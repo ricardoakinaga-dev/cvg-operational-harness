@@ -1,0 +1,188 @@
+--- R18/packages/harness/src/iterative-dispatch.ts
++++ R19/packages/harness/src/iterative-dispatch.ts
+@@ -1219,9 +1219,16 @@
+       case 'cancelled':
+         return { stopReason: 'CANCELLED', response: CANCELLED_RESPONSE }
+       case 'failed':
++        if (ctx.options.toolResultContext) {
++          // Preserve the native first failure across later checkpoint/step/audit
++          // faults. This live diagnostic grants neither usage nor replay.
++          run.primaryResponseFailure = `MODEL_FAILURE: Response composition failed: ${outcome.error}.`
++        }
+         return {
+           stopReason: 'MODEL_FAILURE',
+-          response: `Response composition failed: ${outcome.error}.`
++          response:
++            run.primaryResponseFailure ??
++            `Response composition failed: ${outcome.error}.`
+         }
+       case 'unrecorded':
+         // The native pre-model gate already owns the call slot. A lost result
+--- R18/packages/harness/src/iterative-runtime.ts
++++ R19/packages/harness/src/iterative-runtime.ts
+@@ -336,6 +336,8 @@
+   resumeObservation?: Observation
+   checkpointToken?: CheckpointToken | null
+   checkpointConflict?: boolean
++  /** Live failure evidence only; never a checkpoint, receipt or usage claim. */
++  primaryResponseFailure?: string
+   readonly input: RuntimeInput
+   readonly executionId: string
+   readonly startedAtMs: number
+@@ -1067,11 +1069,14 @@
+         {
+           kind: 'stop',
+           stopReason:
+-            error instanceof ToolResultContextError
+-              ? error.stopReason
+-              : 'INTERNAL_FAILURE',
+-          response:
+-            error instanceof ToolResultContextError
++            run.primaryResponseFailure && !run.checkpointConflict
++              ? 'MODEL_FAILURE'
++              : error instanceof ToolResultContextError
++                ? error.stopReason
++                : 'INTERNAL_FAILURE',
++          response: run.primaryResponseFailure
++            ? `${run.primaryResponseFailure} Secondary response failure: ${errorMessage(error)}.`
++            : error instanceof ToolResultContextError
+               ? `${error.code}: ${error.message}`
+               : `Execution failed internally: ${errorMessage(error)}.`,
+           ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
+@@ -2429,7 +2434,7 @@
+         throw new Error('audit deadline exceeded')
+       }
+       return result
+-    } catch {
++    } catch (error) {
+       if (this.options.toolResultContext) {
+         // A required audit veto cannot leave a healthy writer advertising a
+         // successful terminal checkpoint. Keep all acknowledged usage/effects.
+@@ -2443,8 +2448,9 @@
+       }
+       return {
+         ...result,
+-        response:
+-          'Execution could not be completed because audit recording failed.',
++        response: run.primaryResponseFailure
++          ? `${result.response} Secondary audit recording failure: ${errorMessage(error)}.`
++          : 'Execution could not be completed because audit recording failed.',
+         stopReason: 'INSUFFICIENT_EVIDENCE'
+       }
+     }
+--- R18/packages/harness/src/__tests__/complete-response-path-public.test.ts
++++ R19/packages/harness/src/__tests__/complete-response-path-public.test.ts
+@@ -318,6 +318,54 @@
+       responseCheckpoint: 'transient-after-model',
+       maxModelCalls: 1,
+       responseCostUsd: 0.0625
++    },
++    {
++      id: 'RR31',
++      name: 'model failure survives transient checkpoint failure with one slot',
++      mode: 'rules',
++      responseModelThrows: true,
++      responseCheckpoint: 'transient-after-model',
++      maxModelCalls: 1
++    },
++    {
++      id: 'RR32',
++      name: 'model failure survives transient checkpoint failure with spare slots',
++      mode: 'rules',
++      responseModelThrows: true,
++      responseCheckpoint: 'transient-after-model',
++      maxModelCalls: 5
++    },
++    {
++      id: 'RR33',
++      name: 'model failure remains evidence after checkpoint ACK loss with one slot',
++      mode: 'rules',
++      responseModelThrows: true,
++      responseCheckpoint: 'lost-ack-after-model',
++      maxModelCalls: 1
++    },
++    {
++      id: 'RR34',
++      name: 'model failure remains evidence after checkpoint ACK loss with spare slots',
++      mode: 'rules',
++      responseModelThrows: true,
++      responseCheckpoint: 'lost-ack-after-model',
++      maxModelCalls: 5
++    },
++    {
++      id: 'RR35',
++      name: 'model failure remains evidence after required terminal audit veto',
++      mode: 'rules',
++      responseModelThrows: true,
++      terminalAuditFails: true,
++      maxModelCalls: 5
++    },
++    {
++      id: 'RR36',
++      name: 'model failure survives required failed-step audit veto',
++      mode: 'rules',
++      responseModelThrows: true,
++      stepAuditFails: true,
++      maxModelCalls: 5
+     }
+   ]
+   for (const scenario of scenarios) {
+@@ -509,10 +557,15 @@
+       audit.append = async (event) => {
+         if (
+           (scenario.terminalAuditFails &&
+-            event.action === 'runtime.completed') ||
++            (event.action === 'runtime.completed' ||
++              (scenario.responseModelThrows &&
++                checkpointFaultActive &&
++                event.action === 'runtime.stopped'))) ||
+           (scenario.stepAuditFails &&
+             event.action === 'step.completed' &&
+-            event.result === 'RESPOND:SUCCEEDED')
++            (event.result === 'RESPOND:SUCCEEDED' ||
++              (scenario.responseModelThrows &&
++                event.result === 'RESPOND:FAILED')))
+         ) {
+           auditVetoes.push(event)
+           throw new Error('synthetic_required_audit_veto')
+@@ -710,6 +763,27 @@
+           checkpoint?.state.observations.find((o) => o.type === 'TOOL_RESULT')
+             ?.payload
+         ).toMatchObject({ output })
++        if (scenario.responseModelThrows) {
++          expect(result.response).toContain(
++            'synthetic_native_response_model_failure'
++          )
++          expect(modelResults).toHaveLength(0)
++          if (scenario.responseCheckpoint)
++            expect(result.response).toContain(
++              'synthetic_response_checkpoint_unacknowledged'
++            )
++          if (scenario.terminalAuditFails)
++            expect(result.response).toContain('synthetic_required_audit_veto')
++          if (scenario.stepAuditFails) expect(result.response).toMatch(/audit/i)
++          if (scenario.responseCheckpoint === 'lost-ack-after-model') {
++            expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
++            expect(checkpoint?.state.stopReason).toBeUndefined()
++            expect(checkpoint?.stepNumber).toBe(1)
++            expect(checkpoint?.budgetUsage.modelCalls).toBe(1)
++            expect(checkpoint?.budgetUsage.costUsd).toBe(0)
++            return
++          }
++        }
+         if (
+           scenario.responseFinish ||
+           scenario.responseModelThrows ||
+@@ -723,7 +797,11 @@
+           expect(checkpoint?.stepNumber).toBe(2)
+           expect(checkpoint?.budgetUsage.steps).toBe(2)
+           expect(checkpoint?.state.stopReason).toBe(
+-            scenario.responseModelThrows ? 'MODEL_FAILURE' : 'INTERNAL_FAILURE'
++            scenario.terminalAuditFails
++              ? 'INSUFFICIENT_EVIDENCE'
++              : scenario.responseModelThrows
++                ? 'MODEL_FAILURE'
++                : 'INTERNAL_FAILURE'
+           )
+           expect(sample.nativeSteps).toContainEqual(
+             expect.objectContaining({

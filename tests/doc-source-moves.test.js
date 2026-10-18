@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +20,67 @@ const fixtureRoots = []
 const old = 'apps/worker/src/shift-assistant/domain.ts'
 const destination = 'products/shift-assistant/src/domain.ts'
 const move = { old, new: destination, movedBy: 'HISO-004' }
+const pare100OriginalBytes = readFileSync(
+  join(repositoryRoot, 'tests/fixtures/doc-relocations/pare100-original.json')
+)
+const pare100Revisions = JSON.parse(
+  readFileSync(
+    join(
+      repositoryRoot,
+      'tests/fixtures/doc-relocations/pare100-revisions.json'
+    ),
+    'utf8'
+  )
+)
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
+
+function assertFrozenDocTarget(entry, bytes, revisions = pare100Revisions) {
+  assert.deepEqual(Object.keys(revisions).sort(), [
+    'originalProofSha256',
+    'revisions',
+    'schemaVersion',
+    'sourceCommit'
+  ])
+  assert.equal(revisions.schemaVersion, 1)
+  assert.equal(
+    revisions.sourceCommit,
+    '7ecc5b53944dcbc50fc26a95cfaec05bb1c62eb5'
+  )
+  assert.equal(revisions.originalProofSha256, sha256(pare100OriginalBytes))
+  assert.equal(revisions.revisions.length, 1)
+  const revision = revisions.revisions[0]
+  assert.deepEqual(Object.keys(revision).sort(), [
+    'appendHeading',
+    'appendSha256',
+    'prefixBytes',
+    'sha256After',
+    'sha256Before',
+    'target'
+  ])
+  assert.equal(revision.target, 'docs/02_spec/0207_cleanup_orphaned_emits.md')
+  assert.equal(revision.prefixBytes, 4715)
+  assert.equal(revision.appendHeading, '## Fechamento local — 15/10/2026')
+  assert.equal(
+    revision.sha256Before,
+    'b03badb2802d31a74eaa1347ee443763f38506493b43ab3853c2e136d24939d2'
+  )
+  if (entry.new !== revision.target) {
+    assert.equal(sha256(bytes), entry.sha256Before)
+    return
+  }
+  assert.equal(entry.sha256Before, revision.sha256Before)
+  assert.equal(
+    sha256(bytes.subarray(0, revision.prefixBytes)),
+    entry.sha256Before
+  )
+  assert.equal(sha256(bytes), revision.sha256After)
+  const append = bytes.subarray(revision.prefixBytes)
+  assert.equal(sha256(append), revision.appendSha256)
+  assert.equal(
+    append.toString('utf8').startsWith(`\n${revision.appendHeading}\n`),
+    true
+  )
+}
 
 afterEach(() => {
   for (const root of fixtureRoots.splice(0)) {
@@ -60,7 +123,7 @@ function fixture(markdown = `[source](../${old})\n`) {
   return { root, run, write }
 }
 
-test('policy registers exactly the 20 evidence moves and historical hashes', () => {
+test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
   const policy = JSON.parse(
     readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
   )
@@ -73,9 +136,12 @@ test('policy registers exactly the 20 evidence moves and historical hashes', () 
       'utf8'
     )
   )
-  assert.equal(policy.movedTargets.length, 20)
+  const historical = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy !== 'PARE100-EXEC-20261014'
+  )
+  assert.equal(historical.length, 20)
   assert.deepEqual(
-    policy.movedTargets.map(({ old, new: target, sha256Before }) => ({
+    historical.map(({ old, new: target, sha256Before }) => ({
       old,
       new: target,
       sha256Before
@@ -87,6 +153,78 @@ test('policy registers exactly the 20 evidence moves and historical hashes', () 
     }))
   )
   assert.match(policy.movedTargetsProvenance, /historical.*not a claim/)
+})
+
+test('three PARE100 frozen document relocations retain exact existing targets', () => {
+  const policy = JSON.parse(
+    readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
+  )
+  const proof = JSON.parse(pare100OriginalBytes.toString('utf8'))
+  const additions = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy === 'PARE100-EXEC-20261014'
+  )
+  assert.equal(additions.length, 3)
+  assert.equal(
+    new Set(policy.movedTargets.map(({ old }) => old)).size,
+    policy.movedTargets.length
+  )
+  assert.deepEqual(
+    additions.map(({ old, new: target, sha256Before }) => ({
+      copy: old,
+      source: target,
+      sha256: sha256Before
+    })),
+    proof.copies
+  )
+  for (const entry of additions) {
+    assert.equal(existsSync(join(repositoryRoot, entry.old)), false)
+    assertFrozenDocTarget(entry, readFileSync(join(repositoryRoot, entry.new)))
+  }
+})
+
+test('frozen relocation revision rejects altered history, append and metadata', () => {
+  const revision = pare100Revisions.revisions[0]
+  const entry = { new: revision.target, sha256Before: revision.sha256Before }
+  const bytes = readFileSync(join(repositoryRoot, entry.new))
+  assertFrozenDocTarget(entry, bytes)
+  for (const offset of [
+    0,
+    revision.prefixBytes - 1,
+    revision.prefixBytes,
+    bytes.length - 1
+  ]) {
+    const changed = Buffer.from(bytes)
+    changed[offset] ^= 1
+    assert.throws(() => assertFrozenDocTarget(entry, changed))
+  }
+  assert.throws(() =>
+    assertFrozenDocTarget(entry, bytes.subarray(0, revision.prefixBytes))
+  )
+  assert.throws(() =>
+    assertFrozenDocTarget({ ...entry, new: 'docs/unknown.md' }, bytes)
+  )
+  for (const changes of [
+    { prefixBytes: 4716 },
+    { sha256Before: '0'.repeat(64) },
+    { sha256After: '0'.repeat(64) },
+    { appendSha256: '0'.repeat(64) },
+    { target: 'docs/unknown.md' },
+    { appendHeading: 'different' },
+    { extra: true }
+  ]) {
+    const mutated = structuredClone(pare100Revisions)
+    Object.assign(mutated.revisions[0], changes)
+    assert.throws(() => assertFrozenDocTarget(entry, bytes, mutated))
+  }
+  const duplicate = structuredClone(pare100Revisions)
+  duplicate.revisions.push(duplicate.revisions[0])
+  assert.throws(() => assertFrozenDocTarget(entry, bytes, duplicate))
+  assert.throws(() =>
+    assertFrozenDocTarget(entry, bytes, {
+      ...pare100Revisions,
+      originalProofSha256: '0'.repeat(64)
+    })
+  )
 })
 
 test('exact move resolves and reports the raw historical link without editing it', () => {

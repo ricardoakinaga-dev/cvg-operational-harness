@@ -1,0 +1,124 @@
+{
+  "verdict": "REVISE_SPEC",
+  "findings": [
+    {
+      "id": "I1-0216-01",
+      "priority": "P2",
+      "blocks_design_acceptance": true,
+      "title": "Installed version drift is described as blocking, but the frozen checker only reports it",
+      "location": {
+        "path": "docs/02_spec/0216_pare100_compiled_kernel_boundary_qualification.md",
+        "line": 23
+      },
+      "evidence": [
+        {
+          "path": "scripts/boundary-manifests.mjs",
+          "lines": [
+            444,
+            469
+          ],
+          "observation": "accepts(entry) checks registry identity/integrity metadata but not version equality; a version mismatch returns verified:true with drift."
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            316,
+            324
+          ],
+          "observation": "A verified drift is stored in installedDrift, without emitting a diagnostic."
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            1792,
+            1825
+          ],
+          "observation": "status/passed depend on violations and diagnostics. installedLockDrift is explicitly informational and is not part of the decision."
+        },
+        {
+          "path": "docs/02_spec/0216_pare100_compiled_kernel_boundary_qualification.md",
+          "line": 21,
+          "observation": "HOW forbids changes to decision logic and allows only the literal additional groups."
+        }
+      ],
+      "concrete_counterexample": "For an otherwise valid reached registry installation with matching name/path/resolved/integrity metadata, keep the committed version at 1.0.0 and set the installed manifest version to 2.0.0. The frozen code returns verified:true plus drift and does not make this condition a blocking diagnostic. This is a static branch trace, not an executed fixture or a live PASS claim.",
+      "impact": "The exact proposal promises an installed fence that its permitted BUILD cannot provide, and item 35 only specifies the unverified-dependency negative, which would not detect this false drift claim.",
+      "required_revision": "Align line 23 with frozen behavior: unverified installed dependencies and installed product findings remain blocking; installed version drift retains its current informational semantics. If blocking version drift is actually intended, it needs its own explicit scope/contract review rather than being introduced through these 13 exception rows. Do not broaden this qualification or silently change the checker."
+    },
+    {
+      "id": "I1-0216-02",
+      "priority": "P2",
+      "blocks_design_acceptance": true,
+      "title": "The per-pin symlink oracle requires exception counts after discovery has already aborted",
+      "location": {
+        "path": "docs/02_spec/0216_pare100_compiled_kernel_boundary_qualification.md",
+        "line": 33
+      },
+      "evidence": [
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            59,
+            79
+          ],
+          "observation": "files() throws unverified_source_symlink when a discovered directory entry is a symlink."
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            93,
+            104
+          ],
+          "observation": "Source discovery walks packages before exception matching is reached."
+        },
+        {
+          "path": "scripts/check-product-boundary.mjs",
+          "lines": [
+            1724,
+            1767
+          ],
+          "observation": "pinsHold and exception counts run only after discovery/analysis complete."
+        },
+        {
+          "path": "tests/pare100-sdk-boundary-qualification.test.js",
+          "lines": [
+            195,
+            204
+          ],
+          "observation": "The existing byte-identical symlink negative correctly accepts an early physical-identity exception using toThrow."
+        },
+        {
+          "path": "docs/02_spec/0216_pare100_compiled_kernel_boundary_qualification.md",
+          "line": 21,
+          "observation": "HOW forbids changing discovery/decision behavior."
+        }
+      ],
+      "concrete_counterexample": "Replace packages/platform/src/plugin-execution-core.ts with a symlink to a byte-identical regular copy in an isolated future fixture. The frozen files() walk throws before there is an audit report. The oracle cannot inspect dependent=0 and independent=1/8 counts. No symlink fixture was created or executed during this review.",
+      "impact": "Item 33 would reject the existing correct fail-closed path or force an unauthorized discovery rewrite just to produce counts. This is an oracle mismatch, not evidence that symlinks are accepted.",
+      "required_revision": "Specify early physical-identity/discovery rejection as a valid required result for source/ancestor symlinks. Assert dependent-zero and unchanged independent counts only when an audit report is returned. Keep byte-drift/missing-pin and symlink cases distinct in the oracle; retain fail-closed behavior and all matcher constraints."
+    }
+  ],
+  "limitations": [
+    {
+      "id": "MISSING-SENTINEL",
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sentinel.json",
+      "status": "MISSING_PRE_AND_POST",
+      "effect": "No comparison with an externally supplied sentinel/seal can be claimed. The 29 packet files have independently measured exact pre/post byte hashes and metadata. No substitute was fetched."
+    },
+    {
+      "id": "DESIGN-ONLY",
+      "effect": "No checker, sealed source, TypeScript compiler, tests, build, platform/sandbox probe, runner or guest was executed. Planned emission/negative tests and post-BUILD I1 remain unperformed."
+    },
+    {
+      "id": "BOUNDED-AUTHORITY",
+      "effect": "The approval record hashes for 0214/0215 match their sealed documents. This review does not fetch the referenced decision packet, prior reports, absent 0215 source closure, public workspace manifests or compiler; it does not reaccept 0214/0215 or prove a live closure."
+    }
+  ],
+  "not_findings": [
+    "All 13 full-expression SHA16, normalized lines, literal paths, reasons, max=1 and row/site identities match the frozen bytes.",
+    "All 12 proposed file pins match physical regular canonical files.",
+    "The four descriptor sites compare own safeParse descriptor values to captured function identities; the reviewed sites neither invoke the safeParse function nor invoke its accessor. This is bounded by trusted host composition.",
+    "The 9 sandbox JS sites retain the reviewed TS behavior on static inspection; universal guest/OS containment is not an acceptance criterion.",
+    "The three proposed groups are absent from the frozen active table. The four approved0215 groups retain exactly 19/14/3/10 occurrences with identical reason/pins/sites."
+  ]
+}

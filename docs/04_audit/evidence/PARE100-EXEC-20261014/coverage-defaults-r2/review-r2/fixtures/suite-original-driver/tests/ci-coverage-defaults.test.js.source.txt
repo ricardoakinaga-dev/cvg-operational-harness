@@ -1,0 +1,301 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { CI_BAR_SCOPE } from '../scripts/ci-bar-contract.mjs'
+
+const project = path.resolve(import.meta.dirname, '..')
+const owned = []
+
+// The real driver and its dependency-free bootstrap graph run unchanged.
+// Only npm is an explicit synthetic producer. These are orchestration tests,
+// not product coverage, certification, provenance or a complete CI run.
+function copyModule(relative, root, seen = new Set()) {
+  if (seen.has(relative)) return
+  seen.add(relative)
+  const source = fs.readFileSync(path.join(project, relative), 'utf8')
+  const target = path.join(root, relative)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, source)
+  const imports = [
+    ...source.matchAll(
+      /^\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]/gm
+    ),
+    ...source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)
+  ]
+  for (const [, specifier] of imports)
+    if (specifier.startsWith('.'))
+      copyModule(
+        path.posix.normalize(
+          path.posix.join(path.posix.dirname(relative), specifier)
+        ),
+        root,
+        seen
+      )
+}
+
+const producer = `#!${process.execPath}
+import fs from 'node:fs'
+import path from 'node:path'
+const root = process.cwd(), mode = process.env.SYNTHETIC_REPORT
+fs.writeFileSync('observed.json', JSON.stringify({ argv: process.argv.slice(2), perFile: process.env.CVG_COVERAGE_PER_FILE ?? null, scope: process.env.CVG_TEST_SCOPE }))
+if (mode === 'exit7') process.exit(7)
+if (mode === 'missing') process.exit(0)
+const dimensions = ['statements', 'branches', 'functions', 'lines']
+const metric = (total, covered) => ({ total, covered, skipped: 0, pct: total === 0 ? 100 : Math.floor(10000 * covered / total) / 100 })
+const core = Object.fromEntries(dimensions.map(key => [key, metric(20, 20)]))
+const other = Object.fromEntries(dimensions.map(key => [key, metric(80, key === 'branches' ? 65 : 70)]))
+if (mode.startsWith('below-')) { const key = mode.slice(6); other[key] = metric(80, other[key].covered - 1) }
+const total = Object.fromEntries(dimensions.map(key => [key, metric(100, core[key].covered + other[key].covered)]))
+const summary = { total, [path.join(root, 'packages/contracts/src/synthetic.ts')]: core, [path.join(root, mode === 'product' ? 'products/shift/src/synthetic.ts' : 'packages/other/src/synthetic.ts')]: other }
+if (mode === 'inconsistent') summary.total.statements = metric(100, 99)
+fs.mkdirSync('coverage', { recursive: true })
+fs.writeFileSync('coverage/coverage-summary.json', mode === 'malformed' ? '{' : JSON.stringify(mode === 'empty' ? { total } : summary))
+console.log('synthetic coverage producer; no application tests executed')
+`
+
+function run(mode = 'good', { flag, gate = 'coverage', priorReport } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-coverage-defaults-'))
+  owned.push(root)
+  copyModule('scripts/ci-bar.mjs', root)
+  const artifactDir = path.join(root, 'artifacts')
+  fs.mkdirSync(path.join(artifactDir, 'gates'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'bin'))
+  fs.mkdirSync(path.join(root, 'home'))
+  fs.writeFileSync(path.join(root, 'bin/npm'), producer, { mode: 0o700 })
+  fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}\n')
+  fs.writeFileSync(
+    path.join(artifactDir, 'ci-bar-state.json'),
+    JSON.stringify({
+      scope: CI_BAR_SCOPE,
+      runId: 'synthetic-coverage-defaults',
+      candidateId: 'a'.repeat(64),
+      nodeVersion: process.versions.node,
+      npmVersion: 'synthetic',
+      startedAt: new Date().toISOString(),
+      candidateFiles: [],
+      gates: []
+    })
+  )
+  let priorReportContent
+  const reportPath = path.join(root, 'coverage/coverage-summary.json')
+  if (priorReport) {
+    const dimensions = ['statements', 'branches', 'functions', 'lines']
+    const metric = (total, covered) => ({
+      total,
+      covered,
+      skipped: 0,
+      pct: (100 * covered) / total
+    })
+    const core = Object.fromEntries(
+      dimensions.map((key) => [key, metric(20, 20)])
+    )
+    const other = Object.fromEntries(
+      dimensions.map((key) => [key, metric(80, key === 'branches' ? 65 : 70)])
+    )
+    const total = Object.fromEntries(
+      dimensions.map((key) => [key, metric(100, 20 + other[key].covered)])
+    )
+    priorReportContent = JSON.stringify({
+      total,
+      [path.join(root, 'packages/contracts/src/synthetic.ts')]: core,
+      [path.join(root, 'packages/other/src/synthetic.ts')]: other
+    })
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+    fs.writeFileSync(reportPath, priorReportContent)
+    const timestamp =
+      priorReport === 'old' ? new Date('2000-01-01') : new Date()
+    fs.utimesSync(reportPath, timestamp, timestamp)
+  }
+  const environment = {
+    PATH: [
+      path.join(root, 'bin'),
+      path.dirname(process.execPath),
+      '/usr/bin',
+      '/bin'
+    ].join(path.delimiter),
+    HOME: path.join(root, 'home'),
+    TMPDIR: path.join(root, 'home'),
+    XDG_CONFIG_HOME: path.join(root, 'home/config'),
+    XDG_DATA_HOME: path.join(root, 'home/data'),
+    LANG: 'C.UTF-8',
+    CI_ARTIFACT_DIR: artifactDir,
+    CVG_TEST_SCOPE: 'all',
+    SYNTHETIC_REPORT: mode,
+    ...(flag === undefined ? {} : { CVG_COVERAGE_PER_FILE: flag })
+  }
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/ci-bar.mjs', 'gate', gate],
+    {
+      cwd: root,
+      env: environment,
+      encoding: 'utf8',
+      timeout: 10_000,
+      maxBuffer: 2 * 1024 * 1024
+    }
+  )
+  expect(result.error).toBeUndefined()
+  expect(result.signal).toBeNull()
+  return {
+    result,
+    entry: JSON.parse(result.stdout),
+    observed: JSON.parse(
+      fs.readFileSync(path.join(root, 'observed.json'), 'utf8')
+    ),
+    root,
+    priorReportContent
+  }
+}
+
+afterEach(() => {
+  for (const root of owned.splice(0))
+    fs.rmSync(root, { recursive: true, force: true })
+})
+
+describe('default CI per-file coverage enforcement', () => {
+  it.each([undefined, '0', 'false', 'garbage', '1'])(
+    'requires per-file mode with inherited %s and preserves the core scope',
+    (flag) => {
+      const { result, entry, observed } = run('good', { flag })
+      expect(observed.perFile).toBe('1')
+      expect(observed.scope).toBe('core')
+      expect(observed.argv).toEqual(['run', 'test:core', '--', '--coverage'])
+      expect(result.status, result.stderr).toBe(0)
+      expect(entry.status).toBe('PASS')
+      expect(entry.outputFailures).toEqual([])
+    }
+  )
+
+  it.each(['statements', 'branches', 'functions', 'lines'])(
+    'still rejects aggregate %s below its existing floor',
+    (dimension) => {
+      const { result, entry } = run(`below-${dimension}`)
+      expect(result.status).toBe(1)
+      expect(entry.status).toBe('FAIL')
+      expect(
+        entry.outputFailures.some((failure) =>
+          failure.startsWith('coverage_aggregate_invalid:')
+        )
+      ).toBe(true)
+    }
+  )
+
+  it.each([
+    ['old', undefined],
+    ['old', '0'],
+    ['old', 'garbage'],
+    ['recent', undefined],
+    ['recent', '0'],
+    ['recent', 'garbage']
+  ])(
+    'rejects a %s previous report with inherited %s and no new emission',
+    (priorReport, flag) => {
+      const { result, entry, root } = run('missing', { priorReport, flag })
+      expect(result.status).toBe(1)
+      expect(entry.status).toBe('FAIL')
+      expect(entry.outputFailures).toContain(
+        'missing_artifact:coverage/coverage-summary.json'
+      )
+      expect(
+        fs.existsSync(path.join(root, 'coverage/coverage-summary.json'))
+      ).toBe(false)
+      expect(
+        fs.existsSync(
+          path.join(
+            root,
+            'artifacts/gate-outputs/coverage/coverage/coverage-summary.json'
+          )
+        )
+      ).toBe(false)
+    }
+  )
+
+  it('accepts a newly emitted report even when its bytes match the previous report', () => {
+    const { result, entry, root, priorReportContent } = run('good', {
+      priorReport: 'old'
+    })
+    expect(result.status).toBe(0)
+    expect(entry.status).toBe('PASS')
+    expect(
+      fs.readFileSync(path.join(root, 'coverage/coverage-summary.json'), 'utf8')
+    ).toBe(priorReportContent)
+    expect(
+      fs.statSync(path.join(root, 'coverage/coverage-summary.json')).mtimeMs
+    ).toBeGreaterThan(Date.parse('2000-01-01'))
+  })
+
+  it('preserves a failed child exit after invalidating the previous coverage output', () => {
+    const { result, entry, root } = run('exit7', { priorReport: 'old' })
+    expect(result.status).toBe(7)
+    expect(entry.outputFailures).toEqual([])
+    expect(
+      fs.existsSync(path.join(root, 'coverage/coverage-summary.json'))
+    ).toBe(false)
+  })
+
+  it('does not invalidate a previous coverage report when running another gate', () => {
+    const { result, root, priorReportContent } = run('missing', {
+      gate: 'format',
+      priorReport: 'old'
+    })
+    expect(result.status).toBe(0)
+    expect(
+      fs.readFileSync(path.join(root, 'coverage/coverage-summary.json'), 'utf8')
+    ).toBe(priorReportContent)
+    expect(
+      fs.statSync(path.join(root, 'coverage/coverage-summary.json')).mtimeMs
+    ).toBe(Date.parse('2000-01-01'))
+  })
+
+  it.each(['inconsistent', 'malformed', 'empty'])(
+    'rejects a %s aggregate even when the child exits zero',
+    (mode) => {
+      const { result, entry } = run(mode)
+      expect(result.status).toBe(1)
+      expect(
+        entry.outputFailures.some((failure) =>
+          failure.startsWith('coverage_aggregate_invalid:')
+        )
+      ).toBe(true)
+    }
+  )
+
+  it('retains missing-report and product-scope refusals', () => {
+    const missing = run('missing')
+    expect(missing.result.status).toBe(1)
+    expect(missing.entry.outputFailures).toContain(
+      'missing_artifact:coverage/coverage-summary.json'
+    )
+    const product = run('product')
+    expect(product.result.status).toBe(1)
+    expect(product.entry.outputFailures).toContain(
+      'out_of_scope_coverage:coverage:1'
+    )
+  })
+
+  it('preserves a failed child exit without manufacturing a report failure', () => {
+    const { result, entry } = run('exit7')
+    expect(result.status).toBe(7)
+    expect(entry.exitCode).toBe(7)
+    expect(entry.outputFailures).toEqual([])
+  })
+
+  it('requires the flag for nested certify without treating the synthetic producer as certification', () => {
+    const { observed, result, entry } = run('good', {
+      flag: '0',
+      gate: 'certify'
+    })
+    expect(observed.perFile).toBe('1')
+    expect(observed.argv).toEqual(['run', 'certify'])
+    expect(result.status).toBe(1)
+    expect(entry.status).toBe('FAIL')
+  })
+
+  it('does not rewrite the coverage preference for an unrelated gate', () => {
+    const { observed, result } = run('good', { flag: '0', gate: 'format' })
+    expect(observed.perFile).toBe('0')
+    expect(result.status).toBe(0)
+  })
+})

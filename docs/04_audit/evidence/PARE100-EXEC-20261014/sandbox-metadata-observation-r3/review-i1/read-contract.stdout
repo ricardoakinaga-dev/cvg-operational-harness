@@ -1,0 +1,309 @@
+FILE review-requirements.md
+# Test-support observation requirements
+
+Task P100-004/P100-024/SBX-METADATA-OBS-003, T2 only. Judge real public source factory single_pass observations with synthetic external ports and a memory-only pure echo. No production code, public contract, policy, identity, approval, SQL, lockfile or engines may be changed. Native containment, production policy, compiled ABI, managed lifecycle ML29, two-engine/full parity and release remain unproven. Human220/221/222pending; no new permission inferred.
+
+OBS-SBX01: directWORKSPACE deny gate exactly once, bodyzero, UNSAFE_REQUEST. OBS-SBX02: capabilityNONE no gate, onebody/COMPLETED, nomodel/approval. OBS-SBX03: record target capabilityWORKSPACE preservation or loss truthfully, source wiring real, never infer sandboxPASS fromprocess exit0. OBS-SBX04: verify source and run membership/digests from externally pinned authority and independently supplied capture receipt; no self-trusting checksum. Reject malformed/lost/forged native fields, logs, telemetry, causal identity, fingerprints, numeric types/duplicate JSON, process/environment/duration/streams and unknown teardown. A receipt binds an honestly captured exact run, not arbitrary hostile host/code provenance. Semantic copied-record negatives must exercise meaning beyond checksums, with explicitly test-only receipts that are not accepted actual captures. OBS-SBX05: immutable source, focused type/lint/format, two native observations plus trustedchild deadline/output/read/snapshot fault paths, current independent review and globalpending limits.
+
+Launcher original source1054+newtestsupport now1061paths, no transitive compiled/native qualification. Runtime deadline5s absolute across EOF/join; cleanup separately bounded; cap1MiB retained; alwayscleanup/persist partialfailure in finally; private per-run homes and caches disabled. No copied runtime implementation, monkeypatch of engine, native helper, provider/network/service/PG/realdata. Synthetic fixed lifecycle children only stdio/timers/closing own FDs; never run externally supplied code/argv from data. Source authority/receipt expected SHA are Lead/operator parameters outside observation JSON. Keep chronological and capture limits truthful.
+
+For the fixed local fixture, a denied/non-dispatched tool has telemetry.toolDurationMs exactly zero. Successful journal createdAt<=updatedAt<=turn-end audit timestamp. Any clock anomaly is invalid/inconclusive for this evidence, never normalized into success. Retain raw clocks and authenticate actual capture with external receipt. These refinements do not claim universal distributed clock ordering.
+
+FILE common.py
+from pathlib import Path
+import hashlib
+import json
+
+P = Path(__file__).resolve().parent
+W = P.parent / 'worktree'
+NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+CAP = 1048576
+
+def require(ok, reason):
+    if not ok:
+        raise ValueError(reason)
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def strict_load(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, 'duplicate JSON key: ' + key)
+            result[key] = value
+        return result
+    def invalid(value):
+        raise ValueError('invalid JSON number: ' + value)
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+
+def load(path):
+    return strict_load(Path(path).read_bytes())
+
+def put(path, value):
+    Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+
+def integer(value, minimum=0, maximum=5000):
+    return type(value) is int and minimum <= value <= maximum
+
+def equal(actual, expected, reason):
+    # JSON equality must distinguish booleans from integers.
+    require(type(actual) is type(expected), reason + ': type')
+    if isinstance(expected, dict):
+        require(set(actual) == set(expected), reason + ': keys')
+        for key in expected:
+            equal(actual[key], expected[key], reason + '.' + key)
+    elif isinstance(expected, list):
+        require(len(actual) == len(expected), reason + ': length')
+        for a, b in zip(actual, expected):
+            equal(a, b, reason + '[]')
+    else:
+        require(actual == expected, reason)
+
+def env_for(folder):
+    return {
+        'PATH': f'{NODE.parent}:/usr/bin:/bin', 'HOME': str(folder / 'home'),
+        'TMPDIR': str(folder / 'tmp'), 'TMP': str(folder / 'tmp'), 'TEMP': str(folder / 'tmp'),
+        'XDG_CACHE_HOME': str(folder / 'cache'), 'XDG_CONFIG_HOME': str(folder / 'config'),
+        'XDG_DATA_HOME': str(folder / 'data'), 'TSX_DISABLE_CACHE': '1',
+        'NODE_DISABLE_COMPILE_CACHE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+        'TSX_TSCONFIG_PATH': str(W / 'tsconfig.base.json'),
+        'LANG': 'C.UTF-8', 'TZ': 'UTC', 'NO_COLOR': '1'
+    }
+
+def source_paths():
+    paths = set()
+    for tree in ['packages', 'apps', 'legacy/packages', 'products']:
+        for src in (W / tree).glob('*/src'):
+            paths.update(f for f in src.rglob('*') if f.is_file())
+    paths.update(f for f in (W / 'node_modules/tsx').rglob('*') if f.is_file())
+    paths.update([NODE, W / 'package.json', W / 'package-lock.json', W / 'tsconfig.base.json'])
+    frozen = load(P.parent / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json')
+    pins = frozen['newGroups'][0]['pins']
+    require(len(pins) == 465, 'pins count')
+    require(all(digest(W / name) == sha for name, sha in pins.items()), 'pin drift')
+    paths.update(W / name for name in pins)
+    paths.update(P / n for n in ['observe.mts', 'run.py', 'launcher.py', 'common.py', 'validate.py', 'checks.py', 'seal.py', 'fixture.json', 'tsconfig.json'])
+    return sorted(paths)
+
+def snapshot(paths):
+    return {str(f): digest(f) for f in paths}
+
+def authority(path, expected_sha):
+    require(len(expected_sha) == 64 and digest(path) == expected_sha, 'untrusted authority digest')
+    value = load(path)
+    require(set(value) == {'schema', 'sources', 'argv', 'cwd', 'pins', 'fixtureSHA256'}, 'authority schema')
+    require(value['schema'] == 'sandbox-observer-authority-v2' and value['pins'] == 465, 'authority version')
+    paths = source_paths()
+    equal(value['sources'], snapshot(paths), 'trusted source membership/digests')
+    require(value['fixtureSHA256'] == digest(P / 'fixture.json'), 'fixture authority')
+    require(value['cwd'] == str(P), 'trusted cwd')
+    loader = W / 'node_modules/tsx/dist/loader.mjs'
+    equal(value['argv'], [str(NODE), '--import', str(loader), str(P / 'observe.mts')], 'trusted argv')
+    return value
+
+FILE launcher.py
+import ctypes
+import os
+import selectors
+import signal
+import subprocess
+import time
+from common import CAP
+
+def execute(argv, cwd, env, deadline_ms=5000, cap=CAP, read_fault=False):
+    """Only trusted test callers supply argv/faults; no observation JSON authority."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER failed')
+    started = time.monotonic_ns()
+    deadline = started + deadline_ms * 1000000
+    child = None
+    selector = selectors.DefaultSelector()
+    streams = {'stdout': bytearray(), 'stderr': bytearray()}
+    eof = {'stdout': False, 'stderr': False}
+    errors = []
+    discarded = 0
+    exit_code = None
+    reaped = []
+    remaining_group = None
+    execution_end = None
+    cleanup_start = None
+    try:
+        child = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True)
+        selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
+        selector.register(child.stderr, selectors.EVENT_READ, 'stderr')
+        while selector.get_map():
+            remaining_ns = deadline - time.monotonic_ns()
+            if remaining_ns <= 0:
+                raise TimeoutError('execution_deadline')
+            for key, _ in selector.select(min(0.02, remaining_ns / 1000000000)):
+                if read_fault:
+                    raise OSError('synthetic_capture_error')
+                data = os.read(key.fileobj.fileno(), min(65536, cap + 1))
+                if not data:
+                    eof[key.data] = True
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                room = cap - sum(map(len, streams.values()))
+                streams[key.data].extend(data[:room])
+                discarded += max(0, len(data) - room)
+                if discarded:
+                    raise OverflowError('combined_output_cap')
+        # EOF does not end the execution deadline.
+        remaining_ns = deadline - time.monotonic_ns()
+        if remaining_ns <= 0:
+            raise TimeoutError('execution_deadline_after_eof')
+        try:
+            exit_code = child.wait(timeout=remaining_ns / 1000000000)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError('execution_deadline_after_eof') from error
+        execution_end = time.monotonic_ns()
+        if execution_end > deadline:
+            raise TimeoutError('execution_deadline_at_join')
+    except Exception as error:
+        errors.append({'type': type(error).__name__, 'message': str(error)})
+    finally:
+        execution_end = execution_end or time.monotonic_ns()
+        cleanup_start = time.monotonic_ns()
+        selector.close()
+        if child is not None:
+            # Always kill/reap this dedicated group; no unrelated resources.
+            stop_by = time.monotonic_ns() + 2000000000
+            while True:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    break
+                except OSError as error:
+                    errors.append({'type': type(error).__name__, 'message': str(error)})
+                    break
+                if child.poll() is not None:
+                    exit_code = child.returncode
+                while True:
+                    try:
+                        pid, status = os.waitpid(-child.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        break
+                    if not pid:
+                        break
+                    if pid == child.pid:
+                        exit_code = os.waitstatus_to_exitcode(status)
+                        child.returncode = exit_code
+                    else:
+                        reaped.append({'pid': pid, 'waitStatus': status})
+                if time.monotonic_ns() >= stop_by:
+                    errors.append({'type': 'TimeoutError', 'message': 'cleanup_deadline'})
+                    break
+                time.sleep(0.005)
+            try:
+                exit_code = child.wait(timeout=max(0.001, (stop_by-time.monotonic_ns())/1000000000))
+            except Exception as error:
+                errors.append({'type': type(error).__name__, 'message': str(error)})
+            try:
+                os.killpg(child.pid, 0)
+                remaining_group = True
+            except ProcessLookupError:
+                remaining_group = False
+            except OSError as error:
+                errors.append({'type': type(error).__name__, 'message': str(error)})
+            for stream in [child.stdout, child.stderr]:
+                if stream is not None:
+                    stream.close()
+        else:
+            remaining_group = False
+    finished = time.monotonic_ns()
+    return {
+        'argv': argv, 'cwd': str(cwd), 'env': env,
+        'pid': child.pid if child else None, 'processGroup': child.pid if child else None,
+        'spawned': child is not None, 'exitCode': exit_code,
+        'joined': child is not None and exit_code is not None,
+        'remainingProcessGroup': remaining_group, 'subreaper': True,
+        'executionElapsedNs': execution_end-started,
+        'cleanupElapsedNs': finished-execution_end,
+        'totalElapsedNs': finished-started,
+        'deadlineMs': deadline_ms, 'outputLimit': cap, 'discardedBytes': discarded,
+        'eof': eof, 'errors': errors, 'descendantsReaped': reaped,
+        'retainedBytes': sum(map(len, streams.values()))
+    }, {key: bytes(value) for key, value in streams.items()}
+
+FILE run.py
+from pathlib import Path
+import argparse
+import sys
+from common import P, authority, digest, env_for, put, snapshot, source_paths
+from launcher import execute
+
+def run(folder, authority_path, expected_sha, snapshot_fault=False, capture_driver=execute):
+    folder.mkdir(parents=True, exist_ok=False)
+    streams = {'stdout': b'', 'stderr': b''}
+    before = None
+    after = None
+    record = {'schema': 'sandbox-observer-process-v2', 'authoritySHA256': expected_sha,
+              'capture': None, 'snapshotErrors': [], 'sourceCount': 0, 'sourcesUnchanged': False}
+    try:
+        trusted = authority(authority_path, expected_sha)
+        before = snapshot(source_paths())
+        record['sourceCount'] = len(before)
+        for directory in ['home', 'tmp', 'cache', 'config', 'data']:
+            (folder / directory).mkdir()
+        record['capture'], streams = capture_driver(trusted['argv'], P, env_for(folder))
+    except Exception as error:
+        record['snapshotErrors'].append({'stage': 'before_or_capture', 'type': type(error).__name__, 'message': str(error)})
+    finally:
+        # Capture outcome persists even if the post-run source snapshot fails.
+        try:
+            if snapshot_fault:
+                raise OSError('synthetic_after_snapshot_error')
+            after = snapshot(source_paths())
+            record['sourcesUnchanged'] = before is not None and before == after
+        except Exception as error:
+            record['snapshotErrors'].append({'stage': 'after', 'type': type(error).__name__, 'message': str(error)})
+        for name, data in streams.items():
+            (folder / (name + '.txt')).write_bytes(data)
+        put(folder / 'sources-before.json', before)
+        put(folder / 'sources-after.json', after)
+        put(folder / 'process.json', record)
+    capture = record['capture']
+    good = (capture is not None and capture['exitCode'] == 0 and capture['joined']
+            and capture['remainingProcessGroup'] is False and not capture['errors']
+            and not record['snapshotErrors'] and record['sourcesUnchanged'])
+    return good, record
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--authority', required=True, type=Path)
+    parser.add_argument('--authority-sha', required=True)
+    args = parser.parse_args()
+    good, result = run(args.run.resolve(), args.authority, args.authority_sha)
+    print({'measurementProcessValid': good, 'exitCode': result['capture']['exitCode'] if result['capture'] else None,
+           'sourceCount': result['sourceCount'], 'record': str(args.run / 'process.json')})
+    sys.exit(0 if good else 1)
+
+FILE seal.py
+"""Lead capture receipt. Expected digest must be supplied independently later."""
+from pathlib import Path
+import argparse
+from common import digest, put
+
+FILES = {'process.json', 'sources-before.json', 'sources-after.json', 'stdout.txt', 'stderr.txt'}
+
+def seal(folder, target):
+    if target.exists():
+        raise FileExistsError(target)
+    value = {'schema': 'sandbox-observer-receipt-v2', 'run': str(folder.resolve()),
+             'files': {name: {'sha256': digest(folder / name), 'bytes': (folder / name).stat().st_size} for name in sorted(FILES)}}
+    put(target, value)
+    return digest(target)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args()
+    print(seal(args.run, args.out))
+

@@ -1,0 +1,182 @@
+"""Explicit Lead publication selection; never recurse into live actor output.
+
+Run only after actors are closed and current review outputs authenticated.
+Original private outputs and historical seals are never modified.
+"""
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+import hashlib
+import json
+
+n = Path(__file__).parent
+b = n.parent
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+entries = {}
+omissions = []
+prototype = json.loads((b / 'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text())
+secret = unquote(urlparse(prototype['test_database_url']).password or '').encode()
+assert len(secret) >= 8
+
+
+def add(path, classification, expected=None):
+    assert path.resolve().is_relative_to(n.resolve()) and not path.is_symlink()
+    raw = path.read_bytes()
+    if expected is not None:
+        assert len(raw) == expected['bytes'] and sha(raw) == expected['sha256'], path
+    rel = str(path.relative_to(n))
+    record = {'path': rel, 'bytes': len(raw), 'sha256': sha(raw), 'classification': classification}
+    if not raw or secret in raw:
+        omissions.append(dict(record, reason='EMPTY' if not raw else 'PRIVATE_LITERAL_COLLISION_EXCLUDED'))
+    else:
+        entries[rel] = dict(record, private=False, clearance='Lead selected synthetic/local evidence; original visibility labels preserved')
+
+
+status = json.loads((b / 'status.json').read_text())
+assert status['allCurrentAgentsClosed'] is True and status['liveAgents'] == {}, 'Selected native/documentary actors must be closed before publication'
+review = json.loads((n / 'response-repair/review-lead-verification-r6.json').read_text())
+assert review['allOutputsAuthenticated'] is True
+for directory in [n, n / 'response-repair', n / 'response-repro']:
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and not path.is_symlink() and path.suffix in ['.json', '.md', '.py', '.log', '.mjs', '.diff', '.txt'] and path.name != 'publication-clearance.json':
+            add(path, 'Lead-owned recorded metadata/source/check/diagnosis')
+for name in ['controls', 'controls-r15', 'controls-r16', 'controls-r17', 'controls-r18', 'controls-r19', 'i1-r6-lead-recompute', 'r18-retest', 'r17-retest', 'r17-retest-r2', 'r16-retest', 'r16-empty-repro', 'lead-selector-probe', 'lead-selector-probe-r15', 'r15-retest']:
+    directory = n / 'response-repair' / name
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and not path.is_symlink():
+            add(path, 'Lead control/probe source or actual result; no native acceptance by itself')
+    if (directory / 'run').exists():
+        for path in sorted((directory / 'run').iterdir()):
+            if path.is_file() and not path.is_symlink():
+                if directory.name == 'r15-retest' and path.name == 'independent-private.json':
+                    omissions.append({'path': str(path.relative_to(n)), 'bytes': path.stat().st_size, 'sha256': sha(path.read_bytes()), 'reason': 'LEAD_OVERWRITE_DISCLOSED_CURRENT_R16_COPY_PUBLISHED_AT_R16_PATH; historical R15 raw unavailable'})
+                else:
+                    add(path, 'I0 retest raw evidence, not fresh I1 judgment')
+
+pg = n / 'response-repair/pg-regression-r15'
+pg_proof = json.loads((pg / 'lead-verification.json').read_text())
+assert pg_proof['own224Stopped'] and pg_proof['serviceClients'] == 0
+for path in sorted(pg.iterdir()):
+    if not path.is_file() or path.is_symlink():
+        continue
+    if path.name == 'assigned-resource-private.json':
+        omissions.append({'path': str(path.relative_to(n)), 'bytes': path.stat().st_size, 'sha256': sha(path.read_bytes()), 'reason': 'PRIVATE_ASSIGNED_CREDENTIAL_RESOURCE_EXCLUDED'})
+    else:
+        add(path, 'Lead assigned PG fence primitive regression; not RESPONSE model/tool lifecycle')
+
+scout = n / 'authority-scout-r1'
+for line in (scout / 'SHA256SUMS').read_text().splitlines():
+    digest, relative = line.split(maxsplit=1)
+    path = scout / relative
+    assert path.resolve().is_relative_to(scout.resolve()) and sha(path.read_bytes()) == digest
+    add(path, 'Authenticated documentary authority scout; not new authority')
+add(scout / 'SHA256SUMS', 'Documentary scout detached digest listing')
+
+for number in [1, 2, 3, 4, 5, 6]:
+    verified = json.loads((n / 'response-repair' / f'review-lead-verification-r{number}.json').read_text())
+    if verified.get('actorRoot'):
+        actor = Path(verified['actorRoot'])
+    elif verified.get('sealPath'):
+        actor = Path(verified['sealPath']).parent
+    else:
+        actor = n / 'response-repair' / f'review-r{number}'
+    assert actor.resolve().is_relative_to((n / 'response-repair' / f'review-r{number}').resolve())
+    seal = Path(verified['sealPath']) if verified.get('sealPath') else next(actor / name for name in ['seal-manifest.json', 'final-seal.json', 'seal.json'] if (actor / name).exists())
+    assert sha(seal.read_bytes()) == verified['sealSHA256']
+    manifest = json.loads(seal.read_text())
+    actor_entries = manifest.get('files', manifest.get('entries', manifest.get('allEntries', manifest.get('completeInventory', {}).get('files', []))))
+    assert actor_entries
+    assert verified.get('allOutputsAuthenticated') is True or verified.get('outputsVerified') == len(actor_entries)
+    for expected in actor_entries:
+        path = actor / expected['path']
+        assert path.absolute().is_relative_to(actor.absolute())
+        if expected.get('type', 'file') != 'file':
+            omissions.append({'path': str(path.relative_to(n)), 'bytes': expected.get('bytes'), 'sha256': expected.get('sha256'), 'reason': 'NONREGULAR_ACTOR_ENTRY_NOT_COPIED', 'type': expected['type']})
+            continue
+        assert path.resolve().is_relative_to(actor.resolve()) and path.is_file() and not path.is_symlink()
+        raw = path.read_bytes()
+        assert len(raw) == expected['bytes'] and sha(raw) == expected['sha256']
+        category = expected.get('class', expected.get('category', expected.get('role', 'unclassified')))
+        if 'cache' in category.lower() or category in ['raw-v8-coverage', 'immutable-input-byte-snapshot']:
+            omissions.append({'path': str(path.relative_to(n)), 'bytes': len(raw), 'sha256': sha(raw), 'reason': 'CACHE_OR_AUXILIARY_COVERAGE_OR_DUPLICATE_INPUT_SNAPSHOT_PRIVATE_ORIGINAL_PRESERVED', 'originalClass': category})
+        else:
+            add(path, 'Lead-authenticated actor output; original class: ' + category, expected)
+    add(seal, 'Original actor seal, immutable; exhaustive private inventory retained')
+    detached = next(actor / name for name in ['seal-manifest.sha256', 'final-seal.sha256', 'seal.json.sha256', 'seal.sha256'] if (actor / name).exists())
+    add(detached, 'Original actor detached seal digest')
+
+for number in [1, 2, 3, 4, 5, 6]:
+    packet = n / 'response-repair' / f'review-packet-r{number}'
+    m = json.loads((packet / 'manifest.json').read_text())
+    add(packet / 'manifest.json', 'Original frozen review packet manifest')
+    add(Path(m['candidateManifestCopy']), 'Original frozen candidate manifest copy')
+    add(Path(m['allowedScopeMetadata']['path']), 'Original packet scope metadata')
+    for expected in m['inputs'] + m['proofs'] + m['environmentTemplates']:
+        add(Path(expected['copy']), 'Original readonly frozen input/proof/template', expected)
+
+# Documentary evidence is a separate family, never implicit BUILD authority.
+for number in [1, 2, 3, 4]:
+    author = n / f'published-contract-draft-r{number}'
+    lead = n / f'published-contract-lead-review-r{number}'
+    if number == 1:
+        receipt = json.loads((lead / 'author-verification.json').read_text())
+        inventory = author / 'artifact-manifest.json'
+        assert sha(inventory.read_bytes()) == receipt['authorManifestSHA256']
+        payloads = json.loads(inventory.read_text())['files']
+        controls = [inventory]
+    else:
+        receipt = json.loads((lead / ('author-authentication.json' if number in [3, 4] else 'author-verification.json')).read_text())
+        seal = author / 'detached-seal.json'
+        expected_seal = receipt['sealSHA256'] if number in [3, 4] else receipt['authorSealSHA256']
+        assert sha(seal.read_bytes()) == expected_seal
+        sealed = json.loads(seal.read_text())
+        inventory = author / sealed['inventory'].get('path', sealed['inventory'].get('file'))
+        assert sha(inventory.read_bytes()) == sealed['inventory']['sha256']
+        author_inventory = json.loads(inventory.read_text())
+        payloads = [dict(e, path=e.get('path', e.get('file'))) for e in author_inventory.get('artifacts', author_inventory.get('files', []))]
+        controls = [inventory, seal]
+    assert {str(x.relative_to(author)) for x in author.iterdir() if x.is_file()} == {x['path'] for x in payloads} | {x.name for x in controls}
+    for expected in payloads:
+        add(author / expected['path'], 'Authenticated author proposal/history, NOT approval/BUILD/runtime evidence', expected)
+    for path in controls:
+        add(path, 'Original author documentary inventory/seal')
+    for path in sorted(lead.rglob('*')):
+        if path.is_file() and not path.is_symlink():
+            add(path, 'Lead documentary source/output verification or editorial provenance')
+    packet = n / f'published-contract-review-packet-r{number}'
+    manifest = json.loads((packet / 'manifest.json').read_text())
+    add(packet / 'manifest.json', 'Frozen documentary technical review packet')
+    for expected in manifest['inputs']:
+        copied = Path(expected['copy'])
+        copied = copied if copied.is_absolute() else packet / copied
+        if not copied.resolve().is_relative_to(n.resolve()):
+            assert number == 1 and expected['id'] in ['K01', 'K02', 'K03']
+            omissions.append({'path': str(copied), 'bytes': expected['bytes'], 'sha256': expected['sha256'], 'reason': 'HISTORICAL_EXTERNAL_SKILL_REFERENCE_HASH_ONLY_NOT_COPIED_OUTSIDE_OWN_SCOPE'})
+            continue
+        add(copied, 'Original readonly documentary proposal/source/authority input', expected)
+    critic = n / f'published-contract-review-r{number}'
+    verified = json.loads((lead / 'critic-verification.json').read_text())
+    assert verified.get('allOutputsAuthenticated') is True or verified.get('immutableClean') is True
+    seal = next(critic / name for name in ['detached-seal.json', 'seal.detached.json', 'seal.json', 'final-seal.json'] if (critic / name).exists())
+    assert sha(seal.read_bytes()) == verified['sealSHA256']
+    sealed = json.loads(seal.read_text())
+    if 'files' in sealed:
+        outputs = sealed['files']
+        control_paths = [seal]
+    else:
+        inventory = critic / sealed['inventory']['path']
+        assert sha(inventory.read_bytes()) == sealed['inventory']['sha256']
+        output_inventory = json.loads(inventory.read_text())
+        outputs = output_inventory.get('files', output_inventory.get('payloads', []))
+        assert outputs
+        control_paths = [inventory, seal]
+    for expected in outputs:
+        add(critic / expected['path'], 'Authenticated independent technical documentary judgment, not runtime/BUILD authority', expected)
+    for path in control_paths:
+        add(path, 'Original documentary critic inventory/seal')
+
+result = {'status': 'EXPLICIT_LEAD_ALLOWLIST_NOT_GLOBAL_ACCEPTANCE',
+          'entries': [entries[key] for key in sorted(entries)], 'omissions': omissions,
+          'privacyMethod': 'Local synthetic evidence selection plus conservative private credential literal collision exclusion; originals remain private and unchanged.',
+          'limitations': 'No OS attestation, real provider/tokenizer/billing, current PG/global/fullTR/consumer adoption or all36 closure.'}
+(n / 'publication-clearance.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps({'selected': len(entries), 'omitted': len(omissions), 'clearanceSHA256': sha((n / 'publication-clearance.json').read_bytes())}))

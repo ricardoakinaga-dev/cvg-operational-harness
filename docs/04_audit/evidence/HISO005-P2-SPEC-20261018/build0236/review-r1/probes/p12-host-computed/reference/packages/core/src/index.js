@@ -1,0 +1,1 @@
+const run=(s)=>import(s); const {[run("../../../products/shift/src/index.js")]: value}={value:1}; Object.getPrototypeOf({});

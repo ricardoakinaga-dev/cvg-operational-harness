@@ -1,0 +1,34 @@
+
+const fs=require('node:fs'), path=require('node:path'), crypto=require('node:crypto'),{fileURLToPath}=require('node:url'),{syncBuiltinESMExports}=require('node:module');
+const raw={};for(const k of Object.keys(fs))if(typeof fs[k]==='function')raw[k]=fs[k].bind(fs);
+const cfg=JSON.parse(raw.readFileSync(process.env.I1_BOUNDARY,'utf8'));
+const allowed=new Set(cfg.files);const dirs=new Set();for(const f of allowed){let d=path.dirname(f);while(d===cfg.artifact||d.startsWith(cfg.artifact+'/')){dirs.add(d);d=path.dirname(d)}}
+const depRoots=[cfg.dependencies,cfg.packet+'/node_modules',cfg.artifact+'/node_modules'];
+const under=(p,r)=>p===r||p.startsWith(r+'/');
+const normalize=p=>typeof p==='number'?null:path.resolve(p instanceof URL?fileURLToPath(p):Buffer.isBuffer(p)?p.toString():p);
+const log=(kind,data)=>raw.appendFileSync(cfg.out+'/i1-fs-'+process.pid+'.jsonl',JSON.stringify({kind,run:process.env.I1_RUN,...data})+'\n');
+const seen=new Set();
+function check(p,write=false,content=false){
+ const n=normalize(p);if(n===null)return;
+ const isDep=depRoots.some(r=>under(n,r));const ok=under(n,cfg.out)||(!write&&(allowed.has(n)||dirs.has(n)||isDep));
+ if(!ok){log(write?'DENIED_WRITE':'DENIED_PROBE',{path:n,content});const e=new Error('I1 sealed boundary: '+n);e.code='ENOENT';throw e}
+ if(write&&!under(n,cfg.out)){log('DENIED_WRITE',{path:n});throw new Error('I1 readonly input')}
+ if(!write&&content&&!under(n,cfg.out)&&!seen.has(n)){
+   try{const st=raw.statSync(n);if(st.isFile()){
+     const real=raw.realpathSync(n);
+     if(isDep&&!under(real,cfg.dependencies)){log('DEPENDENCY_ESCAPE',{path:n,real});throw new Error('I1 dependency escapes mirror')}
+     const b=raw.readFileSync(n);log('READ_PRE',{path:n,real,bytes:b.length,sha256:crypto.createHash('sha256').update(b).digest('hex')});seen.add(n);
+   }}catch(e){if(e.code!=='ENOENT')throw e}
+ }
+ return n;
+}
+const reads=['readFileSync','readFile','createReadStream'];const probes=['statSync','stat','lstatSync','lstat','accessSync','access','realpathSync','realpath','existsSync','readlinkSync','readlink'];
+for(const k of [...reads,...probes])if(raw[k]){const native=fs[k].native;fs[k]=function(p,...args){try{check(p,false,reads.includes(k))}catch(e){const cb=args.at(-1);if(k==='existsSync')return false;if(typeof cb==='function'){queueMicrotask(()=>cb(e));return}throw e}return raw[k](p,...args)};if(native)fs[k].native=(p,...args)=>{check(p);return native(p,...args)}}
+for(const k of ['writeFileSync','writeFile','appendFileSync','appendFile','mkdirSync','mkdir','rmSync','rm','unlinkSync','unlink','rmdirSync','rmdir','createWriteStream','truncateSync','truncate','chmodSync','chmod','utimesSync','utimes'])if(raw[k])fs[k]=function(p,...args){check(p,true);return raw[k](p,...args)};
+for(const k of ['renameSync','rename','copyFileSync','copyFile','linkSync','link'])if(raw[k])fs[k]=function(a,b,...args){check(a,k.startsWith('rename')||k.startsWith('link'));check(b,true);return raw[k](a,b,...args)};
+function writing(flags){return typeof flags==='number'?(flags & (fs.constants.O_WRONLY|fs.constants.O_RDWR|fs.constants.O_CREAT|fs.constants.O_TRUNC|fs.constants.O_APPEND))!==0:flags!==undefined&&/[wa+]/.test(flags)}
+for(const k of ['openSync','open'])fs[k]=function(p,flags,...args){check(p,writing(flags),!writing(flags));return raw[k](p,flags,...args)};
+for(const k of ['readdirSync','readdir','opendirSync','opendir'])if(raw[k])fs[k]=function(p,...args){check(p);log('ENUMERATION',{path:normalize(p)});return raw[k](p,...args)};
+const pr=fs.promises;
+for(const k of ['readFile','stat','lstat','access','realpath','readlink','readdir','opendir','open','writeFile','appendFile','mkdir','rm','unlink','rmdir','truncate','chmod','utimes','rename','copyFile'])if(pr[k]){const fn=pr[k].bind(pr);pr[k]=async function(p,...args){const w=['writeFile','appendFile','mkdir','rm','unlink','rmdir','truncate','chmod','utimes','rename'].includes(k)||k==='open'&&writing(args[0]);check(p,w,k==='readFile'||k==='open'&&!w);if(k==='rename'||k==='copyFile')check(args[0],true);if(k==='readdir'||k==='opendir')log('ENUMERATION',{path:normalize(p)});return fn(p,...args)}}
+syncBuiltinESMExports();log('GUARD_READY',{cwd:process.cwd(),node:process.version});

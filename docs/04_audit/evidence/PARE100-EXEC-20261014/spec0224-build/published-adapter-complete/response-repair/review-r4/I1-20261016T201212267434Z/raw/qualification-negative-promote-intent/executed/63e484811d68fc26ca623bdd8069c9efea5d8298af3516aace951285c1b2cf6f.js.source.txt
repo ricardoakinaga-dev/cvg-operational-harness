@@ -1,0 +1,4 @@
+// Inspector source collection only; no code rewriting, no listener/network.
+const fs=require('node:fs'),crypto=require('node:crypto'),inspector=require('node:inspector');
+const dir=process.env.I1_EXECUTED;if(dir){const session=new inspector.Session();session.connect();
+ session.on('Debugger.scriptParsed',({params:p})=>{if(!(p.url.includes('/artifact/')||p.url.includes(process.env.I1_REVIEW+'/')))return;session.post('Debugger.getScriptSource',{scriptId:p.scriptId},(err,result)=>{if(err){fs.appendFileSync(dir+'/errors.jsonl',JSON.stringify({pid:process.pid,scriptId:p.scriptId,url:p.url,error:err.message})+'\n');return}const code=result.scriptSource,h=crypto.createHash('sha256').update(code).digest('hex');fs.writeFileSync(dir+'/'+h+'.js',code);fs.appendFileSync(dir+'/index.jsonl',JSON.stringify({pid:process.pid,scriptId:p.scriptId,url:p.url,bytes:Buffer.byteLength(code),sha256:h,sourceMapURL:p.sourceMapURL})+'\n')})});session.post('Debugger.enable');}

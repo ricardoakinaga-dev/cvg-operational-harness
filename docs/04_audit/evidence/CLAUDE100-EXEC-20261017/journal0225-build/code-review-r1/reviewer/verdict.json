@@ -1,0 +1,212 @@
+{
+  "task": "C100-FND-JOURNAL-0225-BUILD-001:CODE-REVIEW-R1",
+  "reviewDeliveryStatus": "IMPLEMENTED",
+  "verdict": "REVISE",
+  "at": "2026-10-18T15:36:21.119780+00:00",
+  "reviewRound": 1,
+  "maximumCodeReviewRounds": 2,
+  "reviewer": "Independent R1, direct execution, no descendants",
+  "canonicalContractSha256": "c807d35015175aceae6b1ccb46510a9c17e05c49ceab99a31a8375ed7c6b3743",
+  "approvedSpecSha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+  "sourceCheckpoint": "428d0021c8ef61022d352831059e76567100b90d",
+  "sourceFiles": 23,
+  "largestGap": "R1-01: a confirmed effect becomes unrecoverable when canonical checkpoint/candidate serialization reorders input keys.",
+  "mandatoryFindings": [
+    {
+      "id": "R1-01",
+      "kind": "CODE",
+      "severity": "P1",
+      "mandatory": true,
+      "status": "REPRODUCED_COMPONENT_AND_SOURCE_CHAIN",
+      "criterion": [
+        "SPEC0225 §7",
+        "J08",
+        "J10",
+        "J11"
+      ],
+      "path": "packages/harness/src/effect-journal.ts",
+      "line": 486,
+      "relatedLocations": [
+        {
+          "path": "packages/harness/src/effect-journal.ts",
+          "line": 308
+        },
+        {
+          "path": "packages/harness/src/complete-journal-recovery.ts",
+          "line": 122
+        },
+        {
+          "path": "packages/harness/src/iterative-runtime.ts",
+          "line": 980
+        },
+        {
+          "path": "packages/orchestrator/src/hybrid-orchestrator.ts",
+          "line": 891
+        },
+        {
+          "path": "packages/harness/src/complete-checkpoint.ts",
+          "line": 510
+        }
+      ],
+      "title": "Canonical recovery input no longer matches the original order-sensitive proposal hash",
+      "expected": "A matching committed CONFIRMED result must be recovered without another body when a checkpoint save/process acknowledgement was lost; JSON object property insertion order is not a changed proposal.",
+      "observed": "proposalHash uses JSON.stringify of the original tool input. settledRecoveryCandidate snapshots pending with completeSnapshot/JSON.parse, sorting object keys; the V2 checkpoint codec does the same. readNativeConfirmedEffect hashes that reordered input and returns null. The runtime stops RESULT_UNAVAILABLE despite a legitimate committed result. The alternate reservation replay likewise reports a different proposal.",
+      "directEvidence": [
+        "/tmp/cvg-claude100-exec-20261017/journal0225-build/code-review-r1/probe-recovery-input-result.json",
+        "/tmp/cvg-claude100-exec-20261017/journal0225-build/code-review-r1/probe-input-order-result.json",
+        "HybridOrchestrator parses result.text then only sanitizes decision fields (hybrid-orchestrator.ts:889-905); it does not sort the nested toolInput before dispatch. iterative-dispatch.ts:386 and kernel/pipeline.ts:505 pass that input to the journal wrapper.",
+        "Current public/recovery fixture hardcodes toolInput:{} at journal-result-process.ts:863; passing output matrices do not exercise multi-key inputs."
+      ],
+      "reproduction": {
+        "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-claude100-exec-20261017/journal0225-build/code-review-r1/probe-recovery-input.mjs",
+        "status": "REPRODUCED",
+        "node": "v22.23.2",
+        "cases": "Top-level {z:1,a:2} and nested {nested:{z:1,a:2}}: eligible recovery, same-input callback succeeds, actual recovery candidate callback returns null. Sorted {a:2,z:1}: recovers and stages exactly one step. All cases body=1 and journal stays CONFIRMED.",
+        "boundary": "Exact-source pure modules transpiled with pinned TS6 and local import remapping; synthetic in-memory stamped get seam, not native PG provenance, full factory, process restart or qualification."
+      },
+      "impact": "Core recovery liveness failure for ordinary valid JSON inputs; no duplicate body or confirmed-row mutation demonstrated.",
+      "requiredClosure": "Make proposal identity consistent across first reservation and canonical checkpoint/recovery while preserving existing proposal/fingerprint/fence conflict protections. Add a discriminating unsorted and nested-input recovery regression, retaining an actually changed-input negative. Exact migration/compatibility handling belongs to the Lead; R1 authorizes no rework.",
+      "confidence": "HIGH",
+      "nativeFactoryReproduction": "UNKNOWN (forbidden to execute PG/integration in R1)"
+    },
+    {
+      "id": "R1-E01",
+      "kind": "REQUIRED_EVIDENCE",
+      "severity": "P2",
+      "mandatory": true,
+      "status": "NOT_COMPLETE_IN_SUPPLIED_CURRENT_EVIDENCE",
+      "criterion": [
+        "SPEC0225 §9 J07",
+        "SPEC0225 §11 J07"
+      ],
+      "path": "packages/persistence/src/__tests__/complete-effect-result-postgres.integration.ts",
+      "line": 1550,
+      "relatedLocations": [
+        {
+          "path": "packages/persistence/src/__tests__/complete-effect-result-postgres.integration.ts",
+          "line": 2012
+        },
+        {
+          "path": "apps/worker/src/__tests__/journal-result-preclaim-readiness.test.ts",
+          "line": 243
+        }
+      ],
+      "title": "The required isolated native J07 matrix is not closed by the current profile counts",
+      "expected": "At least one isolated case per distinct required readiness guard, including absent migration/wiring and mixed fleet; other preconditions remain valid; refuse admission before claim/model/body.",
+      "observed": "Native91 exercises absent mode on activated principal, role/ACL/membership/checksum/disabled-trigger/session/GUC and DML negatives. Checksum tamper is not an absent-migration/absent-wiring witness. The added preclaim test is explicitly a native-method admission wrapper. The other readiness matrix uses mocked catalog rows. No current supplied native case independently demonstrates missing expansion/activation wiring with the other inputs valid, or an actual mixed fleet beyond the old-login session condition. The 13 newly executed original preflight regressions are valuable baseline checks, not these missing mode1 witnesses.",
+      "directEvidence": [
+        "native-1792336818658-command.json/JUnit: complete 91-case list; binding46 current",
+        "complete-effect-result-postgres.integration.ts:1550-1650 (finite guard mutation list and checksum tamper), :1653-1714 (old login session), :1717-1754 (forged GUC), :2012-2052 (preflight method wrapper)",
+        "journal-result-preclaim-readiness.test.ts:107-223 mocked catalog; :243-248 instrumented admission wrapper",
+        "j07-preflight-pg-report.json:339PASS; original postgres-role-preflight.test.ts covers the legacy/default composition."
+      ],
+      "reproduction": "UNKNOWN: R1 did not run PG or a fleet. This is an audited evidence coverage gap, not a demonstrated admission bypass.",
+      "impact": "Cannot close J07 or use profile totals as qualification evidence for the exact §11 minimum.",
+      "requiredClosure": "Supply current, source-bound isolated native witnesses for the missing required guards/composition cases, or leave J07 explicitly open. No new human approval is requested by this finding; no test/code rework is authorized by R1.",
+      "confidence": "HIGH for absence in the supplied indexed/current profile evidence; no claim that an unindexed proof cannot exist."
+    }
+  ],
+  "openQualificationGates": [
+    {
+      "id": "J16",
+      "status": "NOT_COMPLETE",
+      "severity": "P1_QUALIFICATION_GATE",
+      "path": "j07-preflight-pg-command.json",
+      "line": 1,
+      "directEvidence": "scope=339fivefocals/privatePG; not full npmtest/certification. Contract limitations and explicit Lead updates retain full J16/private qualification pending.",
+      "reproduction": "UNKNOWN; full suite forbidden to R1",
+      "codeDefectAsserted": false
+    }
+  ],
+  "criteria": [
+    {
+      "id": "J01",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "Native91 fresh write/get/re-reserve processes, own-null/value/type/bytes/hash checks; not a whole-program claim."
+    },
+    {
+      "id": "J02",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "Native91 and public66 cover NUL/escapes/Unicode/reserved keys/apparent envelopes and JSON-looking strings."
+    },
+    {
+      "id": "J03",
+      "status": "SUPPORTED_WITH_BOUNDARIES",
+      "evidenceAndLimits": "Logical byte/depth limits native. Node1M/+1 component discrimination plus public byte dominance (§11.1). Physical envelope E±1 uses virtual SQL/driver component, not damaged persisted native rows/RETURNING; shared projection reviewed statically."
+    },
+    {
+      "id": "J04",
+      "status": "SUPPORTED_WITH_BOUNDARIES",
+      "evidenceAndLimits": "43 native corruption/SQL refusal cases plus bounded codec controls. SQL-invalid shape cases are rejected by DB; no claim they exercised adapter decode. No new code failure identified in inspected codec."
+    },
+    {
+      "id": "J05",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "Current SQL/runner hashes bind the expansion interruption and identical22-row before/after digests. Native legacy-null/SQL-NULL/FAILED no-adoption. General v0 refusal branch reviewed; no full J15 drill inferred."
+    },
+    {
+      "id": "J06",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "Three original full reader modules, two distinct SQL texts, legacy controls9 and42501 outcomes12; PUBLIC/inherited known-bad readiness controls6. Current shared support is not certification of historical whole binaries."
+    },
+    {
+      "id": "J07",
+      "status": "PARTIAL_EVIDENCE",
+      "evidenceAndLimits": "R1-E01. Native negatives and339focals do not close every isolated minimum guard/fleet witness."
+    },
+    {
+      "id": "J08",
+      "status": "REVISE_CODE",
+      "evidenceAndLimits": "Real rollback/commit-ack observations exist; R1-01 breaks the matching-proposal recovery/replay invariant for reordered inputs."
+    },
+    {
+      "id": "J09",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "public66 covers22outputs at full-CAS SIGKILL; frame/receipt/usage assertions and independent prekill read inspected. Does not cover all toolInput permutations or parity."
+    },
+    {
+      "id": "J10",
+      "status": "REVISE_CODE",
+      "evidenceAndLimits": "public66 includes distinct journal-commit and commit/preack crashpoints. All use empty toolInput; R1-01 defeats nonempty reordered matching inputs."
+    },
+    {
+      "id": "J11",
+      "status": "REVISE_CODE",
+      "evidenceAndLimits": "context19 covers output/depth/node/frame bounds,300KiB,save-failure and7 recovery faults. New callback/CAS staging is conservative on faults, but R1-01 blocks legitimate unsorted-input recovery."
+    },
+    {
+      "id": "J12",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "capture8 keeps output1MiB and wholeToolResult8MiB distinct; 8MiB positive is component capture, public confirmation still fails1MiB. Started/uncertain fresh readers preserve checkpoint and counters. Primary+secondary errors retained in AggregateError for failed settlement."
+    },
+    {
+      "id": "J13",
+      "status": "SUPPORTED_SCOPED",
+      "evidenceAndLimits": "bound17 includes real0029 AND0030 guards/fence positives, independent DML refusals, actual lease expiry during encode and reclaimed outer attempt; unbound proofs not substituted."
+    },
+    {
+      "id": "J16",
+      "status": "NOT_COMPLETE",
+      "evidenceAndLimits": "Five focal files progressed326PASS+13PENDING to339PASS/0PENDING with TEST_DATABASE_URL. Full current Node22 unit/PG/E2E/certification and pertinent legacy/published/capability/tool/SDK regression qualification remain pending; no certificate transferred."
+    }
+  ],
+  "authority": {
+    "humanGateUnchanged": true,
+    "wholeSpecApproved": false,
+    "releaseApproved": false,
+    "parity117plus17Approved": false,
+    "authorizationForRework": false,
+    "onlyDeferredCriteria": [
+      "J14",
+      "full J15 drill"
+    ]
+  },
+  "limitations": [
+    "R1 ran only private pure component probes under exact Node22.23.2; PG/runtime profiles are independently inspected Lead artifacts.",
+    "Native/factory reproduction of R1-01 is UNKNOWN; exact helper/callback reproduction and reachable source chain are direct evidence.",
+    "Provenance stamp in the pure probe is a test seam, not proof of native durable get.",
+    "Unindexed evidence and full J16 qualification are not presumed."
+  ],
+  "report": "REPORT.md",
+  "evidenceManifest": "evidence-manifest.json"
+}

@@ -1,0 +1,87 @@
+import pathlib,json,hashlib,re,collections,sys
+O=pathlib.Path(__file__).resolve().parent.parent
+sys.dont_write_bytecode=True
+sys.path.insert(0,str(O/'checks'))
+from verify import sha,canon,ck,checks,wrapper,load,evs
+M=load(O/'inputs/manifest.json');A=pathlib.Path(M['artifactRoot']);S=O/'inputs/artifact'
+# Source copies only; original path strings used as comparison identifiers.
+allowed={str(A/x['relative']):x for x in M['inputs']}
+reads=[json.loads(x) for x in (O/'logs/reads.jsonl').read_text().splitlines()]
+transforms=[json.loads(x) for x in (O/'logs/transforms.jsonl').read_text().splitlines()]
+ck(all('pid' in x and 'path' in x for x in reads),'every selected read retains pid/path')
+ck(all(('bytes' in x)==('sha256' in x) for x in reads),'available read byte/hash metadata intact')
+for t in transforms:
+ if t['path'] in allowed:ck(t['sourceSha256']==allowed[t['path']]['sha256'] and t['sourceBytes']==allowed[t['path']]['bytes'],'observed transform source matches immutable copy')
+by=collections.defaultdict(lambda:{'reads':[],'transforms':[],'results':[]})
+for n,r in enumerate(reads,1):by[r['pid']]['reads'].append({'line':n,**r})
+for n,t in enumerate(transforms,1):by[t['pid']]['transforms'].append({'line':n,**t})
+for f in sorted((O/'run').glob('SP*/**/result.json')):
+ r=load(f);by[r['pid']]['results'].append({'path':str(f.relative_to(O)),'sha256':sha(f.read_bytes()),'calls':r['calls'],'measurements':r['measurements']})
+joined=[]
+for pid,b in sorted(by.items()):
+ paths={r['path'] for r in b['reads']};ts={r['path'] for r in b['transforms']};joined.append({'pid':pid,'readCount':len(b['reads']),'transformCount':len(b['transforms']),'resultCount':len(b['results']),'samePidReadAndTransformPaths':sorted(paths&ts),**b})
+ck(any(x['resultCount']==14 and x['readCount']>0 and x['transformCount']>0 for x in joined),'actual test PID joins raw reads/transforms14attempts')
+(O/'checks/pid-joined-summary.json').write_text(json.dumps(joined,indent=2))
+# Static closure is conservative over textual imports/reexports, not an execution claim.
+template=load(O/'inputs/manifest.json')['environmentTemplates'][1]
+cfg=json.loads((O/'inputs/environment/vitest-template.mjs').read_text().split('export default ',1)[1]);aliases=cfg['resolve']['alias'];pending=['packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts'];seen=set();edges=[];external=[];unresolved=[]
+while pending:
+ rel=pending.pop()
+ if rel in seen:continue
+ seen.add(rel);f=S/rel
+ if f.suffix not in ['.ts','.mts','.js','.json']:continue
+ text=f.read_text()
+ matches=re.findall(r"(?:\b(?:import|export)\s+(?:type\s+)?[^;]*?\bfrom\s*|\bimport\s*\(|\brequire\s*\(|\bimport\s*)['\"]([^'\"]+)['\"]",text)
+ for spec in matches:
+  if spec in aliases:target=pathlib.Path(aliases[spec]).relative_to(A)
+  elif spec.startswith('.'):
+   target=pathlib.Path(rel).parent/spec
+   # Normalize lexically, never traverse outside owned copies.
+   parts=[]
+   for part in target.parts:
+    if part=='..':parts.pop()
+    elif part!='.':parts.append(part)
+   target=pathlib.Path(*parts)
+  else:external.append({'from':rel,'specifier':spec});continue
+  opts=[target,target.with_suffix('.ts'),target/'index.ts',target/'index.js']
+  hit=next((str(x) for x in opts if str(A/x) in allowed),None)
+  if hit:edges.append({'from':rel,'specifier':spec,'to':hit});pending.append(hit)
+  else:unresolved.append({'from':rel,'specifier':spec})
+(O/'checks/static-import-closure.json').write_text(json.dumps({'method':'conservative textual import/export/dynamic-import/require regex; includes type/reexport edges; filesystem migration reads separate; no semantic tree-shaking claim','paths':[{'path':r,'bytes':allowed[str(A/r)]['bytes'],'sha256':allowed[str(A/r)]['sha256']} for r in sorted(seen)],'edges':edges,'externalImports':external,'unresolved':unresolved},indent=2))
+observed=[{'line':i,**r,'inputPin':allowed[r['path']]['sha256'],'matchesPin':r.get('sha256')==allowed[r['path']]['sha256']} for i,r in enumerate(reads,1) if r['path'] in allowed]
+ck(all(r['matchesPin'] for r in observed),'all actual selected source reads match pins')
+(O/'checks/observed-source-reads.json').write_text(json.dumps(observed,indent=2))
+# Physical SQL instrumentation metadata are joined by query sequence to entry PID/label/scope.
+raw=[json.loads(x) for x in (O/'run/sql-wire-private.jsonl').read_text().splitlines()];entries={r['sequence']:r for r in raw if r['type']=='SQL-entry'};returns=collections.defaultdict(list)
+for n,r in enumerate(raw,1):
+ if r['type']!='SQL-entry':
+  entry=entries[r['sequence']];returns[r['sequence']].append({'line':n,'pid':entry['pid'],'label':entry['label'],'scope':entry['scope'],**r})
+ck(len(entries)==sum(len(v) for v in returns.values())==5419,'all SQL entries have returned/callback result')
+sqlpairs=[]
+for q,e in entries.items():
+ sqlpairs.append({'sequence':q,'pid':e['pid'],'scope':e['scope'],'label':e['label'],'sqlSha256':sha(e['args'][0]),'sqlBytes':len(e['args'][0].encode()),'argsSha256':sha(canon(e['args'])),'returnRecords':returns[q]})
+(O/'checks/sql-pid-joined-private.json').write_text(json.dumps(sqlpairs,indent=2))
+transactions=[]
+for f in sorted((O/'run').glob('SP*/**/result.json')):
+ r=load(f)
+ for ev in evs(r,'CAS-return-after-transaction'):
+  if ev['result']['status']!='APPLIED':continue
+  candidates=[e for e in entries.values() if len(e['args'])>1 and isinstance(e['args'][1],list) and len(e['args'][1])>=3 and e['args'][1][2]==ev['checkpointId'] and re.search(r'(INSERT INTO|UPDATE) operational_execution_checkpoints',e['args'][0])]
+  ck(len(candidates)==1,'CAS APPLIED binds exact physical SQL mutation')
+  e=candidates[0];ret=returns[e['sequence']][0]['result'];ck(ret['rowCount']==1 and ret['rows'][0]['checkpoint_id']==ev['checkpointId'],'native CAS mutation actual SQL rowCount')
+  commit=next(x for q,x in entries.items() if q>e['sequence'] and x['args'][0]=='COMMIT' and x['label']==e['label'])
+  ck(returns[commit['sequence']][0]['result']['command']=='COMMIT','native SQL COMMIT result')
+  w=json.loads(e['args'][1][8]);state=wrapper(w);ck(sha(canon(json.loads(e['args'][1][9])))==sha(canon(next(x for x in evs(r,'CAS-entry') if x['sequence']==ev['entry'])['checkpoint']['budgetUsage'])),'SQL written budget same as CAS')
+  transactions.append({'result':str(f.relative_to(O)),'pid':e['pid'],'eventSequence':ev['sequence'],'sqlSequence':e['sequence'],'commitSQLSequence':commit['sequence'],'checkpointId':ev['checkpointId'],'digest':ev['digest'],'physicalWrapperSha256':sha(canon(w)),'status':ev['result']['status']})
+(O/'checks/cas-sql-commit-bindings.json').write_text(json.dumps(transactions,indent=2))
+# Actual lease wait is SELECT pg_sleep; no fake UPDATE/maxlease injected by fixture.
+leaseq=[e for e in entries.values() if 'SELECT pg_sleep(' in e['args'][0]];ck(len(leaseq)==1 and leaseq[0]['scope']=='SP12','one real server lease wait')
+# Full statements retained privately; distinguish native claim UPDATE (expected) from fixture backdating.
+lease_backdates=[e['sequence'] for e in entries.values() if re.search(r'lease_until\s*=\s*(?:now\(\)|clock_timestamp\(\))\s*-',e['args'][0],re.I)];ck(not lease_backdates,'no observed SQL fixture lease backdate')
+replay=[]
+for label,root in [('producer',O/'inputs/producer'),('fresh-I1',O/'run')]:
+ for f in sorted(root.glob('SP*/**/replay-before.json')):
+  a=load(f)['checkpoint'];b=load(f.with_name('replay-after.json'))['checkpoint'];d=[k for k in a if a[k]!=b[k]];replay.append({'set':label,'path':str(f.relative_to(root)),'changedTopLevel':d,'stopBefore':a['state'].get('stopReason'),'stopAfter':b['state'].get('stopReason'),'activeDurationBefore':a['budgetUsage']['activeDurationMs'],'activeDurationAfter':b['budgetUsage']['activeDurationMs'],'receiptContextStable':a['state']['toolResultContext']==b['state']['toolResultContext']})
+(O/'checks/replay-diagnostics.json').write_text(json.dumps(replay,indent=2))
+summary={'readRecords':len(reads),'readRecordsWithHash':sum('sha256'in x for x in reads),'readPids':sorted(by),'transformRecords':len(transforms),'observedInputReadPaths':len(set(x['path'] for x in observed)),'staticClosurePaths':len(seen),'staticUnresolved':unresolved,'sqlEntries':len(entries),'casSQLBindings':len(transactions),'sqlLeaseWaitSequence':leaseq[0]['sequence'],'checks':len(checks),'pass':all(x['ok'] for x in checks)}
+(O/'checks/audit-summary.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary))

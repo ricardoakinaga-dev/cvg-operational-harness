@@ -1,0 +1,45 @@
+FILE validate.py
+90:             {'type': 'tool/result', **base_log, 'toolId': before['id'], 'outcome': 'not_started' if contained else 'succeeded'},
+91:             {'type': 'turn/end', **base_log, 'stopReason': reason}
+92:         ], 'complete kernel log')
+93:         require(len(case['auditEvents']) == 1, 'audit count')
+94:         audit_time = case['auditEvents'][0]['timestamp']
+95:         timestamp(audit_time)
+96:         equal(case['auditEvents'], [{'actor': inp['agent']['id'], 'agent': inp['agent']['id'], 'tenant': inp['tenantId'],
+97:               'action': 'harness.single_pass', 'policy': 'ALLOW', 'approval': None, 'tool': before['id'],
+98:               'result': reason, 'timestamp': audit_time, 'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete audit payload')
+99:         require(len(case['telemetryEvents']) == 1, 'telemetry count')
+100:         event = case['telemetryEvents'][0]
+101:         require(integer(event['latencyMs']) and integer(event['toolDurationMs']), 'telemetry timing types/range')
+102:         if contained:
+103:             equal(event['toolDurationMs'], 0, 'blocked tool was never dispatched')
+104:         equal(case['telemetryEvents'], [{'name': 'harness.single_pass', 'latencyMs': event['latencyMs'],
+105:               'errors': 1 if contained else 0, 'costUsd': 0, 'inputTokens': 0, 'outputTokens': 0,
+106:               'provider': None, 'toolDurationMs': event['toolDurationMs'], 'steps': 1,
+107:               'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete telemetry payload')
+108:         journal = case['journalRecord']
+109:         if contained:
+110:             equal(journal, None, 'blocked journal')
+111:         else:
+112:             require(set(journal) == {'tenantId', 'operationKey', 'proposalHash', 'state', 'attemptId', 'createdAt', 'updatedAt', 'result'}, 'journal schema')
+113:             require(re.fullmatch(r'attempt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', journal['attemptId']), 'attempt UUID')
+114:             require(timestamp(journal['createdAt']) <= timestamp(journal['updatedAt']), 'journal clock order')
+115:             require(timestamp(journal['updatedAt']) <= timestamp(audit_time), 'journal confirmation precedes turn-end audit; clock anomaly is invalid/inconclusive')
+116:             proposal = {'schemaVersion': 'effect-proposal-v2', 'compositionFingerprint': fingerprint(normalized),
+117:                         'tool': {key: normalized[key] for key in ['id', 'version', 'sideEffect', 'idempotent', 'providerId', 'providerVersion']}, 'input': ECHO}
+118:             expected_proposal = hashlib.sha256(json.dumps(proposal, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+119:             equal(journal['proposalHash'], expected_proposal, 'recomputed journal proposal hash')
+120:             equal(journal, {**journal, 'tenantId': inp['tenantId'], 'operationKey': invocation['operationKey'],
+121:                            'state': 'CONFIRMED', 'result': ECHO}, 'journal causal payload')
+FILE review-requirements.md
+1: # Test-support observation requirements
+2: 
+3: Task P100-004/P100-024/SBX-METADATA-OBS-003, T2 only. Judge real public source factory single_pass observations with synthetic external ports and a memory-only pure echo. No production code, public contract, policy, identity, approval, SQL, lockfile or engines may be changed. Native containment, production policy, compiled ABI, managed lifecycle ML29, two-engine/full parity and release remain unproven. Human220/221/222pending; no new permission inferred.
+4: 
+5: OBS-SBX01: directWORKSPACE deny gate exactly once, bodyzero, UNSAFE_REQUEST. OBS-SBX02: capabilityNONE no gate, onebody/COMPLETED, nomodel/approval. OBS-SBX03: record target capabilityWORKSPACE preservation or loss truthfully, source wiring real, never infer sandboxPASS fromprocess exit0. OBS-SBX04: verify source and run membership/digests from externally pinned authority and independently supplied capture receipt; no self-trusting checksum. Reject malformed/lost/forged native fields, logs, telemetry, causal identity, fingerprints, numeric types/duplicate JSON, process/environment/duration/streams and unknown teardown. A receipt binds an honestly captured exact run, not arbitrary hostile host/code provenance. Semantic copied-record negatives must exercise meaning beyond checksums, with explicitly test-only receipts that are not accepted actual captures. OBS-SBX05: immutable source, focused type/lint/format, two native observations plus trustedchild deadline/output/read/snapshot fault paths, current independent review and globalpending limits.
+6: 
+7: Launcher original source1054+newtestsupport now1061paths, no transitive compiled/native qualification. Runtime deadline5s absolute across EOF/join; cleanup separately bounded; cap1MiB retained; alwayscleanup/persist partialfailure in finally; private per-run homes and caches disabled. No copied runtime implementation, monkeypatch of engine, native helper, provider/network/service/PG/realdata. Synthetic fixed lifecycle children only stdio/timers/closing own FDs; never run externally supplied code/argv from data. Source authority/receipt expected SHA are Lead/operator parameters outside observation JSON. Keep chronological and capture limits truthful.
+8: 
+9: For the fixed local fixture, a denied/non-dispatched tool has telemetry.toolDurationMs exactly zero. Successful journal createdAt<=updatedAt<=turn-end audit timestamp. Any clock anomaly is invalid/inconclusive for this evidence, never normalized into success. Retain raw clocks and authenticate actual capture with external receipt. These refinements do not claim universal distributed clock ordering.
+QUALITY [('format', 0), ('typecheck', 0), ('lint', 0)]
+COUNTS 23

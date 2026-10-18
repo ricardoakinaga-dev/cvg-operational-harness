@@ -1,0 +1,116 @@
+from pathlib import Path
+import json, hashlib, subprocess
+from datetime import datetime, timezone
+P=Path('/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-reference-profile')
+def h(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def load(n):return json.loads((P/n).read_text())
+def save(n,j):(P/n).write_text(json.dumps(j,ensure_ascii=False,indent=2)+'\n')
+freeze=load('review-freeze-r1.json')
+for x in freeze['files']:
+ p=P/x['path'];assert p.stat().st_size==x['bytes'] and h(p)==x['sha256'],x['path']
+manifest=P/'review-r1/manifest.json';assert h(manifest)=='8df1330982aab1ce01101723e5b7d19a3ea30961cd799edd8be026984d4146b3'
+for x in load('review-r1/manifest.json')['outputs']:
+ p=manifest.parent/x['path'];assert p.stat().st_size==x['bytes'] and h(p)==x['sha256']
+save('Lead-review-r1.json',{'kind':'LEAD_INSPECTED_INDEPENDENT_R1','verdict':'REVISE','mandatory_count':1,'finding':'R1-F01','affected_criteria':['SDKHOW05','SDKHOW07'],'checks':12,'review_manifest_sha256':h(manifest),'subject57_verified':True,'decision':'One grouped documentary topology repair, then same Curie R2 final. No SDK/compiler/acquisition.'})
+changed=['execution-profile.json','containment-and-observer.json','HOW.md']
+pre=P/'R1-preimages';assert not pre.exists();pre.mkdir()
+mapping=[]
+for n in changed:
+ b=(P/n).read_bytes();q=pre/n;q.write_bytes(b);mapping.append({'path':n,'preimage':str(q.relative_to(P)),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+save('R1-preimages/map.json',{'purpose':'Reconstruct all57 R1 inputs:3 exact preimages+54 unchanged in place','files':mapping,'R1_count':57})
+
+topology={
+ 'kind':'SELECTED_LINUX_NAMED_FIFO_TOPOLOGY_NOT_IMPLEMENTED','status':'PROPOSED_HOW_ADMISSION_NOT_RUN','finding':'R1-F01',
+ 'selection':'Per-attempt host-created named FIFOs, reopened by each role after exec. No control FD is expected to survive an SDK launch; no host Unix socket or TCP endpoint is exposed.',
+ 'process_graph':{
+  'python':['outside-cgroup host supervisor','contained python-driver + real CodexClient','SDK Popen of Python stdio adapter','adapter Popen of synthetic Python RPC peer'],
+  'typescript':['outside-cgroup host supervisor','contained node ts-driver + real SDK','SDK spawn of Node stdio adapter executable','adapter spawn of synthetic Node JSONL peer'],
+  'roles':'Each of driver, adapter and peer opens its own two fixed /observer FIFO paths after its own exec. Python SDK close_fds and Node default stdio need not be changed.',
+  'identity':'Adapter and peer are distinct code/config hashes and PIDs. The SDK-owned child is explicitly the synthetic adapter endpoint, not a Codex executable. Every process and descendant stays in the claimed cgroup; no upstream process behavior is inferred.'},
+ 'argv':{
+  'python_driver':['/runtime/python','-I','-S','/profile/python-driver.py','--case','CASE_ID'],
+  'python_SDK_launch_args_override':['/runtime/python','-I','-S','/profile/adapter-python.py'],
+  'python_adapter_peer':['/runtime/python','-I','-S','/profile/fixture-rpc.py','--case','CASE_ID'],
+  'TS_codexPathOverride':'/profile/adapter-typescript',
+  'TS_adapter_executable':'Regular executable file with single shebang #!/runtime/node; same hash-bound adapter source, not a shell or external command resolver.',
+  'TS_adapter_peer':['/runtime/node','/profile/fixture-cli.mjs','--case','CASE_ID','--sdk-argv-json','JSON_ENCODED_ORIGINAL_SDK_ARGV'],
+  'per_case_config':'/profile/adapter-config.json contains the frozen case ID/language, exact peer executable/argv and six FIFO paths. It is read-only, file-hash bound and replaces any arbitrary CLI command input. SDK env contains the same fixed allowlist, no ambient host environment.'},
+ 'channels':{
+  'host_paths':'New private attempt directory beneath this task runtime, mode0700, owned by supervisor; create exactly driver.events,driver.control,adapter.events,adapter.control,peer.events,peer.control as FIFOs, not regular files or sockets.',
+  'sandbox_paths':['/observer/driver.events','/observer/driver.control','/observer/adapter.events','/observer/adapter.control','/observer/peer.events','/observer/peer.control'],
+  'mounts':'Bind only these six individual FIFO nodes to their fixed sandbox paths; parent directory, host /tmp, other sockets, cgroup filesystem and repository are not mounted. Use read-only node binds to prohibit namespace replacement; the admission test must prove data I/O on these mounted FIFOs works. If unsupported, stop and replan, no looser mount fallback.',
+  'FD_creation':'Supervisor opens events read/nonblock and control read-write/nonblock before target start, with explicit keeper writer FDs where needed. Roles reopen their own events write/nonblock and control read/nonblock by pathname after exec. They do not inherit or guess supervisor FDs. Mark all local FDs non-inheritable. Peers also reopen their own nodes; adapters need no pass_fds/extra stdio contract.',
+  'frames':'One atomic OS write per frame, uint32be length then UTF8 JSON payload <=4092 bytes; maximum entire frame4096 and raw chunk2048 bytes (base64). Admission requires observed fpathconf(PC_PIPE_BUF)>=4096 and each full write size<=PIPE_BUF. Header bounded1024bytes; oversize, EAGAIN beyond case deadline, short atomic write, invalid UTF8/schema/sequence/digest or missing frame => INVALID_CAPTURE; never truncate/drop/retry a target case.',
+  'roles_protocol':'BEGIN binds attempt/case/role, local PID+PIDnamespace, expected code hash and nonce from readonly config; monotonic per-role sequence; raw chunks carry stream/direction/offset/count/digest. Supervisor maps namespace PIDs to independently observed host cgroup members/startticks and admission identities; a self-reported PID/hash alone is not proof.',
+  'control_protocol':'Supervisor sends only allowlisted READY,RELEASE_REPLY,RELEASE_EXIT,ABORT_NOW,FINISH_PEER acknowledgments bound to case/role/sequence. No code, paths or arbitrary commands over control; each role has its own control FIFO. Control is never part of SDK stdin/stdout/stderr.',
+  'exposure':'These dedicated observer FIFOs are the only writable host IPC endpoints exposed to target processes. No ambient host socket is mounted. This is a reference-test control channel, not a production or harness public contract.'},
+ 'relay':{
+  'stdio':'Adapter owns peer stdin/stdout/stderr pipes (normal child_process/subprocess); SDK owns adapter stdin/stdout/stderr. Adapter forwards bytes unmodified in both directions and stderr; no JSON parse, normalization, reordering, added delimiter or swallowed error in SDK streams.',
+  'capture':'Adapter emits RAW_READ chunks and separate FORWARD_COMMIT byte counts after successful OS writes; partial writes are counted accurately. Before returning to next forwarding operation, commit the corresponding telemetry frame. Supervisor retains originals/digests and receipt timestamps. Peer reports only control/write milestones and never supplies the authoritative raw capture.',
+  'normal_exit':'Drain peer stdout/stderr; emit per-stream final counters/digests and END, then propagate the peer exit code or re-raise its terminating signal. Do not wait forever for Python SDK stdin EOF after peer exit. For persistent RPC cases supervisor FINISH_PEER follows completed API/control assertions, then peer exit/drain, then driver closes SDK.',
+  'signal':'Adapters record/handle SIGTERM as part of this explicitly synthetic endpoint. Defer signal termination only while a bounded forward+telemetry commit is active, at most100ms; finish/declare incomplete counters and then terminate by the same signal. No indefinite signal suppression. SIGKILL/host death/missing telemetry/unknown commit window means INVALID_CAPTURE/INCONCLUSIVE, even if API result looks expected.',
+  'limits':'Same stdout/stderr/wire/case/cgroup caps; backpressure is bounded by the30s case deadline. Capture channels consume the same case artifact budget. No extra process/thread outside TasksMax32 or outside the service.'},
+ 'SDKPY07_barrier':[
+  'Driver opens its channels before real SDK start; adapter/peer each open theirs after SDK/adapter exec.',
+  'Supervisor observes adapter RAW_READ+FORWARD_COMMIT for turn/start, plus peer REQUEST_HELD. Only then sends ABORT_NOW to driver.',
+  'Driver cancels real async task and reports actual CancelledError witness; only then supervisor sends RELEASE_REPLY to peer.',
+  'Peer writes the frozen real TurnStartResponse, adapter records/forwards reply; exact observation-only close-return hook reports turnA _closed=True.',
+  'Supervisor waits for the matching hook event before FINISH_PEER; peer exits, adapter drains/END/exits; only then driver closes SDK. Absence of interrupt is judged only over that complete declared call interval.'],
+ 'TS_barriers':'For abort test supervisor waits for independent child/cgroup witness plus adapter+peer READY then sends ABORT_NOW to driver. For early iterator break/kill, preserve actual API lane and require complete commit/exit/EOF evidence separately; missing capture invalidates the case rather than repairing Node/SDK behavior.',
+ 'shutdown':'After driver/service exit and independently observed cgroup populated=0, supervisor closes its keeper writers and drains events to actual FIFO EOF. Reconcile role sequences, counters, END or explicitly known termination, raw hashes and OS identity. FIFO EOF alone is not child exit. Preserve metadata/raw bytes; close descriptors and unmount only own service resources; no peer file deletion.',
+ 'required_admission_controls':['Six inode/type/mode/symlink/race/attempt ownership checks and exact mounted-node I/O; roles reopen after exec under Python close_fds=True and normal Node stdio, using constant diagnostic helpers only.',
+ 'Two-direction raw identity with partial writes, separate stderr and named-control barriers; a known omitted/late/corrupted chunk or false FORWARD_COMMIT must invalidate capture.',
+ 'FIFO backpressure, missing reader, producer crash, orphan, normal exit, SIGTERM mid-commit and SIGKILL all bounded; cleanup must be witnessed independently. Missing100ms commit deadline invalidates, never passes a result.',
+ 'Supervisor control cannot be injected into SDK streams, FIFO frame limits observed and unclaimed host sockets remain inaccessible.'],
+ 'scope_limits':'Instrumented adapters/relay timing is a property of this synthetic peer profile, not a claim about the official CLI process lifecycle. Admission/control implementation and every SDK/compiler execution remain NOT_RUN.'}
+save('transport-topology.json',topology)
+j=load('execution-profile.json')
+j['python']['SDK_configuration']['launch_args_override']=topology['argv']['python_SDK_launch_args_override']
+j['python']['fixtures']='Concrete RPC values in cases.json are produced by separate synthetic peer behind a stdio adapter. Both peer and adapter reopen named observer FIFOs after exec; no SDK patch, inherited-FD assumption or genuine Codex metadata claim.'
+j['typescript']['SDK_configuration']['codexPathOverride']='/profile/adapter-typescript'
+j['typescript']['fixture_executable']='Node shebang stdio adapter launches the separately identified synthetic Node peer; see transport-topology.json. Both reopen their own named FIFOs; adapter preserves byte/exit behavior subject to declared observation and signal constraints.'
+j['transport_topology']='transport-topology.json; selected process graphs, argv, FIFO mounts/framing, relays, barriers, exit and capture-completeness contract'
+j['execution_stages']=['ACQUIRE_PRIVATE_DATA_AND_VERIFY_LOCKS','IMPLEMENT_PRIVATE_DRIVERS_RELAYS_SUPERVISOR_NO_SDK_IMPORT','ADMIT_HELPERS_FIFOS_LOADER_AND_CONTAINMENT_WITH_CONSTANT_DIAGNOSTICS','FREEZE_ALL_DRIVERS_CONFIG_ARGV_ENV_IDENTITIES','QUALIFY_COMPILER_THEN_TRANSPILE_TEN_FILES_AND_SEAL_EMITS','RUN_PYTHON_CASES_ONCE_SERIAL','RUN_TS_CASES_ONCE_SERIAL','INDEPENDENT_CAPTURE_AND_CLIENT_ACCEPTANCE_AND_CLEANUP']
+save('execution-profile.json',j)
+j=load('containment-and-observer.json');j['sandbox']=j['sandbox'].replace('No host sockets/repo/HOME/keys/config/cache mounted.','Only six individually bound per-attempt observer FIFO nodes as specified in transport-topology.json; no host sockets/repo/HOME/keys/config/cache mounted.')
+j['observer']['transport']='Selected named-FIFO topology in transport-topology.json: unmodified-byte adapters inserted via supported executable overrides, separate peer processes and supervisor channels reopened after exec. No extra FD is assumed inherited across SDK Popen/spawn. Raw chunks and actual forward commits are distinct; control never enters SDK stdio.'
+j['observer']['ordering']+=' Complete frames/counters must reconcile with topology END/known termination and host service/cgroup/pipe EOF witnesses. Uncertain signal/commit windows invalidate capture.'
+j['admission_tests']+=topology['required_admission_controls'];j['transport_topology']='transport-topology.json'
+save('containment-and-observer.json',j)
+p=P/'HOW.md';t=p.read_text();t=t.replace('e [casos](cases.json).','e [casos](cases.json). A [topologia selecionada](transport-topology.json)\nfixa processos, argv, relays e FIFOs nomeados reabertos depois de cada exec.');t+='''
+## Transporte e revisão R1
+
+R1 encontrou uma lacuna P2: os SDKs não passam um FD de controle extra aos
+subprocessos. O reparo escolhe seis FIFOs nomeados por tentativa, expostos
+individualmente, que cada papel reabre por caminho depois do exec. Os adapters
+Python/Node são os filhos sintéticos dos SDKs e lançam os peers separados com
+pipes normais. O observador externo recebe bytes/counters pelos FIFOs; o
+controle fica fora de stdin/stdout/stderr. Nenhum socket do host é exposto.
+
+A montagem e o I/O dos nós individuais, os limites de frame, a barreira
+cancel/reply e a captura sob sinal precisam passar admissão concreta antes dos
+SDKs. Se um sinal puder ocultar um commit ou uma captura estiver incompleta,
+o caso é inválido/inconclusivo. O adapter é um endpoint sintético instrumentado;
+seu tratamento de sinais não representa o ciclo de vida do Codex CLI real.
+''';p.write_text(t)
+save('repair-r1.json',{'kind':'ONE_GROUPED_T1_HOW_REPAIR','finding':'R1-F01','review_rounds_used':1,'grouped_repairs_used':1,'remaining_reviews':1,'additional_repairs_authorized':0,
+ 'changed_frozen_inputs':changed,'new_contract':'transport-topology.json','prior_subject_reconstruction':'R1-preimages/map.json','R1_verdict_preserved':'review-r1/review.json',
+ 'decision':'Select named FIFOs reopened after exec by driver/adapters/peers, with exact process/argv/channel/relay/commit/cutpoint/shutdown construction and finite prerequisite tests; align stage dependency order.',
+ 'not_executed':['FIFOs or adapter controls','SDK','TypeScript compiler','artifact acquisition'],'functional_receipts':0,'observed_at':datetime.now(timezone.utc).isoformat()})
+# Format before freeze. Historical first review and preimages remain byte exact.
+paths=[str(P/n) for n in changed+['transport-topology.json','repair-r1.json','Lead-review-r1.json','R1-preimages/map.json']]
+c=subprocess.run([str(P.parents[5]/'node_modules/.bin/prettier'),'--write',*paths],capture_output=True,text=True);assert c.returncode==0,c.stderr
+for x in freeze['files']:
+ candidates=[p for p in mapping if p['path']==x['path']];q=P/(candidates[0]['preimage'] if candidates else x['path'])
+ assert q.stat().st_size==x['bytes'] and h(q)==x['sha256'],x['path']
+assert h(manifest)=='8df1330982aab1ce01101723e5b7d19a3ea30961cd799edd8be026984d4146b3'
+# R2 extends the judged contract without pulling mutable closure/control files into the subject.
+paths={x['path'] for x in freeze['files']}
+paths|={'review-freeze-r1.json','transport-topology.json','repair-r1.json','Lead-review-r1.json','R1-preimages/map.json'}
+paths|={str(p.relative_to(P)) for p in pre.iterdir() if p.is_file()}
+paths|={str(p.relative_to(P)) for p in (P/'review-r1').rglob('*') if p.is_file()}
+fs=[{'path':n,'bytes':(P/n).stat().st_size,'sha256':h(P/n)} for n in sorted(paths)]
+save('review-freeze-r2.json',{'kind':'FINAL_T1_HOW_REVIEW_SUBJECT','round':2,'files':fs,'file_count':len(fs),'observed_at':datetime.now(timezone.utc).isoformat(),'prior57_reconstructible':True,'max_reviews':2,'grouped_repairs_used':1,'runtime':'NOT_RUN'})
+c=subprocess.run(['python3',str(P/'verify.py')],capture_output=True,text=True);assert c.returncode==0,c.stdout
+save('verification-r2.json',{'exit_status':c.returncode,'output':json.loads(c.stdout),'stderr':c.stderr})
+print(json.dumps({'R1_reconstructed':57,'R2_inputs':len(fs),'freeze_sha256':h(P/'review-freeze-r2.json'),'changed':changed,'static_pass':6}))

@@ -1,0 +1,17 @@
+const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:path');
+const w='/tmp/cvg-claude100-exec-20261017/foundation-th06-candidate',ts=require(w+'/node_modules/typescript'),base=process.cwd()+'/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/',out=base+'foundation-diagnostics-replan/';
+const freeze=JSON.parse(fs.readFileSync(base+'foundation-th06-recovery/source-freeze.json'));
+const files=[],rows=[];
+for(const row of freeze.sources.filter(x=>x.role==='candidate')){
+ const text=fs.readFileSync(w+'/'+row.path,'utf8'),sha=crypto.createHash('sha256').update(text).digest('hex');if(sha!==row.sha256)throw Error('Frozen source drift');
+ const sf=ts.createSourceFile(row.path,text,ts.ScriptTarget.Latest,true),candidate=[];
+ function walk(n){if(ts.isCallExpression(n)&&((ts.isIdentifier(n.expression)&&n.expression.text==='errorInfo')||(ts.isIdentifier(n.expression)&&n.expression.text==='String'&&n.arguments.some(x=>/^(error|e|caught|failure)$/.test(x.getText(sf)))))){
+   let caught,owner,arrow,tries=[],guards=[];for(let a=n.parent;a;a=a.parent){if(!caught&&ts.isCatchClause(a))caught=a;if(!owner&&ts.isFunctionLike(a))owner=a;if(ts.isArrowFunction(a))arrow=a;if(ts.isTryStatement(a)&&a.catchClause&&n.getStart(sf)>=a.tryBlock.getStart(sf)&&n.end<=a.tryBlock.end)tries.push(sf.getLineAndCharacterOfPosition(a.getStart(sf)).line+1);if(ts.isCallExpression(a)&&/^(cleanupCompleteChildren|withCompleteCleanup)$/.test(a.expression.getText(sf)))guards.push({kind:a.expression.getText(sf),line:sf.getLineAndCharacterOfPosition(a.getStart(sf)).line+1,lazyCallbackAncestor:!!arrow})}
+   const line=sf.getLineAndCharacterOfPosition(n.getStart(sf)).line+1,context=text.split('\n').slice(Math.max(0,line-3),line+2).join('\n');
+   const classification=row.path.endsWith('complete-process-support.test.ts')?'TEST_ORACLE_OR_DIAGNOSTIC_SUBSTITUTE_REQUIRES_REAL_PROJECTION_CONTROL':caught?(guards.some(x=>x.kind==='cleanupCompleteChildren'&&x.lazyCallbackAncestor)?'INFERRED_LAZY_DIAGNOSTIC_CALLBACK_CHECK_PRIMARY_BINDING':'CATCH_PROJECTION_NEEDS_PRIMARY_OWNERSHIP_ANALYSIS'):tries.length?'TRY_PROTECTED_PROJECTION_CHECK_PRIMARY_RECOMBINATION':'PROJECTION_OR_HANDLER_REQUIRES_SEMANTIC_CLASSIFICATION';
+   candidate.push({line,call:n.getText(sf),kind:n.expression.getText(sf),owner:owner?.name?.getText(sf)||'callback',nearestCatchLine:caught?sf.getLineAndCharacterOfPosition(caught.getStart(sf)).line+1:null,tryCatchEnclosures:tries,resourceOwnerEnclosures:guards,classification,evidence:'STATIC_AST_ONLY_NOT_RUNTIME_PROOF',context});
+ }ts.forEachChild(n,walk)}walk(sf);
+ files.push({path:row.path,sha256:sha,sites:candidate.length});for(const r of candidate)rows.push({path:row.path,...r});
+}
+const result={task:'C100-FND-DIAGNOSTICS-REPLAN-001',at:new Date().toISOString(),head:freeze.head,scope:'seven frozen private tests/support files; complete direct errorInfo plus named error coercions',files,siteCount:rows.length,sites:rows,classificationIsProof:false,callerDataflow:'UNKNOWN until reviewed HOW; lexical ancestry alone cannot prove primary survives',executedApplicationOrTests:false,sourceMutated:false,oldUnits:'FAILED_CLOSED_NO_BUDGET_RESET'};
+fs.writeFileSync(out+'diagnostic-source-map.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify({sites:rows.length,files:files.map(x=>({path:path.basename(x.path),sites:x.sites})),method:'staticAST only; no target/helper imported or executed'}));

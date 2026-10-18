@@ -1,0 +1,41 @@
+'use strict';
+const net = require('node:net');
+const http = require('node:http');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const socketError = options => new Promise((resolve, reject) => {
+  let socket;
+  assert.doesNotThrow(() => { socket = net.connect(options); });
+  socket.once('error', error => resolve(error.code));
+  socket.once('connect', () => { socket.destroy(); reject(new Error('Negative control connected')); });
+});
+(async () => {
+  for (const options of [{ host: '203.0.113.1', port: 443 }, { host: '127.0.0.1', port: 5432 }, { host: 'provider.invalid', port: 443 }]) {
+    assert.equal(await socketError(options), 'CVG_GLOBAL_TEST_NETWORK_BLOCKED');
+  }
+  const server = http.createServer((req, res) => res.end(req.headers.host));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const answer = await new Promise((resolve, reject) => {
+    const req = http.get({ hostname: 'provider.invalid', port, agent: false, lookup: (_host, opts, cb) => opts.all
+      ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4) }, res => {
+      let value = ''; res.on('data', chunk => value += chunk); res.on('end', () => resolve(value));
+    });
+    req.once('error', reject);
+  });
+  assert.equal(answer, `provider.invalid:${port}`);
+  for (const addresses of [[{ address: '203.0.113.1', family: 4 }], [{ address: '127.0.0.1', family: 4 }, { address: '203.0.113.1', family: 4 }]]) {
+    assert.equal(await socketError({ host: 'provider.invalid', port, autoSelectFamily: true,
+      lookup: (_host, _opts, cb) => cb(null, addresses) }), 'CVG_GLOBAL_TEST_NETWORK_BLOCKED');
+  }
+  await new Promise(resolve => server.close(resolve));
+  assert.equal(await socketError({ host: '127.0.0.1', port }), 'CVG_GLOBAL_TEST_NETWORK_BLOCKED');
+  const ipcPath = path.join(__dirname, 'qualification.sock');
+  const ipc = net.createServer(socket => socket.end('own-ipc'));
+  await new Promise(resolve => ipc.listen(ipcPath, resolve));
+  await new Promise((resolve, reject) => {
+    const socket = net.connect(ipcPath); socket.once('error', reject); socket.resume(); socket.once('end', resolve);
+  });
+  await new Promise(resolve => ipc.close(resolve));
+  console.log('PASS: owned pinned HTTP and IPC; async denial of external, unpinned, mixed lookup, unowned PG, and closed listeners; original logical authority preserved');
+})().catch(error => { console.error(error); process.exitCode = 1; });

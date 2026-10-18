@@ -1,0 +1,28 @@
+import os,sys,json,time,subprocess,hashlib
+from pathlib import Path
+D=Path(__file__).resolve().parent
+label=sys.argv[1];argv=sys.argv[2:]
+assert label.replace("-", "").isalnum()
+for name in ("home","tmp","xdg-cache","xdg-config","xdg-data","xdg-state","xdg-runtime"):(D/"private"/name).mkdir(parents=True,exist_ok=True)
+env={"PATH":"/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(D/"private/home"),"TMPDIR":str(D/"private/tmp"),"TMP":str(D/"private/tmp"),"TEMP":str(D/"private/tmp"),"XDG_CACHE_HOME":str(D/"private/xdg-cache"),"XDG_CONFIG_HOME":str(D/"private/xdg-config"),"XDG_DATA_HOME":str(D/"private/xdg-data"),"XDG_STATE_HOME":str(D/"private/xdg-state"),"XDG_RUNTIME_DIR":str(D/"private/xdg-runtime"),"NODE_DISABLE_COMPILE_CACHE":"1","PYTHONDONTWRITEBYTECODE":"1","TSX_DISABLE_CACHE":"1"}
+start=time.time(); t=time.monotonic(); out=D/(label+".stdout.txt");err=D/(label+".stderr.txt")
+with out.open("wb") as o,err.open("wb") as e:
+ p=subprocess.Popen(argv,cwd=D,env=env,stdout=o,stderr=e)
+ try:rc=p.wait(timeout=180);timeout=False
+ except subprocess.TimeoutExpired:p.kill();rc=p.wait(timeout=5);timeout=True
+record={"argv":argv,"cwd":str(D),"env":env,"startEpoch":start,"elapsedSeconds":time.monotonic()-t,"exit":rc,"wrapperTimeout":timeout,"stdout":{"path":str(out),"bytes":out.stat().st_size,"sha256":hashlib.sha256(out.read_bytes()).hexdigest()},"stderr":{"path":str(err),"bytes":err.stat().st_size,"sha256":hashlib.sha256(err.read_bytes()).hexdigest()},"truncated":False}
+(D/(label+".command.json")).write_text(json.dumps(record,indent=2)+"\n")
+print(json.dumps(record))
+for path in (out,err):
+ b=path.read_bytes();print(path.name+":\n"+b[:90000].decode("utf-8","replace"))
+ if len(b)>90000:print("DISPLAY TRUNCATED; full capture retained")
+if label=="finalize" and rc==0:
+ manifest_path=D/"artifact-manifest.json"
+ paths={f for f in D.rglob("*") if f.is_file() and f!=manifest_path}
+ paths.update(f for f in (D.parent/"runs/i1-01").rglob("*") if f.is_file())
+ paths.add(D.parent/"receipt-i1-01.json")
+ entries=[{"path":str(f),"bytes":f.stat().st_size,"sha256":hashlib.sha256(f.read_bytes()).hexdigest()} for f in sorted(paths)]
+ manifest={"schema":"i1-artifact-manifest-v1","selfExcluded":str(manifest_path),"coverage":"all D regular files plus own i1-01 run regular files and receipt; frozen inputs separately in integrity.json","artifacts":entries}
+ manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
+ print(json.dumps({"manifest":str(manifest_path),"files":len(entries),"leadPinSHA256":hashlib.sha256(manifest_path.read_bytes()).hexdigest()}))
+sys.exit(rc)

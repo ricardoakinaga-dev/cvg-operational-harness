@@ -1,0 +1,1948 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/operational-step-postgres.ts SHA256 e110ee06553b5612a798f8b8966516d3f7c4e416b4850a764e052db0f7c14cbd
+     1 import {
+     2   guardOptionalPublishedWrite,
+     3   type ControlledPublishedDatabaseFence
+     4 } from './controlled-published-fencing.ts'
+     5 import type {
+     6   ExecutionCheckpoint,
+     7   ExecutionStep,
+     8   ExecutionStepStore,
+     9   CheckpointCompareAndSwapInput,
+    10   CheckpointCompareAndSwapResult
+    11 } from '@cvg/harness-contracts'
+    12 import {
+    13   isStepTransitionAllowed,
+    14   type StepStatus
+    15 } from '@cvg/harness-contracts'
+    16 import {
+    17   CheckpointError,
+    18   validateCheckpointIntegrity,
+    19   encodeCompleteCheckpointState,
+    20   decodeCompleteCheckpointState,
+    21   validateCompleteCheckpointTransition,
+    22   COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES,
+    23   COMPLETE_CHECKPOINT_DATA_MAX_CHARS
+    24 } from '@cvg/harness'
+    25 import type { TenantId } from '@cvg/platform'
+    26 import { TenantIdSchema } from '@cvg/platform'
+    27 import type { QueryResultRow } from 'pg'
+    28 import type { PostgresQueryable } from './postgres.ts'
+    29 import {
+    30   withTenantContext,
+    31   type PostgresPoolClient,
+    32   type PostgresPoolLike
+    33 } from './tenant-scoped-postgres.ts'
+    34 
+    35 export type OperationalStepPostgresConnection =
+    36   | PostgresQueryable
+    37   | PostgresPoolLike
+    38 
+    39 export interface PostgresExecutionStepStoreOptions {
+    40   readonly clock?: () => Date
+    41   /** Trusted bound composition only; absent keeps unbound behavior. */
+    42   readonly fence?: ControlledPublishedDatabaseFence
+    43 }
+    44 
+    45 interface StepRow extends QueryResultRow {
+    46   tenant_id: string
+    47   execution_id: string
+    48   step_number: number
+    49   step_id: string
+    50   step_type: ExecutionStep['stepType']
+    51   status: StepStatus
+    52   attempt: number
+    53   side_effecting: boolean
+    54   decision_type: ExecutionStep['decisionType'] | null
+    55   reason_code: string | null
+    56   error_code: string | null
+    57   observation_refs: unknown
+    58   started_at: Date | string
+    59   completed_at: Date | string | null
+    60 }
+    61 
+    62 interface CheckpointRow extends QueryResultRow {
+    63   tenant_id: string
+    64   execution_id: string
+    65   checkpoint_id: string
+    66   checkpoint_version: number
+    67   runtime_profile: string
+    68   runtime_version: string
+    69   orchestrator_version: string
+    70   step_number: number
+    71   state: unknown
+    72   budget_usage: unknown
+    73   digest: string
+    74   created_at: Date | string
+    75 }
+    76 
+    77 const stepColumns = `
+    78   tenant_id, execution_id, step_number, step_id, step_type, status, attempt,
+    79   side_effecting, decision_type, reason_code, error_code, observation_refs,
+    80   started_at, completed_at`
+    81 
+    82 const checkpointColumns = `
+    83   tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+    84   runtime_version, orchestrator_version, step_number, state, budget_usage,
+    85   digest, created_at`
+    86 
+    87 // CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+    88 // octet_length uses expanded text size, not compressed pg_column_size.
+    89 const boundedCheckpointColumns = checkpointColumns.replace(
+    90   'state, budget_usage',
+    91   `
+    92   CASE WHEN checkpoint_version <> 2 OR
+    93     (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
+    94      AND length(state->>'data') <= ${COMPLETE_CHECKPOINT_DATA_MAX_CHARS})
+    95     THEN state ELSE NULL END AS state,
+    96   CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+    97     THEN budget_usage ELSE NULL END AS budget_usage`
+    98 )
+    99 
+   100 function text(value: unknown, label: string, max = 200): string {
+   101   if (typeof value !== 'string' || value.trim().length === 0) {
+   102     throw new CheckpointError('checkpoint_binding', `${label} is required`)
+   103   }
+   104   if (value.length > max) {
+   105     throw new CheckpointError('checkpoint_binding', `${label} is too long`)
+   106   }
+   107   return value.trim()
+   108 }
+   109 
+   110 function asIso(value: Date | string | null): string | null {
+   111   if (value === null) return null
+   112   return value instanceof Date
+   113     ? value.toISOString()
+   114     : new Date(value).toISOString()
+   115 }
+   116 
+   117 function jsonValue(value: unknown): unknown {
+   118   if (typeof value !== 'string') return value
+   119   try {
+   120     return JSON.parse(value) as unknown
+   121   } catch {
+   122     throw new CheckpointError(
+   123       'checkpoint_integrity',
+   124       'Persisted step JSON is invalid'
+   125     )
+   126   }
+   127 }
+   128 
+   129 function jsonText(value: unknown, label: string): string {
+   130   try {
+   131     const serialized = JSON.stringify(value)
+   132     if (serialized === undefined) throw new Error('undefined')
+   133     return serialized
+   134   } catch {
+   135     throw new CheckpointError(
+   136       'checkpoint_integrity',
+   137       `${label} cannot be serialized`
+   138     )
+   139   }
+   140 }
+   141 
+   142 function mapStep(row: StepRow): ExecutionStep {
+   143   const refs = jsonValue(row.observation_refs)
+   144   return {
+   145     stepId: row.step_id,
+   146     executionId: row.execution_id,
+   147     tenantId: row.tenant_id,
+   148     stepNumber: row.step_number,
+   149     stepType: row.step_type,
+   150     status: row.status,
+   151     attempt: row.attempt,
+   152     sideEffecting: row.side_effecting,
+   153     startedAt: asIso(row.started_at) as string,
+   154     ...(row.completed_at
+   155       ? { completedAt: asIso(row.completed_at) as string }
+   156       : {}),
+   157     ...(row.decision_type ? { decisionType: row.decision_type } : {}),
+   158     ...(row.reason_code
+   159       ? {
+   160           reasonCode: row.reason_code as NonNullable<
+   161             ExecutionStep['reasonCode']
+   162           >
+   163         }
+   164       : {}),
+   165     observationRefs: Array.isArray(refs) ? (refs as string[]) : [],
+   166     ...(row.error_code ? { errorCode: row.error_code } : {})
+   167   }
+   168 }
+   169 
+   170 function mapCheckpoint(row: CheckpointRow): ExecutionCheckpoint {
+   171   return {
+   172     checkpointId: row.checkpoint_id,
+   173     executionId: row.execution_id,
+   174     tenantId: row.tenant_id,
+   175     checkpointVersion: row.checkpoint_version,
+   176     runtimeProfile:
+   177       row.runtime_profile as ExecutionCheckpoint['runtimeProfile'],
+   178     runtimeVersion: row.runtime_version,
+   179     orchestratorVersion: row.orchestrator_version,
+   180     stepNumber: row.step_number,
+   181     state:
+   182       row.checkpoint_version === 2
+   183         ? decodeCompleteCheckpointState(row.state)
+   184         : (jsonValue(row.state) as ExecutionCheckpoint['state']),
+   185     budgetUsage: jsonValue(
+   186       row.budget_usage
+   187     ) as ExecutionCheckpoint['budgetUsage'],
+   188     createdAt: asIso(row.created_at) as string,
+   189     digest: row.digest
+   190   }
+   191 }
+   192 
+   193 function isPool(
+   194   connection: OperationalStepPostgresConnection
+   195 ): connection is PostgresPoolLike {
+   196   return typeof (connection as PostgresPoolLike).connect === 'function'
+   197 }
+   198 
+   199 /**
+   200  * Durable Phase 3 step/checkpoint authority. Tenant scoping is inherited from
+   201  * the Phase 2 connection discipline; checkpoint integrity is validated before
+   202  * every write and after every read.
+   203  */
+   204 export class PostgresExecutionStepStore implements ExecutionStepStore {
+   205   private readonly clock: () => Date
+   206   private readonly fence: ControlledPublishedDatabaseFence | undefined
+   207 
+   208   public constructor(
+   209     private readonly connection: OperationalStepPostgresConnection,
+   210     options: PostgresExecutionStepStoreOptions = {}
+   211   ) {
+   212     this.clock = options.clock ?? (() => new Date())
+   213     this.fence = options.fence
+   214   }
+   215 
+   216   public recordStep(step: ExecutionStep): Promise<void> {
+   217     const tenant = TenantIdSchema.parse(step.tenantId)
+   218     if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {
+   219       throw new CheckpointError(
+   220         'step_conflict',
+   221         'A step number must be a positive integer'
+   222       )
+   223     }
+   224     return this.run(tenant, (client) =>
+   225       transaction(client, async () => {
+   226         const guard = await guardOptionalPublishedWrite(
+   227           client,
+   228           tenant,
+   229           step.executionId,
+   230           this.fence,
+   231           ['SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING'].includes(step.status)
+   232         )
+   233         await recordOperationalStepOnClient(client, tenant, step, guard)
+   234         await guard?.recheck()
+   235       })
+   236     )
+   237   }
+   238 
+   239   public listSteps(
+   240     tenantId: string,
+   241     executionId: string
+   242   ): Promise<readonly ExecutionStep[]> {
+   243     const tenant = TenantIdSchema.parse(tenantId)
+   244     const id = text(executionId, 'executionId')
+   245     return this.run(tenant, async (client) => {
+   246       const result = await client.query<StepRow>(
+   247         `SELECT ${stepColumns}
+   248            FROM operational_execution_steps
+   249           WHERE tenant_id = $1 AND execution_id = $2
+   250           ORDER BY step_number ASC`,
+   251         [tenant, id]
+   252       )
+   253       return result.rows.map(mapStep)
+   254     })
+   255   }
+   256 
+   257   public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+   258     if (checkpoint.checkpointVersion === 2)
+   259       throw new CheckpointError(
+   260         'checkpoint_version',
+   261         'V2 checkpoints require CAS'
+   262       )
+   263     const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+   264     validateCheckpointIntegrity(checkpoint, {
+   265       tenantId: checkpoint.tenantId,
+   266       executionId: checkpoint.executionId
+   267     })
+   268     return this.run(tenant, (client) =>
+   269       transaction(client, async () => {
+   270         const guard = await guardOptionalPublishedWrite(
+   271           client,
+   272           tenant,
+   273           checkpoint.executionId,
+   274           this.fence,
+   275           !!checkpoint.state.stopReason
+   276         )
+   277         await guard?.recheck()
+   278         await saveOperationalCheckpointOnClient(client, tenant, checkpoint)
+   279         await guard?.recheck()
+   280       })
+   281     )
+   282   }
+   283 
+   284   public compareAndSwapCheckpoint(
+   285     input: CheckpointCompareAndSwapInput
+   286   ): Promise<CheckpointCompareAndSwapResult> {
+   287     const tenant = TenantIdSchema.parse(input.tenantId)
+   288     validateCheckpointIntegrity(input.next, input)
+   289     if (
+   290       input.expected &&
+   291       input.expected.checkpointId === input.next.checkpointId
+   292     ) {
+   293       throw new CheckpointError(
+   294         'checkpoint_integrity',
+   295         'CAS requires a fresh checkpoint ID'
+   296       )
+   297     }
+   298     // Snapshot before the first await; callers cannot alter a validated write in flight.
+   299     const next = structuredClone(input.next)
+   300     const expected = input.expected ? { ...input.expected } : null
+   301     const state =
+   302       next.checkpointVersion === 2
+   303         ? encodeCompleteCheckpointState(next.state)
+   304         : next.state
+   305     const values = [
+   306       tenant,
+   307       next.executionId,
+   308       next.checkpointId,
+   309       next.checkpointVersion,
+   310       next.runtimeProfile,
+   311       next.runtimeVersion,
+   312       next.orchestratorVersion,
+   313       next.stepNumber,
+   314       jsonText(state, 'checkpoint state'),
+   315       jsonText(next.budgetUsage, 'checkpoint budget usage'),
+   316       next.digest,
+   317       next.createdAt
+   318     ]
+   319     return this.run(tenant, (client) =>
+   320       transaction(client, async () => {
+   321         const guard = await guardOptionalPublishedWrite(
+   322           client,
+   323           tenant,
+   324           next.executionId,
+   325           this.fence,
+   326           !!next.state.stopReason
+   327         )
+   328         const existing = await client.query<CheckpointRow>(
+   329           `SELECT ${boundedCheckpointColumns} FROM operational_execution_checkpoints
+   330          WHERE tenant_id = $1 AND execution_id = $2 FOR UPDATE`,
+   331           [tenant, next.executionId]
+   332         )
+   333         const row = existing.rows[0]
+   334         const current = row ? mapCheckpoint(row) : null
+   335         if (current)
+   336           validateCheckpointIntegrity(current, {
+   337             tenantId: tenant,
+   338             executionId: next.executionId
+   339           })
+   340         const currentToken = current
+   341           ? { checkpointId: current.checkpointId, digest: current.digest }
+   342           : undefined
+   343         if (
+   344           expected === null
+   345             ? current !== null
+   346             : !current ||
+   347               current.checkpointId !== expected.checkpointId ||
+   348               current.digest !== expected.digest
+   349         ) {
+   350           await guard?.recheck()
+   351           return {
+   352             status: 'CONFLICT',
+   353             ...(currentToken ? { currentToken } : {})
+   354           }
+   355         }
+   356         validateCompleteCheckpointTransition(current, next)
+   357         await guard?.recheck()
+   358         const result =
+   359           expected === null
+   360             ? await client.query(
+   361                 `INSERT INTO operational_execution_checkpoints
+   362           (tenant_id,execution_id,checkpoint_id,checkpoint_version,runtime_profile,runtime_version,
+   363            orchestrator_version,step_number,state,budget_usage,digest,created_at)
+   364           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
+   365           ON CONFLICT (tenant_id,execution_id) DO NOTHING RETURNING checkpoint_id`,
+   366                 values
+   367               )
+   368             : await client.query(
+   369                 `UPDATE operational_execution_checkpoints SET
+   370           checkpoint_id=$3,checkpoint_version=$4,runtime_profile=$5,runtime_version=$6,
+   371           orchestrator_version=$7,step_number=$8,state=$9::jsonb,budget_usage=$10::jsonb,digest=$11,created_at=$12
+   372           WHERE tenant_id=$1 AND execution_id=$2 AND checkpoint_id=$13 AND digest=$14
+   373           RETURNING checkpoint_id`,
+   374                 [...values, expected.checkpointId, expected.digest]
+   375               )
+   376         await guard?.recheck()
+   377         return result.rows.length
+   378           ? {
+   379               status: 'APPLIED',
+   380               token: { checkpointId: next.checkpointId, digest: next.digest }
+   381             }
+   382           : { status: 'CONFLICT' }
+   383       })
+   384     )
+   385   }
+   386 
+   387   public loadCheckpoint(
+   388     tenantId: string,
+   389     executionId: string
+   390   ): Promise<ExecutionCheckpoint | null> {
+   391     const tenant = TenantIdSchema.parse(tenantId)
+   392     const id = text(executionId, 'executionId')
+   393     return this.run(tenant, async (client) => {
+   394       const result = await client.query<CheckpointRow>(
+   395         `SELECT ${boundedCheckpointColumns}
+   396            FROM operational_execution_checkpoints
+   397           WHERE tenant_id = $1 AND execution_id = $2`,
+   398         [tenant, id]
+   399       )
+   400       const row = result.rows[0]
+   401       if (!row) return null
+   402       const checkpoint = mapCheckpoint(row)
+   403       validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })
+   404       return checkpoint
+   405     })
+   406   }
+   407 
+   408   private async run<T>(
+   409     tenant: TenantId,
+   410     operation: (client: PostgresQueryable) => Promise<T>
+   411   ): Promise<T> {
+   412     if (isPool(this.connection)) {
+   413       return withTenantContext(
+   414         this.connection,
+   415         tenant,
+   416         (client: PostgresPoolClient) => operation(client)
+   417       )
+   418     }
+   419     return operation(this.connection)
+   420   }
+   421 }
+   422 
+   423 async function transaction<T>(
+   424   client: PostgresQueryable,
+   425   operation: () => Promise<T>
+   426 ): Promise<T> {
+   427   await client.query('BEGIN')
+   428   try {
+   429     const result = await operation()
+   430     await client.query('COMMIT')
+   431     return result
+   432   } catch (error) {
+   433     await client.query('ROLLBACK').catch(() => undefined)
+   434     throw error
+   435   }
+   436 }
+   437 
+   438 /** Package-internal: caller supplies parent fence and owns the transaction. */
+   439 export async function recordOperationalStepOnClient(
+   440   client: PostgresQueryable,
+   441   tenant: TenantId,
+   442   step: ExecutionStep,
+   443   guard?: { recheck: () => Promise<Date> } | null
+   444 ): Promise<void> {
+   445   const existing = await client.query<StepRow>(
+   446     `SELECT ${stepColumns}
+   447      FROM operational_execution_steps
+   448     WHERE tenant_id = $1 AND execution_id = $2 AND step_number = $3
+   449     FOR UPDATE`,
+   450     [tenant, step.executionId, step.stepNumber]
+   451   )
+   452   const current = existing.rows[0]
+   453   if (current) {
+   454     if (current.step_id !== step.stepId) {
+   455       throw new CheckpointError(
+   456         'step_conflict',
+   457         'A different step already occupies this step number'
+   458       )
+   459     }
+   460     if (
+   461       current.status !== step.status &&
+   462       !isStepTransitionAllowed(current.status, step.status)
+   463     ) {
+   464       throw new CheckpointError(
+   465         'step_transition',
+   466         `Step transition ${current.status} -> ${step.status} is not allowed`
+   467       )
+   468     }
+   469     await guard?.recheck()
+   470     await client.query(
+   471       `UPDATE operational_execution_steps
+   472         SET status = $4, attempt = $5, side_effecting = $6,
+   473             decision_type = $7, reason_code = $8, error_code = $9,
+   474             observation_refs = $10::jsonb,
+   475             started_at = $11, completed_at = $12
+   476       WHERE tenant_id = $1 AND execution_id = $2 AND step_number = $3`,
+   477       [
+   478         tenant,
+   479         step.executionId,
+   480         step.stepNumber,
+   481         step.status,
+   482         step.attempt,
+   483         step.sideEffecting,
+   484         step.decisionType ?? null,
+   485         step.reasonCode ?? null,
+   486         step.errorCode ?? null,
+   487         jsonText(step.observationRefs, 'observation refs'),
+   488         step.startedAt,
+   489         step.completedAt ?? null
+   490       ]
+   491     )
+   492     return
+   493   }
+   494   const blocking = await client.query<{ step_number: number }>(
+   495     `SELECT step_number
+   496      FROM operational_execution_steps
+   497     WHERE tenant_id = $1 AND execution_id = $2
+   498       AND step_number < $3
+   499       AND status NOT IN ('SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING')
+   500     ORDER BY step_number ASC
+   501     LIMIT 1`,
+   502     [tenant, step.executionId, step.stepNumber]
+   503   )
+   504   if (blocking.rows[0]) {
+   505     throw new CheckpointError(
+   506       'step_transition',
+   507       `Step ${step.stepNumber} cannot start before step ${blocking.rows[0].step_number} settles`
+   508     )
+   509   }
+   510   await guard?.recheck()
+   511   await client.query(
+   512     `INSERT INTO operational_execution_steps
+   513      (tenant_id, execution_id, step_number, step_id, step_type, status,
+   514       attempt, side_effecting, decision_type, reason_code, error_code,
+   515       observation_refs, started_at, completed_at)
+   516    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb,
+   517            $13, $14)`,
+   518     [
+   519       tenant,
+   520       step.executionId,
+   521       step.stepNumber,
+   522       step.stepId,
+   523       step.stepType,
+   524       step.status,
+   525       step.attempt,
+   526       step.sideEffecting,
+   527       step.decisionType ?? null,
+   528       step.reasonCode ?? null,
+   529       step.errorCode ?? null,
+   530       jsonText(step.observationRefs, 'observation refs'),
+   531       step.startedAt,
+   532       step.completedAt ?? null
+   533     ]
+   534   )
+   535 }
+   536 
+   537 /** Package-internal; used by the atomic snapshot/checkpoint seal. */
+   538 export async function saveOperationalCheckpointOnClient(
+   539   client: PostgresQueryable,
+   540   tenant: TenantId,
+   541   checkpoint: ExecutionCheckpoint
+   542 ): Promise<void> {
+   543   if (checkpoint.checkpointVersion === 2)
+   544     throw new CheckpointError(
+   545       'checkpoint_version',
+   546       'V2 checkpoints require CAS'
+   547     )
+   548   validateCheckpointIntegrity(checkpoint, {
+   549     tenantId: tenant,
+   550     executionId: checkpoint.executionId
+   551   })
+   552   const result = await client.query(
+   553     `INSERT INTO operational_execution_checkpoints
+   554      (tenant_id, execution_id, checkpoint_id, checkpoint_version,
+   555       runtime_profile, runtime_version, orchestrator_version,
+   556       step_number, state, budget_usage, digest, created_at)
+   557    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb,
+   558            $11, $12)
+   559    ON CONFLICT (tenant_id, execution_id) DO UPDATE
+   560      SET checkpoint_id = EXCLUDED.checkpoint_id,
+   561          checkpoint_version = EXCLUDED.checkpoint_version,
+   562          runtime_profile = EXCLUDED.runtime_profile,
+   563          runtime_version = EXCLUDED.runtime_version,
+   564          orchestrator_version = EXCLUDED.orchestrator_version,
+   565          step_number = EXCLUDED.step_number,
+   566          state = EXCLUDED.state,
+   567          budget_usage = EXCLUDED.budget_usage,
+   568          digest = EXCLUDED.digest,
+   569          created_at = EXCLUDED.created_at
+   570      WHERE operational_execution_checkpoints.checkpoint_version <> 2`,
+   571     [
+   572       tenant,
+   573       checkpoint.executionId,
+   574       checkpoint.checkpointId,
+   575       checkpoint.checkpointVersion,
+   576       checkpoint.runtimeProfile,
+   577       checkpoint.runtimeVersion,
+   578       checkpoint.orchestratorVersion,
+   579       checkpoint.stepNumber,
+   580       jsonText(checkpoint.state, 'checkpoint state'),
+   581       jsonText(checkpoint.budgetUsage, 'checkpoint budget usage'),
+   582       checkpoint.digest,
+   583       checkpoint.createdAt
+   584     ]
+   585   )
+   586   if (result.rowCount === 0)
+   587     throw new CheckpointError(
+   588       'checkpoint_version',
+   589       'V1 cannot overwrite a V2 checkpoint'
+   590     )
+   591 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts SHA256 bffb7da0dd305b973bdcc5f390a7d062a0eb3f042f9def0ecb0dae9b64580d4f
+     1 /** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
+     2 import { spawn } from 'node:child_process'
+     3 import { createHash, randomUUID } from 'node:crypto'
+     4 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+     5 import { dirname, join, resolve } from 'node:path'
+     6 import { Pool } from 'pg'
+     7 import { describe, expect, it } from 'vitest'
+     8 import {
+     9   canonicalizeCompleteJson,
+    10   type DecisionInputCounter,
+    11   type ModelGateway,
+    12   type ModelRequest,
+    13   type RuntimeInput
+    14 } from '@cvg/harness-contracts'
+    15 import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+    16 import {
+    17   createCapabilityRegistry,
+    18   createOperationalHarness
+    19 } from '../../../harness/src/index.ts'
+    20 import {
+    21   phase3AgentProfile,
+    22   phase3RuntimeInput,
+    23   InMemoryApprovalEngine,
+    24   RecordingAuditSink,
+    25   RecordingTelemetrySink,
+    26   ScriptedPolicyEngine
+    27 } from '../../../harness/src/__tests__/fixtures/phase3-fixtures.ts'
+    28 import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+    29 import { PostgresOperationalEffectJournal } from '../operational-execution-postgres.ts'
+    30 import { withTenantContext } from '../tenant-scoped-postgres.ts'
+    31 import { TenantIdSchema } from '@cvg/platform'
+    32 
+    33 const resourcePath = process.env.SPEC0224_PUBLIC_PG_RESOURCE
+    34 if (process.env.SPEC0224_PUBLIC_PG_REQUIRED === '1' && !resourcePath)
+    35   throw new Error('Assigned synthetic PG resource required')
+    36 const role = process.env.SPEC0224_PUBLIC_CHILD_ROLE
+    37 const target =
+    38   'packages/persistence/src/__tests__/complete-tool-public-restart.test.ts'
+    39 const tenantId = TenantIdSchema.parse(
+    40   'tenant_00000000-0000-4000-8000-000000000224'
+    41 )
+    42 const toolId = 'synthetic.public.restart.echo'
+    43 const sha = (s: string) => createHash('sha256').update(s).digest('hex')
+    44 // Toy64 is deliberately shared by the synthetic provider and counter; no real tokenizer claim.
+    45 const tokens = (v: unknown) =>
+    46   Math.ceil(
+    47     Buffer.byteLength(
+    48       canonicalizeCompleteJson(v, {
+    49         maxBytes: 1_000_000,
+    50         maxDepth: 64,
+    51         maxNodes: 1_000_000
+    52       })
+    53     ) / 64
+    54   )
+    55 const fixture = (name: string): string | null =>
+    56   name === 'ascii4096'
+    57     ? 'x'.repeat(4096)
+    58     : name === 'unicode4096bytes'
+    59       ? '🙂'.repeat(1024)
+    60       : name === 'json-null-value'
+    61         ? null
+    62         : name === 'json-string-number'
+    63           ? '42'
+    64           : name === 'json-string-null'
+    65             ? 'null'
+    66             : name === 'json-string-object'
+    67               ? '{}'
+    68               : '\u0000'.repeat(4096) + 'Olá🙂漢字"\\\n'
+    69 const save = (path: string, v: unknown) =>
+    70   writeFile(path, JSON.stringify(v, null, 2) + '\n')
+    71 const errorInfo = (e: unknown) =>
+    72   e instanceof Error
+    73     ? {
+    74         name: e.name,
+    75         message: e.message,
+    76         stack: e.stack,
+    77         code: (e as Error & { code?: string }).code
+    78       }
+    79     : { message: String(e) }
+    80 async function exists(p: string) {
+    81   try {
+    82     await readFile(p)
+    83     return true
+    84   } catch (e) {
+    85     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    86     return false
+    87   }
+    88 }
+    89 async function gate(p: string) {
+    90   const until = Date.now() + 25000
+    91   while (!(await exists(p))) {
+    92     if (Date.now() > until) throw new Error(`Gate timeout ${p}`)
+    93     await new Promise((y) => setTimeout(y, 10))
+    94   }
+    95 }
+    96 async function connect() {
+    97   const r = JSON.parse(await readFile(resourcePath!, 'utf8'))
+    98   const u = new URL(r.test_database_url)
+    99   if (
+   100     r.synthetic !== true ||
+   101     r.schemaName !== 'pare224_runtime' ||
+   102     r.containerId !==
+   103       '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c' ||
+   104     u.hostname !== '127.0.0.1'
+   105   )
+   106     throw new Error('Not assigned resource')
+   107   const pool = new Pool({
+   108     connectionString: u.toString(),
+   109     options: `-c search_path=${r.schemaName},public`,
+   110     max: 3
+   111   })
+   112   return {
+   113     pool,
+   114     store: new PostgresExecutionStepStore(pool),
+   115     journal: new PostgresOperationalEffectJournal(pool)
+   116   }
+   117 }
+   118 async function snapshot(dir: string, label: string, executionId: string) {
+   119   const { pool, store } = await connect()
+   120   try {
+   121     const rows = await withTenantContext(pool, tenantId, async (c) => ({
+   122       execution: (
+   123         await c.query(
+   124           'SELECT * FROM operational_executions WHERE tenant_id=$1 AND id=$2',
+   125           [tenantId, executionId]
+   126         )
+   127       ).rows,
+   128       checkpoints: (
+   129         await c.query(
+   130           'SELECT * FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+   131           [tenantId, executionId]
+   132         )
+   133       ).rows,
+   134       steps: (
+   135         await c.query(
+   136           'SELECT * FROM operational_execution_steps WHERE tenant_id=$1 AND execution_id=$2 ORDER BY step_number',
+   137           [tenantId, executionId]
+   138         )
+   139       ).rows,
+   140       journal: (
+   141         await c.query(
+   142           'SELECT * FROM operational_effect_journal WHERE tenant_id=$1 AND operation_key LIKE $2',
+   143           [tenantId, executionId + ':%']
+   144         )
+   145       ).rows
+   146     }))
+   147     const value = {
+   148       rows,
+   149       checkpoint: await store.loadCheckpoint(tenantId, executionId),
+   150       steps: await store.listSteps(tenantId, executionId)
+   151     }
+   152     await save(join(dir, `${label}.json`), value)
+   153     return value
+   154   } finally {
+   155     await pool.end()
+   156   }
+   157 }
+   158 async function seed(executionId: string) {
+   159   const { pool } = await connect()
+   160   try {
+   161     await withTenantContext(pool, tenantId, (c) =>
+   162       c.query(
+   163         "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+   164         [tenantId, executionId, sha(executionId)]
+   165       )
+   166     )
+   167   } finally {
+   168     await pool.end()
+   169   }
+   170 }
+   171 
+   172 async function runChild(
+   173   dir: string,
+   174   input: { executionId: string; name: string },
+   175   childRole: string
+   176 ) {
+   177   const { pool, store, journal } = await connect()
+   178   const audit = new RecordingAuditSink(),
+   179     telemetry = new RecordingTelemetrySink()
+   180   const requests: unknown[] = [],
+   181     results: unknown[] = [],
+   182     casTrace: unknown[] = [],
+   183     journalTrace: unknown[] = []
+   184   const trace = async () =>
+   185     save(join(dir, `${childRole}.trace.json`), {
+   186       pid: process.pid,
+   187       requests,
+   188       results,
+   189       casTrace,
+   190       journalTrace,
+   191       audit: audit.events
+   192     })
+   193   // Observational wrappers call the native methods unchanged and rethrow native failures.
+   194   for (const method of [
+   195     'reserve',
+   196     'markStarted',
+   197     'confirm',
+   198     'fail',
+   199     'markUncertain',
+   200     'get'
+   201   ] as const) {
+   202     const original = journal[method].bind(journal)
+   203     Object.defineProperty(journal, method, {
+   204       value: async (...args: unknown[]) => {
+   205         try {
+   206           const result = await (
+   207             original as (...a: unknown[]) => Promise<unknown>
+   208           )(...args)
+   209           journalTrace.push({ method, args, result })
+   210           await trace()
+   211           if (
+   212             childRole === 'writer' &&
+   213             input.name === 'json-null-value' &&
+   214             method === 'confirm'
+   215           ) {
+   216             await save(join(dir, 'committed.json'), {
+   217               pid: process.pid,
+   218               phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
+   219               checkpoint: await store.loadCheckpoint(
+   220                 tenantId,
+   221                 input.executionId
+   222               ),
+   223               result
+   224             })
+   225             process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
+   226             await new Promise(() => {
+   227               setInterval(() => {}, 1000)
+   228             })
+   229           }
+   230           return result
+   231         } catch (e) {
+   232           journalTrace.push({ method, args, error: errorInfo(e) })
+   233           await trace()
+   234           throw e
+   235         }
+   236       }
+   237     })
+   238   }
+   239   const cas = store.compareAndSwapCheckpoint.bind(store)
+   240   store.compareAndSwapCheckpoint = async (value) => {
+   241     if (childRole.startsWith('race') && value.expected === null) {
+   242       await save(join(dir, `${childRole}.initial-ready.json`), {
+   243         pid: process.pid,
+   244         expected: null
+   245       })
+   246       process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
+   247       await gate(join(dir, 'race-start.gate'))
+   248     }
+   249     const result = await cas(value)
+   250     casTrace.push({ input: value, result })
+   251     await trace()
+   252     if (childRole.startsWith('race') && value.expected === null)
+   253       await save(join(dir, `${childRole}.initial-cas.json`), {
+   254         pid: process.pid,
+   255         result
+   256       })
+   257     const full = value.next.state.observations.find(
+   258       (o) =>
+   259         o.type === 'TOOL_RESULT' &&
+   260         (o.payload as { completion?: string }).completion === 'COMPLETE'
+   261     )
+   262     if (childRole === 'writer' && result.status === 'APPLIED' && full) {
+   263       await save(join(dir, 'committed.json'), {
+   264         pid: process.pid,
+   265         checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
+   266         cas: value,
+   267         result
+   268       })
+   269       process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
+   270       await new Promise(() => {
+   271         setInterval(() => {}, 1000)
+   272       })
+   273     }
+   274     return result
+   275   }
+   276   const capabilities = createCapabilityRegistry([
+   277     {
+   278       descriptor: {
+   279         id: toolId,
+   280         version: '1',
+   281         description: 'Pure synthetic echo',
+   282         inputSchema: { type: 'object' },
+   283         outputSchema: {},
+   284         risk: 'LOW',
+   285         sideEffect: 'NONE',
+   286         idempotent: true,
+   287         requiresApproval: false,
+   288         origin: 'core',
+   289         providerId: 'synthetic.public.restart',
+   290         providerVersion: '1'
+   291       },
+   292       implementation: {
+   293         validateInput: () => true,
+   294         validateOutput: () => true,
+   295         execute: async (toolInput) => {
+   296           const output = (toolInput as { text: string | null }).text
+   297           await appendFile(
+   298             join(dir, 'body-markers.jsonl'),
+   299             JSON.stringify({
+   300               pid: process.pid,
+   301               role: childRole,
+   302               input: toolInput,
+   303               output
+   304             }) + '\n'
+   305           )
+   306           process.stdout.write('PUBLIC224_BODY\n')
+   307           return { status: 'SUCCEEDED', output }
+   308         }
+   309       }
+   310     }
+   311   ])
+   312   const model: ModelGateway = {
+   313     complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+   314       void _signal
+   315       requests.push(structuredClone(request))
+   316       await trace()
+   317       await appendFile(
+   318         join(dir, 'model-markers.jsonl'),
+   319         JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
+   320       )
+   321       expect(request.maxOutputTokens).toBe(512)
+   322       if (childRole.startsWith('race')) await gate(join(dir, 'race-model.gate'))
+   323       const frame = JSON.parse(request.messages[1]!.content)
+   324       const observed = frame.items.find(
+   325         (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
+   326       )
+   327       // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
+   328       const decision = childRole.startsWith('race')
+   329         ? {
+   330             decisionType: 'RESPOND',
+   331             reasonCode: 'GOAL_SATISFIED',
+   332             responseText: 'one synthetic race decision'
+   333           }
+   334         : observed
+   335           ? {
+   336               decisionType: 'RESPOND',
+   337               reasonCode: 'GOAL_SATISFIED',
+   338               responseText:
+   339                 typeof observed.value.payload.output === 'string'
+   340                   ? observed.value.payload.output
+   341                   : canonicalizeCompleteJson(observed.value.payload.output)
+   342             }
+   343           : {
+   344               decisionType: 'CALL_TOOL',
+   345               reasonCode: 'TOOL_REQUIRED',
+   346               toolId,
+   347               toolVersion: '1',
+   348               toolInput: { text: fixture(input.name) }
+   349             }
+   350       const text = JSON.stringify(decision)
+   351       expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
+   352       const result = {
+   353         text,
+   354         provider: 'synthetic.public.restart',
+   355         model: 'toy64-v1',
+   356         inputTokens: tokens(request),
+   357         outputTokens: tokens(text),
+   358         costUsd: 0
+   359       }
+   360       results.push(result)
+   361       await trace()
+   362       return result
+   363     }
+   364   }
+   365   const counter: DecisionInputCounter = {
+   366     measure: async (request) => ({
+   367       counterId: 'toy64',
+   368       counterVersion: '1',
+   369       provider: 'synthetic.public.restart',
+   370       model: 'toy64-v1',
+   371       formattingVersion: '1',
+   372       inputUpperBoundTokens: tokens(request),
+   373       contextWindowTokens: 100_000,
+   374       costUpperBoundUsd: 0
+   375     })
+   376   }
+   377   const harness = createOperationalHarness({
+   378     toolResultContext: { version: 1 },
+   379     capabilities,
+   380     effectJournal: journal,
+   381     stepStore: store,
+   382     iterativeOrchestrator: new HybridOrchestrator({
+   383       decisionModel: model,
+   384       decisionInputCounter: counter,
+   385       decisionModelSupportsMaxOutputTokens: true
+   386     }),
+   387     modelGateway: model,
+   388     policy: new ScriptedPolicyEngine(),
+   389     approvals: new InMemoryApprovalEngine(),
+   390     audit,
+   391     telemetry
+   392   })
+   393   const base = phase3RuntimeInput({
+   394     tenantId: tenantId as RuntimeInput['tenantId'],
+   395     executionId: input.executionId
+   396   })
+   397   const runtimeInput = {
+   398     ...base,
+   399     capabilityFingerprint: capabilities.compositionFingerprint(),
+   400     agent: phase3AgentProfile({ tools: [toolId] }),
+   401     userMessage: 'Echo the full synthetic tool output.',
+   402     budget: { ...base.budget, maxTokens: 10_000 }
+   403   }
+   404   await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
+   405   try {
+   406     const result = await harness.run(runtimeInput)
+   407     await trace()
+   408     await save(join(dir, `${childRole}.outcome.json`), {
+   409       pid: process.pid,
+   410       result
+   411     })
+   412     process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
+   413   } catch (e) {
+   414     await trace()
+   415     await save(join(dir, `${childRole}.error.json`), errorInfo(e))
+   416     throw e
+   417   } finally {
+   418     await pool.end()
+   419   }
+   420 }
+   421 async function child(childRole: string, dir: string, inputPath: string) {
+   422   const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
+   423   if (!config) throw new Error('Private child config required')
+   424   const argv = [
+   425     resolve('node_modules/vitest/vitest.mjs'),
+   426     'run',
+   427     '--config',
+   428     config,
+   429     target
+   430   ]
+   431   const envOverrides = {
+   432     SPEC0224_PUBLIC_CHILD_ROLE: childRole,
+   433     SPEC0224_PUBLIC_CHILD_DIR: dir,
+   434     SPEC0224_PUBLIC_CHILD_INPUT: inputPath
+   435   }
+   436   const proc = spawn(process.execPath, argv, {
+   437     cwd: process.cwd(),
+   438     env: { ...process.env, ...envOverrides },
+   439     stdio: ['ignore', 'pipe', 'pipe']
+   440   })
+   441   let stdout = '',
+   442     stderr = ''
+   443   let readyResolve: (s: string) => void
+   444   const ready = new Promise<string>((y) => {
+   445     readyResolve = y
+   446   })
+   447   const timer = setTimeout(() => {
+   448     readyResolve('timeout')
+   449     proc.kill('SIGKILL')
+   450   }, 45000)
+   451   proc.stdout.on('data', (b: Buffer) => {
+   452     stdout += b.toString()
+   453     if (stdout.includes('PUBLIC224_READY')) readyResolve('ready')
+   454     else if (stdout.includes('PUBLIC224_FINISHED')) readyResolve('finished')
+   455   })
+   456   proc.stderr.on('data', (b: Buffer) => {
+   457     stderr += b.toString()
+   458   })
+   459   const done = new Promise<{
+   460     code: number | null
+   461     signal: NodeJS.Signals | null
+   462   }>((yes, no) => {
+   463     proc.on('error', no)
+   464     proc.on('close', async (code, signal) => {
+   465       clearTimeout(timer)
+   466       readyResolve('exited')
+   467       try {
+   468         const emptyStreamsOmitted = []
+   469         for (const [name, data] of [
+   470           ['stdout', stdout],
+   471           ['stderr', stderr]
+   472         ]) {
+   473           if (data)
+   474             await writeFile(join(dir, `${childRole}.${name}.log`), data!)
+   475           else emptyStreamsOmitted.push(name)
+   476         }
+   477         await save(join(dir, `${childRole}.command.json`), {
+   478           executable: process.execPath,
+   479           argv,
+   480           envOverrides,
+   481           pid: proc.pid,
+   482           code,
+   483           signal,
+   484           emptyStreamsOmitted
+   485         })
+   486         yes({ code, signal })
+   487       } catch (e) {
+   488         no(e)
+   489       }
+   490     })
+   491   })
+   492   return { proc, ready, done }
+   493 }
+   494 async function lines(p: string) {
+   495   return (await exists(p))
+   496     ? (await readFile(p, 'utf8'))
+   497         .trim()
+   498         .split('\n')
+   499         .filter(Boolean)
+   500         .map((s) => JSON.parse(s))
+   501     : []
+   502 }
+   503 if (role) {
+   504   it(`public runtime child ${role}`, async () => {
+   505     const dir = process.env.SPEC0224_PUBLIC_CHILD_DIR!
+   506     const input = JSON.parse(
+   507       await readFile(process.env.SPEC0224_PUBLIC_CHILD_INPUT!, 'utf8')
+   508     )
+   509     await runChild(dir, input, role)
+   510   }, 60000)
+   511 } else {
+   512   describe.skipIf(!resourcePath)(
+   513     'SPEC0224 public PG process recreation',
+   514     () => {
+   515       it.each([
+   516         'ascii4096',
+   517         'unicode4096bytes',
+   518         'nul4096-escapes',
+   519         'json-string-number',
+   520         'json-string-null',
+   521         'json-string-object',
+   522         'json-null-value'
+   523       ])(
+   524         'resumes full %s after APPLIED CAS and SIGKILL without another body',
+   525         async (name) => {
+   526           const dir = join(
+   527             dirname(resourcePath!),
+   528             `restart-${name}-${randomUUID()}`
+   529           )
+   530           await mkdir(dir)
+   531           const executionId = `spec0224_public_${randomUUID()}`,
+   532             inputPath = join(dir, 'input.json')
+   533           await save(inputPath, { executionId, name })
+   534           await seed(executionId)
+   535           let writer: Awaited<ReturnType<typeof child>> | undefined
+   536           try {
+   537             writer = await child('writer', dir, inputPath)
+   538             const checkpointReady = await writer.ready
+   539             if (checkpointReady !== 'ready') {
+   540               await writer.done
+   541               await snapshot(dir, 'native-premature-finish', executionId)
+   542               const native = await readFile(
+   543                 join(dir, 'writer.outcome.json'),
+   544                 'utf8'
+   545               ).catch(() => 'No outcome; see child logs')
+   546               await save(
+   547                 join(dirname(resourcePath!), 'lead-native-failure.json'),
+   548                 {
+   549                   status: 'RED',
+   550                   name,
+   551                   dir,
+   552                   checkpointReady,
+   553                   native,
+   554                   sourcePatches: false
+   555                 }
+   556               )
+   557               throw new Error(
+   558                 `Native runtime did not reach successful full TOOL_RESULT CAS: ${native}; evidence ${dir}`
+   559               )
+   560             }
+   561             expect(writer.proc.kill('SIGKILL')).toBe(true)
+   562             expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+   563             const before = await snapshot(dir, 'before-reader', executionId)
+   564             const committed = JSON.parse(
+   565               await readFile(join(dir, 'committed.json'), 'utf8')
+   566             )
+   567             expect(before.checkpoint).toEqual(committed.checkpoint)
+   568             const reader = await child('reader', dir, inputPath)
+   569             expect(await reader.done).toEqual({ code: 0, signal: null })
+   570             const after = await snapshot(dir, 'after-reader', executionId)
+   571             const outcome = JSON.parse(
+   572               await readFile(join(dir, 'reader.outcome.json'), 'utf8')
+   573             )
+   574             const wt = JSON.parse(
+   575                 await readFile(join(dir, 'writer.trace.json'), 'utf8')
+   576               ),
+   577               rt = JSON.parse(
+   578                 await readFile(join(dir, 'reader.trace.json'), 'utf8')
+   579               )
+   580             await save(join(dir, 'comparison-observed.json'), {
+   581               writerPid: committed.pid,
+   582               readerPid: outcome.pid,
+   583               outcome,
+   584               beforeBudget: before.checkpoint?.budgetUsage,
+   585               afterBudget: after.checkpoint?.budgetUsage,
+   586               bodyMarkers: await lines(join(dir, 'body-markers.jsonl')),
+   587               writerUsage: wt.results,
+   588               readerUsage: rt.results
+   589             })
+   590             expect(outcome.pid).not.toBe(committed.pid)
+   591             expect(outcome.result.stopReason).toBe('COMPLETED')
+   592             expect(outcome.result.response).toBe(
+   593               fixture(name) === null ? 'null' : fixture(name)
+   594             )
+   595             expect(await lines(join(dir, 'body-markers.jsonl'))).toHaveLength(1)
+   596             expect(wt.requests).toHaveLength(1)
+   597             expect(rt.requests).toHaveLength(1)
+   598             const payload = after.checkpoint!.state.observations.find(
+   599               (o) => o.type === 'TOOL_RESULT'
+   600             )!.payload as {
+   601               output: string | null
+   602               outputBytes: number
+   603               outputSha256: string
+   604             }
+   605             expect(payload.output).toBe(fixture(name))
+   606             expect(payload.outputBytes).toBe(
+   607               Buffer.byteLength(canonicalizeCompleteJson(fixture(name)))
+   608             )
+   609             expect(payload.outputSha256).toBe(
+   610               sha(canonicalizeCompleteJson(fixture(name)))
+   611             )
+   612             expect(after.rows.journal).toHaveLength(1)
+   613             expect(after.rows.journal[0]!.state).toBe('CONFIRMED')
+   614             expect(after.rows.journal[0]!.result).toBe(fixture(name))
+   615             expect(after.rows.journal).toEqual(before.rows.journal)
+   616             const receipts =
+   617               after.checkpoint!.state.toolResultContext!.decisionAdmissions
+   618             expect(receipts.map((r) => r.status)).toEqual([
+   619               'SETTLED',
+   620               'SETTLED'
+   621             ])
+   622             expect(new Set(receipts.map((r) => r.admissionId)).size).toBe(2)
+   623             const usage = [...wt.results, ...rt.results]
+   624             expect(after.checkpoint!.budgetUsage).toMatchObject({
+   625               modelCalls: 2,
+   626               inputTokens: usage.reduce((s, r) => s + r.inputTokens, 0),
+   627               outputTokens: usage.reduce((s, r) => s + r.outputTokens, 0),
+   628               costUsd: 0
+   629             })
+   630             expect(before.checkpoint!.budgetUsage.modelCalls).toBe(1)
+   631             expect(receipts.map((r) => r.actual)).toEqual(
+   632               usage.map((r) => ({
+   633                 modelCalls: 1,
+   634                 inputTokens: r.inputTokens,
+   635                 outputTokens: r.outputTokens,
+   636                 costUsd: r.costUsd
+   637               }))
+   638             )
+   639             await save(join(dir, 'assertions-pass.json'), {
+   640               status: 'PASS',
+   641               fullOutputExact: true,
+   642               writerSigkill: true,
+   643               recreatedRuntime: true,
+   644               noNewBody: true,
+   645               actualUsageAndReceipts: true,
+   646               fencebound: 'NOT_RUN'
+   647             })
+   648           } finally {
+   649             if (
+   650               writer &&
+   651               writer.proc.exitCode === null &&
+   652               writer.proc.signalCode === null
+   653             ) {
+   654               writer.proc.kill('SIGKILL')
+   655               await writer.done
+   656             }
+   657           }
+   658         },
+   659         90000
+   660       )
+   661       it('admits only one actual model call from an initial CAS race between two public runtime processes', async () => {
+   662         const dir = join(dirname(resourcePath!), `race-${randomUUID()}`)
+   663         await mkdir(dir)
+   664         const executionId = `spec0224_public_race_${randomUUID()}`,
+   665           inputPath = join(dir, 'input.json')
+   666         await save(inputPath, { executionId, name: 'race' })
+   667         await seed(executionId)
+   668         const children: Awaited<ReturnType<typeof child>>[] = []
+   669         try {
+   670           children.push(
+   671             await child('race-a', dir, inputPath),
+   672             await child('race-b', dir, inputPath)
+   673           )
+   674           expect(await Promise.all(children.map((c) => c.ready))).toEqual([
+   675             'ready',
+   676             'ready'
+   677           ])
+   678           await writeFile(join(dir, 'race-start.gate'), 'go')
+   679           await Promise.all(
+   680             ['race-a', 'race-b'].map((r) =>
+   681               gate(join(dir, `${r}.initial-cas.json`))
+   682             )
+   683           )
+   684           await writeFile(join(dir, 'race-model.gate'), 'go')
+   685           expect(await Promise.all(children.map((c) => c.done))).toEqual([
+   686             { code: 0, signal: null },
+   687             { code: 0, signal: null }
+   688           ])
+   689           const state = await snapshot(dir, 'after-race', executionId)
+   690           const outcomes = await Promise.all(
+   691             ['race-a', 'race-b'].map(async (r) =>
+   692               JSON.parse(await readFile(join(dir, `${r}.outcome.json`), 'utf8'))
+   693             )
+   694           )
+   695           await save(join(dir, 'comparison-observed.json'), {
+   696             outcomes,
+   697             models: await lines(join(dir, 'model-markers.jsonl')),
+   698             state
+   699           })
+   700           expect(await lines(join(dir, 'model-markers.jsonl'))).toHaveLength(1)
+   701           expect(outcomes.map((v) => v.result.stopReason).sort()).toEqual([
+   702             'COMPLETED',
+   703             'STATE_CONFLICT'
+   704           ])
+   705           expect(state.checkpoint!.budgetUsage.modelCalls).toBe(1)
+   706           expect(
+   707             state.checkpoint!.state.toolResultContext!.decisionAdmissions.map(
+   708               (r) => r.status
+   709             )
+   710           ).toEqual(['SETTLED'])
+   711           expect(await lines(join(dir, 'body-markers.jsonl'))).toHaveLength(0)
+   712           await save(join(dir, 'assertions-pass.json'), {
+   713             status: 'PASS',
+   714             initialCasTwoProcesses: true,
+   715             actualModelCalls: 1,
+   716             receipts: 1,
+   717             fencebound: 'NOT_RUN',
+   718             reservationRaceSeparate: 'NOT_RUN'
+   719           })
+   720         } finally {
+   721           await Promise.all(
+   722             children.map(async (c) => {
+   723               if (c.proc.exitCode === null && c.proc.signalCode === null)
+   724                 c.proc.kill('SIGKILL')
+   725               await c.done
+   726             })
+   727           )
+   728         }
+   729       }, 90000)
+   730     }
+   731   )
+   732 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-checkpoint-bound-fence.test.ts SHA256 d34e4bab0f3da7498ec1dbc1b11ffba686a2bc604da4536319d7388736b14e1e
+     1 // SPEC0224 TR05: native bound PostgreSQL CAS only; no runtime/model acceptance.
+     2 import { randomBytes, randomUUID, createHash } from 'node:crypto'
+     3 import { readFile, writeFile } from 'node:fs/promises'
+     4 import { resolve } from 'node:path'
+     5 import { Client, Pool } from 'pg'
+     6 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+     7 import {
+     8   EMPTY_BUDGET_USAGE,
+     9   canonicalizeCompleteJson,
+    10   type ExecutionCheckpoint
+    11 } from '@cvg/harness-contracts'
+    12 import { sealCheckpoint } from '@cvg/harness'
+    13 import {
+    14   AgentConfigSchema,
+    15   InMemoryControlPlaneStore,
+    16   createControlledCapabilityGateway,
+    17   createTraceId,
+    18   prepareControlledPublishedAdmission,
+    19   controlledDigest,
+    20   type ControlledPublishedPrepared
+    21 } from '@cvg/platform'
+    22 import { createCorrelationId } from '@cvg/shared'
+    23 import { runPostgresMigrations } from '../postgres-migrations.ts'
+    24 import { PostgresControlledPublishedKernelStore } from '../controlled-published-kernel-store.ts'
+    25 import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+    26 import { TenantScopedPostgresCapabilityApprovalRepository } from '../tenant-scoped-capability-approval-repository.ts'
+    27 import {
+    28   TenantScopedPostgresRuntimeRepository,
+    29   withTenantContext,
+    30   withTenantTransaction
+    31 } from '../tenant-scoped-postgres.ts'
+    32 
+    33 const resourcePath = process.env.SPEC0224_FENCE_RESOURCE
+    34 const evidence = process.env.SPEC0224_FENCE_EVIDENCE
+    35 if (!resourcePath || !evidence)
+    36   throw new Error(
+    37     'Assigned SPEC0224 fence resource/evidence required; never skip'
+    38   )
+    39 const tenantId = 'tenant_00000000-0000-4000-8000-000000000224'
+    40 const executionId = `exec_${randomUUID()}`
+    41 let admin: Client | undefined
+    42 let pool: Pool | undefined
+    43 let schema: string
+    44 let role: string
+    45 const emit = async (name: string, value: unknown) => {
+    46   await writeFile(
+    47     resolve(evidence, `${name}.json`),
+    48     JSON.stringify(value, null, 2) + '\n'
+    49   )
+    50   console.info('SPEC0224_FENCE', name)
+    51 }
+    52 const token = (cp: ExecutionCheckpoint) => ({
+    53   checkpointId: cp.checkpointId,
+    54   digest: cp.digest
+    55 })
+    56 
+    57 // Pure synthetic checkpoint payload, not a claim of tool/model execution.
+    58 function checkpoint(label: string): ExecutionCheckpoint {
+    59   const output = { synthetic: 'bound-fence', value: 'x'.repeat(4096), label }
+    60   const raw = canonicalizeCompleteJson(output)
+    61   return sealCheckpoint({
+    62     tenantId,
+    63     executionId,
+    64     checkpointVersion: 2,
+    65     runtimeProfile: 'iterative',
+    66     runtimeVersion: '2.0.0',
+    67     orchestratorVersion: '1.0.0',
+    68     stepNumber: 1,
+    69     state: {
+    70       goal: 'synthetic bound CAS only',
+    71       stepNumber: 1,
+    72       openQuestions: [],
+    73       resolvedInputs: {},
+    74       loopSignatures: [],
+    75       observations: [
+    76         {
+    77           observationId: 'obs_fence',
+    78           stepId: 'step_fence',
+    79           executionId,
+    80           stepNumber: 1,
+    81           type: 'TOOL_RESULT',
+    82           source: 'TOOL',
+    83           trust: 'UNTRUSTED',
+    84           payload: {
+    85             schemaVersion: 1,
+    86             status: 'SUCCEEDED',
+    87             sideEffect: 'NONE',
+    88             completion: 'COMPLETE',
+    89             resultAvailability: 'AVAILABLE',
+    90             output,
+    91             outputBytes: Buffer.byteLength(raw),
+    92             outputSha256: createHash('sha256').update(raw).digest('hex')
+    93           },
+    94           summary: 'synthetic fixture',
+    95           provenance: { sourceId: 'synthetic-fence-fixture' },
+    96           timestamp: '2026-10-16T00:00:00.000Z'
+    97         }
+    98       ],
+    99       toolResultContext: {
+   100         version: 1,
+   101         deliveredThroughStep: 0,
+   102         pendingDecisionAdmission: null,
+   103         decisionAdmissions: []
+   104       }
+   105     },
+   106     budgetUsage: {
+   107       ...EMPTY_BUDGET_USAGE,
+   108       steps: 1,
+   109       modelCalls: 1,
+   110       inputTokens: 100,
+   111       outputTokens: 32,
+   112       costUsd: 0.01
+   113     }
+   114   })
+   115 }
+   116 
+   117 describe('SPEC0224 TR05 native bound checkpoint V2 CAS', () => {
+   118   beforeAll(async () => {
+   119     const resource = JSON.parse(await readFile(resourcePath, 'utf8')) as {
+   120       test_database_url: string
+   121       containerId: string
+   122       synthetic: boolean
+   123       exclusiveClaim: string
+   124       schemaName: string
+   125       roleName: string
+   126       hostPort: { HostIp: string; HostPort: string }
+   127     }
+   128     const url = new URL(resource.test_database_url)
+   129     if (
+   130       resource.containerId !==
+   131         '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c' ||
+   132       resource.synthetic !== true ||
+   133       !resource.exclusiveClaim ||
+   134       url.hostname !== '127.0.0.1' ||
+   135       url.pathname !== '/pare224_synthetic' ||
+   136       url.username !== 'pare224' ||
+   137       resource.hostPort.HostIp !== '127.0.0.1' ||
+   138       url.port !== resource.hostPort.HostPort ||
+   139       !/^pare224_fence[a-z0-9_]*$/.test(resource.schemaName) ||
+   140       !/^pare224_fence[a-z0-9_]*$/.test(resource.roleName)
+   141     )
+   142       throw new Error('Refusing non-assigned PG224 resource')
+   143     schema = resource.schemaName
+   144     role = resource.roleName
+   145     admin = new Client({ connectionString: url.toString() })
+   146     await admin.connect()
+   147     // CREATE without IF NOT EXISTS refuses reuse of any earlier fixture.
+   148     await admin.query(`CREATE SCHEMA ${schema}`)
+   149     await runPostgresMigrations(admin, {
+   150       schemaName: schema,
+   151       createSchema: false
+   152     })
+   153     const password = randomBytes(24).toString('hex')
+   154     await admin.query(
+   155       `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS`
+   156     )
+   157     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+   158     await admin.query(
+   159       `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`
+   160     )
+   161     await admin.query(
+   162       `REVOKE DELETE ON ${schema}.controlled_published_bindings FROM ${role}`
+   163     )
+   164     await admin.query(
+   165       `REVOKE UPDATE,DELETE ON ${schema}.controlled_published_evidence FROM ${role}`
+   166     )
+   167     await admin.query(
+   168       `GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`
+   169     )
+   170     url.username = role
+   171     url.password = password
+   172     pool = new Pool({
+   173       connectionString: url.toString(),
+   174       max: 2,
+   175       options: `-c search_path=${schema} -c lock_timeout=1500 -c statement_timeout=3000`
+   176     })
+   177     await emit(
+   178       'serving-identity',
+   179       (
+   180         await pool.query(
+   181           `SELECT current_user,session_user,current_database(),current_schema(),
+   182       r.rolsuper,r.rolbypassrls,r.rolinherit,
+   183       (SELECT count(*)::int FROM pg_auth_members WHERE member=r.oid) AS memberships,
+   184       (SELECT count(*)::int FROM pg_namespace WHERE nspname=$1 AND nspowner=r.oid) AS owned_schemas,
+   185       (SELECT count(*)::int FROM pg_class WHERE relnamespace=$1::regnamespace AND relowner=r.oid) AS owned_relations
+   186       FROM pg_roles r WHERE rolname=current_user`,
+   187           [schema]
+   188         )
+   189       ).rows
+   190     )
+   191     const identity = (
+   192       await pool.query(
+   193         `SELECT rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user`
+   194       )
+   195     ).rows[0]
+   196     expect(identity).toEqual({
+   197       rolsuper: false,
+   198       rolbypassrls: false,
+   199       rolinherit: false
+   200     })
+   201     const saved = JSON.parse(
+   202       await readFile(resolve(evidence, 'serving-identity.json'), 'utf8')
+   203     )[0]
+   204     expect(saved.current_user).toBe(role)
+   205     expect(saved.session_user).toBe(role)
+   206     expect(saved.current_database).toBe('pare224_synthetic')
+   207     expect(saved.memberships).toBe(0)
+   208     expect(saved.owned_schemas).toBe(0)
+   209     expect(saved.owned_relations).toBe(0)
+   210     const rls = (
+   211       await pool.query(
+   212         `SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class
+   213       WHERE relnamespace=$1::regnamespace AND relname=ANY($2) ORDER BY relname`,
+   214         [
+   215           schema,
+   216           [
+   217             'controlled_published_bindings',
+   218             'controlled_published_evidence',
+   219             'operational_execution_checkpoints'
+   220           ]
+   221         ]
+   222       )
+   223     ).rows
+   224     expect(rls).toHaveLength(3)
+   225     for (const row of rls) {
+   226       expect(row.relrowsecurity).toBe(true)
+   227       expect(row.relforcerowsecurity).toBe(true)
+   228     }
+   229     await emit('native-rls', rls)
+   230     await emit(
+   231       'native-triggers-before',
+   232       (
+   233         await pool.query(
+   234           `SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition
+   235       FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace=$1::regnamespace AND NOT t.tgisinternal ORDER BY c.relname,t.tgname`,
+   236           [schema]
+   237         )
+   238       ).rows
+   239     )
+   240   })
+   241   afterAll(async () => {
+   242     // Preserve all own schema/roles/data for Lead inspection. Stop container externally.
+   243     await pool?.end()
+   244     await admin?.end()
+   245   })
+   246 
+   247   it('applies with native prepared OPEN authority, rejects old token/absent/stale/expired fence and simple V2 save without mutating prior state', async () => {
+   248     if (!pool) throw new Error('Serving pool not provisioned')
+   249     const serving = pool
+   250     const repository = new TenantScopedPostgresRuntimeRepository(serving)
+   251     const published = new PostgresControlledPublishedKernelStore(serving)
+   252     const config = AgentConfigSchema.parse({
+   253       persona: { name: 'Synthetic224', role: 'assistant', tone: 'calm' },
+   254       greeting: 'Synthetic.',
+   255       promptBlocks: [],
+   256       responseTemplates: {},
+   257       model: {
+   258         provider: 'fake',
+   259         model: 'deterministic-v1',
+   260         temperature: 0,
+   261         maxTokens: 128,
+   262         timeoutMs: 3000,
+   263         retries: 0,
+   264         secretRef: 'secret://controlled/synthetic'
+   265       },
+   266       policies: {
+   267         version: 'synthetic224',
+   268         minConfidence: 0.7,
+   269         lowConfidence: 'clarify',
+   270         maxClarifications: 2,
+   271         enabledActions: ['respond'],
+   272         approvalActions: [],
+   273         blockedActions: []
+   274       },
+   275       plugins: [],
+   276       knowledge: [],
+   277       handoff: {
+   278         lowConfidenceDestination: 'synthetic',
+   279         destinations: ['synthetic'],
+   280         maxClarifications: 2
+   281       }
+   282     })
+   283     const platform = new InMemoryControlPlaneStore()
+   284     const agent = await platform.createAgent(
+   285       { tenantId },
+   286       {
+   287         slug: `fence-${randomUUID()}`,
+   288         name: 'Synthetic224',
+   289         description: 'Synthetic only'
+   290       }
+   291     )
+   292     const version = await platform.createVersion(
+   293       { tenantId },
+   294       agent.id,
+   295       config,
+   296       'synthetic'
+   297     )
+   298     // Published catalog provisioning is fixture DML, not fabricated native admission/binding.
+   299     await withTenantTransaction(serving, tenantId, async (c) => {
+   300       await c.query(
+   301         `INSERT INTO platform_agents(tenant_id,id,slug,name,description) VALUES($1,$2,$3,'Synthetic224','Synthetic only')`,
+   302         [tenantId, agent.id, agent.slug]
+   303       )
+   304       await c.query(
+   305         `INSERT INTO platform_agent_versions(tenant_id,id,agent_id,version,status,config,created_by) VALUES($1,$2,$3,1,'PUBLISHED',$4::jsonb,'synthetic')`,
+   306         [tenantId, version.id, agent.id, JSON.stringify(config)]
+   307       )
+   308     })
+   309     const inbound = await repository.createWithSession({
+   310       tenantId,
+   311       channel: 'web',
+   312       senderRef: `synthetic-${randomUUID()}`,
+   313       externalMessageId: randomUUID(),
+   314       body: 'Synthetic fence proof'
+   315     })
+   316     const event = await repository.enqueue({
+   317       tenantId,
+   318       type: 'inbound.process',
+   319       idempotencyKey: `synthetic224:${randomUUID()}`,
+   320       payload: { synthetic: true },
+   321       conversationId: inbound.conversation.id,
+   322       sessionId: inbound.session.id,
+   323       inboundMessageId: inbound.message.id
+   324     })
+   325     const claimed = await repository.claimNextFenced({
+   326       tenantId,
+   327       workerId: `synthetic224:${randomUUID()}`,
+   328       eventId: event.id
+   329     })
+   330     if (!claimed) throw new Error('Native outer claim unavailable')
+   331     const input = {
+   332       tenantId,
+   333       agentId: agent.id,
+   334       versionId: version.id,
+   335       traceId: createTraceId(),
+   336       executionId,
+   337       correlationId: createCorrelationId(),
+   338       inboundMessageId: inbound.message.id,
+   339       message: 'Synthetic fence proof',
+   340       history: [],
+   341       executionMode: 'CONTROLLED_RUNTIME' as const,
+   342       requireCapabilityApproval: false,
+   343       context: {
+   344         conversationId: inbound.conversation.id,
+   345         sessionId: inbound.session.id
+   346       }
+   347     }
+   348     const gateway = createControlledCapabilityGateway({
+   349       approvalAuthority: new TenantScopedPostgresCapabilityApprovalRepository(
+   350         serving
+   351       )
+   352     })
+   353     const admission = prepareControlledPublishedAdmission({
+   354       version,
+   355       input,
+   356       actor: {
+   357         id: 'system.controlled-runtime',
+   358         role: 'System',
+   359         permissions: []
+   360       },
+   361       gateway
+   362     })
+   363     const admitted = await published.admit(admission, claimed.claimRef)
+   364     const claim = await published.claim(executionId, claimed.claimRef)
+   365     expect(claim.disposition).toBe('ACTIVE')
+   366     const host = published.createHost(
+   367       claim,
+   368       { assertActive() {}, requestStop() {}, async stopAndJoin() {} },
+   369       new AbortController().signal
+   370     )
+   371     const prepared: ControlledPublishedPrepared = {
+   372       schema: 'controlled-published-prepared-v1',
+   373       requestDigest: claim.requestDigest,
+   374       fingerprint: claim.fingerprint,
+   375       message: input.message,
+   376       history: [],
+   377       promptWithHistory: 'Synthetic prepared prompt',
+   378       intent: 'respond',
+   379       policy: {
+   380         decision: 'allowed',
+   381         reason: 'synthetic',
+   382         layer: 'agent_behavior',
+   383         policyVersion: 'synthetic224'
+   384       },
+   385       risk: { level: 'low', reason: 'synthetic' },
+   386       response: { mode: 'answer', text: 'Synthetic.' },
+   387       sourceIds: [],
+   388       configDigest: controlledDigest(config)
+   389     }
+   390     const started = await host.continuation.startPrepared(
+   391       host.identity,
+   392       prepared,
+   393       admission.runtime
+   394     )
+   395     const phase = await host.continuation.beginPhase(
+   396       host.identity,
+   397       claim.state.sealId,
+   398       'checkpoint.bound-cas',
+   399       controlledDigest({ synthetic: true })
+   400     )
+   401     await emit('native-admission-claim-prepared-phase', {
+   402       admitted,
+   403       admission,
+   404       claim,
+   405       identity: host.identity,
+   406       fence: claim.fence,
+   407       prepared,
+   408       started,
+   409       phase
+   410     })
+   411     const steps = new PostgresExecutionStepStore(serving, {
+   412       fence: claim.fence
+   413     })
+   414     const first = checkpoint('complete')
+   415     const firstResult = await steps.compareAndSwapCheckpoint({
+   416       tenantId,
+   417       executionId,
+   418       expected: null,
+   419       next: first
+   420     })
+   421     await emit('positive-initial', { checkpoint: first, result: firstResult })
+   422     expect(firstResult).toEqual({ status: 'APPLIED', token: token(first) })
+   423     const {
+   424       checkpointId: _id,
+   425       createdAt: _at,
+   426       digest: _digest,
+   427       ...unsigned
+   428     } = first
+   429     void _id
+   430     void _at
+   431     void _digest
+   432     const current = sealCheckpoint(unsigned)
+   433     const updated = await steps.compareAndSwapCheckpoint({
+   434       tenantId,
+   435       executionId,
+   436       expected: token(first),
+   437       next: current
+   438     })
+   439     await emit('positive-update', { checkpoint: current, result: updated })
+   440     expect(updated).toEqual({ status: 'APPLIED', token: token(current) })
+   441     expect(await steps.loadCheckpoint(tenantId, executionId)).toEqual(current)
+   442 
+   443     const snapshot = () =>
+   444       withTenantContext(serving, tenantId, async (c) => {
+   445         const result: Record<string, unknown> = {}
+   446         for (const table of [
+   447           'operational_execution_checkpoints',
+   448           'operational_executions',
+   449           'operational_execution_outbox',
+   450           'controlled_published_bindings',
+   451           'controlled_published_evidence',
+   452           'operational_execution_steps',
+   453           'operational_execution_events',
+   454           'outbox_events',
+   455           'outbox_attempts',
+   456           'effect_journal',
+   457           'operational_effect_journal'
+   458         ]) {
+   459           result[table] = (
+   460             await c.query(
+   461               `SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`
+   462             )
+   463           ).rows
+   464         }
+   465         return result
+   466       })
+   467     const before = await snapshot()
+   468     await emit('snapshot-before-negatives', before)
+   469     const binding = (
+   470       before.controlled_published_bindings as { row: Record<string, unknown> }[]
+   471     )[0]!.row
+   472     expect(binding.phase_state).toBe('OPEN')
+   473     expect(binding.open_phase_acked).toBe(false)
+   474     expect(binding.prepared_digest).toBe(controlledDigest(prepared))
+   475     // A refused write proposes new result data and a larger budget, while
+   476     // retaining the already committed result. The baseline must stay exact.
+   477     const proposedObservation =
+   478       checkpoint('must-never-persist').state.observations[0]!
+   479     const next = sealCheckpoint({
+   480       ...unsigned,
+   481       stepNumber: 2,
+   482       state: {
+   483         ...unsigned.state,
+   484         stepNumber: 2,
+   485         observations: [
+   486           ...unsigned.state.observations,
+   487           {
+   488             ...proposedObservation,
+   489             observationId: 'obs_refused',
+   490             stepId: 'step_refused',
+   491             stepNumber: 2
+   492           }
+   493         ]
+   494       },
+   495       budgetUsage: {
+   496         ...unsigned.budgetUsage,
+   497         steps: 2,
+   498         modelCalls: 2,
+   499         inputTokens: 200,
+   500         outputTokens: 64,
+   501         costUsd: 0.02
+   502       }
+   503     })
+   504     await emit('refused-candidate', next)
+   505     const cas = { tenantId, executionId, expected: token(current), next }
+   506     const unchanged = async (name: string) => {
+   507       const after = await snapshot()
+   508       await emit(`snapshot-${name}`, after)
+   509       expect(after).toEqual(before)
+   510       expect(await steps.loadCheckpoint(tenantId, executionId)).toEqual(current)
+   511     }
+   512     const oldToken = await steps.compareAndSwapCheckpoint({
+   513       ...cas,
+   514       expected: token(first)
+   515     })
+   516     await emit('negative-old-token', oldToken)
+   517     expect(oldToken).toEqual({
+   518       status: 'CONFLICT',
+   519       currentToken: token(current)
+   520     })
+   521     await unchanged('old-token')
+   522     const refusal = async (
+   523       name: string,
+   524       action: () => unknown,
+   525       code: string
+   526     ) => {
+   527       let failure: unknown
+   528       try {
+   529         await action()
+   530       } catch (error) {
+   531         failure = error
+   532       }
+   533       await emit(
+   534         `negative-${name}`,
+   535         failure instanceof Error
+   536           ? {
+   537               name: failure.name,
+   538               message: failure.message,
+   539               code: (failure as Error & { code?: string }).code,
+   540               stack: failure.stack
+   541             }
+   542           : { failure: String(failure) }
+   543       )
+   544       expect(failure).toMatchObject({ code })
+   545       await unchanged(name)
+   546     }
+   547     await refusal(
+   548       'absent-fence',
+   549       () =>
+   550         new PostgresExecutionStepStore(serving).compareAndSwapCheckpoint(cas),
+   551       'lease_lost'
+   552     )
+   553     await refusal(
+   554       'stale-attempt-fence',
+   555       () =>
+   556         new PostgresExecutionStepStore(serving, {
+   557           fence: { ...claim.fence, attempt: claim.fence.attempt + 1 }
+   558         }).compareAndSwapCheckpoint(cas),
+   559       'lease_lost'
+   560     )
+   561     await refusal(
+   562       'simple-v2-save',
+   563       () => steps.saveCheckpoint(next),
+   564       'checkpoint_version'
+   565     )
+   566     const clock = (await serving.query('SELECT clock_timestamp() AS now'))
+   567       .rows[0]!.now as Date
+   568     const delay = Date.parse(started.expiresAt) - clock.getTime() + 100
+   569     expect(delay).toBeGreaterThan(0)
+   570     expect(delay).toBeLessThanOrEqual(12100)
+   571     await emit('expiry-wait', {
+   572       clock,
+   573       started,
+   574       delayMs: delay,
+   575       mechanism: 'natural DB deadline, no SQL lease edits, no renewal'
+   576     })
+   577     await new Promise((done) => setTimeout(done, delay))
+   578     const afterClock = (await serving.query('SELECT clock_timestamp() AS now'))
+   579       .rows[0]!.now as Date
+   580     expect(afterClock.getTime()).toBeGreaterThanOrEqual(
+   581       Date.parse(started.expiresAt)
+   582     )
+   583     await emit('expired-db-clock', {
+   584       now: afterClock,
+   585       expiresAt: started.expiresAt
+   586     })
+   587     await refusal(
+   588       'expired-native-fence',
+   589       () => steps.compareAndSwapCheckpoint(cas),
+   590       'lease_lost'
+   591     )
+   592     await emit(
+   593       'native-triggers-after',
+   594       (
+   595         await serving.query(
+   596           `SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace=$1::regnamespace AND NOT t.tgisinternal ORDER BY c.relname,t.tgname`,
+   597           [schema]
+   598         )
+   599       ).rows
+   600     )
+   601     expect(
+   602       JSON.parse(
+   603         await readFile(resolve(evidence, 'native-triggers-after.json'), 'utf8')
+   604       )
+   605     ).toEqual(
+   606       JSON.parse(
+   607         await readFile(resolve(evidence, 'native-triggers-before.json'), 'utf8')
+   608       )
+   609     )
+   610     await emit('result', {
+   611       status: 'BUILDER_EVIDENCE_ONLY',
+   612       observed:
+   613         'two APPLIED native OPEN fence CAS; stale token CONFLICT; absent/stale-attempt/expired fence lease_lost; simple V2 save checkpoint_version; full row snapshots identical',
+   614       fixture:
+   615         'synthetic checkpoint/result/usage and prepared object supplied through native APIs; no model/tool body executed',
+   616       acceptance: false
+   617     })
+   618   })
+   619 })
+

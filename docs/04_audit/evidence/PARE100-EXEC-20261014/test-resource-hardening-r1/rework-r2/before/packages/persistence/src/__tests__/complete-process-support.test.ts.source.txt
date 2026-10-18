@@ -1,0 +1,821 @@
+// @vitest-environment node
+import { spawn, execFile, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import * as fs from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, dirname } from 'node:path'
+import { afterEach, expect, it, vi } from 'vitest'
+import {
+  COMPLETE_NODE,
+  completeReadiness,
+  completeArgv,
+  completeChildConfig,
+  completeCollector,
+  completeProfiles,
+  startCompleteChild,
+  assignedService,
+  observeCompleteChild,
+  privateEnvironment,
+  ownedPath,
+  privateBytes,
+  assignedResource,
+  inspectCompleteResource,
+  stopCompleteChildren
+} from './fixtures/complete-process-support.ts'
+
+const virtual = vi.hoisted(() => ({
+  files: new Map<string, Buffer>(),
+  dirs: new Set<string>(),
+  sockets: new Set<string>()
+}))
+vi.mock('node:fs/promises', async (original) => {
+  const native = await original<typeof import('node:fs/promises')>()
+  const stat = (directory = false, socket = false, size = 0) => ({
+    uid: process.getuid!(),
+    mode: directory ? 0o40700 : 0o100600,
+    size,
+    isFile: () => !directory && !socket,
+    isDirectory: () => directory,
+    isSocket: () => socket,
+    isSymbolicLink: () => false
+  })
+  return {
+    ...native,
+    lstat: vi.fn(async (path: string) =>
+      virtual.files.has(path)
+        ? stat(false, false, virtual.files.get(path)!.length)
+        : virtual.dirs.has(path)
+          ? stat(true)
+          : virtual.sockets.has(path)
+            ? stat(false, true)
+            : native.lstat(path)
+    ),
+    realpath: vi.fn(async (path: string) =>
+      virtual.files.has(path) ||
+      virtual.dirs.has(path) ||
+      virtual.sockets.has(path)
+        ? path
+        : native.realpath(path)
+    ),
+    open: vi.fn(async (path: string, ...args: unknown[]) => {
+      if (!virtual.files.has(path))
+        return Reflect.apply(native.open, native, [path, ...args])
+      const bytes = virtual.files.get(path)!
+      return {
+        stat: async () => stat(false, false, bytes.length),
+        close: async () => {},
+        readFile: async () => bytes,
+        read: async (buffer: Buffer) => {
+          bytes.copy(buffer)
+          return { bytesRead: bytes.length, buffer }
+        }
+      }
+    }),
+    mkdtemp: vi.fn(async (prefix: string) =>
+      native.mkdtemp(
+        prefix.startsWith(
+          '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/'
+        )
+          ? join(tmpdir(), 'mock-inspect-')
+          : prefix
+      )
+    )
+  }
+})
+vi.mock('node:child_process', async (original) => {
+  const native = await original<typeof import('node:child_process')>()
+  return { ...native, execFile: vi.fn(), spawn: vi.fn(native.spawn) }
+})
+const homes: string[] = []
+const children: ReturnType<typeof observeCompleteChild>[] = []
+afterEach(async () => {
+  await Promise.allSettled(children.splice(0).map((c) => c.stop()))
+  for (const home of homes.splice(0))
+    await fs.rm(home, { recursive: true, force: true })
+  virtual.files.clear()
+  virtual.dirs.clear()
+  virtual.sockets.clear()
+  vi.clearAllMocks()
+})
+async function scratch() {
+  const root = await fs.mkdtemp(join(tmpdir(), 'complete-support-'))
+  homes.push(root)
+  return root
+}
+const scripts = {
+  normal:
+    'process.stdout.write(Buffer.from([0,240,159,153,130])); process.stderr.write("diagnostic")',
+  exact:
+    'process.stdout.write(Buffer.alloc(1048576,120)); process.stderr.write(Buffer.alloc(1048576,121))',
+  stdoutOverflow:
+    'process.stdout.write("READY PASS\\n"); process.stdout.write(Buffer.alloc(1048576,120)); setInterval(()=>{},1000)',
+  stderrOverflow:
+    'process.stderr.write(Buffer.alloc(1048577,120)); setInterval(()=>{},1000)',
+  readyTimer: 'process.stdout.write("READY\\n"); setInterval(()=>{},1000)',
+  refuse:
+    'process.on("SIGTERM",()=>process.stderr.write("refused")); process.stdout.write("READY\\n"); setInterval(()=>{},1000)',
+  failed: 'process.stdout.write("PASS\\n"); process.exitCode=7'
+} as const
+async function launch(program: keyof typeof scripts, options = {}) {
+  const root = await scratch(),
+    { home, env } = await privateEnvironment(root)
+  const proc = spawn(COMPLETE_NODE, ['-e', scripts[program]], {
+    cwd: root,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const owned = observeCompleteChild(proc, home, {
+    maxRuntimeMs: 5000,
+    exitTimeoutMs: 100,
+    termGraceMs: 100,
+    killGraceMs: 1000,
+    ...options
+  })
+  children.push(owned)
+  return { ...owned, home }
+}
+async function ready(proc: ChildProcess) {
+  await new Promise<void>((yes) => proc.stdout!.once('data', () => yes()))
+}
+it('S01/S02: private allowlist has no ambient Node, provider, PG, npm or Docker fields', async () => {
+  const root = await scratch(),
+    { home, env } = await privateEnvironment(root)
+  const hostileParent = {
+    NODE_OPTIONS: '--require forbidden',
+    NODE_PATH: 'untrusted',
+    PGPASSWORD: 'synthetic',
+    OPENAI_API_KEY: 'synthetic',
+    DOCKER_CONTEXT: 'peer'
+  }
+  const unsafe = { ...hostileParent }
+  expect(unsafe.NODE_OPTIONS).toBeDefined() // original spread's discriminating red control, never executed
+  for (const key of Object.keys(hostileParent)) expect(env[key]).toBeUndefined()
+  expect(Object.keys(env).sort()).toEqual(
+    [
+      'PATH',
+      'HOME',
+      'TMPDIR',
+      'TMP',
+      'TEMP',
+      'XDG_CONFIG_HOME',
+      'XDG_CACHE_HOME',
+      'XDG_DATA_HOME',
+      'XDG_STATE_HOME',
+      'LANG',
+      'TZ',
+      'NODE_ENV',
+      'CI'
+    ].sort()
+  )
+  for (const key of [
+    'HOME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'XDG_CONFIG_HOME',
+    'XDG_CACHE_HOME',
+    'XDG_DATA_HOME',
+    'XDG_STATE_HOME'
+  ]) {
+    expect(env[key]).toMatch(new RegExp('^' + home))
+    expect((await fs.stat(env[key]!)).mode & 0o777).toBe(0o700)
+  }
+})
+it('S01: complete successful raw bytes, close/PID absence and HOME deletion', async () => {
+  const c = await launch('normal')
+  expect(await c.done).toEqual({ code: 0, signal: null })
+  expect(c.output.bytes('stdout')).toEqual(Buffer.from([0, 240, 159, 153, 130]))
+  expect(c.output.bytes('stderr').toString()).toBe('diagnostic')
+  expect(c.proc.stdout!.closed).toBe(true)
+  expect(() => process.kill(c.proc.pid!, 0)).toThrow(/ESRCH/)
+  await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
+  await c.stop()
+})
+it('S03: finite roles and native loader difference, unknown role/profile reject before launch', () => {
+  for (const profile of Object.keys(
+    completeProfiles
+  ) as (keyof typeof completeProfiles)[]) {
+    for (const role of completeProfiles[profile].roles) {
+      const argv = completeArgv(profile, role, '/owned/config', '/physical/W')
+      expect(argv.at(-1)).toBe(completeProfiles[profile].target)
+      expect(argv.includes('--configLoader')).toBe(
+        profile === 'bound-admission'
+      )
+    }
+    expect(() => completeArgv(profile, 'unknown', '/c', '/w')).toThrow(/role/)
+  }
+  expect(() =>
+    completeArgv('unknown' as 'store-restart', 'writer', '/c', '/w')
+  ).toThrow()
+  const config = completeChildConfig('store-restart', '/w', '/s')
+  const data = JSON.parse(config.slice('export default '.length))
+  expect(data.test).toEqual({
+    environment: 'node',
+    pool: 'threads',
+    maxWorkers: 1,
+    fileParallelism: false,
+    include: [completeProfiles['store-restart'].target]
+  })
+})
+it('S04: owned physical regular files accept; prefix/traversal/file and ancestor symlinks/modes reject', async () => {
+  const root = await scratch(),
+    file = join(root, 'input.json')
+  await fs.writeFile(file, '{}', { mode: 0o600 })
+  expect((await privateBytes(root, file)).toString()).toBe('{}')
+  await expect(ownedPath(root, file, 'file', true)).rejects.toThrow(/exists/)
+  await expect(ownedPath(root, root + '-peer/file', 'file')).rejects.toThrow(
+    /outside/
+  )
+  await expect(ownedPath(root, root + '/../file', 'file')).rejects.toThrow(
+    /outside/
+  )
+  const link = join(root, 'link')
+  await fs.symlink(file, link)
+  await expect(privateBytes(root, link)).rejects.toThrow(/Symlink/)
+  const dir = join(root, 'dir')
+  await fs.mkdir(dir, { mode: 0o700 })
+  await fs.symlink(dir, join(root, 'alias'))
+  await fs.writeFile(join(dir, 'x'), '{}', { mode: 0o600 })
+  await expect(privateBytes(root, join(root, 'alias/x'))).rejects.toThrow(
+    /Symlink/
+  )
+  await fs.chmod(file, 0o644)
+  await expect(privateBytes(root, file)).rejects.toThrow(/mode/)
+  await fs.chmod(file, 0o600)
+  await fs.writeFile(file, Buffer.alloc(1048577))
+  await expect(privateBytes(root, file)).rejects.toThrow(/bounds/)
+})
+it('S05: exact stdout/stderr/combined limits succeed using real harmless Node writes', async () => {
+  const c = await launch('exact')
+  expect(await c.done).toEqual({ code: 0, signal: null })
+  expect(c.output.bytes('stdout').length).toBe(1048576)
+  expect(c.output.bytes('stderr').length).toBe(1048576)
+})
+it.each(['stdoutOverflow', 'stderrOverflow'] as const)(
+  'S05/S06: %s latches, joins and rejects apparent READY/PASS prefix',
+  async (program) => {
+    const c = await launch(program)
+    await expect(c.done).rejects.toThrow(/OUTPUT_LIMIT/)
+    expect(() => c.output.bytes('stdout')).toThrow(/partial/)
+    expect(c.proc.stdout!.closed).toBe(true)
+    await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
+  }
+)
+it('S07: split UTF8/NUL/markers preserve exact bytes; original per-chunk decoding is lossy', () => {
+  const bytes = Buffer.from('READY\u0000🙂FINISHED'),
+    limits: Error[] = []
+  const c = completeCollector((e) => limits.push(e))
+  let old = ''
+  for (const byte of bytes) {
+    const part = Buffer.from([byte])
+    c.push('stdout', part)
+    old += part.toString()
+  }
+  expect(c.bytes('stdout')).toEqual(bytes)
+  expect(old).not.toBe(bytes.toString())
+  expect(limits).toEqual([])
+  c.push('stderr', Buffer.alloc(1048576))
+  c.push('stdout', Buffer.alloc(1048576 - bytes.length))
+  expect(c.bytes('stdout').length).toBe(1048576)
+  c.push('stderr', Buffer.alloc(1))
+  expect(limits).toHaveLength(1)
+  expect(() => c.bytes('stdout')).toThrow(/OUTPUT_LIMIT/)
+})
+it('S08/S10: READY does not clear independent watchdog even if parent abandons done', async () => {
+  const c = await launch('readyTimer', { maxRuntimeMs: 200 })
+  await ready(c.proc)
+  await new Promise((yes) => c.proc.once('close', yes))
+  await expect(c.done).rejects.toThrow(/maxRuntimeMs/)
+  expect(() => process.kill(c.proc.pid!, 0)).toThrow(/ESRCH/)
+})
+it('S09: intentional SIGKILL remains exact; normal nonzero remains observable', async () => {
+  const c = await launch('readyTimer')
+  await ready(c.proc)
+  expect(c.proc.kill('SIGKILL')).toBe(true)
+  expect(await c.done).toEqual({ code: null, signal: 'SIGKILL' })
+  const failed = await launch('failed')
+  expect(await failed.done).toEqual({ code: 7, signal: null })
+})
+it('S09/S10: TERM refusal escalates and concurrent stop/done join without losing bytes', async () => {
+  const c = await launch('refuse')
+  await ready(c.proc)
+  const results = await Promise.all([c.stop(), c.stop(), c.done])
+  expect(results).toEqual(Array(3).fill({ code: null, signal: 'SIGKILL' }))
+  expect(c.output.bytes('stderr').toString()).toContain('refused')
+})
+it('S09: asynchronous ENOENT preserves original cause and joins before removing HOME', async () => {
+  const root = await scratch(),
+    { home, env } = await privateEnvironment(root)
+  // Exact allowed executable, deliberately absent cwd: no arbitrary executable seam.
+  const proc = spawn(COMPLETE_NODE, ['-e', scripts.normal], {
+    cwd: join(root, 'absent'),
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const c = observeCompleteChild(proc, home, {
+    maxRuntimeMs: 1000,
+    termGraceMs: 100,
+    killGraceMs: 100,
+    exitTimeoutMs: 100
+  })
+  children.push(c)
+  await expect(c.done).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(fs.stat(home)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+function fakeChild() {
+  const child = new EventEmitter() as ChildProcess
+  Object.assign(child, {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true)
+  })
+  return child
+}
+it('S11/S14: exit without close fails boundedly, preserves HOME and primary plus join error', async () => {
+  const root = await scratch(),
+    { home } = await privateEnvironment(root),
+    proc = fakeChild()
+  const c = observeCompleteChild(proc, home, {
+    maxRuntimeMs: 100,
+    exitTimeoutMs: 30,
+    termGraceMs: 30,
+    killGraceMs: 30
+  })
+  proc.emit('exit', 0, null)
+  c.fail(new Error('synthetic observer failure'))
+  await expect(c.done).rejects.toMatchObject({
+    cause: { message: 'synthetic observer failure' }
+  })
+  expect((await fs.stat(home)).isDirectory()).toBe(true)
+  proc.emit('close', 0, null) // no real descendants; finish fixture without claiming joined result
+})
+it('S14: join-all attempts every child, retains primary and blocks subsequent DB cleanup', async () => {
+  const calls: string[] = [],
+    primary = new Error('assertion failed')
+  await expect(
+    stopCompleteChildren(
+      [
+        {
+          stop: async () => {
+            calls.push('one')
+            throw new Error('join')
+          }
+        },
+        {
+          stop: async () => {
+            calls.push('two')
+          }
+        }
+      ],
+      primary
+    )
+  ).rejects.toMatchObject({
+    cause: primary,
+    errors: [primary, expect.any(Error)]
+  })
+  expect(calls.sort()).toEqual(['one', 'two'])
+})
+
+function assignment() {
+  const root =
+      '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-postgres/builder-r1',
+    resource = join(root, 'resource.json')
+  const claimId = `PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224:capacity:${root}`
+  const r = {
+    synthetic: true,
+    exclusiveClaim: claimId,
+    containerId: 'a'.repeat(64),
+    containerName: '/cvg-pare100-224-pg',
+    imageId: 'sha256:' + 'b'.repeat(64),
+    schemaName: 'pare224_synthetic_r1',
+    roleName: 'pare224_synthetic_r1_service',
+    test_database_url:
+      'postgresql://pare224:synthetic@127.0.0.1:54321/pare224_synthetic',
+    hostPort: { HostIp: '127.0.0.1', HostPort: '54321' }
+  }
+  const bytes = Buffer.from(JSON.stringify(r)),
+    docker = Buffer.from('mock executable bytes')
+  const claim = {
+    task: 'PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224',
+    kind: 'capacity',
+    claimId,
+    root,
+    resource,
+    resourceSHA256: createHash('sha256').update(bytes).digest('hex'),
+    cwd: join(import.meta.dirname, '../../../..'),
+    evidence: join(root, 'evidence'),
+    containerId: r.containerId,
+    containerName: r.containerName,
+    imageId: r.imageId,
+    port: '54321',
+    database: 'pare224_synthetic',
+    user: 'pare224',
+    schema: r.schemaName,
+    role: r.roleName,
+    docker: '/usr/bin/docker',
+    dockerSHA256: createHash('sha256').update(docker).digest('hex'),
+    dockerHost: 'unix://' + join(root, 'docker.sock')
+  }
+  virtual.files.set(resource, bytes)
+  virtual.files.set(
+    join(root, 'complete-process-claim.json'),
+    Buffer.from(JSON.stringify(claim))
+  )
+  virtual.files.set('/usr/bin/docker', docker)
+  virtual.sockets.add(join(root, 'docker.sock'))
+  for (
+    let dir = root;
+    dir.startsWith('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build');
+    dir = dirname(dir)
+  )
+    virtual.dirs.add(dir)
+  virtual.dirs.add(claim.evidence)
+  return { root, resource, r, claim }
+}
+it('S13: exact mocked claim accepts; descriptor/claim mismatches reject before Docker spawn', async () => {
+  const a = assignment()
+  expect(
+    (await assignedResource('capacity', a.resource, a.root)).resource
+  ).toEqual(a.r)
+  for (const mutation of [
+    { synthetic: false },
+    { exclusiveClaim: 'peer' },
+    { containerId: 'c'.repeat(64) },
+    { hostPort: { HostIp: '0.0.0.0', HostPort: '54321' } },
+    { schemaName: 'peer' },
+    { roleName: 'peer' },
+    { imageId: 'sha256:' + 'c'.repeat(64) },
+    {
+      test_database_url:
+        'postgresql://pare224:synthetic@localhost:54321/pare224_synthetic'
+    },
+    {
+      test_database_url: 'postgresql://pare224:synthetic@127.0.0.1:54321/peer'
+    },
+    {
+      test_database_url:
+        'postgresql://peer:synthetic@127.0.0.1:54321/pare224_synthetic'
+    }
+  ]) {
+    const bytes = Buffer.from(JSON.stringify({ ...a.r, ...mutation }))
+    virtual.files.set(a.resource, bytes)
+    virtual.files.set(
+      join(a.root, 'complete-process-claim.json'),
+      Buffer.from(
+        JSON.stringify({
+          ...a.claim,
+          resourceSHA256: createHash('sha256').update(bytes).digest('hex')
+        })
+      )
+    )
+    await expect(
+      assignedResource('capacity', a.resource, a.root)
+    ).rejects.toThrow(/identity/)
+  }
+  expect(execFile).not.toHaveBeenCalled()
+})
+it.each([
+  'good-object',
+  'good-array',
+  'timeout',
+  'maxBuffer',
+  'malformed',
+  'prefix',
+  'wrong-shape',
+  'wrong-id',
+  'nonzero',
+  'no-callback'
+] as const)(
+  'S12: mocked native inspect %s with finite options and closed join',
+  async (mode) => {
+    const a = assignment()
+    vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+      const [executable, argv, options, callback] = args as [
+        string,
+        string[],
+        {
+          timeout: number
+          maxBuffer: number
+          killSignal: string
+          encoding: string
+          env: NodeJS.ProcessEnv
+        },
+        (e: Error | null, b: Buffer) => void
+      ]
+      expect(executable).toBe('/usr/bin/docker')
+      expect(argv).toEqual(
+        mode === 'good-array'
+          ? ['inspect', a.r.containerId]
+          : ['inspect', '--format', '{{json .}}', a.r.containerId]
+      )
+      expect(options).toMatchObject({
+        timeout: 5000,
+        maxBuffer: 1048576,
+        killSignal: 'SIGKILL',
+        encoding: 'buffer',
+        cwd: a.root
+      })
+      expect(options.env.NODE_OPTIONS).toBeUndefined()
+      expect(options.env.DOCKER_HOST).toBe(a.claim.dockerHost)
+      const child = fakeChild()
+      queueMicrotask(() => {
+        const object = {
+          Id: a.r.containerId,
+          Name: a.r.containerName,
+          Image: a.r.imageId
+        }
+        const text =
+          mode === 'good-array'
+            ? JSON.stringify([object])
+            : mode === 'malformed'
+              ? '{'
+              : mode === 'prefix'
+                ? JSON.stringify(object) + 'garbage'
+                : mode === 'wrong-shape'
+                  ? JSON.stringify([object])
+                  : mode === 'wrong-id'
+                    ? JSON.stringify({ ...object, Id: 'peer' })
+                    : JSON.stringify(object)
+        child.emit('exit', mode === 'nonzero' ? 7 : 0, null)
+        child.emit('close', mode === 'nonzero' ? 7 : 0, null)
+        if (mode === 'no-callback') return
+        callback(
+          mode === 'timeout'
+            ? Object.assign(new Error('native timeout'), { code: 'ETIMEDOUT' })
+            : mode === 'maxBuffer'
+              ? Object.assign(new Error('native maxBuffer'), {
+                  code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+                })
+              : null,
+          Buffer.from(text)
+        )
+      })
+      return child as ReturnType<typeof execFile>
+    })
+    const result = inspectCompleteResource(
+      'capacity',
+      a.resource,
+      a.root,
+      mode === 'good-array' ? 'array' : 'object'
+    )
+    if (mode.startsWith('good')) expect(JSON.parse(await result)).toBeTruthy()
+    else await expect(result).rejects.toThrow()
+    expect(execFile).toHaveBeenCalledTimes(1)
+  }
+)
+
+function profileAssignment(profile: 'store-restart' | 'bound-admission') {
+  const a = assignment()
+  const claimId = `PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224:${profile}:${a.root}`
+  const resource = { ...a.r, exclusiveClaim: claimId }
+  const bytes = Buffer.from(JSON.stringify(resource))
+  const config = join(a.root, 'child.config.mjs')
+  const configBytes = Buffer.from(
+    completeChildConfig(profile, a.claim.cwd, a.root)
+  )
+  const claim = {
+    ...a.claim,
+    kind: profile,
+    claimId,
+    config,
+    configSHA256: createHash('sha256').update(configBytes).digest('hex'),
+    resourceSHA256: createHash('sha256').update(bytes).digest('hex'),
+    service: join(a.root, 'service.json')
+  }
+  virtual.files.set(a.resource, bytes)
+  virtual.files.set(config, configBytes)
+  virtual.files.set(
+    join(a.root, 'complete-process-claim.json'),
+    Buffer.from(JSON.stringify(claim))
+  )
+  return { ...a, claim, config, configBytes }
+}
+it('S03: exact sealed config accepts; hash, pool, environment, include and executable-code tampering reject', async () => {
+  const a = profileAssignment('store-restart')
+  expect(
+    (await assignedResource('store-restart', a.resource, a.root)).claim.config
+  ).toBe(a.config)
+  const path = join(a.root, 'complete-process-claim.json')
+  for (const altered of [
+    a.configBytes.toString().replace('threads', 'forks'),
+    a.configBytes.toString().replace('node', 'jsdom'),
+    a.configBytes
+      .toString()
+      .replace(completeProfiles['store-restart'].target, 'peer.test.ts'),
+    a.configBytes.toString() + 'process.exit(0)',
+    a.configBytes.toString().replace('"maxWorkers":1', '"maxWorkers":100')
+  ]) {
+    const bytes = Buffer.from(altered)
+    virtual.files.set(a.config, bytes)
+    virtual.files.set(
+      path,
+      Buffer.from(
+        JSON.stringify({
+          ...a.claim,
+          configSHA256: createHash('sha256').update(bytes).digest('hex')
+        })
+      )
+    )
+    await expect(
+      assignedResource('store-restart', a.resource, a.root)
+    ).rejects.toThrow(/static config/)
+  }
+  virtual.files.set(a.config, a.configBytes)
+  virtual.files.set(
+    path,
+    Buffer.from(JSON.stringify({ ...a.claim, configSHA256: '0'.repeat(64) }))
+  )
+  await expect(
+    assignedResource('store-restart', a.resource, a.root)
+  ).rejects.toThrow(/static config/)
+})
+it('S03/S02: exact finite launch uses sealed paths and allowlisted profile env; mocked child never runs app', async () => {
+  const a = profileAssignment('store-restart'),
+    dir = join(a.claim.evidence, 'run'),
+    input = join(dir, 'input.json')
+  virtual.dirs.add(dir)
+  virtual.files.set(input, Buffer.from('{}'))
+  vi.mocked(spawn).mockImplementationOnce((...args: unknown[]) => {
+    const [executable, argv, options] = args as [
+      string,
+      string[],
+      { env: NodeJS.ProcessEnv; cwd: string }
+    ]
+    expect(executable).toBe(COMPLETE_NODE)
+    expect(argv).toEqual(
+      completeArgv('store-restart', 'writer', a.config, a.claim.cwd)
+    )
+    expect(options.cwd).toBe(a.claim.cwd)
+    expect(options.env).toMatchObject({
+      SPEC0224_PG_REQUIRED: '1',
+      SPEC0224_PG_RESOURCE: a.resource,
+      SPEC0224_PG_CHILD_ROLE: 'writer',
+      SPEC0224_PG_CHILD_INPUT: input,
+      SPEC0224_PG_CHILD_DIR: dir
+    })
+    expect(
+      Object.keys(options.env).filter((key) => !key.startsWith('SPEC0224_'))
+    ).not.toContain('NODE_OPTIONS')
+    const child = fakeChild()
+    setImmediate(() => {
+      child.stdout!.emit('data', Buffer.from('PG224_READY'))
+      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
+    })
+    return child as ReturnType<typeof spawn>
+  })
+  const c = await startCompleteChild({
+    profile: 'store-restart',
+    role: 'writer',
+    resource: a.resource,
+    config: a.config,
+    input,
+    dir,
+    root: a.root
+  })
+  expect(await c.done).toEqual({ code: 0, signal: null })
+  expect(c.output.bytes('stdout').toString()).toBe('PG224_READY')
+  const calls = vi.mocked(spawn).mock.calls.length
+  await expect(
+    startCompleteChild({
+      profile: 'store-restart',
+      role: 'unknown',
+      resource: a.resource,
+      config: a.config,
+      input,
+      dir,
+      root: a.root
+    })
+  ).rejects.toThrow(/role/)
+  await expect(
+    startCompleteChild({
+      profile: 'store-restart',
+      role: 'reader',
+      resource: a.resource,
+      config: input,
+      input,
+      dir,
+      root: a.root
+    })
+  ).rejects.toThrow(/Unsealed/)
+  expect(vi.mocked(spawn).mock.calls.length).toBe(calls)
+})
+it('S13: exact bound service options accept; prefixes, extra options, host/port/database/user reject', async () => {
+  const a = profileAssignment('bound-admission')
+  const service = {
+    host: '127.0.0.1',
+    port: 54321,
+    database: a.claim.database,
+    user: a.claim.role,
+    password: 'synthetic',
+    options: `-c search_path=${a.claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`
+  }
+  virtual.files.set(a.claim.service, Buffer.from(JSON.stringify(service)))
+  await expect(
+    assignedService(a.resource, a.root, a.claim.service, a.claim.evidence)
+  ).resolves.toBeTruthy()
+  for (const mutation of [
+    { options: service.options + ' -c search_path=public' },
+    { options: `-c search_path=${a.claim.schema}` },
+    { host: 'localhost' },
+    { port: 54322 },
+    { database: 'peer' },
+    { user: 'peer' }
+  ]) {
+    virtual.files.set(
+      a.claim.service,
+      Buffer.from(JSON.stringify({ ...service, ...mutation }))
+    )
+    await expect(
+      assignedService(a.resource, a.root, a.claim.service, a.claim.evidence)
+    ).rejects.toThrow(/connection/)
+  }
+})
+it('S09: intended result starts exit deadline even when child leaves an active timer', async () => {
+  const c = await launch('readyTimer')
+  await ready(c.proc)
+  await expect(c.finish()).rejects.toThrow(/exitTimeoutMs/)
+  expect(c.proc.stdout!.closed).toBe(true)
+  await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+it.each(['store-restart', 'public-restart'] as const)(
+  'S07/S08: %s preserves split readiness marker and original readiness lifetime',
+  async (profile) => {
+    const root = await scratch(),
+      { home } = await privateEnvironment(root),
+      proc = fakeChild()
+    vi.useFakeTimers()
+    try {
+      vi.mocked(proc.kill).mockImplementation(() => {
+        queueMicrotask(() => {
+          proc.emit('exit', null, 'SIGTERM')
+          proc.emit('close', null, 'SIGTERM')
+        })
+        return true
+      })
+      const c = observeCompleteChild(proc, home, {
+        maxRuntimeMs: completeProfiles[profile].maxRuntimeMs,
+        exitTimeoutMs: 5000,
+        termGraceMs: 1000,
+        killGraceMs: 2000
+      })
+      const status = completeReadiness(c, profile)
+      for (const byte of Buffer.from(
+        profile === 'store-restart' ? 'PG224_READY' : 'PUBLIC224_READY'
+      ))
+        proc.stdout!.emit('data', Buffer.from([byte]))
+      expect(await status).toBe('ready')
+      if (profile === 'store-restart') {
+        await vi.advanceTimersByTimeAsync(20000)
+        expect(proc.kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(5000)
+        await expect(c.done).rejects.toThrow(/maxRuntimeMs/)
+      } else {
+        await vi.advanceTimersByTimeAsync(45000)
+        await expect(c.done).rejects.toThrow(/readiness timeout/)
+      }
+      expect(proc.kill).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+)
+
+it.each(['store-restart', 'public-restart'] as const)(
+  'S08: %s without READY fails at the original readiness deadline',
+  async (profile) => {
+    const root = await scratch(),
+      { home } = await privateEnvironment(root),
+      proc = fakeChild()
+    vi.useFakeTimers()
+    try {
+      vi.mocked(proc.kill).mockImplementation(() => {
+        queueMicrotask(() => {
+          proc.emit('exit', null, 'SIGTERM')
+          proc.emit('close', null, 'SIGTERM')
+        })
+        return true
+      })
+      const c = observeCompleteChild(proc, home, {
+        maxRuntimeMs: completeProfiles[profile].maxRuntimeMs,
+        exitTimeoutMs: 5000,
+        termGraceMs: 1000,
+        killGraceMs: 2000
+      })
+      const status = completeReadiness(c, profile)
+      await vi.advanceTimersByTimeAsync(
+        completeProfiles[profile].readinessMs - 1
+      )
+      expect(proc.kill).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      if (profile === 'store-restart')
+        await expect(status).rejects.toThrow(/readiness timeout/)
+      else expect(await status).toBe('timeout')
+      await expect(c.done).rejects.toThrow(/readiness timeout/)
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+)

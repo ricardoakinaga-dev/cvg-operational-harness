@@ -1,0 +1,169 @@
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:2:-- No legacy turn is backfilled. Migration0028 remains a dedicated schema.
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:3:-- The migration owner supplies the serving role's explicit minimal grants:
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:108:ALTER TABLE controlled_published_bindings ENABLE ROW LEVEL SECURITY;
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:109:ALTER TABLE controlled_published_bindings FORCE ROW LEVEL SECURITY;
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:110:ALTER TABLE controlled_published_evidence ENABLE ROW LEVEL SECURITY;
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:111:ALTER TABLE controlled_published_evidence FORCE ROW LEVEL SECURITY;
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:120:CREATE FUNCTION cvg_controlled_evidence_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:128:CREATE FUNCTION cvg_controlled_binding_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:161:-- Bind lookups to the trigger's schema, never a mutable caller search_path.
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:162:CREATE FUNCTION cvg_controlled_bound_writer() RETURNS trigger LANGUAGE plpgsql AS $$
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:172:  ELSIF TG_TABLE_NAME='operational_effect_journal' THEN
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:181:  -- The reserved parent marker is only a deny discriminator. Ordinary roles
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:182:  -- must not need grants on private sidecars to keep writing unbound work.
+../packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql:247:CREATE TRIGGER controlled_bound_journal_writer BEFORE INSERT OR UPDATE OR DELETE ON operational_effect_journal
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:14: * one must exist in the runtime schema with RLS + FORCE RLS enabled, and the
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:15: * runtime role must not own them.
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:30:  // unreadable switch keeps the worker paused, so the grant is required.
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:40:  'operational_effect_journal',
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:68:  rolcreaterole: boolean
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:73:                            rolcreaterole, rolreplication
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:74:                       FROM pg_roles
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:75:                      WHERE rolname = current_user
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:85: * Verifies the effective PostgreSQL role and tenant-isolation schema before the
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:109:    const roleResult = await client.query<RoleRow>(ROLE_QUERY)
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:110:    const role = roleResult.rows[0]
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:112:      !role ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:113:      role.rolsuper ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:114:      role.rolbypassrls ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:115:      role.rolcreatedb ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:116:      role.rolcreaterole ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:117:      role.rolreplication
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:120:        'PostgreSQL worker role must be a non-superuser without BYPASSRLS'
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:124:    const memberships = await client.query<{ count: number }>(
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:126:         FROM pg_auth_members AS membership
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:127:         INNER JOIN pg_roles AS member ON member.oid = membership.member
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:128:        WHERE member.rolname = current_user`
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:130:    if (Number(memberships.rows[0]?.count ?? 0) > 0) {
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:131:      throw new Error('PostgreSQL worker role must not inherit other roles')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:139:    if (databaseOwner.rows[0]?.owner === role.rolname) {
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:140:      throw new Error('PostgreSQL worker role must not own the database')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:143:    const schemaPrivilege = await client.query<{ can_create: boolean }>(
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:144:      `SELECT has_schema_privilege(current_user, current_schema(), 'CREATE')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:147:    if (schemaPrivilege.rows[0]?.can_create) {
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:148:      throw new Error('PostgreSQL worker role must not create schema objects')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:163:        WHERE n.nspname = current_schema()
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:169:        'PostgreSQL worker schema is missing tenant-isolated tables'
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:175:          table.owner === role.rolname ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:181:        'PostgreSQL worker tables must be tenant-isolated and not owned by the runtime role'
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:189:      roles: string
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:194:      `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:196:        WHERE schemaname = current_schema() AND tablename = ANY($1::text[])`,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:216:        policy.roles !== '{public}' ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:234:      can_trigger: boolean
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:237:      `SELECT table_name, has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:238:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'INSERT') AS can_insert,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:239:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'UPDATE') AS can_update,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:240:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'DELETE') AS can_delete,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:241:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRUNCATE') AS can_truncate,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:242:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRIGGER') AS can_trigger,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:243:              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'REFERENCES') AS can_references
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:262:          privileges.can_trigger ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:273:      const migrations = await client.query<{
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:275:        checksum: string | null
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:277:        `SELECT version, checksum
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:278:           FROM schema_migrations
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:283:        migrations.rows.map((migration) => [migration.version, migration])
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:286:        const migration = applied.get(version)
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:288:        const checksum = createHash('sha256').update(sql).digest('hex')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:289:        if (!migration || migration.checksum !== checksum) {
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:291:            `PostgreSQL worker migration is not verified: ${version}`
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:347:  'operational_effect_journal',
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:389:  controlled_bound_journal_writer: 'operational_effect_journal',
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:394:/** Serving-role/read-only qualification. Migration and DDL are never run here. */
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:413:  const migration = await readPostgresMigrationSql(
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:418:      `SELECT (has_table_privilege(current_user,'schema_migrations','SELECT')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:419:           AND NOT has_table_privilege(current_user,'schema_migrations','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')) AS read_only`
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:423:        'Published serving role must not write migration metadata'
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:426:      trigger_name: string
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:432:      trigger_type: number
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:438:      `SELECT t.tgname AS trigger_name, c.relname AS table_name, t.tgenabled AS enabled,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:439:               p.prosecdef AS security_definer, p.proname AS function_name, pg_get_functiondef(p.oid) AS definition, t.tgtype AS trigger_type,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:440:               (p.pronamespace=n.oid) AS function_local, (pg_get_userbyid(p.proowner)<>current_user) AS independent_owner,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:442:          FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:444:         WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname=ANY($1::text[])`,
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:448:      throw new Error('Published writer guard triggers are missing')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:450:      const rows = result.rows.filter((row) => row.trigger_name === name)
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:476:        row.trigger_type !== expectedType ||
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:482:          migrationFunctionBody(migration, expectedFunction)
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:488:      `SELECT (has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'USAGE')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:489:           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'UPDATE')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:490:           AND has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'USAGE')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:491:           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'UPDATE')) AS permitted`
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:504:function migrationFunctionBody(sql: string, name: string): string {
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:507:    throw new Error('Published writer function is missing from migration')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:514:    : new Error('PostgreSQL worker role preflight failed')
+../packet-r1/source/apps/worker/src/postgres-role-preflight.ts:517:// Matches the deparsed expressions installed by the repository migrations.
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:7:  schemaName?: string
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:8:  migrations?: string[]
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:12:const migrationPath = resolve(
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:14:  'packages/persistence/migrations/0000_initial.sql'
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:16:const migrationDirectory = resolve(
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:18:  'packages/persistence/migrations'
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:33:  '0012_channel_effect_journal',
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:34:  '0013_runtime_effect_journal',
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:52:function assertSafeSchemaName(schemaName: string): void {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:53:  if (!/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:54:    throw new Error('Invalid PostgreSQL schema name')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:59:  return readFile(migrationPath, 'utf8')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:66:    throw new Error('Invalid PostgreSQL migration version')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:68:  return readFile(resolve(migrationDirectory, `${version}.sql`), 'utf8')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:75:  const migration = await readInitialMigrationSql()
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:77:  if (options.schemaName) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:78:    assertSafeSchemaName(options.schemaName)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:83:    if (options.schemaName) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:85:        await client.query(`CREATE SCHEMA IF NOT EXISTS ${options.schemaName}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:87:      await client.query(`SET search_path TO ${options.schemaName}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:90:      `SELECT pg_advisory_xact_lock(hashtext('cvg-agent-secretary:migrations'))`
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:93:      `CREATE TABLE IF NOT EXISTS schema_migrations (
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:99:      `SELECT version FROM schema_migrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:108:    await client.query(migration)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:117: * Applies ordered migrations with a checksum guard. The legacy 0000 file is
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:125:  const migrations = options.migrations ?? defaultPostgresMigrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:126:  for (const version of migrations) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:127:    const migration = await readPostgresMigrationSql(version)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:128:    const checksum = createHash('sha256').update(migration).digest('hex')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:132:      if (options.schemaName) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:133:        assertSafeSchemaName(options.schemaName)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:136:            `CREATE SCHEMA IF NOT EXISTS ${options.schemaName}`
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:139:        await client.query(`SET search_path TO ${options.schemaName}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:142:        `SELECT pg_advisory_xact_lock(hashtext('cvg-agent-secretary:migrations'))`
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:145:        `CREATE TABLE IF NOT EXISTS schema_migrations (
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:151:        `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:155:        checksum: string | null
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:157:        `SELECT version, checksum
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:158:         FROM schema_migrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:165:        if (!current.checksum) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:166:          throw new Error(`PostgreSQL migration checksum missing: ${version}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:168:        if (current.checksum !== checksum) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:169:          throw new Error(`PostgreSQL migration checksum mismatch: ${version}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:172:        await client.query(migration)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:174:          `INSERT INTO schema_migrations (version, checksum)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:176:           ON CONFLICT (version) DO UPDATE SET checksum = EXCLUDED.checksum`,
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:177:          [version, checksum]
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:348:    throw new Error(`${label} is required for a legacy migration baseline`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:353: * Records an operator-approved checksum baseline for a legacy database that
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:354: * was created by 0000_initial before checksum tracking existed. This is never
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:365:  if (options.schemaName) assertSafeSchemaName(options.schemaName)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:366:  const migration = await readPostgresMigrationSql('0000_initial')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:367:  const checksum = createHash('sha256').update(migration).digest('hex')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:371:    if (options.schemaName) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:373:        await client.query(`CREATE SCHEMA IF NOT EXISTS ${options.schemaName}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:375:      await client.query(`SET search_path TO ${options.schemaName}`)
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:378:      `SELECT pg_advisory_xact_lock(hashtext('cvg-agent-secretary:migrations'))`
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:384:       WHERE n.nspname = current_schema()
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:399:       FROM information_schema.columns
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:400:       WHERE table_schema = current_schema()
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:421:       WHERE schemaname = current_schema()
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:437:      `CREATE TABLE IF NOT EXISTS schema_migrations (
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:443:      `ALTER TABLE schema_migrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:444:         ADD COLUMN IF NOT EXISTS checksum text,
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:451:      checksum: string | null
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:453:      `SELECT version, checksum
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:454:       FROM schema_migrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:461:      throw new Error('Legacy database has no 0000_initial migration marker')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:463:    if (current.checksum) {
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:464:      throw new Error('0000_initial already has a migration checksum')
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:467:      `UPDATE schema_migrations
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:468:       SET checksum = $2,
+../packet-r1/source/packages/persistence/src/postgres-migrations.ts:475:        checksum,

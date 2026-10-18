@@ -1,0 +1,366 @@
+{
+  "version": 1,
+  "task": "C100-Q01-REF-PORT-001",
+  "round": 2,
+  "role": "independent security/code critic",
+  "observed_at": "2026-10-18T02:35:30.642920+00:00",
+  "verdict": "REJECT",
+  "scope": "FIRST_BOUNDED_NATIVE_LAUNCH_ELIGIBILITY_ONLY",
+  "boundedLaunchEligible": false,
+  "finalPositiveControls": "NOT_RUN",
+  "finalNPAcceptance": "NOT_RUN",
+  "nativeExecution": "NOT_RUN",
+  "actualReferenceContainers": "NOT_RUN",
+  "M1": "NOT_RUN",
+  "functionalCatalogCredit": "NONE",
+  "codeCorrectionsConsumed": 1,
+  "codeCorrectionsRemaining": 1,
+  "candidate": "/tmp/cvg-claude100-exec-20261017/ref-port-candidate",
+  "candidateCheckpoint": "8997560a4ace2a6b51e5f877bbdb4940536d43d5",
+  "bindings": {
+    "specSha256": "aaa12b3ee55021e357fc9a17518316135eb4ca423b87215af754cd18dbb41f04",
+    "sourceFreezeSha256": "e5294292b5affba4ac3b1b74cdc1c999fbfb0122b1b43297329764e3738d2c15",
+    "reviewContractSha256": "467bd51864cdd585ad036392047b3340e303301902ceb105a5d99ff01b954027",
+    "correctionContractSha256": "4b1cb1d9d3b7bafd2bdb0638f3eccbbc9d79807346fe836fe6500c608c02b7af",
+    "inputsManifestSha256": "0eb94f861829902e3bd8441c4679766b0867980eb1748f2e164e3c5e8843c3f0",
+    "evidenceManifest": "manifest.json"
+  },
+  "mandatoryFindingCount": 2,
+  "findings": [
+    {
+      "id": "R2-01",
+      "origin": "R1-03",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "mandatory": true,
+      "affectedNP": [
+        "NP02",
+        "NP03",
+        "NP08"
+      ],
+      "title": "Contradictory PASS proofs still accepted for INFRA_FAILURE reports",
+      "spec": "Approved SPEC lines397\u2013409 require PASS evidence and rejection of contradictory bindings; this is not restricted to PORT_OBSERVED.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 396,
+          "detail": "PASS checks are checked for referenced artifact roles only."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 406,
+          "detail": "Any status other than PORT_OBSERVED or PORT_NOT_OBSERVED returns before semantic proof validation."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 580,
+          "detail": "assertContainmentProofs is unreachable for INFRA_FAILURE, BLOCKED_CONTAINMENT and INVALID_INPUT."
+        }
+      ],
+      "reproducer": "Start from the newly generated, genuine simulated privacy_failure report: INFRA_FAILURE/exit1 with CONTAINER_PROFILE=PASS and NAMESPACES=PASS. Change inspect-observer HostConfig.Privileged to true and update its artifact hash/size. Separately change preflight uid=0, hostMarkerAbsent=false, pidNamespace=synthetic host inode and rehash. assertEvidenceBindings returns each contradictory report unchanged. The identical mutations on PORT_OBSERVED are rejected.",
+      "evidence": [
+        "validator_INFRA_FAILURE_inspect.json",
+        "validator_INFRA_FAILURE_preflight.json",
+        "validator_PORT_OBSERVED_inspect.json",
+        "validator_PORT_OBSERVED_preflight.json",
+        "adversarial-r2.json"
+      ],
+      "impact": "The successful-status repair works, but failed reports can still claim intact security checks that their own bound bytes disprove. This is the SPEC verifier property, not an allegation of arbitrary host forgery or a positive native escape.",
+      "correction": "Recompute every claimed PASS from its available, corresponding proof for all statuses. Apply only reached-check requirements so a legitimate partial failure does not need future evidence. Reject contradictory retained proofs even when the terminal status is failure; do not remove the PASS checks merely to hide the contradiction."
+    },
+    {
+      "id": "R2-02",
+      "origin": "R1-02",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "mandatory": true,
+      "affectedNP": [
+        "NP07"
+      ],
+      "title": "SIGINT/SIGTERM during trusted bootstrap entry bypass cancellation cleanup",
+      "spec": "Approved SPEC lines169\u2013174,373\u2013381 require finite cancellation cleanup; SIGKILL/power loss are the explicit no-cleanup cases. R2 contract explicitly requires assessment during entry.",
+      "code": [
+        {
+          "path": "scripts/claude100-reference-port.mjs",
+          "line": 32,
+          "detail": "CLI freezes/verifies/imports before entering the signal-owning controller and has no entry signal handlers."
+        },
+        {
+          "path": "scripts/claude100-reference-port.mjs",
+          "line": 50,
+          "detail": "Fallback cleanup requires graph already returned; normal process signal termination does not enter this finally."
+        },
+        {
+          "path": "tests/claude100/reference-port/bootstrap.mjs",
+          "line": 104,
+          "detail": "freezeHostGraph creates owned private files/FDs without cancellation handling."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 123,
+          "detail": "Scoped handlers start only after the copied controller execute function begins."
+        }
+      ],
+      "reproducer": "Two owned Node22 subprocesses call the actual builtin-only freezeHostGraph on fresh reviewer-owned roots. fs.watch self-delivers SIGINT or SIGTERM after the exclusive bootstrap directory appears, before freeze resolves or any controller import. Both checkpoints have zero handlers; each process terminates by that signal and leaves its private partial snapshot. The valid probe CLI/main is not invoked. By contrast, four copied-controller cases after entry handle both signals at CONFIGURE/START_PORT, preserve SIGNAL, clean both virtual containers and dispose the graph.",
+      "evidence": [
+        "signal-r2.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r2/artifacts/bootstrap_SIGINT/signal-checkpoint.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r2/artifacts/bootstrap_SIGTERM/signal-checkpoint.json"
+      ],
+      "impact": "Ordinary entry cancellation is still treated like a crash and leaves an avoidable private snapshot. No Docker/native resources existed in these bootstrap tests; the residual finding is narrower than the original in-controller leak.",
+      "correction": "Own cancellation from before the first bootstrap side effect, abort further entry/native starts, close owned pins/handles and attempt finite identity-checked disposal on cancellation. Preserve the signal plus cleanup causes, transfer ownership cleanly to the controller, and keep the no-fallible-IO-after-publication guarantee."
+    }
+  ],
+  "sixFindingRecheck": [
+    {
+      "id": "R1-01",
+      "status": "RESOLVED_WITHIN_BOUNDED_RETEST",
+      "judgment": "All six physical input/profile mutations are refused both before native launch and after the port phase; all12 return exit1, DRIFT_RUNTIME and no published report. Both empty-directory mutations produce INFRA_FAILURE. No virtual resources remain. Refusing publication when physical bytes cannot support a coherent inventory is correct.",
+      "code": [
+        "inputs.mjs:139",
+        "controller.mjs:131",
+        "controller.mjs:751",
+        "evidence.mjs:202",
+        "report.mjs:786"
+      ],
+      "evidence": [
+        "adversarial-r2.json"
+      ]
+    },
+    {
+      "id": "R1-02",
+      "status": "PARTIALLY_RESOLVED_MANDATORY_REMAINS",
+      "judgment": "Copied-controller SIGINT/SIGTERM at configure and port pass four independent tests: SIGNAL preserved, zero post-configure starts when cancelled there, both virtual resources removed, graph disposed, handlers restored. Entry/bootstrap still fails both signals (R2-02).",
+      "code": [
+        "controller.mjs:118",
+        "controller.mjs:140",
+        "controller.mjs:160",
+        "controller.mjs:418",
+        "scripts/claude100-reference-port.mjs:32"
+      ],
+      "evidence": [
+        "signal-r2.json"
+      ]
+    },
+    {
+      "id": "R1-03",
+      "status": "PARTIALLY_RESOLVED_MANDATORY_REMAINS",
+      "judgment": "Rehashed inspect/preflight contradictions are rejected for PORT_OBSERVED. Exactly the same contradictions are accepted for a real simulated INFRA_FAILURE report while CONTAINER_PROFILE and NAMESPACES remain PASS (R2-01). Cannot close on positive-only validation.",
+      "code": [
+        "report.mjs:396",
+        "report.mjs:406",
+        "report.mjs:580"
+      ],
+      "evidence": [
+        "validator_INFRA_FAILURE_inspect.json",
+        "validator_INFRA_FAILURE_preflight.json",
+        "adversarial-r2.json"
+      ]
+    },
+    {
+      "id": "R1-04",
+      "status": "RESOLVED_WITHIN_BOUNDED_RETEST",
+      "judgment": "Nonzero actual wrapper status preserves IO/INFRA_FAILURE and continues rm/final inspect; both virtual identities removed. The baseline independently preserves the distinct native port exit1 while wrapper/cleanup remain intact.",
+      "code": [
+        "controller.mjs:495",
+        "controller.mjs:513"
+      ],
+      "evidence": [
+        "adversarial-r2.json"
+      ]
+    },
+    {
+      "id": "R1-05",
+      "status": "RESOLVED_WITHIN_BOUNDED_RETEST",
+      "judgment": "Complete body terminal without REQUEST/RESPONSE is now PROTOCOL/INFRA_FAILURE rather than clean absence, with partial body evidence retained. Controller enforces body/request/response cardinality and bytes/hash agreement after cleanup.",
+      "code": [
+        "controller.mjs:894",
+        "controller.mjs:907"
+      ],
+      "evidence": [
+        "adversarial-r2.json"
+      ]
+    },
+    {
+      "id": "R1-06",
+      "status": "RESOLVED_REPRESENTATION_AND_GRAPH_TESTED",
+      "judgment": "Fixed builtinAllowlist is present in profile and checked for exact equality. Actual frozen graph imports copied controller/helper code, pins both original and copied graphs, and disposes graph before publication. Trusted entry representation is compatible with the approved SPEC as explained separately; entry cancellation is R2-02.",
+      "code": [
+        "bootstrap.mjs:16",
+        "bootstrap.mjs:40",
+        "scripts/claude100-reference-port.mjs:32",
+        "scripts/claude100-reference-port.mjs:34",
+        "controller.mjs:701",
+        "controller.mjs:557"
+      ],
+      "evidence": [
+        "closure-independent-r2.json",
+        "adversarial-r2.json",
+        "bootstrap-adapted-r2.json"
+      ]
+    }
+  ],
+  "requiredInterpretations": {
+    "profileTopLevel": {
+      "judgment": "COMPATIBLE",
+      "reason": "The approved text explicitly requires a fixed Node builtin allowlist in the profile. Its top-level profile description uses cont\u00e9m rather than an exact closed key set. Docker config projections and Reportv1 are explicitly closed and remain unchanged. Adding the fixed top-level builtinAllowlist fulfils an existing required datum; it grants no configurable capability. Twelve fixed entries exactly match independent AST observations and resolved profile."
+    },
+    "trustedBootstrap": {
+      "judgment": "COMPATIBLE_ARCHITECTURE_WITH_CANCELLATION_GAP",
+      "reason": "The minimal trusted pre-import bootstrap uses only Node builtins and fixed source/path/hash constants. It pins originals and copies before the host controller/helper graph is imported from the private snapshot. A small original bootstrap necessarily precedes its own copied execution and is itself in the reviewed inventory. Copied-controller integration with fake Engine/native observed a valid recon report and disposal before publication. This closes original host-graph consumption, but entry cancellation remains mandatory R2-02."
+    },
+    "fixedWithinClosureImport": {
+      "judgment": "COMPATIBLE_SCOPED_INTERPRETATION_EXPLICIT",
+      "reason": "I read Imports din\u00e2micos/resolu\u00e7\u00e3o fora da closure s\u00e3o proibidos as prohibiting dynamic/out-of-closure resolution, not the sole reviewed bootstrap import of a fixed already-verified path within that closure. The target is graph.root plus the literal tests/claude100/reference-port/controller.mjs; it is not chosen by manifest/env/target. Independent AST finds exactly this one ImportExpression, no unresolved static edge, and all subsequent module imports resolve inside the copied graph or the fixed builtin list. This interpretation does not permit generic dynamic import or resolution outside the frozen graph and does not alter the immutable SPEC, Docker config or report schema."
+    }
+  },
+  "compatibilityQuestions": [
+    {
+      "id": "Q1",
+      "judgment": "COMPATIBLE_FAIL_CLOSED_NOT_RUNTIME_PROVEN",
+      "reason": "Ordinal domain stays0\u20133. Simulated protected observer EOF/nonzero after a valid exchange remains INFRA_FAILURE and both virtual resources are removed; no invented ordinal or observed host CAP claim. Actual fifth HTTP attempt is NOT_RUN."
+    },
+    {
+      "id": "Q2",
+      "judgment": "COMPATIBLE_DEADLINE_INTERPRETATION_NOT_RUNTIME_PROVEN",
+      "reason": "Transport unchanged: counted <=2s local Unixsocket Enginev1.51 attach handshake, stream bounded by shared controller deadline; no 30s Docker CLI attach. Original source judgment preserved, actual Engine/HTTP handshake and image compatibility NOT_RUN."
+    },
+    {
+      "id": "Q3",
+      "judgment": "COMPATIBLE_ZERO_TERMINALS_AND_BODY_JOIN_RETESTED",
+      "reason": "Zero-length terminal wire representation stays within admitted0\u20134096length. Safe unit tests cover duplicates/after-terminal/fragmentation/EOF, and the original orphan-body counterexample now gives PROTOCOL/INFRA_FAILURE. Actual cross-pipe native timing remains NOT_RUN."
+    },
+    {
+      "id": "Q4",
+      "judgment": "COMPATIBLE_CONSERVATIVE_HOST_WINDOW_NOT_RUNTIME_PROVEN",
+      "reason": "No total cross-pipe order invented between native start/port and HTTP. Late observer raw bytes after STOP are rejected with INFRA_FAILURE and both virtual identities removed. Conservative false negatives are possible; no positive evidence inferred. Actual scheduling is NOT_RUN."
+    }
+  ],
+  "tests": {
+    "safeOriginalUnits": {
+      "status": "PASS",
+      "files": 8,
+      "tests": 171,
+      "exitCode": 0,
+      "evidence": "safe-unit-r2.json"
+    },
+    "bootstrapAdaptedUnits": {
+      "status": "PASS",
+      "tests": 22,
+      "exitCode": 0,
+      "evidence": "bootstrap-adapted-r2.json",
+      "adaptation": "Output prefix moved into reviewer R2 ownership; static imports/fixture source URLs made absolute. Assertions preserved; original hardcoded builder prefix not used."
+    },
+    "adversarial": {
+      "scenarios": 22,
+      "additionalValidatorProbes": 4,
+      "exitCode": 0,
+      "result": "COMPLETED_COUNTEREXAMPLES_REPRODUCED; exit0 does not mean candidate compliance",
+      "evidence": "adversarial-r2.json"
+    },
+    "signals": {
+      "controllerCases": 4,
+      "controllerResult": "PASS_IN_SIMULATION",
+      "bootstrapEntryCases": 2,
+      "bootstrapEntryResult": "CANCELLATION_FAILURE_REPRODUCED",
+      "parentExitCode": 0,
+      "evidence": "signal-r2.json"
+    },
+    "closure": {
+      "sources": 20,
+      "bytes": 248695,
+      "fixedBuiltins": 12,
+      "dynamicImports": 1,
+      "unresolvedStaticImports": 0,
+      "evidence": "closure-independent-r2.json"
+    },
+    "runtime": "Node22.23.2 pinned executable, own TMPDIR/cache/artifacts",
+    "notRunByReviewer": [
+      "Actual valid probe CLI/main or observer/client main",
+      "Actual Docker/container/HTTP/network/native/Claude",
+      "Broad gates/PG/E2E/fullcert",
+      "Original inputs/controller/unaltered bootstrap tests with out-of-scope hardcoded/default marker writes"
+    ]
+  },
+  "preservation": {
+    "source34BeforeAfter": "MATCH",
+    "protected7Versus26d866c3": "MATCH",
+    "oldR1EvidenceFiles": 680,
+    "oldR1Evidence": "ALL_MATCH",
+    "currentBinaryPins": "Node,DockerCLI,Claude ALL_MATCH; image runtime NOT_RUN",
+    "sourceModifications": false,
+    "sharedLedgerWrites": false,
+    "delegatedAgents": 0,
+    "networkCalls": 0,
+    "dockerCommands": 0
+  },
+  "criteria": [
+    {
+      "id": "NP01",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    },
+    {
+      "id": "NP02",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": [
+        "R2-01"
+      ]
+    },
+    {
+      "id": "NP03",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": [
+        "R2-01"
+      ]
+    },
+    {
+      "id": "NP04",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    },
+    {
+      "id": "NP05",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    },
+    {
+      "id": "NP06",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    },
+    {
+      "id": "NP07",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": [
+        "R2-02"
+      ]
+    },
+    {
+      "id": "NP08",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": [
+        "R2-01"
+      ]
+    },
+    {
+      "id": "NP09",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    },
+    {
+      "id": "NP10",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFindings": []
+    }
+  ],
+  "limitations": [
+    "All Engine/preflight/native/HTTP messages are simulated; real containment/native lineage/exchange/cleanup remain unproven.",
+    "Entry signal tests exercise actual freezeHostGraph directly in own Node processes; invoking the valid CLI/main is prohibited. The CLI gap is additionally established by source inspection.",
+    "Current original file hashes match approved pins, but Docker image/API/ELF/runtime compatibility is NOT_RUN.",
+    "No web references fetched; network forbidden.",
+    "No live Lead jobs/resources inspected or controlled; stopped fullcert R1 confers no final certificate.",
+    "Pure and adapted test results do not grant M1,117+17functional catalog acceptance, release, final NP acceptance or launch eligibility."
+  ],
+  "nextAction": "Use the one remaining correction round to fix negative-status PASS proof validation and bootstrap-entry cancellation, preserve R1/R2 evidence, refreeze exact corrected source and obtain independent review/current fullgates before any native launch."
+}

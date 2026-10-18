@@ -1,0 +1,43 @@
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+PRIVATE = Path(__file__).parent
+WORK = PRIVATE.parent / 'worktree'
+OUT = PRIVATE / 'causal-fault'
+assert not OUT.exists()
+OUT.mkdir()
+rows = []
+for name in ['reference-agent-driver.mjs', 'reference-tool-driver.mjs', 'failure-case.mjs', 'tool-case.mjs']:
+    src = WORK / 'tests/differential' / name
+    dst = OUT / name
+    shutil.copy2(src, dst)
+    rows.append({'name': name, 'original_sha256': hashlib.sha256(src.read_bytes()).hexdigest()})
+driver = OUT / 'reference-agent-driver.mjs'
+text = driver.read_text()
+assert text.count('return args.text') == 1
+driver.write_text(text.replace('return args.text', "return args.text + '!fault'"))
+home = OUT / 'home'
+home.mkdir()
+fixture = home / 'fixture.json'
+fixture.write_text(json.dumps({'version': 1, 'id': 'causal-fault', 'message': 'Run the pure echo', 'text': 'synthetic echo'}))
+node = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+env = {'PATH': str(Path(node).parent) + ':/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(home), 'TMP': str(home), 'TEMP': str(home), 'NODE_ENV': 'test', 'LANG': 'C.UTF-8'}
+for var, suffix in [('XDG_CONFIG_HOME', 'config'), ('XDG_CACHE_HOME', 'cache'), ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'), ('DSH_HOME', 'dsh')]:
+    env[var] = str(home / suffix)
+argv = [node, str(OUT / 'reference-tool-driver.mjs'), str(fixture)]
+result = subprocess.run(argv, env=env, cwd=home, capture_output=True, timeout=7)
+assert len(result.stdout) + len(result.stderr) < 1048576
+assert result.returncode != 0 and not result.stdout, 'Corrupted tool result accepted'
+record = {'kind': 'SYNTHETIC_PORT_CAUSAL_FAULT_NOT_CORRECT_ENGINE_BASELINE', 'argv': argv, 'environment': env, 'timeoutSeconds': 7, 'exit': result.returncode, 'exit_observed': True, 'stdout_bytes': len(result.stdout), 'stderr_bytes': len(result.stderr), 'source_copies': rows, 'fault_source_sha256': hashlib.sha256(driver.read_bytes()).hexdigest(), 'current_source_modified': False}
+for name, data in [('stdout', result.stdout), ('stderr', result.stderr)]:
+    record[name + '_sha256'] = hashlib.sha256(data).hexdigest()
+    if data:
+        (OUT / (name + '.txt')).write_bytes(data)
+shutil.rmtree(home)
+record['home_removed_after_exit'] = not home.exists()
+(OUT / 'result.json').write_text(json.dumps(record, indent=2, ensure_ascii=False) + '\n')
+print(json.dumps({'fault_rejected_exit': result.returncode, 'stdout_bytes': len(result.stdout), 'home_cleanup_after_exit': True}))

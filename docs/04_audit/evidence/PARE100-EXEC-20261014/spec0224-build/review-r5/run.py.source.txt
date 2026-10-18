@@ -1,0 +1,14 @@
+import os,sys,subprocess,json,datetime,pathlib
+R=pathlib.Path(__file__).parent
+W='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+name=sys.argv[1];cmd=sys.argv[2:]
+env=os.environ.copy()
+for key,sub in [('TMPDIR','tmp'),('TMP','tmp'),('TEMP','tmp'),('XDG_CACHE_HOME','cache'),('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),('npm_config_cache','npm-cache')]:
+ p=R/sub;p.mkdir(exist_ok=True);env[key]=str(p)
+env['PATH']='/home/ricardo/.nvm/versions/node/v22.23.2/bin:'+env['PATH']
+env['PYTHONDONTWRITEBYTECODE']='1'
+start=datetime.datetime.now(datetime.timezone.utc).isoformat()
+p=subprocess.run(cmd,cwd=W,env=env,capture_output=True)
+(R/(name+'.stdout.log')).write_bytes(p.stdout);(R/(name+'.stderr.log')).write_bytes(p.stderr)
+(R/(name+'.command.json')).write_text(json.dumps({'argv':cmd,'cwd':W,'started':start,'ended':datetime.datetime.now(datetime.timezone.utc).isoformat(),'exit':p.returncode,'environment_overrides':{k:env[k] for k in ['TMPDIR','TMP','TEMP','XDG_CACHE_HOME','XDG_CONFIG_HOME','XDG_DATA_HOME','npm_config_cache','PATH','PYTHONDONTWRITEBYTECODE']}},indent=2)+'\n')
+sys.stdout.buffer.write(p.stdout);sys.stderr.buffer.write(p.stderr);sys.exit(p.returncode)

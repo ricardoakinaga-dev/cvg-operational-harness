@@ -114,6 +114,15 @@ const PINNED: Record<PackageName, readonly string[]> = {
     'createSdk',
     'createSdkMinimal',
     'createSdkServer',
+    'createStdioSdkTransport',
+    'serveStdioSdk',
+    'SdkWireError',
+    'SDK_TRANSPORT_ERROR_CODES',
+    'StdioTransportOptions',
+    'StdioSdkTransport',
+    'StdioServerOptions',
+    'StdioSdkServer',
+    'SdkWireErrorKind',
     'SDK_PROTOCOL_VERSION'
   ]
 }

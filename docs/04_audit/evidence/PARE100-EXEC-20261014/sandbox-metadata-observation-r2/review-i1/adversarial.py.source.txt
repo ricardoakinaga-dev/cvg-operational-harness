@@ -1,0 +1,39 @@
+import sys,json,copy,shutil,hashlib
+from pathlib import Path
+D=Path(__file__).resolve().parent;P=D.parent
+sys.path.insert(0,str(P))
+from common import authority,env_for,load,put,digest
+from validate import validate_run
+from seal import seal
+A="5c93abb6b77fdcc79d99bafa623864a28a2c41cc4fb636be591a10171072a456"
+trusted=authority(P/"authority.json",A)
+base=P/"runs/i1-01";root=D/"adversarial-01";root.mkdir()
+results=[]
+def test(name,mutate,expected):
+ f=root/name;shutil.copytree(base,f)
+ proc=load(f/"process.json");proc["capture"]["env"]=env_for(f);data=load(f/"stdout.txt")
+ mutate(f,proc,data)
+ put(f/"process.json",proc);put(f/"stdout.txt",data)
+ proc["capture"]["retainedBytes"]=(f/"stdout.txt").stat().st_size;put(f/"process.json",proc)
+ receipt=root/(name+".TEST-ONLY-receipt.json");seal(f,receipt)
+ # Test-only expected digest for semantic controls; never an actual capture.
+ expected_sha=hashlib.sha256(receipt.read_bytes()).hexdigest()
+ try:result=validate_run(f,trusted,A,receipt,expected_sha);actual="ACCEPTED";reason=None
+ except (ValueError,KeyError,IndexError,TypeError) as e:actual="REJECTED";reason=str(e);result=None
+ results.append({"name":name,"expected":expected,"actual":actual,"reason":reason,"result":result,"actualCapture":False,"receiptTrust":"TEST_ONLY_FOR_SEMANTIC_EVALUATION"})
+noop=lambda f,p,d:None
+test("positive",noop,"ACCEPTED")
+test("blocked-tool-duration",lambda f,p,d:d["cases"][0]["telemetryEvents"][0].__setitem__("toolDurationMs",5000),"REJECTED")
+def future(f,p,d):
+ j=d["cases"][1]["journalRecord"];j["createdAt"]="2099-01-01T00:00:00.000Z";j["updatedAt"]="2099-01-01T00:00:00.001Z"
+test("journal-after-audit",future,"REJECTED")
+test("audit-before-journal",lambda f,p,d:d["cases"][1]["auditEvents"][0].__setitem__("timestamp","2000-01-01T00:00:00.000Z"),"REJECTED")
+test("log-result-loss",lambda f,p,d:d["cases"][0]["kernelLogEvents"].pop(2),"REJECTED")
+test("gate-operation-identity",lambda f,p,d:d["cases"][0]["gateCalls"][0]["context"].__setitem__("operationKey","forged"),"REJECTED")
+test("extra-run-file",lambda f,p,d:(f/"extra.json").write_text("{}"),"REJECTED")
+test("unknown-teardown",lambda f,p,d:p["capture"].__setitem__("remainingProcessGroup",None),"REJECTED")
+test("bool-exit",lambda f,p,d:p["capture"].__setitem__("exitCode",False),"REJECTED")
+test("bool-source-count",lambda f,p,d:p.__setitem__("sourceCount",True),"REJECTED")
+put(D/"adversarial-results.json",results)
+for r in results:print(json.dumps({k:v for k,v in r.items() if k!="result"}))
+print(json.dumps({"total":len(results),"unexpectedAcceptances":[r["name"] for r in results if r["expected"]=="REJECTED" and r["actual"]=="ACCEPTED"],"realCapturesAuthorizedByTestReceipts":0}))

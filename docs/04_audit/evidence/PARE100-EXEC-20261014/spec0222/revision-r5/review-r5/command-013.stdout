@@ -1,0 +1,96 @@
+
+FILE cvg/packages/contracts/src/contracts.ts 527 570
+527:   readonly attributes?: Readonly<Record<string, string | number>>
+528: }
+529: 
+530: export interface TelemetrySink {
+531:   record(event: TelemetryEvent): void
+532: }
+533: 
+534: export interface KnowledgeResult {
+535:   readonly id: string
+536:   readonly text: string
+537:   readonly source: string
+538:   readonly version: string
+539: }
+540: 
+541: export interface KnowledgeProvider {
+542:   search(
+543:     query: string,
+544:     context: ContextSnapshot
+545:   ): Promise<readonly KnowledgeResult[]>
+546: }
+547: 
+548: export interface MemoryStore {
+549:   load(sessionId: SessionId): Promise<StateSnapshot>
+550:   save(sessionId: SessionId, state: StateSnapshot): Promise<void>
+551: }
+552: 
+553: export interface InboundMessage {
+554:   readonly tenantId: TenantId
+555:   readonly conversationId: ConversationId
+556:   readonly externalMessageId: string
+557:   readonly text: string
+558:   readonly receivedAt: string
+559:   readonly correlationId: CorrelationId
+560: }
+561: 
+562: export interface OutboundMessage {
+563:   readonly conversationId: ConversationId
+564:   readonly text: string
+565:   readonly correlationId: CorrelationId
+566: }
+567: 
+568: export interface HarnessRuntime {
+569:   execute(input: RuntimeInput): Promise<RuntimeResult>
+570: }
+
+FILE spec.md 164 185
+164: ## 6. Linearização da troca, policy e evidência
+165: 
+166: Uma fila por owner serializa bootstrap/replace/publication/reconciliação de evidência. Admissão de pins/turnos é síncrona e não segura um lock enquanto plugin/policy/audit arbitrário aguarda. O ÚNICO predicado de admissão nova é owner.status === OPEN. Não há outro flag de fence que possa discordar do status: BOOTING, EVIDENCE_PENDING, CLOSING, CLOSED e FAILED não admitem pins/turnos novos. Árvores já admitidas têm as regras separadas da seção7.
+167: 
+168: Predicados de COMMIT, ambos em uma seção síncrona sem await:
+169: 
+170: | Operação  | Elegibilidade exata                                                                                                                                              | Efeito do commit local                                                                                     |
+171: | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+172: | Bootstrap | status BOOTING, revision0, current null, candidato READY, policy/evidência PREPARED ACK, signal não abortado e closeRequested false                              | current=candidato, revision1, receipt.committed=true, status=EVIDENCE_PENDING                              |
+173: | Replace   | status OPEN, current/revision iguais aos capturados/expectedRevision, candidato READY, policy/evidência PREPARED ACK, signal não abortado e closeRequested false | current=candidato, revision=anterior+1, anterior RETIRING, receipt.committed=true, status=EVIDENCE_PENDING |
+174: 
+175: closeRequested é latch monotônico que só muda false→true por close; ele não é autorização de admissão. Status EVIDENCE_PENDING começa NO commit e inclui o período normal de espera de ACK, não só o erro. Um candidato bootado não torna o owner OPEN antes de evidência.
+176: 
+177: 1. Capturar/reservar request e consultar tombstone com a precedência6.1. Autorizar o actor fixo para bootstrap/replace e validar catálogo/config antes de activate. Bootstrap é a única operação que prepara uma primeira geração em BOOTING. Replace exige OPEN e prepara enquanto a corrente atende usos já admitidos.
+178: 2. Falha/cancel antes de commit não troca current/revision; conservar candidato/recursos e fazer cleanup possuído. No bootstrap sem commit, falha deixa owner FAILED com ready FAILED/cleanup receipt, nunca OPEN; no replace pré-commit falho, a corrente continua OPEN salvo close ou falha independente. Não reativar por retry da mesma chave.
+179: 3. Candidato READY satisfaz serviços/perfis/ports/hooks, todas as promises originais de activate e suas aquisições/tarefas de inicialização já terminaram, pendingAcquire0 e readiness do boot. Um recurso vivo devidamente inicializado não é um callback de boot pendente; task de boot infinita não vira READY por ter fornecido um serviço cedo. Reavaliar policy. Append da linha PREPARED correspondente da tabela3.3 deve ACKar antes de commit; erro não publica. O último check de estado/revisão/signal e a troca só ocorrem depois desse ACK, conforme tabela acima. Close que venceu torna AMBOS os commits inelegíveis.
+180: 4. Após commit, append da linha COMMITTED correspondente (`plugin.lifecycle.v1.published`) é uma observação do ponteiro já fixado. Nenhum rollback automático existe daqui em diante. Se o append lança/rejeita/tem outcome desconhecido, permanecer EVIDENCE_PENDING com receipt imutável do commit. Preparação/activate não são repetidos.
+181: 5. Um único helper `acceptPublicationAck(receipt, attempt)` trata tanto ACK normal de COMMITTED quanto ACK de COMMITTED_OBSERVED. Só abre se status === EVIDENCE_PENDING, closeRequested === false, receipt nativo do owner tem committed=true, current.id/revision coincidem com o commit imutável e attempt pertence a esse receipt. Então status→OPEN uma vez. BOOTING não é admitido aqui: o bootstrap já mudou para EVIDENCE_PENDING no commit. Qualquer CLOSING/CLOSED/FAILED, receipt/attempt alheio ou revisão diferente impede reabertura.
+182: 6. reconcileEvidence só aceita receipt desse commit enquanto EVIDENCE_PENDING e sem closeRequested. Reavalia policy e acrescenta a linha publish_observed/COMMITTED_OBSERVED com attempt novo; não repete activate/commit/revisão. Seu ACK passa pelo MESMO helper5. Se close vence durante o append, o ACK é conservado como fato, mas não reabre. Quando o owner já está CLOSING/CLOSED, recusar novo reconcile antes de IO; cleanup não depende de um grant futuro.
+183: 7. Cancel no último check pré-commit cancela a operação sem publicação; depois de commit é too-late para desfazer o ponteiro. Prazo do observer/caller não altera esses predicados nem abandona recurso. Retirada anterior tem join independente: ACTIVATED_RETIREMENT_PENDING só depois de ACK/OPEN; REPLACED_AND_DISPOSED exige cleanup real. Sem ACK, retornar PUBLICATION_PENDING, nunca sucesso de ativação operacional.
+184: 
+185: pinCurrent reserva snapshot/slot e captura current/revision antes de autorização de leitura. Depois do await, verifica de novo status OPEN e a MESMA geração/revisão antes de emitir lease; se mudou, retorna STALE_REVISION e libera a reserva, sem pin/turno e sem reautorizar silenciosamente outra geração. inventory autoriza o recurso de perfil e só então captura um snapshot local síncrono; CLOSING/CLOSED não inicia IO em controls fechados e só fornece diagnóstico mínimo já possuído conforme6.1.
+
+FILE spec.md 211 231
+211: ## 7. Quiescência real e descarte
+212: 
+213: Cada geração mantém separadamente pins, turnos admitidos, operações efetivamente iniciadas, aquisições de recursos e disposers. O drain inicial exige pins0, roots de turnos nativos originais0, subtrees de produtores de uso/init0 e pendingAcquire0. Excluir os controllers de lifecycle e observers cuja única função é AGUARDAR esse drain; contar o próprio close/join como uso necessário faria self-join. Durante DISPOSING, novos roots de cleanup e seus filhos são avaliados pelas barreiras por item7.1, não pelo teste inicial de zero usado antes de iniciar cleanup. Quiescência exige todos esses usos efetivos resolvidos e nenhum novo produtor admitido. Liberação do lease ou resolução de `runTurn` não reduz contadores de operações que continuam após race de timeout/cancel.
+214: 
+215: O tracker obrigatório é instalado pelo wiring confiável ANTES das corridas nativas de deadline/cancel, não depende de a capability lembrar de chamar track. Cada callback admitido ganha um producer token nativo (owner/generation/lease/operation identity e estado ACTIVE) e registra a promessa ORIGINAL. Seu continuation assíncrono mantém esse token até a promessa original resolver/rejeitar. O retorno da corrida só encerra a espera do kernel/caller, nunca esse token. Dados tardios não mudam um RuntimeResult já devolvido nem repetem body.
+216: 
+217: | Borda nativa a instrumentar                                                                                                                         | Lifetime que precisa ser retido                                                                                                                                                                     |
+218: | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+219: | Orchestrator.decideNextStep e IterativeOrchestrator.decide                                                                                          | Promessa inteira do planner/orquestrador, inclusive código antes/depois de qualquer ModelGateway e mesmo quando não chama modelo                                                                    |
+220: | ModelGateway.complete, ToolDefinition.execute e observer permitido de capability                                                                    | Promessa inteira original, antes de race/withDeadline; token filho não substitui o do planner/callback pai                                                                                          |
+221: | ContextEngine.build, knowledge.search, CompletionEvaluator.evaluate, SufficiencyEvaluator.evaluate e callbacks async de extração/factory declarados | Mesma regra, mesmo quando port é emprestado; não dar como terminado só pelo timeout do consumidor                                                                                                   |
+222: | PolicyEngine.evaluate, ApprovalEngine.request/execution.begin/complete/fail/release/uncertain, SandboxGate.evaluate, PauseSwitch.isPaused           | IO de controle original e continuations, com contagem no owner e no produtor de turno/operação que o emitiu                                                                                         |
+223: | KernelLog.append, AuditSink.append, EffectLedger.started/finished e EffectJournal.reserve/markStarted/confirm/fail/markUncertain/get                | IO original de journal/audit/settlement, inclusive append que continua depois da janela de audit no single_pass ou iterative                                                                        |
+224: | ExecutionStepStore.recordStep/listSteps/saveCheckpoint/loadCheckpoint e SessionEventStore.openSession/append/read usados pelo log adapter           | IO original e continuations; store emprestado também participa de join, embora o owner não o feche                                                                                                  |
+225: | Callback sync de telemetry e demais ports declarados sync                                                                                           | Registrar sua invocação até retornar/throw; se port violar o contrato e devolver thenable, observar/contar sua resolução e bloquear novo uso desse port como contract failure, sem ignorar promessa |
+226: 
+227: Wrappers são por instância/método real, antes de sua entrega ao runtime/Hybrid/adapters; não contar só uma proxy externa de execute. Parent/child tokens contabilizam separadamente: fechar um token não libera um filho ainda pendente. A emissão de tokens e aquisição de quota ocorrem sincronamente antes do callback, com finally na promessa original; sync throw também encerra corretamente o próprio token. Uma chamada nova só pode nascer de um lease admitido ou de um producer token nativo ainda ACTIVE; AsyncLocalStorage pode propagar esse contexto, mas ID/campo de payload nunca o autentica.
+228: 
+229: Release proíbe novos runTurn daquele lease, mas um turno já admitido e seus callbacks filhos ainda podem terminar enquanto o owner não está CLOSING. O fence temporário de publicação proíbe novos pins/turnos, não interrompe as árvores de produtores já admitidas na geração anterior. Owner.close proíbe também novos callbacks filhos de trabalho de usuário: uma decisão velha que, depois de await, tenta iniciar um novo model/tool/callback é recusada antes da invocação real. Promises já iniciadas continuam observadas até o settlement. O wrapper real do body faz a última checagem síncrona de CLOSING sem await antes da chamada; negação usa erro/resultado rejeitado do pipeline existente, nunca sucesso, e não reembolsa/reutiliza approval automaticamente. reserve/markStarted são emissão de novo trabalho e não são autorizados como settlement; confirm/fail/markUncertain e leituras necessárias para assentar uso já possuído podem ser settlement. Código de controle e settlement já possuído pode criar IO filho de conclusão (audit/log/approval settlement/journal/checkpoint/cleanup) depois do fechamento, sob o token original ainda vivo ou um token nativo de cleanup. Essa permissão vem do wiring fixo por método/fase, nunca de um flag escolhido pelo plugin. Uma continuação que roda depois de seu producer original terminar não pode criar IO só porque herdou um contexto assíncrono antigo. Fechar recursos OWNED do owner só depois de toda essa árvore de produtores/IO/cleanup; propriedade BORROWED dispensa close do recurso, não dispensa aguardar seus usos.
+230: 
+231: Ao entrar em retirada sem pins nem runTurn nativo original ainda aguardando sua execução, sinalizar cancelamento da geração antes de esperar tarefas de background ou callbacks destacados por timeout já registrados. Não abortar uma execução nativa ainda em andamento só porque seu lease entrou em releasing; owner.close é a operação explícita que cancela trabalho ativo. Essas tarefas precisam observar o signal sem depender do disposer final para terminar; caso contrário permanecerão CLEANUP_PENDING e bloquearão nova quota, sem prova falsa de quiescência. Não iniciar task nova depois de fechado o produtor. Código arbitrário que esconde IO fora do port/track/acquire viola o catálogo; não se promete rastreamento de internals de bibliotecas não declarados.
+LEAF_COUNT 271
+FIRST_RECORD {"id": "contract:00275a5c10c0abb707ded3cc1eefda7408e5f0dbc48469bdbed35c10af100e67", "contract_sha256": "d77a2931ff208e8e48c1783ba04d6b8d06a8b76d32bc02c92977e2ee0defa238", "source": "packages/boot/plugin-manager/src/index.ts", "source_sha256": "e835c6ecd02aa5d423906a3d1bb7f497242660e8c11d06af09facd17919cc69c", "owner_task": "P100-040", "scope": "CONTRACT", "extraction_status": "STATIC", "parity_status": "NOT_VERIFIED", "procedure": null, "procedure_status": "PENDING_BEHAVIORAL_CONTRACT", "evidence": []}
+STATUSES ['None']

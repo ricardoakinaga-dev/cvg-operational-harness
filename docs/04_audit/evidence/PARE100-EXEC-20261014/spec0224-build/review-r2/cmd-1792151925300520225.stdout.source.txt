@@ -1,0 +1,501 @@
+   220	describe('SPEC0224 public capability factory integration', () => {
+   221	  it.each([
+   222	    ['complete-ascii4096', 'x'.repeat(4096)],
+   223	    ['complete-unicode', 'Olá🙂漢字'.repeat(150)],
+   224	    ['complete-escapes', '"\\\n\u0000'.repeat(100)]
+   225	  ])(
+   226	    'compares actual pinned reference and complete public factory outputs: %s',
+   227	    async (name, text) => {
+   228	      const home = mkdtempSync(join(tmpdir(), 'cvg-complete-differential-'))
+   229	      const fixture = {
+   230	        version: 1,
+   231	        id: name,
+   232	        message: 'Run the pure synthetic echo',
+   233	        text
+   234	      }
+   235	      const script = resolve('tests/differential/reference-tool-driver.mjs')
+   236	      try {
+   237	        const file = join(home, 'fixture.json')
+   238	        writeFileSync(file, JSON.stringify(fixture))
+   239	        const environment = {
+   240	          PATH: [dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
+   241	          HOME: home,
+   242	          TMPDIR: home,
+   243	          TMP: home,
+   244	          TEMP: home,
+   245	          XDG_CONFIG_HOME: join(home, 'config'),
+   246	          XDG_CACHE_HOME: join(home, 'cache'),
+   247	          XDG_DATA_HOME: join(home, 'data'),
+   248	          XDG_STATE_HOME: join(home, 'state'),
+   249	          DSH_HOME: join(home, 'dsh'),
+   250	          NODE_ENV: 'test',
+   251	          LANG: 'C.UTF-8'
+   252	        }
+   253	        const child = spawnSync(process.execPath, [script, file], {
+   254	          cwd: home,
+   255	          env: environment,
+   256	          encoding: 'utf8',
+   257	          timeout: 5000,
+   258	          maxBuffer: 1048576,
+   259	          killSignal: 'SIGKILL'
+   260	        })
+   261	        const command = {
+   262	          argv: [process.execPath, script, file],
+   263	          cwd: home,
+   264	          environment,
+   265	          pid: child.pid,
+   266	          exit: child.status,
+   267	          signal: child.signal,
+   268	          error: child.error?.message ?? null,
+   269	          stdout: child.stdout,
+   270	          stderr: child.stderr
+   271	        }
+   272	        traces.push({ name, command })
+   273	        expect(child.error, child.stderr).toBeUndefined()
+   274	        expect(child.signal, child.stderr).toBeNull()
+   275	        expect(child.status, child.stderr).toBe(0)
+   276	        const reference = JSON.parse(child.stdout)
+   277	        const l = lane(undefined, { echoText: text })
+   278	        const result = await l.harness.run(l.input)
+   279	        traces.push({
+   280	          name,
+   281	          reference,
+   282	          cvg: { result, requests: l.requests, toolBodies: l.toolBodies }
+   283	        })
+   284	        // Limited observable equivalence. Native names/events/usage remain raw.
+   285	        const projection = (bodies: { input: unknown; output: unknown }[]) =>
+   286	          bodies.map(({ input, output }) => ({ input, output }))
+   287	        expect(
+   288	          projection(l.toolBodies as { input: unknown; output: unknown }[])
+   289	        ).toEqual(projection(reference.native.toolBodies))
+   290	        expect(reference.native.finalText).toBe(text)
+   291	        expect(result.response).toBe(reference.native.finalText)
+   292	        expect(result.stopReason).toBe('COMPLETED')
+   293	        expect(l.requests).toHaveLength(2)
+   294	        expect(l.bodies()).toBe(1)
+   295	      } finally {
+   296	        rmSync(home, { recursive: true, force: true })
+   297	      }
+   298	    }
+   299	  )
+   300	
+   301	  it.each([
+   302	    ['ascii4096', 'x'.repeat(4096)],
+   303	    ['unicode', 'Olá🙂漢字'.repeat(150)],
+   304	    ['escapes', '"\\\n\u0000'.repeat(100)]
+   305	  ])(
+   306	    'preserves complete %s output causally through actual request and checkpoint',
+   307	    async (name, output) => {
+   308	      const l = lane(output)
+   309	      const result = await l.harness.run(l.input)
+   310	      const checkpoint = await l.steps.loadCheckpoint(
+   311	        l.input.tenantId,
+   312	        l.input.executionId!
+   313	      )
+   314	      traces.push({
+   315	        name,
+   316	        result,
+   317	        requests: l.requests,
+   318	        checkpoint,
+   319	        audit: l.audit.events
+   320	      })
+   321	      expect(result.stopReason).toBe('COMPLETED')
+   322	      expect(result.response).toBe(output)
+   323	      expect(l.bodies()).toBe(1)
+   324	      expect(l.requests).toHaveLength(2)
+   325	      expect(checkpoint?.checkpointVersion).toBe(2)
+   326	      const observation = checkpoint!.state.observations.find(
+   327	        (value) => value.type === 'TOOL_RESULT'
+   328	      )!
+   329	      expect(observation.payload).toMatchObject({
+   330	        output,
+   331	        completion: 'COMPLETE',
+   332	        resultAvailability: 'AVAILABLE',
+   333	        outputSha256: createHash('sha256')
+   334	          .update(canonicalizeCompleteJson(output))
+   335	          .digest('hex')
+   336	      })
+   337	      expect(
+   338	        checkpoint!.state.toolResultContext!.decisionAdmissions.map(
+   339	          (value) => value.status
+   340	        )
+   341	      ).toEqual(['SETTLED', 'SETTLED'])
+   342	      expect(checkpoint!.budgetUsage.modelCalls).toBe(2)
+   343	    }
+   344	  )
+   345	
+     1	import { createHash } from 'node:crypto'
+     2	import { TextDecoder } from 'node:util'
+     3	import {
+     4	  canonicalizeCompleteJson,
+     5	  COMPLETE_CHECKPOINT_MAX_BYTES,
+     6	  MAX_CHECKPOINT_OBSERVATIONS,
+     7	  OBSERVATION_TYPES,
+     8	  OBSERVATION_SOURCES,
+     9	  DECISION_TYPES,
+    10	  DECISION_REASON_CODES,
+    11	  COMPLETION_OUTCOMES,
+    12	  STOP_REASONS,
+    13	  validateLoopDecision,
+    14	  type AgentLoopState,
+    15	  type CompleteCheckpointStorageState,
+    16	  type ExecutionCheckpoint
+    17	} from '@cvg/harness-contracts'
+    18	import { CheckpointError, type UnsignedCheckpoint } from './step-store.ts'
+    19	
+    20	const LIMITS = {
+    21	  maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+    22	  maxDepth: 64,
+    23	  maxNodes: 1000000
+    24	}
+    25	export const COMPLETE_CHECKPOINT_DATA_MAX_CHARS =
+    26	  4 * Math.ceil(COMPLETE_CHECKPOINT_MAX_BYTES / 3)
+    27	export const COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES =
+    28	  COMPLETE_CHECKPOINT_DATA_MAX_CHARS + 512
+    29	const sha = (text: string | Uint8Array): string =>
+    30	  createHash('sha256').update(text).digest('hex')
+    31	function fail(message = 'Invalid complete checkpoint'): never {
+    32	  throw new CheckpointError('checkpoint_integrity', message)
+    33	}
+    34	type Rule = (value: unknown) => unknown
+    35	const str: Rule = (value) => (typeof value === 'string' ? value : fail())
+    36	const id: Rule = (value) =>
+    37	  typeof value === 'string' && value.length > 0 && !value.includes('\u0000')
+    38	    ? value
+    39	    : fail('Invalid checkpoint identifier')
+    40	const number: Rule = (value) =>
+    41	  typeof value === 'number' &&
+    42	  Number.isFinite(value) &&
+    43	  value >= 0 &&
+    44	  !Object.is(value, -0)
+    45	    ? value
+    46	    : fail()
+    47	const integer: Rule = (value) =>
+    48	  Number.isSafeInteger(number(value)) ? value : fail()
+    49	const positive: Rule = (value) =>
+    50	  (integer(value) as number) > 0 ? value : fail()
+    51	const bool: Rule = (value) => (typeof value === 'boolean' ? value : fail())
+    52	const digest: Rule = (value) =>
+    53	  typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    54	    ? value
+    55	    : fail('Invalid checkpoint hash')
+    56	const one =
+    57	  (...values: readonly unknown[]): Rule =>
+    58	  (value) =>
+    59	    values.includes(value) ? value : fail()
+    60	const json: Rule = (value) => {
+    61	  canonicalizeCompleteJson(value, LIMITS)
+    62	  return value
+    63	}
+    64	const nullable =
+    65	  (rule: Rule): Rule =>
+    66	  (value) =>
+    67	    value === null ? null : rule(value)
+    68	
+    69	/** Only declared optional internal fields may omit undefined. Arbitrary JSON is never repaired. */
+    70	function record(
+    71	  required: Record<string, Rule>,
+    72	  optional: Record<string, Rule> = {}
+    73	): Rule {
+    74	  return (value) => {
+    75	    if (!value || typeof value !== 'object' || Array.isArray(value)) fail()
+    76	    const prototype = Object.getPrototypeOf(value)
+    77	    if (prototype !== Object.prototype && prototype !== null) fail()
+    78	    const keys = Reflect.ownKeys(value)
+    79	    if (
+    80	      keys.length >
+    81	      Object.keys(required).length + Object.keys(optional).length
+    82	    )
+    83	      fail('Unknown checkpoint field')
+    84	    const normalized = Object.create(null) as Record<string, unknown>
+    85	    for (const key of keys) {
+    86	      if (
+    87	        typeof key !== 'string' ||
+    88	        (!Object.hasOwn(required, key) && !Object.hasOwn(optional, key))
+    89	      )
+    90	        fail('Unknown checkpoint field')
+    91	      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    92	      if (!descriptor || !('value' in descriptor))
+    93	        fail('Checkpoint accessor is forbidden')
+    94	      if (descriptor.value === undefined && Object.hasOwn(optional, key))
+    95	        continue
+    96	      normalized[key as string] = (required[key as string] ??
+    97	        optional[key as string])!(descriptor.value)
+    98	    }
+    99	    for (const key of Object.keys(required))
+   100	      if (!Object.hasOwn(normalized, key)) fail('Missing checkpoint field')
+   101	    return normalized
+   102	  }
+   103	}
+   104	function array(rule: Rule): Rule {
+   105	  return (value) => {
+   106	    if (
+   107	      !Array.isArray(value) ||
+   108	      Object.getPrototypeOf(value) !== Array.prototype
+   109	    )
+   110	      fail()
+   111	    const length = Object.getOwnPropertyDescriptor(value, 'length')!
+   112	      .value as number
+   113	    if (
+   114	      length > LIMITS.maxNodes ||
+   115	      Reflect.ownKeys(value).length !== length + 1
+   116	    )
+   117	      fail('Invalid checkpoint array')
+   118	    const normalized: unknown[] = []
+   119	    for (let i = 0; i < length; i++) {
+   120	      const descriptor = Object.getOwnPropertyDescriptor(value, String(i))
+   121	      if (!descriptor || !('value' in descriptor))
+   122	        fail('Invalid checkpoint array')
+   123	      normalized.push(rule(descriptor.value))
+   124	    }
+   125	    return normalized
+   126	  }
+   127	}
+   128	const usage = record({
+   129	  modelCalls: integer,
+   130	  inputTokens: integer,
+   131	  outputTokens: integer,
+   132	  costUsd: number
+   133	})
+   134	const measurement = record({
+   135	  counterId: id,
+   136	  counterVersion: id,
+   137	  provider: id,
+   138	  model: id,
+   139	  formattingVersion: id,
+   140	  inputUpperBoundTokens: integer,
+   141	  contextWindowTokens: positive,
+   142	  costUpperBoundUsd: number
+   143	})
+   144	const receipt = record(
+   145	  {
+   146	    admissionId: id,
+   147	    tenantId: id,
+   148	    executionId: id,
+   149	    stepNumber: positive,
+   150	    attempt: integer,
+   151	    purpose: one('ORCHESTRATION', 'REPAIR'),
+   152	    requestSha256: digest,
+   153	    measurement,
+   154	    reserved: usage,
+   155	    status: one('RESERVED', 'SETTLED', 'UNKNOWN')
+   156	  },
+   157	  { actual: usage, unknownReason: id, resultSha256: digest }
+   158	)
+   159	const context = record(
+   160	  {
+   161	    version: one(1),
+   162	    deliveredThroughStep: integer,
+   163	    pendingDecisionAdmission: nullable(id),
+   164	    decisionAdmissions: array(receipt)
+   165	  },
+   166	  { acceptedDecision: (value) => acceptedDecision(value) }
+   167	)
+   168	const question = record(
+   169	  {
+   170	    questionType: one(
+   171	      'CLARIFICATION',
+   172	      'MISSING_FIELD',
+   173	      'CONFIRMATION',
+   174	      'CHOICE'
+   175	    ),
+   176	    missingFields: array(str),
+   177	    promptIntent: str
+   178	  },
+   179	  { choices: array(str) }
+   180	)
+   181	const decision = record(
+   182	  {
+   183	    decisionType: one(...DECISION_TYPES),
+   184	    reasonCode: one(...DECISION_REASON_CODES)
+   185	  },
+   186	  {
+   187	    selectedCapability: id,
+   188	    toolId: id,
+   189	    toolVersion: id,
+   190	    toolInput: json,
+   191	    query: str,
+   192	    knowledgeCategories: array(str),
+   193	    responseIntent: str,
+   194	    responseText: str,
+   195	    requestedInput: question,
+   196	    verificationTarget: str
+   197	  }
+   198	)
+   199	const acceptedDecision = record({
+   200	  stepNumber: positive,
+   201	  decision,
+   202	  decisionAdmissionIds: array(id)
+   203	})
+   204	const evaluation = record(
+   205	  {
+   206	    outcome: one(...COMPLETION_OUTCOMES),
+   207	    reasonCode: one(
+   208	      ...DECISION_REASON_CODES,
+   209	      'COMPLETION_CONFIRMED',
+   210	      'EVALUATOR_UNAVAILABLE'
+   211	    ),
+   212	    deterministic: bool
+   213	  },
+   214	  { detail: str, usage }
+   215	)
+   216	const provenance = record(
+   217	  { sourceId: id },
+   218	  { sourceVersion: id, operationKey: id, effectRef: id, category: str }
+   219	)
+   220	const observation = record({
+   221	  observationId: id,
+   222	  executionId: id,
+   223	  stepId: id,
+   224	  stepNumber: integer,
+   225	  type: one(...OBSERVATION_TYPES),
+   226	  source: one(...OBSERVATION_SOURCES),
+   227	  trust: one('TRUSTED', 'UNTRUSTED'),
+   228	  payload: (value) => value,
+   229	  summary: str,
+   230	  provenance,
+   231	  timestamp: id
+   232	})
+   233	const stateSchema = record(
+   234	  {
+   235	    goal: str,
+   236	    stepNumber: integer,
+   237	    observations: array(observation),
+   238	    openQuestions: array(str),
+   239	    resolvedInputs: json,
+   240	    loopSignatures: array(str),
+   241	    toolResultContext: context
+   242	  },
+   243	  {
+   244	    capabilityFingerprint: id,
+   245	    pendingQuestion: question,
+   246	    pendingApprovalId: id,
+   247	    pendingDecision: decision,
+   248	    pendingStepNumber: positive,
+   249	    selectedCapability: id,
+   250	    stopReason: one(...STOP_REASONS),
+   251	    lastEvaluation: evaluation
+   252	  }
+   253	)
+   254	const budgetSchema = record({
+   255	  steps: integer,
+   256	  modelCalls: integer,
+   257	  toolCalls: integer,
+   258	  knowledgeCalls: integer,
+   259	  verificationCalls: integer,
+   260	  replans: integer,
+   261	  decisionRepairs: integer,
+   262	  inputTokens: integer,
+   263	  outputTokens: integer,
+   264	  costUsd: number,
+   265	  activeDurationMs: number
+   266	})
+   267	const unsignedSchema = record({
+   268	  tenantId: id,
+   269	  executionId: id,
+   270	  checkpointVersion: one(2),
+   271	  runtimeProfile: one('iterative'),
+   272	  runtimeVersion: id,
+   273	  orchestratorVersion: id,
+   274	  stepNumber: integer,
+   275	  state: stateSchema,
+   276	  budgetUsage: budgetSchema
+   277	})
+   278	const succeeded = record({
+   279	  schemaVersion: one(1),
+   280	  status: one('SUCCEEDED'),
+   281	  sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   282	  completion: one('COMPLETE'),
+   283	  resultAvailability: one('AVAILABLE'),
+   284	  output: (value) => {
+   285	    canonicalizeCompleteJson(value)
+   286	    return value
+   287	  },
+   288	  outputBytes: integer,
+   289	  outputSha256: digest
+   290	})
+   291	const unavailable = record({
+   292	  schemaVersion: one(1),
+   293	  status: one('SUCCEEDED'),
+   294	  sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   295	  completion: one('UNAVAILABLE'),
+   296	  resultAvailability: one('UNAVAILABLE'),
+   297	  reason: one('INVALID_JSON', 'RESULT_TOO_LARGE', 'RESULT_COMPLEXITY')
+   298	})
+   299	const failed = record({
+   300	  schemaVersion: one(1),
+   301	  status: one('FAILED', 'REJECTED'),
+   302	  sideEffect: one('NONE', 'READ', 'WRITE', 'EXTERNAL'),
+   303	  completion: one('NOT_APPLICABLE'),
+   304	  resultAvailability: one('UNAVAILABLE'),
+   305	  error: str
+   306	})
+   307	
+[
+  {
+    "input": "null",
+    "replay": {
+      "status": "SUCCEEDED",
+      "output": "null",
+      "outputWasUndefined": false
+    },
+    "envelope": {
+      "schemaVersion": 1,
+      "status": "SUCCEEDED",
+      "sideEffect": "NONE",
+      "completion": "COMPLETE",
+      "resultAvailability": "AVAILABLE",
+      "output": "null",
+      "outputBytes": 6,
+      "outputSha256": "f072cbec3bf8841871d4284230c5e983dc211a56837aed862487148f947d1a1f"
+    },
+    "bodies": 0,
+    "queries": [
+      "INSERT INTO operational_effect_journal\n     (tenant_id, operation_key, proposal_hash, state, attempt_id,\n      result, error, created_at, updated_at)\n   VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)\n   ON CONFLICT (tenant_id, operation_key) DO NOTHING",
+      "SELECT \n  tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,\n  created_at, updated_at\n     FROM operational_effect_journal\n    WHERE tenant_id = $1 AND operation_key = $2\n    FOR UPDATE"
+    ]
+  },
+  {
+    "input": "{\"a\":1}",
+    "replay": {
+      "status": "SUCCEEDED",
+      "output": "{\"a\":1}",
+      "outputWasUndefined": false
+    },
+    "envelope": {
+      "schemaVersion": 1,
+      "status": "SUCCEEDED",
+      "sideEffect": "NONE",
+      "completion": "COMPLETE",
+      "resultAvailability": "AVAILABLE",
+      "output": "{\"a\":1}",
+      "outputBytes": 11,
+      "outputSha256": "3dc4eef510cec9eda1ca361042e8152bd62c44288af2d9cc465cc217c381facd"
+    },
+    "bodies": 0,
+    "queries": [
+      "INSERT INTO operational_effect_journal\n     (tenant_id, operation_key, proposal_hash, state, attempt_id,\n      result, error, created_at, updated_at)\n   VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)\n   ON CONFLICT (tenant_id, operation_key) DO NOTHING",
+      "SELECT \n  tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,\n  created_at, updated_at\n     FROM operational_effect_journal\n    WHERE tenant_id = $1 AND operation_key = $2\n    FOR UPDATE"
+    ]
+  },
+  {
+    "input": null,
+    "replay": {
+      "status": "SUCCEEDED",
+      "outputWasUndefined": true
+    },
+    "envelope": {
+      "schemaVersion": 1,
+      "status": "SUCCEEDED",
+      "sideEffect": "NONE",
+      "completion": "UNAVAILABLE",
+      "resultAvailability": "UNAVAILABLE",
+      "reason": "INVALID_JSON"
+    },
+    "bodies": 0,
+    "queries": [
+      "INSERT INTO operational_effect_journal\n     (tenant_id, operation_key, proposal_hash, state, attempt_id,\n      result, error, created_at, updated_at)\n   VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)\n   ON CONFLICT (tenant_id, operation_key) DO NOTHING",
+      "SELECT \n  tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,\n  created_at, updated_at\n     FROM operational_effect_journal\n    WHERE tenant_id = $1 AND operation_key = $2\n    FOR UPDATE"
+    ]
+  }
+]

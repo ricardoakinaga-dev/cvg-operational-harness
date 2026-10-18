@@ -1,0 +1,574 @@
+FILE reference/packages/sandbox/sandbox-policy/src/index.ts
+1: /**
+2:  * The sandbox POLICY home (`ctx.sandboxPolicy`): the single owner of the
+3:  * deployment's sandbox fallbacks plus per-session resolution: the file-effect
+4:  * {@link SandboxMode}, the `workspace-write` root, and the override kit (the
+5:  * `sandbox/mode` event, its fold, and its write path; the fold is the
+6:  * `sandboxMode` session-projection unit registered here, while the event and
+7:  * write path come from `./session-mode.ts`).
+8:  * Before each agent request, the owner also contributes the resolved policy to
+9:  * the cache-safe runtime-context snapshot. The agent loop logs that snapshot as
+10:  * model history, so replay reconstructs the same mode and root the enforcing
+11:  * consumers resolve without rewriting the stable system prompt.
+12:  *
+13:  * Enforcing filesystem, one-shot bash, and terminal backends read the SAME
+14:  * resolved policy here. The context describes that policy without inventorying
+15:  * capabilities, while each backend retains its own enforcement dialect and each
+16:  * tool owns its operation-specific denial and escalation guidance. The service
+17:  * reads session state once at each operation boundary; executors and providers
+18:  * remain session-free.
+19:  *
+20:  * @module @deepseek-ai/dsh-sandbox-policy
+21:  */
+22: 
+23: import { isAbsolute } from 'node:path'
+24: import { Context, Service } from '@deepseek-ai/cordis'
+25: import { z as zod } from 'zod'
+26: import z from '@deepseek-ai/schemastery'
+27: import type {} from '@deepseek-ai/dsh-agent'
+28: import type { SandboxExecutionEnvironment, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+29: import type { Session } from '@deepseek-ai/dsh-session'
+30: import type {} from '@deepseek-ai/dsh-session-projection'
+31: import type {} from '@deepseek-ai/dsh-system-prompt'
+32: 
+33: export { SANDBOX_MODES, setSandboxMode } from './session-mode.ts'
+34: 
+35: /** Preserve execution-world spelling; enforcing providers resolve filesystem identity on their host. */
+36: function resolveWorkspaceRoot(path: string): string {
+37:   if (!isAbsolute(path)) throw new Error('sandbox-policy: workspace root must be an absolute execution-world path')
+38:   return path
+39: }
+40: 
+41: /** Render the policy without claiming which capabilities are mounted. */
+42: function renderPolicyContext(policy: SandboxExecutionPolicy): string {
+43:   switch (policy.mode) {
+44:     case 'read-only':
+45:       return 'Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'
+46:     case 'workspace-write':
+47:       return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
+48:     case 'danger-full-access':
+49:       return 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.'
+50:     /*! v8 ignore next 4 -- SandboxMode is a typed same-process closed union; this branch is only the static exhaustiveness guard. */
+51:     default: {
+52:       const mode: never = policy.mode
+53:       throw new Error(`unreachable sandbox mode: ${String(mode)}`)
+54:     }
+55:   }
+56: }
+57: 
+58: /** Explain only provider-declared facts; namespace IDs depend on the Host runner installation. */
+59: function renderEnvironment(environment: SandboxExecutionEnvironment): string {
+60:   const parts = [`Process sandbox runner: ${environment.runner}; enforcement: ${environment.enforcement}.`]
+61:   switch (environment.temporaryFiles) {
+62:     case 'per-call': parts.push('Process temporary files are private to each command and do not survive into the next command. Use the workspace for files exchanged between commands or filesystem tools.'); break
+63:     case 'per-session': parts.push('Process temporary files are private to this session.'); break
+64:     case 'host': parts.push('Process temporary paths use the Host filesystem.'); break
+65:     case 'unknown': parts.push('The runner does not declare temporary-file sharing or persistence.'); break
+66:   }
+67:   if (environment.sharesHostTemporaryFiles === false) parts.push('Process temporary files are not the Host temporary files seen by ordinary filesystem tools.')
+68:   if (environment.identity === 'namespace-dependent') parts.push('UID and GID visibility depends on the runner user namespace. Host root ownership and supplementary groups may be unmapped; do not assume Host identity checks or chown behave identically.')
+69:   if (environment.identity === 'restricted-token') parts.push('Processes use a restricted Windows token.')
+70:   return parts.join(' ')
+71: }
+72: 
+73: declare module '@deepseek-ai/dsh-session/types' {
+74:   interface SessionEventMap {
+75:     /** Provider facts observed when composing a request under a confined standing policy. */
+76:     'sandbox/environment': { mode: Exclude<SandboxMode, 'danger-full-access'>; environment: SandboxExecutionEnvironment }
+77:   }
+78: }
+79: 
+80: declare module '@deepseek-ai/cordis' {
+81:   interface Context {
+82:     sandboxPolicy: SandboxPolicyService
+83:   }
+84: }
+85: 
+86: /**
+87:  * Plugin config: the deployment's sandbox default. All optional — `Config`
+88:  * supplies the defaults (`mode: 'read-only'` is the fail-safe default; a
+89:  * deployment that wants a workspace-writable agent opts in explicitly). The
+90:  * runner choice is NOT here (it is the `ctx.sandbox` provider's config), nor
+91:  * is any per-family knob: this is the one shared policy home.
+92:  */
+93: export interface Config {
+94:   /** File-sandbox mode a session starts from (default: `read-only`). */
+95:   mode?: SandboxMode
+96:   /**
+97:    * Absolute fallback root for agentless calls and sessions without a cwd (default:
+98:    * `process.cwd()`). Normal agent calls use their session cwd instead.
+99:    */
+100:   workspaceRoot?: string
+101: }
+102: 
+103: /** Inputs that select the sandbox policy for one capability call. */
+104: export interface SandboxPolicyRequest {
+105:   /** Calling session; its immutable cwd becomes the workspace boundary. */
+106:   session?: Session
+107:   /** Explicit approved mode override, which outranks session policy. */
+108:   mode?: SandboxMode
+109: }
+110: 
+111: /** The sandbox-mode projection's state schema (state equals the public shape). */
+112: const sandboxModeStateSchema = zod.union([
+113:   zod.literal('read-only'),
+114:   zod.literal('workspace-write'),
+115:   zod.literal('danger-full-access'),
+116: ]).nullable()
+117: 
+118: type SandboxModeState = zod.infer<typeof sandboxModeStateSchema>
+119: declare module '@deepseek-ai/dsh-session-projection/types' {
+120:   interface SessionProjectionStateMap {
+121:     /** Last logged sandbox-mode override, or null before one (deployment default applies at resolve time). */
+122:     sandboxMode: SandboxModeState
+123:   }
+124: }
+125: 
+126: /**
+127:  * The sandbox-policy service (`ctx.sandboxPolicy`). Owns the deployment
+128:  * default mode, fallback workspace root, and current request-time policy
+129:  * section. Tool layers call {@link resolve} for each execution so a session's
+130:  * mode log and immutable cwd travel together to every enforcing capability.
+131:  */
+132: export class SandboxPolicyService extends Service {
+133:   // Inline schema call: the config catalog walks `static Config` statically.
+134:   static Config: z<Config> = z.object({
+135:     mode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('read-only'),
+136:     // No schema default: process.cwd() is resolved in the constructor so the
+137:     // stored root is always absolute regardless of how it was supplied.
+138:     workspaceRoot: z.string(),
+139:   })
+140: 
+141:   static inject = ['sessionProjections']
+142: 
+143:   /** The deployment default mode — the fallback beneath a session override. */
+144:   readonly defaultMode: SandboxMode
+145:   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
+146:   readonly workspaceRoot: string
+147:   private readonly environments = new WeakMap<Session, string>()
+148:   constructor(ctx: Context, config: Config) {
+149:     super(ctx, 'sandboxPolicy')
+150:     // schemastery (static Config) already filled `mode`; the cast records that
+151:     // runtime fact. `workspaceRoot` has NO schema default, so its fallback to
+152:     // the process cwd is real branching, resolved absolute either way.
+153:     this.defaultMode = config.mode as SandboxMode
+154:     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
+155: 
+156:     ctx.sessionProjections.register({
+157:       key: 'sandboxMode',
+158:       stateVersion: 1,
+159:       stateSchema: sandboxModeStateSchema,
+160:       init: () => null,
+161:       apply: (state, event) => (event.type === 'sandbox/mode' ? event.data.mode : state),
+162:     })
+163: 
+164:     ctx.inject(['systemPrompt'], (scope: Context) => {
+165:       scope.systemPrompt.context({
+166:         name: 'sandbox:policy',
+167:         order: scope.systemPrompt.getContextOrder('SANDBOX_POLICY'),
+168:         text: (context) => {
+169:           const session = context.agent?.session
+170:           if (session === undefined) return ''
+171:           const policy = this.resolve({ session })
+172:           const text = renderPolicyContext(policy)
+173:           if (policy.mode === 'danger-full-access') return text
+174:           const environment = scope.get('sandbox')?.describe({ ...policy, mode: policy.mode })
+175:           if (environment === undefined) return text
+176:           const data = { mode: policy.mode, environment }
+177:           const key = JSON.stringify(data)
+178:           if (this.environments.get(session) !== key) {
+179:             session.append('sandbox/environment', data)
+180:             this.environments.set(session, key)
+181:           }
+182:           return `${text}\n${renderEnvironment(environment)}`
+183:         },
+184:       })
+185:     })
+186:   }
+187: 
+188:   /**
+189:    * Resolve the complete policy for one capability call. An approved explicit
+190:    * mode outranks the session's last `sandbox/mode` event, which outranks the
+191:    * deployment default. A session cwd is its workspace-write boundary; the
+192:    * configured root is the fallback for agentless calls and sessions without a
+193:    * cwd.
+194:    * @param request - optional session and approved mode override.
+195:    * @returns the fully resolved per-call mode and absolute workspace root.
+196:    */
+197:   resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
+198:     const { session } = request
+199:     return {
+200:       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
+201:       workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
+202:       ...session === undefined ? {} : { sessionId: session.id },
+203:     }
+204:   }
+205: 
+206:   /**
+207:    * Read the session override without applying the deployment default.
+208:    * @param session - session whose log supplies the override.
+209:    * @returns the last logged mode, or `undefined` without one.
+210:    */
+211:   overrideOf(session: Session): SandboxMode | undefined {
+212:     return this.ctx.sessionProjections.stateOf(session, 'sandboxMode') ?? undefined
+213:   }
+214: }
+215: 
+216: export default SandboxPolicyService
+FILE reference/packages/sandbox/sandbox-policy/src/session-mode.ts
+1: /**
+2:  * Per-session sandbox-mode override: the session log as the store. A runtime
+3:  * switch (a UI policy control or test scenario) is recorded as one
+4:  * `sandbox/mode` event on the session it applies to;
+5:  * `effective = projection state ?? the deployment default`, so an override
+6:  * survives restart by replay, two sessions can never see each other's state,
+7:  * and there is no external config store. The event is log-only (the
+8:  * `approval/*` precedent): the policy owner projects the fold into each model
+9:  * request, while enforcing tools report operation-specific boundary markers.
+10:  * EXECUTION honors the same fold through `ctx.sandboxPolicy.resolve()` — it
+11:  * stamps the mode together with the calling session's workspace root onto each
+12:  * capability call, weakest-precedence beneath an escalation grant.
+13:  *
+14:  * The override is policy state shared by every enforcing family (bash and
+15:  * filesystem alike), so it lives here in the policy package rather than in any
+16:  * one capability's seam.
+17:  *
+18:  * @module dsh-sandbox-policy/session-mode
+19:  */
+20: 
+21: import type { Session } from '@deepseek-ai/dsh-session'
+22: import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+23: 
+24: declare module '@deepseek-ai/dsh-session/types' {
+25:   interface SessionEventMap {
+26:     /**
+27:      * The session's sandbox mode was switched — log-only (like `approval/*`;
+28:      * NOT a surface event, carries no `surfaceOp`): durable and replayable,
+29:      * never in the model transcript. The LAST such event is the session's
+30:      * override (folded by the sandboxMode projection unit). `source: 'delegation'` marks
+31:      * an override seeded into a child; an absent source is a runtime switch.
+32:      */
+33:     'sandbox/mode': {
+34:       mode: SandboxMode
+35:       /** Marks an override seeded into a child at delegation. */
+36:       source?: 'delegation'
+37:     }
+38:   }
+39: }
+40: 
+41: /** Every {@link SandboxMode}, for option advertisement and runtime validation of untrusted mode strings. */
+42: export const SANDBOX_MODES: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
+43: 
+44: /**
+45:  * THE write path for a session's sandbox-mode override: appends exactly one
+46:  * `sandbox/mode` event — the switch IS its event; nothing mutates mode state
+47:  * out of band. Takes effect on the session's next confined call (bash or fs)
+48:  * — consumers read the shared projection state.
+49:  * @param session - the session the override belongs to.
+50:  * @param mode - the mode every subsequent confined call in this session runs
+51:  *   under (until the next switch).
+52:  */
+53: export function setSandboxMode(session: Session, mode: SandboxMode): void {
+54:   session.append('sandbox/mode', { mode })
+55: }
+FILE reference/packages/sandbox/sandbox-policy/src/invariant.ts
+1: /** Package-owned session-event invariants for sandbox policy. @module @deepseek-ai/dsh-sandbox-policy/invariant */
+2: 
+3: import type { Context } from '@deepseek-ai/cordis'
+4: import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+5: import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
+6: import { SANDBOX_MODES } from './session-mode.ts'
+7: 
+8: const PACKAGE_NAME = '@deepseek-ai/dsh-sandbox-policy'
+9: 
+10: /** Cordis companion plugin name. */
+11: export const name = 'sandbox-policy-invariant'
+12: /** Service required before the companion can reserve package ownership. */
+13: export const inject = ['invariants']
+14: 
+15: /* jscpd:ignore-start -- package companions share replay and dispatch plumbing */
+16: /** Validate the package-owned event fields and ignore unrelated events. */
+17: function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
+18:   if (event.type === 'sandbox/mode' && !SANDBOX_MODES.includes(event.data.mode)) {
+19:     fail(`sandbox/mode carries unknown mode ${JSON.stringify(event.data.mode)}`)
+20:   }
+21: }
+22: 
+23: /** Install validation for loaded and newly appended sandbox modes. */
+24: const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
+25:   for (const session of ctx.sessions.list()) {
+26:     // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+27:     for (const event of session.snapshotEvents()) validateEvent(event, fail)
+28:   }
+29:   ctx.on('internal/dispatch', (_mode, eventName, args) => {
+30:     if (eventName !== 'session/event') return
+31:     const event = (args as [Session, SessionEvent])[1]
+32:     validateEvent(event, fail)
+33:   }, { global: true })
+34: }, { inject: ['sessions'] })
+35: /* jscpd:ignore-end */
+36: 
+37: /**
+38:  * Register this package's invariant companion.
+39:  * @param ctx - Cordis context carrying the invariant service.
+40:  * @returns the installed registration's disposer after setup succeeds.
+41:  */
+42: export const apply = (ctx: Context): Promise<() => void> =>
+43:   Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
+FILE reference/packages/sandbox/sandbox/src/roots.ts
+1: /**
+2:  * The writable-root derivation shared by every enforcement dialect that
+3:  * expresses a mode as a canonical allow-list: `workspace-write` means "the
+4:  * workspace root plus the platform temp areas", and this module is that
+5:  * meaning's one home. The Seatbelt profile
+6:  * (`@deepseek-ai/dsh-sandbox-local`) and the in-process filesystem fence
+7:  * (`@deepseek-ai/dsh-fs-sandbox`) both derive their allow-list here, so "the
+8:  * write tool cannot write /tmp but bash can" asymmetries cannot arise between
+9:  * them. The bwrap and Landlock dialects keep their own grant spellings (an
+10:  * ephemeral `/tmp` mount, launcher-owned flags) — the honest per-runner
+11:  * differences recorded in the sandbox RFC — with parity pinned by test.
+12:  *
+13:  * @module dsh-sandbox/roots
+14:  */
+15: 
+16: import { realpathSync } from 'node:fs'
+17: import { tmpdir } from 'node:os'
+18: import type { SandboxExecutionPolicy } from './index.ts'
+19: 
+20: /**
+21:  * Resolve a granted root to the path the enforcement layer actually compares:
+22:  * canonical (symlinks resolved), because both Seatbelt filters and the fs
+23:  * fence's containment check match resolved paths — `/tmp` IS `/private/tmp`
+24:  * on darwin, and an as-spelled grant would match nothing.
+25:  * @param path - the root as configured or platform-reported.
+26:  * @returns the canonical path, or the spelling as-is when resolution fails
+27:  *   (a missing root matches nothing until it exists — the conservative
+28:  *   outcome; inventing a fallback would grant a path the caller never named).
+29:  */
+30: export function canonicalPath(path: string): string {
+31:   try {
+32:     // Node's JavaScript realpath implementation lexically collapses `..`
+33:     // before resolving a preceding symlink on some platforms. The native
+34:     // implementation follows the filesystem's component-by-component lookup,
+35:     // matching chdir/spawn and the enforcement layers this identity feeds.
+36:     return realpathSync.native(path)
+37:   } catch {
+38:     // realpathSync.native failed: the path (or a prefix) is missing or unreadable.
+39:     return path
+40:   }
+41: }
+42: 
+43: /**
+44:  * The roots one confined execution may WRITE under — the mode's meaning as a
+45:  * canonical, deduplicated allow-list. `read-only` allows nothing;
+46:  * `workspace-write` allows the policy's workspace root, the host `/tmp`, and
+47:  * the per-user platform temp dir (`os.tmpdir()` — the real temp area for
+48:  * mkstemp-family tools; omitting it would deny what the mode promises).
+49:  * @param policy - the file-effect policy to derive the allow-list from.
+50:  * @returns the canonical writable roots; empty exactly under `read-only`.
+51:  */
+52: export function writableRoots(policy: SandboxExecutionPolicy): string[] {
+53:   if (policy.mode !== 'workspace-write') return []
+54:   return [...new Set([policy.workspaceRoot, '/tmp', tmpdir()].map(canonicalPath))]
+55: }
+FILE reference/packages/sandbox/sandbox-local/src/profiles.ts
+1: /**
+2:  * Internal platform-profile builders for the local sandbox provider.
+3:  *
+4:  * @module @deepseek-ai/dsh-sandbox-local/profiles
+5:  */
+6: 
+7: import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-system/landlock-run'
+8: import { writableRoots } from '@deepseek-ai/dsh-sandbox'
+9: import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+10: 
+11: /**
+12:  * Build the bwrap profile arguments for one file-effect policy.
+13:  * @param policy - file-effect policy to express as bwrap mounts.
+14:  * @returns profile arguments before the trailing separator and command argv.
+15:  */
+16: export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
+17:   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
+18:   if (policy.mode === 'workspace-write') {
+19:     args.push('--perms', '1777', '--tmpfs', '/tmp')
+20:     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
+21:   }
+22:   return args
+23: }
+24: 
+25: /**
+26:  * Build the Landlock launcher grants for one file-effect policy.
+27:  * @param policy - file-effect policy to express as Landlock allow-list grants.
+28:  * @returns launcher grant arguments before the trailing separator and command argv.
+29:  */
+30: export function landlockProfileArgs(policy: SandboxPolicy): string[] {
+31:   const readWrite = ['/dev/null']
+32:   if (policy.mode === 'workspace-write') {
+33:     readWrite.push('/tmp', policy.workspaceRoot)
+34:   }
+35:   return landlockGrantArgs({ readOnly: ['/'], readWrite })
+36: }
+37: 
+38: /** Quote one path as an SBPL string literal. */
+39: function sbplString(path: string): string {
+40:   return `"${path.replaceAll('\\', String.raw`\\`).replaceAll('"', String.raw`\"`)}"`
+41: }
+42: 
+43: /**
+44:  * Build the sandbox-exec arguments and SBPL profile for one policy. The
+45:  * writable roots come from the shared {@link writableRoots} helper (canonical,
+46:  * deduplicated) so the Seatbelt grant and the in-process fs fence
+47:  * (`@deepseek-ai/dsh-fs-sandbox`) can never drift apart.
+48:  * @param policy - file-effect policy to express as an SBPL profile.
+49:  * @returns sandbox-exec arguments before the trailing separator and command argv.
+50:  */
+51: export function seatbeltProfileArgs(policy: SandboxPolicy): string[] {
+52:   const forms = ['(version 1)', '(allow default)', '(deny file-write*)', `(allow file-write* (literal ${sbplString('/dev/null')}))`]
+53:   const roots = writableRoots(policy)
+54:   if (roots.length > 0) {
+55:     forms.push(`(allow file-write* ${roots.map(root => `(subpath ${sbplString(root)})`).join(' ')})`)
+56:   }
+57:   return ['-p', forms.join(' ')]
+58: }
+FILE reference/packages/sandbox/sandbox-windows-acl/src/grant.ts
+1: /**
+2:  * Server-side write-grant materialization. The sandbox seam holds one
+3:  * standing workspace grant per workspace and one revocable temp grant per
+4:  * live session/workspace pair. Workspace identities survive by deterministic
+5:  * derivation and their standing ACE; temp identities derive from random
+6:  * private paths and are deliberately new after a restart.
+7:  *
+8:  * Fail-closed: `add` throws on any grant failure and the caller disposes the
+9:  * instance (revoking every path granted so far); `dispose` revokes every
+10:  * revocable grant, leaves the standing workspace edits in place, and reports
+11:  * every cleanup failure.
+12:  * @module @deepseek-ai/dsh-sandbox-windows-acl/grant
+13:  */
+14: 
+15: import { grantWrite, revokeWrite } from './acl.ts'
+16: import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32Sync } from './ffi.ts'
+17: import type { NativePtr, Win32Bindings } from './ffi.ts'
+18: import { makeWellKnownSid } from './token.ts'
+19: import * as abi from './win32-abi.ts'
+20: 
+21: /**
+22:  * One write SID's provider-lifetime grant materialization: the parsed SID
+23:  * pointer plus every directory whose DACL currently carries its ACE and whose
+24:  * label ACL carries the Low mandatory label. Workspace paths are added
+25:  * STANDING (their security descriptor edits are the cross-session reuse cache
+26:  * and outlive the grant — dispose() skips revoking them, or the next
+27:  * provision would re-propagate the whole tree); temp paths are revocable
+28:  * (dispose() revokes them — an inheritable ACE must not outlive its
+29:  * session's temp directory). Create with {@link AclWriteGrant.create};
+30:  * dispose revokes the revocable paths and frees every SID.
+31:  */
+32: export class AclWriteGrant {
+33:   /** The write SID in SDDL string form. */
+34:   readonly writeSid: string
+35:   private readonly api: Win32Bindings
+36:   private readonly sidPtr: NativePtr
+37:   private readonly lowLabelSidPtr: NativePtr
+38:   private readonly worldSidPtr: NativePtr
+39:   private readonly revocablePaths: string[] = []
+40:   private readonly standingPaths: string[] = []
+41: 
+42:   private constructor(
+43:     api: Win32Bindings,
+44:     sidPtr: NativePtr,
+45:     lowLabelSidPtr: NativePtr,
+46:     worldSidPtr: NativePtr,
+47:     writeSid: string,
+48:   ) {
+49:     this.api = api
+50:     this.sidPtr = sidPtr
+51:     this.lowLabelSidPtr = lowLabelSidPtr
+52:     this.worldSidPtr = worldSidPtr
+53:     this.writeSid = writeSid
+54:   }
+55: 
+56:   /**
+57:    * Parse the SID string, create the Low integrity SID the grants label with
+58:    * and the world SID their ambient-delete deny names, and open the binding
+59:    * table (lazily, once per server). Fail-closed: any failure throws — nothing
+60:    * is granted yet.
+61:    * @param writeSid - the workspace (`S-1-4-x-y`) or temp (`S-1-4-x-y-1`) capability SID string.
+62:    * @param api - optional already-resolved bindings (tests).
+63:    * @returns the ready grant (no ACEs yet).
+64:    */
+65:   static create(writeSid: string, api?: Win32Bindings): AclWriteGrant {
+66:     const bindings = api ?? win32Sync()
+67:     const sidSlot = allocPtrSlot()
+68:     if (bindings.convertStringSidToSidW(writeSid, sidSlot) === 0) {
+69:       throwLastError(bindings, 'ConvertStringSidToSidW', writeSid)
+70:     }
+71:     const sidPtr = decodePtr(sidSlot)
+72:     if (sidPtr === null) throwLastError(bindings, 'ConvertStringSidToSidW', `null SID for ${writeSid}`)
+73:     try {
+74:       const lowLabelSidPtr = makeWellKnownSid(bindings, abi.WinLowLabelSid)
+75:       try {
+76:         const worldSidPtr = makeWellKnownSid(bindings, abi.WinWorldSid)
+77:         return new AclWriteGrant(bindings, sidPtr, lowLabelSidPtr, worldSidPtr, writeSid)
+78:       } catch (error) {
+79:         // The Low label SID is LocalAlloc'd: release it before the world-SID
+80:         // failure propagates to the sidPtr release below.
+81:         bindings.localFree(lowLabelSidPtr)
+82:         throw error
+83:       }
+84:     } catch (error) {
+85:       bindings.localFree(sidPtr)
+86:       throw error
+87:     }
+88:   }
+89: 
+90:   /**
+91:    * Grant the write ACE, the ambient-delete deny, and the Low mandatory label
+92:    * on one directory (idempotent: an already-standing exact ACE, deny, and
+93:    * label skip the eager full-tree re-propagation — see {@link grantWrite})
+94:    * and record the path for {@link dispose} unless it is standing. The path is
+95:    * recorded BEFORE the grant: a post-apply throw (a LocalFree failure after
+96:    * SetNamedSecurityInfoW succeeded) must still revoke it, and revoking an
+97:    * ungranted path is a no-op merge. Callers treat a throw as a failed
+98:    * materialization and dispose the instance to revoke the paths granted so
+99:    * far.
+100:    * @param path - the directory whose DACL and label gain the grant.
+101:    * @param standing - the edits outlive this grant (the workspace reuse
+102:    *   cache; dispose() skips revoking it). Default false (revoked on
+103:    *   dispose — the temp-directory lifecycle).
+104:    */
+105:   add(path: string, standing = false): void {
+106:     ;(standing ? this.standingPaths : this.revocablePaths).push(path)
+107:     grantWrite(this.api, path, this.sidPtr, this.lowLabelSidPtr, this.worldSidPtr)
+108:   }
+109: 
+110:   /** Every directory currently carrying the grant, in grant order. */
+111:   get paths(): readonly string[] {
+112:     return [...this.standingPaths, ...this.revocablePaths]
+113:   }
+114: 
+115:   /** Revoke every revocable grant (standing security descriptor edits stay) and free the SIDs; reports every cleanup failure. */
+116:   dispose(): void {
+117:     const failures: unknown[] = []
+118:     for (const path of this.revocablePaths) {
+119:       try {
+120:         revokeWrite(this.api, path, this.sidPtr)
+121:       } catch (error) {
+122:         failures.push(error)
+123:       }
+124:     }
+125:     for (const [label, sidPtr] of [
+126:       ['write SID', this.sidPtr],
+127:       ['Low label SID', this.lowLabelSidPtr],
+128:       ['world SID', this.worldSidPtr],
+129:     ] as const) {
+130:       try {
+131:         const freed = this.api.localFree(sidPtr)
+132:         if (!isNullPtr(freed)) throwLastError(this.api, 'LocalFree', label)
+133:       } catch (error) {
+134:         failures.push(error)
+135:       }
+136:     }
+137:     if (failures.length > 0) {
+138:       throw new AggregateError(failures, `AclWriteGrant dispose completed with ${failures.length} cleanup failure(s)`)
+139:     }
+140:   }
+141: }

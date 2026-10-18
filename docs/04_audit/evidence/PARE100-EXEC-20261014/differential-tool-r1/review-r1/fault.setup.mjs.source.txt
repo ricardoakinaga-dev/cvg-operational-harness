@@ -1,0 +1,10 @@
+import { vi } from 'vitest'
+vi.mock('node:child_process', async (importOriginal) => {
+ const original = await importOriginal()
+ return { ...original, spawnSync(file,args,options) {
+   if (Array.isArray(args) && args[0]?.endsWith('/reference-tool-driver.mjs')) {
+     return original.spawnSync(file,['-e',"process.stdout.write('I1_CHILD_FAULT_STDOUT\\n');process.stderr.write('I1_CHILD_FAULT_STDERR\\n');process.exitCode=23"],options)
+   }
+   return original.spawnSync(file,args,options)
+ } }
+})

@@ -1,0 +1,21 @@
+import pathlib,json,hashlib,os,stat,sys
+R=pathlib.Path(__file__).resolve().parents[1]; P=R.parent/'review-packet-r3';m=json.loads((P/'manifest.json').read_bytes())
+def entry(p,category):
+ st=os.lstat(p); d={'path':str(p),'category':category,'type':'symlink' if stat.S_ISLNK(st.st_mode) else 'directory' if stat.S_ISDIR(st.st_mode) else 'file','bytes':st.st_size}
+ if d['type']=='symlink': d['target']=os.readlink(p);d['sha256']=hashlib.sha256(d['target'].encode()).hexdigest()
+ elif d['type']=='file': d['sha256']=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+ return d
+items=[entry(P/'manifest.json','manifest')];errors=[]
+for e in m['inputs']+m['proofs']+m['environmentTemplates']:
+ d=entry(e['copy'],e.get('category','proof/template'));items.append(d)
+ if d.get('sha256')!=e['sha256'] or d['bytes']!=e['bytes']:errors.append(d)
+for p,cat in [(m['candidateManifestCopy'],'candidate'),(m['allowedScopeMetadata']['path'],'scope-package'),(m['node'],'assigned-node')]:items.append(entry(p,cat))
+D=pathlib.Path(m['allowedDependencyMirror']);items.append(entry(D,'dependency-root'))
+for root,dirs,files in os.walk(D,followlinks=False):
+ for n in sorted(dirs+files):items.append(entry(pathlib.Path(root)/n,'dependency'))
+items.append(entry(pathlib.Path(m['artifactRoot'])/'node_modules','artifact-dependency-link'))
+c=json.loads(pathlib.Path(m['candidateManifestCopy']).read_bytes());binding=[]
+for e in c['sourceBindings']:
+ a=[a for a in m['inputs'] if a['relative']==e['path']];binding.append({'path':e['path'],'pass':len(a)==1 and all(a[0][k]==e[k] for k in ['bytes','sha256']) and a[0]['category'] in ['source','constraints','configurationAddon']})
+res={'entries':items,'mismatches':errors,'candidateCount':len(binding),'bindings':binding,'manifestSHA':hashlib.sha256((P/'manifest.json').read_bytes()).hexdigest(),'candidateSHA':hashlib.sha256(pathlib.Path(m['candidateManifestCopy']).read_bytes()).hexdigest()}
+(R/('sentinel-'+sys.argv[1]+'.json')).write_text(json.dumps(res,indent=2)+'\n');print({'phase':sys.argv[1],'entries':len(items),'mismatches':len(errors),'bindings':len(binding),'bindingFailures':[b for b in binding if not b['pass']]})

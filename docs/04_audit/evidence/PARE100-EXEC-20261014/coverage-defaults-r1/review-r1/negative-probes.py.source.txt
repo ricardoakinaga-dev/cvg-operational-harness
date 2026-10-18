@@ -1,0 +1,18 @@
+import pathlib,json,subprocess,hashlib,time,copy
+R=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1/review-r1');root=R/'probes/fresh-None';records=json.loads((R/'commands.json').read_text());base=next(x for x in records if x['name']=='fresh-None');env=base['environment'];source=json.loads((root/'input.json').read_text());results=[]
+cases={}
+for d,t in [('statements',90),('branches',85),('functions',90),('lines',90)]:
+ s=copy.deepcopy(source)
+ for v in s.values():v[d]={'total':100,'covered':t-1,'skipped':0,'pct':t-1}
+ cases['below-'+d]=s
+s=copy.deepcopy(source);s['total']['statements']['covered']=99;s['total']['statements']['pct']=99;cases['inconsistent-sums']=s
+s=copy.deepcopy(source);s['total']['lines']['pct']=99;cases['inconsistent-pct']=s
+cases['totalonly']={'total':source['total']};cases['malformed']='{';cases['null']='null';cases['array']='[]'
+s=copy.deepcopy(source);s[str(root/'products/shift-assistant/src/toy.ts')]=s.pop(next(k for k in s if k!='total'));cases['product']=s
+for name,s in cases.items():
+ (root/'input.json').write_text(s if isinstance(s,str) else json.dumps(s));start=time.time();p=subprocess.run(base['argv'],cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15);assert len(p.stdout)<=2*1024*1024 and len(p.stderr)<=2*1024*1024
+ (R/(name+'.stdout')).write_bytes(p.stdout);(R/(name+'.stderr')).write_bytes(p.stderr)
+ entry=json.loads(p.stdout);results.append(dict(name=name,exit=p.returncode,entry=entry,input=s))
+ records.append(dict(name=name,argv=base['argv'],cwd=str(root),environment=env,timeout_seconds=15,max_stdout_bytes=2*1024*1024,max_stderr_bytes=2*1024*1024,seconds=round(time.time()-start,3),exit=p.returncode,stdout_sha256=hashlib.sha256(p.stdout).hexdigest(),stderr_sha256=hashlib.sha256(p.stderr).hexdigest()))
+ print(name,p.returncode,entry['status'],entry['outputFailures'])
+(R/'negative-results.json').write_text(json.dumps(results,indent=2)+'\n');(R/'commands.json').write_text(json.dumps(records,indent=2)+'\n')

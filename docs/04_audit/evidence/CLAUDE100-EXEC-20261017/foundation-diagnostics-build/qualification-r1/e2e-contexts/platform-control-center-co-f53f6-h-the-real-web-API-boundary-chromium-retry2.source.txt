@@ -1,0 +1,152 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: platform-control-center.spec.ts >> configures, publishes and dry-runs an agent through the real web/API boundary
+- Location: tests/e2e/platform-control-center.spec.ts:4:5
+
+# Error details
+
+```
+TimeoutError: locator.waitFor: Timeout 10000ms exceeded.
+Call log:
+  - waiting for getByText('CVG Agent Secretary') to be visible
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]: "[plugin:vite:import-analysis] Failed to resolve import \"@cvg/shared\" from \"apps/web/src/features/journeys/index.tsx\". Does the file exist?"
+  - generic [ref=e5]: /tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/index.tsx:2:31
+  - generic [ref=e6]: "1 | import { useEffect, useRef, useState } from \"react\"; 2 | import { createDomainId } from \"@cvg/shared\"; | ^ 3 | import { apiClient } from \"../../api/client.ts\"; 4 | var _jsxFileName = \"/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/in..."
+  - generic [ref=e7]: at TransformPluginContext._formatLog (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31147:39) at TransformPluginContext.error (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31144:14) at normalizeUrl (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28083:18) at async file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28153:30 at async Promise.all (index 1) at async TransformPluginContext.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28119:4) at async EnvironmentPluginContainer.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:30932:14) at async loadAndTransform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:20671:26) at async viteTransformMiddleware (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:25205:20)
+  - generic [ref=e8]:
+    - text: Click outside, press Esc key, or fix the code to dismiss.
+    - text: You can also disable this overlay by setting
+    - code [ref=e9]: server.hmr.overlay
+    - text: to
+    - code [ref=e10]: "false"
+    - text: in
+    - code [ref=e11]: vite.config.mts
+    - text: .
+```
+
+# Test source
+
+```ts
+  1   | import type { Page } from '@playwright/test'
+  2   | 
+  3   | export class ControlCenterPage {
+  4   |   constructor(private readonly page: Page) {}
+  5   | 
+  6   |   async goto(): Promise<void> {
+  7   |     await this.page.goto('/')
+> 8   |     await this.page.getByText('CVG Agent Secretary').waitFor()
+      |                                                      ^ TimeoutError: locator.waitFor: Timeout 10000ms exceeded.
+  9   |   }
+  10  | 
+  11  |   async authenticateAsAdmin(tenantId: string): Promise<void> {
+  12  |     await this.page.getByLabel('ID do operador').fill('admin.e2e')
+  13  |     await this.page.getByLabel('Papel operacional').selectOption('Admin')
+  14  |     await this.page.getByLabel('Tenant ID').fill(tenantId)
+  15  |     await this.page.getByText('Control Center').waitFor()
+  16  |   }
+  17  | 
+  18  |   async createDraft(input: {
+  19  |     slug: string
+  20  |     name: string
+  21  |     greeting: string
+  22  |     knowledgeSource: string
+  23  |     handoff: {
+  24  |       clarifyThreshold: string
+  25  |       handoffThreshold: string
+  26  |       maxClarifications: string
+  27  |       destinations: string
+  28  |       priority: 'low' | 'medium' | 'high'
+  29  |     }
+  30  |   }): Promise<void> {
+  31  |     await this.page.getByLabel('Slug do agente').fill(input.slug)
+  32  |     await this.page.getByLabel('Nome do agente').fill(input.name)
+  33  |     await this.page.getByLabel('Saudação').fill(input.greeting)
+  34  |     await this.page
+  35  |       .getByLabel('Fonte de knowledge controlada')
+  36  |       .fill(input.knowledgeSource)
+  37  |     await this.page
+  38  |       .getByLabel('Threshold de clarificação')
+  39  |       .fill(input.handoff.clarifyThreshold)
+  40  |     await this.page
+  41  |       .getByLabel('Threshold de handoff')
+  42  |       .fill(input.handoff.handoffThreshold)
+  43  |     await this.page
+  44  |       .getByLabel('Máximo de clarificações')
+  45  |       .fill(input.handoff.maxClarifications)
+  46  |     await this.page
+  47  |       .getByLabel('Destinos de handoff')
+  48  |       .fill(input.handoff.destinations)
+  49  |     await this.page
+  50  |       .getByLabel('Prioridade de handoff')
+  51  |       .selectOption(input.handoff.priority)
+  52  |     await this.page.getByRole('button', { name: 'Criar rascunho' }).click()
+  53  |     await this.page.getByText(/Rascunho v\d+ criado\./).waitFor()
+  54  |   }
+  55  | 
+  56  |   async startNewAgent(): Promise<void> {
+  57  |     await this.page.getByRole('button', { name: 'Novo agente' }).click()
+  58  |   }
+  59  | 
+  60  |   async selectAgent(slug: string): Promise<void> {
+  61  |     await this.page.getByText(slug, { exact: true }).locator('..').click()
+  62  |   }
+  63  | 
+  64  |   async publishCurrentVersion(): Promise<void> {
+  65  |     await this.page.getByRole('button', { name: 'Enviar para teste' }).click()
+  66  |     await this.page.getByText('Versão movida para TESTING.').waitFor()
+  67  |     await this.page.getByRole('button', { name: 'Aprovar versão' }).click()
+  68  |     await this.page.getByText('Versão movida para APPROVED.').waitFor()
+  69  |     await this.createAndValidateReleaseCandidate()
+  70  |     await this.page.getByRole('button', { name: 'Publicar versão' }).click()
+  71  |     await this.page
+  72  |       .getByText('Versão publicada como snapshot imutável.')
+  73  |       .waitFor()
+  74  |   }
+  75  | 
+  76  |   async runDryRun(message: string): Promise<void> {
+  77  |     await this.page.getByLabel('Mensagem fictícia para Test Lab').fill(message)
+  78  |     await this.page.getByRole('button', { name: 'Executar dry-run' }).click()
+  79  |     await this.page
+  80  |       .getByText('Dry-run concluído sem chamada externa.')
+  81  |       .waitFor()
+  82  |   }
+  83  | 
+  84  |   async saveEditedVersion(greeting: string): Promise<void> {
+  85  |     await this.page.getByLabel('Saudação').fill(greeting)
+  86  |     const promptBlocks = JSON.parse(
+  87  |       await this.page.getByLabel('Prompt blocks JSON').inputValue()
+  88  |     ) as Array<Record<string, unknown>>
+  89  |     promptBlocks.push({
+  90  |       id: 'e2e-behavior',
+  91  |       kind: 'instruction',
+  92  |       content: 'Responda com linguagem simples e controlada.',
+  93  |       priority: 20,
+  94  |       enabled: true
+  95  |     })
+  96  |     await this.page
+  97  |       .getByLabel('Prompt blocks JSON')
+  98  |       .fill(JSON.stringify(promptBlocks, null, 2))
+  99  |     const responseTemplates = JSON.parse(
+  100 |       await this.page.getByLabel('Response templates JSON').inputValue()
+  101 |     ) as Record<string, string>
+  102 |     responseTemplates.low_confidence =
+  103 |       'Pode esclarecer sua solicitação para a equipe controlada?'
+  104 |     await this.page
+  105 |       .getByLabel('Response templates JSON')
+  106 |       .fill(JSON.stringify(responseTemplates, null, 2))
+  107 |     await this.page.getByRole('button', { name: 'Salvar nova versão' }).click()
+  108 |     await this.page.getByText(/Nova versão v\d+ criada\./).waitFor()
+```

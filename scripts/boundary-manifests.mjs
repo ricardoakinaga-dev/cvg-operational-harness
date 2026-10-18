@@ -2,6 +2,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  createInstalledIdentityComparator,
+  INSTALLED_IDENTITY_LIMITS
+} from './boundary-installed-identity.mjs'
 const require = createRequire(import.meta.url)
 const semver = require('semver')
 export const manifestDependencyFields = [
@@ -379,23 +383,19 @@ function readLockfile(filename) {
   return value.packages
 }
 
-// Installed third-party code is not parsed file by file. An installed package
-// is accepted as a terminal graph node only when the committed lockfile
-// (package-lock.json, a reviewed and versioned file) records that exact
-// installation path as a registry artifact (https tarball plus integrity)
-// whose package name matches the installed manifest. npm's untracked
-// installed-tree record (node_modules/.package-lock.json) is deliberately not
-// a trust root, and a link entry is never a registry artifact.
-//
-// The version field is not a content-integrity proof (npm does not keep the
-// tarball to re-hash), so an installed version that differs from the committed
-// lockfile is returned as drift for the report instead of being mistaken for
-// verification. Tampered contents are covered only by the product tripwire.
+// SPEC0228: lock metadata identifies a declared package, never its installed
+// bytes or semantic module frontier. Until a separately approved proof exists,
+// every third-party installation remains unverified. The caller must still
+// expand declared dependencies and scan known product references and links.
 export function createInstalledPackageVerifier(
   root,
-  { productReferences = [] } = {}
+  { productReferences = [], installedReference } = {}
 ) {
   const committed = readLockfile(path.join(root, 'package-lock.json'))
+  const identity =
+    installedReference === undefined
+      ? undefined
+      : createInstalledIdentityComparator(root, installedReference)
   const needles = productReferences.map((text) => ({
     text,
     bytes: Buffer.from(text)
@@ -453,8 +453,11 @@ export function createInstalledPackageVerifier(
     const entry = lookup(committed, key)
     if (accepts(entry))
       return {
-        verified: true,
-        source: 'package-lock.json',
+        verified: false,
+        reason:
+          entry.version === manifest.version
+            ? 'UNVERIFIED_INSTALLED_CONTENT'
+            : 'INSTALLED_VERSION_MISMATCH',
         dependencies,
         ...(entry.version === manifest.version
           ? {}
@@ -475,6 +478,13 @@ export function createInstalledPackageVerifier(
     }
   }
   function verify(context, key) {
+    // Byte identity is additive evidence. Re-evaluate metadata and bytes for
+    // every opt-in call; a cached context must never preserve an old MATCH.
+    if (identity)
+      return {
+        ...evaluate(context, key),
+        contentIdentity: identity.compare(context, key)
+      }
     if (!verdicts.has(context)) verdicts.set(context, evaluate(context, key))
     return verdicts.get(context)
   }
@@ -483,6 +493,7 @@ export function createInstalledPackageVerifier(
   // bridge. Symlinks are returned for canonical classification by the caller.
   // Nested node_modules are separate packages with their own verification.
   function scan(context) {
+    if (identity) return scanBounded(context)
     const references = []
     const links = []
     const walk = (directory) => {
@@ -502,5 +513,116 @@ export function createInstalledPackageVerifier(
     if (fs.lstatSync(context).isDirectory()) walk(context)
     return { references, links }
   }
-  return { verify, scan }
+  // Retain the tripwire even when identity collection refuses a link/type.
+  // Streaming avoids allocating a whole installed file; refusal is explicit.
+  const scanStarted = performance.now()
+  let scanEntries = 0
+  let scanBytes = 0
+  function scanBounded(context) {
+    const references = [],
+      links = [],
+      nestedPackages = []
+    let packageBytes = 0
+    const overlap = Math.max(0, ...needles.map((n) => n.bytes.length - 1))
+    const check = () => {
+      if (
+        performance.now() - scanStarted >
+        INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
+      )
+        throw new Error('INSTALLED_SCAN_TIMEOUT')
+    }
+    const nested = (directory, depth) => {
+      if (depth > INSTALLED_IDENTITY_LIMITS.maxDepth)
+        throw new Error('INSTALLED_SCAN_DEPTH_LIMIT')
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        check()
+        if (++scanEntries > INSTALLED_IDENTITY_LIMITS.maxEntries)
+          throw new Error('INSTALLED_SCAN_ENTRY_LIMIT')
+        const target = path.join(directory, entry.name)
+        if (entry.isSymbolicLink()) links.push(target)
+        else if (entry.name.startsWith('@') && entry.isDirectory())
+          nested(target, depth + 1)
+        else if (entry.isDirectory()) {
+          let manifest
+          try {
+            manifest = fs.lstatSync(path.join(target, 'package.json'))
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error
+          }
+          if (manifest?.isFile())
+            nestedPackages.push(path.relative(context, target))
+          else walk(target, depth + 1)
+        } else if (entry.isFile()) scanFile(target)
+      }
+    }
+    const scanFile = (file) => {
+      if (!needles.length) return
+      const found = new Set()
+      const fd = fs.openSync(
+        file,
+        fs.constants.O_RDONLY |
+          fs.constants.O_NOFOLLOW |
+          fs.constants.O_NONBLOCK
+      )
+      try {
+        if (!fs.fstatSync(fd).isFile())
+          throw new Error('INSTALLED_SCAN_FILE_CHANGED')
+        const buffer = Buffer.alloc(64 * 1024)
+        let tail = Buffer.alloc(0),
+          count
+        while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) {
+          check()
+          packageBytes += count
+          scanBytes += count
+          if (
+            packageBytes > INSTALLED_IDENTITY_LIMITS.maxPackageBytes ||
+            scanBytes > INSTALLED_IDENTITY_LIMITS.maxTotalBytes
+          )
+            throw new Error('INSTALLED_SCAN_BYTE_LIMIT')
+          const bytes = Buffer.concat([tail, buffer.subarray(0, count)])
+          for (const needle of needles)
+            if (bytes.includes(needle.bytes)) found.add(needle.text)
+          tail = overlap
+            ? bytes.subarray(Math.max(0, bytes.length - overlap))
+            : Buffer.alloc(0)
+        }
+      } finally {
+        fs.closeSync(fd)
+        // Preserve any product witness observed before a later read refusal.
+        for (const needle of needles)
+          if (found.has(needle.text))
+            references.push({ file, reference: needle.text })
+      }
+    }
+    const walk = (directory, depth) => {
+      check()
+      if (depth > INSTALLED_IDENTITY_LIMITS.maxDepth)
+        throw new Error('INSTALLED_SCAN_DEPTH_LIMIT')
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        check()
+        if (++scanEntries > INSTALLED_IDENTITY_LIMITS.maxEntries)
+          throw new Error('INSTALLED_SCAN_ENTRY_LIMIT')
+        const file = path.join(directory, entry.name)
+        if (entry.isSymbolicLink()) links.push(file)
+        else if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules') walk(file, depth + 1)
+          else nested(file, depth + 1)
+        } else if (entry.isFile()) scanFile(file)
+      }
+    }
+    try {
+      walk(context, 0)
+      return { references, links, nestedPackages }
+    } catch (error) {
+      return {
+        references,
+        links,
+        nestedPackages,
+        limitation: /^INSTALLED_SCAN_[A-Z_]+$/.test(error.message)
+          ? error.message
+          : 'INSTALLED_SCAN_IO_ERROR'
+      }
+    }
+  }
+  return { verify, scan, finalize: () => identity?.finalize() }
 }

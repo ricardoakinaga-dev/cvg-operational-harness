@@ -1,0 +1,19 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),ts=require('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/typescript');
+const p='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts',text=fs.readFileSync(p,'utf8'),sf=ts.createSourceFile(p,text,ts.ScriptTarget.Latest,true);
+let instrument,joinMethod;function walk(n){if(ts.isFunctionDeclaration(n)&&n.name?.text==='instrumentSql')instrument=n;if(ts.isMethodDeclaration(n)&&n.name?.getText(sf)==='joinDelivery')joinMethod=n;ts.forEachChild(n,walk)}walk(sf);assert(instrument&&joinMethod);
+function compile(code,args){return new Function(...args,ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText)}
+function has(e,t){return e===t||e&&typeof e==='object'&&(has(e.cause,t)||Array.isArray(e.errors)&&e.errors.some(x=>has(x,t)))}
+(async()=>{const results=[];for(const mode of ['sync','promise','callback']){
+ const E=new Error('SQL_PRIMARY'),D=new Error('WIRE_DIAGNOSTIC');let count=0,delivered,observed;
+ const client={query:mode==='sync'?()=>{throw E}:mode==='promise'?()=>Promise.reject(E):(...args)=>{args.at(-1)(E);return 'native-handle'}};
+ const fn=compile(instrument.getText(sf)+';return instrumentSql;',['appendFileSync','join','output','tagged','sqlSequence','sqlScope','errorInfo'])( (_path,bytes)=>{const r=JSON.parse(bytes);if(r.type==='SQL-error'||r.type==='SQL-callback')throw D},()=>'/synthetic/wire','/synthetic',(_k,v)=>v,0,'case',e=>({message:String(e?.message||e)}));
+ fn(client,'synthetic');try{await client.query('SELECT synthetic',...(mode==='callback'?[(e)=>{count++;delivered=e}]:[]))}catch(e){observed=e}
+ const final=mode==='callback'?delivered:observed;results.push({mode,primaryRetained:!!has(final,E),diagnosticRetained:!!has(final,D),callbackCount:count,pass:!!has(final,E)&&!!has(final,D)&&(mode!=='callback'||count===1)});
+ }
+ const AF=Object.getPrototypeOf(async()=>{}).constructor;let runtimeDone=false,released=false;
+ const runResult=new Promise(()=>{});const code=ts.transpileModule('(async '+joinMethod.getText(sf)+')',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ // Compile actual method body only; the ignored runResult remains deliberately unresolved.
+ const body=ts.transpileModule('async function joinDelivery() '+joinMethod.body.getText(sf)+';return joinDelivery();',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ await new AF('release','calls','delivered','decisions','runResult',body)({resolve(){released=true}},0,{promise:Promise.resolve()},[],runResult);
+ const barrier={kind:'ACTUAL_JOINDELIVERY_METHOD_ONLY',released,returnedBeforeRuntimeSettled:!runtimeDone,pass:runtimeDone,applicationExecuted:false};
+ const out={task:'C100-FND-TH06-RECOVERY-001',instrumentSql:results,barrier,applicationExecuted:false};fs.writeFileSync('docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/diagnostic-first-red.json',JSON.stringify(out,null,2)+'\n');assert(results.every(x=>!x.pass));assert(barrier.returnedBeforeRuntimeSettled);console.log(JSON.stringify(out));})().catch(e=>{console.error(e);process.exitCode=1});

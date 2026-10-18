@@ -1,0 +1,30 @@
+import pathlib, hashlib, json
+B=pathlib.Path(__file__).resolve().parent
+W=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+excluded=[]
+def reason(p):
+    relative=p.relative_to(B)
+    if relative.parts[0] in ['cache','nodecache','tmp']:
+        return 'Private cache/temporary infrastructure; original preserved, not primary evidence.'
+    if p.stat().st_size==0:
+        return 'Original empty stream preserved privately; no nonempty primary content.'
+    return None
+for p in sorted(B.rglob('*')):
+    if p.is_file():
+        why=reason(p)
+        if why:excluded.append(dict(path=str(p),bytes=p.stat().st_size,reason=why))
+excluded.append(dict(path=str(B/'artifact-manifest.json'),reason='Manifest excludes itself to avoid a recursive self-hash.'))
+with (B/'excluded-paths-index.json').open('x') as f:json.dump(dict(excluded=excluded,allOriginalsPreserved=True),f,indent=2);f.write('\n')
+paths=[p for p in B.rglob('*') if p.is_file() and not reason(p)]
+paths.extend([W/'packages/persistence/src/__tests__/complete-tool-json-public-postgres.integration.ts',B.parent/'contract.json',W/'docs/02_spec/0224_pare100_complete_tool_result_context.md'])
+entries=[]
+for p in sorted(set(paths)):
+    data=p.read_bytes()
+    assert data
+    entries.append(dict(path=str(p),sha256=hashlib.sha256(data).hexdigest(),bytes=len(data)))
+manifest=dict(scope='PUBLIC-JSON-001 PostgreSQL builder evidence only; no acceptance',entries=entries,excludedPathIndex=str(B/'excluded-paths-index.json'))
+with (B/'artifact-manifest.json').open('x') as f:json.dump(manifest,f,indent=2);f.write('\n')
+for entry in entries:
+    p=pathlib.Path(entry['path'])
+    assert p.stat().st_size==entry['bytes'] and hashlib.sha256(p.read_bytes()).hexdigest()==entry['sha256']
+print(json.dumps(dict(primaryEntries=len(entries),primaryBytes=sum(e['bytes'] for e in entries),excludedEntries=len(excluded),manifestSHA256=hashlib.sha256((B/'artifact-manifest.json').read_bytes()).hexdigest(),allHashesVerified=True)))

@@ -1,0 +1,14 @@
+import os,json,hashlib,pathlib,datetime,sys
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r4');D=P/'review-i1'
+def entry(path,expected,size=None):
+ p=pathlib.Path(path); b=p.read_bytes(); actual=hashlib.sha256(b).hexdigest(); ok=actual==expected and (size is None or len(b)==size)
+ return {'path':str(p),'resolved':str(p.resolve()),'expectedSHA256':expected,'sha256':actual,'bytes':len(b),'expectedBytes':size,'ok':ok}
+r={'timeUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),'packet':entry(P/'review-packet.json','76b64bd9a1cd32dc5b39311999e846d04be7c6a0e24745d8b00800c1dafc8429'),'authority':entry(P/'authority.json','c01bacf68ffe423dda7987ebfd59096bde7712589dc68922955ae470a5fbd1e2')}
+assert r['packet']['ok'] and r['authority']['ok']
+x=json.loads((P/'review-packet.json').read_bytes());a=json.loads((P/'authority.json').read_bytes())
+r['files']=[entry(v['path'],v['sha256'],v['bytes']) for v in x['files']]
+r['hashOnlyConstraints']=[entry(v['path'],v['sha256']) for v in x['hashOnlyConstraints']]
+r['sources']=[entry(k,v) for k,v in a['sources'].items()]
+r['counts']={'files':len(r['files']),'hashOnlyConstraints':len(r['hashOnlyConstraints']),'sources':len(r['sources'])}
+r['ok']=r['counts']=={'files':24,'hashOnlyConstraints':6,'sources':1061} and all(v['ok'] for k in ('files','hashOnlyConstraints','sources') for v in r[k])
+(D/sys.argv[1]).write_text(json.dumps(r,indent=2)+'\n'); print(json.dumps({'ok':r['ok'],'counts':r['counts'],'failures':[v for k in ('files','hashOnlyConstraints','sources') for v in r[k] if not v['ok']],'files':[v['path'] for v in r['files']],'hashOnlyPaths':[v['path'] for v in r['hashOnlyConstraints']]}));sys.exit(0 if r['ok'] else 1)

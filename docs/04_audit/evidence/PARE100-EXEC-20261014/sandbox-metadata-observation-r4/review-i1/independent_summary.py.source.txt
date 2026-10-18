@@ -1,0 +1,37 @@
+from pathlib import Path
+import json,hashlib,datetime,copy
+D=Path(__file__).parent;P=D.parent
+fixture=json.loads((P/'fixture.json').read_bytes()); cases=[]; normalized=[]
+for name in ('attempt-01','attempt-02','i1-01'):
+ f=P/'runs'/name;d=json.loads((f/'stdout.txt').read_bytes());p=json.loads((f/'process.json').read_bytes());c=p['capture'];out=[]
+ span=(c['executionElapsedNs']+999999)//1000000;previous=None;first=None;sum_latency=0
+ for item in d['cases']:
+  original=fixture['cases'][item['caseId']];assert item['input']==original['input'] and item['beforeDescriptor']==original['descriptor']
+  assert not item['modelCalls'] and not item['approvalRequests'];assert len(item['auditEvents'])==len(item['telemetryEvents'])==1
+  a=datetime.datetime.fromisoformat(item['auditEvents'][0]['timestamp'].replace('Z','+00:00'));first=first or a;event=item['telemetryEvents'][0];j=item['journalRecord']
+  if previous:assert previous<=a
+  assert 0<=event['toolDurationMs']<=event['latencyMs']<=span+1
+  if j:
+   created=datetime.datetime.fromisoformat(j['createdAt'].replace('Z','+00:00'));updated=datetime.datetime.fromisoformat(j['updatedAt'].replace('Z','+00:00'));assert created<=updated<=a
+   if previous:assert previous<=created
+  else:assert event['toolDurationMs']==0
+  sum_latency+=event['latencyMs'];previous=a
+  out.append({'case':item['caseId'],'registeredSandbox':item['registeredDescriptors'][0].get('sandbox','ABSENT') if isinstance(item['registeredDescriptors'],list) else 'NO_REGISTRY','gateCalls':len(item['gateCalls']),'bodyCalls':len(item['bodyCalls']),'stopReason':item['nativeResult']['stopReason'],'auditTime':item['auditEvents'][0]['timestamp'],'latencyMs':event['latencyMs'],'toolDurationMs':event['toolDurationMs'],'journalTimes':{k:j[k] for k in ('createdAt','updatedAt')} if j else None,'fingerprint':item['capabilityFingerprint']})
+ assert sum_latency<=span+3 and (previous-first).total_seconds()*1000<=span+1
+ assert c['joined'] is True and c['remainingProcessGroup'] is False and c['exitCode']==0 and not c['errors']
+ assert c['executionElapsedNs']<=5000000000 and c['cleanupElapsedNs']<=2200000000 and c['totalElapsedNs']==c['executionElapsedNs']+c['cleanupElapsedNs']
+ assert c['retainedBytes']==(f/'stdout.txt').stat().st_size+(f/'stderr.txt').stat().st_size
+ # Only these known nondeterministic fields are excluded for static payload comparison.
+ stable=copy.deepcopy(d)
+ for item in stable['cases']:
+  item['auditEvents'][0].pop('timestamp');item['telemetryEvents'][0].pop('latencyMs');item['telemetryEvents'][0].pop('toolDurationMs')
+  if item['journalRecord']:
+   for k in ('attemptId','createdAt','updatedAt'):item['journalRecord'].pop(k)
+ normalized.append(stable)
+ cases.append({'run':name,'executionElapsedNs':c['executionElapsedNs'],'cleanupElapsedNs':c['cleanupElapsedNs'],'totalElapsedNs':c['totalElapsedNs'],'retainedBytes':c['retainedBytes'],'cases':out,'privateDirectoryFiles':[str(q.relative_to(f)) for sub in ('home','tmp','cache','config','data') for q in (f/sub).rglob('*') if q.is_file()]})
+assert all(v==normalized[0] for v in normalized)
+controls=json.loads((D/'controls-01/results.json').read_bytes());lifecycle=[]
+for r in controls['lifecycleControls']:
+ c=r.get('capture',r.get('record',{}).get('capture'));lifecycle.append({'test':r['test'],'errors':c['errors'],'snapshotErrors':r.get('record',{}).get('snapshotErrors',[]),'joined':c['joined'],'remainingProcessGroup':c['remainingProcessGroup'],'executionElapsedNs':c['executionElapsedNs'],'cleanupElapsedNs':c['cleanupElapsedNs'],'retainedBytes':c['retainedBytes'],'discardedBytes':c['discardedBytes']})
+r={'threeStaticPayloadsEqualExceptRecordedClocksAndAttemptUUIDs':True,'rawCaptures':cases,'lifecycle':lifecycle,'controlCounts':{'all':len(controls['validatorControls']),'semanticFullRun':sum(x.get('kind')=='semantic' for x in controls['validatorControls']),'processSemantic':sum(x.get('kind')=='process-semantic' for x in controls['validatorControls'])}}
+(D/'independent-summary.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))

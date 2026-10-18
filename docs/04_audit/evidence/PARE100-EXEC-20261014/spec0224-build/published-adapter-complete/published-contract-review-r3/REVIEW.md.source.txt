@@ -1,0 +1,46 @@
+# I1 — revisão documental independente R3
+
+Decisão: **REVISE**. Há **um finding HIGH** que impede APPROVE_FOR_HUMAN_TECHNICAL_REVIEW: o protocolo de GUC não admite a tentativa interna zero no intervalo durável entre admissão e primeiro claim interno, embora exija writers externos nesse intervalo. Não se concede gate humano, BUILD, aplicação de migration ou aceite de runtime.
+
+## Escopo e autoridade
+
+Primeiro acesso por ferramenta: leitura exclusiva do manifesto indicado, SHA-256 `f8bb306b400cf5c7736d0b60e3039b1552336de39bba557f4252362f5ce9c169`. Depois, somente manifesto, suas 53 cópias enumeradas e os próprios outputs desta lane. Todos os 54 fingerprints iniciais conferem (manifesto + 53 inputs). As 49 entradas do source-manifest também conferem com o manifesto externo. O relatório final de integridade registra a comparação antes/depois.
+
+O julgamento toma as aprovações217/224 apenas nos escopos estipulados pelo usuário/manifesto; não tenta reconstruir decisões por cabeçalhos antigos das cópias nem segue links para ledgers, originais ou avaliações anteriores. 0225 permanece PENDING;0030 é dependência,0031 futura não autorizada. As três propostas foram lidas integralmente. Fontes técnicas copiadas foram inspecionadas por funções, contratos e callers pertinentes, com varredura textual/inventário do conjunto; isso é revisão estática, não prova de execução integral de todos os ramos.
+
+Não houve descendentes, código de produto, DDL executado/gerado, banco, provider, rede, commit, push ou deploy. Apenas scripts de inspeção/integridade no diretório próprio. Uma tentativa de chamar `python` falhou por executável ausente; a inspeção prosseguiu com `python3 -B`, sem testes de produto. A restrição expressa desta lane prevalece sobre as instruções gerais copiadas de atualizar ledgers; nenhum ledger foi acessado ou alterado.
+
+## I1-R3-001 — HIGH — outer writer sem representação legal antes do inner claim
+
+**Âncoras normativas:** PROPOSED-SPEC §8.4, linhas913–925 (GUCs obrigatórios),919 (`inner attempt nativo, ou0 bootstrap`),936–945 (`attempt0` somente antes da binding e nenhum outro writer),968–995 (outer claim/renew antes de inner claim, autoridade externa separada e renew quando surge binding). §7,758–759 preserva S0. ACCEPTANCE-PLAN W05,167 exige renew antes de attachInner.
+
+**Fontes concretas:** S08 `admit`,253–303 confirma a admissão em transação distinta de `claim`; N13,1335–1341 e1387–1423 cria RECEIVED0 e termina QUEUED0, com queue pending/attempts0; S08,438–456 só incrementa parent/queue no futuro inner claim. S01,255–285 chama admit, depois store.claim, depois attachInner. N06,374–376 renova somente outbox enquanto não há inner. N05,468–526 altera predecessor/evento/attempt externo para reclamar uma entrega expirada. S09,97–110 mostra que `published_attempt` carrega a tentativa interna do fence.
+
+**Contraexemplo documental, NOT_RUN:** A obtém claim externo, admite complete e recebe COMMIT. A binding existe, parent=QUEUED/attempt0, prepared=null, sem lease interno. Antes de store.claim, um tick de renewal pode ver essa binding. Alternativamente, A morre exatamente aí; depois da expiração externa real, B deve reclamar o evento para chegar ao primeiro claim interno. Os writers gen2 precisam preencher `published_attempt`. Zero está proibido porque a binding já existe; o outer attempt não é inner attempt; antecipar1 inventa a tentativa que somente store.claim pode criar. O claim externo é pré-condição para chamar store.claim. Assim o contrato literal não possui transição para o renew legítimo nem para reclaim desse S0. Rejeitar toda recuperação não implementa o percurso positivo especificado.
+
+**Impacto:** indisponibilidade de um estado durável permitido e ambiguidade material de autoridade deixada ao BUILD. Uma implementação pode bloquear esse estado para sempre; outra pode contornar a proibição inventando owner/tentativa interna. O finding é sobre a proposta futura, não uma alegação de defeito executado no snapshot atual.
+
+**Correção precisa:** especificar contexto discriminado outer-only para binding admitida com parent0/ausência comprovada de inner claim. Enumerar operações externas permitidas, seus deltas, ref/attempt externo exatos, locks, clock e revalidação; decidir explicitamente a representação de ausência de owner interno. Corrigir a proibição universal de zero ou separar esse campo do inner fence. Nunca copiar outerAttempt para innerAttempt nem conceder CAS/model/tool/lease interno por essa exceção. Preservar0029. Sincronizar D17/D19 e W01/W04/W05 com esse estado.
+
+**Oráculos futuros, todos NOT_RUN:** (1) parar após COMMIT real de admit e antes de store.claim; renew externo positivo preserva parent0 e não cria lease interno; (2) SIGKILL nesse ponto e reclaim nativo B após expiração real, mesma admissão/IDs, primeiro inner claim posterior, uma M1/tool/M2; (3) tentativas zero em ACTIVE/CAS/dispatch, ref foreign/inválida, inner já existente ou writer antigo continuam recusadas sem mutação. Não implementar nem executar esses testes nesta lane.
+
+## Demais critérios examinados
+
+| Critério do manifesto | Juízo documental e âncoras |
+| --- | --- |
+| Rota pública concreta, modo confiável, projeção, duas chamadas/uma tool, par e caps | §1–4 e PA01–05/13/17 usam ingress/worker/fachadas/fábrica nativos, seleção server-only e saída M2 derivada do frame. S01/S02/S03/S04 e S14 confirmam os seams e o corpo constante. Proposta muda deliberadamente uma chamada para duas. Não é implementação nem aceite. |
+| Um dono de contabilidade e todos outcomes | §5.1/5.2 e R01–17 eliminam, só no opt-in, beginModelRequest, recordModelResult e as adições diretas de unrecorded. N01,615–665; N02,510–601; S12,1205–1258 confirmam os três locais reais. Não foi identificado outro bloqueador documental nessa reconciliação. |
+| Raw/guard/acceptedDecision/acceptedResponse e cursor | §5.3/5.4 e Q01–08 distinguem regra[] de receipt RESPONSE e slot histórico de executável. N04,423–458; N02,1178–1250 e1287–1320; S12,895–940 exigem exatamente os deltas de validator/seletor/limpeza propostos. AcceptedResponse novo depende de SETTLED, ACKs e claims; histórico não ganha dispatch. |
+| CAS, fases, claims/fences e terminação | §6 e C01–13 prescrevem on-client CAS+ACK+seal, APPLIED só após COMMIT, ACK único, avaliação eager somente no perfil novo, diagnósticos restritos e nenhuma escrita CAS no cancel_close. S13,284–383; S06,929–1071; S09,156–336 e S10,199–206 sustentam a necessidade desses deltas. Não basta o CAS genérico existente. |
+| Breach/quarentena | §4.1/6.4 e D24/R16–17/C12–13 especificam latch do processo e witness privado da tentativa observadora. max(reserved,actual) substitui contribuição uma vez; UNKNOWN não é enriquecido posteriormente; falha de autoridade conserva reserva. Sem promessa de frota/billing; todo teste NOT_RUN. |
+| Migration0031, lookup, locks e cada writer | Inventário13+13/índice/três funções é concreto; SECURITY INVOKER, SELECT com RLS e sem lock em trigger; prefixo parent-first e reinício de transação quando surge binding. **Bloqueado por I1-R3-001** na transição admitida/inner0. Demais regras são propostas a comprovar, não DDL já existente. |
+| Callbacks/close/completion/ACK | §7/8.6 e PA10–12/W06/W13/W14 separam callbackEntered de factory/model/body, DML negado de SELECT revogado e ACK externo em duas transações. S01,324–396; N05,554–924; N10,637–789 e N11,1198–1222 são seams reais. Sonda same-role não prova callback0; isso está corretamente limitado no texto. |
+| Compatibilidade, dependências e limites de claims | §8.1/9/10, D01–25/B01–08 e PA14–18 preservam defaults/generic224/single-pass e exigem aceite separado do genérico e0030. Corpo constante bounded não demonstra4096/NUL/full-domain. Rebind futuro obrigatório; hashes internos antigos do genérico não substituem os inputs copiados atuais. Nenhum release/paridade/global é concedido. |
+
+A ausência de outro finding nesta revisão não é aprovação parcial de runtime. A matriz complementar registra os resultados e transições revistos; nenhuma linha significa PASS de teste. O problema de tentativa zero precisa de decisão documental exata e nova revisão antes da apresentação canônica ao gate humano. Não foi pedido nem concedido BUILD.
+
+## Artefatos e fechamento
+
+`decision.json`: decisão/findings/âncoras estruturados. `transition-audit.md`: análise das transições e de todos os outcomes/writers. `read-set.json`:53 cópias com hashes/foco. `input-fingerprints-before.json`, `input-fingerprints-after.json` e `integrity-comparison.json`: integridade do conjunto. `scope-and-checks.json`: limites e status. `inspect_snapshot.py` e `close_review.py`: scripts ordinários incluídos no inventário.
+
+`output-inventory.json` enumera todos os arquivos ordinários, inclusive vazios/caches se presentes, com SHA-256, bytes e categoria, além dos diretórios/empty directories. Exclui somente o próprio inventário e `seal.detached.json`, para fechamento não circular. `seal.detached.json` inclui o hash/bytes do inventário e dos artefatos principais. O selo é digest detached de integridade, sem alegação de assinatura criptográfica de identidade. Seu SHA-256 é devolvido no fechamento da conversa.

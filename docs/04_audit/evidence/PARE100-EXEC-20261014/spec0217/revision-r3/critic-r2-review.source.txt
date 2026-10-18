@@ -1,0 +1,87 @@
+# Bounded I1 DESIGN recheck — SPEC0217 R2
+
+**REVISE — one new material liveness/acceptance inconsistency.** The four original design findings have concrete R2 remedies, and the previously missing ACK implementation is now supplied. However, the newly fixed outer lease makes the mandatory positive S1 restart unavailable through the actual configured profile. A test-only shorter lease would exercise a different timing contract.
+
+This verdict covers static design admissibility only. It does not grant runtime acceptance, user approval, BUILD/schema authorization, release permission, or completion of P100-010. The original R1 REVISE is preserved; no original result was read or modified in this recheck.
+
+## Candidate and scope
+
+Authoritative candidate is the formatted SPEC in this new manifest, not a designer handoff hash:
+
+- SPEC0217 SHA-256: `7cf299cc8728d0e79166dc2879a7e8418e057f2a7d89f00989bae8efa9cf79cf`.
+- Included acceptance-plan SHA-256: `029c6edbe5aee470a0c51a2e6437ea806dc6b630ea312c3dff067024f4578bd0`.
+- Sentinel SHA-256: `2a690d175581396a85eba5514ceeb1f941b395426cb9bb2e589ba479b1f2b760`.
+- Preflight: all120/120 file hashes match, with no extra files. Postflight is recorded separately in integrity-post.json.
+
+Only this R2 packet, its adjacent sentinel and this new result directory were accessed. Source reads were bounded to the revised causal paths and acceptance plan. No live ROOT/W/C/reference, Builder reports, old review files, runtime/tests/DB/network, implementation or descendants were used. Read/hash/report commands performed no application execution. The statement that unchanged sources originated in physical W is provenance supplied by the task; this lane did not inspect W. No finite causal supplement is currently needed to establish the finding below.
+
+References below are relative to `critic-spec0217-r2-packet/`. SPEC denotes `docs/02_spec/0217_pare100_durable_kernel_composition.md`; acceptance denotes the included `docs/04_audit/evidence/PARE100-EXEC-20261014/spec0217/acceptance-plan.md`.
+
+## Disposition of the four original findings
+
+| Original finding | Bounded R2 disposition | Exact causal remedy assessed |
+| --- | --- | --- |
+| R1: consume0002 outside execution fence | Addressed at DESIGN level | SPEC178–195 adds a clearly NEW consumeBoundApproval, acknowledged phaseRef, one tenant/client/root transaction, execution→binding→outer→session→pause→grant locks, DB time after waits and before mutation/commit, atomic consumed/audit/receipt, no pool-backed fallback. Unbound verifyAndConsume semantics remain explicitly preserved. HOW334 names the affected repositories; K05/K06/K08/K10 and acceptance59–66 distinguish stale-before-root, clock-after-wait, winner and rollback. |
+| R2: plan absent at S1 | Addressed at DESIGN level | SPEC214–229 and341 move deterministic post-output plan preparation into the completed checkpoint1 wrapper for the durable branch, with phase/ACK before the atomic S1 seal. Local0214 remains at step2. Snapshot fixes planOutcome/digests/canonical commands/expectedStep2 and resumed step2 cannot plan/parse again. Suppressed output still performs zero planning/consume/body. |
+| R3: lost RAM fault indistinguishable from idle seal | Addressed at DESIGN level, with an explicit behavioral choice | SPEC231–265 defines IDLE_SEALED/OPEN/FAULTED/CLOSED, CAS seal consumption, intent ACK before callbacks, completion.evaluate spanning its evaluation audit, sequential phase ACKs and settlement-only recovery. The pre-operation rollback/noACK/op0 failure is honestly attempt-local; persisted OPEN/intent/fault cannot be erased. Seal metadata COMMIT/ACK loss is distinguished from an unacknowledged effect. Acceptance78–89 has paired positive P/P0 and negative N cases, not fail-all. |
+| R4: omitted outer ACK causal implementation | Source gap closed; integration profile has the new finding N1 below | postgres-outbox.ts and the directly relevant outbox/hash/sanitization helpers are now sealed inputs. SPEC60–82 distinguishes outer/inner leases, two ACK transactions, retained pool client, busy-as-error, instance nonce and the marker/already_completed/S3 cases. Acceptance91–97 exercises the actual ACK boundary. |
+
+These dispositions are not assertions that the new methods, schema or tests exist. Existing0002 consumption still opens its own transaction (`platform-approval-repository.ts:98–198`), and the tenant wrapper still checks out a client (`tenant-scoped-capability-approval-repository.ts:40–50`); the new shared-client helper and branch are proposed work. The existing `withTenantTransaction` is an actual helper (`tenant-scoped-postgres.ts:157+`), not an invented existing kernel hook.
+
+## N1 — Fixed180s outer lease prevents successful S1 restart under the≤120s kernel deadline
+
+**Priority: high. Type: newly introduced liveness/acceptance-contract inconsistency.**
+
+SPEC13 requires a killed worker at S1 to be replaced by another process that continues the same execution successfully, without a second model or plan/body replay. Merely failing every restart does not satisfy this slice. But SPEC78–80 and HOW329 fix the new profile's outer lease at180000ms, preserve the kernel's120000ms ceiling and require its absolute deadline to include downtime. Existing PostgreSQL claim semantics cannot redeliver the killed process's still-leased outer event before that180s expiry. There is no proposed alternate recovery trigger or lease-release operation for a SIGKILLed worker.
+
+### Causal evidence
+
+- SPEC80: outer lease180000ms in controlled and continuous; kernel ceiling120000ms; preparation bounded5000ms. It allows a1000ms outer lease only through fixture/test options. SPEC21 refuses a different configured profile; SPEC329 repeats180000ms in the production-path HOW.
+- SPEC74 and supplied `apps/worker/src/continuous-worker.ts:270–319`: this PG adapter has no actual heartbeatClaim renewal. Its fallback only looks up status/owner. No callback wakes the compositor independently of outer claim. A dead process cannot release or renew its claim.
+- `packages/persistence/src/postgres-outbox.ts:189–209,224–247`: claim computes/persists lease_until from now+leaseMs and selects processing rows only when lease_until<=now. Supplying eventId does not bypass that condition.
+- Same file270–355: ACK preparation COMMITs before invoking the handler, so a kill inside the handler leaves the outer row processing, without a pre-created result marker. Only after another successful outer claim can B enter that handler again.
+- `packages/platform/src/contracts.ts:79`: model.timeoutMs is constrained to100–120000. `controlled-kernel-execution.ts:469,480` supplies that budget and deadline today. R2 SPEC129,277 preserves the absolute deadline across restart; the new host does not authorize extending it.
+- SPEC82 requires both leases to permit the restart, rather than authorizing B to bypass the outer claim. SPEC298/K02 line364 still promises positive S1 continuation.
+- Acceptance30–33 instructs the fixture to expire both leases while retaining deadline headroom; SPEC80 permits test-only outer1000ms. That can validate the resume algorithm, but not availability of that transition under the fixed180000ms profile.
+
+### Minimal failure timeline
+
+Use the most favorable allowed kernel budget120000ms, a valid fast preparation, the genuine one pure tool, no pause or DB fault:
+
+| Time from outer claim | Durable state / permitted action |
+| --- | --- |
+| t=0 | A claims outer inbound with lease_until=t180s and enters real ACK preparation/handler. |
+| t=0.1s | Preparation completes; startPrepared fixes kernel expiresAt=t120.1s. |
+| t=0.2s | A commits S1 IDLE_SEALED with model1/plan1/inputParse1/body0, then receives SIGKILL. No outer marker or ACK COMMIT exists. |
+| t<180s | B cannot claim that processing event through the unchanged PostgreSQL claimNext. Even if inner A's lease expires much earlier, the compositor is not reached. |
+| t>=180s | B can claim outer and eventually inner, but the original expiresAt is already exceeded. R2's deadline/fence guards must reject model/consume/body; the successful S1 continuation is unavailable. |
+
+With preparation at the allowed5s bound, the maximum kernel deadline is still t125s, before the earliest t180s outer redelivery. Smaller model budgets worsen the gap. Resetting expiresAt in B would violate D07/K06; directly calling the compositor would violate the actual outer-ACK path required by K01/K02. The flaw is liveness, not permission to bypass those guards.
+
+### Required remedy before ACCEPT_SPEC
+
+Select a coherent recovery timing contract for the real opt-in profile and revise SPEC2.2/HOW/K02 together. Outer redelivery must have a supported path within the remaining absolute kernel deadline for at least the mandated S1 positive scenario, while retaining inner fencing and no duplicate handler/consumption.
+
+A concrete design may use a suitably short outer lease with correctly specified renewal/ownership behavior for live workers, or another explicitly designed and fenced redelivery mechanism. If renewal or reclaim operations must be added, label them NEW and include their real files/transactions/clock/stop semantics in HOW; the existing PG fallback is not renewal. Do not solve the mismatch by silently extending/resetting the kernel deadline, administrative early lease expiry, or treating a test-only lease as the runtime profile's behavior. A longer kernel budget would itself require an explicit new reviewed contract instead of claiming the existing0214 ceiling was preserved.
+
+The acceptance plan must include a real API→published worker→PG ACK S1 kill/restart case using the **supported runtime profile's lease/deadline relationship**. B must reach the handler via ordinary claim and succeed before the original expiresAt. Test-only accelerated clocks may be used only if they preserve that relationship and the same time authority; independently shortening outer rows while keeping expiresAt fixed does not prove it. Retain the negative case where genuinely exhausted downtime produces failed/handoff with zero body. Pair the two so neither fail-all restart nor deadline reset passes. Adjust future test timeouts if the chosen actual profile requires it.
+
+## Checks for introduced consistency/security gaps
+
+No additional material blocker was established in this bounded recheck:
+
+- The shared-client consumption order is implementable as a future refactor: outer ACK holds no transaction while the effect executes; inner operations can lock outer→session consistently without calling ACK/completion under those locks. Grant expiry, request staleness and kernel expiry are explicitly separate. The precommit recheck does not promise physical fsync/ACK before the clock deadline, and late ACK still grants no body admission.
+- The new poolmax4/concurrency1 profile accounts for the outer connection retained outside its transaction; it does not pretend that a pool1 can serve nested checkouts. Process-instance base80+UUID remains within the current120-character owner limit. Busy/deferred must throw so ACK cannot create a success marker for them.
+- Real outer ACK is now causally verified: postgres-outbox.ts270–334 commits preparation;349–355 invokes effect only without a marker;366–499 relocks/rechecks ownership, then writes marker+processed+attempt/audit atomically. Fail503–589 has lease checks/backoff/dead-letter and no success marker. The helper805–820 owns BEGIN/COMMIT/ROLLBACK. Therefore the old missing-source objection is resolved without inferring behavior from table names.
+- S1 plan formation precedes the new seal without requiring a fabricated kernel hook. S2 still follows journal confirmation, ledger finish, approval settlement, callback and tool step/checkpoint ACKs in the existing pipeline. Phase primitives are excluded from recursive wrapping, and the evaluator/audit phase spanning rule addresses the original post-checkpoint fault interval.
+- Terminal wrappers now explicitly close local entry before await, including inside harness.execute (SPEC261), and subsequent IO uses a settlement-only path. Recovered OPEN cannot become success; live healthy terminal OPEN requires acknowledged predecessors and a valid S2 (or empty/suppressed S1) before close (SPEC263). Private consumed/CONFIRMED facts survive failed public projection. These remain BUILD obligations and NOT_RUN oracles.
+
+No source supplement is requested: the new defect follows from supplied constants, actual claim filtering and the preserved deadline contract. Additional unrelated source would not resolve it.
+
+## Limits and next action
+
+The one pure tool, published durable inbound only, default-off profile and production refusal remain explicit. No new provider/network/data, clinical/financial, appointment mutation, RAG authority or release permission is admissible. Full P100-010 and legacy retirement remain open.
+
+0029 remains a proposed additive migration, with0028 dedicated and historical checksums preserved. The prior Lead observation that0029 was physically free grants no current reservation. Implementation/migration claims and explicit T3 user review are still future prerequisites. All K01–K12 remain NOT_RUN; the newly included acceptance plan supplies proposed commands and meaningful negative controls, not runtime evidence.
+
+Next action: correct N1's actual profile and matching acceptance oracle, then perform a bounded fresh technical recheck of that concrete candidate before the T3 user gate. The original four findings need not be reopened merely because this new timing inconsistency remains.

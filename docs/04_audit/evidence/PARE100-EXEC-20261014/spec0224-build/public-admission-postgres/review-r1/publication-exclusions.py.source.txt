@@ -1,0 +1,25 @@
+import pathlib,json,urllib.parse,hashlib,stat
+R=pathlib.Path(__file__).parent
+H=lambda b:hashlib.sha256(b).hexdigest()
+def save(n,v):
+ with (R/n).open('x') as f:json.dump(v,f,indent=2)
+secret_names=['resource-private.json','resource-prototype-private.json'];secrets=[]
+for n in secret_names:
+ p=R/n;assert stat.S_IMODE(p.stat().st_mode)==0o600
+ u=json.loads(p.read_text())['test_database_url'];secrets.extend([('full-resource-url',u.encode()),('password-literal',urllib.parse.unquote(urllib.parse.urlsplit(u).password).encode())])
+matches=[]
+for p in R.rglob('*'):
+ if p.is_file() and p.name not in secret_names:
+  b=p.read_bytes();kinds=sorted(set(k for k,s in secrets if s and s in b))
+  if kinds:matches.append(dict(path=str(p.relative_to(R)),kinds=kinds,bytes=len(b),sha256=H(b),publication='EXCLUDE_RAW_PRESERVE_PRIVATELY'))
+assert len(matches)==12 and all(x['path'].endswith('/runtime-input.json') and x['kinds']==['password-literal'] for x in matches)
+check=dict(credentialFiles=secret_names,additionalLiteralMatchExclusions=matches,fullResourceUrlMatchesOutsideCredentialFiles=[],reason='The admin password literal also equals the synthetic input.agent.policies[0] fixture label. This is a literal collision in raw runtime input, not a URL or newly exposed service credential. Conservatively withhold all 12 matching raw files without changing raw evidence.',initialPackagingCheck='finalize-review exit1: assertion on literal matches. Failure/raw streams retained; no fixture/test rerun.',serviceCredential='Generated in fixture memory, never logged; not available to scanner.',protection='REVIEW directory0700; resource files0600; all outputs private until curated publication.')
+save('credential-exclusion-check.json',check)
+base=(R/'report.md').read_text()
+base=base.replace('No credential URL/password was printed.', 'No full resource URL or credential was deliberately printed. The final publication scan found the admin password literal also equals a synthetic fixture policy label, so all12 matching raw runtime-input files are additionally excluded from publication; their bytes remain private and unchanged.')
+base=base.replace('LOW / I1-LOW-001', 'LOW / I1-LOW-001',1)
+base+='''\nLOW / I1-LOW-002 — publication exclusion collision. The private admin credential literal also appears as the synthetic input.agent.policies[0] label in six supplied and six fresh raw runtime-input.json artifacts. No full credential URL appeared outside the two credential files. The initial packaging assertion intentionally failed on these literal matches (finalize-review exit1; raw stderr preserved). All12 raw files and both credential files are excluded from publication, preserving them privately without editing the fixture or evidence. This is not a native admission failure. The functional run, reconstruction and SQL audit remain exit0. credential-exclusion-check.json records exact paths/bytes/SHA and classification without the literal.\n\nThis final report supersedes report.md and decision-final.json supersedes decision.json for publication/review routing. Earlier drafts and the failed finalizer remain in the private output manifest for audit. No namespace or fixture retry occurred.\n'''
+with (R/'report-final.md').open('x') as f:f.write(base)
+d=json.loads((R/'decision.json').read_text());d['findings'].append(dict(id='I1-LOW-002',severity='LOW',blocking=False,source=['credential-exclusion-check.json','commands/finalize-review/stderr'],finding='Admin password literal equals a synthetic fixture policy label in 12 raw runtime inputs; all literal-matching inputs conservatively excluded from publication and preserved privately.',impact='Publication filtering only; native scoped proof unchanged.',requestedAction='Do not publish excluded raw files. Any later curation must preserve privately authenticated originals.'))
+d['publicationExclusions']=check;d['packagingFailurePreserved']=True;d['canonicalReport']='report-final.md';save('decision-final.json',d)
+print('Private publication exclusions recorded: 2 credential files + 12 unchanged raw runtime inputs. Packaging assertion exit1 preserved; canonical final report/decision written; no fixture retry.')

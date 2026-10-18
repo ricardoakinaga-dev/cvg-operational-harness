@@ -1,0 +1,18 @@
+import json,subprocess,sys,shutil,hashlib
+from pathlib import Path
+base=Path(__file__).parent;source=base/'builder-r1/runs/r4';dest=base/'lead-controls';dest.mkdir(exist_ok=True);out=[]
+def execute(name,path,expected):
+ p=subprocess.run([sys.executable,str(base/'recompute.py'),str(path)],capture_output=True);(dest/(name+'.stdout.log')).write_bytes(p.stdout);(dest/(name+'.stderr.log')).write_bytes(p.stderr);assert (p.returncode==0)==expected,(name,p.stderr[-500:]);out.append({'name':name,'exit':p.returncode,'expectedPass':expected})
+ if expected:(base/'lead-recompute.json').write_bytes(p.stdout)
+execute('actual-final',source,True)
+for name in ['domain-digest','native-runtime-binding','child-process-pid','reserve-order']:
+ run=dest/name;shutil.copytree(source,run,dirs_exist_ok=True,ignore=shutil.ignore_patterns('*private*'))
+ if name=='child-process-pid':
+  path=run/'race-initial/race-result.json';d=json.loads(path.read_text());d['children'][1]['pid']=d['children'][0]['pid']
+ else:
+  path=run/'BA01/positive/result.json';d=json.loads(path.read_text());e=next(x for x in d['events'] if x['type']=='fresh-service-SQL')
+  if name=='domain-digest':e['physical']['checkpoint']['digest']='0'*64
+  elif name=='native-runtime-binding':e['physical']['authority']['request']['runtime']['budget']['maxModelCalls']+=1
+  else:e['commit']=e['entry']
+ path.write_text(json.dumps(d,indent=2)+'\n');execute(name,run,False)
+report={'status':'PASS','controls':out,'knownBadRejected':4,'verifierSHA256':hashlib.sha256((base/'recompute.py').read_bytes()).hexdigest(),'limits':'Privateevidencecorruptionsonly, no native/test/source/dbchanges. DoesnotreplacefreshI1.'};(base/'lead-controls.json').write_text(json.dumps(report,indent=2)+'\n');print(report)

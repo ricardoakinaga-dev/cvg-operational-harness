@@ -1,0 +1,31 @@
+import fs from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {performance} from 'node:perf_hooks';
+import assert from 'node:assert/strict';
+import {parseStrictJson as current} from '../qualification-candidate/tests/claude100/qualification/strict-json.mjs';
+import {parseStrictJson as old} from './old/strict-json.mjs';
+const work='/mnt/ia/cvg-codex100-exec-20261017/qualification-review-r2';
+const candidate='/mnt/ia/cvg-codex100-exec-20261017/qualification-candidate';
+const r1='/mnt/ia/cvg-codex100-exec-20261017/qualification-review-r1';
+const results=[];
+async function check(id,fn){const t=performance.now();try{results.push({id,status:'PASS',details:await fn(),ms:performance.now()-t})}catch(e){results.push({id,status:'FAIL',message:e.stack,ms:performance.now()-t})}}
+const outcome=(parse,token,domain)=>{try{const v=parse(token,domain?{numericDomain:domain}:undefined);return {status:'ACCEPT',value:v,negativeZero:Object.is(v,-0)}}catch(e){return {status:e.status,message:e.message}}};
+const tokens=['0','-0','-0.0','-0e0','0e9999999999999999999999999','-0e9999999999999999999999999','1e999999999999999999999999','1e-999999999999999999999','1e-324','5e-324','1e-323','1e309','1e-309','1e-7','0.1','0.1000000000000000000001','1.0000000000000001','9007199254740991','9007199254740992','9007199254740993','-9007199254740991','-9007199254740992','4503599627370495.5','1e0','1.2300e2','1230000e-4','-1230000e-4','0.00123000e5','0.000000','1.23000000000000000000','2.500e-1','0.000001','123456789012345e-2','01','1.','+1','NaN','{"ignored":-0}','{"ignored":0.1000000000000000000001}','{"x":1,"x":2}'];
+for(const domain of [undefined,'CODEX_EXACT_DECIMAL']) for(const token of tokens) await check('semantics-'+(domain??'default-legacy')+'-'+token,()=>{const a=outcome(old,token,domain),b=outcome(current,token,domain);assert.deepEqual(b,a);return b});
+await check('trailing-scan-long-exact-positive',()=>{const token='123'+'0'.repeat(200000)+'e-200000';assert.equal(current(token,{numericDomain:'CODEX_EXACT_DECIMAL'}),123);return {bytes:token.length,value:123}});
+await check('numeric-bound-unchanged',()=>{assert.throws(()=>current('1e-1001',{numericDomain:'CODEX_EXACT_DECIMAL',maxBytes:7}),e=>e.status==='INVALID_INPUT');assert.equal(current('0e99999',{numericDomain:'CODEX_EXACT_DECIMAL',maxBytes:7}),0)});
+function child(which,timeout=2000) {
+ const module=which==='old' ? new URL('./old/strict-json.mjs',import.meta.url).href : new URL('../qualification-candidate/tests/claude100/qualification/strict-json.mjs',import.meta.url).href;
+ const code=`const {parseStrictJson}=await import(${JSON.stringify(module)});try{parseStrictJson('1'+'0'.repeat(200000)+'1e-200002',{numericDomain:'CODEX_EXACT_DECIMAL'});process.exitCode=7}catch(e){if(e.status!=='INVALID_INPUT')throw e;process.stdout.write(e.message)}`;
+ const t=performance.now();const r=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',timeout,env:{...process.env,TMPDIR:work+'/tmp'}});return {status:r.status,signal:r.signal,error:r.error?.code??null,stdout:r.stdout,stderr:r.stderr,ms:performance.now()-t};
+}
+await check('200K-parser-knownbad-discriminates-R1',()=>{const r=child('old');assert.equal(r.error,'ETIMEDOUT');assert.notEqual(r.status,0);return r});
+await check('200K-parser-current-within-original-2s',()=>{const r=child('current');assert.equal(r.error,null);assert.equal(r.status,0,r.stderr);assert.equal(r.stdout,'JSON number loses exact decimal value on serialization');return r});
+async function copyKnownBad(name) {
+ const source=r1+'/tmp/final-case-001',dest=work+'/tmp/'+name;await fs.mkdir(dest,{mode:0o700});
+ await fs.cp(source,dest,{recursive:true,filter:p=>!p.startsWith(source+'/out')});return dest;
+}
+function cli(root){const args=['--manifest','manifest.json','--catalog','catalog.json','--rule','rule.json','--capture-index','capture-index.json','--authority-index','authority-index.json','--evidence-root',root,'--out','r2-output'];const t=performance.now();const r=spawnSync(process.execPath,[candidate+'/scripts/codex100-qualify.mjs',...args],{encoding:'utf8',timeout:5000,env:{...process.env,TMPDIR:work+'/tmp'}});assert.equal(r.error,undefined);assert.equal(r.signal,null);assert.equal(r.status,1,r.stderr);const d=JSON.parse(r.stdout);assert.equal(d.status,'INVALID_INPUT');assert.equal(d.reviewStatus,'PENDING');assert.equal(d.checks[0].message,'JSON number loses exact decimal value on serialization');assert(d.checks.slice(1).every(x=>x.status==='NOT_RUN'));return {status:d.status,message:d.checks[0].message,ms:performance.now()-t,timeout_ms:5000,reviewStatus:d.reviewStatus};}
+await check('R1-knownbad-raw-reused-through-current-CLI',async()=>{const root=await copyKnownBad('r1-raw');const a=await fs.readFile(r1+'/tmp/final-case-001/catalog.json'),b=await fs.readFile(root+'/catalog.json');assert.deepEqual(b,a);return {catalog_bytes:b.length,...cli(root)}});
+await check('200K-catalog-unprojected-current-CLI',async()=>{const root=await copyKnownBad('200K-raw');const raw=await fs.readFile(root+'/catalog.json','utf8');const oldtoken='1'+'0'.repeat(40000)+'1e-40002';assert.equal(raw.split(oldtoken).length,2);const token='1'+'0'.repeat(200000)+'1e-200002';const updated=raw.replace(oldtoken,token);assert.equal(updated.match(/"execution":/g).length,1);await fs.writeFile(root+'/catalog.json',updated);const {createHash}=await import('node:crypto');const sha=createHash('sha256').update(updated).digest('hex');for(const file of ['manifest.json','capture-index.json','authority-index.json']){const d=JSON.parse(await fs.readFile(root+'/'+file,'utf8'));d.catalogSha256=sha;await fs.writeFile(root+'/'+file,JSON.stringify(d))}return {catalog_bytes:Buffer.byteLength(updated),coefficient_zeros:200000,...cli(root)}});
+const data={node:process.version,total:results.length,passed:results.filter(x=>x.status==='PASS').length,failed:results.filter(x=>x.status==='FAIL').length,results};await fs.writeFile(work+'/closure-controls.results.json',JSON.stringify(data,null,2)+'\n');console.log(JSON.stringify({node:data.node,total:data.total,passed:data.passed,failed:data.failed,failures:results.filter(x=>x.status==='FAIL'),closure:results.slice(-6)}));process.exitCode=data.failed?1:0;

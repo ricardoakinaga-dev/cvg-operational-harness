@@ -1,0 +1,28 @@
+# SPEC0217 R2 — witness causal e resposta de desenho
+
+Estado: STATIC_RECON_AND_DESIGN_ONLY. Autor da revisão documental, sem independência de crítico. BUILD/DB/runtime/network/descendants NOT_RUN; nenhum RuntimePASS. Fonte da demanda: usuário pediu quatro remédios de R1 e somente escrita na SPEC0217/evidence própria. Qualificação C congelada **não lida nem editada**.
+
+## Baseline preservada antes de editar
+
+A SPEC corrente formatada pelo Lead foi conferida contra SHA-256 `a913a0b3baad89abeef6a5169f752767d1525e86ec56ccb79b9dce52492dcbf6` e arquivada em [previous-spec0217.source.txt](previous-spec0217.source.txt) antes da primeira edição. [Crítica R1](critic-r1-review.source.txt) mantém REVISE; [provenance.json](provenance.json) registra seu hash. Acceptance-plan e controles anteriores pequenos foram copiados como `.previous.source.txt`; não apagar histórico nem reclassificar verdict antigo.
+
+## Inspeção causal independente do remédio
+
+- R1: leu o método inteiro `platform-approval-repository.ts:98–198`, checkout tenant-scoped e `controlledApprovals.begin`. Confirmou BEGIN próprio e ausência de leitura de0016/fence/deadline kernel no consumo. Remédio: SPEC4.2 operação NOVA bound, helper transaction-free no mesmo client e lock order explícito, mutação0002/audit/receipt atômicos, unbound preservado. Não chamou método novo fingindo que existe.
+- R2: leu closures/decide step1/step2 em `controlled-kernel-execution.ts:161–320` e o checkpoint pós-dispatch/evaluate do loop/dispatch. Confirmou que S1 antigo capturava plano vazio antes de step2. Remédio:5.1 rotina privada pós-output no wrapper checkpoint1, plano/commands/nextStep2 persistidos antes do seal; resume sem planning/parse adicionais; suppressed planning0.
+- R3: leu `InvocationEvidenceState.io/fail`, `iterative-runtime.ts:887–909,1502+` e `iterative-dispatch.ts:987–1012`. Confirmou intervalo checkpoint1→evaluation audit e latch atual só RAM. Remédio:5.2 write-ahead beginPhase ACK antes de callbacks, seal consumido e estados IDLE_SEALED/OPEN/FAULTED/CLOSED; pares P/P0/N e fronteiras metadata ACK explicitadas. Não promete observar após morte um fault nunca persistido.
+- R4: leu `postgres-outbox.ts` inteiro, forwarders do repository/tenant context, worker/job dispatch, helpers de takeover no postgres.ts, transaction/backoff/result sanitization, conteúdo/idempotência e migration0010. Confirmou duas tx no ACK, effect fora delas, client do ACK retido até retorno, marker só no commit final, lease externo separado, fail/backoff/dead-letter e skip do effect quando marker existe. SPEC2.2 traz linhas e delta de composição; algoritmo do outbox não muda.
+
+## Particularidades do caminho externo realmente observado
+
+claimNext externo aceita processing com lease expirado e avança attempts; não usa recoverExpired0016. ACK preparação valida ownership/journal e commita antes do effect; ACK final revalida owner/lease/takeover e grava marker/status/attempts/audit atomicamente. Kill em S1/S3 antes desse commit deixa marker ausente; B pode reentrar. Kill depois de completion antes do ACK pode encontrar mensagem já completed; marker válido pode pular handler inteiro. Handoff na completion pode causar supressão dead_letter no ACK final, sem marker de êxito. Busy retornado normalmente seria ACKado como resultado: a proposta manda throw retryable.
+
+Continuous worker tem heartbeatClaim opcional, mas este adapter PG só tem fallback de leitura status/owner; não prova renovação temporal nem abort do handler. A R2 seleciona lease externo limitado/perfil concorrência1/poolmax4 e workerId de instância, além de guardas de outer/inner claim e clock na autoridade. São **deltas propostos**, não runtime existente ou testado. O snapshot inclui os helpers usados por esse trace, sem ampliar para qualificação C ou referência externa.
+
+[source-inventory.json](source-inventory.json) e [source-hashes.sha256](source-hashes.sha256) identificam41 fontes com paths/bytes/linhas e cópias inertes `.source.txt`. Apenas a comparação estática de hashes/arquivos próprios será executada no congelamento. Não rodar formatter, link checker, fullproject gates, testes, DB ou certificação nesta lane; Lead os coordena separadamente.
+
+## Aceites e handoff
+
+[Acceptance-plan R2](acceptance-plan.md) é cópia da versão corrente atualizada e deve acompanhar o próximo packet do Lead; a crítica R1 não recebeu esse plano. Ele integra K01–K12, races0002 por conexões distintas, kill antes/depois do plano/seal, pares de phase fault/noACK e marker/attempts do ACK externo real. Tudo PLANNED/NOT_RUN. Fail-all deve falhar os positivos; reset de pending/fault deve falhar os negativos.
+
+Residual: Lead e crítico fresco julgam esta candidata; usuário revisa contrato T3 concreto antes de BUILD, inclusive semântica attempt-local/noACK, linearização de consumo e limites do perfil. Slot/claim0029 e execução K01–K12 são futuros. P100-010 continua parcial; nenhum novo tool/provider/approval channel/efeito sensível/RAG/produção/release foi autorizado. Próxima ação é handoff documental ao Lead, sem implementação.

@@ -1,0 +1,86 @@
+{
+  "kind": "BOUNDED_SOURCE_FINDINGS_NOT_RUNTIME_RACE_PROOF",
+  "spans": [
+    {
+      "id": "NI01-1297-1322",
+      "input": "NI01",
+      "path": "packages/harness/src/execution-spine.ts",
+      "sha256": "4c5ba558917227efb638b9a38642d9850ee189a0635bb18ec5f5628aa085f968",
+      "start_line": 1297,
+      "end_line": 1322,
+      "excerpt": "    const claimed = await this.options.store.claimNext(\n      this.options.tenantId,\n      this.options.workerId,\n      this.now(),\n      this.options.leaseMs\n    )\n    if (!claimed) return { kind: 'idle' }\n    await this.options.faultInjector?.(\n      OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM\n    )\n    this.options.onSignal?.(\n      claimed.recovered ? 'execution.retry_claimed' : 'execution.claimed',\n      claimed.record\n    )\n\n    const running = await this.options.store.transition(\n      {\n        tenantId: this.options.tenantId,\n        executionId: claimed.record.id,\n        to: 'RUNNING',\n        workerId: this.options.workerId,\n        fenceToken: claimed.record.attempt,\n        reason: 'worker_started'\n      },\n      this.now()\n    )"
+    },
+    {
+      "id": "NI01-1335-1356",
+      "input": "NI01",
+      "path": "packages/harness/src/execution-spine.ts",
+      "sha256": "4c5ba558917227efb638b9a38642d9850ee189a0635bb18ec5f5628aa085f968",
+      "start_line": 1335,
+      "end_line": 1356,
+      "excerpt": "    )\n    const heartbeatTimer = setInterval(() => {\n      if (heartbeatInFlight) return\n      heartbeatInFlight = this.options.store\n        .heartbeat(\n          this.options.tenantId,\n          running.id,\n          this.options.workerId,\n          running.attempt,\n          this.now(),\n          this.options.leaseMs\n        )\n        .then(() => undefined)\n        .catch((error: unknown) => {\n          heartbeatError = error\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined\n        })\n    }, heartbeatMs)\n    try {\n      const harnessOptions ="
+    },
+    {
+      "id": "NI01-1370-1397",
+      "input": "NI01",
+      "path": "packages/harness/src/execution-spine.ts",
+      "sha256": "4c5ba558917227efb638b9a38642d9850ee189a0635bb18ec5f5628aa085f968",
+      "start_line": 1370,
+      "end_line": 1397,
+      "excerpt": "            bufferedTelemetry.push(copy(event))\n          }\n        }\n      }\n      const composedOptions = this.options.effectJournal\n        ? {\n            ...optionsWithBufferedSinks,\n            effectJournal: this.options.effectJournal,\n            ...(this.options.effectJournalOptions\n              ? { effectJournalOptions: this.options.effectJournalOptions }\n              : {})\n          }\n        : optionsWithBufferedSinks\n      const harness: OperationalHarness =\n        createOperationalHarness(composedOptions)\n      const resume = deriveExecutionResume(running)\n      result = await harness.execute({\n        ...running.request.runtime,\n        executionId: running.id,\n        ...(running.capabilityFingerprint\n          ? { capabilityFingerprint: running.capabilityFingerprint }\n          : {}),\n        ...(resume ? { resume } : {})\n      })\n    } catch (error) {\n      const message =\n        error instanceof Error ? error.message : 'worker execution failed'\n      const failed = await this.options.store.transition("
+    },
+    {
+      "id": "NI02-259-270",
+      "input": "NI02",
+      "path": "apps/worker/src/operational-harness-worker.ts",
+      "sha256": "0d3e2bd5c4d6e3de283df278457f49e99b12ba23b922fbbe928415f0f4073d23",
+      "start_line": 259,
+      "end_line": 270,
+      "excerpt": "  const effectJournal: EffectJournal | undefined = pool\n    ? new PostgresOperationalEffectJournal(pool as unknown as PostgresPoolLike)\n    : syntheticEffectEnabled || runtimeProfile === 'iterative'\n      ? new InMemoryEffectJournal()\n      : undefined\n  const stepStore: ExecutionStepStore | null =\n    runtimeProfile === 'iterative'\n      ? pool\n        ? new PostgresExecutionStepStore(pool as unknown as PostgresPoolLike)\n        : new InMemoryExecutionStepStore()\n      : null\n  const approvalEngine = new DurableApprovalEngineAdapter(approvalAuthority)"
+    },
+    {
+      "id": "NI03-1234-1253",
+      "input": "NI03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1234,
+      "end_line": 1253,
+      "excerpt": "  private assertLease(\n    record: ExecutionRecord,\n    workerId: string,\n    now: Date,\n    fenceToken: number | undefined\n  ): void {\n    const worker = text(workerId, 'workerId', 120)\n    if (\n      record.leaseOwner !== worker ||\n      fenceToken !== record.attempt ||\n      !record.leaseUntil ||\n      Date.parse(record.leaseUntil) <= now.getTime()\n    ) {\n      throw new OperationalExecutionError(\n        'lease_lost',\n        'Execution lease is not owned by this worker'\n      )\n    }\n  }\n"
+    },
+    {
+      "id": "NI03-1473-1510",
+      "input": "NI03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1473,
+      "end_line": 1510,
+      "excerpt": "  private transition(\n    input: {\n      tenantId: string\n      operationKey: string\n      attemptId: string\n    },\n    state: EffectJournalState,\n    values: { result?: unknown; error?: string } = {}\n  ): Promise<EffectJournalRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const operation = text(input.operationKey, 'operationKey', 240)\n    const attemptId = text(input.attemptId, 'attemptId', 240)\n    const timestamp = new Date()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const selected = await client.query<EffectRow>(\n          `SELECT ${effectColumns}\n             FROM operational_effect_journal\n            WHERE tenant_id = $1 AND operation_key = $2\n            FOR UPDATE`,\n          [tenant, operation]\n        )\n        const row = selected.rows[0]\n        if (!row)\n          throw new OperationalExecutionError(\n            'not_found',\n            'Effect reservation is missing'\n          )\n        if (row.attempt_id !== attemptId) {\n          throw new OperationalExecutionError(\n            'lease_lost',\n            'Effect attempt is fenced'\n          )\n        }\n        if (state === 'EFFECT_STARTED' && row.state !== 'RESERVED') {\n          if (row.state === state) return mapEffect(row)\n          throw new OperationalExecutionError(\n            'invalid_action',"
+    },
+    {
+      "id": "NI04-19-22",
+      "input": "NI04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 19,
+      "end_line": 22,
+      "excerpt": "} from './tenant-scoped-postgres.ts'\n\nexport type OperationalStepPostgresConnection =\n  | PostgresQueryable"
+    },
+    {
+      "id": "NI05-484-491",
+      "input": "NI05",
+      "path": "packages/harness/src/kernel/pipeline.ts",
+      "sha256": "b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272",
+      "start_line": 484,
+      "end_line": 491,
+      "excerpt": "    // a pause or a cancellation still prevents the effect (F01/F02).\n    const blocked = await revalidate(host, call)\n    if (blocked) return { kind: 'not_started', gate: blocked }\n    try {\n      await host.get('effects').started(ref)\n    } catch (error) {\n      return {\n        kind: 'not_started',"
+    },
+    {
+      "id": "NI08-368-403",
+      "input": "NI08",
+      "path": "docs/02_spec/0224_pare100_complete_tool_result_context.md",
+      "sha256": "f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea",
+      "start_line": 368,
+      "end_line": 403,
+      "excerpt": "### 5.3 Exclusão entre escritores e CAS do checkpoint\n\n`ExecutionStepStore.saveCheckpoint` atual não prova exclusão de reservas.\nO modo1 exige a extensão `compareAndSwapCheckpoint` com entrada lógica\n`{tenantId,executionId,expected:{checkpointId,digest}|null,next}` e saída\nAPPLIED com token novo ou CONFLICT. Sem essa extensão a composição recusa\nmodo1 antes de qualquer corpo/modelo; não emular CAS com load seguido de\nsave. Toda escrita de checkpoint2, inclusive inicial, pre-dispatch, reserva,\nsettlement, cursor e terminal, usa a extensão. saveCheckpoint simples deve\nrecusar escrita2 e, no reader novo, impedir escrita1 sobre execução2.\n\nCAS inicial é INSERT condicional se a linha não existir. Demais CAS são\nUPDATE condicional de tenant/execution/checkpointId/digest esperados em uma\ntransação. next tem checkpointId novo a cada escrita, bindings válidos e o\nmesmo modo; alteração zero linhas é conflito e não autoriza chamada. Isso\nimpede ABA de digest sem mudar schema. Store memória implementa a mesma\noperação indivisível em seu estado compartilhado, sem await entre comparação\ne troca. Stores que não conseguem cumprir o contrato não suportam modo1.\n\nNo adaptador PG, conferir autoridade nativa e fence quando bound, manter a\nordem de locks existente, checar saldos/reserva vigente e fazer CAS no mesmo\nclient/transaction. Não abrir transação aninhada/pool separado. Receipt só\nsai após COMMIT. Não manter transação ou row lock durante chamada ao modelo.\nSe dois processos disputarem a mesma reserva, apenas o CAS vencedor recebe\nreceipt; o perdedor retorna STATE_CONFLICT sem chamar modelo/corpo. Ao\ncarregar reserva alheia pendente, tratar como UNKNOWN conservador e parar;\nnão quitá-la, cancelá-la nem tentar outra chamada.\n\nNo caminho unbound, CAS serializa estado/orçamento, mas não cria lease de\nworker/ACK externo. Esta fatia local não mistura writer antigo e novo na\nmesma execução: reader1 é incompatível com escrita2 e a composição isolada\né o único owner autorizado dos IDs de teste. Deploy com binaries mistos,\nintegração nos hosts ou compartilhamento real dessa execução exige o gate\noperacional apropriado; não afirmar que cliente legado arbitrário que já\ntenha acesso direto de escrita ao banco é contido por um contrato novo.\nNa composição bound valem também os fences existentes, sem mudá-los."
+    }
+  ]
+}

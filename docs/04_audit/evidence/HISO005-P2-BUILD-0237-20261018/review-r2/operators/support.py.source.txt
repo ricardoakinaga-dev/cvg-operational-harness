@@ -1,0 +1,42 @@
+import pathlib,json,subprocess,os,hashlib,time
+C=pathlib.Path('/mnt/ia/cvg-hiso005-build0237-20261018'); T=pathlib.Path('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r2'); O=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/HISO005-P2-BUILD-0237-20261018/review-r2'); N='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+ENV={'PATH':str(pathlib.Path(N).parent)+':/usr/bin:/bin','LANG':'C','LC_ALL':'C','TZ':'UTC','TMPDIR':str(T)}
+ENGINE='''import fs from 'node:fs';import {pathToFileURL} from 'node:url';const m=await import(pathToFileURL(process.argv[1]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const before=fs.readdirSync('/proc/self/fd').length;const out=m[p.method||'runSemanticBoundary'](p.input);process.stdout.write(JSON.stringify({output:out,fdBefore:before,fdAfter:fs.readdirSync('/proc/self/fd').length}));'''
+HELPER='''import fs from 'node:fs';import path from 'node:path';import {pathToFileURL} from 'node:url';const m=await import(pathToFileURL(process.argv[1]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const products=[];const before=fs.readdirSync('/proc/self/fd').length;let s,out={};try{s=m.createResolutionSession({root:p.root,limits:p.limits,onProduct:(file,from)=>products.push({file,from})});if(p.action==='read')out.value=s.read(p.file).text;else out.value=s.resolve(p.edge);out.snapshot=s.snapshot();if(p.mutate){const q=path.join(p.root,p.mutate.file);if(p.mutate.action==='replaceLink'){fs.unlinkSync(q);fs.symlinkSync(p.mutate.target,q)}else if(p.mutate.action==='renameParent'){fs.renameSync(q,q+'-old');fs.mkdirSync(q);fs.writeFileSync(path.join(q,'package.json'),'{}')}else fs.writeFileSync(q,p.mutate.text)}try{out.revalidated=s.revalidate()}catch(e){out.revalidationError=e.message}if(out.revalidated)try{out.parentRevalidated=m.revalidateResolutionSnapshot({root:p.root,snapshot:out.snapshot,limits:p.limits})}catch(e){out.parentError=e.message}}catch(e){out.error=e.message;if(s){out.snapshot=s.snapshot();try{out.revalidated=s.revalidate()}catch(e){out.revalidationError=e.message}}}finally{s?.close();s?.close()}out.products=products;out.fdBefore=before;out.fdAfter=fs.readdirSync('/proc/self/fd').length;process.stdout.write(JSON.stringify(out));'''
+ORACLE_ESM="process.stdout.write(import.meta.resolve(process.argv[1]))"
+ORACLE_CJS="const{createRequire}=require('node:module');const{pathToFileURL}=require('node:url');const path=require('node:path');process.stdout.write(createRequire(pathToFileURL(path.resolve('operator-oracle.cjs'))).resolve(process.argv[1]))"
+for name,code in [('engine',ENGINE),('helper',HELPER),('oracle-esm',ORACLE_ESM),('oracle-cjs',ORACLE_CJS)]: (O/('raw/'+name+'.operator.source.txt')).write_text(code+'\n')
+summary=[]
+def run(id,code,args,payload=None,cwd=C,module=True):
+ argv=[N]+(['--input-type=module'] if module else [])+['--eval',code]+args
+ started=time.monotonic(); r=subprocess.run(argv,cwd=cwd,env=ENV,input='' if payload is None else json.dumps(payload),text=True,capture_output=True,timeout=40)
+ receipt={'id':id,'argv':argv,'cwd':str(cwd),'env':ENV,'stdin':'' if payload is None else json.dumps(payload),'stdout':r.stdout,'stderr':r.stderr,'returncode':r.returncode,'elapsedSeconds':time.monotonic()-started}
+ (O/('raw/'+id+'.json')).write_text(json.dumps(receipt,indent=2)+'\n')
+ try: val=json.loads(r.stdout)
+ except: val={'raw':r.stdout}
+ brief={'id':id,'returncode':r.returncode}
+ if 'output' in val:
+  out=val['output'];brief.update(status=out['status'],proofs=len(out.get('proofs',[])),violations=out.get('violations'),unknowns=[u['reason']+':'+u.get('detail','') for u in out.get('unknowns',[])],validation=out.get('validation'),fds=[val['fdBefore'],val['fdAfter']])
+ elif code==HELPER: brief.update(error=val.get('error'),target=val.get('value',{}).get('file') if isinstance(val.get('value'),dict) else val.get('value'),revalidated=val.get('revalidated'),revalidationError=val.get('revalidationError'),products=val.get('products'),fds=[val.get('fdBefore'),val.get('fdAfter')])
+ elif 'contentReads' in val: brief.update(error=val.get('error'),products=val.get('products'),contentReads=val.get('contentReads'),ownedFinal=val.get('ownedFinal'),revalidated=val.get('revalidated'),revalidationError=val.get('revalidationError'))
+ else:brief['raw']=r.stdout if len(r.stdout)<1000 else 'Full stdout in structured receipt'
+ summary.append(brief);print(json.dumps(brief),flush=True);return val
+
+def put(root,p,body):
+ f=root/p; f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(body if isinstance(body,bytes) else body.encode());return f
+
+def fixture(id,files=None,mode='import'):
+ root=T/'fixtures'/id;root.mkdir(parents=True,exist_ok=False)
+ put(root,'package.json',json.dumps({'name':'synthetic-root','type':'module' if mode=='import' else 'commonjs','workspaces':['apps/*','packages/*','legacy/packages/*','products/*']}))
+ for p,b in (files or {}).items():put(root,p,b)
+ return root
+
+def workspace(id,mode='import',exports=None,entry=None,link=None,name='demo'):
+ ext='mjs' if mode=='import' else 'cjs';exports=exports if exports is not None else {'node':'./good.'+ext,'default':'./other.'+ext}
+ root=fixture(id,{'entry.'+ext:entry or ('import {answer} from '+json.dumps(name)+';export const result=answer;' if mode=='import' else 'const p=require('+json.dumps(name)+');module.exports=p;'),'packages/demo/package.json':json.dumps({'name':name,'type':'module' if mode=='import' else 'commonjs','exports':exports}),'packages/demo/good.'+ext:'export const answer=42;' if mode=='import' else 'module.exports=42;','packages/demo/other.'+ext:'export const answer=0;' if mode=='import' else 'module.exports=0;'},mode)
+ l=root/'node_modules'/name;l.parent.mkdir(parents=True,exist_ok=True);l.symlink_to(link or (('../../' if name.startswith('@') else '../')+'packages/demo'));return root,'entry.'+ext
+
+def engine(id,root,start='entry.mjs',**extra):return run(id,ENGINE,[str(C/'scripts/boundary-semantic-engine.mjs')],{'input':{'root':str(root),'starts':[start],'origins':[],'installed':[],'compiled':{'status':'UNAVAILABLE','files':[]},**extra}})
+def helper(id,root,from_='entry.mjs',spec='demo',mode='import',**extra):return run(id,HELPER,[str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root),'edge':{'from':from_,'specifier':spec,'mode':mode},**extra})
+def oracle(id,root,from_='entry.mjs',spec='demo',mode='import'):return run(id,ORACLE_ESM if mode=='import' else ORACLE_CJS,[spec],cwd=(root/from_).parent,module=mode=='import')
+

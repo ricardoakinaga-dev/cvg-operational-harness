@@ -1,0 +1,10 @@
+
+import fs from 'node:fs';import {createHash} from 'node:crypto';
+const base=process.env.I1_REVIEW+'/observed/'+process.env.I1_RUN;fs.mkdirSync(base,{recursive:true});
+config.plugins=[{name:'i1-preserve-transform',enforce:'post',transform(code,id){
+ if(!id.startsWith(config.root+'/') && !id.startsWith(process.env.I1_REVIEW+'/variants/'))return;
+ const h=createHash('sha256').update(id).digest('hex');const f=id.split('?')[0];
+ let original;try{original=fs.readFileSync(f);fs.writeFileSync(base+'/'+h+'.original',original)}catch{}
+ fs.writeFileSync(base+'/'+h+'.transformed',code);
+ fs.appendFileSync(base+'/modules.jsonl',JSON.stringify({id,originalBytes:original?.length,originalSHA256:original?createHash('sha256').update(original).digest('hex'):null,transformedBytes:Buffer.byteLength(code),transformedSHA256:createHash('sha256').update(code).digest('hex'),stem:h})+'\n');
+ }}];export default config;

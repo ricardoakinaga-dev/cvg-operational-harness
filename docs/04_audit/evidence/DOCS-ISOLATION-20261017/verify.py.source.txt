@@ -1,0 +1,37 @@
+from pathlib import Path
+from collections import Counter
+import re,json,hashlib,datetime,subprocess
+R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');E=R/'docs/04_audit/evidence/DOCS-ISOLATION-20261017'
+read=lambda f:(R/f).read_text();jread=lambda f:json.loads((R/f).read_text());sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+b=jread(str(E.relative_to(R)/'baseline.json'));checks=[]
+def check(id,condition,detail):
+ checks.append({'id':id,'status':'PASS' if condition else 'FAIL','detail':detail})
+protected=[x for x in b['files'] if x['protected']];drift=[x['path'] for x in protected if sha(R/x['path'])!=x['sha256']]
+runbook=read('docs/08_runtime/0803_runbook_gates_locais.md');block=runbook.split('4. **`boundary:products`',1)[1].split('5. **Gates concorrentes',1)[0]
+check('DOC-01',all(x in block for x in ['f11f762f6a176417a40d2d53bdb67c633d7e1cef','INCOMPLETE/exit1','12,04s','10,79s','303','471','não integra','npm --prefix']) and '~20 min' not in block and not any(x.startswith('scripts/') for x in drift),'Runbook binds expected result/performance and command to preserved candidate; root checker scripts byte-identical to baseline.')
+authority=jread('docs/04_audit/evidence/USER-DECISIONS-20261016/production-0374.json');backlog=read('docs/03_build/0370_harness_product_isolation_backlog.md');plan=read('docs/03_build/0374_plano_producao_harness.md')
+check('DOC-02',authority['decisions']['B5_HISO010']['choice']=='APROVADO (revisão humana T3)' and 'APPROVED' in backlog and 'check obrigatório do produto' in backlog and 'check obrigatório do produto' in plan and 'production-0374.json' in backlog and 'production-0374.json' in plan,'Both living documents use the immutable16Oct receipt, separating human approval from remote CI/required-check proof.')
+mission=all('ADR-010' in read(x) for x in ['AGENTS.md','docs/07_agents/AGENTS.md','README.md','docs/README.md','docs/99_operational_index.md'])
+nav=all('## Navegação corrente — 30/09/2026' not in read(x) for x in ['docs/README.md','docs/99_operational_index.md'])
+check('DOC-03',mission and nav and 'Direção atual de navegação: ADR-010' in read('docs/08_runtime/agent_coordination.md'),'Mission and current navigation follow ADR010; old UP91 navigation and private checkpoints labelled historical; AGENTS already correct and preserved.')
+check('DOC-04',not drift and all(x in read('products/shift-assistant/docs/spec.md') for x in ['SPEC0177','D1–D4','Barra0368']) and all(x in read('README.md') for x in ['0373','0374','barra 0368 não certifica']),'Frozen contracts/authority/evidence/root source intact; consumer and harness qualification scopes distinct.')
+product=read('products/shift-assistant/docs/backlog.md');before=(E/'before/products--shift-assistant--docs--backlog.md.source.txt').read_text();cards=lambda t:t[t.index('### PISO-001'):]
+piso_ids=re.findall(r'^### (PISO-\d{3})',product,re.M)
+section=backlog.split('## Consumidor isolado — integração com o backlog próprio',1)[1].split('## Rastreabilidade',1)[0]
+check('DOC-05',cards(product)==cards(before) and piso_ids==[f'PISO-{i:03}' for i in range(1,11)] and '- Estado:' not in section and section.count('[Cartão canônico no consumidor]')==10,'All10functional PISO cards byte-preserved; root has10links and no PISO status copy.')
+ap=read('products/shift-assistant/docs/requisitos-ap.md');ap_before=(E/'before/products--shift-assistant--docs--requisitos-ap.md.source.txt').read_text()
+rows=lambda t: [s for s in t.splitlines() if re.match(r'^\| AP-\d{3}',s)]
+links=lambda t:re.findall(r'\]\(([^)]+)\)',t)
+apids=lambda t:re.findall(r'^\| (AP-\d{3})',t,re.M)
+map_ok=apids(ap)==apids(ap_before)==[f'AP-{i:03}' for i in range(1,17)] and [links(x) for x in rows(ap)]==[links(x) for x in rows(ap_before)]
+files=['spec.md','backlog.md','requisitos-ap.md','operacao-local.md','guia-plantonista.md','homologacao-corpus.md'];map_ok=map_ok and all((R/'products/shift-assistant/docs'/x).is_file() for x in files) and 'Mapa documental e de autoridade' in ap
+check('DOC-06',map_ok,'All16AP IDs and original canonical card links preserved; documentary authority/operation/guide/corpus map complete; no new AP status queue.')
+policy=jread('docs/doc-link-policy.json');moves=[x for x in policy['movedTargets'] if x['new'].startswith('products/shift-assistant/')]
+move_rows=[dict(old=x['old'],new=x['new'],oldAbsent=not (R/x['old']).exists(),newPresent=(R/x['new']).is_file(),sha256Before=x['sha256Before']) for x in moves]
+check('DOC-07',len(moves)==20 and all(x['oldAbsent'] and x['newPresent'] for x in move_rows) and not drift,'Exact20consumer relocation entries resolve; policy and17protected contracts/decisions/evidence/source files unchanged. Historical sha256Before not confused with current target content.')
+# Navigation-only public API change must preserve every fenced example and substantive scope.
+api=read('docs/architecture/PUBLIC_API.md');api0=(E/'before/docs--architecture--PUBLIC_API.md.source.txt').read_text()
+assert re.findall(r'```[\s\S]*?```',api)==re.findall(r'```[\s\S]*?```',api0)
+# Later final audit checks DOC08 after reviewer and ledgers/card closure.
+report={'task':'DOCS-ISOLATION-20261017','observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'checks':checks,'protectedFileCount':len(protected),'protectedDrift':drift,'pisoFunctionalCardsByteIdentical':cards(product)==cards(before),'consumerMoves':move_rows,'publicApiFencedExamplesUnchanged':True}
+(E/'invariants.json').write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n');print(json.dumps({'checks':checks,'protectedDrift':drift},indent=2,ensure_ascii=False));assert all(x['status']=='PASS' for x in checks)

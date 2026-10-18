@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "config_path": "/profile/adapter-config.json",
+  "config": {
+    "attempt": "40hex nonce",
+    "case": "19 source caseID or DIAG-*",
+    "nonce": "40hex readonly nonce",
+    "language": "python|typescript",
+    "deadline_seconds": 30,
+    "fifo_root": "/observer",
+    "fifo_nodes": "role.events / role.control for driver,adapter,peer",
+    "fifo_stat": "expected map path->[dev_decimal_string,ino_decimal_string,mode0600,sandbox_uid0]; host keeper opens before spawn",
+    "peer_argv": "frozen executable/argv list (no arbitrary command received from controls)",
+    "case_input": "exact copied cases.json row fixture_input",
+    "mode": "diagnostic|sdk;diagnostic never imports targets"
+  },
+  "event_envelope": {
+    "v": 1,
+    "attempt": "config.attempt",
+    "case": "config.case",
+    "role": "driver|adapter|peer",
+    "seq": "successive integer starting0,<=100000",
+    "kind": "BEGIN|READY|RAW_READ|FORWARD_COMMIT|STREAM_END|REQUEST_HELD|API_CANCELLED|HOOK_CLOSED|API_RESULT|API_ERROR|SIGNAL|END|INVALID|PEER_MILESTONE|DIAGNOSTIC",
+    "pid": "local integer PID",
+    "mono_ns": "decimal string",
+    "data": "kind-specific JSON object"
+  },
+  "event_data": {
+    "BEGIN": [
+      "nonce",
+      "source_sha256",
+      "pid_namespace"
+    ],
+    "RAW_READ": {
+      "stream": "stdin|stdout|stderr",
+      "offset": "integer0based raw-read byte offset",
+      "base64": "rawchunk<=2048bytes",
+      "sha256": "chunkSHA256"
+    },
+    "FORWARD_COMMIT": {
+      "stream": "stdin|stdout|stderr",
+      "offset": "committed stream offset before this count",
+      "bytes": "actual completed write count,positive<=2048"
+    },
+    "STREAM_END": {
+      "stream": "stdin|stdout|stderr",
+      "read_bytes": "int",
+      "committed_bytes": "int",
+      "read_sha256": "hex"
+    },
+    "END": {
+      "streams": "dict stream->{read_bytes,committed_bytes,read_sha256}",
+      "child_exit_code": "int|null",
+      "child_signal": "string|null",
+      "complete": "bool"
+    }
+  },
+  "framing": "One write: uint32be payloadLength+UTF8compactJSON;len<=4096;metadata<=1024 excluding base64;PC_PIPE_BUF>=4096;no partial-frame writes/duplicateJSONkeys/NaN/unknown kinds or fields/oversize silently accepted. Zero or ambiguous commit -> INVALID, not counter success.",
+  "controls": {
+    "v": 1,
+    "attempt": "config.attempt",
+    "case": "config.case",
+    "role": "recipient",
+    "seq": "int starting0",
+    "command": "READY|RELEASE_REPLY|RELEASE_EXIT|ABORT_NOW|FINISH_PEER"
+  },
+  "semantics": "Strict per-role seq, independent per-stream offsets/commits; raw before forward, commit only after actual complete/partial known OS write. Unknown partial on error invalidates. No control in SDK stdio. Each role reopens own named FIFOs after exec, NOFOLLOW+CLOEXEC+nonblock,stat before/after type/ownership/mode/inode;no passedextraSDKFD.",
+  "limits": {
+    "stdout": 262144,
+    "stdin": 262144,
+    "stderr": 65536,
+    "case_artifacts": 2097152,
+    "raw_chunk": 2048,
+    "frame": 4096,
+    "signal_commit_seconds": 0.1
+  },
+  "source_modules": {
+    "Python": "channel.py,adapter-python.py,fixture-rpc.py,python-driver.py (Lead)",
+    "Node": "channel.cjs,adapter-typescript (node shebang CommonJS),fixture-cli.mjs,ts-driver.mjs,transpile.mjs,extension-loader.mjs (builder)"
+  },
+  "driver_policy": "SDK target imports strictly inside sdk-mode after future admission; diagnostic mode only constant fixtures/ownhelpers. TS compiler/transpile code source prepared but not executed now. No top-level SDK/TypeScript imports. All19 concrete source cases remain required, not dummy JSON success; returned API lane always from actual SDK calls when later admitted."
+}

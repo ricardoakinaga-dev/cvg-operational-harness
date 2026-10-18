@@ -1,0 +1,112 @@
+--- a/packages/orchestrator/src/hybrid-orchestrator.ts
++++ b/packages/orchestrator/src/hybrid-orchestrator.ts
+@@ -430,7 +430,12 @@
+         )
+       }
+       return context.toolResultContext
+-        ? { decision, decisionAdmissionIds: [] }
++        ? {
++            decision,
++            decisionAdmissionIds: [
++              ...(context.toolResultContext.settledDecisionAdmissionIds ?? [])
++            ]
++          }
+         : { decision, usage: EMPTY_MODEL_USAGE }
+     }
+ 
+@@ -552,7 +557,11 @@
+       }
+     }
+     let selected = completeItems(context)
+-    const decisionAdmissionIds: string[] = []
++    // Native validation may re-enter the same step after a settled turn.
++    // Report those receipts too; their usage has already been charged.
++    const decisionAdmissionIds: string[] = [
++      ...(context.toolResultContext?.settledDecisionAdmissionIds ?? [])
++    ]
+     let errors: readonly string[] = context.decisionRepair?.errors ?? []
+     let repairs = 0
+     while (true) {
+--- a/packages/orchestrator/src/__tests__/complete-tool-context.test.ts
++++ b/packages/orchestrator/src/__tests__/complete-tool-context.test.ts
+@@ -316,6 +316,80 @@
+     })
+     expect(l.complete).not.toHaveBeenCalled()
+     expect(l.measure).not.toHaveBeenCalled()
++  })
++
++  it('returns existing native settled receipts from rules without another model call or usage charge', async () => {
++    const l = lane()
++    const modeled = await new HybridOrchestrator(l.options).decide(l.input)
++    const existing = Object.freeze([...modeled.decisionAdmissionIds!])
++    const ruleTurn = await new HybridOrchestrator({
++      rules: [() => decision as never]
++    }).decide({
++      ...l.input,
++      context: context({
++        decisionRepair: {
++          attempt: 1,
++          errors: ['native validation rejected prior turn']
++        },
++        toolResultContext: {
++          version: 1,
++          requiredObservationIds: [],
++          settledDecisionAdmissionIds: existing
++        }
++      })
++    })
++    expect(ruleTurn).toEqual({
++      decision,
++      decisionAdmissionIds: ['admission.0']
++    })
++    expect(existing).toEqual(['admission.0'])
++    expect(l.complete).toHaveBeenCalledTimes(1)
++    expect(l.measure).toHaveBeenCalledTimes(1)
++    expect(l.reserve).toHaveBeenCalledTimes(1)
++    expect(l.settle).toHaveBeenCalledTimes(1)
++  })
++
++  it('prefixes reentered same-step repair receipts with all prior native settled IDs without mutating or charging them', async () => {
++    const l = lane()
++    const orchestrator = new HybridOrchestrator(l.options)
++    const first = await orchestrator.decide(l.input)
++    const existing = Object.freeze([...first.decisionAdmissionIds!])
++    l.complete
++      .mockResolvedValueOnce(result({ text: 'not JSON' }))
++      .mockResolvedValueOnce(result())
++    const turn = await orchestrator.decide({
++      ...l.input,
++      context: context({
++        decisionRepair: {
++          attempt: 1,
++          errors: ['native validation rejected prior turn']
++        },
++        toolResultContext: {
++          version: 1,
++          requiredObservationIds: [],
++          settledDecisionAdmissionIds: existing
++        }
++      })
++    })
++    expect(turn).toEqual({
++      decision,
++      decisionAdmissionIds: ['admission.0', 'admission.1', 'admission.2']
++    })
++    expect(turn).not.toHaveProperty('usage')
++    expect(existing).toEqual(['admission.0'])
++    expect(l.complete).toHaveBeenCalledTimes(3)
++    expect(l.reserve).toHaveBeenCalledTimes(3)
++    expect(l.settle).toHaveBeenCalledTimes(3)
++    expect(l.settlements.map((settlement) => settlement.admissionId)).toEqual([
++      'admission.0',
++      'admission.1',
++      'admission.2'
++    ])
++    expect(l.snapshots.map((snapshot) => snapshot.purpose)).toEqual([
++      'ORCHESTRATION',
++      'REPAIR',
++      'REPAIR'
++    ])
+   })
+ 
+   it.each([

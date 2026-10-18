@@ -1,0 +1,2161 @@
+--- /dev/null
++++ b/scripts/boundary-semantic-resolution.mjs
+@@ -0,0 +1,1172 @@
++// SPEC0237: resolution and physical premises only. Never load target modules.
++import fs from 'node:fs'
++import path from 'node:path'
++import { createHash } from 'node:crypto'
++import { isBuiltin } from 'node:module'
++import { fileURLToPath, pathToFileURL } from 'node:url'
++
++export const RESOLUTION_PROFILE = 'linux-rootfd-workspace-v1'
++export const RESOLUTION_LIMITS = Object.freeze({
++  maxWorkspaces: 512,
++  maxLinks: 512,
++  maxLinkBytes: 4096,
++  maxPathComponents: 64,
++  maxOpenDescriptors: 72
++})
++const HARD = Object.freeze({
++  maxFileBytes: 16 * 1024 ** 2,
++  maxTotalBytes: 256 * 1024 ** 2,
++  maxFiles: 12000
++})
++// The engine passes its frozen hard acquisition/interpreter envelope. Only
++// acquisition and the five resolution caps are consumed by this helper.
++const INTERPRETER = Object.freeze({
++  maxNodes: 2000000,
++  maxUnionValues: 128,
++  maxContexts: 64,
++  maxCallDepth: 64,
++  maxStates: 100000,
++  timeoutMs: 120000
++})
++const hash = (v) => createHash('sha256').update(v).digest('hex')
++const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
++const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
++const encode = (v) => JSON.stringify(v)
++const fail = (reason, file = '') => {
++  throw Error(reason + (file ? ':' + file : ''))
++}
++const generation = (s) =>
++  Object.fromEntries(
++    [
++      'dev',
++      'ino',
++      'mode',
++      'nlink',
++      'uid',
++      'gid',
++      'size',
++      'mtimeNs',
++      'ctimeNs'
++    ].map((key) => [key, String(s[key])])
++  )
++const same = (a, b) => encode(a) === encode(b)
++function utf8(bytes, file) {
++  // Buffer roundtrip rejects lone surrogates as well as malformed byte strings.
++  const text = bytes.toString('utf8')
++  if (!Buffer.from(text).equals(bytes) || /[\u0000-\u001f\u007f]/.test(text))
++    fail('UNKNOWN_METADATA_ENCODING', file)
++  return text
++}
++function textFile(bytes, file) {
++  const text = bytes.toString('utf8')
++  if (!Buffer.from(text).equals(bytes)) fail('UNKNOWN_INPUT_ENCODING', file)
++  return text
++}
++function limitsFor(input) {
++  const result = { ...HARD, ...RESOLUTION_LIMITS }
++  if (input === undefined) return result
++  if (!object(input)) fail('UNKNOWN_INVALID_LIMITS')
++  for (const [key, value] of Object.entries(input)) {
++    const ceiling = result[key] ?? INTERPRETER[key]
++    if (
++      ceiling === undefined ||
++      !Number.isSafeInteger(value) ||
++      value < 0 ||
++      value > ceiling
++    )
++      fail('UNKNOWN_INVALID_LIMITS')
++    if (Object.hasOwn(result, key)) result[key] = value
++  }
++  return result
++}
++const component = (v) =>
++  typeof v === 'string' &&
++  v.length > 0 &&
++  !/[\\/\u0000-\u001f\u007f]/.test(v) &&
++  v !== '.' &&
++  v !== '..' &&
++  Buffer.from(v).toString('utf8') === v
++const asciiPart = (v) =>
++  /^[A-Za-z0-9_@+.-]+$/.test(v) &&
++  v !== '.' &&
++  v !== '..' &&
++  v.toLowerCase() !== 'node_modules'
++const packagePart = (v) =>
++  /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v) && v !== '.' && v !== '..'
++const dirname = (v) =>
++  path.posix.dirname(v) === '.' ? '' : path.posix.dirname(v)
++const at = (dir, file) => (dir ? dir + '/' + file : file)
++const flags =
++  fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
++const dirFlags = flags | fs.constants.O_DIRECTORY
++
++export function createResolutionSession({
++  root,
++  limits,
++  onProduct = () => {}
++} = {}) {
++  const caps = limitsFor(limits)
++  if (process.platform !== 'linux') fail('UNKNOWN_ACQUISITION_PLATFORM')
++  if (
++    typeof root !== 'string' ||
++    !path.isAbsolute(root) ||
++    path.normalize(root) !== root ||
++    root === '/' ||
++    Buffer.from(root).toString('utf8') !== root ||
++    /[\u0000-\u001f\u007f]/.test(root)
++  )
++    fail('UNKNOWN_ROOT')
++  if (typeof onProduct !== 'function') fail('UNKNOWN_PRODUCT_CALLBACK')
++  const fds = new Set(),
++    directories = new Set(),
++    premises = new Map(),
++    inputs = new Map(),
++    cache = new Map()
++  const charged = new Set(),
++    resolutions = [],
++    workspaceNames = new Set(),
++    linkNames = new Set()
++  const usage = {
++    fileBytes: 0,
++    totalBytes: 0,
++    files: 0,
++    workspaces: 0,
++    links: 0,
++    linkBytes: 0,
++    pathComponents: 0,
++    openDescriptors: 0
++  }
++  let rootfd,
++    closed = false
++  const check = () => {
++    if (closed) fail('UNKNOWN_CLOSED_SESSION')
++  }
++  function io(fn, file = '') {
++    try {
++      return fn()
++    } catch (error) {
++      if (/^UNKNOWN_/.test(error.message)) throw error
++      const code = /^[A-Z0-9_]+$/.test(error.code || '') ? error.code : 'IO'
++      fail('UNKNOWN_ACQUISITION_' + code, file)
++    }
++  }
++  function open(file, mode, logical) {
++    if (fds.size + directories.size >= caps.maxOpenDescriptors)
++      fail('UNKNOWN_RESOLUTION_LIMIT:maxOpenDescriptors')
++    const fd = io(() => fs.openSync(file, mode), logical)
++    fds.add(fd)
++    usage.openDescriptors = Math.max(
++      usage.openDescriptors,
++      fds.size + directories.size
++    )
++    return fd
++  }
++  function closeFD(fd) {
++    if (fds.delete(fd)) fs.closeSync(fd)
++  }
++  function close() {
++    if (closed) return
++    closed = true
++    let error
++    for (const directory of [...directories]) {
++      try {
++        directory.closeSync()
++      } catch {
++        error = true
++      }
++      directories.delete(directory)
++    }
++    for (const fd of [...fds]) {
++      try {
++        closeFD(fd)
++      } catch {
++        error = true
++      }
++    }
++    if (error) fail('UNKNOWN_ACQUISITION_CLOSE')
++  }
++  function charge(key, size) {
++    usage.fileBytes = Math.max(usage.fileBytes, size)
++    if (size > caps.maxFileBytes) fail('UNKNOWN_ANALYSIS_LIMIT:maxFileBytes')
++    if (charged.has(key)) return
++    if (usage.files >= caps.maxFiles) fail('UNKNOWN_ANALYSIS_LIMIT:maxFiles')
++    if (usage.totalBytes + size > caps.maxTotalBytes)
++      fail('UNKNOWN_ANALYSIS_LIMIT:maxTotalBytes')
++    charged.add(key)
++    usage.files++
++    usage.totalBytes += size
++  }
++  function put(kind, file, data, bytes, physicalKey = kind + ':' + file) {
++    const key = kind + ':' + file
++    const entry = { kind, file, ...data }
++    if (premises.has(key) && !same(premises.get(key), entry))
++      fail('UNKNOWN_RESOLUTION_MUTATION', file)
++    premises.set(key, entry)
++    const raw = bytes === undefined ? Buffer.from(encode(data)) : bytes
++    inputs.set(key, { kind, file, sha256: hash(raw) })
++    charge(physicalKey, raw.length)
++    return entry
++  }
++  function stat(file, s) {
++    const g = generation(s)
++    put('stat', file, { stat: g }, undefined, 'stat:' + s.dev + ':' + s.ino)
++    return g
++  }
++  function parts(file, allowRoot = false) {
++    check()
++    if (allowRoot && file === '') return []
++    if (
++      typeof file !== 'string' ||
++      path.posix.isAbsolute(file) ||
++      !file.split('/').every(component)
++    )
++      fail('UNKNOWN_PATH')
++    const p = file.split('/')
++    usage.pathComponents = Math.max(usage.pathComponents, p.length)
++    if (p.length > caps.maxPathComponents)
++      fail('UNKNOWN_RESOLUTION_LIMIT:maxPathComponents')
++    return p
++  }
++  const proc = (fd, leaf = '') =>
++    '/proc/self/fd/' + fd + (leaf ? '/' + leaf : '')
++  function lstat(fd, leaf, logical) {
++    try {
++      return fs.lstatSync(proc(fd, leaf), { bigint: true })
++    } catch (error) {
++      if (error.code === 'ENOENT') return null
++      io(() => {
++        throw error
++      }, logical)
++    }
++  }
++  function assertSame(before, after, file) {
++    if (!same(generation(before), generation(after)))
++      fail('UNKNOWN_INPUT_MUTATION', file)
++  }
++  // Every parent is a held, nofollow directory. Check its entry relative to
++  // its own held parent again, even if the operation throws or records absence.
++  function walk(file, leafAction) {
++    const p = parts(file),
++      opened = [],
++      chain = []
++    let fd = rootfd,
++      prefix = ''
++    try {
++      stat(
++        '',
++        io(() => fs.fstatSync(rootfd, { bigint: true }))
++      )
++      for (const name of p.slice(0, -1)) {
++        const logical = at(prefix, name),
++          before = lstat(fd, name, logical)
++        if (!before) {
++          put('absence', logical, { parent: prefix })
++          return leafAction(null, null, file, logical)
++        }
++        stat(logical, before)
++        if (!before.isDirectory())
++          fail(
++            before.isSymbolicLink()
++              ? 'UNKNOWN_ANCESTOR_SYMLINK'
++              : 'UNKNOWN_ANCESTOR_FORMAT',
++            logical
++          )
++        const next = open(proc(fd, name), dirFlags, logical)
++        opened.push(next)
++        assertSame(
++          before,
++          io(() => fs.fstatSync(next, { bigint: true }), logical),
++          logical
++        )
++        chain.push({ fd, name, next, before, logical })
++        prefix = logical
++        fd = next
++      }
++      return leafAction(fd, p.at(-1), file)
++    } finally {
++      try {
++        for (const c of chain) {
++          const current = lstat(c.fd, c.name, c.logical)
++          if (!current) fail('UNKNOWN_INPUT_MUTATION', c.logical)
++          assertSame(c.before, current, c.logical)
++          assertSame(
++            c.before,
++            io(() => fs.fstatSync(c.next, { bigint: true }), c.logical),
++            c.logical
++          )
++        }
++        stat(
++          '',
++          io(() => fs.fstatSync(rootfd, { bigint: true }))
++        )
++      } finally {
++        for (const owned of opened.reverse()) closeFD(owned)
++      }
++    }
++  }
++  function inspect(file) {
++    return walk(file, (fd, leaf, logical, missing) => {
++      if (fd === null) {
++        put('absence', logical, { missing })
++        return null
++      }
++      const s = lstat(fd, leaf, logical)
++      if (!s) {
++        put('absence', logical, { parent: dirname(logical) })
++        return null
++      }
++      stat(logical, s)
++      return s
++    })
++  }
++  function probe(file) {
++    return inspect(file) !== null
++  }
++  function read(file) {
++    return walk(file, (fd, leaf, logical) => {
++      if (fd === null) fail('UNKNOWN_ACQUISITION_ENOENT', logical)
++      const before = lstat(fd, leaf, logical)
++      if (!before) {
++        put('absence', logical, { parent: dirname(logical) })
++        fail('UNKNOWN_ACQUISITION_ENOENT', logical)
++      }
++      stat(logical, before)
++      if (!before.isFile())
++        fail(
++          before.isSymbolicLink() ? 'UNKNOWN_SYMLINK' : 'UNKNOWN_FORMAT',
++          logical
++        )
++      const size = Number(before.size)
++      if (!Number.isSafeInteger(size) || size > caps.maxFileBytes)
++        fail('UNKNOWN_ANALYSIS_LIMIT:maxFileBytes')
++      const physicalKey = 'file:' + before.dev + ':' + before.ino
++      // Reserve the bounded size before allocation, including on error.
++      charge(physicalKey, size)
++      const owned = open(proc(fd, leaf), flags, logical)
++      try {
++        assertSame(
++          before,
++          io(() => fs.fstatSync(owned, { bigint: true }), logical),
++          logical
++        )
++        const bytes = Buffer.alloc(size + 1)
++        let length = 0
++        while (length < bytes.length) {
++          const n = io(
++            () =>
++              fs.readSync(owned, bytes, length, bytes.length - length, length),
++            logical
++          )
++          if (!n) break
++          length += n
++        }
++        if (length !== size) fail('UNKNOWN_INPUT_MUTATION', logical)
++        const after = io(() => fs.fstatSync(owned, { bigint: true }), logical)
++        assertSame(before, after, logical)
++        const present = lstat(fd, leaf, logical)
++        if (!present) fail('UNKNOWN_INPUT_MUTATION', logical)
++        assertSame(before, present, logical)
++        const raw = bytes.subarray(0, size),
++          sha256 = hash(raw)
++        put(
++          'file',
++          logical,
++          { sha256, stat: generation(after) },
++          raw,
++          physicalKey
++        )
++        const result = {
++          bytes: raw,
++          text: textFile(raw, logical),
++          sha256,
++          stat: after
++        }
++        // Cache never authorizes a stale read; reacquisition above is mandatory.
++        if (cache.has(logical) && cache.get(logical) !== sha256)
++          fail('UNKNOWN_INPUT_MUTATION', logical)
++        cache.set(logical, sha256)
++        return result
++      } finally {
++        closeFD(owned)
++      }
++    })
++  }
++  function json(file) {
++    const { text } = read(file)
++    let body
++    try {
++      body = JSON.parse(text)
++    } catch {
++      fail('UNKNOWN_INVALID_MANIFEST', file)
++    }
++    if (!object(body)) fail('UNKNOWN_INVALID_MANIFEST', file)
++    return body
++  }
++  function inventory(file) {
++    parts(file, true)
++    // A sentinel lets the same parent walker acquire the directory itself.
++    return walk(at(file, '__inventory__'), (parent) => {
++      if (parent === null) fail('UNKNOWN_WORKSPACE_CONFIG', file)
++      const before = io(() => fs.fstatSync(parent, { bigint: true }), file)
++      if (fds.size + directories.size >= caps.maxOpenDescriptors)
++        fail('UNKNOWN_RESOLUTION_LIMIT:maxOpenDescriptors')
++      const directory = io(
++        () => fs.opendirSync(proc(parent), { encoding: 'buffer' }),
++        file
++      )
++      directories.add(directory)
++      usage.openDescriptors = Math.max(
++        usage.openDescriptors,
++        fds.size + directories.size
++      )
++      const raw = []
++      let size = 0,
++        partial = false
++      try {
++        while (true) {
++          const entry = io(() => directory.readSync(), file)
++          if (entry === null) break
++          const name = entry.name
++          if (!Buffer.isBuffer(name)) fail('UNKNOWN_METADATA_ENCODING', file)
++          raw.push(name)
++          size += name.length + 1
++          // Bound allocation while streaming, before materializing an inventory.
++          if (
++            raw.length > HARD.maxFiles ||
++            size > caps.maxFileBytes ||
++            usage.totalBytes + size > caps.maxTotalBytes
++          ) {
++            partial = true
++            break
++          }
++        }
++      } finally {
++        try {
++          io(() => directory.closeSync(), file)
++        } finally {
++          directories.delete(directory)
++        }
++      }
++      raw.sort(Buffer.compare)
++      assertSame(
++        before,
++        io(() => fs.fstatSync(parent, { bigint: true }), file),
++        file
++      )
++      put(
++        'inventory',
++        file,
++        {
++          rawHex: raw.map((b) => b.toString('hex')),
++          partial,
++          stat: generation(before)
++        },
++        Buffer.concat(raw.flatMap((b) => [b, Buffer.from([0])]))
++      )
++      if (partial) fail('UNKNOWN_ANALYSIS_LIMIT:maxFiles')
++      const names = raw.map((b) => utf8(b, file))
++      if (!names.every(component)) fail('UNKNOWN_METADATA_ENCODING', file)
++      return names
++    })
++  }
++  function link(file, from, census = false) {
++    return walk(file, (fd, leaf, logical) => {
++      if (fd === null) fail('UNKNOWN_ACQUISITION_ENOENT', logical)
++      const before = lstat(fd, leaf, logical)
++      if (!before?.isSymbolicLink()) fail('UNKNOWN_LINK_FORMAT', logical)
++      stat(logical, before)
++      if (Number(before.size) > RESOLUTION_LIMITS.maxLinkBytes)
++        fail('UNKNOWN_RESOLUTION_LIMIT:maxLinkBytes')
++      const bytes = io(
++        () => fs.readlinkSync(proc(fd, leaf), { encoding: 'buffer' }),
++        logical
++      )
++      usage.linkBytes = Math.max(usage.linkBytes, bytes.length)
++      if (bytes.length > RESOLUTION_LIMITS.maxLinkBytes)
++        fail('UNKNOWN_RESOLUTION_LIMIT:maxLinkBytes')
++      const after = lstat(fd, leaf, logical)
++      if (!after) fail('UNKNOWN_INPUT_MUTATION', logical)
++      assertSame(before, after, logical)
++      put(
++        'link',
++        logical,
++        {
++          rawHex: bytes.toString('hex'),
++          sha256: hash(bytes),
++          stat: generation(after)
++        },
++        bytes
++      )
++      const raw = utf8(bytes, logical)
++      if (from !== undefined) classifyRaw(raw, from, dirname(logical))
++      if (!linkNames.has(logical)) {
++        if (linkNames.size >= RESOLUTION_LIMITS.maxLinks)
++          fail('UNKNOWN_RESOLUTION_LIMIT:maxLinks')
++        linkNames.add(logical)
++        usage.links = linkNames.size
++      }
++      if (!census) enforceLinkCaps()
++      return raw
++    })
++  }
++  function enforceLinkCaps() {
++    if (usage.linkBytes > caps.maxLinkBytes)
++      fail('UNKNOWN_RESOLUTION_LIMIT:maxLinkBytes')
++    if (usage.links > caps.maxLinks) fail('UNKNOWN_RESOLUTION_LIMIT:maxLinks')
++  }
++  function product(file, from) {
++    if (file === 'products' || file.startsWith('products/'))
++      onProduct(file, from)
++  }
++  function classifyRaw(raw, from, base = '') {
++    if (typeof raw !== 'string') return
++    // Classification never authorizes acquisition. Even rejected spellings can
++    // identify a known product; normalization is used here only for the census.
++    let result
++    if (path.isAbsolute(raw))
++      result = path.relative(root, raw).split(path.sep).join('/')
++    else result = path.posix.normalize(at(base, raw))
++    product(result, from)
++  }
++  function censusLinks(file, from) {
++    // This negative census never grants an owner or opens a target's content.
++    // Walk each component so an intermediate alias to a product is visible
++    // without asking the OS to traverse that alias.
++    const seen = new Set()
++    let pending = file
++    for (let hop = 0; hop < RESOLUTION_LIMITS.maxLinks; hop++) {
++      product(pending, from)
++      if (pending === 'products' || pending.startsWith('products/')) return
++      if (seen.has(pending)) return
++      seen.add(pending)
++      const segments = pending.split('/')
++      if (
++        segments.length > RESOLUTION_LIMITS.maxPathComponents ||
++        !segments.every(component)
++      )
++        return
++      let redirected = false
++      for (let i = 0; i < segments.length; i++) {
++        const prefix = segments.slice(0, i + 1).join('/')
++        const s = inspect(prefix)
++        if (!s) return
++        if (s.isSymbolicLink()) {
++          const raw = link(prefix, from, true)
++          let target = path.isAbsolute(raw)
++            ? path.relative(root, raw).split(path.sep).join('/')
++            : path.posix.normalize(at(dirname(prefix), raw))
++          classifyRaw(raw, from, dirname(prefix))
++          if (
++            target.startsWith('../') ||
++            target === '..' ||
++            path.isAbsolute(target)
++          )
++            return
++          const tail = segments.slice(i + 1).join('/')
++          if (tail) target = path.posix.normalize(at(target, tail))
++          pending = target
++          redirected = true
++          break
++        }
++        if (i < segments.length - 1 && !s.isDirectory()) return
++      }
++      if (!redirected) return
++    }
++  }
++  function manifestAt(file) {
++    let dir = dirname(file)
++    while (true) {
++      const candidate = at(dir, 'package.json')
++      if (probe(candidate))
++        return { manifest: candidate, body: json(candidate) }
++      if (path.posix.basename(dir) === 'node_modules')
++        fail('UNKNOWN_PACKAGE_SCOPE', dir)
++      if (!dir) return null
++      dir = dirname(dir)
++    }
++  }
++  function workspaces() {
++    const rootBody = json('package.json'),
++      patterns = rootBody.workspaces
++    const allowed = ['apps/*', 'packages/*', 'legacy/packages/*', 'products/*']
++    if (
++      !Array.isArray(patterns) ||
++      new Set(patterns).size !== patterns.length ||
++      patterns.some((p) => !allowed.includes(p))
++    )
++      fail('UNKNOWN_WORKSPACE_CONFIG')
++    const found = new Map()
++    for (const pattern of [...patterns].sort(compare)) {
++      const parent = pattern.slice(0, -2)
++      if (!probe(parent)) continue
++      for (const name of inventory(parent)) {
++        const key = parent + '/' + name
++        if (!packagePart(name)) fail('UNKNOWN_WORKSPACE_CONFIG', key)
++        const s = inspect(key)
++        if (!s?.isDirectory()) fail('UNKNOWN_WORKSPACE_CONFIG', key)
++        if (!workspaceNames.has(key)) {
++          if (workspaceNames.size >= caps.maxWorkspaces)
++            fail('UNKNOWN_RESOLUTION_LIMIT:maxWorkspaces')
++          workspaceNames.add(key)
++          usage.workspaces = workspaceNames.size
++        }
++        const manifest = key + '/package.json'
++        if (!probe(manifest)) fail('UNKNOWN_WORKSPACE_CONFIG', key)
++        const body = json(manifest)
++        if (typeof body.name !== 'string' || found.has(body.name))
++          fail('UNKNOWN_WORKSPACE_CONFIG', key)
++        found.set(body.name, { key, manifest, body })
++      }
++    }
++    return found
++  }
++  function censusEntry(body, canonical, from, subpath, mode) {
++    let entry
++    try {
++      entry =
++        body.exports != null
++          ? selectExports(body.exports, subpath, mode, [])
++          : subpath !== '.'
++            ? subpath
++            : body.main || './index.js'
++    } catch {
++      return
++    }
++    classifyRaw(entry, from, canonical)
++  }
++  function ownerAt(key, name, from, subpath, mode) {
++    censusLinks(key, from)
++    const present = inspect(key)
++    if (!present) return null
++    let canonical = key,
++      workspace = false
++    if (present.isSymbolicLink()) {
++      censusLinks(key, from)
++      const raw = link(key, from, true)
++      classifyRaw(raw, from, dirname(key))
++      const direct = key === 'node_modules/' + name
++      const up = name.startsWith('@') ? '../../packages/' : '../packages/'
++      let tail
++      if (raw.startsWith(up)) tail = raw.slice(up.length)
++      else if (raw.startsWith(root + '/packages/'))
++        tail = raw.slice((root + '/packages/').length)
++      if (!direct || !tail || !packagePart(tail))
++        fail('UNKNOWN_WORKSPACE_LINK', key)
++      canonical = 'packages/' + tail
++      // Only a regular canonical package manifest is inspected. Its selected
++      // negative target must reach the product census before registry caps.
++      const candidateManifest = canonical + '/package.json'
++      if (probe(candidateManifest))
++        censusEntry(json(candidateManifest), canonical, from, subpath, mode)
++      enforceLinkCaps()
++      const registry = workspaces(),
++        registered = registry.get(name)
++      if (!registered || registered.key !== canonical)
++        fail('UNKNOWN_WORKSPACE_CONFIG', key)
++      workspace = true
++    } else if (!present.isDirectory())
++      fail('UNKNOWN_PACKAGE_DIRECTORY_WITHOUT_MANIFEST', key)
++    const manifest = canonical + '/package.json'
++    if (!probe(manifest))
++      fail('UNKNOWN_PACKAGE_DIRECTORY_WITHOUT_MANIFEST', key)
++    const body = json(manifest)
++    if (body.name !== name) fail('UNKNOWN_PACKAGE_NAME', key)
++    return { key, manifest, body, workspace }
++  }
++  function selectExports(value, subpath, mode, branch) {
++    const active = new Set(
++      mode === 'import'
++        ? ['node', 'import', 'module-sync', 'node-addons']
++        : ['require', 'node', 'node-addons', 'module-sync']
++    )
++    function select(v, depth = 0) {
++      if (depth > 64) fail('UNKNOWN_EXPORTS_DEPTH')
++      if (v === null) fail('UNKNOWN_BLOCKED_EXPORT')
++      if (typeof v === 'string') return v
++      if (!object(v)) fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++      const keys = Object.keys(v)
++      if (
++        keys.some(
++          (k) => /^\d+$/.test(k) || k.startsWith('.') || k.includes('*')
++        )
++      )
++        fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++      for (const key of keys) {
++        if (key !== 'default' && !active.has(key)) continue
++        branch.push(key)
++        const result = select(v[key], depth + 1)
++        if (result !== undefined) return result
++        branch.pop()
++      }
++      return undefined
++    }
++    if (object(value)) {
++      const keys = Object.keys(value),
++        mapped = keys.some((k) => k.startsWith('.'))
++      if (mapped) {
++        if (
++          !keys.every(
++            (k) =>
++              k === '.' ||
++              (k.startsWith('./') && k.slice(2).split('/').every(asciiPart))
++          )
++        )
++          fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++        if (!Object.hasOwn(value, subpath)) fail('UNKNOWN_UNRESOLVED_EXPORT')
++        branch.push(subpath)
++        const result = select(value[subpath])
++        if (result === undefined) fail('UNKNOWN_UNRESOLVED_EXPORT')
++        return result
++      }
++    }
++    if (subpath !== '.') fail('UNKNOWN_UNRESOLVED_EXPORT')
++    const result = select(value)
++    if (result === undefined) fail('UNKNOWN_UNRESOLVED_EXPORT')
++    return result
++  }
++  function urlTarget(entry, owner, from, exact) {
++    const canonicalKey = dirname(owner.manifest)
++    classifyRaw(entry, from, canonicalKey)
++    if (typeof entry !== 'string')
++      fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++    if (path.isAbsolute(entry) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(entry))
++      fail('UNKNOWN_ABSOLUTE_PACKAGE_ENTRY')
++    const target = entry.startsWith('./') ? entry : exact ? '' : './' + entry
++    if (
++      !target.startsWith('./') ||
++      !target.slice(2).split('/').every(asciiPart)
++    )
++      fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++    const manifestURL = pathToFileURL(
++      path.join(root, owner.key, 'package.json')
++    )
++    const logicalURL = new URL(target, manifestURL)
++    if (
++      logicalURL.protocol !== 'file:' ||
++      logicalURL.host ||
++      logicalURL.username ||
++      logicalURL.password ||
++      logicalURL.port ||
++      logicalURL.search ||
++      logicalURL.hash
++    )
++      fail('UNKNOWN_TARGET_URL')
++    const logicalPath = fileURLToPath(logicalURL)
++    const prefix = path.join(root, owner.key) + path.sep
++    if (
++      !logicalPath.startsWith(prefix) ||
++      pathToFileURL(logicalPath).href !== logicalURL.href
++    )
++      fail('UNKNOWN_PACKAGE_ESCAPE')
++    const tail = logicalPath.slice(prefix.length).split(path.sep).join('/')
++    if (!tail.split('/').every(asciiPart)) fail('UNKNOWN_TARGET_URL')
++    const file = canonicalKey + '/' + tail
++    return { file, logicalURL: logicalURL.href }
++  }
++  function finishTarget(file, mode, from, exact) {
++    product(file, from)
++    if (file === 'products' || file.startsWith('products/'))
++      fail('UNKNOWN_PRODUCT_TARGET', file)
++    parts(file)
++    if (mode === 'require' && !path.posix.extname(file)) {
++      if (exact) fail('UNKNOWN_EXACT_EXPORTS_TARGET')
++      if (
++        [
++          file + '.cjs',
++          file + '.json',
++          file + '.node',
++          file + '/package.json'
++        ].some(probe)
++      )
++        fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++      const candidates = [file, file + '.js', file + '/index.js'].filter(
++        (f) => {
++          const s = inspect(f)
++          return s?.isFile()
++        }
++      )
++      if (candidates.length !== 1) fail('UNKNOWN_AMBIGUOUS_RESOLUTION', file)
++      file = candidates[0]
++    }
++    if (
++      !/\.(?:[cm]?js|[cm]?ts)$/.test(file) ||
++      /\.d\.[cm]?ts$/.test(file) ||
++      (file.includes('node_modules/') && /\.[cm]?ts$/.test(file))
++    )
++      fail('UNKNOWN_FORMAT', file)
++    read(file)
++    const scope = manifestAt(file)
++    const targetMode =
++      /\.c(?:js|ts)$/.test(file) ||
++      (!/\.m(?:js|ts)$/.test(file) && scope?.body.type !== 'module')
++        ? 'require'
++        : 'import'
++    if (targetMode !== mode) fail('UNKNOWN_MODULE_INTEROP', file)
++    return file
++  }
++  function resolve({ from, specifier, mode } = {}) {
++    // Literal builtin refusal precedes even path validation and scope metadata.
++    if (typeof specifier !== 'string') fail('UNKNOWN_RESOLUTION')
++    if (isBuiltin(specifier)) fail('UNKNOWN_NATIVE_BUILTIN')
++    if (!['import', 'require'].includes(mode)) fail('UNKNOWN_RUNTIME_PROFILE')
++    parts(from)
++    if (specifier.startsWith('./') || specifier.startsWith('../'))
++      classifyRaw(specifier, from, dirname(from))
++    read(from)
++    let owner = null,
++      file,
++      logicalURL,
++      exact = false
++    const branch = []
++    if (specifier.startsWith('./') || specifier.startsWith('../')) {
++      classifyRaw(specifier, from, dirname(from))
++      if (
++        !/^[A-Za-z0-9_@+./-]+$/.test(specifier) ||
++        specifier.endsWith('/') ||
++        specifier
++          .split('/')
++          .some(
++            (p, i, a) => !p || (i === a.length - 1 && (p === '.' || p === '..'))
++          )
++      )
++        fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++      // Resolve traversed directory components before normalizing any '..'.
++      const stack = dirname(from).split('/').filter(Boolean)
++      for (const part of specifier.split('/').slice(0, -1)) {
++        if (part === '.') continue
++        if (part === '..') {
++          if (!stack.length) fail('UNKNOWN_EXTERNAL_PATH')
++          stack.pop()
++        } else {
++          stack.push(part)
++          const s = inspect(stack.join('/'))
++          if (!s?.isDirectory()) fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++        }
++      }
++      file = [...stack, specifier.split('/').at(-1)].join('/')
++      logicalURL = new URL(specifier, pathToFileURL(path.join(root, from))).href
++    } else {
++      const pieces = specifier.split('/'),
++        count = specifier.startsWith('@') ? 2 : 1
++      const name = pieces.slice(0, count).join('/')
++      if (
++        (count === 2 &&
++          (!packagePart(pieces[0].slice(1)) ||
++            !packagePart(pieces[1] || ''))) ||
++        (count === 1 && !packagePart(name)) ||
++        !pieces.slice(count).every(asciiPart)
++      )
++        fail('UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION')
++      const scope = manifestAt(from)
++      if (scope?.body.name === name && scope.body.exports != null)
++        fail('UNKNOWN_PACKAGE_SELF_REFERENCE')
++      let dir = dirname(from)
++      while (true) {
++        if (
++          !(mode === 'require' && path.posix.basename(dir) === 'node_modules')
++        ) {
++          const key = at(dir, 'node_modules/' + name)
++          const requestedSubpath =
++            pieces.length === count ? '.' : './' + pieces.slice(count).join('/')
++          owner = ownerAt(key, name, from, requestedSubpath, mode)
++          if (mode === 'require' && owner?.body.exports == null) {
++            if (['.js', '.json', '.node'].some((suffix) => probe(key + suffix)))
++              fail('UNKNOWN_CJS_FILE_PACKAGE')
++          }
++          if (owner) break
++        }
++        if (!dir) break
++        dir = dirname(dir)
++      }
++      if (!owner) fail('UNKNOWN_RESOLUTION')
++      const body = owner.body
++      if (Object.hasOwn(body, 'browser') || Object.hasOwn(body, 'imports'))
++        fail('UNKNOWN_AMBIGUOUS_RESOLUTION')
++      exact = body.exports != null
++      const subpath =
++        pieces.length === count ? '.' : './' + pieces.slice(count).join('/')
++      const entry = exact
++        ? selectExports(body.exports, subpath, mode, branch)
++        : subpath !== '.'
++          ? subpath
++          : body.main || './index.js'
++      const target = urlTarget(entry, owner, from, exact)
++      file = target.file
++      logicalURL = target.logicalURL
++    }
++    file = finishTarget(file, mode, from, exact)
++    const trace = {
++      from,
++      specifier,
++      mode,
++      conditions:
++        mode === 'import'
++          ? ['node', 'import', 'module-sync', 'node-addons']
++          : ['require', 'node', 'node-addons', 'module-sync'],
++      branch,
++      exact,
++      logicalURL,
++      canonicalFile: file,
++      canonicalURL: pathToFileURL(path.join(root, file)).href,
++      owner: owner
++        ? {
++            key: owner.key,
++            manifest: owner.manifest,
++            workspace: owner.workspace
++          }
++        : null
++    }
++    resolutions.push(trace)
++    return { file, owner, trace }
++  }
++  function anchorNow() {
++    return io(() => {
++      if (fs.realpathSync(root) !== root) fail('UNKNOWN_ROOT_ALIAS')
++      const entries = []
++      let dir = root
++      while (true) {
++        const s = fs.lstatSync(dir, { bigint: true })
++        if (!s.isDirectory()) fail('UNKNOWN_ROOT_ALIAS')
++        entries.push({ depth: entries.length, stat: generation(s) })
++        if (dir === '/') break
++        dir = path.dirname(dir)
++      }
++      return entries
++    })
++  }
++  let anchor
++  try {
++    anchor = anchorNow()
++    const before = fs.lstatSync(root, { bigint: true })
++    rootfd = open(root, dirFlags)
++    const after = io(() => fs.fstatSync(rootfd, { bigint: true }))
++    assertSame(before, after, '')
++    // Check procfs before any target acquisition; no ordinary-path fallback.
++    const procStat = io(() => fs.statSync(proc(rootfd), { bigint: true }))
++    assertSame(after, procStat, '')
++    if (!same(anchor, anchorNow())) fail('UNKNOWN_ROOT_MUTATION')
++    stat('', after)
++    put('anchor', '', { parents: anchor })
++  } catch (error) {
++    close()
++    if (/^UNKNOWN_/.test(error.message)) throw error
++    fail('UNKNOWN_ROOT_ACQUISITION')
++  }
++  function snapshot() {
++    check()
++    return JSON.parse(
++      encode({
++        schemaVersion: 1,
++        profile: RESOLUTION_PROFILE,
++        root,
++        inputs: [...inputs.values()].sort((a, b) =>
++          compare(a.kind + ':' + a.file, b.kind + ':' + b.file)
++        ),
++        premises: [...premises.values()].sort((a, b) =>
++          compare(a.kind + ':' + a.file, b.kind + ':' + b.file)
++        ),
++        resolutions: [...resolutions].sort((a, b) =>
++          compare(encode(a), encode(b))
++        )
++      })
++    )
++  }
++  function revalidate() {
++    check()
++    const saved = snapshot()
++    for (const premise of saved.premises) replay(premise)
++    const current = snapshot()
++    if (
++      !same(saved.premises, current.premises) ||
++      !same(saved.inputs, current.inputs)
++    )
++      fail('UNKNOWN_RESOLUTION_MUTATION')
++    return true
++  }
++  // Private replay primitives never exposed to callers.
++  function replay(entry) {
++    if (entry.kind === 'anchor') {
++      if (!same(entry.parents, anchorNow())) fail('UNKNOWN_ROOT_MUTATION')
++    } else if (entry.kind === 'stat') {
++      const s =
++        entry.file === ''
++          ? io(() => fs.fstatSync(rootfd, { bigint: true }))
++          : inspect(entry.file)
++      if (!s || !same(entry.stat, generation(s)))
++        fail('UNKNOWN_INPUT_MUTATION', entry.file)
++    } else if (entry.kind === 'absence') {
++      if (probe(entry.file)) fail('UNKNOWN_RESOLUTION_MUTATION', entry.file)
++    } else if (entry.kind === 'file') read(entry.file)
++    else if (entry.kind === 'link') link(entry.file, undefined, true)
++    else if (entry.kind === 'inventory') inventory(entry.file)
++    else fail('UNKNOWN_INVALID_SNAPSHOT')
++  }
++  // Replay is kept in a WeakMap, not a public method or serialized authority.
++  const session = {
++    read,
++    probe,
++    resolve,
++    snapshot,
++    revalidate,
++    close,
++    get usage() {
++      return { ...usage }
++    }
++  }
++  REPLAY.set(session, replay)
++  return session
++}
++const REPLAY = new WeakMap()
++
++function snapshotData(value) {
++  // Reject accessors/functions before JSON serialization can call a supplied
++  // getter or toJSON. Worker snapshots are plain JSON data, never code.
++  const pending = [{ value, depth: 0 }],
++    seen = new Set()
++  let nodes = 0
++  while (pending.length) {
++    const { value: v, depth } = pending.pop()
++    if (++nodes > INTERPRETER.maxNodes || depth > 64)
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    if (v === null || typeof v === 'boolean' || typeof v === 'string') continue
++    if (typeof v === 'number' && Number.isFinite(v)) continue
++    if (typeof v !== 'object' || seen.has(v)) fail('UNKNOWN_INVALID_SNAPSHOT')
++    seen.add(v)
++    const proto = Object.getPrototypeOf(v)
++    if (
++      proto !== Object.prototype &&
++      proto !== Array.prototype &&
++      proto !== null
++    )
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    for (const [key, descriptor] of Object.entries(
++      Object.getOwnPropertyDescriptors(v)
++    )) {
++      if (Array.isArray(v) && key === 'length') continue
++      if (!Object.hasOwn(descriptor, 'value') || !descriptor.enumerable)
++        fail('UNKNOWN_INVALID_SNAPSHOT')
++      pending.push({ value: descriptor.value, depth: depth + 1 })
++    }
++  }
++}
++
++function validateTraces(saved, root) {
++  const validPath = (v) =>
++    typeof v === 'string' && v.length > 0 && v.split('/').every(component)
++  const files = new Set(
++    saved.premises.filter((p) => p.kind === 'file').map((p) => p.file)
++  )
++  const hasFile = (file) => files.has(file)
++  for (const trace of saved.resolutions) {
++    if (
++      !object(trace) ||
++      !validPath(trace.from) ||
++      !hasFile(trace.from) ||
++      !validPath(trace.canonicalFile) ||
++      !hasFile(trace.canonicalFile) ||
++      typeof trace.specifier !== 'string' ||
++      isBuiltin(trace.specifier) ||
++      !['import', 'require'].includes(trace.mode) ||
++      typeof trace.exact !== 'boolean' ||
++      !Array.isArray(trace.branch) ||
++      trace.branch.some(
++        (v) => typeof v !== 'string' || /[\u0000-\u001f\u007f]/.test(v)
++      ) ||
++      !same(
++        trace.conditions,
++        trace.mode === 'import'
++          ? ['node', 'import', 'module-sync', 'node-addons']
++          : ['require', 'node', 'node-addons', 'module-sync']
++      ) ||
++      trace.canonicalURL !==
++        pathToFileURL(path.join(root, trace.canonicalFile)).href
++    )
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    let logical
++    try {
++      logical = new URL(trace.logicalURL)
++    } catch {
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    }
++    if (
++      logical.protocol !== 'file:' ||
++      logical.host ||
++      logical.search ||
++      logical.hash ||
++      !fileURLToPath(logical).startsWith(root + path.sep)
++    )
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    if (
++      trace.owner !== null &&
++      (!object(trace.owner) ||
++        !validPath(trace.owner.key) ||
++        !validPath(trace.owner.manifest) ||
++        !hasFile(trace.owner.manifest) ||
++        typeof trace.owner.workspace !== 'boolean')
++    )
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++  }
++}
++
++export function revalidateResolutionSnapshot({ root, snapshot, limits } = {}) {
++  // Strict JSON data only, bounded before recursive validation. No supplied
++  // path can name an absolute/procfs/parent path or authorize a link traversal.
++  let raw
++  snapshotData(snapshot)
++  try {
++    raw = encode(snapshot)
++  } catch {
++    fail('UNKNOWN_INVALID_SNAPSHOT')
++  }
++  if (typeof raw !== 'string' || raw.length > HARD.maxTotalBytes)
++    fail('UNKNOWN_INVALID_SNAPSHOT')
++  let saved
++  try {
++    saved = JSON.parse(raw)
++  } catch {
++    fail('UNKNOWN_INVALID_SNAPSHOT')
++  }
++  if (
++    !object(saved) ||
++    saved.schemaVersion !== 1 ||
++    saved.profile !== RESOLUTION_PROFILE ||
++    saved.root !== root ||
++    !Array.isArray(saved.inputs) ||
++    !Array.isArray(saved.premises) ||
++    !Array.isArray(saved.resolutions) ||
++    saved.inputs.length > HARD.maxFiles * 8 ||
++    saved.premises.length > HARD.maxFiles * 8
++  )
++    fail('UNKNOWN_INVALID_SNAPSHOT')
++  const keys = new Set()
++  for (const entry of saved.premises) {
++    if (
++      !object(entry) ||
++      !['anchor', 'stat', 'absence', 'file', 'link', 'inventory'].includes(
++        entry.kind
++      ) ||
++      typeof entry.file !== 'string' ||
++      (entry.file !== '' && !entry.file.split('/').every(component)) ||
++      (entry.file === '' &&
++        !['anchor', 'stat', 'inventory'].includes(entry.kind))
++    )
++      fail('UNKNOWN_INVALID_SNAPSHOT')
++    const key = entry.kind + ':' + entry.file
++    if (keys.has(key)) fail('UNKNOWN_INVALID_SNAPSHOT')
++    keys.add(key)
++  }
++  validateTraces(saved, root)
++  const session = createResolutionSession({ root, limits })
++  try {
++    for (const premise of saved.premises) REPLAY.get(session)(premise)
++    const current = session.snapshot()
++    if (
++      !same(current.premises, saved.premises) ||
++      !same(current.inputs, saved.inputs)
++    )
++      fail('UNKNOWN_RESOLUTION_MUTATION')
++    return true
++  } finally {
++    session.close()
++  }
++}
+--- /dev/null
++++ b/tests/b6-0237-resolution-helper.test.js
+@@ -0,0 +1,983 @@
++// @vitest-environment node
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import { pathToFileURL } from 'node:url'
++import { createHash } from 'node:crypto'
++import {
++  createResolutionSession,
++  revalidateResolutionSnapshot,
++  RESOLUTION_LIMITS,
++  RESOLUTION_PROFILE
++} from '../scripts/boundary-semantic-resolution.mjs'
++
++const BASE = '/mnt/ia/cvg-hiso005-build0237-runtime-20261018/helper'
++const parents = [],
++  sessions = []
++const hash = (b) => createHash('sha256').update(b).digest('hex')
++const write = (root, file, bytes) => {
++  const target = path.join(root, file)
++  fs.mkdirSync(path.dirname(target), { recursive: true })
++  fs.writeFileSync(
++    target,
++    typeof bytes === 'object' && !Buffer.isBuffer(bytes)
++      ? JSON.stringify(bytes)
++      : bytes
++  )
++  return target
++}
++const symlink = (root, file, raw) => {
++  const target = path.join(root, file)
++  fs.mkdirSync(path.dirname(target), { recursive: true })
++  fs.symlinkSync(raw, target)
++}
++function fixture({
++  scoped = false,
++  workspace = false,
++  mode = 'import',
++  exports = './entry.js',
++  main
++} = {}) {
++  fs.mkdirSync(BASE, { recursive: true })
++  const parent = fs.mkdtempSync(path.join(BASE, 'fixture-'))
++  parents.push(parent)
++  const root = path.join(parent, 'raíz com espaço')
++  const name = scoped ? '@random/demo' : 'demo',
++    key = 'node_modules/' + name
++  write(root, 'package.json', {
++    name: 'fixture',
++    type: mode === 'import' ? 'module' : 'commonjs',
++    workspaces: ['packages/*']
++  })
++  write(root, 'src/caller.js', 'throw new Error("NEVER EXECUTE FIXTURE")\n')
++  const owner = workspace ? 'packages/member' : key
++  write(root, owner + '/package.json', {
++    name,
++    type: mode === 'import' ? 'module' : 'commonjs',
++    ...(exports === undefined ? {} : { exports }),
++    ...(main === undefined ? {} : { main })
++  })
++  write(root, owner + '/entry.js', 'throw new Error("NEVER EXECUTE TARGET")\n')
++  if (workspace)
++    symlink(root, key, scoped ? '../../packages/member' : '../packages/member')
++  return { root, parent, name, key, owner, mode, from: 'src/caller.js' }
++}
++function session(f, limits, onProduct) {
++  const s = createResolutionSession({ root: f.root, limits, onProduct })
++  sessions.push(s)
++  return s
++}
++const resolve = (s, f, specifier = f.name, mode = f.mode) =>
++  s.resolve({ from: f.from, specifier, mode })
++const fdCount = () => fs.readdirSync('/proc/self/fd').length
++afterEach(() => {
++  vi.restoreAllMocks()
++  for (const s of sessions.splice(0)) s.close()
++  for (const p of parents.splice(0))
++    fs.rmSync(p, { recursive: true, force: true })
++})
++
++describe('0237 helper physical acquisition and deterministic premises', () => {
++  it('returns exact bytes, bigint fstat, stable hashes and charges once across rereads', () => {
++    const f = fixture(),
++      s = session(f),
++      first = s.read(f.from),
++      before = s.usage
++    expect(first.bytes.toString('utf8')).toBe(first.text)
++    expect(first.sha256).toBe(hash(first.bytes))
++    expect(typeof first.stat.ino).toBe('bigint')
++    expect(s.read(f.from).sha256).toBe(first.sha256)
++    expect(s.usage).toEqual(before)
++    expect(s.usage.fileBytes).toBeGreaterThanOrEqual(first.bytes.length)
++    expect(s.usage.totalBytes).toBeGreaterThan(first.bytes.length)
++    expect(s.usage.files).toBeGreaterThan(0)
++    expect(s.revalidate()).toBe(true)
++    expect(s.snapshot().profile).toBe(RESOLUTION_PROFILE)
++  })
++  it('snapshots are byteidentical for immutable inputs independent of descriptor numbers', () => {
++    const f = fixture({ workspace: true }),
++      a = session(f)
++    resolve(a, f)
++    const noise = fs.openSync(
++      f.root,
++      fs.constants.O_RDONLY | fs.constants.O_DIRECTORY
++    )
++    try {
++      const b = session(f)
++      resolve(b, f)
++      expect(b.snapshot()).toEqual(a.snapshot())
++      const snap = a.snapshot()
++      expect(snap.inputs.map((x) => x.kind)).toEqual(
++        expect.arrayContaining([
++          'file',
++          'stat',
++          'link',
++          'inventory',
++          'absence',
++          'anchor'
++        ])
++      )
++      expect(JSON.stringify(snap)).not.toMatch(/\/proc\/|"fd"|"pid"/)
++      expect(
++        revalidateResolutionSnapshot({
++          root: f.root,
++          snapshot: JSON.parse(JSON.stringify(snap))
++        })
++      ).toBe(true)
++    } finally {
++      fs.closeSync(noise)
++    }
++  })
++  it.each([
++    'file',
++    'ancestor',
++    'root',
++    'absent',
++    'manifest',
++    'inventory',
++    'link'
++  ])('invalidates real %s mutation after successful acquisition', (kind) => {
++    const f = fixture({ workspace: true }),
++      s = session(f)
++    resolve(s, f)
++    s.probe('src/absent.js')
++    const snap = s.snapshot()
++    if (kind === 'file')
++      write(f.root, f.owner + '/entry.js', 'export const changed = 1')
++    if (kind === 'ancestor') {
++      fs.renameSync(path.join(f.root, 'src'), path.join(f.root, 'src-old'))
++      write(f.root, f.from, 'throw new Error("replacement")')
++    }
++    if (kind === 'root') {
++      fs.renameSync(f.root, f.root + '-old')
++      fs.mkdirSync(f.root)
++    }
++    if (kind === 'absent') write(f.root, 'src/absent.js', 'export {}')
++    if (kind === 'manifest')
++      write(f.root, f.owner + '/package.json', { name: 'changed' })
++    if (kind === 'inventory')
++      write(f.root, 'packages/new/package.json', { name: 'new' })
++    if (kind === 'link') {
++      fs.unlinkSync(path.join(f.root, f.key))
++      symlink(f.root, f.key, '../packages/elsewhere')
++    }
++    expect(() => s.revalidate()).toThrow(/UNKNOWN_/)
++    expect(() =>
++      revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++    ).toThrow(/UNKNOWN_/)
++  })
++  it('invalidates a changed physical root parent generation even with unchanged root contents', () => {
++    const f = fixture(),
++      s = session(f)
++    resolve(s, f)
++    const snap = s.snapshot()
++    write(f.parent, 'parent-change.txt', 'metadata premise mutation')
++    expect(() => s.revalidate()).toThrow('UNKNOWN_ROOT_MUTATION')
++    expect(() =>
++      revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++    ).toThrow('UNKNOWN_ROOT_MUTATION')
++  })
++  it('reads no content through a swapped leaf while its previously opened fd remains safe', () => {
++    const f = fixture(),
++      s = session(f),
++      original = fs.readSync
++    const external = write(f.parent, 'foreign.js', 'FOREIGN CONTENT')
++    let swapped = false
++    vi.spyOn(fs, 'readSync').mockImplementation((...args) => {
++      const n = original(...args)
++      if (!swapped) {
++        swapped = true
++        fs.unlinkSync(path.join(f.root, f.from))
++        fs.symlinkSync(external, path.join(f.root, f.from))
++      }
++      return n
++    })
++    const before = fdCount()
++    expect(() => s.read(f.from)).toThrow(/UNKNOWN_INPUT_MUTATION/)
++    expect(swapped).toBe(true)
++    expect(fdCount()).toBe(before)
++    expect(s.snapshot().inputs.some((i) => i.kind === 'file')).toBe(false)
++  })
++  it('detects a real parent rename during a held-fd read, retaining all descriptor cleanup', () => {
++    const f = fixture(),
++      s = session(f),
++      original = fs.readSync
++    let swapped = false
++    vi.spyOn(fs, 'readSync').mockImplementation((...args) => {
++      const n = original(...args)
++      if (!swapped) {
++        swapped = true
++        fs.renameSync(path.join(f.root, 'src'), path.join(f.root, 'old-src'))
++        symlink(f.root, 'src', '../foreign')
++      }
++      return n
++    })
++    const before = fdCount()
++    expect(() => s.read(f.from)).toThrow(/UNKNOWN_(INPUT|RESOLUTION)_MUTATION/)
++    expect(fdCount()).toBe(before)
++  })
++  it('bounds growth and detects short reads during actual read mutation', () => {
++    const f = fixture(),
++      s = session(f),
++      original = fs.readSync
++    let changed = false
++    vi.spyOn(fs, 'readSync').mockImplementation((...args) => {
++      if (!changed) {
++        changed = true
++        fs.truncateSync(path.join(f.root, f.from), 0)
++      }
++      return original(...args)
++    })
++    expect(() => s.read(f.from)).toThrow(/UNKNOWN_INPUT_MUTATION/)
++  })
++  it('refuses invalid UTF8 file bytes without replacement decoding', () => {
++    const f = fixture()
++    write(f.root, 'bad.js', Buffer.from([0xc3, 0x28]))
++    expect(() => session(f).read('bad.js')).toThrow('UNKNOWN_INPUT_ENCODING')
++  })
++  it('refuses a canonical-root alias and all ancestor links before content read', () => {
++    const f = fixture(),
++      alias = path.join(f.parent, 'alias')
++    fs.symlinkSync(f.root, alias)
++    expect(() => createResolutionSession({ root: alias })).toThrow(
++      'UNKNOWN_ROOT_ALIAS'
++    )
++    symlink(f.root, 'alias-src', 'src')
++    const s = session(f)
++    expect(() => s.read('alias-src/caller.js')).toThrow(
++      'UNKNOWN_ANCESTOR_SYMLINK'
++    )
++    expect(() => s.probe('alias-src/missing.js')).toThrow(
++      'UNKNOWN_ANCESTOR_SYMLINK'
++    )
++  })
++  it('never opens a foreign leaf symlink for content', () => {
++    const f = fixture(),
++      outside = write(f.parent, 'foreign.js', 'FOREIGN')
++    symlink(f.root, 'foreign.js', outside)
++    const s = session(f),
++      original = fs.openSync,
++      paths = []
++    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
++      paths.push(String(args[0]))
++      return original(...args)
++    })
++    expect(() => s.read('foreign.js')).toThrow('UNKNOWN_SYMLINK')
++    expect(paths.some((p) => p.endsWith('/foreign.js'))).toBe(false)
++    expect(s.revalidate()).toBe(true)
++  })
++  it.each([
++    '../outside',
++    '/proc/self/fd/1',
++    'src//caller.js',
++    'src/../caller.js',
++    'src\\caller.js',
++    'src/\0x'
++  ])('rejects untrusted read/probe path %j', (file) => {
++    const s = session(fixture())
++    expect(() => s.read(file)).toThrow('UNKNOWN_PATH')
++    expect(() => s.probe(file)).toThrow('UNKNOWN_PATH')
++  })
++  it.each(['file', 'link', 'stat', 'inventory', 'absence'])(
++    'rejects forged snapshot %s path before acquisition',
++    (kind) => {
++      const f = fixture(),
++        s = session(f),
++        snap = s.snapshot()
++      snap.premises.push({ kind, file: '../foreign', sha256: '0'.repeat(64) })
++      expect(() =>
++        revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++      ).toThrow('UNKNOWN_INVALID_SNAPSHOT')
++    }
++  )
++  it('rejects forged hashes, profiles, missing premises and duplicate premises', () => {
++    const f = fixture(),
++      s = session(f)
++    s.read(f.from)
++    for (const mutate of [
++      (x) => {
++        x.inputs[0].sha256 = '0'.repeat(64)
++      },
++      (x) => {
++        x.profile = 'other'
++      },
++      (x) => {
++        x.premises = []
++      },
++      (x) => {
++        x.premises.push(x.premises[0])
++      }
++    ]) {
++      const snap = s.snapshot()
++      mutate(snap)
++      expect(() =>
++        revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++      ).toThrow(/UNKNOWN_/)
++    }
++  })
++  it('rejects forged resolution paths and active code in untrusted snapshot data', () => {
++    const f = fixture(),
++      s = session(f)
++    resolve(s, f)
++    for (const mutate of [
++      (x) => {
++        x.resolutions[0].canonicalFile = '../foreign'
++      },
++      (x) => {
++        x.resolutions[0].logicalURL = 'file:///proc/self/fd/99'
++      },
++      (x) => {
++        x.resolutions[0].mode = 'custom'
++      },
++      (x) => {
++        x.resolutions[0].specifier = 'fs/promises'
++      },
++      (x) => {
++        x.resolutions[0].conditions = ['browser']
++      }
++    ]) {
++      const snap = s.snapshot()
++      mutate(snap)
++      expect(() =>
++        revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++      ).toThrow('UNKNOWN_INVALID_SNAPSHOT')
++    }
++    let calls = 0
++    const snap = s.snapshot()
++    Object.defineProperty(snap, 'toJSON', {
++      enumerable: true,
++      value: () => {
++        calls++
++        return {}
++      }
++    })
++    expect(() =>
++      revalidateResolutionSnapshot({ root: f.root, snapshot: snap })
++    ).toThrow('UNKNOWN_INVALID_SNAPSHOT')
++    expect(calls).toBe(0)
++  })
++  it('closes every fd on repeated success, refusal, revalidation and factory failure', () => {
++    const f = fixture(),
++      before = fdCount()
++    for (let i = 0; i < 20; i++) {
++      const s = createResolutionSession({ root: f.root })
++      try {
++        resolve(s, f)
++        expect(() => s.read('missing.js')).toThrow(/UNKNOWN_/)
++        expect(s.revalidate()).toBe(true)
++      } finally {
++        s.close()
++        s.close()
++      }
++      expect(() =>
++        createResolutionSession({
++          root: f.root,
++          limits: { maxOpenDescriptors: 0 }
++        })
++      ).toThrow('maxOpenDescriptors')
++    }
++    expect(fdCount()).toBe(before)
++  })
++  it.each(['EMFILE', 'EACCES'])(
++    'fails closed on injected OS %s without descriptor leaks',
++    (code) => {
++      const f = fixture(),
++        before = fdCount(),
++        s = session(f),
++        original = fs.openSync
++      vi.spyOn(fs, 'openSync').mockImplementation((file, ...args) => {
++        if (String(file).endsWith('/caller.js'))
++          throw Object.assign(Error('private OS path'), { code })
++        return original(file, ...args)
++      })
++      expect(() => s.read(f.from)).toThrow(
++        'UNKNOWN_ACQUISITION_' + code + ':src/caller.js'
++      )
++      s.close()
++      expect(fdCount()).toBe(before)
++    }
++  )
++  it('fails closed when own procfs is unavailable during root acquisition', () => {
++    const f = fixture(),
++      original = fs.statSync,
++      before = fdCount()
++    vi.spyOn(fs, 'statSync').mockImplementation((file, ...args) => {
++      if (String(file).startsWith('/proc/self/fd/'))
++        throw Object.assign(Error('sensitive proc path'), { code: 'ENOENT' })
++      return original(file, ...args)
++    })
++    expect(() => createResolutionSession({ root: f.root })).toThrow(
++      'UNKNOWN_ACQUISITION_ENOENT'
++    )
++    expect(fdCount()).toBe(before)
++  })
++  it('refuses actual permission-denied content and restores only its fixture mode', () => {
++    const f = fixture(),
++      s = session(f),
++      file = path.join(f.root, f.from),
++      before = fdCount()
++    fs.chmodSync(file, 0)
++    try {
++      expect(() => s.read(f.from)).toThrow('UNKNOWN_ACQUISITION_EACCES')
++      expect(fdCount()).toBe(before)
++    } finally {
++      fs.chmodSync(file, 0o600)
++    }
++  })
++})
++
++describe('0237 helper workspace/owner/exports/URL without target evaluation', () => {
++  it.each([false, true])(
++    'resolves relative and absolute direct workspace links scoped=%s with URL roundtrip',
++    (scoped) => {
++      const f = fixture({ scoped, workspace: true })
++      for (const raw of [
++        scoped ? '../../packages/member' : '../packages/member',
++        f.root + '/packages/member'
++      ]) {
++        fs.unlinkSync(path.join(f.root, f.key))
++        symlink(f.root, f.key, raw)
++        const s = session(f),
++          result = resolve(s, f)
++        expect(result.file).toBe('packages/member/entry.js')
++        expect(result.owner).toMatchObject({
++          key: f.key,
++          manifest: 'packages/member/package.json',
++          workspace: true
++        })
++        expect(result.trace.logicalURL).toBe(
++          pathToFileURL(path.join(f.root, f.key, 'entry.js')).href
++        )
++        expect(result.trace.canonicalURL).toBe(
++          pathToFileURL(path.join(f.root, result.file)).href
++        )
++        expect(s.revalidate()).toBe(true)
++        s.close()
++      }
++    }
++  )
++  it.each([
++    '../missing/../packages/member',
++    '../packages/other/../member',
++    '../packages//member',
++    '../packages/member/',
++    '../outside',
++    '../chain',
++    '../packages/alias'
++  ])(
++    'refuses nonexact workspace link %j without content substitution',
++    (raw) => {
++      const f = fixture({ workspace: true })
++      symlink(f.root, 'chain', 'packages/member')
++      symlink(f.root, 'packages/alias', 'member')
++      fs.unlinkSync(path.join(f.root, f.key))
++      symlink(f.root, f.key, raw)
++      const s = session(f)
++      expect(() => resolve(s, f)).toThrow(/UNKNOWN_/)
++      expect(
++        s
++          .snapshot()
++          .inputs.some((x) => x.kind === 'file' && x.file.endsWith('entry.js'))
++      ).toBe(false)
++    }
++  )
++  it('refuses invalid UTF8 link text exactly', () => {
++    const f = fixture({ workspace: true })
++    fs.unlinkSync(path.join(f.root, f.key))
++    fs.symlinkSync(Buffer.from([0xff, 0xfe]), path.join(f.root, f.key))
++    expect(() => resolve(session(f), f)).toThrow('UNKNOWN_METADATA_ENCODING')
++  })
++  it('refuses invalid UTF8 directory entry bytes without acquiring an approximate workspace', () => {
++    const f = fixture({ workspace: true })
++    const raw = Buffer.concat([
++      Buffer.from(f.root + '/packages/'),
++      Buffer.from([0xff])
++    ])
++    fs.mkdirSync(raw)
++    expect(() => resolve(session(f), f)).toThrow('UNKNOWN_METADATA_ENCODING')
++  })
++  it.each(['cycle', 'foreign', 'nested'])(
++    'refuses physical %s links without content acquisition',
++    (kind) => {
++      const f = fixture({ workspace: true })
++      fs.unlinkSync(path.join(f.root, f.key))
++      if (kind === 'cycle') {
++        symlink(f.root, f.key, '../loop')
++        symlink(f.root, 'loop', f.key)
++      }
++      if (kind === 'foreign')
++        symlink(f.root, f.key, path.join(f.parent, 'foreign'))
++      if (kind === 'nested') {
++        symlink(f.root, f.key, '../packages/member')
++        symlink(f.root, 'src/node_modules/demo', '../../packages/member')
++      }
++      const s = session(f)
++      expect(() => resolve(s, f)).toThrow(/UNKNOWN_/)
++      expect(
++        s
++          .snapshot()
++          .inputs.some((x) => x.kind === 'file' && x.file.endsWith('/entry.js'))
++      ).toBe(false)
++    }
++  )
++  it.each([
++    'missing',
++    'duplicate',
++    'additional-pattern',
++    'bad-entry',
++    'symlink-workspace',
++    'name-mismatch'
++  ])('refuses workspace registry %s', (kind) => {
++    const f = fixture({ workspace: true })
++    if (kind === 'missing') write(f.root, 'package.json', { workspaces: [] })
++    if (kind === 'duplicate')
++      write(f.root, 'packages/duplicate/package.json', { name: f.name })
++    if (kind === 'additional-pattern')
++      write(f.root, 'package.json', { workspaces: ['packages/**'] })
++    if (kind === 'bad-entry')
++      fs.mkdirSync(path.join(f.root, 'packages/no-manifest'))
++    if (kind === 'symlink-workspace')
++      symlink(f.root, 'packages/alias', 'member')
++    if (kind === 'name-mismatch')
++      write(f.root, 'packages/member/package.json', {
++        name: 'other',
++        exports: './entry.js'
++      })
++    expect(() => resolve(session(f), f)).toThrow(/UNKNOWN_WORKSPACE_CONFIG/)
++  })
++  it.each(['direct', 'intermediate', 'ancestor', 'conditional'])(
++    'records known product before cap/refusal via %s without reading product content',
++    (kind) => {
++      const f = fixture({
++        workspace: kind !== 'conditional',
++        exports:
++          kind === 'conditional'
++            ? {
++                import: '../../products/shift/index.mjs',
++                default: './entry.js'
++              }
++            : './entry.js'
++      })
++      write(
++        f.root,
++        'products/shift/index.mjs',
++        'throw new Error("PRODUCT NEVER EXECUTED")'
++      )
++      if (kind !== 'conditional') {
++        fs.unlinkSync(path.join(f.root, f.key))
++        if (kind === 'direct') symlink(f.root, f.key, '../products/shift')
++        if (kind === 'intermediate') {
++          symlink(f.root, f.key, '../intermediate')
++          symlink(f.root, 'intermediate', 'products/shift')
++        }
++        if (kind === 'ancestor') {
++          symlink(f.root, f.key, '../middle/shift')
++          symlink(f.root, 'middle', 'products')
++        }
++      }
++      const products = [],
++        s = session(f, { maxWorkspaces: 0 }, (file, from) =>
++          products.push({ file, from })
++        )
++      expect(() => resolve(s, f)).toThrow(/UNKNOWN_/)
++      expect(products.some((x) => x.file.startsWith('products/shift'))).toBe(
++        true
++      )
++      expect(
++        s
++          .snapshot()
++          .inputs.filter((x) => x.kind === 'file')
++          .some((x) => x.file.startsWith('products/'))
++      ).toBe(false)
++    }
++  )
++  it.each(['maxWorkspaces', 'maxLinks', 'maxLinkBytes'])(
++    'preserves selected workspace conditional product before reduced %s cap',
++    (cap) => {
++      const f = fixture({
++        workspace: true,
++        exports: { node: '../../products/shift/index.mjs' }
++      })
++      write(
++        f.root,
++        'products/shift/index.mjs',
++        'throw new Error("NEVER EXECUTE PRODUCT")'
++      )
++      const products = [],
++        s = session(f, { [cap]: 0 }, (file) => products.push(file))
++      expect(() => resolve(s, f)).toThrow(/UNKNOWN_/)
++      expect(products).toContain('products/shift/index.mjs')
++      expect(
++        s
++          .snapshot()
++          .inputs.filter((x) => x.kind === 'file')
++          .some((x) => x.file.startsWith('products/'))
++      ).toBe(false)
++    }
++  )
++  it('detects physical mutation during streamed inventory and closes its directory handle', () => {
++    const f = fixture({ workspace: true }),
++      original = fs.opendirSync,
++      before = fdCount()
++    let changed = false
++    vi.spyOn(fs, 'opendirSync').mockImplementation((...args) => {
++      const directory = original(...args),
++        read = directory.readSync.bind(directory)
++      vi.spyOn(directory, 'readSync').mockImplementation(() => {
++        const entry = read()
++        if (!changed) {
++          changed = true
++          write(f.root, 'packages/new/package.json', { name: 'new' })
++        }
++        return entry
++      })
++      return directory
++    })
++    const s = session(f)
++    expect(() => resolve(s, f)).toThrow(/UNKNOWN_(INPUT|RESOLUTION)_MUTATION/)
++    expect(changed).toBe(true)
++    s.close()
++    expect(fdCount()).toBe(before)
++  })
++  it.each(['import', 'require'])(
++    'exact builtin guard precedes importer, scope, owner and link metadata in %s mode',
++    (mode) => {
++      const f = fixture(),
++        s = session(f),
++        before = s.snapshot()
++      for (const specifier of [
++        'module',
++        'fs',
++        'fs/promises',
++        'node:fs',
++        'node:test'
++      ])
++        expect(() =>
++          s.resolve({ from: 'does-not-exist', specifier, mode })
++        ).toThrow('UNKNOWN_NATIVE_BUILTIN')
++      expect(s.snapshot()).toEqual(before)
++    }
++  )
++  it.each(['test', 'fs-promises'])(
++    'ordinary name %s is resolved by ordinary rules',
++    (name) => {
++      const f = fixture()
++      fs.renameSync(
++        path.join(f.root, f.key),
++        path.join(f.root, 'node_modules', name)
++      )
++      write(f.root, 'node_modules/' + name + '/package.json', {
++        name,
++        type: 'module',
++        exports: './entry.js'
++      })
++      expect(resolve(session(f), f, name).file).toBe(
++        'node_modules/' + name + '/entry.js'
++      )
++    }
++  )
++  it.each(['import', 'require'])(
++    'refuses self reference before substituting external owner in %s mode',
++    (mode) => {
++      const f = fixture({ mode })
++      write(f.root, 'src/package.json', { name: f.name, exports: './local.js' })
++      expect(() => resolve(session(f), f)).toThrow(
++        'UNKNOWN_PACKAGE_SELF_REFERENCE'
++      )
++    }
++  )
++  it.each(['missing-manifest', 'invalid-manifest', 'mismatched-name'])(
++    'first present owner %s is decisive, never skips to outer convenient owner',
++    (kind) => {
++      const f = fixture(),
++        key = 'src/node_modules/demo'
++      fs.mkdirSync(path.join(f.root, key), { recursive: true })
++      if (kind === 'invalid-manifest')
++        write(f.root, key + '/package.json', '{invalid')
++      if (kind === 'mismatched-name')
++        write(f.root, key + '/package.json', {
++          name: 'wrong',
++          type: 'module',
++          exports: './entry.js'
++        })
++      expect(() => resolve(session(f), f)).toThrow(/UNKNOWN_/)
++    }
++  )
++  it('CJS rejects sibling files before legacy directory but honors directory exports first', () => {
++    const f = fixture({ mode: 'require' })
++    write(f.root, 'node_modules/demo.js', 'throw new Error("DO NOT EXECUTE")')
++    expect(resolve(session(f), f).file).toBe(f.key + '/entry.js')
++    write(f.root, f.key + '/package.json', { name: f.name, main: './entry.js' })
++    expect(() => resolve(session(f), f)).toThrow('UNKNOWN_CJS_FILE_PACKAGE')
++  })
++  it.each([
++    [
++      { default: './early.js', import: './later.js' },
++      'import',
++      'early.js',
++      ['default']
++    ],
++    [
++      { browser: './inactive.js', node: './node.js', default: './late.js' },
++      'import',
++      'node.js',
++      ['node']
++    ],
++    [
++      { import: './esm.js', require: './cjs.js' },
++      'require',
++      'cjs.js',
++      ['require']
++    ],
++    [
++      { import: { browser: './inactive.js' }, default: './fallback.js' },
++      'import',
++      'fallback.js',
++      ['default']
++    ],
++    [
++      { 'module-sync': './sync.js', default: './late.js' },
++      'require',
++      'sync.js',
++      ['module-sync']
++    ],
++    [
++      { 'node-addons': './addons.js', default: './late.js' },
++      'import',
++      'addons.js',
++      ['node-addons']
++    ]
++  ])(
++    'selects finite ordered branches %j under %s',
++    (exports, mode, expected, branch) => {
++      const f = fixture({ exports, mode })
++      for (const file of [
++        'early.js',
++        'later.js',
++        'inactive.js',
++        'node.js',
++        'late.js',
++        'esm.js',
++        'cjs.js',
++        'fallback.js',
++        'sync.js',
++        'addons.js'
++      ])
++        write(f.root, f.key + '/' + file, 'throw new Error("DO NOT EXECUTE")')
++      const s = session(f),
++        result = resolve(s, f)
++      expect(result.file).toBe(f.key + '/' + expected)
++      expect(result.trace.branch).toEqual(branch)
++      expect(s.revalidate()).toBe(true)
++    }
++  )
++  it('exact nested subpath selects only its literal key', () => {
++    const f = fixture({
++      exports: { '.': './entry.js', './nested/tool': { import: './entry.js' } }
++    })
++    expect(resolve(session(f), f, 'demo/nested/tool').trace.branch).toEqual([
++      './nested/tool',
++      'import'
++    ])
++    expect(() => resolve(session(f), f, 'demo/nested/other')).toThrow(
++      'UNKNOWN_UNRESOLVED_EXPORT'
++    )
++  })
++  it.each([
++    { import: null, default: './entry.js' },
++    { import: ['./entry.js'], default: './entry.js' },
++    { import: 42, default: './entry.js' },
++    { '.': './entry.js', import: './entry.js' },
++    { './*': './entry.js' },
++    { 1: './entry.js', default: './entry.js' },
++    { './x': { import: { browser: './entry.js' } } }
++  ])(
++    'refuses blocked/unmodelled exports %j instead of convenient fallback',
++    (exports) => {
++      const f = fixture({ exports })
++      expect(() => resolve(session(f), f)).toThrow(/UNKNOWN_/)
++    }
++  )
++  it.each([
++    './sa\tfe.mjs',
++    './safe.mjs\r',
++    './safe.mjs\n',
++    './entry.js ',
++    './%65ntry.js',
++    './a/../entry.js',
++    './a//entry.js',
++    './node_modules/x.js',
++    './é.js',
++    './entry.js?x',
++    './entry.js#x',
++    './entry.js/',
++    './a\\entry.js'
++  ])('never repairs target %j into a positive', (exports) => {
++    const f = fixture({ exports })
++    write(f.root, f.key + '/safe.mjs', 'throw new Error("DO NOT EXECUTE")')
++    write(
++      f.root,
++      f.key + '/sa\tfe.mjs',
++      'throw new Error("TAB TARGET DO NOT EXECUTE")'
++    )
++    expect(() => resolve(session(f), f)).toThrow(
++      'UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION'
++    )
++  })
++  it.each([
++    'demo//x',
++    'demo/../x',
++    'demo/%78',
++    'demo/x?x',
++    '#alias',
++    'node:ordinary',
++    'demo/x ',
++    'demo\\x'
++  ])('refuses unsupported bare specifier %j', (specifier) => {
++    const f = fixture()
++    expect(() => resolve(session(f), f, specifier)).toThrow(/UNKNOWN_/)
++  })
++  it.each(['import', 'require'])(
++    'exports target is exact without extension or index fallback in %s',
++    (mode) => {
++      const f = fixture({ mode, exports: './entry' })
++      expect(() => resolve(session(f), f)).toThrow(/UNKNOWN_/)
++      write(f.root, f.key + '/entry', 'throw new Error("DO NOT EXECUTE")')
++      expect(() => resolve(session(f), f)).toThrow(
++        /UNKNOWN_(FORMAT|EXACT_EXPORTS_TARGET)/
++      )
++      write(f.root, f.key + '/package.json', {
++        name: f.name,
++        type: mode === 'import' ? 'module' : 'commonjs',
++        exports: './entry.js'
++      })
++      expect(resolve(session(f), f).file).toBe(f.key + '/entry.js')
++    }
++  )
++  it.each(['/outside/entry.js', 'file:///outside/entry.js'])(
++    'refuses absolute or URL main %j without rewriting it',
++    (main) => {
++      const f = fixture()
++      write(f.root, f.key + '/package.json', {
++        name: f.name,
++        type: 'module',
++        main
++      })
++      expect(() => resolve(session(f), f)).toThrow(
++        'UNKNOWN_ABSOLUTE_PACKAGE_ENTRY'
++      )
++      write(f.root, f.key + '/package.json', {
++        name: f.name,
++        type: 'module',
++        main,
++        exports: './entry.js'
++      })
++      expect(resolve(session(f), f).file).toBe(f.key + '/entry.js')
++    }
++  )
++  it('repaired conservative legacy explicit and CJS extension fallback retain negative alternatives', () => {
++    const f = fixture({ mode: 'require' })
++    write(f.root, f.key + '/package.json', { name: f.name, main: './entry' })
++    expect(resolve(session(f), f).file).toBe(f.key + '/entry.js')
++    write(f.root, f.key + '/entry.json', '{}')
++    expect(() => resolve(session(f), f)).toThrow(
++      'UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION'
++    )
++  })
++  it('relative exact JS positive and nonmodelled interop negative are paired', () => {
++    const f = fixture(),
++      s = session(f)
++    write(f.root, 'src/target.mjs', 'throw new Error("DO NOT EXECUTE")')
++    // Fresh session after fixture mutation is required.
++    s.close()
++    expect(resolve(session(f), f, './target.mjs').file).toBe('src/target.mjs')
++    expect(() => resolve(session(f), f, './target.mjs', 'require')).toThrow(
++      'UNKNOWN_MODULE_INTEROP'
++    )
++  })
++})
++
++describe('0237 deterministic cap boundaries', () => {
++  it('counts the held session root descriptor during revalidation under a reduced fd cap', () => {
++    const f = fixture({ workspace: true }),
++      originalOpen = fs.openSync,
++      originalClose = fs.closeSync
++    const owned = new Set()
++    let peak = 0
++    vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
++      const fd = originalOpen(...args)
++      owned.add(fd)
++      peak = Math.max(peak, owned.size)
++      return fd
++    })
++    vi.spyOn(fs, 'closeSync').mockImplementation((fd) => {
++      owned.delete(fd)
++      return originalClose(fd)
++    })
++    const s = session(f, { maxOpenDescriptors: 4 })
++    resolve(s, f)
++    expect(s.revalidate()).toBe(true)
++    s.close()
++    expect(peak).toBeLessThanOrEqual(4)
++    expect(owned.size).toBe(0)
++  })
++  it('keeps the frozen exported cap shape and rejects any increase or profile override', () => {
++    expect(RESOLUTION_LIMITS).toEqual({
++      maxWorkspaces: 512,
++      maxLinks: 512,
++      maxLinkBytes: 4096,
++      maxPathComponents: 64,
++      maxOpenDescriptors: 72
++    })
++    const f = fixture()
++    for (const [key, value] of Object.entries(RESOLUTION_LIMITS))
++      expect(() => session(f, { [key]: value + 1 })).toThrow(
++        'UNKNOWN_INVALID_LIMITS'
++      )
++    expect(() => session(f, { profile: 1 })).toThrow('UNKNOWN_INVALID_LIMITS')
++  })
++  it.each([
++    'maxWorkspaces',
++    'maxLinks',
++    'maxLinkBytes',
++    'maxPathComponents',
++    'maxOpenDescriptors'
++  ])('has physical positive and overflow controls for %s', (key) => {
++    const f = fixture({ workspace: true }),
++      s = session(f)
++    resolve(s, f)
++    const used = {
++      maxWorkspaces: s.usage.workspaces,
++      maxLinks: s.usage.links,
++      maxLinkBytes: s.usage.linkBytes,
++      maxPathComponents: s.usage.pathComponents,
++      maxOpenDescriptors: s.usage.openDescriptors
++    }[key]
++    expect(used).toBeGreaterThan(0)
++    expect(resolve(session(f, { [key]: used }), f).file).toBe(
++      'packages/member/entry.js'
++    )
++    expect(() => resolve(session(f, { [key]: used - 1 }), f)).toThrow(
++      'UNKNOWN_RESOLUTION_LIMIT:' + key
++    )
++  })
++  it.each(['maxFileBytes', 'maxTotalBytes', 'maxFiles'])(
++    'bounds actual acquisition using %s and closes on failure',
++    (key) => {
++      const f = fixture(),
++        s = session(f)
++      resolve(s, f)
++      const used = {
++        maxFileBytes: s.usage.fileBytes,
++        maxTotalBytes: s.usage.totalBytes,
++        maxFiles: s.usage.files
++      }[key]
++      expect(resolve(session(f, { [key]: used }), f).file).toBe(
++        f.key + '/entry.js'
++      )
++      expect(() => resolve(session(f, { [key]: used - 1 }), f)).toThrow(
++        'UNKNOWN_ANALYSIS_LIMIT:' + key
++      )
++    }
++  )
++})

@@ -1,0 +1,87 @@
+from pathlib import Path
+import hashlib, json, re, shutil
+
+P = Path(__file__).parent
+B = P.parent
+W = B / 'worktree'
+R = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+O = R / 'docs/04_audit/evidence/PARE100-EXEC-20261014/sandbox-procedures-r4'
+
+def sha(f):
+    return hashlib.sha256(f.read_bytes()).hexdigest()
+
+def put(f, value):
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+def copy(f, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(f, target)
+
+q = P / 'review-packet'
+pairs = json.loads((q / 'source-manifest.json').read_text())
+entries = json.loads((q / 'packet-manifest.json').read_text())
+external = json.loads((q / 'external-inputs.json').read_text())
+assert len(pairs) == 11 and len(entries) == 28 and len(external) == 55
+assert all(sha(Path(x['live'])) == x['sha256'] == sha(q / x['copy']) for x in pairs)
+assert all(sha(q / x['path']) == x['sha256'] for x in entries)
+assert all(sha(Path(x['path'])) == x['sha256'] for x in external)
+assert {str(f.relative_to(q)) for f in q.rglob('*') if f.is_file()} == {x['path'] for x in entries} | {'packet-manifest.json'}
+for name in ['original-leaf-bindings.json', 'selected-catalog-contracts.json', 'source-hashes.json', 'mode-vocabulary-gap.json', 'procedures.json', 'observation-clauses.json', 'semantic-proposals.json', 'pending-bindings.json', 'closed-event-witnesses.json', 'retained-base.json', 'scope.json', 'proposal-notes.md']:
+    assert sha(P / name) == sha(q / name), name
+rows = json.loads((P / 'original-leaf-bindings.json').read_text())
+bindings = json.loads((P / 'semantic-proposals.json').read_text())
+pending = json.loads((P / 'pending-bindings.json').read_text())
+procedures = json.loads((P / 'procedures.json').read_text())
+assert len(rows) == 427 and len(bindings) == 140 and len(pending) == 287 and len(procedures) == 12
+assert sum(x['extraction_status'] == 'UNKNOWN' for x in rows) == 177
+assert sum(x['originalLeaf']['extraction_status'] == 'UNKNOWN' for x in bindings) == 18
+original = {x['id']: x for x in rows}
+assert len(original) == 427
+assigned = {x['leafId'] for x in bindings}
+unassigned = {x['leaf']['id'] for x in pending}
+assert len(assigned) == 140 and len(unassigned) == 287 and not assigned & unassigned
+assert assigned | unassigned == set(original)
+assert all(x['originalLeaf'] == original[x['leafId']] for x in bindings)
+assert all(x['leaf'] == original[x['leaf']['id']] for x in pending)
+assert all(x['execution'] == 'NOT_RUN' for x in procedures)
+frozen = json.loads((B / 'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text())
+pins = frozen['newGroups'][0]['pins']
+assert len(pins) == 465 and all(sha(W / s) == h for s, h in pins.items())
+ledgers = {'docs/99_runtime_state.md', 'docs/20_master_execution_log.md', 'docs/30_backlog_master.md', 'docs/08_runtime/agent_coordination.md'}
+drift = [s for s, h in frozen['inputs'].items() if sha(W / s) != h]
+assert set(drift) <= ledgers
+protected = json.loads((q / 'constraints.json').read_text())
+for x in protected['sourceSpecs']:
+    assert sha(Path(x['path'])) == x['sha256'] == sha(R / Path(x['path']).relative_to(W))
+prior = json.loads((R / 'docs/04_audit/evidence/PARE100-EXEC-20261014/spec0222/revision-r6/program-scope-retention.json').read_text())
+text = (R / 'docs/03_build/0378_backlog_paridade_integral.md').read_text()
+parts = re.split(r'^#{2,3} (P100-\d+) — .*$', text, flags=re.M)
+tasks = {}
+for i in range(1, len(parts), 2):
+    ident, body = parts[i:i+2]
+    state = re.search(r'^- Estado: `([^`]+)`', body, re.M)
+    criterion = re.search(r'^- Pronto: (.+)$', body, re.M)
+    assert state and criterion
+    tasks[ident] = {'state': state[1], 'criterion': criterion[1]}
+assert tasks == prior['tasks']
+bar = json.loads((W / '.gauntlet/bar.json').read_text())
+bar_hash = hashlib.sha256(json.dumps(bar, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+assert bar_hash == prior['barCanonicalSHA256']
+for f in P.iterdir():
+    if f.is_file() and f.stat().st_size:
+        copy(f, O / (f.name + '.source.txt' if f.suffix == '.py' else f.name))
+for name in ['source-manifest.json', 'external-inputs.json', 'packet-manifest.json', 'constraints.json']:
+    copy(q / name, O / name)
+if (P / 'checks').exists():
+    for f in (P / 'checks').rglob('*'):
+        if f.is_file() and f.stat().st_size:
+            copy(f, O / f.relative_to(P))
+put(O / 'lead-integrity.json', {'sourcePairs': 11, 'packetFiles': 29, 'externalInputsVerified': 55, 'allOriginalBindings': 427, 'proposedBindings': 140, 'pendingBindings': 287, 'originalUnknowns': 177, 'proposalUnknowns': 18, 'procedures': 12, 'runtimeTests': 0, 'pins': 465, 'nonledgerInputDrift': [], 'ledgerInputDrift': drift, 'semanticCoverage': 'NOT_ESTABLISHED', 'acceptance': 'NOT_GRANTED'})
+put(O / 'program-scope-retention.json', {'cards': 36, 'phases': 8, 'doneLocal': 2, 'open': 34, 'tasks': tasks, 'barCanonicalSHA256': bar_hash, 'parity': 'NOT_MEASURED', 'allCriteriaRetained': True, 'fullGoalComplete': False})
+manifest = [{'path': str(f.relative_to(O)), 'sha256': sha(f), 'bytes': f.stat().st_size} for f in sorted(O.rglob('*')) if f.is_file() and f.name != 'evidence-manifest.json']
+put(O / 'evidence-manifest.json', manifest)
+for f in O.rglob('*'):
+    if f.is_file():
+        copy(f, W / f.relative_to(R))
+print(json.dumps({'originalBindings': 427, 'proposed': 140, 'pending': 287, 'procedures': 12, 'runtimeTests': 0, 'pins': 465, 'cards': 36, 'open': 34, 'status': json.loads((P / 'status.json').read_text())['status']}))

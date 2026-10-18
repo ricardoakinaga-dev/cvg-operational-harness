@@ -1,0 +1,1 @@
+import type {T} from "./absent.ts"; export const result=1;

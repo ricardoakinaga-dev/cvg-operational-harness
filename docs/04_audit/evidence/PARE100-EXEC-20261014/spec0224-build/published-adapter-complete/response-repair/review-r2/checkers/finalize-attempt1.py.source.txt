@@ -1,0 +1,69 @@
+import pathlib,json,hashlib,os,datetime
+O=pathlib.Path(__file__).resolve().parents[1];P=O.parent/'review-packet-r2';M=json.loads((P/'manifest.json').read_text());allowed={e['copy'] for e in M['inputs']};runs=[]
+for f in sorted((O/'raw').glob('*-reads.jsonl')):
+ rows=[]
+ for line in f.read_text().splitlines():
+  r=json.loads(line);p=r.get('path','');category='unclassified'
+  if r.get('denied'):category='denied-before-read'
+  elif p in allowed:category='enumerated-input-read'
+  elif p.startswith(str(O)+'/'):category='owned-output-read'
+  elif p==M['allowedScopeMetadata']['path']:category='scope-package-read'
+  elif p.startswith(M['allowedDependencyMirror']+'/') or p.startswith(M['externalReadOnlyDependencies']+'/'):category='mirror-dependency-read'
+  elif p.startswith('/home/ricardo/.nvm/versions/node/v22.23.2/'):category='assigned-node-runtime-read'
+  elif not r.get('sha256'):category='resolution-probe-no-bytes'
+  elif p in ['/usr/bin/ldd','/proc/version']:category='initial-scope-deviation-ancillary-os-read'
+  r['evidenceClass']=category;rows.append(r)
+ if '-strict-' in f.name:assert not any(r['evidenceClass'] in ['unclassified','initial-scope-deviation-ancillary-os-read'] for r in rows)
+ runs.append({'run':f.name.removesuffix('-reads.jsonl'),'observations':rows,'scopeDeviationSuccessfulReads':sum(r['evidenceClass']=='initial-scope-deviation-ancillary-os-read' for r in rows),'unclassifiedSuccessfulReads':sum(r['evidenceClass']=='unclassified' and 'sha256' in r for r in rows)})
+(O/'raw/read-classification-final.json').write_text(json.dumps(runs,indent=2)+'\n')
+mods=[]
+for f in sorted((O/'observed').glob('*/modules.jsonl')):
+ rows=[json.loads(line) for line in f.read_text().splitlines()]
+ for r in rows:
+  for suffix,key in [('original','originalSHA256'),('transformed','transformedSHA256')]:
+   if r[key]:assert hashlib.sha256((f.parent/(r['stem']+'.'+suffix)).read_bytes()).hexdigest()==r[key]
+ mods.append({'run':f.parent.name,'evidenceType':'observed-transform-hook; execution not line coverage','modules':rows})
+(O/'raw/transformed-module-index-final.json').write_text(json.dumps(mods,indent=2)+'\n')
+# Final verification checks existing evidence without rerunning or mutating tests.
+assert json.loads((O/'integrity-summary.json').read_text())['immutableInputsClean']
+assert all(e['clean'] for e in json.loads((O/'fingerprint-after.json').read_text()))
+for e in json.loads((O/'fingerprint-after.json').read_text()):assert hashlib.sha256(pathlib.Path(e['path']).read_bytes()).hexdigest()==e['sha256']
+v=json.loads((O/'raw/independent-verification-strict.json').read_text());assert all(not x['errors'] for x in v['actualBaseline']);assert all(x['detected'] for x in v['posteriorEvidenceMutationControls'])
+replay=json.loads((O/'raw/replay-strict-cases.json').read_text());second=next(c for c in replay if c['case']=='REPLAY_EMPTY_SECOND');assert len(second['requests'])==2 and second['replayCheckpoint']['budgetUsage']['modelCalls']==1
+summary={'formalDecision':'INVALID','technicalDisposition':'REJECT','largestMaterialFinding':'F-001','candidateUntouched':True,'proofsAndTemplatesUntouched':True,'dependencyMirrorUntouched':True,'nodeUntouched':True,'initialLiteralScopeClean':False,'strictSuccessfulUnenumeratedNodeFSReads':0,'OSAttestation':False,'runCommands':[],'publicationSensitive':'All raw/internal source/config/cache/read-path data; Lead curates publication.'}
+for f in sorted((O/'raw').glob('*-command.json')):
+ data=json.loads(f.read_text());summary['runCommands'].append({'path':str(f.relative_to(O)),'exit':data['exit'],'argv':data['argv']})
+(O/'verification-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+# No further writes except the inventory and detached seals after this point.
+exclude={'output-inventory.json','final-seal.json','final-seal.sha256'}
+def category(rel):
+ s=str(rel)
+ if s.startswith('observed/'):return 'observed-original-or-transformed-bytes'
+ if s.startswith('raw/KNOWN_BAD'):return 'posterior-negative-evidence-control'
+ if s.startswith('raw/'):return 'raw-executed-or-derived-diagnostic-see-report'
+ if s.startswith('variants/KNOWN_BAD'):return 'owned-known-bad-implementation-control'
+ if s.startswith('variants/'):return 'owned-public-test-or-codec-control'
+ if s.startswith('config/'):return 'execution-config-or-instrumentation'
+ if s.startswith('checkers/'):return 'review-checker-script'
+ if s.startswith(('cache/','nodecache/','tmp/')):return 'cache-temp-compile-output'
+ if 'fingerprint' in s or s.startswith(('dependency-','node-','integrity-','input-index')):return 'posterior-input-integrity-metadata'
+ return 'derived-report-or-metadata'
+def entry(p):
+ rel=p.relative_to(O);typ='file'
+ if p.is_symlink():b=os.readlink(p).encode();typ='symlink'
+ elif p.is_dir():b=b'';typ='directory'
+ else:b=p.read_bytes()
+ e={'path':str(rel),'type':typ,'category':category(rel),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'publicationSensitive':True}
+ if typ=='symlink':e['linkText']=b.decode()
+ return e
+paths=[]
+for root,dirs,files in os.walk(O,followlinks=False):
+ for name in dirs+files:
+  f=pathlib.Path(root)/name
+  if str(f.relative_to(O)) not in exclude:paths.append(f)
+entries=[entry(p) for p in sorted(paths,key=lambda p:str(p.relative_to(O)))]
+inv={'scope':'posterior full output inventory, not proof of execution/read','selfHash':'final-seal.json contains this inventory bytes+SHA; seal and detached SHA excluded to avoid recursion','directoryHash':'SHA256 of empty bytes; bytes=0','symlinkHash':'SHA256 of link text, never dereferenced as owned output','entries':entries}
+(O/'output-inventory.json').write_text(json.dumps(inv,indent=2)+'\n')
+seal={'schema':'cvg-independent-review-detached-seal/1','decision':'INVALID','technicalDisposition':'REJECT','createdAtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),'candidateManifestSHA256':M['candidateManifestSha256'],'excluded':['final-seal.json','final-seal.sha256'],'scope':'Every owned file/directory/symlink, including inventory; source and dependency trees remain external read-only inputs. Posterior seal is not OS attestation.','entries':sorted(entries+[entry(O/'output-inventory.json')],key=lambda e:e['path'])}
+b=(json.dumps(seal,indent=2)+'\n').encode();(O/'final-seal.json').write_bytes(b);h=hashlib.sha256(b).hexdigest();(O/'final-seal.sha256').write_text(h+'  final-seal.json\n')
+print(json.dumps({'sealedEntries':len(seal['entries']),'files':sum(e['type']=='file' for e in seal['entries']),'directories':sum(e['type']=='directory' for e in seal['entries']),'symlinks':sum(e['type']=='symlink' for e in seal['entries']),'fileBytes':sum(e['bytes'] for e in seal['entries'] if e['type']=='file'),'sealSHA256':h,'immutableInputsClean':True,'literalInitialScopeClean':False,'decision':'INVALID','technicalDisposition':'REJECT'},indent=2))

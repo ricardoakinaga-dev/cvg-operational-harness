@@ -1,0 +1,113 @@
+import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+const own='/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries/review-r1';
+const sha=x=>createHash('sha256').update(x).digest('hex');
+const canon=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canon).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';
+const reads=[];
+const read=async p=>{let b=await fs.readFile(own+'/'+p);reads.push({path:p,bytes:b.length,sha256:sha(b)});return JSON.parse(b)};
+const errors=[];let n=0;
+const check=(ok,label)=>{n++;if(!ok)errors.push(label)};
+function checkpoint(cp,label){
+ let {checkpointId,createdAt,digest,...unsigned}=cp;
+ check(digest===sha('cvg.checkpoint.v2\n'+canon(unsigned)),label+': logical checkpoint digest');
+ return digest;
+}
+function physical(snapshot,label){
+ const cp=snapshot.checkpoint;checkpoint(cp,label);
+ check(snapshot.rows.checkpoints.length===1,label+': one physical checkpoint');
+ const p=snapshot.rows.checkpoints[0],w=p.state;
+ check(w.storageCodec==='cvg.checkpoint-state/2'&&w.encoding==='base64',label+': physical storage codec');
+ const b=Buffer.from(w.data,'base64');const raw=b.toString('utf8');
+ check(b.toString('base64')===w.data,label+': base64 exact');
+ check(b.length===w.decodedBytes&&sha(b)===w.decodedSha256,label+': physical bytes and hash');
+ check(canon(JSON.parse(raw))===raw,label+': physical state canonical bytes');
+ check(raw===canon(cp.state),label+': physical and logical state agree');
+ check(canon(p.budget_usage)===canon(cp.budgetUsage),label+': physical and logical budget agree');
+ check(p.digest===cp.digest&&p.checkpoint_id===cp.checkpointId,label+': physical identity and digest');
+ return {codec:w.storageCodec,decodedBytes:b.length,decodedSha256:sha(b),checkpointDigest:cp.digest};
+}
+function accounting(cp,raw,casTrace,label){
+ const ctx=cp.state.toolResultContext,receipts=ctx.decisionAdmissions;
+ check(ctx.pendingDecisionAdmission===null,label+': no pending reserve');
+ check(receipts.length===raw.requests.length&&receipts.length===raw.responses.length,label+': calls equal receipts');
+ const totals={modelCalls:0,inputTokens:0,outputTokens:0,costUsd:0};let admissions=[];
+ for(let i=0;i<receipts.length;i++){
+  const r=receipts[i],request=raw.requests[i],response=raw.responses[i];
+  const requestHash=sha(canon(request));
+  check(r.status==='SETTLED',label+': settled '+i);
+  check(r.executionId===cp.executionId&&r.tenantId===cp.tenantId,label+': binding '+i);
+  check(r.requestSha256===requestHash,label+': request hash '+i);
+  check(r.resultSha256===sha(canon(response)),label+': native result hash '+i);
+  check(request.maxOutputTokens===512&&r.reserved.outputTokens===512,label+': output cap '+i);
+  const actual={modelCalls:1,inputTokens:response.inputTokens,outputTokens:response.outputTokens,costUsd:response.costUsd};
+  check(canon(r.actual)===canon(actual),label+': receipt actual '+i);
+  check(r.measurement.inputUpperBoundTokens===Math.ceil(Buffer.byteLength(canon(request))/64),label+': toy64 exact '+i);
+  check(response.inputTokens===r.measurement.inputUpperBoundTokens&&response.outputTokens<=512,label+': measured native usage '+i);
+  check(raw.counters.some(c=>canon(c.request)===canon(request)&&canon(c.measurement)===canon(r.measurement)),label+': actual request equals counted request '+i);
+  const applied=casTrace.filter(t=>t.result?.status==='APPLIED');
+  const reserved=applied.findIndex(t=>t.input.next.state.toolResultContext.decisionAdmissions.some(x=>x.admissionId===r.admissionId&&x.status==='RESERVED'));
+  const settled=applied.findIndex(t=>t.input.next.state.toolResultContext.decisionAdmissions.some(x=>x.admissionId===r.admissionId&&x.status==='SETTLED'));
+  check(reserved>=0&&settled>reserved,label+': durable CAS reserve then settle '+i);
+  admissions.push({admissionId:r.admissionId,requestHash,resultHash:r.resultSha256,reservedCASIndex:reserved,settledCASIndex:settled,actual});
+  for(const k of Object.keys(totals))totals[k]+=actual[k];
+ }
+ for(const k of Object.keys(totals))check(cp.budgetUsage[k]===totals[k],label+': exact usage total '+k);
+ return {totals,admissions};
+}
+const summary=await read('postgres-run/matrix-summary.json');const cases=[];
+for(const c of summary){
+ const p='postgres-run/cases/'+c.caseId+'/';
+ const f=await read(p+'fixture.json'),before=await read(p+'before-fresh-harness.json'),after=await read(p+'after-fresh-harness.json'),raw=await read(p+'raw-requests-responses.json'),trace=await read(p+'native-journal-cas-trace.json');
+ const beginErrors=errors.length;const physBefore=physical(before,c.caseId+' before'),physAfter=physical(after,c.caseId+' after');
+ const usage=accounting(before.checkpoint,raw,trace.casTrace,c.caseId);
+ const beforeCp=before.checkpoint,afterCp=after.checkpoint;
+ const obs=beforeCp.state.observations.filter(o=>o.type==='TOOL_RESULT');
+ check(c.counts.body===1&&c.counts.getterHook===0,c.caseId+': body and unsafe hooks');
+ check(canon(beforeCp.state.toolResultContext)===canon(afterCp.state.toolResultContext),c.caseId+': context and model ledger unchanged fresh factory');
+ for(const k of ['modelCalls','inputTokens','outputTokens','costUsd'])check(beforeCp.budgetUsage[k]===afterCp.budgetUsage[k],c.caseId+': no additional '+k);
+ const j=before.rows.journal[0];check(before.rows.journal.length===1,c.caseId+': one journal row');
+ let nativeErrorCodes=trace.journalTrace.filter(x=>x.error).map(x=>({method:x.method,code:x.error.code,message:x.error.message}));
+ let valueProof=null;
+ if(f.canonical!==undefined){
+  check(Buffer.byteLength(f.canonical)===f.canonicalBytes&&sha(f.canonical)===f.canonicalSha256,c.caseId+': expected bytes hash');
+  if(c.kind!=='nul')check(j.state==='CONFIRMED'&&canon(j.result)===f.canonical,c.caseId+': native journal exact value type');
+  if(c.kind==='complete'||c.kind==='context-overflow'){
+   const payload=obs[0]?.payload;
+   check(obs.length===1&&payload?.completion==='COMPLETE'&&canon(payload.output)===f.canonical,c.caseId+': exact capture');
+   check(payload?.outputBytes===f.canonicalBytes&&payload?.outputSha256===f.canonicalSha256,c.caseId+': envelope bytes hash');
+   check(obs[0]?.provenance.operationKey===j.operation_key&&obs[0]?.trust==='UNTRUSTED',c.caseId+': provenance trust');
+   const frames=raw.requests.flatMap(r=>JSON.parse(r.messages[1].content).items.filter(i=>i.value?.type==='TOOL_RESULT').map(i=>i.value));
+   check(frames.length===(c.kind==='complete'?1:0),c.caseId+': actual tool frames');
+   if(c.kind==='complete'){
+    check(canon(frames[0])===canon(obs[0]),c.caseId+': entire actual frame equals checkpoint observation');
+    check(c.first.response===`sha256:${f.canonicalSha256};bytes:${f.canonicalBytes}`,c.caseId+': response receipt independent expected');
+   }
+   valueProof={type:f.rawType,canonicalBytes:f.canonicalBytes,canonicalSha256:f.canonicalSha256,frameCount:frames.length};
+  }
+ }
+ if(c.kind==='nul'){
+  check(j.state==='UNCERTAIN'&&nativeErrorCodes.some(e=>e.method==='confirm'&&e.code==='22P05'),c.caseId+': required NUL native functional failure');
+  check(raw.frameValues.length===0&&c.counts.model===1&&c.first.stopReason==='TOOL_FAILURE',c.caseId+': NUL not delivered or completed');
+ }
+ if(c.kind==='invalid')check(c.counts.outputValidation===0&&j.state==='UNCERTAIN',c.caseId+': prevalidation invalid capture uncertainty');
+ const confirm=trace.journalTrace.find(t=>t.method==='confirm');
+ if(c.kind==='complete'||c.kind==='context-overflow'||c.kind==='too-large'||c.kind==='complexity'){
+  check(confirm&&!confirm.error&&Object.hasOwn(confirm.result,'result')&&canon(confirm.result.result)===f.canonical,c.caseId+': native mapped confirm value');
+ }
+ cases.push({caseId:c.caseId,kind:c.kind,observationStatus:errors.length===beginErrors?'PASS_SCOPED':'FAIL_OBSERVATION',requiredFunctionalStatus:c.kind==='nul'?'FAIL_REQUIRED_NATIVE_PG_NUL':'NO_ADDITIONAL_FUNCTIONAL_VERDICT',physicalBefore:physBefore,physicalAfter:physAfter,valueProof,nativeErrorCodes,usage,bodyCount:c.counts.body,modelCount:c.counts.model,stopReason:c.first.stopReason,journalState:j.state,capture:obs[0]?.payload?.completion,rerunToolCallsDelta:afterCp.budgetUsage.toolCalls-beforeCp.budgetUsage.toolCalls,noReplayFrozenCountsAssertion:c.checks.noReplayFreshConnectionAndFactory});
+}
+const memory=await read('memory-run/observations.json');const memorySummary=[];
+for(const c of memory){
+ if(c.name==='tr02-observer-controls')continue;
+ const cp=c.checkpoint;checkpoint(cp,c.name);
+ if(c.goldenJson!==undefined){
+  const p=cp.state.observations.find(o=>o.type==='TOOL_RESULT').payload;
+  check(canon(p.output)===c.goldenJson&&p.outputBytes===Buffer.byteLength(c.goldenJson)&&p.outputSha256===sha(c.goldenJson),c.name+': independent typed value bytes hash');
+  const frame=JSON.parse(c.requests[1].messages[1].content).items.find(i=>i.value?.type==='TOOL_RESULT').value;
+  check(canon(frame.payload)===canon(p),c.name+': actual frame');
+ }
+ memorySummary.push({name:c.name,checkpointDigest:cp.digest,stopReason:(c.result??c.first)?.stopReason,modelCalls:cp.budgetUsage.modelCalls,toolCalls:cp.budgetUsage.toolCalls});
+}
+const result={at:new Date().toISOString(),oracle:'Independent JS recursive sorted-key canonical serializer; no imports of @cvg or frozen checker. Offline raw-evidence analysis only.',checks:n,errors,cases,memorySummary,reads};
+await fs.writeFile(own+'/independent-recompute.json',JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify({checks:n,errors,cases:cases.length,memoryRecords:memory.length}));if(errors.length)process.exitCode=1;

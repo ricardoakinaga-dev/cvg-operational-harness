@@ -1,0 +1,67 @@
+from pathlib import Path
+import json,hashlib,re,datetime,subprocess
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';N=E/'g04/full-native-spec';SPEC=R/'docs/02_spec/0239_codex_native_journey.md';h=lambda b:hashlib.sha256(b).hexdigest();checks=[]
+def put(p,d):p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+def check(i,f):
+ try:x=f();checks.append({'id':i,'status':'PASS_T1_ONLY','detail':x})
+ except Exception as e:checks.append({'id':i,'status':'FAIL','detail':str(e)})
+# Rebind changedannex after samegroupedrepair, beforefreeze; table doesnotinclude SPECselfhash.
+bound=json.loads((N/'normative-annexes.json').read_text())
+for x in bound['inputs']:
+ p=N/x['path'];b=p.read_bytes();x.update(bytes=len(b),sha256=h(b))
+put(N/'normative-annexes.json',bound);s=SPEC.read_text();start=s.index('| Anexo normativo');s=s[:start]+'| Anexo normativo | SHA-256 |\n| --- | --- |\n'+'\n'.join('| `'+x['path']+'` | `'+x['sha256']+'` |' for x in bound['inputs'])+'\n';SPEC.write_text(s)
+cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--write',str(SPEC.relative_to(R))];r=subprocess.run(cmd,capture_output=True,text=True);assert r.returncode==0,r.stdout+r.stderr
+
+def sources():
+ d=json.loads((N/'source-inputs.json').read_text());assert len(d['inputs'])==d['input_count']==57;by={x['id']:x for x in d['inputs']}
+ for x in d['inputs']:
+  a=(N/x['archive']).read_bytes();b=(R/x['path']).read_bytes();assert a==b and h(b)==x['sha256'] and len(b)==x['bytes'],x['id']
+ total=0
+ for name in ['source-spans.json','source-spans-r2-additions.json']:
+  for x in json.loads((N/name).read_text())['spans']:
+   p=N/by[x['input']]['archive'];assert '\n'.join(p.read_text().splitlines()[x['start_line']-1:x['end_line']])==x['excerpt'] and h(p.read_bytes())==x['input_sha256'],x['id'];total+=1
+ assert total==45;return '57source/archive pairs and45exactranges, no sourcecode modified'
+check('R2-V01',sources)
+def recovery():
+ freeze=json.loads((N/'review-freeze-r1.json').read_text());m=json.loads((N/'R1-preimages/map.json').read_text());mapping={x['original_path']:x['archive'] for x in m['preimages']};changed=[]
+ for x in freeze['files']:
+  current=R/x['path'];p=R/mapping.get(x['path'],x['path']);b=p.read_bytes();assert len(b)==x['bytes'] and h(b)==x['sha256'],x['path']
+  if current.read_bytes()!=b:changed.append(x['path'])
+ assert len(changed)==4 and set(changed)==set(mapping);review=json.loads((N/'review-r1/manifest.json').read_text())
+ for x in review['outputs']:
+  if x['sha256'] is None:continue
+  b=(R/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'],x['path']
+ put(N/'R1-reconstruction-after-repair.json',{'recovered':105,'unchanged_inplace':101,'changed_with_preimages':changed,'R1_review_payloads_exact':8,'technical_R1_verdict_unchanged':'REVISE5','no_other_R1_mutation':True});return '105R1 reconstructed:101original+4preimages;8reviewpayloads unchanged'
+check('R2-V02',recovery)
+def coverage():
+ t=json.loads((N/'test-plan.json').read_text());c=json.loads((N/'CQ-coverage.json').read_text());ea=json.loads((N/'concurrency-schedules.json').read_text());rules=json.loads((N/'rules-matrix.json').read_text());assert len(t['cases'])==30 and all(x['status']=='NOT_RUN' and x['functional_receipt'] is None for x in t['cases']);assert {x['CQ'] for x in c['rows']}=={f'CQ{i:02d}' for i in range(1,15)};assert {x['inherited_id'] for x in ea['EA_overlays']}=={f'EA{i:02d}' for i in range(1,20)};assert h((R/ea['inherited']['path']).read_bytes())==ea['inherited']['sha256'];assert len(ea['NJ26_quota']['cases'])==5 and len(rules['rows'])==12
+ cat=json.loads((R/'docs/03_build/tracking/codex100_catalog_v1.json').read_text());assert len(cat['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in cat['requirements']);return '14CQ/30NJ/19EA+5quota/12rulefamilies allfuture,509NOT_RUN/nullreceipt'
+check('R2-V03',coverage)
+def norms():
+ s=SPEC.read_text();assert len(bound['inputs'])==8
+ for x in bound['inputs']:
+  b=(N/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'] and x['sha256'] in s
+ req=json.loads((N/'rules-matrix.json').read_text());assert all(x['required_core_normalizationPolicy']==[] and x['required_core_assertions']==[{'kind':'EQUAL_COMPLETE'}] for x in req['rows']);assert all((x['projection']['kind']=='EXACT_BYTES')==(x['collector_mode']=='OPAQUE_FRAME') for x in req['rows']);assert len(json.loads((N/'governance-proposals.json').read_text())['proposals'])==6;return '8annexhashes explicitlybound incanonicalSPEC; fixedqualifier modes and6proposedequivalences,noexistingapprovalextended'
+check('R2-V04',norms)
+def prior():
+ old=json.loads((E/'checkpoint-before-full-native-repair-manifest.json').read_text());allowed={'docs/02_spec/0239_codex_native_journey.md'}|{str((N/x).relative_to(R)) for x in ['source-inputs.json','test-plan.json','governance-proposals.json']};n=0
+ for x in old['files']:
+  if x['path'] in allowed:continue
+  b=(R/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'],x['path'];n+=1
+ assert n==2326;return '2326oldcheckpointpayloads exact,only4registeredsubjectchanges sofar'
+check('R2-V05',prior)
+md=[SPEC]+sorted((N/'contracts').glob('*.md'))
+def docs():
+ count=0
+ for p in md:
+  for target in re.findall(r'\]\(([^)]+)\)',p.read_text()):
+   target=target.split()[0].strip('<>').split('#')[0]
+   if not target or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:',target):continue
+   assert (p.parent/target).exists(),str(p)+':'+target;count+=1
+ for p in N.rglob('*.json'):json.loads(p.read_text())
+ return {'MD':len(md),'local_links':count,'broken':0,'allpackageJSON':'PARSED'}
+check('R2-V06',docs)
+def fmt():
+ cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check']+[str(x.relative_to(R)) for x in md];r=subprocess.run(cmd,capture_output=True,text=True);assert r.returncode==0,r.stdout+r.stderr;return {'command':cmd,'exit_code':r.returncode,'stdout':r.stdout}
+check('R2-V07',fmt)
+d={'task':'DX100-G04:REPAIR-FULL-NATIVE-SPEC-R1','kind':'T1_INTEGRITY_NOT_EXECUTED_BACKEND_OR_PARITY_TESTS','observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'checks':checks,'passed':sum(x['status']=='PASS_T1_ONLY' for x in checks),'failed':sum(x['status']=='FAIL' for x in checks),'runtime_tests':'NOT_RUN','functional_receipts':0,'independent_R2':'PENDING','BUILD_authorized':False};put(N/'verification-repair-r2.json',d);print(json.dumps(d,ensure_ascii=False));assert not d['failed']

@@ -1,0 +1,380 @@
+ESLINT const tseslint = require('typescript-eslint')
+
+module.exports = tseslint.config(
+  {
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      '**/dist/**',
+      'coverage/**',
+      'test-results/**',
+      'docs/**',
+      'packages/*/src/**/*.js',
+      '**/*.d.ts',
+      '**/*.js.map'
+    ]
+  },
+  ...tseslint.configs.recommended,
+  {
+    files: ['**/*.js'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  }
+)
+
+FIXTURE 35
+35: export function phase3RuntimeInput(
+36:   overrides: Partial<RuntimeInput> = {}
+37: ): RuntimeInput {
+38:   return {
+39:     agent: phase3AgentProfile(),
+40:     tenantId: PHASE3_TENANT,
+41:     executionId: 'exec_phase3_fixture',
+42:     conversationId:
+43:       'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+44:     sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+45:     correlationId:
+46:       'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+47:     traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+48:     userMessage: 'phase 3 controlled fixture',
+49:     context: {
+50:       values: { fixture: 'phase3' },
+51:       sourceIds: ['phase3-fixture'],
+52:       capturedAt: '2026-09-15T00:00:00.000Z'
+53:     },
+54:     state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+55:     budget: {
+56:       maxSteps: 8,
+57:       maxModelCalls: 4,
+58:       maxToolCalls: 4,
+59:       maxDurationMs: 30_000,
+60:       maxCostUsd: 1,
+61:       maxTokens: 4_000,
+62:       maxKnowledgeCalls: 3,
+63:       maxReplans: 2,
+64:       maxVerificationCalls: 3,
+65:       maxDecisionRepairs: 1
+66:     },
+67:     runtimeProfile: 'iterative',
+68:     ...overrides
+69:   }
+70: }
+71: 
+72: export function phase3AgentProfile(
+73:   overrides: Partial<AgentProfile> = {}
+74: ): AgentProfile {
+75:   return {
+76:     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+77:     version: 'v1' as AgentProfile['version'],
+78:     objective: 'Complete the synthetic operational goal.',
+79:     instructions: ['synthetic only', 'never act without authorization'],
+80:     skills: [],
+81:     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+82:     policies: ['synthetic-only'],
+83:     ...overrides
+84:   }
+85: }
+86: 
+87: export interface Phase3ToolObserver {
+88:   (event: { toolId: string; operationKey: string; input: unknown }): void
+89: }
+90: 
+91: export function createPhase3ToolRegistry(options: {
+92:   readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+FIXTURE 72
+72: export function phase3AgentProfile(
+73:   overrides: Partial<AgentProfile> = {}
+74: ): AgentProfile {
+75:   return {
+76:     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+77:     version: 'v1' as AgentProfile['version'],
+78:     objective: 'Complete the synthetic operational goal.',
+79:     instructions: ['synthetic only', 'never act without authorization'],
+80:     skills: [],
+81:     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+82:     policies: ['synthetic-only'],
+83:     ...overrides
+84:   }
+85: }
+86: 
+87: export interface Phase3ToolObserver {
+88:   (event: { toolId: string; operationKey: string; input: unknown }): void
+89: }
+90: 
+91: export function createPhase3ToolRegistry(options: {
+92:   readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+93:   readonly reserveFails?: boolean
+94:   readonly observe?: Phase3ToolObserver
+95: }): ToolRegistry {
+96:   const availabilityTool: ToolDefinition = {
+97:     id: PHASE3_TOOL_AVAILABILITY,
+98:     version: 'v1',
+99:     description: 'Checks the synthetic resource availability.',
+100:     inputSchema: { type: 'object' },
+101:     outputSchema: { type: 'object' },
+102:     risk: 'LOW',
+103:     sideEffect: 'READ',
+104:     idempotent: true,
+105:     requiresApproval: false,
+106:     execute: async (input, context): Promise<ToolResult> => {
+107:       options.observe?.({
+108:         toolId: availabilityTool.id,
+109:         operationKey: context.operationKey ?? '',
+110:         input
+111:       })
+112:       return {
+113:         status: 'SUCCEEDED',
+114:         output:
+115:           options.availability === 'AVAILABLE'
+116:             ? { available: true }
+117:             : { available: false, reason: 'occupied' }
+118:       }
+119:     }
+120:   }
+121:   const reserveTool: ToolDefinition = {
+122:     id: PHASE3_TOOL_RESERVE,
+123:     version: 'v1',
+124:     description: 'Creates a synthetic reservation.',
+125:     inputSchema: { type: 'object' },
+126:     outputSchema: { type: 'object' },
+127:     risk: 'MEDIUM',
+128:     sideEffect: 'WRITE',
+129:     idempotent: false,
+FIXTURE 282
+282: export class ScriptedPolicyEngine implements PolicyEngine {
+283:   public readonly evaluations: PolicyRequest[] = []
+284: 
+285:   public constructor(
+286:     private readonly deniedTools: readonly string[] = [],
+287:     private readonly handoffTools: readonly string[] = [],
+288:     private readonly approvalTools: readonly string[] = []
+289:   ) {}
+290: 
+291:   public async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
+292:     this.evaluations.push(request)
+293:     if (this.deniedTools.includes(request.tool.id)) {
+294:       return {
+295:         outcome: 'DENY',
+296:         reason: `Policy denies ${request.tool.id}.`,
+297:         policyVersion: 'synthetic-policy-v1'
+298:       }
+299:     }
+300:     if (this.handoffTools.includes(request.tool.id)) {
+301:       return {
+302:         outcome: 'HANDOFF',
+303:         reason: `Policy requires a human for ${request.tool.id}.`,
+304:         policyVersion: 'synthetic-policy-v1'
+305:       }
+306:     }
+307:     if (this.approvalTools.includes(request.tool.id)) {
+308:       return {
+309:         outcome: 'REQUIRE_APPROVAL',
+310:         reason: `Policy requires approval for ${request.tool.id}.`,
+311:         policyVersion: 'synthetic-policy-v1'
+312:       }
+313:     }
+314:     return {
+315:       outcome: 'ALLOW',
+316:       reason: 'Allowed by synthetic policy.',
+317:       policyVersion: 'synthetic-policy-v1'
+318:     }
+319:   }
+320: }
+321: 
+322: export class RecordingAuditSink implements AuditSink {
+323:   public readonly events: AuditEvent[] = []
+324: 
+325:   public async append(event: AuditEvent): Promise<void> {
+326:     this.events.push(event)
+327:   }
+328: }
+329: 
+330: export class RecordingTelemetrySink implements TelemetrySink {
+331:   public readonly events: TelemetryEvent[] = []
+332: 
+333:   public record(event: TelemetryEvent): void {
+334:     this.events.push(event)
+335:   }
+336: }
+337: 
+338: export class InMemoryApprovalEngine implements ApprovalEngine {
+339:   private readonly decisions = new Map<string, ApprovalDecision>()
+FIXTURE 322
+322: export class RecordingAuditSink implements AuditSink {
+323:   public readonly events: AuditEvent[] = []
+324: 
+325:   public async append(event: AuditEvent): Promise<void> {
+326:     this.events.push(event)
+327:   }
+328: }
+329: 
+330: export class RecordingTelemetrySink implements TelemetrySink {
+331:   public readonly events: TelemetryEvent[] = []
+332: 
+333:   public record(event: TelemetryEvent): void {
+334:     this.events.push(event)
+335:   }
+336: }
+337: 
+338: export class InMemoryApprovalEngine implements ApprovalEngine {
+339:   private readonly decisions = new Map<string, ApprovalDecision>()
+340:   private readonly executionStates = new Map<
+341:     string,
+342:     'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+343:   >()
+344: 
+345:   public readonly requests: ApprovalRequest[] = []
+346:   public approveOnRequest = false
+347: 
+348:   /** Single-use execution lifecycle, mirroring the durable authority. */
+349:   public execution: ApprovalExecutionPort = {
+350:     begin: async (request) => {
+351:       const state = this.executionStates.get(request.approvalId)
+352:       if (state !== undefined) {
+353:         throw new Error(`Approval execution is ${state.toLowerCase()}`)
+354:       }
+355:       this.executionStates.set(request.approvalId, 'RESERVED')
+356:       return {
+357:         approvalId: request.approvalId,
+358:         reservationId: `reservation_${request.approvalId}`
+359:       }
+360:     },
+361:     complete: async ({ request }) => {
+362:       this.executionStates.set(request.approvalId, 'CONSUMED')
+363:     },
+364:     fail: async ({ request }) => {
+365:       this.executionStates.delete(request.approvalId)
+366:     },
+367:     uncertain: async ({ request }) => {
+368:       this.executionStates.set(request.approvalId, 'UNCERTAIN')
+369:     }
+370:   }
+371: 
+372:   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+373:     this.requests.push(request)
+374:     const existing = this.decisions.get(request.operationKey)
+375:     if (existing) return existing
+376:     if (this.approveOnRequest) {
+377:       const decision: ApprovalDecision = {
+378:         status: 'APPROVED',
+379:         approvalId: `approval_${request.operationKey}` as never,
+FIXTURE 330
+330: export class RecordingTelemetrySink implements TelemetrySink {
+331:   public readonly events: TelemetryEvent[] = []
+332: 
+333:   public record(event: TelemetryEvent): void {
+334:     this.events.push(event)
+335:   }
+336: }
+337: 
+338: export class InMemoryApprovalEngine implements ApprovalEngine {
+339:   private readonly decisions = new Map<string, ApprovalDecision>()
+340:   private readonly executionStates = new Map<
+341:     string,
+342:     'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+343:   >()
+344: 
+345:   public readonly requests: ApprovalRequest[] = []
+346:   public approveOnRequest = false
+347: 
+348:   /** Single-use execution lifecycle, mirroring the durable authority. */
+349:   public execution: ApprovalExecutionPort = {
+350:     begin: async (request) => {
+351:       const state = this.executionStates.get(request.approvalId)
+352:       if (state !== undefined) {
+353:         throw new Error(`Approval execution is ${state.toLowerCase()}`)
+354:       }
+355:       this.executionStates.set(request.approvalId, 'RESERVED')
+356:       return {
+357:         approvalId: request.approvalId,
+358:         reservationId: `reservation_${request.approvalId}`
+359:       }
+360:     },
+361:     complete: async ({ request }) => {
+362:       this.executionStates.set(request.approvalId, 'CONSUMED')
+363:     },
+364:     fail: async ({ request }) => {
+365:       this.executionStates.delete(request.approvalId)
+366:     },
+367:     uncertain: async ({ request }) => {
+368:       this.executionStates.set(request.approvalId, 'UNCERTAIN')
+369:     }
+370:   }
+371: 
+372:   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+373:     this.requests.push(request)
+374:     const existing = this.decisions.get(request.operationKey)
+375:     if (existing) return existing
+376:     if (this.approveOnRequest) {
+377:       const decision: ApprovalDecision = {
+378:         status: 'APPROVED',
+379:         approvalId: `approval_${request.operationKey}` as never,
+380:         reason: 'approved by fixture'
+381:       }
+382:       this.decisions.set(request.operationKey, decision)
+383:       return decision
+384:     }
+385:     const decision: ApprovalDecision = {
+386:       status: 'PENDING',
+387:       approvalId: `approval_${request.operationKey}` as never,
+FIXTURE 338
+338: export class InMemoryApprovalEngine implements ApprovalEngine {
+339:   private readonly decisions = new Map<string, ApprovalDecision>()
+340:   private readonly executionStates = new Map<
+341:     string,
+342:     'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+343:   >()
+344: 
+345:   public readonly requests: ApprovalRequest[] = []
+346:   public approveOnRequest = false
+347: 
+348:   /** Single-use execution lifecycle, mirroring the durable authority. */
+349:   public execution: ApprovalExecutionPort = {
+350:     begin: async (request) => {
+351:       const state = this.executionStates.get(request.approvalId)
+352:       if (state !== undefined) {
+353:         throw new Error(`Approval execution is ${state.toLowerCase()}`)
+354:       }
+355:       this.executionStates.set(request.approvalId, 'RESERVED')
+356:       return {
+357:         approvalId: request.approvalId,
+358:         reservationId: `reservation_${request.approvalId}`
+359:       }
+360:     },
+361:     complete: async ({ request }) => {
+362:       this.executionStates.set(request.approvalId, 'CONSUMED')
+363:     },
+364:     fail: async ({ request }) => {
+365:       this.executionStates.delete(request.approvalId)
+366:     },
+367:     uncertain: async ({ request }) => {
+368:       this.executionStates.set(request.approvalId, 'UNCERTAIN')
+369:     }
+370:   }
+371: 
+372:   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+373:     this.requests.push(request)
+374:     const existing = this.decisions.get(request.operationKey)
+375:     if (existing) return existing
+376:     if (this.approveOnRequest) {
+377:       const decision: ApprovalDecision = {
+378:         status: 'APPROVED',
+379:         approvalId: `approval_${request.operationKey}` as never,
+380:         reason: 'approved by fixture'
+381:       }
+382:       this.decisions.set(request.operationKey, decision)
+383:       return decision
+384:     }
+385:     const decision: ApprovalDecision = {
+386:       status: 'PENDING',
+387:       approvalId: `approval_${request.operationKey}` as never,
+388:       reason: 'approval pending'
+389:     }
+390:     this.decisions.set(request.operationKey, decision)
+391:     return decision
+392:   }
+393: 
+394:   public approve(operationKey: string): void {
+395:     this.decisions.set(operationKey, {
+CONTROL_SUMMARY [{"name": "eof-timeout", "capture": {"executionElapsedNs": 150156500, "cleanupElapsedNs": 10292299, "totalElapsedNs": 160448799, "retainedBytes": 0, "errors": [{"type": "TimeoutError", "message": "execution_deadline_after_eof"}], "joined": true, "remainingProcessGroup": false}}, {"name": "output-cap", "capture": {"executionElapsedNs": 21004169, "cleanupElapsedNs": 10267994, "totalElapsedNs": 31272163, "retainedBytes": 1024, "errors": [{"type": "OverflowError", "message": "combined_output_cap"}], "joined": true, "remainingProcessGroup": false}}, {"name": "capture-error", "capture": {"executionElapsedNs": 20016209, "cleanupElapsedNs": 10264077, "totalElapsedNs": 30280286, "retainedBytes": 0, "errors": [{"type": "OSError", "message": "synthetic_capture_error"}], "joined": true, "remainingProcessGroup": false}}, {"name": "after-snapshot-error", "capture": {"executionElapsedNs": 22530402, "cleanupElapsedNs": 22703, "totalElapsedNs": 22553105, "retainedBytes": 26, "errors": [], "joined": true, "remainingProcessGroup": false}}]

@@ -1,0 +1,14 @@
+from pathlib import Path
+import json,sys,hashlib
+R=Path(__file__).resolve().parent;sys.path.insert(0,str(R));from run import run,env_for,NODE
+Q=R/'private';driver=Q/'tests/differential/reference-failure-driver.mjs';original=driver.read_bytes();env=env_for(R/'fault-env')
+script=b"process.stdout.write('I1_STDOUT_SENTINEL_9a70\\n'); process.stderr.write('I1_STDERR_SENTINEL_9a70\\n'); process.exitCode=23;\n"
+# Actual newline in source; JS string contains escaped newline.
+script="process.stdout.write('I1_STDOUT_SENTINEL_9a70\\n'); process.stderr.write('I1_STDERR_SENTINEL_9a70\\n'); process.exitCode=23;\n".encode()
+try:
+ driver.write_bytes(script)
+ code=run('fault-default',[NODE,str(Q/'node_modules/vitest/vitest.mjs'),'run','tests/differential/model-failure-differential.test.ts','--config',str(Q/'vitest.config.mjs'),'-t','observes both real motors: error-ascii','--reporter=verbose'],Q,env,20,2097152)
+ logs=(R/'commands/fault-default.stdout.log').read_text()+(R/'commands/fault-default.stderr.log').read_text()
+ facts={'intentionalFault':'private driver child prints stdout+stderr sentinels and exits 23; no reference run or CVG call expected in this probe','driverSHA256':hashlib.sha256(script).hexdigest(),'exit':code,'stdoutSentinelInPreservedVitestLog':'I1_STDOUT_SENTINEL_9a70' in logs,'stderrSentinelInPreservedVitestLog':'I1_STDERR_SENTINEL_9a70' in logs,'remainingEvidenceDirectories':[str(p) for p in Path(env['TMPDIR']).glob('cvg-*-evidence-*')],'remainingChildHomes':[str(p) for p in Path(env['TMPDIR']).glob('cvg-model-failure-*')]}
+ (R/'fault-default-results.json').write_text(json.dumps(facts,indent=2));print(json.dumps(facts))
+finally:driver.write_bytes(original)

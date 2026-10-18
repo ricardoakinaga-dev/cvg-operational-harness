@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Inventory/seal only own critic outputs; not an authenticity signature."""
+import hashlib
+import json
+from pathlib import Path
+
+OUT = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-r2')
+ARTIFACTS = {
+    'check_packet.py', 'seal_outputs.py', 'check-results.json',
+    'fingerprints-before.json', 'fingerprints-after.json',
+    'report.md', 'findings.json', 'read-coverage.json',
+}
+
+
+def encoded(value):
+    return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode()
+
+
+def row(name):
+    path = OUT / name
+    if path.is_symlink() or path.resolve() != path or not path.is_file():
+        raise ValueError('Unsafe own artifact path: ' + name)
+    data = path.read_bytes()
+    return {'path': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+
+
+def main():
+    actual = {str(p.relative_to(OUT)) for p in OUT.rglob('*') if p.is_file() or p.is_symlink()}
+    if actual - ARTIFACTS - {'inventory.json', 'seal.json'}:
+        raise ValueError('Unaccounted own outputs: ' + repr(sorted(actual - ARTIFACTS - {'inventory.json', 'seal.json'})))
+    if ARTIFACTS - actual:
+        raise ValueError('Missing own outputs')
+    results = json.loads((OUT / 'check-results.json').read_text())
+    if results['overall'] != 'PASS':
+        raise ValueError('Static checks failed; preserve error, do not seal')
+    before = json.loads((OUT / 'fingerprints-before.json').read_text())
+    after = json.loads((OUT / 'fingerprints-after.json').read_text())
+    if before != after or after['count'] != 53:
+        raise ValueError('Input fingerprint mismatch')
+    findings = json.loads((OUT / 'findings.json').read_text())
+    if findings['verdict'] != 'REVISE' or len(findings['criteria']) != 7:
+        raise ValueError('Unexpected report identity')
+    artifacts = [row(name) for name in sorted(ARTIFACTS)]
+    inventory = {
+        'schema': 'cvg.critic-i1.inventory/1', 'ownedRoot': str(OUT), 'verdict': 'REVISE',
+        'files': artifacts,
+        'inventorySelf': {'path': 'inventory.json', 'byteShaLocation': 'seal.json'},
+        'detachedSeal': {'path': 'seal.json', 'selfHashExcluded': True},
+        'rule': 'Byte/SHA for every preceding own artifact here; detached seal repeats all and includes inventory itself. Only detached seal excludes itself, avoiding recursive hashes.',
+        'inputManifestSha256': after['manifest']['sha256'],
+        'sourceCopies': 53, 'beforeAfterEqual': True,
+        'runtimeAcceptance': 'NOT_RUN', 'humanApproval': 'NOT_GRANTED', 'buildAuthority': 'NOT_AUTHORIZED',
+    }
+    (OUT / 'inventory.json').write_bytes(encoded(inventory))
+    sealed = artifacts + [row('inventory.json')]
+    payload = json.dumps(sealed, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    seal = {
+        'schema': 'cvg.critic-i1.detached-seal/1', 'ownedRoot': str(OUT),
+        'algorithm': 'SHA-256', 'authenticity': 'Unsigned integrity seal, not identity attestation',
+        'verdict': 'REVISE', 'manifestSha256': after['manifest']['sha256'],
+        'inputCopies': 53, 'inputFingerprintsImmutable': True,
+        'files': sealed, 'fileListCanonicalSha256': hashlib.sha256(payload).hexdigest(),
+        'canonicalRule': 'UTF-8 json.dumps(files, ensure_ascii=False, sort_keys=True, separators=(comma,colon)), no newline',
+        'excludedSelf': 'seal.json',
+    }
+    (OUT / 'seal.json').write_bytes(encoded(seal))
+    verify = json.loads((OUT / 'seal.json').read_text())
+    assert all(row(r['path']) == r for r in verify['files'])
+    assert {r['path'] for r in verify['files']} | {'seal.json'} == {str(p.relative_to(OUT)) for p in OUT.rglob('*') if p.is_file()}
+    print(json.dumps({'verdict': 'REVISE', 'sealedFiles': len(sealed), 'ownedFiles': len(sealed) + 1,
+                      'inventorySha256': row('inventory.json')['sha256'], 'sealVerified': True}))
+
+
+if __name__ == '__main__':
+    main()

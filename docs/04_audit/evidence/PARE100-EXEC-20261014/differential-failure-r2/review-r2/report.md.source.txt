@@ -1,0 +1,45 @@
+# I1 fresh — T2 P100-004/F-DIF-ERR-001 R2
+
+**APPROVE_SCOPED_TEST_SUPPORT.** Nenhum achado material no suporte de teste delimitado pelo contrato corrente. Não é aprovação de paridade nem de gate de produto, produção ou release.
+
+Revisão independente das fontes e de execuções próprias; modelo herdado, sem agentes descendentes. Escopo congelado: `review-packet/rules/current-task-contract.md.source.txt`, SHA-256 `2c68a0d157bc4eb397db186387cfc96b7b7d4410d64850afa06777ed0b8c3f23`. Referência: pin `768fb1f3d3dcf9a16659ee354e927d05475f22dd`. Nenhum parecer, retorno, ledger, backlog, coordenação, história, `.gauntlet` ou rationale do Builder foi consultado nesta revisão. O claim foi informado pelo solicitante. As restrições desta solicitação prevaleceram sobre atualizações de estado no repositório.
+
+## Evidência própria
+
+| Critério obrigatório | Observação executada | Resultado |
+| --- | --- | --- |
+| Três falhas e três replies pelos motores reais | `real-explicit-v4` e `real-default`, Node 22.23.2 / Vitest 4.1.11; fontes atuais sem alteração | 19/19 em cada modo, exit 0 |
+| Rejeição de observações adulteradas | `probe.mjs`: 39 mutações em cada uma das três falhas | 117/117 rejeitadas; três observações válidas aceitas |
+| Controle RED discriminante | `red-controls.mjs`, comparador anterior, mesmas 11 exigências de rejeição | 11 assertions falham no anterior; exit 1 intencional; atual rejeita 11/11 |
+| Inventário independente do registro | `inventory-guard.mjs`, resolução pelos nove nomes constantes, realpath, arquivo regular, SHA de disco; hook que bloquearia carregamento de código da referência | Nove entradas verificadas; zero tentativas de carregamento de módulos da referência |
+| Preservação após falha real do filho de controle | Cópia privada de cada CLI em `fault-project-{reply,failure}`, filho finito com sentinelas stdout/stderr e exit 23; modo default e explícito | Quatro pais terminam exit 1 esperado; provas retidas fora da HOME do filho; nenhum resultado contado como motor real |
+| Ciclo de vida e metadados | `verify-evidence.py`: seis comandos reais e quatro de controle | PID, exit, signal, duração, timeout 5000 ms, maxBuffer 1048576, hashes, ambiente e término conferidos; HOMEs removidas e PIDs ausentes |
+| Coleta padrão em sucesso / preservação explícita | Pasta TMP da execução padrão vazia após sucesso; seis comandos/raws explícitos preservados; canário explícito conservado e ausente do registro de falha | Conforme |
+| Qualidade das fontes atuais | `quality-types`, `quality-lint`, `quality-format` em projeto/configuração/dependências privados | Exit 0 nos três checks focados |
+| Integridade | `pre-sentinels.json`, `post-sentinels.json` e sentinelas adicionais | 560 entradas originais e 30 inputs adicionais inalterados; 17 cópias atuais idênticas ao pacote |
+
+As 560 entradas são 66 arquivos selados, 17 correspondentes live e 477 externos (465 CVG e 12 fontes/exports da referência). Foram conferidas antes e depois; o próprio manifesto de entrada também foi hashado. Os 30 inputs adicionais abrangem SDK e configuração necessários à execução privada. Isso não constitui inventário de toda a closure de runtime.
+
+As mutações próprias incluem remoção de header/context/model-request; adulteração de mensagens persistidas e requests; mensagem tool e `turn.effects` extras; divergências entre evento/request/input, session/correlation/trace; erro e causa falsos; evento removido, fingerprint trocado, `surfaceOp` removido/alterado; hash zero, export inexistente, diretório e export trocado. O comparador anterior aceitava 81/117 mutações; nenhum desses aceites foi atribuído à versão atual. Os resultados completos estão em `own-results/mutation-results.json`.
+
+## Inspeção do mecanismo
+
+`failure-native-schemas.mjs` valida as duas topologias separadamente, exige os campos esperados e liga eventos, mensagens, requests e turno às cópias e ao input. Mantém os fingerprints por tipo do protocolo v1 e `surfaceOp: append` nas mensagens da referência. `compare-model-failure.mjs` exige identidade exata do inventário produzido por `reference-inventory.mjs`; o controle não depende apenas de regex de hash ou prefixo de caminho. O inventário resolve nomes constantes e lê FS/Git, sem executar exports da referência.
+
+O driver usa os exports públicos de testkit/AgentLoop, SessionStore e LlmAdapter instalados no pin. O consumidor CVG usa SDK, factory/kernel e sessão reais. Apenas o modelo externo é sintético. Não foi copiada implementação da referência nem executado build nela.
+
+A causa sintética encadeada permanece nos snapshots dos adapters. A referência observada produz `LlmError` com causa nula e terminal `{kind: error, code: UNKNOWN}`; o CVG conserva `MODEL_FAILURE` e sua resposta nativa. Essas diferenças permanecem nos raws e na medição. Contadores iguais não produzem PASS de paridade; todas as medições válidas retornaram `fullParity: NOT_VERIFIED`.
+
+Os dois suites registram `onTestFailed`, finalizam pelo `evidence-lifecycle` e removem evidência owned apenas em sucesso. Em falha default, o registro JSON contém streams/metadados/hashes/caminho com orçamento limitado; o arquivo bruto permanece. O modo explícito não enumera arquivos alheios. Nos controles, `spawnSync` observa o exit antes da gravação dos metadados e da remoção no `finally`; os registros comprovam exit 23 e a HOME já estava recolhida na verificação posterior. O teste de lifecycle também confirmou o limite inferior a 512 KiB para emissão com truncamento, sem truncar o arquivo retido.
+
+O comparador de reply, o helper CVG de reply e ambos os drivers são idênticos ao estágio anterior. O diff dos suites preserva os casos e assertions existentes, adicionando controles e lifecycle/metadados; ver `own-results/preservation.json`.
+
+## Proveniência, reprodução e limites
+
+`logs/*.command.json` registra argv, ambiente whitelisted, cwd, PID, exit observado, duração, limites e hashes dos logs para cada execução medida. O supervisor próprio impõe 80 s e 2 MiB combinados; os filhos da referência usam 5 s e 1 MiB. Os ambientes dos filhos usam PATH Node fixo e HOME/TMP/XDG/DSH privados. Nenhuma execução medida atingiu limites. Não houve instalação, provider, serviço, PG, Docker, CLI de usuário ou ação de rede autorizada; os drivers observados registraram zero tentativas de rede.
+
+`setup.py`, `run.py`, `quality.py`, `probe.mjs`, `red-controls.mjs`, `inventory-guard.mjs`, `fault-controls.py` e `verify-evidence.py` conservam os procedimentos. Os três primeiros ensaios `real-explicit`, `v2` e `v3` falharam na preparação da cópia (alias SDK, depois tsconfigs ausentes), antes de executar os motores. Seus logs foram preservados e não contam como defeitos do candidato nem como resultados dos motores. Após copiar os inputs necessários, a execução `v4` passou; os 17 arquivos avaliados permaneceram idênticos aos selados.
+
+Resultados próprios ficam em `own-results/`, `logs/` e provas retidas em `runs/fault-*/tmp/`. `received/input-index.json` identifica o material recebido, separado dos resultados próprios. Os bytes recebidos foram verificados; logs/veredictos do Lead não fundamentam esta conclusão.
+
+Permanecem **NOT_VERIFIED**: closure transitiva da distribuição, equivalência entre source/lib e paridade funcional total. Os checks de tipos são focados no suporte e suas dependências alcançadas, não uma certificação geral do repositório. Esta decisão não qualifica P100-004, P100-003, barra 0368/36, gates globais, release ou 0220 humana. Nenhum arquivo no root, W, referência ou pacote foi alterado; somente `review-r2/**` foi escrito. Próxima ação: o Lead pode incorporar este parecer ao arquivo de evidências e à integridade disjuntos.

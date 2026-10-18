@@ -1,0 +1,4695 @@
+diff --git a/scripts/boundary-installed-identity.mjs b/scripts/boundary-installed-identity.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e74a330cd1e059402c468926de4179aa01a5fc93
+--- /dev/null
++++ b/scripts/boundary-installed-identity.mjs
+@@ -0,0 +1,1106 @@
++// SPEC0234: physical content identity only. No result approves semantics.
++import fs from 'node:fs'
++import path from 'node:path'
++import { createHash } from 'node:crypto'
++
++export const INSTALLED_IDENTITY_LIMITS = Object.freeze({
++  maxCompressedBytes: 2 * 1024 ** 3,
++  maxTotalBytes: 4 * 1024 ** 3,
++  maxPackageBytes: 512 * 1024 ** 2,
++  maxEntries: 200_000,
++  maxDepth: 64,
++  maxProcesses: 8,
++  npmTimeoutMs: 180_000,
++  comparisonTimeoutMs: 120_000
++})
++const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
++const NPM = '/home/ricardo/.nvm/versions/node/v22.23.2/lib/node_modules/npm'
++const NODE_SHA =
++  '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
++const NPM_SHA =
++  'a931e1d739da4bc407ffd23e6b242f20c3f7475378a0718bac03c83e7ca801ae'
++const HEX = /^[a-f0-9]{64}$/
++const own = (v, k) => Object.hasOwn(v, k)
++const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
++const lexical = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
++const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
++const inside = (root, target) =>
++  target === root || target.startsWith(root + path.sep)
++const posix = (file) => file.split(path.sep).join('/')
++const relativePath = (s) =>
++  typeof s === 'string' &&
++  s.length > 0 &&
++  !s.includes('\\') &&
++  !s.includes('\0') &&
++  !path.posix.isAbsolute(s) &&
++  s.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
++const packageKey = (s) =>
++  relativePath(s) &&
++  /^(?:node_modules\/(?:@[^/]+\/)?[^@/.][^/]*)(?:\/node_modules\/(?:@[^/]+\/)?[^@/.][^/]*)*$/.test(
++    s
++  )
++const nestedPath = (relative) =>
++  /(?:^|\/)node_modules\/(?:@[^/]+\/)?[^@/.][^/]*$/.test(relative)
++function nestedBoundary(file, relative, stat) {
++  if (!nestedPath(relative)) return false
++  if (stat.isSymbolicLink()) return true
++  if (!stat.isDirectory()) return false
++  try {
++    return lstat(path.join(file, 'package.json')).isFile()
++  } catch (error) {
++    if (error.code === 'ENOENT') return false
++    throw error
++  }
++}
++
++export class InstalledIdentityError extends Error {
++  constructor(code, status = 'UNAVAILABLE') {
++    super(code)
++    this.name = 'InstalledIdentityError'
++    this.code = code
++    this.status = status
++  }
++}
++const fail = (code, status) => {
++  throw new InstalledIdentityError(code, status)
++}
++const requireValue = (condition, code = 'REFERENCE_SCHEMA_INVALID') => {
++  if (!condition) fail(code)
++}
++
++// Build strings directly: JSON.stringify would reorder integer-like keys.
++export function canonicalJson(value) {
++  const active = new Set()
++  function encode(v) {
++    if (v === null || typeof v === 'string' || typeof v === 'boolean')
++      return JSON.stringify(v)
++    if (typeof v === 'number' && Number.isFinite(v)) return JSON.stringify(v)
++    if (
++      !Array.isArray(v) &&
++      (!record(v) ||
++        ![Object.prototype, null].includes(Object.getPrototypeOf(v)))
++    )
++      fail('CANONICAL_JSON_VALUE_INVALID')
++    if (active.has(v)) fail('CANONICAL_JSON_CYCLE')
++    active.add(v)
++    const result = Array.isArray(v)
++      ? '[' + Array.from(v, encode).join(',') + ']'
++      : '{' +
++        Object.keys(v)
++          .sort(lexical)
++          .map((k) => JSON.stringify(k) + ':' + encode(v[k]))
++          .join(',') +
++        '}'
++    active.delete(v)
++    return result
++  }
++  return encode(value) + '\n'
++}
++
++function signature(stat) {
++  return ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs']
++    .map((k) => String(stat[k]))
++    .join(':')
++}
++const lstat = (file) => fs.lstatSync(file, { bigint: true })
++const inode = (stat) => String(stat.dev) + ':' + String(stat.ino)
++
++function readPhysical(
++  file,
++  {
++    maxBytes = INSTALLED_IDENTITY_LIMITS.maxTotalBytes,
++    consume,
++    onChunk,
++    check = () => {}
++  } = {}
++) {
++  const before = lstat(file)
++  if (!before.isFile()) fail('NOT_REGULAR_FILE', 'UNSUPPORTED')
++  if (before.size > BigInt(maxBytes)) fail('LIMIT_REGULAR_BYTES', 'UNSUPPORTED')
++  const fd = fs.openSync(
++    file,
++    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
++  )
++  try {
++    if (signature(before) !== signature(fs.fstatSync(fd, { bigint: true })))
++      fail('FILE_CHANGED_DURING_READ')
++    const digest = createHash('sha256')
++    const buffer = Buffer.allocUnsafe(64 * 1024)
++    let bytes = 0
++    for (;;) {
++      check()
++      const length = fs.readSync(fd, buffer, 0, buffer.length, null)
++      if (!length) break
++      bytes += length
++      if (bytes > maxBytes) fail('LIMIT_REGULAR_BYTES', 'UNSUPPORTED')
++      const chunk = buffer.subarray(0, length)
++      digest.update(chunk)
++      consume?.(chunk)
++      onChunk?.({ file, bytes })
++    }
++    if (
++      BigInt(bytes) !== before.size ||
++      signature(before) !== signature(fs.fstatSync(fd, { bigint: true })) ||
++      signature(before) !== signature(lstat(file))
++    )
++      fail('FILE_CHANGED_DURING_READ')
++    return {
++      sha256: digest.digest('hex'),
++      size: bytes,
++      executableBits: Number(before.mode & 0o111n),
++      stat: before
++    }
++  } finally {
++    fs.closeSync(fd)
++  }
++}
++
++export function sha256File(file) {
++  return readPhysical(file).sha256
++}
++function readJson(file, maxBytes = 16 * 1024 ** 2) {
++  const chunks = []
++  readPhysical(file, {
++    maxBytes,
++    consume: (chunk) => chunks.push(Buffer.from(chunk))
++  })
++  try {
++    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
++  } catch {
++    fail('JSON_INVALID')
++  }
++}
++
++function physicalDirectory(dir) {
++  if (!lstat(dir).isDirectory() || fs.realpathSync(dir) !== path.resolve(dir))
++    fail('DIRECTORY_ALIAS', 'UNSUPPORTED')
++}
++function safeFile(root, relative) {
++  const file = path.join(root, relative)
++  if (!inside(root, file) || fs.realpathSync(file) !== file)
++    fail('PATH_ALIAS', 'UNSUPPORTED')
++  return file
++}
++
++export function fingerprintResolution(inputRoot) {
++  const root = fs.realpathSync(inputRoot)
++  physicalDirectory(root)
++  const snapshots = new Map()
++  const remember = (file) => {
++    const before = signature(lstat(file))
++    if (snapshots.has(file) && snapshots.get(file) !== before)
++      fail('RESOLUTION_INPUT_RACE')
++    snapshots.set(file, before)
++  }
++  const files = new Set(['package.json'])
++  remember(path.join(root, 'package.json'))
++  const rootManifest = readJson(safeFile(root, 'package.json'))
++  requireValue(record(rootManifest), 'RESOLUTION_MANIFEST_INVALID')
++  const workspaces =
++    rootManifest.workspaces === undefined
++      ? []
++      : Array.isArray(rootManifest.workspaces)
++        ? rootManifest.workspaces
++        : rootManifest.workspaces?.packages
++  requireValue(Array.isArray(workspaces), 'WORKSPACES_UNSUPPORTED')
++  let visited = 0
++  function expand(base, segments, depth = 0) {
++    remember(base)
++    if (
++      ++visited > INSTALLED_IDENTITY_LIMITS.maxEntries ||
++      depth > INSTALLED_IDENTITY_LIMITS.maxDepth
++    )
++      fail('RESOLUTION_LIMIT', 'UNSUPPORTED')
++    if (!segments.length) {
++      const relative = posix(path.relative(root, base))
++      if (fs.existsSync(path.join(base, 'package.json')))
++        files.add((relative ? relative + '/' : '') + 'package.json')
++      return
++    }
++    const [head, ...tail] = segments
++    if (head === '**') expand(base, tail, depth + 1)
++    const pattern = new RegExp(
++      '^' +
++        head
++          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
++          .replace(/\*/g, '.*')
++          .replace(/\?/g, '.') +
++        '$'
++    )
++    for (const name of fs.readdirSync(base).sort(lexical)) {
++      if (['node_modules', 'dist', '.git'].includes(name)) continue
++      if (!pattern.test(name) && head !== '**') continue
++      const full = path.join(base, name)
++      const stat = lstat(full)
++      if (stat.isSymbolicLink()) fail('WORKSPACE_ALIAS', 'UNSUPPORTED')
++      if (stat.isDirectory())
++        expand(full, head === '**' ? segments : tail, depth + 1)
++    }
++  }
++  for (const pattern of workspaces) {
++    requireValue(
++      relativePath(pattern) && !/[!{}[\]]/.test(pattern),
++      'WORKSPACES_UNSUPPORTED'
++    )
++    expand(root, pattern.split('/'))
++  }
++  const entries = []
++  for (const file of [...files].sort(lexical)) {
++    remember(path.join(root, file))
++    entries.push({ path: file, sha256: sha256File(safeFile(root, file)) })
++    const config = path.posix.join(path.posix.dirname(file), '.npmrc')
++    remember(path.dirname(path.join(root, config)))
++    try {
++      if (!lstat(path.join(root, config)).isFile())
++        fail('CONFIG_NOT_REGULAR', 'UNSUPPORTED')
++      remember(path.join(root, config))
++      entries.push({ path: config, sha256: sha256File(safeFile(root, config)) })
++    } catch (error) {
++      if (error.code !== 'ENOENT') throw error
++      entries.push({ path: config, absent: true })
++    }
++  }
++  entries.sort((a, b) => lexical(a.path, b.path))
++  remember(path.join(root, 'package-lock.json'))
++  const lockSha256 = sha256File(safeFile(root, 'package-lock.json'))
++  for (const [file, before] of snapshots)
++    if (before !== signature(lstat(file))) fail('RESOLUTION_INPUT_RACE')
++  return {
++    lockSha256,
++    configSha256: hash(canonicalJson(entries))
++  }
++}
++
++export function fingerprintToolchain({ nodePath = NODE, npmRoot = NPM } = {}) {
++  requireValue(
++    typeof nodePath === 'string' &&
++      path.isAbsolute(nodePath) &&
++      typeof npmRoot === 'string' &&
++      path.isAbsolute(npmRoot),
++    'TOOLCHAIN_PATH_INVALID'
++  )
++  physicalDirectory(npmRoot)
++  if (fs.realpathSync(nodePath) !== nodePath) fail('TOOLCHAIN_ALIAS')
++  const started = performance.now()
++  const check = () => {
++    if (
++      performance.now() - started >=
++      INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
++    )
++      fail('TOOLCHAIN_TIMEOUT')
++  }
++  const nodeFile = readPhysical(nodePath, { check })
++  const nodeSha256 = nodeFile.sha256
++  if (nodeSha256 !== NODE_SHA) fail('TOOLCHAIN_NODE_PIN_MISMATCH')
++  const npmPackage = readJson(path.join(npmRoot, 'package.json'))
++  requireValue(
++    npmPackage.name === 'npm' && npmPackage.version === '10.9.8',
++    'TOOLCHAIN_NPM_VERSION_MISMATCH'
++  )
++  const entries = []
++  const snapshots = []
++  const fileSnapshots = [{ file: nodePath, stat: nodeFile.stat }]
++  let count = 0,
++    totalBytes = 0
++  function walk(dir, depth = 0) {
++    check()
++    if (depth > 64) fail('TOOLCHAIN_LIMIT')
++    const before = lstat(dir)
++    const names = fs.readdirSync(dir).sort(lexical)
++    snapshots.push({ dir, before, names })
++    for (const name of names) {
++      check()
++      if (++count > INSTALLED_IDENTITY_LIMITS.maxEntries)
++        fail('TOOLCHAIN_LIMIT')
++      const file = path.join(dir, name)
++      const stat = lstat(file)
++      if (stat.isDirectory()) walk(file, depth + 1)
++      else if (stat.isFile()) {
++        const result = readPhysical(file, {
++          check,
++          maxBytes: INSTALLED_IDENTITY_LIMITS.maxTotalBytes - totalBytes
++        })
++        totalBytes += result.size
++        fileSnapshots.push({ file, stat: result.stat })
++        entries.push({
++          path: posix(path.relative(npmRoot, file)),
++          type: 'file',
++          sha256: result.sha256,
++          executableBits: result.executableBits
++        })
++      } else fail('TOOLCHAIN_UNSUPPORTED_TYPE')
++      if (entries.length > INSTALLED_IDENTITY_LIMITS.maxEntries)
++        fail('TOOLCHAIN_LIMIT')
++    }
++  }
++  walk(npmRoot)
++  for (const snapshot of fileSnapshots) {
++    check()
++    if (signature(snapshot.stat) !== signature(lstat(snapshot.file)))
++      fail('TOOLCHAIN_CHANGED')
++  }
++  for (const snapshot of snapshots) {
++    if (
++      signature(snapshot.before) !== signature(lstat(snapshot.dir)) ||
++      canonicalJson(snapshot.names) !==
++        canonicalJson(fs.readdirSync(snapshot.dir).sort(lexical))
++    )
++      fail('TOOLCHAIN_CHANGED')
++  }
++  // The trusted preparation used pathlib path ordering (component tuples).
++  // Reproduce that exact aggregate; string sorting changes cli/ vs cli.js.
++  entries.sort((a, b) => {
++    const left = a.path.split('/'),
++      right = b.path.split('/')
++    for (let i = 0; i < Math.min(left.length, right.length); i++) {
++      const order = lexical(left[i], right[i])
++      if (order) return order
++    }
++    return left.length - right.length
++  })
++  const npmTreeSha256 = hash(canonicalJson(entries).slice(0, -1))
++  if (npmTreeSha256 !== NPM_SHA) fail('TOOLCHAIN_NPM_PIN_MISMATCH')
++  return {
++    nodePath,
++    nodeVersion: '22.23.2',
++    nodeSha256,
++    npmRoot,
++    npmVersion: npmPackage.version,
++    npmTreeSha256
++  }
++}
++
++function collectionLimits(options) {
++  const limits = { ...INSTALLED_IDENTITY_LIMITS }
++  if (options.testOnly?.limits) {
++    for (const [key, value] of Object.entries(options.testOnly.limits)) {
++      requireValue(
++        own(limits, key) &&
++          Number.isSafeInteger(value) &&
++          value >= 0 &&
++          value <= limits[key],
++        'TEST_LIMIT_INVALID'
++      )
++      limits[key] = value
++    }
++  }
++  return limits
++}
++
++export function collectPackageInventory(packageRoot, options = {}) {
++  const limits = collectionLimits(options)
++  const hooks = options.testOnly?.hooks ?? {}
++  const root = path.resolve(packageRoot)
++  const entries = [],
++    nestedPackages = [],
++    snapshots = [],
++    inodes = new Set()
++  const usage = { entries: 0, regularBytes: 0, maxDepth: 0 }
++  const started = performance.now()
++  const deadline = Math.min(
++    started + limits.comparisonTimeoutMs,
++    options._deadline ?? Infinity
++  )
++  const inventory = { entries, nestedPackages, usage }
++  const check = () => {
++    if (performance.now() >= deadline) fail('COMPARISON_TIMEOUT')
++  }
++  function visit(file, relative, depth) {
++    check()
++    if (depth > limits.maxDepth) fail('LIMIT_DEPTH', 'UNSUPPORTED')
++    usage.maxDepth = Math.max(usage.maxDepth, depth)
++    const stat = lstat(file)
++    hooks.afterLstat?.({ file, relative, stat })
++    if (relative && ++usage.entries > limits.maxEntries)
++      fail('LIMIT_ENTRIES', 'UNSUPPORTED')
++    const snapshot = { file, stat }
++    snapshots.push(snapshot)
++    const nested = relative && nestedBoundary(file, relative, stat)
++    if (nested) nestedPackages.push(relative)
++    if (stat.isFile()) {
++      const remaining =
++        Math.min(limits.maxPackageBytes, limits.maxTotalBytes) -
++        usage.regularBytes
++      const result = readPhysical(file, {
++        maxBytes: remaining,
++        onChunk: hooks.afterChunk,
++        check
++      })
++      usage.regularBytes += result.size
++      inodes.add(inode(stat))
++      entries.push({
++        path: relative,
++        type: 'file',
++        size: result.size,
++        sha256: result.sha256,
++        executableBits: result.executableBits
++      })
++    } else if (stat.isSymbolicLink()) {
++      const target = fs.readlinkSync(file)
++      let resolution
++      try {
++        resolution = fs.realpathSync(file)
++      } catch {
++        entries.push({ path: relative, type: 'link', target, resolution: null })
++        fail('LINK_UNRESOLVED', 'UNSUPPORTED')
++      }
++      snapshot.target = target
++      snapshot.resolution = resolution
++      entries.push({ path: relative, type: 'link', target, resolution })
++      if (!inside(root, resolution)) fail('LINK_EXTERNAL', 'UNSUPPORTED')
++    } else if (stat.isDirectory()) {
++      if (relative) entries.push({ path: relative, type: 'directory' })
++      // A nested installation is an explicit successor, never an exclusion.
++      if (nested) return
++      const names = fs.readdirSync(file).sort(lexical)
++      snapshot.names = names
++      for (const name of names)
++        visit(
++          path.join(file, name),
++          relative ? relative + '/' + name : name,
++          depth + 1
++        )
++    } else fail('SPECIAL_FILE', 'UNSUPPORTED')
++  }
++  try {
++    physicalDirectory(root)
++    visit(root, '', 0)
++    hooks.beforeRevalidate?.({ root })
++    for (const snapshot of snapshots) {
++      check()
++      if (signature(snapshot.stat) !== signature(lstat(snapshot.file)))
++        fail('INVENTORY_CHANGED')
++      if (
++        snapshot.names &&
++        canonicalJson(snapshot.names) !==
++          canonicalJson(fs.readdirSync(snapshot.file).sort(lexical))
++      )
++        fail('DIRECTORY_CHANGED')
++      if (
++        snapshot.target !== undefined &&
++        (fs.readlinkSync(snapshot.file) !== snapshot.target ||
++          fs.realpathSync(snapshot.file) !== snapshot.resolution)
++      )
++        fail('LINK_CHANGED')
++    }
++    entries.sort((a, b) => lexical(a.path, b.path))
++    nestedPackages.sort(lexical)
++    inventory.inventorySha256 = hash(canonicalJson(inventory))
++    Object.defineProperties(inventory, {
++      _inodes: { value: inodes },
++      _snapshots: {
++        value: snapshots.map((s) => ({
++          path: posix(path.relative(root, s.file)),
++          signature: signature(s.stat)
++        }))
++      }
++    })
++    return inventory
++  } catch (cause) {
++    const error =
++      cause instanceof InstalledIdentityError
++        ? cause
++        : new InstalledIdentityError('INVENTORY_IO_ERROR')
++    // An unsupported early entry cannot hide later physical successors.
++    // This pass never follows links or reads payloads; refusal remains final.
++    let count = 0,
++      complete = true
++    function discover(dir, relative, depth) {
++      if (
++        performance.now() >= deadline ||
++        depth > limits.maxDepth ||
++        count >= limits.maxEntries
++      ) {
++        complete = false
++        return
++      }
++      let names, before
++      try {
++        before = lstat(dir)
++        names = fs.readdirSync(dir).sort(lexical)
++      } catch {
++        complete = false
++        return
++      }
++      for (const name of names) {
++        if (++count > limits.maxEntries || performance.now() >= deadline) {
++          complete = false
++          break
++        }
++        const file = path.join(dir, name),
++          child = relative ? relative + '/' + name : name
++        try {
++          const stat = lstat(file)
++          if (nestedBoundary(file, child, stat)) {
++            if (!nestedPackages.includes(child)) nestedPackages.push(child)
++          } else if (stat.isDirectory()) discover(file, child, depth + 1)
++          else if (stat.isSymbolicLink() && name === 'node_modules')
++            complete = false
++        } catch {
++          complete = false
++        }
++      }
++      try {
++        if (
++          signature(before) !== signature(lstat(dir)) ||
++          canonicalJson(names) !==
++            canonicalJson(fs.readdirSync(dir).sort(lexical))
++        )
++          complete = false
++      } catch {
++        complete = false
++      }
++    }
++    try {
++      physicalDirectory(root)
++      discover(root, '', 0)
++    } catch {
++      complete = false
++    }
++    nestedPackages.sort(lexical)
++    inventory.partial = true
++    inventory.frontierComplete = complete
++    error.frontierComplete = complete
++    error.inventory = inventory
++    throw error
++  }
++}
++
++function measured(value) {
++  return (
++    record(value) &&
++    Object.keys(value).length > 0 &&
++    Object.values(value).every((n) => Number.isFinite(n) && n >= 0)
++  )
++}
++function validateInventory(pkg) {
++  requireValue(
++    Array.isArray(pkg.entries) &&
++      Array.isArray(pkg.nestedPackages) &&
++      measured(pkg.usage) &&
++      HEX.test(pkg.inventorySha256)
++  )
++  requireValue(pkg.entries.length <= INSTALLED_IDENTITY_LIMITS.maxEntries)
++  requireValue(
++    Number.isSafeInteger(pkg.usage.maxDepth) &&
++      pkg.usage.maxDepth >= 0 &&
++      pkg.usage.maxDepth <= INSTALLED_IDENTITY_LIMITS.maxDepth
++  )
++  let previous = '',
++    regularBytes = 0
++  for (const entry of pkg.entries) {
++    requireValue(
++      record(entry) &&
++        relativePath(entry.path) &&
++        lexical(previous, entry.path) < 0
++    )
++    requireValue(
++      entry.path.split('/').length <= INSTALLED_IDENTITY_LIMITS.maxDepth
++    )
++    previous = entry.path
++    if (entry.type === 'file') {
++      requireValue(
++        Number.isSafeInteger(entry.size) &&
++          entry.size >= 0 &&
++          HEX.test(entry.sha256) &&
++          Number.isInteger(entry.executableBits) &&
++          (entry.executableBits & ~0o111) === 0
++      )
++      regularBytes += entry.size
++    } else if (entry.type === 'link')
++      requireValue(
++        typeof entry.target === 'string' &&
++          typeof entry.resolution === 'string' &&
++          path.isAbsolute(entry.resolution)
++      )
++    else requireValue(entry.type === 'directory')
++    const allowed =
++      entry.type === 'file'
++        ? ['path', 'type', 'size', 'sha256', 'executableBits']
++        : entry.type === 'link'
++          ? ['path', 'type', 'target', 'resolution']
++          : ['path', 'type']
++    requireValue(Object.keys(entry).every((key) => allowed.includes(key)))
++  }
++  requireValue(
++    regularBytes <= INSTALLED_IDENTITY_LIMITS.maxPackageBytes &&
++      regularBytes === pkg.usage.regularBytes &&
++      pkg.usage.entries === pkg.entries.length
++  )
++  requireValue(
++    pkg.nestedPackages.every(
++      (p, i, list) =>
++        relativePath(p) &&
++        /(?:^|\/)node_modules\/(?:@[^/]+\/)?[^@/.][^/]*$/.test(p) &&
++        (!i || lexical(list[i - 1], p) < 0)
++    )
++  )
++  requireValue(
++    pkg.inventorySha256 ===
++      hash(
++        canonicalJson({
++          entries: pkg.entries,
++          nestedPackages: pkg.nestedPackages,
++          usage: pkg.usage
++        })
++      ),
++    'REFERENCE_INVENTORY_DIGEST_INVALID'
++  )
++}
++
++function readReceipt(manifestPath, expectedSha256) {
++  const chunks = []
++  readPhysical(manifestPath, {
++    maxBytes: 256 * 1024 ** 2,
++    consume: (chunk) => chunks.push(Buffer.from(chunk))
++  })
++  const bytes = Buffer.concat(chunks)
++  if (hash(bytes) !== expectedSha256) fail('REFERENCE_DIGEST_MISMATCH')
++  let receipt
++  try {
++    receipt = JSON.parse(bytes.toString('utf8'))
++  } catch {
++    fail('REFERENCE_JSON_INVALID')
++  }
++  if (!Buffer.from(canonicalJson(receipt)).equals(bytes))
++    fail('REFERENCE_NOT_CANONICAL')
++  const r = receipt
++  requireValue(
++    record(r) &&
++      r.schemaVersion === 1 &&
++      r.kind === 'cvg-installed-content-reference'
++  )
++  for (const key of [
++    'commit',
++    'root',
++    'lockSha256',
++    'configSha256',
++    'toolchain',
++    'toolchainSha256',
++    'recipe',
++    'selection',
++    'limits',
++    'usage',
++    'packages'
++  ])
++    requireValue(own(r, key))
++  requireValue(
++    typeof r.commit === 'string' && /^[a-f0-9]{40,64}$/.test(r.commit)
++  )
++  requireValue(
++    typeof r.root === 'string' &&
++      path.isAbsolute(r.root) &&
++      HEX.test(r.lockSha256) &&
++      HEX.test(r.configSha256) &&
++      HEX.test(r.toolchainSha256) &&
++      record(r.toolchain)
++  )
++  const recipe = r.recipe
++  requireValue(
++    record(recipe) &&
++      recipe.exitCode === 0 &&
++      recipe.offline === true &&
++      recipe.ignoreScripts === true &&
++      recipe.completed === true &&
++      Array.isArray(recipe.argv) &&
++      recipe.argv.every((a) => typeof a === 'string')
++  )
++  const required = [
++    'ci',
++    '--offline',
++    '--ignore-scripts',
++    '--audit=false',
++    '--fund=false',
++    '--include=dev',
++    '--include=optional'
++  ]
++  requireValue(
++    required.every((arg) => recipe.argv.includes(arg)) &&
++      !recipe.argv.some((arg) =>
++        /^(--force|--online|--offline=false|--ignore-scripts=false)(=|$)/.test(
++          arg
++        )
++      ),
++    'REFERENCE_RECIPE_INVALID'
++  )
++  const cacheArg = recipe.argv.findIndex((arg) => arg === '--cache')
++  requireValue(
++    cacheArg >= 0 &&
++      typeof recipe.argv[cacheArg + 1] === 'string' &&
++      path.isAbsolute(recipe.argv[cacheArg + 1]),
++    'REFERENCE_CACHE_INVALID'
++  )
++  // Recipe fields cannot override its offline/no-lifecycle claims later in argv.
++  // An optional leading npm CLI path is recorded by the runner.
++  const command = recipe.argv.indexOf('ci')
++  requireValue(
++    command === 0 ||
++      (command === 1 &&
++        recipe.argv[0] ===
++          path.join(r.toolchain.npmRoot ?? '', 'bin/npm-cli.js')),
++    'REFERENCE_RECIPE_INVALID'
++  )
++  const flags = new Set([
++    ...required.filter((arg) => arg !== 'ci'),
++    '--update-notifier=false'
++  ])
++  const seenFlags = new Set()
++  for (let i = command + 1; i < recipe.argv.length; i++) {
++    const arg = recipe.argv[i]
++    requireValue(!seenFlags.has(arg), 'REFERENCE_RECIPE_INVALID')
++    seenFlags.add(arg)
++    if (arg === '--cache') {
++      i++
++      continue
++    }
++    requireValue(flags.has(arg), 'REFERENCE_RECIPE_INVALID')
++  }
++  requireValue(
++    record(r.selection) &&
++      r.selection.platform === process.platform &&
++      r.selection.arch === process.arch &&
++      r.selection.dev === true &&
++      r.selection.optional === true
++  )
++  requireValue(
++    canonicalJson(r.limits) === canonicalJson(INSTALLED_IDENTITY_LIMITS),
++    'REFERENCE_LIMITS_INVALID'
++  )
++  requireValue(measured(r.usage) && Array.isArray(r.packages))
++  for (const [key, cap] of Object.entries({
++    compressedBytes: INSTALLED_IDENTITY_LIMITS.maxCompressedBytes,
++    regularBytes: INSTALLED_IDENTITY_LIMITS.maxTotalBytes,
++    entries: INSTALLED_IDENTITY_LIMITS.maxEntries,
++    maxDepth: INSTALLED_IDENTITY_LIMITS.maxDepth,
++    maxProcesses: INSTALLED_IDENTITY_LIMITS.maxProcesses,
++    npmElapsedMs: INSTALLED_IDENTITY_LIMITS.npmTimeoutMs
++  }))
++    if (own(r.usage, key))
++      requireValue(r.usage[key] <= cap, 'REFERENCE_USAGE_LIMIT')
++  requireValue(
++    r.toolchainSha256 === hash(canonicalJson(r.toolchain)),
++    'REFERENCE_TOOLCHAIN_DIGEST_INVALID'
++  )
++  let previous = '',
++    entries = 0,
++    bytesTotal = 0
++  for (const pkg of r.packages) {
++    requireValue(
++      record(pkg) &&
++        packageKey(pkg.key) &&
++        lexical(previous, pkg.key) < 0 &&
++        typeof pkg.name === 'string' &&
++        pkg.name.length > 0 &&
++        typeof pkg.version === 'string' &&
++        pkg.version.length > 0
++    )
++    previous = pkg.key
++    validateInventory(pkg)
++    entries += pkg.entries.length
++    bytesTotal += pkg.usage.regularBytes
++  }
++  requireValue(
++    entries <= INSTALLED_IDENTITY_LIMITS.maxEntries &&
++      bytesTotal <= INSTALLED_IDENTITY_LIMITS.maxTotalBytes,
++    'REFERENCE_TOTAL_LIMIT'
++  )
++  return r
++}
++
++function sameInventory(a, b) {
++  return (
++    a.inventorySha256 === b.inventorySha256 &&
++    canonicalJson(a._snapshots) === canonicalJson(b._snapshots)
++  )
++}
++function normalizedEntries(inventory, packageRoot) {
++  return inventory.entries.map((entry) =>
++    entry.type === 'link'
++      ? {
++          ...entry,
++          resolution: posix(path.relative(packageRoot, entry.resolution))
++        }
++      : entry
++  )
++}
++function differences(reference, evaluated, referenceRoot, evaluatedRoot) {
++  const a = new Map(
++    normalizedEntries(reference, referenceRoot).map((e) => [e.path, e])
++  )
++  const b = new Map(
++    normalizedEntries(evaluated, evaluatedRoot).map((e) => [e.path, e])
++  )
++  const diffs = []
++  for (const file of [...new Set([...a.keys(), ...b.keys()])].sort(lexical)) {
++    if (!a.has(file)) diffs.push({ path: file, reason: 'EXTRA' })
++    else if (!b.has(file)) diffs.push({ path: file, reason: 'MISSING' })
++    else if (canonicalJson(a.get(file)) !== canonicalJson(b.get(file)))
++      diffs.push({ path: file, reason: 'CONTENT_TYPE_OR_MODE' })
++  }
++  if (
++    canonicalJson(reference.nestedPackages) !==
++    canonicalJson(evaluated.nestedPackages)
++  )
++    diffs.push({ path: 'node_modules', reason: 'NESTED_PACKAGES' })
++  return diffs
++}
++
++export function createInstalledIdentityComparator(evaluatedRoot, options) {
++  if (
++    !record(options) ||
++    typeof options.manifestPath !== 'string' ||
++    options.manifestPath.length === 0 ||
++    typeof options.expectedSha256 !== 'string' ||
++    !HEX.test(options.expectedSha256)
++  )
++    throw new TypeError('INVALID_INSTALLED_REFERENCE_OPTIONS')
++  const expectedSha256 = options.expectedSha256
++  const manifestPath = path.resolve(options.manifestPath)
++  if (!lstat(manifestPath).isFile())
++    throw new TypeError('INSTALLED_REFERENCE_NOT_REGULAR')
++  const root = fs.realpathSync(evaluatedRoot)
++  const receipt = readReceipt(manifestPath, expectedSha256)
++  const referenceRoot = receipt.root
++  physicalDirectory(referenceRoot)
++  if (inside(root, referenceRoot) || inside(referenceRoot, root))
++    fail('REFERENCE_ROOT_SELF_ALIAS')
++  const started = performance.now()
++  const used = [],
++    outputs = []
++  const evaluatedInodes = new Set(),
++    referenceInodes = new Set(),
++    unique = new Map()
++  let invalid = null
++  function checkTime() {
++    if (
++      performance.now() - started >=
++      INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
++    )
++      fail('COMPARISON_TIMEOUT')
++  }
++  function collect(source) {
++    checkTime()
++    let entries = 0,
++      bytes = 0
++    for (const [file, saved] of unique) {
++      if (file !== source) {
++        entries += saved.entries
++        bytes += saved.regularBytes
++      }
++    }
++    const collectOptions = {
++      _deadline: started + INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs,
++      testOnly: {
++        limits: {
++          maxEntries: Math.max(
++            0,
++            INSTALLED_IDENTITY_LIMITS.maxEntries - entries
++          ),
++          maxTotalBytes: Math.max(
++            0,
++            INSTALLED_IDENTITY_LIMITS.maxTotalBytes - bytes
++          )
++        }
++      }
++    }
++    try {
++      const inventory = collectPackageInventory(source, collectOptions)
++      unique.set(source, inventory.usage)
++      return inventory
++    } catch (error) {
++      // Failed collection still consumed part of this physical inventory.
++      // A later package cannot regain that budget by starting a fresh call.
++      if (error.inventory) unique.set(source, error.inventory.usage)
++      throw error
++    }
++  }
++  function validateInputs() {
++    checkTime()
++    if (
++      fs.realpathSync(evaluatedRoot) !== root ||
++      fs.realpathSync(referenceRoot) !== referenceRoot
++    )
++      fail('ROOT_CHANGED')
++    physicalDirectory(root)
++    physicalDirectory(referenceRoot)
++    readReceipt(manifestPath, expectedSha256)
++    for (const source of [root, referenceRoot]) {
++      const fingerprint = fingerprintResolution(source)
++      if (
++        fingerprint.lockSha256 !== receipt.lockSha256 ||
++        fingerprint.configSha256 !== receipt.configSha256
++      )
++        fail('RESOLUTION_CHANGED')
++    }
++  }
++  validateInputs()
++  const toolchain = fingerprintToolchain({
++    nodePath: receipt.toolchain.nodePath,
++    npmRoot: receipt.toolchain.npmRoot
++  })
++  if (canonicalJson(toolchain) !== canonicalJson(receipt.toolchain))
++    fail('TOOLCHAIN_CHANGED')
++  const lock = readJson(path.join(root, 'package-lock.json'))
++  requireValue(record(lock.packages), 'LOCK_PACKAGES_INVALID')
++  const packages = new Map(receipt.packages.map((pkg) => [pkg.key, pkg]))
++  function invalidate(code) {
++    invalid = code
++    for (const result of outputs) {
++      result.status = 'UNAVAILABLE'
++      if (!result.reasons.includes(code)) result.reasons.push(code)
++    }
++  }
++  function compare(context, key) {
++    const result = {
++      status: 'UNAVAILABLE',
++      referenceDigest: expectedSha256,
++      inventory: { reference: null, evaluated: null },
++      diffs: [],
++      reasons: [],
++      nestedPackages: []
++    }
++    outputs.push(result)
++    if (invalid) {
++      result.reasons.push(invalid)
++      return result
++    }
++    try {
++      checkTime()
++      if (!packageKey(key) || path.resolve(context) !== path.join(root, key))
++        fail('PACKAGE_CONTEXT_INVALID')
++      const locked = own(lock.packages, key) ? lock.packages[key] : undefined
++      const expected = packages.get(key)
++      // Missing reference must not erase the actual package inventory.
++      const evaluated = collect(context)
++      result.inventory.evaluated = evaluated
++      result.nestedPackages = [...evaluated.nestedPackages]
++      if (!expected) {
++        result.reasons.push('REFERENCE_PACKAGE_UNAVAILABLE')
++        return result
++      }
++      const referencePackage = path.join(referenceRoot, key)
++      const reference = collect(referencePackage)
++      result.inventory.reference = reference
++      for (const [inventory, target, opposite] of [
++        [evaluated, evaluatedInodes, referenceInodes],
++        [reference, referenceInodes, evaluatedInodes]
++      ]) {
++        for (const id of inventory._inodes) {
++          if (opposite.has(id)) fail('REFERENCE_HARDLINK_SELF_ALIAS')
++          target.add(id)
++        }
++      }
++      used.push({ context, referencePackage, reference, evaluated })
++      if (reference.inventorySha256 !== expected.inventorySha256)
++        fail('REFERENCE_PACKAGE_CHANGED')
++      result.diffs = differences(
++        reference,
++        evaluated,
++        referencePackage,
++        context
++      )
++      let actualManifest
++      try {
++        actualManifest = readJson(path.join(context, 'package.json'))
++      } catch (error) {
++        if (
++          !['ENOENT', 'NOT_REGULAR_FILE', 'JSON_INVALID'].includes(error.code)
++        )
++          throw error
++        result.reasons.push('INSTALLED_MANIFEST_INVALID')
++      }
++      const referenceManifest = readJson(
++        path.join(referencePackage, 'package.json')
++      )
++      const keyName = key.slice(key.lastIndexOf('node_modules/') + 13)
++      requireValue(
++        record(locked) &&
++          locked.link !== true &&
++          typeof locked.version === 'string' &&
++          typeof locked.resolved === 'string' &&
++          locked.resolved.startsWith('https://') &&
++          typeof locked.integrity === 'string' &&
++          /^sha512-[A-Za-z0-9+/]{86}==$/.test(locked.integrity) &&
++          Buffer.from(locked.integrity.slice(7), 'base64').toString(
++            'base64'
++          ) === locked.integrity.slice(7),
++        'LOCK_PACKAGE_UNAVAILABLE'
++      )
++      if (
++        expected.name !== (locked.name ?? keyName) ||
++        expected.version !== locked.version ||
++        referenceManifest.name !== expected.name ||
++        referenceManifest.version !== expected.version
++      )
++        fail('REFERENCE_PACKAGE_IDENTITY_INVALID')
++      if (
++        !record(actualManifest) ||
++        actualManifest.name !== expected.name ||
++        actualManifest.version !== expected.version
++      )
++        result.diffs.push({ path: 'package.json', reason: 'PACKAGE_IDENTITY' })
++      result.status = result.diffs.length ? 'MISMATCH' : 'MATCH'
++    } catch (error) {
++      result.status = error.status ?? 'UNAVAILABLE'
++      const code =
++        error instanceof InstalledIdentityError
++          ? error.code
++          : 'COMPARISON_IO_ERROR'
++      result.reasons.push(code)
++      if (error.inventory) {
++        result.inventory.partial = error.inventory
++        result.nestedPackages = [
++          ...new Set([
++            ...result.nestedPackages,
++            ...error.inventory.nestedPackages
++          ])
++        ]
++        if (error.frontierComplete === false)
++          result.reasons.push('NESTED_FRONTIER_INCOMPLETE')
++      }
++      if (
++        code === 'REFERENCE_HARDLINK_SELF_ALIAS' ||
++        code === 'REFERENCE_PACKAGE_CHANGED'
++      )
++        invalidate(code)
++    }
++    return result
++  }
++  function finalize() {
++    try {
++      validateInputs()
++      for (const snapshot of used) {
++        checkTime()
++        if (
++          !sameInventory(snapshot.evaluated, collect(snapshot.context)) ||
++          !sameInventory(snapshot.reference, collect(snapshot.referencePackage))
++        )
++          fail('PACKAGE_CHANGED_AFTER_COMPARISON')
++      }
++      checkTime()
++      validateInputs()
++      if (
++        canonicalJson(
++          fingerprintToolchain({
++            nodePath: toolchain.nodePath,
++            npmRoot: toolchain.npmRoot
++          })
++        ) !== canonicalJson(toolchain)
++      )
++        fail('TOOLCHAIN_CHANGED')
++      checkTime()
++    } catch (error) {
++      invalidate(
++        error instanceof InstalledIdentityError
++          ? error.code
++          : 'FINAL_REVALIDATION_IO_ERROR'
++      )
++    }
++    return {
++      status: invalid ? 'UNAVAILABLE' : 'COMPLETE',
++      reasons: invalid ? [invalid] : [],
++      usage: { packages: used.length, elapsedMs: performance.now() - started }
++    }
++  }
++  return { compare, finalize }
++}
+diff --git a/scripts/boundary-manifests.mjs b/scripts/boundary-manifests.mjs
+index 082fabf8cd996bb176e8bb717f7368d46ee8912c..471d8b050040e8a0b05fad388a4fca985574f9de 100644
+--- a/scripts/boundary-manifests.mjs
++++ b/scripts/boundary-manifests.mjs
+@@ -2,6 +2,10 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ import { createRequire } from 'node:module'
+ import { fileURLToPath, pathToFileURL } from 'node:url'
++import {
++  createInstalledIdentityComparator,
++  INSTALLED_IDENTITY_LIMITS
++} from './boundary-installed-identity.mjs'
+ const require = createRequire(import.meta.url)
+ const semver = require('semver')
+ export const manifestDependencyFields = [
+@@ -379,23 +383,19 @@ function readLockfile(filename) {
+   return value.packages
+ }
+ 
+-// Installed third-party code is not parsed file by file. An installed package
+-// is accepted as a terminal graph node only when the committed lockfile
+-// (package-lock.json, a reviewed and versioned file) records that exact
+-// installation path as a registry artifact (https tarball plus integrity)
+-// whose package name matches the installed manifest. npm's untracked
+-// installed-tree record (node_modules/.package-lock.json) is deliberately not
+-// a trust root, and a link entry is never a registry artifact.
+-//
+-// The version field is not a content-integrity proof (npm does not keep the
+-// tarball to re-hash), so an installed version that differs from the committed
+-// lockfile is returned as drift for the report instead of being mistaken for
+-// verification. Tampered contents are covered only by the product tripwire.
++// SPEC0228: lock metadata identifies a declared package, never its installed
++// bytes or semantic module frontier. Until a separately approved proof exists,
++// every third-party installation remains unverified. The caller must still
++// expand declared dependencies and scan known product references and links.
+ export function createInstalledPackageVerifier(
+   root,
+-  { productReferences = [] } = {}
++  { productReferences = [], installedReference } = {}
+ ) {
+   const committed = readLockfile(path.join(root, 'package-lock.json'))
++  const identity =
++    installedReference === undefined
++      ? undefined
++      : createInstalledIdentityComparator(root, installedReference)
+   const needles = productReferences.map((text) => ({
+     text,
+     bytes: Buffer.from(text)
+@@ -453,8 +453,11 @@ export function createInstalledPackageVerifier(
+     const entry = lookup(committed, key)
+     if (accepts(entry))
+       return {
+-        verified: true,
+-        source: 'package-lock.json',
++        verified: false,
++        reason:
++          entry.version === manifest.version
++            ? 'UNVERIFIED_INSTALLED_CONTENT'
++            : 'INSTALLED_VERSION_MISMATCH',
+         dependencies,
+         ...(entry.version === manifest.version
+           ? {}
+@@ -475,6 +478,13 @@ export function createInstalledPackageVerifier(
+     }
+   }
+   function verify(context, key) {
++    // Byte identity is additive evidence. Re-evaluate metadata and bytes for
++    // every opt-in call; a cached context must never preserve an old MATCH.
++    if (identity)
++      return {
++        ...evaluate(context, key),
++        contentIdentity: identity.compare(context, key)
++      }
+     if (!verdicts.has(context)) verdicts.set(context, evaluate(context, key))
+     return verdicts.get(context)
+   }
+@@ -483,6 +493,7 @@ export function createInstalledPackageVerifier(
+   // bridge. Symlinks are returned for canonical classification by the caller.
+   // Nested node_modules are separate packages with their own verification.
+   function scan(context) {
++    if (identity) return scanBounded(context)
+     const references = []
+     const links = []
+     const walk = (directory) => {
+@@ -502,5 +513,116 @@ export function createInstalledPackageVerifier(
+     if (fs.lstatSync(context).isDirectory()) walk(context)
+     return { references, links }
+   }
+-  return { verify, scan }
++  // Retain the tripwire even when identity collection refuses a link/type.
++  // Streaming avoids allocating a whole installed file; refusal is explicit.
++  const scanStarted = performance.now()
++  let scanEntries = 0
++  let scanBytes = 0
++  function scanBounded(context) {
++    const references = [],
++      links = [],
++      nestedPackages = []
++    let packageBytes = 0
++    const overlap = Math.max(0, ...needles.map((n) => n.bytes.length - 1))
++    const check = () => {
++      if (
++        performance.now() - scanStarted >
++        INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
++      )
++        throw new Error('INSTALLED_SCAN_TIMEOUT')
++    }
++    const nested = (directory, depth) => {
++      if (depth > INSTALLED_IDENTITY_LIMITS.maxDepth)
++        throw new Error('INSTALLED_SCAN_DEPTH_LIMIT')
++      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
++        check()
++        if (++scanEntries > INSTALLED_IDENTITY_LIMITS.maxEntries)
++          throw new Error('INSTALLED_SCAN_ENTRY_LIMIT')
++        const target = path.join(directory, entry.name)
++        if (entry.isSymbolicLink()) links.push(target)
++        else if (entry.name.startsWith('@') && entry.isDirectory())
++          nested(target, depth + 1)
++        else if (entry.isDirectory()) {
++          let manifest
++          try {
++            manifest = fs.lstatSync(path.join(target, 'package.json'))
++          } catch (error) {
++            if (error.code !== 'ENOENT') throw error
++          }
++          if (manifest?.isFile())
++            nestedPackages.push(path.relative(context, target))
++          else walk(target, depth + 1)
++        } else if (entry.isFile()) scanFile(target)
++      }
++    }
++    const scanFile = (file) => {
++      if (!needles.length) return
++      const found = new Set()
++      const fd = fs.openSync(
++        file,
++        fs.constants.O_RDONLY |
++          fs.constants.O_NOFOLLOW |
++          fs.constants.O_NONBLOCK
++      )
++      try {
++        if (!fs.fstatSync(fd).isFile())
++          throw new Error('INSTALLED_SCAN_FILE_CHANGED')
++        const buffer = Buffer.alloc(64 * 1024)
++        let tail = Buffer.alloc(0),
++          count
++        while ((count = fs.readSync(fd, buffer, 0, buffer.length, null))) {
++          check()
++          packageBytes += count
++          scanBytes += count
++          if (
++            packageBytes > INSTALLED_IDENTITY_LIMITS.maxPackageBytes ||
++            scanBytes > INSTALLED_IDENTITY_LIMITS.maxTotalBytes
++          )
++            throw new Error('INSTALLED_SCAN_BYTE_LIMIT')
++          const bytes = Buffer.concat([tail, buffer.subarray(0, count)])
++          for (const needle of needles)
++            if (bytes.includes(needle.bytes)) found.add(needle.text)
++          tail = overlap
++            ? bytes.subarray(Math.max(0, bytes.length - overlap))
++            : Buffer.alloc(0)
++        }
++      } finally {
++        fs.closeSync(fd)
++        // Preserve any product witness observed before a later read refusal.
++        for (const needle of needles)
++          if (found.has(needle.text))
++            references.push({ file, reference: needle.text })
++      }
++    }
++    const walk = (directory, depth) => {
++      check()
++      if (depth > INSTALLED_IDENTITY_LIMITS.maxDepth)
++        throw new Error('INSTALLED_SCAN_DEPTH_LIMIT')
++      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
++        check()
++        if (++scanEntries > INSTALLED_IDENTITY_LIMITS.maxEntries)
++          throw new Error('INSTALLED_SCAN_ENTRY_LIMIT')
++        const file = path.join(directory, entry.name)
++        if (entry.isSymbolicLink()) links.push(file)
++        else if (entry.isDirectory()) {
++          if (entry.name !== 'node_modules') walk(file, depth + 1)
++          else nested(file, depth + 1)
++        } else if (entry.isFile()) scanFile(file)
++      }
++    }
++    try {
++      walk(context, 0)
++      return { references, links, nestedPackages }
++    } catch (error) {
++      return {
++        references,
++        links,
++        nestedPackages,
++        limitation: /^INSTALLED_SCAN_[A-Z_]+$/.test(error.message)
++          ? error.message
++          : 'INSTALLED_SCAN_IO_ERROR'
++      }
++    }
++  }
++  return { verify, scan, finalize: () => identity?.finalize() }
+ }
+diff --git a/scripts/boundary-reference-process.mjs b/scripts/boundary-reference-process.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..023193a2b7bef2bd61b559b8c6aa3a0ed85aa503
+--- /dev/null
++++ b/scripts/boundary-reference-process.mjs
+@@ -0,0 +1,183 @@
++import fs from 'node:fs'
++import { spawn } from 'node:child_process'
++
++export function unavailable(code) {
++  return Object.assign(new Error(code), { code, status: 'UNAVAILABLE' })
++}
++
++// Never inherit provider/npm/Git configuration, NODE_OPTIONS or loader variables.
++// HOME is deliberately absent rather than reassigned. All npm config paths are explicit.
++export function referenceEnvironment(nodePath, configRoot) {
++  return {
++    PATH: nodePath.slice(0, nodePath.lastIndexOf('/')) + ':/usr/bin:/bin',
++    LANG: 'C',
++    LC_ALL: 'C',
++    TZ: 'UTC',
++    GIT_CONFIG_NOSYSTEM: '1',
++    GIT_CONFIG_GLOBAL: '/dev/null',
++    GIT_CONFIG_COUNT: '0',
++    GIT_TERMINAL_PROMPT: '0',
++    ...(configRoot
++      ? {
++          NPM_CONFIG_USERCONFIG: configRoot + '/user.npmrc',
++          NPM_CONFIG_GLOBALCONFIG: configRoot + '/global.npmrc',
++          NPM_CONFIG_UPDATE_NOTIFIER: 'false',
++          TMPDIR: configRoot + '/tmp'
++        }
++      : {})
++  }
++}
++
++function processes() {
++  const found = []
++  for (const name of fs.readdirSync('/proc')) {
++    if (!/^\d+$/.test(name)) continue
++    try {
++      const stat = fs.readFileSync('/proc/' + name + '/stat', 'utf8')
++      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
++      if (fields[0] !== 'Z')
++        found.push({
++          pid: Number(name),
++          parent: Number(fields[1]),
++          group: Number(fields[2]),
++          start: fields[19]
++        })
++    } catch (error) {
++      if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
++    }
++  }
++  return found
++}
++
++// A detached, owned process group bounds cleanup to this invocation. These are
++// refusal ceilings and sampled observations, not a sandbox for a hostile npm.
++export async function runOwnedProcess(
++  command,
++  args,
++  {
++    cwd,
++    env,
++    timeoutMs,
++    maxProcesses = 8,
++    maxOutputBytes = 8 * 1024 * 1024,
++    stdoutPath,
++    stderrPath,
++    input,
++    resourceCheck
++  }
++) {
++  if (
++    !Number.isFinite(timeoutMs) ||
++    timeoutMs <= 0 ||
++    maxProcesses < 1 ||
++    maxProcesses > 8
++  )
++    throw unavailable('PROCESS_LIMIT_INVALID')
++  const started = Date.now()
++  const out = stdoutPath ? fs.openSync(stdoutPath, 'wx', 0o600) : null
++  const err = stderrPath ? fs.openSync(stderrPath, 'wx', 0o600) : null
++  const chunks = []
++  let bytes = 0,
++    peak = 0,
++    failure,
++    lastResourceCheck = 0
++  const owned = new Map()
++  const child = spawn(command, args, {
++    cwd,
++    env,
++    detached: true,
++    stdio: ['pipe', 'pipe', 'pipe']
++  })
++  const observe = () => {
++    const current = processes()
++    let added
++    do {
++      added = false
++      for (const proc of current) {
++        if (
++          !owned.has(proc.pid) &&
++          (proc.pid === child.pid ||
++            proc.group === child.pid ||
++            owned.has(proc.parent))
++        ) {
++          owned.set(proc.pid, proc.start)
++          added = true
++        }
++      }
++    } while (added)
++    return current.filter((proc) => owned.get(proc.pid) === proc.start)
++  }
++  const kill = () => {
++    if (!child.pid) return
++    // Also reap observed descendants that have called setsid/setpgid. Validate
++    // Linux starttime before every signal so a recycled PID is never targeted.
++    for (const proc of observe().reverse()) {
++      try {
++        process.kill(proc.pid, 'SIGKILL')
++      } catch (error) {
++        if (error.code !== 'ESRCH') throw error
++      }
++    }
++    try {
++      process.kill(-child.pid, 'SIGKILL')
++    } catch (error) {
++      if (error.code !== 'ESRCH') throw error
++    }
++  }
++  const refuse = (code) => {
++    failure ??= unavailable(code)
++    kill()
++  }
++  function capture(chunk, fd, collect) {
++    bytes += chunk.length
++    if (bytes > maxOutputBytes) return refuse('PROCESS_OUTPUT_LIMIT')
++    if (fd !== null) fs.writeSync(fd, chunk)
++    if (collect) chunks.push(chunk)
++  }
++  child.stdout.on('data', (chunk) => capture(chunk, out, out === null))
++  child.stderr.on('data', (chunk) => capture(chunk, err, false))
++  child.stdin.on('error', (error) => {
++    if (error.code !== 'EPIPE') refuse('PROCESS_INPUT_FAILED')
++  })
++  child.stdin.end(input)
++  const timer = setTimeout(() => refuse('PROCESS_TIMEOUT'), timeoutMs)
++  const monitor = setInterval(() => {
++    try {
++      const count = observe().length
++      peak = Math.max(peak, count)
++      if (count > maxProcesses) refuse('PROCESS_COUNT_LIMIT')
++      if (resourceCheck && Date.now() - lastResourceCheck >= 100) {
++        lastResourceCheck = Date.now()
++        resourceCheck()
++      }
++    } catch (error) {
++      refuse(error.code ?? 'PROCESS_OBSERVATION_FAILED')
++    }
++  }, 10)
++  let code, signal
++  try {
++    ;[code, signal] = await new Promise((resolve, reject) => {
++      child.once('error', () => reject(unavailable('PROCESS_START_FAILED')))
++      child.once('close', (exitCode, exitSignal) =>
++        resolve([exitCode, exitSignal])
++      )
++    })
++  } finally {
++    clearTimeout(timer)
++    clearInterval(monitor)
++    kill()
++    if (out !== null) fs.closeSync(out)
++    if (err !== null) fs.closeSync(err)
++  }
++  const observation = {
++    exitCode: code,
++    signal,
++    elapsedMs: Date.now() - started,
++    maxProcesses: peak,
++    outputBytes: bytes
++  }
++  if (failure) throw Object.assign(failure, { observation })
++  if (code !== 0)
++    throw Object.assign(unavailable('PROCESS_NONZERO'), { observation })
++  return { ...observation, stdout: Buffer.concat(chunks) }
++}
+diff --git a/scripts/build-installed-reference.mjs b/scripts/build-installed-reference.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd3f641c9e841a0118410ccdfaeb7c7eb8b742c4
+--- /dev/null
++++ b/scripts/build-installed-reference.mjs
+@@ -0,0 +1,759 @@
++import fs from 'node:fs'
++import path from 'node:path'
++import { createHash } from 'node:crypto'
++import { createRequire } from 'node:module'
++import { pipeline } from 'node:stream/promises'
++import { pathToFileURL } from 'node:url'
++import {
++  canonicalJson,
++  sha256File,
++  fingerprintResolution,
++  fingerprintToolchain,
++  collectPackageInventory,
++  INSTALLED_IDENTITY_LIMITS
++} from './boundary-installed-identity.mjs'
++import {
++  referenceEnvironment,
++  runOwnedProcess,
++  unavailable
++} from './boundary-reference-process.mjs'
++
++const DEFAULT_NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
++const DEFAULT_NPM =
++  '/home/ricardo/.nvm/versions/node/v22.23.2/lib/node_modules/npm'
++const AUXILIARY_PINS = Object.freeze({
++  '/usr/bin/git':
++    '2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668',
++  '/usr/bin/tar':
++    '3ee2c3c0b4dd9aacebfd2f0fbae44bad36348203acff78a44888dd58c05f811c',
++  '/usr/bin/strace':
++    '28f957c227012de0b18d1bd7fff2d396cb693ea60ed8013be68de071e84b5001'
++})
++const hash = (value) => createHash('sha256').update(value).digest('hex')
++const inside = (root, item) => item === root || item.startsWith(root + path.sep)
++const exists = (file) => {
++  try {
++    fs.lstatSync(file)
++    return true
++  } catch (e) {
++    if (e.code === 'ENOENT') return false
++    throw e
++  }
++}
++const safe = (name) =>
++  name &&
++  !name.startsWith('/') &&
++  !name.split('/').some((p) => !p || p === '.' || p === '..') &&
++  !/[\x00-\x1f\\]/.test(name)
++const excluded = (name) =>
++  name
++    .split('/')
++    .some(
++      (p) =>
++        [
++          'node_modules',
++          'dist',
++          '.git',
++          '.ssh',
++          '.aws',
++          '.gnupg',
++          '.agent',
++          '.npm',
++          'coverage',
++          'test-results'
++        ].includes(p) ||
++        /^(\.env(?:\..*)?|\.netrc|\.npm-token|credentials(?:\..*)?|secrets?(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i.test(
++          p
++        )
++    )
++
++function regular(file) {
++  const stat = fs.lstatSync(file)
++  if (!stat.isFile()) throw unavailable('INPUT_NOT_REGULAR')
++  return stat
++}
++
++function limitsFor(testOnly) {
++  const limits = { ...INSTALLED_IDENTITY_LIMITS }
++  if (testOnly) {
++    if (testOnly.context !== 'synthetic-fixture')
++      throw unavailable('TEST_CONTEXT_REQUIRED')
++    for (const [key, value] of Object.entries(testOnly.limits ?? {})) {
++      if (
++        !(key in limits) ||
++        !Number.isSafeInteger(value) ||
++        value < 1 ||
++        value > limits[key]
++      )
++        throw unavailable('LIMIT_RAISE_FORBIDDEN')
++      limits[key] = value
++    }
++  }
++  return limits
++}
++
++function validateConfigs(root, files) {
++  const accepted = new Set([
++    'engine-strict=true',
++    'legacy-peer-deps=false',
++    'strict-peer-deps=true',
++    'install-strategy=hoisted',
++    'package-lock=true',
++    'registry=https://registry.npmjs.org/'
++  ])
++  for (const { name } of files) {
++    if (path.posix.basename(name) !== '.npmrc') continue
++    const file = path.join(root, name)
++    if (regular(file).size > 64 * 1024)
++      throw unavailable('PROJECT_CONFIG_LIMIT')
++    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
++      const value = line.trim()
++      if (
++        value &&
++        !value.startsWith('#') &&
++        !value.startsWith(';') &&
++        !accepted.has(value)
++      )
++        throw unavailable('PROJECT_CONFIG_UNKNOWN')
++    }
++  }
++}
++
++function sourceDigest(root, files) {
++  const entries = []
++  for (const { name, oid, mode, size } of files) {
++    const file = path.join(root, name)
++    const before = regular(file)
++    // No symlink ancestor, including an innocuous-looking workspace directory.
++    if (fs.realpathSync(file) !== file) throw unavailable('SOURCE_ALIAS')
++    if (
++      before.size !== size ||
++      (before.mode & 0o111) !== (mode === '100755' ? 0o111 : 0)
++    )
++      throw unavailable('SOURCE_COMMIT_MISMATCH')
++    const digest = createHash('sha1').update('blob ' + size + '\0')
++    const fd = fs.openSync(
++      file,
++      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
++    )
++    const buf = Buffer.alloc(64 * 1024)
++    try {
++      let n,
++        readBytes = 0
++      while ((n = fs.readSync(fd, buf, 0, buf.length, null))) {
++        readBytes += n
++        if (readBytes > size) throw unavailable('SOURCE_COMMIT_MISMATCH')
++        digest.update(buf.subarray(0, n))
++      }
++    } finally {
++      fs.closeSync(fd)
++    }
++    const after = regular(file)
++    if (
++      digest.digest('hex') !== oid ||
++      ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(
++        (key) => before[key] !== after[key]
++      )
++    )
++      throw unavailable('SOURCE_COMMIT_MISMATCH')
++    entries.push({ path: name, oid, mode, size })
++  }
++  return hash(canonicalJson(entries))
++}
++
++function allFiles(root, limits, digest = true) {
++  let entries = 0,
++    regularBytes = 0,
++    maxDepth = 0
++  const list = []
++  const visit = (dir, depth) => {
++    maxDepth = Math.max(maxDepth, depth)
++    if (depth > limits.maxDepth) throw unavailable('REFERENCE_DEPTH_LIMIT')
++    for (const name of fs.readdirSync(dir).sort()) {
++      if (++entries > limits.maxEntries)
++        throw unavailable('REFERENCE_ENTRIES_LIMIT')
++      const file = path.join(dir, name),
++        stat = fs.lstatSync(file)
++      if (stat.isDirectory()) {
++        list.push({ path: path.relative(root, file), type: 'directory' })
++        visit(file, depth + 1)
++      } else if (stat.isFile()) {
++        regularBytes += stat.size
++        if (regularBytes > limits.maxTotalBytes)
++          throw unavailable('REFERENCE_BYTES_LIMIT')
++        if (digest)
++          list.push({
++            path: path.relative(root, file).split(path.sep).join('/'),
++            type: 'file',
++            sha256: sha256File(file),
++            size: stat.size,
++            executableBits: stat.mode & 0o111
++          })
++      } else if (stat.isSymbolicLink())
++        list.push({
++          path: path.relative(root, file),
++          type: 'link',
++          target: fs.readlinkSync(file)
++        })
++      else throw unavailable('REFERENCE_SPECIAL_FILE')
++    }
++  }
++  visit(root, 0)
++  return { entries, regularBytes, maxDepth, list }
++}
++
++function cacheFile(cacheSource, integrity) {
++  if (
++    typeof integrity !== 'string' ||
++    !/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity)
++  )
++    throw unavailable('CACHE_SRI_REQUIRED')
++  const digest = Buffer.from(integrity.slice(7), 'base64')
++  if (digest.length !== 64 || digest.toString('base64') !== integrity.slice(7))
++    throw unavailable('CACHE_SRI_INVALID')
++  const hex = digest.toString('hex')
++  return path.join(
++    cacheSource,
++    '_cacache/content-v2/sha512',
++    hex.slice(0, 2),
++    hex.slice(2, 4),
++    hex.slice(4)
++  )
++}
++
++export function inspectReferenceTrace(trace, nodePath) {
++  if (regular(trace).size > 8 * 1024 * 1024)
++    throw unavailable('PROCESS_TRACE_LIMIT')
++  const observed = fs.readFileSync(trace, 'utf8')
++  if (/\b(?:socket\(AF_INET6?|connect\([^\n]*AF_INET6?)/.test(observed))
++    throw unavailable('NETWORK_ATTEMPT_OBSERVED')
++  const executions = observed
++    .split('\n')
++    .filter((line) => /\bexecve\(/.test(line))
++  if (
++    executions.length !== 1 ||
++    !executions[0].includes(JSON.stringify(nodePath))
++  )
++    throw unavailable('CHILD_EXECUTION_OBSERVED')
++  if (/\b(?:setsid|setpgid)\(/.test(observed))
++    throw unavailable('PROCESS_GROUP_ESCAPE_OBSERVED')
++  return {
++    traceSha256: sha256File(trace),
++    networkAttempts: 0,
++    executions: executions.length
++  }
++}
++
++async function seedCache(cacheSource, cache, lock, limits, npmRoot, usage) {
++  // This library is inside the already validated npm TCB, never a new dependency.
++  const require = createRequire(path.join(npmRoot, 'package.json'))
++  const cacache = require('cacache')
++  const seen = new Set()
++  let compressedBytes = 0
++  const payloads = []
++  const missing = []
++  for (const [key, value] of Object.entries(lock.packages)) {
++    if (!key.includes('node_modules/') || value.link) continue
++    if (
++      !safe(key) ||
++      !/^https:\/\/registry\.npmjs\.org\//.test(value.resolved ?? '')
++    )
++      throw unavailable('LOCK_NONREGISTRY_PACKAGE')
++    const file = cacheFile(cacheSource, value.integrity)
++    let before
++    try {
++      before = regular(file)
++    } catch (error) {
++      if (error.code !== 'ENOENT') throw error
++      if (value.optional !== true)
++        throw unavailable('CACHE_PAYLOAD_REQUIRED_MISSING')
++      // npm decides platform/optional selection with the frozen recipe. An
++      // unavailable payload is never fabricated from the evaluated tree;
++      // a package not installed remains explicit in the receipt inventory.
++      missing.push({
++        key,
++        integrity: value.integrity,
++        optional: true,
++        reason: 'CACHE_PAYLOAD_UNAVAILABLE'
++      })
++      continue
++    }
++    if (seen.has(value.integrity)) continue
++    seen.add(value.integrity)
++    if (fs.realpathSync(file) !== file) throw unavailable('CACHE_ALIAS')
++    compressedBytes += before.size
++    if (compressedBytes > limits.maxCompressedBytes)
++      throw unavailable('CACHE_BYTES_LIMIT')
++    const hash512 = createHash('sha512')
++    const fd = fs.openSync(
++      file,
++      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
++    )
++    const stream = fs.createReadStream(file, { fd, autoClose: true })
++    // Only verified payloads gain an index: never inherit the source cache index.
++    let readBytes = 0
++    for await (const chunk of stream) {
++      readBytes += chunk.length
++      usage.compressedBytes += chunk.length
++      if (readBytes > before.size) throw unavailable('CACHE_MUTATED')
++      hash512.update(chunk)
++    }
++    if ('sha512-' + hash512.digest('base64') !== value.integrity)
++      throw unavailable('CACHE_SRI_MISMATCH')
++    const after = regular(file)
++    if (
++      ['dev', 'ino', 'size', 'ctimeMs', 'mtimeMs'].some(
++        (k) => before[k] !== after[k]
++      )
++    )
++      throw unavailable('CACHE_MUTATED')
++    await pipeline(
++      fs.createReadStream(file),
++      cacache.put.stream(
++        path.join(cache, '_cacache'),
++        'cvg-sri:' + value.integrity,
++        { integrity: value.integrity }
++      )
++    )
++    payloads.push({ integrity: value.integrity, size: before.size })
++  }
++  return { compressedBytes, payloads, missing }
++}
++
++/** Internal offline recipe. testOnly can REDUCE caps and mutate actual fixtures;
++ * it cannot supply a toolchain, npm command, result or production cap override. */
++export async function buildInstalledReference(options) {
++  const allowed = new Set([
++    'sourceRoot',
++    'commit',
++    'outputRoot',
++    'cacheSource',
++    'nodePath',
++    'npmRoot',
++    'testOnly'
++  ])
++  if (!options || Object.keys(options).some((key) => !allowed.has(key)))
++    throw unavailable('RUNNER_OPTIONS_INVALID')
++  const { commit, testOnly } = options
++  const limits = limitsFor(testOnly)
++  if (!/^[a-f0-9]{40}$/.test(commit ?? '')) throw unavailable('COMMIT_REQUIRED')
++  const sourceRoot = fs.realpathSync(options.sourceRoot)
++  const cacheSource = fs.realpathSync(options.cacheSource)
++  const outputRoot = path.resolve(options.outputRoot)
++  if (exists(outputRoot)) throw unavailable('OUTPUT_ALREADY_EXISTS')
++  const parent = fs.realpathSync(path.dirname(outputRoot))
++  if (
++    parent !== path.dirname(outputRoot) ||
++    inside(sourceRoot, outputRoot) ||
++    inside(cacheSource, outputRoot)
++  )
++    throw unavailable('OUTPUT_NOT_INDEPENDENT')
++  const nodePath = options.nodePath ?? DEFAULT_NODE,
++    npmRoot = options.npmRoot ?? DEFAULT_NPM
++  const toolchain = fingerprintToolchain({ nodePath, npmRoot })
++  if (
++    process.versions.node !== toolchain.nodeVersion ||
++    sha256File(process.execPath) !== toolchain.nodeSha256
++  )
++    throw unavailable('RUNNER_NODE_RUNTIME_MISMATCH')
++  for (const [tool, pin] of Object.entries(AUXILIARY_PINS)) {
++    regular(tool)
++    if (sha256File(tool) !== pin) throw unavailable('AUXILIARY_PIN_MISMATCH')
++  }
++  fs.mkdirSync(outputRoot, { mode: 0o700 })
++  const snapshot = path.join(outputRoot, 'snapshot'),
++    cache = path.join(outputRoot, 'cache')
++  const configRoot = path.join(outputRoot, 'config'),
++    logs = path.join(outputRoot, 'logs')
++  for (const dir of [
++    snapshot,
++    cache,
++    configRoot,
++    logs,
++    path.join(configRoot, 'tmp')
++  ])
++    fs.mkdirSync(dir, { mode: 0o700 })
++  for (const name of ['user.npmrc', 'global.npmrc'])
++    fs.writeFileSync(path.join(configRoot, name), '', {
++      flag: 'wx',
++      mode: 0o600
++    })
++  const env = referenceEnvironment(nodePath, configRoot)
++  const usage = {
++    compressedBytes: 0,
++    regularBytes: 0,
++    entries: 0,
++    maxDepth: 0,
++    maxProcesses: 0,
++    npmElapsedMs: 0
++  }
++  let sequence = 0
++  const run = async (tool, args, extra = {}) => {
++    if (!(tool in AUXILIARY_PINS) || sha256File(tool) !== AUXILIARY_PINS[tool])
++      throw unavailable('AUXILIARY_PIN_MISMATCH')
++    return runOwnedProcess(tool, args, {
++      cwd: sourceRoot,
++      env,
++      timeoutMs: INSTALLED_IDENTITY_LIMITS.npmTimeoutMs,
++      maxProcesses: limits.maxProcesses,
++      stderrPath: path.join(logs, String(++sequence) + '.stderr.log'),
++      ...extra
++    })
++  }
++  const git = async (...args) =>
++    (
++      await run('/usr/bin/git', [
++        '-c',
++        'core.hooksPath=/dev/null',
++        '-c',
++        'core.fsmonitor=false',
++        ...args
++      ])
++    ).stdout
++  try {
++    if (
++      (await git('rev-parse', '--verify', 'HEAD')).toString().trim() !== commit
++    )
++      throw unavailable('SOURCE_COMMIT_ASSERTION')
++    const rawTree = await git('ls-tree', '-r', '-l', '-z', commit)
++    const files = rawTree
++      .toString('utf8')
++      .split('\0')
++      .filter(Boolean)
++      .map((line) => {
++        const match = /^(\d{6}) blob ([a-f0-9]{40})\s+(\d+)\t(.+)$/.exec(line)
++        if (!match) throw unavailable('SOURCE_TYPE_UNSUPPORTED')
++        const [, mode, oid, size, name] = match
++        if (!safe(name)) throw unavailable('SOURCE_PATH_INVALID')
++        return { mode, oid, size: Number(size), name }
++      })
++      .filter(({ name }) => !excluded(name))
++    if (files.some(({ mode }) => !['100644', '100755'].includes(mode)))
++      throw unavailable('SOURCE_LINK_UNSUPPORTED')
++    if (
++      files.length > limits.maxEntries ||
++      files.reduce((sum, f) => sum + f.size, 0) > limits.maxTotalBytes ||
++      files.some((f) => f.name.split('/').length > limits.maxDepth)
++    )
++      throw unavailable('SOURCE_LIMIT')
++    if (
++      !files.some(({ name }) => name === 'package-lock.json') ||
++      !files.some(({ name }) => name === 'package.json')
++    )
++      throw unavailable('SOURCE_MANIFEST_REQUIRED')
++    validateConfigs(sourceRoot, files)
++    const sourceSha256 = sourceDigest(sourceRoot, files)
++    const resolution = fingerprintResolution(sourceRoot)
++    // Explicit regular paths only. No glob expansion, checkout hooks, previous
++    // installation, credential paths, or untracked working-tree data enter tar.
++    for (let offset = 0; offset < files.length; offset += 100) {
++      const archive = path.join(outputRoot, 'source-' + offset + '.tar')
++      await run(
++        '/usr/bin/git',
++        [
++          'archive',
++          '--format=tar',
++          commit,
++          '--',
++          ...files.slice(offset, offset + 100).map((f) => f.name)
++        ],
++        {
++          stdoutPath: archive,
++          maxOutputBytes: limits.maxTotalBytes + 1024 * 1024
++        }
++      )
++      await run('/usr/bin/tar', [
++        '--extract',
++        '--file=' + archive,
++        '--directory=' + snapshot,
++        '--no-same-owner',
++        '--no-same-permissions'
++      ])
++      fs.unlinkSync(archive)
++    }
++    if (
++      sourceDigest(snapshot, files) !== sourceSha256 ||
++      canonicalJson(fingerprintResolution(snapshot)) !==
++        canonicalJson(resolution)
++    )
++      throw unavailable('SNAPSHOT_MISMATCH')
++    validateConfigs(snapshot, files)
++    const lock = JSON.parse(
++      fs.readFileSync(path.join(snapshot, 'package-lock.json'), 'utf8')
++    )
++    if (
++      lock.lockfileVersion !== 3 ||
++      !lock.packages ||
++      typeof lock.packages !== 'object'
++    )
++      throw unavailable('LOCK_SCHEMA_UNSUPPORTED')
++    const seeded = await seedCache(
++      cacheSource,
++      cache,
++      lock,
++      limits,
++      npmRoot,
++      usage
++    )
++    usage.compressedBytes = seeded.compressedBytes
++    const argv = [
++      path.join(npmRoot, 'bin/npm-cli.js'),
++      'ci',
++      '--offline',
++      '--ignore-scripts',
++      '--audit=false',
++      '--fund=false',
++      '--include=dev',
++      '--include=optional',
++      '--cache',
++      cache
++    ]
++    await testOnly?.hooks?.beforeNpm?.({
++      sourceRoot,
++      snapshot,
++      cache,
++      configRoot
++    })
++    if (
++      (await git('rev-parse', '--verify', 'HEAD')).toString().trim() !== commit
++    )
++      throw unavailable('SOURCE_COMMIT_ASSERTION')
++    const revalidate = () => {
++      for (const [tool, pin] of Object.entries(AUXILIARY_PINS))
++        if (sha256File(tool) !== pin)
++          throw unavailable('AUXILIARY_PIN_MISMATCH')
++      if (
++        sourceDigest(sourceRoot, files) !== sourceSha256 ||
++        sourceDigest(snapshot, files) !== sourceSha256 ||
++        canonicalJson(fingerprintResolution(sourceRoot)) !==
++          canonicalJson(resolution) ||
++        canonicalJson(fingerprintResolution(snapshot)) !==
++          canonicalJson(resolution)
++      )
++        throw unavailable('INPUT_MUTATED')
++      if (
++        canonicalJson(fingerprintToolchain({ nodePath, npmRoot })) !==
++        canonicalJson(toolchain)
++      )
++        throw unavailable('TOOLCHAIN_MUTATED')
++      for (const name of ['user.npmrc', 'global.npmrc'])
++        if (regular(path.join(configRoot, name)).size !== 0)
++          throw unavailable('EMPTY_CONFIG_MUTATED')
++      validateConfigs(snapshot, files)
++    }
++    revalidate()
++    const trace = path.join(logs, 'npm.trace')
++    const result = await run(
++      '/usr/bin/strace',
++      [
++        '-f',
++        '-qq',
++        '-s',
++        '256',
++        '-e',
++        'trace=process,network,setsid,setpgid',
++        '-o',
++        trace,
++        nodePath,
++        ...argv
++      ],
++      {
++        cwd: snapshot,
++        stdoutPath: path.join(logs, 'npm.stdout.log'),
++        stderrPath: path.join(logs, 'npm.stderr.log'),
++        timeoutMs: limits.npmTimeoutMs,
++        resourceCheck: () => {
++          if (exists(trace) && regular(trace).size > 8 * 1024 * 1024)
++            throw unavailable('PROCESS_TRACE_LIMIT')
++          allFiles(snapshot, limits, false)
++        }
++      }
++    )
++    usage.npmElapsedMs = result.elapsedMs
++    usage.maxProcesses = result.maxProcesses
++    const observation = inspectReferenceTrace(trace, nodePath)
++    await testOnly?.hooks?.afterNpm?.({
++      sourceRoot,
++      snapshot,
++      cache,
++      configRoot
++    })
++    revalidate()
++    const physical = allFiles(snapshot, limits)
++    Object.assign(usage, {
++      entries: physical.entries,
++      regularBytes: physical.regularBytes,
++      maxDepth: physical.maxDepth
++    })
++    const packages = [],
++      unavailablePackages = []
++    const inventoryStarted = Date.now()
++    for (const entry of physical.list) {
++      if (
++        entry.type !== 'directory' ||
++        !/(?:^|\/)node_modules\/(?:@[^/]+\/)?[^/@][^/]*$/.test(entry.path) ||
++        path.posix.basename(entry.path) === '.bin'
++      )
++        continue
++      if (!Object.hasOwn(lock.packages, entry.path))
++        throw unavailable('UNLOCKED_PHYSICAL_PACKAGE')
++    }
++    for (const [key, item] of Object.entries(lock.packages).sort(([a], [b]) =>
++      a < b ? -1 : a > b ? 1 : 0
++    )) {
++      if (Date.now() - inventoryStarted > limits.comparisonTimeoutMs)
++        throw unavailable('INVENTORY_TIMEOUT')
++      if (!key.includes('node_modules/') || item.link) continue
++      const packageRoot = path.join(snapshot, key)
++      if (!exists(packageRoot)) {
++        unavailablePackages.push({
++          key,
++          reason: 'NOT_INSTALLED_BY_OFFLINE_RECIPE',
++          optional: item.optional === true,
++          peer: item.peer === true
++        })
++        continue
++      }
++      if (
++        !fs.lstatSync(packageRoot).isDirectory() ||
++        fs.realpathSync(packageRoot) !== packageRoot
++      )
++        throw unavailable('PACKAGE_ROOT_ALIAS')
++      const manifestPath = path.join(packageRoot, 'package.json')
++      regular(manifestPath)
++      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
++      const expectedName = item.name ?? key.split('node_modules/').at(-1)
++      if (manifest.name !== expectedName || manifest.version !== item.version)
++        throw unavailable('INSTALLED_PACKAGE_IDENTITY')
++      const inventory = collectPackageInventory(packageRoot, {
++        testOnly: { limits }
++      })
++      packages.push({
++        key,
++        name: manifest.name,
++        version: manifest.version,
++        entries: inventory.entries,
++        nestedPackages: inventory.nestedPackages,
++        usage: inventory.usage,
++        inventorySha256: inventory.inventorySha256
++      })
++    }
++    // Detect regular-byte mutations after inventory, before publishing any receipt.
++    revalidate()
++    if (
++      canonicalJson(allFiles(snapshot, limits).list) !==
++      canonicalJson(physical.list)
++    )
++      throw unavailable('REFERENCE_MUTATED')
++    if (Date.now() - inventoryStarted > limits.comparisonTimeoutMs)
++      throw unavailable('INVENTORY_TIMEOUT')
++    if (
++      (await git('rev-parse', '--verify', 'HEAD')).toString().trim() !== commit
++    )
++      throw unavailable('SOURCE_COMMIT_ASSERTION')
++    if (
++      canonicalJson(inspectReferenceTrace(trace, nodePath)) !==
++      canonicalJson(observation)
++    )
++      throw unavailable('OBSERVATION_MUTATED')
++    const recipe = {
++      argv,
++      exitCode: 0,
++      offline: true,
++      ignoreScripts: true,
++      completed: true,
++      environment: env,
++      sourceSha256,
++      auxiliaryPins: AUXILIARY_PINS,
++      cachePayloads: seeded.payloads,
++      cacheUnavailable: seeded.missing,
++      observation: { ...observation, ...result, stdout: undefined }
++    }
++    delete recipe.observation.stdout
++    const receipt = {
++      schemaVersion: 1,
++      kind: 'cvg-installed-content-reference',
++      commit,
++      root: fs.realpathSync(snapshot),
++      ...resolution,
++      toolchain,
++      toolchainSha256: hash(canonicalJson(toolchain)),
++      recipe,
++      selection: {
++        platform: process.platform,
++        arch: process.arch,
++        dev: true,
++        optional: true
++      },
++      limits,
++      usage,
++      packages,
++      unavailable: unavailablePackages
++    }
++    const manifestPath = path.join(outputRoot, 'reference.json')
++    const bytes = canonicalJson(receipt)
++    const staged = path.join(outputRoot, '.reference.partial')
++    const fd = fs.openSync(staged, 'wx', 0o600)
++    try {
++      fs.writeFileSync(fd, bytes)
++      fs.fsyncSync(fd)
++    } finally {
++      fs.closeSync(fd)
++    }
++    fs.renameSync(staged, manifestPath)
++    return { manifestPath, expectedSha256: hash(bytes), receipt }
++  } catch (error) {
++    const failure = {
++      status: 'UNAVAILABLE',
++      code: /^[A-Z0-9_]+$/.test(error.code ?? '')
++        ? error.code
++        : 'REFERENCE_BUILD_FAILED',
++      usage,
++      ...(error.observation ? { observation: error.observation } : {})
++    }
++    fs.writeFileSync(
++      path.join(outputRoot, 'failure.json'),
++      canonicalJson(failure),
++      { flag: 'wx', mode: 0o600 }
++    )
++    throw Object.assign(unavailable(failure.code), { outputRoot })
++  }
++}
++
++if (
++  process.argv[1] &&
++  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
++) {
++  const names = {
++    'source-root': 'sourceRoot',
++    commit: 'commit',
++    'output-root': 'outputRoot',
++    'cache-source': 'cacheSource',
++    'node-path': 'nodePath',
++    'npm-root': 'npmRoot'
++  }
++  const options = {}
++  try {
++    for (const arg of process.argv.slice(2)) {
++      const match = /^--([a-z-]+)=(.+)$/.exec(arg)
++      if (!match || !names[match[1]] || names[match[1]] in options)
++        throw unavailable('CLI_OPTIONS_INVALID')
++      options[names[match[1]]] = match[2]
++    }
++    for (const key of ['sourceRoot', 'commit', 'outputRoot', 'cacheSource'])
++      if (!options[key]) throw unavailable('CLI_OPTIONS_REQUIRED')
++    const { manifestPath, expectedSha256 } =
++      await buildInstalledReference(options)
++    process.stdout.write(
++      JSON.stringify({ manifestPath, expectedSha256 }) + '\n'
++    )
++  } catch (error) {
++    process.stderr.write(
++      JSON.stringify({
++        status: 'UNAVAILABLE',
++        code: error.code ?? 'REFERENCE_BUILD_FAILED'
++      }) + '\n'
++    )
++    process.exitCode = 2
++  }
++}
+diff --git a/tests/b6-0228-boundary-containment.test.js b/tests/b6-0228-boundary-containment.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..adcddcaa2c9f73040ec7a70c93e487e910ad3c00
+--- /dev/null
++++ b/tests/b6-0228-boundary-containment.test.js
+@@ -0,0 +1,228 @@
++import { afterEach, describe, expect, it } from 'vitest'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++import { spawnSync } from 'node:child_process'
++import { auditProductBoundary } from '../scripts/check-product-boundary.mjs'
++import { createInstalledPackageVerifier } from '../scripts/boundary-manifests.mjs'
++
++const roots = []
++function fixture() {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-b6-0228-'))
++  roots.push(root)
++  const write = (file, value) => {
++    const target = path.join(root, file)
++    fs.mkdirSync(path.dirname(target), { recursive: true })
++    fs.writeFileSync(target, value)
++  }
++  write(
++    'package.json',
++    JSON.stringify({ workspaces: ['packages/*', 'products/*'] })
++  )
++  write('packages/core/package.json', JSON.stringify({ name: 'core' }))
++  write('packages/core/src/index.ts', 'export const neutral = 1\n')
++  write(
++    'products/shift-assistant/package.json',
++    JSON.stringify({ name: '@cvg/shift-assistant' })
++  )
++  write('products/shift-assistant/src/index.ts', 'export const product = 1\n')
++  const vendor = (
++    version = '1.0.0',
++    source = 'module.exports = 1\n',
++    dependencies = {}
++  ) => {
++    write(
++      'package-lock.json',
++      JSON.stringify({
++        lockfileVersion: 3,
++        packages: {
++          'node_modules/vendor': {
++            version: '1.0.0',
++            resolved: 'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',
++            integrity: 'sha512-YQ=='
++          }
++        }
++      })
++    )
++    write(
++      'node_modules/vendor/package.json',
++      JSON.stringify({
++        name: 'vendor',
++        version,
++        main: 'index.js',
++        dependencies
++      })
++    )
++    write('node_modules/vendor/index.js', source)
++    write(
++      'packages/core/src/index.ts',
++      "import value from 'vendor'; export { value }\n"
++    )
++  }
++  return { root, write, vendor }
++}
++afterEach(() => {
++  for (const root of roots.splice(0))
++    fs.rmSync(root, { recursive: true, force: true })
++})
++
++const splitProduct =
++  "module.exports = require('../../' + 'products/' + 'shift-assistant/src/index.ts')\n"
++describe('SPEC0228 conservative boundary contract', () => {
++  it('keeps the neutral positive and direct-product negative controls', () => {
++    const { root, write } = fixture()
++    expect(auditProductBoundary(root).status).toBe('PASS')
++    write(
++      'packages/core/src/index.ts',
++      "export * from '../../../products/shift-assistant/src/index.ts'\n"
++    )
++    expect(auditProductBoundary(root).status).toBe('FAIL')
++  })
++  it.each([
++    ['1.0.0', 'UNVERIFIED_INSTALLED_CONTENT'],
++    ['9.9.9', 'INSTALLED_VERSION_MISMATCH']
++  ])(
++    'never verifies metadata-only installed content at %s',
++    (version, reason) => {
++      const { root, vendor } = fixture()
++      vendor(version)
++      const verifier = createInstalledPackageVerifier(root)
++      const verdict = verifier.verify(
++        path.join(root, 'node_modules/vendor'),
++        'node_modules/vendor'
++      )
++      expect(verdict).toMatchObject({
++        verified: false,
++        reason,
++        dependencies: []
++      })
++      expect(verdict).not.toHaveProperty('source')
++      const audit = auditProductBoundary(root)
++      expect(audit.status).toBe('INCOMPLETE')
++      expect(audit.diagnostics).toContainEqual({
++        file: 'node_modules/vendor/package.json',
++        reason: 'UNVERIFIED_INSTALLED_PACKAGE',
++        detail: reason
++      })
++      expect(audit.installedLockDrift).toEqual(
++        version === '1.0.0'
++          ? []
++          : [
++              {
++                package: 'node_modules/vendor',
++                installedVersion: version,
++                lockfileVersion: '1.0.0'
++              }
++            ]
++      )
++    }
++  )
++  it.each(['1.0.0', '9.9.9'])(
++    'refuses the B6 concatenated product path at version %s without executing it',
++    (version) => {
++      const { root, vendor } = fixture()
++      vendor(version, splitProduct)
++      expect(auditProductBoundary(root).status).toBe('INCOMPLETE')
++    }
++  )
++  it('retains FAIL and drift when literal product evidence coexists with unverified bytes', () => {
++    const { root, vendor } = fixture()
++    vendor(
++      '9.9.9',
++      "module.exports = require('../../products/shift-assistant/src/index.ts')\n"
++    )
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.diagnostics.some(
++        (d) => d.reason === 'INSTALLED_PACKAGE_REFERENCES_PRODUCT'
++      )
++    ).toBe(true)
++    expect(
++      audit.diagnostics.some((d) => d.detail === 'INSTALLED_VERSION_MISMATCH')
++    ).toBe(true)
++    expect(audit.installedLockDrift).toHaveLength(1)
++  })
++  it('expands a declared product successor despite refused installed content', () => {
++    const { root, vendor } = fixture()
++    vendor('1.0.0', 'module.exports = 1\n', { '@cvg/shift-assistant': '1.0.0' })
++    fs.mkdirSync(path.join(root, 'node_modules/@cvg'), { recursive: true })
++    fs.symlinkSync(
++      path.join(root, 'products/shift-assistant'),
++      path.join(root, 'node_modules/@cvg/shift-assistant'),
++      'dir'
++    )
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.violations.some(
++        (v) =>
++          v.trail.includes('node_modules/vendor/package.json') &&
++          v.trail.includes('products/shift-assistant/package.json')
++      )
++    ).toBe(true)
++    expect(
++      audit.diagnostics.some((d) => d.detail === 'UNVERIFIED_INSTALLED_CONTENT')
++    ).toBe(true)
++  })
++  it.each([
++    [
++      'apps/api/src/main.ts',
++      "const shutdown = { install(source:any) { source.getBuiltinModule('module').createRequire(__filename)('../../../products/shift-assistant/src/index.ts') } }\nshutdown.install(process)\n"
++    ],
++    [
++      'apps/web/src/__tests__/app.test.tsx',
++      "const vi = { spyOn(source:any, _method:string) { source.process.getBuiltinModule('module').createRequire('/tmp/entry.cjs')('/tmp/products/shift-assistant/src/index.ts'); return { mockImplementation(_callback:any) {} } } }\nvi.spyOn(globalThis, 'fetch').mockImplementation((input) => {\n})\n"
++    ]
++  ])(
++    'refuses substituted receiver at %s in normal, strict and CLI paths',
++    (file, source) => {
++      const { root, write } = fixture()
++      write(
++        'packages/shared/src/lifecycle.ts',
++        fs.readFileSync('packages/shared/src/lifecycle.ts')
++      )
++      write(file, source)
++      const normal = auditProductBoundary(root)
++      const strict = auditProductBoundary(root, { exceptions: false })
++      expect(normal.status).toBe('INCOMPLETE')
++      expect(normal.exceptionsApplied).toBe(false)
++      expect(normal.exceptions).toEqual([])
++      expect(normal.diagnostics).toEqual(strict.diagnostics)
++      for (const flags of [[], ['--strict']]) {
++        const result = spawnSync(
++          process.execPath,
++          ['scripts/check-product-boundary.mjs', root, ...flags],
++          { encoding: 'utf8', timeout: 30000 }
++        )
++        expect(result.status).toBe(1)
++        expect(JSON.parse(result.stdout).diagnostics).toEqual(
++          normal.diagnostics
++        )
++      }
++    }
++  )
++  it('refuses an explicit legacy exception request even on a neutral fixture', () => {
++    const { root } = fixture()
++    const audit = auditProductBoundary(root, { exceptions: true })
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptionsApplied).toBe(false)
++    expect(audit.diagnostics).toContainEqual({
++      file: 'package.json',
++      reason: 'UNAPPROVED_EXCEPTION_REQUEST'
++    })
++  })
++  it('never weakens a known FAIL when legacy exceptions are requested', () => {
++    const { root, write } = fixture()
++    write(
++      'packages/core/src/index.ts',
++      "export * from '../../../products/shift-assistant/src/index.ts'\n"
++    )
++    const audit = auditProductBoundary(root, { exceptions: true })
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.diagnostics.some((d) => d.reason === 'UNAPPROVED_EXCEPTION_REQUEST')
++    ).toBe(true)
++    expect(audit.exceptions).toEqual([])
++  })
++})
+diff --git a/tests/b6-0234-boundary-integration.test.js b/tests/b6-0234-boundary-integration.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..c39a25065019cba8678d925a6e7affad487d2608
+--- /dev/null
++++ b/tests/b6-0234-boundary-integration.test.js
+@@ -0,0 +1,501 @@
++import { afterEach, describe, expect, it } from 'vitest'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++import { spawnSync } from 'node:child_process'
++import { createInstalledPackageVerifier } from '../scripts/boundary-manifests.mjs'
++
++const roots = []
++const fixture = () => {
++  const root = fs.mkdtempSync(
++    path.join(os.tmpdir(), 'cvg-b6-0234-integration-')
++  )
++  roots.push(root)
++  fs.writeFileSync(
++    path.join(root, 'package-lock.json'),
++    JSON.stringify({ lockfileVersion: 3, packages: {} })
++  )
++  return root
++}
++afterEach(() => {
++  for (const root of roots.splice(0))
++    fs.rmSync(root, { recursive: true, force: true })
++})
++
++describe('SPEC0234 boundary opt-in is structural and conservative', () => {
++  it('refuses a missing reference file instead of ignoring the opt-in', () => {
++    const root = fixture()
++    expect(() =>
++      createInstalledPackageVerifier(root, {
++        installedReference: {
++          manifestPath: path.join(root, 'missing.json'),
++          expectedSha256: '0'.repeat(64)
++        }
++      })
++    ).toThrow()
++  })
++  it('rejects a supplied identity object without the expected digest', () => {
++    const root = fixture()
++    expect(() =>
++      createInstalledPackageVerifier(root, {
++        installedReference: { manifestPath: path.join(root, 'missing.json') }
++      })
++    ).toThrow()
++  })
++  it.each([
++    ['--installed-reference=x'],
++    ['--installed-reference-sha256=' + 'a'.repeat(64)],
++    [
++      '--installed-reference=x',
++      '--installed-reference-sha256=' + 'A'.repeat(64)
++    ],
++    [
++      '--installed-reference=x',
++      '--installed-reference=x',
++      '--installed-reference-sha256=' + 'a'.repeat(64)
++    ]
++  ])('CLI rejects malformed or unpaired identity arguments: %j', (...flags) => {
++    const child = spawnSync(
++      process.execPath,
++      ['scripts/check-product-boundary.mjs', ...flags],
++      { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8' }
++    )
++    expect(child.status).toBe(2)
++  })
++})
++
++// Independent synthetic roots are populated from declared fixture literals.
++// They exercise the comparator/checker boundary; production provenance is
++// separately demonstrated through the offline runner and reviewed artifacts.
++async function identityFixture({
++  source = 'module.exports = 1\n',
++  version = '1.0.0',
++  nested = false
++} = {}) {
++  const {
++    canonicalJson,
++    sha256File,
++    fingerprintResolution,
++    fingerprintToolchain,
++    collectPackageInventory,
++    INSTALLED_IDENTITY_LIMITS
++  } = await import('../scripts/boundary-installed-identity.mjs')
++  const { createHash } = await import('node:crypto')
++  const hash = (value) => createHash('sha256').update(value).digest('hex')
++  const evaluated = fixture(),
++    reference = fixture()
++  const sri = 'sha512-' + Buffer.alloc(64, 1).toString('base64')
++  const lock = {
++    lockfileVersion: 3,
++    packages: {
++      '': { name: 'fixture', version: '1.0.0' },
++      'node_modules/vendor': {
++        version: '1.0.0',
++        resolved: 'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',
++        integrity: sri
++      },
++      ...(nested
++        ? {
++            'node_modules/vendor/node_modules/inner': {
++              version: '1.0.0',
++              resolved: 'https://registry.npmjs.org/inner/-/inner-1.0.0.tgz',
++              integrity: sri
++            }
++          }
++        : {})
++    }
++  }
++  const write = (root, file, body) => {
++    const p = path.join(root, file)
++    fs.mkdirSync(path.dirname(p), { recursive: true })
++    fs.writeFileSync(p, body)
++  }
++  for (const root of [evaluated, reference]) {
++    write(
++      root,
++      'package.json',
++      JSON.stringify({
++        name: 'fixture',
++        version: '1.0.0',
++        private: true,
++        workspaces: ['packages/*', 'products/*']
++      })
++    )
++    write(root, 'package-lock.json', JSON.stringify(lock))
++    write(
++      root,
++      'packages/core/package.json',
++      JSON.stringify({
++        name: 'core',
++        version: '1.0.0',
++        dependencies: { vendor: '1.0.0' }
++      })
++    )
++    write(
++      root,
++      'packages/core/src/index.ts',
++      "import value from 'vendor';export {value}\n"
++    )
++    write(
++      root,
++      'products/shift-assistant/package.json',
++      JSON.stringify({ name: '@cvg/shift-assistant', version: '1.0.0' })
++    )
++    write(
++      root,
++      'products/shift-assistant/src/index.ts',
++      'export const product=1\n'
++    )
++    write(
++      root,
++      'node_modules/vendor/package.json',
++      JSON.stringify({
++        name: 'vendor',
++        version: root === evaluated ? version : '1.0.0',
++        main: 'index.js'
++      })
++    )
++    write(root, 'node_modules/vendor/index.js', source)
++    write(
++      root,
++      'node_modules/vendor/.hidden.unknown-extension',
++      'all bytes included\n'
++    )
++    if (nested) {
++      write(
++        root,
++        'node_modules/vendor/node_modules/inner/package.json',
++        JSON.stringify({ name: 'inner', version: '1.0.0', main: 'index.js' })
++      )
++      write(
++        root,
++        'node_modules/vendor/node_modules/inner/index.js',
++        'module.exports=2\n'
++      )
++    }
++  }
++  const packages = Object.keys(lock.packages)
++    .filter((k) => k.includes('node_modules/'))
++    .sort()
++    .map((key) => ({
++      key,
++      name: key.endsWith('/inner') ? 'inner' : 'vendor',
++      version: '1.0.0',
++      ...collectPackageInventory(path.join(reference, key))
++    }))
++  const toolchain = fingerprintToolchain()
++  const receipt = {
++    schemaVersion: 1,
++    kind: 'cvg-installed-content-reference',
++    commit: 'f'.repeat(40),
++    root: fs.realpathSync(reference),
++    ...fingerprintResolution(reference),
++    toolchain,
++    toolchainSha256: hash(canonicalJson(toolchain)),
++    recipe: {
++      argv: [
++        'ci',
++        '--offline',
++        '--ignore-scripts',
++        '--audit=false',
++        '--fund=false',
++        '--include=dev',
++        '--include=optional',
++        '--cache',
++        path.join(reference, 'cache')
++      ],
++      exitCode: 0,
++      offline: true,
++      ignoreScripts: true,
++      completed: true
++    },
++    selection: {
++      platform: process.platform,
++      arch: process.arch,
++      dev: true,
++      optional: true
++    },
++    limits: { ...INSTALLED_IDENTITY_LIMITS },
++    usage: {
++      entries: packages.reduce((s, p) => s + p.usage.entries, 0),
++      regularBytes: packages.reduce((s, p) => s + p.usage.regularBytes, 0),
++      maxDepth: Math.max(...packages.map((p) => p.usage.maxDepth))
++    },
++    packages
++  }
++  const manifestPath = path.join(reference, 'reference.json')
++  const save = () => {
++    fs.writeFileSync(manifestPath, canonicalJson(receipt))
++    return { manifestPath, expectedSha256: sha256File(manifestPath) }
++  }
++  const installedReference = save()
++  return { evaluated, reference, receipt, installedReference, write, save }
++}
++
++describe('SPEC0234 identity adds evidence without semantic approval', () => {
++  it('reports full identical content while preserving the complete default report', async () => {
++    const f = await identityFixture()
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const baseline = auditProductBoundary(f.evaluated, { graph: true })
++    const opt = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(opt.status).toBe('INCOMPLETE')
++    expect(opt.passed).toBe(false)
++    expect(opt.exceptionsApplied).toBe(false)
++    expect(opt.diagnostics).toEqual(baseline.diagnostics)
++    expect(opt.violations).toEqual(baseline.violations)
++    expect(opt.graph.nodes).toEqual(baseline.graph.nodes)
++    expect(opt.graph.edges).toEqual(baseline.graph.edges)
++    const vendor = opt.graph.installed.find(
++      (p) => p.node === 'node_modules/vendor/package.json'
++    )
++    expect(vendor.verified).toBe(false)
++    expect(vendor.reason).toBe('UNVERIFIED_INSTALLED_CONTENT')
++    expect(vendor.contentIdentity.status).toBe('MATCH')
++    expect(
++      vendor.contentIdentity.inventory.evaluated.entries.some(
++        (e) => e.path === '.hidden.unknown-extension'
++      )
++    ).toBe(true)
++  })
++  it('never turns byte-identical computed product loading into a semantic PASS', async () => {
++    const f = await identityFixture({
++      source:
++        "module.exports=import('products/'+['shift','assistant'].join('-')+'/src/index.js')\n"
++    })
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    // Installed code is opaque to the semantic analyzer even with byte identity.
++    expect(report.status).toBe('INCOMPLETE')
++    expect(report.graph.installed[0].contentIdentity.status).toBe('MATCH')
++    expect(report.graph.installed[0].verified).toBe(false)
++  })
++  it('preserves literal product FAIL and all default diagnostics with identity MATCH', async () => {
++    const f = await identityFixture({
++      source: "module.exports=require('@cvg/shift-assistant')\n"
++    })
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const baseline = auditProductBoundary(f.evaluated, { graph: true })
++    const opt = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(opt.status).toBe('FAIL')
++    expect(opt.diagnostics).toEqual(baseline.diagnostics)
++    expect(opt.graph.installed[0].contentIdentity.status).toBe('MATCH')
++    expect(opt.graph.installed[0].verified).toBe(false)
++  })
++  it('preserves version drift and exception request independently of byte evidence', async () => {
++    const f = await identityFixture({ version: '1.0.1' })
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const baseline = auditProductBoundary(f.evaluated, {
++      graph: true,
++      exceptions: true
++    })
++    const opt = auditProductBoundary(f.evaluated, {
++      graph: true,
++      exceptions: true,
++      installedReference: f.installedReference
++    })
++    expect(opt.status).toBe('INCOMPLETE')
++    expect(opt.diagnostics).toEqual(baseline.diagnostics)
++    expect(opt.installedLockDrift).toEqual(baseline.installedLockDrift)
++    expect(opt.installedLockDrift).toHaveLength(1)
++    expect(opt.graph.installed[0].contentIdentity.status).toBe('MISMATCH')
++  })
++  it('does not reuse a MATCH when installed bytes change on the same verifier', async () => {
++    const f = await identityFixture()
++    const verifier = createInstalledPackageVerifier(f.evaluated, {
++      installedReference: f.installedReference
++    })
++    const context = path.join(f.evaluated, 'node_modules/vendor')
++    expect(
++      verifier.verify(context, 'node_modules/vendor').contentIdentity.status
++    ).toBe('MATCH')
++    f.write(f.evaluated, 'node_modules/vendor/index.js', 'module.exports=99\n')
++    expect(
++      verifier.verify(context, 'node_modules/vendor').contentIdentity.status
++    ).toBe('MISMATCH')
++  })
++  it('expands an otherwise undeclared physical nested package and preserves its product tripwire', async () => {
++    const f = await identityFixture({ nested: true })
++    f.write(
++      f.evaluated,
++      'node_modules/vendor/node_modules/inner/index.js',
++      "module.exports=require('@cvg/shift-assistant')\n"
++    )
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(report.installedPackageCount).toBe(2)
++    expect(report.status).toBe('FAIL')
++    expect(report.graph.installed.map((x) => x.node)).toContain(
++      'node_modules/vendor/node_modules/inner/package.json'
++    )
++    expect(report.graph.installed.every((x) => x.verified === false)).toBe(true)
++    expect(
++      report.graph.installed.find((x) => x.node.endsWith('/inner/package.json'))
++        .contentIdentity.status
++    ).toBe('MISMATCH')
++  })
++  it('keeps a nested product witness when the parent has an unsupported dangling link', async () => {
++    const f = await identityFixture({ nested: true })
++    fs.symlinkSync(
++      'missing',
++      path.join(f.evaluated, 'node_modules/vendor/.dangling')
++    )
++    f.write(
++      f.evaluated,
++      'node_modules/vendor/node_modules/inner/index.js',
++      "module.exports=require('@cvg/shift-assistant')\n"
++    )
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(report.status).toBe('FAIL')
++    expect(report.installedPackageCount).toBe(2)
++    expect(
++      report.graph.installed.find(
++        (x) => x.node === 'node_modules/vendor/package.json'
++      ).contentIdentity.status
++    ).toBe('UNSUPPORTED')
++    expect(
++      report.graph.installed.find((x) => x.node.endsWith('/inner/package.json'))
++        .contentIdentity.status
++    ).toBe('MISMATCH')
++  })
++  it('exposes per-package identity without requiring graph output', async () => {
++    const f = await identityFixture()
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      installedReference: f.installedReference
++    })
++    expect(report.status).toBe('INCOMPLETE')
++    expect(report.installedContentIdentity).toHaveLength(1)
++    expect(report.installedContentIdentity[0].verified).toBe(false)
++    expect(report.installedContentIdentity[0].contentIdentity.status).toBe(
++      'MATCH'
++    )
++    expect(report.graph).toBeUndefined()
++  })
++  it('classifies a nested directory link to product sources by canonical destination', async () => {
++    const f = await identityFixture()
++    const link = path.join(
++      f.evaluated,
++      'node_modules/vendor/node_modules/bridge'
++    )
++    fs.mkdirSync(path.dirname(link), { recursive: true })
++    fs.symlinkSync(path.join(f.evaluated, 'products/shift-assistant/src'), link)
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(report.status).toBe('FAIL')
++    expect(report.violations.length).toBeGreaterThan(0)
++    expect(
++      report.violations.some(
++        (v) =>
++          v.reason === 'CORE_DEPENDS_ON_PRODUCT' &&
++          v.trail.at(-1) === 'products/shift-assistant/src'
++      )
++    ).toBe(true)
++  })
++  it('keeps non-package files under node_modules in the parent inventory and product tripwire', async () => {
++    const f = await identityFixture()
++    f.write(
++      f.evaluated,
++      'node_modules/vendor/node_modules/orphan.opaque',
++      'products/shift-assistant/src/index.ts\n'
++    )
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(report.status).toBe('FAIL')
++    expect(report.installedPackageCount).toBe(1)
++    expect(report.graph.installed[0].contentIdentity.status).toBe('MISMATCH')
++    expect(
++      report.diagnostics.some(
++        (d) =>
++          d.reason === 'INSTALLED_PACKAGE_REFERENCES_PRODUCT' &&
++          d.file.endsWith('/orphan.opaque')
++      )
++    ).toBe(true)
++  })
++  it('records a cyclic nested dependency as unsupported without crashing the graph', async () => {
++    const f = await identityFixture()
++    const manifest = JSON.parse(
++      fs.readFileSync(
++        path.join(f.evaluated, 'node_modules/vendor/package.json'),
++        'utf8'
++      )
++    )
++    manifest.dependencies = { inner: '1.0.0' }
++    f.write(
++      f.evaluated,
++      'node_modules/vendor/package.json',
++      JSON.stringify(manifest)
++    )
++    const link = path.join(
++      f.evaluated,
++      'node_modules/vendor/node_modules/inner'
++    )
++    fs.mkdirSync(path.dirname(link), { recursive: true })
++    fs.symlinkSync('inner', link)
++    const { auditProductBoundary } =
++      await import('../scripts/check-product-boundary.mjs')
++    const report = auditProductBoundary(f.evaluated, {
++      graph: true,
++      installedReference: f.installedReference
++    })
++    expect(report.status).toBe('INCOMPLETE')
++    expect(report.graph.installed[0].contentIdentity.status).toBe('UNSUPPORTED')
++    expect(
++      report.diagnostics.some((d) => d.detail === 'CYCLIC_INSTALLED_LINK')
++    ).toBe(true)
++  })
++  it('normal and strict CLI produce identical diagnostics and identity graph', async () => {
++    const f = await identityFixture()
++    const commands = [[], ['--strict']].map((extra, i) => {
++      const graph = path.join(f.evaluated, `graph-${i}.json`)
++      const child = spawnSync(
++        process.execPath,
++        [
++          'scripts/check-product-boundary.mjs',
++          f.evaluated,
++          `--installed-reference=${f.installedReference.manifestPath}`,
++          `--installed-reference-sha256=${f.installedReference.expectedSha256}`,
++          `--graph=${graph}`,
++          ...extra
++        ],
++        { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8' }
++      )
++      expect(child.status).toBe(1)
++      return {
++        report: JSON.parse(child.stdout),
++        graph: JSON.parse(fs.readFileSync(graph, 'utf8'))
++      }
++    })
++    expect(commands[0]).toEqual(commands[1])
++  })
++})
+diff --git a/tests/b6-0234-installed-identity.test.js b/tests/b6-0234-installed-identity.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..a9e3789c45d249c4e6d5ff360e788da896b0f302
+--- /dev/null
++++ b/tests/b6-0234-installed-identity.test.js
+@@ -0,0 +1,895 @@
++import { afterEach, beforeAll, describe, expect, it } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import { createHash } from 'node:crypto'
++import { spawnSync } from 'node:child_process'
++import {
++  canonicalJson,
++  sha256File,
++  fingerprintResolution,
++  fingerprintToolchain,
++  collectPackageInventory,
++  createInstalledIdentityComparator,
++  INSTALLED_IDENTITY_LIMITS
++} from '../scripts/boundary-installed-identity.mjs'
++
++const TMP = '/tmp/cvg-hiso005-0234-20261017/comparer'
++const roots = []
++const hash = (value) => createHash('sha256').update(value).digest('hex')
++const KEY = 'node_modules/vendor'
++let trustedToolchain
++beforeAll(() => {
++  trustedToolchain = fingerprintToolchain()
++})
++function temp() {
++  fs.mkdirSync(TMP, { recursive: true })
++  const root = fs.mkdtempSync(path.join(TMP, 'case-'))
++  roots.push(root)
++  return root
++}
++afterEach(() => {
++  for (const root of roots.splice(0))
++    fs.rmSync(root, { recursive: true, force: true })
++})
++function write(root, file, body) {
++  const target = path.join(root, file)
++  fs.mkdirSync(path.dirname(target), { recursive: true })
++  fs.writeFileSync(target, body)
++  return target
++}
++function fixture({ nested = false, links = false } = {}) {
++  const parent = temp(),
++    evaluated = path.join(parent, 'evaluated'),
++    reference = path.join(parent, 'reference')
++  const nestedKey = KEY + '/node_modules/@scope/inner'
++  const lock = {
++    lockfileVersion: 3,
++    packages: {
++      '': { name: 'synthetic', version: '1.0.0' },
++      [KEY]: {
++        version: '1.0.0',
++        resolved: 'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',
++        integrity: 'sha512-' + Buffer.alloc(64, 1).toString('base64')
++      },
++      ...(nested
++        ? {
++            [nestedKey]: {
++              version: '2.0.0',
++              resolved:
++                'https://registry.npmjs.org/@scope/inner/-/inner-2.0.0.tgz',
++              integrity: 'sha512-' + Buffer.alloc(64, 2).toString('base64')
++            }
++          }
++        : {})
++    }
++  }
++  for (const root of [evaluated, reference]) {
++    write(
++      root,
++      'package.json',
++      JSON.stringify({
++        name: 'synthetic',
++        version: '1.0.0',
++        private: true,
++        workspaces: ['packages/*']
++      })
++    )
++    write(root, 'packages/core/package.json', '{"name":"core"}')
++    write(root, 'package-lock.json', JSON.stringify(lock))
++    write(root, KEY + '/package.json', '{"name":"vendor","version":"1.0.0"}')
++    write(root, KEY + '/index.js', 'module.exports = 1\n')
++    write(root, KEY + '/.hidden.payload', 'opaque\0synthetic bytes')
++    write(
++      root,
++      KEY + '/data/no-known-extension',
++      'unrecognized extension included'
++    )
++    if (nested) {
++      write(
++        root,
++        nestedKey + '/package.json',
++        '{"name":"@scope/inner","version":"2.0.0"}'
++      )
++      write(root, nestedKey + '/entry.js', 'module.exports = 2\n')
++    }
++    if (links) fs.symlinkSync('index.js', path.join(root, KEY, 'internal'))
++  }
++  const packages = [KEY, ...(nested ? [nestedKey] : [])].map((key) => ({
++    key,
++    name: key === KEY ? 'vendor' : '@scope/inner',
++    version: key === KEY ? '1.0.0' : '2.0.0',
++    ...collectPackageInventory(path.join(reference, key))
++  }))
++  const receipt = {
++    schemaVersion: 1,
++    kind: 'cvg-installed-content-reference',
++    commit: 'f'.repeat(40),
++    root: reference,
++    ...fingerprintResolution(reference),
++    toolchain: trustedToolchain,
++    toolchainSha256: hash(canonicalJson(trustedToolchain)),
++    recipe: {
++      argv: [
++        'ci',
++        '--offline',
++        '--ignore-scripts',
++        '--audit=false',
++        '--fund=false',
++        '--include=dev',
++        '--include=optional',
++        '--cache',
++        path.join(parent, 'cache')
++      ],
++      exitCode: 0,
++      offline: true,
++      ignoreScripts: true,
++      completed: true
++    },
++    selection: {
++      platform: process.platform,
++      arch: process.arch,
++      dev: true,
++      optional: true
++    },
++    limits: { ...INSTALLED_IDENTITY_LIMITS },
++    usage: {
++      entries: packages.reduce((sum, p) => sum + p.usage.entries, 0),
++      regularBytes: packages.reduce((sum, p) => sum + p.usage.regularBytes, 0),
++      maxDepth: Math.max(...packages.map((p) => p.usage.maxDepth))
++    },
++    packages
++  }
++  const manifestPath = path.join(parent, 'receipt.json')
++  const save = (bytes = canonicalJson(receipt)) => {
++    fs.writeFileSync(manifestPath, bytes)
++    return { manifestPath, expectedSha256: sha256File(manifestPath) }
++  }
++  let installedReference = save()
++  const comparator = () =>
++    createInstalledIdentityComparator(evaluated, installedReference)
++  return {
++    parent,
++    evaluated,
++    reference,
++    receipt,
++    nestedKey,
++    manifestPath,
++    get options() {
++      return installedReference
++    },
++    save(bytes) {
++      installedReference = save(bytes)
++      return installedReference
++    },
++    comparator,
++    compare(c = comparator(), key = KEY) {
++      return { c, result: c.compare(path.join(evaluated, key), key) }
++    }
++  }
++}
++
++describe('SPEC0234 installed physical identity', () => {
++  it('ID-05 requires canonical recursive lexical JSON and a terminal LF', () => {
++    expect(canonicalJson({ z: { b: 2, a: 1 }, a: [2, 1] })).toBe(
++      '{"a":[2,1],"z":{"a":1,"b":2}}\n'
++    )
++    expect(canonicalJson({ 2: 'two', 10: 'ten' })).toBe(
++      '{"10":"ten","2":"two"}\n'
++    )
++    for (const bad of [
++      undefined,
++      NaN,
++      Infinity,
++      [undefined],
++      { missing: undefined }
++    ])
++      expect(() => canonicalJson(bad)).toThrow()
++  })
++
++  it('ID-01 inventories every physical file and compares bytes without granting approval', () => {
++    const f = fixture()
++    const { c, result } = f.compare()
++    expect(result.status).toBe('MATCH')
++    expect(result.verified).not.toBe(true)
++    expect(result.inventory.evaluated.entries.map((e) => e.path)).toEqual([
++      '.hidden.payload',
++      'data',
++      'data/no-known-extension',
++      'index.js',
++      'package.json'
++    ])
++    expect(result.inventory.evaluated.usage.entries).toBe(5)
++    expect(c.finalize().status).toBe('COMPLETE')
++    expect(result.status).toBe('MATCH')
++    expect(Object.keys(result.inventory.evaluated)).not.toContain('_inodes')
++    expect(JSON.stringify(result)).not.toContain('signature')
++  })
++
++  it.each([
++    [
++      'body',
++      (root) => write(root, KEY + '/index.js', 'module.exports = 9\n'),
++      'index.js'
++    ],
++    [
++      'hidden',
++      (root) => write(root, KEY + '/.hidden.payload', 'changed'),
++      '.hidden.payload'
++    ],
++    [
++      'unknown extension',
++      (root) => write(root, KEY + '/data/no-known-extension', 'changed'),
++      'data/no-known-extension'
++    ],
++    ['extra', (root) => write(root, KEY + '/extra.bin', 'extra'), 'extra.bin'],
++    [
++      'missing',
++      (root) => fs.unlinkSync(path.join(root, KEY, 'index.js')),
++      'index.js'
++    ],
++    [
++      'type',
++      (root) => {
++        fs.unlinkSync(path.join(root, KEY, 'index.js'))
++        fs.mkdirSync(path.join(root, KEY, 'index.js'))
++      },
++      'index.js'
++    ],
++    [
++      'executable',
++      (root) => fs.chmodSync(path.join(root, KEY, 'index.js'), 0o755),
++      'index.js'
++    ],
++    [
++      'name',
++      (root) =>
++        write(
++          root,
++          KEY + '/package.json',
++          '{"name":"impostor","version":"1.0.0"}'
++        ),
++      'package.json'
++    ],
++    [
++      'version',
++      (root) =>
++        write(
++          root,
++          KEY + '/package.json',
++          '{"name":"vendor","version":"9.0.0"}'
++        ),
++      'package.json'
++    ]
++  ])(
++    'ID-02/03 exposes %s divergence at the physical boundary',
++    (_, mutate, file) => {
++      const f = fixture()
++      mutate(f.evaluated)
++      const { c, result } = f.compare()
++      expect(result.status).toBe('MISMATCH')
++      expect(result.diffs.some((diff) => diff.path === file)).toBe(true)
++      c.finalize()
++      expect(result.status).toBe('MISMATCH')
++    }
++  )
++
++  it('ID-04 refuses the evaluated root and its symlink alias as reference', () => {
++    const f = fixture()
++    f.receipt.root = f.evaluated
++    f.save()
++    expect(f.comparator).toThrow('REFERENCE_ROOT_SELF_ALIAS')
++    const alias = path.join(f.parent, 'alias')
++    fs.symlinkSync(f.evaluated, alias)
++    f.receipt.root = alias
++    f.save()
++    expect(f.comparator).toThrow('DIRECTORY_ALIAS')
++  })
++
++  it('ID-04 detects cross-tree hardlinks and invalidates earlier results', () => {
++    const f = fixture()
++    const c = f.comparator(),
++      first = f.compare(c).result
++    const file = KEY + '/index.js'
++    fs.unlinkSync(path.join(f.reference, file))
++    fs.linkSync(path.join(f.evaluated, file), path.join(f.reference, file))
++    expect(f.compare(c).result.reasons).toContain(
++      'REFERENCE_HARDLINK_SELF_ALIAS'
++    )
++    expect(first.status).toBe('UNAVAILABLE')
++  })
++
++  it.each([
++    [
++      'schema version',
++      (r) => {
++        r.schemaVersion = 2
++      }
++    ],
++    [
++      'missing root',
++      (r) => {
++        delete r.root
++      }
++    ],
++    [
++      'recipe incomplete',
++      (r) => {
++        r.recipe.completed = false
++      }
++    ],
++    [
++      'npm exit',
++      (r) => {
++        r.recipe.exitCode = 1
++      }
++    ],
++    [
++      'offline omitted',
++      (r) => {
++        r.recipe.argv = r.recipe.argv.filter((a) => a !== '--offline')
++      }
++    ],
++    [
++      'timeout/partial',
++      (r) => {
++        r.recipe.completed = false
++        r.recipe.timeout = true
++      }
++    ],
++    [
++      'platform',
++      (r) => {
++        r.selection.platform = 'other'
++      }
++    ],
++    [
++      'toolchain digest',
++      (r) => {
++        r.toolchainSha256 = '0'.repeat(64)
++      }
++    ],
++    [
++      'limit raised',
++      (r) => {
++        r.limits.maxDepth++
++      }
++    ],
++    [
++      'duplicate package',
++      (r) => {
++        r.packages.push(r.packages[0])
++      }
++    ],
++    [
++      'unsafe key',
++      (r) => {
++        r.packages[0].key = '../escape'
++      }
++    ],
++    [
++      'inventory digest',
++      (r) => {
++        r.packages[0].inventorySha256 = '0'.repeat(64)
++      }
++    ],
++    [
++      'untyped entry',
++      (r) => {
++        delete r.packages[0].entries[0].type
++      }
++    ]
++  ])('ID-05 rejects invalid receipt: %s', (_, mutate) => {
++    const f = fixture()
++    mutate(f.receipt)
++    f.save()
++    expect(f.comparator).toThrow()
++  })
++
++  it('ID-05 rejects duplicate keys, whitespace, foreign digest and nonregular receipts', () => {
++    const f = fixture(),
++      good = canonicalJson(f.receipt)
++    f.save(
++      good.replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1')
++    )
++    expect(f.comparator).toThrow('REFERENCE_NOT_CANONICAL')
++    f.save(good + '\n')
++    expect(f.comparator).toThrow('REFERENCE_NOT_CANONICAL')
++    f.save(good)
++    expect(() =>
++      createInstalledIdentityComparator(f.evaluated, {
++        ...f.options,
++        expectedSha256: '0'.repeat(64)
++      })
++    ).toThrow('REFERENCE_DIGEST_MISMATCH')
++    fs.renameSync(f.manifestPath, f.manifestPath + '.regular')
++    fs.symlinkSync(f.manifestPath + '.regular', f.manifestPath)
++    expect(f.comparator).toThrow('INSTALLED_REFERENCE_NOT_REGULAR')
++    for (const options of [
++      {},
++      { manifestPath: f.manifestPath },
++      { manifestPath: f.manifestPath, expectedSha256: 'A'.repeat(64) }
++    ])
++      expect(() =>
++        createInstalledIdentityComparator(f.evaluated, options)
++      ).toThrow('INVALID_INSTALLED_REFERENCE_OPTIONS')
++  })
++
++  it.each([
++    'package-lock.json',
++    'package.json',
++    'packages/core/package.json',
++    '.npmrc',
++    'packages/core/.npmrc'
++  ])('ID-05 revalidates resolution input %s', (file) => {
++    const f = fixture(),
++      { c, result } = f.compare()
++    write(
++      f.evaluated,
++      file,
++      file.endsWith('.npmrc') ? 'audit=false\n' : '{"changed":true}'
++    )
++    expect(c.finalize().status).toBe('UNAVAILABLE')
++    expect(result.status).toBe('UNAVAILABLE')
++    expect(result.reasons).toContain('RESOLUTION_CHANGED')
++  })
++
++  it('ID-05 fingerprints declared workspace expansion, modes, and excludes unrelated runtime content', () => {
++    const f = fixture(),
++      before = fingerprintResolution(f.reference)
++    write(f.reference, KEY + '/new-runtime-file', 'not a resolution input')
++    write(f.reference, '.env.synthetic-unread', 'not a resolution input')
++    expect(fingerprintResolution(f.reference)).toEqual(before)
++    write(f.reference, 'packages/new/package.json', '{"name":"new"}')
++    expect(fingerprintResolution(f.reference).configSha256).not.toBe(
++      before.configSha256
++    )
++  })
++
++  it('ID-05 pins actual Node/npm files; unknown executables are never run', () => {
++    expect(trustedToolchain.npmTreeSha256).toBe(
++      'a931e1d739da4bc407ffd23e6b242f20c3f7475378a0718bac03c83e7ca801ae'
++    )
++    const root = temp(),
++      sentinel = path.join(root, 'executed')
++    const fake = write(root, 'node', '#!/bin/sh\ntouch ' + sentinel + '\n')
++    fs.chmodSync(fake, 0o755)
++    expect(() => fingerprintToolchain({ nodePath: fake })).toThrow(
++      'TOOLCHAIN_NODE_PIN_MISMATCH'
++    )
++    expect(fs.existsSync(sentinel)).toBe(false)
++    const npmRoot = path.join(root, 'npm')
++    fs.cpSync(trustedToolchain.npmRoot, npmRoot, { recursive: true })
++    write(npmRoot, 'bin/npm-cli.js', 'tampered actual CLI bytes')
++    expect(() => fingerprintToolchain({ npmRoot })).toThrow(
++      'TOOLCHAIN_NPM_PIN_MISMATCH'
++    )
++    write(npmRoot, 'package.json', '{"name":"npm","version":"other"}')
++    expect(() => fingerprintToolchain({ npmRoot })).toThrow(
++      'TOOLCHAIN_NPM_VERSION_MISMATCH'
++    )
++  })
++
++  it('ID-05 rehashes actual pinned toolchain at finalize, without per-package rehash', () => {
++    const f = fixture(),
++      npmRoot = path.join(f.parent, 'npm')
++    fs.cpSync(trustedToolchain.npmRoot, npmRoot, { recursive: true })
++    f.receipt.toolchain = fingerprintToolchain({ npmRoot })
++    f.receipt.toolchainSha256 = hash(canonicalJson(f.receipt.toolchain))
++    f.save()
++    const { c, result } = f.compare()
++    write(npmRoot, 'bin/npm-cli.js', 'mutated after MATCH')
++    expect(c.finalize().status).toBe('UNAVAILABLE')
++    expect(result.status).toBe('UNAVAILABLE')
++    expect(result.reasons).toContain('TOOLCHAIN_NPM_PIN_MISMATCH')
++  })
++
++  it('ID-06 normalizes canonical internal link resolution across independent roots', () => {
++    const f = fixture({ links: true }),
++      { c, result } = f.compare()
++    expect(result.status).toBe('MATCH')
++    const entry = result.inventory.reference.entries.find(
++      (e) => e.path === 'internal'
++    )
++    expect(entry).toEqual({
++      path: 'internal',
++      type: 'link',
++      target: 'index.js',
++      resolution: path.join(f.reference, KEY, 'index.js')
++    })
++    c.finalize()
++    expect(result.status).toBe('MATCH')
++  })
++
++  it.each(['dangling', 'cycle', 'external'])(
++    'ID-06 refuses %s symlinks with partial evidence',
++    (kind) => {
++      const f = fixture(),
++        dir = path.join(f.evaluated, KEY)
++      const target =
++        kind === 'dangling'
++          ? 'missing'
++          : kind === 'cycle'
++            ? 'unsafe'
++            : write(f.parent, 'outside', 'outside')
++      fs.symlinkSync(target, path.join(dir, 'unsafe'))
++      const result = f.compare().result
++      expect(result.status).toBe('UNSUPPORTED')
++      expect(
++        result.inventory.partial.entries.some(
++          (e) => e.path === 'unsafe' && e.type === 'link'
++        )
++      ).toBe(true)
++    }
++  )
++
++  it('ID-06 records scoped nested successors and compares their content independently', () => {
++    const f = fixture({ nested: true }),
++      c = f.comparator()
++    const parent = f.compare(c).result
++    expect(parent.status).toBe('MATCH')
++    expect(parent.nestedPackages).toEqual(['node_modules/@scope/inner'])
++    expect(
++      parent.inventory.evaluated.entries.some((e) =>
++        e.path.endsWith('entry.js')
++      )
++    ).toBe(false)
++    write(f.evaluated, f.nestedKey + '/entry.js', 'module.exports = 9\n')
++    const inner = f.compare(c, f.nestedKey).result
++    expect(inner.status).toBe('MISMATCH')
++    c.finalize()
++    expect(inner.status).toBe('MISMATCH')
++  })
++
++  it('ID-10 preserves inventory when an optional/peer package is absent from reference', () => {
++    const f = fixture()
++    f.receipt.packages = []
++    f.receipt.unavailable = [{ key: KEY, reason: 'optional platform fixture' }]
++    f.save()
++    const { c, result } = f.compare()
++    expect(result.status).toBe('UNAVAILABLE')
++    expect(result.reasons).toContain('REFERENCE_PACKAGE_UNAVAILABLE')
++    expect(result.inventory.evaluated.entries.length).toBe(5)
++    c.finalize()
++    expect(result.status).toBe('UNAVAILABLE')
++  })
++
++  it.each([
++    ['maxPackageBytes', 1, 'LIMIT_REGULAR_BYTES'],
++    ['maxTotalBytes', 1, 'LIMIT_REGULAR_BYTES'],
++    ['maxEntries', 1, 'LIMIT_ENTRIES'],
++    ['maxDepth', 0, 'LIMIT_DEPTH'],
++    ['comparisonTimeoutMs', 0, 'COMPARISON_TIMEOUT']
++  ])(
++    'ID-10 refuses reduced %s limits without truncated success',
++    (key, value, code) => {
++      const f = fixture()
++      expect(() =>
++        collectPackageInventory(path.join(f.evaluated, KEY), {
++          testOnly: { limits: { [key]: value } }
++        })
++      ).toThrow(code)
++      expect(() =>
++        collectPackageInventory(path.join(f.evaluated, KEY), {
++          testOnly: { limits: { [key]: INSTALLED_IDENTITY_LIMITS[key] + 1 } }
++        })
++      ).toThrow('TEST_LIMIT_INVALID')
++    }
++  )
++
++  it('ID-10 refuses real FIFO entries without blocking on open', () => {
++    const f = fixture(),
++      fifo = path.join(f.evaluated, KEY, 'fifo')
++    const child = spawnSync('/usr/bin/mkfifo', [fifo], { encoding: 'utf8' })
++    expect(child.status).toBe(0)
++    const result = f.compare().result
++    expect(result.status).toBe('UNSUPPORTED')
++    expect(result.reasons).toContain('SPECIAL_FILE')
++  })
++
++  it('ID-10 refuses a real unreadable file', () => {
++    const f = fixture(),
++      file = path.join(f.evaluated, KEY, 'index.js')
++    fs.chmodSync(file, 0)
++    try {
++      const result = f.compare().result
++      expect(result.status).toBe('UNAVAILABLE')
++      expect(result.reasons).toContain('INVENTORY_IO_ERROR')
++    } finally {
++      fs.chmodSync(file, 0o644)
++    }
++  })
++
++  it('ID-11 detects real midstream byte mutation with unchanged file length', () => {
++    const root = temp(),
++      file = write(root, 'large.opaque', Buffer.alloc(256 * 1024, 7))
++    let mutated = false
++    expect(() =>
++      collectPackageInventory(root, {
++        testOnly: {
++          hooks: {
++            afterChunk: () => {
++              if (mutated) return
++              mutated = true
++              const fd = fs.openSync(file, 'r+')
++              fs.writeSync(fd, Buffer.from([8]), 0, 1, 128 * 1024)
++              fs.closeSync(fd)
++            }
++          }
++        }
++      })
++    ).toThrow('FILE_CHANGED_DURING_READ')
++    expect(mutated).toBe(true)
++    expect(fs.readFileSync(file)[128 * 1024]).toBe(8)
++  })
++
++  it('ID-11 detects real file-to-link replacement between lstat and read', () => {
++    const root = temp(),
++      file = write(root, 'victim', 'same')
++    write(root, 'target', 'same')
++    let replaced = false
++    expect(() =>
++      collectPackageInventory(root, {
++        testOnly: {
++          hooks: {
++            afterLstat: ({ relative }) => {
++              if (relative !== 'victim' || replaced) return
++              replaced = true
++              fs.unlinkSync(file)
++              fs.symlinkSync('target', file)
++            }
++          }
++        }
++      })
++    ).toThrow()
++    expect(replaced).toBe(true)
++    expect(fs.lstatSync(file).isSymbolicLink()).toBe(true)
++  })
++
++  it('ID-11 detects real link retargeting after collection', () => {
++    const root = temp(),
++      link = path.join(root, 'link')
++    write(root, 'one', 'one')
++    write(root, 'two', 'two')
++    fs.symlinkSync('one', link)
++    expect(() =>
++      collectPackageInventory(root, {
++        testOnly: {
++          hooks: {
++            beforeRevalidate: () => {
++              fs.unlinkSync(link)
++              fs.symlinkSync('two', link)
++            }
++          }
++        }
++      })
++    ).toThrow('INVENTORY_CHANGED')
++    expect(fs.readlinkSync(link)).toBe('two')
++  })
++
++  it.each(['evaluated', 'reference'])(
++    'ID-11 finalizes actual post-collection %s byte changes',
++    (side) => {
++      const f = fixture(),
++        { c, result } = f.compare()
++      const file = path.join(f[side], KEY, 'index.js'),
++        before = fs.statSync(file)
++      const child = spawnSync(
++        process.execPath,
++        [
++          '-e',
++          'const fs=require("node:fs");fs.writeFileSync(process.argv[1],"module.exports = 9\\n")',
++          file
++        ],
++        { encoding: 'utf8' }
++      )
++      expect(child.status).toBe(0)
++      fs.utimesSync(file, before.atime, before.mtime)
++      expect(c.finalize().status).toBe('UNAVAILABLE')
++      expect(result.status).toBe('UNAVAILABLE')
++      expect(result.reasons).toContain('PACKAGE_CHANGED_AFTER_COMPARISON')
++    }
++  )
++
++  it.each(['type', 'link', 'receipt'])(
++    'ID-11 invalidates computed MATCH after actual %s mutation',
++    (kind) => {
++      const f = fixture({ links: true }),
++        { c, result } = f.compare()
++      if (kind === 'receipt') fs.appendFileSync(f.manifestPath, '\n')
++      else if (kind === 'type') {
++        fs.unlinkSync(path.join(f.evaluated, KEY, 'index.js'))
++        fs.mkdirSync(path.join(f.evaluated, KEY, 'index.js'))
++      } else {
++        fs.unlinkSync(path.join(f.evaluated, KEY, 'internal'))
++        fs.symlinkSync(
++          '.hidden.payload',
++          path.join(f.evaluated, KEY, 'internal')
++        )
++      }
++      c.finalize()
++      expect(result.status).toBe('UNAVAILABLE')
++    }
++  )
++
++  it('ID-11 never memoizes verdicts by context and invalidates all earlier objects on final mutation', () => {
++    const f = fixture(),
++      c = f.comparator(),
++      first = f.compare(c).result
++    expect(first.status).toBe('MATCH')
++    write(f.evaluated, KEY + '/index.js', 'module.exports = 7\n')
++    const second = f.compare(c).result
++    expect(second.status).toBe('MISMATCH')
++    c.finalize()
++    expect(first.status).toBe('UNAVAILABLE')
++    expect(second.status).toBe('UNAVAILABLE')
++    expect(f.compare(c).result.status).toBe('UNAVAILABLE')
++  })
++
++  it.each(['missing', 'directory', 'invalid JSON', 'null JSON'])(
++    'ID-03 keeps physical differences for an installed manifest that is %s',
++    (kind) => {
++      const f = fixture(),
++        file = path.join(f.evaluated, KEY, 'package.json')
++      if (kind === 'missing' || kind === 'directory') {
++        fs.unlinkSync(file)
++        if (kind === 'directory') fs.mkdirSync(file)
++      } else
++        fs.writeFileSync(file, kind === 'null JSON' ? 'null' : '{malformed')
++      const { c, result } = f.compare()
++      expect(result.status).toBe('MISMATCH')
++      expect(result.diffs.some((diff) => diff.path === 'package.json')).toBe(
++        true
++      )
++      c.finalize()
++      expect(result.status).toBe('MISMATCH')
++    }
++  )
++
++  it.each([
++    '--offline=false',
++    '--ignore-scripts=false',
++    '--no-offline',
++    '--force=false',
++    '--omit=dev',
++    '--audit=true'
++  ])('ID-05 rejects contradictory or unreviewed recipe argument %s', (arg) => {
++    const f = fixture()
++    f.receipt.recipe.argv.push(arg)
++    f.save()
++    expect(f.comparator).toThrow('REFERENCE_RECIPE_INVALID')
++  })
++
++  it.each(['missing', 'noncanonical'])(
++    'ID-04 never matches a lock package with %s SHA512 integrity',
++    (kind) => {
++      const f = fixture()
++      for (const root of [f.evaluated, f.reference]) {
++        const lock = JSON.parse(
++          fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8')
++        )
++        if (kind === 'missing') delete lock.packages[KEY].integrity
++        else lock.packages[KEY].integrity = 'sha512-' + 'A'.repeat(85) + 'B=='
++        write(root, 'package-lock.json', JSON.stringify(lock))
++      }
++      Object.assign(f.receipt, fingerprintResolution(f.reference))
++      f.save()
++      const result = f.compare().result
++      expect(result.status).toBe('UNAVAILABLE')
++      expect(result.reasons).toContain('LOCK_PACKAGE_UNAVAILABLE')
++    }
++  )
++
++  it('ID-05 rejects dangling configuration symlinks as unsupported physical inputs', () => {
++    const f = fixture()
++    fs.symlinkSync('nonexistent', path.join(f.reference, '.npmrc'))
++    expect(() => fingerprintResolution(f.reference)).toThrow(
++      'CONFIG_NOT_REGULAR'
++    )
++  })
++
++  it('ID-10 applies the immutable production package cap to sparse files without reading their payload', () => {
++    const f = fixture(),
++      file = write(f.evaluated, KEY + '/oversized', '')
++    fs.truncateSync(file, INSTALLED_IDENTITY_LIMITS.maxPackageBytes + 1)
++    const c = createInstalledIdentityComparator(f.evaluated, {
++      ...f.options,
++      limits: { maxPackageBytes: Infinity }
++    })
++    const result = f.compare(c).result
++    expect(result.status).toBe('UNSUPPORTED')
++    expect(result.reasons).toContain('LIMIT_REGULAR_BYTES')
++    expect(result.inventory.partial.usage.regularBytes).toBeLessThan(1024)
++    expect(Object.isFrozen(INSTALLED_IDENTITY_LIMITS)).toBe(true)
++  })
++
++  it('ID-11 repeated finalize revalidates live bytes after an earlier successful finalize', () => {
++    const f = fixture(),
++      { c, result } = f.compare()
++    expect(c.finalize().status).toBe('COMPLETE')
++    write(f.reference, KEY + '/new-after-finalize', 'new bytes')
++    expect(c.finalize().status).toBe('UNAVAILABLE')
++    expect(result.status).toBe('UNAVAILABLE')
++  })
++
++  it('ID-06 still discovers nested successors after a lexically earlier unsupported link', () => {
++    const f = fixture({ nested: true })
++    fs.symlinkSync('absent', path.join(f.evaluated, KEY, '.dangling'))
++    const result = f.compare().result
++    expect(result.status).toBe('UNSUPPORTED')
++    expect(result.nestedPackages).toEqual(['node_modules/@scope/inner'])
++    expect(result.inventory.partial.frontierComplete).toBe(true)
++  })
++
++  it.each([
++    'node_modules/strange.dat',
++    'node_modules/.unknown',
++    'node_modules/no-package/payload'
++  ])(
++    'ID-06 compares nonpackage content at %s without a node_modules exclusion',
++    (file) => {
++      const f = fixture()
++      for (const root of [f.evaluated, f.reference])
++        write(root, KEY + '/' + file, 'original opaque bytes')
++      Object.assign(
++        f.receipt.packages[0],
++        collectPackageInventory(path.join(f.reference, KEY))
++      )
++      f.save()
++      const c = f.comparator(),
++        equal = f.compare(c).result
++      expect(equal.status).toBe('MATCH')
++      expect(
++        equal.inventory.evaluated.entries.some(
++          (e) => e.path === file && e.type === 'file'
++        )
++      ).toBe(true)
++      expect(equal.nestedPackages).toEqual([])
++      write(f.evaluated, KEY + '/' + file, 'different opaque bytes')
++      const changed = f.compare(c).result
++      expect(changed.status).toBe('MISMATCH')
++      expect(changed.diffs.some((e) => e.path === file)).toBe(true)
++      c.finalize()
++      expect(equal.status).toBe('UNAVAILABLE')
++    }
++  )
++
++  it('ID-06 inventories .bin symlinks physically and checks targets without following them', () => {
++    const f = fixture()
++    for (const root of [f.evaluated, f.reference]) {
++      const bin = path.join(root, KEY, 'node_modules/.bin')
++      fs.mkdirSync(bin, { recursive: true })
++      fs.symlinkSync('../../index.js', path.join(bin, 'tool'))
++    }
++    Object.assign(
++      f.receipt.packages[0],
++      collectPackageInventory(path.join(f.reference, KEY))
++    )
++    f.save()
++    const { c, result } = f.compare()
++    expect(result.status).toBe('MATCH')
++    expect(
++      result.inventory.evaluated.entries.find(
++        (e) => e.path === 'node_modules/.bin/tool'
++      )?.type
++    ).toBe('link')
++    expect(result.nestedPackages).toEqual([])
++    c.finalize()
++    expect(result.status).toBe('MATCH')
++  })
++
++  it('ID-10 marks an incomplete nested frontier explicitly when the traversal cap prevents discovery', () => {
++    const f = fixture({ nested: true })
++    let error
++    try {
++      collectPackageInventory(path.join(f.evaluated, KEY), {
++        testOnly: { limits: { maxEntries: 1 } }
++      })
++    } catch (caught) {
++      error = caught
++    }
++    expect(error?.status).toBe('UNSUPPORTED')
++    expect(error?.inventory.partial).toBe(true)
++    expect(error?.inventory.frontierComplete).toBe(false)
++    expect(error?.inventory.inventorySha256).toBeUndefined()
++  })
++})
+diff --git a/tests/b6-0234-reference-recipe.test.js b/tests/b6-0234-reference-recipe.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..3f5e88ab33a305662fbd4f93cbbdfe580c4957e1
+--- /dev/null
++++ b/tests/b6-0234-reference-recipe.test.js
+@@ -0,0 +1,613 @@
++// @vitest-environment node
++import { afterEach, expect, test } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import net from 'node:net'
++import { createHash } from 'node:crypto'
++import { execFileSync } from 'node:child_process'
++import {
++  buildInstalledReference,
++  inspectReferenceTrace
++} from '../scripts/build-installed-reference.mjs'
++import {
++  canonicalJson,
++  createInstalledIdentityComparator,
++  INSTALLED_IDENTITY_LIMITS
++} from '../scripts/boundary-installed-identity.mjs'
++import {
++  referenceEnvironment,
++  runOwnedProcess
++} from '../scripts/boundary-reference-process.mjs'
++
++const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
++const BASE = '/tmp/cvg-hiso005-0234-20261017/runner'
++fs.mkdirSync(BASE, { recursive: true })
++const roots = []
++const cleanup = []
++afterEach(async () => {
++  while (cleanup.length) await cleanup.pop()()
++})
++const write = (file, data) => {
++  fs.mkdirSync(path.dirname(file), { recursive: true })
++  fs.writeFileSync(file, data)
++}
++const json = (file, value) => write(file, JSON.stringify(value))
++const git = (root, ...args) =>
++  execFileSync(
++    '/usr/bin/git',
++    [
++      '-c',
++      'core.hooksPath=/dev/null',
++      '-c',
++      'user.name=Synthetic Fixture',
++      '-c',
++      'user.email=fixture@invalid.example',
++      ...args
++    ],
++    {
++      cwd: root,
++      env: referenceEnvironment(NODE),
++      encoding: 'utf8',
++      stdio: ['ignore', 'pipe', 'pipe']
++    }
++  ).trim()
++
++function fixture({
++  optional = false,
++  config,
++  packageBytes = 12,
++  networkPort = 1
++} = {}) {
++  const base = fs.mkdtempSync(path.join(BASE, 'fixture-'))
++  roots.push(base)
++  const sourceRoot = path.join(base, 'source'),
++    cacheSource = path.join(base, 'cache-source')
++  fs.mkdirSync(sourceRoot)
++  fs.mkdirSync(cacheSource)
++  const sentinel = path.join(base, 'lifecycle-sentinel')
++  const attack = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(sentinel)},'ran');const s=require('node:net').connect(${networkPort},'127.0.0.1');s.on('connect',()=>s.end());s.on('error',()=>{});`
++  const buildTar = (name, extra = {}) => {
++    const staging = path.join(base, name),
++      pkg = path.join(staging, 'package')
++    fs.mkdirSync(pkg, { recursive: true })
++    const manifest = {
++      name,
++      version: '1.0.0',
++      scripts: {
++        preinstall: 'node attack.cjs',
++        install: 'node attack.cjs',
++        postinstall: 'node attack.cjs'
++      },
++      ...extra
++    }
++    json(path.join(pkg, 'package.json'), manifest)
++    write(path.join(pkg, 'attack.cjs'), attack)
++    write(path.join(pkg, 'index.js'), 'x'.repeat(packageBytes))
++    write(path.join(pkg, '.hidden.unknown'), 'complete fixture inventory')
++    write(path.join(pkg, 'executable'), '#!/bin/sh\nexit 0\n')
++    fs.chmodSync(path.join(pkg, 'executable'), 0o755)
++    const tar = path.join(base, name + '.tgz')
++    execFileSync('/usr/bin/tar', ['-czf', tar, '-C', staging, 'package'], {
++      env: referenceEnvironment(NODE)
++    })
++    const payload = fs.readFileSync(tar),
++      hex = createHash('sha512').update(payload).digest('hex')
++    const integrity = 'sha512-' + Buffer.from(hex, 'hex').toString('base64')
++    const cached = path.join(
++      cacheSource,
++      '_cacache/content-v2/sha512',
++      hex.slice(0, 2),
++      hex.slice(2, 4),
++      hex.slice(4)
++    )
++    write(cached, payload)
++    return {
++      version: '1.0.0',
++      resolved:
++        'https://registry.npmjs.org/' + name + '/-/' + name + '-1.0.0.tgz',
++      integrity,
++      cached
++    }
++  }
++  const payload = buildTar('fixture-safe')
++  const rootManifest = {
++    name: 'recipe-fixture',
++    version: '1.0.0',
++    scripts: { preinstall: 'node attack.cjs', postinstall: 'node attack.cjs' },
++    dependencies: { 'fixture-safe': '1.0.0' }
++  }
++  const { cached, ...lockEntry } = payload
++  const packages = {
++    '': {
++      name: rootManifest.name,
++      version: rootManifest.version,
++      dependencies: rootManifest.dependencies
++    },
++    'node_modules/fixture-safe': lockEntry
++  }
++  if (optional) {
++    const item = buildTar('fixture-optional', { os: ['!' + process.platform] })
++    delete item.cached
++    rootManifest.optionalDependencies = { 'fixture-optional': '1.0.0' }
++    packages[''].optionalDependencies = rootManifest.optionalDependencies
++    packages['node_modules/fixture-optional'] = {
++      ...item,
++      optional: true,
++      os: ['!' + process.platform]
++    }
++  }
++  json(path.join(sourceRoot, 'package.json'), rootManifest)
++  json(path.join(sourceRoot, 'package-lock.json'), {
++    name: rootManifest.name,
++    version: '1.0.0',
++    lockfileVersion: 3,
++    requires: true,
++    packages
++  })
++  write(path.join(sourceRoot, 'attack.cjs'), attack)
++  write(
++    path.join(sourceRoot, 'nested/.env.example'),
++    'excluded synthetic example'
++  )
++  write(path.join(sourceRoot, '.env'), 'synthetic environment excluded')
++  write(
++    path.join(sourceRoot, 'docs/node_modules/forbidden-fixture/x'),
++    'exclude nested committed fixture'
++  )
++  write(path.join(sourceRoot, 'nested/dist/x'), 'excluded generated')
++  if (config !== undefined) write(path.join(sourceRoot, '.npmrc'), config)
++  git(sourceRoot, 'init', '-q')
++  git(sourceRoot, 'add', '-f', '--', '.')
++  git(sourceRoot, 'commit', '-q', '-m', 'synthetic offline fixture')
++  const commit = git(sourceRoot, 'rev-parse', 'HEAD')
++  // Working-tree installation is intentionally poisoned and must never be copied.
++  write(
++    path.join(sourceRoot, 'node_modules/fixture-safe/index.js'),
++    'poisoned evaluated installation'
++  )
++  return {
++    base,
++    sourceRoot,
++    cacheSource,
++    outputRoot: path.join(base, 'output'),
++    commit,
++    cached,
++    sentinel,
++    attack
++  }
++}
++const options = (f, extra = {}) => ({
++  sourceRoot: f.sourceRoot,
++  cacheSource: f.cacheSource,
++  outputRoot: f.outputRoot,
++  commit: f.commit,
++  ...extra
++})
++async function refuses(f, extra, code) {
++  await expect(
++    buildInstalledReference(options(f, extra))
++  ).rejects.toMatchObject({ status: 'UNAVAILABLE', ...(code ? { code } : {}) })
++  expect(fs.existsSync(path.join(f.outputRoot, 'reference.json'))).toBe(false)
++  if (fs.existsSync(f.outputRoot))
++    expect(
++      JSON.parse(
++        fs.readFileSync(path.join(f.outputRoot, 'failure.json'), 'utf8')
++      ).status
++    ).toBe('UNAVAILABLE')
++}
++
++test('ID-04/05/09: real offline ci builds an independent canonical reference; no lifecycle or IP syscall', async () => {
++  const server = net.createServer((socket) => {
++    contacts++
++    socket.end()
++  })
++  let contacts = 0
++  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
++  cleanup.push(() => new Promise((resolve) => server.close(resolve)))
++  const f = fixture({ networkPort: server.address().port })
++  const positive = path.join(f.base, 'positive-control.trace')
++  // Same script REALLY writes the sentinel and contacts the controlled listener
++  // when executed; the observer must see those syscalls (not synthetic statuses).
++  await runOwnedProcess(
++    '/usr/bin/strace',
++    [
++      '-f',
++      '-qq',
++      '-e',
++      'trace=process,network',
++      '-o',
++      positive,
++      NODE,
++      path.join(f.sourceRoot, 'attack.cjs')
++    ],
++    { cwd: f.sourceRoot, env: referenceEnvironment(NODE), timeoutMs: 5000 }
++  )
++  expect(fs.readFileSync(f.sentinel, 'utf8')).toBe('ran')
++  expect(contacts).toBe(1)
++  expect(fs.readFileSync(positive, 'utf8')).toMatch(/connect\([^\n]*AF_INET/)
++  expect(() => inspectReferenceTrace(positive, NODE)).toThrowError(
++    'NETWORK_ATTEMPT_OBSERVED'
++  )
++  fs.unlinkSync(f.sentinel)
++  contacts = 0
++  process.env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:1/'
++  process.env.NODE_OPTIONS = '--require=/nonexistent/synthetic-hook'
++  cleanup.push(() => {
++    delete process.env.NPM_CONFIG_REGISTRY
++    delete process.env.NODE_OPTIONS
++  })
++  const before = fs.readFileSync(f.cached)
++  const result = await buildInstalledReference(options(f))
++  expect(fs.readFileSync(result.manifestPath, 'utf8')).toBe(
++    canonicalJson(result.receipt)
++  )
++  expect(result.expectedSha256).toBe(
++    createHash('sha256')
++      .update(fs.readFileSync(result.manifestPath))
++      .digest('hex')
++  )
++  expect(result.receipt.packages).toHaveLength(1)
++  expect(result.receipt.packages[0].entries.map((e) => e.path)).toContain(
++    '.hidden.unknown'
++  )
++  expect(
++    fs.readFileSync(
++      path.join(result.receipt.root, 'node_modules/fixture-safe/index.js'),
++      'utf8'
++    )
++  ).toBe('x'.repeat(12))
++  expect(fs.statSync(f.cached).ino).not.toBe(
++    fs.statSync(
++      path.join(result.receipt.root, 'node_modules/fixture-safe/index.js')
++    ).ino
++  )
++  expect(fs.readFileSync(f.cached)).toEqual(before)
++  for (const name of [
++    '.env',
++    'nested/.env.example',
++    'nested/dist/x',
++    'docs/node_modules/forbidden-fixture/x'
++  ])
++    expect(fs.existsSync(path.join(result.receipt.root, name))).toBe(false)
++  expect(fs.existsSync(f.sentinel)).toBe(false)
++  expect(contacts).toBe(0)
++  const trace = fs.readFileSync(
++    path.join(f.outputRoot, 'logs/npm.trace'),
++    'utf8'
++  )
++  expect(trace).not.toMatch(/socket\(AF_INET|connect\([^\n]*AF_INET/)
++  expect(trace.match(/\bexecve\(/g)).toHaveLength(1)
++  expect(result.receipt.recipe.environment).not.toHaveProperty('HOME')
++  expect(result.receipt.recipe.environment).not.toHaveProperty('NODE_OPTIONS')
++  expect(result.receipt.recipe.environment.NPM_CONFIG_UPDATE_NOTIFIER).toBe(
++    'false'
++  )
++  expect(result.receipt.limits).toEqual(INSTALLED_IDENTITY_LIMITS)
++  expect(result.receipt.usage.maxProcesses).toBeGreaterThanOrEqual(2)
++  expect(result.receipt.usage.maxProcesses).toBeLessThanOrEqual(8)
++  expect(result.receipt.usage.compressedBytes).toBe(before.length)
++  expect(result.receipt).not.toHaveProperty('verified')
++  fs.cpSync(
++    path.join(result.receipt.root, 'node_modules/fixture-safe'),
++    path.join(f.sourceRoot, 'node_modules/fixture-safe'),
++    { recursive: true }
++  )
++  const comparer = createInstalledIdentityComparator(f.sourceRoot, {
++    manifestPath: result.manifestPath,
++    expectedSha256: result.expectedSha256
++  })
++  const verdict = comparer.compare(
++    path.join(f.sourceRoot, 'node_modules/fixture-safe'),
++    'node_modules/fixture-safe'
++  )
++  comparer.finalize()
++  expect(verdict.status).toBe('MATCH')
++  expect(verdict.verified).not.toBe(true)
++}, 30000)
++
++test('ID-04: tampered physical SRI payload cannot create receipt', async () => {
++  const f = fixture()
++  fs.writeFileSync(f.cached, 'tampered actual payload')
++  await refuses(f, {}, 'CACHE_SRI_MISMATCH')
++}, 30000)
++
++test.each(['absent', 'sha1-no', 'sha512-invalid'])(
++  'ID-04: %s SRI is rejected',
++  async (value) => {
++    const f = fixture()
++    const lockPath = path.join(f.sourceRoot, 'package-lock.json')
++    const lock = JSON.parse(fs.readFileSync(lockPath))
++    if (value === 'absent')
++      delete lock.packages['node_modules/fixture-safe'].integrity
++    else lock.packages['node_modules/fixture-safe'].integrity = value
++    json(lockPath, lock)
++    git(f.sourceRoot, 'add', '--', 'package-lock.json')
++    git(f.sourceRoot, 'commit', '-qm', 'invalid SRI fixture')
++    f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
++    await refuses(f, {}, 'CACHE_SRI_REQUIRED')
++  },
++  30000
++)
++
++test('ID-05: uncommitted source bytes and a different commit assertion fail closed', async () => {
++  const f = fixture()
++  write(path.join(f.sourceRoot, 'attack.cjs'), 'source drift')
++  await refuses(f, {}, 'SOURCE_COMMIT_MISMATCH')
++  const g = fixture()
++  await refuses(g, { commit: '0'.repeat(40) }, 'SOURCE_COMMIT_ASSERTION')
++}, 30000)
++
++test.each([
++  'cache=/tmp/escape\n',
++  '//registry.npmjs.org/:_authToken=synthetic\n',
++  'offline=false\n',
++  'onload-script=attack.cjs\n',
++  'update-notifier=true\n'
++])(
++  'ID-05/09: material config escape %s is rejected before npm',
++  async (config) => {
++    const f = fixture({ config })
++    await refuses(f, {}, 'PROJECT_CONFIG_UNKNOWN')
++    expect(fs.existsSync(path.join(f.outputRoot, 'logs/npm.trace'))).toBe(false)
++  },
++  30000
++)
++
++test('ID-05: untrusted node executable is refused without executing it', async () => {
++  const f = fixture(),
++    fake = path.join(f.base, 'fake-node')
++  write(fake, '#!/bin/sh\ntouch ' + f.sentinel + '\n')
++  fs.chmodSync(fake, 0o755)
++  await refuses(f, { nodePath: fake }, 'TOOLCHAIN_NODE_PIN_MISMATCH')
++  expect(fs.existsSync(f.sentinel)).toBe(false)
++}, 30000)
++
++test.each(['beforeNpm', 'afterNpm'])(
++  'ID-05/11: real config/source mutation at %s invalidates recipe',
++  async (phase) => {
++    const f = fixture()
++    await refuses(f, {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          [phase]: ({ snapshot }) =>
++            write(path.join(snapshot, 'package.json'), '{"name":"mutated"}')
++        }
++      }
++    })
++  },
++  30000
++)
++
++test('ID-05: changed empty user config invalidates recipe before execution', async () => {
++  const f = fixture()
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          beforeNpm: ({ configRoot }) =>
++            write(path.join(configRoot, 'user.npmrc'), 'offline=false')
++        }
++      }
++    },
++    'EMPTY_CONFIG_MUTATED'
++  )
++}, 30000)
++
++test('ID-05: changed npm CLI material is refused without executing it', async () => {
++  const f = fixture(),
++    fake = path.join(f.base, 'fake-npm')
++  json(path.join(fake, 'package.json'), { name: 'npm', version: '10.9.8' })
++  write(path.join(fake, 'bin/npm-cli.js'), f.attack)
++  await refuses(f, { npmRoot: fake }, 'TOOLCHAIN_NPM_PIN_MISMATCH')
++  expect(fs.existsSync(f.sentinel)).toBe(false)
++}, 30000)
++
++test('ID-05: HEAD movement invalidates recipe even when tracked input bytes remain identical', async () => {
++  const f = fixture()
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          beforeNpm: () =>
++            git(
++              f.sourceRoot,
++              'commit',
++              '--allow-empty',
++              '-qm',
++              'moved synthetic HEAD'
++            )
++        }
++      }
++    },
++    'SOURCE_COMMIT_ASSERTION'
++  )
++}, 30000)
++
++test('ID-10: highly compressed payload exceeding physical byte ceiling never publishes partial receipt', async () => {
++  const f = fixture({ packageBytes: 128 * 1024 })
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        limits: { maxTotalBytes: 16 * 1024 }
++      }
++    },
++    'REFERENCE_BYTES_LIMIT'
++  )
++}, 30000)
++
++test('ID-05/09: removing verified cache payload after preparation causes actual offline npm failure', async () => {
++  const f = fixture()
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          beforeNpm: ({ cache }) =>
++            fs.rmSync(path.join(cache, '_cacache'), { recursive: true })
++        }
++      }
++    },
++    'PROCESS_NONZERO'
++  )
++  const trace = fs.readFileSync(
++    path.join(f.outputRoot, 'logs/npm.trace'),
++    'utf8'
++  )
++  expect(trace).not.toMatch(/socket\(AF_INET|connect\([^\n]*AF_INET/)
++  expect(
++    fs.readFileSync(path.join(f.outputRoot, 'logs/npm.stderr.log'), 'utf8')
++  ).toMatch(/ENOTCACHED/)
++}, 30000)
++
++test('ID-10: optional platform omission is reported with lock key intact', async () => {
++  const f = fixture({ optional: true })
++  const { receipt } = await buildInstalledReference(options(f))
++  expect(receipt.packages.map((p) => p.key)).toEqual([
++    'node_modules/fixture-safe'
++  ])
++  expect(receipt.unavailable).toEqual([
++    {
++      key: 'node_modules/fixture-optional',
++      reason: 'NOT_INSTALLED_BY_OFFLINE_RECIPE',
++      optional: true,
++      peer: false
++    }
++  ])
++}, 30000)
++
++test('ID-10: foreign optional cache absence is explicit and does not prevent the actual offline recipe', async () => {
++  const f = fixture({ optional: true })
++  const lock = JSON.parse(
++    fs.readFileSync(path.join(f.sourceRoot, 'package-lock.json'), 'utf8')
++  )
++  const integrity = lock.packages['node_modules/fixture-optional'].integrity
++  const hex = Buffer.from(integrity.slice(7), 'base64').toString('hex')
++  fs.unlinkSync(
++    path.join(
++      f.cacheSource,
++      '_cacache/content-v2/sha512',
++      hex.slice(0, 2),
++      hex.slice(2, 4),
++      hex.slice(4)
++    )
++  )
++  const { receipt } = await buildInstalledReference(options(f))
++  expect(receipt.recipe.cacheUnavailable).toEqual([
++    {
++      key: 'node_modules/fixture-optional',
++      integrity,
++      optional: true,
++      reason: 'CACHE_PAYLOAD_UNAVAILABLE'
++    }
++  ])
++  expect(
++    receipt.unavailable.some((p) => p.key === 'node_modules/fixture-optional')
++  ).toBe(true)
++  expect(receipt.packages.map((p) => p.key)).toEqual([
++    'node_modules/fixture-safe'
++  ])
++  expect(receipt.recipe.observation.networkAttempts).toBe(0)
++}, 30000)
++
++test.each([
++  ['maxCompressedBytes', 1, 'CACHE_BYTES_LIMIT'],
++  ['maxEntries', 1, 'SOURCE_LIMIT'],
++  ['maxDepth', 1, 'REFERENCE_DEPTH_LIMIT'],
++  ['maxTotalBytes', 1, 'SOURCE_LIMIT'],
++  ['maxPackageBytes', 1, undefined],
++  ['npmTimeoutMs', 1, undefined],
++  ['maxProcesses', 1, 'PROCESS_COUNT_LIMIT']
++])(
++  'ID-05/10: lowered %s ceiling refuses instead of truncating receipt',
++  async (key, value, code) => {
++    const f = fixture()
++    await refuses(
++      f,
++      { testOnly: { context: 'synthetic-fixture', limits: { [key]: value } } },
++      code
++    )
++  },
++  30000
++)
++
++test('ID-10: unknown options and raised limits cannot alter recipe; existing output cannot be reused', async () => {
++  const f = fixture()
++  await refuses(f, { offline: false }, 'RUNNER_OPTIONS_INVALID')
++  await refuses(
++    f,
++    { testOnly: { context: 'synthetic-fixture', limits: { maxProcesses: 9 } } },
++    'LIMIT_RAISE_FORBIDDEN'
++  )
++  fs.mkdirSync(f.outputRoot)
++  write(path.join(f.outputRoot, 'owned-marker'), 'preserve')
++  await expect(buildInstalledReference(options(f))).rejects.toMatchObject({
++    code: 'OUTPUT_ALREADY_EXISTS'
++  })
++  expect(fs.readFileSync(path.join(f.outputRoot, 'owned-marker'), 'utf8')).toBe(
++    'preserve'
++  )
++}, 30000)
++
++test('ID-04: output root under evaluated source and canonical cache aliases are refused', async () => {
++  const f = fixture()
++  await expect(
++    buildInstalledReference(
++      options(f, { outputRoot: path.join(f.sourceRoot, 'alias') })
++    )
++  ).rejects.toMatchObject({ code: 'OUTPUT_NOT_INDEPENDENT' })
++  const alias = path.join(f.base, 'source-alias')
++  fs.symlinkSync(f.sourceRoot, alias)
++  await expect(
++    buildInstalledReference(
++      options(f, { outputRoot: path.join(alias, 'output') })
++    )
++  ).rejects.toMatchObject({ code: 'OUTPUT_NOT_INDEPENDENT' })
++}, 30000)
++
++test('ID-05: actual publication filesystem failure leaves no success receipt', async () => {
++  const f = fixture()
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          afterNpm: () =>
++            write(
++              path.join(f.outputRoot, '.reference.partial'),
++              'deliberately occupied staging path'
++            )
++        }
++      }
++    },
++    'EEXIST'
++  )
++}, 30000)
++
++test('ID-05/09: timeout kills observed detached owned descendant while leaving unrelated process alive', async () => {
++  const f = fixture()
++  const pidPath = path.join(f.base, 'detached.pid')
++  const code = `const {spawn}=require('node:child_process');const c=spawn(${JSON.stringify(NODE)},['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidPath)},String(c.pid));c.unref();setInterval(()=>{},1000);`
++  await expect(
++    runOwnedProcess(NODE, ['-e', code], {
++      cwd: f.base,
++      env: referenceEnvironment(NODE),
++      timeoutMs: 500,
++      stdoutPath: path.join(f.base, 'timeout.stdout'),
++      stderrPath: path.join(f.base, 'timeout.stderr')
++    })
++  ).rejects.toMatchObject({ code: 'PROCESS_TIMEOUT' })
++  const pid = Number(fs.readFileSync(pidPath, 'utf8'))
++  // A killed orphan may briefly be a zombie pending init reaping; it cannot run.
++  if (fs.existsSync('/proc/' + pid + '/stat'))
++    expect(fs.readFileSync('/proc/' + pid + '/stat', 'utf8')).toMatch(/\) Z /)
++  expect(() => process.kill(process.pid, 0)).not.toThrow()
++}, 30000)
+diff --git a/tests/product-boundary.test.js b/tests/product-boundary.test.js
+index 821a34e61175f0718d741307b51107ea5fe76bc9..435f513030cc920990bef281a9313dfece96895a 100644
+--- a/tests/product-boundary.test.js
++++ b/tests/product-boundary.test.js
+@@ -62,7 +62,7 @@ afterEach(() => {
+ })
+ 
+ describe('harness product boundary', () => {
+-  it('pins session JSON reflection and invalidates sites on any validator mutation', () => {
++  it('keeps session JSON reflection unverified before and after validator mutation', () => {
+     const { root, write } = fixture()
+     const file = 'packages/harness/src/session/events.ts'
+     const source = fs.readFileSync(file, 'utf8')
+@@ -75,11 +75,11 @@ describe('harness product boundary', () => {
+       )
+     // This focused fixture does not resolve runtime imports; only the exact
+     // reflection sites are under test. The real-tree gate verifies closure.
+-    expect(dynamic()).toEqual([])
++    expect(dynamic()).toHaveLength(10)
+     write(file, `${source}\n// unreviewed mutation\n`)
+     expect(dynamic()).toHaveLength(10)
+   })
+-  it('pins the reviewed PDSH host probe and still rejects product edges', () => {
++  it('keeps the PDSH host probe unverified and still rejects product edges', () => {
+     const { root, write } = fixture()
+     write(
+       'packages/contracts/package.json',
+@@ -102,7 +102,7 @@ describe('harness product boundary', () => {
+       auditProductBoundary(root).diagnostics.filter((d) =>
+         d.file.startsWith('packages/sandbox/')
+       )
+-    ).toEqual([])
++    ).toHaveLength(1)
+     write(
+       'packages/sandbox/src/capabilities.ts',
+       `${probe}\n// unreviewed mutation\n`
+@@ -123,7 +123,7 @@ describe('harness product boundary', () => {
+     ).toBe(true)
+   })
+ 
+-  it('binds PDSH catalog process sites to both test and generator bytes', () => {
++  it('does not exempt catalog process sites based on test and generator pins', () => {
+     const { root, write } = fixture()
+     write(
+       'packages/vitest/package.json',
+@@ -150,7 +150,7 @@ describe('harness product boundary', () => {
+       auditProductBoundary(root).diagnostics.filter((d) =>
+         d.file.includes('pdsh-014-tool-catalog')
+       )
+-    expect(diagnostics()).toEqual([])
++    expect(diagnostics()).toHaveLength(4)
+     write(
+       'scripts/gen-tool-catalog.mjs',
+       `${generator}\n// generator mutation\n`
+@@ -1123,12 +1123,11 @@ describe('HISO-005 B1 installed frontier', () => {
+   const vendorLock = (entry = {}) =>
+     lockfile({ 'node_modules/vendor': { version: '1.0.0', ...entry } })
+ 
+-  it('treats a lock-verified installed package as a terminal node (not parsed)', () => {
++  it('refuses metadata-only terminal trust for an installed package (not parsed)', () => {
+     const { root, write } = fixture()
+     write('package-lock.json', vendorLock())
+-    // Would be an UNVERIFIED_DYNAMIC_CODE_EXECUTION if third-party code were
+-    // parsed. Registry artifacts recorded in the lockfile are trusted not to
+-    // build product paths; the tripwire below covers literal references.
++    // SPEC0228: opaque third-party code stays unverified even when its
++    // metadata matches. The literal-reference scan remains an extra control.
+     installed(
+       write,
+       'vendor',
+@@ -1139,10 +1138,11 @@ describe('HISO-005 B1 installed frontier', () => {
+     )
+     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
+     const audit = auditProductBoundary(root)
+-    expect(audit.status).toBe('PASS')
++    expect(audit.status).toBe('INCOMPLETE')
+     expect(audit.installedPackageCount).toBe(1)
+     expect(audit.installedLockDrift).toEqual([])
+-    expect(cli(root).status).toBe(0)
++    expect(audit.diagnostics[0].detail).toBe('UNVERIFIED_INSTALLED_CONTENT')
++    expect(cli(root).status).toBe(1)
+   })
+ 
+   it('refuses an installed package absent from the lockfile', () => {
+@@ -1195,13 +1195,14 @@ describe('HISO-005 B1 installed frontier', () => {
+     expect(audit.diagnostics[0].detail).toBe('NOT_IN_LOCKFILE')
+   })
+ 
+-  it('reports installed version drift without treating it as a boundary path', () => {
++  it('refuses installed version drift without treating it as a product edge', () => {
+     const { root, write } = fixture()
+     write('package-lock.json', vendorLock({ version: '2.0.0' }))
+     installed(write, 'vendor', {})
+     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
+     const audit = auditProductBoundary(root)
+-    expect(audit.status).toBe('PASS')
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.diagnostics[0].detail).toBe('INSTALLED_VERSION_MISMATCH')
+     expect(audit.installedLockDrift).toEqual([
+       {
+         package: 'node_modules/vendor',
+@@ -1326,25 +1327,18 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+   // shutdown-signal-source pins the real install() implementation that
+   // receives `process`; the fixture carries a byte-identical copy.
+   const lifecycle = 'packages/shared/src/lifecycle.ts'
+-  const pinMessage = `${lifecycle} changed: re-review the shutdown-signal-source pin in scripts/check-product-boundary.mjs`
+   const withPin = (write) => write(lifecycle, fs.readFileSync(lifecycle))
+ 
+-  it('accepts a listed site only with its file, reason, line, expression and pin', () => {
++  it('refuses a listed site even with matching file, reason, line, expression and pin', () => {
+     const { root, write } = fixture()
+     withPin(write)
+     write(entry, listed)
+     const audit = auditProductBoundary(root)
+-    expect(audit.status, pinMessage).toBe('PASS')
+-    expect(audit.exceptions).toEqual([
+-      {
+-        file: `${entry}:2`,
+-        reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+-        expression: '19ed40bf62c399b8',
+-        exception: 'shutdown-signal-source'
+-      }
+-    ])
+-    expect(cli(root)).toEqual({ status: 0, audit })
+-    // Raw analysis: the same site is a blocking diagnostic without the table.
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptionsApplied).toBe(false)
++    expect(audit.exceptions).toEqual([])
++    expect(cli(root)).toEqual({ status: 1, audit })
++    // Normal analysis now retains every diagnostic from the strict path.
+     const strict = auditProductBoundary(root, { exceptions: false })
+     expect(strict.status).toBe('INCOMPLETE')
+     expect(strict.exceptions).toEqual([])
+@@ -1377,7 +1371,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+       'INCOMPLETE',
+       'UNVERIFIED_MODULE_LOADER_ESCAPE'
+     )
+-    expect(audit.exceptions.length).toBeLessThanOrEqual(1)
++    expect(audit.exceptions).toEqual([])
+   })
+ 
+   it('lapses when a pinned file changes', () => {
+@@ -1399,7 +1393,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+     )
+   })
+ 
+-  it('binds the complete flagged expression, not only the line where it starts', () => {
++  it('refuses both listed subprocess expressions and changed arguments', () => {
+     const file =
+       'apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts'
+     const source = (target) =>
+@@ -1417,11 +1411,9 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+     const listedSpawn = fixture()
+     listedSpawn.write(file, source('apps/worker/src/main.ts'))
+     const audit = auditProductBoundary(listedSpawn.root)
+-    expect(audit.status).toBe('PASS')
+-    expect(audit.exceptions.map((item) => item.exception)).toEqual([
+-      'entrypoint-subprocess'
+-    ])
+-    // Same first line, different arguments: the exception no longer applies.
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptions).toEqual([])
++    // Same first line and different arguments both remain unverified.
+     const changed = fixture()
+     changed.write(file, source('products/shift/src/index.ts'))
+     expectRefused(

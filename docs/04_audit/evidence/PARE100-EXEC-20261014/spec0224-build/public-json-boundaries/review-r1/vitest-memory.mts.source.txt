@@ -1,0 +1,71 @@
+import { defineConfig } from "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/dist/config.js";
+import { resolve } from "node:path";
+import { appendFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+
+const root = "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree";
+const own =
+  "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries/review-r1";
+const packages = {
+  "harness-contracts": "contracts",
+  "harness-orchestrator": "orchestrator",
+  harness: "harness",
+  platform: "platform",
+  persistence: "persistence",
+  shared: "shared",
+  sandbox: "sandbox",
+  sdk: "sdk",
+  policy: "policy",
+  "agent-core": "agent-core",
+  "legacy-secretary-evals": "../../legacy/packages/secretary-evals",
+};
+export default defineConfig({
+  root,
+  cacheDir: resolve(own, "cache/vite-memory"),
+  plugins: [
+    {
+      name: "private-source-observer",
+      transform(_code, id) {
+        const path = id.split("?")[0]!;
+        if (
+          path.startsWith(root + "/") &&
+          !path.includes("/node_modules/")
+        ) {
+          const bytes = readFileSync(path);
+          appendFileSync(
+            resolve(
+              process.env.SPEC0224_JSON_EVIDENCE!,
+              "transformed-inputs.jsonl",
+            ),
+            JSON.stringify({
+              path,
+              bytes: bytes.length,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            }) + "\n",
+          );
+        }
+        return null;
+      },
+    },
+  ],
+  resolve: {
+    alias: Object.fromEntries(
+      Object.entries(packages).map(([name, dir]) => [
+        "@cvg/" + name,
+        resolve(root, "packages", dir, "src/index.ts"),
+      ]),
+    ),
+  },
+  ssr: { noExternal: [/^@cvg\//] },
+  test: {
+    environment: "node",
+    maxWorkers: 1,
+    fileParallelism: false,
+    testTimeout: 30000,
+    hookTimeout: 60000,
+    include: [
+      "packages/harness/src/__tests__/complete-tool-public.test.ts",
+    ],
+    server: { deps: { inline: [/^@cvg\//] } },
+  },
+});

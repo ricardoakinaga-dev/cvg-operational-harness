@@ -1,0 +1,254 @@
+1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+2: import type {
+3:   AgenticKnowledgeProvider,
+4:   Claim,
+5:   CompletionEvaluator,
+6:   ContextEngine,
+7:   ExecutionStepStore,
+8:   IterativeOrchestrator,
+9:   RuntimeInput,
+10:   RuntimeProfile,
+11:   RuntimeResult,
+12:   SandboxGate,
+13:   SufficiencyEvaluator,
+14:   CapabilityRegistry,
+15:   ToolRegistry
+16: } from '@cvg/harness-contracts'
+17: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+18: import {
+19:   createJournaledToolRegistry,
+20:   type EffectJournal,
+21:   type JournaledToolRegistryOptions
+22: } from './effect-journal.ts'
+23: import {
+24:   SinglePassGovernedRuntime,
+25:   type HarnessRuntimeOptions
+26: } from './runtime.ts'
+27: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+28: 
+29: export interface OperationalHarnessOptions extends Omit<
+30:   HarnessRuntimeOptions,
+31:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+32: > {
+33:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+34:   /**
+35:    * Explicit capability composition. Its adapter is the only runtime-facing
+36:    * registry for this path; callers cannot provide both registries.
+37:    */
+38:   readonly capabilities?: CapabilityRegistry
+39:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+40:   readonly tools?: ToolRegistry
+41:   /** Required for capability composition and optional for compatibility tools. */
+42:   readonly effectJournal?: EffectJournal
+43:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+44:   /**
+45:    * Required to run the iterative profile. The runtime registry resolves the
+46:    * requested profile here; the worker never selects a runtime class.
+47:    */
+48:   readonly iterativeOrchestrator?: IterativeOrchestrator
+49:   readonly stepStore?: ExecutionStepStore
+50:   readonly contextEngine?: ContextEngine
+51:   readonly knowledge?: AgenticKnowledgeProvider
+52:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+53:   readonly completionEvaluator?: CompletionEvaluator
+54:   readonly claimExtractor?: (response: string) => readonly Claim[]
+55:   readonly defaultRuntimeProfile?: RuntimeProfile
+56:   readonly clock?: () => Date
+57:   /** Optional containment gate; absent means fail-closed for contained tools. */
+58:   readonly sandbox?: SandboxGate
+59: }
+60: 
+61: export interface OperationalHarness {
+62:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+63:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+64:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+65:   readonly capabilityFingerprint?: string
+66: }
+67: 
+68: /**
+69:  * Canonical public composition root for the neutral harness packages. Product
+70:  * adapters provide the ports; this function only wires them together and
+71:  * resolves the runtime profile through a registry-like selection.
+72:  */
+73: export function createOperationalHarness(
+74:   options: OperationalHarnessOptions
+75: ): OperationalHarness {
+76:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+77:   if (options.capabilities && !options.effectJournal) {
+78:     throw new Error(
+79:       'Capability composition requires an explicit effect journal'
+80:     )
+81:   }
+82:   const tools = resolveTools(options, capabilityFingerprint)
+83:   const singlePass = new SinglePassGovernedRuntime({
+84:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+85:     modelGateway: options.modelGateway,
+86:     policy: options.policy,
+87:     approvals: options.approvals,
+88:     tools,
+89:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+90:     audit: options.audit,
+91:     telemetry: options.telemetry,
+92:     ...(options.pause ? { pause: options.pause } : {}),
+93:     ...(options.effects ? { effects: options.effects } : {}),
+94:     ...(options.log ? { log: options.log } : {}),
+95:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+96:   })
+97: 
+98:   const iterative =
+99:     options.iterativeOrchestrator && options.stepStore
+100:       ? new IterativeGovernedRuntime({
+101:           orchestrator: options.iterativeOrchestrator,
+102:           modelGateway: options.modelGateway,
+103:           policy: options.policy,
+104:           approvals: options.approvals,
+105:           tools,
+106:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+107:           audit: options.audit,
+108:           telemetry: options.telemetry,
+109:           ...(options.pause ? { pause: options.pause } : {}),
+110:           ...(options.effects ? { effects: options.effects } : {}),
+111:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+112:           ...(options.log ? { log: options.log } : {}),
+113:           stepStore: options.stepStore,
+114:           ...(options.contextEngine
+115:             ? { contextEngine: options.contextEngine }
+116:             : {}),
+117:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+118:           ...(options.sufficiencyEvaluator
+119:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+120:             : {}),
+121:           ...(options.completionEvaluator
+122:             ? { completionEvaluator: options.completionEvaluator }
+123:             : {}),
+124:           ...(options.claimExtractor
+125:             ? { claimExtractor: options.claimExtractor }
+126:             : {}),
+127:           ...(options.clock ? { clock: options.clock } : {})
+128:         })
+129:       : undefined
+130: 
+131:   const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
+132:     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+133: 
+134:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+135:     const governedInput = capabilityFingerprint
+136:       ? { ...input, capabilityFingerprint }
+137:       : input
+138:     if (
+139:       capabilityFingerprint &&
+140:       input.executionId &&
+141:       input.capabilityFingerprint === undefined
+142:     ) {
+143:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+144:       return {
+145:         response:
+146:           'Capability composition fingerprint is required for durable execution.',
+147:         stopReason: 'STATE_CONFLICT',
+148:         steps: 0,
+149:         modelCalls: 0,
+150:         toolCalls: 0,
+151:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+152:       }
+153:     }
+154:     if (
+155:       capabilityFingerprint &&
+156:       input.capabilityFingerprint !== undefined &&
+157:       input.capabilityFingerprint !== capabilityFingerprint
+158:     ) {
+159:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+160:       return {
+161:         response:
+162:           'Capability composition fingerprint does not match the runtime.',
+163:         stopReason: 'STATE_CONFLICT',
+164:         steps: 0,
+165:         modelCalls: 0,
+166:         toolCalls: 0,
+167:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+168:       }
+169:     }
+170:     const profile = resolveProfile(governedInput)
+171:     if (profile === 'iterative') {
+172:       if (!iterative) {
+173:         await safeAudit(
+174:           options,
+175:           governedInput,
+176:           'runtime.stopped',
+177:           'STATE_CONFLICT'
+178:         )
+179:         return {
+180:           response:
+181:             'The iterative runtime profile is not configured in this composition.',
+182:           stopReason: 'STATE_CONFLICT',
+183:           steps: 0,
+184:           modelCalls: 0,
+185:           toolCalls: 0,
+186:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+187:         }
+188:       }
+189:       return iterative.execute(governedInput)
+190:     }
+191:     return singlePass.execute(governedInput)
+192:   }
+193: 
+194:   return {
+195:     run: (input) => execute(input),
+196:     execute,
+197:     resolveProfile,
+198:     ...(options.capabilities
+199:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+200:       : {})
+201:   }
+202: }
+203: 
+204: function resolveTools(
+205:   options: OperationalHarnessOptions,
+206:   capabilityFingerprint: string | undefined
+207: ): ToolRegistry {
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+210:       'Operational harness composition accepts capabilities or tools, not both'
+211:     )
+212:   }
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+216:   if (!registry) {
+217:     throw new Error(
+218:       'Operational harness composition requires an explicit capability or tool registry'
+219:     )
+220:   }
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+224:     ...(capabilityFingerprint
+225:       ? { compositionFingerprint: capabilityFingerprint }
+226:       : {})
+227:   })
+228: }
+229: 
+230: async function safeAudit(
+231:   options: OperationalHarnessOptions,
+232:   input: RuntimeInput,
+233:   action: string,
+234:   result: string
+235: ): Promise<void> {
+236:   try {
+237:     await options.audit.append({
+238:       actor: input.agent.id,
+239:       agent: input.agent.id,
+240:       tenant: input.tenantId,
+241:       action,
+242:       policy: null,
+243:       approval: null,
+244:       tool: null,
+245:       result,
+246:       timestamp: new Date().toISOString(),
+247:       traceId: input.traceId,
+248:       correlationId: input.correlationId
+249:     })
+250:   } catch {
+251:     // misconfiguration must still fail closed without an unhandled error
+252:   }
+253: }
+

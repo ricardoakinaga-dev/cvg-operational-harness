@@ -1,0 +1,96 @@
+'use strict';
+// Private verifier only. This is a Node TCP/IPC guard, not an OS sandbox.
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const dns = require('node:dns');
+const { threadId } = require('node:worker_threads');
+const assigned = __dirname;
+const registry = process.env.CVG_GLOBAL_TEST_NET_REGISTRY || path.join(assigned, 'run-network.jsonl');
+const blocked = process.env.CVG_GLOBAL_TEST_NET_BLOCKED || path.join(assigned, 'run-blocked.jsonl');
+for (const target of [registry, blocked]) {
+  if (path.dirname(target) !== assigned) throw new Error('Unassigned guard output');
+}
+const append = (file, value) => fs.appendFileSync(file, JSON.stringify({ pid: process.pid, threadId, ...value }) + '\n');
+append(registry, { event: 'guard-active' });
+let serial = 0;
+const listen = net.Server.prototype.listen;
+net.Server.prototype.listen = function (...args) {
+  const id = `${process.pid}:${threadId}:${++serial}`;
+  this.once('listening', () => {
+    const address = this.address();
+    if (address) append(registry, typeof address === 'string'
+      ? { event: 'listen', id, path: address }
+      : { event: 'listen', id, port: address.port, address: address.address });
+  });
+  this.once('close', () => append(registry, { event: 'close', id }));
+  return listen.apply(this, args);
+};
+function activeListeners() {
+  const active = new Map();
+  for (const line of fs.readFileSync(registry, 'utf8').split('\n')) {
+    if (!line) continue;
+    const row = JSON.parse(line);
+    if (row.event === 'listen') active.set(row.id, row);
+    if (row.event === 'close') active.delete(row.id);
+  }
+  return [...active.values()].filter(row => {
+    try { process.kill(row.pid, 0); return true; } catch { return false; }
+  });
+}
+const isLoopback = address => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+function owned(address, port) {
+  return isLoopback(address) && activeListeners().some(row => row.port === port && (
+    row.address === address || row.address === '0.0.0.0' || row.address === '::'
+  ));
+}
+function denial(host, port, reason, resolvedAddress) {
+  append(blocked, { host, port: Number.isFinite(port) ? port : null, reason, ...(resolvedAddress ? { resolvedAddress } : {}) });
+  const error = new Error('CVG_GLOBAL_TEST_NETWORK_BLOCKED: unowned synthetic test connection');
+  error.code = 'CVG_GLOBAL_TEST_NETWORK_BLOCKED';
+  return error;
+}
+const connect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const input = Array.isArray(args[0]) ? args[0] : args;
+  const first = input[0];
+  const options = first && typeof first === 'object' ? { ...first }
+    : typeof first === 'string' && !/^\d+$/.test(first) ? { path: first }
+    : { port: first, host: typeof input[1] === 'string' ? input[1] : undefined };
+  const callback = input.find(value => typeof value === 'function');
+  const host = options.host || options.hostname || 'localhost';
+  const port = Number(options.port);
+  const rejectSocket = error => { process.nextTick(() => this.destroy(error)); return this; };
+  // Node selects IPC whenever a string path is present, even alongside port.
+  if (typeof options.path === 'string') {
+    const valid = options.path.startsWith(assigned + '/') && activeListeners().some(row => row.path === options.path);
+    if (!valid) return rejectSocket(denial(host, port, 'UNOWNED_IPC'));
+  } else if (net.isIP(host)) {
+    if (!owned(host, port)) return rejectSocket(denial(host, port, 'UNOWNED_OR_NON_LOOPBACK_IP'));
+  } else {
+    // Preserve the transport's own pinned lookup. Validate each returned address
+    // at the callback boundary, before Node can open a connection to it.
+    const originalLookup = options.lookup || dns.lookup;
+    options.lookup = function (hostname, lookupOptions, done) {
+      return originalLookup.call(this, hostname, lookupOptions, (error, address, family) => {
+        if (error) return done(error);
+        const addresses = Array.isArray(address) ? address.map(row => row.address) : [address];
+        const rejected = addresses.find(value => !owned(value, port));
+        if (!addresses.length || rejected !== undefined) return done(denial(host, port, 'UNOWNED_RESOLVED_ADDRESS', rejected));
+        return done(null, address, family);
+      });
+    };
+    // No DNS request is needed for the standard loopback spelling.
+    if (host === 'localhost' && !first?.lookup) {
+      options.lookup = (_hostname, lookupOptions, done) => {
+        const address = lookupOptions.family === 6 ? '::1' : '127.0.0.1';
+        if (!owned(address, port)) return done(denial(host, port, 'UNOWNED_LOCALHOST', address));
+        return lookupOptions.all ? done(null, [{ address, family: net.isIP(address) }]) : done(null, address, net.isIP(address));
+      };
+    } else if (!first?.lookup) {
+      // Unpinned hostnames are denied without a DNS query.
+      return rejectSocket(denial(host, port, 'UNPINNED_HOSTNAME'));
+    }
+  }
+  return callback ? connect.call(this, options, callback) : connect.call(this, options);
+};

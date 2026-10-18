@@ -1,0 +1,39 @@
+import fs from 'node:fs';
+import { measureModelFailureContracts as measure } from './private/tests/differential/compare-model-failure.mjs';
+const p = new URL('../review-packet/raw-current/model-failure/', import.meta.url);
+const outcomes=[];
+for(const id of ['error-ascii','error-unicode','error-cause']) {
+ const base=JSON.parse(fs.readFileSync(new URL(`${id}.native.json`,p),'utf8'));
+ const probes={
+  baseline:()=>{},
+  artifactZeroHash:r=>r.reference.reference.artifacts[0].sha256='0'.repeat(64),
+  artifactNonexistentPath:r=>r.reference.reference.artifacts[0].file='/home/ricardo/deepseek-harness-session-fixes/DOES-NOT-EXIST.js',
+  artifactDirectoryOnly:r=>r.reference.reference.artifacts[0].file='/home/ricardo/deepseek-harness-session-fixes/',
+  claimedVerifiedClosure:r=>r.reference.reference.transitiveArtifactClosure='PASS',
+  lostHeaderPayload:r=>delete r.reference.native.events[6].data,
+  lostContextPayload:r=>delete r.reference.native.events[7].data,
+  wrongPersistedMessage:r=>r.reference.native.messages.find(x=>x.role==='user').content[0].text='OTHER REQUEST',
+  extraPersistedTool:r=>r.reference.native.messages.push({role:'tool',content:[{type:'text',text:'side effect'}]}),
+  extraRequestTool:r=>r.reference.native.requests[0].unshift({role:'tool',content:[]}),
+  wrongTurnInErrorEvent:r=>r.reference.native.events[8].data.turn=999,
+  lostCvgRequestPayload:r=>delete r.cvg.native.events[2].payload.request,
+  extraCvgTurnEffect:r=>r.cvg.native.turn.effects=[{kind:'unexpected_effect'}],
+  extraCvgTerminalEffect:r=>r.cvg.native.events[3].payload.effects=[{kind:'unexpected_effect'}],
+  wrongCvgTenant:r=>r.cvg.native.events.forEach(x=>x.tenantId='other-tenant'),
+  wrongCvgRequestCorrelation:r=>r.cvg.native.requests[0].request.correlationId='other',
+  duplicateCvgEventId:r=>r.cvg.native.events[1].eventId=r.cvg.native.events[0].eventId,
+  missingCvgSchema:r=>r.cvg.native.events.forEach(x=>delete x.schemaFingerprint),
+  removedRefEvent:r=>r.reference.native.events.pop(),
+  extraRefEvent:r=>r.reference.native.events.push(r.reference.native.events[0]),
+  tamperedAdapterError:r=>r.reference.native.adapterErrors[0].message+='tampered',
+  wrongFixtureId:r=>r.cvg.fixtureId='wrong-id',
+  fabricatedDownstreamCause:r=>r.reference.native.liveErrors[0].error.cause={name:'Error',message:'invented',cause:null}
+ };
+ for(const [probe,mutate] of Object.entries(probes)) {
+  const row=structuredClone(base);mutate(row);let result,error;
+  try{result=measure(row.reference,row.cvg,row.fixture)}catch(e){error=e.message}
+  outcomes.push({id,probe,accepted:!!result,status:result?.status,fullParity:result?.fullParity,error});
+ }
+}
+fs.writeFileSync(new URL('./mutation-results.json',import.meta.url),JSON.stringify(outcomes,null,2)+'\n');
+console.log(JSON.stringify(outcomes,null,2));

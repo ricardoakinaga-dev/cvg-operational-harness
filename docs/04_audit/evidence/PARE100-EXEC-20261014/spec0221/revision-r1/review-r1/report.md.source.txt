@@ -1,0 +1,73 @@
+# I1 independent technical review — SPEC0221 r1
+
+Verdict: **REVISE**. One P1 and two P2 design findings require concrete clarification before presenting this revision as technically ready for human review. This verdict grants no BUILD authority and no functional-parity credit. The SPEC was assessed as a proposed normative contract, not as implemented behavior.
+
+Scope: sealed `review-packet` and its manifest-listed primary sources, with three necessary extra primary files enumerated in `source-integrity.json`. No descendants or previous-review input. All references below are relative to the packet root unless prefixed `extra:`; extra references resolve against the manifest CVG worktree root. Line numbers are one-based.
+
+## I1-01 — P1: COMMIT-unknown recovery lacks a settled-outcome fence and a pending state
+
+References: cvg/docs/02_spec/0221_pare100_public_session_persistence.md:140,150,166,172,214; cvg/packages/persistence/src/session-events.ts:87,94,97,108.
+
+Section 8 instructs recovery on a new connection to classify the original batch as present, absent or inconsistent, but does not require the original server transaction to have ended before absence is definitive, or require one consistent snapshot for all identities/head checks. Section 6 requires confirmed server-side loss only before the next writer opens; that does not constrain the earlier recovery classification. Destruction of the client socket is not confirmation that the original COMMIT has settled on the server.
+
+Counterexample: A writer sends COMMIT and loses its response while the server has not completed it. A new reader sees no batch rows and reports absent. The original COMMIT then completes. Alternatively, per-ID reads on opposite sides of that commit manufacture a mixed result from an atomic batch. Neither observation establishes rollback or corruption.
+
+Required fix: Specify a recovery state machine with pending/unknown retained until the original attempt is known to be settled; define a backend-side completion fence or an equivalent ownership/transaction-settlement protocol. Read all original IDs/digests/order and the head in one consistent snapshot after that fence before declaring absent or inconsistent. Define recovery separately for create, append and flush: existing rows alone do not prove that an uncertain flush barrier completed. Recovery may perform a fresh explicitly requested synchronous barrier under a newly acquired handle without replaying events or effects. Specify the captured recovery descriptor needed for getter-snapshotted inputs, without exposing bodies or SQL.
+
+Required future check: Extend SP18 to pause the original transaction before its final COMMIT outcome, lose the client response, and run recovery both before and after settlement; early absence must remain unknown, and an atomic batch must never be diagnosed as partial due to multiple read snapshots. Cover ambiguous create and flush as well as append.
+
+Design-level inference from the normative recovery text and PostgreSQL 16 snapshot/lock semantics; no database experiment was executed.
+
+## I1-02 — P2: The public handle adapter needs an explicit capability and serialization boundary
+
+References: cvg/docs/02_spec/0221_pare100_public_session_persistence.md:62,81,106,120,174,176,193,216; cvg/packages/contracts/src/session-events.ts:20,47; cvg/packages/persistence/src/session-events.ts:155,185,186,204; cvg/packages/sdk/src/server.ts:202,246,263; extra:packages/harness/src/session/kernel-log.ts:33,41.
+
+sessionEventStoreForHandle(handle) promises tenant validation, eventId/digest deduplication and store-assigned sequence in the same owner queue, but SessionHandle exposes neither its bound tenant nor an atomic append-unsequenced/lookup operation. A generic implementation over the published interface cannot validate the tenant of an empty session, and read-then-append creates two separately admitted queue operations. The text does not restrict the helper to authentic factory handles or specify the internal capability that bridges these gaps.
+
+Counterexample: Two adapters over one handle, or an adapter and direct handle call, both read head N before either queued append executes. Both assign N+1; one fails despite single ownership. An empty handle also has no event from which a generic adapter can discover tenant identity, so it cannot implement the specified tenant check using only the published members.
+
+Required fix: Choose and document the supported boundary. For example, restrict the helper to factory-issued handles carrying a private authenticated tenant/owner capability, define rejection of foreign or unsupported handles, and enqueue deduplication, cursor selection, materialization and persistence as one owner operation shared by every adapter and direct call. State how the helper accesses that capability across packages without deep imports, queue re-entry, a second connection, or a second log. Alternatively extend the public adapter port explicitly. Publish the factory/helper entry point and relevant signatures so this choice is reviewable.
+
+Required future check: Add an empty-stream wrong-tenant negative, foreign-handle refusal, two independently created adapters over one handle, concurrent duplicate/different appends, adapter/direct-call ordering, and close/flush while adapter work is queued. Retain the real SDK/kernel vertical slice.
+
+Static public-interface feasibility gap, not a claim that a private factory capability cannot be implemented.
+
+## I1-03 — P2: Service-owner shutdown does not cover in-flight handle acquisition
+
+References: cvg/docs/02_spec/0221_pare100_public_session_persistence.md:104,138,140,142,162,164,217.
+
+The factory lifecycle owner must drain and close all handles, but there is no service admission/shutdown state or rule for create/open calls already waiting for a pool lease, lock claim or COMMIT. Handle close and global flush have explicit admission/capture rules; they do not settle this service-wide race.
+
+Counterexample: create is admitted and awaits connection acquisition (or COMMIT), so no handle is published/registered yet. The owner snapshots current handles, closes them and resolves shutdown. The pending create then publishes a writer retaining its physical connection and advisory session lock after shutdown has supposedly completed. The same race exists for a pending read open.
+
+Required fix: Specify a synchronous service CLOSING admission fence, rejection of later service calls, registration and joining of all previously admitted acquisitions, and cleanup of acquired-but-unpublished leases/claims. Decide whether a pending successful acquisition is delivered then immediately closed or rejected with explicit committed/unknown-create semantics; it must not escape the shutdown join. Memoize shutdown completion/failure and include read handles and uncertain commits. Do not turn a possibly committed create into a clean abort.
+
+Required future check: Extend SP21 with owner shutdown while create/open are waiting for a lease, after writer-lock claim, and during COMMIT; after shutdown completes no late live handle, connection or ownership may remain. Check repeated shutdown and aggregate cleanup failures.
+
+Missing lifecycle semantics in the proposed factory boundary; no runtime failure is asserted.
+
+The I1-01 inference relies on PostgreSQL's distinction between a reader's snapshot and an uncommitted transaction's eventual outcome; successive Read Committed statements can also see different commits. See the [official PG16 isolation documentation](https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED). A session advisory lock lasts until explicit unlock or server-session end, so client-side destruction is not itself a completed server-side fence; see [PG16 advisory locks](https://www.postgresql.org/docs/16/explicit-locking.html#ADVISORY-LOCKS). A replacement durability barrier must retain the proposed synchronous-WAL requirements; see [PG16 WAL configuration](https://www.postgresql.org/docs/16/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT). These are design inferences, not native PG observations.
+
+## Boundaries checked without additional defects
+
+- The legacy append actually locks the stream row, deduplicates, inserts one event and advances the cursor in one transaction (`cvg/packages/persistence/src/session-events.ts:155-213`). The proposed nonblocking transactional advisory guard addresses row-before-advisory interleavings without requiring modification of this writer. A legacy replay without mutation is correctly distinguished. Native acceptance of every interleaving is still unproved.
+- The dedicated physical-session requirement is explicit; the existing pool port only exposes connect/query/release (`cvg/packages/persistence/src/tenant-scoped-postgres.ts:90-98`). The SPEC proposes a new lease port, forbids transparent reconnect/transaction pooling, preserves terminal LOST, and requires cleanup after failed create, close, and unknown COMMIT. I1-03 concerns the separate service shutdown race.
+- The existing 0028 schema has RLS/FORCE RLS, identity protection and event immutability (`cvg/packages/persistence/migrations/0028_session_events.sql:11-70`). The proposed expansion adds cursor guards and deferred final checks; minimum serving grants, migration authority, preflight, historic metadata adoption/CAS, and application-only rollback are explicit. No SQL was executed; trigger ordering, actual grants, constraints, RLS and WAL behavior remain BUILD-time proof obligations, not findings for being unexecuted.
+- Header text versus event JSONB is intentionally differentiated (`SPEC:106-122`). One original-property capture before await is required; running existing CVG validation only on that captured data is feasible. Current validators reject accessors on their direct original input (`cvg/packages/harness/src/session/events.ts:48-90`), so they cannot themselves satisfy the new getter admission rule without the proposed materializer. The existing canonicalizer normalizes negative zero (`extra:packages/contracts/src/canonical-json.ts:5-11,57-64`); rejecting it in the new ingress snapshot avoids that loss. JSONB representation differences remain declared residuals, not newly discovered defects.
+- Full-prefix validation in a fresh consistent read snapshot, detached return values, monotonic heads, stat/list metadata-only reads, stable opaque revisions, per-handle queue admission, uncancellable close, global-flush barrier capture/allSettled, and pre-IO versus post-IO cancellation are normative obligations. No claim is made that today's implementation supplies them. I1-01 asks that the separate recovery path specify the same snapshot discipline and a definitive settlement boundary.
+
+## Preservation and authority checks
+
+The local structural comparison found all 75 original records in the same order with every original field/value unchanged in the proposed bindings; only five proposal-annotation keys were added to each record. Counts remain 71 STATIC, four UNKNOWN, 75 NOT_VERIFIED functional/parity states, 75 PROPOSED_NOT_RUN procedure states, and two pending semantic surfaces. All 18 original procedures remain PROPOSED_NOT_RUN / NOT_VERIFIED, with the same IDs in the proposed crosswalk; its entries are NOT_RUN and CVG_POSTGRES_ONLY_NOT_REFERENCE_QUALIFICATION. All 13 original gaps are preserved exactly.
+
+The sealed original files themselves are checked bytewise against their manifest/live hashes. This does not imply that the larger 44,132-leaf catalog, which is outside this packet, was independently re-read. Its declared denominator remains 44,132; the selected set is 75.
+
+SPEC lines 14, 122, 176, 222 and 224 retain format4/seq0, Cordis, the full vocabulary, JSONL physical recovery/location, backend qualification and fork/merge/resume/import-export obligations. No SP result is presented as executed; no parent task, full-session parity, reference ABI, release or production gate is waived. These declared residuals are not new defects in this review.
+
+## Integrity, artifacts and limitations
+
+`source-integrity.json` records the expected SHA-256 and pre/post hashes of all 29 packet/live pairs, all 30 packet files including the manifest, and the three extra primary files. It also records the binding/procedure preservation checks. Final integrity status must be read from that artifact. Initial hashing followed the first textual SPEC read and preceded the remaining technical source inspection; final hashing checks the same frozen inventory. No claim is made about changes that could have been reverted between observations.
+
+`verdict.json` contains the machine-readable findings and limitations. `artifact-manifest.json` lists all nonempty deliverables with sizes and SHA-256; it excludes itself to avoid a circular hash and is hashed separately at delivery.
+
+No runtime/SQL execution, installation, service launch, source edit, or repository ledger write occurred. Only standard-library text/hash/JSON inspection and writes under `review-r1` were performed. Network use was limited to the three linked official PG16 pages. The declared reference pin was not independently verified through Git metadata. This is design review for human-review readiness only; native PostgreSQL behavior, actual public consumer compilation and SDK integration remain unverified.

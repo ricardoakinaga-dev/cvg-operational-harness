@@ -1,0 +1,1 @@
+import {type T} from "../../../products/shift/src/index.ts"; Object.getPrototypeOf({});

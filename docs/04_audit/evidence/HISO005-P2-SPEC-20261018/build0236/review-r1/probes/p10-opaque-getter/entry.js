@@ -1,0 +1,1 @@
+const obj={get x(){return unknown()}}; Object.getOwnPropertyDescriptor(obj,"x");

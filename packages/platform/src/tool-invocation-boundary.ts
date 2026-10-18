@@ -125,7 +125,7 @@ function normalizeHandlerError(
   return status === 'failed' ? 'tool_handler_failed' : 'tool_handler_blocked'
 }
 
-function cloneBoundedValue(value: unknown): unknown {
+export function cloneBoundedValue(value: unknown): unknown {
   const seen = new WeakSet<object>()
   let totalChars = 0
   let totalNodes = 0

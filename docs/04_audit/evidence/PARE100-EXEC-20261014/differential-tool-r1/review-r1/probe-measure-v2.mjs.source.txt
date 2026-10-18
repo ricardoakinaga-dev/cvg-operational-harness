@@ -1,0 +1,41 @@
+import fs from 'node:fs'
+import { measureToolTurn } from './candidate/tests/differential/compare-tool-turn.mjs'
+import { normalizeToolTransport } from './candidate/tests/differential/tool-transport.mjs'
+import { validateToolCase } from './candidate/tests/differential/tool-case.mjs'
+import { readReferenceInventory } from './candidate/tests/differential/reference-inventory.mjs'
+const O = new URL('./', import.meta.url)
+const read = (n) => JSON.parse(fs.readFileSync(new URL(n,O),'utf8'))
+const raw=read('explicit-evidence/tool-turn/tool-ascii.native.json')
+const rows=[]
+function check(name,value,expectAccept=false,fixture=raw.fixture) {
+ let result,error
+ try {result=measureToolTurn(value.reference,value.cvg,fixture)} catch(e){error=e.message}
+ rows.push({name,accepted:!error,expectedAccept:expectAccept,...(error?{error}:{status:result.status})})
+}
+for(const id of ['ascii','unicode','json']){const x=read(`explicit-evidence/tool-turn/tool-${id}.native.json`); check('baseline-'+id,x,true,x.fixture)}
+for(const mode of ['baseline','missing-tools','wrong-schema','wrong-routing']) check('delivered-request-'+mode,{reference:read(`raw/request-${mode}.stdout.log`),cvg:raw.cvg}, mode==='baseline')
+const paths=[],objects=[],scalars=[]
+function collect(v,p=[]){if(v!==null && typeof v==='object'){if(p.length)objects.push(p);for(const [k,c]of Object.entries(v)){paths.push([...p,k]);collect(c,[...p,k])}}else scalars.push([p,v])}
+collect({reference:raw.reference,cvg:raw.cvg})
+const parent=(x,p)=>p.slice(0,-1).reduce((a,k)=>a[k],x)
+for(const p of paths){let x=structuredClone(raw);delete parent(x,p)[p.at(-1)];check('missing:/'+p.join('/'),x)}
+for(const p of objects){let x=structuredClone(raw);let v=p.reduce((a,k)=>a[k],x);if(Array.isArray(v))v.push({unexpected_effect:true});else v.unexpected_effect=true;check('extra:/'+p.join('/'),x)}
+const normalized=new Set(normalizeToolTransport({reference:raw.reference,cvg:raw.cvg}).normalizedPaths)
+for(const [p,v]of scalars){const pointer='/'+p.join('/');if(normalized.has(pointer))continue;let x=structuredClone(raw);parent(x,p)[p.at(-1)]=typeof v==='string'?v+'!':typeof v==='number'?v+1:typeof v==='boolean'?!v:'unexpected';check('scalar:'+pointer,x)}
+for(const [name,p,v]of [
+ ['invalid-clock',['reference','native','events','0','time'],-1],
+ ['invalid-clock-type',['reference','native','events','0','time'],'2026-01-01'],
+ ['out-of-range-epoch',['reference','native','events','0','time'],Number.MAX_SAFE_INTEGER],
+ ['invalid-iso',['cvg','native','steps','0','completedAt'],'2026-99-01T00:00:00.000Z'],
+ ['alias-broken',['reference','native','requests','1','3','id'],'00000000-0000-4000-8000-000000000001'],
+ ['call-result',['reference','native','requests','1','3','toolCallId'],'unbound'],
+ ['capability',['cvg','native','policyDecisions','0','request','tool','sideEffect'],'EXTERNAL'],
+ ['hash',['reference','reference','artifacts','0','sha256'],'0'.repeat(64)]
+]){let x=structuredClone(raw); parent(x,p)[p.at(-1)]=v;check(name,x)}
+let reads=0
+for(const make of [()=>{let x=structuredClone(raw);Object.defineProperty(x.cvg.native,'turn',{enumerable:true,get(){reads++;throw Error('getter')}});return x},()=>{let x=structuredClone(raw);x.cvg.native.toolBodies[0].extra=()=>1;return x},()=>{let x=structuredClone(raw);x.cvg.native.turn.extra=undefined;return x},()=>{let x=structuredClone(raw);x.cvg.native.turn.extra=NaN;return x}])check('non-data',make())
+for(const f of [{...raw.fixture,text:'a'.repeat(4097)},{...raw.fixture,extra:1},Object.defineProperty({...raw.fixture},'text',{enumerable:true,get(){reads++;return 'x'}})]){let error;try{validateToolCase(f)}catch(e){error=e.message}rows.push({name:'fixture-guard',accepted:!error,expectedAccept:false,error})}
+const inventory=readReferenceInventory();fs.writeFileSync(new URL('raw/independent-inventory-v2.json',O),JSON.stringify(inventory,null,2)+'\n')
+const result={rows,counts:{total:rows.length,unexpectedAccepts:rows.filter(x=>x.accepted&&!x.expectedAccept).length,unexpectedRejects:rows.filter(x=>!x.accepted&&x.expectedAccept).length,getterReads:reads},unexpected:rows.filter(x=>x.accepted!==x.expectedAccept)}
+fs.writeFileSync(new URL('raw/tamper-probes-v2.json',O),JSON.stringify(result,null,2)+'\n')
+console.log(JSON.stringify({counts:result.counts,unexpected:result.unexpected},null,2))

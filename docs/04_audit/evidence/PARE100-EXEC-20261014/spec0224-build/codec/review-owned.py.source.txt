@@ -1,0 +1,22 @@
+from pathlib import Path
+import json,hashlib,difflib
+p=Path(__file__).parent; w=p.parent.parent/'worktree'
+claim=json.loads((p/'claim.json').read_text()); manifest=[]
+for path in claim['owned']:
+ f=w/path; data=f.read_bytes(); manifest.append({'path':path,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+ old=p/'baseline'/path
+ before=old.read_text() if old.exists() else ''
+ patch=''.join(difflib.unified_diff(before.splitlines(True),data.decode().splitlines(True),fromfile='baseline/'+path,tofile='candidate/'+path))
+ dest=p/'deltas'/(path+'.patch');dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(patch)
+checks={}
+def unchanged(path,start,end):
+ before=(p/'baseline'/path).read_text(); after=(w/path).read_text()
+ return before[before.index(start):before.index(end)]==after[after.index(start):after.index(end)]
+checks['memory_recordStep_listSteps_unchanged']=unchanged('packages/harness/src/step-store.ts','  public async recordStep(','  public async saveCheckpoint(')
+checks['postgres_recordStep_listSteps_unchanged']=unchanged('packages/persistence/src/operational-step-postgres.ts','  public recordStep(','  public saveCheckpoint(')
+checks['postgres_native217_recordOperationalStep_unchanged']=unchanged('packages/persistence/src/operational-step-postgres.ts','async function transaction<','/** Package-internal; used by the atomic snapshot/checkpoint seal. */')
+checks['legacy_canonicalizer_no_diff']='packages/contracts/src/canonical-json.ts' not in claim['owned']
+(p/'candidate-manifest.json').write_text(json.dumps(manifest,indent=2))
+(p/'preservation-checks.json').write_text(json.dumps(checks,indent=2))
+print(json.dumps({'files':len(manifest),'checks':checks},indent=2))
+if not all(checks.values()): raise SystemExit(1)

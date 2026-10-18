@@ -1,0 +1,277 @@
+
+docs/02_spec/0224_pare100_complete_tool_result_context.md:1:140
+1: # SPEC0224 — resultado completo no contexto de decisão
+2: 
+3: ## 1. Estado, requisito e autoridade
+4: 
+5: Task `P100-004/P100-014/P100-020/P100-021/TOOL-RESULT-SPEC-001`.
+6: 16/10/2026. Estado inicial `DRAFT_FOR_TECHNICAL_REVIEW`; elaboração documental
+7: T1 de uma mudança futura **T3**, sem BUILD autorizado. Esta SPEC atende ao gap
+8: `OBS-I1-001` dentro dos 36 cartões do PARE100. Não redefine os critérios dos
+9: cartões nem declara sua conclusão.
+10: 
+11: O [reconhecimento](../04_audit/evidence/PARE100-EXEC-20261014/context-result-recon-r1/report.md)
+12: e suas 14 fontes autenticadas são o estado CURRENT. O
+13: [aceite diferencial anterior](../04_audit/evidence/PARE100-EXEC-20261014/differential-tool-r3/lead-acceptance.json)
+14: preserva três fixtures aceitas e um caso adicional vermelho de texto4096bytes.
+15: Aqui se especifica PROPOSED, não comportamento já implementado ou medido.
+16: 
+17: A [constituição D-12](../07_agents/AGENTS.md#governança-proporcional-d-12-26092026)
+18: exige revisão explícita desta SPEC pelo usuário antes do BUILD porque mudam
+19: contratos públicos e a representação do checkpoint. A aprovação0217 não
+20: autoriza esta extensão. As decisões0220/0221/0222 continuam independentes,
+21: pendentes e não serão reenviadas por esta task. Esta SPEC não concede release,
+22: acesso a provider real, produção, dados reais ou efeito externo real.
+23: 
+24: Os requisitos originais continuam na
+25: [carteira0378](../03_build/0378_backlog_paridade_integral.md): P100-004 exige
+26: comparador que rejeite resultado indevido; P100-014 exige contratos de
+27: modelos/usage/errors; P100-020 exige ordem/vínculos e retomada; P100-021 exige
+28: pressão/usage reconstruíveis e overflow sem provider. Suas dependências
+29: originais não são declaradas concluídas por esta SPEC.
+30: 
+31: ## 2. Invariantes e fatia vertical
+32: 
+33: 1. Todo resultado necessário à próxima decisão chega completo ao modelo ou
+34:    a decisão é recusada antes da chamada. Summary nunca substitui o original.
+35: 2. Conteúdo de ferramenta permanece UNTRUSTED; identidade, provenance,
+36:    policy, approval, sandbox e settlement vêm das portas nativas, nunca do
+37:    texto ou de campos homônimos devolvidos pela ferramenta.
+38: 3. A admissão mede o pedido efetivamente enviado, inclusive instruções,
+39:    catálogo, usuário, resultados e reparos. Tokens, bytes e custo são medidas
+40:    distintas. Uma estimativa de caracteres não é prova de janela do provider.
+41: 4. Overflow de contexto não transforma efeito confirmado em falha de corpo,
+42:    nem permite repetir ferramenta ou fabricar confirmação de sucesso.
+43: 5. Resultado completo, completude, orçamento e estado de entrega sobrevivem
+44:    à retomada quando sua gravação foi confirmada. Estado antigo truncado não
+45:    pode ser promovido a completo por um digest válido.
+46: 
+47: A primeira fatia atravessa a fábrica pública `createOperationalHarness`, o
+48: despacho real de ferramenta, o ContextEngine, HybridOrchestrator, a porta
+49: de modelo sintética e o store real de checkpoint. Entrada explícita:
+50: `OperationalHarnessOptions.toolResultContext = { version: 1 }`, também
+51: disponível nas opções da classe iterative. Ausência mantém o protocolo
+52: anterior durante a transição. `single_pass` não aceita essa opção: erro de
+53: configuração antes de executar, em vez de ignorá-la.
+54: 
+55: O modo novo é denominado `complete-tool-v1`. A ativação é vinculada ao
+56: checkpoint e não pode mudar no meio de uma execução. Sua prova isolada não
+57: fecha os cartões: adoção pelo caminho padrão, SDKs, hosts e demais perfis
+58: continua obrigação do programa integral. A mudança do default não faz parte
+59: deste BUILD inicial e exigirá sua própria verificação de consumidores.
+60: 
+61: ## 3. Donos, contratos e limites
+62: 
+63: O harness é dono da observação, retenção, checkpoint e orçamento. O
+64: ContextEngine é dono da seleção. O orquestrador é dono da serialização do
+65: pedido e da interpretação da proposta do modelo. O adaptador de modelo
+66: qualificado é dono da contagem de entrada e do limite de saída. Policy,
+67: approval, journal e sandbox conservam sua autoridade nativa.
+68: 
+69: As adições ficam nos contratos existentes, sem serviço, tabela, fila, store
+70: de blob ou endpoint novo. Alterações previstas: contratos execution-v2/model,
+71: fábrica e iterative-runtime/dispatch, context-engine, hybrid-orchestrator,
+72: completion, step-store e adaptador PostgreSQL de checkpoint. Também testes
+73: dessas fronteiras. Queries DML/SELECT e codecs desse adaptador podem mudar
+74: conforme esta SPEC; DDL/migration não são previstos. Necessidade de schema
+75: de banco novo exige revisão antes de executá-la.
+76: 
+77: Limites fixos do protocolo inicial, sem aumento silencioso por caller:
+78: 
+79: | Recurso                        | Limite e unidade                                                                                                                     | Consequência                                                                           |
+80: | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+81: | Output completo                | 32768 bytes UTF-8 da representação JSON canônica                                                                                     | Acima: UNAVAILABLE/RESULT_TOO_LARGE; sem corte de valor.                               |
+82: | Estrutura JSON                 | Profundidade32 e10000nós, raiz contada como profundidade1; cada valor (objeto, array ou escalar) é um nó, chaves não contam como nós | Acima: UNAVAILABLE/RESULT_COMPLEXITY.                                                  |
+83: | Metadados de identidade        | Cada campo textual até512unidades UTF-16; envelope de observação até4096bytes além do output                                         | Metadado nativo inválido: parar, sem confiar no payload para substituí-lo.             |
+84: | Observações no checkpoint      | Máximo50, preservando todas as TOOL_RESULT da execução                                                                               | Sem espaço: recusar nova ferramenta antes de invocar seu corpo.                        |
+85: | Checkpoint unsigned canônico   | 8388608bytes UTF-8                                                                                                                   | Preflight antes de ferramenta e de gravação; exceder interrompe, nunca grava truncado. |
+86: | Mensagem system de decisão     | 16000unidades UTF-16                                                                                                                 | Não cabe: CONTEXT_OVERFLOW, zero chamadas.                                             |
+87: | Mensagem user de decisão       | 32000unidades UTF-16                                                                                                                 | Mesmo tratamento; não fragmentar nem cortar JSON.                                      |
+88: | Pedido de decisão serializado  | 131072bytes UTF-8, incluindo context/budget/purpose/IDs                                                                              | Mesmo tratamento; signal é controle local não serializável.                            |
+89: | Reserva de saída por tentativa | 512tokens e limite expresso no ModelRequest                                                                                          | Recusar se não houver capacidade para a reserva completa.                              |
+90: 
+91: São limites PROPOSED de contenção desta fatia, não capacidade medida do
+92: PostgreSQL ou do provider.32768bytes acomodam a serialização de uma string
+93: de4096bytes UTF-8 inclusive escapes JSON de caracteres de controle. Isso
+94: não garante admissão de qualquer combinação de usuário/catálogo/histórico:
+95: o pedido completo ainda precisa caber. Bytes maiores, outros formatos e
+96: offload permanecem fora desta prova; não se declara paridade desse domínio.
+97: 
+98: ### 3.1 Valor JSON e observação versionada
+99: 
+100: Domínio completo: null, boolean, string sem surrogate isolado, número finito
+101: diferente de -0, array denso de valores admissíveis ou objeto simples com
+102: propriedades próprias de dados e valores admissíveis. Rejeitar undefined
+103: inclusive em campos, BigInt, NaN/Infinity, ciclos, holes, accessor, symbol,
+104: propriedades extras de array, instâncias com protótipo próprio e toJSON.
+105: Não executar getters/toJSON para tentar obter um valor. Alias acíclico pode
+106: ser serializado como valor repetido. Não se oferece isolamento contra Proxy
+107: ou código JS hostil no mesmo processo; ferramentas instaladas são código
+108: confiável e seus resultados são dados sem autoridade.
+109: 
+110: Canonicalização recursiva: chaves próprias de objeto em ordem lexicográfica,
+111: array na ordem original, strings/chaves com escaping JSON determinístico,
+112: números pela representação JSON do número JS admissível. Sem normalização
+113: Unicode, trim, coercion ou alteração de tipo. Usar o mesmo algoritmo em
+114: snapshot, digest, persistência e pedido. Verificação é por valor e também
+115: pelos bytes canônicos. Não usar a ordem de inserção de objeto como contrato.
+116: 
+117: `Observation.payload` de TOOL_RESULT no modo novo passa a ter união explícita
+118: `schemaVersion:1`, preservando `status`, `sideEffect`, `completion` e
+119: `resultAvailability` separadamente. Ramos:
+120: 
+121: - `completion: COMPLETE`: `output` JSON admissível obrigatório,
+122:   `outputBytes` e `outputSha256` calculados do valor completo. Somente quando
+123:   o pipeline nativo retornou SUCCEEDED e a captura integral foi válida.
+124: - `completion: UNAVAILABLE`: sem campo output, com motivo estável
+125:   INVALID_JSON/RESULT_TOO_LARGE/RESULT_COMPLEXITY. `status` continua sendo o
+126:   resultado do pipeline; não inventar FAILED quando ele confirmou SUCCEEDED.
+127:   Sem digest do conteúdo que não foi integralmente validado. Tamanho pode
+128:   ser um lower bound explicitamente rotulado, nunca um total inventado.
+129: - Resultado nativo FAILED/REJECTED: envelope de diagnóstico versionado,
+130:   `completion: NOT_APPLICABLE`, `resultAvailability: UNAVAILABLE`, sem output
+131:   completo e com erro redigido; nunca elegível como evidência de
+132:   efeito confirmado. O journal mantém sua classificação original.
+133: 
+134: `resultAvailability` indica AVAILABLE ou UNAVAILABLE; a condição de entrega
+135: ao modelo fica no estado do contexto, não no texto do resultado. Nenhum
+136: campo do output pode sobrescrever o envelope. `summary` continua prévia
+137: limitada300unidades e não participa da prova de completude. Não aplicar
+138: `boundedPayload` ao output ou envelope versionado. Conhecimento e outras
+139: observações permanecem sob seus contratos atuais e não são promovidos a
+140: fonte institucional aprovada por esta mudança.
+
+docs/02_spec/0224_pare100_complete_tool_result_context.md:243:375
+243: 
+244: ## 4. Seleção única e pedido real
+245: 
+246: ContextBuildInput/StepContext recebem um campo opcional versionado
+247: `toolResultContext`. No modo novo sua ausência ou inconsistência é erro;
+248: não existe fallback silencioso para summary. O runtime valida a saída de
+249: ContextEngine customizado, inclusive IDs/cursor, integridade do envelope e
+250: conjunto obrigatório. HybridOrchestrator anuncia suporte ao protocolo1;
+251: modo novo com orquestrador sem suporte é erro de composição antes de run.
+252: Esse anúncio é contrato de código confiável, não isolamento de plugin hostil.
+253: 
+254: ContextEngine seleciona primeiro instruções/governança, objetivo/usuário e
+255: todos os TOOL_RESULT da execução. Dados de usuário e ferramentas
+256: são UNTRUSTED. Conhecimento/histórico opcionais são considerados em ordem
+257: de prioridade já existente e só entram inteiros. A seleção retorna os IDs
+258: e o valor completo de cada resultado; não usa summarizeObservation para
+259: reconstruir payload nem lê uma segunda lista paralela para renderizar.
+260: 
+261: Formato wire interno: exatamente duas mensagens, ambas ModelMessage atual:
+262: 
+263: 1. system: instruções de governança do host, instruções de agente confiáveis,
+264:    esquema de decisão, tipos/reasons permitidos e catálogo registrado.
+265: 2. user: JSON versionado `cvg.decision-context/1` contendo objetivo do usuário,
+266:    userMessage, estado descritivo, itens selecionados e dados de reparo.
+267:    Cada item inclui contextId, prioridade, trust, source, observationId,
+268:    provenance e o payload completo quando aplicável. Dados arbitrários não
+269:    são interpolados no texto de system. Diagnóstico de erro do modelo é
+270:    dado de reparo UNTRUSTED, não instrução do host.
+271: 
+272: O modelo pode propor, mas nenhum texto concede policy/approval/execução.
+273: JSON framing evita ambiguidade sintática, sem promessa de resistência
+274: semântica de LLM a prompt injection. Ambas as roles existem nos dois
+275: contratos atuais; não se introduz role tool nem tool_call_id nesta fatia.
+276: O gateway governado é rota distinta: testar diretamente ModelInputSchema
+277: com as duas mensagens prova só compatibilidade do input. Não prova que
+278: ModelRequest inteiro satisfaz ModelGatewayRequestSchema nem cria adaptação
+279: de orçamento/maxOutputTokens entre essas rotas.
+280: 
+281: O orquestrador constrói um snapshot imutável do ModelRequest final, incluindo
+282: messages, context, budget, correlationId, purpose e o novo campo opcional
+283: `maxOutputTokens:512`. Faz validação de tamanho e contagem sobre esse mesmo
+284: snapshot, calcula requestSha256 e envia os mesmos valores. O signal é
+285: propagado separadamente. Mutação após admissão invalida a chamada.
+286: 
+287: ## 5. Admissão e orçamento, inclusive reparos
+288: 
+289: ### 5.1 Contagem qualificada
+290: 
+291: HybridOrchestrator recebe uma porta confiável `DecisionInputCounter` pareada
+292: com o decisionModel. Ela recebe o snapshot final e devolve counterId/version,
+293: identidade do modelo/formatação, inputUpperBoundTokens, contextWindowTokens
+294: e costUpperBoundUsd incluindo a reserva de saída. O adaptador deve garantir
+295: limite superior para todo input realmente enviado, inclusive wrappers do
+296: provider. ModelRequest.maxOutputTokens precisa ser respeitado pelo par.
+297: 
+298: Sem esse par qualificado, sem janela conhecida, contagem inválida ou sem
+299: limite de saída: ADMISSION_UNAVAILABLE, zero chamadas. Não usar o estimador
+300: legado `ceil(text.length/4)` como substituto. Nesta fatia só se qualificam
+301: pares sintéticos locais de contador/modelo; não se habilita provider real.
+302: A contagem sintética é a regra declarada pelo modelo sintético, não medição
+303: de tokenizer de modelo comercial ou local instalado.
+304: 
+305: Tentar remover apenas itens opcionais inteiros e reconstruir/medir de novo.
+306: Nunca remover governança, usuário ou resultado obrigatório. A admissão exige:
+307: 
+308: - limites de bytes/unidades da seção3 e todas as fronteiras de schema;
+309: - inputUpperBoundTokens <= tokenBudget do contexto (default4000 no modo1);
+310: - inputUpperBoundTokens +512 <= janela declarada do par;
+311: - a mesma soma <= saldo de maxTokens da execução;
+312: - costUpperBoundUsd <= saldo de maxCostUsd, prazo ainda válido e saldo
+313:   para uma chamada e, se necessário, um reparo de decisão.
+314: 
+315: Sem espaço após remover opcionais: CONTEXT_OVERFLOW ou motivo de orçamento
+316: específico, sem chamada ao modelo. Contagem pura não consome slot de modelo.
+317: Counter que não respeita deadline, lança ou devolve NaN/números negativos
+318: faz a admissão falhar. Não há retry de counter nesta fatia.
+319: 
+320: ### 5.2 Reserva persistida antes de cada tentativa
+321: 
+322: IterativeOrchestratorInput recebe, somente no modo1, a porta do runtime
+323: `decisionAdmission` com reserve/settle. Há no máximo uma reserva pendente
+324: por execução; exclusão atômica está definida em5.3. Fence da0217 é revalidado
+325: quando a composição é publicada/bound; não é presumido em store unbound. A reserva
+326: vincula tenant, execution, passo, attempt, purpose, requestSha256, contador,
+327: limites e ID opaco nativo; IDs enviados pelo output não têm efeito.
+328: 
+329: `reserve` revalida saldos/deadline/cancelamento, cobra um modelCall e os
+330: limites superiores de tokens/custo, registra repair quando purpose=REPAIR e
+331: persiste checkpoint antes de retornar receipt. Falha desse save impede
+332: complete. O orquestrador só chama o modelo com receipt do snapshot atual.
+333: 
+334: `settle` aceita apenas a reserva corrente, o digest correto e uso nativo
+335: finito/não negativo dentro dos limites. Substitui a cobrança reservada pelo
+336: uso real e persiste sua quitação. Repetição idêntica é idempotente; receipt
+337: de outra execução/passo, resultado conflitante ou tentativa de quitar uma
+338: reserva diferente são STATE_CONFLICT. Não baixar saldo de outra chamada.
+339: 
+340: Falha, timeout, cancelamento, perda de processo/lease ou resultado sem uso
+341: validável conservam a cobrança superior. A reserva passa a UNKNOWN e a
+342: execução interrompe; não repetir a chamada automaticamente nem liberar
+343: saldo por falta de resposta. Na retomada, reserva pendente vira UNKNOWN
+344: antes de qualquer despacho; resolução operacional futura não é autorização
+345: para prosseguir nesta fatia. Resultado tardio após encerramento não muda
+346: checkpoint, saldo ou decisão. Se settlement falhar no store, conservar a
+347: reserva anterior como cobrança e interromper.
+348: 
+349: Uso acima do limite é ADMISSION_BREACH: não entregar resposta nem despachar
+350: efeito, marcar par contador/modelo não qualificado e conservar diagnóstico
+351: do uso observado. Não afirmar que a cobrança real ficou limitada quando o
+352: adaptador violou o contrato. O caso é critério vermelho, não ajuste para PASS.
+353: 
+354: No modo1 a contabilidade de decisão pertence exclusivamente à porta do
+355: runtime. O retorno novo contém decision e decisionAdmissionIds, a lista sem
+356: repetições de todas as tentativas quitadas deste passo. usage legado deve
+357: estar ausente; o runtime confere a lista com o ledger nativo desse passo e
+358: não reaplica ModelUsage agregado. O runtime rejeita retorno com uso duplicado,
+359: reserva UNKNOWN ou digest divergente. Chamadas de resposta do pipeline
+360: mantêm sua contabilidade nativa; seu orçamento compartilha o saldo já
+361: debitado. Não criar segundo gate no pipeline nem omitir seu uso.
+362: 
+363: Cada reparo produz snapshot/contagem/reserva próprios e repete a admissão
+364: com os novos erros, prazo e saldos. A observação completa permanece obrigatória em todos os pedidos
+365: posteriores até o término da execução, mesmo depois do avanço do cursor. Decisão inválida após
+366: último reparo interrompe pelo erro nativo, com todas as chamadas cobradas.
+367: 
+368: ### 5.3 Exclusão entre escritores e CAS do checkpoint
+369: 
+370: `ExecutionStepStore.saveCheckpoint` atual não prova exclusão de reservas.
+371: O modo1 exige a extensão `compareAndSwapCheckpoint` com entrada lógica
+372: `{tenantId,executionId,expected:{checkpointId,digest}|null,next}` e saída
+373: APPLIED com token novo ou CONFLICT. Sem essa extensão a composição recusa
+374: modo1 antes de qualquer corpo/modelo; não emular CAS com load seguido de
+375: save. Toda escrita de checkpoint2, inclusive inicial, pre-dispatch, reserva,

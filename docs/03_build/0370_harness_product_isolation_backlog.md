@@ -1,6 +1,28 @@
 # 0370 — Backlog de isolamento do Operational Harness
 
-## Estado atual — checkpoint 61
+## Estado documental vigente — 17/10/2026
+
+O [plano0388](0388_documentation_isolation_reconciliation.md) conclui HISO-002/HISO-008 como entregas documentais DONE, com navegação e B5 reconciliados. Os cartões HISO abaixo são a fonte de estado; os cartões PISO têm [backlog canônico no produto](../../products/shift-assistant/docs/backlog.md) e [correspondência AP–PISO–HISO](../../products/shift-assistant/docs/requisitos-ap.md), sem duplicação de fila. Os resultados do checkpoint61 abaixo pertencem à candidata privada e à data daquela rodada; não instruem retomar processos antigos ou promover seus patches.
+
+A SPEC0228 foi concluída na candidataf11, com INCOMPLETE intencional e sem integração automática ao checkout principal. HISO-005/HISO-014 permanecem abertos. A autoridade B5 de16/10 está aprovada; execução remota/check obrigatório do produto continuam pendentes de comprovação em HISO-010. Nenhum fechamento documental aceita o isolamento, o piloto ou a produção.
+
+## Atualização HISO-005 — BUILD0237 concluído localmente — 18/10/2026
+
+A aprovação T3 foi executada: fonte `84d8d4b4`/sete arquivos integrados, revisão final zero obrigatórios,14 aceites,16 gates e38 hashes atuais.5.211 unit/302 PG/12 E2E/zero skips; consumidor207 imports/76 exports/oito pacotes/zero rede. [Resultado atual](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md). Root77 protegidos/índice/HEAD preservados,PG removido/portas livres. A fronteira atual1609=537+1072 permaneceINCOMPLETE/zero provas; o ledger conserva também todas 1721 ocorrências anteriores sem resolução presumida. HISO005/P2/P3/B6 continuam abertos; [próxima tarefa](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/NEXT.md).
+
+## Atualização HISO-005 — SPEC0237 pronta para decisão T3 — 18/10/2026
+
+Preparação documental `HISO005-P2-RESOLUTION-SPEC-20261018` concluída: [contrato0237](../02_spec/0237_b6_runtime_resolution_profile.md), SHA `81f091fa8edaf3ce89543773e24960b4dc9feff3de15f6552940192e9f1ef5f1`, R2finalAPPROVE_SPEC/zero obrigatórios, trêsP1R1 tratados e sugestãoP3 esclarecida no [pacote de decisão](../04_audit/evidence/HISO005-P2-RESOLUTION-SPEC-20261018/decision-packet.md). Futuro `HISO005-P2-BUILD-0237` WAITING_HUMAN_APPROVAL; todosRS01–14NOT_RUN. Próxima ação: revisão explícitaT3 deste novo delta positivo antes do código. Autoridade0236cf07 vigente e P1 resolvido, sem repetir essa pergunta. HISO005/P2/P3/B6 permaneceINCOMPLETE2258=537+1721/303MATCH/zeroverified/zeroresolvidos; nenhuma aprovação de produção, release ou transferência de certificado.
+
+## Atualização HISO-005 — retomada explícita do P1 nativo — 18/10/2026
+
+Task `HISO005-0236-BUILTIN-REPAIR-20261018` COMPLETED_LOCAL_P1: recusa nativa corrigida antes de lookup, reviewAPPROVE0/12cenários/40calls,173focais e16gatesPASS/5015unit/302PG/12E2E/zero skips,verificador corrente38hashes. Fonte d8e3f8f/dois paths promovidos com78protegidos/índice preservados;3preimagens de testespeer reancoradas ao seu commit qualificado, sem escritaHISO nesses paths. PG próprio removido/portas livres,3716selados anteriores intactos e119+55vazios próprios catalogados sem duplicar registros. [Resultado](../04_audit/evidence/HISO005-0236-BUILTIN-REPAIR-20261018/REPORT.md). Fronteira2258=537baseline+1721novos,303MATCH/zeroverified/zeroresolvidos; HISO005/P2/P3/B6 continua aberto. Próximo do pai: baseline/HOW0237 com guarda nativa herdada, revisão documental/humana antes de novo BUILD positivo. Não repetir aprovação0236 nem reabrir os ciclos históricos reprovados.
+
+## Atualização HISO-005 — reparo de resolução — 18/10/2026
+
+Task `HISO005-0236-RESOLVER-CONFORMANCE-20261018` BLOCKED/FAILED_QUALITY_BAR: revisãoR2final confirmou as correçõesR1, mas encontrou umP1 na precedência de builtins; Node seleciona nativo e kernel prova pacote homônimo. Fonte7ad6d2f/dois paths/159focaisPASS preservada, sem fullcert ou promoção. Duas revisões esgotadas, nenhuma terceira/reset automático. [Estado/próxima ação delimitada](../04_audit/evidence/HISO005-0236-RESOLVER-CONFORMANCE-20261018/state.json). Root75df/comaceitereaberto e certificados históricos intactos; PG próprio removido/portas livres. Autoridade0236 vigente; SPEC0237 somenteT1, sem BUILD ou perguntahumana enquanto v1 não qualificada. HISO005/P2/P3/B6 abertos.
+
+## Histórico — checkpoint61 da candidata privada
 
 R56 corrigiu mídia primária com payloadR53, preparação build/tipos/lint PASS e suíte completa atual PASS; cobertura e demais gates ainda RUNNING em PostgreSQL55599. Novo críticoR58 REJECT: backups retidos da migração divergem de migration.inventory e offline/backup/restore aceitavam. R63 reproduziu baseline e corrigiu três caminhos isolados: validação hash/tamanho/inventorycanônico antes de healthy, guardlive dos originais retidos; 127 testes/4arquivos, 10 casos adicionais sem novo arquivo, prefixoR38/R53exato; compiledbefore aceita/after rejeita, tipos/lint/formato/publicbuild PASS. Novo críticoDockerR61 REJECT: truncamento ativo para vazio detectado live, restart perde estado de incidente e permite replay/envio duplicado. R65 corrige isolated com fallback de retenção de lock jáexistente, sem schema ou liberação. R50 neutral full5100/385, PG288/35, E2E12 sem retries/skips, SBOM/licenças/audit/criticalcoveragePASS. R62 I1 confirmou números mas INCOMPLETE por proveniência/inputs faltantes e contador V8 negativo; supplement32exactfiles fornecido, nenhum contador sanitizado. R55checker finite entregue: literal/direct1→0, 1065testes/5arquivosPASS, originais intactos, unknownsretidos; R64novo críticoRUNNING, sem wholeclosureaceite. Evidência durável e commits próprios,2.083inputsR56 reconstruíveis dos archives; caches não trackeados no Gitprivado. Históricos R44qualificationDENIED e R49REJECT preservados. SomenteHISO001DONE; todos24critérios mantidos, globalFAIL/produçãoNO_GO. NO_MODEL, zero inferências externas, sem Rootpromoção/providerexecute/push/dadosreais/piloto/deploy; T4/egress/humano separados.
 
@@ -19,10 +41,12 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 
 ### HISO-002 — Reconciliar a missão e os ponteiros vigentes
 
-- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: mantenedor da documentação do harness. Risco/gate: T1 / G0. Dependências: HISO-001.
+- Estado: `DONE`. Prioridade: P1. Dono: mantenedor da documentação do harness. Risco/gate: T1 / G0. Dependências: HISO-001.
 - WHAT/WHERE/HOW: atualizar README raiz, `docs/README.md`, índice, AGENTS/direção e ledgers quando os claims permitirem. Usar ADR-010 para identificar este repositório com o Operational Harness e classificar o Assistente de Plantão como consumidor.
 - Aceite: nenhuma instrução vigente aplica automaticamente a barra 0368 ao core ou confunde os dois produtos. Preservar D1–D4, SPEC 0177, barra 0368 e histórico da ADR-009 como contratos do assistente. Não reinstalar o antigo programa enterprise/UP91 por mudar a identidade.
 - Evidência: diff documental e links verificados; entradas de runtime/log/backlog integradas pelo owner, sem sobrescrever alterações de outro agente. Encaminha F13.
+
+- Fechamento documental17/10/2026 (`DOCS-ISOLATION-20261017`,T1): missão ADR-010, README/AGENTS/constituição, índices manuais, coordenação e entradas vigentes dos ledgers reconciliados. UP91/ADR-009 de missão e checkpoints privados mantêm contexto histórico;0368/D1–D4/SPEC0177 pertencem ao produto e0373/0374 ao núcleo. [Evidência e critérios](../04_audit/evidence/DOCS-ISOLATION-20261017/REPORT.md), revisão independente elegível sem achados e checks documentais. AP-001 ainda conserva seu requisito próprio de commit/aceite; fechar esta tarefa documental não encerra claims técnicos alheios, F13 integral ou produção.
 
 ### HISO-003 — Especificar a extração sem mudança de comportamento
 
@@ -46,6 +70,59 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - Evidência: grafo resolvido e execução positiva/negativa do gate. Fixtures da sonda não entram no artefato de produção.
 - Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B1): gate `boundary:products` passa a terminar em 26 s com `PASS` (antes ~22 min `INCOMPLETE`); dependências instaladas verificadas contra o lockfile commitado; 50 testes negativos novos cobrem os contraexemplos T2 (`P1-R2-01`, `P1-R2-02`) e as 73 sondas do crítico posterior dão 0 falsos PASS. O PASS depende de uma tabela de 169 exceções de primeira parte vinculadas por arquivo/linha/digest que ainda exige revisão independente (`--strict` mostra `INCOMPLETE`). Estado permanece `IN_PROGRESS` até a reauditoria Codex (B6). [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
+#### Subtask HISO005-P2-BUILD-0240 — IN_PROGRESS/BUILD local autorizado
+
+Usuário aprovou explicitamente SPEC0240/SHA1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161; [autoridade](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/authority-build0240.json), [MS01–12](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/task-contract.json). Candidata84d8 própria preparada/pins/20fontes/137+590selados preservados. Próxima ação V2_BASELINE_FIRST_RED antes de deltahelper/engine; críticas/gates/consumidor/medição atuais obrigatórios antes de promoção. MS01–12NOT_RUN; B6INCOMPLETE1609/zero provas, sem repetição de aprovação/release/push/deploy. Recon/T1abaixo permanece concluído/selado.
+
+#### Subtask HISO005-P2-METADATA-RECON-20261018 — concluída; BUILD0240 aguarda gate
+
+- Estado `COMPLETED` local/T1; [resultado](../04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/REPORT.md), [aceitesNR01–06](../04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/ACCEPTANCE.md).359 origens retidas/358 arquivos,Node4+28,14 controles de corpo v2; uma origem indisponível não atribuída. Lead11checks/590selados/20fontes/Root7/índice/HEAD preservados.
+- [SPEC0240](../02_spec/0240_b6_node_metadata_resolution_scope.md) `1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161`, R2finalAPPROVE_SPEC/zero obrigatórios/12 casos;45+35artefatos/34+29snapshots verificados, crítico fechado,2/2 documentais. [Decisão concreta](../04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/decision-packet.md).
+- Próximo `HISO005-P2-BUILD-0240` em `WAITING_HUMAN_APPROVAL`: DECIDE_SPEC0240 antes do novo código positivo. MS01–12 NOT_RUN, B6 INCOMPLETE1609/zero provas; metadados não fecham corpo/proveniência. Aprovações0236/0237 resolvidas; sem reiniciar reviews/candidatas/gates ou transferir certificado. Plano condicionalM0–M5 em0391, sem produção/push/deploy.
+
+#### Subtask HISO005-P2-RESOLUTION-SPEC-20261018 — perfil de resolução
+
+- Estado `COMPLETED_LOCAL_DOCUMENTAL`, T1. [SPEC0237](../02_spec/0237_b6_runtime_resolution_profile.md), SHA-256 `81f091fa8edaf3ce89543773e24960b4dc9feff3de15f6552940192e9f1ef5f1`, revisão final APPROVE_SPEC/zero obrigatórios e pacote documental selado de88 arquivos. [Resultado documental](../04_audit/evidence/HISO005-P2-RESOLUTION-SPEC-20261018/REPORT.md).
+- A aprovação explícita posterior do usuário resolveu a espera T3 antes do código. [Autoridade do BUILD](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/authority-build0237.json). O estado “BUILD não autorizado” dentro do pacote selado descreve o momento histórico da preparação e não exige repetir a aprovação. Os aceites executáveis pertencem à subtask de BUILD abaixo; HISO005/B6 permanece aberto.
+
+#### Subtask HISO005-P2-BUILD-0237 — construção do perfil de resolução
+
+- Estado `COMPLETED_LOCAL`, T3 aprovado. [Resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md), [14 aceites](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/ACCEPTANCE.md). Fonte `84d8d4b4`/sete deltas próprios integrados, revisão R2 final APPROVE/zero obrigatórios,398 focais e5.211 unit/439 arquivos/302 PG/12 E2E PASS, sem skips/flaky.16 gates e38 hashes correntes; consumidor fresco207 imports/76 exports/oito pacotes/zero rede. A fonte não mudou após R2.
+- Revalidações e paridade física dos emits confirmadas;537 origens e303 registros instalados preservados. Ledger guarda1721 tuplas da fronteira anterior e1072 atuais com multiplicidade, sem dar crédito à mudança de causas ou contagens. Medição atualINCOMPLETE1609/zero provas. Tentativas ambientais e capturas intermediárias permanecem históricas, sem reclassificação.
+- Promoção preservou77caminhos/HEAD/índice. Root foi observado sem transferência de certificado; PG próprio removido por identidade/clientes0/portas livres/processos0. Evidências e fontes anteriores intactas. PaiHISO005/P2/P3/B6 continua `IN_PROGRESS`; [seguir pela maior causa restante](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/NEXT.md), sem repetir aprovações ou reiniciar jobs antigos.
+
+#### Subtask HISO005-P2-SPEC-20261018 — contrato semântico
+
+- Estado `COMPLETED` para preparaçãoT1 e para o BUILD local `HISO005-P2-BUILD-0236`, aprovado explicitamente pelo usuário para SPEC SHA-256 cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49 antes do código. Pedido atual “resolva essas outras pendencias”. [SPEC0236](../02_spec/0236_b6_semantic_boundary_proof.md), [plano0391](0391_hiso005_semantic_proof_execution.md), [censo histórico](../04_audit/evidence/HISO005-P2-SPEC-20261018/recon.json). O fechamento é do mecanismo, sem encerrar H5-P2 integral/B6.
+- Censo completo de471diagnósticos:168ocorrências vinculadas a AST/42arquivos,303instalados302MATCH/1MISMATCH;8.036arquivos JS/92.445.611bytes examinados como sintaxe, sem concessão de confiança. Contrato proposto inclui18aceites, resolução física, binding/implementação, limites/UNKNOWN e contabilidade sem perder duplicatas. Bootstrap ambiental, processos abertos e nativos não recebem dispensa.
+- Implementação75df/17paths qualificada:18aceites do mecanismo, revisão final APPROVE/zero obrigatórios/16cenários;16gates/4.978unit/302PG/12E2E/zero skips e38hashes oficiais atuais. Consumidor fresco207imports/76exports/zeroRede e compatibilidade byteexata confirmados após gates.17paths promovidos por pré-imagens/63protegidos e índice intactos; PG próprio removido, portas livres. [Relatório final](../04_audit/evidence/HISO005-P2-SPEC-20261018/build0236/REPORT.md). Medição pós-gates2399=537baseline+1862novos,303MATCH/zeroverified/zeroresolvidos; origens e multiset conferidos independentemente. P2/P3/novaB6 continuam abertos, sem exceções ou aceite por UNKNOWN. Catálogo central segue claimClaude100; delta34 próprio pronto e52problemas de links da outra frente encaminhados ao owner. Próxima ação: contrato0237 concreto/revisão/decisãoT3; não repetir aprovação0236.
+
+#### Subtask HISO005-P1-INTEGRATION-20261018 — composição dos mecanismos aprovados
+
+- Estado `COMPLETED_LOCAL`, T2; [task pré-BUILD](../04_audit/evidence/HISO005-P2-SPEC-20261018/integration-build/task-short-spec.json). Port inicial9b494a4d, base26d/55fontesClaude preservadas,10paths próprios compostos depois na75df junto da0236. Checker preserva mudanças posteriores/PARE e mantém exceções inativas. A integração não concede isolamento integral.
+- Histórico do port inicial: crítica independente APPROVE_SCOPED_DIFF/zero obrigatórios,160testes e12grupos de sondas; formato/tipo/lint/buildPASS; certificação88d6d11e encerrada por identidade após4750unitPASS/92ENOENT, logs preservados. Preparo de emits corrigido e93casos legados mantidos/passando; nova certificação será emitida após freeze0236, com PG56236/API3386/web4386 próprios. Consumidor fresco207imports/76exports/jornadaPASS. Referência nova8de30020,304presentes/50optionalausentes,298SRI/zeroIP/umaexecNode revisados antes do consumo.
+- Composição75df dos10pathsP1 e sete adicionais qualificada/promovida:16gates/38hashes atuais,17pós-imagens/63fontesprotegidas/índice preservados e cleanup próprio concluído. Referência instalada89fd40e9 e compilada115f72ef revistas como proveniência da variante, sem autoridade semântica; os eventos antigos acima permanecem históricos. [Promoção](../04_audit/evidence/HISO005-P2-SPEC-20261018/build0236/promotion-receipt.json). O rootobservado continuaINCOMPLETE, não certificado pela candidata; receipt compilado de outra variante recusado. Nenhum push/deploy/produção.
+
+#### Subtask HISO005-CONTENT-ID-BUILD-0234 — H5-P1
+
+- Estado `COMPLETED / BUILD_T3_APPROVED_USER` (escopo local H5-P1), autoridade17/10 registrada para hash exato0234 em [authority.json](../04_audit/evidence/HISO005-0234-BUILD-20261017/authority.json). Implementação e14aceites em candidata própria derivada de f11; fontes do principal readonly. [Execução0390](0390_hiso005_installed_identity_build.md).
+- Aceites ID01–14 concluídos, crítica independente APPROVE_SCOPED_DIFF/zero obrigatórios e16gates locaisPASS na candidatab7032f82:3607unit/302PG/12E2E sem falhas/skips/todo/flaky,38hashes oficiais verificados. Closure303=302MATCH/1esbuildMISMATCH, todosverifiedfalse/471diagnósticos/INCOMPLETE; consumidor fresco198imports/72exportsPASS. [Fechamento](../04_audit/evidence/HISO005-0234-BUILD-20261017/REPORT.md). P1 não fecha HISO005/P2/P3/B6; sem integração no principal, push/deploy/produção. Recursos próprios encerrados; candidata/ref revisada preservadas. Proposta/estado de preparação abaixo são históricos, não bloqueio humano atual.
+
+#### HISO005-PROOF-PLAN-20261017 — única frente de prova positiva
+
+- Estado: `COMPLETED` para preparaçãoT1; aprovação humana subsequente registrada na subtask BUILD0234 acima. O estado WAITING_HUMAN_APPROVAL do pacote congelado é histórico. Pedido do usuário: uma frente por vez. A sessão segue somenteHISO-005/B6, preservando as frentes de outros responsáveis. [Plano integral0389](0389_hiso005_positive_proof_execution.md).
+- Primeiro contrato concreto: [SPEC0234](../02_spec/0234_b6_installed_content_identity.md), T3 proposto, identidade de bytes contra referência offline sem restaurar verified:true ou PASS. O recon encontrou303payloads SHA-512 correspondentes ao lock; não extraiu ou instalou conteúdo. [Prova readonly](../04_audit/evidence/HISO005-PROOF-PLAN-20261017/recon.json).
+- A frente inteira ainda exige semântica da implementação/loaders, identidade dos receptores/espelhos e novaB6; nenhum desconhecido foi dispensado ou convertido em aceite. A0228 aprovou contenção e não autorizou este mecanismo futuro. Revisão independente ACCEPT_SPEC/zero achados obrigatórios. SPEC0234 SHA b33aff4d1d1e36d64dd97298bc73d1c058220776c349e6704478303ef8a9c76d aprovada posteriormente para BUILD local; a execução segue na subtask0234, sem alterar o pacote de preparação. [Pacote concreto](../04_audit/evidence/HISO005-PROOF-PLAN-20261017/decision-packet.md).
+
+#### B6-REMEDIATION-BUILD-0228 — primeira contenção dos falsos PASS (17/10/2026)
+
+- Estado: `COMPLETED`. Dono: engenharia do harness/B1. Gate: T3 para esta unidade, sem reclassificar a extração histórica T2 do cartão pai.
+- WHAT/WHERE/HOW: [SPEC0228](../02_spec/0228_b6_boundary_fail_closed_remediation.md), após [B6/0619](../04_audit/0619_b6_stable_isolation_reaudit_2026-10-17.md); recusar confiança terminal de metadados e manter inativas as exceções atuais, nos scripts de fronteira/testes e bloco correspondente do runbook, em candidata própria derivada de5a199668.
+- Dependência satisfeita em17/10: usuário aprovou implementar a SPEC; [autoridade T3](../04_audit/evidence/B6-0228-BUILD-20261017/authority.json). [Pacote T3 com SHA](../04_audit/evidence/B6-REMEDIATION-SPEC-20261017/decision-packet.md); revisão técnica independente ACCEPT_SPEC; implementação em candidata própria e14/14aceites concluídos,156focais PASS e16gates locais PASS.
+- Aceite: B6R-01–14 preservam FAIL, expansão/drift e controles negativos. O gate normal da baseline será INCOMPLETE; contenção não encerra os achados/B6/HISO-014 nem fornece prova positiva. Revisão independente APPROVE_SCOPED_DIFF;3479unit/302PG/12E2E,zero skips; fronteira final INCOMPLETE/471diagnósticos/303instalados,semexceções. Próxima ação do cartão pai: prova positiva futura de isolamento e nova B6; checkpoint localf11f762f em candidate/b6-0228-20261017. Sem alteração de runtime, schema, produto, lock, workflow ou release nesta unidade.
+
+- Fechamento: [relatório e14aceites](../04_audit/evidence/B6-0228-BUILD-20261017/REPORT.md), [certificado local](../04_audit/evidence/B6-0228-BUILD-20261017/full-certification-summary.json), fontes intactas e recursos próprios encerrados. HISO-005 geral permanece IN_PROGRESS; sem integração/push/deploy.
+
 ### HISO-006 — Separar descoberta, build, testes e coverage
 
 - Estado: `IN_PROGRESS`. Prioridade: P1. Dono: engenharia de tooling do harness. Risco/gate: T2 / G1–G2; alteração de barra vira T3. Dependências: HISO-004.
@@ -65,10 +142,12 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 
 ### HISO-008 — Transferir docs e backlog do produto
 
-- Estado: `IN_PROGRESS`. Prioridade: P1. Dono: mantenedor documental de cada projeto. Risco/gate: T1 / G0; mudança do checker é T2. Dependências: HISO-004, HISO-007.
+- Estado: `DONE`. Prioridade: P1. Dono: mantenedor documental de cada projeto. Risco/gate: T1 / G0; mudança do checker é T2. Dependências: HISO-004, HISO-007.
 - WHAT/WHERE/HOW: estabelecer docs e backlog em `products/shift-assistant/docs`; transferir os cartões PISO com IDs, requisitos AP e histórico. Manter no harness links de integração, contratos e estado de isolamento. Atualizar mapa restrito de paths históricos quando necessário para links.
 - Aceite: cada cartão tem um status canônico; AP/PISO têm matriz de correspondência, não duas filas independentes. Evidências e relatórios históricos continuam íntegros. Barra 0368 e decisões D1–D4 são produto; fontes antigas com caminhos movidos são resolvidas por mapeamento explícito, sem allowlist genérica de links quebrados.
 - Evidência: mapa de transferência e checks de links/IDs/hashes históricos. Encaminha F13; não alterar textos de auditoria para aparentar achados fechados.
+
+- Fechamento documental17/10/2026 (`DOCS-ISOLATION-20261017`,T1): docs próprias e [mapa de autoridade/AP–PISO–HISO](../../products/shift-assistant/docs/requisitos-ap.md) conferidos; dez cartões PISO funcionais byteidênticos no único backlog do produto e16AP preservados,20moves exatos resolvidos sem alterar política. Contratos, decisões e evidências históricas protegidos por hash. [Evidência e critérios](../04_audit/evidence/DOCS-ISOLATION-20261017/REPORT.md). Os paths estruturais de HISO-004/HISO-007 estão disponíveis para esta entrega documental; seus aceites operacionais continuam abertos e não são encerrados por ela. Sem alterar status funcional PISO, D2/NO_MODEL ou piloto.
 
 ### HISO-009 — Validar consumo por interfaces públicas suportadas
 
@@ -87,7 +166,8 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 
 ## Harness — correções compartilhadas
 
-- Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B5): workflow `product-shift-assistant.yml` novo (build, testes, denominador e imagem do produto, sem gates do harness); barra do harness com `CVG_TEST_SCOPE=core` selado no manifesto (`hiso-010-v1-core-sealed`). Pendente: revisão humana T3 (mudança de contrato de evidência sem SPEC aprovada; cobertura do produto sem gate; format/lint/typecheck ainda cobrem `products/**`) e execução real no GitHub Actions. [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
+- Histórico de07/10/2026 (`PLAN0374-B-FABLE-20261007`, B5): workflow próprio do produto e barra do harness com `CVG_TEST_SCOPE=core`, selo `hiso-010-v1-core-sealed`. A revisão humana então pendente foi posteriormente aprovada; a [evidência de preparação](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md) mantém seus bytes e a data original.
+- Estado vigente B5/HISO-010, reconciliado em17/10: **revisão humana T3 APPROVED** conforme `decisions.B5_HISO010` do [recibo de16/10](../04_audit/evidence/USER-DECISIONS-20261016/production-0374.json), também registrado no [plano0374](0374_plano_producao_harness.md#7-decisões-do-usuário--16102026). Escopo decidido: barra do harness sem testes do produto, workflow próprio do consumidor e cobertura do produto vinculada à barra0368. **Execução real no GitHub Actions e check obrigatório do produto permanecem não comprovados nesta trilha**; HISO-010 continua IN_PROGRESS. O alcance de format/lint/typecheck e as outras obrigações do cartão exigem suas próprias evidências; esta reconciliação não altera workflows ou concede aceite por aprovação documental.
 
 ### HISO-011 — Limitar recepção do transporte de modelo
 
@@ -186,7 +266,7 @@ Os dez cartões foram transferidos atomicamente, preservando seu conteúdo, para
 
 Cada cartão só passa a DONE com claim/task, SPEC/gate proporcional, diff próprio e evidência de seus aceites. Regressão/skip/pendência humana material mantém o cartão aberto. No fechamento de cada rodada, atualizar runtime/log/backlog e evidências; se ledgers estiverem modificados por outro agente, preparar handoff como nesta rodada, conforme regra 5 de coordenação.
 
-Próxima ação em execução: finalizar gates/revisão da fatia T2 HISO-004–008; SPEC 0178 registrada antes do BUILD. HISO-002 permanece parcial pela regra 5 de coordenação. A extração física começa em **HISO-004**, após a SPEC. A independência do harness encerra em **HISO-014**; liberação do assistente permanece uma decisão separada em **PISO-010**. Continuidade documental: [handoff desta rodada](../08_runtime/handoffs/harness_isolation_plan_20261003.md).
+Continuidade vigente: HISO-002/HISO-008 são encerrados somente pelas provas documentais do [plano0388](0388_documentation_isolation_reconciliation.md). Os aceites técnicos HISO-004/007 e a independência HISO-014 continuam nos cartões próprios; HISO-005 exige prova positiva futura e nova B6. A liberação do assistente permanece separada em PISO-010. O [handoff de planejamento de03/10](../08_runtime/handoffs/harness_isolation_plan_20261003.md) é histórico; a [reconciliação atual](../08_runtime/handoffs/docs_isolation_20261017.md) registra os documentos e o estado desta rodada.
 
 ## NEXT-D1/NEXT-D2 — ciclo local autorizado de 04/10/2026
 

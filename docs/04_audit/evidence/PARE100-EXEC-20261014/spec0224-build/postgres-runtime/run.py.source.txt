@@ -1,0 +1,18 @@
+import subprocess, json, pathlib, sys, datetime, os
+B = pathlib.Path(__file__).resolve().parent
+W = pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+label, *argv = sys.argv[1:]
+started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+result = subprocess.run(argv, cwd=W, capture_output=True, env=os.environ)
+record = dict(argv=argv, cwd=str(W), envOverrides={k: v for k, v in os.environ.items() if k.startswith(('SPEC0224_PG_', 'SPEC0224_PUBLIC_'))}, startedAt=started, finishedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), exitStatus=result.returncode, streams={}, emptyStreamsOmitted=[])
+for name, data in [('stdout', result.stdout), ('stderr', result.stderr)]:
+    if data:
+        path = B / f'{label}.{name}.log'
+        path.write_bytes(data)
+        record['streams'][name] = str(path)
+        sys.stdout.buffer.write(data)
+    else:
+        record['emptyStreamsOmitted'].append(name)
+(B / f'{label}.json').write_text(json.dumps(record, indent=2)+'\n')
+print(json.dumps(record))
+sys.exit(result.returncode)

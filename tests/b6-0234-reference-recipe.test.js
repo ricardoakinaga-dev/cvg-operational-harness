@@ -1,0 +1,613 @@
+// @vitest-environment node
+import { afterEach, expect, test } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
+import net from 'node:net'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import {
+  buildInstalledReference,
+  inspectReferenceTrace
+} from '../scripts/build-installed-reference.mjs'
+import {
+  canonicalJson,
+  createInstalledIdentityComparator,
+  INSTALLED_IDENTITY_LIMITS
+} from '../scripts/boundary-installed-identity.mjs'
+import {
+  referenceEnvironment,
+  runOwnedProcess
+} from '../scripts/boundary-reference-process.mjs'
+
+const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-runner'
+fs.mkdirSync(BASE, { recursive: true })
+const roots = []
+const cleanup = []
+afterEach(async () => {
+  while (cleanup.length) await cleanup.pop()()
+})
+const write = (file, data) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, data)
+}
+const json = (file, value) => write(file, JSON.stringify(value))
+const git = (root, ...args) =>
+  execFileSync(
+    '/usr/bin/git',
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'user.name=Synthetic Fixture',
+      '-c',
+      'user.email=fixture@invalid.example',
+      ...args
+    ],
+    {
+      cwd: root,
+      env: referenceEnvironment(NODE),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  ).trim()
+
+function fixture({
+  optional = false,
+  config,
+  packageBytes = 12,
+  networkPort = 1
+} = {}) {
+  const base = fs.mkdtempSync(path.join(BASE, 'fixture-'))
+  roots.push(base)
+  const sourceRoot = path.join(base, 'source'),
+    cacheSource = path.join(base, 'cache-source')
+  fs.mkdirSync(sourceRoot)
+  fs.mkdirSync(cacheSource)
+  const sentinel = path.join(base, 'lifecycle-sentinel')
+  const attack = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(sentinel)},'ran');const s=require('node:net').connect(${networkPort},'127.0.0.1');s.on('connect',()=>s.end());s.on('error',()=>{});`
+  const buildTar = (name, extra = {}) => {
+    const staging = path.join(base, name),
+      pkg = path.join(staging, 'package')
+    fs.mkdirSync(pkg, { recursive: true })
+    const manifest = {
+      name,
+      version: '1.0.0',
+      scripts: {
+        preinstall: 'node attack.cjs',
+        install: 'node attack.cjs',
+        postinstall: 'node attack.cjs'
+      },
+      ...extra
+    }
+    json(path.join(pkg, 'package.json'), manifest)
+    write(path.join(pkg, 'attack.cjs'), attack)
+    write(path.join(pkg, 'index.js'), 'x'.repeat(packageBytes))
+    write(path.join(pkg, '.hidden.unknown'), 'complete fixture inventory')
+    write(path.join(pkg, 'executable'), '#!/bin/sh\nexit 0\n')
+    fs.chmodSync(path.join(pkg, 'executable'), 0o755)
+    const tar = path.join(base, name + '.tgz')
+    execFileSync('/usr/bin/tar', ['-czf', tar, '-C', staging, 'package'], {
+      env: referenceEnvironment(NODE)
+    })
+    const payload = fs.readFileSync(tar),
+      hex = createHash('sha512').update(payload).digest('hex')
+    const integrity = 'sha512-' + Buffer.from(hex, 'hex').toString('base64')
+    const cached = path.join(
+      cacheSource,
+      '_cacache/content-v2/sha512',
+      hex.slice(0, 2),
+      hex.slice(2, 4),
+      hex.slice(4)
+    )
+    write(cached, payload)
+    return {
+      version: '1.0.0',
+      resolved:
+        'https://registry.npmjs.org/' + name + '/-/' + name + '-1.0.0.tgz',
+      integrity,
+      cached
+    }
+  }
+  const payload = buildTar('fixture-safe')
+  const rootManifest = {
+    name: 'recipe-fixture',
+    version: '1.0.0',
+    scripts: { preinstall: 'node attack.cjs', postinstall: 'node attack.cjs' },
+    dependencies: { 'fixture-safe': '1.0.0' }
+  }
+  const { cached, ...lockEntry } = payload
+  const packages = {
+    '': {
+      name: rootManifest.name,
+      version: rootManifest.version,
+      dependencies: rootManifest.dependencies
+    },
+    'node_modules/fixture-safe': lockEntry
+  }
+  if (optional) {
+    const item = buildTar('fixture-optional', { os: ['!' + process.platform] })
+    delete item.cached
+    rootManifest.optionalDependencies = { 'fixture-optional': '1.0.0' }
+    packages[''].optionalDependencies = rootManifest.optionalDependencies
+    packages['node_modules/fixture-optional'] = {
+      ...item,
+      optional: true,
+      os: ['!' + process.platform]
+    }
+  }
+  json(path.join(sourceRoot, 'package.json'), rootManifest)
+  json(path.join(sourceRoot, 'package-lock.json'), {
+    name: rootManifest.name,
+    version: '1.0.0',
+    lockfileVersion: 3,
+    requires: true,
+    packages
+  })
+  write(path.join(sourceRoot, 'attack.cjs'), attack)
+  write(
+    path.join(sourceRoot, 'nested/.env.example'),
+    'excluded synthetic example'
+  )
+  write(path.join(sourceRoot, '.env'), 'synthetic environment excluded')
+  write(
+    path.join(sourceRoot, 'docs/node_modules/forbidden-fixture/x'),
+    'exclude nested committed fixture'
+  )
+  write(path.join(sourceRoot, 'nested/dist/x'), 'excluded generated')
+  if (config !== undefined) write(path.join(sourceRoot, '.npmrc'), config)
+  git(sourceRoot, 'init', '-q')
+  git(sourceRoot, 'add', '-f', '--', '.')
+  git(sourceRoot, 'commit', '-q', '-m', 'synthetic offline fixture')
+  const commit = git(sourceRoot, 'rev-parse', 'HEAD')
+  // Working-tree installation is intentionally poisoned and must never be copied.
+  write(
+    path.join(sourceRoot, 'node_modules/fixture-safe/index.js'),
+    'poisoned evaluated installation'
+  )
+  return {
+    base,
+    sourceRoot,
+    cacheSource,
+    outputRoot: path.join(base, 'output'),
+    commit,
+    cached,
+    sentinel,
+    attack
+  }
+}
+const options = (f, extra = {}) => ({
+  sourceRoot: f.sourceRoot,
+  cacheSource: f.cacheSource,
+  outputRoot: f.outputRoot,
+  commit: f.commit,
+  ...extra
+})
+async function refuses(f, extra, code) {
+  await expect(
+    buildInstalledReference(options(f, extra))
+  ).rejects.toMatchObject({ status: 'UNAVAILABLE', ...(code ? { code } : {}) })
+  expect(fs.existsSync(path.join(f.outputRoot, 'reference.json'))).toBe(false)
+  if (fs.existsSync(f.outputRoot))
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(f.outputRoot, 'failure.json'), 'utf8')
+      ).status
+    ).toBe('UNAVAILABLE')
+}
+
+test('ID-04/05/09: real offline ci builds an independent canonical reference; no lifecycle or IP syscall', async () => {
+  const server = net.createServer((socket) => {
+    contacts++
+    socket.end()
+  })
+  let contacts = 0
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  cleanup.push(() => new Promise((resolve) => server.close(resolve)))
+  const f = fixture({ networkPort: server.address().port })
+  const positive = path.join(f.base, 'positive-control.trace')
+  // Same script REALLY writes the sentinel and contacts the controlled listener
+  // when executed; the observer must see those syscalls (not synthetic statuses).
+  await runOwnedProcess(
+    '/usr/bin/strace',
+    [
+      '-f',
+      '-qq',
+      '-e',
+      'trace=process,network',
+      '-o',
+      positive,
+      NODE,
+      path.join(f.sourceRoot, 'attack.cjs')
+    ],
+    { cwd: f.sourceRoot, env: referenceEnvironment(NODE), timeoutMs: 5000 }
+  )
+  expect(fs.readFileSync(f.sentinel, 'utf8')).toBe('ran')
+  expect(contacts).toBe(1)
+  expect(fs.readFileSync(positive, 'utf8')).toMatch(/connect\([^\n]*AF_INET/)
+  expect(() => inspectReferenceTrace(positive, NODE)).toThrowError(
+    'NETWORK_ATTEMPT_OBSERVED'
+  )
+  fs.unlinkSync(f.sentinel)
+  contacts = 0
+  process.env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:1/'
+  process.env.NODE_OPTIONS = '--require=/nonexistent/synthetic-hook'
+  cleanup.push(() => {
+    delete process.env.NPM_CONFIG_REGISTRY
+    delete process.env.NODE_OPTIONS
+  })
+  const before = fs.readFileSync(f.cached)
+  const result = await buildInstalledReference(options(f))
+  expect(fs.readFileSync(result.manifestPath, 'utf8')).toBe(
+    canonicalJson(result.receipt)
+  )
+  expect(result.expectedSha256).toBe(
+    createHash('sha256')
+      .update(fs.readFileSync(result.manifestPath))
+      .digest('hex')
+  )
+  expect(result.receipt.packages).toHaveLength(1)
+  expect(result.receipt.packages[0].entries.map((e) => e.path)).toContain(
+    '.hidden.unknown'
+  )
+  expect(
+    fs.readFileSync(
+      path.join(result.receipt.root, 'node_modules/fixture-safe/index.js'),
+      'utf8'
+    )
+  ).toBe('x'.repeat(12))
+  expect(fs.statSync(f.cached).ino).not.toBe(
+    fs.statSync(
+      path.join(result.receipt.root, 'node_modules/fixture-safe/index.js')
+    ).ino
+  )
+  expect(fs.readFileSync(f.cached)).toEqual(before)
+  for (const name of [
+    '.env',
+    'nested/.env.example',
+    'nested/dist/x',
+    'docs/node_modules/forbidden-fixture/x'
+  ])
+    expect(fs.existsSync(path.join(result.receipt.root, name))).toBe(false)
+  expect(fs.existsSync(f.sentinel)).toBe(false)
+  expect(contacts).toBe(0)
+  const trace = fs.readFileSync(
+    path.join(f.outputRoot, 'logs/npm.trace'),
+    'utf8'
+  )
+  expect(trace).not.toMatch(/socket\(AF_INET|connect\([^\n]*AF_INET/)
+  expect(trace.match(/\bexecve\(/g)).toHaveLength(1)
+  expect(result.receipt.recipe.environment).not.toHaveProperty('HOME')
+  expect(result.receipt.recipe.environment).not.toHaveProperty('NODE_OPTIONS')
+  expect(result.receipt.recipe.environment.NPM_CONFIG_UPDATE_NOTIFIER).toBe(
+    'false'
+  )
+  expect(result.receipt.limits).toEqual(INSTALLED_IDENTITY_LIMITS)
+  expect(result.receipt.usage.maxProcesses).toBeGreaterThanOrEqual(2)
+  expect(result.receipt.usage.maxProcesses).toBeLessThanOrEqual(8)
+  expect(result.receipt.usage.compressedBytes).toBe(before.length)
+  expect(result.receipt).not.toHaveProperty('verified')
+  fs.cpSync(
+    path.join(result.receipt.root, 'node_modules/fixture-safe'),
+    path.join(f.sourceRoot, 'node_modules/fixture-safe'),
+    { recursive: true }
+  )
+  const comparer = createInstalledIdentityComparator(f.sourceRoot, {
+    manifestPath: result.manifestPath,
+    expectedSha256: result.expectedSha256
+  })
+  const verdict = comparer.compare(
+    path.join(f.sourceRoot, 'node_modules/fixture-safe'),
+    'node_modules/fixture-safe'
+  )
+  comparer.finalize()
+  expect(verdict.status).toBe('MATCH')
+  expect(verdict.verified).not.toBe(true)
+}, 30000)
+
+test('ID-04: tampered physical SRI payload cannot create receipt', async () => {
+  const f = fixture()
+  fs.writeFileSync(f.cached, 'tampered actual payload')
+  await refuses(f, {}, 'CACHE_SRI_MISMATCH')
+}, 30000)
+
+test.each(['absent', 'sha1-no', 'sha512-invalid'])(
+  'ID-04: %s SRI is rejected',
+  async (value) => {
+    const f = fixture()
+    const lockPath = path.join(f.sourceRoot, 'package-lock.json')
+    const lock = JSON.parse(fs.readFileSync(lockPath))
+    if (value === 'absent')
+      delete lock.packages['node_modules/fixture-safe'].integrity
+    else lock.packages['node_modules/fixture-safe'].integrity = value
+    json(lockPath, lock)
+    git(f.sourceRoot, 'add', '--', 'package-lock.json')
+    git(f.sourceRoot, 'commit', '-qm', 'invalid SRI fixture')
+    f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
+    await refuses(f, {}, 'CACHE_SRI_REQUIRED')
+  },
+  30000
+)
+
+test('ID-05: uncommitted source bytes and a different commit assertion fail closed', async () => {
+  const f = fixture()
+  write(path.join(f.sourceRoot, 'attack.cjs'), 'source drift')
+  await refuses(f, {}, 'SOURCE_COMMIT_MISMATCH')
+  const g = fixture()
+  await refuses(g, { commit: '0'.repeat(40) }, 'SOURCE_COMMIT_ASSERTION')
+}, 30000)
+
+test.each([
+  'cache=/tmp/escape\n',
+  '//registry.npmjs.org/:_authToken=synthetic\n',
+  'offline=false\n',
+  'onload-script=attack.cjs\n',
+  'update-notifier=true\n'
+])(
+  'ID-05/09: material config escape %s is rejected before npm',
+  async (config) => {
+    const f = fixture({ config })
+    await refuses(f, {}, 'PROJECT_CONFIG_UNKNOWN')
+    expect(fs.existsSync(path.join(f.outputRoot, 'logs/npm.trace'))).toBe(false)
+  },
+  30000
+)
+
+test('ID-05: untrusted node executable is refused without executing it', async () => {
+  const f = fixture(),
+    fake = path.join(f.base, 'fake-node')
+  write(fake, '#!/bin/sh\ntouch ' + f.sentinel + '\n')
+  fs.chmodSync(fake, 0o755)
+  await refuses(f, { nodePath: fake }, 'TOOLCHAIN_NODE_PIN_MISMATCH')
+  expect(fs.existsSync(f.sentinel)).toBe(false)
+}, 30000)
+
+test.each(['beforeNpm', 'afterNpm'])(
+  'ID-05/11: real config/source mutation at %s invalidates recipe',
+  async (phase) => {
+    const f = fixture()
+    await refuses(f, {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          [phase]: ({ snapshot }) =>
+            write(path.join(snapshot, 'package.json'), '{"name":"mutated"}')
+        }
+      }
+    })
+  },
+  30000
+)
+
+test('ID-05: changed empty user config invalidates recipe before execution', async () => {
+  const f = fixture()
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          beforeNpm: ({ configRoot }) =>
+            write(path.join(configRoot, 'user.npmrc'), 'offline=false')
+        }
+      }
+    },
+    'EMPTY_CONFIG_MUTATED'
+  )
+}, 30000)
+
+test('ID-05: changed npm CLI material is refused without executing it', async () => {
+  const f = fixture(),
+    fake = path.join(f.base, 'fake-npm')
+  json(path.join(fake, 'package.json'), { name: 'npm', version: '10.9.8' })
+  write(path.join(fake, 'bin/npm-cli.js'), f.attack)
+  await refuses(f, { npmRoot: fake }, 'TOOLCHAIN_NPM_PIN_MISMATCH')
+  expect(fs.existsSync(f.sentinel)).toBe(false)
+}, 30000)
+
+test('ID-05: HEAD movement invalidates recipe even when tracked input bytes remain identical', async () => {
+  const f = fixture()
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          beforeNpm: () =>
+            git(
+              f.sourceRoot,
+              'commit',
+              '--allow-empty',
+              '-qm',
+              'moved synthetic HEAD'
+            )
+        }
+      }
+    },
+    'SOURCE_COMMIT_ASSERTION'
+  )
+}, 30000)
+
+test('ID-10: highly compressed payload exceeding physical byte ceiling never publishes partial receipt', async () => {
+  const f = fixture({ packageBytes: 128 * 1024 })
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        limits: { maxTotalBytes: 16 * 1024 }
+      }
+    },
+    'REFERENCE_BYTES_LIMIT'
+  )
+}, 30000)
+
+test('ID-05/09: removing verified cache payload after preparation causes actual offline npm failure', async () => {
+  const f = fixture()
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          beforeNpm: ({ cache }) =>
+            fs.rmSync(path.join(cache, '_cacache'), { recursive: true })
+        }
+      }
+    },
+    'PROCESS_NONZERO'
+  )
+  const trace = fs.readFileSync(
+    path.join(f.outputRoot, 'logs/npm.trace'),
+    'utf8'
+  )
+  expect(trace).not.toMatch(/socket\(AF_INET|connect\([^\n]*AF_INET/)
+  expect(
+    fs.readFileSync(path.join(f.outputRoot, 'logs/npm.stderr.log'), 'utf8')
+  ).toMatch(/ENOTCACHED/)
+}, 30000)
+
+test('ID-10: optional platform omission is reported with lock key intact', async () => {
+  const f = fixture({ optional: true })
+  const { receipt } = await buildInstalledReference(options(f))
+  expect(receipt.packages.map((p) => p.key)).toEqual([
+    'node_modules/fixture-safe'
+  ])
+  expect(receipt.unavailable).toEqual([
+    {
+      key: 'node_modules/fixture-optional',
+      reason: 'NOT_INSTALLED_BY_OFFLINE_RECIPE',
+      optional: true,
+      peer: false
+    }
+  ])
+}, 30000)
+
+test('ID-10: foreign optional cache absence is explicit and does not prevent the actual offline recipe', async () => {
+  const f = fixture({ optional: true })
+  const lock = JSON.parse(
+    fs.readFileSync(path.join(f.sourceRoot, 'package-lock.json'), 'utf8')
+  )
+  const integrity = lock.packages['node_modules/fixture-optional'].integrity
+  const hex = Buffer.from(integrity.slice(7), 'base64').toString('hex')
+  fs.unlinkSync(
+    path.join(
+      f.cacheSource,
+      '_cacache/content-v2/sha512',
+      hex.slice(0, 2),
+      hex.slice(2, 4),
+      hex.slice(4)
+    )
+  )
+  const { receipt } = await buildInstalledReference(options(f))
+  expect(receipt.recipe.cacheUnavailable).toEqual([
+    {
+      key: 'node_modules/fixture-optional',
+      integrity,
+      optional: true,
+      reason: 'CACHE_PAYLOAD_UNAVAILABLE'
+    }
+  ])
+  expect(
+    receipt.unavailable.some((p) => p.key === 'node_modules/fixture-optional')
+  ).toBe(true)
+  expect(receipt.packages.map((p) => p.key)).toEqual([
+    'node_modules/fixture-safe'
+  ])
+  expect(receipt.recipe.observation.networkAttempts).toBe(0)
+}, 30000)
+
+test.each([
+  ['maxCompressedBytes', 1, 'CACHE_BYTES_LIMIT'],
+  ['maxEntries', 1, 'SOURCE_LIMIT'],
+  ['maxDepth', 1, 'REFERENCE_DEPTH_LIMIT'],
+  ['maxTotalBytes', 1, 'SOURCE_LIMIT'],
+  ['maxPackageBytes', 1, undefined],
+  ['npmTimeoutMs', 1, undefined],
+  ['maxProcesses', 1, 'PROCESS_COUNT_LIMIT']
+])(
+  'ID-05/10: lowered %s ceiling refuses instead of truncating receipt',
+  async (key, value, code) => {
+    const f = fixture()
+    await refuses(
+      f,
+      { testOnly: { context: 'synthetic-fixture', limits: { [key]: value } } },
+      code
+    )
+  },
+  30000
+)
+
+test('ID-10: unknown options and raised limits cannot alter recipe; existing output cannot be reused', async () => {
+  const f = fixture()
+  await refuses(f, { offline: false }, 'RUNNER_OPTIONS_INVALID')
+  await refuses(
+    f,
+    { testOnly: { context: 'synthetic-fixture', limits: { maxProcesses: 9 } } },
+    'LIMIT_RAISE_FORBIDDEN'
+  )
+  fs.mkdirSync(f.outputRoot)
+  write(path.join(f.outputRoot, 'owned-marker'), 'preserve')
+  await expect(buildInstalledReference(options(f))).rejects.toMatchObject({
+    code: 'OUTPUT_ALREADY_EXISTS'
+  })
+  expect(fs.readFileSync(path.join(f.outputRoot, 'owned-marker'), 'utf8')).toBe(
+    'preserve'
+  )
+}, 30000)
+
+test('ID-04: output root under evaluated source and canonical cache aliases are refused', async () => {
+  const f = fixture()
+  await expect(
+    buildInstalledReference(
+      options(f, { outputRoot: path.join(f.sourceRoot, 'alias') })
+    )
+  ).rejects.toMatchObject({ code: 'OUTPUT_NOT_INDEPENDENT' })
+  const alias = path.join(f.base, 'source-alias')
+  fs.symlinkSync(f.sourceRoot, alias)
+  await expect(
+    buildInstalledReference(
+      options(f, { outputRoot: path.join(alias, 'output') })
+    )
+  ).rejects.toMatchObject({ code: 'OUTPUT_NOT_INDEPENDENT' })
+}, 30000)
+
+test('ID-05: actual publication filesystem failure leaves no success receipt', async () => {
+  const f = fixture()
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          afterNpm: () =>
+            write(
+              path.join(f.outputRoot, '.reference.partial'),
+              'deliberately occupied staging path'
+            )
+        }
+      }
+    },
+    'EEXIST'
+  )
+}, 30000)
+
+test('ID-05/09: timeout kills observed detached owned descendant while leaving unrelated process alive', async () => {
+  const f = fixture()
+  const pidPath = path.join(f.base, 'detached.pid')
+  const code = `const {spawn}=require('node:child_process');const c=spawn(${JSON.stringify(NODE)},['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidPath)},String(c.pid));c.unref();setInterval(()=>{},1000);`
+  await expect(
+    runOwnedProcess(NODE, ['-e', code], {
+      cwd: f.base,
+      env: referenceEnvironment(NODE),
+      timeoutMs: 500,
+      stdoutPath: path.join(f.base, 'timeout.stdout'),
+      stderrPath: path.join(f.base, 'timeout.stderr')
+    })
+  ).rejects.toMatchObject({ code: 'PROCESS_TIMEOUT' })
+  const pid = Number(fs.readFileSync(pidPath, 'utf8'))
+  // A killed orphan may briefly be a zombie pending init reaping; it cannot run.
+  if (fs.existsSync('/proc/' + pid + '/stat'))
+    expect(fs.readFileSync('/proc/' + pid + '/stat', 'utf8')).toMatch(/\) Z /)
+  expect(() => process.kill(process.pid, 0)).not.toThrow()
+}, 30000)

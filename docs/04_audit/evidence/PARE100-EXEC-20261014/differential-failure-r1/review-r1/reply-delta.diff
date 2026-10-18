@@ -1,0 +1,279 @@
+--- before/cvg-reply.ts
++++ current/cvg-reply.ts
+@@ -5,7 +5,10 @@
+   ApprovalEngine as ApprovalDomain,
+   InMemoryApprovalStore
+ } from '@cvg/approval-engine'
+-import type { ApprovalEngine as ApprovalPort } from '@cvg/harness-contracts'
++import type {
++  ApprovalEngine as ApprovalPort,
++  ModelGateway
++} from '@cvg/harness-contracts'
+ 
+ export interface ReplyCase {
+   version: 1
+@@ -14,9 +17,8 @@
+   fragments: string[]
+ }
+ 
+-/** Real public SDK/kernel/session path; only the external model is scripted. */
+-export async function runCvgReply(fixture: ReplyCase) {
+-  let modelBodies = 0
++/** Shared real composition; callers own only the synthetic external model. */
++export function createCvgDifferentialSdk(modelGateway: ModelGateway) {
+   const sessions = new InMemorySessionEventStore()
+   const policyDomain = new PolicyEngine({ profile: REFERENCE_POLICY_PROFILE })
+   const approvalDomain = new ApprovalDomain({
+@@ -46,7 +48,7 @@
+       }
+     }
+   }
+-  const sdk = createSdk({
++  return createSdk({
+     tenantId: 'pare100_synthetic',
+     sessions,
+     approvals,
+@@ -70,17 +72,23 @@
+         }
+       }
+     },
+-    modelGateway: {
+-      complete: async () => {
+-        if (++modelBodies > 1) throw new Error('unexpected model call')
+-        return {
+-          text: fixture.fragments.join(''),
+-          provider: 'pare100-synthetic',
+-          model: 'keyless-v1',
+-          inputTokens: 1,
+-          outputTokens: 2,
+-          costUsd: 0
+-        }
++    modelGateway
++  })
++}
++
++/** Real public SDK/kernel/session path; only the external model is scripted. */
++export async function runCvgReply(fixture: ReplyCase) {
++  let modelBodies = 0
++  const sdk = createCvgDifferentialSdk({
++    complete: async () => {
++      if (++modelBodies > 1) throw new Error('unexpected model call')
++      return {
++        text: fixture.fragments.join(''),
++        provider: 'pare100-synthetic',
++        model: 'keyless-v1',
++        inputTokens: 1,
++        outputTokens: 2,
++        costUsd: 0
+       }
+     }
+   })
+--- before/reference-agent-driver.mjs
++++ current/reference-agent-driver.mjs
+@@ -12,6 +12,11 @@
+ import https from 'node:https'
+ import http2 from 'node:http2'
+ import dgram from 'node:dgram'
++import {
++  validateFailureCase,
++  makeFailure,
++  snapshotFailure
++} from './failure-case.mjs'
+ 
+ const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes'
+ const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
+@@ -21,22 +26,30 @@
+ }
+ const json = (value) => JSON.parse(JSON.stringify(value))
+ 
+-async function main() {
++export async function runReferenceFixture(mode = 'reply') {
++  if (!['reply', 'failure'].includes(mode)) fail('invalid driver mode')
+   if (process.argv.length !== 3) fail('one fixture path required')
++  if (!process.env.HOME) fail('isolated cwd/home required')
++  const home = fs.realpathSync(process.env.HOME)
++  const cwd = fs.realpathSync(process.cwd())
+   if (
+-    path.resolve(process.cwd()) === REFERENCE_ROOT ||
+-    !process.env.HOME ||
+-    !path.resolve(process.cwd()).startsWith(path.resolve(process.env.HOME))
++    cwd === REFERENCE_ROOT ||
++    cwd.startsWith(`${REFERENCE_ROOT}${path.sep}`) ||
++    (cwd !== home && !cwd.startsWith(`${home}${path.sep}`))
+   )
+     fail('isolated cwd/home required')
+   const filename = path.resolve(process.argv[2])
++  const fixtureStat = fs.lstatSync(filename)
+   if (
+-    fs.lstatSync(filename).isSymbolicLink() ||
+-    fs.statSync(filename).size > 65536
++    !fixtureStat.isFile() ||
++    fixtureStat.nlink !== 1 ||
++    fixtureStat.size > 65536 ||
++    !fs.realpathSync(filename).startsWith(`${home}${path.sep}`)
+   )
+     fail('unsafe fixture')
+   const fixture = JSON.parse(fs.readFileSync(filename, 'utf8'))
+-  if (
++  if (mode === 'failure') validateFailureCase(fixture)
++  else if (
+     !fixture ||
+     typeof fixture !== 'object' ||
+     Array.isArray(fixture) ||
+@@ -148,13 +161,20 @@
+   const ctx = new Context()
+   const events = [],
+     requests = [],
+-    chunks = []
++    chunks = [],
++    adapterErrors = [],
++    liveErrors = []
+   let calls = 0
+   class ScriptedAdapter extends LlmAdapter {
+     async *stream(options) {
+       if (++calls > 1) fail('unexpected_model_call')
+       if (options.signal?.aborted) fail('cancelled_before_model')
+       requests.push(json(options.messages))
++      if (mode === 'failure') {
++        const error = makeFailure(fixture)
++        adapterErrors.push(snapshotFailure(error))
++        throw error
++      }
+       const script = [
+         { type: 'block-start', index: 0, blockType: 'text' },
+         ...fixture.fragments.map((text) => ({
+@@ -182,6 +202,10 @@
+     ctx.on('session/event', (_session, event) => {
+       events.push(json(event))
+     })
++    if (mode === 'failure')
++      ctx.on('agent/error', ({ turn, step, error }) => {
++        liveErrors.push({ turn, step, error: snapshotFailure(error) })
++      })
+     ctx.llm.registerAdapter(['pare100-synthetic'], new ScriptedAdapter())
+     const driver = await mountAgentLoopTestHarness(ctx)
+     const agent = await driver.create(
+@@ -202,22 +226,35 @@
+     await agent.whenIdle()
+     const messages = json(agent.session.deriveMessages())
+     const assistant = messages.filter((x) => x.role === 'assistant')
+-    native = { events, messages, requests, chunks, modelCalls: calls }
+-    if (calls !== 1 || assistant.length !== 1 || networkAttempts.length)
++    native = {
++      events,
++      messages,
++      requests,
++      chunks,
++      modelCalls: calls,
++      ...(mode === 'failure' ? { adapterErrors, liveErrors } : {})
++    }
++    if (
++      calls !== 1 ||
++      (mode === 'reply' && assistant.length !== 1) ||
++      networkAttempts.length
++    )
+       fail('missing_or_extra_execution')
+-    native.finalText = assistant[0].content
+-      .filter((x) => x.type === 'text')
+-      .map((x) => x.text)
+-      .join('')
+-    const completed = events.filter((x) => x.type === 'assistant/message')
+-    if (
+-      completed.length !== 1 ||
+-      !completed[0].data.usage ||
+-      !Number.isSafeInteger(completed[0].data.usage.inputTokens) ||
+-      !Number.isSafeInteger(completed[0].data.usage.outputTokens)
+-    )
+-      fail('missing_native_usage')
+-    native.observedUsage = json(completed[0].data.usage)
++    if (mode === 'reply') {
++      native.finalText = assistant[0].content
++        .filter((x) => x.type === 'text')
++        .map((x) => x.text)
++        .join('')
++      const completed = events.filter((x) => x.type === 'assistant/message')
++      if (
++        completed.length !== 1 ||
++        !completed[0].data.usage ||
++        !Number.isSafeInteger(completed[0].data.usage.inputTokens) ||
++        !Number.isSafeInteger(completed[0].data.usage.outputTokens)
++      )
++        fail('missing_native_usage')
++      native.observedUsage = json(completed[0].data.usage)
++    }
+     native.toolCalls = events.filter((x) => x.type === 'tool/call').length
+   } finally {
+     await ctx.fiber.dispose()
+@@ -262,20 +299,28 @@
+       },
+       native,
+       networkAttempts,
+-      projection: {
+-        text: native.finalText,
+-        modelCalls: native.modelCalls,
+-        toolCalls: native.toolCalls,
+-        inputTokens: native.observedUsage.inputTokens,
+-        outputTokens: native.observedUsage.outputTokens,
+-        effects: []
+-      },
+-      projectionStatus: 'BOUNDED_REPLY_ONLY_NOT_FULL_PARITY'
++      ...(mode === 'failure'
++        ? { observationStatus: 'NATIVE_FAILURE_MEASUREMENT_NOT_PARITY' }
++        : {
++            projection: {
++              text: native.finalText,
++              modelCalls: native.modelCalls,
++              toolCalls: native.toolCalls,
++              inputTokens: native.observedUsage.inputTokens,
++              outputTokens: native.observedUsage.outputTokens,
++              effects: []
++            },
++            projectionStatus: 'BOUNDED_REPLY_ONLY_NOT_FULL_PARITY'
++          })
+     }) + '\n'
+   )
+ }
+ 
+-main().catch((error) => {
+-  process.stderr.write(`${error.message}\n`)
+-  process.exitCode = 1
+-})
++if (
++  process.argv[1] &&
++  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
++)
++  runReferenceFixture().catch((error) => {
++    process.stderr.write(`${error.message}\n`)
++    process.exitCode = 1
++  })
+--- before/reply-differential.test.ts
++++ current/reply-differential.test.ts
+@@ -3,7 +3,7 @@
+ import os from 'node:os'
+ import crypto from 'node:crypto'
+ import { spawnSync } from 'node:child_process'
+-import { describe, expect, it } from 'vitest'
++import { afterAll, describe, expect, it } from 'vitest'
+ import { runCvgReply, type ReplyCase } from './cvg-reply.ts'
+ import { compareReplyProjections } from './compare-reply.mjs'
+ 
+@@ -28,11 +28,16 @@
+   }
+ ]
+ const script = path.resolve('tests/differential/reference-agent-driver.mjs')
+-const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/differential'
+-)
++const ownedEvidence = process.env.CVG_DIFFERENTIAL_EVIDENCE_DIR === undefined
++const evidence = ownedEvidence
++  ? fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-reply-evidence-'))
++  : path.resolve(process.env.CVG_DIFFERENTIAL_EVIDENCE_DIR!)
+ const sha = (value: string) =>
+   crypto.createHash('sha256').update(value).digest('hex')
++
++afterAll(() => {
++  if (ownedEvidence) fs.rmSync(evidence, { recursive: true, force: true })
++})
+ 
+ describe('SPEC0213 bounded installed-loop reply differential', () => {
+   for (const fixture of cases)

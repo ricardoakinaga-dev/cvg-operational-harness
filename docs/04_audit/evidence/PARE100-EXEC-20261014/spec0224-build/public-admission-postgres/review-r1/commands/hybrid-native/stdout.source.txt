@@ -1,0 +1,171 @@
+        }
+        let remove = -1
+        for (let index = 0; index < selected.length; index += 1) {
+          const candidate = selected[index]!.item
+          if (
+            optionalItem(candidate) &&
+            (remove < 0 ||
+              CONTEXT_PRIORITIES.indexOf(candidate.priority) >=
+                CONTEXT_PRIORITIES.indexOf(selected[remove]!.item.priority))
+          )
+            remove = index
+        }
+        if (remove < 0) throw overflow
+        selected = selected.filter((_entry, index) => index !== remove)
+      }
+      ensureTime()
+      const snapshot = request!
+      const measured = measurement!
+      const requestSha256 = completeDigest(snapshot)
+      const reserved = await decisionAdmission.reserve({
+        request: snapshot,
+        measurement: measured,
+        attempt
+      })
+      checkReceipt(
+        reserved,
+        context,
+        snapshot,
+        measured,
+        requestSha256,
+        'RESERVED'
+      )
+      if (decisionAdmissionIds.includes(reserved.admissionId)) {
+        throw new ToolResultContextError(
+          'STATE_CONFLICT',
+          'Admission ID reused across attempts',
+          'STATE_CONFLICT'
+        )
+      }
+      let result: ModelResult | undefined
+      try {
+        ensureTime()
+        result = await withinDecisionDeadline(
+          () =>
+            model.complete(
+              Object.freeze({
+                ...snapshot,
+                ...(input.signal ? { signal: input.signal } : {})
+              })
+            ),
+          remainingMs(),
+          input.signal
+        )
+        ensureTime()
+        if (
+          !result ||
+          typeof result.text !== 'string' ||
+          result.provider !== measured.provider ||
+          result.model !== measured.model ||
+          !Number.isSafeInteger(result.inputTokens) ||
+          result.inputTokens < 0 ||
+          result.inputTokens > measured.inputUpperBoundTokens ||
+          !Number.isSafeInteger(result.outputTokens) ||
+          result.outputTokens < 0 ||
+          result.outputTokens > COMPLETE_DECISION_OUTPUT_TOKENS ||
+          !finiteNonnegative(result.costUsd) ||
+          result.costUsd > measured.costUpperBoundUsd
+        ) {
+          this.decisionPairBreached = true
+          throw new ToolResultContextError(
+            'ADMISSION_BREACH',
+            'Native model identity or usage violates qualified measurement'
+          )
+        }
+        result = freezeComplete(
+          JSON.parse(canonicalizeCompleteJson(result, REQUEST_JSON_LIMITS))
+        ) as ModelResult
+      } catch (error) {
+        if (
+          result &&
+          Number.isSafeInteger(result.inputTokens) &&
+          result.inputTokens >= 0 &&
+          Number.isSafeInteger(result.outputTokens) &&
+          result.outputTokens >= 0 &&
+          finiteNonnegative(result.costUsd) &&
+          error instanceof ToolResultContextError &&
+          error.code === 'ADMISSION_BREACH'
+        ) {
+          // Let the native runtime retain finite observed overuse. An UNKNOWN
+          // without this result would charge only the breached upper bound.
+          await decisionAdmission.settle({
+            kind: 'RESULT',
+            admissionId: reserved.admissionId,
+            requestSha256,
+            result
+          })
+          throw error
+        }
+        await decisionAdmission.settle({
+          kind: 'UNKNOWN',
+          admissionId: reserved.admissionId,
+          requestSha256,
+          reason:
+            error instanceof ToolResultContextError &&
+            error.code === 'ADMISSION_BREACH'
+              ? 'ADMISSION_BREACH'
+              : 'DECISION_USAGE_UNKNOWN'
+        })
+        if (
+          error instanceof ToolResultContextError &&
+          error.code === 'ADMISSION_BREACH'
+        )
+          throw error
+        throw new ToolResultContextError(
+          'DECISION_USAGE_UNKNOWN',
+          'Model call failed, was cancelled, returned invalid data or missed its deadline'
+        )
+      }
+      const settled = await decisionAdmission.settle({
+        kind: 'RESULT',
+        admissionId: reserved.admissionId,
+        requestSha256,
+        result
+      })
+      checkReceipt(
+        settled,
+        context,
+        snapshot,
+        measured,
+        requestSha256,
+        'SETTLED',
+        reserved
+      )
+      if (
+        settled.actual?.modelCalls !== 1 ||
+        settled.actual.inputTokens !== result.inputTokens ||
+        settled.actual.outputTokens !== result.outputTokens ||
+        settled.actual.costUsd !== result.costUsd ||
+        (settled.resultSha256 !== undefined &&
+          settled.resultSha256 !== completeDigest(result))
+      ) {
+        throw new ToolResultContextError(
+          'STATE_CONFLICT',
+          'Settlement does not bind the native result',
+          'STATE_CONFLICT'
+        )
+      }
+      decisionAdmissionIds.push(settled.admissionId)
+      ensureTime()
+      let parsed: unknown
+      try {
+        parsed = parseDecisionText(result.text)
+      } catch (error) {
+        if (repairs >= this.maxDecisionRepairs) throw error
+        repairs += 1
+        errors = [
+          error instanceof Error ? error.message : 'unparseable decision'
+        ]
+        continue
+      }
+      const validation = validateLoopDecision(parsed)
+      errors = validation.valid
+        ? disallowedTypeErrors(sanitizeLoopDecision(parsed), context)
+        : validation.errors
+      if (errors.length === 0)
+        return { decision: sanitizeLoopDecision(parsed), decisionAdmissionIds }
+      if (repairs >= this.maxDecisionRepairs) {
+        throw new OrchestratorDecisionError(
+          'decision_invalid',
+          `Orchestrator decision stayed invalid after ${repairs} repairs: ${errors.join('; ')}`
+        )

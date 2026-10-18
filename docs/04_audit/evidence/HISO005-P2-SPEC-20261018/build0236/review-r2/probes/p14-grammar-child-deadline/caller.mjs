@@ -1,0 +1,1 @@
+import fs from 'node:fs'; import {runSemanticBoundary} from '/home/ricardo/cvg-candidates/hiso005-integrated-20261018/scripts/boundary-semantic-engine.mjs'; const input=JSON.parse(fs.readFileSync(process.argv[2])); process.stdout.write(JSON.stringify(runSemanticBoundary(input)));

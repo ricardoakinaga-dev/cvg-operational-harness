@@ -1,0 +1,96 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const w='/tmp/cvg-claude100-exec-20261017/foundation-th06-candidate',ts=require(w+'/node_modules/typescript'),dir=w+'/packages/persistence/src/__tests__/';
+const names=['complete-admission-capacity-postgres.integration.ts','complete-bound-admission-postgres.integration.ts','complete-settlement-public-postgres.integration.ts','complete-tool-process-restart.test.ts','complete-tool-public-restart.test.ts','fixtures/complete-process-support.ts'];
+function parse(name,text){return ts.createSourceFile(name,text,ts.ScriptTarget.Latest,true)}
+function edit(name,fn){const p=dir+name,s=fs.readFileSync(p,'utf8'),r=fn(s);assert.notEqual(s,r,'No changes '+name);fs.writeFileSync(p,r)}
+function once(s,a,b){assert.equal(s.split(a).length,2,'Expected unique '+a.slice(0,90));return s.replace(a,b)}
+function replacements(s,rs){rs.sort((a,b)=>b.start-a.start);for(const r of rs)s=s.slice(0,r.start)+r.text+s.slice(r.end);return s}
+function transformNodes(name,s,predicate,render){const sf=parse(name,s),rs=[];function walk(n){if(predicate(n,sf)){rs.push({start:n.getStart(sf),end:n.end,text:render(n,sf)});return}ts.forEachChild(n,walk)}walk(sf);return replacements(s,rs)}
+// All simple resource finalizers, including the three original F01 scopes except public runChild.
+for(const name of names)edit(name,s=>{
+ if(name!=='fixtures/complete-process-support.ts') {
+ const sf=parse(name,s);let imp;ts.forEachChild(sf,n=>{if(ts.isImportDeclaration(n)&&n.moduleSpecifier.text==='./fixtures/complete-process-support.ts')imp=n});assert(imp,'fixture import');
+ const bindings=imp.importClause.namedBindings; const old=bindings.getText(sf);
+ const entries=bindings.elements.map(n=>n.getText(sf));for(const item of ['withCompleteCleanup','cleanupCompleteChildren'])if(!entries.includes(item))entries.push(item);
+ s=s.slice(0,bindings.getStart(sf))+'{'+entries.join(', ')+'}'+s.slice(bindings.end);
+ }
+ // Remove duplicate import when consumer already used cleanupCompleteChildren.
+ s=s.replace('  cleanupCompleteChildren,\n  cleanupCompleteChildren,','  cleanupCompleteChildren,');
+ return transformNodes(name,s,(n,sf)=>ts.isTryStatement(n)&&!n.catchClause&&!!n.finallyBlock&&(/await (?:reader|db|pool|admin|handle|executable)\??\.(?:end|close)\(\)/.test(n.finallyBlock.getText(sf))||/a\.release\.resolve\(\)/.test(n.finallyBlock.getText(sf))), (n,sf)=>{
+ const f=n.finallyBlock.getText(sf),ends=[...f.matchAll(/await ((?:reader|db|pool|admin|handle|executable)\??\.(?:end|close)\(\))/g)].map(x=>'() => '+x[1]);
+ const cleanups=ends.length?ends:['async () => '+f];
+ return 'return await withCompleteCleanup(async () => '+n.tryBlock.getText(sf)+', ['+cleanups.join(', ')+'])';
+ });
+});
+edit('fixtures/complete-process-support.ts',s=>{
+ // Catch-only ownership transfers: HOME must stay allocated on success.
+ s=s.replaceAll('    await rm(home, { recursive: true })\n    throw error','    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], { error })\n    throw error');
+ s=once(s,'  let primary: unknown\n  try {\n    const stdout = await Promise.race([','  return await withCompleteCleanup(async () => {\n    const stdout = await Promise.race([');
+ const a='  } catch (error) {\n    primary = error\n    throw error\n  } finally {\n    try {\n      await owned.stop()\n    } catch (error) {\n      if (primary && primary !== error)\n        throw new AggregateError(\n          [primary, error],\n          \'Inspect failed; cleanup also failed\',\n          { cause: primary }\n        )\n      throw error\n    }\n  }';
+ s=once(s,a,'  }, [() => owned.stop()])');
+ s=once(s,'    children.map((child) => child.stop())','    children.map((child) => Promise.resolve().then(() => child.stop()))');
+ s=once(s,'  cleanups: readonly (() => Promise<unknown>)[],','  cleanups: readonly (() => unknown)[],');
+ const old="  const reject = (): never => {\n    const distinct = [...new Set(errors)]\n    if (distinct.length === 1) throw distinct[0]\n    throw new AggregateError(distinct, 'Fixture and resource cleanup failed', {\n      cause: distinct[0]\n    })\n  }";
+ s=once(s,old,"  const reject = (): never => {\n    throw completeCleanupError(errors)!.error\n  }");
+ const code=`/** A presence wrapper retains even a thrown undefined; one policy for all scopes. */
+export function completeCleanupError(errors: readonly unknown[]): { error: unknown } | undefined {
+  const distinct = [...new Set(errors)]
+  if (!distinct.length) return undefined
+  return { error: distinct.length === 1 ? distinct[0] : new AggregateError(
+    distinct, 'Fixture and resource cleanup failed', { cause: distinct[0] }
+  ) }
+}
+
+/** The action owns its resource until all safe finalizers have completed. */
+export async function withCompleteCleanup<T>(
+  action: () => T | Promise<T>,
+  cleanups: readonly (() => unknown)[]
+): Promise<T> {
+  let result!: T
+  let primary: { error: unknown } | undefined
+  try { result = await action() } catch (error) { primary = { error } }
+  await cleanupCompleteChildren([], cleanups, primary)
+  return result
+}
+
+`;
+ return once(s,'/** Child join is mandatory before DB cleanup;',code+'/** Child join is mandatory before DB cleanup;');
+});
+// Pool constructors transfer ownership only after all fallible store construction succeeds.
+for(const name of ['complete-tool-process-restart.test.ts','complete-tool-public-restart.test.ts'])edit(name,s=>{
+ const sf=parse(name,s);let connect;ts.forEachChild(sf,n=>{if(ts.isFunctionDeclaration(n)&&n.name.text==='connect')connect=n});assert(connect);
+ const ret=connect.body.statements.at(-1);assert(ts.isReturnStatement(ret));return replacements(s,[{start:ret.getStart(sf),end:ret.end,text:'try { '+ret.getText(sf)+' } catch (error) { await cleanupCompleteChildren([], [() => pool.end()], { error }); throw error }'}]);
+});
+edit('complete-tool-public-restart.test.ts',s=>{
+ s=once(s,'    await trace()\n    await save(join(dir, `${childRole}.error.json`), errorInfo(e))\n    throw e','    await cleanupCompleteChildren([], [trace, () => save(join(dir, `${childRole}.error.json`), errorInfo(e))], { error: e })\n    throw e');
+ s=once(s,'          await trace()\n          throw e','          await cleanupCompleteChildren([], [trace], { error: e })\n          throw e');
+ s=once(s,'  } finally {\n    await pool.end()\n  }\n}\nasync function child','  }\n}\nasync function child');
+ // Protect every fallible operation after connect, including pre-run constructions and save.
+ const sf=parse('public',s);let fn;ts.forEachChild(sf,n=>{if(ts.isFunctionDeclaration(n)&&n.name.text==='runChild')fn=n});assert(fn);const st=fn.body.statements;
+ s=replacements(s,[{start:st[1].getStart(sf),end:st.at(-1).end,text:'return await withCompleteCleanup(async () => {\n'+s.slice(st[1].getStart(sf),st.at(-1).end)+'\n}, [() => pool.end()])'}]);
+ s=s.replaceAll('let primary: unknown','let primary: { error: unknown } | undefined').replaceAll('primary = error','primary = { error }').replace('await stopCompleteChildren(ownedChildren, primary)','await cleanupCompleteChildren(ownedChildren, [], primary)').replace('await stopCompleteChildren(children, primary)','await cleanupCompleteChildren(children, [], primary)');
+ s=s.replace('  stopCompleteChildren,\n','');return s;
+});
+edit('complete-bound-admission-postgres.integration.ts',s=>{
+ s=once(s,"    await save(join(args.dir, 'error.json'), {\n      error: errorInfo(error),\n      events,\n      calls,\n      measurements\n    })\n    throw error", "    await cleanupCompleteChildren([], [() => save(join(args.dir, 'error.json'), {\n      error: errorInfo(error), events, calls, measurements\n    })], { error })\n    throw error");
+ s=once(s,'      await pool?.end()\n      await admin?.end()','      await cleanupCompleteChildren([], [() => pool?.end(), () => admin?.end()])');
+ s=once(s,'async function settleWorkers(primary?: unknown) {\n  await stopCompleteChildren(workers, primary)\n}','async function settleWorkers(primary?: { error: unknown }) {\n  await cleanupCompleteChildren(workers, [], primary)\n}');
+ s=s.replace('  stopCompleteChildren\n','').replace('let primary: unknown','let primary: { error: unknown } | undefined').replace('primary = error','primary = { error }');return s;
+});
+edit('complete-admission-capacity-postgres.integration.ts',s=>{
+ s=once(s,'        let checkError: unknown','        let checkError: unknown\n        let primary: { error: unknown } | undefined');
+ s=once(s,'          checkError = error','          checkError = error\n          primary = { error }');
+ const sf=parse('capacity',s);return transformNodes('capacity',s,(n,sf)=>ts.isTryStatement(n)&&!!n.catchClause&&!!n.finallyBlock&&n.finallyBlock.getText(sf).includes('observation.countsAtFinally'),(n,sf)=>{
+ const sts=n.finallyBlock.statements;const last=sts.slice(-3);assert(last.every(x=>x.getText(sf).startsWith('await save(')));
+ const meta=s.slice(sts[0].getStart(sf),sts.at(-4).end).replace('error: checkError ? errorInfo(checkError) : undefined','error: primary ? errorInfo(checkError) : undefined');
+ const saves=last.map(x=>'() => '+x.expression.expression.getText(sf));
+ return 'try '+n.tryBlock.getText(sf)+' '+n.catchClause.getText(sf)+' finally { await cleanupCompleteChildren([], [async () => { '+meta+' }, '+saves.join(', ')+'], primary) }';
+ });
+});
+// Settlement diagnostics and shared attempt lifetime.
+edit('complete-settlement-public-postgres.integration.ts',s=>{
+ s=once(s,'  cleanupCompleteChildren,','  cleanupCompleteChildren,\n  completeCleanupError,');
+ s=once(s,"  const original = client.query.bind(client)","  const original = client.query.bind(client)"); // requires a following real replacement below
+ return s+'\n';
+});
+console.log('Core resource scopes transformed; settlement remaining.')

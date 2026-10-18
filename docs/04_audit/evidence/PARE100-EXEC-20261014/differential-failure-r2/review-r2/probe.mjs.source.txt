@@ -1,0 +1,54 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { measureModelFailureContracts as now } from './project/tests/differential/compare-model-failure.mjs'
+import { measureModelFailureContracts as before } from './baseline/compare-model-failure.mjs'
+import { readReferenceInventory } from './project/tests/differential/reference-inventory.mjs'
+const root=path.dirname(fileURLToPath(import.meta.url));
+const cases=['error-ascii','error-unicode','error-cause'];let results=[];
+const mutations=[
+ ['header data removed',r=>delete r.native.events[6].data],
+ ['context data removed',r=>delete r.native.events[7].data],
+ ['model-request removed',(_r,c)=>delete c.native.events[2].payload.request],
+ ['persisted user tampered',r=>r.native.messages[1].content[0].text+='bad'],
+ ['persisted system tampered',r=>r.native.messages[0].content[0].text+='bad'],
+ ['persisted tool added',r=>r.native.messages.push({role:'tool',content:'bad'})],
+ ['turn effects added',(_r,c)=>c.native.turn.effects=[{bad:true}]],
+ ['inventory zero hash',r=>r.reference.artifacts[0].sha256='0'.repeat(64)],
+ ['inventory nonexistent',r=>r.reference.artifacts[0].file=r.reference.root+'/DOES-NOT-EXIST.js'],
+ ['inventory directory',r=>r.reference.artifacts[0].file=r.reference.root],
+ ['inventory export swap',r=>Object.assign(r.reference.artifacts[0],{file:r.reference.artifacts[1].file,sha256:r.reference.artifacts[1].sha256})],
+ ['inventory reordered',r=>r.reference.artifacts.reverse()],
+ ['inventory extra field',r=>r.reference.artifacts[0].effects=['bad']],
+ ['native reference event missing',r=>r.native.events.splice(6,1)],
+ ['native CVG event missing',(_r,c)=>c.native.events.splice(2,1)],
+ ['header payload extra',r=>r.native.events[6].data.header.tools=[{bad:true}]],
+ ['context payload extra',r=>r.native.events[7].data.effects=[{bad:true}]],
+ ['request correlation mismatch',(_r,c)=>c.native.requests[0].request.correlationId='wrong'],
+ ['session mismatch',(_r,c)=>c.native.events[2].sessionId='wrong'],
+ ['trace mismatch',(_r,c)=>c.native.events[2].traceId='wrong'],
+ ['turn payload correlation mismatch',(_r,c)=>c.native.events[1].payload.correlationId='wrong'],
+ ['wrong fingerprint',(_r,c)=>c.native.events[0].schemaFingerprint=c.native.events[1].schemaFingerprint],
+ ['reference append removed',r=>delete r.native.events[4].surfaceOp],
+ ['reference append changed',r=>r.native.events[5].surfaceOp='replace'],
+ ['CVG request context removed',(_r,c)=>delete c.native.requests[0].request.context],
+ ['CVG request extra tool',(_r,c)=>c.native.requests[0].request.tools=[{}]],
+ ['reference request tampered',r=>r.native.requests[0][0].content[0].text+='bad'],
+ ['adapter error name changed',r=>r.native.adapterErrors[0].name='Fake'],
+ ['adapter error cause changed',(_r,c)=>c.native.adapterErrors[0].cause={name:'Error',message:'wrong',cause:null}],
+ ['live error cause invented',r=>r.native.liveErrors[0].error.cause={name:'Error',message:'wrong',cause:null}],
+ ['terminal error changed',r=>r.native.events[10].data.reason.error.message+='bad'],
+ ['attempt error changed',r=>r.native.events[8].data.stream[0].chunk.reason.failure.code='BAD'],
+ ['CVG stop changed',(_r,c)=>c.native.turn.stopReason='COMPLETED'],
+ ['equal counters despite missing event',r=>r.native.events.pop()],
+ ['reference inserted mismatch',r=>r.native.events[0].data.inserted[0].content[0].text+='bad'],
+ ['tool effect outer',r=>r.effects=[{}]],
+ ['CVG request message tampered',(_r,c)=>c.native.events[2].payload.request.messages[0].content+='bad'],
+ ['request signal false',(_r,c)=>c.native.requests[0].signalProvided=false],
+ ['CVG event duplicate id',(_r,c)=>c.native.events[1].eventId=c.native.events[0].eventId]
+];
+const execute=(fn,r,c,f)=>{try {let value=fn(r,c,f);return {accepted:true,status:value.status,fullParity:value.fullParity}}catch(e){return {accepted:false,error:e.message}}};
+for(const id of cases){const d=JSON.parse(fs.readFileSync(path.join(root,'own-results/real-explicit-v4/model-failure',id+'.native.json')));results.push({id,mutation:'valid observation',current:execute(now,d.reference,d.cvg,d.fixture)});
+ for(const [label,mutate]of mutations){const r=structuredClone(d.reference),c=structuredClone(d.cvg);mutate(r,c);results.push({id,mutation:label,current:execute(now,r,c,d.fixture),before:execute(before,r,c,d.fixture)})}}
+fs.writeFileSync(path.join(root,'own-results/mutation-results.json'),JSON.stringify({inventory:readReferenceInventory(),results},null,2));
+const invalid=results.filter(x=>x.mutation!=='valid observation'&&x.current.accepted);console.log(JSON.stringify({valid:results.filter(x=>x.mutation==='valid observation').map(x=>x.current),mutations:mutations.length*3,unexpectedAccepted:invalid,beforeAccepted:results.filter(x=>x.before?.accepted).length}));if(invalid.length)process.exitCode=1;

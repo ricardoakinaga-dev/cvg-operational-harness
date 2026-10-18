@@ -1,0 +1,541 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index 4f8367f8..73ec8902 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -4,11 +4,16 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import { createHash } from 'node:crypto'
+-import { createRequire } from 'node:module'
++import { createRequire, stripTypeScriptTypes, Module } from 'node:module'
++import vm from 'node:vm'
+ import { spawnSync } from 'node:child_process'
+ import { performance } from 'node:perf_hooks'
+ 
+ const SELF = fileURLToPath(import.meta.url)
++const isWorker = () =>
++  process.argv[1] &&
++  path.resolve(process.argv[1]) === SELF &&
++  process.argv[2] === '--semantic-worker'
+ const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+ const NODE_SHA =
+   '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
+@@ -112,6 +117,12 @@ function checkTCB() {
+         throw Error('UNKNOWN_RUNTIME_PROFILE')
+     } else if (/^--eval=/.test(arg)) continue
+     else if (/^--input-type=(?:module|commonjs)$/.test(arg)) continue
++    else if (
++      arg === '--experimental-vm-modules' &&
++      isWorker() &&
++      process.execArgv.length === 1
++    )
++      continue
+     else if (
+       arg === '--input-type' &&
+       ['module', 'commonjs'].includes(process.execArgv[index + 1])
+@@ -127,6 +138,7 @@ function checkTCB() {
+   return {
+     nodeSha256: NODE_SHA,
+     parserSha256: PARSER_SHA,
++    grammarValidator: 'pinned-node-native-vm-parse-only',
+     engineSha256: hash(fs.readFileSync(SELF))
+   }
+ }
+@@ -1422,31 +1434,32 @@ export function analyzeSemanticBoundary(input) {
+           origin.id || null
+         )
+     }
+-    // TS's permissive AST is not the Node grammar. Before any consumable
+-    // proof, parse actual runtime files with the pinned Node --check. This
+-    // never imports/evaluates a target; child parsing and the outer worker
+-    // both have finite deadlines. Unknown/violating closures need no proof.
++    // TS's permissive AST is not the Node grammar. Native V8 compilation and
++    // Node's strip-only TS parser run INSIDE this supervised worker. Never
++    // link, evaluate or run a module/script, and never spawn a parser child.
++    // The parent's independent native deadline can kill synchronous parsing.
+     if (!out.unknowns.length && !out.violations.length) {
+       for (const file of [...astFiles.keys()].sort(sort)) {
+-        const remaining = Math.floor(
+-          limits.timeoutMs - (performance.now() - started)
+-        )
+-        if (remaining < 1) throw Error('UNKNOWN_ANALYSIS_LIMIT:timeoutMs')
+-        const syntax = spawnSync(NODE, ['--check', path.join(root, file)], {
+-          cwd: root,
+-          env: {
+-            PATH: path.dirname(NODE) + ':/usr/bin:/bin',
+-            LANG: 'C',
+-            LC_ALL: 'C',
+-            TZ: 'UTC'
+-          },
+-          encoding: 'utf8',
+-          timeout: Math.min(1000, remaining),
+-          killSignal: 'SIGKILL',
+-          maxBuffer: 1024 * 1024
+-        })
+-        if (syntax.error || syntax.status !== 0)
++        bump('states', out.usage.states, 'maxStates')
++        try {
++          let source = astFiles.get(file).text
++          if (/\.[cm]?ts$/.test(file))
++            source = stripTypeScriptTypes(source, { mode: 'strip' })
++          if (modules.get(file)?.mode === 'import') {
++            if (typeof vm.SourceTextModule !== 'function')
++              throw Error('VM grammar unavailable')
++            void new vm.SourceTextModule(source, {
++              identifier: path.join(root, file)
++            })
++          } else if (modules.get(file)?.mode === 'require') {
++            source = source.replace(/^\uFEFF/, '').replace(/^#![^\r\n]*/, '')
++            void new vm.Script(Module.wrap(source), {
++              filename: path.join(root, file)
++            })
++          } else throw Error('unknown grammar profile')
++        } catch {
+           unknown(file, 'UNKNOWN_RUNTIME_SYNTAX')
++        }
+       }
+     }
+     // Revalidate every physical assumption, even on an UNKNOWN result.
+@@ -1587,7 +1600,9 @@ function comparable(output) {
+ export function validateSemanticBoundary(input, output) {
+   try {
+     if (!record(output)) return { valid: false, reason: 'INVALID_OUTPUT' }
+-    const expected = analyzeSemanticBoundary(input)
++    const expected = isWorker()
++      ? analyzeSemanticBoundary(input)
++      : runSemanticBoundary(input)
+     return semanticCanonicalJson(comparable(expected)) ===
+       semanticCanonicalJson(comparable(output))
+       ? { valid: true }
+@@ -1605,24 +1620,28 @@ export function runSemanticBoundary(input) {
+   try {
+     limits = limitsFor(input)
+     const profile = checkTCB()
+-    const worker = spawnSync(NODE, [SELF, '--semantic-worker'], {
+-      input: JSON.stringify(input),
+-      encoding: 'utf8',
+-      timeout: Math.max(
+-        1,
+-        Math.floor(limits.timeoutMs - (performance.now() - started))
+-      ),
+-      killSignal: 'SIGKILL',
+-      maxBuffer: 64 * 1024 ** 2,
+-      env: {
+-        PATH: path.dirname(NODE) + ':/usr/bin:/bin',
+-        LANG: 'C',
+-        LC_ALL: 'C',
+-        TZ: 'UTC'
+-      },
+-      cwd: path.dirname(SELF),
+-      windowsHide: true
+-    })
++    const worker = spawnSync(
++      NODE,
++      ['--experimental-vm-modules', SELF, '--semantic-worker'],
++      {
++        input: JSON.stringify(input),
++        encoding: 'utf8',
++        timeout: Math.max(
++          1,
++          Math.floor(limits.timeoutMs - (performance.now() - started))
++        ),
++        killSignal: 'SIGKILL',
++        maxBuffer: 64 * 1024 ** 2,
++        env: {
++          PATH: path.dirname(NODE) + ':/usr/bin:/bin',
++          LANG: 'C',
++          LC_ALL: 'C',
++          TZ: 'UTC'
++        },
++        cwd: path.dirname(SELF),
++        windowsHide: true
++      }
++    )
+     if (
+       worker.error?.code === 'ETIMEDOUT' ||
+       performance.now() - started > limits.timeoutMs
+diff --git a/scripts/check-product-boundary.mjs b/scripts/check-product-boundary.mjs
+index 8b0fd42d..40cd4985 100644
+--- a/scripts/check-product-boundary.mjs
++++ b/scripts/check-product-boundary.mjs
+@@ -151,8 +151,9 @@ export function auditProductBoundary(
+       }
+       const snapshot = originFiles.get(absolute)
+       if (
+-        snapshot.validUtf8 &&
+-        (!origin?.source || snapshot.text === origin.source.text)
++        (origin?.context === 'semantic-frontier' && !origin?.node) ||
++        (snapshot.validUtf8 &&
++          (!origin?.source || snapshot.text === origin.source.text))
+       )
+         fileSha256 = snapshot.sha256
+     } catch {
+@@ -190,15 +191,20 @@ export function auditProductBoundary(
+       }
+     }
+     const tuple = {
+-      file: relative,
+-      fileSha256,
++      file: origin?.physicalFileKnown === false ? null : relative,
++      fileSha256: origin?.physicalFileKnown === false ? null : fileSha256,
+       kind,
+       start,
+       end,
+       reason: diagnostic.reason,
+-      context: origin ? 'loader-diagnostic' : 'physical-diagnostic',
++      context:
++        origin?.context ??
++        (origin ? 'loader-diagnostic' : 'physical-diagnostic'),
+       diagnosticExpression: diagnostic.expression ?? null,
+       expression,
++      ...(origin?.semanticPointer
++        ? { semanticPointer: origin.semanticPointer }
++        : {}),
+       ...(synthetic ? { synthetic } : {})
+     }
+     const key = semanticEngine.semanticCanonicalJson(tuple)
+@@ -2230,23 +2236,53 @@ export function auditProductBoundary(
+       }
+     }
+     const priorNewCount = diagnostics.length
+-    for (const unknown of output.unknowns ?? [])
+-      diagnostics.push({
+-        file: unknown.file || 'package.json',
++    const frontierOrigins = []
++    const emitFrontier = (unknown, pointer) => {
++      const file = unknown.file || 'package.json'
++      let physicalFileKnown = false
++      try {
++        const target = path.resolve(root, file)
++        physicalFileKnown =
++          Boolean(unknown.file) &&
++          inside(root, target) &&
++          fs.realpathSync(target) === target &&
++          fs.lstatSync(target).isFile()
++      } catch {
++        /* Missing/aliased physical provenance remains null, never invented. */
++      }
++      const diagnostic = {
++        file,
+         reason: 'UNVERIFIED_SEMANTIC_FRONTIER',
+         detail: unknown.reason,
+-        ...(unknown.originId ? { originId: unknown.originId } : {})
++        semanticDetail: unknown.detail ?? null,
++        ...(unknown.originId ? { causalOriginId: unknown.originId } : {})
++      }
++      reportDiagnostic(file, diagnostic, {
++        context: 'semantic-frontier',
++        physicalFileKnown,
++        semanticPointer: {
++          path: pointer,
++          reportedFile: unknown.file || null,
++          reason: unknown.reason,
++          detail: unknown.detail ?? null,
++          causalOriginId: unknown.originId ?? null
++        }
+       })
++      const origin = diagnosticOrigins.get(diagnostic)
++      diagnostic.originId = origin.id
++      frontierOrigins.push(origin)
++    }
++    for (const [index, unknown] of (output.unknowns ?? []).entries())
++      emitFrontier(unknown, '#/semanticBoundary/unknowns/' + index)
+     if (
+       output.status !== 'PROVEN' &&
+       !output.unknowns?.length &&
+       !output.violations?.length
+     )
+-      diagnostics.push({
+-        file: 'package.json',
+-        reason: 'UNVERIFIED_SEMANTIC_FRONTIER',
+-        detail: 'UNKNOWN_INCOMPLETE_RESULT'
+-      })
++      emitFrontier(
++        { file: '', reason: 'UNKNOWN_INCOMPLETE_RESULT' },
++        '#/semanticBoundary/status'
++      )
+     for (const violation of output.violations ?? [])
+       violations.push({
+         ...violation,
+@@ -2259,17 +2295,26 @@ export function auditProductBoundary(
+       new Set(origins.map((item) => item.id)).size !== baseline.length
+     )
+       throw new Error('semantic_occurrence_partition_invalid')
++    const newOriginIds = frontierOrigins.map((origin) => origin.id)
++    const baselineIds = new Set(origins.map((origin) => origin.id))
++    if (
++      new Set(newOriginIds).size !== diagnostics.length - priorNewCount ||
++      newOriginIds.some((id) => baselineIds.has(id))
++    )
++      throw new Error('semantic_frontier_origin_partition_invalid')
+     const { telemetry, ...semanticBody } = output
+     result.resolvedDiagnostics = resolvedDiagnostics
+     result.semanticBoundary = {
+       ...semanticBody,
+       compiledProvenance: compiled,
+       origins,
++      frontierOrigins,
+       occurrences: {
+         baseline: baseline.length,
+         resolved: resolvedDiagnostics.length,
+         unresolved: unresolvedOrigins.length,
+         new: diagnostics.length - priorNewCount,
++        newOriginIds,
+         unresolvedOrigins
+       }
+     }
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index 7c52d350..38853e87 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -506,3 +506,92 @@ describe('R1 regressions at the installed MATCH public boundary', () => {
+     }
+   )
+ })
++
++describe('Recovery controls for every new frontier origin', () => {
++  it('assigns each new blocking occurrence its own physical nonAST lineage, separate from baseline proofs', () => {
++    const f = fixture({
++      core: "import 'vendor'; export const result=1;",
++      vendor: 'export default function(specifier){return import(specifier)}'
++    })
++    const a = f.run(),
++      b = f.run(['--semantic', '--strict']),
++      report = a.report,
++      rows = report.diagnostics.filter(
++        (x) => x.reason === 'UNVERIFIED_SEMANTIC_FRONTIER'
++      )
++    expect(report.status).toBe('INCOMPLETE')
++    expect(rows.length).toBeGreaterThan(0)
++    const ids = rows.map((x) => x.originId),
++      baseline = new Set(report.semanticBoundary.origins.map((x) => x.id))
++    expect(new Set(ids).size).toBe(rows.length)
++    expect(
++      ids.every(
++        (id) =>
++          typeof id === 'string' &&
++          /^[a-f0-9]{64}$/.test(id) &&
++          !baseline.has(id)
++      )
++    ).toBe(true)
++    expect(report.semanticBoundary.frontierOrigins).toHaveLength(rows.length)
++    expect(report.semanticBoundary.occurrences.newOriginIds).toEqual(ids)
++    for (const diagnostic of rows) {
++      const origin = report.semanticBoundary.frontierOrigins.find(
++        (x) => x.id === diagnostic.originId
++      )
++      expect(origin).toMatchObject({
++        kind: 'NonAstDiagnostic',
++        start: null,
++        end: null,
++        context: 'semantic-frontier',
++        reason: 'UNVERIFIED_SEMANTIC_FRONTIER'
++      })
++      if (origin.file)
++        expect(origin.fileSha256).toBe(
++          hash(fs.readFileSync(path.join(f.evaluated, origin.file)))
++        )
++      const { id, ...tuple } = origin
++      expect(id).toBe(hash(canonicalJson(tuple).replace(/\n$/, '')))
++      expect(origin.semanticPointer.reason).toBe(diagnostic.detail)
++      expect(origin.semanticPointer.detail).toBe(diagnostic.semanticDetail)
++      expect(
++        report.semanticBoundary.proofs.some((p) => p.originId === origin.id)
++      ).toBe(false)
++    }
++    expect(report.semanticBoundary.frontierOrigins).toEqual(
++      b.report.semanticBoundary.frontierOrigins
++    )
++    expect(report.semanticBoundary.occurrences.baseline).toBe(
++      report.semanticBoundary.occurrences.resolved +
++        report.semanticBoundary.occurrences.unresolved
++    )
++  })
++})
++
++describe('Recovery byte provenance for invalid encodings', () => {
++  it('preserves the physical full byte hash for a nonAST invalid UTF8 frontier source', () => {
++    const vendor = Buffer.concat([
++      Buffer.from('export const value=1; //'),
++      Buffer.from([255])
++    ])
++    const f = fixture({
++        core: "import 'vendor'; export const result=1;",
++        vendor
++      }),
++      result = f.run()
++    expect(result.report.status).toBe('INCOMPLETE')
++    const origin = result.report.semanticBoundary.frontierOrigins.find(
++      (x) => x.semanticPointer.reason === 'UNKNOWN_ENCODING'
++    )
++    expect(origin).toMatchObject({
++      file: 'node_modules/vendor/index.js',
++      fileSha256: hash(vendor),
++      start: null,
++      end: null,
++      kind: 'NonAstDiagnostic'
++    })
++    expect(result.graph.installed[0]).toMatchObject({
++      verified: false,
++      contentIdentity: { status: 'MATCH' }
++    })
++  })
++})
+diff --git a/tests/b6-0236-semantic-engine.test.js b/tests/b6-0236-semantic-engine.test.js
+index 8eb5f5b0..8b320429 100644
+--- a/tests/b6-0236-semantic-engine.test.js
++++ b/tests/b6-0236-semantic-engine.test.js
+@@ -3,7 +3,7 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ import { createHash } from 'node:crypto'
+ import { createRequire } from 'node:module'
+-import { spawnSync } from 'node:child_process'
++import { spawn, spawnSync } from 'node:child_process'
+ import {
+   runSemanticBoundary as directRunSemanticBoundary,
+   analyzeSemanticBoundary,
+@@ -869,3 +869,144 @@ describe('R1 regressions for witnessed semantic omissions', () => {
+     }
+   )
+ })
++
++function ownProcess(pid) {
++  try {
++    const text = fs.readFileSync('/proc/' + pid + '/stat', 'utf8')
++    const born = text.slice(text.lastIndexOf(')') + 2).split(' ')[19]
++    const children = new Set()
++    for (const task of fs.readdirSync('/proc/' + pid + '/task')) {
++      try {
++        for (const child of fs
++          .readFileSync('/proc/' + pid + '/task/' + task + '/children', 'utf8')
++          .trim()
++          .split(/\s+/)
++          .filter(Boolean))
++          children.add(Number(child))
++      } catch {}
++    }
++    return {
++      pid,
++      born,
++      children: [...children],
++      cmdline: fs
++        .readFileSync('/proc/' + pid + '/cmdline', 'utf8')
++        .replaceAll('\0', ' ')
++    }
++  } catch {
++    return null
++  }
++}
++async function supervisedObservation(input, { stopWorker = false } = {}) {
++  const code =
++    'const fs=require("node:fs");const engine=require(process.argv[1]);process.stdout.write(JSON.stringify(engine.runSemanticBoundary(JSON.parse(fs.readFileSync(0,"utf8")))));'
++  const caller = spawn(pinnedNode, ['-e', code, enginePath], {
++    cwd: path.dirname(enginePath),
++    env: {
++      PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin',
++      LANG: 'C',
++      TZ: 'UTC'
++    }
++  })
++  let stdout = '',
++    stderr = '',
++    closed = false,
++    exitCode = null,
++    maxDepth = 0,
++    stopped = null
++  caller.stdout.setEncoding('utf8')
++  caller.stderr.setEncoding('utf8')
++  caller.stdout.on('data', (x) => (stdout += x))
++  caller.stderr.on('data', (x) => (stderr += x))
++  caller.on('close', (code) => {
++    closed = true
++    exitCode = code
++  })
++  caller.stdin.end(JSON.stringify(input))
++  const owned = new Map(),
++    start = Date.now()
++  try {
++    while (!closed) {
++      const pending = [{ pid: caller.pid, depth: 0 }]
++      while (pending.length) {
++        const { pid, depth } = pending.shift(),
++          record = ownProcess(pid)
++        if (!record) continue
++        if (depth > 0) {
++          owned.set(pid, record)
++          maxDepth = Math.max(maxDepth, depth)
++        }
++        if (
++          stopWorker &&
++          !stopped &&
++          depth === 1 &&
++          record.cmdline.includes(enginePath) &&
++          record.cmdline.includes('--semantic-worker')
++        ) {
++          const current = ownProcess(pid)
++          if (current?.born === record.born) {
++            process.kill(pid, 'SIGSTOP')
++            stopped = { pid, born: record.born }
++          }
++        }
++        for (const child of record.children)
++          pending.push({ pid: child, depth: depth + 1 })
++      }
++      if (Date.now() - start > 9000)
++        throw Error('own parser observation deadline exceeded')
++      await new Promise((resolve) => setTimeout(resolve, 3))
++    }
++    expect(exitCode, stderr).toBe(0)
++    return {
++      result: JSON.parse(stdout),
++      maxDepth,
++      stopped,
++      elapsedMs: Date.now() - start,
++      remaining: [...owned.values()]
++        .filter((x) => ownProcess(x.pid)?.born === x.born)
++        .map((x) => ({ pid: x.pid, born: x.born }))
++    }
++  } finally {
++    for (const record of [...owned.values()].reverse())
++      if (ownProcess(record.pid)?.born === record.born) {
++        try {
++          process.kill(record.pid, 'SIGKILL')
++        } catch {}
++      }
++    if (!closed) caller.kill('SIGKILL')
++  }
++}
++describe('Recovery controls for lifecycle and native grammar', () => {
++  it('owns parsing inside its one supervised worker without grammar grandchildren', async () => {
++    const observed = await supervisedObservation(
++      fixture('export const answer=42;')
++    )
++    expect(observed.result.status).toBe('PROVEN')
++    expect(observed.maxDepth).toBe(1)
++    expect(observed.remaining).toEqual([])
++    expect(observed.result.proofs[0].derivation.profile.grammarValidator).toBe(
++      'pinned-node-native-vm-parse-only'
++    )
++  })
++  it('kills and reaps an exactly identified stalled parser worker by the overall deadline', async () => {
++    const observed = await supervisedObservation(
++      { ...fixture('export const answer=42;'), limits: { timeoutMs: 1200 } },
++      { stopWorker: true }
++    )
++    expect(observed.stopped).not.toBeNull()
++    expect(observed.result.status).toBe('UNKNOWN')
++    expect(observed.result.proofs).toEqual([])
++    expect(observed.remaining).toEqual([])
++    expect(observed.elapsedMs).toBeLessThan(2500)
++  })
++  it('keeps the internal VM grammar launch flag private to the worker', () => {
++    const observed = cleanCall('runSemanticBoundary', [fixture()], {
++      flags: ['--experimental-vm-modules']
++    })
++    expect(observed.status).toBe('UNKNOWN')
++    expect(observed.proofs).toEqual([])
++    expect(
++      observed.unknowns.some((x) => x.reason === 'UNKNOWN_RUNTIME_PROFILE')
++    ).toBe(true)
++  })
++})

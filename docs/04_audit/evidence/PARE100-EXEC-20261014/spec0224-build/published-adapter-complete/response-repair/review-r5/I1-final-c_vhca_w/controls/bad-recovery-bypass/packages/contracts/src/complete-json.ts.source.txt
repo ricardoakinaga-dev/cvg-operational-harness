@@ -1,0 +1,138 @@
+import type {
+  CompleteJsonErrorCode,
+  CompleteJsonLimits
+} from './complete-tool-context.ts'
+export type { CompleteJsonErrorCode } from './complete-tool-context.ts'
+
+export class CompleteJsonError extends Error {
+  public constructor(
+    public readonly code: CompleteJsonErrorCode,
+    message: string
+  ) {
+    super(message)
+    this.name = 'CompleteJsonError'
+  }
+}
+
+/** Strict JSON snapshot. No property reads, hooks, coercion or Unicode normalization. */
+export function canonicalizeCompleteJson(
+  value: unknown,
+  limits: CompleteJsonLimits = {}
+): string {
+  const maxBytes = limits.maxBytes ?? 32768
+  const maxDepth = limits.maxDepth ?? 32
+  const maxNodes = limits.maxNodes ?? 10000
+  for (const limit of [maxBytes, maxDepth, maxNodes]) {
+    if (!Number.isSafeInteger(limit) || limit < 0)
+      throw new CompleteJsonError('RESULT_COMPLEXITY', 'Invalid JSON limit')
+  }
+  const chunks: string[] = []
+  let bytes = 0,
+    nodes = 0
+  const ancestors = new Set<object>()
+  const invalid = (): never => {
+    throw new CompleteJsonError('INVALID_JSON', 'Value is not strict JSON')
+  }
+  const complexity = (): never => {
+    throw new CompleteJsonError(
+      'RESULT_COMPLEXITY',
+      'JSON complexity limit exceeded'
+    )
+  }
+  const append = (part: string): void => {
+    bytes += Buffer.byteLength(part, 'utf8')
+    if (bytes > maxBytes)
+      throw new CompleteJsonError(
+        'RESULT_TOO_LARGE',
+        'JSON byte limit exceeded'
+      )
+    chunks.push(part)
+  }
+  const string = (text: string): void => {
+    // UTF-16 units are a lower bound on escaped UTF-8 size, before scanning/allocation.
+    if (text.length + 2 > maxBytes - bytes)
+      throw new CompleteJsonError(
+        'RESULT_TOO_LARGE',
+        'JSON byte limit exceeded'
+      )
+    let encodedBytes = 2
+    for (let i = 0; i < text.length; i++) {
+      const unit = text.charCodeAt(i)
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = text.charCodeAt(++i)
+        if (!(next >= 0xdc00 && next <= 0xdfff)) invalid()
+        encodedBytes += 4
+      } else if (unit >= 0xdc00 && unit <= 0xdfff) invalid()
+      else if (unit === 34 || unit === 92 || [8, 9, 10, 12, 13].includes(unit))
+        encodedBytes += 2
+      else if (unit < 32) encodedBytes += 6
+      else encodedBytes += unit < 128 ? 1 : unit < 2048 ? 2 : 3
+      if (encodedBytes > maxBytes - bytes)
+        throw new CompleteJsonError(
+          'RESULT_TOO_LARGE',
+          'JSON byte limit exceeded'
+        )
+    }
+    append(JSON.stringify(text))
+  }
+  const visit = (input: unknown, depth: number): void => {
+    if (++nodes > maxNodes || depth > maxDepth) complexity()
+    if (input === null) {
+      append('null')
+      return
+    }
+    switch (typeof input) {
+      case 'string':
+        string(input)
+        return
+      case 'boolean':
+        append(input ? 'true' : 'false')
+        return
+      case 'number':
+        if (!Number.isFinite(input) || Object.is(input, -0)) invalid()
+        append(JSON.stringify(input))
+        return
+      case 'object':
+        break
+      default:
+        invalid()
+    }
+    const object = input as object
+    if (ancestors.has(object)) invalid()
+    const array = Array.isArray(object)
+    const prototype = Object.getPrototypeOf(object)
+    if (
+      array
+        ? prototype !== Array.prototype
+        : prototype !== Object.prototype && prototype !== null
+    )
+      invalid()
+    const length = array
+      ? (Object.getOwnPropertyDescriptor(object, 'length')?.value as number)
+      : 0
+    if (array && length > maxNodes - nodes) complexity()
+    const keys = Reflect.ownKeys(object)
+    if (keys.some((key) => typeof key !== 'string')) invalid()
+    if (array && keys.length !== length + 1) invalid()
+    if (!array && keys.length > maxNodes - nodes) complexity()
+    ancestors.add(object)
+    append(array ? '[' : '{')
+    const names = array ? null : (keys as string[]).sort()
+    const count = array ? length : names!.length
+    for (let i = 0; i < count; i++) {
+      const name = array ? String(i) : names![i]!
+      const descriptor = Object.getOwnPropertyDescriptor(object, name)
+      if (!descriptor || !('value' in descriptor)) invalid()
+      if (i) append(',')
+      if (!array) {
+        string(name)
+        append(':')
+      }
+      visit(descriptor!.value, depth + 1)
+    }
+    append(array ? ']' : '}')
+    ancestors.delete(object)
+  }
+  visit(value, 1)
+  return chunks.join('')
+}

@@ -1,0 +1,58 @@
+import json,hashlib,os,datetime,re
+from pathlib import Path
+b=Path(__file__).parent;w=b.parents[2]/'worktree';source=w/'packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts';run=b/'runs/r1';now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def save(name,data):
+ with (b/name).open('x') as f:json.dump(data,f,indent=2);f.write('\n')
+ os.chmod(b/name,0o600)
+before=json.loads((b/'frozen-inputs-before.json').read_text());after={}
+for category,rows in before.items():
+ after[category]=[]
+ for row in rows:
+  p=w/row['path'];actual=sha(p);after[category].append({**row,'afterSHA256':actual,'unchanged':actual==row['sha256']});assert actual==row['sha256'],row['path']
+assert len(after['r12'])==79 and len(after['sql'])==30
+save('frozen-inputs-after.json',{'observedAt':now(),'inputs':after,'all109Unchanged':True})
+pg=json.loads((b/'attempt-r1/pg-r1.command.json').read_text());checks=json.loads((b/'checks-final.json').read_text());h=sha(source);assert pg['sourceBeforeSHA256']==pg['sourceAfterSHA256']==h and pg['exit']==pg['connectionCheckExit']==0
+for c in checks:assert c['exit']==0 and c['sourceBeforeSHA256']==c['sourceAfterSHA256']==h
+index=json.loads((run/'case-summary-index.json').read_text());assert len(index['cases'])==12;assert {c['id'] for c in index['cases']}=={'SP%02d'%i for i in range(1,13)}
+results=[]
+for case in index['cases']:
+ assert case['containment']=='PASS'
+ for path in case['rawFiles']:assert Path(path).is_file(),path
+ for attempt in case['attempts']:
+  p=Path(attempt['result']);d=json.loads(p.read_text());assert all(k in d for k in ['events','input','result','final','calls','measurements','pid'])
+  results.append({'case':case['id'],'raw':str(p),'executionId':d['input']['executionId'],'tenantId':d['input']['tenantId'],'pid':d['pid'],'stopReason':d['result']['stopReason'],'calls':d['calls'],'measurements':d['measurements'],'durableReceipts':d['final']['state']['toolResultContext']['decisionAdmissions'],'liveResultUsage':d['result']['usage'],'durableBudgetUsage':d['final']['budgetUsage']})
+assert len(results)==14 and sum(r['calls'] for r in results)==13 and sum(r['measurements'] for r in results)==13
+nan=json.loads((run/'SP06/A/main/result.json').read_text());assert nan['actualProviderResult']['inputTokens']=={'$number':'NaN'}
+for id,pre,post,status in [('SP10','late-before','late-after','UNKNOWN'),('SP11','late-before','late-after','RESERVED'),('SP12','takeover-before-late','takeover-after-late','RESERVED')]:
+ a=json.loads((run/id/'main'/(pre+'.json')).read_text());z=json.loads((run/id/'main'/(post+'.json')).read_text());assert a['row']==z['row'] and a['checkpoint']==z['checkpoint'];assert a['checkpoint']['state']['toolResultContext']['decisionAdmissions'][0]['status']==status
+close=json.loads((b/'attempt-r1/connection-close-proof.json').read_text());stopped=json.loads((b/'attempt-r1/container-stopped.json').read_text());assert close['closed'] and close['serviceClients']==0 and stopped['stopExit']==0 and stopped['observed']['status']=='exited'
+protected={'observedAt':now(),'ownContainerStopped':True,'zeroOwnServiceClients':True,'schema':'pare224_settle_r1','role':'pare224_settle_r1_service','dataPreserved':True,'oldNamespacesNeverAdoptedReadAlteredOrDropped':True,'PG217NeverInspectedOrTouched':True,'evidence':['attempt-r1/connection-close-proof.json','attempt-r1/container-stopped.json','runs/r1/preexistence.json','runs/r1/identity-rls-grants.json'],'scope':'Self-report plus native grants/queries/cleanup artifacts; no OS sandbox attestation or unrelated database inventory.'}
+save('resource-final.json',protected)
+save('self-review.json',{'observedAt':now(),'kind':'BUILDER_SELF_REVIEW_NOT_INDEPENDENT','status':'IMPLEMENTED','focusedSuite':'12 PASS','attempts':14,'actualModelBodies':13,'counterEntries':13,'sourceSHA256':h,'frozen79And30SQLUnchanged':True,'results':results,'notes':['SP06 NaN is explicitly tagged; same Hybrid fresh bound execution zero counter/model.','SP07 finite 517 Toy64 output tokens retained UNKNOWN; functional qualification FAIL_INVALID_PAIR remains.','SP09 durable SETTLED actual3output tokens; returned live512 conservative; no rollback.','SP10 durableUNKNOWN/INTERNAL_FAILURE; SP11 durableRESERVED/INTERNAL_FAILURE with actual lease_lost CAS errors; CP before/after late equal.','SP12 fixed fenced outer lease is also10000ms: postgres-outbox.ts claimNextFenced ignores compatibility leaseMs. Actual max expiry waited on database clock; takeover native SETTLEMENT/FAULTED/dispatch_closed; oldlate returns INSUFFICIENT_EVIDENCE, CP RESERVED unchanged.','No additional source edits after focused execution; no namespace rerun.'],'limitations':['Synthetic trusted prepared fixture and in-memory support, not actual consumerroute or parent lifecycle completion.','NativeFake plus Toy64 is synthetic measurement/cost0, not provider tokenizer/billing qualification.','SP06/SP07 containment PASS leaves invalid pair functional FAIL.','Known medium conservative live accounting and parentRUNNING/OPEN orFAULTED remain.','No fullTR05/global/P0/CI/225/NULjournal/program36/release claim.','Independent Lead checker/packaging and fresh critic are external to builder scope.']})
+save('preflight-history.json',{'note':'Actual pre-PG compilation/lint diagnosis retained; no PostgreSQL resource was used until final checks green.','commands':[{'name':'typecheck-preflight','argv':['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/typescript/bin/tsc','-p','tsconfig.typecheck.json','--noEmit'],'exit':2,'stdout':'typecheck-preflight.stdout.log','stderr':'typecheck-preflight.stderr.log','diagnosis':'Fixture typing: possibly undefined lease row and claim.fence.attempt field. No production error.'},{'name':'eslint-preflight','argv':['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/eslint/bin/eslint.js','packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts'],'exit':1,'stdout':'eslint-preflight.stdout.log','stderr':'eslint-preflight.stderr.log','diagnosis':'Two unused imports in new fixture.'},{'name':'format-preflight','argv':['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--write','packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts'],'exit':0,'stdout':'format-preflight.stdout.log','stderr':'format-preflight.stderr.log'},{'name':'typecheck-prepg','exit':0,'stdout':'typecheck-prepg.stdout.log','stderr':'typecheck-prepg.stderr.log'},{'name':'eslint-prepg','exit':0,'stdout':'eslint-prepg.stdout.log','stderr':'eslint-prepg.stderr.log'}],'finalCommands':['typecheck-final.command.json','eslint-final.command.json','vitest-collect.command.json','attempt-r1/pg-r1.command.json']})
+# Credentials are never printed. All raw data, source cuts and legacy literals are PRIVATE by default.
+credentialFiles=[]
+for p in sorted(b.rglob('*')):
+ if not p.is_file():continue
+ if p.suffix in ['.json','.ts','.mjs','.py','.log','.jsonl']:
+  try:
+   data=p.read_text()
+   if re.search(r'postgres(?:ql)?://[^\s\x22]+:[^\s\x22]+@|"password"\s*:',data):credentialFiles.append(str(p.relative_to(b)))
+  except (UnicodeDecodeError,OSError):pass
+save('privacy-inventory.json',{'default':'PRIVATE','credentialsAndRuntimeInputsNeverPrinted':True,'credentialPatternFiles':credentialFiles,'explicitCredentialFiles':['private/resource-private.json','private/service-connection-private.json'],'legacySourceCuts':'PRIVATE raw immutable source; may contain historical synthetic literals','publication':'Lead must publish only separately sanitized reviewable artifacts; this tree is private by default.'})
+# Constrain all builder outputs, including preflight logs created before runner umask.
+for p in b.rglob('*'):
+ if p.is_file():os.chmod(p,0o600)
+ elif p.is_dir():os.chmod(p,0o700)
+os.chmod(b,0o700)
+rows=[]
+for p in sorted(b.rglob('*')):
+ if not p.is_file():continue
+ rel=str(p.relative_to(b));empty=p.stat().st_size==0
+ cls='GENERATED_CACHE' if rel.startswith(('cache/','nodecache/','tmp/')) else 'FROZEN_READONLY_INPUT_COPY' if rel.startswith('source-cuts/') else 'PRIMARY_RAW' if rel.startswith(('runs/','attempt-r1/')) else 'BUILDER_TOOL_OR_VERIFICATION'
+ rows.append({'path':str(p),'relativePath':rel,'bytes':p.stat().st_size,'sha256':sha(p),'class':cls,'privacy':'PRIVATE','containsCredentialPattern':rel in credentialFiles,'empty':empty,'emptyClassification':'EMPTY_CAPTURED_STREAM_NO_OUTPUT' if empty and rel.endswith('.log') else 'EMPTY_GENERATED' if empty else None,'mode':oct(p.stat().st_mode&0o777)})
+emptyDirs=[str(p.relative_to(b)) for p in sorted(b.rglob('*')) if p.is_dir() and not any(p.iterdir())]
+manifest={'schema':'settlement-builder-artifacts/1','observedAt':now(),'status':'IMPLEMENTED_NOT_ACCEPTED','source':{'path':str(source),'sha256':h,'bytes':source.stat().st_size},'rawRunRoot':str(run),'executionRoot':str(b/'attempt-r1'),'privateResourceRoot':str(b/'private'),'focusedResult':'12 PASS','allBuilderFiles':rows,'emptyDirectories':emptyDirs,'manifestSelfBinding':'artifact-manifest.json and its detached SHA are bound by the delivery SHA; self-reference intentionally excluded','limitationsFile':str(b/'self-review.json')}
+save('artifact-manifest.json',manifest);mh=sha(b/'artifact-manifest.json');(b/'artifact-manifest.sha256').write_text(mh+'  artifact-manifest.json\n');os.chmod(b/'artifact-manifest.sha256',0o600)
+print(json.dumps({'status':'IMPLEMENTED','sourceSHA256':h,'manifestSHA256':mh,'filesBound':len(rows),'emptyFiles':sum(r['empty'] for r in rows),'emptyDirs':emptyDirs,'privateFiles':len(rows),'focusedTests':12,'actualModelBodies':13,'ownStopped':True,'ownClients':0}))

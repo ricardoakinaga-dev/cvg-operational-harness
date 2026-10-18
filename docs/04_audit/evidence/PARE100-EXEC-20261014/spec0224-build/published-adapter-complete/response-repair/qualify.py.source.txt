@@ -1,0 +1,67 @@
+"""Offline verifier controls; original/native source and raw traces immutable."""
+import copy
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+base = Path(__file__).parent
+source = base.parent / 'response-repro/focused08-final2-trace-private.json'
+raw = source.read_bytes()
+original = json.loads(raw)
+out = base / 'controls'
+out.mkdir(exist_ok=True)
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+results = []
+
+
+def execute(name, data, accepted):
+    path = out / (name + '-trace-private.json')
+    path.write_bytes(canonical(data))
+    argv = ['python3', str(base / 'recompute.py'), str(path)]
+    p = subprocess.run(argv, capture_output=True)
+    (out / (name + '.stdout.log')).write_bytes(p.stdout)
+    (out / (name + '.stderr.log')).write_bytes(p.stderr)
+    assert (p.returncode == 0) == accepted, (name, p.returncode, p.stderr[-1000:])
+    results.append({'name': name, 'argv': argv, 'exit': p.returncode, 'expectedAcceptance': accepted,
+                    'inputSHA256': sha(path.read_bytes()), 'stdoutSHA256': sha(p.stdout), 'stderrSHA256': sha(p.stderr)})
+
+
+def rehash(cp):
+    cp['digest'] = sha(b'cvg.checkpoint.v2\n' + canonical({k: v for k, v in cp.items() if k not in ['checkpointId', 'createdAt', 'digest']}))
+
+
+execute('positive', original, True)
+bad = copy.deepcopy(original)
+frame = json.loads(bad[1]['requests'][0]['messages'][1]['content'])
+item = next(i for i in frame['items'] if i['priority'] == 'FRESH_TOOL_RESULTS')
+item['value']['payload']['output']['text'] = item['value']['payload']['output']['text'].replace('TAIL', 'FAIL')
+bad[1]['requests'][0]['messages'][1]['content'] = canonical(frame).decode()
+execute('response-output-drift', bad, False)
+bad = copy.deepcopy(original)
+cp = bad[5]['checkpoint']
+cp['budgetUsage']['steps'] = 1
+rehash(cp)
+execute('coherent-invalid-terminal-step', bad, False)
+bad = copy.deepcopy(original)
+bad[4]['result']['modelCalls'] = 2
+execute('missing-response-charge', bad, False)
+bad = copy.deepcopy(original)
+message = bad[7]['requests'][0]['messages'][0]
+marker = 'UNTRUSTED_INTENT_224'
+message['content'] = marker + message['content'][len(marker):]
+execute('intent-promoted-to-system', bad, False)
+bad = copy.deepcopy(original)
+bad[1]['journals'][0]['result'] = {'erased': True}
+execute('erased-native-journal-value', bad, False)
+bad = copy.deepcopy(original)
+bad[0]['checkpoint']['state']['toolResultContext']['decisionAdmissions'][0]['resultSha256'] = '0' * 64
+rehash(bad[0]['checkpoint'])
+execute('coherent-receipt-result-drift', bad, False)
+assert source.read_bytes() == raw
+record = {'status': 'PASS_VERIFIER_QUALIFICATION_NOT_NATIVE_IMPLEMENTATION_PROOF',
+          'positiveAccepted': 1, 'knownBadRejected': 6, 'sourceSHA256': sha(raw),
+          'verifierSHA256': sha((base / 'recompute.py').read_bytes()), 'results': results}
+(base / 'qualification.json').write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps({k: v for k, v in record.items() if k != 'results'}))

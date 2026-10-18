@@ -1,0 +1,14 @@
+import fs from 'node:fs'
+import {createPortRequestCapture} from './tests/differential/capture-port-data.mjs'
+const result={runtime:process.version},capture=createPortRequestCapture(),controller=new AbortController()
+controller.abort('actually-aborted')
+const aborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted').get
+const reason=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'reason').get
+result.actualBefore={aborted:aborted.call(controller.signal),reason:reason.call(controller.signal)}
+Object.defineProperties(controller.signal,{aborted:{value:false},reason:{value:undefined}})
+result.shadowedReceipt=capture({signal:controller.signal});result.actualAfter={aborted:aborted.call(controller.signal),reason:reason.call(controller.signal)}
+const fake=Object.create(AbortSignal.prototype);Object.defineProperties(fake,{aborted:{value:false},reason:{value:undefined}})
+try{result.fakeReceipt=capture({signal:fake})}catch(e){result.fakeRejected=String(e)}
+let reads=0;const getterSignal=new AbortController().signal;Object.defineProperty(getterSignal,'aborted',{get(){reads++;return false}})
+try{result.getterReceipt=capture({signal:getterSignal})}catch(e){result.getterRejected=String(e)}result.getterReads=reads
+fs.writeFileSync('evidence/critic/signal-native.json',JSON.stringify(result,null,2));console.log(result)

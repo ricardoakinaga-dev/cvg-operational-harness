@@ -1,0 +1,22 @@
+import json,pathlib
+from review_io import emit
+p=pathlib.Path.cwd().parent/'packet-r1'
+files=[x for x in (p/'proof/postgres-runtime-r3').rglob('*.json') if x.name in ('writer.trace.json','native-premature-finish.json')]
+out=[]
+for f in sorted(files):
+ j=json.loads(f.read_text()); out.append({'file':str(f.relative_to(p)),'root_keys':list(j) if isinstance(j,dict) else None})
+ def walk(v,path=''):
+  if isinstance(v,dict):
+   for k,x in v.items():
+    q=path+'/'+k
+    if k in ('sql','query','statement','error','code','message','detail','state','result_present','name','phase') and not isinstance(x,(list,dict)):
+     s=str(x)
+     if len(s)>600:s=s[:600]+' [DISPLAY TRUNCATED; raw hashed input retained]'
+     out.append({'pointer':q,'value':s})
+    elif k in ('journal','bodyMarkers','requests','sqlFailures'):
+     out.append({'pointer':q,'type':type(x).__name__,'count':len(x) if isinstance(x,(dict,list)) else None})
+    walk(x,q)
+  elif isinstance(v,list):
+   for i,x in enumerate(v):walk(x,path+'/'+str(i))
+ walk(j)
+emit(json.dumps(out,indent=2))

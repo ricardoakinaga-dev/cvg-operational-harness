@@ -1,0 +1,68 @@
+
+packages/harness/src/kernel/pipeline.ts:600:690
+600:   | { readonly kind: 'deadline' }
+601:   | { readonly kind: 'cancelled' }
+602:   | { readonly kind: 'failed'; readonly error: string }
+603:   | { readonly kind: 'completed'; readonly result: ModelResult }
+604:   /** The model answered but the result could not be logged (F04). */
+605:   | {
+606:       readonly kind: 'unrecorded'
+607:       readonly result: ModelResult
+608:       readonly gate: KernelStop
+609:     }
+610: 
+611: /**
+612:  * `model/before-call` → log `model/request` (I6) → call raced against the
+613:  * budget and the cancel signal → log `model/result`.
+614:  */
+615: export async function runModelCall(
+616:   host: KernelHost,
+617:   turn: TurnState,
+618:   request: Omit<ModelRequest, 'signal'>
+619: ): Promise<ModelPipelineResult> {
+620:   const controller = new AbortController()
+621:   const full: ModelRequest = {
+622:     ...request,
+623:     signal: AbortSignal.any([controller.signal, turn.signal])
+624:   }
+625:   const preGate = turn.budget.beginModelRequest()
+626:   if (preGate) return { kind: 'stopped', gate: preGate }
+627:   const gate = await runGate(host, 'model/before-call', { turn, request: full })
+628:   if (gate.kind === 'stop') return { kind: 'stopped', gate }
+629:   if (turn.signal.aborted) return { kind: 'cancelled' }
+630:   // I6: log the request as it will be sent, after every control adjusted it.
+631:   const { signal: _signal, ...effective } = full
+632:   void _signal
+633:   const logged = await appendLog(host, {
+634:     type: 'model/request',
+635:     correlationId: turn.input.correlationId,
+636:     request: snapshot(effective)
+637:   })
+638:   if (logged) return { kind: 'stopped', gate: logged }
+639:   try {
+640:     const outcome = await race(turn, () => host.get('model').complete(full))
+641:     if (outcome === DEADLINE || outcome === CANCELLED) {
+642:       controller.abort()
+643:       return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+644:     }
+645:     const unrecorded = await appendLog(host, {
+646:       type: 'model/result',
+647:       correlationId: turn.input.correlationId,
+648:       provider: outcome.provider,
+649:       inputTokens: outcome.inputTokens,
+650:       outputTokens: outcome.outputTokens
+651:     })
+652:     if (unrecorded) {
+653:       return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+654:     }
+655:     const accounted = turn.budget.recordModelResult({
+656:       inputTokens: outcome.inputTokens,
+657:       outputTokens: outcome.outputTokens,
+658:       costUsd: outcome.costUsd
+659:     })
+660:     if (accounted) return { kind: 'stopped', gate: accounted }
+661:     return { kind: 'completed', result: outcome }
+662:   } catch (error) {
+663:     return { kind: 'failed', error: errorMessage(error) }
+664:   }
+665: }

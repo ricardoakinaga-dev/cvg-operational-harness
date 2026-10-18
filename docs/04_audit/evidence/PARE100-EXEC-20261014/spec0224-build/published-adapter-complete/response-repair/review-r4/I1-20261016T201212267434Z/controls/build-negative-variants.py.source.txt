@@ -1,0 +1,22 @@
+import pathlib,json,hashlib,difflib
+R=pathlib.Path(__file__).parent.parent;m=json.loads((R/'input-index.json').read_text())
+variants={
+ 'negative-no-precheckpoint':('packages/harness/src/iterative-runtime.ts','// Only its committed checkpoint may precede model entry.\n            await this.persistCheckpoint(run)','// I1 deliberately bad: omit pre-entry checkpoint ACK.'),
+ 'negative-double-actual':('packages/harness/src/iterative-runtime.ts','inputTokens: result.inputTokens,\n            outputTokens: result.outputTokens,\n            costUsd: result.costUsd','inputTokens: result.inputTokens * 2,\n            outputTokens: result.outputTokens * 2,\n            costUsd: result.costUsd * 2'),
+ 'negative-promote-intent':('packages/harness/src/iterative-dispatch.ts',"'Compose the final user-facing answer.',","'Compose the final user-facing answer. '+decision.responseIntent,")}
+records=[]
+for name,(rel,old,new)in variants.items():
+ root=R/'controls'/name;root.mkdir(exist_ok=False)
+ for e in m['inputs']:
+  if e['category']=='source'and e.get('relative','').startswith('packages/harness/src/'):
+   p=root/e['relative'];p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(pathlib.Path(e['copy']).read_bytes())
+ p=root/rel;s=p.read_text();assert old in s;s2=s.replace(old,new,1);p.write_text(s2)
+ (root/'mutation.patch').write_text(''.join(difflib.unified_diff(s.splitlines(True),s2.splitlines(True),fromfile=rel+'.original',tofile=rel+'.KNOWN_BAD')))
+ records.append({'variant':name,'path':rel,'beforeSHA256':hashlib.sha256(s.encode()).hexdigest(),'afterSHA256':hashlib.sha256(s2.encode()).hexdigest(),'replacementBefore':old,'replacementAfter':new,'purpose':'negative test qualification only; never candidate authority'})
+(R/'controls/mutations.json').write_text(json.dumps(records,indent=2)+'\n')
+s=(R/'checkers/adversarial.test.ts').read_text().split('for(const output of ')[0]
+s += "\nit('positive full output and one healthy exact charge',async()=>{const s=await probe({id:'control-exact',output:{unicode:'😀',null:null,tail:'END'}});expect(s.result.response).toBe('i1:'+digest({unicode:'😀',null:null,tail:'END'}));expect(s.result.modelCalls).toBe(1);expect(s.result.usage).toEqual({inputTokens:127,outputTokens:13,costUsd:0.0625});expect(s.checkpoint?.budgetUsage).toMatchObject({modelCalls:1,inputTokens:127,outputTokens:13,costUsd:0.0625});expect(s.checkpoint?.state.toolResultContext?.decisionAdmissions).toHaveLength(0)})\n"
+s += "it('positive native checkpoint ACK and intent precede provider',async()=>{const s=await probe({id:'control-pre',output:{test:'ENTRY'}});expect(s.entries[0].checkpoint.budgetUsage.modelCalls).toBe(1);expect(s.entries[0].steps).toContainEqual(expect.objectContaining({stepType:'RESPOND',status:'RUNNING'}));expect(s.entries[0].events).toContainEqual(expect.objectContaining({op:'cp-ack',checkpoint:expect.objectContaining({budgetUsage:expect.objectContaining({modelCalls:1})})}))})\n"
+s += "it('positive trust framing excludes intent and user from system',async()=>{const s=await probe({id:'control-trust',output:{test:'UNTRUSTED_TOOL_I1'}});expect(s.requests[0].messages).toHaveLength(2);const system=s.requests[0].messages[0].content;for(const marker of ['UNTRUSTED_INTENT_I1','UNTRUSTED_USER_I1','UNTRUSTED_TOOL_I1'])expect(system).not.toContain(marker);expect(JSON.parse(s.requests[0].messages[1].content).items.find((i:any)=>i.priority==='FRESH_TOOL_RESULTS').trust).toBe('UNTRUSTED')})\n"
+(R/'checkers/qualification-public.test.ts').write_text(s)
+print('Created 3 owned known-bad source variants and 3 independent public-path qualification tests')

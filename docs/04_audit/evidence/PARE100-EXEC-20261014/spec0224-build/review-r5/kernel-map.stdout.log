@@ -1,0 +1,94 @@
+packages/harness/src/kernel/controls.ts:193:            'Duration budget exhausted before policy evaluation.'
+packages/harness/src/kernel/controls.ts:239:      // Guards run again after the loop's checkpoint and after the approval
+packages/harness/src/kernel/controls.ts:329:// ---------------------------------------------------------------- policy
+packages/harness/src/kernel/controls.ts:347:export function policyControl(policy: PolicyEngine): KernelPlugin {
+packages/harness/src/kernel/controls.ts:349:    name: 'control.policy',
+packages/harness/src/kernel/controls.ts:351:    provides: ['policy'],
+packages/harness/src/kernel/controls.ts:354:      ctx.provide('policy', policy)
+packages/harness/src/kernel/controls.ts:360:            policy.evaluate({
+packages/harness/src/kernel/controls.ts:372:              'Duration budget exhausted during policy evaluation.'
+packages/harness/src/kernel/controls.ts:376:          turn.metadata.policy = decision.outcome
+packages/harness/src/kernel/controls.ts:377:          call.policyDecision = decision
+packages/harness/src/kernel/controls.ts:382:            { cause: 'policy_failed' }
+packages/harness/src/kernel/controls.ts:388:              cause: 'policy_denied'
+packages/harness/src/kernel/controls.ts:392:              cause: 'policy_handoff'
+packages/harness/src/kernel/controls.ts:403:              { cause: 'policy_unsupported' }
+packages/harness/src/kernel/controls.ts:412:// ------------------------------------------------------------- approvals
+packages/harness/src/kernel/controls.ts:421: * The reservation is settled in `tool/post-execute` for every outcome.
+packages/harness/src/kernel/controls.ts:423:export function approvalsControl(
+packages/harness/src/kernel/controls.ts:424:  approvals: ApprovalEngine,
+packages/harness/src/kernel/controls.ts:428:    name: 'control.approvals',
+packages/harness/src/kernel/controls.ts:430:    provides: ['approvals'],
+packages/harness/src/kernel/controls.ts:431:    requires: ['budget', 'policy'],
+packages/harness/src/kernel/controls.ts:433:      ctx.provide('approvals', approvals)
+packages/harness/src/kernel/controls.ts:443:        const gate = await reserve(call, call.grant)
+packages/harness/src/kernel/controls.ts:446:      ctx.on('tool/post-execute', (call, outcome) => settle(call, outcome))
+packages/harness/src/kernel/controls.ts:454:    const policyVersion = call.policyDecision?.policyVersion ?? 'unknown'
+packages/harness/src/kernel/controls.ts:461:          'Duration budget exhausted before approval evaluation.'
+packages/harness/src/kernel/controls.ts:464:      const approvalOrDeadline = await turn.budget.withDeadline(() =>
+packages/harness/src/kernel/controls.ts:465:        approvals.request({
+packages/harness/src/kernel/controls.ts:481:          policyVersion
+packages/harness/src/kernel/controls.ts:484:      if (approvalOrDeadline === DEADLINE) {
+packages/harness/src/kernel/controls.ts:487:          'Duration budget exhausted during approval evaluation.'
+packages/harness/src/kernel/controls.ts:490:      const approval = approvalOrDeadline
+packages/harness/src/kernel/controls.ts:491:      const approvalId = approval.approvalId
+packages/harness/src/kernel/controls.ts:492:        ? { approvalId: approval.approvalId }
+packages/harness/src/kernel/controls.ts:494:      if (approval.status === 'PENDING') {
+packages/harness/src/kernel/controls.ts:495:        return stop('APPROVAL_REQUIRED', approval.reason, {
+packages/harness/src/kernel/controls.ts:496:          ...approvalId,
+packages/harness/src/kernel/controls.ts:497:          cause: 'approval_pending'
+packages/harness/src/kernel/controls.ts:500:      if (approval.status === 'DENIED') {
+packages/harness/src/kernel/controls.ts:501:        return stop('POLICY_DENIED', approval.reason, {
+packages/harness/src/kernel/controls.ts:502:          ...approvalId,
+packages/harness/src/kernel/controls.ts:503:          cause: 'approval_denied'
+packages/harness/src/kernel/controls.ts:506:      if (approval.status !== 'APPROVED') {
+packages/harness/src/kernel/controls.ts:510:          { cause: 'approval_failed' }
+packages/harness/src/kernel/controls.ts:513:      if (!approval.approvalId) {
+packages/harness/src/kernel/controls.ts:516:          'Approved execution has no approval identifier.',
+packages/harness/src/kernel/controls.ts:517:          { cause: 'approval_failed' }
+packages/harness/src/kernel/controls.ts:520:      turn.metadata.approval = approval.approvalId
+packages/harness/src/kernel/controls.ts:523:        approvalId: approval.approvalId,
+packages/harness/src/kernel/controls.ts:532:        policyVersion,
+packages/harness/src/kernel/controls.ts:540:        { cause: 'approval_failed' }
+packages/harness/src/kernel/controls.ts:543:    if (!approvals.execution) {
+packages/harness/src/kernel/controls.ts:544:      // Without the execution port an approval cannot be consumed once (I9).
+packages/harness/src/kernel/controls.ts:547:        'Approved execution requires a single-use approval execution port.',
+packages/harness/src/kernel/controls.ts:548:        { approvalId: call.grant.approvalId, cause: 'approval_unbound' }
+packages/harness/src/kernel/controls.ts:555:  async function reserve(
+packages/harness/src/kernel/controls.ts:560:    const port = approvals.execution
+packages/harness/src/kernel/controls.ts:564:        'Approved execution requires a single-use approval execution port.',
+packages/harness/src/kernel/controls.ts:565:        { approvalId: request.approvalId, cause: 'approval_unbound' }
+packages/harness/src/kernel/controls.ts:571:        'Duration budget exhausted before approval execution.',
+packages/harness/src/kernel/controls.ts:572:        { approvalId: request.approvalId }
+packages/harness/src/kernel/controls.ts:583:          { approvalId: request.approvalId, cause: 'approval_failed' }
+packages/harness/src/kernel/controls.ts:586:      call.approval = { request, handle: handleOrDeadline }
+packages/harness/src/kernel/controls.ts:592:        { approvalId: request.approvalId, cause: 'approval_failed' }
+packages/harness/src/kernel/controls.ts:597:  async function settle(
+packages/harness/src/kernel/controls.ts:601:    const reservation = call.approval
+packages/harness/src/kernel/controls.ts:602:    const port = approvals.execution
+packages/harness/src/kernel/controls.ts:614:        // absence of effect gives the approval back instead of ending it
+packages/harness/src/kernel/controls.ts:631:              'Tool execution exceeded its deadline after approval execution started.',
+packages/harness/src/kernel/controls.ts:641:              'Tool execution was cancelled after approval execution started.',
+packages/harness/src/kernel/controls.ts:650:            reason: `Tool executor threw after approval execution started: ${outcome.error}`,
+packages/harness/src/kernel/controls.ts:712:                policy: turn.metadata.policy,
+packages/harness/src/kernel/controls.ts:713:                approval: turn.metadata.approval,
+packages/harness/src/kernel/pipeline.ts:27: * single-turn loop and the iterative loop both call these functions, so policy,
+packages/harness/src/kernel/pipeline.ts:28: * approval, guards, pause, cancellation, the log and the effect ledger live in
+packages/harness/src/kernel/pipeline.ts:53:      policy: null,
+packages/harness/src/kernel/pipeline.ts:54:      approval: null,
+packages/harness/src/kernel/pipeline.ts:134:    blocked.approvalId !== undefined ? { approvalId: blocked.approvalId } : {}
+packages/harness/src/kernel/pipeline.ts:213: * changed before dispatch: after the loop's checkpoint and after the approval
+packages/harness/src/kernel/pipeline.ts:230:   * Nothing ran and nothing is reserved; the call is closed as not started.
+packages/harness/src/kernel/pipeline.ts:241:   * Dispatch was attempted; the outcome is already settled. `logFailure` is
+packages/harness/src/kernel/pipeline.ts:246:      readonly kind: 'settled'
+packages/harness/src/kernel/pipeline.ts:265:export async function runToolCall(
+packages/harness/src/kernel/pipeline.ts:272:  // I5: the call is on the log before any policy runs or the body starts.
+packages/harness/src/kernel/pipeline.ts:328:  const settled = await postExecute(host, call, await dispatch(host, call))
+packages/harness/src/kernel/pipeline.ts:333:    outcome: settled.kind
+packages/harness/src/kernel/pipeline.ts:336:    ? { kind: 'settled', outcome: settled, logFailure }
+packages/harness/src/kernel/pipeline.ts:337:    : { kind: 'settled', outcome: settled }
+packages/harness/src/kernel/pipeline.ts:392:      policy: {
+packages/harness/src/kernel/pipeline.ts:483:    // Last decision point: after every wrapper (the approval reservation),
+packages/harness/src/kernel/pipeline.ts:562:      // The body already ran. A missing settlement is uncertain, never a
+packages/harness/src/kernel/pipeline.ts:566:        error: 'unknown_effect: effect_settlement_failed',
+packages/harness/src/kernel/pipeline.ts:584:      // I7: a failing settlement after an effect never reads as success.

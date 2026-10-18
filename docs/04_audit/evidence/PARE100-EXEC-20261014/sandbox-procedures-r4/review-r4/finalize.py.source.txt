@@ -1,0 +1,23 @@
+import pathlib,json,hashlib,subprocess,sys,os,datetime
+D=pathlib.Path.cwd()
+env=os.environ.copy();env.update(NODE_DISABLE_COMPILE_CACHE='1',PYTHONDONTWRITEBYTECODE='1')
+argv=[sys.executable,'-B',str(D/'integrity_check.py'),'final']
+r=subprocess.run(argv,cwd=D,env=env,capture_output=True)
+(D/'final-hash-command.stdout').write_bytes(r.stdout);(D/'final-hash-command.stderr').write_bytes(r.stderr)
+(D/'final-hash-command.json').write_text(json.dumps({'argv':argv,'cwd':str(D),'exit':r.returncode,'stdoutFile':'final-hash-command.stdout','stderrFile':'final-hash-command.stderr','captureTruncated':False},indent=2)+'\n')
+initial=json.loads((D/'integrity-initial.json').read_text());final=json.loads((D/'integrity-final.json').read_text())
+ok=r.returncode==0 and initial['passed']==final['passed']==111 and initial['membership']['ok'] and final['membership']['ok']
+(D/'integrity.json').write_text(json.dumps({'initial':initial,'final':final,'checksPerPhase':111,'all222ChecksPassed':ok,'membershipEachPhase':29,'scope':'Hash preservation only; no behavioral acceptance'},indent=2)+'\n')
+v=json.loads((D/'verdict.json').read_text());v['integrity']={'initial':initial['passed'],'final':final['passed'],'expectedPerPhase':111,'membershipEachPhase':29,'allPass':ok}
+v['criteria'][0]['status']='PASS_INITIAL_AND_FINAL_111_OF_111' if ok else 'FAIL_INTEGRITY'
+if not ok:v['verdict']='REVISE';v['integrityFailurePreserved']=True
+(D/'verdict.json').write_text(json.dumps(v,indent=2)+'\n')
+s=(D/'report.md').read_text().replace('Initial 111/111 PASS; FINAL_INTEGRITY_PENDING','Initial 111/111 PASS; final 111/111 PASS' if ok else 'Integrity FAILED; inspect integrity.json')
+s=s.replace('FINAL_INTEGRITY_PENDING.', 'Initial and final integrity phases each passed all 111 checks with exact 29-file membership (222/222 hash checks overall).' if ok else 'Final integrity failure preserved in integrity.json.')
+(D/'report.md').write_text(s)
+out=json.dumps({'verdict':v['verdict'],'initialHashChecksPassed':initial['passed'],'finalHashChecksPassed':final['passed'],'membershipEachPhase':29,'all12Procedures':'NOT_RUN','materialFindings':[f['id'] for f in v['materialFindings']],'artifactManifestSelfExcluded':True},indent=2)+'\n'
+(D/'finalization-command.stdout').write_text(out);(D/'finalization-command.stderr').write_text('')
+(D/'finalization-command.json').write_text(json.dumps({'outerToolCmd':'python3 -B finalize.py','pythonArgvObserved':sys.argv,'cwd':str(D),'exit':0 if ok else 2,'stdoutFile':'finalization-command.stdout','stderrFile':'finalization-command.stderr','captureTruncated':False,'method':'Reviewer-owned self-recording finalizer, whose child hash command uses subprocess capture','timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat()},indent=2)+'\n')
+manifest=[{'path':str(p.relative_to(D)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size} for p in sorted(D.rglob('*')) if p.is_file() and p.name!='artifact-manifest.json']
+(D/'artifact-manifest.json').write_text(json.dumps({'files':manifest,'excludes':['artifact-manifest.json'],'selfHash':'LEAD_COMPUTE','candidateMutations':False},indent=2)+'\n')
+sys.stdout.write(out);sys.exit(0 if ok else 2)

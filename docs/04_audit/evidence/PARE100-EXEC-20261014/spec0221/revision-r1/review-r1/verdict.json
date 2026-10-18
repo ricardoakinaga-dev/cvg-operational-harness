@@ -1,0 +1,126 @@
+{
+  "verdict": "REVISE",
+  "findings": [
+    {
+      "id": "I1-01",
+      "priority": "P1",
+      "title": "COMMIT-unknown recovery lacks a settled-outcome fence and a pending state",
+      "references": [
+        {
+          "path": "cvg/docs/02_spec/0221_pare100_public_session_persistence.md",
+          "lines": [
+            140,
+            150,
+            166,
+            172,
+            214
+          ]
+        },
+        {
+          "path": "cvg/packages/persistence/src/session-events.ts",
+          "lines": [
+            87,
+            94,
+            97,
+            108
+          ]
+        }
+      ],
+      "finding": "Section 8 instructs recovery on a new connection to classify the original batch as present, absent or inconsistent, but does not require the original server transaction to have ended before absence is definitive, or require one consistent snapshot for all identities/head checks. Section 6 requires confirmed server-side loss only before the next writer opens; that does not constrain the earlier recovery classification. Destruction of the client socket is not confirmation that the original COMMIT has settled on the server.",
+      "counterexample": "A writer sends COMMIT and loses its response while the server has not completed it. A new reader sees no batch rows and reports absent. The original COMMIT then completes. Alternatively, per-ID reads on opposite sides of that commit manufacture a mixed result from an atomic batch. Neither observation establishes rollback or corruption.",
+      "required_fix": "Specify a recovery state machine with pending/unknown retained until the original attempt is known to be settled; define a backend-side completion fence or an equivalent ownership/transaction-settlement protocol. Read all original IDs/digests/order and the head in one consistent snapshot after that fence before declaring absent or inconsistent. Define recovery separately for create, append and flush: existing rows alone do not prove that an uncertain flush barrier completed. Recovery may perform a fresh explicitly requested synchronous barrier under a newly acquired handle without replaying events or effects. Specify the captured recovery descriptor needed for getter-snapshotted inputs, without exposing bodies or SQL.",
+      "required_future_check": "Extend SP18 to pause the original transaction before its final COMMIT outcome, lose the client response, and run recovery both before and after settlement; early absence must remain unknown, and an atomic batch must never be diagnosed as partial due to multiple read snapshots. Cover ambiguous create and flush as well as append.",
+      "basis": "Design-level inference from the normative recovery text and PostgreSQL 16 snapshot/lock semantics; no database experiment was executed."
+    },
+    {
+      "id": "I1-02",
+      "priority": "P2",
+      "title": "The public handle adapter needs an explicit capability and serialization boundary",
+      "references": [
+        {
+          "path": "cvg/docs/02_spec/0221_pare100_public_session_persistence.md",
+          "lines": [
+            62,
+            81,
+            106,
+            120,
+            174,
+            176,
+            193,
+            216
+          ]
+        },
+        {
+          "path": "cvg/packages/contracts/src/session-events.ts",
+          "lines": [
+            20,
+            47
+          ]
+        },
+        {
+          "path": "cvg/packages/persistence/src/session-events.ts",
+          "lines": [
+            155,
+            185,
+            186,
+            204
+          ]
+        },
+        {
+          "path": "cvg/packages/sdk/src/server.ts",
+          "lines": [
+            202,
+            246,
+            263
+          ]
+        },
+        {
+          "path": "extra:packages/harness/src/session/kernel-log.ts",
+          "lines": [
+            33,
+            41
+          ]
+        }
+      ],
+      "finding": "sessionEventStoreForHandle(handle) promises tenant validation, eventId/digest deduplication and store-assigned sequence in the same owner queue, but SessionHandle exposes neither its bound tenant nor an atomic append-unsequenced/lookup operation. A generic implementation over the published interface cannot validate the tenant of an empty session, and read-then-append creates two separately admitted queue operations. The text does not restrict the helper to authentic factory handles or specify the internal capability that bridges these gaps.",
+      "counterexample": "Two adapters over one handle, or an adapter and direct handle call, both read head N before either queued append executes. Both assign N+1; one fails despite single ownership. An empty handle also has no event from which a generic adapter can discover tenant identity, so it cannot implement the specified tenant check using only the published members.",
+      "required_fix": "Choose and document the supported boundary. For example, restrict the helper to factory-issued handles carrying a private authenticated tenant/owner capability, define rejection of foreign or unsupported handles, and enqueue deduplication, cursor selection, materialization and persistence as one owner operation shared by every adapter and direct call. State how the helper accesses that capability across packages without deep imports, queue re-entry, a second connection, or a second log. Alternatively extend the public adapter port explicitly. Publish the factory/helper entry point and relevant signatures so this choice is reviewable.",
+      "required_future_check": "Add an empty-stream wrong-tenant negative, foreign-handle refusal, two independently created adapters over one handle, concurrent duplicate/different appends, adapter/direct-call ordering, and close/flush while adapter work is queued. Retain the real SDK/kernel vertical slice.",
+      "basis": "Static public-interface feasibility gap, not a claim that a private factory capability cannot be implemented."
+    },
+    {
+      "id": "I1-03",
+      "priority": "P2",
+      "title": "Service-owner shutdown does not cover in-flight handle acquisition",
+      "references": [
+        {
+          "path": "cvg/docs/02_spec/0221_pare100_public_session_persistence.md",
+          "lines": [
+            104,
+            138,
+            140,
+            142,
+            162,
+            164,
+            217
+          ]
+        }
+      ],
+      "finding": "The factory lifecycle owner must drain and close all handles, but there is no service admission/shutdown state or rule for create/open calls already waiting for a pool lease, lock claim or COMMIT. Handle close and global flush have explicit admission/capture rules; they do not settle this service-wide race.",
+      "counterexample": "create is admitted and awaits connection acquisition (or COMMIT), so no handle is published/registered yet. The owner snapshots current handles, closes them and resolves shutdown. The pending create then publishes a writer retaining its physical connection and advisory session lock after shutdown has supposedly completed. The same race exists for a pending read open.",
+      "required_fix": "Specify a synchronous service CLOSING admission fence, rejection of later service calls, registration and joining of all previously admitted acquisitions, and cleanup of acquired-but-unpublished leases/claims. Decide whether a pending successful acquisition is delivered then immediately closed or rejected with explicit committed/unknown-create semantics; it must not escape the shutdown join. Memoize shutdown completion/failure and include read handles and uncertain commits. Do not turn a possibly committed create into a clean abort.",
+      "required_future_check": "Extend SP21 with owner shutdown while create/open are waiting for a lease, after writer-lock claim, and during COMMIT; after shutdown completes no late live handle, connection or ownership may remain. Check repeated shutdown and aggregate cleanup failures.",
+      "basis": "Missing lifecycle semantics in the proposed factory boundary; no runtime failure is asserted."
+    }
+  ],
+  "limitations": [
+    "Independent I1 design review only; no descendants, builder summaries, prior reviews, shared ledgers, .agent/.gauntlet, execution histories or other packet directories were read.",
+    "No application code, SQL, runtime tests, services, package installs, or source mutations were executed. Python standard-library scripts only read/hash/compare source text and write review artifacts in the authorized output directory.",
+    "No executable PostgreSQL proof, BUILD approval, functional parity, deployment approval or production qualification is provided. SP01-SP22 remain future checks.",
+    "Only the sealed packet, its manifest-listed live files and three necessary additional primary files were inspected. Extra paths, reasons and pre/post hashes are enumerated in source-integrity.json.",
+    "Network reads were limited to three official PostgreSQL 16 documentation pages. Web responses are supporting documentation, not filesystem packet copies, and are not included in the local file SHA inventory.",
+    "The reference commit is the pin declared in the sealed procedures (768fb1f3d3dcf9a16659ee354e927d05475f22dd). Source bytes were checked against the manifest; no Git metadata or checkout/history was inspected.",
+    "Initial hashes were captured after the first textual SPEC read and before the remaining technical source inspection; final hashes bracket the subsequent review. No stronger claim about unobserved intermediate filesystem states is made."
+  ],
+  "no_build_authority": true
+}

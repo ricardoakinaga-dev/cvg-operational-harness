@@ -1,0 +1,125 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: visual-shell.spec.ts >> admin control center remains navigable on a narrow viewport
+- Location: tests/e2e/visual-shell.spec.ts:58:5
+
+# Error details
+
+```
+TimeoutError: locator.fill: Timeout 10000ms exceeded.
+Call log:
+  - waiting for getByLabel('ID do operador')
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]: "[plugin:vite:import-analysis] Failed to resolve import \"@cvg/shared\" from \"apps/web/src/features/journeys/index.tsx\". Does the file exist?"
+  - generic [ref=e5]: /tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/index.tsx:2:31
+  - generic [ref=e6]: "1 | import { useEffect, useRef, useState } from \"react\"; 2 | import { createDomainId } from \"@cvg/shared\"; | ^ 3 | import { apiClient } from \"../../api/client.ts\"; 4 | var _jsxFileName = \"/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/in..."
+  - generic [ref=e7]: at TransformPluginContext._formatLog (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31147:39) at TransformPluginContext.error (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31144:14) at normalizeUrl (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28083:18) at async file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28153:30 at async Promise.all (index 1) at async TransformPluginContext.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28119:4) at async EnvironmentPluginContainer.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:30932:14) at async loadAndTransform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:20671:26) at async viteTransformMiddleware (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:25205:20)
+  - generic [ref=e8]:
+    - text: Click outside, press Esc key, or fix the code to dismiss.
+    - text: You can also disable this overlay by setting
+    - code [ref=e9]: server.hmr.overlay
+    - text: to
+    - code [ref=e10]: "false"
+    - text: in
+    - code [ref=e11]: vite.config.mts
+    - text: .
+```
+
+# Test source
+
+```ts
+  1  | import { expect, test } from '@playwright/test'
+  2  | 
+  3  | const viewports = [
+  4  |   { name: 'mobile', width: 375, height: 812 },
+  5  |   { name: 'tablet', width: 768, height: 900 },
+  6  |   { name: 'desktop', width: 1440, height: 900 }
+  7  | ] as const
+  8  | 
+  9  | test('console shell preserves layout, focus and control sizing across viewports', async ({
+  10 |   page
+  11 | }) => {
+  12 |   for (const viewport of viewports) {
+  13 |     await page.setViewportSize(viewport)
+  14 |     await page.goto('/', { waitUntil: 'networkidle' })
+  15 | 
+  16 |     await expect(
+  17 |       page.getByRole('heading', { name: 'CVG Agent Secretary' })
+  18 |     ).toBeVisible()
+  19 |     const skipLink = page.getByRole('link', {
+  20 |       name: 'Pular para o console operacional'
+  21 |     })
+  22 |     await expect(skipLink).toBeAttached()
+  23 |     await skipLink.focus()
+  24 |     await skipLink.press('Enter')
+  25 |     await expect(page.locator('#console-operacional')).toBeFocused()
+  26 | 
+  27 |     const metrics = await page.evaluate(() => ({
+  28 |       viewport: window.innerWidth,
+  29 |       scrollWidth: document.documentElement.scrollWidth,
+  30 |       actionMinHeights: Array.from(
+  31 |         document.querySelectorAll('.actions button, .sessionButton')
+  32 |       ).map((element) => Number.parseFloat(getComputedStyle(element).minHeight))
+  33 |     }))
+  34 |     expect(
+  35 |       metrics.scrollWidth,
+  36 |       `${viewport.name} horizontal overflow`
+  37 |     ).toBeLessThanOrEqual(metrics.viewport)
+  38 |     expect(metrics.actionMinHeights.every((height) => height >= 40)).toBe(true)
+  39 | 
+  40 |     const sessionButton = page.getByRole('button', { name: 'Encerrar sessão' })
+  41 |     await sessionButton.focus()
+  42 |     await expect
+  43 |       .poll(() =>
+  44 |         sessionButton.evaluate(
+  45 |           (element) => getComputedStyle(element).outlineStyle
+  46 |         )
+  47 |       )
+  48 |       .toBe('solid')
+  49 |     await expect(page).toHaveScreenshot(`console-${viewport.name}.png`, {
+  50 |       animations: 'disabled',
+  51 |       caret: 'hide',
+  52 |       fullPage: false,
+  53 |       maxDiffPixelRatio: 0.02
+  54 |     })
+  55 |   }
+  56 | })
+  57 | 
+  58 | test('admin control center remains navigable on a narrow viewport', async ({
+  59 |   page
+  60 | }) => {
+  61 |   await page.setViewportSize({ width: 375, height: 812 })
+  62 |   await page.goto('/', { waitUntil: 'networkidle' })
+> 63 |   await page.getByLabel('ID do operador').fill('operator.fixture')
+     |                                           ^ TimeoutError: locator.fill: Timeout 10000ms exceeded.
+  64 |   await page.getByLabel('Papel operacional').selectOption('Admin')
+  65 |   await page
+  66 |     .getByLabel('Tenant ID')
+  67 |     .fill('tenant_00000000-0000-4000-8000-000000000199')
+  68 | 
+  69 |   await expect(page.locator('#platform-panel')).toBeVisible()
+  70 |   await expect(
+  71 |     page.getByRole('navigation', { name: 'Atalhos do Control Center' })
+  72 |   ).toBeVisible()
+  73 |   await expect(page.getByRole('link', { name: 'Release ledger' })).toBeVisible()
+  74 | 
+  75 |   const metrics = await page.evaluate(() => ({
+  76 |     viewport: window.innerWidth,
+  77 |     scrollWidth: document.documentElement.scrollWidth
+  78 |   }))
+  79 |   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewport)
+  80 | })
+  81 | 
+```

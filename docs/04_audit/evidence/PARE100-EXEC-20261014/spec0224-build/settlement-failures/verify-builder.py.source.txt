@@ -1,0 +1,61 @@
+"""Authenticate builder artifact bindings and current exact source, no DB writes."""
+import collections
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parent
+actor = base / 'builder-r1'
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+manifest_path = actor / 'artifact-manifest-final.json'
+manifest_raw = manifest_path.read_bytes()
+manifest = json.loads(manifest_raw)
+assert sha(manifest_raw) == '44e2b67099e780b544bb4f6a42d6b81fa0dc19493970c390da34426f9a967da7'
+entries = manifest['allBuilderFiles']
+for entry in entries:
+    path = Path(entry['path'])
+    assert path.resolve().is_relative_to(actor.resolve())
+    assert path == actor / entry['relativePath']
+    raw = path.read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], path
+    assert entry['empty'] == (len(raw) == 0)
+candidate = json.loads((b / 'candidate-r13.json').read_text())
+for entry in candidate['sourceBindings']:
+    raw = Path(entry['live']).read_bytes()
+    assert len(raw) == entry['bytes'] and sha(raw) == entry['sha256'], entry['path']
+    assert (Path(candidate['manifest']).parent / entry['copy']).read_bytes() == raw
+source_sha = manifest['source']['sha256']
+for name in ['typecheck-final.command.json', 'eslint-final.command.json',
+             'vitest-collect.command.json', 'attempt-r1/pg-r1.command.json']:
+    command = json.loads((actor / name).read_text())
+    assert command['exit'] == 0 and command['sourceBeforeSHA256'] == source_sha == command['sourceAfterSHA256']
+close = json.loads((actor / 'attempt-r1/connection-close-proof.json').read_text())
+assert close['serviceClients'] == 0 and close['closed'] is True and close['preservedData'] is True
+stopped = json.loads((actor / 'attempt-r1/container-stopped.json').read_text())
+assert stopped['stopExit'] == 0 and stopped['observed']['status'] == 'exited'
+assert stopped['observed']['id'] == '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+core = json.loads((base / 'lead-core-attempt01.stdout.json').read_text())
+scenarios = json.loads((base / 'lead-scenarios-attempt03.stdout.json').read_text())
+assert core['checks'] == 3404 and scenarios['checks'] == 845
+controls = json.loads((base / 'scenario-qualification-r2.json').read_text())
+assert controls['positiveAccepted'] == 1 and controls['knownBadRejected'] == 4
+record = {'status': 'AUTHENTICATED_PENDING_FRESH_I1_NOT_ACCEPTED',
+          'manifest': str(manifest_path), 'manifestSHA256': sha(manifest_raw),
+          'artifactCount': len(entries), 'emptyFiles': sum(e['empty'] for e in entries),
+          'classCounts': dict(collections.Counter(e['class'] for e in entries)),
+          'frozenCurrentSources': len(candidate['sourceBindings']), 'sourceSHA256': source_sha,
+          'checks': {'focusedPG': '12PASS', 'globalTypecheck': 'PASS', 'focusedLint': 'PASS',
+                     'collection': 'PASS', 'leadCoreChecks': core['checks'], 'leadScenarioChecks': scenarios['checks'],
+                     'uniqueExecutions': scenarios['uniqueExecutions'], 'actualGatewayEntries': scenarios['actualGatewayEntries'],
+                     'coreKnownBadRejected': 4, 'scenarioKnownBadRejected': 4},
+          'cleanup': {'serviceClients': 0, 'own224Stopped': True, 'dataPreserved': True},
+          'measurementCorrection': 'First Lead checker compared full budgetUsage during replay; SP08 diagnostic elapsed duration changes legitimately. Original failure retained; compare all charges except activeDuration and explicitly report diagnostic/CP changes. No fixture/bar/core changed.',
+          'replayDiagnosticMutations': scenarios['replayDiagnosticMutations'],
+          'limitations': ['Trusted synthetic prepared/support fixture, parent remains RUNNING/OPEN or FAULTED without consumer ACK.',
+                          'NaN/overoutput pair remains FAIL qualification; containment PASS not provider parity.',
+                          'SP09 returned conservative output512 vs durable actual3. SP10 UNKNOWN, SP11/SP12 RESERVED with native refusals.',
+                          'User-space observation, not OS provenance attestation.',
+                          'FullTR05/globalP0/CIprofile/225/NUL2FAIL/all36/eightphases remain open.']}
+(base / 'builder-lead-verification.json').write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps({k: v for k, v in record.items() if k in ['status', 'manifestSHA256', 'artifactCount', 'emptyFiles', 'frozenCurrentSources', 'checks']}))

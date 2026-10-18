@@ -1,0 +1,44 @@
+import pathlib,json,hashlib,re,sys
+B=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay');W=B/'worktree';R=B/'spec0224-build/public-admission-capacity/review-r1'
+packet=B/'spec0224-build/public-admission-capacity/review-packet-r2/manifest.json';candidate=B/'spec0224-build/candidate-r9/manifest.json'
+sha=lambda b:hashlib.sha256(b).hexdigest()
+records={};checks=[]
+def bind(p,expect=None,size=None,category='transitive'):
+ p=pathlib.Path(p).absolute();b=p.read_bytes();d={'path':str(p),'bytes':len(b),'sha256':sha(b),'category':category};records[str(p)]=d
+ if expect is not None: checks.append({'path':str(p),'match':d['sha256']==expect and (size is None or len(b)==size),'expectedSha256':expect})
+ return b
+for p,h in [(packet,'a7055cffdeb065f60caaedd4436f85afe067c859cbae158081457f82ced93113'),(candidate,'bae87feb75d078332f06abdd2f9c8153de858d74b3dc20936dd7a5b84c3aadc6')]:
+ m=json.loads(bind(p,h,category='manifest'))
+ for group in ['sources','sourceBindings','proofs','readonlyConstraints']:
+  for e in m.get(group,[]):
+   bind(e.get('live',e['path']),e['sha256'],e['bytes'],group+'-live')
+   if 'copy' in e:bind(p.parent/e['copy'],e['sha256'],e['bytes'],group+'-copy')
+# Small static source import closure; no scans/hashes of unused dependency trees.
+config=(W/'vitest.config.mts').read_text();aliases=dict(re.findall(r"'(@cvg/[^']+)': resolve\(\s*workspaceRoot,\s*'([^']+)'\s*\)",config))
+queue=[W/'packages/harness/src/__tests__/complete-admission-capacity-public.test.ts'];seen=set();external=set()
+while queue:
+ p=queue.pop().resolve()
+ if p in seen:continue
+ seen.add(p);s=bind(p,category='source-import-closure').decode()
+ for dep in re.findall(r'(?:from\s*|import\s*\(|require\s*\()?[\'\"]([^\'\"\n]+)[\'\"]',s):
+  if dep in aliases:q=W/aliases[dep]
+  elif dep.startswith('.'):
+   q=p.parent/dep
+   if not q.is_file():
+    q=next((x for x in [q.with_suffix('.ts'),q.with_suffix('.js'),q/'index.ts',q/'index.js'] if x.is_file()),None)
+   if q is None:continue
+  else:
+   if dep.startswith(('node:','@cvg/')):external.add(dep)
+   continue
+  if q.is_file() and q.suffix in ['.ts','.tsx','.js','.mjs','.cjs']:queue.append(q)
+for r in ['package.json','package-lock.json','node_modules/vitest/vitest.mjs','node_modules/vitest/dist/cli.js','node_modules/vitest/dist/config.js','node_modules/vitest/package.json','node_modules/vite/package.json','node_modules/vite/dist/node/index.js','node_modules/vite/dist/node/chunks/node.js','node_modules/jsdom/package.json','node_modules/jsdom/lib/api.js','node_modules/esbuild/package.json','node_modules/esbuild/lib/main.js']:
+ bind(W/r,category='runner-entry')
+bind('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',category='node-binary')
+for r in ['vitest.i1.mjs','observe-loads.cjs']:bind(R/r,category='private-config')
+mode=sys.argv[1];out={'phase':mode,'records':list(records.values()),'checks':checks,'allExpectedMatch':all(c['match'] for c in checks),'sourceClosureFiles':len(seen),'aliases':aliases}
+if mode=='post':
+ pre=json.loads((R/'sentinel-pre.json').read_text());out['prePostDifferences']=[{'before':d,'after':records.get(d['path'])} for d in pre['records'] if records.get(d['path'])!=d];out['unchanged']=not out['prePostDifferences']
+(R/f'sentinel-{mode}.json').write_text(json.dumps(out,indent=2)+'\n')
+print(json.dumps({'phase':mode,'records':len(records),'checks':len(checks),'allExpectedMatch':out['allExpectedMatch'],'sourceClosureFiles':len(seen),'unchanged':out.get('unchanged')}))
+assert out['allExpectedMatch']
+if mode=='post':assert out['unchanged']

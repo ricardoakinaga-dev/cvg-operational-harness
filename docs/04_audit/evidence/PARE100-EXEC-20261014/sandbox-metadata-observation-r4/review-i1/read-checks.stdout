@@ -1,0 +1,176 @@
+1: from pathlib import Path
+2: import argparse
+3: import copy
+4: import json
+5: import shutil
+6: from common import P, NODE, CAP, authority, digest, env_for, load, put, require, strict_load
+7: from launcher import execute
+8: from run import run
+9: from seal import seal
+10: from validate import evaluate, validate_run
+11: 
+12: def check(folder, authority_path, authority_sha, out):
+13:     out.mkdir(parents=True, exist_ok=False)
+14:     trusted = authority(authority_path, authority_sha)
+15:     fixture = load(P / 'fixture.json')
+16:     data = load(folder / 'stdout.txt')
+17:     execution_ns = load(folder / 'process.json')['capture']['executionElapsedNs']
+18:     outer_ms = (execution_ns + 999999) // 1000000
+19:     results = []
+20:     mutations = [
+21:         ('missing-target', lambda d: d['cases'].pop(1)),
+22:         ('duplicate-case', lambda d: d['cases'].append(copy.deepcopy(d['cases'][1]))),
+23:         ('lost-telemetry', lambda d: d['cases'][1]['telemetryEvents'].clear()),
+24:         ('malformed-telemetry', lambda d: d['cases'][1]['telemetryEvents'].__setitem__(0, {})),
+25:         ('forged-telemetry', lambda d: d['cases'][1]['telemetryEvents'][0].__setitem__('errors', 42)),
+26:         ('forged-body-count', lambda d: d['cases'][1]['bodyCalls'].clear()),
+27:         ('forged-body-tenant', lambda d: d['cases'][1]['bodyCalls'][0]['context'].__setitem__('tenantId', 'forged')),
+28:         ('forged-body-agent', lambda d: d['cases'][1]['bodyCalls'][0]['context'].__setitem__('agentId', 'forged')),
+29:         ('forged-body-signal', lambda d: d['cases'][1]['bodyCalls'][0]['context']['signal'].__setitem__('aborted', True)),
+30:         ('forged-log-payload', lambda d: d['cases'][1]['kernelLogEvents'][1].__setitem__('input', {'text': 'forged'})),
+31:         ('forged-log-correlation', lambda d: d['cases'][1]['kernelLogEvents'][1].__setitem__('correlationId', 'forged')),
+32:         ('forged-gate-flags', lambda d: d['cases'][0]['gateCalls'][0]['policy'].__setitem__('networkAllowed', True)),
+33:         ('forged-decision-input', lambda d: d['cases'][1]['decisions'][0]['input']['runtime'].__setitem__('userMessage', 'forged')),
+34:         ('forged-fingerprint', lambda d: d['cases'][1].__setitem__('capabilityFingerprint', '0' * 64)),
+35:         ('forged-proposal-hash', lambda d: d['cases'][1]['journalRecord'].__setitem__('proposalHash', '0' * 64)),
+36:         ('boolean-counter', lambda d: d['cases'][1]['nativeResult'].__setitem__('toolCalls', True)),
+37:         ('boolean-timing', lambda d: d['cases'][1]['telemetryEvents'][0].__setitem__('latencyMs', False)),
+38:         ('lost-audit', lambda d: d['cases'][1]['auditEvents'].clear()),
+39:         ('extra-event-field', lambda d: d['cases'][1]['kernelLogEvents'][2].__setitem__('forged', True)),
+40:         ('forged-normalized-mode', lambda d: d['cases'][1]['submittedDescriptor'].__setitem__('sandbox', 'WORKSPACE')),
+41:         ('blocked-tool-duration', lambda d: d['cases'][0]['telemetryEvents'][0].__setitem__('toolDurationMs', 1)),
+42:         ('journal-after-audit', lambda d: (d['cases'][1]['journalRecord'].__setitem__('createdAt', '2099-01-01T00:00:00.000Z'), d['cases'][1]['journalRecord'].__setitem__('updatedAt', '2099-01-01T00:00:00.001Z'))),
+43:         ('audit-before-journal', lambda d: d['cases'][1]['auditEvents'][0].__setitem__('timestamp', '2000-01-01T00:00:00.000Z')),
+44:         ('tool-duration-over-turn', lambda d: (d['cases'][1]['telemetryEvents'][0].__setitem__('latencyMs', 0), d['cases'][1]['telemetryEvents'][0].__setitem__('toolDurationMs', 5000))),
+45:         ('turn-duration-over-execution', lambda d: (d['cases'][1]['telemetryEvents'][0].__setitem__('latencyMs', outer_ms + 2), d['cases'][1]['telemetryEvents'][0].__setitem__('toolDurationMs', outer_ms + 2))),
+46:         ('sequential-clock-reversal', lambda d: (d['cases'][1]['journalRecord'].__setitem__('createdAt', '2000-01-01T00:00:00.000Z'), d['cases'][1]['journalRecord'].__setitem__('updatedAt', '2000-01-01T00:00:00.000Z'), d['cases'][1]['auditEvents'][0].__setitem__('timestamp', '2000-01-01T00:00:00.000Z'))),
+47:         ('audit-span-over-execution', lambda d: (d['cases'][2]['journalRecord'].__setitem__('createdAt', '2099-01-01T00:00:00.000Z'), d['cases'][2]['journalRecord'].__setitem__('updatedAt', '2099-01-01T00:00:00.000Z'), d['cases'][2]['auditEvents'][0].__setitem__('timestamp', '2099-01-01T00:00:00.000Z'))),
+48:         ('sequential-duration-sum', lambda d: [c['telemetryEvents'][0].__setitem__('latencyMs', outer_ms) for c in d['cases']]),
+49:     ]
+50:     for name, mutate in mutations:
+51:         mutant = copy.deepcopy(data)
+52:         mutate(mutant)
+53:         try:
+54:             evaluate(mutant, fixture, execution_ns)
+55:         except (ValueError, KeyError, IndexError, TypeError) as error:
+56:             f = out / 'semantic-full-run' / name
+57:             shutil.copytree(folder, f)
+58:             raw = (json.dumps(mutant, ensure_ascii=False, allow_nan=False) + '\n').encode()
+59:             (f / 'stdout.txt').write_bytes(raw)
+60:             process = load(f / 'process.json')
+61:             process['capture']['env'] = env_for(f)
+62:             process['capture']['retainedBytes'] = len(raw)
+63:             put(f / 'process.json', process)
+64:             receipt = out / (name + '.semantic-test-only.receipt.json')
+65:             sha = seal(f, receipt)
+66:             try:
+67:                 validate_run(f, trusted, authority_sha, receipt, sha)
+68:             except (ValueError, KeyError, IndexError, TypeError) as full_error:
+69:                 results.append({'test': name, 'kind': 'semantic', 'result': 'REJECTED',
+70:                                 'reason': str(error), 'fullRunResult': 'REJECTED',
+71:                                 'fullRunReason': str(full_error),
+72:                                 'receiptScope': 'TEST_ONLY_NOT_ACTUAL_CAPTURE'})
+73:                 continue
+74:             raise AssertionError('full-run semantic mutation accepted: ' + name)
+75:         raise AssertionError('semantic mutation accepted: ' + name)
+76:     for raw in ['{"cases":[],"cases":[]}', '{"value":NaN}', '{"value":Infinity}']:
+77:         try:
+78:             strict_load(raw)
+79:         except ValueError:
+80:             results.append({'test': raw, 'kind': 'strict-json', 'result': 'REJECTED'})
+81:             continue
+82:         raise AssertionError('ambiguous JSON accepted')
+83:     # Forged copies receive an explicitly test-only trusted receipt so semantic
+84:     # rejection is exercised beyond transport hashes. These are never accepted runs.
+85:     process_mutations = [
+86:         ('empty-source-map', lambda f, p: (put(f/'sources-before.json', {}), put(f/'sources-after.json', {}), p.__setitem__('sourceCount', 0))),
+87:         ('bad-argv', lambda f, p: p['capture'].__setitem__('argv', ['forged'])),
+88:         ('bad-cwd', lambda f, p: p['capture'].__setitem__('cwd', '/forged')),
+89:         ('bad-env', lambda f, p: p['capture']['env'].__setitem__('NODE_OPTIONS', 'forged')),
+90:         ('bad-group', lambda f, p: p['capture'].__setitem__('processGroup', 1)),
+91:         ('boolean-pid', lambda f, p: p['capture'].__setitem__('pid', True)),
+92:         ('bad-deadline', lambda f, p: p['capture'].__setitem__('deadlineMs', 6000)),
+93:         ('bad-duration', lambda f, p: p['capture'].__setitem__('executionElapsedNs', 5000000001)),
+94:         ('missing-duration', lambda f, p: p['capture'].pop('executionElapsedNs')),
+95:         ('hidden-stderr', lambda f, p: (f/'stderr.txt').write_text('concealed stderr')),
+96:         ('unknown-join', lambda f, p: p['capture'].__setitem__('joined', None)),
+97:         ('source-drift', lambda f, p: put(f/'sources-after.json', {})),
+98:     ]
+99:     for name, mutate in process_mutations:
+100:         f = out / name
+101:         shutil.copytree(folder, f)
+102:         process = load(f/'process.json')
+103:         process['capture']['env'] = env_for(f)
+104:         mutate(f, process)
+105:         put(f/'process.json', process)
+106:         receipt = out/(name+'.receipt.json')
+107:         sha = seal(f, receipt)
+108:         try:
+109:             validate_run(f, trusted, authority_sha, receipt, sha)
+110:         except (ValueError, KeyError, IndexError, TypeError):
+111:             results.append({'test': name, 'kind': 'process-semantic', 'result': 'REJECTED'})
+112:             continue
+113:         raise AssertionError('process mutation accepted: ' + name)
+114:     # An unmodified copied run with adjusted private home paths is a positive
+115:     # control for the copied-evidence setup, not an independently captured run.
+116:     positive = out/'copy-positive'
+117:     shutil.copytree(folder, positive)
+118:     process = load(positive/'process.json')
+119:     process['capture']['env'] = env_for(positive)
+120:     put(positive/'process.json', process)
+121:     receipt = out/'copy-positive.receipt.json'
+122:     sha = seal(positive, receipt)
+123:     validate_run(positive, trusted, authority_sha, receipt, sha)
+124:     results.append({'test': 'copied-evidence-harness', 'result': 'PASS_COPY_CONTROL_ONLY'})
+125:     try:
+126:         validate_run(positive, trusted, authority_sha, receipt, '0'*64)
+127:     except ValueError:
+128:         results.append({'test': 'untrusted-receipt', 'result': 'REJECTED'})
+129:     else:
+130:         raise AssertionError('untrusted receipt accepted')
+131:     try:
+132:         authority(authority_path, '0'*64)
+133:     except ValueError:
+134:         results.append({'test': 'untrusted-source-authority', 'result': 'REJECTED'})
+135:     else:
+136:         raise AssertionError('untrusted authority accepted')
+137:     # Controlled children only: close own pipes then wait, flood own stdout,
+138:     # injected read failure, and post-capture snapshot failure.
+139:     lifecycle = []
+140:     fixtures = [
+141:         ('eof-timeout', "require('fs').closeSync(1);require('fs').closeSync(2);setTimeout(()=>{},2000)", 150, CAP, False, 'execution_deadline_after_eof'),
+142:         ('output-cap', "process.stdout.write('x'.repeat(100000));setTimeout(()=>{},2000)", 1000, 1024, False, 'combined_output_cap'),
+143:         ('capture-error', "process.stdout.write('x');setTimeout(()=>{},2000)", 1000, CAP, True, 'synthetic_capture_error'),
+144:     ]
+145:     for name, script, deadline, cap, fault, expected in fixtures:
+146:         f = out/name
+147:         f.mkdir()
+148:         capture, streams = execute([str(NODE), '-e', script], P, env_for(f), deadline, cap, fault)
+149:         put(f/'process.json', capture)
+150:         for key, raw in streams.items():
+151:             (f/(key+'.txt')).write_bytes(raw)
+152:         require(any(expected in error['message'] for error in capture['errors']), name+' fault not observed')
+153:         require(capture['joined'] and capture['remainingProcessGroup'] is False, name+' cleanup')
+154:         require(capture['retainedBytes'] <= cap, name+' retained cap')
+155:         lifecycle.append({'test': name, 'result': 'EXPECTED_FAILURE_RETAINED_AND_JOINED', 'capture': capture})
+156:     def synthetic_driver(argv, cwd, env):
+157:         return execute([str(NODE), '-e', "process.stdout.write('synthetic snapshot fixture')"], cwd, env)
+158:     f = out/'after-snapshot-error'
+159:     good, record = run(f, authority_path, authority_sha, snapshot_fault=True, capture_driver=synthetic_driver)
+160:     require(not good and record['capture']['joined'] and record['capture']['remainingProcessGroup'] is False, 'snapshot fault cleanup')
+161:     require(record['snapshotErrors'][0]['stage'] == 'after' and (f/'stdout.txt').read_bytes(), 'snapshot failure evidence')
+162:     lifecycle.append({'test': 'after-snapshot-error', 'result': 'EXPECTED_FAILURE_RETAINED_AND_JOINED', 'record': record})
+163:     put(out/'results.json', {'validatorControls': results, 'lifecycleControls': lifecycle,
+164:                             'sourceAuthoritySHA256': authority_sha, 'sandboxNativeTests': 0,
+165:                             'productionChanges': 0, 'fullParity': 'NOT_MEASURED'})
+166:     return len(results), len(lifecycle)
+167: 
+168: if __name__ == '__main__':
+169:     parser = argparse.ArgumentParser()
+170:     parser.add_argument('--run', required=True, type=Path)
+171:     parser.add_argument('--authority', required=True, type=Path)
+172:     parser.add_argument('--authority-sha', required=True)
+173:     parser.add_argument('--out', required=True, type=Path)
+174:     args = parser.parse_args()
+175:     print(check(args.run.resolve(), args.authority, args.authority_sha, args.out.resolve()))
+

@@ -1,0 +1,55 @@
+--- v4
++++ v5
+@@ -11,7 +11,7 @@
+ const hash=(x:any)=>createHash('sha256').update(JSON.stringify(sorted(x))).digest('hex')
+ function toolFrom(request:any){const frame=JSON.parse(request.messages[1].content);return frame.items.filter((x:any)=>x.priority==='FRESH_TOOL_RESULTS').map((x:any)=>x.value)}
+ const faultCases = [
+- 'healthy','empty','whitespace','selector-throw','selector-drop','selector-alias','model-throw','model-deadline',
++ 'healthy','empty','whitespace','selector-deadline','selector-throw','selector-drop','selector-alias','model-throw','model-deadline',
+  'cp-pre-before','cp-pre-lostack','cp-pre-persistent','cp-post-transient','cp-post-persistent','cp-post-lostack',
+  'step-start-before','step-start-lostack','step-start-persistent','step-end-before','step-end-lostack','step-end-persistent',
+  'audit-start','audit-step','audit-terminal','log-request','log-result','model-throw+cp-post-transient','model-throw+cp-post-lostack',
+@@ -40,6 +40,7 @@
+  const contextEngine={build:async(x:any)=>{
+   contextBuilds++;const c=await nativeContext.build(x)
+   if(enabled&&contextBuilds===3){
++   if(fault==='selector-deadline')return new Promise(()=>{})
+    if(fault==='selector-throw')throw new Error('I1_SELECTOR_THROW')
+    if(fault==='selector-drop')return {...c,contextItems:c.contextItems.filter((i:any)=>i.priority!=='FRESH_TOOL_RESULTS')}
+    if(fault==='selector-alias'){let mutate=(n:number)=>queueMicrotask(()=>{if(n)return mutate(n-1);c.instructions.push('I1_LATE_HOST_MUTATION');for(const item of c.contextItems)if(item.priority==='FRESH_TOOL_RESULTS')item.content='MUTATED';c.userMessage='I1_LATE_USER_MUTATION'});mutate(5)}
+@@ -48,7 +49,7 @@
+  }}
+  const model={complete:async({signal,...request}:any)=>{
+   requests.push(cp(request));entries.push({checkpoint:await steps.loadCheckpoint(input.tenantId,input.executionId),steps:await steps.listSteps(input.tenantId,input.executionId)})
+-  if(enabled&&fault.includes('model-throw'))throw new Error('I1_PROVIDER_THROW_NO_OBSERVED_USAGE')
++  if(enabled&&fault.includes('model-throw')){faults.push({type:'provider',error:'I1_PROVIDER_THROW_NO_OBSERVED_USAGE',providerEntry:requests.length,observedUsage:null});throw new Error('I1_PROVIDER_THROW_NO_OBSERVED_USAGE')}
+   if(enabled&&fault==='model-deadline')return new Promise(()=>{})
+   const output=legacy?'LEGACY':toolFrom(request)[0]?.payload.output
+   return {text:enabled&&fault.startsWith('empty')?'':fault==='whitespace'?' \n\t ':hash(output),provider:'i1.synthetic',model:'declared',inputTokens:37,outputTokens:11,costUsd:0.125}
+@@ -63,7 +64,7 @@
+  }
+  let evaluations=0
+  const make=()=>createOperationalHarness({...(legacy?{}:{toolResultContext:{version:1}}),capabilities:caps,effectJournal:journal,stepStore:steps,contextEngine,defaultRuntimeProfile:'iterative',iterativeOrchestrator:new HybridOrchestrator({decisionModel:model,decisionInputCounter:{measure:async()=>({counterId:'i1',counterVersion:'1',provider:'i1',model:'declared',formattingVersion:'1',inputUpperBoundTokens:1000,contextWindowTokens:8192,costUpperBoundUsd:0.125})},decisionModelSupportsMaxOutputTokens:true,rules:[rule],maxDecisionRepairs:0}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals,audit,telemetry:new RecordingTelemetrySink(),log:{append:async e=>{log.push(cp(e));if(enabled&&logHits===0&&((fault.includes('log-result')&&e.type==='model/result')||(fault==='log-request'&&e.type==='model/request'))){logHits++;throw new Error('I1_MODEL_LOG_VETO')}}},...(continuation==='active'?{completionEvaluator:{evaluate:async({lastDecision}:any)=>{evaluations++;if(lastDecision.decisionType==='STOP')return {outcome:'COMPLETE',reasonCode:'USER_REQUESTED_STOP',deterministic:true};if(lastDecision.decisionType==='REPLAN'&&!allowResume)throw new Error('I1_AFTER_SUCCESSFUL_RESPONSE_ACTIVE');if(lastDecision.decisionType==='RESPOND'&&!allowResume)return {outcome:'INCOMPLETE',reasonCode:'STRATEGY_CHANGED',deterministic:true};return {outcome:lastDecision.decisionType==='RESPOND'?'COMPLETE':'INCOMPLETE',reasonCode:lastDecision.decisionType==='RESPOND'?'GOAL_SATISFIED':'TOOL_REQUIRED',deterministic:true}}}}:{})})
+- const base=phase3RuntimeInput();const input:any={...base,executionId:'exec_i1_'+fault+'_'+maxCalls+'_'+legacy+'_'+(continuation||''),capabilityFingerprint:caps.compositionFingerprint(),agent:phase3AgentProfile({tools:[tool]}),userMessage:'UNTRUSTED_USER_AUTHORITY synthetic tool then hash',budget:{...base.budget,maxTokens:20000,maxModelCalls:maxCalls,maxDurationMs:fault==='model-deadline'?100:30000}}
++ const base=phase3RuntimeInput();const input:any={...base,executionId:'exec_i1_'+fault+'_'+maxCalls+'_'+legacy+'_'+(continuation||''),capabilityFingerprint:caps.compositionFingerprint(),agent:phase3AgentProfile({tools:[tool]}),userMessage:'UNTRUSTED_USER_AUTHORITY synthetic tool then hash',budget:{...base.budget,maxTokens:20000,maxModelCalls:maxCalls,maxDurationMs:fault.endsWith('deadline')?100:30000}}
+  const first=await make().run(input)
+  const snapshot=async()=>({checkpoint:await steps.loadCheckpoint(input.tenantId,input.executionId),steps:await steps.listSteps(input.tenantId,input.executionId),journals:await Promise.all(ops.map(k=>journal.get(input.tenantId,k))),bodies,requests:cp(requests)})
+  const before=await snapshot();enabled=false;allowResume=true
+@@ -80,7 +81,7 @@
+  expect(after.requests).toEqual(before.requests);expect(after2.requests).toEqual(before.requests)
+  expect(after.checkpoint).toEqual(before.checkpoint);expect(after2.checkpoint).toEqual(before.checkpoint)
+  expect(after.journals).toEqual(before.journals);expect(after2.journals).toEqual(before.journals)
+- const zero=['selector-throw','selector-drop','cp-pre-before','cp-pre-lostack','cp-pre-persistent','step-start-before','step-start-lostack','step-start-persistent','audit-start','log-request'].includes(fault)
++ const zero=['selector-deadline','selector-throw','selector-drop','cp-pre-before','cp-pre-lostack','cp-pre-persistent','step-start-before','step-start-lostack','step-start-persistent','audit-start','log-request'].includes(fault)
+  expect(before.requests.length).toBe(zero?0:1)
+  for(const e of r.entries){expect(e.checkpoint.budgetUsage.modelCalls).toBe(1);expect(e.steps.some((s:any)=>s.stepType==='RESPOND'&&s.status==='RUNNING')).toBe(true)}
+  if(!zero&&!fault.includes('model-throw')&&fault!=='model-deadline'){
+@@ -89,7 +90,7 @@
+  }
+  if(fault==='cp-post-persistent'){expect(before.checkpoint.budgetUsage).toMatchObject({modelCalls:1,inputTokens:0,outputTokens:0,costUsd:0});expect(replay.response).toMatch(/uncertain.*reconciliation/)}
+  if(fault.includes('model-throw')){expect(first.response).toContain('I1_PROVIDER_THROW_NO_OBSERVED_USAGE');if(!fault.includes('lostack'))expect(before.checkpoint.state.stopReason).toBe('MODEL_FAILURE')}
+- if(fault==='model-deadline')expect(first.stopReason).toBe('MAX_DURATION')
++ if(fault.endsWith('deadline'))expect(first.stopReason).toBe('MAX_DURATION')
+  if(fault==='healthy'||fault==='selector-alias'){
+   expect(first.stopReason).toBe('COMPLETED');expect(first.response).toBe(hash(r.resultOutput))
+   const req=before.requests[0];expect(req.messages[0].content).not.toMatch(/UNTRUSTED_|I1_LATE_/);expect(req.messages[1].content).not.toContain('I1_LATE_')

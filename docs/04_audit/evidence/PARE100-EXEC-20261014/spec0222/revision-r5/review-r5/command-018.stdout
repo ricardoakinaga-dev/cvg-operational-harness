@@ -1,0 +1,59 @@
+FILE spec.md RG_EXIT 0
+36:O conjunto protegido é `CONTROL_SERVICES` mais `OPTIONAL_SERVICES` de segurança, incluindo `sandbox`. Opcional significa que pode estar ausente e falhar fechado, não que uma capability possa fornecê-lo. O BUILD corrigirá explicitamente a classificação de proteção de sandbox no host, sem incluí-lo em REQUIRED_SERVICES nem mudar grants. Capability só pode prover slots declarados de LOOP_CAPABILITIES e hooks permitidos; não registra guardas, não recebe mutador do owner e não reordena os controles.
+38:Cada geração usa os mesmos control ports de identidade capturada e wrappers de registro sem ownership desses recursos compartilhados. Descartar seus registros não fecha audit/policy/approvals/log/effects/sandbox/stores. Recursos de controle próprios do owner têm disposers separados e só fecham depois de todas as gerações e operações; recursos emprestados nunca são fechados por ele. Referências não se tornam isolamento contra código JavaScript arbitrário do mesmo processo: plugins precisam ser previamente revisados; contenção nativa continua P100-024.
+133:| tool/pre-execute                          | suportado se o gate é alcançado | suportado se o gate é alcançado | DTO readonly de identidade/toolId/version e digest da intenção; não altera tool/input/operationKey/approval/sandbox |
+136:DTOs contêm somente campos de identificação do turno do lease, runtimeProfile, stepNumber quando houver, purpose/toolId/toolVersion quando aplicável e digests; nenhum port/função, grant de aprovação ou handle de sandbox é exposto. Capturar/detach/freeze antes do callback e contar a promessa original do observer. Seu retorno permitido é void/Promise<void>; retornar outcome/next/descriptor, sync throw ou reject é contract failure fail-closed no gate, não resposta de sucesso. O wrapper chama sua continuação nativa uma vez, internamente e somente depois de o observer terminar com void; o módulo não a recebe, não pode chamá-la duas vezes ou agendá-la depois. Se um controle anterior parar o gate, a capability não roda; não alegar que o observer vê todas as negações.
+148:CURRENT: CapabilityRegistry calcula o fingerprint dos descriptors normalizados, incluindo providerId/providerVersion. O adapter de effect journal calcula proposalHash de compositionFingerprint, identidade/metadados da tool e invocation.input; sua chave de reserva é tenantId/operationKey. CONFIRMED com o mesmo proposalHash pode retornar o resultado salvo sem chamar o body atual. planDigest/configDigest/generationId/executionId não entram automaticamente nesse hash. Logo, trocar o target configurado A por B mantendo os mesmos descriptors pode produzir replay de A no turno de B; é uma dedução de fonte, não um exploit executado.
+156:O contexto de ativação recebe `toolBindings`, dados readonly/detached com a versão nativa esperada por provider declarado; não recebe mutador ou autoridade nova. O mapa e seus preimages entram no agregado256KiB do plan/config e no accounting16MiB, com scan/reserva antes de clone/hash; cada registro cobra também seu mínimo256bytes. Toda registration entregue a provideCapabilities precisa ter providerId permitido, providerVersion EXATAMENTE igual à versão derivada correspondente e toolId/version no conjunto declarado do catálogo. Validar os descriptors realmente registrados antes de preparar/publicar o kernel, tanto em bootstrap quanto replace. Campo ausente, versão escolhida pelo plugin, configuração alterada depois do snapshot ou tentativa de manter a versão derivada de A sob binding B resulta CATALOG_MISMATCH e cleanup do candidato, sem publicação. Não reescrever silenciosamente um descriptor já registrado para fingir que seu fingerprint original foi validado.
+249:Aplicar a mesma primitive/barreira a rollback de boot, retirada normal, recurso de acquire que chegou tarde e pilha OWNED do owner. Um recurso tardio já registrado recebe sequência de registro e item próprios antes de ser descartado; pendingAcquire impede começar uma pilha dependente prematuramente. Não chamar a API legada void e depois a primitive de relatório (nem o contrário), pois isso repetiria disposers. Recusar novas aquisições de trabalho de usuário durante cleanup; IO interno de settlement usa os tokens nativos correspondentes e seu contrato de port termina somente quando sua operação original terminou. É uma regra de lifetime declarado, não introspecção/sandbox de toda biblioteca arbitrária.
+263:Esse limite impede INICIAR outro callback, não revoga/estorna efeitos internos de um body já chamado que ignora signal. Tal body continua possuído, pode ter outcome incerto, e só termina por seu contrato/backend; contenção forte continua P100-024/T4. Nunca declarar quiescência ou ausência de efeito por ter fechado o latch.
+286:Códigos estáveis propostos: INVALID_INPUT, OWNER_CLOSED, OWNER_FENCED, TENANT_MISMATCH, STALE_REVISION, REQUEST_CONFLICT, QUOTA_EXCEEDED, POLICY_BLOCKED, HANDOFF_REQUIRED, CATALOG_MISMATCH, BOOT_FAILED, PUBLICATION_PENDING, CLEANUP_PENDING, CLEANUP_FAILED, REENTRANT_OPERATION, UNSUPPORTED_DURABLE_BINDING, TURN_ADMISSION_CLOSED, OWNER_CLOSED_EVIDENCE_UNCERTAIN. Diagnóstico carrega somente IDs/digests/phase/counters e causa sanitizada. Não emitir corpo de ferramenta, credenciais/config ou path sensível; audit/log indisponível impede novo trabalho de gerenciamento, sem inventar evidência de ausência de efeito.
+296:OBS-I1-001 (tool result longo truncado em summary300) continua aberto em P100-004/014/020; lifetime correto não restaura conteúdo perdido. SDKsingle_pass, forks/resume/search/backends, topology16vs3, sideEffecting, contenção nativa, interfaces/hosts e gates globais permanecem no objetivo integral. Nenhuma produção, provider real, dado real ou efeito clínico/financeiro/agenda automático é autorizado.
+300:Somente após aprovação desta SPEC: contrato/owner novos em `packages/harness/src/managed-lifecycle.ts` e export público; helpers internos mínimos em factory/runtime/kernel para receber o MESMO host preparado, sem nova implementação de loop; host/types para sandbox protegido e erro observável de cleanup; wrappers de ownership dos ports de capability. Tipos novos ficam locais ao pacote harness. Os contratos atuais de packages/contracts permanecem byte-identical nesta fatia; se o BUILD revelar que precisam mudar, parar e revisar a SPEC concreta e seu gate humano antes dessa alteração. Testes novos em harness/kernel e fixtures públicas, com type/API/architecture checks. Nenhuma mudança no worker/API/platform/persistence/SDK/manifests/lock ou SQL nesta fatia; adapters dessas superfícies são gates posteriores.
+312:| ML03 | Matriz finita de observers e controles/sandbox protegidos; turn/end formatter de COMPLETED e around/replacement hooks recusados antes de init                                                                         | Confundir OPTIONAL com não protegido; unload/bypass por plugin/modelo                                                                                          |
+
+
+FILE cvg/packages/harness/src/capability-boundary.ts RG_EXIT 0
+207:function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+249:  return deepFreeze({
+275:      descriptor: normalizeDescriptor(registration.descriptor),
+405:function cloneDescriptor(
+408:  return deepFreeze({
+
+
+FILE cvg/packages/harness/src/kernel/pipeline.ts RG_EXIT 0
+305:  const sandbox = await enforceSandbox(host, call)
+343: * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+347: * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+351:export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+352:  return descriptor.sandbox ?? 'NONE'
+359: * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+361:async function enforceSandbox(
+365:  const requiredMode = requiredSandboxMode(call.tool)
+366:  if (requiredMode === 'NONE') return undefined
+
+
+capability-boundary.ts:405: function cloneDescriptor(
+capability-boundary.ts:406:   descriptor: CapabilityDescriptor
+capability-boundary.ts:407: ): CapabilityDescriptor {
+capability-boundary.ts:408:   return deepFreeze({
+capability-boundary.ts:409:     ...descriptor,
+capability-boundary.ts:410:     inputSchema: cloneJsonValue(descriptor.inputSchema),
+capability-boundary.ts:411:     outputSchema: cloneJsonValue(descriptor.outputSchema)
+capability-boundary.ts:412:   }) as CapabilityDescriptor
+capability-boundary.ts:413: }
+capability-boundary.ts:414: 
+capability-boundary.ts:415: function sorted(
+capability-boundary.ts:416:   registrations: readonly StoredRegistration[]
+capability-boundary.ts:417: ): readonly StoredRegistration[] {
+capability-boundary.ts:418:   return [...registrations].sort((left, right) => {
+capability-boundary.ts:419:     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
+capability-boundary.ts:420:     if (idOrder !== 0) return idOrder
+capability-boundary.ts:421:     return compareCodeUnits(left.descriptor.version, right.descriptor.version)
+capability-boundary.ts:422:   })
+capability-boundary.ts:423: }
+capability-boundary.ts:424: 
+ORIGINAL_LEAF_COUNTS {'STATIC': 242, 'UNKNOWN': 29}
+ORIGINAL_PARITY_COUNTS {'NOT_VERIFIED': 271}
+NO_CANDIDATE_BINDING_COUNT 271
+LEAF_KEYS ['id', 'contract_sha256', 'source', 'source_sha256', 'owner_task', 'scope', 'extraction_status', 'parity_status', 'procedure', 'procedure_status', 'evidence']

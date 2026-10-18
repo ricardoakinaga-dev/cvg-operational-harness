@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Launch the finite reference probe only after terminal compiled-byte attestation."""
+from pathlib import Path
+import datetime
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+HERE = Path(__file__).resolve().parent
+BUILD = HERE.parent / 'reference-compilation'
+
+
+def sha(path):
+    with path.open('rb') as f:
+        return hashlib.file_digest(f, 'sha256').hexdigest()
+
+
+def save(path, value):
+    path.write_text(json.dumps(value, indent=2) + '\n')
+
+
+def storage(path):
+    total = 0
+    for directory, dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            p = Path(directory) / name
+            try:
+                size = p.lstat().st_size
+            except FileNotFoundError:
+                continue  # concurrently removed private SQLite/temp file, contributes no storage
+            total += size
+    return total
+
+
+def main():
+    c = json.loads((HERE / 'contract.json').read_text())
+    for row in c['source_inputs']:
+        assert sha(Path(c['upstream']) / row['path']) == row['sha256'], 'source input drift'
+    assert sha(HERE / 'driver.py') == c['driver_sha256'], 'probe driver changed after contract'
+    run = json.loads((BUILD / 'live.json').read_text())
+    assert run['status'] == 'TERMINAL' and run['exit'] == 0 and not run['abort_reason'], 'same build not yet successful'
+    # Recheck the terminal build provenance and its readonly trees before any ELF execution.
+    verified = subprocess.run(['/usr/bin/python3', '-I', str(BUILD / 'verify-build.py'), '--check'],
+                              check=True, capture_output=True, timeout=240)
+    provenance = json.loads((BUILD / 'build-provenance.json').read_text())
+    artifact = Path(provenance['artifact']['path'])
+    assert not artifact.is_symlink() and artifact.is_file()
+    assert artifact.stat().st_size == provenance['artifact']['bytes'] and sha(artifact) == provenance['artifact']['sha256']
+    mem = int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines()
+                   if line.startswith('MemAvailable:'))) * 1024
+    assert mem >= c['minimum_available_memory_bytes'], 'insufficient current memory headroom'
+    resource = Path(c['resource_root'])
+    resource.mkdir(parents=True, exist_ok=True)
+    assert shutil.disk_usage(resource).free >= c['minimum_free_disk_bytes'], 'insufficient disk'
+    attempt = 'keyless-' + uuid.uuid4().hex[:10]
+    work = resource / attempt
+    work.mkdir(exist_ok=False)
+    control = resource / (attempt + '-control')
+    control.mkdir(exist_ok=False)
+    home = work / 'home'
+    (home / '.codex').mkdir(parents=True)
+    (home / '.codex/config.toml').write_text(c['synthetic_config_toml'])
+    (control / 'driver.py').write_bytes((HERE / 'driver.py').read_bytes())
+    (control / 'environment.json').write_text(json.dumps(c['environment']))
+    save(control / 'host-namespaces.json', {k: os.readlink('/proc/self/ns/' + k) for k in ['net', 'mnt', 'pid']})
+    uid, gid = os.getuid(), os.getgid()
+    (control / 'passwd').write_text(f'cvgprobe:x:{uid}:{gid}:Synthetic reference:/reference-home:/usr/sbin/nologin\n')
+    (control / 'group').write_text(f'cvgprobe:x:{gid}:\n')
+    scope = 'cvg-codex100-ref-probe-' + attempt + '.scope'
+    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
+           'XDG_RUNTIME_DIR': '/run/user/' + str(uid),
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(uid) + '/bus'}
+    guard = """import pathlib,json,os,sys
+cg=pathlib.Path('/proc/self/cgroup').read_text().strip().split('::',1)[1]
+p=pathlib.Path('/sys/fs/cgroup')/cg.lstrip('/')
+v={k:(p/k).read_text().strip() for k in ['memory.max','memory.swap.max','pids.max','cpu.max']}
+assert v['memory.max']=='4294967296' and v['memory.swap.max']=='0' and v['pids.max']=='256'
+cpu=v['cpu.max'].split();assert cpu[0]!='max' and int(cpu[0])/int(cpu[1])==2
+assert cg.endswith('/'+sys.argv[1]),'unexpected scope'
+print('CVG_REFERENCE_PROBE_KERNEL '+json.dumps({'cgroup':cg,'limits':v}),file=sys.stderr,flush=True)
+os.execv(sys.argv[2],sys.argv[2:])"""
+    sandbox = ['/usr/bin/bwrap', '--unshare-all', '--new-session', '--die-with-parent',
+               '--clearenv', '--cap-drop', 'ALL', '--ro-bind', '/usr', '/usr',
+               '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64',
+               '--symlink', 'usr/bin', '/bin', '--proc', '/proc', '--dev', '/dev',
+               '--tmpfs', '/tmp', '--dir', '/etc', '--dir', '/reference',
+               '--ro-bind', str(artifact), '/reference/codex',
+               '--ro-bind', c['native_sysroot'], '/native',
+               '--ro-bind', str(control), '/control',
+               '--ro-bind', str(control / 'passwd'), '/etc/passwd',
+               '--ro-bind', str(control / 'group'), '/etc/group',
+               '--bind', str(home), '/reference-home', '--bind', str(work), '/work',
+               '--chdir', '/work']
+    for k, v in c['environment'].items():
+        sandbox.extend(['--setenv', k, v])
+    sandbox.extend(['/usr/bin/python3', '-I', '/control/driver.py'])
+    command = ['/usr/bin/systemd-run', '--user', '--scope', '--collect', '--quiet', '--unit', scope,
+               '-p', 'MemoryMax=4294967296', '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=200%',
+               '-p', 'TasksMax=256', '-p', 'RuntimeMaxSec=180',
+               '/usr/bin/python3', '-I', '-c', guard, scope, *sandbox]
+    report = {'task': c['task'], 'attempt': attempt, 'scope': scope, 'status': 'PREPARED',
+              'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'command': command, 'contract_sha256': sha(HERE / 'contract.json'),
+              'runner_sha256': sha(Path(__file__)), 'driver_sha256': sha(HERE / 'driver.py'),
+              'build_provenance_sha256': sha(BUILD / 'build-provenance.json'),
+              'reference_artifact': provenance['artifact'], 'work': str(work),
+              'memory_available_at_launch': mem, 'functional_parity_receipts': 0}
+    save(work / 'attempt.json', report)
+    dest = HERE / attempt
+    dest.mkdir(exist_ok=False)
+    save(dest / 'launch.json', report)
+    started = time.monotonic()
+    cause = None
+    proc = None
+    code = None
+    try:
+        with (work / 'supervisor.stdout.log').open('xb') as stdout, (work / 'supervisor.stderr.log').open('xb') as stderr:
+            proc = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr)
+            report.update(status='RUNNING', runner_pid=os.getpid(), child_pid=proc.pid)
+            save(HERE / 'live.json', report)
+            while proc.poll() is None:
+                assert time.monotonic() - started < 185, 'supervisor timeout'
+                assert storage(work) <= c['monitored_storage_limit_bytes'], 'private storage cap exceeded'
+                assert shutil.disk_usage(work).free >= c['abort_free_disk_bytes'], 'free disk threshold'
+                time.sleep(0.25)
+            code = proc.wait()
+    except BaseException as exc:
+        cause = {'type': type(exc).__name__, 'message': str(exc)}
+    finally:
+        active = subprocess.run(['systemctl', '--user', 'show', scope, '-p', 'ActiveState', '--value'],
+                                env=env, capture_output=True, text=True, timeout=10).stdout.strip()
+        if active not in ['', 'inactive', 'failed']:
+            if cause is None:
+                cause = {'type': 'ResidualScope', 'message': 'owned scope still active after supervisor returned'}
+            subprocess.run(['systemctl', '--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', scope],
+                           env=env, capture_output=True, timeout=10)
+        if proc is not None and proc.poll() is None:
+            code = proc.wait(timeout=10)
+        for _ in range(20):
+            active = subprocess.run(['systemctl', '--user', 'show', scope, '-p', 'ActiveState', '--value'],
+                                    env=env, capture_output=True, text=True, timeout=10).stdout.strip()
+            if active in ['', 'inactive', 'failed']:
+                break
+            time.sleep(0.1)
+        assert active in ['', 'inactive', 'failed'], 'owned scope failed to become inactive'
+        # Preserve all private observations, including the first failed driver assertion.
+        for path in work.rglob('*'):
+            if path.is_file() and not path.is_symlink():
+                target = dest / 'raw' / path.relative_to(work)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+        for path in control.iterdir():
+            target = dest / 'raw/control' / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+        report.update(status='TERMINAL', exit=code, first_supervisor_failure=cause,
+                      elapsed_seconds=round(time.monotonic() - started, 3), scope_now=active,
+                      reference_unchanged=sha(artifact) == provenance['artifact']['sha256'])
+        journal = subprocess.run(['journalctl', '--user', '-u', scope, '--no-pager', '-o', 'short-iso'],
+                                 env=env, capture_output=True, timeout=15)
+        (dest / 'unit.journal.log').write_bytes(journal.stdout + journal.stderr)
+        save(dest / 'terminal.json', report)
+        save(HERE / 'live.json', report)
+    print(json.dumps({k: report[k] for k in ['attempt', 'status', 'exit', 'first_supervisor_failure', 'elapsed_seconds', 'scope_now', 'reference_unchanged']}))
+    assert code == 0 and cause is None and report['reference_unchanged'], 'probe did not succeed; preserve raw first failure'
+    proof = dest / 'raw/output/namespace-proof.json'
+    assert proof.is_file() and (dest / 'raw/output/observations.json').is_file()
+    assert b'CVG_REFERENCE_PROBE_KERNEL ' in (dest / 'raw/supervisor.stderr.log').read_bytes()
+
+
+if __name__ == '__main__':
+    main()

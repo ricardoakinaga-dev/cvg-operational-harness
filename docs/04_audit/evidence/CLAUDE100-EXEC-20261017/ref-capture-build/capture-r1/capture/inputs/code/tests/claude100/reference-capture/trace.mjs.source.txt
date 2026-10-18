@@ -1,0 +1,140 @@
+import { performance } from 'node:perf_hooks'
+import { CODES, LIMITS, PHASES, canonical, fault } from './constants.mjs'
+
+export const CONTROL_TRACE = 'control-trace.json'
+export const OBSERVER_TRACE = 'observer-trace.json'
+const HOST_TYPES = new Set([
+  'HOST_COMMAND',
+  'HOST_COMMAND_RESULT',
+  'HOST_ARTIFACT',
+  'HOST_CASE_RESULT',
+  'HOST_FAILURE'
+])
+export const fileFor = (source) =>
+  source === 'observer' ? OBSERVER_TRACE : CONTROL_TRACE
+export const ref = (source, ordinal) => `${fileFor(source)}#${ordinal}`
+
+/**
+ * One host clock and one global ordinal for both physical trace files. HOST
+ * records are capped at 1024; FRAME/RAW have their own per-role ceilings.
+ */
+export class Trace {
+  constructor({ now = () => performance.now() } = {}) {
+    this.now = now
+    this.started = now()
+    this.records = []
+    this.host = 0
+    this.frames = { client: 0, observer: 0 }
+    this.raws = { client: 0, observer: 0 }
+    this.lastOffset = 0
+  }
+  get hostFull() {
+    return this.host >= LIMITS.hostRecords
+  }
+  record(source, type, data) {
+    if (source === 'HOST') {
+      if (!HOST_TYPES.has(type)) throw fault('PROTOCOL')
+      if (this.host >= LIMITS.hostRecords) throw fault('CAP')
+      this.host++
+    } else {
+      if (!['client', 'observer'].includes(source)) throw fault('PROTOCOL')
+      if (type === 'FRAME') {
+        if (this.frames[source] >= LIMITS.controlFrames) throw fault('CAP')
+        this.frames[source]++
+      } else if (type === 'RAW') {
+        if (this.raws[source] >= LIMITS.rawFrames) throw fault('CAP')
+        this.raws[source]++
+      } else throw fault('PROTOCOL')
+    }
+    const offset = Math.max(
+      this.lastOffset,
+      Math.round(this.now() - this.started)
+    )
+    if (offset > LIMITS.offsetMs) throw fault('CAP')
+    this.lastOffset = offset
+    const ordinal = this.records.length
+    this.records.push({
+      ordinal,
+      offsetMs: offset,
+      source,
+      type,
+      data: JSON.parse(canonical(data))
+    })
+    return ordinal
+  }
+  documents(runId) {
+    return {
+      control: {
+        version: 2,
+        runId,
+        file: CONTROL_TRACE,
+        records: this.records.filter((r) => r.source !== 'observer')
+      },
+      observer: {
+        version: 2,
+        runId,
+        file: OBSERVER_TRACE,
+        records: this.records.filter((r) => r.source === 'observer')
+      }
+    }
+  }
+}
+
+/**
+ * Bijective failure ledger. Each cause is recorded once, in order; the first
+ * is primary. eventRef is null only for a suffix after the HOST record cap.
+ */
+export class Ledger {
+  constructor(trace) {
+    this.trace = trace
+    this.failures = []
+    this.errors = []
+    this.seen = new WeakSet()
+    this.overflow = false
+  }
+  add(error, { phase, caseId = null, causes = [] }) {
+    const actual = error instanceof Error ? error : fault('IO')
+    if (this.seen.has(actual)) return null
+    this.seen.add(actual)
+    if (this.failures.length >= LIMITS.failures) {
+      this.overflow = true
+      return null
+    }
+    const code = CODES.includes(actual.code) ? actual.code : 'IO'
+    const order = this.failures.length
+    const causeOrders = [...new Set(causes)]
+      .filter((o) => Number.isSafeInteger(o) && o >= 0 && o < order)
+      .sort((a, b) => a - b)
+      .slice(0, LIMITS.causeChildren)
+    const failure = {
+      order,
+      code,
+      phase: PHASES.includes(phase) ? phase : 'CLEANUP',
+      caseId,
+      primary: order === 0,
+      eventRef: null,
+      causeOrders
+    }
+    this.failures.push(failure)
+    this.errors.push(actual)
+    if (!this.trace.hostFull) {
+      try {
+        const data = { ...failure }
+        delete data.eventRef
+        failure.eventRef = ref(
+          'HOST',
+          this.trace.record('HOST', 'HOST_FAILURE', data)
+        )
+      } catch {
+        failure.eventRef = null
+      }
+    }
+    return order
+  }
+  get length() {
+    return this.failures.length
+  }
+  codes() {
+    return this.failures.map((f) => f.code)
+  }
+}

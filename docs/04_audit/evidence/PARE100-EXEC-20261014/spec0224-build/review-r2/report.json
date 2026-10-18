@@ -1,0 +1,536 @@
+{
+  "review": "Fresh independent I1 intermediate CODE review",
+  "candidate": "SPEC0224 candidateR2",
+  "verdict": "REJECT",
+  "codeQuality": {
+    "verdict": "REJECT",
+    "basis": "Independent confirmed-null recovery defect I1-R2-002. The required public NUL integration also remains broken; no numeric score inherited."
+  },
+  "criterionQualification": "INCOMPLETE; TR02 and TR06 FAIL, others PARTIAL at the complete criterion denominator",
+  "packet": {
+    "root": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2",
+    "manifestSha256": "6b16ece08c5b6427064cd18a49490f63b912ec2ce4340977c1aa5cbceedf8571",
+    "approvedSpecSha256": "f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea",
+    "sources": 63,
+    "proofs": 19,
+    "sourceCopyProofAndManifestRecords": 146,
+    "preAllMatch": true,
+    "postAllMatch": true,
+    "hashesAndSizesBefore": "hash-pre.json",
+    "hashesAndSizesAfter": "hash-post.json",
+    "validSourceIdentity": true
+  },
+  "findings": [
+    {
+      "id": "I1-R2-001",
+      "severity": "HIGH",
+      "confidence": 0.99,
+      "title": "Public native journal cannot carry the approved NUL JSON domain before the V2 checkpoint",
+      "kind": "material integration blocker; supplied RED independently traced to actual source",
+      "anchors": [
+        {
+          "path": "packages/harness/src/createOperationalHarness.ts",
+          "line": 253
+        },
+        {
+          "path": "packages/harness/src/effect-journal.ts",
+          "line": 366
+        },
+        {
+          "path": "packages/persistence/src/operational-execution-postgres.ts",
+          "line": 1835
+        },
+        {
+          "path": "packages/persistence/src/operational-execution-postgres.ts",
+          "line": 1843
+        }
+      ],
+      "diagnosis": "Factory wraps the prepared tool in the native effect journal. Journal confirmation sends output through jsonText to result=$4::jsonb before returning successful dispatch. V2 base64 protects checkpoint state only. NUL output/keys still reach native journal JSONB. The supplied public test cannot reach successful full TOOL_RESULT CAS and returns unknown_effect. This is conservative failure, not forged success, but TR06 is unmet.",
+      "evidence": [
+        "proof/integration/pg-public-r2-02.json",
+        "proof/integration/pg-public-r2-02.stdout.log",
+        "proof/integration/pg-public-r2-02.stderr.log"
+      ],
+      "repro": "No PG/service access; do not repeat the known unavailable proof.",
+      "authority": "Keep native journal failure uncertain. Altering journal format/storage or adding schema/migration is not authorized by this review or the checkpoint codec SPEC. Any required T3 scope expansion needs new authority."
+    },
+    {
+      "id": "I1-R2-002",
+      "severity": "MEDIUM",
+      "confidence": 1.0,
+      "title": "Confirmed JSON null is dropped by the native journal mapper during recovery",
+      "kind": "concrete code defect; independent executable assertion",
+      "anchors": [
+        {
+          "path": "packages/persistence/src/operational-execution-postgres.ts",
+          "line": 1239
+        },
+        {
+          "path": "packages/persistence/src/operational-execution-postgres.ts",
+          "line": 1783
+        },
+        {
+          "path": "packages/harness/src/effect-journal.ts",
+          "line": 323
+        },
+        {
+          "path": "packages/harness/src/complete-tool-results.ts",
+          "line": 80
+        }
+      ],
+      "diagnosis": "mapEffect omits result whenever row.result===null. A legitimate CONFIRMED JSONB null decoded by node-postgres is therefore read as absent. Journaled replay returns SUCCEEDED/output:undefined and completeToolPayload marks UNAVAILABLE/INVALID_JSON. A valid JSON value becomes unavailable at the durable recovery boundary; positive JSON-looking strings remain strings. No body re-execution or policy bypass was observed.",
+      "evidence": [
+        "journal-null.test.ts",
+        "journal-null.observations.json",
+        "cmd-1792151829758201378.json",
+        "cmd-1792151829758201378.stdout",
+        "cmd-1792151829758201378.stderr"
+      ],
+      "repro": "One failing correctness assertion, two passing positive string controls inside it; query seam supplies native-driver decoded row and executes real reserve/map/replay/envelope code. Exit 1: expected undefined to deeply equal null. Zero tool bodies. Not a real PostgreSQL run or complete runtime restart.",
+      "remediation": "Preserve confirmed null while distinguishing absent/SQL-NULL state conservatively using native journal evidence; add a null recovery regression. This report grants no storage/schema changes or automatic reinterpretation of legacy uncertain records."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "TR01",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Public factory full ASCII4096, Unicode and escapes are supported by packet assertions and causal requests; own memory-path assertions passed. Reviewed Unicode fixture is 2100 UTF-8 bytes (14*150), not the specified Unicode4096bytes. The complete previous-three-plus-new fixture denominator is not established here.",
+      "anchors": "proof/integration/focused-r2-02.stdout.log; source/packages/harness/src/__tests__/complete-tool-public.test.ts:221,301; focused.requests.json"
+    },
+    {
+      "id": "TR02",
+      "status": "FAIL",
+      "evidenceAndMeaning": "Strict canonicalizer boundary/limit assertions passed; native journal recovery silently changes admissible JSON null to undefined (I1-R2-002). This failure is specifically the recovered-result boundary, not the direct canonicalizer or memory codec.",
+      "anchors": "journal-null.test.ts; journal-null.observations.json; source/packages/contracts/src/__tests__/complete-json.test.ts"
+    },
+    {
+      "id": "TR03",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Reviewed exact immutable request, qualified counter, whole optional-item trimming, output reserve, and A17KiB+B17KiB retention/refusal paths. Relevant focused tests passed. This bounded review does not establish every exact/+1 schema, system/catalog/history/repair combination in the criterion.",
+      "anchors": "source/packages/orchestrator/src/hybrid-orchestrator.ts:575; source/packages/orchestrator/src/__tests__/complete-tool-context.test.ts:591,637,734"
+    },
+    {
+      "id": "TR04",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Native context comparison protects native fields, mandatory IDs and canonical payloads; focused custom-payload tampering test passed. No exhaustive mutation set or real-LLM semantic injection resistance established.",
+      "anchors": "source/packages/harness/src/complete-tool-results.ts:239; source/packages/harness/src/iterative-runtime.ts:1304; source/packages/harness/src/__tests__/complete-tool-public.test.ts:423"
+    },
+    {
+      "id": "TR05",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Reviewed native reserve-before-call, receipt identity, same-step settlement idempotence, immutable settled receipts, UNKNOWN/breach conservative usage and accepted-decision linkage. Own focused accounting/CAS assertions passed. Supplied PG store/process proof: four passed; supplied public PG suite: six passed and one NUL failure. These establish narrower local/unbound paths, not every listed bound-fence/timeout/failure/concurrency permutation.",
+      "anchors": "source/packages/harness/src/complete-decision-admission.ts:229,311; source/packages/harness/src/complete-checkpoint.ts:368,480,663; proof/integration/pg-store-r2-02.stdout.log"
+    },
+    {
+      "id": "TR06",
+      "status": "FAIL",
+      "evidenceAndMeaning": "Required public PG NUL restart path failed before successful full-result CAS: TOOL_FAILURE/unknown_effect (I1-R2-001). Independent query-seam repro also exposes confirmed-null loss (I1-R2-002). Memory codec NUL/base64/integrity assertions and narrower PG checkpoint/process tests do not replace public runtime+journal proof. PG was not rerun by this reviewer.",
+      "anchors": "proof/integration/pg-public-r2-02.json; proof/integration/pg-public-r2-02.stderr.log; journal-null.observations.json"
+    },
+    {
+      "id": "TR07",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Focused synthetic confirmed oversized-result and missing-saved-result/no-replay controls passed. Native NUL journal failure stays uncertain; it must not be promoted to a confirmed effect. Complete cross-store post-effect save-failure/restart conservation is not established.",
+      "anchors": "source/packages/harness/src/effect-journal.ts:365,381; source/packages/harness/src/iterative-runtime.ts:744; source/packages/harness/src/__tests__/complete-tool-public.test.ts:364,594"
+    },
+    {
+      "id": "TR08",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "All TOOL_RESULT retention and pre-body 51st-slot refusal passed; exact codec 8MiB controls passed. Supplied executable regression includes 50-result user resume. Preflight reserves a full placeholder and 64KiB slack. An end-to-end near-8MiB public body/save and full-capacity approval-resume proof is not established by this review.",
+      "anchors": "source/packages/harness/src/complete-tool-results.ts:222; source/packages/harness/src/iterative-runtime.ts:1954; source/regression-repro.source.txt; source/packages/harness/src/iterative-dispatch.ts:163"
+    },
+    {
+      "id": "TR09",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Separately hashed compatibility03 source and raw output support six public-factory composition/single_pass/V1-upgrade/off-mode-V2/legacy-TOOL checks, zero model calls. Legacy focused assertions and direct common gateway-input proof are narrower than SDK/worker consumer integration and full route transport.",
+      "anchors": "addendum/public-compatibility-03.json; addendum/public-compatibility-03.stdout.log; addendum/public-compatibility.mts; proof/integration/gateway-common-01.stdout.log"
+    },
+    {
+      "id": "TR10",
+      "status": "PARTIAL",
+      "evidenceAndMeaning": "Supplied public tests execute a pinned reference driver for three textual fixtures and compare a limited observable projection. Own copied tests could not locate that driver from private CWD (three environment failures); no new two-engine admission-negative-control proof was run. Original red/global denominator is not replaced, and no all36 equivalence is granted.",
+      "anchors": "source/packages/harness/src/__tests__/complete-tool-public.test.ts:221; cmd-1792151877877328636.stderr; proof/integration/focused-r2-02.stdout.log"
+    }
+  ],
+  "verification": {
+    "independentRepro": {
+      "commandRecord": "cmd-1792151829758201378.json",
+      "exit": 1,
+      "result": "REAL CORRECTNESS FAILURE: recovered JSON null becomes undefined; strings preserved"
+    },
+    "focusedRerun": {
+      "commandRecord": "cmd-1792151877877328636.json",
+      "exit": 1,
+      "passed": 115,
+      "failed": 3,
+      "meaning": "3 reference-driver resolution failures from private CWD; not candidate defects. All 3 other suites and 16/19 public-suite assertions passed. No further retries."
+    },
+    "initialFocusedAttempt": {
+      "commandRecord": "cmd-1792151849518343260.json",
+      "exit": 1,
+      "meaning": "Four suites not loaded because absolute outside-root Vite /@fs module paths failed; no assertions ran."
+    },
+    "supplied": {
+      "focused": "143 passed across six selected files, exit0",
+      "rawRegression": "five executable assertions passed, exit0; prior-review names in filenames are not imported verdicts",
+      "scopedRegression": "892 passed, 125 skipped across 89 files; exit0; stderr says TOOL_CATALOG.md stale; not full certification",
+      "pgStoreProcess": "four passed across two files, exit0; no reviewer PG access",
+      "pgPublic": "six passed, one NUL case failed; exit1",
+      "typecheck": "exit0 with both streams EMPTY_STREAM_OMITTED",
+      "lint": "exit0 with both streams EMPTY_STREAM_OMITTED; owned-path list itself not in packet, so precise lint denominator is not independently authenticated",
+      "gateway": "22 actual requests/four boundary controls: direct common input schema only",
+      "compatibility03": "six public-factory assertions, modelCalls0, exit0; separately hashed before read"
+    }
+  },
+  "inspection": {
+    "boundaries": [
+      "Public factory, prepared capability results, native journal wrapping and row mapping",
+      "Strict JSON domain and exact bytes/depth/nodes; closed optional normalization",
+      "Logical digest, bounded physical base64/UTF-8/JSON codec and CAS transitions",
+      "All mandatory tool retention, cursor, custom-context integrity and immutable request",
+      "Native reserve/settle, accepted-decision checkpoint, receipt bindings/lifecycle/conservative budget sums",
+      "User/approval resume source; counted pending dispatch versus accepted decision; completion fail closed"
+    ],
+    "positiveAssessment": "Layering keeps tool data UNTRUSTED; whole results survive memory selection/CAS; request reservation precedes model invocation; settled receipts and retained results are transition-protected. These positives do not repair journal-domain loss."
+  },
+  "freshness": {
+    "noSubagents": true,
+    "modelOrEffortChanged": false,
+    "inheritedScores": false,
+    "forbiddenHistoryRead": false,
+    "earlierReviewsRead": false,
+    "builderReportsRead": false,
+    "sibling0225Read": false,
+    "pgOrServiceAccess": false,
+    "sourceMutations": false,
+    "notes": [
+      "Approved exact SPEC authority is from the current user despite draft-language historical text inside that frozen SPEC.",
+      "No final-critic substitution; this is one bounded I1 review, not an exhaustive matrix or final acceptance.",
+      "Optional late public-version-conflict-01 addendum was not consumed after the material diagnosis; no PASS/FAIL is inferred for it.",
+      "Private tests import live W sources whose 63 authenticated paths match before/after; transitive dependencies outside the frozen packet were executed but not exhaustively independently authenticated."
+    ]
+  },
+  "processCompliance": {
+    "writeBoundaryCompliant": false,
+    "violation": "Three existing differential tests called mkdtempSync(tmpdir()) without private TMPDIR. They briefly wrote fixture.json under /tmp/cvg-complete-differential-* outside review-r2; each finally removed its directory. This was an avoidable reviewer execution mistake. No lasting/source mutation detected by authenticated hashes. Do not treat this run as procedurally pristine.",
+    "record": "cmd-1792151877877328636.json",
+    "otherNotes": [
+      "All authored persistent review artifacts, own CWD/config/cache and request evidence are under review-r2.",
+      "An early source-read logger counter collided under parallel read calls; one redundant checkpoint read log was overwritten. The original combined source read remains in cmd-01.stdout and the source was recaptured with numbered lines in cmd-1792151925300520225.stdout. No test record was lost.",
+      "Initial metadata/hash bootstrap commands are preserved in the tool transcript; pre-hash details and sizes are in hash-pre.json. One bootstrap launch failed before command execution because its prospective CWD did not exist."
+    ]
+  },
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "-c",
+        "import pathlib; r=pathlib.Path(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source\"); paths=[\"docs/02_spec/0224_pare100_complete_tool_result_context.md\",\"packages/contracts/src/complete-json.ts\",\"packages/contracts/src/complete-tool-context.ts\",\"packages/harness/src/complete-checkpoint.ts\",\"packages/harness/src/complete-decision-admission.ts\",\"packages/harness/src/complete-tool-results.ts\"]; [(print(\"FILE\",p),print(\"\".join(f\"{i}: {l}\" for i,l in enumerate((r/p).open(),1)))) for p in paths]"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-01.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:54:53.970203+00:00",
+      "record": "cmd-01.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; sed -n \"244,590p\" \"$p/docs/02_spec/0224_pare100_complete_tool_result_context.md\"; cat \"$p/packages/contracts/src/complete-json.ts\"; cat \"$p/packages/contracts/src/complete-tool-context.ts\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-02.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:02.682799+00:00",
+      "record": "cmd-02.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2; wc -l \"$p/source/packages/harness/src/iterative-runtime.ts\" \"$p/source/packages/harness/src/complete-checkpoint.ts\" \"$p/source/packages/orchestrator/src/hybrid-orchestrator.ts\"; cat \"$p/source/packages/harness/src/complete-decision-admission.ts\"; cat \"$p/source/vitest.config.mts\"; cat \"$p/proof/integration/focused-r2-02.json\" \"$p/proof/integration/pg-public-r2-02.json\" \"$p/proof/integration/pg-public-r2-02.stdout.log\" \"$p/proof/integration/pg-public-r2-02.stderr.log\"; cat \"$p/source/regression-repro.source.txt\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-03.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:07.519913+00:00",
+      "record": "cmd-03.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; rg -n \"complete|Complete|toolResultContext|acceptedDecision|resume|Admission|Checkpoint\" \"$p/packages/harness/src/iterative-runtime.ts\" \"$p/packages/harness/src/iterative-dispatch.ts\" \"$p/packages/harness/src/createOperationalHarness.ts\" \"$p/packages/harness/src/context-engine.ts\" \"$p/packages/orchestrator/src/hybrid-orchestrator.ts\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-04.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:14.492541+00:00",
+      "record": "cmd-04.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/harness/src/complete-checkpoint.ts\" | sed -n \"308,748p\"; nl -ba \"$p/packages/harness/src/createOperationalHarness.ts\" | sed -n \"75,270p\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151724646656046.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:24.654013+00:00",
+      "record": "cmd-1792151724646656046.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/harness/src/iterative-runtime.ts\" | sed -n \"480,920p\"; nl -ba \"$p/packages/harness/src/iterative-runtime.ts\" | sed -n \"1070,1420p\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151731450320043.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:31.456023+00:00",
+      "record": "cmd-1792151731450320043.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/orchestrator/src/hybrid-orchestrator.ts\" | sed -n \"145,420p\"; nl -ba \"$p/packages/orchestrator/src/hybrid-orchestrator.ts\" | sed -n \"480,825p\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151739454247702.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:39.461060+00:00",
+      "record": "cmd-1792151739454247702.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/orchestrator/src/hybrid-orchestrator.ts\" | sed -n \"817,915p\"; rg -n \"result|jsonb|SUCCEEDED|unknown_effect|JSON.stringify|class .*Journal\" \"$p/packages/persistence/src/operational-execution-postgres.ts\" \"$p/packages/persistence/src/postgres.ts\" \"$p/packages/harness/src/effect-journal.ts\"; nl -ba \"$p/packages/harness/src/iterative-dispatch.ts\" | sed -n \"160,270p\"; nl -ba \"$p/packages/harness/src/iterative-runtime.ts\" | sed -n \"920,1070p\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151749671769003.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:49.684883+00:00",
+      "record": "cmd-1792151749671769003.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/persistence/src/operational-execution-postgres.ts\" | sed -n \"1060,1250p\"; nl -ba \"$p/packages/persistence/src/operational-execution-postgres.ts\" | sed -n \"1715,1855p\"; nl -ba \"$p/packages/harness/src/effect-journal.ts\" | sed -n \"290,410p\"; rg -n \"it\\(|test\\(|describe\\(\" \"$p/packages/harness/src/__tests__/complete-tool-public.test.ts\" \"$p/packages/harness/src/__tests__/complete-checkpoint.test.ts\" \"$p/packages/contracts/src/__tests__/complete-json.test.ts\" \"$p/packages/orchestrator/src/__tests__/complete-tool-context.test.ts\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151759127861705.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:55:59.145094+00:00",
+      "record": "cmd-1792151759127861705.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2; cat \"$p/proof/integration/focused-r2-02.stdout.log\" \"$p/proof/integration/pg-store-r2-02.stdout.log\" \"$p/proof/integration/regression-r2-01.json\" \"$p/proof/integration/regression-r2-01.stdout.log\" \"$p/proof/integration/typecheck-r2-02.json\" \"$p/proof/integration/lint-r2-01.json\" \"$p/proof/integration/i1-regression-r2-02.stdout.log\" \"$p/proof/integration/gateway-common-01.stdout.log\"; head -80 \"$p/source/packages/persistence/src/operational-execution-postgres.ts\"; nl -ba \"$p/source/packages/persistence/src/operational-step-postgres.ts\" | sed -n \"1,100p\"; rg -n \"compareAndSwap|encodeComplete|decodeComplete|STORAGE_MAX|CASE|octet_length|saveCheckpoint|validateComplete\" \"$p/source/packages/persistence/src/operational-step-postgres.ts\" \"$p/source/packages/harness/src/step-store.ts\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151781053046156.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:56:21.064085+00:00",
+      "record": "cmd-1792151781053046156.json"
+    },
+    {
+      "argv": [
+        "python3",
+        "-c",
+        "import pathlib,hashlib,json; base=pathlib.Path(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/integration\"); out=pathlib.Path(\"addendum\");out.mkdir(exist_ok=True);records=[]\nfor name in [\"public-compatibility-03.json\",\"public-compatibility-03.stdout.log\",\"public-compatibility.mts\"]:\n p=base/name;b=p.read_bytes();q=out/name;q.write_bytes(b);records.append(dict(live=str(p),copy=str(q.resolve()),bytes=len(b),sha256=hashlib.sha256(b).hexdigest(),copySha256=hashlib.sha256(q.read_bytes()).hexdigest()))\npathlib.Path(\"addendum-hash-pre.json\").write_text(json.dumps(records,indent=2)+\"\\n\"); print(json.dumps(records,indent=2))"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151802768207472.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:56:42.794207+00:00",
+      "record": "cmd-1792151802768207472.json"
+    },
+    {
+      "argv": [
+        "env",
+        "PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin",
+        "XDG_CACHE_HOME=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/cache",
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "journal-null.test.ts",
+        "--config",
+        "./vitest.config.mts",
+        "--configLoader",
+        "native",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 1,
+      "stdout": "cmd-1792151829758201378.stdout",
+      "stderr": "cmd-1792151829758201378.stderr",
+      "at": "2026-10-16T11:57:11.540915+00:00",
+      "record": "cmd-1792151829758201378.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "cat addendum/public-compatibility-03.json addendum/public-compatibility-03.stdout.log addendum/public-compatibility.mts; p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/harness/src/context-engine.ts\" | sed -n \"1,340p\"; nl -ba \"$p/packages/harness/src/step-store.ts\" | sed -n \"190,280p\"; nl -ba \"$p/packages/persistence/src/operational-step-postgres.ts\" | sed -n \"250,430p\""
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151841585201578.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:57:21.592662+00:00",
+      "record": "cmd-1792151841585201578.json"
+    },
+    {
+      "argv": [
+        "env",
+        "PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin",
+        "XDG_CACHE_HOME=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/cache",
+        "CVG_COMPLETE_PUBLIC_EVIDENCE=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/focused.requests.json",
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/__tests__/complete-json.test.ts",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-checkpoint.test.ts",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-tool-public.test.ts",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/orchestrator/src/__tests__/complete-tool-context.test.ts",
+        "--config",
+        "./vitest.config.mts",
+        "--configLoader",
+        "native",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 1,
+      "stdout": "cmd-1792151849518343260.stdout",
+      "stderr": "cmd-1792151849518343260.stderr",
+      "at": "2026-10-16T11:57:32.465004+00:00",
+      "record": "cmd-1792151849518343260.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/harness/src/iterative-runtime.ts\" | sed -n \"1912,2035p\"; nl -ba \"$p/packages/harness/src/completion.ts\" | sed -n \"1,200p\"; nl -ba \"$p/packages/harness/src/iterative-dispatch.ts\" | sed -n \"695,800p\"; rg -n \"it\\(|test\\(|describe\\(|it.each|test.each\" \"$p/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts\" \"$p/packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts\" \"$p/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts\"; cat /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/proof/integration/regression-r2-01.stderr.log"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151862903157078.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:57:42.915730+00:00",
+      "record": "cmd-1792151862903157078.json"
+    },
+    {
+      "argv": [
+        "python3",
+        "-c",
+        "from pathlib import Path; import re,json\nw=Path(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree\");p=Path(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source\");paths=[\"packages/contracts/src/__tests__/complete-json.test.ts\",\"packages/harness/src/__tests__/complete-checkpoint.test.ts\",\"packages/harness/src/__tests__/complete-tool-public.test.ts\",\"packages/orchestrator/src/__tests__/complete-tool-context.test.ts\"]\nfor f in paths:\n s=(p/f).read_text();s=re.sub(r\"(?P<q>[\\x22\\x27])(?P<v>\\.{1,2}/[^\\x22\\x27]+)(?P=q)\",lambda m:m[\"q\"]+str((w/f).parent.joinpath(m[\"v\"]).resolve())+m[\"q\"],s);s=s.replace(\"from \\x27vitest\\x27\", \"from \\x27\"+str(w/\"node_modules/vitest/dist/index.js\")+\"\\x27\");q=Path(\"private-tests\")/Path(f).name;q.parent.mkdir(exist_ok=True);q.write_text(s)\nc=Path(\"vitest.config.mts\").read_text();start=c.index(\"    include: [\");end=c.index(\"    ],\",start)+6;c=c[:start]+\"    include: [\\x27private-tests/*.test.ts\\x27, \\x27journal-null.test.ts\\x27],\"+c[end:];Path(\"vitest.config.mts\").write_text(c)\nprint(json.dumps({\"privateCopies\":paths,\"adjustments\":\"relative imports resolved to original W source; vitest entry absolute; private root/cache; candidate tests unchanged otherwise\"}))"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151877825215917.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:57:57.849955+00:00",
+      "record": "cmd-1792151877825215917.json"
+    },
+    {
+      "argv": [
+        "env",
+        "PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin",
+        "XDG_CACHE_HOME=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/cache",
+        "CVG_COMPLETE_PUBLIC_EVIDENCE=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/focused.requests.json",
+        "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/vitest.mjs",
+        "run",
+        "private-tests",
+        "--config",
+        "./vitest.config.mts",
+        "--configLoader",
+        "native",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 1,
+      "stdout": "cmd-1792151877877328636.stdout",
+      "stderr": "cmd-1792151877877328636.stderr",
+      "at": "2026-10-16T11:58:07.705553+00:00",
+      "record": "cmd-1792151877877328636.json"
+    },
+    {
+      "argv": [
+        "python3",
+        "hash_packet.py",
+        "post"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151897825795788.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:58:17.863986+00:00",
+      "record": "cmd-1792151897825795788.json"
+    },
+    {
+      "argv": [
+        "python3",
+        "-c",
+        "import json,pathlib,hashlib;rs=json.loads(pathlib.Path(\"addendum-hash-pre.json\").read_text());out=[]\nfor r in rs:\n for k in [\"live\",\"copy\"]:\n  p=pathlib.Path(r[k]);b=p.read_bytes();out.append(dict(path=str(p),kind=k,bytes=len(b),sha256=hashlib.sha256(b).hexdigest(),ok=len(b)==r[\"bytes\"] and hashlib.sha256(b).hexdigest()==r[\"sha256\"]))\npathlib.Path(\"addendum-hash-post.json\").write_text(json.dumps(out,indent=2)+\"\\n\");print(json.dumps({\"allMatch\":all(r[\"ok\"] for r in out),\"files\":len(out)}))"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151897897043810.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:58:17.925742+00:00",
+      "record": "cmd-1792151897897043810.json"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "p=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source; nl -ba \"$p/packages/harness/src/__tests__/complete-tool-public.test.ts\" | sed -n \"220,345p\"; nl -ba \"$p/packages/harness/src/complete-checkpoint.ts\" | sed -n \"1,307p\"; cat journal-null.observations.json"
+      ],
+      "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2",
+      "exit": 0,
+      "stdout": "cmd-1792151925300520225.stdout",
+      "stderr": "EMPTY",
+      "at": "2026-10-16T11:58:45.306517+00:00",
+      "record": "cmd-1792151925300520225.json"
+    }
+  ],
+  "missingRequiredEvidence": [
+    "Successful required public PG NUL result/restart with native journal and conserved value/bytes/usage/settlement",
+    "Native confirmed-null recovery preserving the exact JSON value; query-seam RED needs correction and applicable real-store proof",
+    "Complete specified TR01 fixture denominator, including Unicode4096bytes and earlier fixtures",
+    "Full applicable qualification/consumer, E2E/certification gates; scoped regressions and direct gateway input checks cannot substitute",
+    "Broader two-engine admission controls and unchanged all36/global acceptance evidence"
+  ],
+  "authority": {
+    "buildAccepted": false,
+    "globalParityGranted": false,
+    "releaseGranted": false,
+    "productionPushDeploy": false,
+    "checkerPinLockDdlMigrationMutation": false,
+    "futureScopeChangeAuthorityGranted": false
+  },
+  "createdAt": "2026-10-16T12:00:57.099060+00:00"
+}

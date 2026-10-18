@@ -1,0 +1,89 @@
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/pipeline.ts ===
+  42   input: RuntimeInput,
+  43   startedAt: number,
+  44   budget: TurnBudget,
+  45   signal: AbortSignal
+  46 ): TurnState {
+  47   return {
+  48     input,
+  49     startedAt,
+  50     signal,
+  51     budget,
+  52     metadata: {
+  53       policy: null,
+  54       approval: null,
+  55       tool: null,
+  56       provider: null,
+  57       inputTokens: 0,
+  58       outputTokens: 0,
+  59       costUsd: 0,
+  60       toolDurationMs: 0
+  61     }
+  62   }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/effect-journal.ts ===
+ 341       }
+ 342       await journal.markStarted({
+ 343         tenantId: context.tenantId,
+ 344         operationKey,
+ 345         attemptId
+ 346       })
+ 347       try {
+ 348         const result = await tool.execute(input, context)
+ 349         if (
+ 350           options.crashAfterEffectBeforeConfirm &&
+ 351           result.status === 'SUCCEEDED'
+ 352         ) {
+ 353           await journal.markUncertain({
+ 354             tenantId: context.tenantId,
+ 355             operationKey,
+ 356             attemptId,
+ 357             reason: 'synthetic crash after effect before confirmation'
+ 358           })
+ 359           return {
+ 360             status: 'REJECTED',
+ 361             error:
+ 362               'unknown_effect: synthetic crash after effect before confirmation'
+ 363           }
+ 364         }
+ 365         if (result.status === 'SUCCEEDED') {
+ 366           await journal.confirm({
+ 367             tenantId: context.tenantId,
+ 368             operationKey,
+ 369             attemptId,
+ 370             result: result.output
+ 371           })
+ 372         } else {
+ 373           await journal.fail({
+ 374             tenantId: context.tenantId,
+ 375             operationKey,
+ 376             attemptId,
+ 377             error: result.error ?? 'tool failed'
+ 378           })
+ 379         }
+ 380         return result
+ 381       } catch (error) {
+ 382         const message =
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/effect-journal.ts ===
+ 218     }
+ 219     if (state === 'EFFECT_STARTED' && current.state !== 'RESERVED') {
+ 220       throw new EffectJournalError('Effect cannot start from its current state')
+ 221     }
+ 222     if (
+ 223       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+ 224       current.state !== 'EFFECT_STARTED'
+ 225     ) {
+ 226       if (current.state === state) return clone(current)
+ 227       throw new EffectJournalError(
+ 228         'Effect outcome is not valid for its current state'
+ 229       )
+ 230     }
+ 231     const next: EffectJournalRecord = {
+ 232       ...current,
+ 233       state,
+ 234       ...(values.result !== undefined ? { result: values.result } : {}),
+ 235       ...(values.error !== undefined ? { error: values.error } : {}),
+ 236       updatedAt: now()
+ 237     }
+ 238     this.records.set(identity, next)
+ 239     return clone(next)
+ 240   }

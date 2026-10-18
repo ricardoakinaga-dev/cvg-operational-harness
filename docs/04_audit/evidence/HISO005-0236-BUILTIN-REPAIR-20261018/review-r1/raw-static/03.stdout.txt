@@ -1,0 +1,179 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index 18438441..1513af80 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -4,7 +4,12 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import { createHash } from 'node:crypto'
+-import { createRequire, stripTypeScriptTypes, Module } from 'node:module'
++import {
++  createRequire,
++  stripTypeScriptTypes,
++  Module,
++  isBuiltin
++} from 'node:module'
+ import vm from 'node:vm'
+ import { spawnSync } from 'node:child_process'
+ import { performance } from 'node:perf_hooks'
+@@ -305,6 +310,9 @@ export function analyzeSemanticBoundary(input) {
+   }
+   function resolve(from, specifier, mode) {
+     if (typeof specifier !== 'string') throw Error('UNKNOWN_RESOLUTION')
++    // Native identity wins over same-name packages and package self-references.
++    // v1 has no semantic summary for a builtin; never prove its disk substitute.
++    if (isBuiltin(specifier)) throw Error('UNKNOWN_NATIVE_BUILTIN')
+     const runtimeLiteral = (value) => {
+       if (
+         !/^[A-Za-z0-9@._/+-]+$/.test(value) ||
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index c21df45a..b24d14fc 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -259,11 +259,12 @@ function updateJson(root, file, update) {
+   update(body)
+   fs.writeFileSync(target, JSON.stringify(body))
+ }
+-function standaloneKernel(f) {
+-  const key = 'node_modules/vendor'
++function standaloneKernel(f, key = 'node_modules/vendor') {
+   const reference = JSON.parse(fs.readFileSync(f.manifestPath))
+   const actual = collectPackageInventory(path.join(f.evaluated, key))
+-  expect(actual.inventorySha256).toBe(reference.packages[0].inventorySha256)
++  expect(actual.inventorySha256).toBe(
++    reference.packages.find((entry) => entry.key === key).inventorySha256
++  )
+   const input = {
+     root: f.evaluated,
+     starts: ['packages/core/src/index.js'],
+@@ -1237,3 +1238,130 @@ describe('SPEC0236 runtime resolver conformance', () => {
+     expect(result.graph.installed[0].verified).toBe(true)
+   })
+ })
++
++describe('SPEC0236 exact native builtin precedence', () => {
++  function builtinFixture(specifier, mode, selfReference = false) {
++    const name = specifier.replace(/^node:/, '').split('/')[0]
++    const key = 'node_modules/' + name
++    const f = fixture({
++      core:
++        mode === 'require'
++          ? `module.exports=require('${specifier}')\n`
++          : `import {value}from'${specifier}';export const result=value\n`,
++      vendor: 'export const value=1\n',
++      extraInstalledKeys: [key],
++      prepare(root) {
++        updateJson(root, 'packages/core/package.json', (body) => {
++          body.type = mode === 'require' ? 'commonjs' : 'module'
++          if (selfReference) {
++            body.name = name
++            body.exports = './src/index.js'
++          }
++        })
++        write(
++          root,
++          key + '/package.json',
++          JSON.stringify({
++            name,
++            version: '1.0.0',
++            type: mode === 'require' ? 'commonjs' : 'module',
++            main: './index.js'
++          })
++        )
++        const bytes =
++          mode === 'require' ? 'module.exports=1\n' : 'export const value=1\n'
++        write(root, key + '/index.js', bytes)
++        write(root, key + '/promises.js', bytes)
++      }
++    })
++    return { f, key }
++  }
++  it.each(
++    ['require', 'import'].flatMap((mode) =>
++      ['module', 'fs', 'fs/promises', 'node:fs', 'node:test'].map(
++        (specifier) => [mode, specifier]
++      )
++    )
++  )(
++    'refuses native builtin %s %s before a homonymous package proof',
++    (mode, specifier) => {
++      const { f, key } = builtinFixture(specifier, mode)
++      const oracle = nativeResolution(
++        specifier,
++        path.join(f.evaluated, 'packages/core/src/index.js'),
++        mode
++      )
++      expect(oracle.status, oracle.stderr).toBe(0)
++      expect(oracle.stdout).toBe(
++        mode === 'require'
++          ? specifier
++          : specifier.startsWith('node:')
++            ? specifier
++            : 'node:' + specifier
++      )
++      const kernel = standaloneKernel(f, key)
++      expect(kernel.status, JSON.stringify(kernel)).toBe('UNKNOWN')
++      expect(kernel.proofs).toEqual([])
++      expect(
++        kernel.unknowns.some((item) => item.reason === 'UNKNOWN_NATIVE_BUILTIN')
++      ).toBe(true)
++      expect(
++        kernel.inputs.some((item) => item.file.startsWith(key + '/'))
++      ).toBe(false)
++      expect(
++        kernel.installed.every(
++          (item) => item.status !== 'PROVEN' && !item.proofIds.length
++        )
++      ).toBe(true)
++      const cli = f.run()
++      expect(cli.code).not.toBe(0)
++      expect(cli.report.status).toBe('INCOMPLETE')
++      expect(cli.report.semanticBoundary.proofs).toEqual([])
++      expect(cli.graph.installed.every((item) => !item.verified)).toBe(true)
++    }
++  )
++  it.each(['require', 'import'])(
++    'dispatches native builtin before same-name self-reference in %s',
++    (mode) => {
++      const { f, key } = builtinFixture('module', mode, true)
++      const oracle = nativeResolution(
++        'module',
++        path.join(f.evaluated, 'packages/core/src/index.js'),
++        mode
++      )
++      expect(oracle.status, oracle.stderr).toBe(0)
++      expect(oracle.stdout).toBe(mode === 'require' ? 'module' : 'node:module')
++      const kernel = standaloneKernel(f, key)
++      expect(kernel.status).toBe('UNKNOWN')
++      expect(kernel.proofs).toEqual([])
++      expect(
++        kernel.unknowns.some((item) => item.reason === 'UNKNOWN_NATIVE_BUILTIN')
++      ).toBe(true)
++      expect(
++        kernel.inputs.some((item) => item.file.startsWith(key + '/'))
++      ).toBe(false)
++    }
++  )
++  it.each(['require', 'import'])(
++    'keeps bare test an ordinary package when only node:test is builtin in %s',
++    (mode) => {
++      const { f, key } = builtinFixture('test', mode)
++      const oracle = nativeResolution(
++        'test',
++        path.join(f.evaluated, 'packages/core/src/index.js'),
++        mode
++      )
++      const selected = path.join(f.evaluated, key, 'index.js')
++      expect(oracle.status, oracle.stderr).toBe(0)
++      expect(oracle.stdout).toBe(
++        mode === 'require' ? selected : pathToFileURL(selected).href
++      )
++      const kernel = standaloneKernel(f, key)
++      expect(kernel.status, JSON.stringify(kernel)).toBe('PROVEN')
++      expect(
++        kernel.inputs.some((item) => item.file === key + '/index.js')
++      ).toBe(true)
++      expect(kernel.unknowns).toEqual([])
++    }
++  )
++})

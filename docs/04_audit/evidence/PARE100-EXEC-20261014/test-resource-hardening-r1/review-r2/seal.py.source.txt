@@ -1,0 +1,28 @@
+import pathlib,json,hashlib,datetime,stat
+O=pathlib.Path(__file__).parent
+P=O.parent/'review-packet-r2'
+H=lambda b:hashlib.sha256(b).hexdigest()
+pre=json.loads((O/'integrity-pre.json').read_text())
+b=(P/'manifest.json').read_bytes();m=json.loads(b)
+post={'manifestSHA256':H(b),'packet':[],'actualOrigins':[]}
+for f in m['files']:
+ b=(P/f['path']).read_bytes();assert (len(b),H(b))==(f['bytes'],f['sha256']),f['path']
+ post['packet'].append({'path':f['path'],'bytes':len(b),'sha256':H(b)})
+for f in pre['actualOrigins']:
+ b=pathlib.Path(f['path']).read_bytes();assert (len(b),H(b))==(f['bytes'],f['sha256']),f['path']
+ post['actualOrigins'].append({'path':f['path'],'bytes':len(b),'sha256':H(b)})
+assert pre==post,'PRE/POST DRIFT'
+(O/'integrity-post.json').write_text(json.dumps(post,indent=2)+'\n')
+rows=[];dirs=[]
+for p in sorted(O.rglob('*')):
+ assert not p.is_symlink(),str(p)
+ if p.name=='output-manifest.json' and p.parent==O:continue
+ if p.is_file():
+  b=p.read_bytes();rows.append({'path':str(p.relative_to(O)),'bytes':len(b),'sha256':H(b),'mode':oct(stat.S_IMODE(p.stat().st_mode))})
+ elif p.is_dir():dirs.append({'path':str(p.relative_to(O)),'mode':oct(stat.S_IMODE(p.stat().st_mode))})
+ else:raise AssertionError('Nonregular owned output '+str(p))
+seal={'kind':'SEALED_INDEPENDENT_I1_REVIEW_R2_OUTPUTS','verdict':'REVISE','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'inputManifestSHA256':post['manifestSHA256'],'prePostIdentical':True,'authenticatedCopies':len(post['packet']),'frozenActualOrigins':len(post['actualOrigins']),'selfExcluded':'output-manifest.json','files':rows,'directories':dirs}
+target=O/'output-manifest.json';target.write_text(json.dumps(seal,indent=2)+'\n')
+for f in rows:
+ b=(O/f['path']).read_bytes();assert (len(b),H(b))==(f['bytes'],f['sha256'])
+print(json.dumps({'verdict':'REVISE','prePostIdentical':True,'packetCopies':len(post['packet']),'actualOrigins':len(post['actualOrigins']),'sealedOutputFiles':len(rows),'outputManifest':str(target),'outputManifestSHA256':H(target.read_bytes())},indent=2))

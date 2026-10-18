@@ -1,0 +1,26 @@
+import pathlib,json,shutil,os,time
+O=pathlib.Path(__file__).parent; P=O.parent/'review-packet';M=json.loads((P/'packet-manifest.json').read_text());W=pathlib.Path(M['readonlyWorktree']);Q=O/'project';Q.mkdir(exist_ok=True)
+shutil.copytree(P/'current/tests',Q/'tests',dirs_exist_ok=True)
+shutil.copytree(W/'node_modules',Q/'node_modules',symlinks=True,ignore=lambda p,n:[x for x in n if x in ('.cache','.vite','.vite-temp','@cvg')],dirs_exist_ok=True)
+metas=set()
+for s in M['externalReadonlyInputs']:
+ p=pathlib.Path(s)
+ if p.is_relative_to(W):
+  d=Q/p.relative_to(W);d.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,d)
+  for a in p.parents:
+   if a==W:break
+   if (a/'package.json').is_file():metas.add(a/'package.json')
+for p in metas:
+ d=Q/p.relative_to(W);d.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,d)
+sc=Q/'node_modules/@cvg';sc.mkdir(exist_ok=True)
+for p in metas:
+ x=json.loads(p.read_text());name=x.get('name','')
+ if name.startswith('@cvg/'):(sc/name.split('/')[1]).symlink_to(os.path.relpath(Q/p.parent.relative_to(W),sc))
+(Q/'package.json').write_text('{"name":"i1-private-review","private":true,"type":"module"}\n')
+(Q/'vitest.config.mjs').write_text("export default { cacheDir: './.cache/vite', test: { include: ['tests/differential/*.test.{ts,js}'], fileParallelism: false, maxWorkers: 1 } }\n")
+for name in ['tmp','home','cache','logs','own-results','received']:(O/name).mkdir(exist_ok=True)
+external=[]
+for p in (Q/'node_modules').rglob('*'):
+ if p.is_symlink() and not p.resolve().is_relative_to(Q):external.append(str(p))
+(O/'setup-result.json').write_text(json.dumps(dict(productionFiles=sum('/worktree/' in s for s in M['externalReadonlyInputs']),packageMetadata=len(metas),externalSymlinks=external),indent=2))
+print('setup complete; external links',external)

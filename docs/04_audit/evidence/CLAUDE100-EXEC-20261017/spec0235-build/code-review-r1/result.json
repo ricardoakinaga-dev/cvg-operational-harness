@@ -1,0 +1,460 @@
+{
+  "version": 1,
+  "task": "C100-Q01-REF-PORT-001",
+  "role": "independent security/code critic",
+  "round": 1,
+  "observed_at": "2026-10-18T02:13:42.069937+00:00",
+  "verdict": "REJECT",
+  "scope": "FIRST_BOUNDED_NATIVE_LAUNCH_ELIGIBILITY_ONLY",
+  "boundedLaunchEligible": false,
+  "finalPositiveControls": "NOT_RUN",
+  "finalNPAcceptance": "NOT_RUN",
+  "nativeExecution": "NOT_RUN",
+  "actualReferenceContainers": "NOT_RUN",
+  "M1": "NOT_RUN",
+  "functionalCatalogCredit": "NONE",
+  "candidate": "/tmp/cvg-claude100-exec-20261017/ref-port-candidate",
+  "candidateCheckpoint": "ccaa464c55b7abdaa93ad6849f1ecb23eb858f62",
+  "bindings": {
+    "specSha256": "aaa12b3ee55021e357fc9a17518316135eb4ca423b87215af754cd18dbb41f04",
+    "sourceFreezeSha256": "48e64f8ec82018db1912cc49619e8fe317fd1fcfcdd3ce98a089d358e6bf27b5",
+    "reviewContractSha256": "0f5bf7863c674d421817e59c6791e192fd035e03360ae9287535c89c2693f223",
+    "buildContractSha256": "b234504c7670cbd33272bd2d49326b6c1f3c386b4da708a374f960b89ed4b659",
+    "buildContractR2Sha256": "a98e401af498740690e9c7b694dc1f2f5f386424b062c9c2c3b283a9af9c11cb",
+    "inputsManifestSha256": "aad53cd0d5ff60ddac3df2a3d5bf0fd7f841e3471440bc1c30613d5965ee51df",
+    "evidenceManifest": "manifest.json"
+  },
+  "preservation": {
+    "source31BeforeAfter": "MATCH",
+    "protected7Versus26d866c3": "MATCH",
+    "sourceModifications": false,
+    "sharedLedgerWrites": false,
+    "delegatedAgents": 0,
+    "networkCalls": 0,
+    "dockerCommands": 0,
+    "observerClientMainCalls": 0,
+    "broadGates": "NOT_RUN_BY_REVIEWER"
+  },
+  "tests": {
+    "safeUnit": {
+      "status": "PASS",
+      "tests": 166,
+      "files": 7,
+      "node": "v22.23.2",
+      "exitCode": 0,
+      "evidence": "safe-unit-r1.json"
+    },
+    "independentAdversarial": {
+      "status": "COMPLETED_CONTRACT_FAILURES_REPRODUCED",
+      "cases": 14,
+      "exitCode": 0,
+      "evidence": "adversarial-r1.json",
+      "meaning": "Assertions preserve observed counterexamples; exit0 is not candidate acceptance"
+    },
+    "signalSubprocesses": {
+      "status": "COMPLETED_CANCELLATION_FAILURES_REPRODUCED",
+      "cases": 2,
+      "exitCode": 0,
+      "evidence": "signal-r1.json"
+    },
+    "closureAST": {
+      "status": "LITERAL_CLOSURE_COMPLETE_PROFILE_AND_HOST_SNAPSHOT_GAPS",
+      "sources": 19,
+      "bytes": 214909,
+      "builtins": 12,
+      "evidence": "closure-independent-r1.json"
+    },
+    "notRunByReviewer": [
+      "inputs.test.js (creates markers outside assigned reviewer write roots)",
+      "controller.test.js (default real host marker outside reviewer ownership)",
+      "Docker/Engine/container/HTTP/native wrapper/client mains",
+      "repository fullgates/certification/coverage/PG/E2E"
+    ]
+  },
+  "mandatoryFindingCount": 6,
+  "findings": [
+    {
+      "id": "R1-01",
+      "severity": "HIGH",
+      "priority": 1,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP04",
+        "NP08"
+      ],
+      "title": "Physical consumed inputs and profile can change while DRIFT and publication still PASS",
+      "expected": "SPEC lines 229\u2013259, 307\u2013309, 322\u2013325, 403\u2013409: retain/verify exact consumed bytes before native execution and after cleanup; changed frozen profile is DRIFT_RUNTIME/INFRA_FAILURE.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/inputs.mjs",
+          "line": 79,
+          "detail": "Only bundle-source copies and their originals become retained pins."
+        },
+        {
+          "path": "tests/claude100/reference-port/inputs.mjs",
+          "line": 125,
+          "detail": "Bundle inventory, separate stdin, mounted workspace settings/MCP, consumed inventory and empty directory are created without retained pins/inventory verification."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 691,
+          "detail": "Profile is persisted but never pinned."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 503,
+          "detail": "DRIFT checks original manifest plus context.pins and claims mounted snapshots match."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 436,
+          "detail": "Publication validator receives evidence.retained memory, not current artifact bytes."
+        }
+      ],
+      "evidence": [
+        "adversarial-r1.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/drift_profile_json/review-observation.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/drift_workspace_settings_json/run/report.json"
+      ],
+      "reproduction": "Before simulated START_NATIVE, overwrite each of mounted settings, mounted MCP, profile, consumed-inputs, bundle-inventory and separately retained stdin in six independent owned runs. Each returns PORT_OBSERVED/0, all checks PASS, no failures, and a published digest differing from physical bytes. Adding an unlisted file to the supposedly empty readonly volume directory also passes.",
+      "impact": "Current code can launch against changed mounted settings/MCP and publish a successful immutable-looking report whose retained artifacts disagree with disk. This is the ordinary drift model explicitly required by the SPEC; it does not assume malicious root or modifying candidate source.",
+      "correction": "Retain descriptor/path/content identity for all physical consumed artifacts, profile and the empty bind inventory. Verify before START_NATIVE and after cleanup; recompute staged evidence from anchored physical bytes before publication. Preserve actual drift as INFRA_FAILURE and never emit a complete successful report."
+    },
+    {
+      "id": "R1-02",
+      "severity": "HIGH",
+      "priority": 2,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP07"
+      ],
+      "title": "Host SIGINT/SIGTERM use default termination instead of bounded cleanup",
+      "expected": "SPEC lines 169\u2013174, 373\u2013381: controller cancellation attempts finite cleanup and preserves cause/owned identities; only SIGKILL/power loss lack this guarantee.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 58,
+          "detail": "execute owns lifecycle but installs no SIGINT/SIGTERM handlers or cancellation mechanism."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 823,
+          "detail": "cleanup is reached only by normal async control flow."
+        },
+        {
+          "path": "scripts/claude100-reference-port.mjs",
+          "line": 45,
+          "detail": "CLI awaits runProbe without signal interception."
+        }
+      ],
+      "evidence": [
+        "signal-r1.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/host_SIGINT/signal-checkpoint.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/host_SIGTERM/signal-checkpoint.json"
+      ],
+      "reproduction": "Own Node22 subprocesses run the real controller with an entirely in-memory Engine, fake toolchain pins and fake marker. At START_PORT both signal listener counts are zero and two virtual resources exist. Self-delivered SIGINT/SIGTERM terminate with the respective signal; intents survive but no cleanup.json or report is written. Parent deadline is 2 seconds.",
+      "impact": "A routine host cancellation leaves actual owned containers/marker unreconciled until an external operator acts. Wrapper signal handlers do not substitute for host cancellation.",
+      "correction": "Install scoped host cancellation handlers before side effects, record SIGNAL, stop future starts and route cancellation through one finite cleanup path. Remove handlers in finalization; preserve original cancellation and any cleanup failure. Test both signals with an owned simulated subprocess."
+    },
+    {
+      "id": "R1-03",
+      "severity": "HIGH",
+      "priority": 3,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP02",
+        "NP03",
+        "NP08"
+      ],
+      "title": "Evidence validator accepts rehashed contradictory containment proofs",
+      "expected": "SPEC lines 397\u2013409 require real proof for every PASS and a validator rejecting omitted/contradictory bindings, not just digest consistency.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 32,
+          "detail": "assertEvidenceBindings checks byte hashes and selected relationships but does not revalidate inspect/preflight security facts."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 158,
+          "detail": "Trace validation covers frame shape and native hashes, not equivalence of preflight/inspect/profile PASS evidence."
+        },
+        {
+          "path": "tests/claude100/reference-port/schema.mjs",
+          "line": 318,
+          "detail": "Checks require a valid existing artifact reference, not a proof appropriate to that check."
+        }
+      ],
+      "evidence": [
+        "adversarial-r1.json"
+      ],
+      "reproduction": "Clone the baseline report and retained bytes in memory. Change a retained inspect HostConfig.Privileged to true; separately change preflight uid to 0, hostMarkerAbsent to false and pidNamespace to the synthetic host inode. Update each artifact bytes/hash. assertEvidenceBindings accepts both reports with PORT_OBSERVED and all containment checks PASS.",
+      "impact": "A hash-consistent artifact set can contradict its own containment claims and still be accepted by the shipped evidence validator. This is not a claim that an arbitrary attacker can rewrite host evidence; it is a demonstrated SPEC-required verifier failure.",
+      "correction": "Recompute every required check from its appropriate retained proofs, cardinalities and trace relationships; rerun closed profile/inspect/namespace/preflight equivalence validation and reject any contradiction. Do not weaken the qualified helpers."
+    },
+    {
+      "id": "R1-04",
+      "severity": "MEDIUM",
+      "priority": 4,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP07"
+      ],
+      "title": "Nonzero wrapper status aborts removal of an otherwise proven owned container",
+      "expected": "SPEC lines 373\u2013381 require stop/remove/final absence confirmation for each known owned identity, preserving execution and cleanup errors separately.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 469,
+          "detail": "An exited wrapper with nonzero ExitCode throws IO before reaching rm/final inspect."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 491,
+          "detail": "Catch leaves the identity UNRESOLVED, although no remove was attempted and daemon is available."
+        }
+      ],
+      "evidence": [
+        "adversarial-r1.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/wrapper_nonzero_on_cleanup/run/cleanup.json"
+      ],
+      "reproduction": "After the simulated client STOP/CLOSED, set its actual inspect State.ExitCode to 1. Controller returns INFRA_FAILURE and preserves the failure, but never sends rm for the client and leaves one virtual container; observer removal succeeds.",
+      "impact": "An abnormal wrapper exit deliberately produces an avoidable resource leak. Failure status and a handoff are honest but do not discharge the required cleanup attempt.",
+      "correction": "Record the nonzero wrapper observation as an execution failure and continue identity-checked removal/final inspect. Keep execution and cleanup failures separate; only actual inability to reconcile/remove justifies UNRESOLVED."
+    },
+    {
+      "id": "R1-05",
+      "severity": "MEDIUM",
+      "priority": 5,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP03",
+        "NP06",
+        "NP08"
+      ],
+      "title": "Complete body framing without its trusted REQUEST/RESPONSE is classified as clean absence",
+      "expected": "SPEC lines 291\u2013299, 339\u2013343, 391\u2013409: missing protected control/body relationships are protocol failure; clean absence requires otherwise intact controls.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 793,
+          "detail": "Wait checks only requests already present in the map; it is vacuously satisfied for orphan body frames."
+        },
+        {
+          "path": "tests/claude100/reference-port/capture.mjs",
+          "line": 154,
+          "detail": "EOF validates binary framing/terminals but not required matching protected control events."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 327,
+          "detail": "Orphan terminal bodies become partialBodies while the run can retain intact PHASES/PRIVACY_CAPS."
+        }
+      ],
+      "evidence": [
+        "adversarial-r1.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/orphan_body_without_events/run/observer-trace.json"
+      ],
+      "reproduction": "Keep the complete eligible synthetic body and its terminal but suppress its REQUEST and RESPONSE controls, leaving seq contiguous and EOF/CLOSED otherwise valid. Real controller publishes PORT_NOT_OBSERVED with PHASES=PASS and PRIVACY_CAPS=PASS instead of INFRA_FAILURE.",
+      "impact": "Missing-control evidence is mislabeled as an intact run with no eligible exchange. It does not produce PORT_OBSERVED in this reproducer but violates required incomplete/error observability.",
+      "correction": "Before intact classification, require a bijection between eligible body ordinal/terminal and protected REQUEST/RESPONSE records, with all required fields/digests/phase/window checked. Preserve orphan bytes as partial failure."
+    },
+    {
+      "id": "R1-06",
+      "severity": "MEDIUM",
+      "priority": 6,
+      "mandatory": true,
+      "confidence": "HIGH",
+      "affectedNP": [
+        "NP04",
+        "NP08"
+      ],
+      "title": "Host consumes original source imports; reviewed builtin allowlist is absent from profile",
+      "expected": "SPEC lines 224\u2013231 requires consuming only the private source/input snapshot and including a fixed Node builtin allowlist in the profile.",
+      "code": [
+        {
+          "path": "scripts/claude100-reference-port.mjs",
+          "line": 2,
+          "detail": "Host controller is imported from original checkout before snapshot creation."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 1,
+          "detail": "Its host helper closure is statically imported from original files."
+        },
+        {
+          "path": "tests/claude100/reference-port/inputs.mjs",
+          "line": 83,
+          "detail": "Later snapshot copies the closure but host continues using the original module graph."
+        },
+        {
+          "path": "tests/claude100/reference-port/controller.mjs",
+          "line": 642,
+          "detail": "Resolved profile has no builtin allowlist."
+        }
+      ],
+      "evidence": [
+        "closure-independent-r1.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r1/artifacts/baseline/run/inputs/profile.json"
+      ],
+      "reproduction": "Independent Acorn AST inventory agrees with the Lead: 19 source paths, 214909 bytes, 12 builtins, zero unresolved literal imports/dynamic imports. However inspect the CLI import and profile key list: container wrappers use the copy, host does not; profile omits the reviewed allowlist.",
+      "impact": "Literal closure completeness is positive evidence but cannot stand in for the approved consumed-source/profile contract. The current result binds copied bytes rather than the entire module graph actually used by the host.",
+      "correction": "Use a minimal trusted bootstrap to freeze and verify the closure before executing the snapshotted host controller; persist the fixed reviewed builtin allowlist in the approved profile representation. Resolve any schema ambiguity explicitly rather than silently claiming compliance."
+    }
+  ],
+  "compatibilityQuestions": [
+    {
+      "id": "Q1",
+      "question": "Fifth HTTP attempt cannot use ordinal4",
+      "judgment": "COMPATIBLE_FAIL_CLOSED_STAGING",
+      "explanation": "The closed domain remains 0\u20133. The observer fails CAP privately and exits nonzero without inventing an ordinal/frame. A protected premature EOF is sufficient to reject the run as incomplete INFRA_FAILURE; it is not sufficient to assert that CAP specifically was observed on the host. Synthetic observer_cap_eof confirms a prior valid exchange does not rescue the result. Actual fifth request cap/exit/cleanup positive control remains NOT_RUN. R1-04 requires avoiding leaks on nonzero cleanup observations.",
+      "code": [
+        "observer.mjs:117",
+        "observer.mjs:383",
+        "controller.mjs:297"
+      ],
+      "evidence": [
+        "adversarial-r1.json"
+      ]
+    },
+    {
+      "id": "Q2",
+      "question": "Local Enginev1.51 HTTP101 attach handshake \u22642s versus observation \u226430s",
+      "judgment": "COMPATIBLE_TRANSPORT_INTERPRETATION_NOT_RUNTIME_QUALIFIED",
+      "explanation": "It is coherent to apply the per-call deadline to establishing a counted attach stream, then bound observation by the shared controller deadline. DockerTransport.budget counts attach within 24 calls; handshake has <=2s timer; observation ends at the same global deadline. This does not extend a Docker CLI command to 30s. Fixed local socket/config and preflight API-range refusal are present. No network lookup was performed and no Engine compatibility/101 lifetime was exercised; current image/API availability and final positive controls are NOT_RUN. This judgment follows the approved observation design and inspected source, not a claim that official reference pages were fetched.",
+      "code": [
+        "docker.mjs:65",
+        "docker.mjs:185",
+        "docker.mjs:225",
+        "docker.mjs:293",
+        "controller.mjs:587"
+      ],
+      "evidence": [
+        "safe-unit-r1.json"
+      ]
+    },
+    {
+      "id": "Q3",
+      "question": "Zero-length binary terminal per phase/channel/body; interleaving and EOF",
+      "judgment": "WIRE_REPRESENTATION_COMPATIBLE_IMPLEMENTATION_INCOMPLETE",
+      "explanation": "Length zero is already admitted by the length domain, so it can unambiguously designate one terminal without adding a wire type/schema. Decoder checks duplicates, data after terminal, malformed/partial EOF; native classification joins actual END and both channel terminals. Byte-fragmentation/terminal safe tests passed. However the observer body/control join is not total: terminal body without REQUEST/RESPONSE is accepted as clean PORT_NOT_OBSERVED (R1-05). Thus the proposed representation is compatible, but strict missing-event/EOF safety is not satisfied by this candidate.",
+      "code": [
+        "protocol.mjs:429",
+        "protocol.mjs:457",
+        "capture.mjs:94",
+        "controller.mjs:788"
+      ],
+      "evidence": [
+        "safe-unit-r1.json",
+        "adversarial-r1.json"
+      ]
+    },
+    {
+      "id": "Q4",
+      "question": "Conservatively exclude observer events/bytes received after host STOP; no invented cross-pipe order",
+      "judgment": "COMPATIBLE_CONSERVATIVE_WINDOW_POLICY",
+      "explanation": "Both native START/port and HTTP proof must exist within authorized host START_PORT\u2192STOP; their arrival order need not match across pipes. Observer REQUEST/RESPONSE and raw handlers reject outside that window. Excluding late arrivals may turn an otherwise valid exchange into INFRA_FAILURE (false negative), but cannot manufacture a positive exchange. Synthetic observer_raw_after_stop confirms rejection plus cleanup of both virtual identities. Real pipe scheduling is NOT_RUN. Missing orphan joins and host cancellation/cleanup findings remain independent and must be fixed.",
+      "code": [
+        "controller.mjs:189",
+        "controller.mjs:276",
+        "controller.mjs:787"
+      ],
+      "evidence": [
+        "adversarial-r1.json"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "NP01",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "SOURCE_NEGATIVES_REVIEWED_NOT_RUNTIME_PROVEN",
+      "findings": []
+    },
+    {
+      "id": "NP02",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-03"
+      ]
+    },
+    {
+      "id": "NP03",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-03",
+        "R1-05"
+      ]
+    },
+    {
+      "id": "NP04",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-01",
+        "R1-06"
+      ]
+    },
+    {
+      "id": "NP05",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "SOURCE_NEGATIVES_REVIEWED_NOT_RUNTIME_PROVEN",
+      "findings": []
+    },
+    {
+      "id": "NP06",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-05"
+      ]
+    },
+    {
+      "id": "NP07",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-02",
+        "R1-04"
+      ]
+    },
+    {
+      "id": "NP08",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "MANDATORY_FINDING",
+      "findings": [
+        "R1-01",
+        "R1-03",
+        "R1-05",
+        "R1-06"
+      ]
+    },
+    {
+      "id": "NP09",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "SOURCE_NEGATIVES_REVIEWED_NOT_RUNTIME_PROVEN",
+      "findings": []
+    },
+    {
+      "id": "NP10",
+      "finalAcceptance": "NOT_RUN",
+      "boundedReviewJudgment": "CURRENT_FULL_GATES_NOT_COMPLETED_BY_REVIEWER",
+      "findings": []
+    }
+  ],
+  "limitations": [
+    "All Engine/preflight/native/HTTP stimuli in the adversarial integration tests are explicitly simulated.",
+    "Physical current Node/Docker/Claude bytes match fixed pins; Docker image/API runtime compatibility is NOT_RUN.",
+    "No official web references fetched because network is forbidden in this review.",
+    "Lead current full certification is a disjoint live job; no result is inferred and it was not inspected/controlled.",
+    "No claim of release, M1, complete functional catalog acceptance or final NP acceptance."
+  ],
+  "nextAction": "Lead preserves/stops only its owned certification attempt, corrects mandatory findings in an authorized correction round, refreezes/reviews current source and evidence, then reissues appropriate gates before any bounded native launch."
+}

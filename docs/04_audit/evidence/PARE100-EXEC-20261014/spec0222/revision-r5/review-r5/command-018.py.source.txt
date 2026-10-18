@@ -1,0 +1,13 @@
+from pathlib import Path
+import subprocess,json,collections
+p=Path.cwd().parent/'review-packet'
+for name,pat in [('spec.md',r'sandbox|conten|CATALOG_MISMATCH|normali'),('cvg/packages/harness/src/capability-boundary.ts',r'sandbox|function cloneDescriptor|return deepFreeze|normalizeDescriptor'),('cvg/packages/harness/src/kernel/pipeline.ts',r'requiredSandboxMode|NONE|enforceSandbox')]:
+ r=subprocess.run(['rg','-n',pat,str(p/name)],capture_output=True,text=True)
+ print('FILE',name,'RG_EXIT',r.returncode);print(r.stdout);print(r.stderr)
+l=(p/'cvg/packages/harness/src/capability-boundary.ts').read_text().splitlines()
+for i in range(405,425):print(f'capability-boundary.ts:{i}: {l[i-1]}')
+a=json.loads((p/'original-leaf-bindings.json').read_text())
+print('ORIGINAL_LEAF_COUNTS',dict(collections.Counter(x.get('extraction_status') for x in a)))
+print('ORIGINAL_PARITY_COUNTS',dict(collections.Counter(x.get('parity_status') for x in a)))
+print('NO_CANDIDATE_BINDING_COUNT',sum(not x.get('candidate_cvg_files') for x in a))
+print('LEAF_KEYS',list(a[0]))

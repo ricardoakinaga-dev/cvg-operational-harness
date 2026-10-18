@@ -1,0 +1,34 @@
+# 0388 — Reconciliação documental do isolamento
+
+Task `DOCS-ISOLATION-20261017`, solicitada pelo usuário em 17/10/2026. Trilha T1: documentação e verificação dos critérios existentes de HISO-002/HISO-008. Fonte de autoridade: ADR-010 e os recibos já registrados; esta rodada não altera contratos ou decisões.
+
+## Resultado requerido
+
+1. Sincronizar o runbook0803 com a SPEC0228, identificando a candidata `f11f762f` e o checkout principal separadamente. Atualizar documentação não integra código nem transfere certificação entre árvores.
+2. Reconciliar B5/HISO-010 com a decisão humana de16/10, mantendo pendentes a execução real no GitHub Actions e a qualificação do check obrigatório do produto.
+3. Encerrar a organização documental HISO-002/HISO-008 pelos critérios originais: missão e navegação vigentes, uma fonte de status por cartão, correspondência AP–PISO–HISO, contratos/histórico preservados e links explícitos. Aceites técnicos das dependências e piloto/produção não são concedidos por esta conclusão documental.
+
+## Critérios congelados antes da edição
+
+| ID     | Obrigação e evidência necessária                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| DOC-01 | Runbook sem a estimativa obsoleta de20min; comportamento SPEC0228, exit1/INCOMPLETE, tempo observado e comando vinculados à candidata correta; fontes do checker principal intactas. |
+| DOC-02 | B5 em0370 e0374 aponta para o mesmo recibo de16/10; aprovação T3 distinguida de CI real/check obrigatório ainda não comprovados.                                                     |
+| DOC-03 | README, docs/README, índice manual, AGENTS, constituição e coordenação identificam harness e consumidor segundo ADR-010; UP91 e ADR-009 raiz classificados como histórico de missão. |
+| DOC-04 | Barra0368, SPEC0177 e D1–D4 pertencem ao consumidor; barra0373/plano0374 pertencem ao harness, sem autorização cruzada.                                                              |
+| DOC-05 | Dez cartões PISO e todos os seus conteúdos funcionais/status permanecem canônicos em products/shift-assistant/docs/backlog.md;0370 conserva somente ponteiros PISO.                  |
+| DOC-06 | Os16AP têm correspondência explícita; docs de contrato, operação, guia e corpus têm caminhos próprios e ponteiros de origem; nenhuma fila AP concorrente ou mudança de requisito.    |
+| DOC-07 | Contratos congelados, decisões e evidências históricas preservados por hash; os20moves do consumidor mantêm resolução exata sem nova allowlist.                                      |
+| DOC-08 | Links, formato, higiene, inspeção do diff e revisão documental aprovados; HISO-002/008 e registros operacionais reconciliados com evidência atual.                                   |
+
+## Execução e controle
+
+Baseline e cópias anteriores em [evidências](../04_audit/evidence/DOCS-ISOLATION-20261017/baseline.json). Claim em agent_coordination; fontes de aplicação, locks, workflows, candidatas e programas concorrentes readonly. Ledgers recebem somente entrada própria no topo, preservando seus corpos anteriores.
+
+Procedimentos: comparar fontes/decisões, reconciliar documentos, conferir invariantes e hashes, executar os checkers documentais locais em Node22 e obter uma revisão independente do diff. Não executar testes de aplicação, certify ou CI remoto para mudanças apenas documentais. Se um check falhar, registrar o primeiro resultado e corrigir a documentação ou diagnosticar a captura; não relaxar o verificador.
+
+Estado inicial: `IN_PROGRESS`. Próxima ação: aplicar a reconciliação e demonstrar DOC-01–08. Resultado e continuidade serão registrados no [handoff](../08_runtime/handoffs/docs_isolation_20261017.md).
+
+## Fechamento — 17/10/2026
+
+Estado final `COMPLETED` documental, condicionado à conferência final registrada na evidência. DOC01–07 demonstrados por invariantes e revisão independente APPROVE_DOCUMENTARY_CLOSURE_ELIGIBILITY, sem achados materiais. Links do repositório inteiro e formato PASS; comando reproduzido na candidataf11, INCOMPLETE esperado em12,99s. DOC08 consolida esse parecer, checks finais, HISO-002/HISO-008 DONE e ledgers. Dez cartões PISO funcionais intactos,16AP/20moves preservados,17inputs protegidos e179artefatos B6 anteriores sem drift. [Relatório e matriz final](../04_audit/evidence/DOCS-ISOLATION-20261017/REPORT.md). Próximo trabalho está nas trilhas técnicas existentes; não resta requisito interno desta reconciliação depois dos checks finais. Sem integração de checker, CI remoto, commit/push/deploy ou aceite de isolamento/produção.

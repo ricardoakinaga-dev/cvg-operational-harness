@@ -1,0 +1,29 @@
+import pathlib,json,hashlib,re
+B=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1');P=B/'review-packet';N=P/'native-raw';A=B/'review-native-addendum';R=B/'review-r1'
+def h(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+rows=[]
+for case in sorted((N/'cases').iterdir()):
+ command=json.loads((case/'driver.command.json').read_text());fixture=case/'fixture'; c=fixture/'scripts/ci-bar.mjs';f=fixture/'scripts/phase10-certify.mjs';config=fixture/'vitest.config.mts'
+ envs=[]
+ if (case/'child-env.jsonl').exists():
+  for l in (case/'child-env.jsonl').read_text().splitlines():
+   e=json.loads(l);env=e.get('env',{});envs.append(dict(event=e.get('event'),flag=env.get('CVG_COVERAGE_PER_FILE'),scope=env.get('CVG_TEST_SCOPE'),node=e.get('node')))
+ coverage=fixture/'coverage/coverage-summary.json';metrics=None
+ if coverage.exists():
+  s=json.loads(coverage.read_text());metrics={k:{d:v[d]['pct'] for d in ['statements','branches','functions','lines']} for k,v in s.items()}
+ rows.append(dict(case=case.name,exit=command.get('exit'),argv=command.get('argv'),ci_driver_sha256=h(c),phase10_driver_sha256=h(f),config_sha256=h(config),environment=envs,metrics=metrics))
+(R/'raw-cases-assessment.json').write_text(json.dumps(rows,indent=2)+'\n')
+checks=[]
+am=json.loads((A/'manifest.json').read_text())
+for relative in am['files']:
+ if not relative.endswith('/phase10-result.json'):continue
+ result=json.loads((A/relative).read_text());prefix=pathlib.Path(relative).parent
+ for gate in result['gates']:
+  log=A/prefix.parent/pathlib.Path(gate['log'])
+  checks.append(dict(case=pathlib.Path(relative).parts[1],gate=gate['id'],status=gate['status'],log=str(log),sha256=h(log),expected=gate['logSha256'],matches=h(log)==gate['logSha256']))
+(R/'phase10-log-bindings.json').write_text(json.dumps(checks,indent=2)+'\n')
+print('raw cases',len(rows),'bound logs',len(checks),'all match',all(x['matches'] for x in checks))
+for x in rows:
+ if x['case'].startswith('green') and ('r2-ci-certify' in x['case'] or 'phase10' in x['case'] or 'ci-' in x['case']):
+  print(x['case'],x['exit'],'drivers_current',x['ci_driver_sha256']==h(P/'current/scripts/ci-bar.mjs'),x['phase10_driver_sha256']==h(P/'current/scripts/phase10-certify.mjs'),'env',x['environment'])
+print('unchanged config/package/lock', {f:h(P/'current'/f)==h(N/'originals'/f) for f in ['vitest.config.mts','package.json','package-lock.json']})

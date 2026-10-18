@@ -1,0 +1,148 @@
+from pathlib import Path
+import argparse
+import copy
+import json
+import shutil
+from common import P, NODE, CAP, authority, digest, env_for, load, put, require, strict_load
+from launcher import execute
+from run import run
+from seal import seal
+from validate import evaluate, validate_run
+
+def check(folder, authority_path, authority_sha, out):
+    out.mkdir(parents=True, exist_ok=False)
+    trusted = authority(authority_path, authority_sha)
+    fixture = load(P / 'fixture.json')
+    data = load(folder / 'stdout.txt')
+    results = []
+    mutations = [
+        ('missing-target', lambda d: d['cases'].pop(1)),
+        ('duplicate-case', lambda d: d['cases'].append(copy.deepcopy(d['cases'][1]))),
+        ('lost-telemetry', lambda d: d['cases'][1]['telemetryEvents'].clear()),
+        ('malformed-telemetry', lambda d: d['cases'][1]['telemetryEvents'].__setitem__(0, {})),
+        ('forged-telemetry', lambda d: d['cases'][1]['telemetryEvents'][0].__setitem__('errors', 42)),
+        ('forged-body-count', lambda d: d['cases'][1]['bodyCalls'].clear()),
+        ('forged-body-tenant', lambda d: d['cases'][1]['bodyCalls'][0]['context'].__setitem__('tenantId', 'forged')),
+        ('forged-body-agent', lambda d: d['cases'][1]['bodyCalls'][0]['context'].__setitem__('agentId', 'forged')),
+        ('forged-body-signal', lambda d: d['cases'][1]['bodyCalls'][0]['context']['signal'].__setitem__('aborted', True)),
+        ('forged-log-payload', lambda d: d['cases'][1]['kernelLogEvents'][1].__setitem__('input', {'text': 'forged'})),
+        ('forged-log-correlation', lambda d: d['cases'][1]['kernelLogEvents'][1].__setitem__('correlationId', 'forged')),
+        ('forged-gate-flags', lambda d: d['cases'][0]['gateCalls'][0]['policy'].__setitem__('networkAllowed', True)),
+        ('forged-decision-input', lambda d: d['cases'][1]['decisions'][0]['input']['runtime'].__setitem__('userMessage', 'forged')),
+        ('forged-fingerprint', lambda d: d['cases'][1].__setitem__('capabilityFingerprint', '0' * 64)),
+        ('forged-proposal-hash', lambda d: d['cases'][1]['journalRecord'].__setitem__('proposalHash', '0' * 64)),
+        ('boolean-counter', lambda d: d['cases'][1]['nativeResult'].__setitem__('toolCalls', True)),
+        ('boolean-timing', lambda d: d['cases'][1]['telemetryEvents'][0].__setitem__('latencyMs', False)),
+        ('lost-audit', lambda d: d['cases'][1]['auditEvents'].clear()),
+        ('extra-event-field', lambda d: d['cases'][1]['kernelLogEvents'][2].__setitem__('forged', True)),
+        ('forged-normalized-mode', lambda d: d['cases'][1]['submittedDescriptor'].__setitem__('sandbox', 'WORKSPACE')),
+    ]
+    for name, mutate in mutations:
+        mutant = copy.deepcopy(data)
+        mutate(mutant)
+        try:
+            evaluate(mutant, fixture)
+        except (ValueError, KeyError, IndexError, TypeError):
+            results.append({'test': name, 'kind': 'semantic', 'result': 'REJECTED'})
+            continue
+        raise AssertionError('semantic mutation accepted: ' + name)
+    for raw in ['{"cases":[],"cases":[]}', '{"value":NaN}', '{"value":Infinity}']:
+        try:
+            strict_load(raw)
+        except ValueError:
+            results.append({'test': raw, 'kind': 'strict-json', 'result': 'REJECTED'})
+            continue
+        raise AssertionError('ambiguous JSON accepted')
+    # Forged copies receive an explicitly test-only trusted receipt so semantic
+    # rejection is exercised beyond transport hashes. These are never accepted runs.
+    process_mutations = [
+        ('empty-source-map', lambda f, p: (put(f/'sources-before.json', {}), put(f/'sources-after.json', {}), p.__setitem__('sourceCount', 0))),
+        ('bad-argv', lambda f, p: p['capture'].__setitem__('argv', ['forged'])),
+        ('bad-cwd', lambda f, p: p['capture'].__setitem__('cwd', '/forged')),
+        ('bad-env', lambda f, p: p['capture']['env'].__setitem__('NODE_OPTIONS', 'forged')),
+        ('bad-group', lambda f, p: p['capture'].__setitem__('processGroup', 1)),
+        ('boolean-pid', lambda f, p: p['capture'].__setitem__('pid', True)),
+        ('bad-deadline', lambda f, p: p['capture'].__setitem__('deadlineMs', 6000)),
+        ('bad-duration', lambda f, p: p['capture'].__setitem__('executionElapsedNs', 5000000001)),
+        ('missing-duration', lambda f, p: p['capture'].pop('executionElapsedNs')),
+        ('hidden-stderr', lambda f, p: (f/'stderr.txt').write_text('concealed stderr')),
+        ('unknown-join', lambda f, p: p['capture'].__setitem__('joined', None)),
+        ('source-drift', lambda f, p: put(f/'sources-after.json', {})),
+    ]
+    for name, mutate in process_mutations:
+        f = out / name
+        shutil.copytree(folder, f)
+        process = load(f/'process.json')
+        process['capture']['env'] = env_for(f)
+        mutate(f, process)
+        put(f/'process.json', process)
+        receipt = out/(name+'.receipt.json')
+        sha = seal(f, receipt)
+        try:
+            validate_run(f, trusted, authority_sha, receipt, sha)
+        except (ValueError, KeyError, IndexError, TypeError):
+            results.append({'test': name, 'kind': 'process-semantic', 'result': 'REJECTED'})
+            continue
+        raise AssertionError('process mutation accepted: ' + name)
+    # An unmodified copied run with adjusted private home paths is a positive
+    # control for the copied-evidence setup, not an independently captured run.
+    positive = out/'copy-positive'
+    shutil.copytree(folder, positive)
+    process = load(positive/'process.json')
+    process['capture']['env'] = env_for(positive)
+    put(positive/'process.json', process)
+    receipt = out/'copy-positive.receipt.json'
+    sha = seal(positive, receipt)
+    validate_run(positive, trusted, authority_sha, receipt, sha)
+    results.append({'test': 'copied-evidence-harness', 'result': 'PASS_COPY_CONTROL_ONLY'})
+    try:
+        validate_run(positive, trusted, authority_sha, receipt, '0'*64)
+    except ValueError:
+        results.append({'test': 'untrusted-receipt', 'result': 'REJECTED'})
+    else:
+        raise AssertionError('untrusted receipt accepted')
+    try:
+        authority(authority_path, '0'*64)
+    except ValueError:
+        results.append({'test': 'untrusted-source-authority', 'result': 'REJECTED'})
+    else:
+        raise AssertionError('untrusted authority accepted')
+    # Controlled children only: close own pipes then wait, flood own stdout,
+    # injected read failure, and post-capture snapshot failure.
+    lifecycle = []
+    fixtures = [
+        ('eof-timeout', "require('fs').closeSync(1);require('fs').closeSync(2);setTimeout(()=>{},2000)", 150, CAP, False, 'execution_deadline_after_eof'),
+        ('output-cap', "process.stdout.write('x'.repeat(100000));setTimeout(()=>{},2000)", 1000, 1024, False, 'combined_output_cap'),
+        ('capture-error', "process.stdout.write('x');setTimeout(()=>{},2000)", 1000, CAP, True, 'synthetic_capture_error'),
+    ]
+    for name, script, deadline, cap, fault, expected in fixtures:
+        f = out/name
+        f.mkdir()
+        capture, streams = execute([str(NODE), '-e', script], P, env_for(f), deadline, cap, fault)
+        put(f/'process.json', capture)
+        for key, raw in streams.items():
+            (f/(key+'.txt')).write_bytes(raw)
+        require(any(expected in error['message'] for error in capture['errors']), name+' fault not observed')
+        require(capture['joined'] and capture['remainingProcessGroup'] is False, name+' cleanup')
+        require(capture['retainedBytes'] <= cap, name+' retained cap')
+        lifecycle.append({'test': name, 'result': 'EXPECTED_FAILURE_RETAINED_AND_JOINED', 'capture': capture})
+    def synthetic_driver(argv, cwd, env):
+        return execute([str(NODE), '-e', "process.stdout.write('synthetic snapshot fixture')"], cwd, env)
+    f = out/'after-snapshot-error'
+    good, record = run(f, authority_path, authority_sha, snapshot_fault=True, capture_driver=synthetic_driver)
+    require(not good and record['capture']['joined'] and record['capture']['remainingProcessGroup'] is False, 'snapshot fault cleanup')
+    require(record['snapshotErrors'][0]['stage'] == 'after' and (f/'stdout.txt').read_bytes(), 'snapshot failure evidence')
+    lifecycle.append({'test': 'after-snapshot-error', 'result': 'EXPECTED_FAILURE_RETAINED_AND_JOINED', 'record': record})
+    put(out/'results.json', {'validatorControls': results, 'lifecycleControls': lifecycle,
+                            'sourceAuthoritySHA256': authority_sha, 'sandboxNativeTests': 0,
+                            'productionChanges': 0, 'fullParity': 'NOT_MEASURED'})
+    return len(results), len(lifecycle)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--authority', required=True, type=Path)
+    parser.add_argument('--authority-sha', required=True)
+    parser.add_argument('--out', required=True, type=Path)
+    args = parser.parse_args()
+    print(check(args.run.resolve(), args.authority, args.authority_sha, args.out.resolve()))

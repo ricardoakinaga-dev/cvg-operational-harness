@@ -1,0 +1,11 @@
+import subprocess,sys,os,json,datetime,pathlib
+D=pathlib.Path(__file__).resolve().parent
+name=sys.argv[1]
+argv=([sys.executable,'-B','-c',sys.argv[2],*sys.argv[3:]] if name=='--code' else [sys.executable,'-B',str(D/name),*sys.argv[2:]])
+env=os.environ.copy();env.update(PYTHONDONTWRITEBYTECODE='1',NODE_DISABLE_COMPILE_CACHE='1')
+r=subprocess.run(argv,cwd=D,env=env,capture_output=True)
+index=len(list(D.glob('command-*.json')))+1
+stem=D/f'command-{index:03d}'
+stem.with_suffix('.stdout').write_bytes(r.stdout);stem.with_suffix('.stderr').write_bytes(r.stderr)
+stem.with_suffix('.json').write_text(json.dumps({'argv':argv,'cwd':str(D),'exit':r.returncode,'stdoutFile':stem.name+'.stdout','stderrFile':stem.name+'.stderr','stdoutBytes':len(r.stdout),'stderrBytes':len(r.stderr),'captureTruncated':False,'outerInvocation':['python3','capture.py',*sys.argv[1:]],'envOverrides':{'PYTHONDONTWRITEBYTECODE':'1','NODE_DISABLE_COMPILE_CACHE':'1'},'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat()},indent=2)+'\n')
+sys.stdout.buffer.write(r.stdout);sys.stderr.buffer.write(r.stderr);sys.exit(r.returncode)

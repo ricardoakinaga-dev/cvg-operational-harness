@@ -1,0 +1,36 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+const directory = path.join(process.env.RUNNER_TEMP, 'shift-assistant')
+const raw = fs.readFileSync(path.join(directory, 'test-report.json'))
+const report = JSON.parse(raw)
+const files = report.testResults.map((file) =>
+  path.relative(process.cwd(), file.name).split(path.sep).join('/')
+)
+const failures = []
+if (files.length === 0 || report.numTotalTests <= 0) failures.push('empty_product_suite')
+if (report.success !== true || report.numFailedTests !== 0) failures.push('product_tests_failed')
+if (report.numPendingTests !== 0 || report.numTodoTests !== 0) failures.push('product_tests_skipped')
+const foreign = files.filter((file) => !file.startsWith('products/shift-assistant/'))
+if (foreign.length > 0) failures.push(`foreign_tests:${foreign.length}`)
+const summary = {
+  schemaVersion: 1,
+  kind: 'cvg-product-test-denominator',
+  owner: 'shift-assistant',
+  scope: 'products/shift-assistant',
+  repository: process.env.GITHUB_REPOSITORY,
+  sha: process.env.GITHUB_SHA,
+  runId: process.env.GITHUB_RUN_ID,
+  attempt: process.env.GITHUB_RUN_ATTEMPT,
+  testFiles: files.length,
+  tests: report.numTotalTests,
+  passed: report.numPassedTests,
+  failed: report.numFailedTests,
+  skipped: report.numPendingTests + report.numTodoTests,
+  reportSha256: createHash('sha256').update(raw).digest('hex'),
+  failures,
+  verdict: failures.length === 0 ? 'PASS' : 'FAIL'
+}
+fs.writeFileSync(path.join(directory, 'denominator.json'), `${JSON.stringify(summary, null, 2)}\n`)
+process.stdout.write(`${JSON.stringify(summary)}\n`)
+process.exitCode = failures.length === 0 ? 0 : 1

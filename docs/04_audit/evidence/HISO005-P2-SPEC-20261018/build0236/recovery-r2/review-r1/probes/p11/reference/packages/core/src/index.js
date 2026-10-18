@@ -1,0 +1,1 @@
+import 'vendor';export const result=1;

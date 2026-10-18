@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict'
+import {createOperationalHarness,InMemoryExecutionStepStore,sealCheckpoint} from '@cvg/harness'
+import {HybridOrchestrator} from '@cvg/harness-orchestrator'
+import {EMPTY_BUDGET_USAGE} from '@cvg/harness-contracts'
+import {phase3RuntimeInput,InMemoryApprovalEngine,RecordingAuditSink,RecordingTelemetrySink,ScriptedPolicyEngine} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/evals/phase3-fixtures.ts'
+let modelCalls=0
+const input=phase3RuntimeInput()
+const store=new InMemoryExecutionStepStore()
+const ports={modelGateway:{complete:async()=>{modelCalls++;throw Error('unexpected model body')}},tools:{list:()=>[],resolve:()=>undefined},policy:new ScriptedPolicyEngine(),approvals:new InMemoryApprovalEngine(),audit:new RecordingAuditSink(),telemetry:new RecordingTelemetrySink()}
+const orchestrator=new HybridOrchestrator({rules:[()=>({decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'safe synthetic'})]})
+assert.throws(()=>createOperationalHarness({...ports,toolResultContext:{version:1},iterativeOrchestrator:orchestrator}))
+assert.throws(()=>createOperationalHarness({...ports,toolResultContext:{version:1},stepStore:store}))
+const h=createOperationalHarness({...ports,toolResultContext:{version:1},iterativeOrchestrator:orchestrator,stepStore:store})
+await assert.rejects(h.run({...input,runtimeProfile:'single_pass'}))
+const legacy=(observations:any[])=>sealCheckpoint({tenantId:input.tenantId,executionId:input.executionId!,checkpointVersion:1,runtimeProfile:'iterative',runtimeVersion:'2.0.0',orchestratorVersion:'1.0.0',stepNumber:observations.length?1:0,state:{goal:input.agent.objective,stepNumber:observations.length?1:0,observations,openQuestions:[],resolvedInputs:{},loopSignatures:[]},budgetUsage:{...EMPTY_BUDGET_USAGE,steps:observations.length?1:0}})
+await store.saveCheckpoint(legacy([]))
+const upgraded=await h.run(input)
+assert.equal(upgraded.stopReason,'COMPLETED',JSON.stringify(upgraded))
+assert.equal((await store.loadCheckpoint(input.tenantId,input.executionId!))!.checkpointVersion,2)
+const oldReader=createOperationalHarness({...ports,iterativeOrchestrator:orchestrator,stepStore:store})
+const refused=await oldReader.run(input)
+assert.equal(refused.stopReason,'STATE_CONFLICT')
+const oldStore=new InMemoryExecutionStepStore()
+const cp=legacy([{observationId:'old_result',executionId:input.executionId!,stepId:'old_step',stepNumber:1,type:'TOOL_RESULT',source:'TOOL',trust:'UNTRUSTED',payload:{status:'SUCCEEDED',output:'legacy limited'},summary:'legacy limited',provenance:{sourceId:'legacy'},timestamp:'2026-10-16T00:00:00.000Z'}])
+await oldStore.saveCheckpoint(cp)
+const newReader=createOperationalHarness({...ports,toolResultContext:{version:1},iterativeOrchestrator:orchestrator,stepStore:oldStore})
+const refusedLegacyResult=await newReader.run(input)
+assert.equal(refusedLegacyResult.stopReason,'INSUFFICIENT_EVIDENCE')
+assert.ok(refusedLegacyResult.response.includes('LEGACY_RESULT_UNKNOWN'))
+assert.deepEqual(await oldStore.loadCheckpoint(input.tenantId,input.executionId!),cp)
+assert.equal(modelCalls,0)
+console.log(JSON.stringify({status:'PASS',cases:6,modelCalls,upgrade:upgraded.stopReason,oldReader:refused.stopReason,legacyResult:refusedLegacyResult.stopReason,scope:'Publicfactory compatibility only, notSDK/worker integration orglobalqualification'}))

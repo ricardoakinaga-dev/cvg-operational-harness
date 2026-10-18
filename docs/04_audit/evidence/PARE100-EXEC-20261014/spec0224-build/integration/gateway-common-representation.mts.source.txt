@@ -1,0 +1,19 @@
+import { readFileSync } from 'node:fs'
+import assert from 'node:assert/strict'
+import { ModelInputSchema } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/model-gateway/src/contracts.ts'
+const traces = JSON.parse(readFileSync('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/integration/focused-02.requests.json','utf8'))
+let actualRequests=0
+for (const trace of traces) for (const request of trace.requests ?? trace.cvg?.requests ?? []) {
+ const actual={messages:request.messages}
+ const parsed=ModelInputSchema.safeParse(actual)
+ assert.equal(parsed.success,true)
+ if(parsed.success) assert.deepEqual(parsed.data,actual)
+ assert.equal(request.maxOutputTokens,512)
+ actualRequests++
+}
+assert.ok(actualRequests>0)
+assert.equal(ModelInputSchema.safeParse({system:'s'.repeat(16000),messages:[{role:'user',content:'u'.repeat(32000)}]}).success,true)
+assert.equal(ModelInputSchema.safeParse({system:'s'.repeat(16001),messages:[{role:'user',content:'u'}]}).success,false)
+assert.equal(ModelInputSchema.safeParse({messages:[{role:'user',content:'u'.repeat(32001)}]}).success,false)
+assert.equal(ModelInputSchema.safeParse({messages:[{role:'tool',content:'not introduced'}]}).success,false)
+console.log(JSON.stringify({status:'PASS',actualRequests,boundaryControls:4,scope:'Direct governed gateway common input schema only. No adapter, provider, maxOutputTokens transport mapping or integrated route qualification.'}))

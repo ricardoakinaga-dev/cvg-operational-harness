@@ -1,0 +1,51 @@
+from pathlib import Path
+import json,hashlib,subprocess,re,datetime
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';N=E/'g04/full-native-spec';h=lambda b:hashlib.sha256(b).hexdigest();checks=[]
+def check(i,fn):
+ try:v=fn();checks.append({'id':i,'status':'PASS_T1_ONLY','detail':v})
+ except Exception as e:checks.append({'id':i,'status':'FAIL','detail':str(e)})
+def own():
+ s=json.loads((N/'source-inputs.json').read_text());assert len(s['inputs'])==s['input_count']==52;by={x['id']:x for x in s['inputs']}
+ for x in s['inputs']:
+  a=(N/x['archive']).read_bytes();b=Path(x['path']).read_bytes();assert a==b and len(a)==x['bytes'] and h(a)==x['sha256'],x['id']
+ spans=json.loads((N/'source-spans.json').read_text());assert len(spans['spans'])==32
+ for x in spans['spans']:
+  p=N/by[x['input']]['archive'];assert '\n'.join(p.read_text().splitlines()[x['start_line']-1:x['end_line']])==x['excerpt'],x['id']
+ return '52current/canonical/pinarchive pairs exact;32exactranges;6pinfiles gitverified atcapture'
+check('FN-V01',own)
+def scout():
+ D=N/'wire-scout';m=json.loads((D/'manifest.json').read_text());rows=m['files']
+ for x in rows:
+  b=(D/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'],x['path']
+ s=json.loads((D/'sources.json').read_text());ranges=0
+ for x in s['sources']:
+  b=(D/x['snapshot']).read_bytes();assert h(b)==x['initial_sha256'] and len(b)==x['bytes'],x['id']
+  for span in x['ranges']:
+   q=b[span['byte_start']:span['byte_start']+span['bytes']];assert h(q)==span['sha256'],span['id'];ranges+=1
+ assert len(s['sources'])==32 and ranges==60
+ return {'scoutoutputs':len(rows),'sourcearchives':32,'exactranges':60,'coordination_live_drift':'known,notimmutable;archivedpreimagepreserved','actor':'CLOSED'}
+check('FN-V02',scout)
+def coverage():
+ t=json.loads((N/'test-plan.json').read_text());c=json.loads((N/'CQ-coverage.json').read_text());assert len(t['cases'])==30 and len({x['id'] for x in t['cases']})==30;assert all(x['status']=='NOT_RUN' and x['functional_receipt'] is None and x['known_bad'] for x in t['cases']);assert {x['CQ'] for x in c['rows']}=={f'CQ{i:02d}' for i in range(1,15)};assert all(x['cases'] for x in c['rows']);ea=t['inherited_EA'];assert h((R/ea['path']).read_bytes())==ea['sha256'] and len(ea['case_ids'])==19;assert t['execution']['runtime_tests_run']==0
+ cat=json.loads((R/'docs/03_build/tracking/codex100_catalog_v1.json').read_text());assert len(cat['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in cat['requirements']);return '30futurecases+19inheritedEA/14CQ+509catalog remainNOT_RUN/nullreceipt'
+check('FN-V03',coverage)
+def prior():
+ old=json.loads((E/'checkpoint-before-full-native-spec-manifest.json').read_text());mutable={'.agent/plans/codex100-exec-20261017.md','docs/03_build/0386_backlog_paridade_codex.md','docs/08_runtime/handoffs/codex100_exec_20261017.md',str(E.relative_to(R))+'/state.json',str(E.relative_to(R))+'/continuation.json',str(E.relative_to(R))+'/execution-log.jsonl'};rows=[x for x in old['files'] if x['path'] not in mutable];assert len(rows)==2178
+ for x in rows:
+  b=(R/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'],x['path']
+ return '2178previousimmutablepayloads unchanged; only6currentcontrols mutable'
+check('FN-V04',prior)
+def docs():
+ md=[R/'docs/02_spec/0239_codex_native_journey.md'];count=0
+ for p in md:
+  for t in re.findall(r'\]\(([^)]+)\)',p.read_text()):
+   t=t.split()[0].strip('<>').split('#')[0]
+   if not t or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:',t):continue
+   assert (p.parent/t).exists(),t;count+=1
+ for p in N.rglob('*.json'):json.loads(p.read_text())
+ return {'currentSPEC_links':count,'broken':0,'JSON':'PARSED'}
+check('FN-V05',docs)
+def fmt():
+ cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check','docs/02_spec/0239_codex_native_journey.md'];r=subprocess.run(cmd,capture_output=True,text=True);assert r.returncode==0,r.stdout+r.stderr;return {'command':cmd,'exit_code':r.returncode,'stdout':r.stdout}
+check('FN-V06',fmt)
+d={'task':'DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY','kind':'T1_INTEGRITY_NOT_BACKEND_OR_PARITY_PROOF','observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'checks':checks,'passed':sum(x['status']=='PASS_T1_ONLY' for x in checks),'failed':sum(x['status']=='FAIL' for x in checks),'native_runtime_tests':'NOT_RUN','functional_receipts':0};(N/'verification-r1.json').write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n');print(json.dumps(d,ensure_ascii=False));assert not d['failed']

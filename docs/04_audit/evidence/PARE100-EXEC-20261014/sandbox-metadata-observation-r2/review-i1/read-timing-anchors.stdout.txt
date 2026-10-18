@@ -1,0 +1,294 @@
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/pipeline.ts ===
+ 290       outcome: 'not_started'
+ 291     })
+ 292     // A lost closing record is not hidden behind the denial (AUD-0598 R04):
+ 293     // the call stays blocked, and the turn reports the missing evidence.
+ 294     return unrecorded
+ 295       ? { kind: 'stopped', gate: unrecordedBlock(unrecorded, blocked), blocked }
+ 296       : { kind: 'stopped', gate: blocked }
+ 297   }
+ 298 
+ 299   const gate = await runGate(host, 'tool/pre-execute', call)
+ 300   if (gate.kind === 'stop') return closeNotStarted(gate)
+ 301 
+ 302   const denial = await revalidate(host, call)
+ 303   if (denial) return closeNotStarted(denial)
+ 304 
+ 305   const sandbox = await enforceSandbox(host, call)
+ 306   if (sandbox) return closeNotStarted(sandbox)
+ 307 
+ 308   let hooked: KernelStop | undefined
+ 309   try {
+ 310     hooked = await hooks.beforeDispatch?.(call)
+ 311   } catch (error) {
+ 312     // The loop's own checkpoint failed: the logged call is still closed once
+ 313     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+ 314     await appendLog(host, {
+ 315       type: 'tool/result',
+ 316       correlationId,
+ 317       toolId: tool.id,
+ 318       outcome: 'not_started'
+ 319     })
+ 320     throw error
+ 321   }
+ 322   if (hooked) return closeNotStarted(hooked)
+ 323 
+ 324   // The hook may have taken time (checkpoint): re-check before reserving.
+ 325   const late = await revalidate(host, call)
+ 326   if (late) return closeNotStarted(late)
+ 327 
+ 328   const settled = await postExecute(host, call, await dispatch(host, call))
+ 329   const logFailure = await appendLog(host, {
+ 330     type: 'tool/result',
+ 331     correlationId,
+ 332     toolId: tool.id,
+ 333     outcome: settled.kind
+ 334   })
+ 335   return logFailure
+ 336     ? { kind: 'settled', outcome: settled, logFailure }
+ 337     : { kind: 'settled', outcome: settled }
+ 338 }
+ 339 
+ 340 /**
+ 341  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+ 342  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+ 343  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+ 344  * in-memory and never reaches the sandbox gate.
+ 345  */
+ 346 /**
+ 347  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+ 348  * means no gate; the harness never infers containment from `sideEffect`, so
+ 349  * legacy side-effecting tools keep running until they opt in.
+ 350  */
+ 351 export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+ 352   return descriptor.sandbox ?? 'NONE'
+ 353 }
+ 354 
+ 355 /**
+ 356  * Enforcement point between every control decision and the capability body
+ 357  * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+ 358  * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+ 359  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+ 360  */
+ 361 async function enforceSandbox(
+ 362   host: KernelHost,
+ 363   call: ToolCallState
+ 364 ): Promise<KernelStop | undefined> {
+ 365   const requiredMode = requiredSandboxMode(call.tool)
+ 366   if (requiredMode === 'NONE') return undefined
+ 367   if (!host.has('sandbox')) {
+ 368     return stop(
+ 369       'UNSAFE_REQUEST',
+ 370       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+ 371     )
+ 372   }
+ 373   const gate = host.get('sandbox')
+ 374   if (!gate) {
+ 375     // host.has was checked; a missing entry here is a host-integrity fault,
+ 376     // so fail closed the same way as an unconfigured gate.
+ 377     return stop(
+ 378       'UNSAFE_REQUEST',
+ 379       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+ 380     )
+ 381   }
+ 382   try {
+ 383     const outcome: SandboxGateOutcome = await gate.evaluate({
+ 384       descriptor: call.tool,
+ 385       context: {
+ 386         tenantId: call.turn.input.tenantId,
+ 387         agentId: call.turn.input.agent.id,
+ 388         correlationId: call.turn.input.correlationId,
+ 389         traceId: call.turn.input.traceId,
+ 390         operationKey: call.invocation.operationKey
+ 391       },
+ 392       policy: {
+ 393         requiredMode,
+ 394         workspaceScoped: requiredMode === 'WORKSPACE',
+ 395         networkAllowed: requiredMode === 'EGRESS',
+ 396         subprocessAllowed: requiredMode === 'PROCESS'
+ 397       }
+ 398     })
+ 399     if (outcome.kind === 'denied') {
+ 400       return stop(
+ 401         'UNSAFE_REQUEST',
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/controls.ts ===
+ 704           const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
+ 705           const recorded = await turn.budget.withDeadline(
+ 706             () =>
+ 707               audit.append({
+ 708                 actor: turn.input.agent.id,
+ 709                 agent: turn.input.agent.id,
+ 710                 tenant: turn.input.tenantId,
+ 711                 action,
+ 712                 policy: turn.metadata.policy,
+ 713                 approval: turn.metadata.approval,
+ 714                 tool: turn.metadata.tool,
+ 715                 result: result.stopReason,
+ 716                 timestamp: new Date().toISOString(),
+ 717                 traceId: turn.input.traceId,
+ 718                 correlationId: turn.input.correlationId
+ 719               }),
+ 720             window
+ 721           )
+ 722           if (recorded === DEADLINE) throw new Error('audit deadline exceeded')
+ 723           return result
+ 724         } catch {
+ 725           return {
+ 726             ...result,
+ 727             response:
+ 728               'Execution could not be completed because audit recording failed.',
+ 729             stopReason: 'INSUFFICIENT_EVIDENCE'
+ 730           }
+ 731         }
+ 732       })
+ 733     }
+ 734   }
+ 735 }
+ 736 
+ 737 // ---------------------------------------------------------- capabilities
+ 738 
+ 739 export function plannerCapability(planner: Orchestrator): KernelPlugin {
+ 740   return {
+ 741     name: 'capability.planner',
+ 742     kind: 'capability',
+ 743     provides: ['planner'],
+ 744     apply: (ctx) => void ctx.provide('planner', planner)
+ 745   }
+ 746 }
+ 747 
+ 748 export function modelCapability(model: ModelGateway): KernelPlugin {
+ 749   return {
+ 750     name: 'capability.model',
+ 751     kind: 'capability',
+ 752     provides: ['model'],
+ 753     apply: (ctx) => void ctx.provide('model', model)
+ 754   }
+ 755 }
+ 756 
+ 757 export function toolsCapability(tools: ToolRegistry): KernelPlugin {
+ 758   return {
+ 759     name: 'capability.tools',
+ 760     kind: 'capability',
+ 761     provides: ['tools'],
+ 762     apply: (ctx) => void ctx.provide('tools', tools)
+ 763   }
+ 764 }
+ 765 
+ 766 export interface TelemetryCapabilityOptions {
+ 767   readonly name?: string
+ 768 }
+ 769 
+ 770 /** Observability never turns a governed result into an error. */
+ 771 export function telemetryCapability(
+ 772   telemetry: TelemetrySink,
+ 773   options: TelemetryCapabilityOptions = {}
+ 774 ): KernelPlugin {
+ 775   const name = options.name ?? 'harness.kernel'
+ 776   return {
+ 777     name: 'capability.telemetry',
+ 778     kind: 'capability',
+ 779     provides: ['telemetry'],
+ 780     apply(ctx) {
+ 781       ctx.provide('telemetry', telemetry)
+ 782       ctx.on('turn/end', async (turn, result) => {
+ 783         const event: TelemetryEvent = {
+ 784           name,
+ 785           latencyMs: Date.now() - turn.startedAt,
+ 786           errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+ 787           costUsd: result.usage.costUsd,
+ 788           inputTokens: result.usage.inputTokens,
+ 789           outputTokens: result.usage.outputTokens,
+ 790           provider: turn.metadata.provider,
+ 791           toolDurationMs: turn.metadata.toolDurationMs,
+ 792           steps: result.steps,
+ 793           traceId: turn.input.traceId,
+ 794           correlationId: turn.input.correlationId
+ 795         }
+ 796         try {
+ 797           telemetry.record(event)
+ 798         } catch {
+ 799           // Observability must not turn a governed result into an error.
+ 800         }
+ 801         return result
+ 802       })
+ 803     }
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/kernel/pipeline.ts ===
+ 490       return {
+ 491         kind: 'not_started',
+ 492         gate: stop(
+ 493           'INSUFFICIENT_EVIDENCE',
+ 494           `Effect ledger could not record the start: ${errorMessage(error)}.`
+ 495         )
+ 496       }
+ 497     }
+ 498     started = true
+ 499     const startedAt = Date.now()
+ 500     const toolController = new AbortController()
+ 501     try {
+ 502       // Past the decision point the body is always invoked, so a recorded
+ 503       // start never pairs with a body that did not run.
+ 504       const value = await raceInvoked(turn, () =>
+ 505         call.tool.execute(call.invocation.input, {
+ 506           tenantId: turn.input.tenantId,
+ 507           agentId: turn.input.agent.id,
+ 508           correlationId: turn.input.correlationId,
+ 509           traceId: turn.input.traceId,
+ 510           operationKey: call.invocation.operationKey,
+ 511           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+ 512           signal: AbortSignal.any([toolController.signal, turn.signal])
+ 513         })
+ 514       )
+ 515       const durationMs = Date.now() - startedAt
+ 516       if (value === DEADLINE || value === CANCELLED) {
+ 517         toolController.abort()
+ 518         return {
+ 519           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+ 520           durationMs
+ 521         }
+ 522       }
+ 523       return value.status === 'SUCCEEDED'
+ 524         ? { kind: 'succeeded', result: value, durationMs }
+ 525         : { kind: 'failed', result: value, durationMs }
+ 526     } catch (error) {
+ 527       return {
+=== /tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r2/../worktree/packages/harness/src/effect-journal.ts ===
+   1 import { createHash, randomUUID } from 'node:crypto'
+   2 import type {
+   3   ToolDefinition,
+   4   ToolExecutionContext,
+   5   ToolRegistry,
+   6   ToolResult
+   7 } from '@cvg/harness-contracts'
+   8 
+   9 export type EffectJournalState =
+  10   | 'RESERVED'
+  11   | 'EFFECT_STARTED'
+  12   | 'CONFIRMED'
+  13   | 'FAILED'
+  14   | 'UNCERTAIN'
+  15 
+  16 export interface EffectJournalRecord {
+  17   readonly tenantId: string
+  18   readonly operationKey: string
+  19   readonly proposalHash: string
+  20   readonly state: EffectJournalState
+  21   readonly attemptId: string
+  22   readonly result?: unknown
+  23   readonly error?: string
+  24   readonly createdAt: string
+  25   readonly updatedAt: string
+  26 }
+  27 
+  28 export interface EffectJournal {
+  29   reserve(input: {
+  30     tenantId: string
+  31     operationKey: string
+  32     proposalHash: string
+  33     attemptId: string
+  34   }): Promise<EffectJournalRecord>
+  35   markStarted(input: {
+  36     tenantId: string
+  37     operationKey: string
+  38     attemptId: string
+  39   }): Promise<EffectJournalRecord>
+  40   confirm(input: {

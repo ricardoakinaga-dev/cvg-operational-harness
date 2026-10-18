@@ -1,0 +1,626 @@
+FILE reference/packages/boot/hmr/src/index.ts
+129:   private operations: Promise<unknown> = Promise.resolve()
+130:   private readonly executing = new AsyncLocalStorage<boolean>()
+131:   private applicationReady: Promise<boolean> = Promise.resolve(true)
+132:   private closing = false
+133:   private readonly configPaths = new Set<string>()
+134: 
+135:   /** Serialize a caller-owned mutation with all automatic reload paths.
+136:    * @param operation Work that must not overlap module or configuration replacement.
+137:    * @returns The operation result after its asynchronous work completes.
+138:    */
+139:   runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+140:     if (this.executing.getStore()) return Promise.reject(new Error('HMR transactions cannot be nested'))
+141:     const task = this.operations.then(async () => {
+142:       if (this.closing) throw new Error('HMR is disposed')
+143:       return this.executing.run(true, operation)
+144:     })
+145:     this.operations = task.catch(() => {})
+146:     return task
+147:   }
+148: 
+149:   private runReload(operation: () => Promise<void>): Promise<void> {
+150:     return this.runExclusive(async () => {
+151:       if (await this.applicationReady) await operation()
+152:     })
+153:   }
+154: 
+155:   /** Watch a configuration path through the same queue as module replacement.
+156:    * @param filename Absolute path, which may not exist yet.
+157:    * @param refresh Rebuilds configuration from its current files and awaits Loader completion.
+158:    * @returns Disposer closing this registration and waiting for its pending refresh.
+159:    */
+160:   async watchConfig(filename: string, refresh: () => Promise<void>): Promise<() => Promise<void>> {
+161:     const paths = [resolve(filename), canonicalPath(filename)]
+162:     if (paths.some(path => this.configPaths.has(path))) throw new Error(`config path already registered: ${filename}`)
+163:     for (const path of paths) this.configPaths.add(path)
+164:     try {
+165:       const dispose = await this.executing.exit(() => watchExactConfig(
+166:         this.ownerContext, filename, this.config, () => this.runReload(refresh), () => this.executing.getStore() === true,
+167:       ))
+168:       return async () => {
+169:         await dispose()
+170:         for (const path of paths) this.configPaths.delete(path)
+171:       }
+172:     } catch (error) {
+173:       for (const path of paths) this.configPaths.delete(path)
+174:       throw error
+175:     }
+198:   async* [Service.init](): AsyncGenerator<() => Promise<void>, void, unknown> {
+199:     yield async () => {
+200:       this.closing = true
+201:       await this.watcher?.close()
+202:       // A configuration reload may remove its own HMR entry.
+203:       if (!this.executing.getStore()) await this.operations
+204:     }
+205: 
+206:     const profile = this.ownerContext.get('profileContext')
+207:     if (profile !== undefined) {
+208:       const ready = this.ownerContext.get('appReady')
+209:       if (ready === undefined) throw new Error('Profile HMR requires application readiness')
+210:       const started = Promise.withResolvers<boolean>()
+211:       this.applicationReady = started.promise
+212:       const unsubscribe = ready.onReady(() => { started.resolve(true) })
+213:       yield () => { unsubscribe(); started.resolve(false); return Promise.resolve() }
+214:       const manifestPath = join(profile.dir, 'package.json')
+215:       const patchFiles = [profile.patchPath, join(profile.home, PROFILE_PATCH_FILENAME)]
+500:     const generations = [...reloads].map(([previous, info]) => ({
+501:       ...info, previous,
+502:       fibers: [...info.runtime?.fibers ?? []].map((fiber) => {
+503:         const entry = fiber.entry?.fiber?.uid === fiber.uid ? fiber.entry : undefined
+504:         const config: unknown = entry === undefined ? fiber._config : entry.options.config
+505:         return { fiber, entry, config }
+506:       }),
+507:     }))
+508:     const attempts: Array<(typeof generations)[number] & { replacement: Plugin }> = []
+509:     try {
+510:       for (const generation of generations) {
+511:         const replacement = this.ctx.loader.unwrapExports(await this.ctx.loader.import(generation.filename, this.getOuterStack)) as Plugin
+512:         attempts.push({ ...generation, replacement })
+513:       }
+514:     } catch (e) {
+515:       handleError(this.ctx, e)
+516:       rollback()
+517:       throw e
+518:     }
+519: 
+520:     const reload = async (plugin: Plugin, fibers: (typeof generations)[number]['fibers']) => {
+521:       const activated = []
+522:       for (const previousFiber of fibers) {
+523:         if (previousFiber.fiber.parent.fiber.uid === null) continue
+524:         const fiber = previousFiber.fiber.parent.registry.plugin(plugin, previousFiber.config, this.getOuterStack).ctx.fiber
+525:         if (previousFiber.entry !== undefined) {
+526:           fiber.entry = previousFiber.entry
+527:           previousFiber.entry.fiber = fiber
+528:         }
+529:         activated.push(fiber)
+530:       }
+531:       await Promise.all(activated.map(fiber => fiber.await()))
+532:     }
+533: 
+534:     const removed = new Set<Plugin>()
+535:     try {
+536:       for (const { previous: plugin, replacement, filename, runtime, fibers } of attempts) {
+537:         if (!runtime) continue
+538:         const path = relative(this.baseDir, fileURLToPath(filename))
+539: 
+540:         removed.add(plugin)
+541:         try {
+542:           this.ctx.registry.delete(plugin)
+543:           await Promise.all(fibers.map(({ fiber }) => fiber.await()))
+544:         } catch (err) {
+545:           this.ctx.logger.warn('failed to dispose plugin at %C', path)
+546:           this.ctx.logger.warn(err)
+547:         }
+548: 
+549:         try {
+550:           await reload(replacement, fibers)
+551:           this.ctx.logger.info('reload plugin at %C', path)
+552:         } catch (err) {
+553:           this.ctx.logger.warn('failed to reload plugin at %C', path)
+554:           this.ctx.logger.warn(err)
+555:           throw err
+556:         }
+557:       }
+558:     } catch (error) {
+559:       // Restore caches and re-register old plugins after a replacement failure.
+560:       rollback()
+561:       for (const { previous: plugin, replacement, fibers } of attempts) {
+562:         if (!removed.has(plugin)) continue
+563:         try {
+564:           const replacementRuntime = this.ctx.registry.get(replacement)
+565:           const replacementFibers = [...replacementRuntime?.fibers ?? []]
+566:           this.ctx.registry.delete(replacement)
+567:           // Failed startup errors remain on fibers after their teardown finishes.
+568:           await Promise.allSettled(replacementFibers.map(fiber => fiber.await()))
+569:           await reload(plugin, fibers)
+570:         } catch (err) {
+571:           this.ctx.logger.warn(err)
+572:         }
+573:       }
+574:       throw error
+575:     }
+576: 
+577:     await this.ctx.loader.await()
+578:     this.ctx.emit('hmr/reload', reloads)
+FILE reference/packages/boot/plugin-manager/src/index.ts
+825:     if (publisher === undefined) return `bundle "${name}" has no verifiable publisher identity`
+826:     if (!this.allowedPublishers.has(publisher)) {
+827:       return `bundle "${name}" publisher "${publisher}" is not allowlisted`
+828:     }
+829:     return undefined
+830:   }
+831: 
+832:   private configure<T>(operation: () => Promise<T>): Promise<T> {
+833:     const hmr = this.ownerContext.get('hmr')
+834:     const apply = () => { this.abort.signal.throwIfAborted(); return operation() }
+835:     return hmr === undefined ? apply() : hmr.runExclusive(apply)
+836:   }
+837: 
+838:   private async reload(requiredIds: readonly string[] = []): Promise<string[]> {
+839:     if (this.ownerContext.get('hmr') === undefined) return []
+840:     return reconcileProfilePatches(this.ownerContext.root, readProfilePatches('dsh', this.profile), 'dsh', requiredIds)
+841:   }
+842: 
+843:   private async change(
+844:     operation: (result: ChangeResult) => Promise<ChangeResult['application'] | void>,
+845:     request: Pick<ChangeResult, 'stage' | 'target' | 'enabled'>,
+846:     reason: PluginChange['reason'],
+847:   ): Promise<ChangeResult> {
+848:     return withFileLock(join(this.profile.dir, 'package.json'), async () => {
+849:       this.abort.signal.throwIfAborted()
+850:       const before = this.diskState()
+851:       const result: ChangeResult = { ...request, changed: false,
+852:         application: this.ownerContext.get('hmr') !== undefined ? 'applied' : 'restart-required' }
+853:       try {
+854:         result.application = await operation(result) ?? result.application
+855:       } catch (error) {
+856:         if (error instanceof InstallCancelledError) {
+857:           result.application = 'cancelled'
+858:         } else {
+859:           result.application = 'failed'
+860:           result.error = managementError(error)
+861:         }
+862:       }
+863:       result.changed = before !== this.diskState()
+864:       this.ownerContext.emit('plugin-manager/changed', { reason })
+865:       return result
+866:     }, { waitMs: this.lockWaitMs })
+867:   }
+868: 
+869:   private diskState(): string {
+870:     return ['package.json', 'cordis.patch.yml', 'pnpm-workspace.yaml', PROFILE_COMPATIBILITY_FILENAME].map((file) => {
+871:       try { return readFileSync(join(this.profile.dir, file), 'utf8') }
+872:       catch (error) {
+873:         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+874:         throw error
+875:       }
+876:     }).join('\0')
+877:   }
+878: }
+879: 
+880: export default PluginManager
+FILE reference/packages/preset/agent-preset-registry/src/index.ts
+90:       this.definitions.delete(definition.id)
+91:       await record.ready
+92:       if (record.generation !== undefined) {
+93:         record.generation.retired = true
+94:         await this.collect(record.generation)
+95:       }
+96:     }
+97:     record.ready = this.activate(record)
+98:     await record.ready
+99:     return unregister
+100:   }
+101: 
+102:   private async activate(record: Definition): Promise<void> {
+103:     const key = {}
+104:     const scope = createScope(this.owner, key)
+105:     try {
+106:       const problem = entryListProblem(record.config.plugins)
+107:       if (problem !== undefined) throw new Error(problem)
+108:       const context = scope.ctx.extend({ baseUrl: record.context.baseUrl })
+109:       const mount = await mountPreset(context, record.config.id, record.config.plugins)
+110:       const generation: Generation = { scope, key, mount, users: 0, retired: false }
+111:       this.generations.set(key, generation)
+112:       record.generation = generation
+113:     } catch (error) {
+114:       record.broken = (error as Error).message
+115:       this.owner.logger.warn(`agent preset ${record.config.id}: ${record.broken}`)
+116:       await scope.dispose()
+117:     }
+118:   }
+119: 
+120:   /**
+121:    * Current activation diagnostic of a definition.
+122:    *
+123:    * A mount failure is final. A mounted tree is re-audited on every read: a
+124:    * row waiting for a Host service activates by itself once that provider
+125:    * finishes, so the audit waits for the Host Loader tree to settle before
+126:    * reporting the row as unusable. Callers therefore must not run inside a
+127:    * Host row's own activation, which the settlement would wait on.
+128:    * @param record - the definition to audit.
+129:    * @returns one line per unusable row, or undefined when the definition is usable.
+130:    */
+131:   private async diagnostic(record: Definition): Promise<string | undefined> {
+132:     await record.ready
+133:     if (record.generation === undefined) return record.broken
+134:     const tree = record.generation.mount.tree
+135:     let audit = await auditRows(tree)
+136:     if (audit.pending.length > 0) {
+137:       await this.owner.loader.await()
+138:       audit = await auditRows(tree)
+139:     }
+140:     const lines = [...audit.failed, ...audit.pending]
+141:     return lines.length === 0 ? undefined : lines.join('\n')
+142:   }
+143: 
+144:   private async collect(generation: Generation): Promise<void> {
+145:     if (!generation.retired || generation.users !== 0) return
+146:     this.generations.delete(generation.key)
+147:     await generation.scope.dispose()
+148:   }
+149: 
+150:   /** Read every declared preset, including activation failures.
+151:    * @returns Display metadata and loading diagnostics.
+152:    */
+153:   async list(): Promise<AgentPreset[]> {
+154:     const rows = await Promise.all([...this.definitions.values()].map(async (record) => {
+155:       const broken = await this.diagnostic(record)
+205:     })
+206:   }
+207: 
+208:   private async retain(id?: string): Promise<Generation> {
+209:     const wanted = id ?? this.defaultId
+210:     while (true) {
+211:       const record = this.definitions.get(wanted)
+212:       if (record === undefined) throw new RemoteError('agent-preset/not-found', `Unknown agent preset: ${wanted}`,
+213:         { agentPreset: wanted, available: [...this.definitions.keys()] })
+214:       const broken = await this.diagnostic(record)
+215:       if (this.definitions.get(wanted) !== record) continue
+216:       const generation = record.generation
+217:       if (broken !== undefined || generation === undefined) {
+218:         const reason = broken as string
+219:         throw new RemoteError('agent-preset/invalid', reason, { agentPreset: wanted, reason })
+220:       }
+221:       generation.users++
+222:       return generation
+223:     }
+224:   }
+225: 
+226:   private async bind(ctx: Context, generation: Generation): Promise<void> {
+227:     const key = scopeOf(ctx)
+228:     if (key === undefined) throw new Error('Agent preset binding requires a scoped context')
+229:     const binding = this.bindings.get(key)
+230:     if (binding?.generation === generation) return
+231:     if (binding !== undefined) {
+232:       binding.parent.rebind(generation.key)
+233:       const old = binding.generation
+234:       generation.users++
+235:       binding.generation = generation
+236:       old.users--
+237:       await this.collect(old)
+238:     } else this.join(ctx, key, generation)
+239:   }
+240: 
+241:   private join(ctx: Context, key: ScopeKey, generation: Generation): void {
+242:     const binding = { parent: bindScopeParent(key, generation.key), generation }
+243:     generation.users++
+244:     this.bindings.set(key, binding)
+245:     ctx.effect(() => async () => {
+246:       this.bindings.delete(key)
+247:       binding.generation.users--
+248:       await this.collect(binding.generation)
+249:     }, 'agent-preset.binding')
+250:   }
+251: 
+252:   /** Bind an unpublished Agent to the current preset revision.
+253:    * @param ctx Agent context from its setup callback.
+254:    * @param id Requested preset, or the default.
+255:    * @returns Bound preset identity.
+256:    */
+257:   async mount(ctx: Context, id?: string): Promise<AgentPreset> {
+258:     const generation = await this.retain(id)
+259:     try {
+260:       await this.bind(ctx, generation)
+261:       return { id: generation.mount.presetId }
+262:     } finally {
+263:       generation.users--
+264:       await this.collect(generation)
+265:     }
+266:   }
+267: 
+268:   /** Join a child to the exact revision retained by its parent.
+269:    * @param ctx Child Agent context.
+270:    * @param parent Parent Agent context.
+271:    * @returns Inherited preset id, or undefined in a preset-free composition.
+272:    */
+273:   composeFrom(ctx: Context, parent: Context): string | undefined {
+274:     const mounted = standingMountFor(parent)
+275:     if (mounted === undefined) return undefined
+276:     const generation = this.generations.get(mounted.key)
+277:     if (generation === undefined) throw new Error('Parent preset revision is unavailable')
+278:     // A child has no existing binding, so this path has no asynchronous cleanup.
+279:     const key = scopeOf(ctx)
+280:     if (key === undefined) throw new Error('Child preset binding requires a scope')
+FILE cvg/packages/platform/src/plugin-gateway.ts
+112:   agentId: AgentId
+113:   versionId: AgentVersionId
+114:   plugin: string
+115:   toolName: string
+116:   status: 'succeeded' | 'failed' | 'blocked'
+117:   payload: unknown
+118: }
+119: 
+120: export class PluginRegistry {
+121:   private readonly plugins: RegisteredPlugin[]
+122: 
+123:   constructor(plugins: RegisteredPlugin[] = []) {
+124:     this.plugins = plugins.map(normalizeRegisteredPlugin)
+125:   }
+126: 
+127:   register(plugin: RegisteredPlugin): PluginRegistry {
+128:     const normalized = normalizeRegisteredPlugin(plugin)
+129:     if (this.get(normalized.manifest.name, normalized.manifest.version)) {
+130:       throw new Error(
+131:         `Plugin already registered: ${normalized.manifest.name}@${normalized.manifest.version}`
+132:       )
+133:     }
+134:     return new PluginRegistry([...this.plugins, normalized])
+135:   }
+136: 
+137:   get(name: string, version: string): RegisteredPlugin | null {
+138:     const plugin = this.plugins.find(
+139:       (candidate) =>
+140:         candidate.manifest.name === name &&
+141:         candidate.manifest.version === version
+142:     )
+143:     return plugin ? cloneRegisteredPlugin(plugin) : null
+144:   }
+145: 
+146:   getLatest(name: string): RegisteredPlugin | null {
+147:     const plugin = [...this.plugins]
+148:       .filter((candidate) => candidate.manifest.name === name)
+149:       .sort((left, right) =>
+150:         comparePluginVersions(right.manifest.version, left.manifest.version)
+151:       )[0]
+152:     return plugin ? cloneRegisteredPlugin(plugin) : null
+153:   }
+154: 
+155:   list(): RegisteredPlugin[] {
+156:     return [...this.plugins]
+157:       .sort((left, right) => {
+158:         const byName = left.manifest.name.localeCompare(right.manifest.name)
+159:         return byName !== 0
+160:           ? byName
+FILE cvg/packages/platform/src/controlled-kernel-execution.ts
+350:   const evaluatorCore: CompletionEvaluator = {
+351:     evaluate: async ({ lastDecision }) => {
+352:       evidence.check()
+353:       const complete =
+354:         finalIssued &&
+355:         lastDecision?.decisionType === 'RESPOND' &&
+356:         lastDecision.reasonCode === 'GOAL_SATISFIED' &&
+357:         !!output &&
+358:         attempts.every((a) => a.resultAcknowledged)
+359:       return {
+360:         outcome: complete ? 'COMPLETE' : 'INCOMPLETE',
+361:         reasonCode: complete ? 'COMPLETION_CONFIRMED' : 'POLICY_REQUIRED',
+362:         deterministic: true
+363:       }
+364:     }
+365:   }
+366:   const evaluator: CompletionEvaluator = {
+367:     evaluate: async (request) =>
+368:       durable
+369:         ? durable.evaluate(() => evaluatorCore.evaluate(request))
+370:         : evaluatorCore.evaluate(request)
+371:   }
+372:   const composeHarness = () =>
+373:     createOperationalHarness({
+374:       ...guarded,
+375:       capabilities: composition.registry,
+376:       defaultRuntimeProfile: 'iterative',
+377:       iterativeOrchestrator: planner,
+378:       completionEvaluator: evaluator,
+379:       policy: controlledPolicy(evidence, core),
+380:       approvals: controlledApprovals(
+381:         evidence,
+382:         core,
+383:         () => fingerprint,
+384:         agentVersion,
+385:         correlationId,
+386:         async (a) => {
+387:           return (
+388:             input.capabilityApproval ??
+389:             (await input.resolveCapabilityApproval?.({
+390:               tenantId: input.tenantId,
+391:               agentId: input.agentId,
+392:               versionId: input.versionId,
+393:               toolName: a.command.execution.toolName,
+394:               input: a.command.execution.input,
+395:               actor: a.command.execution.actor
+396:             })) ??
+397:             undefined
+398:           )
+399:         }
+400:       ),
+401:       modelGateway: {
+402:         complete: async (request) => {
+403:           evidence.check()
+404:           if (durable) await evidence.refreshPause()
+405:           if (
+406:             durable &&
+407:             (evidence.paused || evidence.controller.signal.aborted)
+840:             !/^sha256-[a-f0-9]{64}$/.test(seal.hash)
+841:           )
+842:             throw new Error('controlled_seal_ack')
+843:           durable.seal = seal
+844:           latestSnapshot = snapshot
+845:         } catch {
+846:           evidence.fail('resume.seal')
+847:           await durable.poison('resume.seal')
+848:           throw new Error('controlled_resume_seal_unavailable')
+849:         }
+850:       }
+851:     }
+852:     const harness = composeHarness()
+853:     result = await harness.execute(runtimeInput)
+854:   } catch {
+855:     if (durable) {
+856:       evidence.fail('runtime')
+857:       await durable.poison('runtime')
+858:     }
+859:     /* Invalid/throwing kernels project INTERNAL_FAILURE after preparation. */
+860:   } finally {
+861:     evidence.close()
+FILE cvg/packages/orchestrator/src/hybrid-orchestrator.ts
+126: function resultToUsage(usage: ModelUsage): ModelUsage {
+127:   return usage
+128: }
+129: 
+130: /**
+131:  * Hybrid orchestrator: deterministic rules first, probabilistic decision
+132:  * support only when semantics are actually required. It selects actions but
+133:  * never authorizes them; policy, approval and budgets remain outside.
+134:  */
+135: export class HybridOrchestrator implements IterativeOrchestrator {
+136:   public readonly version: string
+137:   private readonly decisionModel: ModelGateway | undefined
+138:   private readonly rules: readonly OrchestrationRule[]
+139:   private readonly maxDecisionRepairs: number
+140: 
+141:   public constructor(options: HybridOrchestratorOptions = {}) {
+142:     this.decisionModel = options.decisionModel
+143:     this.rules = options.rules ?? []
+144:     const requested = options.maxDecisionRepairs ?? 1
+145:     this.maxDecisionRepairs = Number.isFinite(requested)
+146:       ? Math.min(5, Math.max(0, Math.trunc(requested)))
+147:       : 1
+148:     this.version = options.version ?? 'hybrid-1.0.0'
+149:   }
+150: 
+151:   public async decide(
+152:     input: IterativeOrchestratorInput
+153:   ): Promise<IterativeOrchestratorTurn> {
+154:     const context = input.context
+155:     for (const rule of this.rules) {
+156:       const decision = rule(context)
+157:       if (!decision) continue
+158:       const validation = validateLoopDecision(decision)
+159:       if (!validation.valid) {
+160:         throw new OrchestratorDecisionError(
+161:           'decision_invalid',
+162:           `Deterministic rule produced an invalid decision: ${validation.errors.join('; ')}`
+163:         )
+164:       }
+165:       return { decision, usage: EMPTY_MODEL_USAGE }
+166:     }
+167: 
+168:     if (!this.decisionModel) {
+169:       throw new OrchestratorDecisionError(
+170:         'orchestrator_unavailable',
+171:         'No deterministic rule matched and no decision model is configured'
+172:       )
+173:     }
+174: 
+175:     let usage: ModelUsage = EMPTY_MODEL_USAGE
+176:     let lastErrors: readonly string[] = []
+177:     let repairAttempt = 0
+178:     while (true) {
+179:       if (input.signal?.aborted) {
+180:         throw new OrchestratorDecisionError(
+181:           'orchestrator_unavailable',
+182:           'Decision was cancelled by the runtime deadline'
+183:         )
+184:       }
+185:       const prompt = buildDecisionPrompt({
+186:         ...context,
+187:         ...(repairAttempt > 0
+188:           ? {
+189:               decisionRepair: {
+190:                 attempt: repairAttempt,
+191:                 errors: lastErrors
+192:               }
+193:             }
+194:           : {})
+195:       })
+196:       const modelResult = await this.decisionModel.complete({
+197:         messages: [
+198:           { role: 'system', content: prompt },
+199:           { role: 'user', content: context.userMessage }
+200:         ],
+201:         context: {
+202:           values: { goal: context.goal },
+203:           sourceIds: ['hybrid-orchestrator'],
+204:           capturedAt: new Date().toISOString()
+205:         },
+206:         budget: context.budget,
+207:         correlationId: context.correlationId,
+208:         purpose: repairAttempt > 0 ? 'REPAIR' : 'ORCHESTRATION',
+209:         ...(input.signal ? { signal: input.signal } : {})
+210:       })
+211:       usage = addUsage(usage, modelResult)
+212:       let parsed: unknown
+213:       try {
+214:         parsed = parseDecisionText(modelResult.text)
+FILE cvg/packages/contracts/src/index.ts
+1: export * from './contracts.ts'
+2: export * from './execution-v2.ts'
+3: export * from './session-events.ts'
+4: export * from './canonical-json.ts'
+FILE cvg/tsconfig.base.json
+1: {
+2:   "compilerOptions": {
+3:     "target": "ES2022",
+4:     "module": "NodeNext",
+5:     "moduleResolution": "NodeNext",
+6:     "strict": true,
+7:     "noUncheckedIndexedAccess": true,
+8:     "exactOptionalPropertyTypes": true,
+9:     "esModuleInterop": true,
+10:     "forceConsistentCasingInFileNames": true,
+11:     "skipLibCheck": true,
+12:     "resolveJsonModule": true,
+13:     "declaration": true,
+14:     "sourceMap": true,
+15:     "composite": true,
+16:     "ignoreDeprecations": "6.0",
+17:     "allowImportingTsExtensions": true,
+18:     "rewriteRelativeImportExtensions": true,
+19:     "types": ["node"],
+20:     "baseUrl": ".",
+21:     "paths": {
+22:       "@cvg/harness-contracts": ["packages/contracts/src/index.ts"],
+23:       "@cvg/harness-orchestrator": ["packages/orchestrator/src/index.ts"],
+24:       "@cvg/harness": ["packages/harness/src/index.ts"],
+25:       "@cvg/sdk": ["packages/sdk/src/index.ts"],
+26:       "@cvg/sandbox": ["packages/sandbox/src/index.ts"],
+27:       "@cvg/shared": ["packages/shared/src/index.ts"],
+28:       "@cvg/persistence": ["packages/persistence/src/index.ts"],
+29:       "@cvg/agent-core": ["packages/agent-core/src/index.ts"],
+30:       "@cvg/legacy-secretary-evals": [
+31:         "legacy/packages/secretary-evals/src/index.ts"
+32:       ],
+33:       "@cvg/legacy-secretary-journeys": [
+34:         "legacy/packages/secretary-journeys/src/index.ts"
+35:       ],
+36:       "@cvg/legacy-secretary-profile": [
+37:         "legacy/packages/secretary-profile/src/index.ts"
+38:       ],
+39:       "@cvg/policy": ["packages/policy/src/index.ts"],
+40:       "@cvg/adapters": ["packages/adapters/src/index.ts"],
+41:       "@cvg/rag": ["packages/rag/src/index.ts"],
+42:       "@cvg/platform": ["packages/platform/src/index.ts"],
+43:       "@cvg/model-gateway": ["packages/model-gateway/src/index.ts"],
+44:       "@cvg/policy-engine": ["packages/policy-engine/src/index.ts"],
+45:       "@cvg/approval-engine": ["packages/approval-engine/src/index.ts"],
+46:       "@cvg/channel-gateway": ["packages/channel-gateway/src/index.ts"],
+47:       "@cvg/observability": ["packages/observability/src/index.ts"],
+48:       "@cvg/agent-runtime": ["packages/agent-runtime/src/index.ts"],
+49:       "@cvg/agent-evals": ["packages/agent-evals/src/index.ts"],
+50:       "@cvg/chaos": ["packages/chaos/src/index.ts"],
+51:       "@cvg/conversation": ["packages/conversation/src/index.ts"]
+52:     }
+53:   }
+54: }

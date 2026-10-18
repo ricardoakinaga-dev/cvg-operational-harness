@@ -1,0 +1,118 @@
+{
+ "round": 2,
+ "subject_sha256": "321f893ffb73ad213f99b838a36f7220ea4bdd2c06828e7b9304910638a3a9f1",
+ "verdict": "APPROVE",
+ "subject_hash_check": "source-freeze-r2.json (sha256 321f893f…a9f1) e os 27 arquivos listados (sha256, bytes, modo) conferidos antes e depois: 0 divergências. As pré-imagens archives/r1-preimages/** batem com source-freeze-r1.json. interface-v1.json, quality-bar.json e task.json não mudaram desde R1.",
+ "r1_findings_status": {
+  "R1-F01": "RESOLVED",
+  "R1-F02": "RESOLVED",
+  "R1-F03": "RESOLVED",
+  "R1-F04": "RESOLVED",
+  "R1-F05": "RESOLVED",
+  "R1-F06": "RESOLVED",
+  "R1-F07": "RESOLVED"
+ },
+ "r1_findings_evidence": {
+  "R1-F01": "Em observer.py:381-382, papel INVALID/MISSING/NO_TERMINAL vira reason (VIOLATION já virava). Em l.390-395, SIGNAL_WITHOUT_END do adapter ou do driver vira reason, e SIGNAL do peer sem SIGNAL do adapter também. Em l.504-506, KNOWN_SIGNAL_TERMINATION passa a exigir driver END completo e peer END ou SIGNAL_WITHOUT_END, com a saída coberta pelos os_checks. Em supervisor.py:782, o supervisor exige p.signal=='SIGTERM' (sem o 'or INVALID'), e DIAG-TS-ABORT ganhou a mesma checagem (l.807). Selftests R2: reconcile.F01_peer_invalid_rejected e F01_peer_missing_rejected.",
+  "R1-F02": "Em adapter-typescript:45, a janela que expira com active>0 resulta em INVALID ('in-flight forward with unknown completion'), nunca END. Em observer.py:397-400, END após SIGNAL com read!=committed em typescript resulta em INVALID. No Python o pendente continua aceito porque a escrita não bloqueante de no máximo 2048 bytes (<= PIPE_BUF) num pipe é tudo-ou-EAGAIN; se o emit do FORWARD_COMMIT falha após o write, o ledger já somou n e o END diverge da reconstrução (violação). Selftests: reconcile.F02_ts_unknown_commit_after_signal e F02_python_known_pending_declared.",
+  "R1-F03": "adapter-python.py: a âncora fica no handler (l.46). O sinal é checado logo após o select (l.180), antes de cada leitura e antes de cada escrita (l.183, 197) e após o laço. O teto de 100 ms resulta em INVALID (l.93-99, 124-125), e a espera EAGAIN não terminal é interrompida por sinal (channel.py:448-449, com ch.interrupt em adapter-python.py:61). O peer Python faz o mesmo (fixture-rpc.py: after select e die_by_signal com teto). O supervisor mede recv(SIGNAL/END) contra signal_sent_ns (observer.py:406-410; supervisor.py:543), e ABORT_CALLED->terminal do adapter <= 100 ms (observer.py:411-415). Em 8ec433a64c73, SIGNAL->END foi 0,084 ms; o END do adapter foi recebido antes de RELEASE_EXIT->driver (248,259 ms) e o SIGTERM saiu em 240,633 ms, ou seja <= 7,6 ms.",
+  "R1-F04": "supervisor.py:725 exige driver_exit_zero (rc==0) em os_checks, o que invalida PASS e KNOWN_SIGNAL. finish_controls/finishControls passam a rodar ANTES do END em todos os papéis: python-driver.py:384, adapter-python.py:211, fixture-rpc.py:202, ts-driver.mjs:159-160, adapter-typescript:118 e fixture-cli.mjs (os dois ENDs). Depois do END só restam close_fds/closeFds. O ramo Python de reconcile compara returncode com o status declarado (observer.py:488-495). Selftests: controls.*_unconsumed/truncated_before_end e reconcile.F04_python_returncode_mismatch.",
+  "R1-F05": "source-freeze-r2.json tem host_sources_differing_from_freeze_r2 e host_identity.recorded por tentativa, e qualification_by_identity. Recalculei as 10 tentativas a partir de profile-manifest.json e command.json: papéis e host batem com o declarado; só 8ec433a64c73 tem identidade R2 exata.",
+  "R1-F06": "supervisor.py:497-499 soma em case_bytes os eventos dos três papéis, os controles e a saída integral do serviço. Acima de 2097152 a unidade leva SIGKILL (l.671-674) e o caso fica INVALID (l.726). A saída do serviço é contada inteira e passar de 64 KiB invalida (l.727). O cap por papel continua como limite adicional. Em 8ec433, case_artifact_bytes=128699, que confere: 128181 de eventos + 518 de controles.",
+  "R1-F07": "extension-loader.mjs:33-38 (bindEmitted, chamado em config() l.118) exige emitted[n] == admission.files[...] antes de qualquer decisão. ts-driver.mjs:22-32 e 38-40 (checkEmitted antes do import) exigem index.js, package.json ligado, fechamento exato do diretório e só arquivos regulares; verifyFiles da admissão confere os hashes. Pais emitidos só usam sdk_builtins (l.43-46), validado como subconjunto (l.27). Os selftests Node cobrem loader.bind_emitted_*, emitted.* e loader.emitted_parent_*."
+ },
+ "r1_advisory_status": {
+  "R1-F08": "RESOLVED. A barreira final RELEASE_EXIT do driver TS (ts-driver.mjs:159) é enviada só após END/INVALID ou saída testemunhada (supervisor.py:501-504, 560-561). alive() trata zumbi (Z/X) como saída (l.269-274). O plano de TS02/03/07/08 registra a corrida do finally do SDK, e o observer rejeita frame de adapter/peer posterior ao END do driver (observer.py:401-405).",
+  "R1-F09": "DOCUMENTED (limite; escrita parcial inalcançável com <= PIPE_BUF; stderr do peer Python não exercitado).",
+  "R1-F10": "RESOLVED. clip() por bytes UTF-8 em channel.py:74-79 e channel.cjs:55-61, usado em error_data, API_CANCELLED e invalid.",
+  "R1-F11": "RESOLVED. END normal Node <= 100 ms; process.exit(125) após o re-raise; Python restaura SIG_DFL após o END e re-raise de sinal observado (adapter-python.py:214-217; fixture-rpc.py:202-210).",
+  "R1-F12": "RESOLVED. PASS exige complete nos três END (observer.py:499); stderr Python não vazio invalida (l.477-478).",
+  "R1-F13": "RESOLVED. Rótulo SIGTERM_ADAPTER_AFTER_16384_STDOUT_COMMITTED.",
+  "R1-F14": "DOCUMENTED. acceptance_predicates=NOT_IMPLEMENTED_NEXT_STAGE nos 19 casos (case-plan.json).",
+  "R1-F15": "DOCUMENTED (limite declarado).",
+  "R1-F16": "RESOLVED. run() envolve _run(); abort() mata a unidade, espera o systemd-run e grava INVALID_CAPTURE/SUPERVISOR_ERROR e o budget (supervisor.py:579-609).",
+  "R1-F17": "RESOLVED como documentação (ver R2-F03: asserção tautológica)."
+ },
+ "regressions_checked": [
+  "Barreira RELEASE_EXIT do driver TS: simulei DIAG-TS-ECHO, LARGE e ABORT e SDKTS01-10. A liberação só ocorre após END/INVALID ou saída testemunhada de adapter e peer, e um RELEASE_EXIT fora de ordem no caso hold vira 'unexpected control' -> INVALID. Sem deadlock nos fluxos normais, de abort e de kill-no-finally.",
+  "role_done/alive com zumbi: não gera falso PASS. Um peer zumbi sem terminal libera o driver, mas o observer o marca NO_TERMINAL -> INVALID. Um peer zumbi impede ABORT_NOW (alive=False) -> prazo -> INVALID.",
+  "finish_controls/finishControls antes do END: só close_fds/closeFds depois do END. O watchdog do driver Python é cancelado depois de finish_controls; se disparar antes, sai 125 -> driver_exit_zero=false.",
+  "Janela ancorada no handler: em Python o handler roda entre bytecodes e select, sleep e read são interrompidos (PEP 475 + wakeup fd), então a âncora fica próxima da entrega. No Node a âncora é onSignal no event loop.",
+  "Interrupção de EAGAIN: só para emits não terminais (until=None). Pendente com sinal resulta em ChannelError -> fail -> INVALID e término pelo mesmo sinal. Commit escrito sem frame já vira violação pela divergência ledger/END.",
+  "Orçamento agregado: confere com 8ec433 (128699). Após violação, RoleLog para de contar bytes, mas a violação já invalida.",
+  "Caminho de exceção do supervisor: cobre falhas em prepare (sem unidade), na execução e em finish (sobrescreve result.json com INVALID).",
+  "sdk_builtins/bindEmitted/checkEmitted: nenhum relaxamento; sdk_builtins é subconjunto de builtins, e o fechamento rejeita arquivo extra, symlink e diretório.",
+  "Modo SDK (19 casos): as chamadas Python/TS não mudaram fora de clip/checkEmitted/override. As novas regras do observer são compatíveis com o fluxo SDK Python (close() com terminate só após RELEASE_EXIT) e TS (finally-kill resulta em KNOWN_SIGNAL_TERMINATION ou INVALID, como no plano).",
+  "interface-v1 inalterada; as emendas de interface-bindings são aditivas ou mais estritas (exceto o texto de R2-F01)."
+ ],
+ "findings": [
+  {
+   "id": "R2-F01",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "interface-bindings-v1.json",
+   "line": 64,
+   "title": "A emenda de terminal_frames descreve o END normal de forma diferente do código Python",
+   "evidence": "O texto diz que INVALID/END/SIGNAL não são barrados pelo prazo do caso e que o END normal tem janela própria de até 100 ms. Os ENDs normais em Python (adapter-python.py:212, fixture-rpc.py:203, python-driver.py:386) usam until=None, então em channel.py:442-449 o limite é self.deadline: esperam EAGAIN até o prazo do caso (podem ser interrompidos por sinal) e são recusados depois dele. No Node, o END normal do adapter é min(100 ms, prazo) (adapter-typescript:121-122), portanto também barrado pelo prazo.",
+   "impact": "É só divergência de documento: o comportamento real é fail-closed (END tardio vira INVALID ou ausência de terminal) e não há falso PASS. Mas o suplemento congelado descreve um limite que o Python não aplica.",
+   "fix": "Corrigir o texto (END normal limitado pelo prazo do caso e, no Node, por 100 ms) ou passar until=min(now+0.1, deadline) nos ENDs normais do Python."
+  },
+  {
+   "id": "R2-F02",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 740,
+   "title": "recv_ns não é persistido, e a checagem de entrega do sinal não pode ser reauditada pela evidência",
+   "evidence": "observer.reconcile compara recv_ns (memória) com signal_sent_ns, mas events-*.jsonl só gravam os frames (compact(e)) e result.json só traz signal_sent_ns. Em 8ec433a64c73 a janela só pode ser limitada indiretamente pela ação RELEASE_EXIT->driver (o END do adapter foi recebido antes de 248,259 ms; SIGTERM em 240,633 ms).",
+   "impact": "A evidência do critério de 100 ms a partir da entrega depende da execução do supervisor, não de dado preservado.",
+   "fix": "Persistir recv_ns por frame (por exemplo events-<role>.recv.jsonl) e os valores medidos SIGNAL/END - signal_sent_ns no result.json."
+  },
+  {
+   "id": "R2-F03",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "node/ts-driver.mjs",
+   "line": 46,
+   "title": "A asserção de codexPathOverride (R1-F17) é tautológica",
+   "evidence": "options.codexPathOverride recebe a constante na linha anterior e é afirmado igual a ela. Só protege contra edição do código; não verifica que o SDK usou o override (exec.ts só chama findCodexPath sem executablePath).",
+   "impact": "É baixo: o caminho createRequire continua inalcançável com o override, como documentado.",
+   "fix": "Opcional: manter como documentação ou afirmar, após a construção, que o cmdline do adapter testemunhado pelo supervisor é /profile/adapter-typescript (map_role já faz isso)."
+  },
+  {
+   "id": "R2-F04",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 528,
+   "title": "Comportamento conhecido-ruim do SDK termina em INVALID por prazo, não em MISMATCH",
+   "evidence": "Com HOOK_CLOSED closed=false em SDKPY07, FINISH_PEER não é enviado, o peer não termina, RELEASE_EXIT não sai e o driver expira (INVALID). Um interrupt extra em SDKPY09/SDKPY08 não tem script, e o SDK espera sem timeout até o watchdog. A observação conhecida-ruim acaba registrada como INVALID_CAPTURE.",
+   "impact": "É fail-closed, mas perde a distinção entre captura inválida e comportamento do cliente divergente; cabe aos predicados de aceitação (NOT_IMPLEMENTED_NEXT_STAGE).",
+   "fix": "Na próxima porta, definir para cada caso o caminho de término sob o known-bad (por exemplo FINISH_PEER também com closed=false e um veredito MISMATCH separado)."
+  }
+ ],
+ "checks_run": [
+  "sha256sum source-freeze-r2.json = 321f893f…a9f1; sha256, bytes e modo dos 27 arquivos (0 divergências, antes e depois)",
+  "pré-imagens archives/r1-preimages/** contra source-freeze-r1.json (0 divergências); diff -u dos 16 arquivos alterados",
+  "node --check nos 7 fontes Node (OK)",
+  "cd U && python3 -I python/selftest_python.py (sem argumento): Python 115/115, Node 98/98, rc 0; hashes de selftests/*.json batem com o freeze",
+  "recálculo das identidades de papel e host das 10 tentativas contra source-freeze-r2.json (todas batem com o declarado)",
+  "análise da tentativa 8ec433a64c73-DIAG-PY-TERM: result.json, events-*.jsonl (SIGNAL inflight -> FORWARD_COMMIT -> END em 0,084 ms; peer SIGNAL; driver END após adapter e peer), actions, command.json (host = R2; argv bwrap/systemd igual às tentativas anteriores, salvo caminhos da tentativa), profile-manifest.json (fontes de papel = R2) e soma de case_artifact_bytes"
+ ],
+ "criteria": {
+  "H01": "ATENDIDO. Identidade por tentativa (papel e host) registrada e conferida; vínculo dos emitidos imposto no código (só autoteste); nenhum import alvo.",
+  "H02": "ATENDIDO. FIFOs, reabertura e framing sem regressão; known-bad nos selftests.",
+  "H03": "PARCIAL. Relay Python com fontes R2 em 8ec433 (75.941 B stdout). Relay TS só com identidade anterior. Escrita parcial inalcançável e stderr Python não exercitado (documentados).",
+  "H04": "PARCIAL. Drivers e peers dos 19 casos completos e chamadas SDK corretas; predicados de aceitação declarados NOT_IMPLEMENTED_NEXT_STAGE (próxima porta).",
+  "H05": "PARCIAL. Gate de transpile e loader corretos no código e nos autotestes R2; prova em serviço (TS-ECHO) só com identidade anterior.",
+  "H06": "ATENDIDO. Comando bwrap/systemd igual ao das tentativas anteriores; containment em PY-RPC (identidade anterior); limites de cgroup e netns conferidos em 8ec433.",
+  "H07": "ATENDIDO no código e nos autotestes R2 (caps, omitido, corrompido, commit falso, cap agregado, interrupção de contrapressão). STALL e KILL só com identidade anterior.",
+  "H08": "PARCIAL. Barreiras por evento; a final Python foi exercida em 8ec433. Cancel/reply (PY-RPC) só com identidade anterior; barreira final TS só por autoteste e análise estática.",
+  "H09": "PARCIAL. Caminho de sinal Python qualificado com fontes R2 (8ec433: entrega->END <= 7,6 ms, SIGNAL->END 0,084 ms, peer encaminhado, limpeza testemunhada). Caminho de sinal Node R2 (INVALID por commit em voo, sem espera do peer) não rodou em serviço; orçamento esgotado.",
+  "H10": "ATENDIDO. R1 e R2 por crítico sem descendentes; reviews 2/2, reparo agrupado 1/1, serviços 12/12, sem reinício de orçamento.",
+  "H11": "PENDENTE (Lead). runtime state, master log e backlog ainda não citam a unidade; só agent_coordination.",
+  "H12": "ATENDIDO. SDK_runtime e compiler_runtime NOT_RUN; functional_receipts 0; todos os result.json são CONSTANT_DIAGNOSTIC_NOT_SDK_EXECUTION."
+ },
+ "verdict_note": "APPROVE = nenhum achado obrigatório aberto (R1-F01..F07 resolvidos no código; R2 só traz P3). Não é qualificação completa: os critérios PARCIAIS acima, sobretudo TS sob identidade R2 em serviço e a aceitação dos 19 casos, ficam como pendências declaradas para a próxima porta separada.",
+ "limits": "Não executei serviços, bwrap, SDK, Pydantic nem o compilador. Os comportamentos Node R2 (barreira final, INVALID em voo, interrupção, sdk_builtins/bindEmitted/checkEmitted no loader real) foram avaliados por análise estática e pelos autotestes puros, não em execução contida. A âncora no handler Python e a ordem de fases do libuv foram analisadas estaticamente. recv_ns não está na evidência (R2-F02), então a janela de entrega de 8ec433 foi limitada indiretamente pelas ações. H11 só por grep."
+}

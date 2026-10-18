@@ -1,0 +1,48 @@
+from pathlib import Path
+import datetime, hashlib, json, os, signal, subprocess, time
+
+base = Path(__file__).parent
+program = base.parents[1]
+worktree = program / 'worktree'
+task = json.loads((program / 'test-resource-hardening-r1/task-short-spec.json').read_text())
+paths = [row['path'] for row in task['maxWriteScope']]
+digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+before = {p: digest(worktree / p) for p in paths}
+out = base / 'boundary-after-test-support'
+out.mkdir(mode=0o700)
+env = {'PATH': '/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin',
+       'HOME': str(out), 'TMPDIR': str(out), 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'CI': '1'}
+records = []
+for label, flags in [('default', []), ('strict', ['--strict'])]:
+    argv = ['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node', 'scripts/check-product-boundary.mjs',
+            '--graph=' + str(out / (label + '-graph.json')), *flags]
+    start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    t = time.monotonic()
+    proc = subprocess.Popen(argv, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    expired = False
+    try:
+        stdout, stderr = proc.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        expired = True
+        os.killpg(proc.pid, signal.SIGKILL)
+        stdout, stderr = proc.communicate(timeout=5)
+    for stream, data in [('stdout', stdout), ('stderr', stderr)]:
+        with (out / (label + '.' + stream)).open('xb') as f:
+            f.write(data)
+    summary = {}
+    try:
+        parsed = json.loads(stdout)
+        summary = {k: v for k, v in parsed.items() if isinstance(v, (str, int, float, bool)) or v is None}
+    except ValueError:
+        summary = {'unparsed': True}
+    records.append({'label': label, 'argv': argv, 'cwd': str(worktree), 'environment': env,
+                    'startedAt': start, 'seconds': time.monotonic() - t, 'exit': proc.returncode,
+                    'deadlineExpired': expired, 'stdoutSHA256': hashlib.sha256(stdout).hexdigest(),
+                    'stderrSHA256': hashlib.sha256(stderr).hexdigest(), 'summary': summary})
+after = {p: digest(worktree / p) for p in paths}
+result = {'kind': 'OFFICIAL_READONLY_BOUNDARY_OBSERVATION', 'before': before, 'after': after,
+          'sourceUnchangedDuringObservation': before == after, 'records': records,
+          'qualificationActivation': False, 'fullT2Acceptance': False}
+with (out / 'receipt.json').open('x') as f:
+    json.dump(result, f, indent=2); f.write('\n')
+print(json.dumps({'sourceUnchanged': before == after, 'records': [{k: r[k] for k in ['label', 'exit', 'seconds', 'summary']} for r in records]}))

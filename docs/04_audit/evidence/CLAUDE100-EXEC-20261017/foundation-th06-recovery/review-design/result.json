@@ -1,0 +1,470 @@
+{
+  "schema_version": 1,
+  "task": "C100-FND-TH06-RECOVERY-001",
+  "review": "review-design",
+  "reviewer_role": "independent critic",
+  "language": "pt-BR",
+  "at": "2026-10-18T05:25:46.170517+00:00",
+  "verdict": "REVISE",
+  "mandatory_findings": 2,
+  "severity_counts": {
+    "P0": 0,
+    "P1": 2,
+    "P2": 0
+  },
+  "findings": [
+    {
+      "id": "RD-01",
+      "severity": "P1",
+      "mandatory": true,
+      "title": "Diagnóstico SQL em instrumentSql ainda pode substituir a primária ou impedir o callback nativo",
+      "plan_contract": "HOW regras 3 e 6: combinar diagnóstico com primária; preservar outros catches classificados como eventos em memória/observação deliberada.",
+      "locations": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts",
+          "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/11-complete-settlement-public-postgres.integration.ts.source.txt",
+          "lines": [
+            125,
+            128,
+            145,
+            152,
+            163,
+            165,
+            169,
+            171
+          ],
+          "sha256": "7e76951c90cc25ca4082430d3cf072485f8b7a7133250aadce3288dfadeb1cd7"
+        }
+      ],
+      "static_evidence": "wire usa appendFileSync. Nos handlers de rejeição 163–165 e no catch 169–171, wire executa antes de throw error. No callback 145–152, wire executa antes de Reflect.apply(callback). São I/O e serialização falíveis, não apenas eventos em memória. O HOW nomeia trace/save público e attempt bound, mas não dá tratamento a esta instrumentação SQL nem ao handler de rejeição .then.",
+      "counterexample": "A query rejeita/lança E; appendFileSync do SQL-error lança D: o consumidor recebe D, e E desaparece antes que o wrapper externo possa capturá-lo. Na forma callback, falha de wire impede a entrega do callback original.",
+      "required_change": "Incluir explicitamente instrumentSql no HOW e classificar suas formas síncrona, Promise e callback. Preservar E por presença/identidade e agregar D; entregar o callback original uma única vez, com dono explícito para falha diagnóstica. Manter SQL, conteúdo dos registros e contrato sync/Promise/callback; não introduzir wrapper async indiscriminado na API query.",
+      "acceptance": "Controles extraídos do instrumentSql real: erro SQL + falha de appendFileSync nas formas síncrona e Promise, callback com erro nativo + falha de diagnóstico e callback invocado uma vez. O grafo final conserva E/D e eventual end P. Remover a proteção deve tornar o controle vermelho, sem executar PG/aplicação.",
+      "status": "OPEN"
+    },
+    {
+      "id": "RD-02",
+      "severity": "P1",
+      "mandatory": true,
+      "title": "Barreira de settlement precisa cobrir início tardio do runtime e sobreviver até afterAll",
+      "plan_contract": "HOW regra 5: juntar todos os attempts por joinDelivery antes de finish/DB; joins não confirmados impedem DB/finish dependente. Regra 4: afterAll settlement tenta ambos end.",
+      "locations": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts",
+          "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/11-complete-settlement-public-postgres.integration.ts.source.txt",
+          "lines": [
+            737,
+            1036,
+            1078,
+            1082,
+            1083,
+            1089,
+            1227,
+            1231,
+            1245,
+            1308,
+            1319,
+            1320
+          ],
+          "sha256": "7e76951c90cc25ca4082430d3cf072485f8b7a7133250aadce3288dfadeb1cd7"
+        }
+      ],
+      "static_evidence": "createAttempt agenda runResult após ready (mkdir). joinDelivery libera o deferred, só espera delivered se calls > 0 e aguarda a lista decisions atual; não aguarda runResult. finish aguarda somente seu próprio runResult antes de nativeLoad. O afterAll fecha pool/admin sem conhecer attempts nem estado da barreira.",
+      "counterexample": "Após adicionar dois attempts, o corpo falha antes de ready do segundo. joinDelivery do segundo vê calls=0/decisions vazias e retorna. finish do primeiro pode ler DB enquanto o segundo runtime ainda está pendente. Além disso, se a nova barreira rejeitar e caseRun impedir seus callbacks locais, o afterAll ainda executa pool.end/admin.end; a proibição não atravessa o hook.",
+      "required_change": "Definir uma barreira de quiescência dos attempts reais: liberar todos, observar todos os joins e a conclusão de todos os runResult antes de qualquer finish/snapshot dependente. Registrar por presença o estado de join confirmado/não confirmado e propagá-lo ao afterAll, que só fecha DB após confirmação. Em falha, preservar todas as causas e tentar os demais joins/diagnósticos seguros; manter a observação deliberada de erros nativos e não alterar deadlines/cancel/asserções/payloads.",
+      "acceptance": "Extrair createAttempt/joinDelivery, caseRun e afterAll reais, com I/O e runtime pesado stubados. Corpo falha imediatamente com dois attempts e ready/runtime do segundo retido: nenhum finish/nativeLoad/snapshot/end antes de todos concluírem. Join rejeitado: os demais joins são observados, a primária (inclusive falsy) permanece e o afterAll não chama DB/end. Nenhum aplicativo/PG necessário.",
+      "status": "OPEN"
+    }
+  ],
+  "checks": [
+    {
+      "area": "F01 histórico / três consumidores",
+      "assessment": "SUFFICIENT_DESIGN_FOR_DIRECT_FAILURE",
+      "detail": "Wrapper externo cobre corpo+catch+finally dos filhos store, público e bound; não basta testar finally isolado. Implementação não revisada."
+    },
+    {
+      "area": "Aquisição e transferência",
+      "assessment": "EXPLICIT_CONTRACT_REQUIRES_POSTREVIEW",
+      "detail": "Regra 2 distingue fechamento incondicional de recursos locais de fechamento só na falha dos dois connect que retornam Pool e da transferência de HOME ao observador. No BUILD, conferir retorno preservado, falha de construtor/connect/save e falha dupla de remoção; nenhum end/rm no sucesso transferido."
+    },
+    {
+      "area": "Diagnóstico substituindo primária",
+      "assessment": "REVISE_RD_01",
+      "detail": "Trace/save público e bound estão previstos; instrumentSql settlement não está resolvido."
+    },
+    {
+      "area": "Joins antes de DB",
+      "assessment": "REVISE_RD_02",
+      "detail": "A barreira proposta não estabelece quiescência dos runResult tardios nem guarda o afterAll."
+    },
+    {
+      "area": "Falsy e combinação",
+      "assessment": "SUFFICIENT_DESIGN",
+      "detail": "{error} distingue ausência de throw undefined/null/false/0/string vazia. cleanupCompleteChildren já aceita presença; migrar pais públicos/bound/inspect sem alterar parâmetro opcional antigo. caseRun deve usar presença para FAIL e rethrow."
+    },
+    {
+      "area": "Callbacks seguros",
+      "assessment": "PARTIAL_RD_01_RD_02",
+      "detail": "cleanups já têm await dentro de try individual e continuidade dos callbacks independentes. Preservar receiver em end/close, não antecipar I/O na construção da lista; dependentes de join ficam fora da continuação incondicional. Callback SQL exige solução RD-01."
+    },
+    {
+      "area": "Testes do consumidor real",
+      "assessment": "SUFFICIENT_APPROACH_WITH_REQUIRED_EXTENSIONS",
+      "detail": "Critério de extrair wrappers/catches reais e falhar ao remover a captura é adequado; acrescentar controles reais RD-01/RD-02. Suíte de helper isolada não satisfaz esses limites."
+    },
+    {
+      "area": "Compatibilidade e história",
+      "assessment": "PRESERVED_DESIGN_INTENT",
+      "detail": "Não há fonte implementada julgada. As sete pré-imagens e os sete protegidos conferem com design-inputs; nenhuma mudança de payload/assert/runtime/policy/schema aprovada. Nova recuperação não reabre FAILED_REQUIRED_TH06_CLOSED."
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/AGENTS.md",
+      "role": "governance_scoped_read",
+      "bytes": 2116,
+      "sha256_before": "71c998ec20820644bf63e127176608dbbda5898f6a98867d6c95f4a4fc7760c3",
+      "sha256_after": "71c998ec20820644bf63e127176608dbbda5898f6a98867d6c95f4a4fc7760c3",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/00-AGENTS.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/00-AGENTS.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/07_agents/AGENTS.md",
+      "role": "governance_scoped_read",
+      "bytes": 8251,
+      "sha256_before": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede",
+      "sha256_after": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/01-AGENTS.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/01-AGENTS.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/08_runtime/agent_coordination.md",
+      "role": "governance_scoped_read",
+      "bytes": 843349,
+      "sha256_before": "f92d03d7480f2ec0f1f75470d50c6643a2ac2854aed4e9e9f09c12dcf4b0c15e",
+      "sha256_after": "73a559551b17214384eaf3591d626ab5162ff3e8b1d1769f93fd5ad203085534",
+      "unchanged": false,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/02-agent_coordination.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/02-agent_coordination.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/99_runtime_state.md",
+      "role": "governance_scoped_read",
+      "bytes": 444179,
+      "sha256_before": "a1f616858d7955ee6f9226a66c98f2a0dab07714dd62867412f3596d62c12071",
+      "sha256_after": "a1f616858d7955ee6f9226a66c98f2a0dab07714dd62867412f3596d62c12071",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/03-99_runtime_state.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/03-99_runtime_state.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/20_master_execution_log.md",
+      "role": "governance_scoped_read",
+      "bytes": 449405,
+      "sha256_before": "5d079986741c0fc34600ce781ad3da7825457ad9a91053679317ba969557fcbc",
+      "sha256_after": "5d079986741c0fc34600ce781ad3da7825457ad9a91053679317ba969557fcbc",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/04-20_master_execution_log.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/04-20_master_execution_log.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/30_backlog_master.md",
+      "role": "governance_scoped_read",
+      "bytes": 408427,
+      "sha256_before": "d004342d8dad1924c30b688fba8a18e3abf45392fa75cbfce48e94371cedcc05",
+      "sha256_after": "d004342d8dad1924c30b688fba8a18e3abf45392fa75cbfce48e94371cedcc05",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/05-30_backlog_master.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/05-30_backlog_master.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/plan.md",
+      "role": "design_frozen",
+      "bytes": 6645,
+      "sha256_before": "2e1aeddd037df41dd3ae1a37c0f4d70f7740e147daeea3a963e85a2943f588de",
+      "sha256_after": "2e1aeddd037df41dd3ae1a37c0f4d70f7740e147daeea3a963e85a2943f588de",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/06-plan.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/06-plan.md.source.txt",
+      "expected_sha256": "2e1aeddd037df41dd3ae1a37c0f4d70f7740e147daeea3a963e85a2943f588de",
+      "matches_expected": true
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/design-inputs.json",
+      "role": "design_frozen",
+      "bytes": 3993,
+      "sha256_before": "e2c2bef2413885ed4e9f9a04f637e26b0e0a9045ad327baad27d344a2b87cd62",
+      "sha256_after": "e2c2bef2413885ed4e9f9a04f637e26b0e0a9045ad327baad27d344a2b87cd62",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/07-design-inputs.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/07-design-inputs.json.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/source-resource-map.json",
+      "role": "design_frozen",
+      "bytes": 69160,
+      "sha256_before": "11fffd9474cd53bcee6e5d565714ff32c6292f18849821dbac94347bd5850f6b",
+      "sha256_after": "11fffd9474cd53bcee6e5d565714ff32c6292f18849821dbac94347bd5850f6b",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/08-source-resource-map.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/08-source-resource-map.json.source.txt",
+      "expected_sha256": "11fffd9474cd53bcee6e5d565714ff32c6292f18849821dbac94347bd5850f6b",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts",
+      "role": "source_semantic_review",
+      "bytes": 43558,
+      "sha256_before": "d7ed548ee171043580880abd13741f27bf7af12c36464ac6dc5eb3670cbafadb",
+      "sha256_after": "d7ed548ee171043580880abd13741f27bf7af12c36464ac6dc5eb3670cbafadb",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/09-complete-admission-capacity-postgres.integration.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/09-complete-admission-capacity-postgres.integration.ts.source.txt",
+      "expected_sha256": "d7ed548ee171043580880abd13741f27bf7af12c36464ac6dc5eb3670cbafadb",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts",
+      "role": "source_semantic_review",
+      "bytes": 38958,
+      "sha256_before": "b9a824c1fd133462159f502caa726079d2fa75bf1b594663db4f7138aeb596da",
+      "sha256_after": "b9a824c1fd133462159f502caa726079d2fa75bf1b594663db4f7138aeb596da",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/10-complete-bound-admission-postgres.integration.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/10-complete-bound-admission-postgres.integration.ts.source.txt",
+      "expected_sha256": "b9a824c1fd133462159f502caa726079d2fa75bf1b594663db4f7138aeb596da",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts",
+      "role": "source_semantic_review",
+      "bytes": 57398,
+      "sha256_before": "7e76951c90cc25ca4082430d3cf072485f8b7a7133250aadce3288dfadeb1cd7",
+      "sha256_after": "7e76951c90cc25ca4082430d3cf072485f8b7a7133250aadce3288dfadeb1cd7",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/11-complete-settlement-public-postgres.integration.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/11-complete-settlement-public-postgres.integration.ts.source.txt",
+      "expected_sha256": "7e76951c90cc25ca4082430d3cf072485f8b7a7133250aadce3288dfadeb1cd7",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts",
+      "role": "source_semantic_review",
+      "bytes": 16829,
+      "sha256_before": "4c57017584ef54032db68f69dd548f977255466429566ea42b0662707aa1d8bb",
+      "sha256_after": "4c57017584ef54032db68f69dd548f977255466429566ea42b0662707aa1d8bb",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/12-complete-tool-process-restart.test.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/12-complete-tool-process-restart.test.ts.source.txt",
+      "expected_sha256": "4c57017584ef54032db68f69dd548f977255466429566ea42b0662707aa1d8bb",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts",
+      "role": "source_semantic_review",
+      "bytes": 25201,
+      "sha256_before": "856bd370cc9c7b0f33b6affbb7e2764176d4c49c491d1ac492b623d6af9e85bb",
+      "sha256_after": "856bd370cc9c7b0f33b6affbb7e2764176d4c49c491d1ac492b623d6af9e85bb",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/13-complete-tool-public-restart.test.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/13-complete-tool-public-restart.test.ts.source.txt",
+      "expected_sha256": "856bd370cc9c7b0f33b6affbb7e2764176d4c49c491d1ac492b623d6af9e85bb",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/fixtures/complete-process-support.ts",
+      "role": "source_semantic_review",
+      "bytes": 24630,
+      "sha256_before": "3e170e46bff682b48665b92d06dfde1656a9fdcc6ef4ab05172e0a561e1da0e2",
+      "sha256_after": "3e170e46bff682b48665b92d06dfde1656a9fdcc6ef4ab05172e0a561e1da0e2",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/14-complete-process-support.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/14-complete-process-support.ts.source.txt",
+      "expected_sha256": "3e170e46bff682b48665b92d06dfde1656a9fdcc6ef4ab05172e0a561e1da0e2",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/complete-process-support.test.ts",
+      "role": "source_semantic_review",
+      "bytes": 34145,
+      "sha256_before": "6ccf574056897e30df9140bff9a22173c5c048ba2ea5aeffaaa0da0faad1f008",
+      "sha256_after": "6ccf574056897e30df9140bff9a22173c5c048ba2ea5aeffaaa0da0faad1f008",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/15-complete-process-support.test.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/15-complete-process-support.test.ts.source.txt",
+      "expected_sha256": "6ccf574056897e30df9140bff9a22173c5c048ba2ea5aeffaaa0da0faad1f008",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/apps/worker/src/__tests__/fixtures/pare217-process-lifecycle.ts",
+      "role": "protected_hash_only",
+      "bytes": 5069,
+      "sha256_before": "42d57db03d2200d6957c0fd0fb8a02fefea150bd7a168ffbcf44ba2524a8f500",
+      "sha256_after": "42d57db03d2200d6957c0fd0fb8a02fefea150bd7a168ffbcf44ba2524a8f500",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/16-pare217-process-lifecycle.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/16-pare217-process-lifecycle.ts.source.txt",
+      "expected_sha256": "42d57db03d2200d6957c0fd0fb8a02fefea150bd7a168ffbcf44ba2524a8f500",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/apps/worker/src/__tests__/pare217-process-lifecycle.test.ts",
+      "role": "protected_hash_only",
+      "bytes": 9160,
+      "sha256_before": "131314f8d87661b867e9d83e8ab7d359500f90464c3356df689e8c120e9b972d",
+      "sha256_after": "131314f8d87661b867e9d83e8ab7d359500f90464c3356df689e8c120e9b972d",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/17-pare217-process-lifecycle.test.ts.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/17-pare217-process-lifecycle.test.ts.source.txt",
+      "expected_sha256": "131314f8d87661b867e9d83e8ab7d359500f90464c3356df689e8c120e9b972d",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tsconfig.typecheck.json",
+      "role": "protected_hash_only",
+      "bytes": 467,
+      "sha256_before": "9a68bfcba3d7cd6adadc554b12ef2b9409bbbff73367daf88f098a47e439287a",
+      "sha256_after": "9a68bfcba3d7cd6adadc554b12ef2b9409bbbff73367daf88f098a47e439287a",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/18-tsconfig.typecheck.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/18-tsconfig.typecheck.json.source.txt",
+      "expected_sha256": "9a68bfcba3d7cd6adadc554b12ef2b9409bbbff73367daf88f098a47e439287a",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tsconfig.json",
+      "role": "protected_hash_only",
+      "bytes": 957,
+      "sha256_before": "638b2e698746a29c43bfc5c6bdc40812f24d9c8ad4c234b7f5305d2559f04bb8",
+      "sha256_after": "638b2e698746a29c43bfc5c6bdc40812f24d9c8ad4c234b7f5305d2559f04bb8",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/19-tsconfig.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/19-tsconfig.json.source.txt",
+      "expected_sha256": "638b2e698746a29c43bfc5c6bdc40812f24d9c8ad4c234b7f5305d2559f04bb8",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/eslint.config.js",
+      "role": "protected_hash_only",
+      "bytes": 448,
+      "sha256_before": "af724c52c92e1a11d7a7aed0fca8ea0cac681ddbeffcf5a7902c1df08384ada1",
+      "sha256_after": "af724c52c92e1a11d7a7aed0fca8ea0cac681ddbeffcf5a7902c1df08384ada1",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/20-eslint.config.js.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/20-eslint.config.js.source.txt",
+      "expected_sha256": "af724c52c92e1a11d7a7aed0fca8ea0cac681ddbeffcf5a7902c1df08384ada1",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/package.json",
+      "role": "protected_hash_only",
+      "bytes": 9037,
+      "sha256_before": "9f93c979c3154fab0196e7029d0efd1c152fbaa4f75e1127da75dba5139b8041",
+      "sha256_after": "9f93c979c3154fab0196e7029d0efd1c152fbaa4f75e1127da75dba5139b8041",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/21-package.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/21-package.json.source.txt",
+      "expected_sha256": "9f93c979c3154fab0196e7029d0efd1c152fbaa4f75e1127da75dba5139b8041",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/package.json",
+      "role": "protected_hash_only",
+      "bytes": 689,
+      "sha256_before": "99b0d9436cbcf90ad56f60cbb82141f2f8d8cf9b6a51e3a3c4bb352a794b9950",
+      "sha256_after": "99b0d9436cbcf90ad56f60cbb82141f2f8d8cf9b6a51e3a3c4bb352a794b9950",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/22-package.json.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/22-package.json.source.txt",
+      "expected_sha256": "99b0d9436cbcf90ad56f60cbb82141f2f8d8cf9b6a51e3a3c4bb352a794b9950",
+      "matches_expected": true
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/AGENTS.md",
+      "role": "governance_scoped_read",
+      "bytes": 2116,
+      "sha256_before": "71c998ec20820644bf63e127176608dbbda5898f6a98867d6c95f4a4fc7760c3",
+      "sha256_after": "71c998ec20820644bf63e127176608dbbda5898f6a98867d6c95f4a4fc7760c3",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/23-AGENTS.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/23-AGENTS.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    },
+    {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/docs/07_agents/AGENTS.md",
+      "role": "governance_scoped_read",
+      "bytes": 8251,
+      "sha256_before": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede",
+      "sha256_after": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede",
+      "unchanged": true,
+      "snapshot": "/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/24-AGENTS.md.source.txt",
+      "snapshot_relative": "../../../../../../../../../../tmp/cvg-claude100-exec-20261017/foundation-th06-recovery/review-design/inputs/24-AGENTS.md.source.txt",
+      "expected_sha256": null,
+      "matches_expected": null
+    }
+  ],
+  "method": {
+    "static_only": true,
+    "target_code_executed": false,
+    "application_executed": false,
+    "tests_executed": false,
+    "gates_executed": false,
+    "network_used": false,
+    "PG_Docker_install": false,
+    "descendants_created": 0,
+    "skills_applied": [],
+    "read_scope": "Sete fontes completas, plano e mapa AST; governança lida por constituição, regras finais e claim próprio. Sete protegidos somente para integridade por hash."
+  },
+  "frozen_design": {
+    "plan_sha256": "2e1aeddd037df41dd3ae1a37c0f4d70f7740e147daeea3a963e85a2943f588de",
+    "design_inputs_sha256": "e2c2bef2413885ed4e9f9a04f637e26b0e0a9045ad327baad27d344a2b87cd62",
+    "source_resource_map_sha256": "11fffd9474cd53bcee6e5d565714ff32c6292f18849821dbac94347bd5850f6b",
+    "source_count": 7,
+    "protected_count": 7,
+    "design_source_protected_unchanged": 17,
+    "all_inputs_unchanged": 24
+  },
+  "user_supplied_context_not_independently_verified": [
+    "first-red.json: 12 controles, 9 PASS/3 FAIL; catches/finally reais e corpo finito",
+    "Candidata base a724 criada, dependências em cópia física, sem fonte editada",
+    "task.json congela EC01–EC08/orçamento",
+    "Baseline 50/50 em 3,77 s"
+  ],
+  "excluded_new_lead_outputs": [
+    "first-red.json",
+    "task.json",
+    "nova candidata e resultados de baseline"
+  ],
+  "history": {
+    "prior_unit": "FAILED_REQUIRED_TH06_CLOSED",
+    "prior_reworks_exhausted": true,
+    "reset_or_reopen": false,
+    "new_recovery_separate": true
+  },
+  "continuity": {
+    "status": "DESIGN_REVISE",
+    "last_completed_action": "Revisão estática independente do HOW congelado; dois obrigatórios concretos registrados.",
+    "next_action": "Lead fecha RD-01/RD-02 no ajuste documental agrupado permitido antes de código; esta rodada não revisa automaticamente novos documentos. Uma única retomada do crítico para postreview após fonte congelada.",
+    "postreview_used": false,
+    "source_changes_authorized_by_review": false,
+    "integration_release_production_granted": false,
+    "shared_ledgers": "Somente leitura por pedido explícito; continuidade local nestes artefatos."
+  }
+}

@@ -1,0 +1,37 @@
+from pathlib import Path
+import json, subprocess, hashlib, datetime, sys
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+c=Path('/tmp/cvg-claude100-exec-20261017/journal0225-candidate')
+b=Path('/tmp/cvg-claude100-exec-20261017/journal0225-build/preclaim-test-builder')
+e=root/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/preclaim-test-builder'
+env=json.loads((e.parent/'environment.json').read_text())
+for key in ['HOME','TMPDIR','TMP','TEMP','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME','NPM_CONFIG_CACHE']:
+    env[key]=str(b/'environment'/key.lower());Path(env[key]).mkdir(parents=True,exist_ok=True)
+for key in ['NPM_CONFIG_USERCONFIG','NPM_CONFIG_GLOBALCONFIG']:
+    env[key]=str(b/'environment'/('user.npmrc' if 'USER' in key else 'global.npmrc'))
+    Path(env[key]).write_text('# isolated preclaim unit test environment\n')
+assert 'TEST_DATABASE_URL' not in env
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+p='apps/worker/src/__tests__/journal-result-preclaim-readiness.test.ts'
+original='apps/worker/src/__tests__/postgres-role-preflight.test.ts'
+mode=sys.argv[1]
+if mode=='version': argv=[node,'--version']
+elif mode in ['format','format-check']: argv=[node,'node_modules/prettier/bin/prettier.cjs','--write' if mode=='format' else '--check',p]
+else: argv=[node,'node_modules/vitest/vitest.mjs','run',p,original,'--config','vitest.config.mts','--no-file-parallelism','--maxWorkers=1','--reporter=json','--outputFile='+str(b/(mode+'-vitest.json'))]
+inputs=json.loads((e/'claim-and-plan.json').read_text())['protected']
+def hashes(): return {x['path']:hashlib.sha256((c/x['path']).read_bytes()).hexdigest() for x in inputs}
+before=hashes()
+start=datetime.datetime.now(datetime.timezone.utc).isoformat()
+r=subprocess.run(argv,cwd=c,env=env,capture_output=True,text=True)
+record={'argv':argv,'cwd':str(c),'env_redacted':env,'inherited_env':False,'TEST_DATABASE_URL':'ABSENT; original13 PostgreSQL cases NOT_RUN/skipped','started_at':start,'finished_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr,'protected_before':before,'protected_after':hashes(),'new_test_sha256':hashlib.sha256((c/p).read_bytes()).hexdigest(),'scope':'UNIT instrumented preclaim only, no native J07 credit'}
+for folder in [b,e]: (folder/(mode+'-command.json')).write_text(json.dumps(record,indent=2)+'\n')
+report=b/(mode+'-vitest.json')
+if report.exists():
+    (e/report.name).write_bytes(report.read_bytes());data=json.loads(report.read_text())
+    print(json.dumps({k:data.get(k) for k in ['success','numTotalTests','numPassedTests','numFailedTests','numPendingTests']}))
+    for suite in data.get('testResults',[]):
+        counts={status:sum(t['status']==status for t in suite['assertionResults']) for status in ['passed','failed','pending','skipped','todo']}
+        print(json.dumps({'file':suite['name'],'counts':counts}))
+        for test in suite['assertionResults']:
+            if test['status']=='failed':print(json.dumps({'test':test['fullName'],'messages':test['failureMessages']}))
+print(json.dumps({'mode':mode,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr}))

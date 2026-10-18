@@ -1,0 +1,86 @@
+from pathlib import Path
+import json,hashlib,re,datetime,subprocess,urllib.parse
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';P=E/'g01/sdk-open-contracts';T=Path('/tmp/cvg-codex100-exec-20261017/sdk-open-contracts')
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat();h=lambda q:hashlib.sha256(q.read_bytes()).hexdigest()
+def put(q,d):q.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+def load(q):return json.loads(q.read_text())
+def entry(q):return {'path':str(q.relative_to(R)),'bytes':q.stat().st_size,'sha256':h(q)}
+def verify(rows,base=R,resolve=None):
+ for x in rows:
+  if x.get('sha256') is None:continue
+  q=resolve(x['path']) if resolve else base/x['path'];assert q.is_file() and q.stat().st_size==x['bytes'] and h(q)==x['sha256'],x['path']
+old=load(E/'checkpoint-before-sdk-open-contracts-manifest.json');mutable={'.agent/plans/codex100-exec-20261017.md','docs/03_build/0386_backlog_paridade_codex.md','docs/08_runtime/handoffs/codex100_exec_20261017.md'}|{str((E/x).relative_to(R)) for x in ['state.json','continuation.json','execution-log.jsonl']}
+pre1={x['original_path']:R/x['archive'] for x in load(P/'R1-preimages/map.json')['preimages']};pre2={x['original_path']:R/x['archive'] for x in load(P/'R2-preimages/map.json')['preimages']}
+checks=[];put(P/'closure-verification.json',{'kind':'DOCUMENTARY_CLOSURE_TRANSACTION','status':'IN_PROGRESS','observed_at':now(),'not_runtime_acceptance':True})
+def check(id,fn):
+ try:checks.append({'id':id,'status':'PASS_DOCUMENTARY_SCOPE_ONLY','detail':fn()})
+ except Exception as ex:checks.append({'id':id,'status':'FAIL','detail':repr(ex)})
+def baseline():
+ assert len(old['files'])==2690 and len(mutable)==6 and h(E/'checkpoint-before-sdk-open-contracts-manifest.json')=='a59198d315c21b2a75d345eee17952d766e82b2643151441eb62fed07afa2f02'
+ verify([x for x in old['files'] if x['path'] not in mutable]);return {'prior_program':2690,'immutable_unchanged':2684,'authorized_current_controls':sorted(mutable),'SPEC0239_eight_annexes_request':'UNCHANGED','Root9qualifier':'UNCHANGED','catalog':'UNCHANGED'}
+check('SDK-F01',baseline)
+def review():
+ f1=load(P/'review-freeze-r1.json');f2=load(P/'review-freeze-r2.json');verify(f1['files'],resolve=lambda s:pre1.get(s,R/s));verify(f2['files'],resolve=lambda s:pre2.get(s,R/s));assert len(f1['files'])==70 and len(f2['files'])==95
+ for dirname,count in [('review-r1',70),('review-r2',95)]:
+  m=load(P/dirname/'manifest.json');verify(m['outputs'],P/dirname)
+  for f in ['first-hash-inventory.json','last-hash-inventory.json']:
+   x=load(P/dirname/f);assert len(x['files'])==count;pre=pre1 if dirname=='review-r1' else pre2;verify(x['files'],resolve=lambda s:pre.get(s,R/s))
+ r=load(P/'review-r2/review.json');assert r['verdict']=='ACCEPT_BOUNDED_SOURCE_CONTRACTS' and r['mandatory_count']==0 and r['substantive_check_count']==15 and all(not x['mandatory_open'] for x in r['prior_findings_disposition'])
+ assert h(P/'review-r2/manifest.json')=='1f56dc9f1f3b578206b07dc8aa862ff15c206335a2cf420628d0e50dca693652';assert load(P/'Lead-review-acceptance-r2.json')['actor_closed']
+ m=load(P/'review-r2/manifest.json');return {'R1_reconstructed':70,'R1_preimages':5,'R2_reconstructed':95,'R2_presentation_preimage':1,'R2_first_last_verified':95,'review_outputs_hashed':len([x for x in m['outputs'] if x.get('sha256')]),'independent_checks':15,'mandatory':0,'actor':'CLOSED','runtime_credit':False}
+check('SDK-F02',review)
+def sourcechecks():
+ out=[]
+ for cmd in [['python3','-B',str(P/'verify-source.py'),'--check'],['python3','-B',str(P/'typescript/reader.py'),'--check']]:
+  p=subprocess.run(cmd,capture_output=True,text=True);assert p.returncode==0,p.stdout+p.stderr;out.append({'command':cmd,'exit_code':0,'stdout':p.stdout})
+ d=load(P/'verification.json');assert d['passed']==8 and d['negative_controls_rejected']==24 and d['TS_negative_controls_reported']==10 and d['functional_receipts']==0
+ m=load(P/'typescript/manifest.json');verify(m['outputs'],P/'typescript');assert load(P/'Lead-scout-acceptance.json')['actor_closed']
+ return {'actual_metadata_checks':out,'source_snapshots':36,'source_groups':8,'Lead_data_mutants_rejected':24,'TS_data_mutants_rejected':10,'plain_data_overlays':16,'SDK_target_execution':0,'scout_outputs_unchanged':18}
+check('SDK-F03',sourcechecks)
+def scope():
+ d=load(P/'integration.json');assert len(d['rows'])==6 and all(x['current_gap_status']=='OPEN' and x['qualification']=='NOT_RUN' and x['receipt'] is None for x in d['rows'])
+ assert len(load(P/'python-contracts.json')['rows'])==20 and len(load(P/'typescript/contracts.json')['contracts'])==24 and load(P/'python-call-edges.json')['count']==350 and len(load(P/'generated-boundaries.json')['models'])==33
+ c=load(R/'docs/03_build/tracking/codex100_catalog_v1.json');assert len(c['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in c['requirements'])
+ a=load(P/'acceptance-status.json');assert a['status']=='COMPLETED_T1_BOUNDED_SDK_SOURCE_RECONCILIATION' and a['review_budget_used']==2 and a['grouped_repair_used']==1 and not a['automatic_reviews_remaining'] and not a['automatic_repairs_remaining']
+ return {'OPEN_gaps':6,'source_contracts':44,'source_edges_not_runtime_calls':350,'selected_models_not_runtime_schemas':33,'catalog_NOT_RUN_null':509,'families':22,'cards':49,'phases':10,'CQ':14,'functional_receipts':0,'budget':'2reviews1repairspent'}
+check('SDK-F04',scope)
+def human():
+ q=load(E/'g04/native-journey-recovery-plan/human-review-request.json');assert q['status']=='REQUESTED_PENDING_USER' and q['user_response'] is None and not q['BUILD_authorized'];assert q['SPEC_sha256']=='ccdf3a754c460e138307148f9eec79e0dce4a9b7ac5c9d10334716e5b5c0dd87'
+ assert load(P/'reference-prerequisites.json')['python_isolated_mode'] and load(P/'reference-prerequisites.json')['kind'].startswith('POST_FREEZE')
+ nxt=load(P/'next-task.json');assert nxt['task']=='DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE' and not nxt['runtime_execution_authorized_by_this_task']
+ return {'SPEC0239_T3':'PENDING_USER_UNCHANGED','repeat_approval_questions':0,'prior_0221_0225_0231':'RESOLVED','postfreeze_dependency_observation':'LEAD_METADATA_ONLY_NOT_REVIEWED_RUNTIME','next_profile_execution':'NOT_AUTHORIZED_BY_T1_PLAN'}
+check('SDK-F05',human)
+md=[R/'.agent/plans/codex100-exec-20261017.md',R/'docs/03_build/0386_backlog_paridade_codex.md',R/'docs/08_runtime/handoffs/codex100_exec_20261017.md',P/'REPORT.md',P/'typescript-report.formatted.md']
+def docs():
+ count=0
+ for q in md+[P/'typescript/report.md',P/'review-r2/report.md']:
+  for raw in re.findall(r'\]\(([^)]+)\)',q.read_text()):
+   v=raw.split()[0].strip('<>').split('#')[0]
+   if not v or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:',v):continue
+   assert (q.parent/urllib.parse.unquote(v)).exists(),str(q)+':'+v;count+=1
+ for q in P.rglob('*.json'):load(q)
+ for line in (E/'execution-log.jsonl').read_text().splitlines():json.loads(line)
+ cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check']+[str(q.relative_to(R)) for q in md];s=subprocess.run(cmd,capture_output=True,text=True);assert s.returncode==0,s.stdout+s.stderr
+ return {'current_MD':5,'raw_archived_MD_links_checked':2,'local_links':count,'broken':0,'format_exit':0,'format_stdout':s.stdout,'ownJSONandJSONL':'PARSED','raw_scout_and_review':'PRESERVED_NO_FORMAT_REWRITE'}
+check('SDK-F06',docs)
+def hygiene():
+ c=load(R/'docs/04_audit/evidence/empty-artifact-status.json');base=R/c['root'];known={(base/x['path']).resolve() for x in c['files']};zeros={q.resolve() for q in E.rglob('*') if q.is_file() and q.stat().st_size==0};assert zeros<=known and len(zeros)==39;assert all(q.stat().st_size for q in P.rglob('*') if q.is_file())
+ return {'historical_zeros':39,'new_zeros':0,'central':'READONLY','SDK_app_provider_runtime_jobs_started':0,'PG_Docker_ports_used':0}
+check('SDK-F07',hygiene)
+def pointers():
+ id='DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE'
+ for name in ['state.json','continuation.json']:
+  s=load(E/name);assert s['active_action_id']==id and s['status']=='IN_PROGRESS' and s['goal_status']=='active' and s['all_own_agents_closed'] and s['all_own_jobs_terminal']
+ assert 'active_action_id='+id in md[0].read_text() and '1. ['+id+']' in md[0].read_text()
+ for q in md[:3]:assert id in q.read_text()
+ return {'active_action_id':id,'goal':'active','program':'IN_PROGRESS','actors_jobs':'CLOSED','full_G01_closed':False,'no_newBUILD':True}
+check('SDK-F08',pointers)
+result={'kind':'T1_SOURCE_DELIVERY_CLOSURE_NOT_RUNTIME_OR_PARITY_CERTIFICATE','observed_at':now(),'checks':checks,'passed':sum(x['status']=='PASS_DOCUMENTARY_SCOPE_ONLY' for x in checks),'failed':sum(x['status']=='FAIL' for x in checks),'source_verdict':'ACCEPT_BOUNDED_SOURCE_CONTRACTS','independent_checks':15,'mandatory_open':0,'SDK_runtime_tests':'NOT_RUN','functional_receipts':0};put(P/'closure-verification.json',result);print(json.dumps({'passed':result['passed'],'failed':result['failed'],'checks':[{'id':x['id'],'status':x['status'],'detail':x['detail'] if x['status']=='FAIL' else None} for x in checks]},ensure_ascii=False));assert not result['failed'],'Do notsealfailedcheckpoint'
+for name in ['state.json','continuation.json']:
+ q=E/name;d=load(q);d['verification']={'artifact':'g01/sdk-open-contracts/closure-verification.json','status':'PASS_T1_SOURCE_SCOPE_ONLY','checks':8,'source_groups':8,'Lead_data_controls_rejected':24,'TS_data_controls_rejected':10,'independent_checks':15,'mandatory_open':0,'SDK_runtime_tests':'NOT_RUN','functional_receipts':0};d['authorization']='Integralusergoal authorizescurrentT1source/HOW preparation. SDKsourceunitacceptedonlyasdata/ASTcontracts; nextG02profileplanmustfixeligibleidentities/deps/containmentbeforetargetexecution. NoNativeBUILDauthoritywithoutnewSPEC0239explicitT3andqualifiedowners.0221/0225/0231resolved;0239requestpendingnotreasked.';put(q,d)
+for name in ['close-unit.py','verify-and-seal.py']:(P/(name+'.raw.txt')).write_bytes((T/name).read_bytes())
+files=sorted([entry(q) for q in P.rglob('*') if q.is_file() and q!=P/'manifest.json'],key=lambda x:x['path']);put(P/'manifest.json',{'task':'DX100-G01:RECONCILE-OPEN-SDK-CONTRACTS','kind':'COMPLETED_T1_SOURCE_CONTRACT_RECONCILIATION_NOT_FUNCTIONAL_PARITY','observed_at':now(),'status':'COMPLETED_T1_BOUNDED_SDK_SOURCE_RECONCILIATION','files':files,'file_count':len(files),'R1_reconstructed':70,'R2_reconstructed':95,'R2_current_unchanged_contracts':'94inplace+1presentationpreimage','source_verdict':'ACCEPT_BOUNDED_SOURCE_CONTRACTS','mandatory_open':0,'all6gaps':'OPEN','SDK_runtime_tests':'NOT_RUN','functional_receipts':0,'next_action_id':'DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE'})
+current=load(E/'manifest.json');ext={x['path'] for x in old['files'] if not x['path'].startswith(str(E.relative_to(R))+'/')};allfiles=sorted([entry(q) for q in E.rglob('*') if q.is_file() and q!=E/'manifest.json']+[entry(R/q) for q in sorted(ext)],key=lambda x:x['path']);assert len(allfiles)==len({x['path'] for x in allfiles})
+claim=re.search(r'^### CODEX100-EXEC-20261017.*?(?=^#{2,3} |\Z)',(R/'docs/08_runtime/agent_coordination.md').read_text(),re.M|re.S).group(0)
+current.update({'observed_at':now(),'files':allfiles,'file_count':len(allfiles),'own_claim_section_sha256':hashlib.sha256(claim.encode()).hexdigest(),'next_action_id':'DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE','current_documentary_checks':{'artifact':'g01/sdk-open-contracts/closure-verification.json','status':'PASS_T1_SOURCE_SCOPE_ONLY','checks':8,'independent_checks':15,'mandatory_open':0,'SDK_runtime_tests':'NOT_RUN'},'previous_checkpoint_manifest':{'path':'checkpoint-before-sdk-open-contracts-manifest.json','sha256':h(E/'checkpoint-before-sdk-open-contracts-manifest.json'),'file_count':2690,'unchanged':2684,'only_current_control_changes':sorted(mutable)},'sdk_open_contracts':{'manifest':'g01/sdk-open-contracts/manifest.json','manifest_sha256':h(P/'manifest.json'),'status':'COMPLETED_T1_BOUNDED_SDK_SOURCE_RECONCILIATION','source_snapshots':36,'contracts':44,'source_edges':350,'receiver_alias_declarations':8,'selected_generated_declarations':33,'Lead_data_wrong_relations_rejected':24,'TS_data_wrong_relations_rejected':10,'review':'ACCEPT_BOUNDED_SOURCE_CONTRACTS','independent_checks':15,'mandatory_open':0,'R1_reconstructed':70,'R2_reconstructed':95,'actor_closed':True,'all6gaps':'OPEN','SDK_runtime_tests':'NOT_RUN','functional_receipts':0,'postfreeze_prerequisites':'g01/sdk-open-contracts/reference-prerequisites.json_LEAD_METADATA_NOT_R2JUDGMENT'},'checkpoint_note':'SDKsourcecontractsunitacceptedR2/15checks0mandatoryafter2P2repaired1group.36sources44contracts350selectedstaticrelations33modeldecls;8groups/34datawrongrelations+16syntheticoverlays. NotSDKexecution/parity/G01closure;all6gapsOPEN/509NOT_RUN. SPEC0239/eightannexes/requestpendingunchanged. Goalactive,nextG02SDKreferenceprofileHOW/dependencyeligibility,norealSDKyet.','active_runtime_note':'Allownactors/jobsclosed;noSDK/app/Codex/provider/PG/ports/network/install/gatesstarted. Onlysource/dataAST/Gitcheckersandinstalledmetadataread;sharedmastersdirtyreadonly/deltasownhandoff.'});put(E/'manifest.json',current);verify(allfiles);verify(load(P/'manifest.json')['files']);baseline();review()
+print(json.dumps({'unit_payloads':len(files),'program_payloads':len(allfiles),'program_manifest_sha256':h(E/'manifest.json'),'all_payloads_rehashed':True,'verdict':'ACCEPT_BOUNDED_SOURCE_CONTRACTS','next':'DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE','SDK_runtime':'NOT_RUN','functional_receipts':0}))

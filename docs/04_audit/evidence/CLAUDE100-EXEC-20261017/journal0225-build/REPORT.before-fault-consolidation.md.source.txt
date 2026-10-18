@@ -1,0 +1,68 @@
+# SPEC0225 — recuperação nativa implementada localmente
+
+Checkpoint privado `041c1c31873f967c3dcc4648f241686eabeecd09`, sourceclean, sem promoção ao checkout
+compartilhado. BUILD continua em andamento; não é aceite integral da SPEC,
+M1, paridade funcional ou release.
+
+A retomada agora recupera o resultado confirmado do journal quando o passo
+nativo já foi concluído e a observação se perdeu. Exige leitura mode1 validada,
+identidade/proposta/tentativa/ref compatíveis e CAS confirmado antes do próximo
+modelo. Não reabre a ferramenta nem modifica passo, referência ou journal.
+Restaura apenas o contador do passo não reconhecido no checkpoint; os receipts
+e o uso já confirmado permanecem. Resultado fora do contexto vira UNAVAILABLE.
+
+A marca interna só vem de get com leitura sem xid de escrita atribuído; uma
+própria escrita não commitada não qualifica recuperação. Nenhuma assinatura,
+opção, barrel, schema/migration, grant de serviço ou política pública nova.
+O handoff legado/InMemory foi preservado. O limite de journal1MiB e de contexto
+32KiB permanecem; timestamp usa completedAt durável com comparação cronológica.
+O caminho preserveCheckpoint também impede correção escrita por veto de auditoria.
+
+## Evidência atual
+
+| Prova                                                                                                       | Resultado                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Focais](recovery-unit-r3-report.json)                                                                      | 116PASS/0FAIL/0PENDING:41novos componentes e75legados completos. Marca simulada no componente não é prova PostgreSQL.                                                                    |
+| [PostgreSQL](native-1792326936804-command.json)                                                             | 26PASS/0FAIL/0SKIP: inclui leitura qualificada pelo role mínimo, null próprio e get não commitado sem marca, com rollback do caller preservado; flags/ACLs/readiness/guard/rollback/ack. |
+| [Contexto e recuperação](native-1792326940775-command.json)                                                 | 12PASS/0FAIL/0SKIP sem filtro:10fronteiras e perda de save pequeno/300KiB. Dois processos por caso, corpo total1; ref/step/timestamp/contagem conferidos.                                |
+| [Três crashpoints públicos](native-1792326951539-command.json)                                              | 66PASS/0FAIL/0SKIP:22fixtures após CAS completo, após confirm antes do CAS e após COMMIT antes do ack.                                                                                   |
+| [Auditoria nativa](recovery-current-native-lead-audit.json)                                                 | 34inputs por perfil íntegros,24PIDs no contexto, journal/passo imutáveis, recuperação completa pequena e300KiB sem próximo modelo.                                                       |
+| [Auditoria pública](recovery-current-public66-lead-audit.json)                                              | 132PIDs, valor/tipo/bytes/SHA/frame e receipts/usage conferidos.                                                                                                                         |
+| [Build](build-runtime-r6-command.json), [tipagem](typecheck-r12-command.json), [lint](lint-r7-command.json) | 20workspaces reais e exit0; tipagem no tsconfig.typecheck.json.                                                                                                                          |
+| [Recurso final](recovery-final-resource-checkpoint.json)                                                    | Schema ativo/roles temporárias ausentes, zero outros clientes,22legadas0 intactas; PG próprio4d8/55880 reservado.                                                                        |
+
+O [HOW R2](settled-recovery-how/proposal-r2.md) recebeu
+[ACCEPT_SCOPED_HOW/zero obrigatório](settled-recovery-how/review-r2/REPORT.md).
+Lead autenticou47artefatos e17inputs, sob a aprovação0225 existente. Bohr foi
+encerrado; revisão técnica não é crítica de código, cujo orçamento segue0/2.
+R1REVISE/3obrigatórios, seus45artefatos e as reproduções vermelhas permanecem.
+O oracle de passo foi ampliado antes de código para não inventar ref/timestamp.
+
+A correção de readiness que ignora backend_type mascarado também permanece:
+role antigo conectado é recusado sem pg_monitor novo. A fixture de outro writer
+foi corrigida com SELECT temporário somente no parent, para passar o lookup0029
+e discriminar a recusa42501 literal da0030. ACLs/flags foram restaurados e roles
+removidas. Falhas por pré-condição errada e rótulos antigos de runners estão
+preservados; [errata](runner-metadata-errata.json) não altera resultados brutos.
+O runner novo registra contagens TAP reais e agora propaga o exit do filho.
+
+## Saldo obrigatório
+
+O bug de reconstrução tem positivos nativos atuais, mas os
+[sete oráculos de falha](recovery-fault-oracles.json) ainda são NOT_RUN:
+get/CAS/ack/auditoria/cancel/pause/deadline. Não declarar o ramo completamente
+qualificado antes deles e da crítica fresca. J13 ainda exige guards bound0029/
+outer/fence reais e seus negativos; os casos unbound não substituem essa prova.
+J03/J04 nativos, saldo mínimoJ05–J07/três readers e J12 completo também seguem
+pendentes. SomenteJ14 e drill completoJ15 foram adiados pela aprovação original.
+
+J16 e os gates completos atuais unit/PG/E2E/certificação continuam obrigatórios.
+Há P0 de qualificação composta,43reds históricos e dívida documental selada,
+sem repin/checker relaxado ou reclassificação. Nenhum requisito117+17 foi
+creditado por estes testes. Não houve encerramento da rodada de código,
+promoção, push, produção, modelo/conta real ou dado real.
+
+Todos os jobs e o reviewer desta etapa estão encerrados. Continuidade nos
+registros próprios; ledgers99/20/30 continuam readonly por alterações alheias.
+Próxima ação: implementar os sete oráculos finitos no helper/context test já
+reclamados, preservando as guardas e o checkpoint privado congelado.

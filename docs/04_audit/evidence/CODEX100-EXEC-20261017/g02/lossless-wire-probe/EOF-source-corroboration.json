@@ -1,0 +1,47 @@
+{
+  "kind": "LEAD_STATIC_SOURCE_CORROBORATION_OF_EOF_CONFOUND_NOT_PER_REQUEST_CAUSAL_PROOF",
+  "observed_at": "2026-10-18T07:50:04.263085+00:00",
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "citations": [
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "file_sha256": "e4f83304498aec2e9ccad9ad3a0af66965ab93508a4a6923f993731adcd69c19",
+      "start_line": 100,
+      "end_line": 133,
+      "span_sha256": "a77b8285c9487140043a92cbefa05e58e6e6e7c786ddb922ac1c8c1843c05f02",
+      "span_utf8": "        while let Some(line) = stdin_rx.recv().await {\n            let line = match line {\n                Ok(line) => line,\n                Err(err) => {\n                    error!(\"Failed reading stdin: {err}\");\n                    break;\n                }\n            };\n            if let Some(client_name) = stdio_initialize_client_name(&line)\n                && let Some(initialize_client_name_tx) = initialize_client_name_tx.take()\n            {\n                let _ = initialize_client_name_tx.send(client_name);\n            }\n            if !forward_incoming_message(\n                &transport_event_tx_for_reader,\n                &writer_tx_for_reader,\n                connection_id,\n                &line,\n            )\n            .await\n            {\n                break;\n            }\n        }\n\n        // EOF can finish the transport before RPC or runtime cleanup. Start\n        // the same process deadline even if no SIGTERM arrives.\n        if cfg!(unix) && install_shutdown_signal_handler {\n            start_shutdown_watchdog();\n        }\n        let _ = transport_event_tx_for_reader\n            .send(TransportEvent::ConnectionClosed { connection_id })\n            .await;\n        debug!(\"stdin reader finished (EOF)\");\n",
+      "limited_claim": "EOFreader canfinishtransportbeforeRPC/runtimecleanup andemitsConnectionClosed."
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "file_sha256": "d744a2311e30c661cdd3e18655183b3b28e0fb26d2a84e3e298161ac0dd328c6",
+      "start_line": 1173,
+      "end_line": 1197,
+      "span_sha256": "17d8dc2fec69021d6c0bb29e9934e666f5e1701f72f18169bc9391bffd796e27",
+      "span_utf8": "                            TransportEvent::ConnectionClosed { connection_id } => {\n                                let Some(connection_state) = connections.remove(&connection_id) else {\n                                    continue;\n                                };\n                                let stdio_closed = connection_state.origin == ConnectionOrigin::Stdio;\n                                connection_state.session.rpc_gate.close().await;\n                                let outbound_closed = outbound_control_tx\n                                    .send(OutboundControlEvent::Closed { connection_id })\n                                    .await\n                                    .is_ok();\n                                let processor = Arc::clone(&processor);\n                                connection_cleanup_tasks.spawn(async move {\n                                    processor\n                                        .connection_closed(connection_id, &connection_state.session)\n                                        .await;\n                                });\n                                if !outbound_closed {\n                                    break \"outbound_router_closed\";\n                                }\n                                if single_client_mode && stdio_closed {\n                                    // Pending remote enrollment must stop before RPCs drain.\n                                    remote_control_shutdown_token.cancel();\n                                    break \"stdio_connection_closed\";\n                                }\n                            }\n",
+      "limited_claim": "ConnectionClosed removesconnection,closesRPCgate/sendsoutboundclosed andbreaksstdio singleclientloop."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 1030,
+      "end_line": 1078,
+      "span_sha256": "0f29c85906a23e57835033c7c384b3b1c29b932d4cc11492d46e855f4d47716a",
+      "span_utf8": "        let error_request_id = connection_request_id.clone();\n        let rpc_gate = Arc::clone(&session.rpc_gate);\n        let processor = Arc::clone(self);\n        let span = request_context.span();\n        let request = QueuedInitializedRequest::new(\n            rpc_gate,\n            async move {\n                let _turn_admission = turn_admission;\n                // Runtime changes already admitted before drain finish normally. Turn work\n                // still waiting in serialization must observe the newly closed gate.\n                if recheck_turn_admission && let Err(error) = processor.turn_admission.admit() {\n                    processor.outgoing.send_error(error_request_id, error).await;\n                    return;\n                }\n                let processor_for_request = Arc::clone(&processor);\n                let originator = AuthStorageOriginator::from_client_name(\n                    session.app_server_client_name().unwrap_or(\"none\"),\n                );\n                // Keep queued requests small to avoid large stack temporaries during construction.\n                let result = originator\n                    .scope(Box::pin(\n                        processor_for_request.handle_initialized_client_request(\n                            connection_request_id,\n                            codex_request,\n                            request_context,\n                            session,\n                            event_stream_ready,\n                        ),\n                    ))\n                    .await;\n                if let Err(error) = result {\n                    processor.outgoing.send_error(error_request_id, error).await;\n                }\n            }\n            .instrument(span),\n        );\n\n        if let Some(scope) = serialization_scope {\n            let (key, access) = RequestSerializationQueueKey::from_scope(connection_id, scope);\n            self.request_serialization_queues\n                .enqueue(key, access, request)\n                .await;\n        } else {\n            tokio::spawn(async move {\n                request.run().await;\n            });\n        }\n        Ok(())\n    }\n",
+      "limited_claim": "Initializedrequests withoutserialization_scope runinspawnedtasks; completionorderneednotfollowrequestorder."
+    },
+    {
+      "path": "codex-rs/app-server/src/transport.rs",
+      "file_sha256": "d6812cfe44d609351fb1880a426ed19215d18de2b103947c10e38b2d431563f7",
+      "start_line": 140,
+      "end_line": 151,
+      "span_sha256": "4f8b7eacfb4c80a11af9ade811f2f879772b36ae3ad7ea076387b79bfd5db625",
+      "span_utf8": "\nasync fn send_message_to_connection(\n    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,\n    connection_id: ConnectionId,\n    message: OutgoingMessage,\n    write_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,\n) -> bool {\n    let Some(connection_state) = connections.get(&connection_id) else {\n        warn!(\"dropping message for disconnected connection: {connection_id:?}\");\n        return false;\n    };\n    let message = filter_outgoing_message_for_connection(connection_state, message);\n",
+      "limited_claim": "Outboundrouterdropsmessages ifconnection notpresent."
+    }
+  ],
+  "runtime_fact": "8sourcecaseshadnoobservedtargetresponsebyEOF;controlbarrierresponded. No wrongnumericIDecho observed.",
+  "source_interpretation": "Sourcepermitsasyncdispatch+connectionclosingbeforealltargetresponsewrites; thissupports lifecycleconfound,notproofwhichbranchcausedeachabsence.",
+  "not_proven": "Cannotassign8omissionstoIDdecoderrejectionorconcludeall11edgegrammarinvalid. No retry/concurrencyproof orcompletei64oracle.",
+  "future_design_requirement": "A newunitmustwaitsource-declaredvalidtargetresponsebeforebarrier/EOFandseparatelyboundunknownedgeobservation; thisattemptisfrozenandspent1of1."
+}

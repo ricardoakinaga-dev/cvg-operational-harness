@@ -1,0 +1,64 @@
+import { readFile, writeFile, mkdir, cp } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+const repo = process.cwd()
+const packet = path.join(repo,'docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/native-journey-recovery-plan')
+const root = '/tmp/cvg-codex100-exec-20261017/native-journey-recovery-plan/cases'
+if (existsSync(root)) throw new Error('Do not overwrite/retry the finite diagnostic')
+const how = JSON.parse(await readFile(path.join(packet,'offline-how.json')))
+const inputs = JSON.parse(await readFile(path.join(packet,'inputs.json')))
+const sha = b => createHash('sha256').update(b).digest('hex')
+for (const f of inputs.inputs) { const b=await readFile(path.join(repo,f.path)); if(sha(b)!==f.sha256 || b.length!==f.bytes)throw new Error('Input drift '+f.path) }
+const { qualifyCodex } = await import(pathToFileURL(path.join(repo,'tests/claude100/qualification/qualify.mjs')))
+const { canonicalJson } = await import(pathToFileURL(path.join(repo,'tests/support/governed-test-kit/index.js')))
+const digest = d => sha(canonicalJson(d))
+const baseline = JSON.parse(await readFile(path.join(repo,'tests/codex100/qualification/catalog-baseline.v1.json')))
+const catalog={schema_version:1,catalog_id:'CODEX-CAP-v1',revision:'synthetic-mechanism-only',program:'CODEX100',reference:{repository:baseline.repository,commit:baseline.source_commit},family_count:baseline.families.length,functional_denominator:baseline.functional_minimum,mandatory_cvg_controls:baseline.control_minimum,families:baseline.families.map(id=>({id,name:id,owner:'synthetic',source:'synthetic',reuse:[]})),requirements:baseline.requirements.map(row=>({...row,mandatory:true,owner:'synthetic',sources:[{path:'synthetic'}],status:'NOT_RUN',receipt:null}))}
+const target=Buffer.from('{"id":9007199254740993,"error":{"code":-32600,"message":"Already initialized"}}\n')
+const badID=Buffer.from('{"id":9007199254740992,"error":{"code":-32600,"message":"Already initialized"}}\n')
+const prior=Buffer.from('{"method":"synthetic.previous","params":{}}\n')
+const clone=d=>JSON.parse(JSON.stringify(d))
+const results=[]
+for (const c of how.cases) {
+ const dir=path.join(root,c.id); await cp(path.join(repo,'tests/claude100/qualification/fixtures/wire-v1'),dir,{recursive:true})
+ const read=async f=>JSON.parse(await readFile(path.join(dir,f),'utf8'))
+ const write=async(f,d)=>writeFile(path.join(dir,f),JSON.stringify(d,null,2)+'\n')
+ const manifest=await read('manifest.json'),rule=await read('rule.json'),captures=await read('capture-index.json'),authorities=await read('authority-index.json')
+ await write('catalog.json',catalog); const catalogHash=sha(await readFile(path.join(dir,'catalog.json')))
+ manifest.requirementIds=[baseline.requirements[0].id];rule.requirementIds=[...manifest.requirementIds]
+ manifest.catalogSha256=captures.catalogSha256=authorities.catalogSha256=catalogHash
+ rule.projection={kind:'EXACT_BYTES',referenceRole:c.projection_role,cvgRole:c.projection_role};rule.normalizationPolicy=[];rule.requiredRoles=c.id==='O01'?['RAW_INPUT','RAW_STDOUT']:c.id==='O02'?['RAW_INPUT','RAW_STDOUT']:['RAW_INPUT','RAW_STDOUT','RAW_STATE']
+ const witnesses=[]
+ for (const side of ['reference','cvg']) {
+  const setup=Buffer.from(JSON.stringify({id:'setup',result:{userAgent:side==='reference'?'codex.synthetic':'cvg.synthetic',codexHome:'/synthetic/'+side,platformFamily:'unix',platformOs:'linux'}})+'\n')
+  const stdout=Buffer.concat([setup,prior,target]);let selected=target;let start=setup.length+prior.length
+  if(c.id==='O04'&&side==='cvg')selected=badID
+  if(c.id==='O06'||(c.id==='O05'&&side==='cvg')){selected=prior;start=setup.length}
+  const stdoutPath=`${side}/full-stdout.bin`,framePath=`${side}/selected-frame.bin`
+  await writeFile(path.join(dir,stdoutPath),stdout);await writeFile(path.join(dir,framePath),selected)
+  const input=manifest[side].artifacts.find(x=>x.role==='RAW_INPUT')
+  manifest[side].artifacts=[input,{path:stdoutPath,sha256:sha(stdout),bytes:stdout.length,role:'RAW_STDOUT'}]
+  if(c.id!=='O01')manifest[side].artifacts.push({path:framePath,sha256:sha(selected),bytes:selected.length,role:c.id==='O02'?'RAW_STDOUT':'RAW_STATE'})
+  witnesses.push({side,stdoutSha256:sha(stdout),selectedSha256:sha(selected),startByte:start,endByteExclusive:start+selected.length,selectedEqualsClaimedRawSpan:stdout.subarray(start,start+selected.length).equals(selected),selectedIsFixtureTarget:selected.equals(target),fixtureTargetStartByte:setup.length+prior.length,syntheticOnly:true})
+ }
+ await write('rule.json',rule);const ruleHash=sha(await readFile(path.join(dir,'rule.json')));manifest.ruleSha256=ruleHash;for(const a of authorities.entries)a.ruleSha256=ruleHash
+ const entries=[]
+ for(const [position,side] of ['reference','cvg'].entries()) {
+  const current=manifest[side]
+  for(const artifact of current.artifacts){const b=await readFile(path.join(dir,artifact.path));artifact.sha256=sha(b);artifact.bytes=b.length}
+  current.artifacts.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0)
+  const captureId=manifest.captureAttestations[position];const receipt={version:1,captureId,collectorId:'synthetic-test-collector',runId:manifest.runId,scenarioId:manifest.scenarioId,side,fixtureSha256:manifest.fixtureSha256,ruleSha256:ruleHash,...clone(current)}
+  const receiptPath=`${side}/receipt.json`;await write(receiptPath,receipt)
+  entries.push({captureId,collectorId:receipt.collectorId,runId:receipt.runId,scenarioId:receipt.scenarioId,side,identitySha256:digest(current.identity),artifactSetSha256:digest(current.artifacts),receiptPath,receiptSha256:sha(await readFile(path.join(dir,receiptPath)))})
+ }
+ captures.entries=entries;await write('manifest.json',manifest);await write('capture-index.json',captures);await write('authority-index.json',authorities);await write('test-only-lineage.json',{kind:'INERT_SYNTHETIC_DATA_NOT_REFERENCE_OBSERVATION',witnesses})
+ const startedAt=new Date().toISOString();const report=await qualifyCodex({evidenceRoot:dir,manifest:'manifest.json',catalog:'catalog.json',rule:'rule.json',captureIndex:'capture-index.json',authorityIndex:'authority-index.json',out:'result'})
+ const row={id:c.id,expected:c.expected,actual:report.status,matchesDiagnosticExpectation:report.status===c.expected,exitCode:report.exitCode,reviewStatus:report.reviewStatus,startedAt,endedAt:new Date().toISOString(),witnesses,rawStdoutPreserved:true,sourceChanged:false,notFunctionalQualification:true,interpretation:c.interpretation??'Offline comparison mechanism observation only; no real capture/approval/receipt.'}
+ results.push(row);await write('diagnostic-observation.json',row)
+}
+const summary={task:'DX100-G04:REPLAN-AFTER-FAILED-R2',kind:'TEST_ONLY_OFFLINE_MECHANISM_OBSERVATIONS',evaluations:results.length,expectedObservations:results.filter(x=>x.matchesDiagnosticExpectation).length,unexpectedObservations:results.filter(x=>!x.matchesDiagnosticExpectation).length,results,sourceChanges:0,nativeExecutions:0,referenceExecutions:0,functionalReceipts:0,supplementaryFinding:'O06 demonstrates that artifact hash/equality does not prove the selector picked the intended frame; independent lineage gate remains required.'}
+await writeFile(path.join(packet,'offline-observations.json'),JSON.stringify(summary,null,2)+'\n')
+console.log(JSON.stringify({evaluations:summary.evaluations,expected:summary.expectedObservations,unexpected:summary.unexpectedObservations,results:results.map(x=>({id:x.id,status:x.actual,expected:x.expected})),functionalReceipts:0}))
+if(summary.unexpectedObservations)process.exitCode=1

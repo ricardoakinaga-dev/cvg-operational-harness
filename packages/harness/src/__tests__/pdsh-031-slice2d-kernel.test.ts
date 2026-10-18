@@ -438,7 +438,7 @@ describe('PDSH-031 slice 2d — kernel pipeline edges', () => {
     })
   })
 
-  it('keeps the outcome when the effect ledger closing write fails', async () => {
+  it('reports uncertainty when the effect ledger closing write fails (SPEC0212)', async () => {
     const { turn } = makeTurn()
     const host = fakeHost({
       services: toolServices({
@@ -450,7 +450,10 @@ describe('PDSH-031 slice 2d — kernel pipeline edges', () => {
     })
     expect(await runToolCall(host, toolCallStub(turn) as never)).toMatchObject({
       kind: 'settled',
-      outcome: { kind: 'succeeded' }
+      outcome: {
+        kind: 'threw',
+        error: 'unknown_effect: effect_settlement_failed'
+      }
     })
   })
 })

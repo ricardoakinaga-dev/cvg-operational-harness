@@ -1,0 +1,18 @@
+import pathlib, json, hashlib, copy
+b=pathlib.Path(__file__).resolve().parent
+p=b/'run-r1/cases/unicode-bytes32768'
+raw=json.loads((p/'raw-requests-responses.json').read_text())
+fixture=json.loads((p/'fixture.json').read_text())
+frame=json.loads(raw['requests'][1]['messages'][1]['content'])
+payload=next(x['value']['payload'] for x in frame['items'] if isinstance(x.get('value'),dict) and x['value'].get('type')=='TOOL_RESULT')
+def observer(candidate):
+    actual=json.dumps(candidate['output'],ensure_ascii=False,sort_keys=True,separators=(',',':'))
+    return (actual==fixture['canonical'] and len(actual.encode())==candidate['outputBytes']==fixture['canonicalBytes'] and hashlib.sha256(actual.encode()).hexdigest()==candidate['outputSha256']==fixture['canonicalSha256'])
+assert observer(payload)
+bad_type=copy.deepcopy(payload);bad_type['output']={'looksLike':payload['output']}
+bad_truncation=copy.deepcopy(payload);bad_truncation['output']=payload['output'][:-1]
+bad_digest=copy.deepcopy(payload);bad_digest['outputSha256']='0'*64
+assert not observer(bad_type) and not observer(bad_truncation) and not observer(bad_digest)
+with (b/'observer-actual-frame-controls.json').open('x') as f:
+    json.dump(dict(source='run-r1/cases/unicode-bytes32768/raw-requests-responses.json:requests[1]',actualFullFramePositive=True,mutationsRejected=['type','truncation','digest'],positiveControls=1,negativeControls=3),f,indent=2);f.write('\n')
+print('Actual full Unicode32768 model-frame positive + type/truncation/digest negative controls verified (artifact-only).')

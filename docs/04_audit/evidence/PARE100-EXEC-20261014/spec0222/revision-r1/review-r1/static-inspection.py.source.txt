@@ -1,0 +1,56 @@
+"""Static packet inspection only: no candidate import, runtime or simulated owner."""
+from pathlib import Path
+import json,collections,hashlib
+root=Path('../review-packet').resolve()
+selections={
+ 'spec.md':[(30,40),(44,64),(68,78),(82,106),(119,135),(137,164)],
+ 'cvg/packages/harness/src/kernel/host.ts':[(71,98),(115,138),(140,188),(190,253)],
+ 'cvg/packages/harness/src/kernel/types.ts':[(168,198),(286,348)],
+ 'cvg/packages/harness/src/kernel/profile.ts':[(57,88)],
+ 'cvg/packages/harness/src/createOperationalHarness.ts':[(73,137),(194,227)],
+ 'cvg/packages/harness/src/kernel/kernel-runtime.ts':[(188,209),(281,297),(626,671)],
+ 'cvg/packages/harness/src/kernel/pipeline.ts':[(78,104),(138,185),(299,328),(473,514),(534,571),(574,595),(625,644)],
+ 'cvg/packages/harness/src/kernel/controls.ts':[(690,734),(739,805)],
+ 'cvg/packages/harness/src/iterative-runtime.ts':[(424,450),(571,605),(790,804),(991,1015),(1569,1687),(1691,1722),(1764,1789)],
+ 'cvg/packages/harness/src/capability-boundary.ts':[(70,145),(184,205),(300,403)],
+ 'cvg/packages/harness/src/effect-journal.ts':[(251,279),(281,297),(310,395)],
+ 'cvg/packages/contracts/src/contracts.ts':[(177,210),(290,313),(493,531)],
+ 'cvg/packages/orchestrator/src/hybrid-orchestrator.ts':[(135,172),(178,210)],
+ 'reference/packages/host/plugin-inventory/src/index.ts':[(78,114)],
+ 'reference/packages/host/plugin-inventory/src/types.ts':[(7,75)],
+ 'reference/packages/boot/plugin-manager/src/types.ts':[(110,136)],
+ 'reference/packages/boot/plugin-manager/src/tools.ts':[(18,44)],
+ 'reference/packages/boot/plugin-manager/src/index.ts':[(832,866)],
+ 'reference/packages/boot/hmr/src/index.ts':[(127,153),(198,214),(492,517),(534,578)],
+ 'reference/packages/preset/agent-preset-registry/src/index.ts':[(30,48),(80,117),(144,148),(208,249)],
+ 'reference/packages/preset/agent-preset-registry/src/mount.ts':[(40,72),(245,272)],
+ 'reference/packages/preset/agent-preset-registry/src/invariant.ts':[(24,59)],
+ 'cvg/packages/harness/src/kernel/__tests__/host.test.ts':[(77,108)],
+ 'reference/packages/preset/agent-preset-registry/tests/registry.spec.ts':[(36,66),(147,175)],
+ 'reference/packages/boot/plugin-manager/tests/tools.spec.ts':[(84,97),(131,177)],
+ 'reference/packages/host/plugin-inventory/tests/inventory.spec.ts':[(152,197)],
+ 'cvg/packages/shared/src/lifecycle.ts':[(34,86)],
+ 'cvg/packages/platform/src/controlled-kernel-execution.ts':[(129,179)],
+ 'cvg/packages/platform/src/controlled-kernel-continuation.ts':[(72,127),(172,215)],
+ 'cvg/packages/sdk/src/composition.ts':[(34,76)],
+}
+index=[]
+with Path('primary-excerpts.txt').open('x') as out:
+ for name,ranges in selections.items():
+  p=root/name
+  lines=p.read_text().splitlines()
+  index.append({'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'ranges':ranges,'evidence':'STATIC_SOURCE_ONLY; tests if present were read, NOT_RUN'})
+  for a,b in ranges:
+   out.write(f'\n=== {name}:{a}-{b} ===\n')
+   for n in range(a,min(b,len(lines))+1): out.write(f'{n:5} {lines[n-1]}\n')
+leaves=json.loads((root/'original-leaf-bindings.json').read_text())
+summary={'mode':'STATIC_ONLY','candidate_runtime_imported':False,'native_tests_executed':False,'leaf_count':len(leaves),
+ 'extraction_status':dict(collections.Counter(r['extraction_status'] for r in leaves)),
+ 'parity_status':dict(collections.Counter(r['parity_status'] for r in leaves)),
+ 'procedure_status':dict(collections.Counter(r['procedure_status'] for r in leaves)),
+ 'semantic_coverage_proven':False,'source_lib_relation':'NOT_VERIFIED',
+ 'ML01_ML20':'NOT_RUN','PL01_PL12':'NOT_RUN'}
+Path('static-diagnostics.json').open('x').write(json.dumps(summary,indent=2)+'\n')
+Path('evidence-index.json').open('x').write(json.dumps(index,indent=2)+'\n')
+print(json.dumps(summary,indent=2))
+print('Selected primary excerpt files:',len(index))

@@ -1,0 +1,126 @@
+import ctypes
+import os
+import selectors
+import signal
+import subprocess
+import time
+from common import CAP
+
+def execute(argv, cwd, env, deadline_ms=5000, cap=CAP, read_fault=False):
+    """Only trusted test callers supply argv/faults; no observation JSON authority."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'PR_SET_CHILD_SUBREAPER failed')
+    started = time.monotonic_ns()
+    deadline = started + deadline_ms * 1000000
+    child = None
+    selector = selectors.DefaultSelector()
+    streams = {'stdout': bytearray(), 'stderr': bytearray()}
+    eof = {'stdout': False, 'stderr': False}
+    errors = []
+    discarded = 0
+    exit_code = None
+    reaped = []
+    remaining_group = None
+    execution_end = None
+    cleanup_start = None
+    try:
+        child = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True)
+        selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
+        selector.register(child.stderr, selectors.EVENT_READ, 'stderr')
+        while selector.get_map():
+            remaining_ns = deadline - time.monotonic_ns()
+            if remaining_ns <= 0:
+                raise TimeoutError('execution_deadline')
+            for key, _ in selector.select(min(0.02, remaining_ns / 1000000000)):
+                if read_fault:
+                    raise OSError('synthetic_capture_error')
+                data = os.read(key.fileobj.fileno(), min(65536, cap + 1))
+                if not data:
+                    eof[key.data] = True
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                room = cap - sum(map(len, streams.values()))
+                streams[key.data].extend(data[:room])
+                discarded += max(0, len(data) - room)
+                if discarded:
+                    raise OverflowError('combined_output_cap')
+        # EOF does not end the execution deadline.
+        remaining_ns = deadline - time.monotonic_ns()
+        if remaining_ns <= 0:
+            raise TimeoutError('execution_deadline_after_eof')
+        try:
+            exit_code = child.wait(timeout=remaining_ns / 1000000000)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError('execution_deadline_after_eof') from error
+        execution_end = time.monotonic_ns()
+        if execution_end > deadline:
+            raise TimeoutError('execution_deadline_at_join')
+    except Exception as error:
+        errors.append({'type': type(error).__name__, 'message': str(error)})
+    finally:
+        execution_end = execution_end or time.monotonic_ns()
+        cleanup_start = time.monotonic_ns()
+        selector.close()
+        if child is not None:
+            # Always kill/reap this dedicated group; no unrelated resources.
+            stop_by = time.monotonic_ns() + 2000000000
+            while True:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    break
+                except OSError as error:
+                    errors.append({'type': type(error).__name__, 'message': str(error)})
+                    break
+                if child.poll() is not None:
+                    exit_code = child.returncode
+                while True:
+                    try:
+                        pid, status = os.waitpid(-child.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        break
+                    if not pid:
+                        break
+                    if pid == child.pid:
+                        exit_code = os.waitstatus_to_exitcode(status)
+                        child.returncode = exit_code
+                    else:
+                        reaped.append({'pid': pid, 'waitStatus': status})
+                if time.monotonic_ns() >= stop_by:
+                    errors.append({'type': 'TimeoutError', 'message': 'cleanup_deadline'})
+                    break
+                time.sleep(0.005)
+            try:
+                exit_code = child.wait(timeout=max(0.001, (stop_by-time.monotonic_ns())/1000000000))
+            except Exception as error:
+                errors.append({'type': type(error).__name__, 'message': str(error)})
+            try:
+                os.killpg(child.pid, 0)
+                remaining_group = True
+            except ProcessLookupError:
+                remaining_group = False
+            except OSError as error:
+                errors.append({'type': type(error).__name__, 'message': str(error)})
+            for stream in [child.stdout, child.stderr]:
+                if stream is not None:
+                    stream.close()
+        else:
+            remaining_group = False
+    finished = time.monotonic_ns()
+    return {
+        'argv': argv, 'cwd': str(cwd), 'env': env,
+        'pid': child.pid if child else None, 'processGroup': child.pid if child else None,
+        'spawned': child is not None, 'exitCode': exit_code,
+        'joined': child is not None and exit_code is not None,
+        'remainingProcessGroup': remaining_group, 'subreaper': True,
+        'executionElapsedNs': execution_end-started,
+        'cleanupElapsedNs': finished-execution_end,
+        'totalElapsedNs': finished-started,
+        'deadlineMs': deadline_ms, 'outputLimit': cap, 'discardedBytes': discarded,
+        'eof': eof, 'errors': errors, 'descendantsReaped': reaped,
+        'retainedBytes': sum(map(len, streams.values()))
+    }, {key: bytes(value) for key, value in streams.items()}

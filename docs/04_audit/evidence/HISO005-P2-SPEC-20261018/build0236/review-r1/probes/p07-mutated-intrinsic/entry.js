@@ -1,0 +1,1 @@
+const O=Object; O.getPrototypeOf=()=>1; Object.getPrototypeOf({});

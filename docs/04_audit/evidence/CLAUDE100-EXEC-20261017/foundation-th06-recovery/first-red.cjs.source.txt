@@ -1,0 +1,16 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),path=require('node:path'),crypto=require('node:crypto');
+const w='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree';const ts=require(w+'/node_modules/typescript');const AF=Object.getPrototypeOf(async()=>{}).constructor;
+const results=[];
+(async()=>{for(const name of ['complete-bound-admission-postgres.integration.ts','complete-tool-process-restart.test.ts','complete-tool-public-restart.test.ts']){
+ const rel='packages/persistence/src/__tests__/'+name,text=fs.readFileSync(path.join(w,rel),'utf8'),sf=ts.createSourceFile(rel,text,ts.ScriptTarget.Latest,true);let chosen;
+ function underRunChild(n){for(let a=n.parent;a;a=a.parent)if(ts.isFunctionDeclaration(a)&&a.name?.text==='runChild')return true;return false}
+ function walk(n){if(!chosen&&ts.isTryStatement(n)&&n.finallyBlock&&/^\{\s*await (?:db|pool)\.end\(\)\s*\}$/.test(n.finallyBlock.getText(sf))&&(name!=='complete-tool-public-restart.test.ts'||underRunChild(n)))chosen=n;ts.forEachChild(n,walk)}walk(sf);assert(chosen);
+ const code='try { if (bodyError) throw primary; return 17 } '+(chosen.catchClause?.getText(sf)||'')+' finally '+chosen.finallyBlock.getText(sf);
+ for(const [mode,bodyError,cleanupError]of[['success',false,false],['body',true,false],['cleanup',false,true],['both',true,true]]){
+ const primary=new Error('BODY_PRIMARY'),secondary=new Error('POOL_CLEANUP');let closes=0,observed,result;
+ const pool={end:async()=>{closes++;if(cleanupError)throw secondary}};
+ try{result=await new AF('bodyError','primary','db','pool','trace','save','join','dir','childRole','errorInfo',code)(bodyError,primary,pool,pool,async()=>{},async()=>{},path.join,'/synthetic','writer',()=>({synthetic:true}))}catch(e){observed=e}
+ function has(e,target,seen=new Set()){if(e===target)return true;if(e===null||typeof e!=='object'||seen.has(e))return false;seen.add(e);return has(e.cause,target,seen)||(Array.isArray(e.errors)&&e.errors.some(x=>has(x,target,seen)))}
+ const pass=closes===1&&(!bodyError||has(observed,primary))&&(!cleanupError||has(observed,secondary))&&((bodyError||cleanupError)?observed!==undefined:result===17);
+ results.push({path:rel,sha256:crypto.createHash('sha256').update(text).digest('hex'),line:sf.getLineAndCharacterOfPosition(chosen.getStart(sf)).line+1,mode,pass,primaryRetained:has(observed,primary),cleanupRetained:has(observed,secondary),closes,actualBoundaryCode:code,applicationExecuted:false});
+ }}const out={task:'C100-FND-TH06-RECOVERY-001',kind:'FIRST_RED_ACTUAL_CONSUMER_TRY_CATCH_FINALLY',cases:results.length,pass:results.filter(x=>x.pass).length,fail:results.filter(x=>!x.pass).length,results};fs.writeFileSync('docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/first-red.json',JSON.stringify(out,null,2)+'\n');assert.equal(out.fail,3);console.log(JSON.stringify({cases:out.cases,pass:out.pass,fail:out.fail,meaning:'Three original both-failure controls lose body primary; no application/PG run.'}));})().catch(e=>{console.error(e);process.exitCode=1})

@@ -1,0 +1,93 @@
+--- certified-private-baseline
++++ current-peer-root
+@@ -18,7 +18,7 @@
+ }
+ 
+ function readLimits(options) {
+-  const limits = { ...LIMITS }
++  const limits = { ...LIMITS, numericDomain: 'LEGACY_FINITE' }
+   if (options === undefined) return limits
+   if (
+     options === null ||
+@@ -33,7 +33,10 @@
+   }
+   const descriptors = Object.getOwnPropertyDescriptors(options)
+   for (const key of Reflect.ownKeys(descriptors)) {
+-    if (typeof key !== 'string' || !Object.hasOwn(LIMITS, key)) {
++    if (
++      typeof key !== 'string' ||
++      (!Object.hasOwn(LIMITS, key) && key !== 'numericDomain')
++    ) {
+       fail('Unknown JSON limit option')
+     }
+     const descriptor = descriptors[key]
+@@ -41,6 +44,12 @@
+       fail('JSON limit options must be data properties')
+     }
+     const value = descriptor.value
++    if (key === 'numericDomain') {
++      if (value !== 'LEGACY_FINITE' && value !== 'CODEX_EXACT_DECIMAL')
++        fail('Unknown JSON numeric domain')
++      limits.numericDomain = value
++      continue
++    }
+     if (!Number.isInteger(value) || value < 0 || value > LIMITS[key]) {
+       fail(`JSON ${key} must be an integer from 0 to ${LIMITS[key]}`)
+     }
+@@ -70,6 +79,43 @@
+   } catch {
+     fail('JSON input is not valid UTF-8')
+   }
++}
++
++// Tokens have already passed the JSON number grammar. Keep decimal work
++// linear in bounded source bytes; never expand a power or parse a giant exponent.
++function decimalParts(token, maxBytes) {
++  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token)
++  const fraction = match[3] ?? ''
++  let digits = (match[2] + fraction).replace(/^0+/, '')
++  if (!digits) return ['+', '0', 0]
++  let exponentToken = match[4] ?? '0'
++  const negativeExponent = exponentToken.startsWith('-')
++  exponentToken = exponentToken.replace(/^[+-]/, '').replace(/^0+/, '') || '0'
++  const bound = String(maxBytes + 400)
++  if (
++    exponentToken.length > bound.length ||
++    (exponentToken.length === bound.length && exponentToken > bound)
++  )
++    fail('JSON decimal exponent exceeds bounded numeric domain')
++  let exponent =
++    Number(exponentToken) * (negativeExponent ? -1 : 1) - fraction.length
++  let end = digits.length
++  while (end > 0 && digits.charCodeAt(end - 1) === 0x30) end--
++  exponent += digits.length - end
++  digits = digits.slice(0, end)
++  return [match[1] || '+', digits, exponent]
++}
++
++function assertCodexNumber(token, value, maxBytes) {
++  if (
++    (Number.isInteger(value) && !Number.isSafeInteger(value)) ||
++    Object.is(value, -0)
++  )
++    fail('JSON number is outside the CodeX safe numeric domain')
++  const original = decimalParts(token, maxBytes)
++  const serialized = decimalParts(JSON.stringify(value), maxBytes)
++  if (original.some((component, index) => component !== serialized[index]))
++    fail('JSON number loses exact decimal value on serialization')
+ }
+ 
+ /**
+@@ -194,8 +240,11 @@
+       if (!digit()) syntax('Missing exponent digit')
+       while (digit()) offset++
+     }
+-    const value = Number(source.slice(start, offset))
++    const token = source.slice(start, offset)
++    const value = Number(token)
+     if (!Number.isFinite(value)) syntax('Non-finite JSON number')
++    if (limits.numericDomain === 'CODEX_EXACT_DECIMAL')
++      assertCodexNumber(token, value, limits.maxBytes)
+     return value
+   }
+ 

@@ -1,0 +1,36 @@
+import json,pathlib,hashlib,datetime,collections,subprocess,os
+R=pathlib.Path(__file__).parent;P=R.parent/'review-packet-r1';M=json.loads((P/'manifest.json').read_text());A=pathlib.Path(M['artifactRoot']);lookup={e['copy']:e for e in M['inputs']}
+H=lambda b:hashlib.sha256(b).hexdigest()
+ranges={'packages/harness/src/createOperationalHarness.ts':[(80,158)],'packages/harness/src/complete-decision-admission.ts':[(149,277),(278,420)],'packages/harness/src/iterative-runtime.ts':[(408,421),(970,999),(1340,1460),(1971,2050),(2229,2260)],'packages/orchestrator/src/hybrid-orchestrator.ts':[(745,910)],'packages/harness/src/execution-spine.ts':[(531,582)],'packages/persistence/src/operational-step-postgres.ts':[(89,100),(257,432)],'packages/persistence/src/controlled-published-fencing.ts':[(127,337)],'packages/persistence/src/controlled-published-kernel-store.ts':[(217,275),(661,870)],'packages/platform/src/controlled-kernel-continuation.ts':[(386,550)],'packages/platform/src/model-provider.ts':[(1,48)],'packages/contracts/src/complete-tool-context.ts':[(14,24)],'docs/02_spec/0224_pare100_complete_tool_result_context.md':[(1,30),(206,243),(287,404),(462,497)],'docs/02_spec/0217_pare100_durable_kernel_composition.md':[(314,346),(350,368),(434,460)]}
+ex=[]
+for rel,rr in ranges.items():
+ p=A/rel;assert str(p) in lookup;b=p.read_bytes();lines=b.decode().splitlines();ex.append({'path':str(p),'sha256':H(b),'excerpts':[{'firstLine':lo,'lastLine':hi,'text':'\n'.join(lines[lo-1:hi])} for lo,hi in rr]})
+(R/'static-inspection.json').write_text(json.dumps({'kind':'postrun static source inspection, NOT observed execution reads','files':ex},indent=2)+'\n')
+reads=[json.loads(x) for x in (R/'reads.jsonl').read_text().splitlines()];trans=[json.loads(x) for x in (R/'transforms.jsonl').read_text().splitlines()]
+assert all(x['id'] in lookup and x['sha256']==lookup[x['id']]['sha256'] for x in trans)
+observed=[]
+for p,vals in sorted(__import__('itertools').groupby(sorted(reads,key=lambda x:x['path']),lambda x:x['path'])):
+ vals=list(vals);observed.append({'path':p,'pids':sorted({x['pid'] for x in vals}),'readTimeMetadata':vals,'category':'packet-source' if p in lookup else 'review-or-runtime-or-dependency','manifestBinding':lookup[p]['sha256'] if p in lookup else None})
+(R/'input-inventory.json').write_text(json.dumps({'instrumentationOnly':True,'kernelSandbox':False,'executionAttestation':False,'observedReads':observed,'postrunStaticManifestInventory':[{'path':e['copy'],'bytes':e['bytes'],'sha256':e['sha256']} for e in M['inputs']],'transformRows':len(trans),'uniqueTransformedSourcePaths':len({x['id'] for x in trans}),'transformHashesAllMatchPacket':True,'transformRecordsHavePid':False,'note':'read metadata is best effort hash obtained before wrapped read, not proof of bytes delivered. Relative paths, nonwrapped APIs and writes are not exhaustively monitored; denied read is preserved in commands/09-guard-control.stderr.'},indent=2)+'\n')
+# Deeper native binding audit of immutable observed JSON only.
+from datetime import datetime as DT
+parse=lambda s:DT.fromisoformat(s.replace('Z','+00:00'))
+canon=lambda x:json.dumps(x,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+checks=[]
+for label,root in [('supplied',P/'proof'),('independent',R/'runs/r1')]:
+ for name in ['BA01','negative-absent','negative-stale','negative-expired','race-initial','race-reserve']:
+  d=json.loads((root/name/'native-authority.json').read_text());a=d['admission'];rt=a['runtime'];duration=100 if name=='negative-expired' else 30000
+  expected={'maxSteps':2,'maxModelCalls':1,'maxToolCalls':0,'maxDurationMs':duration,'maxCostUsd':0,'maxTokens':1000,'maxKnowledgeCalls':0,'maxReplans':0,'maxDecisionRepairs':0,'maxVerificationCalls':2}
+  assert a['budget']==rt['budget']==expected;assert rt==d['admitted']['runtime']==d['claim']['runtime'];assert d['claim']['disposition']=='ACTIVE' and d['claim']['fence']['attempt']==1
+  assert a['runtime']['executionId']==a['input']['executionId']==d['claim']['executionId']==d['hostIdentity']['executionId'];assert d['phase']['attempt']==d['claim']['fence']['attempt'];assert d['phase']['phaseType']=='checkpoint.bound-admission';assert d['prepared']['requestDigest']==a['requestDigest'] and d['prepared']['fingerprint']==a['fingerprint']
+  assert d['started']['preparedDigest']=='sha256-'+H(canon(d['prepared']).encode());assert round((parse(d['started']['expiresAt'])-parse(d['started']['startedAt'])).total_seconds()*1000)==duration
+  for f in (root/name).rglob('result.json'):
+   v=json.loads(f.read_text());assert v['input']==rt
+   for e in v['events']:
+    if e['type']=='fresh-service-SQL':
+     ph=e['physical'];ob=ph['authority'];assert parse(ob['lease_until'])>parse(ob['observed_at']);assert ob['attempt']==d['claim']['fence']['attempt'] and ob['lease_owner']==d['claim']['fence']['workerId'];assert ob['active_outer_attempt']==d['claim']['fence']['outer']['expectedOuterAttempt'];assert str(ob['active_outer_attempt_row_id'])==d['claim']['fence']['outer']['expectedAttemptRowId'];assert ob['prepared_digest']==d['started']['preparedDigest'];assert ob['open_phase_id']==d['phase']['phaseId']
+  checks.append({'dataset':label,'case':name,'nativeBudgetExact':True,'nativeRuntimeExact':True,'preparedDigestIndependent':True,'durationMs':duration,'nativeHostPhaseFenceBinding':True})
+identity=json.loads((R/'runs/r1/identity-rls-grants.json').read_text());assert len(identity['rls'])==18 and all(x['relrowsecurity'] and x['relforcerowsecurity'] for x in identity['rls']);assert len(identity['grants'])==53
+(R/'binding-audit.json').write_text(json.dumps({'pass':True,'checks':checks,'forcedRlsTables':18,'grantRows':53,'grantException':'controlled_published_evidence UPDATE revoked; 17*3+2=53','migrationsResultAbsent':'Native runner returns undefined; JSON omits migrations property. Actual fixture executes existing migrations; no migration-count claim.'},indent=2)+'\n')
+(R/'inspection-failures.json').write_text(json.dumps({'nativeRunFailures':[],'bootstrapStreamsNotCaptured':['Initial manifest cat and preparatory source inspection streams were visible through tool output only, not independently retained as raw files. Initial manifest tool output was truncated. No claim of complete bootstrap capture.'],'inspectionFailures':[{'kind':'static rg probe','result':'exit 2 for guessed nonexistent packages/platform/src/controlled-published*.ts and packages/harness/src/operational-execution*.ts / operational-execution-contracts.ts','preservedAs':'This transcript-derived record; original raw streams were not saved. Continued via manifest-listed controlled-kernel-continuation.ts and execution-spine.ts.'},{'kind':'postrun inspection Python probe','result':"KeyError: migrations; native JSON keys identity/rls/grants only. Earlier transformed-module checks completed with 113 unique paths, zero mismatches.",'exit':1,'preservedAs':'This transcript-derived record; original raw streams were not saved. Corrected inspection does not replace or hide failure.'}],'packagingAttemptsFailed':[]},indent=2)+'\n')
+print(json.dumps({'postrunBindingChecks':len(checks),'uniqueTransforms':len({x['id'] for x in trans}),'observedReadRecords':len(reads),'pass':True}))

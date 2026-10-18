@@ -1,0 +1,324 @@
+/** NOT RUN by the codec Builder. Lead supplies a provisioned synthetic schema
+ * and an exclusive PG resource claim; this test does not create schema/services. */
+import { readFile } from 'node:fs/promises'
+import { randomUUID, createHash } from 'node:crypto'
+import { Pool } from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  EMPTY_BUDGET_USAGE,
+  canonicalizeCompleteJson,
+  type ExecutionCheckpoint
+} from '@cvg/harness-contracts'
+import {
+  sealCheckpoint,
+  InMemoryExecutionStepStore,
+  COMPLETE_CHECKPOINT_DATA_MAX_CHARS,
+  COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES
+} from '@cvg/harness'
+import { TenantIdSchema } from '@cvg/platform'
+import {
+  PostgresExecutionStepStore,
+  saveOperationalCheckpointOnClient
+} from '../operational-step-postgres.ts'
+import {
+  withTenantContext,
+  withTenantTransaction
+} from '../tenant-scoped-postgres.ts'
+
+const resourcePath = process.env.SPEC0224_PG_RESOURCE
+if (process.env.SPEC0224_PG_REQUIRED === '1' && !resourcePath)
+  throw new Error('SPEC0224 assigned synthetic PG resource required')
+const tenantId = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000224'
+)
+const otherTenant = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000225'
+)
+const executionId = `spec0224_codec_${randomUUID()}`
+let pool: Pool
+let store: PostgresExecutionStepStore
+let oversizedJsonReachedDriver = false
+function fixture(step = 0): ExecutionCheckpoint {
+  const output = { '\u0000😀': '\u0000'.repeat(4096) }
+  const raw = canonicalizeCompleteJson(output)
+  return sealCheckpoint({
+    tenantId,
+    executionId,
+    checkpointVersion: 2,
+    runtimeProfile: 'iterative',
+    runtimeVersion: '2.0.0',
+    orchestratorVersion: '1.0.0',
+    stepNumber: step,
+    state: {
+      goal: 'synthetic',
+      stepNumber: step,
+      observations: step
+        ? [
+            {
+              observationId: 'obs_1',
+              stepId: 'step_1',
+              executionId,
+              stepNumber: 1,
+              type: 'TOOL_RESULT',
+              source: 'TOOL',
+              trust: 'UNTRUSTED',
+              payload: {
+                schemaVersion: 1,
+                status: 'SUCCEEDED',
+                sideEffect: 'NONE',
+                completion: 'COMPLETE',
+                resultAvailability: 'AVAILABLE',
+                output,
+                outputBytes: Buffer.byteLength(raw),
+                outputSha256: createHash('sha256').update(raw).digest('hex')
+              },
+              summary: 'preview',
+              provenance: { sourceId: 'synthetic' },
+              timestamp: '2026-10-16T00:00:00.000Z'
+            }
+          ]
+        : [],
+      openQuestions: [],
+      resolvedInputs: {},
+      loopSignatures: [],
+      toolResultContext: {
+        version: 1,
+        deliveredThroughStep: 0,
+        pendingDecisionAdmission: null,
+        decisionAdmissions: []
+      }
+    },
+    budgetUsage: { ...EMPTY_BUDGET_USAGE, steps: step }
+  })
+}
+function token(checkpoint: ExecutionCheckpoint) {
+  return { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+}
+
+function reservedFixture(admissionId: string): ExecutionCheckpoint {
+  const base = fixture(1)
+  const {
+    checkpointId: _id,
+    createdAt: _at,
+    digest: _digest,
+    ...unsigned
+  } = base
+  void _id
+  void _at
+  void _digest
+  const reserved = {
+    modelCalls: 1,
+    inputTokens: 100,
+    outputTokens: 512,
+    costUsd: 1
+  }
+  return sealCheckpoint({
+    ...unsigned,
+    state: {
+      ...base.state,
+      toolResultContext: {
+        ...base.state.toolResultContext!,
+        pendingDecisionAdmission: admissionId,
+        decisionAdmissions: [
+          {
+            admissionId,
+            tenantId,
+            executionId,
+            stepNumber: 2,
+            attempt: 1,
+            purpose: 'ORCHESTRATION',
+            requestSha256: 'a'.repeat(64),
+            measurement: {
+              counterId: 'synthetic',
+              counterVersion: '1',
+              provider: 'synthetic',
+              model: 'synthetic',
+              formattingVersion: '1',
+              inputUpperBoundTokens: 100,
+              contextWindowTokens: 1024,
+              costUpperBoundUsd: 1
+            },
+            reserved,
+            status: 'RESERVED'
+          }
+        ]
+      }
+    },
+    budgetUsage: { ...base.budgetUsage, ...reserved }
+  })
+}
+
+describe.skipIf(!resourcePath)(
+  'SPEC0224 real PG codec/CAS on exclusively assigned synthetic schema',
+  () => {
+    beforeAll(async () => {
+      const resource = JSON.parse(await readFile(resourcePath!, 'utf8')) as {
+        test_database_url: string
+        schemaName: string
+        synthetic: boolean
+        exclusiveClaim: string
+      }
+      const url = new URL(resource.test_database_url)
+      if (
+        resource.synthetic !== true ||
+        !resource.exclusiveClaim ||
+        !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
+        !/^[a-z][a-z0-9_]*$/.test(resource.schemaName)
+      )
+        throw new Error('Refusing unassigned synthetic PG resource')
+      pool = new Pool({
+        connectionString: url.toString(),
+        options: `-c search_path=${resource.schemaName},public`,
+        max: 4
+      })
+      // Per-client instrumentation observes bytes BEFORE the native JSONB parser.
+      pool.on('connect', (client) =>
+        client.setTypeParser(3802, (raw: string) => {
+          if (Buffer.byteLength(raw) > COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES) {
+            oversizedJsonReachedDriver = true
+            throw new Error('OVERSIZED_JSON_REACHED_DRIVER')
+          }
+          return JSON.parse(raw) as unknown
+        })
+      )
+      store = new PostgresExecutionStepStore(pool)
+      await withTenantContext(pool, tenantId, async (client) => {
+        await client.query(
+          `INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state)
+        VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')`,
+          [tenantId, executionId, 'a'.repeat(64)]
+        )
+      })
+    })
+    afterAll(async () => {
+      if (!pool) return
+      try {
+        await withTenantContext(pool, tenantId, async (client) => {
+          await client.query(
+            'DELETE FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+            [tenantId, executionId]
+          )
+          await client.query(
+            'DELETE FROM operational_executions WHERE tenant_id=$1 AND id=$2',
+            [tenantId, executionId]
+          )
+        })
+      } finally {
+        await pool.end()
+      }
+    })
+
+    it('has exactly one initial winner and one winner for competing reservation snapshots; reloads on a fresh adapter', async () => {
+      const first = fixture()
+      const input = { tenantId, executionId, expected: null, next: first }
+      const raced = await Promise.all([
+        store.compareAndSwapCheckpoint(input),
+        store.compareAndSwapCheckpoint({ ...input, next: fixture() })
+      ])
+      expect(raced.filter((r) => r.status === 'APPLIED')).toHaveLength(1)
+      const current = (await store.loadCheckpoint(tenantId, executionId))!
+      const next = reservedFixture('admission_a'),
+        competing = reservedFixture('admission_b')
+      const updates = await Promise.all([
+        store.compareAndSwapCheckpoint({
+          ...input,
+          expected: token(current),
+          next
+        }),
+        store.compareAndSwapCheckpoint({
+          ...input,
+          expected: token(current),
+          next: competing
+        })
+      ])
+      expect(updates.filter((r) => r.status === 'APPLIED')).toHaveLength(1)
+      const winner = updates[0]!.status === 'APPLIED' ? next : competing
+      expect(winner.state.toolResultContext!.decisionAdmissions).toHaveLength(1)
+      expect(
+        await new PostgresExecutionStepStore(pool).loadCheckpoint(
+          tenantId,
+          executionId
+        )
+      ).toEqual(winner)
+      const memory = new InMemoryExecutionStepStore()
+      await memory.compareAndSwapCheckpoint({ ...input, next: winner })
+      expect(await memory.loadCheckpoint(tenantId, executionId)).toEqual(winner)
+      expect(await store.loadCheckpoint(otherTenant, executionId)).toBeNull()
+      expect(
+        (
+          await store.compareAndSwapCheckpoint({
+            ...input,
+            expected: token(current),
+            next: fixture(1)
+          })
+        ).status
+      ).toBe('CONFLICT')
+      expect(() => store.saveCheckpoint(winner)).toThrow()
+      const {
+        checkpointId: _id,
+        createdAt: _at,
+        digest: _d,
+        ...unsigned
+      } = winner
+      void _id
+      void _at
+      void _d
+      const legacy = sealCheckpoint({
+        ...unsigned,
+        checkpointVersion: 1,
+        state: { ...unsigned.state, toolResultContext: undefined }
+      })
+      await expect(store.saveCheckpoint(legacy)).rejects.toThrow()
+      await expect(
+        withTenantTransaction(pool, tenantId, (client) =>
+          saveOperationalCheckpointOnClient(client, tenantId, legacy)
+        )
+      ).rejects.toThrow()
+    })
+
+    it('returns bounded SQL projections, refuses corrupt wrappers and oversized state before driver JSON parsing', async () => {
+      const checkpoint = (await store.loadCheckpoint(tenantId, executionId))!
+      let saved: unknown
+      await withTenantContext(pool, tenantId, async (client) => {
+        const row = await client.query(
+          'SELECT state FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+          [tenantId, executionId]
+        )
+        saved = row.rows[0]!.state
+        expect((saved as Record<string, unknown>).storageCodec).toBe(
+          'cvg.checkpoint-state/2'
+        )
+        await client.query(
+          `UPDATE operational_execution_checkpoints SET state=jsonb_set(state,'{decodedSha256}',to_jsonb($3::text)) WHERE tenant_id=$1 AND execution_id=$2`,
+          [tenantId, executionId, '0'.repeat(64)]
+        )
+      })
+      try {
+        await expect(
+          store.loadCheckpoint(tenantId, executionId)
+        ).rejects.toThrow()
+        expect(oversizedJsonReachedDriver).toBe(false)
+        await withTenantContext(pool, tenantId, (client) =>
+          client.query(
+            `UPDATE operational_execution_checkpoints SET state=jsonb_build_object('data',repeat('A',$3::int)) WHERE tenant_id=$1 AND execution_id=$2`,
+            [tenantId, executionId, COMPLETE_CHECKPOINT_DATA_MAX_CHARS + 1]
+          )
+        )
+        await expect(
+          store.loadCheckpoint(tenantId, executionId)
+        ).rejects.toThrow()
+      } finally {
+        await withTenantContext(pool, tenantId, (client) =>
+          client.query(
+            'UPDATE operational_execution_checkpoints SET state=$3::jsonb WHERE tenant_id=$1 AND execution_id=$2',
+            [tenantId, executionId, JSON.stringify(saved)]
+          )
+        )
+      }
+      expect(await store.loadCheckpoint(tenantId, executionId)).toEqual(
+        checkpoint
+      )
+      expect(oversizedJsonReachedDriver).toBe(false)
+    })
+  }
+)

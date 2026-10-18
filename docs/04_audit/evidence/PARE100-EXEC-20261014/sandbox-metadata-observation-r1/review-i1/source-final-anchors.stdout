@@ -1,0 +1,720 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/pipeline.ts LINES 665
+361: async function enforceSandbox(
+362:   host: KernelHost,
+363:   call: ToolCallState
+364: ): Promise<KernelStop | undefined> {
+365:   const requiredMode = requiredSandboxMode(call.tool)
+366:   if (requiredMode === 'NONE') return undefined
+367:   if (!host.has('sandbox')) {
+368:     return stop(
+369:       'UNSAFE_REQUEST',
+370:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+371:     )
+372:   }
+373:   const gate = host.get('sandbox')
+374:   if (!gate) {
+375:     // host.has was checked; a missing entry here is a host-integrity fault,
+376:     // so fail closed the same way as an unconfigured gate.
+377:     return stop(
+378:       'UNSAFE_REQUEST',
+379:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+380:     )
+381:   }
+382:   try {
+383:     const outcome: SandboxGateOutcome = await gate.evaluate({
+384:       descriptor: call.tool,
+385:       context: {
+386:         tenantId: call.turn.input.tenantId,
+387:         agentId: call.turn.input.agent.id,
+388:         correlationId: call.turn.input.correlationId,
+389:         traceId: call.turn.input.traceId,
+390:         operationKey: call.invocation.operationKey
+391:       },
+392:       policy: {
+393:         requiredMode,
+394:         workspaceScoped: requiredMode === 'WORKSPACE',
+395:         networkAllowed: requiredMode === 'EGRESS',
+396:         subprocessAllowed: requiredMode === 'PROCESS'
+397:       }
+398:     })
+399:     if (outcome.kind === 'denied') {
+400:       return stop(
+401:         'UNSAFE_REQUEST',
+402:         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+403:       )
+404:     }
+405:     if (outcome.kind === 'unavailable') {
+406:       return stop(
+407:         'UNSAFE_REQUEST',
+408:         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+409:       )
+410:     }
+411:     const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+412:     const handle = granted && {
+413:       mode: granted.mode,
+414:       allowNetwork: granted.allowNetwork,
+415:       allowSubprocess: granted.allowSubprocess,
+416:       workspaceRoot: granted.workspaceRoot,
+417:       deadlineMs: granted.deadlineMs
+418:     }
+419:     if (
+420:       outcome.kind !== 'allowed' ||
+421:       outcome.mode !== requiredMode ||
+422:       !handle ||
+423:       handle.mode !== requiredMode ||
+424:       typeof handle.allowNetwork !== 'boolean' ||
+425:       typeof handle.allowSubprocess !== 'boolean' ||
+426:       (handle.deadlineMs !== undefined &&
+427:         (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+428:       (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+429:       (handle.workspaceRoot !== undefined &&
+430:         (typeof handle.workspaceRoot !== 'string' ||
+431:           !isAbsolute(handle.workspaceRoot) ||
+432:           handle.workspaceRoot.includes('\0')))
+433:     ) {
+434:       return stop(
+435:         'UNSAFE_REQUEST',
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+437:       )
+438:     }
+439:     // Copy only validated grants. Neither a later gate mutation nor model
+440:     // JSON can rewrite the authority passed to the capability body.
+441:     call.sandboxHandle = Object.freeze({
+442:       mode: handle.mode,
+443:       allowNetwork: handle.allowNetwork,
+444:       allowSubprocess: handle.allowSubprocess,
+445:       ...(handle.workspaceRoot !== undefined
+446:         ? { workspaceRoot: handle.workspaceRoot }
+447:         : {}),
+448:       ...(handle.deadlineMs !== undefined
+449:         ? { deadlineMs: handle.deadlineMs }
+450:         : {})
+451:     })
+452:     return undefined
+453:   } catch (error) {
+454:     return stop(
+455:       'UNSAFE_REQUEST',
+456:       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+457:     )
+458:   }
+459: }
+460: 
+461: async function dispatch(
+462:   host: KernelHost,
+463:   call: ToolCallState
+464: ): Promise<ToolOutcome> {
+465:   const { turn } = call
+466:   const ref = {
+467:     tenantId: turn.input.tenantId,
+468:     correlationId: turn.input.correlationId,
+469:     toolId: call.tool.id,
+470:     operationKey: call.invocation.operationKey
+471:   }
+472:   let started = false
+473:   const terminal = async (): Promise<ToolOutcome> => {
+474:     if (turn.budget.remainingMs() <= 0) {
+475:       return {
+476:         kind: 'not_started',
+477:         gate: stop(
+478:           'MAX_DURATION',
+479:           'Duration budget exhausted before tool execution.'
+480:         )
+481:       }
+482:     }
+483:     // Last decision point: after every wrapper (the approval reservation),
+484:     // a pause or a cancellation still prevents the effect (F01/F02).
+485:     const blocked = await revalidate(host, call)
+486:     if (blocked) return { kind: 'not_started', gate: blocked }
+487:     try {
+488:       await host.get('effects').started(ref)
+489:     } catch (error) {
+490:       return {
+491:         kind: 'not_started',
+492:         gate: stop(
+493:           'INSUFFICIENT_EVIDENCE',
+494:           `Effect ledger could not record the start: ${errorMessage(error)}.`
+495:         )
+496:       }
+497:     }
+498:     started = true
+499:     const startedAt = Date.now()
+500:     const toolController = new AbortController()
+501:     try {
+502:       // Past the decision point the body is always invoked, so a recorded
+503:       // start never pairs with a body that did not run.
+504:       const value = await raceInvoked(turn, () =>
+505:         call.tool.execute(call.invocation.input, {
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+519:           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+520:           durationMs
+521:         }
+522:       }
+523:       return value.status === 'SUCCEEDED'
+524:         ? { kind: 'succeeded', result: value, durationMs }
+525:         : { kind: 'failed', result: value, durationMs }
+526:     } catch (error) {
+527:       return {
+528:         kind: 'threw',
+529:         error: errorMessage(error),
+530:         durationMs: Date.now() - startedAt
+531:       }
+532:     }
+533:   }
+534:   const listeners = host.listeners('tool/execute')
+535:   const run = (index: number): Promise<ToolOutcome> => {
+536:     const entry = listeners[index]
+537:     if (!entry) return terminal()
+538:     return entry
+539:       .fn(call, () => run(index + 1))
+540:       .catch(
+541:         (error: unknown): ToolOutcome =>
+542:           started
+543:             ? {
+544:                 kind: 'threw',
+545:                 error: `${entry.plugin} failed: ${errorMessage(error)}`,
+546:                 durationMs: 0
+547:               }
+548:             : {
+549:                 kind: 'not_started',
+550:                 gate: stop(
+551:                   'INSUFFICIENT_EVIDENCE',
+552:                   `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
+553:                 )
+554:               }
+555:       )
+556:   }
+557:   const outcome = await run(0)
+558:   if (started) {
+559:     try {
+560:       await host.get('effects').finished(ref, outcome.kind)
+561:     } catch {
+562:       // The body already ran. A missing settlement is uncertain, never a
+563:       // successful effect or permission to retry the body/ledger.
+564:       return {
+565:         kind: 'threw',
+566:         error: 'unknown_effect: effect_settlement_failed',
+567:         durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+568:       }
+569:     }
+570:   }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/kernel-runtime.ts LINES 671
+155:  * through a named interception point; governance lives in control plugins.
+156:  * Behavior matches `SinglePassGovernedRuntime` and closes the conformance gaps
+157:  * I5 (call logged before dispatch), I6 (model request logged), I7 (listener
+158:  * failures normalized) and I8 (cancellation by `RuntimeInput.signal`).
+159:  */
+160: export class KernelRuntime implements HarnessRuntime {
+161:   #host: Promise<KernelHost> | undefined
+162: 
+163:   private constructor(
+164:     private readonly plugins: readonly KernelPlugin[],
+165:     host: KernelHost | undefined,
+166:     private readonly options: KernelRuntimeOptions = {}
+167:   ) {
+168:     if (host) this.#host = Promise.resolve(host)
+169:   }
+170: 
+171:   /** Boots eagerly and fails loudly when the profile is incomplete. */
+172:   public static async boot(
+173:     plugins: readonly KernelPlugin[],
+174:     options: KernelRuntimeOptions = {}
+175:   ): Promise<KernelRuntime> {
+176:     const host = await KernelHost.boot(plugins, REQUIRED_SERVICES)
+177:     return new KernelRuntime(plugins, host, options)
+178:   }
+179: 
+180:   /** Boots on first use; a boot failure becomes a fail-closed result. */
+181:   public static lazy(
+182:     plugins: readonly KernelPlugin[],
+183:     options: KernelRuntimeOptions = {}
+184:   ): KernelRuntime {
+185:     return new KernelRuntime(plugins, undefined, options)
+186:   }
+187: 
+188:   public async dispose(): Promise<void> {
+189:     if (!this.#host) return
+190:     const host = await this.#host.catch(() => undefined)
+191:     await host?.dispose()
+192:   }
+193: 
+194:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+195:     let host: KernelHost
+196:     try {
+197:       this.#host ??= KernelHost.boot(this.plugins, REQUIRED_SERVICES)
+198:       host = await this.#host
+199:     } catch (error) {
+200:       return result({
+201:         response:
+202:           this.options.bootFailureResponse ??
+203:           `Kernel could not start: ${errorMessage(error)}.`,
+204:         stopReason: 'INTERNAL_FAILURE',
+205:         modelCalls: 0,
+206:         toolCalls: 0
+207:       })
+208:     }
+209:     return new Turn(host, input).run()
+210:   }
+211: }
+212: 
+275:         return this.#finish(
+276:           fromStop(
+277:             stop('MAX_DURATION', 'Duration budget exhausted before planning.')
+278:           )
+279:         )
+280:       }
+281:       const decision = await race(this.#state, () =>
+282:         this.#host.get('planner').decideNextStep({
+283:           runtime: input,
+284:           availableTools: this.#availableTools(),
+285:           step: 1
+286:         })
+287:       )
+288:       if (decision === CANCELLED) {
+289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+290:       }
+291:       if (decision === DEADLINE) {
+292:         return this.#finish(
+293:           fromStop(
+294:             stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+295:           )
+296:         )
+297:       }
+298:       switch (decision.action) {
+299:         case 'RESPOND':
+300:           return await this.#respond(decision.response)
+301:         case 'CALL_TOOL':
+302:           return await this.#callTool(decision.toolInvocation)
+303:         case 'ASK_USER':
+304:           return this.#finish(
+305:             fromStop(
+306:               stop(
+307:                 'NEEDS_USER_INPUT',
+308:                 decision.response ??
+309:                   decision.reason ??
+310:                   'More information is required.'
+311:               )
+312:             )
+313:           )
+314:         case 'REQUEST_APPROVAL':
+315:           return this.#finish(
+316:             fromStop(
+317:               stop(
+318:                 'APPROVAL_REQUIRED',
+319:                 decision.response ??
+320:                   decision.reason ??
+321:                   'Approval is required before continuing.'
+322:               )
+323:             )
+324:           )
+325:         case 'HANDOFF':
+326:           return this.#finish(
+327:             fromStop(
+328:               stop(
+329:                 'HUMAN_TAKEOVER',
+330:                 decision.response ??
+331:                   decision.reason ??
+332:                   'Human takeover is required.'
+333:               )
+334:             )
+335:           )
+336:         case 'STOP':
+337:           return this.#finish(
+338:             fromStop(
+339:               stop(
+340:                 'INSUFFICIENT_EVIDENCE',
+341:                 decision.response ?? decision.reason ?? 'Execution stopped.'
+342:               )
+343:             )
+344:           )
+345:         case 'RETRIEVE':
+346:         case 'VERIFY':
+347:           return this.#finish(
+348:             fromStop(
+349:               stop(
+350:                 'INSUFFICIENT_EVIDENCE',
+351:                 'This single-pass compatibility runtime does not execute retrieval or verification steps.'
+352:               )
+353:             )
+354:           )
+355:       }
+356:     } catch (error) {
+357:       return this.#finish(
+358:         fromStop(
+359:           stop(
+360:             'INSUFFICIENT_EVIDENCE',
+361:             `Execution could not be planned: ${errorMessage(error)}.`
+362:           )
+363:         )
+364:       )
+365:     }
+366:   }
+367: 
+368:   async #respond(response: string | undefined): Promise<RuntimeResult> {
+369:     if (response?.trim()) {
+370:       return this.#finish(
+371:         result({
+372:           response,
+373:           stopReason: 'COMPLETED',
+374:           modelCalls: 0,
+375:           toolCalls: 0
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/effect-journal.ts LINES 397
+1: import { createHash, randomUUID } from 'node:crypto'
+2: import type {
+3:   ToolDefinition,
+4:   ToolExecutionContext,
+5:   ToolRegistry,
+6:   ToolResult
+7: } from '@cvg/harness-contracts'
+8: 
+9: export type EffectJournalState =
+10:   | 'RESERVED'
+11:   | 'EFFECT_STARTED'
+12:   | 'CONFIRMED'
+13:   | 'FAILED'
+14:   | 'UNCERTAIN'
+15: 
+16: export interface EffectJournalRecord {
+17:   readonly tenantId: string
+18:   readonly operationKey: string
+19:   readonly proposalHash: string
+20:   readonly state: EffectJournalState
+21:   readonly attemptId: string
+22:   readonly result?: unknown
+23:   readonly error?: string
+24:   readonly createdAt: string
+25:   readonly updatedAt: string
+26: }
+27: 
+28: export interface EffectJournal {
+29:   reserve(input: {
+30:     tenantId: string
+31:     operationKey: string
+32:     proposalHash: string
+33:     attemptId: string
+34:   }): Promise<EffectJournalRecord>
+35:   markStarted(input: {
+36:     tenantId: string
+37:     operationKey: string
+38:     attemptId: string
+39:   }): Promise<EffectJournalRecord>
+40:   confirm(input: {
+41:     tenantId: string
+42:     operationKey: string
+43:     attemptId: string
+44:     result: unknown
+45:   }): Promise<EffectJournalRecord>
+46:   fail(input: {
+47:     tenantId: string
+48:     operationKey: string
+49:     attemptId: string
+50:     error: string
+51:   }): Promise<EffectJournalRecord>
+52:   markUncertain(input: {
+53:     tenantId: string
+54:     operationKey: string
+55:     attemptId: string
+56:     reason: string
+57:   }): Promise<EffectJournalRecord>
+58:   get(
+59:     tenantId: string,
+60:     operationKey: string
+61:   ): Promise<EffectJournalRecord | null>
+62: }
+63: 
+64: export class EffectJournalError extends Error {
+65:   public constructor(message: string) {
+66:     super(message)
+67:     this.name = 'EffectJournalError'
+68:   }
+69: }
+70: 
+71: function key(tenantId: string, operationKey: string): string {
+72:   return `${tenantId}\u0000${operationKey}`
+73: }
+74: 
+75: function now(): string {
+76:   return new Date().toISOString()
+77: }
+78: 
+79: function bounded(value: string, label: string): string {
+80:   if (typeof value !== 'string' || value.trim().length === 0) {
+81:     throw new EffectJournalError(`${label} is required`)
+82:   }
+83:   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
+84:   return value.trim()
+85: }
+86: 
+87: export type EffectAttemptIdFactory = () => string
+88: 
+89: /**
+90:  * Generates the fencing identity for one effect attempt. The factory seam is
+91:  * intentionally explicit so synthetic tests can be deterministic; production
+92:  * callers use the node:crypto default and never a weak fallback.
+93:  */
+94: export function createEffectAttemptId(
+95:   factory: EffectAttemptIdFactory = randomUUID
+96: ): string {
+97:   const token = bounded(factory(), 'attemptId token')
+98:   return bounded(`attempt_${token}`, 'attemptId')
+99: }
+100: 
+101: function clone<T>(value: T): T {
+102:   return structuredClone(value)
+103: }
+104: 
+105: /** Process-local journal for synthetic crash/replay proofs. */
+106: export class InMemoryEffectJournal implements EffectJournal {
+107:   private readonly records = new Map<string, EffectJournalRecord>()
+108: 
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+156: 
+157:   public markStarted(input: {
+158:     tenantId: string
+159:     operationKey: string
+160:     attemptId: string
+161:   }): Promise<EffectJournalRecord> {
+162:     return this.transition(input, 'EFFECT_STARTED')
+163:   }
+164: 
+165:   public confirm(input: {
+166:     tenantId: string
+167:     operationKey: string
+168:     attemptId: string
+169:     result: unknown
+170:   }): Promise<EffectJournalRecord> {
+171:     return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+172:   }
+173: 
+174:   public fail(input: {
+175:     tenantId: string
+176:     operationKey: string
+177:     attemptId: string
+178:     error: string
+179:   }): Promise<EffectJournalRecord> {
+180:     return this.transition(input, 'FAILED', {
+215:     if (!current) throw new EffectJournalError('Effect reservation is missing')
+216:     if (current.attemptId !== input.attemptId) {
+217:       throw new EffectJournalError('Effect attempt is fenced')
+218:     }
+219:     if (state === 'EFFECT_STARTED' && current.state !== 'RESERVED') {
+220:       throw new EffectJournalError('Effect cannot start from its current state')
+221:     }
+222:     if (
+223:       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+224:       current.state !== 'EFFECT_STARTED'
+225:     ) {
+226:       if (current.state === state) return clone(current)
+227:       throw new EffectJournalError(
+228:         'Effect outcome is not valid for its current state'
+229:       )
+230:     }
+231:     const next: EffectJournalRecord = {
+232:       ...current,
+233:       state,
+234:       ...(values.result !== undefined ? { result: values.result } : {}),
+235:       ...(values.error !== undefined ? { error: values.error } : {}),
+236:       updatedAt: now()
+237:     }
+238:     this.records.set(identity, next)
+239:     return clone(next)
+240:   }
+241: }
+242: 
+243: export interface JournaledToolRegistryOptions {
+244:   readonly crashAfterEffectBeforeConfirm?: boolean
+245:   /** Binds effect replay to the exact capability composition. */
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: function proposalHash(
+252:   tool: ToolDefinition,
+253:   input: unknown,
+254:   compositionFingerprint: string | undefined
+255: ): string {
+256:   return createHash('sha256')
+257:     .update(
+258:       JSON.stringify({
+259:         schemaVersion: 'effect-proposal-v2',
+260:         compositionFingerprint: compositionFingerprint ?? null,
+261:         tool: {
+262:           id: tool.id,
+263:           version: tool.version,
+264:           sideEffect: tool.sideEffect,
+265:           idempotent: tool.idempotent,
+266:           providerId:
+267:             'providerId' in tool
+268:               ? (tool as { providerId?: unknown }).providerId
+269:               : undefined,
+270:           providerVersion:
+271:             'providerVersion' in tool
+272:               ? (tool as { providerVersion?: unknown }).providerVersion
+273:               : undefined
+274:         },
+275:         input
+276:       })
+277:     )
+278:     .digest('hex')
+279: }
+280: 
+281: /**
+282:  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+283:  * policy and approval still run in the harness before this wrapper is called.
+284:  */
+285: export function createJournaledToolRegistry(
+286:   registry: ToolRegistry,
+287:   journal: EffectJournal,
+288:   options: JournaledToolRegistryOptions = {}
+289: ): ToolRegistry {
+290:   return {
+291:     list: () => registry.list(),
+292:     resolve: (toolId, version) => {
+293:       const tool = registry.resolve(toolId, version)
+294:       if (!tool) return undefined
+295:       return journaledTool(tool, journal, options)
+296:     }
+297:   }
+298: }
+299: 
+300: function journaledTool(
+301:   tool: ToolDefinition,
+302:   journal: EffectJournal,
+303:   options: JournaledToolRegistryOptions
+304: ): ToolDefinition {
+305:   const compositionFingerprint = options.compositionFingerprint
+306:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+307:     : undefined
+308:   return {
+309:     ...tool,
+310:     execute: async (
+311:       input: unknown,
+312:       context: ToolExecutionContext
+313:     ): Promise<ToolResult> => {
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+315:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+316:       const reservation = await journal.reserve({
+317:         tenantId: context.tenantId,
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+320:         attemptId
+321:       })
+322:       if (reservation.state === 'CONFIRMED') {
+323:         return { status: 'SUCCEEDED', output: reservation.result }
+324:       }
+325:       if (
+326:         reservation.state === 'UNCERTAIN' ||
+327:         reservation.state === 'EFFECT_STARTED'
+328:       ) {
+329:         return {
+330:           status: 'REJECTED',
+331:           error:
+332:             'unknown_effect: explicit reconciliation is required before retry'
+333:         }
+334:       }
+335:       if (reservation.attemptId !== attemptId) {
+336:         return {
+337:           status: 'REJECTED',
+338:           error:
+339:             'unknown_effect: an existing reservation requires reconciliation'
+340:         }
+341:       }
+342:       await journal.markStarted({
+343:         tenantId: context.tenantId,
+344:         operationKey,
+345:         attemptId
+346:       })
+347:       try {
+348:         const result = await tool.execute(input, context)
+349:         if (
+350:           options.crashAfterEffectBeforeConfirm &&
+351:           result.status === 'SUCCEEDED'
+352:         ) {
+353:           await journal.markUncertain({
+354:             tenantId: context.tenantId,
+355:             operationKey,
+356:             attemptId,
+357:             reason: 'synthetic crash after effect before confirmation'
+358:           })
+359:           return {
+360:             status: 'REJECTED',
+361:             error:
+362:               'unknown_effect: synthetic crash after effect before confirmation'
+363:           }
+364:         }
+365:         if (result.status === 'SUCCEEDED') {
+366:           await journal.confirm({
+367:             tenantId: context.tenantId,
+368:             operationKey,
+369:             attemptId,
+370:             result: result.output
+371:           })
+372:         } else {
+373:           await journal.fail({
+374:             tenantId: context.tenantId,
+375:             operationKey,
+376:             attemptId,
+377:             error: result.error ?? 'tool failed'
+378:           })
+379:         }
+380:         return result
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/index.ts LINES 4
+

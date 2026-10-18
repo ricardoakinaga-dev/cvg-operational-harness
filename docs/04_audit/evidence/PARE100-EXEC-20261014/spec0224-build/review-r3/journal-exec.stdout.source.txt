@@ -1,0 +1,114 @@
+   284  */
+   285 export function createJournaledToolRegistry(
+   286   registry: ToolRegistry,
+   287   journal: EffectJournal,
+   288   options: JournaledToolRegistryOptions = {}
+   289 ): ToolRegistry {
+   290   return {
+   291     list: () => registry.list(),
+   292     resolve: (toolId, version) => {
+   293       const tool = registry.resolve(toolId, version)
+   294       if (!tool) return undefined
+   295       return journaledTool(tool, journal, options)
+   296     }
+   297   }
+   298 }
+   299 
+   300 function journaledTool(
+   301   tool: ToolDefinition,
+   302   journal: EffectJournal,
+   303   options: JournaledToolRegistryOptions
+   304 ): ToolDefinition {
+   305   const compositionFingerprint = options.compositionFingerprint
+   306     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+   307     : undefined
+   308   return {
+   309     ...tool,
+   310     execute: async (
+   311       input: unknown,
+   312       context: ToolExecutionContext
+   313     ): Promise<ToolResult> => {
+   314       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+   315       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+   316       const reservation = await journal.reserve({
+   317         tenantId: context.tenantId,
+   318         operationKey,
+   319         proposalHash: proposalHash(tool, input, compositionFingerprint),
+   320         attemptId
+   321       })
+   322       if (reservation.state === 'CONFIRMED') {
+   323         return { status: 'SUCCEEDED', output: reservation.result }
+   324       }
+   325       if (
+   326         reservation.state === 'UNCERTAIN' ||
+   327         reservation.state === 'EFFECT_STARTED'
+   328       ) {
+   329         return {
+   330           status: 'REJECTED',
+   331           error:
+   332             'unknown_effect: explicit reconciliation is required before retry'
+   333         }
+   334       }
+   335       if (reservation.attemptId !== attemptId) {
+   336         return {
+   337           status: 'REJECTED',
+   338           error:
+   339             'unknown_effect: an existing reservation requires reconciliation'
+   340         }
+   341       }
+   342       await journal.markStarted({
+   343         tenantId: context.tenantId,
+   344         operationKey,
+   345         attemptId
+   346       })
+   347       try {
+   348         const result = await tool.execute(input, context)
+   349         if (
+   350           options.crashAfterEffectBeforeConfirm &&
+   351           result.status === 'SUCCEEDED'
+   352         ) {
+   353           await journal.markUncertain({
+   354             tenantId: context.tenantId,
+   355             operationKey,
+   356             attemptId,
+   357             reason: 'synthetic crash after effect before confirmation'
+   358           })
+   359           return {
+   360             status: 'REJECTED',
+   361             error:
+   362               'unknown_effect: synthetic crash after effect before confirmation'
+   363           }
+   364         }
+   365         if (result.status === 'SUCCEEDED') {
+   366           await journal.confirm({
+   367             tenantId: context.tenantId,
+   368             operationKey,
+   369             attemptId,
+   370             result: result.output
+   371           })
+   372         } else {
+   373           await journal.fail({
+   374             tenantId: context.tenantId,
+   375             operationKey,
+   376             attemptId,
+   377             error: result.error ?? 'tool failed'
+   378           })
+   379         }
+   380         return result
+   381       } catch (error) {
+   382         const message =
+   383           error instanceof Error ? error.message : 'tool execution failed'
+   384         await journal.markUncertain({
+   385           tenantId: context.tenantId,
+   386           operationKey,
+   387           attemptId,
+   388           reason: `unknown effect after executor failure: ${message}`
+   389         })
+   390         return {
+   391           status: 'REJECTED',
+   392           error: 'unknown_effect: executor outcome is uncertain'
+   393         }
+   394       }
+   395     }
+   396   }
+   397 }

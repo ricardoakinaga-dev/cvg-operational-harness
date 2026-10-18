@@ -1,8 +1,8 @@
 # Operational index — derived navigation
 
 This file is a manually reconciled navigation aid derived from the append-only
-records; it is not generated automatically yet. The linked ledgers remain the
-only mutable sources of operational status. This index must not be used to
+records; it is not generated automatically yet. The linked ledgers and canonical
+backlogs remain the sources of operational status. This index must not be used to
 infer approval, certification or production access.
 
 ## Sources of truth
@@ -10,9 +10,20 @@ infer approval, certification or production access.
 - [runtime state](99_runtime_state.md)
 - [master execution log](20_master_execution_log.md)
 - [master backlog](30_backlog_master.md)
-- [AUD21 executable backlog](03_build/0337_comprehensive_remediation_backlog.md)
+- [harness isolation backlog](03_build/0370_harness_product_isolation_backlog.md)
+- [harness production plan](03_build/0374_plano_producao_harness.md)
+- [consumer PISO backlog](../products/shift-assistant/docs/backlog.md)
 
-## Navegação corrente — 30/09/2026 — AUD0592 / UP91
+## Navegação corrente — 17/10/2026 — ADR-010
+
+- [Missão e fronteiras](architecture/adrs/ADR-010-harness-product-isolation.md): harness reutilizável; [consumidor e suas docs](../products/shift-assistant/docs/README.md) separados.
+- [Backlog0370](03_build/0370_harness_product_isolation_backlog.md) e [roadmap0369](03_build/0369_harness_product_isolation_roadmap.md): HISO-002/HISO-008 têm fechamento documental próprio; HISO-005/HISO-014 não recebem aceite positivo por isso.
+- [SPEC0228 concluída localmente](04_audit/evidence/B6-0228-BUILD-20261017/REPORT.md): candidataf11, sem integração automática; fronteira INCOMPLETE.
+- [Barra0373](03_build/0373_barra_producao_harness.md) e [plano0374](03_build/0374_plano_producao_harness.md): B5 aprovado pelo recibo de16/10, CI remoto/check obrigatório do produto ainda sem comprovação nesta trilha.
+- [AP–PISO–HISO](../products/shift-assistant/docs/requisitos-ap.md): origem e rastreabilidade; o status PISO vive somente no backlog do produto. Barra0368, D1–D4 e SPEC0177 não qualificam o harness.
+- [Reconciliação0388](03_build/0388_documentation_isolation_reconciliation.md) e [handoff](08_runtime/handoffs/docs_isolation_20261017.md): evidência documental atual. [AUD21](03_build/0337_comprehensive_remediation_backlog.md), UP91/0356/0367 e as seções seguintes permanecem históricos, sem reativação por navegação.
+
+## Histórico — Navegação em30/09/2026 — AUD0592 / UP91
 
 - [Roadmap atualizado M0–M9](03_build/0366_program_roadmap_reaudit_2026-09-30.md) e [backlog corrente](03_build/0367_program_backlog_reaudit_2026-09-30.md): 52 cartões e 83 origens/13 gates preservados; 0356 conserva statusPR,0367 possui status UP91.
 - [AUD0592 com 42 notas e13 gates](04_audit/0592_repository_reaudit_2026-09-30.md): maturidade60,24/100, prontidão24,23/100; parecer FAIL/NO_GO, checks atuais isolados e limitações explícitas.

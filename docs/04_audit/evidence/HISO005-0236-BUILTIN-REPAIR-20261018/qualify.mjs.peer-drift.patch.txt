@@ -1,0 +1,64 @@
+--- certified-private-baseline
++++ current-peer-root
+@@ -4,6 +4,7 @@
+   jsonDigest,
+   normalizeLog
+ } from '../../support/governed-test-kit/index.js'
++import { validateCodexCatalog } from '../../codex100/qualification/catalog-profile.mjs'
+ import { parseStrictJson } from './strict-json.mjs'
+ import { QualificationError } from './errors.mjs'
+ import { openEvidenceRoot } from './safe-io.mjs'
+@@ -71,9 +72,23 @@
+ }
+ 
+ /** Data-only local verifier. Its two indices are supplied by the reviewing operator. */
+-export async function qualify(options) {
++export function qualify(options) {
++  return qualifyWithProfile(options, false)
++}
++
++export function qualifyCodex(options) {
++  return qualifyWithProfile(options, true)
++}
++
++// Profile selection is private and cannot be supplied by manifest/CLI/options.
++async function qualifyWithProfile(options, codex) {
+   const startedAt = new Date().toISOString()
+   const report = emptyReport()
++  if (codex)
++    report.limitations.push(
++      'CodeX JSON requires exact decimal roundtrip and safe integers; use EXACT_BYTES for other numeric domains.',
++      'The CodeX catalog may remain open; current captures and independent review are still required.'
++    )
+   let io,
+     output,
+     active = stages[0]
+@@ -97,7 +112,10 @@
+     const file = await io.read(name, cap)
+     snapshots.set(file.path, file)
+     if (json) {
+-      const data = parseStrictJson(file.bytes, { maxBytes: cap })
++      const data = parseStrictJson(file.bytes, {
++        maxBytes: cap,
++        ...(codex ? { numericDomain: 'CODEX_EXACT_DECIMAL' } : {})
++      })
+       documents.set(file.path, data)
+       return { file, data }
+     }
+@@ -258,12 +276,14 @@
+     pass()
+     enter('SCHEMAS')
+     validateManifest(manifest)
+-    validateCatalog(catalog)
++    const bindingCatalog = codex
++      ? validateCodexCatalog(catalog)
++      : (validateCatalog(catalog), catalog)
+     validateRule(rule)
+     validateCaptureIndex(captures)
+     validateAuthorityIndex(authorities)
+     for (const receipt of receipts.values()) validateReceipt(receipt)
+-    validateRequirementBindings(manifest, rule, catalog)
++    validateRequirementBindings(manifest, rule, bindingCatalog)
+     for (const item of rule.normalizationPolicy)
+       if (item && typeof item === 'object' && Object.hasOwn(item, 'namespace'))
+         id(item.namespace)

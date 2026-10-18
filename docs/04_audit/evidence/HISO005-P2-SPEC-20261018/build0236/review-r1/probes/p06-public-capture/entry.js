@@ -1,0 +1,1 @@
+const obj={x:1}; export {obj}; export function read(){ return Object.getOwnPropertyDescriptor(obj,"x").value; }

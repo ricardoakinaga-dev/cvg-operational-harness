@@ -1,0 +1,9 @@
+import json,pathlib,hashlib,datetime
+out=pathlib.Path.cwd(); p=out.parent/'review-packet'; pre=json.loads((out/'pre-inventory-raw.json').read_text()); index={x['path']:x for x in pre['resolved_path_inputs']}; index.update({x['path']:x for x in pre['packet_membership']})
+s=json.loads((p/'source-manifest.json').read_text()); m=json.loads((p/'packet-manifest.json').read_text()); c=json.loads((p/'constraints.json').read_text())
+pairs=[{**x,'pre_live':index[x['live']]['sha256'],'pre_copy':index[str(p/x['copy'])]['sha256'],'match':index[x['live']]['sha256']==index[str(p/x['copy'])]['sha256']==x['sha256']} for x in s]
+entries=[{**x,'pre':index[str(p/x['path'])]['sha256'],'match':index[str(p/x['path'])]['sha256']==x['sha256']} for x in m]
+frozen=c['sourceSpecs']+[x['frozenOrigin'] for x in c['normativeProjections'] if 'frozenOrigin' in x]
+f=[{**x,'pre':index[x['path']]['sha256'],'match':index[x['path']]['sha256']==x['sha256']} for x in frozen]
+r={'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'pairs':pairs,'packet_entries':entries,'frozen_constraint_origins':f,'all_match':all(x['match'] for x in pairs+entries+f),'packet_membership_exact':set(x['path'] for x in pre['packet_membership'])=={str(p/x['path']) for x in m}|{str(p/'packet-manifest.json')}}
+(out/'pre-verification.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps({k:v for k,v in r.items() if k not in ['pairs','packet_entries','frozen_constraint_origins']}));print('pairs',len(pairs),'packet entries',len(entries))

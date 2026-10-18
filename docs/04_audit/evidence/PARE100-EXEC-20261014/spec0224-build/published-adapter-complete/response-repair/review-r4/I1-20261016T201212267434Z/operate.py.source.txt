@@ -1,0 +1,49 @@
+import pathlib,os,json,hashlib,datetime,subprocess,difflib,sys
+R=pathlib.Path(__file__).parent
+M=R.parent.parent/'review-packet-r4'/'manifest.json';m=json.loads(M.read_bytes())
+def dump(p,x):p.write_text(json.dumps(x,indent=2,ensure_ascii=False)+'\n')
+def inventory(base):
+ out=[]
+ for folder,dirs,files in os.walk(base,followlinks=False):
+  for name in sorted(dirs+files):
+   p=pathlib.Path(folder)/name;s=p.lstat();e={'relative':str(p.relative_to(base)),'mode':s.st_mode}
+   if p.is_symlink():e.update(type='symlink',target=os.readlink(p))
+   elif p.is_dir():e.update(type='directory')
+   else:
+    h=hashlib.sha256()
+    with p.open('rb')as f:
+     for b in iter(lambda:f.read(1024*1024),b''):h.update(b)
+    e.update(type='file',bytes=s.st_size,sha256=h.hexdigest())
+   out.append(e)
+ return sorted(out,key=lambda e:e['relative'])
+if sys.argv[1]=='deps':
+ base=pathlib.Path(m['allowedDependencyMirror']).resolve();assert str(base)==m['externalReadOnlyDependencies'];dump(R/'before-resolved-dependencies.json',inventory(base));print('fingerprinted',len(json.loads((R/'before-resolved-dependencies.json').read_text())));sys.exit()
+if sys.argv[1]=='read':
+ log=[]
+ for rel in sys.argv[2:]:
+  e=next(e for e in m['inputs']if e['relative']==rel);p=pathlib.Path(e['copy']);b=p.read_bytes();h=hashlib.sha256(b).hexdigest();assert h==e['sha256'];log.append({'path':str(p),'category':e['category'],'sha256':h,'bytes':len(b),'purpose':'semantic source inspection (not line coverage)'})
+  print('\nFILE',rel)
+  for i,line in enumerate(b.decode().splitlines(),1):print(f'{i:5}: {line}')
+ stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%H%M%S%f');dump(R/'raw'/('inspection-'+stamp+'.json'),log);sys.exit()
+if sys.argv[1]=='run':
+ label=sys.argv[2];run=R/'raw'/label;run.mkdir(exist_ok=False)
+ for n in ['tmp','nodecache','cache','coverage','transforms','executed']:(run/n).mkdir()
+ template=pathlib.Path(m['environmentTemplates'][1]['copy']).read_text();config=template.replace('__I1_ASSIGNED_CACHE__',str(run/'cache'))
+ if len(sys.argv)>3:
+  obj=json.loads(config.removeprefix('export default '));obj['test']['include']=sys.argv[3:];obj['test']['exclude']=[];obj['server']={'fs':{'allow':[m['artifactRoot'],str(R)]}};config='export default '+json.dumps(obj,indent=2)+'\n'
+ if os.environ.get('I1_VARIANT'):
+  obj=json.loads(config.removeprefix('export default '));obj['resolve']['alias']['@cvg/harness']=str(R/'controls'/os.environ['I1_VARIANT']/'packages/harness/src/index.ts');config='export default '+json.dumps(obj,indent=2)+'\n'
+ # Capture actual input to and output of Vite transform hooks, no byte changes.
+ plugin="""\nimport fs from 'node:fs';import crypto from 'node:crypto';
+const capture=(phase)=>(code,id)=>{if(!id.startsWith(process.cwd()+'/')&&!id.startsWith(process.env.I1_REVIEW+'/'))return;const h=crypto.createHash('sha256').update(code).digest('hex');const dir=process.env.I1_TRANSFORMS;fs.writeFileSync(dir+'/'+h+'.txt',code);fs.appendFileSync(dir+'/index.jsonl',JSON.stringify({phase,id,bytes:Buffer.byteLength(code),sha256:h})+'\\n');return null};
+"""
+ config=plugin+config.replace('export default {',"export default {\nplugins:[{name:'i1-preserve-pre',enforce:'pre',transform:capture('pre')},{name:'i1-preserve-post',enforce:'post',transform:capture('post')}],",1)
+ path=run/'vitest.config.mjs';path.write_text(config);(run/'template-diff.patch').write_text(''.join(difflib.unified_diff(template.splitlines(True),config.splitlines(True),fromfile='supplied-template',tofile=str(path))))
+ guard=pathlib.Path(m['environmentTemplates'][0]['copy']);ownGuard=R/'configs'/'trace-reads-original.cjs'
+ if not ownGuard.exists():ownGuard.write_bytes(guard.read_bytes())
+ env={k:v for k,v in os.environ.items()if k in ['PATH','LANG','LC_ALL','TZ']};env.update({'TMPDIR':str(run/'tmp'),'TMP':str(run/'tmp'),'TEMP':str(run/'tmp'),'NODE_COMPILE_CACHE':str(run/'nodecache'),'NODE_V8_COVERAGE':str(run/'coverage'),'SPEC0224_RESPONSE_EVIDENCE':str(run/'cases.json'),'I1_READ_LOG':str(run/'nodefs.jsonl'),'I1_REVIEW':str(R),'I1_SCOPE_PACKAGE':m['allowedScopeMetadata']['path'],'I1_PACKET_DEPS':m['allowedDependencyMirror'],'I1_TRANSFORMS':str(run/'transforms'),'I1_EXECUTED':str(run/'executed'),'NODE_OPTIONS':'--require='+str(ownGuard)+' --require='+str(R/'configs/capture-executed.cjs'),'CI':'1','NO_COLOR':'1'})
+ argv=[m['node'],str(pathlib.Path(m['allowedDependencyMirror'])/'vitest/vitest.mjs'),'run','--config',str(path),'--configLoader','native']
+ dump(run/'command.json',{'argv':argv,'cwd':m['artifactRoot'],'env':env,'start':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+ with (run/'stdout.log').open('wb')as out,(run/'stderr.log').open('wb')as err:
+  result=subprocess.run(argv,cwd=m['artifactRoot'],env=env,stdout=out,stderr=err)
+ dump(run/'exit.json',{'exit':result.returncode,'end':datetime.datetime.now(datetime.timezone.utc).isoformat()});print('RUN',label,'EXIT',result.returncode);print((run/'stdout.log').read_text());print((run/'stderr.log').read_text());sys.exit()

@@ -1,0 +1,705 @@
+/** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
+import { spawn } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { Pool } from 'pg'
+import { describe, expect, it } from 'vitest'
+import {
+  canonicalizeCompleteJson,
+  type DecisionInputCounter,
+  type ModelGateway,
+  type ModelRequest,
+  type RuntimeInput
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import {
+  createCapabilityRegistry,
+  createOperationalHarness
+} from '../../../harness/src/index.ts'
+import {
+  phase3AgentProfile,
+  phase3RuntimeInput,
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine
+} from '../../../harness/src/__tests__/fixtures/phase3-fixtures.ts'
+import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+import { PostgresOperationalEffectJournal } from '../operational-execution-postgres.ts'
+import { withTenantContext } from '../tenant-scoped-postgres.ts'
+import { TenantIdSchema } from '@cvg/platform'
+
+const resourcePath = process.env.SPEC0224_PUBLIC_PG_RESOURCE
+if (process.env.SPEC0224_PUBLIC_PG_REQUIRED === '1' && !resourcePath)
+  throw new Error('Assigned synthetic PG resource required')
+const role = process.env.SPEC0224_PUBLIC_CHILD_ROLE
+const target =
+  'packages/persistence/src/__tests__/complete-tool-public-restart.test.ts'
+const tenantId = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000224'
+)
+const toolId = 'synthetic.public.restart.echo'
+const sha = (s: string) => createHash('sha256').update(s).digest('hex')
+// Toy64 is deliberately shared by the synthetic provider and counter; no real tokenizer claim.
+const tokens = (v: unknown) =>
+  Math.ceil(
+    Buffer.byteLength(
+      canonicalizeCompleteJson(v, {
+        maxBytes: 1_000_000,
+        maxDepth: 64,
+        maxNodes: 1_000_000
+      })
+    ) / 64
+  )
+const fixture = (name: string) =>
+  name === 'ascii4096'
+    ? 'x'.repeat(4096)
+    : name === 'unicode4096bytes'
+      ? '🙂'.repeat(1024)
+      : name === 'json-string-number'
+        ? '42'
+        : name === 'json-string-null'
+          ? 'null'
+          : name === 'json-string-object'
+            ? '{}'
+            : '\u0000'.repeat(4096) + 'Olá🙂漢字"\\\n'
+const save = (path: string, v: unknown) =>
+  writeFile(path, JSON.stringify(v, null, 2) + '\n')
+const errorInfo = (e: unknown) =>
+  e instanceof Error
+    ? {
+        name: e.name,
+        message: e.message,
+        stack: e.stack,
+        code: (e as Error & { code?: string }).code
+      }
+    : { message: String(e) }
+async function exists(p: string) {
+  try {
+    await readFile(p)
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    return false
+  }
+}
+async function gate(p: string) {
+  const until = Date.now() + 25000
+  while (!(await exists(p))) {
+    if (Date.now() > until) throw new Error(`Gate timeout ${p}`)
+    await new Promise((y) => setTimeout(y, 10))
+  }
+}
+async function connect() {
+  const r = JSON.parse(await readFile(resourcePath!, 'utf8'))
+  const u = new URL(r.test_database_url)
+  if (
+    r.synthetic !== true ||
+    r.schemaName !== 'pare224_runtime' ||
+    r.containerId !==
+      '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c' ||
+    u.hostname !== '127.0.0.1'
+  )
+    throw new Error('Not assigned resource')
+  const pool = new Pool({
+    connectionString: u.toString(),
+    options: `-c search_path=${r.schemaName},public`,
+    max: 3
+  })
+  return {
+    pool,
+    store: new PostgresExecutionStepStore(pool),
+    journal: new PostgresOperationalEffectJournal(pool)
+  }
+}
+async function snapshot(dir: string, label: string, executionId: string) {
+  const { pool, store } = await connect()
+  try {
+    const rows = await withTenantContext(pool, tenantId, async (c) => ({
+      execution: (
+        await c.query(
+          'SELECT * FROM operational_executions WHERE tenant_id=$1 AND id=$2',
+          [tenantId, executionId]
+        )
+      ).rows,
+      checkpoints: (
+        await c.query(
+          'SELECT * FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2',
+          [tenantId, executionId]
+        )
+      ).rows,
+      steps: (
+        await c.query(
+          'SELECT * FROM operational_execution_steps WHERE tenant_id=$1 AND execution_id=$2 ORDER BY step_number',
+          [tenantId, executionId]
+        )
+      ).rows,
+      journal: (
+        await c.query(
+          'SELECT * FROM operational_effect_journal WHERE tenant_id=$1 AND operation_key LIKE $2',
+          [tenantId, executionId + ':%']
+        )
+      ).rows
+    }))
+    const value = {
+      rows,
+      checkpoint: await store.loadCheckpoint(tenantId, executionId),
+      steps: await store.listSteps(tenantId, executionId)
+    }
+    await save(join(dir, `${label}.json`), value)
+    return value
+  } finally {
+    await pool.end()
+  }
+}
+async function seed(executionId: string) {
+  const { pool } = await connect()
+  try {
+    await withTenantContext(pool, tenantId, (c) =>
+      c.query(
+        "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+        [tenantId, executionId, sha(executionId)]
+      )
+    )
+  } finally {
+    await pool.end()
+  }
+}
+
+async function runChild(
+  dir: string,
+  input: { executionId: string; name: string },
+  childRole: string
+) {
+  const { pool, store, journal } = await connect()
+  const audit = new RecordingAuditSink(),
+    telemetry = new RecordingTelemetrySink()
+  const requests: unknown[] = [],
+    results: unknown[] = [],
+    casTrace: unknown[] = [],
+    journalTrace: unknown[] = []
+  const trace = async () =>
+    save(join(dir, `${childRole}.trace.json`), {
+      pid: process.pid,
+      requests,
+      results,
+      casTrace,
+      journalTrace,
+      audit: audit.events
+    })
+  // Observational wrappers call the native methods unchanged and rethrow native failures.
+  for (const method of [
+    'reserve',
+    'markStarted',
+    'confirm',
+    'fail',
+    'markUncertain',
+    'get'
+  ] as const) {
+    const original = journal[method].bind(journal)
+    Object.defineProperty(journal, method, {
+      value: async (...args: unknown[]) => {
+        try {
+          const result = await (
+            original as (...a: unknown[]) => Promise<unknown>
+          )(...args)
+          journalTrace.push({ method, args, result })
+          await trace()
+          return result
+        } catch (e) {
+          journalTrace.push({ method, args, error: errorInfo(e) })
+          await trace()
+          throw e
+        }
+      }
+    })
+  }
+  const cas = store.compareAndSwapCheckpoint.bind(store)
+  store.compareAndSwapCheckpoint = async (value) => {
+    if (childRole.startsWith('race') && value.expected === null) {
+      await save(join(dir, `${childRole}.initial-ready.json`), {
+        pid: process.pid,
+        expected: null
+      })
+      process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
+      await gate(join(dir, 'race-start.gate'))
+    }
+    const result = await cas(value)
+    casTrace.push({ input: value, result })
+    await trace()
+    if (childRole.startsWith('race') && value.expected === null)
+      await save(join(dir, `${childRole}.initial-cas.json`), {
+        pid: process.pid,
+        result
+      })
+    const full = value.next.state.observations.find(
+      (o) =>
+        o.type === 'TOOL_RESULT' &&
+        (o.payload as { completion?: string }).completion === 'COMPLETE'
+    )
+    if (childRole === 'writer' && result.status === 'APPLIED' && full) {
+      await save(join(dir, 'committed.json'), {
+        pid: process.pid,
+        checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
+        cas: value,
+        result
+      })
+      process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
+      await new Promise(() => {
+        setInterval(() => {}, 1000)
+      })
+    }
+    return result
+  }
+  const capabilities = createCapabilityRegistry([
+    {
+      descriptor: {
+        id: toolId,
+        version: '1',
+        description: 'Pure synthetic echo',
+        inputSchema: { type: 'object' },
+        outputSchema: {},
+        risk: 'LOW',
+        sideEffect: 'NONE',
+        idempotent: true,
+        requiresApproval: false,
+        origin: 'core',
+        providerId: 'synthetic.public.restart',
+        providerVersion: '1'
+      },
+      implementation: {
+        validateInput: () => true,
+        validateOutput: () => true,
+        execute: async (toolInput) => {
+          const output = (toolInput as { text: string }).text
+          await appendFile(
+            join(dir, 'body-markers.jsonl'),
+            JSON.stringify({
+              pid: process.pid,
+              role: childRole,
+              input: toolInput,
+              output
+            }) + '\n'
+          )
+          process.stdout.write('PUBLIC224_BODY\n')
+          return { status: 'SUCCEEDED', output }
+        }
+      }
+    }
+  ])
+  const model: ModelGateway = {
+    complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+      void _signal
+      requests.push(structuredClone(request))
+      await trace()
+      await appendFile(
+        join(dir, 'model-markers.jsonl'),
+        JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
+      )
+      expect(request.maxOutputTokens).toBe(512)
+      if (childRole.startsWith('race')) await gate(join(dir, 'race-model.gate'))
+      const frame = JSON.parse(request.messages[1]!.content)
+      const observed = frame.items.find(
+        (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
+      )
+      // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
+      const decision = childRole.startsWith('race')
+        ? {
+            decisionType: 'RESPOND',
+            reasonCode: 'GOAL_SATISFIED',
+            responseText: 'one synthetic race decision'
+          }
+        : observed
+          ? {
+              decisionType: 'RESPOND',
+              reasonCode: 'GOAL_SATISFIED',
+              responseText: observed.value.payload.output
+            }
+          : {
+              decisionType: 'CALL_TOOL',
+              reasonCode: 'TOOL_REQUIRED',
+              toolId,
+              toolVersion: '1',
+              toolInput: { text: fixture(input.name) }
+            }
+      const text = JSON.stringify(decision)
+      expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
+      const result = {
+        text,
+        provider: 'synthetic.public.restart',
+        model: 'toy64-v1',
+        inputTokens: tokens(request),
+        outputTokens: tokens(text),
+        costUsd: 0
+      }
+      results.push(result)
+      await trace()
+      return result
+    }
+  }
+  const counter: DecisionInputCounter = {
+    measure: async (request) => ({
+      counterId: 'toy64',
+      counterVersion: '1',
+      provider: 'synthetic.public.restart',
+      model: 'toy64-v1',
+      formattingVersion: '1',
+      inputUpperBoundTokens: tokens(request),
+      contextWindowTokens: 100_000,
+      costUpperBoundUsd: 0
+    })
+  }
+  const harness = createOperationalHarness({
+    toolResultContext: { version: 1 },
+    capabilities,
+    effectJournal: journal,
+    stepStore: store,
+    iterativeOrchestrator: new HybridOrchestrator({
+      decisionModel: model,
+      decisionInputCounter: counter,
+      decisionModelSupportsMaxOutputTokens: true
+    }),
+    modelGateway: model,
+    policy: new ScriptedPolicyEngine(),
+    approvals: new InMemoryApprovalEngine(),
+    audit,
+    telemetry
+  })
+  const base = phase3RuntimeInput({
+    tenantId: tenantId as RuntimeInput['tenantId'],
+    executionId: input.executionId
+  })
+  const runtimeInput = {
+    ...base,
+    capabilityFingerprint: capabilities.compositionFingerprint(),
+    agent: phase3AgentProfile({ tools: [toolId] }),
+    userMessage: 'Echo the full synthetic tool output.',
+    budget: { ...base.budget, maxTokens: 10_000 }
+  }
+  await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
+  try {
+    const result = await harness.run(runtimeInput)
+    await trace()
+    await save(join(dir, `${childRole}.outcome.json`), {
+      pid: process.pid,
+      result
+    })
+    process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
+  } catch (e) {
+    await trace()
+    await save(join(dir, `${childRole}.error.json`), errorInfo(e))
+    throw e
+  } finally {
+    await pool.end()
+  }
+}
+async function child(childRole: string, dir: string, inputPath: string) {
+  const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
+  if (!config) throw new Error('Private child config required')
+  const argv = [
+    resolve('node_modules/vitest/vitest.mjs'),
+    'run',
+    '--config',
+    config,
+    target
+  ]
+  const envOverrides = {
+    SPEC0224_PUBLIC_CHILD_ROLE: childRole,
+    SPEC0224_PUBLIC_CHILD_DIR: dir,
+    SPEC0224_PUBLIC_CHILD_INPUT: inputPath
+  }
+  const proc = spawn(process.execPath, argv, {
+    cwd: process.cwd(),
+    env: { ...process.env, ...envOverrides },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  let stdout = '',
+    stderr = ''
+  let readyResolve: (s: string) => void
+  const ready = new Promise<string>((y) => {
+    readyResolve = y
+  })
+  const timer = setTimeout(() => {
+    readyResolve('timeout')
+    proc.kill('SIGKILL')
+  }, 45000)
+  proc.stdout.on('data', (b: Buffer) => {
+    stdout += b.toString()
+    if (stdout.includes('PUBLIC224_READY')) readyResolve('ready')
+    else if (stdout.includes('PUBLIC224_FINISHED')) readyResolve('finished')
+  })
+  proc.stderr.on('data', (b: Buffer) => {
+    stderr += b.toString()
+  })
+  const done = new Promise<{
+    code: number | null
+    signal: NodeJS.Signals | null
+  }>((yes, no) => {
+    proc.on('error', no)
+    proc.on('close', async (code, signal) => {
+      clearTimeout(timer)
+      readyResolve('exited')
+      try {
+        const emptyStreamsOmitted = []
+        for (const [name, data] of [
+          ['stdout', stdout],
+          ['stderr', stderr]
+        ]) {
+          if (data)
+            await writeFile(join(dir, `${childRole}.${name}.log`), data!)
+          else emptyStreamsOmitted.push(name)
+        }
+        await save(join(dir, `${childRole}.command.json`), {
+          executable: process.execPath,
+          argv,
+          envOverrides,
+          pid: proc.pid,
+          code,
+          signal,
+          emptyStreamsOmitted
+        })
+        yes({ code, signal })
+      } catch (e) {
+        no(e)
+      }
+    })
+  })
+  return { proc, ready, done }
+}
+async function lines(p: string) {
+  return (await exists(p))
+    ? (await readFile(p, 'utf8'))
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((s) => JSON.parse(s))
+    : []
+}
+if (role) {
+  it(`public runtime child ${role}`, async () => {
+    const dir = process.env.SPEC0224_PUBLIC_CHILD_DIR!
+    const input = JSON.parse(
+      await readFile(process.env.SPEC0224_PUBLIC_CHILD_INPUT!, 'utf8')
+    )
+    await runChild(dir, input, role)
+  }, 60000)
+} else {
+  describe.skipIf(!resourcePath)(
+    'SPEC0224 public PG process recreation',
+    () => {
+      it.each([
+        'ascii4096',
+        'unicode4096bytes',
+        'nul4096-escapes',
+        'json-string-number',
+        'json-string-null',
+        'json-string-object'
+      ])(
+        'resumes full %s after APPLIED CAS and SIGKILL without another body',
+        async (name) => {
+          const dir = join(
+            dirname(resourcePath!),
+            `restart-${name}-${randomUUID()}`
+          )
+          await mkdir(dir)
+          const executionId = `spec0224_public_${randomUUID()}`,
+            inputPath = join(dir, 'input.json')
+          await save(inputPath, { executionId, name })
+          await seed(executionId)
+          let writer: Awaited<ReturnType<typeof child>> | undefined
+          try {
+            writer = await child('writer', dir, inputPath)
+            const checkpointReady = await writer.ready
+            if (checkpointReady !== 'ready') {
+              await writer.done
+              await snapshot(dir, 'native-premature-finish', executionId)
+              const native = await readFile(
+                join(dir, 'writer.outcome.json'),
+                'utf8'
+              ).catch(() => 'No outcome; see child logs')
+              await save(
+                join(dirname(resourcePath!), 'lead-native-failure.json'),
+                {
+                  status: 'RED',
+                  name,
+                  dir,
+                  checkpointReady,
+                  native,
+                  sourcePatches: false
+                }
+              )
+              throw new Error(
+                `Native runtime did not reach successful full TOOL_RESULT CAS: ${native}; evidence ${dir}`
+              )
+            }
+            expect(writer.proc.kill('SIGKILL')).toBe(true)
+            expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+            const before = await snapshot(dir, 'before-reader', executionId)
+            const committed = JSON.parse(
+              await readFile(join(dir, 'committed.json'), 'utf8')
+            )
+            expect(before.checkpoint).toEqual(committed.checkpoint)
+            const reader = await child('reader', dir, inputPath)
+            expect(await reader.done).toEqual({ code: 0, signal: null })
+            const after = await snapshot(dir, 'after-reader', executionId)
+            const outcome = JSON.parse(
+              await readFile(join(dir, 'reader.outcome.json'), 'utf8')
+            )
+            const wt = JSON.parse(
+                await readFile(join(dir, 'writer.trace.json'), 'utf8')
+              ),
+              rt = JSON.parse(
+                await readFile(join(dir, 'reader.trace.json'), 'utf8')
+              )
+            await save(join(dir, 'comparison-observed.json'), {
+              writerPid: committed.pid,
+              readerPid: outcome.pid,
+              outcome,
+              beforeBudget: before.checkpoint?.budgetUsage,
+              afterBudget: after.checkpoint?.budgetUsage,
+              bodyMarkers: await lines(join(dir, 'body-markers.jsonl')),
+              writerUsage: wt.results,
+              readerUsage: rt.results
+            })
+            expect(outcome.pid).not.toBe(committed.pid)
+            expect(outcome.result.stopReason).toBe('COMPLETED')
+            expect(outcome.result.response).toBe(fixture(name))
+            expect(await lines(join(dir, 'body-markers.jsonl'))).toHaveLength(1)
+            expect(wt.requests).toHaveLength(1)
+            expect(rt.requests).toHaveLength(1)
+            const payload = after.checkpoint!.state.observations.find(
+              (o) => o.type === 'TOOL_RESULT'
+            )!.payload as {
+              output: string
+              outputBytes: number
+              outputSha256: string
+            }
+            expect(payload.output).toBe(fixture(name))
+            expect(payload.outputBytes).toBe(
+              Buffer.byteLength(canonicalizeCompleteJson(fixture(name)))
+            )
+            expect(payload.outputSha256).toBe(
+              sha(canonicalizeCompleteJson(fixture(name)))
+            )
+            expect(after.rows.journal).toHaveLength(1)
+            expect(after.rows.journal[0]!.state).toBe('CONFIRMED')
+            expect(after.rows.journal[0]!.result).toBe(fixture(name))
+            expect(after.rows.journal).toEqual(before.rows.journal)
+            const receipts =
+              after.checkpoint!.state.toolResultContext!.decisionAdmissions
+            expect(receipts.map((r) => r.status)).toEqual([
+              'SETTLED',
+              'SETTLED'
+            ])
+            expect(new Set(receipts.map((r) => r.admissionId)).size).toBe(2)
+            const usage = [...wt.results, ...rt.results]
+            expect(after.checkpoint!.budgetUsage).toMatchObject({
+              modelCalls: 2,
+              inputTokens: usage.reduce((s, r) => s + r.inputTokens, 0),
+              outputTokens: usage.reduce((s, r) => s + r.outputTokens, 0),
+              costUsd: 0
+            })
+            expect(before.checkpoint!.budgetUsage.modelCalls).toBe(1)
+            expect(receipts.map((r) => r.actual)).toEqual(
+              usage.map((r) => ({
+                modelCalls: 1,
+                inputTokens: r.inputTokens,
+                outputTokens: r.outputTokens,
+                costUsd: r.costUsd
+              }))
+            )
+            await save(join(dir, 'assertions-pass.json'), {
+              status: 'PASS',
+              fullOutputExact: true,
+              writerSigkill: true,
+              recreatedRuntime: true,
+              noNewBody: true,
+              actualUsageAndReceipts: true,
+              fencebound: 'NOT_RUN'
+            })
+          } finally {
+            if (
+              writer &&
+              writer.proc.exitCode === null &&
+              writer.proc.signalCode === null
+            ) {
+              writer.proc.kill('SIGKILL')
+              await writer.done
+            }
+          }
+        },
+        90000
+      )
+      it('admits only one actual model call from an initial CAS race between two public runtime processes', async () => {
+        const dir = join(dirname(resourcePath!), `race-${randomUUID()}`)
+        await mkdir(dir)
+        const executionId = `spec0224_public_race_${randomUUID()}`,
+          inputPath = join(dir, 'input.json')
+        await save(inputPath, { executionId, name: 'race' })
+        await seed(executionId)
+        const children: Awaited<ReturnType<typeof child>>[] = []
+        try {
+          children.push(
+            await child('race-a', dir, inputPath),
+            await child('race-b', dir, inputPath)
+          )
+          expect(await Promise.all(children.map((c) => c.ready))).toEqual([
+            'ready',
+            'ready'
+          ])
+          await writeFile(join(dir, 'race-start.gate'), 'go')
+          await Promise.all(
+            ['race-a', 'race-b'].map((r) =>
+              gate(join(dir, `${r}.initial-cas.json`))
+            )
+          )
+          await writeFile(join(dir, 'race-model.gate'), 'go')
+          expect(await Promise.all(children.map((c) => c.done))).toEqual([
+            { code: 0, signal: null },
+            { code: 0, signal: null }
+          ])
+          const state = await snapshot(dir, 'after-race', executionId)
+          const outcomes = await Promise.all(
+            ['race-a', 'race-b'].map(async (r) =>
+              JSON.parse(await readFile(join(dir, `${r}.outcome.json`), 'utf8'))
+            )
+          )
+          await save(join(dir, 'comparison-observed.json'), {
+            outcomes,
+            models: await lines(join(dir, 'model-markers.jsonl')),
+            state
+          })
+          expect(await lines(join(dir, 'model-markers.jsonl'))).toHaveLength(1)
+          expect(outcomes.map((v) => v.result.stopReason).sort()).toEqual([
+            'COMPLETED',
+            'STATE_CONFLICT'
+          ])
+          expect(state.checkpoint!.budgetUsage.modelCalls).toBe(1)
+          expect(
+            state.checkpoint!.state.toolResultContext!.decisionAdmissions.map(
+              (r) => r.status
+            )
+          ).toEqual(['SETTLED'])
+          expect(await lines(join(dir, 'body-markers.jsonl'))).toHaveLength(0)
+          await save(join(dir, 'assertions-pass.json'), {
+            status: 'PASS',
+            initialCasTwoProcesses: true,
+            actualModelCalls: 1,
+            receipts: 1,
+            fencebound: 'NOT_RUN',
+            reservationRaceSeparate: 'NOT_RUN'
+          })
+        } finally {
+          await Promise.all(
+            children.map(async (c) => {
+              if (c.proc.exitCode === null && c.proc.signalCode === null)
+                c.proc.kill('SIGKILL')
+              await c.done
+            })
+          )
+        }
+      }, 90000)
+    }
+  )
+}

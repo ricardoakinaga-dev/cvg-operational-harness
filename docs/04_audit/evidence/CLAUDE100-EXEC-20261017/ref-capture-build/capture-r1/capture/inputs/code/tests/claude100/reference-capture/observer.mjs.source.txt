@@ -1,0 +1,689 @@
+import { createServer } from 'node:http'
+import {
+  API_KEY,
+  LIMITS,
+  canonical,
+  caseTag,
+  fault,
+  ordinalOf,
+  sha256
+} from './constants.mjs'
+import {
+  KINDS,
+  controlWriter,
+  hostCommands,
+  isDirectMain,
+  observerBlock,
+  preflight,
+  wrapperArguments,
+  writeBytes
+} from './protocol.mjs'
+import {
+  REJECT_SCRIPT,
+  TURNS,
+  classifyContentType,
+  classifyEncoding,
+  inspectRequestBody,
+  turnScript
+} from './script.mjs'
+import { observeWorkspace } from './workspace.mjs'
+
+const AUTHISH = /(auth|cookie|token|api[-_]?key|credential|secret|password)/i
+
+/** Classify headers by enum only; no header value or URL is ever retained. */
+export function classifyHeaders(method, url, rawHeaders) {
+  let bytes = Buffer.byteLength(`${method} ${url} HTTP/1.1\r\n`) + 2
+  let sentinel = 0,
+    forbidden = false
+  const single = new Map()
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    const name = String(rawHeaders[i]).toLowerCase(),
+      value = String(rawHeaders[i + 1])
+    bytes += Buffer.byteLength(rawHeaders[i]) + Buffer.byteLength(value) + 4
+    if (name === 'x-api-key') {
+      if (value === API_KEY) sentinel++
+      else forbidden = true
+    } else if (AUTHISH.test(name)) forbidden = true
+    if (!single.has(name)) single.set(name, value)
+  }
+  if (sentinel > 1 || rawHeaders.length % 2 !== 0) forbidden = true
+  return {
+    bytes,
+    authClass: forbidden ? 'FORBIDDEN' : sentinel ? 'SENTINEL' : 'ABSENT',
+    contentType: classifyContentType(single.get('content-type')),
+    contentEncoding: classifyEncoding(single.get('content-encoding'))
+  }
+}
+
+/**
+ * Observer core. `send(type,payload)` emits control frames, `raw(bytes)` writes
+ * binary blocks; both are serialized here. Exposed for in-process tests.
+ */
+export function createObserver({ send, raw, observeState }) {
+  const failures = []
+  const cases = new Map()
+  const inflight = new Map()
+  const sockets = new Set()
+  let armed = null,
+    open = null,
+    nextProcess = 1,
+    stopping = false,
+    count = 0,
+    totalBody = 0,
+    totalResponse = 0,
+    eligible = 0,
+    port = null,
+    eventChain = Promise.resolve(),
+    rawChain = Promise.resolve(),
+    broken = false
+  function event(type, payload) {
+    const step = eventChain.then(() =>
+      broken ? undefined : send(type, payload)
+    )
+    eventChain = step.catch((cause) => {
+      if (!broken) failures.push(fault('IO', cause))
+      broken = true
+    })
+    return step
+  }
+  function block(key, bytes) {
+    const step = rawChain.then(() =>
+      broken ? undefined : raw(observerBlock(key, bytes))
+    )
+    rawChain = step.catch((cause) => {
+      if (!broken) failures.push(cause?.code ? cause : fault('IO', cause))
+      broken = true
+    })
+    return step
+  }
+  function fail(code, context = {}) {
+    const error = fault(code)
+    failures.push(error)
+    event('ERROR', {
+      code,
+      caseId: context.caseId ?? null,
+      processOrdinal: null,
+      requestOrdinal: context.ordinal ?? null
+    }).catch(() => {})
+    return error
+  }
+
+  async function respond(res, script, context) {
+    const tag = caseTag(context.caseId)
+    if (totalResponse + script.body.length > LIMITS.totalResponseBytes) {
+      fail('CAP', context)
+      res.destroy()
+      return
+    }
+    totalResponse += script.body.length
+    await block(
+      {
+        caseTag: tag,
+        requestTag: context.ordinal,
+        kind: KINDS.RESPONSE_HEADERS,
+        segmentTag: 65535
+      },
+      script.headersBytes
+    )
+    let failed = false,
+      emitted = 0
+    const finished = []
+    const ended = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('FAILED'), LIMITS.closeMs)
+      const settle = (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      }
+      res.once('finish', () => settle('FINISHED'))
+      res.once('close', () =>
+        settle(res.writableFinished ? 'FINISHED' : 'FAILED')
+      )
+      res.once('error', () => settle('FAILED'))
+      // A connection already gone before this response is never awaited.
+      if (res.destroyed || res.socket?.destroyed) settle('FAILED')
+    })
+    if (res.destroyed || res.socket?.destroyed) failed = true
+    try {
+      res.sendDate = false
+      res.writeHead(script.status, { ...script.headers })
+    } catch {
+      failed = true
+    }
+    for (let i = 0; i < script.segments.length && !failed; i++) {
+      const segment = script.segments[i]
+      await block(
+        {
+          caseTag: tag,
+          requestTag: context.ordinal,
+          kind: KINDS.RESPONSE_SEGMENT,
+          segmentTag: i
+        },
+        segment
+      )
+      // The next logical write starts only after this write's callback.
+      const outcome = await new Promise((resolve) => {
+        try {
+          res.write(segment, (cause) => resolve(cause ? 'FAILED' : 'FINISHED'))
+        } catch {
+          resolve('FAILED')
+        }
+      })
+      emitted++
+      await event('RESPONSE_SEGMENT', {
+        caseId: context.caseId,
+        ordinal: context.ordinal,
+        segmentIndex: i,
+        bytes: segment.length,
+        sha256: sha256(segment),
+        outcome
+      })
+      if (outcome !== 'FINISHED') failed = true
+      else finished.push(segment)
+    }
+    if (failed) res.destroy()
+    else res.end()
+    const end = await ended
+    const body = Buffer.concat(finished)
+    await block(
+      {
+        caseTag: tag,
+        requestTag: context.ordinal,
+        kind: KINDS.RESPONSE_BODY,
+        segmentTag: 65535
+      },
+      body
+    )
+    const complete =
+      !failed &&
+      end === 'FINISHED' &&
+      finished.length === script.segments.length
+    await event('RESPONSE', {
+      caseId: context.caseId,
+      ordinal: context.ordinal,
+      status: script.status,
+      headersSha256: sha256(script.headersBytes),
+      bodySha256: sha256(body),
+      bytes: body.length,
+      segmentCount: emitted,
+      outcome: complete ? 'FINISHED' : 'FAILED',
+      coverage: complete ? 'COMPLETE' : 'PARTIAL_UNKNOWN'
+    })
+  }
+
+  async function reject(req, res, context, reason) {
+    await event('REJECTED', {
+      caseId: context.caseId,
+      ordinal: context.ordinal,
+      reason
+    })
+    // Rejected bodies are counted but never retained or emitted.
+    let rejected = 0
+    req.on('data', (chunk) => {
+      rejected += chunk.length
+      totalBody += chunk.length
+      if (rejected > LIMITS.bodyBytes || totalBody > LIMITS.totalBodyBytes) {
+        fail('CAP', context)
+        req.destroy()
+      }
+    })
+    req.resume()
+    await respond(res, REJECT_SCRIPT, context)
+  }
+
+  async function handle(req, res, unsupported) {
+    const ordinal = count++
+    if (ordinal >= LIMITS.requests || stopping) {
+      // No admissible ordinal exists; never invent one or a REJECTED frame.
+      fail(stopping ? 'PROTOCOL' : 'CAP')
+      req.socket.destroy()
+      return
+    }
+    const caseId = armed?.caseId ?? null
+    const context = { caseId, ordinal }
+    const url = String(req.url)
+    const methodClass = req.method === 'POST' ? 'POST' : 'OTHER'
+    const pathClass =
+      url.split('?')[0] === '/v1/messages' ? 'MESSAGES' : 'OTHER'
+    const headers = classifyHeaders(req.method, url, req.rawHeaders)
+    if (caseId) cases.get(caseId).begins.push(ordinal)
+    await event('REQUEST_BEGIN', {
+      caseId,
+      ordinal,
+      methodClass,
+      pathClass,
+      authClass: headers.authClass
+    })
+    let reason = null
+    if (headers.bytes > LIMITS.headerBytes) reason = 'CAP'
+    else if (headers.authClass === 'FORBIDDEN') reason = 'FORBIDDEN_AUTH'
+    else if (unsupported || methodClass !== 'POST' || url !== '/v1/messages')
+      reason = 'UNSUPPORTED_ROUTE'
+    else if (!caseId) reason = 'EARLY_PHASE'
+    else if (headers.authClass !== 'SENTINEL') reason = 'MISSING_SENTINEL'
+    if (reason) {
+      await reject(req, res, context, reason)
+      return
+    }
+    const chunks = []
+    let bytes = 0,
+      capped = false
+    try {
+      for await (const chunk of req) {
+        bytes += chunk.length
+        totalBody += chunk.length
+        if (bytes > LIMITS.bodyBytes || totalBody > LIMITS.totalBodyBytes) {
+          capped = true
+          break
+        }
+        chunks.push(Buffer.from(chunk))
+      }
+    } catch {
+      fail('IO', context)
+      res.destroy()
+      return
+    }
+    if (capped || req.rawTrailers.length) {
+      // Alternative to REQUEST for this BEGIN; the body is never persisted.
+      await event('REJECTED', {
+        caseId,
+        ordinal,
+        reason: capped ? 'CAP' : 'FORBIDDEN_AUTH'
+      })
+      req.destroy()
+      res.destroy()
+      return
+    }
+    const body = Buffer.concat(chunks, bytes)
+    const state = cases.get(caseId)
+    state.eligible++
+    eligible++
+    const turn = state.eligible === 1 ? 1 : 2
+    const verdict = inspectRequestBody(body, {
+      caseId,
+      turn,
+      contentType: headers.contentType,
+      contentEncoding: headers.contentEncoding
+    })
+    // Decision is synchronous: a divergent or extra POST never advances the script.
+    const scriptAccepted =
+      verdict.scriptAccepted &&
+      state.script === 'OPEN' &&
+      turn === state.turns + 1 &&
+      eligible <= LIMITS.eligiblePosts
+    let script
+    if (scriptAccepted) {
+      state.turns++
+      if (state.turns === TURNS[caseId]) state.script = 'DONE'
+      script = turnScript(caseId, turn)
+    } else {
+      state.script = 'TERMINATED'
+      script = REJECT_SCRIPT
+    }
+    await block(
+      {
+        caseTag: caseTag(caseId),
+        requestTag: ordinal,
+        kind: KINDS.REQUEST_BODY,
+        segmentTag: 65535
+      },
+      body
+    )
+    await event('REQUEST', {
+      caseId,
+      ordinal,
+      turn,
+      method: 'POST',
+      path: '/v1/messages',
+      bodySha256: sha256(body),
+      bytes,
+      markerVerified: verdict.markerVerified,
+      contentType: headers.contentType,
+      contentEncoding: headers.contentEncoding,
+      scriptAccepted
+    })
+    await respond(res, script, context)
+  }
+  function track(caseId, promise) {
+    const entry = { caseId, promise }
+    inflight.set(promise, entry)
+    promise.catch(() => fail('IO')).finally(() => inflight.delete(promise))
+  }
+
+  const server = createServer({
+    maxHeaderSize: LIMITS.headerBytes,
+    insecureHTTPParser: false,
+    requestTimeout: LIMITS.caseMs,
+    headersTimeout: LIMITS.caseMs,
+    keepAliveTimeout: 1,
+    connectionsCheckingInterval: 1000
+  })
+  server.maxHeadersCount = 0
+  server.maxRequestsPerSocket = 1
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+    socket.on('error', () => {})
+    socket.setTimeout(LIMITS.caseMs, () => socket.destroy())
+  })
+  const dispatch = (req, res, unsupported = false) =>
+    track(armed?.caseId ?? null, handle(req, res, unsupported))
+  server.on('request', (req, res) => dispatch(req, res))
+  // No implicit 100/417 and no default diagnostics carrying raw packets.
+  server.on('checkContinue', (req, res) => dispatch(req, res, true))
+  server.on('checkExpectation', (req, res) => dispatch(req, res, true))
+  const refuse = (req, socket) => {
+    const ordinal = count++
+    if (ordinal >= LIMITS.requests || stopping) {
+      fail(stopping ? 'PROTOCOL' : 'CAP')
+      socket.destroy()
+      return
+    }
+    const caseId = armed?.caseId ?? null
+    if (caseId) cases.get(caseId).begins.push(ordinal)
+    const headers = classifyHeaders(req.method, String(req.url), req.rawHeaders)
+    const done = (async () => {
+      await event('REQUEST_BEGIN', {
+        caseId,
+        ordinal,
+        methodClass: req.method === 'POST' ? 'POST' : 'OTHER',
+        pathClass: 'OTHER',
+        authClass: headers.authClass
+      })
+      await event('REJECTED', {
+        caseId,
+        ordinal,
+        reason:
+          headers.authClass === 'FORBIDDEN'
+            ? 'FORBIDDEN_AUTH'
+            : 'UNSUPPORTED_ROUTE'
+      })
+    })()
+    socket.destroy()
+    track(caseId, done)
+  }
+  server.on('connect', refuse)
+  server.on('upgrade', refuse)
+  server.on('clientError', (cause, socket) => {
+    // Only a parse failure of a new message is a request; resets are not.
+    if (
+      typeof cause?.code === 'string' &&
+      cause.code.startsWith('HPE_') &&
+      !socket._httpMessage
+    ) {
+      const ordinal = count++
+      if (ordinal >= LIMITS.requests || stopping) fail('CAP')
+      else {
+        const caseId = armed?.caseId ?? null
+        if (caseId) cases.get(caseId).begins.push(ordinal)
+        track(
+          caseId,
+          (async () => {
+            await event('REQUEST_BEGIN', {
+              caseId,
+              ordinal,
+              methodClass: 'OTHER',
+              pathClass: 'OTHER',
+              authClass: 'ABSENT'
+            })
+            await event('REJECTED', {
+              caseId,
+              ordinal,
+              reason:
+                cause.code === 'HPE_HEADER_OVERFLOW'
+                  ? 'CAP'
+                  : 'UNSUPPORTED_ROUTE'
+            })
+          })()
+        )
+      }
+    }
+    socket.destroy()
+  })
+  server.on('error', () => fail('IO'))
+
+  async function drain(caseId) {
+    const pending = [...inflight.values()]
+      .filter((entry) => caseId === undefined || entry.caseId === caseId)
+      .map((entry) => entry.promise.catch(() => {}))
+    let timer
+    const result = await Promise.race([
+      Promise.all(pending).then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), LIMITS.closeMs)
+      })
+    ])
+    clearTimeout(timer)
+    if (!result) fail('TIMEOUT', { caseId: caseId ?? null })
+  }
+
+  return {
+    server,
+    failures,
+    get port() {
+      return port
+    },
+    async listen() {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject)
+        server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+          server.off('error', reject)
+          resolve()
+        })
+      })
+      port = server.address().port
+      return port
+    },
+    async initialState(base) {
+      const state = await observeState()
+      await event('READY', {
+        ...base,
+        port,
+        workspaceStateSha256: state.sha256,
+        workspaceStateBytes: state.bytes.length
+      })
+      await block(
+        {
+          caseTag: 0,
+          requestTag: 255,
+          kind: KINDS.WORKSPACE_STATE,
+          segmentTag: 65535
+        },
+        state.bytes
+      )
+      await event('STATE', {
+        caseId: null,
+        phase: 'BEFORE_VERSION',
+        sha256: state.sha256,
+        bytes: state.bytes.length
+      })
+    },
+    async command({ type, payload }) {
+      if (stopping) throw fault('PROTOCOL')
+      if (type === 'ARM') {
+        if (armed || open || payload.processOrdinal !== nextProcess)
+          throw fault('PROTOCOL')
+        cases.set(payload.caseId, {
+          begins: [],
+          eligible: 0,
+          turns: 0,
+          script: 'OPEN'
+        })
+        armed = {
+          caseId: payload.caseId,
+          processOrdinal: payload.processOrdinal
+        }
+        open = armed
+        await event('ARMED', { ...armed, port })
+        return
+      }
+      if (type === 'END_CASE') {
+        if (
+          !open ||
+          open.caseId !== payload.caseId ||
+          open.processOrdinal !== payload.processOrdinal
+        )
+          throw fault('PROTOCOL')
+        armed = null // Disarm before draining; later requests carry no case.
+        await drain(payload.caseId)
+        const state = await observeState()
+        await block(
+          {
+            caseTag: ordinalOf(payload.caseId),
+            requestTag: 255,
+            kind: KINDS.WORKSPACE_STATE,
+            segmentTag: 65535
+          },
+          state.bytes
+        )
+        await event('STATE', {
+          caseId: payload.caseId,
+          phase: 'AFTER_CASE',
+          sha256: state.sha256,
+          bytes: state.bytes.length
+        })
+        await event('CASE_ENDED', {
+          caseId: payload.caseId,
+          processOrdinal: payload.processOrdinal,
+          requestOrdinals: [...cases.get(payload.caseId).begins].sort(
+            (a, b) => a - b
+          ),
+          workspaceStateSha256: state.sha256,
+          workspaceStateBytes: state.bytes.length
+        })
+        open = null
+        nextProcess++
+        return
+      }
+      throw fault('PROTOCOL')
+    },
+    async stop() {
+      stopping = true
+      armed = null
+      const closed = new Promise((resolve) => server.close(() => resolve()))
+      for (const socket of sockets) socket.destroy()
+      server.closeAllConnections?.()
+      let timer
+      const ok = await Promise.race([
+        (async () => {
+          await closed
+          await drain()
+          await rawChain
+          await eventChain
+          return true
+        })(),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), LIMITS.closeMs)
+        })
+      ])
+      clearTimeout(timer)
+      if (!ok || sockets.size) failures.push(fault('CLEANUP'))
+      return ok
+    },
+    async flush() {
+      await rawChain
+      await eventChain
+    },
+    event,
+    get canonicalHeaders() {
+      return canonical(REJECT_SCRIPT.headers)
+    }
+  }
+}
+
+export async function main() {
+  const { runId, hostMarkerPath } = wrapperArguments(process.argv.slice(2))
+  const send = controlWriter(process.stdout, 'observer', runId)
+  let rawBytes = 0,
+    rawFrames = 0
+  const raw = async (bytes) => {
+    rawBytes += bytes.length
+    rawFrames += Math.ceil(bytes.length / (14 + LIMITS.rawPayloadBytes)) + 1
+    if (rawBytes > LIMITS.rawWireBytes || rawFrames > LIMITS.rawFrames)
+      throw fault('CAP')
+    await writeBytes(process.stderr, bytes)
+  }
+  const observer = createObserver({
+    send,
+    raw,
+    observeState: () => observeWorkspace()
+  })
+  let cancel
+  const cancelled = new Promise((resolve) => {
+    cancel = resolve
+  })
+  const onSignal = () => {
+    observer.failures.push(fault('SIGNAL'))
+    cancel()
+  }
+  const life = setTimeout(() => {
+    observer.failures.push(fault('TIMEOUT'))
+    cancel()
+  }, LIMITS.wrapperLifeMs)
+  for (const s of ['SIGHUP', 'SIGINT', 'SIGTERM']) process.on(s, onSignal)
+  const ioError = (cause) => {
+    observer.failures.push(fault('IO', cause))
+    cancel()
+  }
+  process.stdout.on('error', ioError)
+  process.stderr.on('error', ioError)
+  process.stdin.on('error', ioError)
+  let stopped = false
+  try {
+    const base = await preflight(hostMarkerPath)
+    await observer.listen()
+    await observer.initialState(base)
+    const commands = hostCommands(process.stdin, 'observer', runId)[
+      Symbol.asyncIterator
+    ]()
+    for (;;) {
+      const step = await Promise.race([
+        commands.next(),
+        cancelled.then(() => ({ cancelled: true }))
+      ])
+      if (step.cancelled) break
+      if (step.value.type === 'STOP') {
+        stopped = true
+        break
+      }
+      try {
+        await observer.command(step.value)
+      } catch (cause) {
+        observer.failures.push(cause?.code ? cause : fault('PROTOCOL', cause))
+        await observer
+          .event('ERROR', {
+            code: cause?.code ?? 'PROTOCOL',
+            caseId: null,
+            processOrdinal: null,
+            requestOrdinal: null
+          })
+          .catch(() => {})
+        // Only STOP is admitted after a failure.
+        const next = await Promise.race([
+          commands.next(),
+          cancelled.then(() => ({ cancelled: true }))
+        ])
+        if (!next.cancelled && next.value?.type === 'STOP') stopped = true
+        break
+      }
+    }
+  } catch (cause) {
+    observer.failures.push(cause?.code ? cause : fault('PROTOCOL', cause))
+  }
+  const ok = await observer.stop()
+  if (stopped && ok)
+    await Promise.race([
+      send('CLOSED', {}),
+      new Promise((resolve) => setTimeout(resolve, LIMITS.closeMs))
+    ]).catch(() => observer.failures.push(fault('IO')))
+  clearTimeout(life)
+  for (const s of ['SIGHUP', 'SIGINT', 'SIGTERM']) process.off(s, onSignal)
+  process.stdin.destroy()
+  process.exitCode = observer.failures.length || !stopped ? 1 : 0
+}
+
+if (isDirectMain(import.meta.url)) {
+  // stderr carries binary blocks only; no stack, env or text is printed.
+  main().catch(() => {
+    process.exitCode = 1
+  })
+}

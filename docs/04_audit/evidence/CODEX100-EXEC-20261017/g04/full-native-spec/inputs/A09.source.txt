@@ -1,0 +1,413 @@
+{
+  "task": "DX100-G04:RESOLVE-CANONICAL-PERSISTENCE-PORTS",
+  "kind": "PROPOSED_SOURCE_BOUND_REUSE_DECISION_NOT_RUNTIME_SPEC_OR_ACCEPTANCE",
+  "status": "READY_FOR_INDEPENDENT_DOCUMENTARY_REVIEW",
+  "ports": [
+    {
+      "id": "PP01",
+      "name": "SESSION_EVENTS_AND_CONNECTION_OWNERSHIP",
+      "owner": "PAR-S01 / SPEC0221",
+      "CQ": [
+        "CQ07",
+        "CQ10",
+        "CQ12"
+      ],
+      "current_Root": [
+        "SessionEventStore.openSession/append/read",
+        "PostgresSessionEventStore",
+        "createSessionKernelLog"
+      ],
+      "approved_next": [
+        "SessionPersistence.identity/create/open",
+        "SessionHandle.read/append/flush/close/asyncDispose",
+        "createPostgresSessionPersistence returns {service}",
+        "sessionEventStoreForHandle private-capability adapter to SAME v1 log"
+      ],
+      "not_in_first_slice": [
+        "stat/list/revision",
+        "service.flush/global shutdown/public owner",
+        "recovery tickets/reconcileAttempt/reestablishDurability"
+      ],
+      "transaction": "One handle admission queue; append materialization/dedup/cursor/write in one physical owner transaction; no second log or read-then-append",
+      "trust": "tenant/schema/pool physical session from trusted composition; maxOpenWriters; no transaction pooling or transparent reconnect",
+      "failure": "Lost/commit-unknown terminal for owner; no automated new owner or effect retry; reopen reads facts but cannot recover lost intent",
+      "eligibility": "APPROVED_DESIGN_NOT_IMPLEMENTED_AT_INSPECTED_ROOT_PATHS",
+      "evidence": [
+        "R01-44",
+        "R02-50",
+        "R02-73",
+        "R02-149",
+        "R02-216",
+        "R11-14",
+        "A02-166",
+        "A02-184",
+        "A02-206",
+        "O01-31",
+        "O01-66",
+        "O01-104",
+        "O01-163"
+      ]
+    },
+    {
+      "id": "PP02",
+      "name": "OPERATIONAL_EFFECT_RESULT_JOURNAL",
+      "owner": "PAR-K03 / SPEC0225",
+      "CQ": [
+        "CQ09",
+        "CQ10",
+        "CQ11",
+        "CQ12"
+      ],
+      "current_Root": [
+        "EffectJournal reserve/markStarted/confirm/fail/markUncertain/get",
+        "PostgresOperationalEffectJournal legacy JSONB"
+      ],
+      "approved_next": [
+        "Same logical EffectJournal and binding fields",
+        "resultStorage:{version:1} explicit trusted opt-in",
+        "external storage discriminator + separate encoded payload",
+        "exclusive schema/principal cutover; migrate0030 after0029"
+      ],
+      "not_equivalent": [
+        "PostgresEffectJournal digest-only agent-runtime port",
+        "channel journal",
+        "checkpoint codec",
+        "function output containing fake receipt/envelope"
+      ],
+      "transaction": "State CONFIRMED and valid payload update atomically in journal transition transaction, with applicable write fence checks; not a global transaction with checkpoint/log",
+      "limits": {
+        "journal_output_canonical_bytes": 1048576,
+        "context_bytes": 32768,
+        "ToolResult_capture_bytes": 8388608,
+        "unsigned_checkpoint_total_bytes": 8388608,
+        "independent_overheads_and_other_limits_preserved": true
+      },
+      "failure": "EFFECT_STARTED/UNCERTAIN requires reconciliation, not automatic repeat; confirm exception never proof of rollback or FAILED; first cause must survive reconciliation failure",
+      "eligibility": "OWNER_WIP_SNAPSHOT_WITH_NARROW_R3_OBSERVATION_NOT_INTEGRATED_OR_CODEX_QUALIFIED",
+      "evidence": [
+        "R05-450",
+        "R05-790",
+        "R05-1234",
+        "R05-1356",
+        "R06-28",
+        "R06-322",
+        "R06-366",
+        "R06-353",
+        "A03-82",
+        "A03-270",
+        "A03-312",
+        "O03-128",
+        "O03-153",
+        "O03-342",
+        "O03-343",
+        "O03-343",
+        "O03-8",
+        "O05-56",
+        "S01-1094",
+        "S01-1212",
+        "S01-1112",
+        "S01-3",
+        "S05-9",
+        "S05-9",
+        "S01-1260",
+        "R12-30"
+      ]
+    },
+    {
+      "id": "PP03",
+      "name": "ITERATIVE_STATE_CHECKPOINT_AND_ACCOUNTING",
+      "owner": "PAR / SPEC0224 and0217",
+      "CQ": [
+        "CQ09",
+        "CQ10",
+        "CQ11"
+      ],
+      "current_Root": [
+        "ExecutionStepStore.recordStep/listSteps/saveCheckpoint/loadCheckpoint",
+        "ExecutionCheckpoint version1 with AgentLoopState and budgetUsage"
+      ],
+      "owner_candidate": [
+        "V2 complete checkpoint codec",
+        "checkpoint compareAndSwapCheckpoint with optional controlled fence",
+        "capability fingerprint and admission state"
+      ],
+      "transaction": "Step/checkpoint persistence separate from effect journal. Successful compare-and-swap only advances known prior revision; no inferred cross-store atomicity",
+      "failure": "If confirm committed before checkpoint, reload confirmed result under same bindings; no extra effect; preserve valid execution/accounting; stale checkpoint or composition must reject",
+      "eligibility": "ROOT_BASELINE_AND_OWNER_SNAPSHOT_SOURCE_ONLY; FULL_NATIVE_COMPOSITION_NOT_QUALIFIED",
+      "evidence": [
+        "R03-402",
+        "R03-417",
+        "R04-172",
+        "R04-302",
+        "R04-347",
+        "R07-29",
+        "R07-98",
+        "S02-42",
+        "S02-284",
+        "S02-2",
+        "S03-38",
+        "S03-87",
+        "S04-5",
+        "A05-368-403",
+        "A05-321-332",
+        "G01-127-152",
+        "S02-319-350"
+      ],
+      "standalone_restrictions": {
+        "source": "A05-368-403",
+        "CAS_scope": "STATE_AND_BUDGET_ONLY_NOT_WORKER_LEASE_OR_EXTERNAL_ACK",
+        "all_checkpoint_V2_writes_require_CAS": true,
+        "foreign_pending_reservation": "UNKNOWN_STOP_NO_SETTLE_NO_CANCEL_NO_NEW_CALL",
+        "isolated_slice": "ONE_TRUSTED_OWNER_OF_SYNTHETIC_IDS_NO_MIXED_OLD_NEW_WRITERS",
+        "host_integration_shared_execution_mixed_versions": "REQUIRES_SEPARATE_OPERATIONAL_GATE; no legacy direct-database writer containment inferred"
+      }
+    },
+    {
+      "id": "PP04",
+      "name": "EXECUTION_FENCE_AND_TERMINAL_ARBITRATION",
+      "owner": "PAR / controlled0217+0029; generic Codex seam still to specify",
+      "CQ": [
+        "CQ09",
+        "CQ11",
+        "CQ12"
+      ],
+      "current_Root": [
+        "PostgresOperationalExecutionStore claimNext/heartbeat/transition with lease checks",
+        "cancel rejects CLAIMED/RUNNING"
+      ],
+      "owner_candidate": [
+        "ControlledPublishedDatabaseFence tenant/execution/worker/attempt/outer/cancellation",
+        "guardControlledPublishedFence / guardOptionalPublishedWrite",
+        "controlled host ackPhase/saveResumePoint/close"
+      ],
+      "concrete_reuse_blocker": "S01.guardWrite only allows bound operationKey `${executionId}:s2:find_available_slots`; generic Codex tool operations not admitted by this proof",
+      "transaction": "Fence checks/locked state and protected write/recheck must share actual DB transaction; session advisory owner and effect attempt token are different authorities",
+      "failure": "Old worker must fail before dispatch and all protected writes/settlement. Cancel-request ACK is not terminal ACK. Two orders of terminal commit require explicit one-winner policy in future SPEC",
+      "eligibility": "HISTORICAL_OWNER_BASELINE_AND_WIP_SOURCE_NOT_GENERIC_ADAPTER_ACCEPTANCE",
+      "evidence": [
+        "R05-450",
+        "R05-790",
+        "R05-1234",
+        "R05-1356",
+        "S01-1094",
+        "S01-1212",
+        "S01-1112",
+        "S01-3",
+        "G01-7",
+        "G01-156",
+        "G01-127",
+        "G02-193",
+        "G02-680",
+        "G02-684",
+        "S01-1260",
+        "G02-306",
+        "G02-661",
+        "G02-1320",
+        "G02-1975",
+        "G02-942",
+        "A05-368-403",
+        "A05-321-332",
+        "G01-127-152",
+        "S02-319-350"
+      ],
+      "path_eligibility": {
+        "bound_worker": "FIXED_OPERATION_SOURCE_FOUND_NOT_GENERIC_CODEX_QUALIFICATION",
+        "standalone_epoch_owner_guard": "UNKNOWN_BUILD_BLOCKER_FOR_PATH",
+        "generic_worker_claim_lease_dispatch_settlement": "UNKNOWN_BUILD_BLOCKER_FOR_PATH",
+        "optional_guard": "UNBOUND_WITHOUT_FENCE_RETURNS_NULL_NOT_GENERIC_WORKER_AUTHORITY",
+        "owner": "CODEX100 integrator with PAR owner",
+        "full_SPEC_must": "Reconcile exact qualified sources/manifests and standalone/mixed-writer restrictions before admission. Generic bound matcher alone cannot grant authority."
+      }
+    },
+    {
+      "id": "PP05",
+      "name": "DELIVERY_CURSOR_PRESSURE_AND_DURABLE_ACK",
+      "owner": "CODEX100 native host/SDK contract to specify, consuming PAR session facts",
+      "CQ": [
+        "CQ07",
+        "CQ09",
+        "CQ10",
+        "CQ11"
+      ],
+      "current_Root": [
+        "SDK protocol1 four methods",
+        "single_pass server composition",
+        "poll/read events afterSequence; local transport close distinct from remote cancel"
+      ],
+      "proposed": [
+        "Separate request admission acknowledgement from durable terminal acknowledgement",
+        "Declare durable frame identity, cursor validation and exact projection to source sequence",
+        "Bounded per-client buffer/retention/overflow/deadline rules",
+        "Replay persisted delivery frames without tool/model calls",
+        "Define terminal/log/ACK commit relationship before BUILD"
+      ],
+      "transaction": "No claim of terminal+delivery atomicity in current Root; future SPEC must either bind to same owner transaction or define explicit safe reconciliation before durable ACK",
+      "failure": "Disconnect after commit permits identifiable redelivery; no fabricated terminal, silent gap or automatic new execution. Unknown cursor and unsupported methods reject explicitly",
+      "eligibility": "PARTIAL_SOURCE_DELIVERY_NEW_STREAM_RESUME_ACK_CONTRACT_STILL_OPEN",
+      "evidence": [
+        "R01-44",
+        "R08-54",
+        "R08-295",
+        "R09-11",
+        "R11-14",
+        "A04-49",
+        "A04-51",
+        "A04-52",
+        "A04-53",
+        "A04-54"
+      ]
+    }
+  ],
+  "CQ_in_scope": [
+    "CQ07",
+    "CQ09",
+    "CQ10",
+    "CQ11",
+    "CQ12"
+  ],
+  "full_journey_required": [
+    "CQ01",
+    "CQ02",
+    "CQ03",
+    "CQ04",
+    "CQ05",
+    "CQ06",
+    "CQ07",
+    "CQ08",
+    "CQ09",
+    "CQ10",
+    "CQ11",
+    "CQ12",
+    "CQ13",
+    "CQ14"
+  ],
+  "gaps": [
+    {
+      "id": "CP01",
+      "CQ": [
+        "CQ07",
+        "CQ10",
+        "CQ12"
+      ],
+      "fact": "Approved session handle factory0031 not present at inspected Root paths",
+      "owner": "PAR-S01",
+      "next_required_evidence": "Require owner implementation/gates plus source-export/runtime manifest for composition; preserve first-slice deferrals",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP02",
+      "CQ": [
+        "CQ09",
+        "CQ10",
+        "CQ11"
+      ],
+      "fact": "Journal0030 WIP; R3 scoped44 observation is not full code qualification",
+      "owner": "PAR-K03/C1000225",
+      "next_required_evidence": "Pin qualified adapter/schema/grants/readiness and execute Codex restart/uncertainty matrix at actual source",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP03",
+      "CQ": [
+        "CQ09",
+        "CQ10"
+      ],
+      "fact": "Complete result checkpoint/CAS not current Root API",
+      "owner": "PAR0224/0217",
+      "next_required_evidence": "Use owner-qualified complete checkpoint source; verify schema/versions/fingerprint/usage and CAS binding together; carry standalone CAS-only scope, foreign pending reservation UNKNOWN and no mixed writers as canonical restrictions",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP04",
+      "CQ": [
+        "CQ09",
+        "CQ12"
+      ],
+      "fact": "Bound operation fence has fixed tool key; generic dispatch/settlement seam unqualified",
+      "owner": "CODEX100+PAR",
+      "next_required_evidence": "Specify minimal generic seam/trust/admission before code; no copying published flow or implicit0226 adoption; classify standalone epoch and worker path safeguards separately under CP09, never infer them from checkpoint CAS",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP05",
+      "CQ": [
+        "CQ07"
+      ],
+      "fact": "No admitted incremental delivery cursor/backpressure/retention contract",
+      "owner": "CODEX100",
+      "next_required_evidence": "Freeze frame/event mapping, pressure limits and reconnect rules; provider terminal held behind barrier in proof",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP06",
+      "CQ": [
+        "CQ09"
+      ],
+      "fact": "Active cancellation terminal race and terminal-to-delivery ACK order not specified for this host",
+      "owner": "CODEX100+PAR",
+      "next_required_evidence": "Define first cause, cancellation admission vs terminal and both native commit orders; no success before required durable facts",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP07",
+      "CQ": [
+        "CQ10",
+        "CQ11"
+      ],
+      "fact": "Other JSONB fields may still reject NUL; replay/accounting not automatically atomic",
+      "owner": "CODEX100+PAR",
+      "next_required_evidence": "Trace complete useful value end to end with limits and private metadata; crash boundaries and reconciliation failure controls",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP08",
+      "CQ": [
+        "CQ12"
+      ],
+      "fact": "Sequential R3 writer/reader processes do not prove simultaneous stale-fence race",
+      "owner": "CODEX100+PAR",
+      "next_required_evidence": "Two live distinct OS writers with controlled barriers, real stores/roles and dispatch+persist+settlement observers",
+      "functional_status": "NOT_RUN"
+    },
+    {
+      "id": "CP09",
+      "CQ": [
+        "CQ09",
+        "CQ10",
+        "CQ11",
+        "CQ12"
+      ],
+      "fact": "Standalone epoch/owner and generic worker claim/lease/dispatch/settlement source eligibility are UNKNOWN in this bounded input set. CAS does not create worker lease/external ACK; optional unbound guard may return null. Known isolated/mixed-writer and foreign-reservation restrictions must carry forward.",
+      "owner": "CODEX100 integrator + PAR execution/admission owner",
+      "next_required_evidence": "Full native journey SPEC must pin eligible safeguards or supply a gated design for each path, preserve pending foreign reservation UNKNOWN and no mixed-writer deployment without operational gate. No code for unresolved path.",
+      "path_BUILD_entry": "BLOCKED_UNTIL_ELIGIBLE_GUARD_SOURCES_AND_CONTRACT_RESOLVED",
+      "functional_status": "NOT_RUN",
+      "evidence": [
+        "A05-368-403",
+        "A05-321-332",
+        "G01-127-152",
+        "S02-319-350"
+      ],
+      "absence_across_system_claim": false
+    }
+  ],
+  "selected_alternative": "REUSE_CANONICAL_FOUNDATIONS_AND_SPECIFY_ONLY_MISSING_SEAMS",
+  "new_stores_or_migrations": 0,
+  "new_runtime_code": 0,
+  "functional_receipts": 0,
+  "human_approvals": {
+    "0221": "APPROVED_WITH_ADJUSTMENTS_RECOMPOSITION_ACCEPTED",
+    "0225": "APPROVED_WITH_ADJUSTMENTS_RECOMPOSITION_ACCEPTED_LOCAL_BUILD_IN_PROGRESS",
+    "0231": "LOCAL_QUALIFIER_DELIVERED",
+    "0226": "DEFERRED_NOT_AUTHORIZED_HERE",
+    "new_full_native_journey_SPEC": "NOT_YET_PRODUCED_OR_APPROVED"
+  },
+  "next_action_id": "DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY",
+  "documentary_rework": {
+    "finding": "R1-01",
+    "grouped_repairs_used": 1,
+    "max_grouped_repairs": 1,
+    "R1_retained": "review-r1/manifest.json",
+    "R1_subject_recovery": "R1-01-repair-plan.json"
+  }
+}

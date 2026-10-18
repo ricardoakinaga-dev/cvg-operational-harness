@@ -1,0 +1,49 @@
+from pathlib import Path
+import json,hashlib,datetime
+O=Path.cwd();P=O.parent/'review-packet';pre=json.loads(Path('pre-fingerprint.json').read_text())
+checks=[]
+for row in pre['checks']:
+ b=Path(row['path']).read_bytes();a=hashlib.sha256(b).hexdigest()
+ checks.append({**row,'preActual':row['actual'],'postActual':a,'postSize':len(b),'expectedMatch':a==row['expected'],'prePostMatch':a==row['actual']})
+extra=[]
+for name in ['extra-source-001.json','extra-source-002.json','extra-source-003.json']:
+ r=json.loads(Path(name).read_text());b=Path(r['path']).read_bytes();r['finalSha256']=hashlib.sha256(b).hexdigest();r['size']=len(b);r['allMatch']=r['preSha256']==r['postSha256']==r['finalSha256'];extra.append(r)
+livecopy=[]
+for r in pre['sourceManifest']:
+ a=hashlib.sha256(Path(r['live']).read_bytes()).hexdigest();b=hashlib.sha256((P/r['copy']).read_bytes()).hexdigest();livecopy.append({'live':r['live'],'copy':str(P/r['copy']),'expected':r['sha256'],'liveSha256':a,'copySha256':b,'allMatch':a==b==r['sha256']})
+actual=sorted(str(x.relative_to(P)) for x in P.rglob('*') if x.is_file())
+expected=sorted([x['path'] for x in pre['packetManifest']]+['packet-manifest.json'])
+assert all(x['expectedMatch'] and x['prePostMatch'] for x in checks)
+assert all(x['allMatch'] for x in extra+livecopy)
+assert actual==expected and len(actual)==48
+integrity={'schemaVersion':1,'candidateSha256':pre['sourceManifest'][0]['sha256'],'status':'PASS','timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'counts':{'sourcePairs':43,'packetManifestEntries':47,'packetFilesIncludingManifest':48,'frozenChecksPre':142,'frozenChecksPost':142,'extraSources':3,'sourceMutations':0},'checks':checks,'liveCopyChecks':livecopy,'extraSources':extra,'packetMembership':{'expected':expected,'actual':actual,'exactMatch':True},'sourceManifestIdentity':True,'packetManifestIdentity':True,'constraintsIdentity':True,'originSnapshotOnlyReadOrHashed':False,'frozenD12OriginSemanticRead':False,'wholeBacklogOriginFrozen':False,'sourceMutations':[],'protocolDeviations':[pre['protocolDeviation']],'limitations':['Static source/design review only; no engines, tests, simulations, services, provider, PG, network or installs.','Native CapabilityDescriptor export resolution was inconclusive after three precisely named/hash-bound extra files; finding uses explicit packet ToolDescriptor, normalizer and pipeline behavior, not inferred declaration fields.','Command 018 nonexistent-key association count is invalid and corrected in command 019; four unassociated candidates were not independently reproduced.','Commands 001/002 exact source and raw stdout were reconstructed from the tool-call transcript before sealing; subsequent source and full stdout/stderr recorded at invocation.']}
+Path('source-integrity.json').write_text(json.dumps(integrity,indent=2)+'\n')
+# Extend the recorder with a final sealing branch. It captures the complete final stdout before manifesting it.
+r=Path('runner.py').read_text()
+old="print(stdout.getvalue(),end='');print(stderr.getvalue(),end='',file=sys.stderr)\nsys.exit(code)\n"
+new="""if idx == '022':
+ import hashlib
+ excluded={'artifact-manifest.json',f'command-{idx}.stdout',f'command-{idx}.stderr'}
+ entries=[];empty=[]
+ for p in sorted(out.iterdir(),key=lambda p:p.name):
+  if p.is_file() and p.name not in excluded:
+   b=p.read_bytes()
+   if b:entries.append({'path':str(p),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+   else:empty.append(str(p))
+ if stderr.getvalue():
+  b=stderr.getvalue().encode();entries.append({'path':str(out/f'command-{idx}.stderr'),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+ else:empty.append(str(out/f'command-{idx}.stderr'))
+ skeleton={'schemaVersion':1,'root':str(out),'files':entries,'emptyFilesAndStreams':sorted(empty),'excludedSelf':str(out/'artifact-manifest.json')}
+ wire=json.dumps({'runOutput':stdout.getvalue(),'exit':code,'manifestSkeleton':skeleton},indent=2)+'\\n'
+ (out/f'command-{idx}.stdout').write_text(wire)
+ b=wire.encode();skeleton['files'].append({'path':str(out/f'command-{idx}.stdout'),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+ skeleton['files'].sort(key=lambda e:e['path'])
+ (out/'artifact-manifest.json').write_text(json.dumps(skeleton,indent=2)+'\\n')
+ print(wire,end='');print(stderr.getvalue(),end='',file=sys.stderr)
+else:
+ print(stdout.getvalue(),end='');print(stderr.getvalue(),end='',file=sys.stderr)
+sys.exit(code)
+"""
+assert old in r
+Path('runner.py').write_text(r.replace(old,new))
+print(json.dumps({'integrity':'PASS','counts':integrity['counts'],'membershipExact':True,'frozenInputsUnchanged':True,'extraSourcesUnchanged':True,'protocolDeviations':1}))

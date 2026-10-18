@@ -1,0 +1,86 @@
+# SPEC0217 — plano executável de aceitação antes do gate
+
+Estado: PLANNED / NOT_RUN. [SPEC](../../../../02_spec/0217_pare100_durable_kernel_composition.md). Este documento congela os oráculos, não executa BUILD. Comandos abaixo serão válidos **depois** de implementar os arquivos novos propostos e registrar claims/gate T3; não confundir path de teste planejado com teste existente.
+
+## Fixtures e caminhos propostos de QA
+
+| Path novo proposto | Oráculos e boundary |
+| --- | --- |
+| `packages/platform/src/__tests__/controlled-kernel-continuation.test.ts` | Reidratação real da fachada/factory, S0/S1/S2, normalização parse1, atestação, máscara,23stops, ausência de host local e host inválido. K02/K04/K06/K07/K09/K11. |
+| `packages/persistence/src/__tests__/controlled-published-kernel-postgres.test.ts` | Banco real: admissão atômica, races, binding/digest, fences, queue isolation, state/seals, RLS, checksum, append-only, poison/close/cancel. K04/K05/K08/K09/K10. |
+| `apps/api/src/__tests__/published-durable-kernel-postgres.test.ts` | buildApi real+PG e webhook sintético, contrato queued, correlação, cancel QUEUED200/active409, GET/trajectory sem toolResult de sucesso no turno falho; sem efeito inline. K01/K06/K11. |
+| `apps/worker/src/__tests__/published-durable-kernel-restart.integration.test.ts` | API real e workers filhos distintos, SIGKILL e reentrega, S1 positivo/S3 replay, faults e competição. K01–K12. |
+| `apps/worker/src/__tests__/fixtures/published-kernel-child.ts` | Entry de teste chama compositor/fábrica reais. Injeta apenas barreira de processo e clocks/observadores sintéticos nos ports declarados. Não substitui factory nem planner/handler por sucesso mockado. |
+
+Manter todas as suites atuais0214, API/worker published, operational-harness/kernel antigo e public surfaces. Paths novos de produção e ownership futuro constam da seção7 da SPEC; esta lane não escreve testes nem fixtures executáveis agora.
+
+## Preparação, isolamento e evidências
+
+Lead reserva PG, Node22 e os comandos globais antes de executar. Um cluster/container local próprio, URL apenas loopback e credenciais sintéticas; nenhum DB/volume/porta do usuário reutilizado. Schema exclusivo `pare100_217_<nonce>` e role serving non-superuser/non-BYPASSRLS, sem DDL e sem desabilitar triggers. Admin de fixture só cria/migra/inspeciona/desmonta schema/role próprios; verificações de tenant devem passar também pela role serving.
+
+Fixture aplica migrações operacionais até0027+0029 via `runPostgresMigrations` com lista explícita, sem0028 dedicado. Cadastra agentes/version/prompt/controlados sintéticos pelas APIs/repositórios existentes, mesma tool `find_available_slots` do plugin scheduling.controlled. Nada de copiar pacientes, consultas reais, chaves, providers, HOME do usuário ou reference runtime. Usar mensagem sintética de intenção scheduling sem confirmar/cancelar/reagendar consulta; resposta são apenas constantes do plugin.
+
+Todas as chamadas ao modelo fake e ao handler atestado devem ter contagem observável em processo externo ao worker e persistida pela fixture, além dos intents/receipts de PG. Observer é test-only e não muda handler/validator/atestado; observar através do wrapper de boundary e conferir a referência original das funções. Isso evita um falso positivo onde faltam logs mas um segundo handler executou. Guardar PID, argv, env allowlist sem segredos, start/end UTC, exit code/signal, barrier e timeout por child. Interrupção por pipe/IPC de fixture em marco de persistência comprovado, não sleep probabilístico.
+
+Nunca escrever `TEST_DATABASE_URL` no log. Teste PG sem variável definida ou describe.skip é **BLOCKED/NOT_RUN**, não PASS. Checagem de counts no relatório exige todos K01–K12 efetivamente exercitados; qualquer skip desses oráculos bloqueia aceite. Nenhum retries de runner escondendo corrida. Child timeout mata somente PID/process group próprios; finalmente fechar API/pools, filhos, sockets, role/schema/container da fixture e conferir zero recursos próprios ativos.
+
+## Procedimento K02: restart positivo após modelo
+
+1. API real com `durableInbound=true`, pool do schema próprio, tenant/verificador sintéticos trusted; webhook retorna o envelope atual queued. Persistir IDs/correlation do resultado e consultar row inbound/outbox.
+2. Child A em published-agent + flag proposta postgres-v1, max eventos limitado e workerIdA. Ele usa o handler/factory reais. Esperar notificação **após COMMIT** de S1+checkpoint+snapshot, antes de retornar o saveCheckpoint ao loop. Conferir via outra conexão: same exec/trace/correlation, model count1, tool count0, source/prompt/fingerprint e usage debitados, leaseA vivo.
+3. SIGKILL A e esperar exit.signal. Fazer expirar os dois leases próprios (inbound outbox e execução0016) por relógio/fixture controlados; manter deadline original com folga. Nada de delete/reset de journal/checkpoint.
+4. Child B, PID e workerId diferentes; carregar mesmo inbound. Deve recuperar0016, tomar attempt+1 e reidratar S1. Não passar output/snapshot por memória/IPC de A para B; a única continuação é PG.
+5. Asserir sucesso final seguro: model count global1, handler count global1, journal CONFIRMED1/proposal exata, tool/result terminal1 por operationKey, same exec/trace/correlation, trace closed/completed, wrapper completed e externalEffects false, state0016 SUCCEEDED, inbound completed1, trace de execução1 e outbound sintético1. Correlacionar audit chain/mirror e source hash; nenhum output residual em falha. Exigir conhecida falha quando fixture experimental ignora state/gera novo trace/chama provider de novo.
+6. Reentregar mensagem/evento mais uma vez: nenhuma nova factory/model/body e nenhum novo trace/outbound/consumo; ledger segue imutável.
+
+## Procedimento K03/K04: conclusão e janelas inseguras
+
+- S3: matar depois do close transacional, antes de completion. Child B lê o trace fechado, chama completion idempotente e ACK; não chama factory/model/tool. Matar novamente após completion antes do ACK e provar no terceiro child que marker impede duplicata. Se takeover vence, retorno paused/supressão existente, sem responder nem executar novamente.
+- Parametrizar kill/fault: model/request sem S1; approval verifyAndConsume COMMIT antes de ACK/receipt; journal RESERVED; EFFECT_STARTED; depois do body antes de confirm; CONFIRMED antes de callback/settlement/checkpoint; audit intermediário rejeita e final aceita; close ACK perdido. Em cada caso, snapshot/evidence/parent states têm expected oracle explícito da SPEC6.1.
+- Nunca usar CONFIRMED isolado para criar trace succeeded. Asserir facts privados preservados e projection failed/H, toolResults.output null, parent RuntimeResult sem toolResult de sucesso. Nenhum segundo body/consume; se resultado do ACK for ambíguo, handoff, não retry de capacidade.
+- Erro de DB durante latch/close: job recebe erro seguro e não reporta runtime completed. Recovery compara último resume seal e tail; sem conjunto completo de evidências não promove sucesso. S2 completo pode finalizar sem modelo/body; não alegar recuperação de uma janela sem seal.
+
+## Concorrência, cancel/deadline, tenancy e controles
+
+- K05: dois workers/pools/processos, barreira de corrida real em admit/claim com mesmo inbound; uma row binding/queue e uma entrada de handler. Terceiro worker neutro não reclama/recoverExpired essas rows. Depois de lease perdido, A tenta recordStep/saveCheckpoint/markStarted/confirm/appendEvidence/close e todos os writes de autoridade falham sem alterar vencedor. DB trigger contra writer antigo é negativo adicional, não só unit test de if.
+- K06: cancel pelo endpoint existente em QUEUED vence claim, state CANCELLED e nenhuma chamada. Cancel CLAIMED/RUNNING mantém409; asserir que não foi aceito. AbortSignal de composição durante espera de approval/pause veta entrada, inclusive depois do consume; não release/reissue. Restart ultrapassando expiresAt preserva limite e uso, não renew. Deadline inclui downtime; finalização200ms permite apenas evidência/fechamento, nunca handler tardio.
+- K07: setPaused real tenantA antes e depois de admission, takeover por sessão, pause promise rejeitada/pendente e falha de consulta. Testar ausência da linha pause e corrida de insert/upsert. Observar a linearização especificada, sem alegar cancel/pause físico depois de permit commit. TenantB não interfere.
+- K08: authority0002 real, issuer diferente de executor, expiry/revoke/tenant/actor/version/input/proposal trocados e dois consumes concorrentes; ≤1consumo/body. Sem adapter0015 substituto. Cenários de approval usam actor/authority sintéticos injetados no boundary suportado, sem criar approval automático em worker público.
+- K09: spy de ordem ao redor de portas reais para exigir close local síncrono antes de await terminal/projeção/tool.after; depois de close, forçar ACK tardio e chamar wrapper novamente: body não entra. Falhar/hangar cada port obrigatório; latch não é apagado por audit final bom. Telemetry/eventBus opcional não concede êxito nem apaga falha de evidence sink.
+- K10: RLS/reuse de conexão e IDs colidentes entre tenants; schema/digests/state/checkpoint/proposal/fingerprint/eventSequence alterados; state antigo com revisão/fence vencido; migration interrompida/reexecutada, checksums históricos iguais; UPDATE/DELETE/TRUNCATE de evidence negados pela role serving. Não rodar migration0028 em schema de conversations. Se não houver proteção mixed-writer provada, enable bloqueado.
+- K11: gateway opaco/procedência trocada/duas tools/injeção de host no corpo negam antes de consume/body. parse transform1 na entrada inicial, reidratação não reaplica; source/handler/validators precisam estar atestados.23stops preservados. API inline/TestLab/approval execute e defaults anteriores mantêm shapes/reasons, inclusive400 quando turno falho após consumed/CONFIRMED. Novo perfil não habilita RAG ou ferramenta extra.
+- K12: capturar hashes de fonte/config/testes e build usado antes/depois, com comparação. Artefatos de processo e query PG não são substituíveis por snapshots de Map. Critic novo precisa executar um positivo e negativos próprios contra candidata selada, além de ler código/migration.
+
+## Comandos planejados após BUILD aprovado
+
+Executar do worktree, Node22. `TEST_DATABASE_URL` deve ser injetada pelo dono do recurso; os testes criam isolamento e validam serving role, não expor valor. O bloqueio explícito por ausência da variável evita suite PG silenciosamente skipada.
+
+```sh
+set -eu
+node scripts/node-version-preflight.mjs
+npm run typecheck
+npm run lint
+node_modules/.bin/vitest run packages/platform/src/__tests__/controlled-kernel-continuation.test.ts --no-file-parallelism --maxWorkers=1
+test -n "$TEST_DATABASE_URL"
+node_modules/.bin/vitest run packages/persistence/src/__tests__/controlled-published-kernel-postgres.test.ts apps/api/src/__tests__/published-durable-kernel-postgres.test.ts apps/worker/src/__tests__/published-durable-kernel-restart.integration.test.ts --testTimeout=60000 --no-file-parallelism --maxWorkers=1 --reporter=json --outputFile=docs/04_audit/evidence/PARE100-EXEC-20261014/spec0217/build-future/focused-results.json
+```
+
+O Lead cria diretório build-future somente na rodada de BUILD autorizada, valida exit code/counts de cada teste/K, e preserva stdout/stderr inclusive falhas; não gerar arquivos vazios sem sidecar explícito. Publicar relatório JSON não é aceite automático.
+
+Regressão obrigatória da candidata estável, com claims próprios de recursos/outputs globais e sem encadear BUILD nesta lane:
+
+```sh
+npm test
+npm run test:postgres
+npm run test:e2e
+npm run test:coverage
+npm run test:coverage:per-file
+npm run build:harness
+npm run build:runtime
+npm run boundary:products
+npm run docs:check-links
+```
+
+Acrescentar os testes novos PG ao script test:postgres fica com o Lead/manifests em rodada futura, não assumido existente. Build/smoke dos exports platform/API/worker deve usar o processo atual de build público e provar o mesmo binding/mascaramento nos emits; não modificar checker/qualificações0215/0216 para esconder novos sites. Certify/SBOM/licenses só pelo Lead com claim, na candidata estável quando aplicável; não são comandos desta lane.
+
+Gate final desta fatia: todos K01–K12 executados, zero oráculo obrigatório skipado, atual candidatura/hashes conferidos e crítica independente favorável. Falha/unknown não é PASS parcial. Mesmo um aceite local completo desses oráculos não fecha P100-010 nem autoriza produção, dado real, provider, release ou ferramentas sensíveis.

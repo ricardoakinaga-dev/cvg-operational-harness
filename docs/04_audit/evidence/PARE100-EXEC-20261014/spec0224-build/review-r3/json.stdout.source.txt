@@ -1,0 +1,236 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/complete-json.ts SHA256 ea773ca65a63bb9d3dc429db0681d245e7f3a7efe3e9a0f6d5236349c0888570
+     1 import type {
+     2   CompleteJsonErrorCode,
+     3   CompleteJsonLimits
+     4 } from './complete-tool-context.ts'
+     5 export type { CompleteJsonErrorCode } from './complete-tool-context.ts'
+     6 
+     7 export class CompleteJsonError extends Error {
+     8   public constructor(
+     9     public readonly code: CompleteJsonErrorCode,
+    10     message: string
+    11   ) {
+    12     super(message)
+    13     this.name = 'CompleteJsonError'
+    14   }
+    15 }
+    16 
+    17 /** Strict JSON snapshot. No property reads, hooks, coercion or Unicode normalization. */
+    18 export function canonicalizeCompleteJson(
+    19   value: unknown,
+    20   limits: CompleteJsonLimits = {}
+    21 ): string {
+    22   const maxBytes = limits.maxBytes ?? 32768
+    23   const maxDepth = limits.maxDepth ?? 32
+    24   const maxNodes = limits.maxNodes ?? 10000
+    25   for (const limit of [maxBytes, maxDepth, maxNodes]) {
+    26     if (!Number.isSafeInteger(limit) || limit < 0)
+    27       throw new CompleteJsonError('RESULT_COMPLEXITY', 'Invalid JSON limit')
+    28   }
+    29   const chunks: string[] = []
+    30   let bytes = 0,
+    31     nodes = 0
+    32   const ancestors = new Set<object>()
+    33   const invalid = (): never => {
+    34     throw new CompleteJsonError('INVALID_JSON', 'Value is not strict JSON')
+    35   }
+    36   const complexity = (): never => {
+    37     throw new CompleteJsonError(
+    38       'RESULT_COMPLEXITY',
+    39       'JSON complexity limit exceeded'
+    40     )
+    41   }
+    42   const append = (part: string): void => {
+    43     bytes += Buffer.byteLength(part, 'utf8')
+    44     if (bytes > maxBytes)
+    45       throw new CompleteJsonError(
+    46         'RESULT_TOO_LARGE',
+    47         'JSON byte limit exceeded'
+    48       )
+    49     chunks.push(part)
+    50   }
+    51   const string = (text: string): void => {
+    52     // UTF-16 units are a lower bound on escaped UTF-8 size, before scanning/allocation.
+    53     if (text.length + 2 > maxBytes - bytes)
+    54       throw new CompleteJsonError(
+    55         'RESULT_TOO_LARGE',
+    56         'JSON byte limit exceeded'
+    57       )
+    58     let encodedBytes = 2
+    59     for (let i = 0; i < text.length; i++) {
+    60       const unit = text.charCodeAt(i)
+    61       if (unit >= 0xd800 && unit <= 0xdbff) {
+    62         const next = text.charCodeAt(++i)
+    63         if (!(next >= 0xdc00 && next <= 0xdfff)) invalid()
+    64         encodedBytes += 4
+    65       } else if (unit >= 0xdc00 && unit <= 0xdfff) invalid()
+    66       else if (unit === 34 || unit === 92 || [8, 9, 10, 12, 13].includes(unit))
+    67         encodedBytes += 2
+    68       else if (unit < 32) encodedBytes += 6
+    69       else encodedBytes += unit < 128 ? 1 : unit < 2048 ? 2 : 3
+    70       if (encodedBytes > maxBytes - bytes)
+    71         throw new CompleteJsonError(
+    72           'RESULT_TOO_LARGE',
+    73           'JSON byte limit exceeded'
+    74         )
+    75     }
+    76     append(JSON.stringify(text))
+    77   }
+    78   const visit = (input: unknown, depth: number): void => {
+    79     if (++nodes > maxNodes || depth > maxDepth) complexity()
+    80     if (input === null) {
+    81       append('null')
+    82       return
+    83     }
+    84     switch (typeof input) {
+    85       case 'string':
+    86         string(input)
+    87         return
+    88       case 'boolean':
+    89         append(input ? 'true' : 'false')
+    90         return
+    91       case 'number':
+    92         if (!Number.isFinite(input) || Object.is(input, -0)) invalid()
+    93         append(JSON.stringify(input))
+    94         return
+    95       case 'object':
+    96         break
+    97       default:
+    98         invalid()
+    99     }
+   100     const object = input as object
+   101     if (ancestors.has(object)) invalid()
+   102     const array = Array.isArray(object)
+   103     const prototype = Object.getPrototypeOf(object)
+   104     if (
+   105       array
+   106         ? prototype !== Array.prototype
+   107         : prototype !== Object.prototype && prototype !== null
+   108     )
+   109       invalid()
+   110     const length = array
+   111       ? (Object.getOwnPropertyDescriptor(object, 'length')?.value as number)
+   112       : 0
+   113     if (array && length > maxNodes - nodes) complexity()
+   114     const keys = Reflect.ownKeys(object)
+   115     if (keys.some((key) => typeof key !== 'string')) invalid()
+   116     if (array && keys.length !== length + 1) invalid()
+   117     if (!array && keys.length > maxNodes - nodes) complexity()
+   118     ancestors.add(object)
+   119     append(array ? '[' : '{')
+   120     const names = array ? null : (keys as string[]).sort()
+   121     const count = array ? length : names!.length
+   122     for (let i = 0; i < count; i++) {
+   123       const name = array ? String(i) : names![i]!
+   124       const descriptor = Object.getOwnPropertyDescriptor(object, name)
+   125       if (!descriptor || !('value' in descriptor)) invalid()
+   126       if (i) append(',')
+   127       if (!array) {
+   128         string(name)
+   129         append(':')
+   130       }
+   131       visit(descriptor!.value, depth + 1)
+   132     }
+   133     append(array ? ']' : '}')
+   134     ancestors.delete(object)
+   135   }
+   136   visit(value, 1)
+   137   return chunks.join('')
+   138 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/__tests__/complete-json.test.ts SHA256 67d18b4437e1cc9b60ad2b41152ee521e00fecd7c3bf7a48e73c931695ca39c5
+     1 import { describe, expect, it } from 'vitest'
+     2 import {
+     3   canonicalizeCompleteJson,
+     4   CompleteJsonError
+     5 } from '../complete-json.ts'
+     6 
+     7 describe('complete JSON strict value snapshot', () => {
+     8   it('preserves aliases, Unicode, NUL keys, numeric keys and exact JSON values', () => {
+     9     const alias = { 'é\u0000': '😀\u0000é' }
+    10     const value = {
+    11       z: [null, true, false, 1.25, '', alias, alias],
+    12       '2': 2,
+    13       '10': 10
+    14     }
+    15     const raw = canonicalizeCompleteJson(value)
+    16     expect(raw.startsWith('{"10":10,"2":2,"z":')).toBe(true)
+    17     expect(JSON.parse(raw)).toEqual(value)
+    18     expect(canonicalizeCompleteJson(JSON.parse(raw))).toBe(raw)
+    19   })
+    20 
+    21   it.each([
+    22     undefined,
+    23     BigInt(1),
+    24     NaN,
+    25     Infinity,
+    26     -Infinity,
+    27     -0,
+    28     Symbol('s'),
+    29     () => 1,
+    30     '\ud800',
+    31     '\udfff',
+    32     { '\ud800': 1 },
+    33     new Date(),
+    34     new Map(),
+    35     [1, , 2],
+    36     { a: undefined },
+    37     Object.assign([1], { extra: 2 }),
+    38     { [Symbol('s')]: 1 }
+    39   ])('rejects non-JSON input without coercion (%#)', (value) => {
+    40     expect(() => canonicalizeCompleteJson(value)).toThrow(CompleteJsonError)
+    41     try {
+    42       canonicalizeCompleteJson(value)
+    43     } catch (error) {
+    44       expect((error as CompleteJsonError).code).toBe('INVALID_JSON')
+    45     }
+    46   })
+    47 
+    48   it('never invokes accessors or toJSON and rejects cycles', () => {
+    49     let calls = 0
+    50     const getter = Object.defineProperty({}, 'x', {
+    51       enumerable: true,
+    52       get() {
+    53         calls++
+    54         return 1
+    55       }
+    56     })
+    57     const hook = {
+    58       toJSON() {
+    59         calls++
+    60         return {}
+    61       }
+    62     }
+    63     const cycle: unknown[] = []
+    64     cycle.push(cycle)
+    65     for (const value of [getter, hook, cycle])
+    66       expect(() => canonicalizeCompleteJson(value)).toThrow()
+    67     expect(calls).toBe(0)
+    68   })
+    69 
+    70   it('enforces exact UTF-8 bytes, root-at-one depth and value node limits', () => {
+    71     expect(Buffer.byteLength(canonicalizeCompleteJson('a'.repeat(32766)))).toBe(
+    72       32768
+    73     )
+    74     expect(() => canonicalizeCompleteJson('a'.repeat(32767))).toThrow(
+    75       expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+    76     )
+    77     expect(canonicalizeCompleteJson('😀', { maxBytes: 6 })).toBe('"😀"')
+    78     expect(() => canonicalizeCompleteJson('😀', { maxBytes: 5 })).toThrow()
+    79     let nested: unknown = null
+    80     for (let i = 0; i < 31; i++) nested = [nested]
+    81     expect(() => canonicalizeCompleteJson(nested)).not.toThrow()
+    82     expect(() => canonicalizeCompleteJson([nested])).toThrow(
+    83       expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+    84     )
+    85     expect(() => canonicalizeCompleteJson(Array(9999).fill(0))).not.toThrow()
+    86     expect(() => canonicalizeCompleteJson(Array(10000).fill(0))).toThrow(
+    87       expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+    88     )
+    89     expect(() => canonicalizeCompleteJson('x'.repeat(10_000_000))).toThrow(
+    90       expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+    91     )
+    92     expect(() => canonicalizeCompleteJson(new Array(2 ** 30))).toThrow()
+    93   })
+    94 })
+

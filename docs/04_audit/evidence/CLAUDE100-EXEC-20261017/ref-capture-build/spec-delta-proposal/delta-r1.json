@@ -1,0 +1,64 @@
+{
+  "task": "C100-Q01-REF-CAPTURE-001:SPEC0238-DELTA-PROPOSAL-R1",
+  "status": "DOCUMENTARY_PROPOSAL / NOT_APPROVED / NOTHING_EXECUTED_UNDER_IT",
+  "recorded_at": "2026-10-18T20:27:19.925042+00:00",
+  "base_spec": {
+    "path": "docs/02_spec/0238_claude_scripted_reference_capture.md",
+    "sha256": "48b270842ec83b422ecafeff2a4e802abd2194838ad3669becd2ebf825c464e6"
+  },
+  "authority_needed": "New explicit T3 decision of the user (D-12) on the revised SPEC SHA before any BUILD or native run under this delta. The approval of SPEC0238 does not extend to it.",
+  "observed_facts_from_raw_evidence": {
+    "capture_root": "/mnt/ia/cvg-claude100-refcapture-runtime-20261018/native-r1/capture (archived copy: ref-capture-build/capture-r1/capture)",
+    "report_sha256": "c544351d5251196d4d8fbe37d9aa18d787baf1303d3478b265a16d29f87d383c",
+    "observer_trace_sha256": "b0cd6cd8da267ac41616bca34d6ea6fb6a9a49a27a41e2c06e97bd78fc54d1fe",
+    "native_p1_stdout_sha256": "cd87b23d53cf5cc04c1c93d0e48e93d288dd637e67e9b670a81878780443708b",
+    "result": "INCOMPATIBLE_TRANSCRIPT/1; TEXT INCOMPATIBLE; READ and WRITE_DENIED NOT_RUN; RC01/02/03/07/08/09/11 PASS, RC04 FAIL, RC10 NOT_RUN external",
+    "request_0": "observer-trace.json#106/#107: REQUEST_BEGIN {methodClass:OTHER,pathClass:OTHER,authClass:ABSENT} -> REJECTED UNSUPPORTED_ROUTE, fixed 400 COMPLETE (a non-POST side request; admissible and counted, not part of this delta)",
+    "request_1": "observer-trace.json#116/#117: REQUEST_BEGIN {methodClass:POST,pathClass:MESSAGES,authClass:SENTINEL,caseId:TEXT} -> REJECTED UNSUPPORTED_ROUTE, fixed 400 COMPLETE; no REQUEST frame and no REQUEST_BODY (body not retained by contract)",
+    "native_text_end": "control-trace.json NATIVE_END TEXT: exitCode 1, signal null, timeout false, descendantsAbsent true; native/p1/stdout.bin is one result JSON with is_error:true, api_error_status:400, result 'API Error: 400 CVG_CAPTURE_REJECTED_V1', permission_denials []",
+    "version": "process 0 stdout '2.1.302 (Claude Code)\\n', exit 0",
+    "what_the_raw_proves": "The pinned client sent exactly one POST with the sentinel to pathname /v1/messages during TEXT and the collector refused it as outside the eligible route; with POST+MESSAGES+SENTINEL the only collector code paths producing UNSUPPORTED_ROUTE are a non-empty query (request-target != '/v1/messages') or an Expect/100-continue (checkContinue/checkExpectation) request.",
+    "what_remains_inference": "The exact query text. By SPEC0238 design the URL is never retained. The literal '/v1/messages?beta=true' is inferred from a pre-run static byte scan of the pinned binary (5 matches, Anthropic SDK beta messages client: this._client.post(\"/v1/messages?beta=true\", ...)), recorded before the run in ref-capture-build/pre-run-risk-register.json, and from the 0235 probe that admitted '/v1/messages' or '/v1/messages?beta=true' and observed beta-only body fields (context_management, output_config)."
+  },
+  "proposed_change": {
+    "summary": "Admit exactly one additional literal request-target for the eligible exchange, '/v1/messages?beta=true', and make the query observable by a closed enum so the next capture proves it without retaining arbitrary URL text. Everything else in SPEC0238 (scripts, flags, model, env, profile, containment, caps, wire framing, statuses, RC01-RC11) is unchanged.",
+    "edits": [
+      {
+        "anchor": "L70 'Query é vazia; sem URL/redirect/upstream.'",
+        "replace_with": "A request-target é exatamente `/v1/messages` (query vazia) ou exatamente `/v1/messages?beta=true`; qualquer outra query, fragmento, ordem ou valor é rota OTHER. Sem URL/redirect/upstream. A query nunca é copiada: só o enum queryClass EMPTY/BETA_TRUE/OTHER é registrado."
+      },
+      {
+        "anchor": "L150 REQUEST_BEGIN payload",
+        "replace_with": "`{caseId:K,ordinal:Q,methodClass:POST/OTHER,pathClass:MESSAGES/OTHER,queryClass:EMPTY/BETA_TRUE/OTHER,authClass:SENTINEL/ABSENT/FORBIDDEN}`; admission text adds: queryClass só classifica a query literal fixa; nenhum outro texto de URL é retido."
+      },
+      {
+        "anchor": "L151 REQUEST payload and admission",
+        "replace_with": "Acrescentar `query:EMPTY/BETA_TRUE` ao payload fechado (path continua o literal `/v1/messages`). 'POST candidato' passa a ser POST + pathClass MESSAGES + queryClass EMPTY ou BETA_TRUE; queryClass OTHER continua REJECTED/UNSUPPORTED_ROUTE com o 400 fixo."
+      },
+      {
+        "anchor": "Appendix A Expect/100-continue",
+        "replace_with": "Para eliminar a ambiguidade residual desta evidência, um POST candidato com Expect/100-continue passa a ser classificado REJECTED/UNSUPPORTED_ROUTE com `expectClass:EXPECT` no REQUEST_BEGIN (enum NONE/EXPECT), sem copiar o valor do header."
+      }
+    ],
+    "not_changed": [
+      "model claude-opus-5-5",
+      "argv/flags incl. --permission-mode dontAsk --permission-prompts none",
+      "env and synthetic key",
+      "SSE scripts and five IDs",
+      "tool inventories and turn guards",
+      "native result and permission_denials contract",
+      "containment profile and limits",
+      "caps (12 requests, 5 eligible POST)",
+      "report v2 fields except the two new enums inside wire payloads",
+      "RC01-RC11 criteria and terminal precedence"
+    ],
+    "rationale": "SPEC0238 L21 states that incompatibility does not authorize silently changing the route; this proposal makes the change explicit, minimal (one fixed literal already accepted by the approved SPEC0235 probe) and observable (queryClass/expectClass), so a future run either proves BETA_TRUE or stays honestly incompatible.",
+    "risks_and_unknowns": [
+      "After admission the remaining hypotheses stay NOT_RUN: acceptance of the scripted SSE by 2.1.302, Read execution under dontAsk/--allowedTools Read, and the permission_denials shape for Write.",
+      "A different query (e.g. a future client) remains OTHER and INCOMPATIBLE.",
+      "Expect/100-continue cannot be excluded by the current raw evidence; the expectClass enum resolves it in the next run."
+    ],
+    "future_build_scope_if_approved": "observer.mjs (classification/admission), protocol.mjs (closed payload schemas), model.mjs/report.mjs (validation), tests; new candidate, independent code review, one new contained run, raw audit, gates. No other file and no new capability."
+  },
+  "rc_impact": "None relaxed. RC07 gains a privacy-preserving enum; RC04-RC06 remain unproved until a new authorized run."
+}

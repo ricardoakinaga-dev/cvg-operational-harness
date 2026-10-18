@@ -1,0 +1,77 @@
+"""Finite HTTPS data acquisition. Never installs or imports downloaded code."""
+from pathlib import Path
+import http.client, ssl, json, hashlib, time, sys, urllib.parse
+from datetime import datetime, timezone
+
+R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+P=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-profile-artifacts'
+N=Path('/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts')
+RAW=N/'raw';RAW.mkdir(exist_ok=True)
+proposal=json.loads((P/'input-dependency-proposal.json').read_text())
+ALLOWED={'files.pythonhosted.org','registry.npmjs.org'}
+MAX_TOTAL=67108864
+def sha(b):return hashlib.sha256(b).hexdigest()
+def save(n,j):(P/n).write_text(json.dumps(j,ensure_ascii=False,indent=2)+'\n')
+assert proposal['count']==7 and len(proposal['artifacts'])==7
+assert not (P/'acquisition.json').exists(),'No implicit rerun; inspect preserved attempt first.'
+save('acquisition-admission.json',{'kind':'FINITE_DATA_ACQUISITION_ADMISSION','helper_sha256':sha(Path(__file__).read_bytes()),
+ 'proposal_sha256':sha((P/'input-dependency-proposal.json').read_bytes()),'artifact_count':7,
+ 'TLS_CA_bundle':{'path':'/etc/ssl/certs/ca-certificates.crt','sha256':sha(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes())},
+ 'network':'Direct HTTPS to two exact authority allowlist; no environment proxies, authentication, credentials, installer, registry latest resolution or target import. Redirects refused.',
+ 'policy':'One attempt per artifact in this invocation; second requires explicit transient-failure disposition, never replace pin/hash. Timeout30s per request across all reads.',
+ 'admitted_at':datetime.now(timezone.utc).isoformat()})
+ctx=ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt');ctx.minimum_version=ssl.TLSVersion.TLSv1_2
+rows=[]; total=0
+for spec in proposal['artifacts']:
+    url=urllib.parse.urlsplit(spec['artifact_url']);assert url.scheme=='https' and url.hostname in ALLOWED and not url.username and not url.password and not url.query and not url.fragment and (url.port in [None,443])
+    limit=33554432 if spec['name']=='typescript' else 8388608
+    name=Path(url.path).name;assert name and '..' not in name
+    raw=RAW/name;partial=RAW/(name+'.attempt1.part');assert not raw.exists() and not partial.exists()
+    begin=time.monotonic();deadline=begin+30;conn=None;size=0;digest=hashlib.sha256();digest512=hashlib.sha512()
+    row={'name':spec['name'],'version':spec['version'],'url':spec['artifact_url'],'attempt':1,'observed_at':datetime.now(timezone.utc).isoformat(),'code_executed':False}
+    try:
+        conn=http.client.HTTPSConnection(url.hostname,443,timeout=30,context=ctx);conn.connect();sock=conn.sock
+        row['TLS']={'version':sock.version(),'cipher':sock.cipher()[0],'peer_certificate_sha256':sha(sock.getpeercert(binary_form=True))}
+        sock.settimeout(max(.05,deadline-time.monotonic()))
+        conn.request('GET',url.path,headers={'User-Agent':'CVG-CODEX100-data-acquisition/1','Accept':'application/octet-stream','Accept-Encoding':'identity','Connection':'close'})
+        response=conn.getresponse();row['http_status']=response.status
+        row['headers']={k:response.getheader(k) for k in ['Content-Type','Content-Length','ETag','Last-Modified','Date','Server'] if response.getheader(k) is not None}
+        if response.status!=200:
+            sock.settimeout(max(.05,deadline-time.monotonic()));err=response.read(16384)
+            row['error_response_prefix']={'bytes':len(err),'sha256':sha(err),'UTF8':err.decode('utf-8',errors='replace')[:8000]}
+            raise ValueError('HTTP_STATUS_'+str(response.status)+'; no redirect or artifact substitute')
+        encoding=response.getheader('Content-Encoding');assert encoding in [None,'identity'],encoding
+        length=response.getheader('Content-Length')
+        if length is not None:assert 0<int(length)<=limit and total+int(length)<=MAX_TOTAL
+        with partial.open('xb') as output:
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError('whole request deadline30s')
+                sock.settimeout(max(.01,remaining));chunk=response.read(65536)
+                if not chunk:break
+                size+=len(chunk);total+=len(chunk)
+                assert size<=limit and total<=MAX_TOTAL,'raw-byte cap exceeded'
+                output.write(chunk);digest.update(chunk);digest512.update(chunk)
+        if length is not None:assert size==int(length),'response Content-Length mismatch'
+        row.update({'bytes':size,'sha256':digest.hexdigest(),'sha512_hex':digest512.hexdigest()})
+        if 'expected_sha256' in spec:
+            assert digest.hexdigest()==spec['expected_sha256'],'lock SHA256 mismatch'
+            assert size==spec['expected_bytes'],'lock size mismatch'
+        else:
+            import base64
+            assert spec['expected_integrity']=='sha512-'+base64.b64encode(digest512.digest()).decode(),'lock SHA512 integrity mismatch'
+        partial.rename(raw);row.update({'status':'ACQUIRED_LOCK_MATCHED_RAW_NOT_EXECUTED','raw_path':str(raw)})
+    except Exception as exc:
+        row.update({'status':'ACQUISITION_FAILED_NOT_SUBSTITUTED','error_type':type(exc).__name__,'error':str(exc)})
+        if partial.exists():
+            row['partial']={'path':str(partial),'bytes':partial.stat().st_size,'sha256':sha(partial.read_bytes())}
+            if partial.stat().st_size==0:
+                partial.unlink();row['partial']['representation']='Exact empty attempted file removed; zero-byte metadata preserved here.'
+        row['transient_retry_candidate']=isinstance(exc,(TimeoutError,ConnectionError,OSError)) or row.get('http_status') in [408,429,500,502,503,504]
+    finally:
+        if conn:conn.close()
+    row['elapsed_seconds']=round(time.monotonic()-begin,6);rows.append(row)
+    save('acquisition-live.json',{'status':'IN_PROGRESS_DATA_ONLY','completed':len(rows),'total_raw_read_bytes':total,'rows':rows})
+    print(json.dumps({'name':row['name'],'status':row['status'],'bytes':row.get('bytes'),'http_status':row.get('http_status'),'error':row.get('error')},ensure_ascii=False),flush=True)
+save('acquisition.json',{'kind':'EXECUTED_BOUNDED_HTTPS_DATA_ACQUISITION','rows':rows,'count':len(rows),'passed':sum(x['status']=='ACQUIRED_LOCK_MATCHED_RAW_NOT_EXECUTED' for x in rows),'failed':sum(x['status']!='ACQUIRED_LOCK_MATCHED_RAW_NOT_EXECUTED' for x in rows),'total_raw_read_bytes':total,'SDK_imports':0,'compiler_executions':0,'installers':0,'functional_receipts':0})
+sys.exit(0 if all(x['status']=='ACQUIRED_LOCK_MATCHED_RAW_NOT_EXECUTED' for x in rows) else 1)

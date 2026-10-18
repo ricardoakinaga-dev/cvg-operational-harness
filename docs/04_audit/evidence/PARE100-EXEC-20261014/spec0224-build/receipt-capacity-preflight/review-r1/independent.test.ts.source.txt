@@ -1,0 +1,71 @@
+import {readFileSync} from 'node:fs'
+import {describe,it,expect} from 'vitest'
+import {CompleteDecisionAdmission} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/receipt-capacity-preflight/review-packet-r1/artifact/packages/harness/src/complete-decision-admission.ts'
+import {IterativeGovernedRuntime} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/receipt-capacity-preflight/review-packet-r1/artifact/packages/harness/src/iterative-runtime.ts'
+import {CheckpointError,checkpointDigest} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/receipt-capacity-preflight/review-packet-r1/artifact/packages/harness/src/step-store.ts'
+import {CompleteJsonError,canonicalizeCompleteJson} from '@cvg/harness-contracts'
+const cases=JSON.parse(readFileSync(process.env.I1_REVIEW+'/native-contained.observations.json','utf8'))
+function harness(name='free-20000-prior-true-ASCII',padded=false) {
+ const t=cases.find((t:any)=>t.name===name),m=t.measurements.findLast((m:any)=>m.resumed)
+ const cp=structuredClone(m.checkpointBeforeReserve.checkpointWithoutFixturePadding)
+ if(padded) {const r=m.checkpointBeforeReserve.paddingRecipe;cp.state.resolvedInputs.fixturePadding=r.character.repeat(r.repeat)+r.suffix}
+ const run:any={input:{tenantId:cp.tenantId,correlationId:m.request.correlationId,budget:{maxModelCalls:100,maxTokens:100000,maxCostUsd:100,maxDecisionRepairs:5}},executionId:cp.executionId,state:cp.state,usage:cp.budgetUsage,observations:cp.state.observations}
+ const runtime:any=Object.create(IterativeGovernedRuntime.prototype)
+ runtime.options={toolResultContext:{version:1}};runtime.orchestratorVersion=cp.orchestratorVersion
+ let saves=0,audits=0;let projected:any;let fault:any;let auditFault:any
+ const before=structuredClone(run),usageIdentity=run.usage,stateIdentity=run.state.toolResultContext
+ const port=new CompleteDecisionAdmission({run,stepNumber:cp.stepNumber+1,tokenBudget:100000,signal:new AbortController().signal,remainingMs:()=>30000,
+ preflight:(state,usage)=>{
+  expect(run).toEqual(before);expect(run.usage).toBe(usageIdentity);expect(run.state.toolResultContext).toBe(stateIdentity)
+  runtime.preflightDecisionReceipt(run,state,usage)
+  projected=runtime.checkpointFor(run,{...run.state,toolResultContext:state},usage)
+ },persist:async()=>{
+  saves++;if(fault)throw fault
+  if(saves===1)expect(checkpointDigest(runtime.checkpointFor(run))).toBe(checkpointDigest(projected))
+ },audit:async()=>{audits++;if(auditFault)throw auditFault}})
+ return {run,runtime,port,input:{request:m.request,measurement:m.measurement,attempt:0},before,usageIdentity,get saves(){return saves},get audits(){return audits},set fault(e){fault=e},set auditFault(e){auditFault=e}}
+}
+describe('I1 independent native ordering and error ownership',()=>{
+ it('projects exactly the native saved reservation before mutation; settles without charging prior usage twice',async()=>{
+  const h=harness();const receipt=await h.port.reserve(h.input)
+  expect(h.run.usage).toBe(h.usageIdentity);expect(h.saves).toBe(1);expect(h.audits).toBe(1)
+  expect(receipt.status).toBe('RESERVED')
+  const result={text:'{}',provider:receipt.measurement.provider,model:receipt.measurement.model,inputTokens:3,outputTokens:1,costUsd:0.125}
+  const settled=await h.port.settle({kind:'RESULT',admissionId:receipt.admissionId,requestSha256:receipt.requestSha256,result})
+  expect(settled.status).toBe('SETTLED')
+  expect(h.run.usage.inputTokens).toBe(h.before.usage.inputTokens+3)
+  expect(h.run.usage.outputTokens).toBe(h.before.usage.outputTokens+1)
+  expect(h.run.usage.costUsd).toBe(h.before.usage.costUsd+0.125)
+  const snapshot=structuredClone(h.run);const saves=h.saves
+  expect(await h.port.settle({kind:'RESULT',admissionId:receipt.admissionId,requestSha256:receipt.requestSha256,result})).toEqual(settled)
+  expect(h.run).toEqual(snapshot);expect(h.saves).toBe(saves)
+ })
+ for(const character of ['ASCII','NUL'])it('refuses '+character+' capacity before any live reservation or write',async()=>{
+  const h=harness('free-2000-prior-true-'+character,true)
+  await expect(h.port.reserve(h.input)).rejects.toMatchObject({code:'CONTEXT_OVERFLOW',message:'No checkpoint space for the decision receipt.'})
+  expect(h.run).toEqual(h.before);expect(h.run.usage).toBe(h.usageIdentity);expect(h.saves).toBe(0);expect(h.audits).toBe(0)
+ })
+ it('does not disguise a schema or JSON integrity error as capacity refusal',()=>{
+  const h=harness();h.run.state.resolvedInputs.invalid=undefined
+  let e:any;try{h.runtime.preflightDecisionReceipt(h.run,h.run.state.toolResultContext,h.run.usage)}catch(error){e=error}
+  expect(e).toBeInstanceOf(CompleteJsonError);expect(e.code).toBe('INVALID_JSON');expect(h.saves).toBe(0)
+  delete h.run.state.resolvedInputs.invalid;h.run.state.unrecognizedNativeField=true
+  expect(()=>h.runtime.preflightDecisionReceipt(h.run,h.run.state.toolResultContext,h.run.usage)).toThrow(CheckpointError)
+ })
+ for(const fault of [new Error('Checkpoint byte limit'),new CheckpointError('checkpoint_integrity','Checkpoint byte limit'),new CompleteJsonError('RESULT_TOO_LARGE','synthetic persistence size error')])it('keeps an external save fault conservative: '+fault.name,async()=>{
+  const h=harness();h.fault=fault
+  await expect(h.port.reserve(h.input)).rejects.toBe(fault)
+  expect(h.saves).toBe(1);expect(h.audits).toBe(0);expect(h.run.usage.modelCalls).toBe(h.before.usage.modelCalls+1)
+  expect(h.run.state.toolResultContext.decisionAdmissions.at(-1).status).toBe('RESERVED')
+  const charged=structuredClone(h.run.usage);h.fault=undefined
+  await h.port.close('independent_save_failure')
+  expect(h.run.usage).toEqual(charged);expect(h.run.state.toolResultContext.decisionAdmissions.at(-1).status).toBe('UNKNOWN')
+ })
+ it('retains a size-shaped post-reserve audit error and closes UNKNOWN without refund',async()=>{
+  const h=harness();const fault=new CompleteJsonError('RESULT_TOO_LARGE','synthetic audit failure');h.auditFault=fault
+  await expect(h.port.reserve(h.input)).rejects.toBe(fault)
+  expect(h.saves).toBe(1);const charged=structuredClone(h.run.usage)
+  await h.port.close('independent_audit_failure');expect(h.run.usage).toEqual(charged)
+  expect(h.run.state.toolResultContext.decisionAdmissions.at(-1).status).toBe('UNKNOWN')
+ })
+})

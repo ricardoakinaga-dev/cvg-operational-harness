@@ -1,0 +1,248 @@
+"""T1 bounded evidence checks; this never executes the CVG runtime or target code."""
+from pathlib import Path
+import ast
+import collections
+import datetime
+import hashlib
+import json
+import re
+import subprocess
+
+OUT = Path(__file__).resolve().parent
+ROOT = OUT.parents[3]
+UP = Path('/tmp/cvg-rea-codex-20261017/upstream')
+SCHEMAS = Path('/tmp/cvg-codex100-exec-20261017/experimental-schemas')
+G = OUT/'g01'
+NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+PIN = '8d9f6466ff0294785d56f55b1fe363d132fe4133'
+checks = []
+if not (OUT/'verification.json').exists():
+    (OUT/'verification.json').write_text('{"status":"RUNNING","functional_receipts":0}\n')
+
+def read(path):
+    return json.loads(path.read_text())
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def check(name, function):
+    try:
+        detail = function()
+        checks.append({'name':name, 'result':'PASS', 'detail':detail})
+    except Exception as exc:
+        checks.append({'name':name, 'result':'FAIL', 'detail':str(exc)})
+
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+catalog = read(ROOT/'docs/03_build/tracking/codex100_catalog_v1.json')
+initial = read(OUT/'catalog-input-draft-r1.json')
+protocol = read(G/'protocol-source-inventory.json')
+matrix = read(G/'variant-matrix.json')
+dispositions = read(G/'source-only-dispositions.json')
+
+def identity():
+    require(subprocess.check_output(['git','-C',str(UP),'rev-parse','HEAD'],text=True).strip()==PIN,'Wrong source pin')
+    require(not subprocess.check_output(['git','-C',str(UP),'status','--porcelain'],text=True).strip(),'Upstream modified')
+    return {'commit':PIN,'clean':True,'source_binary_binding':'NOT_AUTHENTICATED'}
+check('source_identity',identity)
+
+def input_snapshots():
+    entry=read(OUT/'entry.json')['files']
+    require(sha(OUT/'catalog-input-draft-r1.json')==entry['docs/03_build/tracking/codex100_catalog_v1.json'],'Initial catalog snapshot mismatch')
+    require(sha(OUT/'backlog-input.txt')==entry['docs/03_build/0386_backlog_paridade_codex.md'],'Initial backlog snapshot mismatch')
+    for p in ['docs/03_build/0384_plano_executivo_paridade_codex.md',
+              'docs/03_build/0385_roadmap_paridade_codex.md']:
+        require(sha(ROOT/p)==entry[p],'Executive plan/roadmap changed during this unit')
+    return {'initial_catalog_and_backlog_byte_exact':True,'executive_plan_and_roadmap_unchanged':True,
+            'backlog_snapshot_extension':'txt preserves exact bytes without reinterpreting historical relative Markdown links'}
+check('original_input_snapshots',input_snapshots)
+
+def additive():
+    rows = catalog['requirements']; original = initial['requirements']
+    by_id = {r['id']:r for r in rows}
+    require(len(by_id)==len(rows),'Duplicate requirement IDs')
+    require(all(by_id.get(r['id'])==r for r in original),'Original normative requirement changed/removed')
+    counts = collections.Counter(r['kind'] for r in rows)
+    require(counts['FUNCTIONAL_PARITY']==485 and len(rows)==507,'Wrong denominator')
+    require(catalog['mandatory_cvg_controls']==22,'Controls changed')
+    require(len({r['family'] for r in rows if r['kind']=='FUNCTIONAL_PARITY'})==22,'Functional family omitted')
+    require(not any(r.get('receipt') or r['status']!='NOT_RUN' for r in rows),'Unqualified evidence relabeled functional')
+    require(not catalog['full_codex_parity_claim'] and 'OPEN' in catalog['scope_closure'],'False closure')
+    delta=read(G/'catalog-delta.json')
+    require(set(delta['added_requirement_ids'])==set(by_id)-{r['id'] for r in original},'Wrong additive delta')
+    require(len(delta['added_requirement_ids'])==106 and not delta['removed_requirement_ids'],'Wrong delta count')
+    return {'initial_preserved':401,'added':106,'functional':485,'controls':22,'qualified':0}
+check('catalog_additivity_and_honest_scope',additive)
+
+def owners():
+    text=(ROOT/'docs/03_build/0386_backlog_paridade_codex.md').read_text()
+    tasks=set(re.findall(r'^### (DX100-[A-Z]\d\d)\s',text,re.M))
+    require(len(tasks)==49,'Backlog task count changed')
+    require(all(r['owner'] in tasks for r in catalog['requirements']),'Requirement has unknown owner')
+    return {'tasks':49,'unknown_owners':0}
+check('task_ownership',owners)
+
+def source_refs():
+    paths={}
+    def visit(value):
+        if isinstance(value,dict):
+            if 'path' in value and 'sha256' in value and (UP/value['path']).is_file():
+                old=paths.setdefault(value['path'],value['sha256'])
+                require(old==value['sha256'],'Conflicting hash: '+value['path'])
+            for v in value.values():visit(v)
+        elif isinstance(value,list):
+            for v in value:visit(v)
+    for filename in ['protocol-source-inventory.json','variant-matrix.json','source-only-dispositions.json',
+                     'exec-server-contracts.json','component-inventory.json','sdk-public-inventory.json',
+                     'cli-attribute-inventory.json','tool-reachability-inventory.json']:
+        visit(read(G/filename))
+    require(all(sha(UP/p)==h for p,h in paths.items()),'Source digest drift')
+    return {'source_files':len(paths),'all_match':True}
+check('pinned_source_hashes',source_refs)
+
+def schemas():
+    idx=read(G/'schema-snapshot-index.json')['files']
+    require(len(idx)==452,'Missing generated schema files')
+    require(all(sha(SCHEMAS/r['path'])==r['sha256'] for r in idx),'Companion schema drift')
+    counts={}
+    for envelope in ['ClientRequest','ServerRequest','ServerNotification','ClientNotification']:
+        p=G/'reference'/(envelope+'.json')
+        require(p.read_bytes()==(SCHEMAS/(envelope+'.json')).read_bytes(),'Snapshot changed')
+        counts[envelope]=len(read(p)['oneOf'])
+    require(sum(counts.values())==269,'Envelope count')
+    require(protocol['counts']=={'ClientRequest':175,'ServerRequest':11,'ServerNotification':87,'ClientNotification':1},'Source counts')
+    return {'companion_files':452,'companion_envelopes':counts,'source_contracts':274}
+check('companion_snapshots_and_source_counts',schemas)
+
+def source_only():
+    expected={r['requirement'] for r in protocol['entries'] if not r['companion_schema_presence']}
+    rows=dispositions['contracts']
+    require(len(rows)==5 and {r['requirement'] for r in rows}==expected,'Source-only gap lost')
+    for row in rows:
+        require(row['qualification']=='NOT_RUN' and row['source_disposition_resolved'],'Disposition status')
+        for s in row['sources']:
+            lines=(UP/s['path']).read_text().splitlines()
+            require(s['anchor'] in lines[s['line']-1],'Anchor no longer matches')
+            excerpt='\n'.join(lines[s['excerpt_start']-1:s['excerpt_start']-1+len(s['excerpt'].split('\n'))])
+            require(excerpt==s['excerpt'],'Source excerpt mismatch')
+        if 'pinned_schema' in row:
+            s=row['pinned_schema']
+            require((UP/s['path']).read_bytes()==(G/s['snapshot']).read_bytes(),'Pinned raw schema mismatch')
+    return {'dispositions':5,'functional_receipts':0,'transitive_variants':'OPEN'}
+check('source_only_dispositions',source_only)
+
+def response_coverage():
+    requests={r['requirement']:r for r in protocol['entries'] if r['envelope'] in ['ClientRequest','ServerRequest']}
+    responses={r['requirement']:r for r in matrix['request_responses']}
+    require(len(responses)==186 and requests.keys()==responses.keys(),'Request response omission')
+    for rid,row in responses.items():
+        require(row['source_response_type']==requests[rid]['response_type'],'Response type mismatch')
+        require(row['response_sender']==('SERVER' if requests[rid]['envelope']=='ClientRequest' else 'CLIENT'),'Wrong sender')
+        require(row['open_obligations'] and row['qualification']=='NOT_RUN','Implicit response closure')
+    missing=[r['request_method'] for r in responses.values() if not r['schema_variants']]
+    require(set(missing)=={'getConversationSummary','gitDiffToRemote','getAuthStatus'},'Unexplained missing response schemas')
+    current=next(r for r in responses.values() if r['request_method']=='currentTime/read')
+    require(any(n['pointer'].endswith('/properties/currentTimeAt') and n.get('type')=='integer'
+                for v in current['schema_variants'] for n in v['nodes']),'Lost currentTimeAt response')
+    return {'request_response_obligations':186,'no_exported_schema':missing,'source_reconciliation':'OPEN'}
+check('response_side_completeness_with_open_obligations',response_coverage)
+
+def schema_projection_regressions():
+    # Load only our walker definition, without running generator mutations.
+    parsed=ast.parse((G/'extract_contracts.py').read_text())
+    function=next(n for n in parsed.body if isinstance(n,ast.FunctionDef) and n.name=='walk_schema')
+    env={};exec(compile(ast.Module(body=[function],type_ignores=[]),'<bounded-schema-walker>','exec'),env)
+    walk=env['walk_schema']
+    fixture={'type':'object','not':{'required':['filters','exclude']},
+             'properties':{'speed':{'type':'number','exclusiveMinimum':0,'format':'double'}},
+             'additionalProperties':{'$ref':'#/definitions/Filter'},'unrecognized-key':{'guard':True}}
+    nodes=list(walk(fixture,{'Filter':{'enum':['include','exclude']}},''))
+    require(any(n['pointer']=='/not' and n['required']==['filters','exclude'] for n in nodes),'not lost')
+    require(any(n.get('constraints',{}).get('exclusiveMinimum')==0 and n['constraints'].get('format')=='double' for n in nodes),'Bound/format lost')
+    require(any(n.get('enum')==['include','exclude'] for n in nodes),'Map type not expanded')
+    require(any('unrecognized-key' in n.get('unsupported_keywords',{}) for n in nodes),'Unknown keyword silently skipped')
+    require(list(walk(False,{},''))[0]['boolean_schema'] is False,'Boolean schema lost')
+    require(any(n.get('constraints',{}).get('exclusiveMinimum')==0 for r in matrix['configuration'] for n in r['nodes']),'Real config positive bound lost')
+    require(any('/not' in n['pointer'] for r in matrix['configuration'] for n in r['nodes']),'Real config exclusions lost')
+    return {'synthetic_constraint_probes':6,'pinned_config_probes':2,'purpose':'Evidence extractor regression only; not application parity'}
+check('review_r1_schema_regressions',schema_projection_regressions)
+
+def inventories():
+    sdk=read(G/'sdk-public-inventory.json')
+    require(len(sdk['exports'])==sdk['public_export_count']==34,'SDK exports changed')
+    members={r['exported_name']:{n['name'] for n in r.get('public_members',[])} for r in sdk['exports']}
+    require({'startThread','resumeThread','constructor'}<=members['Codex'],'SDK class omission')
+    require({'run','runStreamed','id','constructor'}<=members['Thread'],'Thread members omitted')
+    cli=read(G/'cli-attribute-inventory.json');tools=read(G/'tool-reachability-inventory.json')
+    require(cli['attribute_count']==len(cli['attributes'])==196 and len(cli['files'])==30,'CLI inventory drift')
+    require(len(tools['files'])==19 and tools['scope_closure']=='OPEN_G01','Tool scope misleading')
+    return {'sdk_exports':34,'cli_files':30,'cli_attributes':196,'tool_source_files':19,
+            'command_graph_tool_reachability_and_semantics':'OPEN'}
+check('sdk_cli_tool_inventory_structure',inventories)
+
+def continuity():
+    state=read(OUT/'state.json'); plan=(ROOT/state['active_execplan']).read_text()
+    require(state['goal_status']=='active' and state['status']=='IN_PROGRESS','False completion')
+    require('active_action_id='+state['active_action_id'] in plan,'ExecPlan/state disagree')
+    require('['+state['active_action_id']+']' in plan,'No executable next action marker')
+    return {'active_action_id':state['active_action_id'],'goal_status':'active','g01':'IN_PROGRESS'}
+check('continuity_consistency',continuity)
+
+def rea():
+    record=read(G/'rea-experimental-schema-generation.json'); value=record['normalized_result']
+    require(record['evidence_id']=='ev_ccf6fcd3199170a93847b193d2c77dbda0d5bae51853680c0b37a37cfa762e51','Wrong REA evidence')
+    require(not value['truncated'],'Truncated capture')
+    require(value['exit'].get('exit_code',value['exit'].get('code'))==0,'REA command failed')
+    return {'evidence_id':record['evidence_id'],'exit':value['exit'],
+            'limitation':'Manifest authenticates env launcher; binary identity is checked separately'}
+check('rea_capture_exit_and_limits',rea)
+
+def native_binary():
+    binary=Path('/home/ricardo/.nvm/versions/node/v24.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex')
+    actual=sha(binary)
+    require(actual=='399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215','Native binary changed')
+    return {'sha256':actual,'bytes':binary.stat().st_size,'source_build_binding':'OPEN_G02'}
+check('native_companion_identity',native_binary)
+
+def review_integrity():
+    first=read(OUT/'review-input-r1.json')
+    second=read(OUT/'review-input-r2.json')
+    require(all(sha(OUT/'review-r1-inputs'/r['path'])==r['sha256'] for r in first['files']),'Archived R1 input drift')
+    require(all(sha(OUT/r['path'])==r['sha256'] for r in second['files']),'Reviewed R2 input drift')
+    require(sha(OUT/'review-r2-catalog.json')==second['catalog']['sha256'],'Reviewed catalog snapshot drift')
+    require(read(OUT/'review-r2-catalog.json')==catalog,'Catalog changed beyond formatting after R2')
+    require('ACCEPT_BOUNDED_INCREMENT' in (OUT/'review-r2.raw.txt').read_text(),'No bounded review acceptance')
+    return {'r1_original_inputs':len(first['files']),'r2_inputs':len(second['files']),
+            'verdict':'ACCEPT_BOUNDED_INCREMENT','catalog_post_review_change':'JSON formatting only',
+            'limits':'No full G01, CLI/SDK completeness, runtime, gate or reuse approval'}
+check('independent_review_integrity',review_integrity)
+
+for name,cmd,log in [
+    ('scoped_markdown_links',[NODE,'scripts/check-doc-links.mjs',str(OUT),
+        '.agent/plans/codex100-exec-20261017.md','docs/03_build/0386_backlog_paridade_codex.md',
+        'docs/08_runtime/handoffs/codex100_exec_20261017.md'],'verification-links.log'),
+    ('scoped_document_format',[NODE,'node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check',
+        str(OUT/'README.md'),str(G/'README.md'),'.agent/plans/codex100-exec-20261017.md',
+        'docs/03_build/0386_backlog_paridade_codex.md','docs/03_build/tracking/codex100_catalog_v1.json',
+        'docs/08_runtime/handoffs/codex100_exec_20261017.md',str(G/'inventory_sdk.mjs')],'verification-format.log')]:
+    def command_check(cmd=cmd,log=log):
+        result=subprocess.run(cmd,cwd=ROOT,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        (OUT/log).write_text(result.stdout)
+        require(result.returncode==0,'Exit '+str(result.returncode)+'; see '+log)
+        return {'exit':0,'log':log}
+    check(name,command_check)
+
+result={'task':'CODEX100-EXEC-20261017','observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'kind':'BOUNDED_T1_EVIDENCE_VERIFICATION_NOT_FUNCTIONAL_PARITY',
+        'checks':checks,'passed':sum(r['result']=='PASS' for r in checks),
+        'failed':sum(r['result']=='FAIL' for r in checks),
+        'g01_status':'IN_PROGRESS','functional_receipts':0,'full_goal':'ACTIVE_NOT_COMPLETE',
+        'limits':['No runtime BUILD, application gates, model, real account or production execution.',
+                  'No full G01 scope closure, source/build binding or per-variant functional qualification.',
+                  'Shared ledgers/claims/worktrees belong to concurrent programs; no byte-immutability claim.']}
+(OUT/'verification.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps({'passed':result['passed'],'failed':result['failed'],
+                  'failures':[r for r in checks if r['result']=='FAIL']},ensure_ascii=False))
+raise SystemExit(1 if result['failed'] else 0)

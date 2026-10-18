@@ -1,0 +1,194 @@
+{
+  "verdict": "REVISE",
+  "reviewer": "Crítico I1 fresh; inherited model; no descendants",
+  "scope": "T2test-support P100-004/F-DIF-ERR-001 instrumentation delta only",
+  "findings": [
+    {
+      "id": "I1-01",
+      "severity": "P1",
+      "file": "tests/differential/compare-model-failure.mjs",
+      "line": 46,
+      "relatedLines": [
+        146,
+        152,
+        169,
+        181,
+        231
+      ],
+      "title": "Medição aceita payload perdido, mensagem adulterada e efeito extra",
+      "mechanism": "events() valida só tipo/posição/seq; schemas de turn/payload/messages/request não são validados integralmente nem ligados entre si. As mutations lostHeaderPayload, lostContextPayload, wrongPersistedMessage, extraPersistedTool, lostCvgRequestPayload e extraCvgTurnEffect retornam MEASURED_NATIVE_FAILURE_CONTRACTS nas três execuções reais próprias. O status não é paridade, mas aceita observação inválida como medição concluída.",
+      "evidence": [
+        "mutation-own-results.json",
+        "commands/mutation-own.json",
+        "mutations-own.mjs"
+      ],
+      "requiredFix": "Validar schemas nativos e campos obrigatórios sem projetar fora payloads, vincular mensagens persistidas/requests/eventos e rejeitar efeitos/campos extras relevantes ou relatá-los como observação inválida. Incluir controles negativos nos dois lados sem modificar motores."
+    },
+    {
+      "id": "I1-02",
+      "severity": "P1",
+      "file": "tests/differential/compare-model-failure.mjs",
+      "line": 93,
+      "relatedLines": [
+        78,
+        85,
+        97
+      ],
+      "title": "Metadados de artefato não autenticam o artefato informado",
+      "mechanism": "Só prefixo de path e regex SHA256 são exigidos. SHA todo zero, path inexistente dentro do root e o próprio diretório root passam isoladamente para todos os casos reais próprios. Nenhum mapa confiável de package->export->hash é usado pela medição. Hash antes/depois no driver prova estabilidade do arquivo que ele resolveu, não valida um registro adulterado entregue ao comparador.",
+      "evidence": [
+        "mutation-own-results.json",
+        "commands/mutation-own.json"
+      ],
+      "requiredFix": "Ligar a medição a inventário confiável dos exports reais, com paths regulares/canônicos e hashes verificados, rejeitando inventário ausente/inválido/adulterado. Manter closure transitiva e equivalência source/lib como NOT_VERIFIED."
+    },
+    {
+      "id": "I1-03",
+      "severity": "P2",
+      "file": "tests/differential/model-failure-differential.test.ts",
+      "line": 45,
+      "relatedFiles": [
+        {
+          "file": "tests/differential/reply-differential.test.ts",
+          "line": 38
+        }
+      ],
+      "title": "Cleanup padrão apaga a prova da falha",
+      "mechanism": "afterAll remove evidence incondicionalmente quando o diretório é próprio, inclusive depois de child nonzero/timeout/assertion/teardown failure. Fault privado emite dois sentinelas e exit23: teste falha corretamente, stderr aparece no Vitest, stdout e command.json desaparecem. Observer privado copiou os três arquivos imediatamente antes do rm, preservando os bytes falhos para este parecer.",
+      "evidence": [
+        "fault-default-results.json",
+        "fault-default-captured-results.json",
+        "fault-captured-before-cleanup/error-ascii.command.json",
+        "fault-captured-before-cleanup/error-ascii.reference.stdout.log",
+        "fault-captured-before-cleanup/error-ascii.reference.stderr.log",
+        "commands/fault-default-captured.json",
+        "private/fault-capture.mjs"
+      ],
+      "requiredFix": "Recolher os temporários próprios após sucesso; antes de removê-los em falha, preservar stdout/stderr e metadados completos em artefato durável ou emissão estruturada limitada, sem perder o resultado de falha e sem remover diretório explícito."
+    }
+  ],
+  "inheritedObservations": [
+    {
+      "file": "tests/differential/reply-differential.test.ts",
+      "line": 52,
+      "deltaIntroduced": false,
+      "blockingDeltaFinding": false,
+      "observation": "Env reply herdado do before não passa TMPDIR/TMP/TEMP nem XDG_CACHE_HOME/XDG_STATE_HOME, herda PATH e registra apenas envKeys sem PID/duração. Failure runner corrige esses pontos para seu próprio filho. Isolamento TMP de ambos os suites e proveniência completa de reply não podem ser declarados; padrão de os.tmpdir no filho reply é compartilhado no Linux sem essas variáveis. Não foi observado acesso a credenciais/rede."
+    }
+  ],
+  "validation": {
+    "focusedExplicit": "15/15 PASS; own exact sealed test files; private copied runtime deps; node environment",
+    "focusedDefault": "15/15 PASS; own; all owned temporary resources removed",
+    "inputGuards": "8/8 reject before loading reference",
+    "mutationEvaluationsOwn": 69,
+    "mutationEvaluationsReceived": 69,
+    "intentionalFaults": "2 expected failing Vitest runs with private child exit23; not native-reference observations",
+    "sentinels": {
+      "ownNativeObservations": [
+        {
+          "id": "error-ascii",
+          "referenceCalls": 1,
+          "referenceTools": 0,
+          "referenceTerminal": {
+            "kind": "error",
+            "error": {
+              "message": "synthetic model failure",
+              "code": "UNKNOWN"
+            }
+          },
+          "referenceLiveErrors": [
+            {
+              "turn": 1,
+              "step": 1,
+              "error": {
+                "name": "LlmError",
+                "message": "synthetic model failure",
+                "cause": null
+              }
+            }
+          ],
+          "cvgStop": "MODEL_FAILURE",
+          "cvgBodies": 1,
+          "artifactsMatchPacket": true
+        },
+        {
+          "id": "error-cause",
+          "referenceCalls": 1,
+          "referenceTools": 0,
+          "referenceTerminal": {
+            "kind": "error",
+            "error": {
+              "message": "synthetic outer failure",
+              "code": "UNKNOWN"
+            }
+          },
+          "referenceLiveErrors": [
+            {
+              "turn": 1,
+              "step": 1,
+              "error": {
+                "name": "LlmError",
+                "message": "synthetic outer failure",
+                "cause": null
+              }
+            }
+          ],
+          "cvgStop": "MODEL_FAILURE",
+          "cvgBodies": 1,
+          "artifactsMatchPacket": true
+        },
+        {
+          "id": "error-unicode",
+          "referenceCalls": 1,
+          "referenceTools": 0,
+          "referenceTerminal": {
+            "kind": "error",
+            "error": {
+              "message": "Falha sintética: ação 🐾",
+              "code": "UNKNOWN"
+            }
+          },
+          "referenceLiveErrors": [
+            {
+              "turn": 1,
+              "step": 1,
+              "error": {
+                "name": "LlmError",
+                "message": "Falha sintética: ação 🐾",
+                "cause": null
+              }
+            }
+          ],
+          "cvgStop": "MODEL_FAILURE",
+          "cvgBodies": 1,
+          "artifactsMatchPacket": true
+        }
+      ],
+      "defaultTempRemaining": [],
+      "privateSourcesRestored": true,
+      "sealedAndBoundInputs": 527,
+      "allSealedAndBoundUnchanged": true,
+      "dependencyInputs": 1627,
+      "dependenciesUnchanged": true,
+      "transitiveReferenceClosure": "NOT_VERIFIED",
+      "sourceLibEquivalence": "NOT_VERIFIED"
+    }
+  },
+  "limitations": [
+    "Reference transitive distribution closure NOT_VERIFIED",
+    "source/lib build equivalence NOT_VERIFIED",
+    "OS containment of hostile code NOT_VERIFIED",
+    "Types/lint received evidence only; not independently rerun",
+    "Runtime probe process provenance recorded; initial read-only shell inspection/bootstrap calls have tool exit/timing but no captured process PID or full env and are not attested as runtime probes"
+  ],
+  "stillOpen": [
+    "P100-004",
+    "P100-003",
+    "36 cartões",
+    "global gates",
+    "parity",
+    "release",
+    "human 0220"
+  ],
+  "maximumPossibleAcceptance": "scoped observation infrastructure only; no acceptance granted in this round"
+}

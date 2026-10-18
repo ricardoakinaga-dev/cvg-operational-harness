@@ -1,0 +1,19 @@
+from pathlib import Path
+import hashlib,json,os
+R=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-capacity/review-r1');entries=[];empty=[];derived=[]
+for base,dirs,files in os.walk(R):
+ for name in list(dirs):
+  if Path(base)==R and name in ['cache','tmp','node_modules']:
+   sub=Path(base)/name;derived.append({'path':str(sub),'reason':'derived private cache/temp or empty dependency lookup directory; not primary evidence','files':sum(len(fs) for _,_,fs in os.walk(sub))});dirs.remove(name)
+ for name in files:
+  p=Path(base)/name
+  if name=='artifact-manifest.json':continue
+  b=p.read_bytes()
+  if not b:empty.append({'path':str(p),'bytes':0,'status':'EMPTY_PRESERVED'});continue
+  entries.append({'path':str(p),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+d={'scope':'Every nonempty retained primary output under exclusive I1 review-r1; no input/dependency tree copying','entries':sorted(entries,key=lambda x:x['path']),'emptyOutputs':sorted(empty,key=lambda x:x['path']),'derivedOmissions':derived,'selfOmission':'artifact-manifest.json is the self-excluding manifest; all other nonempty primary files included. Its SHA256 is returned separately.'}
+p=R/'artifact-manifest.json';p.write_text(json.dumps(d,indent=2)+'\n')
+for e in d['entries']:
+ b=Path(e['path']).read_bytes();assert len(b)==e['bytes'] and hashlib.sha256(b).hexdigest()==e['sha256']
+assert json.loads((R/'sentinel-post.json').read_text())['unchanged']
+print(json.dumps({'primaryOutputs':len(entries),'emptyOutputs':len(empty),'derivedOmissions':derived,'artifactManifestSha256':hashlib.sha256(p.read_bytes()).hexdigest(),'reportSha256':hashlib.sha256((R/'report.json').read_bytes()).hexdigest()}))

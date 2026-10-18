@@ -1,0 +1,154 @@
+"""Archive/metadata validation and private data materialization; stdlib only."""
+from pathlib import Path, PurePosixPath
+import json, hashlib, base64, zipfile, tarfile, stat, csv, io, email.parser
+import ast, operator, re, sys, sysconfig, os, platform, struct
+from datetime import datetime, timezone
+
+R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+P=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-profile-artifacts'
+N=Path('/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts')
+def load(n):return json.loads((P/n).read_text())
+def save(n,j):(P/n).write_text(json.dumps(j,ensure_ascii=False,indent=2)+'\n')
+def sha(b):return hashlib.sha256(b).hexdigest()
+def normalize(n):return re.sub(r'[-_.]+','-',n).lower()
+def version(v):
+    assert re.fullmatch(r'\d+(?:\.\d+)*',v),('unsupported finite version',v)
+    return tuple(int(x) for x in v.split('.'))+(0,)*max(0,5-len(v.split('.')))
+def satisfies(v,s):
+    if not s:return True
+    for term in s.strip('() ').split(','):
+        m=re.fullmatch(r'\s*(==|!=|>=|<=|>|<)\s*(\d+(?:\.\d+)*)\s*',term)
+        assert m,('unsupported finite specifier',s)
+        assert {'==':operator.eq,'!=':operator.ne,'>=':operator.ge,'<=':operator.le,'>':operator.gt,'<':operator.lt}[m[1]](version(v),version(m[2])),(v,s)
+    return True
+ENV={'python_version':f'{sys.version_info.major}.{sys.version_info.minor}','python_full_version':platform.python_version(),'platform_system':platform.system(),'extra':''}
+def marker(text):
+    if not text:return True
+    root=ast.parse(text,mode='eval')
+    allowed=(ast.Expression,ast.BoolOp,ast.And,ast.Or,ast.Compare,ast.Eq,ast.NotEq,ast.Lt,ast.LtE,ast.Gt,ast.GtE,ast.Name,ast.Load,ast.Constant)
+    assert all(isinstance(n,allowed) for n in ast.walk(root)),('unsupported marker AST',text)
+    def value(n):
+        if isinstance(n,ast.Name):assert n.id in ENV;return ENV[n.id],n.id in ['python_version','python_full_version']
+        assert isinstance(n,ast.Constant) and isinstance(n.value,str);return n.value,False
+    def visit(n):
+        if isinstance(n,ast.Expression):return visit(n.body)
+        if isinstance(n,ast.BoolOp):
+            values=[visit(x) for x in n.values];return all(values) if isinstance(n.op,ast.And) else any(values)
+        assert isinstance(n,ast.Compare);lhs=value(n.left);results=[]
+        for op,right in zip(n.ops,n.comparators):
+            rhs=value(right);a,b=(version(lhs[0]),version(rhs[0])) if lhs[1] or rhs[1] else (lhs[0],rhs[0])
+            results.append({ast.Eq:operator.eq,ast.NotEq:operator.ne,ast.Lt:operator.lt,ast.LtE:operator.le,ast.Gt:operator.gt,ast.GtE:operator.ge}[type(op)](a,b));lhs=rhs
+        return all(results)
+    return visit(root)
+def safe_name(name,directory=False):
+    assert name and not name.startswith(('/','\\')) and '\\' not in name and '\x00' not in name
+    text=name[:-1] if directory and name.endswith('/') else name
+    parts=text.split('/');assert all(x and x not in ['.','..'] and ':' not in x for x in parts),name
+    assert all(not x.endswith('.pth') and x not in ['sitecustomize.py','usercustomize.py'] for x in parts),name
+    return str(PurePosixPath(text))
+
+COUNTERS={'entries':0,'expanded_bytes':0};PER_FILE=33554432
+def budget(name,size):
+    COUNTERS['entries']+=1;COUNTERS['expanded_bytes']+=size
+    assert 0<=size<=PER_FILE and COUNTERS['entries']<=5000 and COUNTERS['expanded_bytes']<=268435456,(name,size,COUNTERS)
+def write_data(root,name,b,original_mode):
+    p=root/name;p.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    assert not p.exists() and not p.is_symlink(),p
+    with p.open('xb') as f:f.write(b)
+    p.chmod(0o600)
+    return {'path':name,'bytes':len(b),'sha256':sha(b),'archive_mode':original_mode,'private_mode':'0600','kind':'REGULAR_DATA_FILE','empty':len(b)==0}
+
+proposal=load('input-dependency-proposal.json');specs={x['name']:x for x in proposal['artifacts']}
+recovered=load('offline-recovery.json');selected={x['name']:x['version'] for x in proposal['artifacts'] if x['name']!='typescript'}
+host={'executable':str(Path(sys.executable).resolve()),'version':platform.python_version(),'implementation':sys.implementation.name,'machine':platform.machine(),'platform':sys.platform,'SOABI':sysconfig.get_config_var('SOABI'),'glibc':os.confstr('CS_GNU_LIBC_VERSION'),'marker_environment':ENV}
+assert host['implementation']=='cpython' and sys.version_info[:2]==(3,12) and host['machine']=='x86_64' and host['platform']=='linux'
+assert host['glibc'].startswith('glibc ');satisfies(host['glibc'].split()[1],'>=2.17')
+
+def wheel(row,spec,root):
+    payload={};modes={};seen=set();dirs=[]
+    with zipfile.ZipFile(row['raw_path']) as z:
+        assert len(z.infolist())<=5000
+        for item in z.infolist():
+            assert item.orig_filename == item.filename, 'NUL/truncated ZIP name'
+            mode=item.external_attr>>16;kind=stat.S_IFMT(mode)
+            assert kind in [0,stat.S_IFREG,stat.S_IFDIR] and not item.flag_bits&1,(item.filename,mode)
+            isdir=item.is_dir();assert kind!=stat.S_IFDIR or isdir
+            name=safe_name(item.filename,isdir);assert name.casefold() not in seen,name;seen.add(name.casefold())
+            budget(name,item.file_size)
+            if isdir:assert item.file_size==0;dirs.append(name);continue
+            assert item.compress_type in [zipfile.ZIP_STORED,zipfile.ZIP_DEFLATED]
+            assert item.file_size==0 or (item.compress_size>0 and item.file_size/item.compress_size<=500)
+            with z.open(item) as f:b=f.read(PER_FILE+1)
+            assert len(b)==item.file_size and len(b)<=PER_FILE
+            payload[name]=b;modes[name]=mode
+    meta_names=[x for x in payload if x.endswith('.dist-info/METADATA')];assert len(meta_names)==1
+    base=meta_names[0].rsplit('/',1)[0];assert all('/' not in x or '.dist-info' not in x.split('/')[0] or x.startswith(base+'/') for x in payload)
+    meta=email.parser.BytesParser().parsebytes(payload[base+'/METADATA']);wh=email.parser.BytesParser().parsebytes(payload[base+'/WHEEL'])
+    assert normalize(meta['Name'])==spec['name'] and meta['Version']==spec['version']
+    satisfies(host['version'],meta['Requires-Python']);tags=wh.get_all('Tag',[])
+    expected=['cp312-cp312-manylinux_2_17_x86_64','cp312-cp312-manylinux2014_x86_64'] if spec['name']=='pydantic-core' else ['py3-none-any']
+    assert set(tags)==set(expected),(spec['name'],tags)
+    assert wh['Root-Is-Purelib']==('false' if spec['name']=='pydantic-core' else 'true')
+    record_name=base+'/RECORD';records=list(csv.reader(io.StringIO(payload[record_name].decode())));indexed={}
+    for entry in records:
+        assert len(entry)==3;name,hashtext,length=entry;assert name in payload and name not in indexed,name
+        indexed[name]=entry
+        if name==record_name:assert hashtext=='' and length=='';continue
+        alg,value=hashtext.split('=',1);assert alg=='sha256' and int(length)==len(payload[name]),entry
+        assert base64.urlsafe_b64encode(hashlib.sha256(payload[name]).digest()).decode().rstrip('=')==value,entry
+    assert set(indexed)==set(payload),'unrecorded/missing wheel contents'
+    deps=[];active=set()
+    for text in meta.get_all('Requires-Dist',[]):
+        req,sep,mark=text.partition(';');match=re.fullmatch(r'\s*([A-Za-z0-9_.-]+)\s*(.*?)\s*',req);assert match
+        name=normalize(match[1]);used=marker(mark.strip()) if sep else True
+        if used:assert name in selected,('unselected active dependency',text);satisfies(selected[name],match[2]);active.add(name)
+        deps.append({'literal':text,'name':name,'active':used,'selected_version':selected.get(name) if used else None,'status':'SATISFIED_SELECTED' if used else 'EXCLUDED_BY_FALSE_MARKER_NO_EXTRAS'})
+    assert active==set(spec['dependencies']),(spec['name'],active,spec['dependencies'])
+    files=[write_data(root,name,b,modes[name]) for name,b in sorted(payload.items())]
+    native=[]
+    for name,b in payload.items():
+        if name.endswith('.so'):
+            assert b[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<H',b,18)[0]==62,name
+            native.append({'path':name,'bytes':len(b),'sha256':sha(b),'ELF':'64bit little endian EM_X86_64','native_loading':'NOT_RUN','transitive_shared_libraries':'NOT_QUALIFIED'})
+    return {'name':spec['name'],'version':spec['version'],'metadata_path':base+'/METADATA','tags':tags,'Requires-Python':meta['Requires-Python'],'dependencies':deps,'RECORD_entries':len(records),'RECORD_self_hash_exception':record_name,'directories':dirs,'files':files,'native_boundaries':native,'status':'LOCK_AND_WHEEL_DATA_VALIDATED_NOT_IMPORTED'}
+
+def npm(row,spec,root):
+    files=[];seen=set();manifest=None
+    with tarfile.open(row['raw_path'],mode='r|gz') as t:
+        for item in t:
+            name=safe_name(item.name,item.isdir());assert name.startswith('package/') or name=='package',name
+            assert item.isfile() or item.isdir(),('nonregular npm entry',name,item.type)
+            assert not item.issparse();assert name.casefold() not in seen;seen.add(name.casefold());budget(name,item.size)
+            if item.isdir():assert item.size==0;continue
+            relative=name[len('package/'):];assert relative
+            b=t.extractfile(item).read(PER_FILE+1);assert len(b)==item.size and len(b)<=PER_FILE
+            if relative=='package.json':manifest=json.loads(b)
+            files.append(write_data(root,relative,b,item.mode))
+    assert manifest['name']=='typescript' and manifest['version']==spec['version']
+    for field in ['dependencies','optionalDependencies','peerDependencies']:assert not manifest.get(field),(field,manifest.get(field))
+    node=json.loads((R/'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-reference-profile/host-inputs.json').read_text())['node']
+    assert sha(Path(node['path']).read_bytes())==node['sha256'];satisfies(node['version'].removeprefix('v'),manifest['engines']['node'])
+    names={f['path'] for f in files};assert manifest['main'].removeprefix('./') in names
+    return {'name':spec['name'],'version':spec['version'],'main':manifest['main'],'engines':manifest['engines'],'runtime_dependencies':{},'dev_dependencies':'Development scripts/tools not selected or executed; runtime compiler package only.','scripts_present_not_executed':manifest.get('scripts',{}),'bin_declared_not_executed':manifest.get('bin',{}),'files':files,'status':'LOCK_AND_NPM_DATA_VALIDATED_NOT_EXECUTED'}
+
+if __name__=='__main__':
+    assert not (P/'validation.json').exists(),'No automatic validation replay over existing extracted data.'
+    (N/'trees').mkdir(exist_ok=False);results=[]
+    for row in recovered['rows']:
+        spec=specs[row['name']];b=Path(row['raw_path']).read_bytes();assert len(b)==row['bytes'] and sha(b)==row['sha256']
+        if 'expected_sha256' in spec:assert sha(b)==spec['expected_sha256'] and len(b)==spec['expected_bytes']
+        else:assert 'sha512-'+base64.b64encode(hashlib.sha512(b).digest()).decode()==spec['expected_integrity']
+        root=N/'trees'/(spec['name']+'-'+spec['version']);root.mkdir(mode=0o700)
+        result=wheel(row,spec,root) if spec['name']!='typescript' else npm(row,spec,root)
+        result['tree_root']=str(root);result['raw']={k:row[k] for k in ['raw_path','bytes','sha256']};results.append(result)
+        print(json.dumps({'name':result['name'],'status':result['status'],'files':len(result['files'])}),flush=True)
+        save('validation-live.json',{'status':'IN_PROGRESS_DATA_ONLY','rows':results,'counters':COUNTERS})
+    # Data-copy merge, no installer: preserve originals and every RECORD byte.
+    merged=N/'python-deps';merged.mkdir(mode=0o700);merged_files=[]
+    for result in results:
+        if result['name']=='typescript':continue
+        for f in result['files']:
+            b=(Path(result['tree_root'])/f['path']).read_bytes();assert sha(b)==f['sha256'];budget(f['path'],len(b))
+            out=write_data(merged,f['path'],b,int(f['archive_mode']));out['origin']=result['name'];merged_files.append(out)
+    save('validation.json',{'kind':'EXECUTED_ARCHIVE_METADATA_AND_DATA_EXTRACTION_ONLY','observed_at':datetime.now(timezone.utc).isoformat(),'host':host,'rows':results,'passed':len(results),'failed':0,'resource_counters':COUNTERS,'merged_python':{'root':str(merged),'files':merged_files,'status':'PRIVATE_DATA_MATERIALIZED_NOT_INSTALLED_OR_IMPORTED'},'parser_scope':'Finite observed numeric version constraints and marker AST; unsupported syntax rejects. No downloaded packaging/Pydantic/TypeScript code was imported.','SDK_imports':0,'Pydantic_imports':0,'compiler_executions':0,'installers':0,'functional_receipts':0})
+    print(json.dumps({'artifacts_validated':len(results),'physical_entries':COUNTERS['entries'],'expanded_bytes_including_merge':COUNTERS['expanded_bytes'],'code_imports':0}))

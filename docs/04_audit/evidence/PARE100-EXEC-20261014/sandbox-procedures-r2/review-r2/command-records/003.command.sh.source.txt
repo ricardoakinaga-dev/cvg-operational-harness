@@ -1,0 +1,35 @@
+python3 - <<'PY'
+import json,pathlib,hashlib,re,sys
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-packet');O=pathlib.Path.cwd()
+pre=json.load(open(O/'pre-fingerprint.json'));(O/'pre-fingerprint-attempt2.json').write_text(json.dumps(pre,indent=2)+'\n')
+def sha(p):
+ h=hashlib.sha256()
+ with open(p,'rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return h.hexdigest()
+for r in pre['records']:r['actual']=sha(r['path']);r['match']=r['actual'] in r['expected']
+d=json.load(open(P/'constraints.json'));records=[];skipped=[]
+def walk(v,trail=(),parents=()):
+ if isinstance(v,dict):
+  for k,x in v.items():
+   if k=='originBacklogSnapshotOnly':skipped.append('.'.join(trail+(k,)));continue
+   walk(x,trail+(k,),parents+(v,))
+ elif isinstance(v,list):
+  for i,x in enumerate(v):walk(x,trail+(str(i),),parents)
+ elif isinstance(v,str) and any(x in trail for x in ('sourceSpecs','frozenD12Origin')):
+  p=pathlib.Path(v)
+  if not p.is_absolute():p=P/p
+  if p.is_file():
+   expected=[]
+   for ancestor in reversed(parents):
+    expected=[x for x in ancestor.values() if isinstance(x,str) and re.fullmatch('[0-9a-fA-F]{64}',x)]
+    if expected:break
+   actual=sha(p);records.append({'group':'constraints','field':'.'.join(trail),'path':str(p),'expected':expected,'actual':actual,'match':actual in expected})
+walk(d)
+pre['records']+=records;pre['membershipPostHash']=sorted(str(p.relative_to(P)) for p in P.rglob('*') if p.is_file());pre['manifest']['actual']=sha(pre['manifest']['path']);pre['counts']={'packetEntries':28,'packetIncludingManifest':29,'primaryPathRecords':22,'externalPaths':55,'constraintPaths':len(records)};pre['skippedForbiddenFields']=skipped
+pre['passed']=len(records)==5 and all(r['match'] for r in pre['records']) and pre['membershipPostHash']==pre['membership'] and pre['manifest']['actual']==pre['manifest']['expected'];pre['priorErrors']=pre.pop('errors');pre['errors']=[] if pre['passed'] else ['Integrity verification incomplete']
+(O/'pre-fingerprint.json').write_text(json.dumps(pre,indent=2)+'\n')
+print(json.dumps({'passed':pre['passed'],'counts':pre['counts'],'constraintFields':[r['field'] for r in records],'skipped':skipped,'constraintKeys':list(d) if not pre['passed'] else None}))
+if not pre['passed']:sys.exit(1)
+PY
+

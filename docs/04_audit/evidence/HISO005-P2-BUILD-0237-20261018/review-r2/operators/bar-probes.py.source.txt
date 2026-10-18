@@ -1,0 +1,30 @@
+exec(open('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r2/support.py').read())
+# Positive pairing and native closed precedence still apply after extra metadata census.
+for mode in ['import','require']:
+ ext='mjs' if mode=='import' else 'cjs'
+ cases={'positive':{'node':'./good.'+ext,'default':'./other.'+ext},'default-first':{'default':'./other.'+ext,'node':'./good.'+ext},'module-sync':{'module-sync':'./good.'+ext,'default':'./other.'+ext},'node-addons':{'node-addons':'./good.'+ext,'default':'./other.'+ext},'nested-unmatched':{'node':{'inactive':'./other.'+ext},'default':'./good.'+ext},'blocked':{'node':None,'default':'./good.'+ext},'array':{'node':['./good.'+ext],'default':'./other.'+ext},'exact-missing':'./missing','invalid-tab':'./go\tod.'+ext}
+ for label,exports in cases.items():
+  root,start=workspace('bar-'+mode+'-'+label,mode,exports=exports);oracle('bar-'+mode+'-'+label+'-oracle',root,start,mode=mode)
+  if label=='exact-missing':put(root,'packages/demo/missing.js','export const answer=0;' if mode=='import' else 'module.exports=0;')
+  if label in ['positive','default-first','blocked','array','exact-missing']:
+   out=engine('bar-'+mode+'-'+label+'-engine',root,start)['output'];expected='PROVEN' if label in ['positive','default-first'] else 'UNKNOWN';assert out['status']==expected
+   if out['status']=='PROVEN':
+    # Independent recomputation of canonical IDs and complete current resolver/profile binding.
+    canon=lambda v:json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+    digest=hashlib.sha256(canon(out['runtimeResolution']).encode()).hexdigest();resolverSha=hashlib.sha256((C/'scripts/boundary-semantic-resolution.mjs').read_bytes()).hexdigest()
+    for proof in out['proofs']:
+     body={k:v for k,v in proof.items() if k!='id'};assert hashlib.sha256(canon(body).encode()).hexdigest()==proof['id'];assert proof['derivation']['runtimeResolutionDigest']==digest;assert proof['derivation']['profile']['resolverSha256']==resolverSha
+    assert out['validation']['valid']
+  else:helper('bar-'+mode+'-'+label+'-helper',root,start,mode=mode)
+ root,start=workspace('bar-'+mode+'-ordinary-test',mode,name='test');engine('bar-'+mode+'-ordinary-test-engine',root,start)
+ for spec in ['module','fs','fs/promises','node:fs','node:test']:
+  val=helper('bar-'+mode+'-native-'+spec.replace('/','-').replace(':','-'),root,start,spec,mode);assert val['error']=='UNKNOWN_NATIVE_BUILTIN';assert not val['snapshot']['resolutions']
+# Correct resolution never grants proof to an unclosed actual body.
+root,start=workspace('bar-hostile-body');put(root,'packages/demo/good.mjs','globalThis.UNEXECUTED_MARKER=1;export const answer=42;');out=engine('bar-hostile-body-engine',root,start)['output'];assert out['status']=='UNKNOWN' and not out['proofs']
+# Ordinary cancellation remains refused, without normalization into positive authority.
+root,start=workspace('bar-cancelled-link',link='../missing/../packages/demo');out=engine('bar-cancelled-link-engine',root,start)['output'];assert out['status']=='UNKNOWN' and not out['proofs']
+# Previously absent closer candidates, and metadata added by census, are revalidated.
+root,start=workspace('bar-absence');put(root,'src/entry.mjs','export const answer=42;');(root/'src/node_modules').mkdir();v=helper('bar-absence-helper',root,'src/entry.mjs',mutate={'file':'src/node_modules/demo','text':'candidate-now-present'});assert v.get('revalidationError')
+# Repeated current-helper cap failures: record OS-level own opens/closes, no Node fd-total inference.
+root,start=workspace('bar-fds','require');P=O.parent/'review-r1';code=(P/'raw/fd-owned.operator.source.txt').read_text().strip();run('bar-owned-fds',code,[str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root)});(O/'operators/fd-owned.operator.source.txt').write_text(code+'\n')
+(O/'probe-summary-bar.json').write_text(json.dumps(summary,indent=2)+'\n')

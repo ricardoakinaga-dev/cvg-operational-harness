@@ -1,0 +1,1379 @@
+# Consumidor publicado: proposta concreta de contrato
+
+Data: 16/10/2026. Task documental: `PUBLISHED-COMPLETE-CONTRACT-DELTA-001`.
+Estado: `PROPOSED_FOR_TECHNICAL_REVIEW`; SPEC humana `NOT_GRANTED`;
+BUILD `NOT_AUTHORIZED`; testes futuros **NOT_RUN**; dependências
+`DEPENDENCY_PENDING`. Não é SPEC canônica nem registro de decisão humana.
+
+As decisões são normativas para a proposta e dependem de autorização de
+implementação. CVG: DISCOVERY → PRD → SPEC → BUILD → AUDIT. Este delta
+público/schema/segurança é T3 e exige aprovação humana da SPEC exata antes
+de código/migration/DDL. As aprovações0217/0224 não concedem modelo adicional,
+orçamento9024, RESPONSE receipts, acceptedResponse ou fence de geração.
+0225 permanece PENDING, sem decisão inferida ou solicitação nesta entrega.
+
+Fontes estáticas e hashes: [source-manifest.json](source-manifest.json).
+Plano normativo: [ACCEPTANCE-PLAN.md](ACCEPTANCE-PLAN.md).
+Decisões/dependências: [DECISIONS-AND-RISKS.md](DECISIONS-AND-RISKS.md).
+Hashes de fonte não são prova de aceitação ou execução. Todos os testes
+futuros permanecem NOT_RUN/DEPENDENCY_PENDING.
+
+## 1. Resultado, limites e fatos atuais
+
+O objetivo é percorrer ingress sintético autenticado → `inbound.process`
+durável → claim externo PostgreSQL real → `createPublishedKernelHandlers`
+→ admit/claim/createHost reais → `executePublishedAgent` →
+`executeConfiguredAgent` → fábrica pública `createOperationalHarness`
+→ ferramenta nativa/journal/checkpoint → close nativo →
+`completeInboundRuntime` → ACK externo real. Uma fábrica por tentativa
+ativa; nenhuma fábrica em replay CLOSED. Nenhum executor alternativo,
+Map de persistência, provider direto ou prepared fabricado substitui a rota.
+
+O perfil inicial mantém exatamente uma ferramenta registrada/habilitada:
+`scheduling.controlled@1.0.0/find_available_slots`, com descriptor,
+validators e corpo constante existentes (S14), `sideEffect=NONE`.
+Zero/duas ferramentas recusam o modo. Tool journal não é consulta real.
+Nenhuma importação de `products/shift-assistant` entra no núcleo/hosts.
+Sem default novo, RAG sem fonte aprovada, efeito clínico/financeiro,
+agenda real, prontuário, provider externo, produção ou release.
+
+| CURRENT: observado estaticamente | Fonte e consequência |
+| --- | --- |
+| Publicado usa M1 RESPONSE, ferramenta e RESPOND literal com texto de M1; budget modelCalls1. | S04/S06: M2 e budget2 são mudanças propostas. |
+| Gateway publicado aplica output guard e devolve texto/uso transformados. | S04: não serve como resultado bruto qualificado para receipts novos. |
+| `runModelCall` cobra beginModelRequest, logs request/result e recordModelResult; `composeResponse.unrecorded` soma tokens/custo diretamente. | N01/N02/S12: três locais a reconciliar, não apenas pre/postModel. |
+| Validator de checkpoint aceita receipts ORCHESTRATION/REPAIR e associa acceptedDecision aos receipts do passo. | N04/C05: RESPONSE e acceptedResponse exigem schema e validação explícitos. |
+| `completion.evaluate` fica com ACK diferido; audit evaluation.completed chama finishEvaluation. | S06/S05: CAS aninhado nesse intervalo seria recusado. |
+| Guard nativo toma parent/binding/inner queue antes de evento externo; outer claim/ACK/fail tomam evento primeiro. | S09/N05: novo prefixo parent-first é obrigatório. |
+| Fence cancel_close atual só admite binding/evidence, não steps/checkpoints. | S09/S10: cancelamento terminal não ganha CAS por passar settlement=true. |
+| Maior arquivo de migration presente na árvore é 0029; 0030 é proposta pendente de 0225. | S10/inventário do manifesto: usar somente 0031 após a pré-condição separada. |
+
+A dependência genérica atual tem aceite separado restrito à memória nativa
+da224 (`APPROVE_SCOPED_NATIVE_MEMORY`), no escopo de RESPONSE/contexto/
+contabilidade/intent/checkpoint/recovery/diagnóstico de primeira falha.
+Esse aceite não cobre PG, suites globais/fullTR, consumidor/default,
+0225/schema/0030/0031 ou integração/release. Registro readonly e seu hash
+estão no manifesto. Bind estático:
+runtime `c4028b7d2897da7f096d2329ebef41b32ed930a9111ba40527143bc655cbc8d0`;
+dispatch `a2a6a9c86eeee1444527082fb53425c0ad146c443c32d56b3caff7d25d55cbf2`;
+teste de referência `eb4299aabfb97dbb061da271d976a51431188dbfd2c68b74e6d1cc12fbcf0b23`.
+Ela usa o slot nativo existente: intent RESPOND RUNNING, persistência
+pré-provider no responseCheckpointControl privado, persistência pós-outcome
+no composeResponse finally e recusa RESPOND adiante do checkpoint. Também
+recusa checkpoint completo parado INTERNAL_FAILURE/MODEL_FAILURE quando
+existe passo nativo RESPOND exatamente no cursor. Não altera o conjunto
+global/legado de stops, nem cria gate/counter/receipt. §5.1 mapeia esses
+callers para o opt-in proposto. Nenhum resultado de teste dessa dependência
+é aceite do consumidor; toda aceitação futura deste consumidor permanece
+NOT_RUN/DEPENDENCY_PENDING. Não foram executados testes neste pacote.
+
+O caller atual também conserva a causa primária de falha RESPONSE em
+diagnóstico efêmero da execução quando checkpoint/step/audit falha depois.
+Esse diagnóstico não é persistido como receipt/gate/counter/schema, não
+prova uso/ACK nem autoriza replay. Hash do teste só identifica a fonte;
+não significa execução ou aceitação desse teste por este pacote.
+
+## 2. Seleção confiável e identidade imutável
+
+Config exclusivamente do servidor:
+`CVG_WORKER_PUBLISHED_CONTEXT_PROTOCOL` ausente/`legacy` mantém legado;
+`complete-tool-v1-synthetic` pede o novo perfil. Trim é permitido; outro
+valor não vazio falha startup/readiness. Exige `NODE_ENV=test`,
+`CVG_WORKER_PUBLISHED_DURABILITY=postgres-v1`, controlled/RLS gates existentes,
+concurrency1, lease10000, preflight §8 e exatamente a ferramenta §1.
+Nem HTTP/SDK/config de agente/payload/texto/runtime.context enviado pelo
+cliente pode selecionar este modo. Desenvolvimento/produção recusam.
+
+Seleção congelada `PublishedContextSelection`, schema fechado:
+
+| Campo | Valor exato |
+| --- | --- |
+| schema / protocol / writerGeneration | `cvg.published-context-selection/1` / `published-complete-v1` / 2 |
+| toolResultContext / topology / projection | `{version:1}` / `guard-tool-response-v1` / `guarded-tool-response-v1` |
+| pair | `fake/deterministic-v1:published-byte64-v1` |
+| limits | budget de §4; contextTokenBudget4000, contextWindowTokens4512, maxOutputTokens512 |
+
+Novo argumento privado confiável `selection` de
+`prepareControlledPublishedAdmission`; host e fachada recomputam a seleção
+admitida. Sem host/portas/declarations reconhecidas: recusar antes de IO.
+Persistir seleção em `request.runtime.context.values.publishedProtocol`
+e em `controlled_published_bindings.admission_runtime.context.values.publishedProtocol`.
+O pai guarda RuntimeInput em `request.runtime`; a cópia admission_runtime
+guarda RuntimeInput diretamente. As duas representações devem ser iguais.
+Preservar **exatamente** `adapterVersion:"controlled-published-v1"` no path
+antigo e `adapter_version` da binding. Não mover/renomear o discriminador.
+
+Digest novo, tagged `sha256-<64hex>`, é controlledDigest do objeto fechado:
+`{domain:"cvg.published-admission/2",base:{adapter,tenantId,inboundMessageId,context,agentId,versionId,configDigest,fingerprint,message,history,actor,executionMode,requireCapabilityApproval,budget},publishedProtocol,promptChecksum}`.
+`base` usa normalização217, actor System confiável/permissões canônicas;
+adapter permanece controlled-published-v1. Excluir worker/attempt/relógio,
+funções e signal. Legado conserva bytes/digest/fórmula existentes.
+
+Primeira admissão usa env; redelivery consulta binding/pai imutáveis antes
+de preparar/claimar. Env desligada impede só **novas** admissões complete;
+generation2 continua lendo/settling complete persistido. Mode/budget/pair/
+pin/fingerprint/checksum/mensagem/history diferentes no mesmo inbound dão
+STATE_CONFLICT, nunca outro executionId ou downgrade. Unknown protocol ou
+generation é UNSUPPORTED antes de claim/renew. Não inferir legado de JSON
+parcial, path malformado, cópia divergente ou parent/binding ausente.
+
+Prepared completo: `controlled-published-prepared-v2`, campos217 mais
+publishedProtocol e promptChecksum; criado pela preparação real da versão
+publicada. `startPrepared` write-once fixa digest/runtime/deadline absoluto
+antes de M1. Existing turn legado não vira complete, mesmo se ainda vazio.
+Bootstrap/prepared sozinho não é autoridade para executar.
+
+## 3. Topologia e projeção finais propostas
+
+Planner determinístico, sem Hybrid/free-form/reparo/replanning/modelo de
+avaliação. Usa a seleção nativa de contexto complete, não resumo paralelo.
+
+| Passo | Trabalho | Fronteira durável |
+| --- | --- | --- |
+| 1 | RESPOND POLICY_REQUIRED, responseIntent `published.pre_tool_guard.v1`; M1 purpose RESPONSE. | Checkpoint2 inicial; reserve/settle/guard/result ACK; resolver exatamente um comando canônico permitido; C1. Não termina o objetivo. |
+| 2 | CALL_TOOL apenas do comando selado. | Controles/approval/permit nativos, operationKey `${executionId}:s2:find_available_slots`; output completo tipado e todos receipts reais; C2. |
+| 3 | RESPOND GOAL_SATISFIED, responseIntent `published.post_tool_response.v1`; M2 purpose RESPONSE. | C2 corrente, output COMPLETE/AVAILABLE, nenhum UNKNOWN; reserve/settle/result log/audit/guard/claims; acceptedResponse3/cursor2; terminal CAS e close. Sem responseText literal de fallback. |
+
+M1 bloqueado/rewritten ou risco high/critical suprime ferramenta/M2 e
+produz handoff nativo. Zero/múltiplos comandos ou descriptor divergente
+após M1: UNSAFE_REQUEST, sem corpo/M2. Deny/failure/approval-required no
+passo2 não chama M2. Falha M2 não apaga efeito confirmado da ferramenta e
+não completa objetivo. Não há ramo novo zero-tool.
+
+M1/M2 recebem dois messages nativos: instruções host/agente em system;
+goal/userMessage/responseIntent/itens selecionados/resultados UNTRUSTED no
+JSON user `schema:"cvg.decision-context",version:1`. Detach, validate e
+freeze **uma** seleção antes de medir; medir e enviar os mesmos bytes.
+Somente history opcional pode sair por itens inteiros. Governance, usuário
+atual e todo TOOL_RESULT são obrigatórios; overflow recusa sem truncar.
+
+Par sintético retorna M1 `Verificação sintética.`. M2 valida uma observação
+COMPLETE/AVAILABLE no frame real e retorna
+`Resultado sintético: sha256-<hash canônico224 do output no frame>.`.
+Não recebe expected fixture/mapa/oracle/fallback/journal read secreto.
+O corpo real constante é pequeno; isso não é prova4096/NUL. Final público
+vem de texto M2 guardado, nunca M1/planner literal/summary/corpo bruto.
+Rewrite M2 mantém handoff seguro e não conta como sucesso de consumo.
+
+Preservar shapes públicos PublishedAgentExecutionResult/TestRunTrace e
+stop mappings/redação217. Provider fake/model deterministic-v1,
+externalCallfalse/knowledge não answered/externalEffectsfalse.
+Output/receipts completos permanecem internos; transporte completed não
+prova COMPLETED nativo. Nenhum texto autoriza envio real.
+
+## 4. Limites e qualificação do par sintético
+
+| Recurso | Valor e recusa |
+| --- | --- |
+| maxSteps / maxModelCalls / maxToolCalls | 3 / 2 / 1, incluindo retomadas |
+| maxTokens / maxCostUsd | 9024 unidades sintéticas / 0 USD |
+| maxDurationMs | config.model.timeoutMs pinado, máximo120000; testes positivos pinam60000; downtime conta |
+| knowledge / replans / decisionRepairs / verification | 0 / 0 / 0 / 2; evaluator determinístico sem usage/modelo |
+| input/output/window | 4000 / 512 / 4512 unidades por chamada; cap512 em ModelRequest; config.maxTokens >=512 obrigatório |
+| wire | system16000 e user32000 UTF-16; request131072 bytes UTF-8; depth64/nodes20000 |
+| texto bruto/guardado | cap existente4000 UTF-16 cada; output model units <=512 também obrigatório |
+| tool/checkpoint | output32768 bytes/depth32/nodes10000; metadata4096; 50 observações; checkpoint unsigned8388608; prospective36864+65536 de224 |
+| host/evidence | prepared/snapshot/event262144 bytes cada; 256 events/4194304 bytes totais217; limiares/headroom existentes não aumentam |
+
+9024 = 2×(4000+512), mudança explícita da fórmula legada
+ceil(prompt.length/4)+1000. Preflight deve deixar espaço para reserve,
+settle/UNKNOWN, ACKs, acceptedResponse bruto+guard e terminal antes de
+model/body. Se não cabe, handoff antes do efeito; nunca truncar ledger.
+Output32768 válido pode não caber no frame/budget; recusar é permitido,
+declarar suporte irrestrito ao domínio não é.
+
+Headroom217 exato: normal sequence<=248/bytes<=2097152;
+terminal não-final sequence<=254/bytes<=3670016;
+execution.fault/execution.closed sequence<=256/bytes<=4194304.
+beginPhase ACTIVE exige sequence+4<=248 e bytes+4×262144<=2097152,
+mesmo quando os payloads reais são menores. Preflight prospectivo soma
+também intents/ACKs adicionais deste perfil antes de model/tool; não trocar
+esses limiares por tamanhos observados só para permitir a prova positiva.
+
+`PublishedCompleteSyntheticPairV1` é adapter nativo in-process, sem ampliar
+registry/provider real; não usa ModelProvider.complete(prompt,fallback).
+counterId `cvg.synthetic.byte64`, counterVersion `1`, formattingVersion
+`published-byte64-v1`, provider/model fake/deterministic-v1.
+Input = ceil(UTF8(canonical(requestWithoutSignal)).length/64), incluindo
+messages/context/budget/IDs/purpose/cap; output = ceil(UTF8(raw.text).length/64).
+Window4512, costUpperBoundUsd0 e actual costUsd0. Unidade é byte64 sintética,
+não tokenizer/modelo real, custo ou billing qualificado.
+
+Counter puro, finito, inteiro não negativo, bounded por deadline/cancel;
+verificar signal antes/depois do await. Pair identity inclui todos os IDs,
+versões, formatting, caps e digest de implementação congelado. Step1/3 e
+intent vêm do pending receipt nativo, nunca de campos de output.
+Mismatch/throw/NaN/sem cap/window excedida na medida: ADMISSION_UNAVAILABLE,
+model entry0. Retorno inválido/uso acima da reserva: ADMISSION_BREACH,
+diagnóstico preservado, sem texto aceito, sem clamp para verde.
+
+### 4.1 Desqualificação: escopo e reset exatos
+
+Um `PublishedPairQualificationLatch` pertence à composição do **processo
+worker**, fora da instância de execução. Começa UNQUALIFIED; qualificação
+determinística de startup do exato par/sources permite QUALIFIED. Qualquer
+ADMISSION_BREACH muda-o irreversivelmente a QUARANTINED nesse processo,
+fecha dispatch da execução e readiness de novas admissões complete.
+Próxima execução/novo objeto counter/model no mesmo processo não reseta.
+Legado não herda uma qualificação complete. Não há reset por env, retry,
+factory recreation ou chamada de serving; apenas reconstrução do processo
+em **novo run de prova** após requalificação explícita do par congelado.
+
+O dataset/run que sofreu breach permanece RED para sempre, mesmo após
+restart. O executor registra novo run/candidato e nova qualificação; a
+revisão independente julga esse run separadamente. Não é quarentena
+persistente/fleet-wide: restart perde o latch e pode requalificar sob esse
+procedimento test-only. Não prometer revogação entre workers/restarts;
+serving completo é concurrency1/dedicado. Quarentena persistente exigiria
+outro contrato T3, fora deste desenho. Requalificar não libera UNKNOWN ou
+reabre a execução que sofreu breach.
+
+## 5. RESPONSE: um único dono nativo e todos os resultados
+
+Novo opt-in confiável de fábrica
+`completeResponseAdmission:{version:1,counter:DecisionInputCounter}` requer
+iterative + toolResultContext.version1 + host/mode reconhecidos. Estende
+DecisionAdmissionRecord.purpose para RESPONSE apenas nesse caminho e os
+validators discriminados. Não é parâmetro HTTP/config/payload. Ausente:
+contabilidade genérica224/legada preservada, a dependência genérica deve ser aceita
+separadamente em seus bytes finais antes de runtime deste perfil. ORCHESTRATION/REPAIR mantêm contratos e único ledger.
+
+O dono é o runtime nativo, LoopRun + CompleteDecisionAdmission +
+`runModelCall`; adapter publicado só fornece par/guard confiáveis. Nenhum
+segundo contador de chamadas, store de orçamento, recibo assinado por
+modelo ou executor sombra. A opção altera este pipeline nativo, não o
+envolve por fora. Comparações abaixo dizem respeito apenas ao modo novo.
+
+### 5.1 Sequência concreta dentro do pipeline
+
+1. Criar passo RESPOND RUNNING nativo e confirmar seu ACK; construir/validar
+   frame congelado e cap512. `runModelCall` escolhe explicitamente o ramo
+   admitted. **Não chama** o débito síncrono legado beginModelRequest.
+2. Executar controles nativos model/before-call (policy/pause/audit etc.)
+   sem débito legado. Append/ACK de model/request com snapshot efetivo.
+   Revalidar depois de controles: mutação do request é conflito, não medição
+   silenciosa de bytes diferentes. Counter mede exatamente esse request.
+3. Reservar no mesmo ledger RESPONSE: modelCalls1, inputUpperBound, output512,
+   costUpperBound0. CAS ACTIVE persiste RESERVED + budget; audit
+   `decision.admission.reserved` deve ACKar antes de autorizar entry.
+   Preflight de capacidade e todos fences/limites antes do reserve.
+   Só APPLIED+ACK conhecido devolve autorização uma vez ao caller vivo.
+4. Rechecar signal/deadline/fence, chamar **uma vez** modelGateway.complete
+   nativo com request congelado + signal composto. O gateway novo retorna
+   **raw ModelResult** imutável; não chama output guard nem troca text/usage.
+   Hooks/emissões model.before/model.after são sequenciais, não uma fase
+   composta que chama outras fases. Nenhum lock SQL através do IO.
+5. Validar raw antes de qualquer soma/digest; SETTLED CAS ACTIVE troca
+   reserva por actual uma vez e guarda resultSha256 do raw. Depois ACK do
+   audit `decision.admission.settled`, depois model/result log real. Esta
+   ordem settle→audit→resultlog é delta explícito do pipeline legado.
+6. Só após esses ACKs executar output guard nativo fora do gateway bruto,
+   via hook confiável `responseAcceptance` do mesmo pipeline. Guard recebe
+   raw.text e policy/risk pinados; retorna registro guardado, não ModelResult
+   com usage reestimado. Rechecar claims/authority/cancel/deadline depois
+   de awaits. Persistir acceptedResponse/estado/cursor por CAS ACTIVE.
+7. `composeResponse` apenas consome outcome/guarded text. Não soma usage.
+   No ramo admitted não chama postModel/recordModelResult legado; no ramo
+   `unrecorded` **não executa as três adições diretas atuais** de S12.
+   Nem retorno do planner, evaluator, adapter, close ou checkpoint projection
+   cobra novamente. Evaluator/planner determinísticos têm usage ausente;
+   usage não vazio nesse perfil dá STATE_CONFLICT antes de arithmetic.
+
+O responseCheckpointControl privado da fonte genérica atual permanece
+no modo genérico. Para admitted ele não debita nem persiste um segundo slot:
+o CAS RESERVED acima é a única fronteira pre-model. Não apagar o reparo
+da fonte genérica atual; distinguir os dois caminhos no mesmo dono nativo.
+
+| Caller de persistência da fonte genérica atual CURRENT | Mapeamento PROPOSED somente admitted |
+| --- | --- |
+| dispatchRespondAttempt recordStep RESPOND RUNNING antes de composeResponse | Preservar a intent nativa e seu ACK antes de model/counter; fase step.recordStep ACTIVE, sem cobrança de chamada. Antes de IO o host não pode selar esse tail como C1/C2. |
+| responseCheckpointControl model/before-call persiste o slot debitado por beginModelRequest | Generic sem opção permanece exatamente assim. Admitted não chama beginModelRequest legado nem esse persist redundante: o único slot/charge é RESERVED CAS ACTIVE do mesmo pipeline §5.1, depois de guards/requestlog/medida e antes da entry. Controle privado não abre outra fase em torno do reserve. |
+| composeResponse finally chama persistCheckpoint em todo outcome | Preservar a obrigação de persistir ou recusar resposta. No admitted, finally espera/join o finalizador único do dono nativo; se outcome válido e owner ainda ativo, confirma token/ledger já ACKados (zero CAS extra se não mudou). Pending/incerteza/stop fecha local antes de await; usa UNKNOWN_DIAGNOSTIC ou BREACH_DIAGNOSTIC estrito §6.4 com fence válido, sem race entre eles. Se terminal saudável já começou, só TERMINAL permitido; cancel/sem autoridade conserva CP anterior. Não fazer persist ACTIVE incondicional após closeLocal, segunda troca de reserva ou ACK duplicado. Falha desse finally impede texto/continuação; nunca engolir erro. |
+| execute recusa RESPOND row.stepNumber > checkpoint.state.stepNumber | Conservar proibição de replay. No host publicado, rehydrator classifica esse caso como tail inseguro antes da execução ativa: usa latest ledger e fence DIAGNOSTIC/sidecar cancel, não uma fábrica nova para repetir modelo ou resetar usage. C1/C2 só passam com step terminal ACKado incluído no checkpoint/selagem coerente; não relaxar comparação para tornar restart verde. |
+| execute recusa stop INTERNAL_FAILURE/MODEL_FAILURE com row RESPOND no cursor completo | Conservar a recusa localizada desse turno. Rehydrator não classifica o slot aceito como executável só porque row e cursor coincidem: stop/fault continuam veto, mesmo com budget spare. Não ampliar stops globais/legados nem bloquear C1/C2 válidos sem stop, pausa legítima ou segmento ativo depois de RESPOND anterior. |
+| composeResponse.failed conserva primaryResponseFailure; runtime catch/finalize distingue falhas secundárias de persistência/step/audit | Conservar a causa primária e explicitar a secundária no diagnóstico nativo efêmero, sem tratá-lo como receipt, witness de actual, ACK ou checkpoint confirmado. O opt-in continua submetido às transições de ledger/fase de §5/6: texto de erro não permite replay, inventar uso ou aceitar resultado. |
+
+Finally não aninha fase em completion.evaluate/resultlog/model.request:
+essas operações devem estar ACKadas/encerradas antes de ele iniciar outra
+intent. Fase incompleta não é autorização de persistência ativa; a matriz
+§6 decide diagnóstico ou conservação. O persist da fonte genérica atual não é removido
+nem reclassificado para outros consumidores por este opt-in.
+
+Contrato do hook confiável de fábrica `responseAcceptance`: recebe objeto
+fechado `{request,rawResult,receipt,stepNumber,signal}` depois de settlement/
+audit/resultlog conhecidos; retorna `{responseText,guard,guardDigest}`,
+com guard fechado de §5.3 e responseText=guard.text. O runtime recomputa
+guardDigest, valida receipt/raw e executa claims nativos antes de persistir
+acceptedResponse. Não importar platform/persistence no harness: o host
+fornece esse port estrutural, model não pode fornecê-lo. Ausência do hook
+no novo perfil é preflight failure. Outcome nativo admitted carrega tag
+privada `accounting:"complete-response-v1"` e admissionId vinculados pelo
+pipeline (não vindos do model), permitindo ao caller recusar qualquer
+queda no ramo legado. Todas variantes stopped/failed/unrecorded após
+reserva conservam esse vínculo nativo, sem fallback de contabilidade.
+
+Se emissão/model.after/log/audit falha depois do retorno, o pipeline conhece
+que houve chamada, mas não deve aceitar texto sem todos ACKs. Todos esses
+ramos pertencem à máquina abaixo; não podem cair no débito legado.
+
+### 5.2 Resultados, cobrança e incerteza
+
+| Outcome/seam real | Ledger/usage autoritativos | Texto/cursor/continuação |
+| --- | --- | --- |
+| stopped em budget/guard/request-log/counter, antes de reserve | Nenhum receipt novo nem débito. Se uma tentativa reserve não confirmou, tratar conforme linhas CAS abaixo. | Sem model/body/acceptedResponse. Stop nativo correspondente. |
+| RESERVED confirmado; audit reserved ou guard final falha antes de model entry | Conserva reserva e uma chamada **reservada**, embora entrada observada seja0; UNKNOWN diagnóstico se fence permite. Não reembolsa por inferência. | Sem entry/replay/acceptance. Handoff. |
+| completed, raw válido e todos ACKs/guard/claims permitem | SETTLED, actual uma vez; modelCalls1 por receipt. | acceptedResponse do passo; M1 cursor0, M2 cursor2; continua somente tentativa ativa. |
+| stopped pós-model por output guard/claim veto | SETTLED se confirmado, ou RESERVED/UNKNOWN se settlement incerto; nenhum débito extra. | Sem novo acceptedResponse/cursor; failed/blocked projection preserva efeito. |
+| deadline/cancel/failed no IO, inclusive throw depois de possível entrada | Reserva uma vez; UNKNOWN sem actual inferido. Se raw válido já havia SETTLED confirmado, mantê-lo; nunca SETTLED→UNKNOWN. | Fecha dispatch síncrono; late completion descartado; sem resposta/replay. |
+| raw inválido (NaN/Infinity/negativo/unsafe integer/provider/model errado/texto inválido), vazio/whitespace | ADMISSION_BREACH para contrato inválido; vazio válido é MODEL_FAILURE. UNKNOWN com reserva se raw não qualifica; vazio válido pode SETTLED com uso real. | Sem aceite/cursor; FAILED RESPOND nativo, não sucesso nem chamada nova. |
+| raw finito acima da reserva/cap | UNKNOWN ADMISSION_BREACH com actual diagnóstico finito observado pela mesma chamada/tentativa viva, via BREACH_DIAGNOSTIC §6.4; contribuição max(reserved,actual) uma vez. Sem witness/autoridade conservar RESERVED ou UNKNOWN sem actual novo conforme fence. | Latch+close síncronos antes do await, join, CAS/ACK diagnóstico; sem aceite/replay. |
+| resultlog falha (`unrecorded`) após SETTLED+audit confirmados | Mantém SETTLED e exact actual uma vez. O ramo unrecorded não soma nada. | INSUFFICIENT_EVIDENCE; sem guard aceito/novo cursor/sucesso. |
+| audit settled falha após CAS SETTLED | SETTLED persiste; falha de audit não reverte uso nem cria outro receipt. | Stop; sem result acceptance. Próxima claim não recupera sucesso. |
+| reserve CAS rollback conhecido/erro before COMMIT | Durable anterior; live tentative separado não é receipt. Se resposta COMMIT é incerta conservar tentativa local e parar; nenhuma entrada. | Reclaim lê estado real; OPEN não reexecuta mesmo se reserva não aparece. |
+| reserve COMMIT, ACK perdido | Durable RESERVED, caller não obteve autorização. | Entry0; recovery UNKNOWN/retém RESERVED, sem replay. |
+| settle CAS rollback/ACK indisponível/COMMIT desconhecido | Caller conserva upper reserve; durable pode estar RESERVED ou SETTLED. Ler só com nova autoridade; não sobrescrever SETTLED com UNKNOWN. | Sem acceptedResponse/response/sucesso por leitura posterior. |
+| settle COMMIT, ACK perdido | Durable SETTLED exact; caller conservador pode reportar reserva. Não somar RuntimeResults concorrentes como billing. | OPEN é settlement-only; sem M2 repetido ou sucesso recuperado. |
+| acceptedResponse/terminal CAS ou close ACK perdido | Se CLOSED realmente commitou, replay só trace validado/completion/ACK. Se ainda OPEN/FAULTED, diagnóstico/handoff. | Um receipt SETTLED ou acceptedResponse sozinho não autoriza sucesso recuperado. |
+| audit de runtime/end-log/callback/outer ACK falha | Ledger já confirmado não muda. Inbound/outer markers só pelo protocolo real. | Falha de evidência bloqueia sucesso afirmado; CLOSED idempotente não chama factory/model/body. |
+
+Toda arithmetic usa valores previamente validados: tokens SafeInteger>=0,
+cost finito>=0, modelCalls1; verificação de overflow antes de soma/subtração.
+Rejeitar -0 conforme normalizador nativo. No par byte64 proposto, recomputar
+também actual.inputTokens=measure exato e actual.outputTokens=ceil(bytes
+UTF-8 raw.text/64), além das verificações upper-bound gerais; uso menor
+fabricado também é breach desse par determinístico.
+Para raw inválido não executar Math.max com seus campos, não serializar
+NaN como null nem criar digest de resultado válido. Diagnóstico guarda
+apenas código/campos finitos permitidos dentro dos caps; sem actual quando
+não é válido. Adição segura pode recusar diagnóstico e preservar RESERVED.
+Usage publicado é soma exata das contribuições do ledger: SETTLED actual;
+RESERVED reserved; UNKNOWN max(reserved,validActual) ou reserved.
+Não somar reserved+actual; o replace é transacional, nunca débito agregado.
+O receipt original inteiro é imutável salvo transição RESERVED→SETTLED ou
+RESERVED→UNKNOWN. UNKNOWN/SETTLED terminais; settle idêntico de SETTLED é
+idempotente; altered/foreign/UNKNOWN settlement dá conflito.
+
+### 5.3 Raw, guard e acceptedDecision/acceptedResponse
+
+requestSha256/resultSha256: SHA-256 untagged da canonicalização224 do
+request sem signal e do **raw** objeto fechado
+`{text,provider,model,inputTokens,outputTokens,costUsd}`, respectivamente.
+Raw usage conta output bruto, mesmo se guard encurta/substitui. Textos
+guardados não alteram raw digest, reserva ou custo. responseSha256 é
+SHA-256 untagged dos bytes UTF-8 de guarded text; guardDigest é
+controlledDigest tagged do registro output-policy real completo.
+
+Novo campo opcional fechado `toolResultContext.acceptedResponse` somente
+no modo admitted:
+`{stepNumber:1|3,decisionAdmissionId,requestSha256,resultSha256,rawResult:{text,provider,model,inputTokens,outputTokens,costUsd},responseText,responseSha256,guard,guardDigest,deliveredThroughStep:0|2}`.
+`guard` é o objeto fechado `{decision:"allowed"|"rewritten",reason:"output_allowed"|"output_redacted"|"unsafe_output_rejected"|"invalid_output"|"output_too_large",mode:"answer"|"clarify"|"handoff"|"blocked",text:string,redacted:boolean}`
+do enforceControlledOutput S15; responseText=guard.text. Raw+guard ficam no checkpoint sob caps
+e permitem recomputar digests, não só confiar em strings de hash. Esta
+retenção explícita é parte do schema proposto e exige aprovação T3.
+
+Validators C05/N04/N03/S13 e host S06/S08 devem: validar shape fechado e modo; recomputar
+todos digests; conferir tenant/execution/step/purpose RESPONSE/attempt0,
+SETTLED único, measurement do par pinado e actual=raw usage. Sem pending/
+UNKNOWN para criação/avanço de acceptance; retenção histórica segue §5.4.
+Proibir receipt RESPONSE em decisionAdmissionIds
+de decisão ORCHESTRATION/REPAIR: o planner determinístico devolve [] e
+acceptedDecision guarda a decisão real com [], enquanto acceptedResponse
+faz a associação RESPONSE separada. Não obrigar decisões de regra a
+declarar recibo fictício nem omitir receipts de decisão realmente usados
+por outros perfis. Filtrar por purpose ao validar o conjunto de decisão.
+
+M1 acceptedResponse1, guard permitido/cursor0; C1 conserva registro completo
+em preToolResponse da snapshot. C2 conserva M1, acceptedDecision CALL_TOOL2
+com [], output/provenance completos e cursor0. M2 acceptedResponse3 exige
+acceptedDecision RESPOND3 da intent exata, M1 preservado, uma ferramenta2
+COMPLETE/AVAILABLE com hashes/provenance/journal/ACKs, guard permitido e
+claims válidos; cursor só então muda0→2. acceptedResponse1→3 uma vez;
+sem mutação do registro já aceito no mesmo passo, regressão3→1, advance
+por reserve/count/log, outputUnavailable ou summary. Falha posterior retém
+aceite já persistido como fato histórico, mas não o transforma em sucesso.
+
+O avanço de passo no perfil admitted conserva acceptedDecision até a
+próxima decisão nativa aceita, em vez de apagá-lo indiscriminadamente como
+fazem ramos genéricos atuais. Assim C1/C2/terminal preservam a associação
+exigida; a próxima decisão substitui só o slot atual, conservando receipts
+e M1 na snapshot. Catch de RESPOND só reconcilia passo terminal realmente
+ACKado; se write incerto, conserva pending/accepted anteriores e fecha.
+Falha de claims nesse perfil para com VERIFICATION_FAILED/handoff; não usa
+o ramo genérico de revisionEvaluation/continue para gerar outra resposta.
+
+### 5.4 Decisão executável, decisão histórica e planner do próximo passo
+
+No perfil admitted, `s` é o cursor de passos **concluídos**:
+`run.stepNumber = checkpoint.stepNumber = state.stepNumber`; não é
+deliveredThroughStep, que só mede entrega de tool context. O slot
+acceptedDecision não ganha um campo status editável. Sua classe é derivada
+do passo, das rows/ACKs nativos e do checkpoint, conforme esta tabela.
+Os callers decidem essa classe antes de qualquer ramo pendingDecision.
+
+| Estado do slot | Validação e único próximo comportamento |
+| --- | --- |
+| Ausente, s=0 | Bootstrap sem pending/receipt/intent anterior; planner(1) pode produzir a regra RESPOND1; validar e CAS ACCEPT antes de dispatch. Ausência de slot em C1/C2 ou com trabalho anterior é conflito. |
+| accepted.stepNumber=s, s>=1 | Histórico, nunca redispatch. Exigir row terminal exata do passo s, tenant/execution/decision/refs compatíveis, ACK durável e CP incorporando os mesmos fatos/usage/step. Somente para progresso: sem pendingDecision/pendingStepNumber, pending receipt, UNKNOWN, stop/fault ou intent adiante. Se host/fence e safe-point permitem progresso, chamar planner(s+1); não entrar no antigo ramo que exige accepted.stepNumber=s+1. Em diagnóstico/falha conservar slot e fatos sem chamar planner. |
+| accepted.stepNumber=s+1 | Executável apenas na mesma tentativa ativa ainda autorizada, decisão válida/imutável e sem dispatch anterior dessa decisão. pendingDecision, se presente, deve ser canonicamente a mesma decisão com pendingStepNumber=s+1. Host recovery OPEN/FAULTED ou receipt/row indicando tentativa já iniciada não concede nova autorização para dispatch. |
+| accepted.stepNumber<s ou >s+1, cursor/row/ACK incoerentes, pending histórico/foreign | STATE_CONFLICT antes de planner/dispatch; não apagar slot, reinterpretar histórico como futuro, alterar step ou inventar ACK para reparar. |
+
+Slot não concluído (step=s+1) com stop/fault/UNKNOWN ou owner fechado é
+retido como **não executável bloqueado**, não reclassificado como histórico
+concluído nem apagado. Shape/transition podem conservar esse objeto no CAS
+DIAGNOSTIC sem permitir dispatch. Estado histórico com UNKNOWN igualmente
+continua retido para diagnóstico; o veto é ao progresso, não à conservação.
+
+O seletor de IterativeGovernedRuntime deve separar explicitamente as
+classes acima antes da precedência atual pendingDecision/acceptedDecision.
+Histórico válido segue o ramo decide(run,s+1), com contexto nativo desse
+próximo passo. No bootstrap e em C1/C2 o planner é determinístico e
+devolve `decisionAdmissionIds:[]`, usage ausente. Aceite de uma decisão
+executável é CAS ACTIVE/ACCEPT com a regra exata do passo, antes de
+recordStep/dispatch. CALL_TOOL2 deriva do comando já selado em C1;
+RESPOND3 deriva do C2 real, sem reparse de M1 ou replay da ferramenta.
+
+O próprio dispatch só usa uma autorização local ligada ao slot/fence e à
+invocação nativa corrente. `recordStep RESPOND RUNNING` consome essa
+autorização antes de composeResponse. A presença de slot+RESERVED no CP é
+um estado intermediário de persistência do pipeline, **não** autorização
+para o while-loop chamar dispatch novamente. Reentrância/factory recriada
+com essa intent/reserva vai para recusa/diagnóstico; a recusa nativa
+RESPOND-ahead e a recusa de stop no cursor continuam obrigatórias.
+
+Transições checkpoint/host permitidas, sem alterar schema de outro perfil:
+
+| Transição | Prova/caller/validator obrigatório |
+| --- | --- |
+| Ausente→accepted1 executável com s=0 | decide(1) validado; ACCEPT sem receipt de decisão inventado, sem pending RESPONSE ainda; runtime/host verificam regra/intenção1 e []. |
+| accepted k executável permanece no mesmo k durante reserve/settle/guard | Objeto acceptedDecision inteiro canonicamente imutável. Native admission persiste RESERVED ou SETTLED de RESPONSE k/attempt0 conforme exceção estrita abaixo. Não trocar decisão, tool input, reason, intent ou IDs para repetir. |
+| s=k-1→s=k, accepted k inalterado | Native recordStep terminal ACKado e reconciliação exata do passo/usage antes do CAS de avanço. Sucesso de M1/tool2 não possui pending/UNKNOWN; limpar pendingDecision/pendingStepNumber, conservar accepted k. No diagnóstico, só avanço comprovado por row terminal, sem tornar slot executável. |
+| accepted k histórico→accepted k+1 executável, s=k inalterado | Só ACTIVE, sem stop/fault/pending/UNKNOWN, decisão do planner(k+1) validada e CAS ACCEPT; C1/C2 devem estar coerentes quando há restart. Não pular k+1, diminuir passo nem substituir decisão do mesmo passo. |
+| Stop/DIAGNOSTIC/TERMINAL | Reter acceptedDecision/acceptedResponse e receipts como fatos; nenhum novo slot, decisão substituída, planner, dispatch ou criação de resposta. Rows/CP podem registrar FAILED sem pretender sucesso. |
+
+Validators de shape/state/transition em N04, checks de seleção/aceite/
+avanço em N02, reserve/settle em S11 e CAS/seal host S06/S08/S13 devem
+compor essas regras. O validator puro verifica binding/cursor/diff; o
+host verifica rows/ACKs/fence no mesmo client/transaction. Substituir o
+check genérico `accepted && pending != null => fail` somente pela exceção
+seguinte neste opt-in; não relaxar a regra generic224/legacy.
+
+Nos callers N02 executeLoop (`dispatch.kind=stop` e avanço de continue) e
+S12 dispatchRespond.catch, o ramo admitted não executa a limpeza genérica
+`acceptedDecision:undefined`. Catch/stop preservam o slot canônico; só
+avançam s/limpam pending mediante row terminal realmente ACKada. Se não
+podem prová-la, preservam também s/pending e fecham sem redispatch. A troca
+para decisão de passo seguinte só ocorre no CAS ACCEPT descrito acima,
+nunca como efeito colateral de catch, stop, C1/C2 ou leitura de checkpoint.
+
+Exceção **única** de coexistência executável+reserva:
+
+- acceptedDecision é a regra RESPOND1 ou RESPOND3 exata de §3, com
+  decisionAdmissionIds=[] e accepted.step=s+1. O passo correspondente tem
+  intent RUNNING nativa ACKada da tentativa dona que está executando o
+  pipeline; sem decisão-modelo ORCHESTRATION/REPAIR nesse passo.
+- Existe exatamente um pendingDecisionAdmission; ele aponta para o único
+  receipt RESERVED do ledger, purpose RESPONSE, step=accepted.step,
+  attempt=0, tenant/execution iguais, requestSha256/measurement iguais ao
+  request congelado/medido e ao par admitido. Reserved não tem actual,
+  resultSha256 ou unknownReason. Não há outro receipt nesse passo nem
+  qualquer UNKNOWN em outro passo; M1 SETTLED histórico é permitido em M2.
+- pendingDecision/pendingStepNumber são ausentes ou ambos correspondem
+  canonicamente ao mesmo slot executável. CALL_TOOL, slot histórico,
+  purpose errado, attempt1, duplicidade, foreign ID/request ou pending
+  incongruente são conflito. O cálculo genérico de attempt pelo tamanho
+  da lista não concede tentativa extra: o perfil exige attempt0 único.
+- Essa coexistência permite **persistir RESERVED**, não aceitar resposta
+  ou executar decisão novamente. Reserve e seu CAS validam o estado
+  proposto antes de mutar LoopRun; só o pipeline vivo recebe autorização
+  de entrada após COMMIT+audit do reserve. SETTLED limpa pending como parte
+  da mesma troca; UNKNOWN limpa pending mas fecha progresso/aceite.
+
+acceptedResponse1 já confirmado e preToolResponse de C1 são históricos
+imutáveis e podem ser conservados enquanto M2 mantém sua própria reserva3
+pendente. Isso não é novo aceite. Criar/alterar acceptedResponse do passo
+em execução, avançar cursor ou substituir1→3 exige pending=null,
+nenhum UNKNOWN e todos requisitos §5.3. Diagnóstico com UNKNOWN retém a
+resposta histórica anterior sem aceitá-la novamente ou conceder dispatch.
+
+C1 fixa s=1, acceptedDecision RESPOND1 **histórico**, acceptedResponse1,
+M1 SETTLED, cursor0, row1 SUCCEEDED/ACK e nextPlannerStep=2. C2 fixa s=2,
+acceptedDecision CALL_TOOL2 **histórico** com [], acceptedResponse1 retido,
+row2/tool/journal/observation ACKados, cursor0 e nextPlannerStep=3. A
+rehidratação classifica esses slots como históricos e chama planner2/3
+somente após validar seal+CP corrente. No terminal s=3, acceptedDecision3
+é histórico e retido, mas stop/close impedem planner4. Nenhuma decisão
+histórica vira elegível por ter budget disponível.
+
+## 6. CAS, fases e settlement completos
+
+### 6.1 Uma operação privada e um dono de ACK
+
+Guarded step port deve encaminhar compareAndSwapCheckpoint. No perfil
+complete ele usa `commitCompleteCheckpoint(fence,input)` privado do host,
+nunca saveCheckpoint2 simples/saveResumePoint legado/pool CAS separado.
+Input fechado: expectedCheckpoint `{checkpointId,digest}|null`; next lógico
+checkpointVersion2 com checkpointId novo; phase ref real; expectedHost
+`{sealId,stateRevision,phaseRevision,evidenceSequence,evidenceHash}`;
+`phaseClass:"ACTIVE"|"TERMINAL"|"DIAGNOSTIC"`;
+commitKind `CHECKPOINT_ONLY|RESUME_POINT`; snapshot null ou state-v2;
+terminalEvidence null ou conjunto de receipts nativos §6.2;
+diagnosticEvidence null ou metadados fechados OBSERVED_BREACH de §6.4;
+supersededPhase null ou `{phaseId,phaseType,phaseRevision,attempt,inputDigest,intentSequence,intentHash}`
+da fase órfã anterior, somente DIAGNOSTIC sob fault/recuperação autorizada.
+Digest da intent cobre todos esses campos, inclusive class/commitKind/next
+digest/snapshot digest. Nada vem de caller HTTP, metadata ou payload.
+
+Retorno APPLIED `{token,ack,seal|null}` só depois COMMIT; CONFLICT sem efeito;
+COMMIT desconhecido não é APPLIED. Mesma primitiva **on-client** CAS/codec/
+integrity/transition de S13, extraída/reutilizada em uma transação do host,
+sem nested BEGIN/pool checkout, não load+save. Guards e validators adicionais
+abaixo compõem a validação nativa, não a substituem.
+
+Uma fila de operações nativas por tentativa serializa fases e callbacks.
+O persist nativo recebe internamente intenção fechada
+`{phaseClass,transitionKind}`; transitionKind é INITIAL, PRE_DISPATCH,
+RESERVE, SETTLE, OBSERVATION, ACCEPT, RESUME_C1, RESUME_C2, TERMINAL ou
+UNKNOWN_DIAGNOSTIC ou BREACH_DIAGNOSTIC. O dono escolhe a intenção no seam correspondente;
+host verifica o diff e recusa discrepância. Não inferir classe somente de
+stopReason do payload nem de boolean settlement enviado pelo caller.
+Antes de beginPhase não há activePhase ou promessa nativa não joined.
+Não manter fase aberta em torno de código que inicia outra fase. Refactor
+de composição explícito para este modo: planner faz decisão pura na sua
+fase e emite eventos depois do ACK; hooks/model/guard/callbacks são fases
+sequenciais. Counter não executa SQL/fase. Model.request phase envolve só
+IO bruto, sem CAS/guard/log interno chamando run recursivamente.
+
+O protocolo novo tem fases distintas `complete.checkpoint.active`,
+`complete.checkpoint.terminal`, `complete.checkpoint.diagnostic`.
+Não usar uma phaseType única com boolean settlement genérico. Ambos
+ControlledContinuationRuntime e store.beginPhase reconhecem **a mesma**
+classificação fechada; não basta regex/allowlist ampla. Adicionar as duas
+últimas à allowlist settlement com validadores §6.2; active nunca entra.
+
+beginPhase confirma intent e abre fase; o port CAS exige essa intent como
+único tail desde expectedHost: sequence=head+1, previous_hash=head.hash,
+mesmos phaseId/revision/attempt/inputDigest. No mesmo transaction CAS,
+append phase ACK e atualizar head; opcionalmente selar C1/C2. O port CAS
+é **único dono desse ACK**; continuation consome ack/token/seal retornados
+e limpa activePhase, sem chamar ackPhase outra vez. Não colocar CAS dentro
+de `run()` que automaticamente ACKa. ACK duplicado é conflito sem mutação.
+Erro desconhecido fecha/poison local; não tentar repetir a mesma fase.
+
+### 6.2 Matriz de autoridade e deltas permitidos
+
+| Classe | Guard/phase e estado de origem | Deltas permitidos e proibidos |
+| --- | --- | --- |
+| ACTIVE / complete.checkpoint.active | Dono vivo CLAIMED/RUNNING, leases inner/queue/outer/attempt exatos; signal/deadline/pause/BOT_ACTIVE permitidos; local aberto, sem fault. OPEN com fase própria ou IDLE_SEALED consumido por begin. | Inicial2, pre-dispatch, reserve, settle válido, observation, acceptedDecision/acceptedResponse/cursor e C1/C2. Validator nativo+§5.3, identidade imutável, retenção total, sem downgrade. RESUME_POINT somente C1/C2 e sem stop/pending/UNKNOWN/fault. |
+| TERMINAL / complete.checkpoint.terminal | closeLocal já síncrono e joined; **mesma tentativa viva saudável**, nenhuma recuperação OPEN/FAULTED, leases válidas, deadline original ainda vivo, pause/BOT_ACTIVE permitidos, nenhuma cancellation/fault. | CHECKPOINT_ONLY; gravar stop terminal e avaliação já ACKada; COMPLETED exige conjunto §7, acceptedResponse3/cursor2 já persistidos e unchanged. Não reserva/chama/settle/libera/insere receipt, observação, decisão ou cursor; não cria seal. Só metadados terminal/step/duração monotônicos. |
+| DIAGNOSTIC / complete.checkpoint.diagnostic — UNKNOWN_DIAGNOSTIC | closeLocal/join; fence settlement real com leases exatas e parent CLAIMED/RUNNING, OPEN ou FAULTED (inclui nova claim settlement). Deadline/pause/takeover podem estar vetando dispatch. | CHECKPOINT_ONLY; RESERVED→UNKNOWN **sem actual novo** ou manter reserva; pending→null, stop não-COMPLETED, fault/evidência/duração monotônicos. Conservar actual já persistido, não inferir de recovery. |
+| DIAGNOSTIC / complete.checkpoint.diagnostic — BREACH_DIAGNOSTIC | Mesma tentativa que observou retorno antes de close, com witness nativo vivo §6.4 e fence ainda atual após join; local já fechado/latch QUARANTINED. Sem recovery/cancellation/closed ou novo owner. | CHECKPOINT_ONLY; único RESERVED RESPONSE→UNKNOWN/ADMISSION_BREACH com actual finito validado capturado; contribuição max uma vez, modelCalls não muda. Somente o delta §6.4. |
+| Parent CANCELLED / cancellation receipt nativo | Apenas guardCancelledPublishedFence + cancel_close, eventSequence/attempt de CANCELLED e outer claim exatos. Não exigir inner lease inexistente. | **Nenhum complete CAS/step write.** Fecha binding/evidence/trace seguro via rota cancel_close existente; conserva último checkpoint e RESERVED como incerteza. Deny de CAS é esperado, não prova UNKNOWN persistido. |
+| CLOSED / fence perdido / outra tentativa vencedora / lease expirado sem novo fence | Nenhuma autoridade CAS, nem por settlement flag. | Zero mutation; ler diagnóstico/CLOSED pela porta própria. Reserva pode permanecer RESERVED; nunca fabricate UNKNOWN/ACK ou resultado. |
+
+TERMINAL permite sucesso **ativo já comprovado**, não sucesso recuperado.
+Ambos diagnósticos proíbem SETTLED→UNKNOWN, UNKNOWN→SETTLED, actual
+acrescentado a UNKNOWN, refund, novo receipt/observation/acceptedDecision/
+acceptedResponse/cursor/plan/snapshot/seal/model/body ou qualquer active
+progress. A exceção BREACH_DIAGNOSTIC não permite novo trabalho; apenas
+registra uso finito já observado antes do fechamento sob o mesmo dono.
+DIAGNOSTIC pode reconciliar stepNumber/usage.steps e limpar pendingDecision/
+pendingStepNumber apenas até o passo terminal FAILED/SUCCEEDED nativo já
+ACKado e consultado no mesmo fence; não criar passo/resultado novo, não
+limpar acceptedDecision/acceptedResponse ou advance cursor. Se não há ACK
+verdadeiro, manter números/pending antigos. Terminal stop COMPLETED ainda
+sem close pode virar stop de evidência falha, conservando o fato do intento
+terminal e registros anteriores; isso não é revogar parent SUCCEEDED,
+que só existe depois de close e já proíbe CAS.
+Origem recovered/claim.disposition=SETTLEMENT, FAULTED, diagnostic ou local
+fault é latch monotônico na tentativa e torna COMPLETED impossível.
+Nenhuma exceção settlement ignora tenant/attempt/outer row/leases. Signal
+de dispatch abortado não é autoridade de fechamento: operação settlement
+usa controle de finalização próprio bounded, conservando fences nativos.
+
+Validators da composição verificam diff exato current→next sob lock e o
+conjunto de provas consultado no DB. Nonterminal reserve/seal mascarado
+como terminal/diagnostic recusa antes de CAS/ACK. Native validation atual
+que permite uma transição1→2 vazia em outro perfil não se aplica aqui:
+published complete nasce2 e nunca migra um turno legado. Proibir alterações
+de identidade/governance/goal/budget/pair/config e perda de qualquer fato.
+
+Se um audit/phase anterior falhou, poison persiste fault original sem
+apagá-lo; fase DIAGNOSTIC não substitui tail silenciosamente. Guardar a
+referência/hash da intent órfã em supersededPhase, na própria nova
+phase.intent diagnóstica; não inventar ACK da fase órfã nem inserir outro
+evento entre o head esperado e a nova intent. Isso só é permitido após
+provar antiga tentativa encerrada ou poison confirmado. A intent anterior
+permanece íntegra no journal de evidence e a nova intent registra esse
+abandono de modo explícito. Uma fase
+sem ACK da mesma tentativa não é descartável para ganhar autoridade ativa.
+Se não há fence/headroom para diagnóstico, conservar OPEN/RESERVED e parar.
+
+### 6.3 Evaluation, close-local e ausência de nesting
+
+Somente no modo complete, evaluator determinístico usa fase
+completion.evaluate com **ACK imediato**, deferAck=false. Guarded audit
+evaluation.completed usa outra fase própria após o ACK; não chama
+finishEvaluation, que permanece apenas no legado. O resultado avaliado e
+seu ACK ficam como prova confiável; não mantêm activePhase. Qualquer falha
+do evaluator/audit impede terminal COMPLETED e segue diagnóstico seguro.
+
+Ordem final saudável: acceptedResponse3/cursor CAS ACTIVE → passo RESPOND3
+concluído ACK → evaluation ACK → evaluation.completed audit ACK → join de
+callbacks/mirrors/result/log/IO pendentes → validar terminalEvidence →
+fechar dispatch local síncrono (state.finalizing/closeLocal/abort) → parar
+e join do único renewal owner → terminal CAS TERMINAL → audits/end-log
+terminais sequenciais → close nativo atômico. Não existe await entre a
+decisão de fechar e o latch local fechado. RecordStep FAILED/stop ou
+saveCheckpoint terminal também fecha local antes do primeiro await, mas
+encaminha para settlement, não para assertDispatch de fase ativa.
+
+closeLocal impede dispatch, não prova DB closed nem vence lease. Janela de
+finalização existente max(expiresAt,now+200ms) não estende deadline de
+sucesso: terminal saudável e close COMPLETED verificam clock DB antes de
+COMMIT. Expiração/fault durante join muda o próximo caminho para diagnóstico
+sem sucesso; não reabre local. Join não é enrolado por timeout que abandona
+promessas SQL. Late completion não pode entrar na fila de mutações.
+
+### 6.4 Breach observado: fechamento e uso diagnóstico monotônico
+
+Esta é uma subtransição restrita de DIAGNOSTIC, não uma quarta classe de
+fase, novo debit owner, gate de modelo ou recibo de admissão. O caller
+nativo `CompleteDecisionAdmission.settleNow`, chamado pelo ramo admitted
+de runModelCall, distingue resultado qualificado de uso **diagnosticamente
+finito** observado. Um uso finito acima da reserva, ou que viola a medida
+exata byte64, não pode ser SETTLED; pode ser preservado como actual de
+UNKNOWN. Esse actual significa uso reportado pelo retorno observado, não
+qualificação/billing real nem conformidade do par.
+
+Condições cumulativas para actual novo nesse caminho:
+
+1. O retorno foi observado pela invocação única autorizada desse receipt
+   antes de qualquer close/cancel/deadline/poison do owner da chamada.
+   Receipt confirmado ainda RESERVED/pendente, purpose RESPONSE, attempt0,
+   tenant/execution/step/request/measurement e provider/model correspondem
+   à chamada e ao par pinados. Não usar receipt foreign/SETTLED/UNKNOWN,
+   resultado tardio, inferência do journal, stdout ou de outro processo.
+2. Antes de arithmetic ou await, validar em memória os campos de uso como
+   SafeInteger>=0 para tokens/modelCalls1, cost finito>=0, nenhum -0 e soma
+   sem overflow. Capturar cópia imutável desses campos e da identidade
+   nativa da chamada em um witness privado. Raw shape/provider/model
+   inválidos, NaN/Infinity/getter/valor não seguro não geram actual novo;
+   seguem UNKNOWN_DIAGNOSTIC sem actual ou conservação da reserva.
+3. O witness é ligado ao owner da invocação, workerId, inner attempt e
+   outer ref exatos que observaram o retorno. Um registry **privado do dono
+   nativo**, por identidade de objeto, valida esse vínculo; não é outro
+   ledger/contador. Não reconstruir witness de hash/JSON/CP, nem após
+   restart/takeover. O host só o recebe pela composição confiável.
+4. Após join, o DB ainda deve confirmar a mesma tentativa/leases/ref/tenant
+   e receipt RESERVED esperado, token/head/capacidade válidos. Uma nova
+   claim de settlement pode diagnosticar ausência de resultado, mas não
+   herda autoridade para acrescentar esse actual. Parent CANCELLED só tem
+   cancel_close sidecar, e parent CLOSED não recebe CAS.
+
+Ordem obrigatória do ramo, com um único finalizador nativo:
+
+- Capturar/validar o witness por operações puras síncronas; tornar latch
+  QUARANTINED e fechar dispatch/owner da admissão/local continuation
+  **sincronamente antes do primeiro await**. Nenhuma decisão/modelo/corpo
+  pode começar entre detecção e fechamento.
+- Congelar a fila de admission; seu close genérico não pode antes gravar
+  UNKNOWN sem actual e consumir esse RESERVED. O mesmo finalizador escolhe
+  uma vez BREACH_DIAGNOSTIC ou, se sem witness/autoridade,
+  UNKNOWN_DIAGNOSTIC/conservação. Finalmente/finally não cria outro close.
+- Parar/join o renewal owner e os IO/callbacks nativos já iniciados,
+  sem await circular: a barreira não inclui a própria promessa do
+  finalizador/pipeline que está esperando essa barreira. Não abrir fase
+  diagnóstica enquanto model.request/outra fase ainda estiver aberta. O
+  retorno model já terminou; ACK perdido de sua fase não é fabricado.
+- Com local fechado e join concluído, beginPhase
+  complete.checkpoint.diagnostic e CAS CHECKPOINT_ONLY com
+  transitionKind BREACH_DIAGNOSTIC. Usar controle settlement bounded e
+  guard real, não assertDispatch ativo. Reservar headroom existente antes
+  da chamada; falta de espaço/fence não permite ampliar caps.
+- CAS grava UNKNOWN+actual, uso conservador e o único ACK da fase na mesma
+  transação; só APPLIED/ACK conhecido confirma o delta. Consumir ACK uma
+  vez e limpar activePhase. Audit breach vem depois como fase settlement
+  restrita: sua falha não desfaz UNKNOWN/uso nem reabre dispatch.
+
+Estender o port privado para
+`commitCompleteCheckpoint(fence,input,liveBreachWitness?)`. O terceiro
+argumento é referência opaca local verificada pelo dono nativo/host, não
+serializada no checkpoint nem aceita de HTTP/SDK/model/config. O input
+canônico contém diagnosticEvidence null ou objeto fechado
+`{kind:"OBSERVED_BREACH",admissionId,requestSha256,stepNumber,admissionAttempt:0,workerId,innerAttempt,outerRef,actual,witnessDigest}`.
+witnessDigest é SHA-256 untagged desses metadados canônicos sem o próprio
+digest; ele liga intent/evidence ao witness privado, não lhe dá autoridade.
+Normalização e inputDigest incluem esses metadados, class/transitionKind
+e diff; token opaco não entra na canonicalização. Port/verifier não cria
+imports platform/persistence no harness. Sem witness válido:
+diagnosticEvidence com actual é rejeitado antes de begin/CAS.
+
+Validators puros N04/N03/S13 conferem shape, imutabilidade e diff permitido;
+host S06/S08 confere witness/owner e fence no mesmo client/transaction.
+Só podem mudar: o receipt RESERVED correspondente para UNKNOWN com
+unknownReason ADMISSION_BREACH e actual capturado; pending desse receipt
+para null; os componentes inputTokens/outputTokens/costUsd pela fórmula
+abaixo; stop/fault/evidência/duração não-sucesso e reconciliação de passo
+terminal já ACKado permitida em §6.2. Demais receipts/M1/tool/observações,
+acceptedDecision/acceptedResponse/plan/cursor permanecem iguais. Não criar
+resultSha256 de resultado qualificado nesse UNKNOWN.
+
+Para cada componente x, `charge(RESERVED)=reserved[x]` e
+`charge(UNKNOWN)=max(reserved[x],actual[x])` com ambos validados.
+`nextUsage[x]=currentUsage[x]-charge(currentReceipt)[x]+charge(nextReceipt)[x]`;
+modelCalls permanece1 nesse receipt, sem novo slot. Validar que nextUsage
+é finito/seguro e >=currentUsage. Nunca somar reserved+actual, aplicar
+max sobre valores inválidos ou diminuir contribuições de outro receipt.
+currentUsage/currentReceipt são os valores do checkpoint confirmado com
+token esperado, lido/validado sob o lock CAS, não um acumulador local já
+alterado por tentativa incerta de persistência. Preparar o next candidato
+sem aplicar delta novamente ao objeto vivo; só reconciliar LoopRun ao
+ACK conhecido. Após ACK perdido, separar observação local de uso do estado
+durável confirmado e não reaplicar a fórmula contra a reserva antiga.
+UNKNOWN existente é imutável; duplicata recebe conflito ou leitura do
+mesmo terminal confirmado, sem novo CAS/ACK/débito. Não enriquecer UNKNOWN
+com witness tardio. Não aceitar resposta, avançar cursor ou fazer SETTLED.
+
+Rollback conhecido/erro antes do COMMIT mantém último CP confirmado e
+RESERVED; erro/ACK perdido deixa resultado **desconhecido** para o caller,
+não APPLIED. Não repetir a adição local por subtração da reserva duas
+vezes, não afirmar que só reserva é o total real conhecido: preservar
+witness observado como diagnóstico local separado do durável confirmado.
+Recovery lê o CP mais recente: se UNKNOWN+actual realmente commitou,
+conserva sua contribuição; se RESERVED ficou, não inventa actual nem
+reconstrói witness. Se fence/DB/ACK faltam, RESERVED é incerteza válida e
+não há replay, refund, sucesso recuperado ou novo trabalho.
+
+## 7. Snapshot, retomada, fechamento e ACK verdadeiro
+
+Snapshot fechado `controlled-published-state-v2`: identidade217,
+preparedDigest/fingerprint/expiresAt, publishedProtocol, plan/commands,
+attempt receipts/guards/faults/durationTotals; safePoint C1|C2;
+nextPlannerStep/expectedStep2|3; preToolResponse completo §5.3;
+postToolResponse null em C1/C2 e completo no fechamento;
+checkpointToken `{checkpointId,digest}`; observationBindings ordenadas
+`{observationId,stepNumber,operationKey,completion,outputBytes,outputSha256}`;
+decisionReceiptIds ordenados; acceptedDecisionDigest|null; cursor;
+budgetUsage; planDigest; finalIssued; dispatchClosed; stop|null.
+Campos nativos ausentes são null conforme schema; não inventar ACKs.
+
+Binding.sealed_checkpoint em complete é só referência fechada
+`{schema:"controlled-published-checkpoint-ref/2",checkpointId,digest}`;
+seal_checkpoint_digest é digest lógico V2 completo, não controlledDigest
+limitado262144 de um checkpoint8MiB e não hash do wrapper JSONB.
+seal_state_digest é controlledDigest da snapshot bounded. Codec224 reversível
+para checkpoint lógico; full tool result e receipts ficam no checkpoint e
+journal real, não metadata/redação/cloneBoundedValue. Guardar raw+guard M1
+na snapshot e validar contra receipt retido. Evidence referencia hashes,
+não cópias arbitrárias do checkpoint. Caps217/224 continuam obrigatórios.
+
+| Fronteira | Retomada por claim real futura |
+| --- | --- |
+| S0 admitido antes do primeiro inner claim | Binding commitada, parent QUEUED/attempt0 e queue pending/attempts0 sem leases, prepared=null e nenhum IO nativo; contexto outer-only pré-claim de §8.4.1 permite renew/reclaim externos. Primeiro store.claim real posterior cria inner attempt1; só então host/preparação reais, sem IDs ou prepared substitutos. |
+| C1 | M1 SETTLED/guard permitido, step1 completo, command PENDING/plan selado, modelCalls1/toolCalls0, cursor0, next2; retomar sem M1/reparse. |
+| C2 | Tudo de C1 retido; step2/tool1, full observation COMPLETE/AVAILABLE e journal/result/log/audit/callbacks ACKados, accepted CALL_TOOL2, cursor0, next3; retomar M2 sem ferramenta/M1/approval novo. |
+| OPEN/FAULTED após qualquer tail sem novo seal coerente | Settlement-only; carregar **checkpoint mais recente**, não restaurar seal antigo apagando reserva/resultado. UNKNOWN se autorizado, senão RESERVED. Handoff sem replay. |
+| Após M2 antes de CLOSED | Não é C3. Mesmo SETTLED/acceptedResponse3 não concede sucesso recuperado; OPEN settle/handoff. |
+| CLOSED | Validar resultado/trace/evidence/parent; sem factory/model/body. Repetir somente completion/ACK idempotentes. |
+
+RESUME_POINT CAS ACTIVE escreve next+ACK+snapshot/reference+stateRevision+1+
+sealId novo+digests+sealedThrough+OPEN→IDLE_SEALED atomicamente. CHECKPOINT_ONLY
+atualiza token/head e mantém OPEN/FAULTED, sem seal. C1/C2 exigem checkpoint
+corrente exatamente igual à referência, nenhum pending/UNKNOWN/stop/fault/
+dispatchClosed/finalIssued e concordância planner/acceptedDecision/receipts.
+COMMIT de seal com retorno perdido pode ser usado pela próxima claim
+somente após validar estado/seal/evidence completos; rollback não pode.
+Heartbeat não consome/recria seal nem estende deadline original.
+
+Antes do corpo: live native guard → actor/policy → approval nativo bound
+quando exigido → permit COMMIT → tool pipeline real → journal settlement →
+result/log/audit/callback ACKs → C2. Approval/handoff sensível mantém217;
+output/model não são grants. requireCapabilityApproval=true sem grant é
+negativo obrigatório mesmo na rota publicada. Não criar capacidade sensível.
+
+`onToolAudit` registra promessa síncrona antes de retornar; retorna a promessa
+real do appendToolAudit. Set membership não é ACK. Join obrigatório antes de
+C2/close; worker repete join idempotente antes da trace/completion. Nenhum
+callback novo após barreira. Failures pedem stop; não engolir poison.
+
+Sucesso close exige: mesmo dono saudável §6.2; terminal checkpoint3 COMMITTED,
+stop COMPLETED, acceptedResponse3/cursor2 e M1/M2 SETTLED/usage exatos,
+guard/claims/evaluator/result/log/audit/callback ACKs, plan/effect/observation
+bindings exatos, nenhuma falta/fault/veto. Salvar result+closed trace+
+dispatchClosed/evidence juntos; transição parent SUCCEEDED por último,
+limpando lease conforme217. Para falha, trace handoff e toolResults públicos
+sem succeeded, mantendo fatos completos internos. Cancelamento usa rota
+cancel_close restrita, nunca altera parent CANCELLED ou inventa CP terminal.
+
+Depois close COMMIT: callbacks terminais existentes awaited → facade retorna
+→ worker join/validação modo/trace → completeInboundRuntime com
+toolAuditEvents[] (mirror já durável) → ACK externo. A completion real cria
+mensagem outbound **local** suprimida/controlada conforme217, persiste trace
+e marca inbound; não é envio de canal real. No modo completo sua transação
+deve prefixar lookup/locks §8 antes de messages/session e exigir CLOSED
+validado. Não aceitar trace fabricado ou flag completed isolada.
+
+ACK externo continua duas transações: preparação/fence/journal COMMIT →
+effect idempotente fora da transação → beforeFinalAck/stopAndJoin →
+transação final com outbox_effects/processed/attempt outcome/audit COMMIT.
+Lost ACK é desconhecido para caller; observar marker real no replay, nunca
+fabricar processed. Falha pós-close deixa CLOSED e inbound pendente;
+replay pode usar closed trace, não executar facade de novo. already_completed
+não cria trace/model/body novo. Pause/takeover pode impedir completion/ACK
+conforme política; unpause nunca reabre CLOSED/FAULTED.
+
+## 8. Migração0031, inventário e todos os writers
+
+### 8.1 Slot e ordem sem apropriação de0030
+
+Nome proposto fixo: **`0031_published_complete_protocol_fence.sql`**.
+É apenas nome de migration futura; nenhum arquivo .sql é criado aqui.
+Não usar0030, 0029a ou pular prefixo numérico. Pré-condição estrita:
+1) migrations existentes até0029 intactas; 2) decisão humana **separada**
+de0225 se/quando existir; 3) implementação e verificação da migration0030
+de0225 e ledger/checksum próprios; 4) aprovação humana exata deste contrato
+T3; 5) BUILD task/claims separados; 6) aplicar0031 apenas depois de0030
+validada; 7) all-generation2 readiness; 8) testes da rota publicada.
+A ordem das duas revisões humanas pode variar, nunca a aplicação0030→0031.
+Se0225 continuar PENDING,0030 não existir/aplicar/falhar, **0031 e todas
+provas PG/rota bounded desta proposta ficam DEPENDENCY_PENDING/NOT_RUN**.
+Não há modo bounded que execute0031 sobre0029 sozinho. Revisão estática/
+projeto de testes podem preceder essas dependências sem claim de runtime.
+Se0030 aprovada mudar contrato incompatível com este desenho, revisar a
+proposta0031 e o gate exato antes de BUILD; não reinterpretar225 por conta.
+
+0029: 16532 bytes, SHA-256
+`a738b4031d4ef06bfc5508cb9c459d7133d419b3271962f4ea9b1a808965745d`.
+Não editar bytes/funcões/triggers0029; seu check marker exato permanece.
+0031 é aditiva: zero tabelas/colunas/backfill/reescrita de dados. Acrescenta
+um índice único e três funções/triggers abaixo. O índice unique tenant/outbox fixa o lookup inequívoco sem mudar modo
+legado. Duplicidade legada encontrada bloqueia aplicação, sem limpeza automática.
+Checksum de arquivo SQL inexistente não é inventado: o contrato normativo
+é o hash desta SPEC; futuro SQL deve implementar exatamente este inventário,
+ter revisão técnica e checksum de bytes próprios antes de aplicação. Um
+desvio material requer novo gate, não escolha discricionária no BUILD.
+
+### 8.2 Lookup imutável e funções propostas
+
+Índice `published_protocol_outbox_key` UNIQUE em
+controlled_published_bindings(tenant_id,outbox_id), sem WHERE. Lookup exige
+no máximo uma binding, pai presente, marker antigo exato e selection do
+pai igual a admission_runtime. Binding immutable217 protege identidades/
+admission_runtime; nova proteção parent congela request inteiro, tenant/id,
+request_hash/idempotency_key e identidade admitida para complete; capabilityFingerprint
+fica dentro de request e na binding, não é coluna adicional no parent.
+Legado não pode receber/remover publishedProtocol posteriormente; presença
+de selection não reconhecida é UNKNOWN, nunca legado.
+
+As três funções seguintes são schema-local, SECURITY INVOKER,
+sem dynamic search_path dependente do caller: referências derivadas de
+TG_TABLE_SCHEMA e qualificadas/quoted; helpers recebem namespace confiável
+fixado pela composição/preflight (não string HTTP). Sem locks/advisory
+locks/SKIP LOCKED dentro de trigger; **somente SELECT MVCC** em lookup.
+GUCs não são credenciais contra processo serving com SQL arbitrário.
+
+| Função/assinatura proposta | Contrato determinístico |
+| --- | --- |
+| `cvg_published_protocol_lookup(namespace text,tenant text,kind text,key text) RETURNS jsonb` | kind fechado execution/outbox/operation/inbound/trace. Retorna objeto fechado `{classification:UNBOUND|LEGACY|COMPLETE|UNKNOWN,executionId,outboxId,protocol,generation}` (nulls explícitos). outbox/inbound/trace pela binding exata; operation prefix `${executionId}:s` com único match; execution pelo parent. Ausência de binding em event sem pai associado é UNBOUND; pai complete sem binding fora do bootstrap é UNKNOWN. Ambiguidade, marker/cópias inválidas, unsupported protocol/gen ou cross-tenant são UNKNOWN/erro, jamais fallback. |
+| `cvg_published_protocol_writer() RETURNS trigger` | Lookup OLD e NEW; impedir retarget por mudar tenant/execution/event/operation/inbound/trace. Para COMPLETE ou payload reservado no INSERT parent/binding exige GUCs generation2 e identidade; UNKNOWN rejeita42501. Valida mode/operation e regras abaixo; parent request/mode imutável, checkpoint2 e schema/ref2 quando presentes, delete negado. Para UNBOUND/LEGACY mantém217 sem novo débito/downgrade; proibido promover legado. Não toma parent lock a partir de event lock. |
+| `cvg_published_protocol_no_truncate() RETURNS trigger` | Sempre rejeita TRUNCATE42501 nas tabelas inventariadas. Serving já não tem TRUNCATE; não scanear/lockar parents em statement trigger. |
+
+Lookups não verificam hash canônico em SQL: runtime recomputa hashes e
+CAS validators sob locks. DB protege seleção imutável, geração e writes
+velhos; aplicação nativa protege fase/token/transição. Não declarar trigger
+como prova de CAS contra SQL malicioso. Lookup retorna somente identidade/
+modo, não output/prepared/texto. Sem novo SECURITY DEFINER/role especial.
+Serving e neutral test role no namespace0031 precisam SELECT RLS-scoped
+nas sidecars/parents para lookup. É prerequisite de grants explícito;
+papel antigo sem SELECT pode receber permission error e zero mutação,
+não um resultado UNBOUND fabricado. Scopes legados sem0031 não mudam.
+
+### 8.3 Inventário exato de triggers/tabelas
+
+Todos BEFORE ROW, enabled O, incondicionais, sem args/WHEN, função
+cvg_published_protocol_writer; sufixo abaixo define nome exato
+`published_protocol_<sufixo>_writer`. Além deles, cada tabela da lista
+recebe BEFORE TRUNCATE FOR EACH STATEMENT
+`published_protocol_<sufixo>_no_truncate` com função no_truncate.
+Ordem alfabética: guards controlled_*0029 continuam antes dos novos
+published_protocol_*; um erro posterior rollbacka todos writes anteriores
+da transação. Não depender da ordem para adquirir locks.
+
+| Sufixo / tabela | Eventos | Lookup/finalidade |
+| --- | --- | --- |
+| execution / operational_executions | INSERT UPDATE DELETE | OLD/NEW id; INSERT complete exige geração mesmo antes da binding; imutabilidade parent request/mode |
+| binding / controlled_published_bindings | INSERT UPDATE DELETE | execution_id e admission_runtime; INSERT bootstrap verifica parent completo e cópias exatas |
+| evidence / controlled_published_evidence | INSERT UPDATE DELETE | execution_id; append-only0029 continua proibindo UPDATE/DELETE |
+| queue / operational_execution_outbox | INSERT UPDATE DELETE | execution_id |
+| event / operational_execution_events | INSERT UPDATE DELETE | execution_id |
+| step / operational_execution_steps | INSERT UPDATE DELETE | execution_id |
+| checkpoint / operational_execution_checkpoints | INSERT UPDATE DELETE | execution_id; complete exige checkpoint_version2, sem overwrite1 |
+| journal / operational_effect_journal | INSERT UPDATE DELETE | operation_key, único parent; codec journal depende0030 |
+| outer / outbox_events | INSERT UPDATE DELETE | id pela binding.outbox_id; binding ainda inexistente é UNBOUND, nunca via payload |
+| attempt / outbox_attempts | INSERT UPDATE DELETE | event_id pela binding.outbox_id; id/event/attempt/worker imutáveis após insert |
+| effect / outbox_effects | INSERT UPDATE DELETE | event_id e binding exata, idempotency_key imutável |
+| inbound / messages | UPDATE DELETE | apenas binding.inbound_message_id exata; inbound runtime completion protegido; mensagens locais outbound não são falsamente classificadas pelo session |
+| trace / platform_execution_traces | INSERT UPDATE DELETE | (tenant_id,trace_id) pela binding.trace_id; N11 grava colunas tenant_id,trace_id,agent_id,version_id,trace,created_at |
+
+Para trace a chave física é trace_id, não id nem conteúdo de trace JSON;
+não usar heurística por session/conversation. Audit_events não recebe lookup por texto sanitizado:
+appendToolAudit valida nativamente e evidence é protegido. Não reivindicar
+isolamento contra serving arbitrário escrevendo audit_events diretamente.
+Sessions/pause/pin/approval conservam controles217 e sua própria autoridade;
+não recebem generation gate global que impediria operador de vetar execução.
+
+### 8.4 GUCs e prefixo de lock dos writers
+
+No **mesmo client/transaction**, depois tenant context e antes do primeiro
+write completo, set_config(...,true):
+`cvg.published_protocol=published-complete-v1`,
+`cvg.published_writer_generation=2`,
+`cvg.published_execution=<parent exato>`,
+`cvg.published_worker=<worker do fence, vazio no outer-only pré-claim>`,
+`cvg.published_attempt=<inner attempt positivo quando há fence/attempt observado; vazio no outer-only pré-claim;0 só no bootstrap ou cancellation receipt próprio>`,
+`cvg.published_mode=<mode217 permitido pela operação>`,
+`cvg.published_outer_operation=<admit|claim|renew|ack_prepare|ack_final|fail|complete_inbound|active|settlement|close|cancel|cancel_close>`.
+`cvg.published_outer_context` é vazio nos caminhos normais, bootstrap e
+cancelamento; no outer-only pré-claim contém o objeto fechado de §8.4.1.
+Contexto de cancel inclui published_cancel_event original. Novos GUCs
+não substituem antigos; limpar ao sair pelo tenant wrapper, destruir client
+se cleanup falhar. Legacy usa contexto217 e GUCs novos vazios, nunca reutiliza
+valores da operação anterior. Todo transaction do ACK inicializa novamente.
+
+Propagação confiável: acrescentar opção privada de construção de
+PostgresRuntimeRepository e TenantScopedPostgresRuntimeRepository
+`publishedProtocolSupport:{generation:2,protocols:["legacy","published-complete-v1"]}`.
+O worker só a fornece após preflight; não é campo de OutboxClaimInput/ref,
+API ou payload. Tenant wrapper deve carregá-la também em renew direto
+on-client, e não apenas em claim/ACK/fail delegados. Store/ports bound usam
+a mesma classificação persistida. Ausente equivale a suporte antigo:
+exclui/refusa complete; nunca assume geração2 por GUC residual.
+
+Mapeamento fechado operation→mode217: admit/claim usam claim; renew,
+ack_prepare e ack_final usam active (somente outer rows, sem exigir inner
+lease depois de close); fail e complete_inbound usam settlement; active,
+settlement, close, cancel e cancel_close usam o mode homônimo. Na admissão
+bootstrap numérico0 é permitido na transação que cria parent
+novo attempt0/RECEIVED→QUEUED e a primeira binding, sob outer ref real;
+binding insert conclui essa mesma transação. Não reconstruir esse contexto
+bootstrap após COMMIT. A ausência interna durável no S0 tem o discriminador
+outer-only de §8.4.1 e **nenhum inner fence/GUC attempt numérico**. O
+cancel_close com cancellation receipt nativo segue a exceção limitada de
+§6.2, inclusive parent cancelado ainda em attempt0; isso nunca permite CAS.
+Nos demais contextos ACTIVE/CAS/dispatch/model/tool e claim interno, um
+inner fence deve ser positivo e real; não admitir0 por causa de S0. O novo trigger
+de parent INSERT e queue bootstrap verifica geração/identidade antes de
+lookup retornar UNKNOWN por binding ainda ausente; fora dessa exceção
+fechada, ausência de binding para parent complete é erro.
+
+Em outer rows a nova função verifica ref/attempt/worker atuais usando os
+campos da linha e a binding, não o valor genérico mode como autorização:
+claim só aposenta predecessor exato/outcome lease_expired e cria próximo
+attempt/processing+TTL; renew só TTL do owner atual; ack_prepare não escreve;
+ack_final só effect marker correspondente+processed/outcome processed;
+fail só failed/dead_letter/outcome/handoff; delete/requeue/retarget negados.
+complete_inbound só escreve inbound/trace vinculados a CLOSED. Operações
+active/settlement/close não podem ser usadas como alias para claim externo.
+As verificações de lock/fence/clock completas ficam no writer transacional;
+triggers MVCC verificam o contexto/delta e nunca tentam adquirir prefixo.
+
+**Ordem global para vínculo existente:** consulta MVCC sem lock → parent
+operational_executions → binding → inner queue → outer event → latest exact
+outer attempt → session → pause → message se necessário → checkpoint →
+journal/effect/step/trace/evidence/audit append (por chave estável se vários).
+Não descobrir binding FOR UPDATE e só depois pedir parent. Prefixo pode
+parar após o recurso necessário, nunca adquirir prefixo anterior mais tarde.
+`completeInboundRuntime` prefixa parent/binding/queue/event/attempt/session/
+pause antes de message, em vez de message→session do caminho legado atual.
+Não manter locks através do handler/model/tool ou outra pool connection.
+
+Novos guards de **outer** verificam generation/lookup/operation e fence
+outer real; não chamam guardControlledPublishedFence(active): outer claim
+ocorre antes de inner claim, e ACK pode ocorrer após parent terminal e
+lease inner removida. Em claim podem parent/binding estar terminal/CLOSED;
+isso permite apenas processamento idempotente/settlement, não dispatch.
+Operação outer não muda parent/inner/closed binding; antigo guard0029 só
+atua nas tabelas originais que essa operação efetivamente escreve.
+
+Ref outer é validada contra evento/última outbox_attempt real, com tenant,
+eventId, processWorkerId, expectedOuterAttempt e expectedAttemptRowId
+exatos. **Não** exigir binding.active_outer_* na nova claim externa,
+renew outer pré-attach ou ACK/CLOSED replay: essa tuple ainda pode pertencer
+ao claim anterior, e binding CLOSED é imutável. A associação imutável
+binding.outbox_id e a ref externa atual bastam para a autoridade outer
+limitada; store.claim ativo deve depois vincular active_outer_* e o fence
+inner antes de qualquer CAS/dispatch. Outer authority nunca cria esse
+vínculo por inferência. Para idempotência processed, exigir marker
+outbox_effects correto e attempt outcome=processed; não reconstituir lease
+inner/outer já removida nem alterar binding CLOSED para satisfazer guard.
+
+| Writer real | Alteração proposta concreta e validação antes de COMMIT |
+| --- | --- |
+| claimNextFenced / PostgresRuntimeRepository / tenant wrapper (N05/N09/N12) | MVCC candidate filter reconhece mode antes de FOR UPDATE/attempt. Para bound: parent FOR UPDATE SKIP LOCKED, binding+queue, evento FOR UPDATE SKIP LOCKED e latest attempt; reconsultar mapping/status/due por clock DB. Se S0 comprovado, usar outer-only PRECLAIM_NO_INNER e candidato de §8.4.1, não innerattempt1/outerAttempt copiado. Depois de generation/lookup/due válidos, aposentar predecessor exato, attempts externos+1, inserir attempt, validar nova ref e devolver. Busy/unsupported/mapping/due mudados: rollback/skip sem tentativa/lease/evidence consumida. Nunca event→parent. |
+| claimNext ordinário/neutral | Predicate exclui todos bindings controlled; não despacha complete. Old binary sem predicate pode tomar event lock, mas trigger novo faz SELECT sem lock e recusa seu primeiro UPDATE/INSERT42501: rollback integral, predecessor retirement incluído. Sem tentativa consumida. Se SELECT antigo tomar predecessor, nenhum trigger busca parent lock. |
+| admit (S08), primeira binding | Advisory tenant/inbound comum serializa writers gen2 que classificam/admit. Criar parent+queue novos antes do event lock; event/attempt/session/pause e outer ref reais, depois binding/cópias; contexto bootstrap generation2/claim/admit. COMMIT pode deixar S0 QUEUED0/sem inner lease/preparednull. Branch existente S0 só valida/retorna mesma admissão sob contexto outer-only, parent-first; não recria parent, não inventa1 nem escreve binding. Não chamar submitOperationalExecution depois de event lock. |
+| inner store.claim / takeover / cancel | Lookup antes, prefixo global, geração antes de mutação. Para S0, primeiro claim aloca a tentativa positiva real conforme §8.4.2; outer-only não lhe serve como fence. Claim native continua dono do inner attempt e active_outer binding. Recovery OPEN/FAULTED fica settlement-only; cancel usa modes217/cancellation receipt. Lease/attempt não altera modo/digest/seleção. |
+| renewOutboxClaim e renewOutboxClaimOnClient (antes de attachInner) | Cada tick consulta binding MVCC; se surgiu binding, reiniciar com parent-first. Em S0 confirmar ausência interna sob locks e instalar contexto outer-only §8.4.1; renovar só evento externo com ref/clock reais, sem inner lease/attempt/ACK nativo. Se store.claim já mudou o parent, abandonar essa exceção e revalidar pelo caminho normal sem fabricar/attach inner fence. Unsupported/latch stopped: zero renew e stop. |
+| store.renewPaired + registry (S08/N06) | Mesmo prefixo, contexto novo generation2 no client; updates parent/queue/event atômicos, rollback conjunto. TTL10000/renew2000/budget tick1500 existentes, deadline absoluto; um owner STARTING→OUTER_ACTIVE→PAIRED_ACTIVE→STOPPING→STOPPED. Sem segundo timer. |
+| ackClaim/ack prepare (N05/N09) | Consulta MVCC e prefixo global antes de evento em **ambas** transações. GUC outer_operation ack_prepare/ack_final respectivamente; validar attempt row exato/lease/current journal. Preparação COMMIT libera todos locks antes de effect real. beforeFinalAck join fora da transação. Final txn valida mesmo ref, insere/valida outbox_effects e muda processed/outcome/audit atomicamente. Parent terminal não exige lease inner para ACK; CLOSED exige resultado validado. |
+| failClaim / suppress takeover | Mesmo prefixo antes de event/session, operação fail, outer fence ainda vivo, generation+lookup. Atualizar failed/dead_letter+attempt exato+handoff/audit atomicamente, sem receipt novo de modelo. Erro retryável só agenda entrega; futura OPEN faz settlement e não repete modelo. |
+| completeInboundRuntime (N10) | Prefixo global, operação complete_inbound, outer ref exata, binding CLOSED e trace/result digests corretos; message completion/trace/local outbound217 em transaction real sem novo provider. already_completed idempotente. Perda de fence bloqueia write/sucesso. |
+| runtime steps/journal/approval/evidence/CAS/close | Guard nativo prefixado e contexto active/settlement/close/cancel_close conforme §6; generation2 soma-se a217. CAS/state/guard não se apoiam em GUC sozinho. close parent transition por último. |
+| requeueDeadLetter/manual delete/unsupported admin serving path | Em complete, deny42501 antes de mudar attempts/lease/receipt. Não resetar counters para replay. Operador pode diagnosticar/vetar por suas portas existentes; requeue futuro exigiria outro contrato. |
+
+Candidate predicate deve estar na consulta sem lock e ser repetido após
+prefixo, não apenas após LIMIT1 no handler. Processar candidatos suportados
+em ordem available_at/created_at/id; busy/unsupported não consome attempts
+nem bloqueia o próximo suportado. Um batch candidato de até32 IDs, consulta
+sem locks, e no máximo32 tentativas parent-first por poll; batch esgotado
+retorna null, próximo poll continua da chave de ordenação final por cursor
+local, não débito nem requeue. Cursor não é autoridade/reordenação durável.
+Processo reiniciado pode repetir scan, sem starvation por LIMIT1 permanente
+no unsupported. Nenhum modo antigo ganha fallback em deadlock/timeout;
+rollback, classificação observável e próximo poll suportado apenas.
+
+A primeira admissão exige todos claimers/admitters do namespace gen2
+drained/exclusivos. Mesmo advisory tenant/inbound cobre reclassificação
+unbound→bound nos writers gen2 antes do primeiro event lock; todos usam
+advisory → parent se existe → prefixo. Claim em evento sem binding não
+adivinha complete do payload: classifica UNBOUND, usa rota publicada test
+confiável, e admit grava modo. Mixed online com writer antigo que não toma
+advisory nessa janela não é suportado nem provado. Ataques old contra
+binding **já commitada** devem falhar sem consumo. Trigger lookup não
+fecha sozinho corrida de classificação sem binding; não reivindicar isso.
+
+### 8.4.1 Contexto outer-only no S0 sem inner owner
+
+Há uma fronteira durável entre COMMIT de admit e a transação de
+store.claim. Binding existente não significa inner owner existente.
+O lookup imutável de protocolo permanece COMPLETE/generation2 nesse S0;
+não retornar LEGACY/UNBOUND/UNKNOWN só porque parent.attempt=0. A prova
+de ausência de inner owner é uma observação volátil separada, conferida
+sob locks pelo writer outer, nunca inferida de env, prepared=null sozinho
+ou de um outer attempt. Não mudar o shape do lookup imutável §8.2.
+
+O contexto privado **outer-only** é discriminado por um objeto fechado:
+
+`{schema:"cvg.published-outer-only/1",kind:"PRECLAIM_NO_INNER",tenantId,executionId,outboxId,inner:{kind:"ABSENT",parentAttempt:0,queueAttempts:0,leaseOwner:null,leaseUntil:null},outer:<CURRENT|CANDIDATE>}`.
+
+- CURRENT é `{kind:"CURRENT",ref:FencedOuterClaimRef}` real, contendo
+  tenantId/eventId/processWorkerId/expectedOuterAttempt/expectedAttemptRowId.
+  É exigido para renew, validação idempotente de admit existente,
+  ack_prepare e fail. Outer attempt é inteiro positivo e attemptRowId é o bigint nativo
+  positivo da última row, na representação decimal validada pela ref; nenhum deles é um inner fence.
+- CANDIDATE é `{kind:"CANDIDATE",eventId,expectedStatus,expectedOuterAttempt,expectedLeaseOwner,expectedLeaseUntil,expectedAvailableAt,latestAttempt:{rowId,attempt,workerId,outcome},nextWorkerId,nextOuterAttempt,nextAttemptRowId:null}`.
+  Descreve somente o predecessor e a intenção de claim externo ainda
+  não commitada. expectedStatus é pending/failed/processing devido;
+  datas/nullable owner/outcome são snapshots exatos das rows nativas,
+  não autoridade fornecida por cliente. latestAttempt deve ser único e
+  coerente com event.attempts; nextOuterAttempt=expectedOuterAttempt+1
+  sem overflow/reset; nextAttemptRowId permanece null até INSERT real.
+  Não fabricar ref corrente para predecessor expirado ou row futura.
+
+`setPublishedOuterPreclaimContext(client,context)` é um novo helper
+privado de composição, distinto de setPublishedWriteContext com fence
+interno. Ele serializa o objeto canônico em
+`cvg.published_outer_context` transaction-local, máximo8192 bytes UTF-8,
+depth16/nodes256. IDs/refs/status/datas usam os validators nativos e caps
+existentes; valor fora desses limites recusa, sem truncar. Exige os GUCs
+protocol/generation/execution/tenant já reconhecidos, operation coerente
+com CURRENT/CANDIDATE e mode217 mapeado em §8.4. Define explicitamente
+`cvg.published_worker=''` e `cvg.published_attempt=''`: **nenhum inner
+worker/attempt foi concedido**. O worker externo é o de ref.processWorkerId
+ou candidate.nextWorkerId, no objeto discriminado; não é copiado para
+published_worker como owner interno.
+
+Campo vazio aqui é ausência por contrato, não parseInt(default0), null
+coercível ou default1. Não construir ControlledKernelFence/DatabaseFence
+com esse objeto. ACTIVE/TERMINAL/DIAGNOSTIC/CAS/reserve/seal/model/tool
+não aceitam o discriminador e não o convertem em fence. Os setters de
+fence nativo, bootstrap e cancelamento limpam outer_context; o helper
+outer-only limpa seus campos de inner fence antes do primeiro DML. O
+wrapper tenant limpa todos os GUCs ao sair e destrói client se falhar.
+Não reutilizar esse contexto no callback executado após ACK prepare COMMIT.
+
+Prova cumulativa de S0 sob locks, antes e imediatamente antes de COMMIT:
+
+- Parent exato do tenant: QUEUED, attempt=0, lease_owner/lease_until null;
+  inner queue da mesma execução: pending, attempts=0, leases null.
+- Binding imutável corresponde ao mesmo parent/outbox/inbound/pin/digest/
+  seleção; prepared/prepared_digest/prepared_runtime, state/state_digest,
+  runtime_result/closed_trace são null; started_at/expires_at null;
+  state_revision=phase_revision=0, phase_state=IDLE_SEALED;
+  dispatch_closed=false, fault=null, closed_trace_digest=null;
+  open_phase_id/type/input_digest/attempt null, open_phase_acked=false;
+  active_outer_* null; seal_id inicial real, sealed_checkpoint/
+  seal_checkpoint_digest/seal_state_digest/consumed_seal_id null e
+  sealed_through_sequence=0. approval_receipt=null e
+  tenant_isolation_quarantined=false. Não exigir um seal_id fabricado.
+- Nenhum step/checkpoint/effect journal desse parent, receipt de modelo,
+  phase intent ou native event de claim/run interno anterior. Evidence da
+  binding ainda é head inicial sequence0/bytes0/hash inicial; eventos
+  nativos RECEIVED/QUEUED attempt0 da própria admissão são permitidos.
+  Não apagar fatos ou resets para fazer uma execução antiga parecer S0.
+- Lookup COMPLETE e generation2 exatos, identidade/admission íntegra,
+  worker qualificado e contexto/ref externos reconhecidos. Parent0 sem
+  binding fora do bootstrap transitório, queue divergente, ausência de
+  rows, prepared não nulo ou inner lease/attempt já existente recusam a
+  classificação PRECLAIM_NO_INNER.
+
+Prefixo: lookup MVCC → advisory tenant/inbound → parent → binding → inner
+queue → outer event → latest exact outer attempt → session → pause, todos
+na mesma transação/client. Reclaim usa parent/event SKIP LOCKED conforme
+claim normal; renew/ack_prepare/fail usam o prefixo normal com sua ref.
+Se apareceu binding ou mudou a classe desde o scan, rollback e reiniciar
+do prefixo, jamais tomar parent depois de event. Nenhum trigger adquire
+esses locks: cvg_published_protocol_writer só faz lookup MVCC e valida o
+contexto/delta; o writer confiável conserva e revalida os locks/clock.
+
+Relógio autoritativo é clock_timestamp() da conexão DB. CURRENT exige
+evento processing, owner/ref/attempt/row exatos e atuais, outcome null e
+lease_until>clock DB, sem row mais nova. CANDIDATE exige due por esse
+clock: processing só após expiração real, ou pending/failed disponível;
+não exigir que uma ref do predecessor expirado ainda seja uma lease viva.
+Ler latestAttempt real, revalidar clock após aposentadoria e antes do
+COMMIT. Durante a sequência atômica do claim, CANDIDATE compara OLD com
+o snapshot exato e NEW com o único delta permitido de cada DML: aposentar
+predecessor, mudar evento e inserir a nova attempt. Não exigir uma ref
+corrente inexistente antes desse INSERT nem aceitar outro predecessor.
+Depois do INSERT, CURRENT usa a rowId real; validar ref nova completa e
+lease viva. Qualquer falha rollbacka a sequência inteira. GUC ou relógio
+do processo não autoriza takeover nem adia a expiração.
+
+| Operação outer-only | Únicos deltas/resultado permitidos no S0 |
+| --- | --- |
+| renew / CURRENT | Renovar só lease_until do evento da ref atual, usando TTL10000 e único tick2000 existentes; revalidar ref/clock/ausência interna antes COMMIT. Não escrever parent/queue/binding/attempt interno/prepared/deadline. |
+| claim ou reclaim / CANDIDATE | Aposentar somente latest predecessor exato não encerrado se processing expirado; evento vira processing com outer attempts+1/owner novo/TTL10000 e campos de claim nativos; inserir uma attempt externa real. Campos event/idempotency/payload e toda admissão ficam iguais. Sem requeue/reset. Após INSERT obter rowId, trocar outer_context para CURRENT com a ref retornada e revalidar S0/ref/clock antes COMMIT. |
+| admit existente / CURRENT | Ler, verificar digest/admission/evidence e retornar os mesmos IDs; zero mutação de parent/queue/binding. Não repetir submit/bootstrap ou criar outro prazo. |
+| ack_prepare / CURRENT | Preparação readonly e validação da ref/marker/takeover existentes; nenhum processed/outbox_effects/inbound/trace. O callback subsequente precisa de store.claim real antes de host/factory/dispatch. As fronteiras de callback/DML de §8.6 continuam distintas. |
+| fail / CURRENT | Somente event failed/dead_letter e seus campos nativos de falha/backoff, outcome/error da exact attempt externa e audit append correspondente, atomicamente. Handoff de sessão continua exigindo a autoridade nativa217 separada; ausência de inner owner não a concede. Nunca marcar processed, criar effect marker ou concluir inbound. |
+
+Qualquer outro DML, incluindo ack_final/complete_inbound, binding/evidence
+nativa, parent/inner queue/step/checkpoint/journal/receipt/prepared, é
+proibido nesse contexto. Sessão/pause podem vetar o primeiro inner claim;
+outer metadata de renew/reclaim não é dispatch nem autorização BOT_ACTIVE.
+Não transformar um veto/pause em inner owner fictício para finalizar.
+
+O novo guard0031 reconhece esse ramo **antes** da regra comum que exige
+inner GUC numérico, exclusivamente nas rows externas de event/attempt
+inventariadas e com protocol/generation/objeto/delta completos. Campos
+worker/attempt não vazios nessa exceção, contexto ausente/malformado,
+foreign ref ou target nativo recusam42501/STATE_CONFLICT sem mutação. Os
+guards0029 permanecem condição AND intacta nos targets originais; o ramo
+outer-only não os chama com fence fake nem os desabilita. Auditoria e
+handoff mantêm suas portas/guards próprios. Não criar tabela, coluna,
+função SQL ou trigger adicional: o contrato restringe os helpers e a
+função writer0031 já inventariados, que devem ser qualificados no preflight.
+
+### 8.4.2 Passagem do S0 ao primeiro inner claim e falhas
+
+COMMIT de admit pode ser seguido de renew externo ou crash sem qualquer
+inner lease. Após SIGKILL e expiração externa real, B executa o reclaim
+nativo acima, lê a mesma admissão e chama store.claim. Antes dessa chamada
+há somente ref externa B; outer attempt pode ser2 ou maior, parent continua0.
+prepared/deadline/modelCalls permanecem ausentes/zero. Não retargetar a
+binding.active_outer_* durante o reclaim nem mudar protocolo/digest/pin.
+
+store.claim adquire advisory antes de parent no caminho S0 e o restante
+do prefixo completo; se só descobrir a classe depois, rollback/reinício,
+nunca advisory depois de row lock. Revalida S0, outer ref B ainda
+viva/última, sessão BOT_ACTIVE e pause=false. Somente essa transação
+nativa calcula a tentativa candidata `parent.attempt+1`, aloca a primeira
+lease interna e muda parent/queue para RUNNING/processing com attempt1,
+vincula active_outer_* à ref B e conserva seal/S0 preparado ainda nulo.
+Isso é a transição nativa real, não uma tentativa1 antecipada pelo outer
+adapter. O setter nativo limpa outer_context e usa contexto positivo de
+claim após validar a transição; COMMIT reconhecido devolve fence1. Só
+depois attachInner liga a mesma renovação ao par e createHost/fachada
+preparam/dispatcham sob as demais portas nativas. Renew outer não cria
+ou retorna esse fence. Original startPrepared write-once continua dono
+do início/deadline; renew/reclaim/S0 não inventam ou resetam seus timestamps.
+
+Se inner claim rollbackar, a admissão S0 continua0 e a ref outer real
+continua sujeita à lease existente. Se seu COMMIT/ACK for desconhecido,
+não attachInner, não criar host/model/tool nem fingir que parent ficou0:
+reler sob nova autoridade. Um parent já em attempt>=1, mesmo sem prepared
+ou lease atual, sai desta exceção para o fluxo normal de claim/settlement
+e nunca retorna a PRECLAIM_NO_INNER. A leitura do attempt existente não
+transfere seu fence ao leitor. Tick que observou S0 antes de store.claim
+de outro writer deve rollback/reclassificar sob locks; não renovar inner
+nem emprestar o owner observado. Renew exclusivamente externo após essa
+reclassificação segue o guard outer normal de §8.4, com ref externa real
+e inner attempt positivo apenas observado, sem transformá-lo em fence
+próprio. Toda operação interna exige o próprio fence positivo real.
+Parent CANCELLED/CLOSED segue somente
+suas rotas restritas, sem usar esta exceção.
+
+Primeiro claim B bem-sucedido permite o percurso positivo normal M1→tool→M2
+uma vez, mesmos IDs/admission/pin, sem prepared substituto; não é apenas
+handoff conservador. Contexto outer-only não permite bypass da intenção
+RUNNING, reserva RESPONSE, CAS/seal/guards, decisões históricas, diagnóstico
+de breach, callbacks ou close/completion/ACK final. Falta de autoridade
+deixa S0/estado real preservado e recusa; nunca copia outerAttempt para
+innerAttempt, inventa1 para renovar ou permite ACTIVE/model/tool em0.
+
+### 8.5 Preflight e aplicação futura, somente após gates
+
+Seleção legacy com namespace217 sem qualquer admissão complete conserva
+preflight217 e não exige0030/0031 para funcionar. A detecção readonly de
+admissões reserved/unknown/complete e do ledger ocorre antes de claims:
+se config pede complete ou existe binding com publishedProtocol (mesmo
+corrupto), exigir o preflight gen2 abaixo ou recusar startup. Não deixar
+env legacy esconder dados2 nem usar requisito0031 para mudar o default
+legado em scopes que nunca admitiram complete.
+
+Ordem de instalação futura0031 em uma transação de maintenance, sem
+claimers: validar ledger0029+0030/checksums e0029 byte hash → inventário/
+pré-condições/duplicidades → índice unique → lookup → writer/no_truncate
+functions → 13 row triggers e13 truncate triggers → validar inventário →
+ledger0031 por runner autorizado. Falha rollback integral; sem IF NOT
+EXISTS para adotar objetos desconhecidos. Nenhum down/destructive cleanup.
+
+Readiness gen2 (antes do primeiro claim, inclusive env legacy em namespace
+com complete) exige: migrações existentes217 +0030 e0031/checksums exatos;
+todos10 guards0029, funções/bodies/tgtype/owners/configs e hash0029 originais;
+índice unique válido/ready, três funções novas exatas e26 triggers conforme
+tabela (row tgtype31 para I/U/D; inbound UPDATE/DELETE tgtype27; truncate34),
+enabledO/unconditional/schema local/non-serving owner/SECURITY INVOKER;
+hash/body do SQL futuro0031 vinculados ao build congelado; zero funções
+shadow, trigger disabled, mudança de search_path ou fallback.
+
+Preflight estende inventário atual S18, não troca seus guards por substring
+de marcador. Verifica FORCE RLS em todas tabelas tenant existentes e policies
+canônicas; serving nonowner/NOSUPER/NOBYPASS/NOINHERIT/sem memberships,
+sem CREATE/TRIGGER/DDL/TRUNCATE/DELETE; schema_migrations só SELECT,
+outbox_attempt sequence só USAGE sem UPDATE. Grants mínimos217 + SELECT
+para lookup das tabelas acima, writes que o worker realmente usa;
+evidence/audit append-only. Funções sem grants novos de escrita/definer.
+Valida ports CAS on-client/phase variants, schemas/prepared2/ref2, immutable
+lookup, par/latch/fontes, one-tool profile e callbacks/joins. Startup recusa
+config/schema/generation desconhecida antes de claim/reserve/body.
+
+O preflight exige também o parser/contexto outer-only fechado de §8.4.1,
+o helper transaction-local separado de fence nativo e a limpeza explícita
+de outer_context nos setters normais. O body qualificado da função
+writer0031 deve discriminar esse ramo antes de exigir inner GUC numérico,
+restringir targets/operações/deltas e negar ACTIVE/CAS por esse contexto.
+Não considerar parent QUEUED0 legítimo como versão não suportada; ausência
+de porta/guarda que implemente essa distinção impede enable, sem fallback
+ou tentativa1 fabricada. Inventário13 row+13 truncate/três funções/índice
+e bytes0029 permanecem os mesmos; nenhuma migration adicional é criada.
+
+### 8.6 ACK antigo: fronteiras de callback, dispatch e persistência
+
+0031 protege os DML inventariados, não SELECT/locks/COMMIT readonly nem a
+invocação de uma função JS após a preparação antiga. No caminho atual
+postgres-outbox.ack/ackClaim, com ref válido, evento processing, sem
+outbox_effects e sessão BOT_ACTIVE, ack_prepare lê/valida e COMMITa antes
+de `rawInput.effect(event)`. O primeiro DML da transação final pode ser
+INSERT outbox_effects, depois de o callback retornar. Não atribuir a um
+trigger DML uma barreira de leitura ou veto retroativo desse callback.
+
+Observadores futuros devem separar, por execução/ref:
+
+| Medida | Significado e prova |
+| --- | --- |
+| ackPrepareCommitted | COMMIT readonly nativo após leitura da ref/marker/takeover; não é autorização de dispatch ou write complete. |
+| outerEffectCallbackEntered | Entrada em rawInput.effect, antes de qualquer trabalho do callback. Não é entrada de fábrica, modelo, ferramenta, efeito externo ou mutação durável. |
+| factoryEntered / modelEntered / toolBodyEntered | Entradas efetivas, contadas individualmente no pipeline/factory/corpo reais; não inferidas de callback ou receipt/reserva. |
+| firstDeniedDml e durableMutations | SQLSTATE/statement/target do primeiro DML barrado e diff de rows confirmadas, incluindo event/attempt/effect marker/parent/binding/CP/receipt/inbound/trace. Zero durableMutations não significa callback0. |
+
+Sonda de fronteira **same-role**: adapter ACK antigo congelado invocado
+diretamente com credential serving qualificada e grants efetivos de SELECT
+do schema ativo, ref outer corrente válido/lease viva, BOT_ACTIVE,
+outbox_effects ausente e binding complete já commitada. Esta é sonda
+adversária do adapter, não rollout suportado nem prova vertical do
+consumidor. Não executa readiness/decoder/handler antigo como condição
+prévia. Callback observador apenas marca entrada e retorna resultado
+sintético local válido para o contrato ACK; beforeFinalAck/signal/ref
+permanecem válidos para alcançar a transação final real. Não substitui
+CAS/journal/close/fence nem executa factory/model/tool/provider.
+
+Exigir nessa sonda: ackPrepareCommitted=1,
+outerEffectCallbackEntered=1, factoryEntered=modelEntered=toolBodyEntered=0
+porque esse callback **não despacha**; primeiro INSERT outbox_effects da
+transação final nega42501 por falta de contexto generation2/operation0031;
+rollback integral, marker ausente, evento não processed, attempt outcome
+inalterado e durableMutations=0. Se outro seam impede alcançar esse DML,
+a sonda não prova essa fronteira e deve ser registrada como tal, sem PASS
+para o oráculo. Esse callback é instrumento de observação separado, não
+substituto de handler no positivo da rota real.
+
+Sonda complementar com callback/handler publicado **real** mantém contador
+de entrada na primeira linha do callback e contadores separados de
+guard/factory/model/body. O guard nativo de geração/fence deve ocorrer
+antes de criar host/factory ou autorizar qualquer dispatch. Um writer
+antigo pode entrar no callback, mas store.claim/porta bound deve recusar
+write/dispatch complete sem geração, conservando zero mutations e
+factory/model/body0. Se readonly decoder/handler veto interromper antes,
+isso é veto desse caller, não prova de que0031 bloqueia callback nem da
+operação posterior que não foi alcançada. Exigir evidência causal do guard
+antes de dispatch nos testes apropriados da rota nativa.
+
+Sonda **credential revogada/drenada**, distinta: cumprir cutover de0225
+somente após sua decisão/implementação/verificação separadas. Novo LOGIN
+runtime exclusivo, zero memberships/segredo não compartilhado, e sessões/
+pools antigos drenados/encerrados. Principal antigo mantém só USAGE de
+schema para resolver o nome correto, sem SELECT/claim/write/rotas herdadas.
+Usando essa credential antiga, SELECT original deve negar42501 no schema
+pretendido: ackPrepareCommitted=0, outerEffectCallbackEntered=0,
+factory/model/body0 e durableMutations=0. Registrar privilégios efetivos,
+session_user/current_user, sessões encerradas e causa da recusa. Esse
+callback0 decorre da revogação real, não de0031. Entregar credential nova
+ao binário antigo viola a premissa de exclusividade, não amplia o guard.
+
+Ref inválido, lease expirada, RLS vazio, marker preexistente, takeover,
+readiness, parser/decoder, falta incidental de grant ou veto do callback
+não substituem a sonda same-role/ref válida. Falha de conexão sem provar
+o SELECT negado tampouco substitui a prova de revogação225. Não baixar a
+garantia de zero durableMutations dos triggers, nem o guard nativo antes
+de dispatch. Não prometer callback0 no cenário same-role permitido a ler.
+0225 continua PENDING: nenhuma sonda/credential/cutover é executada ou
+autorizada por esse desenho; todas são NOT_RUN/DEPENDENCY_PENDING.
+
+## 9. Compatibilidade, rollback e dependências
+
+Legado mantém default, state-v1/S1/S2, uma chamada e projeção literal,
+digest/budget/output guard atuais. Gen2 serve legado conforme217 com lookup
+LEGACY; modo novo usa2 de origem. Leitor velho não ignora campos2 para
+prosseguir: parser recusa, DB generation guard barra mutation/claim/renew.
+UNKNOWN mode só diagnóstico readonly; sem takeover ou settlement de schema
+desconhecido. Não prometer decoder seguro para formato desconhecido.
+
+Rollout somente namespace/tenant sintético isolado, all-generation2,
+grants explícitos e old processes drained. Rollback: desligar admissões
+complete, drenar/pausar, manter gen2 para fechar/settle filas existentes.
+Não rollback online para binário velho, remover guard, regrantar writer
+antigo, reescrever checkpoint ou apagar journal. Roll-forward para dados2.
+Legacy scope vazio novo não é recuperação do scope complete.
+
+Dependências em ordem operacional: revisão técnica desta proposta →
+eventual candidato canônico sob claim do responsável pela integração → gate humano exato T3 →
+task/claims BUILD próprios; em paralelo lógico, verificar os pré-requisitos
+genéricos source-bound no escopo necessário à rota PG e a cadeia0225/0030
+separada. O aceite já registrado é somente native-memory224: não satisfaz
+PG/fullTR/consumidor. Somente com os pré-requisitos da rota verificados,
+aplicar0031 e executar PA da rota. Nenhum desses gates é
+concedido aqui. Não se pede decisão225 nesta rodada.
+
+Mesmo com0030 futura, PA bounded usa corpo constante NUL-free real e não
+prova todo domínio224. Full-domain exige fixture sintética adicional
+autorizada pela mesma rota real, NUL em valores/chaves/Unicode/limites,
+journal/checkpoint/retomada/modelos completos. Não substituir prepared,
+fingir que corpo constante emitiu4096/NUL ou chamar codec checkpoint de
+reparo journal. Falha journal preserva incerteza e handoff, não SUCCEEDED
+reconstruído. PA full-domain segue NOT_RUN/DEPENDENCY_PENDING.
+
+## 10. Gates de implementação e aceitação
+
+A implementação futura deve seguir os contratos de seleção/identidade,
+planner/receipt, CAS/fases, DDL/locks e instrumentos de prova deste pacote.
+Mudança material exige revisar a SPEC exata antes de código. Aprovação
+humana, autorização BUILD e aceitação de runtime são decisões separadas;
+nenhuma está concedida por este desenho. Integração canônica exige claim
+próprio e revisão técnica independente. Não há execução/recurso autorizado
+por este documento nem solicitação de decisão humana nesta etapa.
+
+Nenhum gate global/fullTR05/paridade/programa36/CI PG/E2E/coverage/
+certificação/default/release é fechado. Sem dado/provider/rede/DB/Docker/
+DDL/código/commit/push/deploy/descendentes no escopo documental.

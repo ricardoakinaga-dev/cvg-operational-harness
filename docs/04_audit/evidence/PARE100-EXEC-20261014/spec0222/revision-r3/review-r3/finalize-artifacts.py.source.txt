@@ -1,0 +1,26 @@
+"""Finalize this lane's own artifacts; no project execution or source editing."""
+import pathlib,json,hashlib,datetime
+p=pathlib.Path('.')
+s=json.loads((p/'source-integrity.json').read_text())
+t=json.loads((p/'integrity-terminal.json').read_text())
+t['packet_manifest_self_unchanged']=t['packet_manifest_self']==s['pre']['packet_manifest_self']
+assert t['pass'] and t['packet_manifest_self_unchanged']
+s['terminal']=t
+s['terminal_seal_utc']=t['timestamp_utc']
+s['terminal_all_frozen_match']=True
+# Preserve independently named raw pre/post/terminal results; no failed evidence is replaced.
+(p/'source-integrity.json').write_text(json.dumps(s,indent=2)+'\n')
+v=json.loads((p/'verdict.json').read_text())
+assert v['verdict']=='REVISE' and len(v['findings'])==1
+assert len(v['procedures'])==38 and set(v['procedures'].values())=={'NOT_RUN'}
+files=[]
+for f in sorted(p.rglob('*')):
+ if f.is_file() and f.name!='artifact-manifest.json':
+  data=f.read_bytes();files.append({'path':str(f),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+m={'schema':'spec0222-r3-i1-artifacts-v1','generated_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/revision-r3/review-r3','excludes':['artifact-manifest.json'],'files':files,'file_count':len(files),'verdict':'REVISE','native_tests_run':False}
+f=p/'artifact-manifest.json'
+with f.open('x') as h:json.dump(m,h,indent=2);h.write('\n')
+# Verify authored artifact membership and bytes after sealing.
+assert set(e['path'] for e in files)==set(str(x) for x in p.rglob('*') if x.is_file() and x.name!='artifact-manifest.json')
+assert all(hashlib.sha256((p/e['path']).read_bytes()).hexdigest()==e['sha256'] for e in files)
+print(json.dumps({'artifact_manifest_sha256':hashlib.sha256(f.read_bytes()).hexdigest(),'files_bound':len(files),'terminal_source_integrity':'ALL_MATCH','verdict':v['verdict']}))

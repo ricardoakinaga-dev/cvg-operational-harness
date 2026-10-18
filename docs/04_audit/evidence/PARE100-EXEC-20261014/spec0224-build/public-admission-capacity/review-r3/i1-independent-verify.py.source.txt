@@ -1,0 +1,127 @@
+
+import json,hashlib,copy,math,pathlib
+O=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-capacity/review-r3')
+P=O.parent/'review-packet-r4'
+MAX=8388608
+# Independent encoding for this ASCII-key, binary-exact-cost synthetic packet.
+# Not a general replacement for the native strict JSON serializer.
+def canon(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)
+def digest(v):return hashlib.sha256(canon(v).encode()).hexdigest()
+def sha(b):return hashlib.sha256(b).hexdigest()
+def reqtokens(v):return math.ceil(len(canon(v).encode())/64)
+def unsigned(cp):return {k:v for k,v in cp.items() if k not in ('checkpointId','createdAt','digest')}
+def cpseal(cp):return sha(('cvg.checkpoint.v2\n'+canon(unsigned(cp))).encode())
+def check(x,msg):
+ if not x:raise AssertionError(msg)
+def reconstruct(s):
+ cp=copy.deepcopy(s['checkpointWithoutFixturePadding']);r=s['paddingRecipe'];check(r['character']=='p','padding character')
+ if r['present']:cp['state']['resolvedInputs']['fixturePadding']='p'*r['repeat']
+ check(sha(('p'*r['repeat']).encode())==r['sha256'],'padding hash')
+ raw=canon(unsigned(cp)).encode();check(len(raw)==s['logicalUnsignedBytes'],'independent checkpoint byte count');check(MAX-len(raw)==s['remainingBytes'],'remaining byte count');check(len(raw)<=MAX,'native byte cap');check(cpseal(cp)==cp['digest'],'independent checkpoint digest');return cp
+def receipts(cp):return cp['state']['toolResultContext']['decisionAdmissions']
+def results(cp):return [q for q in cp['state']['observations'] if q['type']=='TOOL_RESULT']
+def projection(pre,m,record=None):
+ cp=copy.deepcopy(pre);ctx=cp['state']['toolResultContext'];step=cp['state']['stepNumber']+1
+ record=record or {'admissionId':'admission_'+'0'*36,'tenantId':cp['tenantId'],'executionId':cp['executionId'],'stepNumber':step,'attempt':sum(r['stepNumber']==step for r in receipts(cp)),'purpose':m['request']['purpose'],'requestSha256':digest(m['request']),'measurement':m['measurement'],'reserved':{'modelCalls':1,'inputTokens':m['measurement']['inputUpperBoundTokens'],'outputTokens':512,'costUsd':m['measurement']['costUpperBoundUsd']},'status':'RESERVED'}
+ # Native post-tool evaluation runs after the last persisted post-tool snapshot.
+ # Independently reconstruct its sole deterministic value before the second seed reserve.
+ if not m['resumed'] and results(cp) and 'lastEvaluation' not in cp['state']:
+  cp['state']['lastEvaluation']={'outcome':'INCOMPLETE','reasonCode':'EVIDENCE_INCOMPLETE','deterministic':True,'detail':'Decision CALL_TOOL requires another loop step.'}
+ ctx['decisionAdmissions'].append(copy.deepcopy(record));ctx['pendingDecisionAdmission']=record['admissionId']
+ for k,v in record['reserved'].items():cp['budgetUsage'][k]+=v
+ if record['purpose']=='REPAIR':cp['budgetUsage']['decisionRepairs']+=1
+ return cp
+
+def verify_case(x):
+ prior=x['name'].endswith('true');refusal=x['name'].startswith('free-2000-')
+ before=reconstruct(x['before']);after=reconstruct(x['after']);rep=reconstruct(x['afterRepeat']) if x['afterRepeat'] else None
+ history=[reconstruct(w['checkpoint']) for w in x['writes']]
+ check(all(w['result']['status']=='APPLIED' for w in x['writes']),'all recorded writes committed')
+ for w,cp in zip(x['writes'],history):check(w['result']['token']=={'checkpointId':cp['checkpointId'],'digest':cp['digest']},'CAS token matches actual stored checkpoint')
+ seedidx=next(i for i,cp in enumerate(history) if cp['checkpointId']==before['checkpointId'])
+ pause=history[seedidx-1];check(pause['state']['stopReason']=='NEEDS_USER_INPUT','native pause preceding seed')
+ candidate=copy.deepcopy(before);del candidate['state']['resolvedInputs']['fixturePadding']
+ check(unsigned(candidate)==unsigned(pause),'seed CAS adds padding only')
+ check(len(receipts(before))==(2 if prior else 0),'prior native receipt count')
+ check(all(r['status']=='SETTLED' for r in receipts(before)),'prior receipts settled')
+ check(len(results(before))==(1 if prior else 0),'actual old tool result count')
+ for observation in results(before):
+  payload=observation['payload'];check(payload['outputBytes']==len(canon(payload['output']).encode()) and payload['outputSha256']==digest(payload['output']),'independent old complete tool output bytes/hash')
+ if prior:
+  check(x['oldJournal']['state']=='CONFIRMED','native journal confirmed');check(x['oldJournal']['result']==results(before)[0]['payload']['output'],'journal/result binding')
+ check(x['oldJournal']==x['afterJournal'],'journal preserved')
+ check(results(after)==results(before),'old TOOL_RESULT retained exactly')
+ check(receipts(after)[:len(receipts(before))]==receipts(before),'old receipts immutable')
+ check(x['bodiesBefore']==x['bodiesAfter']==(1 if prior else 0),'actual body count')
+ check(x['actualCompleteEntries']==x['actualModelsAfter']==len(x['calls']),'complete entries equal successful observed model calls')
+ check(x['modelsBefore']==(2 if prior else 0),'prior model calls')
+ check(x['actualCompleteEntries']-x['modelsBefore']==(0 if refusal else 1),'resumed actual complete delta')
+ for m in x['measurements']:
+  pre=reconstruct(m['checkpointBeforeReserve']);q=m['request'];me=m['measurement'];n=reqtokens(q)
+  check(q['maxOutputTokens']==512 and q['budget']['maxDurationMs']==30000,'unchanged output/deadline caps')
+  frame=json.loads(q['messages'][1]['content']);tool_frames=[z['value'] for z in frame['items'] if isinstance(z.get('value'),dict) and z['value'].get('type')=='TOOL_RESULT']
+  check(tool_frames==results(pre),'actual measured input contains every old full native tool observation')
+  check(n==me['inputUpperBoundTokens'],'independent Toy64 count')
+  for k in ('counterId','counterVersion','provider','model','formattingVersion'):check(len(me[k])==512 and '\0' not in me[k],'legal 512-character metadata')
+  check(len(canon(q).encode())<=131072 and len(q['messages'][0]['content'])<=16000 and len(q['messages'][1]['content'])<=32000,'request byte/unit limits')
+  check(n<=4000 and n+512<=me['contextWindowTokens'],'qualified context/window')
+  u=pre['budgetUsage'];b=q['budget'];check(u['modelCalls']+1<=b['maxModelCalls'] and u['inputTokens']+u['outputTokens']+n+512<=b['maxTokens'] and u['costUsd']+me['costUpperBoundUsd']<=b['maxCostUsd'],'all noncapacity budgets fit')
+ for i,c in enumerate(x['calls']):
+  cp=reconstruct(c['checkpointAtComplete']);q=c['request'];r=c['receipt'];ctx=cp['state']['toolResultContext']
+  check(r['status']=='RESERVED' and r['admissionId']==ctx['pendingDecisionAdmission'] and next(z for z in receipts(cp) if z['admissionId']==r['admissionId'])==r,'actual stored RESERVED inside complete')
+  check((r['tenantId'],r['executionId'],r['purpose'],r['requestSha256'])==(cp['tenantId'],cp['executionId'],q['purpose'],digest(q)),'actual request/receipt binding')
+  check(r['attempt']==0 and r['stepNumber']==cp['state']['stepNumber']+1,'native step/attempt identity')
+  matching=[m for m in x['measurements'] if m['resumed']==c['resumed'] and m['request']==q]
+  check(len(matching)==1 and matching[0]['measurement']==r['measurement'],'measured request is exact actual request')
+  pre=reconstruct(matching[0]['checkpointBeforeReserve']);prospective=projection(pre,matching[0],r)
+  check(unsigned(prospective)==unsigned(cp),'independent reserve projection equals persisted real reservation')
+  check(any(z['checkpointId']==cp['checkpointId'] and z['digest']==cp['digest'] for z in history),'reservation acknowledged by observed native CAS')
+  settled=[z for z in receipts(after) if z['admissionId']==r['admissionId']];check(len(settled)==1 and settled[0]['status']=='SETTLED','actual model call eventually settled')
+  s=settled[0]
+  decision=({'decisionType':'RESPOND','reasonCode':'GOAL_SATISFIED','responseText':'Synthetic admission control complete.'} if c['resumed'] else {'decisionType':'CALL_TOOL','reasonCode':'TOOL_REQUIRED','toolId':'synthetic.admission.capacity','toolVersion':'1','toolInput':{}} if i==0 else {'decisionType':'ASK_USER','reasonCode':'MISSING_INFORMATION','requestedInput':{'questionType':'CLARIFICATION','missingFields':['syntheticAnswer'],'promptIntent':'Supply a synthetic answer.'}})
+  # Text order follows the declared synthetic model's JSON.stringify object insertion.
+  text=json.dumps(decision,separators=(',',':'),ensure_ascii=False)
+  native={'text':text,'provider':r['measurement']['provider'],'model':r['measurement']['model'],'inputTokens':reqtokens(q),'outputTokens':reqtokens(text),'costUsd':0.125}
+  expected={'modelCalls':1,'inputTokens':native['inputTokens'],'outputTokens':native['outputTokens'],'costUsd':0.125}
+  check(s['actual']==expected and s['resultSha256']==digest(native),'independent native result hash and actual settlement')
+ out={'name':x['name'],'sourceMeasurement':'PASS','functional':'PASS_SCOPED_WITH_LIMITS' if refusal else 'PASS_SCOPED','seedRemainingBytes':x['before']['remainingBytes'],'beforeReceiptCount':len(receipts(before)),'afterReceiptCount':len(receipts(after)),'actualCompleteEntriesBefore':x['modelsBefore'],'actualCompleteEntriesAfter':x['actualCompleteEntries'],'actualCompleteDelta':x['actualCompleteEntries']-x['modelsBefore'],'actualToolBodiesBefore':x['bodiesBefore'],'actualToolBodiesAfter':x['bodiesAfter'],'acknowledgedBeforeBudget':before['budgetUsage'],'acknowledgedAfterBudget':after['budgetUsage'],'returnedResult':x['result'],'returnedRepeated':x['repeated'],'afterRemainingBytes':x['after']['remainingBytes'],'measurements':[]}
+ for m in [m for m in x['measurements'] if m['resumed']]:
+  pre=reconstruct(m['checkpointBeforeReserve']);pro=projection(pre,m);size=len(canon(unsigned(pro)).encode());over=size-MAX
+  out['measurements'].append({'requestBytes':len(canon(m['request']).encode()),'inputToy64':reqtokens(m['request']),'preReserveRemainingBytes':m['checkpointBeforeReserve']['remainingBytes'],'projectedReservedUnsignedBytes':size,'projectedOverNativeCapBytes':over})
+  check((size>MAX)==refusal,'capacity-only distinction')
+ if refusal:
+  check(x['result']['stopReason']==x['repeated']['stopReason']=='INSUFFICIENT_EVIDENCE' and 'Checkpoint byte limit' in x['result']['response'],'genuine checkpoint-capacity refusal')
+  check(len([m for m in x['measurements'] if m['resumed']])==2,'both resumptions reach actual counter')
+  check(receipts(after)==receipts(before)==receipts(rep),'no refused receipt persisted')
+  check(after['budgetUsage']==before['budgetUsage']==rep['budgetUsage'],'all acknowledged budget fields preserved including activeDuration')
+  check(results(rep)==results(before),'repeat retains old results')
+  check(unsigned(after)==unsigned(rep),'repeat only refreshes checkpoint metadata')
+  check(after['state']['stopReason']=='NEEDS_USER_INPUT','acknowledged stop remains earlier pause')
+  check(x['result']['modelCalls']==before['budgetUsage']['modelCalls']+1 and x['result']['usage']['outputTokens']==before['budgetUsage']['outputTokens']+512 and x['result']['usage']['costUsd']==before['budgetUsage']['costUsd']+0.25,'returned conservative reserve separate from actual complete count')
+ else:
+  check(x['result']['stopReason']=='COMPLETED' and after['state']['stopReason']=='COMPLETED','positive completed')
+  check(len(receipts(after))==len(receipts(before))+1,'one new settled receipt')
+  for field in ('modelCalls','inputTokens','outputTokens','costUsd'):check(after['budgetUsage'][field]==sum(r['actual'][field] for r in receipts(after)),'settled actual ledger sum')
+ return out
+
+def main():
+ actual=json.loads((O/'i1-observations-attempt02.json').read_text());lead=json.loads((P/'proof/observations-02.json').read_text())
+ summaries=[verify_case(x) for x in actual];lead_summaries=[verify_case(x) for x in lead]
+ controls=[]
+ for name,mutator in [('truncated-actual-model-request',lambda x:x['calls'][-1]['request']['messages'][1].update(content=x['calls'][-1]['request']['messages'][1]['content'][:-1])),('adulterated-reserved-receipt-resealed-checkpoint',None)]:
+  x=copy.deepcopy(actual[0])
+  if mutator:mutator(x)
+  else:
+   c=x['calls'][-1];c['receipt']['requestSha256']='0'*64
+   s=c['checkpointAtComplete'];cp=reconstruct(s)
+   for r in receipts(cp):
+    if r['admissionId']==c['receipt']['admissionId']:r['requestSha256']='0'*64
+   cp['digest']=cpseal(cp);s['checkpointWithoutFixturePadding']['digest']=cp['digest'];s['checkpointWithoutFixturePadding']['state']['toolResultContext']=copy.deepcopy(cp['state']['toolResultContext'])
+  (O/('i1-knownbad-'+name+'.json')).write_text(json.dumps(x,indent=2)+'\n')
+  try:verify_case(x)
+  except AssertionError as e:controls.append({'control':name,'expected':'REJECT','observed':'REJECT','assertion':str(e)})
+  else:raise AssertionError('known bad control unexpectedly accepted: '+name)
+ result={'independentOwnFourCases':summaries,'sealedLeadFourCasesVerified':lead_summaries,'knownBadControls':controls,'canonicalizationScope':'ASCII field names and observed synthetic numerics only; Python independently sorts keys, compact JSON encodes UTF8; every reconstructed digest/size matches native. No general codec qualification.'}
+ (O/'i1-independent-verification.json').write_text(json.dumps(result,indent=2)+'\n')
+ print(json.dumps({'ownCases':len(summaries),'sealedLeadCases':len(lead_summaries),'knownBadControls':controls,'status':'PASS'},indent=2))
+if __name__=='__main__':main()

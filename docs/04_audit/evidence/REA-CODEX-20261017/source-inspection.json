@@ -1,0 +1,995 @@
+{
+  "observed_at": "2026-10-17T21:50:53.260215+00:00",
+  "upstream_sha": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "harness_head": "7ecc5b53944dcbc50fc26a95cfaec05bb1c62eb5",
+  "method": "Selected static sources and line-bound excerpts; no upstream test execution",
+  "sources": [
+    {
+      "kind": "harness",
+      "path": "apps/worker/src/kernel-composition.ts",
+      "sha256": "40487c79aed8f89b15fa392a85e5f323bfa8dfdb54dbef30e336bda43733ed3b",
+      "bytes": 21772,
+      "lines": 674,
+      "excerpts": [
+        {
+          "anchor": "function resolveWorkerRuntimeKind",
+          "line_start": 80,
+          "line_end": 97,
+          "text": " * Worker runtime selection. The published-agent path stays the default; the\n * governed kernel is opt-in and any unknown value fails closed at startup.\n */\nexport function resolveWorkerRuntimeKind(\n  env: NodeJS.ProcessEnv\n): 'kernel' | 'published-agent' {\n  const configured = env[WORKER_RUNTIME_ENV]?.trim()\n  if (!configured || configured === PUBLISHED_AGENT_WORKER_RUNTIME) {\n    return 'published-agent'\n  }\n  if (configured === KERNEL_WORKER_RUNTIME) return 'kernel'\n  throw new KernelRuntimeConfigurationError(\n    'unknown_worker_runtime',\n    `Unknown ${WORKER_RUNTIME_ENV} value: ${configured}`\n  )\n}\n\n/**"
+        },
+        {
+          "anchor": "WORKER_RUNTIME_ENV",
+          "line_start": 53,
+          "line_end": 70,
+          "text": "import type { ControlledWorkerHandlers } from './controlled-worker.ts'\nimport { NonRetryableOutboxError } from './jobs/process-outbox-event.ts'\n\nexport const WORKER_RUNTIME_ENV = 'CVG_WORKER_RUNTIME'\nexport const KERNEL_WORKER_RUNTIME = 'kernel'\nexport const PUBLISHED_AGENT_WORKER_RUNTIME = 'published-agent'\n\nexport const CONTROLLED_KERNEL_POLICY_ID = 'synthetic.controlled-kernel'\nexport const CONTROLLED_KERNEL_POLICY_VERSION = '1.0.0'\nexport const CONTROLLED_KERNEL_PROMPT_ID = 'synthetic.controlled-kernel-prompt'\nexport const CONTROLLED_KERNEL_PROMPT_VERSION = '1.0.0'\n\nexport type KernelRuntimeConfigurationErrorCode =\n  | 'kernel_runtime_prerequisites_missing'\n  | 'unknown_worker_runtime'\n\nexport class KernelRuntimeConfigurationError extends Error {\n  readonly code: KernelRuntimeConfigurationErrorCode"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/agent-evals/src/runner.ts",
+      "sha256": "8984e8339c441ecd814a0f7b8789699f6359f8694d88ab21b819cd51e363dc4e",
+      "bytes": 5167,
+      "lines": 166,
+      "excerpts": [
+        {
+          "anchor": "interface EvalReport",
+          "line_start": 22,
+          "line_end": 39,
+          "text": "  ...(normativeThresholds as EvalThresholds)\n}\n\nexport interface EvalReport {\n  suiteId: string\n  agentId: string\n  startedAt: string\n  finishedAt: string\n  metrics: EvalMetrics\n  thresholds: EvalThresholds\n  verdict: 'PASS' | 'FAIL'\n  failures: Array<{ scenarioId: string; reasons: string[] }>\n}\n\nexport interface RunEvalSuiteInput {\n  suiteId: string\n  dataset: readonly EvalScenarioInput[]\n  agent: EvalAgentUnderTest"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/agent-runtime/src/runtime-kernel-bridge.ts",
+      "sha256": "64b780e38dd5109c98735b0d126733c99024f3b8bd7dc8d3503fc28ed6c1cd7f",
+      "bytes": 22746,
+      "lines": 738,
+      "excerpts": [
+        {
+          "anchor": "Single governance spine",
+          "line_start": 31,
+          "line_end": 48,
+          "text": "import type { KernelPauseCheck, LoopLimits } from './contracts.ts'\n\n/**\n * Single governance spine for the durable runtime (PDSH-001 / KPLG-004 Part\n * B, ADR-011). `GovernedAgentRuntime` keeps its durable phases — approval\n * reservation, effect journal, outbox — but budget, pause, deadline and tool\n * dispatch are decided by `kernel/pipeline.ts`, the same pipeline the\n * single-pass and iterative profiles run. Governed-only vocabulary (outcome\n * `paused`, capability-scoped denial codes) is mapped at this boundary, so no\n * second copy of the spine lives in the durable runtime.\n */\n\nconst BRIDGE_REQUIRED_SERVICES = [\n  'budget',\n  'pause',\n  'log',\n  'effects',\n  'model'"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/capability-boundary.ts",
+      "sha256": "f014688b917019b81c1a89888dab7219078211aa424773578415b02d31885e59",
+      "bytes": 18913,
+      "lines": 625,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { createHash } from 'node:crypto'\nimport type {\n  CapabilityDescriptor,\n  CapabilityImplementation,\n  CapabilityOrigin,\n  CapabilityRegistration,\n  CapabilityRegistry as CapabilityRegistryPort,\n  ToolDefinition,\n  ToolExecutionContext,\n  ToolRegistry,\n  ToolResult\n} from '@cvg/harness-contracts'\n\nconst CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/\nconst MAX_ID_LENGTH = 120"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/compaction.ts",
+      "sha256": "363f51e8701181d6fcf856b0d97873c04bf2a1c2e9274f1adb60bd577d39d2fa",
+      "bytes": 7183,
+      "lines": 225,
+      "excerpts": [
+        {
+          "anchor": "function compactConversation",
+          "line_start": 54,
+          "line_end": 71,
+          "text": "  return Number.isSafeInteger(value) && value >= 1 ? value : fallback\n}\n\nexport function compactConversation(\n  messages: readonly CompactableMessage[],\n  options: ContextCompactionOptions\n): ContextCompactionResult {\n  if (\n    !Number.isSafeInteger(options.maxInputTokens) ||\n    options.maxInputTokens < 1\n  ) {\n    throw new Error('compaction requires maxInputTokens >= 1')\n  }\n  const inputTokens = estimateContextTokens(messages)\n  if (inputTokens <= options.maxInputTokens || messages.length < 2) {\n    return {\n      compacted: false,\n      strategyVersion: COMPACTION_STRATEGY_VERSION,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/context-engine.ts",
+      "sha256": "16045ac6f90184601d815151d81a011e1b944d96b90329b0f7173e34e2b01a77",
+      "bytes": 9680,
+      "lines": 321,
+      "excerpts": [
+        {
+          "anchor": "MANDATORY_PRIORITIES",
+          "line_start": 29,
+          "line_end": 46,
+          "text": " * Governance and system instructions are mandatory: trimming can never drop\n * them, and no observation, tool or knowledge payload can replace them.\n */\nconst MANDATORY_PRIORITIES = new Set<ContextPriority>([\n  'SYSTEM',\n  'AGENT_PROFILE',\n  'CURRENT_GOAL',\n  'CURRENT_STATE'\n])\n\nexport function estimateTokens(text: string): number {\n  return Math.max(1, Math.ceil(text.length / 4))\n}\n\nfunction item(\n  contextId: string,\n  priority: ContextPriority,\n  trust: 'TRUSTED' | 'UNTRUSTED',"
+        },
+        {
+          "anchor": "agent.profile",
+          "line_start": 150,
+          "line_end": 167,
+          "text": "    )\n    items.push(\n      item(\n        'agent.profile',\n        'AGENT_PROFILE',\n        'TRUSTED',\n        'agent',\n        `${input.runtime.objective}\\n${input.runtime.instructions.join('\\n')}`\n      )\n    )\n    items.push(\n      item('goal.current', 'CURRENT_GOAL', 'TRUSTED', 'goal', input.goal)\n    )\n    items.push(\n      item(\n        'state.current',\n        'CURRENT_STATE',\n        'TRUSTED',"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/createOperationalHarness.ts",
+      "sha256": "f1ef60850d5efbb87833da8386b1f0654be764cb9ae72ea89207f88213c73e1b",
+      "bytes": 8607,
+      "lines": 253,
+      "excerpts": [
+        {
+          "anchor": "function createOperationalHarness",
+          "line_start": 70,
+          "line_end": 87,
+          "text": " * adapters provide the ports; this function only wires them together and\n * resolves the runtime profile through a registry-like selection.\n */\nexport function createOperationalHarness(\n  options: OperationalHarnessOptions\n): OperationalHarness {\n  const capabilityFingerprint = options.capabilities?.compositionFingerprint()\n  if (options.capabilities && !options.effectJournal) {\n    throw new Error(\n      'Capability composition requires an explicit effect journal'\n    )\n  }\n  const tools = resolveTools(options, capabilityFingerprint)\n  const singlePass = new SinglePassGovernedRuntime({\n    orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),\n    modelGateway: options.modelGateway,\n    policy: options.policy,\n    approvals: options.approvals,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/iterative-runtime.ts",
+      "sha256": "1b31a582225fa905e931dd7d7ba053da6bea2e4c81686f9502884b8dd2cd81d3",
+      "bytes": 56487,
+      "lines": 1789,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { randomUUID } from 'node:crypto'\nimport type {\n  AgenticKnowledgeProvider,\n  ApprovalId,\n  Claim,\n  ClaimValidation,\n  CompletionEvaluation,\n  CompletionEvaluator,\n  ContextEngine,\n  DecisionValidationResult,\n  ExecutionCheckpoint,\n  ExecutionStep,\n  ExecutionStepStore,\n  IterativeOrchestrator,\n  LoopDecision,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/kernel/controls.ts",
+      "sha256": "68fe8d65d8a425461c5ac404c29d5ac988f5e9081aeccc3327092d7070a6d35c",
+      "bytes": 24094,
+      "lines": 807,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import type {\n  ApprovalEngine,\n  ApprovalExecutionRequest,\n  AuditSink,\n  ModelGateway,\n  Orchestrator,\n  PolicyEngine,\n  RuntimeInput,\n  SandboxGate,\n  TelemetryEvent,\n  TelemetrySink,\n  ToolRegistry\n} from '@cvg/harness-contracts'\nimport {\n  DEADLINE,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/kernel/host.ts",
+      "sha256": "1d251b347fa3985229f509aa468ad7f3e835fbaf49ad126b4a20b24abd7a305b",
+      "bytes": 8179,
+      "lines": 272,
+      "excerpts": [
+        {
+          "anchor": "class KernelHost",
+          "line_start": 47,
+          "line_end": 64,
+          "text": " * sealed: no plugin, agent or configuration can add, remove or reorder a\n * registration while turns run (I2).\n */\nexport class KernelHost {\n  readonly #services = new Map<ServiceKey, { owner: string; value: unknown }>()\n  readonly #listeners: ListenerTable = {\n    'turn/before-step': [],\n    'model/before-call': [],\n    'tool/pre-execute': [],\n    'tool/execute': [],\n    'tool/post-execute': [],\n    'turn/end': []\n  }\n  readonly #guards: { plugin: string; fn: ToolGuard }[] = []\n  readonly #disposers: Disposer[] = []\n  #sealed = false\n\n  private constructor() {}"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/kernel/pipeline.ts",
+      "sha256": "b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272",
+      "bytes": 21046,
+      "lines": 665,
+      "excerpts": [
+        {
+          "anchor": "async function runToolCall",
+          "line_start": 262,
+          "line_end": 279,
+          "text": " * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →\n * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.\n */\nexport async function runToolCall(\n  host: KernelHost,\n  call: ToolCallState,\n  hooks: ToolPipelineHooks = {}\n): Promise<ToolPipelineResult> {\n  const { turn, tool, invocation } = call\n  const correlationId = turn.input.correlationId\n  // I5: the call is on the log before any policy runs or the body starts.\n  const logged = await appendLog(host, {\n    type: 'tool/call',\n    correlationId,\n    toolId: tool.id,\n    operationKey: invocation.operationKey,\n    input: invocation.input\n  })"
+        },
+        {
+          "anchor": "function runGate",
+          "line_start": 76,
+          "line_end": 93,
+          "text": "}\n\n/** Waterfall over a gate point; a throwing listener becomes a stop (I7). */\nexport function runGate<S>(\n  host: KernelHost,\n  point: GatePoint,\n  state: S\n): Promise<KernelGate> {\n  const listeners = host.listeners(point) as unknown as readonly {\n    readonly plugin: string\n    readonly fn: (\n      state: S,\n      next: () => Promise<KernelGate>\n    ) => Promise<KernelGate>\n  }[]\n  const run = (index: number): Promise<KernelGate> => {\n    const entry = listeners[index]\n    if (!entry) return Promise.resolve(PROCEED)"
+        },
+        {
+          "anchor": "function race",
+          "line_start": 136,
+          "line_end": 153,
+          "text": "}\n\n/** Races an operation against the turn budget and the cancel signal (I8). */\nexport async function race<T>(\n  turn: TurnState,\n  operation: () => Promise<T>\n): Promise<T | typeof DEADLINE | typeof CANCELLED> {\n  const signal = turn.signal\n  if (signal.aborted) return CANCELLED\n  let onAbort!: () => void\n  const cancelled = new Promise<typeof CANCELLED>((resolve) => {\n    onAbort = () => resolve(CANCELLED)\n    signal.addEventListener('abort', onAbort, { once: true })\n  })\n  try {\n    return await Promise.race([turn.budget.withDeadline(operation), cancelled])\n  } finally {\n    signal.removeEventListener('abort', onAbort)"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/kernel/profile.ts",
+      "sha256": "2b06370dcfcd26818938050fc11668122bf337a5c4f955bee7fda7b47a5db6ed",
+      "bytes": 2517,
+      "lines": 88,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import type {\n  ApprovalEngine,\n  AuditSink,\n  ModelGateway,\n  Orchestrator,\n  PolicyEngine,\n  SandboxGate,\n  TelemetrySink,\n  ToolRegistry\n} from '@cvg/harness-contracts'\nimport {\n  approvalsControl,\n  auditControl,\n  budgetControl,\n  effectsControl,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/skills/loader.ts",
+      "sha256": "4fdf6d7952196cd0c1d13bba69f681f8209cde35a732141c7fb367957f4fd287",
+      "bytes": 4216,
+      "lines": 155,
+      "excerpts": [
+        {
+          "anchor": "function loadSkillsFromDirectory",
+          "line_start": 96,
+          "line_end": 113,
+          "text": "  }\n}\n\nexport function loadSkillsFromDirectory(\n  skillsDir: string\n): SkillManifestLoadResult {\n  let entries: string[]\n  try {\n    if (!statSync(skillsDir).isDirectory()) {\n      return {\n        ok: false,\n        errors: [{ skillPath: skillsDir, message: 'não é um diretório' }]\n      }\n    }\n    entries = readdirSync(skillsDir).sort()\n  } catch {\n    return {\n      ok: false,"
+        },
+        {
+          "anchor": "const FIELDS",
+          "line_start": 13,
+          "line_end": 30,
+          "text": "\nconst ID_PATTERN = /^[a-z0-9-]+$/\nconst RISK_LEVELS: readonly RiskLevel[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']\nconst FIELDS = [\n  'id',\n  'version',\n  'description',\n  'requiredTools',\n  'requiredKnowledge',\n  'riskLevel'\n] as const\n\nfunction isStringArray(value: unknown): value is readonly string[] {\n  return (\n    Array.isArray(value) &&\n    value.every(\n      (entry): entry is string => typeof entry === 'string' && entry.length > 0\n    )"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/harness/src/step-store.ts",
+      "sha256": "1e598456b19f99d7953031c5be5e09e00145c60b982b1b639e5d03b9f4bf633c",
+      "bytes": 5520,
+      "lines": 189,
+      "excerpts": [
+        {
+          "anchor": "function validateCheckpointIntegrity",
+          "line_start": 58,
+          "line_end": 75,
+          "text": "  }\n}\n\nexport function validateCheckpointIntegrity(\n  checkpoint: ExecutionCheckpoint,\n  expected: { readonly tenantId: string; readonly executionId: string }\n): void {\n  if (checkpoint.checkpointVersion !== CHECKPOINT_VERSION) {\n    throw new CheckpointError(\n      'checkpoint_version',\n      `Checkpoint version ${checkpoint.checkpointVersion} is not supported`\n    )\n  }\n  if (\n    checkpoint.tenantId !== expected.tenantId ||\n    checkpoint.executionId !== expected.executionId\n  ) {\n    throw new CheckpointError("
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/persistence/src/session-events.ts",
+      "sha256": "82bd97295fc2180c3fc2158de777979a78c90d880a7a40daed7ec73892e8856d",
+      "bytes": 8242,
+      "lines": 236,
+      "excerpts": [
+        {
+          "anchor": "class PostgresSessionEventStore",
+          "line_start": 47,
+          "line_end": 64,
+          "text": "}\n\n/** Tenant/schema bound at trusted composition. Pool owns connection acquisition. */\nexport class PostgresSessionEventStore implements SessionEventStore {\n  readonly #pool: PostgresPoolLike\n  readonly #tenantId: string\n  readonly #schema: string\n  constructor(\n    pool: PostgresPoolLike,\n    options: { readonly tenantId: string; readonly schemaName: string }\n  ) {\n    this.#tenantId = validateSessionStream({\n      tenantId: options.tenantId,\n      sessionId: 'boot',\n      formatVersion: 1\n    }).tenantId\n    this.#schema = schemaName(options.schemaName)\n    this.#pool = pool"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/platform/src/controlled-execution-plan.ts",
+      "sha256": "624f76578aa64dc13becdcc8aa47a987097b7ad378992a05af0bdd5ebcea9d67",
+      "bytes": 3756,
+      "lines": 120,
+      "excerpts": [
+        {
+          "anchor": "CONTROLLED_STOP_PROJECTION",
+          "line_start": 2,
+          "line_end": 19,
+          "text": "import type { TestRunTrace } from './contracts.ts'\nimport type { PreparedCapabilityCommand } from './plugin-execution-core.ts'\n\nexport const CONTROLLED_STOP_PROJECTION: Record<\n  StopReason,\n  { status: NonNullable<TestRunTrace['status']>; reason: string | null }\n> = {\n  COMPLETED: { status: 'completed', reason: null },\n  NEEDS_USER_INPUT: {\n    status: 'blocked',\n    reason: 'controlled_runtime_needs_user_input'\n  },\n  APPROVAL_REQUIRED: {\n    status: 'blocked',\n    reason: 'controlled_runtime_approval_required'\n  },\n  HUMAN_TAKEOVER: {\n    status: 'blocked',"
+        },
+        {
+          "anchor": "NEEDS_USER_INPUT",
+          "line_start": 7,
+          "line_end": 24,
+          "text": "  { status: NonNullable<TestRunTrace['status']>; reason: string | null }\n> = {\n  COMPLETED: { status: 'completed', reason: null },\n  NEEDS_USER_INPUT: {\n    status: 'blocked',\n    reason: 'controlled_runtime_needs_user_input'\n  },\n  APPROVAL_REQUIRED: {\n    status: 'blocked',\n    reason: 'controlled_runtime_approval_required'\n  },\n  HUMAN_TAKEOVER: {\n    status: 'blocked',\n    reason: 'controlled_runtime_human_takeover'\n  },\n  POLICY_DENIED: {\n    status: 'blocked',\n    reason: 'controlled_runtime_policy_denied'"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/platform/src/prompt-profile.ts",
+      "sha256": "199b0f342352c8e59fdcd607af5ef42c560e4d3f2abda6bef3f09cbb38fb88d2",
+      "bytes": 6539,
+      "lines": 221,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { createHash } from 'node:crypto'\nimport { DomainError } from '@cvg/shared'\nimport { canonicalizeCapabilityInput } from './approval-authority.ts'\nimport {\n  AgentConfigSchema,\n  type AgentConfig,\n  type AgentVersionRecord,\n  type PromptBlock\n} from './contracts.ts'\nimport { composePrompt } from './prompt-composer.ts'\n\nexport const CONTROLLED_KERNEL_PROMPT_BLOCK: Readonly<PromptBlock> =\n  Object.freeze({\n    id: 'kernel-safety',\n    kind: 'safety',"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sandbox/src/confine.ts",
+      "sha256": "6d9ce62bcf207d6fe2293f5513fdd8e68a3ea2a787f09b05f9672583993ad433",
+      "bytes": 2335,
+      "lines": 62,
+      "excerpts": [
+        {
+          "anchor": "function confinePath",
+          "line_start": 11,
+          "line_end": 28,
+          "text": " * PROCESS gate. Returns the normalized relative path and the absolute path\n * under the real root.\n */\nexport function confinePath(\n  root: string,\n  raw: unknown\n):\n  | { readonly ok: true; readonly rel: string; readonly abs: string }\n  | { readonly ok: false; readonly error: string } {\n  if (typeof raw !== 'string' || raw.trim().length === 0) {\n    return { ok: false, error: 'path is required' }\n  }\n  const path = raw.trim()\n  if (path.length > 4096) {\n    return { ok: false, error: 'path exceeds maxPathLength' }\n  }\n  if (isAbsolute(path) || path.includes('\\0')) {\n    return { ok: false, error: 'path must be relative and free of NUL' }"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sandbox/src/fs-tools.ts",
+      "sha256": "50274993b34cd9331606ae93b60b4d2acb4234b61002e33f78891b1cecf050c9",
+      "bytes": 12875,
+      "lines": 436,
+      "excerpts": [
+        {
+          "anchor": "DEFAULT_LIMITS",
+          "line_start": 48,
+          "line_end": 65,
+          "text": "  readonly limits?: Partial<FsLimits>\n}\n\nconst DEFAULT_LIMITS: FsLimits = {\n  maxPathLength: 4096,\n  maxReadBytes: 1024 * 1024,\n  maxWriteBytes: 1024 * 1024,\n  maxListEntries: 500,\n  maxIntentLength: 200\n}\n\n/** Absolute ceiling regardless of composition overrides (SPEC 0197 §5). */\nconst LIMIT_CEILING_BYTES = 8 * 1024 * 1024\n\nconst FS_BASE = {\n  version: 'v1',\n  inputSchema: { type: 'object' },\n  outputSchema: { type: 'object' },"
+        },
+        {
+          "anchor": "interface FsWriteJournal",
+          "line_start": 14,
+          "line_end": 31,
+          "text": "import type { ToolDefinition, ToolResult } from '@cvg/harness-contracts'\nimport { TEMP_PREFIX, confinePath } from './confine.ts'\n\nexport interface FsWriteJournalEntry {\n  readonly tenantId: string\n  readonly operationKey: string\n  readonly toolId: string\n  readonly path: string\n  readonly intent: string\n  readonly action: 'write' | 'edit'\n  readonly bytes: number\n  readonly sha256: string\n  readonly recordedAt: string\n}\n\n/** Dedicated pre-mutation ledger for write intents (SPEC 0197 §4). */\nexport interface FsWriteJournal {\n  record(entry: FsWriteJournalEntry): Promise<void>"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sandbox/src/gate.ts",
+      "sha256": "043758a118460c077942e58538cf3ca17cd1aad94c9197d5800b915d425fb23b",
+      "bytes": 7656,
+      "lines": 256,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { realpathSync, existsSync, statSync } from 'node:fs'\nimport { isAbsolute } from 'node:path'\nimport type {\n  SandboxEvaluationInput,\n  SandboxGate,\n  SandboxGateOutcome,\n  SandboxHandle,\n  SandboxMode\n} from '@cvg/harness-contracts'\nimport type { SandboxCapabilities } from './capabilities.ts'\n\nexport interface SandboxJournalEntry {\n  readonly toolId: string\n  readonly mode: SandboxMode\n  readonly outcome: SandboxGateOutcome['kind']"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sandbox/src/run.ts",
+      "sha256": "a5fa08026af97e2c809445f5949799f3e70b1f833da542142cb28d14f078e933",
+      "bytes": 5522,
+      "lines": 184,
+      "excerpts": [
+        {
+          "anchor": "DEFAULT_MAX_OUTPUT_BYTES",
+          "line_start": 26,
+          "line_end": 43,
+          "text": "}\n\nconst DEFAULT_TIMEOUT_MS = 30_000\nconst DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024\n\n/**\n * Runs argv inside a bubblewrap namespace per the granted handle (SPEC 0196\n * §5): PID/IPC/UTS isolated, network unshared off, root read-only, workspace\n * bound read-write. `spawn_failed` (bwrap missing, namespace setup refused)\n * is not an exit code — callers must map it to `unavailable`, never to a\n * normal result.\n */\nexport function runContained(\n  request: ContainedRunRequest\n): Promise<ContainedRunResult> {\n  const { handle } = request\n  const [program, ...rest] = request.argv\n  const maxOutputBytes = request.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES"
+        },
+        {
+          "anchor": "const child = spawn",
+          "line_start": 111,
+          "line_end": 128,
+          "text": "    let stderrBytes = 0\n    let truncated = false\n\n    const child = spawn(request.bwrapPath ?? 'bwrap', bwrapArgs, {\n      stdio: ['pipe', 'pipe', 'pipe']\n    })\n\n    const timer = setTimeout(() => {\n      timedOut = true\n      child.kill('SIGKILL')\n    }, timeoutMs)\n\n    const drain = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {\n      let bytes = stream === 'stdout' ? stdoutBytes : stderrBytes\n      if (bytes >= maxOutputBytes) {\n        truncated = true\n        return\n      }"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sandbox/src/shell-tool.ts",
+      "sha256": "aa0b45d2b7a3ac0ca49162db0266b496bb3888e722b80931439441006d063f98",
+      "bytes": 10414,
+      "lines": 329,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { existsSync, realpathSync, statSync } from 'node:fs'\nimport { isAbsolute, sep } from 'node:path'\nimport type {\n  SandboxHandle,\n  ToolDefinition,\n  ToolResult\n} from '@cvg/harness-contracts'\nimport { confinePath } from './confine.ts'\nimport { runContained, type ContainedRunResult } from './run.ts'\n\nexport interface ShellRunRequest {\n  /** Pure argv array — never a shell string, never interpolated. */\n  readonly argv: readonly string[]\n  /** Absolute directory, already confined to the workspace root. */\n  readonly cwd: string"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sdk/src/client.ts",
+      "sha256": "f3009b670111a072415c1fe744da298ef89dd061c79070ceadde2c5f5473e7fe",
+      "bytes": 2768,
+      "lines": 95,
+      "excerpts": [
+        {
+          "anchor": "createSdkClient",
+          "line_start": 48,
+          "line_end": 65,
+          "text": "  return { request: (request) => server.dispatch(request) }\n}\n\nexport function createSdkClient(transport: SdkTransport): SdkClient {\n  let nextRequestId = 1\n  async function call<M extends SdkMethod>(method: M, params?: unknown) {\n    const request: JsonRpcRequest & { readonly method: M } = {\n      jsonrpc: '2.0',\n      id: nextRequestId++,\n      method,\n      ...(params !== undefined ? { params } : {})\n    }\n    const response = await transport.request(request)\n    try {\n      validateCorrelatedResponse(request, response)\n    } catch {\n      throw new SdkClientError(-32085, 'Invalid SDK response')\n    }"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sdk/src/protocol.ts",
+      "sha256": "5a485a669fa917a6514d00fa2fa62a8f86f1b70a7d7a0a9ab025a5ae594595dd",
+      "bytes": 2565,
+      "lines": 108,
+      "excerpts": [
+        {
+          "anchor": "SDK_METHODS",
+          "line_start": 8,
+          "line_end": 25,
+          "text": "\nexport const SDK_PROTOCOL_VERSION = 1\n\nexport const SDK_METHODS = [\n  'sdk.hello',\n  'session.open',\n  'turn.send',\n  'session.events'\n] as const\nexport type SdkMethod = (typeof SDK_METHODS)[number]\n\nexport const SDK_ERROR_CODES = {\n  parse_error: -32700,\n  invalid_request: -32600,\n  method_not_found: -32601,\n  invalid_params: -32602,\n  internal_error: -32603,\n  unsupported_protocol_version: 1001,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "packages/sdk/src/stdio.ts",
+      "sha256": "51ce4cbdb864ebe8004324bb7df75beab64d3b5a67920c2d2d4bac96e317a741",
+      "bytes": 16245,
+      "lines": 576,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import type { Readable, Writable } from 'node:stream'\nimport { SdkClientError, type SdkTransport } from './client.ts'\nimport type { JsonRpcRequest, JsonRpcResponse } from './protocol.ts'\nimport type { SdkServer } from './server.ts'\nimport {\n  isRequest,\n  validIdentifier,\n  validParams,\n  validateCorrelatedResponse\n} from './validators.ts'\n\nexport const SDK_TRANSPORT_ERROR_CODES = {\n  frame: -32080,\n  response_too_large: -32081,\n  timeout: -32082,"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "tests/conformance/harness-runtimes.conformance.test.ts",
+      "sha256": "376bec16bb1e0a45618aa49feb6aa9d49e90bc59acdee6bb941469b7a5940c10",
+      "bytes": 19259,
+      "lines": 590,
+      "excerpts": [
+        {
+          "anchor": "import",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "import { describe, expect, it } from 'vitest'\nimport type {\n  ApprovalEngine,\n  AuditEvent,\n  AuditSink,\n  HarnessRuntime,\n  ModelGateway,\n  ModelRequest,\n  PolicyDecision,\n  PolicyEngine,\n  RuntimeInput,\n  TelemetryEvent,\n  ToolDefinition,\n  ToolRegistry\n} from '@cvg/harness-contracts'"
+        }
+      ]
+    },
+    {
+      "kind": "harness",
+      "path": "tests/differential/reference-agent-driver.mjs",
+      "sha256": "8b358549b75722f4f38384a2e206c1d00942bd6d13229926c9067b42c4b26b06",
+      "bytes": 9027,
+      "lines": 281,
+      "excerpts": [
+        {
+          "anchor": "REFERENCE_PIN",
+          "line_start": 14,
+          "line_end": 31,
+          "text": "import dgram from 'node:dgram'\n\nconst REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes'\nconst REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'\nconst sha = (data) => crypto.createHash('sha256').update(data).digest('hex')\nconst fail = (message) => {\n  throw new Error(message)\n}\nconst json = (value) => JSON.parse(JSON.stringify(value))\n\nasync function main() {\n  if (process.argv.length !== 3) fail('one fixture path required')\n  if (\n    path.resolve(process.cwd()) === REFERENCE_ROOT ||\n    !process.env.HOME ||\n    !path.resolve(process.cwd()).startsWith(path.resolve(process.env.HOME))\n  )\n    fail('isolated cwd/home required')"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/app-server-protocol/src/protocol/common.rs",
+      "sha256": "0e42a89d3bba3ac938867aea4ab653660e5c8d59343b9b9a5fe7e3d6c9a96564",
+      "bytes": 174205,
+      "lines": 4630,
+      "excerpts": [
+        {
+          "anchor": "TurnSteer =>",
+          "line_start": 1066,
+          "line_end": 1083,
+          "text": "        serialization: thread_id(params.thread_id),\n        response: v2::TurnSettingsUpdateResponse,\n    },\n    TurnSteer => \"turn/steer\" {\n        params: v2::TurnSteerParams,\n        inspect_params: true,\n        serialization: thread_id(params.thread_id),\n        response: v2::TurnSteerResponse,\n    },\n    TurnInterrupt => \"turn/interrupt\" {\n        params: v2::TurnInterruptParams,\n        serialization: thread_id(params.thread_id),\n        response: v2::TurnInterruptResponse,\n    },\n    #[experimental(\"thread/realtime/start\")]\n    ThreadRealtimeStart => \"thread/realtime/start\" {\n        params: v2::ThreadRealtimeStartParams,\n        serialization: thread_id(params.thread_id),"
+        },
+        {
+          "anchor": "TurnInterrupt =>",
+          "line_start": 1072,
+          "line_end": 1089,
+          "text": "        serialization: thread_id(params.thread_id),\n        response: v2::TurnSteerResponse,\n    },\n    TurnInterrupt => \"turn/interrupt\" {\n        params: v2::TurnInterruptParams,\n        serialization: thread_id(params.thread_id),\n        response: v2::TurnInterruptResponse,\n    },\n    #[experimental(\"thread/realtime/start\")]\n    ThreadRealtimeStart => \"thread/realtime/start\" {\n        params: v2::ThreadRealtimeStartParams,\n        serialization: thread_id(params.thread_id),\n        response: v2::ThreadRealtimeStartResponse,\n    },\n    #[experimental(\"thread/realtime/appendAudio\")]\n    ThreadRealtimeAppendAudio => \"thread/realtime/appendAudio\" {\n        params: v2::ThreadRealtimeAppendAudioParams,\n        serialization: thread_id(params.thread_id),"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/apply-patch/src/lib.rs",
+      "sha256": "81eeac02181ffb6b1c8e1bdb18457372f11ef800f18675f77f0e10f3ee5dd9f2",
+      "bytes": 46157,
+      "lines": 1408,
+      "excerpts": [
+        {
+          "anchor": "pub struct ApplyPatchOptions",
+          "line_start": 58,
+          "line_end": 75,
+          "text": "\n/// Policy for one patch application. Standalone callers follow symlinks by default.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ApplyPatchOptions {\n    /// Whether filesystem operations may resolve symlinks in any path component.\n    pub follow_symlinks: bool,\n}\n\nimpl Default for ApplyPatchOptions {\n    fn default() -> Self {\n        Self {\n            follow_symlinks: true,\n        }\n    }\n}\n\n#[derive(Debug, Error, PartialEq)]\npub enum ApplyPatchError {"
+        },
+        {
+          "anchor": "follow_symlinks: true",
+          "line_start": 66,
+          "line_end": 83,
+          "text": "impl Default for ApplyPatchOptions {\n    fn default() -> Self {\n        Self {\n            follow_symlinks: true,\n        }\n    }\n}\n\n#[derive(Debug, Error, PartialEq)]\npub enum ApplyPatchError {\n    #[error(transparent)]\n    ParseError(#[from] ParseError),\n    #[error(transparent)]\n    IoError(#[from] IoError),\n    /// Error that occurs while computing replacements when applying patch chunks\n    #[error(\"{0}\")]\n    ComputeReplacements(String),\n    /// A patch path could not be resolved as a path URI."
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/config/src/loader/mod.rs",
+      "sha256": "f1d9c11bc0408da165edd405a148e7307fbf2e15569798597d218fda04f68ff0",
+      "bytes": 75228,
+      "lines": 2050,
+      "excerpts": [
+        {
+          "anchor": "PROJECT_LOCAL_CONFIG_DENYLIST",
+          "line_start": 86,
+          "line_end": 103,
+          "text": "// choose where a user's credentials are sent or which local commands are run.\n// These settings are still supported from user, system, managed, and runtime\n// config layers.\nconst PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[\n    \"openai_base_url\",\n    \"chatgpt_base_url\",\n    \"apps_mcp_product_sku\",\n    \"responses_api_metadata\",\n    \"model_provider\",\n    \"model_providers\",\n    \"notify\",\n    \"profile\",\n    \"profiles\",\n    \"experimental_realtime_webrtc_call_base_url\",\n    \"experimental_realtime_ws_base_url\",\n    \"otel\",\n];\n"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/config/src/shell_environment_policy.rs",
+      "sha256": "93a3c447504f940a266a50ecbb0467dcf08fd7e920f5434455c6e09fad2b25c5",
+      "bytes": 6268,
+      "lines": 173,
+      "excerpts": [
+        {
+          "anchor": "pub struct ShellEnvironmentPolicyToml",
+          "line_start": 12,
+          "line_end": 29,
+          "text": "/// Policy for building the `env` when spawning a process via shell-like tools.\n#[derive(Serialize, Debug, Clone, PartialEq, Default, JsonSchema)]\n#[schemars(deny_unknown_fields)]\npub struct ShellEnvironmentPolicyToml {\n    pub inherit: Option<ShellEnvironmentPolicyInherit>,\n\n    pub ignore_default_excludes: Option<bool>,\n\n    /// Legacy list of regular expressions to exclude.\n    pub exclude: Option<Vec<String>>,\n\n    pub r#set: Option<HashMap<String, String>>,\n\n    /// Legacy list of regular expressions to include.\n    pub include_only: Option<Vec<String>>,\n\n    /// Pattern actions used by the canonical table representation.\n    ///"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/config/src/strict_config.rs",
+      "sha256": "db94dd50d072e5045524403796761ff494835213df624249eacd0e606fd5ef4a",
+      "bytes": 12319,
+      "lines": 348,
+      "excerpts": [
+        {
+          "anchor": "use",
+          "line_start": 1,
+          "line_end": 17,
+          "text": "//! Strict config validation built on top of serde's ignored-field tracking.\n\nuse crate::CONFIG_TOML_FILE;\nuse crate::ConfigLayerStack;\nuse crate::ConfigRequirementsToml;\nuse crate::RequirementsLayerEntry;\nuse crate::config_toml::ConfigToml;\nuse crate::diagnostics::ConfigDiagnosticSource;\nuse crate::diagnostics::ConfigError;\nuse crate::diagnostics::config_error_from_toml_for_source;\nuse crate::diagnostics::default_range;\nuse crate::diagnostics::span_for_config_path;\nuse crate::diagnostics::span_for_toml_key_path;\nuse crate::diagnostics::text_range_from_span;\nuse crate::format_config_layer_source;\nuse crate::requirements_layers::strip_cloud_auth_requirements;\nuse crate::types::Tui;"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/README.md",
+      "sha256": "90419618b596e4965d9326ff57d81a0a3a406dab586b52d114e6829cafc6da31",
+      "bytes": 4869,
+      "lines": 98,
+      "excerpts": [
+        {
+          "anchor": "business logic",
+          "line_start": 1,
+          "line_end": 17,
+          "text": "# codex-core\n\nThis crate implements the business logic for Codex. It is designed to be used by the various Codex UIs written in Rust.\n\n## Wine-exec integration tests\n\nOn x86-64 Linux, run the shared suite against the Windows exec server with\n`bazel test //codex-rs/core:core-all-wine-exec-test`.\n\nLocal execution targets the host OS, Docker targets Linux, and Wine exec targets\nWindows. Choose the skip macro by what the test depends on:\n\n- `skip_if_target_windows!`: Windows target behavior.\n- `skip_if_host_windows!`: Windows host constraints.\n- `skip_if_remote!`: Local-only test behavior.\n- `skip_if_no_remote_env!`: Remote-only test behavior.\n- `skip_if_wine_exec!`: Wine-specific runner debt."
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/agent/child_config.rs",
+      "sha256": "ca8257ec568bc97f85c84f3ed54b38d9e3b43a96f252492ebba38cddb0aec232",
+      "bytes": 13723,
+      "lines": 373,
+      "excerpts": [
+        {
+          "anchor": "fn apply_spawn_agent_runtime_overrides",
+          "line_start": 176,
+          "line_end": 193,
+          "text": "///\n/// These values are chosen by the live turn rather than persisted config, so leaving them stale can\n/// make a child agent disagree with its parent about approval policy, cwd, or sandboxing.\nfn apply_spawn_agent_runtime_overrides(\n    config: &mut Config,\n    turn: &TurnContext,\n) -> Result<(), String> {\n    config\n        .permissions\n        .approval_policy\n        .set(turn.approval_policy())\n        .map_err(|err| format!(\"approval_policy is invalid: {err}\"))?;\n    config.approvals_reviewer = turn.config.approvals_reviewer;\n    #[allow(deprecated)]\n    let turn_cwd = turn.cwd.clone();\n    config.cwd = turn_cwd;\n    config\n        .permissions"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/agent/control.rs",
+      "sha256": "c6efa53baaba49ddb5c3eba2c33bf7bba8860e473acb1a17138ccb2fafca7e49",
+      "bytes": 27101,
+      "lines": 763,
+      "excerpts": [
+        {
+          "anchor": "Per-session controller",
+          "line_start": 90,
+          "line_end": 107,
+          "text": "mod user_authorization;\nmod watch;\n\n/// Per-session controller handle for a local agent tree.\n/// Handles retain a session identity and share their tree's `LocalAgentRuntime`.\n/// Local startup preserves that state when creating or resuming children.\n#[derive(Clone)]\npub(crate) struct LocalAgentControl {\n    /// session_id is equal to the root thread's ID.\n    session_id: SessionId,\n    pub(crate) runtime: LocalAgentRuntime,\n}\n\nimpl Default for LocalAgentControl {\n    fn default() -> Self {\n        Self::new(\n            Weak::default(),\n            default_thread_id_generator(),"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/agents_md.rs",
+      "sha256": "97427a870741b904a3f3c143f5990eaaa65b5bfa99ddac1808b2980052b5fc78",
+      "bytes": 20104,
+      "lines": 562,
+      "excerpts": [
+        {
+          "anchor": "AGENTS.md discovery",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "//! AGENTS.md discovery and user instruction assembly.\n//!\n//! Project-level documentation is primarily stored in files named `AGENTS.md`.\n//! Additional fallback filenames can be configured via `project_doc_fallback_filenames`.\n//! Fallback entries containing path syntax for the executor's OS are ignored\n//! before any filesystem probes use them.\n//! We include the concatenation of all files found along the path from the\n//! project root to the current working directory as follows:\n//!\n//! 1.  Determine the project root by walking upwards from the current working\n//!     directory until a configured `project_root_markers` entry is found.\n//!     When `project_root_markers` is unset, the default marker list is used\n//!     (`.git`). If no marker is found, only the current working directory is\n//!     considered. An empty marker list disables parent traversal.\n//! 2.  Collect every `AGENTS.md` found from the project root down to the"
+        },
+        {
+          "anchor": "LOCAL_AGENTS_MD_FILENAME",
+          "line_start": 42,
+          "line_end": 59,
+          "text": "/// Default filename scanned for AGENTS.md instructions.\npub const DEFAULT_AGENTS_MD_FILENAME: &str = \"AGENTS.md\";\n/// Preferred local override for AGENTS.md instructions.\npub const LOCAL_AGENTS_MD_FILENAME: &str = \"AGENTS.override.md\";\n\n/// When both user and project AGENTS.md docs are present, they will be\n/// concatenated with the following separator.\nconst AGENTS_MD_SEPARATOR: &str = \"\\n\\n--- project-doc ---\\n\\n\";\n\n// Metadata probes are cheap and the exec-server transport already bounds total in-flight calls.\n// This covers typical project hierarchies in one remote round trip without monopolizing that\n// transport when independent startup discovery runs concurrently.\nconst MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;\n\n/// Loads project AGENTS.md content and combines it with host-provided user\n/// instructions.\npub(crate) async fn load_project_instructions(\n    config: &Config,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/compact.rs",
+      "sha256": "9b37f42e826e45ebf2fe3115355fde5ced2f67183c19fab84119b57b0c6bd13b",
+      "bytes": 33855,
+      "lines": 924,
+      "excerpts": [
+        {
+          "anchor": "async fn run_compact_task",
+          "line_start": 152,
+          "line_end": 169,
+          "text": "    Ok(())\n}\n\npub(crate) async fn run_compact_task(\n    sess: Arc<Session>,\n    step_context: Arc<StepContext>,\n    world_state: Arc<WorldState>,\n    input: Vec<UserInput>,\n) -> CodexResult<()> {\n    run_compact_task_inner(\n        sess.clone(),\n        Arc::clone(&step_context.turn),\n        step_context,\n        input,\n        world_state,\n        CompactionTurnMetadata::new(\n            CompactionTrigger::Manual,\n            CompactionReason::UserRequested,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/context_manager/history.rs",
+      "sha256": "efa4559b18671e775181360a988073dd8427cf91ff3c591046e81896289ce570",
+      "bytes": 59016,
+      "lines": 1405,
+      "excerpts": [
+        {
+          "anchor": "retained_context",
+          "line_start": 97,
+          "line_end": 114,
+          "text": "    /// Compatibility history for legacy review and missing root instructions.\n    review_history: Option<TranscriptHistory>,\n    /// Host facts independent of the model window; snapshots share immutable state.\n    retained_context: Arc<RetainedContext>,\n    /// Reviewer policy travels with the history snapshot, independently of capture.\n    guardian_review_mode: GuardianContextMode,\n    retain_inherited_user_messages: bool,\n    /// Bumped whenever history is rewritten, such as compaction or rollback.\n    history_version: u64,\n    /// Last destructive history replacement; ordinary input and compaction preserve it.\n    pub(crate) reset_version: u64,\n    /// Monotonic user-input/reset revision, independent of compaction's history generation.\n    user_message_revision: u64,\n    /// Process-unique so resumed roots cannot match a worker's cached assistant evidence.\n    guardian_review_context_revision: u64,\n    token_info: Option<TokenUsageInfo>,\n    /// Reference context snapshot used for diffing and producing model-visible\n    /// settings update items."
+        },
+        {
+          "anchor": "truncate_function_output_payload",
+          "line_start": 68,
+          "line_end": 85,
+          "text": "use codex_utils_output_truncation::approx_bytes_for_tokens;\nuse codex_utils_output_truncation::approx_token_count;\nuse codex_utils_output_truncation::approx_tokens_from_byte_count_i64;\nuse codex_utils_output_truncation::truncate_function_output_payload;\nuse codex_utils_output_truncation::with_serialization_allowance;\nuse std::num::NonZeroUsize;\nuse std::ops::Deref;\nuse std::sync::Arc;\nuse std::sync::LazyLock;\nuse std::sync::OnceLock;\nuse std::sync::atomic::AtomicU64;\nuse std::sync::atomic::Ordering;\n\nuse crate::config::ManagedFeatures;\nuse crate::context::GuardianContextMode;\nuse codex_features::Feature;\n\nstatic GUARDIAN_REVIEW_CONTEXT_REVISION: AtomicU64 = AtomicU64::new(/*v*/ 1);"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/session/input_queue.rs",
+      "sha256": "afb878f48e95186419c6c218f347a01919069ecdaf2973fa54dc192e8cea062b",
+      "bytes": 28918,
+      "lines": 810,
+      "excerpts": [
+        {
+          "anchor": "mailbox_pending_mails",
+          "line_start": 95,
+          "line_end": 112,
+          "text": "pub(crate) struct InputQueue {\n    activity_tx: watch::Sender<InputQueueActivity>,\n    controller: Option<(ThreadId, Arc<dyn AgentControl>, watch::Receiver<bool>)>,\n    mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,\n}\n\npub(crate) struct PendingMailboxCommunication {\n    pub(crate) communication: InterAgentCommunication,\n    start_options: TurnStartOptions,\n    _diagnostics_guard: GaugeGuard,\n}\n\nimpl InputQueue {\n    pub(crate) fn new() -> Self {\n        let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);\n        Self {\n            activity_tx,\n            controller: None,"
+        },
+        {
+          "anchor": "pub enum TurnInput",
+          "line_start": 33,
+          "line_end": 50,
+          "text": "\n/// Input consumed by a regular turn.\n#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]\npub enum TurnInput {\n    UserInput {\n        content: Vec<UserInput>,\n        client_id: Option<String>,\n        #[serde(flatten)]\n        metadata: UserInputMetadata,\n    },\n    FunctionCallOutput(#[serde(with = \"turn_input_response_item\")] ResponseItemEnvelope),\n    // Preserve the existing serialized format while carrying injection API metadata\n    // through the in-memory queue.\n    ResponseItem(#[serde(with = \"turn_input_response_item\")] ResponseItemEnvelope),\n    InterAgentCommunication(InterAgentCommunication),\n}\n\nmod turn_input_response_item {"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/session/turn.rs",
+      "sha256": "a0140a3459a91fd353e21e337ad076c1a7f615ac628e2cc4db9f3e8f0bf3b0c9",
+      "bytes": 132993,
+      "lines": 3333,
+      "excerpts": [
+        {
+          "anchor": "async fn run_turn",
+          "line_start": 163,
+          "line_end": 180,
+          "text": "/// - If the model sends only an assistant message, we record it in the\n///   conversation history and consider the turn complete.\n///\npub(crate) async fn run_turn(\n    sess: Arc<Session>,\n    turn_context: Arc<TurnContext>,\n    mut input: Vec<TurnInput>,\n    mcp_startup_requirements: &mut McpStartupRequirements,\n    prewarmed_client_session: Option<ModelClientSession>,\n    cancellation_token: CancellationToken,\n) -> CodexResult<Option<String>> {\n    let auto_compaction_enabled = sess\n        .services\n        .thread_extension_data\n        .get::<AutoCompactionDisabled>()\n        .is_none();\n    let auto_summarization_enabled =\n        auto_compaction_enabled && !turn_context.config.features.enabled(Feature::TokenBudget);"
+        },
+        {
+          "anchor": "run_pre_sampling_compact",
+          "line_start": 191,
+          "line_end": 208,
+          "text": "    // diffs/full reinjection + user input) and trigger compaction preemptively\n    // when they would push the thread over the compaction threshold.\n    if auto_compaction_enabled\n        && let Err(err) = run_pre_sampling_compact(\n            &sess,\n            &turn_context,\n            &mut client_session,\n            &cancellation_token,\n        )\n        .await\n    {\n        // Compaction runs before the new input is recorded, so preserve it on every failure.\n        run_hooks_and_record_inputs(\n            &sess,\n            &turn_context,\n            &turn_context.capture_current_model_info(),\n            &input,\n            PersistContext::Standard,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/thread_manager.rs",
+      "sha256": "15f23de2e4b93d45ff76f6c9dbb6f4a97d2a565235baf075ca2ed119424097d5",
+      "bytes": 111525,
+      "lines": 2783,
+      "excerpts": [
+        {
+          "anchor": "pub struct ThreadManager",
+          "line_start": 250,
+          "line_end": 267,
+          "text": "\n/// [`ThreadManager`] is responsible for creating threads and maintaining\n/// them in memory.\npub struct ThreadManager {\n    state: Arc<ThreadManagerState>,\n    _test_codex_home_guard: Option<TempCodexHomeGuard>,\n}\n\n/// Captured parent identity for an internal child, including inline parents that\n/// do not have a public entry in the thread manager. Authentication and the shared\n/// agent budget remain bound to the parent that created this value.\n#[derive(Clone)]\npub struct InternalSessionParent {\n    pub(crate) thread_id: ThreadId,\n    pub(crate) auth_manager: Arc<AuthManager>,\n    pub(crate) agent_control: AgentControlInit,\n    pub(crate) originator: String,\n    pub(crate) inherited_instructions: Option<SessionInstructions>,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/tools/orchestrator.rs",
+      "sha256": "8996f718b818804473c151a8a643747c2b5ab69b05f4630eee143fac7daa0bb5",
+      "bytes": 28899,
+      "lines": 645,
+      "excerpts": [
+        {
+          "anchor": "escalating a sandboxed",
+          "line_start": 1,
+          "line_end": 16,
+          "text": "//! Coordinates tool approval, sandbox selection, and retries after sandbox denial.\n//! Guardian approval applies to the reviewed authority; escalating a sandboxed\n//! attempt requires a fresh review of the retry.\nuse crate::config::NetworkProxySpec;\nuse crate::guardian::GuardianReviewContext;\nuse crate::network_policy_decision::network_approval_context_from_payload;\nuse crate::sandboxing::SandboxPermissions;\nuse crate::tools::approvals::ApprovalAction;\nuse crate::tools::approvals::ApprovalContext;\nuse crate::tools::approvals::ApprovalResolutionSource;\nuse crate::tools::flat_tool_name;\nuse crate::tools::network_approval::ActiveNetworkApproval;\nuse crate::tools::network_approval::DeferredNetworkApproval;\nuse crate::tools::network_approval::NetworkApprovalSpec;\nuse crate::tools::network_approval::begin_network_approval;\nuse crate::tools::network_approval::finish_deferred_network_approval;"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/tools/parallel.rs",
+      "sha256": "be06530c709b09c414df6ec4c8c6f26f117c319d144c8d52289327b3c71a6bb6",
+      "bytes": 36269,
+      "lines": 883,
+      "excerpts": [
+        {
+          "anchor": "if supports_parallel",
+          "line_start": 210,
+          "line_end": 227,
+          "text": "                        readiness.await;\n                    }\n\n                    if supports_parallel {\n                        Either::Left(lock.read().await)\n                    } else {\n                        Either::Right(lock.write().await)\n                    }\n                }\n                .or_cancel_tool(&invocation_cancellation_token)\n                .await?;\n                // Admission through the parallel-execution gate marks the end\n                // of dispatch waiting and the start of handler execution.\n                if let Some(execution_started_at) = execution_started_at {\n                    let _ = execution_started_at.set(Instant::now());\n                }\n\n                let result = router"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/tools/parallel_observation_tests.rs",
+      "sha256": "0840ef6f78282acbe1b95fb420d0004779157467946849cfbfbdae8ccd6cdf32",
+      "bytes": 1421,
+      "lines": 46,
+      "excerpts": [
+        {
+          "anchor": "use",
+          "line_start": 1,
+          "line_end": 16,
+          "text": "//! Outer tool timing observations work without enabling textual tracing.\nuse super::*;\nuse codex_extension_api::ToolLifecycleContributor;\nuse codex_extension_api::ToolTimingInput;\nuse pretty_assertions::assert_eq;\nuse std::sync::Mutex;\nuse std::time::Duration;\n\n#[derive(Default)]\nstruct Observer(Mutex<Vec<(String, Duration)>>);\nimpl ToolLifecycleContributor for Observer {\n    fn on_tool_timing(&self, input: ToolTimingInput<'_>) {\n        self.0\n            .lock()\n            .unwrap()\n            .push((input.call_id.to_string(), input.duration));"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/tools/router.rs",
+      "sha256": "f97420f8a7b117563faad165ae7ad0d020545a2dfffbc46dbbfbdc5251fd939d",
+      "bytes": 15214,
+      "lines": 440,
+      "excerpts": [
+        {
+          "anchor": "pub",
+          "line_start": 35,
+          "line_end": 52,
+          "text": "use tokio_util::sync::CancellationToken;\nuse tracing::instrument;\n\npub use crate::tools::context::ToolCallSource;\n\nconst EXPOSURE_DIRECT: &str = \"direct\";\nconst EXPOSURE_DIRECT_MODEL_ONLY: &str = \"direct_model_only\";\nconst EXPOSURE_DEFERRED: &str = \"deferred\";\nconst EXPOSURE_DEFERRED_MODEL_ONLY: &str = \"deferred_model_only\";\nconst EXPOSURE_CODE_MODE_ONLY: &str = \"code_mode_only\";\nconst EXPOSURE_HIDDEN: &str = \"hidden\";\n\n#[derive(Clone, Debug, PartialEq)]\npub struct ToolCall {\n    pub tool_name: ToolName,\n    pub call_id: String,\n    pub payload: ToolPayload,\n    pub encrypted_function_args: Option<Vec<String>>,"
+        },
+        {
+          "anchor": "tool_supports_parallel",
+          "line_start": 243,
+          "line_end": 260,
+          "text": "        self.registry.create_diff_consumer(tool_name)\n    }\n\n    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {\n        self.registry\n            .supports_parallel_tool_calls(&call.tool_name)\n            .unwrap_or(false)\n    }\n\n    pub(crate) fn registered_tool(&self, tool_name: &ToolName) -> Option<&RegisteredTool> {\n        self.registry.registered_tool(tool_name)\n    }\n\n    #[instrument(level = \"trace\", skip_all, err)]\n    pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {\n        match item {\n            ResponseItem::FunctionCall {\n                name,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/unified_exec/mod.rs",
+      "sha256": "ef9821cfe373ddc9327c118a757ca4c4ca5108a2dc9eaeb5746a33f5904fbce8",
+      "bytes": 7950,
+      "lines": 243,
+      "excerpts": [
+        {
+          "anchor": "UNIFIED_EXEC_OUTPUT_MAX_BYTES",
+          "line_start": 72,
+          "line_end": 89,
+          "text": "pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;\npub(crate) const DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS: u64 = 300_000;\npub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;\npub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB\npub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;\npub(crate) const MAX_UNIFIED_EXEC_PROCESSES: usize = 64;\n\nconst MAX_TRACE_ID_BYTES: usize = 256;\n\nfn trace_id(id: &str) -> Option<&str> {\n    (!id.is_empty() && id.len() <= MAX_TRACE_ID_BYTES).then_some(id)\n}\n\npub(crate) struct UnifiedExecContext {\n    pub session: Arc<Session>,\n    pub step_context: Arc<StepContext>,\n    pub cancellation_token: CancellationToken,\n    pub call_id: String,"
+        },
+        {
+          "anchor": "Unified Exec",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "//! Unified Exec: interactive process execution orchestrated with approvals + sandboxing.\n//!\n//! Responsibilities\n//! - Manages interactive processes (create, reuse, buffer output with caps).\n//! - Supports completion-only calls that terminate on timeout or cancellation.\n//! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and\n//!   retry semantics in a single, descriptive flow.\n//! - Spawns the PTY from a sandbox-transformed `ExecRequest`; on sandbox denial,\n//!   retries without sandbox when policy allows (no re‑prompt thanks to caching).\n//! - Uses the shared `is_likely_sandbox_denied` heuristic to keep denial messages\n//!   consistent with other exec paths.\n//!\n//! Flow at a glance (open process)\n//! 1) Build a small request `{ command, cwd }`.\n//! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run."
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/src/unified_exec/process_manager.rs",
+      "sha256": "7eba3d82a54ad77cb989991ead28b39fe4aa1df24ddea020a0a36adb2d0fca5a",
+      "bytes": 75401,
+      "lines": 1929,
+      "excerpts": [
+        {
+          "anchor": "async fn exec_command",
+          "line_start": 503,
+          "line_end": 520,
+          "text": "            outcome = tracing::field::Empty,\n        )\n    )]\n    pub(crate) async fn exec_command(\n        &self,\n        request: ExecCommandRequest,\n        context: &UnifiedExecContext,\n    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {\n        let result = self\n            .exec_command_inner(request, context, /*completion*/ None)\n            .await;\n        let outcome = match &result {\n            Ok(output) if output.process_id.is_some() => \"yielded\",\n            Ok(_) => \"exited\",\n            Err(_) if context.cancellation_token.is_cancelled() => \"cancelled\",\n            Err(_) => \"failed\",\n        };\n        tracing::Span::current().record(\"outcome\", outcome);"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/tests/common/responses.rs",
+      "sha256": "505a826f569e614ab005cb0eee5b4c3351c7a3886d2184c4bd586a2bf27ba49c",
+      "bytes": 55525,
+      "lines": 1687,
+      "excerpts": [
+        {
+          "anchor": "pub struct ResponseMock",
+          "line_start": 37,
+          "line_end": 54,
+          "text": "use wiremock::matchers::path_regex;\n\n#[derive(Debug, Clone)]\npub struct ResponseMock {\n    requests: Arc<Mutex<Vec<ResponsesRequest>>>,\n}\n\nimpl ResponseMock {\n    fn new() -> Self {\n        Self {\n            requests: Arc::new(Mutex::new(Vec::new())),\n        }\n    }\n\n    pub fn single_request(&self) -> ResponsesRequest {\n        let requests = self.requests.lock().unwrap();\n        if requests.len() != 1 {\n            panic!(\"expected 1 request, got {}\", requests.len());"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/core/tests/common/streaming_sse.rs",
+      "sha256": "49aa352ac7836dbbef35d3298e7e30482d612b6db040f292195ad2c6dea5af26",
+      "bytes": 26690,
+      "lines": 721,
+      "excerpts": [
+        {
+          "anchor": "use",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "use std::collections::VecDeque;\nuse std::sync::Arc;\nuse std::time::SystemTime;\nuse std::time::UNIX_EPOCH;\n\nuse tokio::io::AsyncReadExt;\nuse tokio::io::AsyncWriteExt;\nuse tokio::net::TcpListener;\nuse tokio::sync::Mutex as TokioMutex;\nuse tokio::sync::Notify;\nuse tokio::sync::oneshot;\n\n/// Streaming SSE chunk payload gated by a per-chunk signal.\n#[derive(Debug)]\npub struct StreamingSseChunk {"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/exec-server/src/sandbox_integrity/mod.rs",
+      "sha256": "22662e5e55dc6cbf8c9cba6098c6964e3fb00547cc8240635c6dbc153bd593e2",
+      "bytes": 323,
+      "lines": 13,
+      "excerpts": [
+        {
+          "anchor": "run_integrity_checks",
+          "line_start": 6,
+          "line_end": 13,
+          "text": "mod runner;\nmod telemetry;\n\npub use runner::run_integrity_checks;\n\n#[cfg(test)]\n#[path = \"backend_tests.rs\"]\nmod backend_tests;"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/execpolicy/src/policy.rs",
+      "sha256": "dbac4c7b1cc4efd2859538a8b9348aa5969118476f1e79f1fe7928d8d24a1f09",
+      "bytes": 12754,
+      "lines": 412,
+      "excerpts": [
+        {
+          "anchor": "pub struct Policy",
+          "line_start": 25,
+          "line_end": 42,
+          "text": "}\n\n#[derive(Clone, Debug)]\npub struct Policy {\n    rules_by_program: MultiMap<String, RuleRef>,\n    network_rules: Vec<NetworkRule>,\n    host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,\n}\n\n/// A requirements-owned execution policy with order-independent equality.\n#[derive(Debug, Clone)]\npub struct RequirementsExecPolicy {\n    policy: Policy,\n}\n\nimpl RequirementsExecPolicy {\n    pub fn new(policy: Policy) -> Self {\n        Self { policy }"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/ext/goal/src/lib.rs",
+      "sha256": "fa0a7632863b05c565318f88dd2ef985a08518c833c57e51e70bf4e976e6562f",
+      "bytes": 690,
+      "lines": 28,
+      "excerpts": [
+        {
+          "anchor": "GoalService",
+          "line_start": 12,
+          "line_end": 28,
+          "text": "mod tool;\n\npub use api::GoalObjectiveUpdate;\npub use api::GoalService;\npub use api::GoalServiceError;\npub use api::GoalSetOutcome;\npub use api::GoalSetRequest;\npub use api::GoalTokenBudgetUpdate;\npub use extension::GoalExtension;\npub use extension::GoalExtensionConfig;\npub use extension::install_with_backend;\npub use runtime::GoalRuntimeHandle;\npub use runtime::PreviousGoalSnapshot;\npub use spec::CREATE_GOAL_TOOL_NAME;\npub use spec::GET_GOAL_TOOL_NAME;\npub use spec::UPDATE_GOAL_TOOL_NAME;\npub use tool::CreateGoalRequest;"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/ext/skills/src/catalog_prompt.rs",
+      "sha256": "4f907a96eb3d637f20ec79a72d5cb77185be732e3ea8b0d3040361f486ff20c0",
+      "bytes": 9355,
+      "lines": 106,
+      "excerpts": [
+        {
+          "anchor": "render_available_skills_body",
+          "line_start": 78,
+          "line_end": 95,
+          "text": "    }\n}\n\npub(crate) fn render_available_skills_body(\n    prompt_kind: SkillPromptKind,\n    skill_root_lines: &[String],\n    skill_lines: &[String],\n) -> String {\n    let mut lines: Vec<String> = Vec::new();\n    lines.push(\"## Skills\".to_string());\n    lines.push(prompt_kind.intro().to_string());\n    if !skill_root_lines.is_empty() {\n        lines.push(\"### Skill roots\".to_string());\n        lines.extend(skill_root_lines.iter().cloned());\n    }\n    if skill_lines\n        .iter()\n        .any(|line| line.contains(\"(executor package: \") || line.contains(\"(cloud package: \"))"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/ext/skills/src/dynamic_skill_selector.rs",
+      "sha256": "d38e78a3f654ca90ed76e527e413a78ee582ac6913c39476fe82815eada91dd2",
+      "bytes": 2251,
+      "lines": 58,
+      "excerpts": [
+        {
+          "anchor": "use",
+          "line_start": 8,
+          "line_end": 25,
+          "text": "mod routing_card_lexical;\nmod rrf_lexical_char;\nmod weighted_lexical;\npub(crate) use character_ngram::CharacterNgramSkillSelector;\npub(crate) use character_routing_card::CharacterRoutingCardSkillSelector;\nuse codex_skills::SkillDependencies;\npub(crate) use fielded_bm25::FieldedBm25SkillSelector;\npub(crate) use lru::LruSkillSelector;\npub(crate) use lru_plus_character_routing::LruPlusCharacterRoutingSkillSelector;\npub(crate) use lru_plus_character_routing::LruPlusLexicalCharacterRoutingSkillSelector;\npub(crate) use lru_plus_lexical::LruPlusLexicalSkillSelector;\npub(crate) use multi_query_lexical::MultiQueryLexicalSkillSelector;\npub(crate) use routing_card_lexical::RoutingCardLexicalSkillSelector;\npub(crate) use rrf_lexical_char::RrfLexicalCharSkillSelector;\npub(crate) use weighted_lexical::WeightedLexicalSkillSelector;\n\n/// Metadata searched by a cheap skill selector.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/hooks/src/engine/command_runner.rs",
+      "sha256": "4dc62f137cc8aec5cbecfdb02cc4baf78241c1616a95f9d632a4a57a30afd6e0",
+      "bytes": 15634,
+      "lines": 488,
+      "excerpts": [
+        {
+          "anchor": "HookOutputSpiller",
+          "line_start": 43,
+          "line_end": 60,
+          "text": "use super::dispatcher::hook_scope_label;\nuse super::dispatcher::hook_source_label;\nuse super::dispatcher::scope_for_event;\nuse crate::output_spill::HookOutputSpiller;\nuse codex_protocol::ThreadId;\nuse codex_protocol::protocol::HookCompletedEvent;\nuse codex_protocol::protocol::HookHandlerType;\nuse codex_protocol::protocol::HookOutputEntry;\nuse codex_protocol::protocol::HookOutputEntryKind;\n\nconst MAX_CONCURRENT_ASYNC_HOOKS: usize = 8;\n\n/// Owns command execution and bounded asynchronous work for one session.\n#[derive(Clone)]\npub(crate) struct CommandHookRuntime {\n    shell: CommandShell,\n    environment: Arc<Vec<(OsString, OsString)>>,\n    result_sender: Sender<HookCompletedEvent>,"
+        },
+        {
+          "anchor": "MAX_CONCURRENT_ASYNC_HOOKS",
+          "line_start": 50,
+          "line_end": 67,
+          "text": "use codex_protocol::protocol::HookOutputEntry;\nuse codex_protocol::protocol::HookOutputEntryKind;\n\nconst MAX_CONCURRENT_ASYNC_HOOKS: usize = 8;\n\n/// Owns command execution and bounded asynchronous work for one session.\n#[derive(Clone)]\npub(crate) struct CommandHookRuntime {\n    shell: CommandShell,\n    environment: Arc<Vec<(OsString, OsString)>>,\n    result_sender: Sender<HookCompletedEvent>,\n    state: Arc<Mutex<CommandHookRuntimeState>>,\n    output_spiller: HookOutputSpiller,\n}\n\nstruct CommandHookRuntimeState {\n    concurrency_limit: Arc<Semaphore>,\n    tasks: JoinSet<()>,"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/hooks/src/engine/plugin_trust.rs",
+      "sha256": "75e15014d76f19da6d932ac297a6d9df79fe2c6320933f9cb00b176235e7facf",
+      "bytes": 4153,
+      "lines": 115,
+      "excerpts": [
+        {
+          "anchor": "Each",
+          "line_start": 1,
+          "line_end": 17,
+          "text": "//! Verifies plugin contents at execution, including one-time legacy approval migration.\n//!\n//! Runtime discovery stores declarations and approvals without scanning bundles. Each\n//! execution verifies fresh contents; dropping its future cancels the scan. Legacy\n//! approvals share one immutable bundle baseline per plugin and config home, across\n//! hooks, profiles, versions, and sessions.\n\nuse codex_utils_absolute_path::AbsolutePathBuf;\nuse std::fs;\nuse std::io;\nuse std::io::Write;\n\nuse codex_config::ConfigLayerSource;\nuse codex_config::ConfigLayerStack;\nuse sha2::Digest;\nuse sha2::Sha256;\n"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/thread-store/src/lib.rs",
+      "sha256": "4cce694f5e854973e002b9115c83f9e1d8cdc6f33be2e461c7834975610349d9",
+      "bytes": 4378,
+      "lines": 120,
+      "excerpts": [
+        {
+          "anchor": "Storage-neutral",
+          "line_start": 1,
+          "line_end": 15,
+          "text": "//! Storage-neutral thread persistence interfaces.\n//!\n//! Application code should treat [`codex_protocol::ThreadId`] as the only durable thread handle.\n//! Implementations are responsible for resolving that id to local rollout files, RPC requests, or\n//! any other backing store.\n\nmod error;\nmod in_memory;\nmod live_thread;\nmod local;\nmod projects;\nmod queue_store;\nmod store;\nmod thread_attachments;\nmod thread_metadata_sync;"
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "codex-rs/thread-store/src/store.rs",
+      "sha256": "1447b7e353974d3cadadbb57dfb3374cdf747040f36aabb8ede33245a714ad29",
+      "bytes": 23331,
+      "lines": 629,
+      "excerpts": [
+        {
+          "anchor": "fn prepare_fork",
+          "line_start": 271,
+          "line_end": 288,
+          "text": "    /// Freezes source history and model context used to initialize a referenced fork.\n    ///\n    /// Stores without reference-backed fork support can retain this default implementation.\n    fn prepare_fork(&self, _params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {\n        Box::pin(async {\n            Err(ThreadStoreError::Unsupported {\n                operation: \"prepare_fork\",\n            })\n        })\n    }\n\n    /// Reverts a paginated thread's durable history so it ends immediately before\n    /// `before_turn_id`.\n    ///\n    /// Callers must close the thread's live writer first. The logical thread id and semantic\n    /// metadata stay unchanged.\n    ///\n    /// Stores without paginated revert support can retain this default implementation."
+        }
+      ]
+    },
+    {
+      "kind": "upstream",
+      "path": "sdk/typescript/src/thread.ts",
+      "sha256": "21e5c7dc1c3047564750ecea5dfab8a47ab732488c5023e4e22adb01e874483f",
+      "bytes": 5029,
+      "lines": 159,
+      "excerpts": [
+        {
+          "anchor": "runStreamed",
+          "line_start": 16,
+          "line_end": 33,
+          "text": "/** Alias for `Turn` to describe the result of `run()`. */\nexport type RunResult = Turn;\n\n/** The result of the `runStreamed` method. */\nexport type StreamedTurn = {\n  events: AsyncGenerator<ThreadEvent>;\n};\n\n/** Alias for `StreamedTurn` to describe the result of `runStreamed()`. */\nexport type RunStreamedResult = StreamedTurn;\n\n/** An input to send to the agent. */\nexport type UserInput =\n  | {\n      type: \"text\";\n      text: string;\n    }\n  | {"
+        }
+      ]
+    }
+  ]
+}

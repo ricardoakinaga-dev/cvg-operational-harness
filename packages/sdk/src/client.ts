@@ -4,11 +4,12 @@ import {
   type JsonRpcRequest,
   type JsonRpcResponse,
   type SdkHelloResult,
-  type SessionEventsResult,
   type SessionOpenResult,
+  type SdkMethod,
   type TurnSendResult
 } from './protocol.ts'
 import type { SdkServer } from './server.ts'
+import { validateCorrelatedResponse, validateResult } from './validators.ts'
 
 /** Host-owned transport; this package never opens a socket itself. */
 export interface SdkTransport {
@@ -49,14 +50,19 @@ export function createInProcessTransport(server: SdkServer): SdkTransport {
 
 export function createSdkClient(transport: SdkTransport): SdkClient {
   let nextRequestId = 1
-  async function call(method: string, params?: unknown): Promise<unknown> {
-    const request: JsonRpcRequest = {
+  async function call<M extends SdkMethod>(method: M, params?: unknown) {
+    const request: JsonRpcRequest & { readonly method: M } = {
       jsonrpc: '2.0',
       id: nextRequestId++,
       method,
       ...(params !== undefined ? { params } : {})
     }
     const response = await transport.request(request)
+    try {
+      validateCorrelatedResponse(request, response)
+    } catch {
+      throw new SdkClientError(-32085, 'Invalid SDK response')
+    }
     if ('error' in response) {
       throw new SdkClientError(
         response.error.code,
@@ -64,26 +70,25 @@ export function createSdkClient(transport: SdkTransport): SdkClient {
         response.error.data
       )
     }
-    return response.result
+    return validateResult(request, response.result)
   }
   return {
     protocolVersion: SDK_PROTOCOL_VERSION,
     hello: async () =>
-      (await call('sdk.hello', {
+      await call('sdk.hello', {
         protocolVersion: SDK_PROTOCOL_VERSION
-      })) as SdkHelloResult,
-    openSession: async (sessionId) =>
-      (await call('session.open', { sessionId })) as SessionOpenResult,
+      }),
+    openSession: async (sessionId) => await call('session.open', { sessionId }),
     sendTurn: async (userMessage, sessionId) =>
-      (await call('turn.send', {
+      await call('turn.send', {
         ...(sessionId !== undefined ? { sessionId } : {}),
         userMessage
-      })) as TurnSendResult,
+      }),
     readEvents: async (sessionId, options = {}) => {
-      const result = (await call('session.events', {
+      const result = await call('session.events', {
         sessionId,
         ...options
-      })) as SessionEventsResult
+      })
       return result.events
     }
   }

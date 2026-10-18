@@ -1,0 +1,27 @@
+import json,hashlib,time,datetime,subprocess,os
+from pathlib import Path
+root=Path("/home/ricardo/Área de trabalho/cvg-operational-harness")
+b=root/"docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build"
+t=Path("/tmp/cvg-claude100-exec-20261017/journal0225-build")
+c=Path("/tmp/cvg-claude100-exec-20261017/journal0225-candidate")
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+d=json.loads((b/"public-profile-r1-binding.json").read_text())
+d["runId"]="native-"+str(int(time.time()*1000))
+d["profile"]="journal"
+for x in d["inputs"]:
+ p=c/x["path"]; x["sha256"]=hashlib.sha256(p.read_bytes()).hexdigest()
+ dest=b/"native-profile-r5-sources"/x["path"];dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(p.read_bytes())
+raw=(json.dumps(d,indent=2)+"\n").encode()
+(b/"native-profile-r5-binding.json").write_bytes(raw)
+fd=os.open(t/"native-binding.json",os.O_WRONLY|os.O_TRUNC|os.O_NOFOLLOW);os.write(fd,raw);os.fchmod(fd,0o600);os.close(fd)
+claim=dict(at=now(),task=d["task"],runId=d["runId"],profile="journal",resourceId=d["containerId"],cases=11,scope="existing7plus4realtransactionfaults")
+(b/"native-profile-r5-claim.json").write_text(json.dumps(claim,indent=2)+"\n")
+env=json.loads((t/"environment.json").read_text());node="/home/ricardo/.nvm/versions/node/v22.23.2/bin/node"
+junit=t/(d["runId"]+"-junit.xml")
+argv=[node,"--experimental-strip-types","--test","--test-concurrency=1","--test-reporter=tap","--test-reporter-destination=stdout","--test-reporter=junit","--test-reporter-destination="+str(junit),"packages/persistence/src/__tests__/complete-effect-result-postgres.integration.ts"]
+record=dict(start=now(),argv=argv,cwd=str(c),environment=env,binding_sha256=hashlib.sha256(raw).hexdigest(),scope="native11only; J08postcommitkill andallothermandatorychecks remainowed")
+r=subprocess.run(argv,cwd=c,env=env,text=True,capture_output=True,timeout=180)
+record.update(end=now(),exitCode=r.returncode,stdout=r.stdout,stderr=r.stderr)
+(b/(d["runId"]+"-command.json")).write_text(json.dumps(record,indent=2)+"\n")
+if junit.exists():(b/junit.name).write_bytes(junit.read_bytes())
+print(json.dumps(dict(runId=d["runId"],exitCode=r.returncode,tail=r.stdout[-2200:],stderr=r.stderr[-1000:])))

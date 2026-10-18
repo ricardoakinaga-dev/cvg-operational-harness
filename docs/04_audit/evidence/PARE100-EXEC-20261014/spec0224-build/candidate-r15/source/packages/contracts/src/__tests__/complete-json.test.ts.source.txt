@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest'
+import {
+  canonicalizeCompleteJson,
+  CompleteJsonError
+} from '../complete-json.ts'
+
+describe('complete JSON strict value snapshot', () => {
+  it('preserves aliases, Unicode, NUL keys, numeric keys and exact JSON values', () => {
+    const alias = { 'é\u0000': '😀\u0000é' }
+    const value = {
+      z: [null, true, false, 1.25, '', alias, alias],
+      '2': 2,
+      '10': 10
+    }
+    const raw = canonicalizeCompleteJson(value)
+    expect(raw.startsWith('{"10":10,"2":2,"z":')).toBe(true)
+    expect(JSON.parse(raw)).toEqual(value)
+    expect(canonicalizeCompleteJson(JSON.parse(raw))).toBe(raw)
+  })
+
+  it.each([
+    undefined,
+    BigInt(1),
+    NaN,
+    Infinity,
+    -Infinity,
+    -0,
+    Symbol('s'),
+    () => 1,
+    '\ud800',
+    '\udfff',
+    { '\ud800': 1 },
+    new Date(),
+    new Map(),
+    [1, , 2],
+    { a: undefined },
+    Object.assign([1], { extra: 2 }),
+    { [Symbol('s')]: 1 }
+  ])('rejects non-JSON input without coercion (%#)', (value) => {
+    expect(() => canonicalizeCompleteJson(value)).toThrow(CompleteJsonError)
+    try {
+      canonicalizeCompleteJson(value)
+    } catch (error) {
+      expect((error as CompleteJsonError).code).toBe('INVALID_JSON')
+    }
+  })
+
+  it('never invokes accessors or toJSON and rejects cycles', () => {
+    let calls = 0
+    const getter = Object.defineProperty({}, 'x', {
+      enumerable: true,
+      get() {
+        calls++
+        return 1
+      }
+    })
+    const hook = {
+      toJSON() {
+        calls++
+        return {}
+      }
+    }
+    const cycle: unknown[] = []
+    cycle.push(cycle)
+    for (const value of [getter, hook, cycle])
+      expect(() => canonicalizeCompleteJson(value)).toThrow()
+    expect(calls).toBe(0)
+  })
+
+  it('enforces exact UTF-8 bytes, root-at-one depth and value node limits', () => {
+    expect(Buffer.byteLength(canonicalizeCompleteJson('a'.repeat(32766)))).toBe(
+      32768
+    )
+    expect(() => canonicalizeCompleteJson('a'.repeat(32767))).toThrow(
+      expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+    )
+    expect(canonicalizeCompleteJson('😀', { maxBytes: 6 })).toBe('"😀"')
+    expect(() => canonicalizeCompleteJson('😀', { maxBytes: 5 })).toThrow()
+    let nested: unknown = null
+    for (let i = 0; i < 31; i++) nested = [nested]
+    expect(() => canonicalizeCompleteJson(nested)).not.toThrow()
+    expect(() => canonicalizeCompleteJson([nested])).toThrow(
+      expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+    )
+    expect(() => canonicalizeCompleteJson(Array(9999).fill(0))).not.toThrow()
+    expect(() => canonicalizeCompleteJson(Array(10000).fill(0))).toThrow(
+      expect.objectContaining({ code: 'RESULT_COMPLEXITY' })
+    )
+    expect(() => canonicalizeCompleteJson('x'.repeat(10_000_000))).toThrow(
+      expect.objectContaining({ code: 'RESULT_TOO_LARGE' })
+    )
+    expect(() => canonicalizeCompleteJson(new Array(2 ** 30))).toThrow()
+  })
+})

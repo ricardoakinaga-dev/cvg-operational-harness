@@ -1,0 +1,195 @@
+{
+  "task": "HISO005-0236-RESOLVER-CONFORMANCE-20261018",
+  "round": 1,
+  "verdict": "REVISE",
+  "status": "IMPLEMENTED",
+  "selfApprovedDone": false,
+  "scope": "Exact two-path conservative runtime-resolution repair under existing SPEC0236; mechanism only",
+  "sourceCommit": "1c2012d9514c0f30be1c27cdc7458a9484ab6c6f",
+  "baseCommit": "75dfef50d0b5bc5a8063829ea4c63af8b4ab8b54",
+  "specSha256": "cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49",
+  "inputManifest": {
+    "path": "input-manifest.json",
+    "sha256": "88efce2d553d5848ec2f018b297873fb6932d071338e68446d653d37443eeada"
+  },
+  "criteriaManifest": {
+    "path": "criteria.json",
+    "sha256": "295c3aa0baaa7737e45b259c3d3ba3c1b493330a2d97b52876095336e1b059c7"
+  },
+  "sourceFreeze": {
+    "path": "inputs/023-source-freeze-r1.json"
+  },
+  "reviewer": {
+    "identity": "Codex independent fresh code critic; not implementation author",
+    "independence": "I1 fresh task context",
+    "descendants": 0,
+    "roundBudget": 2,
+    "roundsConsumed": 1
+  },
+  "nativeBindings": {
+    "path": "native-bindings.json",
+    "nodeVersion": "22.23.2",
+    "nodeSha256": "3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327",
+    "allFiveEmbeddedSourcesMatch": true
+  },
+  "sourceSentinel": {
+    "before": "source-before.json",
+    "after": "source-after.json",
+    "all17Agree": true,
+    "onlyTwoPathsDifferFromBase": true,
+    "other15Unchanged": true,
+    "prior21TestBodiesUnchanged": true
+  },
+  "summary": {
+    "distinctScenarios": 20,
+    "completedControlledCalls": 47,
+    "meetingExpected": 18,
+    "mandatoryFindings": 2,
+    "targetApplicationExecuted": false,
+    "scenarioResults": "results.json",
+    "rawCommands": "raw-r3",
+    "fixtureManifest": "fixture-manifest.json",
+    "collectorAttempts": "collector-attempts.json"
+  },
+  "findings": [
+    {
+      "id": "R1-01",
+      "mandatory": true,
+      "severity": "P1",
+      "confidence": "HIGH",
+      "title": "Absolute legacy main is relocated inside package and receives verified:true",
+      "affectedCriteria": [
+        "C1",
+        "C2",
+        "SP07",
+        "SP10",
+        "SP17"
+      ],
+      "affectedPaths": [
+        {
+          "path": "scripts/boundary-semantic-engine.mjs",
+          "lines": [
+            378,
+            383,
+            397,
+            399
+          ]
+        }
+      ],
+      "scenario": "S02",
+      "evidence": [
+        "S02.json",
+        "S02.report.json",
+        "S02.graph.json",
+        "S02.kernel.json",
+        "raw-r3/004.command.json",
+        "raw-r3/004.stdout.txt",
+        "raw-r3/005.command.json",
+        "raw-r3/005.stdout.txt",
+        "raw-r3/006.command.json",
+        "inputs/031-node-internal-modules-cjs-loader.source.txt"
+      ],
+      "observation": "Pinned require.resolve selects the absolute main outside evaluated root. Kernel instead analyzes node_modules/vendor/tmp/.../absolute-target.js; both runSemanticBoundary and its recomputation report PROVEN with validation.valid=true and two proofs. CLI is INCOMPLETE/exit1 for MODULE_OUTSIDE_REPOSITORY but installed content MATCH is marked verified:true with semantic PROVEN and zero semantic unknowns.",
+      "nativeSemantics": "Pinned native tryPackage uses path.resolve(requestPath,pkg), lines501-511; an absolute pkg replaces requestPath.",
+      "impact": "The semantic proof and installed verified bit attest a harmless substitute rather than the selected implementation; global INCOMPLETE does not make the proof consumable.",
+      "requiredRepair": "Conservatively reject absolute/unmodelled legacy main values before package-relative construction and proof publication. Add physical CLI/kernel regression with native resolve-only oracle. No new positive profile is necessary."
+    },
+    {
+      "id": "R1-02",
+      "mandatory": true,
+      "severity": "P1",
+      "confidence": "HIGH",
+      "title": "CJS LOAD_AS_FILE precedence is absent before legacy package-directory selection",
+      "affectedCriteria": [
+        "C1",
+        "C2",
+        "SP07",
+        "SP10",
+        "SP17"
+      ],
+      "affectedPaths": [
+        {
+          "path": "scripts/boundary-semantic-engine.mjs",
+          "lines": [
+            337,
+            351,
+            378,
+            397
+          ]
+        }
+      ],
+      "scenario": "S01",
+      "evidence": [
+        "S01.json",
+        "S01.kernel.json",
+        "raw-r3/001.command.json",
+        "raw-r3/001.stdout.txt",
+        "raw-r3/002.command.json",
+        "raw-r3/002.stderr.txt",
+        "raw-r3/003.command.json",
+        "raw-r3/003.stdout.txt",
+        "inputs/031-node-internal-modules-cjs-loader.source.txt"
+      ],
+      "observation": "With vendor/package.json legacy main entry and sibling node_modules/vendor.js, pinned require.resolve selects vendor.js containing finite concatenated product import. Kernel selects vendor/entry.js and returns PROVEN/validation.valid=true, installed PROVEN, two proof IDs and no unknowns. CLI aborts exit2 ENOTDIR before producing a JSON report; this is not a demonstrated global PASS.",
+      "nativeSemantics": "Pinned Module._findPath resolves exports first, then basePath/tryExtensions before tryPackage, lines731-778. Repair guards check key directories and file-entry suffixes after choosing the directory, missing sibling file precedence.",
+      "impact": "The standalone semantic API can certify a body different from the one the closed CJS runtime selects. The separate CLI acquisition error masks this proof defect in this fixture.",
+      "requiredRepair": "Before deriving a legacy bare-package entry, reject unmodelled native file candidates at applicable search locations. Preserve exports-first precedence and S03 exact-exports positive. Add kernel and CLI controlled regressions without target execution."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "status": "FAIL",
+      "evidence": [
+        "S02.kernel.json",
+        "S01.kernel.json"
+      ],
+      "note": "Original RC01/RC02/RC03 negative guards pass bounded controls; two adjacent actual-resolution proof defects remain."
+    },
+    {
+      "id": "C2",
+      "status": "FAIL",
+      "evidence": [
+        "S01.json",
+        "S02.json"
+      ],
+      "note": "Unmodelled absolute main and LOAD_AS_FILE not refused before proof."
+    },
+    {
+      "id": "C3",
+      "status": "PASS_BOUNDED_ONLY",
+      "evidence": [
+        "S03.json",
+        "S09.json",
+        "S10.json",
+        "S16.json",
+        "S17.json",
+        "static-regression-bindings.json"
+      ],
+      "note": "Four positive controls, known product FAIL, and same-input default/P1 match. Not a whole-suite conclusion."
+    },
+    {
+      "id": "C4",
+      "status": "PASS",
+      "evidence": [
+        "source-before.json",
+        "source-after.json",
+        "input-manifest.json"
+      ],
+      "note": "Exact frozen two-path delta, all15 other prior source paths unchanged; no integration acceptance."
+    }
+  ],
+  "limitations": [
+    "Twenty distinct bounded synthetic scenarios; not exhaustive Node resolution conformance.",
+    "Producer 38 CLI and115 engine/compiler passes are frozen inputs, not independent reruns of those suites. Prior16 gates/38 hashes remain historical and confer no current readiness.",
+    "Default/P1 byte comparison covers one same-input closed ESM fixture; all old21 CLI test bodies were verified unchanged, not independently executed as a full suite.",
+    "S01 CLI exits2 ENOTDIR and has no report; kernel false proof is independently exercised. S02 CLI remains globally INCOMPLETE despite semantic PROVEN/verifiedtrue. No new global false PASS is claimed for these two probes.",
+    "Synthetic installed references attest controlled byte equality only, not npm offline/SRI provenance. All20 evaluated/reference vendor inventories independently match.",
+    "No integration, B6, full-gate, consumer, compiled-receipt or production approval. Lead concurrent publicdist/reference/resource work is outside this frozen-source review.",
+    "Shared native ledgers, .agent, source, manifests/lock, prior sealed evidence and peer resources were not written; shared-ledger final updates are for the lead.",
+    "Collector attempt1 crashed on absent CLI JSON; attempt2 was interrupted after returning from its launcher, exit not observed. Both raw sets remain; accepted measurements come from completed foreground attempt3."
+  ],
+  "last_completed_action": "Independent R1 static/native inspection and20 distinct physical controlled scenarios with two mandatory P1 findings; source17 sentinel unchanged.",
+  "next_action": "Lead to repair both mandatory negative conformance gaps under same approved SPEC0236, preserve current raw results, freeze new candidate and submit R2 within remaining budget before gates/promotion.",
+  "artifactManifest": "artifact-manifest.json"
+}

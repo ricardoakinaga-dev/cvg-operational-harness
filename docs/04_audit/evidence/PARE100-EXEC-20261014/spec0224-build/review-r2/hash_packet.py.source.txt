@@ -1,0 +1,20 @@
+import hashlib,json,pathlib,sys,datetime
+root=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2')
+out=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2')
+expected='6b16ece08c5b6427064cd18a49490f63b912ec2ce4340977c1aa5cbceedf8571'
+records=[]
+def check(path,expected_hash,expected_bytes,kind):
+ data=path.read_bytes(); h=hashlib.sha256(data).hexdigest()
+ records.append(dict(path=str(path),kind=kind,bytes=len(data),sha256=h,ok=h==expected_hash and (expected_bytes is None or len(data)==expected_bytes)))
+check(root/'manifest.json',expected,None,'manifest')
+m=json.loads((root/'manifest.json').read_bytes())
+for s in m['sources']:
+ check(pathlib.Path(s['live']),s['sha256'],s['bytes'],'live')
+ check(root/s['copy'],s['sha256'],s['bytes'],'copy')
+for p in m['proofs']: check(root/p['path'],p['sha256'],p['bytes'],'proof')
+report=dict(phase=sys.argv[1],at=datetime.datetime.now(datetime.timezone.utc).isoformat(),sources=len(m['sources']),proofs=len(m['proofs']),allMatch=all(r['ok'] for r in records),records=records)
+(out/('hash-'+sys.argv[1]+'.json')).write_text(json.dumps(report,indent=2)+'\n')
+print(json.dumps({k:v for k,v in report.items() if k!='records'}))
+for r in records:
+ if not r['ok']: print('MISMATCH',r)
+sys.exit(0 if report['allMatch'] else 1)

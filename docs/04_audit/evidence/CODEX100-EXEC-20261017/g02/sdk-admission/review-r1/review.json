@@ -1,0 +1,308 @@
+{
+ "kind": "INDEPENDENT_REVIEW",
+ "round": 1,
+ "task": "DX100-G02:ADMIT-SDK-PROFILE-AND-ACCEPTANCE",
+ "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r1/",
+ "reviewed_at": "2026-10-18T20:30:21Z",
+ "subject": "review-freeze-r1.json",
+ "subject_sha256": "9e58bee26a6a67affba544b9dc078c93c89178bcbfb4225d2693ab1399b88d58",
+ "subject_hash_check": {
+  "before": {
+   "review_freeze_sha256": "9e58bee26a6a67affba544b9dc078c93c89178bcbfb4225d2693ab1399b88d58",
+   "files_frozen": 650,
+   "files_matching": 649,
+   "mismatches": [
+    {
+     "path": "budget.json",
+     "frozen_bytes": 3336,
+     "current_bytes": 3670,
+     "cause": "registro do início desta revisão (reviews_used 0->1, reviews[] com uma entrada, updated_at) gravado às 17:12:06 local, 15 s depois do freeze (17:11:51); reconstrução com reviews_used=0 e reviews=[] dá exatamente 3336 bytes. Ver R1-F02."
+    }
+   ],
+   "extra_files_not_frozen": [
+    "review-freeze-r1.json (o próprio freeze)"
+   ]
+  },
+  "after": {
+   "review_freeze_sha256": "9e58bee26a6a67affba544b9dc078c93c89178bcbfb4225d2693ab1399b88d58",
+   "files_frozen": 650,
+   "files_matching": 649,
+   "mismatches": [
+    "budget.json (mesmo estado do início: 3670 bytes, sha256 eb2ef0738427d76719fcbab8d636ae461424921af82a5e5b03766b07e0951cc3, mtime 17:12:06 inalterado)"
+   ],
+   "note": "Nenhuma alteração do objeto durante a revisão. Autotestes e reevaluate rodaram com python3 -I -B para não gravar bytecode em python/__pycache__ (que faz parte do objeto congelado)."
+  },
+  "source_freeze_r2": "source-freeze-r2.json (507eb9f3...) confere com as 21 fontes atuais (bytes, sha256 e modo).",
+  "identity_and_emit": "identity-freeze.json (ebfb308f...) e compiler/emit.json (0576db71...) batem com command.json e result.json dos 19 casos e do TSC-SDK-EMIT; emit.json liga identity-freeze e source-freeze-r2; os 10 emitidos em compiler/emitted e runtime/emitted batem com emit.json."
+ },
+ "verdict": "REVISE",
+ "mandatory_findings": [
+  "R1-F01"
+ ],
+ "findings": [
+  {
+   "id": "R1-F01",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "errata.json",
+   "line": 46,
+   "title": "R2-F04 declarado CLOSED, mas o known-bad \"interrupt sem script\" de SDKPY08/09 (e as variantes bloqueantes de SDKPY07) continua terminando INVALID por prazo; os autotestes que mostram MISMATCH usam capturas que o peer congelado não produz",
+   "evidence": "O R2-F04 original (sdk-observation-drivers/review-r2/review.json) tinha duas partes: closed=false em SDKPY07 e \"Um interrupt extra em SDKPY09/SDKPY08 não tem script, e o SDK espera sem timeout até o watchdog\". A errata cita como evidência só SDKPY07 (supervisor.py:847-856, hook.late_close_turn_A_closed_true, autotestes SDKPY07). Em serviço: fixture-rpc.py:51-52 e :166-168 não respondem a chave já usada ou método sem script (só UNSCRIPTED); o SDK chama turn_interrupt de forma síncrona dentro de cancel_goal_operation (inputs/sdk/python/src/openai_codex/client.py:572-597) e espera em client.py:382 `item = waiter.get()` sem timeout; fail_all só ocorre quando o reader vê EOF do stdout do adapter, o que exige a saída do peer, que exige FINISH_PEER, que exige CALLS_DONE+CLIENT_STDIN_CLOSED (supervisor.py:849-856), que o driver bloqueado nunca emite; resultado: watchdog do driver (python-driver.py:426-428) -> INVALID -> INVALID_CAPTURE. O mesmo vale para turn/interrupt enviado de forma bloqueante no caminho de cancelamento ou no callback antes do close() em SDKPY07 (sem API_CANCELLED ou sem HOOK_CLOSED). selftest_acceptance.py:217-240 sintetiza a interrupção extra sem resposta seguida de API_RESULT de cancel_goal_operation (ou de HOOK_CLOSED), e os checks acceptance.SDKPY08.known_bad_third_interrupt_mismatch, acceptance.SDKPY09.known_bad_retry_same_mismatch e acceptance.SDKPY07.known_bad_interrupt_sent_mismatch (selftest_acceptance.py:269-270) provam só o predicado.",
+   "impact": "Nenhum dos 19 PASS_CLIENT_OBSERVATION muda: o caminho é fail-closed (INVALID também rejeita). Mas a afirmação \"R2-F04 CLOSED\" (errata.json) e \"R2-F04 fechado\" (validation-r1.json#/criteria/A01), junto com os KNOWN_BAD de SDKPY08/09 (acceptance.py:79-80) e os nomes dos autotestes, dizem que esses known-bad viram MISMATCH em serviço, o que é falso para SDKPY08/09 e para as variantes bloqueantes de SDKPY07.",
+   "fix": "Correção documental, sem serviço e sem reabrir vaga: errata R2-F04 -> CLOSED_PARTIAL (closed=false em SDKPY07 vira MISMATCH; interrupt sem script em SDKPY08/09 e interrupt bloqueante em SDKPY07 continuam INVALID_CAPTURE por prazo, fail-closed) com residual explícito; marcar os três autotestes como \"nível de predicado, captura sintética inalcançável com o peer congelado\"; ajustar validation A01/A08 e os textos KNOWN_BAD de SDKPY08/09. MISMATCH em serviço só com peer que responda a pedidos sem script, o que pede nova identidade, replan e novas vagas, fora desta unidade."
+  },
+  {
+   "id": "R1-F02",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "budget.json",
+   "line": 6,
+   "title": "Ledger vivo dentro do freeze: budget.json mudou depois do review-freeze-r1",
+   "evidence": "review-freeze-r1.json registra budget.json com 3336 bytes (a12ececa...); o arquivo atual tem 3670 bytes (eb2ef073...) e mtime 17:12:06, depois do freeze (17:11:51). A diferença é o registro desta revisão (reviews_used=1, reviews[0] STARTED). A reconstrução com reviews_used=0 e reviews=[] dá exatamente 3336 bytes, mas o sha256 congelado não pode ser reconferido (updated_at anterior desconhecido).",
+   "impact": "A conferência de integridade pedida falha em 1/650 por um motivo benigno; ninguém consegue provar byte a byte que o conteúdo congelado era só isso.",
+   "fix": "Congelar depois de registrar a revisão ou tirar os ledgers vivos (budget.json, case-ledger.json) do freeze e congelá-los à parte (cópia ou hash por rodada)."
+  },
+  {
+   "id": "R1-F03",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 558,
+   "title": "SELF-F01 confirmado: reevaluate compara objetos Python sem normalizar JSON; tuplas de goal() dão identical_to_stored=false em SDKPY08/09",
+   "evidence": "acceptance.py:301 monta `shape` como lista de tuplas (method, params), gravada no detalhe de wire.pause_then_interrupt_A[_then_B]; o acceptance.json guarda listas. acceptance.py:558 compara stored['predicates'] == acc['predicates'] direto. Reavaliei os 19 e comparei o dicionário inteiro depois de json.loads(json.dumps(acc)): igual ao armazenado em todas as chaves nos 19 casos. A única diferença crua está em SDKPY08/09; não há outra causa.",
+   "impact": "O reevaluate sai com código 1 em 2/19 casos, embora o conteúdo se reproduza. O critério \"reevaluate precisa reproduzir acceptance.json\" (interface-bindings-v2#/acceptance/offline) falha só na forma.",
+   "fix": "Normalizar por JSON nos dois lados da comparação (ou montar `shape` com listas) e comparar o documento inteiro, não só outcome+predicates."
+  },
+  {
+   "id": "R1-F04",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 250,
+   "title": "Alguns predicados são fracos ou julgam o peer sintético, não o cliente",
+   "evidence": "api.request_result_validated (acceptance.py:250-251) aceita qualquer dict com valores None, inclusive {} sem prova de model_validate (o observado tem as 4 chaves de InitializeResponse; o predicado não exige isso). wire.no_ack_for_initialized (:219), wire.initialize_reply_learned_id (:204) e wire.peer_requests_serial (:259) olham as linhas do servidor, que são escritas pelo peer próprio. peer_requests_serial também não confere a intercalação pedido/resposta, mas os bytes do adapter mostram a ordem serial (SDKPY06 adapter seq 8,10,12,14,16,18).",
+   "impact": "Nenhum resultado muda; os bytes de fio sustentam os 19 PASS. Alguns IDs prometem mais do que verificam.",
+   "fix": "Exigir em request_result_validated o conjunto exato de chaves do modelo; renomear ou documentar os predicados de sanidade do peer; conferir a intercalação pelos offsets RAW_READ do adapter."
+  },
+  {
+   "id": "R1-F05",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 223,
+   "title": "Partes do expected_observation e do known_bad sem predicado próprio",
+   "evidence": "SDKPY02/04 pedem \"capture shows initialized precedes guard\". O conjunto de predicados (guard_absent, acceptance.py:223-235) não tem predicado de ordem entre o initialized e o erro do guard. Os brutos mostram a ordem por mono_ns: SDKPY02 adapter RAW_READ initialized 12991549466040 < driver API_ERROR 12991549725003; SDKPY04 12994637072173 < 12994637156970. SDKTS04: o KNOWN_BAD (acceptance.py:84) diz que rejeita \"overwrite present cache-write value\", mas o fixture congelado não tem cache_write_input_tokens presente, então ??= e = não se distinguem nesse caso.",
+   "impact": "Os resultados estão certos, mas a ordem fica fora do julgamento e uma rejeição anunciada não pode acontecer com o fixture do HOW.",
+   "fix": "Adicionar wire.initialized_before_guard por mono_ns (adapter RAW_READ do initialized <= mono do API_ERROR) e corrigir o texto KNOWN_BAD de SDKTS04 para declarar que essa parte do known-bad fica sem fixture."
+  },
+  {
+   "id": "R1-F06",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/selftest_acceptance.py",
+   "line": 269,
+   "title": "negative_power do HOW incompleto nos autotestes",
+   "evidence": "containment-and-observer.json#/observer/negative_power pede controles para initialized omitido, terminal falso, ID de resposta trocado, código emitido alterado e cancelamento relatado como parada remota. Há autoteste para initialized omitido e para drift de hash/staging, mas nenhum para ID de resposta trocado nem para terminal falso. Não há negativo de known-bad para SDKPY03, SDKPY05, SDKTS01, SDKTS03, SDKTS06 e SDKTS07.",
+   "impact": "O poder negativo de parte dos predicados não fica demonstrado. Nenhum PASS observado muda.",
+   "fix": "Acrescentar variantes sintéticas: reply com id trocado (deve dar MISMATCH ou INVALID), linha em branco ignorada em SDKTS03, None bloqueado em SDKPY05, agregado devolvido em SDKTS07 etc."
+  },
+  {
+   "id": "R1-F07",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "interface-bindings-v2.json",
+   "line": 248,
+   "title": "Suplemento v2 não foi emendado depois do R2: a regra de maps e o selo do emit dizem mais do que o código faz",
+   "evidence": "witnesses.maps (linha 248): todo mapeamento com inode != 0 precisa ser raiz RO por (dev, inode), com exceção só para memfd no Node. supervisor.py:443-447 aceita anon_inode sem x nas duas linguagens (ANONYMOUS_KERNEL_OBJECT_NO_EXEC); os 10 casos TS têm 4 entradas anon_inode:[io_uring] rw-s. compiler_stage.seal (linha 281) diz que confere \"lista do compilador == varredura independente do host\"; supervisor.py:1322 só registra lists_equal. validation A06 repete a igualdade como critério. A mudança está documentada só em freeze-history.json. Observado: lists_equal=true nos 10 e só anéis io_uring sem exec, então nenhum resultado muda.",
+   "impact": "Quem julgar pelo texto congelado do suplemento classificaria os maps TS como desconhecidos e acharia que a igualdade de imports é condição do selo.",
+   "fix": "Emendar interface-bindings-v2 (ou publicar v2.1) com a classe ANONYMOUS_KERNEL_OBJECT_NO_EXEC e \"igualdade registrada, allowlist exigida\", ou passar a exigir a igualdade no código."
+  },
+  {
+   "id": "R1-F08",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 1292,
+   "title": "require_calls=0 em exec.js engana: o scanner não vê require por alias",
+   "evidence": "compiler/emit.json#/host_import_scan/exec.js registra require_calls 0, mas compiler/emitted/exec.js:17 e :320-322 usam createRequire(import.meta.url), moduleRequire.resolve(...) e codexRequire.resolve(...). O regex `\\brequire(?:\\.resolve)?\\s*\\(` não pega identificadores com alias. O campo limitation de emit.json declara esse caminho CommonJS, que só é alcançável sem codexPathOverride.",
+   "impact": "A métrica sugere que não há resolução CommonJS no emitido. O limite está declarado em texto, então nenhuma afirmação central fica errada.",
+   "fix": "Remover a métrica ou contar também createRequire e .resolve( por alias, apontando para a limitation."
+  },
+  {
+   "id": "R1-F09",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "validation-r1.json",
+   "line": 127,
+   "title": "A12 cita case-results.json#/meaning para limites que não estão lá",
+   "evidence": "case-results.json:260 diz só \"Não é recibo de paridade nem terminal nativo; recibos funcionais 0\". Os abertos listados na nota A12 (wheel/npm distribuídos, Codex CLI real, tsup/typecheck, demais plataformas, SDKPY07 instrumentado) só existem na própria nota. Também não está declarado que o testemunho de maps cobre só código nativo mapeado: os .py e os .js carregados são identificados por admissão, verify_tree e /profile RO, não por maps.",
+   "impact": "O artefato de resultados que pode circular sozinho não traz os limites. Nenhuma afirmação de crédito está errada (paridade 0, recibos 0).",
+   "fix": "Incluir em case-results.json um bloco limits com esses itens e o escopo do testemunho de maps."
+  },
+  {
+   "id": "R1-F10",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "claim.json",
+   "line": 13,
+   "title": "Leitura do orçamento sem ratificação registrada do Lead",
+   "evidence": "claim.json#/budget_interpretation põe os 19 casos fora dos 12 serviços e diz que a leitura foi \"comunicada ao Lead\". Nenhum aceite foi registrado na unidade. Foram 27 serviços transitórios no total (8 sdkadm + 19 sdkcase; 27 tentativas em runtime/attempts e no resource-receipt-precheck), sem retry e sem vaga reaberta.",
+   "impact": "A leitura está declarada de forma honesta e antes do primeiro serviço. Só falta o registro de que o Lead concordou.",
+   "fix": "Anexar a disposição do Lead (aceite da leitura 12+19) antes da promoção."
+  },
+  {
+   "id": "R1-F11",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/__pycache__/selftest_acceptance.cpython-312.pyc",
+   "line": null,
+   "title": "Higiene da evidência: bytecode dentro do objeto e contagem do autoteste sem nota",
+   "evidence": "python/__pycache__ (2 .pyc) está no freeze. selftest_acceptance.cpython-312.pyc foi compilado de uma versão anterior do fonte (cabeçalho: 30629 bytes, mtime 17:00:14; fonte atual 31120 bytes, 17:06:34). selftests/acceptance-selftest.json registra 120 checks; a execução atual sem argumento dá 117, porque os três gates.* rodam só quando os freezes não existem (selftest_acceptance.py:491-496).",
+   "impact": "Cosmético. Nenhum resultado muda.",
+   "fix": "Tirar __pycache__ da evidência ou do freeze e anotar no relatório do autoteste que os gates são condicionais."
+  }
+ ],
+ "checks_run": [
+  {
+   "check": "Integridade do objeto (650 arquivos) antes e depois",
+   "result": "649/650 iguais; budget.json mudou depois do freeze pelo registro desta revisão (R1-F02); nada mudou durante a revisão."
+  },
+  {
+   "check": "source-freeze-r2.json contra as fontes atuais (bytes, sha256, modo)",
+   "result": "21/21 OK; r1->r2 muda só python/supervisor.py."
+  },
+  {
+   "check": "identity-freeze, emit.json e source-freeze nos command.json e result.json dos 19 casos e do TSC-SDK-EMIT",
+   "result": "OK; service_properties iguais em todos; emit_record dos 10 casos TS bate com compiler/emit.json."
+  },
+  {
+   "check": "profile-manifest e admission.json contra os perfis em runtime/attempts (re-hash) e contra identity-freeze e emit.json",
+   "result": "19/19: 198 (PY) ou 23 (TS) arquivos sem divergência, árvore fechada, admission idêntico, sdk-python e python-deps iguais a identity-freeze#/trees, sdk-emitted igual a emit.json; perfis 0444/0555 (adapter-typescript 0555)."
+  },
+  {
+   "check": "python3 -I -B python/acceptance.py reevaluate cases/<dir> nos 19",
+   "result": "19/19 com o mesmo outcome (PASS_CLIENT_OBSERVATION) e o mesmo veredito de captura; identical_to_stored=false só em SDKPY08/09."
+  },
+  {
+   "check": "Reavaliação com normalização JSON do documento inteiro",
+   "result": "Documento inteiro igual ao armazenado nos 19; SELF-F01 confirmado como única causa (tuplas em acceptance.py:301)."
+  },
+  {
+   "check": "python3 -I -B python/selftest_python.py (sem argumento)",
+   "result": "python 115/0 falhas; node 103/0 falhas; exit 0."
+  },
+  {
+   "check": "python3 -I -B python/selftest_acceptance.py (sem argumento) e diff de IDs contra selftests/acceptance-selftest.json",
+   "result": "117/0 falhas, exit 0; os 3 IDs a menos são gates.* condicionados à ausência dos freezes; nenhum status diverge; hashes dos fontes registrados iguais aos atuais."
+  },
+  {
+   "check": "node --check nas fontes Node (adapter-typescript em cópia .cjs) e nos 10 emitidos (cópias .mjs)",
+   "result": "Todos rc=0."
+  },
+  {
+   "check": "Brutos: events-*.bin vs events-*.jsonl vs events-*.recv.jsonl vs controls-*.bin vs result.actions/frames/raw_frame_bytes",
+   "result": "19/19 coerentes; sem cauda parcial; recv_ns monotônico; controles iguais às ações CONTROL."
+  },
+  {
+   "check": "R2-F02: alinhamento mono_ns (CLOCK_MONOTONIC) contra t0+recv_ns",
+   "result": "Nenhum frame recebido antes de emitido nos 19 casos; atraso máximo 1.5-8.6 ms."
+  },
+  {
+   "check": "Fio decodificado (base64 dos RAW_READ) e linha do tempo de SDKPY02, SDKPY06, SDKPY07, SDKPY08, SDKPY09, SDKTS02, SDKTS03, SDKTS04, SDKTS07, SDKTS08, SDKTS09, SDKTS10",
+   "result": "Bytes conferem com expected_observation e com a fonte do pin: guard 0.150.0 bloqueia (texto de _runtime_requirements); pausa -32603 suprimida, interrupt A, extração de B pelo regex de _active_turn_id_from_error, um único B; mesmo ID A sem segundo pedido; default handler accept/accept/{} com IDs ecoados; SDKPY07 com ABORT_NOW depois de REQUEST_HELD, API_CANCELLED antes de RELEASE_REPLY, HOOK_CLOSED(A, true) antes de CLIENT_STDIN_CLOSED e sem turn/interrupt (414 bytes de stdin); TS parse error com linha e SyntaxError, thread.id e cache_write 0 no yield, code 7 com stderr, AbortError depois de ABORT_CALLED e SIGTERM no adapter."
+  },
+  {
+   "check": "Formas KNOWN_SIGNAL_TERMINATION em SDKTS02/03/07/08 contra exec.ts e thread.ts e pela ordem mono",
+   "result": "Justificadas: o finally de exec.ts faz `if (!child.killed) child.kill()` com o filho vivo; em SDKTS03/07/08 o SIGTERM chega antes do RELEASE_EXIT do peer; sem sinal do supervisor nem ABORT_NOW. A forma obrigatória em SDKTS10 (abort -> SIGTERM do spawn) é coerente com o observado."
+  },
+  {
+   "check": "Barreira de EOF e RELEASE_EXIT (supervisor.advance e release_driver; python-driver close_client_stdin; Popen.send_signal do 3.12 sem sinal em zumbi)",
+   "result": "FINISH_PEER só depois de CLIENT_STDIN_CLOSED e STDIN_EOF; RELEASE_EXIT só com adapter e peer mortos ou zumbis pelo /proc; SDK_CLIENT_CLOSED rc=0 bate com o END do adapter nos 9 casos PY. É suficiente para os julgamentos de ausência no recorte do HOW; o residual de deadlock está em R1-F01."
+  },
+  {
+   "check": "Reclassificação independente de maps-driver.txt por (dev, inode) contra o host atual",
+   "result": "PY: 29 raízes RO; TS: 8 raízes RO e 4 anon_inode:[io_uring] rw-s; nenhum desconhecido; as entradas batem com result.maps_witness."
+  },
+  {
+   "check": "environ do adapter e argv por /proc",
+   "result": "PY igual a FIXED_ENV; TS igual a {HOME, PATH, CODEX_INTERNAL_ORIGINATOR_OVERRIDE}; cmdline TS [/runtime/node,/profile/adapter-typescript,exec,--experimental-json]."
+  },
+  {
+   "check": "Reaquisição: reacquisition.json, materialization.json e raw/ contra sdk-profile-artifacts/validation.json (4394232f...) e lock",
+   "result": "7/7 na primeira tentativa; bytes/sha256 iguais a validation.json; sha256 e sha512 dos arquivos em runtime/raw recalculados e iguais; python-deps (169) igual ao merge autenticado; helper só com zipfile/tarfile, sem installer nem import."
+  },
+  {
+   "check": "Compilador: transpile.mjs qualify, verify_emit_report, seal_emit e emit.json",
+   "result": "Três sondas constantes PASS; 10 saídas sem diagnóstico; allowlist exigida nas duas listas; lists_equal=true nos 10 (só registrado, R1-F07); emitidos preservam ??= e o finally com kill."
+  },
+  {
+   "check": "fixture-cases.json contra cases.json do HOW (5f8587ed...)",
+   "result": "As 19 linhas são idênticas a fixture_input."
+  },
+  {
+   "check": "Ledgers: case-ledger, budget e diretórios",
+   "result": "19 vagas EXECUTED, uma unidade por caso, ligadas aos result.json; 8 serviços no budget com resultados iguais aos diagnósticos e ao compilador; 27 tentativas em runtime/attempts; nenhum retry escondido."
+  }
+ ],
+ "criteria": {
+  "A01": {
+   "status": "PARCIAL",
+   "note": "R1-F14, R2-F01, R2-F02 e R2-F03 fechados. R2-F04 fechado só para closed=false em SDKPY07 (R1-F01)."
+  },
+  "A02": {
+   "status": "ATENDIDO",
+   "note": "Quatro DIAG_PASS com source-freeze-r2; tentativas R1 preservadas."
+  },
+  "A03": {
+   "status": "ATENDIDO",
+   "note": "Igualdade com validation.json e com o lock reconferida, inclusive nos arquivos raw."
+  },
+  "A04": {
+   "status": "ATENDIDO",
+   "note": "Cinco diagnósticos PASS; DIAG-PY-STAGE recusa drift, extra, symlink e gate sem módulo alvo carregado."
+  },
+  "A05": {
+   "status": "ATENDIDO",
+   "note": "Freezes reconferidos e ligados em todos os comandos."
+  },
+  "A06": {
+   "status": "ATENDIDO_COM_RESSALVA",
+   "note": "Qualificação real porém mínima (identidade por sha256 + 3 sondas). Igualdade de imports só registrada e métrica de require enganosa (R1-F07, R1-F08). Emitidos não comparados ao bundle upstream (limite declarado)."
+  },
+  "A07": {
+   "status": "ATENDIDO",
+   "note": "19 vagas uma vez, em série, sem retry; brutos completos e coerentes."
+  },
+  "A08": {
+   "status": "ATENDIDO_COM_RESSALVA",
+   "note": "Os 19 PASS são sustentados pelos bytes e pela fonte; reprodução confirmada depois de normalizar JSON (R1-F03). Autotestes known-bad de SDKPY07/08/09 usam capturas inalcançáveis (R1-F01). Predicados fracos e omitidos em R1-F04/R1-F05/R1-F06."
+  },
+  "A09": {
+   "status": "ATENDIDO",
+   "note": "os_checks verdes; maps reclassificado; environ exato; SDK_CLIENT_CLOSED espelhado; texto do suplemento desatualizado (R1-F07)."
+  },
+  "A10": {
+   "status": "ATENDIDO_COM_RESSALVA",
+   "note": "8/12 + 19/19, 0 retries, nenhuma vaga reaberta; leitura 12+19 sem ratificação registrada (R1-F10); ledger alterado depois do freeze (R1-F02)."
+  },
+  "A11": {
+   "status": "ATENDIDO_NO_ESCOPO_VERIFICADO",
+   "note": "Nada fora do claim dentro da unidade; ledgers 99/20/30 e git não verificados (operações git proibidas a esta revisão)."
+  },
+  "A12": {
+   "status": "ATENDIDO_COM_RESSALVA",
+   "note": "Paridade 0 e recibos funcionais 0 em todos os artefatos; o artefato citado não traz a lista de limites (R1-F09)."
+  }
+ },
+ "limits": [
+  "Nenhum serviço, systemd-run, bwrap, rede, download ou import de SDK, Pydantic ou typescript.js foi executado nesta revisão; os testemunhos do SO (cgroup, systemd, /proc/maps, environ, PIDs) foram aceitos como gravados e só reconferidos quanto à coerência interna e, no caso de maps, contra (dev, inode) atuais do host.",
+  "Os autotestes e o reevaluate rodaram com python3 -I -B (em vez de -I) para não gravar bytecode em python/__pycache__, que faz parte do objeto; o -B não muda a semântica.",
+  "O conteúdo congelado de budget.json não pode ser reconstruído byte a byte; só o tamanho foi reconstruído.",
+  "A reaquisição não foi refeita; a igualdade com validation.json e com o lock foi verificada sobre os arquivos raw preservados em runtime/raw.",
+  "A saída do compilador não foi comparada ao bundle npm distribuído nem a tsup; esse limite já está declarado pela unidade.",
+  "A11 só foi verificado dentro de UNIT; ledgers 99/20/30, coordenação e catálogos não foram verificados (git proibido).",
+  "A análise de deadlock em R1-F01 é estática, feita sobre a fonte do pin e o peer congelado; nenhum known-bad foi executado."
+ ],
+ "functional_receipts": 0,
+ "parity_credit": 0
+}

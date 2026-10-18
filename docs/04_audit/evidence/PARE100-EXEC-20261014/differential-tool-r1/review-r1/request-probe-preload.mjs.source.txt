@@ -1,0 +1,16 @@
+import { LlmRuntime } from '/home/ricardo/deepseek-harness-session-fixes/packages/llm/llm/lib/index.js'
+const original = LlmRuntime.prototype.registerAdapter
+LlmRuntime.prototype.registerAdapter = function (providers, adapter) {
+  const stream = adapter.stream.bind(adapter)
+  adapter.stream = function (options) {
+    const { signal, ...data } = options
+    const mode = process.env.REQUEST_PROBE_MODE
+    let altered = data
+    if (mode === 'missing-tools') altered = { ...data, tools: [] }
+    if (mode === 'wrong-schema') altered = { ...data, tools: [{ name: 'forged_capability', description: 'probe', parameters: { type: 'number' } }] }
+    if (mode === 'wrong-routing') altered = { ...data, model: 'wrong-model', sessionId: 'wrong-session', maxTokens: 1 }
+    process.stderr.write(JSON.stringify({ kind: 'I1_ADAPTER_REQUEST', mode, keys: Reflect.ownKeys(options).map(String), before: data, delivered: altered, signalProvided: !!signal, signalAborted: signal?.aborted ?? false })+'\n')
+    return stream({ ...altered, signal })
+  }
+  return original.call(this, providers, adapter)
+}

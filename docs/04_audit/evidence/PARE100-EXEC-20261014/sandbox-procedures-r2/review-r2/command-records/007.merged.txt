@@ -1,0 +1,409 @@
+FILE reference/packages/sandbox/sandbox-local/src/index.ts
+1: /**
+2:  * Local sandbox backend. It selects the platform runner chain (Linux bwrap then
+3:  * Landlock; macOS Seatbelt; Windows the ACL restricted-token runner), functionally probes
+4:  * competing candidates once, and reports each wrap's enforcement and stderr
+5:  * classification facts. Missing or unusable confinement fails closed rather
+6:  * than returning the original argv.
+7:  *
+8:  * The windows-acl rung additionally owns the write grants: the write SID is
+9:  * the per-WORKSPACE identity derived from the canonical workspace path
+10:  * (`workspaceWriteSid`), while every live session receives a RANDOM private
+11:  * temp directory and its own derived capability (`tempWriteSid`). The
+12:  * workspace-root ACE materializes once per workspace per server lifetime
+13:  * and STANDS (the cross-session reuse cache — the exact-ACE skip makes
+14:  * every later provision O(1) instead of re-propagating the tree per
+15:  * session); the private-temp ACEs are revoked on dispose. The runner
+16:  * receives both SIDs (their presence marks the seam-managed contract) and
+17:  * stops managing DACLs itself. The rung reports partial enforcement because
+18:  * NTFS hard links alias one file object across paths, reads stay unconfined,
+19:  * and a tree another AppContainer tool has ACL'd with a package SID is not
+20:  * readable by the Low-integrity child.
+21:  * @module @deepseek-ai/dsh-sandbox-local
+22:  */
+23: 
+24: import { spawnSync } from 'node:child_process'
+25: import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+26: import { createRequire } from 'node:module'
+27: import { tmpdir } from 'node:os'
+28: import { join } from 'node:path'
+29: import { fileURLToPath, pathToFileURL } from 'node:url'
+30: import {
+31:   LAUNCHER_BIN,
+32:   LAUNCHER_FAILURE_EXIT,
+33:   launcherPath as landlockLauncherPath,
+34:   probe as defaultProbeLandlock,
+35: } from '@deepseek-ai/node-addon-system/landlock-run'
+36: import { Context } from '@deepseek-ai/cordis'
+37: import z from '@deepseek-ai/schemastery'
+38: import { SandboxProvider, SandboxUnavailableError, canonicalPath } from '@deepseek-ai/dsh-sandbox'
+39: import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnforcement, SandboxExecutionEnvironment, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+40: import type { SessionId } from '@deepseek-ai/dsh-session'
+41: import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
+42: import { assertNever } from '@deepseek-ai/dsh-util-values'
+43: import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+44: 
+45: const require = createRequire(import.meta.url)
+46: 
+47: /** Resolve a package entry without relying on Vite's incomplete import.meta.resolve shim. */
+48: function resolveModulePath(specifier: string): string {
+49:   return require.resolve(specifier)
+50: }
+51: 
+52: /** Resolve a package entry as a URL for a generated import expression. */
+53: function resolveModuleUrl(specifier: string): string {
+54:   return pathToFileURL(resolveModulePath(specifier)).href
+55: }
+56: 
+57: /** Plugin config. All optional — `static Config` supplies the defaults. */
+58: export interface Config {
+59:   /**
+60:    * Override the runner argv; bwrap-compatible profile arguments are appended. A
+61:    * non-empty override asserts full enforcement and skips built-in selection and
+62:    * probing. A runner that starts but refuses its profile must be identifiable by
+63:    * {@link runnerFailureSignatures}. Consumers classify a spawn rejection only after
+64:    * confirming the workdir is usable. `ENOENT` or `EACCES` identifies the runner when
+65:    * `error.path` equals argv[0] and `error.syscall` is `spawn` or `spawn <runner>`, or
+66:    * when `error.path` is absent and `error.syscall` is exactly `spawn <runner>`.
+67:    */
+68:   runnerCommand?: string[]
+69:   /**
+70:    * Case-insensitive stderr substrings emitted when a configured
+71:    * {@link runnerCommand} refuses its profile before executing the wrapped
+72:    * command. Required and non-empty with `runnerCommand`; rejected without
+73:    * it. Each entry is a non-empty, single-line, case-insensitive substring
+74:    * covering the executable runner's own failure dialect.
+75:    */
+76:   runnerFailureSignatures?: string[]
+77:   /** Positive timeout for each functional probe; zero would mean unbounded to Node. */
+78:   probeTimeoutMs?: number
+79: }
+80: 
+81: /** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
+82: function defaultProbeBwrap(timeoutMs: number): boolean {
+83:   const workspaceRoot = mkdtempSync(join(tmpdir(), 'dsh-bwrap-probe-'))
+84:   try {
+85:     const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'workspace-write', workspaceRoot }), '--', 'true'], {
+86:       timeout: timeoutMs,
+87:       stdio: 'ignore',
+88:     })
+89:     return probe.status === 0
+90:   } finally {
+91:     rmSync(workspaceRoot, { recursive: true, force: true })
+92:   }
+93: }
+94: 
+95: /**
+96:  * Functional Seatbelt probe: apply the real `read-only` profile through
+97:  * `sandbox-exec -p` and run `true` under it — exit 0 means the kernel
+98:  * accepted and enforced the profile (`sandbox-exec` exits non-zero when
+99:  * `sandbox_init` refuses it). A missing `sandbox-exec` (every non-macOS
+100:  * host) fails the spawn and probes `unusable`, exactly like the other
+101:  * rungs' absent binaries. Apple marks the CLI deprecated but ships it on
+102:  * every macOS; if it ever disappears, this probe is what fails closed.
+103:  */
+104: function defaultProbeSeatbelt(seatbeltExec: string, timeoutMs: number): boolean {
+105:   const probe = spawnSync(seatbeltExec, [...seatbeltProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], {
+106:     timeout: timeoutMs,
+107:     stdio: 'ignore',
+108:   })
+109:   return probe.status === 0
+110: }
+111: 
+112: /**
+113:  * Functional windows-acl probe: run the runner in read-only mode (zero grants,
+114:  * no ACL mutation) around `cmd /c exit 0` — exit 0 means the runner created
+115:  * the restricted token and spawned the child under it. The win32 chain is a
+116:  * sole candidate, so the product never probes; the probe exists for override
+117:  * chains and mirrors the other rungs' shape.
+118:  */
+119: function defaultProbeWindowsAcl(runnerInvocation: string[], timeoutMs: number): boolean {
+120:   const program = runnerInvocation[0]
+121:   if (program === undefined) return false
+122:   const probe = spawnSync(program, [
+123:     ...runnerInvocation.slice(1),
+124:     '--workspace', tmpdir(), '--temp', tmpdir(), '--mode', 'read-only',
+125:     '--', 'cmd', '/c', 'exit', '0',
+126:   ], {
+127:     timeout: timeoutMs,
+128:     stdio: 'ignore',
+129:   })
+130:   return probe.status === 0
+131: }
+132: 
+133: /** Test hook: inject probe verdicts / a fake launcher / a platform without real runners. */
+134: export interface SandboxInternals {
+135:   /** Replaces `process.platform` for chain selection (exercise any platform's chain from any host). */
+136:   platform?: string
+137:   /** Replaces the platform's chain wholesale (walk mechanics — e.g. probing a rung the product chains only reach unprobed). */
+138:   chain?: readonly SelectedRunner['runner'][]
+139:   /** Replaces the functional `bwrap` probe (the Linux chain's first rung). */
+140:   probeBwrap?: () => boolean
+141:   /** Replaces the functional Landlock launcher probe (the Linux chain's second rung). */
+142:   probeLandlock?: (launcher: string) => SandboxEnforcement | 'unusable'
+143:   /** Replaces the functional Seatbelt probe (the darwin chain's sole rung — only consulted if that chain ever grows). */
+144:   probeSeatbelt?: (seatbeltExec: string) => boolean
+145:   /** Replaces the resolved `landlock-run` launcher path (a fake launcher script). */
+146:   landlockLauncher?: string
+147:   /** Replaces the `sandbox-exec` executable the probe and wraps invoke (a fake script). */
+148:   seatbeltExec?: string
+149:   /** Replaces the resolved windows-acl runner argv prefix (a fake runner). */
+150:   windowsAclRunnerArgs?: string[]
+151:   /** Replaces the resolved windows-acl runner built entry path (a fake lib/runner.js location). */
+152:   windowsAclRunnerEntry?: string
+153:   /** Replaces the functional windows-acl probe (the win32 chain's sole rung — only consulted if that chain ever grows). */
+154:   probeWindowsAcl?: () => boolean
+155:   /** Replaces the private-temp-directory removal at provider dispose (a throwing fake exercises the cleanup-failure path). */
+156:   rmTempDir?: (path: string) => void
+157: }
+158: 
+159: /** The chain's verdict: which runner confines, and how completely it enforces. */
+160: type SelectedRunner = { runner: 'bwrap' | 'landlock' | 'seatbelt' | 'windows-acl'; enforcement: SandboxEnforcement }
+161: 
+162: /** One live session/workspace pair's private temp directory and capability. */
+163: interface AclTempCapability {
+164:   dir: string
+165:   writeSid: string
+166:   grant: AclWriteGrant
+167: }
+168: 
+169: /**
+170:  * The runner chain per platform — selection is BY PLATFORM first, probes
+171:  * second: a platform's chain is probed in preference order only when it has
+172:  * MORE than one candidate (probing arbitrates; it does not re-validate a
+173:  * choice that has no alternative). A platform with no chain fails closed at
+174:  * `confine()`. Linux prefers `bwrap` (its mount profile is closest to the
+175:  * mode vocabulary) over the Landlock launcher; darwin has exactly one
+176:  * candidate, selected without any probe.
+177:  */
+178: const PLATFORM_CHAINS: Record<string, readonly SelectedRunner['runner'][]> = {
+179:   linux: ['bwrap', 'landlock'],
+180:   darwin: ['seatbelt'],
+181:   // The Windows restricted-token runner (@deepseek-ai/dsh-sandbox-windows-acl):
+182:   // a sole candidate, selected without a probe — its execution-time refusal
+183:   // fails closed through its stderr signature (windows-acl-run:) and exit 127.
+184:   win32: ['windows-acl'],
+185: }
+186: 
+187: /**
+188:  * Enforcement completeness a rung claims when selected WITHOUT a probe (a
+189:  * chain of one). `bwrap` and Seatbelt govern every promised file effect by
+190:  * construction, so the claim is a profile fact; `landlock` is listed for the
+191:  * table's totality but is unreachable without a probe (the Linux chain has
+192:  * two rungs, so it is only ever selected through its probe, whose report is
+193:  * what distinguishes full from per-ABI-partial — and the launcher additionally
+194:  * self-reports partial enforcement on stderr at every confined run).
+195:  */
+196: const STATIC_ENFORCEMENT: Record<SelectedRunner['runner'], SandboxEnforcement> = {
+197:   bwrap: 'full',
+198:   landlock: 'full',
+199:   seatbelt: 'full',
+200:   // Everyone stays in both restricting lists for process initialization, but
+201:   // the Low label denies the write authority it used to confer. NTFS hard
+202:   // links still alias a granted workspace file to a path outside it, reads
+203:   // stay unconfined, and an AppContainer-ACL'd tree is unreadable to the
+204:   // child: the backend enforces the remaining ACL-addressable surface but
+205:   // must not advertise the absolute promise.
+206:   'windows-acl': 'partial',
+207: }
+208: 
+209: /**
+210:  * A probe bound must be a positive finite number: Node treats
+211:  * `spawnSync({ timeout: 0 })` as NO timeout, so an unvalidated 0 would
+212:  * silently mean "unbounded" — the opposite of what the field promises.
+213:  */
+214: function assertPositiveFinite(name: string, value: number): void {
+215:   if (!Number.isFinite(value) || value <= 0) {
+216:     throw new Error(`sandbox-local: ${name} must be a positive finite number`)
+217:   }
+218: }
+219: 
+220: /**
+221:  * The denial dialect each runner's kernel speaks — the case-insensitive stderr substrings a
+222:  * denied file effect produces under it, carried on every wrap (the seam's
+223:  * `ConfinedArgv.denialSignatures`).
+224:  */
+225: const DENIAL_SIGNATURES = {
+226:   bwrap: ['read-only file system'],
+227:   landlock: ['permission denied'],
+228:   seatbelt: ['operation not permitted'],
+229:   // pwsh/.NET: "Access to the path '...' is denied."; cmd: "Access is denied.";
+230:   // Node EACCES: "permission denied"; EPERM: "operation not permitted".
+231:   'windows-acl': ['access is denied', 'access to the path', 'permission denied', 'operation not permitted'],
+232:   runnerCommand: ['read-only file system', 'permission denied'],
+233: } as const satisfies Record<SelectedRunner['runner'] | 'runnerCommand', readonly string[]>
+234: 
+235: /** The windows-acl runner's documented failure exit (its own RUNNER_FAILURE_EXIT contract, distinct from Landlock's 125). */
+236: const WINDOWS_ACL_RUNNER_FAILURE_EXIT = 127
+237: 
+238: /**
+239:  * Runner-owned fatal diagnostics. Landlock has a versioned exit-125 plus
+240:  * fatal-line launcher-failure contract. Bubblewrap's current fatal paths exit
+241:  * 1 but its public contract does not reserve that status, while sandbox-exec
+242:  * publishes no launcher-failure status; those backends remain signature-only.
+243:  * The windows-acl runner prints `windows-acl-run: <detail>` on every
+244:  * runner-side failure and exits 127 — the rule is exit-gated on that status
+245:  * so a confined command that merely PRINTS the signature (or a runner
+246:  * cleanup failure reported on a non-zero child exit) is never misclassified
+247:  * as "the command did not run". Keep the Landlock tuple aligned with the
+248:  * assembled snapshot fixture at
+249:  * `packages/test-support/session-snapshot/tests/fixtures/partial-landlock-sandbox.ts`.
+250:  */
+251: const RUNNER_FAILURE_RULES = {
+252:   bwrap: [{ fatalSignatures: ['bwrap: '] }],
+253:   landlock: [{
+254:     allowedExitCodes: [LAUNCHER_FAILURE_EXIT],
+255:     fatalSignatures: [`${LAUNCHER_BIN}: `],
+256:     informationalLines: [`${LAUNCHER_BIN}: partial enforcement (older Landlock ABI)`],
+257:   }],
+258:   seatbelt: [{ fatalSignatures: ['sandbox-exec: '] }],
+259:   'windows-acl': [{ allowedExitCodes: [WINDOWS_ACL_RUNNER_FAILURE_EXIT], fatalSignatures: ['windows-acl-run: '] }],
+260: } as const satisfies Record<SelectedRunner['runner'], readonly RunnerFailureRule[]>
+261: 
+262: /**
+263:  * Local process-sandbox provider. Registers as `ctx.sandbox`. Caches the
+264:  * chain verdict and, on the windows-acl rung, the write grants
+265:  * ({@link AclWriteGrant}: the standing workspace-root grant per workspace
+266:  * and the revocable private-temp grant per live session/workspace pair, the
+267:  * latter revoked on provider dispose); the one-time probes spawn nothing
+268:  * else.
+269:  */
+270: export class LocalSandboxProvider extends SandboxProvider {
+271:   // Inline schema call: the config catalog walks `static Config` statically.
+272:   static Config: z<Config> = z.object({
+273:     runnerCommand: z.array(z.string()).default([]),
+274:     runnerFailureSignatures: z.array(z.string()).default([]),
+275:     probeTimeoutMs: z.natural().default(5_000),
+276:   })
+277: 
+278:   /** Test hook (mirrors the bash executors' `internals`). */
+279:   internals: SandboxInternals = {}
+280: 
+281:   private readonly runnerCommand: string[] | undefined
+282:   private readonly configuredRunnerFailureSignatures: string[]
+283:   private readonly probeTimeoutMs: number
+284:   /** Cached chain verdict; undefined until the first confined wrap needs it. */
+285:   private selectedRunner: SelectedRunner | 'unavailable' | undefined
+286:   /**
+287:    * Server-lifetime write grants (windows-acl rung): the STANDING
+288:    * workspace-root grant per workspace (its ACE is the cross-session reuse
+289:    * cache and outlives the provider — never revoked) and the REVOCABLE
+290:    * private-temp grant per live session/workspace pair (revoked on provider
+291:    * dispose).
+292:    */
+293:   private readonly workspaceGrants = new Map<string, AclWriteGrant>()
+294:   private readonly tempCapabilities = new Map<string, AclTempCapability>()
+295: 
+296:   constructor(ctx: Context, config: Config) {
+297:     super(ctx)
+298:     // The schema (static Config) defaults every field — the casts record
+299:     // those runtime facts. An empty runnerCommand means "not configured":
+300:     // use the platform chain.
+301:     const runner = config.runnerCommand as string[]
+302:     const runnerFailureSignatures = config.runnerFailureSignatures as string[]
+303:     if (runner.length === 0 && runnerFailureSignatures.length > 0) {
+304:       throw new Error('sandbox-local: runnerFailureSignatures requires runnerCommand')
+305:     }
+306:     if (runner.length > 0 && runnerFailureSignatures.length === 0) {
+307:       throw new Error('sandbox-local: runnerCommand requires at least one runnerFailureSignatures entry')
+308:     }
+309:     if (runnerFailureSignatures.some(signature => signature.trim().length === 0 || /[\r\n]/u.test(signature))) {
+310:       throw new Error('sandbox-local: runnerFailureSignatures entries must be non-empty single-line strings')
+311:     }
+312:     this.runnerCommand = runner.length > 0 ? runner : undefined
+313:     this.configuredRunnerFailureSignatures = runnerFailureSignatures
+314:     this.probeTimeoutMs = config.probeTimeoutMs as number
+315:     assertPositiveFinite('probeTimeoutMs', this.probeTimeoutMs)
+316:     // An operator-supplied runner does not use the ACL backend. The registry
+317:     // remains optional and may be mounted after this provider.
+318:     /* v8 ignore next 3 -- Windows-only registration; the Linux coverage lane cannot take this branch */
+319:     if (process.platform === 'win32' && this.runnerCommand === undefined) {
+320:       ctx.inject(['skills'], (skillsCtx) => { registerAclDiagnosisSkill(skillsCtx) })
+321:     }
+322:     // The temp grants are revoked with the provider: a clean server
+323:     // shutdown leaves no temp ACEs behind (workspace ACEs stand by design —
+324:     // the reuse cache; an unclean shutdown leaves them for the next
+325:     // provision's exact-ACE skip).
+326:     ctx.effect(() => () => {
+327:       this.revokeAclGrants()
+328:     })
+329:   }
+330: 
+331:   /**
+332:    * Wrap `argv` in the selected runner's invocation for `policy` — the configured
+333:    * `runnerCommand` when present (the operator's assertion, no probe), else the platform
+334:    * chain's runner speaking its own profile dialect.
+335:    *
+336:    * @param argv - the exact argv the caller is about to spawn.
+337:    * @param policy - the file-effect policy this execution runs under.
+338:    * @param signal - cancellation before policy resolution or grant creation.
+339:    * @returns the wrapped argv plus the selected backend's enforcement completeness, denial
+340:    *   signatures, and structured runner-failure rules; throws the fail-closed
+341:    *   `SANDBOX_UNAVAILABLE` error when the platform has no usable runner.
+342:    */
+343:   async confine(argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv> {
+344:     signal?.throwIfAborted()
+345:     policy = { ...policy, workspaceRoot: canonicalPath(policy.workspaceRoot) }
+346:     if (this.runnerCommand !== undefined) {
+347:       return Promise.resolve<ConfinedArgv>({
+348:         argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
+349:         enforcement: 'full',
+350:         denialSignatures: DENIAL_SIGNATURES.runnerCommand,
+351:         runnerFailureRules: [{ fatalSignatures: this.configuredRunnerFailureSignatures }],
+352:       })
+353:     }
+354:     const selected = this.selectRunner(policy.mode)
+355:     const runnerArgv = this.runnerArgv(selected.runner, policy)
+356:     return Promise.resolve<ConfinedArgv>({
+357:       argv: [...runnerArgv, '--', ...argv],
+358:       enforcement: selected.enforcement,
+359:       denialSignatures: DENIAL_SIGNATURES[selected.runner],
+360:       runnerFailureRules: RUNNER_FAILURE_RULES[selected.runner],
+361:     })
+362:   }
+363: 
+364:   /**
+365:    * Describe the selected runner's temporary-files and identity semantics.
+366:    * @param policy - complete policy whose mode determines temporary mounts.
+367:    * @returns facts from the same cached selection used by confine.
+368:    */
+369:   override describe(policy: SandboxPolicy): SandboxExecutionEnvironment {
+370:     if (this.runnerCommand !== undefined) {
+371:       return { runner: 'configured', enforcement: 'full', temporaryFiles: 'unknown', sharesHostTemporaryFiles: 'unknown', identity: 'unknown' }
+372:     }
+373:     this.selectedRunner ??= this.chainVerdict()
+374:     if (this.selectedRunner === 'unavailable') {
+375:       return { runner: 'unavailable', enforcement: 'unavailable', temporaryFiles: 'unknown', sharesHostTemporaryFiles: 'unknown', identity: 'unknown' }
+376:     }
+377:     const { runner, enforcement } = this.selectedRunner
+378:     switch (runner) {
+379:       case 'bwrap': {
+380:         const privateTemporaryFiles = policy.mode === 'workspace-write'
+381:           && policy.workspaceRoot !== '/' && policy.workspaceRoot !== '/tmp'
+382:         return { runner, enforcement, temporaryFiles: privateTemporaryFiles ? 'per-call' : 'host', sharesHostTemporaryFiles: !privateTemporaryFiles, identity: 'namespace-dependent' }
+383:       }
+384:       case 'landlock':
+385:       case 'seatbelt':
+386:         return { runner, enforcement, temporaryFiles: 'host', sharesHostTemporaryFiles: true, identity: 'host' }
+387:       case 'windows-acl':
+388:         return { runner, enforcement, temporaryFiles: policy.mode === 'workspace-write' ? policy.sessionId === undefined ? 'per-call' : 'per-session' : 'host', sharesHostTemporaryFiles: policy.mode !== 'workspace-write', identity: 'restricted-token' }
+389:       default: return assertNever(runner)
+390:     }
+391:   }
+392: 
+393:   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
+394:   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
+395:     switch (runner) {
+396:       case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
+397:       case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
+398:       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
+399:       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
+400:       default: return assertNever(runner)
+401:     }
+PROCEDURE {"id": "SBX07", "name": "Request-time policy/environment context", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox-policy/src/index.ts", "lines": [41, 77]}, {"source": "packages/sandbox/sandbox-policy/src/index.ts", "lines": [164, 183]}], "sourceDerivedExpectations": ["No agent session produces empty context.", "Danger-full-access renders policy and does not ask describe for environment.", "Undefined provider description makes no environment assertion/event.", "Same session object and identical JSON(mode,environment) appends once; changed data appends again.", "Retain declared unknown temp/identity facts, partial/unavailable and per-call/per-session/host distinctions without inventing mounted tools."], "knownBadAndLimits": ["Repeated identical request must not append duplicate environment event.", "Narrative facts are not native isolation proof; session writer durability is unqualified here."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+PROCEDURE {"id": "SBX08", "name": "Exact argv wrapping and configuration", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [57, 79]}, {"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [296, 361]}, {"source": "packages/sandbox/sandbox/src/index.ts", "lines": [139, 202]}], "sourceDerivedExpectations": ["Configured runner and nonempty single-line failure signatures must be paired; probe timeout must be finite positive, including refusal of zero.", "confine checks already-aborted signal before resolving policy/grants.", "Wrap exact argv after native separator; preserve Unicode and shell-sensitive arguments as argv elements.", "Configured runner skips built-in selection/probes and reports full as operator assertion; unknown temp/identity metadata retained.", "No usable platform runner raises structured SANDBOX_UNAVAILABLE and does not return unconfined argv."], "knownBadAndLimits": ["Do not join argv into a shell command or append user arguments before the separator.", "Metadata full from configured runner does not prove real containment or justify calling a real command."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+PROCEDURE {"id": "SBX09", "name": "Selection caching and honest environment facts", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [169, 207]}, {"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [369, 389]}, {"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [543, 597]}], "sourceDerivedExpectations": ["Linux native chain prefers bwrap then Landlock; Darwin/Windows have a single candidate and do not probe for arbitration.", "No candidate is unavailable; multiple candidates probe in order and retain full/partial result; cached verdict reused.", "Windows ACL reports partial; Landlock report may be partial; never upgrade from version or name alone.", "bwrap workspace-write temp is per-call except root / or /tmp; landlock/seatbelt use host temp/identity.", "Windows workspace-write with sessionId reports per-session temp, without session per-call; read-only uses host temp, identity restricted-token."], "knownBadAndLimits": ["Scripted selection checks are future source conformance only, not native platform qualification.", "A declared full/partial or sole unprobed candidate still needs real denied-effect proof for required isolation."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+PROCEDURE {"id": "SBX10", "name": "Canonical roots and runner profile dialects", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox/src/roots.ts", "lines": [20, 55]}, {"source": "packages/sandbox/sandbox-local/src/profiles.ts", "lines": [11, 58]}], "sourceDerivedExpectations": ["canonicalPath uses native component resolution; on failure returns original spelling, not invented fallback root.", "writableRoots returns canonical deduplicated workspace,/tmp,platform tmpdir only for workspace-write; other modes return empty list.", "bwrap workspace-write uses private tmpfs and workspace bind; read-only has no workspace write bind.", "Landlock grants /dev/null and workspace-write grants /tmp/workspace via launcher helper; exact external launcher ABI remains unqualified.", "Seatbelt embeds escaped canonical roots in deny-file-write profile; quotes/backslashes cannot break SBPL string."], "knownBadAndLimits": ["Do not infer network/process confinement from file-policy argv or profile text.", "Profile text/argv equivalence is separate from real filesystem denial, symlink races and native backend grants."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+PROCEDURE {"id": "SBX11", "name": "Runner diagnostics and spawn attribution", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox/src/diagnostics.ts", "lines": [19, 100]}, {"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [220, 260]}], "sourceDerivedExpectations": ["classifyRunnerFailure requires nonzero non-null exit, allowed-code match when declared, fatal nonblank substring on a remaining line after case-insensitive exact informational-line exclusion.", "Preserve original matched stderr line in detail; informational exclusion is exact full-line, not substring/trim.", "matchesSignature also requires nonzero non-null exit but DOES NOT filter empty signatures: empty signature matches a nonzero exit even with empty stderr; do not conflate it with classifier filtering.", "isRunnerSpawnFailure requires usable cwd plus ENOENT/EACCES and exact runner path/syscall conditions; missing runner or unusable cwd is not runner evidence.", "Windows failure rule is exit127-gated; Landlock uses its imported launcher failure tuple with an exact informational partial-enforcement line; per-backend signatures stay separate."], "knownBadAndLimits": ["A user command can print a matching diagnostic; helper classification is dialect inference, not independent proof no command ran.", "No union of backend denial dialects or exit code alone as universal failure proof.", "Do not silently sanitize the public matchesSignature helper to equal classifyRunnerFailure."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+PROCEDURE {"id": "SBX12", "name": "Windows session/workspace temp lifecycle", "status": "PROPOSED_NOT_RUN", "anchors": [{"source": "packages/sandbox/sandbox-local/src/index.ts", "lines": [404, 541]}], "sourceDerivedExpectations": ["Session+workspace pair reuses private random temp capability during provider lifetime, workspace grant remains per workspace.", "Different sessions/workspaces get separate temp identity; agentless invocation delegates per-call temp ownership to runner.", "Partial materialization cleans up acquired grant/temp and preserves cleanup failures.", "Provider dispose attempts all grants/temp removals and reports failures; standing workspace ACE intentionally remains while SID allocations are freed.", "Crash residue is not automatically adopted by a fresh provider; fresh random path/SID prevents identity reuse."], "knownBadAndLimits": ["These are inspected provider/source obligations only; Win32 FFI/ACL token/ABI/native process effects among pending427 requirements remain unqualified.", "Do not run Windows/ACL mutation or subprocesses during this documentary phase."], "runtimeExecuted": false, "semanticBindingAssignment": "PROPOSED_ASSOCIATIONS_ONLY_NOT_ACCEPTED", "publicCVGCounterpart": "REQUIRES_SEPARATE_EXPLICIT_T3_CONTRACT", "platformNativeProof": "NOT_RUN", "execution": "NOT_RUN", "semanticAcceptance": false, "referencePublicArtifact": "SOURCE_ONLY_PUBLISHED_EXPORT_SOURCE_LIB_ABI_NOT_VERIFIED", "cvgPublicBoundary": "UNSPECIFIED_REQUIRES_EXPLICIT_T3_CONTRACT_BEFORE_IMPLEMENTATION", "ordinaryToolControls": "Always required; mode state, source helpers and diagnostic text never grant execution.", "fixtureCodec": "Missing optional key means undefined; null remains an explicit value where the source type permits it. Native handles and ports are synthetic fixture references, never JSON authority.", "evidenceRequirement": "Actual approved public/native boundary, no copied implementation; selector/profile/helper observations alone do not qualify a platform or OS containment."}
+

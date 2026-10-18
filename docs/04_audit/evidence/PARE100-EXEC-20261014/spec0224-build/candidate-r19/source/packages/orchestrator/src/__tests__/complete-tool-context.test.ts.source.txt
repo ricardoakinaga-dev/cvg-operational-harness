@@ -1,0 +1,1115 @@
+import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import type {
+  ContextItem,
+  DecisionAdmissionPort,
+  DecisionAdmissionRecord,
+  DecisionAdmissionSettlement,
+  DecisionInputMeasurement,
+  DecisionModelRequestSnapshot,
+  IterativeOrchestratorInput,
+  ModelRequest,
+  ModelResult,
+  Observation,
+  StepContext
+} from '@cvg/harness-contracts'
+import {
+  canonicalizeCompleteJson,
+  EMPTY_BUDGET_USAGE,
+  ToolResultContextError
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '../hybrid-orchestrator.ts'
+import type { HybridOrchestratorOptions } from '../hybrid-orchestrator.ts'
+
+const jsonLimits = { maxBytes: 131_072, maxDepth: 64, maxNodes: 1_000_000 }
+const canonical = (value: unknown) =>
+  canonicalizeCompleteJson(value, jsonLimits)
+const digest = (value: unknown) =>
+  createHash('sha256').update(canonical(value)).digest('hex')
+const decision = {
+  decisionType: 'RESPOND',
+  reasonCode: 'GOAL_SATISFIED',
+  responseIntent: 'answer'
+}
+const requestEvidence: unknown[] = []
+
+afterAll(() => {
+  if (process.env.CVG_ORCHESTRATOR_EVIDENCE) {
+    writeFileSync(
+      process.env.CVG_ORCHESTRATOR_EVIDENCE,
+      JSON.stringify(requestEvidence, null, 2) + '\n'
+    )
+  }
+})
+
+function context(overrides: Partial<StepContext> = {}): StepContext {
+  return {
+    executionId: 'exec.synthetic.complete',
+    tenantId: 'tenant.synthetic',
+    conversationId: 'conversation.synthetic',
+    stepNumber: 3,
+    runtimeProfile: 'iterative',
+    agentId: 'agent.synthetic' as never,
+    agentVersion: 'v1',
+    objective: 'Host objective',
+    instructions: ['Host instruction'],
+    goal: 'Synthetic goal',
+    userMessage: 'Synthetic user message',
+    stateSummary: 'Synthetic state',
+    observations: [],
+    capabilities: [],
+    knowledgeAvailable: false,
+    completionStrategy: 'DETERMINISTIC',
+    allowedDecisionTypes: ['RESPOND', 'CALL_TOOL'],
+    budget: {
+      maxSteps: 10,
+      maxModelCalls: 5,
+      maxToolCalls: 5,
+      maxTokens: 100_000,
+      maxCostUsd: 1,
+      maxDurationMs: 5_000,
+      maxDecisionRepairs: 4
+    },
+    budgetUsage: { ...EMPTY_BUDGET_USAGE },
+    tokenBudget: 4_000,
+    contextItems: [],
+    correlationId: 'correlation.synthetic' as never,
+    traceId: 'trace.synthetic' as never,
+    toolResultContext: { version: 1, requiredObservationIds: [] },
+    ...overrides
+  }
+}
+
+function toolItem(output: unknown, id = 'obs.tool.1', step = 1): ContextItem {
+  const observation: Observation = {
+    observationId: id,
+    executionId: 'exec.synthetic.complete',
+    stepId: `step.${step}`,
+    stepNumber: step,
+    source: 'TOOL',
+    type: 'TOOL_RESULT',
+    trust: 'UNTRUSTED',
+    payload: {
+      schemaVersion: 1,
+      status: 'SUCCEEDED',
+      sideEffect: 'READ',
+      completion: 'COMPLETE',
+      resultAvailability: 'AVAILABLE',
+      output,
+      outputBytes: Buffer.byteLength(canonical(output)),
+      outputSha256: digest(output)
+    },
+    summary: 'preview must not enter system',
+    provenance: {
+      sourceId: 'tool.echo',
+      sourceVersion: 'v1',
+      operationKey: `op.${id}`
+    },
+    timestamp: '2026-10-16T00:00:00.000Z'
+  }
+  return {
+    contextId: `tool.${id}`,
+    priority: 'FRESH_TOOL_RESULTS',
+    trust: 'UNTRUSTED',
+    source: 'tool.echo',
+    content: canonical(observation),
+    tokenEstimate: 0
+  }
+}
+
+function withTools(
+  items: readonly ContextItem[],
+  overrides: Partial<StepContext> = {}
+): StepContext {
+  return context({
+    contextItems: items,
+    toolResultContext: {
+      version: 1,
+      requiredObservationIds: items
+        .filter((item) => item.priority === 'FRESH_TOOL_RESULTS')
+        .map((item) => JSON.parse(item.content).observationId)
+    },
+    ...overrides
+  })
+}
+
+const history = (
+  content: string,
+  priority: ContextItem['priority'] = 'OLDER_CONTEXT'
+): ContextItem => ({
+  contextId: `history.${priority}`,
+  priority,
+  trust: 'UNTRUSTED',
+  source: 'history',
+  content,
+  tokenEstimate: 0
+})
+const measurement = (
+  overrides: Partial<DecisionInputMeasurement> = {}
+): DecisionInputMeasurement => ({
+  counterId: 'synthetic.counter',
+  counterVersion: '1',
+  provider: 'synthetic',
+  model: 'synthetic.model',
+  formattingVersion: '1',
+  inputUpperBoundTokens: 100,
+  contextWindowTokens: 16_000,
+  costUpperBoundUsd: 0.01,
+  ...overrides
+})
+const result = (overrides: Partial<ModelResult> = {}): ModelResult => ({
+  text: JSON.stringify(decision),
+  provider: 'synthetic',
+  model: 'synthetic.model',
+  inputTokens: 80,
+  outputTokens: 10,
+  costUsd: 0.001,
+  ...overrides
+})
+
+function lane(ctx = context()) {
+  const events: string[] = []
+  const records: DecisionAdmissionRecord[] = []
+  const snapshots: DecisionModelRequestSnapshot[] = []
+  const requests: ModelRequest[] = []
+  const settlements: DecisionAdmissionSettlement[] = []
+  let liveTokens =
+    ctx.budget.maxTokens -
+    ctx.budgetUsage.inputTokens -
+    ctx.budgetUsage.outputTokens
+  let liveCost = ctx.budget.maxCostUsd - ctx.budgetUsage.costUsd
+  let calls = ctx.budgetUsage.modelCalls
+  const measure = vi.fn((request: DecisionModelRequestSnapshot) => {
+    expect(request.maxOutputTokens).toBe(512)
+    return measurement()
+  })
+  const reserve = vi.fn(
+    async (input: Parameters<DecisionAdmissionPort['reserve']>[0]) => {
+      events.push('reserve')
+      const { request, measurement: counted } = input
+      if (
+        calls >= ctx.budget.maxModelCalls ||
+        liveTokens < counted.inputUpperBoundTokens + 512 ||
+        liveCost < counted.costUpperBoundUsd
+      )
+        throw new ToolResultContextError(
+          'ADMISSION_UNAVAILABLE',
+          'Synthetic native balance exhausted',
+          'MAX_TOKENS'
+        )
+      calls += 1
+      liveTokens -= counted.inputUpperBoundTokens + 512
+      liveCost -= counted.costUpperBoundUsd
+      snapshots.push(request)
+      const record: DecisionAdmissionRecord = {
+        admissionId: `admission.${records.length}`,
+        tenantId: ctx.tenantId,
+        executionId: ctx.executionId,
+        stepNumber: ctx.stepNumber,
+        attempt: records.length,
+        purpose: request.purpose as 'ORCHESTRATION' | 'REPAIR',
+        requestSha256: digest(request),
+        measurement: counted,
+        reserved: {
+          modelCalls: 1,
+          inputTokens: counted.inputUpperBoundTokens,
+          outputTokens: 512,
+          costUsd: counted.costUpperBoundUsd
+        },
+        status: 'RESERVED'
+      }
+      records.push(record)
+      return record
+    }
+  )
+  const settle = vi.fn(async (input: DecisionAdmissionSettlement) => {
+    events.push(`settle.${input.kind}`)
+    settlements.push(input)
+    const record = records.find(
+      (record) => record.admissionId === input.admissionId
+    )!
+    if (input.kind === 'UNKNOWN')
+      return {
+        ...record,
+        status: 'UNKNOWN' as const,
+        unknownReason: input.reason
+      }
+    const actual = {
+      modelCalls: 1,
+      inputTokens: input.result.inputTokens,
+      outputTokens: input.result.outputTokens,
+      costUsd: input.result.costUsd
+    }
+    liveTokens +=
+      record.reserved.inputTokens +
+      record.reserved.outputTokens -
+      actual.inputTokens -
+      actual.outputTokens
+    liveCost += record.reserved.costUsd - actual.costUsd
+    return {
+      ...record,
+      status: 'SETTLED' as const,
+      actual,
+      resultSha256: digest(input.result)
+    }
+  })
+  const complete = vi.fn(
+    async (request: ModelRequest): Promise<ModelResult> => {
+      events.push('model')
+      requests.push(request)
+      const { signal: _signal, ...wire } = request
+      void _signal // Local cancellation is deliberately absent from the wire hash.
+      requestEvidence.push({ request: wire, requestSha256: digest(wire) })
+      const frame = JSON.parse(request.messages[1]!.content)
+      const outputs = frame.items
+        .filter(
+          (item: { priority: string }) => item.priority === 'FRESH_TOOL_RESULTS'
+        )
+        .map(
+          (item: { value: Observation }) =>
+            (item.value.payload as { output: unknown }).output
+        )
+      return result({
+        text: JSON.stringify({
+          ...decision,
+          responseText: JSON.stringify(outputs)
+        })
+      })
+    }
+  )
+  requestEvidence.push({
+    kind: 'native-port-lane',
+    events,
+    records,
+    snapshots,
+    settlements
+  })
+  return {
+    ctx,
+    events,
+    records,
+    snapshots,
+    requests,
+    settlements,
+    measure,
+    reserve,
+    settle,
+    complete,
+    options: {
+      decisionModel: { complete },
+      decisionInputCounter: { measure },
+      decisionModelSupportsMaxOutputTokens: true
+    },
+    input: { context: ctx, decisionAdmission: { reserve, settle } }
+  }
+}
+
+describe('SPEC0224 complete-tool-v1 orchestrator lane (synthetic ports)', () => {
+  it('advertises support and returns rules-only empty receipts without qualification or aggregate usage', async () => {
+    const l = lane()
+    const orchestrator = new HybridOrchestrator({
+      rules: [() => decision as never]
+    })
+    expect(orchestrator.contextProtocol).toBe('complete-tool-v1')
+    expect(await orchestrator.decide({ context: l.ctx })).toEqual({
+      decision,
+      decisionAdmissionIds: []
+    })
+    expect(l.complete).not.toHaveBeenCalled()
+    expect(l.measure).not.toHaveBeenCalled()
+  })
+
+  it('returns existing native settled receipts from rules without another model call or usage charge', async () => {
+    const l = lane()
+    const modeled = await new HybridOrchestrator(l.options).decide(l.input)
+    const existing = Object.freeze([...modeled.decisionAdmissionIds!])
+    const ruleTurn = await new HybridOrchestrator({
+      rules: [() => decision as never]
+    }).decide({
+      ...l.input,
+      context: context({
+        decisionRepair: {
+          attempt: 1,
+          errors: ['native validation rejected prior turn']
+        },
+        toolResultContext: {
+          version: 1,
+          requiredObservationIds: [],
+          settledDecisionAdmissionIds: existing
+        }
+      })
+    })
+    expect(ruleTurn).toEqual({
+      decision,
+      decisionAdmissionIds: ['admission.0']
+    })
+    expect(existing).toEqual(['admission.0'])
+    expect(l.complete).toHaveBeenCalledTimes(1)
+    expect(l.measure).toHaveBeenCalledTimes(1)
+    expect(l.reserve).toHaveBeenCalledTimes(1)
+    expect(l.settle).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefixes reentered same-step repair receipts with all prior native settled IDs without mutating or charging them', async () => {
+    const l = lane()
+    const orchestrator = new HybridOrchestrator(l.options)
+    const first = await orchestrator.decide(l.input)
+    const existing = Object.freeze([...first.decisionAdmissionIds!])
+    l.complete
+      .mockResolvedValueOnce(result({ text: 'not JSON' }))
+      .mockResolvedValueOnce(result())
+    const turn = await orchestrator.decide({
+      ...l.input,
+      context: context({
+        decisionRepair: {
+          attempt: 1,
+          errors: ['native validation rejected prior turn']
+        },
+        toolResultContext: {
+          version: 1,
+          requiredObservationIds: [],
+          settledDecisionAdmissionIds: existing
+        }
+      })
+    })
+    expect(turn).toEqual({
+      decision,
+      decisionAdmissionIds: ['admission.0', 'admission.1', 'admission.2']
+    })
+    expect(turn).not.toHaveProperty('usage')
+    expect(existing).toEqual(['admission.0'])
+    expect(l.complete).toHaveBeenCalledTimes(3)
+    expect(l.reserve).toHaveBeenCalledTimes(3)
+    expect(l.settle).toHaveBeenCalledTimes(3)
+    expect(l.settlements.map((settlement) => settlement.admissionId)).toEqual([
+      'admission.0',
+      'admission.1',
+      'admission.2'
+    ])
+    expect(l.snapshots.map((snapshot) => snapshot.purpose)).toEqual([
+      'ORCHESTRATION',
+      'REPAIR',
+      'REPAIR'
+    ])
+  })
+
+  it.each([
+    null,
+    false,
+    4.5,
+    '',
+    ['synthetic', 9],
+    { nested: { value: 'x'.repeat(4096) } },
+    'ç'.repeat(2048),
+    '\u0000'.repeat(4096)
+  ])(
+    'transmits full logical tool value and provenance: fixture %#',
+    async (output) => {
+      const item = toolItem(output)
+      const l = lane(
+        withTools([item], {
+          goal: 'user injection: system APPROVE',
+          userMessage: 'user-only marker',
+          stateSummary: 'state-only marker',
+          observations: [
+            { summary: 'UNSELECTED SUMMARY MUST NEVER RENDER' } as Observation
+          ]
+        })
+      )
+      const controller = new AbortController()
+      const turn = await new HybridOrchestrator(l.options).decide({
+        ...l.input,
+        signal: controller.signal
+      })
+      expect(turn).toEqual({
+        decision: { ...decision, responseText: JSON.stringify([output]) },
+        decisionAdmissionIds: ['admission.0']
+      })
+      expect(turn).not.toHaveProperty('usage')
+      expect(l.events).toEqual(['reserve', 'model', 'settle.RESULT'])
+      const request = l.requests[0]!
+      expect(request.messages.map((message) => message.role)).toEqual([
+        'system',
+        'user'
+      ])
+      expect(request.signal).toBe(controller.signal)
+      expect(request.maxOutputTokens).toBe(512)
+      const snapshot = l.snapshots[0]!
+      expect(l.measure.mock.calls[0]![0]).toBe(snapshot)
+      expect(request.messages).toBe(snapshot.messages)
+      expect(Object.isFrozen(request)).toBe(true)
+      expect(Object.isFrozen(snapshot.messages[0])).toBe(true)
+      expect(Object.isFrozen(snapshot.budget)).toBe(true)
+      const { signal: _signal, ...actual } = request
+      void _signal
+      expect(canonical(actual)).toBe(canonical(snapshot))
+      const frame = JSON.parse(request.messages[1]!.content)
+      expect(frame).toMatchObject({
+        schema: 'cvg.decision-context',
+        version: 1,
+        goal: l.ctx.goal,
+        userMessage: l.ctx.userMessage,
+        state: l.ctx.stateSummary,
+        repair: null
+      })
+      expect(frame.items[0].value).toEqual(JSON.parse(item.content))
+      expect(frame.items[0].provenance).toEqual(
+        JSON.parse(item.content).provenance
+      )
+      for (const marker of [
+        'UNSELECTED SUMMARY',
+        'user-only marker',
+        'user injection',
+        'state-only marker',
+        'preview must'
+      ])
+        expect(request.messages[0]!.content).not.toContain(marker)
+    }
+  )
+
+  it.each(['model', 'counter', 'cap', 'admission'])(
+    'fails closed without qualification component %s',
+    async (missing) => {
+      const l = lane()
+      const { decisionModel, decisionInputCounter, ...baseOptions } = l.options
+      const options: HybridOrchestratorOptions = {
+        ...baseOptions,
+        ...(missing === 'model' ? {} : { decisionModel }),
+        ...(missing === 'counter' ? {} : { decisionInputCounter }),
+        ...(missing === 'cap'
+          ? { decisionModelSupportsMaxOutputTokens: false }
+          : {})
+      }
+      const { decisionAdmission, ...baseInput } = l.input
+      const input: IterativeOrchestratorInput = {
+        ...baseInput,
+        ...(missing === 'admission' ? {} : { decisionAdmission })
+      }
+      await expect(
+        new HybridOrchestrator(options).decide(input)
+      ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+      expect(l.complete).not.toHaveBeenCalled()
+      expect(l.reserve).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    { inputUpperBoundTokens: NaN },
+    { inputUpperBoundTokens: -1 },
+    { inputUpperBoundTokens: 1.5 },
+    { contextWindowTokens: 0 },
+    { costUpperBoundUsd: Infinity },
+    { costUpperBoundUsd: -1 },
+    { provider: '' },
+    { counterVersion: '' }
+  ])(
+    'rejects invalid trusted measurement %# without admission or model',
+    async (invalid) => {
+      const l = lane()
+      l.measure.mockReturnValue(measurement(invalid))
+      await expect(
+        new HybridOrchestrator(l.options).decide(l.input)
+      ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+      expect(l.reserve).not.toHaveBeenCalled()
+      expect(l.complete).not.toHaveBeenCalled()
+    }
+  )
+
+  it('never substitutes a character estimator if the counter throws', async () => {
+    const l = lane()
+    l.measure.mockImplementation(() => {
+      throw new Error('counter failure')
+    })
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+    expect(l.complete).not.toHaveBeenCalled()
+  })
+
+  it('refuses counter mutation of the detached snapshot and preserves caller values', async () => {
+    const l = lane()
+    l.measure.mockImplementation((request) => {
+      Object.defineProperty(request.budget, 'maxTokens', { value: 999999 })
+      return measurement()
+    })
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+    expect(l.ctx.budget.maxTokens).toBe(100_000)
+    expect(l.reserve).not.toHaveBeenCalled()
+    expect(l.complete).not.toHaveBeenCalled()
+  })
+
+  it('retains trusted governance and profile while placing other selected content only in the user frame', async () => {
+    const governance = {
+      ...history('trusted host control', 'SYSTEM'),
+      trust: 'TRUSTED' as const
+    }
+    const profile = {
+      ...history('trusted profile control', 'AGENT_PROFILE'),
+      trust: 'TRUSTED' as const
+    }
+    const untrusted = {
+      ...history('untrusted system priority', 'SYSTEM'),
+      contextId: 'fake.system'
+    }
+    const l = lane(
+      context({
+        contextItems: [
+          governance,
+          profile,
+          untrusted,
+          history('optional pressure')
+        ]
+      })
+    )
+    l.measure.mockImplementation((request) =>
+      measurement({
+        inputUpperBoundTokens:
+          JSON.parse(request.messages[1]!.content).items.length > 3 ? 4001 : 100
+      })
+    )
+    await new HybridOrchestrator(l.options).decide(l.input)
+    const request = l.snapshots[0]!
+    expect(request.messages[0]!.content).toContain('trusted host control')
+    expect(request.messages[0]!.content).toContain('trusted profile control')
+    expect(request.messages[0]!.content).not.toContain(
+      'untrusted system priority'
+    )
+    expect(
+      JSON.parse(request.messages[1]!.content).items.map(
+        (item: { value: string }) => item.value
+      )
+    ).toEqual([
+      'trusted host control',
+      'trusted profile control',
+      'untrusted system priority'
+    ])
+  })
+
+  it('trims an oversized optional item before counting without slicing its contents', async () => {
+    const tool = toolItem('retained')
+    const l = lane(withTools([tool, history('x'.repeat(32_000))]))
+    await new HybridOrchestrator(l.options).decide(l.input)
+    expect(l.measure).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(l.snapshots[0]!.messages[1]!.content).items).toHaveLength(
+      1
+    )
+    expect(
+      JSON.parse(l.snapshots[0]!.messages[1]!.content).items[0].value.payload
+        .output
+    ).toBe('retained')
+  })
+
+  it('trims optional items whole by priority, recounts the entire request, and retains every tool result', async () => {
+    const tool = toolItem({ value: 'complete' })
+    const l = lane(
+      withTools([
+        tool,
+        history('older', 'OLDER_CONTEXT'),
+        history('knowledge', 'TRUSTED_KNOWLEDGE')
+      ])
+    )
+    l.measure.mockImplementation((request) =>
+      measurement({
+        inputUpperBoundTokens:
+          JSON.parse(request.messages[1]!.content).items.length > 1 ? 4001 : 100
+      })
+    )
+    await new HybridOrchestrator(l.options).decide(l.input)
+    expect(l.measure).toHaveBeenCalledTimes(3)
+    const frames = l.measure.mock.calls.map(([request]) =>
+      JSON.parse(request.messages[1]!.content)
+    )
+    expect(
+      frames.map((frame) =>
+        frame.items.map((item: { contextId: string }) => item.contextId)
+      )
+    ).toEqual([
+      [tool.contextId, 'history.OLDER_CONTEXT', 'history.TRUSTED_KNOWLEDGE'],
+      [tool.contextId, 'history.TRUSTED_KNOWLEDGE'],
+      [tool.contextId]
+    ])
+    expect(frames[2].items[0].value).toEqual(JSON.parse(tool.content))
+  })
+
+  it('does not evict an earlier delivered tool result when two required 17KiB values overflow', async () => {
+    const l = lane(
+      withTools([
+        toolItem('A'.repeat(17 * 1024), 'obs.A', 1),
+        toolItem('B'.repeat(17 * 1024), 'obs.B', 2)
+      ])
+    )
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'CONTEXT_OVERFLOW' })
+    expect(l.complete).not.toHaveBeenCalled()
+    expect(l.reserve).not.toHaveBeenCalled()
+  })
+
+  it.each(['system', 'user', 'request'] as const)(
+    'enforces exact %s limit and rejects plus one before complete',
+    async (kind) => {
+      const baseline = lane(
+        context({
+          instructions: [],
+          userMessage: '',
+          correlationId: '' as never
+        })
+      )
+      await new HybridOrchestrator(baseline.options).decide(baseline.input)
+      const snapshot = baseline.snapshots[0]!
+      const target =
+        kind === 'system' ? 16_000 : kind === 'user' ? 32_000 : 131_072
+      const used =
+        kind === 'system'
+          ? snapshot.messages[0]!.content.length + 1
+          : kind === 'user'
+            ? snapshot.messages[1]!.content.length
+            : Buffer.byteLength(canonical(snapshot))
+      for (const extra of [0, 1]) {
+        const filler = 'x'.repeat(target - used + extra)
+        const l = lane(
+          context({
+            instructions: [],
+            userMessage: '',
+            correlationId: '' as never,
+            ...(kind === 'system'
+              ? { instructions: [filler] }
+              : kind === 'user'
+                ? { userMessage: filler }
+                : { correlationId: filler as never })
+          })
+        )
+        const pending = new HybridOrchestrator(l.options).decide(l.input)
+        if (extra === 0) {
+          await pending
+          const sent = l.snapshots[0]!
+          expect(
+            kind === 'system'
+              ? sent.messages[0]!.content.length
+              : kind === 'user'
+                ? sent.messages[1]!.content.length
+                : Buffer.byteLength(canonical(sent))
+          ).toBe(target)
+          expect(l.complete).toHaveBeenCalledTimes(1)
+        } else {
+          await expect(pending).rejects.toMatchObject({
+            code: 'CONTEXT_OVERFLOW'
+          })
+          expect(l.complete).not.toHaveBeenCalled()
+        }
+      }
+    }
+  )
+
+  it.each(['input', 'window', 'tokens', 'cost', 'calls', 'duration'])(
+    'rejects insufficient %s without calling model',
+    async (kind) => {
+      const ctx = context()
+      const l = lane(
+        context({
+          ...ctx,
+          ...(kind === 'input' ? { tokenBudget: 99 } : {}),
+          budget: {
+            ...ctx.budget,
+            ...(kind === 'tokens' ? { maxTokens: 611 } : {}),
+            ...(kind === 'cost' ? { maxCostUsd: 0.009 } : {}),
+            ...(kind === 'calls' ? { maxModelCalls: 0 } : {}),
+            ...(kind === 'duration' ? { maxDurationMs: 0 } : {})
+          }
+        })
+      )
+      if (kind === 'window')
+        l.measure.mockReturnValue(measurement({ contextWindowTokens: 611 }))
+      await expect(
+        new HybridOrchestrator(l.options).decide(l.input)
+      ).rejects.toBeInstanceOf(ToolResultContextError)
+      expect(l.complete).not.toHaveBeenCalled()
+      expect(l.reserve).not.toHaveBeenCalled()
+    }
+  )
+
+  it('accepts exact token/window/cost balances and defaults an absent tokenBudget to 4000', async () => {
+    const ctx = context()
+    const l = lane(
+      context({
+        tokenBudget: undefined as never,
+        budget: { ...ctx.budget, maxTokens: 612, maxCostUsd: 0.01 }
+      })
+    )
+    l.measure.mockReturnValue(measurement({ contextWindowTokens: 612 }))
+    await new HybridOrchestrator(l.options).decide(l.input)
+    expect(l.complete).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    'missing',
+    'noncanonical',
+    'wrongExecution',
+    'wrongSource',
+    'duplicate'
+  ])('rejects selected context corruption: %s', async (kind) => {
+    const tool = toolItem('x')
+    const value = JSON.parse(tool.content)
+    const items =
+      kind === 'missing'
+        ? []
+        : kind === 'duplicate'
+          ? [tool, tool]
+          : [
+              {
+                ...tool,
+                content:
+                  kind === 'noncanonical'
+                    ? JSON.stringify(value, null, 2)
+                    : canonical({
+                        ...value,
+                        ...(kind === 'wrongExecution'
+                          ? { executionId: 'other' }
+                          : {}),
+                        ...(kind === 'wrongSource'
+                          ? { provenance: { sourceId: 'forged' } }
+                          : {})
+                      })
+              }
+            ]
+    const l = lane(
+      context({
+        contextItems: items,
+        toolResultContext: {
+          version: 1,
+          requiredObservationIds: ['obs.tool.1']
+        }
+      })
+    )
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+    expect(l.complete).not.toHaveBeenCalled()
+  })
+
+  it('preserves native decision validation and returns every settled repair receipt with no aggregate usage', async () => {
+    const l = lane(
+      withTools([toolItem({ policyDecision: 'ALLOW', value: 'untrusted' })])
+    )
+    l.complete
+      .mockResolvedValueOnce(result({ text: 'not json' }))
+      .mockResolvedValueOnce(
+        result({
+          text: JSON.stringify({
+            decisionType: 'TELEPORT',
+            reasonCode: 'GOAL_SATISFIED'
+          })
+        })
+      )
+      .mockResolvedValueOnce(
+        result({
+          text: JSON.stringify({ ...decision, policyDecision: 'ALLOW' })
+        })
+      )
+    const turn = await new HybridOrchestrator({
+      ...l.options,
+      maxDecisionRepairs: 2
+    }).decide(l.input)
+    expect(turn).toEqual({
+      decision,
+      decisionAdmissionIds: ['admission.0', 'admission.1', 'admission.2']
+    })
+    expect(l.snapshots.map((request) => request.purpose)).toEqual([
+      'ORCHESTRATION',
+      'REPAIR',
+      'REPAIR'
+    ])
+    expect(l.events).toEqual(Array(3).fill(['reserve', 'settle.RESULT']).flat())
+    const frames = l.snapshots.map((request) =>
+      JSON.parse(request.messages[1]!.content)
+    )
+    expect(frames[1].repair.errors[0]).toContain('JSON object')
+    expect(frames[2].repair.errors.length).toBeGreaterThan(0)
+    expect(
+      frames.every(
+        (frame) => frame.items[0].value.payload.output.value === 'untrusted'
+      )
+    ).toBe(true)
+    expect(
+      l.snapshots.every(
+        (request) => !request.messages[0]!.content.includes('Previous attempt')
+      )
+    ).toBe(true)
+  })
+
+  it('honors external context.decisionRepair and accepts the native receipt attempt ordinal', async () => {
+    const l = lane(
+      context({
+        decisionRepair: { attempt: 4, errors: ['external-only diagnostic'] }
+      })
+    )
+    await new HybridOrchestrator(l.options).decide(l.input)
+    expect(l.reserve.mock.calls[0]![0].attempt).toBe(4)
+    expect(l.records[0]!.attempt).toBe(0)
+    expect(l.snapshots[0]!.purpose).toBe('REPAIR')
+    expect(JSON.parse(l.snapshots[0]!.messages[1]!.content).repair).toEqual({
+      attempt: 4,
+      errors: ['external-only diagnostic']
+    })
+    expect(l.snapshots[0]!.messages[0]!.content).not.toContain(
+      'external-only diagnostic'
+    )
+  })
+
+  it('lets native live balance veto repair after the first call has settled', async () => {
+    const ctx = context()
+    const l = lane(context({ budget: { ...ctx.budget, maxTokens: 650 } }))
+    l.complete.mockResolvedValue(result({ text: 'invalid' }))
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+    expect(l.complete).toHaveBeenCalledTimes(1)
+    expect(l.reserve).toHaveBeenCalledTimes(2)
+    expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+      'RESULT'
+    ])
+  })
+
+  it('never calls model when durable reservation fails', async () => {
+    const l = lane()
+    l.reserve.mockRejectedValue(new Error('synthetic checkpoint save failed'))
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toThrow('checkpoint save failed')
+    expect(l.complete).not.toHaveBeenCalled()
+    expect(l.settle).not.toHaveBeenCalled()
+  })
+
+  it.each(['request', 'tenant', 'measurement', 'reserved'])(
+    'rejects reservation receipt tampering: %s',
+    async (kind) => {
+      const l = lane()
+      const native = l.reserve.getMockImplementation()!
+      l.reserve.mockImplementation(async (input) => {
+        const receipt = await native(input)
+        return {
+          ...receipt,
+          ...(kind === 'request' ? { requestSha256: 'forged' } : {}),
+          ...(kind === 'tenant' ? { tenantId: 'other' } : {}),
+          ...(kind === 'measurement'
+            ? { measurement: measurement({ inputUpperBoundTokens: 1 }) }
+            : {}),
+          ...(kind === 'reserved'
+            ? { reserved: { ...receipt.reserved, outputTokens: 1 } }
+            : {})
+        }
+      })
+      await expect(
+        new HybridOrchestrator(l.options).decide(l.input)
+      ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+      expect(l.complete).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    { provider: 'forged' },
+    { model: 'forged' },
+    { inputTokens: 101 },
+    { outputTokens: 513 },
+    { costUsd: 0.02 },
+    { inputTokens: NaN },
+    { outputTokens: -1 }
+  ])(
+    'forwards finite breach usage or reports unknown invalid usage and disqualifies pair: %#',
+    async (invalid) => {
+      const l = lane()
+      l.complete.mockResolvedValue(result(invalid))
+      const orchestrator = new HybridOrchestrator(l.options)
+      await expect(orchestrator.decide(l.input)).rejects.toMatchObject({
+        code: 'ADMISSION_BREACH'
+      })
+      const native = result(invalid)
+      const finite =
+        Number.isSafeInteger(native.inputTokens) &&
+        native.inputTokens >= 0 &&
+        Number.isSafeInteger(native.outputTokens) &&
+        native.outputTokens >= 0 &&
+        Number.isFinite(native.costUsd) &&
+        native.costUsd >= 0
+      expect(l.settlements[0]).toMatchObject(
+        finite
+          ? { kind: 'RESULT', admissionId: 'admission.0', result: native }
+          : {
+              kind: 'UNKNOWN',
+              admissionId: 'admission.0',
+              reason: 'ADMISSION_BREACH'
+            }
+      )
+      await expect(orchestrator.decide(l.input)).rejects.toMatchObject({
+        code: 'ADMISSION_UNAVAILABLE'
+      })
+      expect(l.complete).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('settles UNKNOWN on model throw and never repairs it', async () => {
+    const l = lane()
+    l.complete.mockRejectedValue(new Error('synthetic provider failure'))
+    await expect(
+      new HybridOrchestrator(l.options).decide(l.input)
+    ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+    expect(l.settlements[0]?.kind).toBe('UNKNOWN')
+    expect(l.complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('propagates cancellation and ignores a late result after UNKNOWN', async () => {
+    const l = lane()
+    const controller = new AbortController()
+    let resolveLate!: (value: ModelResult) => void
+    l.complete.mockImplementation(async (request) => {
+      expect(request.signal).toBe(controller.signal)
+      queueMicrotask(() => controller.abort())
+      return new Promise((resolve) => {
+        resolveLate = resolve
+      })
+    })
+    await expect(
+      new HybridOrchestrator(l.options).decide({
+        ...l.input,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+    resolveLate(result())
+    await Promise.resolve()
+    expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+      'UNKNOWN'
+    ])
+  })
+
+  it('does not start a model call if cancellation arrives during reserve', async () => {
+    const l = lane()
+    const controller = new AbortController()
+    const native = l.reserve.getMockImplementation()!
+    l.reserve.mockImplementation(async (input) => {
+      const receipt = await native(input)
+      controller.abort()
+      return receipt
+    })
+    await expect(
+      new HybridOrchestrator(l.options).decide({
+        ...l.input,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+    expect(l.complete).not.toHaveBeenCalled()
+    expect(l.settlements[0]?.kind).toBe('UNKNOWN')
+  })
+
+  it('does not count, reserve or call a model when already cancelled', async () => {
+    const l = lane()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      new HybridOrchestrator(l.options).decide({
+        ...l.input,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+    expect(l.measure).not.toHaveBeenCalled()
+    expect(l.reserve).not.toHaveBeenCalled()
+    expect(l.complete).not.toHaveBeenCalled()
+  })
+
+  it('times out a counter with no reserve, and an in-flight model as UNKNOWN without late settlement', async () => {
+    const ctx = context()
+    const slowCounter = lane(
+      context({ budget: { ...ctx.budget, maxDurationMs: 20 } })
+    )
+    slowCounter.options.decisionInputCounter = {
+      measure: () => new Promise(() => {})
+    } as never
+    await expect(
+      new HybridOrchestrator(slowCounter.options).decide(slowCounter.input)
+    ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+    expect(slowCounter.reserve).not.toHaveBeenCalled()
+    const slowModel = lane(
+      context({ budget: { ...ctx.budget, maxDurationMs: 20 } })
+    )
+    slowModel.complete.mockImplementation(() => new Promise(() => {}))
+    await expect(
+      new HybridOrchestrator(slowModel.options).decide(slowModel.input)
+    ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+    expect(slowModel.settlements[0]?.kind).toBe('UNKNOWN')
+  })
+
+  it('fails closed on settlement save failure or conflicting result hash', async () => {
+    const failed = lane()
+    failed.settle.mockRejectedValue(new Error('settlement save failed'))
+    await expect(
+      new HybridOrchestrator(failed.options).decide(failed.input)
+    ).rejects.toThrow('settlement save failed')
+    expect(failed.complete).toHaveBeenCalledTimes(1)
+    const forged = lane()
+    const native = forged.settle.getMockImplementation()!
+    forged.settle.mockImplementation(async (input) => ({
+      ...(await native(input)),
+      resultSha256: digest(result({ text: 'conflicting native text' }))
+    }))
+    await expect(
+      new HybridOrchestrator(forged.options).decide(forged.input)
+    ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+  })
+
+  it('exhausts native decision validation and allowed-type repairs without converting rejection to output', async () => {
+    const l = lane(context({ allowedDecisionTypes: ['ASK_USER'] }))
+    l.complete.mockResolvedValue(result())
+    await expect(
+      new HybridOrchestrator({ ...l.options, maxDecisionRepairs: 1 }).decide(
+        l.input
+      )
+    ).rejects.toMatchObject({ code: 'decision_invalid' })
+    expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+      'RESULT',
+      'RESULT'
+    ])
+    expect(
+      JSON.parse(l.snapshots[1]!.messages[1]!.content).repair.errors[0]
+    ).toContain('not allowed')
+  })
+
+  it('preserves legacy request, rules, repair prompts and aggregate usage without new qualification', async () => {
+    const { toolResultContext: _protocol, ...ctx } = context()
+    void _protocol
+    const calls: ModelRequest[] = []
+    const orchestrator = new HybridOrchestrator({
+      decisionModel: {
+        complete: async (request) => {
+          calls.push(request)
+          return result({
+            text: calls.length === 1 ? 'invalid' : JSON.stringify(decision)
+          })
+        }
+      }
+    })
+    expect(await orchestrator.decide({ context: ctx })).toEqual({
+      decision,
+      usage: {
+        modelCalls: 2,
+        inputTokens: 160,
+        outputTokens: 20,
+        costUsd: 0.002
+      }
+    })
+    expect(calls[1]!.messages[0]!.content).toContain(
+      'Previous attempt was rejected'
+    )
+    expect(calls[0]!.messages[1]!.content).toBe(ctx.userMessage)
+    expect(calls[0]).not.toHaveProperty('maxOutputTokens')
+    expect(
+      await new HybridOrchestrator({ rules: [() => decision as never] }).decide(
+        { context: ctx }
+      )
+    ).toEqual({
+      decision,
+      usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
+    })
+  })
+})

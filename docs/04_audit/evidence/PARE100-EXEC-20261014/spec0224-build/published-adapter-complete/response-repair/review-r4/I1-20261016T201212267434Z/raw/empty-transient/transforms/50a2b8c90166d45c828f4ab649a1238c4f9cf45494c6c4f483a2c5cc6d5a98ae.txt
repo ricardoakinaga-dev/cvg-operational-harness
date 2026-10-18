@@ -1,0 +1,151 @@
+import { createHash, randomUUID } from "node:crypto";
+import { CHECKPOINT_VERSION, isStepTransitionAllowed } from "@cvg/harness-contracts";
+import { completeCheckpointDigest, encodeCompleteCheckpointState, decodeCompleteCheckpointState, validateCompleteCheckpointTransition } from "./complete-checkpoint.ts";
+export class CheckpointError extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.code = code;
+		this.name = "CheckpointError";
+	}
+}
+export function checkpointDigest(checkpoint) {
+	if (checkpoint.checkpointVersion === 2) return completeCheckpointDigest(checkpoint);
+	return createHash("sha256").update(JSON.stringify(normalizeForHash(checkpoint))).digest("hex");
+}
+function normalizeForHash(value) {
+	if (Array.isArray(value)) return value.map(normalizeForHash);
+	if (value && typeof value === "object") {
+		const record = value;
+		return Object.fromEntries(Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => [key, normalizeForHash(record[key])]));
+	}
+	return value;
+}
+export function sealCheckpoint(unsigned) {
+	return {
+		...unsigned,
+		checkpointId: `ckpt_${randomUUID()}`,
+		createdAt: new Date().toISOString(),
+		digest: checkpointDigest(unsigned)
+	};
+}
+export function validateCheckpointIntegrity(checkpoint, expected) {
+	if (checkpoint.checkpointVersion !== CHECKPOINT_VERSION && checkpoint.checkpointVersion !== 2) {
+		throw new CheckpointError("checkpoint_version", `Checkpoint version ${checkpoint.checkpointVersion} is not supported`);
+	}
+	if (checkpoint.checkpointVersion === 2 && (typeof checkpoint.checkpointId !== "string" || !checkpoint.checkpointId || checkpoint.checkpointId.includes("\0") || typeof checkpoint.createdAt !== "string" || !Number.isFinite(Date.parse(checkpoint.createdAt)))) {
+		throw new CheckpointError("checkpoint_integrity", "Invalid V2 checkpoint metadata");
+	}
+	if (checkpoint.tenantId !== expected.tenantId || checkpoint.executionId !== expected.executionId) {
+		throw new CheckpointError("checkpoint_binding", "Checkpoint does not belong to the requested execution/tenant");
+	}
+	const { checkpointId: _id, createdAt: _createdAt, digest, ...unsigned } = checkpoint;
+	void _id;
+	void _createdAt;
+	if (checkpointDigest(unsigned) !== digest) {
+		throw new CheckpointError("checkpoint_integrity", "Checkpoint digest does not match its content");
+	}
+}
+function key(tenantId, executionId) {
+	return `${tenantId}\u0000${executionId}`;
+}
+function copy(value) {
+	return structuredClone(value);
+}
+/** Process-local step/checkpoint store used by controlled proofs. */
+export class InMemoryExecutionStepStore {
+	steps = new Map();
+	checkpoints = new Map();
+	async recordStep(step) {
+		const identity = key(step.tenantId, step.executionId);
+		const steps = this.steps.get(identity) ?? new Map();
+		const existing = steps.get(step.stepNumber);
+		if (existing) {
+			if (existing.stepId !== step.stepId) {
+				throw new CheckpointError("step_conflict", "A different step already occupies this step number");
+			}
+			if (existing.status !== step.status && !isStepTransitionAllowed(existing.status, step.status)) {
+				throw new CheckpointError("step_transition", `Step transition ${existing.status} -> ${step.status} is not allowed`);
+			}
+		} else {
+			if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {
+				throw new CheckpointError("step_conflict", "A step number must be a positive integer");
+			}
+			const blocking = [...steps.values()].filter((candidate) => candidate.stepNumber < step.stepNumber && ![
+				"SUCCEEDED",
+				"FAILED",
+				"SKIPPED",
+				"WAITING"
+			].includes(candidate.status));
+			if (blocking.length > 0) {
+				throw new CheckpointError("step_transition", `Step ${step.stepNumber} cannot start before step ${blocking[0]?.stepNumber} settles`);
+			}
+		}
+		steps.set(step.stepNumber, copy(step));
+		this.steps.set(identity, steps);
+	}
+	async listSteps(tenantId, executionId) {
+		const steps = this.steps.get(key(tenantId, executionId));
+		if (!steps) return [];
+		return [...steps.values()].sort((left, right) => left.stepNumber - right.stepNumber).map((step) => copy(step));
+	}
+	async saveCheckpoint(checkpoint) {
+		if (checkpoint.checkpointVersion === 2 || this.checkpoints.get(key(checkpoint.tenantId, checkpoint.executionId))?.checkpointVersion === 2) {
+			throw new CheckpointError("checkpoint_version", "V2 checkpoints require compareAndSwapCheckpoint");
+		}
+		validateCheckpointIntegrity(checkpoint, {
+			tenantId: checkpoint.tenantId,
+			executionId: checkpoint.executionId
+		});
+		this.checkpoints.set(key(checkpoint.tenantId, checkpoint.executionId), copy(checkpoint));
+	}
+	async compareAndSwapCheckpoint(input) {
+		// The entire comparison/validation/replacement is synchronous: no await gap.
+		validateCheckpointIntegrity(input.next, input);
+		const identity = key(input.tenantId, input.executionId);
+		const current = this.checkpoints.get(identity) ?? null;
+		if (current) validateCheckpointIntegrity(current, input);
+		if (input.expected && input.expected.checkpointId === input.next.checkpointId) {
+			throw new CheckpointError("checkpoint_integrity", "CAS requires a fresh checkpoint ID");
+		}
+		const token = current ? {
+			checkpointId: current.checkpointId,
+			digest: current.digest
+		} : undefined;
+		if (input.expected === null ? current !== null : !current || input.expected.checkpointId !== current.checkpointId || input.expected.digest !== current.digest) {
+			return {
+				status: "CONFLICT",
+				...token ? { currentToken: token } : {}
+			};
+		}
+		validateCompleteCheckpointTransition(current, input.next);
+		const next = copy(input.next);
+		if (next.checkpointVersion === 2) {
+			// Exercise the same physical codec as persistent storage without leaking its wrapper to callers.
+			const state = decodeCompleteCheckpointState(encodeCompleteCheckpointState(next.state));
+			this.checkpoints.set(identity, {
+				...next,
+				state
+			});
+		} else this.checkpoints.set(identity, next);
+		return {
+			status: "APPLIED",
+			token: {
+				checkpointId: next.checkpointId,
+				digest: next.digest
+			}
+		};
+	}
+	async loadCheckpoint(tenantId, executionId) {
+		const checkpoint = this.checkpoints.get(key(tenantId, executionId));
+		if (!checkpoint) return null;
+		validateCheckpointIntegrity(checkpoint, {
+			tenantId,
+			executionId
+		});
+		return copy(checkpoint);
+	}
+}
+export function createInMemoryExecutionStepStore() {
+	return new InMemoryExecutionStepStore();
+}

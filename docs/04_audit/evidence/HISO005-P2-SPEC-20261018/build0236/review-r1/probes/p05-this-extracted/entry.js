@@ -1,0 +1,1 @@
+const obj={x:1, f(){return this.x}}; const f=obj.f; f();

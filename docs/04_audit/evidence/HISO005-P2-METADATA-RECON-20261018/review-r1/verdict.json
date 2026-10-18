@@ -1,0 +1,221 @@
+{
+  "task": "HISO005-P2-METADATA-RECON-20261018",
+  "round": 1,
+  "reviewRole": "Independent documentary security-contract critic",
+  "verdict": "REVISE",
+  "evaluatedSpecSha256": "bbae8db218164d06dc4953bd37298b142f5c741c0463fc242469beb07df11562",
+  "evaluatedSpecPath": "docs/02_spec/0240_b6_node_metadata_resolution_scope.md",
+  "contractFreezeSha256": "f9480d7d2d700bbe61d7fae30fc5075b2d0d2490b21fad50e04db6666759887c",
+  "evidenceKind": "DOCUMENTARY_STATIC",
+  "findings": [
+    {
+      "id": "R1-F01",
+      "required": true,
+      "severity": "P2",
+      "confidence": "HIGH",
+      "title": "Qualify new negative discovery before any cap; preserve already-known violations without bypassing acquisition limits",
+      "affectedClauses": [
+        "3.3 paragraphs 1–3",
+        "5/MS05",
+        "5/MS07"
+      ],
+      "criteria": [
+        "MS05",
+        "MS07"
+      ],
+      "scenarios": [
+        "C07",
+        "C08"
+      ],
+      "evidence": [
+        {
+          "input": "docs/02_spec/0240_b6_node_metadata_resolution_scope.md",
+          "snapshot": "raw/01-0240_b6_node_metadata_resolution_scope.md.txt",
+          "clause": "MS05",
+          "quote": "retorna VIOLATION/FAIL antes de qualquer recusa/cap"
+        },
+        {
+          "input": "docs/02_spec/0240_b6_node_metadata_resolution_scope.md",
+          "snapshot": "raw/01-0240_b6_node_metadata_resolution_scope.md.txt",
+          "clause": "3.3",
+          "quote": "Todos os limites físicos/JSON/profundidade/worker/FD/tempo da v2 permanecem limitados e fail-closed."
+        },
+        {
+          "input": "/mnt/ia/cvg-hiso005-build0237-20261018/scripts/boundary-semantic-resolution.mjs",
+          "snapshot": "raw/27-boundary-semantic-resolution.mjs.txt",
+          "lines": "196–207,335–411",
+          "observation": "read rejects maxFileBytes and reserves charged size before allocation; json calls read before JSON.parse. No selected export can be learned from a manifest refused before acquisition."
+        },
+        {
+          "input": "docs/02_spec/0237_b6_runtime_resolution_profile.md",
+          "snapshot": "raw/23-0237_b6_runtime_resolution_profile.md.txt",
+          "clause": "3",
+          "observation": "16MiB/file and finite total/file/FD/deadline budgets; acquisition errors UNKNOWN."
+        }
+      ],
+      "analysis": "MS05 unqualified wording extends the new selected-product obligation to acquisition failures before its target is knowable. A syntactically valid manifest larger than 16MiB, padded with inactive JSON and containing an exact product-alias export, cannot both be refused before allocation and have its selected target established. Likewise a metadata budget can end before the deciding manifest. The surrounding known-negative language suggests the intended bounded interpretation but does not explicitly limit the mandatory acceptance. This is a documentary executability/precedence ambiguity, not a demonstrated implementation regression or false proof.",
+      "minimalRemedy": "State explicitly: retain and prioritize every violation already discovered, including across subsequent errors/caps; run the existing bounded negative census before semantic/refinement caps at its defined stages; require new selected-product VIOLATION when the deciding metadata and link chain were acquired within the existing bounds. If acquisition/deadline fails before the target is known, return explicit UNKNOWN with zero proofs, retaining all prior violations, without bypassing caps. Add paired MS05/MS07 controls: target known then reduced semantic/workspace cap => VIOLATION; metadata acquisition cap before target known => UNKNOWN/no proof/no lost earlier violation. Do not weaken the existing full-v2 multiset retention requirement."
+    }
+  ],
+  "findingsCounts": {
+    "total": 1,
+    "required": 1,
+    "optional": 0,
+    "P0": 0,
+    "P1": 0,
+    "P2": 1,
+    "P3": 0
+  },
+  "scenarios": [
+    {
+      "id": "C01",
+      "input": "Ordinary demo request; imports {\"#private\":\"./private.mjs\"}; closed JS exact export.",
+      "affectedClauses": "3.1; MS01",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Only presence refusal may be relaxed; all bodies/successors and full manifest remain premises. Raw imports-unused/both-unused are v2 UNKNOWN, not v3 evidence.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C02",
+      "input": "Same eligible imports, but main.mjs contains import \"#private\".",
+      "affectedClauses": "3.1; MS02/MS04",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Active # stays UNKNOWN; no textual absence or inactive-code shortcut. Future paired acceptance explicitly required, not observed in current body controls.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C03",
+      "input": "Same eligible imports; exported value uses Reflect.get(globalThis,\"open\").",
+      "affectedClauses": "3.1; MS04",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Opaque body blocks proof. Existing opaque-body observations lack the eligible-map combination; MS04 correctly requires that future combination.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C04",
+      "input": "exports {\".\":\"./main.mjs\",\"node\":\"./other.mjs\"}.",
+      "affectedClauses": "3.2; MS03",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Reject global dot/condition mixture before exact lookup. Both raw mixed-global native errors and Node source agree.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C05",
+      "input": "Request demo/src/a; exports {\"./src/a\":null,\"./src/*\":\"./good.mjs\"}.",
+      "affectedClauses": "3.2; MS02/MS03",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Exact null blocks, never falls into a matching pattern or main; exact non-root branch follows same own-property rule. Selected unsupported arrays/numeric branches also remain refused by retained algorithm.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C06",
+      "input": "exports {\".\":\"./main.mjs\",\"./src/*\":{\"0\":\"../bad\"}}; ordinary demo request.",
+      "affectedClauses": "3.2; MS01/MS03",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Inactive values need no global target validation; key grammar and global map classification remain required. Hash entire manifest; do not turn inactive values into proofs. Inactive-bad-target raw is only an analogous v2 literal-subpath observation.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C07",
+      "input": "Eligible imports + inactive ./src/* + exact ./alias.mjs -> products/consumer/mod.mjs; later workspace/refinement cap.",
+      "affectedClauses": "3.3; MS05/MS07",
+      "assessment": "REQUIRES_CLARIFICATION",
+      "reason": "New path must discover product within bounded readable metadata and retain it over later caps. Raw both-unused-product-alias is currently UNKNOWN; selected-product-alias already records product. No v3 success claimed.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C08",
+      "input": "Valid manifest padded beyond 16MiB in inactive JSON, exact export ultimately points at product alias; no prior target known.",
+      "affectedClauses": "3.3; MS05/MS07",
+      "assessment": "REVISION_REQUIRED",
+      "reason": "Before-all-caps discovery is incompatible with bounded preallocation refusal. Proposed documentary counterexample only; no huge fixture created or run. R1-F01.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C09",
+      "input": "Selected exact ./absent.mjs with no physical target; a neighboring file/main exists.",
+      "affectedClauses": "3.2; MS02/MS06",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Native ESM URL does not establish availability; no extension/main fallback or proof. Tab/percentual target normalization remains expressly forbidden.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C10",
+      "input": "Installed MATCH package resolves dist/index.js, receipt belongs to another path/root, body otherwise closed.",
+      "affectedClauses": "2/4; MS04/MS09/MS11",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Physical identity, provenance, closure and origin proof remain separate. No Vitest name/URL exemption, no credit from MATCH alone.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C11",
+      "input": "Replay a v2 proof with same target URL under new profile while an old origin changes reason or becomes unavailable.",
+      "affectedClauses": "4; MS08/MS09",
+      "assessment": "SOUND_CONTRACT",
+      "reason": "Reject old/tampered profile proof; preserve origin multiplicity and null physical hash. Layered baseline/history/current ledgers cannot be treated as disjoint counts or resolved by disappearing reason.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    },
+    {
+      "id": "C12",
+      "input": "14 body command rows label private analysisRoot as cwd although subprocess inherited repository cwd.",
+      "affectedClauses": "1/5; auxiliary correction",
+      "assessment": "CORRECTION_ACCOUNTED",
+      "reason": "Operator omits cwd; argv explicitly supplies frozen engine and root/start. Native collector passes cwd. Bind correction and never use these rows as native or v3 tests.",
+      "evidenceKind": "DOCUMENTARY_STATIC",
+      "targetExecutedByReviewer": false
+    }
+  ],
+  "futureAcceptance": {
+    "MS01": "NOT_RUN",
+    "MS02": "NOT_RUN",
+    "MS03": "NOT_RUN",
+    "MS04": "NOT_RUN",
+    "MS05": "NOT_RUN",
+    "MS06": "NOT_RUN",
+    "MS07": "NOT_RUN",
+    "MS08": "NOT_RUN",
+    "MS09": "NOT_RUN",
+    "MS10": "NOT_RUN",
+    "MS11": "NOT_RUN",
+    "MS12": "NOT_RUN"
+  },
+  "auxiliaryCorrection": {
+    "path": "docs/04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/body-operator-metadata-correction.json",
+    "bytes": 1082,
+    "sha256": "76f15db667cdd1daf9d1e7958121850d969a2d33650084bd2941d81d6bf8fe64",
+    "effect": "Raw cwd metadata correction only; does not validate v3."
+  },
+  "checks": {
+    "frozenInputsVerified": 13,
+    "specAndFreezeVerified": 2,
+    "inputSnapshots": 34,
+    "nativeRawMatches": 28,
+    "bodyRawHashesStatusesVerified": 14,
+    "nativeSourceExtractionMatches": 3,
+    "realOracleRowsInspected": 4,
+    "documentaryCases": 12
+  },
+  "limitations": [
+    "No application0240 exists; all MS01–12 NOT_RUN",
+    "No target/native/helper/gates/install/PG/Docker/compiler/prototype or network executed",
+    "No third review of BUILD0237; its source used only to understand retained contract/limits",
+    "No full590/source20/Root7/operator/ledger certification; Lead owns independent lane",
+    "Shared ledgers/coordination/index/HEAD not mutated; scoped handoff via these review artifacts only"
+  ],
+  "projectApproved": false,
+  "b6Accepted": false,
+  "buildAuthorized": false,
+  "nextAction": "Lead clarify R1-F01 in a new explicitly frozen SPEC revision; at most R2 documentary review before human T3 decision. No automatic BUILD authority.",
+  "observedAt": "2026-10-18T15:29:30.978073+00:00"
+}

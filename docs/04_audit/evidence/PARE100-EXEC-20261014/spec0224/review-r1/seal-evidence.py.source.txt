@@ -1,0 +1,20 @@
+"""Final local seal. Invocation and streams are tool-only as disclosed."""
+import hashlib, json
+from pathlib import Path
+root = Path.cwd()
+entries = []
+empty = []
+for path in sorted(root.rglob('*')):
+    if not path.is_file() or path.name == 'evidence-manifest.json':
+        continue
+    data = path.read_bytes()
+    relative = str(path.relative_to(root))
+    if not data:
+        empty.append(relative)
+        continue
+    entries.append({'path': relative, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+manifest = {'schema_version': 1, 'review_root': str(root), 'scope': 'Every nonempty own output present at final sealing, except evidence-manifest.json itself.', 'entries': entries, 'entry_count': len(entries), 'excluded_empty_files': empty, 'capture_limits': 'capture-limits.json'}
+(root / 'evidence-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+for name in ('review.json', 'input-sentinel.json', 'evidence-manifest.json'):
+    print(hashlib.sha256((root / name).read_bytes()).hexdigest() + '  ' + str(root / name))
+print('Bound ' + str(len(entries)) + ' nonempty own outputs; ' + str(len(empty)) + ' empty streams excluded. Sealed review complete.')

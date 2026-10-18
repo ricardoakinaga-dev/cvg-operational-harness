@@ -1,0 +1,44 @@
+import pathlib,json,sys,copy
+sys.dont_write_bytecode=True
+O=pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0,str(O/'checks'))
+from verify import cpcheck,phys,resultcheck,stability,load,ck,checks,evs,time
+R=O/'run';out=[]
+def test(name,baseline,check,mutate):
+ x=copy.deepcopy(baseline);check(x);before=len(checks);mutate(x)
+ try:check(x)
+ except (AssertionError,ValueError,KeyError) as e:
+  out.append({'name':name,'baselineAccepted':True,'badEvidenceRejected':True,'reason':str(e),'mutatedInMemoryOnly':True})
+ else:out.append({'name':name,'baselineAccepted':True,'badEvidenceRejected':False});raise AssertionError('mutation survived '+name)
+def set_(o,path,value):
+ for k in path[:-1]:o=o[k]
+ o[path[-1]]=value
+p=load(R/'SP01/main/positive-final.json');a=load(R/'SP01/main/result.json')
+test('forged logical digest',p['checkpoint'],cpcheck,lambda x:set_(x,['digest'],'0'*64))
+test('false physical decodedBytes',p,phys,lambda x:set_(x,['row','state','decodedBytes'],1))
+test('altered SQL column vs logical CP',p,phys,lambda x:set_(x,['row','execution_id'],'exec_bad'))
+test('serving impersonation/session identity mismatch',p,phys,lambda x:set_(x,['identity','session_user'],'pare224'))
+def checkresult(name):return lambda x:resultcheck(x,name,R)
+test('declared zero calls despite actual entry',a,checkresult('SP01/main/result.json'),lambda x:set_(x,['calls'],0))
+test('changed request after reservation',a,checkresult('SP01/main/result.json'),lambda x:evs(x,'model.complete-entry')[0]['request'].update(maxOutputTokens=513))
+test('reserve CAS return is not applied',a,checkresult('SP01/main/result.json'),lambda x:next(e for e in x['events'] if e['sequence']==evs(x,'fresh-service-SQL')[0]['commit'])['result'].update(status='CONFLICT'))
+test('fresh reader secretly writer backend',a,checkresult('SP01/main/result.json'),lambda x:evs(x,'fresh-service-SQL')[0]['writerBackends'].append(evs(x,'fresh-service-SQL')[0]['physical']['identity']['backend_pid']))
+b=load(R/'SP06/A/main/result.json')
+test('lossy NaN null laundering',b,checkresult('SP06/A/main/result.json'),lambda x:set_(x,['actualProviderResult','inputTokens'],None))
+b=load(R/'SP07/main/result.json')
+test('cap overuse silently reduced to512',b,checkresult('SP07/main/result.json'),lambda x:set_(x,['actualProviderResult','outputTokens'],512))
+b=load(R/'SP09/main/result.json')
+test('ACK loss invents acknowledged caller actual',b,checkresult('SP09/main/result.json'),lambda x:set_(x,['result','usage','outputTokens'],3))
+b=load(R/'SP10/main/result.json')
+test('deadline failure misrepresented completed',b,checkresult('SP10/main/result.json'),lambda x:set_(x,['result','stopReason'],'COMPLETED'))
+b=load(R/'SP11/main/result.json')
+test('missing real fence error witness',b,checkresult('SP11/main/result.json'),lambda x:[e['error'].update(code='synthetic') for e in evs(x,'CAS-error')])
+b=[load(R/'SP12/main/takeover-before-late.json'),load(R/'SP12/main/takeover-after-late.json')]
+test('late bytes change under takeover',b,lambda x:stability(*x),lambda x:set_(x,[1,'row','digest'],'f'*64))
+b=load(R/'SP12/main/takeover-native-claims.json')
+def takeover(x):
+ o=x['lease']['observed'];ck(time(x['lease']['slept'][0]['after_expiry'])>=max(time(o[k]) for k in ['parent_lease_until','queue_lease_until','outer_lease_until']),'wait past true max all three leases')
+ ck(x['next']['fence']['attempt']>x['oldClaim']['fence']['attempt'] and x['next']['disposition']=='SETTLEMENT','takeover must change native attempt')
+test('wait only short outer lease, inner still live',b,takeover,lambda x:set_(x,['lease','slept',0,'after_expiry'],x['lease']['observed']['observed_at']))
+test('takeover adopts stale inner attempt',b,takeover,lambda x:set_(x,['next','fence','attempt'],x['oldClaim']['fence']['attempt']))
+(O/'checks/mutation-results.json').write_text(json.dumps({'count':len(out),'allRejected':all(x['badEvidenceRejected'] for x in out),'cases':out},indent=2));print(json.dumps({'mutations':len(out),'rejected':len(out)}))

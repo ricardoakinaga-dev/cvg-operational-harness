@@ -1,0 +1,52 @@
+import fs from 'node:fs';
+import {createRequire} from 'node:module';
+import crypto from 'node:crypto';
+import assert from 'node:assert/strict';
+const R=process.env.I1_REVIEW;
+const req=createRequire(import.meta.url);
+const {Client}=req(process.env.I1_PACKET_DEPS+'/pg');
+const resource=JSON.parse(fs.readFileSync(R+'/resource-private.json','utf8'));
+assert.equal(resource.schemaName,'pare224_admission_i1_r1');assert.equal(resource.roleName,'pare224_admission_i1_r1_service');
+const schema=resource.schemaName,role=resource.roleName;
+const H=v=>crypto.createHash('sha256').update(v).digest('hex');
+const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
+const save=(p,v)=>fs.writeFileSync(p,JSON.stringify(v,null,2)+'\n',{flag:'wx'});
+const client=new Client({connectionString:resource.test_database_url,application_name:'pare224_i1_readonly_audit',options:`-c search_path=${schema} -c statement_timeout=5000 -c lock_timeout=1500`});
+const result={schema,role,secondaryAuditIdentity:'New admin login SET ROLE own service; distinct from native fixture fresh authenticated service backends. Read-only audit only.'};
+try{
+ await client.connect();
+ result.serviceClientsBefore=(await client.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1',[role])).rows[0].count;assert.equal(result.serviceClientsBefore,0);
+ result.freshness=JSON.parse(fs.readFileSync(R+'/runs/r1/preexistence-check.json','utf8'));assert.deepEqual(result.freshness,{schema_exists:false,role_exists:false});
+ await client.query('BEGIN READ ONLY');
+ await client.query(`SET LOCAL ROLE ${role}`);
+ result.identity=(await client.query('SELECT current_user,session_user,current_database(),current_schema(),pg_backend_pid() AS backend_pid')).rows[0];
+ assert.equal(result.identity.current_user,role);assert.equal(result.identity.session_user,'pare224');
+ result.noContextRows=(await client.query(`SELECT checkpoint_id FROM ${schema}.operational_execution_checkpoints`)).rows.length;assert.equal(result.noContextRows,0);
+ await client.query("SELECT set_config('cvg.tenant_id',$1,true)",['tenant_00000000-0000-4000-8000-000000000225']);
+ result.otherTenantRows=(await client.query(`SELECT checkpoint_id FROM ${schema}.operational_execution_checkpoints`)).rows.length;assert.equal(result.otherTenantRows,0);
+ await client.query("SELECT set_config('cvg.tenant_id',$1,true)",['tenant_00000000-0000-4000-8000-000000000224']);
+ const rows=(await client.query(`SELECT tenant_id,execution_id,checkpoint_id,checkpoint_version,runtime_profile,runtime_version,orchestrator_version,step_number,budget_usage,digest,created_at,state::text AS wire,octet_length(state::text) AS wire_bytes FROM ${schema}.operational_execution_checkpoints ORDER BY execution_id`)).rows;
+ assert.equal(rows.length,6);fs.mkdirSync(R+'/live-sql');result.rows=[];
+ for(const row of rows){
+  const name=row.execution_id.replace('exec_pg224_admission_','').replace('_r1','');
+  const matched=fs.readdirSync(R+'/runs/r1/cases').find(n=>n.replace('free-','').replace('-prior-','_').replace('-','_')===name);
+  assert.ok(matched,'exact matching evidence case '+name);
+  const p=JSON.parse(fs.readFileSync(R+'/runs/r1/cases/'+matched+'/physical-checkpoints.json','utf8')).find(p=>p.label==='after-resume');
+  assert.equal(H(row.wire),p.wire.sqlTextSha256);assert.equal(Buffer.byteLength(row.wire),row.wire_bytes);assert.equal(row.wire_bytes,p.wire.sqlTextBytes);
+  const w=JSON.parse(row.wire);assert.deepEqual(Object.keys(w).sort(),['data','decodedBytes','decodedSha256','encoding','storageCodec']);assert.equal(w.encoding,'base64');assert.equal(w.storageCodec,'cvg.checkpoint-state/2');
+  const stateBytes=Buffer.from(w.data,'base64');assert.equal(stateBytes.toString('base64'),w.data);assert.equal(stateBytes.length,w.decodedBytes);assert.equal(H(stateBytes),w.decodedSha256);
+  const stateText=new TextDecoder('utf-8',{fatal:true}).decode(stateBytes),state=JSON.parse(stateText);assert.equal(canonical(state),stateText);
+  const unsigned={tenantId:row.tenant_id,executionId:row.execution_id,checkpointVersion:row.checkpoint_version,runtimeProfile:row.runtime_profile,runtimeVersion:row.runtime_version,orchestratorVersion:row.orchestrator_version,stepNumber:row.step_number,budgetUsage:row.budget_usage,state};
+  const unsignedText=canonical(unsigned);assert.equal(H('cvg.checkpoint.v2\n'+unsignedText),row.digest);assert.ok(Buffer.byteLength(unsignedText)<=8388608);
+  assert.equal(row.digest,p.rowHeader.digest);assert.equal(row.checkpoint_id,p.rowHeader.checkpoint_id);assert.equal(state.toolResultContext.pendingDecisionAdmission,null);
+  fs.writeFileSync(R+'/live-sql/'+matched+'.state-text',row.wire,{flag:'wx'});
+  const {wire,...header}=row;
+  save(R+'/live-sql/'+matched+'.header.json',header);
+  result.rows.push({case:matched,checkpointId:row.checkpoint_id,digest:row.digest,physicalBytes:row.wire_bytes,physicalSha256:H(row.wire),logicalUnsignedBytes:Buffer.byteLength(unsignedText),state:state.stopReason,receipts:state.toolResultContext.decisionAdmissions.map(x=>x.status)});
+ }
+ await client.query('COMMIT');
+ result.serviceClientsAfter=(await client.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1',[role])).rows[0].count;assert.equal(result.serviceClientsAfter,0);
+}finally{
+ await client.end();result.auditClientClosed=true;save(R+'/live-sql-verification.json',result);
+}
+console.log(JSON.stringify({physicalRowsVerified:result.rows?.length,serviceClientsBefore:result.serviceClientsBefore,serviceClientsAfter:result.serviceClientsAfter,auditClientClosed:result.auditClientClosed}));

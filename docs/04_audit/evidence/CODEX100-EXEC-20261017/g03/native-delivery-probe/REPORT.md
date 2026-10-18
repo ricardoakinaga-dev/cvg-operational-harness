@@ -1,0 +1,51 @@
+# DX100-G03 — observação nativa de entrega de tool result
+
+Resultado: **DIAGNOSTIC_COMPLETED / OBSERVED_RESPONSE_DELIVERY_GAP**. O nonce nasceu exclusivamente no corpo de `ToolDefinition.execute` READ/NONE e chegou à segunda `StepContext`, incluindo `observations`. **Não chegou ao pedido real `ModelGateway.complete` de propósito RESPONSE.** Isto é uma medição do fonte atual, sem conclusão de paridade, qualidade da resposta ou qualificação Codex.
+
+## Prova executada
+
+- Nonce sintético: `98b6bf50be4e2dabf0bf9f220be155a39f85ba360abef5a0`.
+- Uma execução READ bem-sucedida, duas decisões, uma chamada real ao gateway sintético, um pedido RESPONSE; runtime `COMPLETED`, alvo e launcher exit 0.
+- Script existente `ScriptedOrchestrator`: CALL_TOOL e depois RESPOND com `responseIntent` constante. Nenhum `responseText` nem nonce fornecido às decisões.
+- `ModelGateway.complete` captura imediatamente `JSON.stringify(request)`, campos do pedido e estado do AbortSignal recebidos do kernel; retorna texto constante sem nonce. O helper não monta o pedido de saída e não acrescenta observações à composição.
+- [Pedido bruto real](raw/output/actual-model-requests.json): duas mensagens (system com instrução/intenção fixa e user), contexto inicial vazio, orçamento/correlationId/purpose/signal do runtime. Nenhum nonce em nenhum campo. O sinal é registrado por metadados porque AbortSignal não possui serialização JSON útil.
+- [Contextos reais das decisões](raw/output/decision-contexts.json), [retorno da ferramenta](raw/output/tool-calls.json), [resultado](raw/output/runtime-result.json), [checkpoint nativo](raw/output/checkpoint.json), [steps](raw/output/steps.json), [auditoria](raw/output/audits.json) e [resumo](raw/output/summary.json) retidos.
+- Controle de contaminação: input inicial, contexto da primeira decisão, decisões estáticas e resposta constante não contêm o nonce. O helper só usa a variável observada `born` nos oráculos posteriores; nenhum callback decisor/gateway consulta seu valor. A próxima observação contém o nonce recebido pelo pipeline real.
+
+## Fonte e proveniência
+
+Factory absoluta: `/home/ricardo/Área de trabalho/cvg-operational-harness/packages/harness/src/createOperationalHarness.ts`; `execute(input.runtimeProfile='iterative')`, `InMemoryExecutionStepStore` e `DefaultContextEngine` existentes. Não se instancia uma cópia de runtime no helper. A factory sem seleção explícita continua `single_pass` (medido em [stimulus](raw/output/stimulus.json)); não há adoção do perfil iterativo como default.
+
+Node executado: `/home/ricardo/.nvm/versions/node/v22.23.2/bin/node`, confirmado dentro do namespace como `v22.23.2`. esbuild instalado **0.28.2**, API confiável, zero plugins, bundle ESM para Node22, aliases de workspace explicitamente apontados a `packages/*/src/index.ts`. Todos os 27 inputs do metafile foram hashados antes/depois do bundle e depois da execução; todos idênticos, sem input `dist`, dependência externa apenas builtin `node:`. Entrypoint externo é o helper `probe.ts`, que importa a factory de fonte exata. Tipos ToolDefinition/ModelRequest/RuntimeInput vêm dos contratos de fonte, eliminados pelo esbuild; não houve typecheck nem gates de app.
+
+Bundle executado e retido: [probe.mjs](raw/probe.mjs), SHA-256 `ae0b0c3b43a875fd64e16003b1bf3e2c12e24f0f0940b69bbe7c769e3b72bbfb` (184400 bytes). [Metafile](raw/metafile.json), [inputs/aliases/tools](raw/provenance.json), [comparação pós-execução](raw/inputs-after-execution.json) e [postflight](raw/postflight.json) contêm caminhos absolutos e hashes integrais. Os manifests de workspace e todos os arquivos de packages também permaneceram idênticos ao snapshot pré-bundle.
+
+| Fonte relativa à raiz `/home/ricardo/Área de trabalho/cvg-operational-harness` | SHA-256 antes = depois                                             |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `packages/contracts/src/contracts.ts`                                          | `32432899d2dea8b5504093541fe884e8ef73751b9e70ba3b878f15f8f212004f` |
+| `packages/contracts/src/execution-v2.ts`                                       | `1e5cfcb9f2935ec2be4399f5494e86611db5bb577c942345ab135ac1f985c1b6` |
+| `packages/harness/src/context-engine.ts`                                       | `16045ac6f90184601d815151d81a011e1b944d96b90329b0f7173e34e2b01a77` |
+| `packages/harness/src/step-store.ts`                                           | `1e598456b19f99d7953031c5be5e09e00145c60b982b1b639e5d03b9f4bf633c` |
+| `packages/harness/src/iterative-dispatch.ts`                                   | `d1f41658ade86c328b6adaa5634bdd1b9e578050fbbc24b17c83db1d36c67141` |
+| `packages/harness/src/iterative-runtime.ts`                                    | `1b31a582225fa905e931dd7d7ba053da6bea2e4c81686f9502884b8dd2cd81d3` |
+| `packages/harness/src/createOperationalHarness.ts`                             | `f1ef60850d5efbb87833da8386b1f0654be764cb9ae72ea89207f88213c73e1b` |
+
+## Contenção e encerramento
+
+O scope próprio `cvg-codex100-native-delivery-2310287.scope` estava ativo **antes de lançar o alvo**. O guard verificou `MemoryMax=2147483648`, `CPUQuotaPerSecUSec=1s`, `TasksMax=128`, `RuntimeMaxUSec=2min` via systemd e os arquivos vivos cgroup2 `memory.max=2147483648`, `cpu.max=100000 100000`, `pids.max=128`. O bundle repetiu a verificação dos limites antes de chamar a factory. O harness alvo só executou dentro de bwrap `--unshare-all --clearenv --cap-drop ALL --die-with-parent --new-session`, com sete identidades de namespace distintas do host e somente loopback com zero tráfego observado.
+
+Montagens: projeção readonly do repositório em `/repo/packages` e `/repo/package.json`, Node, bundle, bibliotecas ELF necessárias e limites cgroup readonly; `/work` é exclusivamente o output próprio; `/tmp` privado, `/proc` do namespace e `/dev` mínimo. Não se expõe a home do host, .git, configs, secrets, socket de sessão nem node_modules. Ambiente alvo: PATH=/nonexistent, LANG=C, PWD=/work. Nenhuma chamada de subprocesso é feita pelo helper alvo; processos auxiliares pertencem somente à contenção/supervisão, sem subagentes.
+
+[Comando exato](raw/target-command.json), [scope ativo](raw/live-scope.json), [limites pré-alvo](raw/live-cgroup-before-target.json), [prova kernel](raw/output/kernel-proof.json), stdout/stderr e [scope terminal](raw/terminal-scope.json) preservados. Timeout próprio100s do alvo,115s do launcher, RuntimeMax120s; cleanup só consulta/para a unidade de nome próprio em caso de necessidade. Todos os três scopes próprios estão inactive/dead, ControlGroup vazio; sem job/resource próprio vivo. Nenhum processo/sessão de referência ou outra lane foi consultado ou alterado.
+
+## Falhas preservadas
+
+[attempt-1](raw/attempt-1/target.stderr.log) e [attempt-2](raw/attempt-2/target.stderr.log) terminaram exit1 na verificação do ambiente, **antes da factory**. O bwrap acrescenta `PWD=/work` depois de limpar o ambiente; o guard inicial esperava somente PATH/LANG. A segunda tentativa apenas imprimiu o ambiente efetivo e confirmou exatamente essas três variáveis, home ausente e `/run/user` ausente. A terceira valida também PWD com valor exato `/work`. Nenhum limite, namespace ou montagem foi relaxado. Bundles, metafiles, hashes e saídas das duas falhas estão preservados. `Result=success` de scope não substitui o exit1 registrado nesses alvos. Stderr vazio da execução final é artefato esperado com exit0, retido byte a byte.
+
+## Limite e continuidade
+
+Diagnóstico isolado do checkout atual, sem aprovação transferida da candidata0224, sem adoção/default da0226 adiada, sem feature/API/gate change. Nenhum Codex reference foi executado ou esperado artificialmente. **Todos os estados do catálogo continuam NOT_RUN e functional_receipts=0.** App, testes e lock não foram editados; nenhum vitest/full gates/install/rede/modelo/conta/PG/Docker/Codex CLI/commit/push/deploy.
+
+`last_completed_action`: medição nativa executada e evidência selada. `status`: COMPLETED_DIAGNOSTIC. `next_action`: Lead avaliar o gap observado para eventual SPEC futura com gate próprio; nenhuma implementação autorizada por esta evidência. Ledgers, backlog, catálogos e continuidade compartilhados readonly por write scope explícito; este parágrafo é o delta de handoff ao Lead.
+
+Helpers: [probe.ts](probe.ts), [build.mjs](build.mjs), [guard.py](guard.py), [run.py](run.py), [finalize.py](finalize.py). Contrato original preservado: [contract.json](contract.json). Claim local e fechamento: [claim.json](claim.json). Manifest de hashes e lista de arquivos: [manifest.json](manifest.json).

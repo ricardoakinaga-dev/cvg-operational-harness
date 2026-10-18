@@ -1,0 +1,117 @@
+
+packages/harness/src/iterative-runtime.ts:155:205
+155: 
+156: const AUDIT_GRACE_MS = 200
+157: 
+158: const TERMINAL_STOPS = new Set<StopReason>([
+159:   'COMPLETED',
+160:   'HUMAN_TAKEOVER',
+161:   'POLICY_DENIED',
+162:   'INSUFFICIENT_EVIDENCE',
+163:   'MAX_STEPS',
+164:   'MAX_COST',
+165:   'MAX_DURATION',
+166:   'MAX_TOKENS',
+167:   'MAX_MODEL_CALLS',
+168:   'MAX_TOOL_CALLS',
+169:   'MAX_REPLANS',
+170:   'MAX_KNOWLEDGE_CALLS',
+171:   'MAX_VERIFICATION_CALLS',
+172:   'VERIFICATION_FAILED',
+173:   'LOOP_DETECTED',
+174:   'STATE_CONFLICT',
+175:   'UNSAFE_REQUEST',
+176:   'CANCELLED'
+177: ])
+178: 
+179: export function errorMessage(error: unknown): string {
+180:   return error instanceof Error ? error.message : 'unknown failure'
+181: }
+182: 
+183: function isNonEmptyString(value: unknown): value is string {
+184:   return typeof value === 'string' && value.trim().length > 0
+185: }
+186: 
+187: export function bindCapabilityFingerprint(
+188:   payload: unknown,
+189:   capabilityFingerprint: string | undefined
+190: ): unknown {
+191:   return capabilityFingerprint
+192:     ? { capabilityFingerprint, input: payload }
+193:     : payload
+194: }
+195: 
+196: function hasValidBoundaryInput(input: RuntimeInput): boolean {
+197:   const identityValues = [
+198:     input.agent?.id,
+199:     input.agent?.version,
+200:     input.tenantId,
+201:     input.conversationId,
+202:     input.sessionId,
+203:     input.correlationId,
+204:     input.traceId
+205:   ]
+
+packages/harness/src/iterative-runtime.ts:1064:1125
+1064:   private rejectCheckpoint(
+1065:     checkpoint: ExecutionCheckpoint,
+1066:     input: RuntimeInput
+1067:   ): string | null {
+1068:     if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+1069:       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+1070:     }
+1071:     if (checkpoint.runtimeProfile !== 'iterative') {
+1072:       return 'Execution checkpoint belongs to a different runtime profile.'
+1073:     }
+1074:     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+1075:       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+1076:     }
+1077:     if (
+1078:       this.options.toolResultContext &&
+1079:       checkpoint.orchestratorVersion !== this.orchestratorVersion
+1080:     ) {
+1081:       return 'Execution checkpoint belongs to a different orchestrator version.'
+1082:     }
+1083:     if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+1084:       return 'Execution checkpoint conflicts with the requested runtime profile.'
+1085:     }
+1086:     if (
+1087:       this.options.capabilityFingerprint &&
+1088:       checkpoint.state.capabilityFingerprint !==
+1089:         this.options.capabilityFingerprint
+1090:     ) {
+1091:       return 'Execution checkpoint belongs to a different capability composition.'
+1092:     }
+1093:     if (
+1094:       checkpoint.state.stopReason &&
+1095:       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+1096:       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+1097:       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+1098:     ) {
+1099:       return 'Terminal execution cannot be resumed.'
+1100:     }
+1101:     return null
+1102:   }
+1103: 
+1104:   private applyResume(
+1105:     run: LoopRun,
+1106:     checkpoint: ExecutionCheckpoint | null
+1107:   ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+1108:     return applyResume(this.dispatchContext, run, checkpoint)
+1109:   }
+1110: 
+1111:   private async runLoop(
+1112:     run: LoopRun
+1113:   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+1114:     if (run.state.pendingQuestion) {
+1115:       // Deterministic rule: a pending question must not be answered by a new
+1116:       // model decision. Re-pause without spending a model call.
+1117:       return this.pause(run, Math.max(1, run.state.stepNumber), {
+1118:         kind: 'pause',
+1119:         pausedKind: 'NEEDS_USER_INPUT',
+1120:         decision: null
+1121:       })
+1122:     }
+1123:     while (true) {
+1124:       // I8: cancellation is honored before every step.
+1125:       if (this.#turns.get(run)?.signal.aborted) {

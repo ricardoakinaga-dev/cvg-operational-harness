@@ -1,0 +1,738 @@
+
+FILE cvg/packages/harness/src/capability-boundary.ts 70 157
+70: export class CapabilityRegistry implements CapabilityRegistryPort {
+71:   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+72:     const stored: StoredRegistration[] = []
+73:     for (const registration of registrations) {
+74:       const normalized = normalizeRegistration(registration)
+75:       if (
+76:         stored.some(
+77:           (candidate) =>
+78:             candidate.descriptor.id === normalized.descriptor.id &&
+79:             candidate.descriptor.version === normalized.descriptor.version
+80:         )
+81:       ) {
+82:         throw new CapabilityRegistryError(
+83:           'duplicate_capability',
+84:           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+85:         )
+86:       }
+87:       stored.push(normalized)
+88:     }
+89:     registrationsByRegistry.set(this, Object.freeze(stored))
+90:   }
+91: 
+92:   public register(registration: CapabilityRegistration): CapabilityRegistry {
+93:     const normalized = normalizeRegistration(registration)
+94:     if (
+95:       getRegistrations(this).some(
+96:         (candidate) =>
+97:           candidate.descriptor.id === normalized.descriptor.id &&
+98:           candidate.descriptor.version === normalized.descriptor.version
+99:       )
+100:     ) {
+101:       throw new CapabilityRegistryError(
+102:         'duplicate_capability',
+103:         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+104:       )
+105:     }
+106: 
+107:     return CapabilityRegistry.fromStored([
+108:       ...getRegistrations(this),
+109:       normalized
+110:     ])
+111:   }
+112: 
+113:   public listDescriptors(): readonly CapabilityDescriptor[] {
+114:     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+115:       cloneDescriptor(descriptor)
+116:     )
+117:   }
+118: 
+119:   public resolveDescriptor(
+120:     capabilityId: string,
+121:     version: string
+122:   ): CapabilityDescriptor | undefined {
+123:     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+124:     if (!isBoundedVersion(version)) return undefined
+125:     const registration = getRegistrations(this).find(
+126:       (candidate) =>
+127:         candidate.descriptor.id === capabilityId &&
+128:         candidate.descriptor.version === version
+129:     )
+130:     return registration ? cloneDescriptor(registration.descriptor) : undefined
+131:   }
+132: 
+133:   public compositionFingerprint(): string {
+134:     const descriptors = sorted(getRegistrations(this)).map(
+135:       ({ descriptor }) => descriptor
+136:     )
+137:     return createHash('sha256')
+138:       .update(
+139:         stableSerialize({
+140:           schemaVersion: 'capability-composition-v1',
+141:           descriptors
+142:         })
+143:       )
+144:       .digest('hex')
+145:   }
+146: 
+147:   private static fromStored(
+148:     registrations: readonly StoredRegistration[]
+149:   ): CapabilityRegistry {
+150:     const registry = Object.create(
+151:       CapabilityRegistry.prototype
+152:     ) as CapabilityRegistry
+153:     registrationsByRegistry.set(registry, Object.freeze([...registrations]))
+154:     return registry
+155:   }
+156: }
+157: 
+
+FILE cvg/packages/harness/src/capability-boundary.ts 207 285
+207: function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+208:   if (!isPlainRecord(value)) {
+209:     throw new CapabilityRegistryError(
+210:       'invalid_descriptor',
+211:       'Capability descriptor must be a plain object'
+212:     )
+213:   }
+214: 
+215:   const descriptor = value as Record<string, unknown>
+216:   if (!isBoundedIdentifier(descriptor.id, MAX_ID_LENGTH)) {
+217:     throw invalidDescriptor('Capability id is invalid')
+218:   }
+219:   if (!isBoundedVersion(descriptor.version)) {
+220:     throw invalidDescriptor('Capability version must be exact and bounded')
+221:   }
+222:   if (
+223:     typeof descriptor.description !== 'string' ||
+224:     descriptor.description.trim().length === 0 ||
+225:     descriptor.description.length > MAX_DESCRIPTION_LENGTH
+226:   ) {
+227:     throw invalidDescriptor('Capability description is invalid')
+228:   }
+229:   if (!ORIGINS.includes(descriptor.origin as CapabilityOrigin)) {
+230:     throw invalidDescriptor('Capability origin is invalid')
+231:   }
+232:   if (!isBoundedIdentifier(descriptor.providerId, MAX_ID_LENGTH)) {
+233:     throw invalidDescriptor('Capability provider id is invalid')
+234:   }
+235:   if (!isBoundedVersion(descriptor.providerVersion)) {
+236:     throw invalidDescriptor('Capability provider version is invalid')
+237:   }
+238:   if (
+239:     !isRisk(descriptor.risk) ||
+240:     !isSideEffect(descriptor.sideEffect) ||
+241:     typeof descriptor.idempotent !== 'boolean' ||
+242:     typeof descriptor.requiresApproval !== 'boolean'
+243:   ) {
+244:     throw invalidDescriptor('Capability governance metadata is invalid')
+245:   }
+246: 
+247:   const inputSchema = cloneJsonValue(descriptor.inputSchema)
+248:   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+249:   return deepFreeze({
+250:     id: descriptor.id,
+251:     version: descriptor.version,
+252:     description: descriptor.description.trim(),
+253:     inputSchema,
+254:     outputSchema,
+255:     risk: descriptor.risk,
+256:     sideEffect: descriptor.sideEffect,
+257:     idempotent: descriptor.idempotent,
+258:     requiresApproval: descriptor.requiresApproval,
+259:     origin: descriptor.origin,
+260:     providerId: descriptor.providerId,
+261:     providerVersion: descriptor.providerVersion
+262:   }) as CapabilityDescriptor
+263: }
+264: 
+265: function normalizeRegistration(value: unknown): StoredRegistration {
+266:   try {
+267:     if (!isPlainRecord(value)) {
+268:       throw new CapabilityRegistryError(
+269:         'invalid_descriptor',
+270:         'Capability registration must be a plain object'
+271:       )
+272:     }
+273:     const registration = value as Record<string, unknown>
+274:     return {
+275:       descriptor: normalizeDescriptor(registration.descriptor),
+276:       implementation: normalizeImplementation(registration.implementation)
+277:     }
+278:   } catch (error) {
+279:     if (error instanceof CapabilityRegistryError) throw error
+280:     throw new CapabilityRegistryError(
+281:       'invalid_descriptor',
+282:       'Capability registration contains unsupported data'
+283:     )
+284:   }
+285: }
+
+FILE cvg/packages/harness/src/capability-boundary.ts 342 405
+342: function toTool(registration: StoredRegistration): ToolDefinition {
+343:   const descriptor = cloneDescriptor(registration.descriptor)
+344:   return {
+345:     ...descriptor,
+346:     execute: (input: unknown, context: ToolExecutionContext) =>
+347:       executeBound(registration.implementation, input, context)
+348:   }
+349: }
+350: 
+351: async function executeBound(
+352:   implementation: CapabilityImplementation,
+353:   input: unknown,
+354:   context: ToolExecutionContext
+355: ): Promise<ToolResult> {
+356:   let safeInput: unknown
+357:   try {
+358:     safeInput = cloneJsonValue(input)
+359:     if (!inputMatchesExecutionContext(safeInput, context)) {
+360:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+361:     }
+362:     if (implementation.validateInput(safeInput) !== true) {
+363:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+364:     }
+365:   } catch {
+366:     return { status: 'REJECTED', error: 'capability_input_invalid' }
+367:   }
+368: 
+369:   let result: ToolResult
+370:   try {
+371:     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+372:     const rawResult = await implementation.execute(safeInput, safeContext)
+373:     const normalizedResult = normalizeToolResult(rawResult)
+374:     if (!normalizedResult) {
+375:       return { status: 'REJECTED', error: 'capability_result_invalid' }
+376:     }
+377:     result = normalizedResult
+378:   } catch {
+379:     return { status: 'FAILED', error: 'capability_execution_failed' }
+380:   }
+381: 
+382:   if (result.status === 'SUCCEEDED') {
+383:     try {
+384:       if (implementation.validateOutput(result.output) !== true) {
+385:         return { status: 'REJECTED', error: 'capability_output_invalid' }
+386:       }
+387:     } catch {
+388:       return { status: 'REJECTED', error: 'capability_output_invalid' }
+389:     }
+390:   }
+391: 
+392:   try {
+393:     return {
+394:       status: result.status,
+395:       ...(result.output !== undefined
+396:         ? { output: cloneJsonValue(result.output) }
+397:         : {}),
+398:       ...(result.error !== undefined ? { error: result.error } : {})
+399:     }
+400:   } catch {
+401:     return { status: 'REJECTED', error: 'capability_result_invalid' }
+402:   }
+403: }
+404: 
+405: function cloneDescriptor(
+
+FILE cvg/packages/harness/src/capability-boundary.ts 454 474
+454: function isBoundedIdentifier(
+455:   value: unknown,
+456:   maxLength: number
+457: ): value is string {
+458:   return (
+459:     typeof value === 'string' &&
+460:     value.trim() === value &&
+461:     value.length > 0 &&
+462:     value.length <= maxLength &&
+463:     CAPABILITY_ID_PATTERN.test(value)
+464:   )
+465: }
+466: 
+467: function isBoundedVersion(value: unknown): value is string {
+468:   return (
+469:     isBoundedIdentifier(value, MAX_VERSION_LENGTH) &&
+470:     value.toLowerCase() !== 'latest'
+471:   )
+472: }
+473: 
+474: function isRisk(value: unknown): boolean {
+
+FILE cvg/packages/harness/src/capability-boundary.ts 529 608
+529: function stableSerialize(
+530:   value: unknown,
+531:   state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+532:   depth = 0
+533: ): string {
+534:   state.nodes += 1
+535:   if (state.nodes > MAX_JSON_NODES) {
+536:     throw new Error('JSON node budget exceeded')
+537:   }
+538:   if (depth > MAX_JSON_DEPTH) {
+539:     throw new Error('JSON depth budget exceeded')
+540:   }
+541: 
+542:   if (value === null) return 'null'
+543:   if (typeof value === 'string') {
+544:     if (value.length > MAX_JSON_STRING_LENGTH) {
+545:       throw new Error('JSON string budget exceeded')
+546:     }
+547:     return JSON.stringify(value)
+548:   }
+549:   if (typeof value === 'boolean') return value ? 'true' : 'false'
+550:   if (typeof value === 'number') {
+551:     if (!Number.isFinite(value)) throw new Error('Non-finite value')
+552:     return JSON.stringify(value)
+553:   }
+554:   if (typeof value !== 'object' || value === undefined) {
+555:     throw new Error('Value is not JSON serializable')
+556:   }
+557:   if (state.seen.has(value)) throw new Error('Value contains a cycle')
+558:   state.seen.add(value)
+559:   try {
+560:     if (Array.isArray(value)) {
+561:       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+562:         throw new Error('JSON array budget exceeded')
+563:       }
+564:       const items: string[] = []
+565:       for (let index = 0; index < value.length; index += 1) {
+566:         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+567:           throw new Error('Sparse arrays are not supported')
+568:         }
+569:         items.push(stableSerialize(value[index], state, depth + 1))
+570:       }
+571:       return boundedSerialized(`[${items.join(',')}]`)
+572:     }
+573:     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+574:     const keys = Object.keys(value)
+575:     if (
+576:       keys.length > MAX_JSON_KEYS ||
+577:       Object.getOwnPropertySymbols(value).length > 0 ||
+578:       Object.getOwnPropertyNames(value).length !== keys.length
+579:     ) {
+580:       throw new Error('JSON object budget or shape exceeded')
+581:     }
+582:     const parts: string[] = []
+583:     for (const key of keys.sort()) {
+584:       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+585:         throw new Error('Unsafe JSON object key')
+586:       }
+587:       const property = Object.getOwnPropertyDescriptor(value, key)
+588:       if (!property || !('value' in property)) {
+589:         throw new Error('Accessor properties are not supported')
+590:       }
+591:       parts.push(
+592:         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+593:       )
+594:     }
+595:     return boundedSerialized(`{${parts.join(',')}}`)
+596:   } finally {
+597:     state.seen.delete(value)
+598:   }
+599: }
+600: 
+601: function boundedSerialized(value: string): string {
+602:   if (value.length > MAX_JSON_BYTES) {
+603:     throw new Error('JSON byte budget exceeded')
+604:   }
+605:   return value
+606: }
+607: 
+608: function deepFreeze<T>(value: T): T {
+
+FILE cvg/packages/harness/src/effect-journal.ts 109 155
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+
+FILE cvg/packages/harness/src/effect-journal.ts 245 395
+245:   /** Binds effect replay to the exact capability composition. */
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: function proposalHash(
+252:   tool: ToolDefinition,
+253:   input: unknown,
+254:   compositionFingerprint: string | undefined
+255: ): string {
+256:   return createHash('sha256')
+257:     .update(
+258:       JSON.stringify({
+259:         schemaVersion: 'effect-proposal-v2',
+260:         compositionFingerprint: compositionFingerprint ?? null,
+261:         tool: {
+262:           id: tool.id,
+263:           version: tool.version,
+264:           sideEffect: tool.sideEffect,
+265:           idempotent: tool.idempotent,
+266:           providerId:
+267:             'providerId' in tool
+268:               ? (tool as { providerId?: unknown }).providerId
+269:               : undefined,
+270:           providerVersion:
+271:             'providerVersion' in tool
+272:               ? (tool as { providerVersion?: unknown }).providerVersion
+273:               : undefined
+274:         },
+275:         input
+276:       })
+277:     )
+278:     .digest('hex')
+279: }
+280: 
+281: /**
+282:  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+283:  * policy and approval still run in the harness before this wrapper is called.
+284:  */
+285: export function createJournaledToolRegistry(
+286:   registry: ToolRegistry,
+287:   journal: EffectJournal,
+288:   options: JournaledToolRegistryOptions = {}
+289: ): ToolRegistry {
+290:   return {
+291:     list: () => registry.list(),
+292:     resolve: (toolId, version) => {
+293:       const tool = registry.resolve(toolId, version)
+294:       if (!tool) return undefined
+295:       return journaledTool(tool, journal, options)
+296:     }
+297:   }
+298: }
+299: 
+300: function journaledTool(
+301:   tool: ToolDefinition,
+302:   journal: EffectJournal,
+303:   options: JournaledToolRegistryOptions
+304: ): ToolDefinition {
+305:   const compositionFingerprint = options.compositionFingerprint
+306:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+307:     : undefined
+308:   return {
+309:     ...tool,
+310:     execute: async (
+311:       input: unknown,
+312:       context: ToolExecutionContext
+313:     ): Promise<ToolResult> => {
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+315:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+316:       const reservation = await journal.reserve({
+317:         tenantId: context.tenantId,
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+320:         attemptId
+321:       })
+322:       if (reservation.state === 'CONFIRMED') {
+323:         return { status: 'SUCCEEDED', output: reservation.result }
+324:       }
+325:       if (
+326:         reservation.state === 'UNCERTAIN' ||
+327:         reservation.state === 'EFFECT_STARTED'
+328:       ) {
+329:         return {
+330:           status: 'REJECTED',
+331:           error:
+332:             'unknown_effect: explicit reconciliation is required before retry'
+333:         }
+334:       }
+335:       if (reservation.attemptId !== attemptId) {
+336:         return {
+337:           status: 'REJECTED',
+338:           error:
+339:             'unknown_effect: an existing reservation requires reconciliation'
+340:         }
+341:       }
+342:       await journal.markStarted({
+343:         tenantId: context.tenantId,
+344:         operationKey,
+345:         attemptId
+346:       })
+347:       try {
+348:         const result = await tool.execute(input, context)
+349:         if (
+350:           options.crashAfterEffectBeforeConfirm &&
+351:           result.status === 'SUCCEEDED'
+352:         ) {
+353:           await journal.markUncertain({
+354:             tenantId: context.tenantId,
+355:             operationKey,
+356:             attemptId,
+357:             reason: 'synthetic crash after effect before confirmation'
+358:           })
+359:           return {
+360:             status: 'REJECTED',
+361:             error:
+362:               'unknown_effect: synthetic crash after effect before confirmation'
+363:           }
+364:         }
+365:         if (result.status === 'SUCCEEDED') {
+366:           await journal.confirm({
+367:             tenantId: context.tenantId,
+368:             operationKey,
+369:             attemptId,
+370:             result: result.output
+371:           })
+372:         } else {
+373:           await journal.fail({
+374:             tenantId: context.tenantId,
+375:             operationKey,
+376:             attemptId,
+377:             error: result.error ?? 'tool failed'
+378:           })
+379:         }
+380:         return result
+381:       } catch (error) {
+382:         const message =
+383:           error instanceof Error ? error.message : 'tool execution failed'
+384:         await journal.markUncertain({
+385:           tenantId: context.tenantId,
+386:           operationKey,
+387:           attemptId,
+388:           reason: `unknown effect after executor failure: ${message}`
+389:         })
+390:         return {
+391:           status: 'REJECTED',
+392:           error: 'unknown_effect: executor outcome is uncertain'
+393:         }
+394:       }
+395:     }
+
+FILE cvg/packages/harness/src/createOperationalHarness.ts 132 225
+132:     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+133: 
+134:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+135:     const governedInput = capabilityFingerprint
+136:       ? { ...input, capabilityFingerprint }
+137:       : input
+138:     if (
+139:       capabilityFingerprint &&
+140:       input.executionId &&
+141:       input.capabilityFingerprint === undefined
+142:     ) {
+143:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+144:       return {
+145:         response:
+146:           'Capability composition fingerprint is required for durable execution.',
+147:         stopReason: 'STATE_CONFLICT',
+148:         steps: 0,
+149:         modelCalls: 0,
+150:         toolCalls: 0,
+151:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+152:       }
+153:     }
+154:     if (
+155:       capabilityFingerprint &&
+156:       input.capabilityFingerprint !== undefined &&
+157:       input.capabilityFingerprint !== capabilityFingerprint
+158:     ) {
+159:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+160:       return {
+161:         response:
+162:           'Capability composition fingerprint does not match the runtime.',
+163:         stopReason: 'STATE_CONFLICT',
+164:         steps: 0,
+165:         modelCalls: 0,
+166:         toolCalls: 0,
+167:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+168:       }
+169:     }
+170:     const profile = resolveProfile(governedInput)
+171:     if (profile === 'iterative') {
+172:       if (!iterative) {
+173:         await safeAudit(
+174:           options,
+175:           governedInput,
+176:           'runtime.stopped',
+177:           'STATE_CONFLICT'
+178:         )
+179:         return {
+180:           response:
+181:             'The iterative runtime profile is not configured in this composition.',
+182:           stopReason: 'STATE_CONFLICT',
+183:           steps: 0,
+184:           modelCalls: 0,
+185:           toolCalls: 0,
+186:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+187:         }
+188:       }
+189:       return iterative.execute(governedInput)
+190:     }
+191:     return singlePass.execute(governedInput)
+192:   }
+193: 
+194:   return {
+195:     run: (input) => execute(input),
+196:     execute,
+197:     resolveProfile,
+198:     ...(options.capabilities
+199:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+200:       : {})
+201:   }
+202: }
+203: 
+204: function resolveTools(
+205:   options: OperationalHarnessOptions,
+206:   capabilityFingerprint: string | undefined
+207: ): ToolRegistry {
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+210:       'Operational harness composition accepts capabilities or tools, not both'
+211:     )
+212:   }
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+216:   if (!registry) {
+217:     throw new Error(
+218:       'Operational harness composition requires an explicit capability or tool registry'
+219:     )
+220:   }
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+224:     ...(capabilityFingerprint
+225:       ? { compositionFingerprint: capabilityFingerprint }
+
+FILE cvg/packages/harness/src/iterative-runtime.ts 430 525
+430:         logControl(this.options.log),
+431:         effectsControl(this.options.effects),
+432:         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+433:         policyControl(this.options.policy),
+434:         approvalsControl(
+435:           this.options.approvals,
+436:           this.options.capabilityFingerprint
+437:             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+438:             : {}
+439:         ),
+440:         auditControl(this.options.audit, { action: 'harness.iterative' }),
+441:         modelCapability(this.options.modelGateway),
+442:         toolsCapability(this.options.tools),
+443:         telemetryCapability(this.options.telemetry, {
+444:           name: 'harness.iterative'
+445:         })
+446:       ],
+447:       ITERATIVE_REQUIRED_SERVICES
+448:     )
+449:     return this.#kernel
+450:   }
+451: 
+452:   private kernelFor(run: LoopRun): KernelHost {
+453:     const entry = this.#turns.get(run)
+454:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+455:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+456:     return entry.host
+457:   }
+458: 
+459:   /**
+460:    * Kernel view of the current run: the iterative active-duration budget and
+461:    * the caller's cancel signal drive the shared pipelines.
+462:    */
+463:   private turnFor(run: LoopRun): TurnState {
+464:     const entry = this.#turns.get(run)
+465:     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
+466:     if (!entry) throw new Error('Kernel turn is not bound to this run.')
+467:     return createTurnState(
+468:       run.input,
+469:       run.startedAtMs,
+470:       {
+471:         remainingMs: () => this.remainingDuration(run),
+472:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+473:           const outcome = await this.withDeadline(
+474:             ms <= 0 ? new Promise<never>(() => undefined) : operation(),
+475:             ms
+476:           )
+477:           return outcome === DEADLINE_EXCEEDED ? DEADLINE : outcome
+478:         },
+479:         beginModelRequest: () => {
+480:           // Single pre-model gate (PDSH-004 / I11): consume one slot.
+481:           if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+482:             return {
+483:               kind: 'stop',
+484:               stopReason: 'MAX_MODEL_CALLS',
+485:               response:
+486:                 'Model-call budget exhausted before the call was started.'
+487:             }
+488:           }
+489:           this.accountUsage(run, {
+490:             modelCalls: 1,
+491:             inputTokens: 0,
+492:             outputTokens: 0,
+493:             costUsd: 0
+494:           })
+495:           return undefined
+496:         },
+497:         recordModelResult: (result) => {
+498:           // Single post-result accounting site (PDSH-004).
+499:           this.accountUsage(run, {
+500:             modelCalls: 0,
+501:             inputTokens: result.inputTokens,
+502:             outputTokens: result.outputTokens,
+503:             costUsd: result.costUsd
+504:           })
+505:           if (
+506:             run.usage.inputTokens + run.usage.outputTokens >
+507:             run.input.budget.maxTokens
+508:           ) {
+509:             return {
+510:               kind: 'stop',
+511:               stopReason: 'MAX_TOKENS',
+512:               response:
+513:                 'Token budget exhausted before a response could be completed.'
+514:             }
+515:           }
+516:           if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+517:             return {
+518:               kind: 'stop',
+519:               stopReason: 'MAX_COST',
+520:               response:
+521:                 'Cost budget exhausted before a response could be completed.'
+522:             }
+523:           }
+524:           return undefined
+525:         }

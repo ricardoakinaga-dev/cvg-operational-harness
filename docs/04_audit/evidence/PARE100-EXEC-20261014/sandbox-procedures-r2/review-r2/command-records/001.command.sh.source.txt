@@ -1,0 +1,21 @@
+python - <<'PY'
+import os,json,hashlib,pathlib
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-packet')
+O=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-r2')
+def sha(p):
+ h=hashlib.sha256()
+ with open(p,'rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return h.hexdigest()
+files=sorted(str(p.relative_to(P)) for p in P.rglob('*') if p.is_file())
+manifest_candidates=[x for x in files if pathlib.Path(x).name in ('packet-manifest.json','packet-manifest.sha256')]
+assert len(manifest_candidates)==1,manifest_candidates
+mp=P/manifest_candidates[0]; actual_manifest=sha(mp)
+assert actual_manifest=='52c3d3e3a0a550d12b65476e0b66fa23bb69710034c7674ede0dbe8898563bb7',actual_manifest
+m=json.load(open(mp)); print('MANIFEST_SCHEMA',json.dumps(m)[:18000])
+for n in files:
+ if any(s in pathlib.Path(n).name.lower() for s in ('source-manifest','external-input','constraint')):
+  v=json.load(open(P/n));print('HASH_SCHEMA',n,json.dumps(v)[:42000])
+print('MEMBERSHIP',json.dumps(files))
+PY
+

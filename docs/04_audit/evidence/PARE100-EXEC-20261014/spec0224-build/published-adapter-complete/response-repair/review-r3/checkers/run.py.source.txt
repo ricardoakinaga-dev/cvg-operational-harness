@@ -1,0 +1,7 @@
+import os,json,pathlib,subprocess,sys,time
+R=pathlib.Path(__file__).resolve().parents[1];P=R.parent/'review-packet-r3';m=json.loads((P/'manifest.json').read_text());name=sys.argv[1]; config=sys.argv[2] if len(sys.argv)>2 else str(R/'configs/vitest-template.mjs')
+env=os.environ.copy();env.update({'I1_READ_LOG':str(R/'raw'/f'{name}-reads.jsonl'),'I1_REVIEW':str(R),'I1_SCOPE_PACKAGE':m['allowedScopeMetadata']['path'],'I1_PACKET_DEPS':m['allowedDependencyMirror'],'TMPDIR':str(R/'tmp'),'NODE_COMPILE_CACHE':str(R/'nodecache'),'SPEC0224_RESPONSE_EVIDENCE':str(R/'evidence'/f'{name}.json'),'NODE_OPTIONS':'--require '+str(R/'configs/trace-reads.cjs')})
+cmd=[m['node'],'--experimental-strip-types',m['allowedDependencyMirror']+'/vitest/vitest.mjs','run','--config',config,'--configLoader','native'];rec={'argv':cmd,'cwd':m['artifactRoot'],'envOverrides':{k:env[k] for k in ['I1_READ_LOG','I1_REVIEW','I1_SCOPE_PACKAGE','I1_PACKET_DEPS','TMPDIR','NODE_COMPILE_CACHE','SPEC0224_RESPONSE_EVIDENCE','NODE_OPTIONS']}};(R/'raw'/f'{name}-command.json').write_text(json.dumps(rec,indent=2)+'\n')
+with (R/'raw'/f'{name}-stdout.log').open('w') as out,(R/'raw'/f'{name}-stderr.log').open('w') as err:
+ p=subprocess.run(cmd,cwd=m['artifactRoot'],env=env,stdout=out,stderr=err)
+rec['exit']=p.returncode;(R/'raw'/f'{name}-command.json').write_text(json.dumps(rec,indent=2)+'\n');print(name,'exit',p.returncode);print((R/'raw'/f'{name}-stdout.log').read_text()[-6000:]);print((R/'raw'/f'{name}-stderr.log').read_text()[-4000:])

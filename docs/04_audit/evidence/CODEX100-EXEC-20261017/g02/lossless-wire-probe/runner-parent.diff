@@ -1,0 +1,29 @@
+--- accepted-keyless-runner.py
++++ lossless-wire-runner.py
+@@ -72,7 +72,7 @@
+     c = json.loads((HERE / 'contract.json').read_text())
+     review = json.loads((HERE / 'review-status.json').read_text())
+     assert review['status'] == 'APPROVED_BOUNDED_HOW', 'HOW review not yet accepted; no execution'
+-    for name in ['contract.json', 'driver.py', 'run.py', 'target-guard.py']:
++    for name in ['contract.json', 'driver.py', 'run.py', 'target-guard.py', 'cases.json']:
+         assert sha(HERE / name) == review['input_sha256'][name], 'reviewed control drift'
+     for row in c['executable_control_inputs']:
+         assert sha(Path(row['path'])) == row['sha256'], 'verifier/control chain drift'
+@@ -98,7 +98,7 @@
+     resource = Path(c['resource_root'])
+     resource.mkdir(parents=True, exist_ok=True)
+     assert shutil.disk_usage(resource).free >= c['minimum_free_disk_bytes'], 'insufficient disk'
+-    attempt = 'keyless-' + uuid.uuid4().hex[:10]
++    attempt = 'lossless-' + uuid.uuid4().hex[:10]
+     work = resource / attempt
+     work.mkdir(exist_ok=False)
+     control = resource / (attempt + '-control')
+@@ -108,6 +108,8 @@
+     (home / '.codex/config.toml').write_text(c['synthetic_config_toml'])
+     (control / 'driver.py').write_bytes((HERE / 'driver.py').read_bytes())
+     (control / 'target-guard.py').write_bytes((HERE / 'target-guard.py').read_bytes())
++    (control / 'base-driver.py').write_bytes(Path(c['base_driver_input']['path']).read_bytes())
++    (control / 'cases.json').write_bytes((HERE / 'cases.json').read_bytes())
+     (control / 'environment.json').write_text(json.dumps(c['environment']))
+     save(control / 'host-namespaces.json', {k: os.readlink('/proc/self/ns/' + k) for k in ['net', 'mnt', 'pid']})
+     uid, gid = os.getuid(), os.getgid()

@@ -1,0 +1,142 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+const R=process.env.I1_REVIEW, MAX=8388608;
+const H=v=>crypto.createHash('sha256').update(v).digest('hex');
+const bytes=v=>Buffer.byteLength(v,'utf8');
+function canonical(v){
+ if(v===null||typeof v!=='object')return JSON.stringify(v);
+ const pieces=[];
+ if(Array.isArray(v)){for(const x of v)pieces.push(canonical(x));return '['+pieces.join(',')+']';}
+ for(const k of Object.keys(v).sort())pieces.push(JSON.stringify(k)+':'+canonical(v[k]));
+ return '{'+pieces.join(',')+'}';
+}
+const equal=(a,b)=>assert.equal(canonical(a),canonical(b));
+const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
+const write=(p,v)=>fs.writeFileSync(p,JSON.stringify(v,null,2)+'\n',{flag:'wx'});
+let snapshotCount=0;
+const validated=new Map();
+function restore(s){
+ const cp=structuredClone(s.checkpointWithoutFixturePadding),p=s.paddingRecipe;
+ assert.equal(p.field,'state.resolvedInputs.fixturePadding');
+ const pad=p.character.repeat(p.repeat)+p.suffix;
+ assert.equal(H(pad),p.sha256);
+ if(p.present)cp.state.resolvedInputs.fixturePadding=pad;
+ else assert.equal(pad,'');
+ const {checkpointId,createdAt,digest,...unsigned}=cp;
+ const raw=canonical(unsigned);
+ assert.equal(bytes(raw),s.logicalUnsignedBytes);
+ assert.equal(H(raw),s.logicalUnsignedSha256);
+ assert.equal(H('cvg.checkpoint.v2\n'+raw),digest);
+ assert.equal(MAX-bytes(raw),s.remainingBytes);
+ assert.ok(bytes(raw)<=MAX);
+ snapshotCount++;
+ return cp;
+}
+function physical(p){
+ const cp=restore(p.nativeLogicalCheckpoint),state=canonical(cp.state),data=Buffer.from(state,'utf8').toString('base64');
+ const wrapper={...p.wrapperHeader,data};
+ equal(Object.keys(wrapper).sort(),['data','decodedBytes','decodedSha256','encoding','storageCodec']);
+ assert.equal(wrapper.encoding,'base64');assert.equal(wrapper.storageCodec,'cvg.checkpoint-state/2');
+ assert.equal(bytes(state),wrapper.decodedBytes);assert.equal(H(state),wrapper.decodedSha256);
+ assert.equal(Buffer.from(data,'base64').toString('utf8'),state);
+ assert.equal(data.length,4*Math.ceil(bytes(state)/3));
+ const w=p.wire,wire=w.prefixBeforeQuotedBase64Data+JSON.stringify(data)+w.suffixAfterQuotedBase64Data;
+ equal(JSON.parse(wire),wrapper);
+ assert.equal(bytes(wire),w.sqlTextBytes);assert.equal(bytes(wire),p.rowHeader.physical_state_bytes);
+ assert.equal(H(wire),w.sqlTextSha256);assert.equal(H(canonical(wrapper)),w.canonicalWrapperSha256);
+ assert.equal(data.length,w.base64Chars);assert.equal(H(data),w.base64Sha256);
+ assert.equal(bytes(state),w.expectedStateCanonicalBytes);assert.equal(H(state),w.expectedStateCanonicalSha256);
+ const map={tenant_id:'tenantId',execution_id:'executionId',checkpoint_id:'checkpointId',checkpoint_version:'checkpointVersion',runtime_profile:'runtimeProfile',runtime_version:'runtimeVersion',orchestrator_version:'orchestratorVersion',step_number:'stepNumber',budget_usage:'budgetUsage',digest:'digest',created_at:'createdAt'};
+ for(const [sql,logical]of Object.entries(map))equal(p.rowHeader[sql],cp[logical]);
+ assert.equal(p.readerIdentity.current_user,p.readerIdentity.session_user);
+ assert.equal(p.readerIdentity.current_database,'pare224_synthetic');
+ assert.equal(p.readerIdentity.tenant_context,cp.tenantId);
+ assert.notEqual(p.readerIdentity.backend_pid,p.writerPid);
+ assert.equal(p.freshPhysicalClient,true);
+ return {cp,stateSha256:H(state),sqlTextSha256:H(wire),sqlTextBytes:bytes(wire),decodedBytes:bytes(state),digest:cp.digest};
+}
+function checkCase(root,name){
+ const dir=path.join(root,'cases',name),o=read(path.join(dir,'observed.json')), ps=read(path.join(dir,'physical-checkpoints.json')),j=read(path.join(dir,'native-journal-trace.json'));
+ assert.equal(o.verdict,'IMPLEMENTED_SCOPED_EXECUTION_ONLY');
+ assert.equal(o.first.stopReason,'NEEDS_USER_INPUT');equal(o.observerErrors,[]);
+ const refuse=o.freeBytes===2000,old=o.priorReceipts?2:0;
+ assert.equal(o.actualCompleteEntries,old+(refuse?0:1));assert.equal(o.calls.length,o.actualCompleteEntries);
+ assert.equal(o.measurements.length,old+1);
+ assert.equal(o.bodiesBefore,o.priorReceipts?1:0);assert.equal(o.bodiesAfter,o.bodiesBefore);
+ assert.equal(o.before.remainingBytes,o.freeBytes);
+ const before=restore(o.before),after=restore(o.after),pause=restore(o.actualBeforePadding.paused);
+ const bCopy=structuredClone(before);delete bCopy.state.resolvedInputs.fixturePadding;
+ for(const k of ['checkpointId','createdAt','digest']){delete bCopy[k];delete pause[k];}
+ equal(bCopy,pause);
+ equal(before.state.resolvedInputs.fixturePadding,after.state.resolvedInputs.fixturePadding);
+ const oldRc=before.state.toolResultContext.decisionAdmissions,afterRc=after.state.toolResultContext.decisionAdmissions;
+ assert.equal(oldRc.length,old);assert.ok(oldRc.every(r=>r.status==='SETTLED'));
+ equal(afterRc.slice(0,old),oldRc);
+ const results=cp=>cp.state.observations.filter(x=>x.type==='TOOL_RESULT');
+ assert.equal(results(before).length,o.priorReceipts?1:0);equal(results(after),results(before));
+ equal(o.oldJournal,o.afterJournal);
+ if(o.priorReceipts)assert.equal(o.oldJournal.state,'CONFIRMED');else equal(j,[]);
+ const verified=ps.map(p=>({label:p.label,backendPid:p.readerIdentity.backend_pid,writerPid:p.writerPid,...physical(p)}));
+ for(const e of o.events)assert.equal(o.events[e.sequence-1],e);
+ const E=n=>o.events[n-1];
+ for(const call of o.calls){
+  const measurement=o.measurements.find(m=>m.counterEntry<call.completeEntry&&canonical(m.request)===canonical(call.request));assert.ok(measurement);
+  const entry=E(call.completeEntry),cas=E(call.priorCASEvent),readEvent=E(call.readEvent);
+  assert.equal(entry.type,'model.complete-entry');assert.equal(cas.type,'native-CAS-return-after-transaction');assert.equal(cas.result.status,'APPLIED');assert.equal(readEvent.type,'fresh-service-SQL-before-response');
+  assert.ok(measurement.counterEntry<cas.sequence&&cas.sequence<entry.sequence&&entry.sequence<readEvent.sequence);
+  const computation=o.events.find(e=>e.type==='synthetic-response-computation'&&e.completeEntry===call.completeEntry);assert.ok(computation.sequence>readEvent.sequence);
+  const cp=restore(call.checkpointAtComplete),r=call.receipt;
+  equal(verified.find(p=>p.label===`model-entry-${entry.completeEntryCount}`).cp,cp);
+  assert.equal(cp.checkpointId,cas.checkpointId);assert.equal(cp.digest,cas.digest);
+  assert.equal(cp.state.toolResultContext.pendingDecisionAdmission,r.admissionId);assert.equal(cas.pendingReceipt,r.admissionId);assert.equal(r.status,'RESERVED');
+  equal(cp.state.toolResultContext.decisionAdmissions.at(-1),r);
+  assert.equal(r.tenantId,cp.tenantId);assert.equal(r.executionId,cp.executionId);
+  assert.equal(r.requestSha256,H(canonical(call.request)));equal(r.measurement,measurement.measurement);
+  assert.equal(r.measurement.inputUpperBoundTokens,Math.ceil(bytes(canonical(call.request))/64));
+  equal(r.reserved,{modelCalls:1,inputTokens:r.measurement.inputUpperBoundTokens,outputTokens:512,costUsd:r.measurement.costUpperBoundUsd});
+  assert.equal(cp.budgetUsage.modelCalls,entry.completeEntryCount);
+  for(const f of ['modelCalls','inputTokens','outputTokens','costUsd'])assert.equal(cp.budgetUsage[f],cp.state.toolResultContext.decisionAdmissions.reduce((sum,x)=>sum+(x.status==='SETTLED'?x.actual:x.reserved)[f],0));
+  const response=o.responses.find(x=>x.completeEntry===call.completeEntry).response;
+  const settled=afterRc.find(x=>x.admissionId===r.admissionId);assert.equal(settled.status,'SETTLED');
+  equal(settled.actual,{modelCalls:1,inputTokens:response.inputTokens,outputTokens:response.outputTokens,costUsd:response.costUsd});
+  assert.equal(settled.resultSha256,H(canonical(response)));
+  assert.equal(response.inputTokens,Math.ceil(bytes(canonical(call.request))/64));assert.equal(response.outputTokens,Math.ceil(bytes(canonical(response.text))/64));
+  assert.equal(response.provider,r.measurement.provider);assert.equal(response.model,r.measurement.model);assert.equal(call.request.maxOutputTokens,512);
+ }
+ assert.equal(after.state.toolResultContext.pendingDecisionAdmission,null);
+ if(refuse){
+  assert.equal(o.result.stopReason,'INSUFFICIENT_EVIDENCE');assert.equal(o.result.response,'CONTEXT_OVERFLOW: No checkpoint space for the decision receipt.');assert.equal(after.state.stopReason,'INSUFFICIENT_EVIDENCE');assert.equal(after.state.pendingQuestion,undefined);
+  for(const f of ['modelCalls','inputTokens','outputTokens','costUsd','toolCalls','steps','decisionRepairs','knowledgeCalls','verificationCalls','replans'])equal(after.budgetUsage[f],before.budgetUsage[f]);
+  equal(o.result.usage,{inputTokens:before.budgetUsage.inputTokens,outputTokens:before.budgetUsage.outputTokens,costUsd:before.budgetUsage.costUsd});
+  assert.ok(after.budgetUsage.activeDurationMs>before.budgetUsage.activeDurationMs);
+  equal(o.repeatCounts.before,o.repeatCounts.after);
+  assert.equal(o.repeated.stopReason,'STATE_CONFLICT');assert.ok(o.repeated.response.includes('Terminal execution cannot be resumed'));
+  equal(restore(o.afterRepeat),after);equal(o.afterRepeatJournal,o.oldJournal);
+ } else {
+  assert.equal(o.result.stopReason,'COMPLETED');assert.equal(afterRc.length,old+1);assert.ok(afterRc.every(x=>x.status==='SETTLED'));
+  for(const f of ['modelCalls','inputTokens','outputTokens','costUsd'])assert.equal(after.budgetUsage[f],afterRc.reduce((sum,r)=>sum+r.actual[f],0));
+ }
+ const rawAfter=ps.find(x=>x.label==='after-resume');
+ for(const p of ps.filter(x=>['data-only-padding-CAS-committed','after-resume','after-repeat'].includes(x.label)))equal(p.journalRows,rawAfter.journalRows);
+ equal(o.rlsControls,{crossTenant:[],noContext:[],storeOtherTenant:null});
+ for(const w of o.writes){assert.equal(w.result.status,'APPLIED');if(w.checkpoint)restore(w.checkpoint);}
+ for(const m of o.measurements)restore(m.checkpointBeforeReserve);
+ return {name,refusal:refuse,priorReceipts:o.priorReceipts,completeEntries:o.actualCompleteEntries,measurements:o.measurements.length,toolBodies:o.bodiesAfter,finalStop:o.result.stopReason,repeatStop:o.repeated?.stopReason??null,repeatInert:refuse?canonical(o.repeatCounts.before)===canonical(o.repeatCounts.after):null,paddingBytes:bytes(before.state.resolvedInputs.fixturePadding),physicalRows:verified.map(({cp,...x})=>x),serviceIdentity:ps[0].readerIdentity.current_user,schema:ps[0].readerIdentity.current_schema};
+}
+const roots=process.argv.slice(2),out=[];
+for(const root of roots){
+ const names=fs.readdirSync(path.join(root,'cases')).sort();assert.equal(names.length,6);
+ out.push({root,cases:names.map(n=>checkCase(root,n))});
+}
+const controls=[];const p=read(path.join(roots[0],'cases/free-2000-prior-false-NUL/physical-checkpoints.json')).find(x=>x.label==='after-resume');
+for(const control of ['bad-padding-hash','bad-sql-hash','bad-domain-digest']){
+ const bad=structuredClone(p);
+ if(control==='bad-padding-hash')bad.nativeLogicalCheckpoint.paddingRecipe.sha256='0'.repeat(64);
+ if(control==='bad-sql-hash')bad.wire.sqlTextSha256='0'.repeat(64);
+ if(control==='bad-domain-digest')bad.nativeLogicalCheckpoint.checkpointWithoutFixturePadding.digest='0'.repeat(64);
+ let rejected=false;try{physical(bad);}catch{rejected=true;}assert.ok(rejected);controls.push({control,rejected});
+}
+write(path.join(R,'reconstruction-results.json'),{independent:true,noNativeDecoderImported:true,algorithm:'Recursive lexicographic JSON using JS string/number encoding; lossless padding restored; SQL wire reconstructed via recorded prefix/base64/suffix; unsigned cvg.checkpoint.v2 newline SHA verified.',snapshotCount,results:out,knownBadPrivateControls:controls});
+console.log(JSON.stringify({datasets:out.length,cases:out.map(x=>x.cases.map(c=>({name:c.name,stop:c.finalStop,entries:c.completeEntries,physicalRows:c.physicalRows.length}))),snapshotCount,controls},null,2));

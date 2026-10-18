@@ -1,0 +1,16 @@
+import json,pathlib,sys,re
+manifest=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/published-contract-review-packet-r3/manifest.json')
+m=json.loads(manifest.read_bytes()); items={x['id']:x for x in m['inputs']}
+mode=sys.argv[1]
+for arg in sys.argv[2:]:
+ parts=arg.split(':'); x=items[parts[0]]; lines=pathlib.Path(x['copy']).read_text().splitlines(); print('\nFILE',x['id'],x['relative'],'LINES',len(lines))
+ if mode=='range':
+  lo=int(parts[1]) if len(parts)>1 else 1; hi=int(parts[2]) if len(parts)>2 else len(lines)
+  for i in range(lo,min(hi,len(lines))+1): print(f'{i}: {lines[i-1]}')
+ elif mode=='outline':
+  for i,l in enumerate(lines,1):
+   if l.startswith('#') or re.search(r'^(export |async function |function |  (async |private |public |protected )).*\b(function|class|async|[A-Za-z]+\()',l): print(f'{i}: {l}')
+ elif mode=='search':
+  pat=':'.join(parts[1:])
+  for i,l in enumerate(lines,1):
+   if re.search(pat,l,re.I): print(f'{i}: {l}')

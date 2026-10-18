@@ -1,0 +1,2 @@
+import original from './vitest.config.mts';
+export default {...original,cacheDir:'../vite-cache-jsdom',test:{...original.test,environment:'jsdom',include:["tests/conformance/harness-runtimes.conformance.test.ts", "tests/consumers-sdk-session.test.ts", "tests/support/governed-test-kit/governed-test-kit.test.ts"],fileParallelism:false,maxWorkers:1,cache:false,reporters:['default','json'],outputFile:{json:'../focal.json'},coverage:{...original.test.coverage,enabled:false}}};

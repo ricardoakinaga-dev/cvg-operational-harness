@@ -1,0 +1,185 @@
+350:     kind: 'control',
+351:     provides: ['policy'],
+352:     requires: ['budget'],
+353:     apply(ctx) {
+354:       ctx.provide('policy', policy)
+355:       ctx.on('tool/pre-execute', async (call, next) => {
+356:         const { turn, tool, invocation } = call
+357:         let decision
+358:         try {
+359:           const decisionOrDeadline = await turn.budget.withDeadline(() =>
+360:             policy.evaluate({
+361:               tenantId: turn.input.tenantId,
+362:               agentId: turn.input.agent.id,
+363:               action: 'tool.execute',
+364:               tool,
+365:               invocation,
+366:               correlationId: turn.input.correlationId
+367:             })
+368:           )
+369:           if (decisionOrDeadline === DEADLINE) {
+370:             return stop(
+371:               'MAX_DURATION',
+372:               'Duration budget exhausted during policy evaluation.'
+373:             )
+374:           }
+375:           decision = decisionOrDeadline
+376:           turn.metadata.policy = decision.outcome
+377:           call.policyDecision = decision
+378:         } catch (error) {
+379:           return stop(
+380:             'INSUFFICIENT_EVIDENCE',
+381:             `Policy evaluation failed: ${errorMessage(error)}.`,
+382:             { cause: 'policy_failed' }
+383:           )
+384:         }
+385:         switch (decision.outcome) {
+386:           case 'DENY':
+387:             return stop('POLICY_DENIED', decision.reason, {
+388:               cause: 'policy_denied'
+389:             })
+390:           case 'HANDOFF':
+391:             return stop('HUMAN_TAKEOVER', decision.reason, {
+392:               cause: 'policy_handoff'
+393:             })
+394:           case 'REQUIRE_APPROVAL':
+395:             call.needsApproval = true
+396:             break
+397:           case 'ALLOW':
+398:             break
+399:           default:
+400:             return stop(
+401:               'INSUFFICIENT_EVIDENCE',
+402:               'Policy returned an unsupported decision.',
+403:               { cause: 'policy_unsupported' }
+404:             )
+405:         }
+406:         return next()
+407:       })
+408:     }
+409:   }
+410: }
+431:       fail('Invalid accepted decision')
+432:     const ids = new Set(accepted.decisionAdmissionIds)
+433:     if (ids.size !== accepted.decisionAdmissionIds.length)
+434:       fail('Duplicate accepted receipt')
+435:     for (const admissionId of ids) {
+436:       const entry = admissions.get(admissionId)
+437:       if (
+438:         !entry ||
+439:         entry.status !== 'SETTLED' ||
+440:         entry.stepNumber !== accepted.stepNumber
+441:       )
+442:         fail('Accepted receipt binding mismatch')
+443:     }
+444:     const nativeIds = ctx.decisionAdmissions
+445:       .filter((r) => r.stepNumber === accepted.stepNumber)
+446:       .map((r) => r.admissionId)
+447:     if (
+448:       nativeIds.length !== ids.size ||
+449:       nativeIds.some((admissionId) => !ids.has(admissionId))
+450:     )
+451:       fail('Accepted decision omits native receipt')
+452:     if (
+453:       state.pendingDecision &&
+454:       (state.pendingStepNumber !== accepted.stepNumber ||
+455:         canonicalizeCompleteJson(state.pendingDecision, LIMITS) !==
+456:           canonicalizeCompleteJson(accepted.decision, LIMITS))
+457:     )
+458:       fail('Pending and accepted decisions disagree')
+459:   }
+460: }
+461: 
+462: function normalizedState(value: unknown): AgentLoopState {
+463:   preflight(value)
+170:           value.includes('\0')
+171:       )
+172:     )
+173:       throw new ToolResultContextError(
+174:         'ADMISSION_UNAVAILABLE',
+175:         'Invalid qualified decision measurement.'
+176:       )
+177:     const requestSha256 = digest(request)
+178:     const inputTokens = measurement.inputUpperBoundTokens
+179:     if (
+180:       inputTokens > this.options.tokenBudget ||
+181:       inputTokens + COMPLETE_DECISION_OUTPUT_TOKENS >
+182:         measurement.contextWindowTokens
+183:     ) {
+184:       throw new ToolResultContextError(
+185:         'CONTEXT_OVERFLOW',
+186:         'The complete decision input does not fit its qualified context.'
+187:       )
+188:     }
+189:     if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+190:       throw new ToolResultContextError(
+191:         'CONTEXT_OVERFLOW',
+192:         'No decision model-call slot remains.',
+193:         'MAX_MODEL_CALLS'
+194:       )
+195:     }
+196:     if (
+197:       run.usage.inputTokens +
+198:         run.usage.outputTokens +
+199:         inputTokens +
+200:         COMPLETE_DECISION_OUTPUT_TOKENS >
+201:       run.input.budget.maxTokens
+202:     ) {
+203:       throw new ToolResultContextError(
+204:         'CONTEXT_OVERFLOW',
+205:         'Insufficient decision token reserve.',
+206:         'MAX_TOKENS'
+207:       )
+208:     }
+209:     if (
+210:       run.usage.costUsd + measurement.costUpperBoundUsd >
+211:       run.input.budget.maxCostUsd
+212:     ) {
+213:       throw new ToolResultContextError(
+214:         'CONTEXT_OVERFLOW',
+215:         'Insufficient decision cost reserve.',
+216:         'MAX_COST'
+217:       )
+218:     }
+219:     if (
+220:       purpose === 'REPAIR' &&
+221:       run.usage.decisionRepairs + 1 > (run.input.budget.maxDecisionRepairs ?? 1)
+222:     ) {
+223:       throw new ToolResultContextError(
+224:         'ADMISSION_UNAVAILABLE',
+225:         'Decision repair limit exhausted.',
+226:         'MODEL_FAILURE'
+227:       )
+228:     }
+229:     const record: DecisionAdmissionRecord = {
+230:       admissionId: `admission_${randomUUID()}`,
+231:       tenantId: run.input.tenantId,
+232:       executionId: run.executionId,
+233:       stepNumber,
+234:       attempt: state.decisionAdmissions.filter(
+235:         (value) => value.stepNumber === stepNumber
+236:       ).length,
+237:       purpose,
+238:       requestSha256,
+239:       measurement: structuredClone(measurement),
+240:       reserved: {
+241:         modelCalls: 1,
+242:         inputTokens,
+243:         outputTokens: COMPLETE_DECISION_OUTPUT_TOKENS,
+244:         costUsd: measurement.costUpperBoundUsd
+245:       },
+246:       status: 'RESERVED'
+247:     }
+248:     run.usage.modelCalls += 1
+249:     run.usage.inputTokens += record.reserved.inputTokens
+250:     run.usage.outputTokens += record.reserved.outputTokens
+251:     run.usage.costUsd += record.reserved.costUsd
+252:     if (purpose === 'REPAIR') run.usage.decisionRepairs += 1
+253:     run.state.toolResultContext = {
+254:       ...state,
+255:       pendingDecisionAdmission: record.admissionId,
+256:       decisionAdmissions: [...state.decisionAdmissions, record]
+257:     }
+258:     await this.options.persist()
+259:     await this.options.audit('decision.admission.reserved', requestSha256)
+260:     // The receipt is returned only after the checkpoint commit and audit.

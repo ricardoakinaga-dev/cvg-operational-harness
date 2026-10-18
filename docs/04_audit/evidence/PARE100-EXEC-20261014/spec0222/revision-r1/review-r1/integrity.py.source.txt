@@ -1,0 +1,19 @@
+from pathlib import Path
+import hashlib,json,sys,datetime
+root=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/review-packet')
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+phase=sys.argv[1]
+sm=json.loads((root/'source-manifest.json').read_text())
+pm=json.loads((root/'packet-manifest.json').read_text())
+con=json.loads((root/'constraints.json').read_text())
+pairs=[dict(x,copy_actual=sha(root/x['copy']),live_actual=sha(x['live']),matches=sha(root/x['copy'])==sha(x['live'])==x['sha256']) for x in sm]
+files=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
+packet=[dict(path=p,actual=sha(root/p),expected=next((x['sha256'] for x in pm if x['path']==p),None)) for p in files]
+extras=[dict(x,actual=sha(x.get('path',x.get('live')))) for x in con['sourceSpecs']+con['metadataExtracts']]
+result=dict(phase=phase,utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),pairs=pairs,packet=packet,manifest_entries=len(pm),membership_exact=set(files)==({x['path'] for x in pm}|{'packet-manifest.json'}),packet_hashes_match=all(x['actual']==x['expected'] for x in packet if x['expected']),extras=extras,extras_match=all(x['actual']==x['sha256'] for x in extras))
+if phase=='post':
+ pre=json.loads(Path('integrity-pre.json').read_text())
+ result['unchanged_since_pre']=all(result[k]==pre[k] for k in ['pairs','packet','membership_exact','extras'])
+Path('integrity-'+phase+'.json').open('x').write(json.dumps(result,indent=2)+'\n')
+print(json.dumps({k:v for k,v in result.items() if k not in ['pairs','packet','extras']}))
+print('pairs',len(pairs),'packet',len(packet),'pair_matches',sum(x['matches'] for x in pairs))

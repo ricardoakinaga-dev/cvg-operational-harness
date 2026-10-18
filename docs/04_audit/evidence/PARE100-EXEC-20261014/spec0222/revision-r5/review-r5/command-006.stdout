@@ -1,0 +1,237 @@
+
+FILE cvg/packages/contracts/src/contracts.ts LINES 570
+22: export interface AgentProfile {
+101:   readonly operationKey: string
+115:   readonly operationKey?: string
+128:   readonly sideEffect: SideEffect
+139: export interface ToolDefinition extends ToolDescriptor {
+177: export interface RuntimeInput {
+178:   readonly agent: AgentProfile
+212: export interface RuntimeResult {
+229:   readonly runtime: RuntimeInput
+232:   readonly previousResult?: RuntimeResult
+294: export interface PolicyRequest {
+298:   readonly tool: ToolDefinition
+311: export interface PolicyEngine {
+312:   evaluate(request: PolicyRequest): Promise<PolicyDecision>
+318:   readonly operationKey: string
+362:   readonly operationKey: string
+402: export interface ToolRegistry {
+403:   list(): readonly ToolDefinition[]
+404:   resolve(toolId: string, version?: string): ToolDefinition | undefined
+493: export interface AuditEvent {
+507: export interface AuditSink {
+508:   append(event: AuditEvent): Promise<void>
+568: export interface HarnessRuntime {
+569:   execute(input: RuntimeInput): Promise<RuntimeResult>
+
+FILE cvg/packages/harness/src/kernel/types.ts LINES 348
+46:   provider: string | null
+200: export type HookPoint = keyof HookMap
+213:       readonly provider: string
+304: /** Services only control plugins may provide (SPEC 0181 I1/I2). */
+305: export const CONTROL_SERVICES = [
+320: export const OPTIONAL_SERVICES = [
+325: export const LOOP_CAPABILITIES = [
+332: export interface KernelContext {
+333:   provide<K extends ServiceKey>(key: K, service: Services[K]): Disposer
+335:   on<P extends HookPoint>(point: P, listener: HookMap[P]): Disposer
+342: export interface KernelPlugin {
+345:   readonly provides?: readonly ServiceKey[]
+347:   apply(ctx: KernelContext): void | Promise<void>
+
+FILE cvg/packages/harness/src/capability-boundary.ts LINES 625
+45: export class CapabilityRegistryError extends Error {
+70: export class CapabilityRegistry implements CapabilityRegistryPort {
+159: export function createCapabilityRegistry(
+167:   readonly fingerprint: string
+170: export function composeCapabilities(
+176:     fingerprint: registry.compositionFingerprint()
+184: export function createCapabilityToolRegistry(
+207: function normalizeDescriptor(value: unknown): CapabilityDescriptor {
+235:   if (!isBoundedVersion(descriptor.providerVersion)) {
+261:     providerVersion: descriptor.providerVersion
+265: function normalizeRegistration(value: unknown): StoredRegistration {
+287: function getRegistrations(
+300: function normalizeImplementation(value: unknown): CapabilityImplementation {
+314:       typeof implementation.validateInput !== 'function' ||
+315:       typeof implementation.execute !== 'function' ||
+316:       typeof implementation.validateOutput !== 'function'
+342: function toTool(registration: StoredRegistration): ToolDefinition {
+351: async function executeBound(
+405: function cloneDescriptor(
+415: function sorted(
+425: function compareCodeUnits(left: string, right: string): number {
+429: function inputMatchesExecutionContext(
+450: function invalidDescriptor(message: string): CapabilityRegistryError {
+454: function isBoundedIdentifier(
+467: function isBoundedVersion(value: unknown): value is string {
+474: function isRisk(value: unknown): boolean {
+483: function isSideEffect(value: unknown): boolean {
+492: function normalizeToolResult(value: unknown): ToolResult | undefined {
+516: function isToolStatus(value: unknown): value is ToolResult['status'] {
+520: function cloneJsonValue(value: unknown): unknown {
+529: function stableSerialize(
+601: function boundedSerialized(value: string): string {
+608: function deepFreeze<T>(value: T): T {
+615: function isPlainRecord(value: unknown): value is Record<string, unknown> {
+
+FILE cvg/packages/harness/src/createOperationalHarness.ts LINES 253
+17: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+19:   createJournaledToolRegistry,
+29: export interface OperationalHarnessOptions extends Omit<
+45:    * Required to run the iterative profile. The runtime registry resolves the
+46:    * requested profile here; the worker never selects a runtime class.
+61: export interface OperationalHarness {
+71:  * resolves the runtime profile through a registry-like selection.
+73: export function createOperationalHarness(
+76:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+77:   if (options.capabilities && !options.effectJournal) {
+78:     throw new Error(
+83:   const singlePass = new SinglePassGovernedRuntime({
+84:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+85:     modelGateway: options.modelGateway,
+86:     policy: options.policy,
+87:     approvals: options.approvals,
+90:     audit: options.audit,
+91:     telemetry: options.telemetry,
+92:     ...(options.pause ? { pause: options.pause } : {}),
+93:     ...(options.effects ? { effects: options.effects } : {}),
+94:     ...(options.log ? { log: options.log } : {}),
+95:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+99:     options.iterativeOrchestrator && options.stepStore
+100:       ? new IterativeGovernedRuntime({
+101:           orchestrator: options.iterativeOrchestrator,
+102:           modelGateway: options.modelGateway,
+103:           policy: options.policy,
+104:           approvals: options.approvals,
+107:           audit: options.audit,
+108:           telemetry: options.telemetry,
+109:           ...(options.pause ? { pause: options.pause } : {}),
+110:           ...(options.effects ? { effects: options.effects } : {}),
+111:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+112:           ...(options.log ? { log: options.log } : {}),
+113:           stepStore: options.stepStore,
+114:           ...(options.contextEngine
+115:             ? { contextEngine: options.contextEngine }
+117:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+118:           ...(options.sufficiencyEvaluator
+119:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+121:           ...(options.completionEvaluator
+122:             ? { completionEvaluator: options.completionEvaluator }
+124:           ...(options.claimExtractor
+125:             ? { claimExtractor: options.claimExtractor }
+127:           ...(options.clock ? { clock: options.clock } : {})
+132:     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+170:     const profile = resolveProfile(governedInput)
+171:     if (profile === 'iterative') {
+181:             'The iterative runtime profile is not configured in this composition.',
+198:     ...(options.capabilities
+199:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+204: function resolveTools(
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+217:     throw new Error(
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+237:     await options.audit.append({
+246:       timestamp: new Date().toISOString(),
+
+FILE cvg/packages/harness/src/kernel/kernel-runtime.ts LINES 671
+16:   race,
+35: export const REQUIRED_SERVICES = [
+56:     input.traceId
+85: export const ALL_AGENT_TOOLS = '*'
+91: export function agentExposesTool(
+101:   const { execute, ...descriptor } = tool
+102:   void execute
+148: export interface KernelRuntimeOptions {
+157:  * I5 (call logged before dispatch), I6 (model request logged), I7 (listener
+158:  * failures normalized) and I8 (cancellation by `RuntimeInput.signal`).
+160: export class KernelRuntime implements HarnessRuntime {
+172:   public static async boot(
+188:   public async dispose(): Promise<void> {
+191:     await host?.dispose()
+194:   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
+214: class Turn {
+222:     if (input.signal?.aborted) this.#controller.abort()
+223:     input.signal?.addEventListener('abort', () => this.#controller.abort(), {
+230:       this.#controller.signal
+234:   public async run(): Promise<RuntimeResult> {
+237:       return this.#finish(
+247:       return this.#finish(
+254:       return this.#finish(
+265:     if (logged) return this.#finish(fromStop(logged))
+268:     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+271:       if (this.#state.signal.aborted) {
+272:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+275:         return this.#finish(
+281:       const decision = await race(this.#state, () =>
+289:         return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+292:         return this.#finish(
+304:           return this.#finish(
+315:           return this.#finish(
+326:           return this.#finish(
+337:           return this.#finish(
+347:           return this.#finish(
+351:                 'This single-pass compatibility runtime does not execute retrieval or verification steps.'
+357:       return this.#finish(
+368:   async #respond(response: string | undefined): Promise<RuntimeResult> {
+370:       return this.#finish(
+398:         return this.#finish(fromStop(outcome.gate))
+400:         return this.#finish(
+404:         return this.#finish(
+414:         return this.#finish(
+422:         return this.#finish(
+441:         if (exhausted) return this.#finish(fromStop(exhausted))
+442:         return this.#finish(
+457:   async #callTool(
+463:       return this.#finish(
+468:       return this.#finish(
+482:       return this.#finish(
+491:       return this.#finish(
+511:       return this.#finish(
+526:       return this.#finish({
+535:     return this.#finish(toolResult)
+635:   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+637:     for (const entry of this.#host.listeners('turn/end')) {
+
+FILE cvg/packages/harness/src/iterative-runtime.ts LINES 1789
+88: export { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+90: export interface IterativeGovernedRuntimeOptions {
+127: export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
+152: export function errorMessage(error: unknown): string {
+160: export function bindCapabilityFingerprint(
+209: export function mapEvaluationToStopReason(
+222: export function boundedPayload(value: unknown, maxChars: number): unknown {
+306: export interface LoopRun {
+330: export type DispatchOutcome =
+358: export class IterativeGovernedRuntime {
+393:    * here, where private members are accessible, so the exported class keeps
+411:       withDeadline: (operation, remainingMs) =>
+412:         this.withDeadline(operation, remainingMs),
+472:         withDeadline: async (operation, ms = this.remainingDuration(run)) => {
+473:           const outcome = await this.withDeadline(
+536:       return this.earlyFinish(
+547:       return this.earlyFinish(
+555:       return this.earlyFinish(
+563:       return this.earlyFinish(
+576:       return this.earlyFinish(
+592:       return this.earlyFinish(
+603:         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+650:     input.signal?.addEventListener('abort', () => controller.abort(), {
+671:         return this.finalize(
+694:         return this.finalize(
+709:       return this.finalize(run, resumeOutcome, startedAtMs)
+720:       return await this.finalize(run, outcome, startedAtMs)
+722:       return await this.finalize(
+992:     const decisionOrDeadline = await this.withDeadline(
+1569:   private async finalize(
+1661:       const auditOrDeadline = await this.withDeadline(
+1724:   private async earlyFinish(
+1764:   private async withDeadline<T>(
+1781: export function stringifySummary(value: unknown, fallback: string): string {

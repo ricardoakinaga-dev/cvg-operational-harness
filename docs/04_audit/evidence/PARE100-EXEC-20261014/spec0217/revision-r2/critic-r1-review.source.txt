@@ -1,0 +1,123 @@
+# Fresh I1 DESIGN review — SPEC0217 R1
+
+**REVISE.** The proposed slice is admissible in scope, but its HOW is not yet a consistent, fully evidenced contract for the promised restart and authority guarantees. R1–R3 below require a design decision or concrete wiring change before the T3 candidate is submitted. R4 requires a sealed causal source supplement. This is a static design verdict, not runtime acceptance, BUILD authorization, user approval, release approval, or closure of P100-010.
+
+Scope: only `critic-spec0217-r1-packet/` and its adjacent sentinel were inputs. All source references below are relative to that packet; SPEC means `docs/02_spec/0217_pare100_durable_kernel_composition.md`. No live workspace/root/reference, agent reports, historical critic results, network, DB, application execution, tests, implementation, or descendants were used. Writes are confined to this result directory. Local read/hash/report commands are the only operations performed. Repository ledgers and coordination files outside the packet were neither read nor changed, as the explicit lane scope requires.
+
+## Material findings
+
+### R1 — Capability consumption has no connected execution fence or cancellation/deadline linearization
+
+**Priority: high; design/authority gap.** SPEC lines 50–51, 107, 138–142, 172–180, 217, 240.
+
+The proposal reuses the real 0002 authority, correctly distinguishes it from 0015, and proposes fences for journal/steps/0016 and the final body permit. It never supplies a fence-aware consumption operation or changes the current 0002 transaction. That leaves an authority mutation outside the claimed execution fence. Final body admission happens later and cannot undo consumption.
+
+Current connected evidence:
+
+- `packages/platform/src/controlled-kernel-adapters.ts:606–653`: begin performs an awaited get, then `verifyAndConsume`; its `state.io` check after resolution does not undo a committed consumption.
+- `packages/persistence/src/tenant-scoped-capability-approval-repository.ts:40–50`: consume obtains a separate tenant-scoped connection and delegates to the repository.
+- `packages/persistence/src/platform-approval-repository.ts:98–198`: that repository opens its own BEGIN, locks the approval, validates its capability bindings and expiry, consumes it, appends its audit and COMMITs. It never reads/locks execution0016, its fence, bound dispatch_closed, pause/session, or the kernel absolute deadline. Capability expiry and kernel expiry are distinct.
+- `packages/harness/src/kernel/controls.ts:439–446,555–586` and `kernel/pipeline.ts:483–505`: consumption precedes the ledger and journaled capability call. SPEC line 240's new permit in controlledRegistration is later still.
+
+**Minimal failure timeline:** A passes the last guard and enters begin; its approval get/connection work waits. A's execution lease expires; B recovers the bound row, detects the already in-flight work and closes it safely. A's delayed get/consume then commits on 0002 while the grant itself is still issued/unexpired. A's later receipt/journal/body permit is fenced out. Body0 is preserved, but the old writer has consumed a grant after losing execution authority. The same ordering allows an in-flight consume to commit after the absolute kernel deadline. A heartbeat or a separate pre-consume fence read does not close this TOCTOU window.
+
+This is relevant even though ordinary published inbound does not require an approval: K08 explicitly promises the real forced-approval synthetic path, and D02/D04/D07 cover it. It does not justify adding an approval channel.
+
+**Required remedy:** define a NEW trusted persistence operation for bound consumption. In one short tenant transaction, lock execution/binding, validate live fence/state/dispatch eligibility/kernel deadline (and explicitly define pause/cancel semantics for consumption), then lock and verify/consume the real 0002 grant with its existing binding checks and consumption audit. Record the execution/operation/approval binding and receipt or uncertainty protocol concretely. Extract a transaction-free private helper rather than nesting the current BEGIN or calling the pool-backed authority under another transaction. Name the affected approval-repository files in HOW and the lock order. Preserve the old public authority behavior for unbound callers and never release/reissue. If unfenced, possibly late consumption is deliberately allowed instead, document that observable limitation and revise D02/D07/K08 before approval.
+
+**Rejectable oracle:** extend K05/K06/K08 to block A immediately before the DB consumption lock, expire/reclaim/close its execution or expire its kernel deadline, then release A. Assert the approval remains issued and no consumption audit/receipt/body appears for the stale attempt. In the winning order, exactly one bound consumption and at most one body are permitted. This must use distinct real connections and the real 0002 authority, not an outer fake boolean.
+
+### R2 — S1 promises a persisted canonical plan before the current planner creates that plan
+
+**Priority: medium; material resume-contract ambiguity.** SPEC lines 155–165, 216, 234–240; K02 line 259.
+
+S1 is defined as the completed initial RESPOND checkpoint plus adapter seal, and the very next sentence requires S1→tool to use the persisted canonical decision/plan. The actual planner has no plan at that checkpoint. The proposed checkpoint wrapper describes capturing pending model output and sealing the current snapshot; it does not specify moving plan creation or a deliberate reconstruction exception.
+
+Current connected evidence:
+
+- `controlled-kernel-execution.ts:161–166,178–185`: the initial closures contain names=[], planSealed=false, attempts=[] and decide(step1) returns RESPOND.
+- `controlled-kernel-execution.ts:187–268`: planTools/catalog/command preparation and attempts are first created in the subsequent planner decision, step2, after output guarding.
+- `packages/harness/src/iterative-dispatch.ts:835–921`: initial RESPOND composes the model response and records its successful step.
+- `packages/harness/src/iterative-runtime.ts:887–909`: only then is the step1 checkpoint saved, before evaluation and before the next decide.
+
+**Minimal failure timeline:** A's wrapper saves exactly that successful step1 checkpoint and the current planner snapshot, advertises S1, and A is killed at K02's barrier. B restores output/providerInvoked and the empty, unsealed plan. It must either call planTools/prepare again to invent the missing plan, fail the positive restart, or assume names/commands not actually sealed. The text does not select which is authorized. This is an ordering contradiction, not proof that the public kernel needs a new hook.
+
+**Required remedy:** choose the intended S1 contract explicitly. For the currently promised persisted-plan version, extract the existing deterministic post-output planning/command preparation into a private idempotent preparation routine and specify exactly where it runs before the first S1 seal (for example, in the step1 checkpoint wrapper, after guarded output is ACKed and before the atomic snapshot/checkpoint save). Store the canonical plan/commands, planSealed, outputAllowsTools derivation and the next planner position; step2 decide must consume those values without another planTools or input parse. Persist the deny/empty-plan case consistently. Preserve zero planning for suppressed output and never move planning into bootstrap before output guarding. Alternatively, explicitly allow a still-unplanned S1 and define deterministic reconstruction plus its tests; remove the incompatible persisted-plan claim.
+
+**Rejectable oracle:** K02 must inspect S1's planner payload, not only model1/tool0. In the persisted-plan version, verify plan/command/inputHash/fingerprint/next step against checkpoint1 and count plan/input parse across A+B: no re-planning or transform on B, model1/body1 total. Kill before planning, after planning/before seal, and after S1; none may be mislabeled the same safe state. Keep the output-rewritten case plan/consume/body0.
+
+### R3 — A post-seal evidence fault can vanish if both the write and poison fail before crash
+
+**Priority: high; durability guarantee/oracle inconsistency.** SPEC lines 134–135, 163, 172, 182–187, 197–201, 266.
+
+The proposal correctly requires a monotonic fault and refuses tails beyond a safe seal. But it also promises that a failure to persist poison blocks success on recovery. No durable representation is specified for the case where the failing evidence transaction and poison both fail without committing anything. Rehydrating only the last safe snapshot would erase that RAM veto.
+
+Current order makes this a reachable gap without any second model or unsafe replay: `iterative-runtime.ts:902–909` saves the initial checkpoint and then evaluates; `iterative-dispatch.ts:1008–1012` performs the following evaluation audit. `iterative-runtime.ts:1502+` has safeAudit behavior; the adapter's `InvocationEvidenceState.io/fail` (`controlled-kernel-adapters.ts:52–90`) is what retains the local veto. SPEC makes that veto durably mandatory but does not add a durable pending boundary for this particular interval.
+
+**Minimal failure timeline:** A commits S1. Its next required evaluation audit fails before any new sidecar/mirror commit. DB remains unavailable, so poison also fails. A has fault/abort only in RAM and dies before terminal close. After DB recovery, B sees exactly the same S1, cursor, null fault and no tail as in the mandatory positive K02 case where A died immediately after S1. B can proceed to the tool and SUCCEEDED, contradicting the promise that the earlier evidence failure survives recovery. If it refuses this indistinguishable state universally, K02 cannot pass.
+
+**Required remedy:** define the missing distinction rather than relying on absence of fault. Specify durable phase/intents and seal-consumption rules for post-seal mandatory work, with no success path after an acknowledged intent is left unresolved; enumerate the allowed recovery states. Also state the unavoidable boundary: when no durable transition was acknowledged and no operation was invoked, a local pre-operation storage failure cannot be distinguished after death from a clean S1 crash. Decide whether that condition is attempt-local and may retry the safe boundary, or changes the positive restart promise. Update the unconditional poison/recovery statement accordingly. Merely adding more best-effort poison calls or hashing the old snapshot does not solve it.
+
+**Rejectable oracle:** extend K04/K09 with a real child killed after a required post-S1 evidence write rolls back/fails and while poison is unavailable; restore DB and restart. Observe durable rows, not RAM. The outcome must follow the explicitly selected state machine, and the known-bad of silently resetting an acknowledged veto/pending intent must fail. Pair it with the genuinely idle S1 positive case so a fail-all implementation cannot satisfy the test.
+
+### R4 — The sealed path stops at the outer ACK implementation needed for K02/K03
+
+**Priority: medium; causal evidence gap, not an asserted runtime defect.** SPEC lines 64, 73–74, 163, 184, 204–205, 225–228, 258–260.
+
+The packet includes the ACK caller and repository forwarding method, but not their implementation dependency `packages/persistence/src/postgres-outbox.ts`. This is the boundary that decides whether a recovered outer inbound claim actually invokes the new compositor again, how ownership is checked, and when outbox_effects/results are committed. The current docs/comment cannot substitute for that implementation.
+
+Evidence: `apps/worker/src/jobs/process-outbox-event.ts:75–80,133–169` runs the handler inside adapter.ack and routes failure through adapter.fail; `tenant-scoped-postgres.ts:234–243` forwards these operations; `postgres.ts:17–28,339–352` imports/delegates them to the missing file. Migration0010 lines 75–93 defines outbox_effects and attempts, but schema alone proves no ACK/recovery ordering. The supplied operational-execution process-kill test uses the different0016 worker; the other kernel test composes the old governed runtime. Neither fills this source gap for published inbound.
+
+**Minimal timeline requiring resolution:** A is killed at inner S1 (or S3) while the outer inbound ACK is in flight. B must reclaim the outer event, enter the handler again, resolve the same bound execution and resume S1 (or read S3), then commit outer completion once. Whether the existing ACK reaches that handler again, retains any relevant locks/connection, or suppresses it based on a durable effect marker cannot be established from the provided forwarding calls. No particular missing implementation behavior is assumed here.
+
+**Required remedy:** supplement the immutable packet with a newly sealed copy of postgres-outbox.ts and any directly used ACK/claim/fail helpers necessary to close this path; provide a line-level trace of the existing behavior and its compatibility with the new inner lease. If it needs a change, add that concrete delta to HOW before the user gate. No live workspace read or runtime test is requested in this review lane.
+
+**Rejectable oracle:** K02/K03 must start through API durable ingress and the actual outer worker/adapter ACK, not call inboundProcess/compositor directly. Observe outbox event ownership/attempts/effect marker together with0016 binding/fence, inner evidence and final message/trace. Assert B reaches the compositor, busy never becomes a successful outer ACK, and S3 never causes another factory/body. Fault after inner close and before outer ACK commit must preserve one completion.
+
+## Connected order and admissible parts
+
+The following is a source-backed composition assessment, not a PASS claim:
+
+1. API `server.ts:1466–1469,1529–1551,1604–1610` uses durable ingress/queue and skips inline execution when durableInbound=true. Published worker `postgres-controlled.ts:331–450` loads tenant/inbound/session, handles takeover, pins/resolves version, gets history, calls executePublishedAgent, then completion. The proposed opt-in compositor is a real integration site; it is not currently wired there.
+2. `agent-core/commands/execute-published-agent.ts:64–134` accepts pinned PUBLISHED/ARCHIVED and supplies the controlled gateway/System actor. Its completed wrapper only means trace available. `platform/test-lab.ts:183–205,280–339` prepares policy/risk/output fallback and calls controlled-kernel-execution. The new second host argument and pure admission export are correctly labeled NEW; they are not existing HTTP hooks.
+3. `controlled-kernel-execution.ts:173–431` uses deterministic initial RESPOND/model/output guard before step2 planning, then the same public createOperationalHarness at328. The pure scheduling plugin's actual tool ID is find_available_slots, plugin scheduling.controlled, version1.0.0 (`controlled-plugins.ts:11–83`): constant synthetic slots, LOW/NONE/idempotent and no required approval unless elevated. This gives no appointment or provider authority.
+4. Public factory `harness/createOperationalHarness.ts:73–128,210–227` uses the actual capability registry and journal wrapper, then the iterative runtime. Durable execution requires its exact fingerprint (lines134–160). Merely replacing a Map or naming a host kernel is insufficient.
+5. Real tool order: durable tool/call log → policy/authorizer/approval request → loop pending checkpoint and RUNNING step → revalidation → approval begin/consume if required → revalidation → effects.started → journal reserve/markStarted → controlledRegistration → proposed asynchronous PG admission preparation → existing synchronous final admission and original handler → journal confirm/fail → effects.finished → approval settlement → tool/result log and callback → observation/terminal step → post-tool checkpoint. Sources: iterative-dispatch.ts:426–470; kernel/pipeline.ts:265–337,461–595; kernel/controls.ts:434–446,555–610; effect-journal.ts:310–395; controlled-kernel-adapters.ts:196–265,350–376. Journal records exist for the pure tool too; no sideEffect=NONE shortcut skips them.
+6. S1 and S2 can use the public stepStore wrapper without inventing onResume/afterCheckpoint: checkpoint saves occur after completed dispatch at iterative-runtime.ts:887–909. S2's callback and approval settlement precede that post-tool checkpoint in the real order. This does not resolve R2's missing pre-S1 plan formation. In-flight checkpoints must never be promoted into S2 just because a previous tool/result looks successful.
+7. Kernel terminal checkpoint and runtime audit occur inside execute (iterative-runtime.ts:1569–1688), before the current facade finally closes its local evidence state (controlled-kernel-execution.ts:480–514). D11 requires moving the local latch into appropriate trusted terminal wrappers and using the proposed settlement-only channel for subsequent mandatory writes; simply retaining today's finally placement would fail K09. This is feasible with the declared adapter changes, but must be checked at every terminal boundary in BUILD. Public projected failure and private CONFIRMED/consumed facts must remain distinct.
+8. Completion uses one client for runtime repository and control plane (`tenant-scoped-postgres.ts:336–345`). `postgres-inbound.ts:637–785` locks the inbound, returns completed on repeat, respects session takeover, writes synthetic outbound runtime:<fixed traceId>, then trace/marker/audit in the transaction. Empty toolAuditEvents is accepted by `postgres-audit.ts:564–611`; therefore the proposed pre-completion durable callback receipts plus empty array are compatible in principle. They do not establish the missing outer ACK behavior in R4.
+
+## Schema, leases and scope
+
+The two sidecars, immutable binding/request digest, tenant-bound FK/unique keys, RLS, bounded schema-validated canonical JSON, append-only chained evidence, exact-key idempotency and atomic snapshot/checkpoint seal are a coherent extension in principle (SPEC109–148). Hash equality is integrity, not authority. Parent0016 must exist before0019; the current checkpoint upsert has no execution lease CAS (`operational-step-postgres.ts:302–325`) and the current operational journal checks only its effect attempt (`operational-execution-postgres.ts:1473–1518`). The proposed shared-client fence changes are necessary, not already implemented features.
+
+claimInbound must explicitly recover only its bound ID and advance0016 attempt; generic claimNext/recoverExpired exclusion and write guards are essential. Current claimNext selects QUEUED/FAILED_RETRYABLE, not arbitrary expired RUNNING (`operational-execution-postgres.ts:464–480`); reusing it unchanged cannot implement takeover. The proposed separate method acknowledges this. QUEUED cancel versus active409 matches the current store and must remain separate from cooperative signal abort. Async pause cannot use the current synchronous readPause unchanged; the proposed awaited guards and synchronous final callback preserve the private executor contract. Absolute expiresAt must include downtime independently of the kernel's activeDuration bookkeeping. The200ms finalization window grants no dispatch/consume time.
+
+0029 is a PROPOSED additive migration. The sealed default runner ends at0027 (`postgres-migrations.ts:20–49`);0028 explicitly rejects legacy conversations/sessions/messages (`0028_session_events.sql:1–9`) and must remain dedicated. I accept the user's statement that the Lead physically observed0029 free; this lane did not inspect W/root or reserve it. BUILD still needs a future migration claim and explicit user approval. Mixed-writer DB guards and exclusion of old serving binaries are prerequisites to enable, not evidence that old writers are currently fenced. Scope includes no schema deployment here.
+
+0214's local U1–U4 scope and the one-tool limit are preserved;0217 remains a new T3 change. The signed0214 approval artifact referenced by SPEC is not a packet member, so its hash/signature was not independently audited; approved0214 scope is the task's stated premise, checked against the included0214 restrictions and current source. P100-010's original task (`scope/0378_backlog_paridade_integral.md:51–57`) requires every active journey to migrate and continue after restart. This proposed published-inbound slice is useful partial progress, not completion of that task or permission to remove legacy/P100-011.
+
+## K01–K12 admissibility assessment
+
+All are proposed, NOT_RUN. No existing Map proof or old-runtime test is transferred.
+
+| Oracle | Design assessment |
+| --- | --- |
+| K01 | Coherent vertical ingress/factory/trace target; close actual ACK path per R4. |
+| K02 | Mandatory positive restart is appropriate; S1 plan contract needs R2 and fault distinction R3; outer reentry needs R4. |
+| K03 | Fixed closed trace plus idempotent completion is implementable; outer ACK crash boundary requires R4. |
+| K04 | Conservative no-repeat handling of consumed/in-flight/CONFIRMED-without-S2 is coherent; add no-durable-tail fault case R3. |
+| K05 | Per-write execution fence and distinct-process competition are rejectable; add stale0002 mutation case R1. |
+| K06 | QUEUED cancel/active409, cooperative veto and downtime deadline are coherent; assert consume cannot commit after lost authority per R1. |
+| K07 | Real async tenant pause and session takeover are coherent; define prestart pause recovery without silently undoing a terminal close. |
+| K08 | Correct real authority0002, bindings and no release/reissue; currently incomplete for execution fencing R1. |
+| K09 | Mandatory receipts, terminal masking and private facts are coherent targets; close must precede terminal awaits; R3 needs a paired crash test. |
+| K10 | Additive0029/default runner/RLS/checksum/tamper/old-writer assertions are rejectable; include new bound consumption transaction and its role/lock behavior. |
+| K11 | Local0214/default-off/ARCHIVED pin/one-tool/parse-once compatibility is coherent; forbid host selection through payload. |
+| K12 | Compiled public path, true children and timestamped PG evidence are proper future proof. Hashes/static source are not runtime proof. The separately linked acceptance-plan.md is absent from this packet, so its commands/fixtures were not assessed. |
+
+Required next step: revise the concrete design for R1–R3, close R4 using sealed source, and obtain fresh technical review of that candidate before the explicit T3 user gate. No runtime acceptance or user approval is granted by this result. No real data, provider/network/channel, clinical/financial action, appointment mutation, RAG authority, production release, commit or push permissions are introduced.
+
+## Integrity evidence
+
+Preflight:114/114 packet file SHA-256 values matched the sentinel; no extra files. Sentinel SHA-256: `71b0b8235b1e8a74040dc98b9071cf02523340b268ad2f9c4d1bc3d8e283f171`. SPEC0217 SHA-256: `a913a0b3baad89abeef6a5169f752767d1525e86ec56ccb79b9dce52492dcbf6`. Full pre/post inventories are in integrity-pre.json and integrity-post.json. The final postflight result, not this prose alone, records whether every packet and sentinel byte remained unchanged.

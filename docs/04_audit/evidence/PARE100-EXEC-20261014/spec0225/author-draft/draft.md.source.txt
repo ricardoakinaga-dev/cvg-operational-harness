@@ -1,0 +1,516 @@
+# SPEC0225 draft — full JSON results in the native operational effect journal
+
+Date: 2026-10-16. Task: `P100-014/P100-020/TOOL-RESULT-JOURNAL-SPEC-001`.
+Status: **PROPOSED / DRAFT_FOR_TECHNICAL_REVIEW**. This is T1 specification
+work for a future **T3** schema/contract change. **BUILD_AUTHORIZED=false**.
+Bounded author, no descendants. Only `spec0225/draft/**` was written.
+The Lead owns canonical SPEC0225, registration, ledgers and integration.
+
+## 1. Scope, authority and evidence boundary
+
+Implement nothing under this task. A separate registered BUILD task, fresh
+technical review and explicit human T3 approval of the integrated SPEC's exact
+SHA-256 must precede implementation. Approval of SPEC0224 SHA-256
+`f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`
+is already recorded and remains independent; its approved bytes must not change.
+0220/0221/0222 stay independent and unresolved by this proposal. There is no
+release, parity, global acceptance, default adoption or production claim.
+
+Scope of a future BUILD: a synthetic isolated PostgreSQL schema and public
+harness path; native `PostgresOperationalEffectJournal`, its connected registry,
+trusted composition and tests. No real provider, external data, product import,
+clinical/financial/appointment action, service launch, deployment or push here.
+ADR-010's dependency direction remains product -> generic infrastructure.
+No digest-only journal or channel journal is substituted for the operational
+journal that actually stores and replays logical results.
+
+The original source cut is preserved in `sourcehashes.json`; its line anchors
+in `findings-decisions.json` describe those captured bytes, **not a globally
+frozen or necessarily current worktree**. Lead-owned BUILD0224 repairs continue.
+`source-cut.json` records a later read-only observation and expected authorized
+drift without replacing the original hashes or old failure evidence. The Lead
+must bind the final canonical candidate to stabilized sources at integration.
+No stabilization, new runtime PASS or global acceptance is claimed here.
+
+Later source observation: `effectColumns` now computes
+`result IS NOT NULL AS result_present`, and `mapEffect` includes `result` when
+that flag is true or the driver value is non-null. JSONB null is therefore
+preserved as own `result:null`; SQL NULL remains absence. This is a calculated
+read projection and mapping repair, **not a physical column/schema/codec**.
+The source still has no format discriminator guarding a prefixed string or
+wrapper from replay. Euclid R2 REJECT/null reproduction and further runtime
+version/fixture work are Lead-reported context; this author has not rerun or
+accepted those tests. The original source-cut evidence remains:
+
+
+- `pg-public-r2-02.json`, stdout and stderr record 7 tests, **6 PASS / 1 FAIL**,
+  exit 1. The NUL restart case did not reach the successful full-result CAS.
+- Its exact directory is
+  `spec0224-build/postgres-runtime-r2/restart-nul4096-escapes-9a977cdc-8f7c-49c6-a135-f3651ee2f188/`.
+  `writer.trace.json` records native confirm error **22P05**, `unsupported
+Unicode escape sequence`, from the `$4::jsonb` journal UPDATE; subsequent
+  `markUncertain` succeeds. The durable snapshot is UNCERTAIN with SQL NULL
+  result; one body marker exists. This is an observed failure, not a new test
+  run by this author. Earlier sibling runs are not substituted for this run.
+- At the original cut, `mapEffect` returned driver-decoded `row.result`
+  directly and omitted null. Strings such as `"42"`, `"null"` and `"{}"` were
+  preserved by that local fix. The later presence-projection repair above
+  supersedes the null-loss source fact; neither repair changes NUL storage,
+  gives old readers a codec guard, or grants global acceptance.
+- `jsonText` still caps native journal serialization at 262144 bytes and
+  writes direct JSONB. `EffectJournal` exposes logical `unknown` results;
+  CONFIRMED replay returns `reservation.result` without a representation check.
+- Migration0016's journal has no result codec/version column. Its
+  `result_protection_version` belongs to **operational_executions**, not this
+  journal. Migration0029's `adapter_version` is a bound execution marker,
+  not authority for interpreting journal results. CheckpointVersion2 likewise
+  cannot discriminate arbitrary journal rows.
+- Checkpoint V2 independently encodes logical state, including NUL, in an
+  ASCII/base64 wrapper. That later codec cannot repair a journal confirmation
+  rejected before the full TOOL_RESULT checkpoint. Existing public tests
+  explicitly label fencebound evidence NOT_RUN.
+
+## 2. Decision and rejected alternatives
+
+**Require an additive migration and an external-to-output discriminator.**
+Add `result_storage_version` and `result_storage_payload` to
+`operational_effect_journal`; retain the original `result jsonb` for legacy
+rows. Version1 payload is an ASCII-only JSONB envelope containing base64 of
+canonical UTF-8 logical result bytes. Do not store an envelope in legacy
+`result`, infer a codec from output keys, or widen the shared `jsonText` limit.
+
+| Candidate                                                           | Decision                                                                                                                    |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Current direct JSONB + string map fix                               | Insufficient: NUL rejection and 256KiB native envelope remain.                                                              |
+| Escape NUL again or add a magic wrapper tag in `result`             | Reject: either changes the logical value or collides with valid legacy output; current old reader would replay the wrapper. |
+| Reuse checkpoint2 / binding adapter_version / protection version    | Reject: none is per-journal result format authority in actual schema.                                                       |
+| New discriminator + separate encoded payload                        | Selected: two additive columns, one codec, same logical journal API, explicit compatibility barrier.                        |
+| Blob service / new journal table / bytea transport / unbounded JSON | Unneeded for the bounded local slice; separate infrastructure or driver paths add no required capability.                   |
+
+At capture, SQL migrations end at `0029_controlled_published_kernel.sql`;
+there is no0030. **0030 is a proposed next number, not a reservation.** Future
+BUILD must recheck the files and claims before proposing a filename such as
+`0030_operational_effect_result_storage.sql`. No SQL source is written here.
+
+## 3. Logical contract, trust and opt-in
+
+Keep `EffectJournal`'s method signatures, states, identity/proposal/attempt
+bindings and logical `EffectJournalRecord.result`. A successful
+`confirm({result:v})`, `get` and CONFIRMED `reserve` return `result:v`, never
+base64, an envelope, SQL NULL standing for an absent value, a summary or a
+provider-supplied receipt. Preserve types, empty and falsy values and NUL keys.
+JSON null must be an **own result property with value null** in version1.
+No changes to policy, approval, sandbox, provenance, operationKey generation,
+proposal hashing or provider identity are authorized by storage encoding.
+
+The supported JSON domain is SPEC0224 strict JSON: finite JS numbers except
+-0; Unicode-scalar strings; null/booleans; dense arrays; plain/null-prototype
+objects with own data properties. No getters/toJSON, sparse arrays, undefined,
+symbols, BigInt, NaN/infinities, cycles or lone surrogates. Canonical keys use
+JS lexicographic UTF-16 order, arrays retain order, numbers/escaping follow
+`canonicalizeCompleteJson`; no Unicode normalization, trimming or coercion.
+Shared acyclic values repeat by value. This is not sandboxing of hostile JS
+or Proxy traps; installed implementations remain trusted code.
+
+PROPOSED adapter option:
+`new PostgresOperationalEffectJournal(connection, { resultStorage: { version: 1 }, fence? })`.
+Absent means legacy writing behavior. Unknown versions fail before execution.
+No global default or CHECKPOINT_VERSION change. No environment/HTTP/model/tool
+field can enable it. Only the trusted host's composition may choose the option
+and provision its corresponding DB principal/schema. Include this mode in the
+trusted immutable composition manifest; validate it before accepting work.
+A durable execution cannot switch mode while running.
+
+The factory still uses the exact same EffectJournal port. Future host wiring
+must explicitly select a compatible journal for `toolResultContext:{version:1}`;
+that context flag alone does not grant storage authority. Native factory and
+registry, including compatibility `tools` and capability paths, must exercise
+version1 replay. Injected custom journals remain their owners' responsibility;
+there is no new claim of native persistence for a fake/in-memory port.
+
+CURRENT ordinary worker constructs the journal without options;
+controlled-published kernel constructs it with `fence` only. Both remain
+legacy by default. Future opt-in must be explicitly wired in the trusted
+composition of **every** worker/reader that can consume the selected isolated
+schema. Do not silently turn on the ordinary worker, controlled-published
+kernel, SDK, product or root host. Default legacy compositions continue on
+legacy schemas; supported newer binaries reject version1 rows if opt-in is
+absent, rather than opportunistically decoding them.
+
+## 4. Physical format and exact bounds
+
+Proposed columns and row invariants (normative requirements, not SQL):
+
+| Field                                                   | Constraint / interpretation                                                                                                                                                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `result_storage_version`                                | smallint NOT NULL, default0, allowed0/1; immutable for a row in this slice, including retry. Unknown version is rejected.                                                                              |
+| Legacy version0                                         | `result` retains existing JSONB bytes/meaning; `result_storage_payload` must be SQL NULL. Never inspect output keys for a tag.                                                                         |
+| Version1 all states                                     | legacy `result` MUST be SQL NULL.                                                                                                                                                                      |
+| Version1 RESERVED / EFFECT_STARTED / FAILED / UNCERTAIN | `result_storage_payload` MUST be SQL NULL.                                                                                                                                                             |
+| Version1 CONFIRMED                                      | `result_storage_payload` MUST be a valid bounded envelope, `error` SQL NULL; state and complete payload written atomically.                                                                            |
+| Envelope                                                | Exactly four keys: `encoding:"base64"`, `decodedBytes` integer, `decodedSha256` lowercase 64 hex chars, `data` canonical RFC4648 base64 with padding. Version authority is the column, not these keys. |
+
+These invariants need DB CHECK enforcement for shape/state/types/length/ASCII
+and a write guard for version/confirmed-row immutability and role capability.
+Decode, strict JSON, byte equality and content SHA-256 validation remain adapter
+responsibilities. Checksums detect corruption, not malicious privileged writes.
+No new extension, compression, external blob, dynamic SQL from output, eval or
+regex replacement of NUL is needed.
+
+Let C(v) be the strict canonical result text and B its UTF-8 bytes.
+`decodedBytes=|B|`; `decodedSha256=SHA256(B)` with no prefix, matching the logical
+output hash convention. Require `C(decode(B))` byte-for-byte equal to B. The
+column version supplies format identity. Identity/proposal/attempt checks bind
+replay to the correct operation; a content hash alone does not bind tenant.
+
+| Budget                         | Exact bound                                                                                                                      |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Native journal logical result  | **8388608 bytes (8MiB)** of C(v), inclusive; minimum valid document1 byte (`0`).                                                 |
+| Native logical shape           | depth64 with root1; 1000000 value nodes; keys do not count as nodes but their escaped bytes count.                               |
+| Base64 `data`                  | `4 * ceil(decodedBytes / 3)` chars, at most **11184812 ASCII chars**.                                                            |
+| Envelope expanded JSONB text   | at most **11185324 bytes**, i.e. data maximum +512. Check expanded `octet_length(payload::text)`, not TOAST/compressed size.     |
+| Context output, unchanged0224  | 32768 canonical bytes, depth32, 10000 nodes; larger journal results can be confirmed yet unavailable to the model.               |
+| Full checkpoint, unchanged0224 | 8388608 unsigned canonical bytes including all other state; a large journal value is not thereby guaranteed to fit a checkpoint. |
+
+Eight MiB aligns with the existing capture/checkpoint containment budget and
+removes the current 256KiB journal bottleneck without confusing journal storage
+with the 32KiB model-context allowance. It is a **proposed containment budget,
+not measured DB throughput/capacity**. Existing `prepareCompleteToolResult`
+bounds the entire ToolResult envelope at8MiB, so public factory output maximum
+is slightly below the journal API maximum. Do not claim that an8MiB output plus
+wrapper passes that existing capture seam. Direct journal boundary tests and
+public-flow tests must distinguish those budgets. No automatic raising of
+capture, checkpoint, message, token or provider budgets accompanies this change.
+
+NUL in C(v) is escaped JSON text, then encoded to base64; it never reaches
+JSONB as a decoded NUL in a key/value. Unicode outside ASCII is likewise inside
+B. Physical keys, hashes, encoding label and data are exclusively ASCII.
+Metadata IDs retain their own validation and reject NUL; result encoding is
+not a relaxation of tenant, key, error or provenance contracts.
+
+Encode checks limits before growing each buffer/string; reject without
+truncation. Read must suppress oversized payloads in SELECT/RETURNING **before
+node-postgres parses JSONB**, using bounded projections analogous to
+`boundedCheckpointColumns`; return a separate overflow flag, then throw. Every
+get/reserve/transition mapper must use this path. DB structural constraints
+are defense in depth, not an excuse to select unbounded preexisting damage.
+
+After bounded projection, require version, exact envelope keys/types, ASCII,
+length formula and padding; bound allocation to declared bytes. Strictly
+reencode base64 to require exact equality; permissive Buffer decoding is
+insufficient. Validate actual byte length and SHA-256. Decode UTF-8 fatally,
+reject BOM/invalid bytes, lexical-scan JSON for bounded depth/nodes before
+allocating its object graph, parse one complete value, then strict-validate
+and recanonicalize. Reject duplicate keys, trailing material and noncanonical
+numbers/escapes/order by exact byte equality. Never recursively decode an
+output object whose shape resembles an envelope.
+
+## 5. Legacy rows, collision cases and compatibility barrier
+
+Version0 is permanently raw legacy data in this slice, even if its output is
+exactly `{encoding:"base64",decodedBytes:4,decodedSha256:...,data:"bnVsbA=="}`,
+has `storageCodec`, or names `result_storage_version`. Version1 whose logical
+output has those same keys is encoded **once** and decoded **once**. No output
+field or magic tag supplies authority. A tag-only scheme fails this invariant.
+
+New opted-in reader's inspection-only `get` handles legacy JSONB as already-decoded values: `"null"`
+stays a string, `"42"` stays a string, `"{}"` stays a string, JSON null stays
+null, false/0/empty string/empty array/object preserve their distinct values.
+Preserve the Lead's calculated **`result IS NOT NULL AS result_present`**
+projection for version0: node-postgres otherwise maps both SQL NULL and JSONB
+null to JS null. Do not replace this projection with a schema column or codec. For version0 CONFIRMED,
+SQL NULL means missing/unknown result, **not** proven JSON null; strict inspection
+fails `LEGACY_RESULT_UNKNOWN` with no body. JSONB null with `result_present=true`
+returns own `result:null`. No schema-default inference fabricates data. The already authorized null-presence repair is an input to this proposal; it
+is not new format authority or an additional0225 implementation.
+
+The native journal table has no parent-execution foreign key in0016. Therefore
+an operationKey/proposal match alone does not prove that a legacy row belongs
+to an execution admitted under the new mode. In the opted-in adapter, `get`
+may decode version0 **for inspection/reconciliation only**, never to create a
+complete0224 observation. `reserve` and all transitions encountering version0
+must fail JOURNAL_STORAGE_MODE/LEGACY_RESULT_UNKNOWN before returning a replay
+or calling markStarted, even when legacy state is CONFIRMED and its proposal
+matches. Preserve the row. This explicit no-adoption rule also covers orphan
+journals, missing parent/binding, active/failed legacy rows and cross-mode key
+reuse. All new opted-in effects reserve fresh version1 rows under newly
+admitted execution identities. Do not attach a legacy orphan to a new parent,
+change its version or manufacture a parent/fence to obtain compatibility.
+Historical legacy executions remain on their existing separately qualified
+legacy resource if any, or are handed off; no copying/moving of live work is authorized; the activated schema does not resume them.
+
+A new column alone is **not** old-reader safety. Actual `jsonValue` parses any
+string: raw JSON-looking strings can change type and an invalid JSON sentinel
+throws, but objects are returned directly. At the original cut, fixed
+`mapEffect` returned non-null `row.result` directly and omitted null. The later
+presence-projection reader also returns native JSONB values directly, including
+JSONB null when present, and still has no codec discriminator check. Both
+reader generations therefore require the same admission barrier. The old
+journaled registry then returns SUCCEEDED with `reservation.result`. Consequently:
+
+- A wrapper in `result` would be returned as the actual result by both object
+  paths. An invalid-string poison pill is ineffective against either direct-value reader generation.
+- Separate payload plus SQL NULL `result` prevents encoded bytes reaching the
+  old result mapper, **but alone could produce SUCCEEDED/undefined**. That is
+  also unacceptable. Neither a sentinel nor column separation proves fail-closed.
+
+A codec RLS filter is not selected. Actual0016 has only tenant/quarantine RLS;
+CURRENT worker preflight verifies a single exact tenant policy per critical
+table, so adding a codec policy would itself need a reviewed preflight change.
+The source path is nevertheless explicit: native `reserve` does INSERT ON
+CONFLICT DO NOTHING, then SELECT FOR UPDATE, and throws `conflict` if no row
+is selected (operational-execution-postgres.ts:1744-1765). The registry awaits
+reserve before checking CONFIRMED, markStarted or invoking the body
+(effect-journal.ts:316-348). Thus **if** an admission filter actually hides the
+conflicting row and INSERT does not fail earlier, the no-row branch throws
+before body; it does not grant a new reservation. This is source-derived
+control-flow reasoning, not a PostgreSQL execution proof of a new RLS policy.
+An RLS-only design would still need real conflicting-invisible-row and
+non-bypass-role tests, plus policy/preflight migration and orphan handling. It
+must RESTRICT or replace the existing permissive tenant policy: an additional
+permissive policy would OR with it and leave an admission bypass. Any admission
+context must be transaction-local and set by the trusted composition, with
+actual non-superuser/NOBYPASSRLS roles; a tool-controlled GUC is not authority.
+It is not claimed safe or implicitly authorized here. The selected ACL cutover
+instead requires old native SELECT/INSERT to fail42501 directly; no invisibility
+or fabricated empty result is used to satisfy that gate.
+
+**Selected compatibility policy: no mixed old/new binaries or principals admitted to data access in an
+activated schema.** Version1 is opt-in only in a dedicated isolated schema with
+exclusive upgraded workers/readers and a newly provisioned runtime LOGIN
+principal. The new LOGIN itself is the codec-capable principal, with **zero role
+memberships** and direct minimal grants. It has no SUPERUSER/BYPASSRLS/ownership/DDL
+or ability to alter triggers/roles, and keeps existing tenant isolation. Migration
+owner and runtime roles are separate. The migration-owned write guard binds to
+that exact provisioned principal name and schema, comparing session_user and
+current_user; it does not trust a caller-supplied role name or GUC. The principal
+name is a trusted installation parameter, fixed before activation and introspected
+by readiness; renaming/changing it requires requalification. The new guard
+is SECURITY INVOKER; a SECURITY DEFINER current_user would identify its owner
+instead and cannot implement this principal check. Do not use a
+NOLOGIN membership role: CURRENT worker preflight rejects any membership.
+Role provisioning and direct grants are scoped to the isolated resource and
+never reused for a legacy binary. Additive codec readiness must preserve all
+existing role, owner, tenant-policy, privilege and migration-checksum checks.
+
+Activation must drain all work and terminate all old schema sessions/pools;
+remove old principals' table/column/function data privileges and inherited
+or PUBLIC data routes to this schema, including execution claim/outbox/checkpoint
+paths and any SECURITY DEFINER entrypoint. Retain only schema USAGE for old
+principals during negative probes so the original unqualified query resolves
+the intended table and fails42501, rather than skipping the schema and finding
+a same-named table in public. No schema CREATE, search_path fallback or access
+through another role is allowed. Old principals must not assume the new role
+or obtain its credential. Then grant only the new runtime principal its
+minimal upgraded operational paths. Verify effective privileges and
+memberships with actual old credentials, not owner/superuser tests. An old
+reader's **original SELECT must raise42501**; an empty RLS result is not the
+acceptance target. An old worker must fail readiness/claim before it can call
+a body. Quarantine resource until these probes pass.
+
+The future migration's write guard additionally requires version1 inserts for
+the exact codec-capable principal; denies version1 insertion/mutation to all other
+runtime roles; denies version changes and changes to a confirmed payload;
+and refuses version0 mutation by the activated codec-capable principal. An old
+writer defaults to0 and is rejected even if mistakenly invoked under the new
+principal. Mode/readiness checks reject a new binary using default legacy
+mode under the codec-capable principal. Transaction-local GUC flags may describe a
+write but **cannot be its sole authority**. Preserve0029 guards as an independent
+AND condition; codec admission never grants a published fence.
+
+This gate is trusted configuration and credential isolation, not cryptographic
+attestation of a JS process. An operator handing the new reader credential to
+an old binary defeats the reader barrier; deployment ownership must pin the
+qualified binary hash and prove exclusivity before activation. This is an
+explicit trust premise, not claimed automatic detection by PostgreSQL. If
+exclusive credentials and workers cannot be guaranteed, **this proposal cannot
+be activated**; do not fall back to mixed operation or declare tag safety.
+
+| Reader/writer / schema state                        | Required behavior                                                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Existing binary + legacy schema, before expansion   | Existing behavior; baseline evidence preserved.                                                                    |
+| Existing binary + expanded but unactivated schema   | Version0 only; original defaults/writes remain usable; no version1 writer privilege.                               |
+| New default binary + expanded legacy schema         | Legacy behavior; no automatic version1 writes; encountering version1 is a storage mode error, not decode/fallback. |
+| New opt-in + expanded isolated activated schema     | Version1 new rows/replay; version0 get is inspection-only; reserve rejects0 per section5.                          |
+| Old binary + activated schema using old credentials | DB permission failure on reads/writes/claim, body0, model0.                                                        |
+| New default writer + activated principal            | Readiness failure; DB guard rejects version0 insert before body.                                                   |
+| New opt-in before migration/principal provisioning  | Readiness failure before reserve, claim, model or body; never fallback to legacy.                                  |
+| Multiple qualified version1 workers                 | Existing attempt/proposal/fence rules plus atomic storage checks; no duplicate effects.                            |
+| Old/new mixed fleet in same activated schema        | Unsupported, activation rejected; coexist only in different isolated schemas/resources.                            |
+
+## 6. Confirmation, replay, uncertainty and errors
+
+Keep the native lock/transaction boundary: tenant context; bound execution and
+outer/fence locks in existing order; journal row `FOR UPDATE`; attempt/proposal
+checks; pre-write recheck; state/payload UPDATE; post-write fence recheck;
+commit. Recheck after bounded encode if time/lease may have expired. Encode
+can be precomputed outside locks but must not weaken those guards. No unguarded
+side-channel writer or backfill bypass may settle a bound effect.
+
+For version1: reserve inserts RESERVED with no payload; markStarted only from
+RESERVED; confirm only from EFFECT_STARTED for the same attempt. CONFIRMED,
+its complete payload and timestamp commit in one transaction. Idempotent
+confirm for the same attempt must validate incoming logical bytes/hash and
+match stored bytes/hash; different data is `conflict`, never overwrite or
+silently accept the current same-state shortcut. Atomicity is for the journal
+row, **not** for external body + DB + checkpoint. Checkpoint save remains later.
+No new exactly-once guarantee across those boundaries is asserted.
+
+On resume, CONFIRMED logical result is retrieved through the native journal and
+validated by the same0224 context checks. Do not execute the body to recover
+lost text. A crash after committed confirmation but before checkpoint can
+reconstruct its observation from that confirmed result. A crash before confirmed
+commit, lost commit acknowledgement, malformed payload, lost fence or an
+unproven external outcome requires reconciliation; never rewrite the row to
+FAILED to permit retry. `reserve` returns existing started/uncertain work without
+adopting a new attempt. Only genuine existing FAILED/pre-effect-safe semantics
+permit retry; version1 FAILED retry clears all result fields atomically.
+Version0 active/FAILED work must be drained or explicitly reconciled before
+activation; the new principal cannot convert it or retry it implicitly.
+
+**Known confirmed oversize is success plus unavailable result, not safe replay.**
+A strict result of32769 bytes (or depth33/nodes10001) within journal limits
+confirms in full, then0224 emits `status:SUCCEEDED, completion:UNAVAILABLE,
+resultAvailability:UNAVAILABLE, reason:RESULT_TOO_LARGE/RESULT_COMPLEXITY`.
+Stop before the next model call, retain the same operationKey/CONFIRMED result
+and native settlement, and resume without a second body. Do not truncate,
+turn this into FAILED/UNCERTAIN, manufacture ACTION_CONFIRMED from a summary,
+or equate UNAVAILABLE with completion of the user's goal. Test above256KiB too.
+
+If a value exceeds8MiB/depth64/1000000 nodes or is not strict JSON, full storage
+is outside this protocol's admitted domain. Refuse it without a partial result
+or fake hash. A returned SUCCEEDED in memory is not proof of committed native
+confirmation; storage failure before confirmation remains the0224 native
+journal failure path: no successful complete result claim, retain started or
+UNCERTAIN, preserve any known in-process native success fact in redacted
+failure evidence, and require handoff. **Never demote an already CONFIRMED row,
+mark it safe to retry or re-run a known-effect body.** A new success-without-
+result journal API/state would need its own explicit design and approval; this
+proposal neither smuggles a receipt into `result` nor claims unbounded storage.
+Existing capture can fail before journal confirmation; do not relabel that as
+proven native confirmation.
+
+Stable redacted diagnostics are proposed as `OperationalExecutionError` using
+existing categories: validation_failed (input bounds/invalid strict JSON),
+invalid_action (mode/incompatible/corrupt persisted result), conflict (identity
+or idempotent-result mismatch), lease_lost (native attempt/fence). Diagnostic
+reasons: JOURNAL_STORAGE_MODE, JOURNAL_RESULT_INVALID, JOURNAL_RESULT_TOO_LARGE,
+JOURNAL_RESULT_CORRUPT, JOURNAL_RESULT_CONFLICT and LEGACY_RESULT_UNKNOWN.
+No new ToolResult status, public effect state, raw SQL/body/credential leak or
+automatic retry is added. Permission errors must be translated to a fail-closed
+storage error, never returned as successful missing results.
+
+If confirm throws, retain the original failure and durable state; a subsequent
+markUncertain failure must not mask it or permit replay. If re-read proves
+CONFIRMED after lost acknowledgement, preserve it; do not attempt a destructive
+uncertain transition. If DB unavailable, stop, with unresolved settlement.
+Logs/metrics contain reason, codec version, logical/physical sizes, tenant-safe
+correlation, operation/attempt references and state, never result text/base64.
+Audit claims describe observed native settlement, not fields supplied by a tool.
+
+## 7. Conditional migration, activation and recovery
+
+All steps here are future/NOT_RUN; run only in separately claimed synthetic
+resources after T3. No running service or DB mutation is authorized by this draft.
+
+1. Freeze sources, migration inventory, old/new binaries and fixtures; register
+   new BUILD/resource ownership. Test baseline including the existing redNUL
+   witness; keep all original failures immutable. Provision a disposable schema,
+   separate migration owner, old runtime principal and new restricted principal.
+2. Expand with the two columns/default0, structural checks and write guard;
+   do not edit0016/0029, drop their triggers or change RLS. Explicitly verify
+   existing trigger bodies/search_path binding, tenant policies, grants and
+   default0. Capture lock duration. Proposed local DDL lock_timeout1s and
+   statement_timeout30s; abort on timeout, rollback transaction, do not retry
+   automatically. Apply once under the existing migration mechanism.
+3. No conversion/backfill of historical logical results: existing rows stay0;
+   adding metadata default0 is not evidence of content conversion. Compare
+   per-tenant counts, identity/state/timestamp and original result::text digests,
+   including wrapper-shaped rows, JSONB null and SQL NULL. Abort on any drift.
+   Legacy pending work must be drained/reconciled; do not claim all such work
+   is pre-effect safe. Do not edit its payload to make it look upgraded.
+4. Qualify upgraded readers/codecs against0/1 without activating the legacy
+   resource. Stop/drain all consumers of the isolated target, revoke old access
+   and rotate credentials as section5 requires. Capture effective grants,
+   session inventory, compiled binary hash and readiness receipt. Activation is
+   a cutover with a maintenance window, not a rolling mixed-binary deployment.
+5. With the exclusive principal, enable the explicit option in the isolated
+   composition; run J01–J16 and applicable unchanged0224 tests plus regression
+   gates. Retain positive/negative observer controls, query/results, PIDs,
+   crashpoints, usage, DB snapshots and cleanup receipts. Any codec mismatch,
+   stale fence, old-reader success or extra body blocks acceptance.
+6. Last safe rollback to old binaries is **before the first version1 reservation
+   or checkpoint2 write**, and only when no active/in-flight work exists and
+   legacy result counts/digests reconcile. With zero version1/checkpoint2 rows,
+   disabling this option and restoring only proven legacy privileges may use
+   the expanded schema; do not automatically run a destructive down migration.
+7. After any version1 row/checkpoint2 write, stop new admission and retain new
+   reader/credentials. Roll forward to a corrected version1-capable binary.
+   No downgrade to0, decoded backfill into legacy JSONB, envelope-to-result copy,
+   resealing, dropping payloads, or old-binary rollback. Export/restore may be
+   exercised in a disposable synthetic DB with row counts/hashes and body0;
+   never restore an old snapshot then replay effects to fill the gap.
+
+For this bounded design no content backfill worker is needed. Future production
+volume, maintenance window, retention, backup recovery time and role ownership
+are UNKNOWN and outside authorization. A future demand for online mixed-version
+availability or conversion of live legacy work invalidates this cutover design
+and needs a separate reviewed change; it does not expand this task implicitly.
+
+## 8. Rejection targets and prospective public test matrix
+
+**Every J test below is NOT_RUN.** Reading previous evidence or checking a hash
+is not execution or PASS of these tests. Use actual PostgreSQL, native journal,
+factory, registry and checkpoint store; only tool/model/counter are synthetic.
+Observe requests actually received by the model; do not manufacture output
+from a fixture hidden from it. Public NUL fixtures within32KiB must complete;
+large results must stop before their follow-up decision. Both are necessary.
+
+| ID / status | Required test and rejection target                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| J01 NOT_RUN | Native journal confirm/get/reserve round-trip strict JSON: null, true/false,0/finite negative/fraction, empty string/array/object, nested values, strings `"42"`, `"null"`, `"{}"`, `"[]"`, `"false"`, `"\"x\""`, non-JSON text and literal backslash-u0000 versus actual NUL. Compare typeof, own result property, value, C(v) bytes and hash in a fresh process. Any coercion/missing null rejects.                                                                                                                         |
+| J02 NOT_RUN | NUL4096 plus escapes, Unicode scalar string, NUL in nested object keys and values, empty key, `__proto__`/constructor/prototype own keys, both raw wrapper-shaped output and version1 output whose value looks like version0/1 envelope. Exact decode once; no prototype mutation/tag decoding.                                                                                                                                                                                                                               |
+| J03 NOT_RUN | Native journal exact logical8388608/8388609 bytes, depth64/65,1000000/1000001 value nodes; physical data11184812 and envelope11185324/+1. Include escape expansion, Unicode and malicious declared small length/large payload. Overlimit allocation/driver parse or partial confirmation rejects. Public tests separately respect whole-ToolResult8MiB capture bound.                                                                                                                                                         |
+| J04 NOT_RUN | Corrupt/unknown column version, mixed legacy+payload, state/payload mismatch, unknown/missing/extra envelope keys, hash/length mismatch, wrong alphabet/padding, malformed UTF-8/BOM, duplicate JSON keys, trailing text, noncanonical JSON, altered numbers, invalid domain including getter/toJSON/-0/hole/cycle/lone surrogate. Inject persisted corruption with migration owner then read as runtime; no body/model, no fallback or hook execution. Include valid positive control so reject-all fails.                   |
+| J05 NOT_RUN | Migration over synthetic legacy primitives and exact current/proposed wrapper-shaped objects; old INSERT omits new columns ->0; compare pre/post counts/identity/state/time/result digests. SQL NULL CONFIRMED fails strict inspection, JSONB null returns null; version1 reserve rejects every version0 collision, including matching confirmed orphan and failed rows, body0. No invented output or orphan adoption. Interrupted/timeout expansion leaves no partial schema, migration rerun uses actual project semantics. |
+| J06 NOT_RUN | Old binaries (pre-map jsonValue path, original direct mapEffect and later result_present mapEffect path), original SELECT/reserve/claim using actual old credentials on activated schema ->42501/body0/model0. Legacy schema positive control stays usable. Intentionally restore an inherited SELECT/claim grant: activation preflight MUST reject. Separate payload alone or successful undefined output is a failed test.                                                                                                                                    |
+| J07 NOT_RUN | New default/no flag, wrong role, missing migration, unknown option, missing worker wiring, privileged/member runtime role, live old session or same-schema mixed fleet all fail readiness before model/body. Direct wrong version0 insert under codec-capable principal and version1 insert under old role denied; forged GUC/output version/tag cannot activate mode.                                                                                                                                                        |
+| J08 NOT_RUN | Real confirm transaction rollback injected before UPDATE/after UPDATE/before commit; state and payload atomic, never CONFIRMED without complete payload. Kill after commit before acknowledgement, then native get proves CONFIRMED without overwrite. Concurrent same-attempt same-result idempotent and different-result conflict. Stale attempt, wrong tenant/proposal and corrupt payload cannot replay.                                                                                                                  |
+| J09 NOT_RUN | Public factory + HybridOrchestrator + real journal/store process restart matrix: existing ascii4096, unicode4096bytes, nul4096-escapes, JSON-looking string-number/null/object; add JSON null, false,0, empty string/array/object, nested NUL key/value and wrapper-shaped object. Kill after APPLIED complete-result CAS; new PID resumes from DB, one total body, CONFIRMED, exact logical/model frame/hash/bytes, stable receipts/usage. Every listed case required; skip/missing fixture is not PASS.                     |
+| J10 NOT_RUN | Kill after successful native journal confirmation **before** complete-result checkpoint, restart public path with persisted accepted decision. Recover native CONFIRMED result for each NUL/null/wrapper primitive case, no body replay; compare receipts and later full CAS/model frame. Distinguish this crashpoint from J09; a direct journal unit test is insufficient.                                                                                                                                                   |
+| J11 NOT_RUN | Public confirmed outputs32768/32769 bytes, depth32/33,nodes10000/10001, plus result300KiB below capture/journal limits. At context oversize: native CONFIRMED unchanged, SUCCEEDED/UNAVAILABLE with correct reason, follow-up model0, one body before/after restart, no fabricated completion. Small positive fits and completes. Also inject checkpoint-save failure after successful confirmation.                                                                                                                          |
+| J12 NOT_RUN | Native confirm failure (DB outage, before commit, lost acknowledgement, serialization/capture bound above8MiB) and markUncertain failure. Preserve original error and durable state; no FAILED/re-reserve safe replay. Confirmed rows never demoted; fresh process blocks unresolved EFFECT_STARTED/UNCERTAIN. Include return-known-SUCCEEDED versus proof-of-commit assertions.                                                                                                                                              |
+| J13 NOT_RUN | Bound composition uses actual0029 triggers/fence kernel, unchanged lock order: normal success with synthetic tool and supported operation key, then stale worker/attempt/outer lease, expired lease during encode, pause/cancel/deadline and unguarded direct DML. Both storage guard and native fences enforced; zero unauthorized writes/dispatch. Do not relabel current unbound public tests as fencebound.                                                                                                               |
+| J14 NOT_RUN | Two public processes race reserve/dispatch/replay and decision CAS using qualified version1 composition. One winning effect/model admission where applicable; loser does not run body or debit usage twice. Mode/proposal/fingerprint drift fails before execution; losing worker cannot settle new payload.                                                                                                                                                                                                                  |
+| J15 NOT_RUN | Activation/recovery drill: stop mid-expand and before cutover, reject old grants/sessions, retry only after actual committed schema reconciliation; verify no content backfill. Before-first-write legacy rollback control, after-first-version1 reservation and after-checkpoint2 no-downgrade controls; roll-forward and synthetic export/restore preserve rows/hash/body0.                                                                                                                                                 |
+| J16 NOT_RUN | Default legacy worker, controlled-published kernel, capability/tools paths and relevant package/SDK regressions on legacy schema; generic packages never import product. After future BUILD run Node22 typecheck/lint/unit/PG/E2E/certification under own claims, preserving baseline reds/skips and stale pins; no checker/pin refresh for green. Observer must reject a deliberately truncated frame and corrupted persisted row while accepting an intact control.                                                         |
+
+Retain the old6PASS/1FAIL record as a red witness even if future J tests pass.
+Acceptance needs exact candidate+DB schema/roles+Node/PG versions, commands and
+full streams; durable pre/post state, distinct PIDs and acknowledgements;
+model/body counters and receipts; malformed controls; test statuses and explicit
+scope. A source hash, compile, serializer unit test or proposed test table is
+not storage/restart/compatibility evidence. Separate Lead/fresh-review/human
+gates apply; this author grants none.
+
+## 9. Bounded handoff and authority questions
+
+Deliverables: this draft, `findings-decisions.json`, `sourcehashes.json`,
+`open-questions.md`, a source-cut supplement, and a delivery manifest/check receipt. No application,
+DDL, migration, lock, checker, pin, approved0224 byte, old evidence or shared
+ledger was changed by this author. All proposed tests remain NOT_RUN.
+
+Concrete proposed design is complete enough for review: two additive columns,
+version1-only new storage,8MiB canonical-result budget, unchanged logical port,
+strict legacy inspection without version0 replay adoption, no content backfill, exclusive
+schema/principal cutover, and roll-forward after the first new row. Its cost is
+4/3 storage expansion, bounded codec allocation/CPU and a cutover window.
+There is no measured performance claim.
+
+The Lead must confirm acceptance of the exclusive-schema/credential cutover
+premise and8MiB budget with the human T3 gate, identify future BUILD/resource
+owners, freeze a canonical candidate, and obtain independent review. If those
+premises are refused, reject this design before implementation; do not silently
+select an alternative. Production operations and live-data migration need
+separate authority and evidence. No new approval of0224 or automatic resolution
+of0220/0221/0222 is requested by this draft.

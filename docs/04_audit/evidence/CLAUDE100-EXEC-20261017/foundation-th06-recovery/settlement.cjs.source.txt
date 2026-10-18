@@ -1,0 +1,111 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),w='/tmp/cvg-claude100-exec-20261017/foundation-th06-candidate',ts=require(w+'/node_modules/typescript'),p=w+'/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts';let s=fs.readFileSync(p,'utf8');
+function once(a,b){assert.equal(s.split(a).length,2,a.slice(0,80));s=s.replace(a,b)}
+function source(){return ts.createSourceFile(p,s,ts.ScriptTarget.Latest,true)}
+function fn(name){const sf=source();let n;ts.forEachChild(sf,x=>{if(ts.isFunctionDeclaration(x)&&x.name.text===name)n=x});assert(n,name);return{sf,n}}
+function replace(n,sf,text){s=s.slice(0,n.getStart(sf))+text+s.slice(n.end)}
+once('withCompleteCleanup, cleanupCompleteChildren}','withCompleteCleanup, cleanupCompleteChildren, completeCleanupError}');
+{
+ const {sf,n}=fn('instrumentSql');replace(n,sf,`function instrumentSql(client: Client | PoolClient, label: string) {
+  const original = client.query.bind(client)
+  const wire = (value: unknown) => appendFileSync(
+    join(output, 'sql-wire-private.jsonl'), JSON.stringify(value, tagged) + '\\n', { mode: 0o600 }
+  )
+  const failed = (error: unknown, record: unknown): never => {
+    try { wire(record) } catch (diagnostic) {
+      throw completeCleanupError([error, diagnostic])!.error
+    }
+    throw error
+  }
+  client.query = ((...args: unknown[]) => {
+    const sequence = ++sqlSequence
+    const callback = args.at(-1)
+    wire({ sequence, type: 'SQL-entry', scope: sqlScope, pid: process.pid,
+      label, args: args.filter((value) => typeof value !== 'function') })
+    if (typeof callback === 'function') {
+      args[args.length - 1] = (...returned: unknown[]) => {
+        let diagnostic: {error: unknown} | undefined
+        try {
+          wire({ sequence, type: 'SQL-callback',
+            error: returned[0] ? errorInfo(returned[0]) : null, result: returned[1] })
+        } catch (error) { diagnostic = {error} }
+        const errors = returned[0] === null || returned[0] === undefined ? [] : [returned[0]]
+        const delivered = diagnostic ? [...returned] : returned
+        if (diagnostic) delivered[0] = completeCleanupError([...errors, diagnostic.error])!.error
+        try { return Reflect.apply(callback, undefined, delivered) }
+        catch (error) {
+          if (diagnostic) throw completeCleanupError([...errors, diagnostic.error, error])!.error
+          throw error
+        }
+      }
+    }
+    try {
+      const value: unknown = Reflect.apply(original, undefined, args)
+      if (value instanceof Promise) return value.then(
+        (result: unknown) => { wire({sequence, type: 'SQL-return', result}); return result },
+        (error: unknown) => failed(error, {sequence, type: 'SQL-error', error: errorInfo(error)})
+      )
+      return value
+    } catch (error) {
+      return failed(error, {sequence, type: 'SQL-error', error: errorInfo(error)})
+    }
+  }) as typeof client.query
+}`);
+}
+once('  return attempt\n}', '  ownedAttempts.add(attempt)\n  return attempt\n}');
+once('const caseIndex: Array<Record<string, unknown>> = []',`const ownedAttempts = new Set<Attempt>()
+let settlementBarrierFailure: {error: unknown} | undefined
+async function quiesceAttempts(attempts: readonly Attempt[]) {
+  // Release every body before awaiting any runtime; native rejections are settled observations.
+  for (const attempt of attempts) attempt.release.resolve()
+  const results = await Promise.allSettled(attempts.map(async (attempt) => {
+    await attempt.runResult.then(() => {}, () => {})
+    await attempt.joinDelivery()
+  }))
+  const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  const failure = completeCleanupError([
+    ...(settlementBarrierFailure ? [settlementBarrierFailure.error] : []), ...errors
+  ])
+  if (failure) { settlementBarrierFailure = failure; throw failure.error }
+}
+const caseIndex: Array<Record<string, unknown>> = []`);
+{
+ const {sf,n}=fn('caseRun');let tri=n.body.statements.find(x=>ts.isTryStatement(x));assert(tri);
+ const final=tri.finallyBlock;const record=final.statements.find(x=>ts.isVariableStatement(x));assert(record?.getText(sf).includes('const record'));
+ // Keep the complete original record payload, changing only presence-based error ownership.
+ const recordText=record.getText(sf).replace('errorInfo(failure)','errorInfo(failure.error)');
+ const text=`let failure: {error: unknown} | undefined
+  try ${tri.tryBlock.getText(sf)} catch (error) { failure = {error} }
+  const remember = (action: () => Promise<unknown>) => async () => {
+    try { return await action() } catch (error) { failure ??= {error}; throw error }
+  }
+  await cleanupCompleteChildren([{stop: () => quiesceAttempts(attempts)}], [
+    ...attempts.map(a => remember(async () => {
+      try { await a.finish() } catch (error) {
+        await cleanupCompleteChildren([], [() => save(join(a.dir, 'finish-error.json'), {
+          error: errorInfo(error), events: a.events, calls: a.calls, measurements: a.measurements
+        })], {error})
+      }
+    })),
+    remember(async () => { await save(join(dir, 'db18-after-private.json'), {
+      tenant224: await snapshot(pool!), tenant225: await snapshot(pool!, tenantB)
+    }) }),
+    remember(async () => { ${recordText}
+      await save(join(dir, 'case-summary-index.json'), record)
+      caseIndex.push(record)
+    })
+  ], failure)`;
+ const start=n.body.statements.find(x=>ts.isVariableStatement(x)&&x.getText(sf).includes('let failure')).getStart(sf);
+ s=s.slice(0,start)+text+'\n'+s.slice(n.body.end-1);
+}
+// afterAll was converted to a summary action plus two end callbacks; guard that group by global barrier.
+{
+ const sf=source();let selected;function walk(n){if(ts.isCallExpression(n)&&n.expression.getText(sf)==='afterAll')selected=n;ts.forEachChild(n,walk)}walk(sf);assert(selected);
+ const text=selected.getText(sf);assert(text.includes('[() => pool?.end(), () => admin?.end()]'));
+ replace(selected,sf,text.replace('[() => pool?.end(), () => admin?.end()]','[async () => { await quiesceAttempts([...ownedAttempts]); await cleanupCompleteChildren([], [() => pool?.end(), () => admin?.end()]) }]'));
+}
+fs.writeFileSync(p,s);
+// Remove only unused stop imports from compact generated imports.
+for(const name of ['complete-tool-public-restart.test.ts','complete-bound-admission-postgres.integration.ts']) {
+ const p=w+'/packages/persistence/src/__tests__/'+name;let t=fs.readFileSync(p,'utf8');t=t.replace('stopCompleteChildren, ','');fs.writeFileSync(p,t);
+}
+console.log('Settlement and diagnostic ownership implemented.')

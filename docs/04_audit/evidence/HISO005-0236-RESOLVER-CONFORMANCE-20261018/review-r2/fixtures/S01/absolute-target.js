@@ -1,0 +1,1 @@
+import('./evaluated/pro'+'ducts/shift/src/index.js');module.exports=2;

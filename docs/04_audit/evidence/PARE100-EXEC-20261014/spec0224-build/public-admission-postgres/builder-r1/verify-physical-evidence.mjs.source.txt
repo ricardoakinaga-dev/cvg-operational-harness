@@ -1,0 +1,73 @@
+// Standalone evidence reconstruction. No runtime/store/codec/canonical helpers.
+import fs from 'node:fs';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+const root=path.dirname(new URL(import.meta.url).pathname);
+const run=process.argv[2];
+if(!/^r[1-9][0-9]*$/.test(run??'')) throw Error('explicit own run required');
+const dir=path.join(root,'runs',run,'cases');
+const sha=x=>createHash('sha256').update(x).digest('hex');
+const assert=(v,m)=>{if(!v)throw Error(m);};
+const golden=v=> v===null || typeof v!=='object' ? JSON.stringify(v) : Array.isArray(v) ? '['+v.map(golden).join(',')+']' : '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+golden(v[k])).join(',')+'}';
+function restore(s){
+ const c=structuredClone(s.checkpointWithoutFixturePadding),p=s.paddingRecipe;
+ const pad=p.character.repeat(p.repeat)+p.suffix;
+ assert(sha(pad)===p.sha256,'padding hash');
+ if(p.present)c.state.resolvedInputs.fixturePadding=pad;
+ const {checkpointId,createdAt,digest,...u}=c;
+ const canonical=golden(u);
+ assert(Buffer.byteLength(canonical)===s.logicalUnsignedBytes,'unsigned bytes');
+ assert(sha(canonical)===s.logicalUnsignedSha256,'unsigned hash');
+ assert(sha('cvg.checkpoint.v2\n'+canonical)===digest,'domain checkpoint digest');
+ assert(8388608-Buffer.byteLength(canonical)===s.remainingBytes,'free bytes');
+ return c;
+}
+function physical(r){
+ const c=restore(r.nativeLogicalCheckpoint),state=golden(c.state),data=Buffer.from(state,'utf8').toString('base64');
+ assert(r.wrapperHeader.storageCodec==='cvg.checkpoint-state/2','codec');
+ assert(r.wrapperHeader.encoding==='base64','encoding');
+ assert(Buffer.byteLength(state)===r.wrapperHeader.decodedBytes,'decoded bytes');
+ assert(sha(state)===r.wrapperHeader.decodedSha256,'decoded hash');
+ assert(data.length===r.wire.base64Chars,'actual base64 length');
+ assert(sha(data)===r.wire.base64Sha256,'actual base64 hash');
+ assert(sha(golden({...r.wrapperHeader,data}))===r.wire.canonicalWrapperSha256,'actual wrapper canonical hash');
+ const wire=r.wire.prefixBeforeQuotedBase64Data+JSON.stringify(data)+r.wire.suffixAfterQuotedBase64Data;
+ assert(sha(wire)===r.wire.sqlTextSha256,'actual SQL wire hash');
+ assert(Buffer.byteLength(wire)===r.wire.sqlTextBytes && r.wire.sqlTextBytes===r.rowHeader.physical_state_bytes,'actual SQL wire bytes');
+ assert(r.rowHeader.checkpoint_id===c.checkpointId && r.rowHeader.digest===c.digest,'row token binding');
+ assert(r.rowHeader.checkpoint_version===c.checkpointVersion && c.checkpointVersion===2,'version');
+ for(const [sql,logical] of Object.entries({execution_id:'executionId',tenant_id:'tenantId',runtime_profile:'runtimeProfile',runtime_version:'runtimeVersion',orchestrator_version:'orchestratorVersion',step_number:'stepNumber',created_at:'createdAt',budget_usage:'budgetUsage'}))
+  assert(golden(r.rowHeader[sql])===golden(c[logical]),'full row binding: '+sql);
+ assert(r.readerIdentity.current_user===r.readerIdentity.session_user && r.readerIdentity.current_user.startsWith('pare224_admission_') && r.readerIdentity.current_user.endsWith('_service'),'service identity');
+ assert(r.readerIdentity.backend_pid!==r.writerPid && r.freshPhysicalClient===true,'fresh physical backend');
+ return c;
+}
+const cases=[];let records=0,entries=0,negativeControls=0;
+for(const name of fs.readdirSync(dir).sort()){
+ const caseDir=path.join(dir,name),o=JSON.parse(fs.readFileSync(path.join(caseDir,'observed.json'),'utf8'));
+ const ps=JSON.parse(fs.readFileSync(path.join(caseDir,'physical-checkpoints.json'),'utf8'));
+ for(const r of ps){
+  const c=physical(r);records++;
+  if(r.readEvent){
+   const read=o.events.find(e=>e.sequence===r.readEvent),entry=o.events.find(e=>e.sequence===read.completeEntry),cas=o.events.find(e=>e.sequence===read.priorCASEvent),computed=o.events.find(e=>e.type==='synthetic-response-computation'&&e.completeEntry===entry.sequence);
+   assert(cas.type==='native-CAS-return-after-transaction'&&cas.result.status==='APPLIED','actual APPLIED return');
+   assert(cas.sequence<entry.sequence&&entry.sequence<read.sequence&&read.sequence<computed.sequence,'ordered CAS/entry/SQL/response computation');
+   assert(entry.type==='model.complete-entry','entry event');
+   for(const key of ['checkpointId','digest'])assert(read[key]===cas[key]&&read[key]===c[key],'ordered token '+key);
+   assert(read.pendingReceipt===cas.pendingReceipt&&read.pendingReceipt===c.state.toolResultContext.pendingDecisionAdmission,'pending receipt binding');
+   const call=o.calls.find(x=>x.completeEntry===entry.sequence),receipt=c.state.toolResultContext.decisionAdmissions.find(x=>x.admissionId===read.pendingReceipt);
+   assert(receipt.status==='RESERVED'&&receipt.requestSha256===sha(golden(call.request)),'actual request reservation');
+   assert(receipt.reserved.outputTokens===512,'native output cap');entries++;
+  }
+ }
+ if(ps.length){
+  const altered=structuredClone(ps[0]);altered.wire.sqlTextSha256='0'.repeat(64);
+  try{physical(altered);throw Error('negative control unexpectedly accepted');}catch(e){assert(e.message==='actual SQL wire hash','wrong negative failure');negativeControls++;}
+  const damaged=structuredClone(ps[0]);damaged.nativeLogicalCheckpoint.checkpointWithoutFixturePadding.state.resolvedInputs.observerTamper='changed';
+  try{physical(damaged);throw Error('negative control unexpectedly accepted');}catch(e){assert(e.message==='unsigned bytes'||e.message==='unsigned hash','wrong logical negative failure');negativeControls++;}
+ }
+ cases.push({name,verdict:o.verdict,physicalRecords:ps.length,completeEntries:o.countsAtFinally.completeEntries,counts:o.countsAtFinally,first:o.first?.stopReason,result:o.result?.stopReason,observerErrors:o.observerErrors?.length??null});
+}
+const report={run,standaloneSourceSHA256:sha(fs.readFileSync(new URL(import.meta.url))),records,modelEntryBindings:entries,negativeControls,cases,scope:'Builder evidence reconstruction only; no independent acceptance. Prior red runs stay red, no provider/concurrency/restart/global qualification.'};
+fs.writeFileSync(path.join(root,'physical-reconstruction-'+run+'.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});
+console.log(JSON.stringify(report));

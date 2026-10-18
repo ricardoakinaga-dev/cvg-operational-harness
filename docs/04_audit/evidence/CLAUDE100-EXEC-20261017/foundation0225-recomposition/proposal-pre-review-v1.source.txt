@@ -1,0 +1,431 @@
+# SPEC0225 — proposta de recomposição dos ajustes aprovados
+
+Data: 16/10/2026. Task: `P100-014/P100-020/TOOL-RESULT-JOURNAL-SPEC-001`.
+Estado desta cópia: **RECOMPOSIÇÃO T1 PARA REVISÃO TÉCNICA**. A decisão humana
+APPROVED_WITH_ADJUSTMENTS está registrada para o original04b92ba4. Esta cópia
+aplica somente esses ajustes; não é execução nem nova aprovação presumida.
+**BUILD_ENTRY_READY=false**: revisão técnica da cópia e dependências ainda
+pendentes. Todos os testes J01–J16 permanecem NOT_RUN.
+
+## 1. Problema, escopo e autoridade
+
+A [SPEC0224](../../../../02_spec/0224_pare100_complete_tool_result_context.md), SHA-256
+`f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, já foi
+aprovada pelo usuário. Seu BUILD local demonstrou preservação do resultado no
+contexto e no checkpoint V2. O journal confirma o resultado antes desse
+checkpoint e ainda grava o valor diretamente em JSONB. No teste público com
+NUL, o PostgreSQL devolveu 22P05 depois de um corpo; o journal ficou UNCERTAIN
+e o checkpoint completo não foi alcançado. Não houve sucesso fim a fim.
+
+Esta proposta complementa essa fronteira. Prevê codec opt-in no
+`PostgresOperationalEffectJournal`, migração aditiva, composição local confiável
+e testes de persistência/retomada. Mantém a API lógica do journal e as regras de
+tenant, policy, approval, sandbox, identidade, tentativa e fence. Não substitui
+o journal operacional por um ledger de hashes, journal de canal ou fake.
+
+A [decisão humana0225](../../USER-DECISIONS-20261016/spec-gates.json) sobre o
+SHA04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5 está
+resolvida com cinco ajustes. Aplicar somente esses ajustes requer revisão
+técnica independente desta cópia, sem repetir o gate humano. Task/recurso e
+dependências de integração continuam obrigatórios; qualquer ampliação além
+da decisão exige gate próprio. A aprovação0224 não é ampliada. Nenhum release
+ou aceite dos cartões decorre desta recomposição.
+
+O escopo futuro é um recurso PostgreSQL novo, descartável e sintético. Papéis,
+sessões antigas e fixtures de cutover dos testes pertencem exclusivamente a
+esse recurso. Não se autoriza operar bancos/principals de terceiros, migrar
+dado real, ativar produção ou habilitar automaticamente hosts existentes.
+
+## 2. Fatos e fronteiras atuais
+
+Os fatos referem-se ao worktree isolado PARE100 e aos snapshots por hash do
+[pacote de proposta](../../PARE100-EXEC-20261014/spec0225/README.md),
+não ao runtime ainda não integrado do diretório principal.
+
+- `operational_effect_journal`, criado na0016, tem `result jsonb`, sem versão
+  de armazenamento. `result_protection_version` pertence a
+  `operational_executions`, não ao journal. O marcador da0029 também não é
+  discriminador por resultado. CheckpointVersion2 não versiona esses registros.
+- O caminho nativo serializa o resultado com limite262144bytes e envia JSONB
+  antes de devolver o sucesso da ferramenta. Escapar NUL novamente mudaria o
+  valor lógico. O codec do checkpoint não repara uma confirmação anterior.
+- A correção local de leitura preserva strings que parecem JSON. A projeção
+  calculada `result IS NOT NULL AS result_present` distingue JSONB null de
+  SQL NULL: o primeiro retorna propriedade própria `result:null`; o segundo
+  permanece ausência. Isso não adiciona coluna nem formato físico.
+- O reader com `jsonValue` e os readers que retornam o valor já decodificado
+  são gerações distintas. Um envelope ou string com prefixo em `result` pode
+  virar a saída da ferramenta para o reader atual. Não há segurança por tag.
+- A retomada pública já foi demonstrada para strings e null, inclusive perda
+  do processo após confirmação e antes do checkpoint. O caso NUL continua
+  vermelho. Esses testes não são execução dos testes futuros desta proposta.
+
+Armazenar o resultado no journal não resolve automaticamente outros campos
+JSONB, como resultado final da execução, sessão, outbox ou consumidores SDK.
+Seu suporte fim a fim precisa de provas e contratos próprios. Não se habilita
+um worker inteiro apenas porque este codec passou em uma fábrica isolada.
+
+## 3. Decisão proposta e alternativa descartada
+
+Adicionar **duas colunas** ao journal existente:
+`result_storage_version` e `result_storage_payload`. A versão fica fora do
+conteúdo da ferramenta. O payload1 contém bytes JSON canônicos em base64 ASCII;
+`result` continua reservado ao armazenamento legado.
+
+| Alternativa                                                              | Decisão                                                                                                      |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| JSONB direto com correção do mapper                                      | Não representa NUL; mantém o gargalo de256KiB.                                                               |
+| Escape extra, tag ou envelope dentro de `result`                         | Altera o valor ou colide com saída legítima; readers atuais podem devolver o conteúdo físico como resultado. |
+| Reutilizar versão do checkpoint ou de outro registro                     | Não identifica o formato de cada linha do journal.                                                           |
+| Discriminador externo e payload separado                                 | Selecionada, com barreira explícita de compatibilidade.                                                      |
+| Serviço de blobs, nova tabela de journal, compressão ou dados ilimitados | Não necessários para esta fatia limitada.                                                                    |
+
+Não haverá coexistência de binários antigos e novos com acesso ao mesmo schema
+ativado. A proposta escolhe cutover exclusivo de schema/principal. Se essa
+premissa não for aceita ou puder ser violada, o desenho não pode ser ativado.
+Uma alternativa de operação mista exige outra decisão técnica antes de BUILD.
+
+## 4. Contrato lógico, domínio e opt-in
+
+As assinaturas de `EffectJournal`, seus estados e os bindings de
+operationKey/proposalHash/attempt não mudam. `confirm({result:v})`, `get` e
+`reserve` confirmado devolvem `v`, nunca base64, envelope, summary ou receipt
+fornecido pela ferramenta. Preservar tipo, valores vazios/falsy e null como
+propriedade própria. Não normalizar Unicode, truncar ou coagir números.
+
+O domínio é o JSON estrito da0224: null/boolean/string Unicode escalar,
+números finitos exceto -0, arrays densos e objetos simples ou de protótipo
+nulo com propriedades próprias de dados. Recusar undefined, BigInt, símbolos,
+holes, getters/toJSON, ciclos, NaN/infinidades e surrogates isolados. Chaves
+seguem ordem lexicográfica UTF-16 do canonicalizador; arrays mantêm ordem.
+Aliases acíclicos repetem por valor. Isso não é sandbox para Proxy ou código
+instalado hostil.
+
+Opção proposta do adapter:
+
+```ts
+new PostgresOperationalEffectJournal(connection, {
+  resultStorage: { version: 1 }
+  // fence permanece a porta nativa existente, quando aplicável.
+})
+```
+
+Sem opção: escrita legada. Versão desconhecida: falha antes da execução.
+Somente composição confiável escolhe o modo; campos de HTTP/modelo/output,
+variáveis não validadas ou uma tag não o ativam. Fixar modo, principal, schema
+e binário no manifesto de composição; não trocar modo durante uma execução.
+
+`toolResultContext:{version:1}` não configura sozinho o armazenamento da porta
+externa. A composição isolada deve injetar explicitamente um journal
+compatível. Journals customizados continuam sob responsabilidade do seu owner.
+Não se alega persistência nativa para uma porta in-memory.
+
+O worker comum hoje constrói o journal sem opção; a composição published passa
+o fence. Não ligar a nova opção implicitamente em nenhum dos dois, SDK,
+produto ou host principal. Todo consumidor admitido ao recurso novo deve ter
+wiring e readiness qualificados; consumidor não qualificado fica fora dele.
+
+## 5. Formato físico e limites exatos
+
+Estas são exigências de schema, não SQL implementado:
+
+| Campo/estado                                | Invariante                                                                                                  |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `result_storage_version`                    | smallint NOT NULL, default0, somente0/1, imutável por linha inclusive retry.                                |
+| Versão0                                     | `result` mantém os bytes/significado JSONB existentes; payload novo SQL NULL.                               |
+| Versão1, qualquer estado                    | `result` legado SQL NULL.                                                                                   |
+| V1 RESERVED/EFFECT_STARTED/FAILED/UNCERTAIN | payload SQL NULL.                                                                                           |
+| V1 CONFIRMED                                | payload completo válido e bounded; `error` SQL NULL; estado/payload gravados atomicamente.                  |
+| Envelope                                    | Exatamente `encoding:"base64"`, `decodedBytes`, `decodedSha256`, `data`. A autoridade de versão é a coluna. |
+
+DB CHECKs cobrem estados, exclusividade, tipos, forma, ASCII e comprimentos.
+Guard de escrita protege versão, principal autorizado e imutabilidade do
+confirmado. O adapter valida conteúdo, JSON estrito e SHA. Hash detecta
+corrupção; não autentica uma escrita privilegiada maliciosa.
+
+Seja C(v) o JSON canônico e B seus bytes UTF-8. Exigir
+`decodedBytes=|B|`, `decodedSha256=SHA256(B)` sem prefixo e igualdade byte a byte
+entre B e a recanonicalização do valor decodificado. Um hash de conteúdo não
+substitui o binding de tenant/operação/tentativa.
+
+| Limite                      | Valor inclusivo                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------- |
+| Resultado lógico no journal | 1048576bytes (1MiB); mínimo um byte JSON válido.                                              |
+| Forma lógica                | profundidade64 com raiz1;1000000nós de valor; chaves contam bytes, não nós.                   |
+| `data` base64               | `4*ceil(decodedBytes/3)`, máximo1398104caracteres ASCII.                                      |
+| Envelope JSONB expandido    | 1398616bytes, máximo do data+512; usar `octet_length(payload::text)`, não tamanho comprimido. |
+| Contexto0224, inalterado    | 32768bytes, profundidade32,10000nós.                                                          |
+| Checkpoint0224, inalterado  | 8388608bytes canônicos unsigned incluindo todo o restante do estado.                          |
+
+1MiB é a redução proposta do teto do journal, autorizada pela decisão, sem
+alegar throughput/capacidade medidos. Fica acima dos32768bytes do contexto
+com folga e abaixo dos8MiB originais. Checkpoint/capture não são aumentados.
+O capture atual limita **todo ToolResult** a8MiB; logo, o output público máximo
+fica abaixo do máximo isolado da API do journal. Os testes devem distinguir
+essas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,
+tokens, provider ou duração por consequência deste codec.
+
+NUL e Unicode ficam nos bytes B, codificados como ASCII. IDs, erros e
+proveniência mantêm sua validação própria; não passam a aceitar NUL.
+
+Encode verifica limites antes de crescer buffers/strings. SELECT/RETURNING
+suprime payload oversized **antes** do parser JSONB do driver, devolvendo flag
+de overflow distinta de ausência; todos get/reserve/transition usam a projeção
+bounded. CHECK não autoriza trazer conteúdo danificado sem limite.
+
+Depois disso, validar versão, quatro chaves exatas, tipos, ASCII, fórmula de
+tamanho e padding. Reencodar base64 e exigir igualdade; Buffer permissivo não
+basta. Validar bytes/SHA, UTF-8 fatal sem BOM, scan lexical de profundidade/nós
+antes do grafo, um único valor JSON e recanonicalização idêntica. Recusar
+duplicatas de chaves, trailing material e formas não canônicas. Decodificar
+uma vez, sem interpretar recursivamente a forma do output.
+
+## 6. Legado, órfãos e barreira de readers/writers
+
+Versão0 é dado bruto legado, inclusive se contiver campos que imitam o novo
+envelope, `storageCodec` ou nome de versão. Versão1 com esses mesmos campos
+como valor é codificada uma vez e decodificada uma vez.
+
+Na porta opt-in, `get` pode inspecionar0 para reconciliação: strings como
+`"42"`, `"null"`, `"{}"` mantêm tipo; null JSONB com flag de presença é null.
+SQL NULL confirmado é resultado desconhecido, nunca null inventado. Essa
+inspeção não autoriza gerar observação0224 completa nem replay.
+
+`reserve` e transitions opt-in encontram versão0: falhar
+JOURNAL_STORAGE_MODE/LEGACY_RESULT_UNKNOWN antes de replay/markStarted/corpo,
+preservando a linha. Isso inclui CONFIRMED com proposal igual, FAILED,
+trabalho ativo e órfãos. A0016 não dá FK de journal para parent: operationKey
+igual não prova admissão sob o modo novo. Não fabricar parent, fence ou
+conversão para adotar um órfão. Novas execuções opt-in reservam linhas1 novas;
+histórico permanece no recurso legado qualificado ou em handoff.
+
+Separar payload e deixar `result` SQL NULL impede devolver base64 pelo mapper
+antigo, mas sozinho pode produzir SUCCEEDED/undefined. Isso também reprova a
+compatibilidade. Nenhuma geração de reader antigo é considerada protegida só
+por coluna, prefixo ou tag.
+
+A alternativa de filtro RLS não foi selecionada. A política atual é de tenant;
+adicionar outra permissiva faria OR e poderia manter um bypass. Uma opção RLS
+teria de restringir/substituir a política existente, adaptar preflight e provar
+com roles sem bypass que conflito invisível não concede reserva. O código
+atual faz INSERT ON CONFLICT DO NOTHING, SELECT FOR UPDATE e lança conflito
+se não lê a linha, antes do corpo; isso é fato de fonte, não prova executada
+de uma política nova. Não se concede autoridade de modo por GUC de ferramenta.
+
+### 6.1 Cutover exclusivo selecionado
+
+No schema ativado, admitir só binários qualificados e um LOGIN runtime novo,
+dedicado, com **zero memberships** e grants mínimos diretos. Sem SUPERUSER,
+BYPASSRLS, ownership, DDL ou alteração de roles/triggers; manter isolamento de
+tenant. Migration owner é separado. Não reutilizar credential em binário
+legado, em outro recurso ou por um role compartilhado.
+
+O guard migration-owned é SECURITY INVOKER e compara `session_user` e
+`current_user` com o principal exato provisionado e o schema fixado na
+instalação. SECURITY DEFINER identificaria o owner e não implementa esse
+binding. Nome do principal é parâmetro confiável de instalação, não de output
+nem GUC runtime. Renomear/trocar exige requalificação.
+
+A expansão inicial não permite escrita1 por ninguém. A ativação instala o
+binding imutável do principal no guard, sob owner, antes de habilitar admissão.
+A ferramenta de instalação deve gerar o binding a partir de identificadores
+validados/quotados e persistir seu hash no recibo de readiness; depois o runtime
+não pode alterá-lo. Nenhuma janela entre expansão e ativação libera escrita1.
+Essa configuração não altera os bytes aprovados da migração nem usa um GUC
+runtime como autoridade persistente.
+
+Drenar trabalho e encerrar pools/sessões antigos **do recurso sintético próprio**.
+Revogar SELECT/INSERT/UPDATE/claim e rotas herdadas/PUBLIC/SECURITY DEFINER dos
+principals antigos; eles não podem assumir o novo role nem obter seu segredo.
+Manter somente USAGE de schema durante as provas negativas: a consulta antiga
+precisa resolver a tabela pretendida e falhar42501, sem fallback para public.
+Verificar privilégios efetivos, memberships, sessões e binários por hash.
+
+A consulta SELECT original, usando credential antiga, deve falhar42501. Linha
+vazia RLS ou SUCCEEDED/undefined não passam. Worker antigo deve falhar
+readiness/claim antes de modelo/corpo. Permissão administrativa usada para
+provisionar fixture não é prova do role de serviço. Quarentenar até essas
+provas passarem; não disponibilizar o schema novo por pressuposição.
+
+O guard exige inserts1 pelo principal ativo, recusa0 por esse principal,
+recusa escrita1 por outros e mudanças de versão/payload confirmado. Guards0029
+continuam condição AND independente; codec não concede fence published.
+Modo ausente sob principal ativo falha readiness antes de aceitar trabalho.
+Novos readers sem opt-in recusam linhas1, sem decode oportunista; queries
+legadas em schema não expandido mantêm seu caminho anterior. Readiness
+distingue explicitamente schema legado/expandido/ativado antes de escolher
+projeção; ausência de coluna no opt-in não autoriza fallback para legado.
+
+Isso é isolamento de credential e configuração, não atestação criptográfica
+de um processo JS. Entregar a credential nova a binário antigo quebra a
+premissa. Se exclusividade não puder ser garantida, não ativar. Operação mista
+somente em schemas/recursos distintos; não há promessa de upgrade sem parada.
+
+### 6.2 Compatibilidade exigida
+
+| Composição                                     | Comportamento                                                                                                           |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Binário/recurso legado sem expansão            | baseline anterior preservada.                                                                                           |
+| Journal legado no schema expandido não ativado | 0/default e consultas legadas preservados; isso não promete que o preflight de um worker antigo aceite migrações novas. |
+| Binário novo default no legado/expandido       | não escreve1; recusa1 se encontrado.                                                                                    |
+| Novo opt-in no ativado                         | novas linhas1;0 somente inspeção, sem adoção.                                                                           |
+| Antigo com credential antiga no ativado        | 42501 em read/write/claim, modelo0/corpo0.                                                                              |
+| Default sem flag sob principal ativo           | readiness falha; guard recusa insert0.                                                                                  |
+| Opt-in sem migração/principal válidos          | falha antes de claim/modelo/corpo.                                                                                      |
+| Vários workers1 qualificados                   | mesma identidade/tentativa/fence, sem efeito duplicado.                                                                 |
+| Fleet antigo/novo no mesmo schema ativo        | configuração não suportada; ativação recusada.                                                                          |
+
+## 7. Confirmação, replay e falhas
+
+Preservar a transação/ordem nativa: contexto tenant, locks de parent/fence/outer
+existentes, journal FOR UPDATE, identidade/tentativa, recheck, UPDATE atômico e
+recheck após escrita antes do commit. Revalidar prazo/lease depois de encode
+bounded. Pré-calcular fora do lock não dispensa guard; não há writer paralelo
+sem fence, backfill que settle ou nova garantia exactly-once externa.
+
+Reserva1 cria RESERVED sem payload. markStarted só de RESERVED; confirm só de
+EFFECT_STARTED para a mesma tentativa. CONFIRMED/payload/timestamp commitam
+juntos. Repetição da confirmação da mesma tentativa exige mesmos bytes/hash;
+dados diferentes geram conflito, sem shortcut que aceite qualquer resultado.
+
+Se cair após confirmação commitada e antes do checkpoint, recuperar o valor
+pelo journal, validar pela0224 e reconstruir observação sem corpo novo. Perda
+de commit/ack/fence ou payload inválido exige reconciliação, sem transformar
+em FAILED para retry. Estado started/uncertain não adota tentativa nova. Só
+FAILED genuinamente pre-effect-safe mantém o retry nativo, limpando payload
+atomicamente. Versão0 não ganha essa adoção pelo modo novo.
+
+Resultado32769bytes/profundidade33/nós10001 que caiba no journal pode ser
+CONFIRMED integralmente e virar SUCCEEDED/UNAVAILABLE no contexto0224. Parar
+antes do próximo modelo; manter operationKey/settlement, sem truncar, repetir
+corpo ou declarar objetivo completo por summary. Testar também300KiB.
+
+Valor fora do domínio/1MiB/profundidade64/1000000nós não admite confirmação
+parcial. Falha antes do commit continua o caminho nativo de journal incerto:
+preservar started/UNCERTAIN e fato de sucesso em memória em evidência redigida,
+sem confundi-lo com confirmação durável. Não demover CONFIRMED, liberar retry
+ou fingir hash completo. Nova API de sucesso sem resultado não é introduzida.
+
+Falha de markUncertain não mascara a falha original de confirm. Se re-read
+provar CONFIRMED após ack perdido, preservá-lo; sem DB, parar com settlement
+não resolvido. Não emitir ACTION_CONFIRMED de texto fornecido pela ferramenta.
+
+Usar categorias existentes de OperationalExecutionError: validation_failed,
+invalid_action, conflict e lease_lost. Razões redigidas propostas:
+JOURNAL_STORAGE_MODE, JOURNAL_RESULT_INVALID, JOURNAL_RESULT_TOO_LARGE,
+JOURNAL_RESULT_CORRUPT, JOURNAL_RESULT_CONFLICT, LEGACY_RESULT_UNKNOWN.
+42501 não vira resultado ausente/sucesso. Logs contêm motivo, versão, tamanhos,
+IDs/correlação e estado, nunca conteúdo/base64/credential.
+
+## 8. Migração, ativação e recuperação futuras
+
+Tudo abaixo está NOT_RUN. A decisão reservou0030 à0225, depois da integração
+da0029 no PAR-G01 e antes da0031 da0221. O inventário corrente ainda não tem
+0029 no checkout compartilhado; presença na candidata PARE não é integração
+canônica. Reconciliar essa dependência e registrar claim antes do BUILD. Não editar0016/0029 ou remover guards,
+checksums, RLS e verificações de owner/role existentes.
+
+1. Congelar candidata, migrations, binários e fixtures; registrar task e novo
+   recurso sintético. Provisionar owner, role antigo de teste e runtime novo.
+2. Expandir colunas/default0/checks/guard que inicialmente nega1. Verificar
+   triggers/search_path/policies/grants. Proposta local: lock_timeout1s e
+   statement_timeout30s; timeout aborta transação, sem retry automático.
+3. Sem backfill/conversão. Comparar contagens por tenant, identidades, estados,
+   tempos e digests de result::text, incluindo null SQL/JSONB e envelopes
+   aparentes. Qualquer drift aborta. Não criar parent nem normalizar órfãos.
+4. Drenar o alvo próprio, impedir accessos antigos, instalar binding do guard
+   e qualificar principal/binário. Recibo liga schema, roles, ACL efetiva,
+   versão e hashes. Não ativar sem probes negativos42501 e owner separado.
+5. Habilitar opt-in somente após readiness e executar J01–J13 e J16, com
+   matriz mínima explícita de J05–J07; J14 e drill completo J15 ficam adiados.
+   Preservar0224 e regressões. Os restart/crashpoints J01/J08/J09/J10 continuam
+   obrigatórios: adiar disputa concorrente J14 não os remove.
+   Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.
+6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de
+   checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.
+   Expansão pode permanecer; não executar down migration destrutiva.
+7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward
+   com readers novos/credentials retidas. Sem downgrade, copy de envelope para
+   result, backfill decodificado, reseal ou restore seguido de replay de efeitos.
+   A política permanece; o drill completo de export/restore J15 está adiado,
+   não é requisito executado desta primeira fatia. Não fazer down destrutivo.
+
+Volume, retenção, latência, janela de produção e recovery time reais não foram
+medidos. Demanda de conversão de trabalho vivo ou operação online mista exige
+outro desenho aprovado; não amplia esta proposta automaticamente.
+
+## 9. Testes rejeitáveis
+
+**Todos J01–J16: NOT_RUN.** J14 e drill completo J15 ficam adiados; J13 e
+J16 continuam na primeira fatia. J05–J07 usam a matriz mínima abaixo, sem
+remover os invariantes de segurança. Hash de fonte, compilação, testes antigos e tabelas
+de intenção não são execução deste protocolo. Usar PostgreSQL real, journal,
+registry, fábrica e stores nativos; apenas ferramenta/modelo/counter sintéticos.
+Observar pedidos reais do modelo; não fornecer resposta oculta fora da ferramenta.
+
+| ID  | Critério obrigatório futuro                                                                                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| J01 | confirm/get/reserve em processo novo preservam todos os tipos JSON, null como propriedade própria, vazios/falsy, números finitos e strings que parecem JSON. Comparar valor/tipo/bytes/hash.                                                                                                    |
+| J02 | NUL4096, escapes, Unicode, NUL em chaves/valores, chaves vazias/reservadas e envelopes aparentes0/1: decode uma vez, sem coerção/prototype mutation.                                                                                                                                            |
+| J03 | Limites lógico1048576/+1, depth64/65, nós1000000/+1 e físicos1398104/data e1398616/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                       |
+| J04 | Versão desconhecida, mistura de campos/estado/payload, hash/length, chaves extra/faltantes, base64/padding, UTF-8/BOM, JSON duplicado/trailing/não canônico e domínio inválido: sem hook/modelo/corpo/fallback. Controle íntegro deve passar.                                                   |
+| J05 | Migração preserva legado/default0/contagens/digests e colisões de envelope; SQL NULL não vira null. Reserve1 recusa todas as linhas0, inclusive órfão confirmado/proposal igual e FAILED; sem backfill/adopção. Expansão interrompida reconcilia a transação.                                   |
+| J06 | Readers antigos com jsonValue, mapper direto e result_present usam suas consultas/credentials originais no ativado:42501/modelo0/corpo0. Controle legado separado funciona. Reintroduzir grant herdado/PUBLIC deve reprovar ativação; undefined/linha vazia não passam.                         |
+| J07 | Flag ausente/versão errada, role privilegiado/member/wrong, migração/wiring faltantes, sessão antiga e fleet misto falham antes de claim/modelo/corpo. Inserts0 pelo principal ativo e1 por outro são negados; GUC/tag forjados não ativam.                                                     |
+| J08 | Transação real: rollback antes/depoisUPDATE e antescommit, kill póscommit/préack, reread CONFIRMED, confirm idempotente igual e conflito diferente; tentativa/tenant/proposal inválidos não replayam nem sobrescrevem.                                                                          |
+| J09 | Fábrica+Hybrid+journal/store reais: ASCII4096, Unicode4096bytes, nul4096-escapes, strings parecendo JSON, null/false/0/vazios e objetos aninhados/envelope. SIGKILL após CAS completo, PID novo, um corpo, valor/frame/hash/bytes/receipts/usage idênticos. Toda fixture é obrigatória.         |
+| J10 | SIGKILL depois de confirmar journal e antes do checkpoint completo: NUL/null/envelopes/primitivos recuperados via journal em PID novo, sem corpo; comparar receipts e próximo frame/CAS. Não substituir pelo crashpoint J09.                                                                    |
+| J11 | Outputs32768/32769bytes, depth32/33 e nós10000/+1, mais300KiB: CONFIRMED íntegro, SUCCEEDED/UNAVAILABLE quando excede contexto, modelo seguinte0 e corpo único antes/depois da retomada; positivo pequeno completa. Incluir falha pósconfirm de save.                                           |
+| J12 | Falhas de DB/commit/ack/capture/encode acima1MiB e de markUncertain preservam erro original/estado, não FAILED/retry seguro. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit.                                         |
+| J13 | Composição bound usa triggers/fences0029 reais e lock order nativo: positivo, worker/attempt/outer stale, lease expirando no encode, pause/cancel/deadline e DML sem guard; ambas as barreiras independentes, sem escrita/corpo indevido. Unbound não prova fencebound.                         |
+| J14 | ADIADO NESTA FATIA. Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                     |
+| J15 | DRILL COMPLETO ADIADO. Políticas conservadas em J05–J07. Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                              |
+| J16 | Regressões legadas worker/published/capabilities/tools/SDK pertinentes e direção neutra; Node22 type/lint/unit/PG/E2E/certificação com claims. Preservar reds/skips/pins stale, sem editar checker/pins para verde. Observer rejeita frame truncado/linha corrompida e aceita controle íntegro. |
+
+Conservar o witness NUL vermelho anterior. Aceite exige candidata exata,
+schema/roles/Node/PG por versão, comandos/streams, snapshots duráveis, PIDs,
+acknowledgements, counters de modelo/corpo e controles positivos/negativos.
+Revisão técnica, decisão humana, BUILD e auditoria têm autoridades separadas.
+
+## 10. Critério de pronto e limite desta proposta
+
+Pronto para BUILD somente após recomposição limitada aos ajustes humanos,
+fontes autenticadas e revisão técnica independente sem obrigatório aberto,
+além de task/recurso e dependências satisfeitas. A decisão humana do original
+com ajustes já está registrada; não será solicitada novamente para esta redução.
+
+A decisão humana aceitou corte exclusivo de schema e credential, com parada
+de consumidores sintéticos antigos, e pediu teto menor ou medição para manter
+8MiB. Esta cópia propõe1MiB para o journal com expansão física4/3; o checkpoint
+continua8MiB. Sem operação mista, sem dados reais, sem worker/produto ativado
+automaticamente e sem rota publicada0226. Não há promessa de desempenho,
+paridade integral, produção ou aprovação de outros gates.
+
+## 11. Matriz mínima e fronteiras desta recomposição
+
+J05: manter legado/default0, digests/contagens, SQL NULL versus JSON null,
+colisões de envelope, recusa de adoção das classes0 (incluindo órfão e FAILED)
+e uma interrupção transacional da expansão. Sem conversão/backfill e sem o
+drill completo de rollback/restore J15.
+
+J06: as três gerações de reader usam consultas/credentials originais; cada
+uma deve obter42501 no schema ativo e funcionar no controle legado separado.
+Uma contraprova de PUBLIC e uma de grant herdado devem reprovar readiness.
+Sem ampliar a uma matriz exaustiva de fleets/versões ou conceder acesso misto.
+
+J07: ao menos um caso isolado por guarda distinta já exigida: flag ausente ou
+versão errada; role privilegiado/member/wrong; migration/wiring ausente; sessão
+antiga; fleet misto; insert0 do ativo e insert1 de outro; GUC/tag sem autoridade.
+Cada negativo mantém as demais pré-condições corretas para discriminar a guarda;
+não usar um caso com várias condições inválidas como prova de todas elas.
+
+J13 mantém os guards0029 em AND, sem editar0016/0029 ou abrir fencebound novo.
+J16 mantém regressões e os gates atuais; não presume que o suporte de testes
+TH06 reprovado seja qualificado. J01/J08–J10 usam processo real e retomada
+sequencial/crashpoints distintos; não são substituídos por mocks ou pelo J14
+adiado. Todos continuam NOT_RUN nesta preparação documental.
+
+A fundação TH06 e sua recuperação terminaram sem aceite; migration0029 ainda
+não está integrada no checkout compartilhado. Esta cópia não supera esses
+pré-requisitos. Não há BUILD, instalação SQL, conta/modelo/Claude executado,
+produção ou crédito M1/funcional nesta unidade.

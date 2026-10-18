@@ -1,0 +1,110 @@
+# Independent final critic — local complete RESPONSE / native outcomes
+
+**Largest material gap: F-001 (HIGH).** A valid synthetic native model result with `text: ""` produces a returned refusal but no failed RESPOND row and no terminal checkpoint. The last durable accepted response decision remains resumable. Replaying it makes a second model call and persists only the later call's usage. Tool output and its confirmed effect journal remain intact; the tool body runs once.
+
+**Decision: INVALID for the literal execution-scope contract. Technical disposition: REJECT.** P-001 records two ancillary OS files read by dependency platform detection in the initial six runs. The supplied tracing template allowed these paths. Six strengthened repeats block these reads and independently reproduce F-001; that does not erase the historical deviation. This report grants neither I1-clean acceptance nor production/global approval. The implementation defect alone prevents technical approval.
+
+Candidate manifest SHA256: `e27b8ebdfe9990d1865483e52c91b14aa0a3d64cd8e5b136edff85d334897f07`. Packet manifest SHA256: `ede20342f0dcd04a558d2fa597da4462d0b4d6e880d0159c0ce2781cbf62a489`. All 81 candidate bindings match the enumerated copies, irrespective of their manifest category or filenames.
+
+## F-001: what actually happens
+
+The actual model-entry request contains the full validated tool result. Returning an empty string after that request is sufficient. [dispatchRespondAttempt](/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/iterative-dispatch.ts:978) returns its contentless-response refusal without writing a FAILED step. The outer exception repair does not run because this is a normal return. The loop advances the cursor to2, while counted steps stay1. [The checkpoint invariant](/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/complete-checkpoint.ts:476) rejects that state before the store method is entered. Thus the native CAS wrapper sees no write error even though finalization cannot seal the terminal state. This causal explanation combines source inspection and a separately executed public-codec witness; the swallowed internal error was not directly intercepted.
+
+| Evidence | First empty response | After replay |
+| --- | --- | --- |
+| Model entries / durable calls | 1 / 0 | 2 total / 1 |
+| Durable cursor / counted steps | 1 / 1 | 2 / 2 |
+| Durable terminal reason | absent | COMPLETED |
+| Native RESPOND row | absent | SUCCEEDED from second call |
+| Native effect/tool body | CONFIRMED / 1 | CONFIRMED / 1 |
+| Synthetic observed / durable input tokens | 138 / 0 | 276 / 138 |
+| Synthetic observed / durable output tokens | 1 / 0 | 3 / 2 |
+| Synthetic observed / durable cost | 0.03125 / 0 | 0.0625 / 0.03125 |
+
+The first returned result reports INSUFFICIENT_EVIDENCE and one model call. The checkpoint still holds accepted RESPOND2 and zero calls. A second `harness.run` on the same execution succeeds; the healthy positive control refuses terminal replay with STATE_CONFLICT and no extra model call. This is an in-memory logical recovery experiment, not a process-restart or PG claim. [Replay raw evidence](raw/replay-strict-cases.json), [compact totals](raw/replay-strict-summary.json), [failing adversarial run](raw/adversarial-strict-stderr.log), [public codec witness](raw/codec-strict-cases.json).
+
+Required correction is a truthful failed native response step plus aligned cursor/accounting and an acknowledged durable refusal for empty content. No implementation edits were made or approved.
+
+## Criteria
+
+The statuses below are technical judgments on the exercised local artifacts. They do not override the INVALID procedural verdict.
+
+| Frozen criterion | Status | Actual evidence and confidence |
+| --- | --- | --- |
+| RR01 | **PASS** | baseline-strict RR01: two ORCHESTRATION requests, two SETTLED receipts; each receipt hashes the actual captured request. Confidence: HIGH. |
+| RR02 | **PASS** | baseline-strict RR02: full 4136-byte canonical JSON tool output in actual RESPONSE frame; matching observation/digest/provenance; native modelCalls=1, no decision receipt. Confidence: HIGH. |
+| RR03 | **PASS** | baseline-strict RR03: 31000-character payload framing refuses before RESPONSE; full checkpoint output and CONFIRMED journal retained; FAILED RESPOND step2, steps=2. Code enforces 16000/32000 message units and 131072 request bytes. Confidence: HIGH for exercised overflow; exact +/-1 boundaries not run. |
+| RR04 | **PASS** | baseline-strict RR04: absent option gives legacy two-message request, original user message unchanged, checkpointV1, native accounting. RR13 covers result-log failure. Confidence: HIGH for fixture. |
+| RR05 | **PASS** | baseline-strict RR05: actual purposes ORCHESTRATION/ORCHESTRATION/RESPONSE, two decision receipts, calls=3, inputs=361 and outputs=8; no aggregate double charge. Confidence: HIGH for uninterrupted fixture; F-001 separately fails replay. |
+| RR06 | **PASS** | baseline-strict RR06: two decision calls exhaust balance; no RESPONSE entry, MAX_MODEL_CALLS durable, FAILED RESPOND2, decision receipts retained. Confidence: HIGH. |
+| RR07 | **PASS** | baseline-strict RR07 drops mandatory item; AX05 selector throws and AX06 returns malformed content. All stop before model with FAILED RESPOND2 and aligned terminal checkpoint. Confidence: HIGH. |
+| RR08 | **PASS** | baseline-strict RR08: three hostile markers absent from system and present as data; tool item UNTRUSTED. Independent parser checks exact frame location, value, native observation identity and provenance. No semantic prompt-injection guarantee. Confidence: HIGH for structural framing. |
+| A1 immutable snapshot across awaits | **PASS** | AX15 records mutation-executed and original wire hash survives. KNOWN_BAD_selector_alias removes only detachment; AX15 then returns mutated digest and fails. Confidence: HIGH. |
+| A2 healthy writer truthful failure step and cursor | **FAIL** | AX02 and REPLAY_EMPTY: empty ModelResult.text returns refusal without RESPOND row; final seal sees cursor2/steps1 and cannot persist. Healthy native writer remains available. First actual usage disappears from checkpoint. Confidence: HIGH. |
+| A3 audit veto preserves acknowledged truth | **PASS** | baseline-strict RR11 terminal veto and RR12 step veto retain native SUCCEEDED RESPOND, cursor2/steps2/calls1, and persist INSUFFICIENT_EVIDENCE in agreement with return. Confidence: HIGH. |
+| A4 unavailable/uncertain writers, legacy, result-log charge | **PASS** | AX07 denies step write before storage: no ACK invented, accepted step retained at cursor1. AX08 commits then throws: real SUCCEEDED row retained/cursor2. AX09/10 terminal checkpoint before/after ACK faults return refusal, retaining effects; no durable correction claimed. AX11 nonzero synthetic cost charged once on result-log failure; RR13 legacy once. Confidence: HIGH for injected cases. |
+| required aggregate: durable terminal response refusal | **FAIL** | F-001: healthy writer plus empty response leaves durable stop absent and accepted RESPOND resumable; next run calls model again while durable usage counts only the later call. Confidence: HIGH. |
+| PG, provider/tokenizer/billing, consumer/default/public217/global parity | **NOT_RUN** | Explicitly excluded: no PG, Docker, network, providers, real data, global closure or production gate. All token/cost quantities are synthetic model declarations. Confidence: N/A. |
+
+The authority is the copied approved SPEC224 and exact copied criteria. Existing native RESPONSE accounting remains distinct from decision admission; no second decision gate or fake provider billing has been introduced by these tests. The unchanged baseline raw requests/results/receipts were reconstructed by a separate Python checker, including exact canonical request hashes, complete values/bytes/digests, trust, provenance, usage sums, row types and terminal cursors. Its JSON assumptions are qualified only for the finite ASCII fixtures inspected here; it is not a general JS number/Unicode canonicalizer. The supplied raw proof also passes that checker, but is labeled historical supplied proof, not my execution. [Independent strict reconstruction](raw/independent-verification-qualified.json).
+
+## Runs and verifier controls
+
+| Strict run | Result | Meaning |
+| --- | --- | --- |
+| baseline-strict | 13/13 pass | Original enumerated public-path tests, original candidate |
+| adversarial-strict | 14 pass, AX02 fails | Own public-port fault injection, original candidate |
+| replay-strict | 2/2 characterization checks pass | Positive replay refusal and negative defect reproduced |
+| codec-strict | 1/1 pass | Original checkpoint seals; constructed cursor2/steps1 rejects with exact error |
+| known-bad-strict | 5 fail / 8 pass | Owned implementation variant drops full required result from actual response frame |
+| known-bad-alias-strict | AX02 and AX15 fail / 13 pass | Owned implementation variant removes selected-context detachment; AX15 detects mutated wire digest |
+
+Known-bad implementation copies are explicitly named under `variants/KNOWN_BAD_*`. Mutation details, before/after hashes, commands, stderr and stdout are retained in `raw/negative-*-mutation.json` and run files. The candidate is never the mutation target. Five additional posterior **evidence** mutation controls (usage, wire omission, provenance, system promotion, cursor) are all rejected; they are not executed implementation evidence. AX15 confirms the retained-selector mutation actually ran. The original candidate passes AX15 and the alias-negative implementation fails it. Whitespace-only native response is accepted by the candidate; this was observed, not elevated to a separate frozen-criteria finding.
+
+Adversarial accounting uses explicitly declared synthetic native result usage, including nonzero synthetic cost. The initial copied adversarial scaffold computes outputTokens from the prospective digest even for the empty/whitespace text variants; this is a fixture limitation, not evidence of a tokenizer. The decisive replay test corrects that fixture and computes the first empty-string usage as one Toy64 output token. No real billing/tokenization inference follows.
+
+The initial independent checker also failed its positive control: it confused contextItem.source (the native provenance sourceId) with observation.source (TOOL). The incorrect checker versions, failed outputs and failed inventory attempts remain preserved. The corrected checker compares contextItem.source against native checkpoint provenance.sourceId; it passes all 13 original positives and supplied proofs and rejects actual known-bad frames plus all five evidence controls. See `raw/verifier-assumption-correction.json` and `raw/verifier-qualified-stdout.log`.
+
+The first ad hoc journal summary failed with KeyError `status` because journals use `state`; it was corrected and retained as `raw/diagnostic-schema-error.log`. This did not affect tests. A second pre-seal inventory attempt confused checker-command metadata with executed run metadata (missing exit); both attempt scripts and diagnostics are retained. Full failed assertions and any warnings remain in raw stdout/stderr, including empty stderr files. Nothing was silently discarded.
+
+## Reproduction
+
+From an environment that retains this assigned tree, execute the existing scripts with Python; each script records the exact assigned Node argv, cwd, environment overrides, timestamps and exit code in its `raw/*-command.json` file. Example commands:
+
+```sh
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" baseline-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" adversarial-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" replay-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" codec-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" known-bad-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/run-strict.py" known-bad-alias-strict
+python3 "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-r2/checkers/verify-raw-qualified.py"
+```
+
+The response reproducer imports the public factory, HybridOrchestrator, native in-memory stores and synthetic capabilities/model. The codec witness only diagnoses a separately constructed checkpoint invariant; it does not replace a runtime execution. Rerunning these scripts changes the sealed output tree and therefore requires a new inventory/seal.
+
+## Independence and evidence provenance
+
+Identity: Codex, GPT-6 family per this session's configured identity. No descendant reviewer/subagent was created. This is a fresh task context with no producer conversation, prior review, Lead state/history, original live sources, AGENTS, ledgers or `.gauntlet` read. Only the packet and allowed dependency mirror were used as implementation/constraint inputs. Exact model deployment identity and matching family with another agent cannot be cryptographically authenticated from this interface; Lead must authenticate separately. I did not consult skills outside the permitted packet.
+
+The first tool call only ran `cat` on the required manifest. Its displayed output was truncated; subsequent parsing and full hashing verified every manifest byte and enumerated all categories without filename exclusions. The allowed packet package metadata, candidate manifest, assigned Node and dependency mirror were fingerprinted. There was no network, PG, Docker, provider, real data, commit, push or deploy. All new files, config, temp, cache and compile-cache outputs are in this assigned tree.
+
+NodeFS tracing starts from the supplied template. It records file-read hashes in user space; the transform plugin records exact source bytes loaded for transformation and exact post-transform code before Vitest instrumentation. Transform records are not proof of line coverage or of every native/OS read. Initial runs incidentally read `/usr/bin/ldd` and `/proc/version` through tooling. Their exact observed hashes are in the initial read logs. This literal allowlist deviation is P-001 and causes INVALID, even though they were not used to judge implementation behavior. The strengthened derivative blocks those paths before reading bytes, blocks child-process methods, and logs the denied probes. It also blocks the unenumerated optional `.modules.yaml` lookup. No successful unenumerated NodeFS read is present in the strict traces; there is no OS attestation.
+
+The dependency mirror may resolve to the external read-only dependency location named by the manifest. Inspection was through mirror paths; trace classification identifies those resolved dependency files separately from live repository sources. No originals or Lead/producer history were opened. Dependency metadata: Vitest4.1.11, Vite8.2.2, runner/expect4.1.11.
+
+`observed/<run>/*.original` and `*.transformed` preserve byte-for-byte original/transformed module evidence for 46–47 transform events per run. `modules.jsonl` ties those bytes to file IDs and hashes. Module transformation is observed, not a claim that every branch executed. Model-entry requests, native step rows/checkpoints/journals and fault events are captured in raw case files. The `variants/` copies, checker-generated mutations and final inventories are derived artifacts; they must not be confused with actually read/transformed/entered evidence. The initial fingerprints read all enumerated files for integrity, not for semantic review or branch coverage.
+
+## Integrity, inventory and publication
+
+384 manifest/input/proof/template/metadata records remain byte-identical; 19,166 dependency files and the assigned Node binary remain identical. **Immutable inputs clean: true. Literal initial execution scope clean: false.** [Full integrity summary](integrity-summary.json).
+
+| Fingerprint set | Before SHA256 | After SHA256 |
+| --- | --- | --- |
+| Inputs including all proof templates | `89ca1d1485eb2390b4b0aed143a62e291667f151cc79a0a2c12227657b52ba51` | `89ca1d1485eb2390b4b0aed143a62e291667f151cc79a0a2c12227657b52ba51` |
+| Dependency mirror | `ec866c602b32f4d14e7e1516f1a1155fe799fef3d4e3e997374ed0256c9688c6` | `ec866c602b32f4d14e7e1516f1a1155fe799fef3d4e3e997374ed0256c9688c6` |
+| Assigned Node metadata/hash | `f3f0fdb027ab0cdb57b8d902c4229ad5b7dc413bf0b9d918eda04feafad1135a` | `f3f0fdb027ab0cdb57b8d902c4229ad5b7dc413bf0b9d918eda04feafad1135a` |
+
+[Output inventory](output-inventory.json) classifies every ordinary output, including empty files, caches, raw diagnostics, configs, checker scripts, derived variants and empty directories, with bytes and SHA256. Directory SHA is the empty-byte marker; symlink SHA covers the link text and never hashes the target tree as owned output. The inventory cannot hash itself recursively; the detached [final seal](final-seal.json) additionally inventories/hashes the inventory itself, covering every owned output except the seal and its detached SHA file. [Detached seal SHA256](final-seal.sha256).
+
+**Publication-sensitive/local private:** raw requests/results, runtime identities, effect journals, checkpoints, audits, stack traces, commands, read paths, dependency fingerprints, copied/transformed sources, caches and controls are retained locally for Lead curation. Synthetic data does not make those internal paths/source artifacts public. This review writes no Lead state. No publication, consumer/global acceptance or production release is granted.

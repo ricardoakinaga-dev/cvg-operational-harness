@@ -1,0 +1,68 @@
+import json,hashlib,shutil,datetime,urllib.parse,collections
+from pathlib import Path
+base=Path(__file__).parent;b=base.parent;w=b.parent/'worktree';actor=base/'builder-r1';packet=base/'review-packet-r1';artifact=packet/'artifact';sha=lambda v:hashlib.sha256(v).hexdigest()
+old=json.loads((b/'candidate-r11/manifest.json').read_text());bound=json.loads((base/'recon.json').read_text());bindings=list(old['sourceBindings']);known={e['path'] for e in bindings}
+extra=[e['path'] for e in bound['sources']]+['packages/harness/src/execution-spine.ts','packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts','docs/02_spec/0217_pare100_durable_kernel_composition.md']
+for e in old['sourceBindings']:assert sha(Path(e['live']).read_bytes())==e['sha256']
+for name in extra:
+ if name in known:continue
+ p=w/name;raw=p.read_bytes();bindings.append({'path':name,'live':str(p),'copy':'source/'+name,'bytes':len(raw),'sha256':sha(raw)});known.add(name)
+assert sha((w/'docs/02_spec/0217_pare100_durable_kernel_composition.md').read_bytes())=='1e5df50255e1634c06e09b46e2fc40da3a51a6e15be10ae4856e092bf910a905'
+cd=b/'candidate-r12';cd.mkdir(exist_ok=True)
+for e in bindings:
+ out=cd/e['copy'];out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(Path(e['live']).read_bytes())
+candidate={'scope':'R12 newnativeboundfactory integrationfixture, expandedreadonlyauthoritysourcecoverage; no native73production/source/SQL/codec/adapter/limit changes. Exactobserved sixcases only, notfullTR05/global/program closure.','sourceBindings':bindings};raw=(json.dumps(candidate,indent=2)+'\n').encode();(cd/'manifest.json').write_bytes(raw)
+(b/'candidate-r12.json').write_text(json.dumps(dict(candidate,manifest=str(cd/'manifest.json'),manifestSha256=sha(raw),sourceCount=len(bindings)),indent=2)+'\n')
+oldpacket=json.loads((b/'public-admission-postgres/review-packet-r1/manifest.json').read_text());inputs=[];relatives=set()
+for e in oldpacket['inputs']:
+ raw=Path(e['original']).read_bytes();assert sha(raw)==e['sha256'];out=artifact/e['relative'];out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);inputs.append(dict(e,copy=str(out)));relatives.add(e['relative'])
+for e in bindings:
+ if e['path'] in relatives:continue
+ out=artifact/e['path'];out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(Path(e['live']).read_bytes());inputs.append({'category':'source','relative':e['path'],'original':e['live'],'copy':str(out),'bytes':e['bytes'],'sha256':e['sha256']});relatives.add(e['path'])
+packet.mkdir(exist_ok=True);(packet/'candidate-manifest.json').write_bytes((cd/'manifest.json').read_bytes())
+meta=packet/'package.json';meta.write_bytes((w/'package.json').read_bytes())
+for p in [packet/'node_modules',artifact/'node_modules']:
+ if not p.exists():p.symlink_to(w/'node_modules',target_is_directory=True)
+# Blind criteria contain no previous failures, reasoning, score, ledgers or review.
+c=json.loads((base/'contract-r2.json').read_text());criteria={'authority':c['authority'],'cases':c['cases'],'guardrails':c['guardrails'],'scope':'Nativepublicfactory andnativePGboundports with actualadmission/claim/host/startPrepared/beginPhase. Synthetictrustedpreparedpayload isnotpublishedconsumeradapterintegration. Judge all observed usagevectors against SPEC5.2/5.3; distinguish actualmodelentries, durableledger and returnedusage. No fullTR05/global/realproviderbilling inference.','producerFinalResource':'See proof/resource-public.json; IDs are actual source observations, not fixed schema defaults.','readerNormalization':'Parentnormalizedruntime omits envelope executionId; nativeadmission/preparedruntime and factoryinput retain the actual matching parentID. Verify source normalization; no arbitrary runtime drift allowed.'};(base/'criteria.json').write_text(json.dumps(criteria,indent=2)+'\n')
+proof=[]
+def add(src,relative):
+ raw=src.read_bytes();out=packet/'proof'/relative;out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);proof.append({'copy':str(out),'relative':relative,'bytes':len(raw),'sha256':sha(raw)})
+add(base/'criteria.json','criteria.json');run=actor/'runs/r4'
+for name in ['preexistence.json','resource-public.json','identity-rls-grants.json']:add(run/name,name)
+for p in sorted(run.rglob('*.json')):
+ if p.parent==run or 'private' in p.name:continue
+ add(p,str(p.relative_to(run)))
+# Actual current command/raw streams only, no producer summary or historical logs.
+for name in ['pg-r4.command.json','pg-r4.stdout.log','pg-r4.stderr.log','connection-close-proof.json','container-stopped.json']:
+ p=actor/'attempt-r4'/name
+ if p.stat().st_size:add(p,'execution/'+name)
+resource=json.loads((b/'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text());resource['schemaName']='pare224_bound_admission_i1_r1';resource['roleName']='pare224_bound_admission_i1_r1_service';resource['exclusiveClaim']='FreshI1only224 newbound_admission_i1_r1/service afterabsence, claimrequired beforestart; rediscoverportafterstart';private=base/'assigned-i1-resource-private-prototype.json';private.write_text(json.dumps(resource,indent=2)+'\n');private.chmod(0o600)
+envdir=packet/'environment';envdir.mkdir(exist_ok=True)
+s=(actor/'vitest.config.mjs').read_text().replace(str(w),str(artifact)).replace('"'+str(actor/'cache')+'"',"process.env.I1_REVIEW+'/cache/vite'")
+s="import {appendFileSync} from 'node:fs';import {createHash} from 'node:crypto';\nconst ROOT="+json.dumps(str(artifact))+";const REVIEW=process.env.I1_REVIEW;\n"+s
+s=s.replace('export default {',"export default {\nplugins:[{name:'i1-source-bind',enforce:'pre',transform(code,id){if(id.startsWith(ROOT+'/')&&!id.includes('/node_modules/'))appendFileSync(REVIEW+'/transforms.jsonl',JSON.stringify({id,sha256:createHash('sha256').update(code).digest('hex')})+'\\n');}}],")
+(envdir/'vitest.i1.mjs').write_text(s);(envdir/'trace-reads.cjs').write_bytes((b/'receipt-capacity-preflight/review-packet-r1/environment/trace-reads.cjs').read_bytes())
+environment=[{'copy':str(p),'bytes':p.stat().st_size,'sha256':sha(p.read_bytes())} for p in sorted(envdir.iterdir())]
+m={'scope':'FreshI1 exactunchangednativeboundfixture criticism; FIRST readthismanifestonly. Sourcecopyreadonly, no originals/AGENTS/ledgers/.agent/.gauntlet/history/previousreports. Writeonlyassignedreviewroot. No descendants.','candidateManifestSha256':sha((cd/'manifest.json').read_bytes()),'candidateManifestCopy':str(packet/'candidate-manifest.json'),'artifactRoot':str(artifact),'inputs':inputs,'proofs':proof,'environmentTemplates':environment,'allowedScopeMetadata':{'path':str(meta),'bytes':meta.stat().st_size,'sha256':sha(meta.read_bytes())},'allowedDependencyMirror':str(packet/'node_modules'),'externalReadOnlyDependencies':str(w/'node_modules'),'node':'/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','privateResource':{'path':str(private),'bytes':private.stat().st_size,'sha256':sha(private.read_bytes()),'private':True,'omitPublication':True,'rule':'OnlyexplicitnewI1resource claim; read-onlyprototype, cloneandrediscoverport inownoutput; neverprintcredentials.'}}
+(packet/'manifest.json').write_text(json.dumps(m,indent=2)+'\n')
+# Curate builder artifacts; credential files/cache excluded, failures preserved.
+secrets=[]
+for p in actor.rglob('*private*.json'):
+ try:
+  d=json.loads(p.read_text());u=d.get('test_database_url');password=d.get('password')
+  if u:secrets.extend([u,urllib.parse.unquote(urllib.parse.urlparse(u).password or '')])
+  if password:secrets.append(password)
+ except (ValueError,AttributeError):pass
+secrets=[s.encode() for s in secrets if len(s)>=8]
+primary=[];omissions=[]
+for p in sorted(actor.rglob('*')):
+ if not p.is_file() or p.name=='artifact-manifest.json':continue
+ rel=str(p.relative_to(actor));raw=p.read_bytes();e={'path':rel,'bytes':len(raw),'sha256':sha(raw)}
+ if any(part in ['cache','tmp','nodecache','__pycache__'] for part in p.relative_to(actor).parts):e.update(category='CACHE_DERIVED',publication=False);omissions.append(e)
+ elif 'private' in p.name:e.update(category='PRIVATE_INPUT_OR_CREDENTIAL',publication=False);omissions.append(e)
+ elif not raw:e.update(category='EMPTY',publication=False);omissions.append(e)
+ elif any(secret in raw for secret in secrets):e.update(category='PRIVATE_LITERAL_COLLISION',publication=False);omissions.append(e)
+ else:primary.append(e)
+am={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'base':str(actor),'executedSourceSHA256':'f81562fd0086739296cccab0f10f0befa4b367cb22edd9b385f1ad2976dcb8c9','primary':primary,'omissions':omissions,'scope':'Produceronly, not selfacceptance; allfailures/privatecredentials/caches/empties preserved, no runtimeROOT/push/deploy.'};(actor/'artifact-manifest.json').write_text(json.dumps(am,indent=2)+'\n')
+record={'status':'FROZEN_PENDING_I1','candidateSHA256':m['candidateManifestSha256'],'sourceCount':len(bindings),'copiedInputs':len(inputs),'proofs':len(proof),'packetSHA256':sha((packet/'manifest.json').read_bytes()),'builderPrimary':len(primary),'builderOmissions':dict(collections.Counter(e['category'] for e in omissions)),'builderManifestSHA256':sha((actor/'artifact-manifest.json').read_bytes())};(base/'freeze.json').write_text(json.dumps(record,indent=2)+'\n');print(record)

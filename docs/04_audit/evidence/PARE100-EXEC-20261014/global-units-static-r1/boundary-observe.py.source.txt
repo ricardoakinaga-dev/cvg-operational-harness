@@ -1,0 +1,21 @@
+from pathlib import Path
+import json, sys, subprocess, hashlib, datetime, time
+base=Path(__file__).parent
+label=sys.argv[1];assert label in ['boundary-default','boundary-strict']
+assert not (base/(label+'.json')).exists()
+env={k:v for k,v in json.loads((base/'command.json').read_text())['environment'].items()
+     if k!='NODE_OPTIONS' and not k.startswith('CVG_GLOBAL_')}
+argv=['node','scripts/check-product-boundary.mjs','--graph='+str(base/(label+'-graph.json'))]
+if label=='boundary-strict':argv.append('--strict')
+t=time.monotonic();started=datetime.datetime.now(datetime.timezone.utc).isoformat()
+r=subprocess.run(argv,cwd=base.parent/'worktree',env=env,capture_output=True,timeout=120)
+streams={}
+for kind,data in [('stdout',r.stdout),('stderr',r.stderr)]:
+    target=base/(label+'.'+kind+'.log');target.write_bytes(data)
+    streams[kind]={'path':target.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+record={'argv':argv,'startedAt':started,'finishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'durationSeconds':time.monotonic()-t,'exit':r.returncode,'streams':streams,'scope':'Official readonly observation, no qualification activation'}
+try:
+    d=json.loads(r.stdout);record['resultSummary']={k:v for k,v in d.items() if isinstance(v,(str,bool,int,float)) or v is None}
+except (ValueError,TypeError):record['resultSummary']='Unparsed stdout; preserve raw failure'
+(base/(label+'.json')).write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record))

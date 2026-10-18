@@ -1,0 +1,96 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -1012,7 +1012,8 @@
+   literals=set()
+   def export_metadata(n):
+     targets=export_targets(n)
+-    return (bool(targets) and all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
++    # Only direct module declarations emit exports; local/class names are runtime data.
++    return (n in tree.body and bool(targets) and all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+       and isinstance(n.value,(ast.List,ast.Tuple))
+       and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+         and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -187,6 +187,81 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  // R22 regression block begin: witnesses are inert Python source data only.
++  it.each([
++    ['function', ''],
++    ['function', ': list[str]'],
++    ['class', ''],
++    ['class', ': list[str]']
++  ])(
++    'R22 %s-local __all__%s is runtime data and cannot privilege a mirrored annotation',
++    (scope, annotation) => {
++      const source = 'python/sdk/src/sdk.py'
++      const payload = 'debugger'
++      const assignment = `    __all__${annotation} = ['debugger']\n    exec(__all__[0])\n`
++      const text =
++        scope === 'function'
++          ? `def run(value: "debugger") -> None:\n${assignment}`
++          : `class Local:\n${assignment}def run(value: "debugger") -> None:\n    pass\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(
++        scope === 'function' ? 2 : annotation ? 4 : 3
++      )
++      expect(entries.some((entry) => entry.kind === 'python-exports')).toBe(
++        false
++      )
++      const run = entries.find((entry) => entry.symbol === 'run')
++      expect(run.kind).toBe('python-function')
++      expect(run.shape.parameters[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(payload),
++        byte_length: 8
++      })
++      expect(run.shape.parameters[0].type.reason).toBeTruthy()
++      expect(run.shape.returns).toBe('None')
++      expect(run.extraction_status).toBe('UNKNOWN')
++      expect(serializeCatalog(entries)).not.toContain(payload)
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-025')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++        expect(entry.id).toBe(
++          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
++        )
++      }
++    }
++  )
++
++  it.each(['', ': list[str]'])(
++    'R22 module-level __all__%s preserves a genuine export and pure mirrored annotation',
++    (annotation) => {
++      const source = 'python/sdk/src/sdk.py'
++      const text = `__all__${annotation} = ['debugger']\ndef run(value: "debugger") -> None:\n    pass\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(3)
++      const exports = entries.find((entry) => entry.kind === 'python-exports')
++      expect(exports.shape.names).toEqual(['debugger'])
++      expect(exports.extraction_status).toBe('STATIC')
++      const run = entries.find((entry) => entry.symbol === 'run')
++      expect(run.shape.parameters[0].type).toBe("'debugger'")
++      expect(run.shape.returns).toBe('None')
++      expect(run.extraction_status).toBe('STATIC')
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-025')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++        expect(entry.id).toBe(
++          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
++        )
++      }
++    }
++  )
++  // R22 regression block end.
++
+   it.each(['build_type', 'eval'])(
+     'R21 dynamic __all__ annotation %s contributes runtime literals without indexing export names',
+     (callee) => {

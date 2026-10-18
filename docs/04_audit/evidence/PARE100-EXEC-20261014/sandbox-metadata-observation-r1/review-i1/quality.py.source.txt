@@ -1,0 +1,36 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+D = Path(__file__).resolve().parent
+P = D.parent
+W = P.parent / 'worktree'
+NODE = Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+env = {'PATH': f'{NODE.parent}:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'NO_COLOR': '1', 'TSX_DISABLE_CACHE': '1'}
+for key, leaf in [('HOME', 'home'), ('TMPDIR', 'tmp'), ('XDG_CACHE_HOME', 'xdg-cache'), ('XDG_CONFIG_HOME', 'xdg-config'), ('XDG_DATA_HOME', 'xdg-data')]:
+    folder = D / ('quality-' + leaf)
+    folder.mkdir(exist_ok=True)
+    env[key] = str(folder)
+env['TMP'] = env['TEMP'] = env['TMPDIR']
+(D / 'tsconfig.i1.json').write_text(json.dumps({'extends': str(P / 'tsconfig.json'), 'compilerOptions': {'incremental': False, 'composite': False, 'noEmit': True, 'tsBuildInfoFile': str(D / 'unused.tsbuildinfo')}}, indent=2) + '\n')
+(D / 'eslint.i1.config.cjs').write_text("const tseslint = require(" + json.dumps(str(W / 'node_modules/typescript-eslint')) + ");\nmodule.exports = tseslint.config(...tseslint.configs.recommended.map(c => ({...c, basePath: " + json.dumps(str(P)) + "})));\n")
+commands = {
+    'typecheck': [str(NODE), str(W / 'node_modules/typescript/bin/tsc'), '--project', str(D / 'tsconfig.i1.json'), '--noEmit', '--incremental', 'false'],
+    'lint': [str(NODE), str(W / 'node_modules/eslint/bin/eslint.js'), '--no-cache', '--config', str(D / 'eslint.i1.config.cjs'), str(P / 'observe.mts')],
+    'format': [str(NODE), str(W / 'node_modules/prettier/bin/prettier.cjs'), '--check', str(P / 'observe.mts'), str(P / 'tsconfig.json')],
+}
+records = []
+for name, argv in commands.items():
+    result = subprocess.run(argv, cwd=D, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    (D / (name + '.stdout')).write_bytes(result.stdout)
+    (D / (name + '.stderr')).write_bytes(result.stderr)
+    record = {'name': name, 'argv': argv, 'cwd': str(D), 'env': env, 'exitCode': result.returncode, 'stdout': str(D / (name + '.stdout')), 'stderr': str(D / (name + '.stderr')), 'stdoutBytes': len(result.stdout), 'stderrBytes': len(result.stderr), 'truncated': False}
+    (D / (name + '.command.json')).write_text(json.dumps(record, indent=2) + '\n')
+    records.append(record)
+    print(json.dumps(record))
+    print(result.stdout.decode(errors='replace'))
+    print(result.stderr.decode(errors='replace'), file=sys.stderr)
+(D / 'quality.json').write_text(json.dumps(records, indent=2) + '\n')
+sys.exit(any(record['exitCode'] for record in records))

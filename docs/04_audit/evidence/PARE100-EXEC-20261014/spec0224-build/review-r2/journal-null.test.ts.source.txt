@@ -1,0 +1,40 @@
+import { expect, it } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/vitest/dist/index.js'
+import { writeFileSync } from 'node:fs'
+import { reserveOperationalEffectOnClient } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/operational-execution-postgres.ts'
+import { createJournaledToolRegistry } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/effect-journal.ts'
+import { completeToolPayload } from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/complete-tool-results.ts'
+
+it('preserves a confirmed native decoded JSON null on journal recovery (with JSON-looking string controls)', async () => {
+  const observations: unknown[] = []
+  for (const value of ['null', '{"a":1}', null]) {
+    let bodies = 0
+    const queries: string[] = []
+    // A query seam supplies the shape already decoded by node-postgres. No DB access.
+    const row = { tenant_id: 'tenant_i1', operation_key: 'exec_i1:s1:synthetic.i1', proposal_hash: '', state: 'CONFIRMED', attempt_id: 'attempt_old', result: value, error: null, created_at: '2026-10-16T00:00:00.000Z', updated_at: '2026-10-16T00:00:00.000Z' }
+    const journal: any = {
+      reserve: async (input: any) => {
+        row.proposal_hash = input.proposalHash
+        const client: any = { query: async (sql: string) => {
+          queries.push(sql)
+          if (sql.includes('INSERT INTO operational_effect_journal')) return { rows: [], rowCount: 0 }
+          if (sql.includes('SELECT') && sql.includes('FROM operational_effect_journal')) return { rows: [row], rowCount: 1 }
+          throw Error('Unexpected SQL in pure query seam')
+        } }
+        return reserveOperationalEffectOnClient(client, { tenant: input.tenantId, operationKey: input.operationKey, proposalHash: input.proposalHash, attemptId: input.attemptId, timestamp: new Date('2026-10-16T00:00:00.000Z') })
+      },
+      markStarted: async () => { throw Error('Confirmed replay must not start') },
+      confirm: async () => { throw Error('Confirmed replay must not confirm again') },
+      fail: async () => { throw Error('Confirmed replay must not fail') },
+      markUncertain: async () => { throw Error('Confirmed replay must not mutate journal') }
+    }
+    const tool: any = { id: 'synthetic.i1', version: '1', sideEffect: 'NONE', execute: async () => { bodies++; return { status: 'SUCCEEDED', output: 'must not execute' } } }
+    const registry: any = { list: () => [tool], resolve: () => tool }
+    const replay = await createJournaledToolRegistry(registry, journal).resolve('synthetic.i1', '1')!.execute({}, { tenantId: 'tenant_i1', operationKey: row.operation_key } as any)
+    const envelope = completeToolPayload(replay.output, 'NONE')
+    observations.push({ input: value, replay: { ...replay, outputWasUndefined: replay.output === undefined }, envelope, bodies, queries })
+    writeFileSync('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r2/journal-null.observations.json', JSON.stringify(observations, null, 2) + '\n')
+    expect(bodies).toBe(0)
+    expect(replay.output).toEqual(value)
+    expect(envelope.completion).toBe('COMPLETE')
+  }
+})

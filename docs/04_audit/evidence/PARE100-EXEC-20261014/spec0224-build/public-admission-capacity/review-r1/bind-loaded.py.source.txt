@@ -1,0 +1,19 @@
+from pathlib import Path
+import json,hashlib
+R=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-capacity/review-r1')
+entries={};errors=[];omissions=[]
+for n in ['frozen-loaded-files.ndjson','control-loaded-files.ndjson','frozen-final-loaded-files.ndjson','transformed-files.ndjson']:
+ for line in (R/n).read_text().splitlines():
+  d=json.loads(line);p=Path(d['path'].split('?')[0]);key=(str(p),d['sha256'])
+  if key in entries:entries[key]['observedIn'].append(n);continue
+  if not p.exists() and str(p).startswith(str(R/'node_modules/.vite-temp')):
+   omissions.append({'path':str(p),'sha256AtLoad':d['sha256'],'reason':'ephemeral bundled private config deleted by Vite; source config retained and bound'});continue
+  try:
+   b=p.read_bytes();h=hashlib.sha256(b).hexdigest();e={'path':str(p),'bytes':len(b),'sha256AtLoadOrTransform':d['sha256'],'sha256Post':h,'unchanged':h==d['sha256'],'observedIn':[n]};entries[key]=e
+   if not e['unchanged']:errors.append(e)
+  except Exception as ex:errors.append({'path':str(p),'error':str(ex)})
+# Externally executed runner binary and dynamically loaded platform runtime code.
+for p in [Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')]:
+ b=p.read_bytes();h=hashlib.sha256(b).hexdigest();entries[(str(p),h)]={'path':str(p),'bytes':len(b),'sha256Post':h,'category':'executable; pre-hash in sentinel-pre.json'}
+d={'scope':'actual CJS module loads, final run CJS/ESM load hooks (before loading), Vite source transforms; hashes only observed files, not dependency trees','entries':list(entries.values()),'omissions':omissions,'errors':errors,'allObservedBindingsUnchanged':not errors}
+(R/'transitive-bindings.json').write_text(json.dumps(d,indent=2)+'\n');print(json.dumps({'bindings':len(entries),'omissions':len(omissions),'errors':errors}));assert not errors

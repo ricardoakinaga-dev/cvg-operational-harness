@@ -1,0 +1,86 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+const O=process.env.I1_REVIEW;
+const traces=JSON.parse(fs.readFileSync(O+'/native-contained.observations.json','utf8'));
+const sha=s=>createHash('sha256').update(s).digest('hex');
+// Independent JSON encoding: standard JSON.stringify on recursively sorted keys.
+// No candidate canonicalizer, schema normalizer, digest or comparator is imported.
+function canonical(v) {
+ if(v===null||typeof v!=='object') return JSON.stringify(v);
+ if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';
+ return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
+}
+const unsigned=c=>{const {checkpointId,createdAt,digest,...u}=c;return u;};
+let snapshots=0;
+function restore(s,check=true) {
+ const c=structuredClone(s.checkpointWithoutFixturePadding), r=s.paddingRecipe;
+ if(r.present) {
+  const padding=r.character.repeat(r.repeat)+r.suffix;
+  assert.equal(sha(padding),r.sha256);
+  c.state.resolvedInputs.fixturePadding=padding;
+ }
+ if(check) {
+  const text=canonical(unsigned(c)),bytes=Buffer.byteLength(text);
+  assert.equal(bytes,s.logicalUnsignedBytes);assert.equal(8388608-bytes,s.remainingBytes);
+  assert.equal(sha('cvg.checkpoint.v2\n'+text),c.digest);snapshots++;
+ }
+ return c;
+}
+const eq=(a,b)=>assert.equal(canonical(a),canonical(b));
+const rows=[];
+for(const t of traces) {
+ const all=[t.before,t.after,...(t.afterRepeat?[t.afterRepeat]:[]),...t.measurements.map(m=>m.checkpointBeforeReserve),...t.calls.map(c=>c.checkpointAtComplete),...t.writes.map(w=>w.checkpoint)];
+ for(const s of all)restore(s);
+ const m=t.measurements.findLast(m=>m.resumed),c=t.calls.find(c=>c.resumed);
+ const measured=restore(m.checkpointBeforeReserve,false),projected=unsigned(structuredClone(measured));
+ const ctx=projected.state.toolResultContext;
+ const record=c?structuredClone(c.receipt):{
+  admissionId:'admission_00000000-0000-0000-0000-000000000000',tenantId:projected.tenantId,executionId:projected.executionId,
+  stepNumber:projected.stepNumber+1,attempt:0,purpose:m.request.purpose,requestSha256:sha(canonical(m.request)),measurement:structuredClone(m.measurement),
+  reserved:{modelCalls:1,inputTokens:m.measurement.inputUpperBoundTokens,outputTokens:512,costUsd:m.measurement.costUpperBoundUsd},status:'RESERVED'
+ };
+ record.attempt=ctx.decisionAdmissions.filter(r=>r.stepNumber===record.stepNumber).length;
+ for(const f of ['modelCalls','inputTokens','outputTokens','costUsd'])projected.budgetUsage[f]+=record.reserved[f];
+ if(record.purpose==='REPAIR')projected.budgetUsage.decisionRepairs++;
+ ctx.pendingDecisionAdmission=record.admissionId;ctx.decisionAdmissions.push(record);
+ const projectedBytes=Buffer.byteLength(canonical(projected));
+ const before=t.before.checkpointWithoutFixturePadding,after=t.after.checkpointWithoutFixturePadding;
+ const old=before.state.toolResultContext.decisionAdmissions;
+ eq(after.state.toolResultContext.decisionAdmissions.slice(0,old.length),old);
+ eq(t.oldJournal,t.afterJournal);
+ eq(before.state.observations.filter(o=>o.type==='TOOL_RESULT'),after.state.observations.filter(o=>o.type==='TOOL_RESULT'));
+ assert.equal(t.bodiesAfter,t.bodiesBefore);
+ if(c) {
+  eq(projected,unsigned(restore(c.checkpointAtComplete,false)));
+  assert(projectedBytes<=8388608);assert.equal(record.status,'RESERVED');
+  assert.equal(record.requestSha256,sha(canonical(c.request)));eq(m.request,c.request);
+  assert.equal(t.result.stopReason,'COMPLETED');
+  const settled=after.state.toolResultContext.decisionAdmissions.at(-1);assert.equal(settled.status,'SETTLED');
+  for(const f of ['inputTokens','outputTokens','costUsd'])assert.equal(after.budgetUsage[f],before.budgetUsage[f]+settled.actual[f]);
+ } else {
+  assert(projectedBytes>8388608);assert.equal(t.result.stopReason,'INSUFFICIENT_EVIDENCE');
+  for(const f of ['modelCalls','inputTokens','outputTokens','costUsd','toolCalls','steps','decisionRepairs'])assert.equal(after.budgetUsage[f],before.budgetUsage[f]);
+  eq(t.result.usage,{inputTokens:before.budgetUsage.inputTokens,outputTokens:before.budgetUsage.outputTokens,costUsd:before.budgetUsage.costUsd});
+  assert.equal(t.actualModelsAfter,t.modelsBefore);assert.equal(t.actualCompleteEntries,t.modelsBefore);
+  assert.equal(after.state.stopReason,'INSUFFICIENT_EVIDENCE');assert(after.budgetUsage.activeDurationMs>before.budgetUsage.activeDurationMs);
+  eq(t.after,t.afterRepeat);eq(t.afterRepeatJournal,t.oldJournal);assert.equal(t.repeated.stopReason,'STATE_CONFLICT');
+  assert.equal(t.measurements.length,t.modelsBefore+1);
+  eq(after.state.toolResultContext.decisionAdmissions,old);
+  // No acknowledged CAS may contain a new reservation/debit after the seed.
+  const seed=t.writes.findIndex(w=>w.checkpoint.checkpointWithoutFixturePadding.checkpointId===before.checkpointId);assert(seed>=0);
+  for(const w of t.writes.slice(seed+1)) {
+   const cp=w.checkpoint.checkpointWithoutFixturePadding;eq(cp.state.toolResultContext.decisionAdmissions,old);
+   for(const f of ['modelCalls','inputTokens','outputTokens','costUsd'])assert.equal(cp.budgetUsage[f],before.budgetUsage[f]);
+  }
+ }
+ for(const call of t.calls) {
+  assert.equal(call.receipt.status,'RESERVED');assert.equal(call.receipt.requestSha256,sha(canonical(call.request)));
+  const stored=call.checkpointAtComplete.checkpointWithoutFixturePadding;
+  const native=stored.state.toolResultContext.decisionAdmissions.find(r=>r.admissionId===stored.state.toolResultContext.pendingDecisionAdmission);
+  eq(native,call.receipt);
+ }
+ rows.push({name:t.name,projectedBytes,maximum:8388608,overBy:projectedBytes-8388608,positive:!!c,priorUsage:before.budgetUsage,returnedUsage:t.result.usage,terminalUnsignedBytes:t.after.logicalUnsignedBytes,repeatImmutable:!c});
+}
+const result={status:'PASS',snapshotsReconstructed:snapshots,cases:rows,method:'Independent recursive sorted-key JSON.stringify; reconstruct full ASCII/NUL padding, unsigned bytes and domain-separated digests; reconstruct future RESERVED checkpoint; compare positive byte-for-byte and refusal >8MiB; inspect every acknowledged postseed write.'};
+fs.writeFileSync(O+'/reconstruction.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

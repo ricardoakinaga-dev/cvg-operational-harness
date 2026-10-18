@@ -1,0 +1,19 @@
+import {registerHooks} from 'node:module';
+import {createHash} from 'node:crypto';
+const mock=new URL('./mock-fs.mjs',import.meta.url).href;
+globalThis.I1files=new Map();
+registerHooks({resolve(s,c,next){if(s==='node:fs/promises'&&c.parentURL!==mock)return{url:mock,shortCircuit:true};return next(s,c);}});
+const helper=await import('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/persistence/src/__tests__/fixtures/complete-process-support.ts');
+const root='/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/bound-admission/review-r1';
+const kind='bound-admission',task='PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224',claimId=`${task}:${kind}:${root}`,cwd='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree';
+const resource={synthetic:true,exclusiveClaim:claimId,containerId:'a'.repeat(64),containerName:'/cvg-pare100-224-pg',imageId:'sha256:'+'b'.repeat(64),schemaName:'pare224_bound_admission_i1',roleName:'pare224_bound_admission_i1_service',test_database_url:'postgresql://pare224:synthetic@127.0.0.1:54321/pare224_synthetic',hostPort:{HostIp:'127.0.0.1',HostPort:'54321'}};
+const sha=b=>createHash('sha256').update(b).digest('hex'),f=globalThis.I1files;
+const resourcePath=root+'/resource.json',service=root+'/service.json',evidence=root+'/evidence',config=root+'/child.config.mjs',rb=Buffer.from(JSON.stringify(resource)),cb=Buffer.from(helper.completeChildConfig(kind,cwd,root));
+const claim={task,kind,claimId,root,cwd,resource:resourcePath,resourceSHA256:sha(rb),evidence,service,config,configSHA256:sha(cb),containerId:resource.containerId,containerName:resource.containerName,imageId:resource.imageId,port:'54321',database:'pare224_synthetic',user:'pare224',schema:resource.schemaName,role:resource.roleName};
+f.set(resourcePath,rb);f.set(config,cb);f.set(root+'/complete-process-claim.json',Buffer.from(JSON.stringify(claim)));
+const base={host:'127.0.0.1',port:54321,database:claim.database,user:claim.role,password:'synthetic',options:`-c search_path=${claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`};
+const results=[];
+for(const [name,extra] of [['green',{}],['wrong-host',{host:'192.0.2.1'}],['connectionString-override',{connectionString:'postgresql://peer:synthetic@192.0.2.1:54322/peer?options=-c%20search_path%3Dpublic'}],['ssl-extra',{ssl:{rejectUnauthorized:false}}]]){
+ f.set(service,Buffer.from(JSON.stringify({...base,...extra})));try{await helper.assignedService(resourcePath,root,service,evidence);results.push({name,accepted:true,extra});}catch(e){results.push({name,accepted:false,error:e.message});}
+}
+console.log(JSON.stringify({method:'Actual frozen helper with virtual fs only; no child, PG module, socket or connection',results},null,2));

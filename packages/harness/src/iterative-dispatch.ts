@@ -319,6 +319,9 @@ export async function dispatchTool(
   stepNumber: number,
   forceApproval: boolean
 ): Promise<DispatchOutcome> {
+  // A previous successful dispatch is trajectory evidence, not the result
+  // of this attempt. Only this dispatch's success may populate toolResult.
+  run.lastToolObservation = null
   // A resumed in-flight step was already counted when it reached dispatch.
   const alreadyCounted =
     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
@@ -626,7 +629,16 @@ export async function dispatchTool(
           }
         })
       )
-      await failStep(unknownEffect ? 'unknown_effect' : 'tool_failed')
+      // Preserve this kernel settlement cause losslessly in the step's error
+      // field. Bounded observations cannot carry restart control evidence.
+      await failStep(
+        outcome.kind === 'threw' &&
+          toolError === 'unknown_effect: effect_settlement_failed'
+          ? toolError
+          : unknownEffect
+            ? 'unknown_effect'
+            : 'tool_failed'
+      )
       return ctx.stop(
         'TOOL_FAILURE',
         unknownEffect

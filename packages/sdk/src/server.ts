@@ -32,6 +32,7 @@ import {
   type JsonRpcSuccess,
   type SdkCapabilities
 } from './protocol.ts'
+import { isRequest, validRpcId } from './validators.ts'
 
 /** Deterministic fallback budget for one SDK turn. */
 export const SDK_DEFAULT_BUDGET: ExecutionBudget = {
@@ -151,9 +152,15 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
             'Session is not open'
           )
         case 'invalid_session_event':
-          return requestError(SDK_ERROR_CODES.invalid_params, error.message)
+          return requestError(
+            SDK_ERROR_CODES.invalid_params,
+            'Invalid session event'
+          )
         default:
-          return requestError(SDK_ERROR_CODES.internal_error, error.message)
+          return requestError(
+            SDK_ERROR_CODES.internal_error,
+            'Session store failed'
+          )
       }
     }
     return requestError(SDK_ERROR_CODES.internal_error, 'Session store failed')
@@ -385,18 +392,8 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
     capabilities,
     async dispatch(payload: unknown): Promise<JsonRpcResponse> {
       const record = asRecord(payload)
-      const id =
-        record &&
-        (typeof record.id === 'string' || typeof record.id === 'number')
-          ? record.id
-          : null
-      if (
-        !record ||
-        record.jsonrpc !== '2.0' ||
-        typeof record.method !== 'string' ||
-        record.method.length === 0 ||
-        id === null
-      ) {
+      const id = record && validRpcId(record.id) ? record.id : null
+      if (!isRequest(payload)) {
         return failure(
           id,
           SDK_ERROR_CODES.invalid_request,
@@ -409,25 +406,19 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
         'turn.send': handleTurnSend,
         'session.events': handleSessionEvents
       }
-      const handler = handlers[record.method]
+      const handler = Object.hasOwn(handlers, payload.method)
+        ? handlers[payload.method]
+        : undefined
       if (!handler) {
-        return failure(
-          id,
-          SDK_ERROR_CODES.method_not_found,
-          `Unknown method ${record.method}`
-        )
+        return failure(id, SDK_ERROR_CODES.method_not_found, 'Unknown method')
       }
       try {
-        return success(id, await handler(record.params))
+        return success(payload.id, await handler(payload.params))
       } catch (error) {
         if (error instanceof SdkRequestError) {
           return failure(id, error.code, error.message)
         }
-        return failure(
-          id,
-          SDK_ERROR_CODES.internal_error,
-          error instanceof Error ? error.message : 'Internal error'
-        )
+        return failure(id, SDK_ERROR_CODES.internal_error, 'Internal error')
       }
     }
   }

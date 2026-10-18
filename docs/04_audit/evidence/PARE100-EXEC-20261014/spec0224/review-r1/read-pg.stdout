@@ -1,0 +1,95 @@
+function text(value: unknown, label: string, max = 200): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new CheckpointError('checkpoint_binding', `${label} is required`)
+  }
+  if (value.length > max) {
+    throw new CheckpointError('checkpoint_binding', `${label} is too long`)
+  }
+  return value.trim()
+}
+
+function asIso(value: Date | string | null): string | null {
+  if (value === null) return null
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(value).toISOString()
+}
+
+function jsonValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new CheckpointError(
+      'checkpoint_integrity',
+      'Persisted step JSON is invalid'
+    )
+  }
+}
+
+function jsonText(value: unknown, label: string): string {
+  try {
+    const serialized = JSON.stringify(value)
+    if (serialized === undefined) throw new Error('undefined')
+    return serialized
+  } catch {
+    throw new CheckpointError(
+      'checkpoint_integrity',
+      `${label} cannot be serialized`
+    )
+  }
+}
+
+function mapStep(row: StepRow): ExecutionStep {
+  const refs = jsonValue(row.observation_refs)
+  return {
+    stepId: row.step_id,
+    executionId: row.execution_id,
+    tenantId: row.tenant_id,
+    stepNumber: row.step_number,
+    stepType: row.step_type,
+    status: row.status,
+    attempt: row.attempt,
+    sideEffecting: row.side_effecting,
+    startedAt: asIso(row.started_at) as string,
+    ...(row.completed_at
+      ? { completedAt: asIso(row.completed_at) as string }
+      : {}),
+    ...(row.decision_type ? { decisionType: row.decision_type } : {}),
+    ...(row.reason_code
+      ? {
+          reasonCode: row.reason_code as NonNullable<
+            ExecutionStep['reasonCode']
+          >
+        }
+      : {}),
+    observationRefs: Array.isArray(refs) ? (refs as string[]) : [],
+    ...(row.error_code ? { errorCode: row.error_code } : {})
+  }
+}
+
+function mapCheckpoint(row: CheckpointRow): ExecutionCheckpoint {
+  return {
+    checkpointId: row.checkpoint_id,
+    executionId: row.execution_id,
+    tenantId: row.tenant_id,
+    checkpointVersion: row.checkpoint_version,
+    runtimeProfile:
+      row.runtime_profile as ExecutionCheckpoint['runtimeProfile'],
+    runtimeVersion: row.runtime_version,
+    orchestratorVersion: row.orchestrator_version,
+    stepNumber: row.step_number,
+    state: jsonValue(row.state) as ExecutionCheckpoint['state'],
+    budgetUsage: jsonValue(
+      row.budget_usage
+    ) as ExecutionCheckpoint['budgetUsage'],
+    createdAt: asIso(row.created_at) as string,
+    digest: row.digest
+  }
+}
+
+function isPool(
+  connection: OperationalStepPostgresConnection
+): connection is PostgresPoolLike {
+  return typeof (connection as PostgresPoolLike).connect === 'function'
+}

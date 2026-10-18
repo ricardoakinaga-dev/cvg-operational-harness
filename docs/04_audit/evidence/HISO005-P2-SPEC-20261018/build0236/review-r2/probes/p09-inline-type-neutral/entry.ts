@@ -1,0 +1,1 @@
+import {type T} from "./neutral.js"; export const result=1;

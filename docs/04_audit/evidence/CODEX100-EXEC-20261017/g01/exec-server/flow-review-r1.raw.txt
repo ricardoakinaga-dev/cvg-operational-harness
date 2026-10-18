@@ -1,0 +1,15 @@
+**NEEDS_CHANGES**
+
+Two mandatory P2 findings. The frozen graph’s sampled bindings are correct; its verifier does not yet enforce the promised boundaries.
+
+1. **P2 — Registry evidence is not bound to the operation’s constant.**  
+   [verify_flows.py:62](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-server/verify_flows.py:62>) validates types and handler names against the supplied excerpt without checking which constant that excerpt registers. Copying `fs/readFile`’s registry/handler/type/result evidence into the `fs/open` row would satisfy these checks while retaining `fs/open`’s identity. The actual routes are distinct at upstream [registry.rs:144](/tmp/cvg-rea-codex-20261017/upstream/codex-rs/exec-server/src/server/registry.rs:144) and [registry.rs:151](/tmp/cvg-rea-codex-20261017/upstream/codex-rs/exec-server/src/server/registry.rs:151).  
+   **Required:** bind each registry excerpt to its exact constant and handler definition; add a negative using internally consistent evidence from another operation. The current handler-name-only mutation misses this failure.
+
+2. **P2 — Required guard evidence can disappear without rejection.**  
+   [verify_flows.py:87](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-server/verify_flows.py:87>) requires only five generic entries. Removing both `request_dispatch` and `request_admission`, or removing `deferred_response_adapter` or `reverse_request_timeout`, encounters no corresponding presence assertion. Recursive source checking validates only evidence that remains. This loses promised boundaries: handshake/concurrent admission at [request_dispatcher.rs:285](/tmp/cvg-rea-codex-20261017/upstream/codex-rs/exec-server/src/server/request_dispatcher.rs:285), and HTTP’s `Ok(()) => None` behavior at [rpc.rs:283](/tmp/cvg-rea-codex-20261017/upstream/codex-rs/exec-server/src/rpc.rs:283).  
+   **Required:** enforce the required generic evidence inventory and its source identities; add negatives for missing concurrency, deferred-response and reverse-timeout evidence.
+
+Verified **6/6 frozen hashes**, the upstream HEAD pin, **18 source hashes against pinned Git objects**, and **120 excerpts**. Inspected all 26 inbound registrations and independently sampled all six outbound paths. HTTP deferred response, filesystem conversion, notification directions and reverse policy response were consistent with source.
+
+These verifier counterexamples follow from static inspection; I executed no verifier, generator, test or target. No writes, network or descendants. Herschel’s active `types/**` remained excluded. Type integration, transitive codecs, runtime/effect/platform/tenant proof remain deferred; this grants no full-G01, functional-parity, gate or reuse approval.

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "I1-F01",
+    "severity": "P1",
+    "blocking": true,
+    "title": "Thrown complete response assembly errors bypass the failed RESPOND terminal path",
+    "criteria": [
+      "RR03",
+      "RR07",
+      "required durable terminal response refusal"
+    ],
+    "source": [
+      "packages/harness/src/iterative-dispatch.ts:894",
+      "packages/harness/src/iterative-dispatch.ts:1058",
+      "packages/harness/src/iterative-runtime.ts:1787",
+      "packages/harness/src/iterative-runtime.ts:982",
+      "packages/harness/src/iterative-runtime.ts:1200"
+    ],
+    "evidence": [
+      "run/cases-private.json cases RR03 and RR07",
+      "run/producer-raw/raw-cases.json cases RR03 and RR07",
+      "run/independent-private.json cases overflow-terminal, dropped-required-terminal, mutated-provenance-terminal",
+      "logs/independent.log"
+    ],
+    "observed": "No model call; complete output and confirmed journal retained. Terminal checkpoint cursor=1, budgetUsage.steps=1; acceptedDecision RESPOND step2 persists; native steps contain only TOOL1 SUCCEEDED. No injected store fault in these cases. Returned stop is INSUFFICIENT_EVIDENCE (or STATE_CONFLICT for mutated provenance).",
+    "cause": "dispatchRespond records FAILED only for a returned stopReason. Selector validation or message-size exception escapes await composeResponse. The outer execute catch finalizes before dispatch stop advances/clears state.",
+    "required": "Cover exceptions from accepted response context assembly/framing in native terminal-step handling; preserve refusal and whole results, without inventing response decision receipts or a second budget gate."
+  },
+  {
+    "id": "I1-F02",
+    "severity": "P2",
+    "blocking": true,
+    "title": "Native response model-result logging failure double-counts the model-call slot",
+    "criteria": [
+      "RR02 native RESPONSE accounting",
+      "RR05 no duplicate usage ownership"
+    ],
+    "source": [
+      "packages/harness/src/kernel/pipeline.ts:625",
+      "packages/harness/src/kernel/pipeline.ts:652",
+      "packages/harness/src/iterative-runtime.ts:523",
+      "packages/harness/src/iterative-dispatch.ts:1133"
+    ],
+    "evidence": [
+      "run/independent-private.json case response-result-log-fails",
+      "logs/independent.log"
+    ],
+    "observed": "One actual RESPONSE invocation and one model result; returned modelCalls=2 and checkpoint budgetUsage.modelCalls=2; input/output usage=73/2 charged once; no decision receipt. Native FAILED RESPOND2 exists, stop INSUFFICIENT_EVIDENCE.",
+    "cause": "Native beginModelRequest already increments the shared usage; unrecorded branch adds modelCalls again.",
+    "required": "Keep native failure accounting truthful and single-owned; do not add a response admission gate."
+  },
+  {
+    "id": "I1-F03",
+    "severity": "P2",
+    "blocking": true,
+    "title": "Audit failures leave response terminal checkpoint inconsistent with returned outcome or native step cursor",
+    "criteria": [
+      "required truthful native terminal checkpoint"
+    ],
+    "source": [
+      "packages/harness/src/iterative-runtime.ts:1994",
+      "packages/harness/src/iterative-runtime.ts:2183",
+      "packages/harness/src/iterative-runtime.ts:2259",
+      "packages/harness/src/iterative-runtime.ts:2302",
+      "packages/harness/src/iterative-runtime.ts:2348"
+    ],
+    "evidence": [
+      "run/independent-private.json case response-terminal-audit-fails",
+      "run/independent-private.json case response-step-audit-fails",
+      "logs/independent.log"
+    ],
+    "observed": "Reject only runtime.completed audit: returned INSUFFICIENT_EVIDENCE but saved checkpoint stopReason=COMPLETED, cursor2. Reject only step.completed RESPOND:SUCCEEDED audit: native RESPOND2 SUCCEEDED, result steps2, checkpoint cursor1 with accepted RESPOND2 and budgetUsage.steps2. Store stays healthy in both probes.",
+    "cause": "Final checkpoint is saved before terminal audit can veto the result; step audit throws after native step write/count but before loop advances state.",
+    "required": "Reconcile the acknowledged native outcome with terminal state when audit vetoes completion; preserve conservative stops and audit failure evidence."
+  }
+]

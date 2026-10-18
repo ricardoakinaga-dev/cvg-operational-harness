@@ -1,0 +1,81 @@
+--- R1-59ce762f
++++ R2-f26ccead
+@@ -160,9 +160,12 @@
+ 1MiB é a redução proposta do teto do journal, autorizada pela decisão, sem
+ alegar throughput/capacidade medidos. Fica acima dos32768bytes do contexto
+ com folga e abaixo dos8MiB originais. Checkpoint/capture não são aumentados.
+-O capture atual limita **todo ToolResult** a8MiB; logo, o output público máximo
+-fica abaixo do máximo isolado da API do journal. Os testes devem distinguir
+-essas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,
++O capture atual continua limitando **todo ToolResult** a8388608bytes. O
++journal V1 limita o JSON canônico de **output** a1048576bytes, uma fronteira
++diferente e menor. A composição precisa satisfazer ambas; não se deduz uma
++saída pública máxima de somente um desses limites. A fonte atual prepara o
++ToolResult antes de tentar confirmá-lo no journal. Isso é leitura estática,
++não prova de execução. Os testes devem discriminar as duas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,
+ tokens, provider ou duração por consequência deste codec.
+ 
+ NUL e Unicode ficam nos bytes B, codificados como ASCII. IDs, erros e
+@@ -363,24 +366,24 @@
+ registry, fábrica e stores nativos; apenas ferramenta/modelo/counter sintéticos.
+ Observar pedidos reais do modelo; não fornecer resposta oculta fora da ferramenta.
+ 
+-| ID  | Critério obrigatório futuro                                                                                                                                                                                                                                                                     |
+-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| J01 | confirm/get/reserve em processo novo preservam todos os tipos JSON, null como propriedade própria, vazios/falsy, números finitos e strings que parecem JSON. Comparar valor/tipo/bytes/hash.                                                                                                    |
+-| J02 | NUL4096, escapes, Unicode, NUL em chaves/valores, chaves vazias/reservadas e envelopes aparentes0/1: decode uma vez, sem coerção/prototype mutation.                                                                                                                                            |
+-| J03 | Limites lógico1048576/+1, depth64/65, nós1000000/+1 e físicos1398104/data e1398616/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                       |
+-| J04 | Versão desconhecida, mistura de campos/estado/payload, hash/length, chaves extra/faltantes, base64/padding, UTF-8/BOM, JSON duplicado/trailing/não canônico e domínio inválido: sem hook/modelo/corpo/fallback. Controle íntegro deve passar.                                                   |
+-| J05 | Migração preserva legado/default0/contagens/digests e colisões de envelope; SQL NULL não vira null. Reserve1 recusa todas as linhas0, inclusive órfão confirmado/proposal igual e FAILED; sem backfill/adopção. Expansão interrompida reconcilia a transação.                                   |
+-| J06 | Readers antigos com jsonValue, mapper direto e result_present usam suas consultas/credentials originais no ativado:42501/modelo0/corpo0. Controle legado separado funciona. Reintroduzir grant herdado/PUBLIC deve reprovar ativação; undefined/linha vazia não passam.                         |
+-| J07 | Flag ausente/versão errada, role privilegiado/member/wrong, migração/wiring faltantes, sessão antiga e fleet misto falham antes de claim/modelo/corpo. Inserts0 pelo principal ativo e1 por outro são negados; GUC/tag forjados não ativam.                                                     |
+-| J08 | Transação real: rollback antes/depoisUPDATE e antescommit, kill póscommit/préack, reread CONFIRMED, confirm idempotente igual e conflito diferente; tentativa/tenant/proposal inválidos não replayam nem sobrescrevem.                                                                          |
+-| J09 | Fábrica+Hybrid+journal/store reais: ASCII4096, Unicode4096bytes, nul4096-escapes, strings parecendo JSON, null/false/0/vazios e objetos aninhados/envelope. SIGKILL após CAS completo, PID novo, um corpo, valor/frame/hash/bytes/receipts/usage idênticos. Toda fixture é obrigatória.         |
+-| J10 | SIGKILL depois de confirmar journal e antes do checkpoint completo: NUL/null/envelopes/primitivos recuperados via journal em PID novo, sem corpo; comparar receipts e próximo frame/CAS. Não substituir pelo crashpoint J09.                                                                    |
+-| J11 | Outputs32768/32769bytes, depth32/33 e nós10000/+1, mais300KiB: CONFIRMED íntegro, SUCCEEDED/UNAVAILABLE quando excede contexto, modelo seguinte0 e corpo único antes/depois da retomada; positivo pequeno completa. Incluir falha pósconfirm de save.                                           |
+-| J12 | Falhas de DB/commit/ack/capture/encode acima1MiB e de markUncertain preservam erro original/estado, não FAILED/retry seguro. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit.                                         |
+-| J13 | Composição bound usa triggers/fences0029 reais e lock order nativo: positivo, worker/attempt/outer stale, lease expirando no encode, pause/cancel/deadline e DML sem guard; ambas as barreiras independentes, sem escrita/corpo indevido. Unbound não prova fencebound.                         |
+-| J14 | ADIADO NESTA FATIA. Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                     |
+-| J15 | DRILL COMPLETO ADIADO. Políticas conservadas em J05–J07. Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                              |
+-| J16 | Regressões legadas worker/published/capabilities/tools/SDK pertinentes e direção neutra; Node22 type/lint/unit/PG/E2E/certificação com claims. Preservar reds/skips/pins stale, sem editar checker/pins para verde. Observer rejeita frame truncado/linha corrompida e aceita controle íntegro. |
++| ID  | Critério obrigatório futuro                                                                                                                                                                                                                                                                                                                                                                  |
++| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| J01 | confirm/get/reserve em processo novo preservam todos os tipos JSON, null como propriedade própria, vazios/falsy, números finitos e strings que parecem JSON. Comparar valor/tipo/bytes/hash.                                                                                                                                                                                                 |
++| J02 | NUL4096, escapes, Unicode, NUL em chaves/valores, chaves vazias/reservadas e envelopes aparentes0/1: decode uma vez, sem coerção/prototype mutation.                                                                                                                                                                                                                                         |
++| J03 | Limites lógico1048576/+1, depth64/65, nós1000000/+1 e físicos1398104/data e1398616/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                                                                                                                    |
++| J04 | Versão desconhecida, mistura de campos/estado/payload, hash/length, chaves extra/faltantes, base64/padding, UTF-8/BOM, JSON duplicado/trailing/não canônico e domínio inválido: sem hook/modelo/corpo/fallback. Controle íntegro deve passar.                                                                                                                                                |
++| J05 | Migração preserva legado/default0/contagens/digests e colisões de envelope; SQL NULL não vira null. Reserve1 recusa todas as linhas0, inclusive órfão confirmado/proposal igual e FAILED; sem backfill/adopção. Expansão interrompida reconcilia a transação.                                                                                                                                |
++| J06 | Readers antigos com jsonValue, mapper direto e result_present usam suas consultas/credentials originais no ativado:42501/modelo0/corpo0. Controle legado separado funciona. Reintroduzir grant herdado/PUBLIC deve reprovar ativação; undefined/linha vazia não passam.                                                                                                                      |
++| J07 | Flag ausente/versão errada, role privilegiado/member/wrong, migração/wiring faltantes, sessão antiga e fleet misto falham antes de claim/modelo/corpo. Inserts0 pelo principal ativo e1 por outro são negados; GUC/tag forjados não ativam.                                                                                                                                                  |
++| J08 | Transação real: rollback antes/depoisUPDATE e antescommit, kill póscommit/préack, reread CONFIRMED, confirm idempotente igual e conflito diferente; tentativa/tenant/proposal inválidos não replayam nem sobrescrevem.                                                                                                                                                                       |
++| J09 | Fábrica+Hybrid+journal/store reais: ASCII4096, Unicode4096bytes, nul4096-escapes, strings parecendo JSON, null/false/0/vazios e objetos aninhados/envelope. SIGKILL após CAS completo, PID novo, um corpo, valor/frame/hash/bytes/receipts/usage idênticos. Toda fixture é obrigatória.                                                                                                      |
++| J10 | SIGKILL depois de confirmar journal e antes do checkpoint completo: NUL/null/envelopes/primitivos recuperados via journal em PID novo, sem corpo; comparar receipts e próximo frame/CAS. Não substituir pelo crashpoint J09.                                                                                                                                                                 |
++| J11 | Outputs32768/32769bytes, depth32/33 e nós10000/+1, mais300KiB: CONFIRMED íntegro, SUCCEEDED/UNAVAILABLE quando excede contexto, modelo seguinte0 e corpo único antes/depois da retomada; positivo pequeno completa. Incluir falha pósconfirm de save.                                                                                                                                        |
++| J12 | Falhas de DB/commit/ack; encode do journal em1048576/+1bytes do output canônico; capture em8388608/+1bytes de todo ToolResult; e markUncertain preservam erro original/estado, não FAILED/retry seguro. Preservar AMBAS as fronteiras, sem reduzir capture a1MiB. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit. |
++| J13 | Composição bound usa triggers/fences0029 reais e lock order nativo: positivo, worker/attempt/outer stale, lease expirando no encode, pause/cancel/deadline e DML sem guard; ambas as barreiras independentes, sem escrita/corpo indevido. Unbound não prova fencebound.                                                                                                                      |
++| J14 | ADIADO NESTA FATIA. Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                                                                                                                  |
++| J15 | DRILL COMPLETO ADIADO. Políticas conservadas em J05–J07. Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                                                                                                                           |
++| J16 | Regressões legadas worker/published/capabilities/tools/SDK pertinentes e direção neutra; Node22 type/lint/unit/PG/E2E/certificação com claims. Preservar reds/skips/pins stale, sem editar checker/pins para verde. Observer rejeita frame truncado/linha corrompida e aceita controle íntegro.                                                                                              |
+ 
+ Conservar o witness NUL vermelho anterior. Aceite exige candidata exata,
+ schema/roles/Node/PG por versão, comandos/streams, snapshots duráveis, PIDs,
+@@ -446,3 +449,19 @@
+ aumentar o cap do adapter, checkpoint ou captura para produzir uma fronteira
+ pública impossível. A revisão técnica deve validar essa consequência da
+ redução, sem remover o guard ou declarar uma prova não executada.
++
++### 11.2 J12 — captura e journal têm domínios distintos
++
++Manter controles separados para a codificação do output pelo journal em
++1048576/+1bytes e a captura de todo ToolResult em8388608/+1bytes. Não tratar
++falha acima de1MiB como prova da fronteira de captura de8MiB. Observar qual
++etapa foi alcançada e a ausência das seguintes quando houver falha anterior.
++
++A captura no limite de8MiB não implica confirmação desse output no journal
++de1MiB; o controle positivo da captura pode ser do componente, assim rotulado.
++Na composição pública, saída que excede1MiB mas cabe no capture chega à
++tentativa de confirmação e falha no journal; ToolResult acima do capture
++falha antes da confirmação. Não declarar sucesso fim a fim no limite maior
++por testar somente a captura. Em ambos os caminhos preservar efeito incerto,
++causa original e eventual falha de markUncertain, sem repetir corpo nem
++classificar como FAILED/pre-effect-safe. Nenhum controle foi executado aqui.

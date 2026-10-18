@@ -1,0 +1,685 @@
+diff --git a/tests/pare100-compiled-kernel-boundary.test.js b/tests/pare100-compiled-kernel-boundary.test.js
+index 06ee26ce..50ebce7e 100644
+--- a/tests/pare100-compiled-kernel-boundary.test.js
++++ b/tests/pare100-compiled-kernel-boundary.test.js
+@@ -159,6 +159,7 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
+   }
+   for (const name of [
+     'boundary-manifests.mjs',
++    'boundary-installed-identity.mjs',
+     'boundary-code-execution.mjs',
+     'boundary-lexical.mjs',
+     'tsconfig-path-grammar.mjs'
+@@ -171,15 +172,16 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
+   )
+   const file = path.join(directory, 'check-product-boundary.mjs')
+   fs.writeFileSync(file, source)
+-  return () => {
++  return (options = {}) => {
+     const run = spawnSync(
+       process.execPath,
+       [
+         '--input-type=module',
+         '-e',
+-        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2])))',
++        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2], JSON.parse(process.argv[3]))))',
+         pathToFileURL(file).href,
+-        f.root
++        f.root,
++        JSON.stringify(options)
+       ],
+       { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }
+     )
+@@ -199,23 +201,113 @@ function expectPinsValid(f, repin = []) {
+     }
+ }
+ 
++function expectInactive(a, status = 'INCOMPLETE') {
++  expect(a.exceptionsApplied).toBe(false)
++  expect(a.exceptions).toEqual([])
++  expect(appliedCounts(a)).toEqual([0, 0, 0])
++  expect(a.status).toBe(status)
++  expect(a.passed).toBe(false)
++}
++// Twelve source occurrences were already unknown outside the thirteen proposed
++// mirror sites. Keep them too; matching the historical table never removes them.
++const additionalRaw = [
++  {
++    file: 'packages/platform/src/tool-invocation-boundary.ts:201',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: '5b2efa8c4f1c77a4'
++  },
++  {
++    file: 'packages/platform/src/tool-invocation-boundary.ts:202',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'b34563e2ebeb7717'
++  },
++  {
++    file: 'packages/platform/src/tool-invocation-boundary.ts:202',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'b34563e2ebeb7717'
++  },
++  {
++    file: 'packages/sandbox/src/capabilities.ts:51',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: '6ee64919b5e7503c'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:114',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'fdc5cd232a6b322b'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:120',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: '5c689333c261579d'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:142',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'c48d06f5a4f383e0'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:143',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'a24febbe3ca5b688'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:157',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: '49c05c6142480228'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:163',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: '520278083d1a776a'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:179',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'e1751db744e7920e'
++  },
++  {
++    file: 'packages/sandbox/src/run.ts:181',
++    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++    expression: 'dc7602b66365a6bb'
++  }
++]
++function expectRawInventory(a, omitted = []) {
++  const identity = ({ file, reason, expression }) =>
++    JSON.stringify({ file, reason, expression })
++  expect(rawSites(a).map(identity).sort()).toEqual(
++    groups
++      .flatMap((g) => g.rows)
++      .filter((row) => !omitted.includes(sourceFile(row)))
++      .map(identity)
++      .sort()
++  )
++  for (const row of additionalRaw.filter(
++    (row) => !omitted.includes(sourceFile(row))
++  ))
++    expect(
++      a.diagnostics.filter((d) => identity(d) === identity(row))
++    ).toHaveLength(
++      additionalRaw.filter((d) => identity(d) === identity(row)).length
++    )
++}
+ function expectInvalidation(a, file, root) {
++  expectInactive(a)
+   for (const g of groups) {
+     const dependent = Object.hasOwn(g.pins, file)
+-    expect(a.exceptions.filter((d) => d.exception === g.id)).toHaveLength(
+-      dependent ? 0 : count(g)
++    const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
++    const presentSites = g.rows.filter((row) =>
++      fs.existsSync(path.join(root, sourceFile(row)))
+     )
+-    if (dependent) {
+-      const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
+-      // The report deliberately omits unused capacity for absent site files.
+-      const presentSites = g.rows.filter((row) =>
+-        fs.existsSync(path.join(root, sourceFile(row)))
+-      )
+-      expect(unused).toHaveLength(presentSites.length)
+-      expect(unused.every((d) => d.pinsHold === false)).toBe(true)
+-    }
++    expect(unused).toHaveLength(presentSites.length)
++    expect(unused.every((d) => d.pinsHold === !dependent)).toBe(true)
+   }
+-  expect(a.passed).toBe(false)
++  const omitted = [...siteFiles, ...additionalRaw.map(sourceFile)].filter(
++    (site) =>
++      !fs.existsSync(path.join(root, site)) ||
++      fs.lstatSync(path.join(root, site)).isSymbolicLink()
++  )
++  expectRawInventory(a, omitted)
+ }
+ 
+ afterEach(() => {
+@@ -223,6 +315,7 @@ afterEach(() => {
+     fs.rmSync(root, { recursive: true, force: true })
+ })
+ 
++// Legacy test names are retained as stable case IDs; the oracle is SPEC0228.
+ describe('SPEC0216 compiled kernel boundary qualification', () => {
+   it('keeps the exact three proposed tables and the previous SPEC0215 46 sites unchanged', () => {
+     const actual = qualificationTable()
+@@ -261,19 +354,29 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+     const f = fixture()
+     expectPinsValid(f)
+     const a = f.audit()
+-    expect(appliedCounts(a)).toEqual([4, 1, 8])
+-    expect(accepted(a)).toHaveLength(13)
+-    expect(rawSites(a)).toEqual([])
+-    expect(a.diagnostics).toEqual([])
++    expectInactive(a)
++    expect(accepted(a)).toEqual([])
++    expectRawInventory(a)
++    expect(rawSites(a)).toHaveLength(13)
++    expect(a.diagnostics).toHaveLength(25)
+     expect(a.violations).toEqual([])
+-    expect(a.passed).toBe(true)
++    expect(a).toEqual(f.audit({ exceptions: false }))
++    const requested = f.audit({ exceptions: true })
++    expectInactive(requested)
++    expect(requested).toEqual({
++      ...a,
++      diagnostics: [
++        { file: 'package.json', reason: 'UNAPPROVED_EXCEPTION_REQUEST' },
++        ...a.diagnostics
++      ]
++    })
+     const identity = ({ file, reason, expression }) => ({
+       file,
+       reason,
+       expression
+     })
+     expect(
+-      accepted(a)
++      rawSites(a)
+         .map(identity)
+         .sort((a, b) => a.file.localeCompare(b.file))
+     ).toEqual(
+@@ -285,7 +388,11 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+   })
+ 
+   it('retains all exact 13 raw diagnostics in strict mode', () => {
+-    const a = fixture().audit({ exceptions: false })
++    const f = fixture(),
++      a = f.audit({ exceptions: false })
++    expectInactive(a)
++    expectRawInventory(a)
++    expect(a).toEqual(f.audit())
+     expect(a.exceptionsApplied).toBe(false)
+     expect(a.exceptions).toEqual([])
+     expect(rawSites(a)).toHaveLength(13)
+@@ -319,12 +426,19 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+           if (mode === 'byte') throw error
+           // A refusal has no report/counts. Accept only a named closed refusal,
+           // never a generic TypeError, test assertion, or arbitrary exception.
+-          expect(String(error.message)).toMatch(
+-            /(?:unverified_source_symlink|unverified_discovery_identity|physical_file_required|unverified_.*identity|missing_.*(?:file|source))/
+-          )
++          expect(error).toBeInstanceOf(Error)
++          if (mode === 'symlink' && file.includes('/dist/'))
++            expect(error.message).toBe(
++              `invalid_boundary_manifest:${target}:physical_file_required`
++            )
++          else {
++            expect(mode).toBe('symlink')
++            expect(error.message).toBe(`unverified_source_symlink:${target}`)
++          }
+           return
+         }
+         expectInvalidation(a, file, f.root)
++        expect(a).toEqual(f.audit({ exceptions: false }))
+       }
+     )
+ 
+@@ -334,9 +448,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+     const copy = path.join(f.root, 'platform-source')
+     fs.renameSync(directory, copy)
+     fs.symlinkSync(copy, directory, 'dir')
+-    expect(() => f.audit()).toThrow(
+-      /unverified_source_symlink|unverified_discovery_identity/
+-    )
++    expect(() => f.audit()).toThrow(/^unverified_source_symlink:/)
+   })
+ 
+   for (const constraint of ['reason', 'path', 'line', 'expression'])
+@@ -376,8 +488,12 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+         const remaining = a.unusedExceptions.filter(
+           (d) => d.exception === group.id
+         )
+-        expect(remaining.length).toBeGreaterThan(0)
++        expect(remaining).toHaveLength(group.rows.length)
+         expect(remaining.every((d) => d.pinsHold)).toBe(true)
++        expectInactive(a)
++        expectRawInventory(a)
++        expect(a).toEqual(audit({ exceptions: false }))
++        expect(a.diagnostics).toEqual(f.audit().diagnostics)
+         const rejected = a.diagnostics.filter(
+           (d) =>
+             d.reason === row.reason &&
+@@ -389,7 +505,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+         for (const other of groups.filter((g) => g.id !== group.id))
+           expect(
+             a.exceptions.filter((d) => d.exception === other.id)
+-          ).toHaveLength(count(other))
++          ).toHaveLength(0)
+       }
+     )
+ 
+@@ -427,16 +543,31 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+       f.write(file, changed)
+       expectPinsValid(f, [file])
+       const a = copiedAuditor(f, { repin: [file] })()
+-      expect(appliedCounts(a)).toEqual([4, 1, 7])
++      expectInactive(a)
++      expect(a).toEqual(
++        copiedAuditor(f, { repin: [file] })({ exceptions: false })
++      )
++      expect(a.diagnostics).toEqual(f.audit().diagnostics)
+       const residual = rawSites(a)
+-      expect(residual).toHaveLength(1)
+-      expect(residual[0].file).toBe(row.file)
+-      expect(residual[0].expression).not.toBe(oldExpression)
++      expect(residual).toHaveLength(13)
++      const changedSite = residual.filter((d) => d.file === row.file)
++      expect(changedSite).toHaveLength(1)
++      expect(changedSite[0].expression).not.toBe(oldExpression)
+       expect(
+-        a.unusedExceptions
+-          .filter((d) => ids.has(d.exception))
+-          .every((d) => d.pinsHold)
+-      ).toBe(true)
++        residual
++          .filter((d) => d.file !== row.file)
++          .map((d) => [d.file, d.reason, d.expression])
++          .sort()
++      ).toEqual(
++        groups
++          .flatMap((g) => g.rows)
++          .filter((r) => r.file !== row.file)
++          .map((r) => [r.file, r.reason, r.expression])
++          .sort()
++      )
++      const unused = a.unusedExceptions.filter((d) => ids.has(d.exception))
++      expect(unused).toHaveLength(13)
++      expect(unused.every((d) => d.pinsHold)).toBe(true)
+       expect(a.passed).toBe(false)
+     }
+   )
+@@ -453,13 +584,23 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+     )
+     expectPinsValid(f, [file])
+     const a = copiedAuditor(f, { repin: [file] })()
+-    expect(appliedCounts(a)).toEqual([4, 1, 8])
++    expectInactive(a)
+     const residual = rawSites(a)
+-    expect(residual).toHaveLength(1)
+-    expect(residual[0].expression).toBe(row.expression)
++    expect(residual).toHaveLength(14)
++    expect(
++      residual.filter((d) => d.expression === row.expression)
++    ).toHaveLength(2)
++    const identity = (d) => `${sourceFile(d)}:${d.reason}:${d.expression}`
++    expect(residual.map(identity).sort()).toEqual(
++      [...groups.flatMap((g) => g.rows), row].map(identity).sort()
++    )
++    expect(a).toEqual(
++      copiedAuditor(f, { repin: [file] })({ exceptions: false })
++    )
++    expect(a.diagnostics).toEqual(f.audit().diagnostics)
+     expect(
+       accepted(a).filter((d) => d.expression === row.expression)
+-    ).toHaveLength(1)
++    ).toHaveLength(0)
+     expect(a.passed).toBe(false)
+   })
+ 
+@@ -468,7 +609,9 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+       file = 'packages/sandbox/src/unlisted.ts'
+     f.write(file, fs.readFileSync('packages/sandbox/dist/run.js'))
+     const a = f.audit()
+-    expect(appliedCounts(a)).toEqual([4, 1, 8])
++    expectInactive(a)
++    expectRawInventory(a)
++    expect(a).toEqual(f.audit({ exceptions: false }))
+     expect(a.exceptions.some((d) => sourceFile(d) === file)).toBe(false)
+     expect(
+       a.diagnostics.filter(
+@@ -526,7 +669,12 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
+       }
+       expectPinsValid(f)
+       const a = f.audit()
+-      expect(appliedCounts(a)).toEqual([4, 1, 8])
++      expectInactive(
++        a,
++        ['product', 'shift'].includes(kind) ? 'FAIL' : 'INCOMPLETE'
++      )
++      expectRawInventory(a)
++      expect(a).toEqual(f.audit({ exceptions: false }))
+       expect(a.passed).toBe(false)
+       if (kind === 'product')
+         expect(
+diff --git a/tests/pare100-sdk-boundary-qualification.test.js b/tests/pare100-sdk-boundary-qualification.test.js
+index c5945061..c1a29add 100644
+--- a/tests/pare100-sdk-boundary-qualification.test.js
++++ b/tests/pare100-sdk-boundary-qualification.test.js
+@@ -105,6 +105,7 @@ async function copiedAuditor(f, changedFiles = [], wrongReason = false) {
+   }
+   for (const name of [
+     'boundary-manifests.mjs',
++    'boundary-installed-identity.mjs',
+     'boundary-code-execution.mjs',
+     'boundary-lexical.mjs',
+     'tsconfig-path-grammar.mjs'
+@@ -117,15 +118,16 @@ async function copiedAuditor(f, changedFiles = [], wrongReason = false) {
+   )
+   const file = path.join(directory, 'check-product-boundary.mjs')
+   fs.writeFileSync(file, source)
+-  return (root) => {
++  return (root, options = {}) => {
+     const run = spawnSync(
+       process.execPath,
+       [
+         '--input-type=module',
+         '-e',
+-        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2])))',
++        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2], JSON.parse(process.argv[3]))))',
+         pathToFileURL(file).href,
+-        root
++        root,
++        JSON.stringify(options)
+       ],
+       { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }
+     )
+@@ -139,24 +141,110 @@ afterEach(() => {
+ })
+ const accepted = (audit) => audit.exceptions.filter((d) => ids.has(d.exception))
+ 
++// SPEC0228: these immutable historical sites are an inventory, never trust.
++const siteFiles = new Set(groups.flatMap((g) => Object.keys(g.sites)))
++function expectInactive(a, status = 'INCOMPLETE') {
++  expect(a.exceptionsApplied).toBe(false)
++  expect(a.exceptions).toEqual([])
++  expect(accepted(a)).toEqual([])
++  expect(a.status).toBe(status)
++  expect(a.passed).toBe(false)
++}
++// Original source occurrences outside the 46 historical sites remain unknown too.
++const additionalRaw = [
++  ['packages/contracts/src/canonical-json.ts:27', '5b2efa8c4f1c77a4'],
++  ['packages/contracts/src/canonical-json.ts:28', 'b34563e2ebeb7717'],
++  ['packages/contracts/src/canonical-json.ts:28', 'b34563e2ebeb7717'],
++  ['packages/harness/src/session/events.ts:62', '511cf3cd840c8327'],
++  ['packages/harness/src/session/events.ts:64', '12b2fdc0a0ffd6ce'],
++  ['packages/harness/src/session/events.ts:70', '12b2fdc0a0ffd6ce'],
++  ['packages/harness/src/session/events.ts:71', '194b520dc30384b3'],
++  ['packages/harness/src/session/events.ts:71', '194b520dc30384b3'],
++  ['packages/harness/src/session/events.ts:71', '7e8c064eaa08ddfa'],
++  ['packages/harness/src/session/events.ts:73', '7d29e4d19453aa96'],
++  ['packages/harness/src/session/events.ts:77', '99cac9d0d093a87e'],
++  ['packages/harness/src/session/events.ts:78', '99cac9d0d093a87e'],
++  ['packages/harness/src/session/events.ts:82', '511cf3cd840c8327']
++].map(([file, expression]) => ({
++  file,
++  reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
++  expression
++}))
++function expectRawInventory(a) {
++  const expected = groups.flatMap((g) =>
++    Object.entries(g.sites).flatMap(([file, lines]) =>
++      Object.values(lines).flatMap((expressions) =>
++        Object.entries(expressions).flatMap(([expression, max]) =>
++          Array.from({ length: max }, () =>
++            JSON.stringify({ file, reason: g.reason, expression })
++          )
++        )
++      )
++    )
++  )
++  const actual = a.diagnostics
++    .filter(
++      (d) =>
++        siteFiles.has(d.file.replace(/:\d+$/, '')) &&
++        d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
++    )
++    .map((d) =>
++      JSON.stringify({
++        file: d.file.replace(/:\d+$/, ''),
++        reason: d.reason,
++        expression: d.expression
++      })
++    )
++  expect(actual.sort()).toEqual(expected.sort())
++  const additionalFiles = new Set(
++    additionalRaw.map((d) => d.file.replace(/:\d+$/, ''))
++  )
++  const identity = ({ file, reason, expression }) =>
++    JSON.stringify({ file, reason, expression })
++  expect(
++    a.diagnostics
++      .filter(
++        (d) =>
++          additionalFiles.has(d.file.replace(/:\d+$/, '')) &&
++          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
++      )
++      .map(identity)
++      .sort()
++  ).toEqual(additionalRaw.map(identity).sort())
++}
++
++// Legacy test names are retained as stable case IDs; the oracle is SPEC0228.
+ describe('SPEC0215 exact capability qualification', () => {
+   it('qualifies exactly the four reviewed groups and 46 diagnostic occurrences', () => {
+     const f = fixture(),
+       a = f.audit()
+     expect(groups.map(count)).toEqual([19, 14, 3, 10])
+-    expect(accepted(a)).toHaveLength(46)
+     for (const g of groups)
+-      expect(a.exceptions.filter((d) => d.exception === g.id)).toHaveLength(
+-        count(g)
+-      )
+-    const files = new Set(groups.flatMap((g) => Object.keys(g.sites)))
++      for (const [file, expected] of Object.entries(g.pins)) {
++        const target = path.join(f.root, file)
++        expect(fs.lstatSync(target).isFile()).toBe(true)
++        expect(fs.realpathSync(target)).toBe(target)
++        expect(
++          createHash('sha256').update(fs.readFileSync(target)).digest('hex')
++        ).toBe(expected)
++      }
++    expectInactive(a)
++    expectRawInventory(a)
+     expect(
+       a.diagnostics.filter(
+-        (d) =>
+-          files.has(d.file.replace(/:\d+$/, '')) &&
+-          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
++        (d) => d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+       )
+-    ).toEqual([])
++    ).toHaveLength(59)
++    expect(a).toEqual(f.audit({ exceptions: false }))
++    const requested = f.audit({ exceptions: true })
++    expectInactive(requested)
++    expect(requested).toEqual({
++      ...a,
++      diagnostics: [
++        { file: 'package.json', reason: 'UNAPPROVED_EXCEPTION_REQUEST' },
++        ...a.diagnostics
++      ]
++    })
+   })
+   it.each(pins)(
+     'invalidates every dependent group on byte drift of %s',
+@@ -167,22 +255,27 @@ describe('SPEC0215 exact capability qualification', () => {
+         fs.readFileSync(file, 'utf8') + '\n// SPEC0215 unreviewed byte\n'
+       )
+       const a = f.audit()
++      expectInactive(a)
++      expectRawInventory(a)
++      expect(a).toEqual(f.audit({ exceptions: false }))
+       for (const g of groups) {
+-        const applied = a.exceptions.filter((d) => d.exception === g.id)
+-        expect(applied).toHaveLength(Object.hasOwn(g.pins, file) ? 0 : count(g))
+-        if (Object.hasOwn(g.pins, file))
+-          expect(
+-            a.unusedExceptions.some(
+-              (d) => d.exception === g.id && d.pinsHold === false
+-            )
+-          ).toBe(true)
++        const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
++        expect(unused).toHaveLength(
++          Object.values(g.sites).flatMap(Object.values).flatMap(Object.keys)
++            .length
++        )
++        expect(
++          unused.every((d) => d.pinsHold === !Object.hasOwn(g.pins, file))
++        ).toBe(true)
+       }
+     }
+   )
+   it('keeps all 46 raw diagnostics in strict mode', () => {
+     const f = fixture(),
+       a = f.audit({ exceptions: false })
+-    expect(a.exceptions).toEqual([])
++    expectInactive(a)
++    expectRawInventory(a)
++    expect(a).toEqual(f.audit())
+     const files = new Set(groups.flatMap((g) => Object.keys(g.sites)))
+     expect(
+       a.diagnostics.filter(
+@@ -201,7 +294,9 @@ describe('SPEC0215 exact capability qualification', () => {
+       path.join(f.root, 'owned-child-copy.mts'),
+       path.join(f.root, file)
+     )
+-    expect(() => f.audit()).toThrow(/physical_file_required|symlink|identity/)
++    expect(() => f.audit()).toThrow(
++      `invalid_boundary_manifest:${path.join(f.root, file)}:physical_file_required`
++    )
+   })
+   it.each([
+     'examples/another/index.mts',
+@@ -225,6 +320,9 @@ describe('SPEC0215 exact capability qualification', () => {
+           d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+       )
+     ).toBe(true)
++    expectInactive(a)
++    expectRawInventory(a)
++    expect(a).toEqual(f.audit({ exceptions: false }))
+     expect(a.exceptions.some((d) => d.file.startsWith(file + ':'))).toBe(false)
+   })
+   it.each([
+@@ -237,7 +335,9 @@ describe('SPEC0215 exact capability qualification', () => {
+       const f = fixture()
+       f.write('packages/sdk/src/unreviewed-bridge.ts', source)
+       const a = f.audit()
+-      expect(accepted(a)).toHaveLength(46)
++      expectInactive(a, kind === 'unresolved' ? 'INCOMPLETE' : 'FAIL')
++      expectRawInventory(a)
++      expect(a).toEqual(f.audit({ exceptions: false }))
+       if (kind === 'product')
+         expect(
+           a.violations.some((d) => JSON.stringify(d).includes('products/shift'))
+@@ -293,29 +393,89 @@ describe('SPEC0215 exact capability qualification', () => {
+       const unused = a.unusedExceptions.filter(
+         (d) => d.exception === 'pare100-sdk-owned-example-child'
+       )
++      expect(unused).toHaveLength(13)
+       expect(unused.every((d) => d.pinsHold === true)).toBe(true)
++      expectInactive(a)
++      expect(a).toEqual(audit(f.root, { exceptions: false }))
++      const direct = f.audit()
++      expect(a.diagnostics).toEqual(direct.diagnostics)
+       const residual = a.diagnostics.filter(
+         (d) =>
+           d.file.startsWith(file + ':') &&
+           d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+       )
+-      expect(residual).toHaveLength(1)
+-      expect(
+-        a.exceptions.filter(
+-          (d) => d.exception === 'pare100-sdk-owned-example-child'
++      expect(residual).toHaveLength(kind === 'count' ? 15 : 14)
++      // Reconstitute only this fixture to compare the full original inventory.
++      f.write(file, original)
++      const originalAudit = f.audit()
++      expectRawInventory(originalAudit)
++      f.write(file, modified)
++      const identity = (d) =>
++        `${d.file.replace(/:\d+$/, '')}:${d.reason}:${d.expression}`
++      const originalSites = originalAudit.diagnostics.filter(
++        (d) =>
++          d.file.startsWith(file + ':') &&
++          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
++      )
++      if (kind === 'expression') {
++        const added = residual.filter(
++          (d) => !originalSites.some((old) => identity(old) === identity(d))
+         )
+-      ).toHaveLength(kind === 'count' ? 14 : 13)
+-      expect(
+-        a.exceptions.filter(
+-          (d) => d.exception === 'pare100-sdk-owned-test-child'
++        const removed = originalSites.filter(
++          (old) => !residual.some((d) => identity(old) === identity(d))
++        )
++        expect(added).toHaveLength(1)
++        expect(removed).toHaveLength(1)
++        expect(residual.map(identity).sort()).toEqual(
++          [
++            ...originalSites.filter(
++              (d) => identity(d) !== identity(removed[0])
++            ),
++            added[0]
++          ]
++            .map(identity)
++            .sort()
++        )
++      } else if (kind === 'line') {
++        expect(residual.map(identity).sort()).toEqual(
++          originalSites.map(identity).sort()
+         )
+-      ).toHaveLength(19)
++      } else {
++        const expression = originalSites.find(
++          (d) => d.expression === 'c1b0eb4f5632c391'
++        ).expression
++        expect(
++          residual.filter((d) => d.expression === expression)
++        ).toHaveLength(2)
++        expect(residual.map(identity).sort()).toEqual(
++          [
++            ...originalSites,
++            originalSites.find((d) => d.expression === expression)
++          ]
++            .map(identity)
++            .sort()
++        )
++      }
++      expect(
++        a.diagnostics.filter((d) => !d.file.startsWith(file + ':'))
++      ).toEqual(
++        originalAudit.diagnostics.filter((d) => !d.file.startsWith(file + ':'))
++      )
+     }
+   )
+   it('does not match another reason even when every byte pin holds', async () => {
+     const f = fixture(),
+       audit = await copiedAuditor(f, [], true),
+       a = audit(f.root)
++    expectInactive(a)
++    expectRawInventory(a)
++    expect(a).toEqual(audit(f.root, { exceptions: false }))
++    expect(a.diagnostics).toEqual(f.audit().diagnostics)
++    expect(
++      a.unusedExceptions.filter(
++        (d) => d.exception === 'pare100-sdk-owned-example-child'
++      )
++    ).toHaveLength(13)
+     expect(
+       a.exceptions.filter(
+         (d) => d.exception === 'pare100-sdk-owned-example-child'

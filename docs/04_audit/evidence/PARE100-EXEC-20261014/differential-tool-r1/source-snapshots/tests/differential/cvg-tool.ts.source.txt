@@ -1,0 +1,250 @@
+import {
+  createOperationalHarness,
+  createSessionKernelLog,
+  InMemoryExecutionStepStore,
+  InMemorySessionEventStore
+} from '@cvg/harness'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
+import { ApprovalEngine, InMemoryApprovalStore } from '@cvg/approval-engine'
+import type {
+  ModelGateway,
+  RuntimeInput,
+  ToolDefinition
+} from '@cvg/harness-contracts'
+import { TOOL_NAME, validateToolCase } from './tool-case.mjs'
+
+export async function runCvgToolTurn(input: unknown) {
+  const fixture = validateToolCase(input)
+  const tenantId = 'pare100_synthetic'
+  const sessionId = `pare100-${fixture.id}`
+  const executionId = `execution-${fixture.id}`
+  const correlationId = `correlation-${fixture.id}`
+  const traceId = `trace-${fixture.id}`
+  const timestamp = '2026-10-16T00:00:00.000Z'
+  const sessions = new InMemorySessionEventStore()
+  const steps = new InMemoryExecutionStepStore()
+  const policy = new PolicyEngine({ profile: REFERENCE_POLICY_PROFILE })
+  const approval = new ApprovalEngine({ store: new InMemoryApprovalStore() })
+  const toolBodies: { name: string; input: unknown; output: string }[] = []
+  const requests: unknown[] = []
+  const responses: string[] = []
+  const policyDecisions: unknown[] = []
+  const approvalRequests: unknown[] = []
+  const audit: unknown[] = []
+  const tool: ToolDefinition = {
+    id: TOOL_NAME,
+    version: 'v1',
+    description: 'Pure synthetic echo',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+      required: ['text'],
+      additionalProperties: false
+    },
+    outputSchema: { type: 'string' },
+    risk: 'LOW',
+    sideEffect: 'NONE',
+    idempotent: true,
+    requiresApproval: false,
+    execute: async (args) => {
+      if (
+        toolBodies.length ||
+        !args ||
+        typeof args !== 'object' ||
+        Object.keys(args).join(',') !== 'text' ||
+        typeof (args as { text?: unknown }).text !== 'string'
+      )
+        throw new Error('unexpected CVG tool body')
+      const text = (args as { text: string }).text
+      toolBodies.push({
+        name: TOOL_NAME,
+        input: structuredClone(args),
+        output: text
+      })
+      return { status: 'SUCCEEDED', output: text }
+    }
+  }
+  const model: ModelGateway = {
+    complete: async ({ signal, ...request }) => {
+      requests.push({
+        request,
+        signalProvided: signal !== undefined,
+        signalAborted: signal?.aborted ?? false
+      })
+      let text: string
+      if (requests.length === 1) {
+        text = JSON.stringify({
+          decisionType: 'CALL_TOOL',
+          reasonCode: 'TOOL_REQUIRED',
+          toolId: TOOL_NAME,
+          toolInput: { text: fixture.text }
+        })
+      } else if (requests.length === 2) {
+        const prompt =
+          request.messages.find((m) => m.role === 'system')?.content ?? ''
+        const observed = prompt.match(/\[TOOL\/TOOL_RESULT\] (.*)/)?.[1]
+        if (
+          toolBodies.length !== 1 ||
+          observed === undefined ||
+          observed !== toolBodies[0]!.output
+        )
+          throw new Error('missing real CVG tool observation')
+        text = JSON.stringify({
+          decisionType: 'RESPOND',
+          reasonCode: 'GOAL_SATISFIED',
+          responseText: observed
+        })
+      } else throw new Error('unexpected CVG model call')
+      responses.push(text)
+      return {
+        text,
+        provider: 'pare100-synthetic',
+        model: 'keyless-v1',
+        inputTokens: 1,
+        outputTokens: 2,
+        costUsd: 0
+      }
+    }
+  }
+  await sessions.openSession({ tenantId, sessionId, formatVersion: 1 })
+  await sessions.append({
+    tenantId,
+    sessionId,
+    formatVersion: 1,
+    eventId: `user-${fixture.id}`,
+    timestamp,
+    correlationId,
+    traceId,
+    type: 'message/user',
+    payload: { text: fixture.message }
+  })
+  const harness = createOperationalHarness({
+    modelGateway: model,
+    iterativeOrchestrator: new HybridOrchestrator({
+      decisionModel: model,
+      maxDecisionRepairs: 0
+    }),
+    stepStore: steps,
+    tools: {
+      list: () => [tool],
+      resolve: (id, version) =>
+        id === tool.id && (!version || version === 'v1') ? tool : undefined
+    },
+    policy: {
+      evaluate: async (request) => {
+        const result = policy.evaluate({
+          tenantId: request.tenantId,
+          agentId: request.agentId,
+          operatorId: 'synthetic_operator',
+          operatorRole: 'Operator',
+          agentProfile: 'assistant',
+          capability: 'resource.read',
+          action: 'resource.read',
+          correlationId: request.correlationId,
+          context: { dataClassification: 'PUBLIC' }
+        })
+        const decision = {
+          outcome: result.decision,
+          reason: result.reason,
+          policyVersion: result.policyVersion
+        }
+        policyDecisions.push({
+          request: JSON.parse(
+            JSON.stringify(request, (_key, value) =>
+              typeof value === 'function' ? { nativeFunction: true } : value
+            )
+          ),
+          decision
+        })
+        return decision
+      }
+    },
+    approvals: {
+      request: async (request) => {
+        approvalRequests.push(structuredClone(request))
+        const record = approval.request({
+          ...request,
+          payload: request.payload,
+          operatorId: request.operatorId!,
+          agentVersion: request.agentVersion!,
+          action: request.action!,
+          resource: request.resource!,
+          policyVersion: request.policyVersion!,
+          executionRef: request.executionRef!,
+          reason: 'Synthetic comparison never approves an effect'
+        })
+        return {
+          status: 'PENDING',
+          approvalId: record.approvalId as never,
+          reason: 'No effect approved'
+        }
+      }
+    },
+    audit: {
+      append: async (event) => {
+        audit.push(structuredClone(event))
+      }
+    },
+    telemetry: { record: () => {} },
+    log: createSessionKernelLog({
+      tenantId,
+      sessionId,
+      formatVersion: 1,
+      correlationId,
+      traceId,
+      store: sessions
+    })
+  })
+  const runtimeInput: RuntimeInput = {
+    tenantId: tenantId as never,
+    sessionId: sessionId as never,
+    executionId,
+    conversationId: sessionId as never,
+    correlationId: correlationId as never,
+    traceId: traceId as never,
+    agent: {
+      id: 'synthetic-agent' as never,
+      version: 'v1' as never,
+      objective: 'Return the pure echo result',
+      instructions: [],
+      skills: [],
+      tools: [TOOL_NAME],
+      policies: []
+    },
+    userMessage: fixture.message,
+    context: { values: {}, sourceIds: [], capturedAt: timestamp },
+    state: { version: 0, values: {}, updatedAt: timestamp },
+    budget: {
+      maxSteps: 3,
+      maxModelCalls: 2,
+      maxToolCalls: 1,
+      maxDurationMs: 5000,
+      maxTokens: 100,
+      maxCostUsd: 1,
+      maxDecisionRepairs: 0
+    },
+    runtimeProfile: 'iterative'
+  }
+  const turn = await harness.execute(runtimeInput)
+  const events = await sessions.read({ tenantId, sessionId })
+  const recordedSteps = await steps.listSteps(tenantId, executionId)
+  return {
+    version: 1,
+    fixtureId: fixture.id,
+    native: {
+      turn,
+      events,
+      steps: recordedSteps,
+      modelBodies: requests.length,
+      requests,
+      responses,
+      toolBodies,
+      policyDecisions,
+      approvalRequests,
+      audit
+    },
+    observationStatus: 'NATIVE_TOOL_TURN_MEASUREMENT_NOT_PARITY',
+    entrypoint: 'PUBLIC_ITERATIVE_HARNESS_NOT_SDK'
+  }
+}
