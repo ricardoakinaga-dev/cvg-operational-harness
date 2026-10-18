@@ -13,7 +13,7 @@ import {
   INSTALLED_IDENTITY_LIMITS
 } from '../scripts/boundary-installed-identity.mjs'
 
-const TMP = '/tmp/cvg-hiso005-0234-20261017/comparer'
+const TMP = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-comparer'
 const roots = []
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 const KEY = 'node_modules/vendor'

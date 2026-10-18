@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import *
 
 state, freeze, review, h = assert_frozen()
-refs = load('references-r1.json')
+refs = load('references-current.json')
 assert refs['status'] == 'REFERENCES_BUILT' and refs['sourceCommit'] == h
 log = []
 tmp = RUNTIME / 'prepare-runtime-tmp'

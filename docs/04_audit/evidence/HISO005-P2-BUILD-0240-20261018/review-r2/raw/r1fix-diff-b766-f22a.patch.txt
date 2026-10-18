@@ -1,0 +1,426 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index 546d4b6b..008fa457 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -28,6 +28,11 @@ const isWorker = () =>
+   process.argv[1] &&
+   path.resolve(process.argv[1]) === SELF &&
+   process.argv[2] === '--semantic-worker'
++// SPEC0240 §3.3: a known product dependency outranks any later cap, deadline,
++// kill or refusal. The worker streams each one as soon as it is discovered and
++// the parent unites the v2 refusal census with the exact-metadata refinement.
++const VIOLATION_STREAM = 'CVG_SEMANTIC_VIOLATION_V1 '
++const REFUSAL_CENSUS_ARG = '--refusal-census'
+ const RESOLVER = path.resolve(
+   path.dirname(SELF),
+   'boundary-semantic-resolution.mjs'
+@@ -187,7 +192,9 @@ const valueKey = (v) =>
+       ? 'union:' + v.values.map(valueKey).sort().join('|')
+       : v.id || v.t
+ 
+-export function analyzeSemanticBoundary(input) {
++export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
++  // Refusal census: the v2 metadata refusals, negative evidence only.
++  const census = refusalCensus === true
+   let limits
+   try {
+     limits = limitsFor(input)
+@@ -281,8 +288,17 @@ export function analyzeSemanticBoundary(input) {
+         !out.violations.some(
+           (x) => semanticCanonicalJson(x) === semanticCanonicalJson(item)
+         )
+-      )
++      ) {
+         out.violations.push(item)
++        // Best effort: the violation is already in the output; a failed
++        // stream write must not change the analysis path.
++        if (isWorker())
++          try {
++            fs.writeSync(2, VIOLATION_STREAM + JSON.stringify(item) + '\n')
++          } catch {
++            // The stdout result still carries it if the worker completes.
++          }
++      }
+       return true
+     }
+     return false
+@@ -1200,7 +1216,7 @@ export function analyzeSemanticBoundary(input) {
+     const manifest = manifestAt(file)
+     if (
+       (manifest?.body.imports &&
+-        !isInactiveImportsMapEligible(manifest.body.imports)) ||
++        (census || !isInactiveImportsMapEligible(manifest.body.imports))) ||
+       manifest?.body.browser
+     )
+       unknown(file, 'UNKNOWN_AMBIGUOUS_RESOLUTION')
+@@ -1274,6 +1290,7 @@ export function analyzeSemanticBoundary(input) {
+     resolution = createResolutionSession({
+       root,
+       limits: { ...SEMANTIC_LIMITS, ...resolutionLimits },
++      refusalCensus: census,
+       onProduct: (file, from) => product(file, from),
+       onNegativeTarget: (file) => {
+         try {
+@@ -1486,6 +1503,7 @@ export function analyzeSemanticBoundary(input) {
+   out.violations.sort((a, b) =>
+     sort(semanticCanonicalJson(a), semanticCanonicalJson(b))
+   )
++  if (census) unknown('', 'UNKNOWN_NEGATIVE_CENSUS_ONLY')
+   out.status = out.violations.length
+     ? 'VIOLATION'
+     : out.unknowns.length
+@@ -1663,17 +1681,47 @@ export function revalidateSemanticInputs(root, output, origins = []) {
+   }
+ }
+ 
++function knownViolation(x) {
++  return (
++    record(x) &&
++    Object.keys(x).sort().join(',') === 'file,reason,target' &&
++    typeof x.file === 'string' &&
++    x.reason === 'PRODUCT_DEPENDENCY' &&
++    typeof x.target === 'string' &&
++    (x.target === 'products' || x.target.startsWith('products/'))
++  )
++}
++
+ // Sync caller; the child owns parse, analysis AND independent recomputation.
+ // spawnSync's native timeout kills even a synchronous parser stuck in the child.
++// Two bounded children share ONE deadline (limits.timeoutMs is not raised):
++// first the negative-only census with the v2 metadata refusals, so the
++// exact-metadata refinement can never consume its budget or time; then the
++// refinement. Violations known from either child (stdout or the stderr
++// stream of a killed child) survive every later cap, error or refusal.
+ export function runSemanticBoundary(input) {
+   const started = performance.now()
+-  let limits, output
+-  try {
+-    limits = limitsFor(input)
+-    const profile = checkTCB()
+-    const worker = spawnSync(
++  const known = new Map()
++  const remember = (items) => {
++    if (!Array.isArray(items)) return
++    for (const item of items)
++      if (knownViolation(item)) known.set(semanticCanonicalJson(item), item)
++  }
++  const streamed = (stderr) => {
++    for (const line of String(stderr || '').split('\n')) {
++      if (!line.startsWith(VIOLATION_STREAM)) continue
++      try {
++        remember([JSON.parse(line.slice(VIOLATION_STREAM.length))])
++      } catch {
++        // A truncated line from a killed child carries no claim.
++      }
++    }
++  }
++  let limits, output, censusMs
++  const spawn = (extra) =>
++    spawnSync(
+       NODE,
+-      ['--experimental-vm-modules', SELF, '--semantic-worker'],
++      ['--experimental-vm-modules', SELF, '--semantic-worker', ...extra],
+       {
+         input: JSON.stringify(input),
+         encoding: 'utf8',
+@@ -1693,6 +1741,20 @@ export function runSemanticBoundary(input) {
+         windowsHide: true
+       }
+     )
++  try {
++    limits = limitsFor(input)
++    const profile = checkTCB()
++    const census = spawn([REFUSAL_CENSUS_ARG])
++    streamed(census.stderr)
++    if (!census.error && census.status === 0)
++      try {
++        remember(JSON.parse(census.stdout).violations)
++      } catch {
++        // Negative evidence only; an unreadable census grants nothing.
++      }
++    censusMs = performance.now() - started
++    const worker = spawn([])
++    streamed(worker.stderr)
+     if (
+       worker.error?.code === 'ETIMEDOUT' ||
+       performance.now() - started > limits.timeoutMs
+@@ -1708,6 +1770,7 @@ export function runSemanticBoundary(input) {
+       )
+     else {
+       output = JSON.parse(worker.stdout)
++      remember(output.violations)
+       // Worker validation is recomputation, not acceptance of an input flag.
+       // The parent separately revalidates each file, TCB and proof identifiers.
+       if (
+@@ -1740,7 +1803,29 @@ export function runSemanticBoundary(input) {
+       error.message || 'UNKNOWN_WORKER_ERROR'
+     )
+   }
+-  return { ...output, telemetry: { elapsedMs: performance.now() - started } }
++  for (const item of output.violations || [])
++    known.delete(semanticCanonicalJson(item))
++  if (known.size) {
++    // UNKNOWN never replaces a known violation; it also blocks every proof.
++    output.violations = [...output.violations, ...known.values()].sort((a, b) =>
++      sort(semanticCanonicalJson(a), semanticCanonicalJson(b))
++    )
++    output.status = 'VIOLATION'
++    output.proofs = []
++    output.installed = (output.installed || []).map((x) => ({
++      ...x,
++      status: 'UNKNOWN',
++      proofIds: [],
++      reason: 'UNKNOWN_INSTALLED_CLOSURE'
++    }))
++  }
++  return {
++    ...output,
++    telemetry: {
++      elapsedMs: performance.now() - started,
++      negativeCensusElapsedMs: censusMs ?? null
++    }
++  }
+ }
+ 
+ if (
+@@ -1749,10 +1834,16 @@ if (
+   process.argv[2] === '--semantic-worker'
+ ) {
+   try {
++    const extra = process.argv.slice(3)
++    const census = extra.length === 1 && extra[0] === REFUSAL_CENSUS_ARG
++    if (extra.length && !census) throw Error('UNKNOWN_WORKER_ARGUMENTS')
+     const input = JSON.parse(fs.readFileSync(0, 'utf8'))
+-    const output = analyzeSemanticBoundary(input)
+-    output.validation = validateSemanticBoundary(input, output)
+-    if (!output.validation.valid) {
++    const output = analyzeSemanticBoundary(input, { refusalCensus: census })
++    output.validation = census
++      ? { valid: false }
++      : validateSemanticBoundary(input, output)
++    if (census) output.proofs = []
++    else if (!output.validation.valid) {
+       output.status = output.violations.length ? 'VIOLATION' : 'UNKNOWN'
+       output.proofs = []
+       output.installed.forEach((x) => {
+diff --git a/scripts/boundary-semantic-resolution.mjs b/scripts/boundary-semantic-resolution.mjs
+index a4610c83..5f332e25 100644
+--- a/scripts/boundary-semantic-resolution.mjs
++++ b/scripts/boundary-semantic-resolution.mjs
+@@ -6,6 +6,9 @@ import { isBuiltin } from 'node:module'
+ import { fileURLToPath, pathToFileURL } from 'node:url'
+ 
+ export const RESOLUTION_PROFILE = 'node22-linux-exact-metadata-v1'
++// Negative-only session with the v2 metadata refusals. Its snapshot can never
++// satisfy RESOLUTION_PROFILE revalidation, so it is never proof authority.
++export const REFUSAL_CENSUS_PROFILE = 'node22-linux-v2-refusal-census-v1'
+ export const RESOLUTION_LIMITS = Object.freeze({
+   maxWorkspaces: 512,
+   maxLinks: 512,
+@@ -103,6 +106,9 @@ export function isInactiveImportsMapEligible(value) {
+     )
+   )
+ }
++const legacyMapKey = (key) =>
++  key === '.' ||
++  (key.startsWith('./') && key.slice(2).split('/').every(asciiPart))
+ const exactMapKey = (key) => {
+   if (key === '.') return true
+   if (!key.startsWith('./')) return false
+@@ -128,7 +134,8 @@ export function createResolutionSession({
+   root,
+   limits,
+   onProduct = () => {},
+-  onNegativeTarget = () => {}
++  onNegativeTarget = () => {},
++  refusalCensus = false
+ } = {}) {
+   const caps = limitsFor(limits)
+   if (process.platform !== 'linux') fail('UNKNOWN_ACQUISITION_PLATFORM')
+@@ -143,6 +150,7 @@ export function createResolutionSession({
+     fail('UNKNOWN_ROOT')
+   if (typeof onProduct !== 'function') fail('UNKNOWN_PRODUCT_CALLBACK')
+   if (typeof onNegativeTarget !== 'function') fail('UNKNOWN_NEGATIVE_CALLBACK')
++  if (typeof refusalCensus !== 'boolean') fail('UNKNOWN_CENSUS_MODE')
+   const fds = new Set(),
+     directories = new Set(),
+     premises = new Map(),
+@@ -775,7 +783,8 @@ export function createResolutionSession({
+       if (mapped) {
+         // Global map classification precedes the exact hit. Patterns are
+         // eligible only as unselected keys; no matching/substitution follows.
+-        if (!keys.every(exactMapKey)) fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++        if (!keys.every(refusalCensus ? legacyMapKey : exactMapKey))
++          fail('UNKNOWN_UNSUPPORTED_EXPORTS')
+         if (!Object.hasOwn(value, subpath)) fail('UNKNOWN_UNRESOLVED_EXPORT')
+         branch.push(subpath)
+         const result = select(value[subpath])
+@@ -965,7 +974,9 @@ export function createResolutionSession({
+       const body = owner.body
+       const hasImports = Object.hasOwn(body, 'imports')
+       const eligibleImports =
+-        hasImports && isInactiveImportsMapEligible(body.imports)
++        hasImports &&
++        !refusalCensus &&
++        isInactiveImportsMapEligible(body.imports)
+       if (Object.hasOwn(body, 'browser') || (hasImports && !eligibleImports))
+         fail('UNKNOWN_AMBIGUOUS_RESOLUTION')
+       metadataSelection.imports = {
+@@ -1071,7 +1082,7 @@ export function createResolutionSession({
+     return JSON.parse(
+       encode({
+         schemaVersion: 1,
+-        profile: RESOLUTION_PROFILE,
++        profile: refusalCensus ? REFUSAL_CENSUS_PROFILE : RESOLUTION_PROFILE,
+         root,
+         inputs: [...inputs.values()].sort((a, b) =>
+           compare(a.kind + ':' + a.file, b.kind + ':' + b.file)
+diff --git a/tests/b6-0240-exact-metadata.test.js b/tests/b6-0240-exact-metadata.test.js
+index 2dba819a..57480272 100644
+--- a/tests/b6-0240-exact-metadata.test.js
++++ b/tests/b6-0240-exact-metadata.test.js
+@@ -670,3 +670,144 @@ describe('0240 MS07/MS08 full snapshots, metadata trace and profile binding', ()
+     ).toBe(true)
+   })
+ })
++
++// R1-REQ-01/02: the exact-metadata refinement must not consume the opportunity
++// of the v2 negative census (shared hard budget, later deadline or kill).
++describe('0240 MS05/MS07 refinement cannot consume the v2 refusal census', () => {
++  const KNOWN = {
++    file: 'entry.mjs',
++    reason: 'PRODUCT_DEPENDENCY',
++    target: 'products/x'
++  }
++  function heavy({ order, nested = false, files }) {
++    fs.mkdirSync(PARENT, { recursive: true })
++    const root = fs.mkdtempSync(path.join(PARENT, 'r1 census '))
++    roots.push(root)
++    write(root, 'package.json', {
++      name: 'synthetic-root',
++      type: 'module',
++      workspaces: ['packages/*', 'products/*']
++    })
++    write(root, 'entry.mjs', order.map((s) => `import '${s}';\n`).join(''))
++    write(root, 'node_modules/pkg/package.json', {
++      name: 'pkg',
++      type: 'module',
++      imports: {},
++      exports: { '.': './index.mjs' }
++    })
++    let index = nested ? "import 'prodalias';\n" : ''
++    for (let i = 0; i < files; i++) {
++      index += `import './f${i}.mjs';\n`
++      write(root, `node_modules/pkg/f${i}.mjs`, '')
++    }
++    write(root, 'node_modules/pkg/index.mjs', index)
++    fs.symlinkSync('../products/x', path.join(root, 'node_modules/prodalias'))
++    write(root, 'products/x/package.json', { name: 'x', type: 'module' })
++    write(root, 'products/x/index.mjs', 'export const x=1;\n')
++    return {
++      root,
++      input: {
++        root,
++        starts: ['entry.mjs'],
++        installed: [],
++        origins: [],
++        compiled: { status: 'UNAVAILABLE', files: [] }
++      }
++    }
++  }
++  const census = (f, input = f.input) =>
++    engine(f, {
++      input,
++      method: 'analyzeSemanticBoundary',
++      output: { refusalCensus: true }
++    })
++  it('shared maxFiles budget: v2 census violation survives the refinement exhaustion', () => {
++    const f = heavy({ order: ['pkg', 'prodalias'], files: 6000 })
++    const refinementOnly = engine(f, { method: 'analyzeSemanticBoundary' })
++    expect(refinementOnly.violations).toEqual([])
++    expect(refinementOnly.unknowns.some((u) => /maxFiles/.test(u.detail))).toBe(
++      true
++    )
++    const v2 = census(f)
++    expect(v2.violations).toEqual([KNOWN])
++    expect(v2.proofs).toEqual([])
++    expect(v2.runtimeResolution.profile).toBe(resolver.REFUSAL_CENSUS_PROFILE)
++    const out = engine(f)
++    expect(out.status).toBe('VIOLATION')
++    expect(out.proofs).toEqual([])
++    expect(out.violations).toEqual([KNOWN])
++    expect(out.kernelVersion).toBe(KERNEL)
++    expect(out.unknowns.some((u) => /maxFiles/.test(u.detail))).toBe(true)
++  }, 240000)
++  it('known product then a later deadline keeps the violation within one deadline', () => {
++    const f = heavy({ order: ['prodalias', 'pkg'], files: 4000 })
++    const input = { ...f.input, limits: { timeoutMs: 4000 } }
++    expect(census(f, input).violations).toEqual([KNOWN])
++    const out = engine(f, { input })
++    expect(out.status).toBe('VIOLATION')
++    expect(out.proofs).toEqual([])
++    expect(out.violations).toEqual([KNOWN])
++    expect(
++      out.unknowns.some((u) => u.reason === 'UNKNOWN_ANALYSIS_LIMIT')
++    ).toBe(true)
++    // One shared deadline: the census never doubles limits.timeoutMs.
++    expect(out.telemetry.negativeCensusElapsedMs).toBeLessThan(4000)
++    expect(out.telemetry.elapsedMs).toBeLessThan(4000 + 2000)
++  }, 120000)
++  it('a product known only to the refinement survives the kill of its worker', () => {
++    const f = heavy({ order: ['pkg'], nested: true, files: 4000 })
++    const input = { ...f.input, limits: { timeoutMs: 4000 } }
++    // v2 refuses pkg before its body: the census cannot know this product.
++    expect(census(f, input).violations).toEqual([])
++    const out = engine(f, { input })
++    expect(out.status).toBe('VIOLATION')
++    expect(out.proofs).toEqual([])
++    expect(out.inputs).toEqual([])
++    expect(out.violations).toEqual([
++      { ...KNOWN, file: 'node_modules/pkg/index.mjs' }
++    ])
++    expect(
++      out.unknowns.some(
++        (u) => u.reason === 'UNKNOWN_ANALYSIS_LIMIT' && u.detail === 'timeoutMs'
++      )
++    ).toBe(true)
++  }, 120000)
++  it('refusal census applies exactly the v2 refusals and is never proof authority', () => {
++    const both = fixture()
++    const s = resolver.createResolutionSession({
++      root: both.root,
++      refusalCensus: true
++    })
++    sessions.push(s)
++    expect(() => select(s, both)).toThrow(/UNKNOWN_AMBIGUOUS_RESOLUTION/)
++    const pattern = fixture({ metadata: 'pattern' })
++    const p = resolver.createResolutionSession({
++      root: pattern.root,
++      refusalCensus: true
++    })
++    sessions.push(p)
++    expect(() => select(p, pattern)).toThrow(/UNKNOWN_UNSUPPORTED_EXPORTS/)
++    const snapshot = p.snapshot()
++    expect(snapshot.profile).toBe(resolver.REFUSAL_CENSUS_PROFILE)
++    expect(() =>
++      resolver.revalidateResolutionSnapshot({ root: pattern.root, snapshot })
++    ).toThrow(/UNKNOWN_INVALID_SNAPSHOT/)
++    expect(() =>
++      resolver.createResolutionSession({ root: both.root, refusalCensus: 1 })
++    ).toThrow(/UNKNOWN_CENSUS_MODE/)
++    const closed = fixture({ metadata: 'none' })
++    const out = census(closed)
++    expect(out.status).toBe('UNKNOWN')
++    expect(out.proofs).toEqual([])
++    expect(
++      out.unknowns.some((u) => u.reason === 'UNKNOWN_NEGATIVE_CENSUS_ONLY')
++    ).toBe(true)
++    const bad = spawnSync(
++      NODE,
++      ['--experimental-vm-modules', ENGINE, '--semantic-worker', '--bogus'],
++      { input: JSON.stringify(closed.input), env, encoding: 'utf8' }
++    )
++    expect(bad.status).toBe(2)
++    expect(bad.stdout).toBe('')
++  })
++})

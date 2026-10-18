@@ -68,7 +68,7 @@ shutil.copyfile(variant / 'examples/consumers/reception-agent/index.ts', consume
 observer = Path('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/without-product-r2/audit-consumer/smoke.mjs')
 assert sha(observer) == '55ae900424d5d35a450589295bf70a20f3c661c61f2898e8195d55eecacd6365'
 src = observer.read_text()
-for old, new in [("'HISO005-P2-BUILD-0237'", "'" + TASK + "'"), ("'d8e3f8f2d346d4f8d3ddd162384ebbb79a322137'", "'" + freeze['base'] + "'"), ("'84d8d4b4ed053493533d7e9ad55e574a9e6f9047'", "'" + h + "'")]:
+for old, new in [("'HISO005-P2-BUILD-0237'", "'" + TASK + "'"), ("'84d8d4b4ed053493533d7e9ad55e574a9e6f9047'", "'" + h + "'"), ("'d8e3f8f2d346d4f8d3ddd162384ebbb79a322137'", "'" + freeze['base'] + "'")]:
     assert src.count(old) == 1, old
     src = src.replace(old, new)
 (consumer / 'smoke.mjs').write_text(src)

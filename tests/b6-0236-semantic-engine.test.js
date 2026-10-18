@@ -13,7 +13,8 @@ import {
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const parent = '/tmp/cvg-hiso005-integration-20261018/engine'
+const parent =
+  '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0236-engine'
 const hash = (x) => createHash('sha256').update(x).digest('hex')
 const pinnedNode = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
 const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')

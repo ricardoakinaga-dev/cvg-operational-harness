@@ -1,0 +1,21 @@
+{
+  "task": "HISO005-P2-BUILD-0240",
+  "observedAt": "2026-10-18T18:33:47.805314+00:00",
+  "reviewRound": "R1",
+  "verdict": "REVISE",
+  "required": [
+    "R1-REQ-01",
+    "R1-REQ-02"
+  ],
+  "rootCause": "Uma única sessão/worker compartilha orçamento físico rígido (maxFiles 12000) e o prazo timeoutMs; o percurso positivo 0240 adquire corpos antes recusados pela v2 e pode esgotar orçamento/prazo antes do census negativo de arestas posteriores; o pai substituía toda saída por empty() em timeout/erro, descartando violações já conhecidas.",
+  "fix": {
+    "helper": "createResolutionSession({refusalCensus}) aplica exatamente as recusas v2 (imports presente => UNKNOWN_AMBIGUOUS_RESOLUTION; chaves de pattern => UNKNOWN_UNSUPPORTED_EXPORTS, inclusive no censusEntry); snapshot com perfil próprio node22-linux-v2-refusal-census-v1, rejeitado por revalidateResolutionSnapshot (nunca autoridade de prova); refusalCensus não booleano => UNKNOWN_CENSUS_MODE.",
+    "engine": "analyzeSemanticBoundary(input,{refusalCensus}) usa a guarda v2 de carregamento e acrescenta UNKNOWN_NEGATIVE_CENSUS_ONLY (status nunca PROVEN, proofs vazias). runSemanticBoundary roda primeiro o worker census (--refusal-census, sem recomputação) e depois o worker de refinamento, ambos sob UM prazo compartilhado (limits.timeoutMs não aumentado). O worker transmite cada violação ao descobri-la (stderr CVG_SEMANTIC_VIOLATION_V1); o pai une violações conhecidas do census, do refinamento e do stream de worker morto em qualquer caminho (timeout, erro, revalidação, prova inválida); com violação conhecida o status é VIOLATION, proofs vazias e instalados UNKNOWN. Argumento extra desconhecido do worker => exit 2.",
+    "tests": "4 testes novos em tests/b6-0240-exact-metadata.test.js: orçamento maxFiles compartilhado (fixture idêntica ao s01 do crítico, N=6000), produto conhecido + prazo posterior (s05, N=4000, timeoutMs 4000, prazo único verificado por telemetria), produto conhecido só pelo refinamento sobrevive ao kill do worker (stream), e controles do modo census (recusas v2 exatas, perfil, revalidação rejeitada, sem prova, argumento de worker inválido)."
+  },
+  "limitsChanged": false,
+  "timeBudget": "Prazo único compartilhado: census primeiro com o mesmo timeoutMs da v2 (só análise, sem recomputação => cobre o que a v2 cobria), refinamento com o restante. Diagnóstico na árvore real antes da correção: v2 22,5 s e v3 30,6 s de 120 s.",
+  "firstRed": "O mecanismo foi reproduzido fisicamente pelo crítico na fonte b766 (review-r1/raw/out/s01-budget-census-loss-n6000.json e s05-known-product-lost-by-timeout-n3000-t5000.json). Os testes novos reproduzem as mesmas fixtures e afirmam VIOLATION.",
+  "codeReviewRoundsConsumed": 1,
+  "nextReview": "R2 (última)"
+}

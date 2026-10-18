@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-BUILD-0240",
+  "round": "R1",
+  "reviewer": "crítico fresco independente (sem contexto herdado, sem descendentes)",
+  "sourceCommit": "b766ffc594057c52a4e34bc57ebb2448fe7808d1",
+  "baseCommit": "84d8d4b4ed053493533d7e9ad55e574a9e6f9047",
+  "specSha256": "1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161",
+  "sourceFreezeSha256": "f54de551e1750b51c4f03b9aaa6d11ce52aac54cb4dff2e22897d1fa99a565e1",
+  "taskContractSha256": "8dc37b5f18c25df7a3dfa51f246b7cdffa44a77ef271acd4dc82e7ff940288e7",
+  "v2DifferentialOracle": {
+    "tree": "/mnt/ia/cvg-hiso005-build0237-20261018",
+    "head": "84d8d4b4ed053493533d7e9ad55e574a9e6f9047",
+    "note": "engine/helper/checker com sha256 iguais aos blobs de 84d8 (raw/env-and-hashes.json); usado só como oracle diferencial v2, somente leitura"
+  },
+  "verdict": "REVISE",
+  "requiredFindings": [
+    {
+      "id": "R1-REQ-01",
+      "severity": "P1",
+      "confidence": "high (mecanismo e regressão v2→v3 reproduzidos fisicamente); impacto na árvore real não medido (MS11 NOT_RUN)",
+      "criterion": "RC3 / MS05 (também MS07); SPEC0240 §3.3: 'o novo refinamento não pode consumir a oportunidade do census negativo preexistente'; 'nenhuma violação desaparece por recusa anterior, orçamento esgotado ou exceção engolida'",
+      "summary": "O novo percurso positivo (mapa imports elegível agora aceito) adquire o corpo e os sucessores do pacote dentro da MESMA sessão de resolução e consome o orçamento físico rígido compartilhado (HARD.maxFiles=12000 cargas de stat/file/absence). Uma violação de produto por alias (node_modules/prodalias -> ../products/x), que a v2 descobre nos mesmos inputs e com os limites padrão, deixa de ser descoberta: o census falha em charge() antes de ler o symlink. Resultado: v2 VIOLATION/FAIL vs v3 UNKNOWN com violations=[] — perda de violação v2 e multiset diferente. Não há nenhum mecanismo na 0240 que reserve orçamento para o census nem que execute o census v2 antes do refinamento.",
+      "repro": "PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:$PATH node raw/s01-budget-census-loss.mjs 6000  (fixture: entry.mjs = \"import 'pkg'; import 'prodalias'\"; node_modules/pkg/package.json = {imports:{}, exports:{'.':'./index.mjs'}}; index.mjs importa 6000 arquivos vazios; node_modules/prodalias -> ../products/x). Saída: v2 status VIOLATION [{file:entry.mjs, reason:PRODUCT_DEPENDENCY, target:products/x}], v3 status UNKNOWN, violations [], unknowns UNKNOWN_ANALYSIS_LIMIT:maxFiles. Controle N=10 (raw/out/s01-budget-census-loss-n10.json): ambos VIOLATION. Caracterização raw/s01b: o mesmo mecanismo já existe na v2 para pacotes SEM metadados; a 0240 o torna alcançável em inputs onde a v2 conservava a violação.",
+      "rawArtifact": "raw/out/s01-budget-census-loss-n6000.json",
+      "relatedArtifacts": [
+        "raw/s01-budget-census-loss.mjs",
+        "raw/out/s01-budget-census-loss-n10.json",
+        "raw/s01b-preexisting-budget-control.mjs",
+        "raw/out/s01b-preexisting-budget-control-n6000.json",
+        "raw/real-tree-v2-headroom.json"
+      ],
+      "sourceLocations": [
+        "scripts/boundary-semantic-resolution.mjs:964-1003 (resolve: imports elegível segue para seleção/aquisição)",
+        "scripts/boundary-semantic-resolution.mjs:218-230 (charge: maxFiles compartilhado falha antes de link()/classifyRaw do alias)",
+        "scripts/boundary-semantic-engine.mjs:481-491 (acquire recursivo do alvo selecionado na mesma sessão)",
+        "scripts/check-product-boundary.mjs:2110-2124 (uma única execução do engine com todos os starts do repositório)"
+      ],
+      "directionNotPrescriptive": "Garantir por construção que o census negativo v2 complete (ou seja reexecutado com a semântica de recusa v2) antes/independentemente do refinamento 0240, ou reservar/isolar o orçamento do refinamento; acrescentar par de teste v2×v3 por multiset sob orçamento rígido."
+    },
+    {
+      "id": "R1-REQ-02",
+      "severity": "P1",
+      "confidence": "high (reproduzido fisicamente com o mesmo input e o mesmo limits.timeoutMs na v2 e na v3)",
+      "criterion": "RC3/RC4 / MS05 + MS07; SPEC0240 §3.3: 'Toda violação já descoberta, inclusive pela v2, tem prioridade sobre erros/caps posteriores'; '...ou deadline ... retornar UNKNOWN explícito/zero provas, preservando todas as violações previamente descobertas'",
+      "summary": "Produto JÁ conhecido é perdido por cap posterior de tempo. Com o alias de produto importado primeiro (violação registrada no worker) e depois um pacote com imports elegível cujo corpo agora é adquirido pela 0240, o worker ultrapassa limits.timeoutMs; runSemanticBoundary no pai substitui toda a saída por empty() (violations=[], status UNKNOWN). Mesmo input e mesmo timeoutMs na v2: VIOLATION em 0,9 s. A revalidação do pai, que agora também reexecuta resolve() para cada trace, conta para o mesmo prazo e para o mesmo caminho empty().",
+      "repro": "PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:$PATH node raw/s05-known-product-lost-by-timeout.mjs 3000 5000  (entry.mjs = \"import 'prodalias'; import 'pkg'\"; pkg com imports:{} e 3000 sucessores; input.limits.timeoutMs=5000). Saída: v2 VIOLATION [{entry.mjs, PRODUCT_DEPENDENCY, products/x}] elapsed≈897 ms; v3 UNKNOWN, violations [], unknowns [['','UNKNOWN_ANALYSIS_LIMIT','timeoutMs']], elapsed≈5050 ms.",
+      "rawArtifact": "raw/out/s05-known-product-lost-by-timeout-n3000-t5000.json",
+      "relatedArtifacts": [
+        "raw/s05-known-product-lost-by-timeout.mjs"
+      ],
+      "sourceLocations": [
+        "scripts/boundary-semantic-engine.mjs:1696-1709 e 1735-1742 (timeout/erro/revalidação do worker -> empty(): violations descartadas)",
+        "scripts/boundary-semantic-resolution.mjs:1277-1292 (revalidação do pai agora re-resolve cada trace, mais tempo no mesmo orçamento)"
+      ],
+      "directionNotPrescriptive": "Preservar no pai as violações já conhecidas apesar de deadline/erro posterior (ex.: census v2 delimitado separado cuja saída sobreviva ao refinamento) ou impedir que o refinamento 0240 consuma o prazo do census; incluir o par MS05 'produto conhecido + cap de tempo' nos testes."
+    }
+  ],
+  "optionalFindings": [
+    {
+      "id": "R1-OPT-01",
+      "severity": "info",
+      "criterion": "MS05/MS07 cobertura de teste",
+      "summary": "tests/b6-0240-exact-metadata.test.js cobre o par MS05 com maxWorkspaces/maxLinks/FD/maxFileBytes, mas não compara multiset v2×v3 sob orçamento rígido compartilhado (maxFiles/maxTotalBytes) nem sob timeoutMs; foi exatamente onde R1-REQ-01/02 apareceram.",
+      "rawArtifact": "raw/out/s01-budget-census-loss-n6000.json"
+    },
+    {
+      "id": "R1-OPT-02",
+      "severity": "info",
+      "criterion": "MS11 (contexto, não medido aqui)",
+      "summary": "Na medição real v2 selada (BUILD0237) o engine usou 3481/12000 cargas e 31,3 s/120 s numa única sessão para todo o repositório, com 0 violações semânticas. A v3 passará a adquirir corpos antes recusados (p.ex. Vitest) na mesma sessão; a MS11 deveria registrar usage.resolution.files, tempo e o multiset de violações para mostrar folga. Hoje não há violação real a perder, mas a garantia do census para regressões futuras é o que R1-REQ-01/02 atingem.",
+      "rawArtifact": "raw/real-tree-v2-headroom.json"
+    },
+    {
+      "id": "R1-OPT-03",
+      "severity": "info",
+      "criterion": "RC4 trace (precisão)",
+      "summary": "metadataSelection.exports.selectedKey registra o subpath requisitado ('.') também para exports string/condicional (sugar), onde não existe chave própria; unselectedPatternKeys fica [] nesses casos. Semanticamente equivale ao '.' implícito do Node e o branch distingue os casos; sugerível um marcador explícito de sugar no trace. Não afeta a segurança: a revalidação rederiva e compara o trace inteiro.",
+      "rawArtifact": "raw/out/s07-trace-sugar.json"
+    },
+    {
+      "id": "R1-OPT-04",
+      "severity": "info",
+      "criterion": "RC2 (assimetria preexistente conservada)",
+      "summary": "A guarda do engine usa truthiness (manifest.body.imports) enquanto o helper usa presença (Object.hasOwn); imports null/''/0/false continua sem UNKNOWN no load() para arquivos alcançados por caminho relativo, como na v2. A 0240 conservou exatamente essa semântica (só relaxa mapa elegível), conforme §3.1; registro apenas para rastreabilidade.",
+      "rawArtifact": "raw/source-diff.patch.txt"
+    }
+  ],
+  "scenariosChecked": [
+    { "id": "SC01", "criterion": "RC5", "expected": "sha256 dos 9 paths do freeze + checker inalterado; delta 84d8..b766 só nos 9 paths", "observed": "todos iguais ao source-freeze; candidata limpa; git diff --name-only = 9 paths", "pass": true, "rawArtifact": "raw/env-and-hashes.json" },
+    { "id": "SC02", "criterion": "RC5", "expected": "testes antigos: só migração literal de versão e de pais de fixture", "observed": "6 arquivos: 5 literais de pasta-pai trocados para o runtime 0240 e 3 literais 'semantic-kernel-v2-resolution'->'v3'; nenhum assert removido/enfraquecido; testes legados de pattern continuam negativos (toThrow /UNKNOWN_/)", "pass": true, "rawArtifact": "raw/legacy-tests-diff.patch.txt" },
+    { "id": "SC03", "criterion": "RC5", "expected": "default/P1 (sem --semantic) byte-igual v2/v3; engine não carregado no default", "observed": "stdout/stderr/exit idênticos (FAIL P1 com 2 violações CORE_DEPENDS_ON_PRODUCT) em ambos; checker.mjs byte-igual à base e require do engine só sob semantic", "pass": true, "rawArtifact": "raw/out/s06-profile-and-default.json" },
+    { "id": "SC04", "criterion": "RC1/MS01/MS06", "expected": "imports elegível inativo, pattern inativo e ambos (ESM e CJS): v3 seleciona a mesma URL do oracle Node22; v2 vermelho", "observed": "5/5 positivos: canonicalURL == import.meta.resolve/require.resolve; v2 UNKNOWN_AMBIGUOUS_RESOLUTION/UNSUPPORTED_EXPORTS", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC05", "criterion": "RC1/MS02", "expected": "mapas imports inelegíveis (#, #/, #a/, #a/*, //, node_modules case-insensitive, .., ./, %, Unicode, espaço, barra invertida, ?, ##, sem #, controle) e valores não-objeto (array/null/string/número/bool) continuam recusados", "observed": "22/22 UNKNOWN_AMBIGUOUS_RESOLUTION", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC06", "criterion": "RC1/MS02", "expected": "pattern que o Node casaria sem chave exata: UNKNOWN_UNRESOLVED_EXPORT, sem matching/substituição", "observed": "2/2 UNKNOWN_UNRESOLVED_EXPORT enquanto o oracle Node resolve", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC07", "criterion": "RC1/MS03", "expected": "chaves de pattern malformadas/múltiplas e mistura '.'/condições (inclusive chave '') recusadas antes do exato", "observed": "15/15 chaves malformadas UNKNOWN_UNSUPPORTED_EXPORTS; mistura e '' UNKNOWN_UNSUPPORTED_EXPORTS (Node: ERR_INVALID_PACKAGE_CONFIG)", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC08", "criterion": "RC1/MS02", "expected": "valor selecionado array/null/condição não casada/numérica/pattern aninhado não salta para pattern/fallback", "observed": "5/5 UNKNOWN (UNSUPPORTED/BLOCKED/UNRESOLVED) mesmo com './*' presente", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC09", "criterion": "RC1/MS02/MS04/MS06", "expected": "target selecionado com * literal, %, tab, escape, .d.ts e arquivo ausente continuam UNKNOWN", "observed": "6/6 UNKNOWN; target ausente refutado por UNKNOWN_ACQUISITION_ENOENT embora import.meta.resolve devolva URL", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC10", "criterion": "RC1/RC2", "expected": "requisição ativa '#' recusada antes da seleção de pacote; interop ESM->CJS recusado", "observed": "UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION e UNKNOWN_MODULE_INTEROP", "pass": true, "rawArtifact": "raw/out/s02-helper-selection.json" },
+    { "id": "SC11", "criterion": "RC1/MS02", "expected": "perfil customizado (--conditions, NODE_OPTIONS) no positivo v3 continua UNKNOWN", "observed": "plain PROVEN; --conditions=custom e NODE_OPTIONS UNKNOWN_RUNTIME_PROFILE, 0 provas", "pass": true, "rawArtifact": "raw/out/s06-profile-and-default.json" },
+    { "id": "SC12", "criterion": "RC2/MS01/MS08", "expected": "engine v3 PROVEN com K5 e closure do target, perfil/kernel v3 na derivação; v2 UNKNOWN", "observed": "E1 ESM e E2 CJS PROVEN, validation.valid, closure=[packages/demo/chosen.*], resolutionProfile node22-linux-exact-metadata-v1, kernel v3; trace com metadataSelection completo", "pass": true, "rawArtifact": "raw/out/s03-engine-closure-violation.json" },
+    { "id": "SC13", "criterion": "RC2/MS04", "expected": "imports elegível + aresta '#' ativa ou em código morto impede prova", "observed": "E3/E4 UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION, 0 provas", "pass": true, "rawArtifact": "raw/out/s03-engine-closure-violation.json" },
+    { "id": "SC14", "criterion": "RC2/MS04", "expected": "imports elegível + reflexão (import(k), import.meta.resolve('#'), createRequire, module.require) impede prova", "observed": "E5–E8 UNKNOWN (DYNAMIC_IMPORT_PROMISE/CALL/PROPERTY/NATIVE_BUILTIN/BINDING), 0 provas", "pass": true, "rawArtifact": "raw/out/s03-engine-closure-violation.json" },
+    { "id": "SC15", "criterion": "RC2/MS04", "expected": "browser+imports e dist sem receipt continuam UNKNOWN", "observed": "E9 UNKNOWN_AMBIGUOUS_RESOLUTION; E10 UNKNOWN_COMPILED_PROVENANCE", "pass": true, "rawArtifact": "raw/out/s03-engine-closure-violation.json" },
+    { "id": "SC16", "criterion": "RC3/MS05", "expected": "produto selecionado por alias/direto/intermediário/workspace com ambos metadados vira VIOLATION, inclusive com cap posterior maxLinks=0/maxWorkspaces=0", "observed": "E11–E14 VIOLATION com o alvo canônico; v2 UNKNOWN nesses inputs (violações acrescentadas, nenhuma perdida)", "pass": true, "rawArtifact": "raw/out/s03-engine-closure-violation.json" },
+    { "id": "SC17", "criterion": "RC3/MS05", "expected": "multiset v2 retido nos mesmos inputs/limites padrão quando o refinamento consome orçamento rígido", "observed": "N=6000: v2 VIOLATION products/x; v3 UNKNOWN violations=[] (UNKNOWN_ANALYSIS_LIMIT:maxFiles)", "pass": false, "rawArtifact": "raw/out/s01-budget-census-loss-n6000.json" },
+    { "id": "SC18", "criterion": "RC3/RC4/MS05/MS07", "expected": "produto já conhecido prevalece sobre deadline posterior", "observed": "v2 VIOLATION; v3 UNKNOWN violations=[] por timeoutMs (pai devolve empty())", "pass": false, "rawArtifact": "raw/out/s05-known-product-lost-by-timeout-n3000-t5000.json" },
+    { "id": "SC19", "criterion": "RC3 (controle/caracterização)", "expected": "controle pequeno conserva; mecanismo preexistente identificado", "observed": "N=10: v2 e v3 VIOLATION idênticas; v2 sem metadados N=6000 também perde (mecanismo preexistente que a 0240 estende a novos inputs)", "pass": true, "rawArtifact": "raw/out/s01-budget-census-loss-n10.json" },
+    { "id": "SC20", "criterion": "RC4/MS08", "expected": "trace adulterado (keys/branch/eligible/unselectedPatternKeys/selectedKey/remoção) e perfil v2 rejeitados pelo pai e pelo helper", "observed": "7/7: revalidateSemanticInputs=false; revalidateResolutionSnapshot lança UNKNOWN_RESOLUTION_MUTATION/INVALID_SNAPSHOT; controle não adulterado = true", "pass": true, "rawArtifact": "raw/out/s04-revalidation-limits.json" },
+    { "id": "SC21", "criterion": "RC4/MS08", "expected": "prova/snapshot v2 (84d8) não satisfaz o perfil novo", "observed": "v2 PROVEN em fixture sem metadados; v3 revalidateSemanticInputs=false e snapshot UNKNOWN_INVALID_SNAPSHOT", "pass": true, "rawArtifact": "raw/out/s04-revalidation-limits.json" },
+    { "id": "SC22", "criterion": "RC4/MS07", "expected": "mutação de campo inativo (valor de imports e de pattern, mesmo tamanho) invalida prova/snapshot anteriores e muda o digest", "observed": "2/2: revalidação false / UNKNOWN_INPUT_MUTATION:packages/demo/package.json; nova prova com runtimeResolutionDigest diferente", "pass": true, "rawArtifact": "raw/out/s04-revalidation-limits.json" },
+    { "id": "SC23", "criterion": "RC4/MS07", "expected": "EACCES, limites (maxOpenDescriptors, maxFileBytes com JSON inativo grande, maxPathComponents) fail-closed e FD reais fechados", "observed": "todos UNKNOWN_*; /proc/self/fd 22 antes e 22 depois", "pass": true, "rawArtifact": "raw/out/s04-revalidation-limits.json" },
+    { "id": "SC24", "criterion": "RC4/MS07", "expected": "nenhum limite aumentado", "observed": "RESOLUTION_LIMITS v2==v3; HARD/SEMANTIC_LIMITS sem alteração no diff; só o nome do perfil mudou", "pass": true, "rawArtifact": "raw/out/s04-revalidation-limits.json" },
+    { "id": "SC25", "criterion": "RC4 (trace)", "expected": "trace distingue mapa exato de sugar", "observed": "branch distingue; selectedKey='.' também para sugar (opcional R1-OPT-03)", "pass": true, "rawArtifact": "raw/out/s07-trace-sugar.json" }
+  ],
+  "notJudged": [
+    "MS09 ledger, MS10 gates/38 hashes/consumidor, MS11 medição real e MS12 promoção: não executados nesta crítica (fora do escopo R1)",
+    "Vitest focal não reexecutado: o veredito se apoia nas sondas próprias acima"
+  ],
+  "rulesObserved": "Escrita apenas em review-r1/ (evidência) e no runtime review-r1/; nenhuma alteração de fonte/candidata; git só leitura; sem rede/npm/PG/Docker/certify/e2e; Node v22.23.2; alvos de fixture nunca importados (oracle com hook de load negando)."
+}

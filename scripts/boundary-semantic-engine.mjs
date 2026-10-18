@@ -17,16 +17,22 @@ import {
   createResolutionSession,
   revalidateResolutionSnapshot,
   RESOLUTION_LIMITS,
-  RESOLUTION_PROFILE
+  RESOLUTION_PROFILE,
+  isInactiveImportsMapEligible
 } from './boundary-semantic-resolution.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v2-resolution'
+export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v3-exact-metadata'
 
 const SELF = fileURLToPath(import.meta.url)
 const isWorker = () =>
   process.argv[1] &&
   path.resolve(process.argv[1]) === SELF &&
   process.argv[2] === '--semantic-worker'
+// SPEC0240 §3.3: a known product dependency outranks any later cap, deadline,
+// kill or refusal. The worker streams each one as soon as it is discovered and
+// the parent unites the v2 refusal census with the exact-metadata refinement.
+const VIOLATION_STREAM = 'CVG_SEMANTIC_VIOLATION_V1 '
+const REFUSAL_CENSUS_ARG = '--refusal-census'
 const RESOLVER = path.resolve(
   path.dirname(SELF),
   'boundary-semantic-resolution.mjs'
@@ -186,7 +192,9 @@ const valueKey = (v) =>
       ? 'union:' + v.values.map(valueKey).sort().join('|')
       : v.id || v.t
 
-export function analyzeSemanticBoundary(input) {
+export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
+  // Refusal census: the v2 metadata refusals, negative evidence only.
+  const census = refusalCensus === true
   let limits
   try {
     limits = limitsFor(input)
@@ -280,8 +288,17 @@ export function analyzeSemanticBoundary(input) {
         !out.violations.some(
           (x) => semanticCanonicalJson(x) === semanticCanonicalJson(item)
         )
-      )
+      ) {
         out.violations.push(item)
+        // Best effort: the violation is already in the output; a failed
+        // stream write must not change the analysis path.
+        if (isWorker())
+          try {
+            fs.writeSync(2, VIOLATION_STREAM + JSON.stringify(item) + '\n')
+          } catch {
+            // The stdout result still carries it if the worker completes.
+          }
+      }
       return true
     }
     return false
@@ -1197,7 +1214,11 @@ export function analyzeSemanticBoundary(input) {
       reachedPackages.get(key).entries.add(file)
     }
     const manifest = manifestAt(file)
-    if (manifest?.body.imports || manifest?.body.browser)
+    if (
+      (manifest?.body.imports &&
+        (census || !isInactiveImportsMapEligible(manifest.body.imports))) ||
+      manifest?.body.browser
+    )
       unknown(file, 'UNKNOWN_AMBIGUOUS_RESOLUTION')
     const mode =
       /\.c(?:js|ts)$/.test(file) ||
@@ -1269,6 +1290,7 @@ export function analyzeSemanticBoundary(input) {
     resolution = createResolutionSession({
       root,
       limits: { ...SEMANTIC_LIMITS, ...resolutionLimits },
+      refusalCensus: census,
       onProduct: (file, from) => product(file, from),
       onNegativeTarget: (file) => {
         try {
@@ -1481,6 +1503,7 @@ export function analyzeSemanticBoundary(input) {
   out.violations.sort((a, b) =>
     sort(semanticCanonicalJson(a), semanticCanonicalJson(b))
   )
+  if (census) unknown('', 'UNKNOWN_NEGATIVE_CENSUS_ONLY')
   out.status = out.violations.length
     ? 'VIOLATION'
     : out.unknowns.length
@@ -1658,17 +1681,47 @@ export function revalidateSemanticInputs(root, output, origins = []) {
   }
 }
 
+function knownViolation(x) {
+  return (
+    record(x) &&
+    Object.keys(x).sort().join(',') === 'file,reason,target' &&
+    typeof x.file === 'string' &&
+    x.reason === 'PRODUCT_DEPENDENCY' &&
+    typeof x.target === 'string' &&
+    (x.target === 'products' || x.target.startsWith('products/'))
+  )
+}
+
 // Sync caller; the child owns parse, analysis AND independent recomputation.
 // spawnSync's native timeout kills even a synchronous parser stuck in the child.
+// Two bounded children share ONE deadline (limits.timeoutMs is not raised):
+// first the negative-only census with the v2 metadata refusals, so the
+// exact-metadata refinement can never consume its budget or time; then the
+// refinement. Violations known from either child (stdout or the stderr
+// stream of a killed child) survive every later cap, error or refusal.
 export function runSemanticBoundary(input) {
   const started = performance.now()
-  let limits, output
-  try {
-    limits = limitsFor(input)
-    const profile = checkTCB()
-    const worker = spawnSync(
+  const known = new Map()
+  const remember = (items) => {
+    if (!Array.isArray(items)) return
+    for (const item of items)
+      if (knownViolation(item)) known.set(semanticCanonicalJson(item), item)
+  }
+  const streamed = (stderr) => {
+    for (const line of String(stderr || '').split('\n')) {
+      if (!line.startsWith(VIOLATION_STREAM)) continue
+      try {
+        remember([JSON.parse(line.slice(VIOLATION_STREAM.length))])
+      } catch {
+        // A truncated line from a killed child carries no claim.
+      }
+    }
+  }
+  let limits, output, censusMs
+  const spawn = (extra) =>
+    spawnSync(
       NODE,
-      ['--experimental-vm-modules', SELF, '--semantic-worker'],
+      ['--experimental-vm-modules', SELF, '--semantic-worker', ...extra],
       {
         input: JSON.stringify(input),
         encoding: 'utf8',
@@ -1688,6 +1741,20 @@ export function runSemanticBoundary(input) {
         windowsHide: true
       }
     )
+  try {
+    limits = limitsFor(input)
+    const profile = checkTCB()
+    const census = spawn([REFUSAL_CENSUS_ARG])
+    streamed(census.stderr)
+    if (!census.error && census.status === 0)
+      try {
+        remember(JSON.parse(census.stdout).violations)
+      } catch {
+        // Negative evidence only; an unreadable census grants nothing.
+      }
+    censusMs = performance.now() - started
+    const worker = spawn([])
+    streamed(worker.stderr)
     if (
       worker.error?.code === 'ETIMEDOUT' ||
       performance.now() - started > limits.timeoutMs
@@ -1703,6 +1770,7 @@ export function runSemanticBoundary(input) {
       )
     else {
       output = JSON.parse(worker.stdout)
+      remember(output.violations)
       // Worker validation is recomputation, not acceptance of an input flag.
       // The parent separately revalidates each file, TCB and proof identifiers.
       if (
@@ -1735,7 +1803,29 @@ export function runSemanticBoundary(input) {
       error.message || 'UNKNOWN_WORKER_ERROR'
     )
   }
-  return { ...output, telemetry: { elapsedMs: performance.now() - started } }
+  for (const item of output.violations || [])
+    known.delete(semanticCanonicalJson(item))
+  if (known.size) {
+    // UNKNOWN never replaces a known violation; it also blocks every proof.
+    output.violations = [...output.violations, ...known.values()].sort((a, b) =>
+      sort(semanticCanonicalJson(a), semanticCanonicalJson(b))
+    )
+    output.status = 'VIOLATION'
+    output.proofs = []
+    output.installed = (output.installed || []).map((x) => ({
+      ...x,
+      status: 'UNKNOWN',
+      proofIds: [],
+      reason: 'UNKNOWN_INSTALLED_CLOSURE'
+    }))
+  }
+  return {
+    ...output,
+    telemetry: {
+      elapsedMs: performance.now() - started,
+      negativeCensusElapsedMs: censusMs ?? null
+    }
+  }
 }
 
 if (
@@ -1744,10 +1834,16 @@ if (
   process.argv[2] === '--semantic-worker'
 ) {
   try {
+    const extra = process.argv.slice(3)
+    const census = extra.length === 1 && extra[0] === REFUSAL_CENSUS_ARG
+    if (extra.length && !census) throw Error('UNKNOWN_WORKER_ARGUMENTS')
     const input = JSON.parse(fs.readFileSync(0, 'utf8'))
-    const output = analyzeSemanticBoundary(input)
-    output.validation = validateSemanticBoundary(input, output)
-    if (!output.validation.valid) {
+    const output = analyzeSemanticBoundary(input, { refusalCensus: census })
+    output.validation = census
+      ? { valid: false }
+      : validateSemanticBoundary(input, output)
+    if (census) output.proofs = []
+    else if (!output.validation.valid) {
       output.status = output.violations.length ? 'VIOLATION' : 'UNKNOWN'
       output.proofs = []
       output.installed.forEach((x) => {

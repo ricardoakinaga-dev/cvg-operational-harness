@@ -88,7 +88,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 | Cartão  | Título                                                    | Tam. | Prio. | Estado        | Depende de       |
 | ------- | --------------------------------------------------------- | ---- | ----- | ------------- | ---------------- |
-| PAR-G01 | Consolidar o trabalho PARE100 em andamento                | P    | P0    | `TODO`        | —                |
+| PAR-G01 | Consolidar o trabalho PARE100 em andamento                | P    | P0    | `DONE`        | —                |
 | PAR-Q01 | Congelar o catálogo de capacidades PAR-CAP v1             | M    | P0    | `IN_PROGRESS` | PAR-G01          |
 | PAR-Q02 | Comparador diferencial keyless operando                   | M    | P0    | `IN_PROGRESS` | PAR-Q01, PAR-Q03 |
 | PAR-Q03 | Kit neutro de test-support                                | M    | P1    | `DONE`        | —                |
@@ -97,7 +97,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-G01 — Consolidar o trabalho PARE100 em andamento
 
-- Fase F0 · prioridade P0 · tamanho P · trilha T1 · relevância hospitalar alta · estado `TODO`.
+- Fase F0 · prioridade P0 · tamanho P · trilha T1 · relevância hospitalar alta · estado `DONE` (18/10/2026, CONT-20261018-D9EF).
+- Fechamento: os três critérios de aceite estão cumpridos. O trabalho da worktree foi commitado pelo usuário em `a72422be` (16/10), com cópia em `refs/backup/pare100-spec0217-r5-snapshot`; nada aceito depende de `/tmp`, que foi apagado no reinício de 18/10. Os cinco gates têm decisão registrada em [spec-gates.json](../04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json) e a correspondência P100→PAR está publicada abaixo. A migration 0029 ainda não está no checkout principal: ela segue para a raiz pela fundação do Claude100 (C100-FND, candidatas sobre `a72422be`), na ordem 0029 → 0030 → 0031.
 - Origem: Estado do programa em 16/10/2026. Absorve: P100-001..004, 010, 012, 025; SPECs 0217–0226.
 - Hoje: 182 caminhos alterados sem commit na worktree `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` (o `/tmp` é limpo no boot); cinco gates T3 pendentes (0220, 0221, 0222, 0225, 0226); 2 de 36 cartões P100 concluídos localmente.
 - Entrega: Commit em branch própria do trabalho da worktree, pelo dono (Codex); decisão do usuário sobre os cinco gates num único pacote; cartões P100 em andamento remapeados para os IDs PAR desta carteira.
