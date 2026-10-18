@@ -10,7 +10,8 @@ import {
   fingerprintResolution,
   fingerprintToolchain,
   collectPackageInventory,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  pinnedToolchainLocation
 } from './boundary-installed-identity.mjs'
 import {
   referenceEnvironment,
@@ -18,9 +19,9 @@ import {
   unavailable
 } from './boundary-reference-process.mjs'
 
-const DEFAULT_NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
-const DEFAULT_NPM =
-  '/home/ricardo/.nvm/versions/node/v22.23.2/lib/node_modules/npm'
+// Default location only (CVG_PINNED_NODE/CVG_PINNED_NPM or the running Node);
+// fingerprintToolchain still enforces the pinned Node and npm identity.
+const { node: DEFAULT_NODE, npm: DEFAULT_NPM } = pinnedToolchainLocation()
 const AUXILIARY_PINS = Object.freeze({
   '/usr/bin/git':
     '2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668',

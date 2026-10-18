@@ -20,7 +20,12 @@ import {
 import { TOOL_NAME, validateToolCase } from './tool-case.mjs'
 import { capturePortRequest } from './capture-port-data.mjs'
 
-const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes'
+// External local reference: CVG_DIFFERENTIAL_REFERENCE_ROOT, by default the
+// original checkout. Its location only; the pinned commit, version and alias
+// guards below still decide, and a missing reference keeps failing closed.
+const REFERENCE_ROOT =
+  process.env.CVG_DIFFERENTIAL_REFERENCE_ROOT ||
+  '/home/ricardo/deepseek-harness-session-fixes'
 const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex')
 const fail = (message) => {

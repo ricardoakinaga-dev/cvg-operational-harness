@@ -9,14 +9,15 @@ import {
   fingerprintResolution,
   fingerprintToolchain,
   collectPackageInventory,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  pinnedToolchainLocation
 } from '../scripts/boundary-installed-identity.mjs'
 import {
   buildCompiledReference,
   loadCompiledBuildReference
 } from '../scripts/boundary-semantic-compiled.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const NODE = pinnedToolchainLocation().node
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
 let parent, evaluated, reference, installedReference, built, commit
 const write = (root, file, bytes) => {

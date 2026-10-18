@@ -13,8 +13,20 @@ export const INSTALLED_IDENTITY_LIMITS = Object.freeze({
   npmTimeoutMs: 180_000,
   comparisonTimeoutMs: 120_000
 })
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
-const NPM = '/home/ricardo/.nvm/versions/node/v22.23.2/lib/node_modules/npm'
+// Only the LOCATION of the pinned Node22/npm toolchain is configurable:
+// CVG_PINNED_NODE / CVG_PINNED_NPM name it explicitly; by default it is the
+// running Node (physical path of process.execPath) and the npm bundled beside
+// it (<prefix>/lib/node_modules/npm). Identity is never taken from the
+// location: NODE_SHA, the npm version and NPM_SHA below still decide, and a
+// relative, aliased or divergent toolchain keeps failing closed.
+export function pinnedToolchainLocation(env = process.env) {
+  const node = env.CVG_PINNED_NODE || fs.realpathSync(process.execPath)
+  const npm =
+    env.CVG_PINNED_NPM ||
+    path.join(path.dirname(path.dirname(node)), 'lib/node_modules/npm')
+  return Object.freeze({ node, npm })
+}
+const { node: NODE, npm: NPM } = pinnedToolchainLocation()
 const NODE_SHA =
   '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
 const NPM_SHA =

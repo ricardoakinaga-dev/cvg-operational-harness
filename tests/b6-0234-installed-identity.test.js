@@ -12,8 +12,9 @@ import {
   createInstalledIdentityComparator,
   INSTALLED_IDENTITY_LIMITS
 } from '../scripts/boundary-installed-identity.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
-const TMP = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-comparer'
+const TMP = ownedRunParent('b6-0234-comparer')
 const roots = []
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 const KEY = 'node_modules/vendor'
@@ -22,7 +23,6 @@ beforeAll(() => {
   trustedToolchain = fingerprintToolchain()
 })
 function temp() {
-  fs.mkdirSync(TMP, { recursive: true })
   const root = fs.mkdtempSync(path.join(TMP, 'case-'))
   roots.push(root)
   return root

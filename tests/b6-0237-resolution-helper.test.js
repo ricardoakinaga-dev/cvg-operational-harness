@@ -10,8 +10,9 @@ import {
   RESOLUTION_LIMITS,
   RESOLUTION_PROFILE
 } from '../scripts/boundary-semantic-resolution.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
-const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-helper'
+const BASE = ownedRunParent('b6-0237-helper')
 const parents = [],
   sessions = []
 const hash = (b) => createHash('sha256').update(b).digest('hex')
@@ -38,7 +39,6 @@ function fixture({
   exports = './entry.js',
   main
 } = {}) {
-  fs.mkdirSync(BASE, { recursive: true })
   const parent = fs.mkdtempSync(path.join(BASE, 'fixture-'))
   parents.push(parent)
   const root = path.join(parent, 'raíz com espaço')

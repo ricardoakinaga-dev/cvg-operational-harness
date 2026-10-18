@@ -8,15 +8,35 @@ import {
   canonicalJson,
   fingerprintResolution,
   fingerprintToolchain,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  pinnedToolchainLocation
 } from '../scripts/boundary-installed-identity.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const NODE = pinnedToolchainLocation().node
 const ENGINE = path.resolve('scripts/boundary-semantic-engine.mjs')
 const CHECKER = path.resolve('scripts/check-product-boundary.mjs')
-const BASELINE =
-  '/home/ricardo/cvg-candidates/hiso005-resolver-fix-20261018/scripts/check-product-boundary.mjs'
-const PARENT = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-lead'
+// Frozen D8 checker (commit d8e3f8f2d346d4f8d3ddd162384ebbb79a322137, formerly
+// read from the hiso005-resolver-fix candidate) vendored byte-for-byte with
+// the five sibling modules its non-semantic path imports. The comparison is
+// refused unless the directory holds exactly these bytes.
+const D8_DIR = path.resolve('tests/fixtures/b6-0237-d8-checker')
+const D8_SHA256 = {
+  'boundary-code-execution.mjs':
+    '4c750071ac1347ffa68e6c62e3082e5507cc94571e83089eb7bd21eb7435540a',
+  'boundary-installed-identity.mjs':
+    '3d282e4f9a54ecd5668fdfb4d9d0e80c9f699b65b4495bfeaf368233b040d5cf',
+  'boundary-lexical.mjs':
+    '6aed88995d5509aa7b2bd8814f66363f42e287bc5081d75b4c27dbf9ac9e71e9',
+  'boundary-manifests.mjs':
+    '40cd1375d45e3059e797e0fc41795b71a07dbc529e257ef77572958dc40880e5',
+  'check-product-boundary.mjs':
+    '4225e532828a59f81c08217193514acc66e938fabd0dad45d32dacc48481b44e',
+  'tsconfig-path-grammar.mjs':
+    '62f5791962360d1836c281b68758094abdd970412d7a5f2ad49e538352201f8f'
+}
+const BASELINE = path.join(D8_DIR, 'check-product-boundary.mjs')
+const PARENT = ownedRunParent('b6-0237-lead')
 const hash = (x) => createHash('sha256').update(x).digest('hex')
 const env = {
   PATH: path.dirname(NODE) + ':/usr/bin:/bin',
@@ -32,7 +52,6 @@ const write = (root, file, body) => {
   return target
 }
 function fixture(files = {}, start = 'entry.mjs') {
-  fs.mkdirSync(PARENT, { recursive: true })
   const root = fs.mkdtempSync(path.join(PARENT, 'physical unicode-ç '))
   for (const [file, body] of Object.entries({
     'package.json': JSON.stringify({
@@ -694,6 +713,10 @@ function cliFixture() {
 }
 describe('BUILD0237 actual CLI: compatibility, origins and strict determinism', () => {
   it('default and P1 match frozen D8 on the same physical inputs', () => {
+    const vendored = {}
+    for (const name of fs.readdirSync(D8_DIR).sort())
+      vendored[name] = hash(fs.readFileSync(path.join(D8_DIR, name)))
+    expect(vendored).toEqual(D8_SHA256)
     const f = cliFixture()
     for (const args of [[], f.flags]) {
       const old = f.run(args, BASELINE)
