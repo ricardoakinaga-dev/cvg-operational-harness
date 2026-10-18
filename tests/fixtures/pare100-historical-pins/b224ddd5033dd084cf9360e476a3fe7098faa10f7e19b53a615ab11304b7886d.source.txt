@@ -1,0 +1,136 @@
+import { createCorrelationId } from '@cvg/shared';
+import { canonicalizeCapabilityInput, createCapabilityInputHash } from "./approval-authority.js";
+import { cloneBoundedValue, normalizePluginHandlerResult, parseToolInput } from "./tool-invocation-boundary.js";
+const attestations = new WeakMap();
+/** Internal trusted-code entry point; never exported by platform/index. */
+export function attestReviewedPlugin(plugin, descriptor) {
+    const handler = plugin.handlers[descriptor.id];
+    const input = plugin.inputValidators[descriptor.id];
+    const output = plugin.outputValidators[descriptor.id];
+    attestations.set(plugin, {
+        manifest: canonicalizeCapabilityInput(plugin.manifest),
+        handler,
+        input,
+        output,
+        inputParse: input.safeParse,
+        outputParse: output.safeParse,
+        descriptor: Object.freeze({ ...descriptor })
+    });
+}
+function attestation(plugin) {
+    const a = attestations.get(plugin);
+    if (!a)
+        return undefined;
+    try {
+        return a.manifest === canonicalizeCapabilityInput(plugin.manifest) &&
+            plugin.handlers[a.descriptor.id] === a.handler &&
+            plugin.inputValidators?.[a.descriptor.id] === a.input &&
+            plugin.outputValidators?.[a.descriptor.id] === a.output &&
+            Object.getOwnPropertyDescriptor(a.input, 'safeParse')?.value ===
+                a.inputParse &&
+            Object.getOwnPropertyDescriptor(a.output, 'safeParse')?.value ===
+                a.outputParse
+            ? a
+            : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+export function propagatePluginAttestation(source, clone) {
+    const a = attestation(source);
+    if (a) {
+        attestations.set(clone, a);
+        if (!attestation(clone))
+            attestations.delete(clone);
+    }
+    return clone;
+}
+const gateways = new WeakMap();
+export function registerGatewayCore(gateway, core) {
+    gateways.set(gateway, core);
+}
+export function gatewayCore(gateway) {
+    return gateway && gateways.get(gateway);
+}
+export function reviewedDescriptor(resolved) {
+    const a = attestation(resolved.plugin);
+    return a &&
+        a.handler === resolved.handler &&
+        a.input === resolved.inputValidator &&
+        a.output === resolved.outputValidator
+        ? a.descriptor
+        : undefined;
+}
+export function prepareCapabilityCommand(execution, resolved, freeze = false) {
+    const parsed = parseToolInput(resolved.inputValidator, execution.input);
+    if (!parsed.success)
+        return null;
+    const safe = {
+        ...execution,
+        input: freeze ? freezeValue(parsed.data) : parsed.data
+    };
+    return {
+        execution: safe,
+        resolved,
+        canonical: canonicalizeCapabilityInput(parsed.data),
+        inputHash: createCapabilityInputHash(safe),
+        correlationId: createCorrelationId()
+    };
+}
+export function matchesPreparedInput(command, value) {
+    try {
+        return (canonicalizeCapabilityInput(cloneBoundedValue(value)) ===
+            command.canonical);
+    }
+    catch {
+        return false;
+    }
+}
+export function matchesPreparedOutput(command, value) {
+    try {
+        return (command.output?.status === 'succeeded' &&
+            (command.output.data === undefined
+                ? value === undefined
+                : canonicalizeCapabilityInput(cloneBoundedValue(value)) ===
+                    canonicalizeCapabilityInput(command.output.data)));
+    }
+    catch {
+        return false;
+    }
+}
+/** The admission callback and captured handler call share one synchronous turn. */
+export async function executeAuthorizedPreparedCommand(command, admit, requireReviewed = false) {
+    const { execution, resolved } = command;
+    if (!admit())
+        return { status: 'blocked', reason: 'terminal_admission_closed' };
+    try {
+        const raw = resolved.handler(execution.input, {
+            tenantId: execution.tenantId,
+            agentId: execution.agentId,
+            versionId: execution.versionId,
+            toolName: execution.toolName,
+            dryRun: execution.dryRun
+        });
+        const rawResult = await raw;
+        const result = requireReviewed && !reviewedDescriptor(resolved)
+            ? null
+            : normalizePluginHandlerResult(rawResult, resolved.outputValidator);
+        command.output = result ?? {
+            status: 'failed',
+            reason: 'tool_result_invalid'
+        };
+    }
+    catch {
+        command.output = { status: 'failed', reason: 'tool_execution_failed' };
+    }
+    return command.output;
+}
+function freezeValue(value) {
+    if (value && typeof value === 'object') {
+        Object.values(value).forEach(freezeValue);
+        Object.freeze(value);
+    }
+    return value;
+}
+//# sourceMappingURL=plugin-execution-core.js.map
