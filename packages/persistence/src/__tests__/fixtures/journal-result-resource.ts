@@ -137,6 +137,34 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
         `GRANT SELECT,INSERT,UPDATE ON ${journalSchema}.operational_executions,${journalSchema}.operational_execution_steps,${journalSchema}.operational_execution_checkpoints TO c100_j225_service`
       )
     }
+    if (binding.profile === 'bound-journal') {
+      const tables = [
+        'conversations',
+        'messages',
+        'sessions',
+        'idempotency',
+        'outbox_events',
+        'outbox_attempts',
+        'platform_agents',
+        'platform_agent_versions',
+        'operational_executions',
+        'operational_execution_outbox',
+        'operational_execution_events',
+        'controlled_published_bindings',
+        'controlled_published_evidence',
+        'operational_execution_steps',
+        'operational_execution_checkpoints',
+        'operational_effect_journal',
+        'effect_journal',
+        'kernel_pause_switches'
+      ] as const
+      await admin.query(
+        `GRANT SELECT,INSERT,UPDATE ON ${tables.map((name) => journalSchema + '.' + name).join(',')} TO c100_j225_service`
+      )
+      await admin.query(
+        `GRANT USAGE ON SEQUENCE ${journalSchema}.outbox_attempts_id_seq,${journalSchema}.operational_execution_events_sequence_seq TO c100_j225_service`
+      )
+    }
     // Old credentials resolve the intended table and fail42501 before binding opens.
     await oldReaderDenied()
     const acl = (

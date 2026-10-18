@@ -34,7 +34,7 @@ export const journalRoot = realpathSync(
 
 export interface NativeJournalBinding {
   task: string
-  profile: 'journal' | 'public-restart'
+  profile: 'journal' | 'public-restart' | 'bound-journal'
   runId: string
   containerId: string
   candidateRoot: string
@@ -129,7 +129,11 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     join(journalTmp, 'native-binding.json')
   ) as NativeJournalBinding
   assert.equal(binding.task, journalTask)
-  assert(binding.profile === 'journal' || binding.profile === 'public-restart')
+  assert(
+    binding.profile === 'journal' ||
+      binding.profile === 'public-restart' ||
+      binding.profile === 'bound-journal'
+  )
   assert(/^native-[0-9]{13}$/.test(binding.runId))
   assert(/^[a-f0-9]{64}$/.test(binding.containerId))
   assert.equal(binding.candidateRoot, journalRoot)
@@ -186,6 +190,25 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     'packages/harness/src/complete-checkpoint.ts',
     'packages/harness/dist/complete-checkpoint.js'
   ]
+  if (binding.profile === 'bound-journal')
+    expected.push(
+      'packages/persistence/src/__tests__/complete-effect-result-bound.integration.ts',
+      'packages/persistence/src/controlled-published-fencing.ts',
+      'packages/persistence/dist/controlled-published-fencing.js',
+      'packages/persistence/src/controlled-published-kernel-store.ts',
+      'packages/persistence/dist/controlled-published-kernel-store.js',
+      'packages/persistence/migrations/0029_controlled_published_kernel.sql',
+      'packages/platform/src/controlled-kernel-continuation.ts',
+      'packages/platform/dist/controlled-kernel-continuation.js',
+      'packages/platform/src/controlled-kernel-adapters.ts',
+      'packages/platform/dist/controlled-kernel-adapters.js',
+      'packages/platform/src/controlled-plugins.ts',
+      'packages/platform/dist/controlled-plugins.js',
+      'packages/persistence/src/tenant-scoped-postgres.ts',
+      'packages/persistence/dist/tenant-scoped-postgres.js',
+      'packages/persistence/src/postgres-outbox.ts',
+      'packages/persistence/dist/postgres-outbox.js'
+    )
   assert.deepEqual(binding.inputs.map((x) => x.path).sort(), expected.sort())
   for (const input of binding.inputs) {
     assert(/^[a-f0-9]{64}$/.test(input.sha256))
