@@ -63,6 +63,19 @@ jobs:
           node --version
           npm --version
 
+      # PDSH-011/013: the sandbox tests run real commands under bubblewrap in
+      # an unprivileged user namespace. The hosted runner ships neither, so
+      # those tests skipped and the skip-governance gate failed on them. The
+      # AppArmor relaxation applies only to this ephemeral runner VM.
+      - name: Enable sandbox host capabilities
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --ro-bind / / true
+
       - name: Initialize candidate/run bar
         id: gate_runtime
         run: node scripts/ci-bar.mjs init
