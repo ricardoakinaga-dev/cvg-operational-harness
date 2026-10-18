@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { before, after, describe, it } from 'node:test'
 import { spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Client, Pool, QueryResultRow } from 'pg'
@@ -38,6 +39,287 @@ const oldReaderDenied = async () => {
   assert(resource)
   await resource.oldReaderDenied()
 }
+
+// These finite fixtures enter through the actual service principal and intact SQL
+// guards. Logical corruption is stored only where the physical envelope permits
+// it; the adapter must still reject it without changing an immutable outcome.
+const corruptionEnvelope = (value: string | Buffer) => {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, 'utf8')
+  return {
+    encoding: 'base64',
+    decodedBytes: bytes.length,
+    decodedSha256: createHash('sha256').update(bytes).digest('hex'),
+    data: bytes.toString('base64')
+  }
+}
+const logicalCorruptions = [
+  [
+    'hash-mismatch',
+    { ...corruptionEnvelope('0'), decodedSha256: '0'.repeat(64) }
+  ],
+  ['declared-length-mismatch', { ...corruptionEnvelope('0'), decodedBytes: 2 }],
+  [
+    'noncanonical-base64-low-bits',
+    { ...corruptionEnvelope('0'), data: 'MB==' }
+  ],
+  ['invalid-utf8', corruptionEnvelope(Buffer.from([0xc3, 0x28]))],
+  ['overlong-utf8', corruptionEnvelope(Buffer.from([0xc0, 0x80]))],
+  ['surrogate-utf8', corruptionEnvelope(Buffer.from([0xed, 0xa0, 0x80]))],
+  ['truncated-utf8', corruptionEnvelope(Buffer.from([0xf0, 0x9f, 0x98]))],
+  [
+    'bom',
+    corruptionEnvelope(
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('null')])
+    )
+  ],
+  ['duplicate-json-key', corruptionEnvelope('{"a":1,"a":2}')],
+  ['escaped-duplicate-json-key', corruptionEnvelope('{"a":1,"\\u0061":2}')],
+  ['trailing-json', corruptionEnvelope('{"a":1}x')],
+  ['leading-whitespace', corruptionEnvelope(' null')],
+  ['trailing-whitespace', corruptionEnvelope('null ')],
+  ['noncanonical-key-order', corruptionEnvelope('{"b":1,"a":2}')],
+  ['noncanonical-escape', corruptionEnvelope('"\\u0061"')],
+  ['negative-zero', corruptionEnvelope('-0')],
+  ['noncanonical-number', corruptionEnvelope('1.0')],
+  ['nonfinite-number', corruptionEnvelope('1e309')],
+  ['lone-surrogate', corruptionEnvelope('"\\ud800"')],
+  ['raw-nul', corruptionEnvelope('"\0"')],
+  ['raw-newline', corruptionEnvelope('"\n"')],
+  ['depth65', corruptionEnvelope('['.repeat(64) + '0' + ']'.repeat(64))],
+  ['invalid-literal', corruptionEnvelope('undefined')],
+  ['truncated-json', corruptionEnvelope('"a')]
+] as const
+const intactEnvelope = corruptionEnvelope('null')
+const physicalCorruptions = [
+  { id: 'unknown-version', version: 2, payload: intactEnvelope, code: '42501' },
+  { id: 'extra-key', payload: { ...intactEnvelope, extra: 1 } },
+  {
+    id: 'missing-key',
+    payload: { encoding: 'base64', decodedBytes: 4, data: 'bnVsbA==' }
+  },
+  { id: 'unknown-encoding', payload: { ...intactEnvelope, encoding: 'hex' } },
+  {
+    id: 'uppercase-hash',
+    payload: {
+      ...intactEnvelope,
+      decodedSha256: intactEnvelope.decodedSha256.toUpperCase()
+    }
+  },
+  { id: 'data-not-string', payload: { ...intactEnvelope, data: 1 } },
+  { id: 'payload-sql-null', payload: null },
+  { id: 'payload-array', payload: [] },
+  { id: 'mixed-legacy-result', payload: intactEnvelope, legacy: 'null' },
+  { id: 'payload-before-confirm', payload: intactEnvelope, state: 'RESERVED' },
+  { id: 'confirmed-error', payload: intactEnvelope, error: 'synthetic' },
+  { id: 'declared-zero', payload: { ...intactEnvelope, decodedBytes: 0 } },
+  {
+    id: 'declared-limit-plus-one',
+    payload: { ...intactEnvelope, decodedBytes: 1048577 }
+  },
+  {
+    id: 'declared-fraction',
+    payload: { ...intactEnvelope, decodedBytes: 1.5 }
+  },
+  { id: 'declared-string', payload: { ...intactEnvelope, decodedBytes: '4' } },
+  {
+    id: 'illegal-base64-character',
+    payload: { ...intactEnvelope, data: '!nVsbA==' }
+  },
+  {
+    id: 'misplaced-base64-padding',
+    payload: { ...intactEnvelope, data: 'bn=sbA==' }
+  },
+  {
+    id: 'data-physical-limit-plus-one',
+    payload: { ...intactEnvelope, data: 'A'.repeat(1398105) }
+  },
+  {
+    id: 'envelope-over-physical-limit',
+    payload: { ...intactEnvelope, extra: 'A'.repeat(1398617) }
+  }
+] as const
+
+describe(
+  'SPEC0225 native corruption boundaries — unbound ports only',
+  { concurrency: false },
+  () => {
+    const controlKey = () => binding.runId + ':corruption-control'
+    const controlValue = { nul: '\0', n: null }
+    const checkedControl = async () => {
+      const row = await new Journal(pool!, {
+        resultStorage: { version: 1 }
+      }).get(journalTenant, controlKey())
+      assert(row)
+      assert.deepEqual(row.result, controlValue)
+      assert.deepEqual(
+        Object.getOwnPropertyDescriptor(
+          row,
+          Symbol.for('cvg.journal.validated-result.v1')
+        ),
+        {
+          value: 1,
+          writable: false,
+          enumerable: false,
+          configurable: false
+        }
+      )
+    }
+    const sql = async (text: string, values: unknown[]) => {
+      const { withTenantContext } = await import('@cvg/persistence')
+      const { TenantIdSchema } = await import('@cvg/platform')
+      return withTenantContext(
+        pool!,
+        TenantIdSchema.parse(journalTenant),
+        (client) => client.query(text, values)
+      )
+    }
+    const snapshot = async (op: string) =>
+      (
+        await sql(
+          'SELECT to_jsonb(j) AS row FROM operational_effect_journal j WHERE tenant_id=$1 AND operation_key=$2',
+          [journalTenant, op]
+        )
+      ).rows
+    const save = (id: string, value: unknown) => {
+      const dir = join(binding.evidenceRoot, binding.runId + '-corruption')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, id + '.json'),
+        JSON.stringify(value, null, 2) + '\n'
+      )
+    }
+    before(async () => {
+      const input = {
+        tenantId: journalTenant,
+        operationKey: controlKey(),
+        proposalHash: 'p',
+        attemptId: 'a'
+      }
+      const journal = new Journal(pool!, { resultStorage: { version: 1 } })
+      await journal.reserve(input)
+      await journal.markStarted(input)
+      await journal.confirm({ ...input, result: controlValue })
+      await checkedControl()
+    })
+    for (const [id, payload] of logicalCorruptions)
+      it(
+        id + ': reject logical corruption with physical guards intact',
+        async () => {
+          verifyNativeJournalBinding()
+          await checkedControl()
+          const input = {
+            tenantId: journalTenant,
+            operationKey: binding.runId + ':corrupt:' + id,
+            proposalHash: 'p',
+            attemptId: 'a'
+          }
+          await sql(
+            "INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result_storage_version,result_storage_payload) VALUES($1,$2,'p','CONFIRMED','a',1,$3::jsonb)",
+            [journalTenant, input.operationKey, JSON.stringify(payload)]
+          )
+          const before = await snapshot(input.operationKey)
+          assert.equal(before.length, 1)
+          const journal = new Journal(pool!, { resultStorage: { version: 1 } })
+          const errors: { method: string; code: string; message: string }[] = []
+          for (const [method, call] of [
+            ['get', () => journal.get(journalTenant, input.operationKey)],
+            ['reserve', () => journal.reserve(input)],
+            ['confirm', () => journal.confirm({ ...input, result: null })],
+            ['fail', () => journal.fail({ ...input, error: 'synthetic' })],
+            [
+              'markUncertain',
+              () => journal.markUncertain({ ...input, reason: 'synthetic' })
+            ]
+          ] as const)
+            await assert.rejects(call, (error: unknown) => {
+              const e = error as { code?: string; message?: string }
+              assert.equal(e.code, 'invalid_action')
+              assert.equal(e.message, 'JOURNAL_RESULT_CORRUPT')
+              errors.push({ method, code: e.code!, message: e.message! })
+              return true
+            })
+          await assert.rejects(
+            sql(
+              "UPDATE operational_effect_journal SET state='FAILED',result_storage_payload=NULL,error='synthetic' WHERE tenant_id=$1 AND operation_key=$2",
+              [journalTenant, input.operationKey]
+            ),
+            (error: unknown) => {
+              assert.equal((error as { code?: string }).code, '23514')
+              assert.equal((error as Error).message, 'JOURNAL_RESULT_CONFLICT')
+              return true
+            }
+          )
+          const after = await snapshot(input.operationKey)
+          assert.deepEqual(after, before)
+          await checkedControl()
+          save(id, {
+            scope: 'NATIVE_LOGICAL_CORRUPTION_UNBOUND_ONLY',
+            id,
+            errors,
+            before,
+            after,
+            controlBeforeAndAfter: true,
+            sqlGuardStillRejectsDemotion: true,
+            modelCalls: 0,
+            toolBodies: 0,
+            resourceId: binding.containerId
+          })
+        }
+      )
+    for (const entry of physicalCorruptions)
+      it(
+        entry.id + ': unchanged SQL boundary refuses physical invalidity',
+        async () => {
+          verifyNativeJournalBinding()
+          await checkedControl()
+          const test = entry as {
+            id: string
+            version?: number
+            payload: unknown
+            legacy?: string
+            state?: string
+            error?: string
+            code?: string
+          }
+          const op = binding.runId + ':physical:' + test.id
+          let actualCode: string | undefined
+          await assert.rejects(
+            sql(
+              "INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result_storage_version,result_storage_payload,result,error) VALUES($1,$2,'p',$3,'a',$4,$5::jsonb,$6::jsonb,$7)",
+              [
+                journalTenant,
+                op,
+                test.state ?? 'CONFIRMED',
+                test.version ?? 1,
+                test.payload === null ? null : JSON.stringify(test.payload),
+                test.legacy ?? null,
+                test.error ?? null
+              ]
+            ),
+            (error: unknown) => {
+              actualCode = (error as { code?: string }).code
+              assert.equal(actualCode, test.code ?? '23514')
+              return true
+            }
+          )
+          assert.deepEqual(await snapshot(op), [])
+          await checkedControl()
+          save(test.id, {
+            scope: 'NATIVE_SQL_REJECTION_UNBOUND_ONLY',
+            id: test.id,
+            actualCode,
+            rowAbsent: true,
+            controlBeforeAndAfter: true,
+            constraintsAndTriggersUnmodified: true,
+            isolatedEnvelopeCapProof: false,
+            modelCalls: 0,
+            toolBodies: 0,
+            resourceId: binding.containerId
+          })
+        }
+      )
+  }
+)
 
 describe(
   'SPEC0225 native journal profile — no public-loop or global credit',
