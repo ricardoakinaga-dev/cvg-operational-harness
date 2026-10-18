@@ -114,8 +114,9 @@ function phase(id: JournalCaptureId, role: 'writer' | 'reader') {
 
 async function snapshot(executionId: string) {
   assert(resource)
-  const { withTenantContext, PostgresExecutionStepStore } =
-    await import('../../dist/index.js')
+  const { withTenantContext, PostgresExecutionStepStore } = (await import(
+    '../../dist/index.js' as string
+  )) as typeof import('../index.ts')
   const { TenantIdSchema } = await import('@cvg/platform')
   const journal = await withTenantContext(
     resource.pool,
@@ -146,8 +147,9 @@ describe(
   { concurrency: false },
   () => {
     it('accepts exactly 8388608 bytes of the entire plain ToolResult', async () => {
-      const { prepareCompleteToolResult } =
-        await import('../../../harness/dist/complete-tool-results.js')
+      const { prepareCompleteToolResult } = (await import(
+        '../../../harness/dist/complete-tool-results.js' as string
+      )) as typeof import('../../../harness/src/complete-tool-results.ts')
       const raw = { output: 'a'.repeat(8388574), status: 'SUCCEEDED' as const }
       assert.equal(Buffer.byteLength(JSON.stringify(raw)), 8388608)
       const prepared = prepareCompleteToolResult(raw)
@@ -168,8 +170,9 @@ describe(
       )
     })
     it('rejects exactly 8388609 bytes before a journal confirmation is involved', async () => {
-      const { prepareCompleteToolResult } =
-        await import('../../../harness/dist/complete-tool-results.js')
+      const { prepareCompleteToolResult } = (await import(
+        '../../../harness/dist/complete-tool-results.js' as string
+      )) as typeof import('../../../harness/src/complete-tool-results.ts')
       const raw = { output: 'a'.repeat(8388575), status: 'SUCCEEDED' as const }
       assert.equal(Buffer.byteLength(JSON.stringify(raw)), 8388609)
       assert.throws(() => prepareCompleteToolResult(raw), {
@@ -210,7 +213,9 @@ describe(
             id === 'capture-plus-one' || id === 'capture-started'
           const uncertainFault = id === 'started' || id === 'capture-started'
           mkdirSync(identity.dir, { recursive: true, mode: 0o700 })
-          const { withTenantContext } = await import('../../dist/index.js')
+          const { withTenantContext } = (await import(
+            '../../dist/index.js' as string
+          )) as typeof import('../index.ts')
           const { TenantIdSchema } = await import('@cvg/platform')
           await withTenantContext(
             resource.pool,

@@ -346,8 +346,9 @@ export async function runJournalPhase(phase: 'write' | 'read' | 'reserve') {
   const binding = verifyNativeJournalBinding()
   assert.equal(binding.profile, 'journal')
   const pg = (await import('pg')).default
-  const { PostgresOperationalEffectJournal } =
-    await import('../../../dist/index.js')
+  const { PostgresOperationalEffectJournal } = (await import(
+    '../../../dist/index.js' as string
+  )) as typeof import('../../index.ts')
   const { canonicalizeCompleteJson } = await import('@cvg/harness-contracts')
   const pool = new pg.Pool({
     ...journalCredentials('service'),
@@ -569,13 +570,16 @@ export async function runPublicJournalPhase(
   )
   const pg = (await import('pg')).default
   const { PostgresOperationalEffectJournal, PostgresExecutionStepStore } =
-    await import('../../../dist/index.js')
+    (await import(
+      '../../../dist/index.js' as string
+    )) as typeof import('../../index.ts')
   const { createOperationalHarness, createCapabilityRegistry } =
     await import('@cvg/harness')
   const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')
   const { canonicalizeCompleteJson } = await import('@cvg/harness-contracts')
-  const { verifyJournalResultStorage } =
-    await import('../../../dist/operational-effect-result-readiness.js')
+  const { verifyJournalResultStorage } = (await import(
+    '../../../dist/operational-effect-result-readiness.js' as string
+  )) as typeof import('../../operational-effect-result-readiness.ts')
   const pool = new pg.Pool({
     ...journalCredentials('service'),
     max: 3,
@@ -1098,13 +1102,16 @@ export async function runCaptureJournalPhase(
   )
   const pg = (await import('pg')).default
   const { PostgresOperationalEffectJournal, PostgresExecutionStepStore } =
-    await import('../../../dist/index.js')
+    (await import(
+      '../../../dist/index.js' as string
+    )) as typeof import('../../index.ts')
   const { createOperationalHarness, createCapabilityRegistry } =
     await import('@cvg/harness')
   const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')
   const { canonicalizeCompleteJson } = await import('@cvg/harness-contracts')
-  const { verifyJournalResultStorage } =
-    await import('../../../dist/operational-effect-result-readiness.js')
+  const { verifyJournalResultStorage } = (await import(
+    '../../../dist/operational-effect-result-readiness.js' as string
+  )) as typeof import('../../operational-effect-result-readiness.ts')
   const pool = new pg.Pool({
     ...journalCredentials('service'),
     max: 2,
@@ -1541,7 +1548,7 @@ export async function runFleetOldReader(): Promise<void> {
   assert(emit && source)
   const original = (await import(
     pathToFileURL(join(journalRoot, emitPath)).href
-  )) as typeof import('../../../dist/index.js')
+  )) as typeof import('../../index.ts')
   const pg = (await import('pg')).default
   const pool = new pg.Pool({
     ...journalCredentials('old'),

@@ -24,7 +24,7 @@ let binding: NativeJournalBinding
 let resource: ReturnType<typeof createJournalResourceFixture> | undefined
 let admin: Client | undefined
 let pool: Pool | undefined
-let Journal: typeof import('../../dist/index.js').PostgresOperationalEffectJournal
+let Journal: typeof import('../index.ts').PostgresOperationalEffectJournal
 before(async () => {
   binding = verifyNativeJournalBinding()
   assert.equal(binding.profile, 'journal')
@@ -86,9 +86,11 @@ describe(
           assert(emit)
           const original = (await import(
             pathToFileURL(join(journalRoot, emitPath)).href
-          )) as typeof import('../../dist/index.js')
+          )) as typeof import('../index.ts')
           const pg = (await import('pg')).default
-          const { runPostgresMigrations } = await import('../../dist/index.js')
+          const { runPostgresMigrations } = (await import(
+            '../../dist/index.js' as string
+          )) as typeof import('../index.ts')
           const journal = new Journal(pool, { resultStorage: { version: 1 } })
           const input = {
             tenantId: journalTenant,
@@ -434,7 +436,9 @@ describe(
       return value
     }
     const row = async (operationKey: string) => {
-      const { withTenantContext } = await import('../../dist/index.js')
+      const { withTenantContext } = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
       const { TenantIdSchema } = await import('@cvg/platform')
       return withTenantContext(
         pool!,
@@ -829,7 +833,9 @@ describe(
         verifyNativeJournalBinding()
         assert(pool)
         const { createJournaledToolRegistry } = await import('@cvg/harness')
-        const { withTenantContext } = await import('../../dist/index.js')
+        const { withTenantContext } = (await import(
+          '../../dist/index.js' as string
+        )) as typeof import('../index.ts')
         const { TenantIdSchema } = await import('@cvg/platform')
         const primaryBody = new Error('SYNTHETIC_PRIMARY_BODY_FAILURE')
         const secondary = new Error('SYNTHETIC_UNCERTAIN_UPDATE_FAILURE')
@@ -1137,7 +1143,9 @@ describe(
       )
     }
     const sql = async (text: string, values: unknown[]) => {
-      const { withTenantContext } = await import('../../dist/index.js')
+      const { withTenantContext } = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
       const { TenantIdSchema } = await import('@cvg/platform')
       return withTenantContext(
         pool!,
@@ -1470,7 +1478,9 @@ describe(
 
     it('never qualifies own uncommitted journal output or commits the caller transaction', async () => {
       assert(pool)
-      const { withTenantContext } = await import('../../dist/index.js')
+      const { withTenantContext } = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
       const { TenantIdSchema } = await import('@cvg/platform')
       const op = binding.runId + ':uncommitted-read'
       const envelope = {
@@ -1756,7 +1766,9 @@ describe(
 
     it('refuses direct version0 insertion by the activated service principal', async () => {
       assert(pool)
-      const { withTenantContext } = await import('../../dist/index.js')
+      const { withTenantContext } = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
       const { TenantIdSchema } = await import('@cvg/platform')
       await assert.rejects(
         withTenantContext(pool, TenantIdSchema.parse(journalTenant), (client) =>
@@ -1849,7 +1861,9 @@ describe(
     ] as const) {
       it(`preserves durable state and primary error for ${fault}`, async () => {
         assert(pool)
-        const { withTenantContext } = await import('../../dist/index.js')
+        const { withTenantContext } = (await import(
+          '../../dist/index.js' as string
+        )) as typeof import('../index.ts')
         const { TenantIdSchema } = await import('@cvg/platform')
         const journal = new Journal(pool, { resultStorage: { version: 1 } })
         const input = {
@@ -2000,7 +2014,7 @@ describe(
         pathToFileURL(
           join(journalRoot, 'apps/worker/dist/postgres-role-preflight.js')
         ).href
-      )) as typeof import('../../../../apps/worker/dist/postgres-role-preflight.js')
+      )) as typeof import('../../../../apps/worker/src/postgres-role-preflight.ts')
       const { TenantIdSchema } = await import('@cvg/platform')
       const critical = [
         ...new Set([

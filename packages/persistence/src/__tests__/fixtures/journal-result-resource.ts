@@ -18,7 +18,7 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
   let admin: Client | undefined
   let pool: Pool | undefined
   let Journal:
-    | typeof import('../../../dist/index.js').PostgresOperationalEffectJournal
+    | typeof import('../../index.ts').PostgresOperationalEffectJournal
     | undefined
   let created = false
   const createdRoles: string[] = []
@@ -51,11 +51,15 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
   const setup = async () => {
     assert.deepEqual(binding, verifyNativeJournalBinding())
     const pg = (await import('pg')).default
-    const runtime = await import('../../../dist/index.js')
-    const guard =
-      await import('../../../dist/operational-effect-result-guard.js')
-    const readiness =
-      await import('../../../dist/operational-effect-result-readiness.js')
+    const runtime = (await import(
+      '../../../dist/index.js' as string
+    )) as typeof import('../../index.ts')
+    const guard = (await import(
+      '../../../dist/operational-effect-result-guard.js' as string
+    )) as typeof import('../../operational-effect-result-guard.ts')
+    const readiness = (await import(
+      '../../../dist/operational-effect-result-readiness.js' as string
+    )) as typeof import('../../operational-effect-result-readiness.ts')
     Journal = runtime.PostgresOperationalEffectJournal
     admin = new pg.Client({
       ...journalCredentials('admin'),

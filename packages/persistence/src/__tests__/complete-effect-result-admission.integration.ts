@@ -34,7 +34,7 @@ let binding: NativeJournalBinding
 let resource: ReturnType<typeof createJournalResourceFixture> | undefined
 let admin: Client | undefined
 let pool: Pool | undefined
-let Journal: typeof import('../../dist/index.js').PostgresOperationalEffectJournal
+let Journal: typeof import('../index.ts').PostgresOperationalEffectJournal
 let positiveKey = ''
 const positiveValue = { j07: 'positive', nested: { z: [null, 0], a: '' } }
 
@@ -491,7 +491,7 @@ describe(
             'packages/persistence/dist/operational-effect-result-guard.js'
           )
         ).href
-      )) as typeof import('../../dist/operational-effect-result-guard.js')
+      )) as typeof import('../operational-effect-result-guard.ts')
       const migrationText = readFileSync(
         join(
           journalRoot,
@@ -581,11 +581,15 @@ AS $cvg0030$${inactiveBody}$cvg0030$`
     it('missing-physical-expansion: a fresh separate empty resource without the expansion columns refuses before effect', async () => {
       assert(admin)
       const pg = (await import('pg')).default
-      const runtime = await import('../../dist/index.js')
-      const guards =
-        await import('../../dist/operational-effect-result-guard.js')
-      const readinessModule =
-        await import('../../dist/operational-effect-result-readiness.js')
+      const runtime = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
+      const guards = (await import(
+        '../../dist/operational-effect-result-guard.js' as string
+      )) as typeof import('../operational-effect-result-guard.ts')
+      const readinessModule = (await import(
+        '../../dist/operational-effect-result-readiness.js' as string
+      )) as typeof import('../operational-effect-result-readiness.ts')
       const database = 'c100_j225_j07_expand'
       const schema = 'c100_j225_j07_expand'
       const principal = 'c100_j225_j07_expand_service'
@@ -903,13 +907,15 @@ AS $cvg0030$${inactiveBody}$cvg0030$`
       assert(admin && pool)
       const worker = (await import(
         pathToFileURL(join(journalRoot, 'apps/worker/dist/worker.js')).href
-      )) as typeof import('../../../../apps/worker/dist/worker.js')
+      )) as typeof import('../../../../apps/worker/src/worker.ts')
       const preflight = (await import(
         pathToFileURL(
           join(journalRoot, 'apps/worker/dist/postgres-role-preflight.js')
         ).href
-      )) as typeof import('../../../../apps/worker/dist/postgres-role-preflight.js')
-      const runtime = await import('../../dist/index.js')
+      )) as typeof import('../../../../apps/worker/src/postgres-role-preflight.ts')
+      const runtime = (await import(
+        '../../dist/index.js' as string
+      )) as typeof import('../index.ts')
       const mainSource = readFileSync(
         join(journalRoot, 'apps/worker/dist/main.js'),
         'utf8'
