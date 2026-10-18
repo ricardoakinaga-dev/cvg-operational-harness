@@ -1,0 +1,100 @@
+# Fresh I1 STATIC audit — SPEC0209
+
+**Verdict: FAIL.** One MEDIUM finding: genuine declaration-only literal selectors can lose exact spelling solely because they contain a space. This verdict is bounded to the sealed helper and tests. It does not accept a live catalog, owner mapping, semantic parity, implementation, release or production use.
+
+## Scope and method
+
+Audit input: `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r16-packet` and its sibling `critic-reference-r16-packet.sentinel.json`. All four sealed files were read completely. The embedded Python extractor and synthetic fixtures were inspected as text only. No helper, tests, Python, fixture source, guest program or reference code was executed or imported. No descendants/subagents, network, Git operations, dependency installation, live worktree or actual reference reads were used.
+
+The initial per-file SHA-256 checks matched all four sentinel entries before helper/test source review. The aggregate was independently recomputed as SHA256 of compact JSON for the lexicographically sorted relative-path-to-SHA256 object. It equals `4ac1f0d567dbf9f6339c885013f46f62358d4585887314471855a006243bd694`. Final comparisons, sentinel hash and the full read disclosure are recorded in integrity.json.
+
+## I1-R16-01 — MEDIUM — Declaration-only selector spelling is discarded
+
+Frozen case B requires preservation of a genuine literal selector/type constraint; only unresolved dual roles require UNKNOWN. The helper's type printer instead treats a spelling whitelist as a necessary condition for preserving even a declaration-only literal.
+
+Inert witness source path: `packages/core/example/src/types.ts`, within the otherwise valid pinned synthetic input/owner setup defined in the sealed tests. The witness was described, never written as a fixture or executed.
+
+```ts
+export type Selector = 'throw 0';
+```
+
+The literal occurs only as the constraint of an exported type alias. There is no initializer, runtime expression or source-consuming call in this physical source. Whether its bytes also form a program in another language is irrelevant to this established declaration role.
+
+Exact connected derivation from `scripts/reference-contract-catalog.mjs`:
+
+1. Lines 254–275 admit the source. Lines 1608–1651 authenticate/read it and connect it to `extractTypeScriptContracts`.
+2. Lines 738–785 establish the source-local literal index. Type syntax is skipped at 744–750, and this source supplies no runtime payload collision.
+3. Lines 847–859 recognize the type alias as kind `type`, symbol `Selector`, and pass its declared type to `printed`.
+4. Lines 558–573 visit the StringLiteral. The payload collision test is false, but `throw 0` fails `/^[A-Za-z0-9_$./:@-]{1,200}$/` because of the space. The literal is added to the opaque list.
+5. Lines 581–585 return the UNKNOWN object below. Lines 960–965 and 1580–1605 carry it into the catalog. The symbol, source and owner remain; the exact selector value does not.
+
+Predicted shape fragment, derived by inspection rather than an observed runtime result:
+
+```json
+{
+  "declarations": [
+    {
+      "visibility": "PUBLIC",
+      "type_parameters": [],
+      "type": {
+        "status": "UNKNOWN",
+        "reason": "Unclassified literal in a declared type; bytes not copied",
+        "literals": [
+          {
+            "value_sha256": "f882cbdbfd85e3796c79410371211a9786307af32e66e3e0bdb141b793bf8601",
+            "byte_length": 7
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+The catalog entry's `extraction_status` is therefore `UNKNOWN`, with `parity_status: NOT_VERIFIED`. The literal digest is `f882cbdbfd85e3796c79410371211a9786307af32e66e3e0bdb141b793bf8601`, length 7 UTF-8 bytes; witness source digest is `9ad22c25fa3375fdc9f7eba04d022d18f91699e1b1598ea49c197c13ed38c5b4`. The expected case-B result retains the exact constraint value `throw 0`. Hash/length retention does not satisfy that requirement for a genuine declaration-only selector.
+
+Impact is contract information loss, not guest execution or false parity approval. The type requirement and generic source entry remain in the denominator, which narrows the finding. No actual live catalog or migration regression is asserted.
+
+Action: use established AST declaration roles and source-local payload evidence to govern preservation, including spaced or punctuated selectors. Keep actual source payloads and unresolved dual roles opaque. Add a spaced selector control and its same-source payload collision counterpart. Preserve requirement identity, owner/source provenance and NOT_VERIFIED parity.
+
+The case-B test at `tests/reference-contract-catalog.test.js:901–924` uses `throw/ROLE_R12/`, which passes the whitelist. Spaced event/tool-name controls at 761–806 use different extraction paths. Their presence does not cover this literal-type path. Tests were read, not run.
+
+## Other reviewed boundaries
+
+| Area | Static assessment and evidence |
+| --- | --- |
+| Bodies and initializers | TypeScript method/function bodies are not printed by signature/member extraction (675–719, 861–955). Initializer strings, nested object names and dynamic expression literals become UNKNOWN/hash/length (488–520, 606–660). No additional concrete body-copying defect was established. |
+| Frozen A | String declaration names have an exact-name shape path distinct from identity projection (533–538, 696–711, 916–942). Authenticated program-looking relative filenames remain exact provenance (88–119, 211–229, 1596–1597). Their spelling alone is not a finding. |
+| Frozen B | FAIL for the concrete declaration-only selector above. Bounded vocabulary selectors without payload collisions have a preservation path; that does not cure the spaced-selector failure. |
+| Frozen C | Same-source runtime strings are indexed before TypeScript extraction (738–785); matching literal types become opaque in printed (558–585). Markdown performs its prepass across recognized TS/JSON fragments before projection (1312–1367). Python runtime-position literals are indexed and matching annotation constants become opaque (974–1011). No additional actionable C violation was established in these inspected direct paths. |
+| Frozen D | JSON payload role is absorbing; payload/vocabulary objects become opaque, unknown member names and values are digested, and schema-map collisions can make the map opaque (1129–1271). Nested default/const/examples/unclassified objects do not regain privilege just by carrying name/type/required keys. |
+| Authentication and paths | Absolute root/full commit, canonical root/top-level identity, version and manifest identifiers are checked (156–242). Each source is checked against the pinned tree blob after ancestor symlink/path guards (88–119, 197–229); candidates are inventoried and reread before return (254–347, 1729–1733). These are source-byte checks, not proof of institutional/semantic correctness. |
+| Git and execution | The Git wrapper strips most inherited Git environment, disables replace objects, fsmonitor/hooks and optional locks, and performs explicit read commands (122–205). Worktree/index comparison filters are avoided. Partial/promisor references are checked before tree collection. The collector's Python subprocess uses isolated stdlib AST source (1716–1727); this audit did not launch it. |
+| Output | Sensitive/non-JSON output, reference-contained output, aliases/symlinks and hardlinks are checked; owner-map overwrite is rejected (1916–1940, 1999–2005). Writes use a new exclusive inode and atomic rename with repeated checks (1942–1968). No extra output-guard finding was established; hostile concurrent filesystem races were not experimentally assessed. |
+| Determinism | Canonical object serialization, sorted source candidates, grouped/sorted declarations and stable hashed kind/package/source/symbol identities are explicit (47–60, 787–802, 960–965, 1588–1591, 1608, 1734–1759). No line number enters IDs. Reproducibility across actual installations/dependency versions was not measured. |
+| Denominator and freeze | Package coverage and owner-map counts are checked (350–411); generic source/document/Python/native/configuration entries retain unknown surfaces (1655–1713). Validation checks duplicate identities, source links, hashes/status and summary counts (1797–1888); freeze comparison rejects removed requirements, changed entries/reference/owner identity and any full-catalog drift (1891–1913). The 318-manifest/55-family live denominator and owner correctness were not inspected or accepted. |
+| Static privilege | Entries and the catalog keep parity NOT_VERIFIED (1604, 1758); validator/freeze statuses expressly concern static artifacts. Implementation validation is not independent approval. This report grants no acceptance based on those statuses. |
+
+## Trust boundary and blindspots
+
+The sentinel authenticates consistency with the supplied seal, not who created the packet or the truth of a reference pin. The complete sealed contract and frozen role decision are the audit authority; unprovided adjudicator content was not fetched.
+
+The helper treats caller-supplied root, expected pin/version and owner map as operational inputs. Its literal role tracking is local to a physical source, including recognized Markdown fragments. Cross-file reconstruction, assembled strings, arbitrary reference resolution, universal language detection and whole-program semantics were not required or assumed. The reported failure needs none of them.
+
+No behavior of the installed TypeScript dependency, Python interpreter, Git version, filesystem race conditions or real repository was tested. Synthetic test assertions are evidence of intended coverage only, not passing test results. UNKNOWN is not parity acceptance. Live owner mapping, catalog completeness, institutional approval, semantic journeys, deployment/release and the SPEC's final semantic P100-003 review remain outside this audit.
+
+## Read/write disclosure
+
+Content reads were limited to these four packet files and the sibling sentinel:
+
+- `docs/02_spec/0209_pare100_reference_catalog.md`
+- `docs/04_audit/evidence/PARE100-EXEC-20261014/adjudicate-reference-r11/role-decisions.json`
+- `scripts/reference-contract-catalog.mjs`
+- `tests/reference-contract-catalog.test.js`
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r16-packet.sentinel.json`
+
+All four packet contents were also read for SHA-256 checks, and the sentinel was parsed as JSON. Directory/metadata reads inventoried only the packet's nested paths, checked for packet symlinks, and initially established that the exact result path did not exist. No prior report/critic/history file was opened; references to prior rounds inside the sealed tests/decision were treated only as current sealed text.
+
+Task commands were ls/find/sha256sum/wc/cat/nl/sed for read-only inventory/text and self-authored Node fs/crypto code for seal checks, inert-data hashing and report writing. They did not evaluate target source. Only the new requested result directory is written, containing verdict.json, findings.json, report.md and integrity.json. No repository/runtime/log/backlog file is changed.
+
+Implementation remains unmodified and has no self-approval. Required checks for any later fix belong to a separately authorized round.

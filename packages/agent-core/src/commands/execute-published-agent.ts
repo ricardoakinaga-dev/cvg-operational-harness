@@ -21,7 +21,8 @@ import {
   type CapabilityApprovalResolver,
   type CapabilityGateway,
   type PlatformEventBus,
-  type ApprovedKnowledgeResolver
+  type ApprovedKnowledgeResolver,
+  type ControlledKernelHostContext
 } from '@cvg/platform'
 import { TraceIdSchema } from '@cvg/platform'
 import { DomainError } from '@cvg/shared'
@@ -62,7 +63,8 @@ export type PublishedAgentExecutionResult =
     }
 
 export async function executePublishedAgent(
-  input: PublishedAgentExecutionInput
+  input: PublishedAgentExecutionInput,
+  host?: ControlledKernelHostContext
 ): Promise<PublishedAgentExecutionResult> {
   const traceId = resolveOptionalTraceId(input.traceId)
   const version = input.versionId
@@ -96,41 +98,44 @@ export async function executePublishedAgent(
     }
   }
 
-  const trace = await executeConfiguredAgent({
-    store: input.store,
-    tenantId: input.tenantId,
-    agentId: input.agentId,
-    versionId: version.id,
-    ...(traceId !== undefined ? { traceId } : {}),
-    message: input.message,
-    history: input.history,
-    executionMode: 'CONTROLLED_RUNTIME',
-    capabilityGateway:
-      input.capabilityGateway ?? createControlledCapabilityGateway(),
-    actor: input.actor ?? {
-      id: 'system.controlled-runtime',
-      role: 'System',
-      permissions: ['scheduling:read']
+  const trace = await executeConfiguredAgent(
+    {
+      store: input.store,
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      versionId: version.id,
+      ...(traceId !== undefined ? { traceId } : {}),
+      message: input.message,
+      history: input.history,
+      executionMode: 'CONTROLLED_RUNTIME',
+      capabilityGateway:
+        input.capabilityGateway ?? createControlledCapabilityGateway(),
+      actor: input.actor ?? {
+        id: 'system.controlled-runtime',
+        role: 'System',
+        permissions: ['scheduling:read']
+      },
+      ...(input.capabilityApproval
+        ? { capabilityApproval: input.capabilityApproval }
+        : {}),
+      ...(input.resolveCapabilityApproval
+        ? { resolveCapabilityApproval: input.resolveCapabilityApproval }
+        : {}),
+      ...(input.requireCapabilityApproval
+        ? { requireCapabilityApproval: true }
+        : {}),
+      ...(input.onToolAudit ? { onToolAudit: input.onToolAudit } : {}),
+      ...(input.eventBus ? { eventBus: input.eventBus } : {}),
+      ...(input.context ? { context: input.context } : {}),
+      ...(input.approvedKnowledge
+        ? { approvedKnowledge: input.approvedKnowledge }
+        : {}),
+      ...(input.resolveApprovedKnowledge
+        ? { resolveApprovedKnowledge: input.resolveApprovedKnowledge }
+        : {})
     },
-    ...(input.capabilityApproval
-      ? { capabilityApproval: input.capabilityApproval }
-      : {}),
-    ...(input.resolveCapabilityApproval
-      ? { resolveCapabilityApproval: input.resolveCapabilityApproval }
-      : {}),
-    ...(input.requireCapabilityApproval
-      ? { requireCapabilityApproval: true }
-      : {}),
-    ...(input.onToolAudit ? { onToolAudit: input.onToolAudit } : {}),
-    ...(input.eventBus ? { eventBus: input.eventBus } : {}),
-    ...(input.context ? { context: input.context } : {}),
-    ...(input.approvedKnowledge
-      ? { approvedKnowledge: input.approvedKnowledge }
-      : {}),
-    ...(input.resolveApprovedKnowledge
-      ? { resolveApprovedKnowledge: input.resolveApprovedKnowledge }
-      : {})
-  })
+    host
+  )
   return { status: 'completed', trace }
 }
 

@@ -10,7 +10,14 @@ import {
 } from './postgres-controlled.ts'
 import { createJsonWorkerTelemetry } from './worker-observability.ts'
 import { getWorkerStartupFailure } from './worker.ts'
-import { assertPostgresWorkerPreflight } from './postgres-role-preflight.ts'
+import {
+  assertPostgresWorkerPreflight,
+  assertPublishedPostgresWorkerPreflight
+} from './postgres-role-preflight.ts'
+import {
+  resolvePublishedDurability,
+  closePublishedWorkerResources
+} from './published-kernel-composition.ts'
 import {
   KERNEL_WORKER_RUNTIME,
   assertPostgresKernelPrerequisites,
@@ -33,7 +40,20 @@ import {
 import { createWorkerReadiness } from './readiness.ts'
 import { redactStartupErrorMessage } from './startup-error.ts'
 
-const startupFailure = getWorkerStartupFailure()
+const startupFailure = (() => {
+  try {
+    resolvePublishedDurability(process.env)
+  } catch (error) {
+    return {
+      code: 'published_durability_invalid',
+      message:
+        error instanceof Error
+          ? error.message
+          : 'Published durability profile is invalid'
+    }
+  }
+  return getWorkerStartupFailure()
+})()
 
 if (startupFailure) {
   console.error(
@@ -348,7 +368,7 @@ async function runPostgresControlledWorker(env: NodeJS.ProcessEnv) {
       console.log(
         JSON.stringify({
           event: 'worker.readiness',
-          workerId: env.CVG_WORKER_ID?.trim() || 'worker-controlled-postgres',
+          workerId: runtime.workerId,
           status: transition.to,
           reason: transition.reason,
           readinessAt: transition.at
@@ -359,14 +379,31 @@ async function runPostgresControlledWorker(env: NodeJS.ProcessEnv) {
   let cleanupPromise: Promise<void> | undefined
   const cleanup = (reason: 'shutdown_started' | 'run_completed') => {
     if (cleanupPromise) return cleanupPromise
-    cleanupPromise = (async () => {
-      readiness.markNotReady(reason)
-      await drainPromise
-      await runtime.pool.end()
-      readiness.markStopped(
-        reason === 'shutdown_started' ? 'shutdown_completed' : 'run_completed'
-      )
-    })()
+    let resolveCleanup!: () => void
+    let rejectCleanup!: (error: unknown) => void
+    cleanupPromise = new Promise<void>((resolve, reject) => {
+      resolveCleanup = resolve
+      rejectCleanup = reject
+    })
+    readiness.markNotReady(reason)
+    const closed = runtime.claimExecutions
+      ? closePublishedWorkerResources(
+          runtime.claimExecutions,
+          runtime.pool,
+          drainPromise
+        )
+      : (async () => {
+          await drainPromise
+          await runtime.pool.end()
+        })()
+    void closed
+      .then(() => {
+        readiness.markStopped(
+          reason === 'shutdown_started' ? 'shutdown_completed' : 'run_completed'
+        )
+        resolveCleanup()
+      }, rejectCleanup)
+      .catch(rejectCleanup)
     return cleanupPromise
   }
   const shutdown = createShutdownController({
@@ -384,9 +421,16 @@ async function runPostgresControlledWorker(env: NodeJS.ProcessEnv) {
   })
   shutdown.install(process)
   try {
-    await assertPostgresWorkerPreflight(runtime.pool, {
-      tenantId: TenantIdSchema.parse(env.CVG_WORKER_TENANT_ID)
-    })
+    if (runtime.claimExecutions) {
+      await assertPublishedPostgresWorkerPreflight({
+        ...runtime,
+        claimExecutions: runtime.claimExecutions
+      })
+    } else {
+      await assertPostgresWorkerPreflight(runtime.pool, {
+        tenantId: TenantIdSchema.parse(env.CVG_WORKER_TENANT_ID)
+      })
+    }
     if (resolveWorkerRuntimeKind(env) === KERNEL_WORKER_RUNTIME) {
       await assertPostgresKernelPrerequisites(
         runtime.pool,
@@ -454,19 +498,37 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
   let cleanupPromise: Promise<void> | undefined
   const cleanup = (reason: 'shutdown_started' | 'startup_failed') => {
     if (cleanupPromise) return cleanupPromise
-    cleanupPromise = (async () => {
-      readiness.markNotReady(reason)
-      const stopped = await runtime.worker.stop()
-      telemetry.log('worker.continuous_drained', {
-        drained: stopped.drained,
-        released: stopped.released,
-        releaseFailed: stopped.releaseFailed
-      })
-      await runtime.pool.end()
-      readiness.markStopped(
-        reason === 'shutdown_started' ? 'shutdown_completed' : 'startup_failed'
-      )
-    })()
+    let resolveCleanup!: () => void
+    let rejectCleanup!: (error: unknown) => void
+    cleanupPromise = new Promise<void>((resolve, reject) => {
+      resolveCleanup = resolve
+      rejectCleanup = reject
+    })
+    readiness.markNotReady(reason)
+    const stopping = runtime.worker.stop()
+    const closed = runtime.claimExecutions
+      ? closePublishedWorkerResources(
+          runtime.claimExecutions,
+          runtime.pool,
+          stopping
+        )
+      : stopping.then(() => runtime.pool.end())
+    void closed
+      .then(async () => {
+        const stopped = await stopping
+        telemetry.log('worker.continuous_drained', {
+          drained: stopped.drained,
+          released: stopped.released,
+          releaseFailed: stopped.releaseFailed
+        })
+        readiness.markStopped(
+          reason === 'shutdown_started'
+            ? 'shutdown_completed'
+            : 'startup_failed'
+        )
+        resolveCleanup()
+      }, rejectCleanup)
+      .catch(rejectCleanup)
     return cleanupPromise
   }
   const shutdown = createShutdownController({
@@ -489,9 +551,16 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
   })
   shutdown.install(process)
   try {
-    await assertPostgresWorkerPreflight(runtime.pool, {
-      tenantId: runtime.tenantId
-    })
+    if (runtime.claimExecutions) {
+      await assertPublishedPostgresWorkerPreflight({
+        ...runtime,
+        claimExecutions: runtime.claimExecutions
+      })
+    } else {
+      await assertPostgresWorkerPreflight(runtime.pool, {
+        tenantId: runtime.tenantId
+      })
+    }
     if (resolveWorkerRuntimeKind(env) === KERNEL_WORKER_RUNTIME) {
       await assertPostgresKernelPrerequisites(runtime.pool, runtime.tenantId)
     }

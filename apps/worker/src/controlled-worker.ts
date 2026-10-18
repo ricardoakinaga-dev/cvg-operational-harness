@@ -1,5 +1,6 @@
 import { type DurableOutboxAdapter, type OutboxEffect } from '@cvg/persistence'
 import type { TenantId } from '@cvg/platform'
+import type { ClaimExecutionRegistry } from './claimed-execution-lifecycle.ts'
 import {
   CONTROLLED_OUTBOX_EVENT_TYPES,
   processOutboxEvent,
@@ -25,6 +26,7 @@ export interface ControlledWorkerOptions {
   tenantId: TenantId
   workerId: string
   adapter: DurableOutboxAdapter
+  claimExecutions?: ClaimExecutionRegistry
   handlers: ControlledWorkerHandlers
   leaseMs?: number
   takeoverActive?: boolean | (() => boolean | Promise<boolean>)
@@ -54,6 +56,9 @@ export function createControlledWorker(
       tenantId: options.tenantId,
       workerId,
       adapter: options.adapter,
+      ...(options.claimExecutions
+        ? { claimExecutions: options.claimExecutions }
+        : {}),
       ...(eventId ? { eventId } : {}),
       ...(options.leaseMs ? { leaseMs: options.leaseMs } : {}),
       ...(options.takeoverActive !== undefined
@@ -72,6 +77,9 @@ export function createControlledWorker(
         tenantId: options.tenantId,
         workerId,
         adapter: options.adapter,
+        ...(options.claimExecutions
+          ? { claimExecutions: options.claimExecutions }
+          : {}),
         ...(options.leaseMs ? { leaseMs: options.leaseMs } : {}),
         ...(options.takeoverActive !== undefined
           ? { takeoverActive: options.takeoverActive }

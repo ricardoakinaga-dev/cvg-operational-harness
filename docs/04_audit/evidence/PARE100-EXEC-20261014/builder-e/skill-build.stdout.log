@@ -1,0 +1,545 @@
+# Codex Instruction Model
+
+## Load when
+
+Load before editing or delegating across unfamiliar repository paths, when `AGENTS.md` or `AGENTS.override.md` may exist, when instruction scope conflicts or is unclear, when installing/discovering the skill, or when reasoning about Codex tools, sandbox, skills, subagents, or ExecPlans.
+
+## Purpose
+
+Apply the current officially documented Codex instruction and skill behavior without inventing a competing hierarchy, hard-coding unstable tool schemas, or treating project documents and runtime state as higher-authority instructions.
+
+## Questions answered
+
+- Which repository guidance does Codex discover for a working directory?
+- How do overrides, nesting, and target paths affect applicable instructions?
+- What is confirmed about skill discovery and progressive disclosure?
+- Which Codex behaviors are intentionally left `UNKNOWN`?
+- How should tools, sandbox, plans, and subagents degrade across surfaces?
+
+## Do not load when
+
+Do not load repeatedly after the target paths and effective instruction chain are already confirmed and unchanged. Do not use it to override system, developer, user, sandbox, approval, or native Codex behavior.
+
+## Evidence boundary
+
+The `CONFIRMED` facts below come from [the frozen official research baseline](../docs/codex-research.md), dated 2026-08-21. Revalidate that baseline only when an official contract materially changes.
+
+`UNKNOWN`: a public universal conflict-resolution order beyond documented instruction discovery, exact tool names/signatures across every Codex surface, future custom-agent schemas, compaction thresholds/summary formats, universal Git workflow, and universal build/test commands. The framework uses feature detection and repository policy for these rather than invention.
+
+## Repository guidance discovery
+
+`CONFIRMED`:
+
+- Codex constructs an instruction chain once per run/session.
+- At global scope, it selects the first non-empty `AGENTS.override.md` or `AGENTS.md`.
+- At project scope, it walks from project root to the current working directory.
+- In each directory it selects at most one non-empty file, in this order: `AGENTS.override.md`, `AGENTS.md`, then configured fallback names.
+- Selected files are concatenated root-to-CWD, so closer guidance appears later.
+- An override changes the selected file in its own directory; it does not erase ancestor guidance.
+- Empty files are ignored. The default aggregate guidance limit is 32 KiB.
+
+The framework does not recalculate or replace Codex's native chain. It makes target scope explicit so the agent can avoid relying on a root file when a nested target has closer guidance.
+
+## Target-path procedure
+
+Before changing a file:
+
+1. identify repository root, current working directory, and exact target path;
+2. use the effective guidance already supplied by Codex for the current directory;
+3. inspect whether directories from root toward the target contain nested guidance that was not in the current CWD chain;
+4. when necessary, change to the appropriate directory or read the relevant target-path guidance without claiming to rebuild native precedence;
+5. apply all applicable higher-authority instructions and preserve narrower constraints;
+6. record inspected instruction paths in runtime state only when persistent work justifies it;
+7. if instructions genuinely conflict and native rules do not resolve the requested action safely, state the conflict and ask only for the material decision that remains available to the user.
+
+Re-evaluate scope when adding a new target directory, delegating another boundary, or recovery finds `instruction_drift`.
+
+## Skills and discovery
+
+`CONFIRMED`:
+
+- A skill is a directory containing `SKILL.md`; the public contract requires `name` and `description`.
+- Current documented discovery locations are repository `.agents/skills` directories from CWD to repository root, `$HOME/.agents/skills`, `/etc/codex/skills`, and system skills.
+- Same-named skills are not merged. Symlinked skill directories are followed.
+- `.codex/skills` and `$CODEX_HOME/skills` are compatibility locations in current source, not the preferred public installation contract for this release.
+- Codex first exposes skill name, description, and path under a catalog budget. Selecting a skill loads the complete `SKILL.md`.
+- `references/` is conditional knowledge, `scripts/` deterministic automation, `assets/` output material, and `agents/openai.yaml` skill UI/invocation metadata.
+
+Consequently, this package keeps `SKILL.md` a router, installs to the current documented `.agents/skills` location, and does not treat `agents/openai.yaml` as a custom-subagent definition.
+
+## Plans and compaction
+
+`CONFIRMED`: conversational Plan mode and a repository ExecPlan are different. ExecPlan is a customizable convention from official guidance, not a native runtime primitive. Durable state, plans, and evidence survive session loss; conversational memory and undocumented compaction internals are not recovery authorities.
+
+`UNKNOWN`: stable compaction threshold, internal summary schema, and reinjection format. Never write process logic that depends on them.
+
+## Tools, sandbox, and approvals
+
+`CONFIRMED`: shell and patch capabilities exist on documented surfaces, but exact tool names and signatures vary. Sandbox, network, and approval controls remain independent boundaries. A skill or Goal does not expand them.
+
+Express procedures by capability and evidence: inspect files, apply a targeted patch, run the project-owned command, observe output, and review changes. Do not require a specific UI command or tool namespace. If `/review`, Git, network, or another optional capability is unavailable, use a safe local fallback and declare the limitation.
+
+Repository instructions decide project-specific commands. The framework never invents a universal lint/test sequence or branch/commit/push rule.
+
+## Subagents
+
+`CONFIRMED`: subagents are useful for independent bounded work but consume more tokens, concurrent writers can conflict, and delegated work inherits effective runtime/sandbox boundaries. Delegation may follow a direct request or applicable project/skill instruction.
+
+Single-agent execution remains complete. Load [Agent Orchestration](20-agent-orchestration.md) when delegation is available and justified, or when an unavailable capability requires an explicit fallback/independence decision. Its delegation gate still requires authorization and available capability. Do not hard-code current internal agent schemas, built-in role names, or concurrency limits.
+
+## Project documents and runtime state
+
+PRD, SPEC, ADR, ExecPlan, tasks, runtime state, backlog, and logs are engineering evidence and project conventions. They do not supersede native system/developer/user instructions, applicable repository guidance, sandbox, or approvals. When they conflict with observed reality, use [Session Recovery](12-session-recovery.md) and [Audit and Evolution](13-audit-evolution.md) rather than silently choosing convenient prose.
+# Lifecycle and Gates
+
+## Load when
+
+Load when selecting or changing lifecycle stage, deciding whether work is ready to implement, evaluating a semantic gate, granting a condition, recording an override, or reopening work after material change.
+
+## Purpose
+
+Define the only normative lifecycle and gate behavior. [contracts.json](contracts.json) owns exact stage, activity, gate, status, and required-field vocabulary.
+
+## Questions answered
+
+- Which stage owns the current outcome?
+- How do PLAN and VERIFY interact with BUILD?
+- What evidence permits transition?
+- When are conditions or overrides legitimate?
+
+## Do not load when
+
+Do not load to perform an already-ready T0/T1 task with no stage transition. Do not use gates as a product, design, testing, or risk checklist; load the owning engine.
+
+## Lifecycle
+
+Operate toward this outcome flow:
+
+    INTENT → DETECT AND CLASSIFY → DISCOVERY? → PRD? → SPEC?
+           → PLAN → BUILD ↔ VERIFY → DELIVERY / OPERATE
+           → AUDIT → EVOLUTION ↺
+
+The exact lifecycle stages and activities are in [contracts.json](contracts.json). PLAN and VERIFY are explicit, persistible activities rather than primary lifecycle stages:
+
+- planning may begin in SPEC, span BUILD, and be revised after evidence;
+- verification occurs at task, milestone, gate, and release boundaries;
+- a focused test does not move the project out of BUILD;
+- delivery is an external/release operation, and operation describes the running system rather than a documentation stage.
+
+Keep one primary stage for the current outcome. Secondary activities may occur without falsifying the stage.
+
+## Stage contracts
+
+| Stage purpose | Entry evidence | Exit evidence |
+| --- | --- | --- |
+| IDEA | human intent or detected opportunity | framed next path: Discovery or a justified proportional mode |
+| DISCOVERY | unresolved problem, users, value, constraints, or important unknowns | [Discovery](04-discovery-engine.md) satisfies DISCOVERY_READY |
+| PRD | problem sufficiently established; product behavior remains undefined | [PRD](05-prd-engine.md) satisfies PRODUCT_DEFINED |
+| SPEC | product behavior is defined; technical contracts remain unresolved | [SPEC](06-spec-engine.md) satisfies TECHNICALLY_SPECIFIED |
+| BUILD | IMPLEMENTATION_READY or a valid proportional route/override | scoped work reaches VERIFIED; release additionally needs RELEASE_READY |
+| AUDIT | observable system and expected baseline | [Audit and Evolution](13-audit-evolution.md) resolves AUDIT_RESOLVED or routes gaps |
+| EVOLUTION | feedback, operation, learning, or gaps require prioritization | work is routed to the earliest stage whose truth must change |
+
+EVOLUTION owns intake, prioritization, and rerouting of feedback; it does not remain the primary stage after a bounded remediation route has begun. An active incident route that inspects or compares expected-versus-actual behavior is AUDIT, while one already containing, applying a reversible code fix, and running regression is BUILD. `OPERATE` may remain the activity without turning either route into EVOLUTION.
+
+Optional stages are skipped only because sufficient current evidence already exists or the selected tier/mode does not need them. Record that reason; do not call an undocumented assumption a skip.
+
+## Semantic gates
+
+Use the exact gate identifiers and contract fields in [contracts.json](contracts.json):
+
+- **DISCOVERY_READY:** the problem, affected users, desired outcome, constraints, evidence, and decisive unknowns support product definition.
+- **PRODUCT_DEFINED:** WHAT, scope, rules, flows, permissions, errors, acceptance, and applicable quality attributes are sufficient for technical design.
+- **TECHNICALLY_SPECIFIED:** HOW, contracts, data, failure behavior, security/operations, migration/compatibility, and test architecture are sufficient for planning.
+- **IMPLEMENTATION_READY:** scope, applicable approvals, dependencies, acceptance, plan/task boundaries, risks, and verification approach are executable.
+- **VERIFIED:** every required criterion has fresh evidence and no blocking gap or unacceptable residual risk remains.
+- **RELEASE_READY:** the integrated artifact, configuration, migration, deployment, observability, rollback/recovery, and release authority are sufficient for the actual environment.
+- **AUDIT_RESOLVED:** expected-versus-actual gaps are closed, accepted by proper authority, or routed with explicit state and next action.
+
+For every gate, instantiate the nested criterion, condition, authority, history, and enum bindings in `contracts.json`. Bind the human-readable `scope` to one stable backlog/task `scope_ref`; a T3/T4 stage-entry or current verification gate must match the active task, and typed verification records must carry the same task binding. Every saved record names at least one concrete `revalidation_triggers` entry; an empty list cannot govern freshness. The `gate_required_criteria` manifest is mandatory semantic coverage: every canonical ID for the selected gate must appear exactly once with `required=true`, and an invented convenience criterion cannot replace a release, verification, authority, recovery, or migration family. Give each decision a unique record ID, zoned timestamp, and `supersedes` pointer when reopening a prior record. Rewording `scope` does not create a new identity: records with the same gate ID and `scope_ref` remain one append-only supersession chain. A PASS or PASS_WITH_CONDITIONS requires every required criterion to be PASS, non-empty explicit limitations for each criterion, and `gaps=[]`; bounded non-blocking follow-up belongs in typed conditions. Plain PASS forbids open conditions; PASS_WITH_CONDITIONS requires at least one typed, non-blocking open condition. Unknown residual risk cannot support a passing gate. An OPEN condition needs a zoned future `due_at`; when the current state reaches it unresolved, the gate is no longer current. An open UNKNOWN/HIGH/CRITICAL-risk condition or one with DENIED, EXPIRED, or UNKNOWN authority cannot be declared non-blocking. `SATISFIED` requires resolved `evidence_refs` and no pending authority; `EXPIRED` or `CANCELLED` cannot disappear inside a passing record and must be reopened or routed explicitly. A condition cannot claim `authority_state=CONFIRMED` unless it binds to the gate's required, confirmed authority record with a concrete actor and evidence. Every authority record must match the governed gate or override scope exactly; an approval for another target is inapplicable. The entire authority ledger is validated even when a record is not yet cited. `CONFIRMED` additionally requires an exact `.agent/authority.jsonl#AUTH-ID` record whose timestamp, actor, decision, scope, and `scope_ref` bind to the governed decision and whose `subject_type`/`subject_id` bind it to that exact gate record or override. The cited record must be the latest applicable decision for that subject and remain unexpired through current use; a later DENIED, EXPIRED, or replacement record invalidates the older confirmation. An arbitrary existing document is not approval evidence. Required authority, and every passing gate with residual HIGH/CRITICAL risk, must be CONFIRMED with a real actor and evidence. An ACTIVE override scope and `scope_ref` must match its gate, its type must be the current primary mode or an active overlay, and its zoned `expires_at` must remain after current state time. A required FAIL, BLOCKED, NOT_APPLICABLE, or NOT_EVALUATED cannot be averaged away, and missing evidence is not PASS.
+
+For VERIFIED and RELEASE_READY, every PASS criterion must cite an exact typed verification-ledger record that is CURRENT, PASS, EXECUTED, scope-matched, observed before the gate, and not invalidated by a later applicable event. A normative file or gate-level evidence alone cannot prove criterion execution.
+
+A gate becomes operational only when its exact relative path and `record_id` are bound by one later execution-log event whose task matches `scope_ref`, whose `gate_decision`, event type, result, and full-record fingerprint agree with the record. This binding is required for the gate named by `last_gate_record` and for any gate carrying the latest OPEN condition or ACTIVE override. Any bound `GATE_REOPENED` creates global ledger debt until a later bound superseding decision exists, even after the runtime pointer moves away. Imported legacy history may use one explicit `RECOVERY` event with `prehistory_state=UNKNOWN`; recovery exposes missing provenance and never invents a historical gate event.
+
+Proportionality may mean a lower tier never creates an entry gate. Once a current non-superseded applicable gate exists for the active task, however, that decision governs every tier: the runtime pointer must identify it and cannot hide it behind another gate. A BLOCKED or failing IMPLEMENTATION_READY gate forbids material entry unless an exact valid reduced-entry override applies. Runtime `risk_level` must not understate the governing gate's residual risk for the same active scope.
+
+## Conditions
+
+A conditional pass is valid only when every condition:
+
+- is demonstrably non-blocking for the current transition;
+- has precise impact, owner, a human-readable trigger plus zoned future `due_at`, verification method, residual risk, and authority state;
+- cannot conceal missing safety, data integrity, central product behavior, irreversible architecture, or required acceptance evidence;
+- automatically reopens or blocks the later gate when its trigger is reached unresolved.
+
+Condition IDs are stable within `scope_ref`. Carry an unresolved condition into later gate records or close the same ID with a typed terminal state and evidence; changing `last_gate_record` does not erase it. `EXPIRED` and `CANCELLED` are terminal descriptions, not resolution: the next update for that ID must be evidenced `SATISFIED`. Satisfaction closes the ID permanently; a new obligation uses a new ID. Close a condition with evidence, not by deleting or reopening it. Human approval must name the real authority and remain pending until actually provided.
+
+## Overrides and proportional paths
+
+A T0/T1 change that never required the full gated pipeline is proportional work, not an override. Use an override only when an otherwise applicable gate is deliberately reduced or bypassed for an eligible work mode from [contracts.json](contracts.json).
+
+An override record must satisfy `override_required_fields` and its enum bindings in `contracts.json`, including a zoned future `expires_at`. Override IDs are stable within `scope_ref`; an ACTIVE override remains current across later gate pointers. `EXPIRED` and `REVOKED` create terminal debt, so the next same-ID update must be evidenced `SATISFIED`; satisfaction closes that ID permanently and any later exception needs a new ID, authority decision, and activation. Deleting the override or merely advancing the gate pointer does not close it. Its type must already be represented by the current primary work mode or overlays, and runtime revalidates expiry against `state.updated_at`. Unknown risk level or UNKNOWN/HIGH/CRITICAL residual risk cannot authorize ACTIVE. It reduces ceremony, never responsibility. It cannot authorize destructive production work, fabricate credentials, accept unresolved/high residual risk, or turn a large feature into a hotfix because of schedule pressure.
+
+A reduced T3/T4 stage entry keeps two facts separate. The applicable gate remains `BLOCKED`; every required criterion remains honestly `PASS` or explicitly `NOT_EVALUATED`, and a known `FAIL` never becomes acceptable. A separately bound ACTIVE override may authorize only that stage entry when it is the latest durable status for that ID, names the reduced gate, uses an eligible active mode, has known acceptable risk, nonempty evidence and controls, carries current CONFIRMED authority, remains unexpired, and has one exact post-decision `OVERRIDE` event with `result=PASS`. Override activation is governance evidence: append a terminal record to close it; `CORRECTION` cannot retype it. This alternative does not satisfy VERIFIED, RELEASE_READY, backlog DONE, production authority, or any required criterion.
+
+Hotfix, incident, emergency, experiment, POC, spike, migration, and small-change behavior belongs to [Operational Modes](14-operational-modes.md). Risk and human authority belong to [Risk](15-risk-engine.md).
+
+## Reopen and route
+
+Reopen the affected gate when material evidence changes the problem, scope, rule, quality attribute, architecture, contract, data/migration, threat, dependency, deployment, or acceptance method. Route to the earliest stage whose approved truth is invalid:
+
+- problem or outcome change → Discovery;
+- product behavior, scope, or rule change → PRD;
+- technical contract or architecture change → SPEC;
+- known implementation correction → BUILD;
+- uncertain expected-versus-actual behavior → AUDIT.
+
+Record the old decision, new evidence, reopened scope, impact, and next action. Never rewrite the prior gate to imply it was never passed.
+# Build Engine
+
+## Load when
+
+Load when a task is implementation-ready and the requested outcome requires changing code, configuration, generated sources through their generator, or another executable artifact.
+
+During SPEC decomposition, consult only the canonical vertical-slice policy when SPEC requires that supporting section. This consultation does not start BUILD or satisfy implementation readiness.
+
+## Purpose
+
+Turn an approved or proportionally defined outcome into the smallest coherent, integrated implementation while preserving contracts and producing an artifact that can be verified.
+
+## Questions answered
+
+- What must be inspected before editing?
+- How should implementation proceed and be sliced?
+- How are failures diagnosed without random patching?
+- When is the artifact ready to enter verification?
+
+## Do not load when
+
+Do not enter the Build execution workflow while problem, product behavior, technical design, authority, or implementation readiness remains blocking. The SPEC supporting-section consultation above remains available. Do not use Build to issue the final quality verdict or to select every test type.
+
+## Entry contract
+
+Confirm the applicable gate in [Lifecycle and Gates](03-lifecycle-gates.md). A task is ready only when it has:
+
+- an observable objective and expected outcome;
+- input/current behavior or a reproducible baseline when applicable;
+- bounded files, components, or change surface to inspect;
+- product and technical contracts that must hold;
+- dependencies and relevant instructions;
+- acceptance criteria and expected proof;
+- material risks, rollback/recovery needs, and authority state;
+- a verification approach from [Verification](09-verification-quality.md) and [Testing](10-testing-strategy.md).
+
+T3/T4 and triggered T2 work also require the living [ExecPlan](07-execplan-engine.md) and control-plane state. An override must be valid before implementation that depends on it.
+
+## Build cycle
+
+For each relevant task:
+
+1. **Understand:** read the task, relevant requirement/SPEC/decision, constraints, Quality Bar, and only the needed references.
+2. **Locate:** inspect applicable instructions, current working tree, entry points, public path, adjacent patterns, generated sources, callers/consumers, schemas, tests, configuration, deployment, and observability.
+3. **Plan:** select the smallest coherent change and the order that preserves safety and gives early evidence. Update the ExecPlan when required.
+4. **Implement:** change the source of truth with a targeted patch; preserve unrelated work and appropriate existing conventions.
+5. **Run:** exercise the real artifact or closest faithful boundary available.
+6. **Test:** execute the focused check, then regression proportional to the mapped blast radius.
+7. **Inspect:** review outputs, persisted state, side effects, logs, diff, wiring, and generated artifacts.
+8. **Critique:** compare against the frozen criteria and search for the largest material gap.
+9. **Fix:** diagnose the gap and apply the smallest root-cause correction.
+10. **Verify:** repeat affected checks and hand the evidence to the Verification Engine.
+
+Do not skip from implementation to DONE. Successful Build produces a candidate artifact and evidence; [Verification](09-verification-quality.md) owns the verdict.
+
+## Inspect before change
+
+Use the [change-surface analysis](02-project-detection.md). Confirm:
+
+- the actual public path and whether the code is connected;
+- current behavior rather than behavior inferred from filenames;
+- ownership and direction of dependencies;
+- tests, fixtures, project commands, and environment assumptions;
+- contracts, state transitions, schemas, and migrations;
+- whether a file is generated and where its source/generator lives;
+- dirty or unexpected changes that may belong to the user;
+- expected blast radius, rollback, and external effects.
+
+If evidence contradicts approved behavior, preserve the observation and route a gap instead of silently rewriting either side.
+
+## Implement a coherent slice
+
+Prefer a minimal vertical slice that crosses only necessary boundaries, produces an observable outcome, and can be validated before expansion. Avoid building an entire database layer, backend, frontend, and test layer in isolated batches unless a proven dependency makes that safer.
+
+Keep rules and invariants in their owning boundary, validate at trust boundaries, enforce authorization on the resource/action, and make errors and side effects explicit. Add transactionality, idempotency, compatibility, observability, or configuration only when the design/risk requires them. Do not create a parallel implementation path or abstraction without a demonstrated need.
+
+Preserve public contracts unless the task explicitly changes them through the appropriate gate. Update consumers, migration, documentation, and tests when an approved contract changes.
+
+## Diagnose failures
+
+Use one evidence-driven loop:
+
+    OBSERVE → PRESERVE EVIDENCE → FORM DISCRIMINATING HYPOTHESES
+            → TEST THE MOST USEFUL HYPOTHESIS → CHANGE → RETEST
+
+Capture the failing input, environment, output, stack or state, and side effects. Distinguish symptom, cause, harness defect, pre-existing failure, and regression. When several causes fit, choose an experiment that separates them before editing.
+
+Do not make random changes, swallow errors, weaken acceptance, remove a difficult test, lower a threshold, add arbitrary retry, or over-mock the failing boundary to manufacture success.
+
+## Review the implementation candidate
+
+Inspect for disconnected code, duplicate rules, partial state, swallowed errors, authorization only in UI, invalid states, retry/duplicate/race behavior, data exposure, incomplete integration, broken consumers, unrelated changes, missing operation signals, and tests that prove implementation details rather than requested behavior.
+
+After several workstreams, perform an integration review for incompatible interfaces, missing wiring, duplicated ownership, inconsistent error/state semantics, partial migration, and regressions across boundaries.
+
+## Handoff to verification
+
+Provide changed artifacts, diff summary, commands/procedures actually run, raw result summary, environment, known limitations, pre-existing failures, remaining risks, and the exact acceptance/Quality Bar criteria addressed. Move work to the verification status defined by [contracts.json](contracts.json); mark DONE only after required evidence and dynamic DoD are satisfied.
+# Verification and Quality Engine
+
+## Load when
+
+Load before material implementation to freeze a Quality Bar, after implementation to judge evidence, during review or adversarial critique, and whenever completion, Definition of Done, or another improvement round is being considered.
+
+## Purpose
+
+Own the quality target, proof model, dynamic Definition of Done, critique loop, largest-gap selection, and final task/milestone verdict. Testing technique belongs to [Testing](10-testing-strategy.md); gates belong to [Lifecycle and Gates](03-lifecycle-gates.md).
+
+## Questions answered
+
+- Did we build what was requested, and does it run correctly?
+- Are acceptance, contracts, regression, documentation, migration, and risk satisfied?
+- What evidence supports each required criterion?
+- What is the largest remaining gap, and should the loop continue or stop?
+
+## Do not load when
+
+Do not load to enumerate tests without an artifact or criterion, to replace product/technical definition, or to perform a purely observational T0 check whose outcome is already objective. Do not treat this reference as authority to accept high risk.
+
+## Freeze the Quality Bar
+
+Before significant implementation, define stable criteria with:
+
+- criterion ID and quality dimension;
+- objective target or contract;
+- evidence method and relevant boundary;
+- required flag and priority;
+- baseline or initial state;
+- known-bad case that should fail the harness when useful;
+- validity notes: environment, workload, sample, freshness, and blind spots.
+
+Targets must be capable of rejecting the artifact. Do not lower them because implementation loses. Revise only when the requirement changes or the measurement is invalid; preserve the prior version, reason, impact, and new evidence method.
+
+Prioritize correctness, safety, authorization, data integrity, and core use before style or cosmetic improvement. A score cannot compensate for a required failure.
+
+## Verification questions
+
+For the scoped artifact, answer with evidence:
+
+1. Was the requested behavior built?
+2. Does the real artifact start or run through the relevant boundary?
+3. Does success, error, state, and side-effect behavior match acceptance?
+4. Did the credible regression surface remain intact?
+5. Are required criteria and business/technical contracts satisfied?
+6. Are documentation and traceability synchronized where needed?
+7. Are migrations, compatibility, rollout, rollback or recovery safe when applicable?
+8. Are security, data, operational, and observability obligations satisfied?
+9. Is residual risk acceptable to the correct authority?
+
+An explanation, code inspection alone, or an old result cannot answer a question that requires current execution.
+
+## Proof of work
+
+Prefer evidence closest to the real outcome: current test output, successful build/start, observed runtime behavior, query or persisted-state result, API response, UI render or screenshot when visual behavior matters, diff/artifact inspection, or static analysis tied to a rule.
+
+Store material evidence using the [Testing evidence protocol](10-testing-strategy.md#evidence-and-sufficiency), which conforms to the verification-record contract in [contracts.json](contracts.json). Record typed procedure status, evidence kind, observation time, and freshness. PASS requires an executed procedure, a permitted observation/evidence kind, and `CURRENT` evidence; PREDICTION or EXPLANATION cannot satisfy it. Freshness begins at `observed_at`, not when the record is later written: a mutation between observation and record timestamp invalidates the claim. Reference large raw output rather than pasting it into state.
+
+VERIFIED and RELEASE_READY criterion PASS records cite the exact verification-ledger ID for their scope. A later applicable mutation, recovery, decision, or failed event invalidates that evidence until the procedure is rerun; the gate timestamp cannot conceal an intervening failure.
+
+Never state “tests passed,” “works,” “safe,” or an equivalent conclusion unless the necessary procedure was actually executed and its current result supports that scope. NOT_RUN, missing environment, stale evidence, and unvalidated harness remain explicit limitations, not PASS.
+
+## Release decision boundary
+
+Use `scripts/doctor.py` for diagnosis and `scripts/release_gate.py` for the package's local release decision. Doctor may return WARN with a successful process exit when it is explicitly limited, such as when no forward decisions were supplied; release treats every result other than exact PASS as failure. The release gate delegates diagnostic policy to doctor and obtains its additional exact invariants from [contracts.json](contracts.json): current forward evidence, terminal verified control state, terminal backlog, exact clean Git root, version tag and optional expected SHA at HEAD, required no-skip unit suite proven by a controller challenge-response after execution within the contracted timeout, and the Git-index-path/worktree-blob/mode product manifest. Explicit decision files must be regular files inside the candidate root without symlinked path components. Doctor, control-plane state, Git identity, index-vs-HEAD, and the manifest are checked again after the suite; the manifest rejects assume-unchanged worktree drift and symlinks in any path component.
+
+The release authority supplies independently reviewed gate and complete product-manifest SHA-256 digests through `--trusted-gate-sha256` / `--trusted-manifest-sha256` or their `RELEASE_TRUSTED_GATE_SHA256` / `RELEASE_TRUSTED_MANIFEST_SHA256` environment equivalents. Missing or mismatched digests prevent doctor and unit execution. The manifest digest is SHA-256 of the UTF-8 canonical JSON list sorted by path, with `path`, `mode`, and `sha256` fields, sorted object keys, no ASCII escaping, and compact separators. Computing an expected digest from an unreviewed candidate is not independent approval. The calling environment must trust the verifier implementation and its Python runtime; the workflow checks the gate file before importing candidate code, but repository/provider protections remain an external prerequisite, not something candidate-owned CI can attest about itself.
+
+Release suite containment currently requires Linux procfs and child-subreaper support; other platforms fail this gate while the diagnostic core remains portable. A dedicated supervisor owns only suite descendants, terminates detached children, and uses bounded waits. The runner preserves standard unittest module/class fixtures and rejects persistent mutation of execution/result methods. Its challenge protocol detects forged output and incomplete execution; it is not a sandbox against arbitrary hostile code with the same user's privileges or self-restoring interpreter mutations. Run reviewed candidates in an isolated, disposable environment when that stronger boundary is needed.
+
+The gate is offline and read-only. Optional local comparison roots prove the versioned source paths, bytes, and modes match a candidate copy, while runtime caches and unversioned extras do not define product identity. A local PASS does not create a tag, publish, install, prove an external provider configuration, or grant authority for those actions; record those later observations and decisions separately.
+
+## Dynamic Definition of Done
+
+Compose DoD from the selected tier, Quality Bar, task acceptance, change surface, and risk. Include only applicable obligations, but do not omit a material one:
+
+- implementation and integration are complete for the scoped outcome;
+- public behavior and errors are observed;
+- relevant tests and regression succeed with valid harnesses;
+- all required acceptance criteria pass;
+- no known blocking regression or gap remains;
+- security, privacy, data, authorization, concurrency, and operational controls are verified when exposed;
+- documentation, contracts, traceability, and generated outputs are synchronized when changed;
+- migration, compatibility, rollout, rollback or recovery evidence exists when needed;
+- verification, backlog, log, plan, and runtime pointers are updated when persistence applies;
+- residual risk, limitations, authority state, and next action are explicit.
+
+An inapplicable item may be omitted or justified. An unexecuted required item blocks or requires a legitimate gate condition; it never becomes DONE by convenience.
+
+## Quality and critique loop
+
+For material work:
+
+    IMPLEMENT → RUN → SELF-REVIEW → INDEPENDENT CRITIQUE WHEN AVAILABLE
+              → IDENTIFY LARGEST GAP → DIAGNOSE → FIX → RETEST
+
+At each iteration define:
+
+- entry condition: a candidate artifact and current evidence;
+- objective: close one named required or highest-value gap;
+- progress signal: changed criterion status or stronger valid evidence;
+- exit condition: required criteria pass and risk is acceptable;
+- escalation condition: authority, external dependency, unsafe next step, or repeated non-progress;
+- maximum-useful-iteration heuristic: stop when remaining findings are non-blocking and expected gain is lower than cost/risk.
+
+Do not loop on polish while a correctness, safety, data, authorization, or central acceptance gap remains. Repeated failure triggers harness review, assumption review, a smaller reproduction, or escalation—not random retries.
+
+## Adversarial review
+
+Attack the artifact against the frozen bar, looking for:
+
+- forgotten or contradicted requirements;
+- regressions and incomplete integration;
+- invalid or impossible states;
+- races, duplicate delivery, ordering, timeout, restart, and partial failure;
+- authentication, authorization, privilege, secret, and data exposure;
+- unsafe migration, compatibility, rollback, or recovery;
+- broken UX, accessibility, visual state, or error recovery when applicable;
+- silent errors and missing operational detection;
+- changed contracts without consumers or tests;
+- weak, over-mocked, stale, or implementation-coupled tests;
+- hidden assumptions, out-of-scope changes, and documentation drift.
+
+Use contextual [Security](16-security-engineering.md), [Data Migrations](17-data-migrations.md), and [Risk](15-risk-engine.md) when triggered instead of copying their detailed policies here.
+
+For material work, conduct a distinct self-review pass after implementation against the frozen criteria and actual artifact/evidence, recording findings and limitations. This remains self-review; it neither replaces required independent critique nor counts as that critique when another reviewer is available.
+
+Then, when independent review is available and proportionate, give the reviewer goal, frozen criteria, artifact/diff, reproduction, environment facts, and safety constraints. Do not bias it with the builder's rationale, suspected fix, or desired verdict. Ask for affected criterion IDs, evidence, severity, confidence, and largest gap. The builder diagnoses suggested causes before changing code.
+
+The builder's implementation report is not a review or approval. Apply `review_degradation_rules` from `contracts.json`: absent subagents do not block the complete single-agent path, but the agent must run a temporally separated review, strengthen executable evidence, and record the limitation. It may issue PASS only when project instructions, the applicable risk/gate, and required authority do not independently mandate another reviewer. Never label self-review independent or degrade a human/risk authority requirement. When a review is used as project traceability evidence, record it through the typed append-only review ledger defined by [Traceability](21-traceability.md); free-text review labels are not evidence.
+
+## Verdict and stop
+
+Use verification statuses from [contracts.json](contracts.json). PASS requires fresh evidence for every required criterion, a valid integrated artifact, no blocking gap, and acceptable residual risk. PARTIAL or BLOCKED communicates incomplete evidence honestly; FAIL identifies a defeated required outcome.
+
+Exit status follows the evidence kind. A `COMMAND` record can support PASS only with the actual integer `exit_status=0`; `null` is not command success. Manual, runtime, static, artifact, or external-record observations may use `null` when no process exit exists, but still require an executed procedure, current observation, concrete evidence, and limitations.
+
+Stop successfully when required criteria and dynamic DoD are satisfied, relevant tests pass, no blocking finding remains, and residual risk is acceptable. Stop without success when a real human decision, critical unavailable dependency, unsafe next action, or inability to obtain minimum evidence prevents progress. In both cases report verified scope, limitations, current state, and next action. Never omit the limitations field: state “none observed” when no limitation is known for the verified scope.
+# Testing Strategy
+
+## Load when
+
+Load when selecting tests for a material change, designing a testable SPEC/task, validating a bug fix, assessing regression surface, or judging whether evidence is sufficient.
+
+## Purpose
+
+Choose the smallest risk-shaped set of tests that can detect material failure, validate the harness, and record reproducible evidence. This is not a fixed test pyramid.
+
+## Questions answered
+
+- Which test types fit the acceptance criteria, boundaries, and risks?
+- How do we prove the harness detects known-bad behavior?
+- Which data, environment, failure, concurrency, and regression cases matter?
+- What evidence is sufficient to support a verification verdict?
+
+## Do not load when
+
+Do not load to add every test category to a trivial change, to compensate for missing requirements, or to declare the quality verdict. [Verification](09-verification-quality.md) owns the verdict.
+
+## Select from behavior and risk
+
+Start from acceptance criteria, public boundary, business rules/invariants, trust boundaries, persistence, integrations, concurrency, migration/compatibility, blast radius, defect history, and cost of failure. Apply tier obligations from [Adaptive Engineering](01-adaptive-engineering.md); do not duplicate them here.
+
+Use only applicable test types:
+
+- **Static validation:** parsing, schemas, links, generated consistency, policy or artifact invariants.
+- **Lint and formatting:** project-defined syntax/style rules; formatting alone does not prove behavior.
+- **Type checking:** compile-time/interface consistency within its actual coverage.
+- **Unit:** pure rules, transformations, guards, values, and local state transitions.
+- **Component:** a cohesive component through its public interface with faithful local dependencies.
+- **Integration:** real database, filesystem, queue, cache, framework, middleware, or module interaction.
+- **Contract:** producer/consumer schema, semantics, errors, versions, and compatibility.
+- **API:** routing, middleware, auth, validation, persistence, responses, errors, idempotency, and side effects.
+- **Database:** constraints, transactions, indexes/query behavior, ownership, and concurrent effects.
+- **Migration:** representative prior state, forward change, data validation, mixed version, retry, locks, rollback or roll-forward.
+- **End-to-end:** a small set of critical vertical user/operator flows through the integrated system.
+- **UI:** interaction, state, errors, accessibility, responsive behavior, and user-visible side effects.
+- **Visual:** rendered comparison for appearance requirements with an explicit review threshold.
+- **Performance:** representative workload, distributions/tails, resources, error rate, and threshold.
+- **Load:** concurrency, sustained volume, saturation, recovery, and capacity behavior.
+- **Security:** specific authorization, input, abuse, data exposure, secret, replay, and audit controls.
+- **Smoke:** startup/deploy health and minimum real flow; it is not full correctness.
+- **Regression:** credible affected behavior beyond the focal case.
+- **Manual verification:** a documented procedure for behavior not reasonably automated, with observer and limitations.
+
+Build and tool-specific checks should use commands discovered from project instructions and configuration. Never invent a universal command or assume an existing test passed.
+
+## Define the test contract
+
+Before implementation when practical, record:
+
+- test ID and source acceptance/risk/requirement;
+- failure or regression it protects against;
+- public or internal boundary under test and why it is appropriate;
+- baseline or bug reproduction;
+- preconditions, fixtures, environment, and configuration;
+- input/action and expected observable result;
+- expected persisted state, side effects, errors, and telemetry;
+- command or manual procedure;
+- isolation, cleanup, determinism controls, and known limitations.
+
+For a bug, first obtain a reproduction that fails before the fix when feasible. For a feature, freeze the acceptance behavior rather than deriving it from the completed implementation.
+
+## Validate the harness
+
+Ask:
+
+- Does a representative known-bad artifact or input fail?
+- Does a known-good case pass?
+- Is the intended boundary actually exercised, or bypassed by mocks?
+- Are setup and assertions deterministic enough to distinguish the result?
+- Do fixtures represent empty, boundary, invalid, skewed, and realistic shapes relevant to risk?
+- Could retries, snapshots, thresholds, warnings, or broad catches hide the failure?
+
+A test that cannot detect its known-bad case is invalid evidence. Repair or replace the harness and record the change before judging the implementation.
+
+## Data, environment, and determinism
+
+Use isolated, synthetic, disposable data for destructive, migration, recovery, or security work. Never use real secrets or unnecessary personal data. Record environment and relevant versions.
+
+Control or record random seed, clock/timezone, locale, ordering, IDs, network substitutes, cache state, concurrency, feature flags, viewport/device, cleanup, and test retries when they can affect the result. Do not extrapolate local evidence to production without naming the limitation.
+
+## Failure, concurrency, and integration
+
+When relevant, test invalid input, timeout/cancellation, dependency unavailable/slow/malformed, partial write and rollback, retry/backoff, duplicate/out-of-order events, idempotency reuse, concurrent update, stale state/cache, queue poison/dead letter, restart/reconnect, resource cleanup, rate limit, and permission change/revocation.
+
+Observe response plus persisted state, emitted effects, and telemetry. Mock dependencies that are outside the test's purpose, but never mock away the boundary whose fidelity or contract is being judged. If a live external system is unavailable, use a faithful sandbox/contract double and record missing live evidence.
+
+Load [Security](16-security-engineering.md) or [Data Migrations](17-data-migrations.md) only for their actual exposure.
+
+## Regression strategy
+
+Use the [change-surface map](02-project-detection.md) to select:
+
+1. focal reproduction or acceptance check;
+2. affected unit/component/integration coverage;
+3. relevant contract/API/E2E or UI flow;
+4. project-defined build, type, lint, formatting, and static checks;
+5. migration, security, performance, or load evidence when the surface requires it;
+6. integrated smoke for deployable/operational artifacts.
+
+Separate pre-existing failures from regressions with baseline evidence. Do not ignore either; report the pre-existing limitation and keep new regressions blocking.
+
+## Evidence and sufficiency
+
+Write material results using the verification-record contract in [contracts.json](contracts.json). Capture exact procedure and typed execution status, evidence kind, scope, environment, exit status when applicable, key raw result or artifact, observation timestamp, freshness, run count where meaningful, and limitations. Manual or observational evidence may use a null exit status; PASS still requires `EXECUTED`, a permitted evidence kind, and `CURRENT` freshness. Store large outputs as referenced artifacts.
+
+Evidence is sufficient when every required acceptance has appropriate proof, the highest-risk rules and failure modes are exercised, the public boundary is observed, the credible regression surface passes, the harness detects known-bad behavior, and limitations are explicit. If a required test cannot run, record NOT_RUN/BLOCKED as defined by the machine contract and route the decision; never say it “should pass.”

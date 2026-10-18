@@ -1,0 +1,588 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -23,6 +23,23 @@
+     value_sha256: hash(value),
+     byte_length: Buffer.byteLength(value, 'utf8')
+   })
++function projectIdentity(symbol, shape, opaque = false) {
++  if (!opaque && identityVocabulary(symbol)) return { symbol, shape }
++  const identity = opaqueLiteral(
++    symbol,
++    'Unclassified identity text; stable digest replaces literal bytes'
++  )
++  return {
++    symbol: `opaque-symbol:${identity.value_sha256}`,
++    shape:
++      shape &&
++      typeof shape === 'object' &&
++      !Array.isArray(shape) &&
++      !Object.hasOwn(shape, 'identity_projection')
++        ? { ...shape, identity_projection: identity }
++        : { contract: shape, identity_projection: identity }
++  }
++}
+ const packageIdentifier = (value) =>
+   typeof value === 'string' &&
+   value.length <= 214 &&
+@@ -719,7 +736,7 @@
+   return source
+ }
+ function indexRuntimeLiterals(source, payloadLiterals) {
+-  const remember = (text) => payloadLiterals.add(hash(text))
++  const remember = (text) => payloadLiterals.set(hash(text), text)
+   const visit = (node) => {
+     // Type syntax, static module locators and declaration names are separate
+     // roles. Runtime expressions inside bodies, call arguments, computed names
+@@ -761,7 +778,7 @@
+   emit,
+   context = '',
+   scriptKind = ts.ScriptKind.TS,
+-  payloadLiterals = new Set()
++  payloadLiterals = new Map()
+ ) {
+   const source = parseTypeScriptContract(text, scriptKind)
+   sourcePayloadLiterals.set(source, payloadLiterals)
+@@ -1025,23 +1042,89 @@
+   'oneOf',
+   'contentSchema'
+ ])
++// Finite recognized schema/tool data members. Their values remain payload
++// unless the vocabulary/schema roles above establish a more specific role.
++const jsonSchemaDataFields = new Set([
++  '$schema',
++  '$id',
++  '$anchor',
++  '$dynamicAnchor',
++  '$dynamicRef',
++  '$vocabulary',
++  '$comment',
++  'title',
++  'description',
++  'deprecated',
++  'readOnly',
++  'writeOnly',
++  'default',
++  'const',
++  'examples',
++  'enum',
++  'format',
++  'pattern',
++  'minimum',
++  'maximum',
++  'exclusiveMinimum',
++  'exclusiveMaximum',
++  'multipleOf',
++  'minLength',
++  'maxLength',
++  'minItems',
++  'maxItems',
++  'uniqueItems',
++  'minContains',
++  'maxContains',
++  'minProperties',
++  'maxProperties',
++  'dependentRequired',
++  'contentEncoding',
++  'contentMediaType'
++])
++const jsonManifestFields = new Set([
++  'name',
++  'version',
++  'type',
++  'main',
++  'module',
++  'types',
++  'exports',
++  'bin',
++  'files',
++  'engines',
++  'peerDependencies',
++  'entrypoints'
++])
++const jsonKnownMember = (role, key) =>
++  role === 'schema-map' ||
++  (role === 'manifest'
++    ? jsonManifestFields.has(key)
++    : role === 'declaration' &&
++      (jsonVocabularyFields.has(key) ||
++        jsonSchemaMaps.has(key) ||
++        jsonSchemaFields.has(key) ||
++        jsonSchemaDataFields.has(key)))
+ const jsonChildRole = (role, key) =>
+-  role === 'schema-map'
+-    ? 'declaration'
+-    : role !== 'declaration'
+-      ? 'payload'
+-      : jsonVocabularyFields.has(key)
+-        ? 'vocabulary'
+-        : jsonSchemaMaps.has(key)
+-          ? 'schema-map'
+-          : jsonSchemaFields.has(key)
+-            ? 'declaration'
+-            : 'payload'
++  role === 'manifest'
++    ? key === 'name'
++      ? 'vocabulary'
++      : 'payload'
++    : role === 'schema-map'
++      ? 'declaration'
++      : role !== 'declaration'
++        ? 'payload'
++        : jsonVocabularyFields.has(key)
++          ? 'vocabulary'
++          : jsonSchemaMaps.has(key)
++            ? 'schema-map'
++            : jsonSchemaFields.has(key)
++              ? 'declaration'
++              : 'payload'
+ function jsonPayloadLiterals(
+   value,
+   field,
+   role = 'declaration',
+-  literals = new Set()
++  literals = new Map()
+ ) {
+   const pending = [{ value, field, role }]
+   while (pending.length) {
+@@ -1054,13 +1137,14 @@
+         typeof item === 'object' &&
+         !Array.isArray(item))
+     if (typeof item === 'string') {
+-      if (payload) literals.add(hash(item))
++      if (payload) literals.set(hash(item), item)
+     } else if (Array.isArray(item)) {
+       for (const child of item)
+         pending.push({ value: child, field: current.field, role: current.role })
+     } else if (item && typeof item === 'object') {
+       for (const [key, child] of Object.entries(item)) {
+-        if (payload) literals.add(hash(key))
++        if (payload || !jsonKnownMember(current.role, key))
++          literals.set(hash(key), key)
+         pending.push({
+           value: child,
+           field: key,
+@@ -1071,7 +1155,7 @@
+   }
+   return literals
+ }
+-// Four finite roles: declaration, schema-map, vocabulary, payload. Payload is
++// Finite roles: declaration, schema-map, vocabulary, payload, manifest. Payload is
+ // absorbing: default/const/examples and unclassified descendants never regain
+ // declaration privileges merely by using a structural-looking property name.
+ function projectJsonContract(
+@@ -1130,19 +1214,12 @@
+         'Unresolved declaration/payload property name; object bytes not copied',
+         json(value)
+       )
+-    if (
+-      role !== 'schema-map' &&
+-      Object.keys(value).some(
+-        (key) => !/^[A-Za-z_$][A-Za-z0-9_$./~:@-]{0,199}$/.test(key)
+-      )
+-    )
+-      return opaque(
+-        'Unclassified JSON property name; object bytes not copied',
+-        json(value)
+-      )
+-    return Object.fromEntries(
+-      Object.entries(value).map(([key, item]) => {
+-        return [
++    const members = Object.entries(value)
++    const unclassified = members.filter(([key]) => !jsonKnownMember(role, key))
++    const projected = Object.fromEntries(
++      members
++        .filter(([key]) => jsonKnownMember(role, key))
++        .map(([key, item]) => [
+           key,
+           projectJsonContract(
+             item,
+@@ -1151,9 +1228,14 @@
+             jsonChildRole(role, key),
+             payloadLiterals
+           )
+-        ]
+-      })
+-    )
++        ])
++    )
++    if (unclassified.length)
++      projected.unclassified_members = opaque(
++        'Unclassified JSON members including their names; bytes not copied',
++        json(Object.fromEntries(unclassified))
++      )
++    return projected
+   }
+   return value
+ }
+@@ -1188,11 +1270,19 @@
+   return wrapped
+ }
+ 
+-function extractDocument(text, source, add, owners) {
++const tableCells = (line) =>
++  line
++    .replace(/^\||\|$/g, '')
++    .split(/(?<!\\)\|/)
++    .map((part) => part.trim())
++const tableSeparator = (columns) =>
++  columns.every((part) => /^:?-+:?$/.test(part.replace(/\s/g, '')))
++
++function extractDocument(text, source, emit, owners) {
+   const lines = text.split('\n')
+   // One local role scope for this physical source. Complete the prepass before
+   // emitting any fragment, so forward/backward matches are order independent.
+-  const payloadLiterals = new Set()
++  const payloadLiterals = new Map()
+   let indexingFence,
+     indexingBody = []
+   for (const line of lines) {
+@@ -1229,8 +1319,29 @@
+       } else indexingBody.push(line)
+     } else {
+       const open = /^```(.*)$/.exec(line)
+-      if (open) indexingFence = open[1].trim()
++      if (open) {
++        indexingFence = open[1].trim()
++        if (
++          indexingFence !== 'json' &&
++          indexingFence !== 'mermaid' &&
++          !isTypeScriptContractFence(indexingFence)
++        )
++          payloadLiterals.set(hash(indexingFence), indexingFence)
++      } else if (/^\|/.test(line)) {
++        const columns = tableCells(line)
++        if (!tableSeparator(columns))
++          for (const cell of columns) payloadLiterals.set(hash(cell), cell)
++      }
+     }
++  }
++  const add = (kind, symbol, shape, ownership) => {
++    const opaqueRole =
++      kind === 'document-table-row' || kind === 'document-unparsed'
++    const collision = [...payloadLiterals.values()].some(
++      (value) => value.length > 0 && symbol.includes(value)
++    )
++    const projected = projectIdentity(symbol, shape, opaqueRole || collision)
++    emit(kind, projected.symbol, projected.shape, ownership)
+   }
+   // Generated Cordis/config sections place their source link after or before
+   // a fence. Resolve ownership for the entire heading independent of order.
+@@ -1378,12 +1489,8 @@
+       tableHeader = undefined
+     }
+     if (/^\|/.test(line)) {
+-      const columns = line
+-        .replace(/^\||\|$/g, '')
+-        .split(/(?<!\\)\|/)
+-        .map((part) => part.trim())
+-      if (columns.every((part) => /^:?-+:?$/.test(part.replace(/\s/g, ''))))
+-        continue
++      const columns = tableCells(line)
++      if (tableSeparator(columns)) continue
+       if (!tableHeader) {
+         tableHeader = columns
+         continue
+@@ -1444,20 +1551,9 @@
+     (kind, symbol, shape, ownership = owners.find(source)) => {
+       if (ownership.resolution)
+         shape = { contract: shape, ownership_resolution: ownership.resolution }
+-      if (!identityVocabulary(symbol)) {
+-        const identity = opaqueLiteral(
+-          symbol,
+-          'Unclassified identity text; stable digest replaces literal bytes'
+-        )
+-        symbol = `opaque-symbol:${identity.value_sha256}`
+-        shape =
+-          shape &&
+-          typeof shape === 'object' &&
+-          !Array.isArray(shape) &&
+-          !Object.hasOwn(shape, 'identity_projection')
+-            ? { ...shape, identity_projection: identity }
+-            : { contract: shape, identity_projection: identity }
+-      }
++      const projected = projectIdentity(symbol, shape)
++      symbol = projected.symbol
++      shape = projected.shape
+       const identity = { kind, package: ownership.package, source, symbol }
+       const id = `contract:${hash(json(identity))}`
+       if (ids.has(id)) fail('DUPLICATE_ID', `${source}:${kind}:${symbol}`)
+@@ -1505,7 +1601,11 @@
+         shape.entrypoints = unknown(
+           'Manifest declares neither exports nor main'
+         )
+-      emit('manifest', 'package', projectJsonContract(shape))
++      emit(
++        'manifest',
++        'package',
++        projectJsonContract(shape, undefined, 0, 'manifest')
++      )
+     } else if (/\.[cm]?[jt]sx?$/.test(source)) {
+       try {
+         extractTypeScriptContracts(
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r14'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r15'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,200 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it('R15 exact I1-R14-01 opaquely projects an unclassified JSON member and same-source mirror', () => {
++    const program = 'throw/ROOT_I1/'
++    const member = JSON.stringify({ [program]: true })
++    const source = 'docs/tool-catalog.md'
++    const markdown =
++      '# Roles\n## Payload\n```json\n{"type":"object","throw/ROOT_I1/":true}\n```\n## Mirror\n```ts public-api\nexport type SourceMirror = \'throw/ROOT_I1/\';\n```\n'
++    const f = fixture({ [source]: markdown })
++    const entries = f
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    const data = entries.find((entry) => entry.kind === 'document-json')
++    expect(data.shape.type).toBe('object')
++    expect(data.shape.unclassified_members).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha(member),
++      byte_length: Buffer.byteLength(member)
++    })
++    const mirror = entries.find((entry) => entry.kind === 'document-type')
++    expect(mirror.shape.declarations[0].type).toMatchObject({
++      status: 'UNKNOWN',
++      literals: [
++        { value_sha256: sha(program), byte_length: Buffer.byteLength(program) }
++      ]
++    })
++    expect(JSON.stringify(entries)).not.toContain(program)
++    for (const entry of entries) {
++      expect(entry.owner_task).toBe('P100-003')
++      expect(entry.source_sha256).toBe(sha(markdown))
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  })
++
++  it('R15 exact I1-R14-02 keeps a payload table cell opaque in its identity as well as shape', () => {
++    const program = 'throw/TABLE_I1/'
++    const source = 'docs/tool-catalog.md'
++    const markdown =
++      "# Tools\n## Payloads\n```ts public-api\nexport const WorkerSource = 'throw/TABLE_I1/';\nnew Worker(WorkerSource, { eval: true });\n```\n| Example | Meaning |\n| --- | --- |\n| throw/TABLE_I1/ | guest source |\n"
++    const f = fixture({ [source]: markdown })
++    const entries = f
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    const row = entries.find((entry) => entry.kind === 'document-table-row')
++    expect(row.symbol).toBe(`opaque-symbol:${sha('Tools/Payloads/' + program)}`)
++    expect(row.shape.identity_projection).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha('Tools/Payloads/' + program),
++      byte_length: Buffer.byteLength('Tools/Payloads/' + program)
++    })
++    expect(row.shape.rows[0][0]).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha(program),
++      byte_length: Buffer.byteLength(program)
++    })
++    expect(JSON.stringify(entries)).not.toContain(program)
++    for (const entry of entries) {
++      expect(entry.owner_task).toBe('P100-003')
++      expect(entry.source_sha256).toBe(sha(markdown))
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  })
++
++  it('R15 table identities are opaque by role, preserve distinct contexts, and survive row reordering', () => {
++    const source = 'docs/persistence-catalog.md'
++    const header = '| Example | Meaning |\n| --- | --- |\n'
++    const a = '| alpha | first |\n',
++      b = '| beta | second |\n'
++    const one = fixture({
++      [source]: '# Tables\n## One\n' + header + a + b + '## Two\n' + header + a
++    }).collect()
++    const two = fixture({
++      [source]: '# Tables\n## One\n' + header + b + a + '## Two\n' + header + a
++    }).collect()
++    const select = (catalog) =>
++      catalog.entries.filter(
++        (entry) =>
++          entry.source === source && entry.kind === 'document-table-row'
++      )
++    const entries = select(one)
++    expect(entries).toHaveLength(3)
++    expect(new Set(entries.map((entry) => entry.id)).size).toBe(3)
++    expect(
++      entries.every(
++        (entry) =>
++          entry.symbol.startsWith('opaque-symbol:') &&
++          entry.shape.identity_projection.status === 'UNKNOWN'
++      )
++    ).toBe(true)
++    expect(entries.map((entry) => entry.id)).toEqual(
++      select(two).map((entry) => entry.id)
++    )
++    expect(
++      entries.every(
++        (entry) =>
++          entry.owner_task === 'P100-003' &&
++          entry.source_sha256 &&
++          entry.parity_status === 'NOT_VERIFIED'
++      )
++    ).toBe(true)
++  })
++
++  it('R15 document identity routes mask shared payload text even inside heading/context parts', () => {
++    const program = 'throw/HEADING_R15/'
++    const source = 'docs/tool-catalog.md'
++    const markdown =
++      '# Tools\n## prefix/' +
++      program +
++      '/suffix\n```ts public-api\nexport const WorkerSource = ' +
++      JSON.stringify(program) +
++      ';\nnew Worker(WorkerSource, { eval: true });\nexport type Selector = \'declared\';\n```\n```json\n{"name":"declared tool"}\n```\n```mermaid\nflowchart LR\n  node["label"]\n```\n| Example | Meaning |\n| --- | --- |\n| ordinary | value |\n```unclassified-info\nignored body\n```\n'
++    const entries = fixture({ [source]: markdown })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(7)
++    expect(JSON.stringify(entries)).not.toContain(program)
++    expect(
++      entries
++        .filter((entry) => entry.kind !== 'document-surface')
++        .every((entry) => entry.symbol.startsWith('opaque-symbol:'))
++    ).toBe(true)
++    expect(
++      entries.find((entry) => entry.kind === 'document-type').shape
++        .declarations[0].type
++    ).toContain('declared')
++    expect(
++      entries.find((entry) => entry.kind === 'document-json').shape.name
++    ).toBe('declared tool')
++    expect(
++      entries.every(
++        (entry) =>
++          entry.owner_task === 'P100-003' &&
++          entry.source_sha256 === sha(markdown) &&
++          entry.parity_status === 'NOT_VERIFIED'
++      )
++    ).toBe(true)
++  })
++
++  it('R15 unclassified table data enters the physical-source index before earlier declarations', () => {
++    const program = 'row/RAW_R15/'
++    const source = 'docs/tool-catalog.md'
++    const markdown =
++      '# Docs\n```ts public-api\nexport type Selector = ' +
++      JSON.stringify(program) +
++      ';\n```\n| Example | Meaning |\n| --- | --- |\n| ' +
++      program +
++      ' | data |\n'
++    const entries = fixture({ [source]: markdown })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    expect(
++      entries.find((entry) => entry.kind === 'document-type').shape
++        .declarations[0].type
++    ).toMatchObject({
++      status: 'UNKNOWN',
++      literals: [
++        { value_sha256: sha(program), byte_length: Buffer.byteLength(program) }
++      ]
++    })
++    expect(JSON.stringify(entries)).not.toContain(program)
++  })
++
++  it('R15 preserves established schema/tool names and selectors beside opaque unclassified members', () => {
++    const source = 'packages/core/example/src/worker.schema.json'
++    const unknown = { 'mystery slot': { 'throw/KEY_R15/': true } }
++    const schema = {
++      name: 'throw 0',
++      type: 'object',
++      required: ['field with space'],
++      properties: { 'field with space': { type: 'string' } },
++      ...unknown
++    }
++    const entry = fixture({ [source]: JSON.stringify(schema) })
++      .collect()
++      .entries.find((entry) => entry.source === source)
++    expect(entry.shape).toMatchObject({
++      name: 'throw 0',
++      type: 'object',
++      required: ['field with space'],
++      properties: { 'field with space': { type: 'string' } }
++    })
++    const text = JSON.stringify(JSON.parse(serializeCatalog(unknown)))
++    expect(entry.shape.unclassified_members).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha(text),
++      byte_length: Buffer.byteLength(text)
++    })
++    expect(JSON.stringify(entry)).not.toContain('mystery slot')
++    expect(JSON.stringify(entry)).not.toContain('throw/KEY_R15/')
++    expect(entry.owner_task).toBe('P100-012')
++    expect(entry.parity_status).toBe('NOT_VERIFIED')
++  })
++
+   it.each([false, true])(
+     'R14 exact I1-R13-01 shares physical Markdown payload evidence (reverse=%s)',
+     (reverse) => {
+@@ -363,11 +557,18 @@
+       expect(entries).toHaveLength(2)
+       for (const entry of entries) {
+         const projected =
+-          field === 'examples' ? entry.shape[field][0] : entry.shape[field]
++          field === 'examples'
++            ? entry.shape[field][0]
++            : field === 'unclassified'
++              ? entry.shape.unclassified_members
++              : entry.shape[field]
++        const text = JSON.stringify(
++          field === 'unclassified' ? { [field]: payload } : payload
++        )
+         expect(projected).toMatchObject({
+           status: 'UNKNOWN',
+-          value_sha256: sha(JSON.stringify(payload)),
+-          byte_length: Buffer.byteLength(JSON.stringify(payload))
++          value_sha256: sha(text),
++          byte_length: Buffer.byteLength(text)
+         })
+         expect(projected.reason).toBeTruthy()
+         expect(entry.shape.type).toBe('object')
+@@ -701,12 +902,7 @@
+       })
+       const worker = projected.properties.worker
+       expect(worker).toMatchObject({ name, type: 'string' })
+-      for (const value of [
+-        worker.default,
+-        worker.const,
+-        worker.examples[0],
+-        worker.unclassified
+-      ]) {
++      for (const value of [worker.default, worker.const, worker.examples[0]]) {
+         expect(JSON.stringify(value)).not.toContain(payloadName)
+         expect(value).toMatchObject({
+           status: 'UNKNOWN',
+@@ -715,6 +911,18 @@
+         })
+         expect(value.reason).toBeTruthy()
+       }
++      const memberText = JSON.stringify(
++        JSON.parse(serializeCatalog({ unclassified: payload }))
++      )
++      expect(worker.unclassified_members).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(memberText),
++        byte_length: Buffer.byteLength(memberText)
++      })
++      expect(worker.unclassified_members.reason).toBeTruthy()
++      expect(JSON.stringify(worker.unclassified_members)).not.toContain(
++        payloadName
++      )
+       expect(entry.extraction_status).toBe('UNKNOWN')
+       expect(entry.owner_task).toBe('P100-012')
+       expect(entry.source_sha256).toBe(

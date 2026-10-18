@@ -1,0 +1,93 @@
+[
+  {
+    "id": "I1-214-F001",
+    "status": "CONFIRMED_PRIVATE_COMPOSITION_DIAGNOSTIC",
+    "severity": "MEDIUM",
+    "priority": "P2",
+    "confidence": "HIGH for private composer; public HTTP consequence source-derived only",
+    "criterion": [
+      "A11",
+      "A19",
+      "A22",
+      "SPEC0214 4.3.1",
+      "SPEC0214 4.5 terminal 200ms grace"
+    ],
+    "title": "Final deadline veto causes healthy terminal logging and audit to be skipped; MAX_DURATION becomes INSUFFICIENT_EVIDENCE",
+    "expected": "A synchronous final local pause read may return boolean after the deadline. The last admission veto must retain MAX_DURATION, body0, consumed, failed/H/null and permit bounded terminal non-effect bookkeeping with healthy delegates. No pre-existing evidence fault is present.",
+    "observed": {
+      "timeoutMs": 1000,
+      "finalSynchronousPauseReadMs": 1010,
+      "admissionCause": "MAX_DURATION",
+      "stop": "INSUFFICIENT_EVIDENCE",
+      "rawStop": "INSUFFICIENT_EVIDENCE",
+      "faultPhase": "log.tool/result",
+      "handlerCalls": 0,
+      "consumed": true,
+      "toolResultDelegateCalls": 0,
+      "terminalAuditDelegateCalls": 0,
+      "legacyCallbackCalls": 0
+    },
+    "sourceToEffect": [
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 112,
+        "fact": "veto returns MAX_DURATION after synchronous local pause read"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 143,
+        "fact": "admit records the veto without entering the handler; does not mark terminal finalization"
+      },
+      {
+        "path": "packages/harness/src/kernel/pipeline.ts",
+        "line": 329,
+        "fact": "kernel closes the dispatched attempt through tool/result"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 195,
+        "fact": "log adapter passes terminal=true only for turn/end, not tool/result"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 71,
+        "fact": "duration<=0 throws before Promise.resolve().then(operation); healthy log delegate never runs"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 89,
+        "fact": "internal pre-delegate timeout fixes evidence fault and aborts local controller"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-adapters.ts",
+        "line": 68,
+        "fact": "subsequent terminal audit is rejected by existing fault before reaching its delegate"
+      },
+      {
+        "path": "packages/platform/src/controlled-kernel-execution.ts",
+        "line": 499,
+        "fact": "evidence fault dominates retained private MAX_DURATION cause in final stop projection"
+      },
+      {
+        "path": "packages/platform/src/controlled-execution-plan.ts",
+        "line": 26,
+        "fact": "public projection reason becomes controlled_runtime_evidence_unavailable instead of controlled_runtime_max_duration"
+      }
+    ],
+    "evidence": [
+      "rawlogs/final-deadline-probe.stdout.log",
+      "rawlogs/final-deadline-probe.stderr.log",
+      "rawlogs/final-deadline-controls.stdout.log",
+      "commands.jsonl"
+    ],
+    "reproduce": "Node v22.23.2; use scratch diagnostic/deadline-probe.mjs with diagnostic/register.mjs, --experimental-transform-types. Exact command in commands.jsonl. Assert fails with actual INSUFFICIENT_EVIDENCE vs expected MAX_DURATION. Controls 0/20ms complete; 1010ms reproduce skipped delegates.",
+    "recommendation": "Lead should classify terminal non-effect closure for bounded grace once final admission is vetoed, so healthy tool/result and audit closures run. Preserve first true evidence fault, irreversible veto/closed state, unchanged dispatch budget and consumed grant; do not enable handler after deadline. Add exact cause/stop/delegate-count/callback tests on public assembled build and private ports.",
+    "limits": [
+      "Diagnostic uses actual private compositor/adapters/factory/kernel/journal/step store, original output policy and sanitization; only source-derived dependency projections for shared UUID helpers and approval canonical hash functions.",
+      "Synthetic attested test plugin, structural gateway core, model and atomic approval authority double. Public PluginRegistry/CapabilityGateway/Zod/HTTP paths NOT executed.",
+      "Pause delegate intentionally stalls synchronously then returns a boolean. Default public local pause reader is a constant false; no claim of a presently client-triggerable pause injection.",
+      "No unsafe handler entry or grant release observed."
+    ],
+    "preliminaryPublishedAt": "2026-10-15T04:54:02.915488+00:00"
+  }
+]

@@ -182,11 +182,13 @@ export function composeCapabilities(
  * deliberately not re-exported from the package entrypoint.
  */
 export function createCapabilityToolRegistry(
-  registry: CapabilityRegistryPort
+  registry: CapabilityRegistryPort,
+  prepareResult?: (result: unknown) => ToolResult
 ): ToolRegistry {
   const snapshot = sorted(getRegistrations(registry))
   return {
-    list: () => snapshot.map((registration) => toTool(registration)),
+    list: () =>
+      snapshot.map((registration) => toTool(registration, prepareResult)),
     resolve: (capabilityId, version) => {
       if (
         !isBoundedIdentifier(capabilityId, MAX_ID_LENGTH) ||
@@ -199,7 +201,7 @@ export function createCapabilityToolRegistry(
           candidate.descriptor.id === capabilityId &&
           candidate.descriptor.version === version
       )
-      return registration ? toTool(registration) : undefined
+      return registration ? toTool(registration, prepareResult) : undefined
     }
   }
 }
@@ -339,19 +341,23 @@ function normalizeImplementation(value: unknown): CapabilityImplementation {
   }) as CapabilityImplementation
 }
 
-function toTool(registration: StoredRegistration): ToolDefinition {
+function toTool(
+  registration: StoredRegistration,
+  prepareResult?: (result: unknown) => ToolResult
+): ToolDefinition {
   const descriptor = cloneDescriptor(registration.descriptor)
   return {
     ...descriptor,
     execute: (input: unknown, context: ToolExecutionContext) =>
-      executeBound(registration.implementation, input, context)
+      executeBound(registration.implementation, input, context, prepareResult)
   }
 }
 
 async function executeBound(
   implementation: CapabilityImplementation,
   input: unknown,
-  context: ToolExecutionContext
+  context: ToolExecutionContext,
+  prepareResult?: (result: unknown) => ToolResult
 ): Promise<ToolResult> {
   let safeInput: unknown
   try {
@@ -367,15 +373,22 @@ async function executeBound(
   }
 
   let result: ToolResult
+  let preparing = false
   try {
     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
     const rawResult = await implementation.execute(safeInput, safeContext)
-    const normalizedResult = normalizeToolResult(rawResult)
+    preparing = Boolean(prepareResult)
+    const normalizedResult = prepareResult
+      ? prepareResult(rawResult)
+      : normalizeToolResult(rawResult)
+    preparing = false
     if (!normalizedResult) {
       return { status: 'REJECTED', error: 'capability_result_invalid' }
     }
     result = normalizedResult
   } catch {
+    if (preparing)
+      throw new Error('unknown_effect: complete_result_not_representable')
     return { status: 'FAILED', error: 'capability_execution_failed' }
   }
 
@@ -390,6 +403,7 @@ async function executeBound(
   }
 
   try {
+    if (prepareResult) return prepareResult(result)
     return {
       status: result.status,
       ...(result.output !== undefined

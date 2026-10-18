@@ -1,0 +1,942 @@
+import type { Readable, Writable } from 'node:stream'
+import { SdkClientError, type SdkTransport } from './client.ts'
+import type { JsonRpcRequest, JsonRpcResponse } from './protocol.ts'
+import type { SdkServer } from './server.ts'
+import {
+  isRequest,
+  validIdentifier,
+  validParams,
+  validateCorrelatedResponse
+} from './validators.ts'
+
+export const SDK_TRANSPORT_ERROR_CODES = {
+  frame: -32080,
+  response_too_large: -32081,
+  timeout: -32082,
+  transport: -32083,
+  limit: -32084,
+  invalid_response: -32085
+} as const
+
+export type SdkWireErrorKind =
+  | 'frame'
+  | 'timeout'
+  | 'transport'
+  | 'closed'
+  | 'limit'
+  | 'invalid_response'
+  | 'remote_error'
+
+export class SdkWireError extends SdkClientError {
+  readonly retrySafe: boolean
+  constructor(
+    readonly kind: SdkWireErrorKind,
+    readonly requestId: string | number,
+    readonly method: string,
+    readonly outcome: 'not_dispatched' | 'unknown',
+    code: number,
+    message: string,
+    data?: unknown
+  ) {
+    super(code, message, data)
+    this.name = 'SdkWireError'
+    this.retrySafe = outcome === 'not_dispatched'
+  }
+}
+
+export interface StdioTransportOptions {
+  readonly input: Readable
+  readonly output: Writable
+  readonly maxFrameBytes?: number
+  readonly maxPendingRequests?: number
+  readonly requestTimeoutMs?: number
+  readonly expectedTenantId: string
+  readonly maxLifetimeRequests?: number
+  readonly maxBufferedBytes?: number
+}
+
+export interface StdioSdkTransport extends SdkTransport {
+  close(): Promise<void>
+}
+
+export interface StdioServerOptions {
+  readonly input: Readable
+  readonly output: Writable
+  readonly server: SdkServer
+  readonly maxFrameBytes?: number
+  readonly maxQueuedRequests?: number
+  readonly maxLifetimeRequests?: number
+  readonly maxBufferedBytes?: number
+  readonly closeTimeoutMs?: number
+  readonly onError?: (failure: {
+    readonly kind: 'frame' | 'transport' | 'limit' | 'invalid_response'
+    readonly code: number
+  }) => void
+}
+
+export interface StdioSdkServer {
+  readonly closed: Promise<void>
+  close(): Promise<void>
+}
+
+type LocalKind = Exclude<SdkWireErrorKind, 'remote_error'>
+const codeFor = (kind: LocalKind) =>
+  SDK_TRANSPORT_ERROR_CODES[kind === 'closed' ? 'transport' : kind]
+const messageFor = (kind: LocalKind) => `SDK stdio ${kind}`
+const keyFor = (id: string | number) => JSON.stringify([typeof id, id])
+
+function bound(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const n = value ?? fallback
+  if (!Number.isSafeInteger(n) || n < min || n > max)
+    throw new Error('Invalid SDK stdio limit')
+  return n
+}
+
+function limits(options: StdioTransportOptions | StdioServerOptions) {
+  const frame = bound(options.maxFrameBytes, 1024 * 1024, 128, 4 * 1024 * 1024)
+  return {
+    frame,
+    bytes: bound(
+      options.maxBufferedBytes,
+      4 * 1024 * 1024,
+      frame,
+      16 * 1024 * 1024
+    ),
+    lifetime: bound(options.maxLifetimeRequests, 4096, 1, 65536)
+  }
+}
+
+/** One bounded tail; never decode incomplete UTF-8 or recover a malformed tail. */
+function readFrames(
+  input: Readable,
+  max: number,
+  onFrame: (value: unknown, bytes: number) => void,
+  fail: (kind: 'frame' | 'transport') => void
+) {
+  let tail = Buffer.alloc(0)
+  let stopped = false
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+  function data(chunk: unknown) {
+    if (stopped) return
+    if (!(chunk instanceof Uint8Array)) {
+      fail('frame')
+      return
+    }
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    let offset = 0
+    while (!stopped && offset < buffer.length) {
+      const lf = buffer.indexOf(10, offset)
+      const end = lf === -1 ? buffer.length : lf + 1
+      const segment = buffer.subarray(offset, end)
+      const length = tail.length + segment.length
+      if (length > max || (lf === -1 && length >= max)) {
+        fail('frame')
+        return
+      }
+      const frame = tail.length
+        ? Buffer.concat([tail, segment], length)
+        : segment
+      if (lf === -1) {
+        tail = Buffer.from(frame)
+        return
+      }
+      tail = Buffer.alloc(0)
+      let value: unknown
+      try {
+        value = JSON.parse(decoder.decode(frame))
+      } catch {
+        fail('frame')
+        return
+      }
+      onFrame(value, length)
+      offset = end
+    }
+  }
+  const end = () => fail(tail.length ? 'frame' : 'transport')
+  const error = () => fail('transport')
+  input.on('data', data)
+  input.on('end', end)
+  input.on('close', end)
+  input.on('error', error)
+  return () => {
+    stopped = true
+    tail = Buffer.alloc(0)
+    input
+      .off('data', data)
+      .off('end', end)
+      .off('close', end)
+      .off('error', error)
+  }
+}
+
+/** Only one active write, completed by BOTH callback and drain when required. */
+function writer(output: Writable) {
+  let cancel: (() => void) | undefined
+  return {
+    cancel: () => cancel?.(),
+    write(frame: Buffer): Promise<void> {
+      return new Promise((resolve, reject) => {
+        let returned = false
+        let callback = false
+        let drained = false
+        let done = false
+        const clean = () => {
+          output.off('drain', drain)
+          cancel = undefined
+        }
+        const finish = (error?: unknown) => {
+          if (done) return
+          if (error !== undefined) {
+            done = true
+            clean()
+            reject(new Error('SDK stdio write failed'))
+            return
+          }
+          if (returned && callback && drained) {
+            done = true
+            clean()
+            resolve()
+          }
+        }
+        const drain = () => {
+          drained = true
+          finish()
+        }
+        cancel = () => finish(new Error('SDK stdio write closed'))
+        output.on('drain', drain)
+        try {
+          const accepted = output.write(frame, (error) => {
+            if (error) finish(error)
+            else {
+              callback = true
+              finish()
+            }
+          })
+          returned = true
+          if (accepted) drained = true
+          finish()
+        } catch (error) {
+          finish(error)
+        }
+      })
+    }
+  }
+}
+
+function outputEvents(output: Writable, fail: () => void) {
+  output.on('error', fail).on('close', fail).on('finish', fail)
+  return () => {
+    output.off('error', fail).off('close', fail).off('finish', fail)
+  }
+}
+
+interface Pending {
+  readonly request: JsonRpcRequest
+  frame: Buffer | undefined
+  readonly bytes: number
+  state: 'QUEUED' | 'WRITTEN'
+  readonly timer: ReturnType<typeof setTimeout>
+  readonly resolve: (response: JsonRpcResponse) => void
+  readonly reject: (error: SdkWireError) => void
+}
+
+export function createStdioSdkTransport(
+  options: StdioTransportOptions
+): StdioSdkTransport {
+  const cap = limits(options)
+  const maxPending = bound(options.maxPendingRequests, 64, 1, 1024)
+  const timeout = bound(options.requestTimeoutMs, 30000, 1, 300000)
+  if (!validIdentifier(options.expectedTenantId))
+    throw new Error('Invalid SDK stdio tenant')
+  let state: 'OPEN' | 'CLOSING' | 'CLOSED' = 'OPEN'
+  const pending = new Map<string, Pending>()
+  const seen = new Set<string>()
+  const queue: Pending[] = []
+  let bytes = 0
+  let pumping = false
+  const writes = writer(options.output)
+  let detachInput = () => {}
+  let detachOutput = () => {}
+  function local(kind: LocalKind, request: JsonRpcRequest, written = false) {
+    return new SdkWireError(
+      kind,
+      request.id,
+      request.method,
+      written ? 'unknown' : 'not_dispatched',
+      codeFor(kind),
+      messageFor(kind)
+    )
+  }
+  function closeWith(kind: LocalKind) {
+    if (state !== 'OPEN') return
+    state = 'CLOSING'
+    detachInput()
+    detachOutput()
+    writes.cancel()
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer)
+      entry.frame = undefined
+      entry.reject(local(kind, entry.request, entry.state === 'WRITTEN'))
+    }
+    pending.clear()
+    queue.length = 0
+    seen.clear()
+    bytes = 0
+    state = 'CLOSED'
+  }
+  async function pump() {
+    if (pumping || state !== 'OPEN') return
+    pumping = true
+    try {
+      while (state === 'OPEN' && queue.length) {
+        const entry = queue.shift()!
+        // A validated response cannot settle an entry that has not been written.
+        const frame = entry.frame!
+        entry.frame = undefined
+        entry.state = 'WRITTEN'
+        await writes.write(frame)
+      }
+    } catch {
+      closeWith('transport')
+    } finally {
+      pumping = false
+    }
+  }
+  detachInput = readFrames(
+    options.input,
+    cap.frame,
+    (response) => {
+      const r = response as { id?: unknown } | null
+      const id = r !== null && typeof r === 'object' ? r.id : undefined
+      const entry =
+        typeof id === 'string' || typeof id === 'number'
+          ? pending.get(keyFor(id))
+          : undefined
+      if (!entry || entry.state !== 'WRITTEN') {
+        closeWith('invalid_response')
+        return
+      }
+      try {
+        validateCorrelatedResponse(
+          entry.request,
+          response,
+          options.expectedTenantId
+        )
+      } catch {
+        closeWith('invalid_response')
+        return
+      }
+      pending.delete(keyFor(entry.request.id))
+      bytes -= entry.bytes
+      clearTimeout(entry.timer)
+      if ('error' in response)
+        entry.reject(
+          new SdkWireError(
+            'remote_error',
+            entry.request.id,
+            entry.request.method,
+            'unknown',
+            response.error.code,
+            response.error.message,
+            response.error.data
+          )
+        )
+      else entry.resolve(response)
+    },
+    closeWith
+  )
+  detachOutput = outputEvents(options.output, () => closeWith('transport'))
+  if (
+    options.input.destroyed ||
+    options.input.readableEnded ||
+    options.output.destroyed ||
+    options.output.writableEnded
+  )
+    closeWith('transport')
+  return {
+    request(request) {
+      if (state !== 'OPEN') return Promise.reject(local('closed', request))
+      if (!isRequest(request) || !validParams(request))
+        return Promise.reject(local('frame', request))
+      let frame: Buffer
+      let snapshot: JsonRpcRequest
+      try {
+        frame = Buffer.from(JSON.stringify(request) + '\n')
+        snapshot = JSON.parse(frame.toString('utf8')) as JsonRpcRequest
+        if (!isRequest(snapshot) || !validParams(snapshot))
+          return Promise.reject(local('frame', request))
+      } catch {
+        return Promise.reject(local('frame', request))
+      }
+      const key = keyFor(snapshot.id)
+      if (
+        frame.length > cap.frame ||
+        seen.has(key) ||
+        seen.size >= cap.lifetime ||
+        pending.size >= maxPending ||
+        bytes + frame.length > cap.bytes
+      )
+        return Promise.reject(local('limit', snapshot))
+      seen.add(key)
+      bytes += frame.length
+      const result = new Promise<JsonRpcResponse>((resolve, reject) => {
+        const entry: Pending = {
+          request: snapshot,
+          frame,
+          bytes: frame.length,
+          state: 'QUEUED',
+          timer: setTimeout(() => closeWith('timeout'), timeout),
+          resolve,
+          reject
+        }
+        pending.set(key, entry)
+        queue.push(entry)
+      })
+      void pump()
+      return result
+    },
+    async close() {
+      closeWith('closed')
+    }
+  }
+}
+
+interface QueuedRequest {
+  readonly request: JsonRpcRequest
+  readonly bytes: number
+}
+
+export function serveStdioSdk(options: StdioServerOptions): StdioSdkServer {
+  const cap = limits(options)
+  const maxQueue = bound(options.maxQueuedRequests, 64, 1, 1024)
+  const closeTimeout = bound(options.closeTimeoutMs, 1000, 1, 5000)
+  let state: 'OPEN' | 'CLOSING' | 'CLOSED' = 'OPEN'
+  let exhausted = false
+  let active = false
+  let bytes = 0
+  const queue: QueuedRequest[] = []
+  const seen = new Set<string>()
+  const writes = writer(options.output)
+  let resolveClosed!: () => void
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve
+  })
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  let detachInput = () => {}
+  let detachOutput = () => {}
+  function report(kind: 'frame' | 'transport' | 'limit' | 'invalid_response') {
+    try {
+      options.onError?.({ kind, code: codeFor(kind) })
+    } catch {
+      /* host callback cannot prevent cleanup */
+    }
+  }
+  function finish() {
+    if (state === 'CLOSED') return
+    state = 'CLOSED'
+    if (deadline !== undefined) clearTimeout(deadline)
+    detachInput()
+    detachOutput()
+    writes.cancel()
+    queue.length = 0
+    seen.clear()
+    bytes = 0
+    resolveClosed()
+  }
+  function closing() {
+    if (state !== 'OPEN') return
+    state = 'CLOSING'
+    detachInput()
+    queue.length = 0
+    bytes = 0
+    if (!active) finish()
+    else deadline = setTimeout(finish, closeTimeout)
+  }
+  function fail(kind: 'frame' | 'transport' | 'limit' | 'invalid_response') {
+    if (state === 'CLOSED') return
+    report(kind)
+    closing()
+    // I/O failure cannot drain; active completion is still observed by pump.
+    if (kind === 'transport') finish()
+  }
+  function finishClosing() {
+    if (state === 'CLOSING' || exhausted) finish()
+  }
+  async function pump() {
+    if (active || state !== 'OPEN') return
+    active = true
+    try {
+      while (state === 'OPEN' && queue.length) {
+        const entry = queue.shift()!
+        const response = await options.server.dispatch(entry.request)
+        if (state !== 'OPEN') break
+        try {
+          validateCorrelatedResponse(entry.request, response)
+        } catch {
+          fail('invalid_response')
+          break
+        }
+        let frame = Buffer.from(JSON.stringify(response) + '\n')
+        if (frame.length > cap.frame) {
+          frame = Buffer.from(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: entry.request.id,
+              error: {
+                code: SDK_TRANSPORT_ERROR_CODES.response_too_large,
+                message: 'response_too_large'
+              }
+            }) + '\n'
+          )
+          if (frame.length > cap.frame) {
+            fail('limit')
+            break
+          }
+        }
+        await writes.write(frame)
+        if (state === 'OPEN') bytes -= entry.bytes
+      }
+    } catch {
+      fail('transport')
+    } finally {
+      active = false
+      finishClosing()
+    }
+  }
+  detachInput = readFrames(
+    options.input,
+    cap.frame,
+    (value, length) => {
+      if (!isRequest(value) || !validParams(value)) {
+        fail('frame')
+        return
+      }
+      const key = keyFor(value.id)
+      if (seen.has(key)) {
+        fail('limit')
+        return
+      }
+      if (seen.size >= cap.lifetime) {
+        // Stop reading, preserve the bounded set of accepted requests through drain.
+        exhausted = true
+        detachInput()
+        report('limit')
+        if (!active && !queue.length) finish()
+        else deadline = setTimeout(finish, closeTimeout)
+        return
+      }
+      if (queue.length >= maxQueue || bytes + length > cap.bytes) {
+        fail('limit')
+        return
+      }
+      seen.add(key)
+      bytes += length
+      queue.push({ request: value, bytes: length })
+      void pump()
+    },
+    fail
+  )
+  detachOutput = outputEvents(options.output, () => fail('transport'))
+  if (
+    options.input.destroyed ||
+    options.input.readableEnded ||
+    options.output.destroyed ||
+    options.output.writableEnded
+  )
+    fail('transport')
+  return {
+    closed,
+    async close() {
+      closing()
+      await closed
+    }
+  }
+}
+import { STOP_REASONS } from '@cvg/harness-contracts'
+import { validateSessionEvent } from '@cvg/harness'
+import {
+  SDK_METHODS,
+  SDK_PROTOCOL_VERSION,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
+  type SdkMethod,
+  type SdkHelloResult,
+  type SessionOpenResult,
+  type TurnSendResult,
+  type SessionEventsResult
+} from './protocol.ts'
+
+export function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+export function validIdentifier(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value.length <= 200 &&
+    !value.includes('\u0000')
+  )
+}
+
+export function validRpcId(value: unknown): value is string | number {
+  return (
+    validIdentifier(value) ||
+    (typeof value === 'number' && Number.isSafeInteger(value))
+  )
+}
+
+export function isSdkMethod(value: string): value is SdkMethod {
+  return SDK_METHODS.some((method) => method === value)
+}
+
+const natural = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+
+export function isRequest(value: unknown): value is JsonRpcRequest {
+  const r = record(value)
+  return (
+    !!r &&
+    Object.hasOwn(r, 'id') &&
+    validRpcId(r.id) &&
+    r.jsonrpc === '2.0' &&
+    typeof r.method === 'string' &&
+    r.method.length > 0 &&
+    (r.params === undefined || !!record(r.params) || Array.isArray(r.params))
+  )
+}
+
+/** Matches the v1 server's params; unknown methods remain method_not_found. */
+export function validParams(request: JsonRpcRequest): boolean {
+  if (!isSdkMethod(request.method)) return true
+  const p = record(request.params)
+  if (!p) return false
+  switch (request.method) {
+    case 'sdk.hello':
+      return (
+        typeof p.protocolVersion === 'number' &&
+        Number.isFinite(p.protocolVersion)
+      )
+    case 'session.open':
+      return validIdentifier(p.sessionId)
+    case 'turn.send':
+      return (
+        typeof p.userMessage === 'string' &&
+        p.userMessage.trim().length > 0 &&
+        Buffer.byteLength(p.userMessage) <= 64 * 1024 &&
+        (p.sessionId === undefined || validIdentifier(p.sessionId))
+      )
+    case 'session.events':
+      return (
+        validIdentifier(p.sessionId) &&
+        natural(p.afterSequence ?? 0) &&
+        natural(p.limit ?? 100) &&
+        ((p.limit ?? 100) as number) >= 1 &&
+        ((p.limit ?? 100) as number) <= 500
+      )
+  }
+}
+
+export function isResponse(value: unknown): value is JsonRpcResponse {
+  const r = record(value)
+  if (!r || r.jsonrpc !== '2.0' || !Object.hasOwn(r, 'id') || !validRpcId(r.id))
+    return false
+  const hasResult = Object.hasOwn(r, 'result')
+  const hasError = Object.hasOwn(r, 'error')
+  if (hasResult === hasError) return false
+  if (hasResult) return true
+  const e = record(r.error)
+  return (
+    !!e &&
+    typeof e.code === 'number' &&
+    Number.isSafeInteger(e.code) &&
+    typeof e.message === 'string' &&
+    Buffer.byteLength(e.message) >= 1 &&
+    Buffer.byteLength(e.message) <= 1024
+  )
+}
+
+interface Results {
+  'sdk.hello': SdkHelloResult
+  'session.open': SessionOpenResult
+  'turn.send': TurnSendResult
+  'session.events': SessionEventsResult
+}
+
+function validResult(
+  request: JsonRpcRequest,
+  value: unknown,
+  expectedTenantId?: string
+): boolean {
+  const r = record(value)
+  const p = record(request.params)
+  if (!r || !p) return false
+  switch (request.method) {
+    case 'sdk.hello': {
+      const c = record(r.capabilities)
+      if (
+        r.protocolVersion !== SDK_PROTOCOL_VERSION ||
+        !c ||
+        typeof c.sessions !== 'boolean' ||
+        typeof c.events !== 'boolean' ||
+        !Array.isArray(c.methods) ||
+        !c.methods.every(
+          (m: unknown) => typeof m === 'string' && isSdkMethod(m)
+        )
+      )
+        return false
+      const methods = new Set(c.methods)
+      return (
+        methods.size === c.methods.length &&
+        methods.has('sdk.hello') &&
+        methods.has('turn.send') &&
+        methods.has('session.open') === c.sessions &&
+        methods.has('session.events') === c.events &&
+        (!c.events || c.sessions)
+      )
+    }
+    case 'session.open':
+      return (
+        r.formatVersion === 1 &&
+        r.sessionId === p.sessionId &&
+        validIdentifier(r.sessionId)
+      )
+    case 'turn.send': {
+      const u = record(r.usage)
+      return (
+        typeof r.stopReason === 'string' &&
+        STOP_REASONS.some((s) => s === r.stopReason) &&
+        typeof r.response === 'string' &&
+        natural(r.modelCalls) &&
+        natural(r.toolCalls) &&
+        !!u &&
+        natural(u.inputTokens) &&
+        natural(u.outputTokens) &&
+        typeof u.costUsd === 'number' &&
+        Number.isFinite(u.costUsd) &&
+        u.costUsd >= 0 &&
+        (p.sessionId === undefined
+          ? !Object.hasOwn(r, 'sessionId')
+          : r.sessionId === p.sessionId)
+      )
+    }
+    case 'session.events': {
+      if (
+        !Array.isArray(r.events) ||
+        r.events.length > ((p.limit ?? 100) as number)
+      )
+        return false
+      let sequence = (p.afterSequence ?? 0) as number
+      const ids = new Set<string>()
+      try {
+        for (const value of r.events) {
+          const event = validateSessionEvent(value)
+          if (
+            event.formatVersion !== 1 ||
+            event.sessionId !== p.sessionId ||
+            (expectedTenantId !== undefined &&
+              event.tenantId !== expectedTenantId) ||
+            event.sequence <= sequence ||
+            ids.has(event.eventId)
+          )
+            return false
+          sequence = event.sequence
+          ids.add(event.eventId)
+        }
+      } catch {
+        return false
+      }
+      return true
+    }
+    default:
+      return false
+  }
+}
+
+/** Validation precedes settlement; returns the unmodified result. */
+export function validateResult<M extends SdkMethod>(
+  request: JsonRpcRequest & { readonly method: M },
+  value: unknown,
+  expectedTenantId?: string
+): Results[M] {
+  if (!validResult(request, value, expectedTenantId))
+    throw new Error('Invalid SDK result')
+  return value as Results[M]
+}
+
+export function validateCorrelatedResponse(
+  request: JsonRpcRequest,
+  response: unknown,
+  expectedTenantId?: string
+): asserts response is JsonRpcResponse {
+  if (
+    !isResponse(response) ||
+    response.id !== request.id ||
+    typeof response.id !== typeof request.id
+  )
+    throw new Error('Invalid SDK response')
+  if (
+    'result' in response &&
+    (!isSdkMethod(request.method) ||
+      !validResult(request, response.result, expectedTenantId))
+  )
+    throw new Error('Invalid SDK result')
+}
+diff --git a/packages/sdk/src/client.ts b/packages/sdk/src/client.ts
+index c4ccd1f..fc48eab 100644
+--- a/packages/sdk/src/client.ts
++++ b/packages/sdk/src/client.ts
+@@ -4,11 +4,12 @@ import {
+   type JsonRpcRequest,
+   type JsonRpcResponse,
+   type SdkHelloResult,
+-  type SessionEventsResult,
+   type SessionOpenResult,
++  type SdkMethod,
+   type TurnSendResult
+ } from './protocol.ts'
+ import type { SdkServer } from './server.ts'
++import { validateCorrelatedResponse, validateResult } from './validators.ts'
+ 
+ /** Host-owned transport; this package never opens a socket itself. */
+ export interface SdkTransport {
+@@ -49,14 +50,19 @@ export function createInProcessTransport(server: SdkServer): SdkTransport {
+ 
+ export function createSdkClient(transport: SdkTransport): SdkClient {
+   let nextRequestId = 1
+-  async function call(method: string, params?: unknown): Promise<unknown> {
+-    const request: JsonRpcRequest = {
++  async function call<M extends SdkMethod>(method: M, params?: unknown) {
++    const request: JsonRpcRequest & { readonly method: M } = {
+       jsonrpc: '2.0',
+       id: nextRequestId++,
+       method,
+       ...(params !== undefined ? { params } : {})
+     }
+     const response = await transport.request(request)
++    try {
++      validateCorrelatedResponse(request, response)
++    } catch {
++      throw new SdkClientError(-32085, 'Invalid SDK response')
++    }
+     if ('error' in response) {
+       throw new SdkClientError(
+         response.error.code,
+@@ -64,26 +70,25 @@ export function createSdkClient(transport: SdkTransport): SdkClient {
+         response.error.data
+       )
+     }
+-    return response.result
++    return validateResult(request, response.result)
+   }
+   return {
+     protocolVersion: SDK_PROTOCOL_VERSION,
+     hello: async () =>
+-      (await call('sdk.hello', {
++      await call('sdk.hello', {
+         protocolVersion: SDK_PROTOCOL_VERSION
+-      })) as SdkHelloResult,
+-    openSession: async (sessionId) =>
+-      (await call('session.open', { sessionId })) as SessionOpenResult,
++      }),
++    openSession: async (sessionId) => await call('session.open', { sessionId }),
+     sendTurn: async (userMessage, sessionId) =>
+-      (await call('turn.send', {
++      await call('turn.send', {
+         ...(sessionId !== undefined ? { sessionId } : {}),
+         userMessage
+-      })) as TurnSendResult,
++      }),
+     readEvents: async (sessionId, options = {}) => {
+-      const result = (await call('session.events', {
++      const result = await call('session.events', {
+         sessionId,
+         ...options
+-      })) as SessionEventsResult
++      })
+       return result.events
+     }
+   }
+diff --git a/packages/sdk/src/index.ts b/packages/sdk/src/index.ts
+index f8a4622..0a8d94d 100644
+--- a/packages/sdk/src/index.ts
++++ b/packages/sdk/src/index.ts
+@@ -2,3 +2,16 @@ export * from './protocol.ts'
+ export * from './server.ts'
+ export * from './client.ts'
+ export * from './composition.ts'
++export {
++  SDK_TRANSPORT_ERROR_CODES,
++  SdkWireError,
++  createStdioSdkTransport,
++  serveStdioSdk
++} from './stdio.ts'
++export type {
++  SdkWireErrorKind,
++  StdioTransportOptions,
++  StdioSdkTransport,
++  StdioServerOptions,
++  StdioSdkServer
++} from './stdio.ts'
+diff --git a/packages/sdk/src/server.ts b/packages/sdk/src/server.ts
+index 2601e28..f4bd3f2 100644
+--- a/packages/sdk/src/server.ts
++++ b/packages/sdk/src/server.ts
+@@ -32,6 +32,7 @@ import {
+   type JsonRpcSuccess,
+   type SdkCapabilities
+ } from './protocol.ts'
++import { isRequest, validRpcId } from './validators.ts'
+ 
+ /** Deterministic fallback budget for one SDK turn. */
+ export const SDK_DEFAULT_BUDGET: ExecutionBudget = {
+@@ -385,18 +386,8 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
+     capabilities,
+     async dispatch(payload: unknown): Promise<JsonRpcResponse> {
+       const record = asRecord(payload)
+-      const id =
+-        record &&
+-        (typeof record.id === 'string' || typeof record.id === 'number')
+-          ? record.id
+-          : null
+-      if (
+-        !record ||
+-        record.jsonrpc !== '2.0' ||
+-        typeof record.method !== 'string' ||
+-        record.method.length === 0 ||
+-        id === null
+-      ) {
++      const id = record && validRpcId(record.id) ? record.id : null
++      if (!isRequest(payload)) {
+         return failure(
+           id,
+           SDK_ERROR_CODES.invalid_request,
+@@ -409,16 +400,14 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
+         'turn.send': handleTurnSend,
+         'session.events': handleSessionEvents
+       }
+-      const handler = handlers[record.method]
++      const handler = Object.hasOwn(handlers, payload.method)
++        ? handlers[payload.method]
++        : undefined
+       if (!handler) {
+-        return failure(
+-          id,
+-          SDK_ERROR_CODES.method_not_found,
+-          `Unknown method ${record.method}`
+-        )
++        return failure(id, SDK_ERROR_CODES.method_not_found, 'Unknown method')
+       }
+       try {
+-        return success(id, await handler(record.params))
++        return success(payload.id, await handler(payload.params))
+       } catch (error) {
+         if (error instanceof SdkRequestError) {
+           return failure(id, error.code, error.message)

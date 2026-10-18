@@ -1,0 +1,1887 @@
+     1	#!/usr/bin/env node
+     2	// Static contract DATA only. No reference modules, generators or plugins are loaded.
+     3	import fs from 'node:fs'
+     4	import path from 'node:path'
+     5	import crypto from 'node:crypto'
+     6	import { execFileSync } from 'node:child_process'
+     7	import { fileURLToPath } from 'node:url'
+     8	import ts from 'typescript'
+     9	
+    10	export const CATALOG_VERSION = 1
+    11	export const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
+    12	export const REFERENCE_VERSION = '0.2.0-rc.1'
+    13	const unknown = (reason, extra = {}) => ({
+    14	  status: 'UNKNOWN',
+    15	  reason,
+    16	  ...extra
+    17	})
+    18	const hash = (value) => crypto.createHash('sha256').update(value).digest('hex')
+    19	const ordered = (value) => {
+    20	  if (Array.isArray(value)) return value.map(ordered)
+    21	  if (value && typeof value === 'object') {
+    22	    return Object.fromEntries(
+    23	      Object.keys(value)
+    24	        .sort()
+    25	        .map((key) => [key, ordered(value[key])])
+    26	    )
+    27	  }
+    28	  return value
+    29	}
+    30	export const serializeCatalog = (value) =>
+    31	  `${JSON.stringify(ordered(value), null, 2)}\n`
+    32	const json = (value) => JSON.stringify(ordered(value))
+    33	const hasUnknown = (value) =>
+    34	  !!value &&
+    35	  typeof value === 'object' &&
+    36	  (value.status === 'UNKNOWN' || Object.values(value).some(hasUnknown))
+    37	const fail = (code, message) => {
+    38	  throw new Error(`${code}: ${message}`)
+    39	}
+    40	const sensitive = (name) =>
+    41	  name
+    42	    .split('/')
+    43	    .some((part) =>
+    44	      /^(?:\.env(?:\..*)?|\.dsh|node_modules|\.git|auth(?:\.json|\.ya?ml)?|secrets?(?:\.json|\.ya?ml))$/i.test(
+    45	        part
+    46	      )
+    47	    )
+    48	
+    49	function readJsonData(filename) {
+    50	  const resolved = path.resolve(filename)
+    51	  if (
+    52	    sensitive(resolved) ||
+    53	    !resolved.endsWith('.json') ||
+    54	    fs.realpathSync(resolved) !== resolved
+    55	  )
+    56	    fail('UNSAFE_JSON_INPUT', resolved)
+    57	  return JSON.parse(fs.readFileSync(resolved, 'utf8'))
+    58	}
+    59	
+    60	function relativePath(name) {
+    61	  if (
+    62	    typeof name !== 'string' ||
+    63	    !name ||
+    64	    name.includes('\\') ||
+    65	    name.includes('\0') ||
+    66	    path.posix.isAbsolute(name) ||
+    67	    name.split('/').some((part) => !part || part === '.' || part === '..') ||
+    68	    sensitive(name)
+    69	  ) {
+    70	    fail('UNSAFE_PATH', String(name))
+    71	  }
+    72	  return name
+    73	}
+    74	
+    75	// Check every ancestor before opening a file. Even in-root symlinks are refused:
+    76	// a literal tracked source path must identify its own source, never an alias.
+    77	function safeRead(root, name) {
+    78	  relativePath(name)
+    79	  let current = root
+    80	  for (const part of name.split('/')) {
+    81	    current = path.join(current, part)
+    82	    let info
+    83	    try {
+    84	      info = fs.lstatSync(current)
+    85	    } catch {
+    86	      fail('MISSING_SOURCE', name)
+    87	    }
+    88	    if (info.isSymbolicLink()) fail('SYMLINK_SOURCE', name)
+    89	  }
+    90	  if (!fs.statSync(current).isFile()) fail('MISSING_SOURCE', name)
+    91	  return fs.readFileSync(current)
+    92	}
+    93	
+    94	function git(root, args) {
+    95	  return execFileSync('git', ['-C', root, ...args], {
+    96	    encoding: 'utf8',
+    97	    maxBuffer: 64 * 1024 * 1024,
+    98	    env: {
+    99	      PATH: process.env.PATH,
+   100	      HOME: process.env.HOME,
+   101	      GIT_CONFIG_NOSYSTEM: '1',
+   102	      GIT_CONFIG_GLOBAL: '/dev/null',
+   103	      GIT_OPTIONAL_LOCKS: '0'
+   104	    }
+   105	  })
+   106	}
+   107	
+   108	function inspectReference(root, expectedCommit, expectedVersion) {
+   109	  if (
+   110	    !root ||
+   111	    !path.isAbsolute(root) ||
+   112	    !/^[a-f0-9]{40,64}$/.test(expectedCommit ?? '')
+   113	  )
+   114	    fail('INVALID_REFERENCE', 'absolute root and full commit required')
+   115	  const resolved = fs.realpathSync(root)
+   116	  if (resolved !== path.resolve(root)) fail('SYMLINK_ROOT', root)
+   117	  if (
+   118	    fs.realpathSync(git(root, ['rev-parse', '--show-toplevel']).trim()) !==
+   119	    resolved
+   120	  )
+   121	    fail('ROOT_MISMATCH', root)
+   122	  const commit = git(root, ['rev-parse', 'HEAD']).trim()
+   123	  if (commit !== expectedCommit) fail('COMMIT_DRIFT', commit)
+   124	  const algorithm = git(root, ['rev-parse', '--show-object-format']).trim()
+   125	  if (!['sha1', 'sha256'].includes(algorithm))
+   126	    fail('INVALID_REFERENCE', algorithm)
+   127	  const tree = new Map(
+   128	    git(root, ['ls-tree', '-rz', '--full-tree', expectedCommit])
+   129	      .split('\0')
+   130	      .filter(Boolean)
+   131	      .map((row) => {
+   132	        const match = /^(\d+) blob ([a-f0-9]+)\t([\s\S]+)$/.exec(row)
+   133	        if (!match) fail('INVALID_TREE', row)
+   134	        return [match[3], { mode: match[1], blob: match[2] }]
+   135	      })
+   136	  )
+   137	  const changes = git(root, [
+   138	    'status',
+   139	    '--porcelain=v1',
+   140	    '-z',
+   141	    '--untracked-files=all'
+   142	  ])
+   143	    .split('\0')
+   144	    .filter(Boolean)
+   145	  for (const change of changes) {
+   146	    const name = change.slice(3)
+   147	    if (isCandidate(name)) fail('SOURCE_DRIFT', name)
+   148	  }
+   149	  const reads = new Map()
+   150	  const read = (name) => {
+   151	    const item = tree.get(name)
+   152	    if (!item) fail('MISSING_PIN_SOURCE', name)
+   153	    if (item.mode === '120000') fail('SYMLINK_SOURCE', name)
+   154	    const bytes = safeRead(resolved, name)
+   155	    const blob = crypto
+   156	      .createHash(algorithm)
+   157	      .update(`blob ${bytes.length}\0`)
+   158	      .update(bytes)
+   159	      .digest('hex')
+   160	    if (blob !== item.blob) fail('SOURCE_DRIFT', name)
+   161	    const source = {
+   162	      path: name,
+   163	      sha256: hash(bytes),
+   164	      bytes: bytes.length,
+   165	      git_blob: blob
+   166	    }
+   167	    reads.set(name, source)
+   168	    return bytes.toString('utf8')
+   169	  }
+   170	  const manifest = JSON.parse(read('package.json'))
+   171	  if (!expectedVersion || manifest.version !== expectedVersion)
+   172	    fail('VERSION_DRIFT', String(manifest.version))
+   173	  return {
+   174	    root: resolved,
+   175	    commit,
+   176	    version: manifest.version,
+   177	    tree,
+   178	    reads,
+   179	    read,
+   180	    manifest
+   181	  }
+   182	}
+   183	
+   184	function isCandidate(name) {
+   185	  if (
+   186	    sensitive(name) ||
+   187	    /\.i18n\.ya?ml$/.test(name) ||
+   188	    /(?:^|\/)(?:tests?|__tests__|fixtures|snapshots|dist|lib|build|out|prebuilds|examples)(?:\/|$)/.test(
+   189	      name
+   190	    ) ||
+   191	    /\.(?:test|spec)\.[^/]+$/.test(name)
+   192	  )
+   193	    return false
+   194	  if (/^(packages|apps|python|native|vendor)\//.test(name)) {
+   195	    return /(?:\/package\.json|\.(?:ts|tsx|mts|cts|js|mjs|cjs|py|c|cc|cpp|h|hpp|rs|ya?ml|toml)|\.schema\.json)$/.test(
+   196	      name
+   197	    )
+   198	  }
+   199	  return (
+   200	    name === 'package.json' ||
+   201	    (/^(?:docs\/(?:tool-catalog|config-catalog|persistence-catalog|dependency-catalog|capability-seams|session-format-status)\.(?:md|json)|docs\/(?:subsystems|cordis-api)\/[^/]+\.md)$/.test(
+   202	      name
+   203	    ) &&
+   204	      !/\.zh\.md$/.test(name))
+   205	  )
+   206	}
+   207	
+   208	function ownerIndex(map, ref) {
+   209	  if (
+   210	    !map ||
+   211	    map.reference_commit !== ref.commit ||
+   212	    map.reference_version !== ref.version ||
+   213	    !Array.isArray(map.package_owners) ||
+   214	    !map.family_owners ||
+   215	    !Array.isArray(map.additional_surfaces)
+   216	  )
+   217	    fail('OWNER_MAP', 'invalid pin or shape')
+   218	  const packages = new Map()
+   219	  const names = new Set()
+   220	  for (const item of map.package_owners) {
+   221	    relativePath(item.manifest)
+   222	    if (
+   223	      !/^P100-\d{3}$/.test(item.owner_task) ||
+   224	      packages.has(item.manifest) ||
+   225	      names.has(item.reference_package)
+   226	    )
+   227	      fail('OWNER_MAP_DUPLICATE', item.manifest)
+   228	    if (!/^P100-\d{3}$/.test(map.family_owners[item.group] ?? ''))
+   229	      fail('OWNER_MAP', item.manifest)
+   230	    const actual = JSON.parse(ref.read(item.manifest))
+   231	    if (
+   232	      actual.name !== item.reference_package ||
+   233	      ref.reads.get(item.manifest).sha256 !== item.manifest_sha256
+   234	    )
+   235	      fail('OWNER_MAP_DRIFT', item.manifest)
+   236	    packages.set(item.manifest, item)
+   237	    names.add(item.reference_package)
+   238	  }
+   239	  const expected = [...ref.tree.keys()].filter((name) =>
+   240	    /^packages\/[^/]+\/[^/]+\/package\.json$/.test(name)
+   241	  )
+   242	  if (
+   243	    expected.length !== packages.size ||
+   244	    expected.some((name) => !packages.has(name))
+   245	  )
+   246	    fail('OWNER_MAP_MISSING', 'package denominator differs')
+   247	  if (
+   248	    map.inventory_coverage?.packages !== packages.size ||
+   249	    map.inventory_coverage?.families !== Object.keys(map.family_owners).length
+   250	  )
+   251	    fail('OWNER_MAP', 'inventory counts differ')
+   252	  const additional = map.additional_surfaces.map((item) => {
+   253	    relativePath(item.reference_path)
+   254	    if (
+   255	      !/^P100-\d{3}$/.test(item.owner_task) ||
+   256	      ![...ref.tree.keys()].some((name) =>
+   257	        name.startsWith(`${item.reference_path}/`)
+   258	      )
+   259	    )
+   260	      fail('OWNER_MAP_MISSING', item.reference_path)
+   261	    return item
+   262	  })
+   263	  if (
+   264	    new Set(additional.map((item) => item.reference_path)).size !==
+   265	    additional.length
+   266	  )
+   267	    fail('OWNER_MAP_DUPLICATE', 'additional surfaces')
+   268	  const additionalPackages = [...ref.tree.keys()]
+   269	    .filter(
+   270	      (name) =>
+   271	        /^(?:apps|native|python|vendor)\/.+\/package\.json$/.test(name) &&
+   272	        isCandidate(name)
+   273	    )
+   274	    .map((name) => ({
+   275	      directory: path.posix.dirname(name),
+   276	      name: JSON.parse(ref.read(name)).name
+   277	    }))
+   278	    .sort(
+   279	      (a, b) =>
+   280	        b.directory.length - a.directory.length ||
+   281	        a.directory.localeCompare(b.directory, 'en')
+   282	    )
+   283	  const find = (source, packageHint) => {
+   284	    const direct =
+   285	      [...packages.values()].find((item) =>
+   286	        source.startsWith(`${path.posix.dirname(item.manifest)}/`)
+   287	      ) ??
+   288	      [...packages.values()].find(
+   289	        (item) => item.reference_package === packageHint
+   290	      )
+   291	    if (direct)
+   292	      return {
+   293	        package: direct.reference_package,
+   294	        owner_task: direct.owner_task,
+   295	        family: direct.group,
+   296	        scope: ['util', 'test-support'].includes(direct.group)
+   297	          ? 'INFRASTRUCTURE_CLOSURE'
+   298	          : 'CONTRACT'
+   299	      }
+   300	    const surface = additional
+   301	      .filter((item) => source.startsWith(`${item.reference_path}/`))
+   302	      .sort((a, b) => b.reference_path.length - a.reference_path.length)[0]
+   303	    if (surface)
+   304	      return {
+   305	        package:
+   306	          packageHint ||
+   307	          additionalPackages.find((item) =>
+   308	            source.startsWith(`${item.directory}/`)
+   309	          )?.name ||
+   310	          `surface:${surface.reference_path}`,
+   311	        owner_task: surface.owner_task,
+   312	        family: surface.reference_path,
+   313	        scope: 'ADDITIONAL_SURFACE'
+   314	      }
+   315	    return {
+   316	      package: packageHint || ref.manifest.name,
+   317	      owner_task: 'P100-003',
+   318	      family: 'catalog',
+   319	      scope: 'CATALOG_DATA'
+   320	    }
+   321	  }
+   322	  return { find, packages, additional }
+   323	}
+   324	
+   325	const printed = (node) => {
+   326	  if (!node)
+   327	    return unknown(
+   328	      'No declared type; inference requires semantic/runtime review'
+   329	    )
+   330	  let executable = false
+   331	  const visit = (child) => {
+   332	    if (
+   333	      ts.isBlock(child) ||
+   334	      ts.isArrowFunction(child) ||
+   335	      ts.isFunctionExpression(child) ||
+   336	      ts.isClassExpression(child) ||
+   337	      ts.isCallExpression(child) ||
+   338	      ts.isNewExpression(child) ||
+   339	      ts.isComputedPropertyName(child)
+   340	    )
+   341	      executable = true
+   342	    ts.forEachChild(child, visit)
+   343	  }
+   344	  visit(node)
+   345	  if (executable)
+   346	    return unknown(
+   347	      'Executable expression in a declared type/heritage is not copied'
+   348	    )
+   349	  return ts
+   350	    .createPrinter({ removeComments: true })
+   351	    .printNode(ts.EmitHint.Unspecified, node, node.getSourceFile())
+   352	    .trim()
+   353	}
+   354	const nodeName = (node) =>
+   355	  node &&
+   356	  (ts.isIdentifier(node) ||
+   357	    ts.isStringLiteral(node) ||
+   358	    ts.isNumericLiteral(node))
+   359	    ? node.text
+   360	    : unknown('Computed or destructured name')
+   361	const modifiers = (node) =>
+   362	  (node.modifiers ?? [])
+   363	    .map((item) => ts.tokenToString(item.kind))
+   364	    .filter(Boolean)
+   365	
+   366	function staticData(node) {
+   367	  if (!node) return unknown('Initializer absent')
+   368	  if (
+   369	    ts.isParenthesizedExpression(node) ||
+   370	    ts.isAsExpression(node) ||
+   371	    ts.isTypeAssertionExpression(node) ||
+   372	    ts.isSatisfiesExpression(node)
+   373	  )
+   374	    return staticData(node.expression)
+   375	  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+   376	    return node.text
+   377	  if (ts.isNumericLiteral(node)) return Number(node.text)
+   378	  if (node.kind === ts.SyntaxKind.TrueKeyword) return true
+   379	  if (node.kind === ts.SyntaxKind.FalseKeyword) return false
+   380	  if (node.kind === ts.SyntaxKind.NullKeyword) return null
+   381	  if (
+   382	    ts.isPrefixUnaryExpression(node) &&
+   383	    ts.isNumericLiteral(node.operand) &&
+   384	    node.operator === ts.SyntaxKind.MinusToken
+   385	  )
+   386	    return -Number(node.operand.text)
+   387	  if (ts.isArrayLiteralExpression(node)) return node.elements.map(staticData)
+   388	  if (ts.isObjectLiteralExpression(node))
+   389	    return {
+   390	      properties: node.properties.map((item) =>
+   391	        ts.isPropertyAssignment(item)
+   392	          ? { name: nodeName(item.name), value: staticData(item.initializer) }
+   393	          : {
+   394	              name: item.name ? nodeName(item.name) : unknown('Spread key'),
+   395	              value: unknown('Dynamic shorthand, spread or method')
+   396	            }
+   397	      )
+   398	    }
+   399	  if (ts.isIdentifier(node))
+   400	    return unknown('Identifier value is not statically evaluated', {
+   401	      reference: node.text
+   402	    })
+   403	  if (ts.isCallExpression(node))
+   404	    return unknown('Call value is not executed', {
+   405	      call: referenceName(node.expression),
+   406	      arguments: node.arguments.map(staticData)
+   407	    })
+   408	  return unknown('Dynamic expression is not evaluated', {
+   409	    syntax_kind: ts.SyntaxKind[node.kind]
+   410	  })
+   411	}
+   412	
+   413	function referenceName(node) {
+   414	  if (ts.isIdentifier(node)) return node.text
+   415	  if (ts.isPropertyAccessExpression(node))
+   416	    return { receiver: referenceName(node.expression), member: node.name.text }
+   417	  if (ts.isCallExpression(node))
+   418	    return unknown('Dynamic call reference is not executed', {
+   419	      call: referenceName(node.expression),
+   420	      arguments: node.arguments.map(staticData)
+   421	    })
+   422	  return unknown('Dynamic reference')
+   423	}
+   424	
+   425	function signature(node) {
+   426	  return {
+   427	    modifiers: modifiers(node).filter(
+   428	      (value) => !['export', 'default', 'async'].includes(value)
+   429	    ),
+   430	    type_parameters: (node.typeParameters ?? []).map(printed),
+   431	    parameters: (node.parameters ?? []).map((parameter) => ({
+   432	      name: nodeName(parameter.name),
+   433	      type: printed(parameter.type),
+   434	      optional: !!parameter.questionToken || !!parameter.initializer,
+   435	      rest: !!parameter.dotDotDotToken,
+   436	      ...(parameter.initializer
+   437	        ? { default: staticData(parameter.initializer) }
+   438	        : {})
+   439	    })),
+   440	    returns: ts.isConstructorDeclaration(node)
+   441	      ? 'constructor'
+   442	      : printed(node.type)
+   443	  }
+   444	}
+   445	
+   446	function memberShape(member) {
+   447	  if (
+   448	    ts.isMethodSignature(member) ||
+   449	    ts.isMethodDeclaration(member) ||
+   450	    ts.isCallSignatureDeclaration(member) ||
+   451	    ts.isConstructSignatureDeclaration(member) ||
+   452	    ts.isIndexSignatureDeclaration(member) ||
+   453	    ts.isConstructorDeclaration(member) ||
+   454	    ts.isGetAccessorDeclaration(member) ||
+   455	    ts.isSetAccessorDeclaration(member)
+   456	  )
+   457	    return signature(member)
+   458	  return {
+   459	    type: printed(member.type),
+   460	    optional: !!member.questionToken,
+   461	    modifiers: modifiers(member),
+   462	    ...(member.initializer ? { value: staticData(member.initializer) } : {})
+   463	  }
+   464	}
+   465	
+   466	export function extractTypeScriptContracts(
+   467	  text,
+   468	  emit,
+   469	  context = '',
+   470	  scriptKind = ts.ScriptKind.TS
+   471	) {
+   472	  const source = ts.createSourceFile(
+   473	    'contract.ts',
+   474	    text,
+   475	    ts.ScriptTarget.Latest,
+   476	    true,
+   477	    scriptKind
+   478	  )
+   479	  if (source.parseDiagnostics.length)
+   480	    fail(
+   481	      'AST_PARSE',
+   482	      source.parseDiagnostics
+   483	        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, ' '))
+   484	        .join('; ')
+   485	    )
+   486	  const records = new Map()
+   487	  const add = (kind, symbol, shape) => {
+   488	    if (
+   489	      symbol.includes('"status":"UNKNOWN"') ||
+   490	      symbol.includes('[object Object]')
+   491	    )
+   492	      shape = {
+   493	        ...shape,
+   494	        name_resolution: unknown(
+   495	          'Computed/destructured declaration name requires semantic/runtime review'
+   496	        )
+   497	      }
+   498	    const key = `${kind}:${symbol}`
+   499	    const record = records.get(key) ?? { kind, symbol, declarations: [] }
+   500	    record.declarations.push(shape)
+   501	    records.set(key, record)
+   502	  }
+   503	  const visitStatements = (statements, prefix, ambient = false) => {
+   504	    for (const node of statements) {
+   505	      const symbol = `${prefix}${node.name ? nodeName(node.name) : 'default'}`
+   506	      const publicDeclaration =
+   507	        ambient ||
+   508	        modifiers(node).includes('export') ||
+   509	        modifiers(node).includes('default')
+   510	      if (ts.isModuleDeclaration(node)) {
+   511	        const next = `${symbol}.`
+   512	        if (node.body && ts.isModuleBlock(node.body))
+   513	          visitStatements(node.body.statements, next, true)
+   514	        else if (node.body && ts.isModuleDeclaration(node.body))
+   515	          visitStatements([node.body], next, true)
+   516	      } else if (ts.isInterfaceDeclaration(node)) {
+   517	        add(
+   518	          /config/i.test(node.name.text)
+   519	            ? 'config-interface'
+   520	            : /event/i.test(node.name.text)
+   521	              ? 'event-interface'
+   522	              : 'interface',
+   523	          symbol,
+   524	          {
+   525	            visibility: publicDeclaration ? 'PUBLIC' : 'DECLARED',
+   526	            type_parameters: (node.typeParameters ?? []).map(printed),
+   527	            heritage: (node.heritageClauses ?? []).map(printed)
+   528	          }
+   529	        )
+   530	        for (const member of node.members) {
+   531	          const name = member.name
+   532	            ? nodeName(member.name)
+   533	            : ts.isIndexSignatureDeclaration(member)
+   534	              ? 'index'
+   535	              : ts.SyntaxKind[member.kind]
+   536	          add(
+   537	            /events?$/i.test(node.name.text)
+   538	              ? 'event-vocabulary'
+   539	              : /config/i.test(node.name.text)
+   540	                ? 'config-field'
+   541	                : 'interface-member',
+   542	            `${symbol}.${typeof name === 'string' ? name : json(name)}`,
+   543	            memberShape(member)
+   544	          )
+   545	        }
+   546	      } else if (ts.isTypeAliasDeclaration(node)) {
+   547	        add(
+   548	          /config/i.test(node.name.text)
+   549	            ? 'config-type'
+   550	            : /event/i.test(node.name.text)
+   551	              ? 'event-type'
+   552	              : 'type',
+   553	          symbol,
+   554	          {
+   555	            visibility: publicDeclaration ? 'PUBLIC' : 'DECLARED',
+   556	            type_parameters: (node.typeParameters ?? []).map(printed),
+   557	            type: printed(node.type)
+   558	          }
+   559	        )
+   560	      } else if (ts.isClassDeclaration(node)) {
+   561	        // Heritage expressions can contain executable expressions; preserve references only.
+   562	        add('class', symbol, {
+   563	          visibility: publicDeclaration ? 'PUBLIC' : 'DECLARED',
+   564	          type_parameters: (node.typeParameters ?? []).map(printed),
+   565	          heritage: (node.heritageClauses ?? []).map((clause) => ({
+   566	            token: ts.tokenToString(clause.token),
+   567	            types: clause.types.map((type) => ({
+   568	              reference: referenceName(type.expression),
+   569	              type_arguments: (type.typeArguments ?? []).map(printed)
+   570	            }))
+   571	          }))
+   572	        })
+   573	        for (const member of node.members) {
+   574	          if (
+   575	            modifiers(member).some((value) =>
+   576	              ['private', 'protected'].includes(value)
+   577	            ) ||
+   578	            (member.name && ts.isPrivateIdentifier(member.name)) ||
+   579	            ts.isClassStaticBlockDeclaration(member)
+   580	          )
+   581	            continue
+   582	          const name = ts.isConstructorDeclaration(member)
+   583	            ? 'constructor'
+   584	            : member.name
+   585	              ? nodeName(member.name)
+   586	              : ts.SyntaxKind[member.kind]
+   587	          add(
+   588	            'class-member',
+   589	            `${symbol}.${typeof name === 'string' ? name : json(name)}`,
+   590	            memberShape(member)
+   591	          )
+   592	        }
+   593	      } else if (ts.isFunctionDeclaration(node) && publicDeclaration) {
+   594	        add('function', symbol, signature(node))
+   595	      } else if (ts.isVariableStatement(node) && publicDeclaration) {
+   596	        for (const declaration of node.declarationList.declarations) {
+   597	          const name = nodeName(declaration.name)
+   598	          const variableSymbol = `${prefix}${typeof name === 'string' ? name : json(name)}`
+   599	          if (
+   600	            declaration.initializer &&
+   601	            (ts.isArrowFunction(declaration.initializer) ||
+   602	              ts.isFunctionExpression(declaration.initializer))
+   603	          )
+   604	            add('function', variableSymbol, signature(declaration.initializer))
+   605	          else
+   606	            add(
+   607	              /config|schema/i.test(String(name)) ? 'config-value' : 'value',
+   608	              variableSymbol,
+   609	              {
+   610	                type: printed(declaration.type),
+   611	                value: staticData(declaration.initializer)
+   612	              }
+   613	            )
+   614	        }
+   615	      } else if (ts.isEnumDeclaration(node)) {
+   616	        add('enum', symbol, {
+   617	          visibility: publicDeclaration ? 'PUBLIC' : 'DECLARED',
+   618	          members: node.members.map((member) => ({
+   619	            name: nodeName(member.name),
+   620	            value: member.initializer
+   621	              ? staticData(member.initializer)
+   622	              : unknown('Implicit enum value not evaluated')
+   623	          }))
+   624	        })
+   625	      } else if (ts.isExportDeclaration(node)) {
+   626	        const from = node.moduleSpecifier
+   627	          ? nodeName(node.moduleSpecifier)
+   628	          : null
+   629	        if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+   630	          for (const item of node.exportClause.elements)
+   631	            add('export', `${prefix}${item.name.text}`, {
+   632	              from,
+   633	              name: item.propertyName?.text ?? item.name.text,
+   634	              type_only: node.isTypeOnly || item.isTypeOnly
+   635	            })
+   636	        } else
+   637	          add('export', `${prefix}*:${json(from)}`, {
+   638	            from,
+   639	            namespace: node.exportClause
+   640	              ? nodeName(node.exportClause.name)
+   641	              : null,
+   642	            type_only: node.isTypeOnly
+   643	          })
+   644	      } else if (ts.isExportAssignment(node)) {
+   645	        add('export', `${prefix}default`, {
+   646	          value: staticData(node.expression),
+   647	          export_equals: node.isExportEquals
+   648	        })
+   649	      }
+   650	    }
+   651	  }
+   652	  visitStatements(source.statements, context)
+   653	  for (const record of [...records.values()].sort((a, b) =>
+   654	    `${a.kind}:${a.symbol}`.localeCompare(`${b.kind}:${b.symbol}`, 'en')
+   655	  )) {
+   656	    record.declarations.sort((a, b) => json(a).localeCompare(json(b), 'en'))
+   657	    emit(record.kind, record.symbol, { declarations: record.declarations })
+   658	  }
+   659	}
+   660	
+   661	const PYTHON_AST = String.raw`
+   662	import ast, json, sys
+   663	def typ(n):
+   664	  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+   665	  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+   666	  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+   667	  return ast.unparse(n)
+   668	def sig(n):
+   669	  args=n.args
+   670	  positional=args.posonlyargs+args.args
+   671	  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+   672	  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+   673	  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+   674	  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+   675	    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+   676	  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+   677	out=[]
+   678	for item in json.load(sys.stdin):
+   679	  rows=[]
+   680	  tree=ast.parse(item["text"])
+   681	  for n in tree.body:
+   682	    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+   683	    elif isinstance(n,ast.ClassDef):
+   684	      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+   685	      for m in n.body:
+   686	        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+   687	        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+   688	    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+   689	    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+   690	      try: value=ast.literal_eval(n.value)
+   691	      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+   692	      rows.append(["python-exports","__all__",{"names":value}])
+   693	  out.append({"path":item["path"],"rows":rows})
+   694	json.dump(out,sys.stdout,sort_keys=True)
+   695	`
+   696	
+   697	function extractDocument(text, source, add, owners) {
+   698	  const lines = text.split('\n')
+   699	  // Generated Cordis/config sections place their source link after or before
+   700	  // a fence. Resolve ownership for the entire heading independent of order.
+   701	  const linkedSources = new Map()
+   702	  let scanHeadings = [],
+   703	    scanAnchor
+   704	  for (const line of lines) {
+   705	    const anchor = /^<a id="([^"]+)"><\/a>/.exec(line)
+   706	    if (anchor) scanAnchor = anchor[1]
+   707	    const heading = /^(#{1,6})\s+(.+)$/.exec(line)
+   708	    if (heading) {
+   709	      scanHeadings = scanHeadings.slice(0, heading[1].length - 1)
+   710	      scanHeadings[heading[1].length - 1] =
+   711	        heading[2].replace(/`/g, '').trim() +
+   712	        (scanAnchor ? `#${scanAnchor}` : '')
+   713	      scanAnchor = undefined
+   714	    }
+   715	    if (/source/i.test(line)) {
+   716	      const link =
+   717	        /\]\((?:\.\.\/)+((?:packages|vendor|apps|python|native)\/[^)#\s]+)(?:#[^)]*)?\)/.exec(
+   718	          line
+   719	        )
+   720	      if (link)
+   721	        linkedSources.set(
+   722	          scanHeadings.filter(Boolean).join('/'),
+   723	          link[1].replace(/:\d+(?:-\d+)?$/, '')
+   724	        )
+   725	    }
+   726	  }
+   727	  let headings = [],
+   728	    packageHint,
+   729	    fence,
+   730	    body = [],
+   731	    tableHeader,
+   732	    nextAnchor
+   733	  const tables = new Map(),
+   734	    unparsed = new Map()
+   735	  const context = () => headings.filter(Boolean).join('/') || 'document'
+   736	  const owner = () =>
+   737	    owners.find(linkedSources.get(context()) ?? source, packageHint)
+   738	  for (const line of lines) {
+   739	    if (fence !== undefined) {
+   740	      if (/^```\s*$/.test(line)) {
+   741	        const content = body.join('\n')
+   742	        if (fence === 'json') {
+   743	          let data
+   744	          try {
+   745	            data = JSON.parse(content)
+   746	          } catch {
+   747	            fail('CATALOG_JSON', `${source}:${context()}`)
+   748	          }
+   749	          add('document-json', context(), data, owner())
+   750	        } else if (
+   751	          /^(?:ts|typescript)(?: |$)/.test(fence) &&
+   752	          /(?:config-catalog|type-equiv|public-api|cordis)/.test(fence)
+   753	        ) {
+   754	          const scanner = ts.createScanner(
+   755	            ts.ScriptTarget.Latest,
+   756	            true,
+   757	            ts.LanguageVariant.Standard,
+   758	            content
+   759	          )
+   760	          const first = scanner.scan()
+   761	          const declaration = [
+   762	            ts.SyntaxKind.ExportKeyword,
+   763	            ts.SyntaxKind.DeclareKeyword,
+   764	            ts.SyntaxKind.InterfaceKeyword,
+   765	            ts.SyntaxKind.TypeKeyword,
+   766	            ts.SyntaxKind.ClassKeyword,
+   767	            ts.SyntaxKind.FunctionKeyword,
+   768	            ts.SyntaxKind.EnumKeyword,
+   769	            ts.SyntaxKind.ImportKeyword,
+   770	            ts.SyntaxKind.ModuleKeyword,
+   771	            ts.SyntaxKind.NamespaceKeyword
+   772	          ].includes(first)
+   773	          const wrapped =
+   774	            fence.includes('cordis-catalog') && !declaration
+   775	              ? `export declare class CordisSurface {\n${content}\n}`
+   776	              : content
+   777	          try {
+   778	            extractTypeScriptContracts(
+   779	              wrapped,
+   780	              (kind, symbol, shape) =>
+   781	                add(`document-${kind}`, symbol, shape, owner()),
+   782	              `${context()}/`
+   783	            )
+   784	          } catch (error) {
+   785	            if (!error.message.startsWith('AST_PARSE:')) throw error
+   786	            add(
+   787	              'document-ast-unknown',
+   788	              context(),
+   789	              unknown(
+   790	                'Generated declaration fragment is not parseable standalone TypeScript; source AST is separately catalogued',
+   791	                { diagnostics: error.message }
+   792	              ),
+   793	              owner()
+   794	            )
+   795	          }
+   796	        } else if (fence === 'mermaid') {
+   797	          const nodes = [
+   798	            ...content.matchAll(/^\s*([\w]+)\["([^"\n]+)"\]/gm)
+   799	          ].map((match) => ({ id: match[1], label: match[2] }))
+   800	          const edges = content
+   801	            .split('\n')
+   802	            .filter((row) => /^\s*[\w]+\s+(?:-->|-.->|---)/.test(row))
+   803	            .map((row) => row.trim())
+   804	          add(
+   805	            'capability-graph',
+   806	            context(),
+   807	            {
+   808	              nodes,
+   809	              edges,
+   810	              semantics: unknown(
+   811	                'Graph data requires semantic capability/journey review'
+   812	              )
+   813	            },
+   814	            owner()
+   815	          )
+   816	        } else {
+   817	          const key = `${context()}/${fence || 'untyped'}`
+   818	          const previous = unparsed.get(key)
+   819	          unparsed.set(key, {
+   820	            blocks: (previous?.blocks ?? 0) + 1,
+   821	            language: fence,
+   822	            ownership: owner()
+   823	          })
+   824	        }
+   825	        fence = undefined
+   826	        body = []
+   827	      } else body.push(line)
+   828	      continue
+   829	    }
+   830	    const open = /^```(.*)$/.exec(line)
+   831	    if (open) {
+   832	      fence = open[1].trim()
+   833	      body = []
+   834	      continue
+   835	    }
+   836	    const anchor = /^<a id="([^"]+)"><\/a>/.exec(line)
+   837	    if (anchor) nextAnchor = anchor[1]
+   838	    const heading = /^(#{1,6})\s+(.+)$/.exec(line)
+   839	    if (heading) {
+   840	      headings = headings.slice(0, heading[1].length - 1)
+   841	      headings[heading[1].length - 1] =
+   842	        heading[2].replace(/`/g, '').trim() +
+   843	        (nextAnchor ? `#${nextAnchor}` : '')
+   844	      nextAnchor = undefined
+   845	      if (heading[1].length === 2)
+   846	        packageHint = /@deepseek-ai\/[\w-]+/.exec(heading[2])?.[0]
+   847	      tableHeader = undefined
+   848	    }
+   849	    if (/^\|/.test(line)) {
+   850	      const columns = line
+   851	        .replace(/^\||\|$/g, '')
+   852	        .split(/(?<!\\)\|/)
+   853	        .map((part) => part.trim())
+   854	      if (columns.every((part) => /^:?-+:?$/.test(part.replace(/\s/g, ''))))
+   855	        continue
+   856	      if (!tableHeader) {
+   857	        tableHeader = columns
+   858	        continue
+   859	      }
+   860	      const hint =
+   861	        /@deepseek-ai\/[\w-]+/.exec(columns.join(' '))?.[0] || packageHint
+   862	      const key = `${context()}/${columns[0]}`
+   863	      const table = tables.get(key) ?? {
+   864	        columns: tableHeader,
+   865	        rows: [],
+   866	        ownership: owners.find(linkedSources.get(context()) ?? source, hint)
+   867	      }
+   868	      if (table.rows.some((row) => json(row) === json(columns)))
+   869	        fail('DUPLICATE_TABLE_ROW', `${source}:${key}`)
+   870	      table.rows.push(columns)
+   871	      tables.set(key, table)
+   872	    }
+   873	  }
+   874	  if (fence !== undefined) fail('CATALOG_FENCE', source)
+   875	  for (const [key, table] of tables)
+   876	    add(
+   877	      'document-table-row',
+   878	      key,
+   879	      {
+   880	        columns: table.columns,
+   881	        rows: table.rows.sort((a, b) => json(a).localeCompare(json(b), 'en'))
+   882	      },
+   883	      table.ownership
+   884	    )
+   885	  for (const [key, data] of unparsed)
+   886	    add(
+   887	      'document-unparsed',
+   888	      key,
+   889	      unknown('Fence not treated as a static contract', {
+   890	        language: data.language,
+   891	        blocks: data.blocks
+   892	      }),
+   893	      data.ownership
+   894	    )
+   895	}
+   896	
+   897	export function collectReferenceCatalog({
+   898	  root,
+   899	  expectedCommit = REFERENCE_PIN,
+   900	  expectedVersion = REFERENCE_VERSION,
+   901	  ownerMap
+   902	}) {
+   903	  const ref = inspectReference(root, expectedCommit, expectedVersion)
+   904	  const map = typeof ownerMap === 'string' ? readJsonData(ownerMap) : ownerMap
+   905	  const owners = ownerIndex(map, ref)
+   906	  const entries = [],
+   907	    ids = new Set(),
+   908	    python = []
+   909	  const emitFor =
+   910	    (source) =>
+   911	    (kind, symbol, shape, ownership = owners.find(source)) => {
+   912	      const identity = { kind, package: ownership.package, source, symbol }
+   913	      const id = `contract:${hash(json(identity))}`
+   914	      if (ids.has(id)) fail('DUPLICATE_ID', `${source}:${kind}:${symbol}`)
+   915	      ids.add(id)
+   916	      entries.push({
+   917	        id,
+   918	        kind,
+   919	        package: ownership.package,
+   920	        source,
+   921	        source_sha256: ref.reads.get(source).sha256,
+   922	        symbol,
+   923	        owner_task: ownership.owner_task,
+   924	        family: ownership.family,
+   925	        scope: ownership.scope,
+   926	        shape,
+   927	        extraction_status: hasUnknown(shape) ? 'UNKNOWN' : 'STATIC',
+   928	        parity_status: 'NOT_VERIFIED',
+   929	        contract_sha256: hash(json(shape))
+   930	      })
+   931	    }
+   932	  const candidates = [...ref.tree.keys()].filter(isCandidate).sort()
+   933	  for (const source of candidates) {
+   934	    const text = ref.read(source),
+   935	      emit = emitFor(source)
+   936	    if (source.endsWith('/package.json') || source === 'package.json') {
+   937	      const data = JSON.parse(text)
+   938	      const shape = Object.fromEntries(
+   939	        [
+   940	          'name',
+   941	          'version',
+   942	          'type',
+   943	          'main',
+   944	          'module',
+   945	          'types',
+   946	          'exports',
+   947	          'bin',
+   948	          'files',
+   949	          'engines',
+   950	          'peerDependencies'
+   951	        ]
+   952	          .filter((key) => key in data)
+   953	          .map((key) => [key, data[key]])
+   954	      )
+   955	      if (!('exports' in data) && !('main' in data))
+   956	        shape.entrypoints = unknown(
+   957	          'Manifest declares neither exports nor main'
+   958	        )
+   959	      emit('manifest', 'package', shape)
+   960	    } else if (/\.[cm]?[jt]sx?$/.test(source)) {
+   961	      try {
+   962	        extractTypeScriptContracts(
+   963	          text,
+   964	          emit,
+   965	          '',
+   966	          /\.tsx$/.test(source)
+   967	            ? ts.ScriptKind.TSX
+   968	            : /\.jsx$/.test(source)
+   969	              ? ts.ScriptKind.JSX
+   970	              : ts.ScriptKind.TS
+   971	        )
+   972	      } catch (error) {
+   973	        fail('SOURCE_AST', `${source}: ${error.message}`)
+   974	      }
+   975	      // Every source has a denominator entry, even when no public declaration is detectable.
+   976	      emit('source-surface', 'surface', {
+   977	        language: 'typescript/javascript',
+   978	        analysis: unknown(
+   979	          'Static syntax inventory; inferred types, export-star resolution and runtime registration require review'
+   980	        )
+   981	      })
+   982	    } else if (source.endsWith('.md')) {
+   983	      for (const link of text.matchAll(
+   984	        /\]\((?:\.\.\/)+(packages\/[^)#\s]+)(?:#[^)]*)?\)/g
+   985	      )) {
+   986	        const target = link[1].replace(/:\d+(?:-\d+)?$/, '')
+   987	        if (
+   988	          !ref.tree.has(target) &&
+   989	          ![...ref.tree.keys()].some((name) => name.startsWith(`${target}/`))
+   990	        )
+   991	          fail('MISSING_DOCUMENT_SOURCE', `${source} -> ${target}`)
+   992	      }
+   993	      extractDocument(text, source, emit, owners)
+   994	      emit('document-surface', 'surface', {
+   995	        format: 'contract-data',
+   996	        freshness: unknown(
+   997	          'Generated docs consumed as committed DATA; generators were not executed'
+   998	        )
+   999	      })
+  1000	    } else if (source.endsWith('.json')) {
+  1001	      emit('json-schema-data', 'data', JSON.parse(text))
+  1002	    } else if (source.endsWith('.py')) {
+  1003	      python.push({ path: source, text })
+  1004	      emit(
+  1005	        'python-surface',
+  1006	        'surface',
+  1007	        unknown(
+  1008	          'Python AST declarations only; annotations/defaults/dynamic exports are not executed'
+  1009	        )
+  1010	      )
+  1011	    } else if (/\.(c|cc|cpp|h|hpp|rs)$/.test(source)) {
+  1012	      // Native implementations are never copied. Declarations not represented by a TS wrapper remain explicit unknowns.
+  1013	      emit(
+  1014	        'native-surface',
+  1015	        'surface',
+  1016	        unknown(
+  1017	          'Native ABI/body not evaluated; TS bindings and manifest are separately catalogued',
+  1018	          { language: path.extname(source).slice(1) }
+  1019	        )
+  1020	      )
+  1021	    } else {
+  1022	      emit(
+  1023	        'configuration-data',
+  1024	        'data',
+  1025	        unknown(
+  1026	          'YAML/TOML configuration requires a dedicated schema-aware parser; no interpolation or config execution',
+  1027	          {
+  1028	            keys: [...text.matchAll(/^([\w.-]+)\s*[:=]/gm)]
+  1029	              .map((match) => match[1])
+  1030	              .sort()
+  1031	          }
+  1032	        )
+  1033	      )
+  1034	    }
+  1035	  }
+  1036	  if (python.length) {
+  1037	    const results = JSON.parse(
+  1038	      execFileSync('python3', ['-I', '-c', PYTHON_AST], {
+  1039	        input: JSON.stringify(python),
+  1040	        encoding: 'utf8',
+  1041	        maxBuffer: 16 * 1024 * 1024,
+  1042	        env: { PATH: process.env.PATH }
+  1043	      })
+  1044	    )
+  1045	    for (const result of results)
+  1046	      for (const [kind, symbol, shape] of result.rows)
+  1047	        emitFor(result.path)(kind, symbol, shape)
+  1048	  }
+  1049	  // Detect a source changed during collection before returning the candidate.
+  1050	  for (const source of ref.reads.keys()) ref.read(source)
+  1051	  if (git(root, ['rev-parse', 'HEAD']).trim() !== ref.commit)
+  1052	    fail('COMMIT_DRIFT', 'changed during collection')
+  1053	  entries.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+  1054	  const counts = (key) =>
+  1055	    Object.fromEntries(
+  1056	      [...new Set(entries.map((item) => item[key]))]
+  1057	        .sort()
+  1058	        .map((value) => [
+  1059	          value,
+  1060	          entries.filter((item) => item[key] === value).length
+  1061	        ])
+  1062	    )
+  1063	  const catalog = {
+  1064	    schema_version: CATALOG_VERSION,
+  1065	    reference: { root: ref.root, commit: ref.commit, version: ref.version },
+  1066	    owner_map_sha256: hash(
+  1067	      json({
+  1068	        ...map,
+  1069	        package_owners: [...map.package_owners].sort((a, b) =>
+  1070	          a.manifest.localeCompare(b.manifest, 'en')
+  1071	        ),
+  1072	        additional_surfaces: [...map.additional_surfaces].sort((a, b) =>
+  1073	          a.reference_path.localeCompare(b.reference_path, 'en')
+  1074	        )
+  1075	      })
+  1076	    ),
+  1077	    parity_status: 'NOT_VERIFIED',
+  1078	    sources: [...ref.reads.values()].sort((a, b) =>
+  1079	      a.path.localeCompare(b.path, 'en')
+  1080	    ),
+  1081	    entries,
+  1082	    summary: {
+  1083	      entries: entries.length,
+  1084	      sources: ref.reads.size,
+  1085	      mapped_manifests: owners.packages.size,
+  1086	      mapped_families: Object.keys(map.family_owners).length,
+  1087	      additional_surfaces: owners.additional.length,
+  1088	      by_kind: counts('kind'),
+  1089	      by_owner: counts('owner_task'),
+  1090	      by_extraction_status: counts('extraction_status')
+  1091	    },
+  1092	    limitations: [
+  1093	      'Contract inventory is not functional equivalence, an acceptance denominator reduction or task approval.',
+  1094	      'Only committed allowlisted contract sources are read; test bodies, examples, builds, binaries, credentials and user sessions are excluded.',
+  1095	      'Utility and test-support package source contracts remain infrastructure closure, never parity PASS.',
+  1096	      'No type checker, dependency resolution, runtime-inferred API, plugin boot or generated-doc freshness execution.',
+  1097	      'YAML/TOML and native ABI bodies remain UNKNOWN; Python declarations use isolated stdlib ast, never reference imports.',
+  1098	      'Semantic journey completeness and original owner mappings require Lead review; documented default tool schemas do not imply all dynamic variants.'
+  1099	    ]
+  1100	  }
+  1101	  catalog.catalog_sha256 = hash(json(catalog))
+  1102	  validateCatalog(catalog)
+  1103	  return catalog
+  1104	}
+  1105	
+  1106	export function validateCatalog(catalog, { root } = {}) {
+  1107	  if (
+  1108	    catalog?.schema_version !== CATALOG_VERSION ||
+  1109	    catalog.parity_status !== 'NOT_VERIFIED' ||
+  1110	    !Array.isArray(catalog.entries) ||
+  1111	    !Array.isArray(catalog.sources) ||
+  1112	    !catalog.entries.length ||
+  1113	    !catalog.sources.length
+  1114	  )
+  1115	    fail('INVALID_CATALOG', 'shape/status')
+  1116	  if (
+  1117	    !catalog.reference ||
+  1118	    !path.isAbsolute(catalog.reference.root ?? '') ||
+  1119	    !/^[a-f0-9]{40,64}$/.test(catalog.reference.commit ?? '') ||
+  1120	    !catalog.reference.version ||
+  1121	    !/^[a-f0-9]{64}$/.test(catalog.owner_map_sha256 ?? '')
+  1122	  )
+  1123	    fail('INVALID_CATALOG', 'reference/owner identity')
+  1124	  if (root && fs.realpathSync(root) !== catalog.reference.root)
+  1125	    fail('ROOT_MISMATCH', root)
+  1126	  const sources = new Map()
+  1127	  for (const source of catalog.sources) {
+  1128	    relativePath(source.path)
+  1129	    if (sources.has(source.path) || !/^[a-f0-9]{64}$/.test(source.sha256))
+  1130	      fail('DUPLICATE_OR_INVALID_SOURCE', source.path)
+  1131	    sources.set(source.path, source)
+  1132	    if (root && hash(safeRead(root, source.path)) !== source.sha256)
+  1133	      fail('SOURCE_DRIFT', source.path)
+  1134	  }
+  1135	  const ids = new Set()
+  1136	  for (const entry of catalog.entries) {
+  1137	    if (ids.has(entry.id)) fail('DUPLICATE_ID', entry.id)
+  1138	    ids.add(entry.id)
+  1139	    const identity = {
+  1140	      kind: entry.kind,
+  1141	      package: entry.package,
+  1142	      source: entry.source,
+  1143	      symbol: entry.symbol
+  1144	    }
+  1145	    if (
+  1146	      entry.id !== `contract:${hash(json(identity))}` ||
+  1147	      !/^P100-\d{3}$/.test(entry.owner_task) ||
+  1148	      entry.parity_status !== 'NOT_VERIFIED'
+  1149	    )
+  1150	      fail('INVALID_ENTRY', entry.id)
+  1151	    if (
+  1152	      !sources.has(entry.source) ||
+  1153	      sources.get(entry.source).sha256 !== entry.source_sha256
+  1154	    )
+  1155	      fail('MISSING_SOURCE', entry.source)
+  1156	    if (
+  1157	      hash(json(entry.shape)) !== entry.contract_sha256 ||
+  1158	      entry.extraction_status !==
+  1159	        (hasUnknown(entry.shape) ? 'UNKNOWN' : 'STATIC')
+  1160	    )
+  1161	      fail('INVALID_CONTRACT', entry.id)
+  1162	  }
+  1163	  const { catalog_sha256: digest, ...content } = catalog
+  1164	  if (digest !== hash(json(content))) fail('CATALOG_DRIFT', 'digest')
+  1165	  if (
+  1166	    catalog.summary?.entries !== ids.size ||
+  1167	    catalog.summary?.sources !== sources.size
+  1168	  )
+  1169	    fail('INVALID_CATALOG', 'summary denominator')
+  1170	  if (root)
+  1171	    inspectReference(root, catalog.reference.commit, catalog.reference.version)
+  1172	  return {
+  1173	    status: 'VALID_STATIC_CATALOG',
+  1174	    parity_status: 'NOT_VERIFIED',
+  1175	    entries: ids.size,
+  1176	    sources: sources.size
+  1177	  }
+  1178	}
+  1179	
+  1180	export function compareCatalogFreeze(frozen, current, options = {}) {
+  1181	  validateCatalog(frozen)
+  1182	  validateCatalog(current, options)
+  1183	  if (
+  1184	    json(frozen.reference) !== json(current.reference) ||
+  1185	    frozen.owner_map_sha256 !== current.owner_map_sha256
+  1186	  )
+  1187	    fail('REFERENCE_DRIFT', 'root/pin/version/owner map')
+  1188	  const currentEntries = new Map(
+  1189	    current.entries.map((entry) => [entry.id, entry])
+  1190	  )
+  1191	  for (const entry of frozen.entries) {
+  1192	    const actual = currentEntries.get(entry.id)
+  1193	    if (!actual) fail('REQUIREMENT_REMOVED', entry.id)
+  1194	    if (json(entry) !== json(actual)) fail('CONTRACT_DRIFT', entry.id)
+  1195	  }
+  1196	  if (frozen.catalog_sha256 !== current.catalog_sha256)
+  1197	    fail('FREEZE_DRIFT', 'sources/additions/metadata changed')
+  1198	  return {
+  1199	    status: 'UNCHANGED_STATIC_FREEZE',
+  1200	    parity_status: 'NOT_VERIFIED',
+  1201	    catalog_sha256: current.catalog_sha256
+  1202	  }
+  1203	}
+  1204	
+  1205	export function runCli(args) {
+  1206	  const options = new Map()
+  1207	  const allowed = [
+  1208	    '--root',
+  1209	    '--commit',
+  1210	    '--version',
+  1211	    '--owner-map',
+  1212	    '--output',
+  1213	    '--freeze'
+  1214	  ]
+  1215	  if (args.length === 1 && args[0] === '--help') {
+  1216	    process.stdout.write(
+  1217	      'Usage: node scripts/reference-contract-catalog.mjs --root ABSOLUTE --owner-map MAP.json --output CATALOG.json [--commit SHA --version VERSION --freeze CATALOG.json]\nRead-only static collection. Every functional contract stays NOT_VERIFIED.\n'
+  1218	    )
+  1219	    return
+  1220	  }
+  1221	  for (let index = 0; index < args.length; index += 2) {
+  1222	    if (
+  1223	      !allowed.includes(args[index]) ||
+  1224	      options.has(args[index]) ||
+  1225	      !args[index + 1] ||
+  1226	      args[index + 1].startsWith('--')
+  1227	    )
+  1228	      fail('CLI_ARGUMENT', args[index])
+  1229	    options.set(args[index], args[index + 1])
+  1230	  }
+  1231	  for (const required of ['--root', '--owner-map', '--output'])
+  1232	    if (!options.has(required)) fail('CLI_ARGUMENT', `${required} required`)
+  1233	  const root = options.get('--root'),
+  1234	    output = path.resolve(options.get('--output'))
+  1235	  if (sensitive(output) || !output.endsWith('.json'))
+  1236	    fail('UNSAFE_JSON_OUTPUT', output)
+  1237	  // Output must not mutate the reference, including through an ancestor symlink.
+  1238	  let ancestor = path.dirname(output)
+  1239	  while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor)
+  1240	  const realOutput = path.join(
+  1241	    fs.realpathSync(ancestor),
+  1242	    path.relative(ancestor, output)
+  1243	  )
+  1244	  const realRoot = fs.realpathSync(root)
+  1245	  if (
+  1246	    realOutput === realRoot ||
+  1247	    realOutput.startsWith(`${realRoot}${path.sep}`) ||
+  1248	    (fs.existsSync(output) && fs.lstatSync(output).isSymbolicLink())
+  1249	  )
+  1250	    fail('OUTPUT_IN_REFERENCE', output)
+  1251	  const catalog = collectReferenceCatalog({
+  1252	    root,
+  1253	    expectedCommit: options.get('--commit') ?? REFERENCE_PIN,
+  1254	    expectedVersion: options.get('--version') ?? REFERENCE_VERSION,
+  1255	    ownerMap: options.get('--owner-map')
+  1256	  })
+  1257	  if (options.has('--freeze'))
+  1258	    compareCatalogFreeze(readJsonData(options.get('--freeze')), catalog, {
+  1259	      root
+  1260	    })
+  1261	  fs.mkdirSync(path.dirname(output), { recursive: true })
+  1262	  fs.writeFileSync(output, serializeCatalog(catalog), { flag: 'w' })
+  1263	  process.stdout.write(
+  1264	    `${JSON.stringify({ output, file_sha256: hash(fs.readFileSync(output)), catalog_sha256: catalog.catalog_sha256, ...catalog.summary, parity_status: catalog.parity_status })}\n`
+  1265	  )
+  1266	}
+  1267	
+  1268	if (
+  1269	  process.argv[1] &&
+  1270	  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  1271	) {
+  1272	  try {
+  1273	    runCli(process.argv.slice(2))
+  1274	  } catch (error) {
+  1275	    process.stderr.write(`${error.message}\n`)
+  1276	    process.exitCode = 1
+  1277	  }
+  1278	}
+     1	import fs from 'node:fs'
+     2	import path from 'node:path'
+     3	import crypto from 'node:crypto'
+     4	import { execFileSync, spawnSync } from 'node:child_process'
+     5	import { afterEach, describe, expect, it } from 'vitest'
+     6	import {
+     7	  collectReferenceCatalog,
+     8	  compareCatalogFreeze,
+     9	  extractTypeScriptContracts,
+    10	  serializeCatalog,
+    11	  validateCatalog
+    12	} from '../scripts/reference-contract-catalog.mjs'
+    13	
+    14	const evidence = path.resolve(
+    15	  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference'
+    16	)
+    17	const temporary = []
+    18	const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+    19	const files = {
+    20	  'package.json': JSON.stringify({
+    21	    name: '@synthetic/root',
+    22	    version: 'fixture-v1'
+    23	  }),
+    24	  'packages/core/example/package.json': JSON.stringify({
+    25	    name: '@synthetic/example',
+    26	    version: 'fixture-v1',
+    27	    exports: { '.': { types: './lib/index.d.ts', default: './lib/index.js' } }
+    28	  }),
+    29	  'packages/core/example/src/index.ts': `
+    30	export interface Config { timeout?: number; mode: 'safe' | 'local' }
+    31	export type Result<T> = { kind: 'done'; value: T } | { kind: 'failed'; reason: string }
+    32	declare module 'synthetic-context' { interface Events { 'task/done'(id: string): void; 'task/error': (message: string) => void } }
+    33	export class Service {
+    34	  private hidden(): void { const bodyMustNeverBeCopied = 'IMPLEMENTATION_MARKER'; }
+    35	  constructor(readonly config: Config) { console.log('IMPLEMENTATION_MARKER'); }
+    36	  run(input: string): Promise<Result<string>> { throw new Error('IMPLEMENTATION_MARKER'); }
+    37	}
+    38	export function work(value: string): number;
+    39	export function work(value: number): number;
+    40	export function work(value: string | number): number { return 'IMPLEMENTATION_MARKER'.length; }
+    41	export const Schema = buildSchema({ mode: getModes(), fixed: true });
+    42	export const staticModes: readonly string[] = ['safe', 'local'];
+    43	export { Config as PublicConfig };
+    44	export * from './types.ts';
+    45	`,
+    46	  'packages/core/example/src/types.ts':
+    47	    'export type Public = { value: string }',
+    48	  'packages/util/helper/package.json': JSON.stringify({
+    49	    name: '@synthetic/util',
+    50	    main: 'lib/index.js'
+    51	  }),
+    52	  'packages/util/helper/src/index.ts':
+    53	    'export function help(x: number): number { return x + 1 }',
+    54	  'packages/test-support/helper/package.json': JSON.stringify({
+    55	    name: '@synthetic/test-support',
+    56	    main: 'lib/index.js'
+    57	  }),
+    58	  'packages/test-support/helper/src/index.ts':
+    59	    'export interface TestSupport { synthetic: true }',
+    60	  'packages/core/example/tests/hidden.test.ts':
+    61	    "throw new Error('TEST_BODY_DO_NOT_READ')",
+    62	  'packages/core/example/lib/index.js': "throw new Error('BUILD_DO_NOT_READ')",
+    63	  'apps/cli/package.json': JSON.stringify({
+    64	    name: '@synthetic/cli',
+    65	    main: 'lib/index.js'
+    66	  }),
+    67	  'apps/cli/src/index.ts': 'export interface CLIConfig { profile: string }',
+    68	  'apps/cli/config/profile.cordis.yml': 'plugins:\n  - name: synthetic\n',
+    69	  'python/sdk/pyproject.toml': '[project]\nname = "synthetic-sdk"\n',
+    70	  'python/sdk/src/sdk.py': `
+    71	from typing import Optional
+    72	__all__ = ['Client']
+    73	class Client:
+    74	    timeout: int
+    75	    def run(self, text: str, mode: Optional[str] = None) -> str:
+    76	        return "PYTHON_BODY_DO_NOT_COPY"
+    77	def dynamic(value):
+    78	    return "PYTHON_BODY_DO_NOT_COPY"
+    79	`,
+    80	  'native/system/package.json': JSON.stringify({
+    81	    name: '@synthetic/native',
+    82	    main: 'index.ts'
+    83	  }),
+    84	  'native/system/src/index.ts':
+    85	    'export interface Native { lock(fd: number): void }',
+    86	  'native/system/src/entry.c':
+    87	    'void implementation() { /* NATIVE_BODY_DO_NOT_COPY */ }',
+    88	  'docs/tool-catalog.md':
+    89	    '# Tools\n## `@synthetic/example`\n### `work`\n```json\n{"name":"work","parameters":{"type":"object","required":["value"],"properties":{"value":{"type":"string"}}}}\n```\n',
+    90	  'docs/config-catalog.md':
+    91	    '# Config\n## `@synthetic/example`\n```ts config-catalog\nexport interface DocumentConfig { timeout?: number }\n```\n',
+    92	  'docs/capability-seams.md':
+    93	    '# Seams\n```mermaid\nflowchart LR\n  pkg_example["example"]\n  svc_work["ctx.work"]\n  pkg_example --> svc_work\n```\n',
+    94	  'docs/subsystems/core.md':
+    95	    '# Core\n<!-- BEGIN GENERATED cordis-surface -->\n```ts public-api\nexport interface ServiceEvents { "task/done": (id: string) => void }\n```\n<!-- END GENERATED cordis-surface -->\n',
+    96	  '.env': 'DO_NOT_READ_SECRET',
+    97	  'auth.json': '{"token":"DO_NOT_READ_SECRET"}',
+    98	  'sessions/private.json': '{"user":"DO_NOT_READ_SECRET"}'
+    99	}
+   100	
+   101	function syntheticPin(root, names) {
+   102	  const run = (args, input) =>
+   103	    execFileSync('git', ['-C', root, ...args], {
+   104	      input,
+   105	      encoding: 'utf8',
+   106	      env: {
+   107	        ...process.env,
+   108	        GIT_AUTHOR_NAME: 'Synthetic',
+   109	        GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+   110	        GIT_COMMITTER_NAME: 'Synthetic',
+   111	        GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+   112	        GIT_AUTHOR_DATE: '2026-10-14T00:00:00Z',
+   113	        GIT_COMMITTER_DATE: '2026-10-14T00:00:00Z'
+   114	      }
+   115	    }).trim()
+   116	  run(['init', '-q', '-b', 'main'])
+   117	  // Only disposable synthetic object storage: no project/reference git commit.
+   118	  run(['add', '--', ...names])
+   119	  const tree = run(['write-tree'])
+   120	  const commit = run(['commit-tree', tree], 'synthetic static fixture\n')
+   121	  run(['update-ref', 'refs/heads/main', commit])
+   122	  return commit
+   123	}
+   124	
+   125	function fixture(overrides = {}) {
+   126	  fs.mkdirSync(evidence, { recursive: true })
+   127	  const root = fs.mkdtempSync(path.join(evidence, '.fixture-'))
+   128	  temporary.push(root)
+   129	  const dataFiles = { ...files, ...overrides }
+   130	  for (const [name, text] of Object.entries(dataFiles)) {
+   131	    fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
+   132	    fs.writeFileSync(path.join(root, name), text)
+   133	  }
+   134	  const commit = syntheticPin(root, Object.keys(dataFiles))
+   135	  const package_owners = [
+   136	    'core/example',
+   137	    'util/helper',
+   138	    'test-support/helper'
+   139	  ].map((name) => {
+   140	    const manifest = `packages/${name}/package.json`
+   141	    const bytes = fs.readFileSync(path.join(root, manifest))
+   142	    const group = name.split('/')[0]
+   143	    return {
+   144	      reference_package: JSON.parse(bytes).name,
+   145	      manifest,
+   146	      manifest_sha256: sha(bytes),
+   147	      group,
+   148	      owner_task: {
+   149	        core: 'P100-012',
+   150	        util: 'P100-052',
+   151	        'test-support': 'P100-004'
+   152	      }[group]
+   153	    }
+   154	  })
+   155	  const ownerMap = {
+   156	    reference_commit: commit,
+   157	    reference_version: 'fixture-v1',
+   158	    inventory_coverage: { packages: 3, families: 3 },
+   159	    family_owners: {
+   160	      core: 'P100-012',
+   161	      util: 'P100-052',
+   162	      'test-support': 'P100-004'
+   163	    },
+   164	    package_owners,
+   165	    additional_surfaces: [
+   166	      { reference_path: 'apps/cli', owner_task: 'P100-040' },
+   167	      { reference_path: 'python/sdk', owner_task: 'P100-025' },
+   168	      { reference_path: 'native/system', owner_task: 'P100-024' }
+   169	    ]
+   170	  }
+   171	  const options = {
+   172	    root,
+   173	    expectedCommit: commit,
+   174	    expectedVersion: 'fixture-v1',
+   175	    ownerMap
+   176	  }
+   177	  return {
+   178	    ...options,
+   179	    options,
+   180	    collect: () => collectReferenceCatalog(options)
+   181	  }
+   182	}
+   183	
+   184	afterEach(() => {
+   185	  for (const root of temporary.splice(0))
+   186	    fs.rmSync(root, { recursive: true, force: true })
+   187	})
+   188	
+   189	describe('P100-003 static contract catalog', () => {
+   190	  it('collects actual manifest/API/type/config/event/tool schema and additional contracts without bodies', () => {
+   191	    const f = fixture(),
+   192	      catalog = f.collect(),
+   193	      text = serializeCatalog(catalog)
+   194	    expect(catalog.summary).toMatchObject({
+   195	      mapped_manifests: 3,
+   196	      mapped_families: 3,
+   197	      additional_surfaces: 3
+   198	    })
+   199	    expect(
+   200	      catalog.entries.every(
+   201	        (entry) => entry.parity_status === 'NOT_VERIFIED' && entry.owner_task
+   202	      )
+   203	    ).toBe(true)
+   204	    expect(
+   205	      catalog.entries.find(
+   206	        (entry) =>
+   207	          entry.kind === 'class-member' && entry.symbol === 'Service.run'
+   208	      ).shape.declarations[0]
+   209	    ).toMatchObject({
+   210	      parameters: [{ name: 'input', type: 'string' }],
+   211	      returns: 'Promise<Result<string>>'
+   212	    })
+   213	    expect(
+   214	      catalog.entries.find(
+   215	        (entry) => entry.kind === 'function' && entry.symbol === 'work'
+   216	      ).shape.declarations
+   217	    ).toHaveLength(3)
+   218	    expect(
+   219	      catalog.entries.some(
+   220	        (entry) =>
+   221	          entry.kind === 'event-vocabulary' &&
+   222	          entry.symbol.endsWith('Events.task/done')
+   223	      )
+   224	    ).toBe(true)
+   225	    expect(
+   226	      catalog.entries.find((entry) => entry.kind === 'document-json').shape
+   227	        .parameters
+   228	    ).toMatchObject({
+   229	      type: 'object',
+   230	      required: ['value'],
+   231	      properties: { value: { type: 'string' } }
+   232	    })
+   233	    expect(
+   234	      catalog.entries.some(
+   235	        (entry) => entry.kind === 'document-config-interface'
+   236	      )
+   237	    ).toBe(true)
+   238	    expect(
+   239	      catalog.entries.some(
+   240	        (entry) =>
+   241	          entry.kind === 'python-method' && entry.symbol === 'Client.run'
+   242	      )
+   243	    ).toBe(true)
+   244	    expect(
+   245	      catalog.entries.some(
+   246	        (entry) =>
+   247	          entry.kind === 'native-surface' &&
+   248	          entry.extraction_status === 'UNKNOWN'
+   249	      )
+   250	    ).toBe(true)
+   251	    expect(
+   252	      catalog.entries
+   253	        .filter((entry) => entry.family === 'test-support')
+   254	        .every((entry) => entry.scope === 'INFRASTRUCTURE_CLOSURE')
+   255	    ).toBe(true)
+   256	    for (const marker of [
+   257	      'IMPLEMENTATION_MARKER',
+   258	      'PYTHON_BODY_DO_NOT_COPY',
+   259	      'NATIVE_BODY_DO_NOT_COPY',
+   260	      'DO_NOT_READ_SECRET',
+   261	      'TEST_BODY_DO_NOT_READ',
+   262	      'BUILD_DO_NOT_READ',
+   263	      'Service.hidden'
+   264	    ])
+   265	      expect(text).not.toContain(marker)
+   266	    expect(
+   267	      catalog.sources.some((source) =>
+   268	        /(?:\.env|auth|sessions|\/tests\/|\/lib\/)/.test(source.path)
+   269	      )
+   270	    ).toBe(false)
+   271	    expect(validateCatalog(catalog, { root: f.root }).status).toBe(
+   272	      'VALID_STATIC_CATALOG'
+   273	    )
+   274	    expect(
+   275	      compareCatalogFreeze(catalog, f.collect(), { root: f.root }).status
+   276	    ).toBe('UNCHANGED_STATIC_FREEZE')
+   277	  })
+   278	
+   279	  it('keeps dynamic/absent data UNKNOWN instead of treating it as an accepted empty value', () => {
+   280	    const catalog = fixture().collect()
+   281	    const schema = catalog.entries.find(
+   282	      (entry) => entry.kind === 'config-value' && entry.symbol === 'Schema'
+   283	    )
+   284	    expect(schema.extraction_status).toBe('UNKNOWN')
+   285	    expect(schema.shape.declarations[0].value).toMatchObject({
+   286	      status: 'UNKNOWN',
+   287	      call: 'buildSchema'
+   288	    })
+   289	    expect(
+   290	      catalog.entries.find(
+   291	        (entry) =>
+   292	          entry.kind === 'python-function' && entry.symbol === 'dynamic'
+   293	      ).extraction_status
+   294	    ).toBe('UNKNOWN')
+   295	    expect(
+   296	      catalog.entries
+   297	        .filter((entry) => entry.kind === 'configuration-data')
+   298	        .every((entry) => entry.shape.status === 'UNKNOWN')
+   299	    ).toBe(true)
+   300	  })
+   301	
+   302	  it('is byte deterministic and IDs survive declaration order/line changes', () => {
+   303	    const f = fixture(),
+   304	      before = f.collect()
+   305	    expect(serializeCatalog(before)).toBe(serializeCatalog(f.collect()))
+   306	    f.ownerMap.package_owners.reverse()
+   307	    expect(serializeCatalog(before)).toEqual(serializeCatalog(f.collect()))
+   308	    expect(before.entries.map((entry) => entry.id)).toEqual(
+   309	      f.collect().entries.map((entry) => entry.id)
+   310	    )
+   311	    const rows = []
+   312	    const rowsReordered = []
+   313	    extractTypeScriptContracts(
+   314	      'export interface B { b: number }\nexport interface A { a: string }',
+   315	      (...args) => rows.push(args)
+   316	    )
+   317	    extractTypeScriptContracts(
+   318	      '\n\nexport interface A { a: string }\nexport interface B { b: number }',
+   319	      (...args) => rowsReordered.push(args)
+   320	    )
+   321	    expect(rows).toEqual(rowsReordered)
+   322	    const g = fixture({
+   323	      'packages/core/example/src/index.ts': `\n\n${files['packages/core/example/src/index.ts']}`
+   324	    })
+   325	    expect(before.entries.map((entry) => entry.id)).toEqual(
+   326	      g.collect().entries.map((entry) => entry.id)
+   327	    )
+   328	  })
+   329	
+   330	  it('rejects changed/deleted/untracked contract sources and changed manifest owner hashes', () => {
+   331	    const f = fixture(),
+   332	      target = path.join(f.root, 'packages/core/example/src/index.ts')
+   333	    fs.appendFileSync(target, '\nexport type Added = string')
+   334	    expect(f.collect).toThrow(/SOURCE_DRIFT/)
+   335	    fs.writeFileSync(target, files['packages/core/example/src/index.ts'])
+   336	    fs.unlinkSync(target)
+   337	    expect(f.collect).toThrow(/SOURCE_DRIFT|MISSING_SOURCE/)
+   338	    fs.writeFileSync(target, files['packages/core/example/src/index.ts'])
+   339	    fs.writeFileSync(
+   340	      path.join(f.root, 'packages/core/example/src/new.ts'),
+   341	      'export type New = number'
+   342	    )
+   343	    expect(f.collect).toThrow(/SOURCE_DRIFT/)
+   344	    fs.unlinkSync(path.join(f.root, 'packages/core/example/src/new.ts'))
+   345	    f.ownerMap.package_owners[0].manifest_sha256 = '0'.repeat(64)
+   346	    expect(f.collect).toThrow(/OWNER_MAP_DRIFT/)
+   347	  })
+   348	
+   349	  it('rejects wrong root/commit/version and missing/duplicate package ownership', () => {
+   350	    const f = fixture()
+   351	    expect(() =>
+   352	      collectReferenceCatalog({ ...f.options, expectedCommit: '0'.repeat(40) })
+   353	    ).toThrow(/COMMIT_DRIFT/)
+   354	    expect(() =>
+   355	      collectReferenceCatalog({ ...f.options, expectedVersion: 'wrong' })
+   356	    ).toThrow(/VERSION_DRIFT/)
+   357	    expect(() =>
+   358	      collectReferenceCatalog({
+   359	        ...f.options,
+   360	        root: path.join(f.root, 'packages')
+   361	      })
+   362	    ).toThrow(/ROOT_MISMATCH/)
+   363	    const missing = structuredClone(f.ownerMap)
+   364	    missing.package_owners.pop()
+   365	    expect(() =>
+   366	      collectReferenceCatalog({ ...f.options, ownerMap: missing })
+   367	    ).toThrow(/OWNER_MAP_MISSING/)
+   368	    f.ownerMap.package_owners.push(f.ownerMap.package_owners[0])
+   369	    expect(f.collect).toThrow(/OWNER_MAP_DUPLICATE/)
+   370	  })
+   371	
+   372	  it('rejects symlinks and escaping source/owner paths without following them', () => {
+   373	    const f = fixture(),
+   374	      target = path.join(f.root, 'packages/core/example/src/index.ts')
+   375	    fs.unlinkSync(target)
+   376	    fs.symlinkSync('/nonexistent/outside-contract.ts', target)
+   377	    expect(f.collect).toThrow(/SOURCE_DRIFT|SYMLINK_SOURCE/)
+   378	    const good = fixture(),
+   379	      catalog = good.collect()
+   380	    catalog.sources[0].path = '../outside.json'
+   381	    expect(() => validateCatalog(catalog, { root: good.root })).toThrow(
+   382	      /UNSAFE_PATH/
+   383	    )
+   384	    good.ownerMap.package_owners[0].manifest = '/outside/package.json'
+   385	    expect(good.collect).toThrow(/UNSAFE_PATH/)
+   386	  })
+   387	
+   388	  it('rejects a pinned external symlink and a root symlink before opening contract files', () => {
+   389	    const f = fixture(),
+   390	      target = path.join(f.root, 'packages/core/example/src/types.ts')
+   391	    fs.unlinkSync(target)
+   392	    fs.symlinkSync('/nonexistent/external-reference-type.ts', target)
+   393	    const pin = syntheticPin(f.root, Object.keys(files))
+   394	    f.options.expectedCommit = pin
+   395	    f.ownerMap.reference_commit = pin
+   396	    expect(f.collect).toThrow(/SYMLINK_SOURCE/)
+   397	    const good = fixture(),
+   398	      link = `${good.root}-link`
+   399	    temporary.push(link)
+   400	    fs.symlinkSync(good.root, link, 'dir')
+   401	    expect(() =>
+   402	      collectReferenceCatalog({ ...good.options, root: link })
+   403	    ).toThrow(/SYMLINK_ROOT/)
+   404	  })
+   405	
+   406	  it('freeze rejects duplicate IDs, missing sources, removed requirements and content drift', () => {
+   407	    const f = fixture(),
+   408	      original = f.collect()
+   409	    const resign = (value) => {
+   410	      const data = { ...value }
+   411	      delete data.catalog_sha256
+   412	      value.catalog_sha256 = sha(
+   413	        JSON.stringify(JSON.parse(serializeCatalog(data)), null, 0)
+   414	      )
+   415	      return value
+   416	    }
+   417	    const duplicate = structuredClone(original)
+   418	    duplicate.entries.push(duplicate.entries[0])
+   419	    expect(() => compareCatalogFreeze(original, duplicate)).toThrow(
+   420	      /DUPLICATE_ID/
+   421	    )
+   422	    const missing = structuredClone(original)
+   423	    missing.sources = []
+   424	    expect(() => compareCatalogFreeze(original, missing)).toThrow(
+   425	      /INVALID_CATALOG/
+   426	    )
+   427	    const removed = structuredClone(original)
+   428	    removed.entries.pop()
+   429	    removed.summary.entries -= 1
+   430	    resign(removed)
+   431	    expect(() => compareCatalogFreeze(original, removed)).toThrow(
+   432	      /REQUIREMENT_REMOVED/
+   433	    )
+   434	    const drift = structuredClone(original)
+   435	    drift.sources[0].sha256 = '0'.repeat(64)
+   436	    expect(() =>
+   437	      compareCatalogFreeze(original, drift, { root: f.root })
+   438	    ).toThrow(/SOURCE_DRIFT/)
+   439	    fs.unlinkSync(path.join(f.root, original.sources[0].path))
+   440	    expect(() =>
+   441	      compareCatalogFreeze(original, original, { root: f.root })
+   442	    ).toThrow(/MISSING_SOURCE/)
+   443	  })
+   444	
+   445	  it('rejects malformed AST, malformed documented JSON and missing documented source', () => {
+   446	    expect(() =>
+   447	      fixture({
+   448	        'packages/core/example/src/types.ts': 'export interface {'
+   449	      }).collect()
+   450	    ).toThrow(/AST_PARSE/)
+   451	    expect(() =>
+   452	      fixture({
+   453	        'docs/tool-catalog.md': '# Tools\n```json\nnot-json\n```\n'
+   454	      }).collect()
+   455	    ).toThrow(/CATALOG_JSON/)
+   456	    expect(() =>
+   457	      fixture({
+   458	        'docs/config-catalog.md':
+   459	          '[source](../packages/core/example/src/missing.ts)\n'
+   460	      }).collect()
+   461	    ).toThrow(/MISSING_DOCUMENT_SOURCE/)
+   462	  })
+   463	
+   464	  it('Python never copies executable annotation/class-base expressions', () => {
+   465	    const f = fixture({
+   466	      'python/sdk/src/sdk.py':
+   467	        'class Dynamic(factory(lambda: "PYTHON_INLINE_BODY")):\n    def run(self, x: (lambda: "PYTHON_INLINE_BODY")):\n        return "PYTHON_INLINE_BODY"\n'
+   468	    })
+   469	    const catalog = f.collect()
+   470	    expect(serializeCatalog(catalog)).not.toContain('PYTHON_INLINE_BODY')
+   471	    expect(
+   472	      catalog.entries.find((entry) => entry.kind === 'python-class')
+   473	        .extraction_status
+   474	    ).toBe('UNKNOWN')
+   475	  })
+   476	
+   477	  it('preserves explicit package owner overrides and parses generated Cordis fragments/variants by semantic anchors', () => {
+   478	    const f = fixture({
+   479	      'docs/subsystems/core.md': `# Core\n## Cordis API\n### ctx.example\n\`\`\`ts cordis-catalog\nrun(id: string): Promise<void>\nrun(id: number): Promise<void>\n\`\`\`\nSource: [source](../../packages/core/example/src/index.ts)\n\n### Options\n\`\`\`ts cordis-catalog\ninterface EventOptions { once?: boolean }\n\`\`\`\n\n### Flattened\n\`\`\`ts cordis-catalog\nrun(value: { readonly first: string readonly second: number }): void\n\`\`\`\n`,
+   480	      'docs/persistence-catalog.md':
+   481	        '# Persistence\n<a id="variant-one"></a>\n## Resolved\n| Field | Type |\n| --- | --- |\n| value | string |\n<a id="variant-two"></a>\n## Resolved\n| Field | Type |\n| --- | --- |\n| value | string |\n'
+   482	    })
+   483	    f.ownerMap.package_owners[0].owner_task = 'P100-038'
+   484	    const catalog = f.collect()
+   485	    expect(
+   486	      catalog.entries
+   487	        .filter((entry) => entry.source.startsWith('packages/core/example/'))
+   488	        .every((entry) => entry.owner_task === 'P100-038')
+   489	    ).toBe(true)
+   490	    const method = catalog.entries.find(
+   491	      (entry) =>
+   492	        entry.kind === 'document-class-member' &&
+   493	        entry.symbol.endsWith('CordisSurface.run')
+   494	    )
+   495	    expect(method.owner_task).toBe('P100-038')
+   496	    expect(method.shape.declarations).toHaveLength(2)
+   497	    expect(
+   498	      catalog.entries.some(
+   499	        (entry) =>
+   500	          entry.kind === 'document-ast-unknown' &&
+   501	          entry.extraction_status === 'UNKNOWN'
+   502	      )
+   503	    ).toBe(true)
+   504	    expect(
+   505	      catalog.entries.filter(
+   506	        (entry) =>
+   507	          entry.kind === 'document-table-row' &&
+   508	          entry.source === 'docs/persistence-catalog.md'
+   509	      )
+   510	    ).toHaveLength(2)
+   511	  })
+   512	
+   513	  it('does not copy executable expressions embedded in TypeScript heritage/types', () => {
+   514	    const rows = []
+   515	    extractTypeScriptContracts(
+   516	      'export interface Dynamic extends factory(() => { return "TYPE_INLINE_BODY" }) {}\nexport type Shape = { [factory(() => "TYPE_INLINE_BODY")]: string }',
+   517	      (...row) => rows.push(row)
+   518	    )
+   519	    expect(JSON.stringify(rows)).not.toContain('TYPE_INLINE_BODY')
+   520	    expect(JSON.stringify(rows)).toContain('UNKNOWN')
+   521	    const computed = []
+   522	    extractTypeScriptContracts(
+   523	      'export class Dynamic extends getBase() { [getName()](): void {} }',
+   524	      (...row) => computed.push(row)
+   525	    )
+   526	    expect(
+   527	      computed.find((row) => row[0] === 'class-member')[2].declarations[0]
+   528	        .name_resolution.status
+   529	    ).toBe('UNKNOWN')
+   530	    expect(
+   531	      computed.find((row) => row[0] === 'class')[2].declarations[0].heritage[0]
+   532	        .types[0].reference.status
+   533	    ).toBe('UNKNOWN')
+   534	  })
+   535	
+   536	  it('freeze rejects live HEAD drift even when the catalog file itself is unchanged', () => {
+   537	    const f = fixture(),
+   538	      catalog = f.collect()
+   539	    execFileSync('git', ['-C', f.root, 'update-ref', '-d', 'refs/heads/main'])
+   540	    expect(() =>
+   541	      compareCatalogFreeze(catalog, catalog, { root: f.root })
+   542	    ).toThrow()
+   543	    const other = fixture()
+   544	    expect(() => validateCatalog(catalog, { root: other.root })).toThrow(
+   545	      /ROOT_MISMATCH/
+   546	    )
+   547	  })
+   548	
+   549	  it('CLI writes reproducible JSON, validates freeze, exits nonzero on bad flags and refuses reference output', () => {
+   550	    const f = fixture(),
+   551	      mapPath = path.join(evidence, `.owner-${path.basename(f.root)}.json`),
+   552	      output = path.join(evidence, `.output-${path.basename(f.root)}.json`)
+   553	    temporary.push(mapPath, output)
+   554	    fs.writeFileSync(mapPath, JSON.stringify(f.ownerMap))
+   555	    const args = [
+   556	      'scripts/reference-contract-catalog.mjs',
+   557	      '--root',
+   558	      f.root,
+   559	      '--commit',
+   560	      f.expectedCommit,
+   561	      '--version',
+   562	      f.expectedVersion,
+   563	      '--owner-map',
+   564	      mapPath,
+   565	      '--output',
+   566	      output
+   567	    ]
+   568	    const invoke = (extra = []) =>
+   569	      spawnSync(process.execPath, [...args, ...extra], {
+   570	        encoding: 'utf8',
+   571	        cwd: process.cwd()
+   572	      })
+   573	    const result = invoke()
+   574	    expect(result.status, result.stderr).toBe(0)
+   575	    expect(JSON.parse(result.stdout)).toMatchObject({
+   576	      parity_status: 'NOT_VERIFIED',
+   577	      mapped_manifests: 3
+   578	    })
+   579	    expect(invoke(['--freeze', output]).status).toBe(0)
+   580	    expect(invoke(['--unexpected', 'value']).status).toBe(1)
+   581	    const unsafeArgs = args
+   582	      .slice(0, -1)
+   583	      .concat(path.join(f.root, 'catalog.json'))
+   584	    expect(
+   585	      spawnSync(process.execPath, unsafeArgs, { encoding: 'utf8' }).stderr
+   586	    ).toContain('OUTPUT_IN_REFERENCE')
+   587	    expect(fs.existsSync(path.join(f.root, 'catalog.json'))).toBe(false)
+   588	  })
+   589	})
+# SPEC 0209 — Catálogo de contratos da referência PARE100
+
+- Task: P100-003, tooling T1/T2, autorizada pela execução atual do plano. BUILD_LOCAL_AUTHORIZED_T2; não altera API, event store ou controles do motor.
+- Referência somente leitura: /home/ricardo/deepseek-harness-session-fixes, commit768fb1f3d3dcf9a16659ee354e927d05475f22dd, CLI0.2.0-rc.1. Não ler ~/.dsh, sessões reais, .env, credenciais ou node_modules da referência.
+
+## Contrato
+
+Criar scripts/reference-contract-catalog.mjs com CLI e funções importáveis para coletar manifests, exports, métodos/interfaces/configs/eventos declarados via AST TypeScript, dados dos catálogos gerados de tools/sessão/config/perfis e apps/Python/native. Excluir código de teste, builds/lib/dist/vendor binário; rastrear utility/test-support como closure de infraestrutura, sem apagá-los do escopo.
+
+Cada entrada tem ID estável, kind, package, source path relativo, SHA-256, declaração/forma de contrato sem corpo de implementação e owner task obtido do capability-family-map inicial. Extrair somente dados de contrato; não importar/vendorizar/copiar implementação DeepSeek. A coleta nunca executa plugin, comando de modelo ou script de instalação da referência.
+
+Dados que dependam de execução ou não possam ser extraídos estaticamente ficam UNKNOWN com reason e fonte, nunca vazios considerados PASS. Nenhum requisito de paridade é PASS porque foi catalogado. A verificação do root/commit/version e dos paths/symlinks deve impedir coleta fora da referência declarada e drift silencioso.
+
+Exportar comparador de freeze que rejeite referência alterada, IDs duplicados, fonte ausente e remoção de requisito. IDs não podem depender da ordem de diretórios nem de linhas; ordenar tudo para output reproduzível. Hashes de fonte mantêm sensibilidade a mudança relevante.
+
+## Validação e ownership
+
+Builder C: scripts/reference-contract-catalog.mjs, tests/reference-contract-catalog.test.js e evidence/reference própria no worktree. Tests com árvore fixture sintética exercitam AST/signatures, JSON schema, corpo não copiado, determinismo, source missing/drift, symlink/fora da raiz, duplicate IDs e caso conhecido-bom. Depois executar coleta no repo pinado e devolver JSON com hashes e limitações.
+
+Lead congela matriz/barra e revê cobertura semântica/jornadas; o catálogo não autoriza diminuir denominador. Pronto: output reprodutível, owners em todos os 318 manifests/55 famílias e surfaces adicionais, guard conhecido-ruim rejeitado, nenhuma leitura sensível ou alteração da referência, crítica I1. A revisão semântica integral P100-003 continua exigida além do índice automático.

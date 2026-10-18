@@ -1,0 +1,311 @@
+# Bounded I1 STATIC review — FAIL
+
+The sealed R19 implementation has four source-derived contract failures (one HIGH, three MEDIUM). This is a bounded static result for SPEC0209 and frozen roles A–D. It grants no live-catalog, mapping, semantic-parity, or release acceptance. No descendants were inspected.
+
+All five sealed file hashes and the exact sentinel matched before and after review. The manifest fingerprint is SHA-256 of the UTF-8 compact JSON object mapping sorted relative paths to their SHA-256 values: `d083e9a8609803c6b2ba8b662b4545a54c0ff936b60901642111551b02124c38`. The sentinel byte digest is `feefe1015355fd902ab096879a7e1cff96cb8c1b6732663ff78b9e6772d5854a`. Full per-file checks and every task-input read are disclosed in integrity.json.
+
+The extractor and tests were read completely as text. No target helper/test/fixture/Python/reference code was executed or imported. No reference repository, live worktree content, Git/history, prior report, install, user session or network was accessed. Only standard read/hash/JSON/report-writing utilities were used. Test assertions are evidence of what is asserted, not independent proof that the implementation meets the bar.
+
+## Findings
+
+### I1-R19-01 — HIGH — Root JSON strings become opaque locally but escape the physical-source payload index and reappear verbatim in literal types
+
+**Rule:** B unresolved dual role stays UNKNOWN; D unclassified JSON payload cannot regain vocabulary privilege; SPEC0209 contract data without implementation bodies.
+
+**Inert witness:** replace only the indicated synthetic source text; do not run it. The ownership examples come from the sealed tests, not a live map.
+
+`docs/tool-catalog.md`
+
+````text
+# Contracts
+## Payload
+```json
+"function guest(){return 19;/* ROOT_PAYLOAD_R19 */}"
+```
+## Mirror
+```ts public-api
+export type Mirror = "function guest(){return 19;/* ROOT_PAYLOAD_R19 */}";
+```
+````
+
+**Exact source-level derivation:**
+
+1. collectReferenceCatalog selects docs/tool-catalog.md (271-274,1697-1708); extractDocument prepasses all fences before emitting (1347-1402).
+2. The JSON prepass calls jsonPayloadLiterals(JSON.parse(content), undefined, declaration, sharedMap) at 1359-1365. At 1197-1204 a primitive string in declaration role is not payload, so the full guest string is never indexed. There are no JSON members to take another branch.
+3. Projection of that same root string reaches 1239-1263: field is undefined and role is declaration, so none of the vocabulary exemptions matches. The document-json shape is explicitly UNKNOWN with the string digest/length.
+4. The second fence contains only a literal type alias. indexRuntimeLiterals skips type syntax (741-747); printed finds no indexed collision at 558-581 and prints the entire quoted literal at 583-586.
+5. The raw alias symbol Contracts/Mirror/Mirror passes identityVocabulary. emitFor at 1615-1641 neither traverses nor sanitizes strings in shape. The document-type entry is STATIC and contains the complete previously unclassified JSON payload as a declared type.
+6. This is a same-physical-source unresolved payload collision, not cross-file resolution or an objection to a declaration-only program-shaped selector. Removing the JSON fence restores the required frozen-B positive case.
+
+**Derived output (selected fields, not an execution capture):**
+
+```json
+{
+  "entry_count_for_source": 3,
+  "opaque_json_shape": {
+    "status": "UNKNOWN",
+    "reason": "Unclassified JSON string requires semantic review; bytes not copied",
+    "value_sha256": "ecda713ae5f3455b6ddef3a7e1525ad00254829ebf4eddf8a266e093ea13a863",
+    "byte_length": 50
+  },
+  "leaking_type_entry": {
+    "id": "contract:8a05f292fdb11c0edd1474374675ec4d50acdf1774361df4405d3984a2fa6124",
+    "kind": "document-type",
+    "package": "@synthetic/root",
+    "source": "docs/tool-catalog.md",
+    "source_sha256": "294b2bc16a8f58a8cddafd9f292fa72bd436a34690b45b426e0122f0c1f9e6c5",
+    "symbol": "Contracts/Mirror/Mirror",
+    "owner_task": "P100-003",
+    "extraction_status": "STATIC",
+    "parity_status": "NOT_VERIFIED",
+    "shape": {
+      "declarations": [
+        {
+          "visibility": "PUBLIC",
+          "type_parameters": [],
+          "type": "\"function guest(){return 19;/* ROOT_PAYLOAD_R19 */}\""
+        }
+      ]
+    }
+  }
+}
+```
+
+**Actual test gap:** `tests/reference-contract-catalog.test.js:637-668,945-983,985-1029,1306-1380`. Assertions cover unclassified object members and named payload slots such as default/const/examples, but not an opaque root JSON string mirrored into an earlier/later declaration fence. Test titles are not independent proof.
+
+**Action:** Align JSON literal indexing with projection classification: any unclassified root string that is emitted as opaque must enter the physical-source unresolved-payload map. Add both fence orders and retain a declaration-only positive control, all three source entries, source hash, owner, ID derivation and NOT_VERIFIED parity.
+
+### I1-R19-02 — MEDIUM — Built-in JSON schema type strings bypass a known same-source executable-payload collision
+
+**Rule:** C actual program source opaque in every output representation; B unresolved dual roles UNKNOWN.
+
+**Inert witness:** replace only the indicated synthetic source text; do not run it. The ownership examples come from the sealed tests, not a live map.
+
+`docs/tool-catalog.md`
+
+````text
+# Contracts
+## Runtime
+```ts public-api
+export type Mirror = "null";
+new Worker("null", { eval: true });
+```
+## Schema
+```json
+{"type":"null"}
+```
+````
+
+**Exact source-level derivation:**
+
+1. The TypeScript prepass visits the actual Worker argument, indexing hash(null) at 735-770. The mirrored literal type is therefore UNKNOWN with that digest and length through printed at 558-581.
+2. The document-json object receives the same shared payloadLiterals map at 1465-1470. Its type field enters vocabulary role through jsonChildRole (1180-1181).
+3. At 1241-1251, role is not payload and null is in the hardcoded type list. Unlike the name/required and $ref branches at 1252-1257, this branch never tests payloadLiterals.has(hash(value)); it returns the exact string null at 1259.
+4. The JSON entry shape is only {type:"null"}; hasUnknown is false, so emitFor marks that entry STATIC. The program remains opaque in the mirrored TypeScript type but appears verbatim in the JSON type representation.
+5. This is not the JSON primitive null, a filename, dynamic evaluation, or a cross-file inference. It is the exact string supplied as guest source and reused as a literal schema constraint in one physical document.
+
+**Derived output (selected fields, not an execution capture):**
+
+```json
+{
+  "entry_count_for_source": 3,
+  "mirror_type": {
+    "status": "UNKNOWN",
+    "reason": "Unclassified literal in a declared type; bytes not copied",
+    "literals": [
+      {
+        "value_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+        "byte_length": 4
+      }
+    ]
+  },
+  "leaking_json_entry": {
+    "id": "contract:be8b7a874dcec2bdeab56ff3681d8625bdc20f678747ff705edb052564df8c9c",
+    "kind": "document-json",
+    "package": "@synthetic/root",
+    "source": "docs/tool-catalog.md",
+    "source_sha256": "6cd32d2b7e836fabe95d11cff856e92bfd4793ea91e391c93e7cf9009e0e0600",
+    "symbol": "Contracts/Schema",
+    "owner_task": "P100-003",
+    "extraction_status": "STATIC",
+    "parity_status": "NOT_VERIFIED",
+    "shape": {
+      "type": "null"
+    }
+  }
+}
+```
+
+**Actual test gap:** `tests/reference-contract-catalog.test.js:243-296,800-829,1306-1380`. R19 tests a shared runtime collision with $ref and its declaration-only positive control. Schema tests assert preservation of ordinary type strings, without a colliding actual runtime guest.
+
+**Action:** Apply collision handling to the built-in type-string branch as well. Retain exact schema type strings when there is no source-local payload collision; retain the requirement, source, owner and NOT_VERIFIED state when making a colliding value UNKNOWN.
+
+### I1-R19-03 — MEDIUM — Mermaid node IDs and simple edges copy an indexed guest program verbatim
+
+**Rule:** C actual program source opaque in every output representation; B unresolved dual roles UNKNOWN.
+
+**Inert witness:** replace only the indicated synthetic source text; do not run it. The ownership examples come from the sealed tests, not a live map.
+
+`docs/tool-catalog.md`
+
+````text
+# Contracts
+## Runtime
+```ts public-api
+export type Mirror = "debugger";
+new Worker("debugger", { eval: true });
+```
+## Graph
+```mermaid
+flowchart LR
+  debugger["node"]
+  sink["target"]
+  debugger --> sink
+```
+````
+
+**Exact source-level derivation:**
+
+1. The shared Markdown prepass indexes the Worker argument debugger through 1366-1373 and 735-770. printed correctly makes the literal type Mirror UNKNOWN with its hash/length.
+2. The Mermaid node regex at 1499 matches debugger["node"]. Line 1501 assigns match[1] directly to nodes[0].id. The projection at 1502 handles the label only, and receives no shared collision map.
+3. The line "  debugger --> sink" passes both edge regular expressions at 1506 and 1508. Line 1509 emits row.trim(), exactly "debugger --> sink", with the same guest source bytes retained.
+4. The add wrapper at 1403-1410 examines the symbol Contracts/Graph, not nested nodes or edges. That symbol contains no payload; emitFor retains the shape unchanged. Graph semantics is UNKNOWN, but this status does not remove the raw bytes.
+5. No file resolution, semantic graph interpretation or whole-program analysis is needed to derive these outputs. The witness is intentionally restricted to the grammar the actual regex accepts.
+
+**Derived output (selected fields, not an execution capture):**
+
+```json
+{
+  "entry_count_for_source": 3,
+  "mirror_type": {
+    "status": "UNKNOWN",
+    "reason": "Unclassified literal in a declared type; bytes not copied",
+    "literals": [
+      {
+        "value_sha256": "4c44d7c28ec0f6ca3e2624c6af1d3be324576d01ef6f6c2dc0af7e61664b8c2c",
+        "byte_length": 8
+      }
+    ]
+  },
+  "leaking_graph_entry": {
+    "id": "contract:be5e64d19d271ec62d19494b3962834e979431e4bbf404330bd1d45a1c8eaf94",
+    "kind": "capability-graph",
+    "package": "@synthetic/root",
+    "source": "docs/tool-catalog.md",
+    "source_sha256": "000abb974a046ae9f54a03181ba60a29376bad627eec28a34db16128523118d7",
+    "symbol": "Contracts/Graph",
+    "owner_task": "P100-003",
+    "extraction_status": "UNKNOWN",
+    "parity_status": "NOT_VERIFIED",
+    "shape_fragments": {
+      "nodes[0].id": "debugger",
+      "edges": [
+        "debugger --> sink"
+      ],
+      "semantics": {
+        "status": "UNKNOWN",
+        "reason": "Graph data requires semantic capability/journey review"
+      }
+    }
+  }
+}
+```
+
+**Actual test gap:** `tests/reference-contract-catalog.test.js:91-93,739-773,1938-1994`. Graph fixtures use noncolliding structural IDs; the long program-shaped marker is placed in labels. They do not check colliding IDs or simple edge text, so their label assertions do not cover these output paths.
+
+**Action:** Project graph identifiers and edge endpoint representations with the shared source-local payload evidence. Preserve graph requirements/connectivity as opaque referenced identities with UNKNOWN reason/hash/length when colliding; keep ordinary noncolliding graph identifiers deterministic.
+
+### I1-R19-04 — MEDIUM — Genuine export module selectors with spaces or punctuation lose their exact declaration spelling
+
+**Rule:** B genuine declared selectors preserve exact spelling regardless of lexical program appearance; A/B exact metadata can coexist with opaque identity.
+
+**Inert witness:** replace only the indicated synthetic source text; do not run it. The ownership examples come from the sealed tests, not a live map.
+
+`packages/core/example/src/types.ts`
+
+````text
+export { Config } from "module with space?!";
+````
+
+**Exact source-level derivation:**
+
+1. indexRuntimeLiterals skips ExportDeclaration at 743-747. There is no runtime payload anywhere in this source, so the moduleSpecifier is a genuine static declaration selector with no unresolved collision.
+2. The export branch calls nodeName(node.moduleSpecifier) at 944-945 instead of declarationName. At 590-593 the spaces and question/exclamation punctuation fail identityVocabulary and produce an opaque UNKNOWN containing only digest/length.
+3. The named export receives symbol Config and shape {from:opaque, name:"Config", type_only:false} at 949-958. declared_name is conditional on item.name being a string, which it is not in this witness, and would describe the exported name rather than the module locator anyway.
+4. No separate exact module selector is retained in shape or symbol. emitFor keeps the Config identity and only the digest of the module locator. Authenticated source path provenance remains correct; that does not preserve the separate selector contract.
+5. This finding requires no cross-file resolution or executable interpretation of the selector. It concerns only inert exact spelling, already preserved for ambient module context at 826-829 and by declarationName when used.
+
+**Derived output (selected fields, not an execution capture):**
+
+```json
+{
+  "entry_count_for_source": 2,
+  "export_entry": {
+    "id": "contract:c192a21c0ad8fc5c3e2bcd41e28b5482252899952a59bb9fbdcfe328b249f5ce",
+    "kind": "export",
+    "package": "@synthetic/example",
+    "source": "packages/core/example/src/types.ts",
+    "source_sha256": "5519897d031f11850e8da8d889737694d34e5a6fbaec1e601ad1c835665429b1",
+    "symbol": "Config",
+    "owner_task": "P100-012",
+    "extraction_status": "UNKNOWN",
+    "parity_status": "NOT_VERIFIED",
+    "shape": {
+      "declarations": [
+        {
+          "from": {
+            "status": "UNKNOWN",
+            "reason": "Unclassified literal name; bytes not copied",
+            "value_sha256": "203f87206d6bfd55826e55915cae1a87573177041c27bb52bb16207898137903",
+            "byte_length": 19
+          },
+          "name": "Config",
+          "type_only": false
+        }
+      ]
+    }
+  }
+}
+```
+
+**Actual test gap:** `tests/reference-contract-catalog.test.js:298-384,919-943,1102-1147`. The R19 exact-selector tests cover ambient module context. The export-from test uses a selector accepted by identityVocabulary. Exact arbitrary named-export metadata tests do not establish exact moduleSpecifier retention.
+
+**Action:** Retain an exact role-established export module selector as declaration metadata, using the same source-local collision policy as declarationName. Leave existing opaque identity rules/IDs intact or provide an explicitly approved complete migration if an identity actually must change. Add declaration-only space/punctuation/program-look positives and same-source payload collision negatives.
+
+## Frozen measurement decision and actual tests
+
+Measurement conflict against frozen B; no bar waiver. Tests:1938-1994 retain the GuestSource alias, add identical ProgramSource initializer to that physical source, retain the multi-kind UNKNOWN/body-marker assertions, assert exactly three TS source entries and their hash/length/source/owner/parity. Tests:386-441 independently retain exact declaration-only program-look positives plus same-source collision negatives. Historical no-other-change compliance cannot be independently diffed from this packet.
+
+A program-shaped literal used only as an authenticated declaration/selector remains a frozen-B positive case. The absence of a runtime use in such a fixture cannot establish implementation-copying failure. Conversely, UNKNOWN status does not permit a colliding payload to remain in a second raw output representation. Authenticated relative filenames are legitimate exact provenance; no filename migration or filename-blacklist finding is made.
+
+## Other inspected boundaries
+
+- Body extraction: TypeScript function/class bodies are not printed by signature/member extraction (672-716,878-931); staticData opaquely handles string initializers and dynamic descendants (603-657). printed rejects executable type/heritage expressions and known literal collisions (539-586). Python helper text is restricted to AST parsing/projection and opaque dynamic annotations (986-1075); it was not run. These observations do not erase the listed alternate output paths.
+- Source/path authentication: relativePath/safeRead reject traversal, sensitive segments and symlink ancestors (88-120); inspectReference validates real root/toplevel, HEAD/version, tree blob identities and re-reads sources (156-252,1764-1768). Authenticated filenames remain exact. Candidate/exclusion and additional/infrastructure scopes were inspected (254-348,350-479); their live completeness is outside this packet.
+- Git authority: the fixed execFileSync argument array suppresses replacement refs, fsmonitor/hooks and ambient Git-config environment; collection avoids status/diff/filter worktree comparisons and refuses declared promisor storage (122-210). Tests:2114-2202 assert selected guards but were not executed. No exploit claim is made from hypothetical config or host behavior.
+- Output authority: CLI requires explicit flags, rejects sensitive/non-JSON/reference output, owner-map aliasing, symlink/nonfile/hardlink targets, and writes a new exclusive inode with rechecks and atomic rename (1951-2054). The test at 1805 deliberately permits output equal to the unchanged validated freeze. No additional source-demonstrated output finding was established.
+- Retention and determinism: emitFor retains source hash, owner, requirement ID and NOT_VERIFIED parity (1615-1641); every recognized TS/Python/native/document source has a surface/denominator entry, including utility/test-support closure. Stable IDs omit line numbers; source/entry/declaration ordering and canonical serialization are explicit (47-60,978-983,1643,1769-1796). validateCatalog/compareCatalogFreeze reject duplicates, missing sources, drift and removed requirements (1832-1949). This does not independently establish live owners, all promised families, or historical ID migration completeness. Finding 04 preserves the source entry/ID but loses exact selector data.
+
+## Blind spots
+
+- No extractor, tests, fixture, Python helper, reference import, Git command, install, build, network request or runtime witness was executed. Witness outputs are source-derived fragments, not observed execution results.
+- No live catalog, capability-family map, actual reference checkout, user sessions, secrets, worktree, descendants, prior reports or history were read. Live counts of 318 manifests and 55 families and actual owner correctness are unverified.
+- No semantic parity, journey completeness, generated-document freshness, type-checker behavior, cross-file/export-star resolution or general whole-program data flow was claimed or required.
+- Dependency versions and Python/TypeScript/Git runtime behavior were not independently inspected; static findings rely on explicit connected branches and conventional literal/type syntax. Symlink races, concurrent filesystem substitution and host-tool trust were not tested.
+- The sealed Lead decision and current tests can be compared directly, but historical assertion preservation cannot be independently diffed without prohibited prior material.
+- Seals establish byte consistency with the supplied sentinel, not an external signature or proof of who created the packet.
+
+## Every explicit task-input read
+
+Only these six files were opened as task input (repeated hash/text reads are included):
+
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet.sentinel.json` — metadata; full byte read; JSON parse; SHA-256; repeat byte reads for canonicalization and final integrity.
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet/docs/02_spec/0209_pare100_reference_catalog.md` — SHA-256 before/after; complete text read.
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet/docs/04_audit/evidence/PARE100-EXEC-20261014/adjudicate-reference-r11/role-decisions.json` — SHA-256 before/after; complete text read.
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet/docs/04_audit/evidence/PARE100-EXEC-20261014/lead/collector-fixture-r18-decision.json` — SHA-256 before/after; complete text read.
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet/scripts/reference-contract-catalog.mjs` — SHA-256 before/after; complete numbered text read, lines 1-2067; targeted re-read:1187-1282,943-969,1497-1523.
+- `/tmp/cvg-pare100-exec-20261014-6az3hlay/critic-reference-r19-packet/tests/reference-contract-catalog.test.js` — SHA-256 before/after; complete numbered text read, lines 1-2241.
+
+Packet directory metadata and recursive entry-name/type inventories were also read before/after; the inventories contained exactly the five listed regular files and no symlinks or extra files. No AGENTS.md, skill file, runtime/backlog/log, builder report, score, root catalog or other repository file was read. This follows the user’s narrower sealed-input authorization.
+
+Writes are restricted to the sibling critic-reference-r19-result directory: verdict.json, findings.json, report.md and integrity.json. Review stops after writing them and checking the seals again.

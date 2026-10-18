@@ -37,7 +37,16 @@ import { createPromptProfileSnapshot } from './prompt-profile.ts'
 import { evaluatePlatformPolicy } from './policy-evaluator.ts'
 import { CONTROLLED_SAFE_OUTPUTS } from './output-policy.ts'
 import { executeControlledKernel } from './controlled-kernel-execution.ts'
-import { CONTROLLED_STOP_PROJECTION } from './controlled-execution-plan.ts'
+import {
+  CONTROLLED_STOP_PROJECTION,
+  projectControlledTools
+} from './controlled-execution-plan.ts'
+import {
+  validateControlledHost,
+  prepareControlledPublishedAdmission,
+  ControlledContinuationRuntime,
+  type ControlledKernelHostContext
+} from './controlled-kernel-continuation.ts'
 
 export interface TestLabInput {
   store: ControlPlaneStore
@@ -181,10 +190,22 @@ export async function runTestLab(input: TestLabInput): Promise<TestRunTrace> {
 }
 
 export async function executeConfiguredAgent(
-  input: ControlledAgentExecutionInput
+  input: ControlledAgentExecutionInput,
+  host?: ControlledKernelHostContext
 ): Promise<TestRunTrace> {
+  if (host) {
+    validateControlledHost(host, input)
+    host = {
+      ...host,
+      identity: Object.freeze({ ...host.identity }),
+      state: { ...host.state }
+    }
+  }
   const traceId = resolveExecutionTraceId(input.traceId)
+  // Facade diagnostics are ephemeral. Durable attempts do not replay preparation
+  // or projection hooks; required facts use guarded kernel log/audit/callback ports.
   const executionInput: ControlledAgentExecutionInput = { ...input, traceId }
+  if (host) delete executionInput.eventBus
   const timing = createControlledTraceTiming(input.monotonicClock)
   const startedAt = new Date()
   const version = await timing.measureAsync('context', () =>
@@ -192,6 +213,62 @@ export async function executeConfiguredAgent(
   )
   if (!version || version.agentId !== input.agentId) {
     throw new DomainError('invalid_action', 'Agent version is not available')
+  }
+  if (host) {
+    if (!input.actor || !input.capabilityGateway)
+      throw new Error('controlled_host_bootstrap')
+    const admission = prepareControlledPublishedAdmission({
+      version,
+      input: {
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        versionId: input.versionId,
+        message: input.message,
+        history: input.history,
+        executionMode: input.executionMode,
+        ...(input.requireCapabilityApproval === undefined
+          ? {}
+          : { requireCapabilityApproval: input.requireCapabilityApproval }),
+        executionId: host.identity.executionId,
+        traceId: host.identity.traceId,
+        correlationId: host.identity.correlationId,
+        inboundMessageId: host.identity.inboundMessageId,
+        context: {
+          conversationId: host.identity.conversationId,
+          sessionId: host.identity.sessionId
+        }
+      },
+      actor: input.actor,
+      gateway: input.capabilityGateway
+    })
+    if (admission.requestDigest !== host.identity.requestDigest)
+      throw new Error('controlled_request_digest')
+  }
+  if (host) {
+    if (host.state.phaseState === 'CLOSED') {
+      const closed = host.state.closedTrace
+      const result = host.state.runtimeResult
+      if (
+        !closed ||
+        closed.traceId !== host.identity.traceId ||
+        closed.tenantId !== input.tenantId ||
+        closed.agentId !== input.agentId ||
+        closed.versionId !== input.versionId ||
+        !result ||
+        !CONTROLLED_STOP_PROJECTION[result.stopReason] ||
+        result.response !== closed.response.text ||
+        closed.provider.externalCall !== false ||
+        closed.knowledge.status === 'answered' ||
+        (result.stopReason !== 'COMPLETED' &&
+          (closed.status === 'completed' ||
+            closed.tools.some((tool) => tool.status === 'succeeded') ||
+            closed.response.mode !== 'handoff'))
+      )
+        throw new Error('controlled_closed_projection')
+      host.lifecycle.requestStop('finalizing')
+      await host.lifecycle.stopAndJoin()
+      return closed
+    }
   }
   const normalizedInput = timing.measure('normalize', () => ({
     message: validateMessage(input.message),
@@ -239,6 +316,7 @@ export async function executeConfiguredAgent(
   const intent = timing.measure('intent', () => classifyForDryRun(message))
   await emitPlatformEvent(executionInput, 'intent.after', intent)
   const approvedKnowledge = await timing.measureAsync('knowledge', async () => {
+    if (host) return undefined
     const candidate =
       input.resolveApprovedKnowledge && intent.name === 'institutional_question'
         ? await input.resolveApprovedKnowledge({
@@ -320,23 +398,118 @@ export async function executeConfiguredAgent(
   const promptWithHistory = history.length
     ? `${prompt.text}\n\nConversation history:\n${history.join('\n')}`
     : prompt.text
-  const kernel = await executeControlledKernel({
-    input: executionInput,
-    version,
-    config,
-    intent: intent.name,
-    policy,
-    risk,
-    response,
-    promptWithHistory,
-    provider: modelProvider,
-    timing,
-    sourceIds:
-      knowledge.trace.status === 'answered' && knowledge.trace.source
-        ? [knowledge.trace.source]
-        : [],
-    emit: (name, payload) => emitPlatformEvent(executionInput, name, payload)
-  })
+  const recoveryHost =
+    host &&
+    (host.cancelled === true ||
+      host.state.phaseState !== 'IDLE_SEALED' ||
+      host.state.snapshot?.fault ||
+      host.state.snapshot?.dispatchClosed)
+      ? host
+      : undefined
+  const recovery = Boolean(recoveryHost)
+  const recoveryRuntime = recoveryHost
+    ? new ControlledContinuationRuntime(recoveryHost)
+    : undefined
+  if (recoveryRuntime) {
+    recoveryRuntime.expiresAt = host?.expiresAt
+      ? Date.parse(host.expiresAt)
+      : Date.now()
+    recoveryRuntime.closeLocal()
+    await recoveryRuntime.join()
+  }
+  const recoveryStop =
+    recoveryHost?.cancelled === true
+      ? ('CANCELLED' as const)
+      : ('INSUFFICIENT_EVIDENCE' as const)
+  const recoverySnapshot = recoveryHost?.state.snapshot
+  const kernel = recoveryHost
+    ? {
+        stop: recoveryStop,
+        output: undefined,
+        providerInvoked: false,
+        tools: projectControlledTools(
+          recoveryHost.state.snapshot?.names ?? [],
+          [],
+          recoveryStop
+        ),
+        response: {
+          mode: 'handoff' as const,
+          text: CONTROLLED_SAFE_OUTPUTS.handoff
+        },
+        result: undefined,
+        durable: recoveryRuntime,
+        snapshot: recoverySnapshot
+          ? {
+              ...recoverySnapshot,
+              finalIssued: false,
+              dispatchClosed: true,
+              stop: recoveryStop,
+              attempts: recoverySnapshot.attempts.map((attempt) => ({
+                ...attempt,
+                closed: true,
+                ...(attempt.phase === 'PENDING'
+                  ? {
+                      phase: 'CLOSED_WITHOUT_ENTRY' as const,
+                      cause: attempt.cause ?? recoveryStop
+                    }
+                  : {})
+              })),
+              fault:
+                recoverySnapshot.fault ??
+                (recoveryHost.cancelled === true
+                  ? null
+                  : {
+                      phase: 'recovery',
+                      code: 'evidence_unavailable' as const,
+                      bodyStarted: recoverySnapshot.attempts.some(
+                        (a) => a.phase === 'ENTERED'
+                      )
+                    })
+            }
+          : null
+      }
+    : await executeControlledKernel(
+        {
+          input: executionInput,
+          version,
+          config,
+          intent: intent.name,
+          policy,
+          risk,
+          response,
+          promptWithHistory,
+          provider: modelProvider,
+          timing,
+          sourceIds:
+            knowledge.trace.status === 'answered' && knowledge.trace.source
+              ? [knowledge.trace.source]
+              : [],
+          emit: (name, payload) =>
+            emitPlatformEvent(
+              host ? { ...input, traceId } : executionInput,
+              name,
+              payload
+            )
+        },
+        host?.ports,
+        host
+      )
+  if (host && policy.decision === 'blocked' && kernel.stop === 'COMPLETED') {
+    // Kernel completion is a private fact; a blocked whole-turn policy cannot
+    // become a durable SUCCEEDED result. Keep the local one-arg profile intact.
+    kernel.stop = 'POLICY_DENIED'
+    kernel.response = { mode: 'handoff', text: CONTROLLED_SAFE_OUTPUTS.handoff }
+    kernel.tools = kernel.tools.map((tool) => ({
+      ...tool,
+      status: tool.status === 'succeeded' ? 'failed' : tool.status
+    }))
+    if (kernel.snapshot)
+      kernel.snapshot = {
+        ...kernel.snapshot,
+        stop: 'POLICY_DENIED',
+        dispatchClosed: true
+      }
+  }
   const output = kernel.output
   const completedResponse = kernel.response
   const projection = CONTROLLED_STOP_PROJECTION[kernel.stop]
@@ -468,7 +641,18 @@ export async function executeConfiguredAgent(
       knowledge: knowledge.trace,
       tools,
       handoffRequested: finalHandoffRequested,
-      durations: timing.snapshot(),
+      durations:
+        host && !recovery
+          ? Object.fromEntries(
+              Object.entries(timing.snapshot()).map(([key, value]) => [
+                key,
+                value +
+                  (host.state.snapshot?.durationTotals?.[
+                    key as TraceSpanName
+                  ] ?? 0)
+              ])
+            )
+          : timing.snapshot(),
       latencyMs: Math.max(0, completedAt.getTime() - startedAt.getTime())
     }),
     ...(input.context?.conversationId
@@ -476,6 +660,47 @@ export async function executeConfiguredAgent(
       : {}),
     ...(input.context?.sessionId ? { sessionId: input.context.sessionId } : {}),
     createdAt: completedAt
+  }
+  if (host) {
+    const runtime = kernel.durable
+    if (!runtime) throw new Error('controlled_host_runtime_missing')
+    await runtime.join()
+    const runtimeResult = kernel.result ?? {
+      response: CONTROLLED_SAFE_OUTPUTS.handoff,
+      stopReason: kernel.stop,
+      steps: host.state.snapshot?.budgetUsage.steps ?? 0,
+      modelCalls: host.state.snapshot?.budgetUsage.modelCalls ?? 0,
+      toolCalls: host.state.snapshot?.budgetUsage.toolCalls ?? 0,
+      usage: {
+        inputTokens: host.state.snapshot?.budgetUsage.inputTokens ?? 0,
+        outputTokens: host.state.snapshot?.budgetUsage.outputTokens ?? 0,
+        costUsd: 0
+      }
+    }
+    const safeResult = {
+      ...runtimeResult,
+      response: trace.response.text,
+      stopReason: kernel.stop,
+      ...(kernel.stop !== 'COMPLETED'
+        ? { toolResult: { status: 'REJECTED' as const } }
+        : {})
+    }
+    try {
+      await runtime.bounded(
+        () =>
+          host.continuation.close(
+            host.identity,
+            kernel.snapshot,
+            safeResult,
+            trace,
+            runtime.seal.stateRevision
+          ),
+        true
+      )
+    } catch {
+      await runtime.poison('close')
+      throw new Error('controlled_terminal_persistence_unavailable')
+    }
   }
   await emitPlatformEvent(executionInput, 'conversation.completed', {
     status: trace.status,

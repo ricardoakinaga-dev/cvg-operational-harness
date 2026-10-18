@@ -1,0 +1,511 @@
+packages/contracts/src/execution-v2.ts-418-  recordStep(step: ExecutionStep): Promise<void>
+packages/contracts/src/execution-v2.ts-419-  listSteps(
+packages/contracts/src/execution-v2.ts-420-    tenantId: string,
+packages/contracts/src/execution-v2.ts-421-    executionId: string
+packages/contracts/src/execution-v2.ts-422-  ): Promise<readonly ExecutionStep[]>
+packages/contracts/src/execution-v2.ts-423-  saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void>
+packages/contracts/src/execution-v2.ts:424:  loadCheckpoint(
+packages/contracts/src/execution-v2.ts-425-    tenantId: string,
+packages/contracts/src/execution-v2.ts-426-    executionId: string
+packages/contracts/src/execution-v2.ts-427-  ): Promise<ExecutionCheckpoint | null>
+packages/contracts/src/execution-v2.ts-428-}
+packages/contracts/src/execution-v2.ts-429-
+packages/contracts/src/execution-v2.ts-430-/* -------------------------------------------------------------------------- */
+packages/contracts/src/execution-v2.ts-431-/* Completion / sufficiency evaluation                                        */
+packages/contracts/src/execution-v2.ts-432-/* -------------------------------------------------------------------------- */
+packages/contracts/src/execution-v2.ts-433-
+packages/contracts/src/execution-v2.ts-434-export const COMPLETION_OUTCOMES = [
+packages/contracts/src/execution-v2.ts-435-  'COMPLETE',
+packages/contracts/src/execution-v2.ts-436-  'INCOMPLETE',
+packages/contracts/src/execution-v2.ts-437-  'NEEDS_USER',
+packages/contracts/src/execution-v2.ts-438-  'WAITING_APPROVAL',
+packages/contracts/src/execution-v2.ts-439-  'INSUFFICIENT_EVIDENCE',
+packages/contracts/src/execution-v2.ts-440-  'FAILED'
+packages/contracts/src/execution-v2.ts-441-] as const
+packages/contracts/src/execution-v2.ts-442-export type CompletionOutcome = (typeof COMPLETION_OUTCOMES)[number]
+packages/contracts/src/execution-v2.ts-443-
+packages/contracts/src/execution-v2.ts-444-export type CompletionStrategy = 'DETERMINISTIC' | 'EVIDENCE_BASED' | 'HYBRID'
+packages/contracts/src/execution-v2.ts-445-
+packages/contracts/src/execution-v2.ts-446-export interface CompletionEvaluation {
+packages/contracts/src/execution-v2.ts-447-  readonly outcome: CompletionOutcome
+packages/contracts/src/execution-v2.ts-448-  readonly reasonCode:
+packages/contracts/src/execution-v2.ts-449-    | DecisionReasonCode
+packages/contracts/src/execution-v2.ts-450-    | 'COMPLETION_CONFIRMED'
+packages/contracts/src/execution-v2.ts-451-    | 'EVALUATOR_UNAVAILABLE'
+packages/contracts/src/execution-v2.ts-452-  readonly deterministic: boolean
+packages/contracts/src/execution-v2.ts-453-  readonly detail?: string
+packages/contracts/src/execution-v2.ts-454-  /** Model/evaluation usage reported by a hybrid evaluator. */
+packages/contracts/src/execution-v2.ts-455-  readonly usage?: {
+packages/contracts/src/execution-v2.ts-456-    readonly modelCalls: number
+packages/contracts/src/execution-v2.ts-457-    readonly inputTokens: number
+packages/contracts/src/execution-v2.ts-458-    readonly outputTokens: number
+packages/contracts/src/execution-v2.ts-459-    readonly costUsd: number
+packages/contracts/src/execution-v2.ts-460-  }
+packages/contracts/src/execution-v2.ts-461-}
+packages/contracts/src/execution-v2.ts-462-
+--
+packages/harness/src/step-store.ts-170-    this.checkpoints.set(
+packages/harness/src/step-store.ts-171-      key(checkpoint.tenantId, checkpoint.executionId),
+packages/harness/src/step-store.ts-172-      copy(checkpoint)
+packages/harness/src/step-store.ts-173-    )
+packages/harness/src/step-store.ts-174-  }
+packages/harness/src/step-store.ts-175-
+packages/harness/src/step-store.ts:176:  public async loadCheckpoint(
+packages/harness/src/step-store.ts-177-    tenantId: string,
+packages/harness/src/step-store.ts-178-    executionId: string
+packages/harness/src/step-store.ts-179-  ): Promise<ExecutionCheckpoint | null> {
+packages/harness/src/step-store.ts-180-    const checkpoint = this.checkpoints.get(key(tenantId, executionId))
+packages/harness/src/step-store.ts-181-    if (!checkpoint) return null
+packages/harness/src/step-store.ts-182-    validateCheckpointIntegrity(checkpoint, { tenantId, executionId })
+packages/harness/src/step-store.ts-183-    return copy(checkpoint)
+packages/harness/src/step-store.ts-184-  }
+packages/harness/src/step-store.ts-185-}
+packages/harness/src/step-store.ts-186-
+packages/harness/src/step-store.ts-187-export function createInMemoryExecutionStepStore(): InMemoryExecutionStepStore {
+packages/harness/src/step-store.ts-188-  return new InMemoryExecutionStepStore()
+packages/harness/src/step-store.ts-189-}
+--
+packages/harness/src/iterative-runtime.ts-125-]
+packages/harness/src/iterative-runtime.ts-126-
+packages/harness/src/iterative-runtime.ts-127-export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
+packages/harness/src/iterative-runtime.ts-128-
+packages/harness/src/iterative-runtime.ts-129-const AUDIT_GRACE_MS = 200
+packages/harness/src/iterative-runtime.ts-130-
+packages/harness/src/iterative-runtime.ts:131:const TERMINAL_STOPS = new Set<StopReason>([
+packages/harness/src/iterative-runtime.ts-132-  'COMPLETED',
+packages/harness/src/iterative-runtime.ts-133-  'HUMAN_TAKEOVER',
+packages/harness/src/iterative-runtime.ts-134-  'POLICY_DENIED',
+packages/harness/src/iterative-runtime.ts-135-  'INSUFFICIENT_EVIDENCE',
+packages/harness/src/iterative-runtime.ts-136-  'MAX_STEPS',
+packages/harness/src/iterative-runtime.ts-137-  'MAX_COST',
+packages/harness/src/iterative-runtime.ts-138-  'MAX_DURATION',
+packages/harness/src/iterative-runtime.ts-139-  'MAX_TOKENS',
+packages/harness/src/iterative-runtime.ts-140-  'MAX_MODEL_CALLS',
+packages/harness/src/iterative-runtime.ts-141-  'MAX_TOOL_CALLS',
+packages/harness/src/iterative-runtime.ts-142-  'MAX_REPLANS',
+packages/harness/src/iterative-runtime.ts-143-  'MAX_KNOWLEDGE_CALLS',
+packages/harness/src/iterative-runtime.ts-144-  'MAX_VERIFICATION_CALLS',
+packages/harness/src/iterative-runtime.ts-145-  'VERIFICATION_FAILED',
+packages/harness/src/iterative-runtime.ts-146-  'LOOP_DETECTED',
+packages/harness/src/iterative-runtime.ts-147-  'STATE_CONFLICT',
+packages/harness/src/iterative-runtime.ts-148-  'UNSAFE_REQUEST',
+packages/harness/src/iterative-runtime.ts-149-  'CANCELLED'
+packages/harness/src/iterative-runtime.ts-150-])
+packages/harness/src/iterative-runtime.ts-151-
+packages/harness/src/iterative-runtime.ts-152-export function errorMessage(error: unknown): string {
+packages/harness/src/iterative-runtime.ts-153-  return error instanceof Error ? error.message : 'unknown failure'
+packages/harness/src/iterative-runtime.ts-154-}
+packages/harness/src/iterative-runtime.ts-155-
+packages/harness/src/iterative-runtime.ts-156-function isNonEmptyString(value: unknown): value is string {
+packages/harness/src/iterative-runtime.ts-157-  return typeof value === 'string' && value.trim().length > 0
+packages/harness/src/iterative-runtime.ts-158-}
+packages/harness/src/iterative-runtime.ts-159-
+packages/harness/src/iterative-runtime.ts-160-export function bindCapabilityFingerprint(
+packages/harness/src/iterative-runtime.ts-161-  payload: unknown,
+packages/harness/src/iterative-runtime.ts-162-  capabilityFingerprint: string | undefined
+packages/harness/src/iterative-runtime.ts-163-): unknown {
+packages/harness/src/iterative-runtime.ts-164-  return capabilityFingerprint
+packages/harness/src/iterative-runtime.ts-165-    ? { capabilityFingerprint, input: payload }
+packages/harness/src/iterative-runtime.ts-166-    : payload
+packages/harness/src/iterative-runtime.ts-167-}
+packages/harness/src/iterative-runtime.ts-168-
+packages/harness/src/iterative-runtime.ts-169-function hasValidBoundaryInput(input: RuntimeInput): boolean {
+--
+packages/harness/src/iterative-runtime.ts-332-  | {
+packages/harness/src/iterative-runtime.ts-333-      readonly kind: 'stop'
+packages/harness/src/iterative-runtime.ts-334-      readonly stopReason: StopReason
+packages/harness/src/iterative-runtime.ts-335-      readonly response: string
+packages/harness/src/iterative-runtime.ts-336-      readonly approvalId?: ApprovalId
+packages/harness/src/iterative-runtime.ts-337-      /**
+packages/harness/src/iterative-runtime.ts:338:       * A rejected resume binding must not overwrite the durable pause with a
+packages/harness/src/iterative-runtime.ts:339:       * terminal checkpoint; the operator can retry the correct binding.
+packages/harness/src/iterative-runtime.ts-340-       */
+packages/harness/src/iterative-runtime.ts-341-      readonly preserveCheckpoint?: boolean
+packages/harness/src/iterative-runtime.ts-342-    }
+packages/harness/src/iterative-runtime.ts-343-  | {
+packages/harness/src/iterative-runtime.ts-344-      readonly kind: 'pause'
+packages/harness/src/iterative-runtime.ts-345-      readonly pausedKind: 'NEEDS_USER_INPUT' | 'APPROVAL_REQUIRED'
+packages/harness/src/iterative-runtime.ts-346-      readonly decision: LoopDecision | null
+packages/harness/src/iterative-runtime.ts-347-      readonly approvalId?: ApprovalId
+packages/harness/src/iterative-runtime.ts-348-      readonly pauseStepNumber?: number
+packages/harness/src/iterative-runtime.ts-349-    }
+packages/harness/src/iterative-runtime.ts-350-
+packages/harness/src/iterative-runtime.ts-351-/**
+packages/harness/src/iterative-runtime.ts-352- * Iterative governed runtime: the durable execution spine owns claiming,
+packages/harness/src/iterative-runtime.ts-353- * leases and transitions; this runtime owns the cognitive loop, step
+packages/harness/src/iterative-runtime.ts-354- * checkpoints, deterministic budgets and the completion evaluation. It never
+packages/harness/src/iterative-runtime.ts-355- * claims jobs, never persists SQL directly and never executes a tool after a
+packages/harness/src/iterative-runtime.ts-356- * rejected decision.
+packages/harness/src/iterative-runtime.ts-357- */
+packages/harness/src/iterative-runtime.ts-358-export class IterativeGovernedRuntime {
+packages/harness/src/iterative-runtime.ts-359-  public readonly runtimeVersion = RUNTIME_V2_VERSION
+packages/harness/src/iterative-runtime.ts-360-  public readonly orchestratorVersion: string
+packages/harness/src/iterative-runtime.ts-361-  private readonly contextEngine: ContextEngine
+packages/harness/src/iterative-runtime.ts-362-  private readonly completionEvaluatorOverride: CompletionEvaluator | undefined
+packages/harness/src/iterative-runtime.ts-363-  private readonly completionEvaluators = new Map<string, CompletionEvaluator>()
+packages/harness/src/iterative-runtime.ts-364-  private readonly clock: () => Date
+packages/harness/src/iterative-runtime.ts-365-  private readonly repeatThreshold: number
+packages/harness/src/iterative-runtime.ts-366-  private readonly maxSignatures: number
+packages/harness/src/iterative-runtime.ts-367-  private readonly maxObservationPayloadChars: number
+packages/harness/src/iterative-runtime.ts-368-  #kernel: Promise<KernelHost> | undefined
+packages/harness/src/iterative-runtime.ts-369-  readonly #turns = new WeakMap<
+packages/harness/src/iterative-runtime.ts-370-    LoopRun,
+packages/harness/src/iterative-runtime.ts-371-    { host: KernelHost; signal: AbortSignal }
+packages/harness/src/iterative-runtime.ts-372-  >()
+packages/harness/src/iterative-runtime.ts-373-
+packages/harness/src/iterative-runtime.ts-374-  public constructor(
+packages/harness/src/iterative-runtime.ts-375-    private readonly options: IterativeGovernedRuntimeOptions
+packages/harness/src/iterative-runtime.ts-376-  ) {
+packages/harness/src/iterative-runtime.ts-377-    this.contextEngine = options.contextEngine ?? new DefaultContextEngine()
+--
+packages/harness/src/iterative-runtime.ts-581-      )
+packages/harness/src/iterative-runtime.ts-582-      /* v8 ignore stop */
+packages/harness/src/iterative-runtime.ts-583-    }
+packages/harness/src/iterative-runtime.ts-584-
+packages/harness/src/iterative-runtime.ts-585-    let checkpoint: ExecutionCheckpoint | null = null
+packages/harness/src/iterative-runtime.ts-586-    try {
+packages/harness/src/iterative-runtime.ts:587:      checkpoint = await this.options.stepStore.loadCheckpoint(
+packages/harness/src/iterative-runtime.ts-588-        input.tenantId,
+packages/harness/src/iterative-runtime.ts-589-        executionId
+packages/harness/src/iterative-runtime.ts-590-      )
+packages/harness/src/iterative-runtime.ts-591-    } catch (error) {
+packages/harness/src/iterative-runtime.ts-592-      return this.earlyFinish(
+packages/harness/src/iterative-runtime.ts-593-        input,
+packages/harness/src/iterative-runtime.ts-594-        `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+packages/harness/src/iterative-runtime.ts-595-        'STATE_CONFLICT',
+packages/harness/src/iterative-runtime.ts-596-        startedAtMs
+packages/harness/src/iterative-runtime.ts-597-      )
+packages/harness/src/iterative-runtime.ts-598-    }
+packages/harness/src/iterative-runtime.ts-599-
+packages/harness/src/iterative-runtime.ts-600-    if (checkpoint) {
+packages/harness/src/iterative-runtime.ts-601-      const rejection = this.rejectCheckpoint(checkpoint, input)
+packages/harness/src/iterative-runtime.ts-602-      if (rejection) {
+packages/harness/src/iterative-runtime.ts-603-        return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
+packages/harness/src/iterative-runtime.ts-604-      }
+packages/harness/src/iterative-runtime.ts-605-    }
+packages/harness/src/iterative-runtime.ts-606-
+packages/harness/src/iterative-runtime.ts-607-    const run: LoopRun = {
+packages/harness/src/iterative-runtime.ts-608-      input,
+packages/harness/src/iterative-runtime.ts-609-      executionId,
+packages/harness/src/iterative-runtime.ts-610-      startedAtMs,
+packages/harness/src/iterative-runtime.ts-611-      stepNumber: checkpoint?.state.stepNumber ?? 0,
+packages/harness/src/iterative-runtime.ts-612-      state: checkpoint
+packages/harness/src/iterative-runtime.ts-613-        ? {
+packages/harness/src/iterative-runtime.ts-614-            ...checkpoint.state,
+packages/harness/src/iterative-runtime.ts-615-            observations: [...checkpoint.state.observations],
+packages/harness/src/iterative-runtime.ts-616-            openQuestions: [...checkpoint.state.openQuestions],
+packages/harness/src/iterative-runtime.ts-617-            resolvedInputs: { ...checkpoint.state.resolvedInputs },
+packages/harness/src/iterative-runtime.ts-618-            loopSignatures: [...checkpoint.state.loopSignatures]
+packages/harness/src/iterative-runtime.ts-619-          }
+packages/harness/src/iterative-runtime.ts-620-        : {
+packages/harness/src/iterative-runtime.ts-621-            goal: input.agent.objective,
+packages/harness/src/iterative-runtime.ts-622-            ...(this.options.capabilityFingerprint
+packages/harness/src/iterative-runtime.ts-623-              ? { capabilityFingerprint: this.options.capabilityFingerprint }
+packages/harness/src/iterative-runtime.ts-624-              : {}),
+packages/harness/src/iterative-runtime.ts-625-            stepNumber: 0,
+--
+packages/harness/src/iterative-runtime.ts-649-    if (input.signal?.aborted) controller.abort()
+packages/harness/src/iterative-runtime.ts-650-    input.signal?.addEventListener('abort', () => controller.abort(), {
+packages/harness/src/iterative-runtime.ts-651-      once: true
+packages/harness/src/iterative-runtime.ts-652-    })
+packages/harness/src/iterative-runtime.ts-653-    this.#turns.set(run, { host, signal: controller.signal })
+packages/harness/src/iterative-runtime.ts-654-
+packages/harness/src/iterative-runtime.ts:655:    const resumeOutcome = this.applyResume(run, checkpoint)
+packages/harness/src/iterative-runtime.ts:656:    if (resumeOutcome) {
+packages/harness/src/iterative-runtime.ts:657:      return this.finalize(run, resumeOutcome, startedAtMs)
+packages/harness/src/iterative-runtime.ts-658-    }
+packages/harness/src/iterative-runtime.ts-659-    run.lastDecision = run.state.pendingDecision ?? null
+packages/harness/src/iterative-runtime.ts-660-    run.lastEvaluation = run.state.lastEvaluation ?? null
+packages/harness/src/iterative-runtime.ts-661-
+packages/harness/src/iterative-runtime.ts-662-    await this.safeAudit(run, 'runtime_v2.started', {
+packages/harness/src/iterative-runtime.ts:663:      result: checkpoint ? 'resumed' : 'started'
+packages/harness/src/iterative-runtime.ts-664-    })
+packages/harness/src/iterative-runtime.ts-665-
+packages/harness/src/iterative-runtime.ts-666-    try {
+packages/harness/src/iterative-runtime.ts-667-      const outcome = await this.runLoop(run)
+packages/harness/src/iterative-runtime.ts-668-      return await this.finalize(run, outcome, startedAtMs)
+packages/harness/src/iterative-runtime.ts-669-    } catch (error) {
+packages/harness/src/iterative-runtime.ts-670-      return await this.finalize(
+packages/harness/src/iterative-runtime.ts-671-        run,
+packages/harness/src/iterative-runtime.ts-672-        {
+packages/harness/src/iterative-runtime.ts-673-          kind: 'stop',
+packages/harness/src/iterative-runtime.ts-674-          stopReason: 'INTERNAL_FAILURE',
+packages/harness/src/iterative-runtime.ts-675-          response: `Execution failed internally: ${errorMessage(error)}.`
+packages/harness/src/iterative-runtime.ts-676-        },
+packages/harness/src/iterative-runtime.ts-677-        startedAtMs
+packages/harness/src/iterative-runtime.ts-678-      )
+packages/harness/src/iterative-runtime.ts-679-    }
+packages/harness/src/iterative-runtime.ts-680-  }
+packages/harness/src/iterative-runtime.ts-681-
+packages/harness/src/iterative-runtime.ts-682-  private rejectCheckpoint(
+packages/harness/src/iterative-runtime.ts-683-    checkpoint: ExecutionCheckpoint,
+packages/harness/src/iterative-runtime.ts-684-    input: RuntimeInput
+packages/harness/src/iterative-runtime.ts-685-  ): string | null {
+packages/harness/src/iterative-runtime.ts-686-    if (checkpoint.runtimeProfile !== 'iterative') {
+packages/harness/src/iterative-runtime.ts-687-      return 'Execution checkpoint belongs to a different runtime profile.'
+packages/harness/src/iterative-runtime.ts-688-    }
+packages/harness/src/iterative-runtime.ts-689-    if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+packages/harness/src/iterative-runtime.ts-690-      return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+packages/harness/src/iterative-runtime.ts-691-    }
+packages/harness/src/iterative-runtime.ts-692-    if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+packages/harness/src/iterative-runtime.ts-693-      return 'Execution checkpoint conflicts with the requested runtime profile.'
+packages/harness/src/iterative-runtime.ts-694-    }
+packages/harness/src/iterative-runtime.ts-695-    if (
+packages/harness/src/iterative-runtime.ts-696-      this.options.capabilityFingerprint &&
+packages/harness/src/iterative-runtime.ts-697-      checkpoint.state.capabilityFingerprint !==
+packages/harness/src/iterative-runtime.ts-698-        this.options.capabilityFingerprint
+packages/harness/src/iterative-runtime.ts-699-    ) {
+packages/harness/src/iterative-runtime.ts-700-      return 'Execution checkpoint belongs to a different capability composition.'
+packages/harness/src/iterative-runtime.ts-701-    }
+packages/harness/src/iterative-runtime.ts-702-    if (
+packages/harness/src/iterative-runtime.ts-703-      checkpoint.state.stopReason &&
+packages/harness/src/iterative-runtime.ts:704:      TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+packages/harness/src/iterative-runtime.ts-705-      checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+packages/harness/src/iterative-runtime.ts-706-      checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+packages/harness/src/iterative-runtime.ts-707-    ) {
+packages/harness/src/iterative-runtime.ts:708:      return 'Terminal execution cannot be resumed.'
+packages/harness/src/iterative-runtime.ts-709-    }
+packages/harness/src/iterative-runtime.ts-710-    return null
+packages/harness/src/iterative-runtime.ts-711-  }
+packages/harness/src/iterative-runtime.ts-712-
+packages/harness/src/iterative-runtime.ts-713-  private applyResume(
+packages/harness/src/iterative-runtime.ts-714-    run: LoopRun,
+packages/harness/src/iterative-runtime.ts-715-    checkpoint: ExecutionCheckpoint | null
+packages/harness/src/iterative-runtime.ts-716-  ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+packages/harness/src/iterative-runtime.ts-717-    return applyResume(this.dispatchContext, run, checkpoint)
+packages/harness/src/iterative-runtime.ts-718-  }
+packages/harness/src/iterative-runtime.ts-719-
+packages/harness/src/iterative-runtime.ts-720-  private async runLoop(
+packages/harness/src/iterative-runtime.ts-721-    run: LoopRun
+packages/harness/src/iterative-runtime.ts-722-  ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+packages/harness/src/iterative-runtime.ts-723-    if (run.state.pendingQuestion) {
+packages/harness/src/iterative-runtime.ts-724-      // Deterministic rule: a pending question must not be answered by a new
+packages/harness/src/iterative-runtime.ts-725-      // model decision. Re-pause without spending a model call.
+packages/harness/src/iterative-runtime.ts-726-      return this.pause(run, Math.max(1, run.state.stepNumber), {
+packages/harness/src/iterative-runtime.ts-727-        kind: 'pause',
+packages/harness/src/iterative-runtime.ts-728-        pausedKind: 'NEEDS_USER_INPUT',
+packages/harness/src/iterative-runtime.ts-729-        decision: null
+packages/harness/src/iterative-runtime.ts-730-      })
+packages/harness/src/iterative-runtime.ts-731-    }
+packages/harness/src/iterative-runtime.ts-732-    while (true) {
+packages/harness/src/iterative-runtime.ts-733-      // I8: cancellation is honored before every step.
+packages/harness/src/iterative-runtime.ts-734-      if (this.#turns.get(run)?.signal.aborted) {
+packages/harness/src/iterative-runtime.ts-735-        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+packages/harness/src/iterative-runtime.ts-736-      }
+packages/harness/src/iterative-runtime.ts-737-      // I12: pause (and any other step control) is checked before each step.
+packages/harness/src/iterative-runtime.ts-738-      const beforeStep = await runGate(
+packages/harness/src/iterative-runtime.ts-739-        this.kernelFor(run),
+packages/harness/src/iterative-runtime.ts-740-        'turn/before-step',
+packages/harness/src/iterative-runtime.ts-741-        this.turnFor(run)
+packages/harness/src/iterative-runtime.ts-742-      )
+packages/harness/src/iterative-runtime.ts-743-      if (beforeStep.kind === 'stop') {
+packages/harness/src/iterative-runtime.ts:744:        // An operator pause is not terminal: the durable checkpoint, with any
+packages/harness/src/iterative-runtime.ts-745-        // pending approval or question, stays resumable (AUD-0597 F03).
+packages/harness/src/iterative-runtime.ts-746-        return {
+packages/harness/src/iterative-runtime.ts-747-          ...this.stop(beforeStep.stopReason, beforeStep.response),
+packages/harness/src/iterative-runtime.ts-748-          /* v8 ignore next -- the pause control is the only before-step control */
+packages/harness/src/iterative-runtime.ts-749-          ...(beforeStep.cause === 'operator_paused'
+packages/harness/src/iterative-runtime.ts-750-            ? { preserveCheckpoint: true }
+packages/harness/src/iterative-runtime.ts-751-            : {})
+packages/harness/src/iterative-runtime.ts-752-        }
+packages/harness/src/iterative-runtime.ts-753-      }
+packages/harness/src/iterative-runtime.ts-754-      const budgetStop = this.checkBudget(run)
+packages/harness/src/iterative-runtime.ts-755-      if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
+packages/harness/src/iterative-runtime.ts-756-
+packages/harness/src/iterative-runtime.ts-757-      let decision: LoopDecision
+packages/harness/src/iterative-runtime.ts-758-      let stepNumber: number
+packages/harness/src/iterative-runtime.ts-759-
+packages/harness/src/iterative-runtime.ts-760-      if (run.state.pendingDecision && run.state.pendingStepNumber) {
+packages/harness/src/iterative-runtime.ts-761-        decision = run.state.pendingDecision
+packages/harness/src/iterative-runtime.ts-762-        stepNumber = run.state.pendingStepNumber
+packages/harness/src/iterative-runtime.ts-763-        run.lastDecision = decision
+packages/harness/src/iterative-runtime.ts-764-      } else {
+packages/harness/src/iterative-runtime.ts-765-        stepNumber = run.stepNumber + 1
+packages/harness/src/iterative-runtime.ts-766-        if (stepNumber > run.input.budget.maxSteps) {
+packages/harness/src/iterative-runtime.ts-767-          return this.stop('MAX_STEPS', 'Step budget exhausted.')
+packages/harness/src/iterative-runtime.ts-768-        }
+packages/harness/src/iterative-runtime.ts-769-        const decisionResult = await this.decide(run, stepNumber)
+packages/harness/src/iterative-runtime.ts-770-        if (decisionResult.outcome) return decisionResult.outcome
+packages/harness/src/iterative-runtime.ts-771-        decision = sanitizeLoopDecision(decisionResult.decision)
+packages/harness/src/iterative-runtime.ts-772-        run.lastDecision = decision
+packages/harness/src/iterative-runtime.ts-773-      }
+packages/harness/src/iterative-runtime.ts-774-
+packages/harness/src/iterative-runtime.ts-775-      const validation = this.validateDecision(run, decision)
+packages/harness/src/iterative-runtime.ts-776-      if (!validation.valid) {
+packages/harness/src/iterative-runtime.ts-777-        run.usage.decisionRepairs += 1
+packages/harness/src/iterative-runtime.ts-778-        run.lastDecisionErrors = validation.errors
+packages/harness/src/iterative-runtime.ts-779-        const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+packages/harness/src/iterative-runtime.ts-780-        if (
+packages/harness/src/iterative-runtime.ts-781-          run.usage.decisionRepairs <= repairBudget &&
+packages/harness/src/iterative-runtime.ts-782-          !run.state.pendingDecision
+--
+packages/harness/src/iterative-runtime.ts-1385-      reasonCode?: ExecutionStep['reasonCode']
+packages/harness/src/iterative-runtime.ts-1386-      errorCode?: string
+packages/harness/src/iterative-runtime.ts-1387-      observationRefs?: readonly string[]
+packages/harness/src/iterative-runtime.ts-1388-    }
+packages/harness/src/iterative-runtime.ts-1389-  ): Promise<void> {
+packages/harness/src/iterative-runtime.ts-1390-    const stepId = `step_${run.executionId}_${input.stepNumber}_${input.stepType.toLowerCase()}`
+packages/harness/src/iterative-runtime.ts:1391:    const terminal = input.status === 'SUCCEEDED' || input.status === 'FAILED'
+packages/harness/src/iterative-runtime.ts-1392-    const decisionType =
+packages/harness/src/iterative-runtime.ts-1393-      input.decisionType ?? run.lastDecision?.decisionType ?? undefined
+packages/harness/src/iterative-runtime.ts-1394-    await this.options.stepStore.recordStep({
+packages/harness/src/iterative-runtime.ts-1395-      stepId,
+packages/harness/src/iterative-runtime.ts-1396-      executionId: run.executionId,
+packages/harness/src/iterative-runtime.ts-1397-      tenantId: run.input.tenantId,
+packages/harness/src/iterative-runtime.ts-1398-      stepNumber: input.stepNumber,
+packages/harness/src/iterative-runtime.ts-1399-      stepType: input.stepType,
+packages/harness/src/iterative-runtime.ts-1400-      status: input.status,
+packages/harness/src/iterative-runtime.ts-1401-      attempt: 1,
+packages/harness/src/iterative-runtime.ts-1402-      sideEffecting: input.sideEffecting,
+packages/harness/src/iterative-runtime.ts-1403-      startedAt: this.clock().toISOString(),
+packages/harness/src/iterative-runtime.ts:1404:      ...(terminal ? { completedAt: this.clock().toISOString() } : {}),
+packages/harness/src/iterative-runtime.ts-1405-      ...(decisionType ? { decisionType } : {}),
+packages/harness/src/iterative-runtime.ts-1406-      ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+packages/harness/src/iterative-runtime.ts-1407-      observationRefs: input.observationRefs ?? [],
+packages/harness/src/iterative-runtime.ts-1408-      ...(input.errorCode ? { errorCode: input.errorCode } : {})
+packages/harness/src/iterative-runtime.ts-1409-    })
+packages/harness/src/iterative-runtime.ts-1410-    if (
+packages/harness/src/iterative-runtime.ts:1411:      (terminal || input.status === 'WAITING') &&
+packages/harness/src/iterative-runtime.ts-1412-      !run.countedSteps.has(input.stepNumber)
+packages/harness/src/iterative-runtime.ts-1413-    ) {
+packages/harness/src/iterative-runtime.ts-1414-      run.countedSteps.add(input.stepNumber)
+packages/harness/src/iterative-runtime.ts-1415-      run.usage.steps += 1
+packages/harness/src/iterative-runtime.ts-1416-    }
+packages/harness/src/iterative-runtime.ts-1417-    await this.safeAudit(
+packages/harness/src/iterative-runtime.ts-1418-      run,
+packages/harness/src/iterative-runtime.ts-1419-      input.status === 'RUNNING' ? 'step.started' : 'step.completed',
+packages/harness/src/iterative-runtime.ts-1420-      { result: `${input.stepType}:${input.status}`, tool: null }
+packages/harness/src/iterative-runtime.ts-1421-    )
+packages/harness/src/iterative-runtime.ts-1422-  }
+packages/harness/src/iterative-runtime.ts-1423-
+packages/harness/src/iterative-runtime.ts-1424-  private async persistCheckpoint(run: LoopRun): Promise<void> {
+packages/harness/src/iterative-runtime.ts-1425-    const checkpoint = sealCheckpoint({
+packages/harness/src/iterative-runtime.ts-1426-      executionId: run.executionId,
+packages/harness/src/iterative-runtime.ts-1427-      tenantId: run.input.tenantId,
+packages/harness/src/iterative-runtime.ts-1428-      checkpointVersion: 1,
+packages/harness/src/iterative-runtime.ts-1429-      runtimeProfile: 'iterative',
+packages/harness/src/iterative-runtime.ts-1430-      runtimeVersion: RUNTIME_V2_VERSION,
+packages/harness/src/iterative-runtime.ts-1431-      orchestratorVersion: this.orchestratorVersion,
+packages/harness/src/iterative-runtime.ts-1432-      stepNumber: run.state.stepNumber,
+packages/harness/src/iterative-runtime.ts-1433-      state: {
+packages/harness/src/iterative-runtime.ts-1434-        ...run.state,
+packages/harness/src/iterative-runtime.ts-1435-        observations: run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+packages/harness/src/iterative-runtime.ts-1436-      },
+packages/harness/src/iterative-runtime.ts-1437-      budgetUsage: { ...run.usage }
+packages/harness/src/iterative-runtime.ts-1438-    })
+packages/harness/src/iterative-runtime.ts-1439-    await this.options.stepStore.saveCheckpoint(checkpoint)
+packages/harness/src/iterative-runtime.ts-1440-  }
+packages/harness/src/iterative-runtime.ts-1441-
+packages/harness/src/iterative-runtime.ts-1442-  private operationKey(
+packages/harness/src/iterative-runtime.ts-1443-    run: LoopRun,
+packages/harness/src/iterative-runtime.ts-1444-    stepNumber: number,
+packages/harness/src/iterative-runtime.ts-1445-    toolId: string
+packages/harness/src/iterative-runtime.ts-1446-  ): string {
+packages/harness/src/iterative-runtime.ts-1447-    return `${run.executionId}:s${stepNumber}:${toolId}`
+packages/harness/src/iterative-runtime.ts-1448-  }
+packages/harness/src/iterative-runtime.ts-1449-
+--
+packages/harness/src/iterative-runtime.ts-1470-    } catch {
+packages/harness/src/iterative-runtime.ts-1471-      // Observability must not turn a governed loop into an unhandled error.
+packages/harness/src/iterative-runtime.ts-1472-    }
+packages/harness/src/iterative-runtime.ts-1473-  }
+packages/harness/src/iterative-runtime.ts-1474-
+packages/harness/src/iterative-runtime.ts-1475-  /**
+packages/harness/src/iterative-runtime.ts:1476:   * A terminal stop never leaves its pending tool step open (AUD-0600 F02).
+packages/harness/src/iterative-runtime.ts-1477-   * A WAITING step never reached its effect (approval wait, or parked by an
+packages/harness/src/iterative-runtime.ts-1478-   * operator pause), so it closes with the stop's own code. A step still
+packages/harness/src/iterative-runtime.ts-1479-   * RUNNING here may have started its effect before a crash or a failure
+packages/harness/src/iterative-runtime.ts-1480-   * after dispatch, so it is closed as `unknown_effect` for reconciliation
+packages/harness/src/iterative-runtime.ts-1481-   * instead of being declared not executed.
+packages/harness/src/iterative-runtime.ts-1482-   */
+packages/harness/src/iterative-runtime.ts-1483-  private async closePendingStep(
+packages/harness/src/iterative-runtime.ts-1484-    run: LoopRun,
+packages/harness/src/iterative-runtime.ts-1485-    stopReason: StopReason
+packages/harness/src/iterative-runtime.ts-1486-  ): Promise<void> {
+packages/harness/src/iterative-runtime.ts-1487-    const stepNumber = run.state.pendingStepNumber
+packages/harness/src/iterative-runtime.ts-1488-    if (!stepNumber) return
+packages/harness/src/iterative-runtime.ts-1489-    const steps = await this.options.stepStore.listSteps(
+packages/harness/src/iterative-runtime.ts-1490-      run.input.tenantId,
+packages/harness/src/iterative-runtime.ts-1491-      run.executionId
+packages/harness/src/iterative-runtime.ts-1492-    )
+packages/harness/src/iterative-runtime.ts-1493-    const step = steps.find(
+packages/harness/src/iterative-runtime.ts-1494-      (candidate) =>
+packages/harness/src/iterative-runtime.ts-1495-        candidate.stepNumber === stepNumber && candidate.stepType === 'TOOL'
+packages/harness/src/iterative-runtime.ts-1496-    )
+packages/harness/src/iterative-runtime.ts-1497-    if (!step || (step.status !== 'WAITING' && step.status !== 'RUNNING')) {
+packages/harness/src/iterative-runtime.ts-1498-      return
+packages/harness/src/iterative-runtime.ts-1499-    }
+packages/harness/src/iterative-runtime.ts-1500-    await this.recordStep(run, {
+packages/harness/src/iterative-runtime.ts-1501-      stepNumber,
+packages/harness/src/iterative-runtime.ts-1502-      stepType: 'TOOL',
+packages/harness/src/iterative-runtime.ts-1503-      status: 'FAILED',
+packages/harness/src/iterative-runtime.ts-1504-      sideEffecting: step.sideEffecting,
+packages/harness/src/iterative-runtime.ts-1505-      ...(step.reasonCode ? { reasonCode: step.reasonCode } : {}),
+packages/harness/src/iterative-runtime.ts-1506-      errorCode:
+packages/harness/src/iterative-runtime.ts-1507-        step.status === 'RUNNING'
+packages/harness/src/iterative-runtime.ts-1508-          ? 'unknown_effect'
+packages/harness/src/iterative-runtime.ts-1509-          : stopReason === 'CANCELLED'
+packages/harness/src/iterative-runtime.ts-1510-            ? 'cancelled'
+packages/harness/src/iterative-runtime.ts-1511-            : stopReason === 'MAX_DURATION'
+packages/harness/src/iterative-runtime.ts-1512-              ? 'deadline'
+packages/harness/src/iterative-runtime.ts-1513-              : 'not_started'
+packages/harness/src/iterative-runtime.ts-1514-    })
+--
+packages/harness/src/iterative-runtime.ts-1518-    run: LoopRun,
+packages/harness/src/iterative-runtime.ts-1519-    outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+packages/harness/src/iterative-runtime.ts-1520-    startedAtMs: number
+packages/harness/src/iterative-runtime.ts-1521-  ): Promise<RuntimeResult> {
+packages/harness/src/iterative-runtime.ts-1522-    let stopReason: StopReason = outcome.stopReason
+packages/harness/src/iterative-runtime.ts-1523-    run.usage.activeDurationMs += Date.now() - startedAtMs
+packages/harness/src/iterative-runtime.ts:1524:    if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+packages/harness/src/iterative-runtime.ts-1525-      try {
+packages/harness/src/iterative-runtime.ts-1526-        await this.closePendingStep(run, stopReason)
+packages/harness/src/iterative-runtime.ts-1527-      } catch {
+packages/harness/src/iterative-runtime.ts:1528:        // The open step could not be closed: the terminal checkpoint must not
+packages/harness/src/iterative-runtime.ts-1529-        // claim a clean stop while the step store disagrees.
+packages/harness/src/iterative-runtime.ts-1530-        stopReason = 'INSUFFICIENT_EVIDENCE'
+packages/harness/src/iterative-runtime.ts-1531-      }
+packages/harness/src/iterative-runtime.ts-1532-    }
+packages/harness/src/iterative-runtime.ts-1533-    run.state = { ...run.state, stopReason }
+packages/harness/src/iterative-runtime.ts-1534-    let checkpointProven = true
+packages/harness/src/iterative-runtime.ts-1535-    if (outcome.preserveCheckpoint) {
+packages/harness/src/iterative-runtime.ts-1536-      // Intentional no-write: the durable pause must stay resumable after a
+packages/harness/src/iterative-runtime.ts:1537:      // rejected resume binding.
+packages/harness/src/iterative-runtime.ts-1538-    } else {
+packages/harness/src/iterative-runtime.ts-1539-      try {
+packages/harness/src/iterative-runtime.ts-1540-        await this.persistCheckpoint(run)
+packages/harness/src/iterative-runtime.ts-1541-      } catch {
+packages/harness/src/iterative-runtime.ts-1542-        checkpointProven = false
+packages/harness/src/iterative-runtime.ts-1543-      }
+packages/harness/src/iterative-runtime.ts-1544-    }
+packages/harness/src/iterative-runtime.ts-1545-    const claimedReason: StopReason = checkpointProven
+packages/harness/src/iterative-runtime.ts-1546-      ? stopReason
+packages/harness/src/iterative-runtime.ts-1547-      : 'INSUFFICIENT_EVIDENCE'
+packages/harness/src/iterative-runtime.ts-1548-    if (!checkpointProven) {
+packages/harness/src/iterative-runtime.ts-1549-      run.state = { ...run.state, stopReason: claimedReason }
+packages/harness/src/iterative-runtime.ts-1550-    }
+packages/harness/src/iterative-runtime.ts-1551-    const result: RuntimeResult = {
+packages/harness/src/iterative-runtime.ts-1552-      response: outcome.response,
+packages/harness/src/iterative-runtime.ts-1553-      stopReason: claimedReason,
+packages/harness/src/iterative-runtime.ts-1554-      ...(outcome.kind === 'stop' && outcome.approvalId
+packages/harness/src/iterative-runtime.ts-1555-        ? { approvalId: outcome.approvalId }
+packages/harness/src/iterative-runtime.ts-1556-        : {}),
+packages/harness/src/iterative-runtime.ts-1557-      steps: run.usage.steps,
+packages/harness/src/iterative-runtime.ts-1558-      modelCalls: run.usage.modelCalls,
+packages/harness/src/iterative-runtime.ts-1559-      toolCalls: run.usage.toolCalls,
+packages/harness/src/iterative-runtime.ts-1560-      usage: {
+packages/harness/src/iterative-runtime.ts-1561-        inputTokens: run.usage.inputTokens,
+packages/harness/src/iterative-runtime.ts-1562-        outputTokens: run.usage.outputTokens,
+packages/harness/src/iterative-runtime.ts-1563-        costUsd: run.usage.costUsd
+packages/harness/src/iterative-runtime.ts-1564-      },
+packages/harness/src/iterative-runtime.ts-1565-      ...(run.lastToolObservation
+packages/harness/src/iterative-runtime.ts-1566-        ? {
+packages/harness/src/iterative-runtime.ts-1567-            toolResult: {
+packages/harness/src/iterative-runtime.ts-1568-              /* v8 ignore next -- only a successful tool observation is stored */
+packages/harness/src/iterative-runtime.ts-1569-              status:
+packages/harness/src/iterative-runtime.ts-1570-                (run.lastToolObservation.payload as { status?: string } | null)
+packages/harness/src/iterative-runtime.ts-1571-                  ?.status === 'SUCCEEDED'
+packages/harness/src/iterative-runtime.ts-1572-                  ? ('SUCCEEDED' as const)
+packages/harness/src/iterative-runtime.ts-1573-                  : ('REJECTED' as const),
+packages/harness/src/iterative-runtime.ts-1574-              output: (
+packages/harness/src/iterative-runtime.ts-1575-                run.lastToolObservation.payload as {

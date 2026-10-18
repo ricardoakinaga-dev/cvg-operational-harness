@@ -1,4 +1,5 @@
 import { createCorrelationId } from '@cvg/shared'
+import { createHash } from 'node:crypto'
 import type { CapabilityDescriptor } from '@cvg/harness-contracts'
 import type {
   CapabilityExecutionInput,
@@ -138,7 +139,8 @@ export interface PreparedCapabilityCommand {
 export function prepareCapabilityCommand(
   execution: CapabilityExecutionInput,
   resolved: ResolvedPluginCommand,
-  freeze = false
+  freeze = false,
+  correlationId?: CapabilityExecutionResult['correlationId']
 ): PreparedCapabilityCommand | null {
   const parsed = parseToolInput(resolved.inputValidator, execution.input)
   if (!parsed.success) return null
@@ -151,7 +153,7 @@ export function prepareCapabilityCommand(
     resolved,
     canonical: canonicalizeCapabilityInput(parsed.data),
     inputHash: createCapabilityInputHash(safe),
-    correlationId: createCorrelationId()
+    correlationId: correlationId ?? createCorrelationId()
   }
 }
 export function matchesPreparedInput(
@@ -165,6 +167,53 @@ export function matchesPreparedInput(
     )
   } catch {
     return false
+  }
+}
+
+/** Rebind canonical data to currently attested functions; never rerun safeParse. */
+export function rehydratePreparedCapabilityCommand(
+  saved: import('./controlled-kernel-continuation.ts').ControlledCanonicalCommand,
+  config: AgentConfig,
+  core: GatewayCore
+): PreparedCapabilityCommand | null {
+  try {
+    const resolved = core.resolve(config, saved.execution.toolName)
+    const descriptor = resolved && reviewedDescriptor(resolved)
+    if (!resolved || !descriptor) return null
+    const execution = {
+      ...saved.execution,
+      config,
+      input: freezeValue(cloneBoundedValue(saved.execution.input))
+    }
+    if (
+      saved.canonical !== canonicalizeCapabilityInput(execution.input) ||
+      saved.inputHash !== createCapabilityInputHash(execution)
+    )
+      return null
+    // Descriptor digest is a structural binding, never a substitute for WeakMap attestation.
+    if (
+      saved.descriptorFingerprint !==
+      `sha256-${createHash('sha256').update(canonicalizeCapabilityInput(descriptor)).digest('hex')}`
+    )
+      return null
+    const output =
+      saved.output === undefined
+        ? undefined
+        : (cloneBoundedValue(
+            saved.output
+          ) as PreparedCapabilityCommand['output'])
+    if (output && !['succeeded', 'blocked', 'failed'].includes(output.status))
+      return null
+    return {
+      execution,
+      resolved,
+      canonical: saved.canonical,
+      inputHash: saved.inputHash,
+      correlationId: saved.correlationId,
+      ...(output ? { output } : {})
+    }
+  } catch {
+    return null
   }
 }
 export function matchesPreparedOutput(

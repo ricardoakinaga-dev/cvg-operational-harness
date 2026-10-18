@@ -1,0 +1,48 @@
+python3 - <<'PY'
+import hashlib,json
+from pathlib import Path
+base=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay')
+packet=base/'critic-control-packet'
+result=base/'critic-control-result'
+selections={
+ 'docs/02_spec/0212_pare100_public_control_wiring.md':[(1,None)],
+ 'docs/architecture/PUBLIC_API.md':[(239,247)],
+ 'packages/harness/src/createOperationalHarness.ts':[(82,128),(204,227)],
+ 'packages/harness/src/kernel/pipeline.ts':[(411,452),(485,532),(557,571)],
+ 'packages/harness/src/iterative-runtime.ts':[(109,116),(131,150),(222,231),(374,388),(425,449),(655,677),(726,733),(784,797),(850,874),(1373,1384),(1546,1605)],
+ 'packages/harness/src/iterative-dispatch.ts':[(157,164),(394,400),(423,462),(595,635),(663,705)],
+ 'packages/contracts/src/execution-v2.ts':[(60,75)],
+ 'packages/contracts/src/contracts.ts':[(110,119),(212,225),(456,470)],
+ 'packages/sandbox/src/shell-tool.ts':[(11,20),(142,166),(178,208),(254,270),(282,307)],
+ 'packages/sandbox/src/run.ts':[(53,72)],
+ 'packages/harness/src/__tests__/pare100-public-controls.test.ts':[(246,275),(357,394),(406,439),(461,526),(530,622)],
+ 'packages/sandbox/src/__tests__/pare100-shell-handle.test.ts':[(62,128)],
+ 'packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts':[(326,363)]
+}
+chunks=[]
+hashes={}
+for rel,ranges in selections.items():
+ data=(packet/rel).read_bytes()
+ hashes[rel]=hashlib.sha256(data).hexdigest()
+ lines=data.decode().splitlines()
+ chunks.append(f'FILE {rel}\nSHA256 {hashes[rel]}')
+ for lo,hi in ranges:
+  if hi is None: hi=len(lines)
+  assert 1<=lo<=hi<=len(lines),(rel,lo,hi,len(lines))
+  chunks.append(f'LINES {lo}-{hi}\n'+'\n'.join(f'{i}: {lines[i-1]}' for i in range(lo,hi+1)))
+(result/'source-evidence.raw.log').write_text('\n\n'.join(chunks)+'\n')
+(result/'source-hashes.json').write_text(json.dumps(hashes,indent=2)+'\n')
+sentinel=base/'critic-control-packet.sentinel.json'
+expected=json.loads(sentinel.read_text())
+actual={str(p.relative_to(packet)):hashlib.sha256(p.read_bytes()).hexdigest() for p in packet.rglob('*') if p.is_file()}
+check={'phase':'after_review_and_tests','sentinel_sha256':hashlib.sha256(sentinel.read_bytes()).hexdigest(),'expected_files':len(expected),'actual_files':len(actual),'missing':sorted(expected.keys()-actual.keys()),'extra':sorted(actual.keys()-expected.keys()),'mismatched':[p for p in expected.keys()&actual.keys() if expected[p]!=actual[p]],'pass':expected==actual}
+(result/'sentinel-after.json').write_text(json.dumps(check,indent=2)+'\n')
+assert check['pass']
+scratch=base/'critic-control-scratch'
+scratch_files={str(p.relative_to(scratch)):hashlib.sha256(p.read_bytes()).hexdigest() for p in scratch.rglob('*') if p.is_file() and 'node_modules' not in p.relative_to(scratch).parts}
+copy_check={'phase':'scratch_source_after_tests','matches_packet':scratch_files==actual,'missing':sorted(actual.keys()-scratch_files.keys()),'extra':sorted(scratch_files.keys()-actual.keys()),'mismatched':[p for p in actual.keys()&scratch_files.keys() if actual[p]!=scratch_files[p]]}
+(result/'scratch-source-check.json').write_text(json.dumps(copy_check,indent=2)+'\n')
+assert copy_check['matches_packet']
+print(json.dumps(check,indent=2))
+print(json.dumps(copy_check,indent=2))
+PY

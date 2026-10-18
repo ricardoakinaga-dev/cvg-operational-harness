@@ -1,0 +1,30 @@
+  it('opaque literal protection also covers document cells, graph labels and annotation literals', () => {
+    const body = 'function guest() { return "OTHER_LITERAL_BODY_MARKER"; }'
+    const f = fixture({
+      'packages/core/example/src/types.ts': `export type GuestSource = ${JSON.stringify(body)};`,
+      'python/sdk/src/sdk.py': `__all__ = [${JSON.stringify(body)}]\ndef run(value: ${JSON.stringify(body)}):\n    pass\n`,
+      'docs/persistence-catalog.md':
+        '# Types\n| Field | Type |\n| --- | --- |\n| worker | ' + body + ' |\n',
+      'docs/capability-seams.md':
+        '# Seams\n```mermaid\nflowchart LR\n  worker["' +
+        body.replaceAll('"', "'") +
+        '"]\n```\n'
+    })
+    const catalog = f.collect()
+    expect(serializeCatalog(catalog)).not.toContain('OTHER_LITERAL_BODY_MARKER')
+    for (const kind of [
+      'type',
+      'python-function',
+      'python-exports',
+      'document-table-row',
+      'capability-graph'
+    ]) {
+      expect(
+        catalog.entries.some(
+          (entry) =>
+            entry.kind === kind && entry.extraction_status === 'UNKNOWN'
+        )
+      ).toBe(true)
+    }
+  })
+

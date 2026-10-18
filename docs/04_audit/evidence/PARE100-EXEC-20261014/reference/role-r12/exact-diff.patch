@@ -1,0 +1,384 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -462,6 +462,12 @@
+   return { find, packages, additional }
+ }
+ 
++// Per parsed source, not a global vocabulary blacklist. Initializer strings
++// already require semantic review; an identical literal type in that source
++// cannot independently establish a declaration-only role for the same bytes.
++const sourceInitializerLiterals = new WeakMap()
++const stringInitializerReason =
++  'String initializer requires semantic review; bytes not copied'
+ const printed = (node) => {
+   if (!node)
+     return unknown(
+@@ -488,7 +494,10 @@
+           ts.SyntaxKind.TemplateMiddle,
+           ts.SyntaxKind.TemplateTail
+         ].includes(child.kind)) &&
+-      !/^[A-Za-z0-9_$./:@-]{1,200}$/.test(child.text)
++      (sourceInitializerLiterals
++        .get(child.getSourceFile())
++        ?.has(hash(child.text)) ||
++        !/^[A-Za-z0-9_$./:@-]{1,200}$/.test(child.text))
+     )
+       literals.push({
+         value_sha256: hash(child.text),
+@@ -539,13 +548,10 @@
+     // Initializer strings can be complete guest programs. Syntax cannot
+     // authenticate them as vocabulary; retain the requirement and provenance,
+     // never its bytes. Declared type signatures/schema vocabulary are separate.
+-    return unknown(
+-      'String initializer requires semantic review; bytes not copied',
+-      {
+-        value_sha256: hash(node.text),
+-        byte_length: Buffer.byteLength(node.text, 'utf8')
+-      }
+-    )
++    return unknown(stringInitializerReason, {
++      value_sha256: hash(node.text),
++      byte_length: Buffer.byteLength(node.text, 'utf8')
++    })
+   if (ts.isNumericLiteral(node)) return Number(node.text)
+   if (node.kind === ts.SyntaxKind.TrueKeyword) return true
+   if (node.kind === ts.SyntaxKind.FalseKeyword) return false
+@@ -655,6 +661,23 @@
+         .map((d) => ts.flattenDiagnosticMessageText(d.messageText, ' '))
+         .join('; ')
+     )
++  const initializerLiterals = new Set()
++  sourceInitializerLiterals.set(source, initializerLiterals)
++  const rememberOpaqueStrings = (value) => {
++    if (!value || typeof value !== 'object') return
++    if (value.status === 'UNKNOWN' && value.reason === stringInitializerReason)
++      initializerLiterals.add(value.value_sha256)
++    else Object.values(value).forEach(rememberOpaqueStrings)
++  }
++  const visitInitializers = (node) => {
++    if (node.initializer) rememberOpaqueStrings(staticData(node.initializer))
++    if (ts.isExportAssignment(node))
++      rememberOpaqueStrings(staticData(node.expression))
++    ts.forEachChild(node, visitInitializers)
++  }
++  // Finish the same-source index before printing any type, including aliases
++  // declared before their corresponding initializer. No consumer is executed.
++  visitInitializers(source)
+   const records = new Map()
+   const add = (kind, symbol, shape) => {
+     if (
+@@ -882,7 +905,39 @@
+ // A schema default/example/const can itself be an entire guest program.
+ // Only bounded structural schema vocabulary is copied as text. Other strings
+ // retain provenance/hash/length as UNKNOWN, including nested arrays/objects.
+-function projectJsonContract(value, field, depth = 0) {
++const jsonVocabularyFields = new Set(['name', 'type', 'required', '$ref'])
++const jsonSchemaMaps = new Set([
++  'properties',
++  'patternProperties',
++  '$defs',
++  'definitions',
++  'dependentSchemas'
++])
++const jsonSchemaFields = new Set([
++  'parameters',
++  'inputSchema',
++  'outputSchema',
++  'items',
++  'prefixItems',
++  'additionalProperties',
++  'additionalItems',
++  'unevaluatedProperties',
++  'unevaluatedItems',
++  'contains',
++  'propertyNames',
++  'not',
++  'if',
++  'then',
++  'else',
++  'allOf',
++  'anyOf',
++  'oneOf',
++  'contentSchema'
++])
++// Four finite roles: declaration, schema-map, vocabulary, payload. Payload is
++// absorbing: default/const/examples and unclassified descendants never regain
++// declaration privileges merely by using a structural-looking property name.
++function projectJsonContract(value, field, depth = 0, role = 'declaration') {
+   const opaque = (reason, data) =>
+     unknown(reason, {
+       value_sha256: hash(data),
+@@ -892,7 +947,8 @@
+     return opaque('JSON contract exceeds projection depth', json(value))
+   if (typeof value === 'string') {
+     if (
+-      (field === 'type' &&
++      role !== 'payload' &&
++      ((field === 'type' &&
+         [
+           'null',
+           'boolean',
+@@ -902,9 +958,9 @@
+           'string',
+           'integer'
+         ].includes(value)) ||
+-      (['required', 'name'].includes(field) &&
+-        /^[A-Za-z_$][A-Za-z0-9_$./:@-]{0,199}$/.test(value)) ||
+-      (field === '$ref' && /^[#./][A-Za-z0-9_$./~:@-]{0,511}$/.test(value))
++        (['required', 'name'].includes(field) &&
++          /^[A-Za-z_$][A-Za-z0-9_$./:@-]{0,199}$/.test(value)) ||
++        (field === '$ref' && /^[#./][A-Za-z0-9_$./~:@-]{0,511}$/.test(value)))
+     )
+       return value
+     return opaque(
+@@ -913,7 +969,9 @@
+     )
+   }
+   if (Array.isArray(value))
+-    return value.map((item) => projectJsonContract(item, field, depth + 1))
++    return value.map((item) =>
++      projectJsonContract(item, field, depth + 1, role)
++    )
+   if (value && typeof value === 'object') {
+     if (
+       Object.keys(value).some(
+@@ -925,10 +983,21 @@
+         json(value)
+       )
+     return Object.fromEntries(
+-      Object.entries(value).map(([key, item]) => [
+-        key,
+-        projectJsonContract(item, key, depth + 1)
+-      ])
++      Object.entries(value).map(([key, item]) => {
++        const childRole =
++          role === 'schema-map'
++            ? 'declaration'
++            : role !== 'declaration'
++              ? 'payload'
++              : jsonVocabularyFields.has(key)
++                ? 'vocabulary'
++                : jsonSchemaMaps.has(key)
++                  ? 'schema-map'
++                  : jsonSchemaFields.has(key)
++                    ? 'declaration'
++                    : 'payload'
++        return [key, projectJsonContract(item, key, depth + 1, childRole)]
++      })
+     )
+   }
+   return value
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r12'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,202 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it('R12 A preserves program-shaped genuine event and tool declaration names', () => {
++    const name = 'throw/ROLE_R12/'
++    const f = fixture({
++      'packages/core/example/src/types.ts': `export interface Events { ${JSON.stringify(name)}(id: string): void }`,
++      'docs/tool-catalog.md':
++        '# Tools\n## `@synthetic/example`\nSource: [types](../packages/core/example/src/types.ts)\n```json\n' +
++        JSON.stringify({ name, parameters: { type: 'object' } }) +
++        '\n```\n'
++    })
++    const catalog = f.collect()
++    const event = catalog.entries.find(
++      (entry) =>
++        entry.kind === 'event-vocabulary' && entry.symbol === `Events.${name}`
++    )
++    const tool = catalog.entries.find(
++      (entry) =>
++        entry.kind === 'document-json' &&
++        entry.source === 'docs/tool-catalog.md'
++    )
++    expect(event).toBeDefined()
++    expect(event.shape.declarations[0].parameters[0].type).toBe('string')
++    expect(tool.shape.name).toBe(name)
++    for (const entry of [event, tool]) {
++      expect(entry.owner_task).toBeTruthy()
++      expect(entry.source_sha256).toBe(
++        sha(fs.readFileSync(path.join(f.root, entry.source)))
++      )
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  })
++
++  it('R12 B preserves a genuine literal selector without borrowing payload roles across sources', () => {
++    const selector = 'throw/ROLE_R12/'
++    const f = fixture({
++      'packages/core/example/src/types.ts': `export type Selector = ${JSON.stringify(selector)}; export interface Envelope { type: ${JSON.stringify(selector)} }`,
++      'packages/core/example/src/payload.ts': `export const opaqueValue = ${JSON.stringify(selector)};`
++    })
++    const catalog = f.collect()
++    const type = catalog.entries.find((entry) => entry.symbol === 'Selector')
++    const member = catalog.entries.find(
++      (entry) => entry.symbol === 'Envelope.type'
++    )
++    for (const entry of [type, member]) {
++      expect(entry.shape.declarations[0].type).toContain(selector)
++      expect(entry.extraction_status).toBe('STATIC')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++    const payload = catalog.entries.find(
++      (entry) => entry.symbol === 'opaqueValue'
++    )
++    expect(payload.shape.declarations[0].value).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha(selector)
++    })
++  })
++
++  it('R12 C keeps actual program source opaque in initializer and same-source mirrored literal types', () => {
++    const program = 'throw/ROLE_R12/'
++    const source = 'packages/core/example/src/types.ts'
++    const f = fixture({
++      [source]: [
++        `export type SourceMirror = ${JSON.stringify(program)};`,
++        `export const WorkerSource: ${JSON.stringify(program)} = ${JSON.stringify(program)};`,
++        'new Worker(WorkerSource, { eval: true });'
++      ].join('\n')
++    })
++    // Parse source only: the synthetic Worker constructor/guest is never run.
++    const catalog = f.collect()
++    const entries = catalog.entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3) // source-surface + both declarations
++    const literal = {
++      value_sha256: sha(program),
++      byte_length: Buffer.byteLength(program)
++    }
++    const worker = entries.find((entry) => entry.symbol === 'WorkerSource')
++    expect(worker.shape.declarations[0].value).toMatchObject({
++      status: 'UNKNOWN',
++      ...literal
++    })
++    for (const symbol of ['WorkerSource', 'SourceMirror']) {
++      const entry = entries.find((item) => item.symbol === symbol)
++      expect(entry.shape.declarations[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        literals: [literal]
++      })
++      expect(entry.extraction_status).toBe('UNKNOWN')
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.source_sha256).toBe(
++        sha(fs.readFileSync(path.join(f.root, source)))
++      )
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++    expect(JSON.stringify(entries)).not.toContain(program)
++  })
++
++  it('R12 D persists payload context while preserving genuine tool/schema names and selectors', () => {
++    const name = 'throw/ROLE_R12/'
++    const payload = { name, nested: [{ type: 'string', required: [name] }] }
++    const schema = {
++      name,
++      type: 'object',
++      required: ['worker'],
++      properties: {
++        worker: {
++          name,
++          type: 'string',
++          default: payload,
++          const: payload,
++          examples: [payload],
++          unclassified: payload
++        }
++      }
++    }
++    const f = fixture({
++      'packages/core/example/src/worker.schema.json': JSON.stringify(schema),
++      'docs/tool-catalog.md':
++        '# Tools\n## `@synthetic/example`\nSource: [types](../packages/core/example/src/types.ts)\n```json\n' +
++        JSON.stringify({ name, parameters: schema }) +
++        '\n```\n'
++    })
++    const catalog = f.collect()
++    const entries = catalog.entries.filter((entry) =>
++      ['json-schema-data', 'document-json'].includes(entry.kind)
++    )
++    expect(entries).toHaveLength(2)
++    for (const entry of entries) {
++      const projected =
++        entry.kind === 'document-json' ? entry.shape.parameters : entry.shape
++      expect(entry.shape.name).toBe(name)
++      expect(projected).toMatchObject({
++        name,
++        type: 'object',
++        required: ['worker']
++      })
++      const worker = projected.properties.worker
++      expect(worker).toMatchObject({ name, type: 'string' })
++      for (const value of [
++        worker.default,
++        worker.const,
++        worker.examples[0],
++        worker.unclassified
++      ]) {
++        expect(JSON.stringify(value)).not.toContain(name)
++        expect(value.name).toMatchObject({
++          status: 'UNKNOWN',
++          value_sha256: sha(name),
++          byte_length: Buffer.byteLength(name)
++        })
++        expect(value.nested[0].type).toMatchObject({
++          status: 'UNKNOWN',
++          value_sha256: sha('string'),
++          byte_length: 6
++        })
++        expect(value.nested[0].required[0]).toMatchObject({
++          status: 'UNKNOWN',
++          value_sha256: sha(name)
++        })
++      }
++      expect(entry.extraction_status).toBe('UNKNOWN')
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.source_sha256).toBe(
++        sha(fs.readFileSync(path.join(f.root, entry.source)))
++      )
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  })
++
++  it('R12 provenance preserves an exact authenticated program-shaped safe filename', () => {
++    const source = 'apps/cli/src/function guest(){return 7;}.ts'
++    const body = 'SAFE_FILENAME_BODY_R12'
++    const f = fixture({
++      [source]: `export function safe(): number { /* ${body} */ return 7; }`
++    })
++    const catalog = f.collect()
++    const entries = catalog.entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(2)
++    expect(entries.find((entry) => entry.symbol === 'safe').owner_task).toBe(
++      'P100-040'
++    )
++    expect(catalog.sources.find((item) => item.path === source).sha256).toBe(
++      sha(fs.readFileSync(path.join(f.root, source)))
++    )
++    expect(
++      entries.every(
++        (entry) =>
++          entry.source_sha256 ===
++          sha(fs.readFileSync(path.join(f.root, source)))
++      )
++    ).toBe(true)
++    expect(serializeCatalog(catalog)).toContain(source)
++    expect(serializeCatalog(catalog)).not.toContain(body)
++    expect(validateCatalog(catalog, { root: f.root }).status).toBe(
++      'VALID_STATIC_CATALOG'
++    )
++  })
++
+   it('collects actual manifest/API/type/config/event/tool schema and additional contracts without bodies', () => {
+     const f = fixture(),
+       catalog = f.collect(),

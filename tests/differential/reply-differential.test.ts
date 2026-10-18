@@ -3,7 +3,8 @@ import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { createDifferentialEvidence } from './evidence-lifecycle.mjs'
 import { runCvgReply, type ReplyCase } from './cvg-reply.ts'
 import { compareReplyProjections } from './compare-reply.mjs'
 
@@ -28,11 +29,15 @@ const cases: ReplyCase[] = [
   }
 ]
 const script = path.resolve('tests/differential/reference-agent-driver.mjs')
-const evidence = path.resolve(
-  'docs/04_audit/evidence/PARE100-EXEC-20261014/differential'
-)
+const evidenceLifecycle = createDifferentialEvidence('reply')
+const evidence = evidenceLifecycle.directory
 const sha = (value: string) =>
   crypto.createHash('sha256').update(value).digest('hex')
+
+beforeEach(({ onTestFailed }) => {
+  onTestFailed(evidenceLifecycle.failed)
+})
+afterAll(evidenceLifecycle.finish)
 
 describe('SPEC0213 bounded installed-loop reply differential', () => {
   for (const fixture of cases)
@@ -45,13 +50,21 @@ describe('SPEC0213 bounded installed-loop reply differential', () => {
         const input = path.join(home, 'fixture.json')
         fs.writeFileSync(input, JSON.stringify(fixture))
         const env = {
-          PATH: process.env.PATH!,
+          PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(
+            path.delimiter
+          ),
           HOME: home,
+          TMPDIR: home,
+          TMP: home,
+          TEMP: home,
           XDG_CONFIG_HOME: path.join(home, 'config'),
           XDG_DATA_HOME: path.join(home, 'data'),
+          XDG_CACHE_HOME: path.join(home, 'cache'),
+          XDG_STATE_HOME: path.join(home, 'state'),
           DSH_HOME: path.join(home, 'dsh'),
           NODE_ENV: 'test'
         }
+        const started = Date.now()
         const child = spawnSync(process.execPath, [script, input], {
           cwd: home,
           env,
@@ -75,6 +88,12 @@ describe('SPEC0213 bounded installed-loop reply differential', () => {
               argv: [process.execPath, script, input],
               cwd: home,
               envKeys: Object.keys(env),
+              environment: env,
+              pid: child.pid,
+              elapsedMs: Date.now() - started,
+              timeoutMs: 5000,
+              maxBuffer: 1048576,
+              childExitObserved: child.status !== null || child.signal !== null,
               exit: child.status,
               signal: child.signal,
               error: child.error?.message ?? null,

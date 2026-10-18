@@ -1,0 +1,383 @@
+diff --git a/packages/contracts/src/contracts.ts b/packages/contracts/src/contracts.ts
+index cd768eb..f658525 100644
+--- a/packages/contracts/src/contracts.ts
++++ b/packages/contracts/src/contracts.ts
+@@ -114,6 +114,8 @@ export interface ToolExecutionContext {
+   readonly traceId: TraceId
+   readonly operationKey?: string
+   readonly signal?: AbortSignal
++  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
++  readonly sandboxHandle?: SandboxHandle
+ }
+ 
+ export interface ToolDescriptor {
+diff --git a/packages/harness/src/createOperationalHarness.ts b/packages/harness/src/createOperationalHarness.ts
+index 196d1b8..2c4db6e 100644
+--- a/packages/harness/src/createOperationalHarness.ts
++++ b/packages/harness/src/createOperationalHarness.ts
+@@ -89,6 +89,8 @@ export function createOperationalHarness(
+     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+     audit: options.audit,
+     telemetry: options.telemetry,
++    ...(options.pause ? { pause: options.pause } : {}),
++    ...(options.effects ? { effects: options.effects } : {}),
+     ...(options.log ? { log: options.log } : {}),
+     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+   })
+@@ -104,6 +106,9 @@ export function createOperationalHarness(
+           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+           audit: options.audit,
+           telemetry: options.telemetry,
++          ...(options.pause ? { pause: options.pause } : {}),
++          ...(options.effects ? { effects: options.effects } : {}),
++          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+           ...(options.log ? { log: options.log } : {}),
+           stepStore: options.stepStore,
+           ...(options.contextEngine
+diff --git a/packages/harness/src/iterative-runtime.ts b/packages/harness/src/iterative-runtime.ts
+index a4b09c2..725da81 100644
+--- a/packages/harness/src/iterative-runtime.ts
++++ b/packages/harness/src/iterative-runtime.ts
+@@ -17,6 +17,7 @@ import type {
+   Observation,
+   RuntimeInput,
+   RuntimeResult,
++  SandboxGate,
+   StopReason,
+   SufficiencyEvaluator
+ } from '@cvg/harness-contracts'
+@@ -59,6 +60,7 @@ import {
+   modelCapability,
+   pauseControl,
+   policyControl,
++  sandboxControl,
+   telemetryCapability,
+   toolsCapability
+ } from './kernel/controls.ts'
+@@ -111,6 +113,7 @@ export interface IterativeGovernedRuntimeOptions {
+   readonly pause?: PauseSwitch
+   readonly log?: KernelLog
+   readonly effects?: EffectLedger
++  readonly sandbox?: SandboxGate
+ }
+ 
+ /** Services the iterative mode needs from the kernel (no single-pass planner). */
+@@ -426,6 +429,7 @@ export class IterativeGovernedRuntime {
+         pauseControl(this.options.pause),
+         logControl(this.options.log),
+         effectsControl(this.options.effects),
++        ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+         policyControl(this.options.policy),
+         approvalsControl(
+           this.options.approvals,
+@@ -648,6 +652,30 @@ export class IterativeGovernedRuntime {
+     })
+     this.#turns.set(run, { host, signal: controller.signal })
+ 
++    // A ledger settlement failure is unresolved evidence, not a resumable
++    // tool decision. Preserve its checkpoint and never repeat that effect.
++    if (
++      checkpoint?.state.stopReason === 'TOOL_FAILURE' &&
++      checkpoint.state.observations.some(
++        (observation) =>
++          observation.type === 'TOOL_RESULT' &&
++          observation.source === 'TOOL' &&
++          (observation.payload as { error?: unknown } | null)?.error ===
++            'unknown_effect: effect_settlement_failed'
++      )
++    ) {
++      return this.finalize(
++        run,
++        {
++          kind: 'stop',
++          stopReason: 'TOOL_FAILURE',
++          response: 'unknown_effect: effect_settlement_failed',
++          preserveCheckpoint: true
++        },
++        startedAtMs
++      )
++    }
++
+     const resumeOutcome = this.applyResume(run, checkpoint)
+     if (resumeOutcome) {
+       return this.finalize(run, resumeOutcome, startedAtMs)
+diff --git a/packages/harness/src/kernel/pipeline.ts b/packages/harness/src/kernel/pipeline.ts
+index 4fb4282..5269bc9 100644
+--- a/packages/harness/src/kernel/pipeline.ts
++++ b/packages/harness/src/kernel/pipeline.ts
+@@ -1,3 +1,4 @@
++import { isAbsolute } from 'node:path'
+ import type {
+   ModelRequest,
+   ModelResult,
+@@ -378,9 +379,8 @@ async function enforceSandbox(
+       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+     )
+   }
+-  let outcome: SandboxGateOutcome
+   try {
+-    outcome = await gate.evaluate({
++    const outcome: SandboxGateOutcome = await gate.evaluate({
+       descriptor: call.tool,
+       context: {
+         tenantId: call.turn.input.tenantId,
+@@ -396,26 +396,66 @@ async function enforceSandbox(
+         subprocessAllowed: requiredMode === 'PROCESS'
+       }
+     })
++    if (outcome.kind === 'denied') {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
++      )
++    }
++    if (outcome.kind === 'unavailable') {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
++      )
++    }
++    const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
++    const handle = granted && {
++      mode: granted.mode,
++      allowNetwork: granted.allowNetwork,
++      allowSubprocess: granted.allowSubprocess,
++      workspaceRoot: granted.workspaceRoot,
++      deadlineMs: granted.deadlineMs
++    }
++    if (
++      outcome.kind !== 'allowed' ||
++      outcome.mode !== requiredMode ||
++      !handle ||
++      handle.mode !== requiredMode ||
++      typeof handle.allowNetwork !== 'boolean' ||
++      typeof handle.allowSubprocess !== 'boolean' ||
++      (handle.deadlineMs !== undefined &&
++        (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
++      (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
++      (handle.workspaceRoot !== undefined &&
++        (typeof handle.workspaceRoot !== 'string' ||
++          !isAbsolute(handle.workspaceRoot) ||
++          handle.workspaceRoot.includes('\0')))
++    ) {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
++      )
++    }
++    // Copy only validated grants. Neither a later gate mutation nor model
++    // JSON can rewrite the authority passed to the capability body.
++    call.sandboxHandle = Object.freeze({
++      mode: handle.mode,
++      allowNetwork: handle.allowNetwork,
++      allowSubprocess: handle.allowSubprocess,
++      ...(handle.workspaceRoot !== undefined
++        ? { workspaceRoot: handle.workspaceRoot }
++        : {}),
++      ...(handle.deadlineMs !== undefined
++        ? { deadlineMs: handle.deadlineMs }
++        : {})
++    })
++    return undefined
+   } catch (error) {
+     return stop(
+       'UNSAFE_REQUEST',
+       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+     )
+   }
+-  if (outcome.kind === 'denied') {
+-    return stop(
+-      'UNSAFE_REQUEST',
+-      `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+-    )
+-  }
+-  if (outcome.kind === 'unavailable') {
+-    return stop(
+-      'UNSAFE_REQUEST',
+-      `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+-    )
+-  }
+-  call.sandboxHandle = outcome.handle
+-  return undefined
+ }
+ 
+ async function dispatch(
+@@ -444,7 +484,17 @@ async function dispatch(
+     // a pause or a cancellation still prevents the effect (F01/F02).
+     const blocked = await revalidate(host, call)
+     if (blocked) return { kind: 'not_started', gate: blocked }
+-    await host.get('effects').started(ref)
++    try {
++      await host.get('effects').started(ref)
++    } catch (error) {
++      return {
++        kind: 'not_started',
++        gate: stop(
++          'INSUFFICIENT_EVIDENCE',
++          `Effect ledger could not record the start: ${errorMessage(error)}.`
++        )
++      }
++    }
+     started = true
+     const startedAt = Date.now()
+     const toolController = new AbortController()
+@@ -458,6 +508,7 @@ async function dispatch(
+           correlationId: turn.input.correlationId,
+           traceId: turn.input.traceId,
+           operationKey: call.invocation.operationKey,
++          ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+           signal: AbortSignal.any([toolController.signal, turn.signal])
+         })
+       )
+@@ -505,9 +556,17 @@ async function dispatch(
+   }
+   const outcome = await run(0)
+   if (started) {
+-    await Promise.resolve(
+-      host.get('effects').finished(ref, outcome.kind)
+-    ).catch(() => undefined)
++    try {
++      await host.get('effects').finished(ref, outcome.kind)
++    } catch {
++      // The body already ran. A missing settlement is uncertain, never a
++      // successful effect or permission to retry the body/ledger.
++      return {
++        kind: 'threw',
++        error: 'unknown_effect: effect_settlement_failed',
++        durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
++      }
++    }
+   }
+   return outcome
+ }
+diff --git a/packages/sandbox/src/shell-tool.ts b/packages/sandbox/src/shell-tool.ts
+index 2ca4a6f..5e5145b 100644
+--- a/packages/sandbox/src/shell-tool.ts
++++ b/packages/sandbox/src/shell-tool.ts
+@@ -1,6 +1,10 @@
+ import { existsSync, realpathSync, statSync } from 'node:fs'
+-import { isAbsolute } from 'node:path'
+-import type { ToolDefinition, ToolResult } from '@cvg/harness-contracts'
++import { isAbsolute, sep } from 'node:path'
++import type {
++  SandboxHandle,
++  ToolDefinition,
++  ToolResult
++} from '@cvg/harness-contracts'
+ import { confinePath } from './confine.ts'
+ import { runContained, type ContainedRunResult } from './run.ts'
+ 
+@@ -9,6 +13,8 @@ export interface ShellRunRequest {
+   readonly argv: readonly string[]
+   /** Absolute directory, already confined to the workspace root. */
+   readonly cwd: string
++  /** Validated grant supplied by the governed execution context. */
++  readonly handle: SandboxHandle
+   readonly timeoutMs: number
+   readonly maxOutputBytes: number
+   readonly stdin?: string
+@@ -36,8 +42,8 @@ export interface ShellToolOptions {
+   /** Absolute tenant workspace root; cwd is confined to it by realpath. */
+   readonly workspaceRoot: string
+   /**
+-   * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with a
+-   * PROCESS handle built from `workspaceRoot`; tests inject a fake.
++   * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with
++   * the granted PROCESS handle; hosts/tests may inject a trusted runner.
+    */
+   readonly run?: (request: ShellRunRequest) => Promise<ShellRunResult>
+   readonly limits?: Partial<ShellLimits>
+@@ -155,13 +161,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         timeoutMs: request.timeoutMs,
+         maxOutputBytes: request.maxOutputBytes,
+         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
+-        handle: {
+-          mode: 'PROCESS',
+-          allowNetwork: false,
+-          allowSubprocess: true,
+-          workspaceRoot: root,
+-          deadlineMs: request.timeoutMs
+-        }
++        handle: request.handle
+       })
+       return result
+     })
+@@ -175,7 +175,37 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+     sideEffect: 'WRITE',
+     idempotent: false,
+     sandbox: 'PROCESS',
+-    execute: async (input) => {
++    execute: async (input, context) => {
++      const handle = context?.sandboxHandle
++      if (
++        !handle ||
++        handle.mode !== 'PROCESS' ||
++        handle.allowSubprocess !== true ||
++        typeof handle.allowNetwork !== 'boolean' ||
++        typeof handle.workspaceRoot !== 'string' ||
++        !isAbsolute(handle.workspaceRoot) ||
++        handle.workspaceRoot.includes('\0') ||
++        (handle.deadlineMs !== undefined &&
++          (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0))
++      )
++        return rejected('a valid governed PROCESS sandbox handle is required')
++      let grantedRoot: string
++      try {
++        grantedRoot = realpathSync(handle.workspaceRoot)
++        if (!statSync(grantedRoot).isDirectory())
++          return rejected('sandbox workspaceRoot must be a directory')
++      } catch {
++        return rejected('sandbox workspaceRoot cannot be resolved')
++      }
++      const withinGrant = (path: string): boolean =>
++        path === grantedRoot ||
++        path.startsWith(
++          grantedRoot.endsWith(sep) ? grantedRoot : grantedRoot + sep
++        )
++      if (!withinGrant(root))
++        return rejected(
++          'configured workspace root is outside the sandbox grant'
++        )
+       const record = input as Record<string, unknown> | null
+ 
+       // Any string-command field is refused: interpolation never enters.
+@@ -227,6 +257,8 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         rawCwd === undefined || rawCwd === '' ? '.' : rawCwd
+       )
+       if (!confined.ok) return rejected(confined.error)
++      if (!withinGrant(confined.abs))
++        return rejected('cwd is outside the sandbox grant')
+       let cwdStats: ReturnType<typeof statSync>
+       try {
+         cwdStats = statSync(confined.abs)
+@@ -247,12 +279,16 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         }
+       }
+ 
+-      const timeoutMs = clamp(
+-        typeof record?.['timeoutMs'] === 'number'
+-          ? record['timeoutMs']
+-          : Number.NaN,
+-        limits.defaultTimeoutMs,
+-        limits.maxTimeoutMs
++      const timeoutMs = Math.min(
++        limits.maxTimeoutMs,
++        handle.deadlineMs ?? Infinity,
++        clamp(
++          typeof record?.['timeoutMs'] === 'number'
++            ? record['timeoutMs']
++            : Number.NaN,
++          limits.defaultTimeoutMs,
++          limits.maxTimeoutMs
++        )
+       )
+ 
+       let result: ShellRunResult
+@@ -260,6 +296,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         result = await runner({
+           argv,
+           cwd: confined.abs,
++          handle,
+           timeoutMs,
+           maxOutputBytes: limits.maxOutputBytes,
+           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})

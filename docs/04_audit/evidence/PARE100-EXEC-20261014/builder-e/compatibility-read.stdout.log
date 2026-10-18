@@ -1,0 +1,149 @@
+import type {
+  Orchestrator,
+  OrchestratorDecision,
+  OrchestratorInput
+} from '@cvg/harness-contracts'
+
+/**
+ * Deterministic compatibility orchestrator. It chooses one action and never
+ * executes tools, calls a model, or evaluates policy.
+ */
+export class SinglePassOrchestrator implements Orchestrator {
+  async decideNextStep(
+    input: OrchestratorInput
+  ): Promise<OrchestratorDecision> {
+    const requestedTool = input.runtime.requestedTool
+
+    if (!requestedTool) {
+      return { action: 'RESPOND' }
+    }
+
+    const tool = input.availableTools.find(
+      (candidate) =>
+        candidate.id === requestedTool.toolId &&
+        (!requestedTool.toolVersion ||
+          candidate.version === requestedTool.toolVersion)
+    )
+
+    if (!tool) {
+      return {
+        action: 'STOP',
+        response: `Tool "${requestedTool.toolId}" is unavailable.`,
+        reason: 'requested_tool_unavailable'
+      }
+    }
+
+    return {
+      action: 'CALL_TOOL',
+      toolInvocation: requestedTool,
+      reason: 'explicit_single_pass_request'
+    }
+  }
+}
+
+/** Small deterministic adapter useful for smoke tests and safe boot checks. */
+export class NoopOrchestrator implements Orchestrator {
+  async decideNextStep(): Promise<OrchestratorDecision> {
+    return {
+      action: 'RESPOND',
+      response: 'Acknowledged.'
+    }
+  }
+}
+  readonly state: StateSnapshot
+  readonly budget: ExecutionBudget
+  readonly requestedTool?: ToolInvocation
+  /**
+   * Explicit runtime selection. The composition root resolves the runtime
+   * through its registry; no caller reaches a runtime class directly.
+   */
+  readonly runtimeProfile?: 'single_pass' | 'iterative'
+  /**
+   * Durable worker resume binding. The worker derives this from the execution
+   * record; the public request body can never set it.
+   */
+  readonly resume?:
+    | { readonly kind: 'approval'; readonly approvalId: string }
+    | { readonly kind: 'user_input'; readonly message: string }
+  /**
+   * Cooperative cancellation from the caller (SPEC 0181 I8). The kernel links
+   * it to its own deadline signal; cancellation before dispatch runs no tool.
+   */
+  readonly signal?: AbortSignal
+}
+
+export interface RuntimeResult {
+  readonly response: string
+  readonly stopReason: StopReason
+  /** Durable approval identity when execution is paused or approved. */
+  readonly approvalId?: ApprovalId
+  readonly steps: number
+  readonly modelCalls: number
+  readonly toolCalls: number
+  readonly usage: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }
+  readonly toolResult?: ToolResult
+}
+
+export interface OrchestratorInput {
+  readonly runtime: RuntimeInput
+  readonly availableTools: readonly ToolDescriptor[]
+  readonly step: number
+  readonly previousResult?: RuntimeResult
+}
+
+export type OrchestratorAction =
+
+export interface PolicyEngine {
+  evaluate(request: PolicyRequest): Promise<PolicyDecision>
+}
+
+export interface ApprovalRequest {
+  readonly tenantId: TenantId
+  readonly agentId: AgentId
+  readonly operationKey: string
+  readonly toolId: string
+  readonly summary: string
+  readonly correlationId: CorrelationId
+  /** Durable execution identity injected by the worker before approval request. */
+  readonly executionRef?: string
+  /** Optional durable-binding fields supplied by the governed runtime. */
+  readonly operatorId?: string
+  readonly agentVersion?: AgentVersion
+  readonly action?: string
+  readonly resource?: { readonly type: string; readonly id?: string }
+  readonly payload?: unknown
+  readonly policyVersion?: string
+}
+
+export type ApprovalStatus = 'APPROVED' | 'DENIED' | 'PENDING'
+
+export type ApprovalDecision =
+  | {
+      readonly status: 'APPROVED'
+      readonly approvalId: ApprovalId
+      readonly reason: string
+    }
+  | {
+      readonly status: 'DENIED' | 'PENDING'
+      readonly approvalId?: ApprovalId
+      readonly reason: string
+    }
+
+export interface ApprovalEngine {
+  request(request: ApprovalRequest): Promise<ApprovalDecision>
+  /** Optional durable effect lifecycle; legacy in-memory fixtures may omit it. */
+  readonly execution?: ApprovalExecutionPort
+}
+
+packages/orchestrator/src/compatibility.ts:15:    const requestedTool = input.runtime.requestedTool
+packages/orchestrator/src/compatibility.ts:17:    if (!requestedTool) {
+packages/orchestrator/src/compatibility.ts:23:        candidate.id === requestedTool.toolId &&
+packages/orchestrator/src/compatibility.ts:24:        (!requestedTool.toolVersion ||
+packages/orchestrator/src/compatibility.ts:25:          candidate.version === requestedTool.toolVersion)
+packages/orchestrator/src/compatibility.ts:31:        response: `Tool "${requestedTool.toolId}" is unavailable.`,
+packages/orchestrator/src/compatibility.ts:38:      toolInvocation: requestedTool,
+packages/harness/src/kernel/kernel-runtime.ts:461:    const invocation = requested ?? input.requestedTool

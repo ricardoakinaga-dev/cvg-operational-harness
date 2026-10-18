@@ -20,6 +20,14 @@ import type {
   ToolDescriptor,
   TraceId
 } from './contracts.ts'
+import type {
+  CheckpointCompareAndSwapInput,
+  CheckpointCompareAndSwapResult,
+  CompleteToolContextConfiguration,
+  CompleteToolContextState,
+  CompleteToolModelContext,
+  DecisionAdmissionPort
+} from './complete-tool-context.ts'
 
 export const RUNTIME_PROFILES = ['single_pass', 'iterative'] as const
 export type RuntimeProfile = (typeof RUNTIME_PROFILES)[number]
@@ -380,6 +388,7 @@ export const EMPTY_BUDGET_USAGE: BudgetUsage = {
 }
 
 export interface AgentLoopState {
+  readonly toolResultContext?: CompleteToolContextState | undefined
   readonly goal: string
   /** Immutable capability composition binding for checkpoint/replay safety. */
   readonly capabilityFingerprint?: string
@@ -415,6 +424,10 @@ export interface ExecutionCheckpoint {
 }
 
 export interface ExecutionStepStore {
+  /** Atomic extension required by complete-tool-v1; simple save cannot emulate it. */
+  compareAndSwapCheckpoint?(
+    input: CheckpointCompareAndSwapInput
+  ): Promise<CheckpointCompareAndSwapResult>
   recordStep(step: ExecutionStep): Promise<void>
   listSteps(
     tenantId: string,
@@ -550,6 +563,7 @@ export interface ContextItem {
 }
 
 export interface StepContext {
+  readonly toolResultContext?: CompleteToolModelContext
   readonly executionId: string
   readonly tenantId: string
   readonly conversationId: string
@@ -583,6 +597,7 @@ export interface StepContext {
 }
 
 export interface ContextBuildInput {
+  readonly toolResultContext?: CompleteToolContextConfiguration
   readonly runtime: {
     readonly executionId?: string
     readonly tenantId: TenantId
@@ -621,6 +636,7 @@ export interface ContextEngine {
 /* -------------------------------------------------------------------------- */
 
 export interface IterativeOrchestratorInput {
+  readonly decisionAdmission?: DecisionAdmissionPort
   readonly context: StepContext
   /** Aborted by the runtime when the decision deadline passes. */
   readonly signal?: AbortSignal
@@ -645,11 +661,14 @@ export const EMPTY_MODEL_USAGE: ModelUsage = {
  * budgets deterministically without reaching into orchestrator internals.
  */
 export interface IterativeOrchestratorTurn {
+  /** Complete-tool-v1 returns runtime-owned settled receipts, never aggregate usage. */
+  readonly decisionAdmissionIds?: readonly string[]
   readonly decision: LoopDecision
   readonly usage?: ModelUsage
 }
 
 export interface IterativeOrchestrator {
+  readonly contextProtocol?: 'complete-tool-v1'
   decide(input: IterativeOrchestratorInput): Promise<IterativeOrchestratorTurn>
 }
 

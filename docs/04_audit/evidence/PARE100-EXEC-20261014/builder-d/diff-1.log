@@ -1,0 +1,673 @@
+diff --git a/packages/contracts/src/contracts.ts b/packages/contracts/src/contracts.ts
+index cd768eb..f658525 100644
+--- a/packages/contracts/src/contracts.ts
++++ b/packages/contracts/src/contracts.ts
+@@ -114,6 +114,8 @@ export interface ToolExecutionContext {
+   readonly traceId: TraceId
+   readonly operationKey?: string
+   readonly signal?: AbortSignal
++  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
++  readonly sandboxHandle?: SandboxHandle
+ }
+ 
+ export interface ToolDescriptor {
+diff --git a/packages/harness/src/__tests__/pdsh-010-sandbox-seam.test.ts b/packages/harness/src/__tests__/pdsh-010-sandbox-seam.test.ts
+index d2874d5..996ac41 100644
+--- a/packages/harness/src/__tests__/pdsh-010-sandbox-seam.test.ts
++++ b/packages/harness/src/__tests__/pdsh-010-sandbox-seam.test.ts
+@@ -81,7 +81,8 @@ const allowGate: SandboxGate = {
+     handle: {
+       mode: input.policy?.requiredMode ?? 'WORKSPACE',
+       allowNetwork: false,
+-      allowSubprocess: false
++      allowSubprocess: false,
++      workspaceRoot: '/tmp'
+     }
+   })
+ }
+diff --git a/packages/harness/src/__tests__/pdsh-031-slice2d-kernel.test.ts b/packages/harness/src/__tests__/pdsh-031-slice2d-kernel.test.ts
+index 449842e..7aca1ea 100644
+--- a/packages/harness/src/__tests__/pdsh-031-slice2d-kernel.test.ts
++++ b/packages/harness/src/__tests__/pdsh-031-slice2d-kernel.test.ts
+@@ -438,7 +438,7 @@ describe('PDSH-031 slice 2d — kernel pipeline edges', () => {
+     })
+   })
+ 
+-  it('keeps the outcome when the effect ledger closing write fails', async () => {
++  it('reports uncertainty when the effect ledger closing write fails (SPEC0212)', async () => {
+     const { turn } = makeTurn()
+     const host = fakeHost({
+       services: toolServices({
+@@ -450,7 +450,10 @@ describe('PDSH-031 slice 2d — kernel pipeline edges', () => {
+     })
+     expect(await runToolCall(host, toolCallStub(turn) as never)).toMatchObject({
+       kind: 'settled',
+-      outcome: { kind: 'succeeded' }
++      outcome: {
++        kind: 'threw',
++        error: 'unknown_effect: effect_settlement_failed'
++      }
+     })
+   })
+ })
+diff --git a/packages/harness/src/createOperationalHarness.ts b/packages/harness/src/createOperationalHarness.ts
+index 196d1b8..2c4db6e 100644
+--- a/packages/harness/src/createOperationalHarness.ts
++++ b/packages/harness/src/createOperationalHarness.ts
+@@ -89,6 +89,8 @@ export function createOperationalHarness(
+     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+     audit: options.audit,
+     telemetry: options.telemetry,
++    ...(options.pause ? { pause: options.pause } : {}),
++    ...(options.effects ? { effects: options.effects } : {}),
+     ...(options.log ? { log: options.log } : {}),
+     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+   })
+@@ -104,6 +106,9 @@ export function createOperationalHarness(
+           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+           audit: options.audit,
+           telemetry: options.telemetry,
++          ...(options.pause ? { pause: options.pause } : {}),
++          ...(options.effects ? { effects: options.effects } : {}),
++          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+           ...(options.log ? { log: options.log } : {}),
+           stepStore: options.stepStore,
+           ...(options.contextEngine
+diff --git a/packages/harness/src/iterative-runtime.ts b/packages/harness/src/iterative-runtime.ts
+index a4b09c2..725da81 100644
+--- a/packages/harness/src/iterative-runtime.ts
++++ b/packages/harness/src/iterative-runtime.ts
+@@ -17,6 +17,7 @@ import type {
+   Observation,
+   RuntimeInput,
+   RuntimeResult,
++  SandboxGate,
+   StopReason,
+   SufficiencyEvaluator
+ } from '@cvg/harness-contracts'
+@@ -59,6 +60,7 @@ import {
+   modelCapability,
+   pauseControl,
+   policyControl,
++  sandboxControl,
+   telemetryCapability,
+   toolsCapability
+ } from './kernel/controls.ts'
+@@ -111,6 +113,7 @@ export interface IterativeGovernedRuntimeOptions {
+   readonly pause?: PauseSwitch
+   readonly log?: KernelLog
+   readonly effects?: EffectLedger
++  readonly sandbox?: SandboxGate
+ }
+ 
+ /** Services the iterative mode needs from the kernel (no single-pass planner). */
+@@ -426,6 +429,7 @@ export class IterativeGovernedRuntime {
+         pauseControl(this.options.pause),
+         logControl(this.options.log),
+         effectsControl(this.options.effects),
++        ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+         policyControl(this.options.policy),
+         approvalsControl(
+           this.options.approvals,
+@@ -648,6 +652,30 @@ export class IterativeGovernedRuntime {
+     })
+     this.#turns.set(run, { host, signal: controller.signal })
+ 
++    // A ledger settlement failure is unresolved evidence, not a resumable
++    // tool decision. Preserve its checkpoint and never repeat that effect.
++    if (
++      checkpoint?.state.stopReason === 'TOOL_FAILURE' &&
++      checkpoint.state.observations.some(
++        (observation) =>
++          observation.type === 'TOOL_RESULT' &&
++          observation.source === 'TOOL' &&
++          (observation.payload as { error?: unknown } | null)?.error ===
++            'unknown_effect: effect_settlement_failed'
++      )
++    ) {
++      return this.finalize(
++        run,
++        {
++          kind: 'stop',
++          stopReason: 'TOOL_FAILURE',
++          response: 'unknown_effect: effect_settlement_failed',
++          preserveCheckpoint: true
++        },
++        startedAtMs
++      )
++    }
++
+     const resumeOutcome = this.applyResume(run, checkpoint)
+     if (resumeOutcome) {
+       return this.finalize(run, resumeOutcome, startedAtMs)
+diff --git a/packages/harness/src/kernel/pipeline.ts b/packages/harness/src/kernel/pipeline.ts
+index 4fb4282..f341035 100644
+--- a/packages/harness/src/kernel/pipeline.ts
++++ b/packages/harness/src/kernel/pipeline.ts
+@@ -1,3 +1,4 @@
++import { isAbsolute } from 'node:path'
+ import type {
+   ModelRequest,
+   ModelResult,
+@@ -378,9 +379,8 @@ async function enforceSandbox(
+       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+     )
+   }
+-  let outcome: SandboxGateOutcome
+   try {
+-    outcome = await gate.evaluate({
++    const outcome: SandboxGateOutcome = await gate.evaluate({
+       descriptor: call.tool,
+       context: {
+         tenantId: call.turn.input.tenantId,
+@@ -396,26 +396,59 @@ async function enforceSandbox(
+         subprocessAllowed: requiredMode === 'PROCESS'
+       }
+     })
++    if (outcome.kind === 'denied') {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
++      )
++    }
++    if (outcome.kind === 'unavailable') {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
++      )
++    }
++    const handle = outcome.kind === 'allowed' ? outcome.handle : undefined
++    if (
++      outcome.kind !== 'allowed' ||
++      outcome.mode !== requiredMode ||
++      !handle ||
++      handle.mode !== requiredMode ||
++      typeof handle.allowNetwork !== 'boolean' ||
++      typeof handle.allowSubprocess !== 'boolean' ||
++      (handle.deadlineMs !== undefined &&
++        (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
++      (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
++      (handle.workspaceRoot !== undefined &&
++        (typeof handle.workspaceRoot !== 'string' ||
++          !isAbsolute(handle.workspaceRoot) ||
++          handle.workspaceRoot.includes('\0')))
++    ) {
++      return stop(
++        'UNSAFE_REQUEST',
++        `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
++      )
++    }
++    // Copy only validated grants. Neither a later gate mutation nor model
++    // JSON can rewrite the authority passed to the capability body.
++    call.sandboxHandle = Object.freeze({
++      mode: handle.mode,
++      allowNetwork: handle.allowNetwork,
++      allowSubprocess: handle.allowSubprocess,
++      ...(handle.workspaceRoot !== undefined
++        ? { workspaceRoot: handle.workspaceRoot }
++        : {}),
++      ...(handle.deadlineMs !== undefined
++        ? { deadlineMs: handle.deadlineMs }
++        : {})
++    })
++    return undefined
+   } catch (error) {
+     return stop(
+       'UNSAFE_REQUEST',
+       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+     )
+   }
+-  if (outcome.kind === 'denied') {
+-    return stop(
+-      'UNSAFE_REQUEST',
+-      `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+-    )
+-  }
+-  if (outcome.kind === 'unavailable') {
+-    return stop(
+-      'UNSAFE_REQUEST',
+-      `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+-    )
+-  }
+-  call.sandboxHandle = outcome.handle
+-  return undefined
+ }
+ 
+ async function dispatch(
+@@ -444,7 +477,17 @@ async function dispatch(
+     // a pause or a cancellation still prevents the effect (F01/F02).
+     const blocked = await revalidate(host, call)
+     if (blocked) return { kind: 'not_started', gate: blocked }
+-    await host.get('effects').started(ref)
++    try {
++      await host.get('effects').started(ref)
++    } catch (error) {
++      return {
++        kind: 'not_started',
++        gate: stop(
++          'INSUFFICIENT_EVIDENCE',
++          `Effect ledger could not record the start: ${errorMessage(error)}.`
++        )
++      }
++    }
+     started = true
+     const startedAt = Date.now()
+     const toolController = new AbortController()
+@@ -458,6 +501,7 @@ async function dispatch(
+           correlationId: turn.input.correlationId,
+           traceId: turn.input.traceId,
+           operationKey: call.invocation.operationKey,
++          ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+           signal: AbortSignal.any([toolController.signal, turn.signal])
+         })
+       )
+@@ -505,9 +549,17 @@ async function dispatch(
+   }
+   const outcome = await run(0)
+   if (started) {
+-    await Promise.resolve(
+-      host.get('effects').finished(ref, outcome.kind)
+-    ).catch(() => undefined)
++    try {
++      await host.get('effects').finished(ref, outcome.kind)
++    } catch {
++      // The body already ran. A missing settlement is uncertain, never a
++      // successful effect or permission to retry the body/ledger.
++      return {
++        kind: 'threw',
++        error: 'unknown_effect: effect_settlement_failed',
++        durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
++      }
++    }
+   }
+   return outcome
+ }
+diff --git a/packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts b/packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts
+index 48975c8..d46e5d8 100644
+--- a/packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts
++++ b/packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts
+@@ -53,12 +53,20 @@ const okRun: ShellRunResult = {
+   truncated: false
+ }
+ 
+-const context = {
+-  tenantId: 'tenant_00000000-0000-4000-8000-000000000001' as never,
+-  agentId: 'agent_00000000-0000-4000-8000-000000000001' as never,
+-  correlationId: 'corr_1' as never,
+-  traceId: 'trace_1' as never,
+-  operationKey: 'pdsh-013-shell.run'
++function context(root: string) {
++  return {
++    tenantId: 'tenant_00000000-0000-4000-8000-000000000001' as never,
++    agentId: 'agent_00000000-0000-4000-8000-000000000001' as never,
++    correlationId: 'corr_1' as never,
++    traceId: 'trace_1' as never,
++    operationKey: 'pdsh-013-shell.run',
++    sandboxHandle: Object.freeze({
++      mode: 'PROCESS' as const,
++      workspaceRoot: root,
++      allowNetwork: false,
++      allowSubprocess: true
++    })
++  }
+ }
+ 
+ describe('PDSH-013 shell tool boot (SPEC 0198 §1)', () => {
+@@ -77,11 +85,12 @@ describe('PDSH-013 shell tool boot (SPEC 0198 §1)', () => {
+ 
+ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+   it('rejects string-command fields — no interpolation path exists', async () => {
+-    const { tool } = probeTool(tempWorkspace(), okRun)
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, okRun)
+     for (const key of ['command', 'cmd', 'shell']) {
+       const result = await tool.execute(
+         { [key]: 'echo pwned', intent: 'x' },
+-        context
++        context(root)
+       )
+       expect(result.status).toBe('REJECTED')
+       expect(result.error).toMatch(/string commands/)
+@@ -89,7 +98,8 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+   })
+ 
+   it('rejects malformed argv (missing, empty, non-string, empty element, NUL)', async () => {
+-    const { tool } = probeTool(tempWorkspace(), okRun)
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, okRun)
+     const bad: unknown[] = [
+       undefined,
+       'echo hi',
+@@ -100,7 +110,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+       [null]
+     ]
+     for (const argv of bad) {
+-      const result = await tool.execute({ argv, intent: 'x' }, context)
++      const result = await tool.execute({ argv, intent: 'x' }, context(root))
+       expect(result.status, JSON.stringify(argv)).toBe('REJECTED')
+     }
+   })
+@@ -113,24 +123,37 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+       maxTotalArgBytes: 7
+     })
+     expect(
+-      (await tool.execute({ argv: ['a', 'b', 'c'], intent: 'x' }, context))
+-        .status
++      (
++        await tool.execute(
++          { argv: ['a', 'b', 'c'], intent: 'x' },
++          context(root)
++        )
++      ).status
+     ).toBe('REJECTED')
+     expect(
+-      (await tool.execute({ argv: ['abcde'], intent: 'x' }, context)).status
++      (await tool.execute({ argv: ['abcde'], intent: 'x' }, context(root)))
++        .status
+     ).toBe('REJECTED')
+     expect(
+-      (await tool.execute({ argv: ['abcd', 'efgh'], intent: 'x' }, context))
+-        .status
++      (
++        await tool.execute(
++          { argv: ['abcd', 'efgh'], intent: 'x' },
++          context(root)
++        )
++      ).status
+     ).toBe('REJECTED')
+   })
+ 
+   it('rejects a missing or oversized intent before any spawn', async () => {
+-    const { tool, calls } = probeTool(tempWorkspace(), okRun, {
++    const root = tempWorkspace()
++    const { tool, calls } = probeTool(root, okRun, {
+       maxIntentLength: 5
+     })
+     for (const intent of [undefined, '   ', 'abcdefg']) {
+-      const result = await tool.execute({ argv: ['true'], intent }, context)
++      const result = await tool.execute(
++        { argv: ['true'], intent },
++        context(root)
++      )
+       expect(result.status, String(intent)).toBe('REJECTED')
+     }
+     expect(calls).toHaveLength(0)
+@@ -144,7 +167,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+     for (const cwd of ['..', '../..', '/etc', 'escape-link']) {
+       const result = await tool.execute(
+         { argv: ['true'], cwd, intent: 'x' },
+-        context
++        context(root)
+       )
+       expect(result.status, cwd).toBe('REJECTED')
+     }
+@@ -159,7 +182,7 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+       (
+         await tool.execute(
+           { argv: ['true'], cwd: 'missing-dir', intent: 'x' },
+-          context
++          context(root)
+         )
+       ).status
+     ).toBe('REJECTED')
+@@ -170,17 +193,18 @@ describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+       (
+         await tool.execute(
+           { argv: ['true'], cwd: 'arquivo.txt', intent: 'x' },
+-          context
++          context(root)
+         )
+       ).status
+     ).toBe('REJECTED')
+   })
+ 
+   it('rejects oversized stdin', async () => {
+-    const { tool } = probeTool(tempWorkspace(), okRun, { maxStdinBytes: 4 })
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, okRun, { maxStdinBytes: 4 })
+     const result = await tool.execute(
+       { argv: ['true'], stdin: '12345', intent: 'x' },
+-      context
++      context(root)
+     )
+     expect(result.status).toBe('REJECTED')
+   })
+@@ -202,7 +226,7 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
+         stdin: 'dados',
+         intent: 'executar comando sintetico'
+       },
+-      context
++      context(root)
+     )
+     expect(result.status).toBe('SUCCEEDED')
+     expect(calls).toHaveLength(1)
+@@ -215,12 +239,16 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
+   it('clamps an invalid timeout to the default', async () => {
+     const root = tempWorkspace()
+     const { tool, calls } = probeTool(root, okRun, { defaultTimeoutMs: 500 })
+-    await tool.execute({ argv: ['true'], timeoutMs: -5, intent: 'x' }, context)
++    await tool.execute(
++      { argv: ['true'], timeoutMs: -5, intent: 'x' },
++      context(root)
++    )
+     expect(calls[0]?.timeoutMs).toBe(500)
+   })
+ 
+   it('surfaces a non-zero exit code as SUCCEEDED (consumer interprets)', async () => {
+-    const { tool } = probeTool(tempWorkspace(), {
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, {
+       exitCode: 1,
+       stdout: '',
+       stderr: 'no match',
+@@ -228,26 +256,31 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
+     })
+     const result = await tool.execute(
+       { argv: ['grep', 'x'], intent: 'x' },
+-      context
++      context(root)
+     )
+     expect(result.status).toBe('SUCCEEDED')
+     expect(result.output).toMatchObject({ exitCode: 1, stderr: 'no match' })
+   })
+ 
+   it('maps spawn_failed to FAILED (containment failure, never an exit code)', async () => {
+-    const { tool } = probeTool(tempWorkspace(), {
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, {
+       exitCode: 'spawn_failed',
+       stdout: '',
+       stderr: 'bwrap: exec failed',
+       truncated: false
+     })
+-    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
++    const result = await tool.execute(
++      { argv: ['true'], intent: 'x' },
++      context(root)
++    )
+     expect(result.status).toBe('FAILED')
+     expect(result.error).toMatch(/containment failed/)
+   })
+ 
+   it('maps timeout to FAILED with the effective budget', async () => {
+-    const { tool } = probeTool(tempWorkspace(), {
++    const root = tempWorkspace()
++    const { tool } = probeTool(root, {
+       exitCode: 'timeout',
+       stdout: '',
+       stderr: '',
+@@ -255,20 +288,24 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
+     })
+     const result = await tool.execute(
+       { argv: ['sleep', '99'], timeoutMs: 1000, intent: 'x' },
+-      context
++      context(root)
+     )
+     expect(result.status).toBe('FAILED')
+     expect(result.error).toMatch(/timed out after 1000ms/)
+   })
+ 
+   it('maps a throwing runner to FAILED', async () => {
++    const root = tempWorkspace()
+     const tool = createShellTool({
+-      workspaceRoot: tempWorkspace(),
++      workspaceRoot: root,
+       run: async () => {
+         throw new Error('runner exploded')
+       }
+     })
+-    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
++    const result = await tool.execute(
++      { argv: ['true'], intent: 'x' },
++      context(root)
++    )
+     expect(result.status).toBe('FAILED')
+     expect(result.error).toMatch(/runner exploded/)
+   })
+@@ -296,7 +333,7 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
+       const tool = createShellTool({ workspaceRoot: root })
+       const result = await tool.execute(
+         { argv: ['/bin/echo', 'sintetico'], intent: 'fumaça do host' },
+-        context
++        context(root)
+       )
+       expect(result.status).toBe('SUCCEEDED')
+       expect(result.output).toMatchObject({
+@@ -316,7 +353,7 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
+           argv: ['/bin/sh', '-c', 'echo sintetico > inside.txt'],
+           intent: 'provar bind gravável do workspace'
+         },
+-        context
++        context(root)
+       )
+       expect(result.status).toBe('SUCCEEDED')
+       const { readFileSync } = await import('node:fs')
+diff --git a/packages/sandbox/src/shell-tool.ts b/packages/sandbox/src/shell-tool.ts
+index 2ca4a6f..1c2415c 100644
+--- a/packages/sandbox/src/shell-tool.ts
++++ b/packages/sandbox/src/shell-tool.ts
+@@ -1,6 +1,10 @@
+ import { existsSync, realpathSync, statSync } from 'node:fs'
+-import { isAbsolute } from 'node:path'
+-import type { ToolDefinition, ToolResult } from '@cvg/harness-contracts'
++import { isAbsolute, sep } from 'node:path'
++import type {
++  SandboxHandle,
++  ToolDefinition,
++  ToolResult
++} from '@cvg/harness-contracts'
+ import { confinePath } from './confine.ts'
+ import { runContained, type ContainedRunResult } from './run.ts'
+ 
+@@ -9,6 +13,8 @@ export interface ShellRunRequest {
+   readonly argv: readonly string[]
+   /** Absolute directory, already confined to the workspace root. */
+   readonly cwd: string
++  /** Validated grant supplied by the governed execution context. */
++  readonly handle: SandboxHandle
+   readonly timeoutMs: number
+   readonly maxOutputBytes: number
+   readonly stdin?: string
+@@ -37,7 +43,7 @@ export interface ShellToolOptions {
+   readonly workspaceRoot: string
+   /**
+    * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with a
+-   * PROCESS handle built from `workspaceRoot`; tests inject a fake.
++   * the granted PROCESS handle; hosts/tests may inject a trusted runner.
+    */
+   readonly run?: (request: ShellRunRequest) => Promise<ShellRunResult>
+   readonly limits?: Partial<ShellLimits>
+@@ -155,13 +161,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         timeoutMs: request.timeoutMs,
+         maxOutputBytes: request.maxOutputBytes,
+         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
+-        handle: {
+-          mode: 'PROCESS',
+-          allowNetwork: false,
+-          allowSubprocess: true,
+-          workspaceRoot: root,
+-          deadlineMs: request.timeoutMs
+-        }
++        handle: request.handle
+       })
+       return result
+     })
+@@ -175,7 +175,37 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+     sideEffect: 'WRITE',
+     idempotent: false,
+     sandbox: 'PROCESS',
+-    execute: async (input) => {
++    execute: async (input, context) => {
++      const handle = context?.sandboxHandle
++      if (
++        !handle ||
++        handle.mode !== 'PROCESS' ||
++        handle.allowSubprocess !== true ||
++        typeof handle.allowNetwork !== 'boolean' ||
++        typeof handle.workspaceRoot !== 'string' ||
++        !isAbsolute(handle.workspaceRoot) ||
++        handle.workspaceRoot.includes('\0') ||
++        (handle.deadlineMs !== undefined &&
++          (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0))
++      )
++        return rejected('a valid governed PROCESS sandbox handle is required')
++      let grantedRoot: string
++      try {
++        grantedRoot = realpathSync(handle.workspaceRoot)
++        if (!statSync(grantedRoot).isDirectory())
++          return rejected('sandbox workspaceRoot must be a directory')
++      } catch {
++        return rejected('sandbox workspaceRoot cannot be resolved')
++      }
++      const withinGrant = (path: string): boolean =>
++        path === grantedRoot ||
++        path.startsWith(
++          grantedRoot.endsWith(sep) ? grantedRoot : grantedRoot + sep
++        )
++      if (!withinGrant(root))
++        return rejected(
++          'configured workspace root is outside the sandbox grant'
++        )
+       const record = input as Record<string, unknown> | null
+ 
+       // Any string-command field is refused: interpolation never enters.
+@@ -227,6 +257,8 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         rawCwd === undefined || rawCwd === '' ? '.' : rawCwd
+       )
+       if (!confined.ok) return rejected(confined.error)
++      if (!withinGrant(confined.abs))
++        return rejected('cwd is outside the sandbox grant')
+       let cwdStats: ReturnType<typeof statSync>
+       try {
+         cwdStats = statSync(confined.abs)
+@@ -247,12 +279,16 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         }
+       }
+ 
+-      const timeoutMs = clamp(
+-        typeof record?.['timeoutMs'] === 'number'
+-          ? record['timeoutMs']
+-          : Number.NaN,
+-        limits.defaultTimeoutMs,
+-        limits.maxTimeoutMs
++      const timeoutMs = Math.min(
++        limits.maxTimeoutMs,
++        handle.deadlineMs ?? Infinity,
++        clamp(
++          typeof record?.['timeoutMs'] === 'number'
++            ? record['timeoutMs']
++            : Number.NaN,
++          limits.defaultTimeoutMs,
++          limits.maxTimeoutMs
++        )
+       )
+ 
+       let result: ShellRunResult
+@@ -260,6 +296,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
+         result = await runner({
+           argv,
+           cwd: confined.abs,
++          handle,
+           timeoutMs,
+           maxOutputBytes: limits.maxOutputBytes,
+           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})

@@ -1,0 +1,95 @@
+333-  public record(event: TelemetryEvent): void {
+334-    this.events.push(event)
+335-  }
+336-}
+337-
+338:export class InMemoryApprovalEngine implements ApprovalEngine {
+339-  private readonly decisions = new Map<string, ApprovalDecision>()
+340-  private readonly executionStates = new Map<
+341-    string,
+342-    'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+343-  >()
+344-
+345-  public readonly requests: ApprovalRequest[] = []
+346-  public approveOnRequest = false
+347-
+348-  /** Single-use execution lifecycle, mirroring the durable authority. */
+349-  public execution: ApprovalExecutionPort = {
+350-    begin: async (request) => {
+351-      const state = this.executionStates.get(request.approvalId)
+352-      if (state !== undefined) {
+353-        throw new Error(`Approval execution is ${state.toLowerCase()}`)
+354-      }
+355-      this.executionStates.set(request.approvalId, 'RESERVED')
+356-      return {
+357-        approvalId: request.approvalId,
+358-        reservationId: `reservation_${request.approvalId}`
+359-      }
+360-    },
+361:    complete: async ({ request }) => {
+362-      this.executionStates.set(request.approvalId, 'CONSUMED')
+363-    },
+364-    fail: async ({ request }) => {
+365-      this.executionStates.delete(request.approvalId)
+366-    },
+367:    uncertain: async ({ request }) => {
+368-      this.executionStates.set(request.approvalId, 'UNCERTAIN')
+369-    }
+370-  }
+371-
+372:  public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+373-    this.requests.push(request)
+374-    const existing = this.decisions.get(request.operationKey)
+375-    if (existing) return existing
+376-    if (this.approveOnRequest) {
+377-      const decision: ApprovalDecision = {
+378-        status: 'APPROVED',
+379-        approvalId: `approval_${request.operationKey}` as never,
+380-        reason: 'approved by fixture'
+381-      }
+382-      this.decisions.set(request.operationKey, decision)
+383-      return decision
+384-    }
+385-    const decision: ApprovalDecision = {
+386-      status: 'PENDING',
+387-      approvalId: `approval_${request.operationKey}` as never,
+388-      reason: 'approval pending'
+389-    }
+390-    this.decisions.set(request.operationKey, decision)
+391-    return decision
+392-  }
+393-
+394-  public approve(operationKey: string): void {
+395-    this.decisions.set(operationKey, {
+396-      status: 'APPROVED',
+397-      approvalId: `approval_${operationKey}` as never,
+398-      reason: 'approved by operator'
+399-    })
+400-  }
+401-
+402-  public deny(operationKey: string): void {
+403-    this.decisions.set(operationKey, {
+404-      status: 'DENIED',
+405-      approvalId: `approval_${operationKey}` as never,
+406-      reason: 'denied by operator'
+407-    })
+408-  }
+409-}
+410-
+411-export class ThrowingModelGateway implements ModelGateway {
+412-  public calls = 0
+413-
+414-  public async complete(): Promise<ModelResult> {
+415-    this.calls += 1
+416-    throw new Error('synthetic model outage')
+417-  }
+418-}
+419-
+420-export function decision(
+421-  value: Omit<LoopDecision, 'reasonCode'> &
+422-    Partial<Pick<LoopDecision, 'reasonCode'>>
+423-): LoopDecision {
+424-  return { reasonCode: 'TOOL_REQUIRED', ...value }
+425-}
+426-
+427-export function orchestratorTurn(decisionValue: LoopDecision): {

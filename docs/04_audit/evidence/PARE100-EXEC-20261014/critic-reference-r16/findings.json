@@ -1,0 +1,105 @@
+[
+  {
+    "id": "I1-R16-01",
+    "severity": "MEDIUM",
+    "category": "declaration-preservation",
+    "title": "Declaration-only literal selectors are made opaque based solely on spelling",
+    "status": "STATICALLY_ESTABLISHED",
+    "requirement": {
+      "source": "docs/04_audit/evidence/PARE100-EXEC-20261014/adjudicate-reference-r11/role-decisions.json",
+      "pointer": "/rules/1",
+      "case": "B-genuine-literal-selector",
+      "expected": "PRESERVE genuine selector/type constraint; unresolved dual role UNKNOWN with source/digest/length"
+    },
+    "implementation_locations": [
+      {
+        "path": "scripts/reference-contract-catalog.mjs",
+        "start_line": 558,
+        "end_line": 585,
+        "role": "Spelling whitelist and replacement of declared type with UNKNOWN"
+      },
+      {
+        "path": "scripts/reference-contract-catalog.mjs",
+        "start_line": 738,
+        "end_line": 785,
+        "role": "Declaration-only type does not enter runtime-payload index"
+      },
+      {
+        "path": "scripts/reference-contract-catalog.mjs",
+        "start_line": 847,
+        "end_line": 859,
+        "role": "Connected type-alias extraction calls printed(node.type)"
+      },
+      {
+        "path": "scripts/reference-contract-catalog.mjs",
+        "start_line": 1580,
+        "end_line": 1605,
+        "role": "Catalog emission retains the opaque shape"
+      },
+      {
+        "path": "scripts/reference-contract-catalog.mjs",
+        "start_line": 1608,
+        "end_line": 1651,
+        "role": "Pinned TypeScript candidate reaches extraction"
+      }
+    ],
+    "inert_witness": {
+      "source_path": "packages/core/example/src/types.ts",
+      "source_text": "export type Selector = 'throw 0';\n",
+      "source_sha256": "9ad22c25fa3375fdc9f7eba04d022d18f91699e1b1598ea49c197c13ed38c5b4",
+      "input_context": "An otherwise valid synthetic pinned tree and owner map using the sealed tests' @synthetic/example package and P100-012 owner; this source replaces its types.ts. Described only; not materialized, parsed with TypeScript, imported or executed.",
+      "literal": "throw 0",
+      "literal_sha256": "f882cbdbfd85e3796c79410371211a9786307af32e66e3e0bdb141b793bf8601",
+      "literal_byte_length": 7,
+      "established_role": "The literal appears exclusively in an exported TypeAliasDeclaration named Selector. There is no runtime expression, initializer, call or other payload occurrence in this physical source. Its program-looking spelling supplies no evidence of a program-source role."
+    },
+    "exact_static_derivation": [
+      "isCandidate accepts packages/core/example/src/types.ts (254-275); ref.read authenticates its bytes before the TypeScript branch invokes extractTypeScriptContracts (1608-1651).",
+      "parseTypeScriptContract builds the source; indexRuntimeLiterals skips type nodes (744-750). With no runtime literal in this source, the source-local payload map has no hash for 'throw 0' (783-785).",
+      "visitStatements recognizes the exported type alias, chooses kind 'type' and symbol 'Selector', and calls printed(node.type) (805-810, 847-859).",
+      "printed visits its StringLiteral. No executable node exists and the payload-map test is false, but the literal fails /^[A-Za-z0-9_$./:@-]{1,200}$/ because of its space (558-573). It adds the literal hash and UTF-8 length.",
+      "The literals.length branch returns UNKNOWN rather than printing the genuine literal constraint (581-585). The exact predicted declaration is provided below.",
+      "Record emission wraps it in declarations (960-965). projectIdentity preserves the valid symbol Selector (19-27, 1585-1587); emitFor retains the shape, marks extraction_status UNKNOWN and parity_status NOT_VERIFIED (1592-1605). The generic source-surface entry does not recover the literal constraint (1655-1661)."
+    ],
+    "predicted_output_fragment": {
+      "kind": "type",
+      "package": "@synthetic/example",
+      "source": "packages/core/example/src/types.ts",
+      "source_sha256": "9ad22c25fa3375fdc9f7eba04d022d18f91699e1b1598ea49c197c13ed38c5b4",
+      "symbol": "Selector",
+      "owner_task": "P100-012",
+      "family": "core",
+      "scope": "CONTRACT",
+      "shape": {
+        "declarations": [
+          {
+            "visibility": "PUBLIC",
+            "type_parameters": [],
+            "type": {
+              "status": "UNKNOWN",
+              "reason": "Unclassified literal in a declared type; bytes not copied",
+              "literals": [
+                {
+                  "value_sha256": "f882cbdbfd85e3796c79410371211a9786307af32e66e3e0bdb141b793bf8601",
+                  "byte_length": 7
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "extraction_status": "UNKNOWN",
+      "parity_status": "NOT_VERIFIED"
+    },
+    "output_evidence_kind": "Prediction derived from sealed code; no helper/test execution and no captured runtime catalog",
+    "impact": "The genuine case-B selector's exact value cannot be recovered from the contract shape; only its digest and length remain. This violates the frozen preservation rule even though declaration identity, source, owner and the file-level denominator remain present. It is information loss, not evidence of guest execution or a parity PASS.",
+    "regression_gap": {
+      "path": "tests/reference-contract-catalog.test.js",
+      "start_line": 901,
+      "end_line": 924,
+      "detail": "The genuine-selector control uses throw/ROLE_R12/, which passes the spelling whitelist. The spaced-name controls at 761-806 test event/tool names through different paths; they do not cover a spaced literal type selector."
+    },
+    "recommended_change": "Preserve literals with an established declaration-only selector role regardless of spelling, while keeping actual payloads and unresolved same-source dual roles opaque. Add a declaration-only spaced/punctuated selector control and a same-source runtime-payload collision control. Preserve source, owner, requirement identity and NOT_VERIFIED parity.",
+    "verification_required_after_fix": "A separate authorized implementation round should review the change and run focused synthetic regressions; this audit neither changes nor self-approves the implementation."
+  }
+]

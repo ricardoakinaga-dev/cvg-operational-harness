@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { auditProductBoundary } from '../scripts/check-product-boundary.mjs'
+import { pinnedBytes, pinnedText } from './support/historical-pin-corpus.mjs'
 
 const proposal = JSON.parse(
   fs.readFileSync(
@@ -55,7 +56,7 @@ function fixture() {
       `packages/${dir}/package.json`,
       JSON.stringify({ name, main: 'src/index.ts' })
     )
-  for (const file of pins) write(file, fs.readFileSync(file))
+  for (const file of pins) write(file, pinnedBytes(file))
   write('packages/contracts/src/index.ts', 'export type Synthetic = string\n')
   write(
     'products/shift/package.json',
@@ -250,10 +251,7 @@ describe('SPEC0215 exact capability qualification', () => {
     'invalidates every dependent group on byte drift of %s',
     (file) => {
       const f = fixture()
-      f.write(
-        file,
-        fs.readFileSync(file, 'utf8') + '\n// SPEC0215 unreviewed byte\n'
-      )
+      f.write(file, pinnedText(file) + '\n// SPEC0215 unreviewed byte\n')
       const a = f.audit()
       expectInactive(a)
       expectRawInventory(a)
@@ -288,7 +286,7 @@ describe('SPEC0215 exact capability qualification', () => {
   it('rejects a symlinked child pin even with byte-identical contents', () => {
     const f = fixture(),
       file = 'examples/consumers/sdk-stdio/child.mts'
-    f.write('owned-child-copy.mts', fs.readFileSync(file))
+    f.write('owned-child-copy.mts', pinnedBytes(file))
     fs.unlinkSync(path.join(f.root, file))
     fs.symlinkSync(
       path.join(f.root, 'owned-child-copy.mts'),
@@ -384,7 +382,7 @@ describe('SPEC0215 exact capability qualification', () => {
     async (_label, mutate, kind) => {
       const f = fixture(),
         file = 'examples/consumers/sdk-stdio/index.mts'
-      const original = fs.readFileSync(file, 'utf8'),
+      const original = pinnedText(file),
         modified = mutate(original)
       expect(modified).not.toBe(original)
       f.write(file, modified)

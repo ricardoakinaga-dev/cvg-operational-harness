@@ -1,0 +1,1 @@
+Fresh independent SDK stdio critic. Read-only frozen packet and governance docs; write ownership only critic-sdk-result/** and authorized copied critic-sdk-scratch/**. No descendants, worktree code/history, builder reports, network/provider/DB, broad tests, edits, commits or release. Lead owns ledgers/PublicAPI/pins integration.

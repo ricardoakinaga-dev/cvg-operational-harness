@@ -1,0 +1,114 @@
+tests/consumers-sdk-session.test.ts:8:} from '../examples/consumers/sdk-session/index.ts'
+tests/consumers-sdk-session.test.ts:11:  resolve(process.cwd(), 'examples/consumers/sdk-session/index.ts'),
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "jsx": "react-jsx",
+    "noEmit": true
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "legacy/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.mts",
+    "vite.config.mts",
+    "products/**/*.ts",
+    "products/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "coverage", "**/dist/**"]
+}
+/**
+ * Neutral contracts for the CVG Operational Harness.
+ *
+ * This module deliberately contains no runtime/framework/provider/product
+ * dependency. Product profiles and adapters implement these ports; the
+ * harness owns sequencing and governance.
+ */
+
+type Brand<Value, Name extends string> = Value & {
+  readonly __harnessBrand: Name
+}
+
+export type AgentId = Brand<string, 'AgentId'>
+export type AgentVersion = Brand<string, 'AgentVersion'>
+export type TenantId = Brand<string, 'TenantId'>
+export type ConversationId = Brand<string, 'ConversationId'>
+export type SessionId = Brand<string, 'SessionId'>
+export type CorrelationId = Brand<string, 'CorrelationId'>
+export type TraceId = Brand<string, 'TraceId'>
+export type ApprovalId = Brand<string, 'ApprovalId'>
+
+export interface AgentProfile {
+  readonly id: AgentId
+  readonly version: AgentVersion
+  readonly objective: string
+  readonly instructions: readonly string[]
+  readonly skills: readonly SkillRequirement[]
+  readonly tools: readonly string[]
+  readonly policies: readonly string[]
+  /** Phase 3 completion strategy; ignored by the single-pass runtime. */
+  readonly completionStrategy?: 'DETERMINISTIC' | 'EVIDENCE_BASED' | 'HYBRID'
+}
+
+export const STOP_REASONS = [
+  'COMPLETED',
+  'NEEDS_USER_INPUT',
+  'APPROVAL_REQUIRED',
+  'HUMAN_TAKEOVER',
+  'POLICY_DENIED',
+  'INSUFFICIENT_EVIDENCE',
+  'MAX_STEPS',
+  'MAX_COST',
+  'MAX_DURATION',
+  'MAX_TOKENS',
+  'MAX_MODEL_CALLS',
+  'MAX_TOOL_CALLS',
+  'MAX_REPLANS',
+  'MAX_KNOWLEDGE_CALLS',
+  'MAX_VERIFICATION_CALLS',
+  'VERIFICATION_FAILED',
+  'LOOP_DETECTED',
+  'TOOL_FAILURE',
+  'MODEL_FAILURE',
+  'INTERNAL_FAILURE',
+  'STATE_CONFLICT',
+  'CANCELLED',
+  'UNSAFE_REQUEST'
+] as const
+
+export type StopReason = (typeof STOP_REASONS)[number]
+
+export interface ExecutionBudget {
+  readonly maxSteps: number
+  readonly maxModelCalls: number
+  readonly maxToolCalls: number
+  readonly maxDurationMs: number
+  readonly maxCostUsd: number
+  readonly maxTokens: number
+  /**
+   * Phase 3 optional iterative budgets. Absent means "not constrained beyond
+   * the shared budgets"; the iterative runtime never grants an unlimited
+   * loop because maxSteps and maxDurationMs remain mandatory.
+   */
+  readonly maxKnowledgeCalls?: number
+  readonly maxReplans?: number
+  readonly maxVerificationCalls?: number
+  readonly maxDecisionRepairs?: number
+}
+
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+export type SideEffect = 'NONE' | 'READ' | 'WRITE' | 'EXTERNAL'
+
+export interface SkillRequirement {
+  readonly id: string
+  readonly version?: string
+}
+
+export interface SkillDefinition {
+  readonly id: string
+  readonly version: string

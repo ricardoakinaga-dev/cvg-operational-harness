@@ -265,6 +265,8 @@ export type ModelCallPurpose =
   | 'REPAIR'
 
 export interface ModelRequest {
+  /** Enforced by a qualified complete-tool-v1 model adapter when supplied. */
+  readonly maxOutputTokens?: number
   readonly messages: readonly ModelMessage[]
   readonly context: ContextSnapshot
   readonly budget: ExecutionBudget

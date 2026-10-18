@@ -1,0 +1,84 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -1527,6 +1527,7 @@
+               )
+               if (!edge) return projectJsonContract(row.trim())
+               const from = graphIdentity(edge[1]),
++                operator = graphIdentity(edge[2]),
+                 to = graphIdentity(edge[3])
+               // The complete copied edge can collide independently of its
+               // endpoints. Preserve connectivity and whole-edge provenance.
+@@ -1539,10 +1540,11 @@
+               // Equal opaque endpoint projections still identify the same
+               // node. Ordinary noncolliding graph data keeps its old shape.
+               return typeof from === 'string' &&
++                typeof operator === 'string' &&
+                 typeof to === 'string' &&
+                 !edgeLiteral
+                 ? row.trim()
+-                : { from, operator: edge[2], to, ...(edgeLiteral ?? {}) }
++                : { from, operator, to, ...(edgeLiteral ?? {}) }
+             })
+           add(
+             'capability-graph',
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -187,6 +187,58 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it.each([true, false])(
++    'R20b simple-edge operator uses source-local collision policy (runtime=%s)',
++    (collision) => {
++      const source = 'docs/tool-catalog.md'
++      const runtime = collision
++        ? 'new Worker("-->", { eval: true });'
++        : 'export type Operator = "-->";'
++      const text =
++        '# Contracts\n## Runtime\n```ts public-api\n' +
++        runtime +
++        '\n```\n## Graph\n```mermaid\nflowchart LR\n  left["node"]\n  right["target"]\n  left --> right\n```\n'
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(collision ? 2 : 3)
++      const graph = entries.find((entry) => entry.kind === 'capability-graph')
++      expect(graph.shape.nodes.map((node) => node.id)).toEqual([
++        'left',
++        'right'
++      ])
++      expect(graph.shape.edges).toHaveLength(1)
++      if (collision) {
++        expect(graph.shape.edges[0]).toMatchObject({
++          from: graph.shape.nodes[0].id,
++          operator: {
++            status: 'UNKNOWN',
++            value_sha256: sha('-->'),
++            byte_length: Buffer.byteLength('-->')
++          },
++          to: graph.shape.nodes[1].id
++        })
++        expect(graph.shape.edges[0].operator.reason).toBeTruthy()
++        expect(serializeCatalog(entries)).not.toContain('-->')
++      } else {
++        expect(graph.shape.edges[0]).toBe('left --> right')
++        const declaration = entries.find(
++          (entry) => entry.kind === 'document-type'
++        )
++        expect(JSON.parse(declaration.shape.declarations[0].type)).toBe('-->')
++        expect(declaration.extraction_status).toBe('STATIC')
++      }
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-003')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++        expect(entry.id).toBe(
++          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
++        )
++      }
++    }
++  )
++
+   it('R20b whole simple-edge collision stays opaque while preserving endpoint connectivity', () => {
+     const source = 'docs/tool-catalog.md'
+     const edgeText = 'left --> right'

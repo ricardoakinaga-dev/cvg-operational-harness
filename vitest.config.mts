@@ -113,6 +113,12 @@ export default defineConfig({
       exclude: [
         '**/*.test.ts',
         '**/*.test.tsx',
+        // Native PostgreSQL/process proofs named *.integration.ts are test
+        // code run only by their own profiles, never by the unit suite; the
+        // two journal fixtures below are imported only by those proofs.
+        '**/*.integration.ts',
+        'packages/persistence/src/__tests__/fixtures/journal-result-process.ts',
+        'packages/persistence/src/__tests__/fixtures/journal-result-resource.ts',
         '**/node_modules/**',
         '**/dist/**',
         '**/main.ts',

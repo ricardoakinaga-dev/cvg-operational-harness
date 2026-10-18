@@ -1,0 +1,727 @@
+packages/harness/src/iterative-runtime.ts 1 130
+import { randomUUID } from 'node:crypto'
+import type {
+  AgenticKnowledgeProvider,
+  ApprovalId,
+  Claim,
+  ClaimValidation,
+  CompletionEvaluation,
+  CompletionEvaluator,
+  ContextEngine,
+  DecisionValidationResult,
+  ExecutionCheckpoint,
+  ExecutionStep,
+  ExecutionStepStore,
+  IterativeOrchestrator,
+  LoopDecision,
+  ModelUsage,
+  Observation,
+  RuntimeInput,
+  RuntimeResult,
+  StopReason,
+  SufficiencyEvaluator
+} from '@cvg/harness-contracts'
+import {
+  EMPTY_BUDGET_USAGE,
+  EMPTY_MODEL_USAGE,
+  MAX_CHECKPOINT_OBSERVATIONS,
+  RUNTIME_V2_VERSION,
+  HYBRID_ORCHESTRATOR_VERSION,
+  sanitizeLoopDecision
+} from '@cvg/harness-contracts'
+import type {
+  ApprovalEngine,
+  AuditSink,
+  ModelGateway,
+  PolicyEngine,
+  TelemetryEvent,
+  TelemetrySink,
+  ToolDefinition,
+  ToolDescriptor,
+  ToolRegistry
+} from '@cvg/harness-contracts'
+import { DefaultContextEngine } from './context-engine.ts'
+import { DeterministicCompletionEvaluator } from './completion.ts'
+import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+import { sealCheckpoint } from './step-store.ts'
+import { agentExposesTool } from './runtime.ts'
+import { KernelHost } from './kernel/host.ts'
+import {
+  CANCELLED_RESPONSE,
+  createTurnState,
+  runGate
+} from './kernel/pipeline.ts'
+import {
+  approvalsControl,
+  auditControl,
+  budgetControl,
+  effectsControl,
+  logControl,
+  modelCapability,
+  pauseControl,
+  policyControl,
+  telemetryCapability,
+  toolsCapability
+} from './kernel/controls.ts'
+import {
+  CONTROL_SERVICES,
+  DEADLINE,
+  type EffectLedger,
+  type KernelLog,
+  type PauseSwitch,
+  type ServiceKey,
+  type TurnState
+} from './kernel/types.ts'
+import {
+  applyResume,
+  composeResponse,
+  dispatchKnowledge,
+  dispatchRespond,
+  dispatchTool,
+  evaluate,
+  pause,
+  validateDecision,
+  type IterativeDispatchContext
+} from './iterative-dispatch.ts'
+
+export { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+
+export interface IterativeGovernedRuntimeOptions {
+  readonly orchestrator: IterativeOrchestrator
+  readonly modelGateway: ModelGateway
+  readonly policy: PolicyEngine
+  readonly approvals: ApprovalEngine
+  readonly tools: ToolRegistry
+  readonly capabilityFingerprint?: string
+  readonly audit: AuditSink
+  readonly telemetry: TelemetrySink
+  readonly stepStore: ExecutionStepStore
+  readonly contextEngine?: ContextEngine
+  readonly knowledge?: AgenticKnowledgeProvider
+  readonly sufficiencyEvaluator?: SufficiencyEvaluator
+  readonly completionEvaluator?: CompletionEvaluator
+  readonly claimExtractor?: (response: string) => readonly Claim[]
+  readonly loopDetection?: {
+    readonly repeatThreshold?: number
+    readonly maxSignatures?: number
+  }
+  readonly maxObservationPayloadChars?: number
+  readonly clock?: () => Date
+  readonly orchestratorVersion?: string
+  /** Kernel controls (SPEC 0181); in-memory defaults when omitted. */
+  readonly pause?: PauseSwitch
+  readonly log?: KernelLog
+  readonly effects?: EffectLedger
+}
+
+/** Services the iterative mode needs from the kernel (no single-pass planner). */
+const ITERATIVE_REQUIRED_SERVICES: readonly ServiceKey[] = [
+  ...CONTROL_SERVICES,
+  'model',
+  'tools',
+  'telemetry'
+]
+
+export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
+
+const AUDIT_GRACE_MS = 200
+
+const TERMINAL_STOPS = new Set<StopReason>([
+  'COMPLETED',
+  'HUMAN_TAKEOVER',
+
+packages/harness/src/iterative-runtime.ts 420 445
+
+  /** Boots the kernel profile of the iterative mode once (SPEC 0181). */
+  private bootKernel(): Promise<KernelHost> {
+    this.#kernel ??= KernelHost.boot(
+      [
+        budgetControl(),
+        pauseControl(this.options.pause),
+        logControl(this.options.log),
+        effectsControl(this.options.effects),
+        policyControl(this.options.policy),
+        approvalsControl(
+          this.options.approvals,
+          this.options.capabilityFingerprint
+            ? { capabilityFingerprint: this.options.capabilityFingerprint }
+            : {}
+        ),
+        auditControl(this.options.audit, { action: 'harness.iterative' }),
+        modelCapability(this.options.modelGateway),
+        toolsCapability(this.options.tools),
+        telemetryCapability(this.options.telemetry, {
+          name: 'harness.iterative'
+        })
+      ],
+      ITERATIVE_REQUIRED_SERVICES
+    )
+    return this.#kernel
+
+packages/contracts/src/contracts.ts 105 120
+  readonly status: 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+  readonly output?: unknown
+  readonly error?: string
+}
+
+export interface ToolExecutionContext {
+  readonly tenantId: TenantId
+  readonly agentId: AgentId
+  readonly correlationId: CorrelationId
+  readonly traceId: TraceId
+  readonly operationKey?: string
+  readonly signal?: AbortSignal
+}
+
+export interface ToolDescriptor {
+  readonly id: string
+
+packages/contracts/src/contracts.ts 440 490
+/* The sandbox decides under what containment an already-allowed effect runs. */
+/* It never decides whether the effect is permitted (policy/approval do) and  */
+/* never downgrades: an unavailable required mode fails closed as a denied    */
+/* outcome, never as silent in-process execution.                             */
+/* -------------------------------------------------------------------------- */
+
+export type SandboxMode =
+  | 'NONE'
+  | 'IN_PROCESS'
+  | 'WORKSPACE'
+  | 'PROCESS'
+  | 'EGRESS'
+
+/** Resolved containment for one tool call; the only channel to fs/net/exec. */
+export interface SandboxHandle {
+  readonly mode: SandboxMode
+  /** Present only in WORKSPACE; the tenant-scoped writable root. */
+  readonly workspaceRoot?: string
+  readonly allowNetwork: boolean
+  readonly allowSubprocess: boolean
+  readonly deadlineMs?: number
+}
+
+export type SandboxGateOutcome =
+  | {
+      readonly kind: 'allowed'
+      readonly mode: SandboxMode
+      readonly handle: SandboxHandle
+    }
+  | { readonly kind: 'denied'; readonly reason: string }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+
+export interface SandboxPolicy {
+  readonly requiredMode: SandboxMode
+  readonly workspaceScoped: boolean
+  readonly networkAllowed: boolean
+  readonly subprocessAllowed: boolean
+  readonly timeoutMs?: number
+}
+
+export interface SandboxEvaluationInput {
+  readonly descriptor: ToolDescriptor
+  readonly context: ToolExecutionContext
+  readonly policy?: SandboxPolicy
+}
+
+/** Enforcement port the harness calls between decision and capability body. */
+export interface SandboxGate {
+  evaluate(input: SandboxEvaluationInput): Promise<SandboxGateOutcome>
+}
+
+
+packages/harness/src/kernel/types.ts 230 275
+  | {
+      readonly type: 'turn/end'
+      readonly correlationId: string
+      readonly stopReason: RuntimeResult['stopReason']
+    }
+
+export interface KernelLog {
+  append(event: KernelLogEvent): void | Promise<void>
+}
+
+/** Pause switch: a paused tenant starts no new step and no new effect. */
+export interface PauseSwitch {
+  isPaused(tenantId: string): boolean | Promise<boolean>
+}
+
+/** Effect ledger: lifecycle of each dispatched effect, before and after. */
+export interface EffectLedger {
+  started(ref: EffectRef): void | Promise<void>
+  finished(ref: EffectRef, outcome: ToolOutcome['kind']): void | Promise<void>
+}
+
+export interface EffectRef {
+  readonly tenantId: string
+  readonly correlationId: string
+  readonly toolId: string
+  readonly operationKey: string
+}
+
+/** Per-turn budget view: the only place that computes budget (I11). */
+export interface TurnBudget {
+  remainingMs(): number
+  /** Computes the window first, then starts `operation`. */
+  withDeadline<T>(
+    operation: () => Promise<T>,
+    ms?: number
+  ): Promise<T | typeof DEADLINE>
+  /**
+   * Single before-model gate (PDSH-004 / I11): consumes one model slot.
+   * Tokens/cost are recorded post-result at the single accounting site;
+   * callers never re-check model-call budgets.
+   */
+  beginModelRequest(): KernelStop | undefined
+  /** Single post-result accounting (tokens, cost); checks totals. */
+  recordModelResult(result: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts 1 180
+import type {
+  AgenticKnowledgeProvider,
+  AgentProfile,
+  ApprovalDecision,
+  ApprovalEngine,
+  ApprovalExecutionPort,
+  ApprovalRequest,
+  AuditEvent,
+  AuditSink,
+  KnowledgeSearchRequest,
+  KnowledgeSearchResult,
+  LoopDecision,
+  ModelGateway,
+  ModelResult,
+  PolicyDecision,
+  PolicyEngine,
+  PolicyRequest,
+  RuntimeInput,
+  SufficiencyEvaluation,
+  SufficiencyEvaluator,
+  TelemetryEvent,
+  TelemetrySink,
+  ToolDefinition,
+  ToolRegistry,
+  ToolResult
+} from '@cvg/harness-contracts'
+import { EMPTY_MODEL_USAGE } from '@cvg/harness-contracts'
+
+export const PHASE3_TENANT =
+  'tenant_00000000-0000-4000-8000-000000000003' as RuntimeInput['tenantId']
+
+export const PHASE3_TOOL_AVAILABILITY = 'synthetic.phase3.availability'
+export const PHASE3_TOOL_RESERVE = 'synthetic.phase3.reserve'
+
+export function phase3RuntimeInput(
+  overrides: Partial<RuntimeInput> = {}
+): RuntimeInput {
+  return {
+    agent: phase3AgentProfile(),
+    tenantId: PHASE3_TENANT,
+    executionId: 'exec_phase3_fixture',
+    conversationId:
+      'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+    sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+    correlationId:
+      'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+    traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+    userMessage: 'phase 3 controlled fixture',
+    context: {
+      values: { fixture: 'phase3' },
+      sourceIds: ['phase3-fixture'],
+      capturedAt: '2026-09-15T00:00:00.000Z'
+    },
+    state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+    budget: {
+      maxSteps: 8,
+      maxModelCalls: 4,
+      maxToolCalls: 4,
+      maxDurationMs: 30_000,
+      maxCostUsd: 1,
+      maxTokens: 4_000,
+      maxKnowledgeCalls: 3,
+      maxReplans: 2,
+      maxVerificationCalls: 3,
+      maxDecisionRepairs: 1
+    },
+    runtimeProfile: 'iterative',
+    ...overrides
+  }
+}
+
+export function phase3AgentProfile(
+  overrides: Partial<AgentProfile> = {}
+): AgentProfile {
+  return {
+    id: 'agent.phase3.synthetic' as AgentProfile['id'],
+    version: 'v1' as AgentProfile['version'],
+    objective: 'Complete the synthetic operational goal.',
+    instructions: ['synthetic only', 'never act without authorization'],
+    skills: [],
+    tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+    policies: ['synthetic-only'],
+    ...overrides
+  }
+}
+
+export interface Phase3ToolObserver {
+  (event: { toolId: string; operationKey: string; input: unknown }): void
+}
+
+export function createPhase3ToolRegistry(options: {
+  readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+  readonly reserveFails?: boolean
+  readonly observe?: Phase3ToolObserver
+}): ToolRegistry {
+  const availabilityTool: ToolDefinition = {
+    id: PHASE3_TOOL_AVAILABILITY,
+    version: 'v1',
+    description: 'Checks the synthetic resource availability.',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    risk: 'LOW',
+    sideEffect: 'READ',
+    idempotent: true,
+    requiresApproval: false,
+    execute: async (input, context): Promise<ToolResult> => {
+      options.observe?.({
+        toolId: availabilityTool.id,
+        operationKey: context.operationKey ?? '',
+        input
+      })
+      return {
+        status: 'SUCCEEDED',
+        output:
+          options.availability === 'AVAILABLE'
+            ? { available: true }
+            : { available: false, reason: 'occupied' }
+      }
+    }
+  }
+  const reserveTool: ToolDefinition = {
+    id: PHASE3_TOOL_RESERVE,
+    version: 'v1',
+    description: 'Creates a synthetic reservation.',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    risk: 'MEDIUM',
+    sideEffect: 'WRITE',
+    idempotent: false,
+    requiresApproval: false,
+    execute: async (input, context): Promise<ToolResult> => {
+      options.observe?.({
+        toolId: reserveTool.id,
+        operationKey: context.operationKey ?? '',
+        input
+      })
+      if (options.reserveFails) {
+        return { status: 'FAILED', error: 'synthetic failure' }
+      }
+      return {
+        status: 'SUCCEEDED',
+        output: { reservationRef: 'reservation-0001', applied: true }
+      }
+    }
+  }
+  const tools = [availabilityTool, reserveTool]
+  return {
+    list: () => tools,
+    resolve: (toolId, version) =>
+      tools.find(
+        (tool) =>
+          tool.id === toolId &&
+          (version === undefined || tool.version === version)
+      )
+  }
+}
+
+export interface SyntheticKnowledgeItem {
+  readonly itemId: string
+  readonly text: string
+  readonly sourceId: string
+  readonly category: string
+}
+
+export class SyntheticKnowledgeProvider implements AgenticKnowledgeProvider {
+  public readonly queries: string[] = []
+
+  public constructor(
+    private readonly catalog: readonly SyntheticKnowledgeItem[]
+  ) {}
+
+  public async search(
+    request: KnowledgeSearchRequest
+  ): Promise<KnowledgeSearchResult> {
+    this.queries.push(request.query)
+    const tokens = request.query.toLowerCase().split(/\s+/)
+    const items = this.catalog.filter((item) => {
+      const text = `${item.text} ${item.category}`.toLowerCase()
+      return tokens.some((token) => token.length > 2 && text.includes(token))
+    })
+
+packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts 1 255
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  createShellTool,
+  hostProbe,
+  type ShellLimits,
+  type ShellRunRequest,
+  type ShellRunResult
+} from '../index.ts'
+
+const tempDirs: string[] = []
+
+function tempWorkspace(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'cvg-shell-'))
+  tempDirs.push(dir)
+  return dir
+}
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    rmSync(tempDirs.pop() as string, { recursive: true, force: true })
+  }
+})
+
+interface RunnerProbe {
+  readonly tool: ReturnType<typeof createShellTool>
+  readonly calls: ShellRunRequest[]
+}
+
+function probeTool(
+  root: string,
+  result: ShellRunResult,
+  limits?: Partial<ShellLimits>
+): RunnerProbe {
+  const calls: ShellRunRequest[] = []
+  const tool = createShellTool({
+    workspaceRoot: root,
+    ...(limits !== undefined ? { limits } : {}),
+    run: async (request) => {
+      calls.push(request)
+      return result
+    }
+  })
+  return { tool, calls }
+}
+
+const okRun: ShellRunResult = {
+  exitCode: 0,
+  stdout: 'ok\n',
+  stderr: '',
+  truncated: false
+}
+
+const context = {
+  tenantId: 'tenant_00000000-0000-4000-8000-000000000001' as never,
+  agentId: 'agent_00000000-0000-4000-8000-000000000001' as never,
+  correlationId: 'corr_1' as never,
+  traceId: 'trace_1' as never,
+  operationKey: 'pdsh-013-shell.run'
+}
+
+describe('PDSH-013 shell tool boot (SPEC 0198 §1)', () => {
+  it('fails closed when workspaceRoot is not an existing directory', () => {
+    expect(() =>
+      createShellTool({ workspaceRoot: join(tmpdir(), 'no-such-root-xyz') })
+    ).toThrow(/workspaceRoot/)
+  })
+
+  it('fails closed when workspaceRoot is relative', () => {
+    expect(() => createShellTool({ workspaceRoot: 'relative/path' })).toThrow(
+      /workspaceRoot/
+    )
+  })
+})
+
+describe('PDSH-013 shell input validation (SPEC 0198 §3)', () => {
+  it('rejects string-command fields — no interpolation path exists', async () => {
+    const { tool } = probeTool(tempWorkspace(), okRun)
+    for (const key of ['command', 'cmd', 'shell']) {
+      const result = await tool.execute(
+        { [key]: 'echo pwned', intent: 'x' },
+        context
+      )
+      expect(result.status).toBe('REJECTED')
+      expect(result.error).toMatch(/string commands/)
+    }
+  })
+
+  it('rejects malformed argv (missing, empty, non-string, empty element, NUL)', async () => {
+    const { tool } = probeTool(tempWorkspace(), okRun)
+    const bad: unknown[] = [
+      undefined,
+      'echo hi',
+      [],
+      [42],
+      [''],
+      ['echo\0hi'],
+      [null]
+    ]
+    for (const argv of bad) {
+      const result = await tool.execute({ argv, intent: 'x' }, context)
+      expect(result.status, JSON.stringify(argv)).toBe('REJECTED')
+    }
+  })
+
+  it('rejects argv over the count/length/total-byte limits', async () => {
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, okRun, {
+      maxArgs: 2,
+      maxArgLength: 4,
+      maxTotalArgBytes: 7
+    })
+    expect(
+      (await tool.execute({ argv: ['a', 'b', 'c'], intent: 'x' }, context))
+        .status
+    ).toBe('REJECTED')
+    expect(
+      (await tool.execute({ argv: ['abcde'], intent: 'x' }, context)).status
+    ).toBe('REJECTED')
+    expect(
+      (await tool.execute({ argv: ['abcd', 'efgh'], intent: 'x' }, context))
+        .status
+    ).toBe('REJECTED')
+  })
+
+  it('rejects a missing or oversized intent before any spawn', async () => {
+    const { tool, calls } = probeTool(tempWorkspace(), okRun, {
+      maxIntentLength: 5
+    })
+    for (const intent of [undefined, '   ', 'abcdefg']) {
+      const result = await tool.execute({ argv: ['true'], intent }, context)
+      expect(result.status, String(intent)).toBe('REJECTED')
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('rejects cwd that escapes the workspace (absolute, .., symlink out)', async () => {
+    const root = tempWorkspace()
+    const outside = tempWorkspace()
+    symlinkSync(outside, join(root, 'escape-link'))
+    const { tool, calls } = probeTool(root, okRun)
+    for (const cwd of ['..', '../..', '/etc', 'escape-link']) {
+      const result = await tool.execute(
+        { argv: ['true'], cwd, intent: 'x' },
+        context
+      )
+      expect(result.status, cwd).toBe('REJECTED')
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('rejects a cwd that does not exist or is not a directory', async () => {
+    const root = tempWorkspace()
+    mkdirSync(join(root, 'dir'))
+    const { tool } = probeTool(root, okRun)
+    expect(
+      (
+        await tool.execute(
+          { argv: ['true'], cwd: 'missing-dir', intent: 'x' },
+          context
+        )
+      ).status
+    ).toBe('REJECTED')
+    // A file used as cwd: create one via fs tool-free helper.
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(join(root, 'arquivo.txt'), 'x', 'utf8')
+    expect(
+      (
+        await tool.execute(
+          { argv: ['true'], cwd: 'arquivo.txt', intent: 'x' },
+          context
+        )
+      ).status
+    ).toBe('REJECTED')
+  })
+
+  it('rejects oversized stdin', async () => {
+    const { tool } = probeTool(tempWorkspace(), okRun, { maxStdinBytes: 4 })
+    const result = await tool.execute(
+      { argv: ['true'], stdin: '12345', intent: 'x' },
+      context
+    )
+    expect(result.status).toBe('REJECTED')
+  })
+})
+
+describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
+  it('passes a confined cwd, clamped timeout and pure argv to the runner', async () => {
+    const root = tempWorkspace()
+    mkdirSync(join(root, 'sub'))
+    const { tool, calls } = probeTool(root, okRun, {
+      defaultTimeoutMs: 1000,
+      maxTimeoutMs: 2000
+    })
+    const result = await tool.execute(
+      {
+        argv: ['echo', 'sintetico'],
+        cwd: 'sub',
+        timeoutMs: 99_999,
+        stdin: 'dados',
+        intent: 'executar comando sintetico'
+      },
+      context
+    )
+    expect(result.status).toBe('SUCCEEDED')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.argv).toEqual(['echo', 'sintetico'])
+    expect(calls[0]?.cwd).toBe(join(root, 'sub'))
+    expect(calls[0]?.timeoutMs).toBe(2000)
+    expect(calls[0]?.stdin).toBe('dados')
+  })
+
+  it('clamps an invalid timeout to the default', async () => {
+    const root = tempWorkspace()
+    const { tool, calls } = probeTool(root, okRun, { defaultTimeoutMs: 500 })
+    await tool.execute({ argv: ['true'], timeoutMs: -5, intent: 'x' }, context)
+    expect(calls[0]?.timeoutMs).toBe(500)
+  })
+
+  it('surfaces a non-zero exit code as SUCCEEDED (consumer interprets)', async () => {
+    const { tool } = probeTool(tempWorkspace(), {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'no match',
+      truncated: false
+    })
+    const result = await tool.execute(
+      { argv: ['grep', 'x'], intent: 'x' },
+      context
+    )
+    expect(result.status).toBe('SUCCEEDED')
+    expect(result.output).toMatchObject({ exitCode: 1, stderr: 'no match' })
+  })
+
+  it('maps spawn_failed to FAILED (containment failure, never an exit code)', async () => {
+    const { tool } = probeTool(tempWorkspace(), {
+      exitCode: 'spawn_failed',
+      stdout: '',
+      stderr: 'bwrap: exec failed',
+      truncated: false
+    })
+    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
+    expect(result.status).toBe('FAILED')
+    expect(result.error).toMatch(/containment failed/)
+  })
+
+  it('maps timeout to FAILED with the effective budget', async () => {
+    const { tool } = probeTool(tempWorkspace(), {
+      exitCode: 'timeout',
+      stdout: '',
+      stderr: '',
+      truncated: false
+    })
+
+packages/harness/src/kernel/host.ts
+packages/harness/src/kernel/profile.ts
+packages/harness/src/kernel/index.ts
+packages/harness/src/kernel/controls.ts
+packages/harness/src/kernel/pipeline.ts
+packages/harness/src/kernel/kernel-runtime.ts
+packages/harness/src/kernel/types.ts
+packages/harness/src/kernel/__tests__/host.test.ts
+

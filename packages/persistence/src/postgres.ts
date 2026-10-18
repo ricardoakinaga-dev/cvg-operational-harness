@@ -19,10 +19,13 @@ import {
   appendDurableOutboxAudit,
   assertOutboxText,
   claimNext,
+  claimNextFenced,
   enqueue,
   fail,
   mapDurableOutboxRow,
   requeueDeadLetter,
+  renewOutboxClaim,
+  assertFencedOutboxClaimOnClient,
   resolveTakeoverCheck,
   type PostgresOutboxContext
 } from './postgres-outbox.ts'
@@ -90,6 +93,12 @@ import {
   DEFAULT_OUTBOX_RETRY_BASE_MS,
   DEFAULT_OUTBOX_RETRY_MAX_MS,
   OUTBOX_TAKEOVER_SUPPRESSED_ERROR,
+  type FencedOuterClaimRef,
+  type FencedClaimedEvent,
+  type FencedClaimRenewal,
+  type FencedRenewalControl,
+  type FencedOutboxAckInput,
+  type FencedOutboxFailInput,
   type OutboxAckInput as MemoryOutboxAckInput,
   type OutboxClaimInput,
   type OutboxEnqueueInput as MemoryOutboxEnqueueInput,
@@ -251,8 +260,8 @@ export class PostgresRuntimeRepository {
         this.isOutboxTakeoverActive(tenantId, event, configuredCheck),
       markOutboxSessionHandoff: (tenantId, sessionId, now) =>
         this.markOutboxSessionHandoff(tenantId, sessionId, now),
-      suppressOutboxForTakeover: (event, tenantId, workerId, now) =>
-        this.suppressOutboxForTakeover(event, tenantId, workerId, now)
+      suppressOutboxForTakeover: (event, tenantId, workerId, now, ref) =>
+        this.suppressOutboxForTakeover(event, tenantId, workerId, now, ref)
     }
   }
 
@@ -340,6 +349,25 @@ export class PostgresRuntimeRepository {
     rawInput: OutboxClaimInput
   ): Promise<DurableOutboxEventRecord | null> {
     return claimNext(this.outboxContext, rawInput)
+  }
+
+  claimNextFenced(input: OutboxClaimInput): Promise<FencedClaimedEvent | null> {
+    return claimNextFenced(this.outboxContext, input)
+  }
+
+  renewOutboxClaim(
+    ref: FencedOuterClaimRef,
+    control: FencedRenewalControl
+  ): Promise<FencedClaimRenewal> {
+    return renewOutboxClaim(this.outboxContext, ref, control)
+  }
+
+  ackClaim(input: FencedOutboxAckInput): Promise<DurableOutboxEventRecord> {
+    return ack(this.outboxContext, input, input)
+  }
+
+  failClaim(input: FencedOutboxFailInput): Promise<DurableOutboxEventRecord> {
+    return fail(this.outboxContext, input, input)
   }
 
   async ack(
@@ -1287,8 +1315,15 @@ export class PostgresRuntimeRepository {
     event: DurableOutboxRow,
     tenantId: TenantId,
     workerId: string,
-    now: Date
+    now: Date,
+    ref?: FencedOuterClaimRef
   ): Promise<DurableOutboxEventRecord> {
+    if (ref) {
+      await assertFencedOutboxClaimOnClient(this.client, ref)
+      if (event.session_id)
+        await this.markOutboxSessionHandoff(tenantId, event.session_id, now)
+      now = (await assertFencedOutboxClaimOnClient(this.client, ref)).now
+    }
     const updated = await this.client.query<DurableOutboxRow>(
       `UPDATE outbox_events
        SET status = 'dead_letter',
@@ -1298,24 +1333,51 @@ export class PostgresRuntimeRepository {
            lease_until = NULL,
            dead_lettered_at = $3
        WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
-         AND lease_owner = $5
+         AND lease_owner = $5${
+           ref
+             ? ` AND attempts = $6 AND lease_until > clock_timestamp()
+         AND EXISTS (SELECT 1 FROM outbox_attempts WHERE tenant_id = $1 AND event_id = $2
+           AND id = $7::bigint AND worker_id = $5 AND attempt = $6 AND outcome IS NULL)`
+             : ''
+         }
        RETURNING ${outboxSelectColumns}`,
-      [tenantId, event.id, now, OUTBOX_TAKEOVER_SUPPRESSED_ERROR, workerId]
+      [
+        tenantId,
+        event.id,
+        now,
+        OUTBOX_TAKEOVER_SUPPRESSED_ERROR,
+        workerId,
+        ...(ref ? [ref.expectedOuterAttempt, ref.expectedAttemptRowId] : [])
+      ]
     )
     const updatedRow = updated.rows[0]
     if (!updatedRow) {
       throw new DomainError('conflict', 'Outbox takeover lost its lease')
     }
-    if (event.session_id) {
+    if (event.session_id && !ref) {
       await this.markOutboxSessionHandoff(tenantId, event.session_id, now)
     }
-    await this.client.query(
+    const attemptUpdate = await this.client.query<{ id: string }>(
       `UPDATE outbox_attempts
        SET outcome = 'handoff', error = $4
        WHERE tenant_id = $1 AND event_id = $2 AND worker_id = $3
-         AND outcome IS NULL`,
-      [tenantId, event.id, workerId, OUTBOX_TAKEOVER_SUPPRESSED_ERROR]
+         AND outcome IS NULL${ref ? ' AND attempt = $5 AND id = $6::bigint' : ''}
+       ${ref ? 'RETURNING id::text AS id' : ''}`,
+      [
+        tenantId,
+        event.id,
+        workerId,
+        OUTBOX_TAKEOVER_SUPPRESSED_ERROR,
+        ...(ref ? [ref.expectedOuterAttempt, ref.expectedAttemptRowId] : [])
+      ]
     )
+    if (
+      ref &&
+      (attemptUpdate.rows.length !== 1 ||
+        attemptUpdate.rows[0]?.id !== ref.expectedAttemptRowId)
+    ) {
+      throw new DomainError('conflict', 'Outbox takeover lost its attempt row')
+    }
     await appendDurableOutboxAudit(this.client, {
       tenantId,
       eventId: event.id,

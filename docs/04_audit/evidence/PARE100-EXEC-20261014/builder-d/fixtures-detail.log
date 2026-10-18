@@ -1,0 +1,179 @@
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts:414:  public async complete(): Promise<ModelResult> {
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-415-    this.calls += 1
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-416-    throw new Error('synthetic model outage')
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-417-  }
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-418-}
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-419-
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts:420:export function decision(
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-421-  value: Omit<LoopDecision, 'reasonCode'> &
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-422-    Partial<Pick<LoopDecision, 'reasonCode'>>
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-423-): LoopDecision {
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-424-  return { reasonCode: 'TOOL_REQUIRED', ...value }
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-425-}
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-426-
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-427-export function orchestratorTurn(decisionValue: LoopDecision): {
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-428-  decision: LoopDecision
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-429-  usage: typeof EMPTY_MODEL_USAGE
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-430-} {
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-431-  return { decision: decisionValue, usage: EMPTY_MODEL_USAGE }
+packages/harness/src/__tests__/fixtures/phase3-fixtures.ts-432-}
+--
+packages/harness/src/kernel/kernel-runtime.ts:282:        this.#host.get('planner').decideNextStep({
+packages/harness/src/kernel/kernel-runtime.ts-283-          runtime: input,
+packages/harness/src/kernel/kernel-runtime.ts-284-          availableTools: this.#availableTools(),
+packages/harness/src/kernel/kernel-runtime.ts-285-          step: 1
+packages/harness/src/kernel/kernel-runtime.ts-286-        })
+packages/harness/src/kernel/kernel-runtime.ts-287-      )
+packages/harness/src/kernel/kernel-runtime.ts-288-      if (decision === CANCELLED) {
+packages/harness/src/kernel/kernel-runtime.ts-289-        return this.#finish(fromStop(stop('CANCELLED', CANCELLED_RESPONSE)))
+packages/harness/src/kernel/kernel-runtime.ts-290-      }
+packages/harness/src/kernel/kernel-runtime.ts-291-      if (decision === DEADLINE) {
+packages/harness/src/kernel/kernel-runtime.ts-292-        return this.#finish(
+packages/harness/src/kernel/kernel-runtime.ts-293-          fromStop(
+packages/harness/src/kernel/kernel-runtime.ts-294-            stop('MAX_DURATION', 'Duration budget exhausted while planning.')
+packages/harness/src/kernel/kernel-runtime.ts-295-          )
+packages/harness/src/kernel/kernel-runtime.ts-296-        )
+packages/harness/src/kernel/kernel-runtime.ts-297-      }
+packages/harness/src/kernel/kernel-runtime.ts-298-      switch (decision.action) {
+packages/harness/src/kernel/kernel-runtime.ts-299-        case 'RESPOND':
+packages/harness/src/kernel/kernel-runtime.ts-300-          return await this.#respond(decision.response)
+packages/harness/src/kernel/kernel-runtime.ts-301-        case 'CALL_TOOL':
+packages/harness/src/kernel/kernel-runtime.ts-302-          return await this.#callTool(decision.toolInvocation)
+packages/harness/src/kernel/kernel-runtime.ts-303-        case 'ASK_USER':
+packages/harness/src/kernel/kernel-runtime.ts-304-          return this.#finish(
+packages/harness/src/kernel/kernel-runtime.ts-305-            fromStop(
+packages/harness/src/kernel/kernel-runtime.ts-306-              stop(
+packages/harness/src/kernel/kernel-runtime.ts-307-                'NEEDS_USER_INPUT',
+packages/harness/src/kernel/kernel-runtime.ts-308-                decision.response ??
+packages/harness/src/kernel/kernel-runtime.ts-309-                  decision.reason ??
+packages/harness/src/kernel/kernel-runtime.ts-310-                  'More information is required.'
+packages/harness/src/kernel/kernel-runtime.ts-311-              )
+packages/harness/src/kernel/kernel-runtime.ts-312-            )
+packages/harness/src/kernel/kernel-runtime.ts-313-          )
+packages/harness/src/kernel/kernel-runtime.ts-314-        case 'REQUEST_APPROVAL':
+packages/harness/src/kernel/kernel-runtime.ts-315-          return this.#finish(
+packages/harness/src/kernel/kernel-runtime.ts-316-            fromStop(
+packages/harness/src/kernel/kernel-runtime.ts-317-              stop(
+packages/harness/src/kernel/kernel-runtime.ts-318-                'APPROVAL_REQUIRED',
+packages/harness/src/kernel/kernel-runtime.ts-319-                decision.response ??
+packages/harness/src/kernel/kernel-runtime.ts-320-                  decision.reason ??
+packages/harness/src/kernel/kernel-runtime.ts-321-                  'Approval is required before continuing.'
+packages/harness/src/kernel/kernel-runtime.ts-322-              )
+packages/harness/src/kernel/kernel-runtime.ts-323-            )
+packages/harness/src/kernel/kernel-runtime.ts-324-          )
+packages/harness/src/kernel/kernel-runtime.ts-325-        case 'HANDOFF':
+packages/harness/src/kernel/kernel-runtime.ts-326-          return this.#finish(
+packages/harness/src/kernel/kernel-runtime.ts-327-            fromStop(
+--
+packages/harness/src/kernel/kernel-runtime.ts:564:      case 'threw': {
+packages/harness/src/kernel/kernel-runtime.ts-565-        const toolResult: ToolResult = {
+packages/harness/src/kernel/kernel-runtime.ts-566-          status: 'FAILED',
+packages/harness/src/kernel/kernel-runtime.ts-567-          error: outcome.error
+packages/harness/src/kernel/kernel-runtime.ts-568-        }
+packages/harness/src/kernel/kernel-runtime.ts-569-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-570-          response: call.approval
+packages/harness/src/kernel/kernel-runtime.ts-571-            ? `unknown_effect: ${outcome.error}`
+packages/harness/src/kernel/kernel-runtime.ts-572-            : outcome.error,
+packages/harness/src/kernel/kernel-runtime.ts-573-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-574-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-575-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-576-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-577-          toolResult
+packages/harness/src/kernel/kernel-runtime.ts-578-        })
+packages/harness/src/kernel/kernel-runtime.ts-579-      }
+packages/harness/src/kernel/kernel-runtime.ts-580-      case 'failed':
+packages/harness/src/kernel/kernel-runtime.ts-581-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-582-          response: outcome.result.error ?? 'Tool execution failed.',
+packages/harness/src/kernel/kernel-runtime.ts-583-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-584-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-585-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-586-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-587-          toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-588-        })
+packages/harness/src/kernel/kernel-runtime.ts-589-      case 'confirm_failed':
+packages/harness/src/kernel/kernel-runtime.ts-590-        return result({
+packages/harness/src/kernel/kernel-runtime.ts-591-          response: `unknown_effect: approval confirmation failed: ${outcome.error}.`,
+packages/harness/src/kernel/kernel-runtime.ts-592-          stopReason: 'TOOL_FAILURE',
+packages/harness/src/kernel/kernel-runtime.ts-593-          ...withApproval,
+packages/harness/src/kernel/kernel-runtime.ts-594-          modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-595-          toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-596-          toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-597-        })
+packages/harness/src/kernel/kernel-runtime.ts-598-      case 'succeeded':
+packages/harness/src/kernel/kernel-runtime.ts-599-        if (
+packages/harness/src/kernel/kernel-runtime.ts-600-          Date.now() - this.#state.startedAt >
+packages/harness/src/kernel/kernel-runtime.ts-601-          this.#state.input.budget.maxDurationMs
+packages/harness/src/kernel/kernel-runtime.ts-602-        ) {
+packages/harness/src/kernel/kernel-runtime.ts-603-          return result({
+packages/harness/src/kernel/kernel-runtime.ts-604-            response: 'Duration budget exhausted after tool execution.',
+packages/harness/src/kernel/kernel-runtime.ts-605-            stopReason: 'MAX_DURATION',
+packages/harness/src/kernel/kernel-runtime.ts-606-            modelCalls: 0,
+packages/harness/src/kernel/kernel-runtime.ts-607-            toolCalls: 1,
+packages/harness/src/kernel/kernel-runtime.ts-608-            toolResult: outcome.result
+packages/harness/src/kernel/kernel-runtime.ts-609-          })
+--
+packages/orchestrator/src/scripted.ts:21:export class ScriptedOrchestrator implements IterativeOrchestrator {
+packages/orchestrator/src/scripted.ts-22-  private index = 0
+packages/orchestrator/src/scripted.ts-23-
+packages/orchestrator/src/scripted.ts-24-  public constructor(private readonly options: ScriptedOrchestratorOptions) {}
+packages/orchestrator/src/scripted.ts-25-
+packages/orchestrator/src/scripted.ts-26-  public get calls(): number {
+packages/orchestrator/src/scripted.ts-27-    return this.index
+packages/orchestrator/src/scripted.ts-28-  }
+packages/orchestrator/src/scripted.ts-29-
+packages/orchestrator/src/scripted.ts-30-  public async decide(): Promise<IterativeOrchestratorTurn> {
+packages/orchestrator/src/scripted.ts-31-    const entry = this.options.script[this.index]
+packages/orchestrator/src/scripted.ts-32-    if (!entry) {
+packages/orchestrator/src/scripted.ts-33-      throw new Error('scripted orchestrator script exhausted')
+packages/orchestrator/src/scripted.ts-34-    }
+packages/orchestrator/src/scripted.ts-35-    const turn: IterativeOrchestratorTurn =
+packages/orchestrator/src/scripted.ts-36-      'decision' in entry ? entry : { decision: entry }
+packages/orchestrator/src/scripted.ts-37-    this.options.onDecision?.(this.index, turn.decision)
+packages/orchestrator/src/scripted.ts-38-    this.index += 1
+packages/orchestrator/src/scripted.ts-39-    return turn
+packages/orchestrator/src/scripted.ts-40-  }
+packages/orchestrator/src/scripted.ts-41-}
+packages/orchestrator/src/scripted.ts-42-
+packages/orchestrator/src/scripted.ts-43-export interface StaticOrchestratorOptions {
+packages/orchestrator/src/scripted.ts-44-  readonly decision: LoopDecision
+packages/orchestrator/src/scripted.ts-45-  /** Upper bound so a hostile fixture can never loop forever in-process. */
+packages/orchestrator/src/scripted.ts-46-  readonly maxCalls?: number
+packages/orchestrator/src/scripted.ts-47-}
+packages/orchestrator/src/scripted.ts-48-
+packages/orchestrator/src/scripted.ts-49-/** Repeats the same decision; used by adversarial and budget proofs. */
+packages/orchestrator/src/scripted.ts-50-export class StaticOrchestrator implements IterativeOrchestrator {
+packages/orchestrator/src/scripted.ts-51-  private calls = 0
+packages/orchestrator/src/scripted.ts-52-
+packages/orchestrator/src/scripted.ts-53-  public constructor(private readonly options: StaticOrchestratorOptions) {}
+packages/orchestrator/src/scripted.ts-54-
+packages/orchestrator/src/scripted.ts-55-  public async decide(): Promise<IterativeOrchestratorTurn> {
+packages/orchestrator/src/scripted.ts-56-    this.calls += 1
+packages/orchestrator/src/scripted.ts-57-    if (this.calls > (this.options.maxCalls ?? 1_000)) {
+packages/orchestrator/src/scripted.ts-58-      throw new Error('static orchestrator call bound exceeded')
+packages/orchestrator/src/scripted.ts-59-    }
+packages/orchestrator/src/scripted.ts-60-    return { decision: this.options.decision, usage: EMPTY_MODEL_USAGE }
+packages/orchestrator/src/scripted.ts-61-  }
+packages/orchestrator/src/scripted.ts-62-}
+packages/orchestrator/src/scripted.ts-63-
+packages/orchestrator/src/scripted.ts-64-export interface ScriptedModelGatewayOptions {
+packages/orchestrator/src/scripted.ts-65-  readonly responses: readonly (
+packages/orchestrator/src/scripted.ts-66-    | string
+--
+packages/orchestrator/src/scripted.ts:91:  public async complete(request: ModelRequest): Promise<ModelResult> {
+packages/orchestrator/src/scripted.ts-92-    void request
+packages/orchestrator/src/scripted.ts-93-    const entry = this.options.responses[this.index]
+packages/orchestrator/src/scripted.ts-94-    if (entry === undefined) {
+packages/orchestrator/src/scripted.ts-95-      throw new Error('scripted model gateway responses exhausted')
+packages/orchestrator/src/scripted.ts-96-    }
+packages/orchestrator/src/scripted.ts-97-    this.index += 1
+packages/orchestrator/src/scripted.ts-98-    const response = typeof entry === 'string' ? { text: entry } : entry
+packages/orchestrator/src/scripted.ts-99-    return {
+packages/orchestrator/src/scripted.ts-100-      text: response.text,
+packages/orchestrator/src/scripted.ts-101-      provider: this.options.provider ?? 'scripted',
+packages/orchestrator/src/scripted.ts-102-      model: this.options.model ?? 'scripted-1',
+packages/orchestrator/src/scripted.ts-103-      inputTokens: response.inputTokens ?? 10,
+packages/orchestrator/src/scripted.ts-104-      outputTokens: response.outputTokens ?? 10,
+packages/orchestrator/src/scripted.ts-105-      costUsd: response.costUsd ?? 0.001
+packages/orchestrator/src/scripted.ts-106-    }
+packages/orchestrator/src/scripted.ts-107-  }
+packages/orchestrator/src/scripted.ts-108-}

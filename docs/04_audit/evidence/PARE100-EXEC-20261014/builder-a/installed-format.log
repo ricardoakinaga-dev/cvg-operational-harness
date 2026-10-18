@@ -1,0 +1,147 @@
+vitest 4.1.11
+@vitest/coverage-v8 4.1.11
+istanbul-lib-coverage 3.2.2
+istanbul-reports 3.2.0
+/*
+ Copyright 2012-2015, Yahoo Inc.
+ Copyrights licensed under the New BSD License. See the accompanying LICENSE file for terms.
+ */
+'use strict';
+const { ReportBase } = require('istanbul-lib-report');
+
+class JsonSummaryReport extends ReportBase {
+    constructor(opts) {
+        super();
+
+        this.file = opts.file || 'coverage-summary.json';
+        this.contentWriter = null;
+        this.first = true;
+    }
+
+    onStart(root, context) {
+        this.contentWriter = context.writer.writeFile(this.file);
+        this.contentWriter.write('{');
+    }
+
+    writeSummary(filePath, sc) {
+        const cw = this.contentWriter;
+        if (this.first) {
+            this.first = false;
+        } else {
+            cw.write(',');
+        }
+        cw.write(JSON.stringify(filePath));
+        cw.write(': ');
+        cw.write(JSON.stringify(sc));
+        cw.println('');
+    }
+
+    onSummary(node) {
+        if (!node.isRoot()) {
+            return;
+        }
+        this.writeSummary('total', node.getCoverageSummary());
+    }
+
+    onDetail(node) {
+        this.writeSummary(
+            node.getFileCoverage().path,
+            node.getCoverageSummary()
+        );
+    }
+
+    onEnd() {
+        const cw = this.contentWriter;
+        cw.println('}');
+        cw.close();
+    }
+}
+
+module.exports = JsonSummaryReport;
+/*
+ Copyright 2012-2015, Yahoo Inc.
+ Copyrights licensed under the New BSD License. See the accompanying LICENSE file for terms.
+ */
+'use strict';
+
+module.exports = function percent(covered, total) {
+    let tmp;
+    if (total > 0) {
+        tmp = (1000 * 100 * covered) / total;
+        return Math.floor(tmp / 10) / 100;
+    } else {
+        return 100.0;
+    }
+};
+    computeSimpleTotals(property) {
+        let stats = this[property];
+
+        if (typeof stats === 'function') {
+            stats = stats.call(this);
+        }
+
+        const ret = {
+            total: Object.keys(stats).length,
+            covered: Object.values(stats).filter(v => !!v).length,
+            skipped: 0
+        };
+        ret.pct = percent(ret.covered, ret.total);
+        return ret;
+    }
+
+    computeBranchTotals(property) {
+        const stats = this[property];
+        const ret = { total: 0, covered: 0, skipped: 0 };
+
+        Object.values(stats).forEach(branches => {
+            ret.covered += branches.filter(hits => hits > 0).length;
+            ret.total += branches.length;
+        });
+        ret.pct = percent(ret.covered, ret.total);
+        return ret;
+    }
+
+    /**
+	* Constructs collected coverage and users' threshold options into separate sets
+	* where each threshold set holds their own coverage maps. Threshold set is either
+	* for specific files defined by glob pattern or global for all other files.
+	*/
+	resolveThresholds(coverageMap) {
+		const resolvedThresholds = [];
+		const files = coverageMap.files();
+		const globalCoverageMap = this.createCoverageMap();
+		for (const key of Object.keys(this.options.thresholds)) {
+			if (key === "perFile" || key === "autoUpdate" || key === "100" || THRESHOLD_KEYS.includes(key)) continue;
+			const glob = key;
+			const globThresholds = resolveGlobThresholds(this.options.thresholds[glob]);
+			const globCoverageMap = this.createCoverageMap();
+			const matcher = pm(glob);
+			const matchingFiles = files.filter((file) => matcher(relative(this.ctx.config.root, file)));
+			for (const file of matchingFiles) {
+				const fileCoverage = coverageMap.fileCoverageFor(file);
+				globCoverageMap.addFileCoverage(fileCoverage);
+			}
+			resolvedThresholds.push({
+				name: glob,
+				coverageMap: globCoverageMap,
+				thresholds: globThresholds
+			});
+		}
+		// Global threshold is for all files, even if they are included by glob patterns
+		for (const file of files) {
+			const fileCoverage = coverageMap.fileCoverageFor(file);
+			globalCoverageMap.addFileCoverage(fileCoverage);
+		}
+		resolvedThresholds.unshift({
+			name: GLOBAL_THRESHOLDS_KEY,
+			coverageMap: globalCoverageMap,
+			thresholds: {
+				branches: this.options.thresholds?.branches,
+				functions: this.options.thresholds?.functions,
+				lines: this.options.thresholds?.lines,
+				statements: this.options.thresholds?.statements
+			}
+		});
+		return resolvedThresholds;
+	}
+	/**

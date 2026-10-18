@@ -1,0 +1,447 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -944,6 +944,11 @@
+         const from = node.moduleSpecifier
+           ? nodeName(node.moduleSpecifier)
+           : null
++        // Keep the legacy locator projection for identity construction, and
++        // carry its role-established exact declaration spelling separately.
++        const selector = node.moduleSpecifier
++          ? { module_selector: declarationName(node.moduleSpecifier) }
++          : {}
+         if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+           for (const item of node.exportClause.elements)
+             add(
+@@ -951,6 +956,7 @@
+               `${prefix}${typeof nodeName(item.name) === 'string' ? nodeName(item.name) : json(nodeName(item.name))}`,
+               {
+                 from,
++                ...selector,
+                 name: declarationName(item.propertyName ?? item.name),
+                 ...(ts.isStringLiteral(item.name)
+                   ? { declared_name: declarationName(item.name) }
+@@ -961,6 +967,7 @@
+         } else
+           add('export', `${prefix}*:${json(from)}`, {
+             from,
++            ...selector,
+             namespace: node.exportClause
+               ? nodeName(node.exportClause.name)
+               : null,
+@@ -1184,6 +1191,23 @@
+             : jsonSchemaFields.has(key)
+               ? 'declaration'
+               : 'payload'
++// The prepass and projection share one finite classification. A string that
++// cannot be copied as declaration vocabulary is payload evidence even at a
++// JSON root or inside an otherwise recognized schema field.
++const jsonStringVocabulary = (value, field, role) =>
++  role !== 'payload' &&
++  ((field === 'type' &&
++    [
++      'null',
++      'boolean',
++      'object',
++      'array',
++      'number',
++      'string',
++      'integer'
++    ].includes(value)) ||
++    (role === 'vocabulary' && ['required', 'name'].includes(field)) ||
++    (field === '$ref' && /^[#./][A-Za-z0-9_$./~:@-]{0,511}$/.test(value)))
+ function jsonPayloadLiterals(
+   value,
+   field,
+@@ -1201,7 +1225,8 @@
+         typeof item === 'object' &&
+         !Array.isArray(item))
+     if (typeof item === 'string') {
+-      if (payload) literals.set(hash(item), item)
++      if (!jsonStringVocabulary(item, current.field, current.role))
++        literals.set(hash(item), item)
+     } else if (Array.isArray(item)) {
+       for (const child of item)
+         pending.push({ value: child, field: current.field, role: current.role })
+@@ -1238,23 +1263,8 @@
+     return opaque('JSON contract exceeds projection depth', json(value))
+   if (typeof value === 'string') {
+     if (
+-      role !== 'payload' &&
+-      ((field === 'type' &&
+-        [
+-          'null',
+-          'boolean',
+-          'object',
+-          'array',
+-          'number',
+-          'string',
+-          'integer'
+-        ].includes(value)) ||
+-        (role === 'vocabulary' &&
+-          ['required', 'name'].includes(field) &&
+-          !payloadLiterals.has(hash(value))) ||
+-        (field === '$ref' &&
+-          !payloadLiterals.has(hash(value)) &&
+-          /^[#./][A-Za-z0-9_$./~:@-]{0,511}$/.test(value)))
++      jsonStringVocabulary(value, field, role) &&
++      !payloadLiterals.has(hash(value))
+     )
+       return value
+     return opaque(
+@@ -1495,20 +1505,35 @@
+             )
+           }
+         } else if (fence === 'mermaid') {
++          const graphIdentity = (id) =>
++            payloadLiterals.has(hash(id))
++              ? opaqueLiteral(
++                  id,
++                  'Unresolved graph identity/runtime payload collision; bytes not copied'
++                )
++              : id
+           const nodes = [
+             ...content.matchAll(/^\s*([\w]+)\["([^"\n]+)"\]/gm)
+           ].map((match) => ({
+-            id: match[1],
++            id: graphIdentity(match[1]),
+             label: projectJsonContract(match[2], 'name')
+           }))
+           const edges = content
+             .split('\n')
+             .filter((row) => /^\s*[\w]+\s+(?:-->|-.->|---)/.test(row))
+-            .map((row) =>
+-              /^\s*[\w]+\s+(?:-->|-.->|---)\s+[\w]+\s*$/.test(row)
++            .map((row) => {
++              const edge = /^\s*([\w]+)\s+(-->|-.->|---)\s+([\w]+)\s*$/.exec(
++                row
++              )
++              if (!edge) return projectJsonContract(row.trim())
++              const from = graphIdentity(edge[1]),
++                to = graphIdentity(edge[3])
++              // Equal opaque endpoint projections still identify the same
++              // node. Ordinary noncolliding graph data keeps its old shape.
++              return typeof from === 'string' && typeof to === 'string'
+                 ? row.trim()
+-                : projectJsonContract(row.trim())
+-            )
++                : { from, operator: edge[2], to }
++            })
+           add(
+             'capability-graph',
+             context(),
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r19'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r20'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,287 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it.each([false, true])(
++    'R20 root JSON opaque string shares payload evidence with a type in either order (reversed=%s)',
++    (reversed) => {
++      const source = 'docs/tool-catalog.md'
++      const payload = 'function guest(){return 19;/* ROOT_PAYLOAD_R19 */}'
++      const jsonFence = `## Payload\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n`
++      const tsFence = `## Mirror\n\`\`\`ts public-api\nexport type Mirror = ${JSON.stringify(payload)};\n\`\`\`\n`
++      const text =
++        '# Contracts\n' + (reversed ? tsFence + jsonFence : jsonFence + tsFence)
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(3)
++      const literal = {
++        value_sha256: sha(payload),
++        byte_length: Buffer.byteLength(payload)
++      }
++      expect(
++        entries.find((entry) => entry.kind === 'document-json').shape
++      ).toMatchObject({ status: 'UNKNOWN', ...literal })
++      expect(
++        entries.find((entry) => entry.kind === 'document-type').shape
++          .declarations[0].type
++      ).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
++      expect(serializeCatalog(entries)).not.toContain('ROOT_PAYLOAD_R19')
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-003')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++        expect(entry.id).toBe(
++          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
++        )
++      }
++    }
++  )
++
++  it('R20 declaration-only document literal type preserves exact body without JSON payload evidence', () => {
++    const source = 'docs/tool-catalog.md'
++    const payload = 'function guest(){return 19;/* ROOT_PAYLOAD_R19 */}'
++    const text = `# Contracts\n## Mirror\n\`\`\`ts public-api\nexport type Mirror = ${JSON.stringify(payload)};\n\`\`\`\n`
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(2)
++    const entry = entries.find((entry) => entry.kind === 'document-type')
++    expect(JSON.parse(entry.shape.declarations[0].type)).toBe(payload)
++    expect(entry.extraction_status).toBe('STATIC')
++  })
++
++  it('R20 unclassified JSON type string joins the same literal index as its opaque projection', () => {
++    const source = 'docs/tool-catalog.md'
++    const payload = 'unclassified schema string?!'
++    const text = `# Contracts\n## Mirror\n\`\`\`ts public-api\nexport type Mirror = ${JSON.stringify(payload)};\n\`\`\`\n## Schema\n\`\`\`json\n${JSON.stringify({ type: payload })}\n\`\`\`\n`
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    const literal = {
++      value_sha256: sha(payload),
++      byte_length: Buffer.byteLength(payload)
++    }
++    expect(
++      entries.find((entry) => entry.kind === 'document-json').shape.type
++    ).toMatchObject({ status: 'UNKNOWN', ...literal })
++    expect(
++      entries.find((entry) => entry.kind === 'document-type').shape
++        .declarations[0].type
++    ).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
++    expect(serializeCatalog(entries)).not.toContain(payload)
++  })
++
++  it.each([false, true])(
++    'R20 built-in JSON type obeys shared runtime collision evidence in either order (reversed=%s)',
++    (reversed) => {
++      const source = 'docs/tool-catalog.md'
++      const tsFence =
++        '## Runtime\n```ts public-api\nexport type Mirror = "null";\nnew Worker("null", { eval: true });\n```\n'
++      const jsonFence = '## Schema\n```json\n{"type":"null"}\n```\n'
++      const text =
++        '# Contracts\n' + (reversed ? jsonFence + tsFence : tsFence + jsonFence)
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(3)
++      const literal = { value_sha256: sha('null'), byte_length: 4 }
++      expect(
++        entries.find((entry) => entry.kind === 'document-json').shape.type
++      ).toMatchObject({ status: 'UNKNOWN', ...literal })
++      expect(
++        entries.find((entry) => entry.kind === 'document-type').shape
++          .declarations[0].type
++      ).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-003')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++      }
++    }
++  )
++
++  it('R20 declaration-only JSON types and reference remain exact without payload collision', () => {
++    const source = 'docs/tool-catalog.md'
++    const schema = {
++      type: [
++        'null',
++        'boolean',
++        'object',
++        'array',
++        'number',
++        'string',
++        'integer'
++      ],
++      $ref: '/C_ROUTE/',
++      name: 'schema with space?!'
++    }
++    const entries = fixture({
++      [source]: `# Schema\n\`\`\`json\n${JSON.stringify(schema)}\n\`\`\`\n`
++    })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(2)
++    const entry = entries.find((entry) => entry.kind === 'document-json')
++    expect(entry.shape).toEqual(schema)
++    expect(entry.extraction_status).toBe('STATIC')
++  })
++
++  it.each([false, true])(
++    'R20 graph IDs and edge endpoints share opaque runtime collision identity in either fence order (reversed=%s)',
++    (reversed) => {
++      const source = 'docs/tool-catalog.md'
++      const tsFence =
++        '## Runtime\n```ts public-api\nexport type Mirror = "debugger";\nnew Worker("debugger", { eval: true });\n```\n'
++      const graphFence =
++        '## Graph\n```mermaid\nflowchart LR\n  debugger["node"]\n  sink["target"]\n  debugger --> sink\n' +
++        (reversed ? '  sink -.-> debugger\n' : '') +
++        '```\n'
++      const text =
++        '# Contracts\n' +
++        (reversed ? graphFence + tsFence : tsFence + graphFence)
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(3)
++      const graph = entries.find((entry) => entry.kind === 'capability-graph')
++      const literal = { value_sha256: sha('debugger'), byte_length: 8 }
++      expect(graph.shape.nodes[0].id).toMatchObject({
++        status: 'UNKNOWN',
++        ...literal
++      })
++      expect(graph.shape.nodes[1].id).toBe('sink')
++      expect(graph.shape.edges[0]).toEqual({
++        from: graph.shape.nodes[0].id,
++        operator: '-->',
++        to: 'sink'
++      })
++      if (reversed)
++        expect(graph.shape.edges[1]).toEqual({
++          from: 'sink',
++          operator: '-.->',
++          to: graph.shape.nodes[0].id
++        })
++      expect(graph.shape.edges).toHaveLength(reversed ? 2 : 1)
++      expect(
++        entries.find((entry) => entry.kind === 'document-type').shape
++          .declarations[0].type
++      ).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
++      expect(serializeCatalog(entries)).not.toContain('debugger')
++      for (const entry of entries) {
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.owner_task).toBe('P100-003')
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++        expect(entry.id).toBe(
++          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
++        )
++      }
++    }
++  )
++
++  it('R20 ordinary graph identifiers and simple edge strings stay unchanged without runtime collision', () => {
++    const source = 'docs/tool-catalog.md'
++    const text =
++      '# Graph\n```mermaid\nflowchart LR\n  debugger["node"]\n  sink["target"]\n  debugger --> sink\n  sink -.-> debugger\n```\n'
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(2)
++    const graph = entries.find((entry) => entry.kind === 'capability-graph')
++    expect(graph.shape.nodes.map((node) => node.id)).toEqual([
++      'debugger',
++      'sink'
++    ])
++    expect(graph.shape.edges).toEqual([
++      'debugger --> sink',
++      'sink -.-> debugger'
++    ])
++    expect(graph.shape.nodes[0].label).toMatchObject({
++      status: 'UNKNOWN',
++      value_sha256: sha('node'),
++      byte_length: 4
++    })
++    expect(graph.shape.semantics.status).toBe('UNKNOWN')
++  })
++
++  it.each(['module with space?!', 'function guest(){return 20;}'])(
++    'R20 named export selector %s retains exact declaration metadata without identity change',
++    (selector) => {
++      const source = 'packages/core/example/src/types.ts'
++      const text = `export { Config } from ${JSON.stringify(selector)};\n`
++      const entries = fixture({ [source]: text })
++        .collect()
++        .entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const entry = entries.find((entry) => entry.kind === 'export')
++      expect(entry.shape.declarations[0].module_selector).toBe(selector)
++      expect(entry.shape.declarations[0].from).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(selector),
++        byte_length: Buffer.byteLength(selector)
++      })
++      expect(entry.symbol).toBe('Config')
++      expect(entry.id).toBe(
++        `contract:${sha(JSON.stringify({ kind: 'export', package: entry.package, source, symbol: 'Config' }))}`
++      )
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++  )
++
++  it('R20 star and namespace exports preserve selector metadata with legacy opaque identities', () => {
++    const source = 'packages/core/example/src/types.ts'
++    const selectors = ['module with space?!', 'module namespace?!']
++    const text = `export * from ${JSON.stringify(selectors[0])};\nexport * as Group from ${JSON.stringify(selectors[1])};\n`
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    for (const selector of selectors) {
++      const from = {
++        byte_length: Buffer.byteLength(selector),
++        reason: 'Unclassified literal name; bytes not copied',
++        status: 'UNKNOWN',
++        value_sha256: sha(selector)
++      }
++      const expectedSymbol = `opaque-symbol:${sha('*:' + JSON.stringify(from))}`
++      const entry = entries.find((entry) => entry.symbol === expectedSymbol)
++      expect(entry).toBeDefined()
++      expect(entry.shape.declarations[0].module_selector).toBe(selector)
++      expect(entry.shape.declarations[0].from).toEqual(from)
++      expect(entry.id).toBe(
++        `contract:${sha(JSON.stringify({ kind: 'export', package: entry.package, source, symbol: expectedSymbol }))}`
++      )
++    }
++    expect(
++      entries.find(
++        (entry) => entry.shape.declarations?.[0].namespace === 'Group'
++      )
++    ).toBeDefined()
++  })
++
++  it('R20 export selector metadata stays UNKNOWN on same-source runtime collision', () => {
++    const source = 'packages/core/example/src/types.ts'
++    const selector = 'module with space?!'
++    const text = `export { Config } from ${JSON.stringify(selector)};\nexport * from ${JSON.stringify(selector)};\nconsume(${JSON.stringify(selector)});\n`
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(3)
++    for (const entry of entries.filter((entry) => entry.kind === 'export')) {
++      expect(entry.shape.declarations[0].module_selector).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(selector),
++        byte_length: Buffer.byteLength(selector)
++      })
++      expect(entry.source_sha256).toBe(sha(text))
++      expect(entry.owner_task).toBe('P100-012')
++      expect(entry.parity_status).toBe('NOT_VERIFIED')
++    }
++    expect(serializeCatalog(entries)).not.toContain(selector)
++  })
++
+   it.each([
+     ['eval', 'parameter'],
+     ['ordinary_annotation', 'parameter'],
+@@ -1348,7 +1629,15 @@
+         required: ['worker']
+       })
+       const worker = projected.properties.worker
+-      expect(worker).toMatchObject({ name, type: 'string' })
++      expect(worker).toMatchObject({
++        name,
++        type: {
++          status: 'UNKNOWN',
++          value_sha256: sha('string'),
++          byte_length: Buffer.byteLength('string')
++        }
++      })
++      expect(worker.type.reason).toBeTruthy()
+       for (const value of [worker.default, worker.const, worker.examples[0]]) {
+         expect(JSON.stringify(value)).not.toContain(payloadName)
+         expect(value).toMatchObject({

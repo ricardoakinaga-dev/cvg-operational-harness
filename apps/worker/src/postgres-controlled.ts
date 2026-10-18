@@ -3,6 +3,7 @@ import { executePublishedAgent, getConversationTimeline } from '@cvg/agent-core'
 import { resolveWorkflowCoordinator } from '@cvg/agent-runtime'
 import {
   PostgresWorkerOperations,
+  PostgresControlledPublishedKernelStore,
   TenantScopedPostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
   guardPostgresPoolErrors,
@@ -21,6 +22,7 @@ import {
 import { CorrelationIdSchema, redactSensitiveText } from '@cvg/shared'
 import {
   createControlledWorker,
+  createControlledDispatch,
   type ControlledWorker,
   type ControlledWorkerHandlers
 } from './controlled-worker.ts'
@@ -43,6 +45,16 @@ import {
 } from './kernel-composition.ts'
 import type { WorkerTelemetry } from './worker-observability.ts'
 import { postgresProductionOptInFailure } from './production-gate.ts'
+import {
+  ClaimExecutionRegistry,
+  type ClaimedEventExecution
+} from './claimed-execution-lifecycle.ts'
+import {
+  createPublishedKernelHandlers,
+  createPublishedProcessWorkerId,
+  resolvePublishedDurability,
+  type PublishedKernelStore
+} from './published-kernel-composition.ts'
 
 export const POSTGRES_CONTROLLED_QUEUE_ADAPTER = 'postgres-controlled' as const
 
@@ -50,6 +62,9 @@ export interface PostgresControlledWorkerRuntime {
   pool: Pool
   adapter: TenantScopedPostgresRuntimeRepository
   worker: ControlledWorker
+  claimExecutions?: ClaimExecutionRegistry
+  workerId: string
+  tenantId: TenantId
 }
 
 export interface PostgresControlledConnection {
@@ -59,6 +74,7 @@ export interface PostgresControlledConnection {
   tenantId: TenantId
   workerId: string
   handlers: ControlledWorkerHandlers
+  claimExecutions?: ClaimExecutionRegistry
 }
 
 export interface PostgresContinuousWorkerOptions {
@@ -79,6 +95,7 @@ export interface PostgresContinuousWorkerRuntime {
   tenantId: TenantId
   workerId: string
   tuning: ContinuousWorkerTuning
+  claimExecutions?: ClaimExecutionRegistry
 }
 
 export interface PostgresControlledHandlerOptions {
@@ -86,6 +103,8 @@ export interface PostgresControlledHandlerOptions {
   pool?: PostgresPoolLike
   /** Pre-composed durable kernel runtime; required if no pool is provided. */
   kernelRuntime?: PostgresKernelRuntime
+  claimContext?: ClaimedEventExecution
+  publishedStore?: PublishedKernelStore
 }
 
 /**
@@ -98,6 +117,9 @@ export function openPostgresControlledConnection(
   env: NodeJS.ProcessEnv,
   handlers?: ControlledWorkerHandlers
 ): PostgresControlledConnection {
+  const durability = resolvePublishedDurability(env)
+  if (durability && handlers)
+    throw new Error('Published durable profile forbids injected handlers')
   const productionFailure = postgresProductionOptInFailure(env)
   if (productionFailure) {
     throw new Error(productionFailure)
@@ -115,9 +137,13 @@ export function openPostgresControlledConnection(
   const tenantId = TenantIdSchema.parse(env.CVG_WORKER_TENANT_ID)
   const schemaName = env.POSTGRES_SCHEMA?.trim() || undefined
   assertSafeSchemaName(schemaName)
+  const workerId = durability
+    ? createPublishedProcessWorkerId(env.CVG_WORKER_ID)
+    : env.CVG_WORKER_ID?.trim() || 'worker-controlled-postgres'
   const pool = guardPostgresPoolErrors(
     new Pool({
       connectionString: databaseUrl,
+      ...(durability ? { max: 4, connectionTimeoutMillis: 1_000 } : {}),
       ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
     })
   )
@@ -127,12 +153,42 @@ export function openPostgresControlledConnection(
   const platform = new TenantScopedPostgresControlPlaneRepository(
     pool as unknown as PostgresPoolLike
   )
+  if (durability) {
+    const store = new PostgresControlledPublishedKernelStore(pool)
+    const claimExecutions = new ClaimExecutionRegistry({
+      tenantId,
+      workerId,
+      adapter,
+      renewPaired: (outer, inner, control) =>
+        store.renewPaired(outer, inner, control),
+      buildEffect: (claimContext) =>
+        createControlledDispatch(
+          createPostgresControlledHandlers(env, adapter, platform, {
+            pool,
+            claimContext,
+            publishedStore: store
+          })
+        )
+    })
+    const unbound = () => {
+      throw new Error('Published durable dispatch requires a bound claim')
+    }
+    return {
+      pool,
+      adapter,
+      platform,
+      tenantId,
+      workerId,
+      claimExecutions,
+      handlers: { inboundProcess: unbound, messageOutbound: unbound }
+    }
+  }
   return {
     pool,
     adapter,
     platform,
     tenantId,
-    workerId: env.CVG_WORKER_ID?.trim() || 'worker-controlled-postgres',
+    workerId,
     handlers:
       handlers ??
       createPostgresControlledHandlers(env, adapter, platform, { pool })
@@ -153,12 +209,20 @@ export function createPostgresControlledWorker(
     tenantId: connection.tenantId,
     workerId: connection.workerId,
     adapter: connection.adapter,
-    handlers: connection.handlers
+    handlers: connection.handlers,
+    ...(connection.claimExecutions
+      ? { claimExecutions: connection.claimExecutions, leaseMs: 10_000 }
+      : {})
   })
   return {
     pool: connection.pool,
     adapter: connection.adapter,
-    worker
+    worker,
+    workerId: connection.workerId,
+    tenantId: connection.tenantId,
+    ...(connection.claimExecutions
+      ? { claimExecutions: connection.claimExecutions }
+      : {})
   }
 }
 
@@ -172,16 +236,35 @@ export function createPostgresContinuousWorker(
   env: NodeJS.ProcessEnv,
   options: PostgresContinuousWorkerOptions = {}
 ): PostgresContinuousWorkerRuntime {
-  const connection = openPostgresControlledConnection(env, options.handlers)
+  const durability = resolvePublishedDurability(env)
   const tuning: ContinuousWorkerTuning = {
     ...parseContinuousWorkerSettings(env),
     ...options.tuning
   }
+  if (durability) {
+    if (
+      (options.tuning?.concurrency !== undefined &&
+        options.tuning.concurrency !== 1) ||
+      (options.tuning?.leaseMs !== undefined &&
+        options.tuning.leaseMs !== 10_000) ||
+      options.heartbeatIntervalMs !== undefined
+    ) {
+      throw new Error(
+        'Published durability requires concurrency1/lease10000 and its sole shared renewal loop'
+      )
+    }
+    tuning.concurrency = 1
+    tuning.leaseMs = 10_000
+  }
+  const connection = openPostgresControlledConnection(env, options.handlers)
   const worker = createContinuousWorker({
     tenantId: connection.tenantId,
     workerId: connection.workerId,
     adapter: connection.adapter,
     handlers: connection.handlers,
+    ...(connection.claimExecutions
+      ? { claimExecutions: connection.claimExecutions }
+      : {}),
     ...tuning,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
     ...(options.heartbeatIntervalMs !== undefined
@@ -211,7 +294,10 @@ export function createPostgresContinuousWorker(
     worker,
     tenantId: connection.tenantId,
     workerId: connection.workerId,
-    tuning
+    tuning,
+    ...(connection.claimExecutions
+      ? { claimExecutions: connection.claimExecutions }
+      : {})
   }
 }
 
@@ -283,6 +369,20 @@ export function createPostgresControlledHandlers(
   platform: TenantScopedPostgresControlPlaneRepository,
   options: PostgresControlledHandlerOptions = {}
 ): ControlledWorkerHandlers {
+  if (resolvePublishedDurability(env)) {
+    if (!options.pool || !options.claimContext || !options.publishedStore) {
+      throw new Error(
+        'Published durable handler requires pool/store and the job claim context'
+      )
+    }
+    return createPublishedKernelHandlers({
+      env,
+      conversations,
+      platform,
+      store: options.publishedStore,
+      claimContext: options.claimContext
+    })
+  }
   resolveWorkflowCoordinator(env)
   if (resolveWorkerRuntimeKind(env) === KERNEL_WORKER_RUNTIME) {
     const parsedTenantId = TenantIdSchema.safeParse(env.CVG_WORKER_TENANT_ID)

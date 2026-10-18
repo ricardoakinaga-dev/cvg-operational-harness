@@ -1,0 +1,45 @@
+SCOPED VERDICT: FAIL
+Scope: immutable approved SPEC0211 SDK stdio + SPEC0212 public controls.
+No full 36-card parity, product readiness, release or production acceptance.
+
+SDK-R2-F01 [P1, high confidence] — Lifetime exhaustion stops observing input failures.
+At packages/sdk/src/stdio.ts:536-543, exhaustion calls detachInput but keeps the pump OPEN. The detach at :174-181 also removes end/close/error handlers; :485-487 can therefore dispatch queued work after input failure.
+Necessary synthetic library regression: hold dispatch 1; queue 2; overflow with 3 at lifetime=2; then EOF/error/close input; complete 1. All three exhausted cases dispatched [1,2], wrote [1,2], and reported only limit. All three non-exhausted controls closed immediately with [1] and zero responses. Exit 1; 3 failed/3 passed. No OS security probes or external IO.
+Fix direction: stop frame admission separately from observing input I/O failure; keep lifecycle listeners until final cleanup. Preserve slow accepted-work drain and explicit-close semantics.
+
+QA-R2-F02 [P2, high confidence] — Boundary acceptance remains INCOMPLETE.
+Shipped product-boundary exit 1, 36 diagnostics: 14 stdio test sites, 9 stdio example sites, 13 generated closure sites. No declared product-import violations; two generated canonical-reflection pins fail. This gate result is not proof of a security bypass. Exact sites and source lines are in result.json and the raw JSON log. Run occurred after public SDK build; source-only baseline not run.
+
+QA-R2-L01 [P2, high confidence; packet completeness] — Catalog omitted.
+Four shipped pdsh-014-tool-catalog tests fail because docs/architecture/TOOL_CATALOG.md is absent from the frozen packet. References: packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts:16,45,52,70,91. No live catalog fetched or generated to conceal the failure.
+
+ACTUAL CHECKS
+Focused SDK: exit 0, 123/123.
+Controls/shell/harness/conformance regression: exit 1, 636 passed/4 missing-catalog failures.
+Public-controls shipped probes: exit 0, 2/2.
+Snapshot replay: exit 0, 42/42 (existing corpus, not dedicated new stdio wire golden coverage).
+Public surface/consumer: exit 0, 9/9.
+Typecheck, scoped lint, public SDK closure, no-alias example compile and actual fixed compiled parent/child: exit 0 each.
+Boundary: exit 1, INCOMPLETE.
+Necessary critic stream regression: exit 1, 3/6 fail. Initial unsupported --include CLI invocation failed before discovery and is preserved separately; private config corrected the invocation, not expectations.
+
+PRIOR FEEDBACK CHECKED AGAINST SOURCE
+Slow accepted lifetime work beyond closeTimeout: passing shipped regression; remaining I/O transition defect above.
+SDK local unexpected host exceptions: fixed bounded messages; remote code/message/data preserved by transport tests.
+Effect settlement: lossless governed step errorCode fences retry/restart across six observation bounds, including failed final checkpoint persistence.
+Shell: grants canonicalized with rights and deadline retained; default backend no-op and injected runner cases passed.
+Stale earlier SUCCEEDED result: cleared before each dispatch; frozen public multi-tool sync/async tests passed.
+No other material production defect was established in the reviewed public controls paths. CTL-W01/W02/W03 pass in executed frozen tests; CTL-W04 is incompletely qualified.
+
+LIMITS / NOT_RUN
+Six tests added by Lead after freeze were not supplied, read or executed.
+Full unit/coverage/per-file coverage, PostgreSQL (explicitly forbidden), E2E, certification/SBOM/licenses/network audit, dedicated new stdio wire replay and prepatch/history comparisons: NOT_RUN. No permission or model changes made.
+Initial and retry1 Selected model is at capacity outcomes are preserved as user-reported infrastructure outcomes, not code results. Current retry2 completed actual QA.
+Independence disclosure: permitted root coordination governance contained Lead/Builder status/remediation notes encountered on initial read. They were not proof; conclusions use actual frozen source and independent logs. No builder report/history files or live source were opened.
+
+IDENTITY / NON-MUTATION
+Sentinel SHA256 fcd9abb0bab366fc06348665c72878667718340183f86790b6a665152e008501 matched before and after; all 1112 packet files exact. All 1112 corresponding scratch frozen inputs also unchanged; only private builds/QA outputs added.
+Node22 PATH, private HOME/TMPDIR, raw stdout/stderr, argv, exits, timings and hashes are in checks/*/{invocation.json,result.json,stdout.log,stderr.log}. Reproduction/configuration copies are retained beside result.json.
+Shared runtime/log/backlog updates remain for Lead; this critic wrote only its owned result/scratch trees. No production code fixes or packet edits.
+
+Next action: fix SDK-R2-F01 under existing approval, refreeze and independently retest; supply catalog and qualify boundary before claiming all SPEC gates.
