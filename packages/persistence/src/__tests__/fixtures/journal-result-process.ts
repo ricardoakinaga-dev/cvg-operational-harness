@@ -21,10 +21,12 @@ import type {
   ModelRequest,
   DecisionInputCounter
 } from '@cvg/harness-contracts'
-import type { QueryResultRow } from 'pg'
+import type { PoolClient, QueryResultRow } from 'pg'
 
 export const journalTask = 'C100-FND-JOURNAL-0225-BUILD-001'
-export const journalTmp = '/tmp/cvg-claude100-exec-20261017/journal0225-build'
+// Persistent private runtime after the 18/10 host restart erased /tmp.
+export const journalTmp = '/mnt/ia/cvg-claude100-journal0225-runtime-20261018'
+export const journalContainerName = '/cvg-claude100-journal225-pg-r2'
 export const journalSchema = 'c100_j225_active'
 export const journalTenant = 'tenant_00000000-0000-4000-8000-00000000b901'
 export const journalOtherTenant = 'tenant_00000000-0000-4000-8000-00000000b902'
@@ -34,7 +36,12 @@ export const journalRoot = realpathSync(
 
 export interface NativeJournalBinding {
   task: string
-  profile: 'journal' | 'public-restart' | 'bound-journal' | 'capture-journal'
+  profile:
+    | 'journal'
+    | 'public-restart'
+    | 'bound-journal'
+    | 'capture-journal'
+    | 'admission-journal'
   runId: string
   containerId: string
   candidateRoot: string
@@ -133,7 +140,8 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     binding.profile === 'journal' ||
       binding.profile === 'public-restart' ||
       binding.profile === 'bound-journal' ||
-      binding.profile === 'capture-journal'
+      binding.profile === 'capture-journal' ||
+      binding.profile === 'admission-journal'
   )
   assert(/^native-[0-9]{13}$/.test(binding.runId))
   assert(/^[a-f0-9]{64}$/.test(binding.containerId))
@@ -191,7 +199,7 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     'packages/harness/src/complete-checkpoint.ts',
     'packages/harness/dist/complete-checkpoint.js'
   ]
-  if (binding.profile === 'journal')
+  if (binding.profile === 'journal' || binding.profile === 'admission-journal')
     expected.push(
       'packages/persistence/src/__tests__/fixtures/journal-result-readers/jsonvalue.ts.source.txt',
       'packages/persistence/src/__tests__/fixtures/journal-result-readers/direct.ts.source.txt',
@@ -205,6 +213,22 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
       'packages/persistence/dist/controlled-published-fencing.js',
       'node_modules/typescript/lib/typescript.js',
       'node_modules/typescript/package.json'
+    )
+  // J07 admission: new test, the original present reader (above) and the
+  // compiled default worker entry closure it boots in a separate process.
+  if (binding.profile === 'admission-journal')
+    expected.push(
+      'packages/persistence/src/__tests__/complete-effect-result-admission.integration.ts',
+      'apps/worker/src/main.ts',
+      'apps/worker/dist/main.js',
+      'apps/worker/src/operational-harness-worker.ts',
+      'apps/worker/dist/operational-harness-worker.js',
+      'apps/worker/src/worker.ts',
+      'apps/worker/dist/worker.js',
+      'apps/worker/src/startup-error.ts',
+      'apps/worker/dist/startup-error.js',
+      'apps/worker/src/worker-observability.ts',
+      'apps/worker/dist/worker-observability.js'
     )
   if (binding.profile === 'bound-journal')
     expected.push(
@@ -266,7 +290,7 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     output,
     [
       binding.containerId,
-      '/cvg-claude100-journal225-pg',
+      journalContainerName,
       'sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94',
       journalTask,
       'claude100-local225',
@@ -1495,13 +1519,112 @@ export async function runCaptureJournalPhase(
   }
 }
 
+export const fleetOldReaderApplication = 'c100-j225-fleet-old-reader'
+export const fleetOldReaderLifetimeMs = 60000
+
+/**
+ * J07 mixed fleet: one separate OS process runs the ORIGINAL present-reader
+ * module with the retained old credential. Its original SQL must fail42501;
+ * it then holds its own pool session until the parent sends SIGTERM (bounded
+ * lifetime). It never receives the service credential, writes nothing and
+ * runs no model or tool body.
+ */
+export async function runFleetOldReader(): Promise<void> {
+  const binding = verifyNativeJournalBinding()
+  assert.equal(binding.profile, 'admission-journal')
+  const emitPath =
+    'packages/persistence/dist/operational-execution-postgres.j06-present.js'
+  const sourcePath =
+    'packages/persistence/src/__tests__/fixtures/journal-result-readers/present.ts.source.txt'
+  const emit = binding.inputs.find((input) => input.path === emitPath)
+  const source = binding.inputs.find((input) => input.path === sourcePath)
+  assert(emit && source)
+  const original = (await import(
+    pathToFileURL(join(journalRoot, emitPath)).href
+  )) as typeof import('../../../dist/index.js')
+  const pg = (await import('pg')).default
+  const pool = new pg.Pool({
+    ...journalCredentials('old'),
+    max: 1,
+    options: '-c search_path=' + journalSchema,
+    application_name: fleetOldReaderApplication,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 10000
+  })
+  let held: PoolClient | undefined
+  let finished = false
+  const finish = async (code: number) => {
+    if (finished) return
+    finished = true
+    try {
+      held?.release()
+      await pool.end()
+    } finally {
+      process.exit(code)
+    }
+  }
+  try {
+    let deniedCode: string | undefined
+    try {
+      await new original.PostgresOperationalEffectJournal(pool).get(
+        journalTenant,
+        'legacy-null'
+      )
+    } catch (error) {
+      deniedCode = (error as { code?: string }).code
+    }
+    assert.equal(deniedCode, '42501')
+    held = await pool.connect()
+    const identity = (
+      await held.query(
+        "SELECT pg_backend_pid() AS backend_pid,session_user AS login,current_user AS principal,current_schema() AS schema,has_table_privilege(current_user,'operational_effect_journal','SELECT') AS can_select"
+      )
+    ).rows[0]!
+    assert.equal(identity.login, 'c100_j225_old')
+    assert.equal(identity.principal, 'c100_j225_old')
+    assert.equal(identity.schema, journalSchema)
+    assert.equal(identity.can_select, false)
+    process.once('SIGTERM', () => void finish(0))
+    // Bounded lifetime even if the parent never signals this owned PID.
+    setTimeout(() => void finish(3), fleetOldReaderLifetimeMs)
+    console.log(
+      JSON.stringify({
+        status: 'READY_FLEET_OLD_READER',
+        pid: process.pid,
+        backendPid: Number(identity.backend_pid),
+        login: identity.login,
+        schema: identity.schema,
+        applicationName: fleetOldReaderApplication,
+        reader: 'present',
+        readerEmitSha256: emit.sha256,
+        readerSourceSha256: source.sha256,
+        originalSqlDenied: deniedCode,
+        runId: binding.runId,
+        modelCalls: 0,
+        toolBodies: 0
+      })
+    )
+    // The held socket and lifetime timer keep this process alive.
+    await new Promise<void>(() => undefined)
+  } catch (error) {
+    if (!finished) {
+      held?.release()
+      await pool.end().catch(() => undefined)
+    }
+    throw error
+  }
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   const phase = process.argv[2]
   try {
-    if (phase === 'capture-writer' || phase === 'capture-reader') {
+    if (phase === 'fleet-old-reader') {
+      assert.equal(process.argv.length, 3)
+      await runFleetOldReader()
+    } else if (phase === 'capture-writer' || phase === 'capture-reader') {
       assert.equal(process.argv.length, 4)
       assert(journalCaptureIds.includes(process.argv[3] as JournalCaptureId))
       await runCaptureJournalPhase(
