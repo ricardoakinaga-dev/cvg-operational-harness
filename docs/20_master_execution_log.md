@@ -1,3 +1,27 @@
+# MAIN-CONSOLIDATION — composição em qualificação — 18/10/2026
+
+- `status: IN_PROGRESS`. Pedido explícito: manter somente a `main` ativa e integrar apenas melhorias. [Plano](08_runtime/main-consolidation-20261018.md), [task/MC01–05](04_audit/evidence/MAIN-CONSOLIDATION-20261018/task.json) e [composição](04_audit/evidence/MAIN-CONSOLIDATION-20261018/composition-contract.md).
+- `last_completed_action`:43 branches locais/18worktrees inventariadas, bundle e deltas privados preservados/verificados; PRs antigos1/2 encerrados e quatro branches remotas antigas removidas, restando main. Candidata própria41ab2813 compõe main+arquivo834+fundação951+portabilidadeb8 e correções antigas selecionadas; R1independente apontou doisP2, reparo agrupado aplicado. Buildruntime/lint/formato/types e SDKPython47PASS na primeira composição; gates finais ainda em execução. Nenhum certificado herdado.
+- `next_action`: MAIN-CONSOLIDATION-20261018:QUALIFY-COMPOSITION — validar reparo/R2 e gates atuais, integrar por PR com checks, então preservar/reconciliar worktrees e remover refs locais redundantes. ReferencecaptureR4 ainda tem fonte não commitada em andamento, fora da promoção; não apagar conteúdo de pares. Sem deploy/aceite produtivo.
+
+# GH006 — integração concluída para repositório individual — 18/10/2026
+
+- `status: COMPLETED`. [PR #3](https://github.com/ricardoakinaga-dev/cvg-operational-harness/pull/3) integrado por squash na `main`, commit `b9f48a7748402bd43ecfd97723710b06f8d52f57`; SHA de origem `4eeb47e88799d55495f794e705dfc5da8a8fdfe0`. [Evidência](04_audit/evidence/GIT-GH006-20261018/solo-merge/result.json).
+- `last_completed_action`: após o usuário esclarecer que trabalha sozinho, ajustada apenas a contagem de aprovações externas de 1 para 0. Objeto de exigência de PR, cinco checks obrigatórios, proteção de administradores, histórico linear e demais campos preservados por comparação integral. Onze checks SUCCESS antes do merge; PR MERGED e ref remota `main` conferidos. Nenhum bypass administrativo, push direto ou alteração do checkout compartilhado.
+- `next_action`: nenhuma para a integração solicitada. Futuras mudanças usam branch e PR com checks; produção/deploy continuam sob seus gates próprios.
+
+# PR #3 — pronto para revisão — 18/10/2026
+
+- `status: COMPLETED` para o pedido “então faz o PR”. O [PR #3](https://github.com/ricardoakinaga-dev/cvg-operational-harness/pull/3) foi encaminhado para revisão, com título e descrição atualizados para a composição atual da candidata.
+- `last_completed_action`: draft removido, SHA `4eeb47e88799d55495f794e705dfc5da8a8fdfe0` preservado e 11 checks SUCCESS reconferidos. [Evidência](04_audit/evidence/GIT-GH006-20261018/pr-ready/result.json). A edição de metadados usou REST após incompatibilidade do `gh pr edit` com Projects classic.
+- `next_action`: obter a aprovação independente exigida pela proteção da `main`, então concluir integração pelo PR. Nenhum merge ou deploy executado nesta rodada.
+
+# GIT-GH006 — commit já publicado por PR — 18/10/2026
+
+- `status: COMPLETED` para diagnóstico da publicação. O SHA `4eeb47e88799d55495f794e705dfc5da8a8fdfe0` já está no remoto `candidate/core-20261017` e no [PR #3](https://github.com/ricardoakinaga-dev/cvg-operational-harness/pull/3). [Evidência](04_audit/evidence/GIT-GH006-20261018/result.json).
+- `last_completed_action`: conferidos SHA remoto, cinco checks obrigatórios PASS e todos os 11 checks SUCCESS; `main` exige PR e uma aprovação, ainda ausente. O PR permanece draft, criado para validação de CI; nenhuma mutação remota foi necessária.
+- `next_action`: se a intenção for integrar na `main`, encaminhar o PR existente para revisão dentro do escopo autorizado, obter aprovação independente e concluir o merge pelo fluxo protegido. Publicação na candidata confirmada; integração na `main` pendente.
+
 # HISO-005 — checkpoint para reinício da sessão — 18/10/2026
 
 - BUILD0240 `IN_PROGRESS`, aprovação explícita resolvida. [Checkpoint para retomada](08_runtime/handoffs/hiso005_build0240_checkpoint_20261018.md), [snapshot/processo](04_audit/evidence/HISO005-P2-BUILD-0240-20261018/session-restart/checkpoint.json), [estado](04_audit/evidence/HISO005-P2-BUILD-0240-20261018/state.json). Usuário solicitou reinício; nenhuma etapa nova será iniciada nesta rodada.
