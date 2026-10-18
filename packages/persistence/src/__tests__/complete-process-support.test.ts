@@ -576,6 +576,11 @@ it('S14: failed join preserves primary and forbids all resource cleanup', async 
   expect(events).toEqual([])
 })
 
+// The assigned SPEC0224 runtime is entirely virtual in these unit tests:
+// physicalPath walks every ancestor, so each directory from the claimed root
+// up to the PARE100 runtime directory is a mocked private directory. The
+// tests never depend on that /tmp directory existing on the host.
+const PARE224_RUNTIME = '/tmp/cvg-pare100-exec-20261014-6az3hlay'
 function assignment() {
   const root =
       '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-postgres/builder-r1',
@@ -623,11 +628,7 @@ function assignment() {
   )
   virtual.files.set('/usr/bin/docker', docker)
   virtual.sockets.add(join(root, 'docker.sock'))
-  for (
-    let dir = root;
-    dir.startsWith('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build');
-    dir = dirname(dir)
-  )
+  for (let dir = root; dir.startsWith(PARE224_RUNTIME); dir = dirname(dir))
     virtual.dirs.add(dir)
   virtual.dirs.add(claim.evidence)
   return { root, resource, r, claim }
