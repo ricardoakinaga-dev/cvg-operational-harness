@@ -1,0 +1,131 @@
+{
+  "task": "C100-FND-JOURNAL-0225-BUILD-001:CODE-REVIEW-R2",
+  "verdict": "APPROVE",
+  "reviewRound": 2,
+  "maximumCodeReviewRounds": 2,
+  "at": "2026-10-18",
+  "reviewer": "R2 independente, execução direta, sem descendentes",
+  "contractFileSha256": "7e3692388910f7c37ab3be3241c9d2e51821c67a8ccc12826dbd6ffd6cb177e9",
+  "approvedSpecSha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+  "candidate": "/mnt/ia/cvg-claude100-journal0225-20261018",
+  "sourceCheckpoint": "219061a3468b963e2a1b61de4d94e93e2bf3de3d",
+  "base": "2f0cc11f7bdda82456f069ac7cc8914cb5335c57",
+  "sourceInputsVerified": "25/25 iguais ao contrato (snapshot, worktree e blob do commit) antes e depois da revisão; worktree rastreado limpo",
+  "verdictScope": "Aceite de revisão de código local da unidade (código + evidência obrigatória dos critérios R1-01/R1-E01 e seções normativas aplicáveis ao diff). NÃO é qualificação J16, release, produção, paridade nem crédito funcional.",
+  "R1_01": "CLOSED",
+  "R1_01_basis": [
+    "Único delta de produção após R1: iterative-runtime.ts:1323-1329 (desde ceef0497). Em modo complete, a decisão nova é destacada como JSON.parse(completeSnapshot(sanitizeLoopDecision(...))) antes de validateDecision/acceptedDecision/primeira reserva; recuperação usa JSON.parse(completeSnapshot(pending)) (complete-journal-recovery.ts:122). Ambos os lados passam pelo mesmo texto canônico -> JSON.parse, logo JSON.stringify do proposalHash (effect-journal.ts:301) coincide, inclusive com chaves inteiras.",
+    "Função proposalHash e caminho legado (sem toolResultContext) inalterados; readNativeConfirmedEffect continua exigindo carimbo, tenant, operationKey, CONFIRMED, proposalHash (inclui compositionFingerprint e identidade da ferramenta) e attemptId (effect-journal.ts:456-506).",
+    "Regressões nativas discriminantes: public66 number-string {z:1,a:2} e nested {nested:{z:1,a:2}} nos crashpoints journal e commit-ack, e context19 save-failure/small, VERMELHAS na produção pré-correção (native-1792338747733: 4 FAIL 'TOOL_FAILURE'!='COMPLETED'; native-1792338826626: 1 FAIL) e VERDES na fonte congelada (native-1792348118290 66/66, native-1792348098883 19/19, deriva 0 de inputs).",
+    "Negativo de input realmente alterado mantido (complete-journal-recovery.test.ts:543 e caso 'accepted decision mismatch').",
+    "Sonda R2 própria sobre os dist da candidata: 9 formas (vazio, controle ordenado, topo, aninhado, chaves inteiras, arrays de objetos, chaves Unicode, __proto__, profundo) recuperam com 1 corpo e 0 escritas no journal; o mesmo fluxo sem a canonicalização reproduz R1-01 nas 7 formas sensíveis à ordem; 7 negativos (valor topo/aninhado alterado, chave extra, troca número/string, outro fingerprint, outro tenant, outra operação) recusam."
+  ],
+  "R1_E01": "CLOSED",
+  "R1_E01_basis": [
+    "Seis casos do HOW presentes e verdes na fonte congelada (native-1792348187435, 6/6, 57 inputs, deriva 0).",
+    "invalid-version: componente real do construtor (rotulado), controle version1 sem conexão, healthy nativo antes/depois, snapshot exato.",
+    "missing-0030-record, inactive-activation-wiring: snapshot do catálogo prova que só a linha 0030 / só prosrc do mesmo OID mudou; get e reserve recusam JOURNAL_STORAGE_MODE; reserve não deixa linha; restauração exata (to_jsonb com microssegundos; activation.sql) e healthy antes/depois.",
+    "missing-physical-expansion: recurso novo vazio, migrado/ativado/qualificado com positivo mode1 antes da falha; somente as 2 colunas (e os 3 CHECKs dependentes, inevitáveis) somem; recusa sem fallback legado; banco/papel removidos; recurso principal com snapshot exato.",
+    "mixed-fleet: processo OS separado com módulo original present + credencial antiga (42501), sessão confirmada por catálogo independente, snapshot inalterado; recusa enquanto vivo; SIGTERM só ao PID próprio; drenagem e healthy/snapshot exatos.",
+    "default-host-no-optin: worker compilado real (dist/main.js) sai com código 1 e a mensagem exata do bloco de qualificação do journal; nenhum READY; execução semeada não reivindicada (bookends iguais); concessões revertidas; snapshot exato.",
+    "Somados ao journal91 (flag ausente no principal ativo; membership/inherit/createdb/createrole/bypassrls/replication isolados; sessão antiga; GUC/application_name forjados; insert0 do ativo; insert1 de outro login; checksum) fecham cada item do mínimo J07 do §11."
+  ],
+  "largestGap": "Nenhum achado obrigatório de código ou evidência nesta revisão. A maior lacuna remanescente é global e fora do escopo do aceite de revisão: J16 NOT_QUALIFIED (E2E/certify/coverage NOT_RUN; checker de boundary INCOMPLETE com +165 diagnósticos nos paths SPEC0225; 43+15+1 vermelhos atribuídos a outras frentes por comparação com 428d0021, que já contém a produção SPEC0225; critério do observer de frame truncado não adjudicado).",
+  "mandatoryFindings": [],
+  "nonMandatoryObservations": [
+    {
+      "id": "R2-O01",
+      "kind": "REQUIRED_EVIDENCE_SEMANTICS",
+      "severity": "P3",
+      "criterion": ["SPEC0225 §6.2 'Opt-in sem migração/principal válidos'", "J07"],
+      "path": "packages/persistence/src/__tests__/complete-effect-result-admission.integration.ts",
+      "line": 84,
+      "observation": "Em 5 dos 6 casos, os contadores downstream {claims,models,bodies} só seriam incrementados se get/reserve resolvessem; são estruturalmente zero na rejeição e não observam um caminho real de claim/modelo/corpo. A prova real é: a porta de readiness do adapter recusa get e reserve e reserve não deixa linha. 'Antes de modelo' para opt-in depende de a composição chamar verifyJournalResultStorage antes de aceitar trabalho (feito pela fixture pública em journal-result-process.ts:1026 e :1473); createOperationalHarness não impõe isso e não existe host opt-in (coerente com SPEC §4). Todas as recusas de readiness usam a mesma mensagem; a atribuição a uma guarda vem do diff de snapshot + healthy imediatamente antes/depois (sessões não estão no snapshot).",
+      "suggestedClosure": "Ao criar qualquer host/composição opt-in reutilizável, exigir gate de readiness pré-claim/pré-modelo com witness próprio; não reutilizar estes contadores como prova de claim/modelo."
+    },
+    {
+      "id": "R2-O02",
+      "kind": "CODE_DESIGN_NOTE",
+      "severity": "P3",
+      "criterion": ["J07 fleet misto", "SPEC0225 §6.1/§6.2"],
+      "path": "packages/persistence/src/operational-effect-result-readiness.ts",
+      "line": 289,
+      "observation": "mixed-fleet e 'sessão antiga' (journal91) exercitam o mesmo mecanismo (other_client_sessions). O caso novo é cenário distinto (PID separado, módulo original, 42501) mas não guarda distinta; um fleet antigo sem sessão viva no instante da readiness não é detectado pela readiness — a proteção passa a ser ACL (42501 e other_login_access=false), conforme SPEC."
+    },
+    {
+      "id": "R2-O03",
+      "kind": "REQUIRED_EVIDENCE_SEMANTICS",
+      "severity": "P3",
+      "criterion": ["J07 default host", "§6.2 'Binário novo default no legado/expandido'"],
+      "path": "packages/persistence/src/__tests__/complete-effect-result-admission.integration.ts",
+      "line": 902,
+      "observation": "O controle positivo do caso default-host é a readiness opt-in mode1 do mesmo recurso, não o worker compilado contra esquema expandido inativo. Um preflight que recusasse qualquer esquema expandido passaria neste caso; esse defeito é discriminado fora do caso pelo J16 PG (postgres-role-preflight.test.ts 13/13 e testes de integração do worker com 0030 aplicada e guarda inativa, j16-r2-test-postgres-report.json 302/0)."
+    },
+    {
+      "id": "R2-O04",
+      "kind": "CODE_BEHAVIOR_NOTE",
+      "severity": "P3",
+      "criterion": ["R1-01 fix", "SPEC0224 domínio JSON estrito"],
+      "path": "packages/harness/src/iterative-runtime.ts",
+      "line": 1328,
+      "observation": "A canonicalização ocorre antes de validateDecision (linha 1335). Em modo complete, decisão com valor fora do domínio estrito (ex.: -0 vindo de JSON.parse, surrogate isolado) agora termina INTERNAL_FAILURE em vez de entrar no reparo; antes da correção a decisão válida já falhava no CAS do acceptedDecision. Fail-closed, sem efeito; reproduzido na sonda R2 (strictness). Legado inalterado."
+    },
+    {
+      "id": "R2-O05",
+      "kind": "REQUIRED_EVIDENCE_SEMANTICS",
+      "severity": "P3",
+      "criterion": ["J07 role wrong"],
+      "path": "packages/persistence/src/__tests__/complete-effect-result-postgres.integration.ts",
+      "line": 1716,
+      "observation": "O caso 'forged GUC/application name' usa o login antigo, que difere do principal em grants e no binding ao mesmo tempo; não há witness isolado de 'principal errado com grants idênticos'. O item 'role privilegiado/member/wrong' do §11 já é fechado pelos casos isolados de privilégio/membership."
+    },
+    {
+      "id": "R2-O06",
+      "kind": "GLOBAL_GATE_ATTRIBUTION",
+      "severity": "P2_GLOBAL",
+      "criterion": ["J16"],
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/restart-r2-20261018/j16-r2-triage.json",
+      "line": 1,
+      "observation": "A triagem atribui os 43 vermelhos SDK/compiled pins e os 45->58 por comparação com 428d0021, que já contém a produção SPEC0225; a base real 2f0cc11f não tem execução unitária indexada. Verifiquei por grep que nenhum dos 25 paths/emits aparece nesses testes e que as falhas citam hash de proposta, sandbox, contracts/canonical-json e session/events — atribuição plausível, não provada contra 2f0cc11f."
+    },
+    {
+      "id": "R2-O07",
+      "kind": "OPERATIONAL_NOTE",
+      "severity": "P3",
+      "criterion": ["SPEC0225 §8 passo 2"],
+      "path": "packages/persistence/src/postgres-migrations.ts",
+      "line": 82,
+      "observation": "lock_timeout 1s / statement_timeout 30s propostos para a expansão não são impostos pela migração nem pelo runner; ficam a cargo da conexão/operador (procedimento futuro, não requisito de código desta fatia)."
+    },
+    {
+      "id": "R2-O08",
+      "kind": "EVIDENCE_SCOPE_NOTE",
+      "severity": "P3",
+      "criterion": ["R1-01 regressões"],
+      "path": "packages/persistence/src/__tests__/fixtures/journal-result-process.ts",
+      "line": 890,
+      "observation": "As regressões nativas cobrem ordem não canônica no topo e aninhada; chaves inteiras, arrays de objetos, Unicode e __proto__ estão cobertos apenas pela sonda de componente R2."
+    }
+  ],
+  "globalGatesNotReviewed": [
+    "J16 E2E: NOT_RUN (exige claim próprio de test:e2e)",
+    "J16 certify: NOT_RUN (exige claim próprio); nenhum certificado inferido",
+    "J16 coverage: NOT_RUN",
+    "J16 checker de boundary: INCOMPLETE na base e na candidata; 0 violations; diagnostics 225->390 (+165 em paths SPEC0225 e emits); checker/manifests não editados",
+    "J16 unit completo: 4937 pass / 58 fail (43 SDK/compiled byte-pin, 15 complete-process-support ambiental pós-reinício) / 1 suite precondition / 71 pending — atribuídos a outras frentes/ambiente; não reexecutado nem readjudicado por R2",
+    "J16 critério do observer (frame truncado/linha corrompida): NOT_ADJUDICATED",
+    "J14 disputa concorrente: ADIADO pela SPEC",
+    "J15 drill completo export/restore: ADIADO pela SPEC",
+    "Perfis nativos (journal91/capture8/context19/bound17/public66/admission6) são locais sintéticos finitos; R2 só inspecionou artefatos e rehasheou bindings, não executou PG"
+  ],
+  "authority": {
+    "humanGateUnchanged": true,
+    "releaseApproved": false,
+    "productionApproved": false,
+    "parityApproved": false,
+    "functionalCredit": 0,
+    "j16Qualified": false
+  },
+  "report": "REPORT.md NÃO CRIADO: escrita de relatório .md bloqueada pelo ambiente do subagente; conteúdo integral entregue no texto de retorno ao Lead",
+  "evidenceManifest": "evidence-manifest.json"
+}

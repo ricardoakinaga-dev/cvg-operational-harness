@@ -51,6 +51,14 @@ function keys(x, fields) {
 function integer(x, max = Number.MAX_SAFE_INTEGER) { return Number.isSafeInteger(x) && x >= 0 && x <= max; }
 function hex(x, n = 64) { return typeof x === 'string' && x.length === n && /^[0-9a-f]+$/.test(x); }
 function shortString(x, max = 400) { return typeof x === 'string' && Buffer.byteLength(x) <= max; }
+// Truncate to at most `max` UTF-8 bytes without splitting a character (validators count bytes).
+function clip(x, max) {
+  const b = Buffer.from(String(x));
+  if (b.length <= max) return b.toString();
+  let end = max;
+  while (end > 0 && (b[end] & 0xc0) === 0x80) end--; // never end inside a multi-byte character
+  return b.subarray(0, end).toString();
+}
 function jsonValue(x, depth = 0) {
   assert(depth <= 32, 'JSON nesting cap');
   if (x === null || typeof x === 'string' || typeof x === 'boolean') return;
@@ -216,7 +224,7 @@ function loadConfig(language = 'typescript') {
   const c = strictJSON(readFile(CONFIG));
   keys(c, ['attempt', 'case', 'nonce', 'language', 'deadline_seconds', 'fifo_root', 'fifo_nodes', 'fifo_stat', 'peer_argv', 'case_input', 'mode']);
   assert(hex(c.attempt, 40) && hex(c.nonce, 40) && c.language === language && ['diagnostic', 'sdk'].includes(c.mode), 'config identity');
-  assert(typeof c.case === 'string' && /^(?:SDKTS(?:0[1-9]|10)|DIAG-TS-[A-Z0-9-]{1,32})$/.test(c.case), 'case ID');
+  assert(typeof c.case === 'string' && /^(?:SDKTS(?:0[1-9]|10)|TSC-SDK-EMIT|DIAG-TS-[A-Z0-9-]{1,32})$/.test(c.case), 'case ID');
   assert((c.mode === 'diagnostic') === c.case.startsWith('DIAG-'), 'mode/case mismatch');
   assert(integer(c.deadline_seconds, 30) && c.deadline_seconds > 0 && c.fifo_root === '/observer', 'deadline/root');
   const names = fifoNames();
@@ -267,14 +275,18 @@ class Channel {
     this.eventFD = openFIFOAt(`/observer/${role}.events`, 'events', c.fifo_stat[`/observer/${role}.events`]);
     try { this.controlFD = openFIFOAt(`/observer/${role}.control`, 'control', c.fifo_stat[`/observer/${role}.control`]); } catch (e) { fs.closeSync(this.eventFD); throw e; }
     this.seq = 0; this.controlSeq = 0; this.bytes = 0; this.terminal = false; this.chain = Promise.resolve(); this.queue = []; this.decoder = new FrameDecoder();
+    this.interrupt = null; // optional () => bool: a pending signal aborts telemetry backpressure waits
     this.begin = { nonce: c.nonce, source_sha256: a.files[sourcePath], pid_namespace: fs.readlinkSync('/proc/self/ns/pid') };
   }
   remainingMs() { return Number((this.deadline - process.hrtime.bigint()) / 1000000n); }
   check() { assert(process.hrtime.bigint() < this.deadline, 'case deadline'); }
   frame(kind, data) { return encodeFrame({ v: 1, attempt: this.config.attempt, case: this.config.case, role: this.role, seq: this.seq, kind, pid: process.pid, mono_ns: String(process.hrtime.bigint()), data }); }
   // One atomic nonblocking write; EAGAIN propagates (no partial frame is possible at <=PIPE_BUF).
+  // Terminal and SIGNAL declarations are bounded by their callers' short windows, not by the case
+  // deadline, so a deadline failure can still be declared; ordinary events never outlive the deadline.
   writeNow(kind, data) {
-    assert(!this.terminal, 'frame after terminal frame'); this.check();
+    assert(!this.terminal, 'frame after terminal frame');
+    if (!TERMINAL.has(kind) && kind !== 'SIGNAL') this.check();
     const b = this.frame(kind, data); assert(this.bytes + b.length <= ROLE_BYTES, 'role artifact cap');
     const n = fs.writeSync(this.eventFD, b); assert(n === b.length, 'short/ambiguous atomic frame write');
     this.seq++; this.bytes += n; if (TERMINAL.has(kind)) this.terminal = true;
@@ -282,7 +294,11 @@ class Channel {
   emit(kind, data) {
     const p = this.chain.then(async () => {
       for (;;) {
-        try { this.writeNow(kind, data); return; } catch (e) { if (!['EAGAIN', 'EWOULDBLOCK'].includes(e.code)) throw e; this.check(); await pause(); }
+        try { this.writeNow(kind, data); return; } catch (e) {
+          if (!['EAGAIN', 'EWOULDBLOCK'].includes(e.code)) throw e;
+          this.check(); if (this.interrupt && this.interrupt()) throw new ChannelError('signal during telemetry backpressure');
+          await pause();
+        }
       }
     });
     this.chain = p.catch(() => {}); return p;
@@ -308,7 +324,10 @@ class Channel {
       await pause();
     }
   }
-  close() { this.readControls(); this.decoder.finish(); assert(this.queue.length === 0, 'unconsumed control'); fs.closeSync(this.controlFD); fs.closeSync(this.eventFD); }
+  // Must run BEFORE the terminal END: a late, extra or truncated control invalidates instead of hiding behind END.
+  finishControls() { this.readControls(); this.decoder.finish(); assert(this.queue.length === 0, 'unconsumed control'); }
+  closeFds() { fs.closeSync(this.controlFD); fs.closeSync(this.eventFD); }
+  close() { this.finishControls(); this.closeFds(); }
 }
 class StreamLedger {
   constructor(stream) { assert(Object.hasOwn(CAPS, stream), 'ledger stream'); this.stream = stream; this.read = 0; this.committed = 0; this.hash = crypto.createHash('sha256'); }
@@ -333,12 +352,19 @@ async function writeAll(stream, b, check, committed = async () => {}) {
     const n = await writeChunk(stream, chunk); assert(n === chunk.length, 'zero/ambiguous write'); await committed(n);
   }
 }
+// Terminal INVALID declaration, bounded to ~50ms of EAGAIN retries; never blocks indefinitely.
 function invalid(ch, e) {
-  try { if (ch && !ch.terminal) ch.writeNow('INVALID', { reason: String(e && e.message ? e.message : e).slice(0, 400) }); } catch {}
+  const reason = clip(e && e.message ? e.message : e, 400);
+  for (let i = 0; ch && !ch.terminal && i < 50; i++) {
+    try { ch.writeNow('INVALID', { reason }); break; } catch (x) {
+      if (!['EAGAIN', 'EWOULDBLOCK'].includes(x.code)) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+  }
   process.exitCode = 125;
 }
 module.exports = {
-  CONFIG, ADMISSION, NODE_SHA256, CAPS, RAW_CHUNK, FRAME, META, FIXED_ENV, ROLE_KINDS, Channel, ChannelError, FrameDecoder, StreamLedger,
+  CONFIG, ADMISSION, NODE_SHA256, CAPS, clip, RAW_CHUNK, FRAME, META, FIXED_ENV, ROLE_KINDS, Channel, ChannelError, FrameDecoder, StreamLedger,
   assert, keys, object, hex, integer, strictJSON, encodeFrame, validateControl, validateEvent, metadataBytes, readFile, shaFile, verifyFiles,
   loadConfig, admission, openFIFOAt, checkFIFO, sha, pause, openSink, writeChunk, writeAll, invalid,
 };

@@ -28,21 +28,27 @@ async function main() {
     }
   };
   const removeHandlers = () => { for (const [s, fn] of Object.entries(handlers)) process.removeListener(s, fn); };
-  // Always terminal: INVALID unless a terminal frame was already written, then exit 125.
+  // Always terminal: INVALID unless a terminal frame was already written; then terminate by the
+  // pending signal (contract) or exit 125.
   const fail = e => {
     if (!finalized) { finalized = true; C.invalid(ch, e); }
     clearTimeout(timer); clearTimeout(signalTimer);
-    if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    removeHandlers(); process.exit(125);
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(signalled || 'SIGKILL');
+    removeHandlers();
+    if (signalled) process.kill(process.pid, signalled);
+    process.exit(125);
   };
   const finishSignal = () => {
     if (finalized) return; finalized = true;
     clearTimeout(timer); clearTimeout(signalTimer);
-    writeTerminal('END', { streams: summaries(), child_exit_code: status ? status.code : null, child_signal: status ? status.signal : null, complete: false }, signalDeadline + 10000000n);
+    // A forward still in flight at the window end has an unknown OS completion: never declare it as END.
+    if (active > 0) writeTerminal('INVALID', { reason: 'in-flight forward with unknown completion at signal deadline' }, signalDeadline + 10000000n);
+    else writeTerminal('END', { streams: summaries(), child_exit_code: status ? status.code : null, child_signal: status ? status.signal : null, complete: false }, signalDeadline + 10000000n);
     removeHandlers(); process.kill(process.pid, signalled);
     process.exit(125); // unreachable unless the default disposition was not restored
   };
-  const maybeFinishSignal = () => { if (signalled && active === 0 && status) finishSignal(); };
+  // Contract: defer the signal only while a forward+commit is in flight (<=90ms); never wait for peer exit.
+  const maybeFinishSignal = () => { if (signalled && active === 0) finishSignal(); };
   const onSignal = sig => {
     if (finalized || signalled) return;
     signalled = sig; signalDeadline = process.hrtime.bigint() + BigInt(SIGNAL_WINDOW_MS) * 1000000n;
@@ -53,6 +59,7 @@ async function main() {
     maybeFinishSignal();
   };
   for (const s of ['SIGTERM', 'SIGINT']) { handlers[s] = () => onSignal(s); process.on(s, handlers[s]); }
+  ch.interrupt = () => signalled !== null; // a pending signal aborts telemetry backpressure waits
   timer = setTimeout(() => fail(new Error('adapter deadline')), Math.max(1, ch.remainingMs()));
 
   const prematureClose = e => e && ['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(e.code);
@@ -108,13 +115,15 @@ async function main() {
     if (signalled) { maybeFinishSignal(); return; }
     const streams = summaries();
     const complete = Object.values(streams).every(s => s.read_bytes === s.committed_bytes);
-    // Synchronous terminal write: no signal handler can interleave with it.
+    ch.finishControls(); // extra/late/truncated control invalidates before END, not after it
+    // Synchronous terminal write (bounded to 100ms of EAGAIN): no signal handler can interleave with it.
     finalized = true; clearTimeout(timer);
-    if (!writeTerminal('END', { streams, child_exit_code: status.code, child_signal: status.signal, complete }, ch.deadline)) process.exit(125);
-    ch.close(); removeHandlers();
+    const endUntil = process.hrtime.bigint() + 100000000n;
+    if (!writeTerminal('END', { streams, child_exit_code: status.code, child_signal: status.signal, complete }, endUntil < ch.deadline ? endUntil : ch.deadline)) process.exit(125);
+    removeHandlers(); ch.closeFds();
     if (!complete) process.exit(125);
-    if (status.signal) process.kill(process.pid, status.signal);
-    else process.exit(status.code);
+    if (status.signal) { process.kill(process.pid, status.signal); process.exit(125); } // fallback if the signal is ignored
+    process.exit(status.code);
   } catch (e) { fail(e); }
 }
 if (require.main === module) main().catch(e => { C.invalid(null, e); process.exit(125); });

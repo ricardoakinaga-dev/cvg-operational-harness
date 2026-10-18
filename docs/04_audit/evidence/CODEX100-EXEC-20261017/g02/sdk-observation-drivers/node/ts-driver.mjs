@@ -3,6 +3,7 @@
 // The SDK is imported only inside sdkCase() after a current admission with sdk_admitted=true.
 // No top-level SDK or TypeScript import exists in this file.
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import C from './channel.cjs';
 import { selectedFixture, holds } from './fixture-cli.mjs';
 
@@ -13,8 +14,20 @@ const SDK_ENV = Object.freeze({ HOME: '/work/home', PATH: '/runtime' }); // exec
 const SDK_ENTRY = 'file:///profile/sdk-emitted/index.js';
 
 function errorData(api, e) {
-  const cause = e == null || e.cause == null ? null : { name: String(e.cause.name ?? 'Error').slice(0, 120), message: String(e.cause.message ?? e.cause).slice(0, 200) };
-  return { api, name: String(e?.name ?? 'Error').slice(0, 120), message: String(e?.message ?? e).slice(0, 360), cause };
+  const cause = e == null || e.cause == null ? null : { name: C.clip(e.cause.name ?? 'Error', 120), message: C.clip(e.cause.message ?? e.cause, 200) };
+  return { api, name: C.clip(e?.name ?? 'Error', 120), message: C.clip(e?.message ?? e, 360), cause };
+}
+// Every emitted SDK module must be admission-bound with the loader-manifest hash, and the emitted
+// directory must be closed (exactly the manifest plus package.json, regular files only) before import.
+export function checkEmitted(cfg, files, listing) {
+  const names = Object.keys(cfg.emitted);
+  C.assert(names.includes('index.js'), 'emitted manifest lacks index.js');
+  for (const n of names) C.assert(files[`/profile/sdk-emitted/${n}`] === cfg.emitted[n], `emitted module not admission-bound: ${n}`);
+  C.assert(C.hex(files['/profile/sdk-emitted/package.json'] ?? ''), 'unbound emitted package.json');
+  const want = [...names, 'package.json'].sort();
+  C.assert(JSON.stringify([...listing.map(e => e.name)].sort()) === JSON.stringify(want), 'emitted directory not closed');
+  C.assert(listing.every(e => e.regular), 'non-regular file in emitted directory');
+  return true;
 }
 // The API call alone is inside this try. Telemetry runs after it, so a failed emit is INVALID, never API_ERROR.
 async function settle(fn) { try { return { ok: true, value: await fn() }; } catch (error) { return { ok: false, error }; } }
@@ -22,9 +35,16 @@ async function settle(fn) { try { return { ok: true, value: await fn() }; } catc
 export async function sdkCase(config, ch) {
   const a = C.admission(config, 'sdk');
   for (const p of [SDK_ENTRY.slice('file://'.length), '/profile/sdk-emitted/package.json', '/profile/node-loader.json', '/profile/extension-loader.mjs']) C.assert(C.hex(a.files[p] ?? ''), `unbound ${p}`);
+  const loaderCfg = C.strictJSON(C.readFile('/profile/node-loader.json'));
+  const listing = fs.readdirSync('/profile/sdk-emitted').map(name => ({ name, regular: fs.lstatSync(`/profile/sdk-emitted/${name}`).isFile() }));
+  checkEmitted(loaderCfg, a.files, listing);
   const { Codex } = await import(SDK_ENTRY); // the only SDK import
   C.assert(typeof Codex === 'function', 'SDK Codex export');
-  const thread = new Codex({ codexPathOverride: '/profile/adapter-typescript', env: { ...SDK_ENV } }).startThread();
+  // codexPathOverride is mandatory: without it exec.ts would resolve a binary through CommonJS createRequire,
+  // which the ESM loader does not govern.
+  const options = { codexPathOverride: '/profile/adapter-typescript', env: { ...SDK_ENV } };
+  C.assert(options.codexPathOverride === '/profile/adapter-typescript', 'codexPathOverride required');
+  const thread = new Codex(options).startThread();
   if (AGGREGATE_CASES.has(config.case)) {
     const r = await settle(() => thread.run('synthetic'));
     if (r.ok) await ch.emit('API_RESULT', { api: 'Thread.run', result: r.value, observations: { thread_id: thread.id } });
@@ -134,9 +154,13 @@ export async function main() {
     timer = setTimeout(() => fail(new Error('driver deadline')), Math.max(1, ch.remainingMs()));
     await ch.start();
     if (config.mode === 'diagnostic') await diagnostic(config, ch); else await sdkCase(config, ch);
+    // Final barrier: the supervisor releases the driver only after adapter and peer are terminal
+    // (END/INVALID frame or independently witnessed exit), never on a SIGNAL frame alone.
+    await ch.control('RELEASE_EXIT');
+    ch.finishControls();
     clearTimeout(timer);
     ch.writeNow('END', { streams: {}, child_exit_code: null, child_signal: null, complete: true });
-    ch.close(); process.exit(0);
+    ch.closeFds(); process.exit(0);
   } catch (e) { fail(e); }
 }
 if (import.meta.url === `file://${process.argv[1]}`) main().catch(e => { C.invalid(null, e); process.exit(125); });
