@@ -1320,7 +1320,13 @@ export class IterativeGovernedRuntime {
         }
         const decisionResult = await this.decide(run, stepNumber)
         if (decisionResult.outcome) return decisionResult.outcome
-        decision = sanitizeLoopDecision(decisionResult.decision)
+        const sanitizedDecision = sanitizeLoopDecision(decisionResult.decision)
+        // Complete checkpoints serialize object keys canonically. Detach the
+        // initial decision in that same form before its first reservation so
+        // recovery sees the identical proposal input. Legacy hashes stay intact.
+        decision = this.options.toolResultContext
+          ? (JSON.parse(completeSnapshot(sanitizedDecision)) as LoopDecision)
+          : sanitizedDecision
         decisionAdmissionIds = decisionResult.decisionAdmissionIds
         modelDecision = decisionResult.modelDecision ?? false
         run.lastDecision = decision

@@ -813,6 +813,8 @@ export async function runPublicJournalPhase(
               pid: process.pid,
               role,
               operationKey: context.operationKey,
+              inputJson: JSON.stringify(_input),
+              inputSha256: sha(canonical(_input)),
               bytes: Buffer.byteLength(canonical(value)),
               sha256: sha(canonical(value))
             }) + '\n',
@@ -860,7 +862,12 @@ export async function runPublicJournalPhase(
           reasonCode: 'TOOL_REQUIRED',
           toolId,
           toolVersion: '1',
-          toolInput: {}
+          toolInput:
+            id === 'number-string'
+              ? { z: 1, a: 2 }
+              : id === 'nested' || (point === 'save-failure' && id === 'small')
+                ? { nested: { z: 1, a: 2 } }
+                : {}
         }
       const text = JSON.stringify(decision)
       assert(count(text) <= request.maxOutputTokens!)
