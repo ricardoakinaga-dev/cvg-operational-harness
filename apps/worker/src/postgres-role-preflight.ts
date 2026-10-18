@@ -293,6 +293,87 @@ export async function assertPostgresWorkerPreflight(
         }
       }
     }
+
+    // SPEC0225: this host has no result-storage opt-in. An activated or unknown
+    // journal guard must reject readiness before the first claim/model/body.
+    const journalColumns = await client.query<{
+      attname: string
+      type: string
+      attnotnull: boolean
+      default_expression: string | null
+    }>(
+      `SELECT a.attname,a.atttypid::regtype::text AS type,a.attnotnull,
+         pg_get_expr(d.adbin,d.adrelid) AS default_expression
+       FROM pg_attribute a LEFT JOIN pg_attrdef d
+         ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+       WHERE a.attrelid=to_regclass('operational_effect_journal')
+         AND NOT a.attisdropped AND a.attname=ANY($1::text[])
+       ORDER BY a.attname`,
+      [['result_storage_payload', 'result_storage_version']]
+    )
+    const journalGuards = await client.query<{
+      definition: string
+      function_name: string
+      local_function: boolean
+      owner: string
+      security_definer: boolean
+      trigger_type: number
+      enabled: string
+      unconditional: boolean
+      function_config: string[] | null
+    }>(
+      `SELECT pg_get_functiondef(p.oid) AS definition,p.proname AS function_name,
+         p.pronamespace=c.relnamespace AS local_function,
+         pg_get_userbyid(p.proowner) AS owner,p.prosecdef AS security_definer,
+         t.tgtype AS trigger_type,t.tgenabled AS enabled,
+         (t.tgqual IS NULL AND t.tgnargs=0) AS unconditional,p.proconfig AS function_config
+       FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+         JOIN pg_class c ON c.oid=t.tgrelid
+       WHERE t.tgrelid=to_regclass('operational_effect_journal')
+         AND NOT t.tgisinternal AND t.tgname='journal_result_storage_guard'`
+    )
+    if (journalColumns.rows.length || journalGuards.rows.length) {
+      const payload = journalColumns.rows[0]
+      const version = journalColumns.rows[1]
+      const guard = journalGuards.rows[0]
+      if (
+        journalColumns.rows.length !== 2 ||
+        payload?.attname !== 'result_storage_payload' ||
+        payload.type !== 'jsonb' ||
+        payload.attnotnull !== false ||
+        payload.default_expression !== null ||
+        version?.attname !== 'result_storage_version' ||
+        version.type !== 'smallint' ||
+        version.attnotnull !== true ||
+        version.default_expression !== '0' ||
+        journalGuards.rows.length !== 1 ||
+        !guard ||
+        guard.function_name !== 'cvg_journal_result_storage_guard' ||
+        guard.local_function !== true ||
+        guard.owner === role.rolname ||
+        guard.security_definer !== false ||
+        guard.trigger_type !== 31 ||
+        guard.enabled !== 'O' ||
+        guard.unconditional !== true ||
+        guard.function_config?.length !== 1 ||
+        guard.function_config[0] !== 'search_path=pg_catalog'
+      ) {
+        throw new Error(
+          'Worker composition is not qualified for journal result storage'
+        )
+      }
+      const migration = await readPostgresMigrationSql(
+        '0030_complete_tool_result_journal'
+      )
+      if (
+        functionBody(guard.definition) !==
+        migrationFunctionBody(migration, 'cvg_journal_result_storage_guard')
+      ) {
+        throw new Error(
+          'Worker composition is not qualified for journal result storage'
+        )
+      }
+    }
   } catch (error) {
     failure = toError(error)
   }
@@ -315,14 +396,23 @@ export async function assertPostgresWorkerPreflight(
         cleanupFailed = true
       }
     } catch (cleanupError) {
-      client.release(toError(cleanupError))
-      throw failure ?? toError(cleanupError)
+      const cleanupFailure = toError(cleanupError)
+      try {
+        client.release(cleanupFailure)
+      } catch {
+        throw failure ?? cleanupFailure
+      }
+      throw failure ?? cleanupFailure
     }
   }
-  if (cleanupFailed && failure) {
-    client.release(failure)
-  } else {
-    client.release()
+  try {
+    if (cleanupFailed && failure) {
+      client.release(failure)
+    } else {
+      client.release()
+    }
+  } catch (releaseError) {
+    throw failure ?? toError(releaseError)
   }
   if (failure) throw failure
 }
