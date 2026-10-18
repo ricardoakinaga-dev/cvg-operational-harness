@@ -7,13 +7,15 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import * as resolver from '../scripts/boundary-semantic-resolution.mjs'
+import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const NODE = pinnedToolchainLocation().node
 const ENGINE = path.resolve(
   import.meta.dirname,
   '../scripts/boundary-semantic-engine.mjs'
 )
-const PARENT = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/test-builder'
+const PARENT = ownedRunParent('b6-0240-metadata')
 const PROFILE = 'node22-linux-exact-metadata-v1'
 const KERNEL = 'semantic-kernel-v3-exact-metadata'
 const roots = [],
@@ -42,7 +44,6 @@ function fixture({
   subpath = '.',
   installed = false
 } = {}) {
-  fs.mkdirSync(PARENT, { recursive: true })
   const root = fs.mkdtempSync(path.join(PARENT, 'metadata unicode-ç '))
   roots.push(root)
   const ext = mode === 'import' ? 'mjs' : 'cjs'
@@ -680,7 +681,6 @@ describe('0240 MS05/MS07 refinement cannot consume the v2 refusal census', () =>
     target: 'products/x'
   }
   function heavy({ order, nested = false, files }) {
-    fs.mkdirSync(PARENT, { recursive: true })
     const root = fs.mkdtempSync(path.join(PARENT, 'r1 census '))
     roots.push(root)
     write(root, 'package.json', {

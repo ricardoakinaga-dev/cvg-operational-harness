@@ -10,13 +10,19 @@ import {
   semanticOriginId,
   SEMANTIC_LIMITS
 } from '../scripts/boundary-semantic-engine.mjs'
+import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const parent =
-  '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0236-engine'
+const parent = ownedRunParent('b6-0236-engine')
 const hash = (x) => createHash('sha256').update(x).digest('hex')
-const pinnedNode = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+const pinnedNode = pinnedToolchainLocation().node
+// A real Node binary that is NOT the pinned one, for the negative runtime
+// control. External resource: CVG_NEGATIVE_NODE, default the original path.
+const negativeNode =
+  process.env.CVG_NEGATIVE_NODE ||
+  '/home/ricardo/.nvm/versions/node/v24.20.0/bin/node'
 const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
 // Vitest itself uses a --require warning hook and resolution conditions. The
 // real API must decline that profile. Exercise positives in a physical clean
@@ -47,7 +53,6 @@ const runSemanticBoundary = (input) => cleanCall('runSemanticBoundary', [input])
 const validateSemanticBoundary = (input, output) =>
   cleanCall('validateSemanticBoundary', [input, output])
 function fixture(source = 'export const answer = 42;', files = {}) {
-  fs.mkdirSync(parent, { recursive: true })
   const root = fs.mkdtempSync(path.join(parent, 'physical-'))
   for (const [file, body] of Object.entries({
     'package.json': '{"type":"module"}',
@@ -667,7 +672,7 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
       underHook.unknowns.some((x) => x.reason === 'UNKNOWN_RUNTIME_PROFILE')
     ).toBe(true)
     const other = cleanCall('runSemanticBoundary', [input], {
-      node: '/home/ricardo/.nvm/versions/node/v24.20.0/bin/node'
+      node: negativeNode
     })
     expect(other.status).toBe('UNKNOWN')
     expect(

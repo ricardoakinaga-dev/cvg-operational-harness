@@ -12,16 +12,17 @@ import {
 import {
   canonicalJson,
   createInstalledIdentityComparator,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  pinnedToolchainLocation
 } from '../scripts/boundary-installed-identity.mjs'
 import {
   referenceEnvironment,
   runOwnedProcess
 } from '../scripts/boundary-reference-process.mjs'
+import { ownedRunParent } from './support/owned-run-parent.mjs'
 
-const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
-const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-runner'
-fs.mkdirSync(BASE, { recursive: true })
+const NODE = pinnedToolchainLocation().node
+const BASE = ownedRunParent('b6-0234-runner')
 const roots = []
 const cleanup = []
 afterEach(async () => {

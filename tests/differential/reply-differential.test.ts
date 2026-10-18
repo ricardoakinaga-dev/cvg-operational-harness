@@ -50,7 +50,14 @@ describe('SPEC0213 bounded installed-loop reply differential', () => {
           XDG_CONFIG_HOME: path.join(home, 'config'),
           XDG_DATA_HOME: path.join(home, 'data'),
           DSH_HOME: path.join(home, 'dsh'),
-          NODE_ENV: 'test'
+          NODE_ENV: 'test',
+          // Location of the pinned external reference, forwarded only if set.
+          ...(process.env.CVG_DIFFERENTIAL_REFERENCE_ROOT
+            ? {
+                CVG_DIFFERENTIAL_REFERENCE_ROOT:
+                  process.env.CVG_DIFFERENTIAL_REFERENCE_ROOT
+              }
+            : {})
         }
         const child = spawnSync(process.execPath, [script, input], {
           cwd: home,
