@@ -1,16 +1,24 @@
 // @vitest-environment node
 // SPEC0240 MS01–08: physical premises + observable closure, never target loading.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import * as resolver from '../scripts/boundary-semantic-resolution.mjs'
-import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
+import {
+  fingerprintToolchain,
+  pinnedToolchainLocation
+} from '../scripts/boundary-installed-identity.mjs'
 import { ownedRunParent } from './support/owned-run-parent.mjs'
 
 const NODE = pinnedToolchainLocation().node
+// Fail the whole suite, not one negative for the wrong reason, when the
+// located Node/npm is not the pinned toolchain.
+beforeAll(() => {
+  fingerprintToolchain({ nodePath: NODE })
+})
 const ENGINE = path.resolve(
   import.meta.dirname,
   '../scripts/boundary-semantic-engine.mjs'

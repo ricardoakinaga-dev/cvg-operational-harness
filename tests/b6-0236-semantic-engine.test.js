@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -10,7 +10,10 @@ import {
   semanticOriginId,
   SEMANTIC_LIMITS
 } from '../scripts/boundary-semantic-engine.mjs'
-import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
+import {
+  fingerprintToolchain,
+  pinnedToolchainLocation
+} from '../scripts/boundary-installed-identity.mjs'
 import { ownedRunParent } from './support/owned-run-parent.mjs'
 
 const require = createRequire(import.meta.url)
@@ -18,6 +21,11 @@ const ts = require('typescript')
 const parent = ownedRunParent('b6-0236-engine')
 const hash = (x) => createHash('sha256').update(x).digest('hex')
 const pinnedNode = pinnedToolchainLocation().node
+// Fail the whole suite, not one negative for the wrong reason, when the
+// located Node/npm is not the pinned toolchain.
+beforeAll(() => {
+  fingerprintToolchain({ nodePath: pinnedNode })
+})
 // A real Node binary that is NOT the pinned one, for the negative runtime
 // control. External resource: CVG_NEGATIVE_NODE, default the original path.
 const negativeNode =
@@ -30,7 +38,7 @@ const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
 function cleanCall(
   method,
   args,
-  { node = pinnedNode, flags = [], nodeOptions } = {}
+  { node = pinnedNode, flags = [], nodeOptions, env = {} } = {}
 ) {
   const code =
     'const fs=require("node:fs"); const engine=require(process.argv[1]); const request=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(JSON.stringify(engine[request.method](...request.args)));'
@@ -42,7 +50,8 @@ function cleanCall(
       PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin',
       LANG: 'C',
       TZ: 'UTC',
-      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {})
+      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
+      ...env
     }
   })
   if (out.status !== 0)
@@ -663,6 +672,34 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
     o.id = semanticOriginId(o)
     input.origins = [o]
     expect(runSemanticBoundary(input).status).toBe('UNKNOWN')
+  })
+  it('takes only the location of the pinned worker Node from CVG_PINNED_NODE, never another identity', () => {
+    const input = fixture(
+      'const data=require("./dep.cjs"); module.exports=data;',
+      {
+        'entry.js': 'const data=require("./dep.cjs"); module.exports=data;',
+        'package.json': '{"type":"commonjs"}',
+        'dep.cjs': 'module.exports=42;'
+      }
+    )
+    const located = (value) =>
+      cleanCall('runSemanticBoundary', [input], {
+        env: { CVG_PINNED_NODE: value }
+      })
+    expect(located(pinnedNode).status).toBe('PROVEN')
+    const toolchain = fs.mkdtempSync(path.join(parent, 'toolchain-'))
+    const alias = path.join(toolchain, 'node-alias')
+    fs.symlinkSync(pinnedNode, alias)
+    const other = path.join(toolchain, 'not-the-pinned-node')
+    fs.writeFileSync(other, 'not the pinned Node binary', { mode: 0o755 })
+    for (const value of [alias, other, 'bin/node']) {
+      const out = located(value)
+      expect(out.status).toBe('UNKNOWN')
+      expect(out.proofs).toEqual([])
+      expect(out.unknowns.some((x) => x.reason === 'UNKNOWN_TOOLCHAIN')).toBe(
+        true
+      )
+    }
   })
   it('rejects the actual caller runtime and hooks, not just a nominal Node path', () => {
     const input = fixture()

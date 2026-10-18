@@ -30,7 +30,10 @@ const markerParent = path.join(
   ownedRunParent('c100-controller-markers'),
   'markers'
 )
-async function ownedHostMarker(nonce) {
+async function ownedHostMarker(...args) {
+  // The controller must keep passing only the nonce, never a marker parent.
+  if (args.length !== 1) throw new Error('controller chose a marker parent')
+  const [nonce] = args
   const marker = await createHostMarker(nonce, markerParent)
   return {
     path: path.join(HOST_MARKER_PARENT, nonce),
