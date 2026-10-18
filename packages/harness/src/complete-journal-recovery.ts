@@ -99,7 +99,7 @@ export function settledRecoveryCandidate(
     step.reasonCode !== pending.reasonCode ||
     !iso(step.startedAt) ||
     !iso(step.completedAt) ||
-    step.completedAt < step.startedAt ||
+    Date.parse(step.completedAt) < Date.parse(step.startedAt) ||
     !Array.isArray(step.observationRefs) ||
     step.observationRefs.length !== 1
   )

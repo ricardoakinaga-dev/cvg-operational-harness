@@ -367,6 +367,25 @@ describe('native settled recovery predicate and staged checkpoint, component onl
     expect(staged.lastToolObservation!.payload).not.toHaveProperty('output')
     expect(f.run.usage.steps).toBe(0)
   })
+  it('compares extended ISO years by time rather than their string order', () => {
+    const f = fixture()
+    f.steps[0] = {
+      ...f.steps[0]!,
+      startedAt: '9999-12-31T23:59:59.999Z',
+      completedAt: '+010000-01-01T00:00:00.000Z'
+    }
+    expect(
+      settledRecoveryCandidate(f.run, f.checkpoint, f.steps, tool)
+    ).not.toBeNull()
+    f.steps[0] = {
+      ...f.steps[0]!,
+      startedAt: '+010000-01-01T00:00:00.000Z',
+      completedAt: '9999-12-31T23:59:59.999Z'
+    }
+    expect(
+      settledRecoveryCandidate(f.run, f.checkpoint, f.steps, tool)
+    ).toBeNull()
+  })
 })
 
 async function journalFixture(
@@ -394,15 +413,13 @@ async function journalFixture(
     attemptIdFactory: () => 'unit'
   })
   const key = 'recovery-operation'
-  await registry
-    .resolve(tool.id)!
-    .execute({}, {
-      tenantId: tenant,
-      agentId: 'agent.synthetic',
-      correlationId: 'synthetic',
-      traceId: 'synthetic',
-      operationKey: key
-    } as ToolExecutionContext)
+  await registry.resolve(tool.id)!.execute({}, {
+    tenantId: tenant,
+    agentId: 'agent.synthetic',
+    correlationId: 'synthetic',
+    traceId: 'synthetic',
+    operationKey: key
+  } as ToolExecutionContext)
   const read = backing.get.bind(backing)
   backing.get = vi.fn(async (t, k) => {
     const record = await read(t, k)
