@@ -5,6 +5,12 @@
 - Roteiro: [roadmap 0379](0379_roadmap_paridade_100_deepseek.md). Evidência da análise: [PARE100-GAP-20261016](../04_audit/evidence/PARE100-GAP-20261016/README.md).
 - Referência congelada: DeepSeek `0.2.0-rc.1`, commit `768fb1f3d3dcf9a16659ee354e927d05475f22dd`, o mesmo pin do [plano 0376](0376_plano_executivo_paridade_integral.md).
 
+## Extensão Claude100 — 17/10/2026
+
+Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado dos 266 PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
+
+Este 0380 permanece a fonte do estado e da execução dos PAR reaproveitados; o 0383 possui apenas o estado dos C100 e o encaminhamento dos aceites Claude. Uma implementação comum tem um único dono, claim e tarefa; serve aos dois catálogos somente depois de qualificada em cada um. Carriers opcionais não se tornam pré-requisitos por mera associação. A extensão não substitui 0379/0380, não concede BUILD T3/T4 e não altera a trilha de produção 0374.
+
 ## Como ler
 
 Cada cartão vem de capacidades observadas na referência e comparadas com o CVG (análise G1–G5). A coluna "Origem" cita o grupo e o ID da capacidade, por exemplo `G2/FS-04`. A coluna "Absorve" aponta o cartão do [backlog 0378](0378_backlog_paridade_integral.md) ou a SPEC que já cobre parte do trabalho, para não duplicar status.
@@ -85,8 +91,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 | PAR-G01 | Consolidar o trabalho PARE100 em andamento                | P    | P0    | `TODO`        | —                |
 | PAR-Q01 | Congelar o catálogo de capacidades PAR-CAP v1             | M    | P0    | `IN_PROGRESS` | PAR-G01          |
 | PAR-Q02 | Comparador diferencial keyless operando                   | M    | P0    | `IN_PROGRESS` | PAR-Q01, PAR-Q03 |
-| PAR-Q03 | Kit neutro de test-support                                | M    | P1    | `TODO`        | —                |
-| PAR-Q04 | Servidor de falhas de modelo e replay de stream sintético | M    | P1    | `TODO`        | PAR-Q03          |
+| PAR-Q03 | Kit neutro de test-support                                | M    | P1    | `DONE`        | —                |
+| PAR-Q04 | Servidor de falhas de modelo e replay de stream sintético | M    | P1    | `DONE`        | PAR-Q03          |
 | PAR-Q05 | Medidor de paridade publicado                             | P    | P0    | `TODO`        | PAR-Q01          |
 
 ### PAR-G01 — Consolidar o trabalho PARE100 em andamento
@@ -118,21 +124,24 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-Q03 — Kit neutro de test-support
 
-- Fase F0 · prioridade P1 · tamanho M · trilha T2 · relevância hospitalar média · estado `TODO`.
+- Fase F0 · prioridade P1 · tamanho M · trilha T2 · relevância hospitalar média · estado `DONE`.
 - Origem: G4/TST-03, TST-04, TST-05. Absorve: P100-004.
 - Hoje: Replay de fixtures do núcleo (`scripts/snapshot-replay.mjs`) e orquestradores roteirizados dentro dos testes; nenhum kit publicado.
 - Entrega: Extrair normalizador de log de sessão, manifesto de suíte e kit do runtime governado num pacote de teste neutro.
 - Depende de: nenhuma.
 - Aceite: Três famílias diferentes usam o kit sem copiar helpers; o normalizador só aceita as normalizações declaradas.
+- Execução atual: unidadeT2 `PAR-Q03-KIT-001`, [SPEC0230](../02_spec/0230_private_governed_test_kit.md), candidata própriaClaude100 baseada7ecc5b53; kit privado e três consumidores de teste, sem contrato público/runtime/lockfile. [Insumos](../04_audit/evidence/CLAUDE100-EXEC-20261017/q03/candidate-inputs.json). Unidade qualificada localmente: TK01–TK08,16/16gates e38hashes verificados em [cert-r2](../04_audit/evidence/CLAUDE100-EXEC-20261017/q03/cert-r2/manifest.json); três consumidores reais preservados. Integração canônica dos oito paths em55fontespromovidas da candidata26d866c3, byteexatas, com702/702focaisroot; PAR-Q03encerrado pelos aceites do kit. Não reabre a unidade224rejeitada nem concede aceite funcional/deprodução. [Prova](../04_audit/evidence/CLAUDE100-EXEC-20261017/integration-result.json).
 
 ### PAR-Q04 — Servidor de falhas de modelo e replay de stream sintético
 
-- Fase F0 · prioridade P1 · tamanho M · trilha T2 · relevância hospitalar média · estado `TODO`.
+- Fase F0 · prioridade P1 · tamanho M · trilha T2 · relevância hospitalar média · estado `DONE`.
 - Origem: G4/TST-01, TST-02. Absorve: P100-004.
 - Hoje: Falhas roteirizadas em `packages/chaos` e testes do gateway; sem servidor HTTP compatível nem gravação de stream.
 - Entrega: Servidor HTTP de falhas no formato do gateway (429, timeout, corte de stream, JSON inválido) e gravação/replay de stream com `record`/`refresh` só sobre dados sintéticos.
 - Depende de: PAR-Q03.
 - Aceite: Cada falha roteirizada produz o erro normalizado esperado; o modo `record` recusa execução com credencial real.
+
+- Unidade localT2 `PAR-Q04-FAULTS-001`, [SPEC0232](../02_spec/0232_private_model_fault_server.md), candidata integrada26d866c3/kitQ03qualificado. MF01–MF07PASS,614/614testesindependentes/zero skip,16gates e38hashesoficiaisatuais;unit4665/PG302/E2E12PASS. Novefontespromovidasbyteexatas comQ03/0229 e702/702focaisroot; PAR-Q04encerrado noescoposintético. Contratos públicos/gatewayruntime/224preservados; não qualifica streaming real,referência,M1 ouprodução. [Resultado](../04_audit/evidence/CLAUDE100-EXEC-20261017/q04/REPORT.md). [Contrato congelado](../04_audit/evidence/CLAUDE100-EXEC-20261017/q04/build-contract.json).
 
 ### PAR-Q05 — Medidor de paridade publicado
 

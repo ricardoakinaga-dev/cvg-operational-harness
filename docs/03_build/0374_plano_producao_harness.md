@@ -139,6 +139,10 @@ Registro completo: [production-0374.json](../04_audit/evidence/USER-DECISIONS-20
 | A2            | Allowlist do gitleaks por caminho, restrita aos caminhos triados; aplicação em tarefa própria, com autorização explícita do usuário               |
 | A3            | Alerta no Telegram do gestor, por receptor que verifica a assinatura HMAC                                                                         |
 | G7            | Rotação do segredo de webhook por corte coordenado                                                                                                |
-| B5            | Aprovado na revisão humana T3; pendente a primeira execução real no GitHub Actions                                                                |
+| B5            | Aprovado na revisão humana T3; pendentes a primeira execução real no GitHub Actions e a comprovação do check obrigatório do produto               |
 
 Executado no mesmo dia ([resolução](../04_audit/evidence/RESOLVE-20261016/README.md)): runbook 0805 e `deploy/harness/` adaptados ao servidor local (`compose.onprem.yaml`, Vault, túnel, espelho no TrueNAS), receptor do Telegram com testes, allowlist A2 aplicada e verificada. Decisões delegadas: Keycloak no servidor como IdP com MFA antes do uso pela equipe, dois operadores sintéticos no ensaio, cópia fora do prédio recomendada. Próximo passo da trilha: preparar o servidor (Vault, bot, túnel, TrueNAS, certificado, GHCR), reauditoria B6 pelo Codex e depois C2–C10 no servidor.
+
+## Reconciliação documental de B5 — 17/10/2026
+
+A autoridade vigente é `decisions.B5_HISO010` do [recibo de16/10](../04_audit/evidence/USER-DECISIONS-20261016/production-0374.json). O estado canônico da tarefa continua em [HISO-010/0370](0370_harness_product_isolation_backlog.md#hiso-010--definir-ci-e-barras-por-artefato). Revisão T3 aprovada não comprova execução real do CI, check obrigatório do produto ou as demais obrigações do cartão. Não houve consulta/execução remota nesta reconciliação. Produção, candidata e identidade do artefato mantêm seus gates próprios. [Plano0388](0388_documentation_isolation_reconciliation.md).

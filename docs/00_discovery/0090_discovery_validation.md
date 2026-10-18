@@ -1,3 +1,7 @@
+# DX100-G04 / Discovery0021 — 18/10/2026
+
+`APROVADO_PARA_PRD_DOCUMENTAL_LEAD_T1`: [Discovery0021](0021_codex100_source_and_execution.md), com [oito critérios documentais e checks Node22 de links/formato](../04_audit/evidence/CODEX100-EXEC-20261017/g04/canonical-product-definition/discovery-review.json). O usuário já escolheu a incorporação nativa integral nos0384/0385/0386; a revisão Lead confirma problema, usuários, resultado e limites para derivar o PRD0030, sem decisão nova de negócio. Aceite documental proporcionalD12T1, não revisão humana de SPEC, aprovação de equivalências pendentes, gate operacionalAUD0592 ou autorização de código/BUILD/integração sensível/release. Preservados22famílias/49cartões/10fases/487obrigaçõesfuncionais+22controlesCVG e todas as variantes/gaps abertos.
+
 # 0090 — Discovery Validation
 
 ## PR-101 / plataforma — 27/09/2026

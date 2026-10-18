@@ -1,3 +1,7 @@
+# DX100-G04 / PRD0030 — 18/10/2026
+
+`APROVADO_PARA_SPEC_DOCUMENTAL_T1`: [PRD0030](0030_codex100_initial_qualification.md), derivado da Discovery0021 validada para documentação. [Revisão independente R1](../04_audit/evidence/CODEX100-EXEC-20261017/g04/canonical-product-definition/review-r1/review.json):12critérios,zero correções obrigatórias e11inputs byteiguais antes/depois; [aceite Lead](../04_audit/evidence/CODEX100-EXEC-20261017/g04/canonical-product-definition/PRD-Lead-acceptance.json). CQ01–14 e todas as funções/variantes continuam NOT_RUN,com a meta integral22famílias/49cartões/10fases/487+22 preservada. Este aceite permite redigir a SPEC da primeira qualificação/jornada; não autoriza código, novo contrato público/schema/policy/approval, adoção0226default, integração sensível, release ou revisão humana T3/T4. Tipos/portas/transações/lifecycle/parser/limites/wiring e oráculos precisam estar definidos na SPEC concreta antes do gate de BUILD.
+
 # 0090 — PRD Validation
 
 ## Gate específico P1-S1 / M07 PRD — aprovado para SPEC documental

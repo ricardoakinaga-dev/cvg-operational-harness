@@ -1,3 +1,58 @@
+## SPEC0240 — BUILD local aprovado explicitamente — 18/10/2026
+
+O usuário respondeu “Aprovo o BUILD local da SPEC0240”, vinculada ao SHA1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161. [Autoridade atual](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/authority-build0240.json), [task/MS01–12](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/task-contract.json), [estado](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/state.json). GateT3 resolvido; espera abaixo é histórica e não se repete. Candidata nova84d8/pins/20fontes/137+590selados conferidos, sem transferir certificação. Primeiro comparar controlesv2, depois implementar, congelar/revisar código e qualificar fonte atual antes de promover. MS01–12 continuamNOT_RUN até evidência própria; B6INCOMPLETE1609/zero provas, sem produção/push/deploy.
+
+## SPEC0240 — contrato tecnicamente revisado; decisão T3 pendente — 18/10/2026
+
+[SPEC0240](0240_b6_node_metadata_resolution_scope.md) congelada SHA-256 `1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161`. [Pacote de decisão](../04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/decision-packet.md), [R2final independente](../04_audit/evidence/HISO005-P2-METADATA-RECON-20261018/review-r2/REPORT.md) APPROVE_SPEC/zero obrigatórios/12 casos documentais; umP2R1 sobre caps antes do conhecimento do target foi esclarecido em3.3/MS05/MS07. Lead conferiu45+35artefatos/34+29snapshots, crítico encerrado/2rodadas encerradas. Recon359origens completo, Node4reais+28privados/14controles de corpo v2, sem target execution.
+
+T1 concluída; futuroBUILD0240 `WAITING_HUMAN_APPROVAL` por novo delta positivo de segurança, D-12/T3. MS01–12 NOT_RUN; não existe código0240/certificação nova, B6continuaINCOMPLETE1609/zero provas. Fonte84d8/20paths/Root7/590selados/índice/HEAD intactos. Não repetir0236/0237 nem editar seus contratos/pacotes; decisão futura e claim em pacote novo, sem produção/release/push/deploy.
+
+## SPEC0237 — BUILD local aprovado e executado — 18/10/2026
+
+A decisão explícita “aprovo e pode continuar a construção” para SHA81f091fa8edaf3ce89543773e24960b4dc9feff3de15f6552940192e9f1ef5f1 foi executada no BUILD0237. Fonte `84d8d4b4`,sete deltas integrados,revisão final zero obrigatórios,14 aceites PASS,16 gates/38 hashes atuais e5.211 unit/302 PG/12 E2E/zero skips. [Autoridade](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/authority-build0237.json), [aceites e limites](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/ACCEPTANCE.md), [resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md). SPEC e pacote documental selado permanecem byteidênticos; a espera humana abaixo é histórica. HISO005/B6 continuaINCOMPLETE1609/zero provas. Não repetir aprovações 0236/0237; novo delta positivo exige seu contrato próprio, sem transferência de certificado ou aprovação de produção.
+
+## SPEC0237 — revisão documental aprovada; BUILD aguarda decisão T3 — 18/10/2026
+
+- [SPEC0237](0237_b6_runtime_resolution_profile.md), SHA-256 `81f091fa8edaf3ce89543773e24960b4dc9feff3de15f6552940192e9f1ef5f1`; [pacote concreto](../04_audit/evidence/HISO005-P2-RESOLUTION-SPEC-20261018/decision-packet.md). Task documental `HISO005-P2-RESOLUTION-SPEC-20261018` concluída localmente; futuro `HISO005-P2-BUILD-0237` em `WAITING_HUMAN_APPROVAL`. [R2 final](../04_audit/evidence/HISO005-P2-RESOLUTION-SPEC-20261018/review-r2/REPORT.md) APPROVE_SPEC/zero obrigatórios; trêsP1R1 tratados no HOW, uma sugestãoP3 esclarecida no pacote sem mudar o SHA.17inputs/24snapshots/32artefatos/25bindings/18casos documentais conferidos; crítico encerrado, orçamento2/2. [ChecksT1](../04_audit/evidence/HISO005-P2-RESOLUTION-SPEC-20261018/document-checks-final.json).
+- BaselineD8 qualificada16gates38hashes/integrada2paths, P1 nativo resolvido; autoridade0236cf07 vigente. HISO005/B6 continuaINCOMPLETE2258=537+1721/303MATCH/zeroverified/zeroresolvidos. TodosRS01–14NOT_RUN; nenhum código0237, gate de aplicação ou aprovação humana concedidos nesta preparação. Nova aquisição/workspace/exports positivos requer revisão explícita própriaD-12/T3 e0236§5; não repetir aprovação0236, não transferir certificados, sem produção/push/deploy.
+
+## SPEC0236 — BUILD local aprovado explicitamente —18/10/2026
+
+- Usuário respondeu `Aprovar BUILD local da SPEC0236`, questionItem call_84d8b6c51cf3499db558a90899811ce2/0, para SHA-256 `cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49`. [Autoridade](../04_audit/evidence/HISO005-P2-SPEC-20261018/authority-build0236.json). GateT3 resolvido antes do código; contrato congelado não é reaberto.
+- Task `HISO005-P2-BUILD-0236` IN_PROGRESS em candidata própria, kernelK0–K7/receita compilada/origem emitida. Todos18aceites ainda exigem execução e evidência; UNKNOWN impede B6. Port0228/0234 será certificado junto da composição corrigida, após92variantes de teste migradas ao contrato conservador, sem apagar negativos/pins/histórico. Sem runtime/schema/lock/produção/push/deploy.
+
+## SPEC0236 — contrato aceito tecnicamente; revisão humana T3 pendente —18/10/2026
+
+- [Contrato0236](0236_b6_semantic_boundary_proof.md) congelado SHA-256 `cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49`. Crítica fresca R2/final `APPROVE_SPEC`, zero achados obrigatórios; os três achadosR1 corrigidos no contrato e preservados na evidência. [Pacote de decisão](../04_audit/evidence/HISO005-P2-SPEC-20261018/decision-packet.md), [parecer](../04_audit/evidence/HISO005-P2-SPEC-20261018/review/r2/REPORT.md).
+- PreparaçãoT1 concluída; implementação `HISO005-P2-BUILD-0236` em `WAITING_HUMAN_APPROVAL`,18aceites de BUILD NOT_RUN. Kernelv1 limitado, proveniência compiledfreshforce e origem emitida de cada ocorrência; UNKNOWN continua impeditivo da B6. Contagens198/72 são baseline histórica; inventário público novo será integral conforme API vigente.
+- Integração mecânica0228/0234 já aprovada segue em taskT2 própria, checkpoint9b494a4d, sem aguardar esta decisão ou conceder aprovação semântica por associação. Nenhuma produção/release/push/deploy autorizados por este registro.
+
+## SPEC0236 — contrato semântico em revisão —18/10/2026
+
+- Task `HISO005-P2-SPEC-20261018`, preparaçãoT1 `IN_PROGRESS`. [Contrato0236](0236_b6_semantic_boundary_proof.md), [execução0391](../03_build/0391_hiso005_semantic_proof_execution.md). Autoridade da0234/P1 concluída permanece válida; não autoriza por associação este HOW novo.
+- Censo471/303/168 completo;18aceites de BUILD `NOT_RUN`. Crítica técnica e checksT1 em curso. Nenhuma aprovação humana ou execução semântica inferida. Implementação propostaT3 requer revisão explícita do contrato antes de código; fontes/runtime/lock e certificados anteriores intactos.
+
+## SPEC0234 — BUILD local verificado;14/14aceites —17/10/2026
+
+- Contrato congelado b33aff4d1d1e36d64dd97298bc73d1c058220776c349e6704478303ef8a9c76d, aprovado pelo usuário antes da implementação. Candidata própria b7032f8245fbfbec5570c585518172de9ab7f075, [fechamento](../04_audit/evidence/HISO005-0234-BUILD-20261017/REPORT.md), [matriz14/14](../04_audit/evidence/HISO005-0234-BUILD-20261017/acceptance-status.json).
+- `COMPLETED_LOCAL / BUILD_T3_APPROVED_USER`: crítica independente0obrigatórios,16gatesPASS,3607unit/302PG/12E2E/zero skips e38hashes oficiais atuais verificados. A observação de identidade mantém302MATCH/1MISMATCH, todosverifiedfalse/INCOMPLETE. HISO005inteiro/P2/P3/B6 não encerrados; sem integração/push/deploy/release. Proposta e pacotes históricos abaixo conservam seus hashes/estados da época; aprovação não é reaberta para0234.
+
+## SPEC0234 — BUILD local aprovado pelo usuário —17/10/2026
+
+- Task `HISO005-CONTENT-ID-BUILD-0234`, `status: IN_PROGRESS / BUILD_T3_APPROVED_USER`. Usuário respondeu “então vamos resolver isso” ao contrato concreto0234, SHA256 `b33aff4d1d1e36d64dd97298bc73d1c058220776c349e6704478303ef8a9c76d`. [Autoridade](../04_audit/evidence/HISO005-0234-BUILD-20261017/authority.json).
+- Candidata própria derivada de f11; referência offline/cache próprios, comparação física conservadora e14aceites. Sem verifiedtrue ou supressão de diagnósticos. `last_completed_action`: autorização e claim registrados; `next_action`: construir referência independente, first red e implementar controles0234. P1 não conclui HISO-005/P2/P3; sem integração/push/deploy/produção.
+
+## SPEC0234 — contrato aceito tecnicamente; revisão humanaT3 pendente —17/10/2026
+
+- Task `HISO005-PROOF-PLAN-20261017`; [SPEC0234](0234_b6_installed_content_identity.md), SHA-256 `b33aff4d1d1e36d64dd97298bc73d1c058220776c349e6704478303ef8a9c76d`. Estado `INDEPENDENT_SPEC_ACCEPTED / HUMAN_T3_REVIEW_PENDING / BUILD_NOT_AUTHORIZED`. [Decisão concreta](../04_audit/evidence/HISO005-PROOF-PLAN-20261017/decision-packet.md), [revisão independente](../04_audit/evidence/HISO005-PROOF-PLAN-20261017/review-r1/REPORT.md).
+- Primeira unidade da única frente HISO-005/B6: identidade de conteúdo via referência offline, sem verifiedtrue ou supressão.14aceites de BUILD NOT_RUN; a fronteira permanece INCOMPLETE e a prova semântica/receptores/novaB6 continuam na mesma frente. Pedido de avançar uma frente autoriza preparação, não revisão humana de SPEC ainda não apresentada. Sem código/runtime/lock/workflow/candidata ou cache alterados, integração/push/deploy/produção.
+
+## SPEC0228 — aprovação humana para BUILD local sintético — 17/10/2026
+
+- O usuário instruiu “siga implementação até não ter mais pendencias” depois do pedido explícito de aprovação da [SPEC0228](0228_b6_boundary_fail_closed_remediation.md), SHA-256 `05fa3140bff99be3b4b91c2a0f0212bd01f6dd10509785867e84d3fcd64bddfe`. Registro de autoridade: [B6-0228-BUILD](../04_audit/evidence/B6-0228-BUILD-20261017/authority.json).
+- Estado: `BUILD_T3_APPROVED_USER / LOCAL_SYNTHETIC_ONLY`. Autoriza primeira fatia e seus14aceites em candidata própria; sem produção, nova prova positiva, publicação ou alteração de runtime/schema/produto/lock/workflow. A fronteira resultante será INCOMPLETE, conforme aprovado.
+
 # PARE100 — BUILD local0224 aprovado pelo usuário — 16/10/2026
 
 - Usuário aprovou explicitamente [SPEC0224](../02_spec/0224_pare100_complete_tool_result_context.md), SHA`f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, pela resposta “Aprovar BUILD local da SPEC0224” ao item `call_8ac9d0eba9354176bbec02230b5b045d/0`. [Autoridade](../04_audit/evidence/PARE100-EXEC-20261014/spec0224-build/authority.json) SHA017124bc; somente worktree isolado/dados e modelos sintéticos/TR01–TR10.0220/0221/0222 continuam PENDING; nenhuma nova confirmação desse BUILD é necessária.
