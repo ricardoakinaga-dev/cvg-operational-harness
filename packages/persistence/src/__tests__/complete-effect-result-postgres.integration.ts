@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Client, Pool, QueryResultRow } from 'pg'
+import type { Client, Pool, QueryConfig, QueryResult, QueryResultRow } from 'pg'
 import type { ToolExecutionContext, ToolRegistry } from '@cvg/harness-contracts'
 import {
   verifyNativeJournalBinding,
@@ -40,6 +40,412 @@ const oldReaderDenied = async () => {
   assert(resource)
   await resource.oldReaderDenied()
 }
+
+describe(
+  'SPEC0225 J03 native bounds and separate SQL/driver component',
+  { concurrency: false },
+  () => {
+    const byteShapes = [
+      ['ascii', 'a'.repeat(1048574)],
+      ['nul', '\0'.repeat(174762) + 'aa'],
+      ['quote', '"'.repeat(524287)],
+      ['bmp', '\u20ac'.repeat(349524) + 'aa'],
+      ['astral', '\u{1f600}'.repeat(262143) + 'aa'],
+      ['nul-key', { ['\0'.repeat(174761) + 'aaaa']: 0 }]
+    ] as const
+    const digest = (text: string) =>
+      createHash('sha256').update(text).digest('hex')
+    const nested = (arrays: number): unknown => {
+      let value: unknown = 0
+      for (let i = 0; i < arrays; i++) value = [value]
+      return value
+    }
+    const row = async (operationKey: string) => {
+      const { withTenantContext } = await import('@cvg/persistence')
+      const { TenantIdSchema } = await import('@cvg/platform')
+      return withTenantContext(
+        pool!,
+        TenantIdSchema.parse(journalTenant),
+        async (client) =>
+          (
+            await client.query(
+              'SELECT to_jsonb(j)::text AS row FROM operational_effect_journal j WHERE tenant_id=$1 AND operation_key=$2',
+              [journalTenant, operationKey]
+            )
+          ).rows[0]!.row as string
+      )
+    }
+    const exercise = async (
+      id: string,
+      value: unknown,
+      bytes: number,
+      accepted: boolean,
+      scope: string
+    ) => {
+      verifyNativeJournalBinding()
+      const json = JSON.stringify(value)
+      assert.equal(
+        Buffer.byteLength(json),
+        bytes,
+        'independent fixture byte oracle'
+      )
+      const journal = new Journal(pool!, { resultStorage: { version: 1 } })
+      const input = {
+        tenantId: journalTenant,
+        operationKey: binding.runId + ':j03:' + id,
+        proposalHash: 'synthetic-j03',
+        attemptId: 'a'
+      }
+      await journal.reserve(input)
+      await journal.markStarted(input)
+      const before = await row(input.operationKey)
+      let result: unknown
+      if (accepted) {
+        const confirmed = await journal.confirm({ ...input, result: value })
+        assert.equal(confirmed.state, 'CONFIRMED')
+        assert.equal(JSON.stringify(confirmed.result), json)
+        const read = await journal.get(journalTenant, input.operationKey)
+        assert(read && Object.hasOwn(read, 'result'))
+        assert.equal(JSON.stringify(read.result), json)
+        const raw = JSON.parse(await row(input.operationKey)) as Record<
+          string,
+          unknown
+        >
+        const envelope = raw.result_storage_payload as {
+          decodedBytes: number
+          decodedSha256: string
+          data: string
+        }
+        assert.equal(raw.result, null)
+        assert.equal(raw.result_storage_version, 1)
+        assert.equal(envelope.decodedBytes, bytes)
+        assert.equal(envelope.decodedSha256, digest(json))
+        assert.equal(
+          Buffer.from(envelope.data, 'base64').toString('utf8'),
+          json
+        )
+        result = {
+          state: read.state,
+          ownResult: true,
+          exactValue: true,
+          decodedBytes: envelope.decodedBytes,
+          decodedSha256: envelope.decodedSha256,
+          dataChars: envelope.data.length
+        }
+      } else {
+        await assert.rejects(
+          journal.confirm({ ...input, result: value }),
+          (error: unknown) =>
+            (error as Error).message === 'JOURNAL_RESULT_TOO_LARGE'
+        )
+        assert.equal(
+          await row(input.operationKey),
+          before,
+          'failed encoding mutated durable row'
+        )
+        const read = await journal.get(journalTenant, input.operationKey)
+        assert(
+          read &&
+            read.state === 'EFFECT_STARTED' &&
+            !Object.hasOwn(read, 'result')
+        )
+        await journal.markUncertain({
+          ...input,
+          reason: 'synthetic J03 rejected confirmation'
+        })
+        const uncertain = await row(input.operationKey)
+        const reserved = await journal.reserve({
+          ...input,
+          attemptId: 'unsafe-new-attempt'
+        })
+        assert.equal(reserved.state, 'UNCERTAIN')
+        assert.equal(reserved.attemptId, 'a')
+        assert.equal(
+          await row(input.operationKey),
+          uncertain,
+          'unsafe retry changed row'
+        )
+        result = {
+          state: read.state,
+          ownResult: false,
+          beforeAfterExact: true,
+          reservedState: reserved.state,
+          attemptId: reserved.attemptId,
+          unsafeRetryNoWrite: true
+        }
+      }
+      writeFileSync(
+        join(binding.evidenceRoot, binding.runId + '-j03-' + id + '.json'),
+        JSON.stringify(
+          {
+            scope,
+            id,
+            bytes,
+            sha256: digest(json),
+            accepted,
+            result,
+            modelCalls: 0,
+            toolBodies: 0
+          },
+          null,
+          2
+        ) + '\n'
+      )
+    }
+    for (const [shape, value] of byteShapes) {
+      for (const extra of [0, 1]) {
+        it(`${shape}: escaped UTF8 bytes1048576+${extra}`, async () => {
+          const input =
+            extra === 0
+              ? value
+              : typeof value === 'string'
+                ? value + 'x'
+                : { [Object.keys(value)[0]! + 'x']: 0 }
+          await exercise(
+            shape + '-' + extra,
+            input,
+            1048576 + extra,
+            extra === 0,
+            'NATIVE_JOURNAL_EXACT_ESCAPED_UTF8_BOUNDARY'
+          )
+        })
+      }
+    }
+    for (const depth of [64, 65]) {
+      it(`root1 depth${depth}`, async () => {
+        await exercise(
+          'depth-' + depth,
+          nested(depth - 1),
+          depth * 2 - 1,
+          depth === 64,
+          'NATIVE_JOURNAL_DEPTH_BOUNDARY_ROOT1'
+        )
+      })
+    }
+    for (const nodes of [1000000, 1000001]) {
+      it(`nodes${nodes}: above logical byte budget, no isolated node-branch claim`, async () => {
+        await exercise(
+          'nodes-' + nodes,
+          Array<number>(nodes - 1).fill(0),
+          2 * nodes - 1,
+          false,
+          'NATIVE_JOURNAL_REJECTION_JOINT_BYTE_COMPLEXITY; INDEPENDENT_SCAN_SEAM_REQUIRED'
+        )
+      })
+    }
+    it('actual shared projection suppresses E+1 before driver JSONB parser; separate readonly virtual source', async () => {
+      verifyNativeJournalBinding()
+      assert(pool)
+      const queries: string[] = []
+      const connection = {
+        connect: async () => {
+          const client = await pool!.connect()
+          return {
+            release: (error?: Error) => client.release(error),
+            query: async <T extends QueryResultRow = QueryResultRow>(
+              text: string,
+              values?: unknown[]
+            ) => {
+              if (text.includes('AS result_storage_overflow'))
+                queries.push(text)
+              return client.query<T>(text, values)
+            }
+          }
+        }
+      }
+      const journal = new Journal(connection, { resultStorage: { version: 1 } })
+      const input = {
+        tenantId: journalTenant,
+        operationKey: binding.runId + ':j03:driver-source',
+        proposalHash: 'p',
+        attemptId: 'a'
+      }
+      await journal.reserve(input)
+      await journal.markStarted(input)
+      await journal.confirm({ ...input, result: null })
+      const good = await journal.get(journalTenant, input.operationKey)
+      assert(good && good.state === 'CONFIRMED' && good.result === null)
+      const retryInput = {
+        ...input,
+        operationKey: input.operationKey + ':retry'
+      }
+      await journal.reserve(retryInput)
+      await journal.markStarted(retryInput)
+      await journal.fail({ ...retryInput, error: 'synthetic retry projection' })
+      const retried = await journal.reserve({ ...retryInput, attemptId: 'b' })
+      assert.equal(retried.state, 'RESERVED')
+      assert.equal(retried.attemptId, 'b')
+      const before = await row(input.operationKey)
+      const casePattern =
+        /CASE WHEN octet_length\(result_storage_payload::text\) <= 1398616\s+THEN result_storage_payload ELSE NULL END AS result_storage_payload/
+      const projectionPattern =
+        /CASE WHEN octet_length\(result_storage_payload::text\) <= 1398616[\s\S]*?AS result_storage_overflow/
+      const projections = queries.map((text) => {
+        const match = projectionPattern.exec(text)
+        assert(match)
+        return match[0]
+      })
+      assert(projections.length >= 6)
+      assert(projections.every((text) => text === projections[0]))
+      assert(
+        queries.some(
+          (text) => /^SELECT/.test(text.trim()) && text.includes('FOR UPDATE')
+        )
+      )
+      assert(
+        queries.some(
+          (text) => /^UPDATE/.test(text.trim()) && text.includes('RETURNING')
+        )
+      )
+      const nativeSelect = queries.find((text) =>
+        text.includes('result_storage_read_committed')
+      )
+      assert(nativeSelect && casePattern.test(nativeSelect))
+      // The actual native calls above are never rewritten. This separate CTE is
+      // explicitly a SQL/driver component, not a malformed persisted journal row.
+      const cte = `WITH operational_effect_journal AS (
+      SELECT (jsonb_populate_record(NULL::${journalSchema}.operational_effect_journal,
+        to_jsonb(j) || jsonb_build_object('result_storage_payload', $3::jsonb))).*
+      FROM ${journalSchema}.operational_effect_journal j
+      WHERE tenant_id=$1 AND operation_key=$2
+    ) `
+      const pg = (await import('pg')).default
+      const observed: number[] = []
+      const tripwire = new Error('SYNTHETIC_OVERSIZED_DRIVER_ENTRY')
+      const client = new pg.Client({
+        ...journalCredentials('service'),
+        options: '-c search_path=' + journalSchema,
+        application_name: 'c100-j225-driver-component',
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 10000,
+        types: {
+          getTypeParser: (oid: number, format?: 'text' | 'binary') => {
+            if (oid === 3802 && (format === undefined || format === 'text'))
+              return (raw: string) => {
+                const size = Buffer.byteLength(raw)
+                observed.push(size)
+                if (size > 1398616) throw tripwire
+                return JSON.parse(raw) as unknown
+              }
+            return pg.types.getTypeParser(oid, format)
+          }
+        }
+      })
+      const observations: unknown[] = []
+      try {
+        await client.connect()
+        await client.query("SELECT set_config('cvg.tenant_id',$1,false)", [
+          journalTenant
+        ])
+        for (const rowMode of ['object', 'array'] as const) {
+          for (const size of [1398615, 1398616, 1398617]) {
+            const payload = JSON.stringify('x'.repeat(size - 2))
+            assert.equal(Buffer.byteLength(payload), size)
+            observed.length = 0
+            const query: QueryConfig<unknown[]> = {
+              text: cte + nativeSelect,
+              values: [journalTenant, input.operationKey, payload],
+              ...(rowMode === 'array' ? { rowMode: 'array' as const } : {})
+            }
+            const result: QueryResult = await client.query(query)
+            assert.equal(result.rowCount, 1)
+            const value = (name: string): unknown =>
+              rowMode === 'array'
+                ? result.rows[0]![
+                    result.fields.findIndex((field) => field.name === name)
+                  ]
+                : result.rows[0]![name]
+            assert.equal(value('result_storage_overflow'), size > 1398616)
+            if (size <= 1398616) {
+              assert.deepEqual(observed, [size])
+              assert.equal(
+                value('result_storage_payload'),
+                'x'.repeat(size - 2)
+              )
+            } else {
+              assert.deepEqual(observed, [])
+              assert.equal(value('result_storage_payload'), null)
+            }
+            observations.push({
+              rowMode,
+              size,
+              overflow: value('result_storage_overflow'),
+              parserEntries: [...observed]
+            })
+          }
+          observed.length = 0
+          const bad = nativeSelect.replace(
+            casePattern,
+            'result_storage_payload AS result_storage_payload'
+          )
+          assert.notEqual(bad, nativeSelect)
+          await assert.rejects(
+            client.query({
+              text: cte + bad,
+              values: [
+                journalTenant,
+                input.operationKey,
+                JSON.stringify('x'.repeat(1398615))
+              ],
+              ...(rowMode === 'array' ? { rowMode: 'array' as const } : {})
+            }),
+            (error: unknown) => error === tripwire
+          )
+          assert.deepEqual(observed, [1398617])
+          observations.push({
+            rowMode,
+            knownBad: true,
+            parserEntries: [...observed],
+            caughtBeforeJsonParse: true
+          })
+        }
+      } finally {
+        await client.end()
+      }
+      assert.equal(await row(input.operationKey), before)
+      const summary = {
+        scope:
+          'SQL_DRIVER_COMPONENT_WITH_READONLY_VIRTUAL_SOURCE_NOT_PERSISTED_CORRUPTION',
+        allocationClaim:
+          'SQL NULL suppresses installed driver JSONB parser only; no zero server/client allocation claim',
+        nativeQueryKinds: queries.map((text) => text.trim().split(/\s/, 1)[0]),
+        nativeProjectionExactShared: true,
+        nativeRetryReturningObserved: true,
+        insertBehavior:
+          'Actual INSERT has no RETURNING; reserve follows with SELECT FOR UPDATE',
+        projectionSha256: digest(projections[0]!),
+        sourceRowUnchanged: true,
+        observations,
+        remaining:
+          'No malformed persisted oversized row or malformed native RETURNING executed; all constraints/readiness/ACL retained',
+        modelCalls: 0,
+        toolBodies: 0
+      }
+      writeFileSync(
+        join(
+          binding.evidenceRoot,
+          binding.runId + '-j03-driver-component.json'
+        ),
+        JSON.stringify(summary, null, 2) + '\n'
+      )
+      writeFileSync(
+        join(
+          binding.evidenceRoot,
+          binding.runId + '-j03-native-query-trace.json'
+        ),
+        JSON.stringify(
+          {
+            scope: 'ACTUAL_NATIVE_SQL_TEXT_NO_CREDENTIALS_OR_PARAMETERS',
+            queries,
+            componentCte: cte
+          },
+          null,
+          2
+        ) + '\n'
+      )
+    })
+  }
+)
 
 describe(
   'SPEC0225 J12 primary plus uncertain-settlement failure',
