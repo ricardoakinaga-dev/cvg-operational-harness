@@ -113,6 +113,7 @@ interface EffectRow extends QueryResultRow {
   result_storage_version?: number
   result_storage_payload?: unknown
   result_storage_overflow?: boolean
+  result_storage_read_committed?: boolean
   tenant_id: string
   operation_key: string
   proposal_hash: string
@@ -1200,7 +1201,7 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
     const operation = text(operationKey, 'operationKey', 240)
     return this.run(tenant, async (client, storage) => {
       const result = await client.query<EffectRow>(
-        `SELECT ${effectColumnsFor(storage)}
+        `SELECT ${effectColumnsFor(storage)}${storage.mode === 1 ? ', pg_current_xact_id_if_assigned() IS NULL AS result_storage_read_committed' : ''}
            FROM operational_effect_journal
           WHERE tenant_id = $1 AND operation_key = $2`,
         [tenant, operation]
@@ -1364,7 +1365,7 @@ function mapEffect(
       }
     }
   }
-  return {
+  const mapped: EffectJournalRecord = {
     tenantId: row.tenant_id,
     operationKey: row.operation_key,
     proposalHash: row.proposal_hash,
@@ -1377,6 +1378,26 @@ function mapEffect(
     ...result,
     ...(row.error !== null ? { error: row.error } : {})
   }
+  // Internal read provenance only; never a public field or SQL authority.
+  // A reader with an assigned xid might be observing its own uncommitted write.
+  if (
+    storage?.mode === 1 &&
+    row.result_storage_version === 1 &&
+    row.state === 'CONFIRMED' &&
+    row.result_storage_read_committed === true
+  ) {
+    Object.defineProperty(
+      mapped,
+      Symbol.for('cvg.journal.validated-result.v1'),
+      {
+        value: 1,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      }
+    )
+  }
+  return mapped
 }
 
 function validateFailure(failure: ExecutionFailure): ExecutionFailure {

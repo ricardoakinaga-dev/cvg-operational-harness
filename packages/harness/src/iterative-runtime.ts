@@ -69,7 +69,14 @@ import {
   type UnsignedCheckpoint
 } from './step-store.ts'
 import { agentExposesTool } from './runtime.ts'
-import { hasNativeEffectReservation } from './effect-journal.ts'
+import {
+  hasNativeEffectReservation,
+  readNativeConfirmedEffect
+} from './effect-journal.ts'
+import {
+  settledRecoveryCandidate,
+  stageSettledRecovery
+} from './complete-journal-recovery.ts'
 import { KernelHost } from './kernel/host.ts'
 import {
   CANCELLED_RESPONSE,
@@ -804,6 +811,39 @@ export class IterativeGovernedRuntime {
       once: true
     })
     this.#turns.set(run, { host, signal: controller.signal })
+    let stagedRecovery: LoopRun | null = null
+    const recoveryStop = (
+      response: string,
+      stopReason: StopReason = 'INSUFFICIENT_EVIDENCE'
+    ) =>
+      this.finalize(
+        run,
+        { kind: 'stop', stopReason, response, preserveCheckpoint: true },
+        startedAtMs
+      )
+    const recoveryGate = async () => {
+      if (this.#turns.get(run)?.signal.aborted)
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      if (this.remainingDuration(run) <= 0)
+        return this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted before result recovery.'
+        )
+      const gate = await this.withDeadline(
+        runGate(this.kernelFor(run), 'turn/before-step', this.turnFor(run)),
+        this.remainingDuration(run)
+      )
+      if (gate === DEADLINE_EXCEEDED || this.remainingDuration(run) <= 0)
+        return this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted during result recovery.'
+        )
+      if (this.#turns.get(run)?.signal.aborted)
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      return gate.kind === 'stop'
+        ? this.stop(gate.stopReason, gate.response)
+        : null
+    }
 
     // Payloads and summaries are bounded, untrusted presentation. The step
     // store owns the lossless governed outcome of the pending dispatch,
@@ -916,8 +956,53 @@ export class IterativeGovernedRuntime {
             )
           }
         }
+        if (settledStep && !savedResult) {
+          try {
+            const pending = checkpoint.state.pendingDecision!
+            const tool = this.options.tools.resolve(
+              pending.toolId!,
+              pending.toolVersion
+            )
+            const candidate = settledRecoveryCandidate(
+              run,
+              checkpoint,
+              steps,
+              tool
+            )
+            if (candidate) {
+              const gate = await recoveryGate()
+              if (gate) return recoveryStop(gate.response, gate.stopReason)
+              const proof = await this.withDeadline(
+                readNativeConfirmedEffect(
+                  tool,
+                  input.tenantId,
+                  candidate.operationKey,
+                  candidate.pending.toolInput ?? {}
+                ),
+                this.remainingDuration(run)
+              )
+              if (proof === DEADLINE_EXCEEDED)
+                return recoveryStop(
+                  'Duration budget exhausted reading the confirmed result.',
+                  'MAX_DURATION'
+                )
+              if (proof)
+                stagedRecovery = stageSettledRecovery(
+                  run,
+                  candidate,
+                  proof.output,
+                  this.maxSignatures
+                )
+            }
+          } catch {
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: native confirmed result recovery could not be validated; reconciliation is required.'
+            )
+          }
+        }
         if (
           settledStep &&
+          !stagedRecovery &&
           (!savedResult ||
             (savedResult.payload as { completion?: string }).completion !==
               'COMPLETE')
@@ -934,7 +1019,7 @@ export class IterativeGovernedRuntime {
             startedAtMs
           )
         }
-        if (settledStep && savedResult) {
+        if (settledStep && savedResult && !stagedRecovery) {
           const pending = checkpoint.state.pendingDecision!
           if (
             savedResult.stepId !== settledStep.stepId ||
@@ -1056,7 +1141,41 @@ export class IterativeGovernedRuntime {
             startedAtMs
           )
         }
-        await this.persistCheckpoint(run)
+        if (stagedRecovery) {
+          // The initial native CAS commits the projection before adopting it.
+          // An ambiguous ACK never reaches the generic finalization save.
+          try {
+            const gate = await recoveryGate()
+            if (gate) return recoveryStop(gate.response, gate.stopReason)
+            await this.persistCheckpoint(stagedRecovery)
+            if (!stagedRecovery.checkpointToken)
+              throw new ToolResultContextError(
+                'STATE_CONFLICT',
+                'Recovery checkpoint token is missing.',
+                'STATE_CONFLICT'
+              )
+            run.state = stagedRecovery.state
+            run.observations = stagedRecovery.observations
+            run.usage = stagedRecovery.usage
+            run.countedSteps = stagedRecovery.countedSteps
+            run.stepNumber = stagedRecovery.stepNumber
+            run.inFlightCounted = false
+            run.lastToolObservation = stagedRecovery.lastToolObservation
+            run.lastDecision = null
+            run.checkpointToken = stagedRecovery.checkpointToken
+          } catch {
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: recovered checkpoint acknowledgement is uncertain; reconciliation is required.'
+            )
+          }
+          if (
+            (run.lastToolObservation!.payload as { completion: string })
+              .completion === 'UNAVAILABLE'
+          )
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: confirmed tool result cannot be delivered completely.'
+            )
+        } else await this.persistCheckpoint(run)
       }
       await this.safeAudit(run, 'runtime_v2.started', {
         result: checkpoint ? 'resumed' : 'started'
@@ -2391,7 +2510,8 @@ export class IterativeGovernedRuntime {
     const finalResult = await this.recordAuditOutcome(
       run,
       result,
-      claimedReason
+      claimedReason,
+      outcome.preserveCheckpoint === true
     )
     this.recordTelemetry(run, finalResult, startedAtMs)
     return finalResult
@@ -2400,7 +2520,8 @@ export class IterativeGovernedRuntime {
   private async recordAuditOutcome(
     run: LoopRun,
     result: RuntimeResult,
-    stopReason: StopReason
+    stopReason: StopReason,
+    preserveCheckpoint: boolean
   ): Promise<RuntimeResult> {
     const action =
       stopReason === 'COMPLETED'
@@ -2435,7 +2556,7 @@ export class IterativeGovernedRuntime {
       }
       return result
     } catch (error) {
-      if (this.options.toolResultContext) {
+      if (this.options.toolResultContext && !preserveCheckpoint) {
         // A required audit veto cannot leave a healthy writer advertising a
         // successful terminal checkpoint. Keep all acknowledged usage/effects.
         run.state = { ...run.state, stopReason: 'INSUFFICIENT_EVIDENCE' }

@@ -165,12 +165,145 @@ describe(
       await oldReaderDenied()
     })
 
+    it('qualifies only committed native get, preserving null without stamping confirm or reserve', async () => {
+      assert(pool)
+      const journal = new Journal(pool, { resultStorage: { version: 1 } })
+      const input = {
+        tenantId: journalTenant,
+        operationKey: binding.runId + ':read-proof',
+        proposalHash: 'p',
+        attemptId: 'a'
+      }
+      const key = Symbol.for('cvg.journal.validated-result.v1')
+      await journal.reserve(input)
+      await journal.markStarted(input)
+      const confirmed = await journal.confirm({ ...input, result: null })
+      assert.equal(Object.getOwnPropertyDescriptor(confirmed, key), undefined)
+      const read = await journal.get(journalTenant, input.operationKey)
+      assert(read && Object.hasOwn(read, 'result') && read.result === null)
+      assert.deepEqual(Object.getOwnPropertyDescriptor(read, key), {
+        value: 1,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      })
+      assert.equal(
+        Object.getOwnPropertyDescriptor(
+          await journal.reserve({ ...input, attemptId: 'other' }),
+          key
+        ),
+        undefined
+      )
+      assert.equal(
+        Object.getOwnPropertyDescriptor(
+          (await journal.get(journalTenant, 'legacy-null'))!,
+          key
+        ),
+        undefined
+      )
+      writeFileSync(
+        join(binding.evidenceRoot, binding.runId + '-qualified-read.json'),
+        JSON.stringify({
+          runtimeRoleRead: true,
+          nullOwnProperty: true,
+          getDescriptorExact: true,
+          confirmReserveLegacyUnstamped: true,
+          modelCalls: 0,
+          toolBodies: 0
+        }) + '\n'
+      )
+    })
+
+    it('never qualifies own uncommitted journal output or commits the caller transaction', async () => {
+      assert(pool)
+      const { withTenantContext } = await import('@cvg/persistence')
+      const { TenantIdSchema } = await import('@cvg/platform')
+      const op = binding.runId + ':uncommitted-read'
+      const envelope = {
+        encoding: 'base64',
+        decodedBytes: 4,
+        decodedSha256:
+          '74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b',
+        data: 'bnVsbA=='
+      }
+      await withTenantContext(
+        pool,
+        TenantIdSchema.parse(journalTenant),
+        async (client) => {
+          await client.query('BEGIN')
+          try {
+            await client.query(
+              `INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result_storage_version) VALUES($1,$2,'p','RESERVED','a',1)`,
+              [journalTenant, op]
+            )
+            await client.query(
+              "UPDATE operational_effect_journal SET state='EFFECT_STARTED' WHERE tenant_id=$1 AND operation_key=$2",
+              [journalTenant, op]
+            )
+            await client.query(
+              "UPDATE operational_effect_journal SET state='CONFIRMED',result_storage_payload=$3::jsonb WHERE tenant_id=$1 AND operation_key=$2",
+              [journalTenant, op, JSON.stringify(envelope)]
+            )
+            assert.equal(
+              (
+                await client.query(
+                  'SELECT pg_current_xact_id_if_assigned() IS NOT NULL AS assigned'
+                )
+              ).rows[0]!.assigned,
+              true
+            )
+            const journal = new Journal(
+              { query: client.query.bind(client) },
+              { resultStorage: { version: 1 } }
+            )
+            const read = await journal.get(journalTenant, op)
+            assert(
+              read && Object.hasOwn(read, 'result') && read.result === null
+            )
+            assert.equal(
+              Object.getOwnPropertyDescriptor(
+                read,
+                Symbol.for('cvg.journal.validated-result.v1')
+              ),
+              undefined
+            )
+          } finally {
+            await client.query('ROLLBACK')
+          }
+        }
+      )
+      assert.equal(
+        await new Journal(pool, { resultStorage: { version: 1 } }).get(
+          journalTenant,
+          op
+        ),
+        null,
+        'get committed a transaction it did not own'
+      )
+      writeFileSync(
+        join(binding.evidenceRoot, binding.runId + '-uncommitted-read.json'),
+        JSON.stringify({
+          assignedTransaction: true,
+          visibleOwnOutputNull: true,
+          recoveryUnqualified: true,
+          rollbackRemovedRow: true,
+          callerTransactionNotCommitted: true,
+          modelCalls: 0,
+          toolBodies: 0
+        }) + '\n'
+      )
+    })
+
     for (const mutation of [
       'public-grant',
       'membership',
       'checksum',
       'disabled-trigger',
-      'inherit'
+      'inherit',
+      'createdb',
+      'createrole',
+      'bypassrls',
+      'replication'
     ] as const) {
       it(`refuses isolated ${mutation} before admission and accepts its exact restoration`, async () => {
         assert(admin && pool)
@@ -203,10 +336,14 @@ describe(
                     `ALTER TABLE ${journalSchema}.operational_effect_journal DISABLE TRIGGER journal_result_storage_guard`,
                     `ALTER TABLE ${journalSchema}.operational_effect_journal ENABLE TRIGGER journal_result_storage_guard`
                   ]
-                : mutation === 'inherit'
+                : mutation === 'inherit' ||
+                    mutation === 'createdb' ||
+                    mutation === 'createrole' ||
+                    mutation === 'bypassrls' ||
+                    mutation === 'replication'
                   ? [
-                      'ALTER ROLE c100_j225_service INHERIT',
-                      'ALTER ROLE c100_j225_service NOINHERIT'
+                      'ALTER ROLE c100_j225_service ' + mutation.toUpperCase(),
+                      'ALTER ROLE c100_j225_service NO' + mutation.toUpperCase()
                     ]
                   : null
         let restored = false
@@ -382,6 +519,71 @@ describe(
           binding.runId + ':forbidden0'
         ),
         null
+      )
+    })
+
+    it('refuses version1 from another login even with INSERT and correct tenant', async () => {
+      assert(admin && pool)
+      const pg = (await import('pg')).default
+      const journal = new Journal(pool, { resultStorage: { version: 1 } })
+      const key = binding.runId + ':other-writer1'
+      assert.equal(await journal.get(journalTenant, key), null)
+      const old = new pg.Client({
+        ...journalCredentials('old'),
+        options: '-c search_path=' + journalSchema,
+        application_name: 'c100-j225-other-writer-negative',
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 10000
+      })
+      try {
+        await admin.query(
+          `GRANT INSERT ON ${journalSchema}.operational_effect_journal TO c100_j225_old`
+        )
+        await admin.query(
+          `GRANT SELECT ON ${journalSchema}.operational_executions TO c100_j225_old`
+        )
+        await old.connect()
+        await old.query("SELECT set_config('cvg.tenant_id',$1,false)", [
+          journalTenant
+        ])
+        await assert.rejects(
+          old.query(
+            `INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result_storage_version) VALUES($1,$2,'p','RESERVED','a',1)`,
+            [journalTenant, key]
+          ),
+          (error: unknown) =>
+            (error as { code?: string; message?: string }).code === '42501' &&
+            (error as Error).message === 'JOURNAL_STORAGE_MODE'
+        )
+      } finally {
+        try {
+          await old.end()
+        } finally {
+          try {
+            await admin.query(
+              `REVOKE INSERT ON ${journalSchema}.operational_effect_journal FROM c100_j225_old`
+            )
+          } finally {
+            await admin.query(
+              `REVOKE SELECT ON ${journalSchema}.operational_executions FROM c100_j225_old`
+            )
+          }
+        }
+      }
+      assert.equal(await journal.get(journalTenant, key), null)
+      await oldReaderDenied()
+      writeFileSync(
+        join(
+          binding.evidenceRoot,
+          binding.runId + '-negative-other-writer1.json'
+        ),
+        JSON.stringify({
+          rejectedByGuard: '42501/JOURNAL_STORAGE_MODE',
+          restored: true,
+          rowAbsent: true,
+          modelCalls: 0,
+          toolBodies: 0
+        }) + '\n'
       )
     })
 

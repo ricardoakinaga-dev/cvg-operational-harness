@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { canonicalizeCompleteJson } from '@cvg/harness-contracts'
 import type {
   ToolDefinition,
   ToolExecutionContext,
@@ -251,6 +252,29 @@ export interface JournaledToolRegistryOptions {
 // Private executor provenance survives the native descriptor copies used by
 // complete-result preparation. Caller-provided descriptor fields cannot opt in.
 const NATIVE_EFFECT_JOURNAL = Symbol('native-effect-journal')
+const NATIVE_EFFECT_RECOVERY = Symbol('native-effect-recovery')
+const VALIDATED_RESULT = Symbol.for('cvg.journal.validated-result.v1')
+
+/** Internal executor provenance; deliberately absent from the public barrel. */
+export async function readNativeConfirmedEffect(
+  tool: ToolDefinition | undefined,
+  tenantId: string,
+  operationKey: string,
+  input: unknown
+): Promise<{ output: unknown } | null> {
+  const descriptor =
+    tool && Object.getOwnPropertyDescriptor(tool, NATIVE_EFFECT_RECOVERY)
+  if (
+    !descriptor ||
+    !('value' in descriptor) ||
+    descriptor.enumerable !== true ||
+    typeof descriptor.value !== 'function'
+  )
+    return null
+  return descriptor.value(tenantId, operationKey, input) as Promise<{
+    output: unknown
+  } | null>
+}
 
 export async function hasNativeEffectReservation(
   tool: ToolDefinition | undefined,
@@ -418,5 +442,56 @@ function journaledTool(
       }
     }
   }
+  Object.defineProperty(wrapped, NATIVE_EFFECT_RECOVERY, {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (
+      tenantId: string,
+      operationKey: string,
+      input: unknown
+    ): Promise<{ output: unknown } | null> => {
+      const record = await journal.get(tenantId, operationKey)
+      if (!record || typeof record !== 'object') return null
+      const stamp = Object.getOwnPropertyDescriptor(record, VALIDATED_RESULT)
+      if (
+        !stamp ||
+        !('value' in stamp) ||
+        stamp.value !== 1 ||
+        stamp.enumerable !== false ||
+        stamp.writable !== false ||
+        stamp.configurable !== false
+      )
+        return null
+      const data = (key: keyof EffectJournalRecord) => {
+        const d = Object.getOwnPropertyDescriptor(record, key)
+        return d && 'value' in d ? (d.value as unknown) : undefined
+      }
+      const attempt = data('attemptId')
+      if (
+        data('tenantId') !== tenantId ||
+        data('operationKey') !== operationKey ||
+        data('state') !== 'CONFIRMED' ||
+        data('proposalHash') !==
+          proposalHash(tool, input, compositionFingerprint) ||
+        typeof attempt !== 'string' ||
+        !attempt.trim() ||
+        attempt.length > 240 ||
+        attempt.includes('\0')
+      )
+        return null
+      const output = Object.getOwnPropertyDescriptor(record, 'result')
+      if (!output || !('value' in output)) return null
+      return {
+        output: JSON.parse(
+          canonicalizeCompleteJson(output.value, {
+            maxBytes: 1048576,
+            maxDepth: 64,
+            maxNodes: 1000000
+          })
+        ) as unknown
+      }
+    }
+  })
   return wrapped
 }

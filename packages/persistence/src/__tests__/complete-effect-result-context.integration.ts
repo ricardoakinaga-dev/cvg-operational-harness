@@ -61,7 +61,11 @@ async function snapshot(executionId: string) {
         )
       ).rows
   )
-  return { checkpoint, journal }
+  const steps = await new PostgresExecutionStepStore(resource.pool).listSteps(
+    journalTenant,
+    executionId
+  )
+  return { checkpoint, journal, steps }
 }
 
 function phase(
@@ -132,7 +136,8 @@ describe(
   () => {
     const cases = [
       ...journalContextIds.map((id) => ({ id, point: 'context' as const })),
-      { id: 'small' as const, point: 'save-failure' as const }
+      { id: 'small' as const, point: 'save-failure' as const },
+      { id: 'large300k' as const, point: 'save-failure' as const }
     ]
     for (const { id, point } of cases)
       it(
@@ -196,6 +201,22 @@ describe(
               before.journal,
               'restart changed confirmed journal'
             )
+            const nativeTool = before.steps.filter(
+              (step) => step.stepType === 'TOOL'
+            )
+            assert.equal(nativeTool.length, 1)
+            assert.equal(nativeTool[0]!.status, 'SUCCEEDED')
+            assert.equal(nativeTool[0]!.attempt, 1)
+            assert.equal(nativeTool[0]!.observationRefs.length, 1)
+            assert.equal(
+              new Date(nativeTool[0]!.completedAt!).toISOString(),
+              nativeTool[0]!.completedAt
+            )
+            assert.deepEqual(
+              after.steps.filter((step) => step.stepType === 'TOOL'),
+              nativeTool,
+              'recovery mutated the settled step, ref or attempt'
+            )
             const row = before.journal[0]!
             assert.equal(row.state, 'CONFIRMED')
             assert.equal(row.result_storage_version, 1)
@@ -227,10 +248,10 @@ describe(
               'reader.trace.json'
             ) as unknown as Trace
             const writer = load(identity.dir, 'writer.outcome.json') as {
-              result: { stopReason: string; response: string }
+              result: { stopReason: string; response: string; steps: number }
             }
             const reader = load(identity.dir, 'reader.outcome.json') as {
-              result: { stopReason: string; response: string }
+              result: { stopReason: string; response: string; steps: number }
             }
             const obs = after.checkpoint?.state.observations.find(
               (o) => o.type === 'TOOL_RESULT'
@@ -320,6 +341,26 @@ describe(
                 !before.checkpoint!.state.observations.some(
                   (o) => o.type === 'TOOL_RESULT'
                 )
+              )
+              assert.equal(obs.observationId, nativeTool[0]!.observationRefs[0])
+              assert.equal(obs.stepId, nativeTool[0]!.stepId)
+              assert.equal(obs.timestamp, nativeTool[0]!.completedAt)
+              assert.equal(obs.provenance.operationKey, row.operation_key)
+              assert.equal(obs.provenance.effectRef, row.operation_key)
+              assert.equal(
+                writer.result.steps,
+                before.checkpoint!.budgetUsage.steps + 1
+              )
+              assert.equal(
+                after.checkpoint!.budgetUsage.steps,
+                before.checkpoint!.budgetUsage.steps +
+                  1 +
+                  (unavailable ? 0 : 1),
+                'count the recovered tool once and a response only when the result is deliverable'
+              )
+              assert.equal(
+                reader.result.steps,
+                after.checkpoint!.budgetUsage.steps
               )
             }
             const usage = [...wt.results, ...rt.results]
