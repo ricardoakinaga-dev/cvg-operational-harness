@@ -1,0 +1,264 @@
+{
+ "kind": "INDEPENDENT_REVIEW",
+ "round": 2,
+ "task": "DX100-G02:ADMIT-SDK-PROFILE-AND-ACCEPTANCE",
+ "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r2/",
+ "reviewed_at": "2026-10-18T20:48:42Z",
+ "subject": "review-freeze-r2.json",
+ "subject_sha256": "05cc2ece8758b7b290fb9ee774224e909eb646a450c783af344401c9f8ffdeee",
+ "subject_hash_check": {
+  "before": {
+   "review_freeze_sha256": "05cc2ece8758b7b290fb9ee774224e909eb646a450c783af344401c9f8ffdeee",
+   "files_frozen": 683,
+   "files_matching": 683,
+   "mismatches": [],
+   "review_r1_sha256_matches_freeze": true,
+   "extra_files_not_frozen": [
+    "budget.json (ledger vivo, excluído de propósito)",
+    "case-ledger.json (ledger vivo, excluído de propósito)",
+    "review-freeze-r2.json (o próprio freeze)",
+    "review-r1/review.json (ligado por review_r1.sha256 cc39f168...)"
+   ],
+   "live_ledgers_vs_snapshots": "budget.json == ledger-snapshots/budget-at-review-freeze-r2.json (bbbe9583...); case-ledger.json == ledger-snapshots/case-ledger-at-review-freeze-r2.json (f1c35cf5..., igual ao congelado na R1)",
+   "review_r2_dir": "vazio no início"
+  },
+  "after": {
+   "review_freeze_sha256": "05cc2ece8758b7b290fb9ee774224e909eb646a450c783af344401c9f8ffdeee",
+   "files_frozen": 683,
+   "files_matching": 683,
+   "mismatches": [],
+   "live_ledgers_vs_snapshots": "ainda iguais (mesmos sha256)",
+   "residue": "nenhum python/__pycache__ e nenhum diretório /mnt/ia/cvg-codex100-exec-20261017/sdk-admission/selftest-* restante",
+   "note": "Nada do objeto mudou durante a revisão. A única escrita desta revisão é review-r2/review.json."
+  },
+  "source_freeze_r2": "source-freeze-r2.json (507eb9f3...) confere com 20/21 fontes atuais em bytes, sha256 e modo; a 21a, python/acceptance.py, diverge como esperado e a preimagem archives/review-r1-preimages/python/acceptance.py tem exatamente o hash congelado (e8ef2550..., 35183 bytes). Papéis (python-driver, adapter-python, fixture-rpc, node/*), observer.py, channel.py e supervisor.py idênticos ao freeze.",
+  "repair_delta": "review-freeze-r1 -> r2: alterados só case-results.json, errata.json, python/acceptance.py, python/selftest_acceptance.py, python/selftest_python.py; removidos budget.json e case-ledger.json do freeze e os 2 .pyc; adicionados 37 arquivos (preimagens, 19 acceptance-r2.json, erratas, snapshots, relatórios r2). As 5 preimagens batem com os hashes do review-freeze-r1. evaluator-freeze-r2.json confere com acceptance.py, observer.py e selftest_acceptance.py atuais."
+ },
+ "verdict": "APPROVE",
+ "mandatory_findings": [],
+ "r1_findings_status": {
+  "R1-F01": {
+   "status": "RESOLVED",
+   "evidence": "errata.json:48 CLOSED_PARTIAL, com closed_part (:56) e residual (:57) corretos: o peer congelado não responde a pedido sem script (fixture-rpc.py:44-72, plan devolve 'none'), _request_raw espera em waiter.get() sem timeout (inputs/sdk/python/src/openai_codex/client.py:382) e o watchdog do driver emite INVALID (python-driver.py:426-428). KNOWN_BAD de SDKPY07/08/09 reescritos (acceptance.py:87-89) sem afirmar MISMATCH em serviço para o pedido bloqueante. Os três autotestes antigos viraram *_predicate_level_unreachable_with_frozen_peer e entraram acceptance.SDKPY0{7,8,9}.blocking_unscripted_request_invalid_never_pass. A forma alcançável dá INVALID_CAPTURE de modo robusto: qualquer frame INVALID do driver vira status INVALID no observador (observer.py:283-285, 337-338, 381-382) e evaluate() força INVALID_CAPTURE (acceptance.py:531-534; INCONCLUSIVE só em SDKTS10). validation-r2 A01/A08 ajustados. Confirmei também a parte alcançável: SDKPY07 closed=false segue para FINISH_PEER (supervisor.py:849-856) e SDKPY08 'no_first_interrupt' completa a captura (MISMATCH). Resíduos só P3: R2-F02 (goal path de SDKPY07 com o mesmo problema de alcance) e R2-F03 (citação antiga em errata.json:52)."
+  },
+  "R1-F02": {
+   "status": "RESOLVED",
+   "evidence": "review-freeze-r2.json exclui budget.json e case-ledger.json (excluded_live_ledgers) e congela ledger-snapshots/*; os vivos são hoje byte a byte iguais aos snapshots, antes e depois desta revisão. O snapshot do budget registra reviews_used 2 com R2 STARTED e repairs[0].record_sha256 a375e8a0..., que confere com repair-r1.json."
+  },
+  "R1-F03": {
+   "status": "RESOLVED",
+   "evidence": "acceptance.py:336-337 monta want e shape como listas; reevaluate normaliza por JSON (:592) e compara o documento inteiro com acceptance-r2.json. Nos 19 casos: rc=0, outcome_equal_to_service_time=true e identical_to_stored_r2=true; regenerando a serialização de reevaluate (json.dumps indent=2 + LF) os 19 acceptance-r2.json saem idênticos byte a byte. Observação P3 sobre o escopo da comparação com o documento de serviço em R2-F04."
+  },
+  "R1-F04": {
+   "status": "RESOLVED",
+   "evidence": "api.request_result_validated exige sorted(res) == ['platformFamily','platformOs','serverInfo','userAgent'] (acceptance.py:286-287); cada predicado traz judges (PEER_SANITY em :104-106, judges() em :109-114) sem renomear IDs; as contagens by_judge de case-results-r2.json conferem com os 19 documentos. A intercalação pelos offsets RAW_READ não foi adicionada, mas wire.peer_requests_serial agora está rotulado peer_or_capture_sanity e não promete mais um julgamento do cliente (o HOW pede que o peer envie em série e espere; as respostas do cliente são julgadas por wire.default_handler_replies)."
+  },
+  "R1-F05": {
+   "status": "PARTIAL",
+   "evidence": "Parte SDKTS04 resolvida: o KNOWN_BAD (acceptance.py:93) declara que a sobrescrita de cache_write presente não tem fixture (fixture-cases.json SDKTS04 sem cache_write_input_tokens). Parte de ordem: wire.initialized_before_guard foi adicionado em SDKPY02/04 e passa nos dois, mas é logicamente implicado pelos predicados que já existiam e não julga a ordem entre os bytes do initialized e o erro do guard (R2-F01). Os dados preservados mostram a ordem nos dois casos, então nenhum resultado muda."
+  },
+  "R1-F06": {
+   "status": "RESOLVED",
+   "evidence": "Autotestes novos presentes e verdes: SDKPY01 negative_swapped_reply_id_predicate_level (MISMATCH) e negative_false_complete_terminal_invalid (INVALID_CAPTURE); SDKPY03 not_written e empty_result; SDKPY05 none_blocked; SDKTS01 nonempty; SDKTS03 ignored; SDKTS06 raised; SDKTS07 returned. O código emitido alterado continua coberto por emitted.* e loader.* do autoteste Node (103/0). Ficou sem negativo só o predicado novo wire.initialized_before_guard, o que é esperado, porque ele não pode falhar sozinho (R2-F01)."
+  },
+  "R1-F07": {
+   "status": "RESOLVED",
+   "evidence": "interface-bindings-v2-errata-r1.json emenda /witnesses/maps (anon_inode sem exec nas duas linguagens; memfd só no Node) e /compiler_stage/seal (allowlist exigida nas duas listas, igualdade só registrada), e confere com supervisor.py:439-445 e :1319-1322. O observado também confere: 10 casos TS com 4 anon_inode:[io_uring] rw-s cada, 0 desconhecidos nos 19 casos e nos 5 diagnósticos R2, lists_equal=true nos 10 em emit.json."
+  },
+  "R1-F08": {
+   "status": "RESOLVED",
+   "evidence": "compiler/emit-errata-r1.json: recontei em compiler/emitted/*.js e bate (exec.js: 2 chamadas createRequire, nas linhas 17 e 321, mais 1 import na linha 5; 2 .resolve( nas linhas 320 e 322; zero nos outros 9). A leitura também confere: findCodexPath só roda sem executablePath (exec.js:25-30), e os casos TS passam o override."
+  },
+  "R1-F09": {
+   "status": "RESOLVED",
+   "evidence": "case-results.json e case-results-r2.json têm o bloco limits (perfil, not_covered, witness_scope, known_bad_reach, credit). A contagem '33 dos 44 contratos fonte (11 selecionados só parcialmente)' confere com sdk-reference-profile/coverage.json (44 linhas, 11 com caso selecionado, whole_requirement_covered=false em todas). validation-r2 A12 aponta #/limits."
+  },
+  "R1-F10": {
+   "status": "PARTIAL",
+   "evidence": "lead-communication.json registra o texto enviado, a ausência de veto e status NOT_VETOED_PENDING_LEAD_RATIFICATION ('Silêncio não é aceite'). validation-r2 A10 diz ATENDIDO_PENDENTE_RATIFICACAO_DO_LEAD, sem dar a leitura 12+19 como aceita. A ratificação continua pendente e só o Lead pode fazê-la, então a unidade não consegue fechar o achado por conta própria. Não verifiquei a entrega da mensagem: ela está fora da UNIT."
+  },
+  "R1-F11": {
+   "status": "RESOLVED",
+   "evidence": "python/__pycache__ removido e fora do freeze; o relatório selftests/r2/acceptance-selftest.json traz a nota de que os gates.* são condicionais (só gates.attempt_unknown_case roda com os freezes presentes). Rodei os autotestes com -B e nenhum bytecode foi gravado."
+  }
+ },
+ "findings": [
+  {
+   "id": "R2-F01",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 267,
+   "title": "wire.initialized_before_guard é redundante: é implicado pelos predicados que já existiam e tira a ordem do fonte, não da captura",
+   "evidence": "Para SDKPY02/04, PASS já exigia wire.initialized_notification_exact (:226, obj(cl,1)=={'method':'initialized'}), api.initialize_result_parsed (:230, api[0] é API_RESULT de initialize) e api.request_raised_CodexError_from_ValueError (:254, len(api)==2 e api[1] é API_ERROR de CodexClient.request). Como api_events segue a ordem de seq do driver (seq consecutivo exigido em observer.py:187), essa conjunção já implica init_seq[0] < err_seq[0]. O predicado novo (:267) só acrescenta a exigência do nome síncrono 'CodexClient.initialize'. Não existe captura em que ele falhe sozinho, por isso não há autoteste negativo dele. O que liga os bytes do initialized ao instante do guard é o comentário ':258 initialize() writes the initialized notification before returning (source)', em conflito com o docstring ':13 Nothing is repaired, relabeled or inferred from source text'. Um cliente que adiasse o initialized para depois do erro do guard (por exemplo, no close) também passaria. O par mono_ns, que é a evidência da captura, ficou só informativo. Ele mostra a ordem nos dois casos: SDKPY02 leitura do initialized pelo adapter 12991549466040 < API_RESULT 12991549482200 < API_ERROR 12991549725003; SDKPY04 12994637072173 < 12994637156970.",
+   "impact": "Nenhum resultado muda, porque os brutos preservados mostram a ordem pedida pelo HOW. A afirmação de que R1-F05 está RESOLVED é mais forte que o julgamento: a ordem continua fora dos predicados, e quem a sustenta é o fonte. O predicado em si não depende de corrida entre processos.",
+   "fix": "Opcional, para um perfil futuro: usar uma prova suficiente e unilateral, mono_ns da RAW_READ do initialized pelo adapter <= mono_ns do API_ERROR (mesmo CLOCK_MONOTONIC). Se valer, ok; se não valer, INCONCLUSIVE ou INVALID, nunca MISMATCH, para não reprovar um cliente correto por atraso de agendamento. Outra saída é reclassificar o predicado como 'ordem na faixa do driver, assistida pelo fonte' e manter R1-F05 como PARTIAL."
+  },
+  {
+   "id": "R2-F02",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 87,
+   "title": "KNOWN_BAD de SDKPY07: o goal path tem o mesmo limite de alcance de R1-F01, mas segue mapeado para wire.no_goal_path sem ressalva",
+   "evidence": "O fixture de SDKPY07 (fixture-cases.json) não tem pause_reply. Para thread/goal/set, Script.plan devolve 'none' (fixture-rpc.py:61, 69-70). Pelo SDK, cancel_goal_operation -> pause_goal -> thread_goal_set -> request -> _request_raw espera em waiter.get() sem timeout (client.py:563-575, 382); o except Exception em cancel_goal_operation não cobre o bloqueio. Um goal path enviado de forma bloqueante (antes do HOOK_CLOSED ou no caminho do chamador) termina, portanto, INVALID_CAPTURE por prazo, não MISMATCH por wire.no_goal_path. O texto r2 qualifica só o turn/interrupt ('only a non-blocking interrupt is judged MISMATCH'). Nenhum autoteste afirma MISMATCH para o goal path, e case-results*.json#/limits/known_bad_reach diz em termos gerais que 'Pedido sem script bloqueante termina INVALID_CAPTURE'.",
+   "impact": "Imprecisão de texto da mesma classe de R1-F01, mas sem afirmação falsa de fechamento e sem autoteste enganoso. O limite geral publicado está correto e o caminho é fail-closed. Nenhum resultado muda.",
+   "fix": "Estender o texto KNOWN_BAD de SDKPY07 e o residual da errata R2-F04: goal path bloqueante -> INVALID_CAPTURE por prazo; só o envio não bloqueante (depois do HOOK_CLOSED) é julgado MISMATCH por wire.no_goal_path."
+  },
+  {
+   "id": "R2-F03",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "errata.json",
+   "line": 52,
+   "title": "A evidência de R2-F04 ainda cita o ID antigo known_bad_interrupt_sent_mismatch",
+   "evidence": "errata.json:52 lista 'selftests acceptance.SDKPY07.known_bad_closed_false_mismatch e known_bad_interrupt_sent_mismatch'. O segundo ID só existe no relatório r1 (selftests/acceptance-selftest.json). Em r2 ele virou acceptance.SDKPY07.known_bad_interrupt_sent_predicate_level_unreachable_with_frozen_peer, que prova só o predicado. As linhas 53-54 explicam a troca, mas a linha 52 continua citando como evidência de fechamento a captura inalcançável que motivou R1-F01.",
+   "impact": "Cosmético. O status CLOSED_PARTIAL, o closed_part e o residual estão certos.",
+   "fix": "Trocar a linha 52 por 'acceptance.SDKPY07.known_bad_closed_false_mismatch (alcançável)' e deixar o ID antigo só como referência ao relatório r1."
+  },
+  {
+   "id": "R2-F04",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/acceptance.py",
+   "line": 21,
+   "title": "reevaluate r2: docstring promete uma alternativa que o código não tem, e a comparação com o documento de serviço ficou restrita a outcome e veredito",
+   "evidence": "O docstring (:21) diz 'compare with acceptance-r2.json (else acceptance.json)', mas sem acceptance-r2.json o código dá identical_to_stored_r2=false e sai com 1 (:597, :609); não existe comparação alternativa com acceptance.json. Contra o acceptance.json de serviço, o r2 compara só outcome e capture_verdict (:596), enquanto o r1 comparava também os predicados. Além disso, predicate_ids_match_plan no r2 se refere aos PRED_IDS do r2, que diferem do case-plan.json congelado em SDKPY02/04. Isso só fica documentado pelo autoteste acceptance.r2_predicates_additive_over_r1. Conferência independente desta revisão: em 19/19, os predicados do r1 aparecem no r2 com o mesmo ok, o mesmo detail e a mesma ordem. As diferenças são só evaluator, judges, o predicado novo de SDKPY02/04 e o texto known_bad de SDKPY07/08/09 e SDKTS04.",
+   "impact": "Nenhum resultado muda, e a reprodução do julgamento de serviço continua verdadeira (verificada aqui). A ferramenta, porém, não mostra isso sozinha, e o docstring descreve um comportamento inexistente.",
+   "fix": "Comparar os predicados do serviço com a projeção do r2 (sem judges e sem os IDs aditivos) e corrigir o docstring."
+  },
+  {
+   "id": "R2-F05",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "validation-r2.json",
+   "line": 130,
+   "title": "A11 aponta 'delta em ledger-delta-cont-d9ef.md', mas esse delta não existe para esta unidade",
+   "evidence": "Não há ledger-delta-cont-d9ef.md na UNIT. O único arquivo com esse nome na worktree é ../sdk-observation-drivers/ledger-delta-cont-d9ef.md (sha256 d89ce020..., igual ao unit-manifest da unidade anterior). Ele é o delta da unidade anterior e só propõe esta como próxima ação (linhas 33, 59, 80, 114). claim.json:34 dizia que o texto proposto iria para esse arquivo. O mesmo texto já estava em validation-r1 A11.",
+   "impact": "A evidência apontada não existe no objeto. A afirmação de que os ledgers 99/20/30 estão intocados não pode ser conferida aqui (git proibido). Nenhum resultado muda.",
+   "fix": "Produzir o delta desta unidade antes da promoção ou corrigir o ponteiro de A11."
+  }
+ ],
+ "checks_run": [
+  {
+   "check": "Integridade do objeto (683 arquivos) antes e depois; review-r1/review.json contra review_r1.sha256; ledgers vivos contra snapshots",
+   "result": "683/683 antes e depois; review-r1 confere; budget.json e case-ledger.json iguais aos snapshots nos dois momentos."
+  },
+  {
+   "check": "source-freeze-r2.json contra as 21 fontes (bytes, sha256, modo) e preimagens contra review-freeze-r1",
+   "result": "20/21 OK; python/acceptance.py diverge e a preimagem tem exatamente o hash congelado; as 5 preimagens batem com review-freeze-r1; evaluator-freeze-r2 confere."
+  },
+  {
+   "check": "Delta review-freeze-r1 -> r2",
+   "result": "Mudaram só 5 arquivos, todos documentais ou de avaliação offline. Nenhuma fonte de papel, do observador, do canal ou do supervisor mudou. 27 tentativas em runtime/attempts, a última às 17:09:52 local, antes do freeze R1: nenhum serviço novo."
+  },
+  {
+   "check": "diff archives/review-r1-preimages/python/acceptance.py python/acceptance.py",
+   "result": "Só endurece ou documenta: 1 predicado aditivo (SDKPY02/04), chaves exatas em request_result_validated, campo judges, campo evaluator, tuplas -> listas nos dois lados da comparação (mesma semântica), textos KNOWN_BAD, reevaluate/reevaluate-write com abertura 'x'. ACCEPTED_FORMS, EOF_CASES, PY_COMMON e os demais predicados ficaram intactos. Nenhum predicado foi afrouxado."
+  },
+  {
+   "check": "diff das preimagens de selftest_acceptance.py e selftest_python.py",
+   "result": "plan_in_case_plan foi substituído por frozen_case_plan_equals_r1_evaluator (contra a preimagem r1) mais r2_predicates_additive_over_r1. plan.file_matches_tables passou a ignorar só acceptance_predicates, compensado pelo autoteste anterior. Variantes novas conforme R1-F06."
+  },
+  {
+   "check": "python3 -I -B python/acceptance.py reevaluate cases/<dir> nos 19",
+   "result": "19/19 rc=0, outcome PASS_CLIENT_OBSERVATION, outcome_equal_to_service_time=true, identical_to_stored_r2=true. Vereditos de captura: PASS em 14, KNOWN_SIGNAL_TERMINATION em SDKTS02/03/07/08/10, todos formas aceitas."
+  },
+  {
+   "check": "Reprodução byte a byte dos acceptance-r2.json (mesma função reevaluate, serialização indent=2 + LF, sem escrita)",
+   "result": "19/19 idênticos; sha256 iguais a case-results-r2.json."
+  },
+  {
+   "check": "acceptance.json de serviço contra acceptance-r2.json, campo a campo",
+   "result": "19/19: diferenças só em evaluator, judges, wire.initialized_before_guard (SDKPY02/04) e known_bad (SDKPY07/08/09, SDKTS04); todos os predicados r1 com mesmo ok, detail e ordem; by_judge confere com case-results-r2. case-results.json confere com os 19 acceptance.json de serviço."
+  },
+  {
+   "check": "python3 -I -B python/selftest_acceptance.py (sem argumento) contra selftests/r2/acceptance-selftest.json",
+   "result": "130 checks, 0 falhas, rc=0. O relatório r2 tem 130/0 e os mesmos IDs: 117 do r1 sem gates condicionais, menos 3 renomeados e plan_in_case_plan, mais 17 novos. Hashes de fonte no relatório iguais aos atuais."
+  },
+  {
+   "check": "python3 -I -B python/selftest_python.py (sem argumento) contra selftests/r2/python-selftest.json e node-selftest.json",
+   "result": "python 115/0, node 103/0, rc=0; IDs e status iguais ao r1; node-selftest r2 idêntico byte a byte ao r1. O autoteste Node usa um ts falso, sem typescript.js."
+  },
+  {
+   "check": "node --check nas fontes Node (channel.cjs, extension-loader.mjs, fixture-cli.mjs, transpile.mjs, ts-driver.mjs, selftest.mjs, adapter-typescript)",
+   "result": "Todos rc=0."
+  },
+  {
+   "check": "Predicado wire.initialized_before_guard: dados, dependência de agendamento e poder discriminante",
+   "result": "Usa seq da faixa do driver (um processo, seq consecutivo exigido pelo observador, emissão sob lock) e o conteúdo do fio. Não depende de corrida entre processos, e o mono_ns só entra como informação. É implicado pelos predicados que já existiam (R2-F01)."
+  },
+  {
+   "check": "Alcance dos known-bad: fixture-rpc.Script.plan, fixtures de SDKPY07/08/09 e SDK do pin (client.py)",
+   "result": "Pedido sem script nunca recebe resposta, e _request_raw bloqueia sem timeout. Com isso, interrupt extra de SDKPY08/09 e interrupt ou goal path bloqueante em SDKPY07 terminam INVALID_CAPTURE. closed=false (SDKPY07), no_first_interrupt (SDKPY08), not_written/none_blocked/empty_result (SDKPY03/05) e as variantes TS terminam MISMATCH. O goal path de SDKPY07 ficou sem ressalva no texto (R2-F02)."
+  },
+  {
+   "check": "Erratas R1-F07/R1-F08 contra o código e os emitidos",
+   "result": "As regras de maps e do selo conferem com supervisor.py. As classes de maps dos 19 result.json conferem (PY 29 raízes RO; TS 8 RO + 4 io_uring sem exec). As contagens de createRequire e .resolve recontadas batem."
+  },
+  {
+   "check": "Afirmações de crédito e limites em validation-r2, case-results*.json, errata, lead-communication, claim",
+   "result": "functional_receipts 0 e parity_credit 0 em todos. Os limites estão declarados (perfil, não cobertos, escopo de maps, alcance dos known-bad). A leitura 12+19 aparece como pendente de ratificação do Lead, nunca como aceita. O errata observed_effect confere: nenhum UNSCRIPTED nos 9 peers PY e wire.eof_bounded_interval ok nos 8 casos com barreira."
+  }
+ ],
+ "criteria": {
+  "A01": {
+   "status": "ATENDIDO_COM_RESIDUAL_DECLARADO",
+   "note": "Concordo com validation-r2. R2-F04 está CLOSED_PARTIAL de forma honesta, com residual explícito. Restam só os P3 R2-F02 (goal path de SDKPY07 sem a mesma ressalva) e R2-F03 (citação antiga)."
+  },
+  "A02": {
+   "status": "ATENDIDO",
+   "note": "Inalterado desde a R1 (objeto idêntico). Os 5 diagnósticos R2 têm maps ok e 0 desconhecidos; a tentativa R1 de TS-ECHO está preservada em freeze-history."
+  },
+  "A03": {
+   "status": "ATENDIDO",
+   "note": "Inalterado desde a R1. A reaquisição não foi refeita nem rechecada nesta rodada."
+  },
+  "A04": {
+   "status": "ATENDIDO",
+   "note": "Inalterado desde a R1."
+  },
+  "A05": {
+   "status": "ATENDIDO",
+   "note": "source-freeze-r2 confere com as fontes de serviço (acceptance.py via preimagem); evaluator-freeze-r2 confere com o avaliador offline."
+  },
+  "A06": {
+   "status": "ATENDIDO",
+   "note": "Com as erratas R1-F07/R1-F08 verificadas, o texto passa a bater com o código (allowlist exigida em supervisor.py:1319-1320; igualdade só registrada)."
+  },
+  "A07": {
+   "status": "ATENDIDO",
+   "note": "19/19 vagas uma vez, case-ledger idêntico ao congelado na R1, 27 tentativas todas anteriores ao freeze R1, 0 retries."
+  },
+  "A08": {
+   "status": "ATENDIDO_COM_RESSALVA",
+   "note": "19 PASS_CLIENT_OBSERVATION reproduzidos (outcome, veredito e documento r2 byte a byte); predicados r1 inalterados em ok e detail. Ressalvas P3: o predicado novo é redundante (R2-F01) e o reevaluate não compara predicados com o documento de serviço (R2-F04)."
+  },
+  "A09": {
+   "status": "ATENDIDO",
+   "note": "Classes de maps reconferidas nos 19 result.json; regra emendada em interface-bindings-v2-errata-r1.json, coerente com supervisor.py."
+  },
+  "A10": {
+   "status": "ATENDIDO_PENDENTE_RATIFICACAO_DO_LEAD",
+   "note": "Serviços 8/12, casos 19/19, revisões 2/2 (esta é a R2), reparo 1/1, retries 0. A leitura 12+19 está registrada como não vetada e pendente; silêncio não é tratado como aceite."
+  },
+  "A11": {
+   "status": "ATENDIDO_NO_ESCOPO_VERIFICADO",
+   "note": "Dentro da UNIT, nada fora do claim. O ponteiro para o delta de ledger não existe para esta unidade (R2-F05). Ledgers 99/20/30 e git não verificados (git proibido)."
+  },
+  "A12": {
+   "status": "ATENDIDO",
+   "note": "Bloco limits presente em case-results.json e case-results-r2.json; 44/11 confere com coverage.json do HOW; recibos funcionais 0 e paridade 0 em todos os artefatos."
+  }
+ },
+ "limits": [
+  "Nenhum serviço, systemd-run, systemctl, bwrap, rede, download, install ou import de SDK, Pydantic ou typescript.js nesta revisão. Os testemunhos do SO gravados em result.json foram aceitos como estão e só reconferidos quanto à coerência interna.",
+  "Execuções desta revisão: os dois autotestes sem argumento, acceptance.py reevaluate nos 19 casos e node --check, sempre com python3 -I -B a partir da UNIT. Para conferir a afirmação 'byte a byte' de A08, a mesma função reevaluate foi chamada por importação de python/acceptance.py num script de leitura e a serialização foi comparada em memória, sem escrever nada na UNIT. Scripts auxiliares de hash e comparação ficaram no scratchpad da sessão, fora da UNIT.",
+  "Os autotestes criaram e apagaram os próprios diretórios /mnt/ia/cvg-codex100-exec-20261017/sdk-admission/selftest-*; nenhum ficou.",
+  "As análises de alcance dos known-bad (R1-F01, R2-F02) são estáticas, feitas sobre a fonte do pin e o peer congelado; nenhum known-bad foi executado.",
+  "Não refiz a reaquisição, a admissão nem o compilador; esses critérios (A02-A04) seguem a R1, e o objeto não mudou nessas partes.",
+  "A11 foi verificado só dentro da UNIT; ledgers 99/20/30, coordenação e git ficaram fora (git proibido). A entrega da mensagem ao Lead (lead-communication.json) não pode ser verificada daqui."
+ ],
+ "functional_receipts": 0,
+ "parity_credit": 0
+}
