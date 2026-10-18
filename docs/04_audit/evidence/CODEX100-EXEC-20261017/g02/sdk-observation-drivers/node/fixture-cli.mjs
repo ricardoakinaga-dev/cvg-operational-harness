@@ -34,8 +34,10 @@ export async function main() {
       for (let i = 0; i < 50; i++) { try { ch.writeNow('SIGNAL', { signal: sig, inflight: false }); break; } catch (e) { if (!['EAGAIN', 'EWOULDBLOCK'].includes(e.code)) break; sleepSync(1); } }
     }
     process.removeAllListeners(sig); process.kill(process.pid, sig);
+    process.exit(125); // fallback: only reached if the default disposition was not restored
   };
   for (const s of ['SIGTERM', 'SIGINT']) process.on(s, () => onSignal(s));
+  ch.interrupt = () => done; // a delivered signal aborts telemetry backpressure waits
   try {
     C.assert(ch.admission.files['/profile/fixture-cases.json'] === C.sha(C.readFile('/profile/fixture-cases.json')), 'unbound fixtures');
     const input = selectedFixture(config);
@@ -54,9 +56,10 @@ export async function main() {
     if (holds(input)) {
       // Holds stdout open. Termination is the adapter-forwarded signal or an explicit finish.
       await ch.control('FINISH_PEER');
+      ch.finishControls();
       done = true; clearTimeout(timer);
       ch.writeNow('END', { streams: {}, child_exit_code: 0, child_signal: null, complete: true });
-      ch.close(); process.exit(0);
+      ch.closeFds(); process.exit(0);
     }
     await ch.control('RELEASE_REPLY');
     const wire = wireFixture(input);
@@ -66,9 +69,10 @@ export async function main() {
     await C.writeAll(err, wire.stderr, () => ch.check());
     await ch.emit('PEER_MILESTONE', { milestone: 'REPLY_WRITTEN', detail: { stdout_bytes: wire.stdout.length, stdout_sha256: C.sha(wire.stdout), stderr_bytes: wire.stderr.length, stderr_sha256: C.sha(wire.stderr) } });
     await ch.control('RELEASE_EXIT');
+    ch.finishControls();
     done = true; clearTimeout(timer);
     ch.writeNow('END', { streams: {}, child_exit_code: wire.code, child_signal: null, complete: true });
-    ch.close(); process.exit(wire.code);
+    ch.closeFds(); process.exit(wire.code);
   } catch (e) { fail(e); }
 }
 if (import.meta.url === `file://${process.argv[1]}`) main().catch(e => { C.invalid(null, e); process.exit(125); });

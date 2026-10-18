@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "kind": "LEAD_INTEGRATION_BINDINGS_SUPPLEMENT_NOT_A_CHANGE_OF_INTERFACE_V1",
+  "interface_v1": {
+    "path": "interface-v1.json",
+    "sha256": "99bd049e467e02298504d864586b15ed2f9335531566b090a8ec57a04ccf8198",
+    "rule": "Nada aqui relaxa interface-v1. Estes vínculos fixam escolhas que interface-v1 deixou abertas (representação exata, admissão, loader, transpile e layout do perfil)."
+  },
+  "fifo_stat_exact": {
+    "decision": "Cada valor é exatamente [dev_decimal_string, ino_decimal_string, \"0600\", 0]. O modo é a string \"0600\" (não o inteiro 384) e o uid é o inteiro 0 visto dentro do userns do sandbox (host uid mapeado para 0).",
+    "keys": "Exatamente os seis caminhos /observer/{driver,adapter,peer}.{events,control}.",
+    "checkpoint_divergence_resolved": "A fonte Node parcial aceitava '0600' ou 384; foi estreitada para somente '0600'."
+  },
+  "fifo_nodes_exact": "Lista com exatamente os seis basenames role.kind, sem repetição.",
+  "peer_argv": {
+    "python": ["/runtime/python", "-I", "-S", "/profile/fixture-rpc.py", "--case", "CASE_ID"],
+    "typescript_prefix": ["/runtime/node", "/profile/fixture-cli.mjs", "--case", "CASE_ID", "--sdk-argv-json"],
+    "typescript_suffix": "O adapter acrescenta exatamente um elemento: JSON.stringify do argv original recebido do SDK (process.argv.slice(2)). É dado observado, não comando: o peer só o valida (lista de strings, <=64 itens, <=512 bytes) e o reporta; o supervisor confere que é igual ao cmdline independente do adapter.",
+    "decision": "peer_argv no config é a lista congelada completa para Python e o prefixo congelado de cinco elementos para TypeScript, conforme transport-topology.json#/argv/TS_adapter_peer (JSON_ENCODED_ORIGINAL_SDK_ARGV é o único elemento dinâmico)."
+  },
+  "admission": {
+    "path": "/profile/admission.json",
+    "replaces_partial_name": "/profile/node-admission.json (nome da fonte parcial; unificado para as duas linguagens)",
+    "keys": ["v", "attempt", "case", "nonce", "language", "runtime_sha256", "files", "fifo_pipe_buf", "containment_admitted", "sdk_admitted", "compiler_admitted"],
+    "types": {
+      "v": "1",
+      "attempt/case/nonce": "iguais ao adapter-config.json",
+      "language": "python|typescript (igual ao config)",
+      "runtime_sha256": "python: e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f; node: 89af8424dd53e560b1933f87ba650d8bf57c83ca5a04600eefb31f416aabbae7",
+      "files": "mapa caminho absoluto /profile/... -> sha256 de TODOS os arquivos montados em /profile exceto o próprio admission.json",
+      "fifo_pipe_buf": "mapa dos seis caminhos /observer/... -> inteiro observado pelo supervisor com fpathconf(PC_PIPE_BUF) no FD do host; >=4096",
+      "containment_admitted": "true somente quando o supervisor montou o comando bwrap/systemd congelado; o testemunho de cgroup/PID é verificado depois, antes do READY",
+      "sdk_admitted": "false nesta unidade (nenhum import SDK/Pydantic)",
+      "compiler_admitted": "false nesta unidade (nenhum import/execução do compilador)"
+    },
+    "writer": "Somente o supervisor externo, antes do lançamento; montado read-only.",
+    "metadata_rule": "Bytes de metadados de um frame = len(payload) menos len(valor base64) quando kind=RAW_READ; caso contrário len(payload). Limite 1024. Aplicado igualmente em channel.cjs, channel.py e observer.py."
+  },
+  "terminal_frames": "END e INVALID são terminais por papel; qualquer frame posterior do mesmo papel é rejeitado. SIGNAL pode preceder END(complete=false) ou o término por sinal.",
+  "role_kinds": {
+    "driver": ["BEGIN", "READY", "API_RESULT", "API_ERROR", "API_CANCELLED", "HOOK_CLOSED", "DIAGNOSTIC", "SIGNAL", "END", "INVALID"],
+    "adapter": ["BEGIN", "READY", "RAW_READ", "FORWARD_COMMIT", "STREAM_END", "SIGNAL", "END", "INVALID"],
+    "peer": ["BEGIN", "READY", "REQUEST_HELD", "PEER_MILESTONE", "DIAGNOSTIC", "SIGNAL", "END", "INVALID"]
+  },
+  "control_meaning": {
+    "READY": "supervisor aceitou BEGIN (PID/startticks/pidns/cmdline/exe/fonte/nonce) e o testemunho de cgroup",
+    "RELEASE_REPLY": "peer pode escrever a resposta retida",
+    "RELEASE_EXIT": "peer pode encerrar após resposta (TS) ou driver pode fechar o SDK após término observado de peer+adapter (Python)",
+    "ABORT_NOW": "driver cancela/aborta a operação em curso",
+    "FINISH_PEER": "peer persistente RPC encerra após as asserções da API"
+  },
+  "profile_layout": {
+    "mount": "Diretório privado por tentativa montado read-only em /profile.",
+    "common": ["/profile/adapter-config.json", "/profile/admission.json", "/profile/fixture-cases.json", "/profile/bootstrap.py"],
+    "python": ["/profile/channel.py", "/profile/adapter-python.py", "/profile/fixture-rpc.py", "/profile/python-driver.py"],
+    "python_sdk_mode_only": ["/profile/sdk-python/** (cópia selada da fonte SDK)", "/profile/python-deps/** (árvore mesclada selada)"],
+    "typescript": ["/profile/package.json {\"type\":\"commonjs\"}", "/profile/channel.cjs", "/profile/adapter-typescript (0555, shebang único #!/runtime/node)", "/profile/fixture-cli.mjs", "/profile/ts-driver.mjs", "/profile/extension-loader.mjs", "/profile/node-loader.json", "/profile/transpile.mjs", "/profile/node-transpile.json"],
+    "typescript_sdk_mode_only": ["/profile/sdk-emitted/package.json {\"type\":\"module\"}", "/profile/sdk-emitted/{codex,codexOptions,events,exec,index,items,outputSchemaFile,thread,threadOptions,turnOptions}.js"],
+    "compiler_stage_only": ["/profile/typescript/lib/typescript.js (sha256 e5f1f6b3e82228a89873cc7b941b2465185e839c0692860f83e3e63e53f94c2b, 9111680 bytes; ../sdk-profile-artifacts/validation.json)", "/profile/sdk-ts-src/*.ts (dez fontes byte-exatas)"]
+  },
+  "node_loader_config": {
+    "path": "/profile/node-loader.json",
+    "keys": ["v", "entry", "prebound", "builtins", "sdk_entry", "emitted_dir", "emitted"],
+    "rules": [
+      "parentURL ausente: especificador deve ser exatamente entry.",
+      "node:<nome> somente se <nome> estiver em builtins; nomes nus de builtin são negados.",
+      "De um arquivo prebound: o URL resolvido deve ser prebound ou sdk_entry (sdk_entry só se listado em emitted).",
+      "De um arquivo emitido: somente ./<nome> sem extensão, sem barra adicional, resolvido para emitted_dir+<nome>.js listado em emitted.",
+      "Qualquer outro caso: erro ERR_CVG_LOADER_DENIED. Sem hook load/fetch/transformSource."
+    ]
+  },
+  "node_transpile_config": {
+    "path": "/profile/node-transpile.json",
+    "keys": ["v", "typescript", "sources", "source_dir", "out_dir", "compiler_options", "allowed_imports"],
+    "compiler_options": {"target": "ES2022", "module": "ESNext", "isolatedModules": true, "esModuleInterop": true, "allowSyntheticDefaultImports": true, "sourceMap": false, "declaration": false, "removeComments": false, "verbatimModuleSyntax": false},
+    "gate": "Recusa (exit 3, REFUSED_NOT_ADMITTED) antes de qualquer require do compilador se admission.compiler_admitted !== true ou config.mode !== 'sdk'."
+  },
+  "functional_receipts": 0,
+  "SDK_runtime": "NOT_RUN"
+}
