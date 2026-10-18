@@ -178,6 +178,17 @@ async function fixture(fault = '') {
               ? 'bad'
               : createHash('sha256').update(sql).digest('hex')
         }))
+      // This SPEC217 fixture represents an unexpanded legacy journal. Its
+      // metadata must answer the new default-host readiness reads explicitly.
+      else if (
+        statement.includes('FROM pg_attribute') &&
+        statement.includes(
+          "a.attrelid=to_regclass('operational_effect_journal')"
+        )
+      )
+        rows = []
+      else if (statement.includes("t.tgname='journal_result_storage_guard'"))
+        rows = []
       else if (statement.includes('FROM pg_trigger'))
         rows = Object.entries(triggers).map(
           ([trigger_name, [table_name, function_name, trigger_type]]) => {

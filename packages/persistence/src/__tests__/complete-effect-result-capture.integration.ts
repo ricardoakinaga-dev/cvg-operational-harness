@@ -115,7 +115,7 @@ function phase(id: JournalCaptureId, role: 'writer' | 'reader') {
 async function snapshot(executionId: string) {
   assert(resource)
   const { withTenantContext, PostgresExecutionStepStore } =
-    await import('@cvg/persistence')
+    await import('../../dist/index.js')
   const { TenantIdSchema } = await import('@cvg/platform')
   const journal = await withTenantContext(
     resource.pool,
@@ -210,7 +210,7 @@ describe(
             id === 'capture-plus-one' || id === 'capture-started'
           const uncertainFault = id === 'started' || id === 'capture-started'
           mkdirSync(identity.dir, { recursive: true, mode: 0o700 })
-          const { withTenantContext } = await import('@cvg/persistence')
+          const { withTenantContext } = await import('../../dist/index.js')
           const { TenantIdSchema } = await import('@cvg/platform')
           await withTenantContext(
             resource.pool,

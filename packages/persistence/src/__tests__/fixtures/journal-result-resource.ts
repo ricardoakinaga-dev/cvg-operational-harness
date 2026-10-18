@@ -18,7 +18,7 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
   let admin: Client | undefined
   let pool: Pool | undefined
   let Journal:
-    | typeof import('@cvg/persistence').PostgresOperationalEffectJournal
+    | typeof import('../../../dist/index.js').PostgresOperationalEffectJournal
     | undefined
   let created = false
   const createdRoles: string[] = []
@@ -51,7 +51,7 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
   const setup = async () => {
     assert.deepEqual(binding, verifyNativeJournalBinding())
     const pg = (await import('pg')).default
-    const runtime = await import('@cvg/persistence')
+    const runtime = await import('../../../dist/index.js')
     const guard =
       await import('../../../dist/operational-effect-result-guard.js')
     const readiness =

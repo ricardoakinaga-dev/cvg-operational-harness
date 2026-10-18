@@ -168,7 +168,7 @@ function startChild(
 async function snapshot(executionId: string) {
   assert(resource)
   const { PostgresExecutionStepStore, withTenantContext } =
-    await import('@cvg/persistence')
+    await import('../../dist/index.js')
   const { TenantIdSchema } = await import('@cvg/platform')
   const store = new PostgresExecutionStepStore(resource.pool)
   const checkpoint = await store.loadCheckpoint(journalTenant, executionId)
@@ -230,7 +230,7 @@ describe(
             verifyNativeJournalBinding()
             const identity = publicJournalIdentity(binding, point, id)
             mkdirSync(identity.dir, { recursive: true, mode: 0o700 })
-            const { withTenantContext } = await import('@cvg/persistence')
+            const { withTenantContext } = await import('../../dist/index.js')
             const { TenantIdSchema } = await import('@cvg/platform')
             const { canonicalizeCompleteJson } =
               await import('@cvg/harness-contracts')

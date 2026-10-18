@@ -47,7 +47,7 @@ const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 async function snapshot(executionId: string) {
   assert(resource)
   const { withTenantContext, PostgresExecutionStepStore } =
-    await import('@cvg/persistence')
+    await import('../../dist/index.js')
   const { TenantIdSchema } = await import('@cvg/platform')
   const checkpoint = await new PostgresExecutionStepStore(
     resource.pool
@@ -156,7 +156,7 @@ describe(
               JSON.stringify(value, null, 2) + '\n',
               { mode: 0o600 }
             )
-          const { withTenantContext } = await import('@cvg/persistence')
+          const { withTenantContext } = await import('../../dist/index.js')
           const { TenantIdSchema } = await import('@cvg/platform')
           const { canonicalizeCompleteJson } =
             await import('@cvg/harness-contracts')
@@ -443,7 +443,7 @@ describe(
               JSON.stringify(value, null, 2) + '\n',
               { mode: 0o600 }
             )
-          const { withTenantContext } = await import('@cvg/persistence')
+          const { withTenantContext } = await import('../../dist/index.js')
           const { TenantIdSchema } = await import('@cvg/platform')
           await withTenantContext(
             resource.pool,

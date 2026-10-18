@@ -322,7 +322,8 @@ export async function runJournalPhase(phase: 'write' | 'read' | 'reserve') {
   const binding = verifyNativeJournalBinding()
   assert.equal(binding.profile, 'journal')
   const pg = (await import('pg')).default
-  const { PostgresOperationalEffectJournal } = await import('@cvg/persistence')
+  const { PostgresOperationalEffectJournal } =
+    await import('../../../dist/index.js')
   const { canonicalizeCompleteJson } = await import('@cvg/harness-contracts')
   const pool = new pg.Pool({
     ...journalCredentials('service'),
@@ -544,7 +545,7 @@ export async function runPublicJournalPhase(
   )
   const pg = (await import('pg')).default
   const { PostgresOperationalEffectJournal, PostgresExecutionStepStore } =
-    await import('@cvg/persistence')
+    await import('../../../dist/index.js')
   const { createOperationalHarness, createCapabilityRegistry } =
     await import('@cvg/harness')
   const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')
@@ -1073,7 +1074,7 @@ export async function runCaptureJournalPhase(
   )
   const pg = (await import('pg')).default
   const { PostgresOperationalEffectJournal, PostgresExecutionStepStore } =
-    await import('@cvg/persistence')
+    await import('../../../dist/index.js')
   const { createOperationalHarness, createCapabilityRegistry } =
     await import('@cvg/harness')
   const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')

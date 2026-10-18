@@ -43,7 +43,7 @@ function save(label: string, name: string, value: unknown) {
 async function prepare(label: string, timeoutMs = 30000) {
   verifyNativeJournalBinding()
   const platform = await import('../../../platform/dist/index.js')
-  const persistence = await import('@cvg/persistence')
+  const persistence = await import('../../dist/index.js')
   const { createCorrelationId } = await import('@cvg/shared')
   const tenantId = platform.TenantIdSchema.parse(journalTenant)
   const config = platform.AgentConfigSchema.parse({
@@ -297,7 +297,7 @@ function journalLockOrder(trace: ReturnType<typeof tracedConnection>['trace']) {
 
 async function physical(executionId: string) {
   const { withTenantContext, PostgresExecutionStepStore } =
-    await import('@cvg/persistence')
+    await import('../../dist/index.js')
   const { TenantIdSchema } = await import('@cvg/platform')
   return withTenantContext(
     resource.pool,
@@ -378,7 +378,7 @@ describe(
       const label = 'wrapper'
       const f = await prepare(label)
       const { PostgresOperationalEffectJournal } =
-        await import('@cvg/persistence')
+        await import('../../dist/index.js')
       const { createJournaledToolRegistry } = await import('@cvg/harness')
       const { connection, trace } = tracedConnection()
       const journal = new PostgresOperationalEffectJournal(connection, {
@@ -444,7 +444,7 @@ describe(
     it('runs the public factory with an unchanged bound admission and one synthetic model call', async () => {
       const label = 'factory'
       const f = await prepare(label)
-      const persistence = await import('@cvg/persistence')
+      const persistence = await import('../../dist/index.js')
       const harness = await import('@cvg/harness')
       const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')
       const { canonicalizeCompleteJson } =
@@ -636,7 +636,7 @@ describe(
           const label = 'and-' + point
           const f = await prepare(label)
           const { withTenantTransaction, PostgresOperationalEffectJournal } =
-            await import('@cvg/persistence')
+            await import('../../dist/index.js')
           const { TenantIdSchema } = await import('@cvg/platform')
           const { guardControlledPublishedFence } =
             await import('../../dist/controlled-published-fencing.js')
@@ -723,7 +723,7 @@ describe(
       const label = 'lease-during-encode'
       const f = await prepare(label)
       const { PostgresOperationalEffectJournal, withTenantContext } =
-        await import('@cvg/persistence')
+        await import('../../dist/index.js')
       const { TenantIdSchema } = await import('@cvg/platform')
       const { connection, trace } = tracedConnection()
       const journal = new PostgresOperationalEffectJournal(connection, {
@@ -845,7 +845,7 @@ describe(
         const label = 'deny-' + point
         const f = await prepare(label, point === 'deadline' ? 300 : 30000)
         const { PostgresOperationalEffectJournal, withTenantContext } =
-          await import('@cvg/persistence')
+          await import('../../dist/index.js')
         const { TenantIdSchema } = await import('@cvg/platform')
         const { createJournaledToolRegistry } = await import('@cvg/harness')
         const tenant = TenantIdSchema.parse(journalTenant)
@@ -905,7 +905,7 @@ describe(
             )
           if (point === 'outer-reclaimed') {
             const { TenantScopedPostgresRuntimeRepository } =
-              await import('@cvg/persistence')
+              await import('../../dist/index.js')
             const next = await new TenantScopedPostgresRuntimeRepository(
               resource.pool
             ).claimNextFenced({
