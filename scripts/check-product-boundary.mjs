@@ -9,17 +9,9 @@ import {
   invalidTsconfigPathPatterns,
   expandSingleWildcard
 } from './tsconfig-path-grammar.mjs'
-// HISO-005 status (PLAN0374 B1, 2026-10-07): the gate completes on the real
-// repository in minutes and its known negative cases (direct, intermediary,
-// alias, workspace/installed dependency, dynamic loaders and the reproduced
-// T2 counterexamples) are covered by tests/product-boundary.test.js. HISO-005
-// is NOT accepted: acceptance still depends on an independent re-audit.
-//
-// Scope: first-party sources (packages, apps, legacy, products and any local
-// file a reference reaches) are parsed completely and fail closed. Installed
-// third-party packages are terminal nodes verified by canonical path, lock
-// metadata, declared successors and a product-identifier tripwire; their
-// implementation is not parsed (see createInstalledPackageVerifier).
+// SPEC0228: installed metadata is not a content proof, and the legacy
+// exception catalog is inactive. Uncertainty remains INCOMPLETE; known product
+// edges remain FAIL. This gate does not grant positive isolation acceptance.
 import fs from 'node:fs'
 import path from 'node:path'
 import { isBuiltin, createRequire } from 'node:module'
@@ -83,8 +75,31 @@ function files(directory, result = [], manifests) {
 
 export function auditProductBoundary(
   directory = process.cwd(),
-  { graph: includeGraph = false, exceptions: applyExceptions = true } = {}
+  {
+    graph: includeGraph = false,
+    exceptions: requestedExceptions = false,
+    installedReference,
+    semantic = false,
+    compiledBuildReference
+  } = {}
 ) {
+  if (typeof semantic !== 'boolean') throw new Error('invalid_semantic_option')
+  if (
+    compiledBuildReference !== undefined &&
+    (!semantic ||
+      !compiledBuildReference ||
+      typeof compiledBuildReference !== 'object' ||
+      Array.isArray(compiledBuildReference) ||
+      typeof compiledBuildReference.manifestPath !== 'string' ||
+      !compiledBuildReference.manifestPath ||
+      !/^[a-f0-9]{64}$/.test(compiledBuildReference.expectedSha256 ?? ''))
+  )
+    throw new Error('invalid_compiled_build_reference_option')
+  // Load the new mechanism only on opt-in. Existing copied-checker/default
+  // callers retain their original dependency and output contract.
+  const semanticEngine = semantic
+    ? require('./boundary-semantic-engine.mjs')
+    : undefined
   const root = fs.realpathSync(directory)
   const metadata = createBoundaryManifestReader(root)
   const boundaryManifest = (filename, rootManifest = false) =>
@@ -110,11 +125,156 @@ export function auditProductBoundary(
   )
   const graph = new Map()
   const diagnostics = []
+  if (requestedExceptions === true)
+    diagnostics.push({
+      file: 'package.json',
+      reason: 'UNAPPROVED_EXCEPTION_REQUEST'
+    })
   // Keep provenance internal: only diagnostics on the actual core closure
   // qualify this gate. Unrelated consumers retain their own quality gates.
   const diagnosticSources = new WeakMap()
-  const reportDiagnostic = (file, diagnostic) => {
+  const diagnosticOrigins = new WeakMap()
+  const originOrdinals = new Map()
+  const originFiles = new Map()
+  const captureOrigin = (file, diagnostic, origin) => {
+    const absolute = path.isAbsolute(file) ? file : path.resolve(root, file)
+    const relative = path.relative(root, absolute)
+    let fileSha256 = null
+    let physicalAvailable = false
+    try {
+      if (origin?.physicalFileKnown === false || !inside(root, absolute))
+        throw new Error('origin_physical_source_unavailable')
+      const before = fs.lstatSync(absolute, { bigint: true })
+      if (
+        !before.isFile() ||
+        fs.realpathSync(absolute) !== absolute ||
+        before.size > BigInt(semanticEngine.SEMANTIC_LIMITS.maxFileBytes)
+      )
+        throw new Error('origin_physical_source_invalid')
+      const same = (a, b) =>
+        ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(
+          (key) => a[key] === b[key]
+        )
+      if (!originFiles.has(absolute)) {
+        const fd = fs.openSync(
+          absolute,
+          fs.constants.O_RDONLY |
+            fs.constants.O_NOFOLLOW |
+            fs.constants.O_NONBLOCK
+        )
+        let bytes, after
+        try {
+          const opened = fs.fstatSync(fd, { bigint: true })
+          if (!opened.isFile() || !same(opened, before))
+            throw new Error('origin_open_identity_changed')
+          // One extra byte detects growth without an unbounded read/allocation.
+          const buffer = Buffer.alloc(Number(opened.size) + 1)
+          let count = 0
+          while (count < buffer.length) {
+            const read = fs.readSync(
+              fd,
+              buffer,
+              count,
+              buffer.length - count,
+              null
+            )
+            if (read === 0) break
+            count += read
+          }
+          after = fs.fstatSync(fd, { bigint: true })
+          if (count !== Number(opened.size) || !same(opened, after))
+            throw new Error('origin_read_changed')
+          bytes = buffer.subarray(0, count)
+        } finally {
+          fs.closeSync(fd)
+        }
+        if (
+          fs.realpathSync(absolute) !== absolute ||
+          !same(after, fs.lstatSync(absolute, { bigint: true }))
+        )
+          throw new Error('origin_path_changed')
+        originFiles.set(absolute, {
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          text: bytes.toString('utf8'),
+          validUtf8: Buffer.from(bytes.toString('utf8')).equals(bytes),
+          stat: after
+        })
+      }
+      const snapshot = originFiles.get(absolute)
+      if (!same(snapshot.stat, before))
+        throw new Error('origin_cache_input_changed')
+      physicalAvailable = true
+      if (
+        (origin?.context === 'semantic-frontier' && !origin?.node) ||
+        (snapshot.validUtf8 &&
+          (!origin?.source || snapshot.text === origin.source.text))
+      )
+        fileSha256 = snapshot.sha256
+    } catch {
+      /* Unavailable origin cannot retire an occurrence. */
+    }
+    let kind = 'NonAstDiagnostic',
+      start = null,
+      end = null,
+      expression = null,
+      synthetic
+    if (origin?.node && origin.source && fileSha256) {
+      try {
+        start = origin.node.getStart(origin.source)
+        end = origin.node.end
+        kind = ts.SyntaxKind[origin.node.kind]
+        expression = origin.node.getText(origin.source)
+        if (!Number.isSafeInteger(start) || start < 0 || end < start)
+          throw new Error('invalid_origin_span')
+        if (ts.isBindingElement(origin.node)) {
+          const property =
+            origin.node.propertyName?.text ?? origin.node.name.text
+          if (typeof property === 'string')
+            synthetic = {
+              originalKind: kind,
+              originalStart: start,
+              originalEnd: end,
+              property
+            }
+        }
+      } catch {
+        kind = 'UnavailableAstOrigin'
+        start = null
+        end = null
+        expression = null
+      }
+    }
+    const tuple = {
+      file: physicalAvailable ? relative : null,
+      fileSha256: physicalAvailable ? fileSha256 : null,
+      ...(!physicalAvailable && origin?.context !== 'semantic-frontier'
+        ? { requestedFile: relative }
+        : {}),
+      kind,
+      start,
+      end,
+      reason: diagnostic.reason,
+      context:
+        origin?.context ??
+        (origin ? 'loader-diagnostic' : 'physical-diagnostic'),
+      diagnosticExpression: diagnostic.expression ?? null,
+      expression,
+      ...(origin?.semanticPointer
+        ? { semanticPointer: origin.semanticPointer }
+        : {}),
+      ...(synthetic ? { synthetic } : {})
+    }
+    const key = semanticEngine.semanticCanonicalJson(tuple)
+    const ordinal = originOrdinals.get(key) ?? 0
+    originOrdinals.set(key, ordinal + 1)
+    const data = { ...tuple, ordinal }
+    data.id = semanticEngine.semanticOriginId(data)
+    diagnosticOrigins.set(diagnostic, data)
+    return data
+  }
+  const reportDiagnostic = (file, diagnostic, origin) => {
     diagnosticSources.set(diagnostic, file)
+    if (semantic) captureOrigin(file, diagnostic, origin)
     diagnostics.push(diagnostic)
   }
   if (coreFiles.length === 0)
@@ -246,11 +406,13 @@ export function auditProductBoundary(
     for (const entry of fs.readdirSync(productRoot))
       productReferences.add(`products/${entry}`)
   const installedPackages = createInstalledPackageVerifier(root, {
-    productReferences: [...productReferences]
+    productReferences: [...productReferences],
+    installedReference
   })
   // Installed third-party packages are terminal nodes keyed by their canonical
   // directory. They are verified and expanded by settleInstalled() without
-  // ever entering the parsed source inventory.
+  // ever entering the parsed source inventory. Metadata alone is not proof, so
+  // these nodes remain unverified under SPEC0228.
   const installedNodes = new Map()
   const installedQueue = []
   const installedDrift = new Map()
@@ -300,6 +462,26 @@ export function auditProductBoundary(
       : path.dirname(target)
     governActor(context)
   }
+  const nestedInstalledSuccessor = (node, context, nested) => {
+    const candidate = path.join(context, nested)
+    let target
+    try {
+      target = fs.realpathSync(candidate)
+    } catch (error) {
+      if (!['ENOENT', 'ELOOP'].includes(error.code)) throw error
+      reportDiagnostic(node, {
+        file: path.relative(root, candidate),
+        specifier: nested,
+        reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+        detail:
+          error.code === 'ELOOP'
+            ? 'CYCLIC_INSTALLED_LINK'
+            : 'DANGLING_INSTALLED_LINK'
+      })
+      return
+    }
+    installedSuccessor(node, target, nested)
+  }
   const settleInstalled = () => {
     while (installedQueue.length) {
       const { node, context, key, valid } = installedQueue.shift()
@@ -321,13 +503,29 @@ export function auditProductBoundary(
           reason: 'UNVERIFIED_INSTALLED_PACKAGE',
           detail: verdict.reason
         })
-      else if (verdict.drift) installedDrift.set(node, verdict.drift)
+      if (verdict.drift) installedDrift.set(node, verdict.drift)
+      // Nested physical installations are independent successor packages,
+      // including undeclared entries. They retain the existing product checks.
+      for (const nested of verdict.contentIdentity?.nestedPackages ?? [])
+        nestedInstalledSuccessor(node, context, nested)
       for (const { name } of verdict.dependencies ?? []) {
-        const located = locateInstalled(
-          root,
-          path.join(context, 'package.json'),
-          name
-        )
+        let located
+        try {
+          located = locateInstalled(
+            root,
+            path.join(context, 'package.json'),
+            name
+          )
+        } catch (error) {
+          if (!installedReference || error.code !== 'ELOOP') throw error
+          reportDiagnostic(node, {
+            file: path.relative(root, node),
+            specifier: name,
+            reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+            detail: 'CYCLIC_INSTALLED_LINK'
+          })
+          continue
+        }
         // Absent optional/peer/unmet dependencies have no physical edge.
         if (!located) continue
         if (located.dangling)
@@ -339,7 +537,25 @@ export function auditProductBoundary(
           })
         else installedSuccessor(node, located.context, name)
       }
-      const { references, links } = installedPackages.scan(context)
+      const {
+        references,
+        links,
+        limitation,
+        nestedPackages = []
+      } = installedPackages.scan(context)
+      for (const nested of nestedPackages)
+        nestedInstalledSuccessor(node, context, nested)
+      if (limitation) {
+        if (verdict.contentIdentity) {
+          verdict.contentIdentity.status = 'UNSUPPORTED'
+          verdict.contentIdentity.reasons.push(limitation)
+        }
+        reportDiagnostic(node, {
+          file: path.relative(root, node),
+          reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+          detail: limitation
+        })
+      }
       for (const { file, reference } of references)
         reportDiagnostic(node, {
           file: path.relative(root, file),
@@ -352,7 +568,11 @@ export function auditProductBoundary(
           target = fs.realpathSync(link)
         } catch (error) {
           // A dangling link cannot be loaded; nothing physical is reachable.
-          if (error.code === 'ENOENT') continue
+          if (
+            error.code === 'ENOENT' ||
+            (installedReference && error.code === 'ELOOP')
+          )
+            continue
           throw error
         }
         installedSuccessor(node, target, path.relative(root, link))
@@ -1183,11 +1403,15 @@ export function auditProductBoundary(
     // exception binds the whole construct (a multi-line call includes its
     // arguments), not merely the line where it starts.
     const loaderDiagnostic = (node, reason) =>
-      reportDiagnostic(file, {
-        file: `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(source, node.getStart()).line + 1}`,
-        reason,
-        expression: expressionDigest(node.getText(source))
-      })
+      reportDiagnostic(
+        file,
+        {
+          file: `${path.relative(root, file)}:${ts.getLineAndCharacterOfPosition(source, node.getStart()).line + 1}`,
+          reason,
+          expression: expressionDigest(node.getText(source))
+        },
+        { node, source }
+      )
     const { scalarMetadata } = auditDynamicCodeExecution({
       ts,
       source,
@@ -1713,14 +1937,11 @@ export function auditProductBoundary(
   }
   for (const [file, references] of consumerEnvReferences)
     if (seen.has(file)) diagnostics.push(...references)
-  // Restricted exceptions apply to core-closure diagnostics only, after the
-  // provenance filter, and never to any reason outside exceptableReasons.
+  // SPEC0228 keeps the legacy catalog as historical inventory only. Pins and
+  // expression matches do not prove receiver identity, so no diagnostic may be
+  // removed by this catalog, including when a legacy caller requests it.
   const exceptions = []
-  const exceptionUse = new Map()
-  const sourceLines = new Map()
   const pinState = new Map()
-  // A group's pins name files its justification depends on (for example the
-  // callee that receives an escaped capability); any byte change lapses it.
   const pinsHold = (pins) =>
     Object.entries(pins).every(([file, digest]) => {
       if (!pinState.has(file)) {
@@ -1736,59 +1957,20 @@ export function auditProductBoundary(
       }
       return pinState.get(file) === digest
     })
-  const exceptionKey = (diagnostic) => {
-    if (!exceptableReasons.has(diagnostic.reason)) return undefined
-    const match = /^(.+):(\d+)$/.exec(diagnostic.file ?? '')
-    if (!match || typeof diagnostic.expression !== 'string') return undefined
-    const [, file, line] = match
-    if (!sourceLines.has(file))
-      sourceLines.set(
+  const unusedExceptions = [...exceptionSites]
+    .filter(([key]) => fs.existsSync(path.join(root, JSON.parse(key)[1])))
+    .map(([key, { id, max, pins }]) => {
+      const [reason, file, line, expression] = JSON.parse(key)
+      return {
+        exception: id,
+        reason,
         file,
-        fs.readFileSync(path.join(root, file), 'utf8').split('\n')
-      )
-    const text = normalizeLine(sourceLines.get(file)[Number(line) - 1] ?? '')
-    return JSON.stringify([
-      diagnostic.reason,
-      file,
-      text,
-      diagnostic.expression
-    ])
-  }
-  for (let index = 0; index < diagnostics.length; ) {
-    const key = applyExceptions && exceptionKey(diagnostics[index])
-    const site = key && exceptionSites.get(key)
-    const used = (key && exceptionUse.get(key)) || 0
-    if (site && used < site.max && pinsHold(site.pins)) {
-      exceptionUse.set(key, used + 1)
-      exceptions.push({
-        ...diagnostics.splice(index, 1)[0],
-        exception: site.id
-      })
-    } else index += 1
-  }
-  // Informational: listed capacity not consumed by a file present in this
-  // tree (a fixed or edited site, or a lapsed pin). Absent files, such as
-  // compiled mirrors in a clean checkout, are not listed.
-  const unusedExceptions = applyExceptions
-    ? [...exceptionSites]
-        .filter(
-          ([key, { max }]) =>
-            (exceptionUse.get(key) ?? 0) < max &&
-            fs.existsSync(path.join(root, JSON.parse(key)[1]))
-        )
-        .map(([key, { id, max, pins }]) => {
-          const [reason, file, line, expression] = JSON.parse(key)
-          return {
-            exception: id,
-            reason,
-            file,
-            line,
-            expression,
-            unused: max - (exceptionUse.get(key) ?? 0),
-            pinsHold: pinsHold(pins)
-          }
-        })
-    : []
+        line,
+        expression,
+        unused: max,
+        pinsHold: pinsHold(pins)
+      }
+    })
   // Known product identity in reached code is a failure, not an unknown.
   const failing = new Set([
     'CONSUMER_ENV_IN_CORE',
@@ -1804,6 +1986,9 @@ export function auditProductBoundary(
   const coreInstalled = [...installedNodes.values()].filter((node) =>
     seen.has(node)
   )
+  // Revalidate the actual bytes and recipe inputs after all scanning. The
+  // comparator invalidates the same verdict objects stored in this report.
+  const identityFinalization = installedPackages.finalize()
   const result = {
     sourceFiles: sourceFiles.length,
     coreFiles: coreFiles.length,
@@ -1812,7 +1997,7 @@ export function auditProductBoundary(
     edgeCount: [...graph.values()].reduce((sum, set) => sum + set.size, 0),
     violations,
     diagnostics,
-    exceptionsApplied: applyExceptions,
+    exceptionsApplied: false,
     exceptions,
     unusedExceptions,
     // Informational: lock-verified installed packages whose on-disk version
@@ -1824,6 +2009,15 @@ export function auditProductBoundary(
     status,
     passed: status === 'PASS'
   }
+  if (installedReference && !includeGraph)
+    result.installedContentIdentity = coreInstalled.map((node) => ({
+      node: path.relative(root, node),
+      verified: false,
+      contentIdentity: installedVerdicts.get(node)?.contentIdentity ?? {
+        status: 'UNAVAILABLE',
+        reasons: ['INVALID_INSTALLED_PATH']
+      }
+    }))
   if (includeGraph) {
     // Resolved core closure: every node reachable from the core starts, its
     // outgoing edges (including those that end in a product witness) and the
@@ -1847,11 +2041,340 @@ export function auditProductBoundary(
             node: relative(node),
             verified: verdict?.verified ?? false,
             source: verdict?.source ?? null,
-            reason: verdict?.reason ?? null
+            reason: verdict?.reason ?? null,
+            ...(verdict?.contentIdentity
+              ? { contentIdentity: verdict.contentIdentity }
+              : {})
           }
         })
         .sort((a, b) => a.node.localeCompare(b.node))
     }
+  }
+  if (semantic) {
+    const baseline = [...diagnostics]
+    const origins = baseline.map((diagnostic) => {
+      if (diagnosticOrigins.has(diagnostic))
+        return diagnosticOrigins.get(diagnostic)
+      const filename =
+        diagnosticSources.get(diagnostic) ??
+        diagnostic.file.replace(/:\d+$/, '')
+      return captureOrigin(filename, diagnostic)
+    })
+    const astOrigins = origins.filter(
+      (origin) =>
+        Number.isSafeInteger(origin.start) &&
+        Number.isSafeInteger(origin.end) &&
+        origin.fileSha256
+    )
+    const compiledModule = require('./boundary-semantic-compiled.mjs')
+    const compiled = compiledBuildReference
+      ? compiledModule.loadCompiledBuildReference(
+          root,
+          compiledBuildReference,
+          { installedReference }
+        )
+      : {
+          status: 'UNAVAILABLE',
+          reason: 'COMPILED_REFERENCE_REQUIRED',
+          files: []
+        }
+    const installed = coreInstalled.map((node) => ({
+      key: path.relative(root, path.dirname(node)),
+      manifest: path.relative(root, node),
+      identityStatus:
+        installedVerdicts.get(node)?.contentIdentity?.status ?? 'UNAVAILABLE',
+      referenceDigest:
+        installedVerdicts.get(node)?.contentIdentity?.referenceDigest ?? null
+    }))
+    const unsupportedProfile =
+      Boolean(process.env.NODE_OPTIONS) ||
+      process.execArgv.some((arg) =>
+        /^(?:--(?:conditions|require|import|loader|experimental-loader)(?:=|$)|-r$|-C(?:=|$))/.test(
+          arg
+        )
+      )
+    let output = unsupportedProfile
+      ? {
+          schemaVersion: 1,
+          kernelVersion: semanticEngine.SEMANTIC_KERNEL_VERSION,
+          status: 'UNKNOWN',
+          proofs: [],
+          installed: [],
+          inputs: [],
+          violations: [],
+          unknowns: [
+            { file: 'package.json', reason: 'UNKNOWN_RUNTIME_PROFILE' }
+          ],
+          validation: { valid: false }
+        }
+      : semanticEngine.runSemanticBoundary({
+          root,
+          starts: [...seen]
+            .filter(
+              (file) =>
+                extensions.has(path.extname(file)) &&
+                !file.split(path.sep).includes('node_modules')
+            )
+            .map((file) => path.relative(root, file))
+            .sort(),
+          origins: astOrigins,
+          installed,
+          compiled
+        })
+    const finalIdentity = installedPackages.finalize()
+    let valid =
+      output.validation?.valid === true &&
+      identityFinalization?.status === 'COMPLETE' &&
+      finalIdentity?.status === 'COMPLETE'
+    if (
+      semanticEngine.semanticCanonicalJson(installed) !==
+      semanticEngine.semanticCanonicalJson(
+        coreInstalled.map((node) => ({
+          key: path.relative(root, path.dirname(node)),
+          manifest: path.relative(root, node),
+          identityStatus:
+            installedVerdicts.get(node)?.contentIdentity?.status ??
+            'UNAVAILABLE',
+          referenceDigest:
+            installedVerdicts.get(node)?.contentIdentity?.referenceDigest ??
+            null
+        }))
+      )
+    )
+      valid = false
+    try {
+      if (!semanticEngine.revalidateSemanticInputs(root, output, astOrigins))
+        valid = false
+      if (compiledBuildReference) {
+        const after = compiledModule.loadCompiledBuildReference(
+          root,
+          compiledBuildReference,
+          { installedReference }
+        )
+        if (
+          semanticEngine.semanticCanonicalJson(after) !==
+          semanticEngine.semanticCanonicalJson(compiled)
+        )
+          valid = false
+      }
+    } catch {
+      valid = false
+    }
+    if (
+      !installedReference ||
+      identityFinalization?.status !== 'COMPLETE' ||
+      finalIdentity?.status !== 'COMPLETE'
+    ) {
+      valid = false
+      output.unknowns.push({
+        file: 'package.json',
+        reason: 'UNKNOWN_INSTALLED_REFERENCE'
+      })
+    }
+    if (compiledBuildReference && compiled.status !== 'PROVEN')
+      output.unknowns.push({
+        file: 'packages/contracts/dist/canonical-json.js',
+        reason: 'UNKNOWN_COMPILED_PROVENANCE',
+        detail: compiled.reason
+      })
+    if (!valid && output.validation?.valid) {
+      output = {
+        ...output,
+        status: 'UNKNOWN',
+        proofs: [],
+        installed: [],
+        unknowns: [
+          ...output.unknowns,
+          { file: 'package.json', reason: 'UNKNOWN_INPUT_REVALIDATION' }
+        ],
+        validation: { valid: false }
+      }
+    }
+    const proofById = new Map(
+      (valid ? output.proofs : []).map((proof) => [proof.id, proof])
+    )
+    const proofByOrigin = new Map()
+    for (const proof of proofById.values()) {
+      if (!proof.originId || proof.status !== 'PROVEN') continue
+      const origin = origins.find((item) => item.id === proof.originId)
+      if (
+        !origin ||
+        proofByOrigin.has(origin.id) ||
+        proof.file !== origin.file ||
+        proof.fileSha256 !== origin.fileSha256 ||
+        proof.kind !== origin.kind ||
+        proof.start !== origin.start ||
+        proof.end !== origin.end ||
+        proof.ordinal !== origin.ordinal
+      ) {
+        valid = false
+        break
+      }
+      proofByOrigin.set(origin.id, proof)
+    }
+    if (!valid) {
+      proofByOrigin.clear()
+      proofById.clear()
+      output = {
+        ...output,
+        status: output.violations?.length ? 'VIOLATION' : 'UNKNOWN',
+        proofs: [],
+        installed: (output.installed ?? []).map((item) => ({
+          ...item,
+          status: 'UNKNOWN',
+          proofIds: []
+        })),
+        validation: { valid: false },
+        unknowns: output.unknowns?.length
+          ? output.unknowns
+          : [{ file: 'package.json', reason: 'UNKNOWN_HOST_VALIDATION' }]
+      }
+    }
+    const closedInstalled = new Map(
+      (valid ? output.installed : [])
+        .filter(
+          (item) =>
+            item.status === 'PROVEN' &&
+            item.proofIds?.length &&
+            item.proofIds.every((id) => proofById.get(id)?.status === 'PROVEN')
+        )
+        .map((item) => [item.key, item])
+    )
+    const resolvedDiagnostics = []
+    const unresolvedOrigins = []
+    diagnostics.splice(0, diagnostics.length)
+    for (let index = 0; index < baseline.length; index++) {
+      const diagnostic = baseline[index],
+        origin = origins[index]
+      let proof = proofByOrigin.get(origin.id)
+      if (diagnostic.reason === 'UNVERIFIED_INSTALLED_PACKAGE') {
+        const node = path.resolve(root, diagnostic.file),
+          key = path.relative(root, path.dirname(node)),
+          verdict = installedVerdicts.get(node),
+          closed = closedInstalled.get(key)
+        if (
+          closed &&
+          verdict?.reason === 'UNVERIFIED_INSTALLED_CONTENT' &&
+          verdict.contentIdentity?.status === 'MATCH'
+        ) {
+          verdict.verified = true
+          verdict.source = semanticEngine.SEMANTIC_KERNEL_VERSION
+          verdict.reason = 'VERIFIED_INSTALLED_SEMANTIC_BOUNDARY'
+          proof = { id: closed.proofIds[0], proofIds: closed.proofIds }
+        }
+      }
+      if (proof)
+        resolvedDiagnostics.push({
+          diagnostic: { ...diagnostic },
+          originId: origin.id,
+          proofId: proof.id,
+          ...(proof.proofIds ? { proofIds: proof.proofIds } : {})
+        })
+      else {
+        diagnostics.push(diagnostic)
+        unresolvedOrigins.push(origin.id)
+      }
+    }
+    const priorNewCount = diagnostics.length
+    const frontierOrigins = []
+    const emitFrontier = (unknown, pointer) => {
+      const file = unknown.file || 'package.json'
+      let physicalFileKnown = false
+      try {
+        const target = path.resolve(root, file)
+        physicalFileKnown =
+          Boolean(unknown.file) &&
+          inside(root, target) &&
+          fs.realpathSync(target) === target &&
+          fs.lstatSync(target).isFile()
+      } catch {
+        /* Missing/aliased physical provenance remains null, never invented. */
+      }
+      const diagnostic = {
+        file,
+        reason: 'UNVERIFIED_SEMANTIC_FRONTIER',
+        detail: unknown.reason,
+        semanticDetail: unknown.detail ?? null,
+        ...(unknown.originId ? { causalOriginId: unknown.originId } : {})
+      }
+      reportDiagnostic(file, diagnostic, {
+        context: 'semantic-frontier',
+        physicalFileKnown,
+        semanticPointer: {
+          path: pointer,
+          reportedFile: unknown.file || null,
+          reason: unknown.reason,
+          detail: unknown.detail ?? null,
+          causalOriginId: unknown.originId ?? null
+        }
+      })
+      const origin = diagnosticOrigins.get(diagnostic)
+      diagnostic.originId = origin.id
+      frontierOrigins.push(origin)
+    }
+    for (const [index, unknown] of (output.unknowns ?? []).entries())
+      emitFrontier(unknown, '#/semanticBoundary/unknowns/' + index)
+    if (
+      output.status !== 'PROVEN' &&
+      !output.unknowns?.length &&
+      !output.violations?.length
+    )
+      emitFrontier(
+        { file: '', reason: 'UNKNOWN_INCOMPLETE_RESULT' },
+        '#/semanticBoundary/status'
+      )
+    for (const violation of output.violations ?? [])
+      violations.push({
+        ...violation,
+        reason: 'CORE_DEPENDS_ON_PRODUCT',
+        source: semanticEngine.SEMANTIC_KERNEL_VERSION
+      })
+    if (
+      resolvedDiagnostics.length + unresolvedOrigins.length !==
+        baseline.length ||
+      new Set(origins.map((item) => item.id)).size !== baseline.length
+    )
+      throw new Error('semantic_occurrence_partition_invalid')
+    const newOriginIds = frontierOrigins.map((origin) => origin.id)
+    const baselineIds = new Set(origins.map((origin) => origin.id))
+    if (
+      new Set(newOriginIds).size !== diagnostics.length - priorNewCount ||
+      newOriginIds.some((id) => baselineIds.has(id))
+    )
+      throw new Error('semantic_frontier_origin_partition_invalid')
+    const { telemetry, ...semanticBody } = output
+    result.resolvedDiagnostics = resolvedDiagnostics
+    result.semanticBoundary = {
+      ...semanticBody,
+      compiledProvenance: compiled,
+      origins,
+      frontierOrigins,
+      occurrences: {
+        baseline: baseline.length,
+        resolved: resolvedDiagnostics.length,
+        unresolved: unresolvedOrigins.length,
+        new: diagnostics.length - priorNewCount,
+        newOriginIds,
+        unresolvedOrigins
+      }
+    }
+    if (telemetry) result.semanticTelemetry = telemetry
+    for (const row of result.graph?.installed ?? []) {
+      const verdict = installedVerdicts.get(path.resolve(root, row.node))
+      row.verified = verdict?.verified ?? false
+      row.source = verdict?.source ?? null
+      row.reason = verdict?.reason ?? null
+    }
+    for (const row of result.installedContentIdentity ?? [])
+      row.verified =
+        installedVerdicts.get(path.resolve(root, row.node))?.verified ?? false
+    result.status =
+      violations.length || diagnostics.some(({ reason }) => failing.has(reason))
+        ? 'FAIL'
+        : diagnostics.length
+          ? 'INCOMPLETE'
+          : 'PASS'
+    result.passed = result.status === 'PASS'
   }
   return result
 }
@@ -2908,22 +3431,94 @@ if (
   try {
     // Usage: check-product-boundary.mjs [root] [--graph=<file>] [--strict]
     // --graph writes the resolved core closure (evidence) to <file>.
-    // --strict disables the restricted exception table (raw analysis).
+    // --strict is retained as an alias; normal analysis also applies no exceptions.
     const args = process.argv.slice(2)
     const flags = args.filter((arg) => arg.startsWith('--'))
     const graphFile = flags
       .find((arg) => arg.startsWith('--graph='))
       ?.slice('--graph='.length)
-    const strict = flags.includes('--strict')
+    const referenceFlags = flags.filter((arg) =>
+      arg.startsWith('--installed-reference=')
+    )
+    const digestFlags = flags.filter((arg) =>
+      arg.startsWith('--installed-reference-sha256=')
+    )
+    const referencePath = referenceFlags[0]?.slice(
+      '--installed-reference='.length
+    )
+    const referenceSha = digestFlags[0]?.slice(
+      '--installed-reference-sha256='.length
+    )
+    const semanticFlags = flags.filter((arg) => arg === '--semantic')
+    const compiledFlags = flags.filter((arg) =>
+      arg.startsWith('--compiled-build-reference=')
+    )
+    const compiledDigestFlags = flags.filter((arg) =>
+      arg.startsWith('--compiled-build-reference-sha256=')
+    )
+    const compiledPath = compiledFlags[0]?.slice(
+      '--compiled-build-reference='.length
+    )
+    const compiledSha = compiledDigestFlags[0]?.slice(
+      '--compiled-build-reference-sha256='.length
+    )
     const unknown = flags.filter(
-      (arg) => !arg.startsWith('--graph=') && arg !== '--strict'
+      (arg) =>
+        !arg.startsWith('--graph=') &&
+        arg !== '--strict' &&
+        arg !== '--semantic' &&
+        !arg.startsWith('--compiled-build-reference=') &&
+        !arg.startsWith('--compiled-build-reference-sha256=') &&
+        !arg.startsWith('--installed-reference=') &&
+        !arg.startsWith('--installed-reference-sha256=')
     )
     const positional = args.filter((arg) => !arg.startsWith('--'))
     if (unknown.length || positional.length > 1 || graphFile === '')
       throw new Error(`invalid_boundary_arguments:${args.join(' ')}`)
+    if (
+      semanticFlags.length > 1 ||
+      (semanticFlags.length && (!referenceFlags.length || !digestFlags.length))
+    )
+      throw new Error('invalid_semantic_arguments')
+    if (compiledFlags.length || compiledDigestFlags.length) {
+      if (
+        !semanticFlags.length ||
+        compiledFlags.length !== 1 ||
+        compiledDigestFlags.length !== 1 ||
+        !compiledPath ||
+        !/^[a-f0-9]{64}$/.test(compiledSha ?? '')
+      )
+        throw new Error('invalid_compiled_build_reference_arguments')
+    }
+    if (referenceFlags.length || digestFlags.length) {
+      if (
+        referenceFlags.length !== 1 ||
+        digestFlags.length !== 1 ||
+        !referencePath ||
+        !/^[a-f0-9]{64}$/.test(referenceSha ?? '')
+      )
+        throw new Error('invalid_installed_reference_arguments')
+    }
     const result = auditProductBoundary(positional[0] ?? process.cwd(), {
       graph: graphFile !== undefined,
-      exceptions: !strict
+      exceptions: false,
+      ...(semanticFlags.length ? { semantic: true } : {}),
+      ...(compiledPath
+        ? {
+            compiledBuildReference: {
+              manifestPath: compiledPath,
+              expectedSha256: compiledSha
+            }
+          }
+        : {}),
+      ...(referencePath
+        ? {
+            installedReference: {
+              manifestPath: referencePath,
+              expectedSha256: referenceSha
+            }
+          }
+        : {})
     })
     if (graphFile !== undefined) {
       fs.writeFileSync(graphFile, `${JSON.stringify(result.graph, null, 2)}\n`)

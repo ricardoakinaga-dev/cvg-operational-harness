@@ -159,6 +159,7 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
   }
   for (const name of [
     'boundary-manifests.mjs',
+    'boundary-installed-identity.mjs',
     'boundary-code-execution.mjs',
     'boundary-lexical.mjs',
     'tsconfig-path-grammar.mjs'
@@ -171,15 +172,16 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
   )
   const file = path.join(directory, 'check-product-boundary.mjs')
   fs.writeFileSync(file, source)
-  return () => {
+  return (options = {}) => {
     const run = spawnSync(
       process.execPath,
       [
         '--input-type=module',
         '-e',
-        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2])))',
+        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2], JSON.parse(process.argv[3]))))',
         pathToFileURL(file).href,
-        f.root
+        f.root,
+        JSON.stringify(options)
       ],
       { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }
     )
@@ -199,23 +201,113 @@ function expectPinsValid(f, repin = []) {
     }
 }
 
+function expectInactive(a, status = 'INCOMPLETE') {
+  expect(a.exceptionsApplied).toBe(false)
+  expect(a.exceptions).toEqual([])
+  expect(appliedCounts(a)).toEqual([0, 0, 0])
+  expect(a.status).toBe(status)
+  expect(a.passed).toBe(false)
+}
+// Twelve source occurrences were already unknown outside the thirteen proposed
+// mirror sites. Keep them too; matching the historical table never removes them.
+const additionalRaw = [
+  {
+    file: 'packages/platform/src/tool-invocation-boundary.ts:201',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: '5b2efa8c4f1c77a4'
+  },
+  {
+    file: 'packages/platform/src/tool-invocation-boundary.ts:202',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'b34563e2ebeb7717'
+  },
+  {
+    file: 'packages/platform/src/tool-invocation-boundary.ts:202',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'b34563e2ebeb7717'
+  },
+  {
+    file: 'packages/sandbox/src/capabilities.ts:51',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: '6ee64919b5e7503c'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:114',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'fdc5cd232a6b322b'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:120',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: '5c689333c261579d'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:142',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'c48d06f5a4f383e0'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:143',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'a24febbe3ca5b688'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:157',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: '49c05c6142480228'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:163',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: '520278083d1a776a'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:179',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'e1751db744e7920e'
+  },
+  {
+    file: 'packages/sandbox/src/run.ts:181',
+    reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+    expression: 'dc7602b66365a6bb'
+  }
+]
+function expectRawInventory(a, omitted = []) {
+  const identity = ({ file, reason, expression }) =>
+    JSON.stringify({ file, reason, expression })
+  expect(rawSites(a).map(identity).sort()).toEqual(
+    groups
+      .flatMap((g) => g.rows)
+      .filter((row) => !omitted.includes(sourceFile(row)))
+      .map(identity)
+      .sort()
+  )
+  for (const row of additionalRaw.filter(
+    (row) => !omitted.includes(sourceFile(row))
+  ))
+    expect(
+      a.diagnostics.filter((d) => identity(d) === identity(row))
+    ).toHaveLength(
+      additionalRaw.filter((d) => identity(d) === identity(row)).length
+    )
+}
 function expectInvalidation(a, file, root) {
+  expectInactive(a)
   for (const g of groups) {
     const dependent = Object.hasOwn(g.pins, file)
-    expect(a.exceptions.filter((d) => d.exception === g.id)).toHaveLength(
-      dependent ? 0 : count(g)
+    const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
+    const presentSites = g.rows.filter((row) =>
+      fs.existsSync(path.join(root, sourceFile(row)))
     )
-    if (dependent) {
-      const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
-      // The report deliberately omits unused capacity for absent site files.
-      const presentSites = g.rows.filter((row) =>
-        fs.existsSync(path.join(root, sourceFile(row)))
-      )
-      expect(unused).toHaveLength(presentSites.length)
-      expect(unused.every((d) => d.pinsHold === false)).toBe(true)
-    }
+    expect(unused).toHaveLength(presentSites.length)
+    expect(unused.every((d) => d.pinsHold === !dependent)).toBe(true)
   }
-  expect(a.passed).toBe(false)
+  const omitted = [...siteFiles, ...additionalRaw.map(sourceFile)].filter(
+    (site) =>
+      !fs.existsSync(path.join(root, site)) ||
+      fs.lstatSync(path.join(root, site)).isSymbolicLink()
+  )
+  expectRawInventory(a, omitted)
 }
 
 afterEach(() => {
@@ -223,6 +315,7 @@ afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true })
 })
 
+// Legacy test names are retained as stable case IDs; the oracle is SPEC0228.
 describe('SPEC0216 compiled kernel boundary qualification', () => {
   it('keeps the exact three proposed tables and the previous SPEC0215 46 sites unchanged', () => {
     const actual = qualificationTable()
@@ -261,19 +354,29 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
     const f = fixture()
     expectPinsValid(f)
     const a = f.audit()
-    expect(appliedCounts(a)).toEqual([4, 1, 8])
-    expect(accepted(a)).toHaveLength(13)
-    expect(rawSites(a)).toEqual([])
-    expect(a.diagnostics).toEqual([])
+    expectInactive(a)
+    expect(accepted(a)).toEqual([])
+    expectRawInventory(a)
+    expect(rawSites(a)).toHaveLength(13)
+    expect(a.diagnostics).toHaveLength(25)
     expect(a.violations).toEqual([])
-    expect(a.passed).toBe(true)
+    expect(a).toEqual(f.audit({ exceptions: false }))
+    const requested = f.audit({ exceptions: true })
+    expectInactive(requested)
+    expect(requested).toEqual({
+      ...a,
+      diagnostics: [
+        { file: 'package.json', reason: 'UNAPPROVED_EXCEPTION_REQUEST' },
+        ...a.diagnostics
+      ]
+    })
     const identity = ({ file, reason, expression }) => ({
       file,
       reason,
       expression
     })
     expect(
-      accepted(a)
+      rawSites(a)
         .map(identity)
         .sort((a, b) => a.file.localeCompare(b.file))
     ).toEqual(
@@ -285,7 +388,11 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
   })
 
   it('retains all exact 13 raw diagnostics in strict mode', () => {
-    const a = fixture().audit({ exceptions: false })
+    const f = fixture(),
+      a = f.audit({ exceptions: false })
+    expectInactive(a)
+    expectRawInventory(a)
+    expect(a).toEqual(f.audit())
     expect(a.exceptionsApplied).toBe(false)
     expect(a.exceptions).toEqual([])
     expect(rawSites(a)).toHaveLength(13)
@@ -319,12 +426,19 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
           if (mode === 'byte') throw error
           // A refusal has no report/counts. Accept only a named closed refusal,
           // never a generic TypeError, test assertion, or arbitrary exception.
-          expect(String(error.message)).toMatch(
-            /(?:unverified_source_symlink|unverified_discovery_identity|physical_file_required|unverified_.*identity|missing_.*(?:file|source))/
-          )
+          expect(error).toBeInstanceOf(Error)
+          if (mode === 'symlink' && file.includes('/dist/'))
+            expect(error.message).toBe(
+              `invalid_boundary_manifest:${target}:physical_file_required`
+            )
+          else {
+            expect(mode).toBe('symlink')
+            expect(error.message).toBe(`unverified_source_symlink:${target}`)
+          }
           return
         }
         expectInvalidation(a, file, f.root)
+        expect(a).toEqual(f.audit({ exceptions: false }))
       }
     )
 
@@ -334,9 +448,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
     const copy = path.join(f.root, 'platform-source')
     fs.renameSync(directory, copy)
     fs.symlinkSync(copy, directory, 'dir')
-    expect(() => f.audit()).toThrow(
-      /unverified_source_symlink|unverified_discovery_identity/
-    )
+    expect(() => f.audit()).toThrow(/^unverified_source_symlink:/)
   })
 
   for (const constraint of ['reason', 'path', 'line', 'expression'])
@@ -376,8 +488,12 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
         const remaining = a.unusedExceptions.filter(
           (d) => d.exception === group.id
         )
-        expect(remaining.length).toBeGreaterThan(0)
+        expect(remaining).toHaveLength(group.rows.length)
         expect(remaining.every((d) => d.pinsHold)).toBe(true)
+        expectInactive(a)
+        expectRawInventory(a)
+        expect(a).toEqual(audit({ exceptions: false }))
+        expect(a.diagnostics).toEqual(f.audit().diagnostics)
         const rejected = a.diagnostics.filter(
           (d) =>
             d.reason === row.reason &&
@@ -389,7 +505,7 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
         for (const other of groups.filter((g) => g.id !== group.id))
           expect(
             a.exceptions.filter((d) => d.exception === other.id)
-          ).toHaveLength(count(other))
+          ).toHaveLength(0)
       }
     )
 
@@ -427,16 +543,31 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
       f.write(file, changed)
       expectPinsValid(f, [file])
       const a = copiedAuditor(f, { repin: [file] })()
-      expect(appliedCounts(a)).toEqual([4, 1, 7])
+      expectInactive(a)
+      expect(a).toEqual(
+        copiedAuditor(f, { repin: [file] })({ exceptions: false })
+      )
+      expect(a.diagnostics).toEqual(f.audit().diagnostics)
       const residual = rawSites(a)
-      expect(residual).toHaveLength(1)
-      expect(residual[0].file).toBe(row.file)
-      expect(residual[0].expression).not.toBe(oldExpression)
+      expect(residual).toHaveLength(13)
+      const changedSite = residual.filter((d) => d.file === row.file)
+      expect(changedSite).toHaveLength(1)
+      expect(changedSite[0].expression).not.toBe(oldExpression)
       expect(
-        a.unusedExceptions
-          .filter((d) => ids.has(d.exception))
-          .every((d) => d.pinsHold)
-      ).toBe(true)
+        residual
+          .filter((d) => d.file !== row.file)
+          .map((d) => [d.file, d.reason, d.expression])
+          .sort()
+      ).toEqual(
+        groups
+          .flatMap((g) => g.rows)
+          .filter((r) => r.file !== row.file)
+          .map((r) => [r.file, r.reason, r.expression])
+          .sort()
+      )
+      const unused = a.unusedExceptions.filter((d) => ids.has(d.exception))
+      expect(unused).toHaveLength(13)
+      expect(unused.every((d) => d.pinsHold)).toBe(true)
       expect(a.passed).toBe(false)
     }
   )
@@ -453,13 +584,23 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
     )
     expectPinsValid(f, [file])
     const a = copiedAuditor(f, { repin: [file] })()
-    expect(appliedCounts(a)).toEqual([4, 1, 8])
+    expectInactive(a)
     const residual = rawSites(a)
-    expect(residual).toHaveLength(1)
-    expect(residual[0].expression).toBe(row.expression)
+    expect(residual).toHaveLength(14)
+    expect(
+      residual.filter((d) => d.expression === row.expression)
+    ).toHaveLength(2)
+    const identity = (d) => `${sourceFile(d)}:${d.reason}:${d.expression}`
+    expect(residual.map(identity).sort()).toEqual(
+      [...groups.flatMap((g) => g.rows), row].map(identity).sort()
+    )
+    expect(a).toEqual(
+      copiedAuditor(f, { repin: [file] })({ exceptions: false })
+    )
+    expect(a.diagnostics).toEqual(f.audit().diagnostics)
     expect(
       accepted(a).filter((d) => d.expression === row.expression)
-    ).toHaveLength(1)
+    ).toHaveLength(0)
     expect(a.passed).toBe(false)
   })
 
@@ -468,7 +609,9 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
       file = 'packages/sandbox/src/unlisted.ts'
     f.write(file, fs.readFileSync('packages/sandbox/dist/run.js'))
     const a = f.audit()
-    expect(appliedCounts(a)).toEqual([4, 1, 8])
+    expectInactive(a)
+    expectRawInventory(a)
+    expect(a).toEqual(f.audit({ exceptions: false }))
     expect(a.exceptions.some((d) => sourceFile(d) === file)).toBe(false)
     expect(
       a.diagnostics.filter(
@@ -526,7 +669,12 @@ describe('SPEC0216 compiled kernel boundary qualification', () => {
       }
       expectPinsValid(f)
       const a = f.audit()
-      expect(appliedCounts(a)).toEqual([4, 1, 8])
+      expectInactive(
+        a,
+        ['product', 'shift'].includes(kind) ? 'FAIL' : 'INCOMPLETE'
+      )
+      expectRawInventory(a)
+      expect(a).toEqual(f.audit({ exceptions: false }))
       expect(a.passed).toBe(false)
       if (kind === 'product')
         expect(

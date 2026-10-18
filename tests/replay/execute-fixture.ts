@@ -22,14 +22,17 @@ import type {
   ToolDefinition
 } from '@cvg/harness-contracts'
 import type { ReplayFixture, ReplayTranscript } from './fixture-schema.mjs'
+import {
+  replayJsonClone as json,
+  RecordingAudit,
+  RecordingTelemetry,
+  fixedClock,
+  sequenceIds
+} from '../support/governed-test-kit/index.js'
 
 export const FROZEN_TIME = '2026-10-14T12:00:00.000Z'
 // No output normalizer: injected IDs and the fake clock remove only UUID/time
 // nondeterminism at their source. Payloads, errors, accounting and order stay exact.
-function json<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
-}
-
 export async function executeFixture(
   f: ReplayFixture,
   probeControls?: 'pause' | 'effects'
@@ -47,16 +50,28 @@ export async function executeFixture(
       toolBodies: unknown[] = []
     const policyDecisions: unknown[] = [],
       approvalRequests: unknown[] = []
-    const approvalEvents: unknown[] = [],
-      audit: unknown[] = [],
-      telemetry: unknown[] = []
+    const approvalEvents: unknown[] = []
+    const auditSink = new RecordingAudit<unknown>({
+      copy: json,
+      onAppend: () => {
+        timeline.push('audit/append')
+      }
+    })
+    const telemetrySink = new RecordingTelemetry<unknown>({
+      copy: json,
+      onRecord: () => {
+        timeline.push('telemetry/record')
+      }
+    })
+    const audit = auditSink.events
+    const telemetry = telemetrySink.events
     const domainPolicy = new DomainPolicy({
       profile: REFERENCE_POLICY_PROFILE,
-      clock: () => new Date(FROZEN_TIME)
+      clock: fixedClock(FROZEN_TIME)
     })
     const domainApprovals = new DomainApprovals({
       store: approvalStore,
-      clock: () => new Date(FROZEN_TIME),
+      clock: fixedClock(FROZEN_TIME),
       idFactory: () => 'approval_replay_synthetic',
       onEvent: (event) => {
         approvalEvents.push(json(event))
@@ -214,20 +229,7 @@ export async function executeFixture(
       if (event.type === f.logFailure) throw new Error('synthetic log failure')
       return append(event)
     })
-    const auditSink = {
-      append: async (event: unknown) => {
-        audit.push(json(event))
-        timeline.push('audit/append')
-      }
-    }
-    const telemetrySink = {
-      record: (event: unknown) => {
-        telemetry.push(json(event))
-        timeline.push('telemetry/record')
-      }
-    }
-    let nextEvent = 0
-    const newEventId = () => `event_replay_${++nextEvent}`
+    const newEventId = sequenceIds('event_replay_')
     let result: ReplayTranscript['result']
     if (f.entry === 'sdk') {
       const sdk = createSdk({

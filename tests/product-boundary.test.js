@@ -62,7 +62,7 @@ afterEach(() => {
 })
 
 describe('harness product boundary', () => {
-  it('pins session JSON reflection and invalidates sites on any validator mutation', () => {
+  it('keeps session JSON reflection unverified before and after validator mutation', () => {
     const { root, write } = fixture()
     const file = 'packages/harness/src/session/events.ts'
     const source = fs.readFileSync(file, 'utf8')
@@ -75,11 +75,11 @@ describe('harness product boundary', () => {
       )
     // This focused fixture does not resolve runtime imports; only the exact
     // reflection sites are under test. The real-tree gate verifies closure.
-    expect(dynamic()).toEqual([])
+    expect(dynamic()).toHaveLength(10)
     write(file, `${source}\n// unreviewed mutation\n`)
     expect(dynamic()).toHaveLength(10)
   })
-  it('pins the reviewed PDSH host probe and still rejects product edges', () => {
+  it('keeps the PDSH host probe unverified and still rejects product edges', () => {
     const { root, write } = fixture()
     write(
       'packages/contracts/package.json',
@@ -102,7 +102,7 @@ describe('harness product boundary', () => {
       auditProductBoundary(root).diagnostics.filter((d) =>
         d.file.startsWith('packages/sandbox/')
       )
-    ).toEqual([])
+    ).toHaveLength(1)
     write(
       'packages/sandbox/src/capabilities.ts',
       `${probe}\n// unreviewed mutation\n`
@@ -123,7 +123,7 @@ describe('harness product boundary', () => {
     ).toBe(true)
   })
 
-  it('binds PDSH catalog process sites to both test and generator bytes', () => {
+  it('does not exempt catalog process sites based on test and generator pins', () => {
     const { root, write } = fixture()
     write(
       'packages/vitest/package.json',
@@ -150,7 +150,7 @@ describe('harness product boundary', () => {
       auditProductBoundary(root).diagnostics.filter((d) =>
         d.file.includes('pdsh-014-tool-catalog')
       )
-    expect(diagnostics()).toEqual([])
+    expect(diagnostics()).toHaveLength(4)
     write(
       'scripts/gen-tool-catalog.mjs',
       `${generator}\n// generator mutation\n`
@@ -1123,12 +1123,11 @@ describe('HISO-005 B1 installed frontier', () => {
   const vendorLock = (entry = {}) =>
     lockfile({ 'node_modules/vendor': { version: '1.0.0', ...entry } })
 
-  it('treats a lock-verified installed package as a terminal node (not parsed)', () => {
+  it('refuses metadata-only terminal trust for an installed package (not parsed)', () => {
     const { root, write } = fixture()
     write('package-lock.json', vendorLock())
-    // Would be an UNVERIFIED_DYNAMIC_CODE_EXECUTION if third-party code were
-    // parsed. Registry artifacts recorded in the lockfile are trusted not to
-    // build product paths; the tripwire below covers literal references.
+    // SPEC0228: opaque third-party code stays unverified even when its
+    // metadata matches. The literal-reference scan remains an extra control.
     installed(
       write,
       'vendor',
@@ -1139,10 +1138,11 @@ describe('HISO-005 B1 installed frontier', () => {
     )
     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
     const audit = auditProductBoundary(root)
-    expect(audit.status).toBe('PASS')
+    expect(audit.status).toBe('INCOMPLETE')
     expect(audit.installedPackageCount).toBe(1)
     expect(audit.installedLockDrift).toEqual([])
-    expect(cli(root).status).toBe(0)
+    expect(audit.diagnostics[0].detail).toBe('UNVERIFIED_INSTALLED_CONTENT')
+    expect(cli(root).status).toBe(1)
   })
 
   it('refuses an installed package absent from the lockfile', () => {
@@ -1195,13 +1195,14 @@ describe('HISO-005 B1 installed frontier', () => {
     expect(audit.diagnostics[0].detail).toBe('NOT_IN_LOCKFILE')
   })
 
-  it('reports installed version drift without treating it as a boundary path', () => {
+  it('refuses installed version drift without treating it as a product edge', () => {
     const { root, write } = fixture()
     write('package-lock.json', vendorLock({ version: '2.0.0' }))
     installed(write, 'vendor', {})
     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
     const audit = auditProductBoundary(root)
-    expect(audit.status).toBe('PASS')
+    expect(audit.status).toBe('INCOMPLETE')
+    expect(audit.diagnostics[0].detail).toBe('INSTALLED_VERSION_MISMATCH')
     expect(audit.installedLockDrift).toEqual([
       {
         package: 'node_modules/vendor',
@@ -1326,25 +1327,18 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
   // shutdown-signal-source pins the real install() implementation that
   // receives `process`; the fixture carries a byte-identical copy.
   const lifecycle = 'packages/shared/src/lifecycle.ts'
-  const pinMessage = `${lifecycle} changed: re-review the shutdown-signal-source pin in scripts/check-product-boundary.mjs`
   const withPin = (write) => write(lifecycle, fs.readFileSync(lifecycle))
 
-  it('accepts a listed site only with its file, reason, line, expression and pin', () => {
+  it('refuses a listed site even with matching file, reason, line, expression and pin', () => {
     const { root, write } = fixture()
     withPin(write)
     write(entry, listed)
     const audit = auditProductBoundary(root)
-    expect(audit.status, pinMessage).toBe('PASS')
-    expect(audit.exceptions).toEqual([
-      {
-        file: `${entry}:2`,
-        reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
-        expression: '19ed40bf62c399b8',
-        exception: 'shutdown-signal-source'
-      }
-    ])
-    expect(cli(root)).toEqual({ status: 0, audit })
-    // Raw analysis: the same site is a blocking diagnostic without the table.
+    expect(audit.status).toBe('INCOMPLETE')
+    expect(audit.exceptionsApplied).toBe(false)
+    expect(audit.exceptions).toEqual([])
+    expect(cli(root)).toEqual({ status: 1, audit })
+    // Normal analysis now retains every diagnostic from the strict path.
     const strict = auditProductBoundary(root, { exceptions: false })
     expect(strict.status).toBe('INCOMPLETE')
     expect(strict.exceptions).toEqual([])
@@ -1377,7 +1371,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
       'INCOMPLETE',
       'UNVERIFIED_MODULE_LOADER_ESCAPE'
     )
-    expect(audit.exceptions.length).toBeLessThanOrEqual(1)
+    expect(audit.exceptions).toEqual([])
   })
 
   it('lapses when a pinned file changes', () => {
@@ -1399,7 +1393,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
     )
   })
 
-  it('binds the complete flagged expression, not only the line where it starts', () => {
+  it('refuses both listed subprocess expressions and changed arguments', () => {
     const file =
       'apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts'
     const source = (target) =>
@@ -1417,11 +1411,9 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
     const listedSpawn = fixture()
     listedSpawn.write(file, source('apps/worker/src/main.ts'))
     const audit = auditProductBoundary(listedSpawn.root)
-    expect(audit.status).toBe('PASS')
-    expect(audit.exceptions.map((item) => item.exception)).toEqual([
-      'entrypoint-subprocess'
-    ])
-    // Same first line, different arguments: the exception no longer applies.
+    expect(audit.status).toBe('INCOMPLETE')
+    expect(audit.exceptions).toEqual([])
+    // Same first line and different arguments both remain unverified.
     const changed = fixture()
     changed.write(file, source('products/shift/src/index.ts'))
     expectRefused(

@@ -105,6 +105,7 @@ async function copiedAuditor(f, changedFiles = [], wrongReason = false) {
   }
   for (const name of [
     'boundary-manifests.mjs',
+    'boundary-installed-identity.mjs',
     'boundary-code-execution.mjs',
     'boundary-lexical.mjs',
     'tsconfig-path-grammar.mjs'
@@ -117,15 +118,16 @@ async function copiedAuditor(f, changedFiles = [], wrongReason = false) {
   )
   const file = path.join(directory, 'check-product-boundary.mjs')
   fs.writeFileSync(file, source)
-  return (root) => {
+  return (root, options = {}) => {
     const run = spawnSync(
       process.execPath,
       [
         '--input-type=module',
         '-e',
-        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2])))',
+        'const {auditProductBoundary}=await import(process.argv[1]);process.stdout.write(JSON.stringify(auditProductBoundary(process.argv[2], JSON.parse(process.argv[3]))))',
         pathToFileURL(file).href,
-        root
+        root,
+        JSON.stringify(options)
       ],
       { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }
     )
@@ -139,24 +141,110 @@ afterEach(() => {
 })
 const accepted = (audit) => audit.exceptions.filter((d) => ids.has(d.exception))
 
+// SPEC0228: these immutable historical sites are an inventory, never trust.
+const siteFiles = new Set(groups.flatMap((g) => Object.keys(g.sites)))
+function expectInactive(a, status = 'INCOMPLETE') {
+  expect(a.exceptionsApplied).toBe(false)
+  expect(a.exceptions).toEqual([])
+  expect(accepted(a)).toEqual([])
+  expect(a.status).toBe(status)
+  expect(a.passed).toBe(false)
+}
+// Original source occurrences outside the 46 historical sites remain unknown too.
+const additionalRaw = [
+  ['packages/contracts/src/canonical-json.ts:27', '5b2efa8c4f1c77a4'],
+  ['packages/contracts/src/canonical-json.ts:28', 'b34563e2ebeb7717'],
+  ['packages/contracts/src/canonical-json.ts:28', 'b34563e2ebeb7717'],
+  ['packages/harness/src/session/events.ts:62', '511cf3cd840c8327'],
+  ['packages/harness/src/session/events.ts:64', '12b2fdc0a0ffd6ce'],
+  ['packages/harness/src/session/events.ts:70', '12b2fdc0a0ffd6ce'],
+  ['packages/harness/src/session/events.ts:71', '194b520dc30384b3'],
+  ['packages/harness/src/session/events.ts:71', '194b520dc30384b3'],
+  ['packages/harness/src/session/events.ts:71', '7e8c064eaa08ddfa'],
+  ['packages/harness/src/session/events.ts:73', '7d29e4d19453aa96'],
+  ['packages/harness/src/session/events.ts:77', '99cac9d0d093a87e'],
+  ['packages/harness/src/session/events.ts:78', '99cac9d0d093a87e'],
+  ['packages/harness/src/session/events.ts:82', '511cf3cd840c8327']
+].map(([file, expression]) => ({
+  file,
+  reason: 'UNVERIFIED_DYNAMIC_CODE_EXECUTION',
+  expression
+}))
+function expectRawInventory(a) {
+  const expected = groups.flatMap((g) =>
+    Object.entries(g.sites).flatMap(([file, lines]) =>
+      Object.values(lines).flatMap((expressions) =>
+        Object.entries(expressions).flatMap(([expression, max]) =>
+          Array.from({ length: max }, () =>
+            JSON.stringify({ file, reason: g.reason, expression })
+          )
+        )
+      )
+    )
+  )
+  const actual = a.diagnostics
+    .filter(
+      (d) =>
+        siteFiles.has(d.file.replace(/:\d+$/, '')) &&
+        d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+    )
+    .map((d) =>
+      JSON.stringify({
+        file: d.file.replace(/:\d+$/, ''),
+        reason: d.reason,
+        expression: d.expression
+      })
+    )
+  expect(actual.sort()).toEqual(expected.sort())
+  const additionalFiles = new Set(
+    additionalRaw.map((d) => d.file.replace(/:\d+$/, ''))
+  )
+  const identity = ({ file, reason, expression }) =>
+    JSON.stringify({ file, reason, expression })
+  expect(
+    a.diagnostics
+      .filter(
+        (d) =>
+          additionalFiles.has(d.file.replace(/:\d+$/, '')) &&
+          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+      )
+      .map(identity)
+      .sort()
+  ).toEqual(additionalRaw.map(identity).sort())
+}
+
+// Legacy test names are retained as stable case IDs; the oracle is SPEC0228.
 describe('SPEC0215 exact capability qualification', () => {
   it('qualifies exactly the four reviewed groups and 46 diagnostic occurrences', () => {
     const f = fixture(),
       a = f.audit()
     expect(groups.map(count)).toEqual([19, 14, 3, 10])
-    expect(accepted(a)).toHaveLength(46)
     for (const g of groups)
-      expect(a.exceptions.filter((d) => d.exception === g.id)).toHaveLength(
-        count(g)
-      )
-    const files = new Set(groups.flatMap((g) => Object.keys(g.sites)))
+      for (const [file, expected] of Object.entries(g.pins)) {
+        const target = path.join(f.root, file)
+        expect(fs.lstatSync(target).isFile()).toBe(true)
+        expect(fs.realpathSync(target)).toBe(target)
+        expect(
+          createHash('sha256').update(fs.readFileSync(target)).digest('hex')
+        ).toBe(expected)
+      }
+    expectInactive(a)
+    expectRawInventory(a)
     expect(
       a.diagnostics.filter(
-        (d) =>
-          files.has(d.file.replace(/:\d+$/, '')) &&
-          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+        (d) => d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
       )
-    ).toEqual([])
+    ).toHaveLength(59)
+    expect(a).toEqual(f.audit({ exceptions: false }))
+    const requested = f.audit({ exceptions: true })
+    expectInactive(requested)
+    expect(requested).toEqual({
+      ...a,
+      diagnostics: [
+        { file: 'package.json', reason: 'UNAPPROVED_EXCEPTION_REQUEST' },
+        ...a.diagnostics
+      ]
+    })
   })
   it.each(pins)(
     'invalidates every dependent group on byte drift of %s',
@@ -167,22 +255,27 @@ describe('SPEC0215 exact capability qualification', () => {
         fs.readFileSync(file, 'utf8') + '\n// SPEC0215 unreviewed byte\n'
       )
       const a = f.audit()
+      expectInactive(a)
+      expectRawInventory(a)
+      expect(a).toEqual(f.audit({ exceptions: false }))
       for (const g of groups) {
-        const applied = a.exceptions.filter((d) => d.exception === g.id)
-        expect(applied).toHaveLength(Object.hasOwn(g.pins, file) ? 0 : count(g))
-        if (Object.hasOwn(g.pins, file))
-          expect(
-            a.unusedExceptions.some(
-              (d) => d.exception === g.id && d.pinsHold === false
-            )
-          ).toBe(true)
+        const unused = a.unusedExceptions.filter((d) => d.exception === g.id)
+        expect(unused).toHaveLength(
+          Object.values(g.sites).flatMap(Object.values).flatMap(Object.keys)
+            .length
+        )
+        expect(
+          unused.every((d) => d.pinsHold === !Object.hasOwn(g.pins, file))
+        ).toBe(true)
       }
     }
   )
   it('keeps all 46 raw diagnostics in strict mode', () => {
     const f = fixture(),
       a = f.audit({ exceptions: false })
-    expect(a.exceptions).toEqual([])
+    expectInactive(a)
+    expectRawInventory(a)
+    expect(a).toEqual(f.audit())
     const files = new Set(groups.flatMap((g) => Object.keys(g.sites)))
     expect(
       a.diagnostics.filter(
@@ -201,7 +294,9 @@ describe('SPEC0215 exact capability qualification', () => {
       path.join(f.root, 'owned-child-copy.mts'),
       path.join(f.root, file)
     )
-    expect(() => f.audit()).toThrow(/physical_file_required|symlink|identity/)
+    expect(() => f.audit()).toThrow(
+      `invalid_boundary_manifest:${path.join(f.root, file)}:physical_file_required`
+    )
   })
   it.each([
     'examples/another/index.mts',
@@ -225,6 +320,9 @@ describe('SPEC0215 exact capability qualification', () => {
           d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
       )
     ).toBe(true)
+    expectInactive(a)
+    expectRawInventory(a)
+    expect(a).toEqual(f.audit({ exceptions: false }))
     expect(a.exceptions.some((d) => d.file.startsWith(file + ':'))).toBe(false)
   })
   it.each([
@@ -237,7 +335,9 @@ describe('SPEC0215 exact capability qualification', () => {
       const f = fixture()
       f.write('packages/sdk/src/unreviewed-bridge.ts', source)
       const a = f.audit()
-      expect(accepted(a)).toHaveLength(46)
+      expectInactive(a, kind === 'unresolved' ? 'INCOMPLETE' : 'FAIL')
+      expectRawInventory(a)
+      expect(a).toEqual(f.audit({ exceptions: false }))
       if (kind === 'product')
         expect(
           a.violations.some((d) => JSON.stringify(d).includes('products/shift'))
@@ -293,29 +393,89 @@ describe('SPEC0215 exact capability qualification', () => {
       const unused = a.unusedExceptions.filter(
         (d) => d.exception === 'pare100-sdk-owned-example-child'
       )
+      expect(unused).toHaveLength(13)
       expect(unused.every((d) => d.pinsHold === true)).toBe(true)
+      expectInactive(a)
+      expect(a).toEqual(audit(f.root, { exceptions: false }))
+      const direct = f.audit()
+      expect(a.diagnostics).toEqual(direct.diagnostics)
       const residual = a.diagnostics.filter(
         (d) =>
           d.file.startsWith(file + ':') &&
           d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
       )
-      expect(residual).toHaveLength(1)
-      expect(
-        a.exceptions.filter(
-          (d) => d.exception === 'pare100-sdk-owned-example-child'
+      expect(residual).toHaveLength(kind === 'count' ? 15 : 14)
+      // Reconstitute only this fixture to compare the full original inventory.
+      f.write(file, original)
+      const originalAudit = f.audit()
+      expectRawInventory(originalAudit)
+      f.write(file, modified)
+      const identity = (d) =>
+        `${d.file.replace(/:\d+$/, '')}:${d.reason}:${d.expression}`
+      const originalSites = originalAudit.diagnostics.filter(
+        (d) =>
+          d.file.startsWith(file + ':') &&
+          d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
+      )
+      if (kind === 'expression') {
+        const added = residual.filter(
+          (d) => !originalSites.some((old) => identity(old) === identity(d))
         )
-      ).toHaveLength(kind === 'count' ? 14 : 13)
-      expect(
-        a.exceptions.filter(
-          (d) => d.exception === 'pare100-sdk-owned-test-child'
+        const removed = originalSites.filter(
+          (old) => !residual.some((d) => identity(old) === identity(d))
         )
-      ).toHaveLength(19)
+        expect(added).toHaveLength(1)
+        expect(removed).toHaveLength(1)
+        expect(residual.map(identity).sort()).toEqual(
+          [
+            ...originalSites.filter(
+              (d) => identity(d) !== identity(removed[0])
+            ),
+            added[0]
+          ]
+            .map(identity)
+            .sort()
+        )
+      } else if (kind === 'line') {
+        expect(residual.map(identity).sort()).toEqual(
+          originalSites.map(identity).sort()
+        )
+      } else {
+        const expression = originalSites.find(
+          (d) => d.expression === 'c1b0eb4f5632c391'
+        ).expression
+        expect(
+          residual.filter((d) => d.expression === expression)
+        ).toHaveLength(2)
+        expect(residual.map(identity).sort()).toEqual(
+          [
+            ...originalSites,
+            originalSites.find((d) => d.expression === expression)
+          ]
+            .map(identity)
+            .sort()
+        )
+      }
+      expect(
+        a.diagnostics.filter((d) => !d.file.startsWith(file + ':'))
+      ).toEqual(
+        originalAudit.diagnostics.filter((d) => !d.file.startsWith(file + ':'))
+      )
     }
   )
   it('does not match another reason even when every byte pin holds', async () => {
     const f = fixture(),
       audit = await copiedAuditor(f, [], true),
       a = audit(f.root)
+    expectInactive(a)
+    expectRawInventory(a)
+    expect(a).toEqual(audit(f.root, { exceptions: false }))
+    expect(a.diagnostics).toEqual(f.audit().diagnostics)
+    expect(
+      a.unusedExceptions.filter(
+        (d) => d.exception === 'pare100-sdk-owned-example-child'
+      )
+    ).toHaveLength(13)
     expect(
       a.exceptions.filter(
         (d) => d.exception === 'pare100-sdk-owned-example-child'
