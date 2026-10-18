@@ -189,11 +189,16 @@ e com histórico linear; administradores não estão isentos. Um push direto de 
 sem checks é recusado. Fluxo:
 
 ```sh
-git push origin HEAD:refs/heads/candidate/<task>    # dispara Verify e Security
-gh run watch                                        # espere os quatro checks verdes
+git push origin HEAD:refs/heads/candidate/<task>
+gh pr create --draft --base main --head candidate/<task>   # Verify e Security só rodam em PR
+gh pr checks <número> --watch                       # espere os quatro checks verdes
 git push origin HEAD:main                           # mesmo SHA, fast-forward
-git push origin --delete candidate/<task>
+git push origin --delete candidate/<task>           # fecha o PR draft
 ```
+
+Os workflows `verify.yml` e `security.yml` disparam em `pull_request` e em push para
+`main`; um push só para `candidate/<task>` não roda nenhum check (constatado em 18/10/2026
+no PR #3).
 
 Push continua exigindo autorização do usuário, conforme
 [coordenação](agent_coordination.md).
