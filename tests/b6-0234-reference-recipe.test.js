@@ -20,7 +20,7 @@ import {
 } from '../scripts/boundary-reference-process.mjs'
 
 const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
-const BASE = '/tmp/cvg-hiso005-0234-20261017/runner'
+const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-runner'
 fs.mkdirSync(BASE, { recursive: true })
 const roots = []
 const cleanup = []

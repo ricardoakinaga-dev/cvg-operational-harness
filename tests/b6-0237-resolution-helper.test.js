@@ -11,7 +11,7 @@ import {
   RESOLUTION_PROFILE
 } from '../scripts/boundary-semantic-resolution.mjs'
 
-const BASE = '/mnt/ia/cvg-hiso005-build0237-runtime-20261018/helper'
+const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-helper'
 const parents = [],
   sessions = []
 const hash = (b) => createHash('sha256').update(b).digest('hex')

@@ -16,7 +16,7 @@ const ENGINE = path.resolve('scripts/boundary-semantic-engine.mjs')
 const CHECKER = path.resolve('scripts/check-product-boundary.mjs')
 const BASELINE =
   '/home/ricardo/cvg-candidates/hiso005-resolver-fix-20261018/scripts/check-product-boundary.mjs'
-const PARENT = '/mnt/ia/cvg-hiso005-build0237-runtime-20261018/lead'
+const PARENT = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-lead'
 const hash = (x) => createHash('sha256').update(x).digest('hex')
 const env = {
   PATH: path.dirname(NODE) + ':/usr/bin:/bin',
@@ -128,7 +128,7 @@ function proven(input) {
   expect(out.status, JSON.stringify(out.unknowns)).toBe('PROVEN')
   expect(out.validation.valid).toBe(true)
   expect(out.proofs.length).toBeGreaterThan(0)
-  expect(out.kernelVersion).toBe('semantic-kernel-v2-resolution')
+  expect(out.kernelVersion).toBe('semantic-kernel-v3-exact-metadata')
   return out
 }
 function refused(input) {
@@ -708,7 +708,7 @@ describe('BUILD0237 actual CLI: compatibility, origins and strict determinism', 
     const normal = f.run([...f.flags, '--semantic'])
     const strict = f.run([...f.flags, '--semantic', '--strict'])
     expect(normal.body.semanticBoundary.kernelVersion).toBe(
-      'semantic-kernel-v2-resolution'
+      'semantic-kernel-v3-exact-metadata'
     )
     delete normal.body.semanticTelemetry
     delete strict.body.semanticTelemetry

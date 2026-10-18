@@ -1,0 +1,170 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index a8dc3893..546d4b6b 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -17,10 +17,11 @@ import {
+   createResolutionSession,
+   revalidateResolutionSnapshot,
+   RESOLUTION_LIMITS,
+-  RESOLUTION_PROFILE
++  RESOLUTION_PROFILE,
++  isInactiveImportsMapEligible
+ } from './boundary-semantic-resolution.mjs'
+ 
+-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v2-resolution'
++export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v3-exact-metadata'
+ 
+ const SELF = fileURLToPath(import.meta.url)
+ const isWorker = () =>
+@@ -1197,7 +1198,11 @@ export function analyzeSemanticBoundary(input) {
+       reachedPackages.get(key).entries.add(file)
+     }
+     const manifest = manifestAt(file)
+-    if (manifest?.body.imports || manifest?.body.browser)
++    if (
++      (manifest?.body.imports &&
++        !isInactiveImportsMapEligible(manifest.body.imports)) ||
++      manifest?.body.browser
++    )
+       unknown(file, 'UNKNOWN_AMBIGUOUS_RESOLUTION')
+     const mode =
+       /\.c(?:js|ts)$/.test(file) ||
+diff --git a/scripts/boundary-semantic-resolution.mjs b/scripts/boundary-semantic-resolution.mjs
+index 9543c7ce..a4610c83 100644
+--- a/scripts/boundary-semantic-resolution.mjs
++++ b/scripts/boundary-semantic-resolution.mjs
+@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
+ import { isBuiltin } from 'node:module'
+ import { fileURLToPath, pathToFileURL } from 'node:url'
+ 
+-export const RESOLUTION_PROFILE = 'linux-rootfd-workspace-v1'
++export const RESOLUTION_PROFILE = 'node22-linux-exact-metadata-v1'
+ export const RESOLUTION_LIMITS = Object.freeze({
+   maxWorkspaces: 512,
+   maxLinks: 512,
+@@ -93,6 +93,28 @@ const asciiPart = (v) =>
+   v !== '.' &&
+   v !== '..' &&
+   v.toLowerCase() !== 'node_modules'
++// SPEC0240: eligibility of metadata that cannot select a non-# request.
++// Values stay opaque; json() binds the entire manifest before this predicate.
++export function isInactiveImportsMapEligible(value) {
++  return (
++    object(value) &&
++    Object.keys(value).every(
++      (key) => key.startsWith('#') && key.slice(1).split('/').every(asciiPart)
++    )
++  )
++}
++const exactMapKey = (key) => {
++  if (key === '.') return true
++  if (!key.startsWith('./')) return false
++  const tail = key.slice(2)
++  const stars = tail.split('*').length - 1
++  if (stars > 1) return false
++  return tail
++    .split('/')
++    .every((part) =>
++      part.includes('*') ? /^[A-Za-z0-9_@+.*-]+$/.test(part) : asciiPart(part)
++    )
++}
+ const packagePart = (v) =>
+   /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v) && v !== '.' && v !== '..'
+ const dirname = (v) =>
+@@ -751,14 +773,9 @@ export function createResolutionSession({
+       const keys = Object.keys(value),
+         mapped = keys.some((k) => k.startsWith('.'))
+       if (mapped) {
+-        if (
+-          !keys.every(
+-            (k) =>
+-              k === '.' ||
+-              (k.startsWith('./') && k.slice(2).split('/').every(asciiPart))
+-          )
+-        )
+-          fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++        // Global map classification precedes the exact hit. Patterns are
++        // eligible only as unselected keys; no matching/substitution follows.
++        if (!keys.every(exactMapKey)) fail('UNKNOWN_UNSUPPORTED_EXPORTS')
+         if (!Object.hasOwn(value, subpath)) fail('UNKNOWN_UNRESOLVED_EXPORT')
+         branch.push(subpath)
+         const result = select(value[subpath])
+@@ -878,6 +895,7 @@ export function createResolutionSession({
+       logicalURL,
+       exact = false
+     const branch = []
++    const metadataSelection = { imports: null, exports: null }
+     if (specifier.startsWith('./') || specifier.startsWith('../')) {
+       classifyRaw(specifier, from, dirname(from))
+       // Normalization here only selects metadata for conservative negative
+@@ -945,8 +963,17 @@ export function createResolutionSession({
+       }
+       if (!owner) fail('UNKNOWN_RESOLUTION')
+       const body = owner.body
+-      if (Object.hasOwn(body, 'browser') || Object.hasOwn(body, 'imports'))
++      const hasImports = Object.hasOwn(body, 'imports')
++      const eligibleImports =
++        hasImports && isInactiveImportsMapEligible(body.imports)
++      if (Object.hasOwn(body, 'browser') || (hasImports && !eligibleImports))
+         fail('UNKNOWN_AMBIGUOUS_RESOLUTION')
++      metadataSelection.imports = {
++        present: hasImports,
++        eligible: eligibleImports,
++        inactive: eligibleImports,
++        keys: eligibleImports ? Object.keys(body.imports) : []
++      }
+       // A selected explicit null is outside the positive legacy subset: it
+       // must reach the blocked export branch, never open main/index fallback.
+       exact = Object.hasOwn(body, 'exports')
+@@ -957,6 +984,14 @@ export function createResolutionSession({
+         : subpath !== '.'
+           ? subpath
+           : body.main || './index.js'
++      if (exact)
++        metadataSelection.exports = {
++          requestedSubpath: subpath,
++          selectedKey: subpath,
++          unselectedPatternKeys: object(body.exports)
++            ? Object.keys(body.exports).filter((key) => key.includes('*'))
++            : []
++        }
+       const target = urlTarget(entry, owner, from, exact)
+       file = target.file
+       logicalURL = target.logicalURL
+@@ -972,6 +1007,7 @@ export function createResolutionSession({
+           : ['require', 'node', 'node-addons', 'module-sync'],
+       branch,
+       exact,
++      metadataSelection,
+       logicalURL,
+       canonicalFile: file,
+       canonicalURL: pathToFileURL(path.join(root, file)).href,
+@@ -1146,6 +1182,7 @@ function validateTraces(saved, root) {
+       isBuiltin(trace.specifier) ||
+       !['import', 'require'].includes(trace.mode) ||
+       typeof trace.exact !== 'boolean' ||
++      !object(trace.metadataSelection) ||
+       !Array.isArray(trace.branch) ||
+       trace.branch.some(
+         (v) => typeof v !== 'string' || /[\u0000-\u001f\u007f]/.test(v)
+@@ -1237,10 +1274,19 @@ export function revalidateResolutionSnapshot({ root, snapshot, limits } = {}) {
+   const session = createResolutionSession({ root, limits })
+   try {
+     for (const premise of saved.premises) REPLAY.get(session)(premise)
++    // Re-derive the selected branch and inactive-metadata premises. A
++    // valid-looking edited trace is never authority for a selection.
++    for (const trace of saved.resolutions)
++      session.resolve({
++        from: trace.from,
++        specifier: trace.specifier,
++        mode: trace.mode
++      })
+     const current = session.snapshot()
+     if (
+       !same(current.premises, saved.premises) ||
+-      !same(current.inputs, saved.inputs)
++      !same(current.inputs, saved.inputs) ||
++      !same(current.resolutions, saved.resolutions)
+     )
+       fail('UNKNOWN_RESOLUTION_MUTATION')
+     return true

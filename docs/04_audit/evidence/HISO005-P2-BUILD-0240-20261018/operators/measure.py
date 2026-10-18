@@ -11,7 +11,7 @@ from common import *
 
 label, checker_dir = sys.argv[1], Path(sys.argv[2])
 state, freeze, review, h = assert_frozen(allow_cert_dirty=True)
-refs = load('references-r1.json')
+refs = load('references-current.json')
 inst, comp = refs['installedReference'], refs['compiledReference']
 assert sha(inst['manifestPath']) == inst['expectedSha256'] and sha(comp['manifestPath']) == comp['expectedSha256']
 work = RUNTIME / ('measure-' + label)

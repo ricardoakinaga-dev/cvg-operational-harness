@@ -5,7 +5,10 @@ import { createHash } from 'node:crypto'
 import { isBuiltin } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-export const RESOLUTION_PROFILE = 'linux-rootfd-workspace-v1'
+export const RESOLUTION_PROFILE = 'node22-linux-exact-metadata-v1'
+// Negative-only session with the v2 metadata refusals. Its snapshot can never
+// satisfy RESOLUTION_PROFILE revalidation, so it is never proof authority.
+export const REFUSAL_CENSUS_PROFILE = 'node22-linux-v2-refusal-census-v1'
 export const RESOLUTION_LIMITS = Object.freeze({
   maxWorkspaces: 512,
   maxLinks: 512,
@@ -93,6 +96,31 @@ const asciiPart = (v) =>
   v !== '.' &&
   v !== '..' &&
   v.toLowerCase() !== 'node_modules'
+// SPEC0240: eligibility of metadata that cannot select a non-# request.
+// Values stay opaque; json() binds the entire manifest before this predicate.
+export function isInactiveImportsMapEligible(value) {
+  return (
+    object(value) &&
+    Object.keys(value).every(
+      (key) => key.startsWith('#') && key.slice(1).split('/').every(asciiPart)
+    )
+  )
+}
+const legacyMapKey = (key) =>
+  key === '.' ||
+  (key.startsWith('./') && key.slice(2).split('/').every(asciiPart))
+const exactMapKey = (key) => {
+  if (key === '.') return true
+  if (!key.startsWith('./')) return false
+  const tail = key.slice(2)
+  const stars = tail.split('*').length - 1
+  if (stars > 1) return false
+  return tail
+    .split('/')
+    .every((part) =>
+      part.includes('*') ? /^[A-Za-z0-9_@+.*-]+$/.test(part) : asciiPart(part)
+    )
+}
 const packagePart = (v) =>
   /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v) && v !== '.' && v !== '..'
 const dirname = (v) =>
@@ -106,7 +134,8 @@ export function createResolutionSession({
   root,
   limits,
   onProduct = () => {},
-  onNegativeTarget = () => {}
+  onNegativeTarget = () => {},
+  refusalCensus = false
 } = {}) {
   const caps = limitsFor(limits)
   if (process.platform !== 'linux') fail('UNKNOWN_ACQUISITION_PLATFORM')
@@ -121,6 +150,7 @@ export function createResolutionSession({
     fail('UNKNOWN_ROOT')
   if (typeof onProduct !== 'function') fail('UNKNOWN_PRODUCT_CALLBACK')
   if (typeof onNegativeTarget !== 'function') fail('UNKNOWN_NEGATIVE_CALLBACK')
+  if (typeof refusalCensus !== 'boolean') fail('UNKNOWN_CENSUS_MODE')
   const fds = new Set(),
     directories = new Set(),
     premises = new Map(),
@@ -751,13 +781,9 @@ export function createResolutionSession({
       const keys = Object.keys(value),
         mapped = keys.some((k) => k.startsWith('.'))
       if (mapped) {
-        if (
-          !keys.every(
-            (k) =>
-              k === '.' ||
-              (k.startsWith('./') && k.slice(2).split('/').every(asciiPart))
-          )
-        )
+        // Global map classification precedes the exact hit. Patterns are
+        // eligible only as unselected keys; no matching/substitution follows.
+        if (!keys.every(refusalCensus ? legacyMapKey : exactMapKey))
           fail('UNKNOWN_UNSUPPORTED_EXPORTS')
         if (!Object.hasOwn(value, subpath)) fail('UNKNOWN_UNRESOLVED_EXPORT')
         branch.push(subpath)
@@ -878,6 +904,7 @@ export function createResolutionSession({
       logicalURL,
       exact = false
     const branch = []
+    const metadataSelection = { imports: null, exports: null }
     if (specifier.startsWith('./') || specifier.startsWith('../')) {
       classifyRaw(specifier, from, dirname(from))
       // Normalization here only selects metadata for conservative negative
@@ -945,8 +972,19 @@ export function createResolutionSession({
       }
       if (!owner) fail('UNKNOWN_RESOLUTION')
       const body = owner.body
-      if (Object.hasOwn(body, 'browser') || Object.hasOwn(body, 'imports'))
+      const hasImports = Object.hasOwn(body, 'imports')
+      const eligibleImports =
+        hasImports &&
+        !refusalCensus &&
+        isInactiveImportsMapEligible(body.imports)
+      if (Object.hasOwn(body, 'browser') || (hasImports && !eligibleImports))
         fail('UNKNOWN_AMBIGUOUS_RESOLUTION')
+      metadataSelection.imports = {
+        present: hasImports,
+        eligible: eligibleImports,
+        inactive: eligibleImports,
+        keys: eligibleImports ? Object.keys(body.imports) : []
+      }
       // A selected explicit null is outside the positive legacy subset: it
       // must reach the blocked export branch, never open main/index fallback.
       exact = Object.hasOwn(body, 'exports')
@@ -957,6 +995,14 @@ export function createResolutionSession({
         : subpath !== '.'
           ? subpath
           : body.main || './index.js'
+      if (exact)
+        metadataSelection.exports = {
+          requestedSubpath: subpath,
+          selectedKey: subpath,
+          unselectedPatternKeys: object(body.exports)
+            ? Object.keys(body.exports).filter((key) => key.includes('*'))
+            : []
+        }
       const target = urlTarget(entry, owner, from, exact)
       file = target.file
       logicalURL = target.logicalURL
@@ -972,6 +1018,7 @@ export function createResolutionSession({
           : ['require', 'node', 'node-addons', 'module-sync'],
       branch,
       exact,
+      metadataSelection,
       logicalURL,
       canonicalFile: file,
       canonicalURL: pathToFileURL(path.join(root, file)).href,
@@ -1035,7 +1082,7 @@ export function createResolutionSession({
     return JSON.parse(
       encode({
         schemaVersion: 1,
-        profile: RESOLUTION_PROFILE,
+        profile: refusalCensus ? REFUSAL_CENSUS_PROFILE : RESOLUTION_PROFILE,
         root,
         inputs: [...inputs.values()].sort((a, b) =>
           compare(a.kind + ':' + a.file, b.kind + ':' + b.file)
@@ -1146,6 +1193,7 @@ function validateTraces(saved, root) {
       isBuiltin(trace.specifier) ||
       !['import', 'require'].includes(trace.mode) ||
       typeof trace.exact !== 'boolean' ||
+      !object(trace.metadataSelection) ||
       !Array.isArray(trace.branch) ||
       trace.branch.some(
         (v) => typeof v !== 'string' || /[\u0000-\u001f\u007f]/.test(v)
@@ -1237,10 +1285,19 @@ export function revalidateResolutionSnapshot({ root, snapshot, limits } = {}) {
   const session = createResolutionSession({ root, limits })
   try {
     for (const premise of saved.premises) REPLAY.get(session)(premise)
+    // Re-derive the selected branch and inactive-metadata premises. A
+    // valid-looking edited trace is never authority for a selection.
+    for (const trace of saved.resolutions)
+      session.resolve({
+        from: trace.from,
+        specifier: trace.specifier,
+        mode: trace.mode
+      })
     const current = session.snapshot()
     if (
       !same(current.premises, saved.premises) ||
-      !same(current.inputs, saved.inputs)
+      !same(current.inputs, saved.inputs) ||
+      !same(current.resolutions, saved.resolutions)
     )
       fail('UNKNOWN_RESOLUTION_MUTATION')
     return true

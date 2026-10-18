@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import *
 
 state, freeze, review, h = assert_frozen(allow_cert_dirty=True)
-refs = load('references-r1.json')
+refs = load('references-current.json')
 inst = refs['installedReference']
 CLOSURE = ['check-product-boundary.mjs', 'boundary-manifests.mjs', 'tsconfig-path-grammar.mjs', 'boundary-code-execution.mjs',
            'boundary-lexical.mjs', 'boundary-installed-identity.mjs', 'boundary-semantic-engine.mjs', 'boundary-semantic-resolution.mjs',
@@ -21,6 +21,8 @@ for name, commit in baselines.items():
             if p.returncode == 0:
                 (d / 'scripts' / f).write_bytes(p.stdout)
         shutil.copytree(CANDIDATE / 'node_modules/typescript', d / 'node_modules/typescript', symlinks=True)
+    if not (d / 'node_modules/semver').exists():
+        shutil.copytree(CANDIDATE / 'node_modules/semver', d / 'node_modules/semver', symlinks=True)
     for f in (d / 'scripts').glob('*.mjs'):
         assert f.read_bytes() == subprocess.check_output(['git', 'show', commit + ':scripts/' + f.name], cwd=CANDIDATE)
     assert sha(d / 'node_modules/typescript/lib/typescript.js') == PARSER_SHA
