@@ -14,6 +14,8 @@ export const RUNTIME_WORKSPACES = [
   'packages/rag',
   'packages/platform',
   'packages/approval-engine',
+  // PDSH-016: channel-gateway (exam egress) depends on the sandbox package.
+  'packages/sandbox',
   'packages/channel-gateway',
   'packages/policy-engine',
   'packages/model-gateway',
