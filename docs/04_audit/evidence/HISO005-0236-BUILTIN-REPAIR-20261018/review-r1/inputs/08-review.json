@@ -1,0 +1,205 @@
+{
+  "task": "HISO005-0236-RESOLVER-CONFORMANCE-20261018",
+  "round": 2,
+  "verdict": "REVISE",
+  "status": "IMPLEMENTED",
+  "selfApprovedDone": false,
+  "scope": "Exact frozen two-path conservative resolver repair under existing approved SPEC0236, mechanism only; second/final bounded review",
+  "sourceCommit": "7ad6d2f7a3da48786b0770f6cd7a259aab4cc20a",
+  "baseCommit": "75dfef50d0b5bc5a8063829ea4c63af8b4ab8b54",
+  "specSha256": "cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49",
+  "inputManifest": {
+    "path": "input-manifest.json",
+    "sha256": "272e8e83e1a0a88c7d12c892d3601becc9913145ba2b8a59c71e917c73bc15a0"
+  },
+  "criteriaManifest": {
+    "path": "criteria.json",
+    "sha256": "295c3aa0baaa7737e45b259c3d3ba3c1b493330a2d97b52876095336e1b059c7",
+    "unchangedFromR1": true
+  },
+  "sourceFreeze": {
+    "path": "inputs/009-source-freeze-r2.json",
+    "sha256": "34f93a5cddf196296ad7a398c45f250ac01da6474dc959a5b8eea2787b909ed7"
+  },
+  "reviewer": {
+    "identity": "Codex independent critic, separate from implementation author, continuing R1",
+    "independence": "I1 established at R1; same critic continuing R2, no new fresh-context claim for R2",
+    "descendants": 0,
+    "roundBudget": 2,
+    "roundsConsumed": 2,
+    "finalRound": true
+  },
+  "nativeBindings": {
+    "path": "native-bindings.json",
+    "nodeVersion": "22.23.2",
+    "nodeSha256": "3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327",
+    "allFiveEmbeddedSourcesMatch": true
+  },
+  "sourceSentinel": {
+    "before": "source-before.json",
+    "after": "source-after.json",
+    "all17Agree": true,
+    "onlyTwoPathsDifferFromBase": true,
+    "other15Unchanged": true,
+    "priorCliTestCallsUnchanged": true,
+    "staticControlEvidence": "static-controls.stdout.json",
+    "r1Before": "r1-before.json",
+    "r1After": "r1-after.json",
+    "r1All760FilesAgree": true,
+    "prior21TestBodiesUnchanged": true
+  },
+  "summary": {
+    "distinctScenarios": 20,
+    "completedControlledCalls": 54,
+    "meetingExpected": 18,
+    "mandatoryFindings": 1,
+    "targetApplicationExecuted": false,
+    "scenarioResults": "results.json",
+    "rawCommands": "raw",
+    "fixtureManifest": "fixture-manifest.json",
+    "collectorAttempts": "collector-attempts.json",
+    "invalidAttempts": 0,
+    "incompleteAttempts": 0,
+    "priorMandatoryFindingsResolved": 2,
+    "cycleOutcome": "FAILED_QUALITY_BAR"
+  },
+  "findings": [
+    {
+      "id": "R2-01",
+      "mandatory": true,
+      "severity": "P1",
+      "confidence": "HIGH",
+      "title": "Bare built-in names can be proved against homonymous installed files instead of the native built-in",
+      "classification": "Existing v1 conformance gap, still present in R2; not identified as a regression introduced by the two R2 guards",
+      "affectedCriteria": [
+        "C1",
+        "C2",
+        "SP07",
+        "SP09",
+        "SP10",
+        "SP17"
+      ],
+      "affectedPaths": [
+        {
+          "path": "scripts/boundary-semantic-engine.mjs",
+          "lines": [
+            305,
+            324,
+            327,
+            337,
+            363
+          ]
+        }
+      ],
+      "scenarios": [
+        "S13",
+        "S20"
+      ],
+      "evidence": [
+        "S13.json",
+        "S13.kernel.json",
+        "S13.report.json",
+        "raw/033.command.json",
+        "raw/033.stdout.txt",
+        "raw/035.command.json",
+        "raw/035.stdout.txt",
+        "S20.json",
+        "S20.kernel.json",
+        "S20.report.json",
+        "raw/052.command.json",
+        "raw/052.stdout.txt",
+        "raw/054.command.json",
+        "raw/054.stdout.txt",
+        "native-bindings.json",
+        "synthetic-identity-bindings.json",
+        "inputs/020-node-internal-modules-cjs-loader.source.txt",
+        "inputs/021-node-internal-modules-esm-resolve.source.txt"
+      ],
+      "observation": "S13 require.resolve(module) selects module (native built-in); S20 import.meta.resolve(fs) selects node:fs. With byte-matching synthetic same-named installed packages supplied as identity premises, the supervised kernel instead analyzes node_modules/module/index.js or node_modules/fs/index.js and returns PROVEN, validation.valid=true, two SourceFile proofs, installed PROVEN and no unknowns. Both full CLI calls remain INCOMPLETE/exit1/semanticUNKNOWN because their installed identity is not granted by the separate CLI path.",
+      "nativeSemantics": "Pinned CJS Module._resolveFilename lines1346-1349 returns built-ins before file/package search. Pinned ESM packageResolve lines762-766 likewise returns a node: URL before getPackageJSONURL. Current resolver has no corresponding built-in dispatch/refusal before bare-package lookup.",
+      "impact": "Identity MATCH of a homonymous package cannot certify a native built-in that Node actually selects. In S13 the real export is a native module/loader capability rather than the modeled primitive1. Accepting the substituted body violates the existing actual-implementation proof contract, even when the public CLI separately refuses it. No new global CLI false PASS is claimed.",
+      "requiredRepair": "Refuse unmodelled built-ins before bare-package/self-reference acquisition and any consumable proof, for both require and import. Use the exact trusted runtime built-in identity rules and preserve node:-prefixed refusals; do not introduce positive native/built-in summaries. Add controlled resolution-only oracle plus kernel witnesses. This is a negative repair under0236, not positive0237."
+    }
+  ],
+  "priorFindings": [
+    {
+      "id": "R1-01",
+      "status": "RESOLVED",
+      "evidence": [
+        "S01.json",
+        "S01.kernel.json"
+      ],
+      "note": "Absolute main now yields UNKNOWN/no proofs; CLI installed verifiedfalse."
+    },
+    {
+      "id": "R1-02",
+      "status": "RESOLVED",
+      "evidence": [
+        "S02.kernel.json",
+        "S03.kernel.json",
+        "S04.kernel.json",
+        "S07.kernel.json"
+      ],
+      "note": "Siblingjs/json/node and nearer sibling all UNKNOWN/no proofs. S05/S06 preserve exports precedence."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "status": "FAIL",
+      "evidence": [
+        "S13.kernel.json",
+        "S20.kernel.json"
+      ],
+      "note": "URL/self/exact guards and both R1 defects pass focal controls; native built-in precedence still substitutes another implementation."
+    },
+    {
+      "id": "C2",
+      "status": "FAIL",
+      "evidence": [
+        "S13.kernel.json",
+        "S20.kernel.json"
+      ],
+      "note": "Unmodelled built-in implementation is not refused before consumable kernel proof."
+    },
+    {
+      "id": "C3",
+      "status": "PASS_BOUNDED_ONLY",
+      "evidence": [
+        "positive-selection-bindings.json",
+        "S09.json",
+        "S14.json",
+        "S15.json",
+        "static-controls.stdout.json"
+      ],
+      "note": "Five positive exact selections, strict/default/P1 compatibility controls, knownproductFAIL and unchanged prior test source. No full-suite conclusion."
+    },
+    {
+      "id": "C4",
+      "status": "PASS",
+      "evidence": [
+        "source-before.json",
+        "source-after.json",
+        "r1-before.json",
+        "r1-after.json"
+      ],
+      "note": "Only authorized source2 differ from base;15unchanged; R1immutable; no integration acceptance."
+    }
+  ],
+  "limitations": [
+    "Twenty distinct focal synthetic scenarios, not exhaustive Node conformance. Two witnesses identify one mandatory mechanism gap; both CLI calls remain globally INCOMPLETE, so no global CLI false PASS is claimed.",
+    "Original R1 findings are resolved in current independently exercised witnesses; the built-in dispatch defect is adjacent existing v1 soundness, not a claimed regression in the new guards.",
+    "All base21 and R1-expanded38 CLI controls retain their executable test-call source text; counts19/31 are declaration counts before it.each expansion. Static preservation does not mean full-suite re-execution.",
+    "Producer159 focal passes are inputs only; not accepted as independent review. No fullcert, full suites, compiled provenance/consumer projection revalidation, integration, B6 or production approval was run or granted.",
+    "Five independently exercised positive cases agree with pinned native file selection and include that exact file among current CLI semantic inputs; this is a finite subset, not a new supported profile.",
+    "Synthetic identity references attest private byte equality, not offline npm/SRI provenance. All packages in all20 fixture reference/evaluated inventories match.",
+    "No invalid or incomplete collector attempts in R2. Expected CLI exit2/noJSON ENOTDIR outcomes for S02/S03/S04 are retained tested refusals with independently checked UNKNOWN kernels.",
+    "Same implementation-independent critic continues R1 into R2; independenceI1 was established at initial entry. This is not a claim of a separate fresh critic for R2. No descendants.",
+    "All760 R1 files are unchanged; all17 source fingerprints agree with freeze and HEAD before/after. Only the two authorized review subtrees were written. Shared ledger reconciliation remains the lead responsibility under the explicit write restriction.",
+    "R2 is second/final round of this repair budget. The quality bar is unmet; do not auto-start a third review, reset this budget, or infer permission for fullcert/promotion from the focal passes."
+  ],
+  "last_completed_action": "R2 independent source/native inspection and20 complete controlled scenarios; R1-01/02 resolved, one mandatory P1 builtin precedence defect remains; source17 and R1760 hashes agree.",
+  "next_action": "Lead to record FAILED_QUALITY_BAR for this second/final review and reconcile R2-01 within existing0236 negative contract. Preserve all evidence; no automatic third round, budget reset, fullcert or promotion on this verdict.",
+  "artifactManifest": "artifact-manifest.json",
+  "stopReason": "Second/final round complete at20 distinct scenarios; mandatory finding remains."
+}

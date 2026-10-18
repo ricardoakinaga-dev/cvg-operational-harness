@@ -1,0 +1,86 @@
+{
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "citations": [
+    {
+      "path": "codex-rs/app-server-protocol/src/rpc.rs",
+      "file_sha256": "78c516097c55b665e375807be6dcdceba232805c9ae9fa48420b0a537f0df705",
+      "start_line": 1,
+      "end_line": 21,
+      "snippet_sha256": "cc0f0909f4927cb6a375512946ea9dfaa8b945597be0e723aadf1df0098840d1",
+      "snippet_utf8": "//! We do not do true JSON-RPC 2.0, as we neither send nor expect the\n//! \"jsonrpc\": \"2.0\" field.\n\nuse crate::JsonSchema;\nuse crate::TS;\nuse codex_protocol::protocol::W3cTraceContext;\nuse serde::Deserialize;\nuse serde::Serialize;\nuse std::fmt;\n\npub const JSONRPC_VERSION: &str = \"2.0\";\n\n#[derive(\n    Debug, Clone, PartialEq, PartialOrd, Ord, Deserialize, Serialize, Hash, Eq, JsonSchema, TS,\n)]\n#[serde(untagged)]\npub enum RequestId {\n    String(String),\n    #[ts(type = \"number\")]\n    Integer(i64),\n}\n",
+      "claim": "Source envelope omits jsonrpc and permits string/i64 request IDs; capture exercises string IDs and7 only.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/src/rpc.rs",
+      "file_sha256": "78c516097c55b665e375807be6dcdceba232805c9ae9fa48420b0a537f0df705",
+      "start_line": 67,
+      "end_line": 88,
+      "snippet_sha256": "a3aa59c35091c913b33b9c89a2e22069d8d44c3c488c61f0bfec283c015956ec",
+      "snippet_utf8": "/// A successful (non-error) response to a request.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\npub struct JSONRPCResponse {\n    pub id: RequestId,\n    pub result: Result,\n}\n\n/// A response to a request that indicates an error occurred.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\npub struct JSONRPCError {\n    pub error: JSONRPCErrorError,\n    pub id: RequestId,\n}\n\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\npub struct JSONRPCErrorError {\n    pub code: i64,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub data: Option<serde_json::Value>,\n    pub message: String,\n}\n",
+      "claim": "Source result/error envelopes differ and error data is optional.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/src/protocol/v1.rs",
+      "file_sha256": "e0642bd1bc7dbe5e24d508420471d705d5688efe8df3a8b40e3af22be55d7754",
+      "start_line": 28,
+      "end_line": 88,
+      "snippet_sha256": "9a372db6b175100b33b74c128febd45154f6651c17356c3bc297c0d6f2b87a59",
+      "snippet_utf8": "#[serde(rename_all = \"camelCase\")]\npub struct InitializeParams {\n    pub client_info: ClientInfo,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub capabilities: Option<InitializeCapabilities>,\n}\n\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]\n#[serde(rename_all = \"camelCase\")]\npub struct ClientInfo {\n    pub name: String,\n    pub title: Option<String>,\n    pub version: String,\n}\n\n/// Client-declared capabilities negotiated during initialize.\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]\n#[serde(rename_all = \"camelCase\")]\npub struct InitializeCapabilities {\n    /// Use explicit gateway OAuth login instead of automatic browser authorization.\n    /// Applies to this app-server's gateway runtime; later connections cannot undo it.\n    #[serde(default, skip_serializing_if = \"std::ops::Not::not\")]\n    pub explicit_gateway_oauth: bool,\n    /// Opt into receiving experimental API methods and fields.\n    #[serde(default)]\n    pub experimental_api: bool,\n    /// Opt into `attestation/generate` requests for upstream `x-oai-attestation`.\n    #[serde(default)]\n    pub request_attestation: bool,\n    /// Legacy opt-in for the `openai/form` MCP extension.\n    ///\n    /// New clients should declare `openai/form` in [`Self::extensions`].\n    #[serde(default, skip_serializing_if = \"std::ops::Not::not\")]\n    pub mcp_server_openai_form_elicitation: bool,\n    /// Exact notification method names that should be suppressed for this\n    /// connection (for example `thread/started`).\n    #[ts(optional = nullable)]\n    pub opt_out_notification_methods: Option<Vec<String>>,\n    /// MCP extension settings declared by the app-server client.\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional = nullable)]\n    pub extensions: Option<HashMap<String, serde_json::Value>>,\n}\n\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]\n#[serde(rename_all = \"camelCase\")]\npub struct InitializeResponse {\n    pub user_agent: String,\n    /// Absolute path to the server's $CODEX_HOME directory.\n    pub codex_home: AbsolutePathBuf,\n    /// Platform family for the running app-server target, for example\n    /// `\"unix\"` or `\"windows\"`.\n    pub platform_family: String,\n    /// Operating system for the running app-server target, for example\n    /// `\"macos\"`, `\"linux\"`, or `\"windows\"`.\n    pub platform_os: String,\n}\n\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]\n#[serde(untagged)]\npub enum GetConversationSummaryParams {\n",
+      "claim": "Initialize inputs/capabilities and four response fields are different contracts.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/initialize_processor.rs",
+      "file_sha256": "4535560b07ab10d1538acd461560a55c1bdf0c9b4049e72775d6b770421f117f",
+      "start_line": 55,
+      "end_line": 105,
+      "snippet_sha256": "92b03b8d06bfa51a0e3e624b561de43a7c3ff8c9377bedf02bbcfd18103fed81",
+      "snippet_utf8": "\n    pub(crate) async fn initialize(\n        &self,\n        connection_id: ConnectionId,\n        request_id: RequestId,\n        params: InitializeParams,\n        session: &ConnectionSessionState,\n        // `Some(...)` means the caller wants initialize to immediately mark the\n        // connection outbound-ready. Websocket JSON-RPC calls pass `None` so\n        // lib.rs can deliver connection-scoped initialize notifications first.\n        outbound_initialized: Option<&AtomicBool>,\n    ) -> Result<bool, JSONRPCErrorError> {\n        let connection_request_id = ConnectionRequestId {\n            connection_id,\n            request_id,\n        };\n        if session.initialized() {\n            return Err(invalid_request(\"Already initialized\"));\n        }\n\n        // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.\n        // Current behavior is per-connection. Reviewer feedback notes this can\n        // create odd cross-client behavior (for example dynamic tool calls on a\n        // shared thread when another connected client did not opt into\n        // experimental API). Proposed direction is instance-global first-write-wins\n        // with initialize-time mismatch rejection.\n        let analytics_initialize_params = params.clone();\n        let capabilities = params.capabilities.unwrap_or_default();\n        let experimental_api_enabled = capabilities.experimental_api;\n        let request_attestation = capabilities.request_attestation;\n        let extensions = capabilities.extensions.as_ref();\n        let mut client_mcp_extensions = codex_mcp::client_mcp_extensions(\n            extensions,\n            capabilities.mcp_server_openai_form_elicitation,\n        );\n        let opt_out_notification_methods = capabilities\n            .opt_out_notification_methods\n            .unwrap_or_default();\n        let ClientInfo {\n            name,\n            title: _title,\n            version,\n        } = params.client_info;\n        // Validate before committing; set_default_originator validates while\n        // mutating process-global metadata.\n        if HeaderValue::from_str(&name).is_err() {\n            return Err(invalid_request(format!(\n                \"Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value.\"\n            )));\n        }\n        // Activate only the embedded TUI and local desktop host. Client-supplied\n",
+      "claim": "Duplicate initialized gate and invalid-header validation precede connection state commit.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/initialize_processor.rs",
+      "file_sha256": "4535560b07ab10d1538acd461560a55c1bdf0c9b4049e72775d6b770421f117f",
+      "start_line": 130,
+      "end_line": 147,
+      "snippet_sha256": "762b83271b5b5260169a663c1bd02ed76cc790efbe99e2db06dd9b985635868e",
+      "snippet_utf8": "        let originator = name.clone();\n        let user_agent_suffix = format!(\"{name}; {version}\");\n        let mutates_global_identity = !NON_ORIGINATING_CLIENT_NAMES.contains(&name.as_str());\n        let codex_home = self.config.codex_home.clone();\n        if session\n            .initialize(InitializedConnectionSessionState {\n                experimental_api_enabled,\n                opted_out_notification_methods: opt_out_notification_methods.into_iter().collect(),\n                app_server_client_name: name.clone(),\n                client_version: version,\n                request_attestation,\n                client_mcp_extensions,\n            })\n            .is_err()\n        {\n            return Err(invalid_request(\"Already initialized\"));\n        }\n        if user_verification_enabled {\n",
+      "claim": "Connection initialize state admission has its own duplicate error.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/initialize_processor.rs",
+      "file_sha256": "4535560b07ab10d1538acd461560a55c1bdf0c9b4049e72775d6b770421f117f",
+      "start_line": 212,
+      "end_line": 228,
+      "snippet_sha256": "70d9b675cca4e2cb81172dd682a903964d90e0a62154fc1b59d816807e6bb611",
+      "snippet_utf8": "        let user_agent = get_codex_user_agent();\n        let response = InitializeResponse {\n            user_agent,\n            codex_home,\n            platform_family: std::env::consts::FAMILY.to_string(),\n            platform_os: std::env::consts::OS.to_string(),\n        };\n\n        self.outgoing\n            .send_response(connection_request_id, response)\n            .await;\n\n        if let Some(outbound_initialized) = outbound_initialized {\n            outbound_initialized.store(true, Ordering::Release);\n            return Ok(true);\n        }\n\n",
+      "claim": "Source constructs four-field response and marks outbound ready after send for supplied flag.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 975,
+      "end_line": 993,
+      "snippet_sha256": "1aeae1e9ffac098da79c5b14a7b3bf0ad85efb72355eb6a4747b0b5d711ffe51",
+      "snippet_utf8": "\n    async fn dispatch_initialized_client_request(\n        self: &Arc<Self>,\n        connection_request_id: ConnectionRequestId,\n        codex_request: ClientRequest,\n        session: Arc<ConnectionSessionState>,\n        request_context: RequestContext,\n    ) -> Result<(), JSONRPCErrorError> {\n        if !session.initialized() {\n            return Err(invalid_request(\"Not initialized\"));\n        }\n\n        if let Some(reason) = codex_request.experimental_reason()\n            && !session.experimental_api_enabled()\n        {\n            return Err(invalid_request(experimental_required_message(reason)));\n        }\n        let connection_id = connection_request_id.connection_id;\n        self.initialize_processor.track_initialized_request(\n",
+      "claim": "Noninitialize request dispatch requires initialized connection.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/src/protocol/v2/thread.rs",
+      "file_sha256": "8c10510bb88990aa0f0105e7a85c0bb7859db7232be29f84a6c66693600ef502",
+      "start_line": 1561,
+      "end_line": 1579,
+      "snippet_sha256": "b08957f4a3fb2b9d0f86f653538b2d7066f84bf9d87a8bca48cf268f508c2e53",
+      "snippet_utf8": "\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]\n#[serde(rename_all = \"camelCase\")]\n#[ts(export_to = \"v2/\")]\npub struct ThreadListResponse {\n    pub data: Vec<Thread>,\n    /// Local receipts for eligible threads on this page, keyed by thread ID.\n    /// Null means durable read state is unavailable; an absent key means that row is ineligible.\n    #[experimental(\"thread/list.readStates\")]\n    pub read_states: Option<HashMap<String, ThreadReadState>>,\n    /// Opaque cursor to pass to the next call to continue after the last item.\n    /// if None, there are no more items to return.\n    pub next_cursor: Option<String>,\n    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.\n    /// This is only populated when the page contains at least one thread.\n    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors\n    /// at the start of the page timestamp so same-second updates are not skipped.\n    pub backwards_cursor: Option<String>,\n}\n",
+      "claim": "Thread list source distinguishes optional readStates and cursors; raw fixture preserves {} versus null.",
+      "authority": "SOURCE_CORROBORATION_NOT_NEW_RUNTIME_OBSERVATION"
+    }
+  ],
+  "runtime_authority": "oracles.json rawcapture bindings only"
+}

@@ -1,0 +1,41 @@
+{
+  "finding": "P3-PY-ASYNC-OFFLOAD-DESCRIPTION",
+  "disposition": "CORRECTED_ADDITIVE_ERRATUM; reviewed sources unchanged",
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "git_blob": "a4c80e65c5974e94583b88a66841472428c5ef65",
+  "superseded_inputs": [
+    {
+      "path": "non-rust/reader.py",
+      "sha256": "e1f5e6b3b170eda9d9b1d24a46424d7225d9f5f4c7ddc5c94a65dca1d533587e"
+    },
+    {
+      "path": "non-rust/inventory.json",
+      "sha256": "4207def86f93476f62b3921211cfb1af0163cc3343972fa891b4bc702d19c5f4"
+    }
+  ],
+  "correction": "asyncio.shield protects start_goal_operation. _start_turn awaits asyncio.wrap_future without shield and registers discard_cancelled_result cleanup on CancelledError. Actual cancellation semantics remain mandatory unqualified language variants.",
+  "source_spans": [
+    {
+      "path": "sdk/python/src/openai_codex/async_client.py",
+      "file_sha256": "7d1e291eed8ce7a907b9dafd79580f286451224c12c59302b61918046a01f99c",
+      "start_line": 241,
+      "end_line": 301,
+      "start_byte": 9508,
+      "end_byte_exclusive": 11711,
+      "sha256": "d9aac53dfd3fbe4c8f5850e6a5abea4e2feb1a16edaff5cf8a69ee693c2176fe",
+      "text": "        \"\"\"Stop continuation work after a logical goal operation is cancelled.\"\"\"\n        await self._call_sync(self._sync.cancel_goal_operation, state)\n\n    async def start_goal_operation(\n        self,\n        thread_id: str,\n        objective: str,\n    ) -> tuple[_GoalOperationState, str]:\n        \"\"\"Start a logical goal through the wrapped sync client.\"\"\"\n        operation: Future[tuple[_GoalOperationState, str]] = Future()\n\n        def start_operation() -> None:\n            try:\n                operation.set_result(self._sync.start_goal_operation(thread_id, objective))\n            except BaseException as exc:\n                operation.set_exception(exc)\n\n        worker = threading.Thread(\n            target=start_operation,\n            name=\"codex-goal-start\",\n            daemon=True,\n        )\n        worker.start()\n        try:\n            return await asyncio.shield(asyncio.wrap_future(operation))\n        except asyncio.CancelledError:\n\n            def cleanup_cancelled_start(\n                completed: Future[tuple[_GoalOperationState, str]],\n            ) -> None:\n                try:\n                    state, _ = completed.result()\n                except BaseException:\n                    return\n\n                def stop_cancelled_goal() -> None:\n                    try:\n                        self._sync.cancel_goal_operation(state)\n                    finally:\n                        state.finish()\n                        self._sync.unregister_goal_operation(state)\n\n                threading.Thread(\n                    target=stop_cancelled_goal,\n                    name=\"codex-goal-start-cleanup\",\n                    daemon=True,\n                ).start()\n\n            operation.add_done_callback(cleanup_cancelled_start)\n            raise\n\n    async def turn_start(\n        self,\n        thread_id: str,\n        input_items: list[JsonObject] | JsonObject | str,\n        params: V2TurnStartParams | JsonObject | None = None,\n    ) -> TurnStartResponse:\n        \"\"\"Start a turn, releasing an unclaimed result if the caller is cancelled.\"\"\"\n        return (await self._start_turn(thread_id, input_items, params, for_handle=False))[0]\n\n    async def _start_turn(\n"
+    },
+    {
+      "path": "sdk/python/src/openai_codex/async_client.py",
+      "file_sha256": "7d1e291eed8ce7a907b9dafd79580f286451224c12c59302b61918046a01f99c",
+      "start_line": 302,
+      "end_line": 327,
+      "start_byte": 11711,
+      "end_byte_exclusive": 12683,
+      "sha256": "9edce05c22c37afcd4af65f58a0b6a30cc0d4c7a627493f26433e970255cf0e4",
+      "text": "        self,\n        thread_id: str,\n        input_items: list[JsonObject] | JsonObject | str,\n        params: V2TurnStartParams | JsonObject | None,\n        for_handle: bool,\n    ) -> tuple[TurnStartResponse, _TurnSubscription | None]:\n        operation = _TURN_START_EXECUTOR.submit(\n            copy_context().run, self._sync._start_turn, thread_id, input_items, params, for_handle\n        )\n        try:\n            return await asyncio.wrap_future(operation)\n        except asyncio.CancelledError:\n\n            def discard_cancelled_result(\n                completed: Future[tuple[TurnStartResponse, _TurnSubscription | None]],\n            ) -> None:\n                try:\n                    _, subscription = completed.result()\n                except BaseException:\n                    return\n                if subscription is not None:\n                    subscription.close()\n\n            operation.add_done_callback(discard_cancelled_result)\n            raise\n\n"
+    }
+  ],
+  "functional_receipts": 0,
+  "full_g01_closure": false
+}

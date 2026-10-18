@@ -1,0 +1,57 @@
+from pathlib import Path
+import json,hashlib,datetime,re,subprocess
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';D=E/'g04/execution-authority-design';sha=lambda b:hashlib.sha256(b).hexdigest();now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat();checks=[]
+def put(p,d):p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+def check(i,fn):
+ try:detail=fn();checks.append({'id':i,'result':'PASS_T1_ONLY','detail':detail})
+ except Exception as e:checks.append({'id':i,'result':'FAIL','detail':str(e)})
+def exact(rows):
+ for x in rows:
+  b=(R/x['path']).read_bytes();assert len(b)==x['bytes'] and sha(b)==x['sha256'],x['path']
+old=json.loads((E/'checkpoint-before-execution-authority-manifest.json').read_text());mutable={str(p.relative_to(R)) for p in [E/'state.json',E/'continuation.json',E/'execution-log.jsonl',R/'.agent/plans/codex100-exec-20261017.md',R/'docs/03_build/0386_backlog_paridade_codex.md',R/'docs/08_runtime/handoffs/codex100_exec_20261017.md']}
+def prior():
+ rows=[x for x in old['files'] if x['path'] not in mutable];assert len(rows)==2124;exact(rows);return {'old_payloads_unchanged':len(rows),'authorized_mutable_current_controls':sorted(mutable)}
+check('EA-F01',prior)
+def review():
+ exact(json.loads((D/'review-freeze-r1.json').read_text())['files']);exact(json.loads((D/'review-r1/manifest.json').read_text())['files']);r=json.loads((D/'review-r1/review.json').read_text());assert r['mandatory_count']==0;assert json.loads((D/'coordination.json').read_text())['critic']['status']=='CLOSED';return '32subject+6reviewoutputs unchanged;14independentchecks/0mandatory;criticCLOSED'
+check('EA-F02',review)
+def citation():
+ s={x['id']:x for x in json.loads((D/'source-inputs.json').read_text())['inputs']};c=json.loads((D/'citation-corrections.json').read_text());assert sha((D/'source-spans.json').read_bytes())==c['frozen_map_sha256']
+ for x in c['corrections']:
+  p=D/s[x['input']]['archive'];assert sha(p.read_bytes())==x['input_sha256'];assert '\n'.join(p.read_text().splitlines()[x['start_line']-1:x['end_line']])==x['excerpt']
+ return 'N01twoexactsourcecorrections additive, reviewedmapunchanged'
+check('EA-F03',citation)
+def cases():
+ d=json.loads((D/'test-plan.json').read_text());assert len(d['cases'])==19 and all(x['status']=='NOT_RUN' and x['test_credit_or_receipt'] is None for x in d['cases']);i=json.loads((D/'full-journey-integration.json').read_text());text=json.dumps(i);assert all(f'CQ{x:02d}' in text for x in range(1,15));c=json.loads((R/'docs/03_build/tracking/codex100_catalog_v1.json').read_text());assert len(c['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in c['requirements']);return '19futurecases/14CQ/509catalogNOT_RUN andnullreceipts'
+check('EA-F04',cases)
+md=[R/'.agent/plans/codex100-exec-20261017.md',R/'docs/03_build/0386_backlog_paridade_codex.md',R/'docs/08_runtime/handoffs/codex100_exec_20261017.md',D/'SPEC.md',D/'REPORT.md',D/'review-r1/report.md']
+def links():
+ count=0
+ for p in md:
+  for t in re.findall(r'\]\(([^)]+)\)',p.read_text()):
+   t=t.split()[0].strip('<>').split('#')[0]
+   if not t or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:',t):continue
+   assert (p.parent/t).exists(),str(p)+':'+t;count+=1
+ for p in D.rglob('*.json'):json.loads(p.read_text())
+ return {'MD':len(md),'local_links':count,'broken':0,'package_JSON':'PARSED'}
+check('EA-F05',links)
+def formatcheck():
+ cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check']+[str(p.relative_to(R)) for p in md];r=subprocess.run(cmd,capture_output=True,text=True);assert r.returncode==0,r.stdout+r.stderr;return {'command':cmd,'exit_code':r.returncode,'stdout':r.stdout}
+check('EA-F06',formatcheck)
+def continuity():
+ action='DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY'
+ for n in ['state.json','continuation.json']:
+  x=json.loads((E/n).read_text());assert x['active_action_id']==action and x['goal_status']=='active' and x['all_own_agents_closed']
+ for p in md[:3]:assert action in p.read_text()
+ central=json.loads((R/'docs/04_audit/evidence/empty-artifact-status.json').read_text());base=R/central['root'];catalogued={(base/x['path']).resolve() for x in central['files']};empty={p.resolve() for p in E.rglob('*') if p.is_file() and p.stat().st_size==0};assert empty<=catalogued;assert not any(p.stat().st_size==0 for p in D.rglob('*') if p.is_file());return {'next_action':action,'goal':'active','own_zero_byte_files':len(empty),'uncatalogued':0,'new_package_zeros':0,'central_catalog':'READONLY'}
+check('EA-F07',continuity)
+result={'kind':'T1_BOUNDED_DESIGN_CHECKPOINT_NOT_RUNTIME_PROOF','observed_at':now(),'checks':checks,'passed':sum(x['result']=='PASS_T1_ONLY' for x in checks),'failed':sum(x['result']=='FAIL' for x in checks),'functional_receipts':0,'native_runtime_tests':'NOT_RUN'};put(D/'final-verification.json',result);print(json.dumps(result,ensure_ascii=False));assert result['failed']==0,'FAILED; do not seal'
+for name in ['state.json','continuation.json']:
+ p=E/name;d=json.loads(p.read_text());d['verification']={'artifact':'g04/execution-authority-design/final-verification.json','status':'PASS_T1_BOUNDED_DESIGN','quality_bar_checks':7,'initial_source_checks':8,'native_runtime_qualification':'NOT_RUN','functional_receipts':0};put(p,d)
+def entry(p):b=p.read_bytes();return {'path':str(p.relative_to(R)),'bytes':len(b),'sha256':sha(b)}
+# Preserve procedures as non-executable evidence; do not import app or run native features.
+for name in ['verify.py','close-unit.py','finalize.py']:
+ p=Path('/tmp/cvg-codex100-exec-20261017/execution-authority-design')/name;(D/(name+'.raw.txt')).write_bytes(p.read_bytes())
+files=[entry(p) for p in sorted(D.rglob('*')) if p.is_file() and p!=D/'manifest.json'];put(D/'manifest.json',{'task':'DX100-G04:SPECIFY-EXECUTION-AUTHORITY','kind':'SEALED_T1_BOUNDED_DESIGN_NOT_FULL_SPEC_OR_BUILD','sealed_at':now(),'file_count':len(files),'files':files,'independent_review':'APPROVE_BOUNDED_EXECUTION_AUTHORITY_DESIGN','mandatory_count':0,'functional_receipts':0,'runtime_tests':'NOT_RUN','next_action_id':'DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY'})
+current=json.loads((E/'manifest.json').read_text());external=[R/x['path'] for x in old['files'] if not x['path'].startswith(str(E.relative_to(R))+'/')];files=[entry(p) for p in sorted(E.rglob('*')) if p.is_file() and p!=E/'manifest.json']+[entry(p) for p in external];files.sort(key=lambda x:x['path']);assert len(files)==len({x['path'] for x in files});claim=re.search(r'^### CODEX100-EXEC-20261017.*?(?=^#{2,3} |\Z)',(R/'docs/08_runtime/agent_coordination.md').read_text(),re.M|re.S).group(0)
+current.update({'observed_at':now(),'file_count':len(files),'files':files,'own_claim_section_sha256':sha(claim.encode()),'goal_status':'active','goal_controller_note':'Actualget_goalactive observed after explicit userresume; oldblockedcheckpoint retained as history.','next_action_id':'DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY','current_documentary_checks':{'artifact':'g04/execution-authority-design/final-verification.json','status':'PASS_T1_BOUNDED_DESIGN','quality_bar_checks':7,'initial_source_checks':8,'own_MD':6,'local_links':next(x['detail']['local_links'] for x in checks if x['id']=='EA-F05'),'new_native_runtime_proof':'NOT_RUN'},'previous_checkpoint_manifest':{'path':'checkpoint-before-execution-authority-manifest.json','sha256':sha((E/'checkpoint-before-execution-authority-manifest.json').read_bytes()),'file_count':2130,'unchanged':2124,'only_current_control_changes':sorted(mutable)},'execution_authority_design':{'status':'COMPLETED_T1_BOUNDED_EXECUTION_AUTHORITY_DESIGN','manifest':'g04/execution-authority-design/manifest.json','manifest_sha256':sha((D/'manifest.json').read_bytes()),'review':'APPROVE_BOUNDED_EXECUTION_AUTHORITY_DESIGN','checks':14,'mandatory_count':0,'N01':'RESOLVED_ADDITIVE','source_inputs':24,'source_ranges':24,'paths':3,'future_cases_NOT_RUN':19,'functional_receipts':0},'checkpoint_note':'BoundedCP04/CP09technicaldesign reviewed andacceptedT1,19futurecasesNOT_RUN; fullnativeSPECnext, no nativecode/functionalparity orcompletegoalclaimed.'});put(E/'manifest.json',current);exact(files);exact(json.loads((D/'manifest.json').read_text())['files']);print(json.dumps({'sealed_package_payloads':len(json.loads((D/'manifest.json').read_text())['files']),'program_payloads':len(files),'program_manifest_sha256':sha((E/'manifest.json').read_bytes()),'all_payloads_final_rehashed':True}))

@@ -1,0 +1,207 @@
+
+ RUN  v4.1.11 /tmp/cvg-claude100-exec-20261017/ref-port-candidate
+
+ ❯ tests/claude100/reference-port/protocol.test.js (72 tests | 1 failed) 96ms
+     × has only static qualified helper imports and finite directmain guards 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/claude100/reference-port/protocol.test.js > frozen invocation and import boundary > has only static qualified helper imports and finite directmain guards
+AssertionError: expected 'import { spawn } from \'node:child_pr…' not to contain 'process.env'
+
+- Expected
++ Received
+
+- process.env
++ import { spawn } from 'node:child_process'
++ import { mkdir, readdir } from 'node:fs/promises'
++ import {
++   LIMITS, SIGNALS, canonical, sha256, fault, nativeInvocation, phaseGate, versionMatches,
++   preflight, wrapperArguments, isDirectMain, controlWriter, hostCommands,
++   encodeRawFrames, writeBytes
++ } from './protocol.mjs'
++
++ // This module is inert on import. Only the pinned OCI entrypoint calls main.
++ export async function main() {
++   const { runId, hostMarkerPath } = wrapperArguments(process.argv.slice(2))
++   const send = controlWriter(process.stdout, 'client', runId)
++   const gate = phaseGate('client')
++   const failures = [], timers = new Set()
++   let configured = null, invocation = null, child = null, childDone = null
++   let versionStarted = false, versionEnded = false, versionMatched = false
++   let portStarted = false, portEnded = false, stopping = false, nativeDeadline = null
++   let stdoutBytes = 0, stderrBytes = 0
++   let ioChain = Promise.resolve(), commandAbort
++   const cancelled = new Promise((resolve) => { commandAbort = resolve })
++   const record = (error) => { failures.push(error); commandAbort(); }
++   const timer = (fn, ms) => {
++     const id = setTimeout(() => { timers.delete(id); fn() }, ms)
++     timers.add(id); return id
++   }
++   const clear = (id) => { clearTimeout(id); timers.delete(id) }
++   const cancel = () => record(fault('SIGNAL'))
++   const ioError = (error) => record(fault('IO', error))
++   process.on('SIGINT', cancel); process.on('SIGTERM', cancel)
++   process.stdin.on('error', ioError); process.stdout.on('error', ioError); process.stderr.on('error', ioError)
++   timer(() => record(fault('TIMEOUT')), LIMITS.controllerMs)
++
++   // PID1 plus an initially empty private namespace gives this wrapper exclusive
++   // ownership of every later process in that namespace, including adopted orphans.
++   async function otherPids() {
++     return (await readdir('/proc')).filter((p) => /^[1-9]\d*$/.test(p) && Number(p) !== process.pid).map(Number)
++   }
++   function kill(pid, signal) {
++     try { process.kill(pid, signal) } catch (error) { if (error.code !== 'ESRCH') throw fault('CLEANUP', error) }
++   }
++   function queueRaw(bytes, phase, channel) {
++     if (channel === 'stdout') stdoutBytes += bytes.length
++     else stderrBytes += bytes.length
++     if (stdoutBytes > LIMITS.nativeStdoutBytes || stderrBytes > LIMITS.nativeStderrBytes) {
++       record(fault('CAP')); return
++     }
++     // Both channels share one ordered, bounded chain: binary frames never interleave.
++     const frames = encodeRawFrames(bytes, 'client', phase, channel)
++     ioChain = ioChain.then(async () => {
++       for (const frame of frames) await writeBytes(process.stderr, frame)
++     })
++     ioChain.catch(record)
++   }
++   function startNative(phase) {
++     if (stopping || failures.length) throw fault('PROTOCOL')
++     const args = phase === 'version' ? invocation.versionArgs : invocation.args
++     const stdin = phase === 'version' ? Buffer.alloc(0) : invocation.stdin
++     const versionOutput = []
++     let timeout = false, startSent = Promise.resolve(), spawned = false, phaseTimer
++     const remaining = nativeDeadline - performance.now()
++     if (remaining <= 0) throw fault('TIMEOUT')
++     // No shell, inheritance of process.env, caller-supplied executable, or third spawn.
++     child = spawn(invocation.file, args, {
++       cwd: invocation.cwd, env: invocation.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true
++     })
++     const owned = child
++     phaseTimer = timer(() => {
++       timeout = true; record(fault('TIMEOUT'))
++       try { kill(owned.pid, 'SIGTERM') } catch (error) { record(error) }
++     }, remaining)
++     childDone = new Promise((resolve) => {
++       owned.once('spawn', () => {
++         spawned = true
++         startSent = send('NATIVE_START', { phase, pid: owned.pid, ppid: process.pid,
++           argvSha256: sha256(canonical([invocation.file, ...args])),
++           envSha256: configured.envSha256, stdinSha256: sha256(stdin) })
++         startSent.catch(record)
++         owned.stdin.end(stdin)
++       })
++       owned.stdout.on('data', (bytes) => {
++         queueRaw(bytes, phase, 'stdout')
++         if (phase === 'version' && stdoutBytes <= LIMITS.nativeStdoutBytes) versionOutput.push(Buffer.from(bytes))
++       })
++       owned.stderr.on('data', (bytes) => queueRaw(bytes, phase, 'stderr'))
++       owned.stdout.on('error', ioError); owned.stderr.on('error', ioError)
++       owned.stdin.on('error', ioError)
++       owned.once('error', (error) => record(fault('TOOLCHAIN_UNAVAILABLE', error)))
++       owned.once('close', (exitCode, observedSignal) => {
++         clear(phaseTimer)
++         // Join START and both raw pipes before END; values come only from ChildProcess.
++         Promise.allSettled([startSent, ioChain]).then(async (results) => {
++           for (const result of results) if (result.status === 'rejected') record(result.reason)
++           if (spawned) {
++             let signal = observedSignal
++             if (signal !== null && !SIGNALS.includes(signal)) { record(fault('SIGNAL')); signal = null }
++             if (exitCode !== null && (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)) { record(fault('PROTOCOL')); exitCode = null }
++             if (observedSignal !== null && !timeout && !stopping) record(fault('SIGNAL'))
++             try { await send('NATIVE_END', { phase, exitCode, signal, timeout }) } catch (error) { record(error) }
++             if (phase === 'version') {
++               versionEnded = true
++               try {
++                 versionMatched = versionMatches(Buffer.concat(versionOutput), { exitCode, signal, timeout })
++                 if (!stopping) gate.end('version', versionMatched)
++                 if (!versionMatched) record(fault('IDENTITY_MISMATCH'))
++               } catch (error) { record(fault('IDENTITY_MISMATCH', error)) }
++             } else { portEnded = true; if (!stopping) gate.end('port') }
++           }
++           if (child === owned) child = null
++           resolve()
++         }).catch((error) => { record(error); resolve() })
++       })
++     })
++   }
++
++   try {
++     const observed = await preflight(hostMarkerPath)
++     if ((await otherPids()).length) throw fault('CONTAINMENT')
++     await mkdir('/scratch/home', { recursive: true, mode: 0o700 })
++     await mkdir('/scratch/config', { recursive: true, mode: 0o700 })
++     const commands = hostCommands(process.stdin, 'client', runId)[Symbol.asyncIterator]()
++     while (!stopping) {
++       const step = await Promise.race([commands.next(), cancelled.then(() => ({ cancelled: true }))])
++       if (step.cancelled) break
++       const { type, payload } = step.value
++       gate.command(type)
++       if (type === 'STOP') { stopping = true; break }
++       if (type === 'CONFIGURE') {
++         if (configured || versionStarted) throw fault('PROTOCOL')
++         invocation = nativeInvocation(payload.port)
++         if (sha256(canonical(invocation.env)) !== payload.envSha256) throw fault('PROTOCOL')
++         configured = Object.freeze({ ...payload })
++         Object.freeze(invocation.env); Object.freeze(invocation.args); Object.freeze(invocation.versionArgs)
++         await send('READY', { ...observed, ...configured })
++       } else if (type === 'START_NATIVE') {
++         if (!configured || versionStarted || child) throw fault('PROTOCOL')
++         versionStarted = true; nativeDeadline = performance.now() + LIMITS.nativeMs
++         startNative('version')
++       } else if (type === 'START_PORT') {
++         if (!versionEnded || !versionMatched || portStarted || child) throw fault('PROTOCOL')
++         if ((await otherPids()).length) throw fault('CONTAINMENT')
++         portStarted = true; startNative('port')
++       } else throw fault('PROTOCOL')
++     }
++     if (versionStarted && !versionEnded || portStarted && !portEnded) record(fault('PROTOCOL'))
++   } catch (error) { record(error) }
++
++   stopping = true
++   // Cleanup has one finite budget, including stdio flush. No failure becomes CLOSED.
++   const cleanupDeadline = performance.now() + LIMITS.cleanupMs
++   try {
++     const pids = await otherPids()
++     for (const pid of pids) kill(pid, 'SIGTERM')
++     if (pids.length) await new Promise((resolve) => timer(resolve, 200))
++     for (const pid of await otherPids()) kill(pid, 'SIGKILL')
++     if (childDone) {
++       await Promise.race([childDone, new Promise((_, reject) => timer(() => reject(fault('CLEANUP')), Math.max(1, cleanupDeadline - performance.now())))])
++     }
++     if ((await otherPids()).length) throw fault('CLEANUP')
++     await Promise.race([ioChain, new Promise((_, reject) => timer(() => reject(fault('CLEANUP')), Math.max(1, cleanupDeadline - performance.now())))])
++     if (!failures.length) await Promise.race([
++       send('CLOSED'), new Promise((_, reject) => timer(() => reject(fault('CLEANUP')), Math.max(1, cleanupDeadline - performance.now())))
++     ])
++   } catch (error) { failures.push(fault('CLEANUP', error)) }
++   for (const id of timers) clearTimeout(id)
++   process.stdin.destroy()
++   process.off('SIGINT', cancel); process.off('SIGTERM', cancel)
++   process.stdin.off('error', ioError); process.stdout.off('error', ioError); process.stderr.off('error', ioError)
++   if (failures.length) throw new AggregateError(failures, 'Reference port client failed', { cause: failures[0] })
++ }
++
++ if (isDirectMain(import.meta.url)) {
++   // stderr is binary raw only. No stack/error/env text is ever printed here.
++   main().catch(() => { process.exit(1) })
++ }
++
+
+ ❯ tests/claude100/reference-port/protocol.test.js:76:24
+     74|       expect(text).toContain('if (isDirectMain(import.meta.url))')
+     75|       expect(text).not.toMatch(/\bimport\s*\(/)
+     76|       expect(text).not.toContain('process.env')
+       |                        ^
+     77|       expect(text).not.toMatch(/console\.|stderr\.write|execFile\(|exe…
+     78|     }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 71 passed (72)
+   Start at  22:07:46
+   Duration  355ms (transform 106ms, setup 0ms, import 151ms, tests 96ms, environment 0ms)
+

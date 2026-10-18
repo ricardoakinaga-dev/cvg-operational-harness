@@ -1,0 +1,268 @@
+{
+  "kind": "SOURCE_RECON_SUPPORTS_CONDITIONAL_SYNC_ERROR_ANCHOR_NOT_EXECUTED_PROOF",
+  "created_at": "2026-10-18T08:52:26.880520+00:00",
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "citations": [
+    {
+      "path": "codex-rs/app-server-protocol/src/rpc.rs",
+      "file_sha256": "78c516097c55b665e375807be6dcdceba232805c9ae9fa48420b0a537f0df705",
+      "start_line": 13,
+      "end_line": 59,
+      "span_sha256": "3b5c3223f9bf59023be279bf23301162beef8843d8ba3ab890ad0c978ab452a4",
+      "span_utf8": "#[derive(\n    Debug, Clone, PartialEq, PartialOrd, Ord, Deserialize, Serialize, Hash, Eq, JsonSchema, TS,\n)]\n#[serde(untagged)]\npub enum RequestId {\n    String(String),\n    #[ts(type = \"number\")]\n    Integer(i64),\n}\n\nimpl fmt::Display for RequestId {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        match self {\n            Self::String(value) => f.write_str(value),\n            Self::Integer(value) => write!(f, \"{value}\"),\n        }\n    }\n}\n\npub type Result = serde_json::Value;\n\n/// Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n#[serde(untagged)]\npub enum JSONRPCMessage {\n    Request(JSONRPCRequest),\n    Notification(JSONRPCNotification),\n    Response(JSONRPCResponse),\n    Error(JSONRPCError),\n}\n\n/// A request that expects a response.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\npub struct JSONRPCRequest {\n    pub id: RequestId,\n    pub method: String,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub params: Option<serde_json::Value>,\n    /// Optional W3C Trace Context for distributed tracing.\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub trace: Option<W3cTraceContext>,\n}\n\n/// A notification which does not expect a response.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n",
+      "limited_claim": "UntagedRPCMessage andRequestId types;Notificationhasnoidfield."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/mod.rs",
+      "file_sha256": "4592c67d84ebd276133f47d29c63327de8d945b30a89b64a59868db30546caf1",
+      "start_line": 20,
+      "end_line": 25,
+      "span_sha256": "b538b6d94cd9729fa49a39e7464e2ebe4dba13a282272c35028d455c915e86d7",
+      "span_utf8": "\n/// Size of the bounded channels used to communicate between tasks. The value\n/// is a balance between throughput and memory usage - 128 messages should be\n/// plenty for an interactive CLI.\npub const CHANNEL_CAPACITY: usize = 128;\n\n",
+      "limited_claim": "Channelcapacity128."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "file_sha256": "e4f83304498aec2e9ccad9ad3a0af66965ab93508a4a6923f993731adcd69c19",
+      "start_line": 51,
+      "end_line": 77,
+      "span_sha256": "e045b35ce04033a2f5bd9f86a7088823302c7fdfc585896bf659dd654ff092b1",
+      "span_utf8": "    }\n    let connection_id = next_connection_id();\n    let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);\n    let writer_tx_for_reader = writer_tx.clone();\n    transport_event_tx\n        .send(TransportEvent::ConnectionOpened {\n            connection_id,\n            origin: ConnectionOrigin::Stdio,\n            auth: None,\n            writer: writer_tx,\n            disconnect_sender: None,\n        })\n        .await\n        .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, \"processor unavailable\"))?;\n\n    // Tokio's stdin uses an uncancellable blocking task, which keeps its runtime\n    // alive while the client leaves stdin open. This process-owned thread may\n    // remain blocked until process exit, but is not joined by the runtime.\n    let (stdin_tx, mut stdin_rx) = mpsc::channel(/*buffer*/ 1);\n    std::thread::Builder::new()\n        .name(\"app-server-stdin\".to_string())\n        .spawn(move || {\n            for line in std::io::stdin().lock().lines() {\n                if stdin_tx.blocking_send(line).is_err() {\n                    break;\n                }\n            }\n",
+      "limited_claim": "Stdioconnection nondisconnectable;stdinreader forwardslines inorder."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "file_sha256": "e4f83304498aec2e9ccad9ad3a0af66965ab93508a4a6923f993731adcd69c19",
+      "start_line": 98,
+      "end_line": 123,
+      "span_sha256": "12a3a76d38686e1524789226ba26055502c5fc2c397c81bfc434fbc8887f64b4",
+      "span_utf8": "    let read_messages = async move {\n        let mut initialize_client_name_tx = Some(initialize_client_name_tx);\n        while let Some(line) = stdin_rx.recv().await {\n            let line = match line {\n                Ok(line) => line,\n                Err(err) => {\n                    error!(\"Failed reading stdin: {err}\");\n                    break;\n                }\n            };\n            if let Some(client_name) = stdio_initialize_client_name(&line)\n                && let Some(initialize_client_name_tx) = initialize_client_name_tx.take()\n            {\n                let _ = initialize_client_name_tx.send(client_name);\n            }\n            if !forward_incoming_message(\n                &transport_event_tx_for_reader,\n                &writer_tx_for_reader,\n                connection_id,\n                &line,\n            )\n            .await\n            {\n                break;\n            }\n        }\n",
+      "limited_claim": "Eachlineforward isawaited beforenextline."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/mod.rs",
+      "file_sha256": "4592c67d84ebd276133f47d29c63327de8d945b30a89b64a59868db30546caf1",
+      "start_line": 214,
+      "end_line": 270,
+      "span_sha256": "83cba5c45877242d0a9a2ecb936d7a72c5f6d3a1afb7dbfd5e290c89ccad924d",
+      "span_utf8": "async fn forward_incoming_message(\n    transport_event_tx: &mpsc::Sender<TransportEvent>,\n    writer: &mpsc::Sender<QueuedOutgoingMessage>,\n    connection_id: ConnectionId,\n    payload: &str,\n) -> bool {\n    match serde_json::from_str::<JSONRPCMessage>(payload) {\n        Ok(message) => {\n            enqueue_incoming_message(transport_event_tx, writer, connection_id, message).await\n        }\n        Err(err) => {\n            error!(\"Failed to deserialize JSONRPCMessage: {err}\");\n            true\n        }\n    }\n}\n\nasync fn enqueue_incoming_message(\n    transport_event_tx: &mpsc::Sender<TransportEvent>,\n    writer: &mpsc::Sender<QueuedOutgoingMessage>,\n    connection_id: ConnectionId,\n    message: JSONRPCMessage,\n) -> bool {\n    let event = TransportEvent::IncomingMessage {\n        connection_id,\n        message,\n    };\n    match transport_event_tx.try_send(event) {\n        Ok(()) => true,\n        Err(mpsc::error::TrySendError::Closed(_)) => false,\n        Err(mpsc::error::TrySendError::Full(TransportEvent::IncomingMessage {\n            connection_id,\n            message: JSONRPCMessage::Request(request),\n        })) => {\n            let overload_error = OutgoingMessage::Error(OutgoingError {\n                id: request.id,\n                error: JSONRPCErrorError {\n                    code: OVERLOADED_ERROR_CODE,\n                    message: \"Server overloaded; retry later.\".to_string(),\n                    data: None,\n                },\n            });\n            match writer.try_send(QueuedOutgoingMessage::new(overload_error)) {\n                Ok(()) => true,\n                Err(mpsc::error::TrySendError::Closed(_)) => false,\n                Err(mpsc::error::TrySendError::Full(_overload_error)) => {\n                    warn!(\n                        \"dropping overload response for connection {:?}: outbound queue is full\",\n                        connection_id\n                    );\n                    true\n                }\n            }\n        }\n        Err(mpsc::error::TrySendError::Full(event)) => transport_event_tx.send(event).await.is_ok(),\n    }\n}\n",
+      "limited_claim": "Decodedmessageenqueue vsparseerrordrop; overloadbypasssourcebranch mustnotoccurunderboundedfixture."
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "file_sha256": "d744a2311e30c661cdd3e18655183b3b28e0fb26d2a84e3e298161ac0dd328c6",
+      "start_line": 519,
+      "end_line": 523,
+      "span_sha256": "497d308f5faf3a283be025a4c93f9b4ac58e1d030167c7f8d90d76bff9f6e3b9",
+      "span_utf8": "        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);\n    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);\n    let (outbound_control_tx, mut outbound_control_rx) =\n        mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);\n\n",
+      "limited_claim": "Incoming/outgoing/control bounded128 channels."
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "file_sha256": "d744a2311e30c661cdd3e18655183b3b28e0fb26d2a84e3e298161ac0dd328c6",
+      "start_line": 1202,
+      "end_line": 1220,
+      "span_sha256": "bb6d5fc6f1dd1f6f58715e44fb805c5901a326c444b74493deb07852eabd4cde",
+      "span_utf8": "                                };\n                                if connection_state.session.rpc_gate.is_closed() {\n                                    continue;\n                                }\n                                match message {\n                                    JSONRPCMessage::Request(request) => {\n                                        let was_initialized =\n                                            connection_state.session.initialized();\n                                        processor\n                                            .process_request(\n                                                connection_id,\n                                                request,\n                                                &transport,\n                                                Arc::clone(&connection_state.session),\n                                            )\n                                            .await;\n                                        let opted_out_notification_methods_snapshot = connection_state\n                                            .session\n                                            .opted_out_notification_methods();\n",
+      "limited_claim": "Mainprocessor awaitsprocess_request forwireRequest."
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "file_sha256": "d744a2311e30c661cdd3e18655183b3b28e0fb26d2a84e3e298161ac0dd328c6",
+      "start_line": 1265,
+      "end_line": 1280,
+      "span_sha256": "132308af80fe7c83958789cd57322375c4f00008b0eef0ea0728ce6e0b7f0a75",
+      "span_utf8": "                                                .store(true, std::sync::atomic::Ordering::Release);\n                                        }\n                                    }\n                                    JSONRPCMessage::Response(response) => {\n                                        processor.process_response(connection_id, response).await;\n                                    }\n                                    JSONRPCMessage::Notification(notification) => {\n                                        processor.process_notification(notification).await;\n                                    }\n                                    JSONRPCMessage::Error(err) => {\n                                        processor.process_error(connection_id, err).await;\n                                    }\n                                }\n                            }\n                        }\n                    }\n",
+      "limited_claim": "Notificationdispatch isawaited."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 110,
+      "end_line": 117,
+      "span_sha256": "22a1ccd9ff0dd89cfd4e441a669770d6b6308e3e7f86430bc3b0bf31f46df872",
+      "span_utf8": "const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);\n\nfn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {\n    reject_obsolete_request_fields(&request)?;\n\n    ClientRequest::try_from(request)\n        .map_err(|err| invalid_request(format!(\"Invalid request: {err}\")))\n}\n",
+      "limited_claim": "UnknownClientRequest conversionbecomesinvalid_request."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 637,
+      "end_line": 694,
+      "span_sha256": "b69ebe82d6829d447d1e81263b3be4fc50524f3ef22fe2bfb02cb40c92899852",
+      "span_utf8": "    pub(crate) async fn process_request(\n        self: &Arc<Self>,\n        connection_id: ConnectionId,\n        request: JSONRPCRequest,\n        transport: &AppServerTransport,\n        session: Arc<ConnectionSessionState>,\n    ) {\n        let request_method = request.method.as_str();\n        tracing::trace!(\n            ?connection_id,\n            request_id = ?request.id,\n            \"app-server request: {request_method}\"\n        );\n        let request_id = ConnectionRequestId {\n            connection_id,\n            request_id: request.id.clone(),\n        };\n        let request_span =\n            crate::app_server_tracing::request_span(&request, transport, connection_id, &session);\n        let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {\n            traceparent: trace.traceparent.clone(),\n            tracestate: trace.tracestate.clone(),\n        });\n        let request_context = RequestContext::new(\n            request_id.clone(),\n            request_method,\n            request_span,\n            request_trace,\n        );\n        Self::run_request_with_context(\n            Arc::clone(&self.outgoing),\n            request_context.clone(),\n            async {\n                let codex_request = deserialize_client_request(request);\n                let result = match codex_request {\n                    Ok(codex_request) => {\n                        // Websocket callers finalize outbound readiness in lib.rs after mirroring\n                        // session state into outbound state and sending initialize notifications to\n                        // this specific connection. Passing `None` avoids marking the connection\n                        // ready too early from inside the shared request handler.\n                        self.handle_client_request(\n                            request_id.clone(),\n                            codex_request,\n                            Arc::clone(&session),\n                            /*outbound_initialized*/ None,\n                            request_context.clone(),\n                        )\n                        .await\n                    }\n                    Err(error) => Err(error),\n                };\n                if let Err(error) = result {\n                    self.outgoing.send_error(request_id.clone(), error).await;\n                }\n            },\n        )\n        .await;\n    }\n",
+      "limited_claim": "Conversionerror pathawaitssend_error; successfulordinarydispatchasynctaskisnotinvokedforunknownmethod."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 750,
+      "end_line": 774,
+      "span_sha256": "eb3cda76944e70ebf740766e1fdff76e3ecee332f7b4bbbd60babded44dc9559",
+      "span_utf8": "    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {\n        // Currently, we do not expect to receive any notifications from the\n        // client, so we just log them.\n        tracing::info!(\"<- notification: {:?}\", notification);\n    }\n\n    /// Handles typed notifications from in-process clients.\n    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {\n        // Currently, we do not expect to receive any typed notifications from\n        // in-process clients, so we just log them.\n        tracing::info!(\"<- typed notification: {:?}\", notification);\n    }\n\n    async fn run_request_with_context<F>(\n        outgoing: Arc<OutgoingMessageSender>,\n        request_context: RequestContext,\n        request_fut: F,\n    ) where\n        F: Future<Output = ()>,\n    {\n        outgoing\n            .register_request_context(request_context.clone())\n            .await;\n        request_fut.instrument(request_context.span()).await;\n    }\n",
+      "limited_claim": "Notificationonlylogs; wrapper awaitsrequestfuture."
+    },
+    {
+      "path": "codex-rs/app-server/src/outgoing_message.rs",
+      "file_sha256": "784e9f538eea4def26e33532206541bcecce0f94bea2c8fd2b7cb30463602617",
+      "start_line": 826,
+      "end_line": 890,
+      "span_sha256": "cb0a57a1e47085dca153becc6a9ec8c837a4a93f9cca06d2841c00789cd42da4",
+      "span_utf8": "    pub(crate) async fn send_error(\n        &self,\n        request_id: ConnectionRequestId,\n        error: impl Into<JSONRPCErrorError>,\n    ) {\n        let request_context = self.take_request_context(&request_id).await;\n        self.send_error_inner(request_context, request_id, error.into())\n            .await;\n    }\n\n    pub(crate) async fn send_result<T, E>(\n        &self,\n        request_id: ConnectionRequestId,\n        result: std::result::Result<T, E>,\n    ) where\n        T: Into<ClientResponsePayload>,\n        E: Into<JSONRPCErrorError>,\n    {\n        match result {\n            Ok(response) => {\n                self.send_response(request_id, response).await;\n            }\n            Err(error) => self.send_error(request_id, error).await,\n        }\n    }\n\n    async fn send_error_inner(\n        &self,\n        request_context: Option<RequestContext>,\n        request_id: ConnectionRequestId,\n        error: JSONRPCErrorError,\n    ) {\n        let outgoing_message = OutgoingMessage::Error(OutgoingError {\n            id: request_id.request_id,\n            error,\n        });\n        self.send_outgoing_message_to_connection(\n            request_context,\n            request_id.connection_id,\n            outgoing_message,\n            \"error\",\n        )\n        .await;\n    }\n\n    async fn send_outgoing_message_to_connection(\n        &self,\n        request_context: Option<RequestContext>,\n        connection_id: ConnectionId,\n        message: OutgoingMessage,\n        message_kind: &'static str,\n    ) {\n        let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {\n            connection_id,\n            message,\n            write_complete_tx: None,\n        });\n        let send_result = if let Some(request_context) = request_context {\n            send_fut.instrument(request_context.span()).await\n        } else {\n            send_fut.await\n        };\n\n        if let Err(err) = send_result {\n            warn!(\"failed to send {message_kind} to client: {err:?}\");\n",
+      "limited_claim": "send_error routesawaiter tosameoutgoingSender."
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "file_sha256": "d744a2311e30c661cdd3e18655183b3b28e0fb26d2a84e3e298161ac0dd328c6",
+      "start_line": 925,
+      "end_line": 975,
+      "span_sha256": "3c75d9434324069da4212f65d3b8b5e3b15fb91d28c54e03dd9bf20bb102b7db",
+      "span_utf8": "            tokio::select! {\n                    biased;\n                    event = outbound_control_rx.recv() => {\n                        let Some(event) = event else {\n                            break;\n                        };\n                        match event {\n                            OutboundControlEvent::Opened {\n                                connection_id,\n                                writer,\n                                disconnect_sender,\n                                initialized,\n                                experimental_api_enabled,\n                                opted_out_notification_methods,\n                            } => {\n                                outbound_connections.insert(\n                                    connection_id,\n                                    OutboundConnectionState::new(\n                                        writer,\n                                        initialized,\n                                        experimental_api_enabled,\n                                        opted_out_notification_methods,\n                                        disconnect_sender,\n                                    ),\n                                );\n                            }\n                            OutboundControlEvent::Closed { connection_id } => {\n                                outbound_connections.remove(&connection_id);\n                            }\n                            OutboundControlEvent::DisconnectAll => {\n                                info!(\n                                    \"disconnecting {} outbound websocket connection(s) for graceful restart\",\n                                    outbound_connections.len()\n                                );\n                                for connection_state in outbound_connections.values() {\n                                    connection_state.request_disconnect();\n                                }\n                                outbound_connections.clear();\n                            }\n                        }\n                    }\n                    envelope = outgoing_rx.recv() => {\n                    let Some(envelope) = envelope else {\n                        break;\n                    };\n                    route_outgoing_envelope(&mut outbound_connections, envelope).await;\n                }\n            }\n        }\n        info!(\"outbound router task exited (channel closed)\");\n    });\n",
+      "limited_claim": "Singleoutboundrouter receivesenvelopes andawaitsroute;Closedcontrol risksdocumented."
+    },
+    {
+      "path": "codex-rs/app-server/src/transport.rs",
+      "file_sha256": "d6812cfe44d609351fb1880a426ed19215d18de2b103947c10e38b2d431563f7",
+      "start_line": 94,
+      "end_line": 128,
+      "span_sha256": "fe96187014ede6c018dbecebc511b7573273ef380742951440b547d306573f0b",
+      "span_utf8": "    fn can_disconnect(&self) -> bool {\n        self.disconnect_sender.is_some()\n    }\n\n    pub(crate) fn request_disconnect(&self) {\n        if let Some(disconnect_sender) = &self.disconnect_sender {\n            disconnect_sender.cancel();\n        }\n    }\n}\n\nfn should_skip_notification_for_connection(\n    connection_state: &OutboundConnectionState,\n    message: &OutgoingMessage,\n) -> bool {\n    let Ok(opted_out_notification_methods) = connection_state.opted_out_notification_methods.read()\n    else {\n        warn!(\"failed to read outbound opted-out notifications\");\n        return false;\n    };\n    match message {\n        OutgoingMessage::AppServerNotification(envelope) => {\n            if envelope.notification.experimental_reason().is_some()\n                && !connection_state\n                    .experimental_api_enabled\n                    .load(Ordering::Acquire)\n            {\n                return true;\n            }\n            let method = envelope.notification.to_string();\n            opted_out_notification_methods.contains(method.as_str())\n        }\n        _ => false,\n    }\n}\n",
+      "limited_claim": "StdioNone meanscan_disconnectfalse;filters onlyAppServerNotification,notErrors."
+    },
+    {
+      "path": "codex-rs/app-server/src/transport.rs",
+      "file_sha256": "d6812cfe44d609351fb1880a426ed19215d18de2b103947c10e38b2d431563f7",
+      "start_line": 141,
+      "end_line": 180,
+      "span_sha256": "b1f6347a629621a8eae6813629ba8552767ddf3cd04102290e3b42cdf1f03d06",
+      "span_utf8": "async fn send_message_to_connection(\n    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,\n    connection_id: ConnectionId,\n    message: OutgoingMessage,\n    write_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,\n) -> bool {\n    let Some(connection_state) = connections.get(&connection_id) else {\n        warn!(\"dropping message for disconnected connection: {connection_id:?}\");\n        return false;\n    };\n    let message = filter_outgoing_message_for_connection(connection_state, message);\n    if should_skip_notification_for_connection(connection_state, &message) {\n        return false;\n    }\n\n    let writer = connection_state.writer.clone();\n    let queued_message = QueuedOutgoingMessage {\n        message,\n        write_complete_tx,\n    };\n    if connection_state.can_disconnect() {\n        match writer.try_send(queued_message) {\n            Ok(()) => false,\n            Err(mpsc::error::TrySendError::Full(_)) => {\n                warn!(\n                    \"disconnecting slow connection after outbound queue filled: {connection_id:?}\"\n                );\n                disconnect_connection(connections, connection_id)\n            }\n            Err(mpsc::error::TrySendError::Closed(_)) => {\n                disconnect_connection(connections, connection_id)\n            }\n        }\n    } else if writer.send(queued_message).await.is_err() {\n        disconnect_connection(connections, connection_id)\n    } else {\n        false\n    }\n}\n\n",
+      "limited_claim": "Connectedstdiowriter usesawaitsend notFull-drop path."
+    },
+    {
+      "path": "codex-rs/app-server/src/transport.rs",
+      "file_sha256": "d6812cfe44d609351fb1880a426ed19215d18de2b103947c10e38b2d431563f7",
+      "start_line": 185,
+      "end_line": 219,
+      "span_sha256": "f2292f612fb7b5babf277e6386f5fca7498e01984732ec7d8ce370e86b969229",
+      "span_utf8": "    let experimental_api_enabled = connection_state\n        .experimental_api_enabled\n        .load(Ordering::Acquire);\n    match message {\n        OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {\n            request_id,\n            mut params,\n        }) => {\n            if !experimental_api_enabled {\n                params.strip_experimental_fields();\n            }\n            OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {\n                request_id,\n                params,\n            })\n        }\n        _ => message,\n    }\n}\n\npub(crate) async fn route_outgoing_envelope(\n    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,\n    envelope: OutgoingEnvelope,\n) {\n    match envelope {\n        OutgoingEnvelope::ToConnection {\n            connection_id,\n            message,\n            write_complete_tx,\n        } => {\n            let _ =\n                send_message_to_connection(connections, connection_id, message, write_complete_tx)\n                    .await;\n        }\n        OutgoingEnvelope::Broadcast { message } => {\n",
+      "limited_claim": "Onlyapprovalrequests stripped;ToConnection routeawaits send."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "file_sha256": "e4f83304498aec2e9ccad9ad3a0af66965ab93508a4a6923f993731adcd69c19",
+      "start_line": 82,
+      "end_line": 94,
+      "span_sha256": "95224d4b5f02b0541e884cfa3227c0d0dddec685196e52f4f873df0d4108cdd9",
+      "span_utf8": "    let (stdout_tx, mut stdout_rx) =\n        mpsc::channel::<(String, oneshot::Sender<()>)>(/*buffer*/ 1);\n    std::thread::Builder::new()\n        .name(\"app-server-stdout\".to_string())\n        .spawn(move || {\n            let mut stdout = std::io::stdout().lock();\n            while let Some((json, written_tx)) = stdout_rx.blocking_recv() {\n                if let Err(err) = stdout.write_all(json.as_bytes()) {\n                    error!(\"Failed to write to stdout: {err}\");\n                    break;\n                }\n                let _ = written_tx.send(());\n            }\n",
+      "limited_claim": "Blockingstdout thread writesfullJSON beforeack."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "file_sha256": "e4f83304498aec2e9ccad9ad3a0af66965ab93508a4a6923f993731adcd69c19",
+      "start_line": 137,
+      "end_line": 151,
+      "span_sha256": "149bd81d82587010a97d7d8fbbcac603c3fcb1e558ba431f262209ad3b78fa62",
+      "span_utf8": "        while let Some(queued_message) = writer_rx.recv().await {\n            let Some(mut json) = serialize_outgoing_message(queued_message.message) else {\n                continue;\n            };\n            json.push('\\n');\n            let (written_tx, written_rx) = oneshot::channel();\n            if stdout_tx.send((json, written_tx)).await.is_err() || written_rx.await.is_err() {\n                break;\n            }\n            if let Some(write_complete_tx) = queued_message.write_complete_tx {\n                let _ = write_complete_tx.send(());\n            }\n        }\n        info!(\"stdout writer exited (channel closed)\");\n    };\n",
+      "limited_claim": "Singlewriter loopFIFO andwritecompletionawait before nextitem."
+    }
+  ],
+  "vendor_FIFO_citation": {
+    "path": "/tmp/cvg-codex100-exec-20261017/reference-build/vendor/tokio-1.52.3/src/sync/mpsc/bounded.rs",
+    "file_sha256": "8352ecf1fffb3fdbd2b161368a129636fa7afea1195bab4982f554bca1a48528",
+    "start_line": 112,
+    "end_line": 126,
+    "span_sha256": "d3b6aa5a3d01b85ff9a64bd1990186ad606945f90f563f0a87007d353198729e",
+    "span_utf8": "/// with backpressure.\n///\n/// The channel will buffer up to the provided number of messages.  Once the\n/// buffer is full, attempts to send new messages will wait until a message is\n/// received from the channel. The provided buffer capacity must be at least 1.\n///\n/// All data sent on `Sender` will become available on `Receiver` in the same\n/// order as it was sent.\n///\n/// The `Sender` can be cloned to `send` to the same channel from multiple code\n/// locations. Only one `Receiver` is supported.\n///\n/// If the `Receiver` is disconnected while trying to `send`, the `send` method\n/// will return a `SendError`. Similarly, if `Sender` is disconnected while\n/// trying to `recv`, the `recv` method will return `None`.\n",
+    "authority": "LOCKED_VENDOR_TOKIO_1_52_3_PACKAGE_AND_FILE_CHECKSUM_VERIFIED"
+  },
+  "compiled_tokio_artifact": {
+    "features": [
+      "bytes",
+      "default",
+      "fs",
+      "full",
+      "io-std",
+      "io-util",
+      "libc",
+      "macros",
+      "mio",
+      "net",
+      "parking_lot",
+      "process",
+      "rt",
+      "rt-multi-thread",
+      "signal",
+      "signal-hook-registry",
+      "socket2",
+      "sync",
+      "test-util",
+      "time",
+      "tokio-macros"
+    ],
+    "fresh": true,
+    "kind": [
+      "lib"
+    ],
+    "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.52.3",
+    "profile": {
+      "debug_assertions": false,
+      "debuginfo": "line-tables-only",
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": false
+    },
+    "target": "tokio"
+  },
+  "compiled_features_file_sha256": "f9f4650f98f5e35ab26fe35442ef2bca34010e744c030488e612f3846dc06e68",
+  "conditions": [
+    {
+      "id": "SC01",
+      "condition": "Targetunknownmethod notin175sourceClientRequest methods;controlunknownmethodsalsonotknown",
+      "source_support": "common sourceinventory+messageprocessorconversionerror; validatebeforeexecution"
+    },
+    {
+      "id": "SC02",
+      "condition": "11freshstdio processes,ownprivatehome,noexternalpeer;init+calbeforeawaited,only2pendinginputs target+marker",
+      "source_support": "stdioOnlyarg/read-onlynamespaceprofile;atmost2queuedincoming messages<128, soFull-bypasscannotjustifyabsence"
+    },
+    {
+      "id": "SC03",
+      "condition": "NoEOF/SIGTERM/disconnectuntilmarkerandcalaftererrorsobserved; anyfailure/forcedcleanupinvalidatesanchor",
+      "source_support": "lib.rsClosedprioritycanotherwiseerasequeuederrors"
+    },
+    {
+      "id": "SC04",
+      "condition": "Allcontrolerrors MUSTcode-32600+ownunknownmethodname+typedid,overload-32001/unexpectedoutputsFAIL",
+      "source_support": "earlyconversionerror vsFullbranchdifferentcode"
+    },
+    {
+      "id": "SC05",
+      "condition": "Awaitedmainconversionerrorenqueuesbeforeprocessinglatermarker;TokioFIFO/singlewriter/stdionondrop preserveearliererrorbeforemarker",
+      "source_support": "18pinnedspans+actualcompiledTokio1.52.3/vendorFIFOdocs"
+    },
+    {
+      "id": "SC06",
+      "condition": "InputIDnotdecodedasRequest mayfallbackNotification(logonly)ordecodefailure(drop);NoTargetError cannotdistinguishthesetwobranches",
+      "source_support": "rpcuntagged,transportparseerror,process_notification"
+    },
+    {
+      "id": "SC07",
+      "condition": "Preserveownwrite message+byte lowerbounds, earlyprefix role/duplicates guard; observedtargeterror MUSTprecede markerframe",
+      "source_support": "Newdriver/HOWmustimplement; no inferencefromlastbarrieronly"
+    },
+    {
+      "id": "SC08",
+      "condition": "Outcomeonlyunknownmethod-IDfixture; no globalgrammar/theoreticaltimeout/qualifoforiginalthreadlist/CVGreceipt",
+      "source_support": "Declaredscope/nonnativeexperiment"
+    }
+  ],
+  "conclusion": "A finiteunknown-method input+marker experimentisdesignableunderSC01-SC08 without assumingordinaryasynchandlercompletion. HOWindependentreviewandactualruntimeguardsstillrequired.",
+  "known_limits": [
+    "Nopublicinternaldecodebranchtrace;noresponsecannotidentifyNotificationvsparse-error.",
+    "Noformalthirdparty/securityproof beyondlockedsource/runtimecontracts.",
+    "Original11threadlistedgefixtures remainhistorical/open unless explicitlyjoinedbylaterevidence."
+  ],
+  "no_target_execution": true,
+  "no_native_CVG_BUILD": true,
+  "functional_receipts": 0
+}

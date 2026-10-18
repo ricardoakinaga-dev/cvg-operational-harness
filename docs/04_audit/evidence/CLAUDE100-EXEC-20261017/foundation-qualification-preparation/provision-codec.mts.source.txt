@@ -1,0 +1,22 @@
+import { createRequire } from 'node:module'
+import { writeFile } from 'node:fs/promises'
+const cwd = '/tmp/cvg-claude100-exec-20261017/foundation-qualification-candidate'
+const require = createRequire(cwd + '/package.json')
+const { Client } = require('pg')
+const { runPostgresMigrations } = await import(cwd + '/packages/persistence/src/postgres-migrations.ts')
+const client = new Client({ connectionString: 'postgresql://pare217:c100_qprep_synthetic@127.0.0.1:55879/pare217_synthetic' })
+await client.connect()
+try {
+  const before = await client.query("SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='c100_qprep_codec') AS schema_exists, EXISTS(SELECT 1 FROM pg_roles WHERE rolname='c100_qprep_codec_service') AS role_exists")
+  if (before.rows[0].schema_exists || before.rows[0].role_exists) throw new Error('Fresh own codec schema/role required')
+  await runPostgresMigrations(client, { schemaName: 'c100_qprep_codec' })
+  await client.query("CREATE ROLE c100_qprep_codec_service LOGIN PASSWORD 'c100_qprep_codec_synthetic' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS")
+  await client.query('GRANT USAGE ON SCHEMA c100_qprep_codec TO c100_qprep_codec_service')
+  await client.query('GRANT SELECT,INSERT,UPDATE,DELETE ON c100_qprep_codec.operational_executions,c100_qprep_codec.operational_execution_checkpoints TO c100_qprep_codec_service')
+  const role = await client.query("SELECT rolname,rolsuper,rolinherit,rolcreatedb,rolcreaterole,rolbypassrls,(SELECT count(*)::int FROM pg_auth_members WHERE member=pg_roles.oid) AS memberships FROM pg_roles WHERE rolname='c100_qprep_codec_service'")
+  const rls = await client.query("SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE relnamespace='c100_qprep_codec'::regnamespace AND relname IN ('operational_executions','operational_execution_checkpoints') ORDER BY relname")
+  const migrations = await client.query('SELECT version,checksum FROM c100_qprep_codec.schema_migrations ORDER BY version')
+  if (role.rows[0].rolsuper || role.rows[0].rolinherit || role.rows[0].rolcreatedb || role.rows[0].rolcreaterole || role.rows[0].rolbypassrls || role.rows[0].memberships !== 0 || rls.rows.some((x:any) => !x.relrowsecurity || !x.relforcerowsecurity)) throw new Error('Codec serving role/RLS not as claimed')
+  await writeFile('/tmp/cvg-claude100-exec-20261017/foundation-qualification-preparation/native/provision-result.json', JSON.stringify({role:role.rows,rls:rls.rows,migrations:migrations.rows,source:'existing_frozen_runPostgresMigrations'},null,2)+'\n', {mode:0o600})
+  console.log('Own codec schema migrated through0029, two-table nonowner role and FORCE RLS verified')
+} finally { await client.end() }

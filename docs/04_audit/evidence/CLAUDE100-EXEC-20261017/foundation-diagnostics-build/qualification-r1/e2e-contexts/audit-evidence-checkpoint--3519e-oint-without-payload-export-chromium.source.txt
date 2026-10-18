@@ -1,0 +1,80 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: audit-evidence-checkpoint.spec.ts >> seals and archives an audit evidence checkpoint without payload export
+- Location: tests/e2e/audit-evidence-checkpoint.spec.ts:3:5
+
+# Error details
+
+```
+TimeoutError: locator.waitFor: Timeout 10000ms exceeded.
+Call log:
+  - waiting for getByText('CVG Agent Secretary') to be visible
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]: "[plugin:vite:import-analysis] Failed to resolve import \"@cvg/shared\" from \"apps/web/src/features/platform/draft-helpers.ts\". Does the file exist?"
+  - generic [ref=e5]: /tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/platform/draft-helpers.ts:9:36
+  - generic [ref=e6]: "7 | * platform characterization suite (unchanged behavior). 8 | */ 9 | import { redactSensitiveText } from \"@cvg/shared\"; | ^ 10 | import { parsePromptProfile, serializePromptBlocks, serializeResponseTemplates } from \"./prompt-profile.ts\"; 11 | export const initialForm = {"
+  - generic [ref=e7]: at TransformPluginContext._formatLog (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31147:39) at TransformPluginContext.error (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31144:14) at normalizeUrl (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28083:18) at async file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28153:30 at async Promise.all (index 0) at async TransformPluginContext.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28119:4) at async EnvironmentPluginContainer.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:30932:14) at async loadAndTransform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:20671:26) at async viteTransformMiddleware (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:25205:20)
+  - generic [ref=e8]:
+    - text: Click outside, press Esc key, or fix the code to dismiss.
+    - text: You can also disable this overlay by setting
+    - code [ref=e9]: server.hmr.overlay
+    - text: to
+    - code [ref=e10]: "false"
+    - text: in
+    - code [ref=e11]: vite.config.mts
+    - text: .
+```
+
+# Test source
+
+```ts
+  1  | import { expect, test } from '@playwright/test'
+  2  | 
+  3  | test('seals and archives an audit evidence checkpoint without payload export', async ({
+  4  |   page,
+  5  |   request
+  6  | }) => {
+  7  |   await request.post('/v1/webhooks/channels/whatsapp/messages', {
+  8  |     data: {
+  9  |       externalMessageId: `e2e-checkpoint-${Date.now()}`,
+  10 |       senderRef: '+5511999991111',
+  11 |       body: 'Fixture controlada de auditoria',
+  12 |       receivedAt: '2026-04-29T17:00:00-03:00'
+  13 |     }
+  14 |   })
+  15 | 
+  16 |   await page.goto('/')
+> 17 |   await page.getByText('CVG Agent Secretary').waitFor()
+     |                                               ^ TimeoutError: locator.waitFor: Timeout 10000ms exceeded.
+  18 |   await page.getByLabel('ID do operador').fill('supervisor.e2e')
+  19 |   await page.getByLabel('Papel operacional').selectOption('Supervisor')
+  20 |   await expect(page.getByText('Evidencias de auditoria')).toBeVisible()
+  21 |   await expect(page.getByText(/eventos controlados/)).toBeVisible()
+  22 | 
+  23 |   await page.getByRole('button', { name: 'Selar checkpoint' }).click()
+  24 |   await expect(
+  25 |     page.getByText(
+  26 |       'Checkpoint selado com IDs e digest; nenhum payload foi persistido.'
+  27 |     )
+  28 |   ).toBeVisible()
+  29 |   await expect(page.getByText(/eventos \/ SEALED/)).toBeVisible()
+  30 | 
+  31 |   await page.getByRole('button', { name: 'Arquivar checkpoint' }).click()
+  32 |   await expect(page.getByText('Checkpoint arquivado com CAS.')).toBeVisible()
+  33 |   await expect(page.getByText(/eventos \/ ARCHIVED/)).toBeVisible()
+  34 |   await expect(page.getByText(/Digest [a-f0-9]{64}/)).toBeVisible()
+  35 | })
+  36 | 
+```

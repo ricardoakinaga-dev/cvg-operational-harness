@@ -1,0 +1,38 @@
+exec(open('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r1/driver.py').read().split('# Stage 1:')[0])
+# Closed Node profile selection: distinct filenames make order observable.
+for mode in ['import','require']:
+ ext='mjs' if mode=='import' else 'cjs'
+ cases={'default-first':{'default':'./other.'+ext,'node':'./good.'+ext},'module-sync':{'module-sync':'./good.'+ext,'default':'./other.'+ext},'node-addons':{'node-addons':'./good.'+ext,'default':'./other.'+ext},'nested-unmatched':{'node':{'inactive':'./other.'+ext},'default':'./good.'+ext},'nested-blocked':{'node':None,'default':'./good.'+ext},'array-active':{'node':['./other.'+ext],'default':'./good.'+ext},'missing-exact':'./missing','invalid-tab':'./go\tod.'+ext,'mixed':{'.':'./good.'+ext,'node':'./other.'+ext},'numeric':{'1':'./other.'+ext,'default':'./good.'+ext},'subpath':{'./literal/deep':'./good.'+ext}}
+ for label,exports in cases.items():
+  root,start=workspace('exports-'+mode+'-'+label,mode,exports=exports);spec='demo/literal/deep' if label=='subpath' else 'demo'
+  oracle('exports-'+mode+'-'+label+'-oracle',root,start,spec,mode);helper('exports-'+mode+'-'+label+'-helper',root,start,spec,mode)
+  if label in ['default-first','nested-blocked','array-active','missing-exact']:engine('exports-'+mode+'-'+label+'-engine',root,start)
+# Pinned builtin exactness and ordinary package control, in both modes.
+for mode in ['import','require']:
+ for spec in ['module','fs','fs/promises','node:fs','node:test','test']:
+  root,start=workspace('builtin-'+mode+'-'+spec.replace('/','-').replace(':','-'),mode,name=spec)
+  helper('builtin-'+mode+'-'+spec.replace('/','-').replace(':','-')+'-helper',root,start,spec,mode)
+# Fresh link bytes that normalize to a valid path cannot acquire positive authority.
+for label,target in [('cancelled','../missing/../packages/demo'),('chain','../middle'),('apps','../apps/demo')]:
+ root,start=workspace('link-'+label,link=target)
+ if label=='chain':(root/'middle').symlink_to('packages/demo')
+ if label=='apps':put(root,'apps/demo/package.json','{"name":"demo","type":"module","exports":"./good.mjs"}');put(root,'apps/demo/good.mjs','export const answer=42;')
+ helper('link-'+label+'-helper',root,start);engine('link-'+label+'-engine',root,start)
+# Source TS is not a receipt for a runtime emit; keep explicit provenance unavailable.
+for ext,mode in [('ts','import'),('mts','import'),('cts','require')]:
+ root,start=workspace('typescript-'+ext,mode,exports='./body.'+ext)
+ put(root,'packages/demo/body.'+ext,'export const answer: number=42;' if mode=='import' else 'const answer: number=42;module.exports=answer;')
+ oracle('typescript-'+ext+'-oracle',root,start,mode=mode);helper('typescript-'+ext+'-helper',root,start,mode=mode);engine('typescript-'+ext+'-engine',root,start)
+# Runtime body closure still gates a correctly selected file. Marker must never exist.
+root,start=workspace('hostile-body');put(root,'packages/demo/good.mjs',"import fs from 'node:fs';fs.writeFileSync('EXECUTED-MARKER','bad');export const answer=42;")
+oracle('hostile-body-oracle',root);engine('hostile-body-engine',root)
+assert not (root/'EXECUTED-MARKER').exists() and not (C/'EXECUTED-MARKER').exists()
+# Link, input bytes and formerly absent nearer candidates must invalidate snapshots.
+for label,mutation in [('link',{'action':'replaceLink','file':'node_modules/demo','target':'../packages/other'}),('manifest',{'file':'packages/demo/package.json','text':'{"name":"demo","type":"module","exports":"./other.mjs"}'}),('body',{'file':'packages/demo/good.mjs','text':'export const answer=43;'}),('absence',{'file':'package.json','text':'{"name":"demo","type":"module","exports":"./entry.mjs"}'})]:
+ root,start=workspace('mutation-'+label);helper('mutation-'+label+'-helper',root,start,mutate=mutation)
+# Every reduced new cap, paired with a successful session on the same fixture.
+root,start=workspace('caps')
+for cap in ['maxWorkspaces','maxLinks','maxLinkBytes','maxPathComponents','maxOpenDescriptors']:
+ helper('cap-'+cap+'-helper',root,start,limits={cap:0})
+helper('cap-positive-helper',root,start)
+(O/'probe-summary-stage2.json').write_text(json.dumps(summary,indent=2)+'\n')

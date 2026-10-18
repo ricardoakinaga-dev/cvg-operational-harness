@@ -1,0 +1,505 @@
+{
+  "kind": "EXPLICIT_SOURCE_LIFECYCLE_AND_BOUNDARY_CONTRACTS",
+  "rows": [
+    {
+      "id": "PY01",
+      "gaps": [
+        "GAP-PY-API"
+      ],
+      "public_entry": "Codex()/AsyncCodex first use",
+      "source_refs": [
+        "sdk/python/src/openai_codex/api.py:85-92",
+        "sdk/python/src/openai_codex/api.py:329-344",
+        "sdk/python/src/openai_codex/api.py:347-353"
+      ],
+      "source_contract": [
+        "Sync constructor starts/initializes/validates metadata eagerly; catch Exception closes then rethrows.",
+        "Async initialization uses double check inside asyncio.Lock; sets initialized only after start/initialize/validate; catch Exception closes and resets.",
+        "Async.metadata before init raises; source has no universal guarantee that BaseException/cancellation during init follows that Exception cleanup branch."
+      ],
+      "future_positive": "Concurrent first awaited uses/metadata before versus after init and ordinary Exception cleanup; also init cancellation must be observed independently.",
+      "future_known_bad": "Treat source eager/lazy modes as identical, claim unconditional cancellation cleanup by name, or set init before validated reply.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY02",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PLATFORM-PACKAGING"
+      ],
+      "public_entry": "CodexConfig/start/close",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:242-281",
+        "sdk/python/src/openai_codex/client.py:283-302",
+        "sdk/python/src/openai_codex/client.py:136-152"
+      ],
+      "source_contract": [
+        "launch_args_override bypasses binary/config/default app-server argv and checkout-capability construction; otherwise --config entries then app-server --listen stdio://.",
+        "Copies environment, applies config.env if truthy and prepends packaged path dirs; Windows PATH key handling/dedup is explicit helper.",
+        "Popen uses stdin/stdout/stderr pipes, UTF8 text and bufsize1; starts sole reader and stderr drain. close clears process/version/capability state, closes stdin, terminate/wait2s then kill on Exception; joins reader/stderr0.5s each.",
+        "kill branch has no following wait in close; source alone does not prove process has been reaped."
+      ],
+      "future_positive": "Fresh child argv/env/cwd and default/custom path; close after start/error under real process observation.",
+      "future_known_bad": "Assume arbitrary launch command validates unversioned capabilities or assert zero surviving processes from source close() alone.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY03",
+      "gaps": [
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "CodexClient.request(method,params,response_model)",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:327-366",
+        "sdk/python/src/openai_codex/client.py:368-385",
+        "sdk/python/src/openai_codex/client.py:896-901",
+        "sdk/python/src/openai_codex/_message_router.py:258-281"
+      ],
+      "source_contract": [
+        "Generic method/params/model remain caller supplied, not a finite allowlist of implemented methods.",
+        "UUID4 string requestId and response waiter exist before write; omitted params stays absent when None; write BaseException discards waiter; waiter failure rethrows same exception.",
+        "request requires response JSON object before response_model.model_validate; response route pops waiter by str(id), maps errors or puts result; unknown waiter responses ignored.",
+        "Data bindings do not assert Python callback/model dispatch or RPC server semantics are closed."
+      ],
+      "future_positive": "Public typed request sees matching real response, unrelated response does not complete it; write failure removes waiter and malformed result fails.",
+      "future_known_bad": "Reclassify arbitrary method as supported finite endpoint; conflate write ACK with result or parse typed result without dictionary check.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY04",
+      "gaps": [
+        "GAP-PY-RPC",
+        "GAP-GENERATED"
+      ],
+      "public_entry": "Generated params or dict passed to wrapper",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:84-110",
+        "sdk/python/src/openai_codex/client.py:485-491",
+        "sdk/python/src/openai_codex/client.py:659-682"
+      ],
+      "source_contract": [
+        "None converts to {}; object with model_dump called with by_alias=True/exclude_none=True/mode=json and must return dict; dict passes through _params_dict, other type raises.",
+        "Individual wrapper can copy and overwrite fields: resume enforces threadId argument, _start_turn enforces threadId/input normalization after params.",
+        "Model missing/default/null serialization is not assumed equivalent to dictionary with explicit None; actual Pydantic runtime remains unqualified."
+      ],
+      "future_positive": "Compare same fields supplied as generated model versus dict, including explicit null and conflicting params threadId/input; validate wrapper wins exactly where source overwrites.",
+      "future_known_bad": "Drop nulls from dict generically or allow params threadId to replace explicit bound thread argument.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY05",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC",
+        "GAP-PROVENANCE"
+      ],
+      "public_entry": "New optional fields and initialize runtime identity",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:304-325",
+        "sdk/python/src/openai_codex/client.py:327-366",
+        "sdk/python/src/openai_codex/_runtime_requirements.py:16-28",
+        "sdk/python/src/openai_codex/_runtime_requirements.py:40-64"
+      ],
+      "source_contract": [
+        "Guard only when non-None fields supplied: turn/start toolOutput/turnTrigger/serviceTierForTurn; thread/resume and fork excludeTurns.",
+        "Version comes from serverInfo.version, fallback parsed userAgent; initialized notification sent after version extraction.",
+        "For runtime0.0.0 require same captured executable/config checkout fields; custom launch has no capability object and fails before _request_raw for guarded fields. Other versions go through packaging.Version>=0.151.0 after alpha normalization.",
+        "CheckoutCapabilities lazily invokes command+generate-json-schema --experimental --out with timeout30 and checks properties in three v2 schema files. No such command was run by this task.",
+        "Truthful CVG metadata cannot be fabricated as official Codex version; compatible SDK/native capability profile is an explicit future obligation, separate from literal first text-only journey."
+      ],
+      "future_positive": "Exercise guarded/unguarded/null options under versioned/unsupported/unknown/unversioned/custom-launch profiles with honest metadata.",
+      "future_known_bad": "Globally assume every request checked minimum version, bypass field guard, or label runtime0.153.4 dependency as proof of native metadata compatibility.",
+      "boundary": "SOURCE_CONTRACT_AND_UNRESOLVED_INTEROPERABILITY_PROFILE",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY06",
+      "gaps": [
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "initialize then initialized",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:304-325",
+        "sdk/python/src/openai_codex/client.py:387-392"
+      ],
+      "source_contract": [
+        "Historical25candidate sites contain20 literal requests,1 initialized notification and4 dynamic sites.",
+        "initialized uses notify→write_message, with no requestId, waiter, response model or server ACK expectation; catalog has ClientNotification-initialized, not ClientRequest-initialized."
+      ],
+      "future_positive": "Initial request response followed by notification with no ACK and correct typed catalog binding.",
+      "future_known_bad": "Require initialized response, allocate waiter for notification or bind it to a nonexistent ClientRequest obligation.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY07",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Server request and default approval handler",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:833-839",
+        "sdk/python/src/openai_codex/client.py:886-894",
+        "sdk/python/src/openai_codex/client.py:863-881"
+      ],
+      "source_contract": [
+        "Default handler returns decision accept for item/commandExecution/requestApproval and item/fileChange/requestApproval, {} otherwise.",
+        "Handler receives method and dictionary params (None for non-dict); reader echoes id with result; handler exception flows to reader BaseException/fail_all.",
+        "CVG institutional authority cannot come from this client default accept. Preserve literal client reply as reference fact, keep sensitive native WRITE held until institutional approval/handoff; governed behavior must stay separated (EQ02 proposed in0239), literal obligation not silently closed."
+      ],
+      "future_positive": "Synthetic reference server asks each approval kind and unknown method; native governed scenario proves client accept alone cannot dispatch institutional effect.",
+      "future_known_bad": "Treat source default accept as native approval grant or count governed held-WRITE proof as literal autoaccept parity.",
+      "boundary": "GOVERNED_BOUNDARY_REQUIRED_LITERAL_OBLIGATION_REMAINS",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY08",
+      "gaps": [
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Notifications/reader failure",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:810-821",
+        "sdk/python/src/openai_codex/client.py:863-881",
+        "sdk/python/src/openai_codex/_message_router.py:283-322",
+        "sdk/python/src/openai_codex/_message_router.py:324-351"
+      ],
+      "source_contract": [
+        "Single stdout reader distinguishes server request(method+id), notification(method without id), and response.",
+        "Known notification model validation failure falls back to UnknownNotification(params dictionary or{}), as does unknown method.",
+        "BaseException in reader fans same failure to response/login/goal/global queues and turn states, clearing routing collections; runtime concurrency/protocol model behavior not proven by source."
+      ],
+      "future_positive": "Known/unknown/malformed payload notification and transport closure wake each subscribed public consumer without fabricated terminal.",
+      "future_known_bad": "Assume unknown notification dropped or typed successfully; claim queue source checks prove no runtime race/deadlock.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY09",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Explicit overload retry helper",
+      "source_refs": [
+        "sdk/python/src/openai_codex/retry.py:12-41",
+        "sdk/python/src/openai_codex/errors.py:86-109",
+        "sdk/python/src/openai_codex/errors.py:112-121",
+        "sdk/python/src/openai_codex/client.py:731-746"
+      ],
+      "source_contract": [
+        "Retry helper defaults3attempts/0.25initial/2.0max/0.2jitter; invalid max_attempts<1 fails; only explicit retry helper wraps request.",
+        "Typed errors distinguish standard codes; server-range retry-limit text and nested overloaded signals select subclasses. RetryLimitExceededError subclasses ServerBusyError, hence considered retryable.",
+        "is_retryable_error also accepts any JsonRpcError with overloaded data, not a single hardcoded -32001 code. Delay formula min(max,delay)+uniform(+/-delay*jitter), then capped doubled delay; actual sleep can exceed nominal cap due jitter."
+      ],
+      "future_positive": "Observe exact attempts/error class/cause with overload subclass, retry-limit text, nested data and nonretryable exception; test bounds from actual formula.",
+      "future_known_bad": "Assume normal request automatically retries, retry only one numeric code, remove subclass behavior, or claim max_delay is strict jitter-inclusive upper bound.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY10",
+      "gaps": [
+        "GAP-PY-API"
+      ],
+      "public_entry": "Async wrapper/cancelled start",
+      "source_refs": [
+        "sdk/python/src/openai_codex/async_client.py:73-81",
+        "sdk/python/src/openai_codex/async_client.py:301-326",
+        "sdk/python/src/openai_codex/api.py:879-893"
+      ],
+      "source_contract": [
+        "Ordinary async wrapper uses asyncio.to_thread; Python event-loop responsiveness/runtime worker behavior remains untested.",
+        "Special _start_turn submits copy_context().run to executor and wraps future. On CancelledError adds callback that closes returned subscription if one exists; does not issue turn_interrupt in that branch.",
+        "Ordinary AsyncTurnHandle.stream finally closes subscription; explicit handle.interrupt is a distinct RPC. Goal-stream cancellation has different semantics (PY14)."
+      ],
+      "future_positive": "Cancel before/after sync result while body thread remains independently observed; subscription cleanup and remote turn continuation distinguished.",
+      "future_known_bad": "Treat task cancellation or stream close as proof of server interruption/zero effect, or reuse goal cancellation semantics for ordinary turn.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY11",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Thread.turn→_start_turn",
+      "source_refs": [
+        "sdk/python/src/openai_codex/api.py:618-664",
+        "sdk/python/src/openai_codex/client.py:659-682",
+        "sdk/python/src/openai_codex/client.py:685-699",
+        "sdk/python/src/openai_codex/_message_router.py:145-157",
+        "sdk/python/src/openai_codex/_message_router.py:159-175"
+      ],
+      "source_contract": [
+        "High-level Thread.turn normalizes input/options to TurnStartParams, then requests handle-mode _start_turn.",
+        "Per-thread lock serializes start; active local goal is rejected. pending_turn snapshots cursors before RPC; prepare_turn binds returned ID and retained events before scope cleanup.",
+        "for_handle controls independent subscription versus single low-level consumer; source does not prove server-side start-versus-join semantics or race outcome."
+      ],
+      "future_positive": "Real notifications before turn/start response, competing handles same thread, active goal rejection and distinct thread independence.",
+      "future_known_bad": "Register only after response and lose early events; infer remote join or effect dedupe just from wrapper method name.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY12",
+      "gaps": [
+        "GAP-PY-API"
+      ],
+      "public_entry": "TurnHandle streams/subscribers",
+      "source_refs": [
+        "sdk/python/src/openai_codex/api.py:822-835",
+        "sdk/python/src/openai_codex/api.py:837-843",
+        "sdk/python/src/openai_codex/api.py:879-893",
+        "sdk/python/src/openai_codex/_message_router.py:177-181",
+        "sdk/python/src/openai_codex/_message_router.py:196-206"
+      ],
+      "source_contract": [
+        "Stream yields routed events and terminates after matching typed turn/completed, finally closes its subscription.",
+        "New subscribe_turn starts at state.next_event, whereas prepare_turn can start at snapshot cursor; they are not unconditional full-history replay.",
+        "Pruning follows minimum subscriber cursor unless pending turn start protects buffers; when no subscribers remain, pruning can remove state after pending-start protection clears. Durable native history/reconnect is a separate institutional requirement, not this in-memory router."
+      ],
+      "future_positive": "Two consumers/late subscription, early events and matching terminal; native cold replay uses its own approved durable ports.",
+      "future_known_bad": "Promise full prior history for a new subscription or count in-memory cursor behavior as durable restart proof.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY13",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Low-level start_goal_operation",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:608-648",
+        "sdk/python/src/openai_codex/client.py:541-547",
+        "sdk/python/src/openai_codex/client.py:549-566"
+      ],
+      "source_contract": [
+        "Goal startup first reads thread, requires idle and persisted(non-ephemeral,path non-None), then reserves route before clearing old goal and activating turn routing.",
+        "Sets goal active and waits real goal start up to constant30s. On BaseException conditionally cancels (activated or not InvalidRequestError), then finishes/unregisters state.",
+        "Actual autonomous server turns/goal effects and persistence must be tested, not inferred from these source preconditions."
+      ],
+      "future_positive": "Idle persisted positive, ephemeral/active rejection, notification-before-reply and failure at each activated/not-activated cut.",
+      "future_known_bad": "Start goal on ephemeral thread, reserve after set and lose events, or assert cleanup implies remote effect absence.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY14",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Logical goal stream and close/cancel",
+      "source_refs": [
+        "sdk/python/src/openai_codex/_goal.py:260-326",
+        "sdk/python/src/openai_codex/_goal.py:196-222",
+        "sdk/python/src/openai_codex/_goal.py:225-245",
+        "sdk/python/src/openai_codex/_goal.py:365-385",
+        "sdk/python/src/openai_codex/_goal.py:395-396",
+        "sdk/python/src/openai_codex/_goal.py:417-437",
+        "sdk/python/src/openai_codex/_goal.py:447-448"
+      ],
+      "source_contract": [
+        "Cursor merges actual turns into one logical ID, emits first started only, suppresses goal status notifications and uses terminal goal/cleared/failed/interrupted state to decide logical completion.",
+        "Normal close/aclose finishes local state/wakes reader/unregisters; sync KeyboardInterrupt and async CancelledError branches explicitly call cancel_goal before close/rethrow.",
+        "Do not equate normal reader close, ordinary turn task cancellation and goal task cancellation. Native governor may require governed pause/approval semantics for the corresponding control path."
+      ],
+      "future_positive": "Multiple real turns/status orderings/failed intermediate turn, normal close versus keyboard/task cancel and exact logical IDs.",
+      "future_known_bad": "End after first physical completed regardless goal state, or make normal aclose silently send cancel_goal.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY15",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-GENERATED"
+      ],
+      "public_entry": "TurnResult collection",
+      "source_refs": [
+        "sdk/python/src/openai_codex/_run.py:68-99",
+        "sdk/python/src/openai_codex/_run.py:102-135",
+        "sdk/python/src/openai_codex/_run.py:45-57",
+        "sdk/python/src/openai_codex/_run.py:60-65"
+      ],
+      "source_contract": [
+        "Only matching turn item-completed and token-usage notifications collected; completed required else RuntimeError.",
+        "Failed turn raises message-bearing RuntimeError (or fixed fallback); interrupted/nonfailed status is not auto-raised by _raise_for_failed_turn.",
+        "Final assistant text scans reversed items for final_answer phase first, otherwise latest None-phase; not naive concatenation of delta text."
+      ],
+      "future_positive": "Mixed-turn items/usage, missing terminal, failed/interrupted status and competing final/unknown-phase assistant items.",
+      "future_known_bad": "Return another turn usage, invent completion, always concatenate delta or return last item regardless phase.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY16",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-GENERATED"
+      ],
+      "public_entry": "RunInput/ExternalMessage",
+      "source_refs": [
+        "sdk/python/src/openai_codex/_inputs.py:96-103",
+        "sdk/python/src/openai_codex/_inputs.py:70-81",
+        "sdk/python/src/openai_codex/api.py:618-664"
+      ],
+      "source_contract": [
+        "Normal string becomes text input; typed image/localImage/skill/mention map to explicit wire keys.",
+        "ExternalMessage requires nonempty tool_name and becomes empty normal input plus TurnToolOutput.model_validate(name,namespace,output), triggering guarded toolOutput feature.",
+        "External content has tool-level/untrusted authority by source contract, not user/developer approval. No actual image/file/model/provider or clinical data used here."
+      ],
+      "future_positive": "Public typed/structured inputs retain wire values and source provenance; external message cannot supply approval and field guard is honored.",
+      "future_known_bad": "Convert external tool content into authorized user instructions or drop structured output into summary/digest only.",
+      "boundary": "SOURCE_INPUT_SHAPE_AND_GOVERNANCE_AUTHORITY_BOUNDARY",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY17",
+      "gaps": [
+        "GAP-PY-API",
+        "GAP-PY-RPC"
+      ],
+      "public_entry": "Interactive login handles",
+      "source_refs": [
+        "sdk/python/src/openai_codex/_login.py:29-43",
+        "sdk/python/src/openai_codex/_login.py:109-111",
+        "sdk/python/src/openai_codex/_login.py:113-115",
+        "sdk/python/src/openai_codex/client.py:441-456",
+        "sdk/python/src/openai_codex/client.py:763-779",
+        "sdk/python/src/openai_codex/_message_router.py:114-124"
+      ],
+      "source_contract": [
+        "Typed login start registers login ID only for supported chatgpt/device-code response variants; router retains early notification in pending login queue.",
+        "wait registers then loops matching typed completion and finally unregisters; cancel is separate login/cancel RPC and is not a generic promise that notification queues are already unregistered.",
+        "No credentials/login/network executed; actual auth/session lifecycle and artifacts remain external capability gate."
+      ],
+      "future_positive": "Synthetic auth start/completion ordering and cancel response with separate queue/handle outcomes; no real login.",
+      "future_known_bad": "Treat cancel ACK as login success/terminal delivery or claim source handle proof authenticates account state.",
+      "boundary": "SOURCE_LITERAL_FUTURE_RUNTIME_UNPROVEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY18",
+      "gaps": [
+        "GAP-GENERATED"
+      ],
+      "public_entry": "Generated Pydantic model boundary",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:84-110",
+        "sdk/python/src/openai_codex/client.py:327-366",
+        "sdk/python/src/openai_codex/client.py:810-821"
+      ],
+      "source_contract": [
+        "33 selected generated declarations include bases/RootModel, Annotated/Field aliases, default syntax and ConfigDict populate_by_name expressions; prior complete generated census remains preserved.",
+        "pyproject permits pydantic>=2.12; uv.lock metadata selects2.13.4/core2.46.4. Neither means the imported library/runtime was qualified here.",
+        "Actual coercion, required nullable/default/extra fields, inherited methods, dump/model_validate and notification fallbacks require explicit external library oracles. Declaration syntax is not a runtime schema computation."
+      ],
+      "future_positive": "Correct installed dependency/model fixtures for alias/name, missing/null/default/extra/union/root and actual emitted JSON; independent schema reference comparison.",
+      "future_known_bad": "Claim inherited or computed Pydantic semantics from annotations/counts, or silently substitute a different dependency/runtime version.",
+      "boundary": "EXTERNAL_LIBRARY_VALIDATION_NOT_RUN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY19",
+      "gaps": [
+        "GAP-PROVENANCE",
+        "GAP-PLATFORM-PACKAGING"
+      ],
+      "public_entry": "Codex binary/package identity",
+      "source_refs": [
+        "sdk/python/src/openai_codex/client.py:178-188",
+        "sdk/python/src/openai_codex/client.py:113-123",
+        "sdk/python-runtime/src/codex_cli_bin/__init__.py:8-15",
+        "sdk/python-runtime/src/codex_cli_bin/__init__.py:18-25",
+        "sdk/python/src/openai_codex/_version.py:11-19"
+      ],
+      "source_contract": [
+        "Explicit codex_bin path must exist; otherwise Python requires bundled codex_cli_bin dependency (FileNotFoundError on absent import), not npm fallback.",
+        "Bundled package requires codex-package.json file and bin/codex(.exe) file; checks in these functions do not prove actual distributed bits/source provenance.",
+        "SDK/runtime source0.0.0-dev, runtime dependency0.153.4, minimum0.151.0, lock dependency builds, Git pin and compiled CLI G02 identity remain distinct. package_version prefers source pyproject, then installed distribution, else0+unknown."
+      ],
+      "future_positive": "Authenticated actual SDK wheel/runtime archive/ELF/platform files and truthful metadata paired to exact deployment profile, separately from source-only paths.",
+      "future_known_bad": "Use matching manifest name/version or G02 CLI hash as proof of Python wheel/runtime0.153.4 provenance.",
+      "boundary": "ARTIFACT_PROVENANCE_OPEN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    },
+    {
+      "id": "PY20",
+      "gaps": [
+        "GAP-PROVENANCE",
+        "GAP-PLATFORM-PACKAGING"
+      ],
+      "public_entry": "Runtime bootstrap/wheel platform",
+      "source_refs": [
+        "sdk/python/_runtime_setup.py:53-96",
+        "sdk/python/_runtime_setup.py:99-122",
+        "sdk/python/_runtime_setup.py:178-260",
+        "sdk/python/_runtime_setup.py:277-305",
+        "sdk/python-runtime/hatch_build.py:15-30"
+      ],
+      "source_contract": [
+        "Bootstrap reuses equal normalized installed runtime version or stages/downloads/installs required version; these functions were never executed.",
+        "Six supported OS/arch asset mappings plus unsupported error are source-defined; source release/HTTP/gh fallback is not authentication of actual bytes.",
+        "Runtime wheel hook refuses sdist, sets pure_python/infer_tag False and py3-none-platform tag from config/env/sys_tags; Python runtime and TS package/proxy distribution routes differ."
+      ],
+      "future_positive": "Future contained artifact verification for six platform selections/build tag and unsupported branch, package digest/source binding and proxy assets; no live install now.",
+      "future_known_bad": "Mark all platforms qualified from one Linux binary or conflate wheel-only declaration with actual authenticated wheel.",
+      "boundary": "PACKAGING_RUNTIME_PROVENANCE_NOT_RUN",
+      "runtime_status": "NOT_RUN",
+      "receipt": null,
+      "whole_requirement_covered": false
+    }
+  ],
+  "count": 20,
+  "functional_receipts": 0,
+  "runtime_tests": "NOT_RUN",
+  "literal_and_governed_are_distinct": true
+}

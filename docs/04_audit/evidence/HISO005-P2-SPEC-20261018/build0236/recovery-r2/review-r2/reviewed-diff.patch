@@ -1,0 +1,137 @@
+diff --git a/scripts/check-product-boundary.mjs b/scripts/check-product-boundary.mjs
+index 40cd4985..3330890e 100644
+--- a/scripts/check-product-boundary.mjs
++++ b/scripts/check-product-boundary.mjs
+@@ -140,16 +140,70 @@ export function auditProductBoundary(
+     const absolute = path.isAbsolute(file) ? file : path.resolve(root, file)
+     const relative = path.relative(root, absolute)
+     let fileSha256 = null
++    let physicalAvailable = false
+     try {
++      if (origin?.physicalFileKnown === false || !inside(root, absolute))
++        throw new Error('origin_physical_source_unavailable')
++      const before = fs.lstatSync(absolute, { bigint: true })
++      if (
++        !before.isFile() ||
++        fs.realpathSync(absolute) !== absolute ||
++        before.size > BigInt(semanticEngine.SEMANTIC_LIMITS.maxFileBytes)
++      )
++        throw new Error('origin_physical_source_invalid')
++      const same = (a, b) =>
++        ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(
++          (key) => a[key] === b[key]
++        )
+       if (!originFiles.has(absolute)) {
+-        const bytes = fs.readFileSync(absolute)
++        const fd = fs.openSync(
++          absolute,
++          fs.constants.O_RDONLY |
++            fs.constants.O_NOFOLLOW |
++            fs.constants.O_NONBLOCK
++        )
++        let bytes, after
++        try {
++          const opened = fs.fstatSync(fd, { bigint: true })
++          if (!opened.isFile() || !same(opened, before))
++            throw new Error('origin_open_identity_changed')
++          // One extra byte detects growth without an unbounded read/allocation.
++          const buffer = Buffer.alloc(Number(opened.size) + 1)
++          let count = 0
++          while (count < buffer.length) {
++            const read = fs.readSync(
++              fd,
++              buffer,
++              count,
++              buffer.length - count,
++              null
++            )
++            if (read === 0) break
++            count += read
++          }
++          after = fs.fstatSync(fd, { bigint: true })
++          if (count !== Number(opened.size) || !same(opened, after))
++            throw new Error('origin_read_changed')
++          bytes = buffer.subarray(0, count)
++        } finally {
++          fs.closeSync(fd)
++        }
++        if (
++          fs.realpathSync(absolute) !== absolute ||
++          !same(after, fs.lstatSync(absolute, { bigint: true }))
++        )
++          throw new Error('origin_path_changed')
+         originFiles.set(absolute, {
+           sha256: createHash('sha256').update(bytes).digest('hex'),
+           text: bytes.toString('utf8'),
+-          validUtf8: Buffer.from(bytes.toString('utf8')).equals(bytes)
++          validUtf8: Buffer.from(bytes.toString('utf8')).equals(bytes),
++          stat: after
+         })
+       }
+       const snapshot = originFiles.get(absolute)
++      if (!same(snapshot.stat, before))
++        throw new Error('origin_cache_input_changed')
++      physicalAvailable = true
+       if (
+         (origin?.context === 'semantic-frontier' && !origin?.node) ||
+         (snapshot.validUtf8 &&
+@@ -191,8 +245,11 @@ export function auditProductBoundary(
+       }
+     }
+     const tuple = {
+-      file: origin?.physicalFileKnown === false ? null : relative,
+-      fileSha256: origin?.physicalFileKnown === false ? null : fileSha256,
++      file: physicalAvailable ? relative : null,
++      fileSha256: physicalAvailable ? fileSha256 : null,
++      ...(!physicalAvailable && origin?.context !== 'semantic-frontier'
++        ? { requestedFile: relative }
++        : {}),
+       kind,
+       start,
+       end,
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index 38853e87..1a9d5572 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -595,3 +595,41 @@ describe('Recovery byte provenance for invalid encodings', () => {
+     })
+   })
+ })
++
++describe('Recovery canonical physical origin acquisition', () => {
++  it('never acquires the bytes of an installed manifest alias already refused by identity validation', () => {
++    const f = fixture({
++      core: "import {value} from 'vendor'; export const result=value;",
++      vendor: 'export const value=1;'
++    })
++    const sentinel = JSON.stringify({
++      name: 'vendor',
++      version: '1.0.0',
++      type: 'module',
++      main: 'index.js',
++      syntheticSentinel: 'outside-evaluated-root-do-not-acquire'
++    })
++    const outside = write(f.parent, 'synthetic-outside.json', sentinel),
++      alias = 'node_modules/vendor/package.json'
++    fs.unlinkSync(path.join(f.evaluated, alias))
++    fs.symlinkSync(outside, path.join(f.evaluated, alias))
++    const result = f.run()
++    expect(result.report.status).toBe('INCOMPLETE')
++    expect(result.graph.installed.every((x) => !x.verified)).toBe(true)
++    const origins = [
++      ...result.report.semanticBoundary.origins,
++      ...result.report.semanticBoundary.frontierOrigins
++    ]
++    const matching = origins.filter(
++      (x) =>
++        x.file === alias ||
++        x.requestedFile === alias ||
++        x.semanticPointer?.reportedFile === alias
++    )
++    expect(matching.length).toBeGreaterThan(0)
++    expect(
++      matching.every((x) => x.file === null && x.fileSha256 === null)
++    ).toBe(true)
++    expect(origins.some((x) => x.fileSha256 === hash(sentinel))).toBe(false)
++  })
++})

@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict'
+import { readFileSync, writeFileSync, lstatSync, realpathSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import ts from '/mnt/ia/cvg-claude100-journal0225-20261018/node_modules/typescript/lib/typescript.js'
+const candidate='/mnt/ia/cvg-claude100-journal0225-20261018'
+const evidence='/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/restart-r2-20261018'
+assert.equal(process.cwd(),candidate)
+assert.equal(process.versions.node,'22.23.2')
+assert.equal(ts.version,'6.0.3')
+const sha=(bytes)=>createHash('sha256').update(bytes).digest('hex')
+const hashes={jsonvalue:'03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac',direct:'300979b5c8e18cc1d14adc87f0024ea37f6bbfaa871d17ac777b0fc24a2316f0',present:'18e7577c1918f9122dbbdaa7adeab8fe682acf3567efd09285ad23d0e20efa7b'}
+const options={target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,rewriteRelativeImportExtensions:true,sourceMap:false,declaration:false}
+const outputs=[]
+for(const kind of ['jsonvalue','direct','present']){
+ const sourcePath='packages/persistence/src/__tests__/fixtures/journal-result-readers/'+kind+'.ts.source.txt'
+ const source=readFileSync(join(candidate,sourcePath))
+ assert.equal(sha(source),hashes[kind])
+ const result=ts.transpileModule(source.toString('utf8'),{fileName:'operational-execution-postgres.ts',compilerOptions:options,reportDiagnostics:true})
+ assert.equal(result.diagnostics?.filter(d=>d.category===ts.DiagnosticCategory.Error).length,0)
+ const ast=ts.createSourceFile('out.js',result.outputText,ts.ScriptTarget.ES2022,true,ts.ScriptKind.JS)
+ const imports=ast.statements.filter(ts.isImportDeclaration).map(d=>d.moduleSpecifier.text)
+ assert(imports.every(x=>['node:crypto','@cvg/harness','@cvg/platform','./tenant-scoped-postgres.js','./controlled-published-fencing.js'].includes(x)))
+ const emitPath='packages/persistence/dist/operational-execution-postgres.j06-'+kind+'.js'
+ assert.equal(realpathSync(join(candidate,'packages/persistence/dist')),join(candidate,'packages/persistence/dist'))
+ const bytes=Buffer.from(result.outputText)
+ writeFileSync(join(candidate,emitPath),bytes,{flag:'wx',mode:0o600})
+ assert(lstatSync(join(candidate,emitPath)).isFile())
+ writeFileSync(join(evidence,'rr1-j06-'+kind+'-compiled.js.source.txt'),bytes,{flag:'wx'})
+ assert.equal(sha(bytes),{jsonvalue:'f8b459b01a719d79dd3b2014234ad3115aaaa71816ec2c65d46239531d2348e3',direct:'37aa0c91dfdafa5be1eb98019fa3f0b54c523408ccae2214fd05cb02786f6e1a',present:'5b6124ec06e0b4aeb1e943d2e8fc351f4824071a921911c3aa2c5c58c28d0159'}[kind])
+ outputs.push({kind,sourcePath,sourceSha256:sha(source),emitPath,emitSha256:sha(bytes),emitBytes:bytes.length,imports})
+}
+const out={at:new Date().toISOString(),scope:'WHOLE_ORIGINAL_MODULE_TRANSPILE_ONLY_NO_TARGET_EXECUTED',compiler:{version:ts.version,sha256:sha(readFileSync(join(candidate,'node_modules/typescript/lib/typescript.js')))},options,outputs,limitations:'Current shared support used later; not full old-tree semantic build or old runtime certification',modelCalls:0,toolBodies:0}
+writeFileSync(join(evidence,'rr1-reader-rebuild.json'),JSON.stringify(out,null,2)+'\n',{flag:'wx'})
+console.log(JSON.stringify({outputs:outputs.length,compiler:ts.version,targetExecuted:false}))

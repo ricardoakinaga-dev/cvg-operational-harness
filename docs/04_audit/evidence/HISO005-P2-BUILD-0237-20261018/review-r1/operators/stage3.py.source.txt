@@ -1,0 +1,43 @@
+exec(open('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r1/driver.py').read().split('# Stage 1:')[0])
+# Alias at the selected workspace exports leaf: same negative-census gap.
+for mode in ['import','require']:
+ ext='mjs' if mode=='import' else 'cjs';root,start=workspace('exports-product-alias-'+mode,mode)
+ put(root,'products/private/package.json','{"name":"synthetic-product","type":"'+('module' if mode=='import' else 'commonjs')+'"}')
+ put(root,'products/private/body.'+ext,'export const answer=42;' if mode=='import' else 'module.exports=42;')
+ p=root/('packages/demo/good.'+ext);p.unlink();p.symlink_to('../../products/private/body.'+ext)
+ oracle('exports-product-alias-'+mode+'-oracle',root,start,mode=mode);helper('exports-product-alias-'+mode+'-helper',root,start,mode=mode);engine('exports-product-alias-'+mode+'-engine',root,start)
+# Paired known-product root-link census must survive refusal and reduced link cap.
+root,start=workspace('root-product-link',link='../products/private')
+put(root,'products/private/package.json','{"name":"demo","type":"module","exports":"./body.mjs"}');put(root,'products/private/body.mjs','export const answer=42;')
+helper('root-product-link-helper',root,start);helper('root-product-link-cap-helper',root,start,limits={'maxLinks':0});engine('root-product-link-engine',root,start)
+# Owner precedence: nearest manifestless directory and self-reference cannot fall through.
+for label in ['manifestless','selfreference']:
+ root,start=workspace('owner-'+label);put(root,'packages/core/entry.mjs','import {answer} from "demo";export const value=answer;')
+ if label=='manifestless': (root/'packages/core/node_modules/demo').mkdir(parents=True)
+ else:put(root,'packages/core/package.json','{"name":"demo","type":"module","exports":"./local.mjs"}');put(root,'packages/core/local.mjs','export const answer=0;')
+ oracle('owner-'+label+'-oracle',root,'packages/core/entry.mjs');helper('owner-'+label+'-helper',root,'packages/core/entry.mjs');engine('owner-'+label+'-engine',root,'packages/core/entry.mjs')
+# CJS sibling file precedence before legacy directories, and exports first.
+for label in ['legacy','exports']:
+ root,start=workspace('cjs-priority-'+label,'require')
+ if label=='legacy':put(root,'packages/demo/package.json','{"name":"demo","main":"./good.cjs"}')
+ put(root,'node_modules/demo.js','module.exports=0;')
+ oracle('cjs-priority-'+label+'-oracle',root,start,mode='require');helper('cjs-priority-'+label+'-helper',root,start,mode='require')
+# Invalid raw source/link UTF8 and an external owned target must stay metadata-only.
+root,start=workspace('invalid-utf8-source');put(root,'packages/demo/good.mjs',b'export const answer=42;\xff');engine('invalid-utf8-source-engine',root,start)
+root,start=workspace('invalid-utf8-link');p=root/'node_modules/demo';p.unlink();os.symlink(b'../packages/dem\xff',os.fsencode(p));helper('invalid-utf8-link-helper',root,start)
+foreign=fixture('owned-foreign',{'body.mjs':'export const answer=991;','package.json':'{"name":"demo","type":"module","exports":"./body.mjs"}'})
+root,start=workspace('external-link',link=str(foreign));helper('external-link-helper',root,start);engine('external-link-engine',root,start)
+# Actual replacement of a previously absent nearer node_modules directory.
+root,start=workspace('absence-insert');put(root,'src/entry.mjs','export const answer=42;');(root/'src/node_modules').mkdir()
+helper('absence-insert-helper',root,'src/entry.mjs',mutate={'file':'src/node_modules/demo','text':'new-file-package'})
+# Metadata-only foreign symlink and real parent rename during held-fd read.
+RACE='''import fs from 'node:fs';import path from 'node:path';import {pathToFileURL} from 'node:url';const{createResolutionSession}=await import(pathToFileURL(process.argv[1]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const before=fs.readdirSync('/proc/self/fd').length;const opens=[];let original=fs.openSync,read=fs.readSync,mutated=false,content=null,error=null;fs.openSync=function(f,flags,...a){opens.push({path:String(f),flags});return original.call(this,f,flags,...a)};fs.readSync=function(...args){if(!mutated){mutated=true;fs.renameSync(path.join(p.root,'src'),path.join(p.root,'src-old'));fs.symlinkSync(p.foreign,path.join(p.root,'src'));}return read.apply(this,args)};let s;try{s=createResolutionSession({root:p.root});content=s.read('src/body.mjs').text;s.revalidate()}catch(e){error=e.message}finally{fs.openSync=original;fs.readSync=read;s?.close()}process.stdout.write(JSON.stringify({error,content,mutated,opens,fdBefore:before,fdAfter:fs.readdirSync('/proc/self/fd').length}));'''
+root=fixture('race-parent',{'src/body.mjs':'export const answer=42;'});run('race-parent',RACE,[str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root),'foreign':str(foreign)})
+(O/'raw/race.operator.source.txt').write_text(RACE+'\n')
+# Repeated same-process workers and helper failures expose accumulation rather than one-time Node fds.
+REPEAT='''import fs from 'node:fs';import {pathToFileURL} from 'node:url';const e=await import(pathToFileURL(process.argv[1]).href);const h=await import(pathToFileURL(process.argv[2]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const counts=[],results=[];for(let i=0;i<6;i++){const out=e.runSemanticBoundary(p);results.push({status:out.status,proofs:out.proofs.length,validation:out.validation});counts.push(fs.readdirSync('/proc/self/fd').length)}for(let i=0;i<30;i++){let s;try{s=h.createResolutionSession({root:p.root,limits:{maxOpenDescriptors:2}});s.resolve({from:'entry.cjs',specifier:'demo',mode:'require'})}catch{}finally{s?.close()}}process.stdout.write(JSON.stringify({counts,results,afterFailures:fs.readdirSync('/proc/self/fd').length}));'''
+root,start=workspace('repeat-fds','require');run('repeat-fds',REPEAT,[str(C/'scripts/boundary-semantic-engine.mjs'),str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root),'starts':[start],'installed':[],'origins':[],'compiled':{'status':'UNAVAILABLE','files':[]}});(O/'raw/repeat.operator.source.txt').write_text(REPEAT+'\n')
+# Explicit disallowed launch profile must fail closed without starting target execution.
+root,start=workspace('denied-profile');args=[N,'--conditions=hostile','--input-type=module','--eval',ENGINE,str(C/'scripts/boundary-semantic-engine.mjs')];payload={'input':{'root':str(root),'starts':[start],'origins':[],'installed':[]}}
+r=subprocess.run(args,cwd=C,env=ENV,input=json.dumps(payload),text=True,capture_output=True,timeout=10);(O/'raw/denied-profile.json').write_text(json.dumps({'argv':args,'cwd':str(C),'env':ENV,'stdin':json.dumps(payload),'stdout':r.stdout,'stderr':r.stderr,'returncode':r.returncode},indent=2)+'\n')
+(O/'probe-summary-stage3.json').write_text(json.dumps(summary,indent=2)+'\n')

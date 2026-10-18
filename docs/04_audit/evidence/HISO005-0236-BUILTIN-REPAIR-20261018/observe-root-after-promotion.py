@@ -1,0 +1,34 @@
+from pathlib import Path
+import datetime,gzip,hashlib,json,subprocess,time
+
+ev=Path(__file__).resolve().parent
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+owned=Path('/tmp/cvg-hiso005-builtin-fix-20261018')
+freeze=json.loads((ev/'source-freeze.json').read_text())
+promotion=json.loads((ev/'promotion-receipt.json').read_text())
+assert promotion['status']=='PROMOTED_TWO_REPAIR_PATHS' and promotion['sourceCommit']==freeze['commit']
+sha=lambda data:hashlib.sha256(data).hexdigest()
+for row in freeze['files']:
+    assert sha((root/row['path']).read_bytes())==row['sha256']
+installed='/tmp/cvg-hiso005-integration-20261018/reference-r2/reference.json'
+compiled='/tmp/cvg-hiso005-resolver-fix-20261018/compiled-reference-r1/reference.json'
+rows=[]
+for mode,flags in [('default',[]),('semantic-other-physical-reference',['--semantic','--installed-reference='+installed,'--installed-reference-sha256=89fd40e9c87c327aa96265d8730b08169f9220bb4904c97460fe0e536ec9b0ef','--compiled-build-reference='+compiled,'--compiled-build-reference-sha256=d6df970d627424bc15e28bcc64ea5ebc9d9c6903337b176ce7979ddd4d5052f3'])]:
+    out=owned/('root-'+mode+'.json')
+    graph=owned/('root-'+mode+'-graph.json')
+    argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','scripts/check-product-boundary.mjs',str(root),'--graph='+str(graph),*flags]
+    started=time.time()
+    with out.open('wb') as stream:
+        process=subprocess.run(argv,cwd=root,env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','LANG':'C','LC_ALL':'C','TZ':'UTC','TMPDIR':str(owned)},stdout=stream,stderr=subprocess.PIPE,timeout=300)
+    (ev/('root-'+mode+'.stderr.txt')).write_bytes(process.stderr)
+    report=json.loads(out.read_text())
+    sem=report.get('semanticBoundary',{})
+    rows.append({'mode':mode,'argv':argv,'exitCode':process.returncode,'status':report['status'],'diagnostics':len(report['diagnostics']),'kernelStatus':sem.get('status'),'compiledProvenance':sem.get('compiledProvenance',{}).get('status'),'elapsedSeconds':time.time()-started,'reportSha256':sha(out.read_bytes()),'graphSha256':sha(graph.read_bytes()),'stderrSha256':sha(process.stderr)})
+    for label,path in [('report',out),('graph',graph)]:
+        with gzip.open(ev/('root-'+mode+'-'+label+'.json.gz'),'wb') as stream:
+            stream.write(path.read_bytes())
+for row in freeze['files']:
+    assert sha((root/row['path']).read_bytes())==row['sha256']
+result={'status':'OBSERVED_SHARED_ROOT_NOT_CERTIFIED','observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'promotedSourceCommit':freeze['commit'],'runs':rows,'rootCertified':False,'b6Accepted':False,'productionApproved':False}
+(ev/'root-post-promotion-observation.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result))

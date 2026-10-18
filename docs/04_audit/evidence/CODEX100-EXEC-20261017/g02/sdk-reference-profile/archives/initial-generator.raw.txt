@@ -1,0 +1,294 @@
+from pathlib import Path
+import hashlib, json, subprocess, sys, os, platform, shutil, tomllib, re
+from datetime import datetime, timezone
+
+R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017'
+P=E/'g02/sdk-reference-profile'
+U=Path('/tmp/cvg-rea-codex-20261017/upstream')
+PIN='8d9f6466ff0294785d56f55b1fe363d132fe4133'
+NOW=datetime.now(timezone.utc).isoformat()
+def sha(b): return hashlib.sha256(b).hexdigest()
+def put(name,value):
+    p=P/name;p.parent.mkdir(parents=True,exist_ok=True)
+    p.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n' if not isinstance(value,str) else value)
+def run(args):
+    c=subprocess.run(args,capture_output=True,check=True)
+    return c.stdout
+def bind(p):
+    b=p.read_bytes();return {'path':str(p),'bytes':len(b),'sha256':sha(b)}
+
+assert not P.exists(), 'new package only; never overwrite judged inputs'
+assert run(['git','-C',str(U),'rev-parse','HEAD']).decode().strip()==PIN
+previous=E/'manifest.json'; m=json.loads(previous.read_text())
+assert m['file_count']==2807
+for x in m['files']:
+    p=R/x['path']; b=p.read_bytes();assert len(b)==x['bytes'] and sha(b)==x['sha256'],x['path']
+checkpoint=E/'checkpoint-before-sdk-reference-profile-manifest.json'
+assert not checkpoint.exists();checkpoint.write_bytes(previous.read_bytes())
+P.mkdir(parents=True)
+put('task.json',{'task':'DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE','status':'IN_PROGRESS','track':'T1','observed_at':NOW,
+ 'what':'Finite HOW for real source-pinned Python/TS SDK client behavior against separately identified synthetic subprocesses.',
+ 'where':str(P.relative_to(R)),'how':'Authenticate local source/lock inputs; select dependency artifacts and identity/capture/resource contract; freeze cases before technical review.',
+ 'dependencies':['g01/sdk-open-contracts/next-task.json','g01/sdk-open-contracts/acceptance-status.json'],
+ 'done':['source and lock SHA bound','acquisition proposal with exact artifacts','finite client assertions and known bad observations','containment/identity/observer/cleanup HOW','technical review and T1 checks','continuity updated'],
+ 'not_authorized':['SDK or compiler execution','download or installation','native public contract BUILD','reuse of exhausted CLI probes'],
+ 'review_budget':{'max_reviews':2,'max_grouped_repairs':1,'fresh_critic':True,'descendants':0},'functional_receipts':0})
+put('recovery.json',{'observed_at':NOW,'classification':'PROGRESS','decision':'RESUME_RECORDED_T1_ACTION',
+ 'previous_checkpoint':{'files':2807,'sha256':sha(previous.read_bytes()),'all_verified':True},
+ 'controller':str((E/'state.json').relative_to(R)),'.agent/state.json':'Different AUD0592 owner; read-only, not this program controller.',
+ 'shared_masters':'99/20/30/0190 peer dirty; rule5; changes in own handoff.',
+ 'last_unit':'SDK source R2 accepted, source only; no runtime credit.',
+ 'next_action_at_entry':'DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE',
+ 'SPEC0239':'Pending explicit T3, existing request unchanged; continuation is not approval.',
+ 'live_jobs':'No own live jobs recovered; no retry of old attempts.',
+ 'instruction_scope':['AGENTS.md','docs/07_agents/AGENTS.md','docs/08_runtime/agent_coordination.md'],
+ 'framework_pack':['session-recovery','spec-engine','verification-quality','testing-strategy','agent-orchestration'],
+ 'mode':'BROWNFIELD / NORMAL / SPEC / HOW / T1','confidence':'High for pinned bytes and pointer; dependency execution eligibility remains unqualified.'})
+
+# Read exact Git bytes as data. No SDK, pydantic, TypeScript or Codex code runs.
+roots=['sdk/python/src/openai_codex','sdk/typescript/src','sdk/python/pyproject.toml','sdk/python/uv.lock',
+       'sdk/python/_runtime_setup.py','sdk/typescript/package.json','sdk/typescript/tsconfig.json','sdk/typescript/tsup.config.ts','pnpm-lock.yaml']
+entries=run(['git','-C',str(U),'ls-tree','-rz',PIN,'--',*roots]).split(b'\0')
+sources=[]
+for entry in entries:
+    if not entry:continue
+    head,rawpath=entry.split(b'\t',1); mode,kind,oid=head.decode().split(); path=rawpath.decode()
+    assert kind=='blob' and mode in ['100644','100755']
+    b=run(['git','-C',str(U),'cat-file','blob',oid]);assert (U/path).read_bytes()==b,path
+    snapshot=P/'inputs'/path;snapshot.parent.mkdir(parents=True,exist_ok=True);snapshot.write_bytes(b)
+    sources.append({'path_git':path,'git_blob':oid,'mode':mode,'bytes':len(b),'sha256':sha(b),'snapshot':str(snapshot.relative_to(P))})
+put('source-inputs.json',{'pin':PIN,'inputs':sources,'count':len(sources),'physical_equals_Git':True,
+ 'scope':'Entire Python package source (22 files), all TS source (10 files), seven packaging/lock/config files; source identity, not published distribution authentication.'})
+
+py=Path('/usr/bin/python3.12'); node=Path(shutil.which('node')).resolve()
+probe=json.loads(run([str(py),'-I','-S','-c','import json,sys,platform,sysconfig;print(json.dumps({"version":sys.version,"implementation":sys.implementation.name,"machine":platform.machine(),"SOABI":sysconfig.get_config_var("SOABI"),"sys_path":sys.path,"isolated":sys.flags.isolated,"no_site":sys.flags.no_site}))']))
+node_version=run([str(node),'--version']).decode().strip()
+put('host-inputs.json',{'observed_at':NOW,'python':{**bind(py),'probe':probe},'node':{**bind(node),'version':node_version},
+ 'infra_candidates':[bind(Path(shutil.which(n)).resolve()) for n in ['bwrap','systemd-run']],
+ 'OS_release':bind(Path('/etc/os-release').resolve()),'disks_free_bytes':{p:shutil.disk_usage(p).free for p in ['/','/mnt/ia']},
+ 'qualification':'Executable file hashes and runtime metadata only. No containment admission or loaded-library closure qualified; no SDK/TypeScript import. Node24 is >=18 declared SDK runtime; Node22 project gates are unrelated and NOT_RUN.'})
+
+lock=tomllib.loads((U/'sdk/python/uv.lock').read_text());pk={x['name']:x for x in lock['package']}
+names=['pydantic','pydantic-core','packaging','annotated-types','typing-extensions','typing-inspection']
+artifacts=[]
+for name in names:
+    pkg=pk[name];selected=[x for x in pkg['wheels'] if ('py3-none-any.whl' in x['url'] if name!='pydantic-core' else 'cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl' in x['url'])]
+    assert len(selected)==1,(name,selected)
+    w=selected[0];artifacts.append({'name':name,'version':pkg['version'],'dependencies':[x['name'] for x in pkg.get('dependencies',[])],
+      'artifact_url':w['url'],'expected_sha256':w['hash'].removeprefix('sha256:'),'expected_bytes':w['size'],
+      'selection':'CPython3.12 Linuxx86_64 manylinux2_17' if name=='pydantic-core' else 'universal py3-none-any',
+      'status':'LOCK_SELECTED_NOT_ACQUIRED','origin':'Pinned upstream sdk/python/uv.lock, not online registry observation.'})
+assert set(d for x in artifacts for d in x['dependencies'])<=set(names)
+pnpm=(U/'pnpm-lock.yaml').read_text();mt=re.search(r'^  typescript@5\.9\.2:\n    resolution: \{integrity: ([^}]+)\}',pnpm,re.M);assert mt
+artifacts.append({'name':'typescript','version':'5.9.2','artifact_url':'https://registry.npmjs.org/typescript/-/typescript-5.9.2.tgz',
+ 'url_status':'Derived npm canonical registry URL, not fetched or asserted currently available.',
+ 'expected_integrity':mt.group(1),'origin':'Pinned upstream pnpm-lock.yaml package entry and SDK importer version.',
+ 'status':'LOCK_SELECTED_NOT_ACQUIRED','dependencies':[],'role':'Compile/transpile tool only; actual package.json dependency closure must be checked after authenticated acquisition.'})
+put('dependency-proposal.json',{'status':'PROPOSED_NO_ACQUISITION','artifacts':artifacts,'count':len(artifacts),
+ 'python_artifact_total_bytes':sum(x['expected_bytes'] for x in artifacts if 'expected_bytes' in x),
+ 'policy':['Never resolve latest or substitute a sdist/different wheel/version after 404/hash/tag failure.',
+ 'Acquisition is a separate registered task, HTTPS official files.pythonhosted.org or registry.npmjs.org only; no redirects to another authority.',
+ 'Per request timeout30s, max two acquisition attempts total per artifact including first; max8MiB each wheel, max32MiB TS tarball, max64MiB total acquired bytes, max256MiB extracted, max5000 entries total; preserve failed metadata; no implicit further attempt.',
+ 'No pip/npm/pnpm install, lifecycle scripts, build hooks, executables or imports during acquisition. Download only with stdlib HTTP and verify exact lock digest and Python size before ZIP/TAR metadata inspection.',
+ 'Reject traversal/absolute paths/symlinks/hardlinks/devices/duplicate names, zip bombs, .pth/startup hooks and unsupported wheel tags; inspect METADATA/WHEEL/RECORD/package.json as data.',
+ 'Verify package name/version/dependency closure, each RECORD digest and size (RECORD self-entry is the specified exception), extracted tree identity and wheel tags against actual interpreter/OS/libc. Python METADATA dependency markers must resolve to these six packages or stop.',
+ 'The npm lock supplies SHA512 integrity, not a SHA256: verify SHA512 raw tar bytes and record independent SHA256 after acquisition. TS tool manifest must have no extra unselected execution dependencies.',
+ 'Private cache under this task runtime only; no root source/lock/global environment changes. Acquisition success does not authorize an import or compile.'],
+ 'excluded_required_later':['openai-codex distributed wheel','openai-codex-cli-bin==0.153.4','npm distributed @openai/codex-sdk and platform Codex packages','typecheck dependencies and official tsup build'],
+ 'scope_explanation':'Source client with explicit synthetic executable overrides never resolves packaged CLI. This is an intentionally incomplete source reference profile, not a full SDK installation or distribution/provenance proof.'})
+
+put('execution-profile.json',{'status':'PROPOSED_REFERENCE_HOW_NOT_EXECUTED','profile':'SOURCE-SDK-CLIENT-LINUX-X64-v1',
+ 'claim_kind':'Real pinned SDK client code against synthetic stdio processes; no real Codex backend/provider, no native CVG implementation.',
+ 'identity':{'python_executable':'host-inputs.json#/python','node_executable':'host-inputs.json#/node','SDK_source':'source-inputs.json',
+ 'dependencies':'dependency-proposal.json; acquired raw artifacts + extracted file tree must be bound before execution',
+ 'config_driver_observer':'New concrete files must have bytes/SHA256 and first/last checks; no wildcard code identity or null receipt admitted.',
+ 'loaded_libraries':'Before admission record executable ELF/interpreter/stdlib/native shared-object roots and OS/libc identity; after run check actual mapped files. Unexpected writable/unknown code root invalidates observation.',
+ 'qualifier_mapping':'Do not encode a source tree digest as LOCAL_BINARY. Existing qualifier LOCAL_BINARY remains the actual executable SHA; SDK/deps/config/driver/observer are separately bound input identities. Before any comparison bind through supported schema or prepare a new reviewed contract; this HOW grants no receipt/schema extension.'},
+ 'python':{'argv':['/runtime/python','-I','-S','/profile/python-driver.py','--case','CASE_ID'],
+ 'path_policy':'Driver inserts fixed /profile/sdk-python then /profile/python-deps into sys.path; remaining stdlib roots enumerated in admission. No PYTHONPATH/user site/sitecustomize; no source patch or monkeypatch.',
+ 'SDK_configuration':{'launch_args_override':['/runtime/python','-I','-S','/profile/fixture-rpc.py','CASE_ID'],'cwd':'/work','experimental_api':True},
+ 'API_boundary':'CodexClient real request/router/reader/model code; AsyncCodexClient ordinary start cancellation and real goal cancel helper are identified internal SDK boundaries, not claims of full public API coverage.',
+ 'fixtures':'Explicit RPC transcripts in cases.json; synthetic peer may report a chosen version to test the client guard. Packet labels every such version as fabricated test input, never authenticated Codex metadata.',
+ 'uncovered':'Default binary resolution/distributed runtime/proxy, actual checkout schema command, full Pydantic API, full async goal startup daemon/cancel and stream state machine remain required future profiles.'},
+ 'typescript':{'compiler':'Lock-selected TypeScript5.9.2; root AST parser6.0.3 is not this toolchain.',
+ 'build_argv':['/runtime/node','/profile/transpile.mjs'],
+ 'build_contract':'Use actual TS5.9.2 transpileModule once on each of the ten byte-exact source files, ES2022/ESNext, remove type-only imports as compiler normally does; report diagnostics and emitted tree hashes; no upstream source edits, no custom AST transformation, no bundler/minifier.',
+ 'runtime_argv':['/runtime/node','--experimental-loader','/profile/extension-loader.mjs','/profile/ts-driver.mjs','--case','CASE_ID'],
+ 'loader_contract':'Exact allowlist only: resolve relative extensionless SDK specifiers to same-directory manifest-listed emitted .js; pass node: builtins; deny all other URL/package/absolute imports. Bind loader code/config and selftests before execution. Loader has no fetch or transformSource hook. Driver/tool imports are separately prebound file URLs; never arbitrary input paths.',
+ 'SDK_configuration':{'codexPathOverride':'/profile/fixture-cli','env':{'HOME':'/work/home','PATH':'/runtime'}},
+ 'fixture_executable':'Regular executable text script with #!/runtime/node, hash bound; accepts the SDK exec argv and stdin, produces exactly the selected JSONL and exit behavior. No shell or actual Codex binary.',
+ 'limits':'This custom source-transpile/loader profile is not the upstream tsup bundle, declaration generation, typecheck or distributed npm artifact. All those remain OPEN.'},
+ 'execution_stages':['ADMISSION identities/resources/containment positive+negative','BUILD_PRIVATE_DRIVERS with focused selftests, no SDK yet','FREEZE driver/observer/fixture/config and emitted outputs after eligible compiler run','RUN_PYTHON cases once serially','RUN_TS cases once serially','INDEPENDENT_ACCEPTANCE and cleanup'],
+ 'stop_policy':'No SDK import until admission and driver/observer qualification pass. No auto retry of timeout/ambiguous/failed case; preserve partial raw bytes and status. A changed driver or compiler requires new source identity and explicit bounded replan; no relabeling old observations.',
+ 'functional_receipts':0,'all_six_SDK_gaps':'OPEN'})
+
+put('containment-and-observer.json',{'status':'PROPOSED_NOT_ADMITTED','runtime_root':'/tmp/cvg-codex100-exec-20261017/sdk-reference-profile',
+ 'launch':'Fresh systemd --user transient service with --pipe --wait --collect, unique task/attempt label. Use the qualified bwrap candidate only after current namespace/resource tests; no fallback to uncontained execution.',
+ 'service_properties':{'MemoryMax':536870912,'TasksMax':32,'CPUQuota':'100%','RuntimeMaxSec':45,'KillMode':'control-group','TimeoutStopSec':3,'NoNewPrivileges':'yes'},
+ 'sandbox':'bwrap --unshare-all --new-session --die-with-parent --clearenv; read-only exact /profile, executable/stdlib/system-library mounts; empty tmpfs root, new /proc and minimal /dev; writable private /work only. No network interfaces/routes beyond fresh isolated loopback, no host sockets/repo/HOME/keys/config/cache mounted.',
+ 'env':{'HOME':'/work/home','TMPDIR':'/work/tmp','PATH':'/runtime','LANG':'C.UTF-8','LC_ALL':'C.UTF-8','TZ':'UTC','PYTHONDONTWRITEBYTECODE':'1'},
+ 'ambient_secrets':'Construct environment from allowlist, never copy host environment into service. API keys/tokens/proxies/SSH agent/DB URLs unavailable. SDK env-copy thus copies only sandbox env.',
+ 'rlimits':{'nofile':128,'fsize_bytes':8388608,'core_bytes':0},
+ 'capture_caps':{'stdout_bytes_per_case':262144,'stderr_bytes_per_case':65536,'wire_bytes_per_case':262144,'case_artifacts_bytes':2097152,'suite_bytes':67108864,'per_case_wall_seconds':30,'whole_suite_wall_seconds':1200,'auto_retries':0},
+ 'admission_tests':['Denied TCP/DNS/Unix host socket attempts with constant diagnostic code, no provider traffic.',
+ 'Synthetic host-home sentinel not readable; outside write denied; private write succeeds.',
+ 'Timeout and orphan synthetic process killed in claimed cgroup; memory/task caps applied and observer detects truncated output as invalid.',
+ 'Hash drift in source/deps/driver/emitted file and loader resolution outside allowlist rejected before importing SDK.'],
+ 'observer':{'location':'Host-side supervisor outside target cgroup; code is independent of SDK/fixture and identity bound before use.',
+ 'events':'Monotonic timestamps; case/attempt ID; raw stdout/stderr bytes in separate files; actual pipe data and sidecar wire ledger, framing offsets/directions; byte counts, digests, exit code/signal, PID/startticks/cgroup; structured API results/errors are a separate lane.',
+ 'transport':'Two bounded unmodified-byte relays capture both Python stdio directions (driver to peer and peer to driver); TS child input/output captured likewise. Relays do not parse/rewrite payloads before forwarding. Fixture control barrier/ACK uses separate inherited pipe/socketpair, never SDK stdout. Hash bind relay implementation and show known-bad corruption/late frame/missing capture is rejected.',
+ 'ordering':'No sleep as proof. Peer announces only receipt/output-write milestones; driver announces invocation/cancel/done. Observer confirms pipe bytes, process identity and exit independently. FIN/EOF, request write, SDK return, signal and wait/reap are different events.',
+ 'assertions':'Compare raw frames with selected source obligations plus separate API lane. UUIDs learned from captured initialize/request and reflected by synthetic peer; no uncontrolled frame normalization. Preserve full stdout and stderr even on error; no fabricated zero streams.',
+ 'negative_power':'A control observation with an omitted initialized notification, false terminal assumption, swapped reply ID, changed emitted code, or cancellation misreported as remote stop must be rejected by the respective assertion/admission predicate. These controls are NOT_RUN until actual driver implementation.'},
+ 'cleanup':'Supervisor terminates only its identity-bound service/processes, bounded TERM then KILL, waits/reaps all direct descendants or records independent cgroup populated=0 plus service exit. Record every timeout, signal, non-reaped child and escalation. Preserve input/capture/cache; do not delete peer files. Neither SDK.close nor child.killed nor Python cancellation proves cleanup.',
+ 'outcome':'PASS_CLIENT_OBSERVATION only when assertions and separate capture/cleanup completeness pass. Otherwise MISMATCH/INVALID_CAPTURE/INCONCLUSIVE/ADMISSION_FAILED. No official parity receipt is emitted by this profile.'})
+
+cases=[]
+def case(id,lang,contracts,boundary,input,action,expected,bad,cut):
+    cases.append({'id':id,'language':lang,'contracts':contracts,'boundary':boundary,'fixture_input':input,'action':action,
+      'expected_observation':expected,'known_bad_observation_to_reject':bad,'cutpoint':cut,'runtime_status':'NOT_RUN','receipt':None,'credit':'CLIENT_BEHAVIOR_ONLY_IF_OBSERVED'})
+init={'serverInfo':{'name':'synthetic-sdk-profile','version':'0.151.0'},'userAgent':'synthetic-sdk-profile/0.151.0'}
+case('SDKPY01','python',['PY06'],'CodexClient.initialize',{'initialize_result':init},'start, initialize, close',
+ 'Exactly request initialize with learned UUID followed by initialized notification without id or params; method initialize returns parsed metadata. No peer ACK for initialized.',
+ 'Wait for initialized ACK or omit initialized and still accept.','Observer sees initialized frame; driver returns; close and independent exit.')
+for id,version,result in [('SDKPY02','0.150.0','raises ValueError before guarded request'),('SDKPY03','0.151.0','writes guarded request'),('SDKPY04','0.0.0','raises ValueError because custom launch has no checkout capabilities')]:
+    case(id,'python',['PY05'],'CodexClient.request version guard',{'initialize_result':{'serverInfo':{'name':'synthetic','version':version}},'request':{'method':'turn/start','params':{'threadId':'t-synthetic','input':[],'toolOutput':[]}},'success_result':{}},
+     'Initialize; invoke request with response_model=models.InitializeResponse (generic request boundary); no real generated TurnStart claim.',result+'; capture shows initialized precedes guard. Synthetic version is not authentic runtime identity.',
+     'Claim guard passed from version text alone or send a rejected request.','After method call finishes/fails, close driver stdin and drain all raw frames before absence judgment.')
+case('SDKPY05','python',['PY05'],'CodexClient.request unset guard',{'initialize_result':{'serverInfo':{'name':'synthetic','version':'0.150.0'}},'request':{'method':'turn/start','params':{'threadId':'t-synthetic','input':[],'toolOutput':None}},'success_result':{}},
+ 'Initialize and generic request with response_model=models.InitializeResponse.',
+ 'Non-None guard is skipped for None; outgoing payload retains dictionary toolOutput:null. This does not prove a real server accepts it.',
+ 'Block None as though truthy field supplied; claim real backend acceptance.','Matching reply received; close/drain witness.')
+case('SDKPY06','python',['PY07'],'Default approval handler via real reader',{'initialize_result':init,'peer_requests':[{'id':'approve-command','method':'item/commandExecution/requestApproval','params':{}},{'id':'approve-file','method':'item/fileChange/requestApproval','params':{}},{'id':'other','method':'synthetic/unknown','params':{}}]},
+ 'Start/initialize unpatched CodexClient with default handler; peer sends requests serially and waits for matching replies.',
+ 'Replies echo IDs: command/file result.decision=accept; unknown result={}. No actual command/file operation exists.',
+ 'Treat SDK accept as institutional native approval or use it to authorize any write.','Peer confirms all three reply bytes; close and reaped child separately.')
+case('SDKPY07','python',['PY10'],'AsyncCodexClient._start_turn cancellation after request write',{'initialize_result':init,'barrier':'Peer holds turn/start reply until cancellation is observed on separate control pipe; then sends valid TurnStartResponse from hash-bound generated fixture.'},
+ 'Create ordinary async turn-start task; cancel only after observer has captured its request; release reply; barrier confirms late subscription cleanup callback has settled.',
+ 'Caller gets CancelledError; callback closes late returned subscription. No implicit turn/interrupt request in this branch. API completion alone does not prove child exit.',
+ 'Use goal cancellation path for ordinary turn, infer remote interruption, or judge no interrupt before late callback/drain.',
+ 'Late worker completion/subscription close independently signaled by driver after future callback; peer EOF then full drain. No arbitrary sleep.')
+case('SDKPY08','python',['PY14'],'CodexClient.cancel_goal_operation internal real helper',{'state':'Actual _GoalOperationState constructed with current turn A, thread t-synthetic; source methods initialize it, no monkeypatch.','pause_reply':{'error':{'code':-32603,'message':'synthetic pause failure'}},'interrupt_A_reply':{'error':{'code':-32600,'message':'expected active turn id B'}},'interrupt_B_reply':{'result':{}}},
+ 'Initialize real client and call real cancel_goal_operation(state); capture real pause/interrupt RPCs.',
+ 'Pause attempt status=paused despite error, then interrupt A, then one interrupt B iff the source parser extracts B from the exact message fixture; generated fixture spelling must be proven against _active_turn_id_from_error before execution.',
+ 'Pause failure prevents first interrupt, unlimited retries, or successful RPC implies remote stop.',
+ 'Helper returns and third captured request has matching reply; peer EOF/drain. Parser fixture qualification is required before SDK import.')
+case('SDKPY09','python',['PY14'],'Goal same-ID rollover',{'state':'Same real state current turn A.','pause_reply':{'result':'Generated valid ThreadGoalSetResponse frozen before admission'},'interrupt_A_reply':{'error':{'code':-32600,'message':'Exact source-parser spelling selecting A, frozen before admission'}}},
+ 'Call cancel_goal_operation(state) once; keep current A unchanged.',
+ 'Pause then one interrupt A; extracted same ID prevents retry, even if alternate state were different. No second interrupt before full drain.',
+ 'Retry A or fall back despite extracted same truthy ID.','Helper finishes; close/drain; no second interrupt judged over complete captured interval.')
+
+def ts(id,contracts,frames,action,expected,bad,exit=0):
+    case(id,'typescript',contracts,'Public Codex.startThread().run/runStreamed with explicit synthetic codexPathOverride',
+      {'JSONL':frames,'exit_code':exit,'stderr':'synthetic detail' if exit else ''},action,expected,bad,
+      'Capture full stdin/stdout/stderr; fixture waits for release if ordering requires; process exit+pipe EOF independently recorded. Generator close is a different milestone.')
+ts('SDKTS01',['TS10','TS11'],[], 'run("synthetic")','Empty EOF with exit0 returns items=[], finalResponse="", usage=null. Spawn argv contains exec --experimental-json; exact additional flags captured.','Assume EOF implies native terminal success.')
+ts('SDKTS02',['TS13'],['{broken'], 'runStreamed("synthetic") and consume','Throws parse Error with offending line and cause; finally cleanup observed separately.','Silently skip malformed line or call it validated event.')
+ts('SDKTS03',['TS13'],[''], 'Consume streamed events','Blank JSONL line is passed by readline and fails JSON.parse, rather than being silently dropped.','Treat blank line as ignorable framing; future actual Node readline observation is decisive.')
+ts('SDKTS04',['TS14'],[{'type':'thread.started','thread_id':'synth-thread'},{'type':'turn.completed','usage':{'input_tokens':1,'cached_input_tokens':0,'output_tokens':2}}],
+ 'Consume streamed iterator; inspect thread.id and event usage before caller handles event.','thread.id becomes synth-thread; usage.cache_write_input_tokens defaults to0 before yield.','Mutate after yield or overwrite present non-null cache-write value.')
+ts('SDKTS05',['TS15'],[{'type':'item.completed','item':{'id':'m','type':'agent_message','text':'first'}},{'type':'item.completed','item':{'id':'m','type':'agent_message','text':'last'}},{'type':'turn.completed','usage':{'input_tokens':1,'cached_input_tokens':0,'output_tokens':2}},{'type':'turn.completed','usage':{'input_tokens':3,'cached_input_tokens':0,'output_tokens':4}}],
+ 'run and retain result','Two items retained, including duplicate id; finalResponse last; last usage 3/0/4/cache-write0 wins.','Deduplicate items, concatenate text, or stop at first turn.completed.')
+ts('SDKTS06',['TS15'],[{'type':'error','message':'synthetic event error'}], 'run','error event ignored by aggregator; empty partial result on exit0. No native success claim.','Raise based on an absent aggregator error branch.')
+ts('SDKTS07',['TS15'],[{'type':'turn.failed','error':{'message':'synthetic failure'}}], 'run','Throws Error("synthetic failure"); generator finally executes; observe exit independently.','Return aggregate or assert finalizer implies reaped child.')
+ts('SDKTS08',['TS15'],[{'type':'turn.failed','error':None}], 'run','Breaks generator but falsey turnFailure yields partial aggregate; deliberately malformed runtime input outside static type.','Add schema validation or unconditional throw not in source.')
+ts('SDKTS09',['TS11','TS15'],[{'type':'item.completed','item':{'id':'m','type':'agent_message','text':'before exit'}}], 'run','Throws Codex Exec exited with code7 containing synthetic stderr; prior streamed events do not suppress process error.','Return successful aggregate after nonzero process exit.',7)
+case('SDKTS10','typescript',['TS12'],'AbortSignal delegated to real Node child_process.spawn',{'behavior':'Fixture holds stdout open, registers receipt milestone over control pipe; fresh AbortController; no JSONL needed.'},
+ 'Start runStreamed; after OS child-start witness abort controller; consume or catch once.',
+ 'Record actual AbortError/error/iterator result and raw evidence; source delegates signal, so Node-version-specific result must be observed, never hardcoded from source. Finally/child.killed do not prove exit; supervisor requires independent exit/reap.',
+ 'Mark cancelled as remote stopped or pass an absent cleanup witness.','Abort delivered then bounded supervisor completion/cgroup-empty; timeout is INCONCLUSIVE, never expected success.')
+put('cases.json',{'status':'FROZEN_CLIENT_ASSERTIONS_NOT_RUN','cases':cases,'count':len(cases),'all_receipts':None,
+ 'fixture_completion_gate':'Before executing SDK, build all concrete generated Python success/error/state fixtures and barrier plumbing as separately hash-bound private drivers; validate schema-required fields using pinned source schema/AST and parser literals as data. No placeholder may be used at runtime; any unresolved fixture stops that case before import.',
+ 'coverage':'Selected five Python source contracts and TS10–15 only; other scenarios and unselected branches remain explicit OPEN. No full API, official server or native parity coverage.'})
+allpy=json.loads((E/'g01/sdk-open-contracts/python-contracts.json').read_text())['rows']
+allts=json.loads((E/'g01/sdk-open-contracts/typescript/contracts.json').read_text())['contracts']
+put('coverage.json',{'source_contract_count':44,'rows':[{'source_contract':r['id'],'selected_case_ids':[c['id'] for c in cases if r['id'] in c['contracts']],
+ 'status':'SELECTED_PARTIAL_NOT_RUN' if any(r['id'] in c['contracts'] for c in cases) else 'OPEN_REQUIRED_FUTURE_PROFILE','whole_requirement_covered':False} for r in allpy+allts],
+ 'six_gaps':'OPEN','all_509_catalog_records':'Unchanged NOT_RUN/null; no receipt emitted.','distributed_and_platform_profiles':'Required later, not removed by source profile.'})
+put('quality-bar.json',{'frozen_at':NOW,'scope':'T1 HOW readiness only; runtime criteria are separate NOT_RUN',
+ 'criteria':[{'id':id,'required':True,'target':target,'evidence':ev} for id,target,ev in [
+ ('SDKHOW01','Pinned complete selected source and config bytes equal Git','source-inputs.json'),
+ ('SDKHOW02','Actual executable identities distinct from source/distribution/version','host-inputs.json; execution-profile.json'),
+ ('SDKHOW03','Exact finite dependencies/lock digests and acquisition stop policy','dependency-proposal.json'),
+ ('SDKHOW04','Both clients use real SDK code with explicit synthetic fixture limits','execution-profile.json; coverage.json'),
+ ('SDKHOW05','Finite assertions/cutpoints/known bad observations, no parity inflation','cases.json'),
+ ('SDKHOW06','No network/credential/root contamination; resource/identity admission before code','containment-and-observer.json'),
+ ('SDKHOW07','Independent raw transport/API/process capture and honest absence/cleanup','containment-and-observer.json'),
+ ('SDKHOW08','No SDK or compiler execution/install/old probe restart during T1','task.json; recovery.json; actual procedure provenance'),
+ ('SDKHOW09','Qualified technical review with fixed2/1 budget; no native authority inferred','independent review outputs; task.json'),
+ ('SDKHOW10','Links/format/hashes and old checkpoint/continuity preservation','verification.json; program checkpoint')]],
+ 'runtime_status':'NOT_RUN','functional_receipts':0})
+put('HOW.md','''# Perfil de referência dos clientes SDK — HOW proposto
+
+O próximo resultado útil é observar os clientes Python e TypeScript reais do pin
+`8d9f6466ff0294785d56f55b1fe363d132fe4133` diante de subprocessos sintéticos
+controlados. O perfil permite distinguir envio, resultado, EOF, cancelamento e
+saída do processo. A preparação T1 não executou os SDKs nem o compilador.
+
+Os contratos canônicos estão em [perfil](execution-profile.json),
+[dependências](dependency-proposal.json), [captura e contenção](containment-and-observer.json)
+e [casos](cases.json). A [cobertura](coverage.json) conserva os 44 contratos,
+incluindo todos os que este primeiro perfil ainda não exerce.
+
+## Identidade e fronteira
+
+O hash do ELF do intérprete identifica um executável; os hashes da fonte SDK,
+dependências, configuração, driver, loader e observador identificam os demais
+inputs. Uma versão informada pelo peer sintético é dado de teste. O cliente
+Python não é o binário Codex e a fixture não é seu app-server real.
+O TypeScript usará um perfil de transpile com TS5.9.2 e loader restrito,
+explicitamente distinto do bundle tsup publicado e de sua superfície de tipos.
+Essas distinções impedem transferir uma prova local para a distribuição oficial.
+
+## Ordem de execução e stops
+
+1. Adquirir apenas os sete artefatos exatos da proposta em cache privado,
+   conferir digests/metadata/closure e selar a árvore extraída. Não instalar.
+2. Preparar os drivers e fixtures concretos e conferir os pré-requisitos de
+   namespace/cgroup/loader/observador. Conferir os campos gerados e parser de
+   erro usados nas fixtures Python. Nenhum placeholder entra em execução.
+3. Congelar os arquivos novos e o argv/env/mounts; qualificar o compilador em
+   contenção antes de transpile. Selar o emit e conferir ausência de imports
+   externos não selecionados. Parar se houver dependência ou diagnóstico aberto.
+4. Executar cada caso uma vez, serialmente, com limite finito e sem retries.
+   Guardar todas as falhas e bytes parciais. Erro de admissão não vira skip.
+5. Conferir captura e limpeza por observador independente do SDK e da fixture,
+   revisar os resultados e só então aceitar observações do cliente no seu escopo.
+
+O gate de cada estágio é uma precondição verificável antes do seguinte. Este
+documento não registra que os estágios já ocorreram. As tarefas seguintes são
+reversíveis e locais sob o pedido integral, com claim e HOW concretos; qualquer
+novo contrato público continua sujeito ao gate próprio.
+
+## Significado dos resultados
+
+O aceite literal do handler Python permanece um fato do cliente, separado do
+approval institucional. EOF ou retorno parcial TypeScript não cria terminal
+nativo. Cancelamento, sinal e close não provam que não houve efeito ou que um
+descendente foi recolhido. Os recibos funcionais continuam zero.
+
+A SPEC0239 e seus oito anexos continuam aguardando a decisão T3 já solicitada;
+esta preparação não concede BUILD nativo nem substitui a qualificação dos
+owners de persistência. O catálogo 487+22 permanece inalterado. A referência
+com o Codex CLI real, wheel/npm distribuídos, outras plataformas, typecheck e
+todos os contratos ainda abertos permanecem obrigatórios no programa.
+''')
+put('REPORT.md','''# SDK — preparação do perfil de referência
+
+Estado inicial: T1 em preparação técnica. Nenhum SDK/compilador executado,
+artefato adquirido ou função nativa entregue nesta unidade.
+
+- [Task e limites](task.json), [recuperação](recovery.json), [barra](quality-bar.json).
+- [HOW](HOW.md), [perfil](execution-profile.json), [casos](cases.json), [cobertura](coverage.json).
+- [Fonte pinada](source-inputs.json), [executáveis observados](host-inputs.json),
+  [aquisição proposta](dependency-proposal.json), [contenção/captura](containment-and-observer.json).
+
+O resultado desta preparação será julgado como HOW, separado da elegibilidade
+de execução e das provas funcionais. A SPEC0239 permanece pendente de T3.
+''')
+put('procedure-provenance.json',{'observed_at':NOW,'kind':'EXECUTED_STATIC_PREPARATION','executed':['stdlib Python file/hash/JSON/TOML parsing','git rev-parse/ls-tree/cat-file','python3.12 -I -S stdlib metadata probe','node --version only','filesystem capacity and executable identity observations'],
+ 'not_executed':['SDK import','TypeScript compiler import/transpile','Codex/reference backend','network download','pip/npm/pnpm install','provider','PG/Docker','application gates'],
+ 'source_lookup_recovery':'Initial read mistakenly used src/openai_codex/_runtime_setup.py; failed FileNotFoundError before mutation, rg located sdk/python/_runtime_setup.py and correct snapshot was authenticated.',
+ 'functional_receipts':0})
+print(json.dumps({'package':str(P),'sources':len(sources),'cases':len(cases),'deps':len(artifacts),'old_files_verified':2807}))

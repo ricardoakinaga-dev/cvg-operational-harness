@@ -1,0 +1,72 @@
+{
+  "kind": "UNREVIEWED_SOURCE_FOLLOWUP_FOR_11_OPEN_ID_EDGES_NOT_NEW_EXECUTION",
+  "observed_at": "2026-10-18T08:34:03.055848+00:00",
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "citations": [
+    {
+      "path": "codex-rs/app-server-protocol/src/rpc.rs",
+      "file_sha256": "78c516097c55b665e375807be6dcdceba232805c9ae9fa48420b0a537f0df705",
+      "start_line": 13,
+      "end_line": 59,
+      "span_sha256": "3b5c3223f9bf59023be279bf23301162beef8843d8ba3ab890ad0c978ab452a4",
+      "span_utf8": "#[derive(\n    Debug, Clone, PartialEq, PartialOrd, Ord, Deserialize, Serialize, Hash, Eq, JsonSchema, TS,\n)]\n#[serde(untagged)]\npub enum RequestId {\n    String(String),\n    #[ts(type = \"number\")]\n    Integer(i64),\n}\n\nimpl fmt::Display for RequestId {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        match self {\n            Self::String(value) => f.write_str(value),\n            Self::Integer(value) => write!(f, \"{value}\"),\n        }\n    }\n}\n\npub type Result = serde_json::Value;\n\n/// Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n#[serde(untagged)]\npub enum JSONRPCMessage {\n    Request(JSONRPCRequest),\n    Notification(JSONRPCNotification),\n    Response(JSONRPCResponse),\n    Error(JSONRPCError),\n}\n\n/// A request that expects a response.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\npub struct JSONRPCRequest {\n    pub id: RequestId,\n    pub method: String,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub params: Option<serde_json::Value>,\n    /// Optional W3C Trace Context for distributed tracing.\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub trace: Option<W3cTraceContext>,\n}\n\n/// A notification which does not expect a response.\n#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n",
+      "limited_source_claim": "RequestId string/i64 anduntaggedRequest/Notification/Response/Error shapes are separate."
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/mod.rs",
+      "file_sha256": "4592c67d84ebd276133f47d29c63327de8d945b30a89b64a59868db30546caf1",
+      "start_line": 214,
+      "end_line": 252,
+      "span_sha256": "8f24825e7949635ec4b0cefa76284e20455fcbf31ef363bbd780f9cfe767cedc",
+      "span_utf8": "async fn forward_incoming_message(\n    transport_event_tx: &mpsc::Sender<TransportEvent>,\n    writer: &mpsc::Sender<QueuedOutgoingMessage>,\n    connection_id: ConnectionId,\n    payload: &str,\n) -> bool {\n    match serde_json::from_str::<JSONRPCMessage>(payload) {\n        Ok(message) => {\n            enqueue_incoming_message(transport_event_tx, writer, connection_id, message).await\n        }\n        Err(err) => {\n            error!(\"Failed to deserialize JSONRPCMessage: {err}\");\n            true\n        }\n    }\n}\n\nasync fn enqueue_incoming_message(\n    transport_event_tx: &mpsc::Sender<TransportEvent>,\n    writer: &mpsc::Sender<QueuedOutgoingMessage>,\n    connection_id: ConnectionId,\n    message: JSONRPCMessage,\n) -> bool {\n    let event = TransportEvent::IncomingMessage {\n        connection_id,\n        message,\n    };\n    match transport_event_tx.try_send(event) {\n        Ok(()) => true,\n        Err(mpsc::error::TrySendError::Closed(_)) => false,\n        Err(mpsc::error::TrySendError::Full(TransportEvent::IncomingMessage {\n            connection_id,\n            message: JSONRPCMessage::Request(request),\n        })) => {\n            let overload_error = OutgoingMessage::Error(OutgoingError {\n                id: request.id,\n                error: JSONRPCErrorError {\n                    code: OVERLOADED_ERROR_CODE,\n                    message: \"Server overloaded; retry later.\".to_string(),\n",
+      "limited_source_claim": "Transport attemptsJSONRPCMessage decode thenforwardsincomingmessage."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 110,
+      "end_line": 117,
+      "span_sha256": "22a1ccd9ff0dd89cfd4e441a669770d6b6308e3e7f86430bc3b0bf31f46df872",
+      "span_utf8": "const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);\n\nfn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {\n    reject_obsolete_request_fields(&request)?;\n\n    ClientRequest::try_from(request)\n        .map_err(|err| invalid_request(format!(\"Invalid request: {err}\")))\n}\n",
+      "limited_source_claim": "ClientRequest conversionfailure becomesinvalidrequest error."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 637,
+      "end_line": 696,
+      "span_sha256": "f73503bc45873ad4fb6c704c345d3ffa3ab70e2d34888cc58555b4d4f8cba437",
+      "span_utf8": "    pub(crate) async fn process_request(\n        self: &Arc<Self>,\n        connection_id: ConnectionId,\n        request: JSONRPCRequest,\n        transport: &AppServerTransport,\n        session: Arc<ConnectionSessionState>,\n    ) {\n        let request_method = request.method.as_str();\n        tracing::trace!(\n            ?connection_id,\n            request_id = ?request.id,\n            \"app-server request: {request_method}\"\n        );\n        let request_id = ConnectionRequestId {\n            connection_id,\n            request_id: request.id.clone(),\n        };\n        let request_span =\n            crate::app_server_tracing::request_span(&request, transport, connection_id, &session);\n        let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {\n            traceparent: trace.traceparent.clone(),\n            tracestate: trace.tracestate.clone(),\n        });\n        let request_context = RequestContext::new(\n            request_id.clone(),\n            request_method,\n            request_span,\n            request_trace,\n        );\n        Self::run_request_with_context(\n            Arc::clone(&self.outgoing),\n            request_context.clone(),\n            async {\n                let codex_request = deserialize_client_request(request);\n                let result = match codex_request {\n                    Ok(codex_request) => {\n                        // Websocket callers finalize outbound readiness in lib.rs after mirroring\n                        // session state into outbound state and sending initialize notifications to\n                        // this specific connection. Passing `None` avoids marking the connection\n                        // ready too early from inside the shared request handler.\n                        self.handle_client_request(\n                            request_id.clone(),\n                            codex_request,\n                            Arc::clone(&session),\n                            /*outbound_initialized*/ None,\n                            request_context.clone(),\n                        )\n                        .await\n                    }\n                    Err(error) => Err(error),\n                };\n                if let Err(error) = result {\n                    self.outgoing.send_error(request_id.clone(), error).await;\n                }\n            },\n        )\n        .await;\n    }\n\n    /// Handles a typed request path used by in-process embedders.\n",
+      "limited_source_claim": "process_request awaitsconversion/handlerandawaitssend_erroronfailure."
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "file_sha256": "4c26e4bc941a3f138c0f1193c7340ef1497e260f5056280d7881fb84ad007f42",
+      "start_line": 750,
+      "end_line": 774,
+      "span_sha256": "eb3cda76944e70ebf740766e1fdff76e3ecee332f7b4bbbd60babded44dc9559",
+      "span_utf8": "    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {\n        // Currently, we do not expect to receive any notifications from the\n        // client, so we just log them.\n        tracing::info!(\"<- notification: {:?}\", notification);\n    }\n\n    /// Handles typed notifications from in-process clients.\n    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {\n        // Currently, we do not expect to receive any typed notifications from\n        // in-process clients, so we just log them.\n        tracing::info!(\"<- typed notification: {:?}\", notification);\n    }\n\n    async fn run_request_with_context<F>(\n        outgoing: Arc<OutgoingMessageSender>,\n        request_context: RequestContext,\n        request_fut: F,\n    ) where\n        F: Future<Output = ()>,\n    {\n        outgoing\n            .register_request_context(request_context.clone())\n            .await;\n        request_fut.instrument(request_context.span()).await;\n    }\n",
+      "limited_source_claim": "Notifications arelogged; run_request_with_context awaitstheprovidedfuture."
+    },
+    {
+      "path": "codex-rs/app-server/src/outgoing_message.rs",
+      "file_sha256": "784e9f538eea4def26e33532206541bcecce0f94bea2c8fd2b7cb30463602617",
+      "start_line": 826,
+      "end_line": 890,
+      "span_sha256": "cb0a57a1e47085dca153becc6a9ec8c837a4a93f9cca06d2841c00789cd42da4",
+      "span_utf8": "    pub(crate) async fn send_error(\n        &self,\n        request_id: ConnectionRequestId,\n        error: impl Into<JSONRPCErrorError>,\n    ) {\n        let request_context = self.take_request_context(&request_id).await;\n        self.send_error_inner(request_context, request_id, error.into())\n            .await;\n    }\n\n    pub(crate) async fn send_result<T, E>(\n        &self,\n        request_id: ConnectionRequestId,\n        result: std::result::Result<T, E>,\n    ) where\n        T: Into<ClientResponsePayload>,\n        E: Into<JSONRPCErrorError>,\n    {\n        match result {\n            Ok(response) => {\n                self.send_response(request_id, response).await;\n            }\n            Err(error) => self.send_error(request_id, error).await,\n        }\n    }\n\n    async fn send_error_inner(\n        &self,\n        request_context: Option<RequestContext>,\n        request_id: ConnectionRequestId,\n        error: JSONRPCErrorError,\n    ) {\n        let outgoing_message = OutgoingMessage::Error(OutgoingError {\n            id: request_id.request_id,\n            error,\n        });\n        self.send_outgoing_message_to_connection(\n            request_context,\n            request_id.connection_id,\n            outgoing_message,\n            \"error\",\n        )\n        .await;\n    }\n\n    async fn send_outgoing_message_to_connection(\n        &self,\n        request_context: Option<RequestContext>,\n        connection_id: ConnectionId,\n        message: OutgoingMessage,\n        message_kind: &'static str,\n    ) {\n        let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {\n            connection_id,\n            message,\n            write_complete_tx: None,\n        });\n        let send_result = if let Some(request_context) = request_context {\n            send_fut.instrument(request_context.span()).await\n        } else {\n            send_fut.await\n        };\n\n        if let Err(err) = send_result {\n            warn!(\"failed to send {message_kind} to client: {err:?}\");\n",
+      "limited_source_claim": "Error routes through outgoingconnection send await; outgoing FIFO/writer needs closurebeforeusingasanchor."
+    }
+  ],
+  "hypothesis": "An unknownsyntheticmethod withrawedgeID couldisolate IDdecodeversusClientRequestconversion becausemethoderrorpathisawaitedbeforeordinaryasyncdispatch. A typedknownunknown-method marker may anchoroutputif outgoingFIFOandnotification/drop paths areproven.",
+  "remaining_recon": [
+    "Trace outgoingreceiver/writer ordering, transport fallthrough and decodererror branches; no assumedfence.",
+    "Retain own-write lowerbounds and same-response completion evidence; preserveall23cases and11edgesOPEN.",
+    "A noresponse result cannot byitselfproveglobalgrammarrejection; reportonlyclosed branch/fixture evidence."
+  ],
+  "state": "PROPOSED_NOT_REVIEWED_NOT_EXECUTED_NOT_AN_APPROVED_ORACLE",
+  "not_current_HOW_input": true,
+  "current_source_positive_lane": "12observed;all11edgesstillOPEN",
+  "budget_note": "Currentunit1runtime/2HOWreviews/1reworkspent. No newexecutionunlessseparateownedcontract/HOW/review; oldunitsnotrerun.",
+  "functional_receipts": 0
+}

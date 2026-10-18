@@ -1,0 +1,180 @@
+# id | RPC method selectors | slash variants | root CLI variants | config keys | core handler names | seed function names | proposed oracle axes
+01-01|turn/start,item/tool/call,item/started,item/completed|Model|Exec|tools|DynamicToolHandler|run_turn,run_sampling_request|model decision;tool dispatch;tool result reinjection;terminal response
+01-02|turn/started,turn/completed,thread/status/changed,error|||orchestrator||run_turn|turn started;streaming;completed;failed;interrupted;causal terminal event
+01-03|thread/goal/*,thread/tokenUsage/updated|||goals,tool_output_token_limit,model_context_window||run_turn|token budget;cost budget;call budget;deadline;accounting attribution;exhaustion before effect
+01-04|turn/start,turn/steer,thread/resume|||history,experimental_thread_store||run_turn,run_hooks_and_record_inputs|checkpoint before tool;interrupted dispatch;resume without duplicate effect;journal causal order
+01-05|turn/interrupt,turn/completed,serverRequest/resolved||Exec,Resume|||drain_in_flight|cancel before dispatch;cancel during stream;pause;terminal cause;cleanup
+01-06|item/tool/call,item/started,item/completed|||tools,orchestrator|DynamicToolHandler|built_tools,drain_in_flight|parallel tool eligibility;exclusive tool;output ordering;cancellation fanout;shared budget
+01-07|environment/*,thread/environment/*,command/exec,process/spawn||Exec,ExecServer|||run_turn|local host;external executor host;provider routing;host ownership;host disconnect
+01-08|error,turn/completed,item/completed|||otel||try_run_sampling_request|causal failure chain;partial output;missing evidence;sink failure;no fabricated success
+02-01|thread/start,thread/read|New||experimental_thread_store,history||record_thread_metadata|new thread;empty thread;metadata persistence;thread identity;open existing thread
+02-02|thread/resume,thread/loaded/list|Resume|Resume|experimental_thread_store||resume_thread_with_preparation|same process resume;fresh process resume;missing thread;history mode;runtime compatibility
+02-03|thread/fork|Fork|Fork|history||prepare_fork|fork before/after turn;parent edge;full history;partial lineage;independent new turns
+02-04|thread/list,thread/search*,thread/turns/list,thread/items/*,thread/timeline/list|||history||search_threads,list_turns,list_items|filter;sort;cursor pagination;item window;search occurrence;missing or stale cursor
+02-05|thread/name/set,thread/metadata/update,thread/section/move,threadSection/*,thread/readState/update|Rename||history||list_thread_sections,move_thread_to_section|title;metadata patch;section movement;read-state updates;unsupported backend
+02-06|thread/attachment/*,thread/attachmentOwner/list,thread/attachment/updated|||||add_thread_attachment,list_thread_attachments|add/list/remove;owner identity;copy between threads;missing attachment;cross-owner rejection
+02-07|thread/archive,thread/unarchive,thread/delete,thread/revert,thread/archived,thread/deleted,thread/unarchived,thread/reverted|Archive,Delete|Archive,Delete,Unarchive|||archive_threads,delete_threads,revert_thread|archive/unarchive;delete;revert;already deleted;partial batch failure;retained references
+02-08|externalAgentConfig/import*,rollout/compress|Export,Import|MigrateRollouts|history,experimental_thread_store||resume_thread_with_preparation|legacy import;export;compressed rollout;version mismatch;partial migration;recovery
+03-01|turn/start,thread/inject_items|||instructions,developer_instructions,include_environment_context||for_prompt,record_annotated_items|instruction origin;history origin;context assembly;source ordering;server/client injection
+03-02||Init||instructions,project_doc_fallback_filenames,project_doc_max_bytes,project_root_markers||record_items|AGENTS scope;override precedence;fallback names;byte cap;symlink/root limits
+03-03|turn/steer,thread/inject_items|||include_environment_context,include_collaboration_mode_instructions||record_retained_context,update_world_state|incremental context;world-state revisions;reinjection;retained context;duplicate prevention
+03-04|thread/compact/start,thread/compacted|Compact,Recap||compact_prompt,model_auto_compact_token_limit,model_post_turn_compact_threshold_percent||replace_compacted,latest_compaction|manual compact;pre-sampling compact;post-turn compact;failed compaction;retained intent
+03-05|item/tool/call,item/completed|||tool_output_token_limit||record_items,retained_context|tool output retention;truncation reference;user intent;replay origin;reasoning removal
+03-06|thread/tokenUsage/updated|||model_context_window,model_auto_compact_token_limit_scope||estimate_token_count,update_token_info|actual usage;estimated context;image budget;remaining window;compaction threshold
+03-07|thread/memoryMode/set,memory/status,memory/reset|Memories,MemoryDrop||memories||record_retained_context|memory opt-in/out;generation mode;learned note;reset;forbidden source retention
+03-08|memory/status,memory/reset|Memories,MemoryUpdate||memories,history||review_items_with_sources|query;history import;retention;forget;source provenance;access boundary
+04-01|model/list,modelProvider/capabilities/read|Model||model_catalog_json,model_provider,model_providers|||model identities;capabilities;catalog refresh;provider unsupported;effective model limits
+04-02|model/list,turn/settings/update|Model||model,model_reasoning_effort,service_tier|||model selection;effort;dynamic service tiers;unsupported tier;account gating
+04-03|turn/start,item/agentMessage/delta,item/completed|Model||model_provider,model_providers|||SSE chunks;WebSocket frames;stream order;disconnect;terminal completion;backpressure
+04-04|turn/start||Exec|model_provider,model_providers|||output schema;valid structured result;invalid result;schema incompatibility;final response boundary
+04-05|model/rerouted,modelProvider/authRecoveryStarted,modelProvider/authRecoveryCompleted|||model_provider,model_providers|||retryable failure;exhausted retries;reroute;timeout;partial stream recovery
+04-06|thread/tokenUsage/updated,account/usage/read|||model_provider,otel|||input/output/cached tokens;cost;per-turn attribution;missing usage;double accounting
+04-07|account/login/start,account/read,modelProvider/capabilities/read||Login|model_provider,openai_base_url,forced_login_method|||OpenAI provider;permitted credential source;account state;unauthorized;logout/revocation
+04-08|modelProvider/capabilities/read||Exec|oss_provider,model_providers|||local provider;OSS provider;declared Bedrock provider;capability absent;provider identity isolation
+04-09|modelProvider/authRecovery*,account/gatewayOAuth/*|||model_providers,chatgpt_base_url|||proxy routing;custom TLS;auth refresh;recovery denial;workspace routing;retry grant
+05-01|fs/readFile,fs/readDirectory||||||file read;line/byte range;missing file;limit;symlink boundary;encoding
+05-02|fs/writeFile,fs/createDirectory,fs/remove,fs/copy|||||apply_patch,apply_hunks_to_files|create;write;copy;remove;parent creation;partial effect reporting
+05-03|item/fileChange/patchUpdated,item/fileChange/outputDelta||Apply||ApplyPatchHandler|apply_patch_with_options,apply_hunks_with_options|multi-file patch;move;partial failure;committed delta;atomicity boundary;conflict
+05-04|fuzzyFileSearch,fuzzyFileSearch/session*|Mention|||||glob;grep;fuzzy result;streaming search;cancel;path limits
+05-05|fs/getMetadata,fs/readDirectory,fs/watch,fs/unwatch,fs/changed||||||metadata;directory listing;watch ownership;unwatch;event overflow;disconnect
+05-06|item/fileChange/patchUpdated||Apply||ApplyPatchHandler|changes,is_exact|base/preview;changed paths;preimage mismatch;untracked file;inexact delta
+05-07|command/exec/outputDelta,item/fileChange/outputDelta|||tool_output_token_limit||read_optional_file_text_for_delta|cap output;spill artifact;read by reference;truncated bytes;missing artifact
+05-08|fs/writeFile,fs/remove,fs/copy||||ApplyPatchHandler|ensure_not_directory,remove_failure_was_side_effect_free|symlink escape;root escape;directory conflict;write failure;partial move delta
+06-01|command/exec,process/spawn||Sandbox|approval_policy,shell_environment_policy|ExecCommandHandler||policy before spawn;sandbox profile;cwd/env;spawn denied;process identity
+06-02|command/exec,process/spawn||Exec|experimental_use_unified_exec_tool|ExecCommandHandler||PTY;plain stdio;TTY detection;terminal dimensions;platform behavior
+06-03|command/exec/outputDelta,process/outputDelta|||background_terminal_max_timeout|ExecCommandHandler,WriteStdinHandler|clamp_yield_time,generate_chunk_id|initial yield;poll;chunk ordering;no output yet;process still live
+06-04|command/exec/write,command/exec/resize,process/writeStdin,process/resizePty||||WriteStdinHandler||stdin write;stdin close;PTY resize;invalid process;closed stream
+06-05|command/exec/terminate,process/kill,process/exited|Stop||background_terminal_max_timeout|WriteStdinHandler||deadline;terminate;kill;already exited;causal cleanup;stdio end
+06-06|thread/backgroundTerminals/*|Ps,Stop||background_terminal_max_timeout|ExecCommandHandler||multiple jobs;thread ownership;process reuse;list;cleanup one versus all
+06-07|command/exec,process/spawn|||allow_login_shell,shell_environment_policy|ExecCommandHandler||allowed env;blocked env;login shell;snapshot identity;platform shell selection
+06-08|command/exec/outputDelta,process/outputDelta,process/exited|||tool_output_token_limit|WriteStdinHandler|format_output_omission_marker,resolve_max_tokens|stdout cap;stderr cap;chunk marker;exit code;cleanup after uncertain effect
+07-01|item/commandExecution/requestApproval,permissionProfile/list||Execpolicy|permissions,approval_policy||run_attempt,run|command rules;network rule;unknown command;deny/allow precedence;approval route
+07-02|permissionProfile/list,item/permissions/requestApproval|Permissions||permissions,default_permissions,sandbox_workspace_write||run_attempt|filesystem roots;carveout;profile selection;inheritance;denied path
+07-03|item/commandExecution/requestApproval,item/fileChange/requestApproval,item/permissions/requestApproval,serverRequest/resolved|Permissions,TestApproval||approval_policy|RequestPermissionsHandler|run|bound request;approval ID;grant scope;duplicate resolution;late response;denial
+07-04|item/permissions/requestApproval,item/commandExecution/requestApproval|||approval_policy||run_attempt|retry after deny;expanded authority;stale approval;fingerprint change;single-use grant
+07-05|item/autoApprovalReview/*,autoApprovalReview/strictReviewRequired,thread/approveGuardianDeniedAction|AutoReview||auto_review,approvals_reviewer||run|automatic review;strict fallback;denied action retry;circuit breaker;review errors
+07-06|||Sandbox|sandbox_mode,permissions||sandbox_outcome_from_tool_error|Linux isolation;allowed root;network confinement;escape attempt;runtime proof
+07-07|||Sandbox|sandbox_mode,permissions||sandbox_outcome_from_tool_error|macOS isolation;seatbelt policy;filesystem confinement;network confinement;runtime proof
+07-08|windowsSandbox/setupStart,windowsSandbox/readiness,windowsSandbox/setupCompleted|ElevateSandbox|Sandbox|windows,permissions||sandbox_outcome_from_tool_error|Windows readiness;setup;local/remote mode;identity args;elevation;partial persistence failure
+07-09|||Sandbox,Exec|sandbox_mode,approval_policy||build_denial_reason_from_output|bypass flags;host limits;inherited ceiling;CVG governed divergence;no implicit grant
+08-01|initialize,initialized||AppServer||||initialize capabilities;experimental API;notification handshake;duplicate initialization;schema version
+08-02|error||AppServer||||request IDs;error codes;legacy aliases;null result;unknown method;invalid params
+08-03|thread/start,turn/start,fs/readFile||AppServer||||client request serialization;params defaults;response;causal errors;all source method families retained
+08-04|item/commandExecution/requestApproval,item/tool/requestUserInput,item/tool/call,serverRequest/resolved||AppServer||||server request;client response;request correlation;timeout;duplicate response;revocation
+08-05|thread/started,turn/started,turn/completed,item/*||AppServer||||notification direction;thread/turn/item identity;ordering;late/deduplicated event;raw events
+08-06|||AppServer,StdioToUds,TcpTunnel|model_providers|||stdio framing;UDS;WebSocket;compression;invalid frame;socket auth
+08-07|error||AppServer||||backpressure;shutdown;disconnect;reconnect;inflight responses;queue loss
+08-08|account/read,remoteControl/client/revoke||AppServer|cli_auth_credentials_store|||connection auth;credential reference;revocation;cross-workspace rejection;reconnect auth
+09-01|thread/start,thread/resume,turn/start||Exec|model|||TypeScript Codex/Thread API;Python sync/async API;constructor options;public types;language-specific errors
+09-02|thread/start,thread/resume,turn/start,item/agentMessage/delta||Exec,Resume||||start;resume;run;runStreamed;terminal result;process lifecycle
+09-03|thread/started,turn/started,turn/completed,item/*,thread/tokenUsage/updated||Exec||||item union;event union;usage;unknown event;failed turn;wire/language naming
+09-04|turn/start||Exec||||text input;image input;input elements;output schema;attachment ownership;invalid prompt
+09-05|turn/interrupt,error||Exec||||AbortSignal;Python cancel;stream consumer cancel;transport error;cleanup;retry rules
+09-06|thread/resume,thread/fork,review/start||Exec,Resume,Fork,Review||||headless exec;resume;fork;review;stdin prompt;session selection
+09-07|turn/completed,error||Exec||||JSONL events;final output file;stdin EOF;exit status;stderr;partial output
+09-08|thread/start||Exec|profile,profiles|||ephemeral thread;explicit config;rule path;cwd;session persistence;override precedence
+10-01|||Exec,Login,AppServer,RemoteControl,Completion||||CLI root/nested commands;aliases;flags;manual adapters;Windows/arg0;effective parser grammar
+10-02|config/read,config/value/write,config/batchWrite|Config||profile,profiles,projects|||layer precedence;profile selection;project override;config write;invalid value;reload
+10-03|configRequirements/read,permissionProfile/list|DebugConfig||default_permissions,permissions|||managed requirements;permission sources;policy precedence;constraint violation;locked setting
+10-04|config/read|Config||*|||all103keys;nested schema;defaults;unions;nullable versus absent;unknown key
+10-05|config/read,config/batchWrite,config/mcpServer/reload|Config||profile,profiles|||strict parse;default;invalid layer;reload;atomic config batch;fallback
+10-06|experimentalFeature/list,experimentalFeature/enablement/set|Experimental|Features|features|||stable;experimental;development;deprecated;removed;feature dependency
+10-07|server/diagnostics|DebugConfig|Doctor,Debug,Completion||||doctor;models diagnostics;prompt input;trace reduction;completion shells;exit codes
+10-08|||Update|check_for_update_on_startup|||installed identity;version status;update artifact;platform packaging;rollback/recovery
+11-01|skills/list,plugin/skill/read|Skills||skills||is_skill_prompt_fragment|SKILL manifest;frontmatter;aliases;instruction fragment;invalid metadata;path limits
+11-02|skills/list,skills/changed,plugin/list|Skills||skills,plugins|||progressive load;catalog roots;shadowing;lazy body;generation refresh;source provenance
+11-03|plugin/install,plugin/uninstall,plugin/reconcile,plugin/read,skills/config/write|Skills|Plugin|skills,plugins|||list/read;install;uninstall;reconcile;invalid package;requested effect approval
+11-04|marketplace/*,plugin/list,plugin/search|Plugins|Plugin|marketplaces|||local marketplace;remote marketplace;upgrade;package validation;offline errors
+11-05|plugin/share/*|||plugins|||save/share;targets;list;checkout;delete/revoke;unauthorized share
+11-06|plugin/install|||plugins|RequestPluginInstallHandler,ListAvailablePluginsToInstallHandler||dependency discovery;installation request;approval;declined request;dependency unavailable
+11-07|item/tool/call|||skills,plugins|ExtensionToolAdapter||contributor registration;world state;catalog generation;source tools;direct handles
+11-08|item/tool/call,item/tool/requestUserInput|||tools,plugins|DynamicToolHandler,ToolSearchHandler||dynamic schema;discovery;metadata versus call preparation;callback;generation mismatch
+12-01|hooks/list|Hooks||hooks||warnings,required_load_errors|hook roots;list;configuration;required load failure;disabled hook
+12-02|hook/started,hook/completed|||hooks||event_name_label,preview_session_start,preview_stop,preview_interrupt|session/start/end;tool pre/post;permission;prompt;compact;stop/interrupt;scope
+12-03|hook/started,hook/completed|||hooks||handler_type,execution_mode,can_apply_control_effects|handler type;command shell;input/output protocol;control effects;malformed output
+12-04|hooks/list|||hooks||required_load_errors|trust source;fingerprint;content change;required hook;blocked untrusted handler
+12-05|hook/started,hook/completed|||hooks||execution_mode|async handler;concurrency cap;pending result;ownership;control-effect eligibility
+12-06|hook/completed|||hooks||max_permission_request_timeout,run_interrupt|timeout;cancel;interrupt;cleanup;partial handler output;causal error
+12-07|hook/started,hook/completed|||hooks||run_session_start,run_pre_tool_use,run_permission_request,run_post_tool_use,run_pre_compact,run_post_compact,run_user_prompt_submit,run_stop,run_session_end|lifecycle event ordering;turn/tool/session correlation;pre-effect veto;post-effect evidence
+12-08|hook/started,hook/completed|||hooks||run_pre_tool_use,can_apply_control_effects|Codex hook bridge;CVG authority intersection;hook control response;no grant escalation
+13-01|mcpServerStatus/list,config/mcpServer/reload|Mcp|Mcp|mcp_servers|||stdio MCP;HTTP MCP;transport selection;server startup;disconnect;hosted auth
+13-02|mcpServer/oauth/login,mcpServer/oauthLogin/completed,config/mcpServer/reload,mcpServerStatus/list|Mcp|Mcp|mcp_oauth_credentials_store,mcp_oauth_callback_url|||OAuth flow;login cancel;reload;status;expired token;server-specific identity
+13-03|mcpServer/tool/call,mcpServer/resource/read|Mcp|Mcp|mcp_servers|ListMcpResourcesHandler,ListMcpResourceTemplatesHandler,ReadMcpResourceHandler|tool_catalog_cache|tools;resources;resource templates;prompts;input/output schema;external runtime unknown
+13-04|item/mcpToolCall/progress,mcpServer/event/stream/*|||mcp_servers|||progress;event subscription;cancel;timeout;tool error;stream closure
+13-05|mcpServer/elicitation/request,item/tool/requestUserInput|||mcp_servers|RequestUserInputHandler||elicitation request;response IDs;decline/cancel;late input;authority boundary
+13-06|app/read,app/list,app/installed,app/list/updated|Apps||apps||codex_apps_tools_cache|app read/list;installed state;suggestions;capabilities;account restrictions
+13-07|app/read,app/list|||apps|||widget metadata;resource URI;display mode;untrusted content;source ownership
+13-08|mcpServer/tool/call|||mcp_servers|ToolSearchHandler,DynamicToolHandler||MCP server tools;deferred discovery;metadata schema;call-time exposure;generation mismatch
+14-01||||agents|SpawnAgentHandler,SpawnAgentHandlerV2|prepare_thread_spawn,prepare_agent_metadata|spawn;role/profile;model;thread identity;depth cap;capacity
+14-02||||agents|SpawnAgentHandler,SpawnAgentHandlerV2|prepare_thread_spawn|full history fork;separate context;parent edge;environment inheritance;private input
+14-03||||agents|SendInputHandler,SendMessageHandlerV2|send_input,send_inter_agent_communication|send;steer;mailbox;message board;capacity check;message source
+14-04||Agents||agents|WaitAgentHandler,WaitAgentHandlerV2|list_agents,get_status,maybe_start_completion_watcher|wait;status;terminal notification;timeout;unknown agent;fresh state
+14-05||||agents|ResumeAgentHandler,CloseAgentHandler|interrupt_agent|resume;close;descendant shutdown;already closed;ownership;terminal status
+14-06||||agents,orchestrator|SpawnAgentHandler,SpawnAgentHandlerV2|thread_spawn_depth|aggregate token budget;depth;capacity;child accounting;parent lifetime
+14-07||||agents|WaitAgentHandler|emit_sub_agent_activity,maybe_start_completion_watcher|parent/child notification;completion watcher;correlation;duplicate terminal notice
+14-08||||agents,permissions|SpawnAgentHandler|inherited_environments_for_source,inherited_exec_policy_for_source,persist_thread_spawn_edge_for_source|grant intersection;tenant identity;source authority;environment inheritance;spawn lineage
+15-01|thread/goal/set,thread/goal/get,thread/goal/clear|Goal||goals|||create/read/update/stop;goal status;objective update;invalid goal;single active goal
+15-02|thread/goal/set,thread/goal/updated,thread/tokenUsage/updated|Goal||goals|||token budget;cost/accounting;remaining budget;exhaustion;goal versus session usage
+15-03|turn/plan/updated,item/plan/delta|Plan||plan_mode_reasoning_effort|PlanHandler||plan steps;statuses;revision;user review;mode switch;progress stream
+15-04|thread/queue/*,thread/queue/changed||Queue|orchestrator|||queue add/list/update/delete;reorder;start;pending input;causal delivery
+15-05|turn/steer,turn/interrupt|||orchestrator|InterruptAgentHandler||steering during turn;interrupt;queue interaction;draft preservation;race with completion
+15-06|item/tool/requestUserInput||||RequestUserInputHandler,RequestUserInputAsyncHandler,SendMessageToUserAsyncHandler||sync input;async input;response arrival;pending options;cancel;no premature dependent effect
+15-07|thread/backgroundTerminals/*|Ps,Stop||background_terminal_max_timeout|ExecCommandHandler,WriteStdinHandler||background job;attach;stop;respawn;ownership;output reference
+15-08|thread/fork,thread/start|Side,Btw||agents|||ephemeral side fork;parent context;return to main;review guard;pending start;side command availability
+16-01|project/*|Worktree||projects||create,list,bind_thread|task worktree;project default branch;existing managed checkout;thread binding;cleanup
+16-02|thread/settings/update,environment/*|Cd,Pwd||projects||repository_root,is_safe_worktree_cwd|multiple roots;cwd;add-dir;relative path;unsafe root;host environment
+16-03|gitDiffToRemote,turn/diff/updated|Diff|Apply|||managed_checkout|working diff;remote/base diff;untracked files;repository unavailable;path scope
+16-04|item/fileChange/patchUpdated|||ghost_snapshot||owner|change attribution;thread owner;external changes;preimage identity;diff provenance
+16-05|review/start|Review|Review|review_model|||local review;headless review;review target;result;cancel;read-only constraints
+16-06|review/start,turn/diff/updated||Apply|||managed_checkout|reviewed result;apply target;changed base;conflict;partial application;approval
+16-07|thread/revert,thread/reverted|||ghost_snapshot||remove,is_safe_worktree_cwd|file rewind;conversation revert;missing snapshot;external modification;safe worktree removal
+16-08|thread/fork,environment/*|App||desktop|||cross-environment copy;handoff;workspace identity;payload integrity;remote host disconnect
+17-01||Model,Presets,Permissions,Goal,Quit,Exit|||||popup order;exact typed lookup;aliases;busy/side guards;inline args;history and draft
+17-02|fuzzyFileSearch,skills/list|Mention|||||mentions;file picker;skill/app binding;paste burst;attachments;element offsets
+17-03||Raw,Tui|||||raw scrollback;inline mode;fullscreen mode;selection;next-launch setting;terminal restoration
+17-04||Keymap,Vim,Copy||tui,disable_paste_burst|||context keymap;default/override;leader/chord;Vim;clipboard;platform modifier
+17-05||Status,Title,Statusline,Theme||tui|||status refresh;terminal title;statusline elements;syntax theme;preference persistence
+17-06||Export,Copy,Recap|||||export destination;copy whole/selection;recap;stream in progress;error/cancel;source formatting
+17-07||Agents,MultiAgents,Side,Btw||agents|||subagent selection;agent command center;side panes;thread switch;parent-owned input
+17-08||Pets||tui|||pet choice;animation;hide;reduced motion;terminal state;asset distribution
+17-09||Raw,Copy||tui|||accessibility;draft under stream;selection ownership;focus;screen-reader behavior;terminal resize
+18-01||Daemon|AppServer||||daemon start/status/stop/install;PID;restart;version;stale socket;service manager
+18-02|thread/resume||AppServer,RemoteControl||||proxy;attach;shared session;read/write roles;disconnect;message ownership
+18-03|remoteControl/*||RemoteControl||||enable/disable;pairing;client list;revoke;manual code;foreground/daemon
+18-04|environment/*||ExecServer||||exec-server handshake;capability roots;wire errors;deferred HTTP/audit responses;executor/controller directions
+18-05|command/exec,process/spawn,fs/readFile||ExecServer||||remote files;remote process;stdin/resize;ownership;environment routing;network denial
+18-06|environment/status,thread/environment/*||ExecServer,RemoteControl||||disconnect;reconnect;host identity;inflight operation;stale capability;error cause
+18-07|||Cloud|cloud|||cloud task list/create/status;diff;apply;cancel;account/auth boundary
+18-08||App,Ide|App|desktop|||IDE context;desktop handoff;gateway;session identity;unsupported platform
+19-01|turn/start|||tools|ViewImageHandler|prepare_image,prepare_message_content|local image;remote image;attachment;unsupported format;source provenance
+19-02|turn/start|||model_context_window,model_providers|ViewImageHandler|resize_image,unified_image_budget_enabled|image dimensions;detail;resize;token budget;data URL;provider capability
+19-03||||tools|||image generation input;edit references;transparent background;output artifact;cancel/provider failure;CVG effect grant
+19-04|thread/realtime/listVoices,thread/realtime/appendAudio,thread/realtime/appendSpeech|Voice||audio,realtime|||voice settings;dictation;audio chunks;mute/stop;device permission;provider failure
+19-05|thread/realtime/start,thread/realtime/sdp,thread/realtime/started|Voice||realtime|||Realtime session;WebRTC SDP;WebSocket transport;event order;connection failure
+19-06|thread/realtime/*transcript*,thread/realtime/outputAudio/delta,thread/realtime/stop|Voice||realtime|||transcription delta;transcript done;audio delta;interrupt;stop;late event
+19-07||||browser_use|||in-app browser;external browser;CDP target;page state;navigation approval;prompt injection boundary
+19-08||||computer_use|||computer-use host;automation target;input event;screen observation;platform;effect approval
+20-01|account/login/start,account/login/cancel,account/login/completed||Login|cli_auth_credentials_store,forced_login_method|||API key;OAuth;device code;workload identity;cancel;credential reference;refresh
+20-02|account/gatewayOAuth/*||Login|cli_auth_credentials_store|||gateway OAuth;credential handle;workspace routing;cancel;expired grant
+20-03|account/logout,account/login/cancel|Logout|Logout|cli_auth_credentials_store|||refresh;cancel;logout;revoke;stale account;credential redaction
+20-04|account/read,account/usage/read,account/rateLimits/*,account/workspaceMessages/read|Usage|||||account info;usage;rate limit;workspace messages;missing entitlement;update event
+20-05|userVerification/*,attestation/generate||||||verification status/enroll/delete/verify/cancel;attestation challenge;identity binding;replay denial
+20-06|modelProvider/capabilities/read,account/read|Daybreak||daybreak|||entitlement;access program;Daybreak enabled/disabled;unknown eligibility;provider/account restriction
+20-07|account/rateLimitResetCredit/consume,account/sendAddCreditsNudgeEmail||||||credit consume;email nudge;explicit authorization;denial;idempotency;no automatic financial action
+20-08|account/read,account/updated,account/gatewayOAuth/*|||forced_chatgpt_workspace_id,forced_login_method|||workspace consent;tenant isolation;identity mismatch;routing;revoked authority
+21-01|thread/started,turn/started,item/started|||otel||global_statsig_metrics_settings|thread/turn/tool trace;causal parent;trace context;missing IDs;export failure
+21-02|thread/tokenUsage/updated,account/usage/read|||otel||install_global_metrics,start_global_timer|tokens;usage;cost;progress;timer;late accounting
+21-03|warning,guardianWarning,deprecationNotice,configWarning|Warnings||notice|||retained warning;config warning;deprecation;guardian notice;deduplication;source
+21-04|feedback/upload|Feedback||feedback|||feedback opt-in;redaction;upload review;cancel;network failure;receipt
+21-05|account/usage/read|||analytics||global_statsig_metrics_settings|analytics opt-in;privacy;event content limits;disabled telemetry;flush failure
+21-06|server/diagnostics|Rollout,Export|Debug|log_dir,otel|||logs;export;rollout path;trace reduction;redaction;log identity
+21-07|server/diagnostics||Doctor,Debug|log_dir|||environment diagnostics;integrity;provider/model status;missing dependency;exit status
+21-08|error,warning|||otel,feedback||install_global_metrics|sink failure;redaction;secret suppression;fail closed evidence;retry without duplicate output
+22-01||||tools|CodeModeExecuteHandler||programmatic cells;tool callbacks;input/output protocol;runtime identity;isolated globals
+22-02||||tools|CodeModeExecuteHandler,CodeModeWaitHandler||yield;wait;cancel;cell lifetime;state persistence;streamed output
+22-03|item/tool/call|||tools|ToolSearchHandler,DynamicToolHandler||tool search;indirect call;dynamic schema;callback identity;generation/exposure
+22-04||||tools|CodeModeExecuteHandler||runtime isolation;filesystem/network ceiling;CPU/memory/output limits;timeout;unsafe effect denial
+22-05|externalAgentConfig/detect,externalAgentConfig/import|Import||skills,hooks|||detect external agent;config import;skills/hooks import;conflict policy;provenance;consent
+22-06|externalAgentConfig/import/recordHistory,externalAgentConfig/import/readHistories|Import|MigrateRollouts|history|||legacy history;storage migration;progress;version mismatch;interrupted import;resume
+22-07|||||||package formats;SDK languages;CLI artifacts;OS/architecture matrix;assets;artifact identity
+22-08|||Update|check_for_update_on_startup|||authenticated update;SBOM;licenses;artifact hash;rollback;recovery without release grant

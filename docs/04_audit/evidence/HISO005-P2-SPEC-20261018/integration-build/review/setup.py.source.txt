@@ -1,0 +1,44 @@
+import pathlib, subprocess, json, hashlib, shutil, datetime
+root=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness'); c=pathlib.Path('/home/ricardo/cvg-candidates/hiso005-integrated-20261018'); tmp=pathlib.Path('/tmp/cvg-hiso005-integration-20261018/review'); out=root/'docs/04_audit/evidence/HISO005-P2-SPEC-20261018/integration-build/review'
+def git(*a): return subprocess.check_output(['git','-C',str(c),*a])
+def sha(b): return hashlib.sha256(b).hexdigest()
+def write(p,v): p.write_text(json.dumps(v,indent=2,ensure_ascii=False)+'\n')
+freeze=json.loads((out.parent/'source-freeze.json').read_text()); task=json.loads((out.parent/'task-short-spec.json').read_text()); base=freeze['base']; head='9b494a4d70c3899e25cb249a78316055c306fc99'
+write(out/'claim.json',{'role':'fresh independent implementation critic','task':'HISO005-P1-INTEGRATION-20261018','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'writePaths':[str(out)+'/**',str(tmp)+'/**'],'noDescendants':True,'authority':'user current critic assignment; parent integration claim read; central ledgers readonly per narrower user scope','status':'IN_PROGRESS','bar':['exact10frozenSources','allBasePathsOutside10Preserved','laterRootCheckerPreservedInactiveCatalog','defaultAndOptinConservative','invalidCLIexit2','normalStrictExact','noRuntimeLockConfigChanges']})
+rows=[]
+for f in freeze['files']:
+ p=f['path']; disk=(c/p).read_bytes(); commit=git('show',head+':'+p)
+ rows.append(dict(path=p,expected=f['sha256'],disk=sha(disk),commit=sha(commit),match=sha(disk)==sha(commit)==f['sha256']))
+changed=git('diff','--name-only',base,head).decode().splitlines(); assert sorted(changed)==sorted(f['path'] for f in rows); assert all(f['match'] for f in rows)
+claude=[dict(path=f['path'],base=sha(git('show',base+':'+f['path'])),head=sha(git('show',head+':'+f['path'])),root=sha((root/f['path']).read_bytes()),expected=f['expected']) for f in task['claudeSources']]
+for f in claude: f['match']=len({f['base'],f['head'],f['root'],f['expected']})==1
+assert len(claude)==55 and all(f['match'] for f in claude)
+# Record index blobs read-only, no git status refresh, no index write.
+pre={}
+for f in freeze['files']:
+ p=f['path']; q=root/p
+ try: index=subprocess.check_output(['git','-C',str(root),'show',':'+p],stderr=subprocess.DEVNULL); idx=sha(index)
+ except subprocess.CalledProcessError: idx='ABSENT'
+ pre[p]={'work':sha(q.read_bytes()) if q.exists() else 'ABSENT','index':idx}
+write(out/'source-integrity.initial.json',{'head':git('rev-parse','HEAD').decode().strip(),'base':base,'sources':rows,'changedPaths':changed,'outside10TrackedDiff':git('diff','--name-only',base,head,'--',':(exclude)scripts/boundary-installed-identity.mjs',':(exclude)scripts/boundary-manifests.mjs',':(exclude)scripts/boundary-reference-process.mjs',':(exclude)scripts/build-installed-reference.mjs',':(exclude)scripts/check-product-boundary.mjs',':(exclude)tests/b6-0228-boundary-containment.test.js',':(exclude)tests/b6-0234-boundary-integration.test.js',':(exclude)tests/b6-0234-installed-identity.test.js',':(exclude)tests/b6-0234-reference-recipe.test.js',':(exclude)tests/product-boundary.test.js').decode(),'claude55':claude,'rootTenPreimages':pre})
+# Snapshot only runtime checker/helper/test inputs; do not copy repository config/global setup.
+files=[f['path'] for f in rows]+['scripts/boundary-code-execution.mjs','scripts/boundary-lexical.mjs','scripts/tsconfig-path-grammar.mjs','scripts/gen-tool-catalog.mjs','packages/shared/src/lifecycle.ts','packages/harness/src/session/events.ts','packages/sandbox/src/capabilities.ts','packages/harness/src/__tests__/pdsh-014-tool-catalog.test.ts']
+snap=tmp/'snapshot'; snap.mkdir(exist_ok=True)
+for p in files:
+ dest=snap/p; dest.parent.mkdir(parents=True,exist_ok=True); dest.write_bytes(git('show',head+':'+p))
+(snap/'package.json').write_text('{"private":true,"type":"module"}\n')
+# Physical package closure, copying only required packages, installed optionals and peers.
+queue=['vitest','typescript','semver']; copied={}
+while queue:
+ name=queue.pop(0)
+ if name in copied: continue
+ src=c/'node_modules'/name
+ if not (src/'package.json').is_file(): continue
+ src=src.resolve(); pkg=json.loads((src/'package.json').read_text()); dest=snap/'node_modules'/name
+ dest.parent.mkdir(parents=True,exist_ok=True); shutil.copytree(src,dest,symlinks=False)
+ copied[name]={'version':pkg['version'],'manifestSha256':sha((src/'package.json').read_bytes())}
+ queue+=list(pkg.get('dependencies',{}))+list(pkg.get('optionalDependencies',{}))+list(pkg.get('peerDependencies',{}))
+write(out/'snapshot-inputs.json',{'files':[{ 'path':p,'sha256':sha((snap/p).read_bytes())} for p in files],'physicalDependencyPackages':copied,'noRepoConfig':True})
+(snap/'vitest.review.config.mjs').write_text("export default { test: { environment: 'node', globals: false, include: ['tests/product-boundary.test.js','tests/b6-0228-boundary-containment.test.js','tests/b6-0234-boundary-integration.test.js'], maxWorkers: 1, fileParallelism: false, testTimeout: 20000 }, cacheDir: './.review-vite-cache' }\n")
+(tmp/'fixtures').mkdir(exist_ok=True)
+print(json.dumps({'tenSources':len(rows),'claudePreserved':len(claude),'snapshotFiles':len(files),'physicalPackages':len(copied)}))

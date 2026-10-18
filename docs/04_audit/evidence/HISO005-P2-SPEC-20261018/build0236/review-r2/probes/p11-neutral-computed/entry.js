@@ -1,0 +1,1 @@
+const {["x"]:value}={x:1}; export const result=1;

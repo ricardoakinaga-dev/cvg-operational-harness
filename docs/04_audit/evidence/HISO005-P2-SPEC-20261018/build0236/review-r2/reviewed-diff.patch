@@ -1,0 +1,345 @@
+diff --git a/scripts/boundary-semantic-compiled.mjs b/scripts/boundary-semantic-compiled.mjs
+index 689765dc..a66e471b 100644
+--- a/scripts/boundary-semantic-compiled.mjs
++++ b/scripts/boundary-semantic-compiled.mjs
+@@ -704,7 +704,7 @@ if (
+     const opts = {}
+     const installedReference = {}
+     for (const arg of process.argv.slice(2)) {
+-      const match = /^--([a-z-]+)=(.+)$/.exec(arg)
++      const match = /^--([a-z0-9-]+)=(.+)$/.exec(arg)
+       if (!match || !names[match[1]])
+         throw error('COMPILED_CLI_OPTIONS_INVALID')
+       const key = names[match[1]],
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index dc854f2f..4f8367f8 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -511,12 +511,7 @@ export function analyzeSemanticBoundary(input) {
+       if (
+         (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
+         n.moduleSpecifier &&
+-        !(n.importClause?.isTypeOnly || n.isTypeOnly) &&
+-        !(
+-          n.importClause?.namedBindings?.elements?.length &&
+-          n.importClause.namedBindings.elements.every((e) => e.isTypeOnly) &&
+-          !n.importClause.name
+-        )
++        !(n.importClause?.isTypeOnly || n.isTypeOnly)
+       )
+         specs = [n.moduleSpecifier.text]
+       if (ts.isCallExpression(n)) {
+@@ -963,6 +958,16 @@ export function analyzeSemanticBoundary(input) {
+           unknown(file, 'UNKNOWN_BINDING_PATTERN')
+           return
+         }
++        if (
++          element.propertyName &&
++          ts.isComputedPropertyName(element.propertyName)
++        ) {
++          // Even an unsupported binding key evaluates its expression first.
++          // Preserve known effects/product edges; never substitute the local name.
++          expression(element.propertyName.expression, e, file)
++          unknown(file, 'UNKNOWN_COMPUTED_BINDING')
++          return
++        }
+         const key = ts.isArrayBindingPattern(name)
+           ? String(i)
+           : element.propertyName?.text || element.name.text
+@@ -1074,13 +1079,9 @@ export function analyzeSemanticBoundary(input) {
+       )
+         continue
+       if (ts.isImportDeclaration(n)) {
+-        if (
+-          n.importClause?.isTypeOnly ||
+-          (n.importClause?.namedBindings?.elements?.length &&
+-            n.importClause.namedBindings.elements.every((x) => x.isTypeOnly) &&
+-            !n.importClause.name)
+-        )
+-          continue
++        // Only the explicit `import type` clause is erased. Inline type
++        // specifiers can preserve an empty import and its runtime effects.
++        if (n.importClause?.isTypeOnly) continue
+         if (n.attributes || n.assertClause)
+           unknown(file, 'UNKNOWN_IMPORT_ATTRIBUTES')
+         const namespace = load(resolve(file, n.moduleSpecifier.text, 'import'))
+@@ -1122,8 +1123,17 @@ export function analyzeSemanticBoundary(input) {
+         continue
+       }
+       if (ts.isFunctionDeclaration(n)) {
+-        if (exported(n) && n.name)
+-          modules.get(file).exports.set(n.name.text, find(e, n.name.text))
++        if (exported(n)) {
++          const isDefault = n.modifiers?.some(
++            (m) => m.kind === ts.SyntaxKind.DefaultKeyword
++          )
++          const value = n.name
++            ? find(e, n.name.text)
++            : functionValue(n, e, file)
++          if (isDefault) modules.get(file).exports.set('default', value)
++          else if (n.name) modules.get(file).exports.set(n.name.text, value)
++          else unknown(file, 'UNKNOWN_EXPORT')
++        } else if (!n.name) unknown(file, 'UNKNOWN_FUNCTION')
+         continue
+       }
+       if (ts.isReturnStatement(n))
+@@ -1412,6 +1422,33 @@ export function analyzeSemanticBoundary(input) {
+           origin.id || null
+         )
+     }
++    // TS's permissive AST is not the Node grammar. Before any consumable
++    // proof, parse actual runtime files with the pinned Node --check. This
++    // never imports/evaluates a target; child parsing and the outer worker
++    // both have finite deadlines. Unknown/violating closures need no proof.
++    if (!out.unknowns.length && !out.violations.length) {
++      for (const file of [...astFiles.keys()].sort(sort)) {
++        const remaining = Math.floor(
++          limits.timeoutMs - (performance.now() - started)
++        )
++        if (remaining < 1) throw Error('UNKNOWN_ANALYSIS_LIMIT:timeoutMs')
++        const syntax = spawnSync(NODE, ['--check', path.join(root, file)], {
++          cwd: root,
++          env: {
++            PATH: path.dirname(NODE) + ':/usr/bin:/bin',
++            LANG: 'C',
++            LC_ALL: 'C',
++            TZ: 'UTC'
++          },
++          encoding: 'utf8',
++          timeout: Math.min(1000, remaining),
++          killSignal: 'SIGKILL',
++          maxBuffer: 1024 * 1024
++        })
++        if (syntax.error || syntax.status !== 0)
++          unknown(file, 'UNKNOWN_RUNTIME_SYNTAX')
++      }
++    }
+     // Revalidate every physical assumption, even on an UNKNOWN result.
+     bump('fileBytes', out.usage.fileBytes, 'maxFileBytes')
+     bump('files', out.usage.files, 'maxFiles')
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index 4e2e6567..7c52d350 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -439,3 +439,70 @@ describe('SPEC0236 real checker/CLI integration', () => {
+     ).toBe(true)
+   })
+ })
++
++describe('R1 regressions at the installed MATCH public boundary', () => {
++  it('retains FAIL for a finite product call hidden in a computed binding key', () => {
++    const f = fixture({
++      core: "import 'vendor'; export const result=1;",
++      vendor:
++        "const run=(s)=>import(s); const {[run('../../'+'pro'+'ducts/shift/src/index.js')]:value}={value:1}; export const answer=1;"
++    })
++    const result = f.run()
++    expect(result.report.status).toBe('FAIL')
++    expect(result.graph.installed[0].verified).toBe(false)
++    expect(result.report.resolvedDiagnostics).toEqual([])
++    expect(
++      result.report.violations.some(
++        (v) => v.reason === 'CORE_DEPENDS_ON_PRODUCT'
++      )
++    ).toBe(true)
++  })
++  it('does not approve an installed package with an anonymous default external loader', () => {
++    const f = fixture({
++      core: "import 'vendor'; export const result=1;",
++      vendor: 'export default function(specifier){return import(specifier)}'
++    })
++    const result = f.run()
++    expect(result.report.status).toBe('INCOMPLETE')
++    expect(result.graph.installed[0]).toMatchObject({
++      verified: false,
++      contentIdentity: { status: 'MATCH' }
++    })
++    expect(result.report.resolvedDiagnostics).toEqual([])
++  })
++  it.each([
++    'export default function(){return 1}',
++    'export default function named(){return 1}'
++  ])('proves a closed actual default runtime export: %s', (vendor) => {
++    const f = fixture({
++      core: "import f from 'vendor'; export const result=f();",
++      vendor
++    })
++    const result = f.run()
++    expect(result.report.status, JSON.stringify(result.report)).toBe('PASS')
++    expect(result.graph.installed[0].verified).toBe(true)
++  })
++  it.each([
++    'export const value: number=1;',
++    'const value=1; const value=2; export const answer=value;'
++  ])(
++    'refuses a matching installed JS payload with invalid actual runtime grammar: %s',
++    (vendor) => {
++      const f = fixture({
++        core: "import 'vendor'; export const result=1;",
++        vendor
++      })
++      const result = f.run()
++      expect(result.report.status).toBe('INCOMPLETE')
++      expect(result.graph.installed[0]).toMatchObject({
++        verified: false,
++        contentIdentity: { status: 'MATCH' }
++      })
++      expect(
++        result.report.semanticBoundary.unknowns.some(
++          (u) => u.reason === 'UNKNOWN_RUNTIME_SYNTAX'
++        )
++      ).toBe(true)
++    }
++  )
++})
+diff --git a/tests/b6-0236-compiled-provenance.test.js b/tests/b6-0236-compiled-provenance.test.js
+index 9bb4de40..511c9295 100644
+--- a/tests/b6-0236-compiled-provenance.test.js
++++ b/tests/b6-0236-compiled-provenance.test.js
+@@ -247,12 +247,22 @@ beforeAll(() => {
+     ],
+     evaluated
+   )
+-  built = buildCompiledReference({
+-    sourceRoot: evaluated,
+-    commit,
+-    outputRoot: path.join(parent, 'fresh-build'),
+-    installedReference
+-  })
++  // Exercise the real operator CLI, including its mandatory sha256 pair.
++  built = JSON.parse(
++    run(
++      [
++        NODE,
++        path.resolve('scripts/boundary-semantic-compiled.mjs'),
++        '--source-root=' + evaluated,
++        '--commit=' + commit,
++        '--output-root=' + path.join(parent, 'fresh-build'),
++        '--installed-reference=' + installedReference.manifestPath,
++        '--installed-reference-sha256=' + installedReference.expectedSha256
++      ],
++      evaluated
++    )
++  )
++  built.receipt = JSON.parse(fs.readFileSync(built.manifestPath, 'utf8'))
+ }, 180000)
+ afterAll(() => {
+   if (parent) fs.rmSync(parent, { recursive: true, force: true })
+diff --git a/tests/b6-0236-semantic-engine.test.js b/tests/b6-0236-semantic-engine.test.js
+index 2101961b..8eb5f5b0 100644
+--- a/tests/b6-0236-semantic-engine.test.js
++++ b/tests/b6-0236-semantic-engine.test.js
+@@ -759,3 +759,113 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
+     }
+   )
+ })
++
++describe('R1 regressions for witnessed semantic omissions', () => {
++  it('evaluates computed destructuring key effects and refuses the binding', () => {
++    const input = fixture(
++      'const run=(s)=>import(s); const {[run("./"+"pro"+"ducts/shift/index.js")]: value}={value:1}; export const answer=1;',
++      { 'products/shift/index.js': 'export const value=1;' }
++    )
++    const result = runSemanticBoundary(input)
++    expect(result.status).toBe('VIOLATION')
++    expect(result.proofs).toEqual([])
++    expect(
++      result.violations.some((v) => v.target === 'products/shift/index.js')
++    ).toBe(true)
++    const neutral = runSemanticBoundary(
++      fixture('const {["x"]: value}={x:1}; export const answer=1;')
++    )
++    expect(neutral.status).toBe('UNKNOWN')
++    expect(
++      neutral.unknowns.some((u) => u.reason === 'UNKNOWN_COMPUTED_BINDING')
++    ).toBe(true)
++  })
++  it.each([
++    'export default function(specifier){return import(specifier)}',
++    'export default function named(specifier){return import(specifier)}'
++  ])('analyzes the public default function body under K0: %s', (source) => {
++    const result = runSemanticBoundary(fixture(source))
++    expect(result.status).toBe('UNKNOWN')
++    expect(result.proofs).toEqual([])
++  })
++  it.each([
++    'export default function(){return 1}',
++    'export default function named(){return 1}'
++  ])(
++    'resolves a legitimate pure default function through the actual default export: %s',
++    (body) => {
++      const result = runSemanticBoundary(
++        fixture("import f from './dep.js'; export const answer=f();", {
++          'dep.js': body
++        })
++      )
++      expect(result.status).toBe('PROVEN')
++      expect(result.validation.valid).toBe(true)
++    }
++  )
++  it('keeps the runtime edge of inline type imports and distinguishes erased import type', () => {
++    const input = fixture(
++      'import {type T} from "./products/shift/index.ts"; export const answer=1;',
++      {
++        'products/shift/index.ts':
++          'export type T=number; export const effect=1;'
++      }
++    )
++    fs.renameSync(
++      path.join(input.root, 'entry.js'),
++      path.join(input.root, 'entry.ts')
++    )
++    input.starts = ['entry.ts']
++    const result = runSemanticBoundary(input)
++    expect(result.status).toBe('VIOLATION')
++    expect(result.proofs).toEqual([])
++    expect(
++      runSemanticBoundary({ ...input, limits: { maxFiles: 1 } }).status
++    ).toBe('VIOLATION')
++    const erased = fixture(
++      'import type {T} from "missing"; export const answer=1;'
++    )
++    fs.renameSync(
++      path.join(erased.root, 'entry.js'),
++      path.join(erased.root, 'entry.ts')
++    )
++    erased.starts = ['entry.ts']
++    expect(runSemanticBoundary(erased).status).toBe('PROVEN')
++    const neutral = fixture(
++      'import {type T} from "./neutral.js"; export const answer=1;',
++      { 'neutral.js': 'export const value=1;' }
++    )
++    fs.renameSync(
++      path.join(neutral.root, 'entry.js'),
++      path.join(neutral.root, 'entry.ts')
++    )
++    neutral.starts = ['entry.ts']
++    const closed = runSemanticBoundary(neutral)
++    expect(closed.status).toBe('PROVEN')
++    expect(closed.inputs.some((x) => x.file === 'neutral.js')).toBe(true)
++  })
++  it.each([
++    'export const value: number=1;',
++    'const value=1; const value=2; export const answer=value;'
++  ])(
++    'does not prove a permissive TS AST rejected by the real pinned Node grammar: %s',
++    (source) => {
++      const input = fixture(source)
++      const syntax = spawnSync(
++        pinnedNode,
++        ['--check', path.join(input.root, 'entry.js')],
++        {
++          encoding: 'utf8',
++          env: { PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin' }
++        }
++      )
++      expect(syntax.status).toBe(1)
++      const result = runSemanticBoundary(input)
++      expect(result.status).toBe('UNKNOWN')
++      expect(result.proofs).toEqual([])
++      expect(
++        result.unknowns.some((u) => u.reason === 'UNKNOWN_RUNTIME_SYNTAX')
++      ).toBe(true)
++    }
++  )
++})

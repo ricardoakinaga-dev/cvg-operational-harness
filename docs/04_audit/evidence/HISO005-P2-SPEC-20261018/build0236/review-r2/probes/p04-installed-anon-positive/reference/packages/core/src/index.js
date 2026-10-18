@@ -1,0 +1,1 @@
+import f from "vendor"; export const result=f();

@@ -1,0 +1,121 @@
+{
+  "kind": "EXECUTED_OFFLINE_RECOVERY_NOT_NETWORK_RETRY",
+  "observed_at": "2026-10-18T15:57:05.498224+00:00",
+  "original_acquisition_status": "FAILED_HELPER_CLEANUP_PRESERVED",
+  "original_acquisition_sha256": "96d6d41b989bced4020c3ff36c268778be0fa1e7bb38e35d34a455b37a5e1f2e",
+  "original_helper_sha256": "d4158f204534b14bb470fd00cf0bcd6d5f0c039cdbed903f39fb753a88102d27",
+  "diagnosis": "All7 exact artifacts completed within Content-Length/lock byte and digest bounds. HTTPResponse closes connection on final read; original loop touched now-closed SSLSocket timeout before asking for next EOF. OSError9 was helper loop termination, not artifact incompleteness.",
+  "stdlib_source": {
+    "path": "/usr/lib/python3.12/http/client.py",
+    "sha256": "0242200eed2aa47dc2723c99605055c9b792dc197ab36884db0a193772ba99d1",
+    "read_excerpt": "    def read(self, amt=None):\n        \"\"\"Read and return the response body, or up to the next amt bytes.\"\"\"\n        if self.fp is None:\n            return b\"\"\n\n        if self._method == \"HEAD\":\n            self._close_conn()\n            return b\"\"\n\n        if self.chunked:\n            return self._read_chunked(amt)\n\n        if amt is not None:\n            if self.length is not None and amt > self.length:\n                # clip the read to the \"end of response\"\n                amt = self.length\n            s = self.fp.read(amt)\n            if not s and amt:\n                # Ideally, we would raise IncompleteRead if the content-length\n                # wasn't satisfied, but it might break compatibility.\n                self._close_conn()\n            elif self.length is not None:\n                self.length -= len(s)\n                if not self.length:\n                    self._close_conn()\n            return s\n        else:\n            # Amount is not given (unbounded read) so we must check self.length\n            if self.length is None:\n                s = self.fp.read()\n            else:\n                try:\n                    s = self._safe_read(self.length)\n                except IncompleteRead:\n                    self._close_conn()\n                    raise\n                self.length = 0\n            self._close_conn()        # we read everything\n            return s\n\n    def readinto(self, b):\n        \"\"\"Read up to len(b) bytes into bytearray b and return the number\n        of bytes read.\n        \"\"\"\n\n        if self.fp is None:\n            return 0\n\n        if self._method == \"HEAD\":\n            self._close_conn()\n            return 0\n\n        if self.chunked:\n            return self._readinto_chunked(b)\n\n        if self.length is not None:\n            if len(b) > self.length:\n                # clip the read to the \"end of response\"\n                b = memoryview(b)[0:self.length]\n\n        # we do not use _safe_read() here because this may be a .will_close\n        # connection, and the user is reading more bytes than will be provided\n        # (for example, reading in 1k chunks)\n        n = self.fp.readinto(b)\n        if not n and b:\n            # Ideally, we would raise IncompleteRead if the content-length\n            # wasn't satisfied, but it might break compatibility.\n            self._close_conn()\n        elif self.length is not None:\n            self.length -= n\n            if not self.length:\n                self._close_conn()\n        return n\n\n    def _read_next_chunk_size(self):\n        # Read the next chunk size from the file\n        line = self.fp.readline(_MAXLINE + 1)\n        if len(line) > _MAXLINE:\n            raise LineTooLong(\"chunk size\")\n        i = line.find(b\";\")\n        if i >= 0:\n            line = line[:i] # strip chunk-extensions\n        try:\n            return int(line, 16)\n        except ValueError:\n            # close the connection as protocol synchronisation is\n            # probably lost\n            self._c"
+  },
+  "constant_in_memory_reproduction": {
+    "HTTP_response": "Content-Length5/hello",
+    "isclosed_before": false,
+    "isclosed_after_final_read": true,
+    "bytes": 5,
+    "network": false
+  },
+  "fix_for_any_future_acquisition": "Check response.isclosed() after final read/at loop head before mutating socket timeout; old helper historical and not rerun. Current7 raw files stay at original .attempt1.part paths and are interpreted as complete only by this independent digest/size receipt.",
+  "rows": [
+    {
+      "name": "pydantic",
+      "version": "2.13.4",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/pydantic-2.13.4-py3-none-any.whl.attempt1.part",
+      "filename_from_lock_URL": "pydantic-2.13.4-py3-none-any.whl",
+      "bytes": 472262,
+      "sha256": "45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.46.4",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.attempt1.part",
+      "filename_from_lock_URL": "pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "bytes": 2094516,
+      "sha256": "926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "packaging",
+      "version": "26.2",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/packaging-26.2-py3-none-any.whl.attempt1.part",
+      "filename_from_lock_URL": "packaging-26.2-py3-none-any.whl",
+      "bytes": 100195,
+      "sha256": "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.7.0",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/annotated_types-0.7.0-py3-none-any.whl.attempt1.part",
+      "filename_from_lock_URL": "annotated_types-0.7.0-py3-none-any.whl",
+      "bytes": 13643,
+      "sha256": "1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.15.0",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/typing_extensions-4.15.0-py3-none-any.whl.attempt1.part",
+      "filename_from_lock_URL": "typing_extensions-4.15.0-py3-none-any.whl",
+      "bytes": 44614,
+      "sha256": "f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.2",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/typing_inspection-0.4.2-py3-none-any.whl.attempt1.part",
+      "filename_from_lock_URL": "typing_inspection-0.4.2-py3-none-any.whl",
+      "bytes": 14611,
+      "sha256": "4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    },
+    {
+      "name": "typescript",
+      "version": "5.9.2",
+      "raw_path": "/tmp/cvg-codex100-exec-20261017/sdk-profile-artifacts/raw/typescript-5.9.2.tgz.attempt1.part",
+      "filename_from_lock_URL": "typescript-5.9.2.tgz",
+      "bytes": 4376902,
+      "sha256": "67a3bc82e822b8f45f653a80fc3a9730d23214d36c83ba85dd7f5abebee82062",
+      "expected_lock_match": true,
+      "HTTP_length_match": true,
+      "status": "LOCK_MATCHED_COMPLETE_BYTES_FROM_PRESERVED_ATTEMPT1",
+      "HTTP_attempts": 1,
+      "network_retry": false
+    }
+  ],
+  "passed": 7,
+  "failed": 0,
+  "total_raw_bytes": 7116743,
+  "SDK_imports": 0,
+  "compiler_executions": 0,
+  "installers": 0,
+  "functional_receipts": 0
+}

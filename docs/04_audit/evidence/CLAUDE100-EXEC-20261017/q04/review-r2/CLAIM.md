@@ -1,0 +1,1 @@
+Independent critic R2, correction1/2. MF01–MF06 and focal MF07. All implementation, R1 paths, candidate sources/history and other sessions readonly. Writes only this directory and /tmp/cvg-claude100-exec-20261017/q04-review-r2/**. No agents/commits/general gates/PG/install. Shared ledgers deferred by handoff to Lead.

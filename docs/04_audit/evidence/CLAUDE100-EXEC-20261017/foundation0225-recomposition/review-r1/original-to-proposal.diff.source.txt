@@ -1,0 +1,226 @@
+--- approved-original-04b92ba4
++++ proposal-59ce762f
+@@ -1,12 +1,15 @@
+-# SPEC0225 — resultado JSON completo no journal operacional
++# SPEC0225 — proposta de recomposição dos ajustes aprovados
+ 
+ Data: 16/10/2026. Task: `P100-014/P100-020/TOOL-RESULT-JOURNAL-SPEC-001`.
+-Estado inicial: **PROPOSTA PARA REVISÃO TÉCNICA**. Elaboração T1 de mudança
+-futura T3. **BUILD_AUTHORIZED=false**; todos os testes J01–J16 estão NOT_RUN.
++Estado desta cópia: **RECOMPOSIÇÃO T1 PARA REVISÃO TÉCNICA**. A decisão humana
++APPROVED_WITH_ADJUSTMENTS está registrada para o original04b92ba4. Esta cópia
++aplica somente esses ajustes; não é execução nem nova aprovação presumida.
++**BUILD_ENTRY_READY=false**: revisão técnica da cópia e dependências ainda
++pendentes. Todos os testes J01–J16 permanecem NOT_RUN.
+ 
+ ## 1. Problema, escopo e autoridade
+ 
+-A [SPEC0224](0224_pare100_complete_tool_result_context.md), SHA-256
++A [SPEC0224](../../../../02_spec/0224_pare100_complete_tool_result_context.md), SHA-256
+ `f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, já foi
+ aprovada pelo usuário. Seu BUILD local demonstrou preservação do resultado no
+ contexto e no checkpoint V2. O journal confirma o resultado antes desse
+@@ -20,10 +23,13 @@
+ tenant, policy, approval, sandbox, identidade, tentativa e fence. Não substitui
+ o journal operacional por um ledger de hashes, journal de canal ou fake.
+ 
+-O BUILD desta proposta exige revisão técnica independente, decisão humana T3
+-sobre seu SHA-256 exato e task/recurso registrados. A autorização da0224 não é
+-reenviada nem estendida silenciosamente ao novo formato.0220/0221/0222 permanecem
+-decisões independentes; nenhum release ou aceite dos36cartões decorre daqui.
++A [decisão humana0225](../../USER-DECISIONS-20261016/spec-gates.json) sobre o
++SHA04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5 está
++resolvida com cinco ajustes. Aplicar somente esses ajustes requer revisão
++técnica independente desta cópia, sem repetir o gate humano. Task/recurso e
++dependências de integração continuam obrigatórios; qualquer ampliação além
++da decisão exige gate próprio. A aprovação0224 não é ampliada. Nenhum release
++ou aceite dos cartões decorre desta recomposição.
+ 
+ O escopo futuro é um recurso PostgreSQL novo, descartável e sintético. Papéis,
+ sessões antigas e fixtures de cutover dos testes pertencem exclusivamente a
+@@ -33,7 +39,7 @@
+ ## 2. Fatos e fronteiras atuais
+ 
+ Os fatos referem-se ao worktree isolado PARE100 e aos snapshots por hash do
+-[pacote de proposta](../04_audit/evidence/PARE100-EXEC-20261014/spec0225/README.md),
++[pacote de proposta](../../PARE100-EXEC-20261014/spec0225/README.md),
+ não ao runtime ainda não integrado do diretório principal.
+ 
+ - `operational_effect_journal`, criado na0016, tem `result jsonb`, sem versão
+@@ -142,16 +148,18 @@
+ entre B e a recanonicalização do valor decodificado. Um hash de conteúdo não
+ substitui o binding de tenant/operação/tentativa.
+ 
+-| Limite                      | Valor inclusivo                                                                                |
+-| --------------------------- | ---------------------------------------------------------------------------------------------- |
+-| Resultado lógico no journal | 8388608bytes; mínimo um byte JSON válido.                                                      |
+-| Forma lógica                | profundidade64 com raiz1;1000000nós de valor; chaves contam bytes, não nós.                    |
+-| `data` base64               | `4*ceil(decodedBytes/3)`, máximo11184812caracteres ASCII.                                      |
+-| Envelope JSONB expandido    | 11185324bytes, máximo do data+512; usar `octet_length(payload::text)`, não tamanho comprimido. |
+-| Contexto0224, inalterado    | 32768bytes, profundidade32,10000nós.                                                           |
+-| Checkpoint0224, inalterado  | 8388608bytes canônicos unsigned incluindo todo o restante do estado.                           |
+-
+-8MiB é orçamento proposto de contenção, não throughput/capacidade medidos.
++| Limite                      | Valor inclusivo                                                                               |
++| --------------------------- | --------------------------------------------------------------------------------------------- |
++| Resultado lógico no journal | 1048576bytes (1MiB); mínimo um byte JSON válido.                                              |
++| Forma lógica                | profundidade64 com raiz1;1000000nós de valor; chaves contam bytes, não nós.                   |
++| `data` base64               | `4*ceil(decodedBytes/3)`, máximo1398104caracteres ASCII.                                      |
++| Envelope JSONB expandido    | 1398616bytes, máximo do data+512; usar `octet_length(payload::text)`, não tamanho comprimido. |
++| Contexto0224, inalterado    | 32768bytes, profundidade32,10000nós.                                                          |
++| Checkpoint0224, inalterado  | 8388608bytes canônicos unsigned incluindo todo o restante do estado.                          |
++
++1MiB é a redução proposta do teto do journal, autorizada pela decisão, sem
++alegar throughput/capacidade medidos. Fica acima dos32768bytes do contexto
++com folga e abaixo dos8MiB originais. Checkpoint/capture não são aumentados.
+ O capture atual limita **todo ToolResult** a8MiB; logo, o output público máximo
+ fica abaixo do máximo isolado da API do journal. Os testes devem distinguir
+ essas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,
+@@ -292,7 +300,7 @@
+ antes do próximo modelo; manter operationKey/settlement, sem truncar, repetir
+ corpo ou declarar objetivo completo por summary. Testar também300KiB.
+ 
+-Valor fora do domínio/8MiB/profundidade64/1000000nós não admite confirmação
++Valor fora do domínio/1MiB/profundidade64/1000000nós não admite confirmação
+ parcial. Falha antes do commit continua o caminho nativo de journal incerto:
+ preservar started/UNCERTAIN e fato de sucesso em memória em evidência redigida,
+ sem confundi-lo com confirmação durável. Não demover CONFIRMED, liberar retry
+@@ -311,8 +319,10 @@
+ 
+ ## 8. Migração, ativação e recuperação futuras
+ 
+-Tudo abaixo está NOT_RUN. A próxima numeração observada é0030, apenas proposta;
+-reler inventário/claims antes do BUILD. Não editar0016/0029 ou remover guards,
++Tudo abaixo está NOT_RUN. A decisão reservou0030 à0225, depois da integração
++da0029 no PAR-G01 e antes da0031 da0221. O inventário corrente ainda não tem
++0029 no checkout compartilhado; presença na candidata PARE não é integração
++canônica. Reconciliar essa dependência e registrar claim antes do BUILD. Não editar0016/0029 ou remover guards,
+ checksums, RLS e verificações de owner/role existentes.
+ 
+ 1. Congelar candidata, migrations, binários e fixtures; registrar task e novo
+@@ -326,7 +336,10 @@
+ 4. Drenar o alvo próprio, impedir accessos antigos, instalar binding do guard
+    e qualificar principal/binário. Recibo liga schema, roles, ACL efetiva,
+    versão e hashes. Não ativar sem probes negativos42501 e owner separado.
+-5. Habilitar opt-in na composição isolada e executar J01–J16,0224 e regressões.
++5. Habilitar opt-in somente após readiness e executar J01–J13 e J16, com
++   matriz mínima explícita de J05–J07; J14 e drill completo J15 ficam adiados.
++   Preservar0224 e regressões. Os restart/crashpoints J01/J08/J09/J10 continuam
++   obrigatórios: adiar disputa concorrente J14 não os remove.
+    Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.
+ 6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de
+    checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.
+@@ -334,7 +347,8 @@
+ 7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward
+    com readers novos/credentials retidas. Sem downgrade, copy de envelope para
+    result, backfill decodificado, reseal ou restore seguido de replay de efeitos.
+-   Export/restore só em fixture descartável, comparando hashes/linhas/corpo0.
++   A política permanece; o drill completo de export/restore J15 está adiado,
++   não é requisito executado desta primeira fatia. Não fazer down destrutivo.
+ 
+ Volume, retenção, latência, janela de produção e recovery time reais não foram
+ medidos. Demanda de conversão de trabalho vivo ou operação online mista exige
+@@ -342,7 +356,9 @@
+ 
+ ## 9. Testes rejeitáveis
+ 
+-**Todos J01–J16: NOT_RUN.** Hash de fonte, compilação, testes antigos e tabelas
++**Todos J01–J16: NOT_RUN.** J14 e drill completo J15 ficam adiados; J13 e
++J16 continuam na primeira fatia. J05–J07 usam a matriz mínima abaixo, sem
++remover os invariantes de segurança. Hash de fonte, compilação, testes antigos e tabelas
+ de intenção não são execução deste protocolo. Usar PostgreSQL real, journal,
+ registry, fábrica e stores nativos; apenas ferramenta/modelo/counter sintéticos.
+ Observar pedidos reais do modelo; não fornecer resposta oculta fora da ferramenta.
+@@ -351,7 +367,7 @@
+ | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+ | J01 | confirm/get/reserve em processo novo preservam todos os tipos JSON, null como propriedade própria, vazios/falsy, números finitos e strings que parecem JSON. Comparar valor/tipo/bytes/hash.                                                                                                    |
+ | J02 | NUL4096, escapes, Unicode, NUL em chaves/valores, chaves vazias/reservadas e envelopes aparentes0/1: decode uma vez, sem coerção/prototype mutation.                                                                                                                                            |
+-| J03 | Limites lógico8388608/+1, depth64/65, nós1000000/+1 e físicos11184812/data e11185324/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                     |
++| J03 | Limites lógico1048576/+1, depth64/65, nós1000000/+1 e físicos1398104/data e1398616/envelope/+1; escape expansion, tamanho declarado falso e rejeição antes de alocar/parser driver. Separar limite de ToolResult público.                                                                       |
+ | J04 | Versão desconhecida, mistura de campos/estado/payload, hash/length, chaves extra/faltantes, base64/padding, UTF-8/BOM, JSON duplicado/trailing/não canônico e domínio inválido: sem hook/modelo/corpo/fallback. Controle íntegro deve passar.                                                   |
+ | J05 | Migração preserva legado/default0/contagens/digests e colisões de envelope; SQL NULL não vira null. Reserve1 recusa todas as linhas0, inclusive órfão confirmado/proposal igual e FAILED; sem backfill/adopção. Expansão interrompida reconcilia a transação.                                   |
+ | J06 | Readers antigos com jsonValue, mapper direto e result_present usam suas consultas/credentials originais no ativado:42501/modelo0/corpo0. Controle legado separado funciona. Reintroduzir grant herdado/PUBLIC deve reprovar ativação; undefined/linha vazia não passam.                         |
+@@ -360,10 +376,10 @@
+ | J09 | Fábrica+Hybrid+journal/store reais: ASCII4096, Unicode4096bytes, nul4096-escapes, strings parecendo JSON, null/false/0/vazios e objetos aninhados/envelope. SIGKILL após CAS completo, PID novo, um corpo, valor/frame/hash/bytes/receipts/usage idênticos. Toda fixture é obrigatória.         |
+ | J10 | SIGKILL depois de confirmar journal e antes do checkpoint completo: NUL/null/envelopes/primitivos recuperados via journal em PID novo, sem corpo; comparar receipts e próximo frame/CAS. Não substituir pelo crashpoint J09.                                                                    |
+ | J11 | Outputs32768/32769bytes, depth32/33 e nós10000/+1, mais300KiB: CONFIRMED íntegro, SUCCEEDED/UNAVAILABLE quando excede contexto, modelo seguinte0 e corpo único antes/depois da retomada; positivo pequeno completa. Incluir falha pósconfirm de save.                                           |
+-| J12 | Falhas de DB/commit/ack/capture/encode acima8MiB e de markUncertain preservam erro original/estado, não FAILED/retry seguro. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit.                                         |
++| J12 | Falhas de DB/commit/ack/capture/encode acima1MiB e de markUncertain preservam erro original/estado, não FAILED/retry seguro. CONFIRMED não é demovido; started/uncertain bloqueiam em processo novo. Diferenciar sucesso em memória de prova de commit.                                         |
+ | J13 | Composição bound usa triggers/fences0029 reais e lock order nativo: positivo, worker/attempt/outer stale, lease expirando no encode, pause/cancel/deadline e DML sem guard; ambas as barreiras independentes, sem escrita/corpo indevido. Unbound não prova fencebound.                         |
+-| J14 | Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                                         |
+-| J15 | Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                                                                                       |
++| J14 | ADIADO NESTA FATIA. Dois processos públicos disputam reserva/dispatch/replay e CAS de decisão; um efeito vencedor e cobranças/receipts sem duplicação, perdedor sem corpo/settlement indevido; drift de modo/proposal/fingerprint bloqueia.                                                     |
++| J15 | DRILL COMPLETO ADIADO. Políticas conservadas em J05–J07. Drill de expansão/ativação, ACL/sessões, sem backfill; rollback antes da primeira escrita, proibição após reserva1/checkpoint2, roll-forward e export/restore sintético preservando hashes/linhas/corpo0.                              |
+ | J16 | Regressões legadas worker/published/capabilities/tools/SDK pertinentes e direção neutra; Node22 type/lint/unit/PG/E2E/certificação com claims. Preservar reds/skips/pins stale, sem editar checker/pins para verde. Observer rejeita frame truncado/linha corrompida e aceita controle íntegro. |
+ 
+ Conservar o witness NUL vermelho anterior. Aceite exige candidata exata,
+@@ -373,12 +389,60 @@
+ 
+ ## 10. Critério de pronto e limite desta proposta
+ 
+-Pronto para decisão humana somente após contrato/candidata estabilizados,
+-fontes autenticadas e crítica fresca sem achado material de especificação.
+-BUILD futuro só após aprovação explícita do hash e registro da task/recurso.
+-
+-A decisão humana inclui duas premissas concretas: corte exclusivo de schema e
+-credential, com parada de consumidores sintéticos antigos, e orçamento lógico
+-8MiB com expansão física4/3. Se recusadas, rejeitar o desenho em vez de escolher
+-alternativa silenciosa. Esta especificação não afirma desempenho, paridade
+-integral, produção, migração de dados reais ou aprovação de outros gates.
++Pronto para BUILD somente após recomposição limitada aos ajustes humanos,
++fontes autenticadas e revisão técnica independente sem obrigatório aberto,
++além de task/recurso e dependências satisfeitas. A decisão humana do original
++com ajustes já está registrada; não será solicitada novamente para esta redução.
++
++A decisão humana aceitou corte exclusivo de schema e credential, com parada
++de consumidores sintéticos antigos, e pediu teto menor ou medição para manter
++8MiB. Esta cópia propõe1MiB para o journal com expansão física4/3; o checkpoint
++continua8MiB. Sem operação mista, sem dados reais, sem worker/produto ativado
++automaticamente e sem rota publicada0226. Não há promessa de desempenho,
++paridade integral, produção ou aprovação de outros gates.
++
++## 11. Matriz mínima e fronteiras desta recomposição
++
++J05: manter legado/default0, digests/contagens, SQL NULL versus JSON null,
++colisões de envelope, recusa de adoção das classes0 (incluindo órfão e FAILED)
++e uma interrupção transacional da expansão. Sem conversão/backfill e sem o
++drill completo de rollback/restore J15.
++
++J06: as três gerações de reader usam consultas/credentials originais; cada
++uma deve obter42501 no schema ativo e funcionar no controle legado separado.
++Uma contraprova de PUBLIC e uma de grant herdado devem reprovar readiness.
++Sem ampliar a uma matriz exaustiva de fleets/versões ou conceder acesso misto.
++
++J07: ao menos um caso isolado por guarda distinta já exigida: flag ausente ou
++versão errada; role privilegiado/member/wrong; migration/wiring ausente; sessão
++antiga; fleet misto; insert0 do ativo e insert1 de outro; GUC/tag sem autoridade.
++Cada negativo mantém as demais pré-condições corretas para discriminar a guarda;
++não usar um caso com várias condições inválidas como prova de todas elas.
++
++J13 mantém os guards0029 em AND, sem editar0016/0029 ou abrir fencebound novo.
++J16 mantém regressões e os gates atuais; não presume que o suporte de testes
++TH06 reprovado seja qualificado. J01/J08–J10 usam processo real e retomada
++sequencial/crashpoints distintos; não são substituídos por mocks ou pelo J14
++adiado. Todos continuam NOT_RUN nesta preparação documental.
++
++A fundação TH06 e sua recuperação terminaram sem aceite; migration0029 ainda
++não está integrada no checkout compartilhado. Esta cópia não supera esses
++pré-requisitos. Não há BUILD, instalação SQL, conta/modelo/Claude executado,
++produção ou crédito M1/funcional nesta unidade.
++
++### 11.1 Consequência quantitativa do teto reduzido
++
++O cap de profundidade64 e o guard de1000000nós continuam iguais. Com o teto
++público de1048576bytes, contudo, o guard de nós não é o primeiro limite
++atingível: JSON estrito com N nós de valor exige ao menos2N−1bytes (chaves
++não contam como nós; arrays de zeros atingem o mínimo). Assim, no máximo
++524288nós cabem no journal antes do limite de bytes.
++
++J03 deve distinguir a prova pública da prova do componente: o journal rejeita
++os casos de1000000/+1 por bytes; isso não prova uma rejeição específica do
++guard de nós. Exercitar o canonicalizador/scan isolado com seus parâmetros
++de teste para discriminar o guard original, com evidência etiquetada como
++componente, e provar a dominância do cap de bytes para a porta pública. Não
++aumentar o cap do adapter, checkpoint ou captura para produzir uma fronteira
++pública impossível. A revisão técnica deve validar essa consequência da
++redução, sem remover o guard ou declarar uma prova não executada.

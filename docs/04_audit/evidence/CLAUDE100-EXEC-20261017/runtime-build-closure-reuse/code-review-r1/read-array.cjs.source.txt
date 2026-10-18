@@ -1,0 +1,17 @@
+const fs = require('node:fs');
+const { createRequire } = require('node:module');
+const root = '/tmp/cvg-claude100-exec-20261017/runtime-build-closure-candidate';
+const ts = createRequire(root + '/package.json')('typescript');
+function list(file) {
+  const sf = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  if (sf.parseDiagnostics.length) throw Error('Invalid JavaScript syntax');
+  const vars = sf.statements.filter(ts.isVariableStatement).flatMap(s => [...s.declarationList.declarations]);
+  const ds = vars.filter(d => ts.isIdentifier(d.name) && d.name.text === 'RUNTIME_WORKSPACES');
+  if(ds.length !== 1 || !ts.isArrayLiteralExpression(ds[0].initializer)) throw Error('Expected one literal array');
+  const a = ds[0].initializer.elements;
+  if(!a.every(ts.isStringLiteral)) throw Error('Nonliteral item');
+  const v = a.map(x=>x.text);
+  if(new Set(v).size!==v.length || v.some(x=>x.startsWith('/') || x.split('/').includes('..'))) throw Error('Invalid workspace');
+  return v;
+}
+process.stdout.write(JSON.stringify({parser:'TypeScript AST only; builder never imported',typescript:ts.version,workspaces:list(root+'/scripts/build-runtime.mjs'),prior:list(process.argv[2])}));

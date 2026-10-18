@@ -1,0 +1,14 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import {createRequire} from 'node:module'
+import {createHash} from 'node:crypto'
+const root='/tmp/cvg-b6-stable-20261017/candidate'
+const require=createRequire(path.join(root,'package.json'));const ts=require('typescript')
+const filename=path.join(root,'scripts/check-product-boundary.mjs');const bytes=fs.readFileSync(filename);const source=ts.createSourceFile(filename,bytes.toString(),ts.ScriptTarget.Latest,true,ts.ScriptKind.JS)
+let declaration
+function visit(n){if(ts.isVariableDeclaration(n)&&n.name.getText(source)==='capabilityExceptions')declaration=n;ts.forEachChild(n,visit)}visit(source)
+function literal(n){if(ts.isObjectLiteralExpression(n))return Object.fromEntries(n.properties.map(p=>{if(!ts.isPropertyAssignment(p))throw Error('not literal');return [ts.isStringLiteralLike(p.name)?p.name.text:p.name.getText(source),literal(p.initializer)]}));if(ts.isArrayLiteralExpression(n))return n.elements.map(literal);if(ts.isStringLiteralLike(n))return n.text;if(ts.isNumericLiteral(n))return Number(n.text);throw Error('unsupported literal:'+n.getText(source))}
+const raw=literal(declaration.initializer)
+const groups=raw.map(g=>({id:g.id,reason:g.reason,pins:g.pins??{},sites:g.sites,sitePaths:Object.keys(g.sites),keys:Object.values(g.sites).reduce((sum,lines)=>sum+Object.values(lines).reduce((n,expressions)=>n+Object.keys(expressions).length,0),0),capacity:Object.values(g.sites).reduce((sum,lines)=>sum+Object.values(lines).reduce((n,expressions)=>n+Object.values(expressions).reduce((a,b)=>a+b,0),0),0),callerPinsMissing:Object.keys(g.sites).filter(p=>!Object.hasOwn(g.pins??{},p))}))
+const report={task:'B6-REMEDIATION-SPEC-20261017',candidate:'5a199668eef5db4ca7aa2adc3853169ca0953cbf',method:'TypeScript AST literal extraction only; candidate module and fixture bodies not executed',checkerSha256:createHash('sha256').update(bytes).digest('hex'),groups,totals:{groups:groups.length,ids:new Set(groups.map(g=>g.id)).size,keys:groups.reduce((s,g)=>s+g.keys,0),capacity:groups.reduce((s,g)=>s+g.capacity,0),paths:new Set(groups.flatMap(g=>g.sitePaths)).size,groupsMissingCallerPins:groups.filter(g=>g.callerPinsMissing.length).length}}
+fs.writeFileSync(process.argv[2],JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report.totals));for(const g of groups)console.log(g.id,g.reason,g.keys,g.capacity,'missingcaller',g.callerPinsMissing.length)

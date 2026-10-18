@@ -1,0 +1,103 @@
+# PRD0030 — primeira jornada e qualificação Codex nativas
+
+Task DX100-G04,18/10/2026. Estado **VALIDATED_FOR_SPEC_DOCUMENTATION / NO_BUILD_AUTHORITY**. Deriva da [Discovery0021](../00_discovery/0021_codex100_source_and_execution.md), cujo [aceite documental T1](../00_discovery/0090_discovery_validation.md) antecede este PRD. O usuário escolheu a incorporação integral nos0384/0385/0386. Este documento define comportamento e aceite para preparar a SPEC; não escolhe implicitamente equivalências, autoriza BUILD ou substitui revisão humana T3/T4.
+
+## Resultado e escopo preservados
+
+O operador e o desenvolvedor devem conseguir executar as funções Codex pelo motor nativo do Operational Harness e reconhecer o que foi comprovado, o que foi governado de modo diferente e o que permanece indisponível ou desconhecido. Fachada que encaminha a execução a um Codex instalado não satisfaz incorporação nativa. O Codex de referência é um oráculo externo, separado da implementação CVG.
+
+O escopo integral permanece em [0384](../03_build/0384_plano_executivo_paridade_codex.md), [0385](../03_build/0385_roadmap_paridade_codex.md), [0386](../03_build/0386_backlog_paridade_codex.md) e no [catálogo](../03_build/tracking/codex100_catalog_v1.json):22famílias,49cartões,10fases,487obrigações funcionais correntes e22controles CVG. Nenhuma plataforma, função experimental, serviço externo, SDK, CLI/TUI, mídia ou variante é eliminada para fechar percentual. Novos requisitos confirmados entram por revisão aditiva e rastreável.
+
+A primeira entrega combina um mecanismo de qualificação falsificável e a jornada completa abaixo. Entregar primeiro o mecanismo é permitido como unidade técnica, mas não conclui Q01 ou a jornada. O aceite final da jornada exige as partes integradas no mesmo candidato e pelos caminhos públicos efetivos. As demais fases e funções continuam obrigatórias depois dela.
+
+## Pessoas, autoridade e recursos
+
+| Ator                             | O que pode fazer                                                                                                                       | O que não ganha por enviar um payload                                                                          |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Cliente autenticado e autorizado | Abrir/consultar recursos e solicitar turnos no escopo concedido; consumir eventos e solicitar interrupção pelos contratos selecionados | Tenant, principal, grants, perfil de execução, orçamento confirmado, owner, fence ou aprovação de efeito       |
+| Revisor institucional autorizado | Registrar aprovação/negação da intenção exata pela porta nativa de decisão                                                             | Alterar retrospectivamente a intenção aprovada, apagar efeito já ocorrido ou autorizar recurso de outro tenant |
+| Host/composição confiáveis       | Vincular identidade, capacidades, stores, perfil, orçamento, provider sintético e versão do contrato                                   | Herdar autoridade de outra composição, pacote de evidência ou nome de cliente                                  |
+| Qualificador e auditor           | Examinar capturas autênticas, regras e resultados; rejeitar divergência/adulteração e emitir julgamento no seu escopo                  | Transformar mock, ACK, hash, catálogo ou exit0 isolado em paridade aprovada                                    |
+
+O núcleo não importa o Assistente de Plantão nem usa dados de consumidor. Tenant, workspace, arquivos, ferramentas, aprovadores, modelos e falhas de ensaio são sintéticos. Efeitos clínicos, financeiros, de prontuário definitivo, agenda real automática, produção irrestrita e RAG sem fonte institucional aprovada permanecem proibidos pelas regras do repositório.
+
+## Jornada obrigatória
+
+1. A composição admite uma conexão e uma sessão para a identidade sintética correta. O cliente recebe somente a superfície contratada, com versão/proveniência identificadas. Outro tenant não consegue observar a sessão nem um fragmento de sua resposta.
+2. Um turno solicita READ real sobre recurso próprio. O valor testemunha nasce no corpo da ferramenta, sem aparecer no input ou em decisões roteirizadas. Registry, policy, orçamento e observação nativos participam da execução.
+3. O runtime decide novamente com o resultado admitido. Quando a resposta final usa composição por responseIntent, o pedido real na fronteira do modelo recebe o resultado completo. O ramo direto responseText tem caso separado; não se exige nele uma chamada RESPONSE que não existe.
+4. A solicitação de WRITE sobre recurso próprio fica retida antes do corpo. PENDING e DENIED mantêm contador de corpo/efeito em zero. Um campo aprovado no resultado da ferramenta ou no payload do cliente não substitui decisão institucional.
+5. O revisor decide a intenção exata pela porta nativa autorizada. A retomada valida identidade, intenção, composição, execução, tentativa e fence; alteração ou recurso estrangeiro gera recusa antes do corpo. A resposta compatível de um cliente é dado de protocolo, sem mutador paralelo de aprovação.
+6. Após admissão, uma WRITE confirmada produz o efeito sintético uma vez e preserva o resultado e o fato de confirmação. Estado incerto permanece explícito e não autoriza retry automático. Cancelamento posterior não fabrica rollback de efeito já ocorrido.
+7. O cliente observa texto incremental antes de o provider sintético liberar o terminal. Os deltas passam pelos controles nativos; fragmentos de argumentos e propostas de ferramenta não executam um corpo. Fatiar uma resposta pronta não satisfaz o caso.
+8. Desconexão, cliente lento e retomada de leitura usam o contrato público correspondente. Eventos duráveis CVG têm identidade/cursor confirmado; os envelopes Codex mantêm sua forma própria. Nenhum campo de cursor CVG novo é imposto ao wire Codex por conveniência. A equivalência e o mapeamento de retomada precisam de regra explícita.
+9. Um processo A é encerrado após confirmação e antes do checkpoint ou ACK nos pontos definidos. Um processo B real recupera sessão, intenção, journal, eventos e accounting pelos mecanismos canônicos. O contador durável do efeito permanece1; não se usa memória do processo A como prova.
+10. Dois processos reais competem pela mesma execução. O escritor que perdeu ownership/fence não persiste, despacha nem confirma novo efeito. As ordens de commit de cancelamento/conclusão determinam um único terminal, com primeira causa e efeitos preservados.
+
+As etapas não pressupõem que a referência ofereça internals CVG. Comportamentos públicos comparáveis usam capturas reais do código Codex; invariantes institucionais usam SPEC CVG aprovada e prova nativa. Se a referência se comportar de modo diferente, registrar a divergência e sua disposição; não fabricar uma resposta esperada ou chamá-la de literalidade.
+
+## Requisitos de aceite da primeira entrega
+
+| ID   | Precondição e ação                                                                              | Resultado verificável obrigatório                                                                                                                   |
+| ---- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CQ01 | Cliente neutro entra pela superfície compatível selecionada e por consumidor nativo qualificado | Ambos alcançam o mesmo motor; fonte/composição/candidata/fingerprints identificadas; nenhum Codex no caminho de execução CVG                        |
+| CQ02 | READ com testemunha gerada no corpo                                                             | Uma invocação, resultado real nos registros e no contexto admitido; nenhum valor antecipado pelo driver                                             |
+| CQ03 | Responder por responseIntent e, em outro caso, responseText                                     | Pedido real de composição contém o corpo exigido no primeiro caso; proveniência da decisão é demonstrada no segundo; um caso não dispensa o outro   |
+| CQ04 | WRITE solicitada em PENDING e DENIED                                                            | Corpo/efeito zero e estado explícito; timeout não transforma espera em autorização                                                                  |
+| CQ05 | Aprovar intenção exata e adulterar cada binding relevante                                       | Positivo executa uma vez; adulterações de identidade/input/profile/capability/tentativa/fence recusadas antes do corpo                              |
+| CQ06 | Provider sintético retém terminal depois do primeiro delta                                      | Cliente recebe delta antes da liberação do terminal; chamada efetiva passou por policy/budget/cancel/deadline e eventos identificados               |
+| CQ07 | Cliente lento, desconexão e retomada                                                            | Ordem/identidade preservadas; buffer limitado e comportamento de pressão declarado; sem chamada extra de modelo/ferramenta para reconstruir entrega |
+| CQ08 | Erro de provider, espera até deadline e cancelamento sem erro do provider                       | Três resultados independentes com primeira causa; nenhum é normalizado indevidamente para sucesso ou para o outro erro                              |
+| CQ09 | Cancelamento/conclusão nas duas ordens de commit                                                | Um terminal conforme a ordem nativa; efeito anterior e journal permanecem verdadeiros; ACK durável só após persistência                             |
+| CQ10 | Encerrar A após journal confirmado e retomar em B                                               | Resultado admitido recuperado sem repetir corpo; estado/eventos/accounting pertencem à mesma execução e composição                                  |
+| CQ11 | Falhar entre início do efeito e confirmação/ACK, inclusive falha de reconciliação               | UNKNOWN/UNCERTAIN e causa preservados; sem FAILED falso, retry automático ou promoção de sucesso em memória a commit                                |
+| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |
+| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |
+| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |
+
+CQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.
+
+## Protocolo e compatibilidade observáveis
+
+A superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.
+
+O ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.
+
+O SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD.
+
+## Estados, limites e falhas
+
+O cliente deve distinguir trabalho em andamento, espera de aprovação, conclusão, cancelamento, falha e settlement incerto pelos contratos públicos de sua superfície. Os nomes internos e transações pertencem à SPEC canônica; o adaptador não funde estados diferentes para simplificar a resposta. Falha de transporte não determina sozinha o estado de um efeito. Erros de persistência/diagnóstico/cleanup não substituem a primeira causa.
+
+Solicitar cancelamento não significa que ele venceu: o primeiro terminal válido persistido sob a autoridade nativa decide a disputa. Se cancelamento vencer, não entregar uma resposta final como conclusão bem-sucedida; preservar fatos de efeito anteriores e settlement pendente quando aplicável. Se conclusão vencer, cancelamento posterior não muda o terminal. O ponto transacional e o tratamento de confirmação tardia precisam estar fixados e qualificados na SPEC, sem fabricar rollback.
+
+Antes da admissão, a composição declara limites com unidades para input, resultado, contexto, evento/frame, buffer, replay, tokens, custo e duração. Valores não vêm de campos de autoridade enviados pelo cliente. A SPEC deve fixar valores/perfis e política de overflow antes de código e carga. Este PRD exige memória pendente limitada, pressão tratada, nenhuma perda/truncamento silencioso e accounting coerente com interrupção; não afirma throughput ou latência ainda não medidos.
+
+Uso parcial não informado pelo provider permanece desconhecido, com reserva/causa/reconciliação explícitas; não reportar zero como medição confirmada nem refazer a chamada para descobrir o custo. Limites menores que o domínio efetivamente admitido pela referência exigem disposição de equivalência governada aprovada ou mantêm a variante pendente. Não estreitar o domínio para facilitar uma suíte verde.
+
+Respeitar os limites e domínios dos mecanismos canônicos reaproveitados. Resultado que não cabe no contexto não vira resumo apresentado como corpo completo, objetivo concluído ou autorização de repetir efeito; a indisponibilidade e o settlement permanecem explícitos. Novo codec não expande automaticamente budget de contexto, mensagem ou provider.
+
+## Qualificação e medida
+
+Cada ensaio deve identificar requisito/variante, candidato, fonte/ELF/SDK/configuração, fixture/driver, regra, contexto de execução e brutos. O driver fornece estímulos e observa o alvo real; não produz sua resposta esperada. Projeção e normalização têm regra fechada e aprovada, com brutos preservados. Não apagar efeito, erro, identidade, custo ou ordem relevante por normalização. Referência faltante e falha de infraestrutura são resultados próprios.
+
+| Medida                    | Fórmula e fonte                                                                                                                           | Baseline, alvo e decisão                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cobertura funcional atual | Requisitos/variantes com provas atuais e julgamento aplicável divididos pelo escopo congelado da revisão do catálogo; recibos do programa | Baseline atual:zero recibos Codex, não zero capacidades existentes. Alvo final100%; impedir M9 se qualquer requisito/variante obrigatório não estiver comprovado |
+| Controles CVG             | Controles obrigatórios com provas atuais, contados separadamente dos funcionais                                                           | Baseline deste programa:zero recibos. Alvo22/22 e variantes aplicáveis antes de aceite final; nunca compensar função ausente com controle verde                  |
+| Jornada integrada         | CQ01–14 aprovados no mesmo candidato, com positivos/negativos e dependências qualificadas                                                 | BaselineNOT_RUN. Alvo14/14, sem omissão de restart/concorrência/stream; liberar somente o marco correspondente                                                   |
+| Poder de rejeição         | Artefatos adulterados rejeitados por classe e caso, preservando um positivo autêntico                                                     | Os controles do observador G02 são diagnóstico do helper, não baseline de paridade. Exigir rejeição de todas as classes CQ13/CQ14 na qualificação real           |
+
+Apurar por revisão de catálogo/candidata e por execução identificada; o owner L5 registra os resultados e o revisor decide seu escopo. Não fazer média entre programas, famílias, equivalência literal e governada. Mudança de insumo ou autoridade invalida os recibos afetados; recibo histórico não concede estado atual.
+
+## Reuso e dependências
+
+PAR0224 continua dono do resultado completo e de sua admissão em contexto/checkpoint. PAR0221/0225 e seus artefatos qualificados governam sessão durável e journal. Compartilhar fixture/servidor de falhas, capturas e comparador Claude100 exige compatibilidade e aceite técnico específicos, não crédito automático de testes ou aprovação de outro alvo. Migrations/contratos/stores têm um owner; este PRD não reserva números nem cria um backend alternativo.
+
+G02 precisa concluir o mesmo CLI387a, atestar seu ELF e executar capturas reais sob o [HOW keyless aceito](../04_audit/evidence/CODEX100-EXEC-20261017/g02/keyless-cli-probe/README.md). O ensaio inicial de nove observações não é a referência de toda a jornada. READ/WRITE/provider/approval/restart terão contratos de ensaio próprios, dados sintéticos, recursos e guardas adequados antes de execução. Acesso remoto, serviço ou plataforma faltante conserva owner, gate e pendência.
+
+## Saída desta definição
+
+Antes de validar o PRD para SPEC, conferir determinismo das regras, distinção de superfícies/autoridades, critérios CQ01–14, limites de equivalência e classificação das dependências. Incógnita que mude comportamento central ou permissão reabre esta definição; escolha técnica de tipo, porta, transação, parser, limites e wiring deve ser decidida na SPEC antes de BUILD.
+
+Este PRD não concede seu próprio aceite. Após validação documental aplicável, preparar SPEC concreta e revisada com contratos públicos exatos, oráculos, fontes/candidata, transações, lifecycle, claims, falhas e verificações. Somente então apresentar a revisão humana T3 exigida; T4 e release continuam decisões separadas. Nenhum CQ, família, cartão ou função recebe PASS pela criação deste documento.

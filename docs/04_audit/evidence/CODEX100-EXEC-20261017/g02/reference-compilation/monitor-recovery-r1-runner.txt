@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Supervise one own offline reference build, preserving logs and live identity."""
+from pathlib import Path
+import hashlib
+import json
+import os
+import shutil
+import signal
+import subprocess
+import time
+import uuid
+
+HERE = Path(__file__).resolve().parent
+CONTRACT = '11c96ed4386078c7c9bdf21458aec2245d754c3d16dbfee49de4e2f65e92a764'
+sha = lambda b:hashlib.sha256(b).hexdigest()
+
+def need(ok, why):
+    if not ok:raise ValueError(why)
+
+def main():
+    raw = (HERE/'contract.json').read_bytes();need(sha(raw) == CONTRACT,'contract drift');c = json.loads(raw)
+    addraw = (HERE/'native-build-addendum.json').read_bytes()
+    need(sha(addraw) == 'e8172f999480708f3935d38bf41174c6e01fdb004849b81a879131ce23f2a298','native build addendum drift')
+    add = json.loads(addraw)
+    recovery_raw = (HERE/'monitor-recovery-contract.json').read_bytes()
+    need(sha(recovery_raw) == '98462519ca2a34d0c169189921cce9b497e865f107fc6cb25999917e8e9319b0','monitor recovery contract drift')
+    recovery = json.loads(recovery_raw)
+    need(sha((HERE/(recovery['prior_attempt']+'.json')).read_bytes()) == recovery['prior_attempt_report_sha256'],'prior failed report drift')
+    need(sha(Path(add['native_acquisition_report']).read_bytes()) == add['native_acquisition_sha256'],'native report drift')
+    need(sha(Path(add['native_acquisition_contract']).read_bytes()) == add['native_acquisition_contract_sha256'],'native contract drift')
+    native = json.loads(Path(add['native_acquisition_report']).read_text());native_root = Path(add['native_sysroot_readonly'])
+    actual = {str(p.relative_to(native_root)) for p in native_root.rglob('*') if p.is_file() or p.is_symlink()}
+    need(actual == {r['path'] for r in native['files']},'native sysroot exact set drift')
+    for row in native['files']:
+        p = native_root/row['path']
+        if row['kind'] == 'SYMLINK':need(p.is_symlink() and os.readlink(p) == row['target'] and p.resolve().is_relative_to(native_root.resolve()),'native link drift')
+        else:
+            need(not p.is_symlink() and p.stat().st_size == row['bytes'],'native member drift')
+            with p.open('rb') as f:need(hashlib.file_digest(f,'sha256').hexdigest() == row['sha256'],'native bytes drift')
+    for row in native['packages']:
+        p = Path(add['native_resource_root'])/Path(row['package']['Filename']).name
+        need(sha(p.read_bytes()) == row['package']['SHA256'],'native archive drift')
+    root = Path(c['resource_root']);limits = c['limits']
+    live = HERE/'live.json'
+    if live.exists():need(json.loads(live.read_text())['status'] == 'TERMINAL','prior job still registered live; inspect same job')
+    for path,h in c['prior_inputs'].items():need(sha(Path(path).read_bytes()) == h,'acquisition input changed '+path)
+    need(shutil.disk_usage(root).free >= limits['minimum_free_disk_bytes'],'insufficient disk headroom')
+    mem = next(int(l.split()[1])*1024 for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:'))
+    need(mem >= limits['minimum_available_memory_bytes'],'insufficient available memory')
+    # Full independent data/tree checks complete before any untrusted code executes.
+    for script in [HERE.parent/'locked-dependencies/verify-vendor.py',HERE.parent/'reference-environment/verify.py']:
+        subprocess.run(['/usr/bin/python3','-I',str(script),'--check'],check=True,timeout=180,stdout=subprocess.DEVNULL)
+    snapshot = json.loads((HERE.parent/'locked-dependencies/source-snapshot.json').read_text())
+    for row in snapshot['files']:
+        p = root/'source'/row['path']
+        if row['git_mode'] == '120000':
+            need(p.is_symlink() and p.resolve().is_relative_to((root/'source').resolve()),'unsafe source link '+row['path'])
+            need(sha(os.fsencode(os.readlink(p))) == row['sha256'],'source link drift '+row['path'])
+        else:
+            need(not p.is_symlink(),'unexpected source link '+row['path'])
+            with p.open('rb') as f:need(hashlib.file_digest(f,'sha256').hexdigest() == row['sha256'],'source drift '+row['path'])
+    work = root/'build-work';target = root/'target'
+    cache = recovery['resume_cache'];indexraw = Path(cache['index']).read_bytes();need(sha(indexraw) == cache['index_sha256'],'cache identity index drift')
+    rows = json.loads(indexraw);actual = {str(p.relative_to(target)) for p in target.rglob('*') if p.is_file() or p.is_symlink()}
+    need(str(target) == cache['path'] and actual == {r['path'] for r in rows},'resume cache set differs')
+    for row in rows:
+        p = target/row['path']
+        if row['kind'] == 'SYMLINK':need(p.is_symlink() and os.readlink(p) == row['target'],'cache link drift')
+        else:
+            need(not p.is_symlink() and p.stat().st_size == row['bytes'],'cache member drift')
+            with p.open('rb') as f:need(hashlib.file_digest(f,'sha256').hexdigest() == row['sha256'],'cache bytes drift')
+    need(not work.exists() and target.is_dir(),'fresh work and verified own partial target required')
+    work.mkdir();(work/'cargo').mkdir()
+    (work/'cargo/config.toml').write_bytes((HERE.parent/'locked-dependencies/vendor-config.toml').read_bytes())
+    # No network is available; all dependency data comes from read-only vendor.
+    uid = os.getuid();env = {'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','XDG_RUNTIME_DIR':'/run/user/'+str(uid),'DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/user/'+str(uid)+'/bus'}
+    wrap = ['/usr/bin/bwrap','--unshare-all','--new-session','--die-with-parent','--clearenv','--cap-drop','ALL','--ro-bind','/usr','/usr']
+    for lib in ['/lib','/lib64']:
+        if Path(lib).exists():wrap += ['--ro-bind',lib,lib]
+    wrap += ['--symlink','usr/bin','/bin','--proc','/proc','--dev','/dev','--tmpfs','/tmp','--dir','/etc','--dir','/controller',
+             '--ro-bind',str(root/'source'),'/source','--ro-bind',str(root/'vendor'),'/vendor',
+             '--ro-bind',c['toolchain_readonly'],'/toolchain','--ro-bind',str(root/'control'),'/control',
+             '--ro-bind',str(native_root),'/native',
+             '--ro-bind',str(HERE/'child.py'),'/controller/child.py','--bind',str(work),'/work','--bind',str(target),'/target']
+    # /usr/bin/cc and c++ are public compiler aliases through /etc/alternatives.
+    # Reproduce those two public symlinks so GCC retains its real executable prefix.
+    wrap += ['--dir','/etc/alternatives']
+    for name in ['cc','c++']:
+        path = '/etc/alternatives/'+name
+        link = os.readlink(path)
+        need(link in ['/usr/bin/gcc','/usr/bin/g++'],'compiler alias unexpectedly changed')
+        wrap += ['--symlink',link,path]
+    childenv = {'PATH':'/toolchain/bin:/usr/bin:/bin','LANG':'C.UTF-8','CARGO_HOME':'/work/cargo','CARGO_TARGET_DIR':'/target','CARGO_NET_OFFLINE':'true','CARGO_BUILD_JOBS':'4','CARGO_TERM_COLOR':'never','RUSTC':'/toolchain/bin/rustc','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/control/git-https.config','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0','TZ':'UTC'}
+    childenv.update(add['reference_build_environment_additions'])
+    for k,v in childenv.items():wrap += ['--setenv',k,v]
+    wrap += ['--chdir','/source/codex-rs','/usr/bin/python3','-I','/controller/child.py']
+    gate = "import pathlib,json,os,sys; s=pathlib.Path('/proc/self/cgroup').read_text().strip().split('::',1)[1]; p=pathlib.Path('/sys/fs/cgroup')/s.lstrip('/'); m=(p/'memory.max').read_text().strip(); sw=(p/'memory.swap.max').read_text().strip(); n=(p/'pids.max').read_text().strip(); cpu=(p/'cpu.max').read_text().split(); assert m=='12884901888' and sw=='0' and n=='256' and cpu[0]!='max' and int(cpu[0])/int(cpu[1])==4; print('CVG_KERNEL_LIMITS '+json.dumps({'scope':s,'memory_max':m,'memory_swap_max':sw,'pids_max':n,'cpu_max':cpu}),file=sys.stderr,flush=True); os.execv(sys.argv[1],sys.argv[1:])"
+    attempt = 'release-'+uuid.uuid4().hex[:10];unit = 'cvg-codex100-ref-build-'+attempt+'.scope'
+    argv = ['/usr/bin/systemd-run','--user','--scope','--collect','--quiet','--unit',unit,'-p','MemoryMax=12884901888','-p','MemorySwapMax=0','-p','TasksMax=256','-p','CPUQuota=400%','-p','RuntimeMaxSec=7200','/usr/bin/python3','-I','-c',gate]+wrap
+    outpath,errpath = HERE/(attempt+'.stdout.log'),HERE/(attempt+'.stderr.log')
+    report = {'task':c['task'],'attempt':attempt,'unit':unit,'status':'RUNNING','contract_sha256':CONTRACT,'runner_sha256':sha(Path(__file__).read_bytes()),'child_sha256':sha((HERE/'child.py').read_bytes()),'argv':argv,'environment':childenv,'stdout':outpath.name,'stderr':errpath.name,'network':'UNSHARED_ALL','functional_receipts':0,'native_CVG_BUILD':False,'reference_binary_executed':False,'disk_enforcement':limits['disk_enforcement'],'initial_available_memory':mem,'initial_free_disk':shutil.disk_usage(root).free}
+    report.update({'native_build_addendum_sha256':sha(addraw),'native_sysroot_entries':native['file_count'],'native_acquisition_report_sha256':add['native_acquisition_sha256']})
+    report.update({'monitor_recovery_contract_sha256':sha(recovery_raw),'resume_cache_index_sha256':cache['index_sha256'],'resume_cache_entries':len(rows),'resume_from_attempt':recovery['prior_attempt']})
+    start = time.monotonic();reason = None;peak = 0;monitor_diagnostics = []
+    with outpath.open('xb') as out,errpath.open('xb') as err:
+        p = subprocess.Popen(argv,env=env,stdout=out,stderr=err,start_new_session=True)
+        report.update({'runner_pid':os.getpid(),'child_pid':p.pid,'started_at_unix':time.time()});live.write_text(json.dumps(report,indent=2)+'\n')
+        print(json.dumps({k:report[k] for k in ['attempt','unit','runner_pid','child_pid','status']}),flush=True)
+        while p.poll() is None:
+            free = shutil.disk_usage(root).free
+            owned = None
+            for retry in range(3):
+                free = shutil.disk_usage(root).free
+                if free < limits['abort_free_disk_bytes']:reason = 'DISK_RESERVE_GUARD';break
+                try:du = subprocess.run(['/usr/bin/du','-sb',str(work),str(target)],capture_output=True,text=True,timeout=15)
+                except subprocess.TimeoutExpired:
+                    monitor_diagnostics.append({'elapsed_seconds':round(time.monotonic()-start,3),'retry':retry,'error':'DU_TIMEOUT'});break
+                if du.returncode == 0:
+                    owned = sum(int(line.split()[0]) for line in du.stdout.splitlines());break
+                monitor_diagnostics.append({'elapsed_seconds':round(time.monotonic()-start,3),'retry':retry,'exit':du.returncode,'stdout':du.stdout,'stderr':du.stderr})
+                lines = du.stderr.splitlines()
+                transient = du.returncode == 1 and lines and all(l.startswith('du: cannot access ') and l.endswith('No such file or directory') for l in lines)
+                if not transient:break
+                time.sleep(0.15)
+            if owned is not None:peak = max(peak,owned)
+            if free < limits['abort_free_disk_bytes']:reason = 'DISK_RESERVE_GUARD'
+            if owned is None:reason = 'DISK_MONITOR_FAILED'
+            if owned is not None and owned > limits['monitored_build_bytes_limit']:reason = 'OWNED_BYTES_MONITOR_GUARD'
+            if time.monotonic()-start > limits['runtime_seconds']+15:reason = 'OWNED_SCOPE_DEADLINE'
+            if reason:
+                subprocess.run(['/usr/bin/systemctl','--user','kill','--signal=SIGKILL','--kill-who=all',unit],env=env,capture_output=True,timeout=10)
+                try:os.killpg(p.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+                break
+            time.sleep(5)
+        p.wait(timeout=15)
+    report.update({'status':'TERMINAL','exit':p.returncode,'abort_reason':reason,'elapsed_seconds':round(time.monotonic()-start,3),'peak_build_bytes_observed':peak,'disk_monitor_diagnostics':monitor_diagnostics})
+    for kind,path in [('stdout',outpath),('stderr',errpath)]:report[kind+'_sha256'] = sha(path.read_bytes())
+    report['actual_kernel_guard_observed'] = errpath.read_text(errors='replace').startswith('CVG_KERNEL_LIMITS ')
+    report['namespace_guards_observed'] = outpath.read_text(errors='replace').startswith('CVG_BUILD_NAMESPACE_GUARDS ')
+    report['build_started'] = 'CVG_FIXED_REFERENCE_BUILD_START\n' in outpath.read_text(errors='replace')
+    artifact = target/'release/codex'
+    if p.returncode == 0 and not reason:
+        need(artifact.is_file() and not artifact.is_symlink(),'successful build lacks regular CLI artifact')
+        with artifact.open('rb') as f:report['artifact'] = {'path':str(artifact),'bytes':artifact.stat().st_size,'sha256':hashlib.file_digest(f,'sha256').hexdigest()}
+    for _ in range(20):
+        report['scope_active_state'] = subprocess.run(['/usr/bin/systemctl','--user','show',unit,'-p','ActiveState','--value'],env=env,capture_output=True,text=True,timeout=10).stdout.strip()
+        if report['scope_active_state'] in ['inactive','failed','']:break
+        time.sleep(0.25)
+    (HERE/(attempt+'.json')).write_text(json.dumps(report,indent=2)+'\n');live.write_text(json.dumps(report,indent=2)+'\n')
+    print(json.dumps({k:report.get(k) for k in ['attempt','status','exit','abort_reason','elapsed_seconds','actual_kernel_guard_observed','namespace_guards_observed','build_started','artifact','scope_active_state']}),flush=True)
+    if p.returncode or reason or not report['actual_kernel_guard_observed'] or not report['namespace_guards_observed']:raise SystemExit(1)
+
+if __name__ == '__main__':main()

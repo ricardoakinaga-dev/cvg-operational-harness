@@ -1,0 +1,220 @@
+{
+  "task": "C100-Q01-QUALIFIER-001",
+  "round": 2,
+  "correction_round_reviewed": 1,
+  "remaining_corrective_rounds": 1,
+  "reviewer_role": "same independent critic, no builder edits",
+  "review_mode": "STATIC_REVIEW_ONLY",
+  "verdict": "REVISE_STATIC",
+  "overall_approval": false,
+  "integrated_gates": "PENDING_Q03_EXPLICIT_EXECUTION_LIFT",
+  "created_at": "2026-10-17T23:20:56.701298+00:00",
+  "candidate": "/tmp/cvg-claude100-exec-20261017/q01-candidate",
+  "packet": "../review-r2-inputs.json",
+  "fixture_packet": "../fixture-freeze-r2.json",
+  "pins_before": "pins-before.json",
+  "pins_after": "pins-after.json",
+  "fixture_pins_before": "fixture-pins-before.json",
+  "fixture_pins_after": "fixture-pins-after.json",
+  "prior_findings": [
+    {
+      "id": "S0229-R1-001",
+      "status": "ADDRESSED_STATIC_PENDING_EXECUTION",
+      "locations": [
+        "tests/claude100/qualification/qualify.mjs:168",
+        "tests/claude100/qualification/qualify.mjs:172"
+      ],
+      "observation": "Requested IDs are deduplicated; scheduling iterates the capped <=32-entry index and schedules each ID once. The 40000-repetition parse-count regression is present; not executed."
+    },
+    {
+      "id": "S0229-R1-002",
+      "status": "ADDRESSED_STATIC_PENDING_EXECUTION",
+      "locations": [
+        "tests/claude100/qualification/qualify.mjs:435",
+        "tests/claude100/qualification/qualify.mjs:451"
+      ],
+      "observation": "All canonical bytes are sliced into <=4MiB ordered descriptors; empty output has one empty part. Projection IO exceptions become INFRA_FAILURE. Numeric 200000-element complete-concatenation regression is present. Residual combined-fault classification is separately R2-001."
+    },
+    {
+      "id": "S0229-R1-003",
+      "status": "ADDRESSED_STATIC_PENDING_EXECUTION",
+      "locations": [
+        "tests/claude100/qualification/qualify.mjs:555",
+        "tests/claude100/qualification/safe-io.mjs:382"
+      ],
+      "observation": "Final authority selector runs after synchronous path/inode checks and all awaited writes/close calls, immediately before linkSync. No await separates selection/publication. Expiry-during-snapshot and expiry-before-selector tests are present. Local synchronous publication is the documented completion boundary; no new physical-time/crash-durability claim."
+    },
+    {
+      "id": "S0229-R1-004",
+      "status": "ADDRESSED_STATIC_PENDING_EXECUTION",
+      "locations": [
+        "tests/claude100/qualification/qualify.mjs:507",
+        "tests/claude100/qualification/qualify.mjs:547",
+        "tests/claude100/qualification/qualify.mjs:570",
+        "tests/claude100/qualification/safe-io.mjs:387"
+      ],
+      "observation": "Pending files are not completed evidence; writes/syncs and descriptor closure precede exclusive publication. Successful publication returns immediately without fallible IO/cleanup. Failed report sync/close, directory close and link have explicit no-report.json regressions. None executed."
+    }
+  ],
+  "findings": [
+    {
+      "id": "S0229-R2-001",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Expiry selection overwrites the mandatory INFRA_FAILURE for a comparator-generated output fault",
+      "file": "tests/claude100/qualification/qualify.mjs",
+      "line": 508,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 451
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 563
+        },
+        {
+          "file": "tests/claude100/qualification/publication.test.js",
+          "line": 172
+        }
+      ],
+      "criteria": [
+        "CQ06",
+        "CQ07"
+      ],
+      "spec_lines": [
+        70
+      ],
+      "confidence": "HIGH",
+      "evidence_kind": "STATIC_COMBINED_FAILURE_PATH",
+      "example": {
+        "preconditions": "Valid fabricated mechanism pair; authority valid at start and initial AUTHORITY stage.",
+        "fault_and_schedule": [
+          "Reject the write of reference.projection (the existing PROJECTION_WRITE fault).",
+          "Allow remaining input snapshots and candidate reports to be written, but advance time beyond authority.expiresAt before final selector."
+        ],
+        "execution": "NOT_RUN"
+      },
+      "expected": "A failure of the comparator or generated-output IO produces INFRA_FAILURE/1 per the explicit final sentence of SPEC precedence. Expiration may outrank an authenticated execution outcome, but must not relabel an actual comparator/output failure.",
+      "actual_static": "The projection catch correctly sets INFRA_FAILURE, then authorityChecked=true plus report.status=INFRA_FAILURE creates a BLOCKED_CVG_SPEC alternative. The selector chooses that alternative after expiry, publishing and returning BLOCKED_CVG_SPEC/1. No distinction is retained between authenticated execution infra outcome and comparator-owned failure.",
+      "impact": "The persisted report hides the actual IO failure behind an authority result, violating the frozen deterministic error contract. Saved/returned reports agree, but agree on the wrong status.",
+      "proposed_remedy": "Track comparator/output failure provenance internally, separately from authenticated execution INFRA_FAILURE, without adding report/schema fields. Such failures must retain INFRA_FAILURE at final selection; expiry can still block a valid semantic result or authenticated execution classification.",
+      "closure_evidence": "Combine projection-write failure with expiry during snapshots/publication. Assert returned and persisted INFRA_FAILURE/1; keep pure-expiry cases BLOCKED_CVG_SPEC and pure authenticated infra/authority precedence controls.",
+      "related_prior_finding": "R1-002 generated-output error handling: ordinary fault is fixed; combined expiry path remains defective."
+    },
+    {
+      "id": "S0229-R2-002",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Metadata normalization can allocate a huge canonical projection before any generated-output budget check",
+      "file": "tests/claude100/qualification/qualify.mjs",
+      "line": 282,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 421
+        },
+        {
+          "file": "tests/support/governed-test-kit/index.js",
+          "line": 84
+        },
+        {
+          "file": "tests/support/governed-test-kit/index.js",
+          "line": 148
+        },
+        {
+          "file": "tests/support/governed-test-kit/index.js",
+          "line": 158
+        },
+        {
+          "file": "tests/claude100/qualification/safe-io.mjs",
+          "line": 281
+        }
+      ],
+      "criteria": [
+        "CQ02",
+        "CQ05",
+        "CQ06"
+      ],
+      "spec_lines": [
+        15,
+        37,
+        66,
+        70
+      ],
+      "confidence": "HIGH",
+      "evidence_kind": "STATIC_ALLOCATION_PATH_AND_EXACT_SIZE_ARITHMETIC",
+      "example": {
+        "normalizationPolicy": [
+          {
+            "field": "eventId",
+            "mode": "id",
+            "namespace": "ASCII n repeated 40000 times"
+          }
+        ],
+        "raw_document": "Array of 20000 copies of {\"eventId\":\"a\"}. Use bound synthetic inputs on both sides.",
+        "raw_bytes_per_side": 320001,
+        "namespace_bytes": 40000,
+        "generated_bytes_per_side": 800400001,
+        "MAX_OUTPUT_bytes": 268435456,
+        "raw_cap_bytes": 4194304,
+        "rule_cap_bytes": 131072,
+        "string_cap_bytes": 65536,
+        "execution": "NOT_RUN; no large projection generated",
+        "recipe": "normalization-expansion-recipe.json"
+      },
+      "expected": "Raw bounded evidence must not bypass generated-resource accounting. Validate any applicable approved ID constraints before expansion, and check the generated normalization/canonicalization budget before allocating/hashing the expanded document. Comparator resource failure must remain an honest INFRA_FAILURE, rather than being treated as malformed envelopes.",
+      "actual_static": "The current namespace lexical validator has no length bound and the qualifier delegates policy validation to it. The long policy fits the raw rule/string limits and normalizeLog([],policy) succeeds. During SCHEMAS, normalizeLog(document,policy) replaces each eventId with id:<40000-byte-namespace>:1 and eagerly computes projectionDigest via canonicalJson, before the IO MAX_OUTPUT guard is reached. The result demands 800,400,001 bytes for one complete canonical string from only 320,001 raw bytes. Runtime string/heap failure is environment-dependent; a thrown range/resource error here is caught as INVALID_INPUT, while an OOM may terminate without a report. No OOM or timing was reproduced.",
+      "impact": "A small bounded local input can bypass the output cap at the allocation boundary and prevent a reliable report; output chunking protects files only after this eager expansion.",
+      "proposed_remedy": "Add a bounded generated-size preflight/accounting path before the digest-generating normalizer is invoked, using the approved finite metadata transforms, or a bounded/streaming implementation with the same kit semantics. Respect existing approved ID limits where applicable; do not silently invent a smaller namespace/input contract or clone normalization semantics. Distinguish envelope validation from comparator resource exceptions. Keep Q03 ownership/gates intact.",
+      "closure_evidence": "Without constructing the huge output, verify an instrumented/preflight guard rejects or reports the over-budget generation before full normalization/digest allocation, with honest status. Include a within-budget long-namespace control, unchanged protected payload/topology, and the 200k numeric chunk regression."
+    }
+  ],
+  "findings_count": 2,
+  "severity_counts": {
+    "P0": 0,
+    "P1": 0,
+    "P2": 2,
+    "P3": 0
+  },
+  "source_read_phase": "COMPLETE",
+  "executed_by_reviewer": {
+    "qualifier": false,
+    "CLI": false,
+    "Q03_kit": false,
+    "integrated_tests": false,
+    "parser_tests": false,
+    "IO_tests": false,
+    "network": false,
+    "services": false,
+    "models": false,
+    "database": false,
+    "broader_gates": false,
+    "descendants": 0,
+    "commits": 0
+  },
+  "publication_assessment": "Synchronous selector then exclusive linkSync, no await, no required IO after success, completed report.json only; addresses the original async expiry/publication inconsistency for static review. Residual R2-001 concerns result selection, not link publication mechanics.",
+  "fixture_assessment": "Separate 19-file derived fabricated fixture freeze plus recipe hash checked. No original documentary examples modified by reviewer. Builder structural-check/format/lint claims not rerun or promoted to independent integrated PASS.",
+  "limitations": [
+    "Static source/control-flow and size arithmetic only; no candidate execution or observed fault/OOM is claimed.",
+    "All CQ01-CQ08 integrated/current acceptance remains pending; tests were inspected, never imported.",
+    "All original R1 evidence preserved. Only NEW review-r2/** written. Shared coordination/ledgers, source/tests/fixtures readonly.",
+    "No SPEC/schema changes or lower gates are authorized by this report. No PASS_CURRENT, actual functional capture, M1 or overall approval."
+  ],
+  "next_action": "Lead diagnoses both R2 findings in the second/final corrective round, freezes revised exact source/test/dependency/fixture hashes, and returns for review. Integrated execution remains forbidden until an explicit lead lift after Q03 current qualification; do not infer permission from partial gate progress.",
+  "source_integrity": {
+    "before_all_match": true,
+    "after_all_match": true,
+    "count": 18,
+    "packet_unchanged": true,
+    "packet_sha256": "d2625a786a5a216ab1d9b20aa778503e288b9db22c64bbb803597fb67c6dfcb9"
+  },
+  "fixture_integrity": {
+    "before_all_match": true,
+    "after_all_match": true,
+    "count": 20,
+    "packet_unchanged": true,
+    "packet_sha256": "488f3b8f25c6a7aeb50df1344c353effadf491b2a65a1eccd41a17fe3dbb4c1e"
+  },
+  "source_read_phase_closed_at": "2026-10-17T23:21:29.448358+00:00"
+}

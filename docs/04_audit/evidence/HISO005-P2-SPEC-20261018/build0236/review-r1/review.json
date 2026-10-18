@@ -1,0 +1,832 @@
+{
+  "schemaVersion": 1,
+  "role": "fresh-independent-critic",
+  "task": "HISO005-P2-BUILD-0236",
+  "round": 1,
+  "maxRounds": 2,
+  "verdict": "REVISE",
+  "candidate": "/home/ricardo/cvg-candidates/hiso005-integrated-20261018",
+  "commit": "22ca4c52dbfd6f80c474def544d3eb4e14852e2f",
+  "base": "26d866c39060669680aca01b34a916d45e1ba362",
+  "specSha256": "cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49",
+  "frozenPathCount": 17,
+  "mandatoryFindings": 5,
+  "findings": [
+    {
+      "id": "R1-01",
+      "priority": "P0",
+      "mandatory": true,
+      "criteria": [
+        "SP03",
+        "SP05",
+        "SP08",
+        "SP10",
+        "SP17"
+      ],
+      "cause": "Computed BindingElement key is never evaluated; propertyName.text fallback uses bound name",
+      "location": "scripts/boundary-semantic-engine.mjs:966",
+      "probe": "p02-computed-binding",
+      "sourceSha256": "025ebf8fd2030c297f85c3ba4bfe40688d01c00d2e14ad8af22504868b97dd03",
+      "observed": "PROVEN, validation.valid=true; real dynamic product call in computed key omitted",
+      "title": "Chave computada de destructuring apaga efeito real e permite PASS de pacote instalado",
+      "causeClass": "UNSOUND_TRANSFER / MISSED_RUNTIME_EFFECT",
+      "probes": [
+        "p02-computed-binding",
+        "p12-host-computed",
+        "p16-host-installed-computed",
+        "p17-host-installed-computed-finite"
+      ],
+      "reproSource": "probes/p17-host-installed-computed-finite/evaluated/node_modules/vendor/index.js",
+      "reproInput": "probes/p17-host-installed-computed-finite/request.json",
+      "reproOutput": "probes/p17-host-installed-computed-finite/output.json",
+      "reproCliOutput": "probes/p17-host-installed-computed-finite/cli-output.json",
+      "inputSourceSha256": "629dd32dfbc91e397432e2c39eb4acbb3a7995c18d6f1f985baa8d7e64e571ea",
+      "actual": "Installed MATCH becomes verified:true; kernel PROVEN; host PASS; CLI exit0. Real computed-key call has finite path ../../ + pro + ducts/shift/src/index.js, reaching own synthetic product at module evaluation. Target was never executed by reviewer.",
+      "impact": "Violação da fronteira real pode ser apagada, não apenas diagnóstico neutro; p16 literal é barrado pelo scanner textual e p12 primeira parte permanece INCOMPLETE, mas p17 finito composto passa.",
+      "recommendation": "No v1, recusar todo BindingElement com ComputedPropertyName antes de qualquer fallback; não vincular pelo nome local. UNKNOWN na closure e zero proofs/verifiedfalse. Suporte posterior somente derivando avaliação da chave e seus efeitos pelas regras já permitidas.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "id": "R1-02",
+      "priority": "P0",
+      "mandatory": true,
+      "criteria": [
+        "SP02",
+        "SP05",
+        "SP08",
+        "SP10",
+        "SP17"
+      ],
+      "cause": "Anonymous default FunctionDeclaration has no name; block silently continues without adding default export or analyzing body under K0",
+      "location": "scripts/boundary-semantic-engine.mjs:1124",
+      "probe": "p03-anonymous-default / p15-host-installed-default",
+      "sourceSha256": "025ebf8fd2030c297f85c3ba4bfe40688d01c00d2e14ad8af22504868b97dd03",
+      "observed": "Public installed MATCH package with export default function(specifier){return import(specifier)} becomes verified:true and CLI PASS exit0",
+      "title": "Default export de função anônima não participa do fechamento público",
+      "causeClass": "MISSED_PUBLIC_ENTRY / UNSOUND_EXPORT_CLOSURE",
+      "probes": [
+        "p03-anonymous-default",
+        "p13-host-default",
+        "p15-host-installed-default"
+      ],
+      "reproSource": "probes/p15-host-installed-default/evaluated/node_modules/vendor/index.js",
+      "reproInput": "probes/p15-host-installed-default/request.json",
+      "reproOutput": "probes/p15-host-installed-default/output.json",
+      "reproCliOutput": "probes/p15-host-installed-default/cli-output.json",
+      "inputSourceSha256": "8a54d6434b65388a2f9de03f349d6f9cac081c45933852a3ec20d494eea872ca",
+      "actual": "Installed MATCH export default function(specifier){ return import(specifier); } is verified:true and host/CLI PASS exit0. Default function is absent from exports map, so external UNKNOWN parameter/body never analyzed.",
+      "impact": "A closure pública de um pacote ganha prova enquanto exporta um loader com alvo externo aberto; recomputação repete a omissão. O controle primeira parte p13 conserva NON_LITERAL_MODULE_REFERENCE/INCOMPLETE.",
+      "recommendation": "Recusar FunctionDeclaration default sem name no v1 e invalidar a closure. Se o builder corrigir representação do default dentro das regras existentes, analisar o corpo sob K0 com argumentos externos UNKNOWN, sem usar argumentos de chamada privada. Incluir defaults nomeados/aliases nos controles, sem criar summary por nome.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "id": "R1-03",
+      "priority": "P1",
+      "mandatory": true,
+      "criteria": [
+        "SP03",
+        "SP07",
+        "SP17"
+      ],
+      "cause": "All inline type specifiers cause the entire import to be skipped, although native stripping/verbatim emit preserves import {} and runtime side effects",
+      "location": "scripts/boundary-semantic-engine.mjs:1078",
+      "probe": "p04-types-runtime / p14-host-type-import",
+      "sourceSha256": "025ebf8fd2030c297f85c3ba4bfe40688d01c00d2e14ad8af22504868b97dd03",
+      "observed": "Kernel PROVEN omits product runtime source from inputs; pinned TS compiler emits import {} from product. Existing host graph still FAIL for direct product.",
+      "title": "Import com specifiers inline type é tratado como totalmente apagado",
+      "causeClass": "RUNTIME_PROFILE / LOST_MODULE_EDGE",
+      "probes": [
+        "p04-types-runtime",
+        "p14-host-type-import"
+      ],
+      "reproSource": "probes/p04-types-runtime/entry.ts",
+      "reproInput": "probes/p04-types-runtime/input.json",
+      "reproOutput": "probes/p04-types-runtime/output.json",
+      "compilerOutput": "probes/p04-types-runtime/compiler-runtime-output.json",
+      "inputSourceSha256": "f471001be230b03b4c594cd223d5fb66cd6ef6144c0c6fc67dbbb7a41da006ba",
+      "actual": "Kernel PROVEN/valid recomputation for import {type T} from ./products/shift/index.ts; product absent from acquired inputs. Pinned TS6.0.3 transpile with verbatimModuleSyntax emits import {} from same target.",
+      "impact": "Premissa K5 de todas as arestas runtime não se sustenta. O grafo legado no checker ainda dá FAIL no produto direto (p14): não afirmar PASS público nesse caso. Em perfil não demonstrado, UNKNOWN é obrigatório.",
+      "recommendation": "Recusar imports com lista totalmente inline type enquanto o perfil de apagamento não for demonstrado, ou preservar a aresta vazia de runtime quando aplicável. Distinguir import type explícito de import {type T}; não aceitar ausência de aresta por heurística de declaração.",
+      "confidence": "CONFIRMED_KERNEL; HOST_FAIL_GUARD_OBSERVED"
+    },
+    {
+      "id": "R1-04",
+      "title": "CLI da receita compilada não aceita seu argumento obrigatório SHA256",
+      "priority": "P1",
+      "mandatory": true,
+      "criteria": [
+        "SP11",
+        "SP15",
+        "SP17"
+      ],
+      "causeClass": "CLI_GRAMMAR / UNREACHABLE_SUPPORTED_PATH",
+      "location": "scripts/boundary-semantic-compiled.mjs:707",
+      "sourceSha256": "48179094c42d3b2aa7f7c4c7b34f22c13f90b4b1e709d4bcc702b9b55cd96726",
+      "probes": [
+        "p20-compiled-cli"
+      ],
+      "reproInput": "probes/p20-compiled-cli/input.json",
+      "reproOutput": "probes/p20-compiled-cli/output.json",
+      "actual": "--installed-reference-sha256=valid64hex fails /^--([a-z-]+)=(.+)$/; CLI exit2 COMPILED_CLI_OPTIONS_INVALID before build. Lead actual-tree command independently has same red.",
+      "impact": "A receita via CLI não é utilizável com o par obrigatório, embora a API execute build. Não é falso PROVEN nem falha de integridade do receipt.",
+      "recommendation": "Aceitar dígitos na gramática do nome mantendo allowlist e rejeição de duplicados; controle positivo de CLI com fixture física já existente e negativos de digest/flags. Reemitir receita final pela CLI no novo freeze.",
+      "confidence": "CONFIRMED; LEAD_REPORTED_AND_INDEPENDENTLY_REPRODUCED"
+    }
+  ],
+  "criteria": {
+    "SP01": {
+      "status": "SUPPORTED_SCOPED",
+      "evidence": "independent-evidence.json: quatro gz descomprimidos iguais aos before/after; default e identity contra9b,537diagnósticos. Sem nova execução global."
+    },
+    "SP02": {
+      "status": "REVISE",
+      "evidence": "p01/p11 positivos; R1-02 derrota closure pública."
+    },
+    "SP03": {
+      "status": "REVISE",
+      "evidence": "p17 produto top-level omitido; p14 guard legado preserva FAIL."
+    },
+    "SP04": {
+      "status": "INSPECTED_NOT_REEXECUTED",
+      "evidence": "Kernel sem resumos shutdown/vi por nome; positivos reais opacos permanecem UNKNOWN. Evidências89 e fonte inspecionadas."
+    },
+    "SP05": {
+      "status": "REVISE",
+      "evidence": "R1-01/02; p05/06/07/09 recusam this extraído/captura pública/mutação/sombreamento corretamente."
+    },
+    "SP06": {
+      "status": "SUPPORTED_SCOPED",
+      "evidence": "p10 getter UNKNOWN; p01/p11 reflexão própria positiva. Proxy e usos descriptor inspecionados nos testes89."
+    },
+    "SP07": {
+      "status": "REVISE",
+      "evidence": "R1-03; perfis ambíguos/symlinks/conditional exports recusados pelo mecanismo."
+    },
+    "SP08": {
+      "status": "REVISE",
+      "evidence": "R1-01/02; string finita de produto em p17 perdida."
+    },
+    "SP09": {
+      "status": "INSPECTED_NOT_REEXECUTED",
+      "evidence": "Processos/native/WASM/async/new/eval sem resumo confiado; nenhum alvo/processo de aplicação executado pelo crítico."
+    },
+    "SP10": {
+      "status": "REVISE",
+      "evidence": "p15/p17 MATCH vira verifiedtrue sem closure suportada. Identidade física não substitui semântica."
+    },
+    "SP11": {
+      "status": "REVISE",
+      "evidence": "R1-04; API15 e actual-tree33.63s/exit0 são evidência do caminho API; CLI final não aceita. Observer getSourceFiles e recusa de outside.d.ts inspecionados; sem transferência de prova TS->JS."
+    },
+    "SP12": {
+      "status": "SUPPORTED_SCOPED",
+      "evidence": "p08 ciclo UNKNOWN; p18 produto prevalece sobre cap; p19 rejeita prova rehash com dependência inexistente. Demais caps/perfis/races apenas fonte/evidências89, sem busca exaustiva de races."
+    },
+    "SP13": {
+      "status": "SUPPORTED_SCOPED",
+      "evidence": "Emissor WeakMap/hash tuple/span/kind/ordinal e partição inspecionados; testes12 de duplicatas/strict inspecionados; p11 positivo e p12/13 guardas conservam ocorrência não quitada."
+    },
+    "SP14": {
+      "status": "PENDING_REAL_SEMANTIC_PARTITION",
+      "evidence": "Multiset168subset234(+66),303subset303 recomputados de artefatos brutos. Não é partição semântica aceita da árvore real."
+    },
+    "SP15": {
+      "status": "PENDING_BROAD_GATES",
+      "evidence": "89engine/15compiled/12CLI/93legacy registros inspecionados. Crítico não duplicou fullsuite; PG/E2E/certify/SBOM/licenças não executados; freeze novo exigirá evidência própria."
+    },
+    "SP16": {
+      "status": "LEAD_EVIDENCE_INSPECTED_ONLY",
+      "evidence": "Fresh consumer207imports/76exports,zero rede,commit22ca: compiled-consumer-r2.json e receipt lidos/hashados. Não reexecutado; não transfere ao futuro freeze."
+    },
+    "SP17": {
+      "status": "REVISE",
+      "evidence": "Crítico independente R1; quatro obrigatórios abertos."
+    },
+    "SP18": {
+      "status": "OPEN_NO_B6_ACCEPTANCE",
+      "evidence": "Nenhuma promoção/certificação/produção; UNKNOWN correto não fecha HISO005/P2/P3/B6."
+    }
+  },
+  "probes": {
+    "syntheticScenarios": 20,
+    "maxAllowed": 20,
+    "targetCodeExecuted": false,
+    "fullSuiteRerun": false,
+    "runtime": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+    "nodeVersion": "22.23.2",
+    "nodeSha256": "3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327",
+    "parserVersion": "6.0.3",
+    "parserSha256": "569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39",
+    "environment": "env -i PATH=Node22:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC; no NODE_OPTIONS or Vitest flags",
+    "results": [
+      {
+        "id": "p01-positive",
+        "expected": "PROVEN",
+        "actual": "PROVEN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 1,
+        "unknowns": [],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "2487a99918dcfff363fab89e8d5de9db1edd6594e510ff5a4218d03d769c9396"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "2487a99918dcfff363fab89e8d5de9db1edd6594e510ff5a4218d03d769c9396"
+      },
+      {
+        "id": "p02-computed-binding",
+        "expected": "UNKNOWN_OR_VIOLATION",
+        "actual": "PROVEN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 2,
+        "unknowns": [],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "8b16f915ee8caa08172364a41489f1de377c2b3152151110fc6d3122b02af74a"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "8b16f915ee8caa08172364a41489f1de377c2b3152151110fc6d3122b02af74a"
+      },
+      {
+        "id": "p03-anonymous-default",
+        "expected": "UNKNOWN",
+        "actual": "PROVEN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 2,
+        "unknowns": [],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "8a2dfc18fe1b4d00833ddef78b000af44780d7c65b93dc27450cdb17006bf0b6"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "8a2dfc18fe1b4d00833ddef78b000af44780d7c65b93dc27450cdb17006bf0b6"
+      },
+      {
+        "id": "p04-types-runtime",
+        "expected": "VIOLATION",
+        "actual": "PROVEN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 2,
+        "unknowns": [],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.ts",
+            "sha256": "f471001be230b03b4c594cd223d5fb66cd6ef6144c0c6fc67dbbb7a41da006ba"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "f471001be230b03b4c594cd223d5fb66cd6ef6144c0c6fc67dbbb7a41da006ba"
+      },
+      {
+        "id": "p05-this-extracted",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_PROPERTY",
+            "originId": null,
+            "detail": ""
+          },
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_THIS",
+            "originId": null,
+            "detail": ""
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "41cfe3909c9237de69ff6eee3900bb22f5e006d484baa4d178ffc58a14bf1db6"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "41cfe3909c9237de69ff6eee3900bb22f5e006d484baa4d178ffc58a14bf1db6"
+      },
+      {
+        "id": "p06-public-capture",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_EXPORTED_MUTABLE_STATE",
+            "originId": null,
+            "detail": ""
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "ed904d8b69f494dfb66bd4a099362a057a209e1cdbcf6f5a3de8e4e8ce2369be"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "ed904d8b69f494dfb66bd4a099362a057a209e1cdbcf6f5a3de8e4e8ce2369be"
+      },
+      {
+        "id": "p07-mutated-intrinsic",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_MUTATION",
+            "originId": null,
+            "detail": ""
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "8aac098f0bb0766b2a0df8a1e2a5cb9c86e32afbe8dd43d9d0d4c1bf819613ac"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "8aac098f0bb0766b2a0df8a1e2a5cb9c86e32afbe8dd43d9d0d4c1bf819613ac"
+      },
+      {
+        "id": "p08-dag-cycle",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_CYCLE",
+            "originId": null,
+            "detail": ""
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "36b7af9126d4ddc1f9ed350b857dfae29a1c19b46ff7bd47a25e87b07e1b7185"
+          },
+          {
+            "file": "other.js",
+            "sha256": "636b022c86287d871716831b338cc7e25d44c74270b87bb798930df1aa940af8"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "36b7af9126d4ddc1f9ed350b857dfae29a1c19b46ff7bd47a25e87b07e1b7185"
+      },
+      {
+        "id": "p09-shadow-this-param",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_CALL",
+            "originId": null,
+            "detail": ""
+          },
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_EXPORT",
+            "originId": null,
+            "detail": ""
+          },
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_PROPERTY",
+            "originId": null,
+            "detail": ""
+          },
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_BINDING_VALUE",
+            "originId": null,
+            "detail": "Object"
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "27b47f3641e153f098e64d24767ac2a114ef16d778d150ab2380b002366d09cd"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "27b47f3641e153f098e64d24767ac2a114ef16d778d150ab2380b002366d09cd"
+      },
+      {
+        "id": "p10-opaque-getter",
+        "expected": "UNKNOWN",
+        "actual": "UNKNOWN",
+        "validation": {
+          "valid": true
+        },
+        "proofs": 0,
+        "unknowns": [
+          {
+            "file": "entry.js",
+            "reason": "UNKNOWN_OBJECT",
+            "originId": null,
+            "detail": ""
+          }
+        ],
+        "violations": [],
+        "inputs": [
+          {
+            "file": "entry.js",
+            "sha256": "af06ed1d31553a5fd9c113b7aff7067555c4102bb023b3e638c40d44a7da6819"
+          },
+          {
+            "file": "package.json",
+            "sha256": "6dc1b06d6b093e9cccb20bee06a93836eee0420ae26803ca2ce4065d82f070d1"
+          }
+        ],
+        "codehash": "af06ed1d31553a5fd9c113b7aff7067555c4102bb023b3e638c40d44a7da6819"
+      },
+      {
+        "id": "p11-host-positive",
+        "codehash": "9f55da130a827a8134093ecf65370879c7fd66a210e558d610edca26529f8e59",
+        "vendorhash": null,
+        "before": {
+          "status": "INCOMPLETE",
+          "diagnostics": 1
+        },
+        "after": {
+          "status": "PASS",
+          "passed": true,
+          "diagnostics": [],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 1,
+            "resolved": 1,
+            "unresolved": 0,
+            "new": 0,
+            "unresolvedOrigins": []
+          },
+          "installed": null
+        },
+        "cliExit": 0
+      },
+      {
+        "id": "p12-host-computed",
+        "codehash": "8c6a00366a359b57b35c7a4f7973096dbb5b8c961e96d5d4dbc6df5f08df73ab",
+        "vendorhash": null,
+        "before": {
+          "status": "INCOMPLETE",
+          "diagnostics": 2
+        },
+        "after": {
+          "status": "INCOMPLETE",
+          "passed": false,
+          "diagnostics": [
+            {
+              "file": "packages/core/src/index.js:1",
+              "reason": "NON_LITERAL_MODULE_REFERENCE"
+            }
+          ],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 2,
+            "resolved": 1,
+            "unresolved": 1,
+            "new": 0,
+            "unresolvedOrigins": [
+              "c1bfeac70f5a7dee2d4da64b56e0c0032b5df6b355aa8b360ac873d92d3eb01b"
+            ]
+          },
+          "installed": null
+        },
+        "cliExit": 1
+      },
+      {
+        "id": "p13-host-default",
+        "codehash": "d74bf7f1ee434ec17d3b6e4008820b86d27e1d13e62f19c5102deb84abbc812a",
+        "vendorhash": null,
+        "before": {
+          "status": "INCOMPLETE",
+          "diagnostics": 2
+        },
+        "after": {
+          "status": "INCOMPLETE",
+          "passed": false,
+          "diagnostics": [
+            {
+              "file": "packages/core/src/index.js:1",
+              "reason": "NON_LITERAL_MODULE_REFERENCE"
+            }
+          ],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 2,
+            "resolved": 1,
+            "unresolved": 1,
+            "new": 0,
+            "unresolvedOrigins": [
+              "8359f30cbf60afb2748d640a906e47b1a280c4433704048d431abb5215460954"
+            ]
+          },
+          "installed": null
+        },
+        "cliExit": 1
+      },
+      {
+        "id": "p14-host-type-import",
+        "codehash": "31b122d1681da541c76afa3cbf32660a12658bca0f260b948ac79d7352d2c946",
+        "vendorhash": null,
+        "before": {
+          "status": "FAIL",
+          "diagnostics": 1
+        },
+        "after": {
+          "status": "FAIL",
+          "passed": false,
+          "diagnostics": [],
+          "violations": [
+            {
+              "reason": "CORE_DEPENDS_ON_PRODUCT",
+              "trail": [
+                "packages/core/src/index.ts",
+                "products/shift/src/index.ts"
+              ]
+            },
+            {
+              "reason": "CORE_DEPENDS_ON_PRODUCT",
+              "trail": [
+                "packages/core/src/index.ts",
+                "products/shift/package.json"
+              ]
+            }
+          ],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 1,
+            "resolved": 1,
+            "unresolved": 0,
+            "new": 0,
+            "unresolvedOrigins": []
+          },
+          "installed": null
+        },
+        "cliExit": 1
+      },
+      {
+        "id": "p15-host-installed-default",
+        "codehash": "b2467ac95d904abf67a87454d9eea25aec6d2bea30e3d3c78328ffea45f9e137",
+        "vendorhash": "8a54d6434b65388a2f9de03f349d6f9cac081c45933852a3ec20d494eea872ca",
+        "before": {
+          "status": "INCOMPLETE",
+          "diagnostics": 2
+        },
+        "after": {
+          "status": "PASS",
+          "passed": true,
+          "diagnostics": [],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 2,
+            "resolved": 2,
+            "unresolved": 0,
+            "new": 0,
+            "unresolvedOrigins": []
+          },
+          "installed": null
+        },
+        "cliExit": 0
+      },
+      {
+        "id": "p16-host-installed-computed",
+        "codehash": "b2467ac95d904abf67a87454d9eea25aec6d2bea30e3d3c78328ffea45f9e137",
+        "vendorhash": "f74ddea49803f813fa7f9a081ee66e68d2f905e206b5b66b91aa13783242bd0e",
+        "before": {
+          "status": "FAIL",
+          "diagnostics": 3
+        },
+        "after": {
+          "status": "FAIL",
+          "passed": false,
+          "diagnostics": [
+            {
+              "file": "node_modules/vendor/index.js",
+              "reference": "products/shift",
+              "reason": "INSTALLED_PACKAGE_REFERENCES_PRODUCT"
+            }
+          ],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 3,
+            "resolved": 2,
+            "unresolved": 1,
+            "new": 0,
+            "unresolvedOrigins": [
+              "571b73497bdda47bfb28043757e5cc689ea9da90872d18fce7323f98b986857a"
+            ]
+          },
+          "installed": null
+        },
+        "cliExit": 1
+      },
+      {
+        "id": "p17-host-installed-computed-finite",
+        "codehash": "b2467ac95d904abf67a87454d9eea25aec6d2bea30e3d3c78328ffea45f9e137",
+        "vendorhash": "629dd32dfbc91e397432e2c39eb4acbb3a7995c18d6f1f985baa8d7e64e571ea",
+        "before": {
+          "status": "INCOMPLETE",
+          "diagnostics": 2
+        },
+        "after": {
+          "status": "PASS",
+          "passed": true,
+          "diagnostics": [],
+          "violations": [],
+          "semantic": "PROVEN",
+          "occurrences": {
+            "baseline": 2,
+            "resolved": 2,
+            "unresolved": 0,
+            "new": 0,
+            "unresolvedOrigins": []
+          },
+          "installed": null
+        },
+        "cliExit": 0
+      },
+      {
+        "id": "p18-product-cap",
+        "status": "VIOLATION",
+        "violations": [
+          {
+            "file": "entry.js",
+            "reason": "PRODUCT_DEPENDENCY",
+            "target": "products/shift/index.js"
+          },
+          {
+            "file": "products/shift/index.js",
+            "reason": "PRODUCT_DEPENDENCY",
+            "target": "products/shift/index.js"
+          }
+        ],
+        "proofs": 0,
+        "expected": "VIOLATION despite reduced cap"
+      },
+      {
+        "id": "p19-forged-dag",
+        "validation": {
+          "valid": false,
+          "reason": "RECOMPUTATION_MISMATCH"
+        },
+        "expected": "invalid recomputation despite valid newly hashed proof with nonexistent dependency"
+      },
+      {
+        "id": "p20-compiled-cli",
+        "argv": [
+          "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node",
+          "/home/ricardo/cvg-candidates/hiso005-integrated-20261018/scripts/boundary-semantic-compiled.mjs",
+          "--source-root=/tmp/cvg-hiso005-integration-20261018/review0236-r1/p11-host-positive/evaluated",
+          "--commit=22ca4c52dbfd6f80c474def544d3eb4e14852e2f",
+          "--output-root=/tmp/cvg-hiso005-integration-20261018/review0236-r1/p20-compiled-cli/fresh",
+          "--installed-reference=/tmp/cvg-hiso005-integration-20261018/review0236-r1/p11-host-positive/installed-reference.json",
+          "--installed-reference-sha256=da48d758faf9c54bc22621ab5168ad65c59b6f22aaa8042171c0b07eefc2ba55"
+        ],
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": "{\"status\":\"UNAVAILABLE\",\"code\":\"COMPILED_CLI_OPTIONS_INVALID\"}\n",
+        "expected": "valid option parsed, not COMPILED_CLI_OPTIONS_INVALID"
+      }
+    ]
+  },
+  "hypothesesNotExecuted": [
+    {
+      "id": "H1",
+      "origin": "Lead after 20th probe",
+      "hypothesis": "TS parser accepts TS-only syntax in .js and interpreter skips interface/type statements; installed MATCH invalid JS might be falsely PROVEN",
+      "locations": [
+        "scripts/boundary-semantic-engine.mjs:493",
+        "scripts/boundary-semantic-engine.mjs:1071"
+      ],
+      "status": "NOT_RUN_BY_CRITIC; LEAD_SUBSEQUENTLY_OBSERVED_KERNEL_RED",
+      "recommendation": "Lead/new freeze/R2: Node22 parse-only --check or equivalent trusted syntax validation without target execution, plus installed fixture; conservatively UNKNOWN until runtime syntax demonstrated.",
+      "leadFinding": "LEAD-R1-05"
+    }
+  ],
+  "limitations": [
+    "No exhaustive model soundness proof or race search; 20 bounded synthetic scenarios.",
+    "Broad gates and real semantic partition are pending; source17 only, not full audit/authorship of55Claude deltas.",
+    "Builder/API/consumer evidence inspected as artifacts, not represented as independent reruns.",
+    "Reference89fd40e9 accepted by Lead for byte comparison only; this review does not grant semantic trust to MATCH.",
+    "Compiled actual-tree API receipt not accepted as final CLI output; no new compiler variant built by critic.",
+    "Recomputation detects forged proof structure but repeats interpreter semantic omissions R1-01/02/03.",
+    "UNKNOWN legitimate is correct refusal and does not close B6."
+  ],
+  "ownership": {
+    "readonlyReview": "RELEASED_TO_LEAD",
+    "sourceMutations": 0,
+    "descendants": 0,
+    "jobsActive": 0,
+    "ledgerEdits": false,
+    "installs": false,
+    "commits": false,
+    "network": false,
+    "nextAction": "Lead repairs four independently reproduced findings plus Lead grammar red once conservatively; new freeze and R2; no promotion/fullcert before re-review."
+  },
+  "completedAt": "2026-10-18T02:16:29.535096+00:00",
+  "leadObservedFindings": [
+    {
+      "id": "LEAD-R1-05",
+      "title": "Gramática JS runtime não validada antes de PROVEN",
+      "mandatory": true,
+      "priority": "P1",
+      "criteria": [
+        "SP07",
+        "SP12",
+        "SP17"
+      ],
+      "causeClass": "PARSER_RUNTIME_GRAMMAR_MISMATCH",
+      "evidenceOrigin": "Lead executed 2 additional probes; critic read raw inputs/outputs and Node22 --check stderr; not independently rerun and outside critic20",
+      "sourceSha256": "025ebf8fd2030c297f85c3ba4bfe40688d01c00d2e14ad8af22504868b97dd03",
+      "reproFiles": [
+        "lead-observed/js-type-first-red.json",
+        "lead-observed/js-duplicate-first-red.json"
+      ],
+      "actual": "Both invalid .js files receive engine PROVEN validationtrue; pinned Node22 --check exits1 without executing target",
+      "sourceHashes": [
+        "00b3659846d4e34d94fd7a2f4f09f3bc93ee6a6f86c1d2fca0875320c33c2166",
+        "cbb8757ccf92fbf9dbb22145510246c0256497a2c52050f466dfe600c66677e8"
+      ],
+      "recommendation": "Conservative runtime grammar gate before publishing any PROVEN, pinned Node22 --check only; supervise remaining strict deadline, no import/run. Failure/timeout/error discards proofs; hash/resolution revalidation after parse guard. Ensure actual extension/module mode and caller profile are pinned.",
+      "limitations": "End-to-end installed MATCH host PASS hypothesis was not executed by critic or demonstrated by these two Lead raw outputs. Kernel falsePROVEN is demonstrated."
+    }
+  ],
+  "independentlyReproducedMandatoryFindings": 4,
+  "leadObservedMandatoryFindings": 1
+}

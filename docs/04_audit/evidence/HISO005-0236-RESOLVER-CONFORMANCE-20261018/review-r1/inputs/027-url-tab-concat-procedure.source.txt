@@ -1,0 +1,195 @@
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync}from 'node:child_process';import {createHash}from 'node:crypto';
+import{canonicalJson,fingerprintResolution,fingerprintToolchain,collectPackageInventory,INSTALLED_IDENTITY_LIMITS}from '/home/ricardo/cvg-candidates/hiso005-integrated-20261018/scripts/boundary-installed-identity.mjs';
+const NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';const CHECKER='/home/ricardo/cvg-candidates/hiso005-integrated-20261018/scripts/check-product-boundary.mjs';const roots=[];const toolchain=fingerprintToolchain();const hash=x=>createHash('sha256').update(x).digest('hex');const write=(root,file,bytes)=>{const p=path.join(root,file);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,bytes);return p};
+function fixture({ core = 'export const result = 1\n', vendor, payload } = {}) {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-b6236-host-'))
+  roots.push(parent)
+  const evaluated = path.join(parent, 'evaluated'),
+    reference = path.join(parent, 'synthetic-independent-reference')
+  const key = 'node_modules/vendor'
+  const lock = {
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'synthetic', version: '1.0.0' },
+      ...(vendor
+        ? {
+            [key]: {
+              version: '1.0.0',
+              resolved: 'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',
+              integrity: 'sha512-' + Buffer.alloc(64, 1).toString('base64')
+            }
+          }
+        : {})
+    }
+  }
+  for (const root of [evaluated, reference]) {
+    write(
+      root,
+      'package.json',
+      JSON.stringify({
+        name: 'synthetic',
+        version: '1.0.0',
+        private: true,
+        type: 'module',
+        workspaces: ['packages/*', 'products/*']
+      })
+    )
+    write(root, 'package-lock.json', JSON.stringify(lock))
+    write(
+      root,
+      'tsconfig.base.json',
+      JSON.stringify({
+        compilerOptions: {
+          module: 'NodeNext',
+          moduleResolution: 'NodeNext',
+          allowJs: true,
+          target: 'ES2022'
+        }
+      })
+    )
+    write(
+      root,
+      'packages/core/package.json',
+      JSON.stringify({
+        name: '@synthetic/core',
+        version: '1.0.0',
+        type: 'module',
+        main: 'src/index.js',
+        ...(vendor ? { dependencies: { vendor: '1.0.0' } } : {})
+      })
+    )
+    write(root, 'packages/core/src/index.js', core)
+    write(
+      root,
+      'products/shift/package.json',
+      JSON.stringify({
+        name: '@private/product',
+        version: '1.0.0',
+        type: 'module',
+        main: 'src/index.js'
+      })
+    )
+    write(root, 'products/shift/src/index.js', 'export const productOnly=1\n')
+    if (vendor) {
+      write(
+        root,
+        key + '/package.json',
+        JSON.stringify({
+          name: 'vendor',
+          version: '1.0.0',
+          type: 'module',
+          main: 'index.js'
+        })
+      )
+      write(root, key + '/index.js', vendor)
+    }
+    if (payload) write(root, key + '/payload.node', payload)
+  }
+  const packages = vendor
+    ? [
+        {
+          key,
+          name: 'vendor',
+          version: '1.0.0',
+          ...collectPackageInventory(path.join(reference, key))
+        }
+      ]
+    : []
+  // Private synthetic operator receipt; not an offline recipe/SRI attestation.
+  const receipt = {
+    schemaVersion: 1,
+    kind: 'cvg-installed-content-reference',
+    commit: 'f'.repeat(40),
+    root: reference,
+    ...fingerprintResolution(reference),
+    toolchain,
+    toolchainSha256: hash(canonicalJson(toolchain)),
+    recipe: {
+      argv: [
+        'ci',
+        '--offline',
+        '--ignore-scripts',
+        '--audit=false',
+        '--fund=false',
+        '--include=dev',
+        '--include=optional',
+        '--cache',
+        path.join(parent, 'cache')
+      ],
+      exitCode: 0,
+      offline: true,
+      ignoreScripts: true,
+      completed: true
+    },
+    selection: {
+      platform: process.platform,
+      arch: process.arch,
+      dev: true,
+      optional: true
+    },
+    limits: { ...INSTALLED_IDENTITY_LIMITS },
+    usage: {
+      entries: packages.reduce((n, p) => n + p.usage.entries, 0),
+      regularBytes: packages.reduce((n, p) => n + p.usage.regularBytes, 0),
+      maxDepth: packages.length
+        ? Math.max(...packages.map((p) => p.usage.maxDepth))
+        : 0
+    },
+    packages
+  }
+  const bytes = canonicalJson(receipt),
+    manifestPath = write(parent, 'installed-reference.json', bytes),
+    expectedSha256 = hash(bytes)
+  const flags = [
+    `--installed-reference=${manifestPath}`,
+    `--installed-reference-sha256=${expectedSha256}`
+  ]
+  const run = (args = ['--semantic'], env = {}) => {
+    const graphFile = path.join(parent, 'graph.json')
+    const result = spawnSync(
+      NODE,
+      [CHECKER, evaluated, `--graph=${graphFile}`, ...flags, ...args],
+      {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: {
+          PATH: path.dirname(NODE) + ':/usr/bin:/bin',
+          LANG: 'C',
+          LC_ALL: 'C',
+          TZ: 'UTC',
+          ...env
+        }
+      }
+    )
+    if (result.error) throw result.error
+    return {
+      code: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+      report: result.stdout ? JSON.parse(result.stdout) : null,
+      graph: fs.existsSync(graphFile)
+        ? JSON.parse(fs.readFileSync(graphFile))
+        : null
+    }
+  }
+  return {
+    parent,
+    evaluated,
+    reference,
+    flags,
+    run,
+    manifestPath,
+    expectedSha256
+  }
+}
+const f=fixture({core:"import { value } from 'vendor'; export const result=value\n",vendor:'export const value=1\n'});
+for(const root of[f.evaluated,f.reference]){
+ const manifest=path.join(root,'node_modules/vendor/package.json');const body=JSON.parse(fs.readFileSync(manifest));body.exports='./sa\tfe.mjs';fs.writeFileSync(manifest,JSON.stringify(body));
+ write(root,'node_modules/vendor/sa\tfe.mjs','export const value=1\n');
+ write(root,'node_modules/vendor/safe.mjs',"import('../../pro'+'ducts/shift/src/index.js'); export const value=2\n");
+}
+const receipt=JSON.parse(fs.readFileSync(f.manifestPath));receipt.packages=[{key:'node_modules/vendor',name:'vendor',version:'1.0.0',...collectPackageInventory(path.join(f.reference,'node_modules/vendor'))}];Object.assign(receipt,fingerprintResolution(f.reference));receipt.usage={entries:receipt.packages[0].usage.entries,regularBytes:receipt.packages[0].usage.regularBytes,maxDepth:receipt.packages[0].usage.maxDepth};const rb=canonicalJson(receipt);fs.writeFileSync(f.manifestPath,rb);const digest=hash(rb);
+const env={PATH:path.dirname(NODE)+':/usr/bin:/bin',LANG:'C',LC_ALL:'C',TZ:'UTC'};
+const argv=[CHECKER,f.evaluated,'--semantic','--installed-reference='+f.manifestPath,'--installed-reference-sha256='+digest,'--graph='+path.join(f.parent,'final-graph.json')];const result=spawnSync(NODE,argv,{cwd:f.evaluated,env,encoding:'utf8',timeout:60000});fs.writeFileSync(path.join(f.parent,'checker.stdout.json'),result.stdout||'');fs.writeFileSync(path.join(f.parent,'checker.stderr.txt'),result.stderr||'');
+const oracleArgs=['--input-type=module','--eval','console.log(import.meta.resolve(process.argv[1]))','vendor'];const oracle=spawnSync(NODE,oracleArgs,{cwd:path.join(f.evaluated,'packages/core/src'),env,encoding:'utf8',timeout:10000});
+const report=result.stdout?JSON.parse(result.stdout):null;const graph=JSON.parse(fs.readFileSync(path.join(f.parent,'final-graph.json')));const record={case:'url-tab-exports-concatenated-product',candidateCommit:'75dfef50d0b5bc5a8063829ea4c63af8b4ab8b54',parent:f.parent,checkerArgv:argv,checkerExit:result.status,checkerStatus:report?.status,diagnostics:report?.diagnostics,semanticUnknowns:report?.semanticBoundary?.unknowns,semanticStatus:report?.semanticBoundary?.status,verified:graph.installed.map(x=>({node:x.node,verified:x.verified,identity:x.contentIdentity?.status})),oracle:{argv:[NODE,...oracleArgs],cwd:path.join(f.evaluated,'packages/core/src'),exitCode:oracle.status,stdout:oracle.stdout,stderr:oracle.stderr},targetCodeExecuted:false,referenceType:'Explicit synthetic operator byte-comparison receipt; no real offline/SRI attestation claimed',selectedInputs:report?.semanticBoundary?.inputs};fs.writeFileSync('/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/HISO005-0236-RESOLVER-CONFORMANCE-20261018/url-tab-concat-first-observation.json',JSON.stringify(record,null,2)+'\n');console.log(JSON.stringify({...record,selectedInputs:undefined}));

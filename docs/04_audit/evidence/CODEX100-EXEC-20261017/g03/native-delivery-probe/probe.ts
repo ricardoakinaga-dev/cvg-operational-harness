@@ -1,0 +1,33 @@
+import { randomBytes } from 'node:crypto'
+import { writeFileSync, readFileSync, readlinkSync, existsSync } from 'node:fs'
+import { createOperationalHarness } from '/home/ricardo/Área de trabalho/cvg-operational-harness/packages/harness/src/createOperationalHarness.ts'
+import { InMemoryExecutionStepStore } from '/home/ricardo/Área de trabalho/cvg-operational-harness/packages/harness/src/step-store.ts'
+import { DefaultContextEngine } from '/home/ricardo/Área de trabalho/cvg-operational-harness/packages/harness/src/context-engine.ts'
+import { ScriptedOrchestrator } from '/home/ricardo/Área de trabalho/cvg-operational-harness/packages/orchestrator/src/scripted.ts'
+import type { ToolDefinition, ModelGateway, RuntimeInput, ModelRequest } from '/home/ricardo/Área de trabalho/cvg-operational-harness/packages/contracts/src/index.ts'
+const save=(name:string,value:unknown)=>writeFileSync('/work/'+name,JSON.stringify(value,null,2)+'\n')
+const limits=Object.fromEntries(['memory.max','cpu.max','pids.max','cgroup.procs'].map(f=>[f,readFileSync('/limits/'+f,'utf8').trim()]))
+if(limits['memory.max']!=='2147483648'||limits['pids.max']!=='128'||limits['cpu.max']!=='100000 100000')throw Error('live cgroup bounds mismatch')
+if(process.versions.node!=='22.23.2'||process.env.HOME||Object.keys(process.env).some(k=>!['PATH','LANG','PWD'].includes(k))||process.env.PWD!=='/work'||existsSync('/run/user')||existsSync('/home/ricardo'))throw Error('environment isolation failed '+JSON.stringify({env:process.env,runUser:existsSync('/run/user'),home:existsSync('/home/ricardo')}))
+save('kernel-proof.json',{node:process.version,execPath:process.execPath,env:process.env,limits,namespaces:Object.fromEntries(['user','mnt','pid','net','ipc','uts','cgroup'].map(k=>[k,readlinkSync('/proc/self/ns/'+k)])),mountinfo:readFileSync('/proc/self/mountinfo','utf8'),netdev:readFileSync('/proc/net/dev','utf8'),status:readFileSync('/proc/self/status','utf8'),cgroup:readFileSync('/proc/self/cgroup','utf8')})
+const script=[{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:'synthetic.native.read',toolInput:{}},{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseIntent:'Give a neutral diagnostic response.'}] as const
+const input:RuntimeInput={agent:{id:'agent.synthetic' as any,version:'v1' as any,objective:'Observe synthetic read delivery.',instructions:['Synthetic diagnostic only.'],skills:[],tools:['synthetic.native.read'],policies:['synthetic-only']},tenantId:'tenant_synthetic' as any,executionId:'exec_native_delivery',conversationId:'conversation_synthetic' as any,sessionId:'session_synthetic' as any,correlationId:'correlation_synthetic' as any,traceId:'trace_synthetic' as any,userMessage:'Perform the synthetic read and respond neutrally.',context:{values:{},sourceIds:['synthetic'],capturedAt:'2026-10-18T00:00:00Z'},state:{version:1,values:{},updatedAt:'2026-10-18T00:00:00Z'},budget:{maxSteps:4,maxModelCalls:3,maxToolCalls:1,maxDurationMs:15000,maxCostUsd:1,maxTokens:8000,maxKnowledgeCalls:0,maxReplans:0,maxVerificationCalls:0,maxDecisionRepairs:0},runtimeProfile:'iterative'}
+const contexts:any[]=[],requests:any[]=[],audits:any[]=[],telemetry:any[]=[],toolCalls:any[]=[]
+let born:string|undefined
+const tool:ToolDefinition={id:'synthetic.native.read',version:'v1',description:'Synthetic memory read',inputSchema:{type:'object'},outputSchema:{type:'object'},risk:'LOW',sideEffect:'READ',sandbox:'NONE',idempotent:true,requiresApproval:false,execute:async(toolInput,toolContext)=>{const nonce=randomBytes(24).toString('hex');born=nonce;const result={status:'SUCCEEDED' as const,output:{nonce}};toolCalls.push({input:structuredClone(toolInput),context:structuredClone({...toolContext,signal:undefined}),result});save('tool-calls.json',toolCalls);return result}}
+const model:ModelGateway={complete:async(request:ModelRequest)=>{requests.push({jsonAtBoundary:JSON.stringify(request),request:structuredClone({...request,signal:undefined}),signal:{present:!!request.signal,aborted:request.signal?.aborted}});save('actual-model-requests.json',requests);return{text:'Synthetic constant final response.',provider:'synthetic',model:'constant',inputTokens:1,outputTokens:1,costUsd:0}}}
+const scripted=new ScriptedOrchestrator({script})
+const stepStore=new InMemoryExecutionStepStore()
+const harness=createOperationalHarness({iterativeOrchestrator:{decide:async({context})=>{contexts.push(structuredClone(context));save('decision-contexts.json',contexts);return scripted.decide()}},stepStore,contextEngine:new DefaultContextEngine(),modelGateway:model,policy:{evaluate:async()=>({outcome:'ALLOW',reason:'Synthetic READ only.',policyVersion:'synthetic-v1'})},approvals:{request:async()=>{throw Error('unexpected approval')}},tools:{list:()=>[tool],resolve:id=>id===tool.id?tool:undefined},audit:{append:async event=>{audits.push(event)}},telemetry:{record:event=>{telemetry.push(event)}}})
+save('stimulus.json',{input,script,toolDescriptor:{...tool,execute:undefined},modelReply:'Synthetic constant final response.',factoryProfile:harness.resolveProfile(input),unselectedDefault:harness.resolveProfile({...input,runtimeProfile:undefined})})
+try{
+ const result=await harness.execute(input)
+ save('runtime-result.json',result);save('audits.json',audits);save('telemetry.json',telemetry)
+ save('steps.json',await stepStore.listSteps(input.tenantId,input.executionId!))
+ save('checkpoint.json',await stepStore.loadCheckpoint(input.tenantId,input.executionId!))
+ const has=(x:unknown)=>!!born&&JSON.stringify(x).includes(born)
+ const responseRequests=requests.filter(r=>r.request.purpose==='RESPONSE')
+ const summary={toolCalls:toolCalls.length,decisionCalls:contexts.length,modelCalls:requests.length,responseRequests:responseRequests.length,nonce:born,initialInputContainsNonce:has(input),staticDecisionsContainNonce:has(script),firstContextContainsNonce:has(contexts[0]),nextContextContainsNonce:has(contexts[1]),nextObservationsContainNonce:has(contexts[1]?.observations),actualResponseRequestContainsNonce:has(responseRequests),finalAnswerContainsNonce:has(result.response),stopReason:result.stopReason,gateReached:toolCalls.length===1&&contexts.length===2&&responseRequests.length===1&&result.stopReason==='COMPLETED',functionalReceipts:0,catalogStatuses:'NOT_RUN'}
+ save('summary.json',summary);console.log(JSON.stringify(summary))
+ if(!summary.gateReached||summary.initialInputContainsNonce||summary.staticDecisionsContainNonce||summary.firstContextContainsNonce)process.exitCode=2
+}catch(e){save('probe-error.json',{name:(e as Error).name,message:(e as Error).message,stack:(e as Error).stack});throw e}

@@ -1,0 +1,74 @@
+from pathlib import Path
+from collections import Counter
+import json,hashlib,subprocess,os,datetime,time,gzip
+C=Path('/home/ricardo/cvg-candidates/b6-0228-20261017')
+R=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+E=R/'docs/04_audit/evidence/B6-0228-BUILD-20261017'
+NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+def read(p):return json.loads(p.read_text())
+def write(name,data):(E/name).write_text(json.dumps(data,indent=2,ensure_ascii=False)+'\n')
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+receipt=read(E/'certify-receipt.json')
+assert receipt['status']=='FINISHED' and receipt['attempt']==2 and receipt['exitCode']==0, receipt
+result=read(C/'certification/phase10-result.json');manifest=read(C/'certification/manifest.json')
+head='f11f762f6a176417a40d2d53bdb67c633d7e1cef'
+assert result['commit']==head and manifest['commit']==head
+assert result['runId']==manifest['runId'] and result['runId']!='run-b0d40eb53354-mvcy53rw'
+assert result['candidate']['candidateId']==manifest['candidateId']=='b0d40eb5335484575013a2ffa38d06a26dace757320f67d3eb24b3182c67d563'
+assert result['decision']=='CONDITIONAL_GO',result['decision']
+expected={'format','typecheck','lint','build','unit','coverage','security','worker_startup','postgres','e2e','evals','chaos','load','restore','sbom','licenses'}
+assert {x['id'] for x in result['gates']}==expected
+assert all(x['status']=='PASS' and x['exitCode']==0 for x in result['gates'])
+for a in manifest['artifacts']:
+ p=C/a['path'];assert p.exists() and p.stat().st_size==a['size'] and sha(p)==a['sha256'],a['path']
+for g in result['gates']:
+ assert sha(C/g['log'])==g['logSha256']
+ for a in g.get('evidence',[]):
+  assert a['runId']==result['runId'] and sha(C/a['path'])==a['sha256'],a
+suite={}
+for kind,total in [('unit',3479),('postgres',302)]:
+ j=read(C/f'certification/{kind}-test-report.json')
+ counts={k:j[k] for k in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests']}
+ assert counts==dict(numTotalTests=total,numPassedTests=total,numFailedTests=0,numPendingTests=0,numTodoTests=0),counts
+ suite[kind]=counts
+j=read(C/'certification/e2e-test-report.json');s=j['stats'];assert s['expected']==12 and all(s[x]==0 for x in ['skipped','unexpected','flaky']) and j['errors']==[],s
+suite['e2e']=s
+frozen=read(E/'source-freeze.json');assert all(sha(C/x['path'])==x['sha256'] for x in frozen['files'])
+assert sha(R/'docs/02_spec/0228_b6_boundary_fail_closed_remediation.md')=='05fa3140bff99be3b4b91c2a0f0212bd01f6dd10509785867e84d3fcd64bddfe'
+changed=subprocess.check_output(['git','diff','--name-only','5a199668eef5db4ca7aa2adc3853169ca0953cbf','HEAD'],cwd=C,text=True).splitlines()
+assert set(changed)=={x['path'] for x in frozen['files']},changed
+for x in result['candidate']['files']:assert sha(C/x['path'])==x['sha256'],x['path']
+env=os.environ.copy();env['PATH']=str(Path(NODE).parent)+':'+env['PATH']
+cmd=['npm','run','certification:verify'];start=now()
+with (E/'certification-verify.log').open('w') as log:p=subprocess.run(cmd,cwd=C,env=env,stdout=log,stderr=subprocess.STDOUT)
+write('certification-verify-receipt.json',dict(command=cmd,startedAt=start,finishedAt=now(),exitCode=p.returncode,runId=result['runId'],candidateId=manifest['candidateId']))
+assert p.returncode==0
+raw=E/'attempt-2';raw.mkdir(exist_ok=True);art=[]
+paths={a['path'] for a in manifest['artifacts']}|{'certification/manifest.json','certification/phase10-result.json','certification/candidate-manifest.json','playwright-results.xml','certification/e2e-test-report.json','coverage/coverage-summary.json'}
+for rel in sorted(paths):
+ p=C/rel;data=p.read_bytes();dest=raw/(rel.replace('/','--')+'.gz');dest.write_bytes(gzip.compress(data,mtime=0));art.append(dict(path=rel,archive=dest.name,sha256=sha(p),bytes=len(data)))
+(raw/'manifest.json').write_text(json.dumps(dict(attempt=2,runId=result['runId'],candidateId=manifest['candidateId'],artifacts=art),indent=2)+'\n')
+for name in ['phase10-result.json','manifest.json','candidate-manifest.json']:(E/('final-'+name)).write_bytes((C/'certification'/name).read_bytes())
+write('full-certification-summary.json',dict(status='PASS_ALL_16_LOCAL_GATES',head=head,runId=result['runId'],candidateId=manifest['candidateId'],decision=result['decision'],certification=result['certification'],suites=suite,gates=[dict(id=x['id'],status=x['status'],durationMs=x['durationMs']) for x in result['gates']],coverage=next(x.get('metrics') for x in result['gates'] if x['id']=='coverage'),sourceDrift=[],artifactHashesVerified=len(manifest['artifacts']),externalGates=result['externalGates'],observedAt=now(),limitation='Mechanical local certification does not accept B6 isolation or production.'))
+# Re-run real boundary after all build/preparation emissions, recording exact complete JSON.
+receipts=[]
+for mode in ['normal','strict']:
+ cmd=[NODE,'scripts/check-product-boundary.mjs',str(C)]+(['--strict'] if mode=='strict' else [])+[f'--graph={E}/graph-final-{mode}.json']
+ start=now();t=time.monotonic();p=subprocess.run(cmd,cwd=C,capture_output=True,text=True);duration=time.monotonic()-t;(E/f'boundary-final-{mode}.json').write_text(p.stdout);(E/f'boundary-final-{mode}.stderr.log').write_text(p.stderr or 'No stderr emitted.\n');j=read(E/f'boundary-final-{mode}.json');assert p.returncode==1 and j['status']=='INCOMPLETE' and j['violations']==[] and j['exceptions']==[] and not j['exceptionsApplied'];assert duration<=60
+ receipts.append(dict(mode=mode,command=cmd,exitCode=p.returncode,durationSeconds=duration,startedAt=start,status=j['status'],sourceFiles=j['sourceFiles'],installedPackages=j['installedPackageCount'],diagnostics=len(j['diagnostics']),exceptions=len(j['exceptions'])))
+write('boundary-final-receipts.json',receipts)
+a=read(E/'boundary-final-normal.json');b=read(E/'boundary-final-strict.json');assert a==b
+old=read(R/'docs/04_audit/evidence/B6-STABLE-20261017/boundary-strict.json')
+key=lambda x:json.dumps(x,sort_keys=True)
+missing=Counter(map(key,old['diagnostics']))-Counter(map(key,a['diagnostics']));assert not missing
+assert a['installedPackageCount']==303
+# Compare complete installed graph nodes rather than counts alone.
+g0=read(E/'graph-normal.json');g1=read(E/'graph-final-normal.json')
+assert g0['installed']==g1['installed']
+assert all(not x['verified'] for x in g1['installed'])
+assert set(g0['nodes']).issubset(set(g1['nodes']))
+assert Counter(map(key,g0['edges']))<=Counter(map(key,g1['edges']))
+write('post-emission-verification.json',dict(status='PASS',sourceDrift=[],changedSourcePaths=changed,normalEqualsStrict=True,oldStrictDiagnostics=len(old['diagnostics']),missingOldStrictDiagnostics=list(missing.elements()),finalDiagnostics=len(a['diagnostics']),installedPackages=a['installedPackageCount'],under60Seconds=True,preEmissionGraphKeys=list(g0),postEmissionGraphKeys=list(g1),observedAt=now()))
+assert all(sha(C/x['path'])==x['sha256'] for x in frozen['files'])
+print(json.dumps(dict(status='VERIFIED',runId=result['runId'],suites=suite,boundary=receipts),indent=2))

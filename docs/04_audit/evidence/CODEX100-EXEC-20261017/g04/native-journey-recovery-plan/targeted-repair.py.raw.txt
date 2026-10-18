@@ -1,0 +1,140 @@
+from pathlib import Path
+import json,re,hashlib,subprocess
+r=Path.cwd();e=r/'docs/04_audit/evidence/CODEX100-EXEC-20261017';n=e/'g04/full-native-spec';p=e/'g04/native-journey-recovery-plan'
+f=n/'contracts/native-data.md';t=f.read_text();a=t.index('Cada NativeEventV1 tem os campos comuns definidos na SPEC');b=t.index('\nResponseProvenance é',a)
+block='''### 3.1 Envelope comum, frame e erro governado
+
+Esta seção é a única definição normativa dos campos comuns; não remete sua definição de volta à SPEC. Todos os objetos abaixo são fechados, com todos os campos presentes; propriedades extras, omissão e null fora das uniões explícitas são INVALID_INPUT antes de append/projeção. Nenhum campo vem de identidade ou grants fornecidos pelo cliente.
+
+```ts
+type NativeExecutionId = string // UUIDv7 canônico lowercase persistido do turno
+type NativeSessionId = string // identidade exata da sessão vinculada, UTF8 1..120 bytes
+type NativeEventId = string // ne_ + 64 caracteres hex lowercase, definido abaixo
+type Sha256Hex = string // exatamente 64 caracteres [0-9a-f]
+type NativeOrdinal = number // inteiro seguro 1..8192, contíguo por execução
+type CanonicalUtcTimestamp = string // YYYY-MM-DDTHH:mm:ss.SSSZ, UTC, milissegundos
+
+type NativeItemPayload = {
+  itemId: string
+  kind: 'user' | 'assistant' | 'tool'
+  logicalStepId: string | null
+  toolId: string | null
+  toolVersion: string | null
+  operationKey: string | null
+  inputRef: InputRef | ObservationRef | null
+  resultRef: ResultRef | null
+  text: string | null
+  responseProvenance: ResponseProvenance | null
+}
+type NativePayloadByType = {
+  'turn.accepted': {
+    requestDigest: Sha256Hex
+    compositionDigest: Sha256Hex
+    profileDigest: Sha256Hex
+    inputRef: InputRef
+  }
+  'turn.started': { epoch: number; workerId: string; checkpointRef: CheckpointRef }
+  'approval.waiting': {
+    approvalId: string
+    intentDigest: Sha256Hex
+    logicalStepId: string
+    operationKey: string
+  }
+  'approval.decided': {
+    approvalId: string
+    intentDigest: Sha256Hex
+    decision: 'APPROVED' | 'DENIED' | 'EXPIRED'
+  }
+  'item.started': NativeItemPayload
+  'text.delta': { itemId: string; delta: string }
+  'item.completed': NativeItemPayload
+  'execution.uncertain': {
+    causeCode: string
+    checkpointRef: CheckpointRef | null
+    effectRefs: EffectRef[]
+    accounting: NativeAccounting
+  }
+  'cancel.requested': { requestId: string; requestedAt: CanonicalUtcTimestamp }
+  'turn.terminal': TerminalSnapshot
+}
+type NativeEventV1 = {
+  [K in keyof NativePayloadByType]: {
+    version: 1
+    eventId: NativeEventId
+    executionId: NativeExecutionId
+    sessionId: NativeSessionId
+    ordinal: NativeOrdinal
+    type: K
+    observedAt: CanonicalUtcTimestamp
+    payload: NativePayloadByType[K]
+  }
+}[keyof NativePayloadByType]
+type NativeFrame = {
+  event: NativeEventV1
+  digest: Sha256Hex
+  cursor: string // token base64url canônico, UTF8 1..1024 bytes; contrato de cursor da SPEC7.2
+}
+type NativeErrorCode =
+  | 'INVALID_INPUT'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'CAPACITY'
+  | 'AUTHORITY_LOST'
+  | 'STORAGE_UNAVAILABLE'
+  | 'COMMIT_UNKNOWN'
+  | 'CURSOR_INVALID'
+  | 'CURSOR_UNAVAILABLE'
+  | 'CONTEXT_OVERFLOW'
+  | 'DELIVERY_LIMIT'
+  | 'UNSUPPORTED_VARIANT'
+type NativeErrorDataCVG = {
+  cvg: {
+    version: 1
+    code: NativeErrorCode
+    executionId: NativeExecutionId | null
+    settlement: 'KNOWN' | 'UNKNOWN' | null
+  }
+}
+```
+
+Oito campos comuns, dez discriminantes. executionId conserva o UUIDv7 do turno e sessionId conserva a identidade realmente vinculada ao serviço de sessão; não converter RPCid, global sequence ou itemId para qualquer um deles. O eventId nasce na transação de append como `ne_`+SHA256 dos bytes UTF8 canônicos de `{v:1,tenantId,executionId,ordinal}` usando o tenant autenticado. A chave é estável para releitura/idempotência e não concede autorização. Ordinal começa em1, avança sem buraco visível por execução no commit conhecido da mesma transação que grava evento/counters; transação abortada não publica evento, ordinal nem ACK. Os limites8192 e posições de fechamento reservadas continuam vigentes. epoch em turn.started é inteiro seguro positivo e checkpointRef inicial confirmado.
+
+observedAt é o instante UTC observado no banco para esse append: capturar uma vez a hora do banco em milissegundos inteiros, domínio1970-01-01 até9999-12-31, e serializar estritamente como `YYYY-MM-DDTHH:mm:ss.SSSZ` com calendário válido. Capturar antes de construir/hashar native_record; o timestamp fica dentro desses bytes. A eventual coluna created_at é metadado SQL e não substitui nem recria observedAt na leitura. Reentrega/restart usa o mesmo texto persistido, nunca Date.now, novo eventId ou timestamp derivado do momento de leitura. requestedAt de cancel.requested é o instante já persistido do pedido de cancelamento nesse mesmo formato, podendo anteceder o append; não substituí-lo por observedAt. Os números *AtMs/durationMs de TerminalSnapshot continuam milissegundos inteiros seguros nos domínios já definidos, e as unidades wire segundos/milissegundos continuam distintas.
+
+Bindings físicos obrigatórios: version↔native_version; eventId↔native_event_id; executionId↔execution_id; sessionId↔native_session_id; ordinal↔native_ordinal; type↔event_type. observedAt/payload e todos os campos comuns estão no native_record; native_record_sha256 é SHA256 dos bytes UTF8 canônicos do **NativeEventV1 inteiro e somente dele**. O codec de captura canônico já exigido é usado antes de await, com escaping inteiro e sem truncamento. Leitor valida versão/shape/tipo-payload, digest e todos os mirrors contra a row autenticada; discrepância é corrupção recusada, nunca reescrita. A sequence SQL bigint não entra como ordinal ou Number. NativeFrame.digest repete o digest verificado; seu cursor vincula aquele evento/digest/manifest conforme o contrato específico, sem grant. Frame, digest e cursor externos não entram no domínio do hash do evento. Caps1MiBevento,16KiBdelta, limites integrais de frame/página e closure64KiB/3slots incluem serialização/escapes nos respectivos domínios, sem descontar overhead.
+
+NativeErrorDataCVG é o formato exato de error.data **somente no erro wire governado**: `{cvg:{version:1,code,executionId,settlement}}`. executionId é null antes de haver execução identificada; settlement é null quando não existe fato de settlement, e KNOWN/UNKNOWN somente quando observado. Não omitir esses campos, fabricar uso0, revelar stack/SQL/credenciais/rawerror ou transportar grants/approval. No mapper governado code=-32600 e message é a string fixa `CVG:` seguida do NativeErrorCode; data segue o objeto acima. Erros Codex literais já definidos na fonte, como Already initialized, conservam seu envelope/mensagem e não são convertidos em erro governado. Tenant/execução/manifest/digest/versão dos refs continuam verificados antes de leitura/projeção.
+
+Provas futuras adicionais NJ23/NJ24: persistir evento completo, encerrar processo e reler bytes/digest/observedAt/cursor idênticos; rejeitar observedAt ausente/extra/desconhecido, calendário/unidade inválida, ordinal fora do domínio/buraco, type/payload incompatíveis e mirrors/digest adulterados. Provar erro antes de claim com executionId/settlement nulos e erro após settlement com fatos reais; mutante que recria timestamp no reader deve falhar. São obrigações NOT_RUN, não testes executados por esta correção documental.
+'''
+t=t[:a]+block+t[b:];f.write_text(t)
+f=n/'contracts/qualification-rules.md';t=f.read_text();t=t.replace('Output é `.frame` opaco.','Output é `.frame` opaco listado como RAW_STATE, nunca RAW_STDOUT.');t=t.replace('RAW_STATE aponta ao **estado derivado do observador**, identificado no contrato de driver;','RAW_STATE aponta ao **artefato derivado do observador**, estado canônico SAFE_GRAPH ou frame opaco OPAQUE_FRAME conforme o contrato de driver;')
+old='Nos manifests de QR05, projectionEXACT_BYTES usa RAW_STDOUT com um frame opaco coletado dentro de lower/upperbounds; normalizationPolicy[].'
+new='Nos manifests de QR05, requiredRoles contém RAW_INPUT, RAW_STDOUT e RAW_STATE, todos únicos por lado. projection={kind:EXACT_BYTES,referenceRole:RAW_STATE,cvgRole:RAW_STATE}; RAW_STATE é o frame opaco completo selecionado com LF e RAW_STDOUT é o stdout original completo, ambos listados/autenticados sem sobrescrever ou duplicar role. normalizationPolicy[].'
+assert old in t;t=t.replace(old,new)
+# Fix the QR05 table's role selection without changing the literal fullframe comparison.
+t=t.replace('EXACT_BYTES', 'EXACT_BYTES',1)
+needle='## 6.'
+section='''### 5.1 Gate obrigatório da seleção opaca QR05
+
+O core0231 compara todos os bytes do único role escolhido e não verifica se o coletor escolheu o frame correto. Antes de indexar RAW_STATE como elegível, o observador confiável e a recomputação independente validam: SHA do stdout completo; conexão/sequência e lower/upperbounds reais; request duplicado e RPCid lossless esperado; exatamente um frame de erro correspondente; offsets inicial/final em bytes incluindo LF; igualdade integral do artifact derivado com esse span do bruto. Índice/proveniência guarda offsets/hashes seguros e o token i64 opaco por bytes/hashes; não materializa o ID em JSONNumber, não o transforma em string no frame e não usa regex genérica ou seleção por texto arbitrário do alvo.
+
+Se seleção/predicado/binding falha em qualquer lado, nenhum RAW_STATE elegível entra no índice; o diagnóstico é separado e o positivo funcional fica inválido mesmo se o core isolado retornar MATCH_REQUIRES_REVIEW. Igualdade de dois frames anteriores, ou de dois diagnósticos, nunca prova a variante. Exigir positivo real futuro com setup metadata diferente mas mesmo frame-alvo, stdout completo preservado e roles únicos; negativos de role duplicado, frame anterior em um lado, i64 adjacente, offset/LF/hash incorreto e frame anterior igual nos dois lados. Neste último o core pode achar bytes iguais, mas o gate de procedência deve recusar antes da qualificação funcional. Os seis casos offline TEST_ONLY do replanejamento são observações do mecanismo, não implementam nem qualificam o coletor/gate ou a referência real.
+
+'''
+# Append just before the next numbered section following matrix, preserving every old obligation.
+pos=t.find('\n## 6.')
+if pos<0:t+='\n'+section
+else:t=t[:pos]+'\n'+section+t[pos:]
+f.write_text(t)
+f=n/'rules-matrix.json';d=json.loads(f.read_text());qr=next(x for x in d['rows'] if x['id']=='QR05');qr['projection']['referenceRole']=qr['projection']['cvgRole']='RAW_STATE';qr['requiredRoles']=['RAW_INPUT','RAW_STDOUT','RAW_STATE'];qr['derived_role_contract']='RAW_STATE=fulltargetopaqueerrorframeincludingLF;RAW_STDOUT=originalfullstdout;rolesunique;independentrecomputedselectiongatebeforeeligibility';qr['mandatory_positive']='Differenttruthfulsetupmetadata/equalactualtargetframe acceptedwithfullstdoutpreserved';qr['known_bad']='BothsamewrongpreviousframecanMATCHinbytecorebutMUSTbeINELIGIBLEviaindependentselectiongate;alsoadjacenti64/onewrongframe/duplicate-role reject';f.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+f=n/'test-plan.json';d=json.loads(f.read_text());nj={x['id']:x for x in d['cases']};nj['NJ23']['R2_targeted_addition']='Closed8fieldNativeEventV1/10discriminants+NativeFrame/error.data.cvg;persist/coldreplaytimestamp/digest/mirrorsidentical;rejectmissingextraobservedAt/calendar/unit/ordinal/payload/mirror/hash;no readerclocknewfacts.';nj['NJ24']['R2_targeted_addition']='QR05EXACT_BYTESRAW_STATEfullopaquetargetframe/RAW_STDOUTfulloriginal/rolesunique;positivewithdifferingsetupmetadata/equalactualtargetframe. RequirelosslessID/offset/LF/rawSHA/provenance recomputation andgatebeforeeligibility;bothsamewrongpreviousframemustbeineligibleevenifbytecoreMATCH;duplicate-role/onewrongframe/adjacenti64mutantsreject. NoTEST_ONLYcredit.';f.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+f=r/'docs/02_spec/0239_codex_native_journey.md';t=f.read_text();t=t.replace('`NativeTerminal`, `NativeAccounting`, referências opcionais e todos os payloads de NativeEventV1 têm definição fechada única no anexo native-data.','`NativeTerminal`, `NativeAccounting`, NativeEventV1 (oito campos comuns e dez payloads discriminados), NativeFrame e NativeErrorDataCVG têm definição fechada única no anexo native-data§3.1, incluindo presença/tipos/ordinal/timestamp/colunas/digest; não há referência inversa à SPEC para definir esses campos.');t=t.replace('REPAIRED_FOR_R2_REVIEW','TARGETED_RECOVERY_AFTER_R2_REVISE');f.write_text(t)
+cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--write',str(n/'contracts/native-data.md'),str(n/'contracts/qualification-rules.md')];res=subprocess.run(cmd,capture_output=True,text=True);assert res.returncode==0,res.stdout+res.stderr
+# Rebind every normative annex only after formatting its final bytes.
+f=n/'normative-annexes.json';d=json.loads(f.read_text());spec=r/'docs/02_spec/0239_codex_native_journey.md';t=spec.read_text()
+for x in d['inputs']:
+ q=n/x['path'];oldhash=x['sha256'];x['sha256']=hashlib.sha256(q.read_bytes()).hexdigest();x['bytes']=q.stat().st_size;assert oldhash in t,x['path'];t=t.replace(oldhash,x['sha256'])
+f.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n');spec.write_text(t)
+res=subprocess.run(cmd[:5]+[str(spec)],capture_output=True,text=True);assert res.returncode==0,res.stdout+res.stderr
+print(json.dumps({'repair':'SINGLE_TARGETED_DOCUMENTARY_REPAIR_APPLIED','SPEC_sha256':hashlib.sha256(spec.read_bytes()).hexdigest(),'changed_subjects':6,'runtime_tests':'NOT_RUN','functional_receipts':0}))

@@ -1,0 +1,17 @@
+exec(open('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r1/driver.py').read().split('# Stage 1:')[0])
+# Actual descriptor ownership, independent of Node's lazy internal descriptors.
+FDS='''import fs from 'node:fs';import {pathToFileURL} from 'node:url';const h=await import(pathToFileURL(process.argv[1]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const open=fs.openSync,close=fs.closeSync,owned=new Set(),events=[];fs.openSync=function(...a){const fd=open.apply(this,a);owned.add(fd);events.push({op:'open',fd,path:String(a[0])});return fd};fs.closeSync=function(fd){events.push({op:'close',fd});owned.delete(fd);return close.call(this,fd)};let errors=0;const liveCounts=[];try{for(let i=0;i<30;i++){let s;try{s=h.createResolutionSession({root:p.root,limits:{maxOpenDescriptors:2}});s.resolve({from:'entry.cjs',specifier:'demo',mode:'require'})}catch{errors++}finally{s?.close()}liveCounts.push(owned.size)}}finally{fs.openSync=open;fs.closeSync=close}process.stdout.write(JSON.stringify({errors,liveCounts,ownedFinal:[...owned],events}));'''
+root=T/'fixtures/repeat-fds';run('fd-owned-tracking',FDS,[str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root)});(O/'raw/fd-owned.operator.source.txt').write_text(FDS+'\n')
+# New workspace TS with emitted counterpart and no compiled receipt: exact runtime target still TS.
+root,start=workspace('typescript-project-no-receipt',exports='./body.ts')
+put(root,'packages/demo/body.ts','export const answer: number=42;')
+put(root,'packages/demo/tsconfig.json','{"compilerOptions":{"outDir":"./dist","module":"NodeNext","target":"ES2022"},"include":["body.ts"]}')
+put(root,'packages/demo/dist/body.js','export const answer=0;')
+engine('typescript-project-no-receipt-engine',root,start)
+# No browser/emit profile may be inferred from TS syntax or file extension.
+root,start=workspace('typescript-config-alias',exports='./body.ts')
+put(root,'packages/demo/body.ts','export const answer: number=42;')
+put(root,'packages/demo/tsconfig.json','{"compilerOptions":{"baseUrl":".","paths":{"demo":["./replacement.ts"]},"module":"CommonJS"}}')
+put(root,'packages/demo/replacement.ts','export const answer=0;')
+engine('typescript-config-alias-engine',root,start)
+(O/'probe-summary-final.json').write_text(json.dumps(summary,indent=2)+'\n')

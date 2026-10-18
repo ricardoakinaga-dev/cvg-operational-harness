@@ -1,0 +1,139 @@
+# Verification and Quality Engine
+
+## Load when
+
+Load before material implementation to freeze a Quality Bar, after implementation to judge evidence, during review or adversarial critique, and whenever completion, Definition of Done, or another improvement round is being considered.
+
+## Purpose
+
+Own the quality target, proof model, dynamic Definition of Done, critique loop, largest-gap selection, and final task/milestone verdict. Testing technique belongs to [Testing](10-testing-strategy.md); gates belong to [Lifecycle and Gates](03-lifecycle-gates.md).
+
+## Questions answered
+
+- Did we build what was requested, and does it run correctly?
+- Are acceptance, contracts, regression, documentation, migration, and risk satisfied?
+- What evidence supports each required criterion?
+- What is the largest remaining gap, and should the loop continue or stop?
+
+## Do not load when
+
+Do not load to enumerate tests without an artifact or criterion, to replace product/technical definition, or to perform a purely observational T0 check whose outcome is already objective. Do not treat this reference as authority to accept high risk.
+
+## Freeze the Quality Bar
+
+Before significant implementation, define stable criteria with:
+
+- criterion ID and quality dimension;
+- objective target or contract;
+- evidence method and relevant boundary;
+- required flag and priority;
+- baseline or initial state;
+- known-bad case that should fail the harness when useful;
+- validity notes: environment, workload, sample, freshness, and blind spots.
+
+Targets must be capable of rejecting the artifact. Do not lower them because implementation loses. Revise only when the requirement changes or the measurement is invalid; preserve the prior version, reason, impact, and new evidence method.
+
+Prioritize correctness, safety, authorization, data integrity, and core use before style or cosmetic improvement. A score cannot compensate for a required failure.
+
+## Verification questions
+
+For the scoped artifact, answer with evidence:
+
+1. Was the requested behavior built?
+2. Does the real artifact start or run through the relevant boundary?
+3. Does success, error, state, and side-effect behavior match acceptance?
+4. Did the credible regression surface remain intact?
+5. Are required criteria and business/technical contracts satisfied?
+6. Are documentation and traceability synchronized where needed?
+7. Are migrations, compatibility, rollout, rollback or recovery safe when applicable?
+8. Are security, data, operational, and observability obligations satisfied?
+9. Is residual risk acceptable to the correct authority?
+
+An explanation, code inspection alone, or an old result cannot answer a question that requires current execution.
+
+## Proof of work
+
+Prefer evidence closest to the real outcome: current test output, successful build/start, observed runtime behavior, query or persisted-state result, API response, UI render or screenshot when visual behavior matters, diff/artifact inspection, or static analysis tied to a rule.
+
+Store material evidence using the [Testing evidence protocol](10-testing-strategy.md#evidence-and-sufficiency), which conforms to the verification-record contract in [contracts.json](contracts.json). Record typed procedure status, evidence kind, observation time, and freshness. PASS requires an executed procedure, a permitted observation/evidence kind, and `CURRENT` evidence; PREDICTION or EXPLANATION cannot satisfy it. Freshness begins at `observed_at`, not when the record is later written: a mutation between observation and record timestamp invalidates the claim. Reference large raw output rather than pasting it into state.
+
+VERIFIED and RELEASE_READY criterion PASS records cite the exact verification-ledger ID for their scope. A later applicable mutation, recovery, decision, or failed event invalidates that evidence until the procedure is rerun; the gate timestamp cannot conceal an intervening failure.
+
+Never state “tests passed,” “works,” “safe,” or an equivalent conclusion unless the necessary procedure was actually executed and its current result supports that scope. NOT_RUN, missing environment, stale evidence, and unvalidated harness remain explicit limitations, not PASS.
+
+## Release decision boundary
+
+Use `scripts/doctor.py` for diagnosis and `scripts/release_gate.py` for the package's local release decision. Doctor may return WARN with a successful process exit when it is explicitly limited, such as when no forward decisions were supplied; release treats every result other than exact PASS as failure. The release gate delegates diagnostic policy to doctor and obtains its additional exact invariants from [contracts.json](contracts.json): current forward evidence, terminal verified control state, terminal backlog, exact clean Git root, version tag and optional expected SHA at HEAD, required no-skip unit suite proven by a controller challenge-response after execution within the contracted timeout, and the Git-index-path/worktree-blob/mode product manifest. Explicit decision files must be regular files inside the candidate root without symlinked path components. Doctor, control-plane state, Git identity, index-vs-HEAD, and the manifest are checked again after the suite; the manifest rejects assume-unchanged worktree drift and symlinks in any path component.
+
+The release authority supplies independently reviewed gate and complete product-manifest SHA-256 digests through `--trusted-gate-sha256` / `--trusted-manifest-sha256` or their `RELEASE_TRUSTED_GATE_SHA256` / `RELEASE_TRUSTED_MANIFEST_SHA256` environment equivalents. Missing or mismatched digests prevent doctor and unit execution. The manifest digest is SHA-256 of the UTF-8 canonical JSON list sorted by path, with `path`, `mode`, and `sha256` fields, sorted object keys, no ASCII escaping, and compact separators. Computing an expected digest from an unreviewed candidate is not independent approval. The calling environment must trust the verifier implementation and its Python runtime; the workflow checks the gate file before importing candidate code, but repository/provider protections remain an external prerequisite, not something candidate-owned CI can attest about itself.
+
+Release suite containment currently requires Linux procfs and child-subreaper support; other platforms fail this gate while the diagnostic core remains portable. A dedicated supervisor owns only suite descendants, terminates detached children, and uses bounded waits. The runner preserves standard unittest module/class fixtures and rejects persistent mutation of execution/result methods. Its challenge protocol detects forged output and incomplete execution; it is not a sandbox against arbitrary hostile code with the same user's privileges or self-restoring interpreter mutations. Run reviewed candidates in an isolated, disposable environment when that stronger boundary is needed.
+
+The gate is offline and read-only. Optional local comparison roots prove the versioned source paths, bytes, and modes match a candidate copy, while runtime caches and unversioned extras do not define product identity. A local PASS does not create a tag, publish, install, prove an external provider configuration, or grant authority for those actions; record those later observations and decisions separately.
+
+## Dynamic Definition of Done
+
+Compose DoD from the selected tier, Quality Bar, task acceptance, change surface, and risk. Include only applicable obligations, but do not omit a material one:
+
+- implementation and integration are complete for the scoped outcome;
+- public behavior and errors are observed;
+- relevant tests and regression succeed with valid harnesses;
+- all required acceptance criteria pass;
+- no known blocking regression or gap remains;
+- security, privacy, data, authorization, concurrency, and operational controls are verified when exposed;
+- documentation, contracts, traceability, and generated outputs are synchronized when changed;
+- migration, compatibility, rollout, rollback or recovery evidence exists when needed;
+- verification, backlog, log, plan, and runtime pointers are updated when persistence applies;
+- residual risk, limitations, authority state, and next action are explicit.
+
+An inapplicable item may be omitted or justified. An unexecuted required item blocks or requires a legitimate gate condition; it never becomes DONE by convenience.
+
+## Quality and critique loop
+
+For material work:
+
+    IMPLEMENT → RUN → SELF-REVIEW → INDEPENDENT CRITIQUE WHEN AVAILABLE
+              → IDENTIFY LARGEST GAP → DIAGNOSE → FIX → RETEST
+
+At each iteration define:
+
+- entry condition: a candidate artifact and current evidence;
+- objective: close one named required or highest-value gap;
+- progress signal: changed criterion status or stronger valid evidence;
+- exit condition: required criteria pass and risk is acceptable;
+- escalation condition: authority, external dependency, unsafe next step, or repeated non-progress;
+- maximum-useful-iteration heuristic: stop when remaining findings are non-blocking and expected gain is lower than cost/risk.
+
+Do not loop on polish while a correctness, safety, data, authorization, or central acceptance gap remains. Repeated failure triggers harness review, assumption review, a smaller reproduction, or escalation—not random retries.
+
+## Adversarial review
+
+Attack the artifact against the frozen bar, looking for:
+
+- forgotten or contradicted requirements;
+- regressions and incomplete integration;
+- invalid or impossible states;
+- races, duplicate delivery, ordering, timeout, restart, and partial failure;
+- authentication, authorization, privilege, secret, and data exposure;
+- unsafe migration, compatibility, rollback, or recovery;
+- broken UX, accessibility, visual state, or error recovery when applicable;
+- silent errors and missing operational detection;
+- changed contracts without consumers or tests;
+- weak, over-mocked, stale, or implementation-coupled tests;
+- hidden assumptions, out-of-scope changes, and documentation drift.
+
+Use contextual [Security](16-security-engineering.md), [Data Migrations](17-data-migrations.md), and [Risk](15-risk-engine.md) when triggered instead of copying their detailed policies here.
+
+For material work, conduct a distinct self-review pass after implementation against the frozen criteria and actual artifact/evidence, recording findings and limitations. This remains self-review; it neither replaces required independent critique nor counts as that critique when another reviewer is available.
+
+Then, when independent review is available and proportionate, give the reviewer goal, frozen criteria, artifact/diff, reproduction, environment facts, and safety constraints. Do not bias it with the builder's rationale, suspected fix, or desired verdict. Ask for affected criterion IDs, evidence, severity, confidence, and largest gap. The builder diagnoses suggested causes before changing code.
+
+The builder's implementation report is not a review or approval. Apply `review_degradation_rules` from `contracts.json`: absent subagents do not block the complete single-agent path, but the agent must run a temporally separated review, strengthen executable evidence, and record the limitation. It may issue PASS only when project instructions, the applicable risk/gate, and required authority do not independently mandate another reviewer. Never label self-review independent or degrade a human/risk authority requirement. When a review is used as project traceability evidence, record it through the typed append-only review ledger defined by [Traceability](21-traceability.md); free-text review labels are not evidence.
+
+## Verdict and stop
+
+Use verification statuses from [contracts.json](contracts.json). PASS requires fresh evidence for every required criterion, a valid integrated artifact, no blocking gap, and acceptable residual risk. PARTIAL or BLOCKED communicates incomplete evidence honestly; FAIL identifies a defeated required outcome.
+
+Exit status follows the evidence kind. A `COMMAND` record can support PASS only with the actual integer `exit_status=0`; `null` is not command success. Manual, runtime, static, artifact, or external-record observations may use `null` when no process exit exists, but still require an executed procedure, current observation, concrete evidence, and limitations.
+
+Stop successfully when required criteria and dynamic DoD are satisfied, relevant tests pass, no blocking finding remains, and residual risk is acceptable. Stop without success when a real human decision, critical unavailable dependency, unsafe next action, or inability to obtain minimum evidence prevents progress. In both cases report verified scope, limitations, current state, and next action. Never omit the limitations field: state “none observed” when no limitation is known for the verified scope.

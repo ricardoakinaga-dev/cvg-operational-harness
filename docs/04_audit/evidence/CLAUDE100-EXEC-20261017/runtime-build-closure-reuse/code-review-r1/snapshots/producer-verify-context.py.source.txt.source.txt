@@ -1,0 +1,48 @@
+import pathlib,json,hashlib,subprocess,datetime,tarfile
+root=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness');b=root/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/runtime-build-closure-reuse';q=pathlib.Path('/tmp/cvg-claude100-exec-20261017/runtime-build-closure-reuse');w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/runtime-build-closure-candidate');c=q/'tmp/cvg-runtime-closure';env=json.loads((q/'environment.json').read_text());node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';workspaces=json.loads(subprocess.check_output([node,str(q/'read-workspaces.cjs')],cwd=w,env=env,text=True));runtime=set(workspaces);all_workspaces={}
+for pattern in json.loads((w/'package.json').read_text())['workspaces']:
+ assert pattern.endswith('/*')
+ for file in (w/pattern[:-2]).glob('*/package.json'):
+  data=json.loads(file.read_text());assert data['name'] not in all_workspaces;all_workspaces[data['name']]=str(file.parent.relative_to(w))
+missing=[];details=[];edges=[];external=[]
+def targets(value):
+ if isinstance(value,str):return [value]
+ if value is None:return []
+ if isinstance(value,list):return [v for x in value for v in targets(x)]
+ if isinstance(value,dict):return [v for x in value.values() for v in targets(x)]
+ raise ValueError('Unsupported exports shape')
+for ws in workspaces:
+ original=(w/ws/'package.json').read_bytes();actual=(c/ws/'package.json').read_bytes();assert original==actual;pkg=json.loads(original);files=[]
+ for dep in pkg.get('dependencies',{}):
+  if dep in all_workspaces:
+   dest=all_workspaces[dep];edges.append({'from':ws,'dependency':dep,'to':dest})
+   if dest not in runtime:missing.append({'from':ws,'missing_dependency_workspace':dest})
+  else:external.append({'from':ws,'dependency':dep})
+ for rel in sorted(set([v for v in [pkg.get('main'),pkg.get('types')] if v]+targets(pkg.get('exports')))):
+  assert '*' not in rel,'Pattern exports require separate validation'
+  p=c/ws/rel;assert p.resolve().is_relative_to((c/ws).resolve()),'Export escapes workspace'
+  exists=p.is_file() and not p.is_symlink();files.append({'path':rel,'exists':exists,'sha256':hashlib.sha256(p.read_bytes()).hexdigest() if exists else None})
+  if not exists:missing.append({'workspace':ws,'missing_literal_entry':rel})
+ details.append({'workspace':ws,'name':pkg['name'],'manifest_equal':True,'entries':files})
+meta=json.loads((c/'runtime-context.json').read_text());assert meta['compiledWorkspaces']==workspaces and meta['sourceIncluded'] is False and meta['testIncluded'] is False
+files=[]
+for p in sorted(c.rglob('*')):
+ assert not p.is_symlink(),'Unexpected link in build context'
+ if p.is_file():
+  rel=p.relative_to(c).as_posix();assert not ('/__tests__/' in rel or rel.endswith(('.test.js','.spec.js')));assert not (rel.endswith('.ts') and not rel.endswith('.d.ts'))
+  data=p.read_bytes();files.append({'path':rel,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+assert not missing
+archive=b/'runtime-context.snapshot.tar.gz'
+with tarfile.open(archive,'w:gz') as tar:
+ for f in files:tar.add(c/f['path'],arcname='runtime-context/'+f['path'],recursive=False)
+with tarfile.open(archive,'r:gz') as tar:
+ names=[]
+ for member in tar.getmembers():
+  assert member.isfile() and member.name.startswith('runtime-context/') and '..' not in pathlib.PurePosixPath(member.name).parts
+  rel=member.name.removeprefix('runtime-context/');row=next(x for x in files if x['path']==rel);assert hashlib.sha256(tar.extractfile(member).read()).hexdigest()==row['sha256'];names.append(rel)
+ assert len(names)==len(files)
+result={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'verdict':'PASS_DECLARED_WORKSPACE_CONTEXT_CLOSURE','workspaces':details,'workspace_count':len(workspaces),'dependency_edges':edges,'workspace_dependency_edges':len(edges),'external_dependencies_not_installed_or_executed':external,'missing':missing,'sandbox_context_dist':(c/'packages/sandbox/dist/index.js').is_file(),'context_metadata':meta,'artifact_count':len(files),'artifacts':files,'archive':{'path':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'all_members_rehashed':True},'target_modules_executed':False,'docker_image_executed':False,'deployment_or_full_T2_qualification':False};(b/'context-verification.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({'verdict':result['verdict'],'workspaces':len(workspaces),'workspace_edges':len(edges),'files':len(files),'archive_bytes':archive.stat().st_size,'missing':missing,'sandbox_context_dist':result['sandbox_context_dist']}))
+prior=json.loads((b.parent/'foundation-qualification-preparation/focused-observations.json').read_text());pins=[]
+for row in prior['pins']:
+ actual=hashlib.sha256((w/row['path']).read_bytes()).hexdigest();pins.append({'path':row['path'],'group':row['group'],'actual':actual,'prior_actual':row['actual'],'equal_to_prior':actual==row['actual'],'approved_expected':row['expected']})
+(b/'prior-pin-input-comparison.json').write_text(json.dumps({'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'pins':pins,'all48equal_to_prior':all(x['equal_to_prior'] for x in pins),'prior_native43fail_is_not_rerun_here':True,'no_repin':True},indent=2)+'\n')

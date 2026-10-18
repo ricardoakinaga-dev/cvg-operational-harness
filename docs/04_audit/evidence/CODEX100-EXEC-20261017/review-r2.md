@@ -1,0 +1,19 @@
+<!-- Portable rendering; verbatim original: review-r2.raw.txt -->
+
+**ACCEPT_BOUNDED_INCREMENT** — both R1 P2 findings are resolved. No new mandatory finding identified in the inspected patch.
+
+1. **R1 P2 schema traversal — CLOSED.** The matrix now preserves both shell-policy exclusion rules, expands `ShellEnvironmentPolicyFilter` to `include|exclude`, and retains `mouse_scroll_speed > 0` plus its format annotation. Boolean schemas are represented explicitly. The [revised walker](../../../../docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/extract_contracts.py:120) records unsupported keywords as open obligations, and matrix scope explicitly says partial projection.
+
+2. **R1 P2 missing responses — CLOSED.** All **186 requests** have exactly one response obligation, matching their declared response type and correct sender. `currentTime/read` includes required `currentTimeAt`, `int64` and whole-second semantics; `thread/queue/add` includes `queuedSubmission`. All three legacy responses remain `OPEN_NO_EXPORTED_SCHEMA`. Source reconciliation, transport/error contracts and functional qualification remain explicitly open.
+
+Evidence checks:
+
+- **10/10 frozen hashes and catalog digest matched before and after review.**
+- All archived R1 inputs match their original hashes, including the previous catalog.
+- All previous **507 requirement records** remain unchanged.
+- All **298 response schema inputs** matched their recorded hashes; inspected root projections matched, with no unresolved references recorded in the revised matrix.
+- Node counts reproduce: **10,911 envelope, 30,707 response and 4,617 configuration records**. These are structural counts.
+
+The R1 advice to bind the catalog digest is also addressed.
+
+Limits: static inspection and artifact-integrity checks only; no files modified, generators, tests or network used. Generic traversal branches were inspected without execution. CLI/SDK additions were excluded. This verdict grants no G01 closure, functional parity, runtime, gate or reuse approval.

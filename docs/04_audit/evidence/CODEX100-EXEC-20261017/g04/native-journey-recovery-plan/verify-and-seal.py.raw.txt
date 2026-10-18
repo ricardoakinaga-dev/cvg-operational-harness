@@ -1,0 +1,99 @@
+from pathlib import Path
+import json,hashlib,re,datetime,subprocess,urllib.parse
+r=Path.cwd();e=r/'docs/04_audit/evidence/CODEX100-EXEC-20261017';n=e/'g04/full-native-spec';p=e/'g04/native-journey-recovery-plan';tmp=Path('/tmp/cvg-codex100-exec-20261017/native-journey-recovery-plan')
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat();sha=lambda q:hashlib.sha256(q.read_bytes()).hexdigest()
+def load(q):return json.loads(q.read_text())
+def put(q,d):q.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+def ent(q):return {'path':str(q.relative_to(r)),'bytes':q.stat().st_size,'sha256':sha(q)}
+def verify(rows,resolve=lambda s:r/s):
+ for x in rows:
+  q=resolve(x['path']);assert q.is_file() and q.stat().st_size==x['bytes'] and sha(q)==x['sha256'],x['path']
+old=load(e/'checkpoint-before-native-journey-replan-manifest.json');pre={x['original_path']:r/x['archive'] for x in load(p/'R2-preimages/map.json')['preimages']};pre1={x['original_path']:r/x['archive'] for x in load(n/'R1-preimages/map.json')['preimages']}
+mutable={'.agent/plans/codex100-exec-20261017.md','docs/03_build/0386_backlog_paridade_codex.md','docs/08_runtime/handoffs/codex100_exec_20261017.md'}|{str((e/x).relative_to(r)) for x in ['state.json','continuation.json','execution-log.jsonl']}|set(pre)
+checks=[]
+put(p/'closure-verification.json',{'kind':'DOCUMENTARY_CLOSURE_TRANSACTION','status':'IN_PROGRESS','observed_at':now(),'not_acceptance':True})
+def check(id,fn):
+ try:checks.append({'id':id,'status':'PASS_DOCUMENTARY_SCOPE_ONLY','detail':fn()})
+ except Exception as ex:checks.append({'id':id,'status':'FAIL','detail':repr(ex)})
+def historical():
+ assert len(old['files'])==2371 and len(mutable)==12
+ assert sha(e/'checkpoint-before-native-journey-replan-manifest.json')=='1244867ca688f53796245b5c456675f3c438b31f0e6a7a99da34bf5bd8ce12f7'
+ preserved=[x for x in old['files'] if x['path'] not in mutable];verify(preserved)
+ verify(load(p/'checkpoint-before-targeted-recovery-N-manifest.json')['files'],lambda s:pre.get(s,r/s))
+ verify(load(n/'review-freeze-r2.json')['files'],lambda s:pre.get(s,r/s));verify(load(n/'review-freeze-r1.json')['files'],lambda s:pre1.get(s,r/s))
+ return {'prior_program':2371,'immutable_unchanged':len(preserved),'authorized_mutable':sorted(mutable),'R1_reconstructible':105,'R2_reconstructible':134,'oldN_reconstructible':184,'old_failed_R2':'PRESERVED','old_Root9':'UNCHANGED'}
+check('C01',historical)
+def review():
+ f=load(p/'review-freeze-r3.json');assert len(f['files'])==423;verify(f['files'])
+ for name in ['first-hash-inventory.json','last-hash-inventory.json']:
+  d=load(p/'review-r3'/name);verify(d['files']);assert len(d['files'])==423
+ m=load(p/'review-r3/manifest.json');outputs=[x for x in m['outputs'] if x['sha256'] is not None];verify(outputs)
+ d=load(p/'review-r3/review.json');assert d['verdict']=='APPROVE_TECHNICAL_SPEC_DESIGN' and d['mandatory_count']==0 and d['checks_count']==12
+ assert d['subject']['first_sha256']==d['subject']['last_sha256']==sha(r/'docs/02_spec/0239_codex_native_journey.md')
+ assert len(d['finding_dispositions'])==2 and all(not x['mandatory_remaining'] for x in d['finding_dispositions'])
+ a=load(p/'Lead-review-acceptance-r3.json');assert a['actor_closed'] and a['mandatory_count']==0
+ return {'verdict':d['verdict'],'checks':12,'mandatory':0,'subject423':'EXACT','first_last423':'EXACT','review_payloads':len(outputs),'manifest_sha256':sha(p/'review-r3/manifest.json'),'actor':'CLOSED','runtime_approval':False}
+check('C02',review)
+def inputproofs():
+ verify(load(p/'inputs.json')['inputs'],lambda s:pre.get(s,r/s));verify(load(p/'source-additions.json')['inputs']);arts=load(p/'offline-artifacts.json');verify(arts['files'],lambda s:p/s);assert len(arts['files'])==271
+ o=load(p/'offline-observations.json');assert o['evaluations']==o['expectedObservations']==6 and o['unexpectedObservations']==0 and o['functionalReceipts']==0
+ by={x['id']:x for x in o['results']};assert [by[x]['actual'] for x in ['O01','O02','O03','O04','O05','O06']]==['MISMATCH','INVALID_INPUT','MATCH_REQUIRES_REVIEW','MISMATCH','MISMATCH','MATCH_REQUIRES_REVIEW']
+ assert all(x['selectedIsFixtureTarget'] for x in by['O03']['witnesses']) and not any(x['selectedIsFixtureTarget'] for x in by['O06']['witnesses'])
+ return {'prepatch_inputs_reconstructible':38,'offline_files':271,'offline_evaluations':6,'unexpected':0,'O06':'EXPECTED_INSUFFICIENCY_COUNTEREXAMPLE_NOT_FUNCTIONAL_PASS','source_module_changes':0,'reference_native_executions':0}
+check('C03',inputproofs)
+def normative():
+ spec=r/'docs/02_spec/0239_codex_native_journey.md';ann=load(n/'normative-annexes.json')['inputs'];assert len(ann)==8
+ for x in ann:assert sha(n/x['path'])==x['sha256'] and x['sha256'] in spec.read_text(),x['path']
+ assert sha(spec)=='ccdf3a754c460e138307148f9eec79e0dce4a9b7ac5c9d10334716e5b5c0dd87'
+ q=load(p/'human-review-request.json');assert q['SPEC_sha256']==sha(spec) and q['annexes']==ann and q['user_response'] is None and not q['BUILD_authorized'] and q['status'] in ['READY_NOT_SENT','REQUESTED_PENDING_USER']
+ assert not load(p/'build-entry-r3.json')['BUILD_ENTRY_READY']
+ return {'annexes_bound':8,'SPEC_sha256':sha(spec),'human_gate':q['status'],'owner_entry':'NOT_READY_SEPARATE_FROM_DESIGN','old_approvals':'0221/0225/0231RESOLVED'}
+check('C04',normative)
+def scope():
+ c=load(r/'docs/03_build/tracking/codex100_catalog_v1.json');assert len(c['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in c['requirements']);assert c['family_count']==22 and c['functional_denominator']==487 and c['mandatory_cvg_controls']==22
+ assert len(load(n/'CQ-coverage.json')['rows'])==14 and len(load(n/'test-plan.json')['cases'])==30 and len(load(n/'concurrency-schedules.json')['EA_overlays'])==19
+ d=load(p/'attempt-disposition.json');assert d['old_budget_stays']=={'reviews':2,'repairs':1,'remaining':0} and d['aggregate_attempts_if_used']=={'reviews':3,'repairs':2} and d['additional_attempt_limit']['further_automatic_extension'] is False
+ assert len(load(p/'next-task.json')['required_gaps'])==6
+ return {'catalog_NOT_RUN_null':509,'functional':487,'CVG':22,'families':22,'cards':49,'phases':10,'CQ':14,'future_NJ':30,'future_EA':19,'old_budget_spent':'2reviews1repair','explicit_aggregate':'3reviews2repairs','new_source_or_runtime':False}
+check('C05',scope)
+md=[r/'.agent/plans/codex100-exec-20261017.md',r/'docs/03_build/0386_backlog_paridade_codex.md',r/'docs/08_runtime/handoffs/codex100_exec_20261017.md',r/'docs/02_spec/0239_codex_native_journey.md',n/'contracts/native-data.md',n/'contracts/qualification-rules.md',n/'contracts/model-bridge.md',p/'REPORT.md',p/'decision-packet.md']
+def docs():
+ count=0
+ for q in md+[p/'review-r3/report.md']:
+  for raw in re.findall(r'\]\(([^)]+)\)',q.read_text()):
+   target=raw.split()[0].strip('<>').split('#')[0]
+   if not target or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:',target):continue
+   assert (q.parent/urllib.parse.unquote(target)).exists(),str(q)+':'+target;count+=1
+ for q in p.rglob('*.json'):load(q)
+ for line in (e/'execution-log.jsonl').read_text().splitlines():json.loads(line)
+ cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check']+[str(q.relative_to(r)) for q in md];proc=subprocess.run(cmd,capture_output=True,text=True);assert proc.returncode==0,proc.stdout+proc.stderr
+ return {'MD':len(md),'raw_review_link_check':1,'local_links':count,'broken':0,'format_exit':0,'format_stdout':proc.stdout,'packetJSONandprogramJSONL':'PARSED','frozen_reports':'UNMODIFIED'}
+check('C06',docs)
+def hygiene():
+ d=load(r/'docs/04_audit/evidence/empty-artifact-status.json');root=r/d['root'];known={(root/x['path']).resolve() for x in d['files']};zeros={q.resolve() for q in e.rglob('*') if q.is_file() and q.stat().st_size==0};assert len(zeros)==39 and zeros<=known;assert all(q.stat().st_size for q in p.rglob('*') if q.is_file())
+ return {'historical_zeros':39,'new_zeros':0,'central':'READONLY','real_data':False,'runtime_PG_ports_jobs_started':0}
+check('C07',hygiene)
+def continuation():
+ action='DX100-G01:RECONCILE-OPEN-SDK-CONTRACTS'
+ for name in ['state.json','continuation.json']:
+  d=load(e/name);assert d['active_action_id']==action and d['status']=='IN_PROGRESS' and d['goal_status']=='active' and d['all_own_agents_closed'] and d['all_own_jobs_terminal']
+ for q in md[:3]:assert action in q.read_text()
+ assert 'active_action_id='+action in md[0].read_text() and '1. ['+action+']' in md[0].read_text()
+ assert load(p/'next-task.json')['task']==action and load(p/'recovery-acceptance.json')['mandatory_open']==0
+ return {'next_action':action,'goal':'active','program':'IN_PROGRESS','own_actors_jobs':'CLOSED','new_T3':'PENDING_SPEC0239_ONLY','runtime_BUILD':'NOT_AUTHORIZED'}
+check('C08',continuation)
+result={'kind':'DOCUMENTARY_CLOSURE_NOT_RUNTIME_FUNCTIONAL_OR_BUILD_APPROVAL','observed_at':now(),'checks':checks,'passed':sum(x['status']=='PASS_DOCUMENTARY_SCOPE_ONLY' for x in checks),'failed':sum(x['status']=='FAIL' for x in checks),'technical_design':'APPROVE_TECHNICAL_SPEC_DESIGN','native_tests':'NOT_RUN','functional_receipts':0}
+put(p/'closure-verification.json',result);print(json.dumps({'passed':result['passed'],'failed':result['failed'],'checks':checks},ensure_ascii=False));assert result['failed']==0,'No failed documentary checkpoint'
+for name in ['state.json','continuation.json']:
+ q=e/name;d=load(q);d['verification']={'artifact':'g04/native-journey-recovery-plan/closure-verification.json','status':'PASS_DOCUMENTARY_ONLY_TECHNICAL_DESIGN_APPROVED','checks':8,'offline_TEST_ONLY_observations':6,'independent_design_checks':12,'mandatory_open':0,'native_runtime_tests':'NOT_RUN','functional_receipts':0};d['full_native_SPEC']['independent_checks']=12;put(q,d)
+for name in ['offline-role-probe.mjs','write-plan.py','targeted-repair.py','freeze-r3.py','close-approved-r3.py','verify-and-seal.py']:
+ (p/(name+'.raw.txt')).write_bytes((tmp/name).read_bytes())
+# Package contains currentreviewsubjects plusmutableclosureevidence;historicalNmanifestretainedaspreimage-basedcheckpoint.
+paths={r/x['path'] for x in load(p/'review-freeze-r3.json')['files']}|{q for q in p.rglob('*') if q.is_file() and q!=p/'manifest.json'}
+files=sorted([ent(q) for q in paths],key=lambda x:x['path'])
+put(p/'manifest.json',{'task':'DX100-G04:RECOVER-FINAL-CONTRACT','kind':'COMPLETED_T1_DESIGN_RECOVERY_AND_T3_PREPARATION_NOT_BUILD','observed_at':now(),'status':'COMPLETED_T1_TECHNICAL_SPEC_DESIGN_RECOVERY','files':files,'file_count':len(files),'SPEC_sha256':sha(r/'docs/02_spec/0239_codex_native_journey.md'),'R3_review_freeze':'review-freeze-r3.json','R3_subjects':423,'R2_reconstructible':134,'R1_reconstructible':105,'mandatory_open':0,'human_T3_approval':False,'runtime_tests':'NOT_RUN','functional_receipts':0})
+current=load(e/'manifest.json');ext={x['path'] for x in old['files'] if not x['path'].startswith(str(e.relative_to(r))+'/')};allfiles=sorted([ent(q) for q in e.rglob('*') if q.is_file() and q!=e/'manifest.json']+[ent(r/q) for q in sorted(ext)],key=lambda x:x['path']);assert len(allfiles)==len({x['path'] for x in allfiles})
+claim=re.search(r'^### CODEX100-EXEC-20261017.*?(?=^#{2,3} |\Z)',(r/'docs/08_runtime/agent_coordination.md').read_text(),re.M|re.S).group(0)
+current.update({'observed_at':now(),'files':allfiles,'file_count':len(allfiles),'own_claim_section_sha256':hashlib.sha256(claim.encode()).hexdigest(),'next_action_id':'DX100-G01:RECONCILE-OPEN-SDK-CONTRACTS','current_documentary_checks':{'artifact':'g04/native-journey-recovery-plan/closure-verification.json','status':'PASS_DOCUMENTARY_ONLY_TECHNICAL_DESIGN_APPROVED','checks':8,'technical_open_mandatory':0,'native_tests':'NOT_RUN'},'previous_checkpoint_manifest':{'path':'checkpoint-before-native-journey-replan-manifest.json','sha256':sha(e/'checkpoint-before-native-journey-replan-manifest.json'),'file_count':2371,'unchanged':2359,'authorized_mutable':sorted(mutable)},'full_native_SPEC':{'artifact':'docs/02_spec/0239_codex_native_journey.md','sha256':sha(r/'docs/02_spec/0239_codex_native_journey.md'),'manifest':'g04/native-journey-recovery-plan/manifest.json','manifest_sha256':sha(p/'manifest.json'),'status':'COMPLETED_T1_TECHNICAL_SPEC_DESIGN_READY_NEW_T3','review':'APPROVE_TECHNICAL_SPEC_DESIGN','round':3,'checks':12,'mandatory_open':0,'R3_subjects_unchanged':423,'R2_reconstructible':134,'R1_reconstructible':105,'source_inputs':57,'primary_ranges':45,'normative_annexes':8,'future_cases_NOT_RUN':30,'inherited_EA_NOT_RUN':19,'actor_closed':True,'old_R2':'FAILED_BUDGET2reviews1repairPRESERVED','explicit_aggregate_attempts':'3reviews2repairs','additional_automatic_reviews':0,'additional_automatic_repairs':0,'functional_receipts':0,'runtime_BUILD_authorized':False,'human_T3_request':'g04/native-journey-recovery-plan/human-review-request.json'},'checkpoint_note':'Evidence-backedexplicitT1replanandtargetedrecoveryofsameR2-01/02 completedR3APPROVE12checks0mandatory. UserdidnotapprovebudgetextensionornewT3;Leaddecisionwasexplicit,oldR2FAILEDpreserved,aggregate3/2. NewSPECccdf3a75/8annexesreadyhumanreview.6offlineTEST_ONLYobservationsnotnativeproof.All509NOT_RUN;goalactive,nextG01SDKscope.','active_runtime_note':'Allownactors/jobsclosed;noreference/native/app/PG/provider/SQL/portsstarted;onlysixexistingdata-onlyqualifierevaluationsTEST_ONLY,no sourcechanges.'});put(e/'manifest.json',current)
+verify(allfiles);verify(load(p/'manifest.json')['files']);historical();review()
+print(json.dumps({'package_payloads':len(files),'program_payloads':len(allfiles),'program_manifest_sha256':sha(e/'manifest.json'),'all_payloads_rehashed':True,'technical':'APPROVED','human_T3':load(p/'human-review-request.json')['status'],'BUILD_authorized':False}))

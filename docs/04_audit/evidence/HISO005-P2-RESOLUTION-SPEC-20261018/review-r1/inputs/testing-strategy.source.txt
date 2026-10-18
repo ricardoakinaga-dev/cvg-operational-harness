@@ -1,0 +1,110 @@
+# Testing Strategy
+
+## Load when
+
+Load when selecting tests for a material change, designing a testable SPEC/task, validating a bug fix, assessing regression surface, or judging whether evidence is sufficient.
+
+## Purpose
+
+Choose the smallest risk-shaped set of tests that can detect material failure, validate the harness, and record reproducible evidence. This is not a fixed test pyramid.
+
+## Questions answered
+
+- Which test types fit the acceptance criteria, boundaries, and risks?
+- How do we prove the harness detects known-bad behavior?
+- Which data, environment, failure, concurrency, and regression cases matter?
+- What evidence is sufficient to support a verification verdict?
+
+## Do not load when
+
+Do not load to add every test category to a trivial change, to compensate for missing requirements, or to declare the quality verdict. [Verification](09-verification-quality.md) owns the verdict.
+
+## Select from behavior and risk
+
+Start from acceptance criteria, public boundary, business rules/invariants, trust boundaries, persistence, integrations, concurrency, migration/compatibility, blast radius, defect history, and cost of failure. Apply tier obligations from [Adaptive Engineering](01-adaptive-engineering.md); do not duplicate them here.
+
+Use only applicable test types:
+
+- **Static validation:** parsing, schemas, links, generated consistency, policy or artifact invariants.
+- **Lint and formatting:** project-defined syntax/style rules; formatting alone does not prove behavior.
+- **Type checking:** compile-time/interface consistency within its actual coverage.
+- **Unit:** pure rules, transformations, guards, values, and local state transitions.
+- **Component:** a cohesive component through its public interface with faithful local dependencies.
+- **Integration:** real database, filesystem, queue, cache, framework, middleware, or module interaction.
+- **Contract:** producer/consumer schema, semantics, errors, versions, and compatibility.
+- **API:** routing, middleware, auth, validation, persistence, responses, errors, idempotency, and side effects.
+- **Database:** constraints, transactions, indexes/query behavior, ownership, and concurrent effects.
+- **Migration:** representative prior state, forward change, data validation, mixed version, retry, locks, rollback or roll-forward.
+- **End-to-end:** a small set of critical vertical user/operator flows through the integrated system.
+- **UI:** interaction, state, errors, accessibility, responsive behavior, and user-visible side effects.
+- **Visual:** rendered comparison for appearance requirements with an explicit review threshold.
+- **Performance:** representative workload, distributions/tails, resources, error rate, and threshold.
+- **Load:** concurrency, sustained volume, saturation, recovery, and capacity behavior.
+- **Security:** specific authorization, input, abuse, data exposure, secret, replay, and audit controls.
+- **Smoke:** startup/deploy health and minimum real flow; it is not full correctness.
+- **Regression:** credible affected behavior beyond the focal case.
+- **Manual verification:** a documented procedure for behavior not reasonably automated, with observer and limitations.
+
+Build and tool-specific checks should use commands discovered from project instructions and configuration. Never invent a universal command or assume an existing test passed.
+
+## Define the test contract
+
+Before implementation when practical, record:
+
+- test ID and source acceptance/risk/requirement;
+- failure or regression it protects against;
+- public or internal boundary under test and why it is appropriate;
+- baseline or bug reproduction;
+- preconditions, fixtures, environment, and configuration;
+- input/action and expected observable result;
+- expected persisted state, side effects, errors, and telemetry;
+- command or manual procedure;
+- isolation, cleanup, determinism controls, and known limitations.
+
+For a bug, first obtain a reproduction that fails before the fix when feasible. For a feature, freeze the acceptance behavior rather than deriving it from the completed implementation.
+
+## Validate the harness
+
+Ask:
+
+- Does a representative known-bad artifact or input fail?
+- Does a known-good case pass?
+- Is the intended boundary actually exercised, or bypassed by mocks?
+- Are setup and assertions deterministic enough to distinguish the result?
+- Do fixtures represent empty, boundary, invalid, skewed, and realistic shapes relevant to risk?
+- Could retries, snapshots, thresholds, warnings, or broad catches hide the failure?
+
+A test that cannot detect its known-bad case is invalid evidence. Repair or replace the harness and record the change before judging the implementation.
+
+## Data, environment, and determinism
+
+Use isolated, synthetic, disposable data for destructive, migration, recovery, or security work. Never use real secrets or unnecessary personal data. Record environment and relevant versions.
+
+Control or record random seed, clock/timezone, locale, ordering, IDs, network substitutes, cache state, concurrency, feature flags, viewport/device, cleanup, and test retries when they can affect the result. Do not extrapolate local evidence to production without naming the limitation.
+
+## Failure, concurrency, and integration
+
+When relevant, test invalid input, timeout/cancellation, dependency unavailable/slow/malformed, partial write and rollback, retry/backoff, duplicate/out-of-order events, idempotency reuse, concurrent update, stale state/cache, queue poison/dead letter, restart/reconnect, resource cleanup, rate limit, and permission change/revocation.
+
+Observe response plus persisted state, emitted effects, and telemetry. Mock dependencies that are outside the test's purpose, but never mock away the boundary whose fidelity or contract is being judged. If a live external system is unavailable, use a faithful sandbox/contract double and record missing live evidence.
+
+Load [Security](16-security-engineering.md) or [Data Migrations](17-data-migrations.md) only for their actual exposure.
+
+## Regression strategy
+
+Use the [change-surface map](02-project-detection.md) to select:
+
+1. focal reproduction or acceptance check;
+2. affected unit/component/integration coverage;
+3. relevant contract/API/E2E or UI flow;
+4. project-defined build, type, lint, formatting, and static checks;
+5. migration, security, performance, or load evidence when the surface requires it;
+6. integrated smoke for deployable/operational artifacts.
+
+Separate pre-existing failures from regressions with baseline evidence. Do not ignore either; report the pre-existing limitation and keep new regressions blocking.
+
+## Evidence and sufficiency
+
+Write material results using the verification-record contract in [contracts.json](contracts.json). Capture exact procedure and typed execution status, evidence kind, scope, environment, exit status when applicable, key raw result or artifact, observation timestamp, freshness, run count where meaningful, and limitations. Manual or observational evidence may use a null exit status; PASS still requires `EXECUTED`, a permitted evidence kind, and `CURRENT` freshness. Store large outputs as referenced artifacts.
+
+Evidence is sufficient when every required acceptance has appropriate proof, the highest-risk rules and failure modes are exercised, the public boundary is observed, the credible regression surface passes, the harness detects known-bad behavior, and limitations are explicit. If a required test cannot run, record NOT_RUN/BLOCKED as defined by the machine contract and route the decision; never say it “should pass.”

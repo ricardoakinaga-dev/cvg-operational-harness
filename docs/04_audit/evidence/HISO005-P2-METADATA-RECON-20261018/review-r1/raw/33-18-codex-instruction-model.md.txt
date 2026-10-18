@@ -1,0 +1,92 @@
+# Codex Instruction Model
+
+## Load when
+
+Load before editing or delegating across unfamiliar repository paths, when `AGENTS.md` or `AGENTS.override.md` may exist, when instruction scope conflicts or is unclear, when installing/discovering the skill, or when reasoning about Codex tools, sandbox, skills, subagents, or ExecPlans.
+
+## Purpose
+
+Apply the current officially documented Codex instruction and skill behavior without inventing a competing hierarchy, hard-coding unstable tool schemas, or treating project documents and runtime state as higher-authority instructions.
+
+## Questions answered
+
+- Which repository guidance does Codex discover for a working directory?
+- How do overrides, nesting, and target paths affect applicable instructions?
+- What is confirmed about skill discovery and progressive disclosure?
+- Which Codex behaviors are intentionally left `UNKNOWN`?
+- How should tools, sandbox, plans, and subagents degrade across surfaces?
+
+## Do not load when
+
+Do not load repeatedly after the target paths and effective instruction chain are already confirmed and unchanged. Do not use it to override system, developer, user, sandbox, approval, or native Codex behavior.
+
+## Evidence boundary
+
+The `CONFIRMED` facts below come from [the frozen official research baseline](../docs/codex-research.md), dated 2026-08-21. Revalidate that baseline only when an official contract materially changes.
+
+`UNKNOWN`: a public universal conflict-resolution order beyond documented instruction discovery, exact tool names/signatures across every Codex surface, future custom-agent schemas, compaction thresholds/summary formats, universal Git workflow, and universal build/test commands. The framework uses feature detection and repository policy for these rather than invention.
+
+## Repository guidance discovery
+
+`CONFIRMED`:
+
+- Codex constructs an instruction chain once per run/session.
+- At global scope, it selects the first non-empty `AGENTS.override.md` or `AGENTS.md`.
+- At project scope, it walks from project root to the current working directory.
+- In each directory it selects at most one non-empty file, in this order: `AGENTS.override.md`, `AGENTS.md`, then configured fallback names.
+- Selected files are concatenated root-to-CWD, so closer guidance appears later.
+- An override changes the selected file in its own directory; it does not erase ancestor guidance.
+- Empty files are ignored. The default aggregate guidance limit is 32 KiB.
+
+The framework does not recalculate or replace Codex's native chain. It makes target scope explicit so the agent can avoid relying on a root file when a nested target has closer guidance.
+
+## Target-path procedure
+
+Before changing a file:
+
+1. identify repository root, current working directory, and exact target path;
+2. use the effective guidance already supplied by Codex for the current directory;
+3. inspect whether directories from root toward the target contain nested guidance that was not in the current CWD chain;
+4. when necessary, change to the appropriate directory or read the relevant target-path guidance without claiming to rebuild native precedence;
+5. apply all applicable higher-authority instructions and preserve narrower constraints;
+6. record inspected instruction paths in runtime state only when persistent work justifies it;
+7. if instructions genuinely conflict and native rules do not resolve the requested action safely, state the conflict and ask only for the material decision that remains available to the user.
+
+Re-evaluate scope when adding a new target directory, delegating another boundary, or recovery finds `instruction_drift`.
+
+## Skills and discovery
+
+`CONFIRMED`:
+
+- A skill is a directory containing `SKILL.md`; the public contract requires `name` and `description`.
+- Current documented discovery locations are repository `.agents/skills` directories from CWD to repository root, `$HOME/.agents/skills`, `/etc/codex/skills`, and system skills.
+- Same-named skills are not merged. Symlinked skill directories are followed.
+- `.codex/skills` and `$CODEX_HOME/skills` are compatibility locations in current source, not the preferred public installation contract for this release.
+- Codex first exposes skill name, description, and path under a catalog budget. Selecting a skill loads the complete `SKILL.md`.
+- `references/` is conditional knowledge, `scripts/` deterministic automation, `assets/` output material, and `agents/openai.yaml` skill UI/invocation metadata.
+
+Consequently, this package keeps `SKILL.md` a router, installs to the current documented `.agents/skills` location, and does not treat `agents/openai.yaml` as a custom-subagent definition.
+
+## Plans and compaction
+
+`CONFIRMED`: conversational Plan mode and a repository ExecPlan are different. ExecPlan is a customizable convention from official guidance, not a native runtime primitive. Durable state, plans, and evidence survive session loss; conversational memory and undocumented compaction internals are not recovery authorities.
+
+`UNKNOWN`: stable compaction threshold, internal summary schema, and reinjection format. Never write process logic that depends on them.
+
+## Tools, sandbox, and approvals
+
+`CONFIRMED`: shell and patch capabilities exist on documented surfaces, but exact tool names and signatures vary. Sandbox, network, and approval controls remain independent boundaries. A skill or Goal does not expand them.
+
+Express procedures by capability and evidence: inspect files, apply a targeted patch, run the project-owned command, observe output, and review changes. Do not require a specific UI command or tool namespace. If `/review`, Git, network, or another optional capability is unavailable, use a safe local fallback and declare the limitation.
+
+Repository instructions decide project-specific commands. The framework never invents a universal lint/test sequence or branch/commit/push rule.
+
+## Subagents
+
+`CONFIRMED`: subagents are useful for independent bounded work but consume more tokens, concurrent writers can conflict, and delegated work inherits effective runtime/sandbox boundaries. Delegation may follow a direct request or applicable project/skill instruction.
+
+Single-agent execution remains complete. Load [Agent Orchestration](20-agent-orchestration.md) when delegation is available and justified, or when an unavailable capability requires an explicit fallback/independence decision. Its delegation gate still requires authorization and available capability. Do not hard-code current internal agent schemas, built-in role names, or concurrency limits.
+
+## Project documents and runtime state
+
+PRD, SPEC, ADR, ExecPlan, tasks, runtime state, backlog, and logs are engineering evidence and project conventions. They do not supersede native system/developer/user instructions, applicable repository guidance, sandbox, or approvals. When they conflict with observed reality, use [Session Recovery](12-session-recovery.md) and [Audit and Evolution](13-audit-evolution.md) rather than silently choosing convenient prose.

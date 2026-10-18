@@ -1,0 +1,134 @@
+diff --git a/scripts/build-installed-reference.mjs b/scripts/build-installed-reference.mjs
+index bef5cd25..cd3f641c 100644
+--- a/scripts/build-installed-reference.mjs
++++ b/scripts/build-installed-reference.mjs
+@@ -244,13 +244,14 @@ export function inspectReferenceTrace(trace, nodePath) {
+   }
+ }
+ 
+-async function seedCache(cacheSource, cache, lock, limits, npmRoot) {
++async function seedCache(cacheSource, cache, lock, limits, npmRoot, usage) {
+   // This library is inside the already validated npm TCB, never a new dependency.
+   const require = createRequire(path.join(npmRoot, 'package.json'))
+   const cacache = require('cacache')
+   const seen = new Set()
+   let compressedBytes = 0
+   const payloads = []
++  const missing = []
+   for (const [key, value] of Object.entries(lock.packages)) {
+     if (!key.includes('node_modules/') || value.link) continue
+     if (
+@@ -259,9 +260,26 @@ async function seedCache(cacheSource, cache, lock, limits, npmRoot) {
+     )
+       throw unavailable('LOCK_NONREGISTRY_PACKAGE')
+     const file = cacheFile(cacheSource, value.integrity)
++    let before
++    try {
++      before = regular(file)
++    } catch (error) {
++      if (error.code !== 'ENOENT') throw error
++      if (value.optional !== true)
++        throw unavailable('CACHE_PAYLOAD_REQUIRED_MISSING')
++      // npm decides platform/optional selection with the frozen recipe. An
++      // unavailable payload is never fabricated from the evaluated tree;
++      // a package not installed remains explicit in the receipt inventory.
++      missing.push({
++        key,
++        integrity: value.integrity,
++        optional: true,
++        reason: 'CACHE_PAYLOAD_UNAVAILABLE'
++      })
++      continue
++    }
+     if (seen.has(value.integrity)) continue
+     seen.add(value.integrity)
+-    const before = regular(file)
+     if (fs.realpathSync(file) !== file) throw unavailable('CACHE_ALIAS')
+     compressedBytes += before.size
+     if (compressedBytes > limits.maxCompressedBytes)
+@@ -276,6 +294,7 @@ async function seedCache(cacheSource, cache, lock, limits, npmRoot) {
+     let readBytes = 0
+     for await (const chunk of stream) {
+       readBytes += chunk.length
++      usage.compressedBytes += chunk.length
+       if (readBytes > before.size) throw unavailable('CACHE_MUTATED')
+       hash512.update(chunk)
+     }
+@@ -298,7 +317,7 @@ async function seedCache(cacheSource, cache, lock, limits, npmRoot) {
+     )
+     payloads.push({ integrity: value.integrity, size: before.size })
+   }
+-  return { compressedBytes, payloads }
++  return { compressedBytes, payloads, missing }
+ }
+ 
+ /** Internal offline recipe. testOnly can REDUCE caps and mutate actual fixtures;
+@@ -468,7 +487,14 @@ export async function buildInstalledReference(options) {
+       typeof lock.packages !== 'object'
+     )
+       throw unavailable('LOCK_SCHEMA_UNSUPPORTED')
+-    const seeded = await seedCache(cacheSource, cache, lock, limits, npmRoot)
++    const seeded = await seedCache(
++      cacheSource,
++      cache,
++      lock,
++      limits,
++      npmRoot,
++      usage
++    )
+     usage.compressedBytes = seeded.compressedBytes
+     const argv = [
+       path.join(npmRoot, 'bin/npm-cli.js'),
+@@ -640,6 +666,7 @@ export async function buildInstalledReference(options) {
+       sourceSha256,
+       auxiliaryPins: AUXILIARY_PINS,
+       cachePayloads: seeded.payloads,
++      cacheUnavailable: seeded.missing,
+       observation: { ...observation, ...result, stdout: undefined }
+     }
+     delete recipe.observation.stdout
+diff --git a/tests/b6-0234-reference-recipe.test.js b/tests/b6-0234-reference-recipe.test.js
+index d4c83431..3f5e88ab 100644
+--- a/tests/b6-0234-reference-recipe.test.js
++++ b/tests/b6-0234-reference-recipe.test.js
+@@ -483,6 +483,40 @@ test('ID-10: optional platform omission is reported with lock key intact', async
+   ])
+ }, 30000)
+ 
++test('ID-10: foreign optional cache absence is explicit and does not prevent the actual offline recipe', async () => {
++  const f = fixture({ optional: true })
++  const lock = JSON.parse(
++    fs.readFileSync(path.join(f.sourceRoot, 'package-lock.json'), 'utf8')
++  )
++  const integrity = lock.packages['node_modules/fixture-optional'].integrity
++  const hex = Buffer.from(integrity.slice(7), 'base64').toString('hex')
++  fs.unlinkSync(
++    path.join(
++      f.cacheSource,
++      '_cacache/content-v2/sha512',
++      hex.slice(0, 2),
++      hex.slice(2, 4),
++      hex.slice(4)
++    )
++  )
++  const { receipt } = await buildInstalledReference(options(f))
++  expect(receipt.recipe.cacheUnavailable).toEqual([
++    {
++      key: 'node_modules/fixture-optional',
++      integrity,
++      optional: true,
++      reason: 'CACHE_PAYLOAD_UNAVAILABLE'
++    }
++  ])
++  expect(
++    receipt.unavailable.some((p) => p.key === 'node_modules/fixture-optional')
++  ).toBe(true)
++  expect(receipt.packages.map((p) => p.key)).toEqual([
++    'node_modules/fixture-safe'
++  ])
++  expect(receipt.recipe.observation.networkAttempts).toBe(0)
++}, 30000)
++
+ test.each([
+   ['maxCompressedBytes', 1, 'CACHE_BYTES_LIMIT'],
+   ['maxEntries', 1, 'SOURCE_LIMIT'],

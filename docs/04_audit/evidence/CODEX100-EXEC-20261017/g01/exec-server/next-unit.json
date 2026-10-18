@@ -1,0 +1,68 @@
+{
+  "active_action_id": "DX100-G01:RESOLVE-CLI-ADAPTERS",
+  "tier": "T1",
+  "purpose": "Resolve source semantics of the four manual Args/FromArgMatches adapters; map Windows vector grammar and pre-clap arg0 dispatch. Preserve accepted previous graph readonly.",
+  "source_pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "four_manual_adapters": [
+    {
+      "owner": "codex-rs/cli/src/main.rs::SessionTuiCli",
+      "reason": "delegates TuiCli args; mutates prompt conflict with last; FromArgMatches wraps TuiCli; no macro expansion/effective schema execution."
+    },
+    {
+      "owner": "codex-rs/exec/src/cli.rs::ExecSharedCliOptions",
+      "reason": "delegates SharedCliOptions; dynamic global(true) for model, dangerously_bypass_approvals_and_sandbox, bypass_hook_trust, worktree; no macro expansion/effective schema execution."
+    },
+    {
+      "owner": "codex-rs/exec/src/cli.rs::ResumeArgs",
+      "reason": "CLI fields owned by ResumeArgsRaw; conversion reinterprets session_id as prompt when last and no explicit prompt; no macro expansion/effective schema execution."
+    },
+    {
+      "owner": "codex-rs/tui/src/cli.rs::TuiSharedCliOptions",
+      "reason": "delegates SharedCliOptions; mark_tui_args mutates dangerously_bypass_approvals_and_sandbox and auto_review conflicts_with approval_policy; no macro expansion/effective schema execution."
+    }
+  ],
+  "known_source_rules": [
+    "SessionTuiCli adds prompt conflicts_with last in both augment methods and delegates FromArgMatches.",
+    "ExecSharedCliOptions marks model, dangerously_bypass_approvals_and_sandbox, bypass_hook_trust and worktree global; no CVG bypass authority granted.",
+    "TuiSharedCliOptions adds approval_policy conflicts to dangerously_bypass_approvals_and_sandbox and auto_review.",
+    "exec ResumeArgsRaw reinterprets session_id as prompt only when last is true and raw.prompt is None.",
+    "arg0_dispatch selects native helper entrypoints before ordinary CLI parse; platform cfg must remain explicit.",
+    "Windows-only dispatch in main.rs calls sandbox_setup::parse_setup_command when first host-vector token is setup. SandboxSetupCommand requires user/current_user group; user requires codex_home; setup_level separately requires elevated. Grammar source at sandbox_setup.rs:13-83, runtime effects not executed."
+  ],
+  "sources": [
+    {
+      "path": "codex-rs/cli/src/main.rs",
+      "sha256": "743324d1f7bc5a0b6fc5192826a128b568fd7b22a0c13815d2813dee5330a5ae",
+      "lines": 5056
+    },
+    {
+      "path": "codex-rs/exec/src/cli.rs",
+      "sha256": "66643e8b3d5964b70cb8f231fb309312376272fb3ea87bcb6849f44cf112f8f6",
+      "lines": 342
+    },
+    {
+      "path": "codex-rs/tui/src/cli.rs",
+      "sha256": "05afbda6b0149a7a1ebc23eafefbc8d393811b293530aa2b13e4eda1f2b5a553",
+      "lines": 157
+    },
+    {
+      "path": "codex-rs/arg0/src/lib.rs",
+      "sha256": "c2e09deecca9af9307029e8ff62b384e314ee07f70080df249fa38e435c610ee",
+      "lines": 839
+    },
+    {
+      "path": "codex-rs/cli/src/sandbox_setup.rs",
+      "sha256": "c7936821795c109518b197cb8629aa19a28c2d4545f8330cc4e75bb7bc4fd473",
+      "lines": 230
+    }
+  ],
+  "further_open": [
+    "Bind the located Windows setup source/grammar to exact Args fields, constraints, dispatch cfg and future comparison cases",
+    "Scalar parsers/value enums and cfg/platform evaluation",
+    "External tool factories and component closure",
+    "Twenty exec-server unresolved transitive references and effect implementations",
+    "G02 executable provenance and functional proof"
+  ],
+  "functional_receipts": 0,
+  "full_g01_closure": false
+}

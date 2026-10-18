@@ -1,0 +1,639 @@
+import { createHash } from 'node:crypto'
+import {
+  canonicalJson,
+  jsonDigest,
+  normalizeLog
+} from '../../support/governed-test-kit/index.js'
+import { validateCodexCatalog } from '../../codex100/qualification/catalog-profile.mjs'
+import { parseStrictJson } from './strict-json.mjs'
+import { QualificationError } from './errors.mjs'
+import { openEvidenceRoot } from './safe-io.mjs'
+import { assertProjectionBudget } from './projection-budget.mjs'
+import {
+  MiB,
+  id,
+  version,
+  validateManifest,
+  validateCatalog,
+  validateRule,
+  validateCaptureIndex,
+  validateAuthorityIndex,
+  validateReceipt,
+  validateRequirementBindings
+} from './schemas.mjs'
+
+const sha = (value) => createHash('sha256').update(value).digest('hex')
+const digestPattern = /^[a-f0-9]{64}$/
+const stages = [
+  'INTEGRITY',
+  'SUPPORTED_WIRE',
+  'SCHEMAS',
+  'REFERENCE',
+  'CAPTURES',
+  'AUTHORITY',
+  'EXECUTION',
+  'COMPARISON'
+]
+const fail = (status, message) => {
+  throw new QualificationError(status, message)
+}
+const equal = (a, b) => canonicalJson(a) === canonicalJson(b)
+const absent = (error) => error?.cause?.code === 'ENOENT'
+
+function emptyReport() {
+  return {
+    version: 1,
+    runId: null,
+    scenarioId: null,
+    requirementIds: [],
+    status: 'INFRA_FAILURE',
+    exitCode: 1,
+    inputs: {
+      manifestSha256: null,
+      catalogSha256: null,
+      ruleSha256: null,
+      captureIndexSha256: null,
+      authorityIndexSha256: null
+    },
+    identities: { referenceSha256: null, cvgSha256: null },
+    checks: stages.map((id) => ({
+      id,
+      status: 'NOT_RUN',
+      message: 'Prior checks have not completed'
+    })),
+    diffs: [],
+    evidence: { reference: [], cvg: [], normalized: [] },
+    limitations: [
+      'Isolated qualification mechanism; no functional parity is granted.',
+      'Independent review and actual reference evidence remain required.'
+    ],
+    reviewStatus: 'PENDING'
+  }
+}
+
+/** Data-only local verifier. Its two indices are supplied by the reviewing operator. */
+export function qualify(options) {
+  return qualifyWithProfile(options, false)
+}
+
+export function qualifyCodex(options) {
+  return qualifyWithProfile(options, true)
+}
+
+// Profile selection is private and cannot be supplied by manifest/CLI/options.
+async function qualifyWithProfile(options, codex) {
+  const startedAt = new Date().toISOString()
+  const report = emptyReport()
+  if (codex)
+    report.limitations.push(
+      'CodeX JSON requires exact decimal roundtrip and safe integers; use EXACT_BYTES for other numeric domains.',
+      'The CodeX catalog may remain open; current captures and independent review are still required.'
+    )
+  let io,
+    output,
+    active = stages[0]
+  const snapshots = new Map()
+  const documents = new Map()
+  const receipts = new Map()
+  let authority, manifest, rule, catalog, captures, authorities
+  let currentAuthority = () => false
+  let authorityChecked = false
+  let authenticatedInfrastructureFailure = false
+  let comparatorFailure = false
+  const pass = () =>
+    Object.assign(
+      report.checks.find((check) => check.id === active),
+      { status: 'PASS', message: 'Check satisfied' }
+    )
+  const enter = (id) => {
+    active = id
+  }
+  const load = async (name, cap, json = false) => {
+    const file = await io.read(name, cap)
+    snapshots.set(file.path, file)
+    if (json) {
+      const data = parseStrictJson(file.bytes, {
+        maxBytes: cap,
+        ...(codex ? { numericDomain: 'CODEX_EXACT_DECIMAL' } : {})
+      })
+      documents.set(file.path, data)
+      return { file, data }
+    }
+    return { file }
+  }
+  const checkFile = async (item, cap = 4 * MiB, json = false) => {
+    const loaded = await load(item.path, cap, json)
+    if (
+      loaded.file.sha256 !== item.sha256 ||
+      (item.bytes !== undefined && loaded.file.size !== item.bytes)
+    )
+      fail('INVALID_INPUT', 'Raw evidence digest or byte count does not match')
+    return loaded
+  }
+  try {
+    io = await openEvidenceRoot(options.evidenceRoot)
+    output = await io.createOutput(options.out)
+    const inputs = [
+      ['manifest', 'manifestSha256', 256 * 1024],
+      ['catalog', 'catalogSha256', MiB],
+      ['rule', 'ruleSha256', 128 * 1024],
+      ['captureIndex', 'captureIndexSha256', MiB],
+      ['authorityIndex', 'authorityIndexSha256', MiB]
+    ]
+    const data = {}
+    for (const [option, field, cap] of inputs) {
+      const loaded = await load(options[option], cap, true)
+      report.inputs[field] = loaded.file.sha256
+      data[option] = loaded.data
+    }
+    ;({
+      manifest,
+      catalog,
+      rule,
+      captureIndex: captures,
+      authorityIndex: authorities
+    } = data)
+    // Integrity outranks schema/unsupported/origin verdicts. Only structurally
+    // addressable files are materialized here; malformed fields fail at SCHEMAS.
+    for (const [declared, actual] of [
+      [manifest?.catalogSha256, report.inputs.catalogSha256],
+      [manifest?.ruleSha256, report.inputs.ruleSha256],
+      [captures?.catalogSha256, report.inputs.catalogSha256],
+      [authorities?.catalogSha256, report.inputs.catalogSha256]
+    ])
+      if (
+        typeof declared === 'string' &&
+        digestPattern.test(declared) &&
+        declared !== actual
+      )
+        fail('INVALID_INPUT', 'Input digest binding does not match')
+    const addressable = (item) =>
+      item !== null &&
+      typeof item === 'object' &&
+      typeof item.path === 'string' &&
+      typeof item.sha256 === 'string' &&
+      digestPattern.test(item.sha256) &&
+      (item.bytes === undefined || Number.isSafeInteger(item.bytes))
+    for (const side of ['reference', 'cvg']) {
+      const items = manifest?.[side]?.artifacts
+      if (!Array.isArray(items)) continue
+      if (items.length > 32)
+        fail('INVALID_INPUT', 'Artifact count exceeds limit')
+      for (const item of items) if (addressable(item)) await checkFile(item)
+    }
+    if (
+      Array.isArray(captures?.entries) &&
+      Array.isArray(manifest?.captureAttestations)
+    ) {
+      if (captures.entries.length > 32)
+        fail('INVALID_INPUT', 'Capture index exceeds limit')
+      const requested = new Set(manifest.captureAttestations)
+      const scheduled = new Set()
+      // The index is capped at32. Malformed repeated attestations cannot
+      // amplify one receipt into unbounded repeated parsing before schema checks.
+      for (const entry of captures.entries) {
+        const captureId = entry?.captureId
+        if (!requested.has(captureId) || scheduled.has(captureId)) continue
+        scheduled.add(captureId)
+        if (
+          !entry ||
+          !addressable({ path: entry.receiptPath, sha256: entry.receiptSha256 })
+        )
+          continue
+        try {
+          const loaded = await checkFile(
+            { path: entry.receiptPath, sha256: entry.receiptSha256 },
+            MiB,
+            true
+          )
+          receipts.set(captureId, loaded.data)
+        } catch (error) {
+          if (!absent(error)) throw error
+        }
+      }
+    }
+    if (Array.isArray(authorities?.entries)) {
+      if (authorities.entries.length > 32)
+        fail('INVALID_INPUT', 'Authority index exceeds limit')
+      authority = authorities.entries.find(
+        (item) => item?.decisionId === rule?.equivalenceDecisionRef
+      )
+      if (authority)
+        for (const item of [
+          {
+            path: authority.specPath,
+            sha256: authority.specSha256,
+            cap: 4 * MiB
+          },
+          {
+            path: authority.decisionReceiptPath,
+            sha256: authority.decisionReceiptSha256,
+            cap: MiB
+          }
+        ])
+          if (addressable(item)) {
+            try {
+              await checkFile(item, item.cap)
+            } catch (error) {
+              if (!absent(error)) throw error
+            }
+          }
+    }
+    if (addressable(rule?.expectedArtifact))
+      await checkFile(rule.expectedArtifact)
+    // Complete JSON is parsed before any comparison. No selector drops data.
+    if (rule?.projection?.kind === 'EXACT_JSON') {
+      for (const [side, role] of [
+        ['reference', rule.projection.referenceRole],
+        ['cvg', rule.projection.cvgRole]
+      ]) {
+        const items = manifest?.[side]?.artifacts
+        const item = Array.isArray(items)
+          ? items.find((item) => item?.role === role)
+          : undefined
+        if (addressable(item)) await checkFile(item, 4 * MiB, true)
+      }
+      if (addressable(rule.expectedArtifact))
+        await checkFile(rule.expectedArtifact, 4 * MiB, true)
+    }
+    pass()
+    enter('SUPPORTED_WIRE')
+    for (const value of [
+      manifest?.version,
+      catalog?.schema_version,
+      rule?.version,
+      captures?.version,
+      authorities?.version,
+      ...[...receipts.values()].map((receipt) => receipt?.version)
+    ]) {
+      if (Number.isInteger(value) && value !== 1) version(value)
+    }
+    if (
+      typeof rule?.projection?.kind === 'string' &&
+      !['EXACT_JSON', 'EXACT_BYTES'].includes(rule.projection.kind)
+    )
+      fail('UNSUPPORTED_RULE', 'Unsupported projection kind')
+    pass()
+    enter('SCHEMAS')
+    validateManifest(manifest)
+    const bindingCatalog = codex
+      ? validateCodexCatalog(catalog)
+      : (validateCatalog(catalog), catalog)
+    validateRule(rule)
+    validateCaptureIndex(captures)
+    validateAuthorityIndex(authorities)
+    for (const receipt of receipts.values()) validateReceipt(receipt)
+    validateRequirementBindings(manifest, rule, bindingCatalog)
+    for (const item of rule.normalizationPolicy)
+      if (item && typeof item === 'object' && Object.hasOwn(item, 'namespace'))
+        id(item.namespace)
+    try {
+      normalizeLog([], rule.normalizationPolicy)
+    } catch (error) {
+      if (!(error instanceof TypeError))
+        fail(
+          'INFRA_FAILURE',
+          'Comparator could not validate the bounded normalization policy'
+        )
+      fail('INVALID_INPUT', 'Invalid normalization policy')
+    }
+    if (rule.normalizationPolicy.length) {
+      const projected = [
+        manifest.reference === null
+          ? rule.expectedArtifact
+          : manifest.reference.artifacts.find(
+              (item) => item.role === rule.projection.referenceRole
+            ),
+        manifest.cvg.artifacts.find(
+          (item) => item.role === rule.projection.cvgRole
+        )
+      ]
+      for (const item of projected)
+        if (item) {
+          assertProjectionBudget(
+            snapshots.get(item.path).size,
+            documents.get(item.path),
+            rule.normalizationPolicy
+          )
+          try {
+            normalizeLog(documents.get(item.path), rule.normalizationPolicy)
+          } catch (error) {
+            if (!(error instanceof TypeError))
+              fail(
+                'INFRA_FAILURE',
+                'Comparator could not allocate a bounded normalized projection'
+              )
+            fail(
+              'INVALID_INPUT',
+              'Normalization requires a complete array of valid envelopes'
+            )
+          }
+        }
+    }
+    for (const side of ['reference', 'cvg']) {
+      if (manifest[side] === null) continue
+      if (
+        rule.requiredRoles.some(
+          (role) => !manifest[side].artifacts.some((item) => item.role === role)
+        )
+      )
+        fail('INVALID_INPUT', 'Required artifact role is missing')
+    }
+    report.runId = manifest.runId
+    report.scenarioId = manifest.scenarioId
+    report.requirementIds = [...manifest.requirementIds]
+    for (const side of ['reference', 'cvg'])
+      if (manifest[side]) {
+        report.identities[`${side}Sha256`] = jsonDigest(manifest[side].identity)
+        report.evidence[side] = manifest[side].artifacts
+        if (
+          manifest[side].identity.kind === 'REMOTE_SERVICE' &&
+          manifest[side].identity.build === null
+        )
+          report.limitations.push(
+            'Remote service build is unknown; this is a dated capture only.'
+          )
+      }
+    pass()
+    enter('REFERENCE')
+    if (
+      rule.verificationClass === 'FUNCTIONAL_PARITY' &&
+      manifest.reference === null
+    )
+      fail('BLOCKED_REFERENCE', 'Functional reference capture is absent')
+    pass()
+    enter('CAPTURES')
+    for (const [position, side] of (manifest.reference === null
+      ? ['cvg']
+      : ['reference', 'cvg']
+    ).entries()) {
+      const captureId = manifest.captureAttestations[position]
+      const entry = captures.entries.find(
+        (item) => item.captureId === captureId
+      )
+      const receipt = receipts.get(captureId)
+      const current = manifest[side]
+      if (
+        !entry ||
+        !receipt ||
+        entry.runId !== manifest.runId ||
+        entry.scenarioId !== manifest.scenarioId ||
+        entry.side !== side ||
+        entry.identitySha256 !== jsonDigest(current.identity) ||
+        entry.artifactSetSha256 !== jsonDigest(current.artifacts)
+      )
+        fail('UNTRUSTED_CAPTURE', 'No exact independent capture binding')
+      const expected = {
+        version: 1,
+        captureId,
+        collectorId: entry.collectorId,
+        runId: manifest.runId,
+        scenarioId: manifest.scenarioId,
+        side,
+        fixtureSha256: manifest.fixtureSha256,
+        ruleSha256: manifest.ruleSha256,
+        identity: current.identity,
+        execution: current.execution,
+        artifacts: current.artifacts
+      }
+      if (
+        !equal(receipt, expected) ||
+        current.artifacts.find((item) => item.role === 'RAW_INPUT').sha256 !==
+          manifest.fixtureSha256
+      )
+        fail(
+          'UNTRUSTED_CAPTURE',
+          'Manifest does not match the trusted capture receipt'
+        )
+    }
+    pass()
+    enter('AUTHORITY')
+    currentAuthority = () =>
+      authority &&
+      authority.scopeId === manifest.scenarioId &&
+      authority.ruleSha256 === manifest.ruleSha256 &&
+      authority.decision === 'APPROVED' &&
+      (authority.expiresAt === null ||
+        (authority.expiresAt > startedAt &&
+          authority.expiresAt > new Date().toISOString())) &&
+      snapshots.has(authority.specPath) &&
+      snapshots.has(authority.decisionReceiptPath)
+    if (!currentAuthority())
+      fail('BLOCKED_CVG_SPEC', 'No current approved scenario authority')
+    authorityChecked = true
+    pass()
+    enter('EXECUTION')
+    for (const side of ['reference', 'cvg'])
+      if (manifest[side]) {
+        const execution = manifest[side].execution
+        if (execution.timeout || execution.outcomeKind === 'INFRA_FAILURE') {
+          authenticatedInfrastructureFailure = true
+          fail(
+            'INFRA_FAILURE',
+            'Authenticated execution failed at infrastructure level'
+          )
+        }
+      }
+    for (const side of ['reference', 'cvg'])
+      if (manifest[side]) {
+        const { outcomeKind, exitCode } = manifest[side].execution
+        if (!equal({ outcomeKind, exitCode }, rule.expectedExecution[side]))
+          fail(
+            'MISMATCH',
+            'Authenticated execution differs from expected outcome'
+          )
+      }
+    pass()
+    enter('COMPARISON')
+    const get = (side, role) =>
+      manifest[side].artifacts.find((item) => item.role === role)
+    const reference =
+      manifest.reference === null
+        ? rule.expectedArtifact
+        : get('reference', rule.projection.referenceRole)
+    const cvg = get('cvg', rule.projection.cvgRole)
+    let a, b
+    if (rule.projection.kind === 'EXACT_BYTES') {
+      a = snapshots.get(reference.path).bytes
+      b = snapshots.get(cvg.path).bytes
+    } else {
+      for (const item of [reference, cvg])
+        assertProjectionBudget(
+          snapshots.get(item.path).size,
+          documents.get(item.path),
+          rule.normalizationPolicy
+        )
+      const project = (item) => {
+        const raw = documents.get(item.path)
+        if (!rule.normalizationPolicy.length) return canonicalJson(raw)
+        try {
+          return canonicalJson(
+            normalizeLog(raw, rule.normalizationPolicy).projection
+          )
+        } catch (error) {
+          if (!(error instanceof TypeError))
+            fail(
+              'INFRA_FAILURE',
+              'Comparator could not allocate a bounded normalized projection'
+            )
+          fail(
+            'INVALID_INPUT',
+            'Normalization requires a valid complete log of envelopes'
+          )
+        }
+      }
+      a = Buffer.from(project(reference))
+      b = Buffer.from(project(cvg))
+    }
+    // Canonical numeric/ID expansion may exceed the raw-input cap. Preserve
+    // every byte in ordered parts, each a valid <=4MiB output descriptor.
+    try {
+      for (const [name, bytes] of [
+        ['reference', a],
+        ['cvg', b]
+      ]) {
+        const parts = Math.max(1, Math.ceil(bytes.length / (4 * MiB)))
+        for (let i = 0; i < parts; i++)
+          report.evidence.normalized.push(
+            await output.write(
+              parts === 1
+                ? `${name}.projection`
+                : `${name}.projection-${String(i).padStart(3, '0')}`,
+              bytes.subarray(i * 4 * MiB, (i + 1) * 4 * MiB)
+            )
+          )
+      }
+    } catch (cause) {
+      throw new QualificationError(
+        'INFRA_FAILURE',
+        'Generated projection could not be materialized',
+        { cause }
+      )
+    }
+    if (!a.equals(b)) {
+      report.diffs.push({
+        role: rule.projection.cvgRole,
+        location: '/',
+        kind: 'VALUE',
+        referenceDigest: sha(a),
+        cvgDigest: sha(b)
+      })
+      fail('MISMATCH', 'Complete documents differ')
+    }
+    pass()
+    report.status = 'MATCH_REQUIRES_REVIEW'
+    report.exitCode = 0
+  } catch (error) {
+    report.status =
+      error instanceof QualificationError ? error.status : 'INFRA_FAILURE'
+    comparatorFailure =
+      report.status === 'INFRA_FAILURE' && !authenticatedInfrastructureFailure
+    report.exitCode = 1
+    Object.assign(
+      report.checks.find((check) => check.id === active),
+      {
+        status: 'FAIL',
+        message:
+          error instanceof QualificationError
+            ? error.message.slice(0, 1024)
+            : 'Comparator failed internally'
+      }
+    )
+  }
+  // Materialize the exact consumed control inputs and immutable source snapshots.
+  // Numeric filenames cannot be supplied by evidence content.
+  let staged = false
+  let blockedReport
+  try {
+    if (output) {
+      let index = 0
+      const inventory = []
+      for (const file of snapshots.values()) {
+        const copy = await output.write(
+          `input-${String(index++).padStart(3, '0')}.bin`,
+          file.bytes
+        )
+        inventory.push({
+          source: file.path,
+          sha256: file.sha256,
+          bytes: file.size,
+          copy: copy.path
+        })
+      }
+      await output.write('input-snapshots.json', JSON.stringify(inventory))
+      await output.write('report.pending.json', JSON.stringify(report, null, 2))
+      if (
+        authorityChecked &&
+        !comparatorFailure &&
+        ['MATCH_REQUIRES_REVIEW', 'MISMATCH', 'INFRA_FAILURE'].includes(
+          report.status
+        )
+      ) {
+        blockedReport = JSON.parse(JSON.stringify(report))
+        blockedReport.status = 'BLOCKED_CVG_SPEC'
+        blockedReport.exitCode = 1
+        Object.assign(
+          blockedReport.checks.find((check) => check.id === 'AUTHORITY'),
+          { status: 'FAIL', message: 'Authority expired at report publication' }
+        )
+        for (const check of blockedReport.checks)
+          if (['EXECUTION', 'COMPARISON'].includes(check.id))
+            Object.assign(check, {
+              status: 'NOT_RUN',
+              message: 'Not used: authority is not current at publication'
+            })
+        await output.write(
+          'report.blocked.pending.json',
+          JSON.stringify(blockedReport, null, 2)
+        )
+      }
+      staged = true
+    }
+  } catch {
+    report.status = 'INFRA_FAILURE'
+    report.exitCode = 1
+    report.limitations.push(
+      'Output could not be fully materialized; any partial report is not authoritative.'
+    )
+    report.checks.push({
+      id: 'OUTPUT',
+      status: 'FAIL',
+      message: 'Report was not published; pending files are incomplete evidence'
+    })
+  } finally {
+    try {
+      await io?.close()
+    } catch {
+      report.status = 'INFRA_FAILURE'
+      report.exitCode = 1
+      staged = false
+      report.limitations.push('Evidence handles could not all be closed.')
+    }
+  }
+  if (staged) {
+    let selected = report
+    try {
+      output.publish(
+        blockedReport
+          ? ['report.pending.json', 'report.blocked.pending.json']
+          : ['report.pending.json'],
+        () => {
+          if (blockedReport && !currentAuthority()) {
+            selected = blockedReport
+            return 'report.blocked.pending.json'
+          }
+          return 'report.pending.json'
+        }
+      )
+      // Publication is the final operation: no later cleanup can invalidate it.
+      return selected
+    } catch {
+      report.status = 'INFRA_FAILURE'
+      report.exitCode = 1
+      report.limitations.push(
+        'Completed report could not be published; pending files remain incomplete.'
+      )
+    }
+  }
+  return report
+}

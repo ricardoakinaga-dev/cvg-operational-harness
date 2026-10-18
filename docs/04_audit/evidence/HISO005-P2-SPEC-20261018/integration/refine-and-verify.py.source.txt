@@ -1,0 +1,74 @@
+import json,pathlib,subprocess,re,hashlib,datetime,os
+R=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness');E=R/'docs/04_audit/evidence/HISO005-P2-SPEC-20261018/integration';T=pathlib.Path('/tmp/cvg-hiso005-p2-20261018/integration');P=E/'integration-preflight.json';d=json.loads(P.read_bytes());env={**os.environ,'GIT_OPTIONAL_LOCKS':'0'}
+def sha(b):return hashlib.sha256(b).hexdigest()
+def blob(rev,p):
+ q=subprocess.run(['git','show',rev+':'+p],cwd=R,capture_output=True,env=env);return q.stdout if q.returncode==0 else b''
+def jsnew(p,v):
+ assert not p.exists();p.write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n')
+imports=[]
+for row in d['ownedSourceAndDocumentPaths']:
+ p=row['path']
+ if not p.endswith('.js') and not p.endswith('.mjs'):continue
+ text=blob(d['scope']['candidateHead'],p).decode();header=re.split(r'^(?:(?:export )?(?:const|function|class)\b)',text,maxsplit=1,flags=re.M)[0]
+ for m in re.finditer(r'''^import\s+[\s\S]*?\sfrom\s*['"]([^'"]+)['"]''',header,re.M):
+  spec=m.group(1)
+  if spec.startswith('.'):imports.append({'from':p,'specifier':spec,'path':os.path.normpath(str(pathlib.PurePosixPath(p).parent/spec))})
+d['staticRelativeImports']=imports
+d['dependencies']=[x for x in d['dependencies'] if not x['path'].startswith('../') and x['rootHead']['exists']]
+d['dependencyExtraction']='Canonical imports limited to leading module import declarations and inspected against source headers. collection.json retains raw lexical candidates including fixture string literals; those are not real dependency paths.'
+d['futureTestResourceCollision']={
+ 'tests/b6-0234-installed-identity.test.js':{'line':16,'hardcodedPath':'/tmp/cvg-hiso005-0234-20261017/comparer','operation':'mkdir recursive + mkdtemp case-*; removes created case roots, not entire prior bundle'},
+ 'tests/b6-0234-reference-recipe.test.js':{'line':23,'hardcodedPath':'/tmp/cvg-hiso005-0234-20261017/runner','operation':'mkdir recursive + mkdtemp fixture-*'},
+ 'impact':'Setting TMPDIR is insufficient for these two byteexact test files. Future test execution needs explicit own resource claim for disjoint new fixture children under these existing roots or isolated mount/path fixture adaptation with reviewed new test hashes; old fixtures/evidence stay read-only. No tests run in this lane.'}
+d['collisionWithActiveOwners'].append({'path':'/tmp/cvg-hiso005-0234-20261017/{comparer,runner}/**','owner':'HISO005-0234 retained earlier evidence/resources','kind':'HARD_CODED_FUTURE_TEST_TEMP_PARENT','required':'claim disjoint new fixture children explicitly or run in isolated path namespace/review portable fixture adjustment; TMPDIR alone does not redirect these tests'})
+d['promotionOrderAndGates'][4]['action']+=' Resolve the two hardcoded fixture-parent ownership reservations before any focused/full unit execution; TMPDIR alone does not isolate them.'
+# Mechanical patch reconstruction happens only in memory. It does not execute/apply repository code or git apply.
+patch=(E/'forward-source-complete.review-only.patch').read_text().splitlines(True)
+sections=[]
+for l in patch:
+ if l.startswith('diff --git '):sections.append([l])
+ else:sections[-1].append(l)
+validated=[]
+for section in sections:
+ m=re.match(r'diff --git a/(.+) b/(.+)\n',section[0]);assert m and m[1]==m[2];p=m[1]
+ original=blob(d['scope']['rootHead'],p).decode().splitlines(True);result=[];pos=0;i=0
+ while i<len(section):
+  match=re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@',section[i])
+  if not match:i+=1;continue
+  oldstart=int(match[1]);oldcount=int(match[2] or 1);newcount=int(match[4] or 1);target=oldstart-1 if oldcount else oldstart;assert target>=pos
+  result+=original[pos:target];pos=target;i+=1;removed=0;added=0
+  while i<len(section) and not section[i].startswith('@@ '):
+   l=section[i]
+   if l.startswith(' '):assert original[pos]==l[1:];result.append(l[1:]);pos+=1;removed+=1;added+=1
+   elif l.startswith('-'):assert original[pos]==l[1:];pos+=1;removed+=1
+   elif l.startswith('+'):result.append(l[1:]);added+=1
+   else:raise AssertionError(repr(l))
+   i+=1
+  assert removed==oldcount and added==newcount,(p,removed,oldcount,added,newcount)
+ result+=original[pos:];post=''.join(result).encode()
+ target=(E/'checker-three-way.review.txt').read_bytes() if p=='scripts/check-product-boundary.mjs' else blob(d['scope']['candidateHead'],p)
+ assert post==target,p
+ validated.append({'path':p,'preimageSha256':sha(''.join(original).encode()) if original else None,'postimageSha256':sha(post),'bytes':len(post),'reconstructedExactly':True})
+assert len(validated)==10
+jsnew(E/'patch-byte-reconstruction.json',{'method':'Pure Python in-memory unified-diff reconstruction against captured root HEAD; no disk source/index patch application; not runtime/functional test','paths':validated,'all10Exact':True,'applied':False})
+d['patchReconstructionArtifact']='patch-byte-reconstruction.json'
+d['result']['fullForwardPatchReconstructsAll10PostimagesInMemory']=True
+# Head/index/source freshness and dirty docs sampled again; no index lock refresh.
+commands=[]
+def run(args,cwd=R):
+ q=subprocess.run(args,cwd=cwd,env=env,capture_output=True);commands.append({'argv':args,'cwd':str(cwd),'exitCode':q.returncode,'stdoutSha256':sha(q.stdout),'stdoutBytes':len(q.stdout),'stderrSha256':sha(q.stderr),'stderrBytes':len(q.stderr)});return q
+rootNow=run(['git','rev-parse','HEAD']).stdout.decode().strip();candRoot=pathlib.Path(d['scope']['candidate']);candNow=run(['git','rev-parse','HEAD'],candRoot).stdout.decode().strip();fresh=[]
+for row in d['ownedSourceAndDocumentPaths']:
+ p=row['path'];f=R/p;c=candRoot/p
+ actual=sha(f.read_bytes()) if f.is_file() else None;candidate=sha(c.read_bytes()) if c.is_file() else None
+ fresh.append({'path':p,'rootInitialSha256':row['rootWorking']['sha256'],'rootFinalSha256':actual,'rootUnchanged':actual==row['rootWorking']['sha256'],'candidateInitialSha256':row['candidateWorking']['sha256'],'candidateFinalSha256':candidate,'candidateUnchanged':candidate==row['candidateWorking']['sha256']})
+central=R/d['centralCatalog']['centralPath'];centralNow=sha(central.read_bytes());oldcentral=d['centralCatalog']['centralCurrent']['sha256'];rootStatus=run(['git','status','--porcelain=v1','--untracked-files=normal']).stdout
+assert not (E/'root-status.final.txt').exists();(E/'root-status.final.txt').write_bytes(rootStatus)
+trackedBefore={x['path']:x['working']['sha256'] for x in d['rootDirty']['tracked']};dirtydrift=[]
+for p,b in trackedBefore.items():
+ f=R/p;a=sha(f.read_bytes()) if f.is_file() else None
+ if a!=b:dirtydrift.append({'path':p,'beforeSha256':b,'afterSha256':a,'classification':'concurrent external change; readonly scout does not rewrite'})
+freshness={'observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'rootHeadUnchanged':rootNow==d['scope']['rootHead'],'candidateHeadUnchanged':candNow==d['scope']['candidateHead'],'ownedPaths':fresh,'allOwnedSourceAndDocumentUnchanged':all(x['rootUnchanged'] and x['candidateUnchanged'] for x in fresh),'centralInitialSha256':oldcentral,'centralFinalSha256':centralNow,'centralUnchanged':centralNow==oldcentral,'trackedDirtyConcurrentDrift':dirtydrift,'commands':commands,'rootCertified':False}
+jsnew(E/'final-freshness.json',freshness);d['finalFreshnessArtifact']='final-freshness.json';d['finalFreshnessSummary']={k:freshness[k] for k in ['rootHeadUnchanged','candidateHeadUnchanged','allOwnedSourceAndDocumentUnchanged','centralUnchanged','trackedDirtyConcurrentDrift']}
+P.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps({'all10PatchPostimagesExact':True,'canonicalStaticImports':len(imports),'dependencies':len(d['dependencies']),'freshness':d['finalFreshnessSummary']},ensure_ascii=False,indent=2))

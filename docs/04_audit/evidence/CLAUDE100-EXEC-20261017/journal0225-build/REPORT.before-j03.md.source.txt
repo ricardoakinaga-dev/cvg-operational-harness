@@ -1,0 +1,72 @@
+# SPEC0225 — captura e retomada sem cobrança duplicada
+
+Checkpoint privado `077fa931`, candidata com fonte limpa. BUILD em andamento,
+sem promoção ao checkout compartilhado ou aceite integral. Zero crédito dos
+117resultados funcionais e17controles CVG.
+
+Os testes novos reproduziram um defeito: o processo novo recusava repetir o
+corpo, mas reabria o dispatch quando o journal estava UNCERTAIN/EFFECT_STARTED,
+reescrevia timestamps do passo e cobrava steps/toolCalls novamente. Quatro
+casos estritos falharam. O predicado interno agora exige uma reserva replayable:
+RESERVED/FAILED/CONFIRMED. Estados incertos ou ilegíveis param antes de novo
+CAS/dispatch com preserveCheckpoint. Nenhuma API pública/barrel/flag/schema ou
+limite foi alterado. [Reprodução e HOW](capture-j12-replay-repair-claim.json),
+[reconciliação de fontes](capture-j12-source-reconciliation.json).
+
+| Evidência atual                                                                                                                                   | Resultado observado                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [Captura](native-1792334017586-command.json)                                                                                                      | 8PASS/0FAIL/0SKIP:2componentes reais e6casos públicos writer/reader em12PIDs.                                                  |
+| [Conferência da captura](capture-j12-current-lead-audit.json)                                                                                     | Checkpoint inteiro, journal e passos idênticos após cada leitor; receipts/uso preservados, leitorCAS0/reserva0/modelo0/corpo0. |
+| [PostgreSQL](native-1792334024971-command.json)                                                                                                   | 71PASS/0FAIL/0SKIP, incluindo43corrupções e2falhas duplas J12 com causa original preservada.                                   |
+| [Contexto](native-1792334031727-command.json)                                                                                                     | 19PASS/0FAIL/0SKIP, incluindo7falhas get/CAS/ack/auditoria/cancel/pause/deadline.                                              |
+| [Bound](native-1792334049979-command.json)                                                                                                        | 17PASS/0FAIL/0SKIP, com guards0029/0030 independentes, outerclaim2 e lease expirando no encode.                                |
+| [Reinício público](native-1792334053164-command.json)                                                                                             | 66PASS/0FAIL/0SKIP,22valores em3crashpoints/132PIDs, toolCalls1antes/depois.                                                   |
+| [Conferência das regressões](capture-j12-current-regression-lead-audit.json),[pública](capture-j12-current-public66-lead-audit.json)              | Inputs atuais37capture/50bound/34demais, bytes/hashes/frames/receipts/uso e controles conferidos.                              |
+| [Focais](recovery-unit-r5-report.json),[build](build-runtime-r8-command.json),[tipagem](typecheck-r31-command.json),[lint](lint-r15-command.json) | 116PASS/0FAIL/0PENDING,20workspaces compilados e exit0 nas checagens canônicas.                                                |
+| [Recurso](capture-j12-final-resource-checkpoint.json)                                                                                             | PG16.15, schema/roles temporários ausentes, clientes0,22legadas0 intactas;4d8/55880 reservado.                                 |
+
+| Caso público     | Bytes output/ToolResult | Confirmações e estado durável                                                       |
+| ---------------- | ----------------------- | ----------------------------------------------------------------------------------- |
+| journal-limit    | 1048576/1048608         | confirm1/CONFIRMED; contexto UNAVAILABLE, sem próximo modelo.                       |
+| journal-plus-one | 1048577/1048609         | confirm1 rejeita encode; UNCERTAIN.                                                 |
+| capture-limit    | 8388576/8388608         | captura passa, confirm1 rejeita journal; UNCERTAIN.                                 |
+| capture-plus-one | 8388577/8388609         | captura rejeita antes de confirm0; UNCERTAIN.                                       |
+| started          | 1048577/1048609         | encode falha e UPDATE UNCERTAIN injetado falha; rollback/EFFECT_STARTED.            |
+| capture-started  | 8388577/8388609         | captura falha, confirm0 e UPDATE UNCERTAIN injetado falha; rollback/EFFECT_STARTED. |
+
+Cada escritor executou um corpo e uma chamada de decisão sintética. O leitor
+em outro PID leu o estado real, preservou todos os dados e não reservou/confirmou
+ou executou novamente a ferramenta. Os dois controles de8MiB são do componente
+compilado de captura; não significam confirmação de8MiB no journal de1MiB.
+No limite nativo de1MiB, get validou conteúdo/hash e o payload real tem
+1398104caracteres base64/1398248bytes JSONB. Não houve dump de resultado8MiB.
+
+A falha de UPDATE UNCERTAIN é uma injeção local antes de delegar no adaptador
+real, com BEGIN/ROLLBACK observados; não é alegação de pane física do servidor.
+A [primeira falha de fixture](capture-j12-fixture-observations.json) por protótipo
+nulo do receipt também permanece: o oracle compara as4chaves/valores exatamente,
+sem mudar o decoder ou afrouxar conservação de uso/timestamps.
+
+A investigação [J03 estática](limits-j03-recon/REPORT.md) usou o modo
+scout-assisted da skill `orchestrate`.
+Schrodinger foi encerrado após14entradas,6inputs/5artefatos/17links e aritmética
+independente conferidos. Manifesto f5b00231618608baa8a6e66528996847fc003ab322f3304c3004161fd6d88450
+intacto. É investigação estática; não é crítica do código ou prova nativa.
+A aprovação0225§11.1 já separa o guard1Mnodes do cap1MiB; não há waiver.
+
+Próxima ação: fechar HOW dos[9inputs J03](j03-native-preparation/plan.json),
+com portas nativas para bytes/escapes/depth e distinção explícita para seams
+SQL/driver. Constraints validadas não serão desabilitadas para fabricar prova
+nativa impossível. Controle virtual é componente; manter lacunas e veredito
+independente quando necessário. Nenhum desses novos procedimentos foi executado.
+
+Restam J03/J04 integrais, saldoJ05–J07/três leitores antigos, crítica fresca de
+código0/2 e J16/gates completos Node22/unit/PG/E2E/certificação. J12 tem matriz
+local atual, sujeita à crítica e qualificação composta; não fecha a SPEC.
+SomenteJ14 e drill completoJ15 foram adiados. P0 de qualificação composta e43reds
+históricos permanecem, sem repin/checker relaxado ou certificado transferido.
+
+SPEC0238 aguarda resposta humana já solicitada, sem reenvio/BUILD. Sem conta/
+modelo/dados reais, produção, release, push ou deploy. Todos os jobs e agentes
+próprios encerrados; PG reservado idle. Ledgers99/20/30 readonly por alterações
+de outro owner; delta próprio pendente. Rodada com código ainda não encerrada.

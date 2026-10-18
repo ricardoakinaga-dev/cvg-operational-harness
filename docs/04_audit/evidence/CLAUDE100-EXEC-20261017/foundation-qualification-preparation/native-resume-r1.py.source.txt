@@ -1,0 +1,30 @@
+import pathlib,json,subprocess,datetime,time,sys,os
+root=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness');b=root/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-qualification-preparation';q=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-preparation');w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-candidate');n=q/'native';out=b/'native-four-profiles';env=json.loads((q/'environment.json').read_text());claim=json.loads((b/'native-resource-claim.json').read_text());resource=json.loads((n/'resources.json').read_text());cid=resource['id'];assert cid=='081a089440e326a89093d916991060a4c5c809f2df6b01073a04d4188f3cc536';assert not (out/'command.json').exists(),'No test launch repetition'
+def at():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def write(p,d):p.write_text(json.dumps(d,indent=2)+'\n');p.chmod(0o600)
+docker=['/usr/bin/docker','--host','unix:///var/run/docker.sock','--config',str(q/'docker-config')];records=json.loads((out/'resource-commands.json').read_text())
+def run(argv,check=True,timeout=45):
+ p=subprocess.run(argv,cwd=w,env=env,capture_output=True,text=True,timeout=timeout);records.append({'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'at':at()});write(out/'resource-commands.json',records)
+ if check and p.returncode:raise RuntimeError('Owned native resource command failed '+str(p.returncode))
+ return p
+p=run(docker+['inspect','--format','{{.Id}}|{{.Name}}|{{.Image}}|{{index .Config.Labels "cvg.task"}}|{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostIp}}|{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}',cid]);assert p.stdout.strip()==cid+'|/'+claim['container_name']+'|'+claim['image']+'|C100-FND-QUALIFICATION-PREP-001|127.0.0.1|55879'
+for i in range(30):
+ p=run(docker+['exec','--env','PGPASSWORD=c100_qprep_synthetic',cid,'psql','--host','127.0.0.1','-U','pare217','-d','pare217_synthetic','-At','-c','SELECT 1'],False)
+ if p.returncode==0 and p.stdout.strip()=='1':break
+ time.sleep(.5)
+else:raise RuntimeError('Owned final TCP PG unavailable; do not recreate')
+general=json.loads((n/'resource-general.json').read_text());codec=json.loads((n/'resource-codec.json').read_text());assert general['containerId']==cid and codec['containerId']==cid
+write(out/'setup-resumption.json',{'at':at(),'reason':'Initial pg_isready Unixsocket saw transient init server; prior provision failed57P03 before schema/role creation. Same owned container revalidated, finalTCP SELECT1 succeeded.','new_container_created':False,'test_rerun':False,'prior_error_preserved':True})
+run(['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(w/'node_modules/tsx/dist/cli.mjs'),str(q/'provision-codec.mts')],timeout=100)
+write(out/'provision-result.json',json.loads((n/'provision-result.json').read_text()))
+env.update(TEST_DATABASE_URL=general['test_database_url'],PHASE4A_DISPOSABLE_PG='1',PHASE4A_PG_REQUIRED='1',SPEC0224_PG_RESOURCE=str(n/'resource-codec.json'),SPEC0224_PG_REQUIRED='1',PARE217_A_PG_RESOURCE=str(n/'resource-general.json'),PARE217_A_PG_REQUIRED='1',PARE217_PG_RESOURCE=str(n/'resource-general.json'),PARE217_PG_REQUIRED='1',PARE217_PROCESS_EVIDENCE=str(n/'evidence'))
+argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/vitest/vitest.mjs','run','packages/conversation/src/__tests__/postgres-conversation.integration.test.ts','packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts','packages/persistence/src/__tests__/pare217-fenced-outbox-postgres.integration.test.ts','packages/persistence/src/__tests__/pare217-published-store-postgres.integration.test.ts','--no-file-parallelism','--maxWorkers=2','--reporter=default','--reporter=json','--outputFile='+str(n/'report.json')]
+with (out/'stdout.log').open('wb') as stdout,(out/'stderr.log').open('wb') as stderr:
+ p=subprocess.Popen(argv,cwd=w,env=env,stdout=stdout,stderr=stderr,start_new_session=True);launch={'at':at(),'argv':argv,'cwd':str(w),'environment':env,'pid':p.pid,'process_start_token':pathlib.Path('/proc/'+str(p.pid)+'/stat').read_text().split(') ')[1].split()[19],'container_id':cid,'state':'RUNNING'};write(out/'command.json',launch);print(json.dumps({'pid':p.pid,'process_start_token':launch['process_start_token'],'container_id':cid}),flush=True)
+ try:code=p.wait(timeout=360)
+ except subprocess.TimeoutExpired:
+  launch.update(state='TIMEOUT_STILL_OWNED_INSPECT');write(out/'command.json',launch);raise
+launch.update(state='COMPLETED',exit=code,ended_at=at());write(out/'command.json',launch)
+if (n/'report.json').exists():
+ raw=(n/'report.json').read_bytes();(out/'report.json').write_bytes(raw);report=json.loads(raw);print(json.dumps({k:report.get(k) for k in ['success','numPassedTests','numFailedTests','numPendingTests','numTotalTests']}),flush=True)
+print('native four profiles exit',code,flush=True);sys.exit(code)

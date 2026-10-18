@@ -1,0 +1,791 @@
+{
+  "kind": "EXACT_SOURCE_TEXT_RANGES_NOT_RUNTIME_PROOF",
+  "spans": [
+    {
+      "id": "R01-44",
+      "input": "R01",
+      "path": "packages/contracts/src/session-events.ts",
+      "input_sha256": "7c6defc6f40a9febef6699f35520ba9932c0bd5b882ed6bbd6732ee4e3b0baea",
+      "start_line": 44,
+      "end_line": 48,
+      "anchor": "export interface SessionEventStore",
+      "excerpt": "export interface SessionEventStore {\n  openSession(input: SessionStream): Promise<SessionStream>\n  append(input: SessionEventAppend): Promise<SessionEvent>\n  read(input: SessionEventRead): Promise<readonly SessionEvent[]>\n}"
+    },
+    {
+      "id": "R02-50",
+      "input": "R02",
+      "path": "packages/persistence/src/session-events.ts",
+      "input_sha256": "82bd97295fc2180c3fc2158de777979a78c90d880a7a40daed7ec73892e8856d",
+      "start_line": 50,
+      "end_line": 67,
+      "anchor": "export class PostgresSessionEventStore",
+      "excerpt": "export class PostgresSessionEventStore implements SessionEventStore {\n  readonly #pool: PostgresPoolLike\n  readonly #tenantId: string\n  readonly #schema: string\n  constructor(\n    pool: PostgresPoolLike,\n    options: { readonly tenantId: string; readonly schemaName: string }\n  ) {\n    this.#tenantId = validateSessionStream({\n      tenantId: options.tenantId,\n      sessionId: 'boot',\n      formatVersion: 1\n    }).tenantId\n    this.#schema = schemaName(options.schemaName)\n    this.#pool = pool\n  }\n  #bound(tenantId: string): void {\n    if (tenantId !== this.#tenantId)"
+    },
+    {
+      "id": "R02-73",
+      "input": "R02",
+      "path": "packages/persistence/src/session-events.ts",
+      "input_sha256": "82bd97295fc2180c3fc2158de777979a78c90d880a7a40daed7ec73892e8856d",
+      "start_line": 73,
+      "end_line": 90,
+      "anchor": "async #transaction",
+      "excerpt": "  async #transaction<T>(\n    operation: (client: PostgresPoolClient) => Promise<T>\n  ): Promise<T> {\n    let client: PostgresPoolClient\n    try {\n      client = await this.#pool.connect()\n    } catch {\n      throw new SessionEventError(\n        'session_storage_unavailable',\n        'Session database unavailable'\n      )\n    }\n    let releaseError: Error | undefined\n    try {\n      await client.query('BEGIN')\n      await client.query(\"SET LOCAL statement_timeout = '5s'\")\n      await client.query(\"SET LOCAL lock_timeout = '5s'\")\n      await client.query(\"SELECT set_config('cvg.tenant_id', $1, true)\", ["
+    },
+    {
+      "id": "R02-149",
+      "input": "R02",
+      "path": "packages/persistence/src/session-events.ts",
+      "input_sha256": "82bd97295fc2180c3fc2158de777979a78c90d880a7a40daed7ec73892e8856d",
+      "start_line": 149,
+      "end_line": 166,
+      "anchor": "async append",
+      "excerpt": "  async append(raw: SessionEventAppend): Promise<SessionEvent> {\n    // Snapshot before awaits: mutations by a caller cannot change committed input.\n    const input = validateSessionEventAppend(raw)\n    this.#bound(input.tenantId)\n    const digest = sessionEventInputDigest(input)\n    return this.#transaction(async (client) => {\n      const stream = await client.query<{\n        next_sequence: string\n        format_version: number\n      }>(\n        `SELECT next_sequence,format_version FROM \"${this.#schema}\".session_streams WHERE tenant_id=$1 AND session_id=$2 FOR UPDATE`,\n        [input.tenantId, input.sessionId]\n      )\n      const current = stream.rows[0]\n      if (!current)\n        throw new SessionEventError(\n          'session_not_open',\n          'Session stream is not open'"
+    },
+    {
+      "id": "R02-216",
+      "input": "R02",
+      "path": "packages/persistence/src/session-events.ts",
+      "input_sha256": "82bd97295fc2180c3fc2158de777979a78c90d880a7a40daed7ec73892e8856d",
+      "start_line": 216,
+      "end_line": 233,
+      "anchor": "async read",
+      "excerpt": "  async read(raw: SessionEventRead): Promise<readonly SessionEvent[]> {\n    const input = validateSessionEventRead(raw)\n    this.#bound(input.tenantId)\n    return this.#transaction(async (client) => {\n      const streams = await client.query(\n        `SELECT 1 FROM \"${this.#schema}\".session_streams WHERE tenant_id=$1 AND session_id=$2`,\n        [input.tenantId, input.sessionId]\n      )\n      if (streams.rows.length !== 1)\n        throw new SessionEventError(\n          'session_not_open',\n          'Session stream is not open'\n        )\n      const result = await client.query<EventRow>(\n        `SELECT record,input_digest FROM \"${this.#schema}\".session_events WHERE tenant_id=$1 AND session_id=$2 AND sequence>$3 ORDER BY sequence ASC LIMIT $4`,\n        [input.tenantId, input.sessionId, input.afterSequence, input.limit]\n      )\n      return result.rows.map((row) => this.#event(row, input.sessionId))"
+    },
+    {
+      "id": "R03-402",
+      "input": "R03",
+      "path": "packages/contracts/src/execution-v2.ts",
+      "input_sha256": "1e5cfcb9f2935ec2be4399f5494e86611db5bb577c942345ab135ac1f985c1b6",
+      "start_line": 402,
+      "end_line": 419,
+      "anchor": "export interface ExecutionCheckpoint",
+      "excerpt": "export interface ExecutionCheckpoint {\n  readonly checkpointId: string\n  readonly executionId: string\n  readonly tenantId: string\n  readonly checkpointVersion: number\n  readonly runtimeProfile: RuntimeProfile\n  readonly runtimeVersion: string\n  readonly orchestratorVersion: string\n  readonly stepNumber: number\n  readonly state: AgentLoopState\n  readonly budgetUsage: BudgetUsage\n  readonly createdAt: string\n  readonly digest: string\n}\n\nexport interface ExecutionStepStore {\n  recordStep(step: ExecutionStep): Promise<void>\n  listSteps("
+    },
+    {
+      "id": "R03-417",
+      "input": "R03",
+      "path": "packages/contracts/src/execution-v2.ts",
+      "input_sha256": "1e5cfcb9f2935ec2be4399f5494e86611db5bb577c942345ab135ac1f985c1b6",
+      "start_line": 417,
+      "end_line": 434,
+      "anchor": "export interface ExecutionStepStore",
+      "excerpt": "export interface ExecutionStepStore {\n  recordStep(step: ExecutionStep): Promise<void>\n  listSteps(\n    tenantId: string,\n    executionId: string\n  ): Promise<readonly ExecutionStep[]>\n  saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void>\n  loadCheckpoint(\n    tenantId: string,\n    executionId: string\n  ): Promise<ExecutionCheckpoint | null>\n}\n\n/* -------------------------------------------------------------------------- */\n/* Completion / sufficiency evaluation                                        */\n/* -------------------------------------------------------------------------- */\n\nexport const COMPLETION_OUTCOMES = ["
+    },
+    {
+      "id": "R04-172",
+      "input": "R04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 172,
+      "end_line": 189,
+      "anchor": "export class PostgresExecutionStepStore",
+      "excerpt": "export class PostgresExecutionStepStore implements ExecutionStepStore {\n  private readonly clock: () => Date\n\n  public constructor(\n    private readonly connection: OperationalStepPostgresConnection,\n    options: PostgresExecutionStepStoreOptions = {}\n  ) {\n    this.clock = options.clock ?? (() => new Date())\n  }\n\n  public recordStep(step: ExecutionStep): Promise<void> {\n    const tenant = TenantIdSchema.parse(step.tenantId)\n    if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {\n      throw new CheckpointError(\n        'step_conflict',\n        'A step number must be a positive integer'\n      )\n    }"
+    },
+    {
+      "id": "R04-302",
+      "input": "R04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 302,
+      "end_line": 319,
+      "anchor": "saveCheckpoint",
+      "excerpt": "  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {\n    const tenant = TenantIdSchema.parse(checkpoint.tenantId)\n    validateCheckpointIntegrity(checkpoint, {\n      tenantId: checkpoint.tenantId,\n      executionId: checkpoint.executionId\n    })\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        await client.query(\n          `INSERT INTO operational_execution_checkpoints\n             (tenant_id, execution_id, checkpoint_id, checkpoint_version,\n              runtime_profile, runtime_version, orchestrator_version,\n              step_number, state, budget_usage, digest, created_at)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb,\n                   $11, $12)\n           ON CONFLICT (tenant_id, execution_id) DO UPDATE\n             SET checkpoint_id = EXCLUDED.checkpoint_id,\n                 checkpoint_version = EXCLUDED.checkpoint_version,"
+    },
+    {
+      "id": "R04-347",
+      "input": "R04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 347,
+      "end_line": 364,
+      "anchor": "loadCheckpoint",
+      "excerpt": "  public loadCheckpoint(\n    tenantId: string,\n    executionId: string\n  ): Promise<ExecutionCheckpoint | null> {\n    const tenant = TenantIdSchema.parse(tenantId)\n    const id = text(executionId, 'executionId')\n    return this.run(tenant, async (client) => {\n      const result = await client.query<CheckpointRow>(\n        `SELECT ${checkpointColumns}\n           FROM operational_execution_checkpoints\n          WHERE tenant_id = $1 AND execution_id = $2`,\n        [tenant, id]\n      )\n      const row = result.rows[0]\n      if (!row) return null\n      const checkpoint = mapCheckpoint(row)\n      validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })\n      return checkpoint"
+    },
+    {
+      "id": "R05-450",
+      "input": "R05",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 450,
+      "end_line": 467,
+      "anchor": "public claimNext(",
+      "excerpt": "  public claimNext(\n    tenantId: string,\n    workerId: string,\n    rawNow?: Date,\n    rawLeaseMs = this.leaseMs\n  ): Promise<ClaimResult | null> {\n    const tenant = TenantIdSchema.parse(tenantId)\n    const worker = text(workerId, 'workerId', 120)\n    const now = rawNow ?? this.clock()\n    const leaseMs = positiveInt(rawLeaseMs, 'leaseMs')\n    const leaseUntil = new Date(now.getTime() + leaseMs)\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        while (true) {\n          const selected = await client.query<ExecutionRow & QueueRow>(\n            `SELECT ${executionColumnsFromJoin}, q.execution_id, q.status, q.available_at,\n                    q.attempts AS queue_attempts, q.lease_owner AS queue_lease_owner,\n                    q.lease_until AS queue_lease_until, q.last_error,"
+    },
+    {
+      "id": "R05-790",
+      "input": "R05",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 790,
+      "end_line": 807,
+      "anchor": "public cancel(",
+      "excerpt": "  public cancel(\n    input: ExecutionCancellationInput,\n    rawNow?: Date\n  ): Promise<ExecutionRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const id = text(input.executionId, 'executionId', 200)\n    const actorId = text(input.actorId, 'actorId', 120)\n    const now = rawNow ?? this.clock()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const current = await this.lockedRecord(client, tenant, id)\n        if (current.state === 'CANCELLED') return current\n        if (current.state === 'CLAIMED' || current.state === 'RUNNING') {\n          throw new OperationalExecutionError(\n            'conflict',\n            'Active execution cannot be cancelled safely'\n          )\n        }"
+    },
+    {
+      "id": "R05-1234",
+      "input": "R05",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1234,
+      "end_line": 1251,
+      "anchor": "private assertLease(",
+      "excerpt": "  private assertLease(\n    record: ExecutionRecord,\n    workerId: string,\n    now: Date,\n    fenceToken: number | undefined\n  ): void {\n    const worker = text(workerId, 'workerId', 120)\n    if (\n      record.leaseOwner !== worker ||\n      fenceToken !== record.attempt ||\n      !record.leaseUntil ||\n      Date.parse(record.leaseUntil) <= now.getTime()\n    ) {\n      throw new OperationalExecutionError(\n        'lease_lost',\n        'Execution lease is not owned by this worker'\n      )\n    }"
+    },
+    {
+      "id": "R05-1356",
+      "input": "R05",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1356,
+      "end_line": 1373,
+      "anchor": "export class PostgresOperationalEffectJournal",
+      "excerpt": "export class PostgresOperationalEffectJournal implements EffectJournal {\n  public constructor(\n    private readonly connection: OperationalExecutionPostgresConnection\n  ) {}\n\n  public reserve(input: {\n    tenantId: string\n    operationKey: string\n    proposalHash: string\n    attemptId: string\n  }): Promise<EffectJournalRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const operationKey = text(input.operationKey, 'operationKey', 240)\n    const proposalHash = text(input.proposalHash, 'proposalHash', 160)\n    const attemptId = text(input.attemptId, 'attemptId', 240)\n    const timestamp = new Date()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {"
+    },
+    {
+      "id": "R06-28",
+      "input": "R06",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 28,
+      "end_line": 45,
+      "anchor": "export interface EffectJournal {",
+      "excerpt": "export interface EffectJournal {\n  reserve(input: {\n    tenantId: string\n    operationKey: string\n    proposalHash: string\n    attemptId: string\n  }): Promise<EffectJournalRecord>\n  markStarted(input: {\n    tenantId: string\n    operationKey: string\n    attemptId: string\n  }): Promise<EffectJournalRecord>\n  confirm(input: {\n    tenantId: string\n    operationKey: string\n    attemptId: string\n    result: unknown\n  }): Promise<EffectJournalRecord>"
+    },
+    {
+      "id": "R06-322",
+      "input": "R06",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 322,
+      "end_line": 339,
+      "anchor": "if (reservation.state === 'CONFIRMED')",
+      "excerpt": "      if (reservation.state === 'CONFIRMED') {\n        return { status: 'SUCCEEDED', output: reservation.result }\n      }\n      if (\n        reservation.state === 'UNCERTAIN' ||\n        reservation.state === 'EFFECT_STARTED'\n      ) {\n        return {\n          status: 'REJECTED',\n          error:\n            'unknown_effect: explicit reconciliation is required before retry'\n        }\n      }\n      if (reservation.attemptId !== attemptId) {\n        return {\n          status: 'REJECTED',\n          error:\n            'unknown_effect: an existing reservation requires reconciliation'"
+    },
+    {
+      "id": "R06-366",
+      "input": "R06",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 366,
+      "end_line": 383,
+      "anchor": "await journal.confirm(",
+      "excerpt": "          await journal.confirm({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            result: result.output\n          })\n        } else {\n          await journal.fail({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            error: result.error ?? 'tool failed'\n          })\n        }\n        return result\n      } catch (error) {\n        const message =\n          error instanceof Error ? error.message : 'tool execution failed'"
+    },
+    {
+      "id": "R06-353",
+      "input": "R06",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 353,
+      "end_line": 370,
+      "anchor": "await journal.markUncertain(",
+      "excerpt": "          await journal.markUncertain({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            reason: 'synthetic crash after effect before confirmation'\n          })\n          return {\n            status: 'REJECTED',\n            error:\n              'unknown_effect: synthetic crash after effect before confirmation'\n          }\n        }\n        if (result.status === 'SUCCEEDED') {\n          await journal.confirm({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            result: result.output"
+    },
+    {
+      "id": "R07-29",
+      "input": "R07",
+      "path": "packages/harness/src/createOperationalHarness.ts",
+      "input_sha256": "f1ef60850d5efbb87833da8386b1f0654be764cb9ae72ea89207f88213c73e1b",
+      "start_line": 29,
+      "end_line": 46,
+      "anchor": "export interface OperationalHarnessOptions",
+      "excerpt": "export interface OperationalHarnessOptions extends Omit<\n  HarnessRuntimeOptions,\n  'orchestrator' | 'tools' | 'capabilityFingerprint'\n> {\n  readonly orchestrator?: HarnessRuntimeOptions['orchestrator']\n  /**\n   * Explicit capability composition. Its adapter is the only runtime-facing\n   * registry for this path; callers cannot provide both registries.\n   */\n  readonly capabilities?: CapabilityRegistry\n  /** Compatibility port retained for existing Phase 2/3 consumers. */\n  readonly tools?: ToolRegistry\n  /** Required for capability composition and optional for compatibility tools. */\n  readonly effectJournal?: EffectJournal\n  readonly effectJournalOptions?: JournaledToolRegistryOptions\n  /**\n   * Required to run the iterative profile. The runtime registry resolves the\n   * requested profile here; the worker never selects a runtime class."
+    },
+    {
+      "id": "R07-98",
+      "input": "R07",
+      "path": "packages/harness/src/createOperationalHarness.ts",
+      "input_sha256": "f1ef60850d5efbb87833da8386b1f0654be764cb9ae72ea89207f88213c73e1b",
+      "start_line": 98,
+      "end_line": 115,
+      "anchor": "const iterative =",
+      "excerpt": "  const iterative =\n    options.iterativeOrchestrator && options.stepStore\n      ? new IterativeGovernedRuntime({\n          orchestrator: options.iterativeOrchestrator,\n          modelGateway: options.modelGateway,\n          policy: options.policy,\n          approvals: options.approvals,\n          tools,\n          ...(capabilityFingerprint ? { capabilityFingerprint } : {}),\n          audit: options.audit,\n          telemetry: options.telemetry,\n          ...(options.pause ? { pause: options.pause } : {}),\n          ...(options.effects ? { effects: options.effects } : {}),\n          ...(options.sandbox ? { sandbox: options.sandbox } : {}),\n          ...(options.log ? { log: options.log } : {}),\n          stepStore: options.stepStore,\n          ...(options.contextEngine\n            ? { contextEngine: options.contextEngine }"
+    },
+    {
+      "id": "R08-54",
+      "input": "R08",
+      "path": "packages/sdk/src/server.ts",
+      "input_sha256": "a660bf8e2cb0141925cdca1b2f478b04b0b6743f9646b963fbb76efb442d7f9d",
+      "start_line": 54,
+      "end_line": 71,
+      "anchor": "export interface SdkServerOptions",
+      "excerpt": "export interface SdkServerOptions {\n  /** Trusted composition binding; never taken from the request. */\n  readonly tenantId: string\n  /** Default agent profile; branded fields are completed by the server. */\n  readonly agent?: Partial<AgentProfile>\n  readonly modelGateway: ModelGateway\n  /** Governance stays visible: policy and approvals are required. */\n  readonly policy: PolicyEngine\n  readonly approvals: ApprovalEngine\n  readonly tools?: ToolRegistry\n  readonly audit?: AuditSink\n  readonly telemetry?: TelemetrySink\n  /** Enables `session.open`/`session.events` when provided. */\n  readonly sessions?: SessionEventStore\n  readonly budget?: ExecutionBudget\n  readonly clock?: () => Date\n  readonly newEventId?: () => string\n  readonly newCorrelationId?: () => string"
+    },
+    {
+      "id": "R08-295",
+      "input": "R08",
+      "path": "packages/sdk/src/server.ts",
+      "input_sha256": "a660bf8e2cb0141925cdca1b2f478b04b0b6743f9646b963fbb76efb442d7f9d",
+      "start_line": 295,
+      "end_line": 312,
+      "anchor": "runtimeProfile: 'single_pass'",
+      "excerpt": "      runtimeProfile: 'single_pass'\n    }\n    let result: RuntimeResult\n    try {\n      result = await harness.execute(input)\n    } catch {\n      throw requestError(SDK_ERROR_CODES.internal_error, 'Runtime failed')\n    }\n    if (\n      sessions !== undefined &&\n      sessionId !== undefined &&\n      result.stopReason === 'COMPLETED'\n    ) {\n      try {\n        await sessions.append({\n          tenantId: options.tenantId,\n          sessionId,\n          formatVersion: 1,"
+    },
+    {
+      "id": "R09-11",
+      "input": "R09",
+      "path": "packages/sdk/src/protocol.ts",
+      "input_sha256": "5a485a669fa917a6514d00fa2fa62a8f86f1b70a7d7a0a9ab025a5ae594595dd",
+      "start_line": 11,
+      "end_line": 28,
+      "anchor": "export const SDK_METHODS",
+      "excerpt": "export const SDK_METHODS = [\n  'sdk.hello',\n  'session.open',\n  'turn.send',\n  'session.events'\n] as const\nexport type SdkMethod = (typeof SDK_METHODS)[number]\n\nexport const SDK_ERROR_CODES = {\n  parse_error: -32700,\n  invalid_request: -32600,\n  method_not_found: -32601,\n  invalid_params: -32602,\n  internal_error: -32603,\n  unsupported_protocol_version: 1001,\n  session_not_found: 1002,\n  capability_not_available: 1003\n} as const"
+    },
+    {
+      "id": "R10-29",
+      "input": "R10",
+      "path": "packages/persistence/src/index.ts",
+      "input_sha256": "b9beb5c9dd05d7ac706e6a3e301411094d209f3586d426268a1d2bb637831b9b",
+      "start_line": 29,
+      "end_line": 29,
+      "anchor": "export * from './session-events.ts'",
+      "excerpt": "export * from './session-events.ts'"
+    },
+    {
+      "id": "R11-14",
+      "input": "R11",
+      "path": "packages/harness/src/session/kernel-log.ts",
+      "input_sha256": "10837d84d265a7b3d2eda3f6307096c6cb3e266e5ee8c2fd42da8f0ae0748024",
+      "start_line": 14,
+      "end_line": 31,
+      "anchor": "export function createSessionKernelLog",
+      "excerpt": "export function createSessionKernelLog(\n  options: SessionKernelLogOptions\n): KernelLog {\n  const stream = validateSessionStream({\n    tenantId: options.tenantId,\n    sessionId: options.sessionId,\n    formatVersion: options.formatVersion\n  })\n  const { store, traceId, correlationId } = options\n  const id = options.eventId ?? randomUUID\n  const clock = options.clock ?? (() => new Date())\n  return {\n    append: async (event) => {\n      if (event.correlationId !== correlationId)\n        throw new SessionEventError(\n          'invalid_session_event',\n          'Kernel log correlation differs from bound turn'\n        )"
+    },
+    {
+      "id": "A01-6",
+      "input": "A01",
+      "path": "docs/04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json",
+      "input_sha256": "282c8e6be6ff6f67c1806c1a46663eedc1ccf652b16be43d43934fa822ad7d27",
+      "start_line": 6,
+      "end_line": 23,
+      "anchor": "\"migrationOrder\"",
+      "excerpt": "  \"migrationOrder\": \"0029 (composição 0217, hoje só na worktree do PARE100) é integrada primeiro no PAR-G01; depois 0030 = SPEC0225 (PAR-K03 precede PAR-S01 no backlog 0380); depois 0031 = SPEC0221. A SPEC0226 está adiada e não reserva número. Reconfirmar o inventário antes de cada BUILD.\",\n  \"gates\": {\n    \"SPEC0220\": {\n      \"file\": \"docs/02_spec/0220_pare100_durable_kernel_boundary_qualification.md\",\n      \"sha256\": \"211d341fed2bb70d07ab525e5e23279803d9fe387295bb14d4669ad22aa4d9a5\",\n      \"decision\": \"DEFERRED\",\n      \"userChoice\": \"Adiar; refazer na 0227 (Recomendado)\",\n      \"reason\": \"Pacote desatualizado: o próprio ledger registra 437 MATCH e 28 DRIFT de 465 pins; a qualificação corrente está sendo redesenhada como 0227.\",\n      \"conditions\": [\n        \"Recompor contra a fonte e os emits atuais com 0 DRIFT\",\n        \"Declarar se a 0227 substitui a 0220\",\n        \"Preferir critério de congelamento mais estável que pins por byte de emit, se o checker permitir\",\n        \"Qualificar sites de processo de teste só depois de a unidade de suporte de testes 0224 estabilizar\",\n        \"Trazer como pacote único no gate semanal\"\n      ],\n      \"parCards\": [\"PAR-K01\"]\n    },\n    \"SPEC0221\": {"
+    },
+    {
+      "id": "A01-23",
+      "input": "A01",
+      "path": "docs/04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json",
+      "input_sha256": "282c8e6be6ff6f67c1806c1a46663eedc1ccf652b16be43d43934fa822ad7d27",
+      "start_line": 23,
+      "end_line": 40,
+      "anchor": "\"SPEC0221\"",
+      "excerpt": "    \"SPEC0221\": {\n      \"file\": \"docs/02_spec/0221_pare100_public_session_persistence.md\",\n      \"sha256\": \"1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4\",\n      \"decision\": \"APPROVED_WITH_ADJUSTMENTS\",\n      \"userChoice\": \"Aprovar com ajustes (Recomendado)\",\n      \"adjustments\": [\n        \"Primeira fatia: dono exclusivo, create/open/read/append/flush/close e a migration; recuperação por ticket e shutdown agregado ficam para fatia posterior\",\n        \"Provas reduzidas ao aceite do PAR-S01: dois processos, writer antigo recusado, isolamento de tenant, kill e reabertura\",\n        \"Número de migration fixado sem colidir com a SPEC0225 (ordem acima: 0031)\",\n        \"Limite de conexões (maxOpenWriters) e proibição de PgBouncer em modo transaction declarados como pré-requisito de implantação\",\n        \"PAR-S04 e PAR-S05 só consomem a API depois do gate desta SPEC\"\n      ],\n      \"parCards\": [\"PAR-S01\"]\n    },\n    \"SPEC0222\": {\n      \"file\": \"docs/02_spec/0222_pare100_managed_capability_lifecycle.md\",\n      \"sha256\": \"bbe359fbd7c52b2e037eb7240c195244f7e6063e4bfa5638e7eedc73d7e82c31\",\n      \"decision\": \"APPROVED_WITH_ADJUSTMENTS\","
+    },
+    {
+      "id": "A01-51",
+      "input": "A01",
+      "path": "docs/04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json",
+      "input_sha256": "282c8e6be6ff6f67c1806c1a46663eedc1ccf652b16be43d43934fa822ad7d27",
+      "start_line": 51,
+      "end_line": 68,
+      "anchor": "\"SPEC0225\"",
+      "excerpt": "    \"SPEC0225\": {\n      \"file\": \"docs/02_spec/0225_pare100_complete_tool_result_journal.md\",\n      \"sha256\": \"04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5\",\n      \"decision\": \"APPROVED_WITH_ADJUSTMENTS\",\n      \"userChoice\": \"Aprovar com ajustes (Recomendado)\",\n      \"adjustments\": [\n        \"Corte exclusivo com parada aceito explicitamente (não há produção hoje); sem operação mista\",\n        \"Teto de armazenamento menor que 8 MiB, alinhado ao contexto da 0224 com folga, ou medido antes de manter 8 MiB\",\n        \"Primeiro BUILD sem J14 (dois processos) e sem o drill completo J15 de rollback e restore; manter J01–J04, J05–J07 mínimos e J08–J12\",\n        \"Reservar o número de migration no inventário atual (ordem acima: 0030) e registrar claim antes do BUILD\",\n        \"Registrar que a 0225 não resolve NUL em outros campos JSONB nem fecha a rota publicada (0226)\"\n      ],\n      \"parCards\": [\"PAR-K03\", \"PAR-C03\"]\n    },\n    \"SPEC0226\": {\n      \"file\": \"docs/02_spec/0226_pare100_published_complete_context.md\",\n      \"sha256\": \"48d73db111dddaae4301b1702ead67efad4bffa2ceaea2e81a3a3bc57bc820ab\",\n      \"decision\": \"DEFERRED\","
+    },
+    {
+      "id": "A01-65",
+      "input": "A01",
+      "path": "docs/04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json",
+      "input_sha256": "282c8e6be6ff6f67c1806c1a46663eedc1ccf652b16be43d43934fa822ad7d27",
+      "start_line": 65,
+      "end_line": 80,
+      "anchor": "\"SPEC0226\"",
+      "excerpt": "    \"SPEC0226\": {\n      \"file\": \"docs/02_spec/0226_pare100_published_complete_context.md\",\n      \"sha256\": \"48d73db111dddaae4301b1702ead67efad4bffa2ceaea2e81a3a3bc57bc820ab\",\n      \"decision\": \"DEFERRED\",\n      \"userChoice\": \"Adiar e reduzir (Recomendado)\",\n      \"reason\": \"Depende da 0225 implementada; 80 cenários e migration permanente de fence para um modo que só roda em teste são desproporcionais.\",\n      \"conditions\": [\n        \"Reapresentar só depois da 0225 implementada\",\n        \"Escopo mínimo que prove o PAR-K03: queda entre modelo e ferramenta, entre ferramenta e resultado, duplicata de efeito e ACK\",\n        \"Sem fence de geração e triggers, se possível; avaliar se o índice cabe na migration da 0225\",\n        \"Resumo de decisão de 1 a 2 páginas separado do texto normativo\"\n      ],\n      \"parCards\": [\"PAR-K01\", \"PAR-K03\"]\n    }\n  }\n}"
+    },
+    {
+      "id": "A02-166",
+      "input": "A02",
+      "path": "docs/02_spec/0221_pare100_public_session_persistence.md",
+      "input_sha256": "1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4",
+      "start_line": 166,
+      "end_line": 183,
+      "anchor": "## 6. Ownership",
+      "excerpt": "## 6. Ownership e coexistência de writers\n\nConexão writer é uma sessão PostgreSQL física reservada até close. Novo port interno explícito de connection lease expõe query, notificação de término/erro e destroy/release uma vez; proibidos proxy que reconecta ou transaction pooling/PgBouncer em modo transaction. Factory qualifica a sessão/primário e não reempresta essa conexão. Timeout de aquisição/statement/lock é5s na fixture; timeout não cria owner alternativo.\n\nCreate: adquirir conexão, transação tenant-bound e synchronous_commit on; inserir stream com header/cut, rejeitando duplicata; obter a chave retornada e tomar exatamente um session try-lock antes do COMMIT; só publicar handle após COMMIT. Falha/abort/COMMIT ambíguo destrói conexão e resolve recuperação pelo ID original, nunca retry com novo ID. Session lock sobrevive rollback; cleanup explícito/destroy é obrigatório também no create falho.\n\nOpen writer: ler chave/metadata existente em transação curta; ausente retorna not-found, header ausente migration-required; executar try-lock parametrizado numa chamada separada (sem efeito colateral dentro de SELECT com LIMIT); se false, already-owned. Revalidar identidade/head/header após claim e antes de publicar. Leitor usa pool e metadata detached, sem advisory lock. Writer não deixa uma transação idle aberta.\n\nGuards no banco são parte obrigatória da migration: antes de INSERT em events e UPDATE de streams, tomar **transaction try-lock** da mesma chave. Na conexão owner é reentrante; outra conexão falha imediatamente. Na ausência de writer, o guard serializa a escrita antiga até COMMIT. Bloquear DELETE/TRUNCATE de streams e mutação de lock key/identity/header/cut; permitir adoção NULL→metadata apenas pela autoridade de migration na janela parada. Inserts novos do caminho legado recebem header honesto de criação atual no banco, unseeded/cut0; nunca preencher header histórico com NOW nem ON CONFLICT atualizar metadata existente.\n\nInterleaving obrigatório: writer antigo já segura row lock; novo handle toma advisory session-lock e espera row; trigger antigo tenta advisory sem espera, falha, faz rollback e libera row. Não usar advisory bloqueante no trigger: produziria ciclo row/advisory. Reader simples não espera owner. Replay legado do mesmo eventId/digest já persistido pode retornar fato anterior sem mutação; é leitura idempotente, não segundo writer.\n\nGuard INSERT valida vínculo/cursor e sequence igual a next_sequence. Cada evento novo é INSERT seguido de avanço unitário de cursor, ambos na mesma transação do batch, compatível com o store antigo. Guard UPDATE só admite cursor final igual a MAX(sequence)+1 (ou1 vazio), sem salto/regressão; flush pode atribuir o mesmo valor. Constraint trigger diferido ao COMMIT em events/streams também valida cursor/head final: INSERT direto sem avanço não pode deixar estado incoerente. Preflight valida prefixo histórico completo; fatos imutáveis+PK preservam contiguidade depois, sem exigir COUNT integral por append. SQL caller não pode desligar/deferir para além do COMMIT essa validação.\n\nUma conexão encerrada perde o lock no servidor; notificação, erro de conexão ou resultado ambíguo torna o handle terminal LOST. Nunca reconectar/reclamar automaticamente ou emprestar outra sessão para o mesmo handle. Append/flush subsequentes retornam ownership-lost; read permanece permitido pelo pool enquanto não houver close, com os mesmos guards de monotonicidade. Durante partição outro writer só abre quando o servidor realmente libertar o lock; disponibilidade não supera exclusividade.\n\nEsse fence é de fatos persistidos, não de efeitos externos de um host antigo. Cutover exige parar dispatch/tools legados e reconciliar execução0217; P100-011 e demais gates de retirada permanecem. Nenhum teste de trigger prova que um provider antigo parou de executar.\n"
+    },
+    {
+      "id": "A02-184",
+      "input": "A02",
+      "path": "docs/02_spec/0221_pare100_public_session_persistence.md",
+      "input_sha256": "1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4",
+      "start_line": 184,
+      "end_line": 201,
+      "anchor": "## 7. Durabilidade",
+      "excerpt": "## 7. Durabilidade, revisão e encerramento\n\nPreflight exige fsync/full_page_writes on e primário; cada transação de escrita usa synchronous_commit on. Essa opção condiciona o ACK ao processamento do WAL; com off pode haver ACK anterior à persistência. [Configuração WAL PG16](https://www.postgresql.org/docs/16/runtime-config-wal.html). Não prometer tolerância a perda de disco, failover assíncrono ou falha de infraestrutura não qualificada.\n\nFlush do writer enfileira barreira após operações admitidas, faz UPDATE de next_sequence para o próprio valor sob ownership e COMMIT síncrono. O UPDATE deve realmente gerar escrita/WAL mesmo sem mudança lógica: um COMMIT somente leitura não serve como barreira para append legado que usou commit assíncrono. Provar essa condição no PG16 real, inclusive sem append e com metadata recém-criada. Se a prova falhar, o desenho precisa revisão; não rotular SELECT como durável. Append próprio também é síncrono, mas flush continua método público observável.\n\nRevision opaca combina nonce da instância, tenant/session, digest do header validado e next_sequence; não expor parsing/ordem como contrato. Igualdade só comparável na mesma instância/sessão. Append não vazio muda head/token, ownership/flush sem mudança lógica não mudam. Não usar token como permissão, resume cursor ou substituto de read. Events/header imutáveis e migração concluída são premissas; alteração administrativa exige parar instâncias. stat/list retornam metadata em snapshot fresco único, sem consultar corpo.\n\nClose marca CLOSING sincronicamente antes do primeiro await, rejeita novas operações e memoiza sua promise; drena fila admitida, tenta flush e libera ownership/conexão exatamente uma vez. É incancelável; asyncDispose é a mesma sequência inclusive chamado sozinho em handle fresco. Falha de flush não é sucesso de close: preservar a rejeição nas chamadas repetidas, destruir conexão quando estado não é confiável e nunca devolver sessão ainda locked ao pool. Read close só libera estado local. LOST close libera recursos, reporta a incerteza pendente; todos os métodos posteriores a close chamado rejeitam closed, prevalecendo sobre read-only/lost.\n\nOwner de serviço tem estados ACTIVE→CLOSING→CLOSED; shutdown marca CLOSING sincronicamente e memoiza a promise, inclusive falha. Nenhum serviço/adapter/handle admite nova operação depois dessa marca; rejeitar SessionPersistenceClosedError, salvo close/shutdown idempotentes. Cada operação admitida possui ticket de lifecycle registrado **antes de qualquer await**, inclusive create/open ainda sem lease/handle, stat/list/global flush/reconcile e trabalho do adapter. Aquisição registra lease imediatamente ao recebê-lo, inclusive resposta tardia a timeout. O adapter de pool deve manter responsabilidade por leases tardios até destruí-los; o prazo do chamador não os desregistra.\n\nHandle cujo close já foi chamado mantém precedência de SessionHandleClosedError. Drain/barreira interna de close/shutdown usa a capability de teardown dos tickets já possuídos, sem readmitir operação pública de flush em serviço CLOSING; não aceitar novo append por essa exceção.\n\nShutdown fecha os handles já publicados e aguarda allSettled de todos os tickets/leases admitidos; nenhum handle pode ser publicado depois de CLOSING. Aquisição pendente que termina antes dessa marca publica/registre atomicamente ou, se a marca já ocorreu, fecha/drena/destroi seu recurso **antes** de encerrar o ticket. Open tardio rejeita serviço fechado; create tardio rejeita SessionAcquisitionClosedError com `creationOutcome:'not-created'|'committed'|'unknown'` e ticket de recuperação quando necessário, sem entregar writer vivo. COMMIT confirmado é reportado como committed, não aborto limpo; desconhecido permanece unknown. Metadata reads já admitidos podem completar durante shutdown, sempre antes de seu join.\n\nShutdown só resolve se todos os recursos locais foram recolhidos e nenhuma sessão/ownership própria ficou sem término confirmado. Cleanup/outcome desconhecido retorna AggregateError com operação/sessionId/ticket, sem sucesso fabricado ou apagar a obrigação. O prazo finito da fixture pode produzir rejeição pendente; não autoriza matar recursos alheios nem afirmar que destroy do socket já encerrou a transação no servidor. Repetir shutdown observa a mesma promise/erro; recuperação explícita usa outro owner ACTIVE e a mesma composição física qualificada, sem reabrir o owner fechado.\n"
+    },
+    {
+      "id": "A02-206",
+      "input": "A02",
+      "path": "docs/02_spec/0221_pare100_public_session_persistence.md",
+      "input_sha256": "1f9490ccee25f246e57a7c9c096c41c2572818c60e2c7bae5a4d315ad8e170e4",
+      "start_line": 206,
+      "end_line": 223,
+      "anchor": "## 8. Erros",
+      "excerpt": "## 8. Erros e ponte para o SDK existente\n\nNova API exporta classes distintas, com `sessionId`, safe message e `cause` quando aplicável: SessionPersistenceNotFoundError, SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionReadOnlyError, SessionOwnershipLostError, SessionHandleClosedError, SessionPersistenceCorruptionError, SessionFormatUnsupportedError. Unsupported inclui direção newer/older apenas quando versão numérica válida permite; location de PG é identidade lógica do backend, sem inventar path de arquivo. SessionMigrationRequiredError, SessionStorageUnavailableError e SessionCommitUnknownError são categorias adicionais CVG; não colapsar incerteza em sucesso/retry.\n\nCommit-unknown contém ticket autêntico de recuperação capturado antes de enviar COMMIT; nunca recomputar digest do objeto original/getter. Registro privado imutável do ticket: kind create/append/flush, tenant/schema/pool identity da composição, sessão/endereço físico original e lock key já adquirida, attemptId, header digest/cut para create, head anterior e sequência ordenada de eventId/inputDigest/fingerprint/sequence para append, head alvo para flush. Dados diagnósticos públicos limitam-se a kind/sessionId/attemptId/IDs/digests; lock key/corpos/SQL/credenciais ficam privados. Ticket não concede execução, tenant, ownership permanente ou permissão de repetir efeitos.\n\n`SessionRecoveryTicket` é um objeto opaco autenticado por registry privado do módulo da factory, sem construtor público, aceito apenas por owner ACTIVE do mesmo pool/schema/tenant qualificado. Pode atravessar duas factories dessa composição no mesmo processo; clone/objeto forjado ou de outro backend/tenant é recusado antes de IO. Não é recibo serializável durável. Depois da perda do processo inteiro, a classificação da tentativa continua UNKNOWN sem evidência externa dos inputs capturados e settlement; abrir um novo writer e inspecionar fatos não reconstrói por si só a intenção perdida. A integração futura com recibos de execução/restart de P100-020 continua obrigatória e não recebe PASS nesta fundação.\n\nEstado de reconciliação: UNKNOWN→PENDING_SETTLEMENT→COMMITTED|ABSENT|CONFLICT, sem classificação terminal a partir de leitura prévia ao fence. A conexão antiga é destruída/quarentenada e jamais libera voluntariamente seu session lock antes de conhecer o resultado final; sem nova conexão para o mesmo handle. `owner.reconcileAttempt` tenta em **nova sessão física** o mesmo session try-lock original, por chave autêntica do ticket. Busy/erro/timeout retorna pending, mesmo que um SELECT anterior não encontre nenhum evento. Tomar esse lock após perda da sessão antiga constitui fence de settlement, não apenas observar socket fechado; mantê-lo durante a verificação e liberar/destroy em finally. Se outro writer já o possui, permanecer pending até um fence posterior; não roubá-lo.\n\nDepois do fence, abrir **um único snapshot REPEATABLE READ fresco** no primário para header/cut, head e todos os IDs/digests/sequence do batch; consultas paginadas ficam na mesma transação. Para append: todos os registros exatamente iguais→committed; nenhum ID, com prefixo anterior validado e nenhum conflito→absent; ID com digest/ordem diferente→conflict. Conjunto parcial só é corruption depois desse fence/snapshot e validação do prefixo, jamais por leituras em snapshots diferentes. Para create: header/cut/id iguais e chave original→committed; nenhum stream→absent; stream divergente ou outra chave→conflict, sem atribuir a outro create o sucesso original. Nenhuma categoria implica retry automático.\n\nEssa escolha evita classificar uma transação com múltiplos snapshots que podem observar commits diferentes; é desenho derivado das regras de isolamento, não prova nativa de recovery. [Isolamento PG16](https://www.postgresql.org/docs/16/transaction-iso.html).\n\nPara flush incerto, encontrar os eventos alvo prova presença lógica, **não** completion/durabilidade da barreira original: retornar `status:'barrier-unknown'` mesmo após settlement. Apenas `reestablishDurability:true` explícito permite emitir uma nova barreira síncrona da seção7 na sessão de recuperação sob o mesmo lock, sem reenviar eventos. Ela produz `status:'durability-reestablished'` para o prefixo alvo validado, com novo attemptId; não declara retrospectivamente que o flush antigo completou. Erro dessa nova barreira gera novo ticket/unknown. Resultado público é união discriminada `pending|committed|absent|conflict|barrier-unknown|durability-reestablished`, incluindo kind/sessionId/attemptId e categoria/causa segura, sem handle reutilizado. Nenhuma reconciliação chama tool, modelo ou approval.\n\nAdapter público `sessionEventStoreForHandle(handle)` liga a API antiga a um único writer, sem expor conexão/lock key. openSession só verifica tenant/id/version desse handle, idempotente sem criar; append captura input v1, consulta eventId/digest e retorna fato prévio em retry idêntico ou conflito se diferente. Para evento novo, atribui sequence/fingerprint pelos helpers CVG existentes e usa o batch/mesma fila owner. read traduz afterSequence exclusivo e limit existentes; não muda dados/ordem. Não criar adapter gravável para reader/lost/closed.\n"
+    },
+    {
+      "id": "A03-82",
+      "input": "A03",
+      "path": "docs/02_spec/0225_pare100_complete_tool_result_journal.md",
+      "input_sha256": "04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5",
+      "start_line": 82,
+      "end_line": 99,
+      "anchor": "## 4. Contrato",
+      "excerpt": "## 4. Contrato lógico, domínio e opt-in\n\nAs assinaturas de `EffectJournal`, seus estados e os bindings de\noperationKey/proposalHash/attempt não mudam. `confirm({result:v})`, `get` e\n`reserve` confirmado devolvem `v`, nunca base64, envelope, summary ou receipt\nfornecido pela ferramenta. Preservar tipo, valores vazios/falsy e null como\npropriedade própria. Não normalizar Unicode, truncar ou coagir números.\n\nO domínio é o JSON estrito da0224: null/boolean/string Unicode escalar,\nnúmeros finitos exceto -0, arrays densos e objetos simples ou de protótipo\nnulo com propriedades próprias de dados. Recusar undefined, BigInt, símbolos,\nholes, getters/toJSON, ciclos, NaN/infinidades e surrogates isolados. Chaves\nseguem ordem lexicográfica UTF-16 do canonicalizador; arrays mantêm ordem.\nAliases acíclicos repetem por valor. Isso não é sandbox para Proxy ou código\ninstalado hostil.\n\nOpção proposta do adapter:\n"
+    },
+    {
+      "id": "A03-270",
+      "input": "A03",
+      "path": "docs/02_spec/0225_pare100_complete_tool_result_journal.md",
+      "input_sha256": "04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5",
+      "start_line": 270,
+      "end_line": 287,
+      "anchor": "## 7.",
+      "excerpt": "## 7. Confirmação, replay e falhas\n\nPreservar a transação/ordem nativa: contexto tenant, locks de parent/fence/outer\nexistentes, journal FOR UPDATE, identidade/tentativa, recheck, UPDATE atômico e\nrecheck após escrita antes do commit. Revalidar prazo/lease depois de encode\nbounded. Pré-calcular fora do lock não dispensa guard; não há writer paralelo\nsem fence, backfill que settle ou nova garantia exactly-once externa.\n\nReserva1 cria RESERVED sem payload. markStarted só de RESERVED; confirm só de\nEFFECT_STARTED para a mesma tentativa. CONFIRMED/payload/timestamp commitam\njuntos. Repetição da confirmação da mesma tentativa exige mesmos bytes/hash;\ndados diferentes geram conflito, sem shortcut que aceite qualquer resultado.\n\nSe cair após confirmação commitada e antes do checkpoint, recuperar o valor\npelo journal, validar pela0224 e reconstruir observação sem corpo novo. Perda\nde commit/ack/fence ou payload inválido exige reconciliação, sem transformar\nem FAILED para retry. Estado started/uncertain não adota tentativa nova. Só\nFAILED genuinamente pre-effect-safe mantém o retry nativo, limpando payload"
+    },
+    {
+      "id": "A03-312",
+      "input": "A03",
+      "path": "docs/02_spec/0225_pare100_complete_tool_result_journal.md",
+      "input_sha256": "04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5",
+      "start_line": 312,
+      "end_line": 329,
+      "anchor": "## 8.",
+      "excerpt": "## 8. Migração, ativação e recuperação futuras\n\nTudo abaixo está NOT_RUN. A próxima numeração observada é0030, apenas proposta;\nreler inventário/claims antes do BUILD. Não editar0016/0029 ou remover guards,\nchecksums, RLS e verificações de owner/role existentes.\n\n1. Congelar candidata, migrations, binários e fixtures; registrar task e novo\n   recurso sintético. Provisionar owner, role antigo de teste e runtime novo.\n2. Expandir colunas/default0/checks/guard que inicialmente nega1. Verificar\n   triggers/search_path/policies/grants. Proposta local: lock_timeout1s e\n   statement_timeout30s; timeout aborta transação, sem retry automático.\n3. Sem backfill/conversão. Comparar contagens por tenant, identidades, estados,\n   tempos e digests de result::text, incluindo null SQL/JSONB e envelopes\n   aparentes. Qualquer drift aborta. Não criar parent nem normalizar órfãos.\n4. Drenar o alvo próprio, impedir accessos antigos, instalar binding do guard\n   e qualificar principal/binário. Recibo liga schema, roles, ACL efetiva,\n   versão e hashes. Não ativar sem probes negativos42501 e owner separado.\n5. Habilitar opt-in na composição isolada e executar J01–J16,0224 e regressões."
+    },
+    {
+      "id": "A04-49",
+      "input": "A04",
+      "path": "docs/01_prd/0030_codex100_initial_qualification.md",
+      "input_sha256": "e8f1a99c5c93399a8dd67261d03bf289b8f7dda78c0c1ece25d79d2e678e120f",
+      "start_line": 49,
+      "end_line": 66,
+      "anchor": "| CQ07",
+      "excerpt": "| CQ07 | Cliente lento, desconexão e retomada                                                            | Ordem/identidade preservadas; buffer limitado e comportamento de pressão declarado; sem chamada extra de modelo/ferramenta para reconstruir entrega |\n| CQ08 | Erro de provider, espera até deadline e cancelamento sem erro do provider                       | Três resultados independentes com primeira causa; nenhum é normalizado indevidamente para sucesso ou para o outro erro                              |\n| CQ09 | Cancelamento/conclusão nas duas ordens de commit                                                | Um terminal conforme a ordem nativa; efeito anterior e journal permanecem verdadeiros; ACK durável só após persistência                             |\n| CQ10 | Encerrar A após journal confirmado e retomar em B                                               | Resultado admitido recuperado sem repetir corpo; estado/eventos/accounting pertencem à mesma execução e composição                                  |\n| CQ11 | Falhar entre início do efeito e confirmação/ACK, inclusive falha de reconciliação               | UNKNOWN/UNCERTAIN e causa preservados; sem FAILED falso, retry automático ou promoção de sucesso em memória a commit                                |\n| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |\n| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |\n| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |\n\nCQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.\n\n## Protocolo e compatibilidade observáveis\n\nA superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.\n\nO ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.\n\nO SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD."
+    },
+    {
+      "id": "A04-51",
+      "input": "A04",
+      "path": "docs/01_prd/0030_codex100_initial_qualification.md",
+      "input_sha256": "e8f1a99c5c93399a8dd67261d03bf289b8f7dda78c0c1ece25d79d2e678e120f",
+      "start_line": 51,
+      "end_line": 68,
+      "anchor": "| CQ09",
+      "excerpt": "| CQ09 | Cancelamento/conclusão nas duas ordens de commit                                                | Um terminal conforme a ordem nativa; efeito anterior e journal permanecem verdadeiros; ACK durável só após persistência                             |\n| CQ10 | Encerrar A após journal confirmado e retomar em B                                               | Resultado admitido recuperado sem repetir corpo; estado/eventos/accounting pertencem à mesma execução e composição                                  |\n| CQ11 | Falhar entre início do efeito e confirmação/ACK, inclusive falha de reconciliação               | UNKNOWN/UNCERTAIN e causa preservados; sem FAILED falso, retry automático ou promoção de sucesso em memória a commit                                |\n| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |\n| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |\n| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |\n\nCQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.\n\n## Protocolo e compatibilidade observáveis\n\nA superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.\n\nO ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.\n\nO SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD.\n\n## Estados, limites e falhas"
+    },
+    {
+      "id": "A04-52",
+      "input": "A04",
+      "path": "docs/01_prd/0030_codex100_initial_qualification.md",
+      "input_sha256": "e8f1a99c5c93399a8dd67261d03bf289b8f7dda78c0c1ece25d79d2e678e120f",
+      "start_line": 52,
+      "end_line": 69,
+      "anchor": "| CQ10",
+      "excerpt": "| CQ10 | Encerrar A após journal confirmado e retomar em B                                               | Resultado admitido recuperado sem repetir corpo; estado/eventos/accounting pertencem à mesma execução e composição                                  |\n| CQ11 | Falhar entre início do efeito e confirmação/ACK, inclusive falha de reconciliação               | UNKNOWN/UNCERTAIN e causa preservados; sem FAILED falso, retry automático ou promoção de sucesso em memória a commit                                |\n| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |\n| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |\n| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |\n\nCQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.\n\n## Protocolo e compatibilidade observáveis\n\nA superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.\n\nO ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.\n\nO SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD.\n\n## Estados, limites e falhas\n"
+    },
+    {
+      "id": "A04-53",
+      "input": "A04",
+      "path": "docs/01_prd/0030_codex100_initial_qualification.md",
+      "input_sha256": "e8f1a99c5c93399a8dd67261d03bf289b8f7dda78c0c1ece25d79d2e678e120f",
+      "start_line": 53,
+      "end_line": 70,
+      "anchor": "| CQ11",
+      "excerpt": "| CQ11 | Falhar entre início do efeito e confirmação/ACK, inclusive falha de reconciliação               | UNKNOWN/UNCERTAIN e causa preservados; sem FAILED falso, retry automático ou promoção de sucesso em memória a commit                                |\n| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |\n| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |\n| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |\n\nCQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.\n\n## Protocolo e compatibilidade observáveis\n\nA superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.\n\nO ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.\n\nO SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD.\n\n## Estados, limites e falhas\n\nO cliente deve distinguir trabalho em andamento, espera de aprovação, conclusão, cancelamento, falha e settlement incerto pelos contratos públicos de sua superfície. Os nomes internos e transações pertencem à SPEC canônica; o adaptador não funde estados diferentes para simplificar a resposta. Falha de transporte não determina sozinha o estado de um efeito. Erros de persistência/diagnóstico/cleanup não substituem a primeira causa."
+    },
+    {
+      "id": "A04-54",
+      "input": "A04",
+      "path": "docs/01_prd/0030_codex100_initial_qualification.md",
+      "input_sha256": "e8f1a99c5c93399a8dd67261d03bf289b8f7dda78c0c1ece25d79d2e678e120f",
+      "start_line": 54,
+      "end_line": 71,
+      "anchor": "| CQ12",
+      "excerpt": "| CQ12 | Dois processos disputam e um mantém fence antigo                                                | Um efeito vencedor; perdedor sem dispatch/persistência/settlement indevidos; evidência dos processos e stores reais                                 |\n| CQ13 | Adulterar resposta, nonce, efeito, evento, ordem, erro, identidade, custo ou input              | O qualificador rejeita cada artefato conhecido como errado; positivo autêntico continua aceito no escopo da regra                                   |\n| CQ14 | Referência/candidata/regra/autoridade ausente, incompatível, expirada ou alterada               | Pendência ou falha explícita; nenhum PASS por schema/help/mock/skip/exit0; regra e revisão atuais vinculadas aos bytes efetivos                     |\n\nCQ01–14 detalham os14resultados NJ da [proposta inicial](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md). Não substituem os IDs funcionais do catálogo nem somam14novas funções ao denominador. Todos continuam **NOT_RUN** para o aceite integrado deste PRD.\n\n## Protocolo e compatibilidade observáveis\n\nA superfície app-server preserva os métodos, sentidos, tipos e campos da fonte pinada. initialize, thread/start, turn/start, turn/interrupt, thread/read e thread/resume são operações distintas, não aliases genéricos para sdk.hello/turn.send. Server-requests, respostas e notifications têm papéis diferentes; notification não recebe ACK inventado. A [proposta wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra nove diferenças com SDKv1 e dez grupos adicionais de caso.\n\nO ID RPC não é identidade de recurso. Tipo string/inteiro e o domínio i64 precisam permanecer exatos no transporte; arredondar por Number ou devolver número como string é divergência. Ausência, null, defaults, flags de capabilities, escopos de conexão/processo, erros e campos opcionais serão confrontados com o runtime pinado. Não transformar a forma do TS gerado em prova de desserialização Rust.\n\nO SDK CVG existente conserva seu contrato durante a adoção isolada aprovada. A qualificação posterior inclui todos os hosts, caminhos de default, SDKs e variantes do programa; uma composição opt-in positiva não fecha essa cobertura. A adoção publicada/default0226 foi adiada pelo usuário e não é concedida por este PRD.\n\n## Estados, limites e falhas\n\nO cliente deve distinguir trabalho em andamento, espera de aprovação, conclusão, cancelamento, falha e settlement incerto pelos contratos públicos de sua superfície. Os nomes internos e transações pertencem à SPEC canônica; o adaptador não funde estados diferentes para simplificar a resposta. Falha de transporte não determina sozinha o estado de um efeito. Erros de persistência/diagnóstico/cleanup não substituem a primeira causa.\n"
+    },
+    {
+      "id": "O01-31",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0221-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f64a1b8991cac8ecab2082c7b44768002ee1723fd419d5c51572c003e6283d37",
+      "start_line": 31,
+      "end_line": 48,
+      "anchor": "## 2. API",
+      "excerpt": "## 2. API da primeira fatia e partes adiadas\n\nRetêm-se os contratos originais de `SessionHeaderV1`, `SessionAccess`, opções\nde create/handle e `SessionHandle`, com seus métodos `read`, `append`, `flush`,\n`close` e `Symbol.asyncDispose` como a mesma operação de close. Retêm-se\n`SessionPersistence.identity`, `create` e `open`. O flush desta fatia é o do\nhandle escritor, não o flush agregado de serviço.\n\nNa factory `createPostgresSessionPersistence`, a entrada permanece pool físico\nqualificado + tenant/schema confiáveis + maxOpenWriters. O retorno da primeira\nfatia contém `{ service }`; o `owner` público do desenho completo fica adiado.\nO port físico necessário a essa factory e seus tipos pertencem à mesma entrada\npública, sem deep import e sem aceitar reconnect transparente por duck typing.\nA composição continua responsável por seu pool; não se adiciona uma API de\nshutdown do serviço nessa fatia.\n\nA ponte já prevista `sessionEventStoreForHandle` permanece apenas suporte ao\nSDK existente no mesmo log v1: capacidade privada genuína, tenant confiável,"
+    },
+    {
+      "id": "O01-66",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0221-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f64a1b8991cac8ecab2082c7b44768002ee1723fd419d5c51572c003e6283d37",
+      "start_line": 66,
+      "end_line": 83,
+      "anchor": "## 3. Invariantes",
+      "excerpt": "## 3. Invariantes retidos sem ampliar escopo\n\n- Tenant é vinculado pela composição autenticada, nunca por header/options\n  fornecidos para escolher outro escopo. RLS e grants reais continuam exigidos.\n- `create` rejeita duplicata e só publica writer após COMMIT conhecido;\n  `open` não cria. Read handle não adquire owner. Header/cut explícitos e\n  metadata detached seguem as validações originais, sem header artificial.\n- Mantêm-se captura única antes do primeiro await, JSON lossless limitado,\n  limites originais header64KiB/profundidade64/nós20mil/evento1MiB/batch8MiB,\n  aliases/getters, vocabulário CVG v1 e recusa de versão/corrupção. Esta\n  recomposição não resolve NUL no corpo JSONB dos eventos v1.\n- Append é batch atômico na ordem original, sequência contígua e digest/\n  fingerprint reais; não renumerar, descartar ou alterar fatos. Adapter e\n  append direto usam a mesma fila; retry idêntico só retorna o fato já existente.\n- Read usa offset0→sequence1, snapshot fresco no primário e validação do prefixo\n  completo em páginas internas256, mesmo fora da fatia devolvida. Sem cache\n  stale, snapshot duradouro entre chamadas ou alteração dos limites originais.\n- A fila de cada handle mantém admissão ordenada, snapshots detached e"
+    },
+    {
+      "id": "O01-104",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0221-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f64a1b8991cac8ecab2082c7b44768002ee1723fd419d5c51572c003e6283d37",
+      "start_line": 104,
+      "end_line": 121,
+      "anchor": "## 4.",
+      "excerpt": "## 4. Ownership, writer antigo e implantação\n\nMantém-se o mecanismo aprovado: advisory lock de sessão na conexão física\nexclusiva; try-lock transacional da mesma chave nos guards das tabelas v1;\nnenhuma transação mantida aberta por toda a vida do handle. Chave de dois int4\npor OID da relação confiável e writer_lock_id unique positivo NO CYCLE, sem hash\ncolidente ou reuso. Não alterar namespace/roles ou acrescentar fence de execução.\n\nOs guards de INSERT/UPDATE/constraint diferida e imutabilidade da seção6\noriginal continuam obrigatórios na migration. Writer antigo sem handle é\nrecusado enquanto há owner; leitor permanece disponível. O caso row-lock antigo\nantes de advisory novo usa try-lock sem espera no trigger, evitando ciclo. Fora\nde owner, o store v1 mantém seu caminho serializado; replay idêntico sem mutação\npode devolver o fato já persistido. Não classificar essa leitura como segundo\nwriter nem recusar artificialmente leitores para aparentar exclusividade.\n\nPerda da sessão física torna o handle LOST terminal. Novo processo só reclama\nownership quando o PostgreSQL realmente libertar o lock. O handle antigo não"
+    },
+    {
+      "id": "O01-163",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0221-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f64a1b8991cac8ecab2082c7b44768002ee1723fd419d5c51572c003e6283d37",
+      "start_line": 163,
+      "end_line": 180,
+      "anchor": "## 6.",
+      "excerpt": "## 6. Cinco testemunhos locais do aceite reduzido\n\nTodos estão **NOT_RUN**. S1–S5 são planos de prova da primeira fatia, não novos\ncontroles creditados e não repetição obrigatória de SP01–SP22. Usar a API/factory\npública real, PG16 sintético novo e processos realmente distintos. Não usar\nmutex in-process, banco mock, fixture com log paralelo ou provider real.\n\n| ID  | Testemunho                                                                                                                                                                                  | Negativo que deve ser detectado                                                        |\n| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |\n| S1  | ProcessoA create/append/flush/close e processoB open/read/append/flush no mesmo log v1; prefixo, IDs, sequência e digests exatos, sem lacuna/duplicata; contrato público compilado          | Log paralelo, renumeração, append parcial, export só por deep import                   |\n| S2  | Dois processos disputam owner da mesma sessão; só um writer; readers progridem, sessão distinta não bloqueia; adapter físico/grants/preflight reais                                         | Mutex apenas local, chave colidente, proxy que troca backend, writer antigo autorizado |\n| S3  | Processo/store legado inalterado tenta append enquanto novo owner está ativo; recusado sem alterar fatos/cursor; incluir interleaving row-before-advisory sem deadlock                      | Guard ausente/bloqueante, trigger contornável, cursor separado do batch                |\n| S4  | Dois tenants com mesmo sessionId, roles non-owner/RLS/grants reais; tenantB não recebe fatos/header do tenantA e seu owner independente progride                                            | Bypass por role elevada, tenant escolhido no input, colisão entre tenants              |\n| S5  | ACK de flush conhecido emA, kill abrupto deA sem close, B aguarda liberação real e reabre/relê prefixo exato; perda real da sessão PG em handle ainda vivo prova old handle LOST/não revive | Flush em memória, reconexão automática, handle antigo que volta a escrever             |\n\nO ACK antecede o kill por barreira IPC observável, sem sleeps como prova. Kill\nsignifica processo sintético da aplicação; não autoriza matar PG/serviço de\nterceiros. A perda de sessão PG do controle usa somente backend próprio por"
+    },
+    {
+      "id": "O03-128",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 128,
+      "end_line": 145,
+      "anchor": "## 5.",
+      "excerpt": "## 5. Formato físico e limites exatos\n\nEstas são exigências de schema, não SQL implementado:\n\n| Campo/estado                                | Invariante                                                                                                  |\n| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |\n| `result_storage_version`                    | smallint NOT NULL, default0, somente0/1, imutável por linha inclusive retry.                                |\n| Versão0                                     | `result` mantém os bytes/significado JSONB existentes; payload novo SQL NULL.                               |\n| Versão1, qualquer estado                    | `result` legado SQL NULL.                                                                                   |\n| V1 RESERVED/EFFECT_STARTED/FAILED/UNCERTAIN | payload SQL NULL.                                                                                           |\n| V1 CONFIRMED                                | payload completo válido e bounded; `error` SQL NULL; estado/payload gravados atomicamente.                  |\n| Envelope                                    | Exatamente `encoding:\"base64\"`, `decodedBytes`, `decodedSha256`, `data`. A autoridade de versão é a coluna. |\n\nDB CHECKs cobrem estados, exclusividade, tipos, forma, ASCII e comprimentos.\nGuard de escrita protege versão, principal autorizado e imutabilidade do\nconfirmado. O adapter valida conteúdo, JSON estrito e SHA. Hash detecta\ncorrupção; não autentica uma escrita privilegiada maliciosa.\n"
+    },
+    {
+      "id": "O03-153",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 153,
+      "end_line": 170,
+      "anchor": "1048576",
+      "excerpt": "| Resultado lógico no journal | 1048576bytes (1MiB); mínimo um byte JSON válido.                                              |\n| Forma lógica                | profundidade64 com raiz1;1000000nós de valor; chaves contam bytes, não nós.                   |\n| `data` base64               | `4*ceil(decodedBytes/3)`, máximo1398104caracteres ASCII.                                      |\n| Envelope JSONB expandido    | 1398616bytes, máximo do data+512; usar `octet_length(payload::text)`, não tamanho comprimido. |\n| Contexto0224, inalterado    | 32768bytes, profundidade32,10000nós.                                                          |\n| Checkpoint0224, inalterado  | 8388608bytes canônicos unsigned incluindo todo o restante do estado.                          |\n\n1MiB é a redução proposta do teto do journal, autorizada pela decisão, sem\nalegar throughput/capacidade medidos. Fica acima dos32768bytes do contexto\ncom folga e abaixo dos8MiB originais. Checkpoint/capture não são aumentados.\nO capture atual continua limitando **todo ToolResult** a8388608bytes. O\njournal V1 limita o JSON canônico de **output** a1048576bytes, uma fronteira\ndiferente e menor. A composição precisa satisfazer ambas; não se deduz uma\nsaída pública máxima de somente um desses limites. A fonte atual prepara o\nToolResult antes de tentar confirmá-lo no journal. Isso é leitura estática,\nnão prova de execução. Os testes devem discriminar as duas fronteiras. Não aumentar budgets de capture, checkpoint, mensagem,\ntokens, provider ou duração por consequência deste codec.\n"
+    },
+    {
+      "id": "O03-342",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 342,
+      "end_line": 359,
+      "anchor": "J13",
+      "excerpt": "5. Habilitar opt-in somente após readiness e executar J01–J13 e J16, com\n   matriz mínima explícita de J05–J07; J14 e drill completo J15 ficam adiados.\n   Preservar0224 e regressões. Os restart/crashpoints J01/J08/J09/J10 continuam\n   obrigatórios: adiar disputa concorrente J14 não os remove.\n   Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.\n6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de\n   checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.\n   Expansão pode permanecer; não executar down migration destrutiva.\n7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward\n   com readers novos/credentials retidas. Sem downgrade, copy de envelope para\n   result, backfill decodificado, reseal ou restore seguido de replay de efeitos.\n   A política permanece; o drill completo de export/restore J15 está adiado,\n   não é requisito executado desta primeira fatia. Não fazer down destrutivo.\n\nVolume, retenção, latência, janela de produção e recovery time reais não foram\nmedidos. Demanda de conversão de trabalho vivo ou operação online mista exige\noutro desenho aprovado; não amplia esta proposta automaticamente.\n"
+    },
+    {
+      "id": "O03-343",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 343,
+      "end_line": 360,
+      "anchor": "J14",
+      "excerpt": "   matriz mínima explícita de J05–J07; J14 e drill completo J15 ficam adiados.\n   Preservar0224 e regressões. Os restart/crashpoints J01/J08/J09/J10 continuam\n   obrigatórios: adiar disputa concorrente J14 não os remove.\n   Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.\n6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de\n   checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.\n   Expansão pode permanecer; não executar down migration destrutiva.\n7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward\n   com readers novos/credentials retidas. Sem downgrade, copy de envelope para\n   result, backfill decodificado, reseal ou restore seguido de replay de efeitos.\n   A política permanece; o drill completo de export/restore J15 está adiado,\n   não é requisito executado desta primeira fatia. Não fazer down destrutivo.\n\nVolume, retenção, latência, janela de produção e recovery time reais não foram\nmedidos. Demanda de conversão de trabalho vivo ou operação online mista exige\noutro desenho aprovado; não amplia esta proposta automaticamente.\n\n## 9. Testes rejeitáveis"
+    },
+    {
+      "id": "O03-343",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 343,
+      "end_line": 360,
+      "anchor": "J15",
+      "excerpt": "   matriz mínima explícita de J05–J07; J14 e drill completo J15 ficam adiados.\n   Preservar0224 e regressões. Os restart/crashpoints J01/J08/J09/J10 continuam\n   obrigatórios: adiar disputa concorrente J14 não os remove.\n   Nova chamada/corpo, reader antigo com acesso ou fence inválido bloqueiam.\n6. Rollback de binário somente antes da primeira reserva1 **ou** escrita de\n   checkpoint2, sem trabalho ativo e com contagens/digests reconciliados.\n   Expansão pode permanecer; não executar down migration destrutiva.\n7. Depois de qualquer linha1/checkpoint2, suspender admissão e fazer roll-forward\n   com readers novos/credentials retidas. Sem downgrade, copy de envelope para\n   result, backfill decodificado, reseal ou restore seguido de replay de efeitos.\n   A política permanece; o drill completo de export/restore J15 está adiado,\n   não é requisito executado desta primeira fatia. Não fazer down destrutivo.\n\nVolume, retenção, latência, janela de produção e recovery time reais não foram\nmedidos. Demanda de conversão de trabalho vivo ou operação online mista exige\noutro desenho aprovado; não amplia esta proposta automaticamente.\n\n## 9. Testes rejeitáveis"
+    },
+    {
+      "id": "O03-8",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0225-recomposition/adjusted-spec-proposal.md",
+      "input_sha256": "f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315",
+      "start_line": 8,
+      "end_line": 25,
+      "anchor": "J16",
+      "excerpt": "pendentes. Todos os testes J01–J16 permanecem NOT_RUN.\n\n## 1. Problema, escopo e autoridade\n\nA [SPEC0224](../../../../02_spec/0224_pare100_complete_tool_result_context.md), SHA-256\n`f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`, já foi\naprovada pelo usuário. Seu BUILD local demonstrou preservação do resultado no\ncontexto e no checkpoint V2. O journal confirma o resultado antes desse\ncheckpoint e ainda grava o valor diretamente em JSONB. No teste público com\nNUL, o PostgreSQL devolveu 22P05 depois de um corpo; o journal ficou UNCERTAIN\ne o checkpoint completo não foi alcançado. Não houve sucesso fim a fim.\n\nEsta proposta complementa essa fronteira. Prevê codec opt-in no\n`PostgresOperationalEffectJournal`, migração aditiva, composição local confiável\ne testes de persistência/retomada. Mantém a API lógica do journal e as regras de\ntenant, policy, approval, sandbox, identidade, tentativa e fence. Não substitui\no journal operacional por um ledger de hashes, journal de canal ou fake.\n"
+    },
+    {
+      "id": "O05-56",
+      "input": "O05",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/entry-checklist.json",
+      "input_sha256": "ac80981a027efed7d65f75e4566d4c17696003857ebef521e8c041b05b66e8ff",
+      "start_line": 56,
+      "end_line": 62,
+      "anchor": "\"BUILD_ENTRY_READY\"",
+      "excerpt": "  \"BUILD_ENTRY_READY\": true,\n  \"source_edits_started\": false,\n  \"future_PG_resource_claim_required\": true,\n  \"global_code_round_and_promotion\": \"BLOCKED_P0_43_BOUNDARY_FAILURES_AND_CURRENT_QUALIFICATION\",\n  \"functional_credit\": 0,\n  \"scope\": \"LOCAL_APPROVED_0225_IMPLEMENTATION_ONLY; PG_NOT_YET_ALLOWED\"\n}"
+    },
+    {
+      "id": "S01-1094",
+      "input": "S01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 1094,
+      "end_line": 1111,
+      "anchor": "export class PostgresOperationalEffectJournal",
+      "excerpt": "export class PostgresOperationalEffectJournal implements EffectJournal {\n  private readonly resultStorageMode: JournalResultStorageMode\n\n  public constructor(\n    private readonly connection: OperationalExecutionPostgresConnection,\n    private readonly options: {\n      fence?: ControlledPublishedDatabaseFence\n      resultStorage?: { readonly version: 1 }\n    } = {}\n  ) {\n    const descriptor = Object.getOwnPropertyDescriptor(options, 'resultStorage')\n    if (descriptor && !('value' in descriptor)) {\n      throw new OperationalExecutionError(\n        'validation_failed',\n        'JOURNAL_STORAGE_MODE'\n      )\n    }\n    const storage = descriptor?.value as unknown"
+    },
+    {
+      "id": "S01-1212",
+      "input": "S01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 1212,
+      "end_line": 1229,
+      "anchor": "private transition(",
+      "excerpt": "  private transition(\n    input: {\n      tenantId: string\n      operationKey: string\n      attemptId: string\n    },\n    state: EffectJournalState,\n    values: { result?: unknown; error?: string } = {}\n  ): Promise<EffectJournalRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const operation = text(input.operationKey, 'operationKey', 240)\n    const attemptId = text(input.attemptId, 'attemptId', 240)\n    const timestamp = new Date()\n    return this.run(tenant, (client, storage) =>\n      transaction(client, async () => {\n        const guard = await this.guardWrite(\n          client,\n          tenant,"
+    },
+    {
+      "id": "S01-1112",
+      "input": "S01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 1112,
+      "end_line": 1129,
+      "anchor": "this.resultStorageMode",
+      "excerpt": "    if (storage === undefined) this.resultStorageMode = 0\n    else {\n      if (\n        !storage ||\n        typeof storage !== 'object' ||\n        Array.isArray(storage) ||\n        Reflect.ownKeys(storage).length !== 1 ||\n        Object.getOwnPropertyDescriptor(storage, 'version')?.value !== 1\n      ) {\n        throw new OperationalExecutionError(\n          'validation_failed',\n          'JOURNAL_STORAGE_MODE'\n        )\n      }\n      this.resultStorageMode = 1\n    }\n  }\n"
+    },
+    {
+      "id": "S01-3",
+      "input": "S01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 3,
+      "end_line": 20,
+      "anchor": "guardOptionalPublishedWrite",
+      "excerpt": "  guardOptionalPublishedWrite,\n  publishedFenceError,\n  type ControlledPublishedDatabaseFence\n} from './controlled-published-fencing.ts'\nimport { randomUUID } from 'node:crypto'\nimport {\n  decodeJournalResult,\n  encodeJournalResult,\n  JOURNAL_RESULT_STORAGE_MAX_BYTES\n} from './operational-effect-result-codec.ts'\nimport {\n  verifyJournalResultStorage,\n  type JournalResultReadiness,\n  type JournalResultStorageMode\n} from './operational-effect-result-readiness.ts'\nimport type {\n  EffectJournal,\n  EffectJournalRecord,"
+    },
+    {
+      "id": "S02-42",
+      "input": "S02",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "e110ee06553b5612a798f8b8966516d3f7c4e416b4850a764e052db0f7c14cbd",
+      "start_line": 42,
+      "end_line": 59,
+      "anchor": "readonly fence?:",
+      "excerpt": "  readonly fence?: ControlledPublishedDatabaseFence\n}\n\ninterface StepRow extends QueryResultRow {\n  tenant_id: string\n  execution_id: string\n  step_number: number\n  step_id: string\n  step_type: ExecutionStep['stepType']\n  status: StepStatus\n  attempt: number\n  side_effecting: boolean\n  decision_type: ExecutionStep['decisionType'] | null\n  reason_code: string | null\n  error_code: string | null\n  observation_refs: unknown\n  started_at: Date | string\n  completed_at: Date | string | null"
+    },
+    {
+      "id": "S02-284",
+      "input": "S02",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "e110ee06553b5612a798f8b8966516d3f7c4e416b4850a764e052db0f7c14cbd",
+      "start_line": 284,
+      "end_line": 301,
+      "anchor": "compareAndSwapCheckpoint",
+      "excerpt": "  public compareAndSwapCheckpoint(\n    input: CheckpointCompareAndSwapInput\n  ): Promise<CheckpointCompareAndSwapResult> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    validateCheckpointIntegrity(input.next, input)\n    if (\n      input.expected &&\n      input.expected.checkpointId === input.next.checkpointId\n    ) {\n      throw new CheckpointError(\n        'checkpoint_integrity',\n        'CAS requires a fresh checkpoint ID'\n      )\n    }\n    // Snapshot before the first await; callers cannot alter a validated write in flight.\n    const next = structuredClone(input.next)\n    const expected = input.expected ? { ...input.expected } : null\n    const state ="
+    },
+    {
+      "id": "S02-2",
+      "input": "S02",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "e110ee06553b5612a798f8b8966516d3f7c4e416b4850a764e052db0f7c14cbd",
+      "start_line": 2,
+      "end_line": 19,
+      "anchor": "guardOptionalPublishedWrite",
+      "excerpt": "  guardOptionalPublishedWrite,\n  type ControlledPublishedDatabaseFence\n} from './controlled-published-fencing.ts'\nimport type {\n  ExecutionCheckpoint,\n  ExecutionStep,\n  ExecutionStepStore,\n  CheckpointCompareAndSwapInput,\n  CheckpointCompareAndSwapResult\n} from '@cvg/harness-contracts'\nimport {\n  isStepTransitionAllowed,\n  type StepStatus\n} from '@cvg/harness-contracts'\nimport {\n  CheckpointError,\n  validateCheckpointIntegrity,\n  encodeCompleteCheckpointState,"
+    },
+    {
+      "id": "S03-38",
+      "input": "S03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/harness/src/createOperationalHarness.ts",
+      "input_sha256": "08e2c4bd510f00ee280a7b721edd42d680e91a550dfac7c7f49078860986edab",
+      "start_line": 38,
+      "end_line": 55,
+      "anchor": "readonly toolResultContext?",
+      "excerpt": "  readonly toolResultContext?: CompleteToolContextConfiguration\n  readonly orchestrator?: HarnessRuntimeOptions['orchestrator']\n  /**\n   * Explicit capability composition. Its adapter is the only runtime-facing\n   * registry for this path; callers cannot provide both registries.\n   */\n  readonly capabilities?: CapabilityRegistry\n  /** Compatibility port retained for existing Phase 2/3 consumers. */\n  readonly tools?: ToolRegistry\n  /** Required for capability composition and optional for compatibility tools. */\n  readonly effectJournal?: EffectJournal\n  readonly effectJournalOptions?: JournaledToolRegistryOptions\n  /**\n   * Required to run the iterative profile. The runtime registry resolves the\n   * requested profile here; the worker never selects a runtime class.\n   */\n  readonly iterativeOrchestrator?: IterativeOrchestrator\n  readonly stepStore?: ExecutionStepStore"
+    },
+    {
+      "id": "S03-87",
+      "input": "S03",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/harness/src/createOperationalHarness.ts",
+      "input_sha256": "08e2c4bd510f00ee280a7b721edd42d680e91a550dfac7c7f49078860986edab",
+      "start_line": 87,
+      "end_line": 104,
+      "anchor": "complete-tool-v1 requires",
+      "excerpt": "      'complete-tool-v1 requires iterative orchestration and a checkpoint store.'\n    )\n  }\n  const capabilityFingerprint = options.capabilities?.compositionFingerprint()\n  if (options.capabilities && !options.effectJournal) {\n    throw new Error(\n      'Capability composition requires an explicit effect journal'\n    )\n  }\n  const tools = resolveTools(options, capabilityFingerprint)\n  const singlePass = new SinglePassGovernedRuntime({\n    orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),\n    modelGateway: options.modelGateway,\n    policy: options.policy,\n    approvals: options.approvals,\n    tools,\n    ...(capabilityFingerprint ? { capabilityFingerprint } : {}),\n    audit: options.audit,"
+    },
+    {
+      "id": "S04-5",
+      "input": "S04",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/harness/src/complete-checkpoint.ts",
+      "input_sha256": "4962fe127711c930c181388acde9214403288de374a762df9447f360b28cc8f0",
+      "start_line": 5,
+      "end_line": 22,
+      "anchor": "COMPLETE_CHECKPOINT",
+      "excerpt": "  COMPLETE_CHECKPOINT_MAX_BYTES,\n  MAX_CHECKPOINT_OBSERVATIONS,\n  OBSERVATION_TYPES,\n  OBSERVATION_SOURCES,\n  DECISION_TYPES,\n  DECISION_REASON_CODES,\n  COMPLETION_OUTCOMES,\n  STOP_REASONS,\n  validateLoopDecision,\n  type AgentLoopState,\n  type CompleteCheckpointStorageState,\n  type ExecutionCheckpoint\n} from '@cvg/harness-contracts'\nimport { CheckpointError, type UnsignedCheckpoint } from './step-store.ts'\n\nconst LIMITS = {\n  maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,\n  maxDepth: 64,"
+    },
+    {
+      "id": "S05-9",
+      "input": "S05",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-effect-result-codec.ts",
+      "input_sha256": "914eb199d70246b191b6fcbf79645f9df7919ec6875bf61f32f3e765da0fa0f4",
+      "start_line": 9,
+      "end_line": 26,
+      "anchor": "MAX_",
+      "excerpt": "export const JOURNAL_RESULT_MAX_BYTES = 1048576\nexport const JOURNAL_RESULT_MAX_DEPTH = 64\nexport const JOURNAL_RESULT_MAX_NODES = 1000000\nexport const JOURNAL_RESULT_DATA_MAX_CHARS = 1398104\nexport const JOURNAL_RESULT_STORAGE_MAX_BYTES = 1398616\n\nexport interface JournalResultEnvelope {\n  readonly encoding: 'base64'\n  readonly decodedBytes: number\n  readonly decodedSha256: string\n  readonly data: string\n}\n\nconst limits = {\n  maxBytes: JOURNAL_RESULT_MAX_BYTES,\n  maxDepth: JOURNAL_RESULT_MAX_DEPTH,\n  maxNodes: JOURNAL_RESULT_MAX_NODES\n}"
+    },
+    {
+      "id": "S05-9",
+      "input": "S05",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-effect-result-codec.ts",
+      "input_sha256": "914eb199d70246b191b6fcbf79645f9df7919ec6875bf61f32f3e765da0fa0f4",
+      "start_line": 9,
+      "end_line": 26,
+      "anchor": "1048576",
+      "excerpt": "export const JOURNAL_RESULT_MAX_BYTES = 1048576\nexport const JOURNAL_RESULT_MAX_DEPTH = 64\nexport const JOURNAL_RESULT_MAX_NODES = 1000000\nexport const JOURNAL_RESULT_DATA_MAX_CHARS = 1398104\nexport const JOURNAL_RESULT_STORAGE_MAX_BYTES = 1398616\n\nexport interface JournalResultEnvelope {\n  readonly encoding: 'base64'\n  readonly decodedBytes: number\n  readonly decodedSha256: string\n  readonly data: string\n}\n\nconst limits = {\n  maxBytes: JOURNAL_RESULT_MAX_BYTES,\n  maxDepth: JOURNAL_RESULT_MAX_DEPTH,\n  maxNodes: JOURNAL_RESULT_MAX_NODES\n}"
+    },
+    {
+      "id": "G01-7",
+      "input": "G01",
+      "path": "packages/persistence/src/controlled-published-fencing.ts",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 7,
+      "end_line": 24,
+      "anchor": "export interface ControlledPublishedDatabaseFence",
+      "excerpt": "export interface ControlledPublishedDatabaseFence {\n  readonly tenantId: string\n  readonly executionId: string\n  readonly workerId: string\n  readonly attempt: number\n  readonly outer: FencedOuterClaimRef\n  readonly signal?: AbortSignal\n  readonly cancellation?: {\n    readonly eventSequence: string\n    readonly attempt: number\n  }\n}\n\nexport interface ControlledPublishedBindingRow extends Record<string, unknown> {\n  tenant_id: string\n  execution_id: string\n  inbound_message_id: string\n  conversation_id: string"
+    },
+    {
+      "id": "G01-156",
+      "input": "G01",
+      "path": "packages/persistence/src/controlled-published-fencing.ts",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 156,
+      "end_line": 173,
+      "anchor": "export async function guardControlledPublishedFence",
+      "excerpt": "export async function guardControlledPublishedFence(\n  client: PostgresQueryable,\n  fence: ControlledPublishedDatabaseFence,\n  options: {\n    settlement?: boolean\n    requirePhase?: boolean\n    skipPause?: boolean\n    signal?: AbortSignal\n  } = {}\n): Promise<{\n  binding: ControlledPublishedBindingRow\n  now: Date\n  recheck: () => Promise<Date>\n  leaseUntil: string\n}> {\n  options = {\n    ...options,\n    ...(!options.settlement && !options.signal && fence.signal"
+    },
+    {
+      "id": "G01-127",
+      "input": "G01",
+      "path": "packages/persistence/src/controlled-published-fencing.ts",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 127,
+      "end_line": 144,
+      "anchor": "export async function guardOptionalPublishedWrite",
+      "excerpt": "export async function guardOptionalPublishedWrite(\n  client: PostgresQueryable,\n  tenantId: string,\n  executionId: string,\n  fence: ControlledPublishedDatabaseFence | undefined,\n  settlement = false\n): Promise<Awaited<ReturnType<typeof guardControlledPublishedFence>> | null> {\n  const bound = await client.query(\n    `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2\n     AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,\n    [tenantId, executionId]\n  )\n  if (!bound.rows.length) {\n    if (fence) publishedFenceError()\n    return null\n  }\n  if (\n    !fence ||"
+    },
+    {
+      "id": "G02-193",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 193,
+      "end_line": 210,
+      "anchor": "export class PostgresControlledPublishedKernelStore",
+      "excerpt": "export class PostgresControlledPublishedKernelStore {\n  constructor(private readonly pool: PostgresPoolLike) {}\n\n  readAdmission(\n    tenantId: string,\n    inboundMessageId: string\n  ): Promise<ControlledPublishedAdmissionRecord | null> {\n    return withTenantContext(\n      this.pool,\n      TenantIdSchema.parse(tenantId),\n      async (client) => {\n        const q = await client.query<ControlledPublishedBindingRow>(\n          'SELECT * FROM controlled_published_bindings WHERE tenant_id=$1 AND inbound_message_id=$2',\n          [tenantId, inboundMessageId]\n        )\n        const b = q.rows[0]\n        if (!b) return null\n        await this.verifyEvidence(client, b)"
+    },
+    {
+      "id": "G02-680",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 680,
+      "end_line": 697,
+      "anchor": "ackPhase(",
+      "excerpt": "        return this.ackPhase(fence, p, v)\n      },\n      saveResumePoint: (f, s, c, q, r) => {\n        checked(f)\n        return this.saveResumePoint(fence, s, c, q, r)\n      },\n      poison: (f, p, r) => {\n        checked(f)\n        return this.poison(fence, p, r)\n      },\n      close: (f, s, r, t, v) => {\n        checked(f)\n        return this.close(fence, s, r, t, v)\n      }\n    }\n    return {\n      identity: claim.identity,\n      signal,"
+    },
+    {
+      "id": "G02-684",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 684,
+      "end_line": 701,
+      "anchor": "saveResumePoint(",
+      "excerpt": "        return this.saveResumePoint(fence, s, c, q, r)\n      },\n      poison: (f, p, r) => {\n        checked(f)\n        return this.poison(fence, p, r)\n      },\n      close: (f, s, r, t, v) => {\n        checked(f)\n        return this.close(fence, s, r, t, v)\n      }\n    }\n    return {\n      identity: claim.identity,\n      signal,\n      ...(fence.cancellation ? { cancelled: true } : {}),\n      expiresAt: claim.expiresAt,\n      state: claim.state,\n      continuation,"
+    },
+    {
+      "id": "S01-1260",
+      "input": "S01",
+      "path": "docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/public-profile-r3-sources/packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 1260,
+      "end_line": 1283,
+      "anchor": "if (operationKey !== `${executionId}:s2:find_available_slots`)",
+      "excerpt": "    if (operationKey !== `${executionId}:s2:find_available_slots`)\n      publishedFenceError()\n    return guardOptionalPublishedWrite(\n      client,\n      tenant,\n      executionId,\n      this.options.fence,\n      settlement\n    )\n  }\n\n  private async run<T>(\n    tenant: TenantId,\n    operation: (\n      client: PostgresQueryable,\n      storage: JournalResultReadiness\n    ) => Promise<T>\n  ): Promise<T> {\n    const checked = async (client: PostgresQueryable) => {\n      const storage = await verifyJournalResultStorage(\n        client,\n        this.resultStorageMode\n      )\n      return operation(client, storage)"
+    },
+    {
+      "id": "G02-306",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 306,
+      "end_line": 329,
+      "anchor": "  claim(",
+      "excerpt": "  claim(\n    executionId: string,\n    outer: FencedOuterClaimRef\n  ): Promise<ControlledPublishedClaim> {\n    return withTenantTransaction(this.pool, outer.tenantId, async (client) => {\n      const parent = await lockedOperationalRecordOnClient(\n        client,\n        outer.tenantId,\n        executionId\n      )\n      const q = await client.query<ControlledPublishedBindingRow>(\n        'SELECT * FROM controlled_published_bindings WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',\n        [outer.tenantId, executionId]\n      )\n      const b = q.rows[0]\n      if (!b || b.outbox_id !== outer.eventId) publishedFenceError()\n      await this.verifyEvidence(client, b)\n      await client.query(\n        'SELECT * FROM operational_execution_outbox WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',\n        [outer.tenantId, executionId]\n      )\n      await assertFencedOutboxClaimOnClient(client, outer)\n      if (b.phase_state === 'CLOSED') {\n        const closed = ("
+    },
+    {
+      "id": "G02-661",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 661,
+      "end_line": 684,
+      "anchor": "  createHost(",
+      "excerpt": "  createHost(\n    claim: ControlledPublishedClaim,\n    lifecycle: ControlledKernelHostContext['lifecycle'],\n    signal: AbortSignal\n  ): ControlledKernelHostContext {\n    if (claim.disposition === 'CLOSED') publishedFenceError()\n    const fence = { ...claim.fence, signal }\n    const checked = (f: ControlledKernelFence): void => validateFence(fence, f)\n    const continuation: ControlledKernelContinuation = {\n      startPrepared: (f, p, r) => {\n        checked(f)\n        return this.startPrepared(fence, p, r)\n      },\n      beginPhase: (f, s, t, d) => {\n        checked(f)\n        return this.beginPhase(fence, s, t, d)\n      },\n      ackPhase: (f, p, v) => {\n        checked(f)\n        return this.ackPhase(fence, p, v)\n      },\n      saveResumePoint: (f, s, c, q, r) => {\n        checked(f)\n        return this.saveResumePoint(fence, s, c, q, r)"
+    },
+    {
+      "id": "G02-1320",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 1320,
+      "end_line": 1343,
+      "anchor": "  private close(",
+      "excerpt": "  private close(\n    fence: ControlledPublishedDatabaseFence,\n    snapshot: ControlledPublishedSnapshot | null,\n    result: RuntimeResult,\n    trace: TestRunTrace,\n    revision: number\n  ): Promise<void> {\n    const r = typedEnvelope(result),\n      t = typedEnvelope(trace),\n      s = snapshot === null ? null : json<ControlledPublishedSnapshot>(snapshot)\n    return this.run(\n      fence,\n      async (client, b, g) => {\n        const success = r.stopReason === 'COMPLETED'\n        const admitted = admissionRecord(b)\n        if (fence.cancellation && r.stopReason !== 'CANCELLED')\n          publishedFenceError('conflict')\n        if (\n          count(b.state_revision) !== revision ||\n          t.tenantId !== fence.tenantId ||\n          t.traceId !== b.trace_id ||\n          t.agentId !== b.agent_id ||\n          t.versionId !== b.version_id ||\n          t.conversationId !== b.conversation_id ||"
+    },
+    {
+      "id": "G02-1975",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 1975,
+      "end_line": 1998,
+      "anchor": "  private run<T>(",
+      "excerpt": "  private run<T>(\n    fence: ControlledPublishedDatabaseFence,\n    operation: (\n      client: PostgresQueryable,\n      b: ControlledPublishedBindingRow,\n      guard: Awaited<ReturnType<typeof guardControlledPublishedFence>>\n    ) => Promise<T>,\n    settlement = false\n  ): Promise<T> {\n    return withTenantTransaction(\n      this.pool,\n      TenantIdSchema.parse(fence.tenantId),\n      async (client) => {\n        const g = await guardControlledPublishedFence(client, fence, {\n          settlement,\n          ...(!settlement && fence.signal ? { signal: fence.signal } : {})\n        })\n        await this.verifyEvidence(client, g.binding)\n        return operation(client, g.binding, g)\n      }\n    )\n  }\n\n  private async appendEvidence("
+    },
+    {
+      "id": "G02-942",
+      "input": "G02",
+      "path": "packages/persistence/src/controlled-published-kernel-store.ts",
+      "input_sha256": "6ba6c90fb60a888b09ee1879301ddfe9c3a3ecb125e1cf5111b87d3aedaf04a2",
+      "start_line": 942,
+      "end_line": 965,
+      "anchor": "  private saveResumePoint(",
+      "excerpt": "  private saveResumePoint(\n    fence: ControlledPublishedDatabaseFence,\n    snapshot: ControlledPublishedSnapshot,\n    checkpoint: ExecutionCheckpoint,\n    sequence: number,\n    revision: number\n  ): Promise<ControlledResumeSeal> {\n    const s = json<ControlledPublishedSnapshot>(snapshot),\n      c = typedEnvelope(checkpoint)\n    return this.run(fence, async (client, b, g) => {\n      if (\n        b.phase_state !== 'OPEN' ||\n        !b.open_phase_acked ||\n        b.evidence_sequence !== sequence ||\n        count(b.state_revision) !== revision ||\n        s.tenantId !== fence.tenantId ||\n        s.executionId !== fence.executionId ||\n        s.traceId !== b.trace_id ||\n        s.requestDigest !== b.request_digest ||\n        s.fingerprint !== b.capability_fingerprint ||\n        s.preparedDigest !== b.prepared_digest ||\n        s.expiresAt !== publishedIso(b.expires_at!) ||\n        s.fault !== null ||\n        s.dispatchClosed ||"
+    },
+    {
+      "id": "R12-30",
+      "input": "R12",
+      "path": "packages/persistence/src/effect-journal-postgres.ts",
+      "input_sha256": "52fff73760970384250684f85819132072cf66eb1fa51355a252dd70879146e1",
+      "start_line": 30,
+      "end_line": 51,
+      "anchor": "interface EffectJournalRow",
+      "excerpt": "interface EffectJournalRow extends QueryResultRow {\n  tenant_id: string\n  operation_key: string\n  proposal_hash: string\n  state: EffectState\n  attempt_id: string\n  execution_ref: string | null\n  result_digest: string | null\n  error_code: string | null\n  reason: string | null\n  expires_at: Date | string\n  reconciled_by: string | null\n  reconciliation_evidence_ref: string | null\n  created_at: Date | string\n  updated_at: Date | string\n  revision: string | number\n}\n\nconst effectJournalColumns = `\n  tenant_id, operation_key, proposal_hash, state, attempt_id, execution_ref,\n  result_digest, error_code, reason, expires_at, reconciled_by,\n  reconciliation_evidence_ref, created_at, updated_at, revision`"
+    }
+  ],
+  "unmatched_searches_diagnostic_only": [
+    {
+      "input": "S01",
+      "search": "confirmOperationalEffectOnClient"
+    },
+    {
+      "input": "G02",
+      "search": "async claim"
+    },
+    {
+      "input": "G02",
+      "search": "async create"
+    },
+    {
+      "input": "G02",
+      "search": "ports("
+    },
+    {
+      "input": "G02",
+      "search": "async close("
+    },
+    {
+      "input": "G02",
+      "search": "async requestCancel"
+    }
+  ]
+}

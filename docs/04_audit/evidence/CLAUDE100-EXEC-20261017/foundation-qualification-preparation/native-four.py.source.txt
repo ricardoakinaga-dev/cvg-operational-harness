@@ -1,0 +1,35 @@
+import pathlib,json,subprocess,datetime,socket,time,hashlib,sys,os
+root=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness');b=root/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-qualification-preparation';q=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-preparation');w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-candidate');n=q/'native';n.mkdir(mode=0o700);out=b/'native-four-profiles';out.mkdir();env=json.loads((q/'environment.json').read_text());claim=json.loads((b/'native-resource-claim.json').read_text());assert claim['port']==55879
+with socket.socket() as probe:probe.bind(('127.0.0.1',55879))
+(q/'docker-config').mkdir(mode=0o700,exist_ok=True);(n/'evidence').mkdir(mode=0o700)
+def at():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def write(p,d):p.write_text(json.dumps(d,indent=2)+'\n');p.chmod(0o600)
+docker=['/usr/bin/docker','--host','unix:///var/run/docker.sock','--config',str(q/'docker-config')];records=[]
+def run(argv,check=True,timeout=45):
+ p=subprocess.run(argv,cwd=w,env=env,capture_output=True,text=True,timeout=timeout);records.append({'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'at':at()});write(out/'resource-commands.json',records)
+ if check and p.returncode:raise RuntimeError('Owned native resource command failed '+str(p.returncode))
+ return p
+assert run(docker+['inspect',claim['container_name']],False).returncode!=0
+run(docker+['image','inspect',claim['image'],'--format','{{.Id}}'])
+p=run(docker+['run','--detach','--rm','--pull=never','--name',claim['container_name'],'--label','cvg.task=C100-FND-QUALIFICATION-PREP-001','--label','cvg.owner=CLAUDE100-EXEC-20261017','--memory=1g','--cpus=1','--pids-limit=128','--tmpfs','/var/lib/postgresql/data:rw,nosuid,nodev,size=768m','--publish','127.0.0.1:55879:5432','--env','POSTGRES_USER=pare217','--env','POSTGRES_PASSWORD=c100_qprep_synthetic','--env','POSTGRES_DB=pare217_synthetic',claim['image']]);cid=p.stdout.strip();assert len(cid)==64
+resource={'at':at(),'task':claim['task'],'id':cid,'name':claim['container_name'],'port':55879,'state':'CREATED_SYNTHETIC_OWNED'};write(n/'resources.json',resource);write(out/'resources.json',resource)
+for i in range(40):
+ if run(docker+['exec',cid,'pg_isready','-U','pare217','-d','pare217_synthetic'],False).returncode==0:break
+ time.sleep(.25)
+else:raise RuntimeError('New own PG not ready')
+p=run(docker+['inspect','--format','{{.Id}}|{{.Name}}|{{.Image}}|{{index .Config.Labels "cvg.task"}}|{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostIp}}|{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}',cid]);assert p.stdout.strip()==cid+'|/'+claim['container_name']+'|'+claim['image']+'|C100-FND-QUALIFICATION-PREP-001|127.0.0.1|55879'
+base={'containerId':cid,'name':claim['container_name'],'containerName':'/'+claim['container_name'],'imageId':claim['image'],'hostPort':{'HostIp':'127.0.0.1','HostPort':'55879'},'synthetic':True,'exclusiveClaim':claim['task']+':'+cid}
+general={**base,'test_database_url':'postgresql://pare217:c100_qprep_synthetic@127.0.0.1:55879/pare217_synthetic'};codec={**base,'test_database_url':'postgresql://c100_qprep_codec_service:c100_qprep_codec_synthetic@127.0.0.1:55879/pare217_synthetic','schemaName':'c100_qprep_codec','roleName':'c100_qprep_codec_service'};write(n/'resource-general.json',general);write(n/'resource-codec.json',codec);write(out/'resource-general.json',general);write(out/'resource-codec.json',codec)
+run(['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(w/'node_modules/tsx/dist/cli.mjs'),str(q/'provision-codec.mts')],timeout=100)
+write(out/'provision-result.json',json.loads((n/'provision-result.json').read_text()))
+env.update(TEST_DATABASE_URL=general['test_database_url'],PHASE4A_DISPOSABLE_PG='1',PHASE4A_PG_REQUIRED='1',SPEC0224_PG_RESOURCE=str(n/'resource-codec.json'),SPEC0224_PG_REQUIRED='1',PARE217_A_PG_RESOURCE=str(n/'resource-general.json'),PARE217_A_PG_REQUIRED='1',PARE217_PG_RESOURCE=str(n/'resource-general.json'),PARE217_PG_REQUIRED='1',PARE217_PROCESS_EVIDENCE=str(n/'evidence'))
+argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/vitest/vitest.mjs','run','packages/conversation/src/__tests__/postgres-conversation.integration.test.ts','packages/persistence/src/__tests__/complete-checkpoint-postgres.test.ts','packages/persistence/src/__tests__/pare217-fenced-outbox-postgres.integration.test.ts','packages/persistence/src/__tests__/pare217-published-store-postgres.integration.test.ts','--no-file-parallelism','--maxWorkers=2','--reporter=default','--reporter=json','--outputFile='+str(n/'report.json')]
+with (out/'stdout.log').open('wb') as stdout,(out/'stderr.log').open('wb') as stderr:
+ p=subprocess.Popen(argv,cwd=w,env=env,stdout=stdout,stderr=stderr,start_new_session=True);launch={'at':at(),'argv':argv,'cwd':str(w),'environment':env,'pid':p.pid,'process_start_token':pathlib.Path('/proc/'+str(p.pid)+'/stat').read_text().split(') ')[1].split()[19],'container_id':cid,'state':'RUNNING'};write(out/'command.json',launch);print(json.dumps({'pid':p.pid,'process_start_token':launch['process_start_token'],'container_id':cid}),flush=True)
+ try:code=p.wait(timeout=360)
+ except subprocess.TimeoutExpired:
+  launch.update(state='TIMEOUT_STILL_OWNED_INSPECT');write(out/'command.json',launch);raise
+launch.update(state='COMPLETED',exit=code,ended_at=at());write(out/'command.json',launch)
+if (n/'report.json').exists():
+ raw=(n/'report.json').read_bytes();(out/'report.json').write_bytes(raw);report=json.loads(raw);print(json.dumps({k:report.get(k) for k in ['success','numPassedTests','numFailedTests','numPendingTests','numTotalTests']}),flush=True)
+print('native four profiles exit',code,flush=True);sys.exit(code)

@@ -1,0 +1,66 @@
+# SPEC0225 — limites nativos e corte antes do parser PostgreSQL
+
+Checkpoint privado `f1fb40b7`, fonte limpa. Esta etapa mudou somente o teste
+nativo; a produção permanece byteidêntica ao checkpoint `077fa931`.
+BUILD local em andamento, sem promoção ou qualificação integral da SPEC.
+
+| Evidência atual                                                                                                       | Resultado observado                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [PostgreSQL](native-1792335981457-command.json)                                                                       | 88PASS/0FAIL/0SKIP, incluindo71anteriores e17novos controles.                                                                                                           |
+| [Conferência Lead](j03-current-lead-audit.json)                                                                       | 34inputs/fonte e snapshots conferidos,77linhas duráveis/10312593bytes autenticados; seis formas no limite1MiB preservam bytes/SHA e base64. Não é revisão independente. |
+| [Driver](native-1792335981457-j03-driver-component.json),[SQL real](native-1792335981457-j03-native-query-trace.json) | 13projeções nativas SELECT/UPDATE RETURNING idênticas; componente separadoE−1/E/E+1 nos modos objeto/array e dois controles negativos.                                  |
+| [Codec](j03-codec-standard-report.json)                                                                               | 165PASS/0FAIL/0PENDING na configuração Vitest original, incluindo seam isolado1M/+1nós.                                                                                 |
+| [Tipagem](typecheck-r34-command.json),[lint](lint-r17-command.json),[formato](j03-native-format-r2-command.json)      | exit0 nas ferramentas canônicas Node22.                                                                                                                                 |
+| [Recurso](j03-final-resource-checkpoint.json)                                                                         | PG16.15, schema ativo ausente, roles0/clientes0,22linhas legadas0 intactas;4d8/55880 reservado idle.                                                                    |
+
+Os16novos casos nativos usam ASCII, NUL, aspas, BMP, astral e NUL em chave,
+cada forma com1048576/+1bytes escapados; depth64/65 com raiz1; e arrays de
+1000000/+1nós acima do teto de bytes. Os sete positivos confirmam e recuperam
+valor completo. As nove recusas mantêm a linha EFFECT_STARTED exatamente,
+sem resultado; após markUncertain, nova tentativa conserva UNCERTAIN/tentativa
+original sem escrita. Nenhum modelo ou corpo é executado nesta matriz direta.
+Os seis valores1MiB têm data1398104 e envelope1398248bytes no modelo de saída
+JSONB espaçado, conferidos a partir dos envelopes realmente persistidos.
+
+No componente SQL/driver, fonte virtual readonly baseada em uma linha real
+oferece payloadsE−1/E/E+1, E=1398616. A consulta usa o SELECT capturado do
+adaptador sem alterar suas chamadas nativas. E+1 devolve SQLNULL/overflowtrue,
+sem entrada no parser JSONB instalado. Retirar somente o CASE faz os dois
+controles negativos atingirem o tripwire com1398617bytes antes de JSON.parse.
+É prova da supressão pré-parser do driver; não implica zero alocação no servidor,
+na rede ou no cliente. Não é linha persistida oversized nem RETURNING danificado.
+Constraints, readiness, ACL, caps e fontes de produção permanecem intactos.
+
+A [primeira execução](native-1792335919943-command.json) foi87PASS/1FAIL:
+o fixture esperava INSERT RETURNING inexistente; o adapter usa INSERT seguido
+de SELECT FOR UPDATE. A [correção do método](j03-driver-method-correction.json)
+passou a observar os caminhos reais, inclusive FAILED→RESERVED com RETURNING.
+A falha foi preservada; nenhuma mudança de runtime ou relaxamento do CASE.
+A [primeira tipagem](typecheck-r32-command.json) também está preservada:
+foram acrescentadas anotações QueryConfig/QueryResult somente ao teste.
+
+J03 ainda requer julgamento independente da suficiência desta combinação de
+provas. D+1 não é comprimento base64 canônico; um envelope válido de quatro
+campos fica abaixo deE. Rejeições físicas conjuntas não provam isolamento
+impossível de cada cap. Arrays1M/+1 ultrapassam bytes e possivelmente
+complexidade; erro TOO_LARGE compartilhado não identifica uma única causa.
+O seam isolado do scanner/canonicalizador permanece etiquetado como componente,
+conforme aprovação0225§11.1. [HOW](j03-native-how-and-claim.json),
+[investigação estática](limits-j03-recon/REPORT.md).
+
+A correção de retomada UNCERTAIN/STARTED e suas provasJ12 continuam no
+[checkpoint anterior](REPORT.before-j03.md.source.txt): captura8/12PIDs,
+contexto19,bound17,público66 e116focais. Sua fonte de produção é idêntica;
+os bindings históricos que incluem o teste agora ampliado não são relabelados
+como novas execuções atuais. Não houve necessidade de recompilar produção.
+
+Próxima ação: fechar HOW dos[8inputs de readers antigos](j06-original-readers-preparation/plan.json).
+As três fontes reais foram localizadas: jsonValue032603, mapper direto300979
+e result_present18e757. Nenhuma foi compilada/executada nesta preparação.
+A consulta manual única do fixture não substitui J06/três gerações.
+
+Restam saldoJ05–J07, julgamentoJ03/J04, crítica fresca de código0/2 e
+J16/gates completos. SomenteJ14 e drill completoJ15 foram adiados.
+Zero crédito117/17, sem M1/paridade/release. SPEC0238 aguarda a resposta já
+solicitada. Jobs/agentes próprios encerrados;99/20/30 readonly por outro owner,
+com delta próprio pendente. Rodada com código ainda não encerrada.

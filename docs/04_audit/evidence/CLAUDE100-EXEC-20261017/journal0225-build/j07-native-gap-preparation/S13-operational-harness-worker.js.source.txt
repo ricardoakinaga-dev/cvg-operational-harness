@@ -1,0 +1,245 @@
+import { Pool } from 'pg';
+import { OperationalExecutionWorker, InMemoryExecutionStepStore, createInMemoryOperationalExecutionStore, InMemoryEffectJournal, OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM } from '@cvg/harness';
+import { SinglePassOrchestrator } from '@cvg/harness-orchestrator';
+import { createPhase3IterativeHarnessOptions, parsePhase3RuntimeProfile, parsePhase3Scenario } from "./phase3-synthetic-agent.js";
+import { ApprovalEngine, DurableApprovalEngineAdapter, PostgresApprovalAuthority, PostgresOperationalExecutionStore, PostgresOperationalEffectJournal, PostgresExecutionStepStore, guardPostgresPoolErrors } from '@cvg/persistence';
+import { TenantIdSchema } from '@cvg/platform';
+import { assertPostgresWorkerPreflight, OPERATIONAL_HARNESS_CRITICAL_TABLES, OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS } from "./postgres-role-preflight.js";
+import { createPhase2SyntheticEffectRegistry } from "./phase2-synthetic-effect.js";
+export const OPERATIONAL_HARNESS_WORKER_RUNTIME = 'operational-harness';
+export const OPERATIONAL_FAULT_POINT_AFTER_CLAIM = OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM;
+export const OPERATIONAL_SYNTHETIC_EFFECT_ENV = 'CVG_WORKER_SYNTHETIC_EFFECT';
+const MAX_OPERATIONAL_WORKER_CONCURRENCY = 32;
+const MAX_OPERATIONAL_WORKER_IDLE_WAIT_MS = 60_000;
+const MAX_OPERATIONAL_WORKER_POLL_INTERVAL_MS = 1_000;
+export function parseOperationalFaultPoint(raw, env = process.env) {
+    const value = raw?.trim();
+    if (!value)
+        return undefined;
+    if (env.NODE_ENV === 'production') {
+        throw new Error('PHASE2_FAULT_POINT is forbidden in production');
+    }
+    if (env.CVG_WORKER_CONTROLLED_MODE !== 'true') {
+        throw new Error('PHASE2_FAULT_POINT requires CVG_WORKER_CONTROLLED_MODE=true');
+    }
+    if (value !== OPERATIONAL_FAULT_POINT_AFTER_CLAIM) {
+        throw new Error(`PHASE2_FAULT_POINT must be ${OPERATIONAL_FAULT_POINT_AFTER_CLAIM}`);
+    }
+    return OPERATIONAL_FAULT_POINT_AFTER_CLAIM;
+}
+export function parseOperationalSyntheticEffect(raw, env = process.env) {
+    const value = raw?.trim();
+    if (!value || value === 'false')
+        return false;
+    if (value !== 'true') {
+        throw new Error(`${OPERATIONAL_SYNTHETIC_EFFECT_ENV} must be either true or false`);
+    }
+    if (env.NODE_ENV === 'production') {
+        throw new Error(`${OPERATIONAL_SYNTHETIC_EFFECT_ENV} is forbidden in production`);
+    }
+    if (env.CVG_WORKER_CONTROLLED_MODE !== 'true') {
+        throw new Error(`${OPERATIONAL_SYNTHETIC_EFFECT_ENV} requires CVG_WORKER_CONTROLLED_MODE=true`);
+    }
+    return true;
+}
+export function parseOperationalWorkerIdleWait(raw, fallback = 0) {
+    const value = raw?.trim() ? Number(raw) : fallback;
+    if (!Number.isSafeInteger(value) ||
+        value < 0 ||
+        value > MAX_OPERATIONAL_WORKER_IDLE_WAIT_MS) {
+        throw new Error(`CVG_WORKER_IDLE_WAIT_MS must be an integer between 0 and ${MAX_OPERATIONAL_WORKER_IDLE_WAIT_MS}`);
+    }
+    return value;
+}
+export function parseOperationalWorkerPollInterval(raw, fallback = 25) {
+    const value = raw?.trim() ? Number(raw) : fallback;
+    if (!Number.isSafeInteger(value) ||
+        value < 1 ||
+        value > MAX_OPERATIONAL_WORKER_POLL_INTERVAL_MS) {
+        throw new Error(`CVG_WORKER_POLL_INTERVAL_MS must be an integer between 1 and ${MAX_OPERATIONAL_WORKER_POLL_INTERVAL_MS}`);
+    }
+    return value;
+}
+export function createOperationalHarnessFaultInjector(env, terminate = (signal) => {
+    process.kill(process.pid, signal);
+}) {
+    const point = parseOperationalFaultPoint(env.PHASE2_FAULT_POINT, env);
+    if (!point)
+        return undefined;
+    let triggered = false;
+    return async (receivedPoint) => {
+        if (triggered || receivedPoint !== point)
+            return;
+        triggered = true;
+        terminate('SIGKILL');
+    };
+}
+export function parseOperationalWorkerConcurrency(raw, fallback = 1) {
+    const value = raw?.trim() ? Number(raw) : fallback;
+    if (!Number.isSafeInteger(value) ||
+        value < 1 ||
+        value > MAX_OPERATIONAL_WORKER_CONCURRENCY) {
+        throw new Error(`CVG_WORKER_CONCURRENCY must be an integer between 1 and ${MAX_OPERATIONAL_WORKER_CONCURRENCY}`);
+    }
+    return value;
+}
+function parseOperationalWorkerAttempts(raw) {
+    if (!raw?.trim())
+        return undefined;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+        throw new Error('CVG_WORKER_MAX_ATTEMPTS must be an integer between 1 and 100');
+    }
+    return value;
+}
+/**
+ * Neutral Phase 2 worker composition. It has no Secretary/product adapter and
+ * uses only a deterministic model. The tool registry stays empty unless the
+ * explicit controlled synthetic-effect fixture is enabled.
+ */
+export function createOperationalHarnessWorker(env, options = {}) {
+    if (env.NODE_ENV === 'production') {
+        throw new Error('Neutral operational harness worker remains controlled-only; production is forbidden');
+    }
+    const faultInjector = createOperationalHarnessFaultInjector(env);
+    const runtimeProfile = parsePhase3RuntimeProfile(env.CVG_WORKER_RUNTIME_PROFILE);
+    const iterativeScenario = parsePhase3Scenario(env.CVG_WORKER_ITERATIVE_SCENARIO);
+    if (runtimeProfile === 'iterative' && !iterativeScenario) {
+        throw new Error('CVG_WORKER_RUNTIME_PROFILE=iterative requires CVG_WORKER_ITERATIVE_SCENARIO');
+    }
+    const syntheticEffectEnabled = parseOperationalSyntheticEffect(env[OPERATIONAL_SYNTHETIC_EFFECT_ENV], env);
+    const tenantId = TenantIdSchema.parse(env.CVG_WORKER_TENANT_ID);
+    const maxAttempts = parseOperationalWorkerAttempts(env.CVG_WORKER_MAX_ATTEMPTS);
+    const schemaName = env.POSTGRES_SCHEMA?.trim() || undefined;
+    assertSafeSchemaName(schemaName);
+    let pool = null;
+    const store = options.store ??
+        (env.DATABASE_URL
+            ? ((pool = guardPostgresPoolErrors(new Pool({
+                connectionString: env.DATABASE_URL,
+                ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
+            }))),
+                new PostgresOperationalExecutionStore(pool, maxAttempts !== undefined ? { maxAttempts } : {}))
+            : createInMemoryOperationalExecutionStore(maxAttempts !== undefined ? { maxAttempts } : {}));
+    const approvalAuthority = pool
+        ? new PostgresApprovalAuthority(pool)
+        : new ApprovalEngine();
+    const effectJournal = pool
+        ? new PostgresOperationalEffectJournal(pool)
+        : syntheticEffectEnabled || runtimeProfile === 'iterative'
+            ? new InMemoryEffectJournal()
+            : undefined;
+    const stepStore = runtimeProfile === 'iterative'
+        ? pool
+            ? new PostgresExecutionStepStore(pool)
+            : new InMemoryExecutionStepStore()
+        : null;
+    const approvalEngine = new DurableApprovalEngineAdapter(approvalAuthority);
+    const harnessOptions = options.harnessOptions ??
+        (runtimeProfile === 'iterative' && iterativeScenario && stepStore
+            ? (record) => createPhase3IterativeHarnessOptions({
+                scenario: iterativeScenario,
+                stepStore,
+                approvals: approvalEngine,
+                ...(record.resume ? { resumeKind: record.resume.kind } : {}),
+                ...(options.syntheticEffectObserver
+                    ? { observer: options.syntheticEffectObserver }
+                    : {})
+            })
+            : createSyntheticHarnessOptions(approvalEngine, syntheticEffectEnabled
+                ? createPhase2SyntheticEffectRegistry(options.syntheticEffectObserver)
+                : { list: () => [], resolve: () => undefined }));
+    let closed = false;
+    const workerOptions = {
+        store,
+        workerId: env.CVG_WORKER_ID?.trim() || 'worker-operational-harness',
+        tenantId,
+        ...(env.CVG_WORKER_LEASE_MS
+            ? { leaseMs: Number(env.CVG_WORKER_LEASE_MS) }
+            : {}),
+        harnessOptions,
+        ...(effectJournal ? { effectJournal } : {}),
+        ...(faultInjector ? { faultInjector } : {})
+    };
+    const worker = new OperationalExecutionWorker(workerOptions);
+    return {
+        worker,
+        store,
+        approvalAuthority,
+        effectJournal: effectJournal ?? null,
+        stepStore,
+        runtimeProfile,
+        tenantId,
+        pool,
+        close: async () => {
+            if (closed)
+                return;
+            closed = true;
+            if (pool)
+                await pool.end();
+        }
+    };
+}
+export async function assertOperationalHarnessPostgresPreflight(runtime) {
+    if (!runtime.pool)
+        return;
+    await assertPostgresWorkerPreflight(runtime.pool, {
+        tenantId: runtime.tenantId,
+        criticalTables: OPERATIONAL_HARNESS_CRITICAL_TABLES,
+        requiredMigrations: OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS
+    });
+}
+/**
+ * The memory composition has no database/RLS claim surface. Keep that
+ * boundary explicit so the entrypoint cannot accidentally describe it as a
+ * durable preflight; production is rejected when the runtime is constructed.
+ */
+export function assertOperationalHarnessProfilePreflight(runtime) {
+    if (runtime.pool)
+        return;
+    if (runtime.runtimeProfile === 'single_pass' && runtime.stepStore !== null) {
+        throw new Error('Single-pass operational harness memory profile cannot expose an iterative step store');
+    }
+    if (runtime.runtimeProfile === 'iterative' && runtime.stepStore === null) {
+        throw new Error('Iterative operational harness memory profile requires an in-memory step store');
+    }
+    if (!runtime.worker || !runtime.store || !runtime.approvalAuthority) {
+        throw new Error('Operational harness memory profile is missing its synthetic execution boundary');
+    }
+}
+function createSyntheticHarnessOptions(approvals, tools) {
+    return {
+        orchestrator: new SinglePassOrchestrator(),
+        modelGateway: {
+            complete: async () => ({
+                text: 'Acknowledged.',
+                provider: 'deterministic-v1',
+                model: 'synthetic-fixture',
+                inputTokens: 1,
+                outputTokens: 1,
+                costUsd: 0
+            })
+        },
+        policy: {
+            evaluate: async () => ({
+                outcome: 'ALLOW',
+                reason: 'synthetic controlled policy',
+                policyVersion: 'synthetic-v1'
+            })
+        },
+        approvals,
+        tools,
+        audit: {
+            append: async () => undefined
+        },
+        telemetry: {
+            record: () => undefined
+        }
+    };
+}
+function assertSafeSchemaName(schemaName) {
+    if (schemaName && !/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
+        throw new Error('POSTGRES_SCHEMA must be a safe lowercase identifier');
+    }
+}
+//# sourceMappingURL=operational-harness-worker.js.map

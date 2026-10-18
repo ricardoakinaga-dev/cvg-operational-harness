@@ -1,0 +1,39 @@
+exec(open('/mnt/ia/cvg-hiso005-build0237-runtime-20261018/review-r2/support.py').read())
+P=O.parent/'review-r1'
+# Independent replay of exact5original witnesses; R1fixtures are readonly.
+for label in ['relative-product-file','relative-product-directory','relative-product-chain','exports-product-alias-import','exports-product-alias-require']:
+ old=json.loads((P/('raw/'+label+'-engine.json')).read_text());argv=old['argv'];r=subprocess.run(argv,cwd=C,env=ENV,input=old['stdin'],text=True,capture_output=True,timeout=40)
+ receipt={'id':'replay-'+label,'sourceCommit':'84d8d4b4ed053493533d7e9ad55e574a9e6f9047','argv':argv,'cwd':str(C),'env':ENV,'stdin':old['stdin'],'stdout':r.stdout,'stderr':r.stderr,'returncode':r.returncode,'priorRawSha256':hashlib.sha256((P/('raw/'+label+'-engine.json')).read_bytes()).hexdigest()}
+ (O/('raw/replay-'+label+'.json')).write_text(json.dumps(receipt,indent=2)+'\n');out=json.loads(r.stdout)['output'];assert out['status']=='VIOLATION' and not out['proofs'] and out['violations'];assert not any(i['file'].startswith('products/') and i['file'].endswith(('.mjs','.cjs')) for i in out['inputs']);summary.append({'id':'replay-'+label,'status':out['status'],'violations':out['violations'],'noProductBodyInput':True});print(json.dumps(summary[-1]),flush=True)
+# Constant operator tracks physical regular reads and owned fd lifecycle.
+TRACK='''import fs from 'node:fs';import path from 'node:path';import {pathToFileURL} from 'node:url';const h=await import(pathToFileURL(process.argv[1]).href);const p=JSON.parse(fs.readFileSync(0,'utf8'));const reads=[],opens=[],owned=new Set(),products=[];const open=fs.openSync,close=fs.closeSync,read=fs.readSync;fs.openSync=function(...a){const fd=open.apply(this,a);owned.add(fd);opens.push({path:String(a[0]),flags:a[1],physical:fs.realpathSync('/proc/self/fd/'+fd)});return fd};fs.closeSync=function(fd){owned.delete(fd);return close.call(this,fd)};fs.readSync=function(fd,...a){reads.push(fs.realpathSync('/proc/self/fd/'+fd));return read.call(this,fd,...a)};let s,out={};try{s=h.createResolutionSession({root:p.root,limits:p.limits,onProduct:(file,from)=>products.push({file,from})});try{out.value=s.resolve(p.edge)}catch(e){out.error=e.message}out.snapshot=s.snapshot();if(p.mutation){fs.unlinkSync(path.join(p.root,p.mutation.file));fs.symlinkSync(p.mutation.target,path.join(p.root,p.mutation.file))}try{out.revalidated=s.revalidate()}catch(e){out.revalidationError=e.message}if(out.revalidated)out.parentRevalidated=h.revalidateResolutionSnapshot({root:p.root,snapshot:out.snapshot,limits:p.limits});}catch(e){out.outerError=e.message}finally{s?.close();fs.openSync=open;fs.closeSync=close;fs.readSync=read}out.products=products;out.contentReads=reads;out.opens=opens;out.ownedFinal=[...owned];process.stdout.write(JSON.stringify(out));'''
+(O/'operators/tracking.operator.source.txt').write_text(TRACK+'\n')
+def tracking(id,root,start,spec,mode='import',**extra):
+ val=run(id,TRACK,[str(C/'scripts/boundary-semantic-resolution.mjs')],{'root':str(root),'edge':{'from':start,'specifier':spec,'mode':mode},**extra});assert not val['ownedFinal'];return val
+# New own fixtures span12mode/topology/edge combinations. No product body may be read.
+for mode in ['import','require']:
+ ext='mjs' if mode=='import' else 'cjs'
+ for kind in ['leaf','directory','chain']:
+  for edge in ['relative','exports']:
+   label='fresh-'+mode+'-'+kind+'-'+edge
+   if edge=='exports':root,start=workspace(label,mode,exports='./alias'+('/body.'+ext if kind=='directory' else '.'+ext));base='packages/demo';up='../../';spec='demo'
+   else:
+    spec='./alias'+('/body.'+ext if kind=='directory' else '.'+ext);start='entry.'+ext
+    root=fixture(label,{start:'import {answer} from '+json.dumps(spec)+';export const value=answer;' if mode=='import' else 'module.exports=require('+json.dumps(spec)+');'},mode);base='';up=''
+   body='products/private/body.'+ext;put(root,'products/private/package.json','{"name":"synthetic-product","type":"'+('module' if mode=='import' else 'commonjs')+'"}');put(root,body,'throw new Error("NEVER EXECUTE PRODUCT BODY");')
+   leaf=(base+'/' if base else '')+'alias'+('' if kind=='directory' else '.'+ext);link=root/leaf;link.parent.mkdir(parents=True,exist_ok=True)
+   if kind=='chain':link.symlink_to('hop.'+ext);(link.parent/('hop.'+ext)).symlink_to(up+body)
+   else:link.symlink_to(up+('products/private' if kind=='directory' else body))
+   oracle(label+'-oracle',root,start,spec,mode)
+   # Require bounded0links refusal to preserve negative evidence independently.
+   val=tracking(label+'-tracking',root,start,spec,mode,limits={'maxLinks':0});assert val['products'];assert not any(p==str(root/body) for p in val['contentReads'])
+   out=engine(label+'-engine',root,start,resolutionLimits={'maxWorkspaces':0})['output'];assert out['status']=='VIOLATION' and out['proofs']==[] and out['violations'];assert not any(i['file'].startswith('products/') and i['file'].endswith(('.mjs','.cjs')) for i in out['inputs'])
+# An ordinary alias stays UNKNOWN without a fabricated product or content acquisition.
+root=fixture('ordinary-alias',{'entry.mjs':'import {answer} from "./alias.mjs";export const value=answer;','products-ordinary/body.mjs':'export const answer=42;'});(root/'alias.mjs').symlink_to('products-ordinary/body.mjs')
+val=tracking('ordinary-alias-tracking',root,'entry.mjs','./alias.mjs');assert not val['products'];assert not any(p.endswith('products-ordinary/body.mjs') for p in val['contentReads']);engine('ordinary-alias-engine',root)
+# External owned synthetic content is never acquired through the new census.
+foreign=fixture('foreign-owned',{'body.mjs':'export const answer=42;'});root=fixture('external-relative',{'entry.mjs':'import {answer} from "./alias.mjs";export const value=answer;'});(root/'alias.mjs').symlink_to(str(foreign/'body.mjs'))
+val=tracking('external-relative-tracking',root,'entry.mjs','./alias.mjs');assert not val['products'];assert not any(p.startswith(str(foreign)) for p in val['contentReads']);engine('external-relative-engine',root)
+# Freshly recorded negative-link premises must invalidate if the link is swapped.
+root=fixture('negative-mutation',{'entry.mjs':'import "./alias.mjs";','products/private/body.mjs':'export const answer=42;','neutral.mjs':'export const answer=0;'});(root/'alias.mjs').symlink_to('products/private/body.mjs');val=tracking('negative-mutation-tracking',root,'entry.mjs','./alias.mjs',mutation={'file':'alias.mjs','target':'neutral.mjs'});assert val.get('revalidationError')
+(O/'probe-summary-reassessment.json').write_text(json.dumps(summary,indent=2)+'\n')

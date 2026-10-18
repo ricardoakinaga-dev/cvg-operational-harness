@@ -1,0 +1,58 @@
+from pathlib import Path
+import json,hashlib,subprocess,re,datetime
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';D=E/'g04/execution-authority-design';h=lambda b:hashlib.sha256(b).hexdigest();checks=[]
+def check(i,f):
+ try:detail=f();checks.append({'id':i,'result':'PASS_T1_ONLY','detail':detail})
+ except Exception as e:checks.append({'id':i,'result':'FAIL','detail':str(e)})
+s=json.loads((D/'source-inputs.json').read_text());by={x['id']:x for x in s['inputs']}
+def sources():
+ assert len(by)==24
+ for x in s['inputs']:
+  a=(R/x['path']).read_bytes();b=(D/x['archive']).read_bytes();assert a==b and h(a)==x['sha256'] and len(a)==x['bytes'],x['id']
+ return '24source/archive pairs byte-exact'
+check('EA-V01',sources)
+def spans():
+ rows=json.loads((D/'source-spans.json').read_text())['spans'];assert len(rows)==len({r['id'] for r in rows})==24
+ for x in rows:
+  q=by[x['input']];ls=(D/q['archive']).read_text().splitlines();assert '\n'.join(ls[x['start_line']-1:x['end_line']])==x['excerpt'] and q['sha256']==x['input_sha256'],x['id']
+ return '24uniquerangeIDs matchfullsourceSHA andexacttext'
+check('EA-V02',spans)
+def provenance():
+ origins={x['id']:x for x in json.loads((D/by['O05']['archive']).read_text())['files']}
+ for new,old in [('O01','G01'),('O02','G02'),('O03','S01'),('O04','S02')]:assert by[new]['sha256']==origins[old]['sha256'],new
+ authority=json.loads((D/by['A04']['archive']).read_text());assert authority['gates']['SPEC0226']['decision']=='DEFERRED';assert authority['gates']['SPEC0221']['decision']==authority['gates']['SPEC0225']['decision']=='APPROVED_WITH_ADJUSTMENTS'
+ return '4owner snapshots exact against prior provenance; existing decisions and0226deferral preserved'
+check('EA-V03',provenance)
+def futureplan():
+ d=json.loads((D/'test-plan.json').read_text());assert d['case_count']==len(d['cases'])==19;assert len({x['id'] for x in d['cases']})==19;assert all(x['status']=='NOT_RUN' and x['test_credit_or_receipt'] is None and x['known_bad_control'] for x in d['cases']);assert d['runtime_tests_run']==d['functional_receipts']==0;assert d['all_full_journey_CQ_preserved']==['CQ%02d'%i for i in range(1,15)]
+ return '19finite futurecases/knownbad; allNOT_RUN/nullcredit;14CQ retained'
+check('EA-V04',futureplan)
+def matrix():
+ d=json.loads((D/'eligibility-matrix.json').read_text());assert {x['id'] for x in d['paths']}=={'STANDALONE','WORKER','BOUND'};assert all(set(x['sources'])<=set(by) for x in d['paths']);assert d['all_current_generic_runtime_claims']=='NOT_QUALIFIED';assert d['functional_receipts']==0
+ return '3executionpaths withsource refs andexplicitlyunqualifiedfuturetargets'
+check('EA-V05',matrix)
+def prior():
+ count=0
+ for sub in ['g04/qualifier-build','g04/native-journey-contract-recon','g04/persistence-port-decision','delivery-audit-20261018']:
+  p=E/sub/'manifest.json';d=json.loads(p.read_text());assert len(d['files'])==d['file_count']
+  for x in d['files']:
+   b=(R/x['path']).read_bytes();assert h(b)==x['sha256'] and len(b)==x['bytes'],x['path']
+  count+=len(d['files'])
+ for x in json.loads((E/'g04/qualifier-build/code-freeze-r2.json').read_text())['files']:assert h((R/x['path']).read_bytes())==x['sha256']
+ p=R/'docs/03_build/tracking/codex100_catalog_v1.json';assert h(p.read_bytes())=='7526e9d172abb1eeffa6981d98f1317fe91af2b617aab2b18a6645a5fd101fa7';d=json.loads(p.read_text());assert len(d['requirements'])==509 and all(x['status']=='NOT_RUN' and x['receipt'] is None for x in d['requirements'])
+ return str(count)+'oldsealedpayloads+9Rootcodepostimages+catalog509exact, nofunctionalcredit'
+check('EA-V06',prior)
+def linksjson():
+ count=0
+ for p in D.glob('*.json'):json.loads(p.read_text())
+ for p in [D/'SPEC.md']:
+  for t in re.findall(r'\]\(([^)]+)\)',p.read_text()):
+   t=t.split()[0].strip('<>')
+   if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:',t) or not t.split('#')[0]:continue
+   assert not t.startswith('/') and (p.parent/t.split('#')[0]).exists(),t;count+=1
+ return {'SPEC_local_links':count,'broken':[],'ownJSON':'PARSED'}
+check('EA-V07',linksjson)
+cmd=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','node_modules/prettier/bin/prettier.cjs','--ignore-path','/dev/null','--check',str((D/'SPEC.md').relative_to(R))];r=subprocess.run(cmd,capture_output=True,text=True)
+def fmt():assert r.returncode==0,r.stdout+r.stderr;return {'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr}
+check('EA-V08',fmt)
+d={'kind':'T1_SOURCE_CONTRACT_INTEGRITY_CHECK_NOT_CONCURRENCY_RUNTIME_PROOF','observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'checks':checks,'passed':sum(x['result']=='PASS_T1_ONLY' for x in checks),'failed':sum(x['result']=='FAIL' for x in checks),'functional_receipts':0,'native_runtime_tests':'NOT_RUN','human_BUILD_gate':'NOT_GRANTED_BY_THIS_CHECK'};(D/'verification-r1.json').write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n');print(json.dumps(d,ensure_ascii=False));raise SystemExit(bool(d['failed']))

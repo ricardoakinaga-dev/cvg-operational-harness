@@ -1,0 +1,60 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const w='/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate',ts=require(w+'/node_modules/typescript'),dir=w+'/packages/persistence/src/__tests__/';
+const root=process.cwd(),map=JSON.parse(fs.readFileSync(root+'/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-diagnostics-replan/semantic-site-map.json'));
+function parse(name,s){return ts.createSourceFile(name,s,ts.ScriptTarget.Latest,true)}
+function apply(s,rs){rs.sort((a,b)=>b.start-a.start);for(let i=0;i<rs.length-1;i++)assert(rs[i+1].end<=rs[i].start,'Overlapping transforms');for(const r of rs)s=s.slice(0,r.start)+r.text+s.slice(r.end);return s}
+function noAwait(n){let found=false;function scan(x){if(ts.isAwaitExpression(x)||ts.isArrowFunction(x)&&x.modifiers?.some(m=>m.kind===ts.SyntaxKind.AsyncKeyword))found=true;ts.forEachChild(x,scan)}scan(n);assert(!found,'Async operation cannot enter synchronous diagnostic actions')}
+function rethrow(block,param,sf){const sts=[...block.statements];const last=sts.pop();assert(ts.isThrowStatement(last)&&last.expression.getText(sf)===param);sts.forEach(noAwait);return '{ throw collectCompleteDiagnostics('+param+', ['+sts.map(st=>'() => { '+st.getText(sf)+' }').join(', ')+']).error }'}
+const counts=[];
+for(const name of ['complete-admission-capacity-postgres.integration.ts','complete-bound-admission-postgres.integration.ts','complete-settlement-public-postgres.integration.ts','complete-tool-public-restart.test.ts']){
+ const p=dir+name;let s=fs.readFileSync(p,'utf8'),sf=parse(name,s),rs=[],seen=new Set(),stats={name,rethrow:0,expected:0,sql:0,carrier:0,observer:0};
+ const sites=map.sites.filter(x=>x.path.endsWith('/'+name));
+ for(const row of sites){
+  if(!row.role.startsWith('RETHROW')&&!['CARRIER_TO_FINALLY_MUST_CAPTURE_PROJECTION','CAS_OBSERVER_RETURN_MUST_NOT_CHANGE','EXPECTED_REJECTION_PROJECTION'].includes(row.role))continue;
+  let call;function find(n){if(ts.isCallExpression(n)&&n.expression.getText(sf)==='errorInfo'&&sf.getLineAndCharacterOfPosition(n.getStart(sf)).line+1===row.line)call=n;ts.forEachChild(n,find)}find(sf);assert(call,'Missing mapped projection '+row.line);
+  let caught,arrow;for(let a=call.parent;a;a=a.parent){if(!caught&&ts.isCatchClause(a))caught=a;if(!arrow&&ts.isArrowFunction(a))arrow=a}
+  let node,text;
+  if(row.role==='CAS_OBSERVER_RETURN_MUST_NOT_CHANGE'){
+   assert(caught);node=caught.block;text='{ observerFailures.push(collectCompleteDiagnostics('+caught.variableDeclaration.name.getText(sf)+', [() => '+caught.block.getText(sf)+']).error) }';stats.observer++;
+  }else if(row.role==='CARRIER_TO_FINALLY_MUST_CAPTURE_PROJECTION'){
+   assert(caught);node=caught.block;const param=caught.variableDeclaration.name.getText(sf),sts=caught.block.statements.filter(st=>!ts.isThrowStatement(st)&&!(ts.isExpressionStatement(st)&&ts.isBinaryExpression(st.expression)&&st.expression.left.getText(sf)==='primary'));sts.forEach(noAwait);text='{ primary = collectCompleteDiagnostics('+param+', [() => { '+sts.map(x=>x.getText(sf)).join('\n')+' }]); throw primary.error }';stats.carrier++;
+  }else if(row.role==='EXPECTED_REJECTION_PROJECTION'){
+   stats.expected++;
+   if(caught){node=caught.block;text='{ projectCompleteDiagnostic('+caught.variableDeclaration.name.getText(sf)+', () => '+caught.block.getText(sf)+') }'}
+   else{assert(arrow);node=arrow.body;text='projectCompleteDiagnostic('+arrow.parameters[0].name.getText(sf)+', () => '+arrow.body.getText(sf)+')'}
+  }else if(name==='complete-tool-public-restart.test.ts'){
+   assert(caught);node=caught.block;const param=caught.variableDeclaration.name.getText(sf),push=caught.block.statements[0];assert(push.getText(sf).startsWith('journalTrace.push'));
+   text='{ const primary = collectCompleteDiagnostics('+param+', [() => { '+push.getText(sf)+' }]); await cleanupCompleteChildren([], [trace], primary); throw primary.error }';stats.rethrow++;
+  }else{
+   node=caught?caught.block:arrow?.body;assert(node&&ts.isBlock(node));text=rethrow(node,caught?caught.variableDeclaration.name.getText(sf):arrow.parameters[0].name.getText(sf),sf);stats.rethrow++;
+  }
+  const key=node.getStart(sf)+':'+node.end;if(seen.has(key)){if(row.role.startsWith('RETHROW'))stats.rethrow--;continue}seen.add(key);rs.push({start:node.getStart(sf),end:node.end,text});
+ }
+ if(name==='complete-settlement-public-postgres.integration.ts'){
+  function scan(n){
+   if(ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(sf)==='failed')){
+    rs.push({start:n.getStart(sf),end:n.end,text:'const failed = (error: unknown, record: () => unknown): never => { throw collectCompleteDiagnostics(error, [() => { wire(record()) }]).error }'});stats.sql++;
+   }
+   if(ts.isCallExpression(n)&&n.expression.getText(sf)==='failed'){
+    assert(n.arguments.length===2&&ts.isObjectLiteralExpression(n.arguments[1]));rs.push({start:n.getStart(sf),end:n.end,text:'failed('+n.arguments[0].getText(sf)+', () => ('+n.arguments[1].getText(sf)+'))'});stats.sql++;
+   }
+   ts.forEachChild(n,scan)
+  }scan(sf);assert.equal(stats.sql,3)
+ }
+ s=apply(s,rs);
+ if(name==='complete-admission-capacity-postgres.integration.ts'){
+  const marker='const observerErrors: unknown[] = []';assert.equal(s.split(marker).length,2);s=s.replace(marker,marker+'\n        const observerFailures: unknown[] = []');sf=parse(name,s);let selected;
+  function visit(n){if(ts.isCallExpression(n)&&n.expression.getText(sf)==='cleanupCompleteChildren'&&n.arguments[1]?.getText(sf).includes('observation.countsAtFinally'))selected=n;ts.forEachChild(n,visit)}visit(sf);assert(selected);const array=selected.arguments[1];assert(ts.isArrayLiteralExpression(array));const first=array.elements[0];assert(ts.isArrowFunction(first)&&ts.isBlock(first.body));
+  const guard='() => { const failure = completeCleanupError(observerFailures); if (failure) throw failure.error }';
+  const metadata='async () => { if (observerFailures.length) observation.verdict = \'UNPROVEN_FAILURE\'; '+first.body.getText(sf).slice(1,-1)+' }';
+  s=apply(s,[{start:array.getStart(sf),end:array.end,text:'['+guard+', '+metadata+', '+array.elements.slice(1).map(n=>n.getText(sf)).join(', ')+']'}]);
+ }
+ sf=parse(name,s);let imp;ts.forEachChild(sf,n=>{if(ts.isImportDeclaration(n)&&n.moduleSpecifier.text==='./fixtures/complete-process-support.ts')imp=n});assert(imp);const list=imp.importClause.namedBindings,items=list.elements.map(n=>n.getText(sf));for(const key of ['collectCompleteDiagnostics',...(name.includes('settlement')?['projectCompleteDiagnostic']:[]),...(name.includes('capacity')?['completeCleanupError']:[])])if(!items.includes(key))items.push(key);
+ s=apply(s,[{start:list.getStart(sf),end:list.end,text:'{'+items.join(', ')+'}'}]);assert.notEqual(s,fs.readFileSync(p,'utf8'));fs.writeFileSync(p,s);counts.push(stats);
+}
+// Add real helper bindings to finite consumers; leave every existing assertion in place.
+{
+ const p=dir+'complete-process-support.test.ts';let s=fs.readFileSync(p,'utf8'),sf=parse('tests',s),imp;ts.forEachChild(sf,n=>{if(ts.isImportDeclaration(n)&&n.moduleSpecifier.text==='./fixtures/complete-process-support.ts')imp=n});const list=imp.importClause.namedBindings,items=list.elements.map(n=>n.getText(sf));items.push('collectCompleteDiagnostics','projectCompleteDiagnostic');s=apply(s,[{start:list.getStart(sf),end:list.end,text:'{'+items.join(', ')+'}'}]);
+ const old="return new Function('exports', ...names, output)({}, ...values)";assert.equal(s.split(old).length,2);s=s.replace(old,"const bindings: Record<string, unknown> = { collectCompleteDiagnostics, projectCompleteDiagnostic }\n  names.forEach((name, index) => { bindings[name] = values[index] })\n  return new Function('exports', ...Object.keys(bindings), output)({}, ...Object.values(bindings))");fs.writeFileSync(p,s);
+}
+fs.writeFileSync(root+'/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-diagnostics-build/wiring-counts.json',JSON.stringify({kind:'implementation transforms, not acceptance',counts},null,2)+'\n');console.log(JSON.stringify(counts));

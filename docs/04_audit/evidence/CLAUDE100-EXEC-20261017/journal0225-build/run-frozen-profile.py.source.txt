@@ -1,0 +1,29 @@
+import json,hashlib,time,datetime,subprocess,os,sys,re
+from pathlib import Path
+root=Path("/home/ricardo/Área de trabalho/cvg-operational-harness")
+b=root/"docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build"
+t=Path("/tmp/cvg-claude100-exec-20261017/journal0225-build")
+c=Path("/tmp/cvg-claude100-exec-20261017/journal0225-candidate")
+profiles={"public66":("public-restart","complete-effect-result-restart.integration.ts",66),"context12":("public-restart","complete-effect-result-context.integration.ts",12),"journal26":("journal","complete-effect-result-postgres.integration.ts",26)}
+assert len(sys.argv)==2 and sys.argv[1] in profiles
+key=sys.argv[1];profile,test,expected=profiles[key];now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+d=json.loads((b/"context-profile-r6-recovery-binding.json").read_text());assert len(d["inputs"])==34
+d["runId"]="native-"+str(int(time.time()*1000));d["profile"]=profile
+assert not (b/(d["runId"]+"-command.json")).exists()
+for x in d["inputs"]:
+ p=c/x["path"];x["sha256"]=hashlib.sha256(p.read_bytes()).hexdigest();dest=b/(d["runId"]+"-sources")/x["path"];dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(p.read_bytes())
+raw=(json.dumps(d,indent=2)+"\n").encode();(b/(d["runId"]+"-binding.json")).write_bytes(raw)
+fd=os.open(t/"native-binding.json",os.O_WRONLY|os.O_TRUNC|os.O_NOFOLLOW);os.write(fd,raw);os.fchmod(fd,0o600);os.close(fd)
+claim=dict(at=now(),task=d["task"],runId=d["runId"],profile=key,expectedTests=expected,resourceId=d["containerId"],inputs=34,scope="one fixed synthetic profile; raw result does not qualify full SPEC/program",functionalCredit=0)
+(b/(d["runId"]+"-claim.json")).write_text(json.dumps(claim,indent=2)+"\n")
+env=json.loads((t/"environment.json").read_text());node="/home/ricardo/.nvm/versions/node/v22.23.2/bin/node";junit=t/(d["runId"]+"-junit.xml")
+argv=[node,"--experimental-strip-types","--test","--test-concurrency=1","--test-reporter=tap","--test-reporter-destination=stdout","--test-reporter=junit","--test-reporter-destination="+str(junit),"packages/persistence/src/__tests__/"+test]
+record=dict(start=now(),argv=argv,cwd=str(c),environment=env,binding_sha256=hashlib.sha256(raw).hexdigest(),profile=key,expectedTests=expected,scope=claim["scope"])
+r=subprocess.run(argv,cwd=c,env=env,text=True,capture_output=True,timeout=240)
+record.update(end=now(),exitCode=r.returncode,stdout=r.stdout,stderr=r.stderr)
+(b/(d["runId"]+"-command.json")).write_text(json.dumps(record,indent=2)+"\n")
+if junit.exists():(b/junit.name).write_bytes(junit.read_bytes())
+counts={k:int(v) for k,v in re.findall(r"^# (tests|pass|fail|cancelled|skipped|todo) ([0-9]+)$",r.stdout,re.M)}
+print(json.dumps(dict(runId=d["runId"],profile=key,exitCode=r.returncode,rawCounts=counts,stderr=r.stderr[-500:],tail=r.stdout[-1200:] if r.returncode else "")))
+
+raise SystemExit(r.returncode)
