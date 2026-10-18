@@ -1,16 +1,12 @@
 import assert from 'node:assert/strict'
 import { before, after, describe, it } from 'node:test'
-import { randomBytes, createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { writeFileSync, chmodSync, unlinkSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { gzipSync } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
-import type { Client, Pool } from 'pg'
+import type { Client, Pool, QueryResultRow } from 'pg'
 import {
   verifyNativeJournalBinding,
-  journalCredentials,
-  journalTmp,
   journalRoot,
   journalSchema,
   journalTenant,
@@ -18,241 +14,29 @@ import {
   journalValues,
   type NativeJournalBinding
 } from './fixtures/journal-result-process.ts'
+import { createJournalResourceFixture } from './fixtures/journal-result-resource.ts'
 
-// Explicit Node22 native command only. No describe.skip or default unit discovery.
 let binding: NativeJournalBinding
+let resource: ReturnType<typeof createJournalResourceFixture> | undefined
 let admin: Client | undefined
 let pool: Pool | undefined
 let Journal: typeof import('@cvg/persistence').PostgresOperationalEffectJournal
-let created = false
-const createdRoles: string[] = []
-const roleNames = ['c100_j225_service', 'c100_j225_old'] as const
-let activationReceipt: unknown
-
-const queryOld = `SELECT tenant_id,operation_key,proposal_hash,state,attempt_id,
-  result,error,created_at,updated_at FROM operational_effect_journal
-  WHERE tenant_id=$1 AND operation_key=$2`
-
-async function oldReaderDenied(): Promise<void> {
-  const pg = (await import('pg')).default
-  const old = new pg.Client({
-    ...journalCredentials('old'),
-    options: '-c search_path=' + journalSchema,
-    application_name: 'c100-j225-old-negative',
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 10000
-  })
-  try {
-    await old.connect()
-    await assert.rejects(
-      old.query(queryOld, [journalTenant, 'legacy-null']),
-      (e: unknown) => (e as { code?: string }).code === '42501'
-    )
-  } finally {
-    await old.end()
-  }
-}
-
 before(async () => {
   binding = verifyNativeJournalBinding()
-  const pg = (await import('pg')).default
-  const runtime = await import('@cvg/persistence')
-  const guard = await import('../../dist/operational-effect-result-guard.js')
-  const readiness =
-    await import('../../dist/operational-effect-result-readiness.js')
-  Journal = runtime.PostgresOperationalEffectJournal
-  admin = new pg.Client({
-    ...journalCredentials('admin'),
-    application_name: 'c100-j225-native-owner',
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 30000
-  })
-  await admin.connect()
-  const identity = (
-    await admin.query(
-      'SELECT current_user AS principal,current_database() AS database'
-    )
-  ).rows[0]
-  assert.equal(identity.principal, 'c100_journal_owner')
-  assert.equal(identity.database, 'c100_journal_synthetic')
-  assert.equal(
-    (
-      await admin.query('SELECT to_regnamespace($1) IS NULL AS absent', [
-        journalSchema
-      ])
-    ).rows[0].absent,
-    true
-  )
-  assert.equal(
-    (
-      await admin.query(
-        'SELECT count(*)::integer AS count FROM pg_roles WHERE rolname=ANY($1::text[])',
-        [roleNames]
-      )
-    ).rows[0].count,
-    0
-  )
-  await runtime.runPostgresMigrations(admin, { schemaName: journalSchema })
-  created = true
-  // Fixture history predates activation; no conversion or adoption of these rows.
-  await admin.query(
-    `INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result) VALUES($1,'legacy-null','legacy-p','CONFIRMED','legacy-a','null'::jsonb),($1,'legacy-failed','legacy-p','FAILED','legacy-a',NULL),($1,'legacy-unknown','legacy-p','CONFIRMED','legacy-a',NULL)`,
-    [journalTenant]
-  )
-  for (const [index, role] of roleNames.entries()) {
-    const password = randomBytes(24).toString('hex')
-    // Both identifiers are finite literals; the generated password is hex, not input.
-    await admin.query(
-      `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`
-    )
-    createdRoles.push(role)
-    const path = join(
-      journalTmp,
-      'private',
-      index === 0 ? 'service.json' : 'old.json'
-    )
-    writeFileSync(
-      path,
-      JSON.stringify({
-        host: '127.0.0.1',
-        port: 55880,
-        database: 'c100_journal_synthetic',
-        user: role,
-        password
-      }) + '\n',
-      { mode: 0o600 }
-    )
-    chmodSync(path, 0o600)
-  }
-  await admin.query(
-    'REVOKE CREATE,TEMPORARY ON DATABASE c100_journal_synthetic FROM PUBLIC'
-  )
-  await admin.query(
-    `GRANT USAGE ON SCHEMA ${journalSchema} TO c100_j225_service,c100_j225_old`
-  )
-  await admin.query(
-    `GRANT SELECT,INSERT,UPDATE ON ${journalSchema}.operational_effect_journal TO c100_j225_service`
-  )
-  await admin.query(
-    `GRANT SELECT ON ${journalSchema}.schema_migrations,${journalSchema}.operational_executions TO c100_j225_service`
-  )
-  // Old credentials resolve the intended table and fail42501 before binding opens.
-  await oldReaderDenied()
-  const acl = (
-    await admin.query(
-      `SELECT NOT has_table_privilege('c100_j225_old',$1,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS old_denied,
-    (SELECT count(*)::integer FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname='c100_j225_service') OR roleid=(SELECT oid FROM pg_roles WHERE rolname='c100_j225_service')) AS memberships,
-    (SELECT count(*)::integer FROM pg_stat_activity WHERE datname=current_database() AND usename='c100_j225_old') AS old_sessions`,
-      [journalSchema + '.operational_effect_journal']
-    )
-  ).rows[0]
-  assert.deepEqual(acl, { old_denied: true, memberships: 0, old_sessions: 0 })
-  const activation = guard.renderJournalResultActivation(
-    journalSchema,
-    'c100_j225_service'
-  )
-  await admin.query(activation.sql)
-  pool = new pg.Pool({
-    ...journalCredentials('service'),
-    max: 1,
-    options: '-c search_path=' + journalSchema,
-    application_name: 'c100-j225-native-service',
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 10000,
-    query_timeout: 12000
-  })
-  const client = await pool.connect()
-  try {
-    activationReceipt = {
-      runId: binding.runId,
-      resourceId: binding.containerId,
-      acl,
-      bindingSha256: activation.bindingSha256,
-      readiness: await readiness.verifyJournalResultStorage(client, 1),
-      schema: journalSchema,
-      principal: 'c100_j225_service',
-      compiledInputs: binding.inputs,
-      modelCalls: 0,
-      toolBodies: 0
-    }
-  } finally {
-    client.release()
-  }
-  writeFileSync(
-    join(binding.evidenceRoot, binding.runId + '-activation.json'),
-    JSON.stringify(activationReceipt, null, 2) + '\n'
-  )
+  assert.equal(binding.profile, 'journal')
+  resource = createJournalResourceFixture(binding)
+  await resource.setup()
+  admin = resource.admin
+  pool = resource.pool
+  Journal = resource.Journal
 })
-
 after(async () => {
-  const failures: unknown[] = []
-  if (pool) {
-    try {
-      await pool.end()
-    } catch (error) {
-      failures.push(error)
-    }
-  }
-  if (!admin) return
-  try {
-    if (created) {
-      // Actual durable bytes are retained as a bounded synthetic state artifact, not a service log.
-      const rows = (
-        await admin.query(
-          `SELECT to_jsonb(j) AS row FROM ${journalSchema}.operational_effect_journal j ORDER BY tenant_id,operation_key`
-        )
-      ).rows.map((x) => x.row)
-      const raw = Buffer.from(JSON.stringify(rows))
-      writeFileSync(
-        join(binding.evidenceRoot, binding.runId + '-durable-rows.json.gz'),
-        gzipSync(raw)
-      )
-      writeFileSync(
-        join(binding.evidenceRoot, binding.runId + '-durable-state.json'),
-        JSON.stringify(
-          {
-            kind: 'SYNTHETIC_DURABLE_STATE_ONLY',
-            rows: rows.length,
-            bytes: raw.length,
-            sha256: createHash('sha256').update(raw).digest('hex'),
-            resourceId: binding.containerId,
-            modelCalls: 0,
-            toolBodies: 0
-          },
-          null,
-          2
-        ) + '\n'
-      )
-      verifyNativeJournalBinding()
-      const sessions = (
-        await admin.query(
-          'SELECT count(*)::integer AS count FROM pg_stat_activity WHERE datname=current_database() AND usename=ANY($1::text[])',
-          [roleNames]
-        )
-      ).rows[0].count
-      assert.equal(sessions, 0)
-      await admin.query(`DROP SCHEMA ${journalSchema} CASCADE`)
-    }
-    for (const role of createdRoles) {
-      await admin.query(`DROP OWNED BY ${role}`)
-      await admin.query(`DROP ROLE ${role}`)
-    }
-    for (const name of createdRoles.map((role) =>
-      role === roleNames[0] ? 'service' : 'old'
-    ))
-      unlinkSync(join(journalTmp, 'private', name + '.json'))
-  } catch (error) {
-    failures.push(error)
-  } finally {
-    try {
-      await admin.end()
-    } catch (error) {
-      failures.push(error)
-    }
-  }
-  if (failures.length)
-    throw new AggregateError(failures, 'Native journal fixture cleanup failed')
+  await resource?.cleanup()
 })
+const oldReaderDenied = async () => {
+  assert(resource)
+  await resource.oldReaderDenied()
+}
 
 describe(
   'SPEC0225 native journal profile — no public-loop or global credit',
@@ -379,6 +163,133 @@ describe(
     it('keeps old credential SELECT denied42501 after activation', async () => {
       await oldReaderDenied()
     })
+
+    for (const fault of [
+      'before-update',
+      'after-update',
+      'before-commit',
+      'commit-ack-loss'
+    ] as const) {
+      it(`preserves durable state and primary error for ${fault}`, async () => {
+        assert(pool)
+        const { withTenantContext } = await import('@cvg/persistence')
+        const { TenantIdSchema } = await import('@cvg/platform')
+        const journal = new Journal(pool, { resultStorage: { version: 1 } })
+        const input = {
+          tenantId: journalTenant,
+          operationKey: binding.runId + ':transaction:' + fault,
+          proposalHash: 'transaction-p',
+          attemptId: 'transaction-a'
+        }
+        const value = { nul: '\0'.repeat(4096), value: null }
+        await journal.reserve(input)
+        await journal.markStarted(input)
+        const before = await journal.get(journalTenant, input.operationKey)
+        const primary = new Error('SYNTHETIC_' + fault)
+        let injected = false
+        let committed = false
+        const operations: string[] = []
+        await assert.rejects(
+          withTenantContext(
+            pool,
+            TenantIdSchema.parse(journalTenant),
+            async (client) => {
+              const connection = {
+                query: async <T extends QueryResultRow = QueryResultRow>(
+                  text: string,
+                  values?: unknown[]
+                ) => {
+                  const update =
+                    /^UPDATE operational_effect_journal\s/.test(text.trim()) &&
+                    values?.[2] === 'CONFIRMED'
+                  const commit = text === 'COMMIT'
+                  if (
+                    update ||
+                    commit ||
+                    text === 'BEGIN' ||
+                    text === 'ROLLBACK'
+                  )
+                    operations.push(update ? 'UPDATE_CONFIRM' : text)
+                  if (
+                    !injected &&
+                    ((fault === 'before-update' && update) ||
+                      (fault === 'before-commit' && commit))
+                  ) {
+                    injected = true
+                    throw primary
+                  }
+                  const result = await client.query<T>(text, values)
+                  if (commit) committed = true
+                  if (
+                    !injected &&
+                    ((fault === 'after-update' && update) ||
+                      (fault === 'commit-ack-loss' && commit))
+                  ) {
+                    injected = true
+                    throw primary
+                  }
+                  return result
+                }
+              }
+              return new Journal(connection, {
+                resultStorage: { version: 1 }
+              }).confirm({ ...input, result: value })
+            }
+          ),
+          (error: unknown) => error === primary
+        )
+        assert.equal(injected, true, 'named fault was not reached')
+        const after = await journal.get(journalTenant, input.operationKey)
+        assert(after)
+        assert.equal(committed, fault === 'commit-ack-loss')
+        if (committed) {
+          assert.equal(after.state, 'CONFIRMED')
+          assert.equal(JSON.stringify(after.result), JSON.stringify(value))
+          const same = await journal.confirm({ ...input, result: value })
+          assert.deepEqual(same, after)
+          await assert.rejects(
+            journal.confirm({ ...input, result: false }),
+            (error: unknown) => (error as { code?: string }).code === 'conflict'
+          )
+        } else {
+          assert.deepEqual(
+            after,
+            before,
+            'rolled-back UPDATE changed durable row'
+          )
+          assert.equal(after.state, 'EFFECT_STARTED')
+          assert(!Object.hasOwn(after, 'result'))
+          await journal.markUncertain({
+            ...input,
+            reason: 'synthetic commit not established'
+          })
+          assert.equal(
+            (await journal.reserve({ ...input, attemptId: 'unsafe-retry' }))
+              .state,
+            'UNCERTAIN'
+          )
+        }
+        writeFileSync(
+          join(
+            binding.evidenceRoot,
+            binding.runId + '-fault-' + fault + '.json'
+          ),
+          JSON.stringify(
+            {
+              fault,
+              injected,
+              committed,
+              operations,
+              before,
+              after,
+              primaryPreserved: true
+            },
+            null,
+            2
+          ) + '\n'
+        )
+      })
+    }
 
     it('leaves an over-cap confirmation unconfirmed and blocks unsafe repeat reservation', async () => {
       const journal = new Journal(pool!, { resultStorage: { version: 1 } })
