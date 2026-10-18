@@ -8,7 +8,8 @@ import {
 } from './failure-case.mjs'
 
 const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
-const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes/'
+import { REFERENCE_ROOT as referenceRoot } from './reference-location.mjs'
+const REFERENCE_ROOT = referenceRoot + '/'
 const REFERENCE_PACKAGES = [
   'cordis',
   'dsh-agent-loop-testkit',

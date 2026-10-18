@@ -65,6 +65,12 @@ describe('SPEC0213 native model failure measurement', () => {
           XDG_STATE_HOME: path.join(home, 'state'),
           DSH_HOME: path.join(home, 'dsh'),
           NODE_ENV: 'test',
+          ...(process.env.CVG_DIFFERENTIAL_REFERENCE_ROOT
+            ? {
+                CVG_DIFFERENTIAL_REFERENCE_ROOT:
+                  process.env.CVG_DIFFERENTIAL_REFERENCE_ROOT
+              }
+            : {}),
           LANG: 'C.UTF-8'
         }
         const started = Date.now()

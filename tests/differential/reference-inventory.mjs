@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 
-const root = '/home/ricardo/deepseek-harness-session-fixes'
+import { REFERENCE_ROOT as root } from './reference-location.mjs'
 const pin = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
 const packages = [
   'cordis',

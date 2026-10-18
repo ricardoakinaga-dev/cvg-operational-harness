@@ -3,6 +3,10 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { readReferenceInventory } from './reference-inventory.mjs'
+import {
+  DEFAULT_REFERENCE_ROOT,
+  REFERENCE_ROOT
+} from './reference-location.mjs'
 import { validateToolCase, TOOL_NAME } from './tool-case.mjs'
 import { normalizeToolTransport } from './tool-transport.mjs'
 
@@ -126,10 +130,21 @@ export function measureToolTurn(reference, cvg, input) {
     )
   )
     invalid()
+  // Relocate only the expected witness's independently checked metadata.
+  // Keep payload, topology, hashes and all transport rules literal.
+  const expectedValue = snapshot(witness.value)
+  const expectedReference = expectedValue.reference.reference
+  if (expectedReference.root !== DEFAULT_REFERENCE_ROOT) invalid()
+  expectedReference.root = REFERENCE_ROOT
+  for (const artifact of expectedReference.artifacts) {
+    if (!artifact.file.startsWith(DEFAULT_REFERENCE_ROOT + path.sep)) invalid()
+    artifact.file =
+      REFERENCE_ROOT + artifact.file.slice(DEFAULT_REFERENCE_ROOT.length)
+  }
   const normalized = normalizeToolTransport(raw)
   if (
     !isDeepStrictEqual(normalized, {
-      value: witness.value,
+      value: expectedValue,
       normalizedPaths: witness.normalizedPaths
     })
   )
