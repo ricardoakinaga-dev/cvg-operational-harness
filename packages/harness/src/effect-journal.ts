@@ -429,12 +429,20 @@ function journaledTool(
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'tool execution failed'
-        await journal.markUncertain({
-          tenantId: context.tenantId,
-          operationKey,
-          attemptId,
-          reason: `unknown effect after executor failure: ${message}`
-        })
+        try {
+          await journal.markUncertain({
+            tenantId: context.tenantId,
+            operationKey,
+            attemptId,
+            reason: `unknown effect after executor failure: ${message}`
+          })
+        } catch (settlementError) {
+          throw new AggregateError(
+            [error, settlementError],
+            'unknown_effect: executor outcome is uncertain; journal settlement failed',
+            { cause: error }
+          )
+        }
         return {
           status: 'REJECTED',
           error: 'unknown_effect: executor outcome is uncertain'

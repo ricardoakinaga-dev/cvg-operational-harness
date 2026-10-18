@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Client, Pool, QueryResultRow } from 'pg'
+import type { ToolExecutionContext, ToolRegistry } from '@cvg/harness-contracts'
 import {
   verifyNativeJournalBinding,
   journalRoot,
@@ -39,6 +40,198 @@ const oldReaderDenied = async () => {
   assert(resource)
   await resource.oldReaderDenied()
 }
+
+describe(
+  'SPEC0225 J12 primary plus uncertain-settlement failure',
+  { concurrency: false },
+  () => {
+    for (const point of ['encode-overflow', 'body-error'] as const)
+      it(point + ': retain both causes and durable started state', async () => {
+        verifyNativeJournalBinding()
+        assert(pool)
+        const { createJournaledToolRegistry } = await import('@cvg/harness')
+        const { withTenantContext } = await import('@cvg/persistence')
+        const { TenantIdSchema } = await import('@cvg/platform')
+        const primaryBody = new Error('SYNTHETIC_PRIMARY_BODY_FAILURE')
+        const secondary = new Error('SYNTHETIC_UNCERTAIN_UPDATE_FAILURE')
+        const queryTrace: string[] = []
+        let secondaryAttempts = 0
+        const connection = {
+          connect: async () => {
+            const client = await pool!.connect()
+            return {
+              release: (error?: Error) => client.release(error),
+              query: async <T extends QueryResultRow = QueryResultRow>(
+                text: string,
+                values?: unknown[]
+              ) => {
+                if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text))
+                  queryTrace.push(text)
+                if (
+                  /^UPDATE operational_effect_journal\s/.test(text.trim()) &&
+                  values?.[2] === 'UNCERTAIN'
+                ) {
+                  secondaryAttempts++
+                  queryTrace.push('INJECT_BEFORE_UNCERTAIN_UPDATE')
+                  throw secondary
+                }
+                return client.query<T>(text, values)
+              }
+            }
+          }
+        }
+        const journal = new Journal(connection, {
+          resultStorage: { version: 1 }
+        })
+        const confirm = journal.confirm.bind(journal)
+        let primary: unknown = point === 'body-error' ? primaryBody : undefined
+        journal.confirm = async (input) => {
+          try {
+            return await confirm(input)
+          } catch (error) {
+            primary = error
+            throw error
+          }
+        }
+        let bodies = 0
+        const tool = {
+          id: 'synthetic.j225.failure',
+          version: '1',
+          description: 'Synthetic fault fixture',
+          inputSchema: { type: 'object' },
+          outputSchema: {},
+          risk: 'LOW' as const,
+          sideEffect: 'NONE' as const,
+          idempotent: true,
+          requiresApproval: false,
+          execute: async () => {
+            bodies++
+            if (point === 'body-error') throw primaryBody
+            // Quotes add two canonical bytes: exact journal limit +1, below capture8MiB.
+            return { status: 'SUCCEEDED' as const, output: 'a'.repeat(1048575) }
+          }
+        }
+        const registry: ToolRegistry = {
+          list: () => [tool],
+          resolve: (id) => (id === tool.id ? tool : undefined)
+        }
+        const wrapped = createJournaledToolRegistry(registry, journal, {
+          attemptIdFactory: () => 'failure-case'
+        })
+        const operationKey = binding.runId + ':j12:' + point
+        const context = {
+          tenantId: journalTenant,
+          agentId: 'synthetic',
+          correlationId: 'synthetic',
+          traceId: 'synthetic',
+          operationKey
+        } as ToolExecutionContext
+        let thrown: unknown
+        try {
+          await wrapped.resolve(tool.id)!.execute({}, context)
+        } catch (error) {
+          thrown = error
+        }
+        const rows = await withTenantContext(
+          pool,
+          TenantIdSchema.parse(journalTenant),
+          async (client) =>
+            (
+              await client.query(
+                'SELECT to_jsonb(j) AS row FROM operational_effect_journal j WHERE tenant_id=$1 AND operation_key=$2',
+                [journalTenant, operationKey]
+              )
+            ).rows
+        )
+        const encodePrimary = primary as { code?: string; message?: string }
+        const summary = {
+          scope: 'NATIVE_J12_DOUBLE_FAILURE_ONLY',
+          point,
+          bodyCalls: bodies,
+          secondaryAttempts,
+          queryTrace,
+          primary: {
+            type: primary instanceof Error ? primary.name : typeof primary,
+            code: encodePrimary?.code,
+            message: encodePrimary?.message
+          },
+          secondary: { name: secondary.name, message: secondary.message },
+          thrown: {
+            name: thrown instanceof Error ? thrown.name : typeof thrown,
+            message: thrown instanceof Error ? thrown.message : String(thrown),
+            retainsPrimaryCause:
+              thrown instanceof Error && thrown.cause === primary,
+            retainsBothErrors:
+              thrown instanceof AggregateError &&
+              thrown.errors.length === 2 &&
+              thrown.errors[0] === primary &&
+              thrown.errors[1] === secondary
+          },
+          durable: rows,
+          resourceId: binding.containerId,
+          modelCalls: 0,
+          capture8MiBBoundaryProved: false
+        }
+        writeFileSync(
+          join(binding.evidenceRoot, binding.runId + '-j12-' + point + '.json'),
+          JSON.stringify(summary, null, 2) + '\n'
+        )
+        assert.equal(bodies, 1)
+        assert.equal(secondaryAttempts, 1)
+        assert.equal(rows.length, 1)
+        assert.equal(rows[0]!.row.state, 'EFFECT_STARTED')
+        assert.equal(rows[0]!.row.result_storage_payload, null)
+        assert.equal(queryTrace.at(-1), 'ROLLBACK')
+        if (point === 'encode-overflow') {
+          assert.equal(encodePrimary.code, 'validation_failed')
+          assert.equal(encodePrimary.message, 'JOURNAL_RESULT_TOO_LARGE')
+        } else assert.equal(primary, primaryBody)
+        assert(
+          summary.thrown.retainsPrimaryCause,
+          'uncertain settlement failure masked the original cause'
+        )
+        assert(
+          summary.thrown.retainsBothErrors,
+          'both independent failures must remain available'
+        )
+        const replay = await wrapped.resolve(tool.id)!.execute({}, context)
+        assert.equal(replay.status, 'REJECTED')
+        assert.match(replay.error!, /unknown_effect/)
+        assert.equal(bodies, 1)
+        assert.equal(secondaryAttempts, 1)
+        const afterReplay = await withTenantContext(
+          pool,
+          TenantIdSchema.parse(journalTenant),
+          async (client) =>
+            (
+              await client.query(
+                'SELECT to_jsonb(j) AS row FROM operational_effect_journal j WHERE tenant_id=$1 AND operation_key=$2',
+                [journalTenant, operationKey]
+              )
+            ).rows
+        )
+        assert.deepEqual(afterReplay, rows)
+        writeFileSync(
+          join(
+            binding.evidenceRoot,
+            binding.runId + '-j12-' + point + '-replay.json'
+          ),
+          JSON.stringify(
+            {
+              status: replay.status,
+              error: replay.error,
+              bodyCallsAfterReplay: bodies,
+              secondaryAttemptsAfterReplay: secondaryAttempts,
+              originalDurable: rows,
+              afterReplay
+            },
+            null,
+            2
+          ) + '\n'
+        )
+      })
+  }
+)
 
 // These finite fixtures enter through the actual service principal and intact SQL
 // guards. Logical corruption is stored only where the physical envelope permits
