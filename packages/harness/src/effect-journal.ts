@@ -276,7 +276,7 @@ export async function readNativeConfirmedEffect(
   } | null>
 }
 
-export async function hasNativeEffectReservation(
+export async function hasReplayableNativeEffectReservation(
   tool: ToolDefinition | undefined,
   tenantId: string,
   operationKey: string
@@ -291,7 +291,10 @@ export async function hasNativeEffectReservation(
   return (
     record !== null &&
     record.tenantId === tenantId &&
-    record.operationKey === operationKey
+    record.operationKey === operationKey &&
+    (record.state === 'RESERVED' ||
+      record.state === 'FAILED' ||
+      record.state === 'CONFIRMED')
   )
 }
 

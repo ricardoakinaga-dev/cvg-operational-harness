@@ -70,7 +70,7 @@ import {
 } from './step-store.ts'
 import { agentExposesTool } from './runtime.ts'
 import {
-  hasNativeEffectReservation,
+  hasReplayableNativeEffectReservation,
   readNativeConfirmedEffect
 } from './effect-journal.ts'
 import {
@@ -924,11 +924,11 @@ export class IterativeGovernedRuntime {
               (step.status === 'RUNNING' || step.status === 'FAILED')
           )
         ) {
-          let hasReservation = false
+          let canReplay = false
           try {
             const pending = checkpoint.state.pendingDecision!
             const proof = await this.withDeadline(
-              hasNativeEffectReservation(
+              hasReplayableNativeEffectReservation(
                 this.options.tools.resolve(
                   pending.toolId!,
                   pending.toolVersion
@@ -938,11 +938,11 @@ export class IterativeGovernedRuntime {
               ),
               this.remainingDuration(run)
             )
-            hasReservation = proof === true
+            canReplay = proof === true
           } catch {
-            // An unreadable journal cannot prove a prior effect reservation.
+            // An unreadable journal cannot authorize replay of a prior effect.
           }
-          if (!hasReservation) {
+          if (!canReplay) {
             return this.finalize(
               run,
               {
@@ -950,7 +950,7 @@ export class IterativeGovernedRuntime {
                 stopReason: 'TOOL_FAILURE',
                 preserveCheckpoint: true,
                 response:
-                  'unknown_effect: pending tool dispatch has no prior native journal reservation; explicit reconciliation is required.'
+                  'unknown_effect: pending tool dispatch has no replayable native journal reservation; explicit reconciliation is required.'
               },
               startedAtMs
             )

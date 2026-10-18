@@ -34,7 +34,7 @@ export const journalRoot = realpathSync(
 
 export interface NativeJournalBinding {
   task: string
-  profile: 'journal' | 'public-restart' | 'bound-journal'
+  profile: 'journal' | 'public-restart' | 'bound-journal' | 'capture-journal'
   runId: string
   containerId: string
   candidateRoot: string
@@ -132,7 +132,8 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
   assert(
     binding.profile === 'journal' ||
       binding.profile === 'public-restart' ||
-      binding.profile === 'bound-journal'
+      binding.profile === 'bound-journal' ||
+      binding.profile === 'capture-journal'
   )
   assert(/^native-[0-9]{13}$/.test(binding.runId))
   assert(/^[a-f0-9]{64}$/.test(binding.containerId))
@@ -208,6 +209,12 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
       'packages/persistence/dist/tenant-scoped-postgres.js',
       'packages/persistence/src/postgres-outbox.ts',
       'packages/persistence/dist/postgres-outbox.js'
+    )
+  if (binding.profile === 'capture-journal')
+    expected.push(
+      'packages/persistence/src/__tests__/complete-effect-result-capture.integration.ts',
+      'packages/contracts/src/complete-tool-context.ts',
+      'packages/contracts/dist/complete-tool-context.js'
     )
   assert.deepEqual(binding.inputs.map((x) => x.path).sort(), expected.sort())
   for (const input of binding.inputs) {
@@ -990,13 +997,495 @@ export async function runPublicJournalPhase(
   }
 }
 
+export const journalCaptureIds = [
+  'journal-limit',
+  'journal-plus-one',
+  'capture-limit',
+  'capture-plus-one',
+  'started',
+  'capture-started'
+] as const
+export type JournalCaptureId = (typeof journalCaptureIds)[number]
+export function journalCaptureRecipe(id: JournalCaptureId) {
+  assert(journalCaptureIds.includes(id))
+  const stringUnits =
+    id === 'journal-limit'
+      ? 1048574
+      : id === 'capture-limit'
+        ? 8388574
+        : id === 'capture-plus-one' || id === 'capture-started'
+          ? 8388575
+          : 1048575
+  return {
+    stringUnits,
+    outputBytes: stringUnits + 2,
+    toolResultBytes: stringUnits + 34
+  }
+}
+export function journalCaptureIdentity(
+  binding: NativeJournalBinding,
+  id: JournalCaptureId
+) {
+  assert(journalCaptureIds.includes(id))
+  return {
+    executionId: 'j225-' + binding.runId + '-capture-' + id,
+    dir: join(journalTmp, binding.runId + '-capture', id)
+  }
+}
+
+export async function runCaptureJournalPhase(
+  role: 'writer' | 'reader',
+  id: JournalCaptureId
+) {
+  const binding = verifyNativeJournalBinding()
+  assert.equal(binding.profile, 'capture-journal')
+  assert(role === 'writer' || role === 'reader')
+  const recipe = journalCaptureRecipe(id)
+  const identity = journalCaptureIdentity(binding, id)
+  const owned = lstatSync(identity.dir)
+  assert(
+    owned.isDirectory() &&
+      !owned.isSymbolicLink() &&
+      owned.uid === process.getuid!() &&
+      (owned.mode & 0o077) === 0
+  )
+  const pg = (await import('pg')).default
+  const { PostgresOperationalEffectJournal, PostgresExecutionStepStore } =
+    await import('@cvg/persistence')
+  const { createOperationalHarness, createCapabilityRegistry } =
+    await import('@cvg/harness')
+  const { HybridOrchestrator } = await import('@cvg/harness-orchestrator')
+  const { canonicalizeCompleteJson } = await import('@cvg/harness-contracts')
+  const { verifyJournalResultStorage } =
+    await import('../../../dist/operational-effect-result-readiness.js')
+  const pool = new pg.Pool({
+    ...journalCredentials('service'),
+    max: 2,
+    options: '-c search_path=' + journalSchema,
+    application_name: 'j225-capture-' + id + '-' + role,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 10000,
+    query_timeout: 12000
+  })
+  const trace: {
+    pid: number
+    role: string
+    id: string
+    requests: unknown[]
+    results: { inputTokens: number; outputTokens: number; costUsd: number }[]
+    journal: unknown[]
+    cas: unknown[]
+    sql: string[]
+    bodyCalls: number
+  } = {
+    pid: process.pid,
+    role,
+    id,
+    requests: [],
+    results: [],
+    journal: [],
+    cas: [],
+    sql: [],
+    bodyCalls: 0
+  }
+  const save = (name: string, data: unknown) =>
+    writeFileSync(
+      join(identity.dir, role + '.' + name + '.json'),
+      JSON.stringify(data, null, 2) + '\n',
+      { mode: 0o600 }
+    )
+  const flush = () => save('trace', trace)
+  const failure = (error: unknown) => {
+    const e = error as { name?: string; code?: string; message?: string }
+    return { name: e?.name, code: e?.code, message: e?.message }
+  }
+  const connection =
+    role === 'writer' && (id === 'started' || id === 'capture-started')
+      ? {
+          connect: async () => {
+            const client = await pool.connect()
+            return {
+              release: (error?: Error) => client.release(error),
+              query: async <T extends QueryResultRow = QueryResultRow>(
+                text: string,
+                values?: unknown[]
+              ) => {
+                if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(text)) trace.sql.push(text)
+                if (
+                  /^UPDATE operational_effect_journal\s/.test(text.trim()) &&
+                  values?.[2] === 'UNCERTAIN'
+                ) {
+                  trace.sql.push('INJECT_BEFORE_NATIVE_UNCERTAIN_UPDATE')
+                  flush()
+                  throw new Error('SYNTHETIC_CAPTURE_UNCERTAIN_UPDATE_FAILURE')
+                }
+                return client.query<T>(text, values)
+              }
+            }
+          }
+        }
+      : pool
+  const journal = new PostgresOperationalEffectJournal(connection, {
+    resultStorage: { version: 1 }
+  })
+  const metadata = (record: Awaited<ReturnType<typeof journal.get>>) => {
+    if (!record) return null
+    const resultPresent = Object.hasOwn(record, 'result')
+    const text = resultPresent ? JSON.stringify(record.result) : undefined
+    return {
+      state: record.state,
+      attemptId: record.attemptId,
+      resultPresent,
+      resultBytes: text === undefined ? null : Buffer.byteLength(text),
+      resultSha256:
+        text === undefined
+          ? null
+          : createHash('sha256').update(text).digest('hex'),
+      error: record.error,
+      qualifiedRead:
+        Object.getOwnPropertyDescriptor(
+          record,
+          Symbol.for('cvg.journal.validated-result.v1')
+        )?.value === 1
+    }
+  }
+  const reserve = journal.reserve.bind(journal)
+  journal.reserve = async (input) => {
+    try {
+      const record = await reserve(input)
+      trace.journal.push({ method: 'reserve', record: metadata(record) })
+      flush()
+      return record
+    } catch (error) {
+      trace.journal.push({ method: 'reserve', error: failure(error) })
+      flush()
+      throw error
+    }
+  }
+  const start = journal.markStarted.bind(journal)
+  journal.markStarted = async (input) => {
+    try {
+      const record = await start(input)
+      trace.journal.push({ method: 'markStarted', record: metadata(record) })
+      flush()
+      return record
+    } catch (error) {
+      trace.journal.push({ method: 'markStarted', error: failure(error) })
+      flush()
+      throw error
+    }
+  }
+  const confirm = journal.confirm.bind(journal)
+  journal.confirm = async (input) => {
+    try {
+      const record = await confirm(input)
+      trace.journal.push({
+        method: 'confirm',
+        outputBytes:
+          typeof input.result === 'string' ? input.result.length + 2 : null,
+        record: metadata(record)
+      })
+      flush()
+      return record
+    } catch (error) {
+      trace.journal.push({
+        method: 'confirm',
+        outputBytes:
+          typeof input.result === 'string' ? input.result.length + 2 : null,
+        error: failure(error)
+      })
+      flush()
+      throw error
+    }
+  }
+  const fail = journal.fail.bind(journal)
+  journal.fail = async (input) => {
+    trace.journal.push({ method: 'fail' })
+    flush()
+    return fail(input)
+  }
+  const uncertain = journal.markUncertain.bind(journal)
+  journal.markUncertain = async (input) => {
+    try {
+      const record = await uncertain(input)
+      trace.journal.push({
+        method: 'markUncertain',
+        reason: input.reason,
+        record: metadata(record)
+      })
+      flush()
+      return record
+    } catch (error) {
+      trace.journal.push({
+        method: 'markUncertain',
+        reason: input.reason,
+        error: failure(error)
+      })
+      flush()
+      throw error
+    }
+  }
+  const get = journal.get.bind(journal)
+  journal.get = async (tenant, operation) => {
+    const record = await get(tenant, operation)
+    trace.journal.push({ method: 'get', record: metadata(record) })
+    flush()
+    return record
+  }
+  const store = new PostgresExecutionStepStore(pool)
+  const cas = store.compareAndSwapCheckpoint.bind(store)
+  store.compareAndSwapCheckpoint = async (input) => {
+    const result = await cas(input)
+    trace.cas.push({
+      stepNumber: input.next.state.stepNumber,
+      pendingStepNumber: input.next.state.pendingStepNumber,
+      usage: input.next.budgetUsage,
+      observations: input.next.state.observations.map((o) => ({
+        type: o.type,
+        payload: o.type === 'TOOL_RESULT' ? o.payload : undefined
+      })),
+      result
+    })
+    flush()
+    return result
+  }
+  const toolId = 'synthetic.j225.capture.echo'
+  const capabilities = createCapabilityRegistry([
+    {
+      descriptor: {
+        id: toolId,
+        version: '1',
+        description: 'Pure synthetic capture boundary',
+        inputSchema: { type: 'object' },
+        outputSchema: {},
+        risk: 'LOW',
+        sideEffect: 'NONE',
+        idempotent: true,
+        requiresApproval: false,
+        origin: 'core',
+        providerId: 'synthetic.j225.capture',
+        providerVersion: '1'
+      },
+      implementation: {
+        validateInput: () => true,
+        validateOutput: () => true,
+        execute: async (_input, context) => {
+          trace.bodyCalls++
+          const value = 'a'.repeat(recipe.stringUnits)
+          const raw = { output: value, status: 'SUCCEEDED' as const }
+          const outputJson = JSON.stringify(value),
+            toolJson = JSON.stringify(raw)
+          assert.equal(Buffer.byteLength(outputJson), recipe.outputBytes)
+          assert.equal(Buffer.byteLength(toolJson), recipe.toolResultBytes)
+          appendFileSync(
+            join(identity.dir, 'bodies.jsonl'),
+            JSON.stringify({
+              pid: process.pid,
+              role,
+              operationKey: context.operationKey,
+              outputBytes: recipe.outputBytes,
+              toolResultBytes: recipe.toolResultBytes,
+              outputSha256: createHash('sha256')
+                .update(outputJson)
+                .digest('hex'),
+              toolResultSha256: createHash('sha256')
+                .update(toolJson)
+                .digest('hex')
+            }) + '\n',
+            { mode: 0o600 }
+          )
+          flush()
+          return raw
+        }
+      }
+    }
+  ])
+  const count = (value: unknown) =>
+    Math.ceil(Buffer.byteLength(canonicalizeCompleteJson(value)) / 64)
+  const model: ModelGateway = {
+    complete: async ({ signal: _signal, ...request }) => {
+      assert(!_signal?.aborted)
+      trace.requests.push(structuredClone(request))
+      flush()
+      const decision =
+        role === 'writer' && trace.requests.length === 1
+          ? {
+              decisionType: 'CALL_TOOL',
+              reasonCode: 'TOOL_REQUIRED',
+              toolId,
+              toolVersion: '1',
+              toolInput: {}
+            }
+          : {
+              decisionType: 'RESPOND',
+              reasonCode: 'GOAL_SATISFIED',
+              responseText: 'Synthetic unexpected continuation'
+            }
+      const text = JSON.stringify(decision)
+      const result = {
+        text,
+        provider: 'synthetic.j225.capture',
+        model: 'toy64-v1',
+        inputTokens: count(request),
+        outputTokens: count(text),
+        costUsd: 0
+      }
+      trace.results.push(result)
+      flush()
+      return result
+    }
+  }
+  const counter: DecisionInputCounter = {
+    measure: async (request) => ({
+      counterId: 'toy64',
+      counterVersion: '1',
+      provider: 'synthetic.j225.capture',
+      model: 'toy64-v1',
+      formattingVersion: '1',
+      inputUpperBoundTokens: count(request),
+      contextWindowTokens: 100000,
+      costUpperBoundUsd: 0
+    })
+  }
+  const harness = createOperationalHarness({
+    toolResultContext: { version: 1 },
+    capabilities,
+    effectJournal: journal,
+    stepStore: store,
+    iterativeOrchestrator: new HybridOrchestrator({
+      decisionModel: model,
+      decisionInputCounter: counter,
+      decisionModelSupportsMaxOutputTokens: true
+    }),
+    modelGateway: model,
+    policy: {
+      evaluate: async () => ({
+        outcome: 'ALLOW',
+        reason: 'Pure synthetic fixture only',
+        policyVersion: 'synthetic-j225'
+      })
+    },
+    approvals: {
+      request: async () => ({
+        status: 'PENDING',
+        reason: 'Synthetic fixture admits no sensitive effect'
+      })
+    },
+    audit: { append: async () => {} },
+    telemetry: { record: () => {} }
+  })
+  const input: RuntimeInput = {
+    agent: {
+      id: 'agent.j225.synthetic' as RuntimeInput['agent']['id'],
+      version: 'v1' as RuntimeInput['agent']['version'],
+      objective: 'Preserve synthetic capture boundaries',
+      instructions: ['Synthetic only'],
+      skills: [],
+      tools: [toolId],
+      policies: ['synthetic-only']
+    },
+    tenantId: journalTenant as RuntimeInput['tenantId'],
+    executionId: identity.executionId,
+    capabilityFingerprint: capabilities.compositionFingerprint(),
+    conversationId: 'conversation_j225' as RuntimeInput['conversationId'],
+    sessionId: 'session_j225' as RuntimeInput['sessionId'],
+    correlationId: 'correlation_j225' as RuntimeInput['correlationId'],
+    traceId: 'trace_j225' as RuntimeInput['traceId'],
+    userMessage: 'Use the pure synthetic tool once.',
+    context: {
+      values: { fixture: 'j225-capture' },
+      sourceIds: ['synthetic-fixture'],
+      capturedAt: '2026-10-18T00:00:00.000Z'
+    },
+    state: { version: 1, values: {}, updatedAt: '2026-10-18T00:00:00.000Z' },
+    runtimeProfile: 'iterative',
+    budget: {
+      maxSteps: 8,
+      maxModelCalls: 4,
+      maxToolCalls: 4,
+      maxDurationMs: 30000,
+      maxCostUsd: 1,
+      maxTokens: 10000,
+      maxKnowledgeCalls: 3,
+      maxReplans: 2,
+      maxVerificationCalls: 3,
+      maxDecisionRepairs: 1
+    }
+  }
+  save('input', input)
+  try {
+    const client = await pool.connect()
+    try {
+      save('readiness', {
+        pid: process.pid,
+        identity: (
+          await client.query(
+            'SELECT current_user,session_user,pg_backend_pid() AS pid'
+          )
+        ).rows[0],
+        readiness: await verifyJournalResultStorage(client, 1)
+      })
+    } finally {
+      client.release()
+    }
+    if (role === 'reader')
+      save(
+        'probe-before',
+        metadata(
+          await journal.get(
+            journalTenant,
+            identity.executionId + ':s1:' + toolId
+          )
+        )
+      )
+    const result = await harness.run(input)
+    const { toolResult, ...safe } = result
+    save('outcome', {
+      pid: process.pid,
+      result: safe,
+      toolResult: toolResult
+        ? {
+            status: toolResult.status,
+            error: toolResult.error,
+            outputPresent: Object.hasOwn(toolResult, 'output')
+          }
+        : null
+    })
+    save(
+      'probe-after',
+      metadata(
+        await journal.get(journalTenant, identity.executionId + ':s1:' + toolId)
+      )
+    )
+    flush()
+    process.stdout.write(
+      JSON.stringify({
+        event: 'FINISHED',
+        pid: process.pid,
+        id,
+        role,
+        stopReason: result.stopReason
+      }) + '\n'
+    )
+  } finally {
+    await pool.end()
+  }
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   const phase = process.argv[2]
   try {
-    if (phase === 'write' || phase === 'read' || phase === 'reserve') {
+    if (phase === 'capture-writer' || phase === 'capture-reader') {
+      assert.equal(process.argv.length, 4)
+      assert(journalCaptureIds.includes(process.argv[3] as JournalCaptureId))
+      await runCaptureJournalPhase(
+        phase === 'capture-writer' ? 'writer' : 'reader',
+        process.argv[3] as JournalCaptureId
+      )
+    } else if (phase === 'write' || phase === 'read' || phase === 'reserve') {
       assert.equal(process.argv.length, 3)
       console.log(JSON.stringify(await runJournalPhase(phase)))
     } else if (

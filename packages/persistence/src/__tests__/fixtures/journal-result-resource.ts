@@ -132,7 +132,10 @@ export function createJournalResourceFixture(binding: NativeJournalBinding) {
     await admin.query(
       `GRANT SELECT ON ${journalSchema}.schema_migrations,${journalSchema}.operational_executions TO c100_j225_service`
     )
-    if (binding.profile === 'public-restart') {
+    if (
+      binding.profile === 'public-restart' ||
+      binding.profile === 'capture-journal'
+    ) {
       await admin.query(
         `GRANT SELECT,INSERT,UPDATE ON ${journalSchema}.operational_executions,${journalSchema}.operational_execution_steps,${journalSchema}.operational_execution_checkpoints TO c100_j225_service`
       )
