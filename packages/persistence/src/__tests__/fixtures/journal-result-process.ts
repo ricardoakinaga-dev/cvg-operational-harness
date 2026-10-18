@@ -170,6 +170,7 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     'apps/worker/dist/postgres-role-preflight.js',
     'packages/persistence/src/__tests__/fixtures/journal-result-resource.ts',
     'packages/persistence/src/__tests__/complete-effect-result-restart.integration.ts',
+    'packages/persistence/src/__tests__/complete-effect-result-context.integration.ts',
     'packages/persistence/src/operational-step-postgres.ts',
     'packages/persistence/dist/operational-step-postgres.js',
     'packages/harness/src/createOperationalHarness.ts',
@@ -395,13 +396,47 @@ export function publicJournalValue(id: PublicJournalCaseId): unknown {
   assert(fixture)
   return fixture.value
 }
-export type PublicJournalPoint = 'cas' | 'journal' | 'commit-ack'
+export const journalContextIds = [
+  'small',
+  'ascii32768',
+  'ascii32769',
+  'unicode32768',
+  'unicode32769',
+  'depth32',
+  'depth33',
+  'nodes10000',
+  'nodes10001',
+  'large300k'
+] as const
+export type JournalContextId = (typeof journalContextIds)[number]
+export function journalContextValue(id: JournalContextId): unknown {
+  assert(journalContextIds.includes(id))
+  if (id === 'small') return { value: 'small', n: null }
+  if (id === 'ascii32768') return 'x'.repeat(32766)
+  if (id === 'ascii32769') return 'x'.repeat(32767)
+  if (id === 'unicode32768') return '🙂'.repeat(8191) + 'xx'
+  if (id === 'unicode32769') return '🙂'.repeat(8191) + 'xxx'
+  if (id === 'nodes10000') return Array(9999).fill(0)
+  if (id === 'nodes10001') return Array(10000).fill(0)
+  if (id === 'large300k') return 'b'.repeat(300 * 1024 - 2)
+  let value: unknown = 0
+  for (let level = 1; level < (id === 'depth32' ? 32 : 33); level++)
+    value = [value]
+  return value
+}
+export type PublicJournalPoint =
+  | 'cas'
+  | 'journal'
+  | 'commit-ack'
+  | 'context'
+  | 'save-failure'
+type JournalFixtureId = PublicJournalCaseId | JournalContextId
 export type PublicJournalRole = 'writer' | 'reader'
 
 export function publicJournalIdentity(
   binding: NativeJournalBinding,
   point: PublicJournalPoint,
-  id: PublicJournalCaseId
+  id: JournalFixtureId
 ) {
   return {
     executionId: 'j225-' + binding.runId + '-' + point + '-' + id,
@@ -413,11 +448,16 @@ export function publicJournalIdentity(
 export async function runPublicJournalPhase(
   point: PublicJournalPoint,
   role: PublicJournalRole,
-  id: PublicJournalCaseId
+  id: JournalFixtureId
 ) {
   const binding = verifyNativeJournalBinding()
   assert.equal(binding.profile, 'public-restart')
-  assert(publicJournalCaseIds.includes(id))
+  const contextCase = point === 'context' || point === 'save-failure'
+  assert(
+    contextCase
+      ? journalContextIds.includes(id as JournalContextId)
+      : publicJournalCaseIds.includes(id as PublicJournalCaseId)
+  )
   const identity = publicJournalIdentity(binding, point, id)
   const owned = lstatSync(identity.dir)
   assert(
@@ -482,7 +522,9 @@ export async function runPublicJournalPhase(
   })
   const store = new PostgresExecutionStepStore(pool)
   const toolId = 'synthetic.j225.public.echo'
-  const value = publicJournalValue(id)
+  const value = contextCase
+    ? journalContextValue(id as JournalContextId)
+    : publicJournalValue(id as PublicJournalCaseId)
   const canonical = (v: unknown) =>
     canonicalizeCompleteJson(v, {
       maxBytes: 1048576,
@@ -579,6 +621,24 @@ export async function runPublicJournalPhase(
   }
   const cas = store.compareAndSwapCheckpoint.bind(store)
   store.compareAndSwapCheckpoint = async (input) => {
+    const hasTool = input.next.state.observations.some(
+      (o) => o.type === 'TOOL_RESULT'
+    )
+    if (role === 'writer' && point === 'save-failure' && hasTool) {
+      assert(operationKey)
+      const durable = await journal.get(journalTenant, operationKey)
+      assert(durable?.state === 'CONFIRMED')
+      assert(canonical(durable.result) === canonical(value))
+      const error = new Error('SYNTHETIC_J11_POST_CONFIRM_SAVE_FAILED')
+      trace.cas.push({
+        injectedBeforeNativeCAS: true,
+        durableJournalState: durable.state,
+        error: { name: error.name, message: error.message },
+        input
+      })
+      flush()
+      throw error
+    }
     const result = await cas(input)
     trace.cas.push({ input, result })
     flush()
@@ -818,6 +878,20 @@ if (
     if (phase === 'write' || phase === 'read' || phase === 'reserve') {
       assert.equal(process.argv.length, 3)
       console.log(JSON.stringify(await runJournalPhase(phase)))
+    } else if (
+      phase === 'context-writer' ||
+      phase === 'context-reader' ||
+      phase === 'save-failure-writer' ||
+      phase === 'save-failure-reader'
+    ) {
+      assert.equal(process.argv.length, 4)
+      const id = process.argv[3]
+      assert(journalContextIds.includes(id as JournalContextId))
+      await runPublicJournalPhase(
+        phase.startsWith('context-') ? 'context' : 'save-failure',
+        phase.endsWith('-writer') ? 'writer' : 'reader',
+        id as JournalContextId
+      )
     } else {
       assert.equal(process.argv.length, 4)
       assert(

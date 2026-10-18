@@ -12,6 +12,7 @@ import {
   journalTenant,
   journalOtherTenant,
   journalValues,
+  journalCredentials,
   type NativeJournalBinding
 } from './fixtures/journal-result-process.ts'
 import { createJournalResourceFixture } from './fixtures/journal-result-resource.ts'
@@ -162,6 +163,226 @@ describe(
 
     it('keeps old credential SELECT denied42501 after activation', async () => {
       await oldReaderDenied()
+    })
+
+    for (const mutation of [
+      'public-grant',
+      'membership',
+      'checksum',
+      'disabled-trigger',
+      'inherit'
+    ] as const) {
+      it(`refuses isolated ${mutation} before admission and accepts its exact restoration`, async () => {
+        assert(admin && pool)
+        const journal = new Journal(pool, { resultStorage: { version: 1 } })
+        const probe = binding.runId + ':readiness-probe'
+        assert.equal(await journal.get(journalTenant, probe), null)
+        const version = '0030_complete_tool_result_journal'
+        const original =
+          mutation === 'checksum'
+            ? ((
+                await admin.query(
+                  `SELECT checksum FROM ${journalSchema}.schema_migrations WHERE version=$1`,
+                  [version]
+                )
+              ).rows[0]!.checksum as string)
+            : null
+        const sql =
+          mutation === 'public-grant'
+            ? [
+                `GRANT SELECT ON ${journalSchema}.operational_effect_journal TO PUBLIC`,
+                `REVOKE SELECT ON ${journalSchema}.operational_effect_journal FROM PUBLIC`
+              ]
+            : mutation === 'membership'
+              ? [
+                  'GRANT c100_j225_old TO c100_j225_service',
+                  'REVOKE c100_j225_old FROM c100_j225_service'
+                ]
+              : mutation === 'disabled-trigger'
+                ? [
+                    `ALTER TABLE ${journalSchema}.operational_effect_journal DISABLE TRIGGER journal_result_storage_guard`,
+                    `ALTER TABLE ${journalSchema}.operational_effect_journal ENABLE TRIGGER journal_result_storage_guard`
+                  ]
+                : mutation === 'inherit'
+                  ? [
+                      'ALTER ROLE c100_j225_service INHERIT',
+                      'ALTER ROLE c100_j225_service NOINHERIT'
+                    ]
+                  : null
+        let restored = false
+        try {
+          if (sql) await admin.query(sql[0]!)
+          else {
+            const changed = await admin.query(
+              `UPDATE ${journalSchema}.schema_migrations SET checksum=$2 WHERE version=$1`,
+              [version, '0'.repeat(64)]
+            )
+            assert.equal(changed.rowCount, 1)
+          }
+          await assert.rejects(
+            journal.get(journalTenant, probe),
+            (error: unknown) =>
+              (error as { message?: string }).message === 'JOURNAL_STORAGE_MODE'
+          )
+        } finally {
+          if (sql) await admin.query(sql[1]!)
+          else {
+            const changed = await admin.query(
+              `UPDATE ${journalSchema}.schema_migrations SET checksum=$2 WHERE version=$1`,
+              [version, original]
+            )
+            assert.equal(changed.rowCount, 1)
+          }
+          assert.equal(await journal.get(journalTenant, probe), null)
+          restored = true
+        }
+        writeFileSync(
+          join(
+            binding.evidenceRoot,
+            binding.runId + '-negative-' + mutation + '.json'
+          ),
+          JSON.stringify(
+            {
+              mutation,
+              rejected: true,
+              restored,
+              beforeAndAfterPositive: true,
+              modelCalls: 0,
+              toolBodies: 0,
+              resourceId: binding.containerId
+            },
+            null,
+            2
+          ) + '\n'
+        )
+      })
+    }
+
+    it('rejects an old live login session without granting it journal access', async () => {
+      assert(pool)
+      const pg = (await import('pg')).default
+      const journal = new Journal(pool, { resultStorage: { version: 1 } })
+      const probe = binding.runId + ':session-probe'
+      assert.equal(await journal.get(journalTenant, probe), null)
+      const old = new pg.Client({
+        ...journalCredentials('old'),
+        options: '-c search_path=' + journalSchema,
+        application_name: 'c100-j225-old-session-negative',
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 10000
+      })
+      try {
+        await old.connect()
+        await assert.rejects(
+          old.query('SELECT result FROM operational_effect_journal'),
+          (error: unknown) => (error as { code?: string }).code === '42501'
+        )
+        const service = await pool.connect()
+        try {
+          const visible = await service.query(
+            'SELECT pid,usename,backend_type FROM pg_stat_activity WHERE datname=current_database() ORDER BY pid'
+          )
+          const owner = await admin!.query(
+            'SELECT pid,usename,backend_type FROM pg_stat_activity WHERE datname=current_database() ORDER BY pid'
+          )
+          writeFileSync(
+            join(
+              binding.evidenceRoot,
+              binding.runId + '-old-session-visibility.json'
+            ),
+            JSON.stringify(
+              { service: visible.rows, owner: owner.rows },
+              null,
+              2
+            ) + '\n'
+          )
+        } finally {
+          service.release()
+        }
+        await assert.rejects(
+          journal.get(journalTenant, probe),
+          (error: unknown) =>
+            (error as { message?: string }).message === 'JOURNAL_STORAGE_MODE'
+        )
+      } finally {
+        await old.end()
+      }
+      assert.equal(await journal.get(journalTenant, probe), null)
+      writeFileSync(
+        join(
+          binding.evidenceRoot,
+          binding.runId + '-negative-old-session.json'
+        ),
+        JSON.stringify({
+          oldSelect: '42501',
+          servingReadiness: 'JOURNAL_STORAGE_MODE',
+          restored: true,
+          modelCalls: 0,
+          toolBodies: 0
+        }) + '\n'
+      )
+    })
+
+    it('never treats forged GUC or application name as an activated principal', async () => {
+      assert(pool)
+      const pg = (await import('pg')).default
+      const old = new pg.Client({
+        ...journalCredentials('old'),
+        options: '-c search_path=' + journalSchema,
+        application_name: 'c100-j225-native-service',
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 10000
+      })
+      try {
+        await old.connect()
+        await old.query(
+          "SELECT set_config('cvg.tenant_id',$1,false),set_config('cvg.journal_result_storage_version','1',false),set_config('cvg.journal_result_storage_principal','c100_j225_service',false)",
+          [journalTenant]
+        )
+        await assert.rejects(
+          new Journal(
+            { query: old.query.bind(old) },
+            { resultStorage: { version: 1 } }
+          ).get(journalTenant, 'legacy-null'),
+          (error: unknown) =>
+            (error as { message?: string }).message === 'JOURNAL_STORAGE_MODE'
+        )
+        await assert.rejects(
+          old.query('SELECT result FROM operational_effect_journal'),
+          (error: unknown) => (error as { code?: string }).code === '42501'
+        )
+      } finally {
+        await old.end()
+      }
+      assert.equal(
+        await new Journal(pool, { resultStorage: { version: 1 } }).get(
+          journalTenant,
+          binding.runId + ':forged-probe'
+        ),
+        null
+      )
+    })
+
+    it('refuses direct version0 insertion by the activated service principal', async () => {
+      assert(pool)
+      const { withTenantContext } = await import('@cvg/persistence')
+      const { TenantIdSchema } = await import('@cvg/platform')
+      await assert.rejects(
+        withTenantContext(pool, TenantIdSchema.parse(journalTenant), (client) =>
+          client.query(
+            `INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id) VALUES($1,$2,'p','RESERVED','a')`,
+            [journalTenant, binding.runId + ':forbidden0']
+          )
+        ),
+        (error: unknown) => (error as { code?: string }).code === '42501'
+      )
+      assert.equal(
+        await new Journal(pool, { resultStorage: { version: 1 } }).get(
+          journalTenant,
+          binding.runId + ':forbidden0'
+        ),
+        null
+      )
     })
 
     for (const fault of [

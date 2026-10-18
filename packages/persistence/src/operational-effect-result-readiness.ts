@@ -287,7 +287,9 @@ async function verifyServingIdentity(
        EXISTS(SELECT 1 FROM pg_proc p WHERE p.pronamespace=n.oid
          AND p.prosecdef) AS security_definer_routes,
        (SELECT count(*)::integer FROM pg_stat_activity a
-         WHERE a.datname=current_database() AND a.backend_type='client backend'
+         -- Unprivileged roles see backend_type as NULL for other principals.
+         -- Login identity remains visible and must not be filtered out.
+         WHERE a.datname=current_database()
            AND a.usename NOT IN(current_user,$2) AND a.pid<>pg_backend_pid()) AS other_client_sessions
      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
        JOIN pg_roles r ON r.rolname=current_user
