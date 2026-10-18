@@ -430,14 +430,26 @@ export function journalContextValue(id: JournalContextId): unknown {
     value = [value]
   return value
 }
+export const journalRecoveryFaultPoints = [
+  'recovery-get-failed',
+  'recovery-cas-failed',
+  'recovery-cas-ack-lost',
+  'recovery-cas-failed-audit-failed',
+  'recovery-cancelled',
+  'recovery-paused',
+  'recovery-read-deadline'
+] as const
+export type JournalRecoveryFaultPoint =
+  (typeof journalRecoveryFaultPoints)[number]
 export type PublicJournalPoint =
   | 'cas'
   | 'journal'
   | 'commit-ack'
   | 'context'
   | 'save-failure'
+  | JournalRecoveryFaultPoint
 type JournalFixtureId = PublicJournalCaseId | JournalContextId
-export type PublicJournalRole = 'writer' | 'reader'
+export type PublicJournalRole = 'writer' | 'reader' | 'resolver'
 
 export function publicJournalIdentity(
   binding: NativeJournalBinding,
@@ -458,7 +470,20 @@ export async function runPublicJournalPhase(
 ) {
   const binding = verifyNativeJournalBinding()
   assert.equal(binding.profile, 'public-restart')
-  const contextCase = point === 'context' || point === 'save-failure'
+  const faultCase = journalRecoveryFaultPoints.includes(
+    point as JournalRecoveryFaultPoint
+  )
+  assert(
+    faultCase ||
+      ['cas', 'journal', 'commit-ack', 'context', 'save-failure'].some(
+        (p) => p === point
+      )
+  )
+  assert(role === 'writer' || role === 'reader' || role === 'resolver')
+  if (role === 'resolver') assert(point === 'recovery-cas-ack-lost')
+  if (faultCase) assert(id === 'small')
+  const contextCase =
+    point === 'context' || point === 'save-failure' || faultCase
   assert(
     contextCase
       ? journalContextIds.includes(id as JournalContextId)
@@ -626,11 +651,36 @@ export async function runPublicJournalPhase(
     return result
   }
   const cas = store.compareAndSwapCheckpoint.bind(store)
+  const get = journal.get.bind(journal)
+  journal.get = async (tenant, operation) => {
+    const result = await get(tenant, operation)
+    trace.journal.push({
+      method: 'get',
+      operationKey: operation,
+      state: result?.state ?? null,
+      qualified: result
+        ? Object.getOwnPropertyDescriptor(
+            result,
+            Symbol.for('cvg.journal.validated-result.v1')
+          )?.value === 1
+        : false
+    })
+    flush()
+    if (role === 'reader' && point === 'recovery-get-failed')
+      throw new Error('SYNTHETIC_RECOVERY_GET_FAILED')
+    if (role === 'reader' && point === 'recovery-read-deadline')
+      await new Promise<never>(() => {})
+    return result
+  }
   store.compareAndSwapCheckpoint = async (input) => {
     const hasTool = input.next.state.observations.some(
       (o) => o.type === 'TOOL_RESULT'
     )
-    if (role === 'writer' && point === 'save-failure' && hasTool) {
+    if (
+      role === 'writer' &&
+      (point === 'save-failure' || faultCase) &&
+      hasTool
+    ) {
       assert(operationKey)
       const durable = await journal.get(journalTenant, operationKey)
       assert(durable?.state === 'CONFIRMED')
@@ -645,9 +695,37 @@ export async function runPublicJournalPhase(
       flush()
       throw error
     }
+    if (
+      role === 'reader' &&
+      (point === 'recovery-cas-failed' ||
+        point === 'recovery-cas-failed-audit-failed')
+    ) {
+      const error = new Error('SYNTHETIC_RECOVERY_CAS_FAILED')
+      trace.cas.push({
+        injectedBeforeNativeCAS: true,
+        hasTool,
+        input,
+        error: { message: error.message }
+      })
+      flush()
+      assert(
+        hasTool &&
+          input.next.state.stepNumber === 1 &&
+          input.next.state.pendingStepNumber === undefined
+      )
+      throw error
+    }
     const result = await cas(input)
     trace.cas.push({ input, result })
     flush()
+    if (role === 'reader' && point === 'recovery-cas-ack-lost') {
+      assert(
+        hasTool &&
+          result.status === 'APPLIED' &&
+          input.next.state.stepNumber === 1
+      )
+      throw new Error('SYNTHETIC_RECOVERY_CAS_ACK_LOST')
+    }
     const full = input.next.state.observations.find(
       (o) =>
         o.type === 'TOOL_RESULT' &&
@@ -776,6 +854,9 @@ export async function runPublicJournalPhase(
     capabilities,
     effectJournal: journal,
     stepStore: store,
+    ...(role === 'reader' && point === 'recovery-paused'
+      ? { pause: { isPaused: () => true } }
+      : {}),
     iterativeOrchestrator: new HybridOrchestrator({
       decisionModel: model,
       decisionInputCounter: counter,
@@ -799,6 +880,8 @@ export async function runPublicJournalPhase(
       append: async (event) => {
         trace.audit.push(event)
         flush()
+        if (role === 'reader' && point === 'recovery-cas-failed-audit-failed')
+          throw new Error('SYNTHETIC_RECOVERY_AUDIT_FAILED')
       }
     },
     telemetry: {
@@ -836,7 +919,8 @@ export async function runPublicJournalPhase(
       maxSteps: 8,
       maxModelCalls: 4,
       maxToolCalls: 4,
-      maxDurationMs: 30000,
+      maxDurationMs:
+        role === 'reader' && point === 'recovery-read-deadline' ? 1000 : 30000,
       maxCostUsd: 1,
       maxTokens: 10000,
       maxKnowledgeCalls: 3,
@@ -844,9 +928,17 @@ export async function runPublicJournalPhase(
       maxVerificationCalls: 3,
       maxDecisionRepairs: 1
     },
-    runtimeProfile: 'iterative'
+    runtimeProfile: 'iterative',
+    ...(role === 'reader' && point === 'recovery-cancelled'
+      ? { signal: AbortSignal.abort() }
+      : {})
   }
   save(role + '.input.json', input)
+  save(role + '.controls.json', {
+    cancelled: input.signal?.aborted === true,
+    paused: role === 'reader' && point === 'recovery-paused',
+    durationMs: input.budget.maxDurationMs
+  })
   try {
     const c = await pool.connect()
     try {
@@ -884,6 +976,27 @@ if (
     if (phase === 'write' || phase === 'read' || phase === 'reserve') {
       assert.equal(process.argv.length, 3)
       console.log(JSON.stringify(await runJournalPhase(phase)))
+    } else if (
+      journalRecoveryFaultPoints.some((point) =>
+        ['writer', 'reader', 'resolver'].some(
+          (role) => phase === point + '-' + role
+        )
+      )
+    ) {
+      assert.equal(process.argv.length, 4)
+      assert.equal(process.argv[3], 'small')
+      assert(typeof phase === 'string')
+      const role = phase.endsWith('-resolver')
+        ? 'resolver'
+        : phase.endsWith('-writer')
+          ? 'writer'
+          : 'reader'
+      const point = phase.slice(
+        0,
+        -(role.length + 1)
+      ) as JournalRecoveryFaultPoint
+      if (role === 'resolver') assert(point === 'recovery-cas-ack-lost')
+      await runPublicJournalPhase(point, role, 'small')
     } else if (
       phase === 'context-writer' ||
       phase === 'context-reader' ||

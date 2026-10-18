@@ -18,6 +18,8 @@ import {
   journalContextIds,
   journalContextValue,
   publicJournalIdentity,
+  journalRecoveryFaultPoints,
+  type JournalRecoveryFaultPoint,
   type JournalContextId,
   type NativeJournalBinding
 } from './fixtures/journal-result-process.ts'
@@ -69,8 +71,8 @@ async function snapshot(executionId: string) {
 }
 
 function phase(
-  point: 'context' | 'save-failure',
-  role: 'writer' | 'reader',
+  point: 'context' | 'save-failure' | JournalRecoveryFaultPoint,
+  role: 'writer' | 'reader' | 'resolver',
   id: JournalContextId
 ) {
   const identity = publicJournalIdentity(binding, point, id)
@@ -412,6 +414,274 @@ describe(
               binding.evidenceRoot,
               binding.runId + '-context',
               point + '-' + id
+            )
+            mkdirSync(dest, { recursive: true })
+            for (const name of readdirSync(identity.dir))
+              copyFileSync(join(identity.dir, name), join(dest, name))
+          }
+        }
+      )
+  }
+)
+
+describe(
+  'SPEC0225 recovery fault boundaries — unbound only',
+  { concurrency: false },
+  () => {
+    for (const point of journalRecoveryFaultPoints)
+      it(
+        `${point}: no replay or unproved continuation`,
+        { timeout: 120000 },
+        async () => {
+          assert(resource)
+          verifyNativeJournalBinding()
+          const identity = publicJournalIdentity(binding, point, 'small')
+          mkdirSync(identity.dir, { recursive: true, mode: 0o700 })
+          const save = (name: string, value: unknown) =>
+            writeFileSync(
+              join(identity.dir, name),
+              JSON.stringify(value, null, 2) + '\n',
+              { mode: 0o600 }
+            )
+          const { withTenantContext } = await import('@cvg/persistence')
+          const { TenantIdSchema } = await import('@cvg/platform')
+          await withTenantContext(
+            resource.pool,
+            TenantIdSchema.parse(journalTenant),
+            (client) =>
+              client.query(
+                `INSERT INTO operational_executions(tenant_id,id,idempotency_key,request_hash,request,state) VALUES($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')`,
+                [journalTenant, identity.executionId, sha(identity.executionId)]
+              )
+          )
+          try {
+            const writerPid = phase(point, 'writer', 'small')
+            const before = await snapshot(identity.executionId)
+            save('before-reader.json', before)
+            assert.equal(before.journal.length, 1)
+            assert.equal(before.journal[0]!.state, 'CONFIRMED')
+            assert.equal(before.journal[0]!.result_storage_version, 1)
+            assert.equal(before.steps.length, 1)
+            const step = before.steps[0]!
+            assert.equal(step.status, 'SUCCEEDED')
+            assert.equal(step.attempt, 1)
+            assert.equal(step.observationRefs.length, 1)
+            assert(step.completedAt)
+            assert(before.checkpoint)
+            assert.equal(before.checkpoint.state.pendingStepNumber, 1)
+            assert(
+              !before.checkpoint.state.observations.some(
+                (o) => o.type === 'TOOL_RESULT'
+              )
+            )
+            assert.equal(before.checkpoint.budgetUsage.steps, 0)
+            const readerPid = phase(point, 'reader', 'small')
+            assert.notEqual(writerPid, readerPid)
+            const after = await snapshot(identity.executionId)
+            save('after-reader.json', after)
+            assert.deepEqual(after.journal, before.journal)
+            assert.deepEqual(after.steps, before.steps)
+            const wt = load(
+              identity.dir,
+              'writer.trace.json'
+            ) as unknown as Trace
+            const rt = load(
+              identity.dir,
+              'reader.trace.json'
+            ) as unknown as Trace & {
+              journal: { method: string; state: string; qualified: boolean }[]
+              audit: { action: string }[]
+              cas: {
+                input: {
+                  next: {
+                    state: {
+                      stepNumber: number
+                      pendingStepNumber?: number
+                      observations: { type: string }[]
+                    }
+                  }
+                }
+                result?: {
+                  status: string
+                  token: { checkpointId: string; digest: string }
+                }
+                injectedBeforeNativeCAS?: boolean
+              }[]
+            }
+            const outcome = load(identity.dir, 'reader.outcome.json') as {
+              result: { stopReason: string; steps: number; response: string }
+            }
+            const controls = load(identity.dir, 'reader.controls.json')
+            assert.equal(wt.requests.length, 1)
+            assert.equal(wt.results.length, 1)
+            assert.equal(rt.requests.length, 0)
+            assert.equal(rt.results.length, 0)
+            assert.equal(
+              outcome.result.steps,
+              before.checkpoint.budgetUsage.steps
+            )
+            const reads = rt.journal.filter((entry) => entry.method === 'get')
+            const ack = point === 'recovery-cas-ack-lost'
+            const casFailure =
+              point === 'recovery-cas-failed' ||
+              point === 'recovery-cas-failed-audit-failed'
+            const inactive =
+              point === 'recovery-cancelled' || point === 'recovery-paused'
+            assert.equal(reads.length, inactive ? 0 : 1)
+            assert(
+              reads.every(
+                (entry) => entry.state === 'CONFIRMED' && entry.qualified
+              )
+            )
+            assert.equal(
+              rt.cas.length,
+              ack || casFailure ? 1 : 0,
+              'failed recovery attempted an additional checkpoint write'
+            )
+            if (ack || casFailure) {
+              const attempt = rt.cas[0]!
+              assert.equal(attempt.input.next.state.stepNumber, 1)
+              assert.equal(
+                attempt.input.next.state.pendingStepNumber,
+                undefined
+              )
+              assert(
+                attempt.input.next.state.observations.some(
+                  (o) => o.type === 'TOOL_RESULT'
+                )
+              )
+              assert.equal(attempt.injectedBeforeNativeCAS === true, casFailure)
+            }
+            if (point === 'recovery-cas-failed-audit-failed') {
+              assert(
+                rt.audit.some((event) => event.action === 'runtime.stopped')
+              )
+              assert.match(outcome.result.response, /audit recording failed/)
+            }
+            if (point === 'recovery-cancelled') {
+              assert.equal(controls.cancelled, true)
+              assert.equal(outcome.result.stopReason, 'CANCELLED')
+            } else if (point === 'recovery-paused') {
+              assert.equal(controls.paused, true)
+              assert.equal(outcome.result.stopReason, 'HUMAN_TAKEOVER')
+            } else if (point === 'recovery-read-deadline') {
+              assert.equal(controls.durationMs, 1000)
+              assert.equal(outcome.result.stopReason, 'MAX_DURATION')
+            } else
+              assert.equal(outcome.result.stopReason, 'INSUFFICIENT_EVIDENCE')
+            let resolverPid: number | null = null
+            if (ack) {
+              assert(after.checkpoint)
+              assert.equal(rt.cas[0]!.result!.status, 'APPLIED')
+              assert.deepEqual(rt.cas[0]!.result!.token, {
+                checkpointId: after.checkpoint.checkpointId,
+                digest: after.checkpoint.digest
+              })
+              assert.equal(after.checkpoint.state.stepNumber, 1)
+              assert.equal(after.checkpoint.state.pendingStepNumber, undefined)
+              assert.equal(after.checkpoint.budgetUsage.steps, 1)
+              assert.deepEqual(
+                { ...after.checkpoint.budgetUsage, steps: 0 },
+                before.checkpoint.budgetUsage
+              )
+              assert.deepEqual(
+                after.checkpoint.state.toolResultContext!.decisionAdmissions,
+                before.checkpoint.state.toolResultContext!.decisionAdmissions
+              )
+              const recovered = after.checkpoint.state.observations.find(
+                (o) => o.type === 'TOOL_RESULT'
+              )!
+              assert.equal(recovered.observationId, step.observationRefs[0])
+              assert.equal(recovered.timestamp, step.completedAt)
+              resolverPid = phase(point, 'resolver', 'small')
+              assert(resolverPid !== writerPid && resolverPid !== readerPid)
+              const resolved = await snapshot(identity.executionId)
+              save('after-resolver.json', resolved)
+              const resolver = load(
+                identity.dir,
+                'resolver.trace.json'
+              ) as unknown as Trace
+              const final = load(identity.dir, 'resolver.outcome.json') as {
+                result: { stopReason: string }
+              }
+              assert.equal(final.result.stopReason, 'COMPLETED')
+              assert.equal(resolver.requests.length, 1)
+              assert.deepEqual(resolved.journal, before.journal)
+              assert.deepEqual(
+                resolved.steps.filter((s) => s.stepType === 'TOOL'),
+                before.steps
+              )
+              assert.equal(resolved.checkpoint!.budgetUsage.steps, 2)
+              const calls = [...wt.results, ...resolver.results]
+              assert.equal(
+                resolved.checkpoint!.budgetUsage.modelCalls,
+                calls.length
+              )
+              for (const key of [
+                'inputTokens',
+                'outputTokens',
+                'costUsd'
+              ] as const)
+                assert.equal(
+                  resolved.checkpoint!.budgetUsage[key],
+                  calls.reduce((sum, call) => sum + call[key], 0)
+                )
+              const receipts =
+                resolved.checkpoint!.state.toolResultContext!.decisionAdmissions
+              assert.equal(receipts.length, 2)
+              assert(receipts.every((r) => r.status === 'SETTLED'))
+              assert.equal(new Set(receipts.map((r) => r.admissionId)).size, 2)
+              const frame = JSON.parse(
+                resolver.requests[0]!.messages[1]!.content
+              )
+              const tool = frame.items.find(
+                (item: { value?: { type?: string } }) =>
+                  item.value?.type === 'TOOL_RESULT'
+              )
+              assert(tool)
+              const { canonicalizeCompleteJson } =
+                await import('@cvg/harness-contracts')
+              const canonical = canonicalizeCompleteJson(
+                tool.value.payload.output
+              )
+              assert.equal(
+                sha(canonical),
+                before.journal[0]!.result_storage_payload.decodedSha256
+              )
+              assert.equal(tool.value.observationId, step.observationRefs[0])
+            } else
+              assert.deepEqual(
+                after,
+                before,
+                'failed recovery changed durable checkpoint/steps/journal'
+              )
+            const bodies = readFileSync(
+              join(identity.dir, 'bodies.jsonl'),
+              'utf8'
+            )
+              .trim()
+              .split('\n')
+              .map((line) => JSON.parse(line))
+            assert.equal(bodies.length, 1)
+            assert.equal(bodies[0].pid, writerPid)
+            save('PASS.json', {
+              scope: 'UNBOUND_RECOVERY_FAULT_ONLY',
+              point,
+              writerPid,
+              readerPid,
+              resolverPid,
+              bodyCalls: 1,
+              newReaderModelCalls: 0,
+              readerCASAttempts: rt.cas.length,
+              nativeCommitAckLost: ack,
+              originalJournalAndStepUnchanged: true,
+              resourceId: binding.containerId
+            })
+          } finally {
+            const dest = join(
+              binding.evidenceRoot,
+              binding.runId + '-faults',
+              point
             )
             mkdirSync(dest, { recursive: true })
             for (const name of readdirSync(identity.dir))
