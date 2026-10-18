@@ -191,6 +191,21 @@ export function verifyNativeJournalBinding(): NativeJournalBinding {
     'packages/harness/src/complete-checkpoint.ts',
     'packages/harness/dist/complete-checkpoint.js'
   ]
+  if (binding.profile === 'journal')
+    expected.push(
+      'packages/persistence/src/__tests__/fixtures/journal-result-readers/jsonvalue.ts.source.txt',
+      'packages/persistence/src/__tests__/fixtures/journal-result-readers/direct.ts.source.txt',
+      'packages/persistence/src/__tests__/fixtures/journal-result-readers/present.ts.source.txt',
+      'packages/persistence/dist/operational-execution-postgres.j06-jsonvalue.js',
+      'packages/persistence/dist/operational-execution-postgres.j06-direct.js',
+      'packages/persistence/dist/operational-execution-postgres.j06-present.js',
+      'packages/persistence/src/tenant-scoped-postgres.ts',
+      'packages/persistence/dist/tenant-scoped-postgres.js',
+      'packages/persistence/src/controlled-published-fencing.ts',
+      'packages/persistence/dist/controlled-published-fencing.js',
+      'node_modules/typescript/lib/typescript.js',
+      'node_modules/typescript/package.json'
+    )
   if (binding.profile === 'bound-journal')
     expected.push(
       'packages/persistence/src/__tests__/complete-effect-result-bound.integration.ts',

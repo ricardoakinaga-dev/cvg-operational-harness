@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { before, after, describe, it } from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { Client, Pool, QueryConfig, QueryResult, QueryResultRow } from 'pg'
 import type { ToolExecutionContext, ToolRegistry } from '@cvg/harness-contracts'
 import {
@@ -40,6 +41,378 @@ const oldReaderDenied = async () => {
   assert(resource)
   await resource.oldReaderDenied()
 }
+
+describe(
+  'SPEC0225 J06 original reader modules and exclusive credentials',
+  { concurrency: false },
+  () => {
+    const generations = [
+      [
+        'jsonvalue',
+        '03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac'
+      ],
+      [
+        'direct',
+        '300979b5c8e18cc1d14adc87f0024ea37f6bbfaa871d17ac777b0fc24a2316f0'
+      ],
+      [
+        'present',
+        '18e7577c1918f9122dbbdaa7adeab8fe682acf3567efd09285ad23d0e20efa7b'
+      ]
+    ] as const
+    for (const [generation, sourceSha256] of generations) {
+      it(
+        generation +
+          ': real legacy positives, original SQL42501, public/inherited access rejected by readiness',
+        async () => {
+          verifyNativeJournalBinding()
+          assert(admin && pool)
+          const legacySchema = 'c100_j225_readers_legacy'
+          const sourcePath =
+            'packages/persistence/src/__tests__/fixtures/journal-result-readers/' +
+            generation +
+            '.ts.source.txt'
+          assert.equal(
+            createHash('sha256')
+              .update(readFileSync(join(journalRoot, sourcePath)))
+              .digest('hex'),
+            sourceSha256
+          )
+          const emitPath =
+            'packages/persistence/dist/operational-execution-postgres.j06-' +
+            generation +
+            '.js'
+          const emit = binding.inputs.find((input) => input.path === emitPath)
+          assert(emit)
+          const original = (await import(
+            pathToFileURL(join(journalRoot, emitPath)).href
+          )) as typeof import('@cvg/persistence')
+          const pg = (await import('pg')).default
+          const { runPostgresMigrations } = await import('@cvg/persistence')
+          const journal = new Journal(pool, { resultStorage: { version: 1 } })
+          const input = {
+            tenantId: journalTenant,
+            operationKey: binding.runId + ':j06:' + generation,
+            proposalHash: 'p',
+            attemptId: 'a'
+          }
+          await journal.reserve(input)
+          await journal.markStarted(input)
+          await journal.confirm({ ...input, result: null })
+          const rows = async () =>
+            (
+              await admin!.query(
+                `SELECT to_jsonb(j)::text AS row FROM ${journalSchema}.operational_effect_journal j ORDER BY tenant_id,operation_key`
+              )
+            ).rows
+          const before = await rows()
+          const queries: {
+            schema: string
+            sql: string
+            operationKey: string
+            errorCode?: string
+          }[] = []
+          const principals: unknown[] = []
+          const drains: number[] = []
+          const downstream = { models: 0, bodies: 0 }
+          const noOldSessions = async () => {
+            for (let attempt = 0; attempt < 20; attempt++) {
+              const count = (
+                await admin!.query(
+                  "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE datname=current_database() AND usename='c100_j225_old'"
+                )
+              ).rows[0]!.count as number
+              drains.push(count)
+              if (count === 0) return
+              await delay(20)
+            }
+            assert.fail('old reader sessions did not drain')
+          }
+          const readOld = async (
+            schema: typeof legacySchema | typeof journalSchema,
+            operationKey: string
+          ) => {
+            const old = new pg.Pool({
+              ...journalCredentials('old'),
+              max: 1,
+              options: '-c search_path=' + schema,
+              application_name: 'c100-j225-original-' + generation,
+              connectionTimeoutMillis: 5000,
+              statement_timeout: 10000
+            })
+            try {
+              const connection = {
+                connect: async () => {
+                  const client = await old.connect()
+                  try {
+                    const identity = (
+                      await client.query(
+                        "SELECT session_user AS login,current_user AS principal,current_schema() AS schema,has_table_privilege(current_user,'operational_effect_journal','SELECT') AS can_select"
+                      )
+                    ).rows[0]!
+                    assert.equal(identity.login, 'c100_j225_old')
+                    assert.equal(identity.principal, 'c100_j225_old')
+                    assert.equal(identity.schema, schema)
+                    principals.push(identity)
+                  } catch (error) {
+                    client.release()
+                    throw error
+                  }
+                  return {
+                    release: (error?: Error) => client.release(error),
+                    query: async <T extends QueryResultRow = QueryResultRow>(
+                      text: string,
+                      values?: unknown[]
+                    ) => {
+                      const trace = text.includes(
+                        'FROM operational_effect_journal'
+                      )
+                        ? { schema, sql: text, operationKey }
+                        : undefined
+                      if (trace) queries.push(trace)
+                      try {
+                        return await client.query<T>(text, values)
+                      } catch (error) {
+                        const code = (error as { code?: string }).code
+                        if (trace && typeof code === 'string')
+                          (trace as { errorCode?: string }).errorCode = code
+                        throw error
+                      }
+                    }
+                  }
+                }
+              }
+              return await new original.PostgresOperationalEffectJournal(
+                connection
+              ).get(journalTenant, operationKey)
+            } finally {
+              await old.end()
+              await noOldSessions()
+            }
+          }
+          const denied = async (operationKey: string) => {
+            await assert.rejects(
+              async () => {
+                const value = await readOld(journalSchema, operationKey)
+                downstream.models++
+                downstream.bodies++
+                return value
+              },
+              (error: unknown) => (error as { code?: string }).code === '42501'
+            )
+            assert.deepEqual(downstream, { models: 0, bodies: 0 })
+          }
+          const ready = async () => {
+            await noOldSessions()
+            const value = await journal.get(journalTenant, input.operationKey)
+            assert(
+              value &&
+                value.state === 'CONFIRMED' &&
+                Object.hasOwn(value, 'result') &&
+                value.result === null
+            )
+          }
+          const refusal = async () => {
+            await noOldSessions()
+            await assert.rejects(
+              journal.get(journalTenant, input.operationKey),
+              (error: unknown) =>
+                (error as Error).message === 'JOURNAL_STORAGE_MODE'
+            )
+          }
+          let legacyCreated = false
+          const controls: unknown[] = []
+          try {
+            assert.equal(
+              (
+                await admin.query(
+                  'SELECT to_regnamespace($1) IS NULL AS absent',
+                  [legacySchema]
+                )
+              ).rows[0]!.absent,
+              true
+            )
+            assert.equal(
+              (
+                await admin.query(
+                  "SELECT count(*)::integer AS count FROM pg_roles WHERE rolname='c100_j225_reader_parent'"
+                )
+              ).rows[0]!.count,
+              0
+            )
+            await runPostgresMigrations(admin, { schemaName: legacySchema })
+            legacyCreated = true
+            await admin.query(`SET search_path TO ${journalSchema}`)
+            await admin.query(
+              `INSERT INTO ${legacySchema}.operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result) VALUES ($1,'j06-object','p','CONFIRMED','a',$2::jsonb),($1,'j06-string','p','CONFIRMED','a','"42"'::jsonb),($1,'j06-null','p','CONFIRMED','a','null'::jsonb)`,
+              [journalTenant, JSON.stringify({ synthetic: 'J06' })]
+            )
+            await admin.query(
+              `GRANT USAGE ON SCHEMA ${legacySchema} TO c100_j225_old`
+            )
+            await admin.query(
+              `GRANT SELECT ON ${legacySchema}.operational_effect_journal TO c100_j225_old`
+            )
+            const legacyBefore = (
+              await admin.query(
+                `SELECT to_jsonb(j)::text AS row FROM ${legacySchema}.operational_effect_journal j ORDER BY operation_key`
+              )
+            ).rows
+            const object = await readOld(legacySchema, 'j06-object')
+            assert(object && object.state === 'CONFIRMED')
+            assert.deepEqual(object.result, { synthetic: 'J06' })
+            const string = await readOld(legacySchema, 'j06-string')
+            assert(string && string.state === 'CONFIRMED')
+            assert.equal(string.result, generation === 'jsonvalue' ? 42 : '42')
+            const nullValue = await readOld(legacySchema, 'j06-null')
+            assert(nullValue && nullValue.state === 'CONFIRMED')
+            assert.equal(
+              Object.hasOwn(nullValue, 'result'),
+              generation === 'present'
+            )
+            if (generation === 'present') assert.equal(nullValue.result, null)
+            await ready()
+            await denied('legacy-null')
+            await denied(input.operationKey)
+            for (const access of ['PUBLIC', 'INHERITED'] as const) {
+              let parentCreated = false
+              try {
+                if (access === 'PUBLIC')
+                  await admin.query(
+                    `GRANT SELECT ON ${journalSchema}.operational_effect_journal TO PUBLIC`
+                  )
+                else {
+                  await admin.query(
+                    'CREATE ROLE c100_j225_reader_parent NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT'
+                  )
+                  parentCreated = true
+                  await admin.query(
+                    `GRANT SELECT ON ${journalSchema}.operational_effect_journal TO c100_j225_reader_parent`
+                  )
+                  await admin.query('ALTER ROLE c100_j225_old INHERIT')
+                  await admin.query(
+                    'GRANT c100_j225_reader_parent TO c100_j225_old'
+                  )
+                }
+                const effective: boolean = (
+                  await admin.query(
+                    `SELECT has_table_privilege('c100_j225_old',$1,'SELECT') AS can_select`,
+                    [journalSchema + '.operational_effect_journal']
+                  )
+                ).rows[0]!.can_select
+                assert.equal(
+                  effective,
+                  true,
+                  'known-bad access was not effective'
+                )
+                await refusal()
+                const unsafe = await readOld(journalSchema, input.operationKey)
+                assert(
+                  unsafe &&
+                    unsafe.state === 'CONFIRMED' &&
+                    !Object.hasOwn(unsafe, 'result')
+                )
+                controls.push({
+                  access,
+                  effectiveOldSelect: true,
+                  readinessRejectedWithNoOldSessions: true,
+                  oldReadState: unsafe.state,
+                  oldReadOwnResult: false,
+                  acceptedAsSuccess: false
+                })
+              } finally {
+                if (access === 'PUBLIC')
+                  await admin.query(
+                    `REVOKE SELECT ON ${journalSchema}.operational_effect_journal FROM PUBLIC`
+                  )
+                else {
+                  if (parentCreated)
+                    await admin.query(
+                      'REVOKE c100_j225_reader_parent FROM c100_j225_old'
+                    )
+                  await admin.query('ALTER ROLE c100_j225_old NOINHERIT')
+                  if (parentCreated) {
+                    await admin.query(
+                      `REVOKE SELECT ON ${journalSchema}.operational_effect_journal FROM c100_j225_reader_parent`
+                    )
+                    await admin.query('DROP ROLE c100_j225_reader_parent')
+                  }
+                }
+              }
+              await ready()
+              await denied(input.operationKey)
+            }
+            assert.deepEqual(await rows(), before)
+            assert.deepEqual(
+              (
+                await admin.query(
+                  `SELECT to_jsonb(j)::text AS row FROM ${legacySchema}.operational_effect_journal j ORDER BY operation_key`
+                )
+              ).rows,
+              legacyBefore
+            )
+            assert.equal(queries.length, 9)
+            assert.equal(
+              new Set(queries.map((query) => query.sql)).size,
+              1,
+              'queries were modified between positive/negative paths'
+            )
+            assert.equal(
+              queries.filter((query) => query.errorCode === '42501').length,
+              4
+            )
+            assert.deepEqual(downstream, { models: 0, bodies: 0 })
+            writeFileSync(
+              join(
+                binding.evidenceRoot,
+                binding.runId + '-j06-' + generation + '.json'
+              ),
+              JSON.stringify(
+                {
+                  scope:
+                    'ORIGINAL_FULL_READER_MODULES_WITH_CURRENT_SHARED_SUPPORT_NOT_WHOLE_HISTORICAL_BINARY_CERTIFICATION',
+                  generation,
+                  sourceSha256,
+                  emitSha256: emit.sha256,
+                  legacy: {
+                    object: object.result,
+                    string: string.result,
+                    nullHasOwnResult: Object.hasOwn(nullValue, 'result'),
+                    rowsUnchanged: true
+                  },
+                  queries,
+                  principals,
+                  drains,
+                  controls,
+                  downstream,
+                  activeRowsUnchanged: true,
+                  credential:
+                    'disposable old-principal credential path; never service credential; historical secrets not reused'
+                },
+                null,
+                2
+              ) + '\n'
+            )
+          } finally {
+            await admin.query(`SET search_path TO ${journalSchema}`)
+            if (legacyCreated)
+              await admin.query(`DROP SCHEMA ${legacySchema} CASCADE`)
+          }
+          await ready()
+          assert.equal(
+            (
+              await admin.query(
+                'SELECT to_regnamespace($1) IS NULL AS absent',
+                [legacySchema]
+              )
+            ).rows[0]!.absent,
+            true
+          )
+        }
+      )
+    }
+  }
+)
 
 describe(
   'SPEC0225 J03 native bounds and separate SQL/driver component',
