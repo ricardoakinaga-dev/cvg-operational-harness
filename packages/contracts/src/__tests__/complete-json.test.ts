@@ -92,3 +92,27 @@ describe('complete JSON strict value snapshot', () => {
     expect(() => canonicalizeCompleteJson(new Array(2 ** 30))).toThrow()
   })
 })
+
+it('retains canonical bytes and exact caps for safe ASCII and adjacent escapes', () => {
+  const ascii = Array.from({ length: 96 }, (_, i) =>
+    String.fromCharCode(i + 32)
+  )
+    .filter((c) => c !== '"' && c !== '\\')
+    .join('')
+    .repeat(512)
+  for (const text of [
+    ascii,
+    ascii + '\n',
+    ascii + '\r',
+    ascii + '\u2028',
+    ascii + '"',
+    ascii + '\\'
+  ]) {
+    const expected = JSON.stringify(text)
+    const size = Buffer.byteLength(expected)
+    expect(canonicalizeCompleteJson(text, { maxBytes: size })).toBe(expected)
+    expect(() =>
+      canonicalizeCompleteJson(text, { maxBytes: size - 1 })
+    ).toThrow(CompleteJsonError)
+  }
+})

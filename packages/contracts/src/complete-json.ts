@@ -55,6 +55,12 @@ export function canonicalizeCompleteJson(
         'RESULT_TOO_LARGE',
         'JSON byte limit exceeded'
       )
+    // Safe ASCII has one UTF-8 byte per unit and needs no escaping. The
+    // lower-bound guard above is exact here, before allocating JSON text.
+    if (!/[^\x20-\x21\x23-\x5b\x5d-\x7f]/.test(text)) {
+      append(JSON.stringify(text))
+      return
+    }
     let encodedBytes = 2
     for (let i = 0; i < text.length; i++) {
       const unit = text.charCodeAt(i)
