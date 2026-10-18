@@ -26,7 +26,9 @@ import {
   stopCompleteChildren,
   cleanupCompleteChildren,
   withCompleteCleanup,
-  completeCleanupError
+  completeCleanupError,
+  collectCompleteDiagnostics,
+  projectCompleteDiagnostic
 } from './fixtures/complete-process-support.ts'
 
 const virtual = vi.hoisted(() => ({
@@ -1061,7 +1063,17 @@ function compileCleanupScope(code: string, names: string[], values: unknown[]) {
       module: ts.ModuleKind.None
     }
   }).outputText
-  return new Function('exports', ...names, output)({}, ...values)
+  const bindings: Record<string, unknown> = {
+    collectCompleteDiagnostics,
+    projectCompleteDiagnostic
+  }
+  names.forEach((name, index) => {
+    bindings[name] = values[index]
+  })
+  return new Function('exports', ...Object.keys(bindings), output)(
+    {},
+    ...Object.values(bindings)
+  )
 }
 function cleanupGraphContains(
   error: unknown,
@@ -1715,3 +1727,667 @@ it('real createAttempt registration tail transfers every attempt to hook ownersh
   expect(returned).toBe(attempt)
   expect(ownedAttempts.has(attempt)).toBe(true)
 })
+
+function realDiagnosticInfo(
+  source: ts.SourceFile
+): (error: unknown) => unknown {
+  for (const statement of source.statements) {
+    if (
+      ts.isFunctionDeclaration(statement) &&
+      statement.name?.text === 'errorInfo'
+    )
+      return compileCleanupScope(
+        statement.getText(source) + ';return errorInfo;',
+        [],
+        []
+      )
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find(
+        (d) => d.name.getText(source) === 'errorInfo'
+      )
+      if (declaration)
+        return compileCleanupScope(
+          'const ' + declaration.getText(source) + ';return errorInfo;',
+          [],
+          []
+        )
+    }
+  }
+  throw new Error('Real diagnostic projection missing')
+}
+function diagnosticVector(kind: 'normal' | 'opaque' | 'accessor') {
+  const diagnostic = new Error('projection failure')
+  let count = 0
+  let primary: unknown
+  if (kind === 'normal') primary = new Error('native-normal')
+  else if (kind === 'opaque') {
+    primary = Object.create(null)
+    Object.defineProperty(primary, Symbol.toPrimitive, {
+      value: () => {
+        count++
+        throw diagnostic
+      }
+    })
+  } else {
+    primary = new Error('native-accessor')
+    Object.defineProperty(primary, 'message', {
+      get() {
+        count++
+        throw diagnostic
+      }
+    })
+  }
+  return { primary, diagnostic, count: () => count }
+}
+it.each([undefined, null, false, 0, ''])(
+  'diagnostic facades retain falsy primary %s and every independent failure',
+  async (primary) => {
+    const first = new Error('construct'),
+      second = new Error('emit'),
+      order: number[] = []
+    const failure = collectCompleteDiagnostics(primary, [
+      () => {
+        order.push(1)
+        throw first
+      },
+      () => {
+        order.push(2)
+        throw second
+      }
+    ])
+    for (const error of [primary, first, second])
+      expect(cleanupGraphContains(failure.error, error)).toBe(true)
+    expect(order).toEqual([1, 2])
+    expect(projectCompleteDiagnostic(primary, () => 17)).toBe(17)
+    const projected = await cleanupOutcome(() =>
+      projectCompleteDiagnostic(primary, () => {
+        throw first
+      })
+    )
+    if (projected.ok) throw new Error('Projection failure hidden')
+    expect(cleanupGraphContains(projected.error, primary)).toBe(true)
+    expect(cleanupGraphContains(projected.error, first)).toBe(true)
+  }
+)
+it.each([
+  'complete-admission-capacity-postgres.integration.ts',
+  'complete-bound-admission-postgres.integration.ts',
+  'complete-settlement-public-postgres.integration.ts'
+])(
+  'real rethrow scopes in %s own the real projection before it can fail',
+  async (name) => {
+    const source = await cleanupConsumerSource(name),
+      projection = realDiagnosticInfo(source),
+      blocks: Array<{ block: ts.Block; label: string }> = []
+    const labels = name.includes('capacity')
+      ? ['journal-error', 'native-CAS-error']
+      : name.includes('bound')
+        ? ['CAS-error']
+        : [
+            'CAS-error',
+            'model.complete-error',
+            'native-reserve-error',
+            'native-settle-error',
+            'hybrid-error',
+            'runtime-error'
+          ]
+    function visit(n: ts.Node) {
+      if (
+        ts.isBlock(n) &&
+        (ts.isCatchClause(n.parent) || ts.isArrowFunction(n.parent)) &&
+        n.getText(source).includes('errorInfo(')
+      ) {
+        const last = n.statements.at(-1)
+        if (last && ts.isThrowStatement(last)) {
+          const found = new Set<string>()
+          function marker(node: ts.Node) {
+            if (ts.isStringLiteralLike(node) && labels.includes(node.text))
+              found.add(node.text)
+            ts.forEachChild(node, marker)
+          }
+          marker(n)
+          if (found.size === 1) blocks.push({ block: n, label: [...found][0]! })
+        }
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    expect(blocks.map((row) => row.label).sort()).toEqual([...labels].sort())
+    for (const { block, label } of blocks)
+      for (const kind of ['normal', 'opaque', 'accessor'] as const) {
+        const vector = diagnosticVector(kind),
+          events: unknown[] = [],
+          writes: unknown[] = [],
+          journalTrace: unknown[] = []
+        const parent = block.parent
+        const code = ts.isCatchClause(parent)
+          ? 'return (async()=>{try{throw primary} ' +
+            parent.getText(source) +
+            '})();'
+          : 'return (' + parent.getText(source) + ')(primary);'
+        const result = await cleanupOutcome(() =>
+          compileCleanupScope(
+            code,
+            [
+              'primary',
+              'errorInfo',
+              'event',
+              'writes',
+              'journalTrace',
+              'entry',
+              'method',
+              'args',
+              'input',
+              'injected',
+              'target',
+              'fault'
+            ],
+            [
+              vector.primary,
+              projection,
+              (...args: unknown[]) => {
+                events.push(args)
+                return events.length
+              },
+              writes,
+              journalTrace,
+              1,
+              'confirm',
+              [],
+              { expected: null },
+              false,
+              false,
+              'NATIVE'
+            ]
+          )
+        )
+        if (result.ok) throw new Error('Native rejection was swallowed')
+        expect(cleanupGraphContains(result.error, vector.primary)).toBe(true)
+        if (kind === 'normal') expect(result.error).toBe(vector.primary)
+        else {
+          expect(cleanupGraphContains(result.error, vector.diagnostic)).toBe(
+            true
+          )
+          let calls = 0
+          function count(n: ts.Node) {
+            if (
+              ts.isCallExpression(n) &&
+              n.expression.getText(source) === 'errorInfo'
+            )
+              calls++
+            ts.forEachChild(n, count)
+          }
+          count(block)
+          expect(calls).toBe(label === 'native-CAS-error' ? 2 : 1)
+          expect(vector.count()).toBe(calls)
+        }
+      }
+  }
+)
+it('real public journal catch attempts trace after its projection fails and retains all causes', async () => {
+  const source = await cleanupConsumerSource(
+      'complete-tool-public-restart.test.ts'
+    ),
+    projection = realDiagnosticInfo(source)
+  let selected: ts.CatchClause | undefined
+  function visit(n: ts.Node) {
+    if (
+      ts.isCatchClause(n) &&
+      n.block.getText(source).includes('journalTrace.push') &&
+      n.block.getText(source).includes('cleanupCompleteChildren')
+    )
+      selected = n
+    ts.forEachChild(n, visit)
+  }
+  visit(source)
+  if (!selected) throw new Error('Missing public journal diagnostic scope')
+  const catchCode = selected.getText(source)
+  const vector = diagnosticVector('opaque'),
+    traceFailure = new Error('trace'),
+    trace = vi.fn(async () => {
+      throw traceFailure
+    }),
+    journalTrace: unknown[] = []
+  const result = await cleanupOutcome(() =>
+    compileCleanupScope(
+      'return (async()=>{try{throw primary} ' + catchCode + '})();',
+      [
+        'primary',
+        'errorInfo',
+        'cleanupCompleteChildren',
+        'journalTrace',
+        'trace',
+        'method',
+        'args'
+      ],
+      [
+        vector.primary,
+        projection,
+        cleanupCompleteChildren,
+        journalTrace,
+        trace,
+        'confirm',
+        []
+      ]
+    )
+  )
+  if (result.ok) throw new Error('Public catch falsely succeeded')
+  for (const error of [vector.primary, vector.diagnostic, traceFailure])
+    expect(cleanupGraphContains(result.error, error)).toBe(true)
+  expect(trace).toHaveBeenCalledTimes(1)
+  expect(journalTrace).toEqual([])
+})
+it.each(['finish', 'probe'])(
+  'real expected rejection %s stays an observation until projection itself fails',
+  async (scope) => {
+    const source = await cleanupConsumerSource(
+        'complete-settlement-public-postgres.integration.ts'
+      ),
+      projection = realDiagnosticInfo(source)
+    let handler: ts.ArrowFunction | ts.CatchClause | undefined
+    function visit(n: ts.Node) {
+      if (
+        scope === 'finish' &&
+        ts.isArrowFunction(n) &&
+        n.parameters.some(
+          (parameter) => parameter.name.getText(source) === 'error'
+        ) &&
+        n.body.getText(source).includes('errorInfo(error)') &&
+        n.body.getText(source).includes('result: null')
+      )
+        handler = n
+      if (
+        scope === 'probe' &&
+        ts.isCatchClause(n) &&
+        n.block.getText(source).includes('errorInfo(caught)') &&
+        n.block.getText(source).includes('native-probe-error')
+      )
+        handler = n
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    if (!handler) throw new Error('Missing actual expected-error handler')
+    for (const kind of ['normal', 'opaque', 'accessor'] as const) {
+      const vector = diagnosticVector(kind),
+        event = vi.fn()
+      const code = ts.isArrowFunction(handler)
+        ? 'return (' + handler.getText(source) + ')(primary);'
+        : 'let error;try{throw primary} ' +
+          handler.getText(source) +
+          ';return error;'
+      const result = await cleanupOutcome(() =>
+        compileCleanupScope(
+          code,
+          ['primary', 'errorInfo', 'a', 'entry'],
+          [vector.primary, projection, { event }, 1]
+        )
+      )
+      if (kind === 'normal') {
+        expect(result.ok).toBe(true)
+        if (!result.ok) throw result.error
+        const value = result.value as {
+          error?: { message?: unknown }
+          message?: unknown
+        }
+        expect(scope === 'finish' ? value.error?.message : value.message).toBe(
+          'native-normal'
+        )
+      } else {
+        if (result.ok)
+          throw new Error('Expected-rejection projection failed silently')
+        expect(cleanupGraphContains(result.error, vector.primary)).toBe(true)
+        expect(cleanupGraphContains(result.error, vector.diagnostic)).toBe(true)
+      }
+    }
+  }
+)
+async function actualCapacityDiagnosticBoundary(
+  source: ts.SourceFile,
+  body: () => unknown,
+  observerFailures: unknown[] = []
+) {
+  let selected: ts.TryStatement | undefined
+  function visit(n: ts.Node) {
+    if (
+      ts.isTryStatement(n) &&
+      n.finallyBlock?.getText(source).includes('observation.countsAtFinally')
+    )
+      selected = n
+    ts.forEachChild(n, visit)
+  }
+  visit(source)
+  if (
+    !selected ||
+    !selected.catchClause ||
+    !selected.finallyBlock ||
+    !ts.isBlock(selected.parent)
+  )
+    throw new Error('Missing actual capacity finally')
+  const declarations = selected.parent.statements.filter(
+    (n) =>
+      ts.isVariableStatement(n) &&
+      n.declarationList.declarations.some((d) =>
+        ['primary', 'checkError'].includes(d.name.getText(source))
+      )
+  )
+  expect(declarations).toHaveLength(2)
+  const code =
+    'return (async()=>{' +
+    declarations.map((n) => n.getText(source)).join('\n') +
+    ';try{await body()} ' +
+    selected.catchClause.getText(source) +
+    ' finally ' +
+    selected.finallyBlock.getText(source) +
+    '})();'
+  const observation: Record<string, unknown> = {
+      verdict: 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
+    },
+    saved: string[] = [],
+    traces: unknown[] = []
+  const result = await cleanupOutcome(() =>
+    compileCleanupScope(
+      code,
+      [
+        'body',
+        'observerFailures',
+        'cleanupCompleteChildren',
+        'completeCleanupError',
+        'errorInfo',
+        'observation',
+        'bodies',
+        'completeEntries',
+        'calls',
+        'measurements',
+        'events',
+        'writes',
+        'observerErrors',
+        'responses',
+        'audit',
+        'telemetry',
+        'traces',
+        'caseName',
+        'save',
+        'join',
+        'dir',
+        'physicalRecords',
+        'journalTrace'
+      ],
+      [
+        body,
+        observerFailures,
+        cleanupCompleteChildren,
+        completeCleanupError,
+        realDiagnosticInfo(source),
+        observation,
+        0,
+        0,
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        { events: [] },
+        { events: [] },
+        traces,
+        'finite',
+        async (path: string) => {
+          saved.push(path)
+        },
+        join,
+        '/synthetic',
+        [],
+        []
+      ]
+    )
+  )
+  return { result, observation, saved, traces }
+}
+it('real capacity catch and finally retain D1 and D2 rather than only the later projection error', async () => {
+  const source = await cleanupConsumerSource(
+      'complete-admission-capacity-postgres.integration.ts'
+    ),
+    primary = Object.create(null),
+    first = new Error('D1 catch'),
+    second = new Error('D2 finally')
+  let count = 0
+  Object.defineProperty(primary, Symbol.toPrimitive, {
+    value: () => {
+      throw count++ === 0 ? first : second
+    }
+  })
+  const { result, saved } = await actualCapacityDiagnosticBoundary(
+    source,
+    () => {
+      throw primary
+    }
+  )
+  if (result.ok) throw new Error('Capacity failure hidden')
+  for (const error of [primary, first, second])
+    expect(cleanupGraphContains(result.error, error)).toBe(true)
+  expect(count).toBe(2)
+  expect(saved.map((path) => path.split('/').at(-1))).toEqual([
+    'observed.json',
+    'physical-checkpoints.json',
+    'native-journal-trace.json'
+  ])
+})
+it.each(['success', 'observer-projection-failure'])(
+  'real CAS observer preserves native return and case verdict for %s',
+  async (mode) => {
+    const source = await cleanupConsumerSource(
+      'complete-admission-capacity-postgres.integration.ts'
+    )
+    let selected: ts.ArrowFunction | undefined
+    function visit(n: ts.Node) {
+      if (
+        ts.isBinaryExpression(n) &&
+        n.left.getText(source) === 'store.compareAndSwapCheckpoint' &&
+        ts.isArrowFunction(n.right)
+      )
+        selected = n.right
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    if (!selected) throw new Error('Missing actual CAS observation wrapper')
+    const vector = diagnosticVector('opaque'),
+      observerFailures: unknown[] = [],
+      observerErrors: unknown[] = [],
+      native = { status: 'APPLIED', token: { checkpointId: 'c', digest: 'd' } },
+      input = {
+        tenantId: 'synthetic',
+        executionId: 'case',
+        expected: null,
+        next: { checkpointId: 'c', digest: 'd', state: {} }
+      }
+    const returned = await compileCleanupScope(
+      'return (' + selected.getText(source) + ')(input);',
+      [
+        'input',
+        'cas',
+        'store',
+        'event',
+        'writes',
+        'observerErrors',
+        'observerFailures',
+        'errorInfo',
+        'snapshot',
+        'expect'
+      ],
+      [
+        input,
+        async () => native,
+        {
+          loadCheckpoint: async () => {
+            if (mode === 'observer-projection-failure') throw vector.primary
+            return { checkpointId: 'c', digest: 'd' }
+          }
+        },
+        () => 1,
+        [],
+        observerErrors,
+        observerFailures,
+        realDiagnosticInfo(source),
+        () => ({}),
+        expect
+      ]
+    )
+    expect(returned).toBe(native)
+    const { result, observation, saved } =
+      await actualCapacityDiagnosticBoundary(source, () => {}, observerFailures)
+    if (mode === 'success') {
+      expect(observerFailures).toEqual([])
+      expect(result.ok).toBe(true)
+      expect(observation.verdict).toBe('IMPLEMENTED_SCOPED_EXECUTION_ONLY')
+    } else {
+      expect(observerErrors).toEqual([])
+      expect(observerFailures).toHaveLength(1)
+      if (result.ok) throw new Error('Observer failure produced a passing case')
+      expect(cleanupGraphContains(result.error, vector.primary)).toBe(true)
+      expect(cleanupGraphContains(result.error, vector.diagnostic)).toBe(true)
+      expect(observation.verdict).toBe('UNPROVEN_FAILURE')
+    }
+    expect(saved).toHaveLength(3)
+  }
+)
+
+it.each([
+  'complete-bound-admission-postgres.integration.ts',
+  'complete-tool-public-restart.test.ts'
+])(
+  'real pre-existing lazy diagnostic catch in %s also owns the real projection',
+  async (name) => {
+    const source = await cleanupConsumerSource(name),
+      projection = realDiagnosticInfo(source)
+    let selected: ts.CatchClause | undefined
+    function visit(n: ts.Node) {
+      if (
+        ts.isCatchClause(n) &&
+        n.block.getText(source).includes('cleanupCompleteChildren') &&
+        n.block.getText(source).includes('error.json')
+      )
+        selected = n
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    if (!selected) throw new Error('Missing lazy diagnostic catch')
+    const catchCode = selected.getText(source)
+    const vector = diagnosticVector('opaque'),
+      trace = vi.fn(async () => {}),
+      save = vi.fn(async () => {})
+    const result = await cleanupOutcome(() =>
+      compileCleanupScope(
+        'return (async()=>{try{throw primary} ' + catchCode + '})();',
+        [
+          'primary',
+          'errorInfo',
+          'cleanupCompleteChildren',
+          'trace',
+          'save',
+          'join',
+          'dir',
+          'childRole',
+          'args',
+          'events',
+          'calls',
+          'measurements'
+        ],
+        [
+          vector.primary,
+          projection,
+          cleanupCompleteChildren,
+          trace,
+          save,
+          join,
+          '/synthetic',
+          'reader',
+          { dir: '/synthetic' },
+          [],
+          [],
+          []
+        ]
+      )
+    )
+    if (result.ok) throw new Error('Lazy diagnostic catch lost its failure')
+    expect(cleanupGraphContains(result.error, vector.primary)).toBe(true)
+    expect(cleanupGraphContains(result.error, vector.diagnostic)).toBe(true)
+    expect(save).not.toHaveBeenCalled()
+    expect(trace).toHaveBeenCalledTimes(name.includes('public') ? 1 : 0)
+  }
+)
+it.each(['finish', 'summary'])(
+  'real settlement caseRun lazy %s callback retains opaque primary on projection failure',
+  async (mode) => {
+    const source = await cleanupConsumerSource(
+        'complete-settlement-public-postgres.integration.ts'
+      ),
+      projection = realDiagnosticInfo(source),
+      vector = diagnosticVector('opaque')
+    const code =
+      'let settlementBarrierFailure;const caseIndex=[];' +
+      cleanupSourceFunction(source, 'quiesceAttempts') +
+      ';' +
+      cleanupSourceFunction(source, 'caseRun') +
+      ';return caseRun;'
+    const run = compileCleanupScope(
+      code,
+      [
+        'completeCleanupError',
+        'cleanupCompleteChildren',
+        'sqlScope',
+        'output',
+        'join',
+        'mkdir',
+        'snapshot',
+        'pool',
+        'tenantB',
+        'save',
+        'savedFiles',
+        'errorInfo'
+      ],
+      [
+        completeCleanupError,
+        cleanupCompleteChildren,
+        'finite',
+        '/synthetic',
+        join,
+        async () => {},
+        async () => ({}),
+        {},
+        'tenantB',
+        async () => {},
+        [],
+        projection
+      ]
+    ) as (
+      id: string,
+      body: (attempts: unknown[]) => Promise<void>
+    ) => Promise<void>
+    const attempt = {
+      release: { resolve() {} },
+      runResult: Promise.resolve(),
+      joinDelivery: async () => {},
+      finish: async () => {
+        throw vector.primary
+      },
+      dir: '/synthetic/a',
+      prepared: {
+        dir: '/synthetic/a',
+        input: { tenantId: 'synthetic', executionId: 'e' }
+      },
+      events: [],
+      calls: 0,
+      measurements: 0
+    }
+    const result = await cleanupOutcome(() =>
+      run('finite', async (attempts) => {
+        if (mode === 'finish') attempts.push(attempt)
+        else throw vector.primary
+      })
+    )
+    if (result.ok)
+      throw new Error('Opaque settlement diagnostic failure passed')
+    expect(cleanupGraphContains(result.error, vector.primary)).toBe(true)
+    expect(cleanupGraphContains(result.error, vector.diagnostic)).toBe(true)
+  }
+)

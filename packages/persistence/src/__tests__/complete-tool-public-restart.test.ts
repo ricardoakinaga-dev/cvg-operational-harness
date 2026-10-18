@@ -6,7 +6,8 @@ import {
   privateBytes,
   ownedPath,
   withCompleteCleanup,
-  cleanupCompleteChildren
+  cleanupCompleteChildren,
+  collectCompleteDiagnostics
 } from './fixtures/complete-process-support.ts'
 /** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
 import { createHash, randomUUID } from 'node:crypto'
@@ -254,9 +255,13 @@ async function runChild(
             }
             return result
           } catch (e) {
-            journalTrace.push({ method, args, error: errorInfo(e) })
-            await cleanupCompleteChildren([], [trace], { error: e })
-            throw e
+            const primary = collectCompleteDiagnostics(e, [
+              () => {
+                journalTrace.push({ method, args, error: errorInfo(e) })
+              }
+            ])
+            await cleanupCompleteChildren([], [trace], primary)
+            throw primary.error
           }
         }
       })

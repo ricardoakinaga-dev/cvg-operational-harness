@@ -2,7 +2,9 @@ import {
   inspectCompleteResource,
   assignedResource,
   withCompleteCleanup,
-  cleanupCompleteChildren
+  cleanupCompleteChildren,
+  collectCompleteDiagnostics,
+  completeCleanupError
 } from './fixtures/complete-process-support.ts'
 import { createHash } from 'node:crypto'
 import { mkdir, realpath, writeFile } from 'node:fs/promises'
@@ -519,20 +521,26 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
                 event('journal-return', { method, entry })
                 return result
               } catch (error) {
-                journalTrace.push({
-                  entry,
-                  method,
-                  args,
-                  error: errorInfo(error)
-                })
-                event('journal-error', { method, entry })
-                throw error
+                throw collectCompleteDiagnostics(error, [
+                  () => {
+                    journalTrace.push({
+                      entry,
+                      method,
+                      args,
+                      error: errorInfo(error)
+                    })
+                  },
+                  () => {
+                    event('journal-error', { method, entry })
+                  }
+                ]).error
               }
             }
           })
         }
         const writes: unknown[] = []
         const observerErrors: unknown[] = []
+        const observerFailures: unknown[] = []
         const measurements: unknown[] = []
         const calls: unknown[] = []
         const responses: unknown[] = []
@@ -549,13 +557,18 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
           try {
             result = await cas(input)
           } catch (error) {
-            event('native-CAS-error', { entry, error: errorInfo(error) })
-            writes.push({
-              entry,
-              expected: input.expected,
-              error: errorInfo(error)
-            })
-            throw error
+            throw collectCompleteDiagnostics(error, [
+              () => {
+                event('native-CAS-error', { entry, error: errorInfo(error) })
+              },
+              () => {
+                writes.push({
+                  entry,
+                  expected: input.expected,
+                  error: errorInfo(error)
+                })
+              }
+            ]).error
           }
           // The event is emitted immediately after native transaction completion,
           // before any observational read or assertion.
@@ -588,11 +601,17 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
               write.checkpoint = snapshot(acknowledged!)
             }
           } catch (error) {
-            const fault = { entry, returned, error: errorInfo(error) }
-            observerErrors.push(fault)
-            event('CAS-observer-error', fault)
-            // Observation failure must fail the test, not change native behavior
-            // after a committed write. It is asserted outside the harness below.
+            observerFailures.push(
+              collectCompleteDiagnostics(error, [
+                () => {
+                  const fault = { entry, returned, error: errorInfo(error) }
+                  observerErrors.push(fault)
+                  event('CAS-observer-error', fault)
+                  // Observation failure must fail the test, not change native behavior
+                  // after a committed write. It is asserted outside the harness below.
+                }
+              ]).error
+            )
           }
           return result
         }
@@ -1095,16 +1114,25 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
           }
           observation.verdict = 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
         } catch (error) {
-          checkError = error
-          primary = { error }
-          observation.verdict = 'UNPROVEN_FAILURE'
-          observation.error = errorInfo(error)
-          throw error
+          primary = collectCompleteDiagnostics(error, [
+            () => {
+              checkError = error
+              observation.verdict = 'UNPROVEN_FAILURE'
+              observation.error = errorInfo(error)
+            }
+          ])
+          throw primary.error
         } finally {
           await cleanupCompleteChildren(
             [],
             [
+              () => {
+                const failure = completeCleanupError(observerFailures)
+                if (failure) throw failure.error
+              },
               async () => {
+                if (observerFailures.length)
+                  observation.verdict = 'UNPROVEN_FAILURE'
                 observation.countsAtFinally = {
                   bodies,
                   completeEntries,

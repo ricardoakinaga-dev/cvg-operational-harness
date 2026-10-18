@@ -707,6 +707,34 @@ export function completeCleanupError(
   }
 }
 
+/** Trusted synchronous diagnostics; async I/O stays in cleanupCompleteChildren. */
+export function collectCompleteDiagnostics(
+  primary: unknown,
+  actions: readonly (() => void)[]
+): { error: unknown } {
+  const errors: unknown[] = [primary]
+  for (const action of actions) {
+    try {
+      action()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  return completeCleanupError(errors)!
+}
+
+/** Synchronous projection of an expected rejection; async I/O keeps its async owner. */
+export function projectCompleteDiagnostic<T>(
+  primary: unknown,
+  project: () => T
+): T {
+  try {
+    return project()
+  } catch (diagnostic) {
+    throw completeCleanupError([primary, diagnostic])!.error
+  }
+}
+
 /** The action owns its resource until all safe finalizers have completed. */
 export async function withCompleteCleanup<T>(
   action: () => T | Promise<T>,

@@ -6,7 +6,8 @@ import {
   privateBytes,
   startCompleteChild,
   withCompleteCleanup,
-  cleanupCompleteChildren
+  cleanupCompleteChildren,
+  collectCompleteDiagnostics
 } from './fixtures/complete-process-support.ts'
 /** Assigned synthetic SPEC217/224 bound factory proof; not the published adapter. */
 import type { ChildProcess } from 'node:child_process'
@@ -484,8 +485,11 @@ async function attempt(args: AttemptInput, db: Pool, conn: Connection) {
       })
       return result
     } catch (error) {
-      event('CAS-error', { entry, error: errorInfo(error) })
-      throw error
+      throw collectCompleteDiagnostics(error, [
+        () => {
+          event('CAS-error', { entry, error: errorInfo(error) })
+        }
+      ]).error
     }
   }
   const counter: DecisionInputCounter = {

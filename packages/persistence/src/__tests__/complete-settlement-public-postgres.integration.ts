@@ -4,7 +4,9 @@ import {
   ownedPath,
   withCompleteCleanup,
   cleanupCompleteChildren,
-  completeCleanupError
+  completeCleanupError,
+  collectCompleteDiagnostics,
+  projectCompleteDiagnostic
 } from './fixtures/complete-process-support.ts'
 /** SPEC217/224 synthetic settlement containment; trusted prepared fixture, not consumer lifecycle. */
 import { appendFileSync } from 'node:fs'
@@ -133,13 +135,12 @@ function instrumentSql(client: Client | PoolClient, label: string) {
       JSON.stringify(value, tagged) + '\n',
       { mode: 0o600 }
     )
-  const failed = (error: unknown, record: unknown): never => {
-    try {
-      wire(record)
-    } catch (diagnostic) {
-      throw completeCleanupError([error, diagnostic])!.error
-    }
-    throw error
+  const failed = (error: unknown, record: () => unknown): never => {
+    throw collectCompleteDiagnostics(error, [
+      () => {
+        wire(record())
+      }
+    ]).error
   }
   client.query = ((...args: unknown[]) => {
     const sequence = ++sqlSequence
@@ -192,19 +193,19 @@ function instrumentSql(client: Client | PoolClient, label: string) {
             return result
           },
           (error: unknown) =>
-            failed(error, {
+            failed(error, () => ({
               sequence,
               type: 'SQL-error',
               error: errorInfo(error)
-            })
+            }))
         )
       return value
     } catch (error) {
-      return failed(error, {
+      return failed(error, () => ({
         sequence,
         type: 'SQL-error',
         error: errorInfo(error)
-      })
+      }))
     }
   }) as typeof client.query
 }
@@ -851,13 +852,16 @@ function createAttempt(
       }
       return result
     } catch (error) {
-      event('CAS-error', {
-        entry,
-        error: errorInfo(error),
-        injected,
-        stage: target ? fault : 'NATIVE'
-      })
-      throw error
+      throw collectCompleteDiagnostics(error, [
+        () => {
+          event('CAS-error', {
+            entry,
+            error: errorInfo(error),
+            injected,
+            stage: target ? fault : 'NATIVE'
+          })
+        }
+      ]).error
     }
   }
   const pair = options.pair ?? createPair()
@@ -981,8 +985,11 @@ function createAttempt(
         event('model.complete-return', { entry, result: actualProviderResult })
         return actualProviderResult
       } catch (error) {
-        event('model.complete-error', { entry, error: errorInfo(error) })
-        throw error
+        throw collectCompleteDiagnostics(error, [
+          () => {
+            event('model.complete-error', { entry, error: errorInfo(error) })
+          }
+        ]).error
       } finally {
         delivered.resolve()
       }
@@ -1008,8 +1015,14 @@ function createAttempt(
             event('native-reserve-return', { entry, result })
             return result
           } catch (error) {
-            event('native-reserve-error', { entry, error: errorInfo(error) })
-            throw error
+            throw collectCompleteDiagnostics(error, [
+              () => {
+                event('native-reserve-error', {
+                  entry,
+                  error: errorInfo(error)
+                })
+              }
+            ]).error
           }
         },
         settle: async (args) => {
@@ -1021,8 +1034,11 @@ function createAttempt(
             event('native-settle-return', { entry, result })
             return result
           } catch (error) {
-            event('native-settle-error', { entry, error: errorInfo(error) })
-            throw error
+            throw collectCompleteDiagnostics(error, [
+              () => {
+                event('native-settle-error', { entry, error: errorInfo(error) })
+              }
+            ]).error
           }
         }
       }
@@ -1036,8 +1052,11 @@ function createAttempt(
           return turn
         },
         (error: unknown) => {
-          event('hybrid-error', { error: errorInfo(error) })
-          throw error
+          throw collectCompleteDiagnostics(error, [
+            () => {
+              event('hybrid-error', { error: errorInfo(error) })
+            }
+          ]).error
         }
       )
       decisions.push(settled)
@@ -1074,8 +1093,11 @@ function createAttempt(
       event('runtime-return', { result })
       return result
     } catch (error) {
-      event('runtime-error', { error: errorInfo(error) })
-      throw error
+      throw collectCompleteDiagnostics(error, [
+        () => {
+          event('runtime-error', { error: errorInfo(error) })
+        }
+      ]).error
     }
   })
   const attempt = {
@@ -1118,7 +1140,11 @@ function createAttempt(
       await attempt.joinDelivery()
       const outcome = await runResult.then(
         (result) => ({ result }),
-        (error: unknown) => ({ result: null, error: errorInfo(error) })
+        (error: unknown) =>
+          projectCompleteDiagnostic(error, () => ({
+            result: null,
+            error: errorInfo(error)
+          }))
       )
       const final = await nativeLoad(
         prepared.input.tenantId,
@@ -1179,8 +1205,10 @@ async function probe(
     result = await a.nativePort.settle(args)
     a.event('native-probe-return', { entry, result })
   } catch (caught) {
-    error = errorInfo(caught)
-    a.event('native-probe-error', { entry, error })
+    projectCompleteDiagnostic(caught, () => {
+      error = errorInfo(caught)
+      a.event('native-probe-error', { entry, error })
+    })
   }
   const after = await readPhysical(a, name + '-after'),
     dbAfter = await snapshot(
