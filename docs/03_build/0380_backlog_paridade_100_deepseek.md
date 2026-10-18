@@ -3,11 +3,11 @@
 - Task: `PARE100-GAP-20261016-F5` (Claude Code). Pedido do usuário em 16/10/2026: "preciso de um backlog e um roadmap para que o operational-harness alcance 100% de pareamento com o deepseek harness".
 - Estado: `APPROVED` como carteira oficial de paridade pelo usuário em 16/10/2026 (D1 a D7 do [roadmap 0379](0379_roadmap_paridade_100_deepseek.md)). A carteira não autoriza BUILD: cada cartão T3 ou T4 segue a constituição (SPEC, revisão humana, gates) antes de código.
 - Roteiro: [roadmap 0379](0379_roadmap_paridade_100_deepseek.md). Evidência da análise: [PARE100-GAP-20261016](../04_audit/evidence/PARE100-GAP-20261016/README.md).
-- Referência congelada: DeepSeek `0.2.0-rc.1`, commit `768fb1f3d3dcf9a16659ee354e927d05475f22dd`, o mesmo pin do [plano 0376](0376_plano_executivo_paridade_integral.md).
+- Referência congelada: DeepSeek `0.2.0-rc.1`, commit `768fb1f3d3dcf9a16659ee354e927d05475f22dd`, o mesmo pin do plano 0376 (linha de trabalho: `docs/03_build/0376_plano_executivo_paridade_integral.md`).
 
 ## Como ler
 
-Cada cartão vem de capacidades observadas na referência e comparadas com o CVG (análise G1–G5). A coluna "Origem" cita o grupo e o ID da capacidade, por exemplo `G2/FS-04`. A coluna "Absorve" aponta o cartão do [backlog 0378](0378_backlog_paridade_integral.md) ou a SPEC que já cobre parte do trabalho, para não duplicar status.
+Cada cartão vem de capacidades observadas na referência e comparadas com o CVG (análise G1–G5). A coluna "Origem" cita o grupo e o ID da capacidade, por exemplo `G2/FS-04`. A coluna "Absorve" aponta o cartão do backlog 0378 (linha de trabalho: `docs/03_build/0378_backlog_paridade_integral.md`) ou a SPEC que já cobre parte do trabalho, para não duplicar status.
 
 | Campo      | Valores                                                                                                                                                                             |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
