@@ -1,3 +1,31 @@
+### MAIN-CONSOLIDATION-20261018 — main única e melhorias preservadas (Codex) (ATIVO)
+
+- Autoridade: usuário pediu “quero na real somente a main ativa, faz o merge das branchs, mantem só as melhorias”. Autoriza consolidar melhorias validadas, publicar por PR e remover branches locais/remotas redundantes após preservação verificável. Não autoriza produção, supressão de testes ou perda de trabalho.
+- Fase atual DISCOVERY/AUDIT: inventário de todas refs/worktrees, commits exclusivos, equivalência ao squash do PR #3, trabalhos não commitados e claims vivos; snapshot recuperável antes de limpeza.
+- Ownership: novo `docs/04_audit/evidence/MAIN-CONSOLIDATION-20261018/**`, novo `docs/08_runtime/main-consolidation-20261018.md`, próprias entradas99/20/30 e esta seção; backup/runtime próprios `/mnt/ia/cvg-main-consolidation-20261018/**`. Integração/gates só em nova candidata própria após HOW/task finitos registrados. Sem editar fontes/worktrees/recursos reservados aos pares.
+- Dois scouts opcionais read-only: (A) linhagem/commits não cobertos do histórico antigo; (B) estado/qualificação das melhorias recentes em candidatas disjuntas. Sem edições, processos de app, PG, rede ou descendentes. Lead controla refs, backup, PR, merge, limpeza e aceitação.
+- Revisão da composição: um crítico independente somente leitura sobre candidata fcb194b8, com foco nos merges e nos cinco paths adaptados de branches antigas. Sem execução de teste/PG/rede, sem escrita ou descendentes; no máximo duas rodadas desta composição. Lead mantém fonte congelada durante parecer e executa gates disjuntos.
+- Pronto: melhorias escolhidas com evidência atual na main, branches redundantes removidas com recuperação preservada, checkout principal em main e estado dos trabalhos em andamento explicitamente reconciliado. Não apagar worktree/alterações não commitadas de outro agente.
+
+### GIT-SOLO-MERGE-20261018 — concluir integração sem segundo colaborador (Codex) (CONCLUÍDO)
+
+- Continuidade do pedido para resolver GH006 e integrar a candidata via PR. Usuário esclareceu que é o único responsável pelo repositório; tarefa deve funcionar sem aprovação de outro colaborador.
+- Escopo: capturar proteção/checks/PR, ajustar somente `required_approving_review_count` de 1 para 0 mantendo o objeto de exigência de PR e todos os checks/proteções; integrar PR #3 por squash condicionado ao HEAD exato `4eeb47e88799d55495f794e705dfc5da8a8fdfe0` e checks verdes. Sem bypass administrativo ou push direto.
+- Escrita local exclusiva: novo `docs/04_audit/evidence/GIT-GH006-20261018/solo-merge/**`, próprias entradas no topo99/20/30 e esta seção. Deltas anteriores destes documentos pertencem à sessão; código e evidências dos pares preservados.
+- Resultado: PR #3 MERGED por squash b9f48a7748402bd43ecfd97723710b06f8d52f57, confirmado na main remota; só contagem externa 1→0, demais campos de proteção iguais. Evidências e ledgers atualizados. Deploy/produção fora do escopo.
+
+### GIT-PR3-READY-20261018 — PR para revisão (Codex) (CONCLUÍDO T1)
+
+- Usuário solicitou “então faz o PR” após o diagnóstico GH006; autorizado encaminhar o PR #3 existente para revisão da integração na `main`.
+- Escopo exclusivo: título, descrição e estado draft do PR #3; novo `docs/04_audit/evidence/GIT-GH006-20261018/pr-ready/**`, entradas próprias no topo dos ledgers99/20/30 e esta seção. Mudanças locais anteriores nesses quatro documentos pertencem a esta sessão; preservar todo conteúdo alheio.
+- Resultado: PR #3 aberto e não draft, título/descrição atualizados via REST e 11 checks SUCCESS reconferidos; snapshots antes/depois e resultado persistidos. Merge depende da aprovação exigida pela branch; nenhuma alteração de código, push ou produção nesta tarefa.
+
+### GIT-GH006-20261018 — publicação pela branch protegida (Codex) (CONCLUÍDO T1)
+
+- Pedido atual: resolver o push rejeitado do commit `4eeb47e88799d55495f794e705dfc5da8a8fdfe0` para `main`.
+- Escopo: leitura de refs/PR/checks/proteção no GitHub; escrita somente desta seção, novas entradas próprias no topo de `docs/99_runtime_state.md`, `docs/20_master_execution_log.md`, `docs/30_backlog_master.md` e novo `docs/04_audit/evidence/GIT-GH006-20261018/result.json`.
+- Resultado: publicação do SHA confirmada no PR #3; cinco checks obrigatórios PASS/11 checks SUCCESS, draft e uma aprovação independente pendentes para integração. Evidência e ledgers atualizados; claims/código/evidências alheios preservados. Nenhum push redundante, alteração da proteção ou merge deste PR de validação de CI.
+
 ### CONT-20261018-D9EF — continuidade das três frentes (Claude Code) (ATIVO)
 
 - Pedido do usuário em 18/10/2026: "na real vc que vai continuar a tarefa, pode usar mais agentes para te ajudar a entregar a tarefa, pode fazer o commit e continuar até me entrega tudo pronto e resolvido". Claude Code assume as frentes HISO005-P2-BUILD-0240, C100-FND-JOURNAL-0225-BUILD-001 e CODEX100-EXEC (DX100-G02) a partir dos checkpoints de reinício do Codex; os claims dessas frentes passam a ter este dono.
