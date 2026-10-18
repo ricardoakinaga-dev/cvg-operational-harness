@@ -1,3 +1,9 @@
+# MAIN-CONSOLIDATION — seleção das melhorias qualificáveis — 18/10/2026
+
+- `status: IN_PROGRESS` para esta tarefa. A linha promovida834, correções existentes da main, portabilidade e suporte independente são a composição selecionada. [Decisão](04_audit/evidence/MAIN-CONSOLIDATION-20261018/selection-decision.json), [contrato vigente](04_audit/evidence/MAIN-CONSOLIDATION-20261018/composition-contract.md).
+- `last_completed_action`: probe da linha selecionada atingiu100% em todos os arquivos críticos modificados; a lacuna parcial remanescente é de arquivo byteidêntico à main. A frente complete permanece não promovida/recuperável em192872d6 e bundle adicional; testes focais/revisões não são certificados globais. União das histórias preserva a árvore estável sem force-push. Snapshot inicial restaurado por clone e49refs conferidas.
+- `next_action`: MAIN-CONSOLIDATION-20261018:QUALIFY-STABLE — executar gates completos e CI da árvore selecionada, depois merge protegido e limpeza final das refs. Programas completos/produção permanecem sob seus gates próprios.
+
 # MAIN-CONSOLIDATION — composição em qualificação — 18/10/2026
 
 - `status: IN_PROGRESS`. Pedido explícito: manter somente a `main` ativa e integrar apenas melhorias. [Plano](08_runtime/main-consolidation-20261018.md), [task/MC01–05](04_audit/evidence/MAIN-CONSOLIDATION-20261018/task.json) e [composição](04_audit/evidence/MAIN-CONSOLIDATION-20261018/composition-contract.md).

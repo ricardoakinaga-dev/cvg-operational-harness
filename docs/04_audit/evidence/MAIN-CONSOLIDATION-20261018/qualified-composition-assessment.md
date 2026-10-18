@@ -1,0 +1,9 @@
+# Avaliação da composição qualificada — seleção por gates
+
+A composição ampliada192872d6 preserva o experimento completo, mas ainda não tem certificação final. O probe exato do core agora passou1145/1145testes (gargalo resolvido), porém falha os pisos100% em módulos novos complete-tool-results, complete-decision-admission, complete-checkpoint e outros. É um probe parcial, portanto não se inventa uma falha da cobertura agregada inteira; ele confirma lacunas e a qualificação da frente continua aberta. O pedido do usuário é consolidar apenas melhorias, não encerrar automaticamente todos os programas/especificações em andamento.
+
+Reconhecimento alternativo finito antes de escolher promoção: candidata detached nova em `/home/ricardo/cvg-main-consolidation-20261018/stable-candidate`, base8e951e12 (mainb9+fontes já promovidas834). Acrescentar a portabilidadeb8, smokes7ef, build limpo e diagnóstico de recuperação já revistos, e somente suporte independente da fundação (corpus histórico vendorizado e seus dois testes, dependênciaTS de testes declarada, correção de maxWorkers e enforcement per-file do certify). Não incorporar os contratos/migrações/worker/codec do novo modo complete. Avaliar pelo mesmo probe100% e gates sem afrouxar configurações. Nenhuma decisão de produção.
+
+Ownership exclusivo da candidata e runtime/stable/\*\*, PG `cvg-main-consolidation-stable-pg`/56303, API3463/web4463 após conferir ausência. Candidata ampliada192 e suas melhorias/performance ficam intactas; snapshot recuperável adicional antes de qualquer exclusão de sua ref remota. Fonte e processos dos pares continuam preservados.
+
+Critério de decisão: escolher apenas composição que atenda aos gates; caso a composição menor confirme a barra, a frente complete permanece arquivada como desenvolvimento não promovido, com código e evidências recuperáveis. A restauração concreta do bundle inicial já foi comprovada por clone-mirror e49refs exatas.
