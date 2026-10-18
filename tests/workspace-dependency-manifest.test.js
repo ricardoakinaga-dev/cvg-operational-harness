@@ -94,7 +94,11 @@ function workspaceImports(workspaceDir) {
   const test = new Set()
   for (const file of collectFiles(src)) {
     const text = fs.readFileSync(file, 'utf8')
-    const bucket = /\.test\.[jt]sx?$/.test(file) ? test : runtime
+    const bucket =
+      file.split(path.sep).includes('__tests__') ||
+      /\.test\.[jt]sx?$/.test(file)
+        ? test
+        : runtime
     for (const match of text.matchAll(IMPORT_PATTERN)) {
       const name = packageNameOf(match[1])
       if (name && !isBuiltin(name)) bucket.add(name)

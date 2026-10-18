@@ -1,0 +1,118 @@
+# I1 R18 static audit — FAIL
+
+Scope: only the five sealed files in the requested packet and the exact sibling sentinel. No descendants. All sealed hashes matched before and after review. The sentinel SHA-256 is 4148abc20583979d6a3c3075e64a4f1aa70a44d34a90a37a8d21a161544bc1b8. This is a bounded static verdict, with no live-catalog, mapping, semantic-parity or release acceptance.
+
+## Findings
+
+### I1-R18-01 — HIGH: Executable annotation arguments are excluded from Python payload indexing and leak through a mirrored annotation
+
+Frozen rule: C-actual-program-source-with-mirrored-type; SPEC0209 implementation/body prohibition and UNKNOWN provenance.
+
+Inert witness, hypothetical sealed-fixture replacement at python/sdk/src/sdk.py:
+
+```python
+def run(value: eval("40 + 2")) -> "40 + 2":
+    pass
+```
+
+1. The complete witness contains an explicit built-in eval call in an annotation and has no binding that shadows eval. Its argument is executable Python expression source. No execution or cross-file resolution is needed to identify this source role.
+2. runtime_literals visits FunctionDef.args but skips ast.arg.annotation; it also skips FunctionDef.returns (994). It therefore never indexes either string and produces an empty payload_literals set for this witness.
+3. typ of the parameter sees ast.Call, fails its allowed-node test (1006-1007), and returns only the generic UNKNOWN above, without a digest/length.
+4. typ of the return sees an allowed ast.Constant string, finds no collision (1010), and returns ast.unparse(n) at 1012: the exact string representation shown above.
+5. sig and the python-function row (1013-1028) transport that return string through the Python result to emitFor. Identity projection affects symbol only; neither it nor validateCatalog redacts shape. The source contributes two entries (python-surface and python-function), and the run entry remains UNKNOWN but still copies the payload.
+
+Action: Traverse runtime expression descendants inside dynamic annotation/return nodes for source-local payload evidence while preserving genuine declaration-only strings. Retain literal provenance on dynamic UNKNOWN projections, then cover this same-source mirror without executing eval.
+
+Test gap: Tests cover ordinary runtime calls and dynamic annotation/base rejection separately. The dynamic-annotation fixture also repeats its marker in a base/body, so it does not test a runtime source literal whose sole runtime occurrence is inside an annotation. Tests were read, never run.
+
+Source: scripts/reference-contract-catalog.mjs:987-1001 (Annotation and return fields skipped wholesale by runtime_literals); scripts/reference-contract-catalog.mjs:1004-1012 (Dynamic annotation loses literals; mirrored string is unparsed without collision evidence); scripts/reference-contract-catalog.mjs:1023-1032,1683-1691,1717-1728,1581-1606 (Connected Python extraction and catalog emission).
+
+### I1-R18-02 — HIGH: JSON $ref bypasses existing same-source payload collision evidence
+
+Frozen rule: C-actual-program-source-with-mirrored-type; B-genuine-literal-selector: unresolved dual role stays UNKNOWN.
+
+Inert witness, hypothetical sealed-fixture replacement at docs/tool-catalog.md:
+
+```markdown
+# Contracts
+## Runtime
+```ts public-api
+export type Mirror = "/C_ROUTE/";
+new Worker("/C_ROUTE/", { eval: true });
+```
+## Locator
+```json
+{"$ref":"/C_ROUTE/"}
+```
+```
+
+1. /C_ROUTE/ is an inert example of valid JavaScript program source (a regexp expression statement), explicitly supplied as Worker source with eval:true. The audit does not execute it.
+2. The Markdown prepass parses the recognized TS fence and indexRuntimeLiterals records the Worker argument (1332-1339,735-770), skipping only the type representation. All fences share that same map.
+3. The TypeScript Mirror becomes UNKNOWN via printed (557-582), demonstrating the collision is already known to the connected extraction.
+4. The JSON projection receives the map (1431-1436). $ref is a known vocabulary member (1048,1130-1154). Its string passes the $ref regexp at 1223. That disjunct lacks the !payloadLiterals.has(hash(value)) condition used for name/required at 1222, so 1225 returns the raw string despite the known collision.
+5. The context Contracts/Locator is identityVocabulary-compatible and does not contain the payload. Both identity projections leave it unchanged. emitFor copies the shape, marks it STATIC because no UNKNOWN remains there, retains P100-003/source SHA and NOT_VERIFIED parity, and validateCatalog accepts the internally consistent shape. Three document entries remain.
+
+Action: Require collision clearance for the $ref vocabulary branch, retaining UNKNOWN reason/hash/length when the role is unresolved. Add a direct connected Markdown regression for an already-indexed payload mirrored into $ref; preserve genuine locator-only declarations.
+
+Test gap: Tests cover same-source TS/JSON sharing and JSON name collisions, but not $ref collisions. The current $ref branch is visibly different from name/required.
+
+Source: scripts/reference-contract-catalog.mjs:1207-1225 ($ref OR branch omits payloadLiterals collision check); scripts/reference-contract-catalog.mjs:1313-1368,1421-1450 (Physical Markdown prepass and connected JSON/TypeScript projection); scripts/reference-contract-catalog.mjs:1581-1606 (Catalog emission retains leaked shape).
+
+### I1-R18-03 — MEDIUM: Genuine quoted ambient module selectors lose their exact declaration spelling
+
+Frozen rule: B-genuine-literal-selector; SPEC0209 declaration/contract shape retention; no identity migration required.
+
+Inert witness, hypothetical sealed-fixture replacement at packages/core/example/src/types.ts:
+
+```typescript
+declare module "opaque module one" { export const asset: number; }
+```
+
+1. The static ModuleDeclaration string is a genuine external-module contract selector. There are no runtime expressions or unclassified payloads in the witness.
+2. indexRuntimeLiterals excludes declaration names, leaving the payload index empty. Nevertheless nodeName applies identityVocabulary to the quoted module name (590-593); the space fails the regular expression at 20, so only its digest/length/reason is returned.
+3. visitStatements canonicalizes that object into the module symbol and constructs the child prefix at 802-811. It emits no module record or declared_name/context field for the module selector.
+4. The public asset declaration emits type:number and value:UNKNOWN Initializer absent (893-911). Its raw symbol contains the opaque parent object, not the original selector. Any generic name_resolution UNKNOWN added at 785-794 likewise carries no original spelling.
+5. emitFor projectIdentity hashes the punctuation-containing raw symbol and adds identity_projection with another digest/length. Neither the value shape, symbol, source path, nor the separate source hash preserves the selector text. There are two entries (value plus source-surface); no requirement deletion or ID migration is needed to repair the lost declaration metadata.
+
+Action: Carry the exact authenticated quoted module selector in declaration context metadata when no same-source payload collision exists; leave opaque IDs unchanged. Add positive space/punctuation/module-selector cases and collision negatives.
+
+Test gap: The opaque-module test checks distinct entries/IDs/UNKNOWN only. It never asserts exact module-selector preservation. Quoted event/class names receive declared_name metadata elsewhere, illustrating a compatible remedy while retaining opaque identities.
+
+Source: scripts/reference-contract-catalog.mjs:588-596 (nodeName makes quoted names with spaces opaque); scripts/reference-contract-catalog.mjs:800-813,893-911,957-962 (Module name used only as projected context; child shape lacks exact enclosing selector); scripts/reference-contract-catalog.mjs:26-41,1581-1606 (Final identity projection retains only digest-based identity).
+
+## Frozen-role and test assessment
+
+A/B positives are present: TS declaration-only literals (tests 190–213), Python annotation-only literals (247–272), quoted event/class names (906–951), genuine JSON schema/tool names and selectors (604–633), and source-separated declarations (1046–1069). No lexical program blacklist is authorized. Identity hashing alone is not proof that exact authenticated declaration spelling is retained; I1-R18-03 identifies a missing metadata route.
+
+C negatives include ordinary calls, Worker source, mirrored annotations/types, initializer wrappers, object keys and shared Markdown fences (tests 215–245, 274–398, 635–721, 836–904, 1071–1108). They do not cover the annotation-expression or $ref routes described above. UNKNOWN/parity NOT_VERIFIED does not excuse copying runtime-source bytes in another field.
+
+D uses absorbing payload roles: jsonChildRole (1139–1154) and projectJsonContract (1235–1269) prevent default/const/examples/unclassified object descendants from regaining declaration privilege. Concrete tests 789–834 and 1110–1184 inspect these paths; this positive assessment does not cover all possible schema dialects. The $ref finding is an already-established same-source role collision, not a claim that every schema-looking string is a program.
+
+Authenticated filenames are legitimate inert provenance. safeRead and ref.read retain exact relative source paths, source SHA-256 and Git blob identities (88–119, 211–229); tests 1186–1213 explicitly cover a program-shaped filename. This audit proposes no filename masking or path identity migration.
+
+## Narrow Lead fixture measurement decision
+
+The sealed Lead decision describes a measurement conflict: an alias-only declaration was being tested as implementation payload, contrary to frozen B. It permits adding an identical runtime initializer in the same physical source, retaining the original alias/assertions, and adding provenance/denominator checks. It grants no bar waiver.
+
+The actual sealed test at 1742–1798 contains both GuestSource alias and ProgramSource initializer (1745); the broad absence assertion remains at 1755, UNKNOWN-kind assertions at 1756–1769, and the new checks require exactly three TS-source entries (1774), hash/length on alias and initializer (1775–1790), source SHA/owner/parity (1791–1796). Separate declaration-only exact-body positive and same-source collision negative cases appear at 190–245, including OTHER_LITERAL_BODY_MARKER. This is consistent with the stated narrow repair. No older test was available or read; the decision's claim about historical assertions is not independent proof. The repaired fixture does not cover the new findings.
+
+## Other inspected connected controls
+
+Path/Git: relative paths and sensitive components are guarded, ancestors are lstat-checked, symlink roots/sources refused, candidate bytes authenticated against pinned Git blobs, complete local object storage required, replacement refs disabled, fsmonitor/hooks disabled, and source/HEAD rechecks occur before returning (68–347, 1730–1734). No reference status/diff or clean/process-filter execution path is used by collection. The code's own isolated Python parser is a runtime subprocess in normal operation; it was inspected as text only in this audit.
+
+Output authorization: the CLI checks flags, JSON/sensitive output paths, output containment/aliases/hardlinks and owner-map overwrite; the writer creates an exclusive inode and renames after rechecking paths (1917–2019). No concurrent filesystem attack, actual output write by the helper, or dependency/runtime behavior was tested.
+
+Retention/determinism: ownerIndex checks map pin, package manifests/hashes, package/family counts and surface owners (350–479); emitFor retains source, source SHA, owner, kind, stable hashed identity, contract digest and NOT_VERIFIED parity (1581–1606). Every candidate has a surface/data/manifest requirement, including unknowns (1609–1715). Canonical serialization and sorting cover object keys, declarations, entries, source lists and owner-map arrays (47–60, 957–963, 1735–1795). Freeze comparison rejects duplicate IDs, missing sources, removed entries, reference/owner drift and all remaining freeze differences (1798–1914). These controls were statically traced; actual live denominators and mapping correctness remain unassessed. Remedies must retain entries/owners/sources/IDs and must not reduce the denominator.
+
+## Integrity, reads and limits
+
+integrity.json contains the full authorized read ledger and before/after SHA-256 values. All source and test lines were read. No local AGENTS/skills/root files were read because this task explicitly restricted reads to the sealed packet and exact sentinel; no worktree edits or coordination claims were made. Only the four requested sibling-result reports were written.
+
+- STATIC ONLY: no collector, helper, tests, Python snippet, fixture code, Git commands or reference programs were executed/imported. Derived outputs are reasoned from sealed source, not runtime observations.
+- No live worktree/root, actual DeepSeek reference/install, user sessions, prior reports, history, descendants/subagents, live catalog, owner mapping or network were accessed.
+- Actual 318-manifest/55-family coverage, semantic parity, real-source applicability, platform/Git/Python/TypeScript behavior, filesystem races and release acceptance are outside this verdict.
+- Sentinel fingerprint construction is unspecified in the provided JSON. Its exact value and sentinel file hash are retained; all five individual sealed SHA-256 values were independently checked before/after. No external signature or origin authentication is claimed.
+- The narrow Lead decision asserts an original-fixture measurement conflict with frozen B. No prior fixture/history was read, so historical preservation is assessed only against the sealed current test and decision text.
+- Static review found no additional concrete non-racy path/Git/output authorization violation. This is not a proof of absence or an adversarial runtime certification.
+
+Stop after this static FAIL verdict. No patches, live collection, test execution, semantic approval or release decision.

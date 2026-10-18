@@ -1,0 +1,29 @@
+python3 - <<'PY'
+import hashlib,json,re
+from pathlib import Path
+base=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay')
+result=base/'critic-control-result'
+report=result/'report.md'
+text=report.read_text().replace('this supported constructor configuration','this existing accepted constructor configuration')
+report.write_text(text)
+successful=(result/'source-evidence.command.txt').read_text()
+failed=successful.replace("'docs/02_spec/0212_pare100_public_control_wiring.md':[(1,None)]", "'docs/02_spec/0212_pare100_public_control_wiring.md':[(8,45)]")
+(result/'extraction-attempt.command.txt').write_text(failed)
+(result/'extraction-attempt.raw.log').write_text('Traceback (most recent call last):\n  File "<stdin>", line 29, in <module>\n  File "<stdin>", line 29, in <genexpr>\nIndexError: list index out of range\n')
+(result/'evidence-command-exits.json').write_text(json.dumps([
+ {'command_file':'extraction-attempt.command.txt','cwd':str(base/'critic-control-packet'),'exit_code':1,'rawlog':'extraction-attempt.raw.log','note':'SPEC source range exceeded EOF; corrected without modifying source'},
+ {'command_file':'source-evidence.command.txt','cwd':str(base/'critic-control-packet'),'exit_code':0,'rawlog':'source-evidence-checks.raw.log'}
+],indent=2)+'\n')
+missing_links=[]
+for target in re.findall(r'\]\(([^)]+)\)',text):
+ file=target.split('#')[0]
+ if not (result/file).exists(): missing_links.append(target)
+assert not missing_links,missing_links
+sentinel=base/'critic-control-packet.sentinel.json'
+expected=json.loads(sentinel.read_text())
+packet=base/'critic-control-packet'
+actual={str(p.relative_to(packet)):hashlib.sha256(p.read_bytes()).hexdigest() for p in packet.rglob('*') if p.is_file()}
+assert actual==expected
+assert hashlib.sha256(sentinel.read_bytes()).hexdigest()=='05c3aa721f91d59736c61d78dbed5a8e46d0b7e41f71a7a0f226881d4cf35125'
+print(json.dumps({'report_links_valid':True,'report_sha256':hashlib.sha256(report.read_bytes()).hexdigest(),'sentinel_final':'PASS','packet_files':len(actual),'test_exits':[r['exit_code'] for r in json.loads((result/'commands.json').read_text())],'result_files':sorted(p.name for p in result.iterdir())},indent=2))
+PY

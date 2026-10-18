@@ -310,6 +310,60 @@ function executeRunner(root, args = []) {
 }
 
 describe('P100-002 current-run coverage orchestration (synthetic child only)', () => {
+  it('defaults to exactly two workers when no explicit worker option is supplied', () => {
+    const root = runnerFixture()
+    const result = executeRunner(root)
+    expect(result.status).toBe(0)
+    const observed = JSON.parse(
+      readFileSync(join(root, 'observed.json'), 'utf8')
+    )
+    expect(
+      observed.args.filter((arg) => arg.startsWith('--maxWorkers='))
+    ).toEqual(['--maxWorkers=2'])
+  })
+
+  it.each([
+    [['--maxWorkers=1'], '1'],
+    [['--maxWorkers', '3'], '3'],
+    [['--max-workers=1'], '1'],
+    [['--max-workers', '3'], '3'],
+    [['--maxWorkers=50%'], '50%'],
+    [['--maxWorkers', '100%'], '100%'],
+    [['--max-workers=50%'], '50%'],
+    [['--max-workers', '100%'], '100%']
+  ])('forwards exactly one explicit worker option for %j', (args, value) => {
+    const root = runnerFixture()
+    const result = executeRunner(root, args)
+    expect(result.status).toBe(0)
+    const observed = JSON.parse(
+      readFileSync(join(root, 'observed.json'), 'utf8')
+    )
+    expect(
+      observed.args.filter((arg) => arg.startsWith('--maxWorkers='))
+    ).toEqual([`--maxWorkers=${value}`])
+  })
+
+  it.each(
+    [
+      ['--maxWorkers=0'],
+      ['--max-workers', '-1'],
+      ['--maxWorkers=101%'],
+      ['--max-workers=1.5'],
+      ['--maxWorkers='],
+      ['--max-workers'],
+      ['--maxWorkers', '--coverage=false']
+    ].map((args) => [args])
+  )('rejects invalid worker arguments %j before launching a child', (args) => {
+    const root = runnerFixture()
+    const result = executeRunner(root, args)
+    expect(result.status).toBe(1)
+    expect(existsSync(join(root, 'observed.json'))).toBe(false)
+    expect(readdirSync(join(root, 'coverage'))).toEqual([
+      'coverage-summary.json',
+      'unrelated-output.txt'
+    ])
+  })
+
   it('runs with the protected config/per-file env and safely forwards normal filters', () => {
     const root = runnerFixture()
     const result = executeRunner(root, [

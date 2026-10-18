@@ -1,0 +1,64 @@
+{
+  "verdict": "FAIL",
+  "scope": "SPEC0209 bounded static reference catalog acceptance only",
+  "findings": [
+    {
+      "id": "I1-REF-001",
+      "severity": "P1 / high",
+      "title": "Executable implementation stored as a string is copied into contract data",
+      "source": "scripts/reference-contract-catalog.mjs",
+      "line": 375,
+      "related_lines": [
+        376,
+        611
+      ],
+      "artifact_source": "docs/04_audit/evidence/PARE100-EXEC-20261014/reference/catalog.json",
+      "artifact_line": 286307,
+      "evidence": "raw-catalog-audit.stdout.log",
+      "impact": "Frozen raw catalog vendors 39,615 characters of executable workflow guest implementation (79 functions with bodies), violating the bodies-exclusion/static-contract-only requirement even though the entry remains UNKNOWN.",
+      "recommendation": "Allowlist contract literal data and represent source-code payloads by UNKNOWN plus source/payload hashes and ownership; do not copy their bytes. Add an executable-string negative fixture and regenerate affected artifacts without shrinking the denominator."
+    },
+    {
+      "id": "I1-REF-002",
+      "severity": "P1 / high",
+      "title": "Git status executes reference-configured fsmonitor command",
+      "source": "scripts/reference-contract-catalog.mjs",
+      "line": 95,
+      "related_lines": [
+        98,
+        137
+      ],
+      "evidence": "execution-boundary-probe.stdout.log",
+      "impact": "Collector can execute arbitrary commands configured in the reference repository during a nominally static/read-only collection. Synthetic tracked shell hook executed and catalog returned NOT_VERIFIED successfully.",
+      "recommendation": "Disable core.fsmonitor explicitly for every Git invocation and isolate any other repository-configured execution mechanisms; retain an independent known-bad command-execution fixture."
+    },
+    {
+      "id": "I1-REF-003",
+      "severity": "P1 / high",
+      "title": "Existing external output hardlink overwrites tracked reference source",
+      "source": "scripts/reference-contract-catalog.mjs",
+      "line": 1248,
+      "related_lines": [
+        1262
+      ],
+      "evidence": "independent-probes.stdout.log",
+      "impact": "Path/symlink checks pass for an external hardlink, then writeFileSync truncates its shared inode and replaces a reference manifest with catalog JSON; CLI exits 0. The read-only reference guarantee fails.",
+      "recommendation": "Write to a newly created exclusive temporary file outside the reference and atomically replace the output directory entry after path checks, or reject multiply linked existing files. Add a hardlink regression checking unchanged reference bytes."
+    },
+    {
+      "id": "I1-REF-004",
+      "severity": "P1 / high",
+      "title": "Git replacement refs substitute a different tree beneath the expected commit pin",
+      "source": "scripts/reference-contract-catalog.mjs",
+      "line": 95,
+      "related_lines": [
+        98,
+        122,
+        128
+      ],
+      "evidence": "pin-replacement-probe.stdout.log",
+      "impact": "rev-parse HEAD preserves the expected SHA while ls-tree/status honor refs/replace. Collector accepts changed source and records original expected pin despite a different tree. Existing authentic freeze still rejects the difference; initial pin authentication does not.",
+      "recommendation": "Set GIT_NO_REPLACE_OBJECTS=1 or use --no-replace-objects for all Git operations; test replacement of a pinned commit/tree while preserving HEAD and manifest owner hashes."
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 import type { StopReason } from '@cvg/harness-contracts'
 import type { TestRunTrace } from './contracts.ts'
 import type { PreparedCapabilityCommand } from './plugin-execution-core.ts'
+import type {
+  ControlledDispatchPermit,
+  ControlledApprovalReceipt
+} from './controlled-kernel-continuation.ts'
 
 export const CONTROLLED_STOP_PROJECTION: Record<
   StopReason,
@@ -90,6 +94,14 @@ export interface ControlledAttempt {
   callbackAcknowledged: boolean
   attempted: boolean
   denied: boolean
+  permit?: ControlledDispatchPermit
+  evidenceRefs?: {
+    phaseId: string
+    phaseType: string
+    sequence: number
+    hash: string
+  }[]
+  approvalReceipt?: ControlledApprovalReceipt
 }
 
 /** Whole-turn authorization masks public success without erasing private facts. */

@@ -1,0 +1,122 @@
+  it.each([
+    ['eval', 'parameter'],
+    ['ordinary_annotation', 'parameter'],
+    ['ordinary_annotation', 'return']
+  ])(
+    'R19 dynamic Python %s in %s annotation indexes runtime literals without execution',
+    (callee, slot) => {
+      const source = 'python/sdk/src/sdk.py'
+      const payload = '40 + 2'
+      const expression = `${callee}("${payload}")`
+      const text = `def run(value: ${slot === 'parameter' ? expression : '"' + payload + '"'}) -> ${slot === 'return' ? expression : '"' + payload + '"'}:\n    pass\n`
+      const entries = fixture({ [source]: text })
+        .collect()
+        .entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(2)
+      const entry = entries.find((entry) => entry.symbol === 'run')
+      const dynamic = slot === 'parameter' ? entry.shape.parameters[0].type : entry.shape.returns
+      const mirror = slot === 'return' ? entry.shape.parameters[0].type : entry.shape.returns
+      const literal = { value_sha256: sha(payload), byte_length: Buffer.byteLength(payload) }
+      expect(dynamic).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
+      expect(mirror).toMatchObject({ status: 'UNKNOWN', ...literal })
+      expect(serializeCatalog(entries)).not.toContain(payload)
+      for (const item of entries) {
+        expect(item.source_sha256).toBe(sha(text))
+        expect(item.owner_task).toBe('P100-025')
+        expect(item.parity_status).toBe('NOT_VERIFIED')
+        expect(item.id).toBe(`contract:${sha(JSON.stringify({ kind: item.kind, package: item.package, source, symbol: item.symbol }))}`)
+      }
+    }
+  )
+
+  it('R19 pure Python annotation containers retain declaration-only literals', () => {
+    const source = 'python/sdk/src/sdk.py'
+    const text = 'def run(value: list["40 + 2"]) -> "40 + 2":\n    pass\n'
+    const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(2)
+    const entry = entries.find((item) => item.symbol === 'run')
+    expect(entry.shape.parameters[0].type).toBe("list['40 + 2']")
+    expect(entry.shape.returns).toBe("'40 + 2'")
+    expect(entry.extraction_status).toBe('STATIC')
+  })
+
+  it('R19 Markdown shared runtime evidence makes a mirrored JSON $ref opaque', () => {
+    const source = 'docs/tool-catalog.md'
+    const payload = '/C_ROUTE/'
+    const text = '# Contracts\n## Runtime\n```ts public-api\nexport type Mirror = "/C_ROUTE/";\nnew Worker("/C_ROUTE/", { eval: true });\n```\n## Locator\n```json\n{"$ref":"/C_ROUTE/"}\n```\n'
+    const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(3)
+    expect(entries.map((entry) => entry.kind).sort()).toEqual(['document-json', 'document-surface', 'document-type'])
+    const literal = { value_sha256: sha(payload), byte_length: Buffer.byteLength(payload) }
+    expect(entries.find((entry) => entry.kind === 'document-json').shape.$ref).toMatchObject({ status: 'UNKNOWN', ...literal })
+    expect(entries.find((entry) => entry.kind === 'document-type').shape.declarations[0].type).toMatchObject({ status: 'UNKNOWN', literals: [literal] })
+    expect(serializeCatalog(entries)).not.toContain(payload)
+    for (const entry of entries) {
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-003')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+      expect(entry.id).toBe(`contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`)
+    }
+  })
+
+  it('R19 genuine JSON $ref without same-source runtime collision remains exact', () => {
+    const source = 'docs/tool-catalog.md'
+    const text = '# Contracts\n## Runtime\n```ts public-api\nexport type Mirror = "/C_ROUTE/";\n```\n## Locator\n```json\n{"$ref":"/C_ROUTE/"}\n```\n'
+    const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(3)
+    const entry = entries.find((item) => item.kind === 'document-json')
+    expect(entry.shape.$ref).toBe('/C_ROUTE/')
+    expect(entry.extraction_status).toBe('STATIC')
+    expect(JSON.parse(entries.find((item) => item.kind === 'document-type').shape.declarations[0].type)).toBe('/C_ROUTE/')
+  })
+
+  it.each(['opaque module one', 'opaque module?! ✓'])(
+    'R19 ambient module selector %s remains exact metadata with existing opaque identity',
+    (selector) => {
+      const source = 'packages/core/example/src/types.ts'
+      const text = `declare module ${JSON.stringify(selector)} { export const asset: number; }\n`
+      const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(2)
+      const entry = entries.find((item) => item.kind === 'value')
+      expect(entry.shape.declarations[0].module_context).toEqual([{ name: selector }])
+      const opaqueName = JSON.stringify({ byte_length: Buffer.byteLength(selector), reason: 'Unclassified literal name; bytes not copied', status: 'UNKNOWN', value_sha256: sha(selector) })
+      expect(entry.symbol).toBe(`opaque-symbol:${sha(opaqueName + '.asset')}`)
+      expect(entry.id).toBe(`contract:${sha(JSON.stringify({ kind: 'value', package: entry.package, source, symbol: entry.symbol }))}`)
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-012')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+    }
+  )
+
+  it('R19 module context follows nested scopes without leaking into siblings or top level', () => {
+    const source = 'packages/core/example/src/types.ts'
+    const text = 'declare module "opaque module one" { namespace Inner { export type Nested = number; } export type Parent = string; }\ndeclare module "sibling?!" { export type Sibling = boolean; }\nexport type Outside = null;\n'
+    const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(5)
+    const types = entries.filter((entry) => entry.kind === 'type')
+    expect(types).toHaveLength(4)
+    const shapeOf = (type) => types.find((entry) => entry.shape.declarations[0].type === type).shape.declarations[0]
+    expect(shapeOf('number').module_context).toEqual([{ name: 'opaque module one' }, { name: 'Inner' }])
+    expect(shapeOf('string').module_context).toEqual([{ name: 'opaque module one' }])
+    expect(shapeOf('boolean').module_context).toEqual([{ name: 'sibling?!' }])
+    expect(shapeOf('null')).not.toHaveProperty('module_context')
+    expect(new Set(entries.map((entry) => entry.id)).size).toBe(5)
+  })
+
+  it('R19 module selector runtime collision is UNKNOWN in context without changing opaque identity', () => {
+    const source = 'packages/core/example/src/types.ts'
+    const selector = 'opaque module one'
+    const text = `declare module "${selector}" { export const asset: number; }\nconsume("${selector}");\n`
+    const entries = fixture({ [source]: text }).collect().entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(2)
+    const entry = entries.find((item) => item.kind === 'value')
+    expect(entry.shape.declarations[0].module_context).toEqual([{ name: expect.objectContaining({ status: 'UNKNOWN', value_sha256: sha(selector), byte_length: Buffer.byteLength(selector) }) }])
+    expect(serializeCatalog(entries)).not.toContain(selector)
+    const opaqueName = JSON.stringify({ byte_length: Buffer.byteLength(selector), reason: 'Unclassified literal name; bytes not copied', status: 'UNKNOWN', value_sha256: sha(selector) })
+    expect(entry.symbol).toBe(`opaque-symbol:${sha(opaqueName + '.asset')}`)
+    expect(entry.id).toBe(`contract:${sha(JSON.stringify({ kind: 'value', package: entry.package, source, symbol: entry.symbol }))}`)
+    expect(entry.source_sha256).toBe(sha(text))
+    expect(entry.owner_task).toBe('P100-012')
+    expect(entry.parity_status).toBe('NOT_VERIFIED')
+  })
+

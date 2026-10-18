@@ -12,6 +12,13 @@ import http from 'node:http'
 import https from 'node:https'
 import http2 from 'node:http2'
 import dgram from 'node:dgram'
+import {
+  validateFailureCase,
+  makeFailure,
+  snapshotFailure
+} from './failure-case.mjs'
+import { TOOL_NAME, validateToolCase } from './tool-case.mjs'
+import { capturePortRequest } from './capture-port-data.mjs'
 
 const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes'
 const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
@@ -21,22 +28,31 @@ const fail = (message) => {
 }
 const json = (value) => JSON.parse(JSON.stringify(value))
 
-async function main() {
+export async function runReferenceFixture(mode = 'reply') {
+  if (!['reply', 'failure', 'tool'].includes(mode)) fail('invalid driver mode')
   if (process.argv.length !== 3) fail('one fixture path required')
+  if (!process.env.HOME) fail('isolated cwd/home required')
+  const home = fs.realpathSync(process.env.HOME)
+  const cwd = fs.realpathSync(process.cwd())
   if (
-    path.resolve(process.cwd()) === REFERENCE_ROOT ||
-    !process.env.HOME ||
-    !path.resolve(process.cwd()).startsWith(path.resolve(process.env.HOME))
+    cwd === REFERENCE_ROOT ||
+    cwd.startsWith(`${REFERENCE_ROOT}${path.sep}`) ||
+    (cwd !== home && !cwd.startsWith(`${home}${path.sep}`))
   )
     fail('isolated cwd/home required')
   const filename = path.resolve(process.argv[2])
+  const fixtureStat = fs.lstatSync(filename)
   if (
-    fs.lstatSync(filename).isSymbolicLink() ||
-    fs.statSync(filename).size > 65536
+    !fixtureStat.isFile() ||
+    fixtureStat.nlink !== 1 ||
+    fixtureStat.size > 65536 ||
+    !fs.realpathSync(filename).startsWith(`${home}${path.sep}`)
   )
     fail('unsafe fixture')
   const fixture = JSON.parse(fs.readFileSync(filename, 'utf8'))
-  if (
+  if (mode === 'tool') validateToolCase(fixture)
+  else if (mode === 'failure') validateFailureCase(fixture)
+  else if (
     !fixture ||
     typeof fixture !== 'object' ||
     Array.isArray(fixture) ||
@@ -148,13 +164,70 @@ async function main() {
   const ctx = new Context()
   const events = [],
     requests = [],
-    chunks = []
+    chunks = [],
+    adapterErrors = [],
+    liveErrors = []
   let calls = 0
+  const toolBodies = []
   class ScriptedAdapter extends LlmAdapter {
     async *stream(options) {
-      if (++calls > 1) fail('unexpected_model_call')
+      if (++calls > (mode === 'tool' ? 2 : 1)) fail('unexpected_model_call')
       if (options.signal?.aborted) fail('cancelled_before_model')
-      requests.push(json(options.messages))
+      requests.push(
+        mode === 'tool' ? capturePortRequest(options) : json(options.messages)
+      )
+      if (mode === 'failure') {
+        const error = makeFailure(fixture)
+        adapterErrors.push(snapshotFailure(error))
+        throw error
+      }
+      if (mode === 'tool') {
+        let script
+        if (calls === 1) {
+          script = [
+            { type: 'block-start', index: 0, blockType: 'tool-call' },
+            {
+              type: 'block-end',
+              index: 0,
+              block: {
+                type: 'tool-call',
+                id: `call-${fixture.id}`,
+                name: TOOL_NAME,
+                arguments: JSON.stringify({ text: fixture.text })
+              }
+            },
+            { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+            { type: 'finish', reason: { kind: 'tool-calls' } }
+          ]
+        } else {
+          const results = options.messages.filter((m) => m.role === 'tool')
+          if (
+            results.length !== 1 ||
+            results[0].toolCallId !== `call-${fixture.id}` ||
+            toolBodies.length !== 1
+          )
+            fail('missing real tool result')
+          const text = results[0].content
+            .map((b) =>
+              b.type === 'text' ? b.text : fail('unexpected tool content')
+            )
+            .join('')
+          if (text !== toolBodies[0].output)
+            fail('tool result differs from body')
+          script = [
+            { type: 'block-start', index: 0, blockType: 'text' },
+            { type: 'text-delta', index: 0, text },
+            { type: 'block-end', index: 0, block: { type: 'text', text } },
+            { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
+            { type: 'finish', reason: { kind: 'stop' } }
+          ]
+        }
+        for (const chunk of script) {
+          chunks.push(json(chunk))
+          yield chunk
+        }
+        return
+      }
       const script = [
         { type: 'block-start', index: 0, blockType: 'text' },
         ...fixture.fragments.map((text) => ({
@@ -179,9 +252,38 @@ async function main() {
   let native
   try {
     await mountAgentLoopTestDependencies(ctx)
+    if (mode === 'tool')
+      ctx.tools.register({
+        name: TOOL_NAME,
+        description: 'Pure synthetic echo; no external capabilities',
+        parameters: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+          additionalProperties: false
+        },
+        output: {
+          schema: { type: 'string' },
+          render: (_args, value) => [{ type: 'text', text: value }]
+        },
+        execute: async (args) => {
+          if (toolBodies.length || typeof args.text !== 'string')
+            fail('unexpected tool body')
+          toolBodies.push({
+            name: TOOL_NAME,
+            input: json(args),
+            output: args.text
+          })
+          return args.text
+        }
+      })
     ctx.on('session/event', (_session, event) => {
       events.push(json(event))
     })
+    if (mode === 'failure')
+      ctx.on('agent/error', ({ turn, step, error }) => {
+        liveErrors.push({ turn, step, error: snapshotFailure(error) })
+      })
     ctx.llm.registerAdapter(['pare100-synthetic'], new ScriptedAdapter())
     const driver = await mountAgentLoopTestHarness(ctx)
     const agent = await driver.create(
@@ -202,23 +304,47 @@ async function main() {
     await agent.whenIdle()
     const messages = json(agent.session.deriveMessages())
     const assistant = messages.filter((x) => x.role === 'assistant')
-    native = { events, messages, requests, chunks, modelCalls: calls }
-    if (calls !== 1 || assistant.length !== 1 || networkAttempts.length)
-      fail('missing_or_extra_execution')
-    native.finalText = assistant[0].content
-      .filter((x) => x.type === 'text')
-      .map((x) => x.text)
-      .join('')
-    const completed = events.filter((x) => x.type === 'assistant/message')
+    native = {
+      events,
+      messages,
+      requests,
+      chunks,
+      modelCalls: calls,
+      ...(mode === 'failure' ? { adapterErrors, liveErrors } : {}),
+      ...(mode === 'tool' ? { toolBodies } : {})
+    }
     if (
-      completed.length !== 1 ||
-      !completed[0].data.usage ||
-      !Number.isSafeInteger(completed[0].data.usage.inputTokens) ||
-      !Number.isSafeInteger(completed[0].data.usage.outputTokens)
+      calls !== (mode === 'tool' ? 2 : 1) ||
+      (mode === 'reply' && assistant.length !== 1) ||
+      networkAttempts.length
     )
-      fail('missing_native_usage')
-    native.observedUsage = json(completed[0].data.usage)
+      fail('missing_or_extra_execution')
+    if (mode === 'reply') {
+      native.finalText = assistant[0].content
+        .filter((x) => x.type === 'text')
+        .map((x) => x.text)
+        .join('')
+      const completed = events.filter((x) => x.type === 'assistant/message')
+      if (
+        completed.length !== 1 ||
+        !completed[0].data.usage ||
+        !Number.isSafeInteger(completed[0].data.usage.inputTokens) ||
+        !Number.isSafeInteger(completed[0].data.usage.outputTokens)
+      )
+        fail('missing_native_usage')
+      native.observedUsage = json(completed[0].data.usage)
+    }
     native.toolCalls = events.filter((x) => x.type === 'tool/call').length
+    if (mode === 'tool') {
+      const final = assistant.at(-1)
+      if (!final || toolBodies.length !== 1 || native.toolCalls !== 1)
+        fail('missing tool turn')
+      native.finalText = final.content
+        .map((b) =>
+          b.type === 'text' ? b.text : fail('unexpected final content')
+        )
+        .join('')
+    }
   } finally {
     await ctx.fiber.dispose()
   }
@@ -262,20 +388,33 @@ async function main() {
       },
       native,
       networkAttempts,
-      projection: {
-        text: native.finalText,
-        modelCalls: native.modelCalls,
-        toolCalls: native.toolCalls,
-        inputTokens: native.observedUsage.inputTokens,
-        outputTokens: native.observedUsage.outputTokens,
-        effects: []
-      },
-      projectionStatus: 'BOUNDED_REPLY_ONLY_NOT_FULL_PARITY'
+      ...(mode === 'failure' || mode === 'tool'
+        ? {
+            observationStatus:
+              mode === 'tool'
+                ? 'NATIVE_TOOL_TURN_MEASUREMENT_NOT_PARITY'
+                : 'NATIVE_FAILURE_MEASUREMENT_NOT_PARITY'
+          }
+        : {
+            projection: {
+              text: native.finalText,
+              modelCalls: native.modelCalls,
+              toolCalls: native.toolCalls,
+              inputTokens: native.observedUsage.inputTokens,
+              outputTokens: native.observedUsage.outputTokens,
+              effects: []
+            },
+            projectionStatus: 'BOUNDED_REPLY_ONLY_NOT_FULL_PARITY'
+          })
     }) + '\n'
   )
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.message}\n`)
-  process.exitCode = 1
-})
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+)
+  runReferenceFixture().catch((error) => {
+    process.stderr.write(`${error.message}\n`)
+    process.exitCode = 1
+  })

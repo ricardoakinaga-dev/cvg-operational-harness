@@ -1,0 +1,199 @@
+  it.each([
+    ['ts', false],
+    ['ts', true],
+    ['js', false]
+  ])(
+    'R21 plain %s runtime fence shares physical-source literals (runtime first=%s)',
+    (language, runtimeFirst) => {
+      const source = 'docs/tool-catalog.md'
+      const payload = 'throw/STATIC_FENCE_R20/'
+      const mirror =
+        '## Mirror\n```ts public-api\nexport type Mirror = "throw/STATIC_FENCE_R20/";\n```\n'
+      const runtime = `## Runtime\n\`\`\`${language}\nnew Worker("throw/STATIC_FENCE_R20/", { eval: true });\n\`\`\`\n`
+      const text =
+        '# Manual\n' + (runtimeFirst ? runtime + mirror : mirror + runtime)
+      const entries = fixture({ [source]: text })
+        .collect()
+        .entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(3)
+      const type = entries.find((entry) => entry.kind === 'document-type')
+      expect(type.shape.declarations[0].type).toMatchObject({
+        status: 'UNKNOWN',
+        literals: [
+          {
+            value_sha256: sha(payload),
+            byte_length: Buffer.byteLength(payload)
+          }
+        ]
+      })
+      const unparsed = entries.find(
+        (entry) => entry.kind === 'document-unparsed'
+      )
+      expect(unparsed.extraction_status).toBe('UNKNOWN')
+      expect(unparsed.shape.language).toMatchObject({
+        status: 'UNKNOWN',
+        value_sha256: sha(language),
+        byte_length: Buffer.byteLength(language)
+      })
+      expect(serializeCatalog(entries)).not.toContain('STATIC_FENCE_R20')
+      for (const entry of entries) {
+        expect(entry.source_sha256).toBe(sha(text))
+        expect(entry.owner_task).toBe('P100-003')
+        expect(entry.parity_status).toBe('NOT_VERIFIED')
+        expect(entry.id).toBe(
+          `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
+        )
+      }
+    }
+  )
+
+  it('R21 plain TS declaration-only literals remain metadata while that fence stays UNKNOWN', () => {
+    const source = 'docs/tool-catalog.md'
+    const payload = 'throw/STATIC_FENCE_R20/'
+    const text =
+      '# Manual\n## Mirror\n```ts public-api\nexport type Mirror = "throw/STATIC_FENCE_R20/";\n```\n## Other\n```ts\nexport type Other = "throw/STATIC_FENCE_R20/";\n```\n'
+    const entries = fixture({ [source]: text })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(3)
+    const type = entries.find((entry) => entry.kind === 'document-type')
+    expect(JSON.parse(type.shape.declarations[0].type)).toBe(payload)
+    expect(type.extraction_status).toBe('STATIC')
+    expect(
+      entries.find((entry) => entry.kind === 'document-unparsed')
+        .extraction_status
+    ).toBe('UNKNOWN')
+    expect(
+      entries.filter((entry) => entry.kind === 'document-type')
+    ).toHaveLength(1)
+  })
+
+  it('R21 Python exports cannot copy an already-indexed runtime literal protected in an annotation', () => {
+    const source = 'python/sdk/src/sdk.py'
+    const text =
+      'import subprocess\n__all__ = ["debugger"]\ndef exported(value: "debugger") -> None:\n    pass\nsubprocess.run(["node", "-e", "debugger"])\n'
+    const entries = fixture({ [source]: text })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(3)
+    const literal = {
+      status: 'UNKNOWN',
+      value_sha256: sha('debugger'),
+      byte_length: Buffer.byteLength('debugger')
+    }
+    const exports = entries.find((entry) => entry.kind === 'python-exports')
+    expect(exports.symbol).toBe('__all__')
+    expect(exports.shape.names).toEqual([expect.objectContaining(literal)])
+    expect(exports.shape.names[0].reason).toBeTruthy()
+    expect(
+      entries.find((entry) => entry.kind === 'python-function').shape
+        .parameters[0].type
+    ).toMatchObject(literal)
+    expect(serializeCatalog(entries)).not.toContain('debugger')
+    for (const entry of entries) {
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-025')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+      expect(entry.id).toBe(
+        `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
+      )
+    }
+  })
+
+  it.each(['', ': list[str]'])(
+    'R21 Python __all__%s retains clean exports beside colliding exports and mirrored annotations',
+    (annotation) => {
+      const source = 'python/sdk/src/sdk.py'
+      const text = `__all__${annotation} = ["debugger", "Client"]\nclass Client:\n    pass\ndef exported(value: "debugger") -> "debugger":\n    pass\nconsume("debugger")\n`
+      const entries = fixture({ [source]: text })
+        .collect()
+        .entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(4)
+      const literal = {
+        status: 'UNKNOWN',
+        value_sha256: sha('debugger'),
+        byte_length: 8
+      }
+      const exports = entries.find((entry) => entry.kind === 'python-exports')
+      expect(exports.shape.names).toEqual([
+        expect.objectContaining(literal),
+        'Client'
+      ])
+      expect(exports.extraction_status).toBe('UNKNOWN')
+      const fn = entries.find((entry) => entry.kind === 'python-function')
+      expect(fn.shape.parameters[0].type).toMatchObject(literal)
+      expect(fn.shape.returns).toMatchObject(literal)
+      expect(serializeCatalog(entries)).not.toContain('debugger')
+      for (const entry of entries) {
+        expect(entry.source_sha256).toBe(sha(text))
+        expect(entry.owner_task).toBe('P100-025')
+        expect(entry.parity_status).toBe('NOT_VERIFIED')
+      }
+    }
+  )
+
+  it('R21 annotated literal __all__ adds its named requirement and retains surrounding IDs', () => {
+    const source = 'python/sdk/src/sdk.py'
+    const text =
+      '__all__: list[str] = ["Client"]\nclass Client:\n    def send(self, value: int) -> None:\n        pass\n'
+    const unannotated = text.replace('__all__: list[str]', '__all__')
+    const entries = fixture({ [source]: text })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    const control = fixture({ [source]: unannotated })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(4)
+    expect(control).toHaveLength(4)
+    expect(entries.map((entry) => entry.id).sort()).toEqual(
+      control.map((entry) => entry.id).sort()
+    )
+    const exports = entries.find((entry) => entry.kind === 'python-exports')
+    expect(exports.symbol).toBe('__all__')
+    expect(exports.shape.names).toEqual(['Client'])
+    expect(exports.extraction_status).toBe('STATIC')
+    expect(entries.map((entry) => entry.kind).sort()).toEqual([
+      'python-class',
+      'python-exports',
+      'python-method',
+      'python-surface'
+    ])
+    for (const entry of entries) {
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-025')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+      expect(entry.id).toBe(
+        `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
+      )
+    }
+  })
+
+  it.each(['', ': list[str]'])(
+    'R21 genuine __all__%s and forward references remain exact with runtime text only in another source',
+    (annotation) => {
+      const source = 'python/sdk/src/sdk.py'
+      const text = `__all__${annotation} = ["Client"]\nclass Client:\n    def send(self, value: "Client") -> "Client":\n        pass\n`
+      const entries = fixture({
+        [source]: text,
+        'python/sdk/src/other.py': 'consume("Client")\n'
+      })
+        .collect()
+        .entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(4)
+      const exports = entries.find((entry) => entry.kind === 'python-exports')
+      expect(exports.shape.names).toEqual(['Client'])
+      expect(exports.extraction_status).toBe('STATIC')
+      const method = entries.find((entry) => entry.kind === 'python-method')
+      expect(
+        method.shape.parameters.find((parameter) => parameter.name === 'value')
+          .type
+      ).toBe("'Client'")
+      expect(method.shape.returns).toBe("'Client'")
+      for (const entry of entries) {
+        expect(entry.source_sha256).toBe(sha(text))
+        expect(entry.owner_task).toBe('P100-025')
+        expect(entry.parity_status).toBe('NOT_VERIFIED')
+      }
+    }
+  )
+

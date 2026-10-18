@@ -1,0 +1,658 @@
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\udfff' in position 0: surrogates not allowed
+ × tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate \ud800 preserves unknown provenance without a collector crash 309ms
+   → Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+ × tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate \udfff preserves unknown provenance without a collector crash 257ms
+   → Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\udfff' in position 0: surrogates not allowed
+
+ × tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate a\ud800z preserves unknown provenance without a collector crash 245ms
+   → Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R16 Python hypothesis: assigned source colliding with a string annotation stays opaque 159ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R16 Python hypothesis: direct call literal colliding with a string annotation stays opaque 164ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R16 Python collisions use runtime AST positions rather than sink or program names 140ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R16 Python preserves annotation-only forward references, declarations and export IDs across physical files 145ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 exact I1-R14-01 opaquely projects an unclassified JSON member and same-source mirror 152ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 exact I1-R14-02 keeps a payload table cell opaque in its identity as well as shape 158ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 table identities are opaque by role, preserve distinct contexts, and survive row reordering 263ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 document identity routes mask shared payload text even inside heading/context parts 151ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 unclassified table data enters the physical-source index before earlier declarations 167ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R15 preserves established schema/tool names and selectors beside opaque unclassified members 150ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 exact I1-R13-01 shares physical Markdown payload evidence (reverse=false) 149ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 exact I1-R13-01 shares physical Markdown payload evidence (reverse=true) 166ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 exact I1-R13-02 masks a type mirrored from a direct runtime argument 160ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 runtime literal roles are generic for standalone call expressions 1ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 runtime literal roles are generic for standalone unary expressions 1ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 runtime literal roles are generic for standalone tagged template expressions 1ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 preserves declaration-only selectors, event names and module locators 1ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R14 keeps document scopes separate while sharing TS and JSON within a physical source 143ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S01 opaquely retains complete JSON payload object keys under default 146ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S01 opaquely retains complete JSON payload object keys under const 146ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S01 opaquely retains complete JSON payload object keys under examples 150ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S01 opaquely retains complete JSON payload object keys under unclassified 141ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S01 treats TypeScript object initializer names as opaque payload keys 134ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S02 indexes literal descendants of opaque binary initializers without evaluation 146ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S02 indexes literal descendants of opaque conditional initializers without evaluation 142ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S02 indexes literal descendants of opaque new initializers without evaluation 129ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S02 indexes literal descendants of opaque tagged-template initializers without evaluation 143ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S03 preserves exact declaration-only names with spaces and their existing opaque identities 147ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S03 keeps same-source TS declaration/payload value collisions UNKNOWN 132ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S03 keeps same-source TS declaration/payload key collisions UNKNOWN 136ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S03 keeps JSON declaration/payload value collisions UNKNOWN across same-source fences 121ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R13 S03 keeps JSON declaration/payload key collisions UNKNOWN across same-source fences 137ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R12 A preserves program-shaped genuine event and tool declaration names 135ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R12 B preserves a genuine literal selector without borrowing payload roles across sources 130ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R12 C keeps actual program source opaque in initializer and same-source mirrored literal types 127ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R12 D persists payload context while preserving genuine tool/schema names and selectors 148ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R12 provenance preserves an exact authenticated program-shaped safe filename 162ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > collects actual manifest/API/type/config/event/tool schema and additional contracts without bodies 260ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > keeps dynamic/absent data UNKNOWN instead of treating it as an accepted empty value 118ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > is byte deterministic and IDs survive declaration order/line changes 460ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects changed/deleted/untracked contract sources and changed manifest owner hashes 175ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects wrong root/commit/version and missing/duplicate package ownership 160ms
+warning: re-init: ignored --initial-branch=main
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects symlinks and escaping source/owner paths without following them 288ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects a pinned external symlink and a root symlink before opening contract files 165ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > freeze rejects duplicate IDs, missing sources, removed requirements and content drift 226ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects malformed AST, malformed documented JSON and missing documented source 312ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > Python never copies executable annotation/class-base expressions 135ms
+fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > preserves explicit package owner overrides and parses generated Cordis fragments/variants by semantic anchors 157ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > does not copy executable expressions embedded in TypeScript heritage/types 2ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > freeze rejects live HEAD drift even when the catalog file itself is unchanged 214ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > CLI writes reproducible JSON, validates freeze, exits nonzero on bad flags and refuses reference output 1851ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > retains executable string requirements as hashes without copying literal or template bodies 138ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > retains schema and documented JSON code literals as UNKNOWN hashes, never bodies 129ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > live validator authenticates recomputed source metadata against pinned blobs 177ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > opaque literal protection also covers document cells, graph labels and annotation literals 149ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > does not copy guest bodies through identities, literal names or bytes annotations 184ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > distinct opaque module names retain separate declaration requirements 138ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects implementation text in root/package provenance identifiers 188ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects additional package body name in apps/cli/package.json 90ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects additional package body name in native/system/package.json 99ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects additional package body name in python/sdk/package.json 97ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects additional package body name in vendor/guest/package.json 88ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > hashes unrecognized fence info without copying implementation bytes 130ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > requires an explicit owner for additional implementation surfaces 89ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > never executes a reference configured fsmonitor or hook during static Git reads 159ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects partial/promisor references before object reads can fetch 80ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > does not follow excluded documentation file links while inventorying source paths 129ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > does not invoke configured clean conversion for excluded changed worktree files 157ms
+warning: re-init: ignored --initial-branch=main
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > does not invoke configured process conversion for excluded changed worktree files 145ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > authenticates the real commit tree despite replacement refs and unchanged HEAD 170ms
+ ✓ tests/reference-contract-catalog.test.js > P100-003 static contract catalog > rejects external output hardlinks without changing any reference inode 452ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate \ud800 preserves unknown provenance without a collector crash
+Error: Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+
+ ❯ collectReferenceCatalog scripts/reference-contract-catalog.mjs:1718:7
+    1716|   if (python.length) {
+    1717|     const results = JSON.parse(
+    1718|       execFileSync('python3', ['-I', '-c', PYTHON_AST], {
+       |       ^
+    1719|         input: JSON.stringify(python),
+    1720|         encoding: 'utf8',
+ ❯ Object.collect tests/reference-contract-catalog.test.js:180:20
+ ❯ tests/reference-contract-catalog.test.js:195:51
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 1, signal: null, output: [ null, '', 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\ud800\' in position 0: surrogates not allowed\n' ], pid: 1376651, stdout: '', stderr: 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\ud800\' in position 0: surrogates not allowed\n' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate \udfff preserves unknown provenance without a collector crash
+Error: Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\udfff' in position 0: surrogates not allowed
+
+ ❯ collectReferenceCatalog scripts/reference-contract-catalog.mjs:1718:7
+    1716|   if (python.length) {
+    1717|     const results = JSON.parse(
+    1718|       execFileSync('python3', ['-I', '-c', PYTHON_AST], {
+       |       ^
+    1719|         input: JSON.stringify(python),
+    1720|         encoding: 'utf8',
+ ❯ Object.collect tests/reference-contract-catalog.test.js:180:20
+ ❯ tests/reference-contract-catalog.test.js:195:51
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 1, signal: null, output: [ null, '', 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\udfff\' in position 0: surrogates not allowed\n' ], pid: 1376726, stdout: '', stderr: 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\udfff\' in position 0: surrogates not allowed\n' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  tests/reference-contract-catalog.test.js > P100-003 static contract catalog > R17 Python escaped surrogate a\ud800z preserves unknown provenance without a collector crash
+Error: Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+
+ ❯ collectReferenceCatalog scripts/reference-contract-catalog.mjs:1718:7
+    1716|   if (python.length) {
+    1717|     const results = JSON.parse(
+    1718|       execFileSync('python3', ['-I', '-c', PYTHON_AST], {
+       |       ^
+    1719|         input: JSON.stringify(python),
+    1720|         encoding: 'utf8',
+ ❯ Object.collect tests/reference-contract-catalog.test.js:180:20
+ ❯ tests/reference-contract-catalog.test.js:195:51
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 1, signal: null, output: [ null, '', 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\ud800\' in position 1: surrogates not allowed\n' ], pid: 1376785, stdout: '', stderr: 'Traceback (most recent call last):\n  File "<string>", line 57, in <module>\n  File "<string>", line 32, in runtime_literals\n  File "<string>", line 30, in visit\n  File "<string>", line 31, in visit\n  File "<string>", line 20, in visit\n  File "<string>", line 4, in opaque\nUnicodeEncodeError: \'utf-8\' codec can\'t encode character \'\ud800\' in position 1: surrogates not allowed\n' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 71 passed (74)
+   Start at  01:52:56
+   Duration  14.43s (transform 155ms, setup 0ms, import 489ms, tests 13.25s, environment 574ms)
+

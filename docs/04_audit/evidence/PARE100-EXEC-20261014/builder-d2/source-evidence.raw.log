@@ -1,0 +1,1254 @@
+FILE docs/02_spec/0212_pare100_public_control_wiring.md
+SHA256 559e7da51d49f9e4ba7c1405a95d9ef2d61256e901d3b26c36f20276d551db4b
+
+LINES 1-42
+1: # SPEC 0212 — Controles públicos efetivos em todos os perfis
+2: 
+3: - Escopo corretivo de P100-012/QA.CONTROLS, sobre o contrato existente da SPEC0181/0195 e OperationalHarnessOptions.
+4: - Trilha T3: pausa/journal de efeitos/contenção são controles. Estado READY_FOR_USER_REVIEW_R2; revisão explícita do usuário antes de BUILD. Não alterar policy, authority, approval ou regras hospitalares.
+5: - Recon executável: os probes tests/replay/public-controls.probe.ts mostraram que pause/effects passados a createOperationalHarness são ignorados. O perfil iterativo também não recebe sandbox, apesar de a fábrica pública aceitar essa porta. Modelo/tool podem executar durante uma pausa configurada e o ledger injetado não recebe lifecycle.
+6: 
+7: ## Mudança delimitada
+8: 
+9: 1. createOperationalHarness encaminha as mesmas instâncias de pause/effects para SinglePassGovernedRuntime e IterativeGovernedRuntime, além das portas que já encaminha. Ausente continua com o default atual; nenhuma opção é reconstruída a partir do modelo/JSON.
+10: 2. IterativeGovernedRuntimeOptions recebe sandbox?:SandboxGate aditivo; bootKernel monta sandboxControl(options.sandbox) quando presente. A fábrica encaminha seu sandbox ao iterativo. Port ausente/indisponível continua fail-closed para tool que exige contenção; não reclassificar tool nem criar executor alternativo.
+11: 3. Preservar ordem dos controles, tipos de estado, approval/journal durável, orçamento, schema/evento persistido e tool exposure. Não adicionar runtime/loop nem tornar controles removíveis. Exceções aditivas/corretivas de contrato descritas abaixo: ToolExecutionContext.sandboxHandle opcional e ShellRunRequest.handle obrigatório; não publicar outcome novo.
+12: 4. ToolExecutionContext recebe sandboxHandle?:SandboxHandle, emitido pelo kernel depois de gate allowed. pipeline valida outcome.mode/handle.mode igual ao modo pedido, flags booleanas, deadline positivo finito quando presente e workspaceRoot absoluto quando necessário. Gate inválido falha UNSAFE_REQUEST antes do body. Context carrega cópia readonly/congelada do handle validado; JSON do modelo não pode definir ou ampliar esses campos. Tools NONE não recebem handle inventado.
+13: 5. createShellTool consome o context.sandboxHandle em vez de fabricar um PROCESS handle. Ausente, modo diferente de PROCESS, subprocess=false, workspaceRoot ausente/inválido ou cwd fora do workspace concedido rejeitam antes de runner. Root configurado e cwd permanecem confinados por realpath também ao root do gate. ShellRunRequest encaminha handle para backend real/injetado; runContained recebe seus grants sem ampliar rede/root/subprocess e timeout é o mínimo de limites/solicitação/handle.deadlineMs quando presente. Direct execute sem contexto governado passa a rejeitar execução, correção de bypass intencional. O runner injetado é porta trusted do host/teste e recebe grants, não prova isolamento nativo. Não prometer aplicação Landlock/containment total, mantidos em P100-024.
+14: 6. effects.started: try/await captura throw síncrono e reject assíncrono; ambos devolvem not_started/INSUFFICIENT_EVIDENCE com zero body e sem finished. started successful antecede body; finished exatamente uma vez após outcome, antes de publicação/post-execute/retorno. Se finished throw/reject, transformar em outcome existente threw com erro fixo unknown_effect: effect_settlement_failed e duração preservada; os consumers atuais single-pass/iterative terminam TOOL_FAILURE/unknown_effect, não SUCCEEDED. Não afirmar ausência do efeito já executado nem repetir body/finished automaticamente. Preservar erro/estado anterior de deadline/cancel/failure em evidência de teste; não apagar journal. Testar cada falha síncrona/assíncrona, incluindo efeito que executou e completion de ledger falhou.
+15: 7. Exceção nas portas de pause/effects/sandbox conserva os resultados fail-closed do pipeline compartilhado. Somente o kernel autoriza execução; chamar a factory não permite bypass pelo dispatch iterativo.
+16: 
+17: ## Arquivos e ownership
+18: 
+19: Lead/Builder corretivo após gate: packages/harness/src/createOperationalHarness.ts, packages/harness/src/iterative-runtime.ts, packages/harness/src/kernel/pipeline.ts, packages/contracts/src/contracts.ts (somente ToolExecutionContext.sandboxHandle), packages/sandbox/src/shell-tool.ts, testes de contrato desses componentes, tests/replay/public-controls.probe.ts e testes novos sob packages/harness/src/**tests**/pare100-public-controls.test.ts. PUBLIC_API registra portas/correções e exports existentes preservados. Config/core policies/approval/consumidor/SQL/lock permanecem intocados. Tipos/descriptors/journal persistidos não mudam.
+20: 
+21: ## Critérios de pronto
+22: 
+23: | ID      | Prova exigida                                                                                                                                                                                                                                                                                          |
+24: | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+25: | CTL-W01 | Factory single_pass e iterative com tenant pausado: zero model body/zero tool body e stop coerente, pelo entrypoint público                                                                                                                                                                            |
+26: | CTL-W02 | Ledger injetado recebe started/finished do efeito em ambos os perfis, antes/depois do corpo; throw/reject síncrono/assíncrono em started produz zero body/not_started; finished falha depois do body produz TOOL_FAILURE/unknown_effect sem replay ou SUCCEEDED                                        |
+27: | CTL-W03 | Sandbox injetado no iterativo é chamado antes do corpo; denied/unavailable/throw/ausente impedem contained tool; gate allowed fornece grants ao context e runner real/injetado; handle inválido/modo/root/subprocess incompatíveis não executam; shell não fabrica grant e timeout não amplia deadline |
+28: | CTL-W04 | Demais perfis/conformidade, replay e source/compile público preservados; Node22 typecheck/lint/unit/coverage/PG/E2E verdes e critic independente sem alteração do candidate                                                                                                                            |
+29: 
+30: Tests precisam reproduzir a falha anterior antes do patch. Não atualizar as expectativas para aceitar a pausa ignorada nem omitir o probe do gate final. Timing/UUIDs podem ser determinísticos; controles, estados, counters e corpo de efeito não são mockados para fabricar PASS.
+31: 
+32: ## Migração, rollback e limites
+33: 
+34: Sem migration ou estado novo. Chamadores que já passam as portas finalmente recebem o comportamento contratado. Backward compatibility estrutural: campos existentes conservados; sandbox no construtor iterativo e sandboxHandle no context opcionais/aditivos. ShellRunRequest.handle é adição obrigatória para executores; direct shell execute sem handle governado deixa de executar, correção de segurança explícita. Sem port, ferramentas puras conservam funcionamento e ferramentas com contenção exigida falham fechado.
+35: 
+36: Se regredir antes da integração, não promover esta lane; reconstruir candidate descartável a partir da baseline ca565391ac52033d6f59b06237a45beb986e1c12 mais outras lanes aceitas, excluindo o diff ATÔMICO desta SPEC (factory/iterative/pipeline/ToolExecutionContext/shell/tests/PUBLIC_API e snapshots próprios). Não usar reset/restore em trabalho compartilhado; inventário/hash do diff e preflight raiz delimitam ownership. Rerodar gates e manter QA.CONTROLS FAIL porque a baseline restaura os defeitos conhecidos; rollback não concede readiness. Não limpar estado, refazer efeitos ou mexer em código de outra lane. Nenhum provider real, clínica/finanças, dado real ou release. A aprovação desta correção não aprova os protocolos ainda em revisão da SPEC0211 nem os outros BUILD T3/T4 futuros.
+37: 
+38: ## Revisão R2
+39: 
+40: Crítica I1 identificou que mero wiring deixava handle fora do context/body e finished rejeitado como SUCCEEDED. Escopo foi expandido explicitamente para corrigir as duas fronteiras, com failures síncronos/assíncronos e reversão atômica delimitada. Nova crítica de desenho e revisão explícita do usuário continuam obrigatórias antes de BUILD.
+41: 
+42: Revisão de prontidão documental: os três gaps I1 R1 foram tratados nesta versão. A reavaliação I1 R2 falhou por capacidade do modelo e não produziu parecer; isso não equivale a ACCEPT. Revisão de código independente permanece gate de aceite depois do BUILD e não é dispensada por aprovação desta SPEC.
+
+FILE docs/architecture/PUBLIC_API.md
+SHA256 3f466acf865452dba29cca3076a96cf1789f006873cb0992bb567e0d2c28ac7d
+
+LINES 239-247
+239: | `effectJournal`                                                                                        | sim com `capabilities`           | `EffectJournal`                                                                                  | `InMemoryEffectJournal` (`sintético`), `PostgresOperationalEffectJournal` (`host`)                             |
+240: | `audit`                                                                                                | sim                              | `append(AuditEvent)`                                                                             | —                                                                                                              |
+241: | `telemetry`                                                                                            | sim                              | `record(TelemetryEvent)`                                                                         | —                                                                                                              |
+242: | `log`                                                                                                  | não                              | `KernelLog`, por exemplo createSessionKernelLog para stream previamente aberto e turno vinculado | `InMemoryKernelLog`, `createSessionKernelLog`                                                                  |
+243: | `orchestrator`                                                                                         | não                              | `Orchestrator`; padrão `SinglePassOrchestrator`                                                  | `SinglePassOrchestrator`, `NoopOrchestrator`                                                                   |
+244: | `iterativeOrchestrator` e `stepStore`                                                                  | ambas, para o perfil `iterative` | `IterativeOrchestrator` e `ExecutionStepStore` (`experimental`)                                  | `InMemoryExecutionStepStore` (`sintético`), `PostgresExecutionStepStore` (`host`)                              |
+245: | `contextEngine`, `knowledge`, `sufficiencyEvaluator`, `completionEvaluator`, `claimExtractor`, `clock` | não                              | Alimentam apenas o perfil iterativo configurado                                                  | —                                                                                                              |
+246: 
+247: `pause`, `log` e `effects` são aceitos pelo tipo `OperationalHarnessOptions`, herdado de `HarnessRuntimeOptions`, mas a fábrica não os repassa ao runtime nesta revisão: o kernel usa sempre os padrões em memória. Não dependa dessas opções pela fábrica.
+
+FILE packages/harness/src/createOperationalHarness.ts
+SHA256 f1ef60850d5efbb87833da8386b1f0654be764cb9ae72ea89207f88213c73e1b
+
+LINES 82-128
+82:   const tools = resolveTools(options, capabilityFingerprint)
+83:   const singlePass = new SinglePassGovernedRuntime({
+84:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+85:     modelGateway: options.modelGateway,
+86:     policy: options.policy,
+87:     approvals: options.approvals,
+88:     tools,
+89:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+90:     audit: options.audit,
+91:     telemetry: options.telemetry,
+92:     ...(options.pause ? { pause: options.pause } : {}),
+93:     ...(options.effects ? { effects: options.effects } : {}),
+94:     ...(options.log ? { log: options.log } : {}),
+95:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+96:   })
+97: 
+98:   const iterative =
+99:     options.iterativeOrchestrator && options.stepStore
+100:       ? new IterativeGovernedRuntime({
+101:           orchestrator: options.iterativeOrchestrator,
+102:           modelGateway: options.modelGateway,
+103:           policy: options.policy,
+104:           approvals: options.approvals,
+105:           tools,
+106:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+107:           audit: options.audit,
+108:           telemetry: options.telemetry,
+109:           ...(options.pause ? { pause: options.pause } : {}),
+110:           ...(options.effects ? { effects: options.effects } : {}),
+111:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+112:           ...(options.log ? { log: options.log } : {}),
+113:           stepStore: options.stepStore,
+114:           ...(options.contextEngine
+115:             ? { contextEngine: options.contextEngine }
+116:             : {}),
+117:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+118:           ...(options.sufficiencyEvaluator
+119:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+120:             : {}),
+121:           ...(options.completionEvaluator
+122:             ? { completionEvaluator: options.completionEvaluator }
+123:             : {}),
+124:           ...(options.claimExtractor
+125:             ? { claimExtractor: options.claimExtractor }
+126:             : {}),
+127:           ...(options.clock ? { clock: options.clock } : {})
+128:         })
+
+LINES 204-227
+204: function resolveTools(
+205:   options: OperationalHarnessOptions,
+206:   capabilityFingerprint: string | undefined
+207: ): ToolRegistry {
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+210:       'Operational harness composition accepts capabilities or tools, not both'
+211:     )
+212:   }
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+216:   if (!registry) {
+217:     throw new Error(
+218:       'Operational harness composition requires an explicit capability or tool registry'
+219:     )
+220:   }
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+224:     ...(capabilityFingerprint
+225:       ? { compositionFingerprint: capabilityFingerprint }
+226:       : {})
+227:   })
+
+FILE packages/harness/src/kernel/pipeline.ts
+SHA256 b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272
+
+LINES 411-452
+411:     const granted = outcome.kind === 'allowed' ? outcome.handle : undefined
+412:     const handle = granted && {
+413:       mode: granted.mode,
+414:       allowNetwork: granted.allowNetwork,
+415:       allowSubprocess: granted.allowSubprocess,
+416:       workspaceRoot: granted.workspaceRoot,
+417:       deadlineMs: granted.deadlineMs
+418:     }
+419:     if (
+420:       outcome.kind !== 'allowed' ||
+421:       outcome.mode !== requiredMode ||
+422:       !handle ||
+423:       handle.mode !== requiredMode ||
+424:       typeof handle.allowNetwork !== 'boolean' ||
+425:       typeof handle.allowSubprocess !== 'boolean' ||
+426:       (handle.deadlineMs !== undefined &&
+427:         (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0)) ||
+428:       (requiredMode === 'WORKSPACE' && handle.workspaceRoot === undefined) ||
+429:       (handle.workspaceRoot !== undefined &&
+430:         (typeof handle.workspaceRoot !== 'string' ||
+431:           !isAbsolute(handle.workspaceRoot) ||
+432:           handle.workspaceRoot.includes('\0')))
+433:     ) {
+434:       return stop(
+435:         'UNSAFE_REQUEST',
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+437:       )
+438:     }
+439:     // Copy only validated grants. Neither a later gate mutation nor model
+440:     // JSON can rewrite the authority passed to the capability body.
+441:     call.sandboxHandle = Object.freeze({
+442:       mode: handle.mode,
+443:       allowNetwork: handle.allowNetwork,
+444:       allowSubprocess: handle.allowSubprocess,
+445:       ...(handle.workspaceRoot !== undefined
+446:         ? { workspaceRoot: handle.workspaceRoot }
+447:         : {}),
+448:       ...(handle.deadlineMs !== undefined
+449:         ? { deadlineMs: handle.deadlineMs }
+450:         : {})
+451:     })
+452:     return undefined
+
+LINES 485-532
+485:     const blocked = await revalidate(host, call)
+486:     if (blocked) return { kind: 'not_started', gate: blocked }
+487:     try {
+488:       await host.get('effects').started(ref)
+489:     } catch (error) {
+490:       return {
+491:         kind: 'not_started',
+492:         gate: stop(
+493:           'INSUFFICIENT_EVIDENCE',
+494:           `Effect ledger could not record the start: ${errorMessage(error)}.`
+495:         )
+496:       }
+497:     }
+498:     started = true
+499:     const startedAt = Date.now()
+500:     const toolController = new AbortController()
+501:     try {
+502:       // Past the decision point the body is always invoked, so a recorded
+503:       // start never pairs with a body that did not run.
+504:       const value = await raceInvoked(turn, () =>
+505:         call.tool.execute(call.invocation.input, {
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+519:           kind: value === DEADLINE ? 'deadline' : 'cancelled',
+520:           durationMs
+521:         }
+522:       }
+523:       return value.status === 'SUCCEEDED'
+524:         ? { kind: 'succeeded', result: value, durationMs }
+525:         : { kind: 'failed', result: value, durationMs }
+526:     } catch (error) {
+527:       return {
+528:         kind: 'threw',
+529:         error: errorMessage(error),
+530:         durationMs: Date.now() - startedAt
+531:       }
+532:     }
+
+LINES 557-571
+557:   const outcome = await run(0)
+558:   if (started) {
+559:     try {
+560:       await host.get('effects').finished(ref, outcome.kind)
+561:     } catch {
+562:       // The body already ran. A missing settlement is uncertain, never a
+563:       // successful effect or permission to retry the body/ledger.
+564:       return {
+565:         kind: 'threw',
+566:         error: 'unknown_effect: effect_settlement_failed',
+567:         durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+568:       }
+569:     }
+570:   }
+571:   return outcome
+
+FILE packages/harness/src/iterative-runtime.ts
+SHA256 42ba67a7543040c41bb364ff99cc1a27f0a4a1f252a3fd50c14af4cb6048be3d
+
+LINES 109-116
+109:   readonly maxObservationPayloadChars?: number
+110:   readonly clock?: () => Date
+111:   readonly orchestratorVersion?: string
+112:   /** Kernel controls (SPEC 0181); in-memory defaults when omitted. */
+113:   readonly pause?: PauseSwitch
+114:   readonly log?: KernelLog
+115:   readonly effects?: EffectLedger
+116:   readonly sandbox?: SandboxGate
+
+LINES 131-150
+131: const TERMINAL_STOPS = new Set<StopReason>([
+132:   'COMPLETED',
+133:   'HUMAN_TAKEOVER',
+134:   'POLICY_DENIED',
+135:   'INSUFFICIENT_EVIDENCE',
+136:   'MAX_STEPS',
+137:   'MAX_COST',
+138:   'MAX_DURATION',
+139:   'MAX_TOKENS',
+140:   'MAX_MODEL_CALLS',
+141:   'MAX_TOOL_CALLS',
+142:   'MAX_REPLANS',
+143:   'MAX_KNOWLEDGE_CALLS',
+144:   'MAX_VERIFICATION_CALLS',
+145:   'VERIFICATION_FAILED',
+146:   'LOOP_DETECTED',
+147:   'STATE_CONFLICT',
+148:   'UNSAFE_REQUEST',
+149:   'CANCELLED'
+150: ])
+
+LINES 222-231
+222: export function boundedPayload(value: unknown, maxChars: number): unknown {
+223:   let serialized: string
+224:   try {
+225:     serialized = JSON.stringify(value) ?? ''
+226:   } catch {
+227:     return '[unserializable payload]'
+228:   }
+229:   if (serialized.length <= maxChars) return value
+230:   return `${serialized.slice(0, maxChars)}…[truncated]`
+231: }
+
+LINES 374-388
+374:   public constructor(
+375:     private readonly options: IterativeGovernedRuntimeOptions
+376:   ) {
+377:     this.contextEngine = options.contextEngine ?? new DefaultContextEngine()
+378:     this.completionEvaluatorOverride = options.completionEvaluator
+379:     this.clock = options.clock ?? (() => new Date())
+380:     this.repeatThreshold = Math.max(
+381:       1,
+382:       options.loopDetection?.repeatThreshold ?? 2
+383:     )
+384:     this.maxSignatures = options.loopDetection?.maxSignatures ?? 12
+385:     this.maxObservationPayloadChars =
+386:       options.maxObservationPayloadChars ?? 4_000
+387:     this.orchestratorVersion =
+388:       options.orchestratorVersion ?? HYBRID_ORCHESTRATOR_VERSION
+
+LINES 425-449
+425:   private bootKernel(): Promise<KernelHost> {
+426:     this.#kernel ??= KernelHost.boot(
+427:       [
+428:         budgetControl(),
+429:         pauseControl(this.options.pause),
+430:         logControl(this.options.log),
+431:         effectsControl(this.options.effects),
+432:         ...(this.options.sandbox ? [sandboxControl(this.options.sandbox)] : []),
+433:         policyControl(this.options.policy),
+434:         approvalsControl(
+435:           this.options.approvals,
+436:           this.options.capabilityFingerprint
+437:             ? { capabilityFingerprint: this.options.capabilityFingerprint }
+438:             : {}
+439:         ),
+440:         auditControl(this.options.audit, { action: 'harness.iterative' }),
+441:         modelCapability(this.options.modelGateway),
+442:         toolsCapability(this.options.tools),
+443:         telemetryCapability(this.options.telemetry, {
+444:           name: 'harness.iterative'
+445:         })
+446:       ],
+447:       ITERATIVE_REQUIRED_SERVICES
+448:     )
+449:     return this.#kernel
+
+LINES 655-677
+655:     // A ledger settlement failure is unresolved evidence, not a resumable
+656:     // tool decision. Preserve its checkpoint and never repeat that effect.
+657:     if (
+658:       checkpoint?.state.stopReason === 'TOOL_FAILURE' &&
+659:       checkpoint.state.observations.some(
+660:         (observation) =>
+661:           observation.type === 'TOOL_RESULT' &&
+662:           observation.source === 'TOOL' &&
+663:           (observation.payload as { error?: unknown } | null)?.error ===
+664:             'unknown_effect: effect_settlement_failed'
+665:       )
+666:     ) {
+667:       return this.finalize(
+668:         run,
+669:         {
+670:           kind: 'stop',
+671:           stopReason: 'TOOL_FAILURE',
+672:           response: 'unknown_effect: effect_settlement_failed',
+673:           preserveCheckpoint: true
+674:         },
+675:         startedAtMs
+676:       )
+677:     }
+
+LINES 726-733
+726:     if (
+727:       checkpoint.state.stopReason &&
+728:       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+729:       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+730:       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+731:     ) {
+732:       return 'Terminal execution cannot be resumed.'
+733:     }
+
+LINES 784-797
+784:       if (run.state.pendingDecision && run.state.pendingStepNumber) {
+785:         decision = run.state.pendingDecision
+786:         stepNumber = run.state.pendingStepNumber
+787:         run.lastDecision = decision
+788:       } else {
+789:         stepNumber = run.stepNumber + 1
+790:         if (stepNumber > run.input.budget.maxSteps) {
+791:           return this.stop('MAX_STEPS', 'Step budget exhausted.')
+792:         }
+793:         const decisionResult = await this.decide(run, stepNumber)
+794:         if (decisionResult.outcome) return decisionResult.outcome
+795:         decision = sanitizeLoopDecision(decisionResult.decision)
+796:         run.lastDecision = decision
+797:       }
+
+LINES 850-874
+850:       const dispatch = await this.dispatch(run, decision, stepNumber)
+851:       if (dispatch.kind === 'pause') {
+852:         return await this.pause(run, stepNumber, dispatch)
+853:       }
+854:       if (dispatch.kind === 'stop') {
+855:         run.stepNumber = stepNumber
+856:         return dispatch
+857:       }
+858: 
+859:       const signatures = [...run.state.loopSignatures, signature].slice(
+860:         -this.maxSignatures
+861:       )
+862:       run.stepNumber = stepNumber
+863:       run.state = {
+864:         ...run.state,
+865:         stepNumber,
+866:         loopSignatures: signatures,
+867:         pendingDecision: undefined,
+868:         pendingStepNumber: undefined,
+869:         selectedCapability:
+870:           decision.toolId ??
+871:           decision.selectedCapability ??
+872:           run.state.selectedCapability
+873:       }
+874:       await this.persistCheckpoint(run)
+
+LINES 1373-1384
+1373:     return {
+1374:       observationId: `obs_${randomUUID()}`,
+1375:       executionId: run.executionId,
+1376:       stepId: input.stepId,
+1377:       stepNumber: input.stepNumber,
+1378:       type: input.type,
+1379:       source: input.source,
+1380:       trust: input.trust,
+1381:       payload: boundedPayload(input.payload, this.maxObservationPayloadChars),
+1382:       summary: input.summary.slice(0, 500),
+1383:       provenance: input.provenance,
+1384:       timestamp: this.clock().toISOString()
+
+LINES 1546-1605
+1546:     let stopReason: StopReason = outcome.stopReason
+1547:     run.usage.activeDurationMs += Date.now() - startedAtMs
+1548:     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+1549:       try {
+1550:         await this.closePendingStep(run, stopReason)
+1551:       } catch {
+1552:         // The open step could not be closed: the terminal checkpoint must not
+1553:         // claim a clean stop while the step store disagrees.
+1554:         stopReason = 'INSUFFICIENT_EVIDENCE'
+1555:       }
+1556:     }
+1557:     run.state = { ...run.state, stopReason }
+1558:     let checkpointProven = true
+1559:     if (outcome.preserveCheckpoint) {
+1560:       // Intentional no-write: the durable pause must stay resumable after a
+1561:       // rejected resume binding.
+1562:     } else {
+1563:       try {
+1564:         await this.persistCheckpoint(run)
+1565:       } catch {
+1566:         checkpointProven = false
+1567:       }
+1568:     }
+1569:     const claimedReason: StopReason = checkpointProven
+1570:       ? stopReason
+1571:       : 'INSUFFICIENT_EVIDENCE'
+1572:     if (!checkpointProven) {
+1573:       run.state = { ...run.state, stopReason: claimedReason }
+1574:     }
+1575:     const result: RuntimeResult = {
+1576:       response: outcome.response,
+1577:       stopReason: claimedReason,
+1578:       ...(outcome.kind === 'stop' && outcome.approvalId
+1579:         ? { approvalId: outcome.approvalId }
+1580:         : {}),
+1581:       steps: run.usage.steps,
+1582:       modelCalls: run.usage.modelCalls,
+1583:       toolCalls: run.usage.toolCalls,
+1584:       usage: {
+1585:         inputTokens: run.usage.inputTokens,
+1586:         outputTokens: run.usage.outputTokens,
+1587:         costUsd: run.usage.costUsd
+1588:       },
+1589:       ...(run.lastToolObservation
+1590:         ? {
+1591:             toolResult: {
+1592:               /* v8 ignore next -- only a successful tool observation is stored */
+1593:               status:
+1594:                 (run.lastToolObservation.payload as { status?: string } | null)
+1595:                   ?.status === 'SUCCEEDED'
+1596:                   ? ('SUCCEEDED' as const)
+1597:                   : ('REJECTED' as const),
+1598:               output: (
+1599:                 run.lastToolObservation.payload as {
+1600:                   output?: unknown
+1601:                 } | null
+1602:               )?.output
+1603:             }
+1604:           }
+1605:         : {})
+
+FILE packages/harness/src/iterative-dispatch.ts
+SHA256 6031d2502956f9d8ac68a1200514de61e86a9258e2251f35b7a6d4319396e6c3
+
+LINES 157-164
+157: export function applyResume(
+158:   ctx: IterativeDispatchContext,
+159:   run: LoopRun,
+160:   checkpoint: ExecutionCheckpoint | null
+161: ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+162:   const resume = run.input.resume
+163:   if (!resume) return null
+164:   if (!checkpoint) {
+
+LINES 394-400
+394:   const call: ToolCallState = {
+395:     turn: ctx.turn(run),
+396:     tool,
+397:     invocation,
+398:     needsApproval: forceApproval,
+399:     executionRef: run.executionId
+400:   }
+
+LINES 423-462
+423:   // Policy, approval, guards (pause) and cancellation run in the kernel
+424:   // pipeline (SPEC 0181); this loop only adds its checkpoint and its steps.
+425:   const pipeline = await runToolCall(ctx.kernel(run), call, {
+426:     beforeDispatch: async () => {
+427:       await recordPolicy()
+428:       const approvalId = call.grant?.approvalId
+429:       if (
+430:         approvalId &&
+431:         run.state.pendingApprovalId &&
+432:         run.state.pendingApprovalId !== approvalId
+433:       ) {
+434:         return {
+435:           kind: 'stop',
+436:           stopReason: 'STATE_CONFLICT',
+437:           response: 'Approval identity changed while resuming the execution.'
+438:         }
+439:       }
+440:       // Budget accounting is committed with the in-flight decision so a crash
+441:       // cannot replay the same step against an unconsumed counter; the
+442:       // approval is only reserved after this checkpoint.
+443:       if (!alreadyCounted) run.usage.toolCalls += 1
+444:       run.inFlightCounted = false
+445:       // The step is in flight from here: a stop reason left by an earlier
+446:       // approval wait would hide that this call is already counted when the
+447:       // execution resumes (AUD-0598 R02).
+448:       run.state = {
+449:         ...run.state,
+450:         pendingDecision: decision,
+451:         pendingStepNumber: stepNumber,
+452:         ...(approvalId ? { pendingApprovalId: approvalId } : {}),
+453:         stopReason: undefined
+454:       }
+455:       await ctx.persistCheckpoint(run)
+456:       await ctx.recordStep(run, {
+457:         stepNumber,
+458:         stepType: 'TOOL',
+459:         status: 'RUNNING',
+460:         sideEffecting: true,
+461:         reasonCode: decision.reasonCode
+462:       })
+
+LINES 595-635
+595:     case 'threw':
+596:     case 'failed': {
+597:       const toolError =
+598:         outcome.kind === 'threw' ? outcome.error : outcome.result.error
+599:       const unknownEffect =
+600:         outcome.kind === 'threw' ||
+601:         toolError?.startsWith('unknown_effect:') === true
+602:       // `unknownEffect` is false only for a settled failure, so the fallback
+603:       // status is unreachable for a thrown outcome.
+604:       const failureStatus =
+605:         outcome.kind === 'failed' ? outcome.result.status : undefined
+606:       await ctx.recordObservation(
+607:         run,
+608:         ctx.makeObservation(run, {
+609:           stepId,
+610:           stepNumber,
+611:           type: 'TOOL_RESULT',
+612:           source: 'TOOL',
+613:           trust: 'UNTRUSTED',
+614:           payload: {
+615:             status: unknownEffect ? 'REJECTED' : (failureStatus as string),
+616:             error: toolError ?? 'tool execution failed'
+617:           },
+618:           summary: unknownEffect
+619:             ? 'Tool outcome is uncertain and requires reconciliation.'
+620:             : 'Tool execution failed.',
+621:           provenance: {
+622:             sourceId: tool.id,
+623:             ...(tool.version ? { sourceVersion: tool.version } : {}),
+624:             operationKey,
+625:             ...(unknownEffect ? { effectRef: operationKey } : {})
+626:           }
+627:         })
+628:       )
+629:       await failStep(unknownEffect ? 'unknown_effect' : 'tool_failed')
+630:       return ctx.stop(
+631:         'TOOL_FAILURE',
+632:         unknownEffect
+633:           ? `unknown_effect: ${toolError as string}`
+634:           : (toolError ?? 'Tool execution failed.')
+635:       )
+
+LINES 663-705
+663:     case 'succeeded': {
+664:       const observation = ctx.makeObservation(run, {
+665:         stepId,
+666:         stepNumber,
+667:         type: 'TOOL_RESULT',
+668:         source: 'TOOL',
+669:         trust: 'UNTRUSTED',
+670:         payload: {
+671:           status: 'SUCCEEDED',
+672:           sideEffect: tool.sideEffect,
+673:           output: boundedPayload(
+674:             outcome.result.output,
+675:             ctx.maxObservationPayloadChars
+676:           )
+677:         },
+678:         summary: stringifySummary(
+679:           outcome.result.output,
+680:           'Tool completed successfully.'
+681:         ),
+682:         provenance: {
+683:           sourceId: tool.id,
+684:           ...(tool.version ? { sourceVersion: tool.version } : {}),
+685:           operationKey,
+686:           effectRef: operationKey
+687:         }
+688:       })
+689:       await ctx.recordObservation(run, observation)
+690:       run.lastToolObservation = observation
+691:       run.state = { ...run.state, pendingApprovalId: undefined }
+692:       await ctx.recordStep(run, {
+693:         stepNumber,
+694:         stepType: 'TOOL',
+695:         status: 'SUCCEEDED',
+696:         sideEffecting: true,
+697:         reasonCode: decision.reasonCode,
+698:         observationRefs: [observation.observationId]
+699:       })
+700:       if (pipeline.logFailure) {
+701:         // F04: the effect is recorded as done (no replay), but the run stops
+702:         // terminally instead of continuing on an unlogged result.
+703:         return ctx.stop('INSUFFICIENT_EVIDENCE', pipeline.logFailure.response)
+704:       }
+705:       return { kind: 'continue' }
+
+FILE packages/contracts/src/execution-v2.ts
+SHA256 1e5cfcb9f2935ec2be4399f5494e86611db5bb577c942345ab135ac1f985c1b6
+
+LINES 60-75
+60: export const STEP_TRANSITIONS: Record<StepStatus, readonly StepStatus[]> = {
+61:   PENDING: ['RUNNING', 'SKIPPED'],
+62:   RUNNING: ['SUCCEEDED', 'FAILED', 'WAITING'],
+63:   WAITING: ['RUNNING', 'FAILED', 'SKIPPED'],
+64:   SUCCEEDED: [],
+65:   // A failed step may be retried; the effect journal still fences duplicates.
+66:   FAILED: ['RUNNING'],
+67:   SKIPPED: []
+68: }
+69: 
+70: export function isStepTransitionAllowed(
+71:   from: StepStatus,
+72:   to: StepStatus
+73: ): boolean {
+74:   return STEP_TRANSITIONS[from].includes(to)
+75: }
+
+FILE packages/contracts/src/contracts.ts
+SHA256 32432899d2dea8b5504093541fe884e8ef73751b9e70ba3b878f15f8f212004f
+
+LINES 110-119
+110: export interface ToolExecutionContext {
+111:   readonly tenantId: TenantId
+112:   readonly agentId: AgentId
+113:   readonly correlationId: CorrelationId
+114:   readonly traceId: TraceId
+115:   readonly operationKey?: string
+116:   readonly signal?: AbortSignal
+117:   /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+118:   readonly sandboxHandle?: SandboxHandle
+119: }
+
+LINES 212-225
+212: export interface RuntimeResult {
+213:   readonly response: string
+214:   readonly stopReason: StopReason
+215:   /** Durable approval identity when execution is paused or approved. */
+216:   readonly approvalId?: ApprovalId
+217:   readonly steps: number
+218:   readonly modelCalls: number
+219:   readonly toolCalls: number
+220:   readonly usage: {
+221:     readonly inputTokens: number
+222:     readonly outputTokens: number
+223:     readonly costUsd: number
+224:   }
+225:   readonly toolResult?: ToolResult
+
+LINES 456-470
+456: export interface SandboxHandle {
+457:   readonly mode: SandboxMode
+458:   /** Present only in WORKSPACE; the tenant-scoped writable root. */
+459:   readonly workspaceRoot?: string
+460:   readonly allowNetwork: boolean
+461:   readonly allowSubprocess: boolean
+462:   readonly deadlineMs?: number
+463: }
+464: 
+465: export type SandboxGateOutcome =
+466:   | {
+467:       readonly kind: 'allowed'
+468:       readonly mode: SandboxMode
+469:       readonly handle: SandboxHandle
+470:     }
+
+FILE packages/sandbox/src/shell-tool.ts
+SHA256 183bd1734989c9fc3be4afc36811d77376f187ab7d053e876a63f673d48e9a2a
+
+LINES 11-20
+11: export interface ShellRunRequest {
+12:   /** Pure argv array — never a shell string, never interpolated. */
+13:   readonly argv: readonly string[]
+14:   /** Absolute directory, already confined to the workspace root. */
+15:   readonly cwd: string
+16:   /** Validated grant supplied by the governed execution context. */
+17:   readonly handle: SandboxHandle
+18:   readonly timeoutMs: number
+19:   readonly maxOutputBytes: number
+20:   readonly stdin?: string
+
+LINES 142-166
+142: export function createShellTool(options: ShellToolOptions): ToolDefinition {
+143:   const rootRaw = options.workspaceRoot
+144:   if (
+145:     !isAbsolute(rootRaw) ||
+146:     !existsSync(rootRaw) ||
+147:     !statSync(rootRaw).isDirectory()
+148:   ) {
+149:     throw new Error(
+150:       `workspaceRoot must be an existing absolute directory: ${rootRaw}`
+151:     )
+152:   }
+153:   const root = realpathSync(rootRaw)
+154:   const limits = resolveLimits(options.limits)
+155:   const runner =
+156:     options.run ??
+157:     (async (request: ShellRunRequest): Promise<ShellRunResult> => {
+158:       const result: ContainedRunResult = await runContained({
+159:         argv: request.argv,
+160:         cwd: request.cwd,
+161:         timeoutMs: request.timeoutMs,
+162:         maxOutputBytes: request.maxOutputBytes,
+163:         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
+164:         handle: request.handle
+165:       })
+166:       return result
+
+LINES 178-208
+178:     execute: async (input, context) => {
+179:       const handle = context?.sandboxHandle
+180:       if (
+181:         !handle ||
+182:         handle.mode !== 'PROCESS' ||
+183:         handle.allowSubprocess !== true ||
+184:         typeof handle.allowNetwork !== 'boolean' ||
+185:         typeof handle.workspaceRoot !== 'string' ||
+186:         !isAbsolute(handle.workspaceRoot) ||
+187:         handle.workspaceRoot.includes('\0') ||
+188:         (handle.deadlineMs !== undefined &&
+189:           (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0))
+190:       )
+191:         return rejected('a valid governed PROCESS sandbox handle is required')
+192:       let grantedRoot: string
+193:       try {
+194:         grantedRoot = realpathSync(handle.workspaceRoot)
+195:         if (!statSync(grantedRoot).isDirectory())
+196:           return rejected('sandbox workspaceRoot must be a directory')
+197:       } catch {
+198:         return rejected('sandbox workspaceRoot cannot be resolved')
+199:       }
+200:       const withinGrant = (path: string): boolean =>
+201:         path === grantedRoot ||
+202:         path.startsWith(
+203:           grantedRoot.endsWith(sep) ? grantedRoot : grantedRoot + sep
+204:         )
+205:       if (!withinGrant(root))
+206:         return rejected(
+207:           'configured workspace root is outside the sandbox grant'
+208:         )
+
+LINES 254-270
+254:       const rawCwd = record?.['cwd']
+255:       const confined = confinePath(
+256:         root,
+257:         rawCwd === undefined || rawCwd === '' ? '.' : rawCwd
+258:       )
+259:       if (!confined.ok) return rejected(confined.error)
+260:       if (!withinGrant(confined.abs))
+261:         return rejected('cwd is outside the sandbox grant')
+262:       let cwdStats: ReturnType<typeof statSync>
+263:       try {
+264:         cwdStats = statSync(confined.abs)
+265:       } catch {
+266:         return rejected('cwd does not exist')
+267:       }
+268:       if (!cwdStats.isDirectory()) {
+269:         return rejected('cwd is not a directory')
+270:       }
+
+LINES 282-307
+282:       const timeoutMs = Math.min(
+283:         limits.maxTimeoutMs,
+284:         handle.deadlineMs ?? Infinity,
+285:         clamp(
+286:           typeof record?.['timeoutMs'] === 'number'
+287:             ? record['timeoutMs']
+288:             : Number.NaN,
+289:           limits.defaultTimeoutMs,
+290:           limits.maxTimeoutMs
+291:         )
+292:       )
+293: 
+294:       let result: ShellRunResult
+295:       try {
+296:         result = await runner({
+297:           argv,
+298:           cwd: confined.abs,
+299:           handle,
+300:           timeoutMs,
+301:           maxOutputBytes: limits.maxOutputBytes,
+302:           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})
+303:         })
+304:       } catch (error) {
+305:         return failed(
+306:           `shell runner failed: ${error instanceof Error ? error.message : 'unknown error'}`
+307:         )
+
+FILE packages/sandbox/src/run.ts
+SHA256 a5fa08026af97e2c809445f5949799f3e70b1f833da542142cb28d14f078e933
+
+LINES 53-72
+53:   if (!handle.allowSubprocess) {
+54:     return refused('handle does not allow subprocesses')
+55:   }
+56:   if (program === undefined) {
+57:     return refused('argv vazio')
+58:   }
+59: 
+60:   const workspace = handle.workspaceRoot
+61:   const cwd = request.cwd !== undefined ? resolve(request.cwd) : workspace
+62:   if (cwd !== undefined) {
+63:     if (workspace !== undefined) {
+64:       const prefix = workspace.endsWith(sep) ? workspace : workspace + sep
+65:       if (cwd !== workspace && !cwd.startsWith(prefix)) {
+66:         return refused(`cwd fora do workspace: ${cwd}`)
+67:       }
+68:     }
+69:     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+70:       return refused(`cwd inexistente: ${cwd}`)
+71:     }
+72:   }
+
+FILE packages/harness/src/__tests__/pare100-public-controls.test.ts
+SHA256 db314e0bc14e13fcfa7928cbb13aa2e8255c084291f3b7765c7094905c0efaf0
+
+LINES 246-275
+246:   it.each(['sync', 'async'] as const)(
+247:     'CTL-W02 finished %s failure retains uncertainty and does not replay',
+248:     async (mode) => {
+249:       const finished = vi.fn(() => {
+250:         if (mode === 'sync') throw new Error('finish failed')
+251:         return Promise.reject(new Error('finish failed'))
+252:       })
+253:       const f = fixture(profile, {
+254:         effects: { started: () => undefined, finished }
+255:       })
+256:       const result = await f.harness.execute(f.input)
+257:       expect(result.stopReason).toBe('TOOL_FAILURE')
+258:       expect(result.response).toContain('unknown_effect:')
+259:       expect(result.response).toContain('effect_settlement_failed')
+260:       expect(f.counts().toolBodies).toBe(1)
+261:       expect(finished).toHaveBeenCalledTimes(1)
+262:       expect(f.log).toContainEqual(
+263:         expect.objectContaining({ type: 'tool/result', outcome: 'threw' })
+264:       )
+265:       if (profile === 'iterative') {
+266:         const checkpoint = await f.store.loadCheckpoint(
+267:           f.input.tenantId,
+268:           f.input.executionId!
+269:         )
+270:         expect(JSON.stringify(checkpoint)).not.toContain('"status":"SUCCEEDED"')
+271:         await f.harness.execute(f.input)
+272:         expect(f.counts().toolBodies).toBe(1)
+273:         expect(finished).toHaveBeenCalledTimes(1)
+274:       }
+275:     }
+
+LINES 357-394
+357:   it('CTL-W03 gate supplies a detached frozen handle; model input cannot grant', async () => {
+358:     const events: string[] = []
+359:     const granted: SandboxHandle = {
+360:       mode: 'PROCESS',
+361:       allowNetwork: false,
+362:       allowSubprocess: true,
+363:       workspaceRoot: '/tmp',
+364:       deadlineMs: 12
+365:     }
+366:     const evaluate = vi.fn(async () => {
+367:       events.push('gate')
+368:       return {
+369:         kind: 'allowed' as const,
+370:         mode: 'PROCESS' as const,
+371:         handle: granted
+372:       }
+373:     })
+374:     const f = fixture(
+375:       profile,
+376:       { sandbox: { evaluate } },
+377:       {
+378:         ...tool(async () => {
+379:           events.push('body')
+380:           return { status: 'SUCCEEDED' }
+381:         }),
+382:         sandbox: 'PROCESS'
+383:       }
+384:     )
+385:     expect((await f.harness.execute(f.input)).stopReason).toBe('COMPLETED')
+386:     const context = f.context() as ToolExecutionContext & {
+387:       sandboxHandle?: SandboxHandle
+388:     }
+389:     expect(context.sandboxHandle).toEqual(granted)
+390:     expect(context.sandboxHandle).not.toBe(granted)
+391:     expect(Object.isFrozen(context.sandboxHandle)).toBe(true)
+392:     expect(evaluate).toHaveBeenCalledTimes(1)
+393:     expect(events).toEqual(['gate', 'body'])
+394:   })
+
+LINES 406-439
+406:   it('CTL-W03 subsequent gate-handle mutation cannot expand the context grant', async () => {
+407:     const granted = {
+408:       mode: 'PROCESS' as const,
+409:       allowNetwork: false,
+410:       allowSubprocess: true,
+411:       workspaceRoot: '/tmp',
+412:       deadlineMs: 20
+413:     }
+414:     const expected = { ...granted }
+415:     const f = fixture(
+416:       profile,
+417:       {
+418:         sandbox: {
+419:           evaluate: async () => ({
+420:             kind: 'allowed',
+421:             mode: 'PROCESS',
+422:             handle: granted
+423:           })
+424:         },
+425:         effects: {
+426:           started: () => {
+427:             granted.allowNetwork = true
+428:             granted.workspaceRoot = '/'
+429:             granted.deadlineMs = 99999
+430:           },
+431:           finished: () => undefined
+432:         }
+433:       },
+434:       { ...tool(), sandbox: 'PROCESS' }
+435:     )
+436:     expect((await f.harness.execute(f.input)).stopReason).toBe('COMPLETED')
+437:     expect(f.context()?.sandboxHandle).toEqual(expected)
+438:     expect(Object.isFrozen(f.context()?.sandboxHandle)).toBe(true)
+439:   })
+
+LINES 461-526
+461:   it('CTL-W03 public factory passes allowed shell grants to runner after approval', async () => {
+462:     const root = mkdtempSync(join(tmpdir(), 'cvg-pare100-shell-public-'))
+463:     try {
+464:       const calls: ShellRunRequest[] = []
+465:       const events: string[] = []
+466:       const approvals = new InMemoryApprovalEngine()
+467:       approvals.approveOnRequest = true
+468:       const granted: SandboxHandle = {
+469:         mode: 'PROCESS',
+470:         workspaceRoot: root,
+471:         allowNetwork: false,
+472:         allowSubprocess: true,
+473:         deadlineMs: 25
+474:       }
+475:       const shell = createShellTool({
+476:         workspaceRoot: root,
+477:         run: async (request) => {
+478:           calls.push(request)
+479:           events.push('runner')
+480:           return {
+481:             exitCode: 0,
+482:             stdout: 'synthetic',
+483:             stderr: '',
+484:             truncated: false
+485:           }
+486:         }
+487:       })
+488:       const f = fixture(
+489:         profile,
+490:         {
+491:           approvals,
+492:           sandbox: {
+493:             evaluate: async () => {
+494:               events.push('gate')
+495:               return { kind: 'allowed', mode: 'PROCESS', handle: granted }
+496:             }
+497:           }
+498:         },
+499:         shell,
+500:         'tool',
+501:         {
+502:           argv: ['synthetic-command'],
+503:           intent: 'synthetic trusted runner probe',
+504:           timeoutMs: 50000,
+505:           sandboxHandle: {
+506:             mode: 'PROCESS',
+507:             workspaceRoot: '/',
+508:             allowNetwork: true,
+509:             deadlineMs: 99999
+510:           }
+511:         }
+512:       )
+513:       expect((await f.harness.execute(f.input)).stopReason).toBe('COMPLETED')
+514:       expect(approvals.requests).toHaveLength(1)
+515:       expect(events).toEqual(['gate', 'runner'])
+516:       expect(calls).toHaveLength(1)
+517:       expect(calls[0]).toMatchObject({
+518:         handle: granted,
+519:         cwd: root,
+520:         timeoutMs: 25
+521:       })
+522:       expect(Object.isFrozen(calls[0]?.handle)).toBe(true)
+523:       expect(calls[0]?.handle).not.toBe(granted)
+524:     } finally {
+525:       rmSync(root, { recursive: true, force: true })
+526:     }
+
+LINES 530-622
+530: describe.each(['sync', 'async'] as const)(
+531:   'CTL-W02 shared pipeline settlement matrix (%s)',
+532:   (failureMode) => {
+533:     it.each(['succeeded', 'failed', 'threw', 'deadline', 'cancelled'] as const)(
+534:       'finished sees original %s; failure preserves duration before post-execute',
+535:       async (original) => {
+536:         vi.useFakeTimers({ toFake: ['Date'] })
+537:         try {
+538:           vi.setSystemTime(1000)
+539:           const events: string[] = []
+540:           const ledger: EffectLedger = {
+541:             started: () => {
+542:               events.push('started')
+543:             },
+544:             finished: (_, kind) => {
+545:               events.push('finished:' + kind)
+546:               if (failureMode === 'sync') throw new Error('settlement failed')
+547:               return Promise.reject(new Error('settlement failed'))
+548:             }
+549:           }
+550:           const host = await KernelHost.boot(
+551:             [
+552:               logControl({ append: () => undefined }),
+553:               effectsControl(ledger),
+554:               {
+555:                 name: 'synthetic.post-execute',
+556:                 kind: 'capability',
+557:                 apply(ctx) {
+558:                   ctx.on('tool/post-execute', async (_, outcome) => {
+559:                     events.push('post:' + outcome.kind)
+560:                     return outcome
+561:                   })
+562:                 }
+563:               }
+564:             ],
+565:             ['log', 'effects']
+566:           )
+567:           const controller = new AbortController()
+568:           const budget: TurnBudget = {
+569:             remainingMs: () => 1000,
+570:             beginModelRequest: () => undefined,
+571:             recordModelResult: () => undefined,
+572:             withDeadline: async (operation) =>
+573:               original === 'deadline' ? DEADLINE : operation()
+574:           }
+575:           const runtimeTool = tool(async () => {
+576:             events.push('body')
+577:             vi.setSystemTime(1025)
+578:             if (original === 'threw')
+579:               throw new Error('original executor failure')
+580:             if (original === 'cancelled') controller.abort()
+581:             return original === 'failed'
+582:               ? { status: 'FAILED', error: 'original failed result' }
+583:               : { status: 'SUCCEEDED' }
+584:           })
+585:           const turn = createTurnState(
+586:             phase3RuntimeInput(),
+587:             1000,
+588:             budget,
+589:             controller.signal
+590:           )
+591:           const result = await runToolCall(host, {
+592:             turn,
+593:             tool: runtimeTool,
+594:             needsApproval: false,
+595:             invocation: {
+596:               toolId: runtimeTool.id,
+597:               input: {},
+598:               operationKey: 'synthetic-matrix'
+599:             }
+600:           })
+601:           expect(result).toMatchObject({
+602:             kind: 'settled',
+603:             outcome: {
+604:               kind: 'threw',
+605:               error: 'unknown_effect: effect_settlement_failed',
+606:               durationMs: 25
+607:             }
+608:           })
+609:           expect(events).toEqual([
+610:             'started',
+611:             'body',
+612:             'finished:' + original,
+613:             'post:threw'
+614:           ])
+615:           await host.dispose()
+616:         } finally {
+617:           vi.useRealTimers()
+618:         }
+619:       }
+620:     )
+621:   }
+622: )
+
+FILE packages/sandbox/src/__tests__/pare100-shell-handle.test.ts
+SHA256 f1df94b87c43aedaf48fd3be330f8690ced9d7922834d4ffaf7846c3d7fc39d3
+
+LINES 62-128
+62: describe('SPEC0212 CTL-W03 shell handle consumption', () => {
+63:   it('direct execution without governed handle rejects before runner, including forged JSON', async () => {
+64:     const { tool, calls } = probe(workspace())
+65:     expect((await tool.execute(input, context())).status).toBe('REJECTED')
+66:     expect(calls).toHaveLength(0)
+67:   })
+68:   it.each([
+69:     { mode: 'WORKSPACE' },
+70:     { allowSubprocess: false },
+71:     { allowNetwork: 'false' },
+72:     { workspaceRoot: undefined },
+73:     { workspaceRoot: 'relative' },
+74:     { deadlineMs: 0 },
+75:     { deadlineMs: Infinity }
+76:   ])('rejects incompatible grant %j', async (override) => {
+77:     const root = workspace()
+78:     const { tool, calls } = probe(root)
+79:     expect(
+80:       (
+81:         await tool.execute(
+82:           input,
+83:           context({ ...grant(root), ...override } as SandboxHandle)
+84:         )
+85:       ).status
+86:     ).toBe('REJECTED')
+87:     expect(calls).toHaveLength(0)
+88:   })
+89:   it('runner consumes original gate grants and timeout never exceeds handle or host limit', async () => {
+90:     const root = workspace()
+91:     const { tool, calls } = probe(root)
+92:     const handle = grant(root)
+93:     expect(
+94:       (await tool.execute({ ...input, timeoutMs: 9999 }, context(handle)))
+95:         .status
+96:     ).toBe('SUCCEEDED')
+97:     expect(calls[0]).toMatchObject({ handle, cwd: root, timeoutMs: 40 })
+98:     await tool.execute({ ...input, timeoutMs: 10 }, context(handle))
+99:     expect(calls[1]?.timeoutMs).toBe(10)
+100:     await tool.execute(input, context({ ...handle, deadlineMs: 1000 }))
+101:     expect(calls[2]?.timeoutMs).toBe(100)
+102:   })
+103:   it('rejects configured root outside granted workspace even when cwd targets grant', async () => {
+104:     const root = workspace()
+105:     mkdirSync(join(root, 'granted'))
+106:     const { tool, calls } = probe(root)
+107:     expect(
+108:       (
+109:         await tool.execute(
+110:           { ...input, cwd: 'granted' },
+111:           context(grant(join(root, 'granted')))
+112:         )
+113:       ).status
+114:     ).toBe('REJECTED')
+115:     expect(calls).toHaveLength(0)
+116:   })
+117:   it('checks gate root using realpath rather than trusting symlink spelling', async () => {
+118:     const root = workspace()
+119:     const outside = workspace()
+120:     symlinkSync(outside, join(root, 'gate-link'))
+121:     const { tool, calls } = probe(root)
+122:     expect(
+123:       (await tool.execute(input, context(grant(join(root, 'gate-link')))))
+124:         .status
+125:     ).toBe('REJECTED')
+126:     expect(calls).toHaveLength(0)
+127:   })
+128: })
+
+FILE packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts
+SHA256 c0edb136d0d3275c57f99a46f8721ccda485d5a66f293693bdd98ff526a88d99
+
+LINES 326-363
+326: describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
+327:   const bwrapWorks = hostProbe.probeBubblewrap()
+328: 
+329:   it.skipIf(!bwrapWorks)(
+330:     'runs a command inside the namespace with workspace bind',
+331:     async () => {
+332:       const root = tempWorkspace()
+333:       const tool = createShellTool({ workspaceRoot: root })
+334:       const result = await tool.execute(
+335:         { argv: ['/bin/echo', 'sintetico'], intent: 'fumaça do host' },
+336:         context(root)
+337:       )
+338:       expect(result.status).toBe('SUCCEEDED')
+339:       expect(result.output).toMatchObject({
+340:         exitCode: 0,
+341:         stdout: 'sintetico\n'
+342:       })
+343:     }
+344:   )
+345: 
+346:   it.skipIf(!bwrapWorks)(
+347:     'writes inside the workspace are visible outside the namespace',
+348:     async () => {
+349:       const root = tempWorkspace()
+350:       const tool = createShellTool({ workspaceRoot: root })
+351:       const result = await tool.execute(
+352:         {
+353:           argv: ['/bin/sh', '-c', 'echo sintetico > inside.txt'],
+354:           intent: 'provar bind gravável do workspace'
+355:         },
+356:         context(root)
+357:       )
+358:       expect(result.status).toBe('SUCCEEDED')
+359:       const { readFileSync } = await import('node:fs')
+360:       expect(readFileSync(join(root, 'inside.txt'), 'utf8')).toBe('sintetico\n')
+361:     }
+362:   )
+363: })

@@ -176,9 +176,46 @@ test('three PARE100 frozen document relocations retain exact existing targets', 
     })),
     proof.copies
   )
+  const { amendments } = JSON.parse(
+    readFileSync(
+      join(
+        repositoryRoot,
+        'docs/04_audit/evidence/PARE100-EXEC-20261014/lead/doc-portability-r3/amendment.json'
+      ),
+      'utf8'
+    )
+  )
+  assert.equal(amendments.length, 1)
+  assert.equal(
+    amendments[0].target,
+    'docs/02_spec/0207_cleanup_orphaned_emits.md'
+  )
+  assert.equal(
+    amendments[0].beforeSHA256,
+    'b03badb2802d31a74eaa1347ee443763f38506493b43ab3853c2e136d24939d2'
+  )
+  assert.equal(
+    amendments[0].afterSHA256,
+    '6f93660593d768d21ec51e6c20acf8eff0701259aea8b2f7053fd1314101cddb'
+  )
   for (const entry of additions) {
     assert.equal(existsSync(join(repositoryRoot, entry.old)), false)
-    assertFrozenDocTarget(entry, readFileSync(join(repositoryRoot, entry.new)))
+    const current = readFileSync(join(repositoryRoot, entry.new))
+    assertFrozenDocTarget(entry, current)
+    const amendment = amendments.find(({ target }) => target === entry.new)
+    if (amendment) {
+      const original = readFileSync(join(repositoryRoot, amendment.original))
+      assert.equal(
+        createHash('sha256').update(original).digest('hex'),
+        entry.sha256Before
+      )
+      assert.equal(amendment.beforeSHA256, entry.sha256Before)
+      assert.equal(current.subarray(0, original.length).equals(original), true)
+    }
+    assert.equal(
+      createHash('sha256').update(current).digest('hex'),
+      amendment?.afterSHA256 ?? entry.sha256Before
+    )
   }
 })
 

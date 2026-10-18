@@ -19,7 +19,10 @@ import {
   type AgentVersionId,
   type TenantId
 } from '@cvg/platform'
-import type { PostgresTransactionClient } from './postgres.ts'
+import type {
+  PostgresTransactionClient,
+  PostgresQueryable
+} from './postgres.ts'
 
 interface CapabilityApprovalRow {
   id: string
@@ -100,102 +103,13 @@ export class PostgresCapabilityApprovalRepository implements CapabilityApprovalA
   ): Promise<CapabilityApprovalRecord | null> {
     const input = normalizeVerificationInput(rawInput)
     if (!input) return null
-
     await this.client.query('BEGIN')
     try {
-      const result = await this.client.query<CapabilityApprovalRow>(
-        `SELECT ${approvalColumns}
-         FROM platform_capability_approvals
-         WHERE tenant_id = $1 AND id = $2
-         FOR UPDATE`,
-        [input.tenantId, input.approvalId]
-      )
-      const current = result.rows[0]
-      if (!current || current.status !== 'issued') {
-        await this.client.query('COMMIT')
-        return null
-      }
-
-      const now = copyDate(this.now(), 'Approval verification time')
-      if (new Date(current.expires_at).getTime() <= now.getTime()) {
-        await this.client.query(
-          `UPDATE platform_capability_approvals
-           SET status = 'expired'
-           WHERE tenant_id = $1 AND id = $2 AND status = 'issued'`,
-          [input.tenantId, input.approvalId]
-        )
-        await this.client.query('COMMIT')
-        return null
-      }
-
-      let inputHash: string
-      try {
-        inputHash = createCapabilityInputHash({
-          tenantId: input.tenantId,
-          agentId: input.agentId,
-          versionId: input.versionId,
-          toolName: input.toolName,
-          input: input.input
-        })
-      } catch {
-        await this.client.query('COMMIT')
-        return null
-      }
-
-      if (
-        current.agent_id !== input.agentId ||
-        current.version_id !== input.versionId ||
-        current.tool_name !== input.toolName ||
-        current.actor_id !== input.actorId ||
-        current.input_hash !== inputHash
-      ) {
-        await this.client.query('COMMIT')
-        return null
-      }
-
-      const consumed = await this.client.query<CapabilityApprovalRow>(
-        `UPDATE platform_capability_approvals
-         SET status = 'consumed', consumed_at = $3
-         WHERE tenant_id = $1 AND id = $2 AND status = 'issued'
-         RETURNING ${approvalColumns}`,
-        [input.tenantId, input.approvalId, now]
-      )
-      const row = consumed.rows[0]
-      if (!row) {
-        await this.client.query('COMMIT')
-        return null
-      }
-      if (input.consumptionAudit) {
-        const payload = sanitizeAuditEvidencePayload({
-          tenantId: input.tenantId,
-          event: 'capability_approval_consumed',
-          approvalId: row.id,
-          agentId: row.agent_id,
-          versionId: row.version_id,
-          toolName: row.tool_name,
-          actorId: row.actor_id,
-          ...(input.consumptionAudit.traceId !== undefined
-            ? { traceId: input.consumptionAudit.traceId }
-            : {})
-        }).payload
-        await this.client.query(
-          `INSERT INTO audit_events
-             (tenant_id, id, type, actor_type, actor_id, correlation_id,
-              policy_version, payload, created_at)
-           VALUES ($1, $2, 'approval_decision', 'System',
-                   'capability-approval-authority', $3, $4, $5::jsonb, $6)`,
-          [
-            input.tenantId,
-            createDomainId('audit'),
-            input.consumptionAudit.correlationId,
-            input.consumptionAudit.policyVersion,
-            JSON.stringify(payload),
-            now
-          ]
-        )
-      }
+      const result = await verifyAndConsumeOnClient(this.client, input, {
+        now: this.now
+      })
       await this.client.query('COMMIT')
-      return mapApproval(row)
+      return result.record
     } catch (error) {
       await this.client.query('ROLLBACK')
       throw error
@@ -389,4 +303,126 @@ function isUniqueViolation(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === '23505'
   )
+}
+
+/** Package-internal transaction-free0002 seam. Bound caller owns all locks and commit. */
+export async function verifyAndConsumeOnClient(
+  client: PostgresQueryable,
+  rawInput: CapabilityApprovalVerificationInput,
+  options: {
+    now: () => Date
+    guard?: () => Promise<Date>
+    requireAudit?: boolean
+  }
+): Promise<{
+  record: CapabilityApprovalRecord | null
+  consumptionAuditId: string | null
+}> {
+  const input = normalizeVerificationInput(rawInput)
+  if (!input) return { record: null, consumptionAuditId: null }
+  if (options.requireAudit && !input.consumptionAudit)
+    throw new Error('Bound capability consumption requires audit')
+  const result = await client.query<CapabilityApprovalRow>(
+    `SELECT ${approvalColumns}
+   FROM platform_capability_approvals
+   WHERE tenant_id = $1 AND id = $2
+   FOR UPDATE`,
+    [input.tenantId, input.approvalId]
+  )
+  const current = result.rows[0]
+  if (!current || current.status !== 'issued') {
+    return { record: null, consumptionAuditId: null }
+  }
+
+  let now = copyDate(
+    options.guard ? await options.guard() : options.now(),
+    'Approval verification time'
+  )
+  if (new Date(current.expires_at).getTime() <= now.getTime()) {
+    await client.query(
+      `UPDATE platform_capability_approvals
+     SET status = 'expired'
+     WHERE tenant_id = $1 AND id = $2 AND status = 'issued'`,
+      [input.tenantId, input.approvalId]
+    )
+    return { record: null, consumptionAuditId: null }
+  }
+
+  let inputHash: string
+  try {
+    inputHash = createCapabilityInputHash({
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      versionId: input.versionId,
+      toolName: input.toolName,
+      input: input.input
+    })
+  } catch {
+    return { record: null, consumptionAuditId: null }
+  }
+
+  if (
+    current.agent_id !== input.agentId ||
+    current.version_id !== input.versionId ||
+    current.tool_name !== input.toolName ||
+    current.actor_id !== input.actorId ||
+    current.input_hash !== inputHash
+  ) {
+    return { record: null, consumptionAuditId: null }
+  }
+
+  if (options.guard) {
+    now = copyDate(await options.guard(), 'Approval verification time')
+    if (new Date(current.expires_at).getTime() <= now.getTime()) {
+      await client.query(
+        `UPDATE platform_capability_approvals SET status='expired'
+      WHERE tenant_id=$1 AND id=$2 AND status='issued'`,
+        [input.tenantId, input.approvalId]
+      )
+      return { record: null, consumptionAuditId: null }
+    }
+  }
+  const consumed = await client.query<CapabilityApprovalRow>(
+    `UPDATE platform_capability_approvals
+   SET status = 'consumed', consumed_at = $3
+   WHERE tenant_id = $1 AND id = $2 AND status = 'issued'
+   RETURNING ${approvalColumns}`,
+    [input.tenantId, input.approvalId, now]
+  )
+  const row = consumed.rows[0]
+  if (!row) {
+    return { record: null, consumptionAuditId: null }
+  }
+  let consumptionAuditId: string | null = null
+  if (input.consumptionAudit) {
+    const payload = sanitizeAuditEvidencePayload({
+      tenantId: input.tenantId,
+      event: 'capability_approval_consumed',
+      approvalId: row.id,
+      agentId: row.agent_id,
+      versionId: row.version_id,
+      toolName: row.tool_name,
+      actorId: row.actor_id,
+      ...(input.consumptionAudit.traceId !== undefined
+        ? { traceId: input.consumptionAudit.traceId }
+        : {})
+    }).payload
+    consumptionAuditId = createDomainId('audit')
+    await client.query(
+      `INSERT INTO audit_events
+       (tenant_id, id, type, actor_type, actor_id, correlation_id,
+        policy_version, payload, created_at)
+     VALUES ($1, $2, 'approval_decision', 'System',
+             'capability-approval-authority', $3, $4, $5::jsonb, $6)`,
+      [
+        input.tenantId,
+        consumptionAuditId,
+        input.consumptionAudit.correlationId,
+        input.consumptionAudit.policyVersion,
+        JSON.stringify(payload),
+        now
+      ]
+    )
+  }
+  return { record: mapApproval(row), consumptionAuditId }
 }

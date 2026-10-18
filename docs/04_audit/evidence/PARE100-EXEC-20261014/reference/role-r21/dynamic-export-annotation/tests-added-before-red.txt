@@ -1,0 +1,51 @@
+  it.each(['build_type', 'eval'])(
+    'R21 dynamic __all__ annotation %s contributes runtime literals without indexing export names',
+    (callee) => {
+      const source = 'python/sdk/src/sdk.py'
+      const payload = '40 + 2'
+      const text = `__all__: ${callee}('40 + 2') = ['Client']\ndef mirror(value: '40 + 2'): pass\n`
+      const entries = fixture({ [source]: text })
+        .collect()
+        .entries.filter((entry) => entry.source === source)
+      expect(entries).toHaveLength(3)
+      const exports = entries.find((entry) => entry.kind === 'python-exports')
+      expect(exports.shape.names).toEqual(['Client'])
+      expect(exports.extraction_status).toBe('STATIC')
+      const mirror = entries.find((entry) => entry.symbol === 'mirror')
+      expect(mirror.shape.parameters[0].type).toMatchObject({
+        status: 'UNKNOWN',
+        value_sha256: sha(payload),
+        byte_length: Buffer.byteLength(payload)
+      })
+      expect(mirror.shape.parameters[0].type.reason).toBeTruthy()
+      expect(serializeCatalog(entries)).not.toContain(payload)
+      for (const entry of entries) {
+        expect(entry.source_sha256).toBe(sha(text))
+        expect(entry.owner_task).toBe('P100-025')
+        expect(entry.parity_status).toBe('NOT_VERIFIED')
+        expect(entry.id).toBe(`contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`)
+      }
+    }
+  )
+
+  it('R21 pure __all__ annotation and export values do not self-contaminate forward references', () => {
+    const source = 'python/sdk/src/sdk.py'
+    const text = "__all__: list['Client'] = ['Client']\ndef mirror(value: 'Client') -> 'Client': pass\n"
+    const entries = fixture({ [source]: text })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(3)
+    const exports = entries.find((entry) => entry.kind === 'python-exports')
+    expect(exports.shape.names).toEqual(['Client'])
+    expect(exports.extraction_status).toBe('STATIC')
+    const mirror = entries.find((entry) => entry.symbol === 'mirror')
+    expect(mirror.shape.parameters[0].type).toBe("'Client'")
+    expect(mirror.shape.returns).toBe("'Client'")
+    expect(mirror.extraction_status).toBe('STATIC')
+    for (const entry of entries) {
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-025')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+    }
+  })
+

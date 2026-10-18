@@ -1,0 +1,569 @@
+--- before/packages/harness/src/iterative-runtime.ts
++++ packages/harness/src/iterative-runtime.ts
+@@ -652,28 +652,56 @@
+     })
+     this.#turns.set(run, { host, signal: controller.signal })
+ 
+-    // A ledger settlement failure is unresolved evidence, not a resumable
+-    // tool decision. Preserve its checkpoint and never repeat that effect.
++    // Payloads and summaries are bounded, untrusted presentation. The step
++    // store owns the lossless governed outcome of the pending dispatch,
++    // including the exact settlement failure cause. Generic TOOL_FAILURE or
++    // unknown_effect records alone do not prove that this ledger failed.
+     if (
+-      checkpoint?.state.stopReason === 'TOOL_FAILURE' &&
+-      checkpoint.state.observations.some(
+-        (observation) =>
+-          observation.type === 'TOOL_RESULT' &&
+-          observation.source === 'TOOL' &&
+-          (observation.payload as { error?: unknown } | null)?.error ===
+-            'unknown_effect: effect_settlement_failed'
+-      )
++      checkpoint?.state.pendingStepNumber &&
++      (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
++        checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+     ) {
+-      return this.finalize(
+-        run,
+-        {
+-          kind: 'stop',
+-          stopReason: 'TOOL_FAILURE',
+-          response: 'unknown_effect: effect_settlement_failed',
+-          preserveCheckpoint: true
+-        },
+-        startedAtMs
+-      )
++      let steps: readonly ExecutionStep[]
++      try {
++        steps = await this.options.stepStore.listSteps(
++          input.tenantId,
++          executionId
++        )
++      } catch {
++        return this.finalize(
++          run,
++          {
++            kind: 'stop',
++            stopReason: 'INSUFFICIENT_EVIDENCE',
++            response:
++              'Pending tool outcome could not be read; reconciliation is required.',
++            preserveCheckpoint: true
++          },
++          startedAtMs
++        )
++      }
++      if (
++        steps.some(
++          (step) =>
++            step.tenantId === input.tenantId &&
++            step.executionId === executionId &&
++            step.stepNumber === checkpoint.state.pendingStepNumber &&
++            step.stepType === 'TOOL' &&
++            step.status === 'FAILED' &&
++            step.errorCode === 'unknown_effect: effect_settlement_failed'
++        )
++      ) {
++        return this.finalize(
++          run,
++          {
++            kind: 'stop',
++            stopReason: 'TOOL_FAILURE',
++            response: 'unknown_effect: effect_settlement_failed',
++            preserveCheckpoint: true
++          },
++          startedAtMs
++        )
++      }
+     }
+ 
+     const resumeOutcome = this.applyResume(run, checkpoint)
+--- before/packages/harness/src/iterative-dispatch.ts
++++ packages/harness/src/iterative-dispatch.ts
+@@ -319,6 +319,9 @@
+   stepNumber: number,
+   forceApproval: boolean
+ ): Promise<DispatchOutcome> {
++  // A previous successful dispatch is trajectory evidence, not the result
++  // of this attempt. Only this dispatch's success may populate toolResult.
++  run.lastToolObservation = null
+   // A resumed in-flight step was already counted when it reached dispatch.
+   const alreadyCounted =
+     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+@@ -626,7 +629,16 @@
+           }
+         })
+       )
+-      await failStep(unknownEffect ? 'unknown_effect' : 'tool_failed')
++      // Preserve this kernel settlement cause losslessly in the step's error
++      // field. Bounded observations cannot carry restart control evidence.
++      await failStep(
++        outcome.kind === 'threw' &&
++          toolError === 'unknown_effect: effect_settlement_failed'
++          ? toolError
++          : unknownEffect
++            ? 'unknown_effect'
++            : 'tool_failed'
++      )
+       return ctx.stop(
+         'TOOL_FAILURE',
+         unknownEffect
+--- before/packages/sandbox/src/shell-tool.ts
++++ packages/sandbox/src/shell-tool.ts
+@@ -296,7 +296,10 @@
+         result = await runner({
+           argv,
+           cwd: confined.abs,
+-          handle,
++          // realpath established the granted directory's identity above.
++          // Use that same identity as cwd at the backend boundary, retaining
++          // every other grant and leaving the context handle untouched.
++          handle: Object.freeze({ ...handle, workspaceRoot: grantedRoot }),
+           timeoutMs,
+           maxOutputBytes: limits.maxOutputBytes,
+           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})
+--- before/packages/harness/src/__tests__/pare100-public-controls.test.ts
++++ packages/harness/src/__tests__/pare100-public-controls.test.ts
+@@ -1,5 +1,11 @@
+ import { describe, expect, it, vi } from 'vitest'
+-import { mkdtempSync, rmSync } from 'node:fs'
++import {
++  mkdtempSync,
++  mkdirSync,
++  realpathSync,
++  rmSync,
++  symlinkSync
++} from 'node:fs'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+ import type {
+@@ -15,7 +21,8 @@
+   createOperationalHarness,
+   type OperationalHarnessOptions
+ } from '../createOperationalHarness.ts'
+-import { InMemoryExecutionStepStore } from '../step-store.ts'
++import { InMemoryExecutionStepStore, sealCheckpoint } from '../step-store.ts'
++import { IterativeGovernedRuntime } from '../iterative-runtime.ts'
+ import { KernelHost } from '../kernel/host.ts'
+ import { effectsControl, logControl } from '../kernel/controls.ts'
+ import { createTurnState, runToolCall } from '../kernel/pipeline.ts'
+@@ -23,6 +30,7 @@
+   DEADLINE,
+   type EffectLedger,
+   type KernelLogEvent,
++  type EffectRef,
+   type TurnBudget
+ } from '../kernel/types.ts'
+ import {
+@@ -97,7 +105,7 @@
+   })
+   const log: KernelLogEvent[] = []
+   const store = new InMemoryExecutionStepStore()
+-  const harness = createOperationalHarness({
++  const harnessOptions = {
+     modelGateway: {
+       complete: async () => {
+         modelBodies += 1
+@@ -142,7 +150,8 @@
+       }
+     },
+     ...options
+-  })
++  } satisfies OperationalHarnessOptions
++  const harness = createOperationalHarness(harnessOptions)
+   const input = phase3RuntimeInput({
+     runtimeProfile: profile,
+     agent: phase3AgentProfile({ tools: [runtimeTool.id] })
+@@ -155,11 +164,351 @@
+     store,
+     iterativeOrchestrator,
+     counts: () => ({ modelBodies, toolBodies }),
+-    context: () => context
++    context: () => context,
++    makeIterative: (maxObservationPayloadChars: number, stepStore = store) =>
++      new IterativeGovernedRuntime({
++        ...harnessOptions,
++        orchestrator: harnessOptions.iterativeOrchestrator,
++        stepStore,
++        maxObservationPayloadChars
++      })
+   }
+ }
+ 
++describe('SPEC0212 D2 persisted uncertainty', () => {
++  it.each(
++    [1, 32, 64, 71, 72, 4000].flatMap((bound) =>
++      (['sync', 'async'] as const).map((mode) => ({ bound, mode }))
++    )
++  )(
++    'F1 bound=$bound finished=$mode fences reentry and restart',
++    async ({ bound, mode }) => {
++      const finished = vi.fn(() => {
++        if (mode === 'sync') throw new Error('synthetic finish failure')
++        return Promise.reject(new Error('synthetic finish failure'))
++      })
++      const started = vi.fn()
++      const f = fixture('iterative', { effects: { started, finished } })
++      const runtime = f.makeIterative(bound)
++      const first = await runtime.execute(f.input)
++      expect(first.stopReason).toBe('TOOL_FAILURE')
++      expect(first.response).toContain('effect_settlement_failed')
++      const checkpoint = await f.store.loadCheckpoint(
++        f.input.tenantId,
++        f.input.executionId!
++      )
++      const steps = await f.store.listSteps(
++        f.input.tenantId,
++        f.input.executionId!
++      )
++      expect(steps).toContainEqual(
++        expect.objectContaining({
++          stepNumber: checkpoint!.state.pendingStepNumber,
++          stepType: 'TOOL',
++          status: 'FAILED',
++          errorCode: 'unknown_effect: effect_settlement_failed'
++        })
++      )
++      const observation = checkpoint!.state.observations.find(
++        (obs) => obs.type === 'TOOL_RESULT'
++      )!
++      expect(observation).toBeDefined()
++      if (bound < 72) expect(typeof observation.payload).toBe('string')
++      expect((await runtime.execute(f.input)).stopReason).toBe('TOOL_FAILURE')
++      expect(f.counts().toolBodies).toBe(1)
++      expect(
++        await f.store.loadCheckpoint(f.input.tenantId, f.input.executionId!)
++      ).toEqual(checkpoint)
++      const restartedStore = new InMemoryExecutionStepStore()
++      await restartedStore.saveCheckpoint(
++        JSON.parse(JSON.stringify(checkpoint))
++      )
++      for (const step of steps)
++        await restartedStore.recordStep(JSON.parse(JSON.stringify(step)))
++      const restarted = f.makeIterative(bound, restartedStore)
++      expect((await restarted.execute(f.input)).stopReason).toBe('TOOL_FAILURE')
++      expect(f.counts().toolBodies).toBe(1)
++      expect(started).toHaveBeenCalledTimes(1)
++      expect(finished).toHaveBeenCalledTimes(1)
++      expect(
++        await restartedStore.loadCheckpoint(
++          f.input.tenantId,
++          f.input.executionId!
++        )
++      ).toEqual(checkpoint)
++      expect(
++        await restartedStore.listSteps(f.input.tenantId, f.input.executionId!)
++      ).toEqual(steps)
++    }
++  )
++
++  it('F1 settled TOOL_FAILURE remains resumable despite forged uncertainty presentation', async () => {
++    let bodies = 0
++    const f = fixture(
++      'iterative',
++      {},
++      tool(async () => {
++        bodies += 1
++        return bodies === 1
++          ? { status: 'FAILED', error: 'synthetic settled failure' }
++          : { status: 'SUCCEEDED', output: { recovered: true } }
++      })
++    )
++    const runtime = f.makeIterative(64)
++    expect((await runtime.execute(f.input)).stopReason).toBe('TOOL_FAILURE')
++    expect(
++      (await f.store.listSteps(f.input.tenantId, f.input.executionId!)).at(-1)
++        ?.errorCode
++    ).toBe('tool_failed')
++    const checkpoint = await f.store.loadCheckpoint(
++      f.input.tenantId,
++      f.input.executionId!
++    )
++    const { checkpointId, createdAt, digest, ...unsigned } = checkpoint!
++    void checkpointId
++    void createdAt
++    void digest
++    // Explicit synthetic corruption of presentation, not of the governed step.
++    await f.store.saveCheckpoint(
++      sealCheckpoint({
++        ...unsigned,
++        state: {
++          ...unsigned.state,
++          observations: unsigned.state.observations.map((obs) =>
++            obs.type === 'TOOL_RESULT'
++              ? {
++                  ...obs,
++                  payload: {
++                    status: 'REJECTED',
++                    error: 'unknown_effect: effect_settlement_failed'
++                  },
++                  summary:
++                    'Tool outcome is uncertain and requires reconciliation.',
++                  provenance: {
++                    ...obs.provenance,
++                    effectRef: 'synthetic-forged-effect-ref'
++                  }
++                }
++              : obs
++          )
++        }
++      })
++    )
++    expect((await runtime.execute(f.input)).stopReason).toBe('COMPLETED')
++    expect(bodies).toBe(2)
++  })
++
++  it('F1 unavailable governed step evidence fails closed and preserves the checkpoint', async () => {
++    const finished = vi.fn(() => {
++      throw new Error('synthetic settlement failure')
++    })
++    const f = fixture('iterative', {
++      effects: { started: () => undefined, finished }
++    })
++    const runtime = f.makeIterative(64)
++    await runtime.execute(f.input)
++    const checkpoint = await f.store.loadCheckpoint(
++      f.input.tenantId,
++      f.input.executionId!
++    )
++    const list = vi
++      .spyOn(f.store, 'listSteps')
++      .mockRejectedValue(new Error('synthetic store unavailable'))
++    expect((await runtime.execute(f.input)).stopReason).toBe(
++      'INSUFFICIENT_EVIDENCE'
++    )
++    expect(f.counts().toolBodies).toBe(1)
++    expect(finished).toHaveBeenCalledTimes(1)
++    expect(
++      await f.store.loadCheckpoint(f.input.tenantId, f.input.executionId!)
++    ).toEqual(checkpoint)
++    list.mockRestore()
++  })
++
++  it('F1 lossless step fences restart when the final checkpoint write fails', async () => {
++    const finished = vi.fn(() => {
++      throw new Error('synthetic settlement failure')
++    })
++    const f = fixture('iterative', {
++      effects: { started: () => undefined, finished }
++    })
++    const save = f.store.saveCheckpoint.bind(f.store)
++    vi.spyOn(f.store, 'saveCheckpoint').mockImplementation(
++      async (checkpoint) => {
++        if (checkpoint.state.stopReason === 'TOOL_FAILURE')
++          throw new Error('synthetic final write failure')
++        await save(checkpoint)
++      }
++    )
++    expect((await f.makeIterative(64).execute(f.input)).stopReason).toBe(
++      'INSUFFICIENT_EVIDENCE'
++    )
++    const checkpoint = await f.store.loadCheckpoint(
++      f.input.tenantId,
++      f.input.executionId!
++    )
++    expect(checkpoint!.state.stopReason).toBeUndefined()
++    expect(checkpoint!.state.pendingDecision?.decisionType).toBe('CALL_TOOL')
++    const result = await f.makeIterative(64).execute(f.input)
++    expect(result.stopReason).toBe('TOOL_FAILURE')
++    expect(result.toolResult).toBeUndefined()
++    expect(f.counts().toolBodies).toBe(1)
++    expect(finished).toHaveBeenCalledTimes(1)
++    expect(
++      await f.store.loadCheckpoint(f.input.tenantId, f.input.executionId!)
++    ).toEqual(checkpoint)
++  })
++
++  it.each(['sync', 'async'] as const)(
++    'F3 public multi-tool factory clears stale success on %s settlement failure',
++    async (mode) => {
++      const bodies: string[] = []
++      const first = {
++        ...tool(async () => {
++          bodies.push('first')
++          return { status: 'SUCCEEDED', output: { first: true } }
++        }),
++        id: 'synthetic.first'
++      }
++      const second = {
++        ...tool(async () => {
++          bodies.push('second')
++          return { status: 'SUCCEEDED', output: { second: true } }
++        }),
++        id: 'synthetic.second'
++      }
++      const finished = vi.fn((ref: EffectRef) => {
++        if (ref.toolId !== second.id) return
++        if (mode === 'sync') throw new Error('synthetic second settlement')
++        return Promise.reject(new Error('synthetic second settlement'))
++      })
++      const f = fixture('iterative', {
++        tools: {
++          list: () => [first, second],
++          resolve: (id) =>
++            [first, second].find((candidate) => candidate.id === id)
++        },
++        iterativeOrchestrator: new ScriptedOrchestrator({
++          script: [
++            decision({
++              decisionType: 'CALL_TOOL',
++              toolId: first.id,
++              toolInput: {}
++            }),
++            decision({
++              decisionType: 'CALL_TOOL',
++              toolId: second.id,
++              toolInput: {}
++            })
++          ]
++        }),
++        effects: { started: () => undefined, finished }
++      })
++      const input = {
++        ...f.input,
++        agent: phase3AgentProfile({ tools: [first.id, second.id] })
++      }
++      const result = await f.harness.execute(input)
++      expect(result.stopReason).toBe('TOOL_FAILURE')
++      expect(result.response).toContain('effect_settlement_failed')
++      expect(result.toolResult).toBeUndefined()
++      const checkpoint = await f.store.loadCheckpoint(
++        input.tenantId,
++        input.executionId!
++      )
++      expect(checkpoint!.state.pendingDecision?.toolId).toBe(second.id)
++      expect(
++        checkpoint!.state.observations.filter(
++          (obs) => obs.type === 'TOOL_RESULT'
++        )
++      ).toEqual([
++        expect.objectContaining({
++          payload: expect.objectContaining({
++            status: 'SUCCEEDED',
++            output: { first: true }
++          })
++        }),
++        expect.objectContaining({
++          payload: expect.objectContaining({
++            status: 'REJECTED',
++            error: 'unknown_effect: effect_settlement_failed'
++          })
++        })
++      ])
++      const retry = await f.harness.execute(input)
++      expect(retry.stopReason).toBe('TOOL_FAILURE')
++      expect(retry.toolResult).toBeUndefined()
++      expect(bodies).toEqual(['first', 'second'])
++      expect(finished).toHaveBeenCalledTimes(2)
++      expect(
++        await f.store.loadCheckpoint(input.tenantId, input.executionId!)
++      ).toEqual(checkpoint)
++    }
++  )
++})
++
+ describe.each(profiles)('SPEC0212 public controls %s', (profile) => {
++  it.each(['symlink', 'parent', 'trailing'] as const)(
++    'F2 default shell backend accepts %s grant identity',
++    async (spelling) => {
++      const base = mkdtempSync(join(tmpdir(), 'cvg-d2-identity-'))
++      try {
++        const root = join(base, 'root')
++        mkdirSync(root)
++        mkdirSync(join(root, 'child'))
++        const link = join(base, 'alias')
++        symlinkSync(root, link)
++        const grantedRoot =
++          spelling === 'symlink'
++            ? link
++            : spelling === 'parent'
++              ? join(root, 'child') + '/..'
++              : root + '/'
++        const approvals = new InMemoryApprovalEngine()
++        approvals.approveOnRequest = true
++        const handle: SandboxHandle = Object.freeze({
++          mode: 'PROCESS',
++          workspaceRoot: grantedRoot,
++          allowNetwork: false,
++          allowSubprocess: true,
++          deadlineMs: 5000
++        })
++        // Fixed no-op, never a user command. Exercises the default bwrap path;
++        // grant equivalence/timeout details are also checked at the injected port.
++        const f = fixture(
++          profile,
++          {
++            approvals,
++            sandbox: {
++              evaluate: async () => ({
++                kind: 'allowed',
++                mode: 'PROCESS',
++                handle
++              })
++            }
++          },
++          createShellTool({ workspaceRoot: root }),
++          'tool',
++          {
++            argv: ['/bin/true'],
++            intent: 'synthetic identity check',
++            timeoutMs: 1000
++          }
++        )
++        const result = await f.harness.execute(f.input)
++        expect(result.stopReason, JSON.stringify(result)).toBe('COMPLETED')
++        expect(result.toolResult).toMatchObject({
++          status: 'SUCCEEDED',
++          output: { exitCode: 0, stdout: '', stderr: '', truncated: false }
++        })
++        expect(realpathSync(grantedRoot)).toBe(realpathSync(root))
++        expect(handle.workspaceRoot).toBe(grantedRoot)
++        expect(f.context()?.sandboxHandle).toEqual(handle)
++      } finally {
++        rmSync(base, { recursive: true, force: true })
++      }
++    }
++  )
+   it.each(['tool', 'model'] as const)(
+     'CTL-W01 paused tenant has zero %s/model/tool bodies',
+     async (route) => {
+--- before/packages/sandbox/src/__tests__/pare100-shell-handle.test.ts
++++ packages/sandbox/src/__tests__/pare100-shell-handle.test.ts
+@@ -1,4 +1,10 @@
+-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
++import {
++  mkdirSync,
++  mkdtempSync,
++  realpathSync,
++  rmSync,
++  symlinkSync
++} from 'node:fs'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+ import { afterEach, describe, expect, it } from 'vitest'
+@@ -60,6 +66,26 @@
+ }
+ 
+ describe('SPEC0212 CTL-W03 shell handle consumption', () => {
++  it('F2 canonicalizes the granted directory for injected backend without changing other authority', async () => {
++    const parent = workspace()
++    const root = join(parent, 'root')
++    mkdirSync(root)
++    const alias = join(parent, 'alias')
++    symlinkSync(parent, alias)
++    const handle = grant(alias)
++    const { tool, calls } = probe(root)
++    expect(
++      (await tool.execute({ ...input, timeoutMs: 9999 }, context(handle)))
++        .status
++    ).toBe('SUCCEEDED')
++    expect(calls[0]).toMatchObject({
++      cwd: realpathSync(root),
++      timeoutMs: 40,
++      handle: { ...handle, workspaceRoot: realpathSync(parent) }
++    })
++    expect(Object.isFrozen(calls[0]?.handle)).toBe(true)
++    expect(handle.workspaceRoot).toBe(alias)
++  })
+   it('direct execution without governed handle rejects before runner, including forged JSON', async () => {
+     const { tool, calls } = probe(workspace())
+     expect((await tool.execute(input, context())).status).toBe('REJECTED')

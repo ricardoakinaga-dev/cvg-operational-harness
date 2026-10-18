@@ -1,0 +1,82 @@
+    expect(result.status).toBe('FAILED')
+    expect(result.error).toMatch(/containment failed/)
+  })
+
+  it('maps timeout to FAILED with the effective budget', async () => {
+    const { tool } = probeTool(tempWorkspace(), {
+      exitCode: 'timeout',
+      stdout: '',
+      stderr: '',
+      truncated: false
+    })
+    const result = await tool.execute(
+      { argv: ['sleep', '99'], timeoutMs: 1000, intent: 'x' },
+      context
+    )
+    expect(result.status).toBe('FAILED')
+    expect(result.error).toMatch(/timed out after 1000ms/)
+  })
+
+  it('maps a throwing runner to FAILED', async () => {
+    const tool = createShellTool({
+      workspaceRoot: tempWorkspace(),
+      run: async () => {
+        throw new Error('runner exploded')
+      }
+    })
+    const result = await tool.execute({ argv: ['true'], intent: 'x' }, context)
+    expect(result.status).toBe('FAILED')
+    expect(result.error).toMatch(/runner exploded/)
+  })
+})
+
+describe('PDSH-013 shell descriptor (SPEC 0198 §2)', () => {
+  it('declares PROCESS containment and mandatory approval', () => {
+    const tool = createShellTool({ workspaceRoot: tempWorkspace() })
+    expect(tool.id).toBe('shell.run')
+    expect(tool.sandbox).toBe('PROCESS')
+    expect(tool.requiresApproval).toBe(true)
+    expect(tool.risk).toBe('HIGH')
+    expect(tool.sideEffect).toBe('WRITE')
+    expect(tool.idempotent).toBe(false)
+  })
+})
+
+describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
+  const bwrapWorks = hostProbe.probeBubblewrap()
+
+  it.skipIf(!bwrapWorks)(
+    'runs a command inside the namespace with workspace bind',
+    async () => {
+      const root = tempWorkspace()
+      const tool = createShellTool({ workspaceRoot: root })
+      const result = await tool.execute(
+        { argv: ['/bin/echo', 'sintetico'], intent: 'fumaça do host' },
+        context
+      )
+      expect(result.status).toBe('SUCCEEDED')
+      expect(result.output).toMatchObject({
+        exitCode: 0,
+        stdout: 'sintetico\n'
+      })
+    }
+  )
+
+  it.skipIf(!bwrapWorks)(
+    'writes inside the workspace are visible outside the namespace',
+    async () => {
+      const root = tempWorkspace()
+      const tool = createShellTool({ workspaceRoot: root })
+      const result = await tool.execute(
+        {
+          argv: ['/bin/sh', '-c', 'echo sintetico > inside.txt'],
+          intent: 'provar bind gravável do workspace'
+        },
+        context
+      )
+      expect(result.status).toBe('SUCCEEDED')
+      const { readFileSync } = await import('node:fs')
+      expect(readFileSync(join(root, 'inside.txt'), 'utf8')).toBe('sintetico\n')
+    }
+  )
+})

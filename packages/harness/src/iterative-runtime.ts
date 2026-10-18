@@ -6,7 +6,12 @@ import type {
   ClaimValidation,
   CompletionEvaluation,
   CompletionEvaluator,
+  CompleteToolContextConfiguration,
+  CompleteToolContextState,
+  CheckpointToken,
+  ContextBuildInput,
   ContextEngine,
+  StepContext,
   DecisionValidationResult,
   ExecutionCheckpoint,
   ExecutionStep,
@@ -29,6 +34,20 @@ import {
   HYBRID_ORCHESTRATOR_VERSION,
   sanitizeLoopDecision
 } from '@cvg/harness-contracts'
+import {
+  canonicalizeCompleteJson,
+  COMPLETE_CHECKPOINT_MAX_BYTES,
+  CompleteJsonError,
+  ToolResultContextError
+} from '@cvg/harness-contracts'
+import { CompleteDecisionAdmission } from './complete-decision-admission.ts'
+import {
+  assertCompleteToolObservation,
+  completeSnapshot,
+  completeToolPayload,
+  retainCompleteObservations,
+  validateCompleteStepContext
+} from './complete-tool-results.ts'
 import type {
   ApprovalEngine,
   AuditSink,
@@ -43,8 +62,21 @@ import type {
 import { DefaultContextEngine } from './context-engine.ts'
 import { DeterministicCompletionEvaluator } from './completion.ts'
 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
-import { sealCheckpoint } from './step-store.ts'
+import {
+  CheckpointError,
+  checkpointDigest,
+  sealCheckpoint,
+  type UnsignedCheckpoint
+} from './step-store.ts'
 import { agentExposesTool } from './runtime.ts'
+import {
+  hasReplayableNativeEffectReservation,
+  readNativeConfirmedEffect
+} from './effect-journal.ts'
+import {
+  settledRecoveryCandidate,
+  stageSettledRecovery
+} from './complete-journal-recovery.ts'
 import { KernelHost } from './kernel/host.ts'
 import {
   CANCELLED_RESPONSE,
@@ -69,6 +101,7 @@ import {
   DEADLINE,
   type EffectLedger,
   type KernelLog,
+  type KernelPlugin,
   type PauseSwitch,
   type ServiceKey,
   type TurnState
@@ -88,6 +121,7 @@ import {
 export { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
 
 export interface IterativeGovernedRuntimeOptions {
+  readonly toolResultContext?: CompleteToolContextConfiguration
   readonly orchestrator: IterativeOrchestrator
   readonly modelGateway: ModelGateway
   readonly policy: PolicyEngine
@@ -263,6 +297,7 @@ function defaultClaimValidation(
 }
 
 interface MutableState {
+  toolResultContext?: CompleteToolContextState | undefined
   goal: string
   stepNumber: number
   observations: Observation[]
@@ -304,6 +339,12 @@ interface MutableUsage {
 }
 
 export interface LoopRun {
+  /** Current resume input, bounded to one live observation outside the checkpoint. */
+  resumeObservation?: Observation
+  checkpointToken?: CheckpointToken | null
+  checkpointConflict?: boolean
+  /** Live failure evidence only; never a checkpoint, receipt or usage claim. */
+  primaryResponseFailure?: string
   readonly input: RuntimeInput
   readonly executionId: string
   readonly startedAtMs: number
@@ -370,10 +411,22 @@ export class IterativeGovernedRuntime {
     LoopRun,
     { host: KernelHost; signal: AbortSignal }
   >()
+  readonly #responseRuns = new WeakMap<TurnState, LoopRun>()
 
   public constructor(
     private readonly options: IterativeGovernedRuntimeOptions
   ) {
+    if (
+      options.toolResultContext &&
+      (options.toolResultContext.version !== 1 ||
+        options.maxObservationPayloadChars !== undefined ||
+        options.orchestrator.contextProtocol !== 'complete-tool-v1' ||
+        typeof options.stepStore.compareAndSwapCheckpoint !== 'function')
+    ) {
+      throw new Error(
+        'complete-tool-v1 requires protocol1, atomic checkpoint CAS and no legacy payload truncation option.'
+      )
+    }
     this.contextEngine = options.contextEngine ?? new DefaultContextEngine()
     this.completionEvaluatorOverride = options.completionEvaluator
     this.clock = options.clock ?? (() => new Date())
@@ -414,6 +467,8 @@ export class IterativeGovernedRuntime {
         this.recordObservation(run, observation),
       recordStep: (run, input) => this.recordStep(run, input),
       persistCheckpoint: (run) => this.persistCheckpoint(run),
+      preflightCompleteTool: (run, decision, stepNumber) =>
+        this.preflightCompleteTool(run, decision, stepNumber),
       safeAudit: (run, action, extras) => this.safeAudit(run, action, extras),
       composeResponse: (run, decision) => this.composeResponse(run, decision),
       kernel: (run) => this.kernelFor(run),
@@ -438,6 +493,9 @@ export class IterativeGovernedRuntime {
             : {}
         ),
         auditControl(this.options.audit, { action: 'harness.iterative' }),
+        ...(this.options.toolResultContext
+          ? [this.responseCheckpointControl()]
+          : []),
         modelCapability(this.options.modelGateway),
         toolsCapability(this.options.tools),
         telemetryCapability(this.options.telemetry, {
@@ -456,6 +514,26 @@ export class IterativeGovernedRuntime {
     return entry.host
   }
 
+  private responseCheckpointControl(): KernelPlugin {
+    return {
+      name: 'control.iterative-response-checkpoint',
+      kind: 'control',
+      apply: (ctx) => {
+        ctx.on('model/before-call', async ({ turn, request }, next) => {
+          if (request.purpose === 'RESPONSE') {
+            const run = this.#responseRuns.get(turn)
+            if (!run)
+              throw new Error('Response turn has no native run binding.')
+            // beginModelRequest already owns and charged the native slot.
+            // Only its committed checkpoint may precede model entry.
+            await this.persistCheckpoint(run)
+          }
+          return next()
+        })
+      }
+    }
+  }
+
   /**
    * Kernel view of the current run: the iterative active-duration budget and
    * the caller's cancel signal drive the shared pipelines.
@@ -464,7 +542,7 @@ export class IterativeGovernedRuntime {
     const entry = this.#turns.get(run)
     /* v8 ignore next -- defensive: the loop only asks for its own bound run */
     if (!entry) throw new Error('Kernel turn is not bound to this run.')
-    return createTurnState(
+    const turn = createTurnState(
       run.input,
       run.startedAtMs,
       {
@@ -526,6 +604,8 @@ export class IterativeGovernedRuntime {
       },
       entry.signal
     )
+    if (this.options.toolResultContext) this.#responseRuns.set(turn, run)
+    return turn
   }
 
   public async execute(input: RuntimeInput): Promise<RuntimeResult> {
@@ -598,13 +678,85 @@ export class IterativeGovernedRuntime {
     }
 
     if (checkpoint) {
+      if (
+        this.options.toolResultContext &&
+        checkpoint.checkpointVersion === 1 &&
+        checkpoint.state.observations.some(
+          (value) => value.type === 'TOOL_RESULT'
+        )
+      ) {
+        return this.earlyFinish(
+          input,
+          'LEGACY_RESULT_UNKNOWN: old tool results cannot be promoted to complete.',
+          'INSUFFICIENT_EVIDENCE',
+          startedAtMs
+        )
+      }
       const rejection = this.rejectCheckpoint(checkpoint, input)
       if (rejection) {
         return this.earlyFinish(input, rejection, 'STATE_CONFLICT', startedAtMs)
       }
     }
 
+    if (this.options.toolResultContext) {
+      let steps: readonly ExecutionStep[]
+      try {
+        steps = await this.options.stepStore.listSteps(
+          input.tenantId,
+          executionId
+        )
+      } catch {
+        return this.earlyFinish(
+          input,
+          'Native response attempt history is unavailable; reconciliation is required.',
+          'STATE_CONFLICT',
+          startedAtMs
+        )
+      }
+      if (
+        steps.some(
+          (step) =>
+            step.tenantId === input.tenantId &&
+            step.executionId === executionId &&
+            step.stepType === 'RESPOND' &&
+            step.stepNumber > (checkpoint?.state.stepNumber ?? 0)
+        )
+      ) {
+        // A durable attempt ahead of the checkpoint is not permission to
+        // replay it. Historical usage may be uncertain; preserve both facts.
+        return this.earlyFinish(
+          input,
+          'Native response attempt is ahead of its checkpoint; usage is uncertain and reconciliation is required. No new model call was made.',
+          'STATE_CONFLICT',
+          startedAtMs
+        )
+      }
+      if (
+        (checkpoint?.state.stopReason === 'INTERNAL_FAILURE' ||
+          checkpoint?.state.stopReason === 'MODEL_FAILURE') &&
+        steps.some(
+          (step) =>
+            step.tenantId === input.tenantId &&
+            step.executionId === executionId &&
+            step.stepType === 'RESPOND' &&
+            step.stepNumber === checkpoint?.state.stepNumber
+        )
+      ) {
+        // A healthy final write can catch the cursor up after a transient
+        // failure. That does not reopen the already stopped response attempt.
+        return this.earlyFinish(
+          input,
+          'Complete response attempt already stopped; reconciliation is required and this checkpoint cannot resume. No new model call was made.',
+          'STATE_CONFLICT',
+          startedAtMs
+        )
+      }
+    }
+
     const run: LoopRun = {
+      checkpointToken: checkpoint
+        ? { checkpointId: checkpoint.checkpointId, digest: checkpoint.digest }
+        : null,
       input,
       executionId,
       startedAtMs,
@@ -645,12 +797,53 @@ export class IterativeGovernedRuntime {
       )
     }
     run.state.observations = run.observations
+    if (this.options.toolResultContext) {
+      run.state.toolResultContext ??= {
+        version: 1,
+        deliveredThroughStep: 0,
+        pendingDecisionAdmission: null,
+        decisionAdmissions: []
+      }
+    }
     const controller = new AbortController()
     if (input.signal?.aborted) controller.abort()
     input.signal?.addEventListener('abort', () => controller.abort(), {
       once: true
     })
     this.#turns.set(run, { host, signal: controller.signal })
+    let stagedRecovery: LoopRun | null = null
+    const recoveryStop = (
+      response: string,
+      stopReason: StopReason = 'INSUFFICIENT_EVIDENCE'
+    ) =>
+      this.finalize(
+        run,
+        { kind: 'stop', stopReason, response, preserveCheckpoint: true },
+        startedAtMs
+      )
+    const recoveryGate = async () => {
+      if (this.#turns.get(run)?.signal.aborted)
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      if (this.remainingDuration(run) <= 0)
+        return this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted before result recovery.'
+        )
+      const gate = await this.withDeadline(
+        runGate(this.kernelFor(run), 'turn/before-step', this.turnFor(run)),
+        this.remainingDuration(run)
+      )
+      if (gate === DEADLINE_EXCEEDED || this.remainingDuration(run) <= 0)
+        return this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted during result recovery.'
+        )
+      if (this.#turns.get(run)?.signal.aborted)
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      return gate.kind === 'stop'
+        ? this.stop(gate.stopReason, gate.response)
+        : null
+    }
 
     // Payloads and summaries are bounded, untrusted presentation. The step
     // store owns the lossless governed outcome of the pending dispatch,
@@ -702,6 +895,176 @@ export class IterativeGovernedRuntime {
           startedAtMs
         )
       }
+      if (
+        this.options.toolResultContext &&
+        checkpoint.state.pendingStepNumber
+      ) {
+        const pendingStep = checkpoint.state.pendingStepNumber
+        const settledStep = steps.find(
+          (step) =>
+            step.tenantId === input.tenantId &&
+            step.executionId === executionId &&
+            step.stepNumber === pendingStep &&
+            step.stepType === 'TOOL' &&
+            step.status === 'SUCCEEDED'
+        )
+        const savedResult = checkpoint.state.observations.find(
+          (observation) =>
+            observation.type === 'TOOL_RESULT' &&
+            observation.stepNumber === pendingStep
+        )
+        if (
+          !settledStep &&
+          steps.some(
+            (step) =>
+              step.tenantId === input.tenantId &&
+              step.executionId === executionId &&
+              step.stepNumber === pendingStep &&
+              step.stepType === 'TOOL' &&
+              (step.status === 'RUNNING' || step.status === 'FAILED')
+          )
+        ) {
+          let canReplay = false
+          try {
+            const pending = checkpoint.state.pendingDecision!
+            const proof = await this.withDeadline(
+              hasReplayableNativeEffectReservation(
+                this.options.tools.resolve(
+                  pending.toolId!,
+                  pending.toolVersion
+                ),
+                input.tenantId,
+                this.operationKey(run, pendingStep, pending.toolId!)
+              ),
+              this.remainingDuration(run)
+            )
+            canReplay = proof === true
+          } catch {
+            // An unreadable journal cannot authorize replay of a prior effect.
+          }
+          if (!canReplay) {
+            return this.finalize(
+              run,
+              {
+                kind: 'stop',
+                stopReason: 'TOOL_FAILURE',
+                preserveCheckpoint: true,
+                response:
+                  'unknown_effect: pending tool dispatch has no replayable native journal reservation; explicit reconciliation is required.'
+              },
+              startedAtMs
+            )
+          }
+        }
+        if (settledStep && !savedResult) {
+          try {
+            const pending = checkpoint.state.pendingDecision!
+            const tool = this.options.tools.resolve(
+              pending.toolId!,
+              pending.toolVersion
+            )
+            const candidate = settledRecoveryCandidate(
+              run,
+              checkpoint,
+              steps,
+              tool
+            )
+            if (candidate) {
+              const gate = await recoveryGate()
+              if (gate) return recoveryStop(gate.response, gate.stopReason)
+              const proof = await this.withDeadline(
+                readNativeConfirmedEffect(
+                  tool,
+                  input.tenantId,
+                  candidate.operationKey,
+                  candidate.pending.toolInput ?? {}
+                ),
+                this.remainingDuration(run)
+              )
+              if (proof === DEADLINE_EXCEEDED)
+                return recoveryStop(
+                  'Duration budget exhausted reading the confirmed result.',
+                  'MAX_DURATION'
+                )
+              if (proof)
+                stagedRecovery = stageSettledRecovery(
+                  run,
+                  candidate,
+                  proof.output,
+                  this.maxSignatures
+                )
+            }
+          } catch {
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: native confirmed result recovery could not be validated; reconciliation is required.'
+            )
+          }
+        }
+        if (
+          settledStep &&
+          !stagedRecovery &&
+          (!savedResult ||
+            (savedResult.payload as { completion?: string }).completion !==
+              'COMPLETE')
+        ) {
+          return this.finalize(
+            run,
+            {
+              kind: 'stop',
+              stopReason: 'INSUFFICIENT_EVIDENCE',
+              preserveCheckpoint: true,
+              response:
+                'RESULT_UNAVAILABLE: a settled tool step has no complete saved result; reconciliation is required.'
+            },
+            startedAtMs
+          )
+        }
+        if (settledStep && savedResult && !stagedRecovery) {
+          const pending = checkpoint.state.pendingDecision!
+          if (
+            savedResult.stepId !== settledStep.stepId ||
+            !settledStep.observationRefs.includes(savedResult.observationId) ||
+            savedResult.provenance.sourceId !== pending.toolId ||
+            savedResult.provenance.sourceVersion !== pending.toolVersion ||
+            savedResult.provenance.operationKey !==
+              this.operationKey(run, pendingStep, pending.toolId!)
+          ) {
+            return this.finalize(
+              run,
+              {
+                kind: 'stop',
+                stopReason: 'STATE_CONFLICT',
+                preserveCheckpoint: true,
+                response:
+                  'Saved tool result does not match the settled native step.'
+              },
+              startedAtMs
+            )
+          }
+          // The acknowledged result and successful step complete this dispatch.
+          // Never reopen it or call its journal/tool again on process recreation.
+          run.stepNumber = pendingStep
+          run.inFlightCounted = false
+          run.countedSteps.add(pendingStep)
+          run.lastToolObservation = savedResult
+          run.state = {
+            ...run.state,
+            stepNumber: pendingStep,
+            pendingDecision: undefined,
+            pendingStepNumber: undefined,
+            pendingApprovalId: undefined,
+            selectedCapability: pending.toolId,
+            loopSignatures: [
+              ...run.state.loopSignatures,
+              decisionSignature(pending)
+            ].slice(-this.maxSignatures),
+            toolResultContext: {
+              ...run.state.toolResultContext!,
+              acceptedDecision: undefined
+            }
+          }
+        }
+      }
     }
 
     const resumeOutcome = this.applyResume(run, checkpoint)
@@ -711,11 +1074,112 @@ export class IterativeGovernedRuntime {
     run.lastDecision = run.state.pendingDecision ?? null
     run.lastEvaluation = run.state.lastEvaluation ?? null
 
-    await this.safeAudit(run, 'runtime_v2.started', {
-      result: checkpoint ? 'resumed' : 'started'
-    })
-
     try {
+      if (this.options.toolResultContext) {
+        const state = run.state.toolResultContext!
+        const orphaned = state.decisionAdmissions.filter(
+          (value) =>
+            value.status === 'RESERVED' ||
+            (value.status === 'SETTLED' &&
+              value.stepNumber > run.state.stepNumber &&
+              !state.acceptedDecision &&
+              !run.state.pendingDecision)
+        )
+        if (
+          orphaned.length > 0 ||
+          state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+        ) {
+          const ids = new Set(
+            orphaned
+              .filter((value) => value.status === 'RESERVED')
+              .map((value) => value.admissionId)
+          )
+          for (const record of orphaned) {
+            if (record.status === 'SETTLED' && record.actual) {
+              run.usage.inputTokens +=
+                Math.max(
+                  record.reserved.inputTokens,
+                  record.actual.inputTokens
+                ) - record.actual.inputTokens
+              run.usage.outputTokens +=
+                Math.max(
+                  record.reserved.outputTokens,
+                  record.actual.outputTokens
+                ) - record.actual.outputTokens
+              run.usage.costUsd +=
+                Math.max(record.reserved.costUsd, record.actual.costUsd) -
+                record.actual.costUsd
+            }
+          }
+          run.state.toolResultContext = {
+            ...state,
+            pendingDecisionAdmission: null,
+            decisionAdmissions: state.decisionAdmissions.map((value) =>
+              ids.has(value.admissionId)
+                ? {
+                    ...value,
+                    status: 'UNKNOWN',
+                    unknownReason: 'process_lost_before_decision'
+                  }
+                : value
+            )
+          }
+          // A settled receipt is immutable: a crash before acceptedDecision is
+          // evidence of an unresolved decision, not permission to replay a model.
+          // Keep the acknowledged checkpoint and return conservative live usage.
+          return await this.finalize(
+            run,
+            {
+              ...this.stop(
+                'INSUFFICIENT_EVIDENCE',
+                'DECISION_USAGE_UNKNOWN: unresolved decision needs handoff.'
+              ),
+              ...(orphaned.some((value) => value.status === 'SETTLED')
+                ? { preserveCheckpoint: true }
+                : {})
+            },
+            startedAtMs
+          )
+        }
+        if (stagedRecovery) {
+          // The initial native CAS commits the projection before adopting it.
+          // An ambiguous ACK never reaches the generic finalization save.
+          try {
+            const gate = await recoveryGate()
+            if (gate) return recoveryStop(gate.response, gate.stopReason)
+            await this.persistCheckpoint(stagedRecovery)
+            if (!stagedRecovery.checkpointToken)
+              throw new ToolResultContextError(
+                'STATE_CONFLICT',
+                'Recovery checkpoint token is missing.',
+                'STATE_CONFLICT'
+              )
+            run.state = stagedRecovery.state
+            run.observations = stagedRecovery.observations
+            run.usage = stagedRecovery.usage
+            run.countedSteps = stagedRecovery.countedSteps
+            run.stepNumber = stagedRecovery.stepNumber
+            run.inFlightCounted = false
+            run.lastToolObservation = stagedRecovery.lastToolObservation
+            run.lastDecision = null
+            run.checkpointToken = stagedRecovery.checkpointToken
+          } catch {
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: recovered checkpoint acknowledgement is uncertain; reconciliation is required.'
+            )
+          }
+          if (
+            (run.lastToolObservation!.payload as { completion: string })
+              .completion === 'UNAVAILABLE'
+          )
+            return recoveryStop(
+              'RESULT_UNAVAILABLE: confirmed tool result cannot be delivered completely.'
+            )
+        } else await this.persistCheckpoint(run)
+      }
+      await this.safeAudit(run, 'runtime_v2.started', {
+        result: checkpoint ? 'resumed' : 'started'
+      })
       const outcome = await this.runLoop(run)
       return await this.finalize(run, outcome, startedAtMs)
     } catch (error) {
@@ -723,8 +1187,18 @@ export class IterativeGovernedRuntime {
         run,
         {
           kind: 'stop',
-          stopReason: 'INTERNAL_FAILURE',
-          response: `Execution failed internally: ${errorMessage(error)}.`
+          stopReason:
+            run.primaryResponseFailure && !run.checkpointConflict
+              ? 'MODEL_FAILURE'
+              : error instanceof ToolResultContextError
+                ? error.stopReason
+                : 'INTERNAL_FAILURE',
+          response: run.primaryResponseFailure
+            ? `${run.primaryResponseFailure} Secondary response failure: ${errorMessage(error)}.`
+            : error instanceof ToolResultContextError
+              ? `${error.code}: ${error.message}`
+              : `Execution failed internally: ${errorMessage(error)}.`,
+          ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
         },
         startedAtMs
       )
@@ -735,11 +1209,20 @@ export class IterativeGovernedRuntime {
     checkpoint: ExecutionCheckpoint,
     input: RuntimeInput
   ): string | null {
+    if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+      return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+    }
     if (checkpoint.runtimeProfile !== 'iterative') {
       return 'Execution checkpoint belongs to a different runtime profile.'
     }
     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+    }
+    if (
+      this.options.toolResultContext &&
+      checkpoint.orchestratorVersion !== this.orchestratorVersion
+    ) {
+      return 'Execution checkpoint belongs to a different orchestrator version.'
     }
     if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
       return 'Execution checkpoint conflicts with the requested runtime profile.'
@@ -808,10 +1291,27 @@ export class IterativeGovernedRuntime {
 
       let decision: LoopDecision
       let stepNumber: number
+      let decisionAdmissionIds: readonly string[] | undefined
+      let modelDecision = false
 
       if (run.state.pendingDecision && run.state.pendingStepNumber) {
         decision = run.state.pendingDecision
         stepNumber = run.state.pendingStepNumber
+        run.lastDecision = decision
+      } else if (
+        this.options.toolResultContext &&
+        run.state.toolResultContext?.acceptedDecision
+      ) {
+        const accepted = run.state.toolResultContext.acceptedDecision
+        if (accepted.stepNumber !== run.stepNumber + 1)
+          throw new ToolResultContextError(
+            'STATE_CONFLICT',
+            'Accepted decision is bound to another step.',
+            'STATE_CONFLICT'
+          )
+        decision = accepted.decision
+        stepNumber = accepted.stepNumber
+        decisionAdmissionIds = accepted.decisionAdmissionIds
         run.lastDecision = decision
       } else {
         stepNumber = run.stepNumber + 1
@@ -820,17 +1320,27 @@ export class IterativeGovernedRuntime {
         }
         const decisionResult = await this.decide(run, stepNumber)
         if (decisionResult.outcome) return decisionResult.outcome
-        decision = sanitizeLoopDecision(decisionResult.decision)
+        const sanitizedDecision = sanitizeLoopDecision(decisionResult.decision)
+        // Complete checkpoints serialize object keys canonically. Detach the
+        // initial decision in that same form before its first reservation so
+        // recovery sees the identical proposal input. Legacy hashes stay intact.
+        decision = this.options.toolResultContext
+          ? (JSON.parse(completeSnapshot(sanitizedDecision)) as LoopDecision)
+          : sanitizedDecision
+        decisionAdmissionIds = decisionResult.decisionAdmissionIds
+        modelDecision = decisionResult.modelDecision ?? false
         run.lastDecision = decision
       }
 
       const validation = this.validateDecision(run, decision)
       if (!validation.valid) {
-        run.usage.decisionRepairs += 1
+        if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
         run.lastDecisionErrors = validation.errors
         const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
         if (
-          run.usage.decisionRepairs <= repairBudget &&
+          (this.options.toolResultContext
+            ? run.usage.decisionRepairs + 1
+            : run.usage.decisionRepairs) <= repairBudget &&
           !run.state.pendingDecision
         ) {
           continue
@@ -844,6 +1354,26 @@ export class IterativeGovernedRuntime {
         )
       }
       run.lastDecisionErrors = []
+      if (this.options.toolResultContext && !run.state.pendingDecision) {
+        const state = run.state.toolResultContext!
+        run.state.toolResultContext = {
+          ...state,
+          deliveredThroughStep: modelDecision
+            ? Math.max(
+                state.deliveredThroughStep,
+                ...run.observations
+                  .filter((value) => value.type === 'TOOL_RESULT')
+                  .map((value) => value.stepNumber)
+              )
+            : state.deliveredThroughStep,
+          acceptedDecision: {
+            stepNumber,
+            decision,
+            decisionAdmissionIds: decisionAdmissionIds ?? []
+          }
+        }
+        await this.persistCheckpoint(run)
+      }
 
       const signature = decisionSignature(decision)
       if (decision.decisionType !== 'STOP') {
@@ -881,6 +1411,13 @@ export class IterativeGovernedRuntime {
       }
       if (dispatch.kind === 'stop') {
         run.stepNumber = stepNumber
+        if (this.options.toolResultContext) {
+          run.state.stepNumber = stepNumber
+          run.state.toolResultContext = {
+            ...run.state.toolResultContext!,
+            acceptedDecision: undefined
+          }
+        }
         return dispatch
       }
 
@@ -898,6 +1435,12 @@ export class IterativeGovernedRuntime {
           decision.toolId ??
           decision.selectedCapability ??
           run.state.selectedCapability
+      }
+      if (this.options.toolResultContext) {
+        run.state.toolResultContext = {
+          ...run.state.toolResultContext!,
+          acceptedDecision: undefined
+        }
       }
       await this.persistCheckpoint(run)
 
@@ -934,13 +1477,13 @@ export class IterativeGovernedRuntime {
     return { kind: 'stop', stopReason, response }
   }
 
-  private async decide(
+  private async buildStepContext(
     run: LoopRun,
     stepNumber: number
-  ): Promise<{
-    outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
-    decision?: LoopDecision
-  }> {
+  ): Promise<
+    | { context: StepContext }
+    | { outcome: Extract<DispatchOutcome, { kind: 'stop' }> }
+  > {
     const remaining = this.remainingDuration(run)
     if (remaining <= 0) {
       return {
@@ -953,22 +1496,36 @@ export class IterativeGovernedRuntime {
 
     const stateForContext: MutableState = {
       ...run.state,
-      observations: run.observations
+      observations:
+        run.resumeObservation &&
+        !run.observations.some(
+          (value) =>
+            value.observationId === run.resumeObservation!.observationId
+        )
+          ? [...run.observations, run.resumeObservation]
+          : run.observations
     }
-    const context = await this.contextEngine.build({
+    const buildInput: ContextBuildInput = {
       runtime: {
         executionId: run.executionId,
         tenantId: run.input.tenantId,
         conversationId: run.input.conversationId,
         correlationId: run.input.correlationId,
         traceId: run.input.traceId,
-        userMessage: run.input.userMessage,
+        userMessage:
+          this.options.toolResultContext &&
+          run.input.resume?.kind === 'user_input'
+            ? run.input.resume.message
+            : run.input.userMessage,
         context: run.input.context,
         objective: run.input.agent.objective,
         instructions: run.input.agent.instructions,
         agentId: run.input.agent.id,
         agentVersion: run.input.agent.version
       },
+      ...(this.options.toolResultContext
+        ? { toolResultContext: this.options.toolResultContext }
+        : {}),
       profile: 'iterative',
       stepNumber,
       goal: run.state.goal,
@@ -979,40 +1536,166 @@ export class IterativeGovernedRuntime {
       allowedDecisionTypes: this.allowedDecisionTypes(run),
       budget: run.input.budget,
       budgetUsage: run.usage,
-      ...(run.usage.decisionRepairs > 0
+      ...((
+        this.options.toolResultContext
+          ? run.lastDecisionErrors.length > 0
+          : run.usage.decisionRepairs > 0
+      )
         ? {
             decisionRepair: {
-              attempt: run.usage.decisionRepairs,
+              attempt: this.options.toolResultContext
+                ? run.usage.decisionRepairs + 1
+                : run.usage.decisionRepairs,
               errors: run.lastDecisionErrors
             }
           }
         : {})
-    })
-    const decisionAbortController = new AbortController()
-    const decisionOrDeadline = await this.withDeadline(
-      this.options.orchestrator.decide({
-        context,
-        signal: decisionAbortController.signal
-      }),
-      remaining
+    }
+    const complete = Boolean(this.options.toolResultContext)
+    const nativeInput = complete ? structuredClone(buildInput) : buildInput
+    const building = this.contextEngine.build(
+      complete ? structuredClone(nativeInput) : nativeInput
     )
-    if (decisionOrDeadline === DEADLINE_EXCEEDED) {
-      decisionAbortController.abort()
+    const built = complete
+      ? await this.withDeadline(building, this.remainingDuration(run))
+      : await building
+    if (built === DEADLINE_EXCEEDED) {
       return {
         outcome: this.stop(
           'MAX_DURATION',
-          'Duration budget exhausted while deciding the next step.'
+          'Context assembly exceeded the execution deadline.'
         )
       }
     }
-    const turn = decisionOrDeadline
-    const usage = turn.usage ?? EMPTY_MODEL_USAGE
-    this.accountUsage(run, usage)
-    const usageStop = this.checkAfterUsage(run)
-    if (usageStop) {
-      return { outcome: this.stop(usageStop.reason, usageStop.response) }
+    // A custom engine may retain and reuse its returned objects. Validate and
+    // render the same detached value across the following async boundaries.
+    const context = complete ? structuredClone(built) : built
+    if (complete) {
+      const native = await new DefaultContextEngine({
+        tokenBudget: context.tokenBudget
+      }).build(nativeInput)
+      validateCompleteStepContext(context, native)
+      for (const observation of run.observations) {
+        if (observation.type === 'TOOL_RESULT') {
+          assertCompleteToolObservation(observation)
+          if (
+            (observation.payload as { completion: string }).completion ===
+            'UNAVAILABLE'
+          ) {
+            throw new ToolResultContextError(
+              'RESULT_UNAVAILABLE',
+              'A complete tool result is unavailable.'
+            )
+          }
+        }
+      }
     }
-    return { decision: turn.decision }
+    return { context }
+  }
+
+  private async decide(
+    run: LoopRun,
+    stepNumber: number
+  ): Promise<{
+    outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
+    decision?: LoopDecision
+    decisionAdmissionIds?: readonly string[]
+    modelDecision?: boolean
+  }> {
+    const remaining = this.remainingDuration(run)
+    const assembled = await this.buildStepContext(run, stepNumber)
+    if ('outcome' in assembled) return assembled
+    const { context } = assembled
+    const complete = Boolean(this.options.toolResultContext)
+    const decisionAbortController = new AbortController()
+    const parentSignal = this.#turns.get(run)?.signal
+    const abort = () => decisionAbortController.abort()
+    if (parentSignal?.aborted) abort()
+    parentSignal?.addEventListener('abort', abort, { once: true })
+    const priorIds = new Set(
+      run.state.toolResultContext?.decisionAdmissions.map(
+        (value) => value.admissionId
+      )
+    )
+    const admission = complete
+      ? new CompleteDecisionAdmission({
+          run,
+          stepNumber,
+          tokenBudget: context.tokenBudget,
+          signal: decisionAbortController.signal,
+          remainingMs: () => this.remainingDuration(run),
+          preflight: (state, usage) =>
+            this.preflightDecisionReceipt(run, state, usage),
+          persist: () => this.persistCheckpoint(run),
+          audit: (action, result) => this.safeAudit(run, action, { result })
+        })
+      : undefined
+    let failed = false
+    try {
+      const decisionOrDeadline = await this.withDeadline(
+        this.options.orchestrator.decide({
+          context,
+          ...(admission ? { decisionAdmission: admission } : {}),
+          signal: decisionAbortController.signal
+        }),
+        complete ? this.remainingDuration(run) : remaining
+      )
+      if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+        decisionAbortController.abort()
+        return {
+          outcome: this.stop(
+            'MAX_DURATION',
+            'Duration budget exhausted while deciding the next step.'
+          )
+        }
+      }
+      const turn = decisionOrDeadline
+      if (complete) {
+        const state = run.state.toolResultContext!
+        const expected = state.decisionAdmissions
+          .filter(
+            (value) =>
+              value.stepNumber === stepNumber && value.status === 'SETTLED'
+          )
+          .map((value) => value.admissionId)
+        if (
+          turn.usage !== undefined ||
+          !Array.isArray(turn.decisionAdmissionIds) ||
+          completeSnapshot(turn.decisionAdmissionIds) !==
+            completeSnapshot(expected) ||
+          state.pendingDecisionAdmission ||
+          state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+        ) {
+          throw new ToolResultContextError(
+            'STATE_CONFLICT',
+            'Decision receipts or usage ownership are inconsistent.',
+            'STATE_CONFLICT'
+          )
+        }
+        return {
+          decision: turn.decision,
+          decisionAdmissionIds: expected,
+          modelDecision: expected.some((value) => !priorIds.has(value))
+        }
+      }
+      const usage = turn.usage ?? EMPTY_MODEL_USAGE
+      this.accountUsage(run, usage)
+      const usageStop = this.checkAfterUsage(run)
+      if (usageStop)
+        return { outcome: this.stop(usageStop.reason, usageStop.response) }
+      return { decision: turn.decision }
+    } catch (error) {
+      failed = true
+      throw error
+    } finally {
+      decisionAbortController.abort()
+      parentSignal?.removeEventListener('abort', abort)
+      try {
+        await admission?.close(failed ? 'decision_failed' : 'decision_closed')
+      } catch (error) {
+        if (!failed) throw error
+      }
+    }
   }
 
   /**
@@ -1314,6 +1997,21 @@ export class IterativeGovernedRuntime {
   ): Promise<
     { response: string } | { stopReason: StopReason; response: string }
   > {
+    if (this.options.toolResultContext) {
+      const assembled = await this.buildStepContext(run, run.state.stepNumber)
+      if ('outcome' in assembled) {
+        return {
+          stopReason: assembled.outcome.stopReason,
+          response: assembled.outcome.response
+        }
+      }
+      return composeResponse(
+        this.dispatchContext,
+        run,
+        decision,
+        assembled.context
+      )
+    }
     return composeResponse(this.dispatchContext, run, decision)
   }
 
@@ -1398,7 +2096,42 @@ export class IterativeGovernedRuntime {
       provenance: Observation['provenance']
     }
   ): Observation {
-    return {
+    let payload = input.payload
+    if (this.options.toolResultContext && input.type === 'TOOL_RESULT') {
+      const value = payload as {
+        schemaVersion?: number
+        status?: string
+        output?: unknown
+        error?: unknown
+      }
+      const tool = this.options.tools.resolve(
+        input.provenance.sourceId,
+        input.provenance.sourceVersion
+      )
+      if (!tool)
+        throw new ToolResultContextError(
+          'STATE_CONFLICT',
+          'Tool observation has no native registry binding.',
+          'STATE_CONFLICT'
+        )
+      if (value.schemaVersion !== 1) {
+        payload =
+          value.status === 'SUCCEEDED'
+            ? completeToolPayload(value.output, tool.sideEffect)
+            : {
+                schemaVersion: 1,
+                status: value.status === 'REJECTED' ? 'REJECTED' : 'FAILED',
+                sideEffect: tool.sideEffect,
+                completion: 'NOT_APPLICABLE',
+                resultAvailability: 'UNAVAILABLE',
+                error:
+                  typeof value.error === 'string'
+                    ? value.error.slice(0, 512)
+                    : 'tool_failed'
+              }
+      }
+    }
+    const observation: Observation = {
       observationId: `obs_${randomUUID()}`,
       executionId: run.executionId,
       stepId: input.stepId,
@@ -1406,20 +2139,26 @@ export class IterativeGovernedRuntime {
       type: input.type,
       source: input.source,
       trust: input.trust,
-      payload: boundedPayload(input.payload, this.maxObservationPayloadChars),
+      payload:
+        this.options.toolResultContext && input.type === 'TOOL_RESULT'
+          ? payload
+          : boundedPayload(payload, this.maxObservationPayloadChars),
       summary: input.summary.slice(0, 500),
       provenance: input.provenance,
       timestamp: this.clock().toISOString()
     }
+    if (this.options.toolResultContext && input.type === 'TOOL_RESULT')
+      assertCompleteToolObservation(observation)
+    return observation
   }
 
   private async recordObservation(
     run: LoopRun,
     observation: Observation
   ): Promise<void> {
-    run.observations = [...run.observations, observation].slice(
-      -MAX_CHECKPOINT_OBSERVATIONS
-    )
+    run.observations = this.options.toolResultContext
+      ? retainCompleteObservations([...run.observations, observation])
+      : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
     run.state = { ...run.state, observations: run.observations }
     await this.safeAudit(run, 'observation.recorded', {
       result: `${observation.source}:${observation.type}`
@@ -1473,22 +2212,158 @@ export class IterativeGovernedRuntime {
     )
   }
 
-  private async persistCheckpoint(run: LoopRun): Promise<void> {
-    const checkpoint = sealCheckpoint({
+  private checkpointFor(
+    run: LoopRun,
+    state: LoopRun['state'] = run.state,
+    usage: LoopRun['usage'] = run.usage
+  ): UnsignedCheckpoint {
+    return {
       executionId: run.executionId,
       tenantId: run.input.tenantId,
-      checkpointVersion: 1,
+      checkpointVersion: this.options.toolResultContext ? 2 : 1,
+      runtimeProfile: 'iterative',
+      runtimeVersion: RUNTIME_V2_VERSION,
+      orchestratorVersion: this.orchestratorVersion,
+      stepNumber: state.stepNumber,
+      state: {
+        ...state,
+        observations: this.options.toolResultContext
+          ? retainCompleteObservations(run.observations)
+          : run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+      },
+      budgetUsage: { ...usage }
+    }
+  }
+
+  private preflightDecisionReceipt(
+    run: LoopRun,
+    state: CompleteToolContextState,
+    usage: LoopRun['usage']
+  ): void {
+    try {
+      checkpointDigest(
+        this.checkpointFor(
+          run,
+          { ...run.state, toolResultContext: state },
+          usage
+        )
+      )
+    } catch (error) {
+      if (
+        (error instanceof CheckpointError &&
+          error.message === 'Checkpoint byte limit') ||
+        (error instanceof CompleteJsonError &&
+          error.code === 'RESULT_TOO_LARGE')
+      ) {
+        throw new ToolResultContextError(
+          'CONTEXT_OVERFLOW',
+          'No checkpoint space for the decision receipt.'
+        )
+      }
+      throw error
+    }
+  }
+
+  private async persistCheckpoint(run: LoopRun): Promise<void> {
+    const checkpoint = sealCheckpoint(this.checkpointFor(run))
+    if (this.options.toolResultContext) {
+      const result = await this.options.stepStore.compareAndSwapCheckpoint!({
+        tenantId: run.input.tenantId,
+        executionId: run.executionId,
+        expected: run.checkpointToken ?? null,
+        next: checkpoint
+      })
+      if (
+        result.status !== 'APPLIED' ||
+        result.token.checkpointId !== checkpoint.checkpointId ||
+        result.token.digest !== checkpoint.digest
+      ) {
+        run.checkpointConflict = true
+        throw new ToolResultContextError(
+          'STATE_CONFLICT',
+          'Checkpoint compare-and-swap did not commit this writer.',
+          'STATE_CONFLICT'
+        )
+      }
+      run.checkpointToken = result.token
+    } else {
+      await this.options.stepStore.saveCheckpoint(checkpoint)
+    }
+  }
+
+  private preflightCompleteTool(
+    run: LoopRun,
+    decision: LoopDecision,
+    stepNumber: number
+  ): void {
+    if (!this.options.toolResultContext) return
+    const tool = this.options.tools.resolve(
+      decision.toolId ?? '',
+      decision.toolVersion
+    )
+    if (!tool)
+      throw new ToolResultContextError(
+        'STATE_CONFLICT',
+        'Missing native tool.',
+        'STATE_CONFLICT'
+      )
+    if (
+      run.observations.filter((value) => value.type === 'TOOL_RESULT').length >=
+      MAX_CHECKPOINT_OBSERVATIONS
+    ) {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'No retention slot remains before tool dispatch.'
+      )
+    }
+    const placeholder = this.makeObservation(run, {
+      stepId: `step_${run.executionId}_${stepNumber}_tool`,
+      stepNumber,
+      type: 'TOOL_RESULT',
+      source: 'TOOL',
+      trust: 'UNTRUSTED',
+      payload: { status: 'SUCCEEDED', output: 'x'.repeat(32_766) },
+      summary: 'x'.repeat(500),
+      provenance: {
+        sourceId: tool.id,
+        sourceVersion: tool.version,
+        operationKey: this.operationKey(run, stepNumber, tool.id),
+        effectRef: this.operationKey(run, stepNumber, tool.id)
+      }
+    })
+    const prospective = {
+      executionId: run.executionId,
+      tenantId: run.input.tenantId,
+      checkpointVersion: 2,
       runtimeProfile: 'iterative',
       runtimeVersion: RUNTIME_V2_VERSION,
       orchestratorVersion: this.orchestratorVersion,
       stepNumber: run.state.stepNumber,
       state: {
         ...run.state,
-        observations: run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+        pendingDecision: decision,
+        pendingStepNumber: stepNumber,
+        observations: retainCompleteObservations([
+          ...run.observations,
+          placeholder
+        ])
       },
-      budgetUsage: { ...run.usage }
-    })
-    await this.options.stepStore.saveCheckpoint(checkpoint)
+      budgetUsage: { ...run.usage, toolCalls: run.usage.toolCalls + 1 }
+    }
+    try {
+      // Optional internal fields are absent on the wire. Real saves use the
+      // stricter schema-owned checkpoint codec, not this size-only projection.
+      canonicalizeCompleteJson(JSON.parse(JSON.stringify(prospective)), {
+        maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES - 65_536,
+        maxDepth: 64,
+        maxNodes: 1_000_000
+      })
+    } catch {
+      throw new ToolResultContextError(
+        'CONTEXT_OVERFLOW',
+        'Prospective checkpoint cannot reserve full tool result and step overhead.'
+      )
+    }
   }
 
   private operationKey(
@@ -1520,7 +2395,13 @@ export class IterativeGovernedRuntime {
         correlationId: run.input.correlationId
       })
     } catch {
-      // Observability must not turn a governed loop into an unhandled error.
+      if (this.options.toolResultContext) {
+        throw new ToolResultContextError(
+          'ADMISSION_UNAVAILABLE',
+          'Native audit could not record the governed step.'
+        )
+      }
+      // Legacy semantics; terminal outcome auditing still owns its veto.
     }
   }
 
@@ -1635,7 +2516,8 @@ export class IterativeGovernedRuntime {
     const finalResult = await this.recordAuditOutcome(
       run,
       result,
-      claimedReason
+      claimedReason,
+      outcome.preserveCheckpoint === true
     )
     this.recordTelemetry(run, finalResult, startedAtMs)
     return finalResult
@@ -1644,7 +2526,8 @@ export class IterativeGovernedRuntime {
   private async recordAuditOutcome(
     run: LoopRun,
     result: RuntimeResult,
-    stopReason: StopReason
+    stopReason: StopReason,
+    preserveCheckpoint: boolean
   ): Promise<RuntimeResult> {
     const action =
       stopReason === 'COMPLETED'
@@ -1678,11 +2561,23 @@ export class IterativeGovernedRuntime {
         throw new Error('audit deadline exceeded')
       }
       return result
-    } catch {
+    } catch (error) {
+      if (this.options.toolResultContext && !preserveCheckpoint) {
+        // A required audit veto cannot leave a healthy writer advertising a
+        // successful terminal checkpoint. Keep all acknowledged usage/effects.
+        run.state = { ...run.state, stopReason: 'INSUFFICIENT_EVIDENCE' }
+        try {
+          await this.persistCheckpoint(run)
+        } catch {
+          // Writer/lease uncertainty still returns the conservative outcome;
+          // no successful correction or rollback is claimed without its ACK.
+        }
+      }
       return {
         ...result,
-        response:
-          'Execution could not be completed because audit recording failed.',
+        response: run.primaryResponseFailure
+          ? `${result.response} Secondary audit recording failure: ${errorMessage(error)}.`
+          : 'Execution could not be completed because audit recording failed.',
         stopReason: 'INSUFFICIENT_EVIDENCE'
       }
     }

@@ -3,8 +3,11 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   CVG_TENANT_CONTEXT_SETTING,
   readPostgresMigrationSql,
+  withTenantContext,
+  type DurableOutboxAdapter,
   type PostgresPoolLike
 } from '@cvg/persistence'
+import type { ClaimExecutionRegistry } from './claimed-execution-lifecycle.ts'
 
 /**
  * Tables the PostgreSQL worker reads or writes during a controlled drain. Each
@@ -52,6 +55,9 @@ export interface PostgresWorkerPreflightOptions {
   tenantId: TenantId
   criticalTables?: readonly string[]
   requiredMigrations?: readonly string[]
+  tableAccess?: Readonly<
+    Record<string, 'read' | 'append' | 'consume' | 'write'>
+  >
 }
 
 interface RoleRow {
@@ -219,6 +225,7 @@ export async function assertPostgresWorkerPreflight(
     }
 
     const tablePrivileges = await client.query<{
+      table_name: string
       can_select: boolean
       can_insert: boolean
       can_update: boolean
@@ -227,28 +234,35 @@ export async function assertPostgresWorkerPreflight(
       can_trigger: boolean
       can_references: boolean
     }>(
-      `SELECT has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
+      `SELECT table_name, has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'INSERT') AS can_insert,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'UPDATE') AS can_update,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'DELETE') AS can_delete,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRUNCATE') AS can_truncate,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'TRIGGER') AS can_trigger,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'REFERENCES') AS can_references
-         FROM unnest($1::text[]) AS table_name`,
+         FROM unnest($1::text[]) WITH ORDINALITY AS requested(table_name, ordinal) ORDER BY ordinal`,
       [criticalTables]
     )
     if (
       tablePrivileges.rows.length !== criticalTables.length ||
-      tablePrivileges.rows.some(
-        (privileges) =>
+      tablePrivileges.rows.some((privileges, index) => {
+        const table = criticalTables[index]!
+        const mode = options.tableAccess?.[table] ?? 'write'
+        const insert = mode === 'append' || mode === 'write'
+        const update = mode === 'consume' || mode === 'write'
+        return (
+          (options.tableAccess !== undefined &&
+            privileges.table_name !== table) ||
           !privileges.can_select ||
-          !privileges.can_insert ||
-          !privileges.can_update ||
+          privileges.can_insert !== insert ||
+          privileges.can_update !== update ||
           privileges.can_delete ||
           privileges.can_truncate ||
           privileges.can_trigger ||
           privileges.can_references
-      )
+        )
+      })
     ) {
       throw new Error(
         'PostgreSQL worker table privileges must be minimal (select/insert/update only)'
@@ -279,6 +293,87 @@ export async function assertPostgresWorkerPreflight(
         }
       }
     }
+
+    // SPEC0225: this host has no result-storage opt-in. An activated or unknown
+    // journal guard must reject readiness before the first claim/model/body.
+    const journalColumns = await client.query<{
+      attname: string
+      type: string
+      attnotnull: boolean
+      default_expression: string | null
+    }>(
+      `SELECT a.attname,a.atttypid::regtype::text AS type,a.attnotnull,
+         pg_get_expr(d.adbin,d.adrelid) AS default_expression
+       FROM pg_attribute a LEFT JOIN pg_attrdef d
+         ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+       WHERE a.attrelid=to_regclass('operational_effect_journal')
+         AND NOT a.attisdropped AND a.attname=ANY($1::text[])
+       ORDER BY a.attname`,
+      [['result_storage_payload', 'result_storage_version']]
+    )
+    const journalGuards = await client.query<{
+      definition: string
+      function_name: string
+      local_function: boolean
+      owner: string
+      security_definer: boolean
+      trigger_type: number
+      enabled: string
+      unconditional: boolean
+      function_config: string[] | null
+    }>(
+      `SELECT pg_get_functiondef(p.oid) AS definition,p.proname AS function_name,
+         p.pronamespace=c.relnamespace AS local_function,
+         pg_get_userbyid(p.proowner) AS owner,p.prosecdef AS security_definer,
+         t.tgtype AS trigger_type,t.tgenabled AS enabled,
+         (t.tgqual IS NULL AND t.tgnargs=0) AS unconditional,p.proconfig AS function_config
+       FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+         JOIN pg_class c ON c.oid=t.tgrelid
+       WHERE t.tgrelid=to_regclass('operational_effect_journal')
+         AND NOT t.tgisinternal AND t.tgname='journal_result_storage_guard'`
+    )
+    if (journalColumns.rows.length || journalGuards.rows.length) {
+      const payload = journalColumns.rows[0]
+      const version = journalColumns.rows[1]
+      const guard = journalGuards.rows[0]
+      if (
+        journalColumns.rows.length !== 2 ||
+        payload?.attname !== 'result_storage_payload' ||
+        payload.type !== 'jsonb' ||
+        payload.attnotnull !== false ||
+        payload.default_expression !== null ||
+        version?.attname !== 'result_storage_version' ||
+        version.type !== 'smallint' ||
+        version.attnotnull !== true ||
+        version.default_expression !== '0' ||
+        journalGuards.rows.length !== 1 ||
+        !guard ||
+        guard.function_name !== 'cvg_journal_result_storage_guard' ||
+        guard.local_function !== true ||
+        guard.owner === role.rolname ||
+        guard.security_definer !== false ||
+        guard.trigger_type !== 31 ||
+        guard.enabled !== 'O' ||
+        guard.unconditional !== true ||
+        guard.function_config?.length !== 1 ||
+        guard.function_config[0] !== 'search_path=pg_catalog'
+      ) {
+        throw new Error(
+          'Worker composition is not qualified for journal result storage'
+        )
+      }
+      const migration = await readPostgresMigrationSql(
+        '0030_complete_tool_result_journal'
+      )
+      if (
+        functionBody(guard.definition) !==
+        migrationFunctionBody(migration, 'cvg_journal_result_storage_guard')
+      ) {
+        throw new Error(
+          'Worker composition is not qualified for journal result storage'
+        )
+      }
+    }
   } catch (error) {
     failure = toError(error)
   }
@@ -301,16 +396,206 @@ export async function assertPostgresWorkerPreflight(
         cleanupFailed = true
       }
     } catch (cleanupError) {
-      client.release(toError(cleanupError))
-      throw failure ?? toError(cleanupError)
+      const cleanupFailure = toError(cleanupError)
+      try {
+        client.release(cleanupFailure)
+      } catch {
+        throw failure ?? cleanupFailure
+      }
+      throw failure ?? cleanupFailure
     }
   }
-  if (cleanupFailed && failure) {
-    client.release(failure)
-  } else {
-    client.release()
+  try {
+    if (cleanupFailed && failure) {
+      client.release(failure)
+    } else {
+      client.release()
+    }
+  } catch (releaseError) {
+    throw failure ?? toError(releaseError)
   }
   if (failure) throw failure
+}
+
+export const PUBLISHED_POSTGRES_CRITICAL_TABLES = [
+  'conversations',
+  'messages',
+  'sessions',
+  'audit_events',
+  'outbox_events',
+  'outbox_attempts',
+  'outbox_effects',
+  'worker_heartbeats',
+  'kernel_pause_switches',
+  'platform_agents',
+  'platform_agent_versions',
+  'platform_execution_traces',
+  'platform_capability_approvals',
+  'operational_executions',
+  'operational_execution_outbox',
+  'operational_execution_events',
+  'operational_effect_journal',
+  'operational_execution_steps',
+  'operational_execution_checkpoints',
+  'controlled_published_bindings',
+  'controlled_published_evidence'
+] as const
+
+export const PUBLISHED_POSTGRES_REQUIRED_MIGRATIONS = [
+  '0002_capability_approvals',
+  '0008_session_agent_version_pin',
+  '0010_outbox_durability',
+  '0011_outbox_payload_redaction',
+  '0016_operational_execution_spine',
+  '0018_operational_execution_invariants',
+  '0019_iterative_execution_steps',
+  '0027_worker_operations',
+  '0029_controlled_published_kernel'
+] as const
+
+export const PUBLISHED_POSTGRES_TABLE_ACCESS: NonNullable<
+  PostgresWorkerPreflightOptions['tableAccess']
+> = {
+  platform_agents: 'read',
+  platform_agent_versions: 'read',
+  platform_execution_traces: 'append',
+  platform_capability_approvals: 'consume',
+  audit_events: 'append',
+  // Native ACK locks this marker FOR UPDATE and may settle its result.
+  // 'write' is SELECT/INSERT/UPDATE only; DELETE/TRUNCATE/DDL remain forbidden.
+  outbox_effects: 'write',
+  operational_execution_events: 'append',
+  controlled_published_evidence: 'append'
+}
+
+const PUBLISHED_GUARD_TRIGGERS: Record<string, string> = {
+  controlled_published_evidence_append_only: 'controlled_published_evidence',
+  controlled_published_binding_immutable: 'controlled_published_bindings',
+  controlled_bound_execution_writer: 'operational_executions',
+  controlled_bound_queue_writer: 'operational_execution_outbox',
+  controlled_bound_event_writer: 'operational_execution_events',
+  controlled_bound_step_writer: 'operational_execution_steps',
+  controlled_bound_checkpoint_writer: 'operational_execution_checkpoints',
+  controlled_bound_journal_writer: 'operational_effect_journal',
+  controlled_bound_binding_writer: 'controlled_published_bindings',
+  controlled_bound_evidence_writer: 'controlled_published_evidence'
+}
+
+/** Serving-role/read-only qualification. Migration and DDL are never run here. */
+export async function assertPublishedPostgresWorkerPreflight(runtime: {
+  pool: PostgresPoolLike
+  tenantId: TenantId
+  workerId: string
+  adapter: DurableOutboxAdapter
+  claimExecutions: ClaimExecutionRegistry
+}): Promise<void> {
+  runtime.claimExecutions.claimAdapter(
+    runtime.tenantId,
+    runtime.workerId,
+    runtime.adapter
+  )
+  await assertPostgresWorkerPreflight(runtime.pool, {
+    tenantId: runtime.tenantId,
+    criticalTables: PUBLISHED_POSTGRES_CRITICAL_TABLES,
+    requiredMigrations: PUBLISHED_POSTGRES_REQUIRED_MIGRATIONS,
+    tableAccess: PUBLISHED_POSTGRES_TABLE_ACCESS
+  })
+  const migration = await readPostgresMigrationSql(
+    '0029_controlled_published_kernel'
+  )
+  await withTenantContext(runtime.pool, runtime.tenantId, async (client) => {
+    const ledger = await client.query<{ read_only: boolean }>(
+      `SELECT (has_table_privilege(current_user,'schema_migrations','SELECT')
+           AND NOT has_table_privilege(current_user,'schema_migrations','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')) AS read_only`
+    )
+    if (ledger.rows[0]?.read_only !== true)
+      throw new Error(
+        'Published serving role must not write migration metadata'
+      )
+    const result = await client.query<{
+      trigger_name: string
+      table_name: string
+      enabled: string
+      security_definer: boolean
+      function_name: string
+      definition: string
+      trigger_type: number
+      function_local: boolean
+      independent_owner: boolean
+      function_config: string[] | null
+      unconditional: boolean
+    }>(
+      `SELECT t.tgname AS trigger_name, c.relname AS table_name, t.tgenabled AS enabled,
+               p.prosecdef AS security_definer, p.proname AS function_name, pg_get_functiondef(p.oid) AS definition, t.tgtype AS trigger_type,
+               (p.pronamespace=n.oid) AS function_local, (pg_get_userbyid(p.proowner)<>current_user) AS independent_owner,
+               p.proconfig AS function_config, (t.tgqual IS NULL AND t.tgnargs=0) AS unconditional
+          FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+          JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid
+         WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname=ANY($1::text[])`,
+      [Object.keys(PUBLISHED_GUARD_TRIGGERS)]
+    )
+    if (result.rows.length !== Object.keys(PUBLISHED_GUARD_TRIGGERS).length)
+      throw new Error('Published writer guard triggers are missing')
+    for (const [name, table] of Object.entries(PUBLISHED_GUARD_TRIGGERS)) {
+      const rows = result.rows.filter((row) => row.trigger_name === name)
+      const row = rows[0]
+      const expectedFunction = name.endsWith('_append_only')
+        ? 'cvg_controlled_evidence_append_only'
+        : name === 'controlled_published_binding_immutable'
+          ? 'cvg_controlled_binding_immutable'
+          : 'cvg_controlled_bound_writer'
+      const expectedType = name.endsWith('_append_only')
+        ? 58
+        : [
+              'controlled_published_binding_immutable',
+              'controlled_bound_execution_writer'
+            ].includes(name)
+          ? 27
+          : name === 'controlled_bound_binding_writer'
+            ? 19
+            : name === 'controlled_bound_evidence_writer'
+              ? 7
+              : 31
+      if (
+        rows.length !== 1 ||
+        !row ||
+        row.table_name !== table ||
+        row.enabled !== 'O' ||
+        row.security_definer ||
+        row.function_name !== expectedFunction ||
+        row.trigger_type !== expectedType ||
+        row.function_local !== true ||
+        row.independent_owner !== true ||
+        row.function_config !== null ||
+        row.unconditional !== true ||
+        functionBody(row.definition) !==
+          migrationFunctionBody(migration, expectedFunction)
+      ) {
+        throw new Error('Published writer guard definition is not verified')
+      }
+    }
+    const sequences = await client.query<{ permitted: boolean }>(
+      `SELECT (has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'USAGE')
+           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('outbox_attempts','id'),'UPDATE')
+           AND has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'USAGE')
+           AND NOT has_sequence_privilege(current_user, pg_get_serial_sequence('operational_execution_events','sequence'),'UPDATE')) AS permitted`
+    )
+    if (sequences.rows[0]?.permitted !== true)
+      throw new Error('Published sequence privileges are not minimal')
+  })
+}
+
+function functionBody(definition: string): string {
+  const match = /\bAS\s+\$(\w*)\$([\s\S]*?)\$\1\$/i.exec(definition)
+  if (!match) throw new Error('Published writer function body is unavailable')
+  return match[2]!.replace(/\r\n/g, '\n').trim()
+}
+
+function migrationFunctionBody(sql: string, name: string): string {
+  const start = sql.indexOf(`CREATE FUNCTION ${name}(`)
+  if (start < 0)
+    throw new Error('Published writer function is missing from migration')
+  return functionBody(sql.slice(start))
 }
 
 function toError(error: unknown): Error {

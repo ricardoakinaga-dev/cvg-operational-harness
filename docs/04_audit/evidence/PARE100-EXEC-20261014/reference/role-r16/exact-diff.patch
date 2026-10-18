@@ -1,0 +1,182 @@
+--- a/scripts/reference-contract-catalog.mjs
++++ b/scripts/reference-contract-catalog.mjs
+@@ -968,15 +968,45 @@
+ 
+ const PYTHON_AST = String.raw`
+ import ast, json, sys, hashlib, re
+-def opaque(value):
++def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+   data=value if isinstance(value,bytes) else value.encode('utf-8')
+-  return {"status":"UNKNOWN","reason":"Unclassified Python literal; bytes not copied","value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
++  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
++def runtime_literals(tree):
++  # Source-local AST roles only: never evaluate a call, initializer or guest.
++  literals=set()
++  def export_metadata(n):
++    if isinstance(n,ast.Assign): targets=n.targets
++    elif isinstance(n,ast.AnnAssign): targets=[n.target]
++    else: return False
++    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
++      and isinstance(n.value,(ast.List,ast.Tuple))
++      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
++        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
++  def visit(n):
++    if export_metadata(n): return
++    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
++      literals.add(opaque(n.value)["value_sha256"])
++    for field,value in ast.iter_fields(n):
++      # Annotations and type parameters are declaration metadata; defaults,
++      # decorators, function bodies and ordinary expressions remain runtime.
++      if field in ("annotation","returns","type_params"): continue
++      if isinstance(value,list):
++        for i,child in enumerate(value):
++          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
++            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
++            continue # Python docstring metadata, not an expression payload.
++          if isinstance(child,ast.AST): visit(child)
++      elif isinstance(value,ast.AST): visit(value)
++  visit(tree)
++  return literals
+ def typ(n):
+   if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+   allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+   if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+   for x in ast.walk(n):
+     if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
++    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
++      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+     if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+   return ast.unparse(n)
+ def sig(n):
+@@ -992,6 +1022,7 @@
+ for item in json.load(sys.stdin):
+   rows=[]
+   tree=ast.parse(item["text"])
++  payload_literals=runtime_literals(tree)
+   for n in tree.body:
+     if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+     elif isinstance(n,ast.ClassDef):
+--- a/tests/reference-contract-catalog.test.js
++++ b/tests/reference-contract-catalog.test.js
+@@ -12,7 +12,7 @@
+ } from '../scripts/reference-contract-catalog.mjs'
+ 
+ const evidence = path.resolve(
+-  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r15'
++  'docs/04_audit/evidence/PARE100-EXEC-20261014/reference/role-r16'
+ )
+ const temporary = []
+ const sha = (value) => crypto.createHash('sha256').update(value).digest('hex')
+@@ -187,6 +187,112 @@
+ })
+ 
+ describe('P100-003 static contract catalog', () => {
++  it.each([
++    [
++      'assigned source',
++      "source = 'throw/PY_ROLE/'\ndef run(value: 'throw/PY_ROLE/') -> None:\n    pass\nsubprocess.run(['node', '-e', source])\n"
++    ],
++    [
++      'direct call literal',
++      "def run(value: 'throw/PY_ROLE/') -> None:\n    pass\nsubprocess.run(['node', '-e', 'throw/PY_ROLE/'])\n"
++    ]
++  ])(
++    'R16 Python hypothesis: %s colliding with a string annotation stays opaque',
++    (_kind, body) => {
++      const program = 'throw/PY_ROLE/'
++      const source = 'python/sdk/src/sdk.py'
++      const text = 'import subprocess\n' + body
++      // The fixture is parsed by stdlib AST, never imported/executed. In
++      // particular subprocess.run and the guest literal remain inert source.
++      const f = fixture({ [source]: text })
++      const catalog = f.collect()
++      const entries = catalog.entries.filter((entry) => entry.source === source)
++      expect(entries).toHaveLength(2)
++      const run = entries.find(
++        (entry) => entry.kind === 'python-function' && entry.symbol === 'run'
++      )
++      expect(run.shape.parameters[0].type).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(program),
++        byte_length: Buffer.byteLength(program)
++      })
++      expect(run.shape.parameters[0].type.reason).toBeTruthy()
++      expect(JSON.stringify(entries)).not.toContain(program)
++      expect(run.shape.returns).toBe('None')
++      for (const entry of entries) {
++        expect(entry.owner_task).toBe('P100-025')
++        expect(entry.source_sha256).toBe(sha(text))
++        expect(entry.parity_status).toBe('NOT_VERIFIED')
++      }
++    }
++  )
++
++  it('R16 Python collisions use runtime AST positions rather than sink or program names', () => {
++    const program = 'throw/PY_GENERIC/'
++    const source = 'python/sdk/src/sdk.py'
++    const text = `def run(value: list[${JSON.stringify(program)}]) -> ${JSON.stringify(program)}:\n    consume(${JSON.stringify(program)})\nclass Service:\n    value: ${JSON.stringify(program)}\n    def send(self, item: ${JSON.stringify(program)}):\n        return ${JSON.stringify(program)}\n`
++    const entries = fixture({ [source]: text })
++      .collect()
++      .entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(5) // source + function + class + field + method
++    const run = entries.find((entry) => entry.symbol === 'run')
++    const send = entries.find((entry) => entry.symbol === 'Service.send')
++    const field = entries.find((entry) => entry.symbol === 'Service.value')
++    for (const value of [
++      run.shape.parameters[0].type,
++      run.shape.returns,
++      send.shape.parameters[1].type,
++      field.shape.type
++    ])
++      expect(value).toMatchObject({
++        status: 'UNKNOWN',
++        value_sha256: sha(program),
++        byte_length: Buffer.byteLength(program)
++      })
++    expect(JSON.stringify(entries)).not.toContain(program)
++  })
++
++  it('R16 Python preserves annotation-only forward references, declarations and export IDs across physical files', () => {
++    const source = 'python/sdk/src/sdk.py'
++    const text = `from external import Remote as PublicRemote\n__all__ = ['Client', 'run', 'PublicRemote']\nclass Client:\n    "Client"\n    value: "Client"\n    def send(self, value: list["Client"]) -> "Client":\n        pass\ndef run(value: "Client") -> "Remote":\n    pass\n`
++    const catalog = fixture({
++      [source]: text,
++      'python/sdk/src/runtime.py': 'consume("Client")\n'
++    }).collect()
++    const entries = catalog.entries.filter((entry) => entry.source === source)
++    expect(entries).toHaveLength(7) // source + export + exports + class + field + method + function
++    const run = entries.find((entry) => entry.symbol === 'run')
++    const send = entries.find((entry) => entry.symbol === 'Client.send')
++    expect(run.shape.parameters[0].type).toContain('Client')
++    expect(run.shape.returns).toContain('Remote')
++    expect(send.shape.parameters[1].type).toContain('Client')
++    expect(send.shape.returns).toContain('Client')
++    expect(
++      entries.find((entry) => entry.symbol === 'Client.value').shape.type
++    ).toContain('Client')
++    expect(
++      entries.find((entry) => entry.symbol === '__all__').shape.names
++    ).toEqual(['Client', 'run', 'PublicRemote'])
++    expect(entries.find((entry) => entry.kind === 'python-export').symbol).toBe(
++      'PublicRemote'
++    )
++    expect(entries.find((entry) => entry.kind === 'python-class').symbol).toBe(
++      'Client'
++    )
++    expect(
++      entries.every(
++        (entry) =>
++          entry.owner_task === 'P100-025' &&
++          entry.source_sha256 === sha(text) &&
++          entry.parity_status === 'NOT_VERIFIED'
++      )
++    ).toBe(true)
++    const other = catalog.entries.filter(
++      (entry) => entry.source === 'python/sdk/src/runtime.py'
++    )
++    expect(other).toHaveLength(1)
++  })
++
+   it('R15 exact I1-R14-01 opaquely projects an unclassified JSON member and same-source mirror', () => {
+     const program = 'throw/ROOT_I1/'
+     const member = JSON.stringify({ [program]: true })

@@ -1,0 +1,39 @@
+        timeoutMs: 25
+      })
+      expect(Object.isFrozen(calls[0]?.handle)).toBe(true)
+      expect(calls[0]?.handle).not.toBe(granted)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('CTL-W02 shared pipeline settlement matrix', () => {
+  it.each(['succeeded', 'failed', 'threw', 'deadline', 'cancelled'] as const)(
+    'finished sees original %s; failure preserves duration before post-execute',
+    async (original) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(1000)
+        const events: string[] = []
+        const ledger: EffectLedger = {
+          started: () => {
+            events.push('started')
+          },
+          finished: (_, kind) => {
+            events.push('finished:' + kind)
+            throw new Error('settlement failed')
+          }
+        }
+        const host = await KernelHost.boot(
+          [
+            logControl({ append: () => undefined }),
+            effectsControl(ledger),
+            {
+              name: 'synthetic.post-execute',
+              kind: 'capability',
+              apply(ctx) {
+                ctx.on('tool/post-execute', async (_, outcome) => {
+                  events.push('post:' + outcome.kind)
+                  return outcome
+                })

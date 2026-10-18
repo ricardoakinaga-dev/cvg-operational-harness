@@ -134,6 +134,22 @@ export class DeterministicCompletionEvaluator implements CompletionEvaluator {
   private evaluateDeterministic(
     input: CompletionEvaluationInput
   ): CompletionEvaluation {
+    if (
+      input.state.toolResultContext &&
+      input.observations.some(
+        (observation) =>
+          observation.type === 'TOOL_RESULT' &&
+          (observation.payload as { resultAvailability?: unknown } | null)
+            ?.resultAvailability === 'UNAVAILABLE'
+      )
+    ) {
+      return {
+        outcome: 'INSUFFICIENT_EVIDENCE',
+        reasonCode: 'EVIDENCE_INCOMPLETE',
+        deterministic: true,
+        detail: 'A complete tool result is unavailable; handoff is required.'
+      }
+    }
     const lastTool = lastToolObservation(input.observations)
     const lastSufficiency = sufficiencyFromObservation(
       lastOfType(input.observations, 'SUFFICIENCY')

@@ -1,0 +1,32 @@
+  it('R20b whole simple-edge collision stays opaque while preserving endpoint connectivity', () => {
+    const source = 'docs/tool-catalog.md'
+    const edgeText = 'left --> right'
+    const text =
+      '# Contracts\n## Runtime\n```ts public-api\nnew Worker("left --> right", { eval: true });\n```\n## Graph\n```mermaid\nflowchart LR\n  left["node"]\n  right["target"]\n  left --> right\n```\n'
+    const entries = fixture({ [source]: text })
+      .collect()
+      .entries.filter((entry) => entry.source === source)
+    expect(entries).toHaveLength(2)
+    const graph = entries.find((entry) => entry.kind === 'capability-graph')
+    expect(graph.shape.nodes.map((node) => node.id)).toEqual(['left', 'right'])
+    expect(graph.shape.edges).toHaveLength(1)
+    expect(graph.shape.edges[0]).toMatchObject({
+      from: graph.shape.nodes[0].id,
+      operator: '-->',
+      to: graph.shape.nodes[1].id,
+      status: 'UNKNOWN',
+      value_sha256: sha(edgeText),
+      byte_length: Buffer.byteLength(edgeText)
+    })
+    expect(graph.shape.edges[0].reason).toBeTruthy()
+    expect(serializeCatalog(entries)).not.toContain(edgeText)
+    for (const entry of entries) {
+      expect(entry.source_sha256).toBe(sha(text))
+      expect(entry.owner_task).toBe('P100-003')
+      expect(entry.parity_status).toBe('NOT_VERIFIED')
+      expect(entry.id).toBe(
+        `contract:${sha(JSON.stringify({ kind: entry.kind, package: entry.package, source, symbol: entry.symbol }))}`
+      )
+    }
+  })
+

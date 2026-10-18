@@ -65,6 +65,17 @@ import {
 } from './postgres.ts'
 import { PostgresControlPlaneRepository } from './platform-control-plane-repository.ts'
 import type { Channel, TaskStatus } from '@cvg/shared'
+import type { QueryResult, QueryResultRow } from 'pg'
+import {
+  FencedRenewalStoppedError,
+  type FencedRenewalControl,
+  type FencedOuterClaimRef,
+  type FencedClaimRenewal,
+  type FencedClaimedEvent,
+  type FencedOutboxAckInput,
+  type FencedOutboxFailInput
+} from './outbox.ts'
+import { renewOutboxClaimOnClient } from './postgres-outbox.ts'
 
 export const CVG_TENANT_CONTEXT_SETTING = 'cvg.tenant_id'
 
@@ -159,13 +170,88 @@ export async function withTenantTransaction<T>(
   rawTenantId: TenantId,
   operation: (client: PostgresPoolClient) => Promise<T>
 ): Promise<T> {
+  return withTenantTransactionInternal(pool, rawTenantId, operation)
+}
+
+const renewalGuardStops = new WeakSet<FencedRenewalStoppedError>()
+
+export function isFencedRenewalGuardStop(
+  error: unknown,
+  control: FencedRenewalControl | undefined
+): error is FencedRenewalStoppedError {
+  return (
+    error instanceof FencedRenewalStoppedError &&
+    error.signal === control?.signal &&
+    renewalGuardStops.has(error)
+  )
+}
+
+export function assertFencedRenewalActive(
+  control?: FencedRenewalControl
+): void {
+  if (!control) return
+  const stopped = (): never => {
+    const error = new FencedRenewalStoppedError(control.signal)
+    renewalGuardStops.add(error)
+    throw error
+  }
+  if (control.signal.aborted) stopped()
+  try {
+    control.assertActive()
+  } catch {
+    stopped()
+  }
+}
+
+/** Never relabel a rejected query, even when stop raced its rejection. */
+export async function queryRenewal<T extends QueryResultRow = QueryResultRow>(
+  client: PostgresQueryable,
+  text: string,
+  values?: unknown[],
+  control?: FencedRenewalControl
+): Promise<QueryResult<T>> {
+  assertFencedRenewalActive(control)
+  const result = await client.query<T>(text, values)
+  assertFencedRenewalActive(control)
+  return result
+}
+
+export function runFencedRenewalTransaction<T>(
+  pool: PostgresPoolLike,
+  tenantId: TenantId,
+  control: FencedRenewalControl,
+  operation: (client: PostgresPoolClient) => Promise<T>
+): Promise<T> {
+  return withTenantTransactionInternal(pool, tenantId, operation, control)
+}
+
+async function withTenantTransactionInternal<T>(
+  pool: PostgresPoolLike,
+  rawTenantId: TenantId,
+  operation: (client: PostgresPoolClient) => Promise<T>,
+  control?: FencedRenewalControl
+): Promise<T> {
   const tenantId = TenantIdSchema.parse(rawTenantId)
+  try {
+    assertFencedRenewalActive(control)
+  } catch (error) {
+    if (isFencedRenewalGuardStop(error, control)) error.cleanupConfirmed = true
+    throw error
+  }
   const client = await pool.connect()
   let released = false
   const release = (error?: Error): void => {
     if (released) return
     released = true
     client.release(error)
+  }
+  // A checkout that resolves after stop must not start a transaction.
+  try {
+    assertFencedRenewalActive(control)
+  } catch (error) {
+    release()
+    if (isFencedRenewalGuardStop(error, control)) error.cleanupConfirmed = true
+    throw error
   }
   let cleanupFailure: Error | undefined
   const clearTenantContext = async (): Promise<void> => {
@@ -187,14 +273,38 @@ export async function withTenantTransaction<T>(
     }
   }
   try {
-    await client.query('BEGIN')
-    await client.query('SELECT set_config($1, $2, false)', [
-      CVG_TENANT_CONTEXT_SETTING,
-      tenantId
-    ])
+    await queryRenewal(client, 'BEGIN', undefined, control)
+    if (control) {
+      await queryRenewal(
+        client,
+        "SET LOCAL lock_timeout = '500ms'",
+        undefined,
+        control
+      )
+      await queryRenewal(
+        client,
+        "SET LOCAL statement_timeout = '1000ms'",
+        undefined,
+        control
+      )
+    }
+    await queryRenewal(
+      client,
+      'SELECT set_config($1, $2, false)',
+      [CVG_TENANT_CONTEXT_SETTING, tenantId],
+      control
+    )
     const result = await operation(client)
+    assertFencedRenewalActive(control)
     await clearTenantContext()
+    assertFencedRenewalActive(control)
     await client.query('COMMIT')
+    // Stop concurrent with COMMIT is ambiguous, never an expected rollback.
+    try {
+      assertFencedRenewalActive(control)
+    } catch {
+      throw new Error('Fenced renewal stopped during COMMIT')
+    }
     release()
     return result
   } catch (error) {
@@ -202,21 +312,54 @@ export async function withTenantTransaction<T>(
       await client.query('ROLLBACK')
     } catch (rollbackError) {
       release(toError(rollbackError))
+      if (isFencedRenewalGuardStop(error, control)) throw rollbackError
       throw error
     }
     try {
       await clearTenantContext()
     } catch (cleanupError) {
       release(toError(cleanupError))
+      if (isFencedRenewalGuardStop(error, control)) throw cleanupError
       throw error
     }
     release(cleanupFailure)
+    if (isFencedRenewalGuardStop(error, control)) {
+      if (cleanupFailure) throw cleanupFailure
+      error.cleanupConfirmed = true
+    }
     throw error
   }
 }
 
 export class TenantScopedPostgresRuntimeRepository {
   constructor(private readonly pool: PostgresPoolLike) {}
+
+  claimNextFenced(input: OutboxClaimInput): Promise<FencedClaimedEvent | null> {
+    return this.run(input.tenantId, (repository) =>
+      repository.claimNextFenced(input)
+    )
+  }
+
+  renewOutboxClaim(
+    ref: FencedOuterClaimRef,
+    control: FencedRenewalControl
+  ): Promise<FencedClaimRenewal> {
+    ref = { ...ref }
+    return runFencedRenewalTransaction(
+      this.pool,
+      ref.tenantId,
+      control,
+      (client) => renewOutboxClaimOnClient(client, ref, control)
+    )
+  }
+
+  ackClaim(input: FencedOutboxAckInput): Promise<DurableOutboxEventRecord> {
+    return this.run(input.tenantId, (repository) => repository.ackClaim(input))
+  }
+
+  failClaim(input: FencedOutboxFailInput): Promise<DurableOutboxEventRecord> {
+    return this.run(input.tenantId, (repository) => repository.failClaim(input))
+  }
 
   enqueue(input: OutboxEnqueueInput): Promise<DurableOutboxEventRecord> {
     return this.run(input.tenantId, (repository) => repository.enqueue(input))

@@ -118,6 +118,62 @@ export interface OutboxRequeueInput {
   correlationId: string
 }
 
+/** A database attempt row is part of the fence, including after counter reset. */
+export interface FencedOuterClaimRef {
+  tenantId: TenantId
+  eventId: string
+  processWorkerId: string
+  expectedOuterAttempt: number
+  expectedAttemptRowId: string
+}
+
+export interface FencedClaimedEvent {
+  event: OutboxEventRecord
+  claimRef: FencedOuterClaimRef
+  dbClaimedAt: string
+}
+
+export interface FencedRenewalControl {
+  signal: AbortSignal
+  assertActive: () => void
+}
+
+export interface FencedClaimRenewal {
+  claimRef: FencedOuterClaimRef
+  dbNow: string
+  leaseUntil: string
+}
+
+export type FencedOutboxAckInput = OutboxAckInput & {
+  claimRef: FencedOuterClaimRef
+  beforeFinalAck: () => Promise<void>
+  signal?: AbortSignal
+}
+
+export type FencedOutboxFailInput = OutboxFailInput & {
+  claimRef: FencedOuterClaimRef
+}
+
+/** Only a joined runner may confirm that cancellation cleaned up safely. */
+export class FencedRenewalStoppedError extends Error {
+  cleanupConfirmed = false
+
+  constructor(readonly signal: AbortSignal) {
+    super('Fenced renewal stopped')
+    this.name = 'FencedRenewalStoppedError'
+  }
+}
+
+export interface FencedOutboxClaimAdapter extends DurableOutboxAdapter {
+  claimNextFenced(input: OutboxClaimInput): Promise<FencedClaimedEvent | null>
+  renewOutboxClaim(
+    ref: FencedOuterClaimRef,
+    control: FencedRenewalControl
+  ): Promise<FencedClaimRenewal>
+  ackClaim(input: FencedOutboxAckInput): Promise<OutboxEventRecord>
+  failClaim(input: FencedOutboxFailInput): Promise<OutboxEventRecord>
+}
+
 export interface DurableOutboxAdapter {
   enqueue(
     input: OutboxEnqueueInput,

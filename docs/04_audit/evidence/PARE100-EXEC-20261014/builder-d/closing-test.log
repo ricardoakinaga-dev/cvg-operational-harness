@@ -1,0 +1,32 @@
+      tool: {
+        ...toolBase,
+        execute: () => {
+          setTimeout(() => midFlight.controller.abort(), 0)
+          return new Promise(() => {})
+        }
+      }
+    })
+    expect(await runToolCall(hostB, callB as never)).toMatchObject({
+      kind: 'settled',
+      outcome: { kind: 'cancelled' }
+    })
+  })
+
+  it('keeps the outcome when the effect ledger closing write fails', async () => {
+    const { turn } = makeTurn()
+    const host = fakeHost({
+      services: toolServices({
+        effects: {
+          started: async () => {},
+          finished: () => Promise.reject(new Error('synthetic ledger failure'))
+        }
+      })
+    })
+    expect(await runToolCall(host, toolCallStub(turn) as never)).toMatchObject({
+      kind: 'settled',
+      outcome: { kind: 'succeeded' }
+    })
+  })
+})
+
+describe('PDSH-031 slice 2d — operational harness composition edges', () => {

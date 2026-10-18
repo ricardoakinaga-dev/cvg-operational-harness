@@ -118,7 +118,9 @@ export function runCoreCoverage(
         '--passWithNoTests=false',
         '--dangerouslyIgnoreUnhandledErrors=false',
         '--no-file-parallelism',
-        '--maxWorkers=2',
+        ...(forwarded.some((arg) => arg.startsWith('--maxWorkers='))
+          ? []
+          : ['--maxWorkers=2']),
         ...forwarded
       ],
       {

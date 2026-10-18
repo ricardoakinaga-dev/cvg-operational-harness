@@ -1,0 +1,619 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { createDifferentialEvidence } from './evidence-lifecycle.mjs'
+import { runCvgToolTurn } from './cvg-tool.ts'
+import { validateToolCase, type ToolCase } from './tool-case.mjs'
+import { measureToolTurn } from './compare-tool-turn.mjs'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import type { ModelGateway } from '@cvg/harness-contracts'
+import {
+  capturePortData,
+  createPortRequestCapture
+} from './capture-port-data.mjs'
+
+const cases: ToolCase[] = [
+  {
+    version: 1,
+    id: 'tool-ascii',
+    message: 'Run the pure synthetic echo',
+    text: 'synthetic echo'
+  },
+  {
+    version: 1,
+    id: 'tool-unicode',
+    message: 'Execute o echo sintético',
+    text: 'Olá 🐾 — ação'
+  },
+  {
+    version: 1,
+    id: 'tool-json',
+    message: 'Echo synthetic JSON characters',
+    text: '{"literal":"\\path"}'
+  }
+]
+const lifecycle = createDifferentialEvidence('tool')
+beforeEach(({ onTestFailed }) => onTestFailed(lifecycle.failed))
+afterAll(lifecycle.finish)
+const script = path.resolve('tests/differential/reference-tool-driver.mjs')
+let asciiReference: unknown
+const sha = (value: string) =>
+  crypto.createHash('sha256').update(value).digest('hex')
+
+describe('SPEC0213 native pure-tool turn measurement', () => {
+  for (const input of cases)
+    it(`executes both public engines: ${input.id}`, async () => {
+      const fixture = validateToolCase(input)
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-tool-turn-'))
+      fs.mkdirSync(lifecycle.directory, { recursive: true })
+      try {
+        const file = path.join(home, 'fixture.json')
+        fs.writeFileSync(file, JSON.stringify(fixture))
+        const env = {
+          PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(
+            path.delimiter
+          ),
+          HOME: home,
+          TMPDIR: home,
+          TMP: home,
+          TEMP: home,
+          XDG_CONFIG_HOME: path.join(home, 'config'),
+          XDG_CACHE_HOME: path.join(home, 'cache'),
+          XDG_DATA_HOME: path.join(home, 'data'),
+          XDG_STATE_HOME: path.join(home, 'state'),
+          DSH_HOME: path.join(home, 'dsh'),
+          NODE_ENV: 'test',
+          LANG: 'C.UTF-8'
+        }
+        const started = Date.now()
+        const child = spawnSync(process.execPath, [script, file], {
+          cwd: home,
+          env,
+          encoding: 'utf8',
+          timeout: 5000,
+          maxBuffer: 1048576,
+          killSignal: 'SIGKILL'
+        })
+        fs.writeFileSync(
+          path.join(lifecycle.directory, `${fixture.id}.reference.stdout.log`),
+          child.stdout ?? ''
+        )
+        fs.writeFileSync(
+          path.join(lifecycle.directory, `${fixture.id}.reference.stderr.log`),
+          child.stderr ?? ''
+        )
+        fs.writeFileSync(
+          path.join(lifecycle.directory, `${fixture.id}.command.json`),
+          JSON.stringify(
+            {
+              argv: [process.execPath, script, file],
+              cwd: home,
+              environment: env,
+              pid: child.pid,
+              elapsedMs: Date.now() - started,
+              timeoutMs: 5000,
+              maxBuffer: 1048576,
+              exit: child.status,
+              signal: child.signal,
+              error: child.error?.message ?? null,
+              stdoutSHA256: sha(child.stdout ?? ''),
+              stderrSHA256: sha(child.stderr ?? ''),
+              childExitObserved: child.status !== null || child.signal !== null
+            },
+            null,
+            2
+          ) + '\n'
+        )
+        expect(child.error, child.stderr).toBeUndefined()
+        expect(child.signal, child.stderr).toBeNull()
+        expect(child.status, child.stderr).toBe(0)
+        const reference = JSON.parse(child.stdout)
+        if (fixture.id === 'tool-ascii') asciiReference = reference
+        const cvg = await runCvgToolTurn(fixture)
+        fs.writeFileSync(
+          path.join(lifecycle.directory, `${fixture.id}.native.json`),
+          JSON.stringify({ fixture, reference, cvg }, null, 2) + '\n'
+        )
+        expect(reference.native.toolBodies).toEqual([
+          {
+            name: 'pare100_echo',
+            input: { text: fixture.text },
+            output: fixture.text
+          }
+        ])
+        expect(cvg.native.toolBodies).toEqual(reference.native.toolBodies)
+        expect(reference.native.finalText).toBe(fixture.text)
+        expect(cvg.native.turn.response).toBe(fixture.text)
+        expect(cvg.native.turn.stopReason).toBe('COMPLETED')
+        expect(cvg.native.turn.modelCalls).toBe(2)
+        expect(cvg.native.turn.toolCalls).toBe(1)
+        expect(cvg.native.approvalRequests).toEqual([])
+        const measurement = measureToolTurn(reference, cvg, fixture)
+        fs.writeFileSync(
+          path.join(lifecycle.directory, `${fixture.id}.measurement.json`),
+          JSON.stringify(measurement, null, 2) + '\n'
+        )
+        expect(measurement.fullParity).toBe('NOT_VERIFIED')
+        expect(measurement.sdkJourney).toBe(
+          'NOT_COVERED_SINGLE_PASS_GAP_RETAINED'
+        )
+        expect(
+          measureToolTurn(
+            structuredClone(reference),
+            structuredClone(cvg),
+            fixture
+          )
+        ).toEqual(measurement)
+        // Every object property and array element is independently removable.
+        // Missing native information must fail, including fields outside the
+        // common text/tool projection and normalized UUID/time locations.
+        const raw = { reference, cvg }
+        const paths: string[][] = []
+        const collect = (v: unknown, prefix: string[]) => {
+          if (v && typeof v === 'object')
+            for (const [key, child] of Object.entries(v)) {
+              paths.push([...prefix, key])
+              collect(child, [...prefix, key])
+            }
+        }
+        collect(raw, [])
+        let rejected = 0
+        for (const remove of paths) {
+          const bad = structuredClone(raw)
+          let parent = bad as Record<string, unknown>
+          for (const key of remove.slice(0, -1))
+            parent = parent[key] as Record<string, unknown>
+          delete parent[remove.at(-1)!]
+          expect(
+            () => measureToolTurn(bad.reference, bad.cvg, fixture),
+            remove.join('/')
+          ).toThrow()
+          rejected++
+        }
+        const changes: {
+          side: 'reference' | 'cvg'
+          path: string[]
+          value: unknown
+        }[] = [
+          {
+            side: 'reference',
+            path: ['native', 'toolBodies', '0', 'output'],
+            value: 'forged'
+          },
+          {
+            side: 'cvg',
+            path: ['native', 'toolBodies', '0', 'input', 'text'],
+            value: 'forged'
+          },
+          {
+            side: 'reference',
+            path: ['native', 'messages', '3', 'toolCallId'],
+            value: 'wrong-call'
+          },
+          {
+            side: 'reference',
+            path: ['native', 'events', '9', 'data', 'arguments'],
+            value: { text: 'forged' }
+          },
+          {
+            side: 'reference',
+            path: [
+              'native',
+              'requests',
+              '1',
+              'request',
+              'messages',
+              '3',
+              'content',
+              '0',
+              'text'
+            ],
+            value: 'forged'
+          },
+          {
+            side: 'cvg',
+            path: ['native', 'turn', 'usage', 'inputTokens'],
+            value: 99
+          },
+          {
+            side: 'cvg',
+            path: ['native', 'policyDecisions', '0', 'decision', 'outcome'],
+            value: 'DENY'
+          },
+          {
+            side: 'cvg',
+            path: ['native', 'audit', '10', 'result'],
+            value: 'APPROVED'
+          },
+          {
+            side: 'reference',
+            path: ['reference', 'artifacts', '0', 'sha256'],
+            value: '0'.repeat(64)
+          },
+          {
+            side: 'reference',
+            path: ['native', 'events', '8', 'data', 'message', 'id'],
+            value: '00000000-0000-4000-8000-000000000000'
+          },
+          {
+            side: 'cvg',
+            path: ['native', 'events', '2', 'payload', 'outcome'],
+            value: 'failed'
+          }
+        ]
+        for (const change of changes) {
+          const bad = structuredClone(raw)
+          let parent = bad[change.side] as Record<string, unknown>
+          for (const key of change.path.slice(0, -1))
+            parent = parent[key] as Record<string, unknown>
+          parent[change.path.at(-1)!] = change.value
+          expect(
+            () => measureToolTurn(bad.reference, bad.cvg, fixture),
+            change.path.join('/')
+          ).toThrow()
+          rejected++
+        }
+        for (const side of ['reference', 'cvg'] as const) {
+          const bad = structuredClone(raw)
+          bad[side].native.toolBodies.push({
+            name: 'extra',
+            input: { text: fixture.text },
+            output: fixture.text
+          })
+          expect(() =>
+            measureToolTurn(bad.reference, bad.cvg, fixture)
+          ).toThrow()
+          rejected++
+        }
+        fs.writeFileSync(
+          path.join(
+            lifecycle.directory,
+            `${fixture.id}.negative-controls.json`
+          ),
+          JSON.stringify(
+            {
+              removedNativeFields: paths.length,
+              rejected,
+              total: paths.length + changes.length + 2
+            },
+            null,
+            2
+          ) + '\n'
+        )
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }, 15000)
+  it('retains and rejects compensated per-call usage and provider-result provenance changes', async () => {
+    expect(asciiReference).toBeDefined()
+    const fixture = cases[0]!
+    const observations = []
+    for (const mode of [
+      'compensated',
+      'provenance',
+      'extra',
+      'missing'
+    ] as const) {
+      const cvg = await runCvgToolTurn(fixture, {
+        transformProviderResult: (result, call) => {
+          if (mode === 'compensated')
+            return {
+              ...result,
+              inputTokens: call === 1 ? 0 : 2,
+              outputTokens: call === 1 ? 0 : 4
+            }
+          if (mode === 'provenance')
+            return {
+              ...result,
+              provider: 'forged-provider',
+              model: 'forged-model'
+            }
+          if (mode === 'extra')
+            return { ...result, unexpectedResultField: 'retained-not-dropped' }
+          const missing = { ...result }
+          Reflect.deleteProperty(missing, 'provider')
+          return missing as typeof result
+        }
+      })
+      expect(cvg.native.turn.usage.inputTokens).toBe(2)
+      expect(cvg.native.turn.usage.outputTokens).toBe(4)
+      expect(cvg.native.modelResults).toHaveLength(2)
+      if (mode === 'compensated')
+        expect(
+          cvg.native.modelResults.map((r) => [r.inputTokens, r.outputTokens])
+        ).toEqual([
+          [0, 0],
+          [2, 4]
+        ])
+      expect(
+        () => measureToolTurn(asciiReference, cvg, fixture),
+        mode
+      ).toThrow()
+      observations.push({ mode, cvg, rejected: true })
+    }
+    fs.writeFileSync(
+      path.join(lifecycle.directory, 'provider-result-controls.json'),
+      JSON.stringify(observations, null, 2) + '\n'
+    )
+  })
+  it('refuses the original post-observer result-replacement counterexample', async () => {
+    expect(asciiReference).toBeDefined()
+    const fixture = cases[0]!
+    const original = HybridOrchestrator.prototype.decide
+    const observations = []
+    try {
+      for (const mode of ['usage', 'provenance'] as const) {
+        HybridOrchestrator.prototype.decide = async function (input) {
+          const gateway = (this as unknown as { decisionModel: ModelGateway })
+            .decisionModel
+          const complete = gateway.complete.bind(gateway)
+          gateway.complete = async (request) => {
+            const result = await complete(request)
+            return mode === 'usage'
+              ? { ...result, inputTokens: 0, outputTokens: 0 }
+              : {
+                  ...result,
+                  provider: 'forged-provider',
+                  model: 'forged-model'
+                }
+          }
+          return original.call(this, input)
+        }
+        const cvg = await runCvgToolTurn(fixture)
+        expect(
+          () => measureToolTurn(asciiReference, cvg, fixture),
+          mode
+        ).toThrow()
+        expect(cvg.native.toolBodies).toEqual([])
+        observations.push({ mode, cvg, rejected: true })
+      }
+    } finally {
+      HybridOrchestrator.prototype.decide = original
+    }
+    fs.writeFileSync(
+      path.join(lifecycle.directory, 'post-observer-controls.json'),
+      JSON.stringify(observations, null, 2) + '\n'
+    )
+  })
+  it('refuses null and undefined provider results without substituting a valid reply', async () => {
+    const observations = []
+    for (const value of [null, undefined]) {
+      const cvg = await runCvgToolTurn(cases[0], {
+        transformProviderResult: () => value as never
+      })
+      observations.push({ mode: String(value), cvg })
+      fs.mkdirSync(lifecycle.directory, { recursive: true })
+      fs.writeFileSync(
+        path.join(lifecycle.directory, 'nullish-provider-controls.json'),
+        JSON.stringify(observations, null, 2) + '\n'
+      )
+      expect(cvg.native.toolBodies).toEqual([])
+      expect(() => measureToolTurn(asciiReference, cvg, cases[0])).toThrow()
+    }
+  })
+  it('rejects counterfeit or shadowed native signal state without calling getters', () => {
+    const capture = createPortRequestCapture()
+    let reads = 0
+    const shadowed = new AbortController()
+    shadowed.abort('actual-abort')
+    Object.defineProperties(shadowed.signal, {
+      aborted: { value: false },
+      reason: { value: undefined }
+    })
+    const getter = new AbortController()
+    Object.defineProperty(getter.signal, 'aborted', {
+      get() {
+        reads++
+        return false
+      }
+    })
+    const fake = Object.create(AbortSignal.prototype)
+    const error = new Error('synthetic')
+    Object.defineProperty(error, 'message', {
+      get() {
+        reads++
+        return 'forged'
+      }
+    })
+    const errorSignal = new AbortController()
+    errorSignal.abort(error)
+    const inheritedError = new Error('synthetic')
+    Object.setPrototypeOf(
+      inheritedError,
+      Object.create(Error.prototype, {
+        name: {
+          get() {
+            reads++
+            return 'forged'
+          }
+        }
+      })
+    )
+    const inheritedSignal = new AbortController()
+    inheritedSignal.abort(inheritedError)
+    const reasonGetter = new AbortController()
+    Object.defineProperty(reasonGetter.signal, 'reason', {
+      get() {
+        reads++
+        return undefined
+      }
+    })
+    for (const signal of [
+      shadowed.signal,
+      getter.signal,
+      fake,
+      errorSignal.signal,
+      inheritedSignal.signal,
+      reasonGetter.signal
+    ])
+      expect(() => capture({ signal })).toThrow()
+    expect(reads).toBe(0)
+    const legitimate = new AbortController()
+    const first = capture({ signal: legitimate.signal })
+    legitimate.abort(new Error('actual-reason'))
+    const second = capture({ signal: legitimate.signal })
+    expect(first.signal).toMatchObject({ aborted: false, reason: null })
+    expect(second.signal).toMatchObject({
+      aborted: true,
+      reason: { kind: 'Error', name: 'Error', message: 'actual-reason' }
+    })
+    expect((first.signal as { identity: string }).identity).toBe(
+      (second.signal as { identity: string }).identity
+    )
+    const defaultReason = new AbortController()
+    defaultReason.abort()
+    expect(capture({ signal: defaultReason.signal }).signal).toMatchObject({
+      aborted: true,
+      reason: { kind: 'Error', name: 'AbortError' }
+    })
+  })
+  it('enforces UTF8 byte boundaries before public engine admission', async () => {
+    const observations: Record<string, unknown>[] = []
+    const referenceIngress = (fixture: unknown, label: string) => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-tool-ingress-'))
+      try {
+        const file = path.join(home, 'fixture.json')
+        fs.writeFileSync(file, JSON.stringify(fixture))
+        const env = {
+          PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(
+            path.delimiter
+          ),
+          HOME: home,
+          TMPDIR: home,
+          TMP: home,
+          TEMP: home,
+          XDG_CONFIG_HOME: path.join(home, 'config'),
+          XDG_CACHE_HOME: path.join(home, 'cache'),
+          XDG_DATA_HOME: path.join(home, 'data'),
+          XDG_STATE_HOME: path.join(home, 'state'),
+          DSH_HOME: path.join(home, 'dsh'),
+          NODE_ENV: 'test',
+          LANG: 'C.UTF-8'
+        }
+        const argv = [script, file]
+        const child = spawnSync(process.execPath, argv, {
+          cwd: home,
+          env,
+          encoding: 'utf8',
+          timeout: 5000,
+          maxBuffer: 1048576,
+          killSignal: 'SIGKILL'
+        })
+        fs.mkdirSync(lifecycle.directory, { recursive: true })
+        const observation = {
+          label,
+          argv: [process.execPath, ...argv],
+          environment: env,
+          pid: child.pid,
+          exit: child.status,
+          signal: child.signal,
+          error: child.error?.message ?? null,
+          childExitObserved: child.status !== null || child.signal !== null,
+          stdout: child.stdout ?? '',
+          stderr: child.stderr ?? ''
+        }
+        observations.push(observation)
+        fs.writeFileSync(
+          path.join(lifecycle.directory, 'utf8-ingress-controls.json'),
+          JSON.stringify(observations, null, 2) + '\n'
+        )
+        expect(child.error).toBeUndefined()
+        expect(child.signal).toBeNull()
+        return observation
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+    for (const text of [
+      'a'.repeat(4096),
+      'é'.repeat(2048),
+      '🐾'.repeat(1024)
+    ]) {
+      for (const field of ['message', 'text'])
+        expect(
+          validateToolCase({ ...cases[0], [field]: text })[
+            field as 'text' | 'message'
+          ]
+        ).toBe(text)
+    }
+    for (const field of ['message', 'text']) {
+      const bad = { ...cases[0], [field]: 'é'.repeat(2048) + 'a' }
+      expect(() => validateToolCase(bad)).toThrow()
+      await expect(runCvgToolTurn(bad)).rejects.toThrow('invalid tool fixture')
+      const child = referenceIngress(bad, `over-${field}`)
+      expect(child.exit).toBe(1)
+      expect(child.stdout).toBe('')
+      expect(child.stderr).toContain('invalid tool fixture')
+    }
+    const boundary = { ...cases[0], message: 'é'.repeat(2048) }
+    const cvg = await runCvgToolTurn(boundary)
+    expect(cvg.native.turn.modelCalls).toBe(2)
+    expect(cvg.native.toolBodies).toHaveLength(1)
+    const child = referenceIngress(boundary, 'exact-message-boundary')
+    expect(child.exit).toBe(0)
+    expect(JSON.parse(child.stdout).native.modelCalls).toBe(2)
+  }, 15000)
+  it('captures native port data immutably and refuses non-data/accessor/sparse/cyclic inputs', () => {
+    const original = { nested: { text: 'first' } }
+    const captured = capturePortData(original)
+    original.nested.text = 'later'
+    expect(captured.nested.text).toBe('first')
+    expect(() => {
+      captured.nested.text = 'forged'
+    }).toThrow()
+    let getterReads = 0
+    const getter = {
+      get text() {
+        getterReads++
+        return 'forged'
+      }
+    }
+    const cyclic: { self?: unknown } = {}
+    cyclic.self = cyclic
+    for (const bad of [
+      getter,
+      cyclic,
+      Array(1),
+      { v: undefined },
+      { v: -0 },
+      { v: Infinity },
+      { v: () => 1 },
+      { v: 'x'.repeat(512 * 1024 + 1) }
+    ])
+      expect(() => capturePortData(bad)).toThrow()
+    expect(getterReads).toBe(0)
+    const capture = createPortRequestCapture()
+    const controller = new AbortController()
+    const a = capture({ provider: 'first', signal: controller.signal })
+    const b = capture({ provider: 'second', signal: controller.signal })
+    expect(a.signal).toEqual(b.signal)
+    expect(a.request).toEqual({ provider: 'first' })
+    expect(() => capture({ signal: { aborted: false } })).toThrow()
+  })
+  it('rejects unsupported fixtures and non-data/getter observations without executing getters', () => {
+    for (const input of [
+      null,
+      {},
+      { ...cases[0], extra: true },
+      { ...cases[0], id: Symbol('id') }
+    ])
+      expect(() => validateToolCase(input)).toThrow()
+    let reads = 0
+    const input = {
+      ...cases[0],
+      get text() {
+        reads++
+        return 'forged'
+      }
+    }
+    expect(() => validateToolCase(input)).toThrow()
+    expect(reads).toBe(0)
+    expect(() => measureToolTurn({}, {}, cases[0])).toThrow()
+    expect(() =>
+      measureToolTurn({}, {}, { ...cases[0], id: 'unsupported' })
+    ).toThrow()
+  })
+})

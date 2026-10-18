@@ -5,7 +5,10 @@ import {
   ApprovalEngine as ApprovalDomain,
   InMemoryApprovalStore
 } from '@cvg/approval-engine'
-import type { ApprovalEngine as ApprovalPort } from '@cvg/harness-contracts'
+import type {
+  ApprovalEngine as ApprovalPort,
+  ModelGateway
+} from '@cvg/harness-contracts'
 
 export interface ReplyCase {
   version: 1
@@ -14,9 +17,8 @@ export interface ReplyCase {
   fragments: string[]
 }
 
-/** Real public SDK/kernel/session path; only the external model is scripted. */
-export async function runCvgReply(fixture: ReplyCase) {
-  let modelBodies = 0
+/** Shared real composition; callers own only the synthetic external model. */
+export function createCvgDifferentialSdk(modelGateway: ModelGateway) {
   const sessions = new InMemorySessionEventStore()
   const policyDomain = new PolicyEngine({ profile: REFERENCE_POLICY_PROFILE })
   const approvalDomain = new ApprovalDomain({
@@ -46,7 +48,7 @@ export async function runCvgReply(fixture: ReplyCase) {
       }
     }
   }
-  const sdk = createSdk({
+  return createSdk({
     tenantId: 'pare100_synthetic',
     sessions,
     approvals,
@@ -70,17 +72,23 @@ export async function runCvgReply(fixture: ReplyCase) {
         }
       }
     },
-    modelGateway: {
-      complete: async () => {
-        if (++modelBodies > 1) throw new Error('unexpected model call')
-        return {
-          text: fixture.fragments.join(''),
-          provider: 'pare100-synthetic',
-          model: 'keyless-v1',
-          inputTokens: 1,
-          outputTokens: 2,
-          costUsd: 0
-        }
+    modelGateway
+  })
+}
+
+/** Real public SDK/kernel/session path; only the external model is scripted. */
+export async function runCvgReply(fixture: ReplyCase) {
+  let modelBodies = 0
+  const sdk = createCvgDifferentialSdk({
+    complete: async () => {
+      if (++modelBodies > 1) throw new Error('unexpected model call')
+      return {
+        text: fixture.fragments.join(''),
+        provider: 'pare100-synthetic',
+        model: 'keyless-v1',
+        inputTokens: 1,
+        outputTokens: 2,
+        costUsd: 0
       }
     }
   })

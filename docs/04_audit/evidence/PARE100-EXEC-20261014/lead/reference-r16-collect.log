@@ -1,0 +1,93 @@
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 30, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+Command failed: python3 -I -c 
+import ast, json, sys, hashlib, re
+def opaque(value,reason="Unclassified Python literal; bytes not copied"):
+  data=value if isinstance(value,bytes) else value.encode('utf-8')
+  return {"status":"UNKNOWN","reason":reason,"value_sha256":hashlib.sha256(data).hexdigest(),"byte_length":len(data)}
+def runtime_literals(tree):
+  # Source-local AST roles only: never evaluate a call, initializer or guest.
+  literals=set()
+  def export_metadata(n):
+    if isinstance(n,ast.Assign): targets=n.targets
+    elif isinstance(n,ast.AnnAssign): targets=[n.target]
+    else: return False
+    return (all(isinstance(t,ast.Name) and t.id=="__all__" for t in targets)
+      and isinstance(n.value,(ast.List,ast.Tuple))
+      and all(isinstance(x,ast.Constant) and isinstance(x.value,str)
+        and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x.value) for x in n.value.elts))
+  def visit(n):
+    if export_metadata(n): return
+    if isinstance(n,ast.Constant) and isinstance(n.value,(str,bytes)):
+      literals.add(opaque(n.value)["value_sha256"])
+    for field,value in ast.iter_fields(n):
+      # Annotations and type parameters are declaration metadata; defaults,
+      # decorators, function bodies and ordinary expressions remain runtime.
+      if field in ("annotation","returns","type_params"): continue
+      if isinstance(value,list):
+        for i,child in enumerate(value):
+          if (field=="body" and i==0 and isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef))
+            and isinstance(child,ast.Expr) and isinstance(child.value,ast.Constant) and isinstance(child.value.value,str)):
+            continue # Python docstring metadata, not an expression payload.
+          if isinstance(child,ast.AST): visit(child)
+      elif isinstance(value,ast.AST): visit(value)
+  visit(tree)
+  return literals
+def typ(n):
+  if n is None: return {"status":"UNKNOWN","reason":"No declared Python annotation"}
+  allowed=(ast.Name,ast.Attribute,ast.Subscript,ast.Constant,ast.Tuple,ast.List,ast.BinOp,ast.BitOr,ast.Load)
+  if not all(isinstance(x,allowed) for x in ast.walk(n)): return {"status":"UNKNOWN","reason":"Dynamic Python annotation/base expression"}
+  for x in ast.walk(n):
+    if isinstance(x,ast.Constant) and isinstance(x.value,bytes): return opaque(x.value)
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and opaque(x.value)["value_sha256"] in payload_literals:
+      return opaque(x.value,"Unresolved Python annotation/runtime payload collision; bytes not copied")
+    if isinstance(x,ast.Constant) and isinstance(x.value,str) and not re.fullmatch(r'[A-Za-z0-9_$./:@-]{1,200}',x.value): return opaque(x.value)
+  return ast.unparse(n)
+def sig(n):
+  args=n.args
+  positional=args.posonlyargs+args.args
+  defaults=[None]*(len(positional)-len(args.defaults))+args.defaults
+  ps=[{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"positional_only":i<len(args.posonlyargs)} for i,(a,d) in enumerate(zip(positional,defaults))]
+  ps += [{"name":a.arg,"type":typ(a.annotation),"optional":d is not None,"keyword_only":True} for a,d in zip(args.kwonlyargs,args.kw_defaults)]
+  for a,kind in [(args.vararg,"vararg"),(args.kwarg,"kwarg")]:
+    if a: ps.append({"name":a.arg,"type":typ(a.annotation),kind:True})
+  return {"parameters":ps,"returns":typ(n.returns),"async":isinstance(n,ast.AsyncFunctionDef)}
+out=[]
+for item in json.load(sys.stdin):
+  rows=[]
+  tree=ast.parse(item["text"])
+  payload_literals=runtime_literals(tree)
+  for n in tree.body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and not n.name.startswith("_"): rows.append(["python-function",n.name,sig(n)])
+    elif isinstance(n,ast.ClassDef):
+      rows.append(["python-class",n.name,{"bases":[typ(b) for b in n.bases]}])
+      for m in n.body:
+        if isinstance(m,(ast.FunctionDef,ast.AsyncFunctionDef)) and (not m.name.startswith("_") or m.name=="__init__"): rows.append(["python-method",n.name+"."+m.name,sig(m)])
+        elif isinstance(m,ast.AnnAssign) and isinstance(m.target,ast.Name): rows.append(["python-field",n.name+"."+m.target.id,{"type":typ(m.annotation)}])
+    elif isinstance(n,ast.ImportFrom): rows.extend([["python-export",a.asname or a.name,{"from":n.module,"level":n.level,"name":a.name}] for a in n.names])
+    elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="__all__" for t in n.targets):
+      try:
+        value=ast.literal_eval(n.value)
+        if not (isinstance(value,(list,tuple)) and all(isinstance(x,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}',x) for x in value)): value=opaque(json.dumps(value,sort_keys=True))
+      except (ValueError,TypeError): value={"status":"UNKNOWN","reason":"Dynamic __all__"}
+      rows.append(["python-exports","__all__",{"names":value}])
+  out.append({"path":item["path"],"rows":rows})
+json.dump(out,sys.stdout,sort_keys=True)
+
+Traceback (most recent call last):
+  File "<string>", line 57, in <module>
+  File "<string>", line 32, in runtime_literals
+  File "<string>", line 30, in visit
+  File "<string>", line 31, in visit
+  File "<string>", line 30, in visit
+  File "<string>", line 20, in visit
+  File "<string>", line 4, in opaque
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 1: surrogates not allowed
+

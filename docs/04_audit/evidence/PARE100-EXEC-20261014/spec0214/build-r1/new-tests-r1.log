@@ -1,0 +1,145 @@
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts (43 tests | 3 failed) 15241ms
+     × fails closed at 'journal.markStarted' ('hang') 10ms
+     × fails closed at 'journal.confirm' ('hang') 5ms
+     × closes PENDING on cancellation before a journal ACK and keeps the first result immutable after late ACK 15002ms
+ ❯ packages/platform/src/__tests__/controlled-kernel-approval.test.ts (11 tests | 3 failed) 114ms
+     × consumes once before entry and denies replay with no release 42ms
+     × allows at most one body under two callers racing on the authority 13ms
+     × never releases a consumed grant after a terminal audit fault 6ms
+ ❯ packages/platform/src/__tests__/controlled-kernel-provenance.test.ts (8 tests | 1 failed) 86ms
+     × refuses a legitimate gateway with changed manifest 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-approval.test.ts > legacy atomic one-use approval inside the real kernel > consumes once before entry and denies replay with no release
+AssertionError: expected 'POLICY_DENIED' to be 'COMPLETED' // Object.is equality
+
+Expected: "COMPLETED"
+Received: "POLICY_DENIED"
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-approval.test.ts:55:25
+     53|     const consume = vi.spyOn(f.authority, 'verifyAndConsume')
+     54|     const result = await executeControlledKernel(f.prepared, f.ports)
+     55|     expect(result.stop).toBe('COMPLETED')
+       |                         ^
+     56|     expect(result.attempts[0]).toMatchObject({ approvalRequired: true,…
+     57|     expect(consume).toHaveBeenCalledTimes(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-approval.test.ts > legacy atomic one-use approval inside the real kernel > allows at most one body under two callers racing on the authority
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-approval.test.ts:69:57
+     67|     const f = await approvedFixture()
+     68|     const results = await Promise.all([executeControlledKernel(f.prepa…
+     69|     expect(results.filter(r => r.stop === 'COMPLETED')).toHaveLength(1)
+       |                                                         ^
+     70|     expect(results.flatMap(r => r.attempts).filter(a => a.phase === 'E…
+     71|     expect((await f.authority.get(f.approval.id, f.input.tenantId))?.s…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-approval.test.ts > legacy atomic one-use approval inside the real kernel > never releases a consumed grant after a terminal audit fault
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-approval.test.ts:98:50
+     96|     f.ports.audit.append = event => event.action === 'runtime.complete…
+     97|     const result = await executeControlledKernel(f.prepared, f.ports)
+     98|     expect(result.attempts[0]?.approvalConsumed).toBe(true)
+       |                                                  ^
+     99|     expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
+    100|     expect(result.tools[0]?.status).toBe('failed')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts > mandatory evidence latches and final handler admission > fails closed at 'journal.markStarted' ('hang')
+AssertionError: expected 'log.tool/result' to be 'journal.markStarted' // Object.is equality
+
+Expected: "journal.markStarted"
+Received: "log.tool/result"
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts:63:42
+     61|     expect(injected).toBe(true)
+     62|     expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
+     63|     expect(result.evidence.fault?.phase).toBe(phase)
+       |                                          ^
+     64|     expect(result.tools.every(t => t.status !== 'succeeded')).toBe(tru…
+     65|     if (!['journal.confirm', 'effects.finished', 'log.tool/result', 'a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts > mandatory evidence latches and final handler admission > fails closed at 'journal.confirm' ('hang')
+AssertionError: expected 'log.tool/result' to be 'journal.confirm' // Object.is equality
+
+Expected: "journal.confirm"
+Received: "log.tool/result"
+
+ ❯ packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts:63:42
+     61|     expect(injected).toBe(true)
+     62|     expect(result.stop).toBe('INSUFFICIENT_EVIDENCE')
+     63|     expect(result.evidence.fault?.phase).toBe(phase)
+       |                                          ^
+     64|     expect(result.tools.every(t => t.status !== 'succeeded')).toBe(tru…
+     65|     if (!['journal.confirm', 'effects.finished', 'log.tool/result', 'a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts > mandatory evidence latches and final handler admission > closes PENDING on cancellation before a journal ACK and keeps the first result immutable after late ACK
+Error: Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ packages/platform/src/__tests__/controlled-kernel-evidence-faults.test.ts:97:3
+     95|   })
+     96|
+     97|   it('closes PENDING on cancellation before a journal ACK and keeps th…
+       |   ^
+     98|     const f = await fixture()
+     99|     const authority = new InMemoryCapabilityApprovalAuthority()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  packages/platform/src/__tests__/controlled-kernel-provenance.test.ts > implementation provenance, not descriptor strings > refuses a legitimate gateway with changed manifest
+ZodError: [
+  {
+    "code": "custom",
+    "path": [
+      "tools",
+      0,
+      "permission"
+    ],
+    "message": "Tool permission must be declared by the manifest"
+  }
+]
+ ❯ normalizeRegisteredPlugin packages/platform/src/plugin-gateway.ts:782:41
+    780|
+    781| function normalizeRegisteredPlugin(plugin: RegisteredPlugin): Register…
+    782|   const manifest = PluginManifestSchema.parse(plugin.manifest)
+       |                                         ^
+    783|   const toolNames = new Set(manifest.tools.map((tool) => tool.name))
+    784|   const handlers = Object.fromEntries(
+ ❯ new PluginRegistry packages/platform/src/plugin-gateway.ts:122:28
+ ❯ packages/platform/src/__tests__/controlled-kernel-provenance.test.ts:56:64
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  3 failed | 3 passed (6)
+      Tests  7 failed | 68 passed (75)
+   Start at  01:27:32
+   Duration  21.20s (transform 538ms, setup 0ms, import 1.27s, tests 15.58s, environment 3.64s)
+
