@@ -263,9 +263,8 @@ function updateJson(root, file, update) {
 function standaloneKernel(f, key = 'node_modules/vendor') {
   const reference = JSON.parse(fs.readFileSync(f.manifestPath))
   const actual = collectPackageInventory(path.join(f.evaluated, key))
-  expect(actual.inventorySha256).toBe(
-    reference.packages.find((entry) => entry.key === key).inventorySha256
-  )
+  const referenced = reference.packages.find((entry) => entry.key === key)
+  expect(actual.inventorySha256).toBe(referenced.inventorySha256)
   const input = {
     root: f.evaluated,
     starts: ['packages/core/src/index.js'],
@@ -275,7 +274,15 @@ function standaloneKernel(f, key = 'node_modules/vendor') {
         key,
         manifest: key + '/package.json',
         identityStatus: 'MATCH',
-        referenceDigest: f.expectedSha256
+        referenceDigest: f.expectedSha256,
+        // SPEC0241 D2 (registered migration): the receipt inventory the
+        // checker supplies for a MATCH package.
+        inventorySha256: referenced.inventorySha256,
+        inventory: {
+          entries: referenced.entries,
+          nestedPackages: referenced.nestedPackages,
+          usage: referenced.usage
+        }
       }
     ],
     compiled: { status: 'UNAVAILABLE', files: [] }
@@ -344,7 +351,7 @@ describe('SPEC0236 real checker/CLI integration', () => {
     expect(after.graph.installed).toHaveLength(1)
     expect(after.graph.installed[0]).toMatchObject({
       verified: true,
-      source: 'semantic-kernel-v3-exact-metadata',
+      source: 'semantic-kernel-v4-integral-body',
       contentIdentity: { status: 'MATCH' }
     })
     expect(after.report.resolvedDiagnostics).toHaveLength(1)

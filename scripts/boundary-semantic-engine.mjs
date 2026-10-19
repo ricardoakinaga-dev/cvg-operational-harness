@@ -20,8 +20,12 @@ import {
   RESOLUTION_PROFILE,
   isInactiveImportsMapEligible
 } from './boundary-semantic-resolution.mjs'
+// SPEC0241 errata E4(a): the 0234 comparator's canonical JSON is imported, not
+// reimplemented. Its module hash is part of the profile (worker and parent).
+import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v3-exact-metadata'
+export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v4-integral-body'
+export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
 
 const SELF = fileURLToPath(import.meta.url)
 const isWorker = () =>
@@ -36,6 +40,10 @@ const REFUSAL_CENSUS_ARG = '--refusal-census'
 const RESOLVER = path.resolve(
   path.dirname(SELF),
   'boundary-semantic-resolution.mjs'
+)
+const IDENTITY = path.resolve(
+  path.dirname(SELF),
+  'boundary-installed-identity.mjs'
 )
 // Only the LOCATION of the pinned Node22 is configurable: CVG_PINNED_NODE, or
 // by default the physical running Node. checkTCB still demands NODE_SHA of the
@@ -123,7 +131,157 @@ function empty(limits, reason, detail = '') {
       callDepth: 0,
       states: 0
     },
-    validation: { valid: false }
+    validation: { valid: false },
+    // SPEC0241 §3.2: a parent envelope loses the frontier; phases are null and
+    // the envelope reason stays in its single tuple.
+    phases: null,
+    bodyCoverage: null,
+    installedFileIdentity: null
+  }
+}
+// SPEC0241 §3.1: closed per-edge list. Only an exception whose reason prefix
+// (text before ':') is listed is contained at a body edge; everything else
+// stays global in the outer catch. A reason found in code and not listed is
+// global by default.
+export const CONTAINED_EDGE_REASONS = Object.freeze([
+  'UNKNOWN_RESOLUTION',
+  'UNKNOWN_NATIVE_BUILTIN',
+  'UNKNOWN_EXTERNAL_PATH',
+  'UNKNOWN_FORMAT',
+  'UNKNOWN_MODULE_INTEROP',
+  'UNKNOWN_AMBIGUOUS_RESOLUTION',
+  'UNKNOWN_UNSUPPORTED_EXPORTS',
+  'UNKNOWN_UNRESOLVED_EXPORT',
+  'UNKNOWN_BLOCKED_EXPORT',
+  'UNKNOWN_EXPORTS_DEPTH',
+  'UNKNOWN_EXACT_EXPORTS_TARGET',
+  'UNKNOWN_TARGET_URL',
+  'UNKNOWN_UNSUPPORTED_RUNTIME_RESOLUTION',
+  'UNKNOWN_PACKAGE_SELF_REFERENCE',
+  'UNKNOWN_PACKAGE_SCOPE',
+  'UNKNOWN_PACKAGE_NAME',
+  'UNKNOWN_PACKAGE_ESCAPE',
+  'UNKNOWN_PACKAGE_DIRECTORY_WITHOUT_MANIFEST',
+  'UNKNOWN_CJS_FILE_PACKAGE',
+  'UNKNOWN_ABSOLUTE_PACKAGE_ENTRY',
+  'UNKNOWN_WORKSPACE_CONFIG',
+  'UNKNOWN_WORKSPACE_LINK',
+  'UNKNOWN_SYMLINK',
+  'UNKNOWN_ANCESTOR_SYMLINK',
+  'UNKNOWN_ANCESTOR_FORMAT',
+  'UNKNOWN_LINK_FORMAT',
+  'UNKNOWN_METADATA_ENCODING',
+  'UNKNOWN_INPUT_ENCODING',
+  'UNKNOWN_INVALID_MANIFEST',
+  'UNKNOWN_PATH',
+  'UNKNOWN_PRODUCT_TARGET',
+  'UNKNOWN_ACQUISITION_ENOENT',
+  'UNKNOWN_ACQUISITION_ENOTDIR',
+  'UNKNOWN_ACQUISITION_ELOOP',
+  'UNKNOWN_ACQUISITION_EACCES',
+  'UNKNOWN_ACQUISITION_EISDIR'
+])
+const CONTAINED_SET = new Set(CONTAINED_EDGE_REASONS)
+export function containedEdgeReason(message) {
+  const reason = (typeof message === 'string' ? message : '').split(':')[0]
+  return CONTAINED_SET.has(reason) ? reason : null
+}
+// Deterministic body cut (§3.2): only these four counters, only in the body.
+const BODY_CUT =
+  /^UNKNOWN_ANALYSIS_LIMIT:(maxStates|maxContexts|maxCallDepth|maxUnionValues)$/
+const PHASES = ['acquisition', 'body', 'postBody', 'grammar', 'revalidation']
+// SPEC0241 §3.4: one physical derivation of the installed package key, the
+// last node_modules plus the scope and name (or the name) components.
+export function installedPackageKey(file) {
+  if (typeof file !== 'string') return null
+  const parts = file.split('/'),
+    index = parts.lastIndexOf('node_modules')
+  if (index < 0) return null
+  const end = index + (parts[index + 1]?.startsWith('@') ? 3 : 2)
+  return {
+    key: parts.slice(0, end).join('/'),
+    relative: parts.slice(end).join('/')
+  }
+}
+const INVENTORY_TYPES = new Set(['file', 'link', 'directory'])
+function inventoryIndex(rec) {
+  const { entries, nestedPackages, usage } = rec.inventory
+  if (
+    !Array.isArray(entries) ||
+    !Array.isArray(nestedPackages) ||
+    !record(usage)
+  )
+    return 'INVENTORY_INVALID'
+  let digest
+  try {
+    digest = hash(installedCanonicalJson({ entries, nestedPackages, usage }))
+  } catch {
+    return 'INVENTORY_INVALID'
+  }
+  if (digest !== rec.inventorySha256) return 'INVENTORY_DIGEST'
+  const index = new Map()
+  let previous = ''
+  for (const entry of entries) {
+    if (
+      !record(entry) ||
+      typeof entry.path !== 'string' ||
+      !entry.path ||
+      !(previous < entry.path) ||
+      !INVENTORY_TYPES.has(entry.type) ||
+      (entry.type === 'file' && !hex(entry.sha256))
+    )
+      return 'INVENTORY_INVALID'
+    previous = entry.path
+    index.set(entry.path, entry)
+  }
+  return index
+}
+// SPEC0241 §3.4 premises for one installed file, all required, no fallback:
+// MATCH package with a hex reference digest, the 0234 reference inventory and
+// its digest recomputed with the comparator's canonical JSON, and a regular
+// entry at the package-relative path whose SHA-256 equals the acquired bytes.
+// A failure returns its closed category; the caller records
+// UNKNOWN_INSTALLED_FILE_IDENTITY for the file.
+export function installedFilePremise({
+  file,
+  sha256,
+  installed,
+  ownerKey,
+  cache
+} = {}) {
+  const fail = (category) => ({ ok: false, category })
+  const derived = installedPackageKey(file)
+  if (!derived || !derived.relative) return fail('PACKAGE_KEY')
+  if (ownerKey !== undefined && ownerKey !== null && ownerKey !== derived.key)
+    return fail('OWNER_KEY')
+  const manifest = derived.key + '/package.json'
+  const rec = Array.isArray(installed)
+    ? installed.find(
+        (x) => record(x) && x.key === derived.key && x.manifest === manifest
+      )
+    : undefined
+  if (!rec || rec.identityStatus !== 'MATCH' || !hex(rec.referenceDigest))
+    return fail('PACKAGE_IDENTITY')
+  if (!hex(rec.inventorySha256) || !record(rec.inventory))
+    return fail('INVENTORY_UNAVAILABLE')
+  let index = cache?.get(rec)
+  if (index === undefined) {
+    index = inventoryIndex(rec)
+    cache?.set(rec, index)
+  }
+  if (typeof index === 'string') return fail(index)
+  const entry = index.get(derived.relative)
+  if (!entry) return fail('ENTRY_MISSING')
+  if (entry.type !== 'file') return fail('ENTRY_TYPE')
+  if (!hex(sha256) || entry.sha256 !== sha256) return fail('ENTRY_SHA256')
+  return {
+    ok: true,
+    record: {
+      file,
+      key: derived.key,
+      inventorySha256: rec.inventorySha256,
+      sha256
+    }
   }
 }
 function checkTCB() {
@@ -173,6 +331,8 @@ function checkTCB() {
     engineSha256: hash(fs.readFileSync(SELF)),
     resolutionProfile: RESOLUTION_PROFILE,
     resolverSha256: hash(fs.readFileSync(RESOLVER)),
+    installedIdentitySha256: hash(fs.readFileSync(IDENTITY)),
+    installedFileIdentityPremise: INSTALLED_FILE_IDENTITY_PREMISE,
     requireModule: process.features.require_module === true
   }
 }
@@ -204,10 +364,34 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
   try {
     limits = limitsFor(input)
   } catch (error) {
-    return empty(SEMANTIC_LIMITS, error.message)
+    const early = empty(SEMANTIC_LIMITS, error.message)
+    early.phases = Object.fromEntries(
+      PHASES.map((p) => [p, 'SKIPPED:' + error.message.split(':')[0]])
+    )
+    early.bodyCoverage = {
+      modules: { total: 0, started: 0, completed: 0 },
+      containedEdges: 0
+    }
+    early.installedFileIdentity = {
+      premise: INSTALLED_FILE_IDENTITY_PREMISE,
+      files: []
+    }
+    return early
   }
   const out = empty(limits, '')
   out.unknowns = []
+  // SPEC0241 §3.2: deterministic phases and body coverage on every exit path.
+  const phases = Object.fromEntries(PHASES.map((p) => [p, null]))
+  const coverage = {
+    modules: { total: 0, started: 0, completed: 0 },
+    containedEdges: 0
+  }
+  const fileIdentity = new Map(),
+    premiseCache = new Map()
+  let inBody = false
+  // §3.1: canonical-key set deduplication; semantics and final order unchanged.
+  const unknownKeys = new Set()
+  const CONTAINED = Object.freeze({ t: 'contained-edge' })
   const unknown = (file, reason, detail = '', originId = null) => {
     // Preserve the established frontier reason and the actual acquired raw
     // source for malformed UTF-8; metadata/path encoding remains distinct.
@@ -218,12 +402,11 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       originId,
       detail: root ? String(detail).replaceAll(root + '/', '') : String(detail)
     }
-    if (
-      !out.unknowns.some(
-        (x) => semanticCanonicalJson(x) === semanticCanonicalJson(item)
-      )
-    )
+    const key = semanticCanonicalJson(item)
+    if (!unknownKeys.has(key)) {
+      unknownKeys.add(key)
       out.unknowns.push(item)
+    }
     return U
   }
   const started = performance.now()
@@ -342,6 +525,10 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           ),
           entries: new Set()
         })
+      // SPEC0241 §3.4: an edge owner and the physical key must coincide.
+      const derived = installedPackageKey(file)
+      if (!census && inBody && derived && derived.key !== key)
+        unknown(file, 'UNKNOWN_INSTALLED_FILE_IDENTITY', 'OWNER_KEY')
     }
     const owner = manifestAt(file)
     const targetMode =
@@ -515,6 +702,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     }
     visit(sf)
   }
+  function contained(value) {
+    return value === CONTAINED ? U : value
+  }
   function union(values) {
     const flat = values.flatMap((v) => (v.t === 'union' ? v.values : [v]))
     if (flat.some((v) => v === U)) return U
@@ -589,15 +779,25 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       : unknown(file, 'UNKNOWN_INHERITED_PROPERTY', String(key.v))
   }
   function functionValue(n, e, file) {
-    if (
-      !n.body ||
-      n.asteriskToken ||
-      n.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ||
-      n.parameters.some(
-        (p) => !ts.isIdentifier(p.name) || p.dotDotDotToken || p.initializer
-      )
-    )
-      return unknown(file, 'UNKNOWN_FUNCTION')
+    // SPEC0241 §3.3: K3 and the moment of refusal are unchanged; the detail
+    // names every closed category of the function (census keeps v3).
+    const categories = []
+    if (!n.body) categories.push('NO_BODY')
+    if (n.asteriskToken) categories.push('GENERATOR')
+    if (n.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword))
+      categories.push('ASYNC')
+    if (n.parameters.some((p) => !ts.isIdentifier(p.name)))
+      categories.push('PARAMETER_PATTERN')
+    if (n.parameters.some((p) => p.dotDotDotToken))
+      categories.push('PARAMETER_REST')
+    if (n.parameters.some((p) => p.initializer))
+      categories.push('PARAMETER_INITIALIZER')
+    if (categories.length) {
+      if (census) return unknown(file, 'UNKNOWN_FUNCTION')
+      for (const category of categories)
+        unknown(file, 'UNKNOWN_FUNCTION', category)
+      return U
+    }
     const codeId = file + ':' + n.pos + ':' + n.end
     return {
       t: 'function',
@@ -684,6 +884,23 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       contextStack.pop()
     }
     return result
+  }
+  // SPEC0241 §3.1: every body edge (static import, export-from, each finite
+  // dynamic import and loader alternative) resolves and loads its target in
+  // containment. A listed reason records the tuple in the acquisition form and
+  // yields U; no alternative target, mode, fallback or retry. Census keeps v3.
+  function edgeLoad(from, specifier, mode) {
+    if (census) return load(resolve(from, specifier, mode))
+    try {
+      return load(resolve(from, specifier, mode))
+    } catch (error) {
+      const message = typeof error?.message === 'string' ? error.message : ''
+      const reason = containedEdgeReason(message)
+      if (!reason) throw error
+      coverage.containedEdges++
+      unknown(relative(error.file) ? error.file : from, reason, message)
+      return CONTAINED
+    }
   }
   function expression(n, e, file) {
     if (!n) return VOID
@@ -809,7 +1026,7 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           values = specs.t === 'union' ? specs.values : [specs]
         for (const v of values)
           if (v.t === 'primitive' && typeof v.v === 'string')
-            load(resolve(file, v.v, 'import'))
+            edgeLoad(file, v.v, 'import')
           else unknown(file, 'UNKNOWN_RESOLUTION')
         // Promise/await is outside K3/K6; do not substitute a namespace value.
         return unknown(file, 'UNKNOWN_DYNAMIC_IMPORT_PROMISE')
@@ -836,7 +1053,7 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         return union(
           values.map((v) =>
             v.t === 'primitive' && typeof v.v === 'string'
-              ? load(resolve(file, v.v, 'require'))
+              ? contained(edgeLoad(file, v.v, 'require'))
               : unknown(file, 'UNKNOWN_RESOLUTION')
           )
         )
@@ -1049,7 +1266,18 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         if (n.importClause?.isTypeOnly) continue
         if (n.attributes || n.assertClause)
           unknown(file, 'UNKNOWN_IMPORT_ATTRIBUTES')
-        const namespace = load(resolve(file, n.moduleSpecifier.text, 'import'))
+        const namespace = edgeLoad(file, n.moduleSpecifier.text, 'import')
+        if (namespace === CONTAINED) {
+          // §3.1: the contained edge's bindings are U, no property lookup.
+          if (n.importClause?.name) e.bindings.set(n.importClause.name.text, U)
+          const clause = n.importClause?.namedBindings
+          if (clause && ts.isNamespaceImport(clause))
+            e.bindings.set(clause.name.text, U)
+          else
+            for (const x of clause?.elements || [])
+              if (!x.isTypeOnly) e.bindings.set(x.name.text, U)
+          continue
+        }
         if (n.importClause?.name)
           e.bindings.set(
             n.importClause.name.text,
@@ -1098,7 +1326,12 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           if (isDefault) modules.get(file).exports.set('default', value)
           else if (n.name) modules.get(file).exports.set(n.name.text, value)
           else unknown(file, 'UNKNOWN_EXPORT')
-        } else if (!n.name) unknown(file, 'UNKNOWN_FUNCTION')
+        } else if (!n.name)
+          unknown(
+            file,
+            'UNKNOWN_FUNCTION',
+            census ? '' : 'ANONYMOUS_DECLARATION'
+          )
         continue
       }
       if (ts.isReturnStatement(n))
@@ -1159,7 +1392,7 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         if (n.attributes || n.assertClause)
           unknown(file, 'UNKNOWN_IMPORT_ATTRIBUTES')
         const namespace = n.moduleSpecifier
-          ? load(resolve(file, n.moduleSpecifier.text, 'import'))
+          ? edgeLoad(file, n.moduleSpecifier.text, 'import')
           : null
         if (!n.exportClause || !ts.isNamedExports(n.exportClause)) {
           unknown(file, 'UNKNOWN_REEXPORT')
@@ -1171,13 +1404,15 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
               .get(file)
               .exports.set(
                 item.name.text,
-                namespace
-                  ? get(
-                      namespace,
-                      primitive(item.propertyName?.text || item.name.text),
-                      file
-                    )
-                  : find(e, item.propertyName?.text || item.name.text) || U
+                namespace === CONTAINED
+                  ? U
+                  : namespace
+                    ? get(
+                        namespace,
+                        primitive(item.propertyName?.text || item.name.text),
+                        file
+                      )
+                    : find(e, item.propertyName?.text || item.name.text) || U
               )
         continue
       }
@@ -1198,12 +1433,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     if (!sf) return unknown(file, 'UNKNOWN_MODULE')
     // Installed identity is physical, including relative imports into an
     // installed tree. Bare package spelling is not the identity boundary.
-    const parts = file.split('/'),
-      installedIndex = parts.lastIndexOf('node_modules')
-    if (installedIndex >= 0) {
-      const end =
-        installedIndex + (parts[installedIndex + 1]?.startsWith('@') ? 3 : 2)
-      const key = parts.slice(0, end).join('/'),
+    const installedPath = installedPackageKey(file)
+    if (installedPath) {
+      const key = installedPath.key,
         manifestFile = key + '/package.json'
       if (!probe(manifestFile)) unknown(file, 'UNKNOWN_INSTALLED_MANIFEST')
       else json(manifestFile)
@@ -1217,6 +1449,19 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           entries: new Set()
         })
       reachedPackages.get(key).entries.add(file)
+      // SPEC0241 D2: per-file 0234 identity for every installed file loaded in
+      // the body, with or without dist; failure is recorded, the body is
+      // still analysed (E5). Census keeps v3.
+      if (!census) {
+        const premise = installedFilePremise({
+          file,
+          sha256: snapshots.get(file)?.sha256,
+          installed: input.installed,
+          cache: premiseCache
+        })
+        if (premise.ok) fileIdentity.set(file, premise.record)
+        else unknown(file, 'UNKNOWN_INSTALLED_FILE_IDENTITY', premise.category)
+      }
     }
     const manifest = manifestAt(file)
     if (
@@ -1242,7 +1487,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       )
     )
       unknown(file, 'UNKNOWN_MODULE_FORMAT')
-    if (file.split('/').includes('dist')) {
+    // A compiled receipt is never authority for an installed file (D2); first
+    // party dist keeps recipe v1. Census keeps the v3 rule.
+    if (file.split('/').includes('dist') && (census || !installedPath)) {
       const provenance = input.compiled?.files?.find((x) => x.file === file)
       if (
         input.compiled?.status !== 'PROVEN' ||
@@ -1252,9 +1499,11 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     }
     const module = { exports: new Map(), cjs: VOID, loading: true, mode }
     modules.set(file, module)
+    coverage.modules.started++
     if (block(sf.statements, env(), file).returned)
       unknown(file, 'UNKNOWN_TOP_LEVEL_RETURN')
     module.loading = false
+    coverage.modules.completed++
     const result =
       mode === 'require'
         ? module.cjs
@@ -1369,7 +1618,35 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       )
         unknown(file, 'UNKNOWN_FORMAT')
     }
-    for (const file of [...astFiles.keys()].sort()) load(file)
+    phases.acquisition = 'COMPLETED'
+    coverage.modules.total = astFiles.size
+    const order = [...astFiles.keys()].sort()
+    inBody = true
+    try {
+      if (census) for (const file of order) load(file)
+      else
+        try {
+          for (const file of order) load(file)
+        } catch (error) {
+          const message =
+            typeof error?.message === 'string' ? error.message : ''
+          const cut = BODY_CUT.exec(message),
+            residual = containedEdgeReason(message)
+          if (cut) {
+            // §3.2: only the body ends; post-body and revalidation still run.
+            unknown('', 'UNKNOWN_ANALYSIS_LIMIT', message)
+            phases.body = 'CUT:' + cut[1]
+          } else if (residual) {
+            // E6: the top-level load is not a containment point; a listed
+            // reason there ends the body as a declared residual stop.
+            unknown(relative(error.file) ? error.file : '', residual, message)
+            phases.body = 'SKIPPED:' + residual
+          } else throw error
+        }
+    } finally {
+      inBody = false
+    }
+    if (phases.body === null) phases.body = 'COMPLETED'
     for (const item of reachedPackages.values())
       if (
         item.identity?.identityStatus !== 'MATCH' ||
@@ -1427,6 +1704,7 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           origin.id || null
         )
     }
+    phases.postBody = 'COMPLETED'
     // TS's permissive AST is not the Node grammar. Native V8 compilation and
     // Node's strip-only TS parser run INSIDE this supervised worker. Never
     // link, evaluate or run a module/script, and never spawn a parser child.
@@ -1454,7 +1732,8 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           unknown(file, 'UNKNOWN_RUNTIME_SYNTAX')
         }
       }
-    }
+      phases.grammar = 'COMPLETED'
+    } else phases.grammar = 'SKIPPED:UNKNOWN_OR_VIOLATION_PRESENT'
     // Revalidate every physical assumption, even on an UNKNOWN result.
     bump('fileBytes', out.usage.fileBytes, 'maxFileBytes')
     bump('files', out.usage.files, 'maxFiles')
@@ -1469,6 +1748,11 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       error.message.split(':')[0] || 'UNKNOWN_ANALYSIS_ERROR',
       error.message
     )
+    // §3.2: a global error declares every unfinished phase with its reason.
+    for (const phase of PHASES)
+      if (phases[phase] === null)
+        phases[phase] =
+          'SKIPPED:' + (error.message.split(':')[0] || 'UNKNOWN_ANALYSIS_ERROR')
   }
   // Every acquisition and absence premise is retained even on UNKNOWN. No FD
   // remains live beyond this invocation, including failed parse/cap paths.
@@ -1479,6 +1763,7 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       out.usage.resolution = { ...resolution.usage }
       syncAcquisitionUsage()
     }
+    if (phases.revalidation === null) phases.revalidation = 'COMPLETED'
   } catch (error) {
     unknown(
       relative(error.file) ? error.file : '',
@@ -1486,6 +1771,8 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       error.message
     )
     out.runtimeResolution = null
+    phases.revalidation =
+      'SKIPPED:' + (error.message.split(':')[0] || 'UNKNOWN_ANALYSIS_ERROR')
   } finally {
     resolution?.close()
   }
@@ -1509,6 +1796,12 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     sort(semanticCanonicalJson(a), semanticCanonicalJson(b))
   )
   if (census) unknown('', 'UNKNOWN_NEGATIVE_CENSUS_ONLY')
+  out.phases = phases
+  out.bodyCoverage = coverage
+  out.installedFileIdentity = {
+    premise: INSTALLED_FILE_IDENTITY_PREMISE,
+    files: [...fileIdentity.values()].sort((a, b) => sort(a.file, b.file))
+  }
   out.status = out.violations.length
     ? 'VIOLATION'
     : out.unknowns.length
@@ -1541,7 +1834,8 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           resolution: [...probes]
             .sort((a, b) => sort(a[0], b[0]))
             .map(([file, exists]) => ({ file, exists })),
-          closure: [...(resolutionEdges.get(file) || [])].sort()
+          closure: [...(resolutionEdges.get(file) || [])].sort(),
+          installedFileIdentity: fileIdentity.get(file) ?? null
         }
       }
       const id = hash(semanticCanonicalJson(proof))
@@ -1686,6 +1980,39 @@ export function revalidateSemanticInputs(root, output, origins = []) {
   }
 }
 
+// SPEC0241 §5: the parent revalidates every per-file identity record the
+// worker used against the input inventory and the acquired file hashes.
+export function revalidateInstalledFileIdentity(input, output) {
+  try {
+    const trace = output?.installedFileIdentity
+    if (
+      !record(trace) ||
+      trace.premise !== INSTALLED_FILE_IDENTITY_PREMISE ||
+      !Array.isArray(trace.files)
+    )
+      return false
+    const hashes = new Map((output.inputs || []).map((x) => [x.file, x.sha256]))
+    const cache = new Map()
+    for (const item of trace.files) {
+      if (!record(item) || hashes.get(item.file) !== item.sha256) return false
+      const premise = installedFilePremise({
+        file: item.file,
+        sha256: item.sha256,
+        installed: input?.installed,
+        cache
+      })
+      if (
+        !premise.ok ||
+        semanticCanonicalJson(premise.record) !== semanticCanonicalJson(item)
+      )
+        return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 function knownViolation(x) {
   return (
     record(x) &&
@@ -1797,6 +2124,8 @@ export function runSemanticBoundary(input) {
           throw Error('UNKNOWN_INVALID_PROOF')
         ids.add(id)
       }
+      if (!revalidateInstalledFileIdentity(input, output))
+        throw Error('UNKNOWN_INVALID_WORKER_RESULT')
       if (!revalidateSemanticInputs(input.root, output))
         throw Error('UNKNOWN_INPUT_MUTATION')
       if (performance.now() - started > limits.timeoutMs)

@@ -1,0 +1,47 @@
+# Comandos do crítico R2 (HISO005-P2-REFERENCE-RECIPE-T2-20261019), Node v22.23.2 apenas
+# NODE=/home/ricardo/.nvm/versions/node/v22.23.2/bin/node   RT=/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-runtime-20261019/review-r2
+# C=/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-20261019 (HEAD d6203875af13, só leitura)
+# env mínimo: env -i HOME=$RT/tmp PATH=<dir do NODE>:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC TMPDIR=$RT/tmp ; nice -n 10
+# SHA de 40 hex abreviados para 12 em todos os arquivos copiados para raw/.
+
+# A. integridade (git só leitura): diff --name-status/-U0, show, hashes  -> raw/a-diff-integrity.txt
+# base e rodada anterior extraídas por `git show` (só leitura) para $RT/work/scripts-228e/scripts e $RT/work/scripts-a5b8/scripts
+#   (build-installed-reference, boundary-installed-identity, boundary-reference-process, boundary-semantic-compiled)
+
+# B. semântica do git para páginas literais (repo sintético em $RT/work/b-repo)
+$RT/probes/b-pathspec.sh $RT/work/b-repo                                   -> raw/b-pathspec.txt
+
+# C. receita instalada (candidata salvo indicação), hook de loader registra argv/stdout do runOwnedProcess (probes/hooks.mjs, wrap-owned.mjs)
+$NODE c-installed-probe.mjs small $RT/work/c-small  (PROBE_DUMP_ARGV)       -> raw/c-installed-small*.json, raw/c-installed-small-argv-cand.json
+PROBE_SCRIPTS=$RT/work/scripts-228e ... small                               -> raw/c-installed-small-228e.json, raw/c-installed-small-argv-228e.json
+PROBE_SCRIPTS=$RT/work/scripts-a5b8 ... small                               -> raw/c-installed-small-a5b8.json, raw/c-installed-small-argv-a5b8.json
+$NODE c-installed-probe.mjs <order|colon|colon-nopage|colon-regular|nonutf8|nonutf8-nopage|nonutf8-deep|empty-paged|empty-nopage> $RT/work/c-<case>
+                                                                            -> raw/c-installed-<case>.json (horários em raw/c-runs.log)
+PROBE_SCRIPTS=$RT/work/scripts-a5b8 ... colon-testshape                     -> raw/c-installed-colon-testshape-a5b8.json
+$NODE c-installed-probe.mjs colon-testshape                                 -> raw/c-installed-colon-testshape-cand.json
+
+# D. receita compilada (candidata, em processo; hook registra argv/stdout do spawnSync: probes/wrap-cp.mjs)
+$NODE d-compiled-probe.mjs <small|colon|colon-nopage|colon-regular|spread|nonutf8|nonutf8-nopage|empty-paged|empty-nopage> $RT/work/d-<case>
+                                                                            -> raw/d-compiled-<case>.json (horários em raw/d-runs.log)
+#   small compara commands.json/receipt com base 228e7918 e a5b8a888 nos MESMOS inputs (CLI das cópias extraídas)
+#   nonutf8 e nonutf8-nopage foram repetidos sem node_modules no commit (primeira versão da fixture incluía os links do node_modules)
+
+# E. receita compilada na árvore REAL 228e7918, sourceRoot = <runtime>/eval-228e (só leitura), deps/receipt sintéticos de $RT/work/d-small,
+#    hook interrompe imediatamente antes do `git archive` (nada de archive de 4 GB)
+$NODE e-compiled-real.mjs <runtime>/eval-228e <228e7918> $RT/work/d-small/evaluated $RT/work/d-small/installed-reference.json $RT/work/e-real-out
+                                                                            -> raw/e-compiled-real.json
+
+# G. forma da árvore real (git ls-tree só leitura no repositório da candidata) e leitura dos recibos instalados do líder (só leitura)
+$NODE g-real-tree.mjs $C 228e7918 <runtime>/installed-reference-r1/reference.json <runtime>/installed-reference-r2/reference.json
+                                                                            -> raw/g-real-tree.json
+
+# F. vitest focal (cwd candidata, só os 2 arquivos permitidos, --no-cache)
+$NODE node_modules/vitest/vitest.mjs run tests/b6-0234-reference-recipe.test.js tests/b6-0236-compiled-provenance.test.js --no-file-parallelism --maxWorkers=2 --no-cache --reporter=json --outputFile=$RT/vitest-focal/report.json
+#   2026-10-19T05:50:47Z..05:52:29Z exit 0                                 -> raw/vitest-focal-summary.json, raw/vitest-focal-state.txt
+#   executado só depois de terminar a medição do líder (check-product-boundary) para não competir por CPU
+
+# Higiene/transparência
+# - `git status --porcelain` rodou uma vez em <runtime>/eval-228e e duas vezes na candidata sem GIT_OPTIONAL_LOCKS=0 (pode só atualizar
+#   o cache de stat do índice; sem mudança de conteúdo); depois disso, sempre com GIT_OPTIONAL_LOCKS=0.
+# - o vitest atualizou a mtime do diretório preexistente e vazio node_modules/.vite-temp da candidata (bundle temporário criado e removido).
+# - nenhuma escrita fora de review-r2/** (evidência) e $RT/** (runtime), nenhum git mutante, rede, PG, Docker, npm install, certify ou E2E.

@@ -1,0 +1,44 @@
+HISO005-P2-BUILD-0241 — Crítica fresca R1 (máx. 2)
+Fonte julgada: 228e79180d6d635ae1013e5069fc10f2f79a1cf6 (base af63ba60)
+Contrato da revisão: review-r1-contract.json (sha256 259db2e9…89b89)
+
+VEREDITO: APPROVE. Zero achados obrigatórios (P0/P1/P2) e sete observações P3 opcionais.
+
+O que foi verificado
+- Os hashes da SPEC, da errata R2, do task-contract e do freeze conferem. O diff toca exatamente os 7
+  caminhos do freeze. O oráculo v3 tem os mesmos bytes do blob de af63ba60.
+- RC1: a lista contida tem 36 motivos e é igual à da §3.1 e à reason-census. Todo UNKNOWN_* lançado
+  está classificado. As quatro arestas do corpo passam por edgeLoad, a tupla tem a forma da aquisição e
+  o valor é U sem consulta de propriedade. A parada residual E6 do laço de topo foi confirmada por sonda.
+- Diferencial v3 × v4 congelado em 32 entradas (20 do lead re-executadas no freeze + 12 próprias):
+  census idêntico 32/32, zero defeitos de conservação da §3.5 e violações v3 contidas na v4. Só o D2
+  positivo virou PROVEN.
+- RC2: o corte pelos quatro contadores dá CUT:<cap>; pós-corpo e revalidação rodam, validation fica
+  válida, duas execuções dão o mesmo resultado e o caso no limite passa. maxNodes e timeoutMs continuam
+  globais, e o envelope do pai fica com phases null.
+- RC3/RC4: violações só de corpo aparecem em todos os módulos, inclusive atrás de aresta contida. As
+  categorias de UNKNOWN_FUNCTION estão corretas e o census mantém a v3.
+- RC5/D2: todas as premissas são exigidas e o receipt nunca é autoridade para arquivo instalado. Nos
+  casos adversariais (symlink de arquivo e de diretório, duplicatas, diretório sem manifesto, usage
+  inválido) nenhum resultado virou PROVEN indevidamente.
+- RC6: a migração dos testes antigos se limita ao literal do kernel e ao inventário 0234 nos registros
+  MATCH sintéticos, sem assert removido. O diff pré-freeze → freeze é só formatação. O vitest focal do
+  teste novo deu 28/28 PASS.
+
+Observações P3 (opcionais)
+- R1-P3-01: o pai não exige trace completo nem compara proof.derivation.installedFileIdentity com o trace.
+- R1-P3-02: a parada residual E6 está correta, mas nenhum teste a cobre (a sonda serve de modelo).
+- R1-P3-03: depois de erro global, phases.revalidation=SKIPPED, embora a revalidação final rode.
+- R1-P3-04: ANONYMOUS_DECLARATION é inalcançável com TS 6.0.3 e não acumularia outras categorias.
+- R1-P3-05: diferencial e controles do lead rodaram no pré-freeze (só formatação). O teste novo congelado
+  não tem primeira falha sobre os bytes finais, e os ajustes pós-tentativa 1 não foram registrados.
+- R1-P3-06: com registros duplicados por chave, a v4 marca os dois como PROVEN (pré-existente na v3,
+  inalcançável pelo checker).
+- R1-P3-07: aresta só de corpo para alvo não adquirido dá UNKNOWN_MODULE sem medir o alvo (herdado).
+
+Não julgado: medição B6 real, ledger, prazo e ENOBUFS na árvore real, 16 gates, verificador 38,
+consumidor fresco, SDK, compat default/P1 e a regressão completa de 747 testes (confiei no registro
+focal com SHAs iguais).
+
+Sondas reproduzíveis em raw/ (harness.mjs + probe-*.mjs; fixtures em
+/mnt/dados/cvg-work/cvg-hiso005-build0241-runtime-20261018/review-r1/fixtures).

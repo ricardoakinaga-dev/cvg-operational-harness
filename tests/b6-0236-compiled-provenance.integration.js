@@ -525,3 +525,109 @@ describe('SPEC0236 compiler-only provenance', () => {
     })
   })
 })
+
+// HISO005-P2-REFERENCE-RECIPE-T2-20261019: the compiled recipe pages a tree
+// listing that exceeds the 8 MiB buffer of ONE git process; each page keeps
+// that buffer. A directory whose immediate children alone exceed it stays
+// refused. The reader still binds the evaluated root itself.
+describe('SPEC0236 compiled recipe listing above the per-process buffer', () => {
+  const LONG_SEGMENT = 's'.repeat(200)
+  function variant(name) {
+    const root = path.join(parent, name)
+    fs.cpSync(evaluated, root, { recursive: true, verbatimSymlinks: true })
+    return root
+  }
+  function deepFiles(root, top, segments, count, name) {
+    const dir = path.join(root, top, ...Array(segments).fill(LONG_SEGMENT))
+    fs.mkdirSync(dir, { recursive: true })
+    for (let i = 0; i < count; i++)
+      fs.writeFileSync(
+        path.join(dir, name ? name(i) : 'f' + String(i).padStart(4, '0')),
+        ''
+      )
+  }
+  function recommit(root, top) {
+    run(['/usr/bin/git', 'add', '-f', '--', top], root)
+    run(
+      [
+        '/usr/bin/git',
+        '-c',
+        'user.name=CVG Synthetic',
+        '-c',
+        'user.email=synthetic@example.invalid',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        'commit',
+        '-qm',
+        'Synthetic long listing fixture'
+      ],
+      root
+    )
+    const head = run(['/usr/bin/git', 'rev-parse', 'HEAD'], root)
+    const listing = spawnSync(
+      '/usr/bin/git',
+      ['ls-tree', '-r', '--format=%(objectmode) %(path)', head],
+      { cwd: root, maxBuffer: 64 * 1024 * 1024 }
+    ).stdout
+    return { head, listing }
+  }
+  const compile = (root, head, output) =>
+    run(
+      [
+        NODE,
+        path.resolve('scripts/boundary-semantic-compiled.mjs'),
+        '--source-root=' + root,
+        '--commit=' + head,
+        '--output-root=' + path.join(parent, output),
+        '--installed-reference=' + installedReference.manifestPath,
+        '--installed-reference-sha256=' + installedReference.expectedSha256
+      ],
+      root
+    )
+  it('RT02 pages a listing above 8 MiB and proves the analyzed mirror of that same root', () => {
+    const root = variant('evaluated-long-listing')
+    for (let i = 0; i < 26; i++)
+      deepFiles(root, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
+    const { head, listing } = recommit(root, 'bulk')
+    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
+    const fresh = JSON.parse(compile(root, head, 'fresh-long-listing'))
+    expect(
+      loadCompiledBuildReference(root, fresh, { installedReference }).status
+    ).toBe('PROVEN')
+    // The receipt stays bound to its own evaluated root, never another one.
+    expect(load(fresh).status).not.toBe('PROVEN')
+  }, 300000)
+  it('RT02 lists a magic-looking tree name literally: its tracked link is still refused', () => {
+    const root = variant('evaluated-magic-listing')
+    for (let i = 0; i < 26; i++)
+      deepFiles(root, ':big/' + String(i).padStart(2, '0'), 17, 100)
+    fs.symlinkSync('/etc/passwd', path.join(root, ':big/link'))
+    write(root, 'big/plain.txt', 'plain sibling')
+    run(
+      ['/usr/bin/git', '--literal-pathspecs', 'add', '-f', '--', ':big', 'big'],
+      root
+    )
+    const { head, listing } = recommit(root, 'big')
+    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
+    expect(() => compile(root, head, 'fresh-magic-listing')).toThrow(
+      /COMPILED_SOURCE_TYPE/
+    )
+  }, 300000)
+  it('RT02 still refuses a directory whose immediate children exceed the buffer', () => {
+    const root = variant('evaluated-wide-listing')
+    deepFiles(
+      root,
+      'wide',
+      10,
+      4000,
+      (i) => 'n' + String(i).padStart(4, '0') + 'x'.repeat(195)
+    )
+    const { head, listing } = recommit(root, 'wide')
+    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
+    expect(() => compile(root, head, 'fresh-wide-listing')).toThrow(
+      /COMPILED_COMMAND_FAILED/
+    )
+  }, 300000)
+})

@@ -1,0 +1,13 @@
+# HISO005-P2-PORT-TO-MAIN-20261019 — proposta de delta para os ledgers (lead CONT-20261018-D9EF)
+
+Proposta aditiva. Os ledgers centrais (`docs/99_runtime_state.md`, `docs/20_master_execution_log.md`, `docs/30_backlog_master.md`) não foram editados por esta unidade; o lead aplica no checkout principal.
+
+- Unidade: porte dos deltas HISO-005 aprovados (BUILD0241 `228e7918` e T2 da receita de referência `a5b8a888` + `d6203875`) para a main publicada `3704e3f8`, em worktree detached própria `/mnt/dados/cvg-work/cvg-hiso005-port-main-20261019`, sem branch.
+- Plano registrado antes da edição (`port-plan.json`). Divergência real da main nesses caminhos: só `tests/b6-0236-semantic-engine.test.js` (Node negativo portável) e o rename byte a byte dos dois testes nativos para `*.integration.js`. Os três scripts citados no briefing (`boundary-semantic-engine.mjs`, `boundary-semantic-compiled.mjs`, `build-installed-reference.mjs`) estão na main com o mesmo blob da pré-imagem.
+- Estratégias: 8 caminhos aplicados byte a byte; `tests/b6-0241-integral-body.test.js` criado; mescla em 3 vias limpa em `tests/b6-0236-semantic-engine.test.js` (os dois diffs intactos); delta T2 migrado para `tests/b6-0234-reference-recipe.integration.js` e `tests/b6-0236-compiled-provenance.integration.js` (bytes iguais aos aprovados; nomes antigos não recriados; continuam só no perfil nativo).
+- Testes (Node 22.23.2): focal B6 padrão 799/799 (14 arquivos, inclui b6-0241, pare100, hermetic e security-scan-config); perfil nativo `test:boundary:native` 56/56; `security-scan-config` + `gitleaks-reviewed-policy` 82/82; `test:secrets:config` com gitleaks 8.28.0 release 33/33 (32 pares revisados).
+- Gates: `prettier --check .`, `lint`, `typecheck`, `docs:check-links` e higiene de evidência verdes; nenhum arquivo vazio novo, catálogo central de vazios não alterado.
+- Crítico novo somente leitura R1: APPROVE, zero obrigatórios (um P3 de registro, atendido). Sem R2.
+- Segredos: 3 exceções exatas (literal + caminho) no mecanismo revisado da main, para o SHA do commit BUILD0241 citado em evidências, exatamente os 3 achados triados em `lead-secret-scan-triage.json`. A 4ª (o próprio arquivo de triagem) foi recusada pelo lead: os três campos `match` passaram a ter o SHA abreviado com nota, no checkout principal e na worktree (cópias byte-iguais). Scan da árvore final no modo da CI: exit 0.
+- Não feito: certify, e2e, PG, push, PR, merge. B6 continua INCOMPLETE; nenhum release concedido.
+- Pendências: aplicar os ledgers; publicar por branch candidata + PR quando autorizado (CI só roda em PR); a prova nativa T2 não roda na CI hospedada (perfil nativo é local por decisão da main).

@@ -2078,14 +2078,30 @@ export function auditProductBoundary(
           reason: 'COMPILED_REFERENCE_REQUIRED',
           files: []
         }
-    const installed = coreInstalled.map((node) => ({
-      key: path.relative(root, path.dirname(node)),
-      manifest: path.relative(root, node),
-      identityStatus:
-        installedVerdicts.get(node)?.contentIdentity?.status ?? 'UNAVAILABLE',
-      referenceDigest:
-        installedVerdicts.get(node)?.contentIdentity?.referenceDigest ?? null
-    }))
+    // SPEC0241 D2: a MATCH package also carries its 0234 reference inventory
+    // and digest, which the comparator already bound to the validated receipt.
+    // The engine recomputes the digest; nothing else becomes authority.
+    const semanticInstalled = () =>
+      coreInstalled.map((node) => {
+        const identity = installedVerdicts.get(node)?.contentIdentity
+        const reference =
+          identity?.status === 'MATCH' ? identity.inventory?.reference : null
+        return {
+          key: path.relative(root, path.dirname(node)),
+          manifest: path.relative(root, node),
+          identityStatus: identity?.status ?? 'UNAVAILABLE',
+          referenceDigest: identity?.referenceDigest ?? null,
+          inventorySha256: reference?.inventorySha256 ?? null,
+          inventory: reference
+            ? {
+                entries: reference.entries,
+                nestedPackages: reference.nestedPackages,
+                usage: reference.usage
+              }
+            : null
+        }
+      })
+    const installed = semanticInstalled()
     const unsupportedProfile =
       Boolean(process.env.NODE_OPTIONS) ||
       process.execArgv.some((arg) =>
@@ -2105,7 +2121,10 @@ export function auditProductBoundary(
           unknowns: [
             { file: 'package.json', reason: 'UNKNOWN_RUNTIME_PROFILE' }
           ],
-          validation: { valid: false }
+          validation: { valid: false },
+          phases: null,
+          bodyCoverage: null,
+          installedFileIdentity: null
         }
       : semanticEngine.runSemanticBoundary({
           root,
@@ -2126,20 +2145,10 @@ export function auditProductBoundary(
       output.validation?.valid === true &&
       identityFinalization?.status === 'COMPLETE' &&
       finalIdentity?.status === 'COMPLETE'
+    // The before/after comparison covers the inventory fields too (§3.4).
     if (
       semanticEngine.semanticCanonicalJson(installed) !==
-      semanticEngine.semanticCanonicalJson(
-        coreInstalled.map((node) => ({
-          key: path.relative(root, path.dirname(node)),
-          manifest: path.relative(root, node),
-          identityStatus:
-            installedVerdicts.get(node)?.contentIdentity?.status ??
-            'UNAVAILABLE',
-          referenceDigest:
-            installedVerdicts.get(node)?.contentIdentity?.referenceDigest ??
-            null
-        }))
-      )
+      semanticEngine.semanticCanonicalJson(semanticInstalled())
     )
       valid = false
     try {

@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-REFERENCE-RECIPE-T2-20261019",
+  "round": "R2",
+  "finalRound": true,
+  "role": "crítico novo e independente (não-fork, sem descendentes)",
+  "contract": "review-r2-contract.json (sha256 d0d9568f16de... conferido)",
+  "observedAt": "2026-10-19T05:55:00Z",
+  "sourceCommit": "d6203875af13",
+  "previousRoundCommit": "a5b8a888",
+  "baseCommit": "228e7918",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-20261019 (HEAD d6203875af13, worktree limpo; os 11 hashes conferem com source-freeze-r2.json)",
+  "verdict": "APPROVE",
+  "trackJudgement": {
+    "track": "T2",
+    "holds": true,
+    "reason": [
+      "O diff 228e7918..d6203875 e o diff a5b8a888..d6203875 tocam só os 4 caminhos da tarefa. As fontes congeladas (boundary-reference-process, boundary-installed-identity, engine, checker, resolution, package.json, lock) têm bytes iguais à base (raw/a-diff-integrity.txt).",
+      "Nenhum teto muda de valor. Os hunks só usam o teto de entradas já existente como limite de páginas (instalada :467, compilada INSTALLED_IDENTITY_LIMITS.maxEntries). maxOutputBytes de 8 MiB, maxBuffer de 8 MiB, COMPILED_SOURCE_LIMIT, os limites da SPEC0234 §4 e os tetos do leitor ficam fora de qualquer hunk.",
+      "O leitor compilado está intacto: o trecho a partir de loadCompiledBuildReference tem o mesmo sha256 na base e na fonte atual (bbbccafe9d91...). recipeVersion 'shared-contracts-fresh-force-v1' e o formato dos recibos não mudam.",
+      "Sem paginação, as chamadas ficam idênticas, medido fisicamente. Na instalada, a sequência inteira de argv dos processos próprios (rev-parse, ls-tree, archive, tar, strace/npm) tem o mesmo hash em 228e7918, a5b8a888 e d6203875 (65736327b573..., raw/c-installed-small-argv-*.json). Na compilada, commands.json é idêntico byte a byte após normalizar o caminho de saída, contra a base e contra a5b8a888, nos mesmos inputs; o recibo difere só em recipeSha256 e commandsSha256 (raw/d-compiled-small.json). '--literal-pathspecs' aparece só nas chamadas com pathspec, em todas as sondas (literalOnlyWithPathspec=true).",
+      "O código novo de falha SOURCE_TREE_PAGE_INVALID não está enumerado nas SPECs 0234/0236/0240/0241 e não é consumido por outro módulo. COMPILED_SOURCE_TYPE e SOURCE_PATH_INVALID já existiam. A SPEC0236 §1 admite correção interna que preserve o contrato.",
+      "A tolerância da amostragem (agora também em readlink e ENOTDIR) continua com um único ponto de chamada: allFiles(snapshot, limits, false, true) dentro do resourceCheck do npm (:657). A varredura final (:671), a reconferência (:733), revalidate() e sourceDigest seguem estritas."
+    ]
+  },
+  "r1FindingsStatus": [
+    {
+      "id": "R1-01",
+      "status": "FIXED",
+      "evidence": [
+        "Páginas com pathspec literal (instalada :471/:489; compilada :363). Página paginada não vazia e sob o próprio prefixo (instalada pageLines :448-465; compilada under :348-358). Na instalada, round-trip UTF-8 obrigatório (:451); na compilada, nome citado é recusado (:356).",
+        "Formato exato do teste final (':big' paginado + 'big/plain.txt'): em a5b8a888 o resultado é BUILT omitindo 2.600 arquivos (sourceSha256 diferente da listagem completa); em d6203875 é REFUSED PROCESS_NONZERO no primeiro `git archive` (raw/c-installed-colon-testshape-{a5b8,cand}.json).",
+        "Instalada com ':big' paginado + symlink: REFUSED SOURCE_LINK_UNSUPPORTED, o mesmo código do caso não paginado (raw/c-installed-colon.json, raw/c-installed-colon-nopage.json). A reconstrução das páginas capturadas é igual, byte a byte e na ordem, ao `ls-tree -r -l -z` completo.",
+        "Instalada com ':big' e 'big' contendo os mesmos nomes relativos: o archive sai 0 (resolve ':big/x' para 'big/x'), mas a conferência do snapshot recusa com ENOENT. Não há recibo parcial (raw/c-installed-colon-regular.json).",
+        "Nome não UTF-8: paginado na raiz e dentro de uma página que deu certo, SOURCE_PATH_INVALID; não paginado, ENOENT. Os três casos recusam (raw/c-installed-nonutf8*.json).",
+        "Compilada: ':big' + symlink paginado dá COMPILED_SOURCE_TYPE, igual ao caso não paginado. ':big' só com arquivos regulares paginado dá BUILT, ':big' presente no snapshot, listagem igual ao `ls-tree -r` e leitor PROVEN. Nome não UTF-8 dá COMPILED_SOURCE_TYPE paginado e não paginado (raw/d-compiled-colon*.json, raw/d-compiled-nonutf8*.json).",
+        "Semântica do git conferida: com --literal-pathspecs, ':x', ':(top)y', ':!z', 'a*', 'q?', '[ab]', 'sp ' e 'nest/:in' listam exatamente a própria árvore e os filhos com '/' final (raw/b-pathspec.txt)."
+      ]
+    },
+    {
+      "id": "R1-02",
+      "status": "FIXED",
+      "evidence": [
+        "Nenhum `push(...` restante nas duas receitas (raw/a-diff-integrity.txt). A instalada acumula Buffers em `out` (:482, :502); a compilada empilha linha a linha em `tree` (:396, :430).",
+        "A mesma fixture de R1, com 132.610 entradas e 'many/' de 130.000 linhas numa única página, que em a5b8a888 terminava em RangeError, agora dá BUILT com leitor PROVEN. A reconstrução é igual ao `ls-tree -r` (raw/d-compiled-spread.json)."
+      ]
+    },
+    {
+      "id": "R1-O1",
+      "status": "APPLIED (P3)",
+      "note": "readlink e ENOTDIR tolerados só na amostragem; sem teste de regressão próprio (ver R2-O4)."
+    },
+    {
+      "id": "R1-O3",
+      "status": "APPLIED (P3)",
+      "note": "Teste de ordem (sourceSha256 igual ao digest da listagem completa) e testes de nome mágico e de nome não UTF-8 acrescentados; vitest focal 56/56."
+    },
+    {
+      "id": "R1-O2",
+      "status": "NOT_APPLIED, registro aceito",
+      "judgement": "Não impede promoção. A memória acumulada fica perto do tamanho da listagem `ls-tree -r` completa, não em 'páginas × 8 MiB': cada entrada aparece uma vez, e a saída parcial das páginas estouradas e as listagens de filhos são descartadas. Na árvore real são cerca de 15,6 MB. Os tetos da SPEC0234 continuam aplicados à lista final. Um teto incremental com os mesmos valores seria refinamento, não exigência do contrato."
+    },
+    {
+      "id": "R1-O4",
+      "status": "NOT_APPLIED, registro aceito",
+      "judgement": "Janela preexistente na base e fechada (o leitor recusa). Corrigir exigiria mudar o log sem paginação, o que contraria a identidade T2 das chamadas sem pathspec. A árvore real pagina, então as linhas são compactadas: na execução real interrompida antes do archive, failure.json tem 114 KB com 166 linhas de ls-tree e os 162 digests conferem (raw/e-compiled-real.json)."
+    }
+  ],
+  "requiredFindings": [],
+  "optionalFindings": [
+    {
+      "id": "R2-O1",
+      "severity": "P3",
+      "confidence": "alta (reproduzido nas duas receitas)",
+      "summary": "Subárvore vazia (só criável por plumbing: mktree/commit-tree) dentro de um diretório paginado é recusada: SOURCE_TREE_PAGE_INVALID na instalada, COMPILED_SOURCE_TYPE na compilada. Sem paginação, a mesma forma dá BUILT. É desvio fechado da propriedade 'união = ls-tree -r', nunca aberto. A árvore real não tem nenhuma subárvore vazia entre 11.297 (raw/g-real-tree.json). Basta registrar.",
+      "repro": [
+        "raw/c-installed-empty-paged.json (REFUSED SOURCE_TREE_PAGE_INVALID) contra raw/c-installed-empty-nopage.json (BUILT)",
+        "raw/d-compiled-empty-paged.json (COMPILED_SOURCE_TYPE) contra raw/d-compiled-empty-nopage.json (BUILT, PROVEN)"
+      ]
+    },
+    {
+      "id": "R2-O2",
+      "severity": "P3",
+      "confidence": "alta",
+      "summary": "r1-fix-decision.json diz que 'o passo git archive já existente recusa esse nome (PROCESS_NONZERO)'. A recusa é certa, mas o código depende do conteúdo. Dá PROCESS_NONZERO quando não existe 'big/<mesmo nome>'. Dá ENOENT na conferência do snapshot, com archive saindo 0, quando existe (o pathspec sem literal resolve ':big/x' para 'big/x'). Dá SOURCE_LINK_UNSUPPORTED com symlink. O teste fixa só a primeira forma. Vale ajustar a redação do registro; o código não precisa mudar.",
+      "repro": [
+        "raw/b-pathspec.txt: `git archive -- ':x/f'` sai 0 e arquiva 'x/f'",
+        "raw/c-installed-colon-regular.json (archive 53/53 ok, REFUSED ENOENT)",
+        "raw/c-installed-colon.json (SOURCE_LINK_UNSUPPORTED)"
+      ]
+    },
+    {
+      "id": "R2-O3",
+      "severity": "P3",
+      "confidence": "alta",
+      "summary": "A primeira falha registrada das correções de R1 (first-red-r1-fixes-command.json) usou os bytes intermediários do teste 0234 (585503f3...). Neles o teste de nome mágico esperava sucesso com digest completo. Depois de recipes-r2-attempt1 falhar com PROCESS_NONZERO, o teste passou a esperar recusa (bytes finais 8b5534a1...), e a falha dessa versão final em a5b8a888 não foi registrada. Esta revisão reproduz o vermelho por sonda: a5b8a888 dá BUILT omitindo 2.600 arquivos, d6203875 recusa. Basta anotar na evidência.",
+      "repro": [
+        "first-red-r1-fixes-command.json e recipes-r2-attempt1-command.json (sha do teste 0234 diferente do congelado)",
+        "raw/c-installed-colon-testshape-a5b8.json contra raw/c-installed-colon-testshape-cand.json"
+      ]
+    },
+    {
+      "id": "R2-O4",
+      "severity": "P3",
+      "confidence": "alta (leitura)",
+      "summary": "A ampliação da tolerância da amostragem para readlink e ENOTDIR (R1-O1) não tem teste próprio; os testes RT03 cobrem só lstat ENOENT. O risco é baixo porque há um único ponto de chamada com sampling=true (:657)."
+    }
+  ],
+  "scenariosChecked": [
+    "S01 escopo e congelamento: HEAD d6203875af13, worktree limpo, 4 caminhos alterados, 11 hashes iguais a source-freeze-r2.json, fontes congeladas iguais à base, nenhuma linha removida nos testes entre a5b8a888 e d6203875 (só o import em relação à base) (raw/a-diff-integrity.txt).",
+    "S02 tetos e contrato: nenhum hunk altera valor de teto. O leitor compilado tem o mesmo hash da base. recipeVersion e o formato dos recibos são os mesmos.",
+    "S03 chamadas sem pathspec idênticas: argv da instalada igual em 228e7918/a5b8a888/d6203875; commands.json da compilada idêntico após normalização contra 228e7918 e a5b8a888; recibos diferem só em recipeSha256/commandsSha256.",
+    "S04 página igual ao `ls-tree -r`: reconstrução das páginas capturadas igual, byte a byte e na ordem, à listagem completa em todos os casos sintéticos que completam a listagem (order, colon, colon-regular, nonutf8-deep, empty-nopage, spread etc.). Na instalada (order), sourceSha256 do recibo igual ao digest da listagem completa com paginação na raiz e em bulk/ e irmãos 'bulk-a', 'bulk.b', 'bulk0', 'a*', 'q?', 'sp ace'.",
+    "S05 árvore real 228e7918: a receita compilada da fonte atual, executada até imediatamente antes do archive, fez 166 ls-tree (paginação na raiz, docs, docs/04_audit e docs/04_audit/evidence), reconstrução igual às 81.607 linhas da listagem completa, checagem de tipo aprovada e 162 digests de página conferidos (raw/e-compiled-real.json). O recibo instalado do líder construído com d6203875 (installed-reference-r2) tem sourceSha256 igual ao digest que calculei de forma independente da listagem completa, e igual ao de r1 (raw/g-real-tree.json). Na árvore real não há nomes com ':', nomes fora de UTF-8, nomes citados, subárvores vazias nem glob.",
+    "S06 recusas preservadas: symlink, nome mágico, nome não UTF-8 e diretório cujos filhos imediatos passam do teto (teste) seguem recusados, paginados ou não. Nenhum caso produziu recibo de sucesso com conteúdo omitido.",
+    "S07 amostragem tolerante só durante o npm: único sampling=true em :657; os testes RT03 positivo e negativo passaram.",
+    "S08 R1-02: spread de 132.610 entradas BUILT e PROVEN; nenhum `push(...` restante.",
+    "S09 vitest focal só dos 2 arquivos permitidos: 56/56, zero skips, exit 0. Status da candidata e cache .vite iguais antes e depois (raw/vitest-focal-summary.json, raw/vitest-focal-state.txt).",
+    "S10 SPECs e regra: 0234 §3.1, §3.2 e §4; 0236 §1, §6 e proveniência compilada v1; D-12 (AGENTS.md)."
+  ],
+  "notJudged": [
+    "RT06/RT07: referências reais e medição B6 do líder. Só li o sourceSha256 de installed-reference-r1/r2; não julguei compiled-reference-r2 nem a medição em andamento.",
+    "Focal B6 completo (819): rodei só os 2 arquivos permitidos.",
+    "Lint/prettier: fora dos comandos permitidos; o líder declara verde.",
+    "Gate T2 da D-12 (typecheck, npm test, test:postgres, E2E): o contrato da tarefa declara certify não previsto. A decisão é do líder/usuário.",
+    "Árvores forjadas inválidas (entradas duplicadas, '.'/'..') e npm hostil.",
+    "Semântica de pathspec do `git archive` da receita instalada (sem literal, preexistente desde a base) para nomes com magia ou glob: fora do escopo desta unidade e inalterada por ela; a árvore real não tem esses nomes."
+  ],
+  "hygiene": [
+    "Escrita só em review-r2/** (evidência) e no runtime review-r2/**. Sem git mutante, rede, PG, Docker, npm install, certify, E2E nem subagentes.",
+    "`git status --porcelain` rodou uma vez em <runtime>/eval-228e e duas vezes na candidata antes de eu usar GIT_OPTIONAL_LOCKS=0. Isso pode ter atualizado apenas o cache de stat do índice, sem mudança de conteúdo.",
+    "O vitest atualizou a mtime do diretório preexistente e vazio node_modules/.vite-temp da candidata.",
+    "SHA de 40 hex abreviados em raw/; a única constante de 40 hex nas sondas é o OID público da árvore vazia do git, em probes/g-real-tree.mjs."
+  ],
+  "rawDir": "raw/",
+  "runtime": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-runtime-20261019/review-r2 (probes/, work/, vitest-focal/, tmp/)"
+}

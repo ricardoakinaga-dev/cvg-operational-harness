@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import {
   canonicalJson,
+  collectPackageInventory,
   fingerprintResolution,
   fingerprintToolchain,
   INSTALLED_IDENTITY_LIMITS,
@@ -142,12 +143,35 @@ function workspace({
   )
   return { input, link, name, mode, ext }
 }
+// SPEC0241 D2 (registered migration): a synthetic MATCH premise also carries
+// the 0234 reference inventory of the physical package, read when the input
+// is serialized, exactly what the checker supplies for a MATCH package.
+function matchRecord(root, key, referenceDigest = 'a'.repeat(64)) {
+  const read = () => collectPackageInventory(path.join(root, key))
+  return {
+    key,
+    manifest: key + '/package.json',
+    identityStatus: 'MATCH',
+    referenceDigest,
+    get inventorySha256() {
+      return read().inventorySha256
+    },
+    get inventory() {
+      const inventory = read()
+      return {
+        entries: inventory.entries,
+        nestedPackages: inventory.nestedPackages,
+        usage: inventory.usage
+      }
+    }
+  }
+}
 function proven(input) {
   const out = call(input)
   expect(out.status, JSON.stringify(out.unknowns)).toBe('PROVEN')
   expect(out.validation.valid).toBe(true)
   expect(out.proofs.length).toBeGreaterThan(0)
-  expect(out.kernelVersion).toBe('semantic-kernel-v3-exact-metadata')
+  expect(out.kernelVersion).toBe('semantic-kernel-v4-integral-body')
   return out
 }
 function refused(input) {
@@ -338,14 +362,7 @@ describe('BUILD0237: physical workspace and finite runtime resolution', () => {
       'node_modules/installed-demo/chosen.mjs': 'export const answer=42;',
       'node_modules/installed-demo/other.mjs': 'export const answer=0;'
     })
-    input.installed = [
-      {
-        key: 'node_modules/installed-demo',
-        manifest: 'node_modules/installed-demo/package.json',
-        identityStatus: 'MATCH',
-        referenceDigest: 'a'.repeat(64)
-      }
-    ]
+    input.installed = [matchRecord(input.root, 'node_modules/installed-demo')]
     const out = proven(input)
     expect(out.installed[0].status).toBe('PROVEN')
     input.installed[0].identityStatus = 'MISMATCH'
@@ -365,14 +382,7 @@ describe('BUILD0237: physical workspace and finite runtime resolution', () => {
         '{"type":"module","exports":"./index.mjs"}',
       'node_modules/closed/index.mjs': 'export const answer=42;'
     })
-    input.installed = [
-      {
-        key: 'node_modules/closed',
-        manifest: 'node_modules/closed/package.json',
-        identityStatus: 'MATCH',
-        referenceDigest: 'a'.repeat(64)
-      }
-    ]
+    input.installed = [matchRecord(input.root, 'node_modules/closed')]
     refused(input)
     write(
       input.root,
@@ -731,7 +741,7 @@ describe('BUILD0237 actual CLI: compatibility, origins and strict determinism', 
     const normal = f.run([...f.flags, '--semantic'])
     const strict = f.run([...f.flags, '--semantic', '--strict'])
     expect(normal.body.semanticBoundary.kernelVersion).toBe(
-      'semantic-kernel-v3-exact-metadata'
+      'semantic-kernel-v4-integral-body'
     )
     delete normal.body.semanticTelemetry
     delete strict.body.semanticTelemetry

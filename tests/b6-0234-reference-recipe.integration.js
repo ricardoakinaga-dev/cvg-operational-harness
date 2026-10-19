@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
@@ -612,3 +612,216 @@ test('ID-05/09: timeout kills observed detached owned descendant while leaving u
     expect(fs.readFileSync('/proc/' + pid + '/stat', 'utf8')).toMatch(/\) Z /)
   expect(() => process.kill(process.pid, 0)).not.toThrow()
 }, 30000)
+
+// HISO005-P2-REFERENCE-RECIPE-T2-20261019: the tree listing may exceed the
+// 8 MiB output cap of ONE owned process; it is paged into processes that each
+// keep that cap. The in-flight sampling walk tolerates an entry that vanishes
+// while npm runs; the final inventory after npm stays strict.
+const LONG_SEGMENT = 's'.repeat(200)
+function deepFiles(root, top, segments, count, name) {
+  const dir = path.join(root, top, ...Array(segments).fill(LONG_SEGMENT))
+  fs.mkdirSync(dir, { recursive: true })
+  for (let i = 0; i < count; i++)
+    fs.writeFileSync(
+      path.join(dir, name ? name(i) : 'f' + String(i).padStart(4, '0')),
+      ''
+    )
+}
+function recommit(f, top) {
+  git(f.sourceRoot, 'add', '-f', '--', top)
+  git(f.sourceRoot, 'commit', '-qm', 'synthetic long listing fixture')
+  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
+  return execFileSync('/usr/bin/git', ['ls-tree', '-r', '-l', '-z', f.commit], {
+    cwd: f.sourceRoot,
+    env: referenceEnvironment(NODE),
+    maxBuffer: 64 * 1024 * 1024
+  })
+}
+
+test('RT02: a tree listing above the per-process output cap is paged and complete', async () => {
+  const f = fixture()
+  for (let i = 0; i < 26; i++)
+    deepFiles(f.sourceRoot, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
+  const listing = recommit(f, 'bulk')
+  expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
+  const tracked = listing
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map((line) => line.slice(line.indexOf('\t') + 1))
+    .filter((name) => name.startsWith('bulk/'))
+  expect(tracked).toHaveLength(2600)
+  const result = await buildInstalledReference(options(f))
+  expect(result.receipt.packages).toHaveLength(1)
+  const copied = []
+  const walk = (dir) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, item.name)
+      if (item.isDirectory()) walk(full)
+      else copied.push(path.relative(result.receipt.root, full))
+    }
+  }
+  walk(path.join(result.receipt.root, 'bulk'))
+  expect(copied.sort()).toEqual([...tracked].sort())
+  // Order and identity: the receipt digest equals the digest of the complete
+  // `ls-tree -r` listing with the recipe's own exclusion rule.
+  expect(result.receipt.recipe.sourceSha256).toBe(fullListingDigest(listing))
+}, 300000)
+
+function fullListingDigest(listing) {
+  const excludedParts = [
+    'node_modules',
+    'dist',
+    '.git',
+    '.ssh',
+    '.aws',
+    '.gnupg',
+    '.agent',
+    '.npm',
+    'coverage',
+    'test-results'
+  ]
+  const secret =
+    /^(\.env(?:\..*)?|\.netrc|\.npm-token|credentials(?:\..*)?|secrets?(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i
+  const entries = listing
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map((line) => {
+      const [, mode, oid, size, name] =
+        /^(\d{6}) blob ([a-f0-9]{40})\s+(\d+)\t(.+)$/.exec(line)
+      return { path: name, oid, mode, size: Number(size) }
+    })
+    .filter(
+      (entry) =>
+        !entry.path
+          .split('/')
+          .some((part) => excludedParts.includes(part) || secret.test(part))
+    )
+  return createHash('sha256').update(canonicalJson(entries)).digest('hex')
+}
+
+test('RT02: a magic-looking tree name never yields a silent partial receipt, paged or not', async () => {
+  // Unpaged control: the existing archive step already refuses such a name.
+  const small = fixture()
+  write(path.join(small.sourceRoot, ':small/plain.txt'), 'magic-looking')
+  git(small.sourceRoot, '--literal-pathspecs', 'add', '-f', '--', ':small')
+  git(small.sourceRoot, 'commit', '-qm', 'synthetic magic-looking name')
+  small.commit = git(small.sourceRoot, 'rev-parse', 'HEAD')
+  await refuses(small, {}, 'PROCESS_NONZERO')
+  // Paged: the page is addressed literally, so the same refusal follows
+  // instead of a receipt that silently drops the tree.
+  const f = fixture()
+  for (let i = 0; i < 26; i++)
+    deepFiles(f.sourceRoot, ':big/' + String(i).padStart(2, '0'), 17, 100)
+  write(path.join(f.sourceRoot, 'big/plain.txt'), 'plain sibling')
+  git(f.sourceRoot, '--literal-pathspecs', 'add', '-f', '--', ':big', 'big')
+  git(f.sourceRoot, 'commit', '-qm', 'synthetic magic-looking tree name')
+  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
+  const listing = execFileSync(
+    '/usr/bin/git',
+    ['ls-tree', '-r', '-l', '-z', f.commit],
+    {
+      cwd: f.sourceRoot,
+      env: referenceEnvironment(NODE),
+      maxBuffer: 64 * 1024 * 1024
+    }
+  )
+  expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
+  await refuses(f, {}, 'PROCESS_NONZERO')
+}, 300000)
+
+test('RT02: a paged child name that does not round-trip UTF-8 is refused', async () => {
+  const f = fixture()
+  for (let i = 0; i < 26; i++)
+    deepFiles(f.sourceRoot, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
+  const odd = Buffer.concat([
+    Buffer.from(f.sourceRoot + '/nonutf8-'),
+    Buffer.from([0xff])
+  ])
+  fs.mkdirSync(odd)
+  fs.writeFileSync(Buffer.concat([odd, Buffer.from('/f.txt')]), 'x')
+  git(f.sourceRoot, 'add', '-f', '--', 'bulk', 'nonutf8-*')
+  git(f.sourceRoot, 'commit', '-qm', 'synthetic non-UTF-8 tree name')
+  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
+  await refuses(f, {}, 'SOURCE_PATH_INVALID')
+}, 300000)
+
+test('RT02: a directory whose immediate children alone exceed the cap stays refused', async () => {
+  const f = fixture()
+  deepFiles(
+    f.sourceRoot,
+    'wide',
+    10,
+    4000,
+    (i) => 'n' + String(i).padStart(4, '0') + 'x'.repeat(195)
+  )
+  expect(recommit(f, 'wide').length).toBeGreaterThan(8 * 1024 * 1024)
+  await refuses(f, {}, 'PROCESS_OUTPUT_LIMIT')
+}, 300000)
+
+function vanishOnce(target) {
+  const original = fs.lstatSync
+  const state = { armed: false, fired: 0 }
+  const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(function (
+    file,
+    ...rest
+  ) {
+    if (state.armed && !state.fired && String(file) === target) {
+      state.fired++
+      throw Object.assign(new Error('synthetic vanished entry'), {
+        code: 'ENOENT'
+      })
+    }
+    return original.call(this, file, ...rest)
+  })
+  cleanup.push(() => spy.mockRestore())
+  return state
+}
+
+test('RT03: an entry that vanishes during the in-flight sampling walk does not kill npm', async () => {
+  const f = fixture()
+  const sentinel = path.join(f.outputRoot, 'snapshot', 'zz-sampling-sentinel')
+  const state = vanishOnce(sentinel)
+  const result = await buildInstalledReference(
+    options(f, {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          // Untracked: only the whole-snapshot sampling walk visits it.
+          beforeNpm: () => {
+            write(sentinel, 'sampling sentinel')
+            state.armed = true
+          },
+          afterNpm: () => {
+            state.armed = false
+          }
+        }
+      }
+    })
+  )
+  expect(state.fired).toBe(1)
+  expect(result.receipt.packages).toHaveLength(1)
+}, 120000)
+
+test('RT03: the same vanished entry in the final strict inventory is still refused', async () => {
+  const f = fixture()
+  const sentinel = path.join(f.outputRoot, 'snapshot', 'zz-sampling-sentinel')
+  const state = vanishOnce(sentinel)
+  await refuses(
+    f,
+    {
+      testOnly: {
+        context: 'synthetic-fixture',
+        hooks: {
+          beforeNpm: () => write(sentinel, 'sampling sentinel'),
+          afterNpm: () => {
+            state.armed = true
+          }
+        }
+      }
+    },
+    'ENOENT'
+  )
+  expect(state.fired).toBe(1)
+}, 120000)
