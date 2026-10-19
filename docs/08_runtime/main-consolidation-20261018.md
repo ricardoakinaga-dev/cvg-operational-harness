@@ -60,3 +60,11 @@ Execução adaptada à evidência: após FAIL conclusivo da barra hospedada, o c
 ## Envelope do parentcertify
 
 Medição da própria CI874: unit1626s +coverage1788s +PG173s +format42s +types16s +lint15s +build21s +startup1s =3682s, ainda sem outros oito componentes obrigatórios. Timeout externo de3600s não oferece envelope para o catálogo atual. Delta isolado aumenta somente parentcertify para5400s, todos outrosparents3600s e deadlines internos/caps nativos inalterados.46regressõesPASS, críticoGibbsAPPROVE. Novo commit exige nova barra completa; fonte de runtime ébyteidêntica874. Objetivo segue main única, com snapshots e novos avanços dos pares preservados no fechamento.
+
+## Compatibilidade do scanner com squash protegido
+
+TaskT2 documentada antes do delta. Scanner real reproduziu52falsos positivos na integração proposta:26valores já triados e26identificadores Git no relatório histórico. A candidata mantém defaults/pins/allowlists anteriores e aceita somente29pares de detector+caminho+literal exatos viaAND, com manifesto de25fontes congeladas.82unitPASS,lint/typecheckPASS e30provasCLI PASS/zero skip (default detecta, par exato aceita, outra localização/novo valor/provedores permanecem detectados). Histórico proposto e squash inicial zeraram achados. Revisão fresca, squash da árvore final e nova barra hospedada integral ainda pendentes; main/proteções inalteradas.
+
+Repetição da prova nativa anterior falhou em um controle de novo valor no detector default (28PASS/2FAIL incluindo parent). O valor transitório foi removido pelo cleanup e não há causa histórica medida. A geração agora garante alta entropia por construção, preservando todos detectores/asserts; nova prova e revisão do delta pendentes. O primeiro30PASS permanece histórico, sem substituir a execução atual.
+
+Após precondição de entropia, provaCLIreal atual30PASS/zero falhas/zero skips em76,753s; lint do deltaPASS. Formato completo e links/higienePASS. A suíte explícita continua fora da coletaVitest padrão, confirmada via comando real de listagem. Publicar nova revisão para barra integral; prova da árvore publicada e revisão estreita final ainda pendentes.

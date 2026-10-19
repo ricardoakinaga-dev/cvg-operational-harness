@@ -2,17 +2,25 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { loadReviewedExceptions } from '../scripts/gitleaks-reviewed-policy.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (file) => fs.readFileSync(path.join(rootDir, file), 'utf8')
 
 describe('secret scan configuration (PR-011)', () => {
-  it('keeps every default Gitleaks rule and scopes allowlists to generic-api-key', () => {
+  it('keeps every default rule with exact reviewed exceptions bound to their sources', () => {
     const config = read('.gitleaks.toml')
 
     expect(config).toMatch(/\[extend\]\s*\nuseDefault = true/)
-    expect(config.match(/^\[\[rules\]\]$/gm)).toHaveLength(1)
-    expect(config).toContain('id = "generic-api-key"')
+    expect(
+      [...config.matchAll(/^id = "([^"]+)"$/gm)].map((match) => match[1])
+    ).toEqual(['generic-api-key', 'sourcegraph-access-token'])
+    expect(config).not.toMatch(/disabledRules|^regex\s*=/m)
+    const entries = loadReviewedExceptions(rootDir)
+    expect(entries.length).toBeGreaterThan(0)
+    expect(new Set(entries.map((entry) => entry.detector))).toEqual(
+      new Set(['generic-api-key', 'sourcegraph-access-token'])
+    )
     expect(config).not.toMatch(/^\[\[allowlists\]\]/m)
     expect(config).not.toMatch(/^\[allowlist\]/m)
   })
@@ -26,6 +34,8 @@ describe('secret scan configuration (PR-011)', () => {
       '  codeql:'
     )[0]
     expect(secretScan).toMatch(/fetch-depth: 0/)
+    expect(secretScan).toContain('export GITLEAKS_BIN="$(command -v gitleaks)"')
+    expect(secretScan).toContain('npm run test:secrets:config')
     const fingerprints = read('.gitleaksignore')
       .split('\n')
       .filter((line) => line && !line.startsWith('#'))

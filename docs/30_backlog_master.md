@@ -1,3 +1,9 @@
+# MAIN-CONSOLIDATION — scanner da integração protegida — 18/10/2026
+
+- `status: IN_PROGRESS`. A simulação de squash encontrou52achados não secretos já classificados ou identificadores Git da triagem. A correção preserva todos defaults e limita29exceções a detector+caminho+literal exatos, viaAND, vinculados a25fontes congeladas. [Task finita](04_audit/evidence/MAIN-CONSOLIDATION-20261018/merge-secret-compatibility-task.md), [evidência](04_audit/evidence/MAIN-CONSOLIDATION-20261018/merge-secret-compatibility-proof.json).
+- `last_completed_action`:82unitPASS;lint/typecheckPASS;scanner real no histórico e squash inicial sem achados;30controles nativos PASS/zero skip. Primeira tentativa unit expôs transformação de URL do Vite e foi corrigida sem relaxar guardas. Nenhuma mudança em proteções da main.
+- `next_action`: concluir revisão fresca e scan da árvore final, publicar correção no PR4 e executar nova barra integral; só então merge e ativação preservadora da main. As frentes incompletas seguem arquivadas/isoladas, sem promoção por limpeza de refs.
+
 # MAIN-CONSOLIDATION — prazo da certificação ajustado à medição — 18/10/2026
 
 - `status: IN_PROGRESS`. Componentes obrigatórios jáPASS na CI39180525930 somaram3682s (61min22s), antes de E2E/evals/chaos/SBOM/licenças/auditoria, acima dos3600s do parentcertify. [Medição/task](04_audit/evidence/MAIN-CONSOLIDATION-20261018/certify-parent-budget-task.json).
