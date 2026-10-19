@@ -21,7 +21,14 @@ import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { SOURCE_PATHS, BUILTIN_ALLOWLIST } from './bootstrap.mjs'
+import {
+  SOURCE_PATHS,
+  BUILTIN_ALLOWLIST,
+  CAPTURE_SOURCE_PATHS,
+  CAPTURE_BUILTIN_ALLOWLIST,
+  CAPTURE_ENTRY,
+  scanProfileImports
+} from './bootstrap.mjs'
 import { parseArgs } from '../../../scripts/claude100-reference-port.mjs'
 
 const prefix = path.join(tmpdir(), 'native-port-bootstrap-tests')
@@ -586,3 +593,238 @@ it.each(['SIGINT', 'SIGTERM'])(
     expect(result.after).toEqual(result.before)
   }
 )
+
+// SPEC0238 second literal profile. The tests above keep the 0235 profile
+// unchanged; these use synthetic checkouts plus the real capture sources only
+// where noted, and never launch Docker, Claude or the capture CLI main.
+describe('SPEC0238 capture profile', () => {
+  const captureSpecUrl = new URL(
+    '../../../docs/02_spec/0238_claude_scripted_reference_capture.md',
+    import.meta.url
+  )
+  const captureCliUrl = new URL(
+    '../../../scripts/claude100-reference-capture.mjs',
+    import.meta.url
+  )
+  async function captureFixture(overrides = {}) {
+    await mkdir(prefix, { recursive: true, mode: 0o700 })
+    const base = await mkdtemp(path.join(prefix, 'capture-case-'))
+    own.push(base)
+    const checkout = path.join(base, 'source'),
+      evidence = path.join(base, 'evidence')
+    await mkdir(checkout, { mode: 0o700 })
+    await mkdir(evidence, { mode: 0o700 })
+    for (const relative of CAPTURE_SOURCE_PATHS) {
+      const filename = path.join(checkout, relative)
+      await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 })
+      const bytes = Object.hasOwn(overrides, relative)
+        ? Buffer.from(overrides[relative])
+        : relative.endsWith('/bootstrap.mjs')
+          ? await readFile(sourceUrl)
+          : relative.endsWith('/0238_claude_scripted_reference_capture.md')
+            ? await readFile(captureSpecUrl)
+            : relative === 'scripts/claude100-reference-capture.mjs'
+              ? await readFile(captureCliUrl)
+              : relative.endsWith('/package.json')
+                ? Buffer.from('{"type":"module"}')
+                : Buffer.from(
+                    'throw new Error("SYNTHETIC_PROTECTED_ORIGINAL_MUST_NOT_IMPORT")\n'
+                  )
+      await writeFile(filename, bytes, { mode: 0o600 })
+    }
+    const module = await import(
+      pathToFileURL(
+        path.join(checkout, 'tests/claude100/reference-port/bootstrap.mjs')
+      ).href
+    )
+    return { base, checkout, evidence, module }
+  }
+  it('declares its own sorted literal list, allowlist and entry without changing 0235', () => {
+    expect(SOURCE_PATHS).toHaveLength(20)
+    expect(CAPTURE_SOURCE_PATHS).toHaveLength(22)
+    expect(CAPTURE_SOURCE_PATHS).toEqual([...CAPTURE_SOURCE_PATHS].sort())
+    expect(new Set(CAPTURE_SOURCE_PATHS).size).toBe(22)
+    expect(Object.isFrozen(CAPTURE_SOURCE_PATHS)).toBe(true)
+    for (const required of [
+      'docs/02_spec/0238_claude_scripted_reference_capture.md',
+      'scripts/claude100-reference-capture.mjs',
+      'tests/claude100/reference-port/bootstrap.mjs',
+      CAPTURE_ENTRY
+    ])
+      expect(CAPTURE_SOURCE_PATHS).toContain(required)
+    expect(CAPTURE_SOURCE_PATHS).not.toContain(
+      'docs/02_spec/0235_claude_native_port_probe.md'
+    )
+    expect(
+      CAPTURE_SOURCE_PATHS.filter((p) => p.includes('reference-port/'))
+    ).toEqual(['tests/claude100/reference-port/bootstrap.mjs'])
+    expect(CAPTURE_BUILTIN_ALLOWLIST).toEqual(BUILTIN_ALLOWLIST)
+    expect(Object.isFrozen(CAPTURE_BUILTIN_ALLOWLIST)).toBe(true)
+  })
+  it('passes the closed import scan for the real capture closure and the bootstrap itself', async () => {
+    const root = new URL('../../../', import.meta.url)
+    const entries = []
+    for (const relative of CAPTURE_SOURCE_PATHS)
+      entries.push({
+        path: relative,
+        bytes: await readFile(new URL(relative, root))
+      })
+    expect(
+      scanProfileImports(
+        entries,
+        CAPTURE_SOURCE_PATHS,
+        CAPTURE_BUILTIN_ALLOWLIST,
+        'scripts/claude100-reference-capture.mjs'
+      )
+    ).toBe(true)
+  })
+  it('applies the same closed scan to the 0235 closure without changing its runtime', async () => {
+    const root = new URL('../../../', import.meta.url)
+    const entries = []
+    for (const relative of SOURCE_PATHS)
+      entries.push({
+        path: relative,
+        bytes: await readFile(new URL(relative, root))
+      })
+    expect(
+      scanProfileImports(
+        entries,
+        SOURCE_PATHS,
+        BUILTIN_ALLOWLIST,
+        'scripts/claude100-reference-port.mjs'
+      )
+    ).toBe(true)
+  })
+  it.each([
+    [
+      'comment-hidden dynamic import',
+      'await import /* x */ ("./protocol.mjs")\n'
+    ],
+    ['line-comment dynamic import', 'await import // x\n("./protocol.mjs")\n'],
+    ['comment-hidden static specifier', "import x from /* c */ 'node:net'\n"]
+  ])('rejects a %s in the scan', (_n, text) => {
+    expect(
+      scanProfileImports(
+        [
+          {
+            path: 'tests/claude100/reference-capture/protocol.mjs',
+            bytes: Buffer.from(text)
+          }
+        ],
+        CAPTURE_SOURCE_PATHS,
+        CAPTURE_BUILTIN_ALLOWLIST,
+        'scripts/claude100-reference-capture.mjs'
+      )
+    ).toBe(false)
+  })
+  it('freezes the capture graph under its own prefix with both physical pins', async () => {
+    const f = await captureFixture()
+    const graph = await f.module.freezeCaptureGraph(f.evidence)
+    graphs.push(graph)
+    expect(Object.keys(graph).sort()).toEqual(
+      [
+        'root',
+        'pins',
+        'entries',
+        'totalBytes',
+        'builtinAllowlist',
+        'dispose'
+      ].sort()
+    )
+    expect(path.basename(graph.root)).toMatch(
+      /^\.reference-capture-bootstrap-[a-f0-9]{32}$/
+    )
+    expect(graph.entries.map((e) => e.path)).toEqual(CAPTURE_SOURCE_PATHS)
+    expect(graph.pins).toHaveLength(44)
+    await close(graph)
+    await graph.dispose()
+    expect(await readdir(f.evidence)).toEqual([])
+    expect(await heldIn(f.base)).toEqual([])
+  })
+  it('rejects a mutated SPEC0238 with IDENTITY_MISMATCH before any import', async () => {
+    const f = await captureFixture({
+      'docs/02_spec/0238_claude_scripted_reference_capture.md': 'MUTANT'
+    })
+    await expect(f.module.freezeCaptureGraph(f.evidence)).rejects.toMatchObject(
+      {
+        code: 'IDENTITY_MISMATCH'
+      }
+    )
+    expect(await readdir(f.evidence)).toEqual([])
+    expect(await heldIn(f.base)).toEqual([])
+  })
+  it.each([
+    ['unlisted relative module', "import { x } from './unlisted.mjs'\n"],
+    ['bare package', "import { x } from 'vitest'\n"],
+    ['builtin outside allowlist', "import net from 'node:net'\n"],
+    ['dynamic import outside the CLI', 'await import("./protocol.mjs")\n'],
+    ['escape from the closure', "import x from '../../../../etc/x.mjs'\n"],
+    ['side-effect import', "import './unlisted.mjs'\n"]
+  ])(
+    'rejects %s in the closure scan and removes its partial snapshot',
+    async (_n, text) => {
+      const f = await captureFixture({
+        'tests/claude100/reference-capture/protocol.mjs': text
+      })
+      await expect(
+        f.module.freezeCaptureGraph(f.evidence)
+      ).rejects.toMatchObject({
+        code: 'INPUT_INVALID'
+      })
+      expect(await readdir(f.evidence)).toEqual([])
+      expect(await heldIn(f.base)).toEqual([])
+    }
+  )
+  it('requires exactly one literal transfer import in the capture CLI', async () => {
+    const cli = await readFile(captureCliUrl, 'utf8')
+    const f = await captureFixture({
+      'scripts/claude100-reference-capture.mjs': `${cli}\nawait import('x')\n`
+    })
+    await expect(f.module.freezeCaptureGraph(f.evidence)).rejects.toMatchObject(
+      {
+        code: 'INPUT_INVALID'
+      }
+    )
+  })
+  it.each(['SIGHUP', 'SIGINT', 'SIGTERM'])(
+    'cancels the capture freeze on actual %s and removes only its snapshot',
+    async (signal) => {
+      const f = await captureFixture()
+      const script = `
+      import { watch } from 'node:fs';
+      import { readdir } from 'node:fs/promises';
+      import { pathToFileURL } from 'node:url';
+      const [file, evidence, signal] = process.argv.slice(1);
+      const { freezeCaptureGraph } = await import(pathToFileURL(file));
+      let sent = false, code = null, graph = null;
+      const watcher = watch(evidence, (_t, name) => {
+        if (!sent && String(name).startsWith('.reference-capture-bootstrap-')) { sent = true; process.kill(process.pid, signal); }
+      });
+      try { graph = await freezeCaptureGraph(evidence); } catch (e) { code = e.code; }
+      finally { watcher.close(); if (graph) { await Promise.all(graph.pins.map(p => p.close())); await graph.dispose(); } }
+      const left = (await readdir(evidence)).filter(n => n.startsWith('.reference-capture-bootstrap-'));
+      console.log(JSON.stringify({ sent, code, left, listeners: ['SIGHUP','SIGINT','SIGTERM'].map(s => process.listenerCount(s)) }));
+    `
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          script,
+          path.join(f.checkout, 'tests/claude100/reference-port/bootstrap.mjs'),
+          f.evidence,
+          signal
+        ],
+        {
+          env: { PATH: '/usr/bin:/bin', HOME: f.base, LANG: 'C.UTF-8' },
+          timeout: 4000
+        }
+      )
+      const result = JSON.parse(stdout)
+      expect(result.sent).toBe(true)
+      expect(result.code).toBe('SIGNAL')
+      expect(result.left).toEqual([])
+      expect(result.listeners).toEqual([0, 0, 0])
+    }
+  )
+})

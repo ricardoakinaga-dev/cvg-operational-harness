@@ -1,0 +1,797 @@
+import { lstat, readFile, readlink, readdir } from 'node:fs/promises'
+import { networkInterfaces } from 'node:os'
+import { pathToFileURL } from 'node:url'
+import { parseStrictJson } from '../qualification/strict-json.mjs'
+import {
+  CASES,
+  CODES,
+  LIMITS,
+  MARKER_ROOT,
+  SIGNALS,
+  caseFromTag,
+  caseOf,
+  canonical,
+  fault
+} from './constants.mjs'
+
+// Wire v3 of SPEC0238 (revision 1) appendix A. Replaces the 0235 wire and the
+// version2 wire of run r1; version 2 frames are refused (PROTOCOL).
+export const VERSION = 3
+const requireValue = (value) => {
+  if (!value) throw fault('PROTOCOL')
+}
+const D = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
+const int = (v, lo, hi) => Number.isSafeInteger(v) && v >= lo && v <= hi
+const P = (v) => int(v, 1, 65535)
+const Q = (v) => int(v, 0, LIMITS.requests - 1)
+const I = (v) => int(v, 0, 3)
+const RUN = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v)
+const K = (v) => v === null || CASES.includes(v)
+const KI = (k, i) => I(i) && k === caseOf(i)
+const bool = (v) => typeof v === 'boolean'
+export const UTC = (v) =>
+  typeof v === 'string' &&
+  /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v) &&
+  Number.isFinite(Date.parse(v)) &&
+  new Date(v).toISOString() === v
+const oneOf = (v, list) => list.includes(v)
+
+function closed(value, keys) {
+  requireValue(
+    value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      [null, Object.prototype].includes(Object.getPrototypeOf(value))
+  )
+  const own = Object.keys(value)
+  requireValue(
+    own.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  )
+}
+const BASE = [
+  'uid',
+  'gid',
+  'pid',
+  'pidNamespace',
+  'netNamespace',
+  'interfaces',
+  'routes',
+  'hostMarkerAbsent'
+]
+function base(p) {
+  requireValue(
+    int(p.uid, 0, 0xffffffff) &&
+      int(p.gid, 0, 0xffffffff) &&
+      int(p.pid, 1, 0x7fffffff)
+  )
+  requireValue(
+    [p.pidNamespace, p.netNamespace].every(
+      (v) => typeof v === 'string' && /^\d{1,20}$/.test(v)
+    )
+  )
+  // Divergent observations parse; the containment comparison is separate.
+  requireValue(
+    Array.isArray(p.interfaces) &&
+      p.interfaces.length <= 64 &&
+      p.interfaces.every(
+        (v) => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(v)
+      )
+  )
+  requireValue(
+    Array.isArray(p.routes) &&
+      p.routes.length <= 64 &&
+      p.routes.every(
+        (v) => typeof v === 'string' && /^[A-Fa-f0-9.:/]{1,64}$/.test(v)
+      )
+  )
+  requireValue(bool(p.hostMarkerAbsent))
+}
+
+// Closed payload schemas by producer and type.
+const OBSERVER = {
+  READY(p) {
+    closed(p, [...BASE, 'port', 'workspaceStateSha256', 'workspaceStateBytes'])
+    base(p)
+    requireValue(
+      P(p.port) &&
+        D(p.workspaceStateSha256) &&
+        int(p.workspaceStateBytes, 0, LIMITS.workspaceStateBytes)
+    )
+  },
+  ARMED(p) {
+    closed(p, ['caseId', 'processOrdinal', 'port'])
+    requireValue(
+      CASES.includes(p.caseId) && KI(p.caseId, p.processOrdinal) && P(p.port)
+    )
+  },
+  REQUEST_BEGIN(p) {
+    closed(p, [
+      'caseId',
+      'ordinal',
+      'methodClass',
+      'pathClass',
+      'queryClass',
+      'expectClass',
+      'authClass'
+    ])
+    requireValue(
+      K(p.caseId) &&
+        Q(p.ordinal) &&
+        oneOf(p.methodClass, ['POST', 'OTHER']) &&
+        oneOf(p.pathClass, ['MESSAGES', 'OTHER']) &&
+        oneOf(p.queryClass, ['EMPTY', 'BETA_TRUE', 'OTHER']) &&
+        oneOf(p.expectClass, ['NONE', 'EXPECT', null]) &&
+        oneOf(p.authClass, ['SENTINEL', 'ABSENT', 'FORBIDDEN'])
+    )
+    // null only on the clientError path: no parsed headers, nothing eligible.
+    if (p.expectClass === null)
+      requireValue(
+        p.methodClass === 'OTHER' &&
+          p.pathClass === 'OTHER' &&
+          p.queryClass === 'OTHER' &&
+          p.authClass === 'ABSENT'
+      )
+  },
+  REQUEST(p) {
+    closed(p, [
+      'caseId',
+      'ordinal',
+      'turn',
+      'method',
+      'path',
+      'queryClass',
+      'bodySha256',
+      'bytes',
+      'markerVerified',
+      'contentType',
+      'contentEncoding',
+      'scriptAccepted'
+    ])
+    requireValue(
+      CASES.includes(p.caseId) &&
+        Q(p.ordinal) &&
+        oneOf(p.turn, [1, 2]) &&
+        p.method === 'POST' &&
+        p.path === '/v1/messages' &&
+        oneOf(p.queryClass, ['EMPTY', 'BETA_TRUE'])
+    )
+    requireValue(
+      D(p.bodySha256) &&
+        int(p.bytes, 0, LIMITS.bodyBytes) &&
+        bool(p.markerVerified) &&
+        bool(p.scriptAccepted)
+    )
+    requireValue(
+      oneOf(p.contentType, ['JSON', 'OTHER', 'ABSENT']) &&
+        oneOf(p.contentEncoding, ['IDENTITY', 'OTHER', 'ABSENT'])
+    )
+    if (p.scriptAccepted)
+      requireValue(
+        p.contentType === 'JSON' &&
+          p.contentEncoding === 'ABSENT' &&
+          p.markerVerified
+      )
+  },
+  REJECTED(p) {
+    closed(p, ['caseId', 'ordinal', 'reason'])
+    requireValue(
+      K(p.caseId) &&
+        Q(p.ordinal) &&
+        oneOf(p.reason, [
+          'EARLY_PHASE',
+          'UNSUPPORTED_ROUTE',
+          'MISSING_SENTINEL',
+          'FORBIDDEN_AUTH',
+          'CAP'
+        ])
+    )
+    if (p.reason === 'EARLY_PHASE') requireValue(p.caseId === null)
+    if (p.reason === 'MISSING_SENTINEL') requireValue(p.caseId !== null)
+  },
+  RESPONSE_SEGMENT(p) {
+    closed(p, [
+      'caseId',
+      'ordinal',
+      'segmentIndex',
+      'bytes',
+      'sha256',
+      'outcome'
+    ])
+    requireValue(
+      K(p.caseId) &&
+        Q(p.ordinal) &&
+        int(p.segmentIndex, 0, 255) &&
+        int(p.bytes, 0, LIMITS.responseBytes) &&
+        D(p.sha256) &&
+        oneOf(p.outcome, ['FINISHED', 'FAILED'])
+    )
+  },
+  RESPONSE(p) {
+    closed(p, [
+      'caseId',
+      'ordinal',
+      'status',
+      'headersSha256',
+      'bodySha256',
+      'bytes',
+      'segmentCount',
+      'outcome',
+      'coverage'
+    ])
+    requireValue(
+      K(p.caseId) &&
+        Q(p.ordinal) &&
+        oneOf(p.status, [200, 400]) &&
+        D(p.headersSha256) &&
+        D(p.bodySha256) &&
+        int(p.bytes, 0, LIMITS.responseBytes) &&
+        int(p.segmentCount, 0, 256) &&
+        oneOf(p.outcome, ['FINISHED', 'FAILED']) &&
+        oneOf(p.coverage, ['COMPLETE', 'PARTIAL_UNKNOWN'])
+    )
+    if (p.coverage === 'COMPLETE') requireValue(p.outcome === 'FINISHED')
+  },
+  STATE(p) {
+    closed(p, ['caseId', 'phase', 'sha256', 'bytes'])
+    requireValue(
+      K(p.caseId) &&
+        oneOf(p.phase, ['BEFORE_VERSION', 'AFTER_CASE']) &&
+        D(p.sha256) &&
+        int(p.bytes, 0, LIMITS.workspaceStateBytes)
+    )
+    requireValue((p.phase === 'BEFORE_VERSION') === (p.caseId === null))
+  },
+  CASE_ENDED(p) {
+    closed(p, [
+      'caseId',
+      'processOrdinal',
+      'requestOrdinals',
+      'workspaceStateSha256',
+      'workspaceStateBytes'
+    ])
+    requireValue(CASES.includes(p.caseId) && KI(p.caseId, p.processOrdinal))
+    requireValue(
+      Array.isArray(p.requestOrdinals) &&
+        p.requestOrdinals.length <= LIMITS.requests &&
+        p.requestOrdinals.every((q, i, a) => Q(q) && (i === 0 || q > a[i - 1]))
+    )
+    requireValue(
+      D(p.workspaceStateSha256) &&
+        int(p.workspaceStateBytes, 0, LIMITS.workspaceStateBytes)
+    )
+  },
+  ERROR: error,
+  CLOSED: (p) => closed(p, [])
+}
+const CLIENT = {
+  READY(p) {
+    closed(p, [...BASE, 'port', 'profileSha256', 'envSetSha256'])
+    base(p)
+    requireValue(P(p.port) && D(p.profileSha256) && D(p.envSetSha256))
+  },
+  NATIVE_START(p) {
+    closed(p, [
+      'processOrdinal',
+      'caseId',
+      'pid',
+      'ppid',
+      'startedAt',
+      'executableSha256',
+      'argvSha256',
+      'envSha256',
+      'stdinSha256'
+    ])
+    requireValue(
+      KI(p.caseId, p.processOrdinal) &&
+        int(p.pid, 2, 0x7fffffff) &&
+        int(p.ppid, 1, 0x7fffffff) &&
+        UTC(p.startedAt)
+    )
+    requireValue(
+      D(p.executableSha256) &&
+        D(p.argvSha256) &&
+        D(p.envSha256) &&
+        D(p.stdinSha256)
+    )
+  },
+  NATIVE_END(p) {
+    closed(p, [
+      'processOrdinal',
+      'caseId',
+      'pid',
+      'endedAt',
+      'exitCode',
+      'signal',
+      'timeout',
+      'stdoutSha256',
+      'stdoutBytes',
+      'stderrSha256',
+      'stderrBytes',
+      'descendantsAbsent'
+    ])
+    requireValue(
+      KI(p.caseId, p.processOrdinal) &&
+        int(p.pid, 2, 0x7fffffff) &&
+        UTC(p.endedAt)
+    )
+    requireValue(
+      (p.exitCode === null || int(p.exitCode, 0, 255)) &&
+        (p.signal === null || SIGNALS.includes(p.signal)) &&
+        (p.exitCode === null || p.signal === null) &&
+        bool(p.timeout) &&
+        bool(p.descendantsAbsent)
+    )
+    requireValue(
+      D(p.stdoutSha256) &&
+        int(p.stdoutBytes, 0, LIMITS.nativeStreamBytes) &&
+        D(p.stderrSha256) &&
+        int(p.stderrBytes, 0, LIMITS.nativeStreamBytes)
+    )
+  },
+  ERROR: error,
+  CLOSED: (p) => closed(p, [])
+}
+function error(p) {
+  closed(p, ['code', 'caseId', 'processOrdinal', 'requestOrdinal'])
+  requireValue(
+    CODES.includes(p.code) &&
+      K(p.caseId) &&
+      (p.processOrdinal === null || KI(p.caseId, p.processOrdinal)) &&
+      (p.requestOrdinal === null || Q(p.requestOrdinal))
+  )
+}
+const COMMANDS = {
+  client: {
+    CONFIGURE(p) {
+      closed(p, ['port', 'profileSha256', 'envSetSha256'])
+      requireValue(P(p.port) && D(p.profileSha256) && D(p.envSetSha256))
+    },
+    START_NATIVE(p) {
+      closed(p, ['processOrdinal', 'caseId'])
+      requireValue(KI(p.caseId, p.processOrdinal))
+    },
+    STOP: (p) => closed(p, [])
+  },
+  observer: {
+    ARM: armOrEnd,
+    END_CASE: armOrEnd,
+    STOP: (p) => closed(p, [])
+  }
+}
+function armOrEnd(p) {
+  closed(p, ['caseId', 'processOrdinal'])
+  requireValue(CASES.includes(p.caseId) && KI(p.caseId, p.processOrdinal))
+}
+
+/** One canonical NDJSON object per LF line, no CR/LF inside, frame <= 8KiB. */
+function parsedLine(line) {
+  try {
+    requireValue(Buffer.isBuffer(line) || line instanceof Uint8Array)
+    const bytes = Buffer.from(line)
+    requireValue(
+      bytes.length > 1 &&
+        bytes.length <= LIMITS.controlFrameBytes &&
+        bytes.at(-1) === 10
+    )
+    const body = bytes.subarray(0, -1)
+    requireValue(!body.includes(10) && !body.includes(13))
+    const value = parseStrictJson(body, {
+      maxBytes: LIMITS.controlFrameBytes,
+      maxDepth: LIMITS.jsonDepth,
+      maxStringBytes: LIMITS.jsonString
+    })
+    requireValue(Buffer.from(canonical(value)).equals(body))
+    return value
+  } catch (cause) {
+    throw fault('PROTOCOL', cause)
+  }
+}
+export function parseControlLine(line, role, runId, expectedSeq) {
+  requireValue(oneOf(role, ['observer', 'client']) && RUN(runId))
+  const v = parsedLine(line)
+  closed(v, ['version', 'runId', 'role', 'seq', 'type', 'payload'])
+  requireValue(
+    v.version === VERSION &&
+      v.runId === runId &&
+      v.role === role &&
+      int(expectedSeq, 0, LIMITS.controlFrames - 1) &&
+      v.seq === expectedSeq
+  )
+  const table = role === 'observer' ? OBSERVER : CLIENT
+  requireValue(typeof v.type === 'string' && Object.hasOwn(table, v.type))
+  table[v.type](v.payload)
+  return v
+}
+export function parseHostCommand(line, role, runId, expectedSeq) {
+  requireValue(oneOf(role, ['observer', 'client']) && RUN(runId))
+  const v = parsedLine(line)
+  closed(v, ['version', 'runId', 'seq', 'type', 'payload'])
+  requireValue(
+    v.version === VERSION &&
+      v.runId === runId &&
+      int(expectedSeq, 0, LIMITS.controlFrames - 1) &&
+      v.seq === expectedSeq
+  )
+  const table = COMMANDS[role]
+  requireValue(Object.hasOwn(table, v.type))
+  table[v.type](v.payload)
+  return v
+}
+export function encodeFrame(runId, role, seq, type, payload) {
+  const line = Buffer.from(
+    canonical({ version: VERSION, runId, role, seq, type, payload }) + '\n'
+  )
+  parseControlLine(line, role, runId, seq)
+  return line
+}
+export function encodeCommand(runId, role, seq, type, payload) {
+  const line = Buffer.from(
+    canonical({ version: VERSION, runId, seq, type, payload }) + '\n'
+  )
+  parseHostCommand(line, role, runId, seq)
+  return line
+}
+
+/** Serialized, capped producer of canonical frames for one wrapper role. */
+export function controlWriter(stream, role, runId) {
+  let seq = 0,
+    bytes = 0,
+    chain = Promise.resolve()
+  return (type, payload) => {
+    if (seq >= LIMITS.controlFrames) throw fault('CAP')
+    const frame = encodeFrame(runId, role, seq, type, payload)
+    bytes += frame.length
+    if (bytes > LIMITS.controlBytes) throw fault('CAP')
+    seq++
+    chain = chain.then(() => writeBytes(stream, frame))
+    return chain
+  }
+}
+export function writeBytes(stream, bytes) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(fault('TIMEOUT')), LIMITS.closeMs)
+    try {
+      stream.write(bytes, (cause) => {
+        clearTimeout(timer)
+        if (cause) reject(fault('IO', cause))
+        else resolve()
+      })
+    } catch (cause) {
+      clearTimeout(timer)
+      reject(fault('IO', cause))
+    }
+  })
+}
+/** Host commands on wrapper stdin. EOF is never a substitute for STOP. */
+export async function* hostCommands(stream, role, runId) {
+  let pending = Buffer.alloc(0),
+    total = 0,
+    seq = 0,
+    stopped = false
+  for await (const chunk of stream) {
+    total += chunk.length
+    if (total > LIMITS.controlBytes) throw fault('CAP')
+    pending = Buffer.concat([pending, chunk])
+    let end
+    const commands = []
+    while ((end = pending.indexOf(10)) !== -1) {
+      if (stopped) throw fault('PROTOCOL')
+      const command = parseHostCommand(
+        pending.subarray(0, end + 1),
+        role,
+        runId,
+        seq++
+      )
+      if (command.type === 'STOP') stopped = true
+      commands.push(command)
+      pending = pending.subarray(end + 1)
+    }
+    if (pending.length >= LIMITS.controlFrameBytes) throw fault('CAP')
+    if (stopped && pending.length) throw fault('PROTOCOL')
+    for (const command of commands) yield command
+  }
+  throw fault('PROTOCOL')
+}
+
+// Binary pipes. Payload bytes are never parsed as control or instructions.
+export const CLIENT_MAGIC = Buffer.from('CVGN2')
+export const OBSERVER_MAGIC = Buffer.from('CVGO2')
+export const CLIENT_HEADER = 11
+export const OBSERVER_HEADER = 14
+export const KINDS = Object.freeze({
+  REQUEST_BODY: 1,
+  RESPONSE_HEADERS: 2,
+  RESPONSE_SEGMENT: 3,
+  RESPONSE_BODY: 4,
+  WORKSPACE_STATE: 5
+})
+export const KIND_NAMES = Object.freeze(
+  Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [v, k]))
+)
+function chunks(bytes) {
+  const parts = []
+  for (let o = 0; o < bytes.length; o += LIMITS.rawPayloadBytes)
+    parts.push(bytes.subarray(o, o + LIMITS.rawPayloadBytes))
+  return parts
+}
+export function clientFrame(processOrdinal, channel, payload) {
+  requireValue(I(processOrdinal) && oneOf(channel, [1, 2]))
+  requireValue(payload.length <= LIMITS.rawPayloadBytes)
+  const header = Buffer.alloc(CLIENT_HEADER)
+  CLIENT_MAGIC.copy(header)
+  header[5] = processOrdinal
+  header[6] = channel
+  header.writeUInt32BE(payload.length, 7)
+  return Buffer.concat([header, payload])
+}
+export function clientFrames(bytes, processOrdinal, channel) {
+  return chunks(bytes).map((p) => clientFrame(processOrdinal, channel, p))
+}
+export function validObserverKey(key) {
+  const { caseTag, requestTag, kind, segmentTag } = key
+  if (!int(caseTag, 0, 3) || !int(kind, 1, 5)) return false
+  if (kind === KINDS.WORKSPACE_STATE)
+    return requestTag === 255 && segmentTag === 65535
+  if (!int(requestTag, 0, LIMITS.requests - 1)) return false
+  if (kind === KINDS.REQUEST_BODY) return caseTag !== 0 && segmentTag === 65535
+  if (kind === KINDS.RESPONSE_SEGMENT) return int(segmentTag, 0, 255)
+  return segmentTag === 65535
+}
+export function observerFrame(key, payload) {
+  requireValue(
+    validObserverKey(key) && payload.length <= LIMITS.rawPayloadBytes
+  )
+  const header = Buffer.alloc(OBSERVER_HEADER)
+  OBSERVER_MAGIC.copy(header)
+  header[5] = key.caseTag
+  header[6] = key.requestTag
+  header[7] = key.kind
+  header.writeUInt16BE(key.segmentTag, 8)
+  header.writeUInt32BE(payload.length, 10)
+  return Buffer.concat([header, payload])
+}
+/** A complete observer key block: contiguous chunks plus its single terminator. */
+export function observerBlock(key, bytes) {
+  return Buffer.concat([
+    ...chunks(bytes).map((p) => observerFrame(key, p)),
+    observerFrame(key, Buffer.alloc(0))
+  ])
+}
+export const keyName = (key) =>
+  key.role === 'client'
+    ? `client/${key.processOrdinal}/${key.channel}`
+    : `observer/${key.caseTag}/${key.requestOrdinal ?? 255}/${key.kind}/${key.segmentIndex ?? 65535}`
+
+/**
+ * Incremental decoder for one role's binary wire. It validates header domains,
+ * key admission, contiguity, terminators and caps before allocating payloads.
+ * Incomplete trailing bytes stay pending; they never become a frame or EOF.
+ */
+export class RawDecoder {
+  constructor(role) {
+    requireValue(oneOf(role, ['client', 'observer']))
+    this.role = role
+    this.pending = Buffer.alloc(0)
+    this.offset = 0
+    this.wireBytes = 0
+    this.frames = 0
+    this.terminated = new Set()
+    this.started = new Set()
+    this.open = null
+    this.lastProcess = 0
+    this.stateKeys = new Set()
+  }
+  /**
+   * Returns the complete frames decoded from this chunk. The first violation is
+   * kept in `error`; decoding stops there and every later byte stays pending.
+   */
+  feed(bytes) {
+    const frames = []
+    if (this.error) {
+      this.pending = Buffer.concat([this.pending, bytes])
+      return frames
+    }
+    try {
+      if (this.wireBytes + bytes.length > LIMITS.rawWireBytes)
+        throw fault('CAP')
+      this.wireBytes += bytes.length
+      this.pending = Buffer.concat([this.pending, bytes])
+      const headerSize =
+        this.role === 'client' ? CLIENT_HEADER : OBSERVER_HEADER
+      while (this.pending.length >= headerSize) {
+        const magic = this.role === 'client' ? CLIENT_MAGIC : OBSERVER_MAGIC
+        requireValue(this.pending.subarray(0, 5).equals(magic))
+        const length = this.pending.readUInt32BE(headerSize - 4)
+        if (length > LIMITS.rawPayloadBytes) throw fault('CAP')
+        const key = this.keyOf(this.pending)
+        if (this.pending.length < headerSize + length) break
+        if (this.frames + 1 > LIMITS.rawFrames) throw fault('CAP')
+        this.admit(key, length)
+        this.frames++
+        const frame = Buffer.from(this.pending.subarray(0, headerSize + length))
+        frames.push({
+          offset: this.offset,
+          headerBytes: headerSize,
+          payloadBytes: length,
+          frame,
+          payload: frame.subarray(headerSize),
+          key
+        })
+        this.offset += frame.length
+        this.pending = this.pending.subarray(headerSize + length)
+      }
+    } catch (cause) {
+      // The caller keeps the whole wire; the unparsed suffix becomes partial.
+      this.error = cause?.code ? cause : fault('PROTOCOL', cause)
+    }
+    return frames
+  }
+  keyOf(buffer) {
+    if (this.role === 'client') {
+      requireValue(I(buffer[5]) && oneOf(buffer[6], [1, 2]))
+      return {
+        role: 'client',
+        caseTag: null,
+        requestOrdinal: null,
+        kind: null,
+        processOrdinal: buffer[5],
+        channel: buffer[6],
+        segmentIndex: null
+      }
+    }
+    const raw = {
+      caseTag: buffer[5],
+      requestTag: buffer[6],
+      kind: buffer[7],
+      segmentTag: buffer.readUInt16BE(8)
+    }
+    requireValue(validObserverKey(raw))
+    return {
+      role: 'observer',
+      caseTag: raw.caseTag,
+      requestOrdinal: raw.requestTag === 255 ? null : raw.requestTag,
+      kind: raw.kind,
+      processOrdinal: null,
+      channel: null,
+      segmentIndex: raw.segmentTag === 65535 ? null : raw.segmentTag
+    }
+  }
+  admit(key, length) {
+    const name = keyName(key)
+    requireValue(!this.terminated.has(name))
+    if (this.role === 'client') {
+      requireValue(key.processOrdinal >= this.lastProcess)
+      if (key.processOrdinal > this.lastProcess) {
+        // Every started child closes both channels before the next ordinal.
+        const previous = [1, 2].map((c) => `client/${this.lastProcess}/${c}`)
+        if (previous.some((name) => this.started.has(name)))
+          requireValue(previous.every((name) => this.terminated.has(name)))
+        this.lastProcess = key.processOrdinal
+      }
+    } else {
+      if (this.open !== null && this.open !== name) throw fault('PROTOCOL')
+      if (key.kind === KINDS.WORKSPACE_STATE && !this.started.has(name)) {
+        requireValue(!this.stateKeys.has(key.caseTag))
+        this.stateKeys.add(key.caseTag)
+      }
+      this.open = length === 0 ? null : name
+    }
+    this.started.add(name)
+    if (length === 0) this.terminated.add(name)
+  }
+  /** True only if every started key has its terminator and nothing is pending. */
+  get settled() {
+    return (
+      this.pending.length === 0 &&
+      [...this.started].every((name) => this.terminated.has(name))
+    )
+  }
+}
+
+export function wrapperArguments(argv) {
+  requireValue(
+    Array.isArray(argv) &&
+      argv.length === 2 &&
+      RUN(argv[0]) &&
+      typeof argv[1] === 'string' &&
+      new RegExp(`^${MARKER_ROOT}/[a-f0-9]{32}$`).test(argv[1])
+  )
+  return { runId: argv[0], hostMarkerPath: argv[1] }
+}
+export function isDirectMain(url) {
+  return Boolean(process.argv[1]) && pathToFileURL(process.argv[1]).href === url
+}
+export { caseFromTag }
+
+/** Wrapper preflight: UID/GID1000, PID1, lo only, loopback routes, marker absent. */
+export async function preflight(hostMarkerPath) {
+  wrapperArguments(['preflight', hostMarkerPath])
+  try {
+    const [pidLink, netLink, ipv4, ipv6, names] = await Promise.all([
+      readlink('/proc/self/ns/pid'),
+      readlink('/proc/self/ns/net'),
+      readFile('/proc/net/route', 'utf8'),
+      readFile('/proc/net/ipv6_route', 'utf8'),
+      readdir('/sys/class/net')
+    ])
+    const inode = (link, type) => {
+      const match = new RegExp(`^${type}:\\[(\\d+)\\]$`).exec(link)
+      if (!match) throw fault('CONTAINMENT')
+      return match[1]
+    }
+    const interfaces = names.sort()
+    const addresses = networkInterfaces()
+    if (
+      interfaces.length !== 1 ||
+      interfaces[0] !== 'lo' ||
+      Object.keys(addresses).some((name) => name !== 'lo') ||
+      Object.values(addresses)
+        .flat()
+        .some((a) => !a.internal)
+    )
+      throw fault('CONTAINMENT')
+    const routes = []
+    for (const row of ipv4.trim().split('\n').slice(1)) {
+      if (!row.trim()) continue
+      const fields = row.trim().split(/\s+/)
+      if (
+        fields.length < 8 ||
+        fields[0] !== 'lo' ||
+        !/^[a-fA-F0-9]{8}$/.test(fields[1]) ||
+        fields[1].slice(6).toLowerCase() !== '7f' ||
+        fields[2] !== '00000000' ||
+        !/^[a-fA-F0-9]{8}$/.test(fields[7])
+      )
+        throw fault('CONTAINMENT')
+      const destination = [...Buffer.from(fields[1], 'hex')].reverse()
+      const mask = [...Buffer.from(fields[7], 'hex')]
+        .reverse()
+        .map((v) => v.toString(2).padStart(8, '0'))
+        .join('')
+      if (!/^1{8,32}0*$/.test(mask)) throw fault('CONTAINMENT')
+      routes.push(
+        `${destination.join('.')}/${mask.indexOf('0') === -1 ? 32 : mask.indexOf('0')}`
+      )
+    }
+    for (const row of ipv6.trim().split('\n')) {
+      if (!row.trim()) continue
+      const f = row.trim().split(/\s+/)
+      if (f.length !== 10 || f[9] !== 'lo') throw fault('CONTAINMENT')
+      if ((Number.parseInt(f[8], 16) & 0x200) !== 0) continue
+      if (
+        f[0] !== '00000000000000000000000000000001' ||
+        f[1] !== '80' ||
+        f[4] !== '00000000000000000000000000000000'
+      )
+        throw fault('CONTAINMENT')
+      routes.push('::1/128')
+    }
+    let hostMarkerAbsent = false
+    try {
+      await lstat(hostMarkerPath)
+    } catch (cause) {
+      if (cause.code !== 'ENOENT') throw cause
+      hostMarkerAbsent = true
+    }
+    const result = {
+      uid: process.getuid(),
+      gid: process.getgid(),
+      pid: process.pid,
+      pidNamespace: inode(pidLink, 'pid'),
+      netNamespace: inode(netLink, 'net'),
+      interfaces,
+      routes,
+      hostMarkerAbsent
+    }
+    if (
+      result.uid !== 1000 ||
+      result.gid !== 1000 ||
+      result.pid !== 1 ||
+      !hostMarkerAbsent
+    )
+      throw fault('CONTAINMENT')
+    return result
+  } catch (cause) {
+    throw fault('CONTAINMENT', cause)
+  }
+}

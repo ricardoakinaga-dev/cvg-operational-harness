@@ -1,0 +1,59 @@
+import mmap,hashlib,json,sys
+B='/home/ricardo/.local/share/claude/versions/2.1.302'
+EXPECTED_SHA='60d7eb7f12fbb28a52533fe8be5884097403562aa02dc73991a021c7067e29a5'
+raw=open(B,'rb')
+m=mmap.mmap(raw.fileno(),0,access=mmap.ACCESS_READ)
+# Read as data only; refuse to scan any other binary.
+if hashlib.sha256(m).hexdigest()!=EXPECTED_SHA:
+    raise SystemExit('binary SHA mismatch')
+P={
+'P01_bare_sets_simple':b'.includes("--bare"))process.env.CLAUDE_CODE_SIMPLE="1"',
+'P02_simple_mode_tool_set':b'if(a.CLAUDE_CODE_SIMPLE&&!r?.skipSimpleModeFilter){let C=un();if(C!==null&&f$()&&!r?.skipReplFilter){',
+'P02b_simple_mode_base_list':b'let R=Dt(),E=[...Xl()?[Di]:[],...R?[R]:[],Gw,Dg];if(Je.isCoordinatorMode())E.push(HVt,Ne,Pt(),...Wg()?[zt]:[]);return B9(E,e)}',
+'P03_powershell_and_null_repl':b'Dt=()=>{if(!Zw())return null;return import.meta.require("/$bunfs/root/chunk-zkvrhmtx.js").PowerShellTool};function un(){return null}',
+'P04_full_base_list_has_write':b'function J_(){let e=ta(),r=un();return[HVt,...Xl()?[Di]:[],...[QO,ZO].filter((n)=>!tse().has(n.name)),MY,Gw,Dg,AE,',
+'P05_import_tool_ids':b'Gw,Ce,Oo,Di}from"/$bunfs/root/chunk-8242685m.js"',
+'P06_Gw_is_Read':b'Gw=Qt({name:Qe,ruleContentField:"file_path",searchHint:"read files, images, PDFs, notebooks"',
+'P07_Dg_is_Edit':b'Dg=Qt({name:dt,ruleContentField:"file_path",searchHint:"modify file contents in place"',
+'P08_AE_is_Write':b'AE=Qt({name:qt,ruleContentField:"file_path",searchHint:"create or overwrite files"',
+'P09_Di_is_Bash':b'Di=Qt({name:We,enablesCodeExecution:!0,ruleContentField:"command",searchHint:"execute shell commands"',
+'P10_B9_filter_deny_and_launch_list':b'function B9(e,n){let o=[...dc(n),...xe(e,n)],r=VTo(n,o);return e.filter((d)=>{if(de(n,d,o,r)||d.mcpInfo?.effectiveMaxPermission==="blocked")return!1;if(!uMt(n,d))return!0;',
+'P11_cli_rules_allow_vs_narrowing':b'alwaysAllowRules:{cliArg:X?[]:M,...y&&{session:X?[]:y.allow}},alwaysDenyRules:{cliArg:S,...y&&{session:y.deny},...U.length>0&&{toolsNarrowing:U}}',
+'P12_tools_flag_to_disallow':b'if(o&&o.length>0){let r=C8s({baseToolsCli:o,baseToolsIsPreset:L,parsedBaseTools:N,getAllBaseTools:l});A.push(...r.warnings),U=r.toolsToDisallow',
+'P13_dontAsk_denies_not_preapproved':b'if(Re==="dontAsk"&&!Xe)return{behavior:"deny",decisionReason:{type:"mode",mode:"dontAsk"},message:pwe(e.name)}',
+'P14_dontAsk_message':b"function pwe(e){return`Permission to use ${e} has been denied because Claude Code is running in don't ask mode. ${G4n}`}",
+'P15_non_allow_to_tool_result_is_error':b'let $i=Fs,To=[{type:"tool_result",content:$i,is_error:!0,tool_use_id:n}]',
+'P16_denial_booking':b'let L=[],ee=(re,u,K)=>{if(L.some((Le)=>Le.tool_use_id===u))return;L.push({tool_name:YVt(re.name),tool_use_id:u,tool_input:K})},pe=V.canUseTool,be=async(re,u,K,Le,_t,bt)=>{let De=await pe(re,u,K,Le,_t,bt);if(E7e(De,bt))ee(re,_t,u);',
+'P17_booking_predicate':b'function E7e(e,o){return e.behavior!=="allow"&&e!==o&&!Pze(e)}function Pze(e){return e.behavior==="deny"&&e.invalidInput===!0}',
+'P18_result_carries_denials':b'permission_denials:L,terminal_reason:Ht',
+'P19a_validateInput_call':b'Et=(as)=>e.validateInput?.(as,{...s,toolUseId:n}),rt=await n_r(e,tt.input,Et)',
+'P19b_permission_decision':b',yo=Go.decision;gt=Go.input;',
+'P20_edit_new_file_valid':b'if(Re===null){if(S==="")return{result:!0};',
+'P21_write_new_file_valid':b'catch(Ie){if(z(Ie))return{result:!0};throw Ie}let Te=s.readFileState.get(K);',
+'P22_edit_replace_all_schema':b'replace_all:oE(M()).default(!1).optional().describe("Replace all occurrences of old_string (default false)")',
+'P23_permission_prompts_none_help':b'or "none" (nobody: anything that would prompt is denied automatically; the permission mode still decides everything else)',
+'P24_ask_terminal_without_host':b"Without one (bare -p / SDK query() with no canUseTool), 'ask' decisions are terminal, so this event also covers those implicit denials.",
+'P24b_denials_authoritative':b'result.permission_denials is the authoritative record',
+'P25_prompts_unavailable_message':b'function NQt(e){return`Permission for this tool use was denied: it requires interactive approval, and permission prompts are not available in this session.',
+'P26_dontAsk_mode_help':b"'dontAsk' - Don't prompt for permissions, deny if not pre-approved.",
+'P27_denial_entry_schema':b'Ty=f(()=>u({tool_name:o(),tool_use_id:o(),tool_input:fe(o(),oe())}))',
+'P28_denial_name_mapping':b'function YVt(e){return e===ht?Op:e}',
+'X01_validate_denied_by_rule_input':b'if(s?.result===!1){let S;if(s.deniedByPermissionRule)S={...n},e.backfillObservableInput?.(S);return{ok:!1,phase:"validate",verdict:s,deniedInput:S}}',
+'X02_validate_denial_booked':b'if(!rt.ok){let as=ft(rt.verdict);if(rt.deniedInput!==void 0)s.onPermissionDenial?.(e,n,rt.deniedInput);return as}',
+'X03_engine_onPermissionDenial':b'toolUseContext:{...V.toolUseContext,abortController:ue,onPermissionDenial:ee,',
+'X04_headless_denial_recorder':b'function nR(e){let n=[];function r(s,h,S){if(n.some((y)=>y.tool_use_id===h))return;n.push({tool_name:YVt(s.name),tool_use_id:h,tool_input:S})}',
+'X05_headless_canUseTool_passthrough':b'canUseTool:e.canUseTool,toolUseContext:mo,fallbackModel:e.fallbackModel,querySource:"sdk"',
+'X06_headless_denials_merge':b'We.permission_denials.unshift(...Yo)',
+'X12_B9_skills_collision':b'function B9(e){return[...jUn(e),...Kwe()]}',
+'X13_RBt_sandbox_only':b'function RBt(e,n){if(e==="auto")return"classify";if(e==="bypassPermissions"||eN(e,n))return"allow";if(e==="dontAsk")return"deny";return"ask"}',
+'X14_RBt_used_for_network_hosts':b'switch(RBt(I.mode,I.isBypassPermissionsModeAvailable)){case"allow":return!0;case"deny":return!1;case"classify":',
+'X15_getTools_imports_B9':b'import{B9}from"/$bunfs/root/chunk-t8eb4qbe.js"',
+}
+out={}
+for k,p in P.items():
+    offs=[];i=m.find(p)
+    while i!=-1 and len(offs)<8:
+        offs.append(i); i=m.find(p,i+1)
+    out[k]={'pattern':p.decode('utf-8'),'occurrences':len(offs),'offsets':offs,'pattern_sha256':hashlib.sha256(p).hexdigest()}
+    print(k,len(offs),offs[:4])
+json.dump(out,open(sys.argv[1],'w'),ensure_ascii=False,indent=1)
