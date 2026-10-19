@@ -988,6 +988,22 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
     !HEX.test(options.expectedSha256)
   )
     throw new TypeError('INVALID_INSTALLED_REFERENCE_OPTIONS')
+  // SPEC0242 L3: a test may only REDUCE the per-phase comparison budget.
+  let budget = INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
+  if (options.testOnly !== undefined) {
+    const value = options.testOnly?.comparisonTimeoutMs
+    requireValue(
+      record(options.testOnly) &&
+        Object.keys(options.testOnly).every(
+          (key) => key === 'comparisonTimeoutMs'
+        ) &&
+        Number.isSafeInteger(value) &&
+        value >= 0 &&
+        value <= budget,
+      'TEST_LIMIT_INVALID'
+    )
+    budget = value
+  }
   const expectedSha256 = options.expectedSha256
   const manifestPath = path.resolve(options.manifestPath)
   if (!lstat(manifestPath).isFile())
@@ -999,6 +1015,14 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
   if (inside(root, referenceRoot) || inside(referenceRoot, root))
     fail('REFERENCE_ROOT_SELF_ALIAS')
   const started = performance.now()
+  // SPEC0242 L3: the budget counts per phase. Phase 1 runs from creation to
+  // the end of the first finalization (comparisons and the checker work in
+  // between included); every later finalization is a phase with its own
+  // wall clock, so a step outside the verifier (the semantic stage, which has
+  // its own deadline) never consumes it. Every derived deadline uses the start
+  // of the current phase.
+  let phaseStart = started,
+    finalizations = 0
   const used = [],
     outputs = []
   const evaluatedInodes = new Set(),
@@ -1006,11 +1030,7 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
     unique = new Map()
   let invalid = null
   function checkTime() {
-    if (
-      performance.now() - started >=
-      INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs
-    )
-      fail('COMPARISON_TIMEOUT')
+    if (performance.now() - phaseStart >= budget) fail('COMPARISON_TIMEOUT')
   }
   function collect(source) {
     checkTime()
@@ -1023,7 +1043,7 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
       }
     }
     const collectOptions = {
-      _deadline: started + INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs,
+      _deadline: phaseStart + budget,
       testOnly: {
         limits: {
           maxEntries: Math.max(
@@ -1094,6 +1114,12 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
       nestedPackages: []
     }
     outputs.push(result)
+    // SPEC0242 L3: no comparison may start a phase of its own after the first
+    // finalization; it invalidates the whole verifier, fail-closed.
+    if (finalizations > 0) {
+      invalidate('COMPARISON_AFTER_FINALIZE')
+      return result
+    }
     if (invalid) {
       result.reasons.push(invalid)
       return result
@@ -1201,6 +1227,9 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
     return result
   }
   function finalize() {
+    const phaseBegin = finalizations === 0 ? started : performance.now()
+    phaseStart = phaseBegin
+    finalizations++
     try {
       validateInputs()
       for (const snapshot of used) {
@@ -1233,7 +1262,11 @@ export function createInstalledIdentityComparator(evaluatedRoot, options) {
     return {
       status: invalid ? 'UNAVAILABLE' : 'COMPLETE',
       reasons: invalid ? [invalid] : [],
-      usage: { packages: used.length, elapsedMs: performance.now() - started }
+      usage: {
+        packages: used.length,
+        elapsedMs: performance.now() - started,
+        phaseMs: performance.now() - phaseBegin
+      }
     }
   }
   return { compare, finalize }

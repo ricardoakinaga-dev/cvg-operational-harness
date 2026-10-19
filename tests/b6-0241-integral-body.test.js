@@ -276,10 +276,11 @@ describe('SPEC0241 A — closed reason list, pure premises and unchanged limits'
       maxFiles: 12000,
       maxNodes: 2000000,
       maxUnionValues: 128,
-      maxContexts: 64,
+      // SPEC0242 L1/L2 (literal migration of A2).
+      maxContexts: 256,
       maxCallDepth: 64,
-      maxStates: 100000,
-      timeoutMs: 120000
+      maxStates: 250000,
+      timeoutMs: 300000
     })
     expect({ ...r.RESOLUTION_LIMITS }).toEqual({
       maxWorkspaces: 512,

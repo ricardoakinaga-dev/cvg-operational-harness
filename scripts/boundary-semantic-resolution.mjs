@@ -22,14 +22,15 @@ const HARD = Object.freeze({
   maxFiles: 12000
 })
 // The engine passes its frozen hard acquisition/interpreter envelope. Only
-// acquisition and the five resolution caps are consumed by this helper.
+// acquisition and the five resolution caps are consumed by this helper; the
+// interpreter values mirror SEMANTIC_LIMITS (SPEC0242 L1/L2) as ceilings.
 const INTERPRETER = Object.freeze({
   maxNodes: 2000000,
   maxUnionValues: 128,
-  maxContexts: 64,
+  maxContexts: 256,
   maxCallDepth: 64,
-  maxStates: 100000,
-  timeoutMs: 120000
+  maxStates: 250000,
+  timeoutMs: 300000
 })
 const hash = (v) => createHash('sha256').update(v).digest('hex')
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
