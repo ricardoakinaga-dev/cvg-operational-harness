@@ -1,0 +1,53 @@
+{
+  "kind": "CONTROL_SLOT_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+  "case": "2A-CTRL01",
+  "purpose": "Provar em serviço que o peer v2 responde a pedido sem script e que o avaliador r3 classifica o known-bad como MISMATCH, sem depender de um SDK que se comporte mal.",
+  "client": {
+    "argv": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/control-client.py",
+      "--case",
+      "2A-CTRL01"
+    ],
+    "imports_sdk": false,
+    "lines": [
+      {
+        "id": "ctrl-1",
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "cvg_control_client",
+            "title": "CVG control client",
+            "version": "0"
+          },
+          "capabilities": {
+            "experimentalApi": true
+          }
+        }
+      },
+      {
+        "method": "initialized"
+      },
+      {
+        "id": "ctrl-2",
+        "method": "turn/interrupt",
+        "params": {
+          "threadId": "t-ctrl",
+          "turnId": "A"
+        }
+      }
+    ],
+    "reads": "uma linha de resposta por pedido, com prazo; depois fecha o stdin"
+  },
+  "rules": [
+    "O cliente de controle não importa o SDK nem Pydantic; escreve linhas JSON-RPC fixas e lê uma resposta por pedido com prazo.",
+    "Usa o mesmo adapter Python, o mesmo peer v2, o mesmo supervisor e o mesmo observador dos casos SDK.",
+    "É julgado com o predicado wire.no_turn_interrupt do SDKPY07; o desfecho esperado é MISMATCH.",
+    "Roda primeiro. Qualquer desfecho diferente de MISMATCH para a unidade antes dos casos SDK (R3-07).",
+    "Conta 1 das 24 vagas e não gera observação de cliente nem crédito."
+  ],
+  "source_freeze": "control-client.py entra no source-freeze-r3 com sha registrado."
+}

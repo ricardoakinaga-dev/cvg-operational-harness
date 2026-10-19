@@ -1,0 +1,541 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-2",
+  "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r1/",
+  "reviewed_at": "2026-10-19T12:46:59Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "a6848224c25c0def0d9fd640016a924818508329aa1b9367f075b3bd6d7c9140",
+  "subject_hash_check": {
+    "before": {
+      "freeze_sha256": "a6848224c25c0def0d9fd640016a924818508329aa1b9367f075b3bd6d7c9140",
+      "files_listed": 631,
+      "files_bytes_and_sha_equal": 631,
+      "files_outside_freeze": [],
+      "pycache_dirs": [],
+      "ok": true,
+      "checked_at": "2026-10-19T12:22:33Z"
+    },
+    "after": {
+      "freeze_sha256": "a6848224c25c0def0d9fd640016a924818508329aa1b9367f075b3bd6d7c9140",
+      "files_listed": 631,
+      "files_bytes_and_sha_equal": 631,
+      "files_outside_freeze": [
+        "review-r1/review.json (exclusão declarada no freeze; criado depois desta conferência)"
+      ],
+      "pycache_dirs": [],
+      "ok": true,
+      "checked_at": "2026-10-19T12:44:22Z"
+    }
+  },
+  "verdict": "APPROVE",
+  "verdict_reason": "Nenhum P1 ou P2. O CONTROL 2B2-CTRL01 (MISMATCH pela regra 6 só por wire.no_turn_interrupt, sanidades aprovadas, inclusive peer.login_frames_synthetic) e os 17 PASS_CLIENT_OBSERVATION se sustentam: reavaliação offline em cópia reproduz 18/18 no nível de predicado e de desfecho; reavaliação com a ordem de emissão (mono_ns dos quadros e t0+t_ns das ações) no lugar do gidx dá os mesmos 18 resultados; 26 perturbações em cópias caem na classe certa (cliente -> MISMATCH regra 6; barreira, captura, shim, fault, login, identidade de código -> INVALID_CAPTURE regra 4; recontagem de ocorrência e PART adulterado/faltante -> INVALID_CAPTURE regra 1) e uma (chave proibida injetada no roteiro congelado, só em memória) derruba o avaliador fora do try (P3, R1-F02; inalcançável com os bytes congelados e, em serviço, vira SUPERVISOR_ERROR/INVALID_CAPTURE). Os predicados novos não são vazios (clock com registros reais de uniform/sleep/monotonic, fault com quadros FAULT, model.oracle_exact com 6 itens, login com 2-6 quadros, emitted_lines com 7 linhas). R1-F01 aprovado (STEP_RELEASE 87 > (h_stop, return, 1) 86 e 126 > (h_cleanup_cb, return, 2) 125, com autoteste positivo/negativo e perturbação). Autotestes 106/106 e validador (17/17 controles negativos, validation-unit.json byte a byte) reproduzidos em cópia. Freezes antes do primeiro serviço, DIAG -> diag-admission -> CONTROL -> SDK, 10/12 serviços, 18/18 vagas, 0 retry, sandbox --unshare-all/--clearenv, carga máxima 5,75 < 12, 56 vazios catalogados. Os 5 achados P3 são endurecimentos e registros; nenhum muda desfecho. Observação de cliente não é paridade: 0 recibos, 0 crédito.",
+  "r1_f01": {
+    "verdict": "APPROVED",
+    "evidence": [
+      "python/supervisor.py:395-409 BARRIER_PLAN 2B-PY13D: passo 10 actions [RELEASE_REPLY, STEP_RELEASE com (hook, h_stop, return, 1, {})]; passo 16 [RELEASE_REPLY, STEP_RELEASE com (hook, h_cleanup_cb, return, 2, {})]",
+      "python/supervisor.py:1189-1241 cond_ok/hook_cond: filtra HOOK_EVENT por (id, event), reconta a ocorrência pela posição na ordem dos quadros (quadro com ocorrência relatada diferente da recontagem -> admission_fail + HOOK_RECOUNT_MISMATCH) e exige len(seen) >= occ e o subconjunto do record no occ-ésimo evento",
+      "python/supervisor.py:1243-1281 run_plan: cada ação só sai depois das suas condições; ações em ordem",
+      "python/acceptance.py:291-307 Seq._driver: ocorrência recontada por (id, event); divergência -> hook_recount_bad -> capture_extra (acceptance.py:1381-1384) -> INVALID_CAPTURE regra 1",
+      "python/acceptance.py:1156-1194 cond_witness (hook: primeiro evento com id, event e ocorrência recontada) e 1197-1240 barrier_order (cada condição do gate antes do gate e cada condição de ação antes da própria ação, por gidx)",
+      "selftests/selftest_2b2.py:1353-1404: positivo (condições verdadeiras só depois de h_cleanup_cb return#2 e h_stop return#1) e negativos (h_cleanup_cb call#1; return#1 + call#2; h_stop call#1 -> falso); recontagem divergente para o plano; R1-F05 liberação depois/antes da testemunha -> ok/falha",
+      "tools/validate_unit.py:158-160 (r1_f01_13d_plan = true em validation-unit.json)",
+      "cases/2B-PY13D-82dfc8f62e30/result.json#/actions: CONTROL STEP_RELEASE tag 10 gidx 87 depois de HOOK_EVENT h_stop return#1 (driver seq 26, gidx 86) e depois de h_cleanup_cb return#1 (gidx 74) e do pause/interrupt; CONTROL STEP_RELEASE tag 16 gidx 126 depois de h_cleanup_cb return#2 (driver seq 41, gidx 125)",
+      "cases/2B-PY13D-82dfc8f62e30/acceptance.json#/predicates[barrier.witnesses_in_order]/detail/barriers: passo 10 condição [hook, h_stop, return, 1] witness_gidx 86 < STEP_RELEASE 87; passo 16 [hook, h_cleanup_cb, return, 2] witness_gidx 125 < STEP_RELEASE 126; ok true",
+      "emissão (mono_ns): h_stop return#1 em t0+1,5305 s < STEP_RELEASE 10 em 1,5388 s; h_cleanup_cb return#2 em 1,5904 s < STEP_RELEASE 16 em 1,5988 s"
+    ],
+    "note": "Conferido também por perturbação em cópia: STEP_RELEASE do passo 10 movido para antes de (h_stop, return, 1) e do passo 16 para entre h_cleanup_cb call#2 e return#2 -> INVALID_CAPTURE regra 4 (barrier.witnesses_in_order); ocorrência relatada do h_stop return 1->2 -> INVALID_CAPTURE regra 1. Um gatilho errado (h_cleanup_cb return#1, gidx 74, ou h_stop call#1, gidx 72) teria liberado antes do fim do cleanup, então o dado distingue o gatilho certo. A sonda route_after_cleanup_1 = [] no passo 11 e hook.count h_stop call = 1 no passo 18 dependem desse gatilho e passaram. Ressalva sem efeito: o avaliador julga contra o plano gravado na pasta (R1-F03), que é igual ao case-plan.json congelado."
+  },
+  "carry_over_2b2": {
+    "R1-F01": "IMPLEMENTADO e conferido (ver r1_f01): supervisor, avaliador, validador, autoteste positivo/negativo e evidência de serviço.",
+    "R1-F02": "IMPLEMENTADO: (a) recontagem por (id, event) no avaliador (acceptance.py:291-307, divergência -> INVALID_CAPTURE regra 1, perturbação conferida) e no supervisor (supervisor.py:1224-1241); (b) validador recusa HOOK:<id>#k de gancho call+return ou não declarado (validate_unit.py:104-108; controles hook_token_of_call_return_hook_r1_f02 e hook_token_undeclared_r1_f02 recusados); (c) autoteste pelo profiler real com threads codex-goal-start/codex-goal-start-cleanup (selftest_2b2.py:1439-1455), reproduzido.",
+    "R1-F03": "IMPLEMENTADO: validate_unit.py:84-122 confere métodos e @threadId de RAW_READ, COMMIT_REPLY e RELEASE_REPLY contra expected.wire.requests e matches do peer_script, com controles negativos (raw_read_unknown_thread_r1_f03, commit_reply_unknown_thread_r1_f03, release_reply_wrong_thread); regras completas rodadas sobre os 18 casos de cases-2b-2.json sem problema.",
+    "R1-F05": "IMPLEMENTADO no código: (a) condições por ação em barrier_order (acceptance.py:1212-1229, autoteste e perturbações); (b) zombie_t_ns em no_termination_before (acceptance.py:1307-1312), sem autoteste e sem caso do 2B-2 que use proc.termination_exact (R1-F04 desta revisão: o state afirma autotestes para as três); (c) BEFORE_REPLY_WRITTEN antes do commit da resposta (acceptance.py:1243-1278, autotestes BEFORE-REPLY 3 positivo e negativo).",
+    "R1-F07": "IMPLEMENTADO: roteiro do 2B2-CTRL01 contra o plano do peer próprio com os dois quadros de login (selftest_2b2.py:758-781); R3-12 confere CAPTURE_CLASSES e client contra predicate_classes congelado (selftest_2b2.py, teste R1-F07 / R3-12). O roteiro é conferido no nível do plano do ScriptV2 (sem processo), como no 2B-1; aceito.",
+    "R1-F08": "IMPLEMENTADO: file_identity confere o sha contra identity-freeze-r4-2b2.json#/trees/sdk-python ou contra a âncora stdlib de cases-2b-2.json antes de source_line_ok (acceptance.py:1075-1132); autoteste positivo (_base.py) e negativo (threading.py fora das âncoras); perturbação em cópia do sha de async_client.py na identity freeze -> hook.code_identity falha -> INVALID_CAPTURE regra 4. Os 22 arquivos de sdk-python, os 169 de python-deps, as 3 âncoras stdlib e as 4 âncoras pydeps conferem hoje com a identity freeze.",
+    "spec R2-F05": "IMPLEMENTADO: FORBIDDEN_LOGIN_KEYS enumerada em fixture-rpc.py:46-49 (igual a validate-spec-2b.mjs.txt:19 e à disposição R2-F05), usada na admissão do ScriptV2 antes do READY (fixture-rpc.py:149-150), em peer.login_frames_synthetic (acceptance.py:874-892) e no validador (validate_unit.py:146-147; controles login_forbidden_key e login_start_type_apikey); enumerada também no state.json#/implementation/deltas/D2B-08.",
+    "continuação R1-F03/R1-F04": "MANTIDOS (environ e status do replay do peer v2 no detalhe de captura); observer.py, adapter-python.py e adapter-python-exec idênticos aos do 2B-1."
+  },
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P3",
+      "area": "R2-F04 / E2B-14 / DV1 (2B-PY13E)",
+      "title": "DV1 mantém o excepthook.wait do 2B-PY13E como pré-condição; com isso o known_bad \"pular o cleanup\" só pode terminar em INVALID_CAPTURE, e o DV1 não registra essa consequência",
+      "evidence": [
+        "state.json#/implementation/deviations[id=DV1]",
+        "python/python-driver.py:170-174,624-659",
+        "inputs/spec-2b/review-r2/executor-disposition.json#/items[id=R2-F04]/note (lista \"hook.wait e excepthook.wait do 2B-PY13E\" como efeito do cliente)",
+        "inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY13E]/case_input/sdk_calls (passos 11, 12 e 13; nota do passo 13)",
+        "inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY13E]/known_bad",
+        "case-plan.json#/cases/2B-PY13E/wait_classes_r2_f04",
+        "cases/2B-PY13E-48a49c0ee912/events-driver.jsonl seq 31-35 (HOOK_WAIT ok, THREAD_JOIN found false, EXCEPTHOOK_WAIT ok)"
+      ],
+      "detail": "Os dois documentos congelados se contradizem (nota do passo 13 contra a disposição R2-F04) e a escolha pela nota do passo é defensável. Mas, se o cliente pular o cleanup, o passo 11 (efeito do cliente) segue, o passo 12 trata nome sem thread vivo como terminado (R2-F02, sem conferir a testemunha h_stop) e o passo 13 estoura -> CaptureFailure -> INVALID_CAPTURE. Ou seja, a classificação do passo 11 como efeito do cliente não tem efeito prático e o known_bad declarado (julgado por hook.events_exact, probe.values_exact e excepthook.records_exact) não chega a MISMATCH, que é o que R2-F04 queria evitar. Não há PASS falso e nenhuma espera estourou neste serviço (desfecho inalterado).",
+      "required_action": "Registrar no DV1 que o known_bad \"pular o cleanup\" do 2B-PY13E termina em INVALID_CAPTURE pelo passo 13 (poder de detecção reduzido, sem PASS falso) e levar ao Lead a escolha entre aceitar isso ou uma errata T1 (passo 13 como efeito do cliente) para reuso futuro; sem novo serviço."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "avaliador (regra 3, robustez)",
+      "title": "Exceção em expand_parts/Seq/capture_extra fica fora do try de evaluate; a admissão de login dentro do ScriptV2 torna isso alcançável",
+      "evidence": [
+        "python/acceptance.py:1454-1470",
+        "python/acceptance.py:1381-1392,464-469",
+        "python/fixture-rpc.py:149-150",
+        "python/supervisor.py:1335-1360,1552"
+      ],
+      "detail": "Perturbação em cópia (chave refreshToken injetada só em memória no peer_script congelado do 2B-PY17A): peer_replay_check constrói o ScriptV2, que agora recusa o roteiro (ChannelError), e a exceção sai de evaluate em vez de virar INVALID_CAPTURE pela regra 3; reevaluate quebra. Em serviço o supervisor captura e grava SUPERVISOR_ERROR/INVALID_CAPTURE, então nunca há PASS indevido; com os bytes congelados (sha ligado e admissão de login aprovada para todos os roteiros) o caminho é inalcançável. Herdado do 2B-1 em parte (capture_extra fora do try), novo no gatilho (admissão de login no construtor).",
+      "required_action": "Levar expand_parts, Seq e capture_extra para dentro do try (ou capturar e compor INVALID_CAPTURE regra 3) e acrescentar autoteste; reavaliar offline."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "barrier.witnesses_in_order / D2B-11 (reavaliação)",
+      "title": "O avaliador julga a barreira contra o plano gravado na pasta do caso, sem conferir com o plano congelado nem com os passos de barreira do case_input",
+      "evidence": [
+        "python/acceptance.py:1727",
+        "python/acceptance.py:1202",
+        "case-plan.json#/cases/2B-PY13D/barrier_plan",
+        "python/supervisor.py:421-430"
+      ],
+      "detail": "Perturbação em cópia: trocar no profile-manifest.json do 2B-PY13D a condição do passo 16 para (h_cleanup_cb, return, 1) mantém PASS (a testemunha #1 existe antes). Conferido nesta revisão: o case_plan das 28 pastas (18 casos e 10 DIAG) é igual ao case-plan.json congelado no source freeze e plan_check() é vazio, então nada muda. Em serviço, STEP_WITNESS fora do plano para a unidade (PLAN_STOP).",
+      "required_action": "Na reavaliação, conferir o plano da pasta contra case-plan.json (sha do source freeze) ou BARRIER_PLAN e os passos de barreira do case_input congelado, com controle negativo."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "registro (carry-over R1-F05 do 2B-1)",
+      "title": "state.json afirma autotestes positivos e negativos para as três checagens do R1-F05, mas zombie_t_ns em no_termination_before não tem autoteste",
+      "evidence": [
+        "state.json#/carry_over_2b2_closure/R1-F05",
+        "python/acceptance.py:1307-1312",
+        "selftests/selftest-results.json (nenhum teste de zombie_t_ns ou no_termination_before)"
+      ],
+      "detail": "A checagem está no código e está correta (zombie_t_ns e recv_ns relativos ao mesmo t0); nenhum caso do 2B-2 usa proc.termination_exact, então sem efeito.",
+      "required_action": "Acrescentar autoteste positivo/negativo de zombie_t_ns antes do CALLS_DONE ou corrigir o texto do state.json."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "carry-over do BIND 2B-1 (first_step_additions) / discriminação de braços",
+      "title": "Checagem de discriminação por braço exigida \"antes de qualquer serviço\" foi feita depois dos serviços e fora de U; duas classificações DISCRIMINATED afirmam mais do que o observado",
+      "evidence": [
+        "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/next-task.json#/first_step_additions (sha f6afbb43…)",
+        "scratchpad/post-review/discrimination-check-2b2.json (sha 185a94df…, fora de U)",
+        "arm_discrimination (esta revisão)"
+      ],
+      "detail": "O carry-over chegou depois dos 18 slots; a checagem não muda casos nem desfechos, só o que cada PASS pode afirmar no BIND. Concordo com 75 dos 77 braços como classificados; PY13.B15 e PY17.B02 deveriam ser PARTIAL_SCOPE (ver arm_discrimination) e PY17.B04 precisa de ressalva no texto.",
+      "required_action": "Registrar como DV8 (pós-revisão) com o horário e a razão do atraso, aplicar as correções de arm_discrimination antes do BIND do 2B-2 e não usar nenhuma parte não observada como observada."
+    }
+  ],
+  "arm_discrimination": {
+    "scope": "Pedido do Lead depois do início da revisão (mensagem do coordenador); juízo independente sobre o documento fora de U, sem escrever nada além deste arquivo.",
+    "source_checked": {
+      "path": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/post-review/discrimination-check-2b2.json",
+      "sha256": "185a94df30aa63fc9d25f595083b627783bac7146406559db0eca82060cdc402",
+      "bind_next_task_sha256": "f6afbb430a0b4e9a8cc438ab52d146fcf48cd0d92975e46ea1c7767664e5dbe6"
+    },
+    "coverage": "77 braços = união exata de branches_targeted dos 17 casos SDK de cases-2b-2.json (mesmos textos, nenhum faltando ou sobrando).",
+    "agree": "Concordo com 75 classificações: as 68 DISCRIMINATED restantes, as 6 PARTIAL_SCOPE (PY13.B05, PY13.B09, PY13.B10, PY14.B03, PY14.B07, PY17.B04) e o NOT_DISCRIMINATED PY13.B06 (t13b2 ephemeral=true e path=null; client.py:619-623 rejeita com a mesma mensagem \"must be persisted\" pelos dois ramos; PY13.B07 com t13b3 ephemeral=false/path=null é que distingue o ramo do path). Conferidos contra a fonte do pin no runtime (client.py, _goal.py, _login.py, errors.py, retry.py, generated/v2_all.py) e contra os roteiros e expectativas congelados.",
+    "disagree": [
+      {
+        "arm": "PY13.B15",
+        "lead": "DISCRIMINATED",
+        "review": "PARTIAL_SCOPE",
+        "why": "O texto inclui \"finaliza\", e no 2B-PY13D nada testemunha state.finish(): h_cleanup_cb e h_stop registram só thread_name e as sondas só olham as chaves da rota (unregister). Pela mesma regra usada no PY13.B10 (finish não observado -> PARTIAL), a parte \"finaliza\" é não observada. A testemunha state._finished = true do 2B-PY13E (h_stop return) é do caminho que levanta (PY13.B18); usá-la aqui seria inferência pela estrutura do finally, não observação. Observado: callback em codex-goal-start depois do RELEASE_REPLY, daemon codex-goal-start-cleanup, pause e interrupt de G13D1, rota liberada."
+      },
+      {
+        "arm": "PY17.B02",
+        "lead": "DISCRIMINATED",
+        "review": "PARTIAL_SCOPE",
+        "why": "\"casa a conclusão tipada\" e \"desregistra no finally\" não são separados do contrário: a fila de L17a só recebe a conclusão válida (nenhuma notificação de outro login, de outro método ou UnknownNotification com loginId L17a chega a ela), então um wait que devolvesse a primeira notificação sem casar daria o mesmo; e só o retorno normal é exercido, não a saída por exceção que o finally cobre. Observado: o wait devolve a conclusão tipada de L17a e o registro fica vazio depois do retorno (registered_after_wait = [])."
+      }
+    ],
+    "notes": [
+      {
+        "arm": "PY17.B04",
+        "note": "PARTIAL_SCOPE correto. Ressalva para o BIND: o texto geral \"variante inesperada ... não registra fila\" é falso para outras variantes: em client.py:441-456 account_login_start registra a fila para ChatgptDeviceCodeLoginAccountResponse antes de start_chatgpt_login (_login.py:29-44) levantar RuntimeError; só a variante apiKey (sem loginId) não registra, e por construção. O BIND não deve generalizar."
+      },
+      {
+        "arm": "PY13.B09",
+        "note": "PARTIAL_SCOPE é conservador e aceitável. Se o BIND aceitar evidência entre casos (como o próprio documento faz no PY09.B02 com o 2B-PY09D), o 2B-PY13B passo 8 (thread/read de t13b4 no fio antes do RuntimeError da reserva, sem clear) mostra que a reserva vem depois do read, o que exclui a reserva transitória numa falha do read; não vale para o PY13.B05 (ordem entre a guarda de idle e a reserva)."
+      },
+      {
+        "arm": "PY13.B01",
+        "note": "DISCRIMINATED aceito; a posição da reserva entre read e clear é sustentada pelo 2B-PY13B passo 8 (evidência entre casos) e convém citá-la no basis."
+      },
+      {
+        "arm": "PY17.B06",
+        "note": "DISCRIMINATED aceito, com a ressalva de que \"nem entrega terminal\" se apoia em o terminal entregue ao wait ser o quadro posterior do peer (error canceled); um terminal sintético idêntico não seria separado."
+      }
+    ],
+    "patterns": "Concordo com o resumo de patterns_checked: guarda nos dois ramos achada só no PY13.B06; mesma mensagem só PY13.B06/B07 (já tratada); nenhum braço depende de pacote ausente (codex_cli_bin); entrada vazia no PY17.B04; nenhuma assinatura tardia sem evento retido; efeito colateral no processo pai (2B1-BIND/R2-F02) não aplicável: nenhum braço do 2B-2 afirma efeito no processo pai, e shims/faults do harness têm restauração conferida (shim.scope_exact com identidade e stdlib intacta; FAULT_SCOPE removed ok). O padrão \"testemunha ausente de estado intermediário\" também alcança PY13.B15 (finish) e PY17.B02 (casamento e finally), acima.",
+    "counts_after_review": {
+      "DISCRIMINATED": 68,
+      "PARTIAL_SCOPE": 8,
+      "NOT_DISCRIMINATED": 1
+    },
+    "items_2_and_3": {
+      "2_R2-F04_2B-PY13E_2B-PY17A": "Coberto na unidade: classificação por passo em case-plan.json#/cases/*/wait_classes_r2_f04 e no driver (python-driver.py:170-174), espelhada no avaliador (acceptance.py:58-59) e conferida por autoteste; 2B-PY13E passo 11 e 2B-PY17A passo 11 efeito do cliente, 2B-PY13E passos 9, 12 e 13 e 2B-PY14B passos 12 e 16 pré-condição. Consequência do passo 13 em R1-F01. O R2-F02 (thread.join por nome) está confirmado em serviço no 2B-PY13E: THREAD_JOIN found=false, alive_after=false, 0 ms, depois de HOOK_WAIT ok (driver seq 31-33).",
+      "3_P3_da_R2_do_BIND": {
+        "R2-F01": "Não se aplica a esta IMPLEMENT (CARRIED_TO_NEXT_BIND: ligação do PY12.B03 do 2B-1).",
+        "R2-F02": "Parte da IMPLEMENT do 2B-2 = somar o padrão \"efeito colateral no processo pai não sondado\" à checagem de first_step_additions: coberto só pelo documento fora de U (patterns_checked), não por U; entra com o DV8 (R1-F05). A parte do v5 do BIND (texto do PY02.B07/B02) é do próximo BIND.",
+        "R2-F03": "Não se aplica a esta IMPLEMENT (CARRIED_TO_NEXT_BIND: validador do v5)."
+      }
+    }
+  },
+  "assessments": {
+    "outcomes": {
+      "control": "2B2-CTRL01 MISMATCH regra 6 com failed_predicates == [wire.no_turn_interrupt]; control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes, peer.before_reply_order_witnessed (PRE_REPLY_NOTIFICATION account/login/completed antes da resposta de ctrl-2) e peer.login_frames_synthetic (2 quadros, 2 LOGIN_FRAME) aprovados; control_gate (supervisor.py:1631-1637) exige regra 6 e só esse predicado.",
+      "sdk": "17/17 PASS_CLIENT_OBSERVATION pela regra 7, capture_form PASS, sem capture_reasons. Expectativas de todos os predicados de valor são não vazias (api, probes, requests, absent, order, hooks, clock, fault, emitted_lines); hook.events_exact casa entradas reais (13D: 71, 72, 124; 13E: 70, 73, 90).",
+      "emission_order": "Reavaliação com a ordem de emissão no lugar do gidx: 18/18 com predicados e desfechos idênticos (1 a 5 inversões adjacentes por caso entre lotes, sem efeito).",
+      "perturbations": [
+        {
+          "perturbation": "R1-F01 STEP_RELEASE do passo 10 antes de (h_stop, return, 1)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "R1-F01 STEP_RELEASE do passo 16 antes de (h_cleanup_cb, return, 2)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "plano da pasta com (h_cleanup_cb, return, 1) no passo 16 (registro)",
+          "expected": null,
+          "got": [
+            "PASS_CLIENT_OBSERVATION",
+            7
+          ]
+        },
+        {
+          "perturbation": "R1-F02 ocorrência relatada do h_stop return 1->2",
+          "expected": [
+            "INVALID_CAPTURE",
+            1
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            1
+          ]
+        },
+        {
+          "perturbation": "hook.events_exact thread_name do h_cleanup_cb call#2",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "probe route_after_cleanup_1 [] -> [t13d1]",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "hook.code_identity com sha da identity freeze alterado (cópia)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "clock.recorder_exact sleep 0.3 -> 0.31 (quadro)",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "clock.recorder_exact valor congelado uniform returned -0.1 -> 0.1",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "clock.recorder_exact per_step congelado alterado",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "shim.scope_exact restauração sem identidade",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "shim.scope_exact registro de alvo não declarado",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "fault.fired_as_declared contagem 1 -> 2 (2B-PY13E)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "fault.fired_as_declared corte call 2 -> 3 (2B-PY14A)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "fault.fired_as_declared contagem congelada 1 -> 2 (2B-PY14B)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "model.oracle_exact dump congelado do passo 25 alterado",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "model.oracle_exact errors_contain congelado alterado",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "wire.emitted_lines_exact byte congelado alterado",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "peer.login_frames_synthetic LOGIN_FRAME com login_id adulterado (2B-PY17A)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "chave proibida no roteiro congelado (em memória)",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": "EXCEPTION fora do try de evaluate: ChannelError: peer_script login admission (CAP-2B-PEER-LOGIN): forbidden key refreshToken at /on_request/1/reply/result"
+        },
+        {
+          "perturbation": "2B2-CTRL01 sem um LOGIN_FRAME",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "clock.recorder_exact monotonic congelado (2B-PY13C)",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "barreira: gate do passo 16 antes da testemunha do driver",
+          "expected": [
+            "INVALID_CAPTURE",
+            4
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            4
+          ]
+        },
+        {
+          "perturbation": "api.steps_exact hook.count congelado 1 -> 2 (2B-PY13D)",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "hook.events_exact h_stop call ocorrência congelada 1 -> 2",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        },
+        {
+          "perturbation": "PART adulterado (2B-PY18A)",
+          "expected": [
+            "INVALID_CAPTURE",
+            1
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            1
+          ]
+        },
+        {
+          "perturbation": "PART faltante (2B-PY18A)",
+          "expected": [
+            "INVALID_CAPTURE",
+            1
+          ],
+          "got": [
+            "INVALID_CAPTURE",
+            1
+          ]
+        },
+        {
+          "perturbation": "probe congelado do 2B-PY18A alterado",
+          "expected": [
+            "MISMATCH",
+            6
+          ],
+          "got": [
+            "MISMATCH",
+            6
+          ]
+        }
+      ]
+    },
+    "spec_conformance": {
+      "vocabulary": "Passo fora do vocabulário -> ChannelError -> INVALID (python-driver.py:803,953; autoteste D2B-02). Listas fechadas iguais ao contrato: RESPONSE_MODELS (InitializeResponse + 6), MODEL_CLASSES (6) + _GoalOperationState só em $model, ENUM_CLASSES (ThreadGoalStatus), SHIM_TARGETS ligados ao modo, FAULT_EXCEPTIONS RuntimeError(msg)/KeyboardInterrupt(), FAULT_MODES; forma dos passos model.*, shim.* e fault.* conferida fora da raia da API. Observação herdada sem efeito: \"method de lista fechada por classe\" não é uma lista no driver (o método vem só do case_input congelado).",
+      "login_admission": "fixture-rpc.py:46-76: chaves proibidas em qualquer profundidade, URL http(s) fora de https://login.invalid/ (mesma regra de validate-spec-2b.mjs.txt:172), regra de account/login/start só com type chatgpt/chatgptDeviceCode, apiKey em result.type permitido (valor, não chave); admissão antes do READY; LOGIN_FRAME por quadro com method, frame, login_id_sha256, bytes e sha256, casado 1:1 com as linhas de login do fio.",
+      "new_predicates": "clock.recorder_exact (uniform a/b/devolvido, sleep, monotonic valores e contagem, por passo; ok parte de bool(want)), shim.scope_exact (janela, identidade, stdlib, nada ativo no CALLS_DONE), fault.fired_as_declared (corte, contagem 1..n, nenhum não declarado, remoção), model.oracle_exact (itens model.* não vazios), model.errors_recorded (informational), peer.login_frames_synthetic (regra única + LOGIN_FRAME), wire.emitted_lines_exact (bytes com $ID) conferidos contra a tabela congelada; classes iguais às congeladas e composição na ordem R4-01 (R3-12).",
+      "E2B-07": "first_error (type e loc exatos), error_count, errors_contain (loc exato ou loc_suffix) em error_matches (acceptance.py:601-627); errors() completo até 32 registrado.",
+      "E2B-11": "result_matches (acceptance.py:183-198): subconjunto por caminho de alias quando todas as chaves congeladas têm ponto, NOTE com fields por subconjunto e dump por jeq. Observação sem efeito: a regra do subconjunto vale para qualquer dict, não só para modelo; o único uso no 2B-2 é o TurnStartResponse do 2B-PY18B passo 8."
+    },
+    "deviations": {
+      "DV1": "Aceito como execução (nenhuma espera estourou), com o registro pedido em R1-F01; a classificação do passo 11 do 2B-PY13E e do passo 11 do 2B-PY17A como efeito do cliente está implementada e espelhada.",
+      "DV2": "Aceito: PART é milestone DIAGNOSTIC (tipo existente), base64 de 480 bytes por pedaço abaixo do META, chave = sha256 do JSON compacto; o avaliador remonta antes de qualquer predicado (acceptance.py:213-246) e PART adulterado, faltante ou órfão vira INVALID_CAPTURE regra 1 (perturbações conferidas). Usado em 2B-PY09C, 13C, 18A, 18D e DIAG-PY-MODELORACLE. Não muda desfecho.",
+      "DV3": "Aceito: alvos own2b:* só no modo diag2b (SHIM_TARGETS ligado ao modo; autoteste CLOCK 4); OwnGoalStream gêmeo do ramo KeyboardInterrupt.",
+      "DV4": "Aceito: é o critério do próprio contrato (saídas iguais às calculadas no processo e versões iguais à identity freeze); info_* fora do critério (supervisor.py:1545-1547).",
+      "DV5": "Aceito: FAULT {target, call, count} como D2B-15.",
+      "DV6": "Aceito: D2B-10 é só do 2B-1 (sub_lots), e o orçamento do 2B-2 lista os 10 DIAG executados.",
+      "DV7": "Aceito: composição literal de async_client.py com os métodos públicos; crédito do comportamento das classes privadas.",
+      "any_changes_outcome": false
+    },
+    "containment_and_rules": "source freeze 12:17:34.36Z e identity freeze 12:17:34.47Z antes do primeiro serviço (DIAG-PY-RPC 12:17:39.02Z); 10 DIAG em série até 12:18:16.28Z, diag-admission 12:18:21.83Z, CONTROL 12:18:21.95Z-12:18:22.21Z, primeiro SDK 12:18:35.01Z; 18 vagas em ordem de slot, sem sobreposição; 28 unidades, 28 pastas de tentativa no runtime, todas liberadas (LoadState not-found); serviços 10/12, vagas 18/18, 0 retry; todos os command.json com --unshare-all e --clearenv, sem --share-net/--bind/--dev-bind, ligando os dois sha das freezes; carga máxima 5,75 (< 12), 0 espera; sem PG, porta ou rede; 33 arquivos do source freeze iguais hoje; identity freeze sem drift.",
+    "hygiene": "empty-artifact-delta.json: 56 entradas = todos os arquivos vazios de U (service-stdout/stderr dos 28 serviços), bytes 0, command igual ao command.json, exitCode igual a result.json#/systemd_run_rc; nenhum segredo (varredura por padrões de chave/token, e-mail só user@1000.service; URLs só https://login.invalid/ e https://errors.pydantic.dev/, e https://auth.example.com/x só como controle negativo em selftest e no validador da especificação); \"apiKey\" no fio só como valor de result.type; nenhum __pycache__ em U.",
+    "inputs": "inputs/spec-2b (16 arquivos) e inputs/spec-r4 (3) iguais byte a byte aos originais do checkout principal e às cópias da unidade 2B-1; 2B-1 COMPLETED_LOCAL com revisão APPROVE (condição de parada do orçamento não atingida)."
+  },
+  "checks_run": [
+    "Freeze: sha de review-freeze-r1.json, bytes e sha dos 631 arquivos, nenhum arquivo fora do freeze, nenhum __pycache__ (antes e depois).",
+    "Cópia de U e da unidade 2B-1 para o scratchpad; todas as execuções em cópias com /usr/bin/python3.12 -I -B.",
+    "tools/validate_unit.py em cópia: ok=true, 17/17 controles negativos recusados, validation-unit.json igual byte a byte (sha b5dc84fe…).",
+    "selftests/selftest_2b2.py em cópia (scratch redirecionado para o scratchpad, em vez do runtime): 106/106, sdk_imported=false, mesmos testes e resultados e mesmos sha das fontes (exceto o do próprio selftest, por causa do redirecionamento).",
+    "python/acceptance.py reevaluate nas 18 pastas de caso (cópia): 18/18 iguais em predicado e desfecho.",
+    "Reavaliação com ordem de emissão no lugar do gidx (18 casos): resultados idênticos.",
+    "28 perturbações em cópias (quadros reescritos com o mesmo envelope, expectativas alteradas só em memória, identity freeze da cópia alterada e restaurada): 26 na classe esperada, 1 exceção do avaliador (R1-F02) e 1 de registro (plano da pasta alterado segue PASS, R1-F03).",
+    "Linha do tempo de serviços (budget.json, case-ledger.json, diag-admission, freezes) e command.json/result.json de 28 serviços (sandbox, freezes, carga, timed_out, rc).",
+    "Leitura completa de acceptance.py e das partes novas de supervisor.py, python-driver.py, harness2b.py, fixture-rpc.py, validate_unit.py e selftest_2b2.py; diff das fontes herdadas contra o 2B-1.",
+    "Leitura dos contratos congelados: cases-2b-2.json (tabela, composição, 18 casos), capability-contracts-2b (CLOCK, FAULT, MODEL, LOGIN, SDKCALLS-2B), freeze-r4-2b-delta, evaluator-r4-2b-delta, execution-budget-2b-2, review-r2 e disposição.",
+    "Linha do tempo 2B-PY13D por gidx (quadros dos três papéis e ações) para o R1-F01; quadros do 2B-PY13E para DV1.",
+    "Leitura (sem importar) da fonte do pin no runtime: async_client.py (start_goal_operation), client.py (start/cancel/_interrupt goal, login), _goal.py, _login.py, errors.py, retry.py, generated/v2_all.py; sha dos 22+169 arquivos e das âncoras stdlib/pydeps contra a identity freeze.",
+    "empty-artifact-delta.json contra os arquivos vazios de U e seus result.json/command.json; varredura de segredos e URLs.",
+    "Acréscimo do Lead: next-task.json do BIND 2B-1 (sha f6afbb43…) e discrimination-check-2b2.json (sha 185a94df…) conferidos braço a braço (77) contra roteiros, expectativas e fonte do pin."
+  ],
+  "not_done": [
+    "Nenhum serviço, systemd-run, bwrap, rede, PostgreSQL, porta, docker, import do SDK ou da Pydantic, comando git; nenhuma escrita em U além de review-r1/review.json; o runtime só foi lido (o autoteste rodou com o scratch redirecionado para o scratchpad).",
+    "Não reexecutei os serviços nem os DIAG; os DIAG foram julgados pelos result.json congelados (diag_checks todos true fora de info_*)."
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

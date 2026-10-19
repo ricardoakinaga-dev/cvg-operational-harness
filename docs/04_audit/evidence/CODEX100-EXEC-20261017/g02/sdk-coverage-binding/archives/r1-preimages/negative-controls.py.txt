@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+# Controles negativos do validador Node: cópias mutadas do mapa, fora da pasta da unidade.
+# Uso: python3 -I negative-controls.py.txt <repo_root> <scratch_dir> <node_bin> <out_json>
+import copy, json, os, subprocess, sys
+ROOT, SCR, NODE, OUT = sys.argv[1:5]
+B = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding")
+base = json.load(open(os.path.join(B, "coverage-observed.json")))
+VAL = open(os.path.join(B, "validate-binding.mjs.txt")).read()
+
+def row(d, cid):
+    return next(r for r in d["rows"] if r["source_contract"] == cid)
+
+def m_whole(d): row(d, "PY06")["whole_requirement_covered"] = True
+def m_open_to_obs(d): row(d, "PY01")["status"] = "OBSERVED_CLIENT_PARTIAL"
+def m_sha(d): row(d, "TS15")["observations"][0]["acceptance"]["sha256"] = "0" * 64
+def m_credit(d): d["parity_credit"] = 1
+def m_receipt(d): row(d, "PY14")["functional_receipt"] = {"id": "fake"}
+def m_case(d): row(d, "TS11")["selected_case_ids"].append("SDKTS02")
+def m_drop(d): d["rows"].pop()
+def m_wrongdir(d): row(d, "PY05")["observations"][0]["acceptance"]["path"] = row(d, "PY06")["observations"][0]["acceptance"]["path"]
+
+CONTROLS = [("whole_requirement_true", m_whole), ("open_row_marked_observed", m_open_to_obs),
+            ("acceptance_sha_wrong", m_sha), ("parity_credit_nonzero", m_credit),
+            ("functional_receipt_added", m_receipt), ("selected_case_added", m_case),
+            ("row_dropped", m_drop), ("acceptance_of_other_case", m_wrongdir)]
+res = []
+os.makedirs(SCR, exist_ok=True)
+for name, fn in CONTROLS:
+    d = copy.deepcopy(base); fn(d)
+    p = os.path.join(SCR, f"neg-{name}.json"); json.dump(d, open(p, "w"))
+    o = os.path.join(SCR, f"neg-{name}.validation.json")
+    subprocess.run([NODE, "--input-type=module", "-", ROOT, o, p], input=VAL, text=True, capture_output=True)
+    v = json.load(open(o))
+    res.append({"control": name, "verdict": v["verdict"], "failed_checks": v["failed"], "rejected": v["verdict"] == "FAIL"})
+out = {"kind": "VALIDATOR_NEGATIVE_CONTROLS", "controls": res,
+       "all_rejected": all(r["rejected"] for r in res),
+       "note": "Cópias mutadas gravadas no scratchpad da sessão; nada desta pasta foi alterado pelos controles."}
+json.dump(out, open(OUT, "w"), indent=2, ensure_ascii=False); open(OUT, "a").write("\n")
+print(out["all_rejected"], [(r["control"], r["failed_checks"]) for r in res])

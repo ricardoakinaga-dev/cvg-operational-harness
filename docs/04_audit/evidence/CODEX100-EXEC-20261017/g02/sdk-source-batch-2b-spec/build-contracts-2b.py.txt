@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B - contratos das capacidades novas, deltas do freeze e do avaliador, CONTROL,
+# orcamentos por sub-lote, plano de cobertura e avaliacao T3. Le cases-2b-1.json e cases-2b-2.json (ja gerados) para
+# derivar used_by e conferir consistencia. Uso: python3 -I -B build-contracts-2b.py.txt <spec_dir>
+import hashlib
+import json
+import os
+import sys
+
+SPEC = sys.argv[1]
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B"
+
+
+def load(name):
+    with open(os.path.join(SPEC, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def ref(rel):
+    return {"path": rel, "sha256": sha(os.path.normpath(os.path.join(SPEC, rel)))}
+
+
+def dump(name, obj):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+
+
+CASES = {"2B-1": load("cases-2b-1.json"), "2B-2": load("cases-2b-2.json")}
+ALL = [c for lot in CASES.values() for c in lot["cases"]]
+BYID = {c["id"]: c for c in ALL}
+FREEZE_R4 = ref("../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json")
+EVAL_R4 = ref("../sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json")
+CTRL_R4 = ref("../sdk-source-batch-2a-continuation-spec/control-slot-contract.json")
+FIT = ref("../sdk-source-batch-2a-continuation-spec/batch-2b-fit-assessment.json")
+COV2 = ref("../sdk-batch-2a-binding/coverage-observed-v2.json")
+GAPS2 = ref("../sdk-batch-2a-binding/gaps-review-v2.json")
+AGENTS = ref("../../../../../07_agents/AGENTS.md")
+PLAN0384 = ref("../../../../../03_build/0384_plano_executivo_paridade_codex.md")
+G01PY = ref("../../g01/sdk-open-contracts/python-contracts.json")
+
+
+def used_by(cap):
+    out = {"2B-1": [], "2B-2": []}
+    for lot, doc in CASES.items():
+        for c in doc["cases"]:
+            if any(i.split(" ")[0] == cap for i in c["infra"]):
+                out[lot].append(c["id"])
+    return out
+
+
+# ------------------------------------------------------------------ the 8 new harness capabilities (fit assessment 1:1)
+CAPS = [
+    {
+        "id": "CAP-2B-ASYNC-DRIVER", "fit_name": "driver async", "delta": "D2B-03",
+        "contract": [
+            "Casos com driver_mode=async rodam dentro de asyncio.run(main()) no thread principal do driver; o resto do protocolo do driver (BEGIN, READY, CALLS_DONE, RELEASE_EXIT) não muda.",
+            "Passos assíncronos: AsyncCodex.new, AsyncCodexClient.new, AsyncThread.new, call com await=true, async_with.enter, task.create/task.cancel/task.await (tarefas nomeadas criadas com asyncio.ensure_future), loop.yield_until (await asyncio.sleep(0) com sonda e teto de iterações), heartbeat, astream.next/astream.aclose (um gerador assíncrono por handle), agstream.next.",
+            "loop.yield_until cede ao loop (await asyncio.sleep(0)) antes de cada avaliação da sonda; sonda que levanta (por exemplo len de None antes do primeiro waiter) conta como 'ainda não'; teto de iterações estourado é INVALID_CAPTURE.",
+            "Esperas de barreira em modo async usam await asyncio.to_thread(ch.control, ...) para o loop seguir livre; a única exceção declarada é loop.block_release_wait_cancel.",
+            "loop.block_release_wait_cancel: no thread do loop, sem ceder ao loop, envia o controle de liberação ao supervisor (síncrono), espera numa threading.Condition o evento de gancho declarado (com prazo) e chama task.cancel(); só então o próximo passo cede ao loop. É o meio de cancelar depois que o futuro concorrente já foi resolvido.",
+            "API_CANCELLED é emitido quando o await da tarefa levanta CancelledError; qualquer outra exceção vai a API_ERROR; o driver nunca engole BaseException fora do passo.",
+            "Nada do SDK é alterado; o watchdog do driver leva estouro de prazo a INVALID_CAPTURE.",
+        ],
+        "observes": "Ordem de tarefas, cancelamento e conclusão de await sobre AsyncCodex, AsyncCodexClient, AsyncThread e AsyncTurnHandle reais.",
+        "injects": "Nada além do cancelamento declarado de tarefas do próprio driver.",
+        "privilege": "Nenhum: só asyncio no processo do driver.",
+        "selftests_offline": [
+            "módulo próprio com asyncio.Lock de dupla checagem: waiters observados e um só inicializador",
+            "to_thread próprio segurado: cancelamento devolve CancelledError e o worker termina depois",
+            "wrap_future próprio: cancelamento depois do set_result com o loop bloqueado chama o callback no thread do loop",
+            "estouro de prazo vira INVALID_CAPTURE",
+            "loop.yield_until com sonda que levanta antes de existir o primeiro waiter: conta como 'ainda não' e termina quando o valor aparece",
+        ],
+        "diag": {"id": "DIAG-PY-ASYNC", "own_code": "Cliente próprio assíncrono, sem importar o SDK, com o mesmo adapter e peer v2: inicialização com asyncio.Lock e dupla checagem, um pedido via to_thread segurado pelo peer, cancelamento antes e depois do resultado (loop.block_release_wait_cancel com gancho no Future.set_result do executor próprio).",
+                 "pass": "Tarefas criadas, canceladas e aguardadas com as classes exatas; callback do cancelamento depois do resultado no MainThread antes do API_CANCELLED; worker do to_thread conclui depois da liberação; nenhuma ação fora do plano de barreiras.",
+                 "on_fail": "Para o sub-lote (as duas unidades dependem desta capacidade)."},
+        "t3": "Não exige T3: código próprio de evidência, sem privilégio, sem contrato público do CVG.",
+    },
+    {
+        "id": "CAP-2B-CONC-BARRIER", "fit_name": "barreira de concorrência", "delta": "D2B-04",
+        "contract": [
+            "worker.start cria um thread daemon nomeado que executa um passo; worker.join espera com prazo; resultado ou erro do worker vai ao canal com o nome do worker.",
+            "worker.parked testemunha, pela pilha de sys._current_frames() do próprio processo, que o worker está estacionado no ponto declarado (objeto de código resolvido por identidade e, quando declarado, a linha); worker.still_parked confirma que continua estacionado depois de hold_s.",
+            "probe e probe.until leem estado por leitura estática: atributos de instância (__dict__ ou slots), chaves de dict e índices; property, descriptor de método ou chamada do SDK são recusados (INVALID_CAPTURE). fn em value, len, keys, is_none, type_name, enum_value, vars_has, is_ref, equals_driver_environ e done (só para tarefas do driver).",
+            "hook.install instala coletores sys.setprofile (thread do loop ou principal) e threading.setprofile (threads novos) antes de qualquer thread do SDK; cada gancho casa um objeto de código por identidade (arquivo em /profile/sdk-python ou na stdlib ligada pela identity freeze, qualname, primeira linha) e registra só os atributos declarados; retain:<expr> guarda uma referência (por exemplo ao Popen) sem alterar argumentos, retorno ou estado.",
+            "barrier emite STEP_WITNESS com as sondas declaradas e espera STEP_RELEASE; o supervisor executa o barrier_plan do caso (D2B-11) e recusa controle fora do plano.",
+            "thread.join espera, só lendo, o fim de um thread do SDK, achado pelo caminho de um objeto do caso ou pelo nome exato (thread_name); estouro do prazo é INVALID_CAPTURE. hook.wait e hook.count consultam eventos já registrados.",
+            "excepthook.install troca threading.excepthook por um registrador (thread, classe, str) que não imprime; excepthook.wait {count, timeout_s} espera até haver count registros (estouro é INVALID_CAPTURE); excepthook.snapshot devolve os registros. O snapshot só é decisivo depois de thread.join ou excepthook.wait declarados, porque o excepthook roda depois que Thread.run desempilha.",
+            "Seletor $executor-thread-of:<tarefa> em worker.parked: o único thread do executor padrão do loop cuja pilha contém o ponto de estacionamento enquanto a tarefa está pendente; zero ou mais de um é INVALID_CAPTURE.",
+            "Os ganchos seguem o sys.setprofile do CPython 3.12: return (arg None) também no unwind de função que levanta, e call/return a cada retomada de gerador; ocorrência (#k) conta esses eventos.",
+            "Tokens de ordem de E2B-04 (HOOK, STEP, CANCEL, API_*, WORKER, RAW_READ, COMMIT_REPLY, RELEASE_REPLY) são emitidos ou derivados na sequência única da unidade.",
+        ],
+        "observes": "Estacionamento e despertar de consumidores, lock por thread, cursores e poda do roteador, thread em que callbacks rodam.",
+        "injects": "Nenhum dado; os ganchos de profile mudam o tempo de execução, e o crédito qualifica um agendamento instrumentado, como o SDKPY07.",
+        "privilege": "Nenhum: introspecção do próprio processo.",
+        "selftests_offline": [
+            "dois threads próprios numa Condition e numa Queue: estacionamento testemunhado, notify acorda o primeiro, notify_all acorda todos",
+            "contextmanager próprio com lock e contador: estacionamento na linha do with",
+            "gancho em código próprio: argumentos e retorno com checksum igual antes e depois",
+            "sonda numa property é recusada; sonda em slot de dataclass é aceita",
+            "gancho no return de função própria que levanta: evento emitido no unwind (arg None)",
+            "gancho em gerador próprio: call/return a cada retomada, com ocorrências contadas",
+            "thread próprio cujo alvo levanta depois de um evento de gancho: snapshot imediato pode sair vazio; depois de thread.join ou excepthook.wait sai com o registro",
+            "seletor $executor-thread-of com uma, nenhuma e duas candidatas (só a primeira é aceita)",
+        ],
+        "diag": {"id": "DIAG-PY-BARRIER", "own_code": "Código próprio no driver com o mesmo adapter e peer v2: workers estacionados em Condition e Queue próprias, round trip STEP_WITNESS/STEP_RELEASE com RELEASE_REPLY de um pedido segurado, ganchos em função própria que levanta e em gerador próprio, thread próprio que levanta lido por excepthook.wait.",
+                 "pass": "Estacionamentos testemunhados antes da liberação, liberação depois do gatilho, ganchos sem efeito colateral e com unwind e retomadas registrados, excepthook com o registro depois da espera, sondas estáticas.",
+                 "on_fail": "Para o sub-lote."},
+        "t3": "Não exige T3.",
+    },
+    {
+        "id": "CAP-2B-CLOCK-RANDOM", "fit_name": "controle determinístico de relógio e aleatório", "delta": "D2B-05",
+        "contract": [
+            "shim.install target=openai_codex.retry troca os atributos de módulo random e time de openai_codex.retry por objetos shim: uniform(a, b) devolve a ou b conforme o roteiro do caso e registra (a, b, devolvido); sleep(s) registra s e retorna sem dormir (relógio virtual). Qualquer outro atributo do shim levanta (INVALID_CAPTURE).",
+            "shim.install target=openai_codex._goal troca o atributo time de openai_codex._goal por shim cujo monotonic() devolve os valores roteirizados em ordem e registra; roteiro esgotado levanta (INVALID_CAPTURE).",
+            "shim.remove restaura o objeto original (identidade conferida); os módulos random e time da stdlib e sys.modules não são tocados.",
+            "O crédito qualifica o comportamento do cliente com relógio e aleatório injetados; tempo real de sleep e espera de 30 s seguem não observados.",
+        ],
+        "observes": "Argumentos exatos de uniform e sleep pela fórmula real de retry.py e o caminho de timeout do wait_for_start.",
+        "injects": "Valores de uniform e de monotonic roteirizados; sleep sem espera real.",
+        "privilege": "Nenhum: substituição de atributo de módulo no processo do driver.",
+        "selftests_offline": [
+            "módulo gêmeo próprio com import random, time: roteiro a/b, registro exato e restauração por identidade",
+            "random.uniform e time.sleep da stdlib intactos depois do remove",
+            "roteiro esgotado e atributo inesperado levantam",
+        ],
+        "diag": {"id": "DIAG-PY-CLOCK", "own_code": "Módulo gêmeo próprio (mesmo padrão de import e de chamada de retry.py e _goal.py), sem importar o SDK, dentro do driver em serviço.",
+                 "pass": "Registros iguais aos roteiros, restauração por identidade, stdlib intacta.",
+                 "on_fail": "Para o sub-lote 2B-2."},
+        "t3": "Não exige T3.",
+    },
+    {
+        "id": "CAP-2B-FAULT-CUT", "fit_name": "injeção de falha por corte", "delta": "D2B-06",
+        "contract": [
+            "fault.install em atributo de instância de um objeto do caso (CodexClient): call_through_then_raise chama o método original e depois levanta a exceção declarada; raise_before_call levanta sem chamar. Exceções de lista fechada: RuntimeError(mensagem) e KeyboardInterrupt(). fault.remove apaga o atributo de instância e a busca volta à classe.",
+            "GoalStream.new aceita fault em next_notification (raise_on_call N) no callable composto pelo driver.",
+            "O registrador de excepthook usado para observar o efeito dos faults pertence à CAP-2B-CONC-BARRIER (qualificado no DIAG-PY-BARRIER dos dois sub-lotes).",
+            "Falha por corte no fio continua sendo resposta de erro do peer v2 (sem código novo); o fault do adapter ignore_sigterm pertence a CAP-2B-PROC-WITNESS.",
+            "Cada disparo emite FAULT {alvo, chamada, contagem}; disparo fora do declarado é falha de captura.",
+        ],
+        "observes": "Limpeza do SDK quando um passo de cleanup levanta e quando BaseException sai do pause.",
+        "injects": "Exceções declaradas em pontos declarados; o código do SDK não é alterado.",
+        "privilege": "Nenhum.",
+        "selftests_offline": [
+            "classe própria: call-through, raise, contagem e remoção; método da classe intacto",
+            "callable de stream próprio com raise_on_call",
+        ],
+        "diag": {"id": "DIAG-PY-FAULTCUT", "own_code": "Objetos e threads próprios no driver em serviço, sem importar o SDK.",
+                 "pass": "Disparos exatamente como declarados e remoção limpa.",
+                 "on_fail": "Para o sub-lote 2B-2."},
+        "t3": "Não exige T3.",
+    },
+    {
+        "id": "CAP-2B-MODEL-ORACLE", "fit_name": "oráculos Pydantic com fixtures de modelo", "delta": "D2B-07",
+        "contract": [
+            "Passos model.validate {model, input} (Modelo.model_validate), model.construct {model, kwargs} (Modelo(**kwargs), o __init__ validador; nunca model_construct) e model.dump {of, by_alias, exclude_none, mode} sobre modelos de lista fechada de openai_codex.generated.v2_all (AskForApproval, Granular, ThreadGoalSetParams, ThreadStartParams, TurnStartParams, Turn) e _goal._GoalOperationState para $model.",
+            "response_model de request além de InitializeResponse só de lista fechada: ThreadGoalSetResponse, ThreadGoalClearResponse, GetAccountResponse, LoginAccountResponse, TurnStartResponse, ThreadReadResponse.",
+            "ValidationError registra classe, error_count e errors() com type, loc (lista) e msg (detalhe de CAP-PY-SDKCALLS-2B, usado aqui como oráculo).",
+            "Avisos de serialização da Pydantic (por exemplo PydanticSerializationUnexpectedValue de default str em campo enum, como itemsView 'full' e historyMode 'legacy') são capturados com warnings.catch_warnings(record=True) e registrados; nunca decidem o desfecho.",
+            "Comparação com referência de schema independente não entra no 2B: os schemas JSON do pin não são entradas desta unidade (fica OPEN no PY18).",
+        ],
+        "observes": "Validação, defaults, extra, union, root e dump reais da Pydantic admitida, pelo caminho do SDK e por passos diretos.",
+        "injects": "Fixtures de modelo declaradas no caso.",
+        "privilege": "Nenhum; nenhuma instalação nem rede (dependência já admitida e selada).",
+        "selftests_offline": [
+            "modelos próprios que espelham os padrões gerados (populate_by_name, alias, RootModel com Literal, extra='forbid', bool | None = False): registro fiel de dump e errors()",
+            "versões registradas iguais às da identity freeze",
+        ],
+        "diag": {"id": "DIAG-PY-MODELORACLE", "own_code": "Importa só pydantic da árvore selada (não openai_codex) e roda os passos model.* sobre modelos próprios em serviço.",
+                 "pass": "Saídas registradas iguais às calculadas no próprio processo e versões iguais às da identity freeze.",
+                 "on_fail": "Para o sub-lote 2B-2."},
+        "t3": "Não exige T3.",
+    },
+    {
+        "id": "CAP-2B-PEER-LOGIN", "fit_name": "peer v2 com login sintético", "delta": "D2B-08",
+        "contract": [
+            "O peer v2 aceita regras para account/login/start e account/login/cancel e notificações account/login/completed.",
+            "Admissão do peer_script (antes do READY), regra única usada pela capacidade, pelo predicado peer.login_frames_synthetic e pelo validador: (1) todo valor que seja URL começa com https://login.invalid/; (2) nenhuma chave de FORBIDDEN_LOGIN_KEYS em qualquer profundidade; (3) uma regra de account/login/start só casa params (match.params ou match.params_subset) com type chatgpt ou chatgptDeviceCode. O valor 'apiKey' em result.type de uma resposta, sem campo de credencial, é permitido: é como o caso 2B-PY17A alcança o ramo de variante inesperada. Violação é falha de captura.",
+            "O peer emite LOGIN_FRAME {method, login_id_sha256} por quadro de login; nada é aberto nem resolvido: o SDK só guarda a auth_url.",
+            "Sem login real, credencial, rede ou sessão; o caminho login_api_key não é exercido.",
+        ],
+        "observes": "Ordem início/conclusão, fila pendente, registro e desregistro, cancel com filas separadas.",
+        "injects": "Respostas e notificações de login sintéticas.",
+        "privilege": "Nenhum.",
+        "selftests_offline": [
+            "admissão aceita o peer_script congelado do 2B-PY17A (inclusive result.type 'apiKey') e o do 2B-PY17B, do 2B-PY18C e do 2B2-CTRL01",
+            "admissão recusa: chave apiKey ou accessToken em qualquer profundidade, URL fora de https://login.invalid/, e regra de account/login/start que case params com type apiKey ou chatgptAuthTokens",
+            "LOGIN_FRAME emitido por quadro",
+        ],
+        "diag": {"id": "DIAG-PY-LOGIN", "own_code": "Cliente próprio, sem SDK, envia account/login/start e account/login/cancel ao peer v2 com quadros de login antes e depois da resposta.",
+                 "pass": "Quadros escritos como declarados, LOGIN_FRAME por quadro, nenhum UNSCRIPTED.",
+                 "on_fail": "Para o sub-lote 2B-2."},
+        "t3": "Não exige T3: login sintético do cliente SDK, sem identidade, credencial ou sessão do CVG; login real seria T4 (fora).",
+    },
+    {
+        "id": "CAP-2B-PEER-BEFORE-REPLY", "fit_name": "peer v2 com notificação antes da resposta", "delta": "D2B-09",
+        "contract": [
+            "Quadros before_reply de uma regra são enfileirados e escritos antes dos bytes da resposta; com hold, são escritos no recebimento e a resposta fica segurada.",
+            "O peer emite BEFORE_REPLY_WRITTEN {rule, frames, bytes} depois de enfileirar os quadros e antes de enfileirar a resposta; o ledger do adapter (FORWARD_COMMIT) prova a ordem de entrega ao SDK.",
+            "Sanidade peer.before_reply_order_witnessed: a ordem de commit ao SDK é quadros antes da resposta.",
+        ],
+        "observes": "Eventos adiantados retidos pelo pending_turn, notificações de goal antes do set, conclusão de login antes da resposta do start, rollover de turn antes da resposta do interrupt.",
+        "injects": "Quadros declarados antes da resposta.",
+        "privilege": "Nenhum.",
+        "selftests_offline": [
+            "plano com before_reply e com before_reply + hold: ordem de escrita e marco",
+            "ledger do adapter rejeita ordem invertida (controle negativo)",
+        ],
+        "diag": {"id": "DIAG-PY-BEFOREREPLY", "own_code": "Cliente próprio, sem SDK, pede duas regras (uma com hold) e lê linhas na ordem.",
+                 "pass": "Notificações lidas antes da resposta, BEFORE_REPLY_WRITTEN antes da resposta, ledger coerente.",
+                 "on_fail": "Para o sub-lote (as duas unidades usam a capacidade, inclusive o CONTROL)."},
+        "t3": "Não exige T3.",
+    },
+    {
+        "id": "CAP-2B-PROC-WITNESS", "fit_name": "testemunha de processo do adapter Python", "delta": "D2B-10",
+        "contract": [
+            "O supervisor (fora do sandbox, mesmo usuário) lê sem privilégio /proc/<pid>/cmdline, /proc/<pid>/environ e o link /proc/<pid>/cwd do adapter no ponto de barreira declarado, sempre depois do BEGIN do adapter (portanto depois do execv do lançador; pid do adapter pelo quadro e pela cgroup), e emite PROC_WITNESS; leitura antes do BEGIN é falha de captura (proc.witness_recorded); o adapter Python relata no BEGIN sys.argv[1:], os.getcwd() e o env; o driver retém o Popen do SDK (proc.retain) e lê args e returncode por sonda.",
+            "Lançador executável /profile/adapter-python-exec (modo 0555, shebang #!/runtime/python -IS) faz execv de ('/runtime/python', '-I', '-S', '/profile/adapter-python.py') com sys.argv[1:] preservado; entra no source freeze. Nenhum bind mount novo.",
+            "Fault do adapter ignore_sigterm, aceito só onde case_input.adapter.fault declara: no SIGTERM emite FAULT sigterm_ignored e segue o relay; só termina por SIGKILL.",
+            "O adapter não recusa env ou cwd diferentes do sandbox; ele os relata.",
+            "Formas de captura, só com testemunhas do SO e do canal: CLIENT_TERMINATED_SIGTERM (SIGNAL SIGTERM do adapter, END complete=false dentro da janela, peer terminado pelo sinal repassado, PID ausente ou zumbi com exit_code de SIGTERM) e CLIENT_KILLED_SIGKILL (FAULT sigterm_ignored, nenhum END, PID zumbi com exit_code de SIGKILL ou ausente depois do reap). O returncode do Popen é fato do cliente, julgado por probe.values_exact e proc.termination_exact, nunca pela forma. Só valem onde o caso declara.",
+            "Zero spawn em barreira declarada e lista de processos da cgroup (nenhum processo além de driver, adapter e peer) por varredura do supervisor.",
+        ],
+        "observes": "argv, env, cwd e término do processo filho do SDK Python, inclusive o ramo kill sem wait.",
+        "injects": "Só o fault ignore_sigterm, no slot condicional.",
+        "privilege": "Nenhum esperado (leitura de /proc do mesmo usuário, como o env do adapter TS no 2A). Se a leitura exigir CAP_SYS_PTRACE, os slots 2B-PY02A, 2B-PY02B e 2B-PY02K não são usados e vale a pergunta T3 contingente.",
+        "selftests_offline": [
+            "lançador: argv da cauda preservado no execv",
+            "adapter com fault: SIGTERM vira FAULT e o relay continua",
+            "classificador das formas CLIENT_TERMINATED_SIGTERM e CLIENT_KILLED_SIGKILL com controles negativos (SIGTERM sem SIGNAL, END presente com SIGKILL); returncode do Popen não entra no classificador",
+            "leitura de /proc antes do BEGIN do adapter vira falha de captura",
+        ],
+        "diag": [
+            {"id": "DIAG-PY-CLOSETERM", "own_code": "Cliente próprio repete a sequência do close do SDK (stdin.close, terminate, wait(2)) contra o adapter com peer v2.",
+             "pass": "Forma CLIENT_TERMINATED_SIGTERM classificada, returncode -15, integridade de prefixo.",
+             "on_fail": "Para o sub-lote 2B-1 (2B-PY01A, 2B-PY01D, 2B-PY02A e 2B-PY02B dependem)."},
+            {"id": "DIAG-PY-PROCWITNESS", "own_code": "Cliente próprio lança o adapter pelo lançador executável com env acrescido e cwd /work/tmp, e pela tupla LAUNCH; a barreira PROC_WITNESS vem imediatamente depois do Popen, antes de qualquer I/O, como no 2B-PY02B.",
+             "pass": "O supervisor espera o BEGIN do adapter, lê cmdline, environ e cwd sem privilégio, e eles são iguais aos esperados nas duas formas de lançamento (forma pós-execv no lançador); controle negativo: leitura forçada antes do BEGIN é registrada como falha de captura.",
+             "on_fail": "Só desliga 2B-PY02A, 2B-PY02B e 2B-PY02K e ativa a pergunta T3 contingente; o resto segue."},
+            {"id": "DIAG-PY-KILLWAIT", "own_code": "Cliente próprio contra o adapter com ignore_sigterm: terminate, wait(2) que estoura, kill, returncode lido logo depois e reap explícito.",
+             "pass": "FAULT sigterm_ignored, TimeoutExpired, returncode None logo depois do kill, SIGKILL testemunhado, forma CLIENT_KILLED_SIGKILL.",
+             "on_fail": "Só desliga 2B-PY02K; PY02.B08 segue OPEN."}],
+        "t3": "Não exige T3 enquanto a leitura de /proc for sem privilégio; ver t3-assessment.json.",
+    },
+]
+for cap in CAPS:
+    cap["used_by"] = used_by(cap["id"])
+    cap["sub_lots"] = [lot for lot, ids in cap["used_by"].items() if ids]
+    assert cap["sub_lots"], cap["id"]
+
+SDKCALLS = {
+    "id": "CAP-PY-SDKCALLS-2B", "extends": "CAP-PY-SDKCALLS (spec2a/capture-contract.json)", "delta": "D2B-02",
+    "vocabulary": {
+        "construction": ["CodexClient.new", "AsyncCodexClient.new", "Codex.new", "AsyncCodex.new", "Thread.new", "AsyncThread.new", "TurnHandle.new",
+                         "ChatgptLoginHandle.new", "GoalStream.new"],
+        "calls": "call {on, method, args, kwargs, await, as}: on é nome do caso ou caminho com pontos a partir dele; method de lista fechada por classe (a do caso); valores com $LAUNCH, $model, $enum, $ref.",
+        "streams": ["stream.next", "astream.next", "astream.aclose", "gstream.next", "gstream.close", "agstream.next"],
+        "other": ["attr", "proc.retain", "clock.mark", "driver.reap", "thread.join", "epilogue"],
+        "result_summary_v2": "dump by_alias mode json para modelos; NOTE {method, payload_class, fields} para notificações; {turn_handle.id, thread_id} para handles de turn; {class, login_id, ...} para handles de login; {state_class, turn_id} para start_goal_operation; {class} para construtores; None para retorno vazio.",
+        "error_detail_v2": "classe qualificada, str, code e message_attr quando existem, data, cause (classe e str), mro (nomes qualificados), e para ValidationError error_count e errors() (type, loc, msg); token de identidade de objeto com referência retida até o CALLS_DONE.",
+        "result_matching": "E2B-11: resumos do vocabulário (handles, start_goal_operation, construtores, listas de excepthook) por jeq exato; modelo Pydantic com chaves congeladas que contêm ponto por subconjunto de caminhos de alias sobre o dump by_alias json; senão jeq do dump completo; NOTE com fields por subconjunto e dump por jeq completo.",
+        "dependency_identity": "O driver registra no BEGIN pydantic.VERSION e pydantic_core.__version__ da árvore selada; diferente de 2.13.4/2.46.4 é INVALID_CAPTURE (nunca troca silenciosa de dependência). Vale para todo slot Python do 2B.",
+        "serialization_warnings": "Avisos emitidos pelos dumps de resumo são capturados e registrados; nunca decidem.",
+    },
+}
+
+# ------------------------------------------------------------------ freeze r4 deltas
+DELTAS = [
+    {"id": "D2B-01", "title": "IDs e fonte de casos",
+     "rule": "Listas e regex de channel.py, constantes do supervisor e do driver aceitam 2B-PY01A..2B-PY18D, 2B1-CTRL01, 2B2-CTRL01 e os DIAG novos; a fonte de casos do supervisor passa a ser cases-2b-1.json no 2B-1 e cases-2b-2.json no 2B-2, ligados por sha; contagens 16 e 18.",
+     "proof": ["autoteste de ID aceito e rejeitado", "autoteste de contagem de slots por sub-lote"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-02", "title": "vocabulário de passos do driver Python (CAP-PY-SDKCALLS-2B)", "rule": "Ver capability-contracts-2b.json#/sdkcalls_extension; passo fora da lista fechada é INVALID_CAPTURE.",
+     "proof": ["autoteste de cada passo com objetos próprios", "R3-12 sobre a tabela dos casos"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-03", "title": "driver async (CAP-2B-ASYNC-DRIVER)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-ASYNC"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-04", "title": "barreira de concorrência (CAP-2B-CONC-BARRIER)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-BARRIER"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-05", "title": "relógio e aleatório (CAP-2B-CLOCK-RANDOM)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-CLOCK"], "sub_lots": ["2B-2"]},
+    {"id": "D2B-06", "title": "falha por corte (CAP-2B-FAULT-CUT)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-FAULTCUT"], "sub_lots": ["2B-2"]},
+    {"id": "D2B-07", "title": "oráculos Pydantic (CAP-2B-MODEL-ORACLE)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-MODELORACLE"], "sub_lots": ["2B-2"]},
+    {"id": "D2B-08", "title": "login sintético no peer v2 (CAP-2B-PEER-LOGIN)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-LOGIN"], "sub_lots": ["2B-2"]},
+    {"id": "D2B-09", "title": "quadros antes da resposta (CAP-2B-PEER-BEFORE-REPLY)", "rule": "Ver capability-contracts-2b.json.", "proof": ["selftests_offline da capacidade", "DIAG-PY-BEFOREREPLY"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-10", "title": "testemunha de processo do adapter Python (CAP-2B-PROC-WITNESS)", "rule": "Ver capability-contracts-2b.json.",
+     "proof": ["selftests_offline da capacidade", "DIAG-PY-CLOSETERM", "DIAG-PY-PROCWITNESS", "DIAG-PY-KILLWAIT"], "sub_lots": ["2B-1"]},
+    {"id": "D2B-11", "title": "barrier_plan do supervisor",
+     "rule": "Cada caso declara barreiras nos próprios passos (barrier, worker.parked, loop.block_release_wait_cancel); o supervisor deriva o plano ordenado {gatilho, ação} (RELEASE_REPLY, STEP_RELEASE, FINISH_PEER, PROC_WITNESS, ZERO_SPAWN_CHECK, RELEASE_EXIT) e recusa controle fora do plano antes do END. Substitui, para os slots 2B, as constantes HOLD_PY e EOF_BARRIER do 2A.",
+     "proof": ["autoteste: controle fora do plano é INVALID", "autoteste: liberação antes do gatilho é INVALID"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-12", "title": "epílogos do driver",
+     "rule": "Três formas declaradas no último passo: eof_calls_done_release_exit_then_sdk_close (barreira EOF pelo stdin retido), a mesma com aclose assíncrono, e calls_done_release_exit_then_sdk_close_if_open (caso que já fechou o cliente ou cujo peer saiu). O finally do driver fecha o que ainda estiver aberto, sem novo passo observado.",
+     "proof": ["autoteste das três formas com cliente próprio"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-13", "title": "cliente de controle com quadros antes da resposta",
+     "rule": "control-client.py lê as linhas do case_input, registra notificações recebidas antes de cada resposta e segue lendo uma resposta por pedido com prazo.",
+     "proof": ["autoteste com o roteiro do 2B1-CTRL01 e do 2B2-CTRL01 contra peer próprio"], "sub_lots": ["2B-1", "2B-2"]},
+    {"id": "D2B-14", "title": "freezes por sub-lote",
+     "rule": "2B-1: source-freeze-r4-2b1 e identity-freeze-r4-2b1 com D2B-01..04, 09..13 e 15 (o registrador de excepthook entra pelo D2B-04). 2B-2: source-freeze-r4-2b2 e identity-freeze-r4-2b2 acrescentando D2B-05..08; requalifica no 2B-2 os DIAG das capacidades herdadas do 2B-1. A identity freeze reconfere o sha dos arquivos da stdlib e da Pydantic usados como âncora (inputs dos casos).",
+     "proof": ["source e identity freeze antes de qualquer serviço do sub-lote"], "sub_lots": ["2B-1", "2B-2"]},
+]
+DELTAS.append({"id": "D2B-15", "title": "tipos de quadro e campos novos por papel",
+               "rule": "Entram em ROLE_KINDS e DATA_FIELDS de channel.py e no observador, só para o papel indicado: driver: STEP_WITNESS e STEP_RELEASE (já do 2A, com as sondas), PROBE {id, value}, HOOK_EVENT {id, event, occurrence, thread_name, record}, WORKER_RESULT e WORKER_PARKED {name, ...}, TASK_EVENT {name, event}, CANCEL {step}, SHIM_RECORD {target, call, args, returned}, SHIM_SCOPE {target, installed|restored, identity_ok}, FAULT {target, call, count}, EXCEPTHOOK_RECORD {thread_name, class, str}, MODEL_RESULT {step, ...}, PROC_RETAIN {as, pid, args}, DEPENDENCY_IDENTITY {pydantic, pydantic_core}, SERIALIZATION_WARNING {step, category, message}; adapter Python: BEGIN com argv_tail, cwd e env, e FAULT sigterm_ignored; peer: PEER_MILESTONE BEFORE_REPLY_WRITTEN e LOGIN_FRAME; supervisor (registro próprio, fora do canal dos papéis): PROC_WITNESS e ZERO_SPAWN_CHECK; cliente de controle: PRE_REPLY_NOTIFICATION. Tipo fora da lista do papel invalida antes do END, como no 2A.",
+               "proof": ["autoteste de cada tipo aceito no seu papel e recusado em outro papel"], "sub_lots": ["2B-1", "2B-2"]})
+FREEZE_DELTA = {
+    "kind": "FREEZE_R4_2B_DELTA", "task": TASK, "base": {"freeze_r4": FREEZE_R4},
+    "inheritance": "Todos os itens F4-01..F4-12 do freeze r4 valem sem mudança. Os itens abaixo são deltas declarados; nenhum altera F4-xx.",
+    "items": DELTAS, "functional_receipts": 0, "parity_credit": 0,
+}
+EVAL_DELTA = {
+    "kind": "EVALUATOR_R4_2B_DELTA", "task": TASK, "base": {"evaluator_r4": EVAL_R4},
+    "inheritance": "R4-01..R4-10 valem sem mudança (R4-06 e R4-10 não se aplicam: não há 2A-TS12R no 2B).",
+    "clauses": [
+        {"id": "E2B-01", "rule": "Tabela de predicados de cases-2b-1.json e cases-2b-2.json; autoteste R3-12 (classe do avaliador == classe congelada) sobre cada tabela."},
+        {"id": "E2B-02", "rule": "Oráculos dos predicados novos como na tabela; jeq em toda comparação de valor JSON, com floats por igualdade exata (-0.0 == 0.0 por valor) e int == float por valor."},
+        {"id": "E2B-03", "rule": "Formas CLIENT_TERMINATED_SIGTERM e CLIENT_KILLED_SIGKILL como em CAP-2B-PROC-WITNESS, só com testemunhas do SO e do canal (o returncode do Popen não entra na forma), mutuamente exclusivas entre si e com PASS; só valem onde o caso declara; integridade de fio sob elas é de prefixo (R4-04)."},
+        {"id": "E2B-04", "rule": "Gramática fechada de ordem: rótulos de passo '<n>:<api>[:<method>]'; expected.api referencia o número do passo; resultados de worker pelo nome. expected.order (e expected.wire.order) é lista de cadeias; cada cadeia é lista de tokens KIND:REF estritamente crescente na sequência única da unidade (número de sequência do canal; bytes do adapter pelo ledger). KIND e REF: STEP:n (início do passo n); CANCEL:n (chamada de task.cancel dentro do passo n); API_RESULT:n, API_ERROR:n e API_CANCELLED:n (quadro de resultado do passo n); WORKER:<nome> (resultado do worker); HOOK:<id>#k (k-ésimo evento do gancho); RAW_READ:<método>[@<threadId>]#k (RAW_READ do LF final da k-ésima linha do cliente com esse método e, se dado, params.threadId); COMMIT_REPLY:<método>[@<threadId>]#k (FORWARD_COMMIT ao SDK do último byte da resposta ao k-ésimo pedido); RELEASE_REPLY:<método>[@<threadId>]#k (controle RELEASE_REPLY do supervisor para o pedido segurado). Em hooks, before, after e during usam os mesmos tokens; during STEP:n vale entre STEP:n e o resultado do passo n. Autoteste interpreta todas as cadeias congeladas dos dois sub-lotes."},
+        {"id": "E2B-05", "rule": "Tokens de identidade são id() de objetos que o driver retém até o CALLS_DONE, para que não haja reutilização de id."},
+        {"id": "E2B-06", "rule": "Eventos de gancho declarados casam por id, atributos e ocorrência; eventos extras são só registrados."},
+        {"id": "E2B-07", "rule": "ValidationError: first_error (type e loc exatos), error_count, errors_contain (type e loc exato ou loc_suffix); detalhes extras só registrados (model.errors_recorded)."},
+        {"id": "E2B-08", "rule": "Sondas: keys ordenadas, tupla vira lista, enum_value é o .value, type_name é type(x).__name__; sonda recusada pela leitura estática é INVALID_CAPTURE."},
+        {"id": "E2B-09", "rule": "Tempo é informativo, exceto o mínimo declarado em expected.timing, julgado dentro de proc.termination_exact."},
+        {"id": "E2B-10", "rule": "Atribuição de MISMATCH só por adjudicação depois da revisão (R4-05); nenhuma regra produz recibo funcional ou crédito de paridade."},
+        {"id": "E2B-11", "rule": "Comparação de resultado: resumos do vocabulário (handles, start_goal_operation, construtores, listas de excepthook, números) por jeq exato; resultado que é modelo Pydantic com todas as chaves congeladas contendo ponto é comparado como subconjunto de caminhos de alias sobre o model_dump(by_alias=True, mode='json'); senão jeq do dump completo; NOTE: fields por subconjunto de caminhos e dump (opcional) por jeq completo do payload. Autoteste com TurnStartResponse (subconjunto) e com NOTE com dump."},
+        {"id": "E2B-12", "rule": "Nas formas de sinal, uma linha que o SDK escreveu (testemunha de gancho no return de CodexClient.notify ou de pedido com resposta) e que não aparece em RAW_READ antes do SIGNAL do adapter é falha de captura (INVALID_CAPTURE), nunca MISMATCH; as demais linhas são julgadas por prefixo."},
+        {"id": "E2B-13", "rule": "wire.absent julga só pedidos cliente->servidor (linhas com id e method); notificação do cliente só é julgada por item com kind=notification. Autoteste R3-12 com o caso 2B-PY01A (initialized presente, '*' exceto initialize ausente)."},
+        {"id": "E2B-14", "rule": "Esperas declaradas (thread.join, excepthook.wait, hook.wait, probe.until, worker.parked, loop.yield_until) que estouram o prazo levam a INVALID_CAPTURE, nunca a MISMATCH."},
+    ],
+    "never": "Nenhuma regra produz recibo funcional ou crédito de paridade.",
+}
+
+# ------------------------------------------------------------------ CONTROL contract
+CONTROL = {
+    "kind": "CONTROL_SLOT_CONTRACT_2B", "task": TASK, "base_contract": CTRL_R4,
+    "purpose": "Provar, em cada sub-lote e sob o seu freeze, que o peer v2 com as capacidades novas de quadro antes da resposta (e de login no 2B-2) responde ao pedido sem script e que o avaliador classifica o known-bad como MISMATCH, sem depender de um SDK que se comporte mal.",
+    "slots": [{"case": cid, "sub_lot": BYID[cid]["sub_lot"], "slot": BYID[cid]["slot"], "execution_order": 1,
+               "case_input_sha256": BYID[cid]["case_input_sha256"], "gate": BYID[cid]["gate"],
+               "changed_from_base": BYID[cid]["changed_from_base"]} for cid in ("2B1-CTRL01", "2B2-CTRL01")],
+    "rules": [
+        "O cliente de controle não importa o SDK nem Pydantic.",
+        "Usa o mesmo adapter Python, peer v2, supervisor e observador dos casos SDK do sub-lote.",
+        "control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed (e peer.login_frames_synthetic no 2B-2) são sanidade: falha leva a INVALID_CAPTURE e para o sub-lote.",
+        "O MISMATCH esperado vem só de wire.no_turn_interrupt (classe client).",
+        "Roda primeiro; qualquer outro desfecho para o sub-lote antes dos casos SDK.",
+        "Conta 1 vaga do sub-lote e não gera observação de cliente nem crédito.",
+    ],
+    "source_freeze": "control-client.py (D2B-13) entra no source freeze de cada sub-lote com sha registrado.",
+}
+
+# ------------------------------------------------------------------ budgets
+REQUAL = ["DIAG-PY-RPC", "DIAG-PY-STAGE", "DIAG-PY-UNSCRIPTED"]
+
+
+def budget(lot, diags, conditional, stops_extra):
+    doc = CASES[lot]
+    cond_slots = [c["id"] for c in doc["cases"] if c["kind"] == "SDK" and "gate" in c]
+    return {
+        "kind": "EXECUTION_BUDGET_FOR_NEXT_UNIT", "task_next": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-" + lot.replace("2B-", "2B-"),
+        "sub_lot": lot,
+        "max": {"case_slots": 24, "control_slots": 1, "services": 12, "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+        "planned": {"case_slots": len(doc["cases"]), "sdk_cases": doc["counts"]["sdk_cases"], "control_slots": doc["counts"]["control"],
+                    "conditional_slots": cond_slots, "qualification_services_planned": len(diags), "qualification_services": diags,
+                    "services_reserve": "%d serviço(s) de reserva, só para diagnóstico de admissão; nunca para repetir um caso" % (12 - len(diags)),
+                    "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+        "conditional_diags": conditional,
+        "order": [
+            "1. Conferir que a IMPLEMENT-AND-ADMIT da continuação 2A está COMPLETED_LOCAL com source-freeze-r4, identity-freeze-r4 e avaliador r4 implementados; se o freeze r4 tiver mudado por reparo, reconferir que cada D2B se aplica sem conflito, ou parar.",
+            "2. Implementar os deltas D2B do sub-lote (freeze-r4-2b-delta.json) e as cláusulas E2B; autotestes offline (incluindo R3-12 da tabela do sub-lote e os selftests de cada capacidade).",
+            "3. Source freeze e identity freeze do sub-lote (D2B-14).",
+            "4. Requalificar os DIAG herdados e qualificar os DIAG novos do sub-lote; DIAG condicional só desliga as vagas que decide.",
+            "5. CONTROL do sub-lote primeiro; se não for MISMATCH vindo de wire.no_turn_interrupt com as sanidades aprovadas, parar.",
+            "6. Casos SDK em ordem de slot, uma vez cada, em série, sem retry; vaga condicional sem gate fica sem uso e não é reatribuída.",
+            "7. Revisão independente (até 2 rodadas, 1 reparo agrupado offline) e adjudicação.",
+        ],
+        "stops": ["qualquer DIAG não condicional falha", "CONTROL diferente de MISMATCH", "dependência, rede ou instalação necessária",
+                  "orçamento esgotado"] + stops_extra,
+        "not_authorized": ["rede", "wheel/npm distribuídos", "Codex CLI real", "provider", "credencial", "login real", "dado real", "push", "produção",
+                           "testemunha privilegiada (CAP_SYS_PTRACE, fanotify, eBPF, audit) sem resposta à pergunta T3 contingente"],
+    }
+
+
+B1 = budget("2B-1", REQUAL + ["DIAG-PY-ASYNC", "DIAG-PY-BARRIER", "DIAG-PY-BEFOREREPLY", "DIAG-PY-CLOSETERM", "DIAG-PY-PROCWITNESS", "DIAG-PY-KILLWAIT"],
+            {"DIAG-PY-PROCWITNESS": "falha desliga 2B-PY02A, 2B-PY02B e 2B-PY02K e ativa a pergunta T3 contingente", "DIAG-PY-KILLWAIT": "falha desliga só 2B-PY02K"}, [])
+B2 = budget("2B-2", REQUAL + ["DIAG-PY-ASYNC", "DIAG-PY-BARRIER", "DIAG-PY-BEFOREREPLY", "DIAG-PY-CLOCK", "DIAG-PY-FAULTCUT", "DIAG-PY-MODELORACLE", "DIAG-PY-LOGIN"],
+            {}, ["o 2B-1 não está admitido (COMPLETED_LOCAL com revisão aprovada): o 2B-2 herda as capacidades do 2B-1"])
+for b in (B1, B2):
+    assert b["planned"]["case_slots"] <= 24 and b["planned"]["qualification_services_planned"] <= 12
+
+# capability DIAG must be budgeted in each sub-lot that uses the capability
+for cap in CAPS:
+    diags = cap["diag"] if isinstance(cap["diag"], list) else [cap["diag"]]
+    for lot in cap["sub_lots"]:
+        b = B1 if lot == "2B-1" else B2
+        for d in diags:
+            assert d["id"] in b["planned"]["qualification_services"], (cap["id"], lot, d["id"])
+
+# ------------------------------------------------------------------ coverage plan
+cov = load(os.path.normpath(os.path.join(SPEC, "../sdk-batch-2a-binding/coverage-observed-v2.json")))
+rows_v2 = {r["source_contract"]: r for r in cov["rows"]}
+REMAIN = {
+    "PY01": "BaseException que não é CancelledError durante o init (KeyboardInterrupt) e o tempo real de inicialização contra um Codex CLI real: perfil distribuído.",
+    "PY02": "Caminho empacotado (codex_cli_bin, prefixo de PATH, resolver padrão) e chave PATH no Windows: perfil distribuído. O ramo kill fica OPEN se o DIAG-PY-KILLWAIT não admitir o 2B-PY02K.",
+    "PY05": "generate-json-schema real do CheckoutCapabilities com versão 0.0.0 e codex_bin, e identidade de runtime verdadeira: perfil distribuído; metadados CVG verdadeiros: BUILD nativo.",
+    "PY08": "Falha de transporte com operação de goal registrada (goal.fail pelo fail_all) e leitura com processo real: continuação seguinte e perfil distribuído.",
+    "PY09": "Sobrecarga real do servidor e tempo real de sleep (o 2B usa relógio virtual): perfil distribuído.",
+    "PY10": "Continuação remota do turn depois do cancelamento: nativo.",
+    "PY11": "Semântica de início versus junção no servidor real: perfil distribuído.",
+    "PY12": "Replay frio durável e reconexão: portas duráveis do nativo.",
+    "PY13": "Efeitos autônomos reais do goal e persistência; corte ativado por fechamento de transporte não entra no 2B: depois do fail_all, um pedido cuja escrita ainda tenha sucesso espera sem leitor (risco de bloqueio, exige testemunha limitada) e fica para a continuação seguinte.",
+    "PY14": "Ordenações reais de status e turns do servidor e autoridade nativa de pausa e aprovação: nativo e perfil distribuído.",
+    "PY17": "Login real, sessão e artefatos de autenticação: gate T4 de capacidade externa, fora do 2B.",
+    "PY18": "Comparação com referência de schema independente (os schemas JSON do pin não são entradas desta unidade), modelos gerados fora dos exercitados e compatibilidade com pydantic>=2.12 além de 2.13.4.",
+}
+ORDER = ["PY01", "PY02", "PY05", "PY08", "PY09", "PY10", "PY11", "PY12", "PY13", "PY14", "PY17", "PY18"]
+rows = []
+for pc in ORDER:
+    cases = [c["id"] for c in ALL if c["kind"] == "SDK" and pc in c["contracts"]]
+    primary = [c for c in cases if c.startswith("2B-" + pc)]
+    branches = []
+    for cid in cases:
+        branches += [b for b in BYID[cid]["branches_targeted"] if b.startswith(pc + ".")]
+    st2 = rows_v2[pc]["status"]
+    rows.append({
+        "source_contract": pc, "gaps": rows_v2[pc]["gaps"], "status_v2": st2,
+        "role_2b": "NEW_CONTRACT" if st2 == "OPEN_REQUIRED_FUTURE_PROFILE" else "RESIDUAL",
+        "cases": cases, "primary_cases": primary,
+        "conditional_cases": [cid for cid in cases if "gate" in BYID[cid]],
+        "sub_lots": sorted({BYID[cid]["sub_lot"] for cid in cases}),
+        "branches_targeted": branches,
+        "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+        "status_rule": "No BIND, linha OPEN passa a OBSERVED_CLIENT_PARTIAL se pelo menos um caso primário foi usado e todos os casos primários usados são consumíveis (PASS_CLIENT_OBSERVATION adjudicado); vaga condicional não usada deixa seus braços OPEN; linha já observada só acrescenta observações.",
+        "remaining_after": REMAIN[pc], "whole_requirement_covered_after": False,
+        "authoritative_residual_refs": rows_v2[pc]["authoritative_residual_refs"],
+    })
+newly = [r["source_contract"] for r in rows if r["status_v2"] == "OPEN_REQUIRED_FUTURE_PROFILE"]
+gaps = load(os.path.normpath(os.path.join(SPEC, "../sdk-batch-2a-binding/gaps-review-v2.json")))
+gap_proj = {}
+for g in gaps["rows"]:
+    obs = set(g["contracts_observed_client_partial_v2"]) | (set(newly) & set(g["contracts"]))
+    gap_proj[g["id"]] = {"observed_v2": "%d/%d" % (len(g["contracts_observed_client_partial_v2"]), g["contracts_total"]),
+                         "observed_if_2b_passes": "%d/%d" % (len(obs), g["contracts_total"]), "status_after": "OPEN"}
+COVERAGE = {
+    "kind": "SDK_SOURCE_BATCH_2B_COVERAGE_PLAN", "task": TASK, "base": COV2, "gaps_base": GAPS2,
+    "rows": rows,
+    "projection_if_all_pass": {
+        "on_v2": {"OBSERVED_CLIENT_PARTIAL": cov["counts"]["OBSERVED_CLIENT_PARTIAL"] + len(newly), "OPEN_REQUIRED_FUTURE_PROFILE": cov["counts"]["OPEN_REQUIRED_FUTURE_PROFILE"] - len(newly)},
+        "on_continuation_projection": {"OBSERVED_CLIENT_PARTIAL": 25 + len(newly), "OPEN_REQUIRED_FUTURE_PROFILE": 19 - len(newly)},
+        "rows_becoming_observed": newly,
+        "gaps": gap_proj,
+        "note": "Projeção de planejamento, com as vagas condicionais liberadas pelos seus DIAG. Só o BIND do 2B (depois de cada execução) muda o mapa; nenhuma linha passa a cobrir o requisito inteiro e as seis lacunas seguem OPEN.",
+    },
+    "functional_receipts": 0, "parity_credit": 0,
+}
+
+# ------------------------------------------------------------------ T3 assessment
+T3 = {
+    "kind": "T3_ASSESSMENT", "task": TASK,
+    "rule": AGENTS,
+    "rule_section": "Governança proporcional (D-12): T3 = mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval; T4 = provider, canal, conhecimento, efeito externo real, dado real ou release candidate.",
+    "plan_section": PLAN0384,
+    "decision": "NAO_EXIGE_T3", "decision_t4": "NAO_EXIGE_T4",
+    "per_capability": [{"capability": cap["id"], "fit_name": cap["fit_name"], "privilege": cap["privilege"], "verdict": "KEEP", "t3": cap["t3"]} for cap in CAPS],
+    "retired_capabilities": [],
+    "why": [
+        "As oito capacidades ficam em ferramentas privadas de evidência sob docs/04_audit/evidence (driver, peer, adapter, supervisor, avaliador e cliente de controle), como nas unidades anteriores.",
+        "Nenhuma exige privilégio ou capability nova do kernel: introspecção e substituições ficam no processo do driver; a leitura de /proc é do mesmo usuário; o lançador executável e o fault do adapter não mudam a contenção (sem bind mount novo, /work segue tmpfs).",
+        "Nenhuma toca código de produto, contrato público, schema, migration, identidade, policy ou approval do CVG; o login é sintético do cliente SDK, sem credencial, sessão ou rede.",
+        "Sem provider, credencial, rede, dado real ou efeito externo (T4 não se aplica).",
+    ],
+    "would_require_t3_if": ["a leitura de /proc do adapter exigir CAP_SYS_PTRACE ou outra capability",
+                            "alguma capacidade precisar alterar código de produto ou contrato público do CVG"],
+    "would_require_t4_if": ["for preciso login real, credencial, rede, wheel/npm distribuídos ou Codex CLI real"],
+    "user_question": None,
+    "contingent_question": {
+        "when": "DIAG-PY-PROCWITNESS não conseguir ler /proc/<pid>/cmdline, environ e cwd do adapter sem privilégio",
+        "effect_meanwhile": "2B-PY02A, 2B-PY02B e 2B-PY02K não são usados e PY02.B01-B04, B06-B08 seguem OPEN; o resto do 2B-1 segue.",
+        "question": "Você autoriza dar ao supervisor de evidência a capability CAP_SYS_PTRACE só para ler cmdline, environ e cwd do adapter nos slots 2B-PY02A, 2B-PY02B e 2B-PY02K?",
+    },
+}
+
+caps_doc = {"kind": "HARNESS_CAPABILITY_CONTRACTS_2B", "task": TASK, "fit_assessment": FIT,
+            "count": len(CAPS), "capabilities": CAPS, "sdkcalls_extension": SDKCALLS,
+            "note": "Os oito nomes do batch-2b-fit-assessment.json mapeiam 1:1 para estas capacidades; CAP-PY-SDKCALLS-2B é extensão do vocabulário existente, não capacidade nova.",
+            "functional_receipts": 0, "parity_credit": 0}
+dump("capability-contracts-2b.json", caps_doc)
+dump("freeze-r4-2b-delta.json", FREEZE_DELTA)
+dump("evaluator-r4-2b-delta.json", EVAL_DELTA)
+dump("control-slot-contract-2b.json", CONTROL)
+dump("execution-budget-2b-1.json", B1)
+dump("execution-budget-2b-2.json", B2)
+dump("coverage-plan-2b.json", COVERAGE)
+dump("t3-assessment.json", T3)
+print(json.dumps({"caps": len(CAPS), "budgets": [B1["planned"]["case_slots"], B2["planned"]["case_slots"]],
+                  "services": [B1["planned"]["qualification_services_planned"], B2["planned"]["qualification_services_planned"]],
+                  "newly": newly, "projection": COVERAGE["projection_if_all_pass"]["on_v2"]}, ensure_ascii=False))

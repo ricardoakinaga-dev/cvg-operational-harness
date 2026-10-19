@@ -1,0 +1,256 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T04:18:01-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "ac30ad232074b6583be9d9e975cecf3a7768789938a3f6228159ad763f041913",
+  "subject_hash_check": {
+    "before": "ok (sha do freeze conferido; 19/19 arquivos com sha256 e bytes iguais aos do freeze)",
+    "after": "ok (sha do freeze inalterado; 19/19 arquivos iguais; nenhuma escrita na pasta da unidade)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 7 P2, 9 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02", "R1-F03", "R1-F04", "R1-F05", "R1-F06", "R1-F07"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "2B-PY13E",
+      "title": "O excepthook.snapshot corre contra o thread codex-goal-start-cleanup depois do hook.wait(h_stop)",
+      "evidence": [
+        "cases-2b-2.json#/cases[id=2B-PY13E]/case_input/sdk_calls passos 11 (hook.wait h_stop), 12 e 13 (excepthook.snapshot)",
+        "cases-2b-2.json#/cases[id=2B-PY13E]/expected/api[step=13] (lista com o registro RuntimeError do thread de cleanup)",
+        "/usr/lib/python3.12/threading.py:1014 (finally de Thread.run) e :1075 (_invoke_excepthook só depois que run() desempilha)",
+        "py/async_client.py:276-281 (stop_cancelled_goal: cancel e, no finally, finish e unregister)",
+        "sonda própria só com stdlib: gancho de profile no return de uma função que levanta dentro de um thread, com snapshot do excepthook logo depois do evento. Resultado: 0/300, 9/300 e 299/300 snapshots vazios, conforme o registrador notifique antes ou depois do I/O ou ceda o GIL"
+      ],
+      "detail": "O evento h_stop (return de stop_cancelled_goal, que no 3.12 também é emitido no unwind) acontece antes de Thread.run terminar e antes de _bootstrap_inner chamar o threading.excepthook. O passo 11 espera só o h_stop, e nada garante que o registro do excepthook já exista no passo 13. Conforme o registrador de ganchos acorda o loop e emite o quadro, o snapshot pode sair vazio. Como api.steps_exact e excepthook.records_exact são da classe client, uma corrida de harness vira MISMATCH falso.",
+      "required_action": "Antes do snapshot, esperar o fim do thread codex-goal-start-cleanup (thread.join por nome, só leitura, com prazo) ou usar um excepthook.wait {count: 1, prazo} cujo estouro dê INVALID_CAPTURE. Congelar esse passo no caso e no contrato da capacidade, e criar um autoteste com o mesmo padrão (gancho no return seguido de exceção no thread)."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "2B-PY10X / sub-lote 2B-1 / capability-contracts-2b.json",
+      "title": "O 2B-PY10X usa excepthook.* no 2B-1, mas o registrador só existe na CAP-2B-FAULT-CUT (2B-2) e não há DIAG para ele no orçamento do 2B-1",
+      "evidence": [
+        "cases-2b-1.json#/cases[id=2B-PY10X]/case_input/sdk_calls passos 2 (excepthook.install) e 21 (excepthook.snapshot); os predicados incluem excepthook.records_exact; a infra não lista CAP-2B-FAULT-CUT",
+        "capability-contracts-2b.json:126 (excepthook.install/snapshot definidos só na CAP-2B-FAULT-CUT, sub_lots ['2B-2'])",
+        "freeze-r4-2b-delta.json:122 (D2B-14: o 2B-1 congela só D2B-01..04 e 09..13; o D2B-06 fica para o 2B-2)",
+        "execution-budget-2b-1.json#/planned/qualification_services (sem o DIAG-PY-FAULTCUT, único DIAG que qualifica o registrador: 'excepthook registra exceção de thread daemon próprio')",
+        "next-task.json#/what (implementa só D2B-01..04 e 09..14)"
+      ],
+      "detail": "A implementação do 2B-1 segue o D2B-14 e não tem contrato, autoteste nem DIAG para excepthook.install/snapshot. O passo ficaria fora do vocabulário fechado (D2B-02: INVALID_CAPTURE), ou um instrumento não qualificado decidiria um predicado client. O validador não detecta o problema porque só confere a infra declarada no caso.",
+      "required_action": "Levar excepthook.install/snapshot para uma capacidade do 2B-1 (por exemplo a CAP-2B-CONC-BARRIER, com autoteste e passo no DIAG-PY-BARRIER), ou incluir no 2B-1 o recorte do D2B-06 junto com o DIAG-PY-FAULTCUT (cabe: 10 de 12 serviços). Atualizar infra, used_by, D2B-14, orçamento e next-task, e acrescentar ao validador a checagem passo -> capacidade do sub-lote."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "2B-PY17A / CAP-2B-PEER-LOGIN",
+      "title": "O peer_script do 2B-PY17A contradiz a regra de admissão de login (type apiKey)",
+      "evidence": [
+        "cases-2b-2.json#/cases[id=2B-PY17A]/case_input/peer_script/on_request[3]/reply/result = {type: 'apiKey'} (necessário para o RuntimeError do passo 9)",
+        "capability-contracts-2b.json:188 ('account/login/start só com type chatgpt ou chatgptDeviceCode'; a violação é falha de captura)",
+        "capability-contracts-2b.json:196 (autoteste: 'admissão recusa script com apiKey, accessToken, URL fora de .invalid e type apiKey')",
+        "cases-2b-2.json:243 (peer.login_frames_synthetic lista apiKey, accessToken, refreshToken, idToken, chatgptAuthTokens)",
+        "validate-spec-2b.mjs.txt:18 e :104 (o validador só olha chaves; a lista dele não tem chatgptAuthTokens)"
+      ],
+      "detail": "Uma implementação fiel ao autoteste congelado recusa, antes do READY, o próprio roteiro do 2B-PY17A (regra de account/login/start com 'type apiKey'). Isso dá falha de captura numa vaga sem retry. As três listas de chaves proibidas (capacidade, predicado e validador) também divergem, e a admissão e a sanidade ficam sem uma definição única.",
+      "required_action": "Escrever que a restrição de type vale para os params do pedido (match) e que um valor sem credencial na resposta (result.type 'apiKey') é permitido, ou redesenhar o ramo. Unificar a lista de chaves proibidas nos três lugares. Acrescentar um autoteste positivo com o peer_script congelado do 2B-PY17A e um controle negativo coerente no validador."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P2",
+      "area": "2B-PY02B / CAP-2B-PROC-WITNESS",
+      "title": "O PROC_WITNESS logo após o start() pode ler /proc antes do execv do lançador",
+      "evidence": [
+        "cases-2b-1.json#/cases[id=2B-PY02B]/case_input/sdk_calls passo 9 (barrier proc_witness logo depois do start e das sondas, antes do initialize)",
+        "cases-2b-1.json#/cases[id=2B-PY02B]/expected/process/argv/proc_cmdline (forma pós-execv)",
+        "capability-contracts-2b.json:254 (leitura 'no ponto de barreira declarado', sem exigir o BEGIN do adapter) e :255 (lançador com shebang -IS que faz execv)",
+        "cases-2b-1.json#/predicate_table/proc.argv_exact (classe client)"
+      ],
+      "detail": "O Popen retorna depois do exec do lançador ('/runtime/python -IS /profile/adapter-python-exec ...'); o segundo execv só acontece depois que o Python do lançador sobe. Se o supervisor ler /proc/<pid>/cmdline ao receber o STEP_WITNESS e antes do BEGIN do adapter, ele vê o cmdline do lançador, e proc.argv_exact (client) dá MISMATCH falso. O DIAG-PY-PROCWITNESS, como está descrito, não exercita esse intervalo.",
+      "required_action": "Exigir no contrato que o PROC_WITNESS só seja lido depois do BEGIN do adapter (pid pelo quadro/NSpid, logo após o execv) e declarar a leitura anterior como falha de captura (capture_order_or_cleanup). Fazer o DIAG-PY-PROCWITNESS usar a barreira imediatamente após o start com o lançador."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P2",
+      "area": "evaluator-r4-2b-delta.json / api.steps_exact / 2B-PY11A, 2B-PY18B, 2B-PY18C",
+      "title": "O resumo de resultado não define chaves com ponto em modelos nem a chave 'dump' na NOTE",
+      "evidence": [
+        "cases-2b-1.json:183 e cases-2b-2.json:187 (api.steps_exact: 'result por jeq (resumo v2: dump by_alias json, NOTE ... campos por caminho de alias)')",
+        "cases-2b-1.json#/cases[id=2B-PY11A]/expected/api[step=10] = {'turn.id': 'B11', 'turn.status': 'inProgress'} (TurnStartResponse)",
+        "cases-2b-2.json#/cases[id=2B-PY18B]/expected/api[step=8] = {'turn.id': 'T18', 'turn.status': 'inProgress'}",
+        "cases-2b-2.json#/cases[id=2B-PY18C]/expected/api passos 7 e 10 (chave 'dump' dentro da NOTE)",
+        "py/generated/v2_all.py:11820-11864 (Turn com completedAt, durationMs, error, itemsView com default 'full', rootTurnId e startedAt)"
+      ],
+      "detail": "Para modelos, o oráculo manda comparar por jeq o dump by_alias json. No dump do TurnStartResponse o turn tem nove chaves, então {'turn.id', 'turn.status'} não é igual por jeq, e uma leitura literal dá MISMATCH falso. A chave 'dump' na NOTE não existe no encoding. Nenhuma cláusula E2B fixa a semântica de subconjunto por caminho fora da NOTE.",
+      "required_action": "Acrescentar uma cláusula E2B (e ajustar o texto do encoding e do oráculo): chave com ponto = caminho de alias sobre o dump, com comparação de subconjunto; 'dump' na NOTE = jeq do model_dump(by_alias=True, mode='json') completo. Outra saída é trocar pelos dumps completos. Criar autoteste do avaliador com os dois formatos."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P2",
+      "area": "2B-PY01A / wire.absent",
+      "title": "O wire.absent '*' (exceto initialize) colide com o initialized esperado",
+      "evidence": [
+        "cases-2b-1.json#/cases[id=2B-PY01A]/expected/wire/absent = [{method: '*', except: ['initialize']}] e /notifications = [{initialized, count 1}]",
+        "cases-2b-1.json:279 (oráculo de wire.absent: 'nenhum item ... aparece no intervalo capturado', sem restringir a pedidos)"
+      ],
+      "detail": "O initialized é um método que aparece no intervalo e não está no except. Com o oráculo como está escrito, wire.absent (client) falha e o caso vira MISMATCH falso mesmo com o SDK correto.",
+      "required_action": "Definir no oráculo que wire.absent julga só pedidos cliente->servidor (linhas com id), ou acrescentar 'initialized' ao except. Criar autoteste R3-12 com esse caso."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P2",
+      "area": "2B-PY01A",
+      "title": "A sonda $hook:h_close_call:self não tem retain declarado",
+      "evidence": [
+        "cases-2b-1.json#/cases[id=2B-PY01A]/case_input/sdk_calls[0]/hooks[id=h_close_call]/record = ['thread_name', 'retain:self._proc']",
+        "cases-2b-1.json#/cases[id=2B-PY01A]/case_input/sdk_calls passo 4 (path ['$hook:h_close_call:self', '._proc'])",
+        "capability-contracts-2b.json:52 ('registra só os atributos declarados; retain:<expr> guarda uma referência')"
+      ],
+      "detail": "Como o construtor levanta, x nunca é atribuído, e o único caminho até o CodexClient é o gancho, que só retém self._proc. Pelo contrato, a sonda do passo 4 não resolve: o resultado é INVALID_CAPTURE numa vaga sem retry, ou o driver teria de reter algo não declarado.",
+      "required_action": "Declarar 'retain:self' no h_close_call do 2B-PY01A (recalculando o case_input_sha256) ou trocar a sonda por uma expressão retida."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "2B-PY01B / CAP-2B-ASYNC-DRIVER",
+      "title": "O loop.yield_until mede len(_init_lock._waiters), que é None até o primeiro waiter",
+      "evidence": [
+        "/usr/lib/python3.12/asyncio/locks.py:78 (self._waiters = None) e :104-106 (a deque só é criada no primeiro acquire bloqueado)",
+        "cases-2b-1.json#/cases[id=2B-PY01B]/case_input/sdk_calls passo 6",
+        "capability-contracts-2b.json:16 (yield_until sem regra de ordem entre sonda e sleep nem para valor None)"
+      ],
+      "detail": "Se a implementação avaliar a sonda antes do primeiro sleep(0), len(None) levanta e o caso cai por falha de harness.",
+      "required_action": "Fixar que o yield_until cede antes de cada avaliação (ou que uma sonda com erro de tipo conta como 'ainda não' até o teto) e cobrir isso no autoteste do driver async."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "2B-PY01A, 2B-PY01D (formas de sinal)",
+      "title": "Sob SIGTERM, a captura do initialized não é garantida por barreira",
+      "evidence": [
+        "../sdk-batch-2a-admission/python/adapter-python.py:179-180 (depois do sinal nenhuma leitura nova começa)",
+        "py/client.py:324 (notify initialized) e :291-295 (stdin.close, terminate, wait)",
+        "expected.wire.notifications [{initialized, count 1}] dos casos, julgado por wire.notifications_exact (client)",
+        "sonda análoga só com stdlib (write, close e terminate imediatos contra um filho em select): 0/200 linhas perdidas"
+      ],
+      "detail": "Entre o flush do initialized e o SIGTERM há só o validate e o close. Se o sinal chegar antes do os.read do adapter, a linha nunca vira RAW_READ e um predicado client falha. Na sonda o risco foi baixo, mas ele não é controlado.",
+      "required_action": "Declarar que, nas formas de sinal, uma linha escrita pelo SDK (testemunhada por gancho no retorno de notify/_write_message) e não lida antes do SIGNAL é falha de captura, não MISMATCH."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P3",
+      "area": "CAP-2B-PROC-WITNESS / E2B-03",
+      "title": "A forma CLIENT_TERMINATED_SIGTERM inclui um fato do cliente (returncode -15 lido pelo driver)",
+      "evidence": [
+        "capability-contracts-2b.json:258",
+        "evaluator-r4-2b-delta.json E2B-03"
+      ],
+      "detail": "Um SDK que encerrasse sem esperar (returncode None) não seria classificado nessa forma e cairia na regra 1 (INVALID_CAPTURE), o que esconderia um known-bad como falha de captura.",
+      "required_action": "Deixar a forma só com testemunhas do SO e do canal, e julgar o returncode em proc.termination_exact/probe.values_exact."
+    },
+    {
+      "id": "R1-F11",
+      "severity": "P3",
+      "area": "E2B-04 / expected.wire.order / worker.parked",
+      "title": "Restrições de ordem e seletores sem gramática fechada",
+      "evidence": [
+        "evaluator-r4-2b-delta.json E2B-04",
+        "2B-PY11B expected.wire.order ('RAW_READ turn/start#2 > FORWARD_COMMIT da resposta de turn/start#1 ao SDK')",
+        "2B-PY01C order ('initialized#1', 'RELEASE_REPLY' sem regra); 2B-PY13D order ('thread/goal/set paused t13d1')",
+        "2B-PY14A passo 32 ('$executor-thread-of:N2' não está definido no encoding)"
+      ],
+      "detail": "Os tokens do E2B-04 não cobrem as formas usadas nos casos. Cada restrição teria de ser codificada à mão, sem autoteste que prove a leitura.",
+      "required_action": "Publicar a gramática (eventos, #n, regra do RELEASE_REPLY, FORWARD_COMMIT por resposta) e o seletor $executor-thread-of, com um autoteste que interprete todas as restrições congeladas."
+    },
+    {
+      "id": "R1-F12",
+      "severity": "P3",
+      "area": "2B-PY01A, 2B-PY01D, 2B-PY02A, 2B-PY02B",
+      "title": "Expectativas declaradas sem predicado que as julgue",
+      "evidence": [
+        "expected.wire.requests em 2B-PY01A, 2B-PY01D e 2B-PY02A sem wire.requests_exact nos predicados",
+        "2B-PY02B expected.process.env sem proc.env_exact (só env.adapter_sandbox_env_only)"
+      ],
+      "detail": "Valores congelados que nunca decidem confundem a leitura do caso e a adjudicação.",
+      "required_action": "Marcar esses valores como informativos ou incluir o predicado (com prefixo sob sinal)."
+    },
+    {
+      "id": "R1-F13",
+      "severity": "P3",
+      "area": "freeze-r4-2b-delta.json",
+      "title": "Os deltas não enumeram os tipos de quadro novos por papel",
+      "evidence": [
+        "../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json F4-07 (precedente: o FAULT entra em ROLE_KINDS e DATA_FIELDS)",
+        "../sdk-batch-2a-admission/python/channel.py:31-41 (listas estritas)",
+        "freeze-r4-2b-delta.json D2B-02..13"
+      ],
+      "detail": "STEP_WITNESS/STEP_RELEASE, PROBE, eventos de gancho, FAULT do driver, registros de excepthook e de relógio, PROC_WITNESS, BEFORE_REPLY_WRITTEN, LOGIN_FRAME e os campos novos do BEGIN do adapter (argv, cwd, env) precisam entrar nas listas de channel.py e do observador. Hoje isso fica implícito.",
+      "required_action": "Listar no delta, por papel, os tipos e campos novos."
+    },
+    {
+      "id": "R1-F14",
+      "severity": "P3",
+      "area": "CAP-2B-MODEL-ORACLE / 2B-PY18D",
+      "title": "O model.construct é ambíguo, e os defaults não validados geram avisos de serialização",
+      "evidence": [
+        "capability-contracts-2b.json:156",
+        "python-deps/pydantic/main.py model_construct (não valida; o status ficaria str)",
+        "py/generated/v2_all.py:11852 ('full') e :12354 ('legacy')"
+      ],
+      "detail": "O model.construct pode ser o __init__ (valida, gera enum) ou o model_construct (sem validação). O dump do passo 25 coincide nos dois casos, mas o ramo PY18.B25 exercido muda. Dumps de Turn/Thread com default str em campo enum emitem PydanticSerializationUnexpectedValue.",
+      "required_action": "Fixar a semântica do model.construct e declarar que avisos de serialização são registrados e não decidem."
+    },
+    {
+      "id": "R1-F15",
+      "severity": "P3",
+      "area": "CAP-2B-CONC-BARRIER (autotestes e DIAG-PY-BARRIER)",
+      "title": "Os autotestes de gancho não cobrem o return no unwind nem o call/return a cada retomada",
+      "evidence": [
+        "capability-contracts-2b.json, selftests_offline da CAP-2B-CONC-BARRIER",
+        "2B-PY01A h_validate_ret (função que levanta) e 2B-PY13E h_stop (finally com exceção)",
+        "sonda própria: no 3.12.3, sys.setprofile emite 'return' (arg None) no unwind e call/return a cada retomada de gerador"
+      ],
+      "detail": "hook.events_exact é client e depende dessas duas propriedades, que nenhum autoteste ou DIAG declarado qualifica.",
+      "required_action": "Acrescentar autoteste e passo do DIAG-PY-BARRIER com uma função que levanta e com um gerador."
+    },
+    {
+      "id": "R1-F16",
+      "severity": "P3",
+      "area": "validate-spec-2b.mjs.txt / validation.json",
+      "title": "Os controles negativos e as checagens do validador têm lacunas",
+      "evidence": [
+        "validation.json negative_controls['mínimo do PY13 não atendido'].first_error = 'CAP-2B-PEER-BEFORE-REPLY: used_by 2B-2'",
+        "validate-spec-2b.mjs.txt:123-125 (capacidade conferida pela infra declarada, não pelo passo usado)",
+        "validate-spec-2b.mjs.txt:18 e :104 (só chaves; lista diferente da capacidade e do predicado)",
+        "capability-contracts-2b.json: o used_by da CAP-2B-CONC-BARRIER não inclui os casos do 2B-2 que usam probe/probe.until"
+      ],
+      "detail": "O controle do mínimo do PY13 é rejeitado por outro erro e não prova a checagem que nomeia. O validador não detectaria o R1-F02 nem o R1-F03.",
+      "required_action": "Criar controles que confiram a mensagem esperada; checar passo -> capacidade -> DIAG por sub-lote; checar os roteiros contra a regra de admissão; manter o used_by coerente com os passos."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 19 arquivos do review-freeze-r1.json antes e depois (iguais); sha do próprio freeze conferido",
+    "sha dos 22+22 inputs declarados (pin, stdlib do perfil, Pydantic preparada) e das 175 âncoras: texto presente nas linhas citadas e sha igual",
+    "case_input_sha256 recalculado pela serialização compacta (34/34); os únicos floats do case_input são 0.5 e 1.5",
+    "rastreio passo a passo dos 32 casos SDK e dos 2 CONTROL contra client.py, async_client.py, api.py, _message_router.py, _goal.py, _login.py, _initialize_metadata.py, _runtime_requirements.py, errors.py, retry.py, models.py, generated/v2_all.py e notification_registry.py",
+    "mensagens exatas (RuntimeError de metadata, AsyncCodex não inicializado, CodexError de versão com causa, JSON-RPC error, timeout de 30 s, repr de ApiKeyLoginAccountResponse)",
+    "aritmética do retry simulada só com stdlib para PY09A-D (0.3, 0.4, 0.2, 0.3, 1.3, 0.8 e sinal de -0.0) e ordem de packaging.Version para alpha (PY05X)",
+    "defaults e erros da Pydantic pela fonte preparada (validate_default False, loc_by_alias True, extra ignore, model_construct, unions RootModel resolvidas pelo literal, bool | None = False)",
+    "semântica da stdlib usada nos oráculos: Condition.notify em FIFO, Queue.put, asyncio.Lock._waiters, shield, wrap_future/_copy_future_state, add_done_callback imediato, send_signal/kill sem reap, ordem do excepthook; sondas próprias de setprofile e da corrida do excepthook",
+    "prioridade de ids e regex de rollover (PY14B), poda pelo cursor mínimo (PY12A), quem acorda em cada fila (PY08X, PY12B), thread de cada callback (PY10X, PY13D, PY13E)",
+    "harness 2A, para viabilidade: adapter-python.py, fixture-rpc.py (hold único, quadro exit, FINISH_PEER), supervisor (bwrap, FIXED_ENV, /profile como diretório, --chdir /work, TasksMax 32, RuntimeMaxSec 45), bootstrap.py, channel.load_config (-I -S)",
+    "herança: freeze r4 F4-01..12, avaliador r4 R4-01..10 e composição R3-06 comparados com a composição e os deltas D2B-01..14 e E2B-01..10",
+    "capacidades: 8 nomes 1:1 com o fit, privilégio, D-12 (sha do AGENTS.md conferido), DIAG por sub-lote e mapa passo -> capacidade",
+    "orçamento: 16 e 18 vagas, 9+3 e 10+2 serviços, 1 CONTROL em cada sub-lote, mínimos do fit (25; 31 com os resíduos) e vagas condicionais com gate",
+    "cobertura: linhas x casos x ramos; projeção de 21/23 para 29/15 e lacunas 13/13, 11/11, 4/4, 1/3, 11/15 e 1/12; whole_requirement false em todas as linhas",
+    "limites: URLs só em https://login.invalid, nenhuma chave de credencial (só o valor 'apiKey' no PY17A), 0 recibos e 0 crédito em todos os documentos",
+    "validador: leitura do código e dos 20 controles negativos de validation.json"
+  ],
+  "limits": "Não importei nem executei o SDK nem a Pydantic: os loc de erros de union, os avisos de serialização e o repr de modelos foram lidos na fonte, não observados. Não executei o harness, o supervisor, o bwrap nem a leitura de /proc entre namespaces (readlink de cwd e environ ficam para o DIAG-PY-PROCWITNESS). As corridas foram avaliadas por leitura e por sondas análogas só com stdlib, sem o adapter real. Não reexecutei os scripts de build nem o validador, porque eles escreveriam na pasta. Nada foi escrito no repositório; uma saída longa de sonda foi gravada pelo próprio harness da sessão, fora do repositório.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

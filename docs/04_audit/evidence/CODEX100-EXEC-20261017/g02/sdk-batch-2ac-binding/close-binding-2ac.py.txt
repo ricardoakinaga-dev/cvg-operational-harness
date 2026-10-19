@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION - escreve state.json e next-task.json com os sha atuais.
+# Uso: python3 -I -B close-binding-2ac.py.txt <unit_dir> <phase>   (phase: draft antes da revisão | final depois dela)
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+U, PHASE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION"
+UNIT = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-binding"
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02"
+
+
+def p(*a):
+    return os.path.normpath(os.path.join(U, *a))
+
+
+def load(name):
+    with open(p(name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(p(name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+cov, gaps, proj, val, iv = (load(x) for x in ("coverage-observed-v3.json", "gaps-review-v3.json", "projection-2b-on-v3.json", "validation.json", "input-verification.json"))
+adm_state = load("../sdk-batch-2ac-admission/state.json")
+lead = load("../sdk-source-batch-2b-spec/lead-decision-r2-f01.json")
+b2_next = load("../sdk-source-batch-2b-spec/next-task.json")
+review = None
+status = "IN_REVIEW"
+if PHASE == "final":
+    r1 = load("review-r1/review.json")
+    r2 = load("review-r2/review.json") if os.path.exists(p("review-r2/review.json")) else None
+    final = r2 or r1
+    review = {"R1": "%s (%s) review-r1/review.json" % (r1["verdict"], r1.get("summary_counts", "")),
+              "repair": "repair-r1.json (1/1)" if os.path.exists(p("repair-r1.json")) else "não usado",
+              "R2": ("%s (%s) review-r2/review.json" % (r2["verdict"], r2.get("summary_counts", ""))) if r2 else "não usada",
+              "disposition": "review-r2/executor-disposition.json" if os.path.exists(p("review-r2/executor-disposition.json")) else None,
+              "critic": "subagente novo por rodada, somente leitura; o executor gravou brief e veredito sem edição"}
+    status = "COMPLETED_LOCAL" if final["verdict"] == "APPROVE" else "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS"
+
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente", "status": status, "write_scope": UNIT + "/**",
+    "repo": iv["repo"],
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])), "record": "input-verification.json"},
+    "result": {
+        "map": "coverage-observed-v3.json", "v2_unchanged_sha256": cov["sources"]["coverage_observed_v2"]["sha256"],
+        "counts_v2": cov["counts_v2"], "counts_v3": cov["counts"],
+        "status_changes": [x["contract"] for x in cov["status_changes"]],
+        "bound_cases_continuation": cov["bound_cases_continuation"],
+        "arms_open_v2": cov["arms_open_explicit_v2_count"], "arms_closed_v3": len(cov["arms_closed_v3"]), "arms_open_explicit_v3": len(cov["arms_open_explicit_v3"]),
+        "arms_closed_by_contract": {c: [a["arm"] for a in cov["arms_closed_v3"] if a["contract"] == c] for c in sorted({a["contract"] for a in cov["arms_closed_v3"]})},
+        "still_not_consumed_2a": [x["case"] for x in cov["still_not_consumed_2a"]],
+        "remaining_open_by_contract": cov["remaining_open_by_contract"],
+        "gaps": gaps["summary"],
+        "projection_2b_on_v3": {"after_2B_1": proj["after_2B_1"]["counts"], "after_2B_1_and_2B_2": proj["after_2B_1_and_2B_2"]["counts"],
+                                "variant_procwitness_not_admitted": {k: v for k, v in proj["variant_procwitness_not_admitted"].items() if k != "why"}},
+        "validation": "%s (%d erros; %d/%d controles negativos rejeitados)" % (val["result"], len(val["errors"]), sum(n["rejected"] for n in val["negative_controls"]), len(val["negative_controls"])),
+        "next_task": "next-task.json (IMPLEMENT-AND-ADMIT do 2B-1)",
+    },
+    "scripts": ["verify-inputs-2ac.py.txt", "build-binding-2ac.py.txt", "validate-binding-2ac.mjs.txt", "close-binding-2ac.py.txt"],
+    "formatting": {"tool": "prettier 3.8.3 (node_modules do repositório, Node v22.23.2), npx prettier --ignore-path /dev/null --write",
+                   "order": ["build-binding-2ac.py.txt grava os três JSON com json.dumps(indent=2)", "prettier --write nos JSON da pasta",
+                             "validate-binding-2ac.mjs.txt grava validation.json", "prettier --write validation.json",
+                             "close-binding-2ac.py.txt grava state.json e next-task.json", "prettier --write state.json e next-task.json"],
+                   "effect": "Só a forma dos arrays curtos (numa linha) e quebras; o conteúdo JSON é o do script. Rodar os scripts sem o prettier reproduz o conteúdo, não os bytes (R1-F06).",
+                   "not_formatted": ["review-freeze-r*.json (assunto das revisões, ligado por sha)", "review-r*/verdict.raw.txt (texto do crítico sem edição)"]},
+    "budget": {"services": 0, "reviews": "2/2" if review and review["R2"] != "não usada" else ("1/2" if review else "0/2"),
+               "grouped_repairs": "1/1" if os.path.exists(p("repair-r1.json")) else "0/1"},
+    "review": review, "functional_receipts": 0, "parity_credit": 0,
+    "note": "Observação de cliente não é paridade. Sem serviço, SDK, rede, PG, commit ou branch; Docker só para o gitleaks, registrado em secret-scan.json quando existir. Ledgers, coordenação, 0384-0386 e catálogo central não editados.",
+    "secret_scan": load("secret-scan.json") if os.path.exists(p("secret-scan.json")) else "ainda não rodado (roda no fechamento, sobre cópia da pasta)",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+nt = {
+    "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-1 (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": status, "status": "READY_PENDING_LEAD_CLAIM" if PHASE == "final" else "DRAFT_PENDING_REVIEW",
+    "track": "T1 com execução local contida (como a admissão 2A e a da continuação)", "t3_required": False,
+    "definition": {"path": G02 + "/sdk-source-batch-2b-spec/next-task.json", "sha256": sha("../sdk-source-batch-2b-spec/next-task.json"),
+                   "note": "A definição completa da unidade (spec, orçamento, paradas, carry-over e R2-F01 obrigatório) está nesse next-task; este documento só acrescenta o que mudou com o BIND da continuação."},
+    "id_convention": "Identificadores de achado prefixados pela origem: 2B-SPEC/... (revisões da especificação do lote 2B) e 2AC-ADM/... (revisões da admissão da continuação 2A).",
+    "lead_decision_2B_SPEC_R2_F01": dict({"path": G02 + "/sdk-source-batch-2b-spec/lead-decision-r2-f01.json", "sha256": sha("../sdk-source-batch-2b-spec/lead-decision-r2-f01.json")},
+                                         **{k: lead[k] for k in ("decision", "rule", "conditions")}),
+    "first_step_additions": [
+        "Antes de qualquer escrita: reconferir que cada delta D2B (../sdk-source-batch-2b-spec/freeze-r4-2b-delta.json) se aplica sem conflito com os 10 itens de carry_over_from_continuation_admission, que entram no mesmo freeze; conflito para a unidade e volta à especificação.",
+        "Implementar 2B-SPEC/R2-F01 (contagem de ocorrência de gancho por (id, event)) no avaliador do 2B-1, com autoteste positivo e negativo, e pedir aprovação explícita dele na revisão da IMPLEMENT.",
+    ],
+    "preconditions_now": [
+        "IMPLEMENT-AND-ADMIT da continuação 2A: %s, com source-freeze-r4 (%s) e identity-freeze-r4 (%s) e revisão R2 %s; precondição do 2B-1 satisfeita."
+        % (adm_state["status"], adm_state["freezes"]["source-freeze-r4.json"][:8], adm_state["freezes"]["identity-freeze-r4.json"][:8], adm_state["review"]["r2"]["verdict"]),
+        "Mapa base passa a ser o v3 (%s): %d observados e %d abertos; a projeção do 2B sobre o v3 está em projection-2b-on-v3.json."
+        % (UNIT + "/coverage-observed-v3.json", cov["counts"]["OBSERVED_CLIENT_PARTIAL"], cov["counts"]["OPEN_REQUIRED_FUTURE_PROFILE"]),
+    ],
+    "carry_over_from_continuation_admission": ["2AC-ADM/%s: %s" % (x["finding"], x["text"]) for x in adm_state["carry_over_next_freeze"]],
+    "carry_over_note": "Os itens acima valem para o próximo freeze antes de qualquer nova execução (state.json#/carry_over_next_freeze da admissão da continuação); o freeze do 2B-1 os aplica junto com os deltas D2B.",
+    "after_this": [
+        "BIND do 2B-1 (coverage-observed-v4 ao lado do v3)",
+        "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-2, com 2B-SPEC/R2-F01 implementado e aprovado na revisão da IMPLEMENT do 2B-1 e o 2B-1 admitido",
+        "segunda continuação 2A: remaining_open_by_contract de coverage-observed-v3.json e os resíduos SECOND_2A_CONTINUATION das linhas fora do plano",
+        "perfil distribuído depois da decisão de identidade dos artefatos",
+    ],
+    "not_authorized_now": b2_next["not_authorized_now"],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+for name, obj in (("state.json", state), ("next-task.json", nt)):
+    with open(p(name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(status, state["result"]["validation"])

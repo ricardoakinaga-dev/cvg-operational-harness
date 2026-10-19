@@ -1,0 +1,92 @@
+--- spec0242-r2.source.md	2026-10-19 04:28:15.880524170 -0300
++++ spec0242-r3.source.md	2026-10-19 04:39:22.844375367 -0300
+@@ -1,6 +1,6 @@
+ # SPEC0242 — Tetos e prazos do corpo integral da fronteira B6
+ 
+-**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho r2 da preparação T1 `HISO005-P2-NEXT-RECON-20261019`. O lead atribui o número final ao materializar em `docs/02_spec`; nesse passo, os links são reescritos para caminhos relativos a `docs/02_spec`, e a referência ao rascunho 0243 recebe o número final. Implementação futura proposta: `HISO005-P2-BUILD-0242`. Mesma frente HISO005/B6, sem reabrir as aprovações 0234, 0236, 0237, 0240 e 0241. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) §6, [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md) §3.2 e §3.5. Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
++**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho r3 (correções da R2 aplicadas sem terceira rodada de crítica) da preparação T1 `HISO005-P2-NEXT-RECON-20261019`. O lead atribui o número final ao materializar em `docs/02_spec`; nesse passo, os links são reescritos para caminhos relativos a `docs/02_spec`, e a referência ao rascunho 0243 recebe o número final. Implementação futura proposta: `HISO005-P2-BUILD-0242`. Mesma frente HISO005/B6, sem reabrir as aprovações 0234, 0236, 0237, 0240 e 0241. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) §6, [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md) §3.2 e §3.5. Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
+ 
+ ## 1. CURRENT — problema e evidência
+ 
+@@ -89,10 +89,10 @@
+ 
+ Alternativas avaliadas e não propostas:
+ 
+-- **Widening** por função depois de K contextos e **corte por módulo.** As duas mudam o domínio abstrato ou a semântica de corte. Também ainda exigem subir `maxStates`, por inferência e não por medição: mesmo zerando os 17.696 estados exclusivos dos arquivos dos helpers que estouram, sobram 107.764 estados, acima de 100.000.
++- **Widening** por função depois de K contextos e **corte por módulo.** As duas mudam o domínio abstrato ou a semântica de corte. Também ainda exigem subir `maxStates`, por inferência e não por medição: mesmo zerando os 19.008 estados exclusivos dos quatro arquivos dos helpers que estouram, sobram 106.452 estados, acima de 100.000.
+ - **Memoização.** Não reduz os contextos dos helpers que estouram.
+ 
+-Fora do delta: algoritmo e definição de contexto, K0–K7 e K3, `maxCallDepth`, `maxUnionValues`, `maxNodes`, `maxFiles`, bytes, `maxBuffer` de 64 MiB, valores de `INSTALLED_IDENTITY_LIMITS`, census, recomputação do worker, receitas de referência ([rascunho 0243](spec0243-r2.source.md)), allowlist e aceite de UNKNOWN.
++Fora do delta: algoritmo e definição de contexto, K0–K7 e K3, `maxCallDepth`, `maxUnionValues`, `maxNodes`, `maxFiles`, bytes, `maxBuffer` de 64 MiB, valores de `INSTALLED_IDENTITY_LIMITS`, census, recomputação do worker, receitas de referência ([rascunho 0243](spec0243-r3.source.md)), allowlist e aceite de UNKNOWN.
+ 
+ ## 3. Contrato
+ 
+@@ -114,7 +114,7 @@
+ 1. **Fase 1** é o relógio de parede da criação do verificador até o fim da primeira finalização. Inclui as comparações, a varredura do checker entre as chamadas e a própria primeira finalização, como hoje.
+ 2. **Cada finalização posterior** é uma fase com relógio de parede do início ao fim dela.
+ 
+-Todo prazo derivado dentro do comparador usa o início da fase corrente: `checkTime` e o `_deadline` passado a `collect()`. Uma chamada a `compare()` depois da primeira finalização é recusada fail-closed com `COMPARISON_AFTER_FINALIZE`; na medição diagnóstica, o checker não faz nenhuma.
++Todo prazo derivado dentro do comparador usa o início da fase corrente: `checkTime` e o `_deadline` passado a `collect()`. Uma chamada a `compare()` depois da primeira finalização é recusada fail-closed com `COMPARISON_AFTER_FINALIZE`, e a recusa invalida o verificador inteiro: o resultado daquela chamada e as finalizações seguintes saem `UNAVAILABLE`. Na medição diagnóstica, o checker não faz nenhuma chamada assim. O teste ID-11 de `tests/b6-0234-installed-identity.test.js` continua verde.
+ 
+ Cada fase continua fail-closed: estouro dá `COMPARISON_TIMEOUT`, `UNAVAILABLE` e o mesmo tratamento de hoje no checker. A finalização posterior revalida exatamente o mesmo conjunto de hoje:
+ 
+@@ -132,10 +132,12 @@
+ 
+ ### 3.3 Conservação
+ 
+-A regra compara duas execuções nos mesmos inputs e com as mesmas referências instalada e compilada:
++A regra compara duas execuções na raiz avaliada `228e7918`, com as mesmas referências instalada e compilada:
+ 
+-- a v4 com os valores atuais;
+-- a v4 com L1–L3.
++- o commit-base da 0242 (§5), sem o delta;
++- o commit com L1–L3.
++
++As referências são construídas uma vez, pela receita do commit-base, e lidas pelos dois lados. A 0242 não altera `boundary-semantic-compiled.mjs`, então o leitor compilado aceita o mesmo recibo nas duas execuções.
+ 
+ As duas precisam terminar sem estouro de prazo, ENOBUFS ou erro de worker, e com as duas finalizações do verificador `COMPLETE`. Nessas condições:
+ 
+@@ -189,7 +191,13 @@
+ | `scripts/boundary-semantic-compiled.mjs` | `dd006347388d13bd9717786764c5de86d0858a61fee19db85f84c777197fe515` |
+ | `scripts/boundary-manifests.mjs`        | `40cd1375d45e3059e797e0fc41795b71a07dbc529e257ef77572958dc40880e5` |
+ 
+-Hoje essas pré-imagens só existem na candidata detached `d6203875`, que é BUILD0241 mais T2. A main, `3704e3f8` e `ae14b824`, ainda tem o kernel v3. A promoção dos caminhos do BUILD0241 e da T2 pelo lead torna a main elegível.
++Hoje essas pré-imagens só existem na candidata detached `d6203875`, que é BUILD0241 mais T2. A main (`3704e3f8`) e o commit documental `ae14b824` ainda têm o kernel v3. A promoção dos caminhos do BUILD0241 e da T2 pelo lead torna a main elegível.
++
++Composição com o [rascunho 0243](spec0243-r3.source.md), que altera `build-installed-reference.mjs`, `boundary-semantic-compiled.mjs` e `boundary-installed-identity.mjs`:
++
++- **Ordem fixa.** Se as duas forem aprovadas, a 0243 vem primeiro e a 0242 depois. Numa candidata compartilhada, cada delta é um commit próprio, nessa ordem.
++- **Base da 0242.** Para cada arquivo, vale a pré-imagem da tabela ou, se a 0243 já estiver no commit-base, a pós-imagem registrada na promoção dela, com o SHA-256 anotado.
++- **Só a 0242 aprovada.** A base é a tabela, e as referências vêm da receita atual.
+ 
+ Fontes previstas:
+ 
+@@ -203,10 +211,10 @@
+ Medições reais:
+ 
+ - avaliam a raiz do BUILD0241 (`228e7918`), os mesmos inputs da T2;
+-- usam referências construídas pela receita atual em `228e7918`, onde ela cabe no teto (margem medida de 22 MB), ou pela receita da 0243, se já estiver aprovada e construída;
++- usam referências construídas pela receita do commit-base: com a 0243 na base, a receita com exclusão; sem ela, a receita atual, que cabe em `228e7918` (margem medida de 22 MB);
+ - as duas execuções da §3.3 usam as mesmas referências.
+ 
+-A 0242 não depende da 0243 para o BUILD. As duas podem dividir a candidata, mas cada delta tem aceite próprio.
++Cada delta tem aceite próprio, e cada conservação compara o commit anterior ao delta com o commit do delta.
+ 
+ O rollback são os valores atuais. A promoção para diante de qualquer uma destas situações:
+ 
+@@ -233,12 +241,12 @@
+ | ID   | Critério obrigatório de BUILD                                                                                                                                                                                                                                                                                                                                                                  |
+ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+ | LB01 | Valores exatos de L1 e L2 por igualdade de constante; nenhum aumento por flag, env ou entrada; redução interna por contador corta com `CUT:<cap>`, com positivo imediatamente abaixo.                                                                                                                                                                                                         |
+-| LB02 | Primeiras falhas preservadas: com os valores atuais, a raiz `228e7918` corta por `maxContexts`; uma fixture com etapa intermediária mais longa que o orçamento (reduzido pela opção de teste) leva a finalização final a `COMPARISON_TIMEOUT`; o teste A2 falha nos valores novos antes da migração.                                                                                       |
+-| LB03 | L3 com fixture de pelo menos 1 pacote usado, para que a finalização final recolete inventário: etapa intermediária maior que o orçamento reduzido termina COMPLETE; fase 1 ou finalização que sozinha passa do orçamento dá `COMPARISON_TIMEOUT`; `compare()` depois da primeira finalização dá `COMPARISON_AFTER_FINALIZE`; opção de teste recusa elevação; conjunto revalidado igual ao de hoje; duração por fase registrada. |
++| LB02 | Primeiras falhas preservadas: com os valores atuais, a raiz `228e7918` corta por `maxContexts`; na pré-imagem, uma fixture com relógio simulado (stub de `performance.now`) e etapa intermediária mais longa que 120 s leva a finalização final a `COMPARISON_TIMEOUT`, ou o teste novo rodado contra a pré-imagem registra essa falha; o teste A2 falha nos valores novos antes da migração.                                                                                       |
++| LB03 | L3 com fixture de pelo menos 1 pacote usado, para que a finalização final recolete inventário: etapa intermediária maior que o orçamento reduzido termina COMPLETE; fase 1 ou finalização que sozinha passa do orçamento dá `COMPARISON_TIMEOUT`; `compare()` depois da primeira finalização dá `COMPARISON_AFTER_FINALIZE` e invalida o verificador; opção de teste recusa elevação; conjunto revalidado igual ao de hoje; duração por fase registrada. |
+ | LB04 | Conservação da §3.3 por multiset nas fixtures e na árvore real, com tuplas de envelope separadas; finalizações COMPLETE nas duas execuções; normal e strict iguais; `validation: true`.                                                                                                                                                                                                       |
+ | LB05 | Medição real pós-gates sem estouro: `bodyCoverage` e `phases` declarados; registro da §3.4 completo, com o uso de todos os tetos e as durações por fase; RSS e payload abaixo dos limiares de parada.                                                                                                                                                                                         |
+ | LB06 | Violações do census iguais às atuais; tempo do census sem aumento além do ruído medido.                                                                                                                                                                                                                                                                                                        |
+-| LB07 | Regressões 0228/0234/0236/0237/0240/0241 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; verificador com os hashes da nova fonte; consumidor físico fresco.                                                                                                                                                                                                                |
++| LB07 | Regressões 0228/0234/0236/0237/0240/0241 preservadas, inclusive ID-11; crítica fresca com zero obrigatórios; 16 gates Node22; verificador com os hashes da nova fonte; consumidor físico fresco.                                                                                                                                                                                                                |
+ | LB08 | Promoção só dos deltas próprios, por pré-imagens e claims; evidências anteriores imutáveis; sem push, deploy ou produção.                                                                                                                                                                                                                                                                      |
+ 
+ ## 8. Autoridade

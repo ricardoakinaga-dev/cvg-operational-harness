@@ -1,0 +1,136 @@
+// DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-binding-2ac.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a partir das entradas: casos consumidos, status por linha, braços fechados e abertos, contagens, sha das fontes e dos
+// acceptance.json citados, lacunas e projeção do 2B; confere que o v2 não mudou; roda controles negativos em cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const UNIT = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-binding'
+const ADM = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-admission'
+const BIND = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2a-binding'
+const B2 = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2b-spec'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const shaFile = (p) => sha(readFileSync(p))
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const armId = (a) => (/^((?:TS|PY|PK)\d\d\.B\d\d)/.exec(a) || [])[1] ?? null
+const V2_SHA = '3136dd27410ad15313f507379f098f6561d8d99db7411bcf8b25e0d8c742b6a0'
+
+const inputs = {
+  v2: load(join(BIND, 'coverage-observed-v2.json')), gaps2: load(join(BIND, 'gaps-review-v2.json')),
+  adj: load(join(ADM, 'adjudication-r1.json')), cases: load(join(ADM, 'inputs/spec-2ac/cases-2a-cont.json')),
+  plan: load(join(ADM, 'inputs/spec-2ac/coverage-plan-2a-cont.json')), plan2b: load(join(B2, 'coverage-plan-2b.json')),
+  c2b: [...load(join(B2, 'cases-2b-1.json')).cases, ...load(join(B2, 'cases-2b-2.json')).cases],
+}
+
+function expected(inp) {
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  const caseById = Object.fromEntries(inp.cases.cases.map((c) => [c.id, c]))
+  const plan = Object.fromEntries(inp.plan.rows.map((r) => [r.source_contract, r]))
+  const out = {}
+  for (const r2 of inp.v2.rows) {
+    const c = r2.source_contract
+    const p = plan[c]
+    const cases = p ? p.cases : []
+    const obsIds = new Set(cases.filter((x) => consumed.has(x)).flatMap((x) => caseById[x].branches_targeted.filter((b) => (armId(b) ?? '').startsWith(c + '.')).map(armId)))
+    const closed = r2.arms_open_explicit_2a.filter((a) => p && p.arms_open_v2.includes(a.arm) && obsIds.has(armId(a.arm))).map((a) => a.arm)
+    const open = r2.arms_open_explicit_2a.filter((a) => !closed.includes(a.arm)).map((a) => a.arm)
+    const replaces = p?.replaces ?? {}
+    const excl = r2.excluded_cases_2a.map((e) => e.case)
+    const stillExcl = excl.filter((e) => !(replaces[e] && consumed.has(replaces[e])))
+    let status = r2.status
+    if (r2.status !== 'OBSERVED_CLIENT_PARTIAL' && p) status = cases.every((x) => consumed.has(x)) && stillExcl.length === 0 ? 'OBSERVED_CLIENT_PARTIAL' : 'OPEN_REQUIRED_FUTURE_PROFILE'
+    out[c] = { status, closed, open, stillExcl, obs: cases.filter((x) => consumed.has(x)) }
+  }
+  return out
+}
+
+function validate(docs, inp) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  const v3 = docs['coverage-observed-v3.json']
+  const g3 = docs['gaps-review-v3.json']
+  const pj = docs['projection-2b-on-v3.json']
+  if (shaFile(join(BIND, 'coverage-observed-v2.json')) !== V2_SHA) err('v2 changed on disk')
+  const exp = expected(inp)
+  if (v3.rows.length !== 44 || inp.v2.rows.length !== 44) err('row count')
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  if (JSON.stringify([...v3.bound_cases_continuation].sort()) !== JSON.stringify([...consumed].sort())) err('bound cases differ from bind_consumes_only')
+  for (const r of v3.rows) {
+    const e = exp[r.source_contract]
+    if (!e) { err(`unknown row ${r.source_contract}`); continue }
+    if (r.status !== e.status) err(`${r.source_contract}: status ${r.status} != ${e.status}`)
+    const closed = r.arms_closed_v3.map((a) => a.arm)
+    if (JSON.stringify(closed) !== JSON.stringify(e.closed)) err(`${r.source_contract}: closed arms differ`)
+    if (JSON.stringify(r.arms_open_explicit_v3.map((a) => a.arm)) !== JSON.stringify(e.open)) err(`${r.source_contract}: open arms differ`)
+    if (JSON.stringify(r.excluded_cases_v3.map((x) => x.case)) !== JSON.stringify(e.stillExcl)) err(`${r.source_contract}: excluded cases differ`)
+    if (JSON.stringify(r.observations_continuation.map((o) => o.case)) !== JSON.stringify(e.obs)) err(`${r.source_contract}: observations differ`)
+    for (const o of r.observations_continuation) {
+      if (!consumed.has(o.case)) err(`${r.source_contract}: ${o.case} not consumable`)
+      const adjRow = inp.adj.rows.find((x) => x.case === o.case)
+      if (o.final_reading !== adjRow.final_reading || o.attribution !== adjRow.attribution) err(`${o.case}: reading not from the adjudication`)
+      const p = normalize(join(UNIT, o.acceptance_service.path))
+      if (shaFile(p) !== o.acceptance_service.sha256) err(`${o.case}: acceptance sha`)
+    }
+    if (r.whole_requirement_covered !== false || r.parity_credit !== 0 || r.functional_receipt !== null) err(`${r.source_contract}: claims coverage, receipt or credit`)
+    const r2 = inp.v2.rows.find((x) => x.source_contract === r.source_contract)
+    if (r.status_v2 !== r2.status) err(`${r.source_contract}: status_v2`)
+  }
+  const counts = { OBSERVED_CLIENT_PARTIAL: 0, OPEN_REQUIRED_FUTURE_PROFILE: 0 }
+  for (const e of Object.values(exp)) counts[e.status] += 1
+  if (JSON.stringify(v3.counts) !== JSON.stringify(counts)) err(`counts ${JSON.stringify(v3.counts)} != ${JSON.stringify(counts)}`)
+  if (v3.arms_closed_v3.length + v3.arms_open_explicit_v3.length !== inp.v2.arms_open_explicit_2a.length) err('closed + open != v2 open arms')
+  for (const [k, s] of Object.entries(v3.sources)) if (shaFile(normalize(join(UNIT, s.path))) !== s.sha256) err(`source sha ${k}`)
+  // gaps
+  const st = Object.fromEntries(Object.entries(exp).map(([k, v]) => [k, v.status]))
+  for (const g of g3.rows) {
+    const obs = g.contracts.filter((c) => st[c] === 'OBSERVED_CLIENT_PARTIAL')
+    if (JSON.stringify(obs) !== JSON.stringify(g.contracts_observed_client_partial_v3)) err(`${g.id}: observed contracts`)
+    if (g.status_after !== 'OPEN') err(`${g.id}: gap closed`)
+  }
+  // projection
+  const sub = Object.fromEntries(inp.c2b.map((c) => [c.id, c.sub_lot]))
+  const become = (lot) => inp.plan2b.rows.filter((r) => st[r.source_contract] === 'OPEN_REQUIRED_FUTURE_PROFILE' && r.primary_cases.every((x) => sub[x] === lot)).map((r) => r.source_contract)
+  const a1 = become('2B-1'), a2 = become('2B-2')
+  const pc = (n) => ({ OBSERVED_CLIENT_PARTIAL: counts.OBSERVED_CLIENT_PARTIAL + n, OPEN_REQUIRED_FUTURE_PROFILE: counts.OPEN_REQUIRED_FUTURE_PROFILE - n })
+  if (JSON.stringify(pj.after_2B_1.counts) !== JSON.stringify(pc(a1.length))) err('projection after 2B-1')
+  if (JSON.stringify(pj.after_2B_1_and_2B_2.counts) !== JSON.stringify(pc(a1.length + a2.length))) err('projection after 2B-2')
+  for (const [n, d] of Object.entries(docs)) if (('functional_receipts' in d && d.functional_receipts !== 0) || ('parity_credit' in d && d.parity_credit !== 0)) err(`${n}: receipts or credit`)
+  return errors
+}
+
+const FILES = ['coverage-observed-v3.json', 'gaps-review-v3.json', 'projection-2b-on-v3.json']
+const docs = Object.fromEntries(FILES.map((f) => [f, load(join(UNIT, f))]))
+const errors = validate(docs, inputs)
+for (const f of readdirSync(UNIT)) { const s = statSync(join(UNIT, f)); if (s.isFile() && s.size === 0) errors.push(`empty file ${f}`) }
+const row = (d, c) => d['coverage-observed-v3.json'].rows.find((r) => r.source_contract === c)
+const controls = [
+  ['linha fora do plano promovida', 'status', (d) => { row(d, 'PY01').status = 'OBSERVED_CLIENT_PARTIAL' }],
+  ['braço fechado sem caso consumido', 'closed arms differ', (d) => { row(d, 'TS03').arms_closed_v3.push({ arm: 'TS03.B01' }) }],
+  ['braço fechado removido', 'open arms differ', (d) => { const r = row(d, 'TS12'); r.arms_open_explicit_v3.push({ arm: 'TS12.B01 (signal pré-abortado)' }) }],
+  ['2A-TS12 dado como consumido', 'excluded cases differ', (d) => { row(d, 'TS12').excluded_cases_v3 = [] }],
+  ['CONTROL consumido', 'bound cases differ', (d) => { d['coverage-observed-v3.json'].bound_cases_continuation.push('2AC-CTRL01') }],
+  ['leitura final fora da adjudicação', 'reading not from the adjudication', (d) => { row(d, 'TS03').observations_continuation[0].final_reading = 'MISMATCH' }],
+  ['sha de acceptance trocado', 'acceptance sha', (d) => { row(d, 'TS10').observations_continuation[0].acceptance_service.sha256 = '0'.repeat(64) }],
+  ['contagem alterada', 'counts', (d) => { d['coverage-observed-v3.json'].counts.OBSERVED_CLIENT_PARTIAL = 26 }],
+  ['requisito inteiro afirmado', 'claims coverage', (d) => { row(d, 'TS07').whole_requirement_covered = true }],
+  ['lacuna fechada', 'gap closed', (d) => { d['gaps-review-v3.json'].rows[4].status_after = 'CLOSED' }],
+  ['projeção alterada', 'projection after 2B-1', (d) => { d['projection-2b-on-v3.json'].after_2B_1.counts.OBSERVED_CLIENT_PARTIAL = 30 }],
+  ['crédito de paridade', 'receipts or credit', (d) => { d['gaps-review-v3.json'].parity_credit = 1 }],
+]
+const negative = controls.map(([name, want, mutate]) => {
+  const d = clone(docs)
+  mutate(d)
+  const e = validate(d, inputs)
+  const hit = e.find((x) => x.includes(want))
+  return { control: name, expected_error_substring: want, rejected: Boolean(hit), matching_error: hit ?? null }
+})
+const doc = {
+  kind: 'BINDING_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION',
+  note: 'segunda implementação do mesmo executor; não é revisão independente', node: process.version,
+  result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors, negative_controls: negative, validated_at: new Date().toISOString(),
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)
+if (errors.length) console.log(errors.slice(0, 20).join('\n'))

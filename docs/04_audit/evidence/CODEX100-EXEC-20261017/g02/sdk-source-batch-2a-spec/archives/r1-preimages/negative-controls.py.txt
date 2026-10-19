@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# Controles negativos do validador da especificação: cópias mutadas de cases-2a.json no scratchpad.
+# Uso: python3 -I negative-controls.py.txt <repo_root> <scratch_dir> <node_bin> <out_json>
+import copy, json, os, subprocess, sys
+ROOT, SCR, NODE, OUT = sys.argv[1:5]
+S = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-spec")
+base = json.load(open(os.path.join(S, "cases-2a.json")))
+VAL = open(os.path.join(S, "validate-spec.mjs.txt")).read()
+
+def case(d, cid):
+    return next(c for c in d["cases"] if c["id"] == cid)
+
+def m_slot25(d):
+    extra = copy.deepcopy(case(d, "2A-TS13")); extra["id"] = "2A-EXTRA"; extra["slot"] = 25; d["cases"].append(extra)
+def m_overloaded(d): case(d, "2A-PY03")["peer_script"]["unscripted_error"]["data"]["kind"] = "server_overloaded"
+def m_server_code(d): case(d, "2A-PY04")["peer_script"]["unscripted_error"]["code"] = -32001
+def m_argv_cap(d):
+    c = case(d, "2A-TS05"); c["expected"]["argv"] = c["expected"]["argv"] + ["--config", "x=" + "y" * 1500]
+    c["expected"]["argv_json_bytes"] = len(json.dumps(c["expected"]["argv"], separators=(",", ":")).encode())
+def m_drop_contract(d): d["cases"] = [c for c in d["cases"] if c["id"] != "2A-PY08"]
+def m_receipt(d): case(d, "2A-TS09")["receipt"] = {"id": "fake"}
+def m_anchor_line(d): case(d, "2A-TS03")["anchors"][0]["lines"] = [1]
+def m_two_controls(d):
+    extra = copy.deepcopy(case(d, "2A-CTRL01")); extra["id"] = "2A-CTRL02"; d["cases"][0] = extra
+def m_real_key(d): case(d, "2A-TS09")["sdk_calls"][0]["options"]["apiKey"] = "sk-proj1234567890"
+
+CONTROLS = [("slot_25_added", m_slot25), ("server_overloaded_in_unscripted", m_overloaded), ("server_range_code", m_server_code),
+            ("argv_over_cap", m_argv_cap), ("contract_without_case", m_drop_contract), ("receipt_added", m_receipt),
+            ("anchor_wrong_line", m_anchor_line), ("second_control", m_two_controls), ("real_key_shape", m_real_key)]
+os.makedirs(SCR, exist_ok=True)
+res = []
+for name, fn in CONTROLS:
+    d = copy.deepcopy(base); fn(d)
+    p = os.path.join(SCR, f"neg-{name}.json"); json.dump(d, open(p, "w"))
+    o = os.path.join(SCR, f"neg-{name}.validation.json")
+    subprocess.run([NODE, "--input-type=module", "-", ROOT, o, p], input=VAL, text=True, capture_output=True)
+    v = json.load(open(o))
+    res.append({"control": name, "verdict": v["verdict"], "failed_checks": v["failed"], "rejected": v["verdict"] == "FAIL"})
+out = {"kind": "VALIDATOR_NEGATIVE_CONTROLS", "controls": res, "all_rejected": all(r["rejected"] for r in res),
+       "note": "Cópias mutadas gravadas só no scratchpad da sessão; nada desta pasta foi alterado pelos controles."}
+with open(OUT, "w") as f:
+    json.dump(out, f, indent=2, ensure_ascii=False); f.write("\n")
+print(out["all_rejected"], [(r["control"], r["failed_checks"]) for r in res])

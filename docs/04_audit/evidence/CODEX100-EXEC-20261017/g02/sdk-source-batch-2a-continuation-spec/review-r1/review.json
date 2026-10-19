@@ -1,0 +1,198 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r1/",
+  "reviewed_at": "2026-10-19T05:33:00Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "bc39f8401552ba73c5acfdaf0ede2b938cfcb042a886eb40aa7723f32da56f2a",
+  "subject_hash_check": {
+    "before": "bc39f8401552ba73c5acfdaf0ede2b938cfcb042a886eb40aa7723f32da56f2a",
+    "after": "bc39f8401552ba73c5acfdaf0ede2b938cfcb042a886eb40aa7723f32da56f2a"
+  },
+  "verdict": "REVISE",
+  "mandatory_findings": [
+    "R1-F01",
+    "R1-F02",
+    "R1-F03"
+  ],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "casos R / 2A-TS12R",
+      "title": "O 2A-TS12R muda mais do que declara e contradiz a regra de que caso R não muda valor esperado",
+      "evidence": [
+        "cases-2a-cont.json:133 (#/expectation_rule: 'Casos R copiam o caso 2A congelado sem mudar valor esperado')",
+        "cases-2a-cont.json:1244-1251 (#/cases/3/expected e expected_observation) contra sdk-source-batch-2a-spec/cases-2a.json 2A-TS12.expected = {api_error_name_recorded, node_specific: 'Classe, momento e se o filho chegou a existir dependem do Node v24.20.0; registrados, não presumidos.', no_remote_stop_claim}",
+        "cases-2a-cont.json:1280-1284 (#/cases/3/replay_of/changes: só barreira, oráculo r4 e troca NO_CHILD->PREFRAME_TERMINATION; sem campo why)",
+        "cases-2a-cont.json:1195, 1286-1291, 1292-1305 (role RESIDUAL_OF_PARTIAL->REEXECUTION_WITH_OS_WITNESS, infra sem CAP-SPAWN-ENOENT e com F4-06/F4-01, âncora nova exec.ts:203)",
+        "validate-spec-cont.mjs.txt:81-86 (para o 2A-TS12R só confere formas, predicado de testemunha, gate e barreira; nenhuma conferência de diferenças não declaradas)",
+        "sonda própria cmp_replays.py no scratch: diff campo a campo 2A-TS12 -> 2A-TS12R"
+      ],
+      "detail": "Mudanças não declaradas: expected (chave api_error_name_recorded renomeada para api_error_recorded; child_existence e no_yield_after_abort acrescentados; node_specific reescrito), expected_observation (passa a afirmar 'o filho é criado e o aborto o encerra antes do primeiro quadro', quando o 2A dizia explicitamente que a existência do filho dependia do Node e não era presumida), role, infra (CAP-SPAWN-ENOENT removido) e anchors (+exec.ts:203). Não há registro do porquê da exclusão de NO_CHILD. Efeito no desfecho é limitado (o evaluator do TS12 não lê expected, e NO_CHILD fora do caso vira INVALID_CAPTURE por R3-F02/R4-03, não MISMATCH), mas o critério pedido ('muda o que diz mudar e por quê') não é cumprido e a regra de topo fica falsa para este caso.",
+      "required_action": "Completar replay_of.changes do 2A-TS12R com todos os campos alterados e um why por mudança (em especial: por que o caso agora presume a existência do filho — spawn do Node v24.20.0 cria e aborta no nextTick, qualificado pelo DIAG-TS-PREABORT — e que NO_CHILD passa a INVALID_CAPTURE pela regra 1, nunca MISMATCH); manter ou justificar a redação 'registrados, não presumidos'; restringir a expectation_rule a 2A-TS03R/06R/07R ou explicitar a exceção do TS12R; no validador, exigir que o diff 2A-TS12 -> 2A-TS12R seja exatamente a lista declarada, com controle negativo."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "freeze r4 / avaliador r4 (testemunha do TS12R)",
+      "title": "PREFRAME_TERMINATION e NO_CHILD não são mutuamente exclusivas: IN_OPEN não prova exec bem-sucedido",
+      "evidence": [
+        "evaluator-r4-contract.json:29 (R4-03: PREFRAME = nenhum quadro + >=1 IN_OPEN + nenhum processo no CALLS_DONE; NO_CHILD = zero eventos + spawn falho)",
+        "cases-2a-cont.json#/predicate_table/abort.os_witness_recorded_r4 (existência do filho = IN_OPEN do inode do executável na janela)",
+        "freeze-r4-contract.json:124-133 (F4-06; DIAG-TS-PREABORT só exige PREFRAME com >=1 IN_OPEN)",
+        "sdk-batch-2a-admission/python/acceptance.py:61 (SPAWN_FAILURE_CODES) e :404-413 (o oráculo r3.1 separava processo mapeado de spawn falho)",
+        "sonda própria (scratch cont-review-r1/inotify_probe.py + probe2/spawn.mjs, Node v24.20.0, kernel 7.0.0-38, uid 1000): script com shebang para intérprete inexistente, spawn com signal pré-abortado -> eventos IN_OPEN, IN_ACCESS, IN_CLOSE_NOWRITE no inode do script e único erro {code: ENOENT, syscall: 'spawn <path>'}, sem AbortError e sem filho"
+      ],
+      "detail": "O kernel emite IN_OPEN ao abrir o arquivo no execve antes de decidir o formato e o intérprete; um exec que falha depois da abertura (ENOEXEC, intérprete ausente, ENOMEM) deixa IN_OPEN sem filho vivo e com evidência positiva de spawn falho no driver. Pela letra do R4-03, esse caso satisfaz PREFRAME_TERMINATION (aceita no 2A-TS12R) e abort.os_witness_recorded_r4 registra 'existência do filho'; com no_remote_stop_claim e no_yield_after_abort aprovados, o desfecho seria PASS_CLIENT_OBSERVATION com o fato errado para TS12.B01 (filho criado e morto pelo aborto). O mesmo critério fraco está no gate do DIAG-TS-PREABORT. É improvável no perfil (runtime ligado pelo identity freeze), mas é exatamente a suficiência do oráculo novo que a unidade precisa fixar, e o r3.1 já fazia essa distinção.",
+      "required_action": "Em R4-03 e no oráculo de abort.os_witness_recorded_r4: PREFRAME_TERMINATION exige também ausência de evidência positiva de spawn falho no driver (code em SPAWN_FAILURE_CODES com syscall spawn*); IN_OPEN com spawn falho -> INVALID_CAPTURE; declarar as formas mutuamente exclusivas e o resto INVALID_CAPTURE. No DIAG-TS-PREABORT, exigir também erro ABORT_ERR do código próprio. Acrescentar autoteste negativo com exec que falha depois da abertura (script com intérprete inexistente) que não pode ser classificado PREFRAME."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "orçamento e DIAG de qualificação",
+      "title": "DIAG-TS-ARGVENV e DIAG-TS-TMPWATCH saem da requalificação sob o freeze r4 sem justificativa, embora suas capacidades sustentem predicados client das vagas",
+      "evidence": [
+        "sdk-batch-2a-admission/budget.json#/planned (9 DIAG, incluindo DIAG-TS-ARGVENV e DIAG-TS-TMPWATCH)",
+        "sdk-source-batch-2a-spec/execution-budget.json#/planned/qualification_services (ARGVENV: argv 768 e env exato; TMPWATCH: listagem do driver, SCHEMA_FILE, inotify informativo, tarefas com UV_THREADPOOL_SIZE=2) e sdk-source-batch-2a-spec/next-task.json:41 (prática: requalificar todos os DIAG a cada freeze)",
+        "execution-budget.json#/planned/qualification_services (11, sem ARGVENV e TMPWATCH) e #/order/2 ('Requalificar os 6 DIAG existentes e qualificar os 5 novos': o DIAG-TS-ENOENT já existia, logo são 7 + 4)",
+        "cases-2a-cont.json: CAP-ENV-EXACT em 2A-TS03R, 2A-TS06R, 2A-TS07R, 2A-TS06X, 2A-TS07X, 2A-TS08X; CAP-TS-DRIVER-TMPDIR/CAP-TMP-WITNESS em 2A-TS03R e 2A-TS06R; predicados client env.child_env_exact, argv.exact_vector/argv.pattern, tmp.driver_listing_after_settle, fixture.schema_bytes_exact",
+        "freeze-r4-contract.json F4-01 (supervisor/config), F4-07 (adapter-typescript, onde ficam os limites de argv/env: adapter-typescript:95-100), F4-08/F4-09 (driver que faz o TMP_LISTING), F4-10 (channel)"
+      ],
+      "detail": "O freeze r4 mexe justamente nos caminhos de código que esses dois DIAG qualificaram no r3. Sem requalificação, uma regressão do harness nesses caminhos aparece como falha de predicado client e vira MISMATCH bruto que precisa de nova adjudicação — o modo de falha que esta continuação existe para reparar. Nada em U explica a exclusão nem diz que o DIAG-TS-ORDER as substitui (ele só prova a chegada dos bytes congelados ao driver e ao fixture-cli). 11 + 2 = 13 excede o teto de 12, então é preciso decidir.",
+      "required_action": "Requalificar ARGVENV e TMPWATCH sob o r4 dentro de 12 serviços (por exemplo, fundir o DIAG-TS-ORDER neles: config de ordem sensível no ARGVENV via flatten->argv/env e schema de ordem sensível no TMPWATCH via SCHEMA_FILE/listagem/tarefas; 12 serviços, reserva 0, registrado), ou registrar por capacidade por que a qualificação r3 vale no r4 (caminhos inalterados por sha) e ampliar a prova do DIAG-TS-ORDER para argv 768/env exato e SCHEMA_FILE/listagem. Corrigir a contagem '6 existentes / 5 novos'."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "casos R e CONTROL",
+      "title": "Mudanças de metadados não declaradas nos casos R e no CONTROL",
+      "evidence": [
+        "cases-2a-cont.json#/cases/0..2 (role NEW_CONTRACT -> REEXECUTION_OF_HARNESS_INVALIDATED_CASE, rule e anchor_inputs novos; changed_fields só lista infra e predicates)",
+        "cases-2a-cont.json#/cases/8 (2AC-CTRL01: gate reescrito e anchor_inputs novo; changes só lista argv/id e predicado de captura)"
+      ],
+      "detail": "Valores esperados, sdk_calls, fixture, formas e âncoras dos casos R e do CONTROL são cópia fiel (sha de replay confere; validador e sonda própria). Faltam só declarações de metadados.",
+      "required_action": "Acrescentar role, rule, anchor_inputs e gate às listas de mudanças declaradas."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "freeze r4 F4-01",
+      "title": "capture.case_input_frozen_bytes depende do sha calculado pelo próprio supervisor, que era o componente com defeito",
+      "evidence": [
+        "freeze-r4-contract.json:40-45 (F4-01)",
+        "evaluator-r4-contract.json:25 (R4-02: compara o sha registrado pelo supervisor)",
+        "sonda própria lang-probe.mjs: JSON.stringify(case_input) em Node v24.20.0 tem o mesmo sha256 congelado nos 9 slots"
+      ],
+      "detail": "Os autotestes e o DIAG-TS-ORDER dão boa garantia, mas o predicado por vaga é autoatestado. Como JSON.stringify do objeto lido reproduz a serialização congelada, há uma testemunha independente barata.",
+      "required_action": "Fazer os papéis (driver, fixture-cli, adapter) relatarem sha256(JSON.stringify(case_input)) lido no BEGIN/READY e o avaliador recalcular a partir do adapter-config.json preservado na evidência."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "freeze r4 F4-06 (janela)",
+      "title": "A disciplina da janela inotify não está especificada",
+      "evidence": [
+        "freeze-r4-contract.json:127 (janela da liberação da barreira ao CALLS_DONE)",
+        "sdk-batch-2a-admission/python/supervisor.py:1047-1050 (cópia de arquivos do perfil para a evidência depois da execução)"
+      ],
+      "detail": "Sem eventos com PID ou carimbo de tempo, a atribuição depende da ordem de leitura: drenar antes de liberar a barreira e imediatamente ao ler o CALLS_DONE, antes de qualquer ação do supervisor que abra arquivos do perfil.",
+      "required_action": "Especificar: drenar antes da liberação e logo no CALLS_DONE; nenhuma leitura do caminho do adapter por supervisor ou driver dentro da janela; IN_Q_OVERFLOW ou IN_IGNORED -> falha de captura; registrar caminho de host e (st_dev, st_ino) observado igual à fonte do --ro-bind."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "avaliador r4 (2A-TS12R)",
+      "title": "Os predicados reaproveitados do TS12 não são religados ao passo 5 e o tipo de passo 'barrier' do driver não está nos itens F4",
+      "evidence": [
+        "sdk-batch-2a-admission/python/acceptance.py:395-414 (2A-TS12 usa '4:Thread.runStreamed' e '4:yield')",
+        "cases-2a-cont.json:1225-1242 (passo 4 é barreira; run no passo 5)"
+      ],
+      "detail": "Reaproveitado sem ajuste, abort.no_yield_after_abort e abort.no_remote_stop_claim passariam no vazio; o abort.api_outcome_recorded falharia e o desfecho seria INVALID_CAPTURE (vaga perdida, não PASS falso).",
+      "required_action": "Acrescentar ao r4 uma cláusula com o passo 5 para os predicados do 2A-TS12R e um autoteste; listar no freeze o suporte do driver ao passo barrier WITNESS_WINDOW_OPEN (reaproveitando o STEP_RELEASE)."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "2A-TS10E / F4-07 / DIAG-TS-EPIPE",
+      "title": "O gate DIAG-TS-EPIPE é mais fraco que as expectativas dependentes do Node e o fault tem riscos de implementação não citados",
+      "evidence": [
+        "cases-2a-cont.json:1413-1453 (uncaught.count 1, resultado vazio; gate 'um uncaughtException EPIPE ou ECONNRESET')",
+        "freeze-r4-contract.json:135-141 (F4-07)",
+        "sdk-batch-2a-admission/node/adapter-typescript:59, 110, 117 (process.stdin tocado no relay, no sinal e no abandono)"
+      ],
+      "detail": "Os valores esperados do 2A-TS10E conferem com exec.ts:209/215-216/250 e com a semântica do Node (sem listener no stdin; o erro não vira 'error' do filho). Mas o gate só exige um uncaught, sem conferir contagem exata, ausência de 'error' do filho e saída 0 depois do EOF. No adapter, fechar o fd 0 e depois tocar process.stdin, ou reaproveitar o fd 0 numa alocação seguinte, falsificaria o fault; o tipo de quadro FAULT também precisa ser aceito por channel e observer.",
+      "required_action": "Gate: exatamente um uncaught (EPIPE ou ECONNRESET, syscall write), nenhum 'error' do filho, EOF do stdout e saída 0. F4-07: no modo fault, nunca instanciar process.stdin, reabrir /dev/null no fd 0 depois do close e declarar o tipo FAULT em DATA_FIELDS/ROLE_KINDS e no observer."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "paradas e gates",
+      "title": "Paradas e gates condicionais estão inconsistentes",
+      "evidence": [
+        "execution-budget.json#/stops (exceção só para 'os dois que só decidem vaga condicional'; a testemunha privilegiada aparece como parada, mas 'o resto segue')",
+        "cases-2a-cont.json:1272 (gate do 2A-TS12R depende também do DIAG-TS-ENOENT)"
+      ],
+      "detail": "Uma falha do DIAG-TS-ENOENT requalificado pararia a unidade inteira, embora só sirva à testemunha do TS12R.",
+      "required_action": "Dizer se a falha do DIAG-TS-ENOENT para a unidade ou só desliga a vaga 2A-TS12R, e tirar a testemunha privilegiada da lista de paradas (ou chamá-la de desvio)."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P3",
+      "area": "lote 2B",
+      "title": "A avaliação do 2B tem pequenos erros de inventário (a conclusão não muda)",
+      "evidence": [
+        "batch-2b-fit-assessment.json#/decision ('sete capacidades novas') contra #/capabilities_new_to_2b (8)",
+        "sdk-batch-2a-binding/next-task.json carry_over R2-F05 (PY05 e PY14 também no 2B) e HOW-next-step.md (resíduos de PY08 e PY10 no 2B)"
+      ],
+      "detail": "25 + 1 + 9 = 35 > 24 confere e, mesmo sozinho, o 2B (26) já excede 24. O escopo omitido só aumenta o mínimo. O teto de serviços (11 de 12 usados) é um segundo motivo, que não aparece.",
+      "required_action": "Corrigir a contagem (8), listar PY05, PY14 e os resíduos PY08/PY10 como escopo do 2B e acrescentar o argumento do teto de serviços."
+    },
+    {
+      "id": "R1-F11",
+      "severity": "P3",
+      "area": "rastreabilidade menor",
+      "title": "Âncoras e textos menores",
+      "evidence": [
+        "freeze-r4-contract.json:157-170 (F4-10 fala em 'regex ... channel.py', mas channel.py:339-340 usa listas; supervisor.py:95,107 fixa CONTROL_CASE e contagens 7/16 e 24 slots)",
+        "state.json#/result/slots/*/gate (texto truncado em 80 caracteres)",
+        "build-spec-cont.py.txt comentário do 2A-TS07X ('expoente', inexistente no caso)",
+        "control-slot-contract.json:62 (purpose diz exercitar match estrito e ordem do exit; o peer_script não tem params nem quadro exit)",
+        "reprodução do gerador no scratch: os 8 JSON saem iguais aos congelados em valor e ordem de chaves, mas não byte a byte (formatação posterior de arrays)"
+      ],
+      "detail": "Nenhum destes muda desfecho.",
+      "required_action": "Ancorar channel.py:339-340 e as constantes do supervisor no F4-10; não truncar os gates no state.json; corrigir o comentário; ajustar o purpose do CONTROL (match estrito e exit só por autoteste); registrar que a reprodução é igual em JSON, não em bytes."
+    }
+  ],
+  "checks_run": [
+    "hash do assunto antes e depois; 17/17 arquivos do freeze conferidos (bytes e sha256); únicos fora do freeze: review-freeze-r1.json e review-r1/",
+    "leitura linha a linha de exec.ts (506 linhas), thread.ts, codex.ts, outputSchemaFile.ts e tipos do pin; ordem do argv exec.ts:95-181 refeita à mão para 2A-TS06X, 2A-TS07X, 2A-TS08X e 2A-TS10E; mensagens exatas exec.ts:284/300/319/340/343; flatten exec.ts:279-311; toTomlValue exec.ts:314-345; isPlainObject exec.ts:352-353; stdin sem listener exec.ts:209/215-216; caminho do erro thread.ts:70-116 (sem spawn e com cleanup)",
+    "sonda própria de semântica (Node v24.20.0, sem SDK): Date sem entradas, instância com chaves próprias, ordem de inserção, buraco ignorado pelo map e 'h=[1, , 3]', undefined visitado, typeof bigint, isFinite de NaN/Infinity, template sem escape; argv_json_bytes 108/54/217 conferem; sha256 de JSON.stringify(case_input) igual ao congelado nos 9 slots; nenhuma chave inteira",
+    "diff campo a campo dos casos R e do CONTROL contra cases-2a.json (sha 147a906d...); case_object_sha256 recalculado nos 5",
+    "âncoras do freeze r4 no supervisor.py:221/275/705, observer.py:445, fixture-rpc.py:56/59/307/308 e channel.cjs:227 conferidas no texto",
+    "leitura de supervisor.py (perfil ro-bind, seal 0555, role_argv do adapter com #!/runtime/node), adapter-typescript, ts-driver.mjs (materialize, STEP_RELEASE, recorder do 2A-TS10), observer.reconcile e acceptance.py (jeq, capture_form, compose, oráculo r3.1 do TS12)",
+    "sonda própria inotify sem privilégio (uid 1000): exec que falha depois da abertura gera IN_OPEN com spawn ENOENT (base do R1-F02)",
+    "reprodução no scratch do verify-inputs-cont (10/10, mesmos detalhes), do validate-spec-cont (PASS, 0 erros, 14/14, igual ao validation.json) e do build-spec-cont (8 JSON iguais em valor e ordem de chaves)",
+    "conferência do plano: 14 braços OPEN do v2 cobertos, projeção 21+4=25 e 23-4=19; orçamento 9 vagas, 11+1 serviços; 2B 3+2+4+3+2+5+2+4=25",
+    "T3: D-12 em docs/07_agents/AGENTS.md:90-104 (sha 8306af1b... confere)",
+    "git status e git diff: nenhum arquivo rastreado de CODEX100-EXEC-20261017 alterado; a unidade é a única pasta não rastreada desse ramo de evidência; mudanças em ledgers no worktree não citam esta unidade"
+  ],
+  "criteria": {
+    "1_valores_esperados_casos_novos": "CONFORME. 2A-TS06X, 2A-TS07X, 2A-TS08X e 2A-TS10E conferem com a fonte do pin linha a linha (mensagens, ordem do argv, d={}, inst.k=1, a.b duplicado, 'h=[1, , 3]', interpolação sem escape, webSearchMode antes do legacy, zero spawn nos passos de erro, stdin sem listener e run resolvido). As dependências do Node estão marcadas e protegidas por gate (ressalva P3 R1-F08). 2A-TS12R: ver R1-F01/R1-F02.",
+    "2_casos_R_e_CONTROL": "PARCIAL. TS03R/06R/07R e CTRL são cópia fiel nos campos de expectativa (sha de replay confere); o 2A-TS12R muda mais do que declara (R1-F01, P2); metadados não declarados (R1-F04, P3).",
+    "3_freeze_r4": "PARCIAL. F4-01..F4-11 têm regra e prova e as âncoras de defeito conferem. Inotify é sem privilégio. A forma PREFRAME/oráculo r4 não exclui spawn falho com IN_OPEN (R1-F02, P2); falta a disciplina da janela (R1-F06, P3).",
+    "4_avaliador_e_composicao": "CONFORME com ressalvas. Mesma composição do r3/r3.1; classes corretas (sanidade para case_input e fault; client para api.*); known_bad julgado só por predicados client; falha de integridade ou de forma não declarada vira INVALID_CAPTURE, nunca MISMATCH. Ressalvas: R1-F02 e R1-F07.",
+    "5_plano_e_orcamento": "PARCIAL. Regra de substituição, projeção 25/19, 14 braços, 9 vagas e 11+1 serviços conferem; DIAG-TS-ARGVENV e DIAG-TS-TMPWATCH foram excluídos sem justificativa (R1-F03, P2); paradas inconsistentes (R1-F09, P3).",
+    "6_lote_2B_e_T3": "CONFORME. O 2B não cabe (35 > 24) e vira unidade própria; NAO_EXIGE_T3 está correto segundo D-12; a pergunta contingente está pronta (ressalvas de inventário em R1-F10).",
+    "7_evidencia": "CONFORME. input-verification e validation reproduzidos com resultado idêntico (o validador é autoverificação declarada, sem checar o 2A-TS12R contra o 2A-TS12); nada fora de U foi alterado; 0 recibos e 0 crédito em todos os documentos."
+  },
+  "limits": [
+    "Sem import ou execução do SDK, sem serviço, sem sandbox bwrap ou systemd e sem rede; o comportamento do Node foi conferido com sondas próprias no host (Node v24.20.0, kernel 7.0.0-38), não dentro do perfil contido.",
+    "feasibility-probes.py.txt não foi reexecutado; as sondas próprias cobrem os mesmos pontos e o caso de exec que falha.",
+    "Os DIAG e autotestes do freeze r4 ainda não existem; esta revisão julga a especificação, não a implementação.",
+    "Estimativas de vagas do 2B são julgamento do executor; só a aritmética e a coerência foram conferidas."
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

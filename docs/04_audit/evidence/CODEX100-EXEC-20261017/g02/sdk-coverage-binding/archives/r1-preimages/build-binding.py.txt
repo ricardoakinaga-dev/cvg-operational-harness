@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE - gera coverage-observed.json e gaps-review.json.
+# Uso: python3 -I build-binding.py.txt <repo_root> <out_dir>
+# Somente leitura das entradas; não importa SDK nem executa nada além de JSON e sha256.
+# As notas de escopo (observed_scope, remaining_open_scope, branch arms) são leitura
+# analítica de cases.json + contratos G01; não são cobertura de ramo medida.
+import hashlib
+import json
+import os
+import sys
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017")
+ADM = os.path.join(E, "g02/sdk-admission")
+REF = os.path.join(E, "g02/sdk-reference-profile")
+G01 = os.path.join(E, "g01/sdk-open-contracts")
+TASK = "DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE"
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p) as f:
+        return json.load(f)
+
+
+def rel_from_out(p):
+    return os.path.relpath(p, OUT)
+
+
+cov_p = os.path.join(REF, "coverage.json")
+cases_p = os.path.join(REF, "cases.json")
+cr_p = os.path.join(ADM, "case-results.json")
+cr2_p = os.path.join(ADM, "case-results-r2.json")
+integ_p = os.path.join(G01, "integration.json")
+pyc_p = os.path.join(G01, "python-contracts.json")
+tsc_p = os.path.join(G01, "typescript/contracts.json")
+um_p = os.path.join(ADM, "unit-manifest.json")
+idf_p = os.path.join(ADM, "identity-freeze.json")
+
+cov = load(cov_p)
+cases = {c["id"]: c for c in load(cases_p)["cases"]}
+cr = {c["case"]: c for c in load(cr_p)["cases"]}
+cr2 = {c["case"]: c for c in load(cr2_p)["cases"]}
+integ = load(integ_p)
+pyc = {c["id"]: c for c in load(pyc_p)["rows"]}
+tsc = {c["id"]: c for c in load(tsc_p)["contracts"]}
+
+# Leitura analítica por contrato observado (fonte: cases.json expected_observation,
+# fixture_input e known_bad; contratos G01 future_positive/branches; review-r1/r2).
+NOTES = {
+    "PY05": {
+        "observed_scope": "Guarda de campo opcional do cliente Python com versões do peer sintético: 0.150.0 com toolOutput não-None levanta CodexError com causa ValueError antes do pedido guardado (SDKPY02); 0.151.0 escreve o pedido guardado (SDKPY03); 0.0.0 com launch customizado, sem capabilities, levanta antes de _request_raw (SDKPY04); toolOutput None não aciona a guarda e o payload mantém toolOutput:null (SDKPY05).",
+        "remaining_open_scope": "Runtime 0.0.0 com checkout capabilities (generate-json-schema), metadados sem versão/desconhecidos, fallback por userAgent, normalização alpha, turnTrigger/serviceTierForTurn e excludeTurns em resume/fork, e metadados CVG verdadeiros. A versão vem do peer sintético e não é identidade de runtime.",
+        "known_bad_limits": "A ordem initialized antes da guarda (SDKPY02/04) é julgada por wire.initialized_before_guard, derivado da faixa do driver e do fonte, não por bytes entre processos (R1-F05 PARTIAL, R2-F01).",
+    },
+    "PY06": {
+        "observed_scope": "initialize com UUID aprendido seguido da notificação initialized sem id/params e sem ACK do peer; metadados de initialize parseados (SDKPY01).",
+        "remaining_open_scope": "O vínculo ClientNotification-initialized do catálogo é fato de fonte; sem app-server real; uma plataforma e um runtime; demais sítios do censo RPC ficam em PY03/PY08.",
+        "known_bad_limits": None,
+    },
+    "PY07": {
+        "observed_scope": "O handler padrão real responde decision=accept a item/commandExecution/requestApproval e item/fileChange/requestApproval e {} a método desconhecido, ecoando os ids, com pedidos em série (SDKPY06). Nenhuma operação real de comando ou arquivo existe.",
+        "remaining_open_scope": "Exceção do handler levando a fail_all no reader; params não-dict; cenário nativo governado mostrando que o accept do cliente não despacha efeito institucional (EQ02/SPEC0239). O accept literal não concede autoridade institucional.",
+        "known_bad_limits": "facts.institutional_approval=NOT_IMPLIED; o julgamento serial do peer é sanidade do peer (R1-F04).",
+    },
+    "PY10": {
+        "observed_scope": "Cancelamento de AsyncCodexClient._start_turn depois da escrita do pedido: o chamador recebe CancelledError; o close tardio da subscription retorna _closed=True para o turn A; nenhum turn/interrupt no intervalo capturado até o retorno do callback e o dreno do peer (SDKPY07). Execução instrumentada com threading.setprofile.",
+        "remaining_open_scope": "Cancelamento antes do resultado síncrono; wrappers asyncio.to_thread comuns; finally de AsyncTurnHandle.stream; continuação remota do turn; timing ou desempenho sem instrumentação.",
+        "known_bad_limits": "O known-bad bloqueante (turn/interrupt no caminho de cancelamento ou goal path) termina INVALID_CAPTURE por prazo, não MISMATCH, porque o peer congelado não responde a pedido sem script (R1-F01, R2-F02). Só closed=false é alcançável como MISMATCH.",
+    },
+    "PY14": {
+        "observed_scope": "cancel_goal_operation real: pause (thread/goal/set paused) com erro ordinário suprimido, turn/interrupt A, extração de B do erro exato e um único turn/interrupt B, sem terceiro (SDKPY08); ID extraído igual a A não gera segundo pedido (SDKPY09).",
+        "remaining_open_scope": "Cursor lógico do goal (merge de turns, supressão de status, terminal por estado), close normal versus KeyboardInterrupt/CancelledError, sucesso do primeiro interrupt, prefixo InvalidRequestError não relacionado, rollover concorrente. Resposta de sucesso não prova parada remota.",
+        "known_bad_limits": "Interrupt sem script (terceiro interrupt, retry do mesmo ID) termina INVALID_CAPTURE, fail-closed, não MISMATCH (R1-F01).",
+    },
+    "TS10": {
+        "observed_scope": "spawn real do Node com codexPathOverride sintético, stdin e stdout presentes; argv com exec --experimental-json e flags adicionais capturadas (SDKTS01).",
+        "remaining_open_scope": "spawn que lança, evento error, stdin ausente, stdout ausente, faults de write/end/kill, listeners e liveness do filho separados do erro reportado.",
+        "analytic_branch_arms_observed": ["TS10.B04 (stdin presente)", "TS10.B05 (braço stdout presente)", "TS10.B06 (stderr presente)"],
+        "known_bad_limits": None,
+    },
+    "TS11": {
+        "observed_scope": "EOF vazio com exit 0 devolve items=[], finalResponse='' e usage=null (SDKTS01); exit 7 com stderr sintético lança 'Codex Exec exited with code 7' mesmo após eventos (SDKTS09).",
+        "remaining_open_scope": "Erro de spawn guardado após o loop, ordem EOF versus exit, readline que lança no setup, CRLF, linha parcial, UTF-8 dividido, sinal com stderr, code null e stderr tardio.",
+        "analytic_branch_arms_observed": ["TS11.B01 (EOF)", "TS11.B03 (code 0 e code diferente de 0)"],
+        "known_bad_limits": None,
+    },
+    "TS12": {
+        "observed_scope": "AbortSignal delegado ao spawn real: aborto depois da testemunha de início do filho, resultado do Node v24.20.0 registrado, término por sinal conhecido e saída/reap conferidos pelo supervisor, não pelo SDK (SDKTS10).",
+        "remaining_open_scope": "Signal omitido ou pré-abortado, aborto antes do yield e depois do EOF, ordens do finally (normal, erro, return), close/removeAllListeners que lançam, child.killed já verdadeiro, filho que ignora o sinal, outras versões de Node.",
+        "analytic_branch_arms_observed": ["TS12.B01 (aborto durante a execução)"],
+        "known_bad_limits": "Cancelamento não é parada remota; o cleanup é julgado por testemunhas do SO.",
+    },
+    "TS13": {
+        "observed_scope": "Linha JSONL malformada lança Error 'Failed to parse item' com a linha e cause (SDKTS02); linha vazia passa pelo readline e falha no JSON.parse, sem descarte silencioso (SDKTS03); cleanup do finally com término por sinal conhecido.",
+        "remaining_open_scope": "JSON válido não-objeto ([], 42, string, null), tipo desconhecido e JSON truncado.",
+        "analytic_branch_arms_observed": ["TS13.B01 (invalid-json)", "TS13.B03 (blank-line)"],
+        "known_bad_limits": None,
+    },
+    "TS14": {
+        "observed_scope": "thread.id passa a synth-thread e usage.cache_write_input_tokens recebe 0 antes do yield (SDKTS04).",
+        "remaining_open_scope": "Vários thread.started, id ausente, usage ausente ou null, cache_write presente não-nulo e demais tipos de evento.",
+        "analytic_branch_arms_observed": ["TS14.B01 (thread.started)", "TS14.B02 (turn.completed com cache_write ausente)"],
+        "known_bad_limits": "A rejeição de sobrescrever cache_write presente não tem fixture (R1-F05).",
+    },
+    "TS15": {
+        "observed_scope": "Itens duplicados retidos, finalResponse igual ao último agent_message e último usage vencendo (SDKTS05); evento error ignorado e resultado parcial vazio com exit 0 (SDKTS06); turn.failed com erro lança Error('synthetic failure') (SDKTS07); turn.failed com error null gera agregado parcial (SDKTS08); exit 7 depois de eventos lança (SDKTS09).",
+        "remaining_open_scope": "Dois turn.completed, falha depois de completed, itens updated/started, cancelamento por break do consumidor. Retorno do cliente não é terminal nativo.",
+        "analytic_branch_arms_observed": ["TS15.B01", "TS15.B02", "TS15.B03 (erro presente e null)", "TS15.B04", "TS15.B05"],
+        "known_bad_limits": None,
+    },
+}
+
+# Proposta de alocação dos 33 abertos (HOW-next-profile.md). Planejamento, não crédito.
+PLAN = {}
+for cid in ["TS01", "TS02", "TS03", "TS04", "TS05", "TS06", "TS07", "TS08", "TS09", "PY03", "PY04", "PY08", "PY15", "PY16"]:
+    PLAN[cid] = "SOURCE_BATCH_2A"
+for cid in ["PY01", "PY02", "PY09", "PY11", "PY12", "PY13", "PY17", "PY18"]:
+    PLAN[cid] = "SOURCE_BATCH_2B"
+for cid in ["PY19", "PY20", "PK01", "PK02", "PK03", "PK04", "PK05", "PK06", "PK07", "PK08", "PK09"]:
+    PLAN[cid] = "DISTRIBUTED_PROFILE"
+PLAN_NOTE = {"PY02": "Ramos de launch_args_override, env e close no lote 2B; ramo de caminho empacotado fica no perfil distribuído."}
+
+
+def gaps_of(cid):
+    if cid in pyc:
+        return pyc[cid]["gaps"]
+    return [tsc[cid]["gap_id"]]
+
+
+def acc_entry(case_id):
+    r = cr[case_id]
+    d = os.path.join(ADM, r["attempt_dir"])
+    a1 = os.path.join(d, "acceptance.json")
+    a2 = os.path.join(d, "acceptance-r2.json")
+    j1, j2 = load(a1), load(a2)
+    assert j1["case"] == case_id and j2["case"] == case_id
+    assert cr2[case_id]["sha256"] == sha(a2), case_id
+    return {
+        "case": case_id,
+        "outcome_service_r1": j1["outcome"],
+        "outcome_offline_r2": j2["outcome"],
+        "capture_verdict": j1["capture_verdict"],
+        "predicates": len(j1["predicates"]),
+        "failed_predicates": j1["failed_predicates"],
+        "by_judge_r2": cr2[case_id]["by_judge"],
+        "client_fact_only": j1["facts"]["client_fact_only"],
+        "parity_receipt": j1["facts"]["parity_receipt"],
+        "functional_receipts": j1["functional_receipts"],
+        "acceptance": {"path": rel_from_out(a1), "sha256": sha(a1)},
+        "acceptance_r2": {"path": rel_from_out(a2), "sha256": sha(a2)},
+    }
+
+
+rows = []
+cited = {}
+for r in cov["rows"]:
+    cid = r["source_contract"]
+    row = {
+        "source_contract": cid,
+        "gaps": gaps_of(cid),
+        "selected_case_ids": list(r["selected_case_ids"]),
+        "status_original": r["status"],
+    }
+    if r["status"] == "SELECTED_PARTIAL_NOT_RUN":
+        obs = [acc_entry(c) for c in r["selected_case_ids"]]
+        all_pass = all(
+            o["outcome_service_r1"] == "PASS_CLIENT_OBSERVATION"
+            and o["outcome_offline_r2"] == "PASS_CLIENT_OBSERVATION"
+            and o["client_fact_only"] is True
+            and o["parity_receipt"] is None
+            and o["functional_receipts"] == 0
+            for o in obs
+        )
+        row["status"] = "OBSERVED_CLIENT_PARTIAL" if all_pass else "OBSERVED_CLIENT_PARTIAL_WITH_FAILURES"
+        row["observations"] = obs
+        n = NOTES[cid]
+        row["observed_scope"] = n["observed_scope"]
+        row["remaining_open_scope"] = n["remaining_open_scope"]
+        if "analytic_branch_arms_observed" in n:
+            row["analytic_branch_arms_observed"] = n["analytic_branch_arms_observed"]
+        row["known_bad_limits"] = n["known_bad_limits"]
+        for o in obs:
+            cited[o["acceptance"]["path"]] = o["acceptance"]["sha256"]
+            cited[o["acceptance_r2"]["path"]] = o["acceptance_r2"]["sha256"]
+    else:
+        assert r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE" and not r["selected_case_ids"], cid
+        row["status"] = "OPEN_REQUIRED_FUTURE_PROFILE"
+        row["planned_profile_proposal"] = PLAN[cid]
+        if cid in PLAN_NOTE:
+            row["planned_profile_note"] = PLAN_NOTE[cid]
+    row["whole_requirement_covered"] = False
+    row["functional_receipt"] = None
+    row["parity_credit"] = 0
+    rows.append(row)
+
+counts = {}
+for row in rows:
+    counts[row["status"]] = counts.get(row["status"], 0) + 1
+bound_cases = sorted({c for row in rows for c in row["selected_case_ids"]})
+
+observed = {
+    "kind": "SDK_COVERAGE_OBSERVED_BINDING",
+    "task": TASK,
+    "version": 1,
+    "meaning": "Mapa versionado ao lado de ../sdk-reference-profile/coverage.json, que não foi editado. Liga as 19 observações de cliente da admissão SDK aos 44 contratos fonte. OBSERVED_CLIENT_PARTIAL significa que todos os casos selecionados do contrato terminaram PASS_CLIENT_OBSERVATION no perfil de referência (fonte do SDK do pin contra peers sintéticos, Linux x86-64, Python 3.12.3, Node v24.20.0, TS 5.9.2 por transpile). Não é qualificação, recibo funcional nem paridade.",
+    "status_vocabulary": {
+        "OBSERVED_CLIENT_PARTIAL": "Casos selecionados observados com PASS_CLIENT_OBSERVATION; parte do contrato e todo o requisito seguem abertos.",
+        "OPEN_REQUIRED_FUTURE_PROFILE": "Sem caso selecionado; requisito obrigatório em perfil futuro.",
+    },
+    "sources": {
+        "coverage_original": {"path": rel_from_out(cov_p), "sha256": sha(cov_p)},
+        "cases": {"path": rel_from_out(cases_p), "sha256": sha(cases_p)},
+        "case_results": {"path": rel_from_out(cr_p), "sha256": sha(cr_p)},
+        "case_results_r2": {"path": rel_from_out(cr2_p), "sha256": sha(cr2_p)},
+        "unit_manifest": {"path": rel_from_out(um_p), "sha256": sha(um_p)},
+        "identity_freeze": {"path": rel_from_out(idf_p), "sha256": sha(idf_p)},
+        "g01_integration": {"path": rel_from_out(integ_p), "sha256": sha(integ_p)},
+        "g01_python_contracts": {"path": rel_from_out(pyc_p), "sha256": sha(pyc_p)},
+        "g01_typescript_contracts": {"path": rel_from_out(tsc_p), "sha256": sha(tsc_p)},
+    },
+    "evaluator_note": "acceptance.json é o documento do avaliador r1 em serviço (source-freeze-r2); acceptance-r2.json é a reavaliação offline após o reparo agrupado (evaluator-freeze-r2), com o mesmo outcome nos 19 casos.",
+    "source_contract_count": len(rows),
+    "counts": counts,
+    "bound_case_count": len(bound_cases),
+    "bound_cases": bound_cases,
+    "cited_acceptance_documents": len(cited),
+    "rows": rows,
+    "six_gaps": "OPEN (ver gaps-review.json)",
+    "all_509_catalog_records": "Inalterados NOT_RUN/null; nenhum recibo emitido.",
+    "distributed_and_platform_profiles": "Obrigatórios depois; não removidos pelo perfil de fonte.",
+    "functional_receipts": 0,
+    "parity_credit": 0,
+}
+
+# Revisão das seis lacunas.
+status_by_id = {row["source_contract"]: row["status"] for row in rows}
+INCIDENTAL = {
+    "GAP-GENERATED": "Fato incidental, sem crédito: os casos Python carregaram o Pydantic 2.13.4/core 2.46.4 admitido e parsearam InitializeResponse (api.initialize_result_parsed em SDKPY01-09; api.request_result_validated com o conjunto exato de chaves em SDKPY03/05). Nenhum oráculo de alias, nullable, default, extra, union, root ou model_dump foi exercido.",
+    "GAP-PROVENANCE": "Fato incidental, sem crédito: sem pyproject no perfil, o SDK Python anunciou clientInfo.version 0+unknown (SDKPY01), coerente com o ramo de fallback de package_version descrito em PY19, que não foi selecionado. A guarda de PY05 usou versões do peer sintético.",
+    "GAP-PLATFORM-PACKAGING": "Os casos TS usaram codexPathOverride sintético, o que contorna o resolver de pacote e plataforma (PK01/PK02); só Linux x86-64; nenhum pacote distribuído.",
+}
+JUST = {
+    "GAP-PY-API": "Quatro dos 13 contratos têm observação parcial de cliente. Seguem abertos o ciclo de vida sync/async real, cancelamento, goal, login, subscribers e processo; a separação entre o accept literal do cliente e a autoridade institucional nativa; e o perfil de versão/capability verdadeiro. Observação de fonte contra peer sintético não qualifica o requisito.",
+    "GAP-PY-RPC": "Quatro dos 11 contratos têm observação parcial de cliente. Seguem abertos o dispatch genérico de método/modelo/callback e a semântica real do app-server; oráculos de request/notification/erro/overload/corrida entre consumidores; variantes desconhecidas pendentes.",
+    "GAP-GENERATED": "Nenhum dos quatro contratos foi selecionado. Pydantic real carregado incidentalmente não é oráculo de modelo gerado.",
+    "GAP-PROVENANCE": "PY05 foi observado só no ramo de guarda com versões sintéticas, explicitamente sem identidade de runtime. Nenhum wheel, npm ou arquivo de runtime distribuído foi autenticado.",
+    "GAP-TS-LANGUAGE": "Seis dos 15 contratos têm observação parcial de cliente. O perfil usou transpile TS 5.9.2 com loader restrito, não o bundle tsup, typecheck nem npm publicado; faults de processo Node, ordens de abort/EOF/exit e a distinção entre retorno parcial e terminal nativo seguem abertos.",
+    "GAP-PLATFORM-PACKAGING": "Nenhum dos 12 contratos foi exercido; plataformas, pacotes, wrappers e proxy exigem o perfil distribuído.",
+}
+gap_rows = []
+for g in integ["rows"]:
+    contracts = g["python_contracts"] + g["typescript_contracts"]
+    obs = [c for c in contracts if status_by_id.get(c) == "OBSERVED_CLIENT_PARTIAL"]
+    progress_before = g["current_unit_progress"]
+    progress_after = (
+        progress_before + "+CLIENT_OBSERVED_PARTIAL_REFERENCE_PROFILE" if obs and g["id"] != "GAP-PROVENANCE" else progress_before
+    )
+    gap_rows.append({
+        "id": g["id"],
+        "owner": g["owner"],
+        "contracts": contracts,
+        "contracts_total": len(contracts),
+        "contracts_observed_client_partial": obs,
+        "contracts_open": [c for c in contracts if c not in obs],
+        "status_before": g["current_gap_status"],
+        "status_after": "OPEN",
+        "progress_before": progress_before,
+        "progress_after": progress_after,
+        "justification": JUST[g["id"]],
+        "incidental_facts": INCIDENTAL.get(g["id"]),
+        "remaining_boundaries_unchanged": g["remaining_boundaries"],
+        "qualification": "NOT_RUN",
+        "receipt": None,
+        "whole_requirement_covered": False,
+    })
+gaps = {
+    "kind": "SDK_GAPS_REVIEW_AFTER_CLIENT_OBSERVATIONS",
+    "task": TASK,
+    "source": {"path": rel_from_out(integ_p), "sha256": sha(integ_p)},
+    "binding": "coverage-observed.json",
+    "decision_rule": "Uma lacuna só deixa OPEN quando todo o requisito dos donos tiver qualificação com recibo. Observação parcial de cliente no perfil de referência muda apenas o rótulo de progresso; nunca o status.",
+    "rows": gap_rows,
+    "summary": {
+        "OPEN": sum(1 for g in gap_rows if g["status_after"] == "OPEN"),
+        "progress_changed": [g["id"] for g in gap_rows if g["progress_after"] != g["progress_before"]],
+        "progress_unchanged": [g["id"] for g in gap_rows if g["progress_after"] == g["progress_before"]],
+    },
+    "functional_receipts": 0,
+    "parity_credit": 0,
+}
+
+for name, obj in (("coverage-observed.json", observed), ("gaps-review.json", gaps)):
+    with open(os.path.join(OUT, name), "w") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+print(json.dumps({"counts": counts, "bound_cases": len(bound_cases), "cited": len(cited), "gaps": gaps["summary"]}, ensure_ascii=False))

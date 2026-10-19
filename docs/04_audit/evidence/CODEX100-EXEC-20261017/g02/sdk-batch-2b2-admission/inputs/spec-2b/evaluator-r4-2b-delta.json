@@ -1,0 +1,70 @@
+{
+  "kind": "EVALUATOR_R4_2B_DELTA",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "base": {
+    "evaluator_r4": {
+      "path": "../sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json",
+      "sha256": "62d948a1373ab0b7eb7ac55d02bfd3a638bdadbf6d194b3765dd273d63c89b72"
+    }
+  },
+  "inheritance": "R4-01..R4-10 valem sem mudança (R4-06 e R4-10 não se aplicam: não há 2A-TS12R no 2B).",
+  "clauses": [
+    {
+      "id": "E2B-01",
+      "rule": "Tabela de predicados de cases-2b-1.json e cases-2b-2.json; autoteste R3-12 (classe do avaliador == classe congelada) sobre cada tabela."
+    },
+    {
+      "id": "E2B-02",
+      "rule": "Oráculos dos predicados novos como na tabela; jeq em toda comparação de valor JSON, com floats por igualdade exata (-0.0 == 0.0 por valor) e int == float por valor."
+    },
+    {
+      "id": "E2B-03",
+      "rule": "Formas CLIENT_TERMINATED_SIGTERM e CLIENT_KILLED_SIGKILL como em CAP-2B-PROC-WITNESS, só com testemunhas do SO e do canal (o returncode do Popen não entra na forma), mutuamente exclusivas entre si e com PASS; só valem onde o caso declara; integridade de fio sob elas é de prefixo (R4-04)."
+    },
+    {
+      "id": "E2B-04",
+      "rule": "Gramática fechada de ordem: rótulos de passo '<n>:<api>[:<method>]'; expected.api referencia o número do passo; resultados de worker pelo nome. expected.order (e expected.wire.order) é lista de cadeias; cada cadeia é lista de tokens KIND:REF estritamente crescente na sequência única da unidade (número de sequência do canal; bytes do adapter pelo ledger). KIND e REF: STEP:n (início do passo n); CANCEL:n (chamada de task.cancel dentro do passo n); API_RESULT:n, API_ERROR:n e API_CANCELLED:n (quadro de resultado do passo n); WORKER:<nome> (resultado do worker); HOOK:<id>#k (k-ésimo evento do gancho); RAW_READ:<método>[@<threadId>]#k (RAW_READ do LF final da k-ésima linha do cliente com esse método e, se dado, params.threadId); COMMIT_REPLY:<método>[@<threadId>]#k (FORWARD_COMMIT ao SDK do último byte da resposta ao k-ésimo pedido); RELEASE_REPLY:<método>[@<threadId>]#k (controle RELEASE_REPLY do supervisor para o pedido segurado). Em hooks, before, after e during usam os mesmos tokens; during STEP:n vale entre STEP:n e o resultado do passo n. Autoteste interpreta todas as cadeias congeladas dos dois sub-lotes."
+    },
+    {
+      "id": "E2B-05",
+      "rule": "Tokens de identidade são id() de objetos que o driver retém até o CALLS_DONE, para que não haja reutilização de id."
+    },
+    {
+      "id": "E2B-06",
+      "rule": "Eventos de gancho declarados casam por id, atributos e ocorrência; eventos extras são só registrados."
+    },
+    {
+      "id": "E2B-07",
+      "rule": "ValidationError: first_error (type e loc exatos), error_count, errors_contain (type e loc exato ou loc_suffix); detalhes extras só registrados (model.errors_recorded)."
+    },
+    {
+      "id": "E2B-08",
+      "rule": "Sondas: keys ordenadas, tupla vira lista, enum_value é o .value, type_name é type(x).__name__; sonda recusada pela leitura estática é INVALID_CAPTURE."
+    },
+    {
+      "id": "E2B-09",
+      "rule": "Tempo é informativo, exceto o mínimo declarado em expected.timing, julgado dentro de proc.termination_exact."
+    },
+    {
+      "id": "E2B-10",
+      "rule": "Atribuição de MISMATCH só por adjudicação depois da revisão (R4-05); nenhuma regra produz recibo funcional ou crédito de paridade."
+    },
+    {
+      "id": "E2B-11",
+      "rule": "Comparação de resultado: resumos do vocabulário (handles, start_goal_operation, construtores, listas de excepthook, números) por jeq exato; resultado que é modelo Pydantic com todas as chaves congeladas contendo ponto é comparado como subconjunto de caminhos de alias sobre o model_dump(by_alias=True, mode='json'); senão jeq do dump completo; NOTE: fields por subconjunto de caminhos e dump (opcional) por jeq completo do payload. Autoteste com TurnStartResponse (subconjunto) e com NOTE com dump."
+    },
+    {
+      "id": "E2B-12",
+      "rule": "Nas formas de sinal, uma linha que o SDK escreveu (testemunha de gancho no return de CodexClient.notify ou de pedido com resposta) e que não aparece em RAW_READ antes do SIGNAL do adapter é falha de captura (INVALID_CAPTURE), nunca MISMATCH; as demais linhas são julgadas por prefixo."
+    },
+    {
+      "id": "E2B-13",
+      "rule": "wire.absent julga só pedidos cliente->servidor (linhas com id e method); notificação do cliente só é julgada por item com kind=notification. Autoteste R3-12 com o caso 2B-PY01A (initialized presente, '*' exceto initialize ausente)."
+    },
+    {
+      "id": "E2B-14",
+      "rule": "Esperas declaradas (thread.join, excepthook.wait, hook.wait, probe.until, worker.parked, loop.yield_until) que estouram o prazo levam a INVALID_CAPTURE, nunca a MISMATCH."
+    }
+  ],
+  "never": "Nenhuma regra produz recibo funcional ou crédito de paridade."
+}

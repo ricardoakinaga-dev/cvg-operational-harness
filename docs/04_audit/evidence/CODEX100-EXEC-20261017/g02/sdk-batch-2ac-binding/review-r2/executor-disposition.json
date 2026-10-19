@@ -1,0 +1,69 @@
+{
+  "kind": "EXECUTOR_DISPOSITION_R2",
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "review": {
+    "path": "review-r2/review.json",
+    "raw": "review-r2/verdict.raw.txt",
+    "subject": "review-freeze-r2.json (b9d0e06c5140a25fe36703fceaaaff83e06a7592a4fb0546a778e62bb5692907)",
+    "verdict": "REVISE",
+    "summary_counts": "0 P1, 1 P2, 4 P3",
+    "mandatory_findings": ["R2-F01"],
+    "r1_findings_after_r2": "9 RESOLVED, 1 PARTIAL (R1-F04, cuja parte aberta é o R2-F01), 0 OPEN"
+  },
+  "rule": "R2 é a última revisão e o reparo agrupado (1/1) já foi usado: nenhum documento revisado é reescrito. O P2 vira errata obrigatória registrada aqui, com o texto certo, e os P3 vão como carry-over para a unidade que os consome. Depois da R2 só mudam state.json, next-task.json, review-r2/, esta disposição, o script novo de fechamento, ledger-delta-cont-d9ef.md e secret-scan.json.",
+  "unit_outcome": "COMPLETED_LOCAL_WITH_CARRIED_P2: o v3 vale como mapa base. As contagens 25/19, os status, os 14 braços fechados, os 0 braços abertos explícitos, as lacunas e a projeção do 2B foram revisados duas vezes e não mudam. Só o texto observed_scope/not_observed do braço TS07.B03 está errado no v3; o texto certo é o desta disposição, e o primeiro consumidor do v3 (o BIND do 2B-1, que gera o v4) o aplica, ou uma errata T1 curta o aplica antes.",
+  "items": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "disposition": "CARRIED_MANDATORY_ERRATUM",
+      "confirmed_by_executor": "Conferido: o 2A-TS07R chama config {k: null} no passo 1 e objs: [{k: 1, 'bad key': 2}] no passo 4 (inputs/spec-2ac/cases-2a-cont.json da admissão); nenhum passo usa chave vazia em objeto inline. O único erro do caso é o null em k (TS07.B04). A chave vazia do 2A-TS06R ({'': 1}) está no nível de cima e cai no TS06.B03.",
+      "wrong_text": {
+        "observed_scope": "objeto inline com chave vazia lança (2A-TS07R)",
+        "not_observed": "filho undefined pulado em objeto inline"
+      },
+      "erratum_text": {
+        "observed_scope": "objeto inline {key = valor} dentro de array, com chave bare (k) e chave entre aspas por JSON.stringify (\"bad key\") (2A-TS07R)",
+        "not_observed": "chave vazia lança e filho undefined pulado em objeto inline"
+      },
+      "locations": [
+        "coverage-observed-v3.json#/arms_closed_v3[arm=TS07.B03]/observed_scope e /not_observed",
+        "coverage-observed-v3.json#/rows[source_contract=TS07]/arms_closed_v3[arm=TS07.B03]/observed_scope e /not_observed",
+        "build-binding-2ac.py.txt ARM_SCOPE[(TS07, TS07.B03)]",
+        "repair-r1.json#/findings[id=R1-F04]/what: ler 'TS07.B03 (inline {key = valor} com chave bare e entre aspas / chave vazia e filho undefined)'"
+      ],
+      "unchanged": "O fechamento do TS07.B03 pelo casamento exato com o 2A-TS07R, o status OBSERVED_CLIENT_PARTIAL do TS07, as contagens e o resto aberto do TS07 (que já manda 'chaves vazias dentro de objeto inline' para a segunda continuação) continuam certos.",
+      "gate": "Até a errata ser aplicada, ninguém cita o observed_scope do TS07.B03 no v3 como observação. O BIND do 2B-1 (v4 ao lado do v3) aplica o texto da errata no v4, com checagem de conteúdo no validador (R2-F02). Se o Lead quiser o v3 corrigido antes, faz uma errata T1 curta nos quatro lugares acima, sem mudar status, contagens nem braços. A IMPLEMENT do 2B-1 não lê esse braço (o 2B só tem contratos Python) e não é afetada."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_NEXT_BIND",
+      "scope": "validador do BIND do 2B-1 (v4)",
+      "note": "O validador do próximo BIND confere conteúdo, não só presença: recalcula as lacunas da projeção principal com o mesmo gp(a1) e gp([...a1, ...a2]) da variante; confere counts_v2 contra o mapa anterior; exige que observed_scope não repita item do resto do plano da linha, ou liga cada escopo a um predicado ou passo do acceptance; põe o TS03 em MUST_REMAIN_ADD; exige os marcadores mínimos nas qualificações ('inferid', 'NOT_WITNESSED', 'não foram testemunhados'). Cada checagem com controle negativo. Os números do v3 estão certos hoje: o crítico refez o build fora do repositório e obteve o mesmo conteúdo."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "disposition": "RESOLVED_AT_CLOSE",
+      "scope": "state.json",
+      "note": "O state.json final sai do fechamento depois de todos os arquivos do reparo e da R2: close-binding-2ac.py.txt em modo final e depois close-binding-2ac-r2.py.txt (script novo; o revisado não é reescrito). O estado final registra reviews 2/2, grouped_repairs 1/1, o bloco review preenchido e, no resumo, os braços fechados com qualificação ou escopo parcial. A contagem da fase interina não importa mais, porque não haverá outro rascunho."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_LEAD_AND_NEXT_STEP0",
+      "scope": "passo 0 da próxima unidade que ler lead-decision-r2-f01.json",
+      "note": "Hoje o passo 0 achou o blob do lead-decision em 8b2a1960, o HEAD destacado de outro worktree, sem ref. Quando a pasta da spec 2B entrar num commit durável (o PR documental do Lead para a main), o passo 0 seguinte ancora a conferência nesse commit, gravado num registro do Lead, e compara o sha com o valor esperado fce2e1e87e679433bc6b4481df46abbef3c32957a69c112f6f844d3a76d2d999 (o mesmo de next-task.json#/lead_decision_2B_SPEC_R2_F01/sha256)."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_NEXT_BIND_AND_SECOND_CONTINUATION",
+      "scope": "TS12, resto aberto",
+      "note": "Ler o destino do término NOT_WITNESSED do filho pré-abortado como 'pergunta T3 nova (testemunha privilegiada do término do filho pré-abortado), com base na pergunta contingente de ../sdk-source-batch-2a-continuation-spec/t3-assessment.json, ou perfil de plataforma'. A pergunta contingente original não dispara porque o inotify foi admitido. O v4 grava o texto novo; a especificação da segunda continuação parte dele. Não há crédito indevido no v3."
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

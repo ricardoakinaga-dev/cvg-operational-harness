@@ -1,0 +1,139 @@
+// DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A - validador da especificação (Node, só leitura).
+// Segunda implementação do mesmo executor, não revisão independente.
+// Uso: node --input-type=module - <repo_root> <out_json> [cases_override] < validate-spec.mjs.txt
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const args = process.argv.slice(process.argv.indexOf("-") + 1);
+const [root, outJson, casesOverride] = args;
+const S = join(root, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-spec");
+const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+const load = (p) => JSON.parse(readFileSync(p, "utf8"));
+const checks = [];
+const check = (id, ok, detail = null) => checks.push({ id, ok: Boolean(ok), detail });
+
+const casesDoc = load(casesOverride || join(S, "cases-2a.json"));
+const cov = load(join(S, "coverage-plan-2a.json"));
+const peer = load(join(S, "peer-v2-contract.json"));
+const evalr3 = load(join(S, "evaluator-r3-contract.json"));
+const cap = load(join(S, "capture-contract.json"));
+const ctrl = load(join(S, "control-slot-contract.json"));
+const budget = load(join(S, "execution-budget.json"));
+const t3 = load(join(S, "t3-assessment.json"));
+const cases = casesDoc.cases;
+
+// Entradas citadas existem e batem.
+const inputsOk = Object.entries(casesDoc.inputs).every(([, v]) => sha(resolve(S, v.path)) === v.sha256);
+check("inputs.sha256_match", inputsOk);
+
+// Âncoras: trecho literal nas linhas declaradas e sha igual ao da entrada.
+let anchorsOk = true;
+const anchorBad = [];
+for (const c of cases) {
+  for (const a of c.anchors) {
+    const inp = casesDoc.inputs[a.input];
+    const lines = readFileSync(resolve(S, inp.path), "utf8").split("\n");
+    const found = lines.map((l, i) => (l.includes(a.text) ? i + 1 : 0)).filter(Boolean);
+    if (a.sha256 !== inp.sha256 || JSON.stringify(found) !== JSON.stringify(a.lines)) {
+      anchorsOk = false;
+      anchorBad.push(`${c.id}:${a.text.slice(0, 40)}`);
+    }
+  }
+}
+check("anchors.text_at_lines_and_sha", anchorsOk, anchorBad);
+
+// Vagas, tipos e ids.
+const sdk = cases.filter((c) => c.kind === "SDK");
+const control = cases.filter((c) => c.kind === "CONTROL");
+check("slots.max_24", cases.length <= 24 && cases.length === 24, cases.length);
+check("slots.sdk_23_control_1", sdk.length === 23 && control.length === 1);
+check("slots.unique_and_sequential", JSON.stringify(cases.map((c) => c.slot)) === JSON.stringify(cases.map((_, i) => i + 1)));
+check("ids.unique", new Set(cases.map((c) => c.id)).size === cases.length);
+
+// Contratos do lote e resíduos.
+const batch = ["TS01", "TS02", "TS03", "TS04", "TS05", "TS06", "TS07", "TS08", "TS09", "PY03", "PY04", "PY08", "PY15", "PY16"];
+const residual = ["PY07", "PY10", "TS10", "TS11", "TS12", "TS13", "TS14", "TS15"];
+const covered = new Set(sdk.flatMap((c) => c.contracts));
+check("contracts.batch_all_covered", batch.every((x) => covered.has(x)), batch.filter((x) => !covered.has(x)));
+check("contracts.residual_all_covered", residual.every((x) => covered.has(x)));
+check("contracts.no_distributed_or_2B", !["PY01", "PY02", "PY09", "PY11", "PY12", "PY13", "PY17", "PY18", "PY19", "PY20", "PK01", "PK05", "PK09"].some((x) => covered.has(x)));
+
+// Nenhum crédito, nenhum resultado afirmado.
+check("credit.none", cases.every((c) => c.runtime_status === "NOT_RUN" && c.receipt === null) && casesDoc.functional_receipts === 0 && casesDoc.parity_credit === 0);
+check("credit.labels", sdk.every((c) => c.credit === "CLIENT_BEHAVIOR_ONLY_IF_OBSERVED") && control.every((c) => c.credit === "NONE_CONTROL_ONLY"));
+
+// argv dentro do novo limite.
+const argvCases = sdk.filter((c) => c.expected && c.expected.argv);
+check("argv.within_cap_768_64", argvCases.every((c) => c.expected.argv_json_bytes <= 768 && c.expected.argv_count <= 64 &&
+  Buffer.byteLength(JSON.stringify(c.expected.argv)) === c.expected.argv_json_bytes), argvCases.map((c) => [c.id, c.expected.argv_json_bytes]));
+check("argv.prefix_exec_experimental_json", argvCases.every((c) => c.expected.argv[0] === "exec" && c.expected.argv[1] === "--experimental-json"));
+
+// Peer v2: erro de pedido sem script permitido.
+const pyCases = cases.filter((c) => c.language === "python");
+const flat = (o) => JSON.stringify(o);
+check("peer.v2_in_all_python_cases", pyCases.every((c) => c.peer_script && c.peer_script.version === 2 && c.peer_script.unscripted_error));
+check("peer.unscripted_code_not_server_range", pyCases.every((c) => {
+  const code = c.peer_script.unscripted_error.code;
+  return Number.isInteger(code) && !(code >= -32099 && code <= -32000) && code !== -32600;
+}));
+check("peer.no_server_overloaded_anywhere", pyCases.every((c) => !flat(c.peer_script).includes("server_overloaded")));
+check("peer.no_retry_limit_text", pyCases.every((c) => !/retry limit|too many failed attempts/i.test(flat(c.peer_script.unscripted_error))));
+
+// Tabela de predicados congelada (R1-F04): todo predicado tem classe e oráculo; known-bad só com client.
+const table = casesDoc.predicate_table || {};
+const classes = new Set(["client", "peer_or_capture_sanity", "capture_order_or_cleanup", "informational", "order_unilateral"]);
+const usedPreds = new Set(cases.flatMap((c) => c.predicates));
+check("predicates.all_in_frozen_table", [...usedPreds].every((p) => table[p] && classes.has(table[p].class) && table[p].oracle && table[p].oracle.length > 10));
+check("predicates.table_has_no_unused", Object.keys(table).every((p) => usedPreds.has(p)));
+check("predicates.known_bad_judged_by_client", cases.every((c) => c.known_bad.judged_by.every((p) => table[p] && table[p].class === "client" && c.predicates.includes(p))));
+check("predicates.no_order_unilateral_in_2A", Object.values(table).every((v) => v.class !== "order_unilateral"));
+check("predicates.inotify_informational_only", [...usedPreds].filter((p) => p.startsWith("tmp.inotify")).every((p) => table[p].class === "informational"));
+
+// Capacidades: usadas = definidas.
+const capIds = new Set(Object.keys(cap.capabilities));
+const usedCaps = new Set(cases.flatMap((c) => c.infra));
+check("caps.used_equals_defined", capIds.size === usedCaps.size && [...usedCaps].every((x) => capIds.has(x)));
+
+// Avaliador r3: cláusulas obrigatórias, com a regra de que falha unilateral nunca vira MISMATCH.
+const r301 = evalr3.clauses.find((x) => x.id === "R3-01");
+check("evaluator.r3_01_never_mismatch", r301 && /<=/.test(r301.rule) && /NUNCA MISMATCH/.test(r301.rule));
+check("evaluator.carry_over_R2F01_F04", ["R2-F01", "R2-F02", "R2-F03", "R2-F04"].every((k) => evalr3.clauses.some((x) => (x.carry_over || "").includes(k))));
+
+// CONTROL: uma vaga, gate, MISMATCH esperado, sem SDK.
+const c0 = control[0];
+check("control.single_gate_mismatch", control.length === 1 && c0.expected.evaluator_outcome === "MISMATCH" && c0.control_client.imports_sdk === false && /para a unidade/.test(c0.gate) && ctrl.case === c0.id && c0.execution_order === 1);
+check("control.mismatch_only_from_client_predicate", !c0.predicates.some((p) => p.includes("outcome")) && c0.predicates.includes("wire.no_turn_interrupt") &&
+  c0.predicates.filter((p) => p.startsWith("control.")).every((p) => table[p] && table[p].class === "peer_or_capture_sanity"));
+check("control.expected_reply_matches_merge_rule", JSON.stringify(c0.expected["server_reply_to_ctrl-2"].error.data) === JSON.stringify({ ...c0.peer_script.unscripted_error.data, method: "turn/interrupt" }) &&
+  typeof peer.unscripted_request.data_merge_rule === "string");
+
+// Corridas conhecidas evitadas (R1-F01): casos que só aceitam KNOWN_SIGNAL_TERMINATION seguram o stdout.
+check("race.signal_only_cases_hold_stdout", sdk.filter((c) => c.language === "typescript" && JSON.stringify(c.accepted_capture_forms) === JSON.stringify(["KNOWN_SIGNAL_TERMINATION"]))
+  .every((c) => c.fixture && c.fixture.write_then_hold === true));
+const r308 = evalr3.clauses.find((x) => x.id === "R3-08");
+check("evaluator.r3_08_consistent_with_r3_01", r308 && /prazo/.test(r308.rule) && /order_unilateral/.test(r308.rule) && evalr3.clauses.find((x) => x.id === "R3-01").applies_in_2A.length === 0);
+
+// Orçamento dentro do máximo.
+const m = budget.max_from_HOW;
+const p = budget.planned;
+check("budget.within_max", p.case_slots <= m.case_slots && p.control_slots === m.control_slots && p.qualification_services_planned <= m.services &&
+  p.reviews <= m.reviews && p.grouped_repairs <= m.grouped_repairs && p.automatic_retries === 0 && m.case_slots === 24 && m.services === 12);
+
+// Plano de cobertura coerente.
+const ids = new Set(cases.map((c) => c.id));
+check("coverage.rows_reference_cases", cov.rows.every((r) => r.cases.length && r.cases.every((x) => ids.has(x)) && r.whole_requirement_covered_after === false));
+check("coverage.projection", cov.projection_if_all_pass.OBSERVED_CLIENT_PARTIAL === 25 && cov.projection_if_all_pass.OPEN_REQUIRED_FUTURE_PROFILE === 19 && cov.functional_receipts === 0);
+check("coverage.base_is_binding_map", sha(resolve(S, cov.base.path)) === cov.base.sha256);
+
+// T3.
+check("t3.decision_explicit", ["NAO_EXIGE_T3", "EXIGE_T3"].includes(t3.decision) && (t3.decision === "NAO_EXIGE_T3" ? t3.user_question === null : typeof t3.user_question === "string"));
+
+// Valores sintéticos: nada com cara de chave real.
+check("synthetic.no_real_key_shapes", !/\bsk-[A-Za-z0-9]/.test(flat(casesDoc)));
+
+const result = { kind: "SPEC_VALIDATION_NODE", task: "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A", node: process.version, checks,
+  passed: checks.filter((c) => c.ok).length, failed: checks.filter((c) => !c.ok).map((c) => c.id),
+  verdict: checks.every((c) => c.ok) ? "PASS" : "FAIL" };
+writeFileSync(outJson, JSON.stringify(result, null, 2) + "\n");
+console.log(result.verdict, result.passed, result.failed);

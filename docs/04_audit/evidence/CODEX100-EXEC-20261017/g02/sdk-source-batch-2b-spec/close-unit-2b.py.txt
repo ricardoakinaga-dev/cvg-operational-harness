@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B - escreve next-task.json e state.json com os sha atuais dos documentos da especificação.
+# Uso: python3 -I -B close-unit-2b.py.txt <spec_dir> <phase> [<review_json>...]
+#   phase: draft (antes da revisão) | final (depois da R2; lê review-r1/review.json, repair-r1.json e review-r2/review.json)
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+SPEC, PHASE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B"
+UNIT = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2b-spec"
+
+
+def sha(name):
+    with open(os.path.join(SPEC, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(name):
+    with open(os.path.join(SPEC, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def spec_ref(name):
+    return {"path": UNIT + "/" + name, "sha256": sha(name)}
+
+
+c1, c2 = load("cases-2b-1.json"), load("cases-2b-2.json")
+b1, b2 = load("execution-budget-2b-1.json"), load("execution-budget-2b-2.json")
+caps = load("capability-contracts-2b.json")
+plan = load("coverage-plan-2b.json")
+t3 = load("t3-assessment.json")
+val = load("validation.json")
+iv = load("input-verification.json")
+review = {}
+carry = []
+if PHASE == "final":
+    r1 = load("review-r1/review.json")
+    rep = load("repair-r1.json")
+    r2 = load("review-r2/review.json")
+    disp = load("review-r2/executor-disposition.json") if os.path.exists(os.path.join(SPEC, "review-r2/executor-disposition.json")) else None
+    review = {"R1": "%s (%s) review-r1/review.json" % (r1["verdict"], r1.get("summary_counts", "")),
+              "repair": "repair-r1.json (1/1)",
+              "R2": "%s (%s) review-r2/review.json" % (r2["verdict"], r2.get("summary_counts", "")),
+              "R2_disposition": "review-r2/executor-disposition.json" if disp else None,
+              "critic": "subagente novo por rodada, somente leitura; o executor grava brief e veredito sem edição"}
+    if disp:
+        carry = [i["note"] for i in disp["items"] if i["disposition"] == "CARRIED_TO_IMPLEMENT"]
+
+
+def slots(doc):
+    return [{"slot": c["slot"], "case": c["id"], "contracts": c["contracts"], "role": c["role"], "gate": c.get("gate")} for c in doc["cases"]]
+
+
+spec = {k: spec_ref(v) for k, v in {
+    "cases_2b_1": "cases-2b-1.json", "cases_2b_2": "cases-2b-2.json", "capability_contracts": "capability-contracts-2b.json",
+    "freeze_r4_2b_delta": "freeze-r4-2b-delta.json", "evaluator_r4_2b_delta": "evaluator-r4-2b-delta.json",
+    "control": "control-slot-contract-2b.json", "budget_2b_1": "execution-budget-2b-1.json", "budget_2b_2": "execution-budget-2b-2.json",
+    "coverage_plan": "coverage-plan-2b.json", "t3": "t3-assessment.json"}.items()}
+spec["freeze_r4"] = {"path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json",
+                     "sha256": load("freeze-r4-2b-delta.json")["base"]["freeze_r4"]["sha256"]}
+spec["evaluator_r4"] = {"path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json",
+                        "sha256": load("evaluator-r4-2b-delta.json")["base"]["evaluator_r4"]["sha256"]}
+
+next_task = {
+    "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-1 (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": "COMPLETED_LOCAL" if PHASE == "final" else "IN_REVIEW",
+    "status": "READY_PENDING_LEAD_CLAIM" if PHASE == "final" else "DRAFT_PENDING_REVIEW",
+    "track": "T1 com execução local contida, como a admissão 2A e a continuação (serviços transientes próprios, sem rede, sem provider, sem dado real)",
+    "t3_required": False, "t3_assessment": UNIT + "/t3-assessment.json", "resume_checkpoint": UNIT + "/state.json",
+    "spec": spec,
+    "precondition": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2A-CONTINUATION em COMPLETED_LOCAL, com source-freeze-r4, identity-freeze-r4 e avaliador r4 implementados e revisados; se o freeze r4 tiver mudado por reparo, reconferir que cada D2B se aplica sem conflito antes de qualquer escrita, ou parar e voltar à especificação.",
+    "what": "Implementar, sobre a implementação do freeze r4, os deltas D2B-01..04 e D2B-09..15 (freeze-r4-2b-delta.json; o registrador de excepthook entra pelo D2B-04) e as cláusulas E2B-01..14 numa pasta nova da unidade; autotestes offline (selftests de CAP-2B-ASYNC-DRIVER, CAP-2B-CONC-BARRIER, CAP-2B-PEER-BEFORE-REPLY e CAP-2B-PROC-WITNESS, R3-12 da tabela de cases-2b-1.json); source-freeze-r4-2b1 e identity-freeze-r4-2b1; requalificar DIAG-PY-RPC, DIAG-PY-STAGE e DIAG-PY-UNSCRIPTED e qualificar DIAG-PY-ASYNC, DIAG-PY-BARRIER, DIAG-PY-BEFOREREPLY, DIAG-PY-CLOSETERM, DIAG-PY-PROCWITNESS e DIAG-PY-KILLWAIT; CONTROL 2B1-CTRL01 primeiro (MISMATCH só por wire.no_turn_interrupt); depois os 15 casos SDK em ordem de slot, uma vez cada, em série, sem retry (2B-PY02A e 2B-PY02B só se o DIAG-PY-PROCWITNESS admitir; 2B-PY02K só se o DIAG-PY-KILLWAIT admitir); revisão independente e adjudicação.",
+    "first_step": "Lead registra claim novo. Conferir state.json desta pasta e os sha da especificação acima antes de qualquer escrita; candidata nova a partir do commit que contiver esta unidade e a IMPLEMENT da continuação.",
+    "budget": {"case_slots": b1["planned"]["case_slots"], "sdk_cases": b1["planned"]["sdk_cases"], "control_slots": 1,
+               "conditional_slots": b1["planned"]["conditional_slots"], "qualification_services_planned": b1["planned"]["qualification_services_planned"],
+               "qualification_services": b1["planned"]["qualification_services"], "services_reserve": b1["planned"]["services_reserve"],
+               "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0, "max": b1["max"]},
+    "stops": b1["stops"], "conditional_diags": b1["conditional_diags"],
+    "carry_over": carry,
+    "not_authorized_now": b1["not_authorized"] + ["alterar código de produto ou contrato público do CVG (exigiria T3)", "SPEC0239 BUILD"],
+    "after_this": [
+        "BIND do 2B-1 (mapa observado ao lado do v2/v3)",
+        "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-2 (18 vagas, 10 serviços), que herda as capacidades do 2B-1 e acrescenta relógio e aleatório, falha por corte, oráculos Pydantic e login sintético",
+        "BIND do 2B-2",
+        "continuação seguinte com os resíduos de remaining_after do plano 2B (goal.fail, corte ativado por fechamento de transporte, schema independente do PY18)",
+        "perfil distribuído depois da decisão de identidade",
+    ],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente",
+    "status": "COMPLETED_LOCAL" if PHASE == "final" else "IN_REVIEW",
+    "write_scope": UNIT + "/**",
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])), "record": "input-verification.json"},
+    "result": {
+        "sub_lots": {
+            "2B-1": {"slots": slots(c1), "counts": c1["counts"], "services": b1["planned"]["qualification_services"]},
+            "2B-2": {"slots": slots(c2), "counts": c2["counts"], "services": b2["planned"]["qualification_services"]}},
+        "totals": {"slots": len(c1["cases"]) + len(c2["cases"]), "sdk_cases": c1["counts"]["sdk_cases"] + c2["counts"]["sdk_cases"], "controls": 2,
+                   "conditional": c1["counts"]["conditional"] + c2["counts"]["conditional"],
+                   "fit_minimum": "25 + 1 CONTROL (26); 31 com os resíduos de PY05, PY14, PY08 e PY10"},
+        "new_capabilities": [{"id": c["id"], "fit_name": c["fit_name"], "sub_lots": c["sub_lots"],
+                              "diag": [d["id"] for d in (c["diag"] if isinstance(c["diag"], list) else [c["diag"]])]} for c in caps["capabilities"]],
+        "freeze": "freeze r4 + D2B-01..D2B-15 (freeze-r4-2b-delta.json)", "evaluator": "avaliador r4 + E2B-01..E2B-14 (evaluator-r4-2b-delta.json)",
+        "predicates": {"2B-1": len(c1["predicate_table"]), "2B-2": len(c2["predicate_table"])},
+        "anchors": val["checked"]["anchors"],
+        "projection_if_all_pass": plan["projection_if_all_pass"],
+        "t3": {"decision": t3["decision"], "user_question": t3["user_question"], "retired_capabilities": t3["retired_capabilities"],
+               "contingent_question": t3["contingent_question"]["question"]},
+        "validation": "%s (%d erros; %d/%d controles negativos rejeitados)" % (val["result"], len(val["errors"]), sum(n["rejected"] for n in val["negative_controls"]), len(val["negative_controls"])),
+        "next_task": "next-task.json (IMPLEMENT-AND-ADMIT do 2B-1, sem T3)",
+    },
+    "scripts": ["verify-inputs-2b.py.txt", "build-spec-2b.py.txt", "build-contracts-2b.py.txt", "validate-spec-2b.mjs.txt", "close-unit-2b.py.txt"],
+    "budget": {"services": 0, "reviews": "2/2" if PHASE == "final" else "0/2", "grouped_repairs": "1/1" if PHASE == "final" else "0/1"},
+    "review": review or None,
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": "Sem serviço, SDK, compilador, Codex CLI, rede, Docker (exceto o gitleaks pedido), PG, commit ou branch. Ledgers, coordenação, 0384-0386 e catálogo central não editados.",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+for name, obj in (("next-task.json", next_task), ("state.json", state)):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], state["result"]["validation"])

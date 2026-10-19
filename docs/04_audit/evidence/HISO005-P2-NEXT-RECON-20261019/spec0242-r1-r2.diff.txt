@@ -1,0 +1,292 @@
+--- spec0242-r1.source.md	2026-10-19 03:56:33.078983316 -0300
++++ spec0242-r2.source.md	2026-10-19 04:28:15.880524170 -0300
+@@ -1,16 +1,17 @@
+ # SPEC0242 — Tetos e prazos do corpo integral da fronteira B6
+ 
+-**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho da preparação T1 `HISO005-P2-NEXT-RECON-20261019`; o número final é atribuído pelo lead ao materializar em `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0242`. Mesma frente HISO005/B6, sem reabrir as aprovações 0234, 0236, 0237, 0240 e 0241. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) §6, [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md) §3.2 e §3.5. Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
++**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho r2 da preparação T1 `HISO005-P2-NEXT-RECON-20261019`. O lead atribui o número final ao materializar em `docs/02_spec`; nesse passo, os links são reescritos para caminhos relativos a `docs/02_spec`, e a referência ao rascunho 0243 recebe o número final. Implementação futura proposta: `HISO005-P2-BUILD-0242`. Mesma frente HISO005/B6, sem reabrir as aprovações 0234, 0236, 0237, 0240 e 0241. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) §6, [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md) §3.2 e §3.5. Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
+ 
+ ## 1. CURRENT — problema e evidência
+ 
+-A medição T2 v4r2 (`228e7918`, engine `b9246972…`) corta o corpo por `maxContexts` depois de 23 de 1.341 módulos, com 4 arestas contidas e 2.410 diagnósticos. A SPEC0241 §3.2 deixou fora do delta valores de limite e prazo, e pediu decisão própria se o corpo integral não coubesse.
++A medição T2 v4r2 avalia a raiz do BUILD0241 (`228e7918`) com o engine `b9246972…`. O corpo é cortado por `maxContexts` depois de 23 de 1.341 módulos, com 4 arestas contidas e 2.410 diagnósticos. A SPEC0241 §3.2 deixou fora do delta valores de limite e prazo, e pediu decisão própria se o corpo integral não coubesse.
+ 
+ Toda a medição abaixo é diagnóstica:
+ 
+-- feita numa cópia privada do engine com tetos experimentais, sobre a mesma entrada da T2 ([despejo](engine-input-dump.json), que reproduz os 2.410);
++- feita em cópias privadas do engine, do checker e do comparador, com tetos e relógios experimentais;
++- sobre a mesma entrada da T2 ([despejo](engine-input-dump.json), que reproduz os 2.410);
+ - nunca é aceite, nunca vira medição oficial e nunca entra em código promovido;
+-- detalhes em [q1-characterization.json](q1-characterization.json).
++- números completos em [q1-characterization.json](q1-characterization.json).
+ 
+ **Achado 1 — o corte é largura, não profundidade.**
+ 
+@@ -26,38 +27,55 @@
+ 
+ Cortes sucessivos:
+ 
+-| Tetos diagnósticos                       | Resultado                                                  |
+-| ---------------------------------------- | ---------------------------------------------------------- |
+-| oficial (64 / 100.000) e 128 contextos   | `CUT:maxContexts` no módulo 23 (7.725 e 8.933 estados)     |
+-| 256 e 512 contextos, 100.000 estados     | `CUT:maxStates` no módulo 1.026 de 1.341                   |
+-| ≥ 145 contextos e ≥ 125.460 estados      | corpo integral, sem corte                                  |
++| Tetos diagnósticos                                          | Resultado                                              |
++| ----------------------------------------------------------- | ------------------------------------------------------ |
++| oficial (64 / 100.000) e 128 contextos                      | `CUT:maxContexts` no módulo 23 (7.725 e 8.933 estados) |
++| 256 e 512 contextos, 100.000 estados                        | `CUT:maxStates` no módulo 1.026 de 1.341               |
++| ≥ 145 contextos e ≥ 125.460 estados, demais tetos como hoje | corpo integral, sem corte                              |
+ 
+-Estados por módulo (inclusivos) têm mediana 18, p90 296, p99 3.796 e máximo 39.150. O máximo é o primeiro teste, que carrega o Vitest. Os 10 módulos mais pesados somam metade da soma inclusiva.
++Estados por módulo, contados de forma inclusiva (o importador inclui os módulos carregados dentro dele, com dupla contagem), têm mediana 18, p90 296, p99 3.796 e máximo 39.150. O máximo é o primeiro teste, que carrega o Vitest.
+ 
+-**Achado 3 — custo linear, folga de prazo pequena.**
++**Achado 3 — custo linear e folga de prazo pequena.**
+ 
+-- **Passada única.** Cerca de 6 mil estados/s e 4,7 KB de heap por estado; heap até 965 MB e RSS máximo de 1,28 GB. O teto de contextos não muda o custo: 64 e 128 contextos gastam o mesmo.
+-- **Pipeline oficial** (census, análise e recomputação no worker, revalidação), com 256/250.000 e prazo de 120 s:
++- **Passada única.** Cerca de 6 mil estados/s e 4,9 kB de heap por estado; heap até 965 MB e RSS máximo de 1,28 GB. O teto de contextos não muda o custo: com o mesmo ponto de parada, 256 e 512 contextos gastam 36,3 s cada, e o corpo integral gasta 40,6 s e 40,0 s com tetos diferentes.
++- **Pipeline oficial com 256/250.000 e prazo de 120 s** (census, análise e recomputação no worker, revalidação):
+   - normal 108,7 s e strict 109,8 s, a load 3,6–5,6, contra 62,7 s com o corte;
+-  - cerca de 0,39 ms por estado de corpo, o que projeta cerca de 160 s em 250.000 estados;
+-  - payload semântico de 16,4 MB, contra `maxBuffer` de 64 MiB.
++  - cerca de 0,39 ms por estado de corpo, o que projeta cerca de 160 s em 250.000 estados (extrapolação linear);
++  - payload semântico compacto de 15,6 MB, contra `maxBuffer` de 64 MiB.
+ - **Sob carga** ([sonda](identity-deadline-probe.json), load 9,4–10,6):
+   - o corpo integral levou 119,6 s;
+   - a configuração oficial com corte levou 135 s e estourou o prazo, com envelope `timeoutMs` e a fronteira perdida.
+   - A fragilidade de prazo já existe hoje.
++- **Memória.** O heap padrão do Node pinado neste host é 4.345.298.944 bytes (4,05 GiB), registrado em [identity-phase-probe.json](identity-phase-probe.json). O worker oficial roda sem `--max-old-space-size`.
+ 
+ **Achado 4 — segunda barreira: o relógio do comparador de identidade.**
+ 
+-- **Mecanismo.** O verificador instalado mede seus 120 s (SPEC0234 §4) desde a criação, antes da etapa semântica. A revalidação final roda depois do corpo.
+-- **Efeito no corpo integral.** O verificador chega a 158–176 s de idade, e a revalidação final sai `COMPARISON_TIMEOUT`. O checker então acrescenta `UNKNOWN_INSTALLED_REFERENCE` e `UNKNOWN_INPUT_REVALIDATION` e marca `validation: false`, o que descarta toda prova.
+-- **Na pipeline de 120 s.** Isso aconteceu mesmo com o corpo terminando dentro do prazo semântico (normal e strict).
+-- **Com o comparador corrigido** (diagnóstico de 300 s que não conta a etapa semântica) e prazo semântico diagnóstico de 240 s: `validation: true`, nenhuma tupla de envelope e 13.521 diagnósticos.
++- **Mecanismo.** O verificador instalado é criado no início do checker (`check-product-boundary.mjs:408`). Os 120 s do comparador (SPEC0234 §4) são medidos desde essa criação, por `checkTime` e pelo `_deadline` passado a `collect()`. A primeira finalização ocorre antes da etapa semântica (linha 1991) e a final, depois dela (linha 2143).
++- **Sem ajuste** (P1 e P2 da sonda, load ~10): a idade do verificador na finalização final foi 176 s e 164 s, com `COMPARISON_TIMEOUT`. O checker então acrescenta `UNKNOWN_INSTALLED_REFERENCE` e `UNKNOWN_INPUT_REVALIDATION` e marca `validation: false`, o que descarta toda prova.
++- **Na pipeline de 120 s com o corpo integral** (load ~4–6): o mesmo par de tuplas e `validation: false`. A causa é inferida pela conta, porque os relatórios não registram o motivo da finalização: a idade na primeira finalização é de cerca de 28 s, e 28 + 108,7 > 120. A P2 confirma o mecanismo sob carga.
++- **Relógio de vida esticado (P3).** A P3 só esticou o relógio de vida para 300 s, ainda contado desde a criação, e a validação voltou a `true`. Isso não testa a L3.
++- **L3 executada como diagnóstico (P4)** ([identity-phase-probe.json](identity-phase-probe.json)). Com os valores desta proposta (256 / 250.000 / 300 s) e o comparador em 120 s por fase:
++  - a fase 1 durou 36,0 s (normal) e 26,7 s (strict);
++  - a finalização final durou 2,2 s e 2,0 s;
++  - nenhuma comparação ocorreu depois da primeira finalização;
++  - `validation: true` em normal e strict, sem tupla de envelope, 13.521 diagnósticos, normal e strict iguais.
++
++**Achado 5 — folga dos tetos fora do delta.**
++
++| Teto             | Uso medido | Teto      | Folga |
++| ---------------- | ---------: | --------: | ----: |
++| `maxNodes`       |  1.693.845 | 2.000.000 | 1,18× |
++| `maxFiles`       |      4.128 |    12.000 | 2,91× |
++| `maxCallDepth`   |          8 |        64 |    8× |
++| `maxUnionValues` |          4 |       128 |   32× |
+ 
+-**Conservação medida.** Entre a T2 com corte e o corpo integral válido ([P3](q1-characterization.json), campo `conservationValidFullBody`):
++`maxNodes` e `maxFiles` são contados na aquisição, antes de `phases.acquisition = COMPLETED` (engine, linhas 1609 e 1621). Estourar um deles não é corte declarado do corpo: perde o corpo inteiro como UNKNOWN global.
++
++**Conservação medida.** Entre a T2 com corte e o corpo integral da P4 (L1–L3 com os valores propostos):
+ 
+ - 1.520 tuplas distintas viram 12.631;
+-- a única tupla que some é a de envelope `UNKNOWN_ANALYSIS_LIMIT:maxContexts`;
+-- violações 0 e 0; normal e strict iguais na pipeline 256/250.000.
++- a única que some é a de envelope `UNKNOWN_ANALYSIS_LIMIT:maxContexts`;
++- violações 0 e 0; normal e strict iguais.
+ 
+ ## 2. PROPOSED — resultado e limite do delta
+ 
+@@ -65,19 +83,16 @@
+ 
+ - **L1 — tetos do corpo.** `maxContexts` 64 → 256 e `maxStates` 100.000 → 250.000. Folga de 1,77× e 1,99× sobre a necessidade medida.
+ - **L2 — prazo semântico.** `timeoutMs` 120 s → 300 s. Fica um único prazo global para census, análise e recomputação. O valor cobre 2,8× o custo medido com carga baixa, 2,5× o medido sob load ~10 e 1,9× a projeção no teto de estados.
+-- **L3 — relógio do comparador.** O teto de 120 s da comparação (SPEC0234 §4) não muda de valor. Passa a contar só o tempo de comparação, em cada fase própria; a etapa semântica, que tem prazo próprio, não consome esse orçamento.
++- **L3 — relógio do comparador.** O teto de 120 s da comparação (SPEC0234 §4) não muda de valor. Passa a ser medido por fase do verificador (§3.2), para que a etapa semântica, que tem prazo próprio, não consuma esse orçamento.
+ 
+ O resultado observável futuro é a fronteira de corpo integral na árvore real, com `validation: true` e cerca de 13,5 mil diagnósticos declarados. Na árvore real, a expectativa continua sendo de zero provas. B6 segue INCOMPLETE.
+ 
+ Alternativas avaliadas e não propostas:
+ 
+-- widening por função depois de K contextos;
+-- corte por módulo;
+-- memoização.
+-
+-As duas primeiras mudam o domínio abstrato ou a semântica de corte e, ainda assim, exigem subir `maxStates` e o prazo. A memoização não reduz os contextos dos helpers que estouram.
++- **Widening** por função depois de K contextos e **corte por módulo.** As duas mudam o domínio abstrato ou a semântica de corte. Também ainda exigem subir `maxStates`, por inferência e não por medição: mesmo zerando os 17.696 estados exclusivos dos arquivos dos helpers que estouram, sobram 107.764 estados, acima de 100.000.
++- **Memoização.** Não reduz os contextos dos helpers que estouram.
+ 
+-Fora do delta: algoritmo e definição de contexto, K0–K7 e K3, `maxCallDepth` (64), `maxUnionValues` (128), `maxNodes`, `maxFiles`, bytes, `maxBuffer` de 64 MiB, valores de `INSTALLED_IDENTITY_LIMITS`, census, recomputação do worker, receitas de referência (rascunho [SPEC0243](spec0243-r1.source.md)), allowlist e aceite de UNKNOWN.
++Fora do delta: algoritmo e definição de contexto, K0–K7 e K3, `maxCallDepth`, `maxUnionValues`, `maxNodes`, `maxFiles`, bytes, `maxBuffer` de 64 MiB, valores de `INSTALLED_IDENTITY_LIMITS`, census, recomputação do worker, receitas de referência ([rascunho 0243](spec0243-r2.source.md)), allowlist e aceite de UNKNOWN.
+ 
+ ## 3. Contrato
+ 
+@@ -94,21 +109,40 @@
+ 
+ ### 3.2 Relógio do comparador (L3)
+ 
+-O verificador de pacotes instalados aplica o teto de 120 s (`comparisonTimeoutMs`) separadamente a duas fases:
++O valor `comparisonTimeoutMs` (120 s) passa a valer por fase do verificador:
++
++1. **Fase 1** é o relógio de parede da criação do verificador até o fim da primeira finalização. Inclui as comparações, a varredura do checker entre as chamadas e a própria primeira finalização, como hoje.
++2. **Cada finalização posterior** é uma fase com relógio de parede do início ao fim dela.
++
++Todo prazo derivado dentro do comparador usa o início da fase corrente: `checkTime` e o `_deadline` passado a `collect()`. Uma chamada a `compare()` depois da primeira finalização é recusada fail-closed com `COMPARISON_AFTER_FINALIZE`; na medição diagnóstica, o checker não faz nenhuma.
++
++Cada fase continua fail-closed: estouro dá `COMPARISON_TIMEOUT`, `UNAVAILABLE` e o mesmo tratamento de hoje no checker. A finalização posterior revalida exatamente o mesmo conjunto de hoje:
+ 
+-1. da criação até o fim da primeira finalização, cobrindo comparações e revalidação;
+-2. a cada finalização posterior, do início dela até o fim.
++- inventário de cada pacote usado, avaliado e referência;
++- entradas e recibo;
++- toolchain.
+ 
+-Tempo gasto fora do verificador não conta, como a etapa semântica. Cada fase continua fail-closed: estouro dá `COMPARISON_TIMEOUT`, `UNAVAILABLE` e o mesmo tratamento de hoje no checker. A finalização posterior revalida exatamente o mesmo conjunto de hoje: inventário de cada pacote usado, avaliado e referência, entradas e toolchain. O valor 120 s, o recibo e o leitor não mudam.
++Continuam inalterados:
++
++- o relógio próprio de `fingerprintToolchain`;
++- o relógio da varredura instalada da fronteira de produto (`scanBounded`, `INSTALLED_SCAN_TIMEOUT`);
++- o valor 120 s, o recibo e o leitor.
++
++O comparador ganha uma opção só de teste, só de redução, para o orçamento por fase. Ela recusa elevação com `TEST_LIMIT_INVALID`, no padrão de `collectPackageInventory`.
+ 
+ ### 3.3 Conservação
+ 
+-A regra vale entre a v4 com os valores atuais e a v4 com L1–L3, nos mesmos inputs, ambas sem estouro de prazo, ENOBUFS ou erro de worker:
++A regra compara duas execuções nos mesmos inputs e com as mesmas referências instalada e compilada:
++
++- a v4 com os valores atuais;
++- a v4 com L1–L3.
+ 
+-- toda tupla UNKNOWN (arquivo, motivo, detalhe) da primeira persiste na segunda;
++As duas precisam terminar sem estouro de prazo, ENOBUFS ou erro de worker, e com as duas finalizações do verificador `COMPLETE`. Nessas condições:
++
++- o multiset de tuplas UNKNOWN (arquivo, motivo, detalhe) da primeira está contido no da segunda;
+ - a exceção são as tuplas de envelope da SPEC0241 §3.5, que entram no ledger;
+ - o multiset de violações da primeira está contido no da segunda;
+-- violações do census são iguais;
++- as violações do census são iguais;
+ - normal e strict são iguais;
+ - `validation` é `true` quando nada além dos limites invalida a execução.
+ 
+@@ -116,30 +150,63 @@
+ 
+ ### 3.4 Registro de orçamento
+ 
+-Toda medição real registra:
++O checker emite em `semanticTelemetry`, que fica fora da igualdade normal/strict:
++
++- tempo semântico e tempo do census;
++- duração de cada fase do verificador.
+ 
+-- tempo semântico e do census;
+-- idade do verificador nas duas finalizações;
+-- RSS máximo do worker;
++O operador da medição registra:
++
++- RSS máximo do processo do worker, por amostragem;
++- load average no início;
+ - bytes do payload semântico;
+-- load average no início.
++- uso de todos os tetos (`usage`).
+ 
+-Estouro de prazo, ENOBUFS ou `COMPARISON_TIMEOUT` é condição de parada (§5), nunca resultado aceito.
++Estouro de prazo, ENOBUFS ou `COMPARISON_TIMEOUT` é condição de parada (§5), nunca resultado aceito. Também param para decisão, sem aceite, RSS acima de 3 GiB (75% do heap padrão) e payload acima de 32 MiB (metade do `maxBuffer`).
+ 
+ ## 4. O que permanece UNKNOWN
+ 
+-Todas as categorias da SPEC0241 §4 continuam UNKNOWN, agora visíveis no corpo inteiro. Os motivos mais frequentes na medição diagnóstica foram `UNKNOWN_BINDING_VALUE` (3.379), `UNKNOWN_INHERITED_PROPERTY` (1.579), `UNKNOWN_UNSUPPORTED_SYNTAX` (1.208), `UNKNOWN_BINDING` (869) e `UNKNOWN_FUNCTION` (831). Qualquer UNKNOWN impede todas as provas. Uma árvore que cresça além de 256 contextos ou 250.000 estados volta a ter corte declarado.
++Todas as categorias da SPEC0241 §4 continuam UNKNOWN, agora visíveis no corpo inteiro. Os motivos mais frequentes na medição diagnóstica foram:
++
++- `UNKNOWN_BINDING_VALUE` (3.379);
++- `UNKNOWN_INHERITED_PROPERTY` (1.579);
++- `UNKNOWN_UNSUPPORTED_SYNTAX` (1.208);
++- `UNKNOWN_BINDING` (869);
++- `UNKNOWN_FUNCTION` (831).
++
++Qualquer UNKNOWN impede todas as provas. Uma árvore que passe de 256 contextos ou 250.000 estados volta a ter corte declarado. Uma árvore que passe de `maxNodes` ou `maxFiles` perde o corpo inteiro na aquisição.
+ 
+ ## 5. Versão, integração e recuperação
+ 
++A base da implementação é definida pelo conteúdo, não pela ancestralidade, porque a main foi consolidada por squash. É o commit qualificado vigente que contém, byte a byte, estas pré-imagens:
++
++| Arquivo                                 | SHA-256 da pré-imagem                                              |
++| --------------------------------------- | ------------------------------------------------------------------ |
++| `scripts/boundary-semantic-engine.mjs`  | `b9246972c4e27257af11800ba82895a5c6db52a25fa82a030c9b5c75a8c48cc8` |
++| `scripts/check-product-boundary.mjs`    | `14ab9a8b941f314f868c09e772490cc4bf302e9ec8b96478294813fd3881ca75` |
++| `scripts/boundary-installed-identity.mjs` | `78d198c75c4d5544db58ea900b82bc1a01e1770e4cdca38ec17fe58c3b997345` |
++| `scripts/build-installed-reference.mjs` | `70f6c43a788a892e7ce283e6e05e86eee7831b7c27bfade0e42b90522e6ff99d` |
++| `scripts/boundary-semantic-compiled.mjs` | `dd006347388d13bd9717786764c5de86d0858a61fee19db85f84c777197fe515` |
++| `scripts/boundary-manifests.mjs`        | `40cd1375d45e3059e797e0fc41795b71a07dbc529e257ef77572958dc40880e5` |
++
++Hoje essas pré-imagens só existem na candidata detached `d6203875`, que é BUILD0241 mais T2. A main, `3704e3f8` e `ae14b824`, ainda tem o kernel v3. A promoção dos caminhos do BUILD0241 e da T2 pelo lead torna a main elegível.
++
+ Fontes previstas:
+ 
+ - `scripts/boundary-semantic-engine.mjs` (L1, L2);
+ - `scripts/boundary-installed-identity.mjs` (L3);
+-- `scripts/check-product-boundary.mjs`, só se o registro da §3.4 exigir;
++- `scripts/check-product-boundary.mjs` (telemetria da §3.4);
+ - teste novo `tests/b6-0242-body-caps-deadlines.test.js`.
+ 
+-Os testes que fixam os valores atuais continuam como testemunhos. Uma migração literal só é feita quando necessária e registrada antes da edição; as primeiras falhas ficam preservadas. A implementação ocorre em candidata física nova, a partir do commit qualificado vigente que contenha a T2 (`ae14b824` ou sucessor), depois de autoridade explícita deste SHA. Pode dividir a candidata com a SPEC0243, mas cada delta tem aceite próprio.
++O teste A2 de `tests/b6-0241-integral-body.test.js` fixa `SEMANTIC_LIMITS` por igualdade e vira migração literal prevista. A primeira falha dele com os valores novos é registrada antes da edição. Os demais testes que fixam valores atuais continuam como testemunhos.
++
++Medições reais:
++
++- avaliam a raiz do BUILD0241 (`228e7918`), os mesmos inputs da T2;
++- usam referências construídas pela receita atual em `228e7918`, onde ela cabe no teto (margem medida de 22 MB), ou pela receita da 0243, se já estiver aprovada e construída;
++- as duas execuções da §3.3 usam as mesmas referências.
++
++A 0242 não depende da 0243 para o BUILD. As duas podem dividir a candidata, mas cada delta tem aceite próprio.
+ 
+ O rollback são os valores atuais. A promoção para diante de qualquer uma destas situações:
+ 
+@@ -152,29 +219,32 @@
+ ## 6. Riscos
+ 
+ - **Folga finita.** São 1,77× em contextos e 1,99× em estados. O crescimento da árvore pode voltar a cortar, mas o corte é declarado e nunca silencioso.
++- **`maxNodes` a 1,18×.** É o teto mais apertado e fica fora do delta. Se o código adquirido crescer cerca de 18%, a aquisição estoura e o corpo inteiro vira UNKNOWN global. Mudar esse teto exige decisão própria.
+ - **Carga.** O custo variou de 1,1× a 2,15× sob load ~10. No teto de estados com 2,15×, a projeção passa de 300 s e cai no envelope. Isso fica declarado.
+-- **Memória.** A projeção é de cerca de 1,6 GB de heap em 250.000 estados, contra o heap padrão de 4,05 GiB do Node pinado neste host, sem flag nova.
+-- **Saída.** O payload de 16,4 MB pode crescer até os 64 MiB do `maxBuffer`, o que daria ENOBUFS e envelope.
+-- **Tempo total.** Com L3, o checker pode durar até a soma dos orçamentos. É o preço de não deixar uma etapa consumir o prazo da outra.
++- **Memória.** A projeção é de cerca de 1,6 GB de heap em 250.000 estados, contra os 4,05 GiB do heap padrão, sem flag nova.
++- **Saída.** O payload de 15,6 MB pode crescer até os 64 MiB do `maxBuffer`, o que daria ENOBUFS e envelope.
++- **Tempo total.** Com L3, o checker pode durar até a soma dos orçamentos de fase e do prazo semântico. É o preço de não deixar uma etapa consumir o prazo da outra.
+ - **Contagem.** Sobe de 2.410 para cerca de 13,5 mil diagnósticos. Não é regressão de confiança, e menos UNKNOWN não seria crédito.
+ 
+ ## 7. Aceites futuros — todos NOT_RUN
+ 
+-Nada abaixo foi demonstrado para uma implementação 0242, que ainda não existe. Os tetos experimentais rodaram só na cópia diagnóstica privada.
++Nada abaixo foi demonstrado para uma implementação 0242, que ainda não existe. Os tetos e o relógio por fase rodaram só nas cópias diagnósticas privadas.
+ 
+-| ID   | Critério obrigatório de BUILD                                                                                                                                                                                                                                                               |
+-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| LB01 | Valores exatos de L1 e L2 por igualdade de constante; nenhum aumento por flag, env ou entrada; redução interna por contador corta com `CUT:<cap>` e positivo imediatamente abaixo.                                                                                                          |
+-| LB02 | Primeiras falhas preservadas: com os valores atuais, a árvore real corta por `maxContexts` no módulo 23, e uma fixture com etapa semântica longa leva a revalidação final a `COMPARISON_TIMEOUT`.                                                                                          |
+-| LB03 | L3: verificador com etapa intermediária mais longa que o orçamento (reduzido pela interface de teste) finaliza COMPLETE; comparação ou finalização que sozinha passa do orçamento dá `COMPARISON_TIMEOUT`; o conjunto revalidado na finalização é o mesmo de hoje.                       |
+-| LB04 | Conservação da §3.3 por multiset nas fixtures e na árvore real, com tuplas de envelope separadas; normal e strict iguais; `validation: true`.                                                                                                                                              |
+-| LB05 | Medição real pós-gates sem estouro: `bodyCoverage` e `phases` declarados, registro da §3.4 completo, payload e RSS dentro dos limites.                                                                                                                                                     |
+-| LB06 | Violações do census iguais às atuais; tempo do census sem aumento além do ruído medido.                                                                                                                                                                                                     |
+-| LB07 | Regressões 0228/0234/0236/0237/0240/0241 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; verificador com os hashes da nova fonte; consumidor físico fresco.                                                                                                           |
+-| LB08 | Promoção só dos deltas próprios por pré-imagens e claims; evidências anteriores imutáveis; sem push, deploy ou produção.                                                                                                                                                                  |
++| ID   | Critério obrigatório de BUILD                                                                                                                                                                                                                                                                                                                                                                  |
++| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| LB01 | Valores exatos de L1 e L2 por igualdade de constante; nenhum aumento por flag, env ou entrada; redução interna por contador corta com `CUT:<cap>`, com positivo imediatamente abaixo.                                                                                                                                                                                                         |
++| LB02 | Primeiras falhas preservadas: com os valores atuais, a raiz `228e7918` corta por `maxContexts`; uma fixture com etapa intermediária mais longa que o orçamento (reduzido pela opção de teste) leva a finalização final a `COMPARISON_TIMEOUT`; o teste A2 falha nos valores novos antes da migração.                                                                                       |
++| LB03 | L3 com fixture de pelo menos 1 pacote usado, para que a finalização final recolete inventário: etapa intermediária maior que o orçamento reduzido termina COMPLETE; fase 1 ou finalização que sozinha passa do orçamento dá `COMPARISON_TIMEOUT`; `compare()` depois da primeira finalização dá `COMPARISON_AFTER_FINALIZE`; opção de teste recusa elevação; conjunto revalidado igual ao de hoje; duração por fase registrada. |
++| LB04 | Conservação da §3.3 por multiset nas fixtures e na árvore real, com tuplas de envelope separadas; finalizações COMPLETE nas duas execuções; normal e strict iguais; `validation: true`.                                                                                                                                                                                                       |
++| LB05 | Medição real pós-gates sem estouro: `bodyCoverage` e `phases` declarados; registro da §3.4 completo, com o uso de todos os tetos e as durações por fase; RSS e payload abaixo dos limiares de parada.                                                                                                                                                                                         |
++| LB06 | Violações do census iguais às atuais; tempo do census sem aumento além do ruído medido.                                                                                                                                                                                                                                                                                                        |
++| LB07 | Regressões 0228/0234/0236/0237/0240/0241 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; verificador com os hashes da nova fonte; consumidor físico fresco.                                                                                                                                                                                                                |
++| LB08 | Promoção só dos deltas próprios, por pré-imagens e claims; evidências anteriores imutáveis; sem push, deploy ou produção.                                                                                                                                                                                                                                                                      |
+ 
+ ## 8. Autoridade
+ 
+-L1 e L2 mudam valores fixados pela SPEC0236 §6 ("64 contextos por função", "100.000 estados" e "120 s para a etapa semântica"), que a SPEC0241 §2 e §3.2 manteve e cuja mudança exige decisão própria. L3 fixa a interpretação do teto de 120 s de comparação da SPEC0234 §4 como tempo de comparação, sem mudar o valor. Elevar teto de recusa e mudar a contagem do prazo são decisões T3 pela D-12, então exigem **revisão explícita da SPEC pelo usuário antes do BUILD**. As aprovações 0234, 0236, 0237, 0240 e 0241 continuam resolvidas e não serão repetidas.
++L1 e L2 mudam valores fixados pela SPEC0236 §6: "64 contextos por função", "100.000 estados" e "120 s para a etapa semântica". A SPEC0241 §2 e §3.2 manteve esses valores, e mudá-los exige decisão própria. L3 fixa como fase do verificador a contagem do teto de 120 s de comparação da SPEC0234 §4, sem mudar o valor.
++
++Elevar teto de recusa e mudar a contagem do prazo são decisões T3 pela D-12, que exige **revisão explícita da SPEC pelo usuário antes do BUILD**. As aprovações 0234, 0236, 0237, 0240 e 0241 continuam resolvidas e não serão repetidas.
+ 
+-Esta preparação e a cópia diagnóstica não autorizam código 0242, produção, release, dados reais, efeitos sensíveis, push ou deploy.
++Esta preparação e as cópias diagnósticas não autorizam código 0242, produção, release, dados reais, efeitos sensíveis, push ou deploy.

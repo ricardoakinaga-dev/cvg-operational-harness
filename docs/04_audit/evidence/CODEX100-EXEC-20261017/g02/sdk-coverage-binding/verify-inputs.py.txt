@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE - passo 0 (somente leitura).
+# Uso: python3 -I verify-inputs.py.txt <repo_root> <out_json>
+# Confere unit-manifest.json, checkpoint.json (freezes), source-freeze-r2.json e
+# identity-freeze.json da porta sdk-admission contra os arquivos atuais.
+# Não importa SDK, não executa nada além de leitura e sha256.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+OUT = sys.argv[2]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+ADM = os.path.join(G02, "sdk-admission")
+REF = os.path.join(G02, "sdk-reference-profile")
+RUNTIME = "/mnt/ia/cvg-codex100-exec-20261017/sdk-admission"
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_map(base, files, with_mode=True):
+    ok, bad, missing = 0, [], []
+    for rel, meta in files.items():
+        p = os.path.join(base, rel)
+        if not os.path.isfile(p):
+            missing.append(rel)
+            continue
+        st = os.stat(p)
+        got = {"bytes": st.st_size, "sha256": sha(p)}
+        if with_mode and "mode" in meta:
+            got["mode"] = oct(st.st_mode & 0o777)
+        exp = {k: meta[k] for k in got if k in meta}
+        if got == exp:
+            ok += 1
+        else:
+            bad.append({"path": rel, "expected": exp, "observed": got})
+    return {"expected": len(files), "match": ok, "mismatch": bad, "missing": missing}
+
+
+res = {
+    "kind": "INPUT_VERIFICATION_STEP0",
+    "task": "DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE",
+    "observed_at": datetime.now(timezone.utc).isoformat(),
+    "checks": {},
+}
+c = res["checks"]
+
+um_path = os.path.join(ADM, "unit-manifest.json")
+um = json.load(open(um_path))
+c["unit-manifest.json"] = {
+    "self_sha256": sha(um_path),
+    "declared_file_count": um["file_count"],
+    "files": check_map(ADM, um["files"]),
+}
+# Arquivos atuais da porta que não constam do manifesto (exceto o próprio manifesto).
+current = set()
+for dp, _, fns in os.walk(ADM):
+    for fn in fns:
+        current.add(os.path.relpath(os.path.join(dp, fn), ADM))
+extra = sorted(current - set(um["files"]) - {"unit-manifest.json"})
+c["unit-manifest.json"]["files_not_in_manifest"] = extra
+# Acréscimos pós-conclusão conhecidos (Lead): recibo de commit que cita o sha do
+# manifesto, ratificação R1-F10 e transcrição R2-F05 do delta de ledgers.
+POST = {"commit-receipt.json", "lead-budget-ratification-20261018.json", "ledger-delta-cont-d9ef.md"}
+REASON = {
+    "commit-receipt.json": ("Recibo do commit de conteúdo da unidade; cita unit_manifest_sha256.",
+                            "commit-receipt.json#/unit_manifest_sha256"),
+    "lead-budget-ratification-20261018.json": ("Ratificação do Lead da leitura de orçamento 12+19 (R1-F10).",
+                                               "next-task.json#/carry_over[0]; review-r2/executor-disposition.json#/residuals[id=R1-F10]"),
+    "ledger-delta-cont-d9ef.md": ("Transcrição pelo Lead do delta de ledgers do executor (R2-F05).",
+                                  "next-task.json#/carry_over[1]; review-r2/executor-disposition.json#/residuals[id=R2-F05]"),
+}
+
+
+def git_out(*args):
+    import subprocess
+    return subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+post = {}
+for rel in extra:
+    if rel in POST:
+        relrepo = os.path.relpath(os.path.join(ADM, rel), ROOT)
+        commit = git_out("log", "-1", "--format=%H", "--", relrepo)
+        blob_commit = git_out("rev-parse", f"{commit}:{relrepo}")
+        blob_work = git_out("hash-object", os.path.join(ADM, rel))
+        post[rel] = {
+            "sha256": sha(os.path.join(ADM, rel)),
+            "bytes": os.path.getsize(os.path.join(ADM, rel)),
+            "reason": REASON[rel][0],
+            "reference": REASON[rel][1],
+            "git_commit": commit,
+            "git_blob_in_commit": blob_commit,
+            "git_blob_worktree": blob_work,
+            "worktree_equals_commit": blob_commit == blob_work,
+        }
+cr = json.load(open(os.path.join(ADM, "commit-receipt.json")))
+c["unit-manifest.json"]["post_completion_additions"] = post
+c["unit-manifest.json"]["commit_receipt_binds_manifest_sha"] = cr.get("unit_manifest_sha256") == c["unit-manifest.json"]["self_sha256"]
+c["unit-manifest.json"]["unexplained_extra_files"] = sorted(set(extra) - POST)
+c["unit-manifest.json"]["current_file_count_excluding_manifest"] = len(current - {"unit-manifest.json"})
+
+cp = json.load(open(os.path.join(ADM, "checkpoint.json")))
+fz = {}
+for rel, h in cp["freezes"].items():
+    p = os.path.join(ADM, rel)
+    fz[rel] = {"expected": h, "observed": sha(p) if os.path.isfile(p) else None}
+    fz[rel]["match"] = fz[rel]["expected"] == fz[rel]["observed"]
+c["checkpoint.json:freezes"] = fz
+
+sf = json.load(open(os.path.join(ADM, "source-freeze-r2.json")))
+c["source-freeze-r2.json"] = check_map(ADM, sf["files"])
+# Cadeia de freeze documentada: um arquivo do source-freeze-r2 pode ter sido substituído
+# pelo reparo agrupado R1 (evaluator-freeze-r2.json). Aceito somente se (a) o arquivo
+# atual bate com o evaluator-freeze-r2, (b) a preimagem arquivada bate com o
+# source-freeze-r2 e (c) o unit-manifest registra o hash atual.
+ef = json.load(open(os.path.join(ADM, "evaluator-freeze-r2.json")))
+explained, unexplained = [], []
+for m in c["source-freeze-r2.json"]["mismatch"]:
+    rel = m["path"]
+    cur = m["observed"]["sha256"]
+    pre = os.path.join(ADM, "archives/review-r1-preimages", rel)
+    ok_eval = rel in ef["files"] and ef["files"][rel]["sha256"] == cur
+    ok_pre = os.path.isfile(pre) and sha(pre) == sf["files"][rel]["sha256"]
+    ok_um = um["files"].get(rel, {}).get("sha256") == cur
+    rec = {"path": rel, "current_matches_evaluator_freeze_r2": ok_eval,
+           "preimage_matches_source_freeze_r2": ok_pre, "unit_manifest_binds_current": ok_um,
+           "preimage": "archives/review-r1-preimages/" + rel, "record": "repair-r1.json"}
+    (explained if (ok_eval and ok_pre and ok_um) else unexplained).append(rec)
+c["source-freeze-r2.json"]["superseded_by_evaluator_freeze_r2"] = explained
+c["source-freeze-r2.json"]["unexplained_mismatch"] = unexplained
+
+idf = json.load(open(os.path.join(ADM, "identity-freeze.json")))
+idc = {}
+idc["source_freeze"] = {
+    "expected": idf["source_freeze"]["sha256"],
+    "observed": sha(os.path.join(ADM, idf["source_freeze"]["path"])),
+}
+idc["static_admission"] = {
+    "expected": idf["static_admission_sha256"],
+    "observed": sha(os.path.join(ADM, "static-admission.json")),
+}
+idc["cases_json(sdk-reference-profile/cases.json)"] = {
+    "expected": idf["cases_json_sha256"],
+    "observed": sha(os.path.join(REF, "cases.json")),
+}
+ts = {}
+for name, h in idf["ts_sources"].items():
+    p = os.path.join(REF, "inputs/sdk/typescript/src", name)
+    ts[name] = {"expected": h, "observed": sha(p) if os.path.isfile(p) else None}
+idc["ts_sources(sdk-reference-profile/inputs/sdk/typescript/src)"] = ts
+for k, v in list(idc.items()):
+    if "expected" in v:
+        v["match"] = v["expected"] == v["observed"]
+    else:
+        for vv in v.values():
+            vv["match"] = vv["expected"] == vv["observed"]
+diag = {}
+for name, meta in idf["admission_diagnostics"].items():
+    diag[name] = {"dir": meta["dir"], "present": os.path.isdir(os.path.join(ADM, meta["dir"]))}
+idc["admission_diagnostics_dirs"] = diag
+# Árvore sdk-python: comparação informativa com a cópia do perfil de referência no repo.
+idc["trees.sdk-python vs sdk-reference-profile/inputs/sdk/python/src (informativo)"] = check_map(
+    os.path.join(REF, "inputs/sdk/python/src"), idf["trees"]["sdk-python"], with_mode=False
+)
+# Runtime preservado fora do repo: só leitura e hash, informativo (não bloqueia).
+if os.path.isdir(RUNTIME):
+    idc["runtime_preserved(informativo)"] = {
+        "sdk-python": check_map(os.path.join(RUNTIME, "sdk-python"), idf["trees"]["sdk-python"], with_mode=False),
+        "python-deps": check_map(os.path.join(RUNTIME, "python-deps"), idf["trees"]["python-deps"], with_mode=False),
+        "typescript_js": {
+            "expected": idf["typescript_js"]["sha256"],
+            "observed": sha(idf["typescript_js"]["path"]) if os.path.isfile(idf["typescript_js"]["path"]) else None,
+        },
+    }
+else:
+    idc["runtime_preserved(informativo)"] = "ABSENT"
+c["identity-freeze.json"] = idc
+
+
+# Hashes das entradas somente leitura desta unidade e estado git das três árvores lidas.
+import subprocess
+INPUTS = {
+    "g02/sdk-reference-profile/coverage.json": os.path.join(REF, "coverage.json"),
+    "g02/sdk-reference-profile/cases.json": os.path.join(REF, "cases.json"),
+    "g02/sdk-reference-profile/HOW.md": os.path.join(REF, "HOW.md"),
+    "g02/sdk-admission/case-results.json": os.path.join(ADM, "case-results.json"),
+    "g02/sdk-admission/case-results-r2.json": os.path.join(ADM, "case-results-r2.json"),
+    "g02/sdk-admission/checkpoint.json": os.path.join(ADM, "checkpoint.json"),
+    "g02/sdk-admission/next-task.json": os.path.join(ADM, "next-task.json"),
+    "g02/sdk-admission/review-r2/executor-disposition.json": os.path.join(ADM, "review-r2/executor-disposition.json"),
+    "g01/sdk-open-contracts/integration.json": os.path.join(G02, "../g01/sdk-open-contracts/integration.json"),
+    "g01/sdk-open-contracts/python-contracts.json": os.path.join(G02, "../g01/sdk-open-contracts/python-contracts.json"),
+    "g01/sdk-open-contracts/typescript/contracts.json": os.path.join(G02, "../g01/sdk-open-contracts/typescript/contracts.json"),
+    "g01/sdk-open-contracts/acceptance-status.json": os.path.join(G02, "../g01/sdk-open-contracts/acceptance-status.json"),
+}
+res["readonly_inputs_sha256"] = {k: sha(v) for k, v in INPUTS.items()}
+# Cada entrada somente leitura confere com o manifesto da unidade dona.
+owner_hash = {}
+for e in json.load(open(os.path.join(REF, "manifest.json")))["files"]:
+    owner_hash["g02/sdk-reference-profile/" + e["path"]] = e["sha256"]
+for e in json.load(open(os.path.join(G02, "../g01/sdk-open-contracts/manifest.json")))["files"]:
+    owner_hash[e["path"].split("CODEX100-EXEC-20261017/", 1)[1]] = e["sha256"]
+for rel, meta in um["files"].items():
+    owner_hash["g02/sdk-admission/" + rel] = meta["sha256"]
+res["readonly_inputs_owner_manifest_match"] = {
+    k: (owner_hash.get(k) == v if k in owner_hash else "NOT_IN_OWNER_MANIFEST")
+    for k, v in res["readonly_inputs_sha256"].items()
+}
+gs = subprocess.run(
+    ["git", "-C", ROOT, "status", "--porcelain", "--", os.path.relpath(ADM, ROOT), os.path.relpath(REF, ROOT),
+     os.path.relpath(os.path.join(G02, "../g01/sdk-open-contracts"), ROOT)],
+    capture_output=True, text=True, check=True,
+).stdout
+git_clean = gs.strip() == ""
+res["git_status_inputs"] = {"clean": git_clean, "porcelain": gs.splitlines()}
+
+
+def blocking_ok():
+    u = c["unit-manifest.json"]["files"]
+    if u["mismatch"] or u["missing"] or c["unit-manifest.json"]["unexplained_extra_files"]:
+        return False
+    if not c["unit-manifest.json"]["commit_receipt_binds_manifest_sha"]:
+        return False
+    if not all(v["worktree_equals_commit"] for v in c["unit-manifest.json"]["post_completion_additions"].values()):
+        return False
+    if not all(v["match"] for v in fz.values()):
+        return False
+    s = c["source-freeze-r2.json"]
+    if s["unexplained_mismatch"] or s["missing"]:
+        return False
+    if not git_clean:
+        return False
+    if any(v is False for v in res["readonly_inputs_owner_manifest_match"].values()):
+        return False
+    for key in ("source_freeze", "static_admission", "cases_json(sdk-reference-profile/cases.json)"):
+        if not idc[key]["match"]:
+            return False
+    if not all(v["match"] for v in ts.values()):
+        return False
+    if not all(v["present"] for v in diag.values()):
+        return False
+    return True
+
+
+res["blocking_result"] = "PASS" if blocking_ok() else "FAIL_STOP"
+res["blocking_scope"] = (
+    "unit-manifest (todos os arquivos, bytes/sha256/mode; extras só os três acréscimos pós-conclusão "
+    "conhecidos, com o recibo de commit citando o sha do manifesto), freezes do checkpoint, "
+    "source-freeze-r2 (divergência só se explicada pela cadeia evaluator-freeze-r2 + preimagem + manifesto), "
+    "no identity-freeze: source_freeze, static_admission, cases.json, ts_sources e diretórios de "
+    "diagnóstico; e git limpo nas três árvores lidas. Árvores do runtime e cópia de inputs são informativas."
+)
+with open(OUT, "w") as f:
+    json.dump(res, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print(res["blocking_result"])

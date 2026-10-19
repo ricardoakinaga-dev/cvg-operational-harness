@@ -1,0 +1,85 @@
+--- spec0243-r2.source.md	2026-10-19 04:29:17.369709270 -0300
++++ spec0243-r3.source.md	2026-10-19 04:39:22.844655018 -0300
+@@ -1,6 +1,6 @@
+ # SPEC0243 — Escopo de fonte das receitas de referência B6
+ 
+-**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho r2 da preparação T1 `HISO005-P2-NEXT-RECON-20261019`. O lead atribui o número final ao materializar em `docs/02_spec`; nesse passo, os links são reescritos para caminhos relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0243`. Mesma frente HISO005/B6. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §3.1 e §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) (receita compilada), [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md). Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
++**PROPOSTA T3. BUILD ainda não autorizado.** Rascunho r3 (correções da R2 aplicadas sem terceira rodada de crítica) da preparação T1 `HISO005-P2-NEXT-RECON-20261019`. O lead atribui o número final ao materializar em `docs/02_spec`; nesse passo, os links são reescritos para caminhos relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0243`. Mesma frente HISO005/B6. Autoridade de segurança: [constituição D-12/T3](../../../07_agents/AGENTS.md), [SPEC0234](../../../02_spec/0234_b6_installed_content_identity.md) §3.1 e §4, [SPEC0236](../../../02_spec/0236_b6_semantic_boundary_proof.md) (receita compilada), [SPEC0241](../../../02_spec/0241_b6_integral_body_installed_provenance.md). Execução e continuidade: [plano 0391](../../../03_build/0391_hiso005_semantic_proof_execution.md).
+ 
+ ## 1. CURRENT — problema e evidência
+ 
+@@ -70,17 +70,17 @@
+ Nomes vindos da árvore nunca são interpretados como pathspec mágico:
+ 
+ - **Instalada.** O archive por lote usa `--literal-pathspecs`, ou `GIT_LITERAL_PATHSPECS=1` no ambiente próprio da receita. Antes do npm, o conjunto de arquivos regulares do snapshot precisa ser exatamente a lista incluída, e só diretórios podem existir além dela. Divergência recusa com `SNAPSHOT_MISMATCH`.
+-- **Compilada.** O archive usa uma de duas formas: a lista explícita de arquivos incluídos com `--literal-pathspecs`, ou uma única pathspec mágica constante do código, `:(exclude)docs/04_audit/evidence`, com ambiente limpo. Depois da extração, o conjunto de arquivos regulares precisa ser exatamente a lista incluída menos o que as regras `--exclude` atuais do tar removem. Divergência recusa com `COMPILED_DIRTY_SOURCE`.
++- **Compilada.** O archive usa uma de duas formas: a lista explícita de arquivos incluídos com `--literal-pathspecs`, ou uma única pathspec mágica constante do código, `:(exclude)docs/04_audit/evidence`, com ambiente limpo. Depois da extração e antes da cópia de `node_modules` para o snapshot, nenhum arquivo regular pode estar fora da lista incluída, e a igualdade atual de `sourceInputs` continua valendo. Divergência recusa com `COMPILED_DIRTY_SOURCE`.
+ 
+ A exclusão nunca é derivada de dado do repositório.
+ 
+ ### 3.3 Guarda fail-closed e ordem
+ 
+-A guarda estática roda primeiro, sobre a listagem completa do commit e os arquivos da raiz de origem. Ela vem antes de `validateConfigs`, `fingerprintResolution`, `sourceInputs`, `compilerInputs` e do archive. Recusa com `SOURCE_EXCLUSION_CONFLICT` na instalada e `COMPILED_SOURCE_EXCLUSION_CONFLICT` na compilada quando:
++A guarda estática roda sobre a listagem completa do commit e os arquivos da raiz de origem. Ela vem depois da asserção de commit e das checagens de listagem da §3.2, e antes de `validateConfigs`, `fingerprintResolution`, `sourceInputs`, `compilerInputs` e do archive. Recusa com `SOURCE_EXCLUSION_CONFLICT` na instalada e `COMPILED_SOURCE_EXCLUSION_CONFLICT` na compilada quando:
+ 
+ 1. um glob de workspace do `package.json` da raiz, expandido sobre a listagem completa do commit (inclusive entradas excluídas) com a semântica de `fingerprintResolution`, alcança um caminho sob um prefixo excluído;
+ 2. uma chave de `packages` do lock, um alvo de link ou um `resolved` com `file:` cai sob o prefixo;
+-3. um `.npmrc`, ou um arquivo lido pelo fingerprint de resolução (`package.json` da raiz e dos workspaces, `package-lock.json`), cai sob o prefixo.
++3. qualquer `.npmrc` sob o prefixo (leitura estrita, mesmo que o npm não o leia), ou um arquivo lido pelo fingerprint de resolução (`package.json` da raiz e dos workspaces, `package-lock.json`) sob o prefixo.
+ 
+ Na compilada, tsconfig e fechamento de entradas do compilador já são fechados pelas recusas existentes, que valem como resultado fail-closed deste caso. Elas sempre acontecem antes de qualquer recibo:
+ 
+@@ -109,7 +109,7 @@
+ | instalada | `recipe.sourceSha256`                                                    | digest só dos incluídos                      |
+ | instalada | `recipe.sourceExclusions`                                                | campo novo, igual à constante                |
+ | instalada | `usage.regularBytes`, `usage.entries`, `usage.maxDepth`                  | snapshot menor                               |
+-| instalada | `usage.npmElapsedMs`, `recipe.observation.elapsedMs`, `recipe.observation.traceSha256` | variam a cada execução do npm |
++| instalada | `usage.npmElapsedMs`, `usage.maxProcesses`, `recipe.observation.elapsedMs`, `recipe.observation.maxProcesses`, `recipe.observation.traceSha256` | variam a cada execução do npm (pico amostrado, tempo e trace) |
+ | compilada | `recipeVersion`                                                          | v1 → v2                                      |
+ | compilada | `recipeSha256`                                                           | bytes do script                              |
+ | compilada | `commandsSha256`                                                         | argv do archive                              |
+@@ -121,7 +121,7 @@
+ - na instalada: `packages`, `unavailable`, `lockSha256`, `configSha256`, `toolchain`, `toolchainSha256`, `selection`, `limits`, `commit`, o restante de `recipe` e de `usage`;
+ - na compilada: `inputs`, `outputs`, `compiler`, `compilerSources`, `dependencies`, `runtimeResolutions`, `toolchain`, `commit`, `argv`, `environment`, `before`, `exitCode`, `kind`, `sourceRoot` e `evaluatedRoot`.
+ 
+-A medição B6 com as duas referências tem multiset de diagnósticos e de tuplas UNKNOWN iguais, salvo os digests das referências. Qualquer outra diferença é defeito.
++A medição B6 roda com o mesmo engine e os mesmos valores nos dois lados, porque a 0243 não altera o engine nem o checker. Com as duas referências, o multiset de diagnósticos e de tuplas UNKNOWN é igual, salvo os digests das referências. Qualquer outra diferença é defeito.
+ 
+ ## 4. O que permanece
+ 
+@@ -132,7 +132,13 @@
+ 
+ ## 5. Versão, integração e recuperação
+ 
+-A base da implementação é definida pelo conteúdo, não pela ancestralidade. É o commit qualificado vigente que contém, byte a byte, as pré-imagens do BUILD0241 e da T2 listadas no rascunho da [0242 §5](spec0242-r2.source.md). Hoje elas só existem na candidata detached `d6203875`; a main (`3704e3f8`) ainda tem o kernel v3 e as receitas anteriores.
++A base da implementação é definida pelo conteúdo, não pela ancestralidade. É o commit qualificado vigente que contém, byte a byte, as pré-imagens do BUILD0241 e da T2 listadas no rascunho da [0242 §5](spec0242-r3.source.md). Hoje elas só existem na candidata detached `d6203875`; a main (`3704e3f8`) ainda tem o kernel v3 e as receitas anteriores.
++
++Composição com a 0242, que altera `boundary-semantic-engine.mjs`, `check-product-boundary.mjs` e `boundary-installed-identity.mjs`:
++
++- **Ordem fixa.** Se as duas forem aprovadas, a 0243 vem primeiro e a 0242 depois. Numa candidata compartilhada, cada delta é um commit próprio, nessa ordem. A base da 0243 é então a tabela de pré-imagens.
++- **Fora dessa ordem.** Se a 0242 já estiver promovida, a base usa a pós-imagem registrada na promoção dela para os arquivos que ela altera, com o SHA-256 anotado.
++- **Conservação.** Compara o commit anterior ao delta com o commit do delta. O engine e o checker são iguais dos dois lados.
+ 
+ Fontes previstas:
+ 
+@@ -149,7 +155,7 @@
+ - **RS06**, a comparação com e sem exclusão, roda em `228e7918`, o commit mais recente em que a receita sem exclusão comprovadamente cabe (margem de 22 MB, construída duas vezes);
+ - **RS07** roda no commit vigente só com exclusão, porque ali a receita sem exclusão provavelmente já não cabe.
+ 
+-A 0243 pode ser construída antes, junto ou depois da 0242, sem dependência de código. Cada uma tem aceite próprio.
++Cada delta tem aceite próprio.
+ 
+ O rollback é a receita T2 sem exclusão, que falha por limite quando a evidência passa do teto. A promoção para diante de qualquer uma destas situações:
+ 
+@@ -176,9 +182,9 @@
+ | RS01 | Primeira falha preservada: com limite reduzido pela interface de teste, a receita atual recusa por limite uma fixture cuja evidência passa do teto, e a receita nova a constrói.                                                                                                                                    |
+ | RS02 | Exatidão do prefixo: `docs/04_audit/evidence` e tudo sob ele saem do snapshot e do archive. `docs/04_audit/evidencex/`, `docs/04_audit/Evidence/` e `x/docs/04_audit/evidence/` permanecem.                                                                                                                         |
+ | RS03 | Checagens sobre a árvore inteira: link, submódulo, nome não UTF-8 e nome inseguro sob o prefixo excluído continuam recusados nas duas receitas.                                                                                                                                                                    |
+-| RS04 | Guarda e ordem: glob de workspace expandido sobre a árvore completa, chave ou link do lock, `file:`, `.npmrc` e manifesto de workspace sob o prefixo recusam com o código da §3.3, antes de qualquer outra checagem. Na compilada, tsconfig e entrada do compilador sob o prefixo recusam com `COMPILED_CONFIG_UNSUPPORTED` ou `COMPILED_SOURCE_OUTSIDE_RECIPE`, nomeado por caso. Nenhum recibo é escrito. |
++| RS04 | Guarda e ordem: glob de workspace expandido sobre a árvore completa, chave ou link do lock, `file:`, `.npmrc` e manifesto de workspace sob o prefixo recusam com o código da §3.3, depois da asserção de commit e das checagens de listagem e antes de `validateConfigs`, `fingerprintResolution`, `sourceInputs`, `compilerInputs` e do archive. Na compilada, tsconfig e entrada do compilador sob o prefixo recusam com `COMPILED_CONFIG_UNSUPPORTED` ou `COMPILED_SOURCE_OUTSIDE_RECIPE`, nomeado por caso. Nenhum recibo é escrito. |
+ | RS05 | Recibos: `sourceExclusions` presente e igual à constante; leitor recusa ausente, diferente ou extra; leitor compilado v2 confere o argv do archive e recusa recibo v1; nenhum override por CLI ou env.                                                                                                              |
+-| RS06 | Conservação da §3.6 em `228e7918`: só os campos da lista diferem; medição B6 com multiset de diagnósticos e tuplas iguais à da receita sem exclusão; normal e strict iguais.                                                                                                                                        |
++| RS06 | Conservação da §3.6 em `228e7918`, entre o commit anterior ao delta e o commit do delta: só os campos da lista diferem; medição B6 com o mesmo engine e os mesmos valores dos dois lados, multiset de diagnósticos e tuplas iguais; normal e strict iguais.                                                                                                                                        |
+ | RS07 | Commit vigente, só com exclusão: as duas receitas constroem, o leitor compilado dá PROVEN, os limites são iguais aos atuais (por constante e por recibo), e snapshot e tar são medidos e registrados.                                                                                                               |
+ | RS08 | Pathspec literal e conferência física: nomes fora do prefixo com `*`, `?`, `[` e `:(` são arquivados literalmente; nada sob o prefixo entra no snapshot; um arquivo extra plantado no snapshot antes do npm recusa com `SNAPSHOT_MISMATCH`, e o mesmo vale na compilada com `COMPILED_DIRTY_SOURCE`.                |
+ | RS09 | Regressões 0228/0234/0236/0237/0240/0241 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; consumidor físico fresco; promoção só dos deltas próprios, sem push, deploy ou produção.                                                                                                              |

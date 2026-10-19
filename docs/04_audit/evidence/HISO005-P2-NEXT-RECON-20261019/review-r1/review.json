@@ -1,0 +1,232 @@
+{
+  "round": "R1",
+  "reviewer": "crítico independente fresco (não-fork), só leitura",
+  "observedAt": "2026-10-19T07:20:00+00:00",
+  "specSha256": {
+    "SPEC0242-draft": "e1461c436b71eb178c1db5c1ef9b249d43b767aa7f4a7f4d24f4ec99aa7e97ff",
+    "SPEC0243-draft": "e196e9a1e4f083c7f481513c717548d39b02e9413cfddfb8c545f4740a960064"
+  },
+  "verdict": {
+    "SPEC0242-draft": "REVISE",
+    "SPEC0243-draft": "REVISE"
+  },
+  "required": [
+    {
+      "id": "R1-01",
+      "spec": "ambas",
+      "severity": "P1",
+      "section": "0242 §5 e 0243 §5 (base de implementação); 0243 §1 (rótulo da tabela)",
+      "finding": "A base proposta, 'commit qualificado vigente que contenha a T2 (ae14b824 ou sucessor)', não contém o código que as duas SPEC alteram. Em ae14b824 e no HEAD atual da main (3704e3f8) o engine é 'semantic-kernel-v3-exact-metadata' (sha256 0497362b…/99b72bf9…), não o v4 b9246972… do BUILD0241; build-installed-reference.mjs, boundary-semantic-compiled.mjs e boundary-installed-identity.mjs também diferem dos bytes da candidata d6203875. O BUILD0241 (228e7918) não é ancestral de ae14b824, e a promoção dos caminhos da T2 está PREPARED_NOT_APPLIED. ae14b824 é o commit documental que registrou a T2, não o que contém seu código. Uma BUILD seguindo o texto partiria de um kernel v3 sem phases/bodyCoverage e sem as receitas T2.",
+      "evidence": "git show ae14b824:scripts/boundary-semantic-engine.mjs linha 24 (kernel v3); git show 228e7918:scripts/boundary-semantic-engine.mjs linha 27 (kernel v4, sha256 b9246972…); contract-freeze-r1.json readOnlySources (engine b9246972…, checker 14ab9a8b…); ../HISO005-P2-REFERENCE-RECIPE-T2-20261019/promotion-deltas-prepared.json campos status=PREPARED_NOT_APPLIED e base=228e7918; docs/08_runtime/agent_coordination.md:108",
+      "requiredChange": "Nas duas §5, definir a base como o commit qualificado que contenha os bytes do BUILD0241 e da T2 (engine b9246972…, checker 14ab9a8b…, identity 78d198c7…, receita instalada 70f6c43a…, compilada dd006347…, manifests 40cd1375…), hoje só na candidata d6203875 ou na futura promoção desses caminhos na main; definir 'sucessor' por identidade de conteúdo dessas pré-imagens, não por ancestralidade (a main foi consolidada por squash). Na tabela da 0243 §1, rotular ae14b824 como 'commit documental da T2 (medição de tamanho)', não como 'T2'."
+    },
+    {
+      "id": "R1-02",
+      "spec": "0242",
+      "severity": "P2",
+      "section": "§1 Achado 4 (2º e 4º itens) e base de L3 em §2",
+      "finding": "A evidência que sustenta L3 está descrita errado. O diagnóstico 'comparador corrigido (diagnóstico de 300 s que não conta a etapa semântica)' só trocou o teto do relógio de vida do comparador de 120 s para 300 s, ainda contado desde a criação. Na P3 ele contou a etapa semântica: idade de 158,5 s na finalização final, com 119,6 s de etapa semântica dentro. A L3 por fase nunca foi executada. Além disso, 'O verificador chega a 158–176 s de idade, e a revalidação final sai COMPARISON_TIMEOUT' mistura P3 (158,5 s, COMPLETE sob override) com P1/P2 (176,2 s e 164,4 s, COMPARISON_TIMEOUT). A conclusão sobrevive por aritmética, mas não está escrita.",
+      "evidence": "operators/identity_probe_patch.py:20-36; diferença de tools-probe/scripts/boundary-installed-identity.mjs para a candidata: checkTime e '_deadline: started + DIAG_CMP_MS' (linhas 880, 890, 905); identity-deadline-probe.json runs[2].verifierAgeAtFinalFinalizeMs=158539, runs[2].semanticTelemetry.elapsedMs=119603, runs[0..1].verifierAgeAtFinalFinalizeMs=176234/164382",
+      "requiredChange": "Corrigir o texto: o diagnóstico ampliou o relógio de vida para 300 s, contando a etapa semântica. Declarar que a L3 em si está NOT_RUN. Apresentar a cota derivada como base: fase 1 ≈ 29,1 s; fase 2 ≤ 158,5 − 29,1 − 119,6 ≈ 9,8 s (cota superior, que inclui também a montagem pré-semântica). Corrigir a faixa para '164–176 s sem ajuste (P1, P2), com COMPARISON_TIMEOUT'. Exigir em LB03/LB05 a medição das durações por fase."
+    },
+    {
+      "id": "R1-03",
+      "spec": "0242",
+      "severity": "P2",
+      "section": "§3.2 (L3) e LB02/LB03",
+      "finding": "A redação de L3 não é implementável sem ambiguidade. (a) 'Tempo gasto fora do verificador não conta' contradiz a fase 1 'da criação até o fim da primeira finalização', que inclui toda a varredura do checker entre a criação e a primeira finalização (cerca de 28 s), que é tempo fora do verificador. (b) O comparador tem dois relógios derivados de 'started': checkTime e o '_deadline' absoluto passado a collectPackageInventory em collect(). Trocar só checkTime mantém a finalização final em COMPARISON_TIMEOUT. (c) Não define o relógio de compare() chamado depois da primeira finalização. (d) LB02/LB03 exigem reduzir o orçamento do comparador 'pela interface de teste', mas createInstalledIdentityComparator não tem essa interface; só collectPackageInventory tem testOnly.limits. (e) Não diz se o relógio da varredura em boundary-manifests (scanStarted, INSTALLED_SCAN_TIMEOUT) e o de fingerprintToolchain mudam.",
+      "evidence": "scripts/check-product-boundary.mjs:408 (criação), :1991 (1ª finalização), :2143 (finalização final); scripts/boundary-installed-identity.mjs:879 (started), :886-892 (checkTime), :904 (_deadline), :1081-1116 (finalize), :385-399 (collectionLimits, único testOnly), :296-302 (relógio próprio de fingerprintToolchain); scripts/boundary-manifests.mjs:518-531 (scanStarted)",
+      "requiredChange": "Reescrever a §3.2 com estes pontos. Fase 1 = relógio de parede da criação ao fim da primeira finalização, incluindo o trabalho do checker entre as chamadas; apagar a frase genérica sobre 'tempo fora'. Cada finalização posterior = relógio de parede do início ao fim dela. Todo prazo derivado dentro do comparador (checkTime e '_deadline' de collect) usa o início da fase corrente. compare() depois da primeira finalização é recusado fail-closed, ou a SPEC define a fase em que ele conta. Criar opção só de teste, só de redução, com recusa de elevação (padrão TEST_LIMIT_INVALID). Declarar inalterados os relógios de fingerprintToolchain e de scanBounded. Em LB03, exigir fixture com ≥1 pacote usado, para que a finalização final recolete inventário."
+    },
+    {
+      "id": "R1-04",
+      "spec": "0242",
+      "severity": "P2",
+      "section": "§4 (última frase) e §6 (Folga finita)",
+      "finding": "O teto mais apertado que resta não é declarado. O corpo integral usa 1.693.845 nós AST contra maxNodes 2.000.000 (84,7%, folga de 1,18×), bem abaixo das folgas de 1,77× e 1,99× citadas. A contagem é global, somada em todos os arquivos adquiridos, e roda antes de 'phases.acquisition = COMPLETED'. Estourar maxNodes, portanto, não é corte declarado do corpo: o corpo inteiro se perde. A frase 'Uma árvore que cresça além de 256 contextos ou 250.000 estados volta a ter corte declarado' omite esse modo. maxFiles está em 4.128 de 12.000.",
+      "evidence": "scripts/boundary-semantic-engine.mjs:1609 (bump('nodes', out.usage.nodes + 1, 'maxNodes')) e :1621 (phases.acquisition = 'COMPLETED'); diag-official.json e diag-nocut.json result.usage.nodes=1693845, files=4128; q1-characterization.json needsWithoutCut.nodes=1693845; runtime pipeline-caps-256-250k/normal-report.json.gz semanticBoundary.usage.nodes=1693845",
+      "requiredChange": "Acrescentar à §6 e à §4 a folga medida de todos os tetos fora do delta: maxNodes 1,18×, maxFiles 2,9×, maxCallDepth 64/8, maxUnionValues 128/4. Explicar que estouro de maxNodes ou maxFiles na aquisição perde o corpo inteiro (UNKNOWN global, sem corte declarado). Exigir em LB05 o registro do uso de todos os tetos."
+    },
+    {
+      "id": "R1-05",
+      "spec": "ambas",
+      "severity": "P2",
+      "section": "0242 §5 e §7 (LB02, LB04, LB05); 0243 §3.6 e §7 (RS06)",
+      "finding": "Os aceites na árvore real dependem de referências que a receita atual talvez não consiga mais construir. A margem instalada estimada é de 336 MB em ae14b824 e 392 MB no HEAD 3704e3f8, contra crescimento médio de cerca de 202 MB/dia; na média, isso dá cerca de 2 dias. RS06 compara com a 'receita sem exclusão' no 'commit qualificado vigente', o que provavelmente será impossível quando o BUILD rodar: a receita recusa por SOURCE_LIMIT ou REFERENCE_BYTES_LIMIT. Pelo mesmo motivo, LB02, LB04 e LB05 da 0242 precisam de referências instaladas e compiladas, que exigem a 0243, ou um commit dentro do teto. Nenhuma das duas SPEC declara essa dependência nem um commit alternativo.",
+      "evidence": "q2-characterization.json commits.ae14b824.installedMarginEstimate=335912573, meanGrowthSince20261001.bytesPerDay=201843197, daysToInstalledCapAtAe14=1.7; git ls-tree -r -l HEAD (3704e3f8): rastreado 3.666.899.441, margem estimada 392.301.017; scripts/build-installed-reference.mjs:522-527 (SOURCE_LIMIT) e allFiles (REFERENCE_BYTES_LIMIT)",
+      "requiredChange": "0243: rodar RS06 (comparação sem e com exclusão) no commit mais recente em que a receita sem exclusão ainda caiba, registrado com a margem (ex.: 228e7918, já medido), e no commit vigente só com exclusão (RS07). 0242: declarar que as medições reais (LB02, LB04, LB05) usam referências da receita 0243, ou de um commit dentro do teto, e que as duas execuções da §3.3 usam as mesmas referências. Declarar a ordem de BUILD entre 0242 e 0243, ou a candidata compartilhada."
+    },
+    {
+      "id": "R1-06",
+      "spec": "0243",
+      "severity": "P2",
+      "section": "§3.6 (fechamento da conservação) e RS06",
+      "finding": "A conservação não é verificável sem ambiguidade. A §3.6 lista alguns campos que devem ser iguais e termina com 'Qualquer outra diferença é defeito'. Isso torna defeito as diferenças esperadas, que não são enumeradas: recipe.sourceSha256, recipe.sourceExclusions, usage, recipe.observation, root, caminho do cache em recipe.argv, TMPDIR e NPM_CONFIG_* em recipe.environment; na compilada, recipeVersion v2, recipeSha256, commandsSha256, installedReferenceDigest, root, cwd e sourceExclusions. Ao mesmo tempo, não exige iguais campos que conferi iguais e que importam para identidade: lockSha256, configSha256, toolchain, toolchainSha256, selection, limits, commit e unavailable (50 entradas); na compilada, argv, environment, before, kind, sourceRoot e evaluatedRoot.",
+      "evidence": "comparação dos recibos do runtime installed-reference-{ref,excl}/reference.json e compiled-reference-{ref,excl}/reference.json (iguais: packages, unavailable, lockSha256, configSha256, toolchain, selection, limits, commit; diferentes: root, usage, recipe.argv, recipe.environment, recipe.observation, recipe.sourceSha256, recipe.sourceExclusions; compilada diferentes: commandsSha256, cwd, installedReferenceDigest, recipeSha256, root); spec0243-r1.source.md:73-81",
+      "requiredChange": "Substituir a §3.6 por uma lista fechada, por recibo, dos campos que podem diferir (com o motivo), e exigir igualdade canônica de todos os demais, incluindo unavailable, lockSha256, configSha256, toolchain, selection e limits. RS06 passa a verificar essa lista."
+    },
+    {
+      "id": "R1-07",
+      "spec": "0243",
+      "severity": "P2",
+      "section": "§3.3 (guarda) e RS04",
+      "finding": "RS04 exige que cada caso seja recusado 'com o código da §3.3', mas recusas estruturais já existentes disparam antes, com outros códigos, e a SPEC não define a ordem. Na compilada, sourceInputs(source) roda primeiro e recusa qualquer 'extends' diferente de '../../tsconfig.base.json' e qualquer 'references' fora do esperado com COMPILED_CONFIG_UNSUPPORTED. compilerInputs recusa entrada fora de SOURCE_ROOTS e das chaves de dependência com COMPILED_SOURCE_OUTSIDE_RECIPE. Na instalada, fingerprintResolution(sourceRoot), comparado com o snapshot, recusa com SNAPSHOT_MISMATCH, e o comparador recusa com RESOLUTION_CHANGED. Também não se diz sobre qual árvore o item 1 (expansão de glob de workspace) é avaliado. No snapshot, que já não tem a evidência, a expansão nunca acharia nada sob o prefixo.",
+      "evidence": "scripts/boundary-semantic-compiled.mjs:33 (SOURCE_ROOTS), :96-124 (cadeia de config fechada), :283-292 (COMPILED_SOURCE_OUTSIDE_RECIPE), :316 (sourceInputs antes de tudo); scripts/build-installed-reference.mjs:563-568 (SNAPSHOT_MISMATCH por fingerprintResolution); scripts/boundary-installed-identity.mjs:197-257 (expansão de workspace no sistema de arquivos), :940-944 (RESOLUTION_CHANGED)",
+      "requiredChange": "Escolher uma de duas opções e escrever na §3.3 e em RS04. (i) A guarda roda sobre a listagem do commit inteiro e sobre a raiz de origem, antes de sourceInputs, compilerInputs, fingerprintResolution e do archive, e emite o código da §3.3. (ii) RS04 aceita como resultado fail-closed válido a recusa preexistente nomeada por caso (COMPILED_CONFIG_UNSUPPORTED, COMPILED_SOURCE_OUTSIDE_RECIPE, SNAPSHOT_MISMATCH, RESOLUTION_CHANGED), sempre antes de qualquer recibo. Em qualquer opção, o item 1 expande os globs sobre a árvore completa do commit (incluindo entradas excluídas), com a semântica de fingerprintResolution. Citar essas recusas preexistentes na §1 como reforço de que a evidência não é entrada."
+    },
+    {
+      "id": "R1-08",
+      "spec": "0243",
+      "severity": "P2",
+      "section": "§3.2 (pathspec), §6 (Pathspec) e §7",
+      "finding": "A regra 'Nomes vindos da árvore nunca são interpretados como pathspec mágico' já é violada pela receita instalada atual e não tem aceite. O archive por lote passa os nomes da árvore como pathspec, sem --literal-pathspecs, e o ambiente não define GIT_LITERAL_PATHSPECS. Um nome rastreado fora do prefixo com caracteres de glob ou magia (ex.: 'docs/*', '[x]', ':(exclude)y'), que safe() aceita, pode puxar arquivos de docs/04_audit/evidence para o snapshot ou deixar arquivos de fora. Nada compara o conjunto físico do snapshot com 'files' antes do npm: sourceDigest só confere os arquivos listados. Com E1, a exclusão poderia ser contornada em silêncio, com o recibo declarando sourceExclusions e um snapshot que contém bytes excluídos.",
+      "evidence": "scripts/build-installed-reference.mjs:538-552 (git archive --format=tar <commit> -- <nomes>, sem --literal-pathspecs), :44-48 (safe() aceita '*', '?', '[', ':'), :563-568 (só sourceDigest dos listados); scripts/boundary-reference-process.mjs:16-19 (env sem GIT_LITERAL_PATHSPECS)",
+      "requiredChange": "Na §3.2, exigir --literal-pathspecs (ou GIT_LITERAL_PATHSPECS=1 no ambiente próprio) no archive por arquivo da receita instalada, e a checagem 'conjunto físico do snapshot antes do npm == arquivos incluídos', falhando fechado. Acrescentar aceite (novo RS ou extensão de RS02/RS03) com nomes fora do prefixo contendo '*', '?', '[' e ':(' arquivados literalmente, e nada sob o prefixo entrando no snapshot. Para a compilada, se usar ':(exclude)', declarar que é a única pathspec mágica, constante, com ambiente limpo."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-O01",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§1 Achado 3",
+      "finding": "Unidades e apoio fracos. '4,7 KB de heap por estado' não bate com heapBytesPerState=4.942 B (4,8 KiB ou 4,9 kB). 'O teto de contextos não muda o custo: 64 e 128 contextos gastam o mesmo' usa duas execuções que cortaram no mesmo módulo 23, o que não testa custo. 'Os 10 módulos mais pesados somam metade da soma inclusiva' soma valores inclusivos aninhados (zod/index ⊃ external ⊃ core/index), com dupla contagem.",
+      "evidence": "q1-characterization.json growth.heapBytesPerState=4942; variants official/ctx2x (cut no módulo 23), ctx4x/ctx8x 36.339/36.260 ms com o mesmo corte; statesPerModuleInclusive.note",
+      "requiredChange": "Usar 4,9 kB (4,8 KiB). Apoiar a independência do custo em ctx4x × ctx8x (36,3 s × 36,3 s) e all8x × nocut. Marcar a soma inclusiva como tendo dupla contagem, ou trocar por estados exclusivos."
+    },
+    {
+      "id": "R1-O02",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§6 Memória",
+      "finding": "'heap padrão de 4,05 GiB do Node pinado neste host' não está registrado em nenhum JSON do pacote. As variantes diagnósticas rodaram com --max-old-space-size explícito (heapMB 4096 a 24576).",
+      "evidence": "diag-*.json campo heapMB; operators/variants.py:25",
+      "requiredChange": "Registrar v8.getHeapStatistics().heap_size_limit do Node pinado, ou citar como evidência que a pipeline 256/250.000 rodou com heap padrão (worker sem flag)."
+    },
+    {
+      "id": "R1-O03",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§1 Achado 4 (3º item)",
+      "finding": "Na pipeline 256/250.000 de 120 s, a causa (COMPARISON_TIMEOUT) é inferida: os relatórios não registram o motivo da finalização (0 ocorrências de COMPARISON_TIMEOUT). A inferência é sólida (idade ≥ cerca de 28 s + 108,7 s > 120 s), mas não está rotulada.",
+      "evidence": "runtime pipeline-caps-256-250k/{normal,strict}-report.json.gz (sem COMPARISON_TIMEOUT); identity-deadline-probe.json (idade na 1ª finalização de cerca de 28–29 s)",
+      "requiredChange": "Rotular como inferência, com a conta, ou citar a P2 como confirmação sob carga."
+    },
+    {
+      "id": "R1-O04",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§1 Achado 2 (3ª linha da tabela) e §2 (alternativas)",
+      "finding": "Duas extrapolações não rotuladas. '≥ 145 contextos e ≥ 125.460 estados → sem corte' vale só com os demais tetos como medidos. 'B e C ainda exigem subir maxStates' não foi medido (options B/C measured=false). A conta disponível sustenta a afirmação: mesmo zerando os estados exclusivos de zod/core, @vitest/expect e chai (17.696), sobram 107.764 > 100.000.",
+      "evidence": "q1-characterization.json options[1..2].measured=false; statesByFileExclusiveTop",
+      "requiredChange": "Marcar as duas como inferência e incluir a conta."
+    },
+    {
+      "id": "R1-O05",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§3.3, §3.4 e LB02/LB04/LB05",
+      "finding": "Pequenas lacunas. A §3.3 não exige que a execução de base (valores atuais) tenha as duas finalizações COMPLETE; sob carga, ela também falha (P1). LB04 fala em 'multiset' e a §3.3 em conjunto de tuplas. LB02 fixa 'módulo 23', que depende da raiz 228e7918. A §3.4 não diz quem produz o registro (código ou operador), não pede as durações por fase da L3, e 'RSS dentro dos limites' (LB05) não tem limite definido. O payload de 16,4 MB foi medido com separadores padrão do Python; compacto, são 15,6 MB.",
+      "evidence": "identity-deadline-probe.json runs[0]; operators/characterize.py:78; runtime pipeline-caps-256-250k/normal-report.json.gz (compacto 15.591.520 B)",
+      "requiredChange": "Exigir finalizações COMPLETE nas duas execuções da §3.3. Alinhar LB04 com a §3.3. Trocar 'módulo 23' por 'corte maxContexts' ou amarrar à raiz. Dizer quem emite o registro da §3.4 e incluir as durações por fase. Definir o limite de RSS ou retirá-lo."
+    },
+    {
+      "id": "R1-O06",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§5 (testemunhos)",
+      "finding": "'Os testes que fixam os valores atuais continuam como testemunhos' conflita com o teste A2, que fixa SEMANTIC_LIMITS por igualdade e terá de ser migrado.",
+      "evidence": "tests/b6-0241-integral-body.test.js:267-283 (candidata d6203875)",
+      "requiredChange": "Nomear A2 como migração literal prevista e dizer como a primeira falha é preservada antes da edição."
+    },
+    {
+      "id": "R1-O07",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "§2 (alternativa 8 GiB)",
+      "finding": "'A alta compra cerca de 23 dias … e então o teto de 200.000 entradas vira a próxima barreira' superestima. Entradas do snapshot contam diretórios: em ae14b824 são 11.131 diretórios de evidência para 78.252 arquivos, cerca de 1,14 entrada por arquivo, o que dá cerca de 4,76 mil entradas/dia. Por essa conta, 200.000 entradas chegam em cerca de 18–19 dias, antes dos 8 GiB (22,9 dias). O valor 24,0 do JSON ignora diretórios. Além disso, fingerprintToolchain também usa maxTotalBytes. A conclusão não muda; fica mais forte.",
+      "evidence": "q2-characterization.json meanGrowthSince20261001.daysToEntriesCapAtAe14=24.0 e optionRaise.buysDaysAtMeanRate=22.9; operators/characterize.py:197; git ls-tree -r -t ae14b824 (11.131 diretórios sob o prefixo); scripts/boundary-installed-identity.mjs:333",
+      "requiredChange": "Corrigir para 'cerca de 19 dias, limitados pelo teto de entradas, que chega antes'. Citar fingerprintToolchain entre os usos da constante."
+    },
+    {
+      "id": "R1-O08",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "§1 (crescimento e fatos do lock)",
+      "finding": "Precisões. 'Saltos de 0,9 a 1,2 GB num dia': na série só o salto de 1,24 GB em cerca de 19 h (35d280d0→4c45ab4f) é de um dia; 7ecc5b53→ee79a364 soma +1,09 GB em cerca de 46 h. A média usa 18 dias (o real é 17,7). Os fatos '411 pacotes' e '28 links' não estão em nenhum JSON do pacote; whyEvidenceIsNotAnInput é literal fixo no operador. Conferi por git e estão corretos (1.188 package.json é a contagem em ae14b824; em 228e7918 são 1.165).",
+      "evidence": "q2-characterization.json evidenceGrowth; operators/characterize.py:183-185 e :210-212; git show <c>:package-lock.json (411 chaves, 28 links para apps/packages/legacy/packages/products, sem file:) em 228e7918, ae14b824 e da35382a",
+      "requiredChange": "Ajustar a frase dos saltos. Indicar o commit das contagens. Registrar os fatos do lock e dos workspaces em JSON reproduzível, com o comando."
+    },
+    {
+      "id": "R1-O09",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "§3.4 (compilada)",
+      "finding": "'O argv registrado em commands.json mostra a exclusão', mas o leitor compilado só confere em commands.json o argv do tsc, não o do archive. 'recipeVersion v2' pode ser lido como ampliação do escopo de dist de primeira parte, que a SPEC0241 §4 associa à 'receita compilada v1'.",
+      "evidence": "scripts/boundary-semantic-compiled.mjs:681-698 (só o argv do tsc é verificado); docs/02_spec/0241_b6_integral_body_installed_provenance.md:146",
+      "requiredChange": "Exigir que o leitor v2 confira o argv do archive com exclusão em commands.json. Declarar que v2 muda só o escopo do archive e que o dist de primeira parte segue fora, como na SPEC0241 §4."
+    },
+    {
+      "id": "R1-O10",
+      "spec": "ambas",
+      "severity": "P3",
+      "section": "links e materialização",
+      "finding": "Os links (../../../… e os JSON locais) resolvem na pasta da evidência, mas quebram ao mover para docs/02_spec. A numeração 0242/0243 é provisória e a 0242 cita 'spec0243-r1.source.md'.",
+      "evidence": "spec0242-r1.source.md:3,11,13,44,56,80; spec0243-r1.source.md:3,9,22-24",
+      "requiredChange": "Na materialização, reescrever os links para caminhos relativos a docs/02_spec e trocar a referência cruzada pelo número final."
+    },
+    {
+      "id": "R1-O11",
+      "spec": "ambas",
+      "severity": "P3",
+      "section": "contract-freeze-r1.json",
+      "finding": "state.json está no freeze, mas é arquivo vivo. Mudou depois do freeze (443 B contra 238 B congelados), como o executor avisou. Os demais 35 insumos, as 2 SPEC, as 6 fontes e os 16 artefatos do runtime conferem.",
+      "evidence": "sha256sum de EV/state.json (eea697f44d80…) ≠ contract-freeze-r1.json inputs[state.json]",
+      "requiredChange": "Tirar state.json dos próximos freezes ou congelar uma cópia."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "SHA-256 do freeze: 2 SPEC, 36 insumos, 6 fontes só leitura, 16 artefatos do runtime; HEAD da candidata", "result": "PASS", "evidence": "57/58 conferem; state.json diverge (arquivo vivo, R1-O11); candidata HEAD d6203875"},
+    {"id": "S02", "what": "Causa do corte: __name do chai, 145 contextos, largura (pilha vazia), conferida com o código de contagem", "result": "PASS", "evidence": "engine:856-866 (assinatura = fn.id + receiver + args + capturas; contexts por fn.id; bump antes de stack.push); q1-characterization.json whatCausesTheCut.cutAt (stack [], contextDepth 0, value 65)"},
+    {"id": "S03", "what": "Necessidade sem corte: 145 contextos, 125.460 estados, profundidade 8, 4 uniões, 1.341/1.341 módulos, 1.535 arestas", "result": "PASS", "evidence": "q1-characterization.json variants all8x/nocut; pipeline-caps-256-250k.json bodyCoverage"},
+    {"id": "S04", "what": "Tabela de cortes sucessivos e quatro helpers acima de 64 (145/98/74/66); máximo de primeira parte 17", "result": "PASS", "evidence": "q1-characterization.json variants e contextsPerFunction"},
+    {"id": "S05", "what": "Custo e projeção: 6.048 estados/s, 0,3901 ms/estado, 160 s em 250 mil, 108,7/109,8 s, 62,7 s com corte", "result": "PASS", "evidence": "q1-characterization.json growth e officialPipeline; operators/characterize.py:42-48,125 (unidades em R1-O01)"},
+    {"id": "S06", "what": "Justificativa de L1/L2: 1,77×, 1,99×, 2,8×, 2,5×, 1,9×, 1,1–2,15× sob carga", "result": "PASS", "evidence": "256/145; 250000/125460; 300/108,7; 300/119,6; 300/160,3; 135,0/62,7"},
+    {"id": "S07", "what": "Prazo semântico único para census, worker e revalidação do pai", "result": "PASS", "evidence": "engine:2034-2135 (spawnSync com timeout pelo orçamento restante; checagens pós-worker)"},
+    {"id": "S08", "what": "Mecanismo do comparador: relógio desde a criação, finalização final estoura, checker acrescenta as duas tuplas e validation false", "result": "PASS", "evidence": "identity:879-892,1081-1116; checker:408,1991,2143-2199; identity-deadline-probe.json P1/P2"},
+    {"id": "S09", "what": "O diagnóstico de 300 s mediu a L3 por fase?", "result": "FAIL", "evidence": "R1-02 (só ampliou o relógio de vida)"},
+    {"id": "S10", "what": "L3 enfraquece fail-closed ou muda o conjunto revalidado?", "result": "PASS", "evidence": "finalize recoleta cada pacote usado (avaliado e referência), validateInputs e toolchain; etapa semântica limitada pelo próprio prazo"},
+    {"id": "S11", "what": "§3.2 implementável sem ambiguidade", "result": "FAIL", "evidence": "R1-03"},
+    {"id": "S12", "what": "Conservação recalculada dos relatórios: 1.520 → 12.631 tuplas, só some a de envelope maxContexts, violações 0/0, 13.521 diagnósticos, normal=strict na pipeline", "result": "PASS", "evidence": "real-v4r2-normal-report.json.gz × probe-P3 report.json.gz; pipeline normal/strict multiset igual"},
+    {"id": "S13", "what": "Folga dos tetos fora do delta declarada", "result": "FAIL", "evidence": "R1-04 (maxNodes 84,7%)"},
+    {"id": "S14", "what": "Base de implementação contém o código alterado", "result": "FAIL", "evidence": "R1-01"},
+    {"id": "S15", "what": "Tabela da 0243 §1: rastreado, evidência, resto, estimativas, margens, tar", "result": "PASS", "evidence": "q2-characterization.json commits; somas e diferenças conferidas; erro de 129.968 B em 228e7918"},
+    {"id": "S16", "what": "Evidência não é entrada do npm: lock 411, 28 links, sem file:, workspaces, sem .npmrc, 1.188 package.json e 201 lock na evidência", "result": "PASS", "evidence": "git show/ls-tree em 228e7918, ae14b824, da35382a (registro ausente no pacote: R1-O08)"},
+    {"id": "S17", "what": "Evidência não é entrada do compilador", "result": "PASS", "evidence": "compiled:33-46 (CONFIGS e SOURCE_ROOTS fechados), :96-124, :283-292"},
+    {"id": "S18", "what": "Recibos instalados ref × excl: packages (304) iguais e campos alterados como declarados", "result": "PASS", "evidence": "installed-reference-{ref,excl}/reference.json (fechamento em R1-06)"},
+    {"id": "S19", "what": "Recibos compilados ref × excl: inputs, outputs, compiler, compilerSources, dependencies e runtimeResolutions iguais; leitor PROVEN 121", "result": "PASS", "evidence": "compiled-reference-{ref,excl}/reference.json; compiled-recipe-*.json reader"},
+    {"id": "S20", "what": "B6 com referências excl igual à T2 v4r2 (2.410, multiset e tuplas)", "result": "PASS", "evidence": "q2-measure-excl-vs-t2.json; operators/q2_measure.py:24-28 (multiset bruto)"},
+    {"id": "S21", "what": "§3.2 viável: nenhum link, submódulo ou tipo especial na árvore (dentro e fora do prefixo)", "result": "PASS", "evidence": "git ls-tree -r -t em 228e7918, ae14b824, da35382a: zero entradas fora de 100644/100755"},
+    {"id": "S22", "what": "Guarda §3.3 cobre os caminhos de insumo (workspace, lock, link, file:, .npmrc, fingerprint, tsconfig, compilador)", "result": "PASS", "evidence": "cobertura adequada; códigos e ordem em R1-07"},
+    {"id": "S23", "what": "Guarda e RS04 testáveis com os códigos declarados", "result": "FAIL", "evidence": "R1-07"},
+    {"id": "S24", "what": "Nomes da árvore nunca como pathspec mágico (receita instalada)", "result": "FAIL", "evidence": "R1-08"},
+    {"id": "S25", "what": "Conservação §3.6 fechada e verificável", "result": "FAIL", "evidence": "R1-06"},
+    {"id": "S26", "what": "Aceites reais viáveis depois do teto de 4 GiB", "result": "FAIL", "evidence": "R1-05"},
+    {"id": "S27", "what": "Comparação com 8 GiB: a constante governa o leitor, o comparador e a varredura de boundary-manifests", "result": "PASS", "evidence": "identity:778-788,812-817,909-914; manifests:576-581 (prazo dos dias em R1-O07)"},
+    {"id": "S28", "what": "A receita compilada precisa da mesma decisão", "result": "PASS", "evidence": "tar 4.106.905.600 B em 228e7918 (margem 188 MB); teto literal em compiled:453"},
+    {"id": "S29", "what": "Enquadramento T3 (D-12) e autoridade sem autorização além do declarado", "result": "PASS", "evidence": "docs/07_agents/AGENTS.md:103; spec0242 §8; spec0243 §8"},
+    {"id": "S30", "what": "Links dos rascunhos resolvem na pasta atual", "result": "PASS", "evidence": "18/18 alvos existem (materialização em R1-O10)"}
+  ],
+  "commands": [
+    {"cmd": "cat /proc/loadavg (várias vezes)", "summary": "load entre 3,1 e 9,0, abaixo de 12 em todas as etapas"},
+    {"cmd": "python3 -I -B <scratchpad>/verify_freeze.py <EV>", "summary": "SHA-256 de 2 SPEC, 36 insumos, 6 fontes e 16 artefatos do runtime; só state.json diverge"},
+    {"cmd": "cat/sed -n dos rascunhos, JSON de evidência e operadores (diag_patch, identity_probe_patch, q2_patch, characterize, q2_measure, identity_probe, common)", "summary": "leitura integral das SPEC e da evidência"},
+    {"cmd": "diff candidata × tools-diag/scripts/boundary-semantic-engine.mjs e × tools-probe/scripts/boundary-installed-identity.mjs", "summary": "patches diagnósticos confirmados; o override do comparador amplia o relógio de vida"},
+    {"cmd": "sed -n/grep -n em boundary-semantic-engine.mjs, boundary-installed-identity.mjs, boundary-manifests.mjs, check-product-boundary.mjs, build-installed-reference.mjs, boundary-semantic-compiled.mjs (candidata d6203875)", "summary": "contagem de contextos, prazo global, relógios do comparador, leitor do recibo, archive, guardas preexistentes"},
+    {"cmd": "python3 -I -B <scratchpad>/cmp_receipts.py", "summary": "recibos instalados e compilados ref × excl campo a campo"},
+    {"cmd": "python3 -I -B <scratchpad>/q2_verify.py <repo> 228e7918 ae14b824 da35382a", "summary": "lock (411 chaves, 28 links), workspaces, file:, .npmrc, package.json/lock e diretórios sob o prefixo, modos não regulares"},
+    {"cmd": "python3 -I -B <scratchpad>/pipe_check.py e cons_check.py", "summary": "limits no payload, ausência de COMPARISON_TIMEOUT nos relatórios, tamanho compacto do payload, tuplas de conservação recalculadas"},
+    {"cmd": "git -C <repo> log/show/rev-parse/merge-base --is-ancestor/ls-tree (só leitura) em ae14b824, 228e7918, da35382a, 6e1b2a9d, HEAD", "summary": "kernel v3 em ae14b824 e HEAD; v4 só na linha 228e7918/d6203875; margem estimada no HEAD"},
+    {"cmd": "grep em docs/02_spec/0234, 0236, 0241, docs/07_agents/AGENTS.md, docs/03_build/0391, agent_coordination.md e promotion-deltas-prepared.json da T2", "summary": "contratos vigentes, D-12/T3, estado da promoção da T2"}
+  ]
+}

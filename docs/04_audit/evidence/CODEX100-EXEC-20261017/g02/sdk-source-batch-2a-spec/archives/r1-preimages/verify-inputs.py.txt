@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A - passo 0 (somente leitura).
+# Uso: python3 -I verify-inputs.py.txt <repo_root> <out_json>
+# Confere a entrega anterior (sdk-coverage-binding, commit b70cb6df), o unit-manifest e o
+# identity-freeze da admissão e o vínculo das fontes SDK citadas com o identity-freeze.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017")
+BIND = os.path.join(E, "g02/sdk-coverage-binding")
+ADM = os.path.join(E, "g02/sdk-admission")
+REF = os.path.join(E, "g02/sdk-reference-profile")
+BIND_COMMIT = "b70cb6df"
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+res = {"kind": "INPUT_VERIFICATION_STEP0", "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+       "observed_at": datetime.now(timezone.utc).isoformat(), "checks": {}}
+c = res["checks"]
+
+# 1. Entrega anterior: state.json da ligação lista 32 arquivos; todos batem e o próprio
+#    state.json é igual ao blob do commit b70cb6df.
+st_p = os.path.join(BIND, "state.json")
+st = json.load(open(st_p))
+bad = [rel for rel, m in st["files"].items() if sha(os.path.join(BIND, rel)) != m["sha256"]]
+rel_state = os.path.relpath(st_p, ROOT)
+c["sdk-coverage-binding"] = {
+    "state_sha256": sha(st_p),
+    "state_status": st["status"],
+    "files_listed": len(st["files"]),
+    "files_mismatch": bad,
+    "state_blob_commit": git("rev-parse", f"{BIND_COMMIT}:{rel_state}"),
+    "state_blob_worktree": git("hash-object", st_p),
+    "git_status": git("status", "--porcelain", "--", os.path.relpath(BIND, ROOT)).splitlines(),
+    "coverage_observed_sha256": sha(os.path.join(BIND, "coverage-observed.json")),
+    "next_task_sha256": sha(os.path.join(BIND, "next-task.json")),
+}
+b = c["sdk-coverage-binding"]
+b["ok"] = (not bad and b["state_blob_commit"] == b["state_blob_worktree"] and not b["git_status"]
+           and st["status"] == "COMPLETED_LOCAL"
+           and b["coverage_observed_sha256"] == st["files"]["coverage-observed.json"]["sha256"])
+
+# 2. Admissão: unit-manifest (692) e extras explicados pela ligação anterior.
+um_p = os.path.join(ADM, "unit-manifest.json")
+um = json.load(open(um_p))
+um_bad = [rel for rel, m in um["files"].items() if sha(os.path.join(ADM, rel)) != m["sha256"]]
+current = set()
+for dp, _, fns in os.walk(ADM):
+    for fn in fns:
+        current.add(os.path.relpath(os.path.join(dp, fn), ADM))
+extra = sorted(current - set(um["files"]) - {"unit-manifest.json"})
+known_extra = sorted(json.load(open(os.path.join(BIND, "input-verification.json")))["checks"]["unit-manifest.json"]["post_completion_additions"])
+c["sdk-admission"] = {
+    "unit_manifest_sha256": sha(um_p),
+    "files_matched": len(um["files"]) - len(um_bad),
+    "files_declared": um["file_count"],
+    "files_mismatch": um_bad,
+    "extra_files": extra,
+    "extra_files_known_from_binding": known_extra,
+    "identity_freeze_sha256": sha(os.path.join(ADM, "identity-freeze.json")),
+    "git_status": git("status", "--porcelain", "--", os.path.relpath(ADM, ROOT)).splitlines(),
+}
+a = c["sdk-admission"]
+a["ok"] = (not um_bad and extra == known_extra and not a["git_status"]
+           and a["unit_manifest_sha256"] == "b5a52f6c291c73b88803a7236bd0a75a61c48e729e4c4a9be9ca2e5ced7810a7"
+           and a["identity_freeze_sha256"] == "ebfb308f17e6a21ab77c91ab3863b737dd646ed6b1b6bbd835cba73e62225b1d")
+
+# 3. Fontes SDK citadas pelos casos: cada arquivo da cópia do perfil de referência bate com o
+#    identity-freeze (ts_sources e trees.sdk-python).
+idf = json.load(open(os.path.join(ADM, "identity-freeze.json")))
+src = {}
+for name, h in idf["ts_sources"].items():
+    p = os.path.join(REF, "inputs/sdk/typescript/src", name)
+    src["typescript/src/" + name] = {"expected": h, "observed": sha(p)}
+for rel, m in idf["trees"]["sdk-python"].items():
+    p = os.path.join(REF, "inputs/sdk/python/src", rel)
+    if os.path.isfile(p):
+        src["python/src/" + rel] = {"expected": m["sha256"], "observed": sha(p)}
+    else:
+        src["python/src/" + rel] = {"expected": m["sha256"], "observed": None,
+                                     "note": "ausente na cópia do perfil; não citado pelos casos"}
+for v in src.values():
+    v["match"] = v["expected"] == v["observed"]
+c["sdk_sources_vs_identity_freeze"] = src
+cited_missing = [k for k, v in src.items() if v["observed"] is None and not k.endswith("py.typed")]
+c["sdk_sources_ok"] = all(v["match"] for v in src.values() if v["observed"] is not None) and not cited_missing
+
+# 4. Infra da admissão que a especificação estende (só leitura): bate com o unit-manifest.
+infra = ["python/fixture-rpc.py", "python/adapter-python.py", "python/python-driver.py", "python/acceptance.py",
+         "python/supervisor.py", "python/observer.py", "python/channel.py", "node/fixture-cli.mjs",
+         "node/adapter-typescript", "node/ts-driver.mjs", "node/channel.cjs", "node/extension-loader.mjs",
+         "fixture-cases.json", "case-plan.json", "interface-bindings-v2.json", "errata.json",
+         "review-r2/review.json", "review-r2/executor-disposition.json"]
+c["admission_infra"] = {rel: {"sha256": sha(os.path.join(ADM, rel)),
+                              "in_unit_manifest": um["files"].get(rel, {}).get("sha256") == sha(os.path.join(ADM, rel))}
+                        for rel in infra}
+c["admission_infra_ok"] = all(v["in_unit_manifest"] for v in c["admission_infra"].values())
+
+res["blocking_result"] = "PASS" if (b["ok"] and a["ok"] and c["sdk_sources_ok"] and c["admission_infra_ok"]) else "FAIL_STOP"
+with open(OUT, "w") as f:
+    json.dump(res, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print(res["blocking_result"], b["ok"], a["ok"], c["sdk_sources_ok"], c["admission_infra_ok"])

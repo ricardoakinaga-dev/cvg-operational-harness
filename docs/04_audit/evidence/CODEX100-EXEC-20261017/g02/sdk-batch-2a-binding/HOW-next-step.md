@@ -1,0 +1,134 @@
+# Próximo passo SDK do DX100-G02 depois do BIND do lote 2A — HOW proposto
+
+A recomendação é uma **continuação do lote 2A** no mesmo pin
+`8d9f6466ff0294785d56f55b1fe363d132fe4133` e na mesma infraestrutura contida. Antes
+de qualquer caso novo, ela corrige a entrega das entradas e o peer (freeze r4) e
+reexecuta, com vaga própria, os três casos que o harness invalidou. Depois vem o
+lote 2B. O perfil distribuído segue obrigatório e vem por último, quando os
+pré-requisitos do fim deste documento estiverem decididos.
+
+Este documento é proposta para revisão. Não registra execução, não concede BUILD e
+não altera o catálogo 487+22.
+
+## Ponto de partida
+
+- [Mapa observado v2](coverage-observed-v2.json): 21 contratos
+  `OBSERVED_CLIENT_PARTIAL` e 23 `OPEN_REQUIRED_FUTURE_PROFILE`. O
+  [mapa v1](../sdk-coverage-binding/coverage-observed.json) tinha 11 e 33 e não foi
+  editado.
+- Passaram a observados: TS01, TS02, TS04, TS08, TS09, PY03, PY04, PY08, PY15 e PY16.
+  TS03, TS05, TS06 e TS07 seguem abertos porque dependem de casos não consumidos.
+- Ficaram 14 braços `OPEN` explícitos (`arms_open_explicit_2a` no mapa):
+  - 12 dos MISMATCH não atribuíveis ao cliente: TS03.B02–B05, TS05.B04, TS06.B02–B04
+    e TS07.B01–B04;
+  - TS12.B01 (sinal pré-abortado), do 2A-TS12, que deu INVALID_CAPTURE;
+  - TS10.B04 (forma B), porque o 2A-TS10 mostrou a forma A.
+- [Revisão das lacunas](gaps-review-v2.json): as seis seguem `OPEN`. Só a
+  GAP-GENERATED ganhou rótulo de progresso nesta versão, com PY04, PY15 e PY16
+  observados.
+- Base de execução: a [admissão do lote 2A](../sdk-batch-2a-admission/state.json),
+  com `source-freeze-r3`, `identity-freeze-r3` e o avaliador r3.1
+  (`evaluator-freeze-r3_1`).
+
+## Por que a continuação vem antes do lote 2B
+
+1. **Os defeitos são do harness e valem para qualquer lote.** O 2B usaria o mesmo
+   supervisor e o mesmo peer v2. Sem a correção, qualquer objeto JSON com ordem de
+   chaves sensível volta a sair ordenado, e o fio deixa de ser o congelado
+   ([errata](../sdk-batch-2a-admission/input-order-errata.json) e
+   [adendo](../sdk-batch-2a-admission/input-order-errata-addendum-r1.json)).
+2. **Custo baixo e conhecido.** Os três casos já têm `sdk_calls`, fixtures e valores
+   esperados congelados e aprovados. A reexecução não muda expectativa.
+3. **Fecha a dívida antes de trocar de assunto.** Sem ela, TS03, TS05, TS06 e TS07
+   continuam abertos sem que o cliente tenha sido observado com a entrada congelada.
+
+## Correções do harness (freeze r4)
+
+Cada correção precisa de autoteste offline e, quando tocar o serviço, de um DIAG
+próprio antes de qualquer vaga. A SPECIFY fixa os detalhes.
+
+| Correção                                                | O que muda                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Prova antes da primeira vaga                                                                                                                                           |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrega do `case_input`                                 | O `case_input` vem dos bytes congelados dos casos, na ordem de inserção. `fixture-cases.json` pode seguir canônico para hash, mas deixa de ser a fonte do `case_input` (hoje: `sort_keys=True`).                                                                                                                                                                                                                                                                                                         | Autoteste: o `case_input` entregue, serializado, é igual byte a byte ao congelado. DIAG com objeto de ordem sensível (schema com várias chaves e config para flatten). |
+| Referência de integridade do fio                        | O supervisor compara o fio relayado com os bytes congelados, não com `ts_fixture` sobre linhas ordenadas. A comparação roda também sob KNOWN_SIGNAL_TERMINATION, sobre o prefixo relayado, ou registra NOT_CHECKED explícito, e cobre o stdout do peer v2 nos casos Python.                                                                                                                                                                                                                              | Autoteste com fixture de objetos fora da ordem de code point; DIAG com JSONL de objetos terminando em END completo.                                                    |
+| Peer v2 com comparação estrita por tipo                 | O match de `params` e `params_subset` usa igualdade JSON estrita por tipo (bool nunca igual a número, null só null), como o `jeq` do avaliador r3.1.                                                                                                                                                                                                                                                                                                                                                     | Autoteste com 0 contra false e 1 contra true nas regras do peer.                                                                                                       |
+| Stdout do peer fechado antes do `EXIT_AFTER_SCRIPT`     | O peer fecha o stdout e só depois emite o marco de saída, como o contrato do peer v2 manda.                                                                                                                                                                                                                                                                                                                                                                                                              | Autoteste de fechamento do stdout antes da saída; o predicado continua julgado pelo END do adapter e por `mono_ns` (r3.1).                                             |
+| Avaliador                                               | O r3.1 vira a base, com igualdade estrita, o oráculo de testemunha do SO e o `reevaluate` com checagem de versão.                                                                                                                                                                                                                                                                                                                                                                                        | Autotestes do r3.1 (54/54) rodados de novo sobre o freeze r4.                                                                                                          |
+| Testemunha do filho no aborto pré-sinalizado (TS12.B01) | É preciso uma testemunha do SO para a existência e o término de um filho que morre antes do primeiro quadro. Candidatas a decidir na SPECIFY, preferindo as sem privilégio: inotify da abertura do executável do adapter (sem capability nova) ou amostragem de PIDs da cgroup antes e depois do passo. Uma candidata que exija privilégio ou capability nova (por exemplo fanotify com CAP_SYS_ADMIN) é parada: reavaliar T3 ou pedir decisão do usuário. Hoje o `pids.peak` não separa o TS10 do TS12. | DIAG com spawn pré-abortado de código próprio, sem SDK. Se nenhuma testemunha for admitida, a vaga não é usada e o braço segue OPEN.                                   |
+
+## Vagas da continuação 2A
+
+| Vaga                   | Origem                                                                          | Regra                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2A-TS03R               | Mesmo `sdk_calls`, fixture e valores esperados do 2A-TS03.                      | Caso novo, vaga de uso único, nunca retry. PASS sob o avaliador da continuação libera TS03.B02–B05. MISMATCH com a entrada congelada comprovada pelo DIAG é candidato a divergência do cliente, sujeito à adjudicação.                             |
+| 2A-TS06R               | Mesmo conteúdo do 2A-TS06.                                                      | Igual. Libera TS06.B02–B04 e TS05.B04, o que fecha a condição de status de TS05 e TS06.                                                                                                                                                            |
+| 2A-TS07R               | Mesmo conteúdo do 2A-TS07.                                                      | Igual. Libera TS07.B01–B04.                                                                                                                                                                                                                        |
+| 2A-TS12R (condicional) | Mesmo conteúdo do 2A-TS12.                                                      | Só se a testemunha do filho for admitida no DIAG. Senão a vaga não é usada e TS12.B01 segue OPEN.                                                                                                                                                  |
+| Resíduos               | `remaining_after_2a` de cada linha do mapa v2 (fonte: `coverage-plan-2a.json`). | A SPECIFY prioriza: injeção de falha de fs e de Node (TS03, TS10, TS11), entradas fora do tipo (TS02, TS06, TS07, TS08), PY03 (falha de escrita), PY15 assíncrono e PY16 com conteúdo estruturado. O que não couber vai a uma segunda continuação. |
+
+Teto proposto: até 24 vagas, cada uma executada uma vez, em série e sem retry; até
+12 serviços de qualificação; 2 revisões e 1 reparo agrupado. O TS10.B04 (write sem
+listener de erro) não volta pela forma B, que depende do Node v24.20.0 e não ocorreu
+(o DIAG-TS-ENOENT e o 2A-TS10 mostraram a forma A). Ele entra na injeção de falha de
+write do lado Node da continuação, com um filho que existe e fecha o stdin antes do
+write (EPIPE), como o plano manda para os faults de write; isso não depende da versão
+do Node.
+
+## Lote 2B — depois da continuação
+
+Contratos: PY01, PY02 (launch_args_override, ambiente e close), PY09, PY11, PY12,
+PY13, PY17 e PY18 (8). Exigem instrumentação de concorrência e async, relógio de retry
+com jitter e oráculos reais de Pydantic (alias, nullable, default, extra, union e
+root). O PY18 é o contrato que falta na GAP-GENERATED. O teto é separado, também de
+até 24 vagas, e o lote usa o freeze r4. O ramo de caminho empacotado do PY02 vai para
+o perfil distribuído. Também entram no 2B os resíduos de PY08 (corridas entre
+consumidores) e de PY10 (cancelamento depois do resultado síncrono, `to_thread` e
+finally do stream).
+
+## Ordem e gates
+
+1. **SPECIFY da continuação 2A (T1, documental).** Congelar as correções do freeze
+   r4, os casos 2A-TS03R, 2A-TS06R, 2A-TS07R e o condicional 2A-TS12R, os resíduos
+   priorizados, os DIAG e o orçamento, com revisão independente. Esta é a
+   [próxima unidade](next-task.json).
+2. **IMPLEMENT e ADMIT da continuação (claim novo, execução local contida).**
+   `source-freeze-r4`, autotestes offline, DIAG de entrega e de testemunha, identity
+   freeze r4 e uma execução por vaga, sem retry. A SPECIFY decide se a vaga CONTROL
+   (known-bad julgado por `wire.no_turn_interrupt`) se repete sob o freeze r4, já que
+   o peer v2 muda; se repetir, ela roda antes das vagas SDK e precisa dar MISMATCH.
+3. **BIND da continuação (T1).** Mapa observado v3 ao lado do v2.
+4. **Lote 2B:** SPECIFY, IMPLEMENT/ADMIT e BIND, com orçamento próprio.
+
+O gate de cada passo é uma precondição verificável antes do seguinte.
+
+## Precisa de T3?
+
+Não, nem a SPECIFY nem a IMPLEMENT da continuação. A avaliação segue a do
+[lote 2A](../sdk-source-batch-2a-spec/t3-assessment.json):
+
+- as mudanças ficam em ferramentas privadas de evidência sob `docs/04_audit/evidence`
+  (supervisor, peer, drivers e avaliador), sem código de produto, contrato público,
+  schema, migration, segurança, identidade, policy ou approval do CVG;
+- não há provider, credencial, rede, dado real nem efeito externo, então T4 não se
+  aplica.
+
+T3 passaria a ser exigido se alguma correção precisasse mudar código de produto ou
+contrato público do CVG, ou se a testemunha do filho exigisse privilégio ou capability
+nova no sandbox (D-12 inclui segurança). Nesse caso a unidade para e pede decisão.
+
+## Perfil distribuído — pré-requisitos (inalterados)
+
+1. **Decisão de identidade** dos artefatos `openai-codex` (wheel), `codex-cli-bin`,
+   `@openai/codex-sdk` e `@openai/codex` em relação ao pin, como o cartão G02 exige.
+2. **Aquisição autenticada** com rede autorizada, digests do registry e cache privado.
+3. **Codex CLI real** em modo keyless, sem provider nem credencial, nas duas
+   identidades: o ELF compilado do pin e o binário distribuído.
+4. **Contratos-alvo:** PY19, PY20, PK01–PK09 e o ramo empacotado do PY02. Também o
+   bundle tsup, o typecheck e as declarações da GAP-TS-LANGUAGE.
+5. **Plataformas:** só linux-x64 é local. As outras cinco seguem abertas.
+
+## Limites
+
+Observação de cliente não é paridade. Recibos funcionais seguem em 0 e o crédito de
+paridade também. As 509 obrigações do catálogo continuam `NOT_RUN`. A SPEC0239 está
+aprovada pelo usuário, mas o BUILD depende de 0029 → 0030 → 0031 qualificadas.

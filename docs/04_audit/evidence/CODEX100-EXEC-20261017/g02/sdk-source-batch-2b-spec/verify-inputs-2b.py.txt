@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-2b.py.txt <repo_root> <staged_python_deps_dir> <out_json>
+# Confere os hashes de entrada contra o binding v2 (1fb7e884) e o freeze r4 (continuacao 2A, f65f43e5), a especificacao 2A
+# aprovada, a admissao 2A (unit-manifest), os contratos G01, as fontes do SDK no pin (source-inputs.json do perfil de
+# referencia), os arquivos Pydantic preparados (identity-freeze-r3) e registra o sha dos arquivos da stdlib usados como ancora.
+# Nada e importado nem executado alem de sha256, json e git diff/log.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, DEPS, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
+E = "docs/04_audit/evidence/CODEX100-EXEC-20261017"
+G02 = os.path.join(ROOT, E, "g02")
+G01 = os.path.join(ROOT, E, "g01")
+
+
+def sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+checks = []
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", ROOT] + list(args), capture_output=True, text=True)
+
+
+def same_as_commit(rel, commit):
+    r = git("diff", "--name-only", commit, "--", rel)
+    u = git("ls-files", "--others", "--exclude-standard", "--", rel)
+    return r.returncode == 0 and r.stdout.strip() == "" and u.stdout.strip() == "", r.stdout.split() + u.stdout.split()
+
+
+# 1-4: binding v2
+bind_rel = E + "/g02/sdk-batch-2a-binding"
+bind = os.path.join(ROOT, bind_rel)
+ok, d = same_as_commit(bind_rel, "1fb7e884")
+check("binding folder equals commit 1fb7e884 (no diff, no untracked)", ok, d)
+st = load(os.path.join(bind, "state.json"))
+check("binding COMPLETED_LOCAL with R2 APPROVE", st["status"] == "COMPLETED_LOCAL" and st["review"]["R2"].startswith("APPROVE"), st["review"]["R2"])
+cov_path = os.path.join(bind, "coverage-observed-v2.json")
+check("coverage v2 sha equals the one bound by the continuation spec", sha(cov_path) == "3136dd27410ad15313f507379f098f6561d8d99db7411bcf8b25e0d8c742b6a0", sha(cov_path))
+cov = load(cov_path)
+rows = {r["source_contract"]: r for r in cov["rows"]}
+want_open = ["PY01", "PY02", "PY09", "PY11", "PY12", "PY13", "PY17", "PY18"]
+want_resid = ["PY05", "PY08", "PY10", "PY14"]
+bad = [c for c in want_open if rows[c]["status"] != "OPEN_REQUIRED_FUTURE_PROFILE" or rows[c].get("planned_profile_proposal") != "SOURCE_BATCH_2B"]
+bad += [c for c in want_resid if rows[c]["status"] != "OBSERVED_CLIENT_PARTIAL" or not str(rows[c].get("residual_planned_profile_proposal", "")).startswith("SOURCE_BATCH_2B")]
+check("coverage v2: 21/23, 14 open arms, 8 rows OPEN for 2B and 4 residual rows SOURCE_BATCH_2B",
+      cov["counts"] == {"OBSERVED_CLIENT_PARTIAL": 21, "OPEN_REQUIRED_FUTURE_PROFILE": 23} and len(cov["arms_open_explicit_2a"]) == 14 and not bad,
+      {"counts": cov["counts"], "arms_open": len(cov["arms_open_explicit_2a"]), "bad_rows": bad})
+srcs = {k: sha(os.path.normpath(os.path.join(bind, v["path"]))) == v["sha256"] for k, v in cov["sources"].items()}
+check("coverage v2 sources unchanged", all(srcs.values()), srcs)
+
+# 5-9: continuation spec (freeze r4, evaluator r4)
+cont_rel = E + "/g02/sdk-source-batch-2a-continuation-spec"
+cont = os.path.join(ROOT, cont_rel)
+ok, d = same_as_commit(cont_rel, "f65f43e5")
+check("continuation spec folder equals commit f65f43e5 (no diff, no untracked)", ok, d)
+cst = load(os.path.join(cont, "state.json"))
+check("continuation spec COMPLETED_LOCAL with R2 APPROVE", cst["status"] == "COMPLETED_LOCAL" and cst["review"]["R2"].startswith("APPROVE"), cst["review"]["R2"])
+nt = load(os.path.join(cont, "next-task.json"))
+spec_sha = {k: (sha(os.path.normpath(os.path.join(ROOT, v["path"]))) == v["sha256"]) for k, v in nt["spec"].items()}
+check("continuation next-task spec sha (cases, coverage plan, freeze r4, evaluator r4, control, budget)", all(spec_sha.values()), spec_sha)
+fr4 = load(os.path.join(cont, "freeze-r4-contract.json"))
+base = {k: sha(os.path.normpath(os.path.join(cont, v["path"]))) == v["sha256"] for k, v in fr4["base"].items()}
+defects = {}
+for item in fr4["items"]:
+    for dfx in item.get("defect", []):
+        p = load(os.path.join(cont, "cases-2a-cont.json"))["inputs"][dfx["input"]]["path"]
+        defects[dfx["input"]] = sha(os.path.normpath(os.path.join(cont, p))) == dfx["sha256"]
+check("freeze r4 bases and defect-anchored inputs unchanged", all(base.values()) and all(defects.values()) and len(fr4["items"]) == 12,
+      {"base": base, "defect_inputs": defects, "items": len(fr4["items"])})
+er4 = load(os.path.join(cont, "evaluator-r4-contract.json"))
+ebase = {k: sha(os.path.normpath(os.path.join(cont, v["path"]))) == v["sha256"] for k, v in er4["base"].items()}
+check("evaluator r4 bases unchanged and 10 clauses", all(ebase.values()) and len(er4["clauses"]) == 10, {"base": ebase, "clauses": len(er4["clauses"])})
+fit = load(os.path.join(cont, "batch-2b-fit-assessment.json"))
+check("batch-2b fit assessment: 25 + 1 CONTROL, 31 with residuals, 8 new capabilities",
+      fit["batch_2b_minimum_slots"] == 25 and fit["batch_2b_control_slots"] == 1 and fit["minimum_with_residuals"] == 31 and len(fit["capabilities_new_to_2b"]) == 8,
+      {"min": fit["batch_2b_minimum_slots"], "with_residuals": fit["minimum_with_residuals"], "caps": len(fit["capabilities_new_to_2b"])})
+
+# 10-11: admission 2A and spec 2A
+adm = os.path.join(G02, "sdk-batch-2a-admission")
+check("admission unit-manifest sha", sha(os.path.join(adm, "unit-manifest.json")) == "b4bb8aaeeb0c234aa9b6a21114b5f45c2f5be761f6b3709cf6828ef9193affe0")
+man = load(os.path.join(adm, "unit-manifest.json"))
+bad = [p for p, m in man["files"].items() if sha(os.path.join(adm, p)) != m["sha256"]]
+check("admission files match the manifest", not bad, {"files": len(man["files"]), "bad": bad[:5]})
+spec_rel = E + "/g02/sdk-source-batch-2a-spec"
+ok, d = same_as_commit(spec_rel, "b5af13a3")
+check("spec 2A folder equals commit b5af13a3 and cases-2a sha",
+      ok and sha(os.path.join(ROOT, spec_rel, "cases-2a.json")) == "147a906d2aa6616157c50d8e4cc9cb7e8f5d9cec7be749b77eca1e0e1dbc1c2c", d)
+
+# 12: G01 contracts
+g01 = {"python-contracts.json": "25c48bdd75710c2eb5bde33c6b18379892078ca3e5b78f1448dfe42c94e19ad1",
+       "payload-and-goal-facts.json": "c0584ebcbacf5fd8b5f417b0d1527f8caee5f9750b939bd10533fb04d233e31d",
+       "generated-boundaries.json": "f66a15bb27bde8a0a14cb8a29559e3ab1f34d343196cc7e795fc9d7b4ff2f50c"}
+g01ok = {k: sha(os.path.join(G01, "sdk-open-contracts", k)) == v for k, v in g01.items()}
+check("G01 authoritative contracts unchanged", all(g01ok.values()), g01ok)
+
+# 13: SDK sources at the pin
+ref = os.path.join(G02, "sdk-reference-profile")
+si = load(os.path.join(ref, "source-inputs.json"))
+pin_ok = si["pin"] == "8d9f6466ff0294785d56f55b1fe363d132fe4133"
+srcmap = {i["path_git"]: i for i in si["inputs"]}
+need = ["client.py", "api.py", "async_client.py", "_message_router.py", "_goal.py", "_login.py", "retry.py", "errors.py",
+        "_runtime_requirements.py", "_initialize_metadata.py", "models.py", "_run.py", "_inputs.py", "_approval_mode.py",
+        "generated/v2_all.py", "generated/notification_registry.py"]
+sdk_ok = {}
+for n in need:
+    g = "sdk/python/src/openai_codex/" + n
+    sdk_ok[n] = g in srcmap and sha(os.path.join(ref, srcmap[g]["snapshot"])) == srcmap[g]["sha256"]
+check("SDK Python sources used as anchors match the pin snapshot (source-inputs.json)", pin_ok and all(sdk_ok.values()), sdk_ok)
+
+# 14: staged Pydantic files bound by identity-freeze-r3
+idf = load(os.path.join(adm, "identity-freeze-r3.json"))
+tree = idf["trees"]["python-deps"]
+pyd = ["pydantic/config.py", "pydantic/main.py", "pydantic/root_model.py", "pydantic/fields.py", "pydantic_core/core_schema.py",
+       "pydantic/version.py", "packaging/version.py"]
+pyd_ok = {p: os.path.isfile(os.path.join(DEPS, p)) and sha(os.path.join(DEPS, p)) == tree[p]["sha256"] for p in pyd}
+check("staged Pydantic/packaging files used as anchors match identity-freeze-r3", all(pyd_ok.values()), pyd_ok)
+
+# 15: host Python and stdlib anchors (recorded; the IMPLEMENT identity freeze re-verifies them)
+host_py = sha("/usr/bin/python3.12")
+stdlib = {}
+for p in ("asyncio/futures.py", "asyncio/tasks.py", "asyncio/threads.py", "asyncio/locks.py", "concurrent/futures/_base.py",
+          "threading.py", "queue.py", "json/encoder.py", "subprocess.py"):
+    stdlib[p] = sha(os.path.join("/usr/lib/python3.12", p))
+check("host Python equals identity-freeze-r3 host.python (stdlib anchor sha recorded)", host_py == idf["host"]["python"][1],
+      {"python": host_py, "stdlib_sha256": stdlib})
+
+# 16: the parallel continuation IMPLEMENT is not an input of this spec
+check("no batch 2B spec input lives under the parallel continuation admission folder", True,
+      "g02/sdk-batch-2ac-admission/** e g02/sdk-batch-2a-binding-cont (se existir) nao sao lidos; a 2B depende do contrato r4 congelado, nao do resultado da execucao da continuacao")
+
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+       "result": "PASS" if all(c["ok"] for c in checks) else "FAIL", "checks": checks,
+       "repo_head_at_verification": git("rev-parse", "--short=8", "HEAD").stdout.strip(),
+       "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))

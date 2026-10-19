@@ -1,0 +1,145 @@
+# Veredito R3: DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A
+
+**Veredito: APPROVE.** Não há P1 nem P2. Os dois P2 da R2 foram resolvidos de fato: R2-F01 (gatilho do SCHEMA_FILE no 2A-TS04) e R2-F02 (composição entre classes). O reparo não introduziu regressão em valores esperados, âncoras, tabela, `known_bad.judged_by`, orçamento, CONTROL nem T3. Ficam três recomendações P3, não obrigatórias: R3-F01, R3-F02 e R3-F03.
+
+## Estado dos achados R2
+
+| Achado | Estado | Evidência |
+| --- | --- | --- |
+| R2-F01 (P2) | **RESOLVED** | Ver abaixo. |
+| R2-F02 (P2) | **RESOLVED** | Ver abaixo. A redação tem ressalvas, tratadas em R3-F01. |
+| R2-F03 (P3) | RESOLVED | `chunk_note` saiu do fixture do 2A-TS11 e passou para `expected` (cases-2a.json:2248). As chaves do fixture estão contidas em `fixture_keys_allowed`. A `credit_condition` (:2249) leva o rótulo "fronteira do adapter observada; leitura do SDK não testemunhada" e diz "necessária, não suficiente". |
+| R2-F04 (P3) | RESOLVED | Ver abaixo. |
+| R2-F05 (P3) | RESOLVED | **TS12** (cases-2a.json:2344): o texto está alinhado ao `judged_by` (`abort.no_remote_stop_claim`, `abort.no_yield_after_abort`), e a existência do filho foi remetida a `abort.os_witness_recorded`. **TS06** (:1601) confere com a fonte: o schema é criado em thread.ts:74, antes do `try` (:98), e removido no finally (:113-114). O erro de config nasce em exec.ts:98→300, dentro do `for await` de thread.ts:99, porque o construtor só guarda a config (codex.ts:17). |
+| R2-F06 (P3) | **PARTIAL** | O registro em `repair-r2.json#/findings[R2-F06]` cobre todos os itens que a R2 citou, mas se declara "Descrição exata" e omite outras mudanças do reparo R1 (ver R3-F03). `repair-r1.json` não foi editado (sha `7db719e7` = preimagem). |
+
+**R2-F01, evidência.**
+- **Gatilho declarado:** o fixture do 2A-TS04 ganhou `"read_schema_file_from_argv": true` (cases-2a.json:1189). É a única mudança nesse fixture em relação à preimagem, e o fixture do TS03 já tinha a chave (:1021).
+- **Gatilho único:**
+  - capture-contract.json:84 (CAP-TMP-WITNESS) e :185 (`work_tmp`) citam só a chave;
+  - não resta no objeto o texto "quando o argv tem --output-schema" (grep);
+  - os casos com a chave são exatamente os casos com predicado `fixture.*`: {TS03, TS04}.
+- **Momento da leitura:** antes da primeira escrita de stdout, com o filho vivo (capture-contract.json:84 e :185; oráculos em cases-2a.json:392 e :396).
+- **Cadeia pela fonte, sem corrida:**
+  1. O schema é gravado em outputSchemaFile.ts:30, dentro de thread.ts:74, antes do spawn (exec.ts:203).
+  2. O primeiro `yield` (thread.ts:111) exige uma linha do stdout (exec.ts:244-246).
+  3. O `return()` do driver só vem depois do primeiro evento.
+  4. Só então ocorrem o `kill` (exec.ts:260, finally do exec) e o `rm` (thread.ts:113-114, finally do thread).
+  - Portanto vale leitura → escrita do stdout → relay → `yield` → `return()` → `kill` → `rm`, sem corrida.
+  - No TS03, o `rm` só vem depois do EOF do stdout do adapter, também posterior à leitura.
+- **Path legível:** o fixture-cli recebe o argv do SDK por `--sdk-argv-json` (fixture-cli.mjs:44-46; adapter-typescript:97 com cwd /work no mesmo sandbox).
+- **Validador:**
+  - checagens em validate-spec.mjs.txt:93-97;
+  - controles negativos `ts04_without_schema_trigger` e `unknown_fixture_key` (negative-controls.py.txt:33-34).
+
+**R2-F02, evidência.**
+- **Igualdade:** `cases-2a.json#/composition` (:172-220) e `R3-06.composition` (evaluator-r3-contract.json:40-88) são iguais (comparação em memória: True).
+- **Desfechos:**
+  - MISMATCH só sai das regras 2 e 6;
+  - falha de sanidade ou de captura/ordem cai na regra 4 (INVALID_CAPTURE), avaliada antes da regra 6;
+  - `evaluation_completed` falho cai na regra 3;
+  - informational nunca decide.
+- **Coerência com a base:**
+  - a regra 1 corresponde a acceptance.py:531-534 e a regra 2 a :535-537;
+  - as regras 3 a 6 refinam :540 (`P.ok()`→MISMATCH) e :528-529;
+  - `evaluation_completed`, que pelo `judges()` de :109-114 seria client, agora dá INVALID_CAPTURE.
+- **Co-falhas citadas na R2:** TS11 (relay + `run_result`), PY08 (`peer.exit_after_script_witnessed` + `closure`) e TS02/TS05/TS08 (`peer.exit_status` + `run_result`) agora caem na regra 4.
+- **Gate do 2A-CTRL01:** sanidade falha → regra 4 → a unidade para. O MISMATCH esperado só sai pela regra 6 via `wire.no_turn_interrupt`. O texto do gate exclui MISMATCH vindo da regra 2.
+- **R3-12:** compara só os predicados de caso e roda co-falhas sintéticas.
+
+**R2-F04, evidência.**
+- **Lista completa:**
+  - recalculei o `judges()` de forma independente (PEER_SANITY de acceptance.py:104-106, regras de :109-114) sobre os 79 predicados;
+  - deu 10 diferenças, iguais à lista `reclassifications_vs_admission`;
+  - cada item tem `admission_judges` e `frozen_class` corretos.
+- **`abort.api_outcome_recorded`:** passou a `capture_order_or_cleanup` (:222) e não aparece em nenhum `judged_by`.
+- **`wire.client_lines_complete_json`:**
+  - voltou a client, como na admissão (acceptance.py:219); isso diverge da errata, mas é igual à base;
+  - a nota "captura cortada já cai na regra 1" vale com forma PASS (observer.py:457-459 e :500-501); veja a ressalva em R3-F02.
+- **`evaluation_completed`:** a divergência está declarada na regra 3, não na lista, que se limita à tabela congelada. É aceitável.
+
+## Achados novos
+
+### R3-F01 (P3, obrigatório: não): a composição deixa implícita a primeira regra e não cobre literalmente client + informational
+- **Local:**
+  - `cases-2a.json#/composition/rule_order` (n=6 em :204, n=7 em :209);
+  - evaluator-r3-contract.json:72-80;
+  - `R3-12` (:166).
+- **Evidência:**
+  - **Primeira regra só no comentário:** a semântica "a primeira regra que se aplica decide" só existe no comentário de build-spec-2a.py.txt:816, não no JSON congelado. A ordem decide o resultado: as regras 1 e 2 casam juntas, porque INVALID_CAPTURE nunca está em `accepted_capture_forms`, e as regras 2 e 3 também, com forma não aceita e falha do avaliador.
+  - **Lacuna literal:** a regra 6 exige "há falhas e todas são da classe client", e a regra 7 exige "nenhuma falha decisiva". Numa co-falha client + informational, nenhuma das duas casa literalmente.
+  - **Casos afetados:** TS03 e TS06 (`tmp.inotify_informational`) e TS11 (`wire.chunk_boundaries_recorded`). O próprio R3-12 admite que informational falha ("só informational -> PASS").
+  - **Risco:** um "senão → PASS" esconderia uma falha client. Exemplo: o known-bad de UTF-8 do TS11, julgado por `api.run_result_exact`.
+  - **Por que é P3:** o desfecho correto (MISMATCH) decorre do texto do R3-06 ("client -> MISMATCH só se não houver falha decisiva de outra classe") e de `predicate_classes.client`. Mas o autoteste do R3-12 não cobre esse par.
+  - **Latente:** a regra 2 vem antes da 5 e contradiz literalmente o "NUNCA MISMATCH" do R3-01. Não há efeito no 2A (`applies_in_2A = []`).
+- **Correção sugerida:** na IMPLEMENT, sem mudar expectativas:
+  - avaliar as regras na ordem `n`, com a primeira que casa decidindo;
+  - ler a regra 6 como "há falhas decisivas e todas são client (informational ignoradas)";
+  - acrescentar ao autoteste do R3-12 os casos "client + informational -> MISMATCH" e "forma não aceita + evaluation_completed falho -> MISMATCH (regra 2)";
+  - se o texto for reaberto, escrever as duas frases na composição.
+
+### R3-F02 (P3, obrigatório: não): a regra 2 não diz o que fazer com formas novas não declaradas nem com captura cortada por sinal
+- **Local:**
+  - regra 2 da composição;
+  - `R3-10` (evaluator-r3-contract.json:170-171);
+  - oráculo de `wire.client_lines_complete_json` (cases-2a.json:458-460).
+- **Evidência:**
+  - **Formas novas:** a base reduz a INVALID_CAPTURE todo veredito fora de PASS/KST (acceptance.py:521). O R3-10 diz que NO_CHILD e PREREADY_SIGNAL_TERMINATION "só valem nos casos que as declaram". A composição não diz se essas formas, observadas num caso que não as declara (por exemplo, adapter morto antes do READY num caso TS), seguem a regra 1 (INVALID_CAPTURE) ou a regra 2 (MISMATCH).
+  - **Captura cortada por sinal:** a nota "captura cortada já cai na regra 1" só vale com forma PASS (observer.py:457-459). Uma captura cortada por sinal (KNOWN_SIGNAL_TERMINATION, observer.py:504-506) num caso Python que só aceita PASS cai na regra 2, como na base (:535-537).
+  - **Por que é P3:** não é regressão, e a probabilidade é baixa depois dos DIAG.
+- **Correção sugerida:** no avaliador r3, tratar NO_CHILD e PREREADY_SIGNAL_TERMINATION fora dos casos que as declaram como forma INVALID_CAPTURE (regra 1). Ajustar a nota para "captura cortada com forma PASS".
+
+### R3-F03 (P3, obrigatório: não): o registro do R2-F06 se diz "exato", mas está incompleto
+- **Local:** `repair-r2.json#/findings[id=R2-F06]/how`.
+- **Evidência:** o diff R1→R2 das preimagens mostra mudanças que o registro não cita:
+  - **2A-CTRL01:** saiu `control.outcome_is_mismatch` dos `predicates`; o `known_bad.judged_by` passou de `control.outcome_is_mismatch` para `wire.no_turn_interrupt`; o texto do `gate` mudou;
+  - **2A-TS11:** entrou `wire.chunk_boundaries_recorded` nos predicados;
+  - **2A-TS10:** `expected.pre_gate` e `rule`;
+  - **2A-PY10R:** `known_bad.text`;
+  - **sdk_calls do TS01, TS04 e TS06:** a chave `work_tmp_schema_dirs*` virou `driver_listing_work_tmp_schema_dirs*`.
+- **Correção sugerida:** no fechamento (state ou ledger), citar a lista completa ou tirar "exata". Não editar `repair-r1.json`.
+
+## Checagens feitas
+
+- **Hashes:**
+  - os 17 arquivos da tabela do brief R3 batem;
+  - as 23 preimagens de `archives/r2-preimages/` batem com o brief R2;
+  - em `repair-r2.json`, 14/14 com `sha256_r2` = preimagem e `sha256_r3` = atual, e os `changed` estão corretos;
+  - a autorização (`2fbf528b`) e o bruto R2 (`50d876f9`) batem;
+  - as entradas de `lead-budget-extension-r3.json` batem: errata `da9798a8`, cases R2 `edfc59db` e evaluator R2 `b7e89f67`;
+  - os arquivos fora do reparo são idênticos às preimagens: next-task, state, ledger-delta, addendum, repair-r1, executor-disposition, errata, input-verification e verify-inputs.
+- **Diff semântico em memória da preimagem R2 contra o atual (cases-2a, evaluator-r3, capture-contract):**
+  - só aparecem as mudanças declaradas em `repair-r2.json`;
+  - nenhuma mudança em argv, stdin, env, payloads, resultados, sdk_calls, peer_script, formas aceitas ou âncoras.
+- **Scripts (lidos, não executados):**
+  - build-spec e build-contracts reproduzem exatamente as mudanças dos JSON;
+  - validate-spec ganhou 5 checagens (41, mesmas ids e ordem de `validation.json`);
+  - negative-controls ganhou 4 controles (18, iguais a `negative-controls.json`);
+  - as mudanças são só acréscimos, sem checagem enfraquecida.
+- **Fonte do pin:**
+  - as 35 entradas conferem por sha;
+  - recalculei as 67 âncoras (0 divergências) e `argv_json_bytes`/`argv_count` dos 12 casos;
+  - li outputSchemaFile.ts, thread.ts, exec.ts e codex.ts por inteiro e `client.close` (client.py:283-297).
+- **Tabela de predicados:**
+  - 79 entradas, igual ao conjunto usado (client 63, sanidade 8, captura/ordem 6, informational 2);
+  - todo `known_bad.judged_by` é client e consta dos predicados do caso;
+  - nenhum `order_unilateral`;
+  - nenhum informational em `judged_by`.
+- **Infra da admissão:**
+  - li acceptance.py (`d4a3c06b`), linhas 95-115, 215-219 e 519-545;
+  - li `observer.reconcile` (365-510), fixture-cli.mjs, adapter-typescript:97 e a sequência de close do python-driver;
+  - os shas das bases do capture-contract conferem, assim como o unit-manifest (`b5a52f6c`) e o identity-freeze (`ebfb308f`);
+  - o `git status` mostra só esta pasta não rastreada sob g02.
+- **E4:**
+  - status `FROZEN_SPEC_NOT_RUN`; os 24 casos estão `NOT_RUN` com `receipt` null;
+  - `functional_receipts` e `parity_credit` são 0;
+  - execution-budget, t3-assessment, control-slot, peer-v2 e coverage-plan não mudaram;
+  - orçamento: 24 vagas / 1 CONTROL / 9 serviços (+3 de reserva) / 2 revisões / 1 reparo / 0 retries;
+  - AGENTS.md `8306af1b` e 0384 `8ff6f573` conferem com o T3.
+
+## Limites
+
+- Nada foi executado: nem SDK, nem Node, nem Pydantic, nem os scripts da pasta. `validation.json` e `negative-controls.json` são registros do executor; reproduzi as checagens em memória, não as execuções.
+- O comportamento do Node v24.20.0 e a futura implementação do gatilho e do momento da leitura no fixture-cli foram raciocinados a partir da fonte e dos contratos.
+- A extensão do Lead se declara delegação do usuário; não verifiquei essa delegação além do registro no repositório. A data `2026-10-19` é coerente com o UTC do `input-verification`.
+- `next-task.json`, `state.json`, `ledger-delta-cont-d9ef.md` e `ledger-delta-addendum-r2.md` não foram avaliados, por desenho. `errata-r2-proposed.json` fica como histórico ligado por hash à extensão.

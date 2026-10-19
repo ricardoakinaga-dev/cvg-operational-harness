@@ -1,0 +1,25 @@
+{
+  "task": "C100-FND-ROOT-INTEGRATION-20261018",
+  "commit": "410e0111",
+  "files": ["tests/pare100-compiled-kernel-boundary.test.js", "tests/pare100-sdk-boundary-qualification.test.js"],
+  "testVersion": "versões do root (migração ao contrato SPEC0228, 165d8c0c), escolhidas no merge",
+  "failuresBeforeFix": {
+    "claude100Line": "43 (32+11) com as versões R4 dos testes",
+    "candidateAfterMerge": "57 de 93 com dist presente; 92 de 93 sem dist (os testes copiavam espelhos compilados do dist vivo)"
+  },
+  "rootCause": "Os fixtures copiavam do working tree os arquivos fixados pelas propostas históricas SPEC0215 (revision-r4) e SPEC0216. Trabalho aprovado posterior (SPEC0217/SPEC0225) mudou 5 fontes fixadas e o espelho compilado: packages/platform/src/{plugin-execution-core,controlled-kernel-adapters,controlled-kernel-execution,index}.ts, packages/harness/src/index.ts e packages/platform/dist/plugin-execution-core.js. Os pins conferem com a R4 (38f3e18d), que era o que o root tinha.",
+  "contract": "SPEC0228 §6/B6R-08/B6R-11: nenhuma tabela legada suprime diagnóstico; os dados históricos ficam como inventário inativo; expectativas antigas incompatíveis são migradas explicitamente, sem remover negativos nem usar skip.",
+  "fix": "Corpus versionado tests/fixtures/pare100-historical-pins: os 29 arquivos aprovados como blobs endereçados por SHA-256 (fontes do blob git 38f3e18d; os 5 espelhos compilados transpilados dessas fontes com TypeScript 6.0.3 e as opções de emit do build:runtime). Cada blob tem SHA-256 igual ao pin da proposta selada (o gerador aborta se não for). Os fixtures dos testes passam a ler desse corpus via tests/support/historical-pin-corpus.mjs.",
+  "unchanged": ["scripts/check-product-boundary.mjs e sua tabela capabilityExceptions", "propostas seladas em docs/04_audit/evidence/PARE100-EXEC-20261014/spec0215|spec0216", "todas as asserções e negativos (byte/missing/symlink, tails, duplicatas, produto literal/dinâmico/createRequire, SHIFT, unresolved, unknown installed)", "expectPinsValid continua comparando cada arquivo do fixture com o pin da proposta", "copiedAuditor continua exigindo que o checker vivo contenha os pins históricos"],
+  "liveDriftAtFix": {
+    "packages/platform/src/plugin-execution-core.ts": "DIFFERENT",
+    "packages/platform/src/controlled-kernel-adapters.ts": "DIFFERENT",
+    "packages/platform/src/controlled-kernel-execution.ts": "DIFFERENT",
+    "packages/platform/src/index.ts": "DIFFERENT",
+    "packages/harness/src/index.ts": "DIFFERENT",
+    "packages/platform/dist/plugin-execution-core.js": "DIFFERENT (compilado da fonte nova)",
+    "other23": "EQUAL"
+  },
+  "after": "93/93 PASS nos dois arquivos, inclusive sem nenhum dist no working tree; sem skip; sem repin do checker.",
+  "generator": "tools/build-pin-corpus.mjs"
+}

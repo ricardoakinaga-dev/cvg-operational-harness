@@ -1,0 +1,80 @@
+# Delta de ledgers proposto ao Lead — CONT-20261018-D9EF / CODEX100
+
+Unidade `DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE`, T1 documental. O executor não
+editou ledgers, coordenação, 0384–0386 nem código. Os links abaixo são relativos a
+este arquivo. Ao transcrever para `docs/`, prefixar com
+`04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/`; para
+`docs/03_build/0386_backlog_paridade_codex.md`, com
+`../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/`.
+
+Fontes: [estado](state.json), [verificação de entrada](input-verification.json),
+[mapa observado](coverage-observed.json), [lacunas](gaps-review.json),
+[validação](validation.json), [HOW do próximo perfil](HOW-next-profile.md) e
+[próxima unidade](next-task.json). Revisão: [R1](review-r1/verdict.md) e
+[R2](review-r2/verdict.md).
+
+## Para `docs/99_runtime_state.md` (bloco CONT-20261018-D9EF, item Codex100)
+
+- `last_completed_action`: DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE
+  `COMPLETED_LOCAL`. As 19 observações de cliente foram ligadas aos 44 contratos num
+  [mapa versionado](coverage-observed.json) ao lado do original, que não foi editado:
+  11 contratos `OBSERVED_CLIENT_PARTIAL` (PY05, PY06, PY07, PY10, PY14, TS10–TS15) e
+  33 `OPEN_REQUIRED_FUTURE_PROFILE`. As [seis lacunas](gaps-review.json) seguem
+  `OPEN`; três ganharam rótulo de progresso. 0 recibos funcionais e 0 crédito de
+  paridade.
+- `next_action`: DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A, documental
+  ([task](next-task.json)). O perfil distribuído wheel/npm com Codex CLI real fica
+  depois, condicionado à decisão de identidade dos artefatos e à autorização da
+  aquisição.
+
+## Para `docs/20_master_execution_log.md`
+
+- 18/10/2026 — DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE (Claude Code,
+  CONT-20261018-D9EF). Passo 0: os 692 arquivos do unit-manifest da admissão, os
+  cinco freezes do checkpoint e as referências do identity freeze conferem. O
+  `python/acceptance.py` difere do source-freeze-r2 por substituição documentada: o
+  arquivo atual bate com o evaluator-freeze-r2 e a preimagem bate com o freeze. Três
+  arquivos posteriores ao manifesto são acréscimos conhecidos do Lead; o recibo de
+  commit cita o sha do manifesto. Resultado: [PASS](input-verification.json).
+- Mapa: 44 linhas na mesma ordem e com os mesmos casos do original; 38 documentos de
+  aceite citados com sha256 (19 `acceptance.json` e 19 `acceptance-r2.json`). O
+  resumo do que segue aberto não é exaustivo; cada linha observada aponta o contrato
+  G01 como resíduo autoritativo. Validador em Node, segunda implementação do mesmo
+  executor (não é revisão independente), com [32 checagens PASS](validation.json) e
+  [10 controles negativos rejeitados](negative-controls.json).
+- Lacunas: GAP-PY-API (4/13), GAP-PY-RPC (4/11) e GAP-TS-LANGUAGE (6/15) com
+  observação parcial e rótulo de progresso novo. GAP-GENERATED e
+  GAP-PLATFORM-PACKAGING sem progresso. GAP-PROVENANCE mantém o rótulo de propósito:
+  o PY05 foi observado em parte, mas só com versões sintéticas, sem prova de
+  identidade. Todas `OPEN`.
+- HOW: perfil de fonte lote 2 recomendado (2A: TS01–TS09, PY03, PY04, PY08, PY15,
+  PY16 e o resíduo de fonte de PY07 e TS10–TS15; 2B: PY01, PY02, PY09, PY11–PY13,
+  PY17, PY18 e o resíduo de PY05, PY10 e PY14), com peer v2 e avaliador r3. O perfil
+  distribuído, proposto para depois, ficaria com PY19, PY20, PK01–PK09 e o ramo
+  empacotado do PY02.
+- Revisão independente: ver [R1](review-r1/verdict.md) e [R2](review-r2/verdict.md).
+- Sem serviço, SDK, compilador, Codex CLI, rede, Docker ou PG. Sem commit.
+
+## Para `docs/30_backlog_master.md`
+
+- Trocar o item "DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE, unidade documental" por
+  "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A, unidade documental
+  ([task](next-task.json))".
+
+## Para `docs/03_build/0386_backlog_paridade_codex.md` (cartão DX100-G02)
+
+- Acrescentar ao cartão: "Ligação das observações SDK concluída no recorte T1:
+  [mapa observado](coverage-observed.json) com 11 contratos `OBSERVED_CLIENT_PARTIAL`
+  e 33 abertos, [seis lacunas](gaps-review.json) `OPEN`, 0 recibos. Próximo: perfil
+  de fonte lote 2A ([HOW](HOW-next-profile.md)); perfil distribuído depois da decisão
+  de identidade."
+- O estado do cartão segue `IN_PROGRESS`. Não incrementa o numerador.
+
+## Carry-over fechado nesta passagem
+
+- R1-F10 e R2-F05 da admissão: os arquivos do Lead existem e têm hash registrado em
+  [input-verification.json](input-verification.json)
+  (`lead-budget-ratification-20261018.json` e `ledger-delta-cont-d9ef.md` da
+  admissão).
+- O peer que responde a pedido sem script e os P3 R2-F01..R2-F04 passam ao
+  [HOW](HOW-next-profile.md) e à [próxima unidade](next-task.json).

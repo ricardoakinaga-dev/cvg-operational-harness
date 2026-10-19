@@ -1,0 +1,298 @@
+// DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-spec-2b.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula: case_input_sha256 (JSON.stringify), tabela de predicados e classes, âncoras (sha e texto da linha), passos referenciados
+// pelo esperado, sondas, capacidades e DIAG por sub-lote, limites de vagas e serviços, mínimos do batch-2b-fit-assessment, plano de
+// cobertura e projeção, quadros de login sintéticos, avaliação T3; roda controles negativos em cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs'
+import { join, normalize, isAbsolute } from 'node:path'
+
+const UNIT = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2b-spec'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const CLASSES = ['client', 'peer_or_capture_sanity', 'capture_order_or_cleanup', 'informational', 'order_unilateral']
+const RESULT_APIS = new Set(['call', 'attr', 'Codex.new', 'task.await', 'stream.next', 'astream.next', 'astream.aclose', 'gstream.next', 'gstream.close',
+  'model.validate', 'model.dump', 'model.construct', 'driver.reap', 'excepthook.snapshot', 'hook.count', 'heartbeat'])
+const KNOWN_INFRA = new Set(['CAP-PY-SDKCALLS-2B', 'CAP-PEER-V2', 'CAP-PEER-EXIT-EARLY', 'CAP-CONTROL-CLIENT'])
+// Lista única FORBIDDEN_LOGIN_KEYS (CAP-2B-PEER-LOGIN, peer.login_frames_synthetic e este validador).
+const FORBIDDEN_KEYS = new Set(['apiKey', 'api_key', 'accessToken', 'refreshToken', 'idToken', 'authToken', 'chatgptAuthTokens', 'password', 'secret'])
+const STEP_CAP = {
+  'CAP-2B-ASYNC-DRIVER': ['AsyncCodex.new', 'AsyncCodexClient.new', 'AsyncThread.new', 'async_with.enter', 'task.create', 'task.cancel', 'task.await',
+    'loop.yield_until', 'loop.block_release_wait_cancel', 'heartbeat', 'astream.next', 'astream.aclose', 'agstream.next'],
+  'CAP-2B-CONC-BARRIER': ['worker.start', 'worker.join', 'worker.parked', 'worker.still_parked', 'barrier', 'probe', 'probe.until', 'hook.install',
+    'hook.wait', 'hook.count', 'thread.join', 'excepthook.install', 'excepthook.wait', 'excepthook.snapshot', 'clock.mark', 'loop.yield_until',
+    'loop.block_release_wait_cancel'],
+  'CAP-2B-CLOCK-RANDOM': ['shim.install', 'shim.remove'],
+  'CAP-2B-FAULT-CUT': ['fault.install', 'fault.remove'],
+  'CAP-2B-MODEL-ORACLE': ['model.validate', 'model.construct', 'model.dump'],
+  'CAP-2B-PROC-WITNESS': ['proc.retain', 'driver.reap'],
+}
+const PRED_CAP = [['proc.', 'CAP-2B-PROC-WITNESS'], ['clock.', 'CAP-2B-CLOCK-RANDOM'], ['shim.', 'CAP-2B-CLOCK-RANDOM'], ['fault.', 'CAP-2B-FAULT-CUT'],
+  ['model.', 'CAP-2B-MODEL-ORACLE'], ['hook.', 'CAP-2B-CONC-BARRIER'], ['barrier.', 'CAP-2B-CONC-BARRIER'], ['consumer.', 'CAP-2B-CONC-BARRIER'],
+  ['identity.', 'CAP-2B-CONC-BARRIER'], ['excepthook.', 'CAP-2B-CONC-BARRIER'], ['probe.', 'CAP-2B-CONC-BARRIER'],
+  ['peer.before_reply', 'CAP-2B-PEER-BEFORE-REPLY'], ['peer.login', 'CAP-2B-PEER-LOGIN']]
+const TOKEN = /^(STEP|CANCEL|API_RESULT|API_ERROR|API_CANCELLED):(\d+)$|^WORKER:([A-Za-z0-9]+)$|^HOOK:([a-z0-9_]+)#(\d+)$|^(RAW_READ|COMMIT_REPLY|RELEASE_REPLY):([a-z][A-Za-z0-9/._-]*)(?:@([A-Za-z0-9_-]+))?#(\d+)$/
+
+function* objects(x) {
+  if (Array.isArray(x)) for (const v of x) yield* objects(v)
+  else if (x && typeof x === 'object') { yield x; for (const v of Object.values(x)) yield* objects(v) }
+}
+function deriveInfra(c) {
+  const caps = new Set()
+  const ci = c.case_input
+  if (c.kind === 'CONTROL') { caps.add('CAP-PEER-V2'); caps.add('CAP-CONTROL-CLIENT') } else { caps.add('CAP-PY-SDKCALLS-2B'); caps.add('CAP-PEER-V2') }
+  for (const st of objects(ci.sdk_calls ?? [])) {
+    for (const [cap, apis] of Object.entries(STEP_CAP)) if (apis.includes(st.api)) caps.add(cap)
+    if (st.api === 'GoalStream.new' && st.fault) caps.add('CAP-2B-FAULT-CUT')
+    if ('$model' in st || (st.api === 'call' && st.kwargs && st.kwargs.response_model && st.kwargs.response_model !== 'InitializeResponse')) caps.add('CAP-2B-MODEL-ORACLE')
+    if (st.api === 'barrier' && /PROC_WITNESS|zero adapter process/.test(JSON.stringify(st))) caps.add('CAP-2B-PROC-WITNESS')
+  }
+  if (ci.driver_mode === 'async') caps.add('CAP-2B-ASYNC-DRIVER')
+  if (c.contracts.includes('PY18')) caps.add('CAP-2B-MODEL-ORACLE')
+  for (const p of c.predicates) for (const [pre, cap] of PRED_CAP) if (p.startsWith(pre)) caps.add(cap)
+  if (ci.adapter || c.accepted_capture_forms.some((f) => f !== 'PASS')) caps.add('CAP-2B-PROC-WITNESS')
+  for (const r of ci.peer_script.on_request) {
+    if (r.before_reply?.length) caps.add('CAP-2B-PEER-BEFORE-REPLY')
+    if (r.match.method.startsWith('account/login/')) caps.add('CAP-2B-PEER-LOGIN')
+    for (const f of objects(r)) { if (f.exit) caps.add('CAP-PEER-EXIT-EARLY'); if (f.method === 'account/login/completed') caps.add('CAP-2B-PEER-LOGIN') }
+  }
+  return [...caps].sort()
+}
+function checkOrderTokens(c, err) {
+  const hooks = new Set()
+  for (const st of objects(c.case_input.sdk_calls ?? [])) if (st.api === 'hook.install') for (const h of st.hooks) hooks.add(h.id)
+  const nsteps = (c.case_input.sdk_calls ?? []).length
+  const toks = []
+  for (const chain of [...(c.expected.order ?? []), ...(c.expected.wire?.order ?? [])]) {
+    if (!Array.isArray(chain) || chain.length < 2) { err(`${c.id}: order chain is not a list of 2+ tokens`); continue }
+    toks.push(...chain)
+  }
+  for (const h of c.expected.hooks ?? []) { if (!hooks.has(h.id)) err(`${c.id}: hook ${h.id} not installed`); for (const k of ['before', 'after', 'during']) if (h[k]) toks.push(h[k]) }
+  for (const t of toks) {
+    const m = TOKEN.exec(t)
+    if (!m) { err(`${c.id}: order token ${t}`); continue }
+    if (m[2] && (+m[2] < 1 || +m[2] > nsteps)) err(`${c.id}: order token step out of range ${t}`)
+    if (m[4] && !hooks.has(m[4])) err(`${c.id}: order token hook ${t}`)
+  }
+}
+const FILES = ['input-verification.json', 'cases-2b-1.json', 'cases-2b-2.json', 'capability-contracts-2b.json', 'freeze-r4-2b-delta.json',
+  'evaluator-r4-2b-delta.json', 'control-slot-contract-2b.json', 'execution-budget-2b-1.json', 'execution-budget-2b-2.json',
+  'coverage-plan-2b.json', 't3-assessment.json']
+
+const lineCache = new Map()
+function inputPath(meta) {
+  if (meta.path_staged) return meta.path_staged
+  if (meta.path_host) return meta.path_host
+  return normalize(join(UNIT, meta.path))
+}
+function linesOf(p) {
+  if (!lineCache.has(p)) lineCache.set(p, readFileSync(p, 'utf8').split('\n'))
+  return lineCache.get(p)
+}
+
+function walkStrings(x, cb, path = '') {
+  if (typeof x === 'string') return cb(x, path)
+  if (Array.isArray(x)) return x.forEach((v, i) => walkStrings(v, cb, `${path}[${i}]`))
+  if (x && typeof x === 'object') for (const [k, v] of Object.entries(x)) { cb(null, `${path}.${k}`, k); walkStrings(v, cb, `${path}.${k}`) }
+}
+
+function validate(docs, fit, cov2) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  const caps = docs['capability-contracts-2b.json']
+  const capIds = new Set(caps.capabilities.map((c) => c.id))
+  const budgets = { '2B-1': docs['execution-budget-2b-1.json'], '2B-2': docs['execution-budget-2b-2.json'] }
+  const allCases = []
+  for (const lot of ['2B-1', '2B-2']) {
+    const doc = docs[lot === '2B-1' ? 'cases-2b-1.json' : 'cases-2b-2.json']
+    if (doc.sub_lot !== lot) err(`${lot}: sub_lot field`)
+    const slots = doc.cases.map((c) => c.slot)
+    if (new Set(slots).size !== slots.length || Math.min(...slots) !== 1 || Math.max(...slots) !== slots.length) err(`${lot}: slots not 1..N unique`)
+    if (doc.cases.length > 24) err(`${lot}: more than 24 slots`)
+    const controls = doc.cases.filter((c) => c.kind === 'CONTROL')
+    if (controls.length !== 1) err(`${lot}: CONTROL count ${controls.length}`)
+    else if (controls[0].execution_order !== 1) err(`${lot}: CONTROL not first`)
+    if (doc.counts.slots !== doc.cases.length || doc.counts.sdk_cases !== doc.cases.length - controls.length) err(`${lot}: counts`)
+    const used = new Set()
+    for (const c of doc.cases) {
+      allCases.push(c)
+      const w = `${c.id}`
+      if (c.sub_lot !== lot) err(`${w}: sub_lot`)
+      if (c.runtime_status !== 'NOT_RUN' || c.receipt !== null) err(`${w}: runtime_status/receipt`)
+      if (sha(Buffer.from(JSON.stringify(c.case_input), 'utf8')) !== c.case_input_sha256) err(`${w}: case_input_sha256`)
+      for (const k of ['sdk_calls', 'peer_script', 'control_client', 'adapter', 'driver_mode']) if (k in c) err(`${w}: ${k} duplicated outside case_input`)
+      for (const p of c.predicates) {
+        used.add(p)
+        const t = doc.predicate_table[p]
+        if (!t) err(`${w}: predicate ${p} not in table`)
+        else if (!CLASSES.includes(t.class)) err(`${p}: class ${t.class}`)
+      }
+      if (!c.predicates.includes('capture.case_input_frozen_bytes')) err(`${w}: capture.case_input_frozen_bytes missing`)
+      for (const a of c.anchors) {
+        const meta = doc.inputs[a.input]
+        if (!meta) { err(`${w}: anchor input ${a.input} not declared`); continue }
+        if (a.sha256 !== meta.sha256) err(`${w}: anchor sha differs from inputs for ${a.input}`)
+        let p
+        try { p = inputPath(meta) } catch { err(`${w}: input path`); continue }
+        let buf
+        try { buf = readFileSync(p) } catch { err(`${w}: cannot read ${p}`); continue }
+        if (sha(buf) !== meta.sha256) err(`${w}: input sha drift ${a.input}`)
+        const ls = linesOf(p)
+        if (!a.lines || ls[a.lines[0] - 1] === undefined || ls[a.lines[0] - 1].trim() !== a.text) err(`${w}: anchor text ${a.input}:${a.lines}`)
+      }
+      for (const i of c.infra) { const id = i.split(' ')[0]; if (!capIds.has(id) && !KNOWN_INFRA.has(id)) err(`${w}: unknown infra ${id}`) }
+      if (JSON.stringify(deriveInfra(c)) !== JSON.stringify([...c.infra].sort())) err(`${w}: infra differs from the capabilities derived from steps and predicates`)
+      for (const id of deriveInfra(c)) {
+        const cap = caps.capabilities.find((x) => x.id === id)
+        if (!cap) continue
+        for (const d of Array.isArray(cap.diag) ? cap.diag : [cap.diag]) if (!budgets[lot].planned.qualification_services.includes(d.id)) err(`${w}: capability ${id} needs ${d.id} in the ${lot} budget`)
+      }
+      if (c.kind === 'SDK') checkOrderTokens(c, err)
+      const ci = c.case_input
+      if (c.kind === 'SDK') {
+        const calls = ci.sdk_calls
+        if (!Array.isArray(calls) || !calls.length) { err(`${w}: no sdk_calls`); continue }
+        calls.forEach((s, i) => { if (s.step !== i + 1) err(`${w}: step numbering at ${i + 1}`) })
+        if (calls[calls.length - 1].api !== 'epilogue') err(`${w}: last step is not an epilogue`)
+        for (const e of c.expected.api ?? []) {
+          const s = calls[e.step - 1]
+          if (!s || !RESULT_APIS.has(s.api)) err(`${w}: expected.api step ${e.step} is not a result step (${s && s.api})`)
+        }
+        const probeIds = new Set(calls.filter((s) => s.api === 'probe').map((s) => s.id))
+        for (const s of calls.filter((s) => s.api === 'barrier')) for (const p of s.witness?.driver_probes ?? []) probeIds.add(p.id)
+        for (const k of Object.keys(c.expected.probes ?? {})) if (!probeIds.has(k)) err(`${w}: expected probe ${k} has no probe step`)
+        for (const k of probeIds) if (!(k in (c.expected.probes ?? {}))) err(`${w}: probe ${k} has no expected value`)
+        if (c.gate && !c.role.startsWith('CONDITIONAL') && !/DIAG-PY-PROCWITNESS/.test(c.gate)) err(`${w}: gate without conditional role or PROCWITNESS`)
+        if (!(c.accepted_capture_forms ?? []).length) err(`${w}: no accepted capture form`)
+        for (const f of c.accepted_capture_forms) if (f !== 'PASS' && !['CLIENT_TERMINATED_SIGTERM', 'CLIENT_KILLED_SIGKILL'].includes(f)) err(`${w}: capture form ${f}`)
+      }
+      walkStrings(ci.peer_script ?? {}, (s, path, key) => {
+        if (key && FORBIDDEN_KEYS.has(key)) err(`${w}: forbidden credential key ${key} at ${path}`)
+        if (s && /^https?:\/\//.test(s) && !s.startsWith('https://login.invalid/')) err(`${w}: non-synthetic URL ${s}`)
+      })
+      for (const r of ci.peer_script?.on_request ?? []) {
+        if (r.match.method !== 'account/login/start') continue
+        const t = (r.match.params ?? r.match.params_subset ?? {}).type
+        if (!['chatgpt', 'chatgptDeviceCode'].includes(t)) err(`${w}: account/login/start rule matches type ${t}`)
+      }
+    }
+    for (const k of Object.keys(doc.predicate_table)) if (!used.has(k)) err(`${lot}: unused table entry ${k}`)
+    const b = budgets[lot]
+    if (b.planned.case_slots !== doc.cases.length) err(`${lot}: budget slots ${b.planned.case_slots} != ${doc.cases.length}`)
+    if (b.planned.case_slots > b.max.case_slots || b.planned.qualification_services_planned > b.max.services) err(`${lot}: budget over max`)
+    if (b.planned.qualification_services.length !== b.planned.qualification_services_planned) err(`${lot}: services count`)
+    if (b.max.case_slots !== 24 || b.max.services !== 12 || b.max.automatic_retries !== 0) err(`${lot}: max changed`)
+  }
+  // capabilities and DIAG per sub-lot
+  if (caps.capabilities.length !== 8) err('capabilities: not 8')
+  const fitNames = [...fit.capabilities_new_to_2b].sort()
+  const capNames = caps.capabilities.map((c) => c.fit_name).sort()
+  if (JSON.stringify(fitNames) !== JSON.stringify(capNames)) err('capabilities: fit names differ from batch-2b-fit-assessment')
+  for (const cap of caps.capabilities) {
+    const diags = Array.isArray(cap.diag) ? cap.diag : [cap.diag]
+    for (const lot of ['2B-1', '2B-2']) {
+      const users = allCases.filter((c) => c.sub_lot === lot && c.infra.some((i) => i.split(' ')[0] === cap.id)).map((c) => c.id)
+      if (JSON.stringify(users) !== JSON.stringify(cap.used_by[lot])) err(`${cap.id}: used_by ${lot}`)
+      if (users.length) for (const d of diags) if (!budgets[lot].planned.qualification_services.includes(d.id)) err(`${cap.id}: ${d.id} not budgeted in ${lot}`)
+    }
+    if (!cap.contract?.length || !cap.selftests_offline?.length) err(`${cap.id}: contract or selftests empty`)
+  }
+  // fit minimums
+  const sdk = allCases.filter((c) => c.kind === 'SDK')
+  const perContract = {}
+  for (const c of sdk) for (const p of c.contracts) if (c.id.startsWith('2B-' + p)) perContract[p] = (perContract[p] ?? 0) + 1
+  for (const row of fit.contracts) if ((perContract[row.id] ?? 0) < row.minimum_slots) err(`fit: ${row.id} has ${perContract[row.id] ?? 0} < ${row.minimum_slots}`)
+  for (const row of fit.residual_scope_2b) if ((perContract[row.id] ?? 0) < row.minimum_slots) err(`fit: residual ${row.id} has ${perContract[row.id] ?? 0} < ${row.minimum_slots}`)
+  if (allCases.length < fit.minimum_with_residuals) err(`fit: ${allCases.length} slots < ${fit.minimum_with_residuals}`)
+  // coverage plan
+  const plan = docs['coverage-plan-2b.json']
+  const rows = Object.fromEntries(plan.rows.map((r) => [r.source_contract, r]))
+  const want = ['PY01', 'PY02', 'PY05', 'PY08', 'PY09', 'PY10', 'PY11', 'PY12', 'PY13', 'PY14', 'PY17', 'PY18']
+  if (JSON.stringify(Object.keys(rows).sort()) !== JSON.stringify(want)) err('plan: rows')
+  for (const c of sdk) for (const p of c.contracts) if (!rows[p] || !rows[p].cases.includes(c.id)) err(`plan: ${c.id} missing from row ${p}`)
+  const v2rows = Object.fromEntries(cov2.rows.map((r) => [r.source_contract, r]))
+  const newly = want.filter((p) => v2rows[p].status === 'OPEN_REQUIRED_FUTURE_PROFILE')
+  const proj = plan.projection_if_all_pass.on_v2
+  if (proj.OBSERVED_CLIENT_PARTIAL !== cov2.counts.OBSERVED_CLIENT_PARTIAL + newly.length || proj.OPEN_REQUIRED_FUTURE_PROFILE !== cov2.counts.OPEN_REQUIRED_FUTURE_PROFILE - newly.length) err('plan projection')
+  for (const r of plan.rows) if (r.whole_requirement_covered_after !== false) err(`plan: ${r.source_contract} claims whole requirement`)
+  // T3
+  const t3 = docs['t3-assessment.json']
+  if (t3.decision !== 'NAO_EXIGE_T3' || t3.user_question !== null || t3.retired_capabilities.length !== 0) err('t3 decision')
+  if (t3.per_capability.length !== 8 || !t3.per_capability.every((x) => x.verdict === 'KEEP')) err('t3 per capability')
+  // deltas and evaluator
+  const fd = docs['freeze-r4-2b-delta.json']
+  for (const d of fd.items) if (!d.proof?.length || !d.sub_lots?.length) err(`${d.id}: proof or sub_lots`)
+  for (const cap of caps.capabilities) if (!fd.items.some((d) => d.id === cap.delta)) err(`${cap.id}: delta ${cap.delta} missing`)
+  if (docs['evaluator-r4-2b-delta.json'].clauses.length < 10) err('evaluator delta clauses')
+  // receipts and credit
+  for (const [n, d] of Object.entries(docs)) if (('functional_receipts' in d && d.functional_receipts !== 0) || ('parity_credit' in d && d.parity_credit !== 0)) err(`${n}: receipts or credit`)
+  return errors
+}
+
+const docs = Object.fromEntries(FILES.map((f) => [f, load(join(UNIT, f))]))
+const fit = load(normalize(join(UNIT, '../sdk-source-batch-2a-continuation-spec/batch-2b-fit-assessment.json')))
+const cov2 = load(normalize(join(UNIT, '../sdk-batch-2a-binding/coverage-observed-v2.json')))
+const errors = validate(docs, fit, cov2)
+for (const f of readdirSync(UNIT)) { const st = statSync(join(UNIT, f)); if (st.isFile() && st.size === 0) errors.push(`empty file ${f}`) }
+
+const caseOf = (d, lot, id) => d[lot].cases.find((c) => c.id === id)
+const resha = (c) => { c.case_input_sha256 = sha(Buffer.from(JSON.stringify(c.case_input), 'utf8')) }
+const controls = [
+  ['valor do case_input mudado sem novo sha', (d) => { caseOf(d, 'cases-2b-1.json', '2B-PY05X').case_input.sdk_calls[4].args[1].turnTrigger = 'x' }],
+  ['predicado fora da tabela', (d) => { caseOf(d, 'cases-2b-2.json', '2B-PY09A').predicates.push('wire.unknown_predicate') }],
+  ['classe inválida', (d) => { d['cases-2b-1.json'].predicate_table['api.steps_exact'].class = 'blocking' }],
+  ['âncora com linha errada', (d) => { caseOf(d, 'cases-2b-2.json', '2B-PY13C').anchors[0].lines = [1] }],
+  ['passo esperado aponta para sonda', (d) => { caseOf(d, 'cases-2b-1.json', '2B-PY12A').expected.api[0].step = 8 }],
+  ['sonda sem valor esperado', (d) => { delete caseOf(d, 'cases-2b-1.json', '2B-PY11A').expected.probes.states_left }],
+  ['mais de 24 vagas', (d) => { const c = d['cases-2b-2.json']; for (let i = 0; i < 7; i++) { const x = clone(c.cases[0]); x.id = 'X' + i; x.slot = c.cases.length + 1; c.cases.push(x) } }],
+  ['DIAG de capacidade fora do orçamento', (d) => { const s = d['execution-budget-2b-2.json'].planned; s.qualification_services = s.qualification_services.filter((x) => x !== 'DIAG-PY-CLOCK'); s.qualification_services_planned -= 1 }],
+  ['orçamento acima de 12 serviços', (d) => { const s = d['execution-budget-2b-1.json'].planned; s.qualification_services_planned = 13 }],
+  ['dois CONTROL no sub-lote', (d) => { caseOf(d, 'cases-2b-1.json', '2B-PY01A').kind = 'CONTROL' }],
+  ['URL de login fora de .invalid (sha recalculado)', (d) => { const c = caseOf(d, 'cases-2b-2.json', '2B-PY17B'); c.case_input.peer_script.on_request[1].reply.result.authUrl = 'https://auth.example.com/x'; resha(c) }],
+  ['chave de credencial no peer (sha recalculado)', (d) => { const c = caseOf(d, 'cases-2b-2.json', '2B-PY17A'); c.case_input.peer_script.on_request[1].reply.result.accessToken = 'x'; resha(c) }],
+  ['mínimo do PY13 não atendido', (d) => { const c = d['cases-2b-2.json']; c.cases = c.cases.filter((x) => x.id !== '2B-PY13A'); c.cases.forEach((x, i) => { x.slot = i + 1 }); d['execution-budget-2b-2.json'].planned.case_slots -= 1 }],
+  ['projeção alterada', (d) => { d['coverage-plan-2b.json'].projection_if_all_pass.on_v2.OBSERVED_CLIENT_PARTIAL = 30 }],
+  ['T3 com capacidade retirada', (d) => { d['t3-assessment.json'].retired_capabilities.push('CAP-2B-PROC-WITNESS') }],
+  ['crédito de paridade', (d) => { d['coverage-plan-2b.json'].parity_credit = 1 }],
+  ['caso fora do plano de cobertura', (d) => { const r = d['coverage-plan-2b.json'].rows.find((x) => x.source_contract === 'PY18'); r.cases = r.cases.filter((x) => x !== '2B-PY18D') }],
+  ['infra desconhecida', (d) => { caseOf(d, 'cases-2b-1.json', '2B-PY08X').infra.push('CAP-2B-UNKNOWN') }],
+  ['nome de capacidade divergente do fit', (d) => { d['capability-contracts-2b.json'].capabilities[0].fit_name = 'driver assíncrono' }],
+  ['campo duplicado fora do case_input', (d) => { caseOf(d, 'cases-2b-1.json', '2B-PY11C').sdk_calls = [] }],
+  ['excepthook num caso sem a capacidade declarada (R1-F02)', (d) => { const c = caseOf(d, 'cases-2b-1.json', '2B-PY10X'); c.infra = c.infra.filter((x) => x !== 'CAP-2B-CONC-BARRIER') }],
+  ['login start com type apiKey no match (R1-F03)', (d) => { const c = caseOf(d, 'cases-2b-2.json', '2B-PY17A'); c.case_input.peer_script.on_request[1].match.params = { type: 'apiKey' }; resha(c) }],
+  ['token de ordem fora da gramática (R1-F11)', (d) => { const c = caseOf(d, 'cases-2b-1.json', '2B-PY11B'); c.expected.order = [['RAW_READ turn/start#2', 'COMMIT_REPLY:turn/start#1']] }],
+]
+const EXPECT = {
+  'valor do case_input mudado sem novo sha': 'case_input_sha256', 'predicado fora da tabela': 'not in table', 'classe inválida': 'class blocking',
+  'âncora com linha errada': 'anchor text', 'passo esperado aponta para sonda': 'not a result step', 'sonda sem valor esperado': 'has no expected value',
+  'mais de 24 vagas': 'more than 24 slots', 'DIAG de capacidade fora do orçamento': 'DIAG-PY-CLOCK', 'orçamento acima de 12 serviços': 'budget over max',
+  'dois CONTROL no sub-lote': 'CONTROL count', 'URL de login fora de .invalid (sha recalculado)': 'non-synthetic URL',
+  'chave de credencial no peer (sha recalculado)': 'forbidden credential key', 'mínimo do PY13 não atendido': 'fit: PY13',
+  'projeção alterada': 'plan projection', 'T3 com capacidade retirada': 't3 decision', 'crédito de paridade': 'receipts or credit',
+  'caso fora do plano de cobertura': 'missing from row PY18', 'infra desconhecida': 'unknown infra', 'nome de capacidade divergente do fit': 'fit names',
+  'campo duplicado fora do case_input': 'duplicated outside case_input',
+  'excepthook num caso sem a capacidade declarada (R1-F02)': 'infra differs', 'login start com type apiKey no match (R1-F03)': 'account/login/start rule matches type',
+  'token de ordem fora da gramática (R1-F11)': 'order token',
+}
+const negative = controls.map(([name, mutate]) => {
+  const d = clone(docs)
+  mutate(d)
+  d['cases-2b-1.json'].counts.slots = d['cases-2b-1.json'].cases.length
+  d['cases-2b-2.json'].counts.slots = d['cases-2b-2.json'].cases.length
+  for (const k of ['cases-2b-1.json', 'cases-2b-2.json']) { const c = d[k]; c.counts.sdk_cases = c.cases.filter((x) => x.kind === 'SDK').length }
+  const e = validate(d, fit, cov2)
+  const hit = e.find((x) => x.includes(EXPECT[name]))
+  return { control: name, expected_error_substring: EXPECT[name], rejected: Boolean(hit), matching_error: hit ?? null, first_error: e[0] ?? null }
+})
+const doc = {
+  kind: 'SPEC_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B',
+  note: 'segunda implementação do mesmo executor; não é revisão independente',
+  node: process.version, result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors,
+  checked: { files: FILES.length, cases: docs['cases-2b-1.json'].cases.length + docs['cases-2b-2.json'].cases.length,
+    anchors: [...docs['cases-2b-1.json'].cases, ...docs['cases-2b-2.json'].cases].reduce((n, c) => n + c.anchors.length, 0) },
+  negative_controls: negative, validated_at: new Date().toISOString(),
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)
+if (errors.length) console.log(errors.slice(0, 20).join('\n'))

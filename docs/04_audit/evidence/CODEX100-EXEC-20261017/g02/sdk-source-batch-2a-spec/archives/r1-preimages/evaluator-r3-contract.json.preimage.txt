@@ -1,0 +1,57 @@
+{
+  "kind": "EVALUATOR_R3_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+  "base": {
+    "path": "../sdk-admission/python/acceptance.py",
+    "sha256": "d4a3c06bfde14f8c419d0e4eab8121b71f36c42c0902fc26e7ea2321a9e32d6d"
+  },
+  "clauses": [
+    {
+      "id": "R3-01",
+      "carry_over": "R2-F01 (admissão)",
+      "rule": "Predicados de ordem entre processos são provas unilaterais: a condição usa <= no mesmo CLOCK_MONOTONIC (por exemplo, mono_ns do RAW_READ do initialized no adapter <= mono_ns do API_ERROR no driver). Se valer, o predicado passa. Se não valer, o resultado do caso é INCONCLUSIVE ou INVALID_CAPTURE, NUNCA MISMATCH. O avaliador r3 trata essa classe à parte da regra atual de acceptance.py:537-540, que marca MISMATCH para qualquer predicado falho.",
+      "applies_in_2A": ["order.kill_and_rm_before_return_resolved (2A-TS04)"],
+      "applies_later": "wire.initialized_before_guard em reexecuções de casos PY05; fecha só a parte de ordem do R1-F05"
+    },
+    {
+      "id": "R3-02",
+      "carry_over": "R2-F02 (admissão)",
+      "rule": "O goal path e o interrupt do SDKPY07 ficam alcançáveis como MISMATCH pelo peer v2 e pelo pause_reply (2A-PY10R); a prova de alcance em serviço é a vaga 2A-CTRL01."
+    },
+    {
+      "id": "R3-03",
+      "carry_over": "R2-F03 (admissão)",
+      "rule": "A errata da unidade de execução cita só IDs alcançáveis (por exemplo acceptance.SDKPY07.known_bad_closed_false_mismatch). A errata.json da admissão permanece congelada; a correção da citação fica registrada na unidade nova."
+    },
+    {
+      "id": "R3-04",
+      "carry_over": "R2-F04 (admissão) e R2-F04 (ligação)",
+      "rule": "reevaluate: docstring e código alinhados; comparação por predicado com o acceptance de serviço (id, ok e detalhe normalizado por JSON); sem o documento r3, saída 1 com mensagem explícita; autoteste para os dois caminhos. client_fact_only, parity_receipt e functional_receipts levam o rótulo da versão do avaliador."
+    },
+    {
+      "id": "R3-05",
+      "rule": "peer.no_unscripted_request passa a julgar o cliente: um pedido sem script respondido pelo peer v2, num caso cujo known-bad o proíbe, é MISMATCH. Se o cliente bloquear mesmo assim, o caso é INVALID_CAPTURE por prazo (fail-closed), nunca PASS."
+    },
+    {
+      "id": "R3-06",
+      "rule": "Classe de juiz decide o desfecho de um predicado falho com forma de captura aceita: client -> MISMATCH; peer_or_capture_sanity e capture_order_or_cleanup -> INVALID_CAPTURE; order_unilateral -> INCONCLUSIVE (R3-01). Cada predicado de cases-2a.json recebe uma classe na implementação, registrada no plano de casos."
+    },
+    {
+      "id": "R3-07",
+      "rule": "A vaga CONTROL roda antes dos casos SDK e deve terminar MISMATCH. PASS ou INVALID_CAPTURE na CONTROL para a unidade antes de qualquer caso SDK. O resultado da CONTROL nunca conta como observação do SDK."
+    },
+    {
+      "id": "R3-08",
+      "rule": "INCONCLUSIVE só por prazo e só nos casos com inconclusive_on_deadline=true (2A-TS10 e 2A-TS12), além do SDKTS10 existente. No 2A-TS10, PASS exige exatamente uma das duas formas declaradas (A: ENOENT relançado; B: erro sem listener no stdin registrado pelo recorder), e a forma observada é registrada."
+    },
+    {
+      "id": "R3-09",
+      "rule": "Expectativas congeladas em cases-2a.json não mudam depois da execução. Divergência entre o valor capturado e o congelado é MISMATCH preservado, com bytes brutos."
+    },
+    {
+      "id": "R3-10",
+      "rule": "Novas formas de captura reconhecidas: NO_CHILD (spawn falhou, nenhum processo do adapter na unidade) e PREREADY_SIGNAL_TERMINATION (adapter terminado por sinal antes do READY). Só valem nos casos que as declaram em accepted_capture_forms."
+    }
+  ],
+  "never": "Nenhuma regra produz recibo funcional ou crédito de paridade."
+}

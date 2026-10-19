@@ -1,0 +1,386 @@
+{
+  "kind": "HARNESS_CAPABILITY_CONTRACTS_2B",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "fit_assessment": {
+    "path": "../sdk-source-batch-2a-continuation-spec/batch-2b-fit-assessment.json",
+    "sha256": "2c839b2094a63b8400b0e4585afef4d7c973b88c9ba24a9406876240c1103d57"
+  },
+  "count": 8,
+  "capabilities": [
+    {
+      "id": "CAP-2B-ASYNC-DRIVER",
+      "fit_name": "driver async",
+      "delta": "D2B-03",
+      "contract": [
+        "Casos com driver_mode=async rodam dentro de asyncio.run(main()) no thread principal do driver; o resto do protocolo do driver (BEGIN, READY, CALLS_DONE, RELEASE_EXIT) não muda.",
+        "Passos assíncronos: AsyncCodex.new, AsyncCodexClient.new, AsyncThread.new, call com await=true, async_with.enter, task.create/task.cancel/task.await (tarefas nomeadas criadas com asyncio.ensure_future), loop.yield_until (await asyncio.sleep(0) com sonda e teto de iterações), heartbeat, astream.next/astream.aclose (um gerador assíncrono por handle), agstream.next.",
+        "loop.yield_until cede ao loop (await asyncio.sleep(0)) antes de cada avaliação da sonda; sonda que levanta (por exemplo len de None antes do primeiro waiter) conta como 'ainda não'; teto de iterações estourado é INVALID_CAPTURE.",
+        "Esperas de barreira em modo async usam await asyncio.to_thread(ch.control, ...) para o loop seguir livre; a única exceção declarada é loop.block_release_wait_cancel.",
+        "loop.block_release_wait_cancel: no thread do loop, sem ceder ao loop, envia o controle de liberação ao supervisor (síncrono), espera numa threading.Condition o evento de gancho declarado (com prazo) e chama task.cancel(); só então o próximo passo cede ao loop. É o meio de cancelar depois que o futuro concorrente já foi resolvido.",
+        "API_CANCELLED é emitido quando o await da tarefa levanta CancelledError; qualquer outra exceção vai a API_ERROR; o driver nunca engole BaseException fora do passo.",
+        "Nada do SDK é alterado; o watchdog do driver leva estouro de prazo a INVALID_CAPTURE."
+      ],
+      "observes": "Ordem de tarefas, cancelamento e conclusão de await sobre AsyncCodex, AsyncCodexClient, AsyncThread e AsyncTurnHandle reais.",
+      "injects": "Nada além do cancelamento declarado de tarefas do próprio driver.",
+      "privilege": "Nenhum: só asyncio no processo do driver.",
+      "selftests_offline": [
+        "módulo próprio com asyncio.Lock de dupla checagem: waiters observados e um só inicializador",
+        "to_thread próprio segurado: cancelamento devolve CancelledError e o worker termina depois",
+        "wrap_future próprio: cancelamento depois do set_result com o loop bloqueado chama o callback no thread do loop",
+        "estouro de prazo vira INVALID_CAPTURE",
+        "loop.yield_until com sonda que levanta antes de existir o primeiro waiter: conta como 'ainda não' e termina quando o valor aparece"
+      ],
+      "diag": {
+        "id": "DIAG-PY-ASYNC",
+        "own_code": "Cliente próprio assíncrono, sem importar o SDK, com o mesmo adapter e peer v2: inicialização com asyncio.Lock e dupla checagem, um pedido via to_thread segurado pelo peer, cancelamento antes e depois do resultado (loop.block_release_wait_cancel com gancho no Future.set_result do executor próprio).",
+        "pass": "Tarefas criadas, canceladas e aguardadas com as classes exatas; callback do cancelamento depois do resultado no MainThread antes do API_CANCELLED; worker do to_thread conclui depois da liberação; nenhuma ação fora do plano de barreiras.",
+        "on_fail": "Para o sub-lote (as duas unidades dependem desta capacidade)."
+      },
+      "t3": "Não exige T3: código próprio de evidência, sem privilégio, sem contrato público do CVG.",
+      "used_by": {
+        "2B-1": ["2B-PY01B", "2B-PY01C", "2B-PY01D", "2B-PY10X"],
+        "2B-2": ["2B-PY13D", "2B-PY13E", "2B-PY14A"]
+      },
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "CAP-2B-CONC-BARRIER",
+      "fit_name": "barreira de concorrência",
+      "delta": "D2B-04",
+      "contract": [
+        "worker.start cria um thread daemon nomeado que executa um passo; worker.join espera com prazo; resultado ou erro do worker vai ao canal com o nome do worker.",
+        "worker.parked testemunha, pela pilha de sys._current_frames() do próprio processo, que o worker está estacionado no ponto declarado (objeto de código resolvido por identidade e, quando declarado, a linha); worker.still_parked confirma que continua estacionado depois de hold_s.",
+        "probe e probe.until leem estado por leitura estática: atributos de instância (__dict__ ou slots), chaves de dict e índices; property, descriptor de método ou chamada do SDK são recusados (INVALID_CAPTURE). fn em value, len, keys, is_none, type_name, enum_value, vars_has, is_ref, equals_driver_environ e done (só para tarefas do driver).",
+        "hook.install instala coletores sys.setprofile (thread do loop ou principal) e threading.setprofile (threads novos) antes de qualquer thread do SDK; cada gancho casa um objeto de código por identidade (arquivo em /profile/sdk-python ou na stdlib ligada pela identity freeze, qualname, primeira linha) e registra só os atributos declarados; retain:<expr> guarda uma referência (por exemplo ao Popen) sem alterar argumentos, retorno ou estado.",
+        "barrier emite STEP_WITNESS com as sondas declaradas e espera STEP_RELEASE; o supervisor executa o barrier_plan do caso (D2B-11) e recusa controle fora do plano.",
+        "thread.join espera, só lendo, o fim de um thread do SDK, achado pelo caminho de um objeto do caso ou pelo nome exato (thread_name); estouro do prazo é INVALID_CAPTURE. hook.wait e hook.count consultam eventos já registrados.",
+        "excepthook.install troca threading.excepthook por um registrador (thread, classe, str) que não imprime; excepthook.wait {count, timeout_s} espera até haver count registros (estouro é INVALID_CAPTURE); excepthook.snapshot devolve os registros. O snapshot só é decisivo depois de thread.join ou excepthook.wait declarados, porque o excepthook roda depois que Thread.run desempilha.",
+        "Seletor $executor-thread-of:<tarefa> em worker.parked: o único thread do executor padrão do loop cuja pilha contém o ponto de estacionamento enquanto a tarefa está pendente; zero ou mais de um é INVALID_CAPTURE.",
+        "Os ganchos seguem o sys.setprofile do CPython 3.12: return (arg None) também no unwind de função que levanta, e call/return a cada retomada de gerador; ocorrência (#k) conta esses eventos.",
+        "Tokens de ordem de E2B-04 (HOOK, STEP, CANCEL, API_*, WORKER, RAW_READ, COMMIT_REPLY, RELEASE_REPLY) são emitidos ou derivados na sequência única da unidade."
+      ],
+      "observes": "Estacionamento e despertar de consumidores, lock por thread, cursores e poda do roteador, thread em que callbacks rodam.",
+      "injects": "Nenhum dado; os ganchos de profile mudam o tempo de execução, e o crédito qualifica um agendamento instrumentado, como o SDKPY07.",
+      "privilege": "Nenhum: introspecção do próprio processo.",
+      "selftests_offline": [
+        "dois threads próprios numa Condition e numa Queue: estacionamento testemunhado, notify acorda o primeiro, notify_all acorda todos",
+        "contextmanager próprio com lock e contador: estacionamento na linha do with",
+        "gancho em código próprio: argumentos e retorno com checksum igual antes e depois",
+        "sonda numa property é recusada; sonda em slot de dataclass é aceita",
+        "gancho no return de função própria que levanta: evento emitido no unwind (arg None)",
+        "gancho em gerador próprio: call/return a cada retomada, com ocorrências contadas",
+        "thread próprio cujo alvo levanta depois de um evento de gancho: snapshot imediato pode sair vazio; depois de thread.join ou excepthook.wait sai com o registro",
+        "seletor $executor-thread-of com uma, nenhuma e duas candidatas (só a primeira é aceita)"
+      ],
+      "diag": {
+        "id": "DIAG-PY-BARRIER",
+        "own_code": "Código próprio no driver com o mesmo adapter e peer v2: workers estacionados em Condition e Queue próprias, round trip STEP_WITNESS/STEP_RELEASE com RELEASE_REPLY de um pedido segurado, ganchos em função própria que levanta e em gerador próprio, thread próprio que levanta lido por excepthook.wait.",
+        "pass": "Estacionamentos testemunhados antes da liberação, liberação depois do gatilho, ganchos sem efeito colateral e com unwind e retomadas registrados, excepthook com o registro depois da espera, sondas estáticas.",
+        "on_fail": "Para o sub-lote."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "2B-1": [
+          "2B-PY01A",
+          "2B-PY01B",
+          "2B-PY01C",
+          "2B-PY01D",
+          "2B-PY02A",
+          "2B-PY02B",
+          "2B-PY02K",
+          "2B-PY05X",
+          "2B-PY08X",
+          "2B-PY10X",
+          "2B-PY11A",
+          "2B-PY11B",
+          "2B-PY11C",
+          "2B-PY12A",
+          "2B-PY12B"
+        ],
+        "2B-2": [
+          "2B-PY13A",
+          "2B-PY13B",
+          "2B-PY13C",
+          "2B-PY13D",
+          "2B-PY13E",
+          "2B-PY14A",
+          "2B-PY14B",
+          "2B-PY17A",
+          "2B-PY17B",
+          "2B-PY18A",
+          "2B-PY18C",
+          "2B-PY18D"
+        ]
+      },
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "CAP-2B-CLOCK-RANDOM",
+      "fit_name": "controle determinístico de relógio e aleatório",
+      "delta": "D2B-05",
+      "contract": [
+        "shim.install target=openai_codex.retry troca os atributos de módulo random e time de openai_codex.retry por objetos shim: uniform(a, b) devolve a ou b conforme o roteiro do caso e registra (a, b, devolvido); sleep(s) registra s e retorna sem dormir (relógio virtual). Qualquer outro atributo do shim levanta (INVALID_CAPTURE).",
+        "shim.install target=openai_codex._goal troca o atributo time de openai_codex._goal por shim cujo monotonic() devolve os valores roteirizados em ordem e registra; roteiro esgotado levanta (INVALID_CAPTURE).",
+        "shim.remove restaura o objeto original (identidade conferida); os módulos random e time da stdlib e sys.modules não são tocados.",
+        "O crédito qualifica o comportamento do cliente com relógio e aleatório injetados; tempo real de sleep e espera de 30 s seguem não observados."
+      ],
+      "observes": "Argumentos exatos de uniform e sleep pela fórmula real de retry.py e o caminho de timeout do wait_for_start.",
+      "injects": "Valores de uniform e de monotonic roteirizados; sleep sem espera real.",
+      "privilege": "Nenhum: substituição de atributo de módulo no processo do driver.",
+      "selftests_offline": [
+        "módulo gêmeo próprio com import random, time: roteiro a/b, registro exato e restauração por identidade",
+        "random.uniform e time.sleep da stdlib intactos depois do remove",
+        "roteiro esgotado e atributo inesperado levantam"
+      ],
+      "diag": {
+        "id": "DIAG-PY-CLOCK",
+        "own_code": "Módulo gêmeo próprio (mesmo padrão de import e de chamada de retry.py e _goal.py), sem importar o SDK, dentro do driver em serviço.",
+        "pass": "Registros iguais aos roteiros, restauração por identidade, stdlib intacta.",
+        "on_fail": "Para o sub-lote 2B-2."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "2B-1": [],
+        "2B-2": ["2B-PY09A", "2B-PY09B", "2B-PY09C", "2B-PY09D", "2B-PY13C"]
+      },
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "CAP-2B-FAULT-CUT",
+      "fit_name": "injeção de falha por corte",
+      "delta": "D2B-06",
+      "contract": [
+        "fault.install em atributo de instância de um objeto do caso (CodexClient): call_through_then_raise chama o método original e depois levanta a exceção declarada; raise_before_call levanta sem chamar. Exceções de lista fechada: RuntimeError(mensagem) e KeyboardInterrupt(). fault.remove apaga o atributo de instância e a busca volta à classe.",
+        "GoalStream.new aceita fault em next_notification (raise_on_call N) no callable composto pelo driver.",
+        "O registrador de excepthook usado para observar o efeito dos faults pertence à CAP-2B-CONC-BARRIER (qualificado no DIAG-PY-BARRIER dos dois sub-lotes).",
+        "Falha por corte no fio continua sendo resposta de erro do peer v2 (sem código novo); o fault do adapter ignore_sigterm pertence a CAP-2B-PROC-WITNESS.",
+        "Cada disparo emite FAULT {alvo, chamada, contagem}; disparo fora do declarado é falha de captura."
+      ],
+      "observes": "Limpeza do SDK quando um passo de cleanup levanta e quando BaseException sai do pause.",
+      "injects": "Exceções declaradas em pontos declarados; o código do SDK não é alterado.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "classe própria: call-through, raise, contagem e remoção; método da classe intacto",
+        "callable de stream próprio com raise_on_call"
+      ],
+      "diag": {
+        "id": "DIAG-PY-FAULTCUT",
+        "own_code": "Objetos e threads próprios no driver em serviço, sem importar o SDK.",
+        "pass": "Disparos exatamente como declarados e remoção limpa.",
+        "on_fail": "Para o sub-lote 2B-2."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "2B-1": [],
+        "2B-2": ["2B-PY13E", "2B-PY14A", "2B-PY14B"]
+      },
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "CAP-2B-MODEL-ORACLE",
+      "fit_name": "oráculos Pydantic com fixtures de modelo",
+      "delta": "D2B-07",
+      "contract": [
+        "Passos model.validate {model, input} (Modelo.model_validate), model.construct {model, kwargs} (Modelo(**kwargs), o __init__ validador; nunca model_construct) e model.dump {of, by_alias, exclude_none, mode} sobre modelos de lista fechada de openai_codex.generated.v2_all (AskForApproval, Granular, ThreadGoalSetParams, ThreadStartParams, TurnStartParams, Turn) e _goal._GoalOperationState para $model.",
+        "response_model de request além de InitializeResponse só de lista fechada: ThreadGoalSetResponse, ThreadGoalClearResponse, GetAccountResponse, LoginAccountResponse, TurnStartResponse, ThreadReadResponse.",
+        "ValidationError registra classe, error_count e errors() com type, loc (lista) e msg (detalhe de CAP-PY-SDKCALLS-2B, usado aqui como oráculo).",
+        "Avisos de serialização da Pydantic (por exemplo PydanticSerializationUnexpectedValue de default str em campo enum, como itemsView 'full' e historyMode 'legacy') são capturados com warnings.catch_warnings(record=True) e registrados; nunca decidem o desfecho.",
+        "Comparação com referência de schema independente não entra no 2B: os schemas JSON do pin não são entradas desta unidade (fica OPEN no PY18)."
+      ],
+      "observes": "Validação, defaults, extra, union, root e dump reais da Pydantic admitida, pelo caminho do SDK e por passos diretos.",
+      "injects": "Fixtures de modelo declaradas no caso.",
+      "privilege": "Nenhum; nenhuma instalação nem rede (dependência já admitida e selada).",
+      "selftests_offline": [
+        "modelos próprios que espelham os padrões gerados (populate_by_name, alias, RootModel com Literal, extra='forbid', bool | None = False): registro fiel de dump e errors()",
+        "versões registradas iguais às da identity freeze"
+      ],
+      "diag": {
+        "id": "DIAG-PY-MODELORACLE",
+        "own_code": "Importa só pydantic da árvore selada (não openai_codex) e roda os passos model.* sobre modelos próprios em serviço.",
+        "pass": "Saídas registradas iguais às calculadas no próprio processo e versões iguais às da identity freeze.",
+        "on_fail": "Para o sub-lote 2B-2."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "2B-1": [],
+        "2B-2": [
+          "2B-PY09C",
+          "2B-PY13C",
+          "2B-PY14B",
+          "2B-PY18A",
+          "2B-PY18B",
+          "2B-PY18C",
+          "2B-PY18D"
+        ]
+      },
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "CAP-2B-PEER-LOGIN",
+      "fit_name": "peer v2 com login sintético",
+      "delta": "D2B-08",
+      "contract": [
+        "O peer v2 aceita regras para account/login/start e account/login/cancel e notificações account/login/completed.",
+        "Admissão do peer_script (antes do READY), regra única usada pela capacidade, pelo predicado peer.login_frames_synthetic e pelo validador: (1) todo valor que seja URL começa com https://login.invalid/; (2) nenhuma chave de FORBIDDEN_LOGIN_KEYS em qualquer profundidade; (3) uma regra de account/login/start só casa params (match.params ou match.params_subset) com type chatgpt ou chatgptDeviceCode. O valor 'apiKey' em result.type de uma resposta, sem campo de credencial, é permitido: é como o caso 2B-PY17A alcança o ramo de variante inesperada. Violação é falha de captura.",
+        "O peer emite LOGIN_FRAME {method, login_id_sha256} por quadro de login; nada é aberto nem resolvido: o SDK só guarda a auth_url.",
+        "Sem login real, credencial, rede ou sessão; o caminho login_api_key não é exercido."
+      ],
+      "observes": "Ordem início/conclusão, fila pendente, registro e desregistro, cancel com filas separadas.",
+      "injects": "Respostas e notificações de login sintéticas.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "admissão aceita o peer_script congelado do 2B-PY17A (inclusive result.type 'apiKey') e o do 2B-PY17B, do 2B-PY18C e do 2B2-CTRL01",
+        "admissão recusa: chave apiKey ou accessToken em qualquer profundidade, URL fora de https://login.invalid/, e regra de account/login/start que case params com type apiKey ou chatgptAuthTokens",
+        "LOGIN_FRAME emitido por quadro"
+      ],
+      "diag": {
+        "id": "DIAG-PY-LOGIN",
+        "own_code": "Cliente próprio, sem SDK, envia account/login/start e account/login/cancel ao peer v2 com quadros de login antes e depois da resposta.",
+        "pass": "Quadros escritos como declarados, LOGIN_FRAME por quadro, nenhum UNSCRIPTED.",
+        "on_fail": "Para o sub-lote 2B-2."
+      },
+      "t3": "Não exige T3: login sintético do cliente SDK, sem identidade, credencial ou sessão do CVG; login real seria T4 (fora).",
+      "used_by": {
+        "2B-1": [],
+        "2B-2": ["2B-PY17A", "2B-PY17B", "2B-PY18C", "2B2-CTRL01"]
+      },
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "CAP-2B-PEER-BEFORE-REPLY",
+      "fit_name": "peer v2 com notificação antes da resposta",
+      "delta": "D2B-09",
+      "contract": [
+        "Quadros before_reply de uma regra são enfileirados e escritos antes dos bytes da resposta; com hold, são escritos no recebimento e a resposta fica segurada.",
+        "O peer emite BEFORE_REPLY_WRITTEN {rule, frames, bytes} depois de enfileirar os quadros e antes de enfileirar a resposta; o ledger do adapter (FORWARD_COMMIT) prova a ordem de entrega ao SDK.",
+        "Sanidade peer.before_reply_order_witnessed: a ordem de commit ao SDK é quadros antes da resposta."
+      ],
+      "observes": "Eventos adiantados retidos pelo pending_turn, notificações de goal antes do set, conclusão de login antes da resposta do start, rollover de turn antes da resposta do interrupt.",
+      "injects": "Quadros declarados antes da resposta.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "plano com before_reply e com before_reply + hold: ordem de escrita e marco",
+        "ledger do adapter rejeita ordem invertida (controle negativo)"
+      ],
+      "diag": {
+        "id": "DIAG-PY-BEFOREREPLY",
+        "own_code": "Cliente próprio, sem SDK, pede duas regras (uma com hold) e lê linhas na ordem.",
+        "pass": "Notificações lidas antes da resposta, BEFORE_REPLY_WRITTEN antes da resposta, ledger coerente.",
+        "on_fail": "Para o sub-lote (as duas unidades usam a capacidade, inclusive o CONTROL)."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "2B-1": ["2B-PY11A", "2B-PY11B", "2B-PY12A", "2B1-CTRL01"],
+        "2B-2": [
+          "2B-PY13A",
+          "2B-PY13C",
+          "2B-PY13D",
+          "2B-PY13E",
+          "2B-PY14B",
+          "2B-PY17A",
+          "2B2-CTRL01"
+        ]
+      },
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "CAP-2B-PROC-WITNESS",
+      "fit_name": "testemunha de processo do adapter Python",
+      "delta": "D2B-10",
+      "contract": [
+        "O supervisor (fora do sandbox, mesmo usuário) lê sem privilégio /proc/<pid>/cmdline, /proc/<pid>/environ e o link /proc/<pid>/cwd do adapter no ponto de barreira declarado, sempre depois do BEGIN do adapter (portanto depois do execv do lançador; pid do adapter pelo quadro e pela cgroup), e emite PROC_WITNESS; leitura antes do BEGIN é falha de captura (proc.witness_recorded); o adapter Python relata no BEGIN sys.argv[1:], os.getcwd() e o env; o driver retém o Popen do SDK (proc.retain) e lê args e returncode por sonda.",
+        "Lançador executável /profile/adapter-python-exec (modo 0555, shebang #!/runtime/python -IS) faz execv de ('/runtime/python', '-I', '-S', '/profile/adapter-python.py') com sys.argv[1:] preservado; entra no source freeze. Nenhum bind mount novo.",
+        "Fault do adapter ignore_sigterm, aceito só onde case_input.adapter.fault declara: no SIGTERM emite FAULT sigterm_ignored e segue o relay; só termina por SIGKILL.",
+        "O adapter não recusa env ou cwd diferentes do sandbox; ele os relata.",
+        "Formas de captura, só com testemunhas do SO e do canal: CLIENT_TERMINATED_SIGTERM (SIGNAL SIGTERM do adapter, END complete=false dentro da janela, peer terminado pelo sinal repassado, PID ausente ou zumbi com exit_code de SIGTERM) e CLIENT_KILLED_SIGKILL (FAULT sigterm_ignored, nenhum END, PID zumbi com exit_code de SIGKILL ou ausente depois do reap). O returncode do Popen é fato do cliente, julgado por probe.values_exact e proc.termination_exact, nunca pela forma. Só valem onde o caso declara.",
+        "Zero spawn em barreira declarada e lista de processos da cgroup (nenhum processo além de driver, adapter e peer) por varredura do supervisor."
+      ],
+      "observes": "argv, env, cwd e término do processo filho do SDK Python, inclusive o ramo kill sem wait.",
+      "injects": "Só o fault ignore_sigterm, no slot condicional.",
+      "privilege": "Nenhum esperado (leitura de /proc do mesmo usuário, como o env do adapter TS no 2A). Se a leitura exigir CAP_SYS_PTRACE, os slots 2B-PY02A, 2B-PY02B e 2B-PY02K não são usados e vale a pergunta T3 contingente.",
+      "selftests_offline": [
+        "lançador: argv da cauda preservado no execv",
+        "adapter com fault: SIGTERM vira FAULT e o relay continua",
+        "classificador das formas CLIENT_TERMINATED_SIGTERM e CLIENT_KILLED_SIGKILL com controles negativos (SIGTERM sem SIGNAL, END presente com SIGKILL); returncode do Popen não entra no classificador",
+        "leitura de /proc antes do BEGIN do adapter vira falha de captura"
+      ],
+      "diag": [
+        {
+          "id": "DIAG-PY-CLOSETERM",
+          "own_code": "Cliente próprio repete a sequência do close do SDK (stdin.close, terminate, wait(2)) contra o adapter com peer v2.",
+          "pass": "Forma CLIENT_TERMINATED_SIGTERM classificada, returncode -15, integridade de prefixo.",
+          "on_fail": "Para o sub-lote 2B-1 (2B-PY01A, 2B-PY01D, 2B-PY02A e 2B-PY02B dependem)."
+        },
+        {
+          "id": "DIAG-PY-PROCWITNESS",
+          "own_code": "Cliente próprio lança o adapter pelo lançador executável com env acrescido e cwd /work/tmp, e pela tupla LAUNCH; a barreira PROC_WITNESS vem imediatamente depois do Popen, antes de qualquer I/O, como no 2B-PY02B.",
+          "pass": "O supervisor espera o BEGIN do adapter, lê cmdline, environ e cwd sem privilégio, e eles são iguais aos esperados nas duas formas de lançamento (forma pós-execv no lançador); controle negativo: leitura forçada antes do BEGIN é registrada como falha de captura.",
+          "on_fail": "Só desliga 2B-PY02A, 2B-PY02B e 2B-PY02K e ativa a pergunta T3 contingente; o resto segue."
+        },
+        {
+          "id": "DIAG-PY-KILLWAIT",
+          "own_code": "Cliente próprio contra o adapter com ignore_sigterm: terminate, wait(2) que estoura, kill, returncode lido logo depois e reap explícito.",
+          "pass": "FAULT sigterm_ignored, TimeoutExpired, returncode None logo depois do kill, SIGKILL testemunhado, forma CLIENT_KILLED_SIGKILL.",
+          "on_fail": "Só desliga 2B-PY02K; PY02.B08 segue OPEN."
+        }
+      ],
+      "t3": "Não exige T3 enquanto a leitura de /proc for sem privilégio; ver t3-assessment.json.",
+      "used_by": {
+        "2B-1": [
+          "2B-PY01A",
+          "2B-PY01B",
+          "2B-PY01C",
+          "2B-PY01D",
+          "2B-PY02A",
+          "2B-PY02B",
+          "2B-PY02K"
+        ],
+        "2B-2": []
+      },
+      "sub_lots": ["2B-1"]
+    }
+  ],
+  "sdkcalls_extension": {
+    "id": "CAP-PY-SDKCALLS-2B",
+    "extends": "CAP-PY-SDKCALLS (spec2a/capture-contract.json)",
+    "delta": "D2B-02",
+    "vocabulary": {
+      "construction": [
+        "CodexClient.new",
+        "AsyncCodexClient.new",
+        "Codex.new",
+        "AsyncCodex.new",
+        "Thread.new",
+        "AsyncThread.new",
+        "TurnHandle.new",
+        "ChatgptLoginHandle.new",
+        "GoalStream.new"
+      ],
+      "calls": "call {on, method, args, kwargs, await, as}: on é nome do caso ou caminho com pontos a partir dele; method de lista fechada por classe (a do caso); valores com $LAUNCH, $model, $enum, $ref.",
+      "streams": [
+        "stream.next",
+        "astream.next",
+        "astream.aclose",
+        "gstream.next",
+        "gstream.close",
+        "agstream.next"
+      ],
+      "other": [
+        "attr",
+        "proc.retain",
+        "clock.mark",
+        "driver.reap",
+        "thread.join",
+        "epilogue"
+      ],
+      "result_summary_v2": "dump by_alias mode json para modelos; NOTE {method, payload_class, fields} para notificações; {turn_handle.id, thread_id} para handles de turn; {class, login_id, ...} para handles de login; {state_class, turn_id} para start_goal_operation; {class} para construtores; None para retorno vazio.",
+      "error_detail_v2": "classe qualificada, str, code e message_attr quando existem, data, cause (classe e str), mro (nomes qualificados), e para ValidationError error_count e errors() (type, loc, msg); token de identidade de objeto com referência retida até o CALLS_DONE.",
+      "result_matching": "E2B-11: resumos do vocabulário (handles, start_goal_operation, construtores, listas de excepthook) por jeq exato; modelo Pydantic com chaves congeladas que contêm ponto por subconjunto de caminhos de alias sobre o dump by_alias json; senão jeq do dump completo; NOTE com fields por subconjunto e dump por jeq completo.",
+      "dependency_identity": "O driver registra no BEGIN pydantic.VERSION e pydantic_core.__version__ da árvore selada; diferente de 2.13.4/2.46.4 é INVALID_CAPTURE (nunca troca silenciosa de dependência). Vale para todo slot Python do 2B.",
+      "serialization_warnings": "Avisos emitidos pelos dumps de resumo são capturados e registrados; nunca decidem."
+    }
+  },
+  "note": "Os oito nomes do batch-2b-fit-assessment.json mapeiam 1:1 para estas capacidades; CAP-PY-SDKCALLS-2B é extensão do vocabulário existente, não capacidade nova.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

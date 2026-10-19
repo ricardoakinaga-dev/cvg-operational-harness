@@ -56,6 +56,12 @@
 - Alinhamento com MAIN-CONSOLIDATION-20261018 (Codex, 18/10): a consolidação é o integrador único rumo ao main. Ela já contém tudo que esta sessão commitou até `834a37a1`, a integração da fundação Claude100 (`951c22ad`) e a portabilidade dos testes (`b8eab238`). Esta sessão não promove mais nada na branch arquivada; C100-FND-ROOT-INTEGRATION-20261018 e ROOT-TEST-PORTABILITY-20261018 passam à consolidação. Pendências conhecidas para a consolidação: 70 testes pendentes condicionados a recursos PARE217/SPEC0224 fora do skip-catalog; 8 testes de capacidade lentos sob instrumentação de cobertura; pinos git/tar/strace B6 recusados num runner limpo; `reply-differential` grava evidência no checkout.
 - Seguem com esta sessão: (1) SPEC0238 r4, a partir de `cda464ea`, candidata própria em `/mnt/ia`; o código da captura entra no main por PR depois de revisão. (2) HISO005-P2-BUILD-0241, aprovado pelo usuário (`6e9323ef`), em candidata a partir de `af63ba60`, em `/mnt/dados/cvg-work/cvg-hiso005-build0241-20261018`, com runtime em `/mnt/dados/cvg-work/cvg-hiso005-build0241-runtime-20261018`, PG `cvg-hiso005-build0241-pg` em 127.0.0.1:56260, API 3446 e web 4446, todos conferidos livres antes do uso.
 - Espaço: removidas as referências regeneráveis `compiled-reference-r6` e `installed-reference-r5` do runtime 0240 (5,7 GB; hashes na evidência). Os diretórios `legacy*` ficaram.
+- Estado em 19/10, depois da consolidação. Tudo vai à `main` por PR montado em worktree detached sob `/mnt/dados/cvg-work/`, e a branch temporária é apagada depois do merge. Histórico local preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.
+  - Já na `main`: captura r5 da SPEC0238 (PR #5). Em CI: BUILD0241 + T2 da receita (PR #6). Este PR documental leva as evidências e as decisões desta sessão.
+  - Em andamento, com claims ativos:
+    - `HISO005-P2-BUILD-0243` e depois `-0242`: candidata `/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019`; PG `cvg-hiso005-build0242-pg` 56262, API 3448, web 4448; evidência `HISO005-P2-BUILD-0243-20261019/` e `-0242-20261019/`.
+    - `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`: só documental, `g02/sdk-batch-2b2-binding/`.
+  - Concluídas no Codex100: ligação v3 (25 contratos observados, 19 abertos), lote 2B-1 (CONTROL em MISMATCH, 15/15 PASS) e ligação v4 (29 observados, 15 abertos, com a errata do v3 aplicada) e lote 2B-2 (CONTROL em MISMATCH, 17/17 PASS).
 
 ### HISO005-P2-BUILD-0240-20261018 — SPEC0240 aprovada (Codex) (ATIVO BUILD T3 LOCAL)
 

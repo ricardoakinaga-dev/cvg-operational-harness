@@ -1,0 +1,177 @@
+```json
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T07:35:00-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "ca6510d4ee0c0ecec09bd01807f49e704be45fa82b76a38875d87eaef8e13d7f",
+  "subject_hash_check": {
+    "before": "ok: os 11 arquivos batem em sha256 e bytes com o freeze, e o sha do review-freeze-r1.json é ca6510d4",
+    "after": "ok: os 11 arquivos continuam iguais; o freeze, o v2 (3136dd27) e o gaps v2 (fdf7ba8f) não mudaram; a pasta só ganhou review-r1/brief.md"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 2 P2, 8 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "TS05 / braço TS05.B04",
+      "title": "TS05.B04 fecha como '(erro antes do spawn com cleanup)' sem que a criação ou a remoção do schema tenham sido testemunhadas",
+      "evidence": [
+        "coverage-observed-v3.json:185-195 (#/arms_closed_v3, contract TS05) e :1171-1200 (#/rows[source_contract=TS05])",
+        "../sdk-batch-2ac-admission/cases/2A-TS06R-af5b4d85d5e6/acceptance.json#/predicates[id=tmp.inotify_informational]/detail/status = NOT_OBSERVED; #/predicates[id=tmp.driver_listing_after_settle]/detail/argv_schema_dir_informational = null",
+        "../sdk-batch-2ac-admission/inputs/spec-2ac/cases-2a-cont.json#/cases[id=2A-TS06R]/expected/inotify_informational: 'a criação não tem testemunha decisiva (sem filho)'",
+        "../../g01/sdk-open-contracts/typescript/contracts.json#/contracts[id=TS05]/branches[id=TS05.B04]/expectation: '... thread já está dentro do try de iteração e chama cleanup'",
+        "../sdk-batch-2ac-admission/state.json#/carry_over_next_freeze[finding=R1-F11]: falta abrir a janela inotify nos passos de erro com spawns=0"
+      ],
+      "detail": "No passo 3, o 2A-TS06R observou três coisas: o erro 'Codex config override keys must be non-empty strings', 0 spawn (ZERO_SPAWN) e nenhum diretório codex-output-schema-* em /work/tmp depois do settle. Nada testemunhou que o schema foi criado antes do try (thread.ts:74) nem que foi removido no finally (thread.ts:113-114): sem filho não há argv com o caminho, e o inotify ficou NOT_OBSERVED. Não sobrar diretório é compatível com 'criado e removido' e também com 'nunca criado'. Mesmo assim, o v3 fecha o braço com o rótulo '(erro antes do spawn com cleanup)', match exact, sem nenhuma qualificação. O resto aberto do TS05 também não registra a testemunha que falta. No TS10.B04 o v3 qualifica corretamente uma inferência do mesmo tipo (origem do EPIPE inferida); aqui não qualificou, e o fechamento afirma mais do que o caso observou.",
+      "required_action": "Qualificar a observação do 2A-TS06R na linha TS05 e o fechamento do TS05.B04, tanto na linha quanto em #/arms_closed_v3. O fato do cliente é: erro antes do spawn, 0 spawn e nenhum diretório de schema depois do settle. A criação e o cleanup são inferidos da fonte (thread.ts:74 e 113-114) e não foram testemunhados (inotify NOT_OBSERVED). Registrar no resto aberto do TS05 a testemunha da criação e remoção do schema no passo de erro, com destino: segunda continuação, janela inotify nos passos com spawns=0 (R1-F11). Alternativa: manter OPEN a parte 'cleanup' do braço."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "coverage-observed-v3.json#/status_vocabulary",
+      "title": "O status_vocabulary copiado do v2 contradiz as quatro linhas promovidas pela replacement_rule",
+      "evidence": [
+        "coverage-observed-v3.json:14-17 (#/status_vocabulary)",
+        "coverage-observed-v3.json#/rows[source_contract=TS03|TS05|TS06|TS07]/status = OBSERVED_CLIENT_PARTIAL",
+        "../sdk-batch-2a-binding/coverage-observed-v2.json#/excluded_cases_2a: 2A-TS03, 2A-TS06 e 2A-TS07 em MISMATCH_NOT_ATTRIBUTABLE_TO_CLIENT; status_v1 OPEN nessas linhas",
+        "build-binding-2ac.py.txt:207 (\"status_vocabulary\": v2[\"status_vocabulary\"])",
+        "../sdk-batch-2a-binding/review-r1/review.json#/findings[id=R1-F01] (P2 do mesmo tipo no v2)"
+      ],
+      "detail": "Pelo vocabulário, OBSERVED_CLIENT_PARTIAL vale para contrato já observado no v1 ou para contrato 'cujos casos 2A da linha do plano foram todos consumidos'. OPEN_REQUIRED_FUTURE_PROFILE vale para 'contrato não observado no v1 com algum caso 2A da linha não consumível'. TS03, TS05, TS06 e TS07 não eram observados no v1 e têm caso 2A não consumível (2A-TS03, 2A-TS06 e 2A-TS07 seguem MISMATCH_NOT_ATTRIBUTABLE_TO_CLIENT). Pelo vocabulário seriam OPEN, mas o v3 os marca OBSERVED pela replacement_rule. A regra está em binding_rule[2], mas a definição dos status, que é o que o leitor do mapa usa, não foi atualizada. Ela ainda cita excluded_cases_2a, campo que no v3 se chama excluded_cases_v3. O status das linhas está certo; é a definição que contradiz o mapa.",
+      "required_action": "Atualizar o status_vocabulary do v3. OBSERVED_CLIENT_PARTIAL passa a valer também quando todo caso 2A não consumível da linha foi substituído por caso R consumido (replacement_rule de coverage-plan-2a-cont.json) e todos os casos da continuação da linha foram consumidos. OPEN_REQUIRED_FUTURE_PROFILE fica só para caso 2A não consumível sem substituto R consumido. Trocar excluded_cases_2a por excluded_cases_v3."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "TS12.B01 e TS10.B04 / arms_closed_v3",
+      "title": "Fechamentos de TS12.B01 e TS10.B04 sem qualificação no nível do braço; o término do filho não aparece no resto aberto",
+      "evidence": [
+        "coverage-observed-v3.json:314-337 (#/arms_closed_v3, TS10.B04 e TS12.B01), :1703-1715 e :1809-1820",
+        "../sdk-batch-2a-binding/coverage-observed-v2.json#/rows[source_contract=TS12]/excluded_cases_2a[0]/bind_rule: 'braço TS12.B01 (aborto e término do filho) OPEN'",
+        "../sdk-batch-2ac-admission/cases/2A-TS12R-d453542f08a5/acceptance.json#/predicates[id=abort.os_witness_recorded_r4]/detail: adapter_pid e adapter_signal NOT_WITNESSED, in_open_in_window 1",
+        "coverage-observed-v3.json#/remaining_open_by_contract/TS12"
+      ],
+      "detail": "As qualificações estão corretas nas observações das linhas TS10 e TS12, em binding_rule[4] e no resumo da GAP-TS-LANGUAGE: só fato do cliente, término NOT_WITNESSED, injeção de falha do harness e origem do EPIPE inferida. Já as entradas de arms_closed_v3, na linha e no topo, trazem só caso e match. No v2 o braço aberto foi descrito como '(aborto e término do filho)'. No v3, a parte do término não entra no resto aberto do TS12 (o texto do plano não a cita) e só fica coberta pela fronteira genérica da lacuna. Não há crédito indevido, mas o fechamento lido isoladamente parece mais amplo do que o observado.",
+      "required_action": "Pôr um campo de qualificação nas entradas de arms_closed_v3 de TS12.B01, TS10.B04 e TS05.B04 (ver R1-F01). Registrar no resto do TS12 que o término do filho pré-abortado segue NOT_WITNESSED, com destino: testemunha privilegiada condicionada à pergunta T3 contingente, ou perfil de plataforma."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "TS03, TS07, TS10 / rótulos fechados e restos",
+      "title": "Rótulos sem qualificador fecham o ramo inteiro enquanto partes dele ficam abertas ou somem do resto",
+      "evidence": [
+        "coverage-observed-v3.json:146 (TS03.B03 fechado) contra #/remaining_open_by_contract/TS03 ('TS03.B03 falha de mkdtemp')",
+        "coverage-observed-v3.json:283 (TS07.B03 fechado) e #/rows[source_contract=TS07]/remaining_after_continuation",
+        "../../g01/sdk-open-contracts/typescript/contracts.json: TS03.B03 'mkdtemp resolve / rejeita'; TS07.B03 'chave vazia lança, filho undefined pula'; TS07.B04 'undefined/function/bigint/symbol'; TS10.B04 'Falha síncrona ocorre antes de try'",
+        "../sdk-batch-2ac-admission/cases/2A-TS07R-d6f472070f07/acceptance.json#/predicates[id=argv.exact_vector]: s com LF escapado já observado",
+        "../sdk-batch-2a-binding/coverage-observed-v2.json#/rows[source_contract=TS10]/remaining_after_2a: 'faults de write/end/kill'"
+      ],
+      "detail": "Os rótulos vêm do plano e o casamento por identificador está certo, mas há cinco perdas de precisão. (1) TS03.B03 aparece fechado por inteiro, mas só o lado 'mkdtemp resolve' foi observado, e o resto lista 'TS03.B03 falha de mkdtemp'. (2) TS07.B03 fecha sem que o filho undefined em objeto inline tenha sido observado, e isso não está no resto. (3) 'function/symbol' do TS07.B04 não foi observado e também não está no resto. (4) A falha síncrona de write/end antes do try do TS10.B04 (resíduo 'faults de write/end/kill' do v2) saiu do resto do v3. (5) O resto do TS07 diz 'strings com caracteres de controle', embora o 2A-TS07R já tenha observado LF. Como remaining_open_scope_exhaustive=false, nada disso é afirmação falsa, mas o leitor perde partes que seguem abertas.",
+      "required_action": "Qualificar o rótulo fechado quando só um lado do ramo foi observado (ex.: 'TS03.B03 (mkdtemp resolve)'). Completar o resto de cada linha com as partes não observadas acima, sem mudar status nem contagens. Precisar 'caracteres de controle' (os outros, além de LF)."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "validate-binding-2ac.mjs.txt / validation.json",
+      "title": "O validador não confere tudo o que o cabeçalho promete; 13 mutações feitas em memória passam com 0 erros",
+      "evidence": [
+        "validate-binding-2ac.mjs.txt:3-4: promete recalcular braços fechados, sha dos acceptance.json citados, lacunas e projeção",
+        "validate-binding-2ac.mjs.txt:64-75: compara só o rótulo do braço; confere o sha do arquivo apontado sem ligá-lo ao dir da adjudicação",
+        "validate-binding-2ac.mjs.txt:83, 87-91, 97-98: braços do topo só por contagem; lacunas sem o summary; projeção sem as linhas e sem a variante",
+        "validate-binding-2ac.mjs.txt:111: o controle 'braço fechado removido' na verdade acrescenta um braço aberto"
+      ],
+      "detail": "Rodei o validador em memória (stdin, caminhos absolutos, gravação trocada por stdout) e ele reproduz PASS, 0 erros e 12/12 controles. Estas 13 mutações passam com 0 erros: ponteiro do 2A-TS03R trocado pelo acceptance.json do 2A-TS06R, com o sha certo desse arquivo; closed_by vazio; match exact trocado por same_arm_id; qualificação NOT_WITNESSED do 2A-TS12R apagada; remaining_after_continuation e remaining_open_by_contract apagados; braço trocado em arms_closed_v3 do topo; variante sem PROCWITNESS alterada; summary das lacunas alterado; status_changes esvaziado; still_not_consumed_2a esvaziado; braço extra em analytic_branch_arms_observed; capture_form e contagem de predicados alterados; rows_becoming_observed alterado. O conteúdo atual está certo (conferi tudo por fora), mas o validador não protege esses pontos.",
+      "required_action": "Acrescentar checagens e controles negativos para: ponteiro do acceptance igual ao dir da adjudicação; closed_by e match recalculados; topo de arms_closed_v3 igual à união das linhas; restos iguais ao plano; qualificações obrigatórias (2A-TS10E, 2A-TS12R e, depois do R1-F01, TS05.B04); capture_form e predicados iguais aos do acceptance; summary das lacunas; linhas e variante da projeção; status_changes, still_not_consumed_2a e vocabulário contra as linhas (R1-F02). Corrigir o nome do controle 'braço fechado removido'."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "proveniência dos bytes congelados",
+      "title": "Os bytes congelados não são a saída dos scripts registrados: houve reformatação sem registro",
+      "evidence": [
+        "build-binding-2ac.py.txt:312 (json.dumps com indent=2)",
+        "coverage-observed-v3.json#/built_at = 2026-10-19T10:19:57Z, mas o mtime é 07:21:24-03:00 (10:21:24Z)",
+        "gaps-review-v3.json e state.json com arrays curtos numa só linha (ex.: gaps-review-v3.json#/rows[id=GAP-GENERATED]/contracts)",
+        "state.json:107 (#/scripts lista só os quatro scripts)"
+      ],
+      "detail": "Reconstruí em memória os três documentos com build-binding-2ac.py.txt sobre as entradas atuais. O conteúdo é igual ao congelado (fora built_at), mas json.dumps(indent=2) daria 100496, 11669 e 2551 bytes, contra 100124, 11408 e 2538 congelados. Os arrays curtos numa só linha indicam um formatador rodado depois do build e depois do close (state.json também foi formatado). Esse passo não está em state.json#/scripts nem em outro registro, então rodar os scripts não reproduz os sha do freeze.",
+      "required_action": "Registrar o formatador em state.json (ferramenta, versão, arquivos e ordem em relação ao validador e ao close), ou fazer os scripts gravarem direto no formato final."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "verify-inputs-2ac.py.txt / input-verification.json",
+      "title": "Passo 0 com commits fixos no código, e a decisão do Lead conferida só pelo valor do campo",
+      "evidence": [
+        "verify-inputs-2ac.py.txt:97 e :109 (f65f43e5 e 1fb7e884 fixos)",
+        "verify-inputs-2ac.py.txt:124-125 (lead-decision-r2-f01.json aceito pelo campo decision, sem sha)",
+        "next-task.json:13-16 (o sha fce2e1e8 da decisão só aparece no fechamento)"
+      ],
+      "detail": "Para a admissão, o passo 0 faz o que diz: lê o commit do commit-receipt. Refiz por fora as três comparações por blob (521, 39 e 25 arquivos, 0 diferenças). Porém, os commits da spec da continuação e do v2 estão fixos no código, sem origem registrada. Além disso, o lead-decision-r2-f01.json é um arquivo posterior ao fechamento da spec 2B e não está versionado na main; o passo 0 o aceita pelo valor do campo decision, sem conferir sha nem blob.",
+      "required_action": "Ler os commits de origem de um registro de cada unidade (state.json ou commit receipt) e conferir no próprio passo 0 o sha do lead-decision-r2-f01.json."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "state.json#/note",
+      "title": "A nota cita Docker para o gitleaks, mas nenhum arquivo registra varredura nesta unidade",
+      "evidence": [
+        "state.json:121",
+        "close-binding-2ac.py.txt:70",
+        "para comparar: ../sdk-source-batch-2b-spec/state.json:475, onde o resultado do gitleaks está registrado"
+      ],
+      "detail": "A nota diz 'Sem ... Docker (exceto o gitleaks)', mas nenhum arquivo do freeze registra uma varredura gitleaks (versão, escopo, resultado). Ou o Docker rodou sem registro numa unidade T1 documental, ou a nota é texto herdado.",
+      "required_action": "Registrar a varredura (versão, cópia varrida, configuração e resultado) ou tirar a exceção da nota."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "projection-2b-on-v3.json",
+      "title": "A variante sem o DIAG-PY-PROCWITNESS traz só contagens, sem a projeção das lacunas",
+      "evidence": [
+        "projection-2b-on-v3.json:55-66 (#/variant_procwitness_not_admitted)"
+      ],
+      "detail": "As contagens 28/16 e 32/12 conferem: as três vagas primárias do PY02 dependem do PROCWITNESS. Faltam as lacunas da variante: GAP-PY-API fica em 9/13 depois do 2B-1 e 12/13 depois do 2B-2, e GAP-PLATFORM-PACKAGING fica em 0/12 nos dois cenários. As demais lacunas são iguais à projeção principal.",
+      "required_action": "Acrescentar as lacunas à variante. Se ajudar, anotar que a falha só do DIAG-PY-KILLWAIT não muda nenhum status."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P3",
+      "area": "next-task.json",
+      "title": "'R2-F01' designa dois achados diferentes, e a decisão do Lead aparece só como ponteiro",
+      "evidence": [
+        "next-task.json:13-16 (lead_decision_r2_f01: R2-F01 da spec 2B, contagem de ganchos por (id, event))",
+        "next-task.json:30 (R2-F01 da admissão da continuação: autotestes do driver)",
+        "next-task.json:36 ('com R2-F01 fechado')",
+        "next-task.json:33 (carry_over_note)",
+        "../sdk-source-batch-2b-spec/lead-decision-r2-f01.json#/conditions; ../sdk-source-batch-2b-spec/next-task.json#/precondition"
+      ],
+      "detail": "O next-task é coerente com o 2B: a definição está ancorada pelo sha 3ad60eb6 e a decisão pelo sha fce2e1e8; os 10 itens de carry-over são iguais a state.json#/carry_over_next_freeze da admissão; not_authorized_now é igual ao do 2B. Há três problemas. (1) O mesmo identificador R2-F01 serve para o achado da spec 2B (contagem por (id, event), decisão ACCEPT_BINDING_RULE) e para o da admissão da continuação (autotestes do driver), então 'com R2-F01 fechado' em after_this fica ambíguo. (2) A decisão do Lead não é repetida: ACCEPT_BINDING_RULE, com autoteste positivo e negativo no avaliador do 2B-1, aprovação explícita pela revisão da IMPLEMENT, e o 2B-2 só depois disso. (3) O carry_over_note manda o freeze do 2B-1 aplicar os 10 itens junto com os D2B, sem pedir a reconferência de conflito que a precondição da spec 2B exige quando o freeze r4 muda.",
+      "required_action": "Prefixar os identificadores pela origem (ex.: 2B-SPEC/R2-F01 e 2AC-ADM/R2-F01). Copiar para o next-task a decisão do Lead e as duas condições. Acrescentar ao primeiro passo do 2B-1 a reconferência de que cada D2B se aplica sem conflito com os 10 itens do carry-over."
+    }
+  ],
+  "checks_run": [
+    "Pasta revisada: /home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-binding. Conferi sha256 e bytes dos 11 arquivos do freeze antes e depois (iguais) e o sha do review-freeze-r1.json (ca6510d4).",
+    "O v2 (3136dd27) e o gaps v2 (fdf7ba8f) não mudaram; as 12 sources do v3 têm sha certo.",
+    "Consumo: bound_cases_continuation é igual a adjudication-r1.json#/bind_consumes_only (8 casos) e o 2AC-CTRL01 fica fora das linhas. Em cada observação, final_reading, attribution, client_observation, capture_reading, offline_outcome, regra e a primeira qualificação são iguais à adjudicação. As 9 referências (8 documentos distintos) apontam para o dir da adjudicação e têm o sha do arquivo. capture_form, número de predicados e failed_predicates são iguais aos dos acceptance.json.",
+    "Status recomputado linha a linha: só TS03, TS05, TS06 e TS07 mudam (replacement_rule); contagem 25/19; status_v2 igual ao v2 nas 44 linhas; nenhuma linha fora do plano tem observação ou braço fechado.",
+    "Braços: os 14 OPEN do v2, os 14 de arms_targeted_from_v2_open do plano e os 14 fechados no v3 coincidem. Recalculei closed_by e match a partir dos branches_targeted dos casos consumidos (todos iguais); o topo é a união das linhas; arms_open_explicit_v3 está vazio. Li cada acceptance.json contra o texto dos ramos TS03, TS05, TS06, TS07, TS08, TS10 e TS12 em g01 typescript/contracts.json.",
+    "Restos: remaining_after_continuation é igual ao remaining_after do plano nas 7 linhas. Nas linhas fora do plano, o resíduo do v2 só troca o destino (SOURCE_BATCH_2A_CONTINUATION por SECOND_2A_CONTINUATION), com o mesmo texto. O 2A-TS12 está em still_not_consumed_2a e em excluded_cases_v3. A errata E7 é igual a errata-r1.json#/rows[id=E7]/read_as.",
+    "Lacunas: contratos, observados v2/v3, abertos e summary recalculados a partir dos status do v3; as 6 seguem OPEN, com justificativa; as fronteiras restantes são iguais às do v2.",
+    "Projeção recalculada com coverage-plan-2b.json (115e257d) e cases-2b-1/2: 29/15 e 33/11, variante 28/16 e 32/12, lacunas 10/13, 8/11, 3/4, 1/3, 15/15 e 1/12 depois do 2B-1, e 13/13, 11/11, 4/4, 1/3, 15/15 e 1/12 depois do 2B-2. A regra é igual à status_rule do plano 2B e confirma o on_continuation_projection (33/11).",
+    "next-task: sha da definição 2B (3ad60eb6) e da decisão do Lead (fce2e1e8) conferidos; carry-over igual aos 10 itens da admissão; not_authorized_now igual ao do 2B; precondição do 2B-1 conferida contra o state da admissão.",
+    "Validador executado em memória (Node v22.23.2, script por stdin, caminhos absolutos, gravação trocada por stdout, cwd fora do repositório): PASS, 0 erros, 12/12 controles. Mais 13 mutações em memória, todas aceitas (R1-F05).",
+    "build-binding-2ac.py.txt executado em memória (python3 -I por stdin, gravação trocada por comparação): conteúdo igual ao congelado fora built_at; bytes diferentes (R1-F06).",
+    "Passo 0 refeito por fora com git somente leitura (ls-tree e hash-object sem -w): 23bc1d10 com 521 arquivos, f65f43e5 com 39, 1fb7e884 com 25, 0 diferenças.",
+    "Limites da unidade: functional_receipts 0 e parity_credit 0 em todos os documentos; whole_requirement_covered false e functional_receipt null nas 44 linhas."
+  ],
+  "limits": "Não reexecutei serviço, SDK, compilador nem Codex CLI. Tomei como registrados os acceptance.json, a adjudicação (R2 APPROVE) e a leitura do IN_OPEN como testemunha da existência do filho; não reavaliei a admissão. Não criei arquivos: as sondas foram comandos inline (python3 -I com -c ou stdin, Node 22 por stdin), e o diretório temporário não foi usado. Da spec 2B li só o que a projeção e o next-task usam. Há um commit 051ffc19 (07:22:41, posterior ao freeze e fora das branches locais listadas) que contém a pasta da spec 2B e o lead-decision; não o revisei. O checkout tem modificações em outros arquivos do repositório que não são minhas. Não identifiquei o formatador usado (R1-F06) nem confirmei se houve execução de Docker (R1-F08).",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}
+```

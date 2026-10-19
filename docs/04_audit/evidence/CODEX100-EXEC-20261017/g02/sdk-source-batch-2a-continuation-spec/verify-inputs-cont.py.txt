@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-cont.py.txt <repo_root> <out_json>
+# Confere o BIND do lote 2A no commit da raiz (1fb7e884), a admissão 2A (unit-manifest), a especificação 2A aprovada e as fontes
+# do SDK usadas nas âncoras. Só leitura, sha256 e git show/diff.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = "docs/04_audit/evidence/CODEX100-EXEC-20261017"
+G02 = os.path.join(ROOT, E, "g02")
+
+
+def sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+checks = []
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", ROOT] + list(args), capture_output=True, text=True)
+
+
+bind = os.path.join(G02, "sdk-batch-2a-binding")
+r = git("diff", "--name-only", "1fb7e884", "--", E + "/g02/sdk-batch-2a-binding")
+check("binding folder equals root commit 1fb7e884", r.returncode == 0 and r.stdout.strip() == "", r.stdout.split())
+st = load(os.path.join(bind, "state.json"))
+check("binding COMPLETED_LOCAL with R2 APPROVE", st["status"] == "COMPLETED_LOCAL" and st["review"]["R2"].startswith("APPROVE"), st["review"]["R2"])
+nt = load(os.path.join(bind, "next-task.json"))
+check("binding next-task names this unit", nt["task"].startswith("DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION") and nt["t3_required"] is False, nt["task"])
+cov = load(os.path.join(bind, "coverage-observed-v2.json"))
+check("coverage v2 counts 21/23 and 14 open arms", cov["counts"] == {"OBSERVED_CLIENT_PARTIAL": 21, "OPEN_REQUIRED_FUTURE_PROFILE": 23} and len(cov["arms_open_explicit_2a"]) == 14,
+      {"counts": cov["counts"], "arms_open": len(cov["arms_open_explicit_2a"])})
+adm = os.path.join(G02, "sdk-batch-2a-admission")
+check("admission unit-manifest sha", sha(os.path.join(adm, "unit-manifest.json")) == "b4bb8aaeeb0c234aa9b6a21114b5f45c2f5be761f6b3709cf6828ef9193affe0")
+man = load(os.path.join(adm, "unit-manifest.json"))
+bad = [p for p, m in man["files"].items() if sha(os.path.join(adm, p)) != m["sha256"]]
+check("admission files match the manifest", not bad, {"files": len(man["files"]), "bad": bad[:5]})
+spec = os.path.join(G02, "sdk-source-batch-2a-spec")
+check("spec 2A cases sha", sha(os.path.join(spec, "cases-2a.json")) == "147a906d2aa6616157c50d8e4cc9cb7e8f5d9cec7be749b77eca1e0e1dbc1c2c")
+r = git("diff", "--name-only", "b5af13a3", "--", E + "/g02/sdk-source-batch-2a-spec")
+check("spec 2A folder equals root commit b5af13a3", r.returncode == 0 and r.stdout.strip() == "", r.stdout.split())
+cases2a = load(os.path.join(spec, "cases-2a.json"))
+drift = {k: v["sha256"] for k, v in cases2a["inputs"].items() if sha(os.path.normpath(os.path.join(spec, v["path"]))) != v["sha256"]}
+check("spec 2A inputs (SDK sources, G01, admission) unchanged", not drift, drift)
+srcs = {k: sha(os.path.normpath(os.path.join(bind, v["path"]))) == v["sha256"] for k, v in cov["sources"].items()}
+check("coverage v2 sources unchanged", all(srcs.values()), srcs)
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION", "result": "PASS" if all(c["ok"] for c in checks) else "FAIL",
+       "checks": checks, "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))

@@ -1,0 +1,70 @@
+{
+  "kind": "PEER_V2_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+  "replaces": {
+    "path": "../sdk-admission/python/fixture-rpc.py",
+    "sha256": "5744f009c0c76d05103f20b311aab928a72981687d11f6a3a378f39533bd21d9"
+  },
+  "scope": "Peer JSON-RPC sintético atrás do adapter Python. Não é app-server do Codex. O peer TS (fixture-cli) não recebe pedidos e não usa este contrato.",
+  "script": {
+    "format": "peer_script com version=2 em cada caso Python de cases-2a.json",
+    "rules": "on_request é uma lista ordenada; cada regra é de uso único; a primeira regra ainda não usada cujo match casa é aplicada.",
+    "match": {
+      "method": "igualdade exata do método",
+      "params": "igualdade JSON exata do objeto params",
+      "params_absent": "a chave params não existe na linha recebida",
+      "params_subset": "cada chave listada existe em params com valor JSON igual",
+      "nth": "ordinal entre as regras com o mesmo match, para pedidos repetidos idênticos"
+    },
+    "actions": {
+      "reply": "escreve {id: <id capturado>, result|error: ...}",
+      "hold": "'until_RELEASE_REPLY' segura a resposta até o controle do supervisor; 'forever' nunca responde e descarta o pedido segurado em FINISH_PEER",
+      "before_reply": "lista de quadros escritos antes da resposta",
+      "after_reply": "lista de quadros escritos depois da resposta",
+      "after_receipt": "lista de quadros escritos logo depois de receber o pedido segurado"
+    },
+    "frames": {
+      "notification": "{method, params} sem id",
+      "server_request": "{id, method, params}; params pode ser não-objeto quando o caso pede",
+      "response": "{id, result|error} com id alheio, para testar roteamento",
+      "exit": "'close_stdout_then_exit_0': fecha o stdout, emite PEER_MILESTONE EXIT_AFTER_SCRIPT e sai com 0"
+    },
+    "ids": "Respostas usam sempre o id capturado do pedido; nenhum UUID fixo, exceto o id alheio declarado em 'response'."
+  },
+  "unscripted_request": {
+    "rule": "Todo pedido sem regra aplicável recebe resposta de erro com o id capturado, em vez de ficar sem resposta.",
+    "declared_per_case": "peer_script.unscripted_error em cases-2a.json",
+    "default_in_2A": {
+      "code": -32601,
+      "message": "cvg synthetic: unscripted request",
+      "data": {
+        "cvg_synthetic": true,
+        "method": "<método recebido>"
+      },
+      "sdk_class": "openai_codex.errors.MethodNotFoundError"
+    },
+    "forbidden": [
+      "qualquer ocorrência de 'server_overloaded' em data, em qualquer profundidade (aciona is_retryable_error)",
+      "códigos de -32099 a -32000 (faixa de servidor; o SDK pode classificar como ServerBusyError ou RetryLimitExceededError pelo texto)",
+      "-32600 (InvalidRequestError) em casos cujo assunto é o prefixo de InvalidRequestError, como PY14; no lote 2A nenhum caso usa -32600 para pedido sem script",
+      "mensagem com 'retry limit' ou 'too many failed attempts'"
+    ],
+    "milestones": [
+      "UNSCRIPTED {method, id_sha256}",
+      "UNSCRIPTED_ERROR_WRITTEN {bytes, sha256}"
+    ],
+    "fail_closed": "Se o cliente ainda assim bloquear (não lê a resposta), o watchdog do driver leva a INVALID_CAPTURE, nunca a PASS.",
+    "carry_over": "R1-F01 e R2-F02 da admissão: o known-bad bloqueante passa a ser alcançável como MISMATCH."
+  },
+  "unchanged": [
+    "RAW_READ do adapter continua a captura autoritativa",
+    "sinais e prazos do peer atual",
+    "limite de linha 262144 bytes"
+  ],
+  "selftests_required": [
+    "pedido sem script recebe o erro declarado com o id capturado",
+    "erro declarado com server_overloaded ou código -32000..-32099 é recusado na admissão",
+    "regra de uso único e nth respeitados",
+    "exit close_stdout_then_exit_0 fecha o stdout antes de sair"
+  ]
+}

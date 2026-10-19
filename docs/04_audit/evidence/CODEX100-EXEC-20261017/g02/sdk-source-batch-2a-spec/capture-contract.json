@@ -1,0 +1,201 @@
+{
+  "kind": "CAPTURE_EXTENSION_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+  "bases": {
+    "fixture-cli": {
+      "path": "../sdk-admission/node/fixture-cli.mjs",
+      "sha256": "92b999abe677afb01f4f8d8a81885a4f03e44205c57164fe63bc4775e61a9139"
+    },
+    "adapter-typescript": {
+      "path": "../sdk-admission/node/adapter-typescript",
+      "sha256": "4c8ce224881ac8110ec3bf919d3949d776554725f997f8b41bf7a8df560b94ab"
+    },
+    "ts-driver": {
+      "path": "../sdk-admission/node/ts-driver.mjs",
+      "sha256": "765db6ea38a7affcb6f05b117ccb58661f3e42d0c8ab89ed9407d7c3df29e639"
+    },
+    "python-driver": {
+      "path": "../sdk-admission/python/python-driver.py",
+      "sha256": "87291651585c3b6e8f289b1fb65d2a54cb24d4ea4cbcfc8c74f5c2524f0af550"
+    },
+    "supervisor": {
+      "path": "../sdk-admission/python/supervisor.py",
+      "sha256": "8013a6105760960d270174216cb6f6938215a7b2ff254563549bd2310d19eda4"
+    },
+    "observer": {
+      "path": "../sdk-admission/python/observer.py",
+      "sha256": "bce4216ecabd1f616e24cdc670ce9e0a487a4a61b824a4d3a2ca4a2a110c6d29"
+    },
+    "interface-bindings-v2": {
+      "path": "../sdk-admission/interface-bindings-v2.json",
+      "sha256": "e1f4088088109fd97e23a055acad22e08039a9dd03a8c4ee9a67fdc5f7385212"
+    }
+  },
+  "capabilities": {
+    "CAP-TS-SDKCALLS": {
+      "text": "ts-driver executa os sdk_calls congelados por caso (opções de Codex, thread e turn, entrada, modo de consumo, marcadores $UNDEFINED e $ac.signal), em vez das opções fixas atuais.",
+      "used_by": [
+        "2A-TS01",
+        "2A-TS02",
+        "2A-TS02B",
+        "2A-TS03",
+        "2A-TS04",
+        "2A-TS05",
+        "2A-TS06",
+        "2A-TS07",
+        "2A-TS08",
+        "2A-TS09",
+        "2A-TS10",
+        "2A-TS11",
+        "2A-TS12",
+        "2A-TS13",
+        "2A-TS14",
+        "2A-TS15"
+      ]
+    },
+    "CAP-TS-DRIVER-TMPDIR": {
+      "text": "O processo do driver TS recebe TMPDIR=/work/tmp, para que os.tmpdir() aponte para o diretório testemunhado. O env do filho continua o do caso.",
+      "used_by": ["2A-TS01", "2A-TS03", "2A-TS04", "2A-TS06", "2A-TS09"]
+    },
+    "CAP-ARGV-CAP": {
+      "text": "Limite do argv repassado do adapter ao fixture-cli sobe de 512 para 768 bytes de JSON (cabe no META=1024 do quadro EXEC_ARGV); o limite de 64 argumentos fica. Maior argv do lote: 655 bytes e 37 argumentos (2A-TS05).",
+      "used_by": ["2A-TS05"]
+    },
+    "CAP-ENV-EXACT": {
+      "text": "O env do adapter é comparado ao child_env congelado do caso, chave a chave, por /proc/<pid>/environ lido pelo supervisor e por autorrelato do adapter repassado ao fixture-cli. Generaliza o predicado env.adapter_sdk_env_only.",
+      "used_by": [
+        "2A-TS01",
+        "2A-TS02",
+        "2A-TS02B",
+        "2A-TS03",
+        "2A-TS04",
+        "2A-TS05",
+        "2A-TS06",
+        "2A-TS07",
+        "2A-TS08",
+        "2A-TS09",
+        "2A-TS11",
+        "2A-TS13",
+        "2A-TS14",
+        "2A-TS15"
+      ]
+    },
+    "CAP-TMP-WITNESS": {
+      "text": "Julgamento por duas testemunhas de ordem sólida: (1) quando o fixture congelado declara read_schema_file_from_argv (gatilho único; 2A-TS03 e 2A-TS04), o fixture-cli lê o arquivo de schema indicado no argv antes da sua primeira escrita de stdout, com o filho vivo, e relata SCHEMA_FILE {path, bytes, sha256, trailing_lf}, o que prova a criação antes do spawn e não corre contra o rm; (2) o driver lista /work/tmp de forma síncrona (fs.readdirSync) logo depois que cada promise assenta, no mesmo processo. Eventos inotify são só informativos: vigia em /proc/<pid do driver>/root/work/tmp pelo supervisor, sem mudar a contenção (/work continua tmpfs dentro do bwrap, sem bind mount); se não puder ser admitida no DIAG-TS-TMPWATCH, fica NOT_OBSERVED sem efeito no desfecho.",
+      "used_by": ["2A-TS01", "2A-TS03", "2A-TS04", "2A-TS06"]
+    },
+    "CAP-EMPTY-STDIN": {
+      "text": "O fixture-cli aceita stdin vazio quando o caso declara allow_empty_stdin (2A-TS02B); nos demais casos, stdin vazio continua inválido.",
+      "used_by": ["2A-TS02B"]
+    },
+    "CAP-STDOUT-CHUNKS": {
+      "text": "O fixture-cli escreve stdout_chunks_hex como escritas separadas, sem LF acrescido, e só escreve o chunk k+1 depois do FORWARD_COMMIT do chunk k pelo adapter (barreira por chunk). A igualdade dos bytes concatenados é sanidade; as fronteiras são registradas e condicionam o crédito do braço UTF-8. A leitura dentro do SDK pode juntar chunks e não é testemunhada.",
+      "used_by": ["2A-TS11"]
+    },
+    "CAP-WRITE-THEN-HOLD": {
+      "text": "O fixture-cli escreve as linhas declaradas e mantém o stdout aberto até sinal ou FINISH_PEER, para que o kill do finally do exec encontre o filho vivo (2A-TS04 e 2A-TS15).",
+      "used_by": ["2A-TS04", "2A-TS15"]
+    },
+    "CAP-ZERO-SPAWN-WITNESS": {
+      "text": "O supervisor testemunha que não há processo do adapter na cgroup da unidade nos pontos declarados (passos com expect.spawns=0) e conta os spawns do caso inteiro.",
+      "used_by": [
+        "2A-TS01",
+        "2A-TS03",
+        "2A-TS04",
+        "2A-TS06",
+        "2A-TS07",
+        "2A-TS10"
+      ]
+    },
+    "CAP-LAZY-BARRIER": {
+      "text": "O driver lista /work/tmp de forma síncrona e emite LAZY_POINT com a listagem; o supervisor confere zero processo do adapter na cgroup e só então envia LAZY_RELEASE para o passo seguinte (2A-TS01).",
+      "used_by": ["2A-TS01"]
+    },
+    "CAP-RESOLVER-ABSENCE": {
+      "text": "A admissão testemunha a ausência de /profile/sdk-emitted/node_modules, /profile/node_modules, /node_modules, $HOME/.node_modules, $HOME/.node_libraries e /lib/node, e a ausência de NODE_PATH no env do driver, para que o override vazio do 2A-TS01 falhe só por ausência, sem carregar código. O passo executa findCodexPath (PK01/PK02) sem crédito.",
+      "used_by": ["2A-TS01"]
+    },
+    "CAP-PREREADY-SIGNAL": {
+      "text": "Forma de captura PREREADY_SIGNAL_TERMINATION para adapter morto por sinal antes do READY (2A-TS12).",
+      "used_by": ["2A-TS12"]
+    },
+    "CAP-SPAWN-ENOENT": {
+      "text": "Forma de captura NO_CHILD para spawn que falha sem processo (2A-TS10, e 2A-TS12 se o Node não chegar a criar o filho). O fixture do caso é {no_child: true}, para que o loadConfig continue recebendo objeto. O DIAG-TS-ENOENT, de código próprio sem SDK, espelha exec.ts:203-216 e decide antes se a vaga do 2A-TS10 é usada.",
+      "used_by": ["2A-TS10", "2A-TS12"]
+    },
+    "CAP-PY-SDKCALLS": {
+      "text": "python-driver executa os sdk_calls congelados por caso (CodexClient, Thread, modelos e entradas públicas do SDK), além dos casos existentes.",
+      "used_by": [
+        "2A-PY03",
+        "2A-PY04",
+        "2A-PY07R",
+        "2A-PY08",
+        "2A-PY10R",
+        "2A-PY15",
+        "2A-PY16"
+      ]
+    },
+    "CAP-PEER-V2": {
+      "text": "Peer JSON-RPC conforme peer-v2-contract.json.",
+      "used_by": [
+        "2A-CTRL01",
+        "2A-PY03",
+        "2A-PY04",
+        "2A-PY07R",
+        "2A-PY08",
+        "2A-PY10R",
+        "2A-PY15",
+        "2A-PY16"
+      ]
+    },
+    "CAP-PEER-EXIT-EARLY": {
+      "text": "Variante de barreira em que o peer sai antes do CALLS_DONE do driver; o adapter propaga o EOF do peer fechando o stdout do SDK (2A-PY08).",
+      "used_by": ["2A-PY08"]
+    },
+    "CAP-PEER-HOLD-FOREVER": {
+      "text": "Pedido segurado com hold=forever é descartado em FINISH_PEER, sem erro de estado (2A-PY07R).",
+      "used_by": ["2A-PY07R"]
+    },
+    "CAP-CUSTOM-HANDLER": {
+      "text": "O driver passa ao CodexClient um approval_handler próprio que registra (method, params) e lança a exceção declarada (2A-PY07R).",
+      "used_by": ["2A-PY07R"]
+    },
+    "CAP-TS-UNCAUGHT-RECORDER": {
+      "text": "Só no 2A-TS10: o driver TS instala um recorder de uncaughtException que emite DIAGNOSTIC com nome, código e mensagem do erro e encerra o driver com código próprio. É instrumentação de observação, como o setprofile do SDKPY07; não muda o SDK.",
+      "used_by": ["2A-TS10"]
+    },
+    "CAP-CONTROL-CLIENT": {
+      "text": "Cliente de controle sem SDK, /profile/control-client.py, conforme control-slot-contract.json.",
+      "used_by": ["2A-CTRL01"]
+    }
+  },
+  "implementation_surface": [
+    "REQUEST_HELD e a checagem de stdin não vazio em channel.cjs:150, channel.py:187, observer.py:294 e fixture-cli.mjs:54 aceitam 0 bytes só com allow_empty_stdin (2A-TS02B)",
+    "regex de ID de caso em channel.cjs:227 e channel.py:338 aceita o prefixo 2A-",
+    "fixture-cli.mjs:10 aceita as chaves novas (allow_empty_stdin, read_schema_file_from_argv, write_then_hold, stdout_chunks_hex, chunk_barrier, no_child); fixture-cli.mjs:44-45 e adapter-typescript:95 passam a 768 bytes",
+    "META=1024 de channel.cjs:20,174 mantido; EXEC_ARGV do maior caso (655 bytes) cabe",
+    "COMMANDS de channel.cjs:15 e channel.py:21 ganham LAZY_RELEASE (2A-TS01) e CHUNK_RELEASE (2A-TS11)",
+    "API_ERROR de channel.cjs:37 e channel.py:42 ganha classe qualificada, code, data, first_loc e um token de identidade de objeto para os casos que comparam a mesma exceção",
+    "loadConfig de channel.cjs:238 continua exigindo case_input objeto; o 2A-TS10 usa {no_child: true}",
+    "fs.promises do SDK usa o threadpool do libuv, que o channel evita por TasksMax=32: o driver TS recebe UV_THREADPOOL_SIZE=2 no freeze r3 e o DIAG-TS-TMPWATCH mede o total de tarefas da cgroup com o schema temporário ativo"
+  ],
+  "fixture_cli_capture": {
+    "argv": "EXEC_ARGV com o vetor exato recebido do SDK (via adapter), limite 768 bytes e 64 argumentos.",
+    "env": "ADAPTER_ENV com o env recebido pelo adapter, chaves ordenadas; testemunha independente por /proc/<pid>/environ.",
+    "work_tmp": "SCHEMA_FILE {path, bytes, sha256, trailing_lf} relatado pelo fixture-cli só quando o fixture declara read_schema_file_from_argv, lido antes da primeira escrita de stdout; listagens de /work/tmp feitas pelo driver depois de cada promise; inotify só informativo.",
+    "fixture_keys_allowed": [
+      "JSONL",
+      "exit_code",
+      "stderr",
+      "behavior",
+      "allow_empty_stdin",
+      "read_schema_file_from_argv",
+      "write_then_hold",
+      "stdout_chunks_hex",
+      "chunk_barrier",
+      "no_child"
+    ],
+    "values": "Todos os valores de env e argv do lote são sintéticos; nenhum segredo, credencial ou dado real."
+  },
+  "freeze": "Todas as mudanças entram num source-freeze-r3 e num identity freeze r3 antes de qualquer serviço; o emit TS selado é reutilizado se os .ts e o transpile não mudarem."
+}

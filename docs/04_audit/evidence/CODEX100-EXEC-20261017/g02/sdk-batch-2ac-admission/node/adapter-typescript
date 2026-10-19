@@ -1,0 +1,150 @@
+#!/runtime/node
+'use strict';
+// Synthetic SDK-owned child for the TypeScript reference profile (codexPathOverride).
+// It is NOT a Codex executable. It relays SDK<->peer bytes unmodified and reports
+// RAW_READ before each forward and FORWARD_COMMIT only after the OS write completed.
+// DX100-G02 batch 2A: argv cap 768 bytes and the received environment passed to the peer.
+// Freeze r4 (F4-07): fault adapter_close_stdin_at_start, only where the frozen fixture declares it.
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const C = require('./channel.cjs');
+
+const SIGNAL_WINDOW_MS = 90; // contract: <=100ms between signal and terminal declaration
+const sleepSync = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+async function main() {
+  const config = C.loadConfig('typescript');
+  const ch = new C.Channel(config, 'adapter', '/profile/adapter-typescript');
+  const ledgers = Object.fromEntries(Object.keys(C.CAPS).map(s => [s, new C.StreamLedger(s)]));
+  const summaries = () => Object.fromEntries(Object.entries(ledgers).map(([s, l]) => [s, l.summary()]));
+  let child = null; let status = null; let active = 0; let finalized = false; let signalled = null;
+  let signalDeadline = 0n; let stdinAbandoned = false; let timer = null; let signalTimer = null; let faultMode = false;
+  const handlers = {};
+
+  // Bounded terminal write: never waits past `untilNs`; a missing END is judged INVALID by the supervisor.
+  const writeTerminal = (kind, data, untilNs) => {
+    for (;;) {
+      try { ch.writeNow(kind, data); return true; } catch (e) {
+        if (!['EAGAIN', 'EWOULDBLOCK'].includes(e.code) || process.hrtime.bigint() >= untilNs) return false;
+        sleepSync(1);
+      }
+    }
+  };
+  const removeHandlers = () => { for (const [s, fn] of Object.entries(handlers)) process.removeListener(s, fn); };
+  // Always terminal: INVALID unless a terminal frame was already written; then terminate by the
+  // pending signal (contract) or exit 125.
+  const fail = e => {
+    if (!finalized) { finalized = true; C.invalid(ch, e); }
+    clearTimeout(timer); clearTimeout(signalTimer);
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(signalled || 'SIGKILL');
+    removeHandlers();
+    if (signalled) process.kill(process.pid, signalled);
+    process.exit(125);
+  };
+  const finishSignal = () => {
+    if (finalized) return; finalized = true;
+    clearTimeout(timer); clearTimeout(signalTimer);
+    // A forward still in flight at the window end has an unknown OS completion: never declare it as END.
+    if (active > 0) writeTerminal('INVALID', { reason: 'in-flight forward with unknown completion at signal deadline' }, signalDeadline + 10000000n);
+    else writeTerminal('END', { streams: summaries(), child_exit_code: status ? status.code : null, child_signal: status ? status.signal : null, complete: false }, signalDeadline + 10000000n);
+    removeHandlers(); process.kill(process.pid, signalled);
+    process.exit(125); // unreachable unless the default disposition was not restored
+  };
+  // Contract: defer the signal only while a forward+commit is in flight (<=90ms); never wait for peer exit.
+  const maybeFinishSignal = () => { if (signalled && active === 0) finishSignal(); };
+  const onSignal = sig => {
+    if (finalized || signalled) return;
+    signalled = sig; signalDeadline = process.hrtime.bigint() + BigInt(SIGNAL_WINDOW_MS) * 1000000n;
+    signalTimer = setTimeout(finishSignal, SIGNAL_WINDOW_MS);
+    if (!writeTerminal('SIGNAL', { signal: sig, inflight: active > 0 }, signalDeadline)) { finishSignal(); return; }
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(sig);
+    if (!faultMode) process.stdin.destroy(); // fault mode never instantiates process.stdin
+    maybeFinishSignal();
+  };
+  for (const s of ['SIGTERM', 'SIGINT']) { handlers[s] = () => onSignal(s); process.on(s, handlers[s]); }
+  ch.interrupt = () => signalled !== null; // a pending signal aborts telemetry backpressure waits
+  timer = setTimeout(() => fail(new Error('adapter deadline')), Math.max(1, ch.remainingMs()));
+
+  const prematureClose = e => e && ['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(e.code);
+  async function relay(stream, readable, sink, onEof) {
+    const ledger = ledgers[stream];
+    try {
+      for await (const chunk of readable) {
+        for (let off = 0; off < chunk.length; off += C.RAW_CHUNK) {
+          if (signalled || finalized) return 'stopped';
+          const b = chunk.subarray(off, Math.min(off + C.RAW_CHUNK, chunk.length));
+          active++;
+          try {
+            await ch.emit('RAW_READ', ledger.raw(b));
+            const n = await C.writeChunk(sink, b);
+            await ch.emit('FORWARD_COMMIT', ledger.commit(n));
+          } finally { active--; maybeFinishSignal(); }
+        }
+      }
+    } catch (e) {
+      if (stream === 'stdin' && (signalled || stdinAbandoned) && prematureClose(e)) return 'stopped';
+      throw e;
+    }
+    if (signalled || finalized) return 'stopped';
+    if (onEof) onEof();
+    await ch.emit('STREAM_END', { stream, ...ledger.summary() });
+    return 'eof';
+  }
+
+  try {
+    await ch.start();
+    if (signalled || finalized) return;
+    const sdkArgv = JSON.stringify(process.argv.slice(2));
+    // Batch 2A CAP-ARGV-CAP: 768 bytes of argv JSON (fits META=1024 of the EXEC_ARGV frame), 64 arguments.
+    C.assert(Buffer.byteLength(sdkArgv) <= 768 && process.argv.length - 2 <= 64, 'SDK argv cap');
+    // Batch 2A CAP-ENV-EXACT: the environment received from the SDK spawn, keys sorted, self-reported to the peer.
+    const sdkEnv = JSON.stringify(Object.fromEntries(Object.keys(process.env).sort().map(k => [k, process.env[k]])));
+    C.assert(Buffer.byteLength(sdkEnv) <= 512, 'SDK env cap');
+    const input = config.case_input;
+    const fx = C.object(input) && Object.hasOwn(input, 'sdk_calls') ? input.fixture : input;
+    faultMode = C.object(fx) && fx.adapter_close_stdin_at_start === true;
+    // Only the three ordinary child stdio pipes: no observer descriptor is inherited.
+    child = spawn(config.peer_argv[0], [...config.peer_argv.slice(1), sdkArgv, '--sdk-env-json', sdkEnv], { cwd: '/work', env: { ...C.FIXED_ENV }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => { status = { code, signal }; resolve(status); maybeFinishSignal(); });
+    });
+    child.stdin.on('error', () => {}); // surfaced through the write callback, never swallowed as success
+    const out = C.openSink(1); const err = C.openSink(2);
+    out.on('error', () => {}); err.on('error', () => {});
+    let stdin;
+    if (faultMode) {
+      // F4-07: declare, close fd 0 without reading, reoccupy fd 0 with /dev/null, end the peer stdin, declare an empty stdin.
+      await ch.emit('FAULT', { fault: 'stdin_closed_at_start' });
+      fs.closeSync(0);
+      C.assert(fs.openSync('/dev/null', 'r') === 0, 'fd 0 not reoccupied by /dev/null');
+      child.stdin.end();
+      await ch.emit('STREAM_END', { stream: 'stdin', ...ledgers.stdin.summary() });
+      stdin = Promise.resolve('eof');
+    } else {
+      stdin = relay('stdin', process.stdin, child.stdin, () => child.stdin.end());
+    }
+    const stdout = relay('stdout', child.stdout, out);
+    const stderr = relay('stderr', child.stderr, err);
+    for (const p of [stdin, stdout, stderr]) p.catch(fail);
+    await exited;
+    await Promise.all([stdout, stderr]);
+    // Peer exit ends the call interval: do not wait for SDK stdin EOF.
+    if (!faultMode && ledgers.stdin.read === ledgers.stdin.committed && active === 0 && !signalled) { stdinAbandoned = true; process.stdin.destroy(); }
+    const stdinState = await stdin;
+    if (stdinState === 'stopped' && stdinAbandoned) await ch.emit('STREAM_END', { stream: 'stdin', ...ledgers.stdin.summary() });
+    if (signalled) { maybeFinishSignal(); return; }
+    const streams = summaries();
+    const complete = Object.values(streams).every(s => s.read_bytes === s.committed_bytes);
+    ch.finishControls(); // extra/late/truncated control invalidates before END, not after it
+    // Synchronous terminal write (bounded to 100ms of EAGAIN): no signal handler can interleave with it.
+    finalized = true; clearTimeout(timer);
+    const endUntil = process.hrtime.bigint() + 100000000n;
+    if (!writeTerminal('END', { streams, child_exit_code: status.code, child_signal: status.signal, complete }, endUntil < ch.deadline ? endUntil : ch.deadline)) process.exit(125);
+    removeHandlers(); ch.closeFds();
+    if (!complete) process.exit(125);
+    if (status.signal) { process.kill(process.pid, status.signal); process.exit(125); } // fallback if the signal is ignored
+    process.exit(status.code);
+  } catch (e) { fail(e); }
+}
+if (require.main === module) main().catch(e => { C.invalid(null, e); process.exit(125); });

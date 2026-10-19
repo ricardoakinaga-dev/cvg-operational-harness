@@ -1,0 +1,134 @@
+// DX100-G02:BIND-SDK-SOURCE-BATCH-2A - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-binding-2a.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a regra de consumo a partir das entradas (adjudication-r1.json, cases-2a.json, coverage-plan-2a.json, mapa v1),
+// compara com coverage-observed-v2.json e gaps-review-v2.json e roda controles negativos em cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const G02 = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02'
+const UNIT = join(G02, 'sdk-batch-2a-binding')
+const ADM = join(G02, 'sdk-batch-2a-admission')
+const V1 = join(G02, 'sdk-coverage-binding')
+const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex')
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const V1_SHA = '49de5da5eff593a594c6fb41662b59b501361711a944af9afe7d1d9a9eb8dde5'
+
+const adj = load(join(ADM, 'adjudication-r1.json'))
+const cases = Object.fromEntries(load(join(ADM, 'inputs/spec-2a/cases-2a.json')).cases.map((c) => [c.id, c]))
+const plan = Object.fromEntries(load(join(ADM, 'inputs/spec-2a/coverage-plan-2a.json')).rows.map((r) => [r.source_contract, r]))
+const v1 = load(join(V1, 'coverage-observed.json'))
+const v1Status = Object.fromEntries(v1.rows.map((r) => [r.source_contract, r.status]))
+const consumed = new Set(adj.bind_consumes_only)
+const adjRows = Object.fromEntries(adj.rows.map((r) => [r.case, r]))
+const WIRE_QUAL = ['2A-TS04', '2A-TS14', '2A-TS15', '2A-PY03', '2A-PY08', '2A-PY15', '2A-TS09']
+
+function owner(caseId, branch) {
+  const m = /^((?:TS|PY|PK)\d\d)\./.exec(branch)
+  if (m) return m[1]
+  const cs = cases[caseId].contracts
+  return cs.length === 1 ? cs[0] : null
+}
+
+function expectedStatus(cid) {
+  if (v1Status[cid] === 'OBSERVED_CLIENT_PARTIAL') return 'OBSERVED_CLIENT_PARTIAL'
+  const p = plan[cid]
+  if (p && p.cases.every((c) => consumed.has(c))) return 'OBSERVED_CLIENT_PARTIAL'
+  return 'OPEN_REQUIRED_FUTURE_PROFILE'
+}
+
+function validate(cov, gaps) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  if (cov.version !== 2) err('version must be 2')
+  if (sha(join(V1, 'coverage-observed.json')) !== V1_SHA) err('v1 map changed')
+  if (cov.rows.length !== 44) err('44 contracts expected')
+  const counts = { OBSERVED_CLIENT_PARTIAL: 0, OPEN_REQUIRED_FUTURE_PROFILE: 0 }
+  const seenArms = new Map()
+  for (const r of cov.rows) {
+    const cid = r.source_contract
+    counts[expectedStatus(cid)]++
+    if (r.status !== expectedStatus(cid)) err(`${cid}: status ${r.status} != recomputed ${expectedStatus(cid)}`)
+    if (r.status_v1 !== v1Status[cid]) err(`${cid}: status_v1 differs from v1`)
+    const planCases = plan[cid] ? plan[cid].cases : []
+    if (JSON.stringify(r.cases_2a) !== JSON.stringify(planCases)) err(`${cid}: cases_2a differ from the coverage plan`)
+    const obsCases = r.observations_2a.map((o) => o.case)
+    const excCases = r.excluded_cases_2a.map((e) => e.case)
+    if (JSON.stringify(obsCases) !== JSON.stringify(planCases.filter((c) => consumed.has(c)))) err(`${cid}: observations are not exactly the consumed cases`)
+    if (JSON.stringify(excCases) !== JSON.stringify(planCases.filter((c) => !consumed.has(c)))) err(`${cid}: excluded cases are not exactly the non-consumed cases`)
+    for (const o of r.observations_2a) {
+      if (!consumed.has(o.case)) err(`${cid}: ${o.case} is not consumable`)
+      if (o.final_reading !== 'PASS_CLIENT_OBSERVATION' || adjRows[o.case].final_reading !== 'PASS_CLIENT_OBSERVATION') err(`${cid}/${o.case}: final reading`)
+      if (o.offline_outcome_r3_1 !== 'PASS_CLIENT_OBSERVATION' || o.failed_predicates_r3_1.length) err(`${cid}/${o.case}: r3.1 outcome`)
+      for (const k of ['acceptance_r3_1', 'acceptance_service']) {
+        const p = normalize(join(UNIT, o[k].path))
+        if (sha(p) !== o[k].sha256) err(`${cid}/${o.case}: ${k} sha`)
+      }
+      if (o.functional_receipts !== 0 || o.parity_receipt !== null) err(`${cid}/${o.case}: receipts`)
+      if (WIRE_QUAL.includes(o.case) && !o.qualifications.some((q) => q.includes('ordem de code point'))) err(`${cid}/${o.case}: key-order qualification missing`)
+      if (o.case === '2A-PY03' && !o.qualifications.some((q) => q.includes('não estrito por tipo'))) err('2A-PY03: peer match qualification missing')
+      for (const a of o.analytic_branch_arms_observed) seenArms.set(`${o.case}|${a.split(' [')[0]}`, 'observed')
+      for (const a of o.arms_open_from_conditions) seenArms.set(`${o.case}|${a.arm}`, 'open')
+    }
+    for (const e of r.excluded_cases_2a) {
+      if (consumed.has(e.case)) err(`${cid}: ${e.case} excluded but consumable`)
+      if (!e.credit.startsWith('NONE')) err(`${cid}/${e.case}: credit must be NONE`)
+      for (const a of e.arms_open) {
+        seenArms.set(`${e.case}|${a}`, 'open')
+        if (!r.arms_open_explicit_2a.some((x) => x.arm === a && x.case === e.case)) err(`${cid}: open arm missing ${a}`)
+        if (r.analytic_branch_arms_observed_2a.includes(a)) err(`${cid}: arm of an excluded case counted as observed ${a}`)
+      }
+    }
+    if (r.whole_requirement_covered !== false || r.functional_receipt !== null || r.parity_credit !== 0) err(`${cid}: requirement/receipt/credit`)
+  }
+  // every branch of every SDK case is accounted for exactly once (observed or open) on its owner contract
+  for (const c of Object.values(cases)) {
+    if (c.kind !== 'SDK') continue
+    for (const b of c.branches_targeted) {
+      const o = owner(c.id, b)
+      if (!o) err(`${c.id}: branch without owner ${b}`)
+      const keyObs = [...seenArms.keys()].filter((k) => k.startsWith(c.id + '|') && (k.endsWith('|' + b) || b.startsWith(k.split('|')[1])))
+      if (!keyObs.length) err(`${c.id}: branch not accounted ${b}`)
+    }
+  }
+  if (JSON.stringify(cov.counts) !== JSON.stringify(counts)) err(`counts ${JSON.stringify(cov.counts)} != ${JSON.stringify(counts)}`)
+  if (JSON.stringify([...cov.bound_cases_2a].sort()) !== JSON.stringify([...consumed].sort())) err('bound_cases_2a != bind_consumes_only')
+  if (cov.functional_receipts !== 0 || cov.parity_credit !== 0) err('map receipts/credit')
+  const status = Object.fromEntries(cov.rows.map((r) => [r.source_contract, r.status]))
+  for (const g of gaps.rows) {
+    if (g.status_after !== 'OPEN') err(`${g.id}: must stay OPEN`)
+    const obs = g.contracts.filter((c) => status[c] === 'OBSERVED_CLIENT_PARTIAL')
+    if (JSON.stringify(obs) !== JSON.stringify(g.contracts_observed_client_partial_v2)) err(`${g.id}: observed list`)
+    if (g.receipt !== null || g.whole_requirement_covered !== false || g.qualification !== 'NOT_RUN') err(`${g.id}: receipt/qualification`)
+  }
+  if (gaps.summary.OPEN !== 6) err('six gaps must be OPEN')
+  return errors
+}
+
+const cov = load(join(UNIT, 'coverage-observed-v2.json'))
+const gaps = load(join(UNIT, 'gaps-review-v2.json'))
+const errors = validate(cov, gaps)
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const row = (doc, id) => doc.rows.find((r) => r.source_contract === id)
+const controls = [
+  ['TS05 promovido a observado', (c) => { row(c, 'TS05').status = 'OBSERVED_CLIENT_PARTIAL' }],
+  ['2A-TS06 consumido em TS06', (c) => { const r = row(c, 'TS06'); r.observations_2a.push(clone(row(c, 'TS05').observations_2a[0])); r.observations_2a[0].case = '2A-TS06' }],
+  ['braço aberto do TS12 removido', (c) => { row(c, 'TS12').arms_open_explicit_2a = [] }],
+  ['braço do 2A-TS07 contado como observado', (c) => { row(c, 'TS07').analytic_branch_arms_observed_2a.push('TS07.B01') }],
+  ['requisito inteiro coberto no PY03', (c) => { row(c, 'PY03').whole_requirement_covered = true }],
+  ['sha do acceptance-r3_1 alterado', (c) => { row(c, 'TS01').observations_2a[0].acceptance_r3_1.sha256 = '0'.repeat(64) }],
+  ['contagem alterada', (c) => { c.counts.OBSERVED_CLIENT_PARTIAL = 22 }],
+  ['qualificação de ordem removida do 2A-TS14', (c) => { row(c, 'TS14').observations_2a[0].qualifications = [] }],
+  ['crédito parcial no excluído 2A-TS03', (c) => { row(c, 'TS03').excluded_cases_2a[0].credit = 'PARTIAL' }],
+  ['recibo funcional no mapa', (c) => { c.functional_receipts = 1 }],
+]
+const negative = controls.map(([name, mutate]) => { const c = clone(cov); mutate(c); const e = validate(c, gaps); return { control: name, rejected: e.length > 0, first_error: e[0] ?? null } })
+const gapControls = [['lacuna fechada', (g) => { g.rows[0].status_after = 'CLOSED' }], ['GAP-GENERATED sem PY04', (g) => { g.rows.find((x) => x.id === 'GAP-GENERATED').contracts_observed_client_partial_v2 = [] }]]
+for (const [name, mutate] of gapControls) { const g = clone(gaps); mutate(g); const e = validate(cov, g); negative.push({ control: name, rejected: e.length > 0, first_error: e[0] ?? null }) }
+const doc = {
+  kind: 'BINDING_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:BIND-SDK-SOURCE-BATCH-2A', note: 'segunda implementação do mesmo executor; não é revisão independente',
+  node: process.version, result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors,
+  recomputed_counts: cov.counts, negative_controls: negative, validated_at: new Date().toISOString()
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)
