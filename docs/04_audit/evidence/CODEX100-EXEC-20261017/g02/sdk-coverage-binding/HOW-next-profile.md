@@ -1,0 +1,193 @@
+# Próximo perfil SDK do DX100-G02 — HOW proposto
+
+Recomendação: **perfil de fonte, lote 2**, no mesmo pin
+`8d9f6466ff0294785d56f55b1fe363d132fe4133` e na mesma infraestrutura já admitida.
+O lote 2A vem primeiro, depois o 2B. O perfil distribuído (wheel e npm com Codex CLI
+real) continua obrigatório e vem depois, quando os pré-requisitos listados no fim
+deste documento estiverem decididos.
+
+Este documento é proposta para revisão. Não registra execução, não concede BUILD e
+não altera o catálogo 487+22.
+
+## Ponto de partida
+
+- [Mapa observado](coverage-observed.json): 11 contratos `OBSERVED_CLIENT_PARTIAL`
+  (PY05, PY06, PY07, PY10, PY14, TS10–TS15) e 33 `OPEN_REQUIRED_FUTURE_PROFILE`. O
+  [coverage.json original](../sdk-reference-profile/coverage.json) não foi editado.
+- [Revisão das lacunas](gaps-review.json): as seis seguem `OPEN`. GAP-PY-API,
+  GAP-PY-RPC e GAP-TS-LANGUAGE ganharam rótulo de progresso; as outras três não.
+- Infraestrutura disponível da [admissão](../sdk-admission/checkpoint.json):
+  supervisor, observador, peers e drivers no `source-freeze-r2`, identidade
+  `ebfb308f…`, emit TS 5.9.2 selado e os sete artefatos readquiridos. Tudo isso é
+  Linux x86-64, Python 3.12.3 e Node v24.20.0.
+
+## Por que o lote de fonte vem antes
+
+1. **Cobre mais contratos com menos risco.** O lote de fonte alcança 22 dos 33
+   abertos sem aquisição nova, rede, provider ou binário de terceiro. O perfil
+   distribuído alcança 11 (PY19, PY20, PK01–PK09) e, aqui, só em Linux x86-64.
+2. **O carry-over pede o mesmo peer.** O peer que responde a pedido sem script é
+   mudança no peer JSON-RPC do perfil de fonte. Aplicá-lo agora reforça o alcance
+   dos known-bad nos contratos Python já observados que dependem de pedido sem
+   script (PY10 e PY14, casos SDKPY07, SDKPY08 e SDKPY09), antes de trocar de
+   identidade. Os casos de TS10–TS15 usam o fixture-cli JSONL e não dependem desse
+   peer.
+3. **O perfil distribuído depende de decisões que ainda não existem.** São três:
+   - a identidade dos artefatos distribuídos em relação ao pin. A fonte do SDK é
+     0.0.0-dev, o runtime distribuído é 0.153.4 e o mínimo é 0.151.0. O cartão
+     DX100-G02 exige vínculo por build reproduzível ou decisão explícita de outro pin;
+   - a autorização da aquisição com rede;
+   - o recorte keyless do Codex CLI real. Provider real não está autorizado, então só
+     caminhos sem modelo seriam observáveis.
+4. **Custo conhecido.** Mesma contenção, mesmo observador e orçamento comparável ao
+   da admissão (8/12 serviços e 19/19 vagas).
+
+O que se perde com esta ordem: o lote de fonte não toca GAP-PROVENANCE e, de
+GAP-PLATFORM-PACKAGING, só alcança o PY02 nos ramos não empacotados (lote 2B). As
+duas lacunas ficam praticamente sem progresso até o perfil distribuído. Aceito,
+porque nenhuma delas fecha com uma só plataforma de qualquer forma.
+
+## Lote 2A — próxima execução
+
+Contratos: TS01–TS09, PY03, PY04, PY08, PY15 e PY16 (14). Todos são observáveis
+pelo argv, ambiente e arquivos do filho sintético, ou pelo fio JSON-RPC do peer.
+
+| Contrato  | O que observar                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| TS01      | Defaults da entrada pública e início preguiçoso: nenhum spawn antes do primeiro `run`.                        |
+| TS02      | Normalização literal da entrada e de imagens locais no argv.                                                  |
+| TS03      | Arquivo de schema temporário: criação, conteúdo e limpeza, com testemunha do diretório `/work/tmp`.           |
+| TS04      | Retorno antecipado dentro do `try` do thread e o `finally` correspondente.                                    |
+| TS05–TS08 | Ordem dos overrides, flatten de config, render TOML e guardas de opção, julgados pelo argv capturado.         |
+| TS09      | Ambiente substituído por inteiro, originator e API key sintética, julgados pelo ambiente do filho.            |
+| PY03      | `request` genérico: resposta não relacionada não completa o waiter; resultado malformado falha.               |
+| PY04      | Precedência de `threadId` em resume/fork (params à direita) e o inverso em `_start_turn`, julgada no payload. |
+| PY08      | Notificação conhecida, desconhecida e malformada, e fechamento do transporte acordando cada consumidor.       |
+| PY15      | Coleta de `TurnResult`: usage do turn certo, terminal ausente, failed/interrupted e fase da resposta final.   |
+| PY16      | `RunInput` e `ExternalMessage` no fio, sem que a mensagem externa conceda approval.                           |
+
+Reforço dos já observados, dentro do mesmo teto: TS14 com `cache_write_input_tokens`
+presente e não nulo (parte TS14 do R1-F05) e o caminho de goal do SDKPY07 com
+`pause_reply` (R2-F02). O lote 2A também recebe o resíduo de fonte dos contratos
+parciais listado na seção seguinte.
+
+Teto proposto: até 24 vagas de caso, cada uma executada uma vez, em série e sem
+retry; até 12 serviços de qualificação; 2 revisões e 1 reparo agrupado. Se o lote
+com o resíduo não couber em 24 vagas, a SPECIFY prioriza e o restante vai para uma
+continuação do 2A. O teto não remove requisito.
+
+## Resíduo dos 11 contratos parciais
+
+`remaining_open_scope` no [mapa](coverage-observed.json) é um resumo não exaustivo.
+O resíduo autoritativo é o contrato G01 inteiro, apontado em
+`authoritative_residual_refs`, menos o que o caso mostrou. Destino proposto:
+
+| Contrato  | Destino do resíduo                                                                                                                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PY05      | 2B (metadados sintéticos sem versão ou desconhecidos, userAgent, alpha, checkout capabilities, demais campos guardados). A identidade verdadeira de runtime vai ao perfil distribuído; metadados CVG, ao BUILD nativo. |
+| PY06      | Perfil distribuído: Codex CLI real em modo keyless no lugar do peer sintético.                                                                                                                                         |
+| PY07      | 2A (exceção do handler, params não-dict). O cenário governado é do BUILD nativo (EQ02/SPEC0239), fora dos perfis SDK.                                                                                                  |
+| PY10      | 2B: cancelamento depois do resultado síncrono, `asyncio.to_thread`, finally do stream e interrupt explícito.                                                                                                           |
+| PY14      | 2B, com o peer v2: cursor lógico, prioridade de turn ID, ID extraído ausente com fallback, falhas suprimidas e BaseException em `pause_goal`.                                                                          |
+| TS10      | 2A. Stdin, stdout ou stderr ausentes só com injeção de falha do lado Node, a definir na SPECIFY.                                                                                                                       |
+| TS11      | 2A: CRLF, linha parcial, UTF-8 dividido, code null, error sem exit, stderr tardio.                                                                                                                                     |
+| TS12      | 2A: signal omitido ou pré-abortado, aborto antes do yield e depois do EOF, falha de kill. Close/removeAllListeners que lançam só com injeção de falha.                                                                 |
+| TS13–TS15 | 2A: JSON não-objeto e truncado, demais eventos, cache_write null e presente, falha depois de completed.                                                                                                                |
+
+## Lote 2B — depois do 2A
+
+Contratos: PY01, PY02 (launch_args_override, ambiente e close), PY09, PY11, PY12,
+PY13, PY17 e PY18 (8). Esses contratos exigem instrumentação de concorrência e de
+async, relógio de retry com jitter e oráculos reais de Pydantic (alias, nullable,
+default, extra, union e root). O teto é separado, também de até 24 vagas. O ramo de
+caminho empacotado do PY02 vai para o perfil distribuído.
+
+## Mudanças de infraestrutura (freeze r3)
+
+### Peer que responde a pedido sem script (carry-over R1-F01 e R2-F02)
+
+Hoje o peer congelado registra `UNSCRIPTED` e não responde. O SDK Python espera em
+`waiter.get()` sem timeout, o watchdog do driver dispara, e o known-bad bloqueante
+termina `INVALID_CAPTURE`: fail-closed, mas não `MISMATCH`.
+
+O peer v2 responde a todo pedido sem script com um erro JSON-RPC sintético que traz
+o id real do pedido. O código e a classe do erro são declarados por caso no freeze,
+de modo que não caiam num ramo em teste. Por exemplo, não usar -32600
+(InvalidRequestError) nos casos de PY14, em que o prefixo desse erro é o assunto. O
+campo `data` nunca contém `server_overloaded`, para não acionar `is_retryable_error`.
+O observador continua registrando `UNSCRIPTED`. O avaliador passa a julgar a
+presença do pedido sem script como `MISMATCH` sempre que o known-bad do caso o
+proíbe.
+
+O caminho antigo continua fail-closed: se o cliente ainda assim bloquear, o watchdog
+segue levando a `INVALID_CAPTURE`, nunca a PASS.
+
+Prova do alcance: autotestes offline com capturas produzidas pelo peer v2. Uma vaga
+de controle em serviço usa um cliente de controle, que não é o SDK, para emitir um
+`turn/interrupt` sem script pelo mesmo canal. O resultado esperado é `MISMATCH`.
+Essa vaga é rotulada CONTROL e não conta como observação do SDK.
+
+### Avaliador r3 (carry-over P3 R2-F01..R2-F04)
+
+- **R2-F01.** `wire.initialized_before_guard` passa a ser julgado por bytes entre
+  processos, como prova suficiente e unilateral: o `mono_ns` do RAW_READ do
+  `initialized` no adapter deve ser menor ou igual (`<=`) ao `mono_ns` do
+  `API_ERROR` no driver, no mesmo CLOCK_MONOTONIC. Se a condição valer, o predicado
+  passa. Se não valer, o resultado é `INCONCLUSIVE` ou `INVALID_CAPTURE`, nunca
+  `MISMATCH`, para não reprovar um cliente correto por atraso de escalonamento. Hoje
+  o avaliador marca como `MISMATCH` qualquer predicado falho com forma de captura
+  aceita (`python/acceptance.py:537-540`); o avaliador r3 precisa tratar esse
+  predicado à parte. Ele fecha só a parte de ordem do R1-F05; a parte TS14 fica com
+  o reforço do lote 2A.
+- **R2-F02.** O known-bad de goal path do SDKPY07 ganha `pause_reply` no fixture e o
+  peer v2. Assim fica alcançável como `MISMATCH`.
+- **R2-F03.** A errata da unidade nova cita só IDs alcançáveis, como
+  `acceptance.SDKPY07.known_bad_closed_false_mismatch`. A `errata.json` da admissão
+  está congelada e não é editada; a correção da citação fica registrada na unidade
+  nova.
+- **R2-F04.** A docstring e o código do `reevaluate` ficam alinhados. A comparação
+  com o `acceptance.json` de serviço passa a ser por predicado (id, ok e detalhe
+  normalizado por JSON). Sem `acceptance-r2.json`, a saída é 1 com mensagem
+  explícita. Os dois caminhos ganham autoteste.
+
+### Captura para TS01–TS09
+
+O `fixture-cli` passa a registrar argv e ambiente recebidos e a listar `/work/tmp`
+antes e depois de cada chamada. O transpile TS 5.9.2, o loader restrito e o emit
+selado permanecem os mesmos, sem bundle tsup nem typecheck.
+
+## Ordem e gates
+
+1. **SPECIFY lote 2A (T1, documental).** Congelar `cases-2a.json` com valores
+   concretos de fio, o plano de cobertura, o peer v2 e o avaliador r3, com revisão
+   independente. Esta é a [próxima unidade](next-task.json).
+2. **IMPLEMENT e ADMIT (claim novo).** `source-freeze-r3`, autotestes offline
+   (incluindo o alcance de `MISMATCH`), requalificação dos DIAG com o freeze r3,
+   identity freeze r3 e uma execução por caso, sem retry.
+3. **BIND do lote 2A (T1).** Ligar as novas observações a uma versão 2 do mapa
+   observado, como nesta unidade.
+4. Repetir para o lote 2B.
+
+O gate de cada passo é uma precondição verificável antes do seguinte.
+
+## Perfil distribuído — pré-requisitos
+
+1. **Decisão de identidade.** Escolher as versões de `openai-codex` (wheel),
+   `codex-cli-bin`, `@openai/codex-sdk` e `@openai/codex` com os pacotes de
+   plataforma, e decidir a relação delas com o pin, como o cartão G02 exige.
+2. **Aquisição autenticada,** como em `sdk-profile-artifacts`: digests do registry,
+   cache privado, sem install global e sem substituição.
+3. **Codex CLI real em duas identidades.** O ELF compilado do pin (`5cce7264…`,
+   atestado na [aceitação da referência](../../g02-reference-acceptance.json)) e o
+   binário distribuído são distintos. Ambos só são observáveis em modo keyless, sem
+   provider nem credencial.
+4. **Contratos-alvo:** PY19, PY20, PK01–PK09 e o ramo empacotado do PY02; também o
+   bundle tsup, o typecheck e as declarações do GAP-TS-LANGUAGE.
+5. **Plataformas:** só linux-x64 é local. As outras cinco seguem abertas até haver
+   acesso.
+
+## Limites
+
+Observação de cliente não é paridade. Recibos funcionais seguem em 0 e o crédito de
+paridade também. As 509 obrigações do catálogo continuam `NOT_RUN`. A SPEC0239 está
+aprovada pelo usuário, mas o BUILD depende de 0029 → 0030 → 0031 qualificadas.

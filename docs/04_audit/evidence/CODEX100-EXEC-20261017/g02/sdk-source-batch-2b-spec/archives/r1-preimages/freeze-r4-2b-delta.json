@@ -1,0 +1,131 @@
+{
+  "kind": "FREEZE_R4_2B_DELTA",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "base": {
+    "freeze_r4": {
+      "path": "../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json",
+      "sha256": "14ad70297aa907e5a88add489196c1b38dfdbf15ef50454f40250185957688ed"
+    }
+  },
+  "inheritance": "Todos os itens F4-01..F4-12 do freeze r4 valem sem mudança. Os itens abaixo são deltas declarados; nenhum altera F4-xx.",
+  "items": [
+    {
+      "id": "D2B-01",
+      "title": "IDs e fonte de casos",
+      "rule": "Listas e regex de channel.py, constantes do supervisor e do driver aceitam 2B-PY01A..2B-PY18D, 2B1-CTRL01, 2B2-CTRL01 e os DIAG novos; a fonte de casos do supervisor passa a ser cases-2b-1.json no 2B-1 e cases-2b-2.json no 2B-2, ligados por sha; contagens 16 e 18.",
+      "proof": [
+        "autoteste de ID aceito e rejeitado",
+        "autoteste de contagem de slots por sub-lote"
+      ],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-02",
+      "title": "vocabulário de passos do driver Python (CAP-PY-SDKCALLS-2B)",
+      "rule": "Ver capability-contracts-2b.json#/sdkcalls_extension; passo fora da lista fechada é INVALID_CAPTURE.",
+      "proof": [
+        "autoteste de cada passo com objetos próprios",
+        "R3-12 sobre a tabela dos casos"
+      ],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-03",
+      "title": "driver async (CAP-2B-ASYNC-DRIVER)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-ASYNC"],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-04",
+      "title": "barreira de concorrência (CAP-2B-CONC-BARRIER)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-BARRIER"],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-05",
+      "title": "relógio e aleatório (CAP-2B-CLOCK-RANDOM)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-CLOCK"],
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "D2B-06",
+      "title": "falha por corte (CAP-2B-FAULT-CUT)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-FAULTCUT"],
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "D2B-07",
+      "title": "oráculos Pydantic (CAP-2B-MODEL-ORACLE)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-MODELORACLE"],
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "D2B-08",
+      "title": "login sintético no peer v2 (CAP-2B-PEER-LOGIN)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-LOGIN"],
+      "sub_lots": ["2B-2"]
+    },
+    {
+      "id": "D2B-09",
+      "title": "quadros antes da resposta (CAP-2B-PEER-BEFORE-REPLY)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": ["selftests_offline da capacidade", "DIAG-PY-BEFOREREPLY"],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-10",
+      "title": "testemunha de processo do adapter Python (CAP-2B-PROC-WITNESS)",
+      "rule": "Ver capability-contracts-2b.json.",
+      "proof": [
+        "selftests_offline da capacidade",
+        "DIAG-PY-CLOSETERM",
+        "DIAG-PY-PROCWITNESS",
+        "DIAG-PY-KILLWAIT"
+      ],
+      "sub_lots": ["2B-1"]
+    },
+    {
+      "id": "D2B-11",
+      "title": "barrier_plan do supervisor",
+      "rule": "Cada caso declara barreiras nos próprios passos (barrier, worker.parked, loop.block_release_wait_cancel); o supervisor deriva o plano ordenado {gatilho, ação} (RELEASE_REPLY, STEP_RELEASE, FINISH_PEER, PROC_WITNESS, ZERO_SPAWN_CHECK, RELEASE_EXIT) e recusa controle fora do plano antes do END. Substitui, para os slots 2B, as constantes HOLD_PY e EOF_BARRIER do 2A.",
+      "proof": [
+        "autoteste: controle fora do plano é INVALID",
+        "autoteste: liberação antes do gatilho é INVALID"
+      ],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-12",
+      "title": "epílogos do driver",
+      "rule": "Três formas declaradas no último passo: eof_calls_done_release_exit_then_sdk_close (barreira EOF pelo stdin retido), a mesma com aclose assíncrono, e calls_done_release_exit_then_sdk_close_if_open (caso que já fechou o cliente ou cujo peer saiu). O finally do driver fecha o que ainda estiver aberto, sem novo passo observado.",
+      "proof": ["autoteste das três formas com cliente próprio"],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-13",
+      "title": "cliente de controle com quadros antes da resposta",
+      "rule": "control-client.py lê as linhas do case_input, registra notificações recebidas antes de cada resposta e segue lendo uma resposta por pedido com prazo.",
+      "proof": [
+        "autoteste com o roteiro do 2B1-CTRL01 e do 2B2-CTRL01 contra peer próprio"
+      ],
+      "sub_lots": ["2B-1", "2B-2"]
+    },
+    {
+      "id": "D2B-14",
+      "title": "freezes por sub-lote",
+      "rule": "2B-1: source-freeze-r4-2b1 e identity-freeze-r4-2b1 com D2B-01..04, 09..13. 2B-2: source-freeze-r4-2b2 e identity-freeze-r4-2b2 acrescentando D2B-05..08; requalifica no 2B-2 os DIAG das capacidades herdadas do 2B-1. A identity freeze reconfere o sha dos arquivos da stdlib e da Pydantic usados como âncora (inputs dos casos).",
+      "proof": [
+        "source e identity freeze antes de qualquer serviço do sub-lote"
+      ],
+      "sub_lots": ["2B-1", "2B-2"]
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

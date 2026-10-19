@@ -1,0 +1,166 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 2,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2A",
+  "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r2/",
+  "reviewed_at": "2026-10-19T04:17:22Z",
+  "subject": "review-freeze-r2.json",
+  "subject_sha256": "f08ad67d59f0040d71527c429b7e9bfa0826577ba41fc2f7051490e53e3933e5",
+  "subject_hash_check": {
+    "before": "OK: o sha256 do review-freeze-r2.json confere. Os 840 arquivos de U batem com o freeze em bytes e sha256. O único arquivo fora da lista é o próprio freeze, excluído por construção. review-r2/ estava vazio. review_r1.sha256 (9c9f81e7…) confere com review-r1/review.json.",
+    "after": "OK: a mesma verificação repetida ao final deu 840/840 iguais e sha do freeze inalterado. Nenhum arquivo em U ficou mais novo que o freeze (find -newer vazio). python/__pycache__ ficou com os mesmos 3 .pyc do freeze, com mtimes 01:04-01:05 -0300, sem .pyc novo de observer.py: as reavaliações rodaram com -I -B. Nenhuma unidade cvg-dx100-2a-* listada. O único arquivo escrito em U foi review-r2/review.json."
+  },
+  "verdict": "APPROVE",
+  "mandatory_findings": 0,
+  "r1_findings_status": [
+    {
+      "id": "R1-F01",
+      "status": "RESOLVED",
+      "note": "adjudication-r1.json:77-98, :130-171 classifica 2A-TS03/06/07 como final_reading MISMATCH_NOT_ATTRIBUTABLE_TO_CLIENT, com attribution HARNESS_INPUT_DELIVERY, client_observation NONE e bind_rule de não consumo. Os três ficam fora de bind_consumes_only (:419-439). case-results.json ganhou colunas por linha, sdk_counts_note (:607) e sdk_final_reading (:614). state.json:133-147 traz as listas. Os acceptance.json de serviço estão intactos: as 24 preimagens batem com review-freeze-r1 e evaluator_version é acceptance-r3 nos 24. O desfecho bruto é preservado (R3-09) e a composição r3.1 continua dando regra 6. A atribuição foi reconferida de forma independente: o SCHEMA_FILE do TS03 tem sha d7f69ea2…, igual a json.dumps(schema, sort_keys=True) com separadores compactos, e difere do congelado (8aa6b8e7…). O argv do TS06/TS07 é a permutação em ordem de code point dos mesmos elementos congelados. A adjudicação não usa o invariante do R3-06 para reescrever o desfecho: só o qualifica numa camada separada, o que é coerente com R3-06 e R3-09."
+    },
+    {
+      "id": "R1-F02",
+      "status": "RESOLVED",
+      "note": "python/acceptance.py:403-413 (r3.1): abort.os_witness_recorded agora exige uma de duas coisas. A primeira é adapter mapeado com PID e sinal ou END. A segunda é evidência positiva de spawn falho no driver (code em SPAWN_FAILURE_CODES, :61, e syscall spawn*, :407). Ausência não testemunhada deixou de valer como registro. Reprodução independente: 2A-TS12 dá INVALID_CAPTURE pela regra 4, com único predicado falho abort.os_witness_recorded (capture_order_or_cleanup, como na predicate_table). Não é INCONCLUSIVE porque timed_out=false (R3-08). Os predicados client passaram, e o known-bad continua julgado só por eles (R3-11). O desvio do observer está declarado em state.json:59, e os reasons do TS12 foram corrigidos (empty-artifact-delta.json:5959-6809, 'NÃO foram testemunhados pelo SO … indica'). O braço TS12.B01 fica OPEN (adjudication-r1.json:248, next-task.json:27). A forma registrada continua NO_CHILD, mas o desfecho é o mesmo que a regra 1 daria."
+    },
+    {
+      "id": "R1-F03",
+      "status": "RESOLVED",
+      "note": "jeq (python/acceptance.py:145-159) passou a ser usado em todas as comparações de valores JSON que vêm do cliente ou do esperado. As comparações com == que restam são de strings constantes, contagens do supervisor, bytes ou identidade, e nenhuma delas é afetada por bool/número. O autoteste reproduzido em cópia no scratch deu 54/54, inclusive 0≠false, 1≠true, o known-bad do 2A-TS14 com false trocado por 0 falhando e o usage do 2A-TS11. Verifiquei de forma independente, trocando jeq por == e registrando divergências, que nenhum predicado e nenhum desfecho muda nos 24 e que não há nenhuma comparação em que estrito e frouxo divirjam. O match do peer v2 (fixture-rpc.py:56,59) ficou como rodou e foi levado como pré-condição de reuso (next-task.json:25), como pedia a R1. A afirmação de que nenhuma regra compara número é inexata (R2-F01, P3)."
+    },
+    {
+      "id": "R1-F04",
+      "status": "RESOLVED",
+      "note": "input-order-errata-addendum-r1.json registra por vaga o stdout do fixture (TS04/14/15), o peer v2 (PY03/08/15), as linhas de controle e a ordem do environ do TS09 (:522). Registra também a referência de integridade cega do supervisor contra a congelada do reevaluate e o mascaramento pelo sinal (:547), qualifica os PASS afetados (:552) e lista as pré-condições de reuso (:553). Conferido de forma independente a partir dos .bin: o stdout de TS04, TS14 e TS15 é igual à serialização ordenada e diferente da congelada, e os demais TS com JSONL não têm objetos. O environ do TS09 está em ordem de code point, com mesmo valor. O oráculo env.child_env_exact é 'chave a chave', então não depende de ordem. 'input_order_errata_all_explained' saiu de state.json, e as qualificações aparecem nas linhas da adjudicação e de case-results."
+    },
+    {
+      "id": "R1-F05",
+      "status": "RESOLVED",
+      "note": "python/acceptance.py:538-547 usa o END do adapter (waitpid do peer) e mono_ns <= o mono_ns do API_ERROR do passo 8. No 2A-PY08: 39475217674494 <= 39475219681563. A ordem milestone-antes-do-close do peer e o autoteste de fechamento do stdout foram levados explicitamente em next-task.json:25 e state.json:60."
+    },
+    {
+      "id": "R1-F06",
+      "status": "RESOLVED",
+      "note": "tmp.driver_listing_after_settle registra names_informational e argv_schema_dir_informational (python/acceptance.py:286-289). No 2A-TS04, o diretório que resta nos passos 3 e 4 é codex-output-schema-eXvh4a, diferente do diretório do argv (y8Pf5M). O detalhe é só informativo, como recomendado."
+    },
+    {
+      "id": "R1-F07",
+      "status": "RESOLVED",
+      "note": "_service_doc exige acceptance-r3 (python/acceptance.py:791-798), e reevaluate exige acceptance-r3.1 no acceptance-r3_1.json (:808-811). reevaluate-write recusa sobrescrever (open 'x'). Os 4 autotestes negativos e positivos em cópia passaram. Reproduzi também o caminho r3: a preimagem rodando em cópia contra os acceptance.json de serviço deu 24/24 iguais."
+    },
+    {
+      "id": "R1-F08",
+      "status": "RESOLVED",
+      "note": "state.json:50-61 lista os desvios pedidos (nth, recorder de uncaughtException, inotify, SIGTERM via quadro SIGNAL, NO_CHILD ampliado, peer v2 com == e ordem do exit) com justificativa de equivalência."
+    },
+    {
+      "id": "R1-F09",
+      "status": "RESOLVED",
+      "note": "As 62 entradas têm environment_scope e systemd_run_caller_env_keys iguais a command.json env_keys. command, exitCode e timestamp não mudaram em relação à preimagem, que a R1 já tinha conferido."
+    }
+  ],
+  "findings": [
+    {
+      "id": "R2-F01",
+      "severity": "P3",
+      "area": "afirmações do reparo / peer v2",
+      "title": "repair-r1.json afirma que 'nenhuma regra do lote compara bool/número' no match do peer v2, mas o 2A-PY03 casa params {\"k\": 1} e {\"k\": 2} com == do Python",
+      "evidence": [
+        "repair-r1.json:46",
+        "inputs/spec-2a/cases-2a.json:2862-2878 (match params k=1 e k=2 do 2A-PY03)",
+        "python/fixture-rpc.py:56 (params != match['params'] com == do Python)",
+        "cases/2A-PY03-cb6477fc6537/events-adapter.bin (stdin reconstruído pelo observer: params {\"k\": 1} e {\"k\": 2}, inteiros)"
+      ],
+      "detail": "Com == do Python, um cliente que enviasse {\"k\": true} casaria a regra k=1, e nenhum predicado do 2A-PY03 julga o tipo desses params. Reconstruí o fio a partir dos quadros brutos: o SDK enviou inteiros 1 e 2, então nada muda no desfecho. A pré-condição de reuso (peer v2 estrito por tipo) já está em next-task.json:25. O problema é só a justificativa escrita, que é inexata.",
+      "required_action": "Recomendação: no próximo documento (BIND), registrar que o match do peer v2 no 2A-PY03 não foi estrito por tipo e que o fio observado tem inteiros. Sem reexecução."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "area": "metadados de artefatos vazios",
+      "title": "empty-artifact-delta.json mudou os reasons de 12 entradas do 2A-TS10 e do DIAG-TS-ENOENT sem declarar; a redação do papel peer é imprecisa",
+      "evidence": [
+        "empty-artifact-delta.json:4599, :4769, :4939, :5109, :5279, :5449, :8169, :8339, :8509 ('spawn falhou sem processo adapter/peer')",
+        "empty-artifact-delta.json:6469, :6639, :6809 (peer do TS12 com o texto do adapter: 'A existência e o término do filho NÃO foram testemunhados')",
+        "archives/review-r1-preimages/empty-artifact-delta.json (antes: 'nenhum processo adapter/peer na unidade')",
+        "repair-r1.json:32 e :95; state.json:216 (declaram só os reasons do TS12 e o environment_scope)"
+      ],
+      "detail": "Comparado com a preimagem, mudaram os campos reason (6 entradas do TS12 e 12 fora do TS12), environment_scope e systemd_run_caller_env_keys. Para o adapter, a nova frase do TS10 e do DIAG-TS-ENOENT tem apoio na evidência (ENOENT com syscall spawn, forma A). Para o peer, 'spawn falhou sem processo peer' é impreciso: o peer nem chegou a ser tentado, porque o adapter não existiu. No TS12, as entradas do peer repetem o texto sobre 'o filho', que é o adapter. Nada disso muda contagem, status (expected_empty) ou desfecho.",
+      "required_action": "Recomendação: no merge do catálogo central, declarar a mudança dos 12 reasons e ajustar a redação do papel peer ('peer não iniciado: adapter ausente')."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "area": "documentos por caso r3.1 x adjudicação",
+      "title": "acceptance-r3_1.json do 2A-TS12 e dos 2A-TS03/06/07 não refletem a leitura adjudicada (informational_only=false; client_fact_only=true)",
+      "evidence": [
+        "cases/2A-TS12-49837ba89ad9/acceptance-r3_1.json:96 (informational_only false sob INVALID_CAPTURE da regra 4)",
+        "adjudication-r1.json:249 ('sob INVALID ficam só informativos')",
+        "python/acceptance.py:723 (informational_only só quando a forma é INVALID_CAPTURE, regra 1)",
+        "cases/2A-TS03-ed30985382b4/acceptance-r3_1.json:175, cases/2A-TS06-16f608db59d1/acceptance-r3_1.json:177, cases/2A-TS07-ff9a32b883be/acceptance-r3_1.json:148 (client_fact_only true, outcome MISMATCH)"
+      ],
+      "detail": "A camada de autoridade é adjudication-r1.json. next-task.json:9 limita o BIND aos 19 de bind_consumes_only, então seguir o roteiro não leva a uso errado. Mesmo assim, quem ler só o documento por caso r3.1 vê o TS12 sem a marca de 'só informativo' e os três MISMATCH como fato de cliente.",
+      "required_action": "Recomendação: o BIND deve ler attribution e final_reading de adjudication-r1.json, e não dos documentos por caso. Numa futura revisão do avaliador, alinhar informational_only com a regra 4 ou documentar a semântica."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "area": "next-task.json / redação",
+      "title": "next-task.json afirma como fato que o aborto 'gera filho criado e morto antes do primeiro quadro', e previous_status antecipa a aprovação da R2",
+      "evidence": [
+        "next-task.json:27",
+        "next-task.json:4 (previous_status COMPLETED_LOCAL) e state.json:7 (REPAIRED_AWAITING_REVIEW_R2)",
+        "adjudication-r1.json:249 e empty-artifact-delta.json:5959 ('indica', 'NÃO foram testemunhados pelo SO')",
+        "cases/2A-TS12-49837ba89ad9/events-driver.jsonl:6-7 (AbortError ABORT_ERR com cause, syscall null)"
+      ],
+      "detail": "A existência do filho é inferida da semântica do Node v24 (abortChildProcess), não testemunhada. Um AbortError com cause=signal.reason também pode sair de outros caminhos que checam o signal antes do spawn. Os outros documentos dizem 'indica', mas o next-task trata a inferência como fato. O desfecho r3.1 (INVALID_CAPTURE) não depende disso.",
+      "required_action": "Recomendação: reescrever como 'indica, pela semântica do Node v24, sem testemunha do SO' e atualizar previous_status depois do veredito da R2."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "area": "higiene da evidência",
+      "title": "python/__pycache__ (3 .pyc gerados pelas ferramentas do reparo) entrou na pasta da unidade e no review-freeze-r2, e não é ignorado pelo .gitignore",
+      "evidence": [
+        "review-freeze-r2.json files: python/__pycache__/acceptance.cpython-312.pyc, channel.cpython-312.pyc, fixture-rpc.cpython-312.pyc",
+        "python/__pycache__/ (mtimes 01:04:04 e 01:05:10 -0300, durante o reparo)",
+        "tools/repair_r1.py:27-29 e tools/input_order_addendum.py (importlib sem -B)"
+      ],
+      "detail": "São bytecode gerado ao importar acceptance, channel e fixture-rpc fora do modo -B. Não afetam resultado nem freezes de fonte, mas são subproduto não declarado na evidência e iriam para o commit se a pasta fosse adicionada inteira.",
+      "required_action": "Recomendação: excluir os .pyc do commit, registrando a exclusão frente ao freeze, e rodar as ferramentas com -B no futuro."
+    }
+  ],
+  "checks_run": [
+    "sha256 do review-freeze-r2.json e verificação de bytes e sha dos 840 arquivos de U, antes e depois (script próprio, python3.12 -I -B), mais find -newer e lista de __pycache__",
+    "diff review-freeze-r1 x review-freeze-r2: 46 arquivos adicionados, 5 alterados (case-results, empty-artifact-delta, python/acceptance.py, state.json, tools/empty_artifacts.py), nenhum removido; nenhum acceptance.json de serviço alterado",
+    "preimagens em archives/review-r1-preimages/ (7 arquivos) conferidas contra os sha do review-freeze-r1; preimagem de acceptance.py = source-freeze-r3 (7be697f0…)",
+    "source-freeze-r3: 31 arquivos com sha e modo; só python/acceptance.py difere (r3.1, esperado). identity-freeze-r3 aponta para source-freeze-r3 com o sha correto. Os 7 sha de inputs/spec-2a conferem. evaluator-freeze-r3_1 e os sha de state.json conferem",
+    "leitura integral do diff r3 -> r3.1 de acceptance.py e varredura das comparações == restantes",
+    "python3.12 -I -B python/acceptance.py reevaluate nos 24 diretórios: 24/24 iguais ao acceptance-r3_1.json; contagens SDK 19 PASS, 3 MISMATCH, 1 INVALID_CAPTURE; CONTROL MISMATCH; diferenças contra o serviço só em TS01/03/04/06 (detalhe informativo), PY08 (detalhe) e TS12 (desfecho)",
+    "preimagem r3 em cópia no scratch: reevaluate contra os acceptance.json de serviço deu 24/24 iguais (20 PASS e 3 MISMATCH SDK, CONTROL MISMATCH)",
+    "teste estrito x frouxo: r3.1 com jeq substituído por == registrando divergências; nenhum predicado ou desfecho muda nos 24 e há 0 comparações divergentes",
+    "autotestes r3.1 reproduzidos numa cópia completa no scratch, com SCRATCH redirecionado: 54/54 e os mesmos nomes e resultados do selftest-results.json da unidade",
+    "consistência cruzada de case-results.json (colunas antigas inalteradas contra a preimagem), adjudication-r1.json, state.json, repair-r1.json e dos 24 pares acceptance.json/acceptance-r3_1.json (desfecho, regra, falhas, versão, service_document); listas bind_consumes_only iguais (19)",
+    "verificação independente da atribuição dos 3 MISMATCH (sha do SCHEMA_FILE do TS03; argv do TS06/TS07) e dos efeitos de ordem no fio (stdout TS04/14/15 reconstruído do .bin; environ do TS09; fio do cliente no PY03)",
+    "empty-artifact-delta: 62 entradas = 62 arquivos vazios reais; command, exitCode e caller_env contra command.json e result.json; diff de campos contra a preimagem",
+    "orçamento e recursos: budget.json (9/12), case-ledger, 33 attempts no runtime e nenhum depois de 00:30:32 -0300; systemctl --user list-units 'cvg-dx100-2a-*' sem unidades; resource-receipt-final all_released",
+    "186 campos functional_receipts/parity_credit em todos os JSON de U: todos 0 ou nulos; todos os JSON parseiam",
+    "varredura de segredos e dados reais (sk-, ghp_, AKIA, JWT, chaves privadas, e-mails, api_key/token): só valores cvg-synthetic-* e user@1000.service"
+  ],
+  "criteria": {
+    "r1_p2_resolution": "Os quatro P2 estão resolvidos de fato. A adjudicação é uma camada separada que não reescreve o serviço (R3-09) e é coerente com a composição do R3-06: os 3 MISMATCH continuam regra 6 brutos, com atribuição fora do cliente, e o TS12 cai na regra 4 por um predicado de captura de classe congelada, sem reclassificação. O endurecimento do r3.1 só reduz crédito: 20 -> 19 PASS consumíveis.",
+    "evaluator_r3_1": "jeq é correto (bool nunca igual a número, null só null, chaves e aninhamento estritos) e está aplicado em todas as comparações de valor relevantes. O novo oráculo de abort.os_witness_recorded é fiel ao texto da predicate_table. reevaluate checa versões e mantém a saída 1 sem documento de serviço. O código de saída passa a se referir ao acceptance-r3_1.json, com a comparação contra o serviço exposta em outcome_equal_to_service e differences_vs_service. Essa mudança está documentada na docstring e é aceitável no avaliador offline.",
+    "new_problems": "Nenhum P1/P2 novo. Service docs, source-freeze-r3, identity-freeze-r3 e spec inputs estão intactos. As preimagens batem. As contagens são consistentes nos 5 documentos. next-task.json só pede trabalho T1 documental, com 0 serviços e nada fora de not_authorized_now. Achados novos: 5 P3 de redação e higiene.",
+    "budget_and_evidence": "24/24 vagas, 9/12 serviços, 1/1 reparo (0 serviços e 0 retries no reparo), reviews 2/2 com esta. Recursos liberados. 62 vazios com metadados reais. 0 recibos funcionais, 0 crédito de paridade. Nenhum segredo ou dado real.",
+    "severity_rule": "P1/P2 bloqueiam; P3 é recomendação. 0 P1/P2 -> APPROVE."
+  },
+  "limits": [
+    "Não executei serviços, supervisor, ferramentas nem autotestes em U, e não importei o SDK. Os autotestes rodaram só numa cópia no scratch, com o caminho SCRATCH redirecionado; por isso o sources_sha256 dos selftests difere na cópia.",
+    "A reavaliação usa o próprio avaliador da unidade. A independência vem do teste estrito x frouxo, da preimagem r3 rodada em cópia e das reconstruções próprias de fio, schema e argv a partir dos .bin e da especificação.",
+    "Não li a fonte do Node nem a do SDK. A semântica de abortChildProcess é tratada como inferência, como nos documentos da unidade.",
+    "Conferi a ordem de chaves do peer v2 só no PY03, como fio do cliente, e de forma agregada nos PY. Não refiz linha a linha o replay ordenado dos sete casos PY nem a linha ctrl-1.",
+    "Não verifiquei /mnt/ia nem o runtime privado além de listar os attempts (somente leitura)."
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

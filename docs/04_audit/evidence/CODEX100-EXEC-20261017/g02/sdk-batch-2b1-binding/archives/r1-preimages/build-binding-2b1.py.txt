@@ -1,0 +1,565 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1 - gera coverage-observed-v4.json, gaps-review-v4.json e projection-2b2-on-v4.json.
+# Uso: python3 -I -B build-binding-2b1.py.txt <repo_root> <out_dir>
+# Regra (next-task.json e adjudication-r1.json da admissão 2B-1; coverage-plan-2b.json):
+#   1. só os 15 casos de adjudication-r1.json#/bind_consumes_only são consumidos; leitura final, atribuição e regra de consumo vêm
+#      da adjudicação, nunca dos acceptance.json por caso (estes dão ponteiro, sha, forma de captura e as evidências por braço);
+#   2. o v3 é a base e não é editado; cada linha do v4 leva a linha do v3 em carried_from_v3, só com as erratas declaradas
+#      (2AC-BIND/R2-F01 no braço TS07.B03 e 2AC-BIND/R2-F05 no destino do TS12);
+#   3. status_rule de coverage-plan-2b.json: linha OPEN no v3 passa a OBSERVED_CLIENT_PARTIAL se pelo menos um caso primário do 2B-1
+#      foi usado e todos os usados são consumíveis; linha já observada só ganha observações; linhas do 2B-2 seguem como no v3;
+#   4. braço observado = braço mirado por um caso consumido da linha, com evidência ligada a predicados do acceptance (chaves de
+#      probe, passos, tokens de ordem, ganchos, consumidores); braço cuja observação não distingue o ramo fica aberto explícito;
+#   5. nenhuma linha cobre o requisito inteiro; 0 recibos funcionais; 0 crédito de paridade.
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+ADM = os.path.join(G02, "sdk-batch-2b1-admission")
+C = os.path.join(G02, "sdk-batch-2ac-binding")
+ADMR, CR = "../sdk-batch-2b1-admission/", "../sdk-batch-2ac-binding/"
+ARM_ID = re.compile(r"^((?:TS|PY|PK)\d\d\.B\d\d)")
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def ref(rel, absp):
+    return {"path": rel, "sha256": sha(absp)}
+
+
+def arm_id(a):
+    m = ARM_ID.match(a)
+    if not m:
+        raise SystemExit("branch without id: %s" % a)
+    return m.group(1)
+
+
+v3 = load(os.path.join(C, "coverage-observed-v3.json"))
+gaps3 = load(os.path.join(C, "gaps-review-v3.json"))
+proj3 = load(os.path.join(C, "projection-2b-on-v3.json"))
+disp = load(os.path.join(C, "review-r2/executor-disposition.json"))
+adj = load(os.path.join(ADM, "adjudication-r1.json"))
+cases = {c["id"]: c for c in load(os.path.join(ADM, "inputs/spec-2b/cases-2b-1.json"))["cases"]}
+plan_doc = load(os.path.join(ADM, "inputs/spec-2b/coverage-plan-2b.json"))
+plan = {r["source_contract"]: r for r in plan_doc["rows"]}
+adj_rows = {r["case"]: r for r in adj["rows"]}
+consumed = list(adj["bind_consumes_only"])
+acc = {c: load(os.path.join(ADM, adj_rows[c]["dir"], "acceptance.json")) for c in consumed}
+D_ITEMS = {i["id"]: i for i in disp["items"]}
+
+# Erratas herdadas do BIND da continuação (aplicadas só no v4; o v3 fica intocado).
+ERR_F01 = D_ITEMS["R2-F01"]
+TS12_ADD_V4 = ("Término do filho pré-abortado segue NOT_WITNESSED: pergunta T3 nova (testemunha privilegiada do término do filho pré-abortado), "
+               "com base na pergunta contingente de ../sdk-source-batch-2a-continuation-spec/t3-assessment.json, ou perfil de plataforma. A pergunta "
+               "contingente original não dispara, porque o inotify foi admitido e testemunhou a existência do filho.")
+TS07B03_EVIDENCE = [{"case": "2A-TS07R", "acceptance": CR.replace("2ac-binding", "2ac-admission") + "cases/2A-TS07R-d6f472070f07/acceptance.json",
+                     "predicate": "argv.exact_vector", "contains": ['objs=[{k = 1, "bad key" = 2}]']}]
+
+
+def _strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from _strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v)
+
+
+_a07 = load(os.path.normpath(os.path.join(C, TS07B03_EVIDENCE[0]["acceptance"])))
+_p07 = [p for p in _a07["predicates"] if p["id"] == "argv.exact_vector"]
+if not (_p07 and _p07[0]["ok"] and all(any(s in t for t in _strings(_p07[0]["detail"])) for s in TS07B03_EVIDENCE[0]["contains"])):
+    raise SystemExit("TS07.B03 erratum evidence not found in the 2A-TS07R acceptance")
+
+# Evidência por braço: (caso, braço) -> itens ligados ao acceptance.json do caso.
+P = "probe.values_exact"
+S = "api.steps_exact"
+H = "hook.events_exact"
+O = "wire.order_constraints"
+W = "consumer.results_exact"
+ARM_EVIDENCE = {
+    "2B-PY01A": {
+        "PY01.B01": [{"predicate": "wire.initialize_handshake"}, {"predicate": "wire.notifications_exact"},
+                     {"predicate": H, "tokens": ["HOOK:h_notify_ret#1", "HOOK:h_init_ret#1", "HOOK:h_validate_ret#1"]}, {"predicate": S, "steps": [2]}],
+        "PY01.B02": [{"predicate": H, "tokens": ["HOOK:h_validate_ret#1", "HOOK:h_close_call#1", "HOOK:h_close_ret#1", "API_ERROR:2"]},
+                     {"predicate": S, "steps": [2]}, {"predicate": "proc.termination_exact"}, {"predicate": "wire.absent"}],
+        "PY02.B05": [{"predicate": "proc.termination_exact"}, {"predicate": "proc.witness_recorded"}, {"predicate": "proc.spawn_count_exact"},
+                     {"predicate": P, "keys": ["retained_returncode", "client_proc_none"]}],
+    },
+    "2B-PY01B": {
+        "PY01.B03": [{"predicate": S, "steps": [2]}, {"predicate": "proc.spawn_count_exact"}],
+        "PY01.B04": [{"predicate": P, "keys": ["waiters_at_barrier", "initialized_at_barrier"]}, {"predicate": "wire.requests_exact"},
+                     {"predicate": "wire.notifications_exact"}, {"predicate": O, "tokens": ["RAW_READ:initialize#1", "RAW_READ:model/list#1", "RAW_READ:model/list#2"]}],
+        "PY01.B05": [{"predicate": S, "steps": [8, 9, 10]}, {"predicate": P, "keys": ["initialized_after"]}],
+    },
+    "2B-PY01C": {
+        "PY01.B06": [{"predicate": S, "steps": [5]}, {"predicate": P, "keys": ["initialized_after_cancel", "init_after_cancel", "proc_is_none_after_cancel", "lock_after_cancel"]},
+                     {"predicate": "proc.termination_exact"}],
+        "PY01.B07": [{"predicate": O, "tokens": ["API_CANCELLED:5", "RELEASE_REPLY:initialize#1", "RAW_READ:initialized#1"]}, {"predicate": "wire.notifications_exact"},
+                     {"predicate": P, "keys": ["runtime_version_from_orphan", "initialized_after_orphan"]}, {"predicate": S, "steps": [13]}],
+        "PY01.B08": [{"predicate": O, "tokens": ["RAW_READ:initialize#2", "RAW_READ:initialized#2", "RAW_READ:model/list#1"]}, {"predicate": "wire.requests_exact"},
+                     {"predicate": P, "keys": ["initialized_after_second_use"]}, {"predicate": "proc.spawn_count_exact"}, {"predicate": S, "steps": [14]}],
+    },
+    "2B-PY01D": {
+        "PY01.B09": [{"predicate": H, "tokens": ["HOOK:h_close_call#1", "HOOK:h_close_ret#1", "API_ERROR:3"]}, {"predicate": H, "entries": [{"id": "h_close_call"}]},
+                     {"predicate": P, "keys": ["init_none", "initialized"]}, {"predicate": "wire.absent"}, {"predicate": S, "steps": [3, 8]}],
+        "PY02.B05": [{"predicate": "proc.termination_exact"}, {"predicate": "proc.witness_recorded"}, {"predicate": "proc.spawn_count_exact"},
+                     {"predicate": P, "keys": ["sync_proc_none", "retained_returncode"]}],
+    },
+    "2B-PY02A": {
+        "PY02.B01": [{"predicate": "proc.argv_exact"}, {"predicate": P, "keys": ["popen_args"]}],
+        "PY02.B02": [{"predicate": "proc.env_exact"}],
+        "PY02.B03": [{"predicate": "proc.cwd_exact"}],
+        "PY02.B04": [{"predicate": S, "steps": [7, 11, 13, 14]}, {"predicate": P, "keys": ["returncode_after_close", "client_proc_none", "runtime_version_none"]},
+                     {"predicate": "proc.termination_exact"}, {"predicate": "wire.absent"}],
+        "PY01.B01": [{"predicate": S, "steps": [1, 2]}, {"predicate": "proc.spawn_count_exact"}, {"predicate": "proc.witness_recorded"},
+                     {"predicate": "wire.initialize_handshake"}, {"predicate": "barrier.witnesses_in_order"}],
+    },
+    "2B-PY02B": {
+        "PY02.B06": [{"predicate": "proc.argv_exact"}, {"predicate": P, "keys": ["popen_args"]}],
+        "PY02.B07": [{"predicate": "proc.env_exact"}],
+        "PY05.B01": [{"predicate": P, "keys": ["checkout_command", "checkout_cwd_none", "checkout_env_equals_driver_environ", "checkout_fields_computed",
+                                               "checkout_fields_after_guard"]}, {"predicate": "proc.no_extra_subprocess"}, {"predicate": S, "steps": [10, 11]}],
+    },
+    "2B-PY02K": {
+        "PY02.B08": [{"predicate": P, "keys": ["returncode_right_after_close"]}, {"predicate": "proc.termination_exact"}, {"predicate": "proc.adapter_fault_fired"},
+                     {"predicate": "timing.recorded"}, {"predicate": S, "steps": [6, 10]}],
+    },
+    "2B-PY05X": {
+        "PY05.B02": [{"predicate": S, "steps": [3, 5]}, {"predicate": P, "keys": ["rv1"]}],
+        "PY05.B03": [{"predicate": P, "keys": ["rv2"]}, {"predicate": S, "steps": [8]}, {"predicate": "wire.requests_exact"}],
+        "PY05.B04": [{"predicate": S, "steps": [9]}, {"predicate": "wire.requests_exact"}],
+        "PY05.B05": [{"predicate": S, "steps": [10]}, {"predicate": "wire.requests_exact"}],
+        "PY05.B06": [{"predicate": P, "keys": ["rv3"]}, {"predicate": S, "steps": [13]}],
+        "PY05.B07": [{"predicate": P, "keys": ["rv5"]}, {"predicate": S, "steps": [18]}],
+        "PY05.B08": [{"predicate": S, "steps": [20]}],
+        "PY05.B09": [{"predicate": P, "keys": ["rv7"]}, {"predicate": S, "steps": [23]}],
+        "PY05.B10": [{"predicate": S, "steps": [15]}],
+    },
+    "2B-PY08X": {
+        "PY08.B06": [{"predicate": W, "workers": ["W1", "W2", "W3", "W4"]}, {"predicate": "identity.groups_exact"}, {"predicate": "peer.exit_after_script_witnessed"}],
+        "PY08.B07": [{"predicate": W, "workers": ["W3", "W4", "W5", "W6"]}, {"predicate": "barrier.witnesses_in_order"}],
+        "PY12.B08": [{"predicate": W, "workers": ["W1", "W2"]}, {"predicate": "identity.groups_exact"}],
+    },
+    "2B-PY10X": {
+        "PY10.B04": [{"predicate": H, "entries": [{"id": "h_set_result"}, {"id": "h_sub_close", "self._state.id": "A10"}]}, {"predicate": S, "steps": [8]}],
+        "PY10.B05": [{"predicate": H, "entries": [{"id": "h_request_ret", "arg:method": "synthetic/slow"}]}, {"predicate": S, "steps": [11, 14]},
+                     {"predicate": P, "keys": ["tb_done_after_heartbeat"]}, {"predicate": "excepthook.records_exact"}],
+        "PY10.B06": [{"predicate": H, "entries": [{"id": "h_sub_close", "self._state.id": "C10"}]}, {"predicate": S, "steps": [18, 19, 20]}, {"predicate": "wire.absent"}],
+    },
+    "2B-PY11A": {
+        "PY11.B01": [{"predicate": "peer.before_reply_order_witnessed", "rules": [1]}, {"predicate": S, "steps": [5, 6, 7, 8]}],
+        "PY11.B02": [{"predicate": "peer.before_reply_order_witnessed", "rules": [2]}, {"predicate": S, "steps": [10, 11, 12]}],
+        "PY12.B01": [{"predicate": S, "steps": [8, 9]}, {"predicate": P, "keys": ["states_left"]}, {"predicate": "wire.absent"}],
+    },
+    "2B-PY11B": {
+        "PY11.B03": [{"predicate": O, "tokens": ["COMMIT_REPLY:turn/start#1", "RAW_READ:turn/start#2"]}, {"predicate": P, "keys": ["lock_users"]},
+                     {"predicate": "barrier.witnesses_in_order"}],
+        "PY11.B04": [{"predicate": W, "workers": ["W1", "W2"]}, {"predicate": S, "steps": [11, 12, 13, 14, 15]}, {"predicate": P, "keys": ["state_removed", "locks_left"]}],
+        "PY12.B02": [{"predicate": S, "steps": [14, 15]}, {"predicate": "peer.before_reply_order_witnessed", "rules": [1]}],
+    },
+    "2B-PY11C": {
+        "PY11.B05": [{"predicate": S, "steps": [6]}, {"predicate": "wire.absent"}, {"predicate": P, "keys": ["goal_routes"]}],
+        "PY11.B06": [{"predicate": S, "steps": [8, 9, 12, 13]}, {"predicate": "wire.requests_exact"}],
+    },
+    "2B-PY12A": {
+        "PY12.B03": [{"predicate": S, "steps": [21, 23, 24]}, {"predicate": P, "keys": ["subscribers_2", "first_event_1"]}],
+        "PY12.B04": [{"predicate": P, "keys": ["first_event_3", "event_keys_3", "first_event_4", "first_event_5", "first_event_6"]}],
+        "PY12.B05": [{"predicate": S, "steps": [6, 7, 15, 17, 18]}, {"predicate": "peer.before_reply_order_witnessed", "rules": [1]}],
+        "PY12.B06": [{"predicate": P, "keys": ["subscribers_5", "state_removed"]}],
+    },
+    "2B-PY12B": {
+        "PY12.B07": [{"predicate": W, "workers": ["W1", "W2", "W3"]}, {"predicate": "identity.groups_exact"}],
+        "PY12.B09": [{"predicate": W, "workers": ["W4", "W5", "W6"]}, {"predicate": P, "keys": ["subscribers_after_unregister", "low_level_registered"]},
+                     {"predicate": S, "steps": [24, 25]}],
+    },
+}
+# Braço mirado cuja observação não distingue o ramo: fica aberto explícito (sem crédito).
+NOT_DISCRIMINATED = {
+    ("PY05", "PY05.B10"): ("O passo 15 (thread/fork com excludeTurns false) roda com a versão 0.152.0-alpha.1.2, acima do mínimo, e passa. Pela fonte "
+                           "(py/client.py:337, thread/fork guarda excludeTurns; py/client.py:342, campo diferente de None conta como fornecido), a guarda roda e aprova; se excludeTurns false não "
+                           "contasse, o pedido também passaria. A observação é igual nos dois ramos, então o braço não fica observado."),
+}
+# Qualificação por braço observado (o resto do braço que não foi testemunhado vai para remaining_after_2b1_additions).
+ARM_QUAL = {
+    ("PY02", "PY02.B02"): ("Comparação chave a chave entre /proc/<pid>/environ, o autorrelato do adapter e o esperado; a ordem das chaves não é comparada "
+                           "(o contrato não pede ordem; R1-F03 da admissão da continuação, mantido)."),
+    ("PY02", "PY02.B06"): ("argv[0] = codex_bin observado em Popen.args (fato do cliente, probe popen_args); o /proc/<pid>/cmdline mostra o processo depois "
+                           "do execv do lançador adapter-python-exec (DV1 da admissão), com a mesma cauda de argumentos e o autorrelato do adapter."),
+    ("PY02", "PY02.B07"): ("PATH sem prefixo e env igual ao do driver, por comparação chave a chave entre /proc/<pid>/environ, o autorrelato do adapter e o "
+                           "esperado; a ordem das chaves não é comparada."),
+    ("PY02", "PY02.B08"): ("Ramo kill provocado por falha declarada do adapter (ignore_sigterm do case_input; proc.adapter_fault_fired): o filho ignora o "
+                           "SIGTERM por injeção do harness. SIGKILL testemunhado pelo SO (zumbi com exit 9); returncode None logo depois do close (probe); "
+                           "close() levou 2,0 s; o reap com -9 é do driver (passo 10), não do close. O ramo com um filho que demora a sair sem falha "
+                           "declarada não foi observado."),
+    ("PY08", "PY08.B07"): ("W5 e W6 seguem sem resultado no worker.still_parked (0,5 s depois do join de W1 a W4) e no CALLS_DONE; a espera registra e "
+                           "segue (R2-F04 da especificação). Bloqueio além da janela de captura não é afirmado."),
+    ("PY10", "PY10.B04"): ("Ordem forçada pelo harness: o loop fica bloqueado de propósito (loop.block_release_wait_cancel) até o worker concluir o "
+                           "_start_turn. A corrida natural entre o cancelamento e o resultado síncrono não é afirmada."),
+}
+ARM_SCOPE = {
+    ("PY05", "PY05.B06"): {"observed_scope": "alpha no mínimo (0.151.0-alpha.1.2) normalizada como pré-release e rejeitada antes de escrever (passos 11 a 13)",
+                           "not_observed": ("alpha acima do mínimo aprovada pela guarda: o passo 15 passa com 0.152.0-alpha.1.2, mas a guarda só roda nele se "
+                                            "excludeTurns false contar como fornecido (PY05.B10, não distinguido); inferido da fonte (py/client.py:342)")},
+}
+REMAIN_ADD = {
+    "PY02": "Ramo kill com um filho que demora a sair sem falha declarada (PY02.B08 só observado com ignore_sigterm injetado): perfil distribuído.",
+    "PY05": ("PY05.B10 (excludeTurns false conta como fornecido) e o lado 'alpha acima do mínimo passa' do PY05.B06 precisam de passo que distinga os "
+             "ramos, por exemplo thread/fork com excludeTurns false sob versão desconhecida e um método guardado com alpha acima do mínimo: "
+             "continuação seguinte do perfil de fonte."),
+    "PY10": "Corrida natural entre o cancelamento e o resultado síncrono, sem bloqueio forçado do loop (PY10.B04): continuação seguinte do perfil de fonte.",
+}
+CONDITIONS_RESOLVED = {
+    "PY02": ("A condição do plano ('o ramo kill fica OPEN se o DIAG-PY-KILLWAIT não admitir o 2B-PY02K') não se aplica: DIAG-PY-KILLWAIT DIAG_PASS "
+             "(KILLED_CANDIDATE), 2B-PY02K usado e consumido."),
+}
+SIGTERM_QUAL = ("Forma de término declarada CLIENT_TERMINATED_SIGTERM: SIGTERM do adapter testemunhado pelo canal (SIGNAL, END incompleto) e pelo SO "
+                "(rastreador de /proc: zumbi com exit 15, depois ausente); peer encerrado por SIGTERM (o alargamento DV8 não foi usado nos dados); "
+                "o returncode -15 do Popen é fato do cliente julgado por probe e proc.termination_exact.")
+CASE_QUAL = {
+    "2B-PY01A": SIGTERM_QUAL, "2B-PY01D": SIGTERM_QUAL, "2B-PY02A": SIGTERM_QUAL,
+    "2B-PY02K": ("Forma CLIENT_KILLED_SIGKILL com falha declarada do adapter (ignore_sigterm, só do case_input da vaga; R1-F12 da continuação): SIGKILL "
+                 "testemunhado pelo SO (zumbi com exit 9), sem SIGNAL nem END do adapter; o returncode do Popen é fato do cliente (probe)."),
+    "2B-PY02B": "Vaga condicional ao DIAG-PY-PROCWITNESS, usada (RUN): leitura de /proc do mesmo usuário sem privilégio, depois do BEGIN do adapter.",
+}
+CASE_QUAL["2B-PY02A"] += " Vaga condicional ao DIAG-PY-PROCWITNESS, usada (RUN)."
+CASE_QUAL["2B-PY02K"] += " Vaga condicional ao DIAG-PY-PROCWITNESS e ao DIAG-PY-KILLWAIT, usada (RUN)."
+COMMON_QUAL = "case_input entregue pelos bytes congelados da vaga (capture.case_input_frozen_bytes nos três papéis); avaliador acceptance-r4-2b1."
+DEST = {
+    "PY01": "DISTRIBUTED_PROFILE", "PY02": "DISTRIBUTED_PROFILE", "PY05": "DISTRIBUTED_PROFILE + NATIVE_BUILD + SOURCE_BATCH_CONTINUATION",
+    "PY08": "SOURCE_BATCH_CONTINUATION + DISTRIBUTED_PROFILE", "PY10": "NATIVE + SOURCE_BATCH_CONTINUATION", "PY11": "DISTRIBUTED_PROFILE",
+    "PY12": "NATIVE",
+}
+
+
+def acc_pred(cid, pid):
+    for p in acc[cid]["predicates"]:
+        if p["id"] == pid:
+            return p
+    raise SystemExit("predicate %s not in acceptance of %s" % (pid, cid))
+
+
+def evidence(cid, aid):
+    items = ARM_EVIDENCE[cid][aid]
+    out = []
+    for it in items:
+        p = acc_pred(cid, it["predicate"])
+        if not p["ok"] or it["predicate"] not in cases[cid]["predicates"]:
+            raise SystemExit("evidence predicate not ok or not frozen: %s %s" % (cid, it))
+        out.append(dict(it, **{"class": p["class"], "ok": True}))
+    return out
+
+
+def observation(cid, contract):
+    a, r = acc[cid], adj_rows[cid]
+    labels = [b for b in cases[cid]["branches_targeted"] if b.startswith(contract + ".")]
+    return {
+        "case": cid, "slot": r["slot"], "conditional": r["conditional"],
+        "final_reading": r["final_reading"], "attribution": r["attribution"], "client_observation": r["client_observation"],
+        "service_outcome": a["outcome"], "composition_rule": a["composition_rule"], "capture_form": a["capture_form"],
+        "predicates": len(a["predicates"]), "failed_predicates": a["failed_predicates"],
+        "known_bad_judged_by": a["known_bad"]["judged_by"],
+        "analytic_branch_arms_targeted": labels,
+        "qualifications": [x for x in (CASE_QUAL.get(cid), COMMON_QUAL) if x],
+        "acceptance_service": ref(ADMR + r["dir"] + "/acceptance.json", os.path.join(ADM, r["dir"], "acceptance.json")),
+        "adjudication_pointer": ADMR + "adjudication-r1.json#/rows[case=%s]" % cid,
+        "client_fact_only": True, "parity_receipt": None, "functional_receipts": 0,
+    }
+
+
+def apply_errata(c, carried):
+    applied = []
+    if c == "TS07":
+        for a in carried["arms_closed_v3"]:
+            if arm_id(a["arm"]) == "TS07.B03":
+                before = {k: a[k] for k in ("observed_scope", "not_observed")}
+                a.update(ERR_F01["erratum_text"])
+                a["evidence_v4"] = TS07B03_EVIDENCE
+                applied.append({"id": "2AC-BIND/R2-F01", "path": "carried_from_v3/arms_closed_v3[arm=TS07.B03]", "v3": before, "v4": ERR_F01["erratum_text"]})
+    if c == "TS12":
+        before = carried["remaining_after_continuation_additions"]
+        carried["remaining_after_continuation_additions"] = TS12_ADD_V4
+        applied.append({"id": "2AC-BIND/R2-F05", "path": "carried_from_v3/remaining_after_continuation_additions", "v3": before, "v4": TS12_ADD_V4})
+    return applied
+
+
+rows, observed_all, open_new = [], [], []
+LIFT = ("source_contract", "gaps")
+for r3 in v3["rows"]:
+    c = r3["source_contract"]
+    carried = copy.deepcopy({k: v for k, v in r3.items() if k not in LIFT})
+    errata = apply_errata(c, carried)
+    p = plan.get(c)
+    row = {"source_contract": c, "gaps": r3["gaps"], "status_v3": r3["status"],
+           "v3_pointer": CR + "coverage-observed-v3.json#/rows[source_contract=%s]" % c,
+           "plan_2b_row": (ADMR + "inputs/spec-2b/coverage-plan-2b.json#/rows[source_contract=%s]" % c) if p else None,
+           "sub_lot_2b": p["sub_lots"][0] if p else None}
+    in_2b1 = bool(p) and p["sub_lots"] == ["2B-1"]
+    if in_2b1:
+        obs = [observation(x, c) for x in p["cases"] if x in consumed]
+        not_consumed = [x for x in p["cases"] if x not in consumed]
+        by_arm, opened = {}, []
+        for x in p["cases"]:
+            if x not in consumed:
+                continue
+            for b in cases[x]["branches_targeted"]:
+                if not b.startswith(c + "."):
+                    continue
+                aid = arm_id(b)
+                ev = evidence(x, aid)
+                if (c, aid) in NOT_DISCRIMINATED:
+                    opened.append({"arm": b, "arm_id": aid, "case": x, "reason": "NOT_DISCRIMINATED", "detail": NOT_DISCRIMINATED[(c, aid)],
+                                   "evidence_non_discriminating": ev})
+                    continue
+                e = by_arm.setdefault(aid, {"arm_id": aid, "labels": [], "observed_by": []})
+                e["labels"].append(b)
+                e["observed_by"].append({"case": x, "label": b, "capture_form": acc[x]["capture_form"],
+                                         "acceptance": ADMR + adj_rows[x]["dir"] + "/acceptance.json", "evidence": ev})
+        arms = []
+        for aid in sorted(by_arm):
+            e = by_arm[aid]
+            if (c, aid) in ARM_QUAL:
+                e["qualification"] = ARM_QUAL[(c, aid)]
+            if (c, aid) in ARM_SCOPE:
+                e.update(ARM_SCOPE[(c, aid)])
+            arms.append(e)
+        used_primary = [x for x in p["primary_cases"] if x in adj_rows and adj_rows[x]["outcome"] != "NOT_RUN"]
+        if r3["status"] == "OBSERVED_CLIENT_PARTIAL":
+            status = "OBSERVED_CLIENT_PARTIAL"
+            rule = "já observado no v3; o 2B-1 acrescenta observações (%s)" % ", ".join(o["case"] for o in obs)
+        elif used_primary and all(x in consumed for x in used_primary):
+            status = "OBSERVED_CLIENT_PARTIAL"
+            rule = ("status_rule de coverage-plan-2b.json: casos primários usados (%s), todos consumíveis (PASS_CLIENT_OBSERVATION adjudicado)"
+                    % ", ".join(used_primary))
+        else:
+            status = "OPEN_REQUIRED_FUTURE_PROFILE"
+            rule = "nenhum caso primário usado, ou caso primário usado não consumível: %s" % ", ".join(not_consumed)
+        row.update({
+            "role_2b": p["role_2b"], "cases_2b1": p["cases"], "primary_cases_2b1": p["primary_cases"], "conditional_cases_2b1": p["conditional_cases"],
+            "primary_cases_used": used_primary, "observations_2b1": obs, "arms_observed_2b1": arms, "arms_open_explicit_2b1": opened,
+            "status": status, "status_rule_applied": rule, "status_changed": status != r3["status"],
+            "remaining_after_2b1": p["remaining_after"],
+        })
+        if c in REMAIN_ADD:
+            row["remaining_after_2b1_additions"] = REMAIN_ADD[c]
+        if c in CONDITIONS_RESOLVED:
+            row["remaining_after_2b1_conditions_resolved"] = CONDITIONS_RESOLVED[c]
+        row["remaining_open_scope_exhaustive"] = False
+        row["residual_planned_profile_proposal"] = DEST[c] + ": " + p["remaining_after"]
+        row["residual_planned_profile_proposal_v3"] = r3.get("residual_planned_profile_proposal") or r3.get("planned_profile_proposal")
+        observed_all += [dict(a, contract=c) for a in arms]
+        open_new += [dict(a, contract=c) for a in opened]
+    else:
+        row.update({"status": r3["status"], "status_changed": False,
+                    "status_rule_applied": ("linha do 2B-2 (coverage-plan-2b.json); status do v3 mantido até o BIND do 2B-2" if p else
+                                            "fora do plano do 2B; status do v3 mantido")})
+        if p:
+            row["role_2b"] = p["role_2b"]
+            row["cases_2b2_pending"] = p["cases"]
+        for k in ("planned_profile_proposal", "residual_planned_profile_proposal"):
+            if r3.get(k) is None:
+                continue
+            if p and r3[k].startswith("SOURCE_BATCH_2B") and not r3[k].startswith("SOURCE_BATCH_2B_"):
+                row[k] = r3[k].replace("SOURCE_BATCH_2B", "SOURCE_BATCH_2B_2", 1)
+                row[k + "_v3"] = r3[k]
+                row["residual_destination_note"] = "Linha do sub-lote 2B-2 (coverage-plan-2b.json); o destino passa a nomear o sub-lote, sem mudar o texto."
+            else:
+                row[k] = r3[k]
+        if c == "PY15":
+            row["residual_destination_note"] = ("O PY15 não está no plano do lote 2B (coverage-plan-2b.json); a parte SOURCE_BATCH_2B do destino do v3 não foi "
+                                                "planejada no 2B-1 nem no 2B-2 e fica para a continuação seguinte, sem mudar o texto.")
+    if errata:
+        row["errata_applied_v4"] = errata
+    row["carried_from_v3"] = carried
+    row["authoritative_residual_refs"] = r3["authoritative_residual_refs"]
+    row.update({"whole_requirement_covered": False, "functional_receipt": None, "parity_credit": 0})
+    rows.append(row)
+
+counts = {s: sum(1 for r in rows if r["status"] == s) for s in ("OBSERVED_CLIENT_PARTIAL", "OPEN_REQUIRED_FUTURE_PROFILE")}
+status4 = {r["source_contract"]: r["status"] for r in rows}
+closed_v3 = copy.deepcopy(v3["arms_closed_v3"])
+for a in closed_v3:
+    if arm_id(a["arm"]) == "TS07.B03":
+        a.update(ERR_F01["erratum_text"])
+        a["evidence_v4"] = TS07B03_EVIDENCE
+remaining = dict(v3["remaining_open_by_contract"])
+remaining["TS12"] = remaining["TS12"].replace(v3["rows"][[r["source_contract"] for r in v3["rows"]].index("TS12")]["remaining_after_continuation_additions"], TS12_ADD_V4)
+for r in rows:
+    if r.get("remaining_after_2b1"):
+        remaining[r["source_contract"]] = r["remaining_after_2b1"] + ((" " + r["remaining_after_2b1_additions"]) if r.get("remaining_after_2b1_additions") else "")
+src = {
+    "coverage_observed_v3": ref(CR + "coverage-observed-v3.json", os.path.join(C, "coverage-observed-v3.json")),
+    "gaps_review_v3": ref(CR + "gaps-review-v3.json", os.path.join(C, "gaps-review-v3.json")),
+    "projection_2b_on_v3": ref(CR + "projection-2b-on-v3.json", os.path.join(C, "projection-2b-on-v3.json")),
+    "disposition_2ac_bind_r2": ref(CR + "review-r2/executor-disposition.json", os.path.join(C, "review-r2/executor-disposition.json")),
+    "adjudication": ref(ADMR + "adjudication-r1.json", os.path.join(ADM, "adjudication-r1.json")),
+    "case_results": ref(ADMR + "case-results.json", os.path.join(ADM, "case-results.json")),
+    "unit_manifest": ref(ADMR + "unit-manifest.json", os.path.join(ADM, "unit-manifest.json")),
+    "reevaluation": ref(ADMR + "reevaluation-2b1.json", os.path.join(ADM, "reevaluation-2b1.json")),
+    "cases_2b_1": ref(ADMR + "inputs/spec-2b/cases-2b-1.json", os.path.join(ADM, "inputs/spec-2b/cases-2b-1.json")),
+    "coverage_plan_2b": ref(ADMR + "inputs/spec-2b/coverage-plan-2b.json", os.path.join(ADM, "inputs/spec-2b/coverage-plan-2b.json")),
+    "source_freeze_r4_2b1": ref(ADMR + "source-freeze-r4-2b1.json", os.path.join(ADM, "source-freeze-r4-2b1.json")),
+    "identity_freeze_r4_2b1": ref(ADMR + "identity-freeze-r4-2b1.json", os.path.join(ADM, "identity-freeze-r4-2b1.json")),
+    "diag_admission_2b1": ref(ADMR + "diag-admission-2b1.json", os.path.join(ADM, "diag-admission-2b1.json")),
+    "sdk_client_py": ref("../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py",
+                         os.path.join(G02, "sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py")),
+}
+cov = {
+    "kind": "SDK_COVERAGE_OBSERVED_BINDING", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1", "version": 4,
+    "meaning": ("Versão 4 do mapa observado, ao lado do v3 (" + CR + "coverage-observed-v3.json, não editado). Liga as 15 observações do 2B-1 aos 44 "
+                "contratos fonte. OBSERVED_CLIENT_PARTIAL segue significando observação parcial de cliente no perfil de referência (fonte do SDK do pin "
+                "contra peers sintéticos, Linux x86-64, CPython 3.12.3, pydantic 2.13.4, freeze r4 com os deltas D2B); não é qualificação, recibo "
+                "funcional nem paridade."),
+    "binding_rule": [
+        "Só os 15 casos de adjudication-r1.json#/bind_consumes_only da admissão 2B-1 são consumidos (leitura final PASS_CLIENT_OBSERVATION, avaliador acceptance-r4-2b1); o CONTROL 2B1-CTRL01 só abriu o gate.",
+        "Leitura final, atribuição e regra de consumo vêm de adjudication-r1.json; os acceptance.json dão ponteiro, sha, forma de captura e as evidências por braço.",
+        "status_rule de coverage-plan-2b.json: linha OPEN no v3 passa a OBSERVED_CLIENT_PARTIAL se pelo menos um caso primário do 2B-1 foi usado e todos os usados são consumíveis; linha já observada só ganha observações; linhas do 2B-2 seguem como no v3.",
+        "Braço observado: braço mirado por um caso consumido da linha, com evidência ligada a predicados aprovados do acceptance (chaves de probe, passos, tokens de ordem, ganchos, consumidores ou regras do peer); braço cuja observação não distingue os ramos fica em arms_open_explicit_v4.",
+        "Cada linha leva a linha do v3 em carried_from_v3, só com as erratas declaradas em errata_applied (2AC-BIND/R2-F01 e 2AC-BIND/R2-F05).",
+        "Nenhuma linha cobre o requisito inteiro; 0 recibos funcionais; 0 crédito de paridade.",
+    ],
+    "status_vocabulary": {
+        "OBSERVED_CLIENT_PARTIAL": ("Contrato já observado no v3, ou contrato OPEN no v3 com linha no plano do 2B-1 cujos casos primários usados foram todos "
+                                    "consumidos (status_rule de coverage-plan-2b.json). Parte do contrato e todo o requisito seguem abertos."),
+        "OPEN_REQUIRED_FUTURE_PROFILE": ("Contrato sem observação no v3 e fora do plano do 2B-1 (inclui as linhas do 2B-2, que esperam o BIND delas), ou com "
+                                         "caso primário do 2B-1 não usado ou não consumível; requisito obrigatório em perfil futuro."),
+    },
+    "status_vocabulary_v3": CR + "coverage-observed-v3.json#/status_vocabulary (regra da continuação 2A)",
+    "errata_applied": [
+        {"id": "2AC-BIND/R2-F01", "source": CR + "review-r2/executor-disposition.json#/items[id=R2-F01]", "arm": "TS07.B03",
+         "v3": ERR_F01["wrong_text"], "v4": ERR_F01["erratum_text"], "evidence_v4": TS07B03_EVIDENCE,
+         "locations_v4": ["arms_closed_v3_carried[arm=TS07.B03]", "rows[source_contract=TS07]/carried_from_v3/arms_closed_v3[arm=TS07.B03]"],
+         "unchanged": "status, contagens e braços fechados do TS07"},
+        {"id": "2AC-BIND/R2-F05", "source": CR + "review-r2/executor-disposition.json#/items[id=R2-F05]", "contract": "TS12",
+         "v3": v3["rows"][[r["source_contract"] for r in v3["rows"]].index("TS12")]["remaining_after_continuation_additions"], "v4": TS12_ADD_V4,
+         "locations_v4": ["remaining_open_by_contract/TS12", "rows[source_contract=TS12]/carried_from_v3/remaining_after_continuation_additions"],
+         "unchanged": "status do TS12 e o braço TS12.B01"},
+    ],
+    "sources": src, "source_contract_count": len(rows),
+    "counts_v3": v3["counts"], "counts": counts,
+    "status_changes": [{"contract": r["source_contract"], "from": r["status_v3"], "to": r["status"]} for r in rows if r["status_changed"]],
+    "bound_cases_2b1": consumed,
+    "control_slot": {"case": "2B1-CTRL01", "final_reading": adj_rows["2B1-CTRL01"]["final_reading"], "counts_as_sdk_observation": False},
+    "conditional_slots": adj["conditional_slots"],
+    "still_not_consumed_2a": v3["still_not_consumed_2a"],
+    "arms_closed_v3_carried": closed_v3,
+    "arms_observed_2b1": observed_all,
+    "arms_open_explicit_v4": copy.deepcopy(v3["arms_open_explicit_v3"]) + open_new,
+    "remaining_open_by_contract": remaining,
+    "cited_acceptance_references": sum(1 for r in rows for _ in r.get("observations_2b1", [])),
+    "cited_acceptance_documents_distinct": len({o["acceptance_service"]["path"] for r in rows for o in r.get("observations_2b1", [])}),
+    "rows": rows,
+    "six_gaps": "OPEN (ver gaps-review-v4.json)",
+    "all_509_catalog_records": "Inalterados NOT_RUN/null; nenhum recibo emitido.",
+    "distributed_and_platform_profiles": "Obrigatórios depois; não removidos pelo perfil de fonte.",
+    "functional_receipts": 0, "parity_credit": 0, "built_at": datetime.now(timezone.utc).isoformat(),
+}
+
+status3 = {r["source_contract"]: r["status"] for r in v3["rows"]}
+rows_2b1 = [r for r in rows if r.get("observations_2b1")]
+OBS = {
+    "GAP-PY-API": ("Observações do 2B-1: PY01, PY02, PY11 e PY12 passam a observados (inicialização síncrona e assíncrona, lançamento e close não "
+                   "empacotados, eventos antes da resposta e lock por thread, roteador de turn); PY05 e PY10 ganham ramos residuais. Caminho empacotado, "
+                   "KeyboardInterrupt no init e servidor real seguem sem observação."),
+    "GAP-PY-RPC": ("Observações do 2B-1: PY11 passa a observado; PY05 e PY08 ganham ramos residuais (guarda de versão, falha de transporte em filas). "
+                   "PY09, PY13, PY14 e PY17 esperam o 2B-2."),
+    "GAP-PROVENANCE": ("Observações do 2B-1: PY05 ganha ramos de versão sintética (userAgent, versão vazia, alpha, sufixo com espaço); PY05.B10 fica "
+                       "aberto por não distinguir os ramos. Identidade de runtime verdadeira e PY19/PY20 seguem sem observação."),
+    "GAP-PLATFORM-PACKAGING": ("Observações do 2B-1: PY02 passa a observado só pelo caminho não empacotado (override, codex_bin explícito, env, cwd, close "
+                               "com SIGTERM e ramo kill com falha declarada); caminho empacotado, PATH no Windows, PY19, PY20 e PK seguem sem observação."),
+    "GAP-TS-LANGUAGE": "Sem caso do 2B-1. Só a errata 2AC-BIND/R2-F01 (texto do braço TS07.B03) e o destino 2AC-BIND/R2-F05 do TS12; contagem e status inalterados.",
+}
+gap_rows = []
+for g in gaps3["rows"]:
+    o4 = [c for c in g["contracts"] if status4[c] == "OBSERVED_CLIENT_PARTIAL"]
+    o3 = [c for c in g["contracts"] if status3[c] == "OBSERVED_CLIENT_PARTIAL"]
+    touched = sorted({r["source_contract"] for r in rows_2b1} & set(g["contracts"]))
+    gap_rows.append({
+        "id": g["id"], "owner": g["owner"], "contracts": g["contracts"], "contracts_total": g["contracts_total"],
+        "contracts_observed_client_partial_v3": o3, "contracts_observed_client_partial_v4": o4,
+        "newly_observed_2b1": [c for c in o4 if c not in o3], "contracts_touched_by_2b1": touched,
+        "contracts_open": [c for c in g["contracts"] if c not in o4],
+        "status_before": g["status_after"], "status_after": "OPEN",
+        "progress_before": g["progress_after"], "progress_after": g["progress_after"], "progress_changed": False,
+        "observed_count_changed": len(o4) != len(o3),
+        "observations_2b1_summary": OBS.get(g["id"]),
+        "remaining_boundaries_unchanged": g["remaining_boundaries_unchanged"],
+        "why_still_open": ("todos os contratos da lacuna têm observação parcial de cliente, mas nenhum cobre o requisito inteiro e as fronteiras restantes seguem sem prova"
+                           if len(o4) == g["contracts_total"] else "há contratos sem observação e fronteiras restantes sem prova"),
+        "qualification": "NOT_RUN", "receipt": None, "whole_requirement_covered": False,
+    })
+gaps = {"kind": "SDK_GAPS_REVIEW", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1", "version": 4,
+        "source": gaps3["source"], "base": ref(CR + "gaps-review-v3.json", os.path.join(C, "gaps-review-v3.json")),
+        "binding": "coverage-observed-v4.json", "decision_rule": gaps3["decision_rule"], "rows": gap_rows,
+        "summary": {"OPEN": sum(1 for g in gap_rows if g["status_after"] == "OPEN"),
+                    "observed_v4": {g["id"]: "%d/%d" % (len(g["contracts_observed_client_partial_v4"]), g["contracts_total"]) for g in gap_rows},
+                    "observed_count_changed": [g["id"] for g in gap_rows if g["observed_count_changed"]],
+                    "progress_changed": [g["id"] for g in gap_rows if g["progress_changed"]]},
+        "functional_receipts": 0, "parity_credit": 0}
+
+# projeção do 2B-2 sobre o v4
+cases2 = {c["id"]: c for c in load(os.path.join(ADM, "inputs/spec-2b/cases-2b-2.json"))["cases"]}
+rows_2b2 = [r for r in plan_doc["rows"] if r["sub_lots"] == ["2B-2"]]
+becoming = []
+for r in rows_2b2:
+    if any(cases2[x]["sub_lot"] != "2B-2" for x in r["primary_cases"]):
+        raise SystemExit("2B-2 row with primary case outside 2B-2: %s" % r["source_contract"])
+    if status4[r["source_contract"]] == "OPEN_REQUIRED_FUTURE_PROFILE":
+        becoming.append(r["source_contract"])
+
+
+def proj(newly):
+    return {"OBSERVED_CLIENT_PARTIAL": counts["OBSERVED_CLIENT_PARTIAL"] + len(newly), "OPEN_REQUIRED_FUTURE_PROFILE": counts["OPEN_REQUIRED_FUTURE_PROFILE"] - len(newly)}
+
+
+def gap_proj(newly):
+    return {g["id"]: "%d/%d" % (len(set(g["contracts_observed_client_partial_v4"]) | (set(newly) & set(g["contracts"]))), g["contracts_total"]) for g in gap_rows}
+
+
+after1_observed = {"counts": counts, "gaps": gaps["summary"]["observed_v4"]}
+projection = {
+    "kind": "SDK_BATCH_2B_2_PROJECTION_ON_V4", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1",
+    "base": {"coverage_observed_v4": "coverage-observed-v4.json", "counts_v4": counts},
+    "plan_2b": ref(ADMR + "inputs/spec-2b/coverage-plan-2b.json", os.path.join(ADM, "inputs/spec-2b/coverage-plan-2b.json")),
+    "rule": ("Linha OPEN no v4 passa a OBSERVED_CLIENT_PARTIAL se pelo menos um caso primário do 2B-2 for usado e todos os usados forem consumíveis "
+             "(status_rule de coverage-plan-2b.json); a linha já observada (PY14) só ganha observações."),
+    "rows_2b2": [{"source_contract": r["source_contract"], "status_v4": status4[r["source_contract"]], "primary_cases": r["primary_cases"],
+                  "conditional_cases": r["conditional_cases"], "becomes_observed_if_primary_cases_consumable": r["source_contract"] in becoming} for r in rows_2b2],
+    "conditional_slots_2b2": sorted({x for r in rows_2b2 for x in r["conditional_cases"]}),
+    "after_2B_2": {"rows_becoming_observed": becoming, "counts": proj(becoming), "gaps": gap_proj(becoming)},
+    "single_row_failure": ("Um caso primário usado que não seja consumível deixa a sua linha OPEN: %s." % "; ".join(
+        "%s depende de %s" % (r["source_contract"], ", ".join(r["primary_cases"])) for r in rows_2b2 if r["source_contract"] in becoming)),
+    "previous_projection_check": {
+        "after_2B_1_in_v3_projection": proj3["after_2B_1"]["counts"], "after_2B_1_observed_v4": counts,
+        "after_2B_1_gaps_in_v3_projection": proj3["after_2B_1"]["gaps"], "after_2B_1_gaps_observed_v4": gaps["summary"]["observed_v4"],
+        "after_2B_1_confirmed": proj3["after_2B_1"]["counts"] == counts and proj3["after_2B_1"]["gaps"] == gaps["summary"]["observed_v4"],
+        "after_2B_2_in_v3_projection": proj3["after_2B_1_and_2B_2"]["counts"], "after_2B_2_on_v4": proj(becoming),
+        "after_2B_2_confirmed": proj3["after_2B_1_and_2B_2"]["counts"] == proj(becoming) and proj3["after_2B_1_and_2B_2"]["gaps"] == gap_proj(becoming),
+        "source": CR + "projection-2b-on-v3.json",
+    },
+    "note": ("Projeção de planejamento. Só o BIND do 2B-2 muda o mapa; nenhuma linha passa a cobrir o requisito inteiro; as seis lacunas seguem OPEN. "
+             "O 2B-2 não tem vaga condicional; a IMPLEMENT do 2B-2 leva o carry-over obrigatório de state.json#/carry_over_2b2 da admissão 2B-1."),
+    "functional_receipts": 0, "parity_credit": 0,
+}
+for name, doc in (("coverage-observed-v4.json", cov), ("gaps-review-v4.json", gaps), ("projection-2b2-on-v4.json", projection)):
+    with open(os.path.join(OUT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(json.dumps({"counts": counts, "changes": cov["status_changes"], "observed_arms": len(observed_all), "open_new": [a["arm_id"] for a in open_new],
+                  "gaps": gaps["summary"]["observed_v4"], "proj": projection["after_2B_2"]["counts"],
+                  "confirmed": [projection["previous_projection_check"]["after_2B_1_confirmed"], projection["previous_projection_check"]["after_2B_2_confirmed"]]},
+                 ensure_ascii=False))

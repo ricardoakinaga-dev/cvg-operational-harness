@@ -1,0 +1,172 @@
+# Veredito R1 — DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE
+
+**Veredito: `REVISE`.** Há dois achados obrigatórios (P2) e seis P3.
+
+Nenhum crédito formal foi ampliado. Em todas as 44 linhas, `whole_requirement_covered=false`, `functional_receipt=null` e `parity_credit=0`. Só as 11 transições permitidas aconteceram, e os 38 documentos de aceite estão corretos. Os dois P2 têm outra natureza:
+- o inventário do que segue aberto (`remaining_open_scope`) omite partes que o contrato G01 enumera de forma explícita (C4);
+- o HOW transcreve o R2-F01 sem a cláusula de segurança que o revisor impôs (C6).
+
+Abaixo, `E/` = `docs/04_audit/evidence/CODEX100-EXEC-20261017/`.
+
+## Achados
+
+### R1-F01 — P2 — obrigatório: sim
+**Onde:** `E/g02/sdk-coverage-binding/coverage-observed.json`
+- `rows[13].remaining_open_scope` (PY14, linha 514)
+- `rows[9].remaining_open_scope` (PY10, linha 404)
+- origem dos textos: `build-binding.py.txt`, NOTES, linhas 72 e 77
+
+**Evidência.** O C4 exige que `remaining_open_scope` não omita partes relevantes do contrato. Duas linhas falham.
+
+*PY14.* O `future_positive` do G01 (`E/g01/sdk-open-contracts/python-contracts.json`, PY14) e o contrato de máquina (`payload-and-goal-facts.json#goal`) enumeram itens que não foram observados e não aparecem no texto:
+- seleção do turn ID por prioridade: `current_turn_id`, depois `completed_turn.id`, depois `started_turn.id`; ID ausente não envia interrupt (`turn_id_priority`). Só o caso "current = A" foi observado.
+- ID extraído ausente, com fallback `state.current_turn()` (`candidate_expression`, `no_retry_predicate` com `None`). O `future_positive` pede "matching-prefix extracted different/same/absent ID" e "state.current_turn fallback". Só "different" (SDKPY08) e "same" (SDKPY09) foram observados.
+- falha do segundo interrupt (suprimida). No SDKPY08 o segundo interrupt teve sucesso.
+- exceção não-InvalidRequest no interrupt, suprimida sem retry.
+- BaseException em `pause_goal`, que não é suprimida ("This is not unconditional suppression of BaseException").
+
+O texto atual lista só cursor/merge, close versus KeyboardInterrupt/CancelledError, sucesso do primeiro interrupt, prefixo não relacionado e rollover concorrente.
+
+*PY10.* O texto lista como aberto "Cancelamento antes do resultado síncrono". Foi exatamente isso que o SDKPY07 observou:
+- `case-plan.json`, SDKPY07: "ABORT_NOW->driver after peer REQUEST_HELD", "RELEASE_REPLY->peer after driver API_CANCELLED";
+- `acceptance-r2.json`: `order.abort_after_request_capture` e `order.reply_released_after_cancel`.
+
+O braço que de fato não foi observado é o "after sync result" do `future_positive` G01 ("Cancel before/after sync result…"), e ele não aparece no texto.
+
+O HOW não aloca o resíduo dos 11 contratos parciais (ver R1-F03), e o `next-task.json` usa `coverage-observed.json` como entrada. Com isso, a omissão funciona como crédito implícito: o que não está listado como aberto tende a ser tratado como feito.
+
+**Correção sugerida.** Corrigir NOTES de PY14 e PY10 e regenerar:
+- PY14: acrescentar os cinco itens acima;
+- PY10: trocar por "cancelamento depois do resultado síncrono" e manter o resto.
+
+Alternativa ou complemento: declarar `remaining_open_scope` não exaustivo e apontar como resíduo autoritativo o `future_positive`, os `branches` e o `machine_contract` do G01. Atualizar `validation.json` se o validador passar a conferir isso.
+
+### R1-F02 — P2 — obrigatório: sim
+**Onde:**
+- `E/g02/sdk-coverage-binding/HOW-next-profile.md`, linhas 107–110 (R2-F01)
+- `E/g02/sdk-coverage-binding/next-task.json`, linha 40 (`carry_over`)
+
+**Evidência.** O conserto do R2-F01 em `E/g02/sdk-admission/review-r2/review.json` diz: "prova suficiente e unilateral, mono_ns da RAW_READ do initialized pelo adapter **<=** mono_ns do API_ERROR … Se valer, ok; **se não valer, INCONCLUSIVE ou INVALID, nunca MISMATCH**, para não reprovar um cliente correto por atraso de agendamento. Outra saída é … manter R1-F05 como PARTIAL."
+
+O HOW diz que o mono_ns "deve ser **menor**" e que "o predicado entra como `capture_order_or_cleanup` e **fecha o resto do R1-F05**". Não diz o que acontece quando a condição falha. No avaliador atual, o rótulo de juiz é só rótulo: `python/acceptance.py:537-540` marca qualquer predicado falho com forma de captura aceita como `MISMATCH`.
+
+Seguido à letra, o HOW leva a um falso MISMATCH quando o adapter for escalonado mais de cerca de 259 µs depois do guard. No SDKPY02 a distância foi de 12991549466040 para 12991549725003. Isso contradiz a cláusula explícita do revisor.
+
+Há também um conflito interno. O R1-F05 tem dois restos, e o HOW chama de "resto do R1-F05" tanto este predicado (linha 110) quanto o reforço TS14 (linha 66).
+
+**Correção sugerida.** No HOW e no `next-task.json`:
+- usar `<=` no mesmo CLOCK_MONOTONIC;
+- falha da prova unilateral → `INCONCLUSIVE` ou `INVALID_CAPTURE`, nunca `MISMATCH`, o que exige que o avaliador r3 mapeie esse predicado de forma diferente do resto;
+- dizer que ele fecha só a parte de ordem do R1-F05 (a parte TS14 fica com o reforço) ou manter R1-F05 PARTIAL.
+
+### R1-F03 — P3 — obrigatório: não
+**Onde:** `HOW-next-profile.md`, linhas 29–31 e 65–67; `next-task.json`, linha 9.
+
+**Evidência.**
+- O HOW aloca os 33 contratos abertos, mas não diz para onde vai o resíduo declarado dos 11 parciais. Exemplos: TS10 faults de spawn/stdio, TS11 CRLF/linha parcial/UTF-8, TS12 pré-abort/ordens do finally, TS13 JSON não-objeto, TS15 updated/started, PY07 exceção do handler, PY10, PY14. Quase tudo isso é observável no perfil de fonte. O único reforço previsto é TS14 com cache_write presente e o SDKPY07 com `pause_reply`.
+- A linha 30 afirma que o peer v2 "reforça os 11 contratos já observados". Os casos TS10–TS15 não usam o peer JSON-RPC (usam o fixture-cli JSONL), e o efeito do peer v2 se restringe ao alcance de known-bad em SDKPY07/08/09.
+
+**Correção sugerida.** Acrescentar uma tabela "resíduo dos 11 parciais → 2A, 2B ou distribuído" e restringir a frase da linha 30 aos contratos Python com pedido sem script.
+
+### R1-F04 — P3 — obrigatório: não
+**Onde:** `coverage-observed.json`
+- `rows[34].remaining_open_scope` (TS15, linha 1142)
+- `rows[29].observed_scope` e `remaining_open_scope` (TS10, linhas 756–757)
+- `rows[30]`, `rows[31]` e `rows[33]` `.remaining_open_scope` (TS11, TS12, TS14; linhas 830, 877, 995)
+- `rows[9].known_bad_limits` (PY10, linha 405)
+
+**Evidência.**
+- **TS15** lista "Dois turn.completed" como aberto. O SDKTS05 tem dois `turn.completed`, e `api.items_retained_last_message_last_usage` mostra o último usage (3/0/4) vencendo, como pede o TS15.B02. É afirmação a menos e incoerente com o próprio `observed_scope`.
+- **TS10, `observed_scope`:** "flags adicionais capturadas". O argv capturado é exatamente `["exec","--experimental-json"]` (`argv.exec_experimental_json`), sem flag adicional.
+- **TS10, resíduo:** omite "stderr ausente" (TS10.B06 presente/ausente).
+- **TS11, resíduo:** omite "error sem exit", que está na `expectation` do G01.
+- **TS12, resíduo:** omite a falha de `kill` suprimida e a prioridade de erros (TS12.B02 e `expectation`).
+- **TS14, resíduo:** omite cache_write presente e null (vira 0 pelo `??=`, TS14.B02) e a distinção entre `turn.failed`/error no modo streamed e no agregador (TS14.B03 e `expectation`).
+- **PY10, `known_bad_limits`:** "Só closed=false é alcançável como MISMATCH" contradiz o KNOWN_BAD do próprio `acceptance-r2.json` do SDKPY07 ("only a non-blocking interrupt is judged MISMATCH by wire.no_turn_interrupt") e o R2-F02 (goal path não bloqueante → `wire.no_goal_path`).
+
+Todos os casos são de afirmação a menos ou de imprecisão. Nenhum amplia crédito.
+
+**Correção sugerida.** Ajustar esses textos em NOTES e regenerar.
+
+### R1-F05 — P3 — obrigatório: não
+**Onde:** `coverage-observed.json`, `rows[4].observations[0].predicates` (SDKPY02, linha 154) e `rows[4].observations[2].predicates` (SDKPY04, linha 202); `build-binding.py.txt`, linhas 148–150.
+
+**Evidência.** O campo `predicates` conta os predicados do r1 (14), enquanto `by_judge_r2` conta os do r2 (9+4+2 = 15, com o `wire.initialized_before_guard` que só existe no r2). O mesmo objeto mistura as duas versões do avaliador sem rótulo. Também `capture_verdict` e `failed_predicates` vêm só do r1.
+
+**Correção sugerida.** Renomear para `predicates_service_r1` e acrescentar `predicates_offline_r2`, ou derivar tudo de uma única versão.
+
+### R1-F06 — P3 — obrigatório: não
+**Onde:** `coverage-observed.json`, nível do documento (`meaning`) e `rows[29..34].analytic_branch_arms_observed`; a ressalva existe só em `build-binding.py.txt`, linhas 5–6 e 52–53.
+
+**Evidência.** A advertência "leitura analítica de cases.json + contratos G01; não são cobertura de ramo medida" está só no comentário do script. O JSON consumido pelas próximas unidades tem apenas o prefixo `analytic_` no nome do campo.
+
+**Correção sugerida.** Acrescentar ao JSON uma nota de vocabulário dizendo que braços e escopos são leitura analítica, não cobertura de ramo medida.
+
+### R1-F07 — P3 — obrigatório: não
+**Onde:** `E/g02/sdk-coverage-binding/input-verification.json`, linhas 15–34; `verify-inputs.py.txt`, linhas 70–80.
+
+**Evidência.** Os três arquivos fora do unit-manifest são aceitos por uma lista fixa de nomes (`POST`). O motivo de cada um (R1-F10, R2-F05, recibo de commit) aparece só no comentário do script, e o JSON não traz razão nem referência. O conteúdo de `lead-budget-ratification-20261018.json` e do `ledger-delta-cont-d9ef.md` da admissão só fica preso pelo git.
+
+Conferi por fora: os dois existem no commit `ff823afe` e a árvore está limpa, e as fontes os explicam (`next-task.json`, `carry_over` da admissão; `review-r2/executor-disposition.json`). Portanto **não há deriva escondida**. A evidência é que está incompleta.
+
+**Correção sugerida.** Gravar no JSON, para cada arquivo, a razão, a referência (carry_over e disposition) e o commit e blob git que o fixam.
+
+### R1-F08 — P3 — obrigatório: não
+**Onde:** `ledger-delta-cont-d9ef.md`, linhas 41, 43–45 e 46–48; `HOW-next-profile.md`, linhas 42–44.
+
+**Evidência.**
+- Linha 48: "O perfil distribuído cobre PY19, PY20 e PK01–PK09". Está no presente para algo planejado e omite o ramo empacotado do PY02, que o HOW (linha 153) e o `next-task.json` incluem.
+- Linhas 43–45: "GAP-PROVENANCE … sem progresso" sem dizer que PY05 foi observado em parte e que o rótulo foi mantido de propósito. O `gaps-review.json` é transparente quanto a isso.
+- Linha 41: "Validador Node independente". É segunda implementação do mesmo executor, não revisão independente.
+- HOW, linhas 42–44: "não toca … GAP-PLATFORM-PACKAGING", mas o lote 2B inclui o PY02, que pertence a esse gap, ainda que só nos ramos não empacotados.
+
+**Correção sugerida.** Ajustar a redação.
+
+## Checagens feitas
+
+1. Recalculei os sha256 dos 12 arquivos do objeto: os 12 batem com o brief.
+2. **C1, passo 0 (correto):**
+   - unit-manifest da admissão: 692/692 arquivos batem em bytes, sha256 e modo, sem ausentes; o próprio manifesto tem sha `b5a52f6c…`;
+   - extras: só `commit-receipt.json`, `lead-budget-ratification-20261018.json`, `ledger-delta-cont-d9ef.md` e o manifesto; os sha256 batem com o `input-verification.json`;
+   - `commit-receipt.unit_manifest_sha256` é igual ao sha do manifesto;
+   - os cinco freezes do checkpoint batem;
+   - o `identity-freeze` confere em `source_freeze`, `static_admission`, `cases.json`, nos dez `ts_sources` e nos cinco diretórios de diagnóstico; as versões Pydantic 2.13.4 e core 2.46.4 constam em `trees.python-deps`;
+   - `python/acceptance.py`: o atual (`d4a3c06b…`) é igual ao `evaluator-freeze-r2` e ao unit-manifest, e a preimagem em `archives/review-r1-preimages/` (`e8ef2550…`) é igual ao `source-freeze-r2`, como registra o `repair-r1.json`;
+   - os 12 `readonly_inputs_sha256` batem com os arquivos atuais e com os manifestos donos;
+   - git limpo nas três árvores; os três arquivos extras vêm do commit `ff823afe`.
+3. **C2 (correto):** comparei linha a linha com `E/g02/sdk-reference-profile/coverage.json`: 44 linhas, mesma ordem, mesmos `selected_case_ids` e `status_original`. Há exatamente 11 transições (PY05, PY06, PY07, PY10, PY14, TS10–TS15). As 33 restantes seguem `OPEN_REQUIRED_FUTURE_PROFILE` e não têm `observations`. Os casos de cada linha observada são iguais aos selecionados. Os `gaps` de cada linha batem com o G01.
+4. **C3 (correto):**
+   - 42 citações, 38 documentos distintos; recalculei os 38 sha256, e todos batem com o mapa e com o unit-manifest;
+   - cada caminho cai no `attempt_dir` do caso certo, com `case` igual ao citado;
+   - outcome r1 e r2 `PASS_CLIENT_OBSERVATION`, `failed_predicates` vazio, `facts.client_fact_only=true`, `parity_receipt=null`, `functional_receipts=0`;
+   - `by_judge_r2` e o sha r2 batem com `case-results-r2.json`.
+5. **C4:**
+   - flags de crédito: corretas em todas as linhas;
+   - comparei cada `observed_scope`, `known_bad_limits` e `analytic_branch_arms_observed` com `cases.json`, com os predicados dos 38 acceptance e com os `branches` e a `expectation` de TS10–TS15 em `typescript/contracts.json`; os IDs de braço citados existem e os braços batem com SDKTS01–10;
+   - comparei cada `remaining_open_scope` com o `source_contract`, o `future_positive` e os `branches` do G01 (achados R1-F01 e R1-F04).
+6. **C5 (correto):**
+   - as seis linhas do `gaps-review.json` batem com o `integration.json` em owner, contratos, status, `current_unit_progress` e `remaining_boundaries`;
+   - status `OPEN` em todas; o rótulo de progresso muda só em GAP-PY-API, GAP-PY-RPC e GAP-TS-LANGUAGE, e a exclusão do GAP-PROVENANCE está justificada;
+   - contagens 4/13, 4/11 e 6/15 conferidas;
+   - fatos incidentais verificados:
+     - `api.initialize_result_parsed` em SDKPY01–09 e `api.request_result_validated` em SDKPY03/05 (o conjunto exato de chaves vem do R1-F04 do r2);
+     - `clientInfo.version "0+unknown"` em `wire.initialize_request_learned_uuid` do SDKPY01, coerente com o PY19 ("else 0+unknown");
+     - `codexPathOverride` contorna `findCodexPath` (`exec.ts:81-88`), e o `os_cmdline` aponta `/profile/adapter-typescript` em SDKTS01–10;
+   - nenhum desses fatos vira crédito.
+7. **C6:**
+   - escolha explícita, justificada pelas fontes: pin `8d9f6466…`, versões 0.0.0-dev, 0.153.4 e 0.151.0 (`versions-and-packaging.json`), ELF `5cce7264…` em `g02-reference-acceptance.json`, catálogo 487+22;
+   - a alocação 2A (14), 2B (8) e distribuído (11) bate com `planned_profile_proposal`, inclusive a nota do PY02;
+   - peer v2 e `server_overloaded` conferidos com `errors.py:61-119` e `fixture-rpc.py`;
+   - R2-F01..R2-F04 comparados com o `review-r2/review.json` (achado R1-F02);
+   - não há autorização fora do escopo.
+8. **C7:** `next-task.json` e o `ledger-delta` são coerentes com o mapa, o HOW e as fontes. Não afirmam recibo, paridade, BUILD nem push. As contagens 29 e 8 batem com `validation.json` e `negative-controls.json`. Ressalvas nos achados R1-F02 e R1-F08.
+9. Li sem executar `verify-inputs.py.txt`, `build-binding.py.txt`, `validate-binding.mjs.txt` e `negative-controls.py.txt`. A lógica bate com os JSON produzidos.
+
+## Limites da revisão
+
+- Somente leitura. Usei apenas `sha256sum`, `python3 -I` e grep/sed. Não executei os scripts `.txt`, nem SDK, Pydantic, typescript.js, serviço, rede ou git com escrita. Nada foi gravado.
+- Os testemunhos do SO, os `result.json` e os bytes brutos da admissão foram aceitos como registrados. Não refiz a avaliação, só conferi os acceptance contra as fontes.
+- O runtime preservado em `/mnt/ia/…` não foi relido. Os campos informativos do passo 0 que dependem dele foram aceitos.
+- O SDK foi lido só como texto, nos trechos citados (`errors.py`, `exec.ts`).
+- Os links quebrados para `state.json`, `review-r1/verdict.md` e `review-r2/verdict.md`, e o `previous_status` e `last_completed_action` `COMPLETED_LOCAL` antecipados, foram tratados como esperados nesta fase. Não são achado.
+- A completude de `remaining_open_scope` foi avaliada contra os contratos G01 de PY05, PY06, PY07, PY10, PY14 e TS10–TS15. Não revi o mapeamento "demais sítios do censo RPC → PY03/PY08" além do `python-rpc-bindings.json`, que não traz esse vínculo.

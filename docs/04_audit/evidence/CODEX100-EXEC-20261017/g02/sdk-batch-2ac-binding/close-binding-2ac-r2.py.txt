@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION - fechamento depois da R2 (script novo; close-binding-2ac.py.txt, revisado, não é reescrito).
+# Uso: python3 -I -B close-binding-2ac-r2.py.txt <unit_dir>
+# Roda depois de "close-binding-2ac.py.txt <unit_dir> final". Lê state.json e next-task.json gerados por ele,
+# review-r1/review.json, repair-r1.json, review-r2/review.json e review-r2/executor-disposition.json, e grava o
+# estado final e a próxima unidade com a errata e o carry-over da R2.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+U = sys.argv[1]
+
+
+def load(name):
+    with open(os.path.join(U, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(os.path.join(U, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+state, nt, cov = load("state.json"), load("next-task.json"), load("coverage-observed-v3.json")
+r1, rep, r2, disp = load("review-r1/review.json"), load("repair-r1.json"), load("review-r2/review.json"), load("review-r2/executor-disposition.json")
+assert state["status"] == "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS" and r2["verdict"] == "REVISE", "rode antes close-binding-2ac.py.txt em modo final"
+items = {i["id"]: i for i in disp["items"]}
+assert sorted(items) == sorted(f["id"] for f in r2["findings"]), "a disposição deve cobrir todos os achados da R2"
+erratum = items["R2-F01"]
+
+state["status"] = "COMPLETED_LOCAL_WITH_CARRIED_P2"
+state["status_note"] = disp["unit_outcome"]
+state["budget"] = {"services": 0, "reviews": "2/2", "grouped_repairs": "1/1"}
+state["review"] = {
+    "R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (r1["verdict"], r1["summary_counts"]),
+    "repair": "repair-r1.json (1/1, %d achados tratados), preimagens em archives/r1-preimages/" % len(rep["findings"]),
+    "R2": "%s (%s) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt" % (r2["verdict"], r2["summary_counts"]),
+    "R1_findings_after_R2": {s: sum(1 for x in r2["r1_findings_status"] if x["status"] == s) for s in ("RESOLVED", "PARTIAL", "OPEN")},
+    "R2_disposition": {i["id"]: "%s (%s)" % (i["disposition"], i["severity"]) for i in disp["items"]},
+    "disposition_path": "review-r2/executor-disposition.json",
+    "critic": "subagente novo por rodada, somente leitura; o executor gravou brief e veredito sem edição",
+}
+state["result"]["erratum_TS07_B03"] = {
+    "finding": "R2-F01 (P2)",
+    "wrong_in_v3": erratum["wrong_text"],
+    "authoritative_text": erratum["erratum_text"],
+    "applies_in": "BIND do 2B-1 (v4) ou errata T1 curta antes; status, contagens e braços não mudam",
+}
+# R2-F03: o resumo marca os braços fechados com qualificação ou escopo parcial (o detalhe fica no v3 e na errata).
+marks = {}
+for a in cov["arms_closed_v3"]:
+    m = [k for k in ("qualification", "observed_scope") if k in a]
+    if m:
+        marks[a["arm"]] = "qualificado" if m == ["qualification"] else "escopo parcial" + (" (texto na errata R2-F01)" if a["arm"] == "TS07.B03" else "")
+state["result"]["arms_closed_with_qualification_or_partial_scope"] = marks
+state["result"]["next_task"] = "next-task.json (IMPLEMENT-AND-ADMIT do 2B-1; a errata R2-F01 vale para o BIND seguinte)"
+state["scripts"] = state["scripts"] + ["close-binding-2ac-r2.py.txt"]
+state["secret_scan"] = "secret-scan.json: o gitleaks roda por último, sobre uma cópia da pasta final (todos os arquivos, inclusive este state.json); o registro lista o sha de cada arquivo escaneado."
+state["post_review_r2"] = {
+    "changed": ["state.json", "next-task.json"],
+    "added": ["review-r2/verdict.raw.txt", "review-r2/review.json", "review-r2/executor-disposition.json", "close-binding-2ac-r2.py.txt",
+              "ledger-delta-cont-d9ef.md", "secret-scan.json"],
+    "not_rewritten": "coverage-observed-v3.json, gaps-review-v3.json, projection-2b-on-v3.json, validation.json, input-verification.json, repair-r1.json e os scripts revisados ficam como no review-freeze-r2.json",
+    "review_freezes": "review-freeze-r1.json e review-freeze-r2.json são os assuntos das revisões, ligados por sha nos vereditos",
+}
+state["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+nt["previous_status"] = state["status"]
+nt["status"] = "READY_PENDING_LEAD_CLAIM"
+nt["previous_review"] = "R1 REVISE (%s) -> reparo agrupado -> R2 REVISE (%s): review-r2/executor-disposition.json" % (r1["summary_counts"], r2["summary_counts"])
+nt["erratum_2AC_BIND_R2_F01"] = {
+    "severity": "P2", "status": "CARRIED_MANDATORY_ERRATUM",
+    "arm": "TS07.B03", "authoritative_text": erratum["erratum_text"], "gate": erratum["gate"],
+    "effect_on_this_task": "nenhum: a IMPLEMENT do 2B-1 não lê o braço TS07.B03",
+}
+nt["carry_over_from_bind_review"] = ["2AC-BIND/%s (%s, %s): %s" % (i["id"], i["severity"], i["disposition"], i["note"]) for i in disp["items"] if i["id"] != "R2-F01"]
+nt["id_convention"] = nt["id_convention"].rstrip(".") + "; 2AC-BIND/... (revisões deste BIND da continuação 2A)."
+nt["after_this"] = [
+    ("BIND do 2B-1 (coverage-observed-v4 ao lado do v3), aplicando a errata 2AC-BIND/R2-F01 e o carry-over 2AC-BIND/R2-F02 e R2-F05"
+     if x.startswith("BIND do 2B-1") else x) for x in nt["after_this"]
+]
+nt["review_records"] = {"review_r1": {"path": "review-r1/review.json", "sha256": sha("review-r1/review.json")},
+                        "repair_r1": {"path": "repair-r1.json", "sha256": sha("repair-r1.json")},
+                        "review_r2": {"path": "review-r2/review.json", "sha256": sha("review-r2/review.json")},
+                        "disposition_r2": {"path": "review-r2/executor-disposition.json", "sha256": sha("review-r2/executor-disposition.json")},
+                        "coverage_observed_v3": {"path": "coverage-observed-v3.json", "sha256": sha("coverage-observed-v3.json")},
+                        "projection_2b_on_v3": {"path": "projection-2b-on-v3.json", "sha256": sha("projection-2b-on-v3.json")}}
+for name, obj in (("state.json", state), ("next-task.json", nt)):
+    with open(os.path.join(U, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], sorted(state["review"]["R2_disposition"]), marks)

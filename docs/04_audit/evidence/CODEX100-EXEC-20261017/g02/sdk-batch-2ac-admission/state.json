@@ -1,0 +1,342 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100 (IN_PROGRESS)",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "lead": "CONT-20261018-D9EF (Claude Code); executor subagente",
+  "track": "T1 com execução local contida",
+  "status": "COMPLETED_LOCAL",
+  "git": {
+    "worktree": "/mnt/dados/cvg-work/cvg-codex100-batch2ac-20261019",
+    "base": "259968f9 (candidata da admissão 2A)",
+    "branch": "nenhuma (HEAD destacado)"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-batch2ac-runtime-20261019 (privado; /mnt/ia não tocado)",
+  "spec_inputs": {
+    "source": "raiz f65f43e5, g02/sdk-source-batch-2a-continuation-spec/ (cópia em inputs/spec-2ac/, seis sha conferidos com next-task.json#/spec)",
+    "sha256": {
+      "cases-2a-cont.json": "60a46db7544134958481c03df476305659f29653faaa171a6fed41a8ce6b4244",
+      "coverage-plan-2a-cont.json": "dca8d1fb22d31145ad9d0a0f4f86d47b9e391c59e8c88aa7eb7ac7f3197ea343",
+      "freeze-r4-contract.json": "14ad70297aa907e5a88add489196c1b38dfdbf15ef50454f40250185957688ed",
+      "evaluator-r4-contract.json": "62d948a1373ab0b7eb7ac55d02bfd3a638bdadbf6d194b3765dd273d63c89b72",
+      "control-slot-contract.json": "35a7f210c7eb2c40762009d924177164cadce5661172d12d12fbcaea53d68c73",
+      "execution-budget.json": "037922bc1b5e5d383071ad46460c187cecd6b52673e214b20d68bf90cd6097f1"
+    }
+  },
+  "implementation": {
+    "from": "fontes da admissão 2A (g02/sdk-batch-2a-admission em 259968f9) copiadas e alteradas nesta pasta",
+    "freeze_r4": {
+      "F4-01": "supervisor.py delivered_input/sdk_rows (case_input do slot congelado, sha antes do READY); channel.cjs/channel.py BEGIN.case_input_sha256; observer BEGIN; acceptance case_input_witness",
+      "F4-02": "supervisor.py ts_fixture/frozen_wire; observer.py wire_check (EQUAL, PREFIX sob sinal, NOT_CHECKED)",
+      "F4-03": "fixture-rpc.py jeq no match de method, params e params_subset",
+      "F4-04": "fixture-rpc.py: os.close(1) antes de EXIT_AFTER_SCRIPT (stdout_closed=true)",
+      "F4-05": "acceptance.py peer_replay_check (CONTROL em capture_extra; DIAG-PY-UNSCRIPTED em diag_checks)",
+      "F4-06": "supervisor.py ExecWitness (inotify_init1 sem privilégio, drenagem antes da liberação e no CALLS_DONE, overflow/IGNORED como falha, dev/ino)",
+      "F4-07": "adapter-typescript faultMode; FAULT em ROLE_KINDS/DATA_FIELDS/observer; fixture-cli aceita a chave",
+      "F4-08": "ts-driver.mjs materialize (exportado para autoteste)",
+      "F4-09": "ts-driver.mjs recorder do 2A-TS10E com drenagem de 500 ms; epipeProbe",
+      "F4-10": "regex de channel.cjs, listas de channel.py, CONTROL_CASE e contagens do supervisor",
+      "F4-11": "acceptance.py r4; source-freeze-r4; identity-freeze-r4; emit selado da admissão reutilizado",
+      "F4-12": "ts-driver.mjs barreira WITNESS_WINDOW_OPEN (STEP_WITNESS kind WINDOW_OPEN); supervisor drena antes do STEP_RELEASE"
+    },
+    "deviations": [
+      {
+        "id": "D1",
+        "item": "F4-07",
+        "finding": "R1-F12",
+        "text": "O autoteste offline do fault do adapter foi substituído pelo DIAG-TS-EPIPE em serviço: o adapter exige FIFOs e admissão do canal. Evidência: diagnostics/962e98815e0c-DIAG-TS-EPIPE/events-adapter.jsonl (READY seq 1, FAULT seq 2, STREAM_END stdin com 0 bytes, nenhum RAW_READ de stdin) e o assert de fd 0 reaberto em /dev/null em node/adapter-typescript. Adjudicação pedida."
+      },
+      {
+        "id": "D2",
+        "item": "F4-06 / R4-03",
+        "finding": null,
+        "text": "enoentProbe passou a emitir ERROR_DETAIL com a falha de spawn, para a evidência de NO_CHILD do R4-03 (mudança antes do source-freeze-r4)."
+      },
+      {
+        "id": "D3",
+        "item": "F4-11",
+        "finding": "R1-F07",
+        "text": "identity-freeze-r4 foi feito depois dos 11 DIAG (06:10:36Z; último DIAG 06:10:31Z; CONTROL 06:10:42Z), contra a letra de F4-11 e do passo 2 do orçamento. Razão: o desenho herdado do lote 2A liga no identity freeze os DIAG aprovados e a decisão das vagas condicionais (freeze_identities exige DIAG_PASS). source-freeze-r4 (06:09:56Z) precede o primeiro serviço (06:10:02Z) e os 9 result.json conferem os dois freezes."
+      },
+      {
+        "id": "D4",
+        "item": "F4-11",
+        "finding": "R1-F01, R2-F02",
+        "text": "A suíte r3.1 (54) não foi rodada como estava: ela mira a tabela e os IDs do lote 2A. selftests/r4_1 portou 11 verificações genéricas (R3-11, regras 2 e 5, R3-08 no 2A-TS12R e no 2A-TS03R, R3-F02, RoleLogs vazios, rejeições do ScriptV2, exit 2, reevaluate, wireFixture x frozen_wire). Seis testes genéricos da r3.1 que valem para esta tabela não foram portados: nenhum código -32099..-32000 nem texto de retry nos peer_script congelados; todo nth na ordem da regra; pedido não roteirizado -> -32601 com data; ctrl-2 recebe o erro não roteirizado congelado; INVALID sem prazo no 2A-TS12R -> INVALID_CAPTURE; acceptance-r4_1.json com versão alheia -> exit 1. A revisão R2 os portou numa cópia e todos passam (review-r2/review.json R2-F02); o porte vai ao próximo freeze."
+      },
+      {
+        "id": "D5",
+        "item": "F4-01",
+        "finding": "R1-F03",
+        "text": "As checagens de env do DIAG-TS-ARGVENV comparam por igualdade de dict e não conferem a ordem. Observação: o /proc environ registrado (result.json adapter_environ) está na ordem congelada PATH, HOME, CVG_DIAG_ENV, CODEX_INTERNAL_ORIGINATOR_OVERRIDE, e os sha dos papéis no BEGIN são iguais ao do supervisor; o EXEC_ENV é ordenado pelo adapter por desenho desde o lote 2A (CAP-ENV-EXACT) e não pode provar a ordem."
+      },
+      {
+        "id": "D6",
+        "item": "F4-05",
+        "finding": "R1-F04",
+        "text": "O estado do replay do peer v2 do CONTROL não ficou no documento de caso (capture_extra só registra MISMATCH); registrado offline em reevaluation-r4_1-peer-replay.json."
+      },
+      {
+        "id": "D7",
+        "item": "F4-09",
+        "finding": "R2-F01",
+        "text": "O autoteste do recorder não executa o ts-driver.mjs (que exige canal e SDK): selftests/r4_1 prova a semântica com uma réplica Node (erro de stream próprio sem listener vira uncaughtException e o processo segue), a ordem registro -> drenagem de 500 ms -> UNCAUGHT -> CALLS_DONE no fonte e, em serviço, exatamente um UNCAUGHT antes do CALLS_DONE no 2A-TS10E e no DIAG-TS-EPIPE."
+      },
+      {
+        "id": "D8",
+        "item": "F4-12",
+        "finding": "R2-F01",
+        "text": "Não há autoteste offline do driver com o passo de barreira: a prova é a ordem no fonte do supervisor (open_window antes do STEP_RELEASE) e a cadeia em serviço recv(WINDOW_OPEN) <= window_open_ns <= t_ns do STEP_RELEASE <= recv(próximo quadro do driver) nas três janelas (2A-TS12R, DIAG-TS-PREABORT, DIAG-TS-ENOENT), todas na base do t0 da tentativa."
+      },
+      {
+        "id": "D9",
+        "item": "F4-10",
+        "finding": "R2-F01",
+        "text": "Aceitação e rejeição de ID foram testadas por execução só na regex TS de channel.cjs; as listas de channel.py e as constantes do supervisor são conferidas por presença de texto e, em serviço, pela admissão exata das 9 vagas e dos 11 DIAG. O nome do teste F4-01 diz \"frozen sha in every preserved adapter-config.json\", mas o sha congelado só é comparado nas 9 vagas (nos 11 DIAG, Node == Python)."
+      }
+    ]
+  },
+  "selftests": {
+    "r4": {
+      "path": "selftests/selftest-results.json",
+      "passed": 54,
+      "failed": 0,
+      "sdk_imported": false,
+      "services": 0,
+      "scope": "suíte própria do r4 (54 testes novos), congelada em source-freeze-r4; não é a suíte r3.1 da admissão 2A, apesar da mesma contagem (review-r1 R1-F01)"
+    },
+    "r4_1": {
+      "path": "selftests/r4_1/selftest-results.json",
+      "passed": 28,
+      "failed": 0,
+      "sdk_imported": false,
+      "services": 0,
+      "scope": "reparo R1 (R1-F01): recorder F4-09 (erro sem listener num stream próprio, ordem no driver e um UNCAUGHT antes do CALLS_DONE nos dois serviços), barreira F4-12 (drenar antes de liberar, no fonte e nas três janelas em serviço), suíte r3.1 portada (R3-11, regras 2 e 5, R3-08 por prazo, R3-F02, RoleLogs vazios nos 9 casos, rejeições do ScriptV2, exit 2, perturbação e versão alheia no reevaluate, wireFixture x frozen_wire), reserialização por papel em todas as vagas F4-01, F4-05 com o stdout ordenado do 2A-PY03, efeitos do quadro exit F4-04 executados, IN_Q_OVERFLOW e IN_IGNORED em ExecWitness.drain F4-06, aceitação e rejeição de IDs F4-10"
+    }
+  },
+  "freezes": {
+    "source-freeze-r4.json": "19e75df5df6225a2289b71164492fd3e8f1510e03cc53368b6c32ad922300752",
+    "identity-freeze-r4.json": "59e38a2dedee118cfa6d6f94a033f42e719aaaac2dfb08c249b681c6ce2c19ed",
+    "emit_reused": {
+      "path": "sdk-admission/compiler/emit.json",
+      "sha256": "0576db71de14119d14af03792e3ffad01d34d6356c6df0ec69b423fafa4c776d"
+    }
+  },
+  "diagnostics": {
+    "DIAG-PY-STAGE": "PASS",
+    "DIAG-TS-LARGE": "PASS",
+    "DIAG-TS-PREABORT": "observer NO_CHILD -> R4-03 PREFRAME_TERMINATION",
+    "DIAG-PY-RPC": "PASS",
+    "DIAG-TS-ECHO": "PASS",
+    "DIAG-TS-EPIPE": "PASS",
+    "DIAG-TS-ARGVENV": "PASS",
+    "DIAG-TS-ENOENT": "observer NO_CHILD -> R4-03 NO_CHILD",
+    "DIAG-TS-TMPWATCH": "PASS",
+    "DIAG-PY-UNSCRIPTED": "PASS",
+    "DIAG-TS-ABORT": "KNOWN_SIGNAL_TERMINATION"
+  },
+  "diagnostics_status": "11/11 DIAG_PASS na primeira execução",
+  "conditional_slots": {
+    "2A-TS12R": "RUN",
+    "2A-TS10E": "RUN"
+  },
+  "control": {
+    "case": "2AC-CTRL01",
+    "outcome": "MISMATCH",
+    "rule": 6,
+    "failed": ["wire.no_turn_interrupt (client)"],
+    "gate_passed": true,
+    "peer_replay_r4_1": {
+      "status": "EQUAL",
+      "stdout_bytes": 279,
+      "stdout_sha256": "85739b33bccb90134e41adfac5465f8fcca7171c292eb347e3ed866683396491",
+      "path": "reevaluation-r4_1-peer-replay.json"
+    },
+    "gate_note": "O gate do supervisor aceita qualquer MISMATCH (R1-F06); o CONTROL executado cumpre o critério completo do contrato: regra 6, failed_predicates só wire.no_turn_interrupt, sanidades aprovadas."
+  },
+  "cases": {
+    "counts": {
+      "PASS_CLIENT_OBSERVATION": 8,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "by_slot": {
+      "2A-TS03R": "PASS_CLIENT_OBSERVATION",
+      "2A-TS06R": "PASS_CLIENT_OBSERVATION",
+      "2A-TS07R": "PASS_CLIENT_OBSERVATION",
+      "2A-TS12R": "PASS_CLIENT_OBSERVATION",
+      "2A-TS10E": "PASS_CLIENT_OBSERVATION",
+      "2A-TS06X": "PASS_CLIENT_OBSERVATION",
+      "2A-TS07X": "PASS_CLIENT_OBSERVATION",
+      "2A-TS08X": "PASS_CLIENT_OBSERVATION",
+      "2AC-CTRL01": "MISMATCH"
+    },
+    "capture_reading_by_slot": {
+      "2A-TS03R": "PASS",
+      "2A-TS06R": "PASS",
+      "2A-TS07R": "PASS",
+      "2A-TS12R": "observer NO_CHILD -> R4-03 PREFRAME_TERMINATION",
+      "2A-TS10E": "PASS",
+      "2A-TS06X": "PASS",
+      "2A-TS07X": "PASS",
+      "2A-TS08X": "PASS",
+      "2AC-CTRL01": "PASS"
+    }
+  },
+  "reevaluation": {
+    "path": "reevaluation-r4.json",
+    "all_predicate_level_equal": true,
+    "all_outcome_equal": true
+  },
+  "budget": {
+    "slots": "9/9",
+    "services": "11/12",
+    "reviews": "2/2",
+    "grouped_repairs": "1/1",
+    "automatic_retries": 0,
+    "load_waits": {
+      "services_checked": 20,
+      "waited": 0,
+      "max_loadavg_1m_at_start": 4.33,
+      "limit": 12.0
+    }
+  },
+  "resources": {
+    "units": 20,
+    "all_released": true,
+    "prefix": "cvg-dx100-2ac-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-batch2ac-20261019",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-batch2ac-runtime-20261019"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 42,
+    "by_status": {
+      "expected_empty": 42
+    },
+    "repair_r1": "motivos do 2A-TS12R reescritos (R1-F09): existência testemunhada por IN_OPEN; término NOT_WITNESSED; DIAG-TS-PREABORT cita o próprio registro de PID e SIGTERM. Pré-imagem em archives/review-r1-preimages/."
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade. SPEC0239 BUILD não autorizada. Sem push, PR, deploy ou produção.",
+  "updated_at": "2026-10-19T07:08:41.722541+00:00",
+  "diagnostics_note": "Veredito do observer; nos sem quadro aparece a forma R4-03 ao lado (review-r1 R1-F02). DIAG-TS-PREABORT é PREFRAME_TERMINATION e DIAG-TS-ENOENT é NO_CHILD, como o gate do 2A-TS12R exige; os 11 são DIAG_PASS.",
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "subject": "review-freeze-r1.json",
+      "verdict": "REVISE",
+      "findings": {
+        "P2": 1,
+        "P3": 11
+      }
+    },
+    "repair_r1": {
+      "path": "repair-r1.json"
+    },
+    "r2": {
+      "path": "review-r2/review.json",
+      "subject": "review-freeze-r2.json",
+      "subject_sha256": "36a39850814a4efd6a6b830d6454d2944b76023da6531429422500cf417563f5",
+      "verdict": "APPROVE",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 5
+      },
+      "disposition": "review-r2/executor-disposition.json"
+    }
+  },
+  "errata": {
+    "path": "errata-r1.json",
+    "findings": ["R1-F02", "R1-F08", "R1-F10"]
+  },
+  "carry_over_next_freeze": [
+    {
+      "finding": "R1-F03",
+      "text": "Comparar a lista de pares do /proc environ em ordem, não por dict."
+    },
+    {
+      "finding": "R1-F04",
+      "text": "Levar o status do replay do peer v2 (EQUAL, PREFIX, NOT_CHECKED, MISMATCH) ao detalhe de captura de todo caso com peer_script."
+    },
+    {
+      "finding": "R1-F05",
+      "text": "api.stdin_error_uncaught: contar só os UNCAUGHT anteriores ao CALLS_DONE, remover o listener depois da drenagem (ou emitir os tardios como violação) e registrar a pilha e o stream para a adjudicação."
+    },
+    {
+      "finding": "R1-F06",
+      "text": "O gate do CONTROL deve exigir regra 6 e failed_predicates == [\"wire.no_turn_interrupt\"], não qualquer MISMATCH."
+    },
+    {
+      "finding": "R1-F07",
+      "text": "Separar o identity freeze (antes de qualquer serviço) do registro de admissão dos DIAG, ou mudar a letra do contrato."
+    },
+    {
+      "finding": "R1-F08",
+      "text": "Corrigir os rótulos (task do source freeze, composition, docstrings), atualizar interface-bindings com FAULT e BEGIN.case_input_sha256 e renomear events_in_window[*].t_ns para drained_t_ns."
+    },
+    {
+      "finding": "R1-F11",
+      "text": "Abrir a janela inotify também nos passos de erro com spawns=0 (CAP-ZERO-SPAWN-WITNESS)."
+    },
+    {
+      "finding": "R1-F12",
+      "text": "Guardar a chave adapter_close_stdin_at_start por ID de caso no fixture-cli e no adapter."
+    },
+    {
+      "finding": "R2-F01",
+      "text": "Autotestes do driver com canal simulado para o recorder (F4-09) e a barreira (F4-12); aceitação e rejeição de ID nas listas de channel.py e nas constantes do supervisor (F4-10); renomear o teste F4-01 ou comparar o sha congelado também nos DIAG."
+    },
+    {
+      "finding": "R2-F02",
+      "text": "Portar os seis testes genéricos da r3.1 listados em D4."
+    }
+  ],
+  "adjudication": {
+    "path": "adjudication-r1.json",
+    "sdk_final_reading": {
+      "PASS_CLIENT_OBSERVATION": 8
+    },
+    "bind_consumes_only": 8,
+    "deviations": "D1-D9 aceitos (D5 e D9 com carry-over)"
+  },
+  "next_task": {
+    "path": "next-task.json",
+    "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A-CONTINUATION (proposta)",
+    "t3_required": false
+  },
+  "tools_repair": [
+    "tools/repair_r1.py",
+    "tools/adjudicate_r1.py",
+    "tools/empty_artifacts.py (motivos do 2A-TS12R)",
+    "tools/close_r2.py"
+  ],
+  "post_review_r2_changes": "post-review-r2-changes.json",
+  "closing_documents": [
+    "state.json",
+    "errata-r1.json (E6)",
+    "adjudication-r1.json (D1-D9)",
+    "next-task.json",
+    "review-r2/executor-disposition.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r2-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ],
+  "validation": {
+    "prettier": "prettier 3.8.3 --ignore-path /dev/null --check nos 15 documentos autorados (JSON e MD): OK. Não reformatados por desenho: arquivos de serviço, freezes (source, identity, review), entradas, fixture-cases, case-plan, interface-bindings, livros do supervisor (budget, case-ledger), resultados de autoteste e review.json do revisor.",
+    "doc_links": "node scripts/check-doc-links.mjs <pasta da unidade>: DOC_LINKS_OK, 0 quebrados",
+    "evidence_hygiene_copy": "cópia da unidade com empty-artifact-delta.json como catálogo: EVIDENCE_HYGIENE_OK (42/42 vazios catalogados, 201 JSON parseáveis)",
+    "evidence_hygiene_real": "na candidata (base 259968f9): 167 erros = 42 desta unidade + 62 da g02/sdk-batch-2a-admission + 39 da g02/sdk-admission + 17 da g02/sdk-observation-drivers + 7 de HISO005-P2-BUILD-0240-20261018, todos vazios sem registro no catálogo central da base; nenhum desta unidade além dos 42 do delta",
+    "secret_scan": "gitleaks v8.28.0 (docker, .gitleaks.toml da raiz): exit 0, 0 achados; controle positivo sintético exit 1 (lead-secret-scan-triage.json)",
+    "pycache": "nenhum __pycache__ nem .pyc na pasta",
+    "units_after": "systemctl --user list-units --all cvg-dx100-2ac-*: 0; nenhum cgroup cvg-dx100-2ac-* em app.slice"
+  }
+}

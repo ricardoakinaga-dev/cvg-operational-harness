@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B - fechamento depois da R2 (script novo; close-unit-2b.py.txt, revisado, não é reescrito).
+# Uso: python3 -I -B close-unit-2b-r2.py.txt <spec_dir>
+# Lê state.json e next-task.json do rascunho, review-r1/review.json, repair-r1.json, review-r2/review.json e
+# review-r2/executor-disposition.json, e grava o estado final e a próxima unidade com o carry-over da R2.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+SPEC = sys.argv[1]
+
+
+def load(name):
+    with open(os.path.join(SPEC, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(os.path.join(SPEC, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+state, nt = load("state.json"), load("next-task.json")
+r1, rep, r2, disp = load("review-r1/review.json"), load("repair-r1.json"), load("review-r2/review.json"), load("review-r2/executor-disposition.json")
+mandatory = [i for i in disp["items"] if i["disposition"] == "CARRIED_TO_IMPLEMENT_MANDATORY"]
+carried = [i for i in disp["items"] if i["disposition"] == "CARRIED_TO_IMPLEMENT"]
+
+state["status"] = "COMPLETED_LOCAL_WITH_CARRIED_P2"
+state["status_note"] = disp["unit_outcome"]
+state["budget"] = {"services": 0, "reviews": "2/2", "grouped_repairs": "1/1"}
+state["review"] = {
+    "R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (r1["verdict"], r1["summary_counts"]),
+    "repair": "repair-r1.json (1/1), preimagens em archives/r1-preimages/",
+    "R2": "%s (%s) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt" % (r2["verdict"], r2["summary_counts"]),
+    "R1_findings_after_R2": {s: sum(1 for x in r2["r1_findings_status"] if x["status"] == s) for s in ("RESOLVED", "PARTIAL", "OPEN")},
+    "R2_disposition": "review-r2/executor-disposition.json",
+    "critic": "subagente novo por rodada, somente leitura; o executor gravou brief e veredito sem edição",
+}
+state["post_review_r2"] = {
+    "changed": ["state.json", "next-task.json"],
+    "added": ["review-r2/verdict.raw.txt", "review-r2/review.json", "review-r2/executor-disposition.json", "close-unit-2b-r2.py.txt",
+              "ledger-delta-cont-d9ef.md"],
+    "review_freezes": "review-freeze-r1.json e review-freeze-r2.json são os assuntos das revisões, ligados por sha nos vereditos",
+}
+state["result"]["next_task"] = "next-task.json (IMPLEMENT-AND-ADMIT do 2B-1, sem T3, com R2-F01 obrigatório)"
+state["scripts"] = state["scripts"] + ["close-unit-2b-r2.py.txt"]
+state["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+nt["previous_status"] = state["status"]
+nt["status"] = "READY_PENDING_LEAD_CLAIM"
+nt["previous_review"] = "R1 REVISE (%s) -> reparo agrupado -> R2 REVISE (%s): review-r2/executor-disposition.json" % (r1["summary_counts"], r2["summary_counts"])
+nt["mandatory_carry_over"] = ["%s (%s): %s" % (i["id"], i["severity"], i["note"]) for i in mandatory]
+nt["carry_over"] = ["%s (%s, %s): %s" % (i["id"], i["severity"], i["scope"], i["note"]) for i in carried]
+nt["gate_for_2B_2"] = "A IMPLEMENT-AND-ADMIT do 2B-2 só começa com R2-F01 fechado (regra de ocorrência por (id, event) implementada, autotestada e aprovada na revisão da IMPLEMENT do 2B-1, ou errata T1 do 2B-2) e com o 2B-1 admitido."
+nt["lead_decision_note"] = "A R2 terminou em REVISE com um P2 de texto (contagem de ocorrência de gancho) que não muda nenhum caso do 2B-1. O executor seguiu o caminho menor e registrado: interpretação vinculante na disposição, verificada pela revisão da IMPLEMENT. Se o Lead preferir corrigir os textos antes, a alternativa é uma errata T1 curta do 2B-2."
+nt["review_records"] = {"review_r1": {"path": "review-r1/review.json", "sha256": sha("review-r1/review.json")},
+                        "repair_r1": {"path": "repair-r1.json", "sha256": sha("repair-r1.json")},
+                        "review_r2": {"path": "review-r2/review.json", "sha256": sha("review-r2/review.json")},
+                        "disposition_r2": {"path": "review-r2/executor-disposition.json", "sha256": sha("review-r2/executor-disposition.json")},
+                        "validator": {"path": "validate-spec-2b.mjs.txt", "sha256": sha("validate-spec-2b.mjs.txt")}}
+for name, obj in (("state.json", state), ("next-task.json", nt)):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], len(mandatory), len(carried))

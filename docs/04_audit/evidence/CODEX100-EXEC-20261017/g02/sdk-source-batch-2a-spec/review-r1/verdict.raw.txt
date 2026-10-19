@@ -1,0 +1,188 @@
+# Veredito R1: DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A
+
+**Veredito: REVISE.** São 5 achados obrigatórios (P2) e 8 recomendações (P3). Não há P1.
+
+Pela leitura da fonte do pin, estes valores conferem: os vetores argv, os bytes de stdin e o env do filho de todos os casos TS, os payloads JSON-RPC, as classes de erro e o TurnResult dos casos Python, as 67 âncoras e os 35 sha de entrada.
+
+Os problemas obrigatórios estão em três pontos:
+- expectativas que dependem de uma corrida ou de uma observação que a infraestrutura não garante (TS15 e os eventos inotify);
+- regras do avaliador r3 que deixam o desfecho (MISMATCH, INVALID_CAPTURE ou INCONCLUSIVE) indefinido;
+- a vaga CONTROL, que é o gate e pode "passar" pelo motivo errado ou parar por uma ambiguidade do valor esperado.
+
+## Achados
+
+### R1-F01 (P2, obrigatório: sim): TS15 espera SIGTERM, mas o término depende de corrida
+- **Onde:** `cases-2a.json#/cases[id=2A-TS15]/fixture`, `/accepted_capture_forms`, `/predicates` (`cleanup.child_terminated_by_SIGTERM`) e `/expected/child_termination`.
+- **Evidência:**
+  - O fixture é JSONL comum, sem `write_then_hold`.
+  - Na infraestrutura da admissão, o supervisor libera `RELEASE_EXIT` ao peer assim que o adapter comita os bytes de `REPLY_WRITTEN` (`supervisor.py:878-882`). Peer e adapter então saem com 0.
+  - O SDK só sinaliza um filho ainda vivo: `exec.ts:260`, `if (!child.killed) child.kill();`. Depois do `exit`, o `kill()` não tem efeito.
+  - A admissão documentou essa mesma corrida para o mesmo padrão (`turn.failed` com break, SDKTS07/08; `supervisor.py:256-259`) e aceitou PASS e KNOWN_SIGNAL_TERMINATION (`case-plan.json` SDKTS07).
+  - No TS15 só KNOWN_SIGNAL_TERMINATION é aceito. Pelo `acceptance.py:535-537`, forma de captura não aceita resulta em `MISMATCH`.
+  - Logo, um SDK correto que perca a corrida gera um MISMATCH falso, e o R3-09 o preserva. O TS04 evitou o problema com CAP-WRITE-THEN-HOLD.
+- **Correção:** acrescentar `"write_then_hold": true` ao fixture do TS15 e incluir 2A-TS15 em `CAP-WRITE-THEN-HOLD.used_by`. A alternativa é aceitar PASS, como no SDKTS07, e condicionar o predicado de SIGTERM à forma observada.
+
+### R1-F02 (P2, obrigatório: sim): eventos inotify esperados que não são observáveis de forma confiável
+- **Onde:**
+  - `cases-2a.json#/cases[id=2A-TS03]/expected/fs_events` e o predicado `tmp.fs_events_create_then_delete`;
+  - `#/cases[id=2A-TS06]/expected/fs_events_step3` e o mesmo predicado;
+  - `#/cases[id=2A-TS04]/predicates` (`tmp.second_dir_removed_before_return`);
+  - `capture-contract.json#/capabilities/CAP-TMP-WITNESS`.
+- **Evidência:**
+  - (a) O inotify não é recursivo. A vigia em `/work/tmp` vê o IN_CREATE do diretório `codex-output-schema-XXXXXX`. O IN_CREATE e o IN_DELETE de `schema.json` exigem vigia no subdiretório, que o supervisor só pode acrescentar depois de ler o primeiro evento. No SDK, o `writeFile` vem logo depois do `mkdtemp`, na mesma função async (`outputSchemaFile.ts:19-20,30`). O evento do arquivo tende a se perder.
+  - (b) "Antes do spawn", "antes do retorno de run()" e "antes do erro" ordenam um evento inotify, que não traz timestamp, contra eventos de outros processos. Nenhum desses predicados está declarado como prova unilateral (o R3-01 lista só o do TS04).
+  - (c) Pelo classificador da admissão (`acceptance.py:104-115`), `tmp.*` cai em `client`. Uma falha vira MISMATCH.
+  - (d) O contrato fala em "diretório do host montado em /work/tmp", mas a admissão usa `--tmpfs /work --dir /work/tmp` dentro do bwrap (`supervisor.py:662`; `claim.json`, "/work tmpfs 64 MiB"). É uma mudança de topologia e de contenção que não foi declarada.
+- **Correção:**
+  - Julgar criação e conteúdo pelo SCHEMA_FILE do fixture-cli: o arquivo existe com os bytes exatos durante o filho, o que prova a criação antes do spawn.
+  - Julgar "removido antes do retorno ou do erro" por uma listagem do próprio driver logo depois que a promise assenta (mesmo processo, ordem sólida).
+  - Deixar os eventos inotify como informativos, ou dar a eles classe e desfecho explícitos.
+  - Declarar o bind mount (ou a vigia por `/proc/<pid>/root`) como mudança de contenção no freeze r3 e no DIAG-TS-TMPWATCH.
+
+### R1-F03 (P2, obrigatório: sim): avaliador r3 contraditório no único predicado de ordem unilateral do lote
+- **Onde:** `evaluator-r3-contract.json#/clauses[id=R3-01]`, `[id=R3-06]` e `[id=R3-08]`; `cases-2a.json#/cases[id=2A-TS04]/inconclusive_on_deadline` (false), `/expected/order_informational` e `/predicates` (`order.kill_and_rm_before_return_resolved`).
+- **Evidência:**
+  - O R3-06 manda a falha de `order_unilateral` para INCONCLUSIVE, e o R3-01 aplica essa classe em 2A só ao predicado do TS04.
+  - O R3-08 restringe INCONCLUSIVE a prazo e aos casos com `inconclusive_on_deadline=true` (TS10 e TS12). Para o TS04, as duas regras dão desfechos incompatíveis.
+  - A condição unilateral desse predicado não está definida: não se diz quais quadros e `mono_ns` comparar.
+  - O próprio caso chama a mesma ordem de `order_informational`, mas a lista como predicado julgado.
+  - O par óbvio, SIGNAL do adapter `<=` API_RESULT do return no driver, não prova o kill antes da resolução, porque o quadro API_RESULT é criado depois dela.
+- **Correção:**
+  - Para a parte do rm, julgar por listagem no driver depois que o `return()` resolve.
+  - Para a parte do kill, registrar como informativa, ou definir uma condição unilateral com desfecho explícito na falha (INVALID_CAPTURE, ou INCONCLUSIVE com o TS04 incluído no R3-08).
+  - Eliminar o conflito entre R3-06 e R3-08.
+
+### R1-F04 (P2, obrigatório: sim): classes de juiz e oráculos dos predicados não congelados; o gate CONTROL pode passar falsamente
+- **Onde:**
+  - `evaluator-r3-contract.json#/clauses[id=R3-06]`: "recebe uma classe na implementação";
+  - `execution-budget.json#/order`: a revisão vem só no passo 6, depois dos 23 casos;
+  - `cases-2a.json#/cases[id=2A-CTRL01]/predicates` e `/known_bad/judged_by`;
+  - `#/cases[id=2A-PY10R]/known_bad/judged_by`;
+  - `#/cases[id=2A-PY08]/predicates` (`peer.exit_after_script_witnessed`);
+  - `#/cases[id=2A-TS11]/predicates` (`wire.fixture_chunks_relayed`).
+- **Evidência:**
+  - Cerca de 60 IDs de predicado novos são só nomes. Não há oráculo nem em `build-spec-2a.py.txt` nem nos contratos.
+  - A classe que decide entre MISMATCH e INVALID_CAPTURE fica para o IMPLEMENT, sem revisão independente antes da execução.
+  - O classificador estendido (`acceptance.py:104-115`) põe em `client`, por prefixo, tudo que não está em PEER_SANITY nem começa com `order.` ou `cleanup.`.
+- **Consequências concretas:**
+  - (a) CONTROL: `control.peer_answered_unscripted` e `control.client_not_blocked` cairiam em `client`. Se o peer v2 não responder e o cliente de controle desistir pelo próprio prazo, o caso termina em MISMATCH por esses predicados. O gate passa sem provar alcance. Além disso, `control.outcome_is_mismatch` é circular, um predicado sobre o próprio desfecho.
+  - (b) PY10R lista `order.absence_judged_after_hook` em `known_bad.judged_by`, mas pelo R3-06 um predicado `order.*` dá INVALID_CAPTURE, não MISMATCH.
+  - (c) `peer.exit_after_script_witnessed` e `wire.fixture_chunks_relayed` são checagens do peer e da captura, mas cairiam em `client`. O `wire.fixture_bytes_relayed` da admissão está em PEER_SANITY; o nome novo não está.
+  - (d) `tmp.fs_events_*` (ver R1-F02).
+- **Correção:**
+  - Congelar em `cases-2a.json`, por predicado, a classe e um oráculo de uma linha.
+  - Exigir que todo predicado em `known_bad.judged_by` seja `client`.
+  - No CTRL01, declarar `control.peer_answered_unscripted` e `control.client_not_blocked` como sanidade (falha leva a INVALID_CAPTURE e à parada). O MISMATCH deve vir só de `wire.no_turn_interrupt`. Tirar `control.outcome_is_mismatch` dos predicados, porque ele é o critério do gate.
+  - Alternativa: criar um gate de revisão independente da tabela de predicados antes do primeiro serviço.
+
+### R1-F05 (P2, obrigatório: sim): resposta esperada do CTRL01 diverge do erro declarado no próprio caso
+- **Onde:**
+  - `cases-2a.json#/cases[id=2A-CTRL01]/peer_script/unscripted_error/data`, que é `{"cvg_synthetic": true}`;
+  - `#/cases[id=2A-CTRL01]/expected/server_reply_to_ctrl-2/error/data`, que é `{"cvg_synthetic": true, "method": "turn/interrupt"}`;
+  - `peer-v2-contract.json#/unscripted_request/default_in_2A/data` (com `method`) e `/declared_per_case`.
+- **Evidência:**
+  - O contrato diz que o erro é declarado por caso, e o caso o declara sem `method`.
+  - O valor esperado do mesmo caso exige `method`. É a única comparação da resposta do peer, e está no caso que é gate.
+  - Os 7 casos Python declaram o mesmo `data` sem `method`.
+  - Uma implementação literal falha o valor esperado da CONTROL. Com o R1-F04 corrigido, a unidade para no gate; sem ele, a divergência fica mascarada.
+- **Correção:** fixar no contrato do peer v2 a regra de mescla (o peer sempre acrescenta `"method": <método recebido>`) e refleti-la no `data` dos 8 casos, ou tirar `method` do valor esperado do CTRL01.
+
+### R1-F06 (P3, obrigatório: não): TS04, valor de `return()`
+- **Onde:** `cases-2a.json#/cases[id=2A-TS04]/expected/return_result`, que é `{"done":true,"value":null}`.
+- **Evidência:** `return()` sem argumento resolve `{value: undefined, done: true}`, e `JSON.stringify` omite a chave. O `encoding` define `$UNDEFINED` só para entradas.
+- **Correção:** declarar `"value": "$UNDEFINED"` com uma codificação de saída, ou julgar só `done`.
+
+### R1-F07 (P3, obrigatório: não): TS11, fronteiras dos chunks não garantidas
+- **Onde:** `cases-2a.json#/cases[id=2A-TS11]/fixture/chunk_note`, `CAP-STDOUT-CHUNKS` e o predicado `wire.fixture_chunks_relayed`.
+- **Evidência:**
+  - O `writeAll` do fixture resolve quando o dado está no pipe e não espera o adapter (`channel.cjs:349-353`).
+  - O adapter lê até 2048 bytes por leitura (`adapter-typescript:69-72`). Dois chunks podem virar uma leitura e uma escrita só, então "encaminhada como escrita separada" não é garantido.
+  - O braço do UTF-8 dividido (TS11.B01) pode não ser exercido mesmo com PASS.
+- **Correção:**
+  - Pôr uma barreira por chunk: o chunk k+1 só sai depois do FORWARD_COMMIT do chunk k.
+  - Julgar a igualdade dos bytes concatenados como sanidade e só registrar as fronteiras.
+  - Condicionar esse crédito à fronteira observada.
+
+### R1-F08 (P3, obrigatório: não): TS10, as formas A e B provavelmente não ocorrem no Node v24
+- **Onde:** `cases-2a.json#/cases[id=2A-TS10]/expected/source_consistent_forms`; `coverage-plan-2a.json` rows TS10 e TS11.
+- **Evidência** (raciocínio pela fonte interna do Node, não executado):
+  - Com `UV_ENOENT`, o pid fica 0 e os sockets de stdio são criados sem handle.
+  - O `onErrorNT`, enfileirado no spawn, roda antes do `onwriteError` do write. O `onexit` destrói só o stdin e emite `error` sem `exit`.
+  - O `errorOrDestroy` sobre o stdin já destruído não faz nada, o que torna a forma B improvável.
+  - O stdout sem handle não emite `end`, então o readline não fecha e `exec.ts:249` nunca é alcançado, o que torna a forma A improvável.
+  - O desfecho provável é prazo, ou seja, INCONCLUSIVE. A vaga é consumida sem observação.
+- **Correção:**
+  - Gastar um serviço de reserva num DIAG de código próprio, que espelhe `exec.ts:203-216` sem SDK, antes de usar a vaga.
+  - Ou declarar uma forma C (prazo) e condicionar o crédito de TS10.B02, TS10.B04 e TS11.B02 no plano à forma observada.
+
+### R1-F09 (P3, obrigatório: não): superfície de implementação não enumerada no contrato de captura
+- **Evidência:**
+  - REQUEST_HELD exige `bytes>0` em `channel.cjs:150`, `channel.py:187` e `observer.py:294`, e o fixture-cli também exige stdin não vazio (`fixture-cli.mjs:54`). O TS02B precisa de mais que o fixture-cli.
+  - A regex de ID de caso não aceita `2A-…` (`channel.cjs:227`, `channel.py:338`).
+  - `fixture-cli.mjs:10` recusa chaves novas, e `fixture-cli.mjs:44-45` fixa o argv em 6 elementos e 512 bytes; `adapter-typescript:95` também limita a 512 bytes.
+  - CAP-ARGV-CAP permite 2048 bytes, mas `META=1024` (`channel.cjs:20,174`) não comporta um EXEC_ARGV acima de cerca de 800 bytes. Os 655 bytes do TS05 cabem.
+  - COMMANDS é uma lista fixa (`channel.cjs:15`, `channel.py:21`); o LAZY_POINT precisa de um controle novo.
+  - API_ERROR tem só `api`, `name`, `message` e `cause` (`channel.cjs:37`, `channel.py:42`), mas os valores esperados usam classe qualificada, `code`, `first_loc` e identidade de objeto.
+  - O `loadConfig` exige `case_input` objeto (`channel.cjs:238`), e o fixture do TS10 é `null`.
+  - O `fs.promises` do SDK (TS01, TS03, TS04 e TS06) usa o threadpool do libuv, que `channel.cjs:4-5` evita por causa de TasksMax=32 (`containment-and-observer.json:7`).
+- **Correção:** listar essas mudanças no contrato de captura e cobri-las nos autotestes e DIAG.
+
+### R1-F10 (P3, obrigatório: não): valores dependentes de versão sem rótulo
+- **Evidência:**
+  - Mensagens do V8: "Cannot read properties of null (reading 'type')" (TS04 passo 3, TS13) e "Cannot read properties of undefined (reading 'cache_write_input_tokens')" (TS14).
+  - Classe `pydantic_core._pydantic_core.ValidationError` e `first_loc` (PY03), que dependem do pydantic e pydantic-core pinados.
+  - Regex do `mkdtemp`, que depende do glibc.
+  - Só TS10 e TS12 têm `node_specific`.
+- **Correção:** rotular esses valores como fatos do Node v24.20.0/V8 e do pydantic pinado.
+
+### R1-F11 (P3, obrigatório: não): PY10R, pause_reply inválido
+- **Onde:** `cases-2a.json#/cases[id=2A-PY10R]/peer_script/on_request[2]`, com `{"result": {}}`.
+- **Evidência:** `ThreadGoalSetResponse` exige `goal` (`v2_all.py:10074-10078`). Num goal path, `pause_goal` levantaria ValidationError, engolida em `client.py:574-577`. O alcance do MISMATCH não muda, mas a resposta não é válida.
+- **Correção:** usar uma resposta com `ThreadGoal` válido, ou anotar que a validade não importa.
+
+### R1-F12 (P3, obrigatório: não): cliente de controle subespecificado
+- **Onde:** `control-slot-contract.json#/client` e `/rules`; `cases-2a.json#/cases[id=2A-CTRL01]/slot`, que é 24.
+- **Evidência:** não está definido qual papel do canal o cliente usa, como ele lança o adapter (o LAUNCH de `python-driver.py:42`, env, cwd `/work`), nem quais marcos (CLIENT_STDIN_CLOSED, CALLS_DONE) ele emite para as barreiras e para o intervalo limitado por EOF. Além disso, o slot é 24, mas R3-07 e o passo 4 do orçamento põem a CONTROL primeiro.
+- **Correção:** especificar, partindo do OwnClient (`python-driver.py:209-271`), e declarar que slot não é ordem de execução.
+
+### R1-F13 (P3, obrigatório: não): TS01 passo 1 executa código do perfil distribuído
+- **Onde:** `cases-2a.json#/cases[id=2A-TS01]/sdk_calls[0]`.
+- **Evidência:** `findCodexPath` (`exec.ts:356-432`) é código de PK01/PK02 e usa o resolvedor CJS que a admissão evitou por estrutura (`ts-driver.mjs:43-47`). A conta de crédito está correta, já que nada é creditado.
+- **Correção:**
+  - Declarar no plano que PK01/PK02 são executados sem crédito.
+  - Fixar em CAP-RESOLVER-ABSENCE os caminhos testemunhados: `/profile/sdk-emitted/node_modules`, `/profile/node_modules`, `/node_modules`, `$HOME/.node_modules`, `$HOME/.node_libraries`, `/lib/node`, e `NODE_PATH` ausente.
+
+## Checagens feitas
+- **Hashes do objeto:** os sha256 dos 18 arquivos batem com o brief.
+- **C1 (passo 0):**
+  - O commit `b70cb6df` existe.
+  - `git diff b70cb6df` sobre `sdk-coverage-binding` e `sdk-admission` sai vazio, e o `git status` dessas pastas está limpo.
+  - Hashes conferidos:
+
+    | Arquivo | sha256 (início) |
+    | --- | --- |
+    | `state.json` (binding) | `59af75a3` |
+    | `next-task.json` (binding) | `7c7f4be3` |
+    | `coverage-observed.json` | `49de5da5` |
+    | `unit-manifest.json` (admissão) | `b5a52f6c` |
+    | `identity-freeze.json` (admissão) | `ebfb308f` |
+
+  - A infraestrutura da admissão bate com `cases-2a.json#/inputs`.
+- **C3:** os 35 inputs e as 67 âncoras (texto na linha e sha) foram conferidos por programa, com 0 divergências.
+- **C2, caso a caso contra a fonte:**
+  - **TS01** (resolvedor, preguiça e argv com resume), **TS02/TS02B** (`join("\n\n")`, imagens depois de resume, id vazio), **TS03** (rejeição de array, bytes do schema sem LF, regex), **TS04** (normalização fora do try e ordem dos finally), **TS05** (37 args), **TS06/TS07** (flatten e TOML, incluindo `1e+21` e chave entre aspas), **TS08** (guardas por truthiness e `!== undefined`), **TS09** (env integral, originator e apiKey), **TS11** (hex decodificado, CRLF, UTF-8, última linha sem LF, usage com `cache_write` 0), **TS13** (yields 42, `[]` e `"str"`), **TS14** (5, null→0, false fica false): conferem.
+  - Os valores de `argv_json_bytes` e `argv_count` foram recalculados nos 14 casos e conferem.
+  - **PY03** (params omitido, id alheio ignorado, CodexError, ValidationError), **PY04** (precedência e `exclude_none` do ThreadResumeParams), **PY08** (registro, roteamento, `fail_all` com o mesmo objeto), **PY15** (filtro por turn, `final_answer`, failed e interrupted; ItemCompletedNotification com `completedAtMs`), **PY16** (toolOutput, guarda de versão 0.151.0, UserInput válidos e ValueError antes do pedido), **PY07R** e **PY10R** (predicados iguais aos do SDKPY07): conferem com `client.py`, `_message_router.py`, `_run.py`, `_inputs.py`, `errors.py`, `v2_all.py` e `notification_registry.py`.
+  - O alvo do transpile é ES2022 (`??=` e geradores nativos).
+- **C4:** os 14 contratos novos, o resíduo de PY07 e TS10–TS15 e os reforços de TS14 e PY10 estão presentes, sem 2B nem perfil distribuído creditados. A projeção 11+14=25 e 33−14=19 confere.
+- **C5:** todos os casos usam -32601, sem `server_overloaded` e fora da faixa -32099..-32000. O PY04 responde com -32603 por script.
+- **C6/C7:** lidos `acceptance.py` (judges e regras de desfecho), `supervisor.py` (barreiras e corrida), `channel.cjs/py`, `observer.py`, `adapter-typescript`, `adapter-python.py`, `fixture-cli.mjs`, `fixture-rpc.py`, `ts-driver.mjs` e `python-driver.py`.
+- **C8:** 24 vagas (23 SDK e 1 CONTROL), 8+4 de 12 serviços, 2 revisões, 1 reparo e 0 retries.
+- **C9:** a seção D-12 e o 0384 conferem pelos hashes citados. NAO_EXIGE_T3/T4 é coerente com o precedente da admissão.
+- **C10:** `next-task.json` e `ledger-delta-cont-d9ef.md` não afirmam execução, recibo, paridade nem autorização. O `state.json` é stub, como previsto.
+
+## Limites
+- Nada foi executado: nem SDK, nem Node, nem Python, nem Pydantic. O comportamento interno do Node (TS10, TS12, streams e readline) e do Pydantic (loc do ValidationError, uniões) foi raciocinado a partir da fonte e do conhecimento, sem verificação no Node v24.20.0 nem nas versões pinadas.
+- Os 692 arquivos do unit-manifest não foram conferidos um a um. Usei o `input-verification.json`, o diff git vazio e os hashes dos arquivos de infraestrutura citados.
+- Os scripts `.py.txt` e `.mjs.txt` foram lidos só para procurar a semântica dos predicados; não foram rodados nem auditados linha a linha.
+- Links para `review-r1/verdict.md`, `review-r2/verdict.md` e o stub de `state.json` não foram tratados como achado, conforme o brief.

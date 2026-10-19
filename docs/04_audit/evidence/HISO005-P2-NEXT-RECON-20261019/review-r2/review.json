@@ -1,0 +1,125 @@
+{
+  "round": "R2",
+  "reviewer": "crítico independente fresco (não-fork), só leitura",
+  "observedAt": "2026-10-19T07:45:00+00:00",
+  "specSha256": {
+    "SPEC0242-draft": "bbf5b00bea86e28067202a9ec33763084fe3152ebc6008c56ec816122d29a2cb",
+    "SPEC0243-draft": "220da6b858b4ea85fee4cac7dd7df9f4062eeecebf5fbffaa32ce69b2f46aad8"
+  },
+  "verdict": {
+    "SPEC0242-draft": "REVISE",
+    "SPEC0243-draft": "REVISE"
+  },
+  "r1Resolution": [
+    {"id": "R1-01", "status": "RESOLVED", "evidence": "spec0242-r2 §5:181-192 define a base por conteúdo com tabela de pré-imagens; os 6 SHA-256 batem com contract-freeze-r2.json readOnlySources e com a candidata d6203875; 0243 §1:16-18 corrige os rótulos e §5:135 remete à tabela. O conflito de ordem entre as duas bases é defeito novo (R2-01)."},
+    {"id": "R1-02", "status": "RESOLVED", "evidence": "spec0242-r2 §1 Achado 4:53-61: P3 descrita como relógio de vida esticado que 'não testa a L3'; faixa 176/164 s só para P1/P2; L3 executada na P4. identity-phase-probe.json: fase 1 36.038/26.654 ms, finalização final 2.164/2.024 ms, comparesAfterFinalize 0, validation true; diff de tools-probe/scripts/boundary-installed-identity.mjs confere phaseStart em checkTime e em _deadline; relatórios P4 do runtime conferidos (limits 256/250000/300000, 13.521 diagnósticos, normal=strict sem telemetria)."},
+    {"id": "R1-03", "status": "RESOLVED", "evidence": "spec0242-r2 §3.2:112-131 trata os cinco pontos: fase 1 com relógio de parede desde a criação, incluindo a varredura do checker; finalização posterior com relógio próprio; checkTime e _deadline pelo início da fase; COMPARISON_AFTER_FINALIZE; relógios de fingerprintToolchain e scanBounded inalterados; opção só de teste e só de redução com TEST_LIMIT_INVALID. LB03:237 exige ≥1 pacote usado. Confirmei no código que o checker só chama verify/compare antes da 1ª finalização (settleInstalled em check-product-boundary.mjs:1010)."},
+    {"id": "R1-04", "status": "RESOLVED", "evidence": "spec0242-r2 Achado 5:63-72, §4:177, §6:222 e LB05:239; q1-characterization.json capsHeadroom (maxNodes 1,18×, maxFiles 2,91×, contagem na aquisição)."},
+    {"id": "R1-05", "status": "PARTIAL", "evidence": "Referências viáveis resolvidas: 0242 §5:203-207 mede a raiz 228e7918 com referências da receita atual (margem de 22 MB, construída duas vezes); 0243 §5:147-150 põe RS06 em 228e7918 e RS07 no commit vigente só com exclusão. A ordem declarada ('antes, junto ou depois', 'mesmas referências', 'ou pela receita da 0243') conflita com as bases byte a byte e com as linhas de base das conservações (R2-01)."},
+    {"id": "R1-06", "status": "RESOLVED", "evidence": "spec0243-r2 §3.6:103-124 tem lista fechada por recibo, com normalização do diretório de saída; q2-characterization.json receiptDiffNormalized (8 campos instalados, 3 compilados), todos dentro da lista; igualdade exigida de unavailable, configSha256, toolchain, selection e limits. Ressalva opcional em R2-O05."},
+    {"id": "R1-07", "status": "RESOLVED", "evidence": "spec0243-r2 §3.3:77-88: guarda estática primeiro, antes de validateConfigs, fingerprintResolution, sourceInputs, compilerInputs e do archive; globs expandidos sobre a listagem completa; recusas preexistentes da compilada aceitas e nomeadas; RS04:179. Ressalva de redação em R2-O07."},
+    {"id": "R1-08", "status": "RESOLVED", "evidence": "spec0243-r2 §1:36 (lacuna latente; conferi 0 nomes com * ? [ ou ':' em 228e7918 e ae14b824), §3.2:70-73 (--literal-pathspecs ou GIT_LITERAL_PATHSPECS=1; conferência física com SNAPSHOT_MISMATCH e COMPILED_DIRTY_SOURCE) e RS08:183. Ressalva opcional em R2-O06."}
+  ],
+  "required": [
+    {
+      "id": "R2-01",
+      "spec": "ambas",
+      "severity": "P2",
+      "section": "0242 §5 (base e medições reais) e §3.3; 0243 §5 (base e ordem) e RS06",
+      "finding": "Defeito novo, criado pela combinação das correções de R1-01 e R1-05: a ordem livre declarada não é executável com as bases byte a byte nem com as linhas de base das conservações. (1) A base da 0242 exige byte a byte build-installed-reference 70f6c43a…, compilada dd006347… e identity 78d198c7…, que a 0243 altera. A base da 0243 exige as mesmas 6 pré-imagens, incluindo engine, checker e identity, que a 0242 altera. Quem for construída e promovida em segundo lugar não terá mais nenhum 'commit qualificado vigente' com suas pré-imagens. Isso contradiz 'A 0243 pode ser construída antes, junto ou depois da 0242'. (2) A §3.3 da 0242 exige as mesmas referências instalada e compilada nas duas execuções (valores atuais × L1–L3) e admite 'ou pela receita da 0243'. O leitor compilado só aceita recibo cujo recipeSha256 seja o hash do próprio script (e, na 0243 v2, recusa v1). Uma referência compilada da 0243 não pode ser lida pela execução de base com o código de pré-imagem, e vice-versa. (3) A RS06 da 0243 exige medição B6 'com multiset de diagnósticos e tuplas iguais à da receita sem exclusão'. O leitor novo recusa recibo sem sourceExclusions, então a base tem de rodar com o código antigo. Se a 0242 estiver no código novo (candidata compartilhada ou 0242 antes), os diagnósticos sobem de 2.410 para cerca de 13,5 mil e a igualdade é impossível.",
+      "evidence": "spec0242-r2.source.md:181-192, :203-209; spec0243-r2.source.md:135, :152, :181; scripts/boundary-semantic-compiled.mjs:645-652 (recipeVersion v1 e recipeSha256 == sha256File(SELF)); scripts/boundary-installed-identity.mjs:688-737 (leitor sem chave estrita em recipe hoje; o novo exige sourceExclusions); q2-measure-excl-vs-t2.json (igualdade B6 obtida com engine de valores oficiais nos dois lados)",
+      "requiredChange": "Fixar a regra de composição nas duas §5. (a) Base: para cada arquivo, a pré-imagem da tabela ou, se a outra SPEC já tiver sido promovida, a pós-imagem registrada na promoção dela, com o SHA-256 anotado. (b) Linha de base de cada conservação: o mesmo commit da candidata sem o próprio delta, com o outro delta presente ou ausente igual nas duas execuções, e referências construídas pela receita desse commit. Retirar 'ou pela receita da 0243' da 0242, ou dizer que nesse caso a base também contém a 0243. (c) Na RS06, comparar execuções com o mesmo engine e os mesmos valores dos dois lados. Se a candidata for compartilhada, cada delta é um commit próprio, e sua conservação compara o commit anterior com o seu. Basta uma ordem fixa (ex.: 0242 e depois 0243) ou a regra (a)-(c)."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-O01",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§2 (alternativas)",
+      "finding": "A soma de 17.696 estados exclusivos usa 3 dos 4 arquivos dos helpers que estouram; falta @vitest/utils/dist/helpers.js (assertTypes, 1.312 estados exclusivos). Com ele, são 19.008 e sobram 106.452 > 100.000. A conclusão não muda.",
+      "evidence": "diag-nocut.json result.topFilesByStates (helpers.js 1312); operators/characterize.py:156",
+      "requiredChange": "Incluir helpers.js ou dizer 'três dos quatro arquivos'."
+    },
+    {
+      "id": "R2-O02",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§5:192",
+      "finding": "'A main, 3704e3f8 e ae14b824, ainda tem o kernel v3': ae14b824 não é ancestral da main (3704e3f8), que foi consolidada por squash.",
+      "evidence": "git merge-base --is-ancestor ae14b824 HEAD (falso); git show ae14b824:scripts/boundary-semantic-engine.mjs:24",
+      "requiredChange": "Reescrever como 'a main (3704e3f8) e o commit documental ae14b824 ainda têm o kernel v3'."
+    },
+    {
+      "id": "R2-O03",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "LB02",
+      "finding": "A primeira falha da L3 'com os valores atuais' usa o 'orçamento reduzido pela opção de teste', mas essa opção só existe no código novo. Na pré-imagem não há como reduzir o orçamento do comparador.",
+      "evidence": "scripts/boundary-installed-identity.mjs:860-916 (createInstalledIdentityComparator sem testOnly); spec0242-r2.source.md:236",
+      "requiredChange": "Na primeira falha sobre a pré-imagem, usar relógio simulado (ex.: stub de performance.now) ou registrar a falha do teste novo rodado contra a pré-imagem."
+    },
+    {
+      "id": "R2-O04",
+      "spec": "0242",
+      "severity": "P3",
+      "section": "§3.2 (COMPARISON_AFTER_FINALIZE)",
+      "finding": "Não diz se a recusa invalida só o resultado daquela chamada ou o verificador inteiro, o que torna UNAVAILABLE a finalização seguinte. O teste ID-11 existente chama compare() depois de finalize e espera só status UNAVAILABLE, e passa nas duas leituras.",
+      "evidence": "tests/b6-0234-installed-identity.test.js:725 (candidata d6203875)",
+      "requiredChange": "Definir o efeito, de preferência invalidando o verificador, e citar ID-11 entre as regressões que precisam continuar verdes."
+    },
+    {
+      "id": "R2-O05",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "§3.6 (lista fechada)",
+      "finding": "usage.maxProcesses e recipe.observation.maxProcesses são picos amostrados durante o npm. Nas duas execuções diagnósticas deram 2 e 2, mas, se oscilarem, viram defeito falso pela lista fechada.",
+      "evidence": "scripts/boundary-reference-process.mjs:147 e :176 (peak amostrado); recibos installed-reference-{ref,excl} (maxProcesses 2/2)",
+      "requiredChange": "Incluir os dois campos entre os que variam por execução do npm, ou declarar que são determinísticos com a evidência."
+    },
+    {
+      "id": "R2-O06",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "§3.2 (compilada, conferência física)",
+      "finding": "'Exatamente a lista incluída menos o que as regras --exclude atuais do tar removem' exige reproduzir a semântica de exclusão do GNU tar (não ancorada, por componente). Hoje isso remove só 3 arquivos .env.example fora do prefixo. A SPEC também não diz que a conferência ocorre antes da cópia de node_modules para o snapshot.",
+      "evidence": "scripts/boundary-semantic-compiled.mjs:456-475 (tar -xf com --exclude) e :485 (cpSync de node_modules); git ls-tree em 228e7918/ae14b824 (.env.example, deploy/harness/.env.example, products/shift-assistant/deploy/.env.example)",
+      "requiredChange": "Enumerar a semântica (componente node_modules ou dist, componente iniciado por .env, sufixo .tsbuildinfo), ou exigir 'nenhum arquivo fora da lista incluída' mais a igualdade atual de sourceInputs. Dizer 'antes da cópia de node_modules'."
+    },
+    {
+      "id": "R2-O07",
+      "spec": "0243",
+      "severity": "P3",
+      "section": "RS04 e §3.3 item 3",
+      "finding": "RS04 diz 'antes de qualquer outra checagem', mas a §3.3 lista a ordem só em relação a validateConfigs, fingerprintResolution, sourceInputs, compilerInputs e archive. A asserção de commit e as checagens de listagem da §3.2 vêm necessariamente antes. No item 3, 'um .npmrc' pode ser lido como qualquer .npmrc sob o prefixo ou só os lidos pelo fingerprint. As duas leituras são fail-closed.",
+      "evidence": "spec0243-r2.source.md:79-83 e :179",
+      "requiredChange": "Alinhar a RS04 à lista da §3.3 e dizer qual leitura do item 3 vale."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "Freeze R2: 2 SPEC, 44 insumos, 6 fontes só leitura, 18 artefatos do runtime; HEAD da candidata", "result": "PASS", "evidence": "70/70 SHA-256 conferem; candidata d6203875; state.json fora do freeze"},
+    {"id": "S02", "what": "Pré-imagens da tabela da 0242 §5 batem com a candidata", "result": "PASS", "evidence": "6 SHA-256 iguais aos de contract-freeze-r2.json readOnlySources"},
+    {"id": "S03", "what": "Patch P4 implementa a L3 do rascunho (phaseStart em checkTime e em _deadline; nova fase em cada finalização posterior)", "result": "PASS", "evidence": "operators/identity_phase_patch.py; diff de tools-probe/scripts/boundary-installed-identity.mjs (d16cc4ad…) contra a candidata"},
+    {"id": "S04", "what": "Quatro linhas de fase por execução: 1ª e 3ª do verificador do checker; 2ª e 4ª dos comparadores do leitor compilado", "result": "PASS", "evidence": "check-product-boundary.mjs:2071 e :2158 chamam loadCompiledBuildReference, que chama dependencies() (compiled:148-157, comparador novo com uma finalização); marcas first/final batem com 36.038 ms e 162.580 ms de idade"},
+    {"id": "S05", "what": "P4: validation true, sem envelope, 13.521 diagnósticos, normal=strict, limites 256/250000/300000 no payload, conservação 1.520→12.631", "result": "PASS", "evidence": "runtime probe-P4-phase-{normal,strict}/report.json.gz recalculados; multiplicidade máxima de tupla 1"},
+    {"id": "S06", "what": "Nenhum compare() depois da 1ª finalização no checker", "result": "PASS", "evidence": "verify só em settleInstalled (check-product-boundary.mjs:498), chamada em :1010, antes de :1991; P4 comparesAfterFinalize 0"},
+    {"id": "S07", "what": "Números novos da 0242 (4,9 kB/estado, 36,3 s e 40,6/40,0 s, 15,6 MB compacto, heap 4.345.298.944 B, tabela de folgas)", "result": "PASS", "evidence": "q1-characterization.json growth, costIndependentOfContexts, capsHeadroom; identity-phase-probe.json pinnedNodeHeapSizeLimitBytes"},
+    {"id": "S08", "what": "Números novos da 0243 (205 MB/dia em 17,7 dias, 1,6 dia, 4,8 mil entradas/dia, 18 × 23 dias, lockFacts)", "result": "PASS", "evidence": "q2-characterization.json meanGrowthSince20261001, entriesGrowthWithDirectories, optionRaise, lockFacts; conferidos com minha contagem por git na R1"},
+    {"id": "S09", "what": "Lista fechada da §3.6 cobre as diferenças medidas", "result": "PASS", "evidence": "receiptDiffNormalized ⊆ tabela da §3.6"},
+    {"id": "S10", "what": "Nenhum nome rastreado com * ? [ ou ':' em 228e7918 e ae14b824; gitattributes sem export-ignore", "result": "PASS", "evidence": "git ls-tree -r --name-only; .gitattributes só com '-whitespace'"},
+    {"id": "S11", "what": "Bases byte a byte compatíveis com 'antes, junto ou depois'", "result": "FAIL", "evidence": "R2-01"},
+    {"id": "S12", "what": "Linhas de base das conservações (0242 §3.3, 0243 RS06) executáveis em toda ordem permitida", "result": "FAIL", "evidence": "R2-01"},
+    {"id": "S13", "what": "Enquadramento T3 e autoridade sem ampliação", "result": "PASS", "evidence": "spec0242-r2 §8:244-250; spec0243-r2 §8:186-190"},
+    {"id": "S14", "what": "Links dos rascunhos r2", "result": "PASS", "evidence": "document-checks-r2.json (11 e 10 links, nenhum quebrado); nota de materialização no cabeçalho"}
+  ],
+  "commands": [
+    {"cmd": "cat /proc/loadavg", "summary": "load entre 3,9 e 5,1"},
+    {"cmd": "python3 -I -B <scratchpad>/verify_freeze.py <EV> (apontado para contract-freeze-r2.json)", "summary": "70/70 SHA-256 conferem"},
+    {"cmd": "cat -n spec0242-r2.source.md / spec0243-r2.source.md; leitura de r1-corrections.json, identity-phase-probe.json, document-checks-r2.json e dos campos novos de q1/q2", "summary": "texto integral dos rascunhos r2 e da evidência nova"},
+    {"cmd": "cat operators/identity_phase_patch.py e identity_phase_probe.py; diff candidata × tools-probe/scripts/boundary-installed-identity.mjs", "summary": "patch L3 conforme a §3.2"},
+    {"cmd": "python3 -I -B <scratchpad>/p4_check.py", "summary": "relatórios P4 normal/strict: validation, limits, diagnósticos, multiplicidade, igualdade sem telemetria"},
+    {"cmd": "grep/sed -n em check-product-boundary.mjs, boundary-semantic-compiled.mjs, boundary-installed-identity.mjs, boundary-reference-process.mjs e tests/b6-0234-installed-identity.test.js (candidata d6203875)", "summary": "chamadas de compare/finalize, leitores e picos amostrados"},
+    {"cmd": "git -C <repo> ls-tree -r --name-only -z 228e7918/ae14b824; ls-tree para .gitattributes; git show 228e7918:.gitattributes", "summary": "nomes com glob ou magia (0), arquivos removidos pelo --exclude do tar (3 .env.example), sem export-ignore"},
+    {"cmd": "python3 -I -B leitura de diag-nocut.json topFilesByStates", "summary": "helpers.js com 1.312 estados exclusivos (R2-O01)"}
+  ]
+}

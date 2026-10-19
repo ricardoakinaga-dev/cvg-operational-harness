@@ -1,0 +1,287 @@
+{
+  "version": 2,
+  "kind": "LEAD_INTEGRATION_BINDINGS_SUPPLEMENT_V2_NOT_A_CHANGE_OF_INTERFACE_V1",
+  "interface_v1": {
+    "path": "interface-v1.json",
+    "sha256": "99bd049e467e02298504d864586b15ed2f9335531566b090a8ec57a04ccf8198",
+    "rule": "Nada aqui relaxa interface-v1. Estes vínculos fixam escolhas que interface-v1 deixou abertas (representação exata, admissão, loader, transpile e layout do perfil)."
+  },
+  "fifo_stat_exact": {
+    "decision": "Cada valor é exatamente [dev_decimal_string, ino_decimal_string, \"0600\", 0]. O modo é a string \"0600\" (não o inteiro 384) e o uid é o inteiro 0 visto dentro do userns do sandbox (host uid mapeado para 0).",
+    "keys": "Exatamente os seis caminhos /observer/{driver,adapter,peer}.{events,control}.",
+    "checkpoint_divergence_resolved": "A fonte Node parcial aceitava '0600' ou 384; foi estreitada para somente '0600'."
+  },
+  "fifo_nodes_exact": "Lista com exatamente os seis basenames role.kind, sem repetição.",
+  "peer_argv": {
+    "python": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/fixture-rpc.py",
+      "--case",
+      "CASE_ID"
+    ],
+    "typescript_prefix": [
+      "/runtime/node",
+      "/profile/fixture-cli.mjs",
+      "--case",
+      "CASE_ID",
+      "--sdk-argv-json"
+    ],
+    "typescript_suffix": "O adapter acrescenta exatamente um elemento: JSON.stringify do argv original recebido do SDK (process.argv.slice(2)). É dado observado, não comando: o peer só o valida (lista de strings, <=64 itens, <=512 bytes) e o reporta; o supervisor confere que é igual ao cmdline independente do adapter.",
+    "decision": "peer_argv no config é a lista congelada completa para Python e o prefixo congelado de cinco elementos para TypeScript, conforme transport-topology.json#/argv/TS_adapter_peer (JSON_ENCODED_ORIGINAL_SDK_ARGV é o único elemento dinâmico)."
+  },
+  "admission": {
+    "path": "/profile/admission.json",
+    "replaces_partial_name": "/profile/node-admission.json (nome da fonte parcial; unificado para as duas linguagens)",
+    "keys": [
+      "v",
+      "attempt",
+      "case",
+      "nonce",
+      "language",
+      "runtime_sha256",
+      "files",
+      "fifo_pipe_buf",
+      "containment_admitted",
+      "sdk_admitted",
+      "compiler_admitted"
+    ],
+    "types": {
+      "v": "1",
+      "attempt/case/nonce": "iguais ao adapter-config.json",
+      "language": "python|typescript (igual ao config)",
+      "runtime_sha256": "python: e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f; node: 89af8424dd53e560b1933f87ba650d8bf57c83ca5a04600eefb31f416aabbae7",
+      "files": "mapa caminho absoluto /profile/... -> sha256 de TODOS os arquivos regulares montados em /profile, recursivo (inclui sdk-python/**, python-deps/**, sdk-emitted/**, typescript/lib/typescript.js e sdk-ts-src/*.ts quando presentes), exceto o próprio admission.json e os negativos declarados do DIAG-PY-STAGE",
+      "fifo_pipe_buf": "mapa dos seis caminhos /observer/... -> inteiro observado pelo supervisor com fpathconf(PC_PIPE_BUF) no FD do host; >=4096",
+      "containment_admitted": "true somente quando o supervisor montou o comando bwrap/systemd congelado; o testemunho de cgroup/PID é verificado depois, antes do READY",
+      "sdk_admitted": "true somente nos 19 casos SDK, depois do ADMIT (diagnósticos constantes PASS) e do identity-freeze.json; false em DIAG e no estágio do compilador",
+      "compiler_admitted": "true somente no estágio TSC-SDK-EMIT (depois do identity-freeze.json); false em DIAG e nos casos SDK"
+    },
+    "writer": "Somente o supervisor externo, antes do lançamento; montado read-only.",
+    "metadata_rule": "Bytes de metadados de um frame = len(payload) menos len(valor base64) quando kind=RAW_READ; caso contrário len(payload). Limite 1024. Aplicado igualmente em channel.cjs, channel.py e observer.py."
+  },
+  "terminal_frames": "END e INVALID são terminais por papel; qualquer frame posterior do mesmo papel é rejeitado. Os controles são lidos e conferidos (fila vazia, sem frame parcial) ANTES do END. Errata R2-F01: o END NORMAL continua limitado pelo prazo do caso no Python (channel.emit sem until) e por min(prazo, 100 ms) no Node; só INVALID (~50 ms) e os frames do caminho de sinal (SIGNAL e o END de sinal, até 100 ms do sinal observado) têm janela própria fora do prazo do caso, para que uma falha de prazo ainda seja declarada.",
+  "role_kinds": {
+    "driver": [
+      "BEGIN",
+      "READY",
+      "API_RESULT",
+      "API_ERROR",
+      "API_CANCELLED",
+      "HOOK_CLOSED",
+      "DIAGNOSTIC",
+      "SIGNAL",
+      "END",
+      "INVALID"
+    ],
+    "adapter": [
+      "BEGIN",
+      "READY",
+      "RAW_READ",
+      "FORWARD_COMMIT",
+      "STREAM_END",
+      "SIGNAL",
+      "END",
+      "INVALID"
+    ],
+    "peer": [
+      "BEGIN",
+      "READY",
+      "REQUEST_HELD",
+      "PEER_MILESTONE",
+      "DIAGNOSTIC",
+      "SIGNAL",
+      "END",
+      "INVALID"
+    ]
+  },
+  "control_meaning": {
+    "READY": "supervisor aceitou BEGIN (PID/startticks/pidns/cmdline/exe/fonte/nonce) e o testemunho de cgroup",
+    "RELEASE_REPLY": "peer pode escrever a resposta retida",
+    "RELEASE_EXIT": "peer pode encerrar após resposta (TS); driver (Python e TS) pode fechar o SDK/encerrar após término de peer e adapter testemunhado por frame terminal ou saída observada pelo SO (um SIGNAL sozinho não basta).",
+    "ABORT_NOW": "driver cancela/aborta a operação em curso",
+    "FINISH_PEER": "peer persistente RPC encerra após as asserções da API"
+  },
+  "profile_layout": {
+    "mount": "Diretório privado por tentativa montado read-only em /profile.",
+    "common": [
+      "/profile/adapter-config.json",
+      "/profile/admission.json",
+      "/profile/fixture-cases.json",
+      "/profile/bootstrap.py"
+    ],
+    "python": [
+      "/profile/channel.py",
+      "/profile/adapter-python.py",
+      "/profile/fixture-rpc.py",
+      "/profile/python-driver.py"
+    ],
+    "python_sdk_mode_only": [
+      "/profile/sdk-python/** (cópia selada da fonte SDK)",
+      "/profile/python-deps/** (árvore mesclada selada)"
+    ],
+    "typescript": [
+      "/profile/package.json {\"type\":\"commonjs\"}",
+      "/profile/channel.cjs",
+      "/profile/adapter-typescript (0555, shebang único #!/runtime/node)",
+      "/profile/fixture-cli.mjs",
+      "/profile/ts-driver.mjs",
+      "/profile/extension-loader.mjs",
+      "/profile/node-loader.json",
+      "/profile/transpile.mjs",
+      "/profile/node-transpile.json"
+    ],
+    "typescript_sdk_mode_only": [
+      "/profile/sdk-emitted/package.json {\"type\":\"module\"}",
+      "/profile/sdk-emitted/{codex,codexOptions,events,exec,index,items,outputSchemaFile,thread,threadOptions,turnOptions}.js"
+    ],
+    "compiler_stage_only": [
+      "/profile/typescript/lib/typescript.js (sha256 e5f1f6b3e82228a89873cc7b941b2465185e839c0692860f83e3e63e53f94c2b, 9111680 bytes; árvore readquirida igual a ../sdk-profile-artifacts/validation.json)",
+      "/profile/sdk-ts-src/*.ts (dez fontes byte-exatas do pin)"
+    ],
+    "diagnostic_stage_only": [
+      "/profile/sdk-python/**, /profile/python-deps/** (DIAG-PY-STAGE, sem import)",
+      "/profile/sdk-drift-extra/{bound.txt,unbound.txt} (unbound.txt fora do manifesto, negativo de fechamento)",
+      "/profile/sdk-drift-link/{bound.txt,link.txt->bound.txt} (negativo de symlink)"
+    ]
+  },
+  "node_loader_config": {
+    "path": "/profile/node-loader.json",
+    "keys": [
+      "v",
+      "entry",
+      "prebound",
+      "builtins",
+      "sdk_builtins",
+      "sdk_entry",
+      "emitted_dir",
+      "emitted"
+    ],
+    "rules": [
+      "parentURL ausente: especificador deve ser exatamente entry.",
+      "node:<nome>: de um pai emitido, somente se estiver em sdk_builtins; dos demais pais, somente se estiver em builtins (sdk_builtins ⊆ builtins). Nomes nus de builtin são negados.",
+      "De um arquivo prebound: o URL resolvido deve ser prebound ou sdk_entry (sdk_entry só se listado em emitted).",
+      "De um arquivo emitido: somente ./<nome> sem extensão, sem barra adicional, resolvido para emitted_dir+<nome>.js listado em emitted.",
+      "Antes de qualquer decisão: o próprio loader e node-loader.json ligados na admissão, e cada emitted[<nome>] igual a admission.files[/profile/sdk-emitted/<nome>].",
+      "Qualquer outro caso: erro ERR_CVG_LOADER_DENIED. Sem hook load/fetch/transformSource."
+    ]
+  },
+  "node_transpile_config": {
+    "path": "/profile/node-transpile.json",
+    "keys": [
+      "v",
+      "typescript",
+      "sources",
+      "source_dir",
+      "out_dir",
+      "compiler_options",
+      "allowed_imports"
+    ],
+    "compiler_options": {
+      "target": "ES2022",
+      "module": "ESNext",
+      "isolatedModules": true,
+      "esModuleInterop": true,
+      "allowSyntheticDefaultImports": true,
+      "sourceMap": false,
+      "declaration": false,
+      "removeComments": false,
+      "verbatimModuleSyntax": false
+    },
+    "gate": "Recusa (exit 3, REFUSED_NOT_ADMITTED) antes de qualquer require do compilador se admission.compiler_admitted !== true ou config.mode !== 'sdk'."
+  },
+  "functional_receipts": 0,
+  "SDK_runtime": "ADMITTED_ONLY_AFTER_IDENTITY_FREEZE",
+  "signal_rules": {
+    "window": "Até 100 ms do sinal observado até a declaração terminal; o adiamento só cobre um forward+commit em voo.",
+    "node_in_flight": "Se houver forward em voo ao fim da janela (conclusão do SO desconhecida), o adapter declara INVALID, nunca END.",
+    "python_pending": "Com escrita não bloqueante de até 2048 bytes (<= PIPE_BUF) em pipe, a escrita é tudo-ou-EAGAIN: o pendente é conhecido e pode ser declarado incompleto.",
+    "backpressure": "Um sinal pendente interrompe esperas EAGAIN de telemetria não terminal; o papel declara INVALID e termina pelo mesmo sinal.",
+    "delivery_measurement": "Quando o supervisor entrega o sinal, SIGNAL e END do adapter devem chegar até 100 ms após a entrega; quando o driver aborta, o terminal do adapter deve ocorrer até 100 ms após ABORT_CALLED (relógio monotônico compartilhado)."
+  },
+  "case_artifacts": "Soma, no supervisor, dos eventos dos três papéis, dos controles enviados e da saída do serviço <= 2097152 bytes; acima disso a unidade é morta e a captura é INVALID. O limite por papel (2 MiB) continua como limite adicional local.",
+  "amendments": [
+    {
+      "round": "repair-r1",
+      "source": "review-r1/review.json (R1-F02/F03/F04/F06/F07/F08)",
+      "note": "Emendas aditivas deste suplemento; interface-v1.json permanece inalterada."
+    },
+    {
+      "round": "admit-r1",
+      "source": "next-task.json da unidade anterior (R1-F14, R2-F01, R2-F02, R2-F04) e R2-F03",
+      "note": "Suplemento v2; interface-v1.json permanece inalterada."
+    }
+  ],
+  "supersedes": {
+    "path": "../sdk-observation-drivers/interface-bindings-v1.json",
+    "sha256": "95be6ca5b1ee66c629917f17b84178ba9515a86a2b434d6e2586b3559b5e42f2",
+    "rule": "v1 continua válido para as tentativas da unidade anterior; v2 vale para DX100-G02:ADMIT-SDK-PROFILE-AND-ACCEPTANCE. Nada aqui relaxa interface-v1."
+  },
+  "staging": {
+    "rule": "Cópia de dados de árvore fechada (só arquivos regulares, sem symlink/especial) a partir do runtime privado; arquivos 0444 e diretórios 0555; manifesto recursivo selado na admissão de cada tentativa e reconferido depois do selo.",
+    "sources": {
+      "sdk-python": "runtime/sdk-python (22 arquivos do pacote openai_codex do pin, blobs Git reconferidos; py.typed vazio)",
+      "python-deps": "runtime/python-deps (169 arquivos; igual ao merge autenticado em validation.json)",
+      "sdk-emitted": "runtime/emitted (10 .js do TSC-SDK-EMIT + package.json {\"type\":\"module\"}), selado em compiler/emit.json"
+    },
+    "closes": "R1-F14 (staging recursivo selado)"
+  },
+  "eof_barrier": {
+    "cases": [
+      "DIAG-PY-RPC",
+      "DIAG-PY-STAGE",
+      "SDKPY01",
+      "SDKPY02",
+      "SDKPY03",
+      "SDKPY04",
+      "SDKPY05",
+      "SDKPY07",
+      "SDKPY08",
+      "SDKPY09"
+    ],
+    "rule": "O driver fecha o stdin do transporte do cliente (sem patch no SDK) e emite DIAGNOSTIC CLIENT_STDIN_CLOSED antes de CALLS_DONE/LATE_REPLY_OBSERVED; o supervisor só envia FINISH_PEER depois de receber também o PEER_MILESTONE STDIN_EOF. Ausências (request guardado, turn/interrupt, segunda interrupção) são julgadas sobre esse intervalo fechado por EOF (cutpoint do HOW).",
+    "exception": "SDKPY06 mantém o stdin aberto: o leitor do SDK responde aos pedidos do peer; FINISH_PEER depois de CALLS_DONE e PEER_REQUESTS_DONE."
+  },
+  "release_exit_driver": "RELEASE_EXIT ao driver só depois de adapter e peer terem saída testemunhada pelo SO (processo ausente ou zumbi com o mesmo PID+starttime); um frame terminal sozinho não basta. Evita que close()/terminate() do SDK alcance um adapter ainda vivo.",
+  "witnesses": {
+    "maps": "Antes de RELEASE_EXIT ao driver o supervisor lê /proc/<driver>/maps; cada mapeamento com inode != 0 precisa ser uma raiz somente leitura permitida por igualdade (dev, inode) com o arquivo do host (/runtime/python, /runtime/node, /usr/lib/python3.12, /usr/lib/x86_64-linux-gnu, /usr/lib/locale, ld-linux, /profile). memfd só é aceito para Node (JIT anônimo). Desconhecido invalida a captura SDK.",
+    "environ": "No BEGIN do adapter o supervisor lê /proc/<adapter>/environ: Python precisa ser exatamente o env fixo do sandbox; TypeScript exatamente {HOME, PATH, CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_sdk_ts}.",
+    "sdk_client_closed": "Python: o driver emite SDK_CLIENT_CLOSED com o returncode visto pelo Popen do SDK depois de close(); precisa espelhar o status declarado pelo adapter."
+  },
+  "recv_ns_files": {
+    "path": "events-<role>.recv.jsonl",
+    "line": "{\"seq\":N,\"kind\":K,\"recv_ns\":T}",
+    "clock": "monotônico do supervisor em ns desde t0 (t0_monotonic_ns em command.json/result.json); mono_ns dos frames é o CLOCK_MONOTONIC absoluto do mesmo host",
+    "closes": "R2-F02"
+  },
+  "acceptance": {
+    "module": "python/acceptance.py",
+    "closes": [
+      "R1-F14",
+      "R2-F04"
+    ],
+    "outcomes": [
+      "PASS_CLIENT_OBSERVATION",
+      "MISMATCH",
+      "INVALID_CAPTURE",
+      "INCONCLUSIVE (só SDKTS10 com timeout)"
+    ],
+    "accepted_capture_forms": "PASS para todos; SDKTS02/03/07/08 aceitam também KNOWN_SIGNAL_TERMINATION causado pelo child.kill() do finally do SDK (sem sinal do supervisor nem ABORT_NOW); SDKTS10 exige KNOWN_SIGNAL_TERMINATION por SIGTERM do abort.",
+    "R2-F04": "FINISH_PEER segue o HOOK_CLOSED do turn A qualquer que seja closed; closed=false ou turn/interrupt capturado viram MISMATCH, não INVALID por prazo.",
+    "offline": "python3 -I acceptance.py reevaluate <tentativa> reconstrói os RoleLogs dos frames brutos e recv_ns preservados e precisa reproduzir acceptance.json."
+  },
+  "compiler_stage": {
+    "case": "TSC-SDK-EMIT",
+    "argv": [
+      "/runtime/node",
+      "/profile/transpile.mjs"
+    ],
+    "qualification": "transpile.mjs qualify(): três sondas constantes (anotação apagada, import type elidido, erro de sintaxe reportado) com as opções congeladas, antes das dez fontes; falha recusa com exit 6.",
+    "seal": "O supervisor confere o relatório (uma linha JSON), bytes/sha de cada saída, diagnósticos e imports (lista do compilador == varredura independente do host), grava runtime/emitted (0444) e compiler/emit.json; os casos TS exigem o selo."
+  },
+  "service_ledgers": {
+    "budget.json": "12 serviços de qualificação (cvg-codex100-sdkadm-<nonce>-<caso>.service): DIAG-* e TSC-SDK-EMIT",
+    "case-ledger.json": "19 vagas de uso único (cvg-codex100-sdkcase-<nonce>-<caso>.service), uma por caso, nunca reabertas"
+  }
+}

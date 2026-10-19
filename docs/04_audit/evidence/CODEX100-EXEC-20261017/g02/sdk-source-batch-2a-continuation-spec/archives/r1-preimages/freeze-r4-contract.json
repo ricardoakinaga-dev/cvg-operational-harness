@@ -1,0 +1,196 @@
+{
+  "kind": "FREEZE_R4_HARNESS_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "base": {
+    "admission_unit_manifest": {
+      "path": "../sdk-batch-2a-admission/unit-manifest.json",
+      "sha256": "b4bb8aaeeb0c234aa9b6a21114b5f45c2f5be761f6b3709cf6828ef9193affe0"
+    },
+    "evaluator_r3_1": {
+      "path": "../sdk-batch-2a-admission/evaluator-freeze-r3_1.json",
+      "sha256": "5075fe35c3361520278fc8f5fc49a74cde87fa9405a5ef84ce829196d2f9f07b"
+    },
+    "errata": {
+      "path": "../sdk-batch-2a-admission/input-order-errata.json",
+      "sha256": "a225640e89926718522196ff20673d7bff5d0001f843d961726a7b7e3a25d4ac"
+    },
+    "addendum": {
+      "path": "../sdk-batch-2a-admission/input-order-errata-addendum-r1.json",
+      "sha256": "0737daf78f1a3a236112b1337eb9d81ebb33e08b810a4846d653bc0885a56ece"
+    }
+  },
+  "items": [
+    {
+      "id": "F4-01",
+      "title": "case_input pelos bytes congelados",
+      "defect": [
+        {
+          "input": "adm2a/python/supervisor.py",
+          "sha256": "f1c481199eb55d852a44f0f38c9c591c9c39ca4f1517a05918650d09782ad1fc",
+          "lines": [221],
+          "text": "return (json.dumps(rows, sort_keys=True, separators=(',', ':'), ensure_ascii=False) + '\\n').encode('utf-8')"
+        },
+        {
+          "input": "adm2a/python/supervisor.py",
+          "sha256": "f1c481199eb55d852a44f0f38c9c591c9c39ca4f1517a05918650d09782ad1fc",
+          "lines": [705],
+          "text": "'case_input': rows.get(self.case, {}),"
+        }
+      ],
+      "rule": "O supervisor lê o case_input do slot na especificação congelada (json.loads preserva a ordem de inserção), escreve-o em adapter-config.json pela serialização compacta e registra o sha256 antes do READY; o valor tem de ser igual ao case_input_sha256 do slot. fixture-cases.json pode seguir canônico para hash, mas nunca é fonte do case_input. Os papéis leem o case_input sem reordenar (JSON.parse e json.loads preservam a ordem de chaves não numéricas).",
+      "proof": [
+        "autoteste: para cada slot, sha256 da serialização entregue == case_input_sha256",
+        "autoteste negativo: entrega com sort_keys é rejeitada",
+        "DIAG-TS-ORDER: objeto de ordem sensível (schema e config com chaves fora da ordem de code point) chega ao driver e ao fixture-cli com os bytes congelados"
+      ]
+    },
+    {
+      "id": "F4-02",
+      "title": "referência de integridade do fio TS pelos bytes congelados, também sob sinal",
+      "defect": [
+        {
+          "input": "adm2a/python/supervisor.py",
+          "sha256": "f1c481199eb55d852a44f0f38c9c591c9c39ca4f1517a05918650d09782ad1fc",
+          "lines": [275],
+          "text": "row = json.loads(fixture_bytes())[case]"
+        },
+        {
+          "input": "adm2a/python/observer.py",
+          "sha256": "8d685c8294b547fc8d167e1dfab7dbc4cf6b6aeb6e681c79edf87aee8e28b366",
+          "lines": [445],
+          "text": "if expected_wire is not None and a.terminal == 'END' and not signalled:"
+        }
+      ],
+      "rule": "O wire esperado vem do fixture congelado (JSONL na ordem de inserção, chunks hex). Com END completo sem sinal: igualdade exata. Sob KNOWN_SIGNAL_TERMINATION ou PREREADY: o stdout e o stderr comitados pelo adapter são prefixo dos bytes congelados; se nada foi comitado, registra NOT_CHECKED explícito com o motivo. Divergência é motivo de captura (INVALID_CAPTURE).",
+      "proof": [
+        "autoteste com fixture de objetos fora da ordem de code point: ordem ordenada é rejeitada",
+        "autoteste do prefixo sob sinal e do NOT_CHECKED",
+        "DIAG-TS-SIGNAL-INTEGRITY: JSONL de objetos com write_then_hold e término por sinal; prefixo conferido"
+      ]
+    },
+    {
+      "id": "F4-03",
+      "title": "peer v2 com igualdade estrita por tipo",
+      "defect": [
+        {
+          "input": "adm2a/python/fixture-rpc.py",
+          "sha256": "c1d823bdd66b2e2b728e3047ca36df341153abb3c46a86b242f60a45abe5e19e",
+          "lines": [56],
+          "text": "if 'params' in match and params != match['params']:"
+        },
+        {
+          "input": "adm2a/python/fixture-rpc.py",
+          "sha256": "c1d823bdd66b2e2b728e3047ca36df341153abb3c46a86b242f60a45abe5e19e",
+          "lines": [59],
+          "text": "if not isinstance(params, dict) or any(k not in params or params[k] != v for k, v in match['params_subset'].items()):"
+        }
+      ],
+      "rule": "method, params e params_subset comparados com jeq (bool nunca igual a número, null só null, int e float por valor), como o avaliador r3.1. nth continua implícito pela ordem das regras de uso único.",
+      "proof": [
+        "autoteste: params {\"k\": 1} não casa {\"k\": true}; {\"k\": 0} não casa {\"k\": false}; {\"k\": 1} casa {\"k\": 1.0}"
+      ]
+    },
+    {
+      "id": "F4-04",
+      "title": "stdout do peer fechado antes do EXIT_AFTER_SCRIPT",
+      "defect": [
+        {
+          "input": "adm2a/python/fixture-rpc.py",
+          "sha256": "c1d823bdd66b2e2b728e3047ca36df341153abb3c46a86b242f60a45abe5e19e",
+          "lines": [307],
+          "text": "ch.emit('PEER_MILESTONE', {'milestone': 'EXIT_AFTER_SCRIPT', 'detail': {'written': written}})"
+        },
+        {
+          "input": "adm2a/python/fixture-rpc.py",
+          "sha256": "c1d823bdd66b2e2b728e3047ca36df341153abb3c46a86b242f60a45abe5e19e",
+          "lines": [308],
+          "text": "os.close(1)"
+        }
+      ],
+      "rule": "No quadro exit, o peer escreve tudo o que está na fila, fecha o fd 1 e só depois emite EXIT_AFTER_SCRIPT (detail com written e stdout_closed=true), e então o END.",
+      "proof": [
+        "autoteste: a ordem dos efeitos do quadro exit é close(1) antes do marco"
+      ]
+    },
+    {
+      "id": "F4-05",
+      "title": "integridade do stdout do peer v2",
+      "rule": "Nos slots Python e CONTROL, o supervisor reexecuta o plano do peer v2 (peer_script congelado) sobre os pedidos do cliente comitados pelo adapter e compara com o stdout comitado: igualdade com END completo, prefixo sob sinal, NOT_CHECKED explícito se nada foi comitado.",
+      "proof": [
+        "autoteste com o adendo da errata: o stdout do 2A-PY03 (ordenado) é rejeitado contra o replay congelado",
+        "DIAG-PY-UNSCRIPTED requalificado com a checagem"
+      ]
+    },
+    {
+      "id": "F4-06",
+      "title": "testemunha do SO para filho morto antes do primeiro quadro",
+      "rule": "O supervisor (fora do sandbox, mesmo usuário) abre inotify_init1 sem privilégio e observa IN_OPEN, IN_ACCESS e IN_CLOSE_NOWRITE no caminho de host do /profile/adapter-typescript do slot. A janela abre na liberação da barreira WITNESS_WINDOW_OPEN do driver e fecha no CALLS_DONE; eventos fora da janela (por exemplo hash de admissão) não contam. Nenhuma capability nova, nenhum bind mount novo, /work segue tmpfs.",
+      "privilege": "Nenhum: inotify exige só permissão de leitura no arquivo observado (probe local como uid 1000 em feasibility-probes.json). fanotify, ptrace fora dos descendentes, eBPF ou audit ficam fora; se precisarem, vale a pergunta T3 contingente.",
+      "proof": [
+        "DIAG-TS-PREABORT: spawn próprio com signal pré-abortado do executável do adapter; PREFRAME_TERMINATION com pelo menos um IN_OPEN na janela",
+        "DIAG-TS-ENOENT requalificado: NO_CHILD com zero eventos do executável do adapter na janela"
+      ]
+    },
+    {
+      "id": "F4-07",
+      "title": "fault do adapter adapter_close_stdin_at_start",
+      "rule": "Chave de fixture aceita só nos slots que a declaram (2A-TS10E e DIAG-TS-EPIPE): depois do READY, o adapter TS emite FAULT stdin_closed_at_start, fecha o fd 0 sem ler, fecha o stdin do peer e declara STREAM_END de stdin com 0 bytes; o resto do relay segue igual.",
+      "proof": [
+        "autoteste do adapter com o fault",
+        "DIAG-TS-EPIPE: escrita própria de 1 MiB sem listener registra uncaughtException EPIPE ou ECONNRESET"
+      ]
+    },
+    {
+      "id": "F4-08",
+      "title": "marcadores do driver TS",
+      "rule": "$REPEAT, $NAN, $INFINITY, $BIGINT, $HOLE, $UNDEFINED dentro de array, $DATE e $INSTANCE, como em cases-2a-cont.json#/encoding; materializados só pelo driver, nunca pelo SDK.",
+      "proof": [
+        "autoteste de materialize: cada marcador vira o valor JS declarado (buraco real, undefined presente, BigInt, Date, instância com chaves próprias)"
+      ]
+    },
+    {
+      "id": "F4-09",
+      "title": "recorder de uncaughtException do 2A-TS10E",
+      "rule": "Só no 2A-TS10E e no DIAG-TS-EPIPE: o driver registra cada uncaughtException como DIAGNOSTIC UNCAUGHT (name, code, syscall, message) e segue; depois que o run assenta, espera 500 ms antes do CALLS_DONE. É instrumento de observação, como o recorder do 2A-TS10.",
+      "proof": ["autoteste com erro emitido sem listener num stream próprio"]
+    },
+    {
+      "id": "F4-10",
+      "title": "IDs de caso",
+      "defect": [
+        {
+          "input": "adm2a/node/channel.cjs",
+          "sha256": "6fb6dfffc5827c8b3d96a949353b9c83c791b1bb2f8ddef859381e74a741a60a",
+          "lines": [227],
+          "text": "/^(?:2A-TS(?:0[1-9]|1[0-5]|02B)|TSC-SDK-EMIT|DIAG-TS-[A-Z0-9-]{1,32})$/"
+        }
+      ],
+      "rule": "As regex de ID em channel.cjs e channel.py aceitam 2A-TS03R, 2A-TS06R, 2A-TS07R, 2A-TS12R, 2A-TS10E, 2A-TS06X, 2A-TS07X, 2A-TS08X e 2AC-CTRL01, e os DIAG novos.",
+      "proof": ["autoteste de ID aceito e rejeitado"]
+    },
+    {
+      "id": "F4-11",
+      "title": "avaliador r4, freezes e emit",
+      "rule": "Avaliador r4 (evaluator-r4-contract.json) sobre a base r3.1; source-freeze-r4 e identity-freeze-r4 antes de qualquer serviço; o emit TS selado da admissão é reutilizado enquanto os .ts e o transpile não mudarem.",
+      "proof": [
+        "autotestes r3.1 (54) rodados de novo sobre o freeze r4",
+        "autoteste R3-12 contra a tabela de cases-2a-cont.json"
+      ]
+    }
+  ],
+  "qualification_diags": [
+    "DIAG-PY-RPC",
+    "DIAG-TS-ECHO",
+    "DIAG-TS-ABORT",
+    "DIAG-TS-LARGE",
+    "DIAG-PY-STAGE",
+    "DIAG-PY-UNSCRIPTED",
+    "DIAG-TS-ORDER",
+    "DIAG-TS-SIGNAL-INTEGRITY",
+    "DIAG-TS-PREABORT",
+    "DIAG-TS-ENOENT",
+    "DIAG-TS-EPIPE"
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

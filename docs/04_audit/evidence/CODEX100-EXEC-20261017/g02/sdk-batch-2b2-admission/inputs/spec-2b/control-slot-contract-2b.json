@@ -1,0 +1,46 @@
+{
+  "kind": "CONTROL_SLOT_CONTRACT_2B",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "base_contract": {
+    "path": "../sdk-source-batch-2a-continuation-spec/control-slot-contract.json",
+    "sha256": "35a7f210c7eb2c40762009d924177164cadce5661172d12d12fbcaea53d68c73"
+  },
+  "purpose": "Provar, em cada sub-lote e sob o seu freeze, que o peer v2 com as capacidades novas de quadro antes da resposta (e de login no 2B-2) responde ao pedido sem script e que o avaliador classifica o known-bad como MISMATCH, sem depender de um SDK que se comporte mal.",
+  "slots": [
+    {
+      "case": "2B1-CTRL01",
+      "sub_lot": "2B-1",
+      "slot": 16,
+      "execution_order": 1,
+      "case_input_sha256": "a2412f10cedc186cbfdc2795c1cbc4464d53779b9b9c3bd6924780b031447b36",
+      "gate": "Roda antes de todos os casos SDK do sub-lote. Critério: MISMATCH vindo só de wire.no_turn_interrupt, com control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed aprovados. Qualquer outro desfecho para o sub-lote.",
+      "changed_from_base": {
+        "lines": "acrescenta ctrl-2 com quadro antes da resposta; o turn/interrupt passa a ser ctrl-3",
+        "predicates": "acrescenta peer.before_reply_order_witnessed",
+        "reads": "o cliente lê e registra as notificações que chegam antes da resposta"
+      }
+    },
+    {
+      "case": "2B2-CTRL01",
+      "sub_lot": "2B-2",
+      "slot": 18,
+      "execution_order": 1,
+      "case_input_sha256": "c54f3d448f1238e553ddb1207a4863eeec0b4ff099a6447b1419e266b5bfa69b",
+      "gate": "Roda antes de todos os casos SDK do sub-lote. Critério: MISMATCH vindo só de wire.no_turn_interrupt, com control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed aprovados e peer.login_frames_synthetic. Qualquer outro desfecho para o sub-lote.",
+      "changed_from_base": {
+        "lines": "acrescenta ctrl-2 com quadro antes da resposta; o turn/interrupt passa a ser ctrl-3",
+        "predicates": "acrescenta peer.before_reply_order_witnessed e peer.login_frames_synthetic",
+        "reads": "o cliente lê e registra as notificações que chegam antes da resposta"
+      }
+    }
+  ],
+  "rules": [
+    "O cliente de controle não importa o SDK nem Pydantic.",
+    "Usa o mesmo adapter Python, peer v2, supervisor e observador dos casos SDK do sub-lote.",
+    "control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed (e peer.login_frames_synthetic no 2B-2) são sanidade: falha leva a INVALID_CAPTURE e para o sub-lote.",
+    "O MISMATCH esperado vem só de wire.no_turn_interrupt (classe client).",
+    "Roda primeiro; qualquer outro desfecho para o sub-lote antes dos casos SDK.",
+    "Conta 1 vaga do sub-lote e não gera observação de cliente nem crédito."
+  ],
+  "source_freeze": "control-client.py (D2B-13) entra no source freeze de cada sub-lote com sha registrado."
+}

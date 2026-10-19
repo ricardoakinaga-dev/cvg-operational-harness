@@ -1,0 +1,341 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100 (IN_PROGRESS)",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-1",
+  "lead": "CONT-20261018-D9EF (Claude Code); executor subagente",
+  "track": "T1 com execução local contida",
+  "status": "COMPLETED_LOCAL",
+  "git": {
+    "worktree": "/mnt/dados/cvg-work/cvg-codex100-batch2b1-20261019",
+    "base": "70b77150 (candidata da continuação 2A, recibo)",
+    "branch": "nenhuma (HEAD destacado)"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-batch2b1-runtime-20261019 (privado; árvores seladas copiadas do runtime 2A e conferidas contra a identity freeze da admissão; /mnt/ia não tocado)",
+  "spec_inputs": {
+    "source": "checkout principal, g02/sdk-source-batch-2b-spec/ (fora do git; cópia do Lead) -> inputs/spec-2b/; freeze/avaliador r4 -> inputs/spec-r4/",
+    "verification": "input-verification.json (11 sha de next-task.json iguais; os dois registros da R2 da especificação só mudaram de formato)"
+  },
+  "implementation": {
+    "from": "fontes Python da continuação 2A (freeze r4) copiadas e alteradas nesta pasta; a pista TypeScript não entra no 2B-1",
+    "deltas": {
+      "D2B-01": "channel.py SDK_CASE_RE 2B-PY01..18 + letra, CONTROL_CASES 2B1/2B2; supervisor liga cases-2b-1.json por sha, 16 vagas (15 SDK)",
+      "D2B-02": "python-driver.py Interp: vocabulário fechado CAP-PY-SDKCALLS-2B do 2B-1 (passo fora da lista = ChannelError, INVALID)",
+      "D2B-03": "Interp.run_async dentro de asyncio.run; task.create/cancel/await, loop.yield_until, loop.block_release_wait_cancel, heartbeat, astream.*, async_with.enter; esperas de barreira por thread própria + call_soon_threadsafe (sem executor padrão)",
+      "D2B-04": "harness2b.py: StaticReader (leitura estática), HookSet (setprofile por identidade de código, ocorrência por (id, event)), park_witness, ExcepthookRecorder, Worker",
+      "D2B-09": "fixture-rpc.py: marco BEFORE_REPLY_WRITTEN {rule, frames, bytes} entre os quadros e a resposta (com hold: quadros no recebimento)",
+      "D2B-10": "adapter-python-exec (lançador 0555), BEGIN do adapter com argv_tail/cwd/env, fault ignore_sigterm só de case_input.adapter.fault; supervisor PROC_WITNESS só depois do BEGIN, rastreador de término (estado e status de zumbi em /proc/<pid>/stat), varredura da cgroup",
+      "D2B-11": "supervisor BARRIER_PLAN por vaga (tabela derivada dos passos de barreira congelados; plan_check sem lacuna); STEP_WITNESS fora do plano para a unidade",
+      "D2B-12": "três epílogos (eof+close, eof+aclose, close_if_open) e finally que fecha o que estiver aberto",
+      "D2B-13": "control-client.py: 4 linhas, PRE_REPLY_NOTIFICATION antes de cada resposta",
+      "D2B-14": "source-freeze-r4-2b1 e identity-freeze-r4-2b1 antes de qualquer serviço (stdlib e packaging/version.py reconferidos); DIAG e decisões em diag-admission-2b1.json",
+      "D2B-15": "channel.py e observer.py (implementações separadas) com os tipos e campos por papel; driver BEGIN com dependency_identity (R2-F06)"
+    },
+    "evaluator": "acceptance.py acceptance-r4-2b1 (E2B-01..E2B-14; sequência única gidx; gramática de ordem; formas de término só com testemunhas do SO e do canal)",
+    "deviations": [
+      {
+        "id": "DV1",
+        "item": "D2B-10 / DIAG-PY-PROCWITNESS",
+        "text": "O canal admite um adapter por tentativa: DIAG-PY-PROCWITNESS testemunha a forma do lançador (com env acrescido e cwd /work/tmp) e a forma da tupla LAUNCH (env e cwd) é testemunhada no DIAG-PY-CLOSETERM (chave gate_proc_witness_launch_form, fora do critério de aprovação do CLOSETERM); a decisão das vagas 2B-PY02A/02B/02K usa as duas."
+      },
+      {
+        "id": "DV2",
+        "item": "D2B-11",
+        "text": "O barrier_plan é uma tabela explícita no supervisor, derivada dos textos witness/release dos passos congelados (não analisa texto livre em tempo de execução); plan_check e o validador provam que cada passo de barreira tem exatamente uma entrada."
+      },
+      {
+        "id": "DV3",
+        "item": "D2B-02 / autotestes",
+        "text": "O SDK não é importado fora do serviço: os caminhos de SDK do interpretador têm auditoria estática por vaga (referências, listas fechadas, park points e precondições mapeados); a maquinaria comum foi exercida offline com código próprio e em serviço pelos seis DIAG novos."
+      },
+      {
+        "id": "DV4",
+        "item": "D2B-15",
+        "text": "API_CANCELLED mantém os campos {name, message} do canal; o rótulo do passo vai em message. PROBE é {id, value}; caminho e fn ficam no case_input congelado."
+      },
+      {
+        "id": "DV5",
+        "item": "E2B-04",
+        "text": "Sequência única = índice gidx do supervisor: quadros de um mesmo lote de leitura ordenados pelo mono_ns de emissão (CLOCK_MONOTONIC comum aos papéis), todos antes das ações que o lote dispara; lotes na ordem de chegada."
+      },
+      {
+        "id": "DV6",
+        "item": "E2B-12",
+        "text": "Aplicada à testemunha que o 2B-1 declara (retorno de CodexClient.notify com method initialized) nas formas de sinal; não há gancho de pedido com resposta em caso de sinal no 2B-1."
+      },
+      {
+        "id": "DV7",
+        "item": "D2B-11 / gates",
+        "text": "Os gates zero_spawn e proc_witness registram e liberam (o resultado é fato de cliente julgado por proc.spawn_count_exact e proc.*_exact); adapter_killed tem limite de 5 s e, estourado, segue com proc.witness_recorded falho."
+      },
+      {
+        "id": "DV8",
+        "item": "E2B-03 / CAP-2B-PROC-WITNESS",
+        "finding": "R1-F04",
+        "text": "O classificador CLIENT_TERMINATED_SIGTERM aceita peer encerrado pelo sinal repassado ou por END próprio (peer que já saiu pelo roteiro antes do sinal). Nos dados (2B-PY01A, 2B-PY01D, 2B-PY02A, DIAG-PY-CLOSETERM) o peer terminou por SIGTERM."
+      }
+    ]
+  },
+  "carry_over_spec_r2": {
+    "R2-F01": "FECHADO: implementado (driver HookSet, quadro HOOK_EVENT, avaliador), autoteste positivo e negativo contra o expected.hooks congelado do 2B-PY13D, validador com controle negativo; aprovado explicitamente pela R1 (review-r1/review.json#/r2_f01).",
+    "R2-F02": "IMPLEMENTADO (escopo 2B-2): thread.join por nome sem thread vivo conta como já terminado; autoteste.",
+    "R2-F03": "IMPLEMENTADO: avaliador (excepthook_records) e validador; controle negativo.",
+    "R2-F04": "IMPLEMENTADO: classes por passo em python-driver.py CLIENT_EFFECT_WAITS (2B-PY11B passo 8, 2B-PY02A passo 12) e case-plan.json#/cases/*/wait_classes_r2_f04; worker.join e worker.still_parked registram e seguem. No 2B-PY11B, a testemunha do supervisor \"peer RECEIVED turn/start = 1\" do passo 9 é registro e não gatilho (valor observado 1, result.json#/barrier_log), coerente com R2-F04 (R1-F06).",
+    "R2-F05": "NÃO APLICÁVEL ao 2B-1 (CAP-2B-PEER-LOGIN é do 2B-2); carry-over mantido.",
+    "R2-F06": "IMPLEMENTADO: STEP_WITNESS e CLOCK_MARK como marcos DIAGNOSTIC do driver; dependency_identity no BEGIN do driver (2.13.4/2.46.4, diferente é INVALID).",
+    "R2-F07": "IMPLEMENTADO EM PARTE: tools/validate_unit.py confere WORKER, métodos de RAW_READ/COMMIT_REPLY/RELEASE_REPLY contra peer_script e hold, @threadId de RELEASE_REPLY, passo de CANCEL, guarda de excepthook e regra de ocorrência, cada um com controle negativo; @threadId de RAW_READ/COMMIT_REPLY e as regras completas sobre cases-2b-2.json vão para o 2B-2 (R1-F03)."
+  },
+  "carry_over_previous_freeze": {
+    "R1-F06 (gate do CONTROL)": "IMPLEMENTADO: supervisor control_gate exige regra 6 e failed_predicates == [wire.no_turn_interrupt]",
+    "R1-F07 (identity freeze antes dos serviços)": "IMPLEMENTADO: identity-freeze-r4-2b1 antes do primeiro serviço; DIAG em diag-admission-2b1.json",
+    "R1-F12 (fault por caso)": "IMPLEMENTADO: o adapter só lê case_input.adapter.fault da vaga",
+    "R1-F03, R1-F04": "MANTIDOS: proc.env_exact compara chave a chave (o contrato não pede ordem); o status do replay do peer v2 só entra em capture_reasons quando MISMATCH",
+    "R1-F05, R1-F11, R1-F08 (t_ns)": "NÃO APLICÁVEIS (pista TypeScript e testemunha inotify não entram no 2B-1)"
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 66,
+    "failed": 0,
+    "sdk_imported": false,
+    "services": 0
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": {
+      "raw_read_unknown_method": true,
+      "cancel_on_non_cancel_step": true,
+      "release_reply_wrong_thread": true,
+      "release_reply_without_hold": true,
+      "worker_unknown": true,
+      "excepthook_non_empty_without_wait": true,
+      "occurrence_without_event": true,
+      "grammar_bad_token": true
+    }
+  },
+  "freezes": {
+    "source-freeze-r4-2b1.json": "eae2dbda67d013374bb75556c524ac36132600cfcb5d1fa696142f8cbc6e5dab",
+    "identity-freeze-r4-2b1.json": "96886578aa7376657dddf3e4969495bac2c2bc1a7366661673cd3d7f9ab477aa",
+    "diag-admission-2b1.json": "62afe2d31080e545b0361ac5cd5c6dc2c4aef409d1699d3b3bba2b82630e918c",
+    "order": "source freeze 2026-10-19T11:05:33.584685+00:00 e identity freeze 2026-10-19T11:05:33.921434+00:00 antes do primeiro serviço (DIAG-PY-RPC, 2026-10-19T11:05:39.075094+00:00); depois DIAG -> diag-admission -> CONTROL -> SDK"
+  },
+  "diagnostics": {
+    "DIAG-PY-RPC": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/f20a4ca171aa-DIAG-PY-RPC"
+    },
+    "DIAG-PY-STAGE": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/d241e141a913-DIAG-PY-STAGE"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/8d32c5fa7a65-DIAG-PY-UNSCRIPTED"
+    },
+    "DIAG-PY-ASYNC": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/d4d06a4f09ad-DIAG-PY-ASYNC"
+    },
+    "DIAG-PY-BARRIER": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/a5b6dd97c302-DIAG-PY-BARRIER"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/8669208c9f98-DIAG-PY-BEFOREREPLY"
+    },
+    "DIAG-PY-CLOSETERM": {
+      "verdict": "SIGTERM_CANDIDATE",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/6ba2e0b6af30-DIAG-PY-CLOSETERM"
+    },
+    "DIAG-PY-PROCWITNESS": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/2c7efa04cde8-DIAG-PY-PROCWITNESS"
+    },
+    "DIAG-PY-KILLWAIT": {
+      "verdict": "KILLED_CANDIDATE",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/e3ef951423bf-DIAG-PY-KILLWAIT"
+    }
+  },
+  "diagnostics_status": "9/9 DIAG_PASS na primeira execução",
+  "conditional_slots": {
+    "2B-PY02A": "RUN",
+    "2B-PY02B": "RUN",
+    "2B-PY02K": "RUN",
+    "used": true,
+    "t3_contingent": "não ativada (leitura de /proc sem privilégio funcionou; nenhuma capability nova)"
+  },
+  "control": {
+    "case": "2B1-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [["wire.no_turn_interrupt", "client"]],
+    "gate": "MISMATCH pela regra 6 só com wire.no_turn_interrupt, antes dos casos SDK",
+    "gate_passed": true,
+    "counts_as_sdk_observation": false
+  },
+  "cases": {
+    "counts": {
+      "PASS_CLIENT_OBSERVATION": 15,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "by_slot": {
+      "2B1-CTRL01": "MISMATCH (PASS)",
+      "2B-PY01A": "PASS_CLIENT_OBSERVATION (CLIENT_TERMINATED_SIGTERM)",
+      "2B-PY01B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY01C": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY01D": "PASS_CLIENT_OBSERVATION (CLIENT_TERMINATED_SIGTERM)",
+      "2B-PY02A": "PASS_CLIENT_OBSERVATION (CLIENT_TERMINATED_SIGTERM)",
+      "2B-PY02B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY02K": "PASS_CLIENT_OBSERVATION (CLIENT_KILLED_SIGKILL)",
+      "2B-PY05X": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY08X": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY10X": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY11A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY11B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY11C": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY12A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY12B": "PASS_CLIENT_OBSERVATION (PASS)"
+    }
+  },
+  "reevaluation": {
+    "path": "reevaluation-2b1.json",
+    "all_predicate_level_equal": true,
+    "all_outcome_equal": true
+  },
+  "budget": {
+    "slots": "16/16",
+    "services": "9/12",
+    "reviews": "1/2",
+    "grouped_repairs": "0/1",
+    "automatic_retries": 0,
+    "load_waits": {
+      "waited": 0,
+      "max_loadavg_1m_at_service_start": 8.11,
+      "limit": 12.0,
+      "note": "load 12,76 lido às 07:15Z, antes de qualquer serviço (leitura da especificação); nenhum serviço começou acima de 12"
+    }
+  },
+  "resources": {
+    "units": 25,
+    "all_released": true,
+    "prefix": "cvg-dx100-2b1-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-batch2b1-20261019",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-batch2b1-runtime-20261019"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 50,
+    "by_status": {
+      "expected_empty": 50
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade. SPEC0239 BUILD não autorizada. Sem push, PR, deploy ou produção.",
+  "updated_at": "2026-10-19T11:34:37.302796+00:00",
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "subject": "review-freeze-r1.json",
+      "subject_sha256": "c00191ba5341d730fdb11a6db56b4c10d8cb8d37eafd681be1a979c88bdbf779",
+      "verdict": "APPROVE",
+      "r2_f01": "APPROVED",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 8
+      },
+      "disposition": "review-r1/executor-disposition.json"
+    }
+  },
+  "adjudication": {
+    "path": "adjudication-r1.json",
+    "sdk_final_reading": {
+      "PASS_CLIENT_OBSERVATION": 15,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0
+    },
+    "bind_consumes_only": 15
+  },
+  "next_task": {
+    "path": "next-task.json",
+    "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1 (proposta)",
+    "t3_required": false
+  },
+  "carry_over_2b2": [
+    {
+      "finding": "R1-F01",
+      "text": "Condição de barreira por gancho com (id, event, occurrence, record_subset), autoteste positivo e negativo; pré-requisito dos passos 10 e 16 do 2B-PY13D. Sem efeito no 2B-1 (conferido pela revisão)."
+    },
+    {
+      "finding": "R1-F02",
+      "text": "Recontagem independente da ocorrência por (id, event) no avaliador ou no observador; validador recusando token HOOK de gancho call+return ou não declarado; autoteste R2-F01 passando pelo profiler com threads nomeadas."
+    },
+    {
+      "finding": "R1-F03",
+      "text": "state.json corrigido: o validador confere @threadId só de RELEASE_REPLY; a conferência de @threadId de RAW_READ/COMMIT_REPLY e as regras completas sobre cases-2b-2.json vão para a IMPLEMENT do 2B-2."
+    },
+    {
+      "finding": "R1-F05",
+      "text": "Três checagens a acrescentar ao avaliador (condições por ação do plano, zombie_t_ns em no_termination_before, marco BEFORE_REPLY_WRITTEN antes do commit da resposta); conferidas à mão pela revisão nos dados do 2B-1."
+    },
+    {
+      "finding": "R1-F07",
+      "text": "Roteiro do 2B2-CTRL01 no autoteste do D2B-13 (depende do login sintético do 2B-2); R3-12 conferindo CAPTURE_CLASSES e client contra predicate_classes congelado."
+    },
+    {
+      "finding": "R1-F08",
+      "text": "hook.code_identity conferindo o sha do arquivo contra identity-freeze antes de ler a linha (ou linhas guardadas em U); sem drift no 2B-1 (22 arquivos e 7 âncoras conferidos pela revisão)."
+    },
+    {
+      "finding": "spec R2-F05",
+      "text": "FORBIDDEN_LOGIN_KEYS enumerada no código e no contrato da IMPLEMENT do 2B-2 (CAP-2B-PEER-LOGIN)."
+    },
+    {
+      "finding": "continuação R1-F03/R1-F04",
+      "text": "environ em ordem e status do replay do peer v2 no detalhe de captura (mantidos)."
+    }
+  ],
+  "closing_documents": [
+    "state.json",
+    "adjudication-r1.json",
+    "next-task.json",
+    "review-r1/executor-disposition.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r1-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ],
+  "tools_closing": [
+    "tools/collect_results.py",
+    "tools/empty_artifacts.py",
+    "tools/close_r1.py"
+  ],
+  "validation": {
+    "prettier": "prettier 3.8.3 --ignore-path /dev/null --check nos 13 documentos autorados (JSON e MD): OK. Não reformatados por desenho: arquivos de serviço, freezes, entradas, fixture-cases, case-plan, livros do supervisor (budget, case-ledger), resultados de autoteste, validation-unit.json e review.json do revisor.",
+    "doc_links": "node scripts/check-doc-links.mjs <pasta da unidade>: DOC_LINKS_OK, 0 quebrados",
+    "evidence_hygiene_copy": "cópia da unidade com empty-artifact-delta.json como catálogo: EVIDENCE_HYGIENE_OK (50/50 vazios catalogados, 183 JSON parseáveis)",
+    "evidence_hygiene_real": "na candidata (base 70b77150): 217 erros = 50 desta unidade + 62 da sdk-batch-2a-admission + 42 da sdk-batch-2ac-admission + 39 da sdk-admission + 17 da sdk-observation-drivers + 7 de HISO005-P2-BUILD-0240-20261018, todos vazios sem registro no catálogo central da base",
+    "secret_scan": "gitleaks v8.28.0 (docker, .gitleaks.toml da raiz): exit 0, 0 achados; controle positivo sintético exit 1 (lead-secret-scan-triage.json)",
+    "pycache": "nenhum __pycache__ nem .pyc na pasta",
+    "units_after": "systemctl --user list-units --all cvg-dx100-2b1-*: 0"
+  }
+}

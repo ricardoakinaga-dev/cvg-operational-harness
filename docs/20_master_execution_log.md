@@ -1,3 +1,27 @@
+# CONT-20261018-D9EF — três frentes depois da consolidação (Claude Code) — 19/10/2026
+
+- `status: IN_PROGRESS`. Claude Code continua HISO-005/B6, Claude100 e Codex100 a pedido do usuário ("continuar até me entrega tudo pronto e resolvido"). [Claim](08_runtime/agent_coordination.md). Com a `main` única, tudo chega por PR montado numa worktree detached. O histórico local anterior à consolidação está preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.
+- `last_completed_action`:
+  - **Claude100:** os deltas r4 e r5 da SPEC0238 foram aprovados pelo usuário. A execução única da r5 (run3) capturou TEXT, READ (desfecho R1, inventário {Read, Edit}) e WRITE_DENIED (W1, negação nativa do Edit). O coletor entrou na `main` pelo PR #5 (`62dfba8d`). O alerta CodeQL #26, sobre a chave sintética da SPEC, foi dispensado como teste com autorização do usuário. [Estado run3](04_audit/evidence/CLAUDE100-EXEC-20261017/ref-capture-build/r5-run/state.json).
+  - **HISO-005:** o BUILD0241 (D1/D2) e a T2 da receita de referência estão concluídos localmente e portados para a `main` no PR #6. A proveniência compilada passou a PROVEN, e a B6 segue `INCOMPLETE` com 2.410 diagnósticos. O recon explicou o corte em `maxContexts` (helper `__name` com 145 contextos) e o teto de 4 GiB. O usuário aprovou o BUILD local da [SPEC0243](02_spec/0243_b6_reference_source_scope.md) e da [SPEC0242](02_spec/0242_b6_body_caps_deadlines.md). [Recon](04_audit/evidence/HISO005-P2-NEXT-RECON-20261019/REPORT.txt), [BUILD0241](04_audit/evidence/HISO005-P2-BUILD-0241-20261018/state.json), [T2](04_audit/evidence/HISO005-P2-REFERENCE-RECIPE-T2-20261019/REPORT.txt).
+  - **Codex100 (DX100-G02):** concluídos localmente:
+    - ligação v1 (11 contratos observados);
+    - lote 2A: CONTROL em MISMATCH e 19 PASS;
+    - ligação v2 (21 observados, 23 abertos);
+    - continuação do 2A: CONTROL em MISMATCH e 8/8 PASS;
+    - especificação do 2B, em sub-lotes 2B-1 e 2B-2.
+
+    Zero recibos funcionais, zero crédito de paridade. [Backlog 0386](03_build/0386_backlog_paridade_codex.md).
+
+  - Antes da consolidação: correções de CI do PR #3, promoção do BUILD0240, aprovação da SPEC0241, journal0225 J07, integração da fundação Claude100 e portabilidade dos testes, todos já na `main` pelo PR #4.
+
+- `next_action`:
+  1. Merge do PR #6 com os checks obrigatórios verdes.
+  2. `HISO005-P2-BUILD-0243` e, depois, `HISO005-P2-BUILD-0242`.
+  3. `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`. Já fecharam: ligação v3 (25/19), lote 2B-1 (CONTROL em MISMATCH, 15/15 PASS), ligação v4 (29/15) e lote 2B-2 (CONTROL em MISMATCH, 17/17 PASS).
+
+  As evidências seguintes entram em PR documental próprio. Push, merge e gates T3 só com autorização do usuário.
+
 # MAIN-CONSOLIDATION — reparo do E2E hospedado — 19/10/2026
 
 - `status: IN_PROGRESS`. Verify39190236719 chegou ao E2E após5700unit/zero pending, cobertura e gates de integraçãoPASS, mas falhou antes dos testes no coletor Gitdiff do Playwright. Diff real1,897GB e repro privada confirmada. [Task finita](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-task.md), [evidência](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-proof.json).

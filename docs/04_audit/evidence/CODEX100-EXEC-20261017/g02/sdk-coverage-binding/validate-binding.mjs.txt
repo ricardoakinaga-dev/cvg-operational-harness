@@ -1,0 +1,145 @@
+// DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE - validador independente (Node, só leitura).
+// Uso: node --input-type=module - <repo_root> <out_json> [observed_override] < validate-binding.mjs.txt
+// observed_override serve só aos controles negativos (cópia mutada fora da pasta).
+// Segunda implementação, em Node, das regras do mapa: não importa SDK e não executa nada.
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
+
+const args = process.argv.slice(process.argv.indexOf("-") + 1);
+const [root, outJson, observedOverride] = args;
+const E = join(root, "docs/04_audit/evidence/CODEX100-EXEC-20261017");
+const OUT = join(E, "g02/sdk-coverage-binding");
+const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+const load = (p) => JSON.parse(readFileSync(p, "utf8"));
+const checks = [];
+const check = (id, ok, detail = null) => checks.push({ id, ok: Boolean(ok), detail });
+
+const obs = load(observedOverride || join(OUT, "coverage-observed.json"));
+const gaps = load(join(OUT, "gaps-review.json"));
+const orig = load(join(E, "g02/sdk-reference-profile/coverage.json"));
+const caseResults = load(join(E, "g02/sdk-admission/case-results.json"));
+const integ = load(join(E, "g01/sdk-open-contracts/integration.json"));
+
+// Fontes citadas batem com os arquivos atuais.
+for (const [k, v] of Object.entries(obs.sources)) {
+  check(`source.${k}.sha256`, sha(resolve(OUT, v.path)) === v.sha256, v.path);
+}
+check("source.coverage_original.unchanged", obs.sources.coverage_original.sha256 === "432cae6792a4812e335a509c9a07fc9923bfc26f1638ae15d462b14076afbeee");
+
+// Mesmos 44 contratos, mesma ordem, mesmos casos selecionados.
+check("rows.count", obs.rows.length === 44 && orig.rows.length === 44, obs.rows.length);
+let sameOrder = true;
+let sameCases = true;
+let sameOrigStatus = true;
+obs.rows.forEach((r, i) => {
+  const o = orig.rows[i];
+  if (r.source_contract !== o.source_contract) sameOrder = false;
+  if (JSON.stringify(r.selected_case_ids) !== JSON.stringify(o.selected_case_ids)) sameCases = false;
+  if (r.status_original !== o.status) sameOrigStatus = false;
+});
+check("rows.same_order", sameOrder);
+check("rows.same_selected_case_ids", sameCases);
+check("rows.status_original_matches", sameOrigStatus);
+
+// Transições permitidas e contagens.
+const expectObserved = ["PY05", "PY06", "PY07", "PY10", "PY14", "TS10", "TS11", "TS12", "TS13", "TS14", "TS15"];
+const observed = obs.rows.filter((r) => r.status === "OBSERVED_CLIENT_PARTIAL").map((r) => r.source_contract);
+const open = obs.rows.filter((r) => r.status === "OPEN_REQUIRED_FUTURE_PROFILE");
+check("counts.observed_11", observed.length === 11 && JSON.stringify(observed) === JSON.stringify(expectObserved), observed);
+check("counts.open_33", open.length === 33);
+check("counts.declared", obs.counts.OBSERVED_CLIENT_PARTIAL === 11 && obs.counts.OPEN_REQUIRED_FUTURE_PROFILE === 33);
+check(
+  "transitions.only_selected_to_observed",
+  obs.rows.every((r) =>
+    r.status_original === "SELECTED_PARTIAL_NOT_RUN"
+      ? r.status === "OBSERVED_CLIENT_PARTIAL"
+      : r.status === "OPEN_REQUIRED_FUTURE_PROFILE" && r.status_original === "OPEN_REQUIRED_FUTURE_PROFILE",
+  ),
+);
+check("open.no_observations", open.every((r) => !r.observations && r.selected_case_ids.length === 0));
+
+// Nenhum crédito ampliado.
+check("credit.whole_requirement_false", obs.rows.every((r) => r.whole_requirement_covered === false));
+check("credit.no_receipt", obs.rows.every((r) => r.functional_receipt === null && r.parity_credit === 0));
+check("credit.totals_zero", obs.functional_receipts === 0 && obs.parity_credit === 0 && gaps.functional_receipts === 0 && gaps.parity_credit === 0);
+
+// Cada observação aponta para acceptance.json/-r2 existentes, com hash e outcome corretos.
+const byCase = Object.fromEntries(caseResults.cases.map((c) => [c.case, c]));
+const bound = new Set();
+let accOk = true;
+const accDetail = [];
+for (const r of obs.rows.filter((x) => x.observations)) {
+  const ids = r.observations.map((o) => o.case);
+  if (JSON.stringify(ids) !== JSON.stringify(r.selected_case_ids)) {
+    accOk = false;
+    accDetail.push(`${r.source_contract}: casos diferentes dos selecionados`);
+  }
+  for (const o of r.observations) {
+    bound.add(o.case);
+    for (const key of ["acceptance", "acceptance_r2"]) {
+      const p = resolve(OUT, o[key].path);
+      const j = load(p);
+      const expectedDir = resolve(E, "g02/sdk-admission", byCase[o.case].attempt_dir);
+      const good =
+        sha(p) === o[key].sha256 &&
+        dirname(p) === expectedDir &&
+        j.case === o.case &&
+        j.outcome === "PASS_CLIENT_OBSERVATION" &&
+        j.functional_receipts === 0 &&
+        j.facts.client_fact_only === true &&
+        j.facts.parity_receipt === null &&
+        j.failed_predicates.length === 0;
+      if (!good) {
+        accOk = false;
+        accDetail.push(`${r.source_contract}/${o.case}/${key}`);
+      }
+    }
+    if (byCase[o.case].outcome !== "PASS_CLIENT_OBSERVATION") accOk = false;
+  }
+}
+check("observations.acceptance_bound_and_pass", accOk, accDetail);
+
+// Resíduo: não exaustivo, com referência autoritativa ao contrato G01 e destino proposto (R1-F01, R1-F03).
+const obsRows = obs.rows.filter((x) => x.observations);
+let refsOk = true;
+for (const r of obsRows) {
+  const refs = r.authoritative_residual_refs || [];
+  if (r.remaining_open_scope_exhaustive !== false || refs.length === 0 || !r.residual_planned_profile_proposal) refsOk = false;
+  for (const ref of refs) if (sha(resolve(OUT, ref.path)) !== ref.sha256) refsOk = false;
+  for (const o of r.observations) {
+    if (o.failed_predicates_service_r1.length || o.failed_predicates_offline_r2.length) refsOk = false;
+  }
+}
+check("residual.non_exhaustive_with_authoritative_refs", refsOk);
+check("residual.py14_goal_facts_ref", (obs.rows.find((r) => r.source_contract === "PY14").authoritative_residual_refs || []).some((x) => x.pointer === "goal"));
+check("vocabulary.analytic_note_present", Boolean(obs.scope_vocabulary && obs.scope_vocabulary.analytic_branch_arms_observed && obs.scope_vocabulary.remaining_open_scope));
+check("observations.all_19_cases_bound", bound.size === 19 && caseResults.cases.every((c) => bound.has(c.case)), bound.size);
+
+// Lacunas: seis, todas OPEN, contratos iguais aos da integração G01.
+check("gaps.six", gaps.rows.length === 6);
+check("gaps.all_open", gaps.rows.every((g) => g.status_before === "OPEN" && g.status_after === "OPEN"));
+check(
+  "gaps.contracts_match_g01",
+  gaps.rows.every((g, i) => {
+    const s = integ.rows[i];
+    return g.id === s.id && JSON.stringify(g.contracts) === JSON.stringify([...s.python_contracts, ...s.typescript_contracts]);
+  }),
+);
+check(
+  "gaps.observed_subset_consistent",
+  gaps.rows.every((g) => g.contracts_observed_client_partial.every((c) => observed.includes(c) && g.contracts.includes(c))),
+);
+check("gaps.no_receipt", gaps.rows.every((g) => g.receipt === null && g.qualification === "NOT_RUN" && g.whole_requirement_covered === false));
+
+const result = {
+  kind: "BINDING_VALIDATION_NODE",
+  task: "DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE",
+  node: process.version,
+  checks,
+  passed: checks.filter((c) => c.ok).length,
+  failed: checks.filter((c) => !c.ok).map((c) => c.id),
+  verdict: checks.every((c) => c.ok) ? "PASS" : "FAIL",
+};
+writeFileSync(outJson, JSON.stringify(result, null, 2) + "\n");
+console.log(result.verdict, result.passed, result.failed);

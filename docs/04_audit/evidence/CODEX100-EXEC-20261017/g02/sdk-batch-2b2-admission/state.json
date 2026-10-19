@@ -1,0 +1,353 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100 (IN_PROGRESS)",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-2",
+  "lead": "CONT-20261018-D9EF (Claude Code); executor subagente",
+  "track": "T1 com execução local contida",
+  "status": "COMPLETED_LOCAL",
+  "git": {
+    "worktree": "/mnt/dados/cvg-work/cvg-codex100-batch2b2-20261019",
+    "base": "6cbd7931 (candidata do 2B-1, recibo)",
+    "branch": "nenhuma (HEAD destacado)"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-batch2b2-runtime-20261019 (privado; árvores seladas copiadas do runtime 2A e conferidas contra a identity freeze da admissão; /mnt/ia não tocado)",
+  "spec_inputs": {
+    "source": "checkout principal, g02/sdk-source-batch-2b-spec/ (fora do git) e cópias da unidade 2B-1 -> inputs/spec-2b/; freeze/avaliador r4 -> inputs/spec-r4/",
+    "verification": "input-verification.json (todas as cópias iguais aos originais do checkout principal e às cópias da unidade 2B-1)",
+    "cases": "inputs/spec-2b/cases-2b-2.json (382d7b29…)",
+    "budget": "inputs/spec-2b/execution-budget-2b-2.json (68fd90a5…)",
+    "carry_over": "../sdk-batch-2b1-admission/state.json#/carry_over_2b2"
+  },
+  "implementation": {
+    "from": "fontes Python do 2B-1 (base 6cbd7931) copiadas e alteradas nesta pasta; ownmodels.py novo",
+    "deltas": {
+      "D2B-01": "cases-2b-2.json ligado por sha no supervisor e no avaliador; 18 vagas (17 SDK + 2B2-CTRL01), nenhuma condicional; control-client.py aceita 2B2-CTRL01",
+      "D2B-02": "python-driver.py Interp: AsyncCodexClient.new, ChatgptLoginHandle.new, GoalStream.new (composição com next_goal_notification, unregister_goal_operation e cancel_goal_operation do cliente), gstream.next/close, agstream.next (passo ou tarefa), $model/$enum/$ref com índice, response_model de lista fechada, worker.parked com $executor-thread-of (async, cedendo ao loop), hook.wait/hook.count com o evento único do gancho e nome exato de thread; passo fora da lista = INVALID",
+      "D2B-05": "harness2b.ShimSet: shims nos atributos random/time de openai_codex.retry e time de openai_codex._goal (uniform a/b roteirizado, sleep sem dormir, monotonic roteirizado), violação registrada (SHIM_VIOLATION), remoção por identidade com stdlib conferida (SHIM_STDLIB); SHIM_RECORD/SHIM_SCOPE",
+      "D2B-06": "harness2b.FaultSet: call_through_then_raise e raise_before_call em atributo de instância, raise_on_call no callable composto do GoalStream; lista fechada RuntimeError(msg)/KeyboardInterrupt(); FAULT {target, call, count} por disparo; FAULT_SCOPE de instalação/remoção; só a instância de BaseException injetada vira API_ERROR do passo",
+      "D2B-07": "model.validate/construct/dump sobre a lista fechada de v2_all e _GoalOperationState (só $model); response_model de lista fechada; error_v2 com a lista errors() completa (até 32); avisos de serialização registrados; DIAG-PY-MODELORACLE com ownmodels.py (só pydantic da árvore selada) e oráculo no mesmo processo",
+      "D2B-08": "fixture-rpc.py: FORBIDDEN_LOGIN_KEYS enumerada (apiKey, api_key, accessToken, refreshToken, idToken, authToken, chatgptAuthTokens, password, secret), login_problems na admissão do peer_script (antes do READY), LOGIN_FRAME {method, frame, login_id_sha256, bytes, sha256} por quadro de login",
+      "D2B-11": "BARRIER_PLAN do 2B-PY13D e do 2B-PY13E; condição de gancho (id, event, occurrence, record_subset) com recontagem no supervisor; passos 10 e 16 do 2B-PY13D liberam depois de (h_stop, return, 1) e (h_cleanup_cb, return, 2)",
+      "D2B-14": "source-freeze-r4-2b2 e identity-freeze-r4-2b2 antes de qualquer serviço (âncoras stdlib asyncio/tasks.py, concurrent/futures/_base.py, json/encoder.py e Pydantic config.py, root_model.py, core_schema.py reconferidas); DIAG em diag-admission-2b2.json",
+      "D2B-15": "tipos já existentes do canal; campo acima do META vai em milestones PART (DV2)"
+    },
+    "evaluator": "acceptance.py acceptance-r4-2b2 (tabela e composição de cases-2b-2.json; predicados novos clock.recorder_exact, shim.scope_exact, fault.fired_as_declared, model.oracle_exact, model.errors_recorded, peer.login_frames_synthetic, wire.emitted_lines_exact)",
+    "deviations": [
+      {
+        "id": "DV1",
+        "item": "R2-F04 / E2B-14 (2B-PY13E passo 13)",
+        "text": "Classificação por passo: hook.wait do 2B-PY13E (passo 11) e probe.until do 2B-PY17A (passo 11) são esperas de efeito do cliente (R2-F04); o excepthook.wait do 2B-PY13E (passo 13) segue pré-condição de harness porque a nota congelada do próprio passo diz \"estouro do prazo é INVALID_CAPTURE, nunca MISMATCH\" (E2B-14). Consequência (R1-F01 da revisão): se o cliente pular o cleanup, o passo 11 segue, o passo 12 trata o nome sem thread vivo como terminado (R2-F02) e o passo 13 estoura, então o known_bad \"pular o cleanup\" termina em INVALID_CAPTURE, nunca em MISMATCH: poder de detecção reduzido, sem PASS falso. Nenhuma espera estourou neste serviço. Decisão do Lead: aceitar ou errata T1 do passo 13 para reuso futuro."
+      },
+      {
+        "id": "DV2",
+        "item": "D2B-15 / META",
+        "text": "Campo de quadro acima do orçamento de metadados do canal (META 1024) vai em milestones DIAGNOSTIC PART (base64 de 480 bytes, chave sha256 do JSON compacto) e o quadro principal leva {$parts, n, bytes}; o avaliador remonta e confere bytes e sha antes de qualquer predicado; PART adulterado, faltante ou órfão é falha de captura. Tipos e campos do canal não mudam."
+      },
+      {
+        "id": "DV3",
+        "item": "DIAG próprios do 2B-2",
+        "text": "DIAG-PY-CLOCK usa alvos de shim só de diagnóstico (own2b:retry, own2b:goal) sobre gêmeos de retry.py e de wait_for_start em own2b.py; DIAG-PY-FAULTCUT usa OwnGoalStream (gêmeo do ramo KeyboardInterrupt de _GoalNotificationStream.__next__, só síncrono) porque o SDK não é importável num DIAG."
+      },
+      {
+        "id": "DV4",
+        "item": "DIAG-PY-MODELORACLE",
+        "text": "Critério de aprovação: registros dos passos model.* do driver iguais aos do oráculo do mesmo processo (ownmodels.oracle sobre a mesma lista de operações) e identidade de dependência igual à identity freeze; constantes conhecidas da Pydantic ficam registradas em chaves info_* (fora do critério, como as gate_* do 2B-1)."
+      },
+      {
+        "id": "DV5",
+        "item": "D2B-15 / FAULT",
+        "text": "FAULT do driver é {target, call, count}: target = <nome>.<atributo>, call = ordinal (texto) da chamada em que disparou, count = disparos desde a instalação."
+      },
+      {
+        "id": "DV6",
+        "item": "D2B-10",
+        "text": "As linhas DIAG-PY-CLOSETERM, -PROCWITNESS e -KILLWAIT do 2B-1 saem do supervisor (D2B-10 é só do 2B-1); o código herdado de testemunha de processo segue presente e sem uso no 2B-2."
+      },
+      {
+        "id": "DV7",
+        "item": "CAP-PY-SDKCALLS-2B / GoalStream.new",
+        "text": "Conforme composition_note do 2B-PY14A: o driver compõe _GoalNotificationStream/_AsyncGoalNotificationStream com closures sobre os métodos públicos do cliente; o crédito é do comportamento literal das classes privadas."
+      },
+      {
+        "id": "inherited",
+        "item": "2B-1 DV2, DV3, DV4, DV5",
+        "text": "Herdados sem mudança: barrier_plan como tabela explícita; auditoria estática dos caminhos de SDK; API_CANCELLED {name, message}; sequência gidx por lote ordenado por mono_ns."
+      },
+      {
+        "id": "DV8",
+        "item": "BIND 2B-1 next-task#/first_step_additions (checagem de discriminação por braço)",
+        "text": "Pedida antes do primeiro serviço, foi feita depois dos 18 slots porque o carry-over do BIND 2B-1 chegou ao executor depois deles. discrimination-check-2b2.json (corrigido pela R1): 77 braços, 68 DISCRIMINATED, 8 PARTIAL_SCOPE (PY13.B05, PY13.B09, PY13.B10, PY13.B15, PY14.B03, PY14.B07, PY17.B02, PY17.B04) e 1 NOT_DISCRIMINATED (PY13.B06: t13b2 é efêmero e sem path, a guarda rejeita pelo path sozinho). Nenhum caso, expectativa ou desfecho muda; os PASS_CLIENT_OBSERVATION não afirmam os braços ou as partes não distinguidas, e o BIND do 2B-2 lê a tabela."
+      }
+    ]
+  },
+  "carry_over_2b2_closure": {
+    "R1-F01": "IMPLEMENTADO: condição (id, event, occurrence, record_subset) no supervisor e no avaliador; passos 10/16 do 2B-PY13D; autoteste positivo e negativo; validador confere o plano; em serviço STEP_RELEASE 87 > h_stop return#1 86 e 126 > h_cleanup_cb return#2 125 (cases/2B-PY13D-*/acceptance.json#barrier.witnesses_in_order).",
+    "R1-F02": "IMPLEMENTADO: recontagem por (id, event) no avaliador (Seq; divergência = falha de captura) e no supervisor (condição de gancho); validador recusa token HOOK de gancho call+return ou não declarado; autoteste R2-F01 pelo profiler real com threads nomeadas.",
+    "R1-F03": "IMPLEMENTADO: tools/validate_unit.py aplica as regras completas sobre cases-2b-2.json, inclusive @threadId de RAW_READ, COMMIT_REPLY e RELEASE_REPLY, com controles negativos.",
+    "R1-F05": "IMPLEMENTADO: barrier.witnesses_in_order confere cada condição do gate e de cada ação antes dela (gidx) e BEFORE_REPLY_WRITTEN antes do commit da resposta, com autotestes positivos e negativos; zombie_t_ns em no_termination_before está no código sem autoteste (nenhum caso do 2B-2 usa proc.termination_exact; corrigido por R1-F04 da revisão).",
+    "R1-F07": "IMPLEMENTADO: roteiro do 2B2-CTRL01 no autoteste do D2B-13 (quadros de login); R3-12 confere CAPTURE_CLASSES e client contra predicate_classes congelado.",
+    "R1-F08": "IMPLEMENTADO: hook.code_identity confere o sha do arquivo (árvore sdk-python pela identity-freeze-r4-2b2, stdlib pelas âncoras dos casos) antes de ler a linha; autoteste positivo e negativo.",
+    "spec R2-F05": "IMPLEMENTADO: FORBIDDEN_LOGIN_KEYS enumerada em fixture-rpc.py, usada pela admissão do peer, por peer.login_frames_synthetic e pelo validador.",
+    "continuação R1-F03/R1-F04": "MANTIDOS sem mudança."
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 106,
+    "failed": 0,
+    "sdk_imported": false,
+    "services": 0
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": {
+      "raw_read_unknown_method": true,
+      "raw_read_unknown_thread_r1_f03": true,
+      "commit_reply_unknown_thread_r1_f03": true,
+      "cancel_on_non_cancel_step": true,
+      "release_reply_wrong_thread": true,
+      "release_reply_without_hold": true,
+      "worker_unknown": true,
+      "excepthook_non_empty_without_wait": true,
+      "occurrence_without_event": true,
+      "hook_token_of_call_return_hook_r1_f02": true,
+      "hook_token_undeclared_r1_f02": true,
+      "response_model_outside_closed_list": true,
+      "model_outside_closed_list": true,
+      "login_forbidden_key": true,
+      "login_start_type_apikey": true,
+      "grammar_bad_token": true,
+      "barrier_plan_missing_entry": true
+    }
+  },
+  "freezes": {
+    "source-freeze-r4-2b2.json": "dac7215128540bb34f91065133584ffa95e0b664bdd38069f7bf37d8ec7493b5",
+    "identity-freeze-r4-2b2.json": "dbbf5a408c0409de71b8701350242fe0d8a4a3f1ea2decaf36a06e29d8803bb7",
+    "diag-admission-2b2.json": "fad6343ee634c1b75e23cfec80c47258f3d1854d05956822c50a135d0886fc82",
+    "order": "source freeze 2026-10-19T12:17:34.355525+00:00 e identity freeze 2026-10-19T12:17:34.468425+00:00 antes do primeiro serviço (2026-10-19T12:17:39.021215+00:00); depois DIAG -> diag-admission -> CONTROL -> SDK"
+  },
+  "diagnostics": {
+    "DIAG-PY-RPC": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/9cf5632e58c5-DIAG-PY-RPC"
+    },
+    "DIAG-PY-STAGE": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/7d384b8036ed-DIAG-PY-STAGE"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/2448b4e309cb-DIAG-PY-UNSCRIPTED"
+    },
+    "DIAG-PY-ASYNC": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/0b5b7b483a53-DIAG-PY-ASYNC"
+    },
+    "DIAG-PY-BARRIER": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/0054301d1849-DIAG-PY-BARRIER"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/07c1ad0d2017-DIAG-PY-BEFOREREPLY"
+    },
+    "DIAG-PY-CLOCK": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/e88f1b507389-DIAG-PY-CLOCK"
+    },
+    "DIAG-PY-FAULTCUT": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/deb5d21ae830-DIAG-PY-FAULTCUT"
+    },
+    "DIAG-PY-MODELORACLE": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/e262c5c5508e-DIAG-PY-MODELORACLE"
+    },
+    "DIAG-PY-LOGIN": {
+      "verdict": "PASS",
+      "status": "DIAG_PASS",
+      "dir": "diagnostics/b4ab0427c4ce-DIAG-PY-LOGIN"
+    }
+  },
+  "diagnostics_status": "10/10 DIAG_PASS na primeira execução (6 herdados requalificados + CLOCK, FAULTCUT, MODELORACLE, LOGIN)",
+  "conditional_slots": "nenhuma no 2B-2",
+  "control": {
+    "case": "2B2-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [["wire.no_turn_interrupt", "client"]],
+    "gate": "MISMATCH pela regra 6 só com wire.no_turn_interrupt, antes dos casos SDK",
+    "gate_passed": true,
+    "counts_as_sdk_observation": false
+  },
+  "cases": {
+    "counts": {
+      "PASS_CLIENT_OBSERVATION": 17,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "by_slot": {
+      "2B2-CTRL01": "MISMATCH (PASS)",
+      "2B-PY09A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY09B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY09C": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY09D": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY13A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY13B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY13C": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY13D": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY13E": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY14A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY14B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY17A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY17B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY18A": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY18B": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY18C": "PASS_CLIENT_OBSERVATION (PASS)",
+      "2B-PY18D": "PASS_CLIENT_OBSERVATION (PASS)"
+    }
+  },
+  "reevaluation": {
+    "path": "reevaluation-2b2.json",
+    "all_predicate_level_equal": true,
+    "all_outcome_equal": true
+  },
+  "budget": {
+    "slots": "18/18",
+    "services": "10/12",
+    "reviews": "1/2",
+    "grouped_repairs": "0/1",
+    "automatic_retries": 0,
+    "load_waits": {
+      "waited": 0,
+      "max_loadavg_1m_at_service_start": 5.75,
+      "limit": 12.0
+    }
+  },
+  "resources": {
+    "units": 28,
+    "all_released": true,
+    "prefix": "cvg-dx100-2b2-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-batch2b2-20261019",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-batch2b2-runtime-20261019"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 56,
+    "by_status": {
+      "expected_empty": 56
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade. SPEC0239 BUILD não autorizada. Sem push, PR, deploy ou produção.",
+  "updated_at": "2026-10-19T12:51:05.117050+00:00",
+  "bind_2b1_carry_over": {
+    "source": {
+      "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/next-task.json",
+      "sha256": "f6afbb430a0b4e9a8cc438ab52d146fcf48cd0d92975e46ea1c7767664e5dbe6"
+    },
+    "received": "depois dos 18 slots (mensagem do coordenador durante a revisão R1)",
+    "first_step_additions": "COBERTO DEPOIS DOS SERVIÇOS como DV8: discrimination-check-2b2.json (68/8/1), revisado pela R1; nenhum PASS afirma braço não distinguido.",
+    "spec_R2-F04": "COBERTO: classificação por passo em python-driver.py CLIENT_EFFECT_WAITS e case-plan.json (13E passo 11 e 17A passo 11 efeito do cliente; 13E passo 13 harness pela nota congelada, DV1 com a consequência registrada); nenhuma espera estourou (HOOK_WAIT, EXCEPTHOOK_WAIT e PROBE_UNTIL ok).",
+    "spec_R2-F02": "CONFIRMADO EM SERVIÇO: no 2B-PY13E o thread.join por nome encontrou o cleanup já terminado (found=false, alive_after=false) depois do hook.wait.",
+    "bind_review_P3": {
+      "2B1-BIND/R2-F01": "NÃO SE APLICA a esta unidade (CARRIED_TO_NEXT_BIND)",
+      "2B1-BIND/R2-F02": "APLICADO: padrão \"efeito colateral no processo pai não sondado\" conferido em discrimination-check-2b2.json#/patterns_checked (não aplicável no 2B-2)",
+      "2B1-BIND/R2-F03": "NÃO SE APLICA a esta unidade (CARRIED_TO_NEXT_BIND)"
+    }
+  },
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "subject": "review-freeze-r1.json",
+      "subject_sha256": "a6848224c25c0def0d9fd640016a924818508329aa1b9367f075b3bd6d7c9140",
+      "verdict": "APPROVE",
+      "r1_f01_2b1_carry_over": "APPROVED",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 5
+      },
+      "disposition": "review-r1/executor-disposition.json"
+    }
+  },
+  "adjudication": {
+    "path": "adjudication-r1.json",
+    "sdk_final_reading": {
+      "PASS_CLIENT_OBSERVATION": 17,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0
+    },
+    "bind_consumes_only": 17,
+    "arm_discrimination": {
+      "DISCRIMINATED": 68,
+      "PARTIAL_SCOPE": 8,
+      "NOT_DISCRIMINATED": 1
+    }
+  },
+  "next_task": {
+    "path": "next-task.json",
+    "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2 (proposta)",
+    "t3_required": false
+  },
+  "carry_over_next": [
+    {
+      "finding": "R1-F02",
+      "text": "expand_parts, Seq e capture_extra para dentro do try de evaluate (ou INVALID_CAPTURE regra 3) com autoteste, na próxima unidade que reusar o avaliador; inalcançável com os bytes congelados (sha ligado, admissão de login aprovada em todos os roteiros) e, em serviço, o supervisor grava SUPERVISOR_ERROR/INVALID_CAPTURE."
+    },
+    {
+      "finding": "R1-F03",
+      "text": "Na reavaliação, conferir o plano da pasta do caso contra case-plan.json (sha do source freeze) ou BARRIER_PLAN e os passos de barreira do case_input, com controle negativo; hoje os 28 planos são iguais ao case-plan.json congelado (conferido pela R1)."
+    },
+    {
+      "finding": "R1-F04",
+      "text": "state.json corrigido: a checagem zombie_t_ns em no_termination_before está no código sem autoteste; nenhum caso do 2B-2 usa proc.termination_exact. Autoteste positivo/negativo vai para a próxima unidade que usar a forma."
+    },
+    {
+      "finding": "R1-F01 (DV1)",
+      "text": "DV1 completado: com o excepthook.wait do passo 13 do 2B-PY13E mantido como pré-condição de harness (nota congelada do passo), o known_bad \"pular o cleanup\" termina em INVALID_CAPTURE, nunca em MISMATCH (poder de detecção reduzido, sem PASS falso; nenhuma espera estourou). Decisão do Lead: aceitar ou errata T1 (passo 13 como efeito do cliente) para reuso futuro; sem novo serviço."
+    }
+  ],
+  "closing_documents": [
+    "state.json",
+    "discrimination-check-2b2.json",
+    "adjudication-r1.json",
+    "next-task.json",
+    "review-r1/executor-disposition.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r1-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ],
+  "tools_closing": [
+    "tools/collect_results.py",
+    "tools/empty_artifacts.py",
+    "tools/close_r1.py"
+  ],
+  "validation": {
+    "prettier": "prettier 3.8.3 --ignore-path /dev/null --check nos 14 documentos autorados (claim, input-verification, preflight, state, discrimination-check-2b2, adjudication-r1, next-task, review-r1/executor-disposition, ledger-delta-cont-d9ef.md, case-results, reevaluation-2b2, resource-receipt-final, empty-artifact-delta, lead-secret-scan-triage): OK; preflight.json e case-results.json só reformatados depois da R1, conteúdo JSON igual. Não reformatados por desenho: arquivos de serviço, freezes, entradas, fixture-cases, case-plan, livros do supervisor (budget, case-ledger), resultados de autoteste, validation-unit.json e review.json do revisor.",
+    "doc_links": "node scripts/check-doc-links.mjs <pasta da unidade>: DOC_LINKS_OK, 0 quebrados",
+    "evidence_hygiene_copy": "cópia da unidade com empty-artifact-delta.json como catálogo: EVIDENCE_HYGIENE_OK (56/56 vazios catalogados, 201 JSON parseáveis)",
+    "secret_scan": "gitleaks v8.28.0 (docker, .gitleaks.toml da raiz): exit 0, 0 achados; controle positivo sintético exit 1 (lead-secret-scan-triage.json)",
+    "pycache": "nenhum __pycache__ nem .pyc na pasta",
+    "units_after": "systemctl --user list-units --all cvg-dx100-2b2-*: 0"
+  }
+}

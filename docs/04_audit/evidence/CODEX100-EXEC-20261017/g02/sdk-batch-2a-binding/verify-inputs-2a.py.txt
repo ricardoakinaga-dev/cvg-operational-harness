@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2A - passo 0 (somente leitura).
+# Uso: python3 -I verify-inputs-2a.py.txt <repo_root> <out_json>
+# Confere a porta g02/sdk-batch-2a-admission promovida à raiz (unit-manifest, commit-receipt, diferença frente ao
+# commit da candidata), a adjudicação, o freeze do avaliador r3.1, os documentos acceptance-r3_1.json, o plano de
+# cobertura e os casos congelados, e fixa o sha do mapa v1, que não pode mudar. Não importa SDK; só leitura, sha256
+# e git diff --name-only.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+OUT = sys.argv[2]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+ADM = os.path.join(G02, "sdk-batch-2a-admission")
+V1 = os.path.join(G02, "sdk-coverage-binding")
+ADM_REL = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2a-admission"
+EXPECT = {
+    "unit_manifest": "b4bb8aaeeb0c234aa9b6a21114b5f45c2f5be761f6b3709cf6828ef9193affe0",
+    "cases_2a": "147a906d2aa6616157c50d8e4cc9cb7e8f5d9cec7be749b77eca1e0e1dbc1c2c",
+    "coverage_plan_2a": "eccc13a3db743187c1e10156134ae55cf469ef410be107c6bd3d05680f7efb3a",
+    "coverage_observed_v1": "49de5da5eff593a594c6fb41662b59b501361711a944af9afe7d1d9a9eb8dde5",
+}
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+checks = []
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+manifest_path = os.path.join(ADM, "unit-manifest.json")
+check("unit-manifest sha", sha(manifest_path) == EXPECT["unit_manifest"], sha(manifest_path))
+manifest = load(manifest_path)
+bad, missing = [], []
+for rel, meta in manifest["files"].items():
+    p = os.path.join(ADM, rel)
+    if not os.path.isfile(p):
+        missing.append(rel)
+    elif sha(p) != meta["sha256"] or os.path.getsize(p) != meta["bytes"]:
+        bad.append(rel)
+current = sorted(os.path.relpath(os.path.join(d, n), ADM) for d, _, ns in os.walk(ADM) for n in ns)
+extra = [p for p in current if p not in manifest["files"]]
+check("unit-manifest files match", not bad and not missing, {"files": len(manifest["files"]), "bad": bad, "missing": missing})
+check("files outside the manifest are explained", sorted(extra) == ["commit-receipt.json", "lead-secret-scan-triage.json", "unit-manifest.json"],
+      {"extra": extra, "explanation": "unit-manifest.json e commit-receipt.json ficam fora por construção; lead-secret-scan-triage.json é acréscimo do Lead na promoção (e6f172ef)"})
+receipt = load(os.path.join(ADM, "commit-receipt.json"))
+check("commit-receipt binds the manifest", receipt["unit_manifest_sha256"] == EXPECT["unit_manifest"], {"content_commit": receipt["content_commit"]})
+diff = subprocess.run(["git", "-C", ROOT, "diff", "--name-only", "259968f9", "e6f172ef", "--", ADM_REL], capture_output=True, text=True)
+check("root promotion equals the candidate plus the Lead triage", diff.returncode == 0 and diff.stdout.split() == [ADM_REL + "/lead-secret-scan-triage.json"],
+      {"candidate_receipt_commit": "259968f9", "root_commit": "e6f172ef", "differences": diff.stdout.split()})
+adj = load(os.path.join(ADM, "adjudication-r1.json"))
+check("adjudication: 19 consumable cases", len(adj["bind_consumes_only"]) == 19, adj["bind_consumes_only"])
+check("adjudication: final reading 19/0/3/1/0", adj["sdk_final_reading"] == {"PASS_CLIENT_OBSERVATION": 19, "MISMATCH_ATTRIBUTABLE_TO_CLIENT": 0,
+                                                                             "MISMATCH_NOT_ATTRIBUTABLE_TO_CLIENT": 3, "INVALID_CAPTURE": 1, "INCONCLUSIVE": 0},
+      adj["sdk_final_reading"])
+efz = load(os.path.join(ADM, "evaluator-freeze-r3_1.json"))
+check("evaluator r3.1 freeze matches acceptance.py", efz["files"]["python/acceptance.py"]["sha256"] == sha(os.path.join(ADM, "python/acceptance.py")))
+r31 = [r["dir"] + "/acceptance-r3_1.json" for r in adj["rows"]]
+check("24 acceptance-r3_1.json present and manifest-bound", all(os.path.isfile(os.path.join(ADM, p)) and manifest["files"].get(p, {}).get("sha256") == sha(os.path.join(ADM, p)) for p in r31),
+      {"documents": len(r31)})
+check("cases-2a.json sha", sha(os.path.join(ADM, "inputs/spec-2a/cases-2a.json")) == EXPECT["cases_2a"])
+check("coverage-plan-2a.json sha", sha(os.path.join(ADM, "inputs/spec-2a/coverage-plan-2a.json")) == EXPECT["coverage_plan_2a"])
+v1 = load(os.path.join(V1, "coverage-observed.json"))
+check("coverage-observed v1 sha (must stay unchanged)", sha(os.path.join(V1, "coverage-observed.json")) == EXPECT["coverage_observed_v1"])
+srcs = {}
+for k, s in v1["sources"].items():
+    p = os.path.normpath(os.path.join(V1, s["path"]))
+    srcs[k] = os.path.isfile(p) and sha(p) == s["sha256"]
+check("v1 sources (G01 contracts, reference profile, admission) unchanged", all(srcs.values()), srcs)
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A", "result": "PASS" if all(c["ok"] for c in checks) else "FAIL",
+       "checks": checks, "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))

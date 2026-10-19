@@ -1,0 +1,886 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A - gera a especificação congelada do lote 2A.
+# Uso: python3 -I build-spec-2a.py.txt <repo_root> <out_dir>
+# Só leitura das fontes (hash e busca de trechos literais). Não importa nem executa SDK.
+# Os valores esperados vêm da leitura da fonte do pin e ficam congelados aqui; uma
+# diferença na execução futura é MISMATCH preservado, nunca reescrita da expectativa.
+import hashlib
+import json
+import os
+import sys
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017")
+ADM = os.path.join(E, "g02/sdk-admission")
+REF = os.path.join(E, "g02/sdk-reference-profile")
+TS = os.path.join(REF, "inputs/sdk/typescript/src")
+PY = os.path.join(REF, "inputs/sdk/python/src/openai_codex")
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A"
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def rel(p):
+    return os.path.relpath(p, OUT)
+
+
+INPUT_FILES = {
+    "ts/exec.ts": os.path.join(TS, "exec.ts"),
+    "ts/thread.ts": os.path.join(TS, "thread.ts"),
+    "ts/codex.ts": os.path.join(TS, "codex.ts"),
+    "ts/outputSchemaFile.ts": os.path.join(TS, "outputSchemaFile.ts"),
+    "ts/threadOptions.ts": os.path.join(TS, "threadOptions.ts"),
+    "ts/turnOptions.ts": os.path.join(TS, "turnOptions.ts"),
+    "ts/codexOptions.ts": os.path.join(TS, "codexOptions.ts"),
+    "py/client.py": os.path.join(PY, "client.py"),
+    "py/api.py": os.path.join(PY, "api.py"),
+    "py/_run.py": os.path.join(PY, "_run.py"),
+    "py/_inputs.py": os.path.join(PY, "_inputs.py"),
+    "py/_message_router.py": os.path.join(PY, "_message_router.py"),
+    "py/errors.py": os.path.join(PY, "errors.py"),
+    "py/generated/v2_all.py": os.path.join(PY, "generated/v2_all.py"),
+    "py/generated/notification_registry.py": os.path.join(PY, "generated/notification_registry.py"),
+    "g01/python-contracts.json": os.path.join(E, "g01/sdk-open-contracts/python-contracts.json"),
+    "g01/typescript/contracts.json": os.path.join(E, "g01/sdk-open-contracts/typescript/contracts.json"),
+    "g01/payload-and-goal-facts.json": os.path.join(E, "g01/sdk-open-contracts/payload-and-goal-facts.json"),
+    "binding/coverage-observed.json": os.path.join(E, "g02/sdk-coverage-binding/coverage-observed.json"),
+    "binding/HOW-next-profile.md": os.path.join(E, "g02/sdk-coverage-binding/HOW-next-profile.md"),
+    "binding/review-r2/executor-disposition.json": os.path.join(E, "g02/sdk-coverage-binding/review-r2/executor-disposition.json"),
+    "admission/fixture-cases.json": os.path.join(ADM, "fixture-cases.json"),
+    "admission/case-plan.json": os.path.join(ADM, "case-plan.json"),
+    "admission/identity-freeze.json": os.path.join(ADM, "identity-freeze.json"),
+    "admission/python/fixture-rpc.py": os.path.join(ADM, "python/fixture-rpc.py"),
+    "admission/python/python-driver.py": os.path.join(ADM, "python/python-driver.py"),
+    "admission/python/acceptance.py": os.path.join(ADM, "python/acceptance.py"),
+    "admission/node/fixture-cli.mjs": os.path.join(ADM, "node/fixture-cli.mjs"),
+    "admission/node/adapter-typescript": os.path.join(ADM, "node/adapter-typescript"),
+    "admission/node/ts-driver.mjs": os.path.join(ADM, "node/ts-driver.mjs"),
+    "admission/node/channel.cjs": os.path.join(ADM, "node/channel.cjs"),
+    "admission/errata.json": os.path.join(ADM, "errata.json"),
+    "admission/review-r2/review.json": os.path.join(ADM, "review-r2/review.json"),
+    "admission/review-r2/executor-disposition.json": os.path.join(ADM, "review-r2/executor-disposition.json"),
+    "reference/cases.json": os.path.join(REF, "cases.json"),
+}
+INPUTS = {k: {"path": rel(p), "sha256": sha(p)} for k, p in INPUT_FILES.items()}
+
+
+def anchor(key, text, count=1):
+    """Linhas (1-based) em que o trecho literal aparece; falha se a contagem divergir."""
+    lines = open(INPUT_FILES[key], encoding="utf-8").read().split("\n")
+    found = [i + 1 for i, line in enumerate(lines) if text in line]
+    assert len(found) == count, (key, text, found)
+    return {"input": key, "sha256": INPUTS[key]["sha256"], "lines": found, "text": text}
+
+
+SDK_ENV = {"HOME": "/work/home", "PATH": "/runtime"}
+CHILD_ENV_DEFAULT = {"HOME": "/work/home", "PATH": "/runtime", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts"}
+ADAPTER = "/profile/adapter-typescript"
+INIT = {"serverInfo": {"name": "synthetic-sdk-profile", "version": "0.151.0"}, "userAgent": "synthetic-sdk-profile/0.151.0"}
+UNSCRIPTED = {"code": -32601, "message": "cvg synthetic: unscripted request",
+              "data": {"cvg_synthetic": True}, "sdk_class": "openai_codex.errors.MethodNotFoundError"}
+SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False}
+TMP_DIR_RE = r"^/work/tmp/codex-output-schema-[A-Za-z0-9]{6}/schema\.json$"
+EMPTY_RUN = {"items": [], "finalResponse": "", "usage": None}
+
+
+def ts_run(input_value, turn_options=None, consume="all", api="run", **extra):
+    call = {"api": api, "input": input_value, "turn_options": turn_options or {}}
+    if api == "run_streamed":
+        call["consume"] = consume
+    call.update(extra)
+    return call
+
+
+def usage(i, c, o, **kw):
+    u = {"input_tokens": i, "cached_input_tokens": c, "output_tokens": o}
+    u.update(kw)
+    return u
+
+
+def tub(cached, inp, out, reasoning, total):
+    return {"cachedInputTokens": cached, "inputTokens": inp, "outputTokens": out,
+            "reasoningOutputTokens": reasoning, "totalTokens": total}
+
+
+def agent_item(i, text, phase="ABSENT"):
+    item = {"type": "agentMessage", "id": i, "text": text}
+    if phase != "ABSENT":
+        item["phase"] = phase
+    return item
+
+
+def notif(method, params):
+    return {"notification": {"method": method, "params": params}}
+
+
+CASES = []
+
+
+def case(**kw):
+    kw.setdefault("runtime_status", "NOT_RUN")
+    kw.setdefault("receipt", None)
+    kw.setdefault("credit", "CLIENT_BEHAVIOR_ONLY_IF_OBSERVED" if kw["kind"] == "SDK" else "NONE_CONTROL_ONLY")
+    kw.setdefault("inconclusive_on_deadline", False)
+    CASES.append(kw)
+
+
+# ---------------------------------------------------------------- TypeScript (16)
+case(id="2A-TS01", kind="SDK", language="typescript", contracts=["TS01"], role="NEW_CONTRACT",
+     branches_targeted=["TS01.B02", "TS01.B03 (braços falsy e truthy)", "TS01.B04"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": "", "env": SDK_ENV},
+          "expect": {"throws": {"name": "Error", "message": "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies."}, "spawns": 0}},
+         {"step": 2, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 3, "api": "c.startThread", "options": {}, "as": "tA", "observe": {"tA.id": None}},
+         {"step": 4, "api": "c.resumeThread", "id": "r-lazy", "options": {}, "as": "tB", "observe": {"tB.id": "r-lazy"}},
+         {"step": 5, "on": "tA", **ts_run("lazy", {"outputSchema": {"type": "object"}}, consume="none", api="run_streamed")},
+         {"step": 6, "barrier": "LAZY_POINT", "witness": {"adapter_processes": 0, "work_tmp_schema_dirs": 0}},
+         {"step": 7, "on": "tB", **ts_run("resumed", consume="all", api="run_streamed")},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"spawns_total": 1, "argv": ["exec", "--experimental-json", "resume", "r-lazy"], "stdin": "resumed",
+               "child_env": CHILD_ENV_DEFAULT, "events_yielded": 0, "work_tmp_schema_dirs_at_end": 0},
+     expected_observation="A construção com override vazio cai no resolver e falha antes de qualquer processo. startThread, resumeThread e runStreamed sem next não iniciam processo nem criam schema temporário. Só o primeiro next do thread retomado cria um processo, com resume r-lazy no argv.",
+     known_bad={"text": "Spawn ou schema criados antes do primeiro next; resolver chamado com override truthy; id do thread retomado ausente.",
+                "judged_by": ["lazy.zero_spawn_at_barrier", "lazy.no_schema_dir_at_barrier", "argv.exact_vector"]},
+     predicates=["api.constructor_resolver_error_exact", "spawn.count_exact", "lazy.zero_spawn_at_barrier",
+                 "lazy.no_schema_dir_at_barrier", "api.thread_ids_observed", "argv.exact_vector",
+                 "env.child_env_exact", "wire.stdin_exact_then_eof", "api.stream_returned_events", "tmp.final_schema_dirs"],
+     accepted_capture_forms=["PASS"],
+     infra=["CAP-TS-SDKCALLS", "CAP-TS-DRIVER-TMPDIR", "CAP-LAZY-BARRIER", "CAP-ZERO-SPAWN-WITNESS", "CAP-RESOLVER-ABSENCE", "CAP-TMP-WITNESS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/codex.ts", "this.exec = new CodexExec(codexPathOverride, env, config, configOverrides);"),
+              anchor("ts/codex.ts", "return new Thread(this.exec, this.options, options, id);"),
+              anchor("ts/exec.ts", "`Unable to locate Codex CLI binaries. Ensure ${CODEX_NPM_NAME} is installed with optional dependencies.`,"),
+              anchor("ts/thread.ts", "const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);"),
+              anchor("ts/exec.ts", 'commandArgs.push("resume", args.threadId);')])
+
+case(id="2A-TS02", kind="SDK", language="typescript", contracts=["TS02", "TS08"], role="NEW_CONTRACT",
+     branches_targeted=["TS02.B02", "TS02.B03", "TS08.B06"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.resumeThread", "id": "r-2", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run([{"type": "text", "text": "alpha"}, {"type": "local_image", "path": "/work/in/a.png"},
+                                         {"type": "text", "text": "beta"}, {"type": "unknown_kind", "text": "ignored"},
+                                         {"type": "local_image", "path": "/work/in/b.png"}])},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"argv": ["exec", "--experimental-json", "resume", "r-2", "--image", "/work/in/a.png", "--image", "/work/in/b.png"],
+               "stdin": "alpha\n\nbeta", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN},
+     expected_observation="Textos unidos por dois LF, imagens em ordem depois de resume, item de tipo desconhecido ignorado, stdin sem LF acrescido e fechado.",
+     known_bad={"text": "Sanitizar ou validar a entrada, acrescentar LF, reordenar imagens ou incluir o item desconhecido no prompt.",
+                "judged_by": ["argv.exact_vector", "wire.stdin_exact_then_eof"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact", "peer.exit_status"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", 'return { prompt: promptParts.join("\\n\\n"), images };'),
+              anchor("ts/exec.ts", 'commandArgs.push("--image", image);'),
+              anchor("ts/exec.ts", "child.stdin.write(args.input);")])
+
+case(id="2A-TS02B", kind="SDK", language="typescript", contracts=["TS02", "TS08"], role="NEW_CONTRACT",
+     branches_targeted=["TS02.B01 (string vazia)", "TS08.B02 (id vazio não vira resume)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.resumeThread", "id": "", "options": {}, "as": "t", "observe": {"t.id": ""}},
+         {"step": 3, "on": "t", **ts_run("")},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": "", "allow_empty_stdin": True},
+     expected={"argv": ["exec", "--experimental-json"], "stdin": "", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN},
+     expected_observation="Prompt vazio preservado (stdin com 0 bytes e EOF) e id vazio sem resume no argv.",
+     known_bad={"text": "Recusar prompt vazio, inventar texto ou emitir resume com id vazio.", "judged_by": ["argv.exact_vector", "wire.stdin_exact_then_eof"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact", "peer.exit_status"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-EMPTY-STDIN", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", 'if (typeof input === "string") {'),
+              anchor("ts/exec.ts", "if (args.threadId) {")])
+
+case(id="2A-TS03", kind="SDK", language="typescript", contracts=["TS03"], role="NEW_CONTRACT",
+     branches_targeted=["TS03.B02 (array rejeitado e objeto aceito)", "TS03.B03", "TS03.B04 (sucesso)", "TS03.B05 (rm com sucesso)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("s", {"outputSchema": ["not", "object"]}),
+          "expect": {"throws": {"name": "Error", "message": "outputSchema must be a plain JSON object"}, "spawns": 0}},
+         {"step": 4, "on": "t", **ts_run("s", {"outputSchema": SCHEMA})},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": "", "read_schema_file_from_argv": True},
+     expected={"spawns_total": 1, "argv_pattern": ["exec", "--experimental-json", "--output-schema", {"regex": TMP_DIR_RE}],
+               "schema_file_bytes": json.dumps(SCHEMA, separators=(",", ":")), "schema_file_trailing_lf": False,
+               "stdin": "s", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN,
+               "fs_events": "IN_CREATE do diretório e do schema.json antes do spawn; IN_DELETE de ambos antes do retorno de run()",
+               "work_tmp_schema_dirs_at_end": 0},
+     expected_observation="Array rejeitado antes de qualquer schema ou processo. Objeto gravado em /work/tmp/codex-output-schema-XXXXXX/schema.json como JSON.stringify sem LF, passado por --output-schema e removido depois do turn.",
+     known_bad={"text": "Validar JSON Schema, aceitar array, gravar com LF ou deixar o diretório depois do turn.",
+                "judged_by": ["api.schema_rejection_exact", "fixture.schema_bytes_exact", "tmp.final_schema_dirs"]},
+     predicates=["api.schema_rejection_exact", "spawn.count_exact", "argv.pattern", "fixture.schema_bytes_exact",
+                 "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact", "tmp.fs_events_create_then_delete",
+                 "tmp.final_schema_dirs"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-ZERO-SPAWN-WITNESS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/outputSchemaFile.ts", 'throw new Error("outputSchema must be a plain JSON object");'),
+              anchor("ts/outputSchemaFile.ts", 'const schemaDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-output-schema-"));'),
+              anchor("ts/outputSchemaFile.ts", 'await fs.writeFile(schemaPath, JSON.stringify(schema), "utf8");'),
+              anchor("ts/outputSchemaFile.ts", "await fs.rm(schemaDir, { recursive: true, force: true });")])
+
+case(id="2A-TS04", kind="SDK", language="typescript", contracts=["TS04", "TS12"], role="NEW_CONTRACT",
+     branches_targeted=["TS04.B01 (normalização falha depois do schema)", "TS04.B02 (return depois do primeiro evento)", "TS12.B02 (ordem do finally em return)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run([None], {"outputSchema": {"type": "object"}}, consume="first_next_only", api="run_streamed"),
+          "expect": {"throws": {"name": "TypeError", "message": "Cannot read properties of null (reading 'type')"}, "spawns": 0,
+                     "work_tmp_schema_dirs_after": 1}},
+         {"step": 4, "on": "t", **ts_run("first-then-return", {"outputSchema": {"type": "object"}}, consume="first_then_return", api="run_streamed")},
+     ],
+     fixture={"JSONL": [{"type": "thread.started", "thread_id": "t4"}], "exit_code": 0, "stderr": "", "write_then_hold": True},
+     expected={"spawns_total": 1, "first_event": {"type": "thread.started", "thread_id": "t4"}, "return_result": {"done": True, "value": None},
+               "argv_pattern": ["exec", "--experimental-json", "--output-schema", {"regex": TMP_DIR_RE}],
+               "stdin": "first-then-return", "child_env": CHILD_ENV_DEFAULT,
+               "child_termination": "SIGTERM (child.kill sem argumento), testemunhado pelo SO",
+               "work_tmp_schema_dirs_at_end": 1,
+               "order_informational": "kill do filho (finally do exec) antes do rm do schema (finally do thread), ambos antes de return() resolver"},
+     expected_observation="Uma entrada [null] falha na normalização depois de criar o schema e fora do try, sem cleanup: o diretório fica. Com return() depois do primeiro evento, o SDK mata o filho e remove o segundo schema antes de resolver.",
+     known_bad={"text": "Prometer cleanup do schema quando a normalização falha, ou tratar return() como prova de que o filho terminou sem testemunha do SO.",
+                "judged_by": ["tmp.leaked_dir_after_normalize_error", "ret.child_terminated_by_SIGTERM"]},
+     predicates=["api.normalize_error_exact", "spawn.count_exact", "tmp.leaked_dir_after_normalize_error", "argv.pattern",
+                 "api.first_event_exact", "ret.return_resolved_done", "ret.child_terminated_by_SIGTERM",
+                 "tmp.second_dir_removed_before_return", "order.kill_and_rm_before_return_resolved"],
+     accepted_capture_forms=["KNOWN_SIGNAL_TERMINATION"],
+     infra=["CAP-TS-SDKCALLS", "CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-WRITE-THEN-HOLD", "CAP-ZERO-SPAWN-WITNESS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", "const { prompt, images } = normalizeInput(input);"),
+              anchor("ts/thread.ts", "await cleanup();"),
+              anchor("ts/exec.ts", "if (!child.killed) child.kill();")])
+
+TS05_ARGV = ["exec", "--experimental-json",
+             "--config", 'model="cfg-model"', "--config", "sandbox_workspace_write.network_access=false",
+             "--config", 'model="raw-model"', "--config", 'approval_policy="never"',
+             "--config", 'openai_base_url="http://127.0.0.1:9/synthetic"',
+             "--model", "thread-model", "--sandbox", "workspace-write", "--cd", "/work/cd",
+             "--add-dir", "/work/a", "--add-dir", "/work/b", "--skip-git-repo-check",
+             "--cyber-access-program", "standard",
+             "--config", 'model_reasoning_effort="high"', "--config", "sandbox_workspace_write.network_access=false",
+             "--config", 'web_search="cached"', "--config", 'approval_policy="on-request"',
+             "resume", "r-5", "--image", "/work/img.png"]
+case(id="2A-TS05", kind="SDK", language="typescript", contracts=["TS05", "TS08"], role="NEW_CONTRACT",
+     branches_targeted=["TS05.B01", "TS05.B02", "TS05.B03", "TS08.B01", "TS08.B02 (id truthy suprime source)", "TS08.B03", "TS08.B05 (mode explícito vence legacy)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "c", "options": {
+             "codexPathOverride": ADAPTER, "env": SDK_ENV, "baseUrl": "http://127.0.0.1:9/synthetic",
+             "config": {"model": "cfg-model", "sandbox_workspace_write": {"network_access": False}},
+             "configOverrides": ['model="raw-model"', 'approval_policy="never"']}},
+         {"step": 2, "api": "c.resumeThread", "id": "r-5", "as": "t", "options": {
+             "model": "thread-model", "threadSource": "synthetic-source", "sandboxMode": "workspace-write",
+             "workingDirectory": "/work/cd", "skipGitRepoCheck": True, "modelReasoningEffort": "high",
+             "networkAccessEnabled": False, "webSearchMode": "cached", "webSearchEnabled": False,
+             "approvalPolicy": "on-request", "additionalDirectories": ["/work/a", "/work/b"]}},
+         {"step": 3, "on": "t", **ts_run([{"type": "text", "text": "x"}, {"type": "local_image", "path": "/work/img.png"}],
+                                         {"cyberAccessProgram": "standard"})},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"argv": TS05_ARGV, "stdin": "x", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN},
+     expected_observation="Vetor argv completo na ordem da fonte: config estruturada, raw, baseUrl e as opções gerenciadas, com chaves repetidas preservadas. threadSource suprimido pelo resume; webSearchMode vence o legacy false.",
+     known_bad={"text": "Deduplicar ou reordenar overrides, emitir --thread-source com resume, ou inferir qual override repetido a CLI aplica.",
+                "judged_by": ["argv.exact_vector"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact", "peer.exit_status"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-ARGV-CAP", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/exec.ts", "for (const override of serializeConfigOverrides(this.configOverrides)) {"),
+              anchor("ts/exec.ts", "for (const override of this.rawConfigOverrides) {"),
+              anchor("ts/exec.ts", '`openai_base_url=${toTomlValue(args.baseUrl, "openai_base_url")}`,'),
+              anchor("ts/exec.ts", "if (args.threadSource !== undefined && !args.threadId) {"),
+              anchor("ts/exec.ts", "if (args.webSearchMode) {")])
+
+TS06_ARGV = ["exec", "--experimental-json", "--config", "a={}", "--config", "b.c={}", "--config", "x.y=1",
+             "--config", 'q"k="v"', "--config", "e.f.g=true"]
+case(id="2A-TS06", kind="SDK", language="typescript", contracts=["TS06", "TS05"], role="NEW_CONTRACT",
+     branches_targeted=["TS06.B02 (filho vazio)", "TS06.B03 (chave vazia lança, undefined pulado)", "TS06.B04 (chave com ponto e aspas sem escape)", "TS05.B04 (erro antes do spawn com cleanup)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "bad", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV, "config": {"": 1}}},
+         {"step": 2, "api": "bad.startThread", "options": {}, "as": "tb"},
+         {"step": 3, "on": "tb", **ts_run("cfg-error", {"outputSchema": {"type": "object"}}),
+          "expect": {"throws": {"name": "Error", "message": "Codex config override keys must be non-empty strings"}, "spawns": 0,
+                     "work_tmp_schema_dirs_after": 0}},
+         {"step": 4, "api": "new Codex", "as": "good", "options": {
+             "codexPathOverride": ADAPTER, "env": SDK_ENV,
+             "config": {"a": {}, "b": {"c": {}}, "d": "$UNDEFINED", "x.y": 1, 'q"k': "v", "e": {"f": {"g": True}}}},
+          "driver_note": "o valor literal \"$UNDEFINED\" é trocado por undefined pelo driver antes de construir o Codex"},
+         {"step": 5, "api": "good.startThread", "options": {}, "as": "tg"},
+         {"step": 6, "on": "tg", **ts_run("cfg")},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"spawns_total": 1, "argv": TS06_ARGV, "stdin": "cfg", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN,
+               "fs_events_step3": "IN_CREATE e IN_DELETE do schema antes do erro (a falha ocorre dentro do try do thread)"},
+     expected_observation="Chave vazia lança sem spawn e o schema do turn é removido. Na config válida: filho vazio vira prefix={}, undefined é pulado, chaves com ponto ou aspas entram sem escape.",
+     known_bad={"text": "Escapar segmentos, emitir undefined, ignorar a chave vazia ou criar processo antes do erro.",
+                "judged_by": ["api.config_error_exact", "argv.exact_vector"]},
+     predicates=["api.config_error_exact", "spawn.count_exact", "tmp.fs_events_create_then_delete", "argv.exact_vector",
+                 "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-ZERO-SPAWN-WITNESS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/exec.ts", 'throw new Error("Codex config override keys must be non-empty strings");', count=2),
+              anchor("ts/exec.ts", "overrides.push(`${prefix}={}`);"),
+              anchor("ts/exec.ts", "if (child === undefined) {", count=2)])
+
+TS07_ARGV = ["exec", "--experimental-json", "--config", 's="he said \\"hi\\"\\n"', "--config", "n=1e+21",
+             "--config", "f=1.5", "--config", 'arr=[1, "two", [true, false]]', "--config", 'objs=[{k = 1, "bad key" = 2}]']
+case(id="2A-TS07", kind="SDK", language="typescript", contracts=["TS07"], role="NEW_CONTRACT",
+     branches_targeted=["TS07.B01", "TS07.B02", "TS07.B03", "TS07.B04 (null)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "bad", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV, "config": {"k": None}}},
+         {"step": 2, "api": "bad.startThread", "options": {}, "as": "tb"},
+         {"step": 3, "on": "tb", **ts_run("toml-error"),
+          "expect": {"throws": {"name": "Error", "message": "Codex config override at k cannot be null"}, "spawns": 0}},
+         {"step": 4, "api": "new Codex", "as": "good", "options": {
+             "codexPathOverride": ADAPTER, "env": SDK_ENV,
+             "config": {"s": 'he said "hi"\n', "n": 1e21, "f": 1.5, "arr": [1, "two", [True, False]], "objs": [{"k": 1, "bad key": 2}]}}},
+         {"step": 5, "api": "good.startThread", "options": {}, "as": "tg"},
+         {"step": 6, "on": "tg", **ts_run("toml")},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"spawns_total": 1, "argv": TS07_ARGV, "stdin": "toml", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN},
+     expected_observation="null lança com o path antes do spawn. Strings via JSON.stringify, número por interpolação (1e+21), arrays com vírgula e espaço, objeto inline com chave bare ou entre aspas.",
+     known_bad={"text": "Validar TOML, renderizar números ou chaves de outra forma, ou aceitar null.", "judged_by": ["api.toml_error_exact", "argv.exact_vector"]},
+     predicates=["api.toml_error_exact", "spawn.count_exact", "argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-ZERO-SPAWN-WITNESS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/exec.ts", "throw new Error(`Codex config override at ${path} cannot be null`);"),
+              anchor("ts/exec.ts", 'return `[${rendered.join(", ")}]`;'),
+              anchor("ts/exec.ts", "parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path}.${key}`)}`);")])
+
+TS08_ARGV = ["exec", "--experimental-json", "--thread-source", "", "--cyber-access-program", "",
+             "--config", "sandbox_workspace_write.network_access=false", "--config", 'web_search="disabled"']
+case(id="2A-TS08", kind="SDK", language="typescript", contracts=["TS08"], role="NEW_CONTRACT",
+     branches_targeted=["TS08.B01 (strings vazias suprimem)", "TS08.B02 (source vazio ao criar)", "TS08.B03 (lista vazia, skip false)", "TS08.B04 (explícitos vazio e false)", "TS08.B05 (legacy false)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "c", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV, "baseUrl": ""}},
+         {"step": 2, "api": "c.startThread", "as": "t", "options": {
+             "model": "", "threadSource": "", "sandboxMode": "", "workingDirectory": "", "skipGitRepoCheck": False,
+             "modelReasoningEffort": "", "networkAccessEnabled": False, "webSearchEnabled": False,
+             "approvalPolicy": "", "additionalDirectories": []}},
+         {"step": 3, "on": "t", **ts_run("g", {"cyberAccessProgram": ""})},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"argv": TS08_ARGV, "stdin": "g", "child_env": CHILD_ENV_DEFAULT, "result": EMPTY_RUN},
+     expected_observation="Strings vazias e false suprimem as flags guardadas por truthiness; threadSource e cyberAccessProgram vazios são emitidos; network false emite false; legacy false emite web_search disabled.",
+     known_bad={"text": "Aplicar defaults locais, validar enums ou tratar string vazia como ausente nos guardas explícitos.", "judged_by": ["argv.exact_vector"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_result_exact", "peer.exit_status"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/exec.ts", "if (args.cyberAccessProgram !== undefined) {"),
+              anchor("ts/exec.ts", "if (args.networkAccessEnabled !== undefined) {"),
+              anchor("ts/exec.ts", 'commandArgs.push("--config", `web_search="disabled"`);')])
+
+TS09_ENV_IN = {"HOME": "/work/home", "PATH": "/runtime", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "",
+               "CODEX_API_KEY": "cvg-synthetic-preexisting", "CVG_SYNTH_ONLY": "1"}
+TS09_ENV_OUT = {"HOME": "/work/home", "PATH": "/runtime", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+                "CODEX_API_KEY": "cvg-synthetic-override", "CVG_SYNTH_ONLY": "1"}
+case(id="2A-TS09", kind="SDK", language="typescript", contracts=["TS09"], role="NEW_CONTRACT",
+     branches_targeted=["TS09.B01 (override truthy sem merge)", "TS09.B02 (originator vazio substituído)", "TS09.B03 (apiKey truthy sobrescreve)", "TS09.B04 (sem pathDirs com override)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "c", "options": {"codexPathOverride": ADAPTER, "env": TS09_ENV_IN, "apiKey": "cvg-synthetic-override"}},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("e")},
+     ],
+     fixture={"JSONL": [], "exit_code": 0, "stderr": ""},
+     expected={"argv": ["exec", "--experimental-json"], "stdin": "e", "child_env": TS09_ENV_OUT, "result": EMPTY_RUN,
+               "child_env_must_not_contain": ["TMPDIR", "LANG", "LC_ALL", "TZ"]},
+     expected_observation="O filho recebe exatamente o env passado, sem herdar o env do driver; originator vazio vira codex_sdk_ts; apiKey sobrescreve CODEX_API_KEY. Valores sintéticos, sem credencial.",
+     known_bad={"text": "Mesclar process.env, manter originator vazio, ignorar apiKey ou acrescentar PATH.", "judged_by": ["env.child_env_exact"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "env.no_driver_env_inherited", "wire.stdin_exact_then_eof", "api.run_result_exact"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT", "CAP-TS-DRIVER-TMPDIR"],
+     anchors=[anchor("ts/exec.ts", "Object.assign(env, this.envOverride);"),
+              anchor("ts/exec.ts", "if (!env[INTERNAL_ORIGINATOR_ENV]) {"),
+              anchor("ts/exec.ts", "env.CODEX_API_KEY = args.apiKey;")])
+
+case(id="2A-TS10", kind="SDK", language="typescript", contracts=["TS10", "TS11"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["TS10.B02 (evento error ENOENT, forma A)", "TS11.B02 (spawnError relançado depois do loop, forma A)", "TS10.B04 (write sem listener de erro, forma B)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "as": "c", "options": {"codexPathOverride": "/profile/no-such-codex", "env": SDK_ENV}},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("enoent")},
+     ],
+     fixture=None,
+     expected={"adapter_processes": 0,
+               "source_consistent_forms": {
+                   "A": {"api_error": {"code": "ENOENT", "syscall_prefix": "spawn"}, "branches": ["TS10.B02", "TS11.B02"],
+                         "text": "readline termina, spawnError é relançado depois do loop e Thread.run rejeita com ENOENT"},
+                   "B": {"uncaught_error_on": "child.stdin", "code_recorded": True, "branches": ["TS10.B04 (write sem listener de erro)"],
+                         "text": "o write/end no stdin de um filho que não existe emite erro sem listener no SDK; o recorder de uncaughtException do driver registra código e mensagem e encerra"}},
+               "rule": "PASS exige exatamente uma das formas A ou B, sem processo do adapter; a forma observada fica registrada e define o braço observado. Prazo sem nenhuma das duas é INCONCLUSIVE.",
+               "node_specific": "Qual forma ocorre depende do Node v24.20.0; registrado, não presumido."},
+     expected_observation="Spawn de caminho inexistente sem processo filho. Pela fonte, o ENOENT é guardado e relançado depois do loop (forma A), mas o write no stdin não tem listener de erro (forma B); a execução registra qual das duas o Node produz.",
+     known_bad={"text": "Inventar child, kill ou resultado de sucesso para um spawn que falhou.", "judged_by": ["spawn.count_exact", "api.enoent_form_A_or_B_exclusive", "api.no_result_value"]},
+     predicates=["spawn.count_exact", "api.enoent_form_A_or_B_exclusive", "api.no_result_value"],
+     accepted_capture_forms=["NO_CHILD"], inconclusive_on_deadline=True,
+     infra=["CAP-TS-SDKCALLS", "CAP-SPAWN-ENOENT", "CAP-ZERO-SPAWN-WITNESS", "CAP-TS-UNCAUGHT-RECORDER"],
+     anchors=[anchor("ts/exec.ts", 'child.once("error", (err) => (spawnError = err));'),
+              anchor("ts/exec.ts", "if (spawnError) throw spawnError;"),
+              anchor("ts/exec.ts", "child.stdin.end();")])
+
+TS11_CHUNKS = [
+    b'{"type":"thread.started","thread_id":"crlf"}\r\n',
+    b'{"type":"item.started","item":{"id":"u","type":"agent_message","text":""}}\n'
+    b'{"type":"item.updated","item":{"id":"u","type":"agent_message","text":"a"}}\n',
+    b'{"type":"item.completed","item":{"id":"u","type":"agent_message","text":"a\xc3',
+    b'\xa7\xc3\xa3o"}}\n',
+    b'{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}',
+]
+case(id="2A-TS11", kind="SDK", language="typescript", contracts=["TS11", "TS15"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["TS11.B01 (CRLF, UTF-8 dividido, última linha sem LF)", "TS15.B04 (item.started e item.updated ignorados)", "TS15.B01", "TS15.B02"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("chunks"), "observe_after": ["t.id"]},
+     ],
+     fixture={"stdout_chunks_hex": [c.hex() for c in TS11_CHUNKS], "exit_code": 0, "stderr": "",
+              "chunk_note": "Cada chunk é uma escrita separada do fixture, encaminhada pelo adapter como escrita separada. A fronteira de leitura dentro do SDK não é testemunhada."},
+     expected={"argv": ["exec", "--experimental-json"], "stdin": "chunks", "child_env": CHILD_ENV_DEFAULT,
+               "result": {"items": [{"id": "u", "type": "agent_message", "text": "ação"}], "finalResponse": "ação",
+                          "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "cache_write_input_tokens": 0}},
+               "thread_id_after": "crlf"},
+     expected_observation="CRLF tratado como uma quebra, UTF-8 dividido entre escritas remontado, última linha sem LF emitida no EOF; item.started e item.updated ficam fora do agregado.",
+     known_bad={"text": "Manter \\r no thread_id, corromper o UTF-8, perder a última linha ou agregar started/updated.", "judged_by": ["api.run_result_exact", "api.thread_id_after"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "wire.fixture_chunks_relayed", "api.run_result_exact", "api.thread_id_after"],
+     accepted_capture_forms=["PASS"], infra=["CAP-TS-SDKCALLS", "CAP-STDOUT-CHUNKS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/exec.ts", "crlfDelay: Infinity,"), anchor("ts/thread.ts", "this._id = parsed.thread_id;")])
+
+case(id="2A-TS12", kind="SDK", language="typescript", contracts=["TS12"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["TS12.B01 (signal pré-abortado)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "api": "new AbortController", "as": "ac", "then": "ac.abort()"},
+         {"step": 4, "on": "t", **ts_run("pre-abort", {"signal": "$ac.signal"}, consume="all", api="run_streamed")},
+     ],
+     fixture={"behavior": "hold"},
+     expected={"api_error_name_recorded": True, "node_specific": "Classe, momento e se o filho chegou a existir dependem do Node v24.20.0; registrados, não presumidos.",
+               "no_remote_stop_claim": True},
+     expected_observation="Com signal já abortado, o SDK só repassa o signal ao spawn; o resultado observado (erro, momento, término do filho) é registrado como fato do Node.",
+     known_bad={"text": "Marcar cancelado como parada remota ou supor que o filho nunca existiu sem testemunha do SO.", "judged_by": ["abort.no_remote_stop_claim", "abort.os_witness_recorded"]},
+     predicates=["abort.api_outcome_recorded", "abort.no_remote_stop_claim", "abort.os_witness_recorded", "abort.no_yield_after_abort"],
+     accepted_capture_forms=["KNOWN_SIGNAL_TERMINATION", "PREREADY_SIGNAL_TERMINATION", "NO_CHILD"], inconclusive_on_deadline=True,
+     infra=["CAP-TS-SDKCALLS", "CAP-PREREADY-SIGNAL", "CAP-SPAWN-ENOENT"],
+     anchors=[anchor("ts/exec.ts", "signal: args.signal,")])
+
+case(id="2A-TS13", kind="SDK", language="typescript", contracts=["TS13"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["TS13.B02 (JSON válido não-objeto)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("non-object", consume="all", api="run_streamed")},
+     ],
+     fixture={"JSONL": ["42", "[]", '"str"', "null", '{"type":"never.reached"}'], "exit_code": 0, "stderr": ""},
+     expected={"yields": [42, [], "str"], "api_error": {"name": "TypeError", "message": "Cannot read properties of null (reading 'type')"},
+               "argv": ["exec", "--experimental-json"], "stdin": "non-object", "child_env": CHILD_ENV_DEFAULT},
+     expected_observation="42, [] e \"str\" são entregues como eventos sem validação; null quebra no acesso a .type dentro do try, e o finally fecha o exec.",
+     known_bad={"text": "Validar o schema do evento, descartar valores não-objeto ou continuar depois do erro.", "judged_by": ["api.yields_exact", "api.stream_error_exact"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.yields_exact", "api.stream_error_exact"],
+     accepted_capture_forms=["PASS", "KNOWN_SIGNAL_TERMINATION"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", "parsed = JSON.parse(item) as ThreadEvent;"), anchor("ts/thread.ts", 'if (parsed.type === "thread.started") {')])
+
+case(id="2A-TS14", kind="SDK", language="typescript", contracts=["TS14"], role="REINFORCEMENT",
+     branches_targeted=["TS14.B01 (thread.started repetido)", "TS14.B02 (cache_write presente, null e false; usage ausente)", "TS14.B03 (turn.failed no modo streamed é evento)"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("cache-write", consume="all", api="run_streamed"), "observe_each_yield": ["t.id"]},
+     ],
+     fixture={"JSONL": [
+         {"type": "thread.started", "thread_id": "first"},
+         {"type": "thread.started", "thread_id": "second"},
+         {"type": "turn.completed", "usage": usage(1, 0, 1, cache_write_input_tokens=5)},
+         {"type": "turn.completed", "usage": usage(2, 0, 2, cache_write_input_tokens=None)},
+         {"type": "turn.completed", "usage": usage(3, 0, 3, cache_write_input_tokens=False)},
+         {"type": "turn.failed", "error": {"message": "streamed failure"}},
+         {"type": "turn.completed"}], "exit_code": 0, "stderr": ""},
+     expected={"yield_snapshots": [
+         {"type": "thread.started", "thread_id": "first", "t.id": "first"},
+         {"type": "thread.started", "thread_id": "second", "t.id": "second"},
+         {"type": "turn.completed", "usage.cache_write_input_tokens": 5},
+         {"type": "turn.completed", "usage.cache_write_input_tokens": 0},
+         {"type": "turn.completed", "usage.cache_write_input_tokens": False},
+         {"type": "turn.failed", "error": {"message": "streamed failure"}}],
+         "api_error": {"name": "TypeError", "message": "Cannot read properties of undefined (reading 'cache_write_input_tokens')"},
+         "argv": ["exec", "--experimental-json"], "stdin": "cache-write", "child_env": CHILD_ENV_DEFAULT},
+     expected_observation="cache_write presente fica (5), null vira 0, false fica false; thread.started repetido troca o id antes do yield; turn.failed é só evento; turn.completed sem usage quebra no acesso.",
+     known_bad={"text": "Sobrescrever cache_write presente, mutar depois do yield, lançar em turn.failed no modo streamed ou inventar usage.", "judged_by": ["api.yield_snapshots_exact", "api.stream_error_exact"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.yield_snapshots_exact", "api.stream_error_exact"],
+     accepted_capture_forms=["PASS", "KNOWN_SIGNAL_TERMINATION"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", "parsed.usage.cache_write_input_tokens ??= 0;")])
+
+case(id="2A-TS15", kind="SDK", language="typescript", contracts=["TS15"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["TS15.B03 (falha depois de completed)", "break do agregador fechando o gerador"],
+     sdk_calls=[
+         {"step": 1, "api": "new Codex", "options": {"codexPathOverride": ADAPTER, "env": SDK_ENV}, "as": "c"},
+         {"step": 2, "api": "c.startThread", "options": {}, "as": "t"},
+         {"step": 3, "on": "t", **ts_run("late-failure")},
+     ],
+     fixture={"JSONL": [
+         {"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": "done"}},
+         {"type": "turn.completed", "usage": usage(1, 0, 1)},
+         {"type": "turn.failed", "error": {"message": "late failure"}},
+         {"type": "item.completed", "item": {"id": "z", "type": "agent_message", "text": "after break"}}], "exit_code": 0, "stderr": ""},
+     expected={"api_error": {"name": "Error", "message": "late failure"}, "argv": ["exec", "--experimental-json"],
+               "stdin": "late-failure", "child_env": CHILD_ENV_DEFAULT,
+               "child_termination": "SIGTERM pelo finally do exec, testemunhado pelo SO"},
+     expected_observation="turn.failed depois de turn.completed interrompe a agregação e lança a mensagem; o item seguinte não é consumido e o finally mata o filho.",
+     known_bad={"text": "Devolver o agregado por já ter visto turn.completed, ou consumir eventos depois da falha.", "judged_by": ["api.run_error_exact"]},
+     predicates=["argv.exact_vector", "env.child_env_exact", "wire.stdin_exact_then_eof", "api.run_error_exact", "cleanup.child_terminated_by_SIGTERM"],
+     accepted_capture_forms=["KNOWN_SIGNAL_TERMINATION"], infra=["CAP-TS-SDKCALLS", "CAP-ENV-EXACT"],
+     anchors=[anchor("ts/thread.ts", "turnFailure = event.error;")])
+
+# ---------------------------------------------------------------- Python (7)
+PY_COMMON_INFRA = ["CAP-PY-SDKCALLS", "CAP-PEER-V2"]
+ECHO_OK = {"serverInfo": {"name": "synthetic-echo", "version": "0.151.0"}, "userAgent": "synthetic-echo/0.151.0",
+           "platformFamily": None, "platformOs": None}
+case(id="2A-PY03", kind="SDK", language="python", contracts=["PY03"], role="NEW_CONTRACT",
+     branches_targeted=["params None omitido", "resposta não relacionada ignorada", "resultado não-objeto recusado antes do model_validate", "falha do model_validate"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize"},
+         {"step": 2, "api": "CodexClient.request", "method": "synthetic/echo", "params": None, "response_model": "InitializeResponse"},
+         {"step": 3, "api": "CodexClient.request", "method": "synthetic/echo", "params": {"k": 1}, "response_model": "InitializeResponse"},
+         {"step": 4, "api": "CodexClient.request", "method": "synthetic/echo", "params": {"k": 2}, "response_model": "InitializeResponse"},
+     ],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "synthetic/echo", "params_absent": True},
+          "before_reply": [{"response": {"id": "00000000-0000-4000-8000-000000000000",
+                                         "result": {"serverInfo": {"name": "unrelated", "version": "9.9.9"}, "userAgent": "unrelated/9.9.9"}}}],
+          "reply": {"result": ECHO_OK}},
+         {"match": {"method": "synthetic/echo", "params": {"k": 1}}, "reply": {"result": [1, 2]}},
+         {"match": {"method": "synthetic/echo", "params": {"k": 2}}, "reply": {"result": {"serverInfo": "not-an-object"}}}]},
+     expected={"client_requests": [
+         {"method": "synthetic/echo", "params_key_present": False, "id_format": "uuid4-string"},
+         {"method": "synthetic/echo", "params": {"k": 1}},
+         {"method": "synthetic/echo", "params": {"k": 2}}],
+         "api": [{"result": {"serverInfo": {"name": "synthetic-echo", "version": "0.151.0"}, "userAgent": "synthetic-echo/0.151.0", "platformFamily": None, "platformOs": None}},
+                 {"error": {"class": "openai_codex.errors.CodexError", "message": "synthetic/echo response must be a JSON object"}},
+                 {"error": {"class": "pydantic_core._pydantic_core.ValidationError", "first_loc": ["serverInfo"]}}]},
+     expected_observation="Sem params, a chave params fica ausente; a resposta de id alheio não completa o waiter; resultado array é recusado pela checagem de dict; objeto inválido falha no model_validate do Pydantic real.",
+     known_bad={"text": "Completar o waiter com resposta alheia, enviar params null, ou validar resultado não-objeto.", "judged_by": ["api.matching_result_only", "wire.params_absent", "api.non_object_rejected"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "wire.params_absent", "wire.request_ids_uuid4",
+                 "api.matching_result_only", "api.non_object_rejected", "api.model_validate_failure_recorded",
+                 "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA,
+     anchors=[anchor("py/client.py", 'raise CodexError(f"{method} response must be a JSON object")'),
+              anchor("py/client.py", 'message["params"] = params', count=2),
+              anchor("py/client.py", "return response_model.model_validate(result)"),
+              anchor("py/_message_router.py", "waiter = self._response_waiters.pop(str(request_id), None)")])
+
+RPC_ERR = {"error": {"code": -32603, "message": "cvg synthetic reply after capture"}}
+case(id="2A-PY04", kind="SDK", language="python", contracts=["PY04"], role="NEW_CONTRACT",
+     branches_targeted=["resume/fork: threadId de params à direita vence (B, None) e argumento quando params None", "modelo gerado com model_dump exclude_none", "_start_turn: argumento e input normalizado vencem params"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize"},
+         {"step": 2, "api": "CodexClient.thread_resume", "thread_id": "A", "params": {"threadId": "B"}},
+         {"step": 3, "api": "CodexClient.thread_resume", "thread_id": "A", "params": None},
+         {"step": 4, "api": "CodexClient.thread_fork", "thread_id": "A", "params": {"threadId": None}},
+         {"step": 5, "api": "CodexClient.thread_resume", "thread_id": "A", "params": {"$model": "ThreadResumeParams", "fields": {"thread_id": "B"}}},
+         {"step": 6, "api": "CodexClient.turn_start", "thread_id": "A", "input_items": "X",
+          "params": {"threadId": "B", "input": [{"type": "text", "text": "Y"}], "model": "SYNTHETIC"}},
+     ],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "thread/resume", "params": {"threadId": "B"}, "nth": 1}, "reply": RPC_ERR},
+         {"match": {"method": "thread/resume", "params": {"threadId": "A"}}, "reply": RPC_ERR},
+         {"match": {"method": "thread/fork", "params": {"threadId": None}}, "reply": RPC_ERR},
+         {"match": {"method": "thread/resume", "params": {"threadId": "B"}, "nth": 2}, "reply": RPC_ERR},
+         {"match": {"method": "turn/start", "params": {"threadId": "A", "input": [{"type": "text", "text": "X"}], "model": "SYNTHETIC"}},
+          "reply": {"result": {"turn": {"id": "T4", "items": [], "status": "inProgress"}}}}]},
+     expected={"client_requests": [
+         {"method": "thread/resume", "params": {"threadId": "B"}},
+         {"method": "thread/resume", "params": {"threadId": "A"}},
+         {"method": "thread/fork", "params": {"threadId": None}},
+         {"method": "thread/resume", "params": {"threadId": "B"}, "note": "model_dump(by_alias, exclude_none) do ThreadResumeParams(thread_id='B'); todos os demais campos têm default None"},
+         {"method": "turn/start", "params": {"threadId": "A", "input": [{"type": "text", "text": "X"}], "model": "SYNTHETIC"}}],
+         "api": [{"error": {"class": "openai_codex.errors.InternalRpcError", "code": -32603}}] * 4 + [{"result": {"turn.id": "T4"}}]},
+     expected_observation="Em resume e fork, o threadId de params à direita vence, inclusive None explícito; sem params vale o argumento. No _start_turn, o argumento A e o input normalizado X vencem params B e Y.",
+     known_bad={"text": "Forçar o argumento sobre params em resume/fork, deixar params vencer em _start_turn, ou confundir None de dict com exclude_none de modelo.", "judged_by": ["wire.payloads_exact"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "wire.payloads_exact", "api.errors_mapped_exact",
+                 "api.turn_start_result", "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA,
+     anchors=[anchor("py/client.py", 'payload = {"threadId": thread_id, **_params_dict(params)}', count=2),
+              anchor("py/client.py", "**_params_dict(params),"),
+              anchor("py/client.py", '"input": self._normalize_input_items(input_items),', count=2),
+              anchor("py/client.py", "exclude_none=True,"),
+              anchor("py/errors.py", "return InternalRpcError(code, message, data)")])
+
+U_T8 = {"total": tub(0, 8, 2, 0, 10), "last": tub(0, 8, 2, 0, 10)}
+case(id="2A-PY08", kind="SDK", language="python", contracts=["PY08"], role="NEW_CONTRACT",
+     branches_targeted=["método desconhecido vira UnknownNotification", "conhecido malformado vira UnknownNotification", "roteamento por turnId bruto", "conhecido válido tipado", "fechamento do transporte acorda fila global e de turn"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize"},
+         {"step": 2, "api": "CodexClient.register_turn_notifications", "turn_id": "T8"},
+         {"step": 3, "api": "CodexClient.request", "method": "synthetic/trigger", "params": None, "response_model": "InitializeResponse"},
+         {"step": 4, "api": "CodexClient.next_notification"},
+         {"step": 5, "api": "CodexClient.next_notification"},
+         {"step": 6, "api": "CodexClient.next_turn_notification", "turn_id": "T8"},
+         {"step": 7, "api": "CodexClient.next_turn_notification", "turn_id": "T8"},
+         {"step": 8, "api": "CodexClient.next_turn_notification", "turn_id": "T8"},
+         {"step": 9, "api": "CodexClient.next_notification"},
+     ],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "synthetic/trigger", "params_absent": True}, "reply": {"result": ECHO_OK},
+          "after_reply": [
+              notif("synthetic/notice", {"k": 1}),
+              notif("thread/tokenUsage/updated", {"threadId": "t8"}),
+              notif("thread/tokenUsage/updated", {"threadId": "t8", "turnId": "T8"}),
+              notif("thread/tokenUsage/updated", {"threadId": "t8", "turnId": "T8", "tokenUsage": U_T8}),
+              {"exit": "close_stdout_then_exit_0"}]}]},
+     expected={"api": [
+         {"step": 4, "notification": {"method": "synthetic/notice", "payload_class": "UnknownNotification", "params": {"k": 1}}},
+         {"step": 5, "notification": {"method": "thread/tokenUsage/updated", "payload_class": "UnknownNotification", "params": {"threadId": "t8"}}},
+         {"step": 6, "notification": {"method": "thread/tokenUsage/updated", "payload_class": "UnknownNotification", "params": {"threadId": "t8", "turnId": "T8"}}},
+         {"step": 7, "notification": {"method": "thread/tokenUsage/updated", "payload_class": "ThreadTokenUsageUpdatedNotification", "turn_id": "T8", "token_usage.total.total_tokens": 10}},
+         {"step": 8, "error": {"class": "openai_codex.errors.TransportClosedError", "message_prefix": "Codex process closed stdout."}},
+         {"step": 9, "error": {"class": "openai_codex.errors.TransportClosedError", "message_prefix": "Codex process closed stdout.", "same_object_as_step": 8}}]},
+     expected_observation="Desconhecido e conhecido malformado viram UnknownNotification; sem turnId vão à fila global, com turnId bruto vão à fila do turn; o válido chega tipado; o fechamento do stdout acorda a fila do turn e a global com o mesmo TransportClosedError, sem terminal inventado.",
+     known_bad={"text": "Descartar a notificação desconhecida, tipar com sucesso a malformada, ou deixar algum consumidor bloqueado depois do fechamento.", "judged_by": ["api.notifications_exact", "api.closure_wakes_both_queues"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "api.notifications_exact", "api.closure_wakes_both_queues",
+                 "api.no_fabricated_terminal", "peer.exit_after_script_witnessed", "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA + ["CAP-PEER-EXIT-EARLY"],
+     anchors=[anchor("py/client.py", "return Notification(method=method, payload=UnknownNotification(params=params_dict))", count=2),
+              anchor("py/_message_router.py", "self._global_notifications.put(exc)"),
+              anchor("py/client.py", "self._router.fail_all(exc)")])
+
+U15 = {"total": tub(0, 10, 5, 0, 15), "last": tub(0, 4, 2, 0, 6)}
+U15_OTHER = {"total": tub(0, 999, 999, 0, 1998), "last": tub(0, 999, 999, 0, 1998)}
+case(id="2A-PY15", kind="SDK", language="python", contracts=["PY15"], role="NEW_CONTRACT",
+     branches_targeted=["só itens e usage do turn certo", "final_answer vence None posterior", "failed lança com mensagem", "interrupted não lança"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize"},
+         {"step": 2, "api": "Thread.run", "thread": "Thread(client, 't15')", "input": "synthetic"},
+         {"step": 3, "api": "Thread.run", "thread": "Thread(client, 't15f')", "input": "synthetic"},
+         {"step": 4, "api": "Thread.run", "thread": "Thread(client, 't15i')", "input": "synthetic"},
+     ],
+     sdk_note="Thread(client, id) é construído como Codex.thread_start faz depois da resposta de thread/start; thread/start não é exercido.",
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "turn/start", "params_subset": {"threadId": "t15"}},
+          "reply": {"result": {"turn": {"id": "T15", "items": [], "status": "inProgress"}}},
+          "after_reply": [
+              notif("item/completed", {"threadId": "t15", "turnId": "OTHER", "completedAtMs": 1700000000001, "item": agent_item("o1", "other turn", "final_answer")}),
+              notif("item/completed", {"threadId": "t15", "turnId": "T15", "completedAtMs": 1700000000002, "item": agent_item("m1", "final A", "final_answer")}),
+              notif("item/completed", {"threadId": "t15", "turnId": "T15", "completedAtMs": 1700000000003, "item": agent_item("m2", "later unknown phase")}),
+              notif("item/completed", {"threadId": "t15", "turnId": "T15", "completedAtMs": 1700000000004, "item": agent_item("m3", "commentary text", "commentary")}),
+              notif("thread/tokenUsage/updated", {"threadId": "t15", "turnId": "OTHER", "tokenUsage": U15_OTHER}),
+              notif("thread/tokenUsage/updated", {"threadId": "t15", "turnId": "T15", "tokenUsage": U15}),
+              notif("turn/completed", {"threadId": "t15", "turn": {"id": "T15", "items": [], "status": "completed"}})]},
+         {"match": {"method": "turn/start", "params_subset": {"threadId": "t15f"}},
+          "reply": {"result": {"turn": {"id": "T15F", "items": [], "status": "inProgress"}}},
+          "after_reply": [notif("turn/completed", {"threadId": "t15f", "turn": {"id": "T15F", "items": [], "status": "failed", "error": {"message": "synthetic turn failure"}}})]},
+         {"match": {"method": "turn/start", "params_subset": {"threadId": "t15i"}},
+          "reply": {"result": {"turn": {"id": "T15I", "items": [], "status": "inProgress"}}},
+          "after_reply": [notif("turn/completed", {"threadId": "t15i", "turn": {"id": "T15I", "items": [], "status": "interrupted"}})]}]},
+     expected={"client_requests": [
+         {"method": "turn/start", "params_subset": {"threadId": "t15", "input": [{"type": "text", "text": "synthetic"}]}},
+         {"method": "turn/start", "params_subset": {"threadId": "t15f", "input": [{"type": "text", "text": "synthetic"}]}},
+         {"method": "turn/start", "params_subset": {"threadId": "t15i", "input": [{"type": "text", "text": "synthetic"}]}}],
+         "api": [{"result": {"id": "T15", "status": "completed", "final_response": "final A", "item_ids": ["m1", "m2", "m3"],
+                             "usage.total.total_tokens": 15, "usage.last.total_tokens": 6, "error": None}},
+                 {"error": {"class": "RuntimeError", "message": "synthetic turn failure"}},
+                 {"result": {"id": "T15I", "status": "interrupted", "final_response": None, "item_ids": [], "usage": None}}],
+         "extra_payload_keys": "Outras chaves do model_dump do TurnStartParams são registradas, não julgadas."},
+     expected_observation="Só entram itens e usage do turn T15; o texto final é o do item final_answer, não o None-phase posterior nem o commentary; failed lança a mensagem; interrupted devolve o resultado sem lançar.",
+     known_bad={"text": "Usar usage ou item de outro turn, concatenar textos, devolver o último item independentemente da fase, lançar em interrupted ou inventar conclusão.", "judged_by": ["api.turn_results_exact"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "wire.turn_start_payload_subset", "api.turn_results_exact",
+                 "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA,
+     anchors=[anchor("py/_run.py", "if agent_message.phase == MessagePhase.final_answer:"),
+              anchor("py/_run.py", "raise RuntimeError(turn.error.message)"),
+              anchor("py/_run.py", "if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:", count=2),
+              anchor("py/api.py", "return _collect_turn_result(stream, turn_id=self.id)")])
+
+case(id="2A-PY16", kind="SDK", language="python", contracts=["PY16"], role="NEW_CONTRACT",
+     branches_targeted=["ExternalMessage vira input vazio + toolOutput guardado", "itens tipados com chaves de fio explícitas", "tool_name vazio recusado antes do pedido"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize"},
+         {"step": 2, "api": "Thread.turn", "thread": "Thread(client, 't16')",
+          "input": {"$ExternalMessage": {"tool_name": "synthetic_tool", "content": "external text", "namespace": "synthetic_ns"}}},
+         {"step": 3, "api": "Thread.turn", "thread": "Thread(client, 't16')", "input": [
+             {"$TextInput": {"text": "t"}}, {"$ImageInput": {"url": "data:image/png;base64,AAAA"}},
+             {"$LocalImageInput": {"path": "/work/i.png"}}, {"$SkillInput": {"name": "s", "path": "/work/s"}},
+             {"$MentionInput": {"name": "m", "path": "/work/m"}}]},
+         {"step": 4, "api": "Thread.turn", "thread": "Thread(client, 't16')", "input": {"$ExternalMessage": {"tool_name": "  ", "content": "x"}},
+          "expect": {"throws": {"class": "ValueError", "message": "ExternalMessage.tool_name must be a nonempty string"}, "requests_written": 0}},
+     ],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "turn/start", "params_subset": {"threadId": "t16", "input": []}},
+          "reply": {"result": {"turn": {"id": "T16A", "items": [], "status": "inProgress"}}}},
+         {"match": {"method": "turn/start", "params_subset": {"threadId": "t16", "input": [{"type": "text", "text": "t"}, {"type": "image", "url": "data:image/png;base64,AAAA"}, {"type": "localImage", "path": "/work/i.png"}, {"type": "skill", "name": "s", "path": "/work/s"}, {"type": "mention", "name": "m", "path": "/work/m"}]}},
+          "reply": {"result": {"turn": {"id": "T16B", "items": [], "status": "inProgress"}}}}]},
+     expected={"client_requests": [
+         {"method": "turn/start", "params": {"threadId": "t16", "input": [], "toolOutput": {"name": "synthetic_tool", "namespace": "synthetic_ns", "output": "external text"}},
+          "must_not_contain_keys": ["approvalPolicy", "approvalsReviewer"]},
+         {"method": "turn/start", "params": {"threadId": "t16", "input": [
+             {"type": "text", "text": "t"}, {"type": "image", "url": "data:image/png;base64,AAAA"}, {"type": "localImage", "path": "/work/i.png"},
+             {"type": "skill", "name": "s", "path": "/work/s"}, {"type": "mention", "name": "m", "path": "/work/m"}]}}],
+         "api": [{"result": {"turn_handle.id": "T16A"}}, {"result": {"turn_handle.id": "T16B"}},
+                 {"error": {"class": "ValueError", "message": "ExternalMessage.tool_name must be a nonempty string"}}],
+         "guard": "toolOutput passa pela guarda de versão com a versão sintética 0.151.0; a versão é dado de teste, não identidade"},
+     expected_observation="ExternalMessage vira input vazio e toolOutput com nome, namespace e conteúdo literais, sem approval; itens tipados mantêm as chaves de fio; tool_name em branco é recusado antes de qualquer pedido.",
+     known_bad={"text": "Converter o conteúdo externo em instrução autorizada do usuário, acrescentar approval, ou resumir o output.", "judged_by": ["wire.payloads_exact", "wire.no_approval_keys"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "wire.payloads_exact", "wire.no_approval_keys",
+                 "api.turn_handles_and_error_exact", "wire.no_request_for_blank_tool_name", "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA,
+     anchors=[anchor("py/_inputs.py", 'raise ValueError("ExternalMessage.tool_name must be a nonempty string")'),
+              anchor("py/_inputs.py", 'return {"type": "localImage", "path": item.path}'),
+              anchor("py/api.py", "wire_input, tool_output = _to_wire_turn_input(input)", count=2)])
+
+case(id="2A-PY07R", kind="SDK", language="python", contracts=["PY07"], role="RESIDUAL_OF_PARTIAL",
+     branches_targeted=["params não-dict chega como None ao handler", "exceção do handler leva a fail_all"],
+     sdk_calls=[
+         {"step": 1, "api": "CodexClient.start+initialize", "client": {"approval_handler": "record_then_raise",
+                                                                     "handler_raises": {"class": "RuntimeError", "message": "cvg synthetic handler failure"}}},
+         {"step": 2, "api": "CodexClient.request", "method": "synthetic/hold", "params": None, "response_model": "InitializeResponse"},
+     ],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}},
+         {"match": {"method": "synthetic/hold", "params_absent": True}, "hold": "forever",
+          "after_receipt": [{"server_request": {"id": "approve-x", "method": "item/commandExecution/requestApproval", "params": [1, 2]}}]}]},
+     expected={"handler_calls": [{"method": "item/commandExecution/requestApproval", "params": None}],
+               "server_lines_answered": {"approve-x": False},
+               "api": [{"error": {"class": "RuntimeError", "message": "cvg synthetic handler failure", "same_object_as_handler_exception": True}}]},
+     expected_observation="O handler recebe params None para params não-dict; a exceção dele sai do reader e o fail_all a entrega ao pedido pendente; nenhuma resposta é escrita para approve-x.",
+     known_bad={"text": "Responder accept mesmo com o handler falhando, ou deixar o pedido pendente bloqueado.", "judged_by": ["wire.no_reply_to_server_request", "api.pending_request_failed_with_handler_error"]},
+     predicates=["wire.client_lines_complete_json", "wire.initialize_handshake", "api.handler_called_with_none",
+                 "wire.no_reply_to_server_request", "api.pending_request_failed_with_handler_error", "peer.no_unscripted_request", "env.adapter_sandbox_env_only"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA + ["CAP-CUSTOM-HANDLER", "CAP-PEER-HOLD-FOREVER"],
+     anchors=[anchor("py/client.py", "params if isinstance(params, dict) else None,"),
+              anchor("py/client.py", "response = self._handle_server_request(msg)")])
+
+case(id="2A-PY10R", kind="SDK", language="python", contracts=["PY10"], role="REINFORCEMENT",
+     branches_targeted=["mesmo caminho do SDKPY07 com pause_reply e peer v2"],
+     sdk_calls=[{"step": 1, "api": "AsyncCodexClient._start_turn com cancelamento", "same_as": "SDKPY07 (python-driver.py sdk_py07, instrumentação threading.setprofile idêntica)"}],
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": {"serverInfo": {"name": "synthetic-sdk-profile", "version": "0.151.0"}}}},
+         {"match": {"method": "turn/start"}, "hold": "until_RELEASE_REPLY", "reply": {"result": {"turn": {"id": "A", "items": [], "status": "inProgress"}}}},
+         {"match": {"method": "thread/goal/set"}, "reply": {"result": {}}, "note": "pause_reply (R2-F02): só existe para que um goal path, se ocorresse, fosse respondido e julgado"}]},
+     expected={"same_as": "SDKPY07: CancelledError, close tardio com _closed=True para A, nenhum turn/interrupt e nenhum thread/goal/set no intervalo capturado",
+               "known_bad_reach": "Um turn/interrupt ou thread/goal/set, bloqueante ou não, agora recebe resposta (erro sintético ou pause_reply) e é julgado MISMATCH por wire.no_turn_interrupt ou wire.no_goal_path"},
+     expected_observation="Repete o SDKPY07 com o peer v2 e pause_reply. O cliente correto dá o mesmo PASS; o ganho é o alcance do known-bad como MISMATCH.",
+     known_bad={"text": "Goal path para turn comum, interrupt inferido ou ausência julgada antes do callback.", "judged_by": ["wire.no_turn_interrupt", "wire.no_goal_path", "order.absence_judged_after_hook"]},
+     predicates=["wire.client_lines_complete_json", "wire.server_lines_complete_json", "wire.initialize_request_learned_uuid", "wire.initialized_notification_exact",
+                 "wire.initialize_reply_learned_id", "api.initialize_result_parsed", "env.adapter_sandbox_env_only", "peer.no_unscripted_request",
+                 "wire.eof_bounded_interval", "wire.turn_start_written", "wire.no_turn_interrupt", "wire.no_goal_path", "wire.held_reply_learned_id",
+                 "api.cancelled_error", "hook.late_close_turn_A_closed_true", "order.abort_after_request_capture", "order.reply_released_after_cancel",
+                 "order.absence_judged_after_hook"],
+     accepted_capture_forms=["PASS"], infra=PY_COMMON_INFRA,
+     anchors=[anchor("admission/python/python-driver.py", "async def sdk_py07(cfg, ch):")])
+
+# ---------------------------------------------------------------- CONTROL (1)
+case(id="2A-CTRL01", kind="CONTROL", language="python", contracts=[], role="CONTROL_KNOWN_BAD_REACH",
+     branches_targeted=[],
+     control_client={"argv": ["/runtime/python", "-I", "-S", "/profile/control-client.py", "--case", "2A-CTRL01"],
+                     "imports_sdk": False,
+                     "lines": [
+                         {"id": "ctrl-1", "method": "initialize", "params": {"clientInfo": {"name": "cvg_control_client", "title": "CVG control client", "version": "0"}, "capabilities": {"experimentalApi": True}}},
+                         {"method": "initialized"},
+                         {"id": "ctrl-2", "method": "turn/interrupt", "params": {"threadId": "t-ctrl", "turnId": "A"}}],
+                     "reads": "uma linha de resposta por pedido, com prazo; depois fecha o stdin"},
+     peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+         {"match": {"method": "initialize"}, "reply": {"result": INIT}}]},
+     expected={"peer_milestones": ["UNSCRIPTED turn/interrupt", "UNSCRIPTED_ERROR_WRITTEN"],
+               "server_reply_to_ctrl-2": {"error": {"code": -32601, "message": "cvg synthetic: unscripted request", "data": {"cvg_synthetic": True, "method": "turn/interrupt"}}},
+               "evaluator_outcome": "MISMATCH", "judged_by": "wire.no_turn_interrupt (mesmo predicado do SDKPY07/2A-PY10R)"},
+     expected_observation="Um cliente de controle, que não é o SDK, envia um turn/interrupt sem script. O peer v2 responde com erro sintético, o cliente não bloqueia, e o avaliador r3 classifica MISMATCH.",
+     known_bad={"text": "Se o resultado for PASS ou INVALID_CAPTURE, o peer v2 ou o avaliador r3 não alcançam o known-bad; a unidade para antes dos casos SDK.", "judged_by": ["control.outcome_is_mismatch"]},
+     predicates=["control.peer_answered_unscripted", "control.client_not_blocked", "wire.no_turn_interrupt", "control.outcome_is_mismatch"],
+     accepted_capture_forms=["PASS"], gate="Roda antes de todos os casos SDK; resultado diferente de MISMATCH para a unidade.",
+     infra=["CAP-PEER-V2", "CAP-CONTROL-CLIENT"],
+     anchors=[anchor("admission/python/fixture-rpc.py", "ch.emit('PEER_MILESTONE', {'milestone': 'UNSCRIPTED', 'detail': {'method': method}})")])
+
+for i, c in enumerate(CASES, start=1):
+    c["slot"] = i
+    c["inputs"] = sorted({a["input"] for a in c["anchors"]} | ({"ts/exec.ts", "ts/thread.ts"} if c["language"] == "typescript" and c["kind"] == "SDK" else set())
+                         | ({"py/client.py"} if c["language"] == "python" and c["kind"] == "SDK" else set()))
+    if c["language"] == "typescript" and c.get("expected", {}).get("argv"):
+        c["expected"]["argv_json_bytes"] = len(json.dumps(c["expected"]["argv"], ensure_ascii=False, separators=(",", ":")).encode())
+        c["expected"]["argv_count"] = len(c["expected"]["argv"])
+
+sdk = [c for c in CASES if c["kind"] == "SDK"]
+ctrl = [c for c in CASES if c["kind"] == "CONTROL"]
+cases_doc = {
+    "kind": "SDK_SOURCE_BATCH_2A_CASES_FROZEN",
+    "task": TASK,
+    "status": "FROZEN_SPEC_NOT_RUN",
+    "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+    "profile": "Mesmo perfil de fonte admitido: Linux x86-64, Python 3.12.3, Node v24.20.0, TS 5.9.2 por transpile e loader restrito; emit selado reutilizado sem recompilar enquanto os .ts não mudarem.",
+    "inputs": INPUTS,
+    "counts": {"slots": len(CASES), "sdk_cases": len(sdk), "control": len(ctrl),
+               "typescript": sum(1 for c in sdk if c["language"] == "typescript"), "python": sum(1 for c in sdk if c["language"] == "python")},
+    "expectation_rule": "Valores esperados vêm da leitura da fonte do pin, com âncoras de linha e sha. Divergência na execução é MISMATCH preservado; nenhuma expectativa é editada depois da execução. Casos marcados inconclusive_on_deadline admitem INCONCLUSIVE só por prazo.",
+    "encoding": {
+        "JSONL": "Objetos viram JSON compacto + LF; strings são linhas literais + LF, como em cases.json do perfil de referência.",
+        "stdout_chunks_hex": "Bytes exatos, uma escrita por chunk, sem LF acrescido.",
+        "$UNDEFINED": "Marcador trocado por undefined pelo driver TS antes da chamada.",
+        "$ac.signal": "Signal do AbortController criado no passo indicado.",
+        "$model / $TextInput / $ExternalMessage etc.": "Construção pelo driver Python da classe pública correspondente do SDK com os campos dados.",
+    },
+    "cases": CASES,
+    "functional_receipts": 0,
+    "parity_credit": 0,
+}
+
+# ---------------------------------------------------------------- plano de cobertura
+BATCH_CONTRACTS = ["TS01", "TS02", "TS03", "TS04", "TS05", "TS06", "TS07", "TS08", "TS09", "PY03", "PY04", "PY08", "PY15", "PY16"]
+RESIDUAL_CONTRACTS = ["PY07", "PY10", "TS10", "TS11", "TS12", "TS13", "TS14", "TS15"]
+REMAINING_AFTER = {
+    "TS01": "TS01.B01 com options omitido (mesmo resolver do override vazio) e mutação das referências de options antes do next: continuação 2A.",
+    "TS02": "TS02.B04 entrada não iterável e item null fora do tipo além do caso TS04: continuação 2A.",
+    "TS03": "TS03.B03 falha de mkdtemp, TS03.B04 erro de stringify (ciclo, BigInt) e TS03.B05 falha de rm: continuação 2A com injeção de falha de fs.",
+    "TS04": "TS04.B03 gerador abandonado sem return e throw no consumidor: continuação 2A.",
+    "TS05": "Precedência efetiva dos overrides repetidos na CLI: perfil com Codex CLI real (distribuído).",
+    "TS06": "Date, objeto com protótipo, colisões e ciclo: continuação 2A.",
+    "TS07": "NaN/Infinity, BigInt, undefined, array com holes e null em array: continuação 2A.",
+    "TS08": "Enum fora do tipo e cyberAccessProgram omitido versus explícito em outros valores: continuação 2A.",
+    "TS09": "TS09.B03 apiKey vazio sem apagar a chave existente, override omitido (herança de process.env) e pathDirs do resolver: continuação 2A e perfil distribuído.",
+    "PY03": "Falha de escrita removendo o waiter: continuação 2A com injeção de falha de stdin.",
+    "PY04": "Modelos gerados de fork e turn/start com campos de default não-None, se existirem: continuação 2A.",
+    "PY08": "Corridas e concorrência entre consumidores: lote 2B.",
+    "PY15": "Versão assíncrona (_collect_async_turn_result) e turn sem terminal (RuntimeError): continuação 2A ou 2B.",
+    "PY16": "Conteúdo estruturado de ExternalMessage (lista de itens) e join de turn ativo: continuação 2A.",
+    "PY07": "Cenário governado nativo (EQ02/SPEC0239): BUILD nativo, fora dos perfis SDK.",
+    "PY10": "Cancelamento depois do resultado síncrono, wrappers to_thread e finally do stream: lote 2B.",
+    "TS10": "stdin, stdout ou stderr ausentes e faults de write/end/kill: continuação 2A com injeção de falha do lado Node.",
+    "TS11": "Ordem EOF versus exit, code null, signal com stderr, stderr tardio, readline que lança: continuação 2A.",
+    "TS12": "Aborto antes do yield e depois do EOF, close/removeAllListeners que lançam, filho que ignora o sinal; outras versões de Node no perfil distribuído ou de plataforma.",
+    "TS13": "JSON truncado e tipo desconhecido no agregador: continuação 2A.",
+    "TS14": "Vários thread.started com id ausente: continuação 2A.",
+    "TS15": "Mensagens múltiplas com updated entre completed: continuação 2A.",
+}
+cov_rows = []
+for cid in BATCH_CONTRACTS + RESIDUAL_CONTRACTS:
+    cs = [c["id"] for c in CASES if cid in c["contracts"]]
+    assert cs, cid
+    cov_rows.append({"source_contract": cid, "batch_role": "NEW_CONTRACT" if cid in BATCH_CONTRACTS else "RESIDUAL_OR_REINFORCEMENT",
+                     "cases": cs, "branches_targeted": sorted({b for c in CASES if cid in c["contracts"] for b in c["branches_targeted"] if b.startswith(cid) or not b[:2].isupper() or not b[2:4].isdigit()}),
+                     "status_before": "OPEN_REQUIRED_FUTURE_PROFILE" if cid in BATCH_CONTRACTS else "OBSERVED_CLIENT_PARTIAL",
+                     "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+                     "whole_requirement_covered_after": False,
+                     "remaining_after_2A": REMAINING_AFTER[cid]})
+coverage_plan = {
+    "kind": "SDK_SOURCE_BATCH_2A_COVERAGE_PLAN",
+    "task": TASK,
+    "base": INPUTS["binding/coverage-observed.json"],
+    "rows": cov_rows,
+    "projection_if_all_pass": {
+        "OBSERVED_CLIENT_PARTIAL": 11 + len(BATCH_CONTRACTS),
+        "OPEN_REQUIRED_FUTURE_PROFILE": 33 - len(BATCH_CONTRACTS),
+        "open_destinations": {"SOURCE_BATCH_2B": ["PY01", "PY02", "PY09", "PY11", "PY12", "PY13", "PY17", "PY18"],
+                              "DISTRIBUTED_PROFILE": ["PY19", "PY20", "PK01", "PK02", "PK03", "PK04", "PK05", "PK06", "PK07", "PK08", "PK09"]},
+        "note": "Projeção de planejamento. Só um BIND depois da execução muda o mapa; nenhuma linha passa a cobrir o requisito inteiro.",
+    },
+    "carry_over_from_binding_r2": {
+        "R2-F02": "Os resíduos aqui são lidos contra a entrada inteira do contrato G01 (rows[id=PYxx] e contracts[id=TSxx], com external_limits).",
+        "R2-F03": "'Outras versões de Node' vai ao perfil distribuído ou de plataforma (TS12).",
+        "R2-F04": "O avaliador r3 rotula a versão de client_fact_only, parity_receipt e functional_receipts (evaluator-r3-contract.json, R3-04).",
+    },
+    "functional_receipts": 0,
+    "parity_credit": 0,
+}
+
+for name, obj in (("cases-2a.json", cases_doc), ("coverage-plan-2a.json", coverage_plan)):
+    with open(os.path.join(OUT, name), "w") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+print(json.dumps({"slots": len(CASES), "sdk": len(sdk), "control": len(ctrl), "contracts": len(cov_rows),
+                  "argv_max_bytes": max(c["expected"].get("argv_json_bytes", 0) for c in sdk if "expected" in c),
+                  "argv_max_count": max(c["expected"].get("argv_count", 0) for c in sdk if "expected" in c)}))

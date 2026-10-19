@@ -1,0 +1,75 @@
+{
+  "kind": "EXECUTOR_DISPOSITION_R2",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "review": {
+    "path": "review-r2/review.json",
+    "sha256": "d8af9c4b6544fafc4166813d2d614bafd7922ded60654e96afad949dab56a466",
+    "raw": {
+      "path": "review-r2/verdict.raw.txt",
+      "sha256": "19734b2f71f93d52e9a2e8604dbaae854b764cc09d6157bfe297745ebf0119c4"
+    },
+    "verdict": "REVISE",
+    "mandatory_findings": ["R2-F01"]
+  },
+  "rule": "R2 é a última revisão e o reparo agrupado (1/1) já foi usado: nenhum documento revisado é reescrito. O P2 restante e os P3 vão para a IMPLEMENT como carry-over explícito em next-task.json; o P2 é obrigatório e bloqueia a IMPLEMENT do 2B-2 até ser fechado. Só state.json, next-task.json, ledger-delta-cont-d9ef.md, review-r2/ e esta disposição mudam depois da R2.",
+  "unit_outcome": "COMPLETED_LOCAL_WITH_CARRIED_P2: a especificação do 2B-1 fica pronta (nenhum achado obrigatório a afeta); a do 2B-2 depende de R2-F01 fechado na IMPLEMENT do 2B-1 ou numa errata T1.",
+  "items": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "disposition": "CARRIED_TO_IMPLEMENT_MANDATORY",
+      "scope": "regra comum aos dois sub-lotes; único caso afetado: 2B-PY13D (2B-2)",
+      "note": "Interpretação vinculante para a IMPLEMENT, escolhida por ser a que o próprio 2B-PY13D usa (passo 16 'segundo return' e hook.count com filtro de event): a ocorrência e o token HOOK:<id>#k contam por (id, event). Em gancho de um tipo só, isso é o mesmo que contar por id; em gancho call+return, cada entrada de expected.hooks traz event e a ocorrência conta dentro desse tipo. Com essa regra, os valores congelados do 2B-PY13D (h_cleanup_cb call #1 e #2, h_stop call #1) estão corretos e nenhum valor de caso muda. Nenhum caso do 2B-1 usa gancho call+return (conferido: só 2B-PY13D), então o 2B-1 não é afetado. A IMPLEMENT do 2B-1, que implementa a máquina de ganchos e o avaliador comuns, deve: (1) contar por (id, event) no driver, no D2B-15 e no avaliador (E2B-04 e E2B-06 lidos assim); (2) ter autoteste com gancho call+return chamado duas vezes que case o expected.hooks congelado do 2B-PY13D; (3) no validador da unidade, exigir event quando houver occurrence > 1 em gancho call+return, com controle negativo. A revisão independente da IMPLEMENT confere esses três pontos. Se o Lead ou essa revisão não aceitar a interpretação, a alternativa é uma errata T1 do 2B-2 (occurrence 3 sob contagem global), antes da IMPLEMENT do 2B-2. Em qualquer caso, a IMPLEMENT do 2B-2 só começa com R2-F01 fechado."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "2B-2 (2B-PY13E), prioritário",
+      "note": "thread.join por nome: depois da testemunha do próprio thread (h_stop), um nome sem thread vivo em threading.enumerate() conta como thread já terminado; não é falha nem espera o thread aparecer. Autoteste com thread que já terminou."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "2B-1 (2B-PY10X)",
+      "note": "Expectativa de excepthook vazia é julgada no snapshot; a exigência de excepthook.wait ou thread.join antes do snapshot vale só para expectativa não vazia. Checagem no validador da unidade."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "2B-PY11B, 2B-PY02A (2B-1); 2B-PY13E, 2B-PY17A (2B-2)",
+      "note": "Separar as esperas que são pré-condição de harness (estouro: INVALID_CAPTURE, E2B-14) das que esperam efeito do cliente (worker.parked do W2 no lock do 2B-PY11B, thread.join do leitor no 2B-PY02A, hook.wait e excepthook.wait do 2B-PY13E, probe.until do 2B-PY17A). Nas segundas, o estouro segue o caso e registra a testemunha para o predicado client do known_bad decidir. A classificação por passo fica registrada na IMPLEMENT e passa pela revisão dela."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "2B-2 (CAP-2B-PEER-LOGIN)",
+      "note": "FORBIDDEN_LOGIN_KEYS = [apiKey, api_key, accessToken, refreshToken, idToken, authToken, chatgptAuthTokens, password, secret] (a mesma lista de validate-spec-2b.mjs.txt e de repair-r1.json), enumerada no código e no contrato da IMPLEMENT."
+    },
+    {
+      "id": "R2-F06",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "D2B-15, os dois sub-lotes",
+      "note": "No D2B-15 implementado: STEP_WITNESS segue como milestone de DIAGNOSTIC do driver (como no 2A) e STEP_RELEASE como COMMAND do supervisor; a identidade da dependência (pydantic, pydantic_core) vai no BEGIN do driver; clock.mark é milestone DIAGNOSTIC CLOCK_MARK."
+    },
+    {
+      "id": "R2-F07",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "scope": "validador da IMPLEMENT",
+      "note": "O validador da unidade seguinte confere nomes de WORKER, métodos e threadId de RAW_READ, COMMIT_REPLY e RELEASE_REPLY contra o peer_script e o hold, o tipo do passo de CANCEL, a guarda de excepthook (R2-F03) e a regra de ocorrência (R2-F01), cada um com controle negativo."
+    },
+    {
+      "id": "R2-F08",
+      "severity": "P3",
+      "disposition": "RECORDED",
+      "note": "Além do registrado em repair-r1.json#/unchanged, o reparo também mudou: as cadeias de ordem do 2B-PY01A e do 2B-PY01D ganharam HOOK:h_notify_ret#1 (expectativa nova, julgada por hook.events_exact); expected.hooks do 2B-PY13D ganhou event 'call'; o park_point do passo 32 do 2B-PY14A passou ao nome qualificado. Pela fonte, as três mudanças estão corretas; a do 2B-PY13D é lida pela regra de R2-F01."
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

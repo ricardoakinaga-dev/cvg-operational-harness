@@ -1,0 +1,580 @@
+{
+  "kind": "ARM_DISCRIMINATION_CHECK_2B2",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-2",
+  "source": {
+    "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/next-task.json#/first_step_additions",
+    "sha256": "f6afbb430a0b4e9a8cc438ab52d146fcf48cd0d92975e46ea1c7767664e5dbe6",
+    "also": "#/carry_over_from_bind_review (2B1-BIND/R2-F02: padrão \"efeito colateral no processo pai não sondado\")"
+  },
+  "timing": "Feita depois dos serviços: o carry-over do BIND 2B-1 chegou ao executor com os 18 slots já executados. Nenhum caso congelado, expectativa, desfecho ou serviço muda; a checagem só limita o que cada PASS_CLIENT_OBSERVATION pode afirmar no BIND do 2B-2.",
+  "rule": "Por braço mirado: DISCRIMINATED quando algum passo observado separa o ramo do seu contrário no perfil de referência; PARTIAL_SCOPE quando só parte do texto do braço é separada (o resto vai como não observado); NOT_DISCRIMINATED quando a observação seria a mesma com e sem o ramo. Braço NOT_DISCRIMINATED ou na parte não observada de PARTIAL_SCOPE nunca vira observado no BIND.",
+  "patterns_checked": {
+    "guarda que passa nos dois ramos (PY05.B10)": "achado: PY13.B06 (t13b2 é efêmero e sem path)",
+    "mesma mensagem com e sem a variação (PY05.B06)": "não achado",
+    "ramo que depende de pacote ausente do perfil (PY02.B02, PY02.B07)": "não achado (nenhum caso do 2B-2 depende de codex_cli_bin)",
+    "entrada vazia que torna o ramo vácuo (PY02.B01)": "achado: PY17.B04, parte \"não registra fila\" (resposta apiKey sem loginId)",
+    "assinatura tardia sem evento retido (PY12.B03)": "não achado: as conclusões adiantadas (PY17.B01, PY17.B05, PY18.B19) são retidas e observadas",
+    "efeito colateral no processo pai não sondado (2B1-BIND/R2-F02)": "não aplicável: nenhum braço do 2B-2 afirma efeito no processo pai (env, cwd, sys.modules); shims e faults são do harness e têm restauração conferida",
+    "testemunha ausente de estado intermediário": "achado: PY13.B05 e PY13.B09 (reserva transitória), PY13.B10 e PY13.B15 (finish), PY14.B03 (primeiro start = start do turn failed), PY14.B07 (completed contra started sem current), PY17.B02 (casamento e finally do wait)"
+  },
+  "counts": {
+    "DISCRIMINATED": 68,
+    "PARTIAL_SCOPE": 8,
+    "NOT_DISCRIMINATED": 1
+  },
+  "arms": [
+    {
+      "case": "2B-PY09A",
+      "arm": "PY09.B01",
+      "arm_text": "PY09.B01 (retry explícito: tentativas até o sucesso com sobrecarga direta e aninhada)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 5: três pedidos e resultado retry-ok; sem o ramo sairia o ServerBusyError do primeiro pedido (wire.requests_exact, api.steps_exact). As duas falhas são de sobrecarga por data (codex_error_info direto e errorInfo aninhado; -32001 sem data viraria CodexRpcError não repetível)."
+    },
+    {
+      "case": "2B-PY09A",
+      "arm": "PY09.B02",
+      "arm_text": "PY09.B02 (sleep = min(max, delay) + uniform(-delay*0,2, +delay*0,2); delay dobra até o teto)",
+      "status": "DISCRIMINATED",
+      "basis": "clock.recorder_exact registra uniform(-0.05, 0.05) e uniform(-0.1, 0.1) e sleeps 0.3 e 0.4 (delay dobra); o teto do delay é distinguido no 2B-PY09D (segundo jitter 0.2 = min(1, 3) * 0.2)."
+    },
+    {
+      "case": "2B-PY09A",
+      "arm": "PY09.B03",
+      "arm_text": "PY09.B03 (pedido comum não tem retry)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 6: um pedido, ServerBusyError, nenhum uniform/sleep (per_step 6 = 0); com retry haveria segundo pedido (sem regra no peer)."
+    },
+    {
+      "case": "2B-PY09B",
+      "arm": "PY09.B04",
+      "arm_text": "PY09.B04 (texto de retry-limit sem data de sobrecarga vira RetryLimitExceededError, subclasse de ServerBusyError, e é repetido)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 5: -32000 com texto de retry-limit e data null vira RetryLimitExceededError (mro contém ServerBusyError) e é repetido (dois pedidos, um sleep); não repetível daria um pedido."
+    },
+    {
+      "case": "2B-PY09B",
+      "arm": "PY09.B05",
+      "arm_text": "PY09.B05 (esgotar max_attempts relança a última exceção)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 5: sai a segunda exceção (\"Too many failed attempts\"), não a primeira."
+    },
+    {
+      "case": "2B-PY09B",
+      "arm": "PY09.B06",
+      "arm_text": "PY09.B06 (max_attempts < 1 levanta ValueError antes de qualquer pedido)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 6: ValueError e wire.absent synthetic/never."
+    },
+    {
+      "case": "2B-PY09B",
+      "arm": "PY09.B07",
+      "arm_text": "PY09.B07 (max_attempts = 1 não repete)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 7: erro repetível (RetryLimitExceededError) com max_attempts=1 e um único pedido synthetic/limit2."
+    },
+    {
+      "case": "2B-PY09C",
+      "arm": "PY09.B08",
+      "arm_text": "PY09.B08 (erro não repetível sai na primeira tentativa)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 5: -32603 sem data, InternalRpcError, um pedido, sem uniform/sleep."
+    },
+    {
+      "case": "2B-PY09C",
+      "arm": "PY09.B09",
+      "arm_text": "PY09.B09 (qualquer JsonRpcError com data de sobrecarga aninhada é repetível, mesmo -32603 mapeado para InternalRpcError)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 6: -32603 com data aninhada em lista é repetido e vence na segunda tentativa."
+    },
+    {
+      "case": "2B-PY09C",
+      "arm": "PY09.B10",
+      "arm_text": "PY09.B10 (código fora da faixa com data string de sobrecarga é repetível; a falha seguinte sem sobrecarga sai)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 7: -31000 (fora da faixa) com data string repetido; a segunda falha (data busy) sai como JsonRpcError."
+    },
+    {
+      "case": "2B-PY09C",
+      "arm": "PY09.B11",
+      "arm_text": "PY09.B11 (exceção que não é JsonRpcError, como ValidationError do modelo, não é repetida)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 8: ValidationError do modelo de resposta, um pedido, sem sleep."
+    },
+    {
+      "case": "2B-PY09D",
+      "arm": "PY09.B12",
+      "arm_text": "PY09.B12 (o sleep pode passar de max_delay_s por causa do jitter)",
+      "status": "DISCRIMINATED",
+      "basis": "clock.recorder_exact: primeiro sleep 1.3 > max_delay_s 1 (first_sleep_exceeds_max_delay)."
+    },
+    {
+      "case": "2B-PY09D",
+      "arm": "PY09.B13",
+      "arm_text": "PY09.B13 (delay inicial zero: nenhum sleep, mas as tentativas continuam)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 6: três pedidos, uniform(-0.0, 0.0) duas vezes e nenhum sleep."
+    },
+    {
+      "case": "2B-PY13A",
+      "arm": "PY13.B01",
+      "arm_text": "PY13.B01 (thread idle e persistido: read, reserva, clear, ativa o roteamento, set ativo, espera o primeiro turn)",
+      "status": "DISCRIMINATED",
+      "basis": "wire.requests_exact (read, clear, set na ordem), resultado {state_class, turn_id G13} e sondas logical/current/started."
+    },
+    {
+      "case": "2B-PY13A",
+      "arm": "PY13.B02",
+      "arm_text": "PY13.B02 (notificação antes da resposta do set é aceita: o roteamento foi ativado antes do set)",
+      "status": "DISCRIMINATED",
+      "basis": "updated e turn/started de G13 chegam antes da resposta do set; sem a ativação antes do set o turn não seria adotado e o wait_for_start esperaria 30 s."
+    },
+    {
+      "case": "2B-PY13A",
+      "arm": "PY13.B03",
+      "arm_text": "PY13.B03 (turn iniciado antes da ativação não é adotado como turn do goal)",
+      "status": "DISCRIMINATED",
+      "basis": "turn/started de T0 antes da resposta do clear (antes da ativação) não é adotado: logical = G13; o cleared anterior à ativação é aceito (passo 11)."
+    },
+    {
+      "case": "2B-PY13B",
+      "arm": "PY13.B05",
+      "arm_text": "PY13.B05 (thread ativo rejeitado antes da reserva)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: InvalidRequestError antes de clear/set, sem rota remanescente (rotas = [t13b4]) e wire.absent de clear/set. Não observado: que a rejeição ocorre antes da reserva e não por reserva seguida de liberação (nenhuma testemunha da reserva)."
+    },
+    {
+      "case": "2B-PY13B",
+      "arm": "PY13.B06",
+      "arm_text": "PY13.B06 (thread efêmero rejeitado)",
+      "status": "NOT_DISCRIMINATED",
+      "basis": "O thread t13b2 tem ephemeral=true e path=null; a guarda \"ephemeral or path is None\" rejeita pelo path sozinho, então a observação não distingue o ramo do efêmero do ramo do path None (PY13.B07, t13b3, que é discriminado). Mesmo padrão do PY05.B10 (guarda que passa nos dois ramos)."
+    },
+    {
+      "case": "2B-PY13B",
+      "arm": "PY13.B07",
+      "arm_text": "PY13.B07 (path None rejeitado como não persistido)",
+      "status": "DISCRIMINATED",
+      "basis": "t13b3: ephemeral=false e path=null rejeitado com \"must be persisted\"."
+    },
+    {
+      "case": "2B-PY13B",
+      "arm": "PY13.B08",
+      "arm_text": "PY13.B08 (rota já existente: RuntimeError da reserva, fora do try, sem clear nem cleanup)",
+      "status": "DISCRIMINATED",
+      "basis": "RuntimeError da reserva, wire.absent de clear/set, rota original mantida (route_is_gx = true)."
+    },
+    {
+      "case": "2B-PY13C",
+      "arm": "PY13.B09",
+      "arm_text": "PY13.B09 (falha no read: sem rota, sem cleanup)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: InternalRpcError do read, sem pause/interrupt (wire.requests_exact) e sem rota no fim. Não observado: ausência de reserva transitória (reserva seguida de liberação daria a mesma leitura)."
+    },
+    {
+      "case": "2B-PY13C",
+      "arm": "PY13.B10",
+      "arm_text": "PY13.B10 (InvalidRequest antes da ativação: finish e unregister sem cancel)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: InvalidRequestError do clear sem pause/interrupt e rota liberada no fim (unregister). Não observado: o finish do estado (o objeto do estado não é retido pelo caso)."
+    },
+    {
+      "case": "2B-PY13C",
+      "arm": "PY13.B11",
+      "arm_text": "PY13.B11 (outra falha antes da ativação: cancel com pause; sem turn, sem interrupt)",
+      "status": "DISCRIMINATED",
+      "basis": "clear -32603: pause de t13c3 e nenhum interrupt (wire.requests_exact e wire.absent)."
+    },
+    {
+      "case": "2B-PY13C",
+      "arm": "PY13.B12",
+      "arm_text": "PY13.B12 (falha depois do set com turn já iniciado: pause e interrupt desse turn)",
+      "status": "DISCRIMINATED",
+      "basis": "set com resposta inválida (ValidationError) depois do turn/started G5: pause e interrupt de G5."
+    },
+    {
+      "case": "2B-PY13C",
+      "arm": "PY13.B13",
+      "arm_text": "PY13.B13 (timeout ativado com relógio controlado: CodexError, pause e interrupt pelo turn concluído)",
+      "status": "DISCRIMINATED",
+      "basis": "shim de monotonic [1000, 1031]: CodexError de timeout sem espera real, pause e interrupt de GX (turn concluído)."
+    },
+    {
+      "case": "2B-PY13D",
+      "arm": "PY13.B14",
+      "arm_text": "PY13.B14 (start assíncrono com shield: cancelar antes do resultado devolve CancelledError na hora; a operação segue no daemon)",
+      "status": "DISCRIMINATED",
+      "basis": "API_CANCELLED do passo 8 antes do RELEASE_REPLY do set (cadeia de ordem) e a operação segue no daemon (rota t13d1 viva no passo 9, cleanup depois)."
+    },
+    {
+      "case": "2B-PY13D",
+      "arm": "PY13.B15",
+      "arm_text": "PY13.B15 (resultado bem-sucedido depois do cancel: callback no thread codex-goal-start inicia o daemon de cleanup, que pausa, interrompe, finaliza e desregistra)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: callback em codex-goal-start depois do RELEASE_REPLY, daemon codex-goal-start-cleanup (h_stop call 1), pause e interrupt de G13D1 e rota liberada (passo 11). Não observado: o \"finaliza\" (state.finish) — nenhum gancho ou sonda do 2B-PY13D lê o estado; a testemunha state._finished do 2B-PY13E é do caminho que levanta (PY13.B18) e não vale aqui (correção da R1, review-r1/review.json#/arm_discrimination).",
+      "review_correction": "R1: DISCRIMINATED -> PARTIAL_SCOPE"
+    },
+    {
+      "case": "2B-PY13D",
+      "arm": "PY13.B16",
+      "arm_text": "PY13.B16 (resultado com falha depois do cancel: o callback retorna sem cleanup)",
+      "status": "DISCRIMINATED",
+      "basis": "h_cleanup_cb call 2 em codex-goal-start depois do RELEASE_REPLY do erro, h_stop só uma vez (passo 18 = 1), wire.absent de pause/interrupt de t13d2."
+    },
+    {
+      "case": "2B-PY13E",
+      "arm": "PY13.B17",
+      "arm_text": "PY13.B17 (cancelar depois do resultado: o callback roda na hora no thread do loop e inicia o cleanup)",
+      "status": "DISCRIMINATED",
+      "basis": "h_set_result em codex-goal-start antes do CANCEL:9 e h_cleanup_cb em MainThread entre CANCEL:9 e API_CANCELLED:10."
+    },
+    {
+      "case": "2B-PY13E",
+      "arm": "PY13.B18",
+      "arm_text": "PY13.B18 (cleanup que levanta: o finally ainda finaliza e desregistra; a exceção vai ao threading.excepthook)",
+      "status": "DISCRIMINATED",
+      "basis": "fault no cancel_goal_operation: h_stop return com state._finished = true, rota liberada e registro do excepthook do thread de cleanup."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B01",
+      "arm_text": "PY14.B01 (cursor lógico: um id lógico, só o primeiro started, deltas reescritos para o id lógico)",
+      "status": "DISCRIMINATED",
+      "basis": "passos 7-9: um started P1 e deltas x e y com turnId P1 (o y era de P2); o started de P2 não aparece."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B02",
+      "arm_text": "PY14.B02 (notificações de status do goal suprimidas)",
+      "status": "DISCRIMINATED",
+      "basis": "os dois thread/goal/updated não aparecem no stream lógico (passos 7-11)."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B03",
+      "arm_text": "PY14.B03 (turn intermediário failed vira o terminal lógico quando o goal termina em status terminal; duração desde o primeiro start)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: o terminal lógico é o failed de P1 (precedência sobre o completed de P2) com startedAt 100 e durationMs 5000, o que exclui o início do último turn (P2, 106). Não distinguido: \"desde o primeiro start\" contra \"desde o início do próprio turn failed\", porque o turn failed é o primeiro (P1)."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B04",
+      "arm_text": "PY14.B04 (close normal finaliza e desregistra sem cancel_goal)",
+      "status": "DISCRIMINATED",
+      "basis": "close do gs2: s2_finished = true, rota liberada e wire.absent de goal/set e interrupt de t14b."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B05",
+      "arm_text": "PY14.B05 (KeyboardInterrupt no next: cancel_goal (pause e interrupt), close e relança)",
+      "status": "DISCRIMINATED",
+      "basis": "fault raise_on_call 2: KeyboardInterrupt relançado, pause de t14c e interrupt de K1, s3_finished = true."
+    },
+    {
+      "case": "2B-PY14A",
+      "arm": "PY14.B06",
+      "arm_text": "PY14.B06 (CancelledError no __anext__ assíncrono: cancel_goal, aclose e relança)",
+      "status": "DISCRIMINATED",
+      "basis": "$executor-thread-of:N2 estacionado em Queue.get; cancel da task: pause de t14d, interrupt de D1, CancelledError, s4_finished = true, rotas vazias."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B07",
+      "arm_text": "PY14.B07 (prioridade do id: current, depois completed, depois started; ausente não interrompe)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: sem id não interrompe (t14m1), completed sozinho (C2), started sozinho (S3) e current acima dos dois (R4). Não distinguido: completed acima de started sem current (nenhum estado do caso tem os dois sem current)."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B08",
+      "arm_text": "PY14.B08 (primeiro interrupt com sucesso encerra)",
+      "status": "DISCRIMINATED",
+      "basis": "m2-m4: um único interrupt por estado."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B09",
+      "arm_text": "PY14.B09 (InvalidRequest com prefixo diferente não repete)",
+      "status": "DISCRIMINATED",
+      "basis": "m5: InvalidRequest \"turn not found\" sem segundo interrupt."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B10",
+      "arm_text": "PY14.B10 (Exception comum no interrupt é suprimida sem repetir)",
+      "status": "DISCRIMINATED",
+      "basis": "m6: -32603 suprimido (resultado None) sem segundo interrupt."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B11",
+      "arm_text": "PY14.B11 (prefixo certo sem id extraível: fallback para state.current_turn() atualizado pelo rollover)",
+      "status": "DISCRIMINATED",
+      "basis": "m7: fallback para state.current_turn() = N7 (turn/started escrito antes da resposta de erro)."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B12",
+      "arm_text": "PY14.B12 (id extraído igual e verdadeiro bloqueia o fallback mesmo com current diferente)",
+      "status": "DISCRIMINATED",
+      "basis": "m8: \"but found `R8`\" bloqueia o fallback; s8_current_after = N8 e wire.absent do interrupt de N8."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B13",
+      "arm_text": "PY14.B13 (segunda falha suprimida, sem terceira tentativa)",
+      "status": "DISCRIMINATED",
+      "basis": "m9: segundo interrupt (X9) falha e não há terceiro (wire.requests_exact)."
+    },
+    {
+      "case": "2B-PY14B",
+      "arm": "PY14.B14",
+      "arm_text": "PY14.B14 (BaseException em pause_goal não é suprimida e pula o interrupt)",
+      "status": "DISCRIMINATED",
+      "basis": "m10: KeyboardInterrupt do pause (fault call_through_then_raise) sai do cancel e wire.absent do interrupt de t14m10."
+    },
+    {
+      "case": "2B-PY17A",
+      "arm": "PY17.B01",
+      "arm_text": "PY17.B01 (conclusão chegada antes da resposta do start fica pendente e é entregue depois do registro)",
+      "status": "DISCRIMINATED",
+      "basis": "conclusão de L17a escrita antes da resposta; depois do start a fila pendente está vazia e o registro tem L17a; wait devolve a conclusão (perdê-la deixaria o wait bloqueado)."
+    },
+    {
+      "case": "2B-PY17A",
+      "arm": "PY17.B02",
+      "arm_text": "PY17.B02 (wait casa a conclusão tipada do login e desregistra no finally)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: wait devolve a conclusão tipada de L17a e o registro fica vazio depois do retorno normal (registered_after_wait = []). Não distinguido: o \"casa\" (nenhuma notificação diferente chega à fila de L17a, então um wait que devolvesse a primeira notificação daria o mesmo) e o \"no finally\" (só a saída normal é exercida) (correção da R1).",
+      "review_correction": "R1: DISCRIMINATED -> PARTIAL_SCOPE"
+    },
+    {
+      "case": "2B-PY17A",
+      "arm": "PY17.B03",
+      "arm_text": "PY17.B03 (variante device code)",
+      "status": "DISCRIMINATED",
+      "basis": "login_chatgpt_device_code: handle com verification_url e user_code e wait com success false."
+    },
+    {
+      "case": "2B-PY17A",
+      "arm": "PY17.B04",
+      "arm_text": "PY17.B04 (variante inesperada levanta RuntimeError e não registra fila)",
+      "status": "PARTIAL_SCOPE",
+      "basis": "Observado: RuntimeError \"unexpected ChatGPT login response: ApiKeyLoginAccountResponse(\". Vácuo: \"não registra fila\", porque a resposta apiKey não tem loginId com que registrar (registered_after_unexpected = [] seria igual em qualquer variante). Ressalva da R1 para o BIND: a frase geral \"variante inesperada não registra fila\" é falsa para a variante device code no login_chatgpt (account_login_start registra a fila de ChatgptDeviceCodeLoginAccountResponse antes do RuntimeError de start_chatgpt_login); o caso só exerce a apiKey; o BIND não generaliza."
+    },
+    {
+      "case": "2B-PY17A",
+      "arm": "PY17.B05",
+      "arm_text": "PY17.B05 (conclusão de login desconhecido fica retida na fila pendente)",
+      "status": "DISCRIMINATED",
+      "basis": "conclusão de L17z sem registro retida em _pending_login_notifications (probe.until e pending_unknown = [L17z])."
+    },
+    {
+      "case": "2B-PY17B",
+      "arm": "PY17.B06",
+      "arm_text": "PY17.B06 (cancel é RPC separado; o ACK não desregistra nem entrega terminal)",
+      "status": "DISCRIMINATED",
+      "basis": "cancel devolve {status: canceled}; o registro segue com L17c e o wait recebe a conclusão posterior com error canceled."
+    },
+    {
+      "case": "2B-PY17B",
+      "arm": "PY17.B07",
+      "arm_text": "PY17.B07 (conclusão posterior ao cancel ainda chega à fila do handle)",
+      "status": "DISCRIMINATED",
+      "basis": "wait depois do cancel devolve a conclusão escrita depois da resposta do cancel."
+    },
+    {
+      "case": "2B-PY17B",
+      "arm": "PY17.B08",
+      "arm_text": "PY17.B08 (cancel de login desconhecido devolve notFound sem registrar nada)",
+      "status": "DISCRIMINATED",
+      "basis": "cancel de L17x devolve notFound e registered_end = []."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B01",
+      "arm_text": "PY18.B01 (resposta por alias e por nome de campo, com populate_by_name)",
+      "status": "DISCRIMINATED",
+      "basis": "n=1 por alias e n=2 por nome de campo dão o mesmo dump."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B02",
+      "arm_text": "PY18.B02 (chave extra ignorada: some no dump e não vira atributo)",
+      "status": "DISCRIMINATED",
+      "basis": "cvgExtra fora do dump, vars_has false e __pydantic_extra__ None."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B03",
+      "arm_text": "PY18.B03 (campo obrigatório ausente: ValidationError missing com loc pelo alias)",
+      "status": "DISCRIMINATED",
+      "basis": "missing com loc [goal, tokensUsed] (alias)."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B04",
+      "arm_text": "PY18.B04 (null em obrigatório não anulável: int_type)",
+      "status": "DISCRIMINATED",
+      "basis": "int_type com loc [goal, tokensUsed]."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B05",
+      "arm_text": "PY18.B05 (anulável opcional aceita null; default None aparece no dump)",
+      "status": "DISCRIMINATED",
+      "basis": "tokenBudget null aceito (n=5) e default None no dump (n=1, campo ausente)."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B06",
+      "arm_text": "PY18.B06 (anulável obrigatório ausente falha; null passa)",
+      "status": "DISCRIMINATED",
+      "basis": "email ausente falha (n=7) e email null passa (n=6)."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B07",
+      "arm_text": "PY18.B07 (union RootModel escolhida pelo literal type; default não None preenchido)",
+      "status": "DISCRIMINATED",
+      "basis": "ChatgptAccount e AmazonBedrockAccount pelo type, usesCodexManagedCredentials false preenchido."
+    },
+    {
+      "case": "2B-PY18A",
+      "arm": "PY18.B08",
+      "arm_text": "PY18.B08 (union sem membro válido falha)",
+      "status": "DISCRIMINATED",
+      "basis": "type unknownKind: literal_error."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B09",
+      "arm_text": "PY18.B09 (params de modelo: model_dump by_alias, exclude_none, json; ordem dos campos da declaração)",
+      "status": "DISCRIMINATED",
+      "basis": "wire.emitted_lines_exact: bytes da linha com a ordem dos campos da declaração e sem None."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B10",
+      "arm_text": "PY18.B10 (construção por nome e por alias)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 4 por nome de campo (approval_policy) e passo 5 por alias (modelProvider)."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B11",
+      "arm_text": "PY18.B11 (enum e RootModel serializados pelo valor)",
+      "status": "DISCRIMINATED",
+      "basis": "sandbox read-only (enum), approvalPolicy never (RootModel) e status active (enum do thread_goal_set) pelo valor."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B12",
+      "arm_text": "PY18.B12 (params dict passa como está, inclusive null; None vira {})",
+      "status": "DISCRIMINATED",
+      "basis": "dict com null passa como está (passo 6) e None vira {} (passo 7)."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B13",
+      "arm_text": "PY18.B13 (threadId e input explícitos vencem o dump mantendo a posição da chave)",
+      "status": "DISCRIMINATED",
+      "basis": "turn/start: threadId t18 e input explícitos nas posições do dump (bytes exatos)."
+    },
+    {
+      "case": "2B-PY18B",
+      "arm": "PY18.B14",
+      "arm_text": "PY18.B14 (linha emitida: json.dumps com separadores padrão e ensure_ascii)",
+      "status": "DISCRIMINATED",
+      "basis": "separadores \", \" e \": \" e ação como \\u00e7\\u00e3o nos bytes emitidos."
+    },
+    {
+      "case": "2B-PY18C",
+      "arm": "PY18.B15",
+      "arm_text": "PY18.B15 (notificação conhecida validada por alias e por nome)",
+      "status": "DISCRIMINATED",
+      "basis": "passos 5 e 6: threadId e thread_id dão ThreadGoalClearedNotification."
+    },
+    {
+      "case": "2B-PY18C",
+      "arm": "PY18.B16",
+      "arm_text": "PY18.B16 (extra ignorado na notificação)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 7: dump só com threadId."
+    },
+    {
+      "case": "2B-PY18C",
+      "arm": "PY18.B17",
+      "arm_text": "PY18.B17 (falha de validação cai em UnknownNotification com o dict cru, ou {} se params não é objeto)",
+      "status": "DISCRIMINATED",
+      "basis": "passos 8, 9 e 11: UnknownNotification com {} (obrigatório ausente), {threadId: null} (dict cru) e {} (params lista)."
+    },
+    {
+      "case": "2B-PY18C",
+      "arm": "PY18.B18",
+      "arm_text": "PY18.B18 (default None de campo opcional na notificação tipada)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 10: loginId ausente vira null no dump tipado."
+    },
+    {
+      "case": "2B-PY18C",
+      "arm": "PY18.B19",
+      "arm_text": "PY18.B19 (login completed inválido cai em Unknown e é roteado pela loginId crua para a fila pendente)",
+      "status": "DISCRIMINATED",
+      "basis": "success inválido: UnknownNotification na fila pendente de L18c (pending_logins e pending_class)."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B20",
+      "arm_text": "PY18.B20 (RootModel aninhado: status, cwd e source do Thread pelo caminho real thread/read)",
+      "status": "DISCRIMINATED",
+      "basis": "sondas: SystemErrorThreadStatus, AbsolutePathBuf (/work) e SessionSourceValue pelo thread/read real."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B21",
+      "arm_text": "PY18.B21 (default não validado: itemsView e historyMode ficam str cru, não enum)",
+      "status": "DISCRIMINATED",
+      "basis": "history_mode e items_view com type_name str (legacy e full)."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B22",
+      "arm_text": "PY18.B22 (union de ThreadItem resolvida pelo literal)",
+      "status": "DISCRIMINATED",
+      "basis": "item[0].root = AgentMessageThreadItem."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B23",
+      "arm_text": "PY18.B23 (extra='forbid' num membro da union faz a union falhar com extra_forbidden)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 20: extra_forbidden em cvgExtra."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B24",
+      "arm_text": "PY18.B24 (bool | None = False: ausente vira False, null fica None e some com exclude_none)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 19: ausentes viram false; passos 22/23: request_permissions null some com exclude_none e aparece como null sem ele."
+    },
+    {
+      "case": "2B-PY18D",
+      "arm": "PY18.B25",
+      "arm_text": "PY18.B25 (construção por nome com enum em str e dump by_alias exclude_none)",
+      "status": "DISCRIMINATED",
+      "basis": "passo 25: {status: paused, threadId: t}."
+    }
+  ],
+  "bind_instruction": "O BIND do 2B-2 lê esta tabela: braço NOT_DISCRIMINATED fica não discriminado; PARTIAL_SCOPE leva só a parte observada, com a parte não observada em not_observed. Os desfechos dos casos não mudam.",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "written_at": "2026-10-19T12:48:00.274464+00:00",
+  "review": {
+    "r1": "review-r1/review.json#/arm_discrimination",
+    "agreed": 75,
+    "corrected": ["PY13.B15", "PY17.B02"],
+    "note_added": ["PY17.B04"],
+    "pre_review_draft_sha256": "185a94df30aa63fc9d25f595083b627783bac7146406559db0eca82060cdc402"
+  },
+  "deviation": "DV8 (state.json): checagem pedida antes do primeiro serviço feita depois dos 18 slots, porque o carry-over do BIND 2B-1 chegou ao executor depois deles."
+}

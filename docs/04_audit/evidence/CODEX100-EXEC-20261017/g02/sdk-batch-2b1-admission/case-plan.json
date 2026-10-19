@@ -1,0 +1,1682 @@
+{
+  "kind": "CASE_PLAN_FROM_SUPERVISOR_TABLES",
+  "cases": {
+    "2B1-CTRL01": {
+      "language": "python",
+      "kind": "control",
+      "driver": "control-client.py (own constant client, no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "control.peer_answered_unscripted",
+          "control.client_not_blocked",
+          "wire.no_turn_interrupt",
+          "capture.case_input_frozen_bytes",
+          "peer.before_reply_order_witnessed"
+        ],
+        "classes": {
+          "control.peer_answered_unscripted": "peer_or_capture_sanity",
+          "control.client_not_blocked": "peer_or_capture_sanity",
+          "wire.no_turn_interrupt": "client",
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "peer.before_reply_order_witnessed": "peer_or_capture_sanity"
+        },
+        "known_bad": {
+          "text": "O turn/interrupt sem script do cliente de controle é o known-bad do SDKPY07; deve ser julgado MISMATCH por wire.no_turn_interrupt.",
+          "judged_by": [
+            "wire.no_turn_interrupt"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY01A": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "CLIENT_TERMINATED_SIGTERM"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "hook.events_exact",
+          "hook.code_identity",
+          "proc.termination_exact",
+          "proc.spawn_count_exact",
+          "proc.witness_recorded"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "hook.events_exact": "client",
+          "hook.code_identity": "peer_or_capture_sanity",
+          "proc.termination_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup"
+        },
+        "known_bad": {
+          "text": "Propagar sem fechar, fechar só depois de propagar, ou deixar o processo vivo; tratar init síncrono como preguiçoso.",
+          "judged_by": [
+            "hook.events_exact",
+            "proc.termination_exact",
+            "api.steps_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY01B": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 3: gate [('zero_spawn',)] -> actions [('STEP_RELEASE', [])]",
+        "step 7: gate [('held', 'initialize', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "3": {
+          "gate": [
+            [
+              "zero_spawn"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "7": {
+          "gate": [
+            [
+              "held",
+              "initialize",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "6": {
+          "api": "loop.yield_until",
+          "class": "HARNESS_PRECONDITION"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_aclose",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "wire.order_constraints",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.spawn_count_exact",
+          "barrier.witnesses_in_order",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "wire.order_constraints": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Inicializar duas vezes, subir processo no construtor, ou marcar inicializado antes da validação.",
+          "judged_by": [
+            "wire.requests_exact",
+            "proc.spawn_count_exact",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY01C": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 3: gate [('held', 'initialize', {})] -> actions [('STEP_RELEASE', [])]",
+        "step 10: gate [('driver_cancelled', 5)] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [('received', 'initialized', 'notification', 1)])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "3": {
+          "gate": [
+            [
+              "held",
+              "initialize",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "10": {
+          "gate": [
+            [
+              "driver_cancelled",
+              5
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              [
+                [
+                  "received",
+                  "initialized",
+                  "notification",
+                  1
+                ]
+              ]
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_aclose",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "wire.order_constraints",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.spawn_count_exact",
+          "proc.termination_exact",
+          "barrier.witnesses_in_order",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "wire.order_constraints": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.termination_exact": "client",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Prometer limpeza incondicional no cancelamento (fechar o processo), deixar o lock preso, ou marcar inicializado pelo worker órfão.",
+          "judged_by": [
+            "probe.values_exact",
+            "proc.termination_exact",
+            "wire.requests_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY01D": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "CLIENT_TERMINATED_SIGTERM"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "hook.events_exact",
+          "hook.code_identity",
+          "proc.termination_exact",
+          "proc.spawn_count_exact",
+          "proc.witness_recorded"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "hook.events_exact": "client",
+          "hook.code_identity": "peer_or_capture_sanity",
+          "proc.termination_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup"
+        },
+        "known_bad": {
+          "text": "Propagar sem fechar ou sem resetar, ou enviar o model/list depois de uma inicialização inválida.",
+          "judged_by": [
+            "hook.events_exact",
+            "proc.termination_exact",
+            "probe.values_exact",
+            "wire.absent"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY02A": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "12": {
+          "api": "thread.join",
+          "class": "CLIENT_EFFECT"
+        }
+      },
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "CLIENT_TERMINATED_SIGTERM"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.argv_exact",
+          "proc.env_exact",
+          "proc.cwd_exact",
+          "proc.termination_exact",
+          "proc.spawn_count_exact",
+          "proc.witness_recorded",
+          "barrier.witnesses_in_order"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.argv_exact": "client",
+          "proc.env_exact": "client",
+          "proc.cwd_exact": "client",
+          "proc.termination_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup"
+        },
+        "known_bad": {
+          "text": "Acrescentar --config/app-server ao override, prefixar PATH, ignorar cwd, ou afirmar zero processo sobrevivente só pelo código do close.",
+          "judged_by": [
+            "proc.argv_exact",
+            "proc.env_exact",
+            "proc.cwd_exact",
+            "proc.termination_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY02B": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 9: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "9": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.argv_exact",
+          "env.adapter_sandbox_env_only",
+          "proc.env_exact",
+          "proc.cwd_exact",
+          "proc.spawn_count_exact",
+          "proc.no_extra_subprocess",
+          "proc.witness_recorded",
+          "barrier.witnesses_in_order",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.argv_exact": "client",
+          "env.adapter_sandbox_env_only": "client",
+          "proc.env_exact": "client",
+          "proc.cwd_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.no_extra_subprocess": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup"
+        },
+        "known_bad": {
+          "text": "Rodar generate-json-schema sem necessidade, prefixar PATH com codex_bin explícito, ou omitir/reordenar --config.",
+          "judged_by": [
+            "proc.argv_exact",
+            "proc.no_extra_subprocess",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY02K": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 9: gate [('adapter_killed',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "9": {
+          "gate": [
+            [
+              "adapter_killed"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "CLIENT_KILLED_SIGKILL"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.termination_exact",
+          "proc.spawn_count_exact",
+          "proc.witness_recorded",
+          "proc.adapter_fault_fired",
+          "barrier.witnesses_in_order",
+          "timing.recorded"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.termination_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup",
+          "proc.adapter_fault_fired": "peer_or_capture_sanity",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "timing.recorded": "informational"
+        },
+        "known_bad": {
+          "text": "Afirmar processo colhido ou zero sobreviventes logo depois do close(), ou que o close espera depois do kill.",
+          "judged_by": [
+            "probe.values_exact",
+            "proc.termination_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY05X": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.notifications_exact",
+          "api.steps_exact",
+          "probe.values_exact",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.notifications_exact": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Checar versão em todo pedido, bloquear campos None, aceitar 0.151.0-alpha como 0.151.0, ou escrever o pedido rejeitado.",
+          "judged_by": [
+            "api.steps_exact",
+            "wire.requests_exact",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY08X": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {
+        "12": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "15": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "17": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        },
+        "18": {
+          "api": "worker.still_parked",
+          "class": "CLIENT_EFFECT"
+        }
+      },
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "api.steps_exact",
+          "consumer.results_exact",
+          "identity.groups_exact",
+          "barrier.witnesses_in_order",
+          "peer.exit_after_script_witnessed",
+          "peer.no_unscripted_request"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "api.steps_exact": "client",
+          "consumer.results_exact": "client",
+          "identity.groups_exact": "client",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.exit_after_script_witnessed": "peer_or_capture_sanity",
+          "peer.no_unscripted_request": "client"
+        },
+        "known_bad": {
+          "text": "Afirmar que a falha de transporte acorda todo consumidor de qualquer fila, ou que as checagens de fila provam ausência de bloqueio.",
+          "judged_by": [
+            "consumer.results_exact",
+            "identity.groups_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY10X": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('held', 'turn/start', {'threadId': 't10a'})] -> actions [('STEP_RELEASE', [])]",
+        "step 7: gate [] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "step 10: gate [('held', 'synthetic/slow', {})] -> actions [('STEP_RELEASE', [])]",
+        "step 15: gate [('driver_cancelled', 14)] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [('hook', 'h_request_ret', {'arg:method': 'synthetic/slow'})])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "held",
+              "turn/start",
+              {
+                "threadId": "t10a"
+              }
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "7": {
+          "gate": [],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "10": {
+          "gate": [
+            [
+              "held",
+              "synthetic/slow",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "15": {
+          "gate": [
+            [
+              "driver_cancelled",
+              14
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              [
+                [
+                  "hook",
+                  "h_request_ret",
+                  {
+                    "arg:method": "synthetic/slow"
+                  }
+                ]
+              ]
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "7": {
+          "api": "loop.block_release_wait_cancel",
+          "class": "HARNESS_PRECONDITION"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_aclose",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "hook.events_exact",
+          "hook.code_identity",
+          "barrier.witnesses_in_order",
+          "excepthook.records_exact",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "hook.events_exact": "client",
+          "hook.code_identity": "peer_or_capture_sanity",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "excepthook.records_exact": "client",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Tratar cancelamento ou close do stream como interrupção remota; esperar o worker do to_thread parar no cancel; não fechar a subscription quando o resultado já existe.",
+          "judged_by": [
+            "hook.events_exact",
+            "wire.absent",
+            "api.steps_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY11A": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "peer.before_reply_order_witnessed",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "peer.before_reply_order_witnessed": "peer_or_capture_sanity",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Registrar só depois da resposta e perder eventos adiantados.",
+          "judged_by": [
+            "api.steps_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY11B": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('held', 'turn/start', {'input': [{'type': 'text', 'text': 'first'}]})] -> actions [('STEP_RELEASE', [])]",
+        "step 9: gate [] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "held",
+              "turn/start",
+              {
+                "input": [
+                  {
+                    "type": "text",
+                    "text": "first"
+                  }
+                ]
+              }
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "9": {
+          "gate": [],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "8": {
+          "api": "worker.parked",
+          "class": "CLIENT_EFFECT"
+        },
+        "10": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.order_constraints",
+          "api.steps_exact",
+          "consumer.results_exact",
+          "probe.values_exact",
+          "barrier.witnesses_in_order",
+          "peer.before_reply_order_witnessed",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.order_constraints": "client",
+          "api.steps_exact": "client",
+          "consumer.results_exact": "client",
+          "probe.values_exact": "client",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.before_reply_order_witnessed": "peer_or_capture_sanity",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Deixar dois turn/start do mesmo thread em voo, reproduzir histórico para o segundo handle, ou inferir junção remota pelo nome do método.",
+          "judged_by": [
+            "wire.order_constraints",
+            "api.steps_exact",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY11C": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "wire.absent",
+          "api.steps_exact",
+          "probe.values_exact",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "wire.absent": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Escrever o turn/start com goal ativo, ou bloquear threads distintos.",
+          "judged_by": [
+            "wire.absent",
+            "api.steps_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY12A": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {
+        "12": {
+          "api": "probe.until",
+          "class": "HARNESS_PRECONDITION"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "api.steps_exact",
+          "probe.values_exact",
+          "peer.before_reply_order_witnessed",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "peer.before_reply_order_witnessed": "peer_or_capture_sanity",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Prometer histórico completo para a nova assinatura, podar além do menor cursor, ou contar o cursor em memória como replay durável.",
+          "judged_by": [
+            "api.steps_exact",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "2B-PY12B": {
+      "language": "python",
+      "kind": "sdk",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {
+        "11": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "13": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        },
+        "17": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "19": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        },
+        "23": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "wire.client_lines_complete_json",
+          "wire.initialize_handshake",
+          "wire.requests_exact",
+          "api.steps_exact",
+          "consumer.results_exact",
+          "identity.groups_exact",
+          "probe.values_exact",
+          "barrier.witnesses_in_order",
+          "peer.no_unscripted_request",
+          "wire.eof_bounded_interval",
+          "env.adapter_sandbox_env_only"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "wire.client_lines_complete_json": "client",
+          "wire.initialize_handshake": "client",
+          "wire.requests_exact": "client",
+          "api.steps_exact": "client",
+          "consumer.results_exact": "client",
+          "identity.groups_exact": "client",
+          "probe.values_exact": "client",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "peer.no_unscripted_request": "client",
+          "wire.eof_bounded_interval": "capture_order_or_cleanup",
+          "env.adapter_sandbox_env_only": "client"
+        },
+        "known_bad": {
+          "text": "Acordar só um consumidor por evento, ou fechar todos os handles no unregister de baixo nível.",
+          "judged_by": [
+            "consumer.results_exact",
+            "identity.groups_exact",
+            "probe.values_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-2b/cases-2b-1.json#/composition",
+        "evaluator": "acceptance-r4-2b1 (DX100-G02 batch 2B-1; frozen predicate table and composition of cases-2b-1.json; E2B-01..E2B-14)"
+      }
+    },
+    "DIAG-PY-RPC": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "ABORT_NOW->driver after peer REQUEST_HELD and the held line fully committed by the adapter",
+        "RELEASE_REPLY->peer after driver API_CANCELLED",
+        "FINISH_PEER->peer after driver LATE_REPLY_OBSERVED and peer STDIN_EOF",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-STAGE": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-ASYNC": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('held', 'initialize', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "step 10: gate [('held', 'own/slow', {})] -> actions [('STEP_RELEASE', [])]",
+        "step 13: gate [('driver_cancelled', 12)] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [('hook', 'h_req_ret', {'arg:method': 'own/slow'})])]",
+        "step 15: gate [('held', 'own/start', {})] -> actions [('STEP_RELEASE', [])]",
+        "step 16: gate [] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "held",
+              "initialize",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "10": {
+          "gate": [
+            [
+              "held",
+              "own/slow",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "13": {
+          "gate": [
+            [
+              "driver_cancelled",
+              12
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              [
+                [
+                  "hook",
+                  "h_req_ret",
+                  {
+                    "arg:method": "own/slow"
+                  }
+                ]
+              ]
+            ]
+          ]
+        },
+        "15": {
+          "gate": [
+            [
+              "held",
+              "own/start",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        },
+        "16": {
+          "gate": [],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "5": {
+          "api": "loop.yield_until",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "16": {
+          "api": "loop.block_release_wait_cancel",
+          "class": "HARNESS_PRECONDITION"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_aclose",
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-BARRIER": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 11: gate [('held', 'own/held', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "11": {
+          "gate": [
+            [
+              "held",
+              "own/held",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "9": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION"
+        },
+        "12": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        },
+        "15": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        },
+        "20": {
+          "api": "excepthook.wait",
+          "class": "HARNESS_PRECONDITION"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('held', 'own/heldearly', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "held",
+              "own/heldearly",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "7": {
+          "api": "worker.join",
+          "class": "CLIENT_EFFECT"
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-CLOSETERM": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 5: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "5": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-PROCWITNESS": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 4: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "4": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-KILLWAIT": {
+      "language": "python",
+      "kind": "diag",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 10: gate [('adapter_killed',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "10": {
+          "gate": [
+            [
+              "adapter_killed"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    }
+  },
+  "diagnostics": {
+    "DIAG-PY-RPC": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-STAGE": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-ASYNC": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-BARRIER": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-CLOSETERM": {
+      "expect": "SIGTERM_CANDIDATE"
+    },
+    "DIAG-PY-PROCWITNESS": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-KILLWAIT": {
+      "expect": "KILLED_CANDIDATE"
+    }
+  },
+  "admission_diagnostics": [
+    "DIAG-PY-RPC",
+    "DIAG-PY-STAGE",
+    "DIAG-PY-UNSCRIPTED",
+    "DIAG-PY-ASYNC",
+    "DIAG-PY-BARRIER",
+    "DIAG-PY-BEFOREREPLY",
+    "DIAG-PY-CLOSETERM",
+    "DIAG-PY-PROCWITNESS",
+    "DIAG-PY-KILLWAIT"
+  ],
+  "conditional_diags": {
+    "DIAG-PY-PROCWITNESS": [
+      "procwitness_slots",
+      "killwait_slot"
+    ],
+    "DIAG-PY-KILLWAIT": [
+      "killwait_slot"
+    ]
+  },
+  "conditional_slots": {
+    "2B-PY02A": "procwitness_slots",
+    "2B-PY02B": "procwitness_slots",
+    "2B-PY02K": "killwait_slot"
+  }
+}

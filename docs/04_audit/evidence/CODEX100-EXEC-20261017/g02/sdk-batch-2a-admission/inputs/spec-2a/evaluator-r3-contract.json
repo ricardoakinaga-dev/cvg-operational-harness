@@ -1,0 +1,175 @@
+{
+  "kind": "EVALUATOR_R3_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A",
+  "base": {
+    "path": "../sdk-admission/python/acceptance.py",
+    "sha256": "d4a3c06bfde14f8c419d0e4eab8121b71f36c42c0902fc26e7ea2321a9e32d6d"
+  },
+  "clauses": [
+    {
+      "id": "R3-01",
+      "carry_over": "R2-F01 (admissão)",
+      "rule": "Predicados de ordem entre processos são provas unilaterais: a condição usa <= no mesmo CLOCK_MONOTONIC (por exemplo, mono_ns do RAW_READ do initialized no adapter <= mono_ns do API_ERROR no driver). Se valer, o predicado passa. Se não valer, o resultado do caso é INCONCLUSIVE ou INVALID_CAPTURE, NUNCA MISMATCH. O avaliador r3 trata essa classe à parte da regra atual de acceptance.py:537-540, que marca MISMATCH para qualquer predicado falho.",
+      "applies_in_2A": [],
+      "note_2A": "Nenhum predicado do lote 2A é order_unilateral. A ordem kill-antes-de-rm do 2A-TS04 é só informativa; o rm é julgado pela listagem do driver depois que return() resolve.",
+      "applies_later": "wire.initialized_before_guard em reexecuções de casos PY05; fecha só a parte de ordem do R1-F05"
+    },
+    {
+      "id": "R3-02",
+      "carry_over": "R2-F02 (admissão)",
+      "rule": "O goal path e o interrupt do SDKPY07 ficam alcançáveis como MISMATCH pelo peer v2 e pelo pause_reply (2A-PY10R); a prova de alcance em serviço é a vaga 2A-CTRL01."
+    },
+    {
+      "id": "R3-03",
+      "carry_over": "R2-F03 (admissão)",
+      "rule": "A errata da unidade de execução cita só IDs alcançáveis (por exemplo acceptance.SDKPY07.known_bad_closed_false_mismatch). A errata.json da admissão permanece congelada; a correção da citação fica registrada na unidade nova."
+    },
+    {
+      "id": "R3-04",
+      "carry_over": "R2-F04 (admissão) e R2-F04 (ligação)",
+      "rule": "reevaluate: docstring e código alinhados; comparação por predicado com o acceptance de serviço (id, ok e detalhe normalizado por JSON); sem o documento r3, saída 1 com mensagem explícita; autoteste para os dois caminhos. client_fact_only, parity_receipt e functional_receipts levam o rótulo da versão do avaliador."
+    },
+    {
+      "id": "R3-05",
+      "rule": "peer.no_unscripted_request passa a julgar o cliente: um pedido sem script respondido pelo peer v2, num caso cujo known-bad o proíbe, é MISMATCH. Se o cliente bloquear mesmo assim, o caso é INVALID_CAPTURE por prazo (fail-closed), nunca PASS."
+    },
+    {
+      "id": "R3-06",
+      "rule": "A classe de juiz decide o desfecho de um predicado falho, e a composição abaixo decide o caso quando há falhas de classes diferentes: client -> MISMATCH só se não houver falha decisiva de outra classe; peer_or_capture_sanity e capture_order_or_cleanup -> INVALID_CAPTURE, mesmo com falhas client no mesmo caso; informational nunca decide; order_unilateral -> INCONCLUSIVE (R3-01). A classe e o oráculo de cada predicado estão congelados em cases-2a.json#/predicate_table; a implementação não reclassifica.",
+      "frozen_table": "cases-2a.json#/predicate_table",
+      "composition": {
+        "rule_order": [
+          {
+            "n": 1,
+            "when": "forma de captura INVALID_CAPTURE",
+            "outcome": "INVALID_CAPTURE",
+            "note": "como acceptance.py:531-534; INCONCLUSIVE só por prazo nos casos com inconclusive_on_deadline (R3-08)"
+          },
+          {
+            "n": 2,
+            "when": "forma de captura não está em accepted_capture_forms do caso",
+            "outcome": "MISMATCH",
+            "note": "como acceptance.py:535-537"
+          },
+          {
+            "n": 3,
+            "when": "o avaliador falhou (predicado implícito evaluation_completed=false)",
+            "outcome": "INVALID_CAPTURE"
+          },
+          {
+            "n": 4,
+            "when": "alguma falha de predicado peer_or_capture_sanity ou capture_order_or_cleanup",
+            "outcome": "INVALID_CAPTURE",
+            "note": "as falhas client do mesmo caso ficam registradas e não decidem"
+          },
+          {
+            "n": 5,
+            "when": "alguma falha de predicado order_unilateral",
+            "outcome": "INCONCLUSIVE",
+            "note": "nenhum no lote 2A (R3-01)"
+          },
+          {
+            "n": 6,
+            "when": "há falhas e todas são da classe client",
+            "outcome": "MISMATCH"
+          },
+          {
+            "n": 7,
+            "when": "nenhuma falha decisiva",
+            "outcome": "PASS_CLIENT_OBSERVATION",
+            "note": "predicados informational nunca decidem"
+          }
+        ],
+        "implicit_predicates": {
+          "evaluation_completed": "regra 3",
+          "capture_form_accepted": "regras 1 e 2"
+        },
+        "invariant": "Uma falha de sanidade, captura, ordem ou do próprio avaliador nunca produz MISMATCH; MISMATCH só sai da regra 2 ou da regra 6."
+      },
+      "reclassifications_vs_admission": {
+        "base": {
+          "path": "../sdk-admission/python/acceptance.py",
+          "sha256": "d4a3c06bfde14f8c419d0e4eab8121b71f36c42c0902fc26e7ea2321a9e32d6d"
+        },
+        "rule": "Diferenças deliberadas entre a tabela congelada e o judges() da admissão; a tabela prevalece.",
+        "items": [
+          {
+            "predicate": "abort.api_outcome_recorded",
+            "admission_judges": "client",
+            "frozen_class": "capture_order_or_cleanup"
+          },
+          {
+            "predicate": "abort.os_witness_recorded",
+            "admission_judges": "client",
+            "frozen_class": "capture_order_or_cleanup"
+          },
+          {
+            "predicate": "cleanup.child_terminated_by_SIGTERM",
+            "admission_judges": "capture_order_or_cleanup",
+            "frozen_class": "client"
+          },
+          {
+            "predicate": "control.client_not_blocked",
+            "admission_judges": "client",
+            "frozen_class": "peer_or_capture_sanity"
+          },
+          {
+            "predicate": "control.peer_answered_unscripted",
+            "admission_judges": "client",
+            "frozen_class": "peer_or_capture_sanity"
+          },
+          {
+            "predicate": "peer.exit_after_script_witnessed",
+            "admission_judges": "client",
+            "frozen_class": "peer_or_capture_sanity"
+          },
+          {
+            "predicate": "peer.no_unscripted_request",
+            "admission_judges": "peer_or_capture_sanity",
+            "frozen_class": "client"
+          },
+          {
+            "predicate": "tmp.inotify_informational",
+            "admission_judges": "client",
+            "frozen_class": "informational"
+          },
+          {
+            "predicate": "wire.chunk_boundaries_recorded",
+            "admission_judges": "client",
+            "frozen_class": "informational"
+          },
+          {
+            "predicate": "wire.fixture_chunks_relayed",
+            "admission_judges": "client",
+            "frozen_class": "peer_or_capture_sanity"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R3-07",
+      "rule": "A vaga CONTROL roda antes dos casos SDK e deve terminar MISMATCH. PASS ou INVALID_CAPTURE na CONTROL para a unidade antes de qualquer caso SDK. O resultado da CONTROL nunca conta como observação do SDK."
+    },
+    {
+      "id": "R3-08",
+      "rule": "INCONCLUSIVE só em duas situações: (a) prazo, nos casos com inconclusive_on_deadline=true (2A-TS10 e 2A-TS12, além do SDKTS10 existente); (b) falha de predicado order_unilateral (R3-01), que não existe no lote 2A. No 2A-TS10, PASS exige exatamente uma das formas A ou B, a forma observada é registrada, e a forma C (prazo) é INCONCLUSIVE. Não há outro caminho para INCONCLUSIVE."
+    },
+    {
+      "id": "R3-09",
+      "rule": "Expectativas congeladas em cases-2a.json não mudam depois da execução. Divergência entre o valor capturado e o congelado é MISMATCH preservado, com bytes brutos."
+    },
+    {
+      "id": "R3-11",
+      "rule": "Todo predicado listado em known_bad.judged_by é da classe client, para que o known-bad, quando ocorrer, seja MISMATCH. Conferido pelo validador da especificação."
+    },
+    {
+      "id": "R3-12",
+      "rule": "A implementação usa exatamente a tabela congelada: um autoteste compara o mapa de classes do avaliador com cases-2a.json#/predicate_table antes do primeiro serviço, só para os predicados de caso (evaluation_completed e capture_form_accepted seguem a composição do R3-06); divergência para a unidade. O mesmo autoteste roda a composição com capturas sintéticas de co-falha: sanidade + client -> INVALID_CAPTURE; captura/ordem + client -> INVALID_CAPTURE; evaluation_completed falho -> INVALID_CAPTURE; só client -> MISMATCH; só informational -> PASS_CLIENT_OBSERVATION."
+    },
+    {
+      "id": "R3-10",
+      "rule": "Novas formas de captura reconhecidas: NO_CHILD (spawn falhou, nenhum processo do adapter na unidade) e PREREADY_SIGNAL_TERMINATION (adapter terminado por sinal antes do READY). Só valem nos casos que as declaram em accepted_capture_forms."
+    }
+  ],
+  "never": "Nenhuma regra produz recibo funcional ou crédito de paridade."
+}

@@ -1,0 +1,233 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 2,
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T04:52:17-03:00",
+  "subject": "review-freeze-r2.json",
+  "subject_sha256": "d64e6a10525475ad037630e095f2717ddf41575796a787bb3c039a36970af5b7",
+  "subject_hash_check": {
+    "before": "ok (sha do freeze conferido; 23/23 arquivos com bytes e sha256 iguais aos do freeze; as 19 preimagens de archives/r1-preimages/ batem com o review-freeze-r1.json)",
+    "after": "ok (sha do freeze inalterado; 23/23 e 19/19 iguais; nenhuma escrita na pasta da unidade)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 1 P2, 7 P3",
+  "mandatory_findings": ["R2-F01"],
+  "r1_findings_status": [
+    {
+      "id": "R1-F01",
+      "status": "RESOLVED",
+      "note": "O 2B-PY13E agora tem hook.wait h_stop (11), thread.join pelo nome codex-goal-start-cleanup (12), excepthook.wait {count 1} (13), probe (14) e snapshot (15). expected.api passou para o passo 15 e as referências CANCEL:9 e API_CANCELLED:10 continuam válidas. O contrato da CAP-2B-CONC-BARRIER (capability-contracts-2b.json:56-57), o autoteste e o DIAG-PY-BARRIER foram atualizados, e o E2B-14 manda estouro de espera para INVALID_CAPTURE. Só o excepthook.wait já torna o snapshot determinístico. Fica uma ressalva sobre o thread.join pelo nome, em R2-F02."
+    },
+    {
+      "id": "R1-F02",
+      "status": "RESOLVED",
+      "note": "excepthook.install/wait/snapshot passaram para a CAP-2B-CONC-BARRIER (D2B-04, nos dois sub-lotes), e o DIAG-PY-BARRIER está no orçamento do 2B-1. A CAP-2B-FAULT-CUT só faz referência ao registrador. O D2B-14 do 2B-1 inclui 15. O 2B-PY02K saiu de fault.fired_as_declared e foi para proc.adapter_fault_fired (PROC-WITNESS). Agora a infra é derivada, e o validador cobra o DIAG de cada capacidade derivada no orçamento do sub-lote. Confirmei com uma sonda numa cópia: fault.install num caso do 2B-1 é recusado por 'needs DIAG-PY-FAULTCUT in the 2B-1 budget'."
+    },
+    {
+      "id": "R1-F03",
+      "status": "PARTIAL",
+      "note": "A contradição central acabou. A restrição de type vale só para o match de account/login/start, result.type 'apiKey' é permitido, existe o autoteste positivo com o roteiro do 2B-PY17A e o validador tem o controle negativo (validate-spec-2b.mjs.txt:174-178). Mas a 'lista única FORBIDDEN_LOGIN_KEYS' só tem o conteúdo enumerado no validador (:19) e no repair-r1.json. A capacidade (capability-contracts-2b.json:224) e o oráculo (cases-2b-2.json:246) só citam o nome, e a preimagem da capacidade listava as chaves. Ver R2-F05."
+    },
+    {
+      "id": "R1-F04",
+      "status": "RESOLVED",
+      "note": "O PROC_WITNESS só é lido depois do BEGIN do adapter, e a leitura anterior é falha de captura (proc.witness_recorded). Isso está no contrato, nas barreiras do 2B-PY02A e do 2B-PY02B (case_input_sha256 recalculados) e no DIAG-PY-PROCWITNESS, que tem barreira logo depois do Popen e controle negativo. Pelo 2A, o adapter emite o BEGIN antes de esperar o READY, então o gatilho não depende do driver."
+    },
+    {
+      "id": "R1-F05",
+      "status": "RESOLVED",
+      "note": "O E2B-11, o encoding ('model result', 'notification result') e o oráculo de api.steps_exact definem: subconjunto por caminho de alias quando todas as chaves congeladas têm ponto, jeq do dump completo nos outros casos, NOTE.fields por subconjunto e NOTE.dump por jeq. Classifiquei todos os resultados congelados: só 2B-PY11A:10 e 2B-PY18B:8 são ALLDOT, e os campos de modelo dos demais conferem com v2_all.py/models.py."
+    },
+    {
+      "id": "R1-F06",
+      "status": "RESOLVED",
+      "note": "O oráculo de wire.absent e o E2B-13 julgam só pedidos (linhas com id e method), e notificações só com kind=notification. Todos os itens de expected.wire.absent dos 14 casos são pedidos. Há autoteste declarado sobre o 2B-PY01A."
+    },
+    {
+      "id": "R1-F07",
+      "status": "RESOLVED",
+      "note": "O h_close_call do 2B-PY01A registra retain:self e retain:self._proc, e o case_input_sha256 confere em Python e em Node."
+    },
+    {
+      "id": "R1-F08",
+      "status": "RESOLVED",
+      "note": "O contrato da CAP-2B-ASYNC-DRIVER faz o yield_until ceder antes de cada avaliação, conta sonda que levanta como 'ainda não' e trata teto estourado como INVALID_CAPTURE. Há autoteste específico."
+    },
+    {
+      "id": "R1-F09",
+      "status": "RESOLVED",
+      "note": "O gancho h_notify_ret (return de CodexClient.notify, arg:method) entrou no 2B-PY01A e no 2B-PY01D, e o E2B-12 classifica a linha escrita e não lida antes do SIGNAL como INVALID_CAPTURE. Pela fonte (client.py:324, notify dentro de initialize), a ordem HOOK:h_notify_ret#1 < HOOK:h_init_ret#1 está correta."
+    },
+    {
+      "id": "R1-F10",
+      "status": "RESOLVED",
+      "note": "As formas CLIENT_TERMINATED_SIGTERM e CLIENT_KILLED_SIGKILL só usam testemunhas do SO e do canal (contrato e E2B-03). O returncode é julgado por probe.values_exact e proc.termination_exact, cujo oráculo ainda o inclui."
+    },
+    {
+      "id": "R1-F11",
+      "status": "RESOLVED",
+      "note": "O E2B-04 tem gramática fechada e todas as cadeias e referências before/after/during foram reescritas. Pela fonte, conferi os referentes de STEP, CANCEL, API_*, HOOK, RAW_READ e RELEASE_REPLY dos 34 casos. O $executor-thread-of está definido no encoding e na capacidade. O validador só confere sintaxe, faixa de passo e existência do gancho (ver R2-F07). A definição de HOOK:<id>#k criou a contradição de R2-F01."
+    },
+    {
+      "id": "R1-F12",
+      "status": "RESOLVED",
+      "note": "wire.requests_exact entrou no 2B-PY01A, 2B-PY01D e 2B-PY02A, e proc.env_exact no 2B-PY02B. O env esperado é o FIXED_ENV de channel.py:29, e com codex_bin explícito não há prefixo de PATH (client.py:251-262)."
+    },
+    {
+      "id": "R1-F13",
+      "status": "RESOLVED",
+      "note": "O D2B-15 enumera os tipos e campos por papel. Há imprecisões menores, em R2-F06."
+    },
+    {
+      "id": "R1-F14",
+      "status": "RESOLVED",
+      "note": "model.construct = Modelo(**kwargs) validador (contrato e nota no passo do 2B-PY18D). Avisos de serialização são registrados e nunca decidem (CAP-2B-MODEL-ORACLE e CAP-PY-SDKCALLS-2B)."
+    },
+    {
+      "id": "R1-F15",
+      "status": "RESOLVED",
+      "note": "Há autotestes e passo do DIAG-PY-BARRIER para o return no unwind e para call/return em cada retomada de gerador. A frase de acompanhamento 'ocorrência (#k) conta esses eventos' gerou a contradição de R2-F01."
+    },
+    {
+      "id": "R1-F16",
+      "status": "RESOLVED",
+      "note": "Reproduzi o validador numa cópia: PASS, 0 erros, 23/23 controles recusados pela substring esperada, inclusive o mínimo do PY13 ('fit: PY13 has 4 < 5'). Ele confere passo -> capacidade -> DIAG por sub-lote, used_by e a regra de login. As lacunas restantes estão em R2-F07."
+    }
+  ],
+  "findings": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "area": "2B-PY13D / CAP-2B-CONC-BARRIER / E2B-04 / E2B-06 / D2B-15",
+      "title": "Ocorrência de gancho definida como '#k = k-ésimo evento do gancho' torna falso o occurrence 2 de h_cleanup_cb (call+return) no 2B-PY13D",
+      "evidence": [
+        "capability-contracts-2b.json:59 ('... call/return a cada retomada de gerador; ocorrência (#k) conta esses eventos')",
+        "evaluator-r4-2b-delta.json:25 (E2B-04: 'HOOK:<id>#k (k-ésimo evento do gancho)') e :33 (E2B-06: 'casam por id, atributos e ocorrência')",
+        "freeze-r4-2b-delta.json:129 (D2B-15: HOOK_EVENT {id, event, occurrence, thread_name, record})",
+        "cases-2b-2.json:3699 (h_cleanup_cb com event 'call+return') e :3511-3517 (expected.hooks[2] = {occurrence 2, event 'call', thread_name 'codex-goal-start', after 'RELEASE_REPLY:thread/goal/set@t13d2#1'})",
+        "cases-2b-2.json:3824 (passo 16: 'depois do segundo return de h_cleanup_cb') e :3835 (hook.count com filtro de event): a leitura do próprio caso é por tipo de evento",
+        "cases-2b-2.json:230 (oráculo de hook.events_exact, classe client: 'filtrados pelos atributos declarados e pela ocorrência')",
+        "archives/r1-preimages/cases-2b-2.json, 2B-PY13D: os hooks não tinham event. O reparo acrescentou event 'call' e manteve occurrence 2",
+        "py/async_client.py:268-289: cleanup_cancelled_start roda uma vez por start_goal_operation, nos dois casos no thread codex-goal-start (T1 depois do RELEASE do set t13d1, T2 depois do RELEASE com erro do set t13d2)"
+      ],
+      "detail": "Pela definição introduzida no reparo (ocorrência = #k = k-ésimo evento do gancho), um gancho 'call+return' numera assim os eventos de h_cleanup_cb: #1 call (T1), #2 return (T1), #3 call (T2), #4 return (T2). O valor congelado {occurrence 2, event call, after RELEASE t13d2} aponta então para o return do primeiro callback, que não é call e acontece antes do RELEASE t13d2. hook.events_exact (client) falha com o SDK correto e o resultado é MISMATCH falso numa vaga sem retry. O próprio caso (passo 16, hook.count) e a frase do oráculo indicam contagem por (id, event), então os documentos se contradizem. Uma leitura literal dos textos congelados dá MISMATCH falso, a mesma classe de R1-F05 e R1-F06. Nenhum autoteste ou checagem do validador cobre o casamento de expected.hooks.",
+      "required_action": "Fixar uma regra única, por exemplo: a ocorrência conta por (id, event) quando o gancho registra call+return, e HOOK:<id>#k só vale para ganchos de um tipo ou com o tipo explícito no token. Alinhar CAP-2B-CONC-BARRIER, E2B-04, E2B-06, D2B-15 e o oráculo de hook.events_exact. Se a contagem global for mantida, a alternativa é corrigir o 2B-PY13D (occurrence 3). Acrescentar um autoteste com gancho call+return chamado duas vezes que case o expected.hooks congelado do 2B-PY13D, e no validador exigir event (e a regra) quando houver occurrence > 1 em gancho call+return."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "area": "2B-PY13E / CAP-2B-CONC-BARRIER (thread.join pelo nome)",
+      "title": "thread.join pelo nome não define o que fazer com um thread que já terminou, e esse é o caso quase sempre depois do hook.wait(h_stop)",
+      "evidence": [
+        "cases-2b-2.json:4346-4347 (passo 12: thread.join thread_name 'codex-goal-start-cleanup', timeout 3)",
+        "capability-contracts-2b.json:56 ('achado pelo caminho de um objeto do caso ou pelo nome exato (thread_name); estouro do prazo é INVALID_CAPTURE')",
+        "evaluator-r4-2b-delta.json:65 (E2B-14)",
+        "/usr/lib/python3.12/threading.py:1073-1077 (run, _invoke_excepthook e, no finally, _delete, que tira o thread do threading.enumerate())",
+        "sonda própria só com stdlib (python3 -I, fora do repositório): setprofile no return de uma função que levanta no finally, Event sinalizado no gancho e busca pelo nome em threading.enumerate() logo depois. O thread já tinha saído em 300/300 tentativas, com e sem I/O no gancho"
+      ],
+      "detail": "Na ordem mais provável o thread de cleanup já saiu de threading.enumerate() quando o passo 12 o procura. O contrato não diz se 'não achado' significa 'já terminou'. Uma implementação que trate isso como falha, ou que espere o thread aparecer, dá INVALID_CAPTURE praticamente sempre na única vaga do PY13.B17/B18. O excepthook.wait do passo 13 já basta para o snapshot. É a mesma classe de R1-F08: harness falha conforme a escolha de implementação, sem MISMATCH.",
+      "required_action": "Carry-over prioritário. Definir que um nome sem thread vivo, depois da testemunha do próprio thread (h_stop), conta como thread já terminado. Outras saídas: reter o Thread pelo gancho (por exemplo retain:threading.current_thread() no h_stop) e fazer join pelo caminho, ou tirar o passo 12. Incluir no autoteste da capacidade um thread que já terminou."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "area": "2B-PY10X / excepthook.records_exact / CAP-2B-CONC-BARRIER",
+      "title": "O texto novo diz que o snapshot só decide depois de thread.join ou excepthook.wait, mas o 2B-PY10X tira o snapshot sem espera e o julga como client",
+      "evidence": [
+        "capability-contracts-2b.json:57 ('O snapshot só é decisivo depois de thread.join ou excepthook.wait declarados')",
+        "cases-2b-1.json:214 (oráculo de excepthook.records_exact: 'lidos depois do excepthook.wait ou do thread.join declarados')",
+        "cases-2b-1.json#/cases[id=2B-PY10X]: excepthook.install no passo 2 (:3817), excepthook.snapshot no passo 21 (:3956), expected.api passo 21 = [], predicado excepthook.records_exact e nenhuma espera declarada"
+      ],
+      "detail": "Lido ao pé da letra, o predicado do 2B-PY10X deixa de decidir ou vira erro do avaliador (INVALID_CAPTURE pela regra 3). O resultado do SDK correto não muda, mas os documentos se contradizem e a regra não diz como tratar uma expectativa vazia.",
+      "required_action": "Escrever que a exigência de espera vale para expectativas não vazias e que lista vazia é julgada no snapshot. Acrescentar ao validador a checagem 'expectativa de excepthook não vazia exige excepthook.wait ou thread.join antes do snapshot'."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "area": "E2B-14 / known_bad de 2B-PY13E, 2B-PY11B, 2B-PY17A, 2B-PY02A",
+      "title": "E2B-14 transforma known-bads de cliente em INVALID_CAPTURE, ao contrário do known_bad.judged_by dos casos",
+      "evidence": [
+        "evaluator-r4-2b-delta.json:65 (E2B-14: estouro de thread.join, excepthook.wait, hook.wait, probe.until, worker.parked ou loop.yield_until -> INVALID_CAPTURE)",
+        "2B-PY13E: hook.wait h_stop (cases-2b-2.json:4340) e excepthook.wait (:4353), contra o known_bad 'Pular o cleanup quando o resultado já existe', julgado por hook.events_exact e excepthook.records_exact",
+        "2B-PY11B: worker.parked de W2 no 'with entry.lock' (passo 8), contra o known_bad 'Deixar dois turn/start do mesmo thread em voo', julgado por wire.order_constraints",
+        "2B-PY17A: probe.until com pendentes == ['L17z'] (cases-2b-2.json:6746), contra PY17.B05",
+        "2B-PY02A: thread.join do _reader_thread (cases-2b-1.json:1794)"
+      ],
+      "detail": "Nesses casos a espera depende do próprio comportamento do cliente. O known-bad declarado nunca chega ao predicado client: estoura a espera e vira INVALID_CAPTURE. Não há PASS falso, mas o caso perde o poder de detecção que declara. É a mesma classe de R1-F10, agora generalizada pelo E2B-14.",
+      "required_action": "Separar as esperas que são pré-condição de harness das que esperam efeito do cliente. Nas segundas, ao estourar o prazo, seguir e registrar uma testemunha para o predicado client decidir. Outra saída é corrigir os known_bad.judged_by que não podem produzir MISMATCH."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "area": "CAP-2B-PEER-LOGIN / peer.login_frames_synthetic",
+      "title": "A lista FORBIDDEN_LOGIN_KEYS não está enumerada nos documentos que a IMPLEMENT segue",
+      "evidence": [
+        "capability-contracts-2b.json:224 e cases-2b-2.json:246 (só citam o nome FORBIDDEN_LOGIN_KEYS)",
+        "validate-spec-2b.mjs.txt:19 e repair-r1.json#/findings[R1-F03] (únicos lugares com o conteúdo)",
+        "next-task.json#/spec (não liga o validador nem o repair-r1.json)",
+        "archives/r1-preimages/capability-contracts-2b.json (a preimagem enumerava as chaves no contrato)"
+      ],
+      "detail": "A regra de admissão do peer é 'regra única', mas o conteúdo dela ficou fora do contrato que a IMPLEMENT segue. Os roteiros congelados não têm nenhuma dessas chaves, então o desfecho não muda. A unificação pedida em R1-F03 ficou só em parte.",
+      "required_action": "Enumerar a lista (apiKey, api_key, accessToken, refreshToken, idToken, authToken, chatgptAuthTokens, password, secret) na CAP-2B-PEER-LOGIN, ou no oráculo, e deixar o validador referenciá-la."
+    },
+    {
+      "id": "R2-F06",
+      "severity": "P3",
+      "area": "freeze-r4-2b-delta.json D2B-15 / CAP-PY-SDKCALLS-2B",
+      "title": "A lista de tipos por papel do D2B-15 tem imprecisões",
+      "evidence": [
+        "freeze-r4-2b-delta.json:129 (driver: 'STEP_WITNESS e STEP_RELEASE (já do 2A ...)', DEPENDENCY_IDENTITY)",
+        "../sdk-batch-2a-admission/python/channel.py:21 (STEP_RELEASE é COMMAND do supervisor) e :31-34 (ROLE_KINDS do driver no 2A sem STEP_WITNESS; no 2A ele é milestone de DIAGNOSTIC, supervisor.py:947)",
+        "capability-contracts-2b.json:379 (dependency_identity 'registra no BEGIN')",
+        "2B-PY02K passos 5 e 7 (clock.mark): nenhum tipo de quadro no D2B-15"
+      ],
+      "detail": "A lista fechada classifica errado um comando e um milestone, diverge sobre onde fica a identidade da dependência e não tem tipo para clock.mark. Tudo isso se contorna com tipos já existentes (API_RESULT, DIAGNOSTIC), mas fica como decisão implícita da IMPLEMENT.",
+      "required_action": "Corrigir o D2B-15: STEP_WITNESS como milestone, STEP_RELEASE como comando, onde fica a identidade da dependência e o tipo do clock.mark."
+    },
+    {
+      "id": "R2-F07",
+      "severity": "P3",
+      "area": "validate-spec-2b.mjs.txt",
+      "title": "O validador ainda não pega a regressão de R1-F01 nem referentes inválidos de tokens de ordem",
+      "evidence": [
+        "validate-spec-2b.mjs.txt:62-78 (checkOrderTokens só confere sintaxe, faixa de passo e se o gancho existe)",
+        "sondas na cópia adaptada do validador, fora do repositório: tirar o excepthook.wait do 2B-PY13E (com sha recalculado) passa com 0 erros; WORKER:ZZ numa cadeia do 2B-PY11B passa com 0 erros"
+      ],
+      "detail": "O repair-r1.json diz que o validador 'interpreta todos os tokens', mas nomes de WORKER, métodos de RAW_READ/RELEASE_REPLY contra o peer_script e o hold, e o tipo do passo de CANCEL não são conferidos. Também não há guarda para expectativa de excepthook sem espera, nem para occurrence em gancho call+return (R2-F01). Pela fonte, os valores congelados atuais estão corretos.",
+      "required_action": "Acrescentar essas checagens, cada uma com um controle negativo."
+    },
+    {
+      "id": "R2-F08",
+      "severity": "P3",
+      "area": "repair-r1.json#/unchanged",
+      "title": "A frase 'Nenhum valor esperado de cliente mudou' subestima o que o reparo mudou",
+      "evidence": [
+        "cases-2b-1.json 2B-PY01A e 2B-PY01D: expected.order ganhou HOOK:h_notify_ret#1, uma expectativa nova julgada por hook.events_exact (client)",
+        "cases-2b-2.json:3500-3516 (2B-PY13D: expected.hooks ganhou event 'call')",
+        "cases-2b-2.json 2B-PY14A passo 32: park_point mudou para o nome qualificado, além da nota do seletor"
+      ],
+      "detail": "Pela fonte, as mudanças estão corretas, com exceção da que R2-F01 aponta. Mas o registro do reparo diz que só mudou a numeração do snapshot do 2B-PY13E.",
+      "required_action": "Declarar essas mudanças no próximo registro de reparo ou de disposição."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 23 arquivos do review-freeze-r2.json, antes e depois; sha do próprio freeze; as 19 preimagens contra o review-freeze-r1.json",
+    "diff estrutural de cada caso e de cada documento contra archives/r1-preimages/ (encoding, predicate_table, case_input, expected, infra, predicados, contratos, deltas, budgets, next-task, state, scripts)",
+    "case_input_sha256 recalculado em Python com a serialização compacta: 34/34",
+    "validador reproduzido em cópia fora do repositório (Node 22, só com UNIT e destino trocados): PASS, 0 erros, 23/23 controles com a substring esperada; mais 4 sondas negativas próprias",
+    "build-spec e build-contracts rodados num espelho fora do repositório (symlinks só de leitura para as entradas): os 10 JSON gerados são semanticamente iguais aos congelados; muda só a formatação dos cases",
+    "conferência semântica dos tokens de ordem dos 34 casos (STEP/CANCEL/API_* contra o tipo de passo e o expected.api, HOOK contra hook.install, RAW_READ/RELEASE_REPLY contra o peer_script e o hold)",
+    "classificação E2B-11 de todos os resultados congelados e campos de InitializeResponse, ServerInfo, ThreadGoal, ThreadGoalSetResponse, TurnStartResponse, CancelLoginAccountResponse, AccountLoginCompletedNotification e ThreadGoalClearedNotification",
+    "rastreio pela fonte dos casos alterados: 2B-PY01A e 2B-PY01D (api.py:85-92 e 330-345, client.py:283-325 e 387-392), 2B-PY13E e 2B-PY13D (async_client.py:244-290), 2B-PY02A, 2B-PY02B e 2B-PY02K (client.py:242-302, lançador, FIXED_ENV), 2B-PY10X, 2B-PY11B, 2B-PY14A e 2B-PY17A",
+    "aritmética do retry do PY09A e do PY09D re-simulada (0.3, 0.4, 1.3, 0.8, 0.30000000000000004)",
+    "threading._bootstrap_inner do 3.12 (run, excepthook, _delete) e sonda própria de busca de thread por nome depois do evento de gancho",
+    "harness 2A, para viabilidade: channel.py (ROLE_KINDS, COMMANDS, FIXED_ENV), adapter-python.py (BEGIN antes do READY, sinal), fixture-rpc.py (EOF não encerra o peer, só FINISH_PEER), supervisor.py (STEP_WITNESS como DIAGNOSTIC)",
+    "herança e deltas: D2B-01..15 e E2B-01..14 contra o freeze r4 e o avaliador r4; coerência entre used_by, infra derivada, D2B-14, budgets e next-task",
+    "limites: URLs só em https://login.invalid/, nenhuma chave de credencial nos peer_scripts, 0 recibos e 0 crédito em todos os documentos; T3 sem mudança"
+  ],
+  "limits": "Não importei nem executei o SDK nem a Pydantic. Dumps, erros e avisos foram lidos na fonte. Não executei o harness, o supervisor, o bwrap nem a leitura de /proc. A semântica do sys.setprofile do 3.12 (return no unwind) se apoia na leitura e na sonda da R1. A sonda da busca por nome é um análogo simplificado, sem driver nem canal reais. Os scripts de build e o validador rodaram só em cópias e espelhos no diretório temporário da sessão, fora do repositório; o close-unit não foi executado. Não reverifiquei por completo os 32 casos SDK que a R1 já rastreou: aprofundei nos casos e textos mudados pelo reparo e fiz amostragem dos demais. Nada foi escrito no repositório.",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "transcription_note": "Texto do crítico gravado sem edição em verdict.raw.txt; este arquivo é o mesmo JSON reformatado, com esta nota acrescentada pelo executor."
+}

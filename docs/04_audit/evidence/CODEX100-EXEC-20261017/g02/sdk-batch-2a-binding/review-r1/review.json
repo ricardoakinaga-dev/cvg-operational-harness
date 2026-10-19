@@ -1,0 +1,199 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A",
+  "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r1/",
+  "reviewed_at": "2026-10-19T04:44:34Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "30e16bbc0c5492a27622e5fe831d38334e3f6c7c8ddbf4aff85a71776f47f436",
+  "subject_hash_check": {
+    "before": {
+      "freeze_sha256": "30e16bbc0c5492a27622e5fe831d38334e3f6c7c8ddbf4aff85a71776f47f436",
+      "files_checked": 10,
+      "all_match": true,
+      "extra_files": [
+        "review-freeze-r1.json",
+        "review-r1/ (vazio)"
+      ]
+    },
+    "after": {
+      "freeze_sha256": "30e16bbc0c5492a27622e5fe831d38334e3f6c7c8ddbf4aff85a71776f47f436",
+      "files_checked": 10,
+      "all_match": true,
+      "checked_at": "2026-10-19T04:44:34Z"
+    }
+  },
+  "verdict": "REVISE",
+  "mandatory_findings": 2,
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "regra de status / vocabulário",
+      "title": "O status_vocabulary do v2 contradiz a linha TS12: 2A-TS12 é caso selecionado não consumível e a linha segue OBSERVED_CLIENT_PARTIAL sem dizer por quê",
+      "evidence": [
+        "coverage-observed-v2.json:15 (OBSERVED_CLIENT_PARTIAL = 'Todos os casos selecionados do contrato (v1 ou lote 2A) observados com leitura final PASS_CLIENT_OBSERVATION')",
+        "coverage-observed-v2.json:16 (OPEN_REQUIRED_FUTURE_PROFILE = 'Sem caso selecionado, ou algum caso do lote não consumível')",
+        "coverage-observed-v2.json:9 (binding_rule: OBSERVED quando já observado no v1 ou todos os casos 2A da linha consumidos)",
+        "coverage-observed-v2.json#/rows[source_contract=TS12]: cases_2a [2A-TS04, 2A-TS12]; excluded_cases_2a 2A-TS12 INVALID_CAPTURE (l. 2024-2035); status OBSERVED_CLIENT_PARTIAL (l. 2046); status_rule_applied 'já observado no v1; o lote 2A acrescenta observações' (l. 2047)",
+        "../sdk-coverage-binding/coverage-observed.json:5 (v1: OBSERVED significa que todos os casos selecionados terminaram PASS_CLIENT_OBSERVATION)",
+        "build-binding-2a.py.txt:161-162 (regra que mantém o status do v1) e :221-224 (vocabulário)",
+        "validate-binding-2a.mjs.txt:33-38 (o validador recalcula só a regra, não confere o vocabulário)"
+      ],
+      "detail": "Recalculei a regra de forma independente: 21/23, as 10 mudanças (PY03, PY04, PY08, PY15, PY16, TS01, TS02, TS04, TS08, TS09) e TS03/TS05/TS06/TS07 abertos batem. A regra do coordenador é coerente com o plano (status_if_all_cases_pass) e com a instrução de não dar crédito aos excluídos: TS05 fica OPEN porque 2A-TS06 é caso selecionado da linha e não passou (mesma lógica do 'todos os casos selecionados' do v1), e TS12 mantém o status porque a exclusão de 2A-TS12 não revoga a observação v1 do SDKTS10. TS08 (2A-TS02, 2A-TS02B, 2A-TS05, 2A-TS08, todos consumidos) e TS10/TS11 (v1) estão certos. O problema é o texto normativo do próprio mapa. O vocabulário v2 é mais amplo que a regra e é falso para TS12: pelo vocabulário, TS12 tem caso selecionado do lote (2A-TS12) sem PASS e 'algum caso do lote não consumível', portanto seria OPEN. TS12 é a única linha onde isso aparece, por ser a única já observada no v1 com caso excluído. O status_rule_applied da linha também omite a exclusão. Quem ler ou validar pelo vocabulário chega a outro status. O validador não pegou porque implementa só a regra.",
+      "required_action": "Reescrever status_vocabulary para dizer exatamente a binding_rule. OBSERVED_CLIENT_PARTIAL: contrato já observado no v1 (casos v1 todos PASS) ou todos os casos 2A da linha do plano consumidos; num contrato já observado no v1, caso 2A não consumível fica em excluded_cases_2a com braços OPEN e não muda o status herdado. OPEN_REQUIRED_FUTURE_PROFILE: sem caso selecionado, ou contrato não observado no v1 com algum caso 2A da linha não consumível. Mudar o status_rule_applied de TS12 para registrar que 2A-TS12 não foi consumido e que TS12.B01 (pré-abortado) fica OPEN sem afetar o status herdado do SDKTS10. No validador, conferir que o status_rule_applied cita todo caso excluído da linha e acrescentar um controle negativo. Opcional: listar em state.json os contratos observados que têm caso excluído (TS12)."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "destinos dos resíduos no mapa v2",
+      "title": "Sete linhas já observadas no v1 (PY07, TS10–TS15) mantêm residual_planned_profile_proposal 'SOURCE_BATCH_2A', lote já executado; em PY07 e TS14 o destino aponta justamente o que o 2A observou, e os braços OPEN TS12.B01 e TS10.B04 ficam sem destino na linha",
+      "evidence": [
+        "coverage-observed-v2.json:564 (PY07: 'SOURCE_BATCH_2A (exceção do handler e params não-dict) ...'), contra os braços observados de 2A-PY07R na mesma linha: 'params não-dict chega como None ao handler' e 'exceção do handler leva a fail_all'",
+        "coverage-observed-v2.json:2177 (TS14: 'SOURCE_BATCH_2A (inclui o reforço cache_write presente)'), contra o braço observado de 2A-TS14 'TS14.B02 (cache_write presente, null e false; usage ausente)'",
+        "coverage-observed-v2.json:1867 (TS10), :1970 (TS11), :2051 (TS12), :2110 (TS13), :2290 (TS15): 'SOURCE_BATCH_2A'",
+        "build-binding-2a.py.txt:177-179 (copia o valor do v1 quando existe; o fallback 'Ver remaining_after_2a' só vale para as 10 linhas novas)",
+        "../sdk-batch-2a-admission/inputs/spec-2a/coverage-plan-2a.json:278 (o remaining_after_2A do TS12 não cita o pré-abortado porque o plano supunha PASS; a linha TS12 do v2 não dá outro destino ao TS12.B01)",
+        "HOW-next-step.md:66 (2A-TS12R condicional) e :69-72 (destino do TS10.B04), que não aparecem nas linhas TS12 e TS10",
+        "next-task.json:13 (o mapa v2 é entrada da próxima SPECIFY)"
+      ],
+      "detail": "O lote 2A já foi executado e ligado. Destinos futuros que apontam para SOURCE_BATCH_2A estão vencidos e, em PY07 e TS14, contradizem as observações da própria linha. As entradas de arms_open_explicit_2a não têm campo de destino, e nos dois braços que não vêm de MISMATCH (TS12.B01 e TS10.B04) a linha não diz para onde vão. O HOW atenua o problema ao usar remaining_after_2a como fonte, mas o mapa é a entrada autoritativa da SPECIFY seguinte e a base do v3, e se contradiz.",
+      "required_action": "Para PY07 e TS10–TS15, trocar residual_planned_profile_proposal pelo destino depois do 2A, derivado de remaining_after_2a (continuação 2A, lote 2B, perfil distribuído ou BUILD nativo), sem o que o 2A já observou. Dar destino explícito a cada entrada de arms_open_explicit_2a: TS03/TS05/TS06/TS07 vão para 2A-TS03R/06R/07R; TS12.B01 vai para 2A-TS12R, condicional à testemunha do SO; TS10.B04 segue o destino decidido no HOW (ver R1-F06). No validador, conferir que nenhuma linha aponta SOURCE_BATCH_2A como destino futuro."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "contagens",
+      "title": "cited_acceptance_documents_2a = 50 conta citações (pares observação×contrato × 2), não documentos; o v1 contava documentos distintos (38)",
+      "evidence": [
+        "coverage-observed-v2.json:268 e state.json:42 (50)",
+        "build-binding-2a.py.txt:236 (sum(2 for r in rows for _ in r['observations_2a']))",
+        "../sdk-coverage-binding/coverage-observed.json:83 (38 = 19 casos × 2 documentos distintos; o v1 tinha 21 pares, 42 citações)",
+        "recontagem própria: 25 pares observação-contrato, 50 citações, 38 arquivos distintos (19 × acceptance-r3_1.json + acceptance.json), todos com sha conferido"
+      ],
+      "detail": "Mesmo nome de campo com semântica diferente entre v1 e v2. O número não está errado como contagem de citações.",
+      "required_action": "Renomear para cited_acceptance_references_2a ou acrescentar cited_acceptance_documents_2a_distinct = 38."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "validação (Node)",
+      "title": "O validador diz conferir cada braço 'exactly once ... on its owner contract', mas só confere existência; também não confere a qualificação de SIGTERM nem o vocabulário",
+      "evidence": [
+        "validate-binding-2a.mjs.txt:84-92 (seenArms é um Map por caso|braço: duplicatas colapsam; filtro por prefixo; o contrato dono não é comparado com a linha)",
+        "validate-binding-2a.mjs.txt:68-69 (só as qualificações de ordem e do peer do 2A-PY03; SIGTERM do 2A-TS04/15 não é conferido)",
+        "validation.json (12/12 controles negativos rejeitados; nenhum mira o vocabulário de R1-F01)"
+      ],
+      "detail": "Recontei de forma independente: 75 braços de branches_targeted nos 23 casos SDK; 61 observados e 14 OPEN; cada um aparece uma vez, no contrato dono. Os 14 OPEN são TS03.B02–B05, TS05.B04, TS06.B02–B04, TS07.B01–B04, TS12.B01 e TS10.B04 (forma B), completos e corretos. Não há defeito de dados, mas a validação afirma mais do que confere. Reproduzi build, validação e verificação de entradas em cópias no scratch: saída idêntica, fora carimbo de tempo e versão do Node.",
+      "required_action": "Alinhar o comentário ao que a checagem faz ou endurecer a checagem (contagem exata e contrato dono). Conferir a qualificação de SIGTERM em 2A-TS04 e 2A-TS15 e a coerência entre vocabulário e linhas."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "HOW / atribuição",
+      "title": "O HOW antecipa a atribuição de um MISMATCH dos casos R ('passa a ser divergência real do cliente') sem passar pela adjudicação",
+      "evidence": [
+        "HOW-next-step.md:63",
+        "../sdk-batch-2a-admission/adjudication-r1.json (atribuição e leitura final só por adjudicação; R2-F03 carregado ao BIND)"
+      ],
+      "detail": "Com a entrega corrigida, um MISMATCH do 2A-TS03R ainda pode vir de outro defeito do harness. Pelo processo, MISMATCH_ATTRIBUTABLE_TO_CLIENT sai da adjudicação, não da forma do desfecho.",
+      "required_action": "Reescrever: 'MISMATCH com a entrada congelada comprovada pelo DIAG é candidato a divergência do cliente, sujeito à adjudicação'."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "HOW / destino do TS10.B04",
+      "title": "TS10.B04 (forma B) vai para 'perfil de outra versão do Node', mas o plano manda faults de write para a continuação 2A, e o braço pode ser alcançado no Node v24 por injeção de falha",
+      "evidence": [
+        "HOW-next-step.md:69-72",
+        "../sdk-batch-2a-admission/inputs/spec-2a/coverage-plan-2a.json:252 ('faults de write/end/kill: continuação 2A com injeção de falha do lado Node')",
+        "../../g01/sdk-open-contracts/typescript/contracts.json#contracts[id=TS10].branches[id=TS10.B04] ('write(input),end() sem ... error listener explícito do stream')"
+      ],
+      "detail": "A forma B do 2A-TS10 era um jeito de chegar ao write sem listener de erro. Um filho que existe e fecha o stdin antes do write (EPIPE) exerce o mesmo braço sem depender da versão do Node. O destino proposto contraria o plano sem justificativa.",
+      "required_action": "Mandar o braço para a injeção de falha de write da continuação, ou justificar por que só outra versão do Node o alcança. Refletir o destino na linha TS10 do mapa (R1-F02)."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "T3 / paradas",
+      "title": "Candidata de testemunha do SO (fanotify) pode exigir privilégio elevado; nem o HOW nem as paradas do next-task tratam isso como gatilho de reavaliação (D-12: segurança)",
+      "evidence": [
+        "HOW-next-step.md:57 (inotify, fanotify ou amostragem de PIDs da cgroup)",
+        "HOW-next-step.md:99-111 ('Não, nem a SPECIFY nem a IMPLEMENT')",
+        "next-task.json:27-31 (stops)",
+        "docs/07_agents/AGENTS.md:90-101 (D-12: T3 inclui segurança)"
+      ],
+      "detail": "A avaliação de T3 está bem fundamentada para a SPECIFY documental e para mudanças em ferramentas de evidência. Porém, conforme o modo de marca, fanotify pede CAP_SYS_ADMIN. Uma testemunha que exija capability nova muda a postura de contenção do sandbox e não está entre as paradas.",
+      "required_action": "Acrescentar parada: 'testemunha que exija privilégio ou capability nova (por exemplo fanotify com CAP_SYS_ADMIN) → parar e reavaliar T3 ou pedir decisão do usuário'. Preferir candidatas sem privilégio."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "HOW / correções do freeze r4",
+      "title": "A correção da referência de integridade não trata o mascaramento sob KNOWN_SIGNAL_TERMINATION nem o stdout do peer v2; o slot de controle sob o freeze r4 não é mencionado",
+      "evidence": [
+        "HOW-next-step.md:53",
+        "../sdk-batch-2a-admission/input-order-errata-addendum-r1.json:484 (observer.py reconcile só compara o fio com END completo e sem sinal; 2A-TS04/14/15 terminaram KNOWN_SIGNAL_TERMINATION)",
+        "../sdk-batch-2a-admission/input-order-errata-addendum-r1.json (respostas do peer nos casos PY saíram da cópia ordenada)",
+        "../sdk-batch-2a-admission/inputs/spec-2a/execution-budget.json (o lote 2A tinha 1 control_slot e uma parada de CONTROL)"
+      ],
+      "detail": "Com a referência certa, a checagem continua pulada nas formas com sinal, que são justamente as dos casos TS com objetos JSONL. As 6 correções exigidas estão no HOW, mas esse ponto e o gate de known-bad do novo freeze ficam para a SPECIFY sem registro.",
+      "required_action": "Exigir que a comparação de integridade rode, ou registre NOT_CHECKED explícito, também sob KNOWN_SIGNAL_TERMINATION e para o stdout do peer v2. Decidir na SPECIFY se o slot de controle (known-bad) é repetido sob o freeze r4 e citá-lo em Ordem e gates."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "lacunas",
+      "title": "incidental_facts_2a da GAP-GENERATED descreve observações creditadas (PY04/15/16) e diz que oráculos de alias seguem sem observação, embora 2A-PY04 tenha observado model_dump(by_alias, ...)",
+      "evidence": [
+        "gaps-review-v2.json:130",
+        "../sdk-batch-2a-admission/inputs/spec-2a/cases-2a.json#cases[id=2A-PY04] (model_dump(by_alias, exclude_none) do ThreadResumeParams(thread_id='B'))"
+      ],
+      "detail": "As seis lacunas seguem OPEN pela regra do v1, e as contagens batem: PY-API 6/13, PY-RPC 7/11, GENERATED 3/4, PROVENANCE 1/3, TS-LANGUAGE 11/15, PLATFORM-PACKAGING 0/12. Só a GENERATED muda o rótulo, o que está correto. O fato incidental do PK01/PK02 (2A-TS01, RESOLVER_ABSENCE em events-driver.jsonl) está sem crédito. O texto da GENERATED, porém, mistura observação creditada com fato incidental, e 'alias' fica impreciso.",
+      "required_action": "Separar o resumo das observações creditadas do campo incidental e reescrever: 'oráculos de alias além do model_dump(by_alias) de um modelo, nullable, default, extra, union e root seguem sem observação (PY18 aberto)'."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P3",
+      "area": "qualificações",
+      "title": "O mapa não registra, em nível global, que os 19 casos consumidos receberam o case_input em ordem de code point; a ordem-insensibilidade dos demais depende da errata",
+      "evidence": [
+        "../sdk-batch-2a-admission/input-order-errata.json:10 (effect: toda chave do case_input entregue em ordem de code point)",
+        "../sdk-batch-2a-admission/input-order-errata.json:503 (order_insensitive_elsewhere; 2A-TS05 tem config cuja ordem congelada já é a de code point)",
+        "coverage-observed-v2.json:6-13 (binding_rule sem menção)"
+      ],
+      "detail": "As qualificações por caso exigidas estão todas presentes e corretas: ordem de chaves no fio em 2A-TS04/14/15, PY03/08/15 e TS09; match não estrito do peer no 2A-PY03; SIGTERM pelo quadro SIGNAL em 2A-TS04/15. Elas vêm da adjudicação, que só qualifica os casos com fio diferente. O fato geral, e o de que o 2A-TS05 não discrimina ordem de inserção de ordem ordenada, fica implícito.",
+      "required_action": "Acrescentar uma frase global com ponteiro para input-order-errata.json#/root_cause e #/order_insensitive_elsewhere."
+    }
+  ],
+  "checks_run": [
+    "Freeze: sha de review-freeze-r1.json = 30e16bbc… e os 10 arquivos com sha e bytes iguais, antes e depois; nenhum arquivo extra além de review-freeze-r1.json e review-r1/.",
+    "Recálculo independente em Python (scratch/recompute.py): exclusões = {2A-TS03, 2A-TS06, 2A-TS07, 2A-TS12}; consumo = leitura final PASS; contratos de cada caso iguais às linhas do plano; branches_targeted do plano = união dos braços dos casos por contrato dono; status 21/23; 10 mudanças; 75 braços (61 observados + 14 OPEN), cada um uma vez no contrato dono.",
+    "As 25 observações: final_reading PASS na adjudicação, outcome PASS_CLIENT_OBSERVATION no acceptance-r3_1.json, failed_predicates e contagem de predicados iguais, dir da adjudicação no caminho, sha de acceptance-r3_1.json e acceptance.json conferidos (38 arquivos distintos).",
+    "Condicionais: 2A-TS10 forma A (api.enoent_form_A_or_B_exclusive) → TS10.B02 e TS11.B02 observados, TS10.B04 OPEN; 2A-TS11 chunk3_and_chunk4_in_separate_commits = true com o rótulo da credit_condition.",
+    "Qualificações por caso conferidas contra adjudication-r1.json, review-r2/executor-disposition.json (R2-F01) e predicados *_child_terminated_by_SIGTERM (só em 2A-TS04/15).",
+    "sources do v2: 13 sha conferidos; authoritative_residual_refs com sha corretos.",
+    "v1: coverage-observed.json = 49de5da5…, gaps-review.json = 6e6e09ed…; git diff HEAD vazio em sdk-coverage-binding, sdk-batch-2a-admission e g01; git diff 259968f9 e6f172ef na admissão = só lead-secret-scan-triage.json.",
+    "git status: só a pasta U é nova desta unidade; os arquivos rastreados modificados (coordenação, ledgers, MAIN-CONSOLIDATION) têm mtime anterior ao início da unidade (01:28 local), não citam a unidade ou são de outro agente.",
+    "Reprodução em cópias no scratch: build-binding-2a → coverage-observed-v2.json e gaps-review-v2.json idênticos (fora built_at); validate-binding-2a (saída redirecionada) → PASS 0 erros, 12/12, idêntico; verify-inputs-2a → 13/13, idêntico.",
+    "Lacunas: listas v1 iguais às do v1; observadas v2 recalculadas a partir do status; rótulo de progresso só na GAP-GENERATED.",
+    "HOW e next-task: links relativos existem; t3-assessment do 2A (a80247d4…) igual nas duas cópias; D-12 conferido em docs/07_agents/AGENTS.md:90-101; 54/54 do r3.1 conferido em review-r2/review.json; DIAG-TS-ENOENT com forma registrada."
+  ],
+  "criteria": {
+    "1_regra_de_status": "Coerente com o plano e com a instrução de não dar crédito aos excluídos; 21/23 e as 10 mudanças conferem; TS05 (OPEN), TS12 (mantido pelo v1), TS10/TS11 (condicionais) e TS08 (4 casos consumidos) corretos. O vocabulário do mapa contradiz TS12 (R1-F01).",
+    "2_atribuicao_de_bracos": "Correta e completa: 75 braços, cada um uma vez no contrato dono; os 14 OPEN explícitos estão completos e corretos.",
+    "3_observacoes": "Ponteiros e sha corretos; leitura final PASS em todas; qualificações exigidas presentes (nota global em R1-F10).",
+    "4_lacunas": "As seis seguem OPEN; contagens e rótulos de progresso coerentes; fatos incidentais sem crédito (redação da GENERATED em R1-F09).",
+    "5_HOW_e_next_task": "Cobrem as 4 correções de entrega e do peer, o avaliador r3.1 como base, a testemunha do TS12, os 3 casos R com vaga própria de uso único (nunca retry) mais o 2A-TS12R condicional, o lote 2B (8 contratos), a ordem e o orçamento. T3 bem fundamentado para o recorte proposto. Nada não autorizado. Recomendações em R1-F05 a R1-F08.",
+    "6_evidencia": "input-verification 13/13 e validação 12/12 reproduzidas; 0 recibos funcionais e 0 crédito de paridade em mapa, lacunas, state e next-task; v1 intacto; nenhum arquivo fora de U alterado pela unidade. A validação afirma mais do que confere (R1-F04)."
+  },
+  "limits": [
+    "Revisão documental e de dados; nenhum serviço, SDK, rede ou PG; os scripts da unidade só rodaram em cópias com saída no scratch.",
+    "A atribuição dos braços é analítica, por prefixo e contrato do caso, como no v1; não é cobertura de ramo medida.",
+    "A adjudicação r1 da admissão é tomada como autoritativa; não reavaliei os desfechos por caso além de conferir outcome, predicados e sha.",
+    "A conclusão de que nenhum arquivo fora de U foi alterado pela unidade se baseia em git status, git diff e mtime; outros agentes alteram outros caminhos ao mesmo tempo.",
+    "Sobre privilégio do fanotify (R1-F07): o requisito de capability depende do modo de marca e da versão do kernel; o achado pede tratar isso como parada, não afirma qual modo seria usado."
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

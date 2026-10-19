@@ -1,0 +1,165 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T09:12:00-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "e5fc2405ce18c79a8b78d1bf4e689141f7fc2cda92d68d1a2e5a716cc7c8b7e2",
+  "subject_hash_check": {
+    "before": "ok (11/11 arquivos, sha e bytes iguais ao freeze)",
+    "after": "ok (11/11 arquivos, sha e bytes iguais ao freeze)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 3 P2, 6 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02", "R1-F03"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "PY05 / braço PY05.B06",
+      "title": "O escopo observado do PY05.B06 afirma 'normalizada como pré-release', mas o passo 13 não distingue a normalização de uma versão inválida",
+      "evidence": [
+        "coverage-observed-v4.json:1281 e :3539 (observed_scope do PY05.B06)",
+        "build-binding-2b1.py.txt:216 (ARM_SCOPE)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/_runtime_requirements.py:16-28",
+        "../sdk-batch-2b1-admission/inputs/spec-2b/cases-2b-1.json:3090 (peer do 2B-PY05X responde version '0.151.0-alpha.1.2')",
+        "../sdk-batch-2b1-admission/cases/2B-PY05X-fe70ffd8a001/acceptance.json#/predicates[id=api.steps_exact] (passo 13)",
+        "validate-binding-2b1.mjs.txt:41 (SCOPE_RULES só por substring)"
+      ],
+      "detail": "Sem o re.sub da linha 19, '0.151.0-alpha.1.2' não é PEP 440: o Version do packaging 26.2 usa fullmatch. Conferi com re da stdlib sobre o _VERSION_PATTERN lido do python-deps preparado, cujo sha 635693b7... é igual à âncora do caso: '0.151.0-alpha.1.2' não casa e '0.151.0a1.post2' casa. O InvalidVersion é engolido e o mesmo ValueError sai, com o repr da versão original (linhas 23-28). Por isso o texto do passo 13 é idêntico com e sem a normalização. A normalização só seria distinguida pelo lado 'alpha acima do mínimo passa', que não foi observado (PY05.B10). Pela regra do próprio BIND (binding_rule[3], o mesmo critério do PY05.B10), o que foi observado do B06 é só isto: 'alpha no mínimo não é aceita como 0.151.0 e é rejeitada antes de escrever'. Isso discrimina o known_bad, mas não mostra que a versão é tratada como pré-release. Além disso, 'antes de escrever' depende de wire.requests_exact, que não está ligado na evidência do braço.",
+      "required_action": "Reescrever o observed_scope sem afirmar normalização. Por exemplo: 'alpha no mínimo (0.151.0-alpha.1.2) rejeitada antes de escrever com o texto da guarda (passos 11 a 13); a rejeição é igual à de versão inválida'. Acrescentar ao not_observed a normalização -alpha.N.M -> aN.postM, que se distingue só com alpha acima do mínimo, o mesmo passo que os acréscimos do PY05 já propõem. Ligar wire.requests_exact à evidência. No validador, pôr mustNot 'normaliz' no SCOPE_RULES, com controle negativo. Ajustar o resumo da GAP-PROVENANCE ('alpha') e o state.json."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "PY02 / braços PY02.B07 e PY02.B02 (metade 'sem prefixo de PATH')",
+      "title": "'Não prefixa PATH' é dado como observado, mas no perfil de referência os dois ramos dão o mesmo PATH",
+      "evidence": [
+        "coverage-observed-v4.json:1030-1049 e :3057-3076 (PY02.B07, qualificação 'PATH sem prefixo'); :847 e :2879 (PY02.B02)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py:126-133 (_installed_codex_path_dirs devolve () sem codex_cli_bin), :136-138 (_prepend_path_dirs não muda o env com path_dirs vazio), :246-261",
+        "../sdk-batch-2b1-admission/identity-freeze-r4-2b1.json:9-100 (trees: sdk-python só com openai_codex; python-deps sem codex_cli_bin) e :866 (driver -I -S)",
+        "../sdk-batch-2b1-admission/python/python-driver.py:1029 (sys.path = /profile/sdk-python, /profile/python-deps)",
+        "../sdk-batch-2b1-admission/inputs/spec-2b/coverage-plan-2b.json#/rows[source_contract=PY02]/remaining_after (prefixo de PATH vai para o perfil distribuído)"
+      ],
+      "detail": "A única fonte de prefixo de PATH no SDK é codex_cli_bin.bundled_path_dir. Esse pacote não existe nas árvores preparadas e o driver roda com -I -S, então _installed_codex_path_dirs() devolve () nos dois lados do 'if self.config.codex_bin is None', e também no ramo de override. PATH=/runtime no 2B-PY02B e no 2B-PY02A seria idêntico se o SDK prefixasse o PATH com codex_bin explícito. A observação é igual nos dois ramos, o mesmo padrão pelo qual o PY05.B10 ficou aberto. A metade 'env = os.environ copiado (+ config.env)' está bem observada. A metade de PATH não está, e a qualificação do B07 a afirma.",
+      "required_action": "Restringir o escopo do PY02.B07 e do PY02.B02. Observado: env copiado (+ config.env), PATH igual ao do driver. Não observado: o ramo que pula o prefixo, que não se distingue sem codex_cli_bin e já está no resto do plano como perfil distribuído. A alternativa é levar o B07 para arms_open_explicit_v4 como NOT_DISCRIMINATED. Trocar a qualificação 'PATH sem prefixo'. No validador, acrescentar a regra de escopo ou o marcador com controle negativo. Revisar o resumo da GAP-PLATFORM-PACKAGING e o state.json."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "PY12 / braço PY12.B03",
+      "title": "A assinatura tardia do 2B-PY12A ocorre com first_event = next_event = 2, então 'começa em next_event, sem histórico' não se distingue de começar no primeiro evento retido",
+      "evidence": [
+        "coverage-observed-v4.json:1803 e :4769 (PY12.B03 observado; a evidência inclui o próprio first_event_1)",
+        "build-binding-2b1.py.txt:181",
+        "../sdk-batch-2b1-admission/cases/2B-PY12A-50b9be4f6d59/acceptance.json:297 (#/predicates[id=probe.values_exact]/detail/first_event_1 = [2])",
+        "../sdk-batch-2b1-admission/inputs/spec-2b/cases-2b-1.json:5534-5540 (passo 8 first_event_1; passo 9 TurnHandle.new); peer_script do 2B-PY12A: nenhum evento novo antes do trigger do passo 11",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/_message_router.py:177-181 (cursor = state.next_event), :196-204 (poda); api.py:807-808 (TurnHandle assina no __post_init__)"
+      ],
+      "detail": "No passo 9, h1 já tinha consumido os eventos 0 e 1 e a poda tinha deixado first_event = 2 = next_event, sem nenhum evento retido. Uma assinatura que começasse no primeiro evento retido, que é o contrário de 'sem histórico', veria o mesmo: q e o terminal. Um cursor 0 falharia, porque os eventos já foram apagados. O caso mostra só que eventos já podados não são reproduzidos. As outras assinaturas tardias do lote (TurnHandle.new no 2B-PY08X e no 2B-PY12B) também nascem sem evento retido. Pelo critério do BIND (binding_rule[3] e PY05.B10), o braço afirma mais do que o caso distingue.",
+      "required_action": "Restringir o escopo. Observado: a assinatura tardia não recebe eventos já podados e começa no índice 2. Não observado: assinatura tardia com eventos retidos ainda não lidos (first_event < next_event, por exemplo com outro assinante atrasado). Levar o não observado para remaining_after_2b1_additions do PY12 (continuação seguinte do perfil de fonte). A alternativa é marcar o braço como NOT_DISCRIMINATED. No validador, acrescentar a regra correspondente com controle negativo e atualizar o state.json."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "PY02 / braço PY02.B01",
+      "title": "'Sem --config' é vacuamente verdadeiro: o 2B-PY02A não tem config_overrides",
+      "evidence": [
+        "../sdk-batch-2b1-admission/inputs/spec-2b/cases-2b-1.json:1713-1723 (config do 2B-PY02A sem config_overrides)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py:205 (default ()), :247-256",
+        "coverage-observed-v4.json:819 e :2852"
+      ],
+      "detail": "O ramo de override é distinguido pela ausência de app-server/--listen. A metade '--config' do known_bad ('Acrescentar --config/app-server ao override') não é julgada, porque não há override de config para acrescentar.",
+      "required_action": "Acrescentar ao braço uma qualificação ou um not_observed: 'override com config_overrides não vazio não ganha --config'. Pode ir como acréscimo do PY02 para a continuação seguinte."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "remaining_open_by_contract e destinos de PY02, PY05 e PY10",
+      "title": "Condição já resolvida mantida no mapa resumo e destinos cujo texto não traz o acréscimo que o rótulo nomeia",
+      "evidence": [
+        "coverage-observed-v4.json:2027 (remaining_open_by_contract.PY02 ainda diz 'O ramo kill fica OPEN se o DIAG-PY-KILLWAIT não admitir o 2B-PY02K')",
+        "coverage-observed-v4.json:3127-3131 (resolução só em remaining_after_2b1_conditions_resolved; o residual do PY02 também mantém a condição)",
+        "coverage-observed-v4.json:3644 (PY05) e :4160 (PY10): rótulo SOURCE_BATCH_CONTINUATION, texto só com o remaining_after do plano",
+        "build-binding-2b1.py.txt:243-247, :363; validate-binding-2b1.mjs.txt:198"
+      ],
+      "detail": "Quem lê só remaining_open_by_contract ou o state.json vê uma condição já resolvida (DIAG-PY-KILLWAIT DIAG_PASS, 2B-PY02K consumido) como se estivesse pendente. Nos residuais do PY05 e do PY10, o item que justifica SOURCE_BATCH_CONTINUATION só aparece em remaining_after_2b1_additions. No PY02, o residual omite o acréscimo do ramo kill sem falha declarada.",
+      "required_action": "Anotar ou substituir a frase resolvida em remaining_open_by_contract.PY02. Compor residual_planned_profile_proposal com remaining_after mais os acréscimos e ajustar o endsWith do validador."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "PY15 / destino residual",
+      "title": "O resíduo SOURCE_BATCH_2B do PY15 fica sem rota explícita",
+      "evidence": [
+        "coverage-observed-v4.json:5139 (PY15: 'SECOND_2A_CONTINUATION + SOURCE_BATCH_2B: ...') e residual_destination_note",
+        "next-task.json:45 (after_this aponta só 'os demais itens SOURCE_BATCH_CONTINUATION de remaining_open_by_contract')",
+        "coverage-observed-v4.json#/remaining_open_by_contract (sem PY15)"
+      ],
+      "detail": "A nota diz que a parte 2B do PY15 (versão assíncrona _collect_async_turn_result e turn sem terminal) fica para a continuação seguinte. Mas o rótulo segue SOURCE_BATCH_2B, o item não está em remaining_open_by_contract e o after_this do next-task não o alcança.",
+      "required_action": "Rotular como SECOND_2A_CONTINUATION + SOURCE_BATCH_CONTINUATION, guardando o _v3, ou incluir o PY15 em remaining_open_by_contract e no after_this."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "gaps-review-v4.json / GAP-PLATFORM-PACKAGING",
+      "title": "Primeiro contrato observado (0/12 -> 1/12) sem mudança nem justificativa do rótulo de progresso",
+      "evidence": [
+        "gaps-review-v4.json:268-306, :335",
+        "build-binding-2b1.py.txt:498 (progress_changed False fixo)",
+        "../sdk-batch-2a-binding/build-binding-2a.py.txt:289, :305-306 (o v2 acrescenta +CLIENT_OBSERVED_PARTIAL_REFERENCE_PROFILE quando há contrato novo observado)",
+        "../sdk-coverage-binding/gaps-review.json#/rows[id=GAP-PROVENANCE]/justification (precedente do v1: não acrescentar o rótulo, com justificativa)"
+      ],
+      "detail": "A decision_rule diz que a observação parcial muda o rótulo de progresso. Há dois precedentes em conflito: o v2, mecânico, e o v1 na GAP-PROVENANCE, por julgamento. O v4 não muda o rótulo e não justifica a escolha.",
+      "required_action": "Registrar a justificativa: o PY02 foi observado só no caminho não empacotado, como o v1 fez para a GAP-PROVENANCE. Ou aplicar a regra do v2. Em qualquer caso, o validador deve conferir."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "validate-binding-2b1.mjs.txt, input-verification.json, errata TS07.B03",
+      "title": "O validador confere o conteúdo da evidência, mas não o escopo nem a discriminação; a evidência da errata TS07.B03 não tem sha",
+      "evidence": [
+        "validate-binding-2b1.mjs.txt:35-43, :47-65, :190-192",
+        "build-binding-2b1.py.txt:69-70, :257-265",
+        "coverage-observed-v4.json#/errata_applied[0]/evidence_v4 (sem sha256)",
+        "verify-inputs-2b1.py.txt:116-134"
+      ],
+      "detail": "(a) 2AC-BIND/R2-F02 está cumprido para a evidência. Reproduzi o validador em memória: PASS, 0 erros, 43/43 controles rejeitados. Minha conferência independente dos 46 braços também não achou referência ausente. Mas o item 3 do R2-F02 está só em parte: o escopo é conferido por substring, sem ligar o observed_scope aos passos ou predicados citados e sem comparar com o resto do plano. Por isso os casos de R1-F01 a R1-F03 passam. As decisões NOT_DISCRIMINATED e QUAL_MARKERS vêm do mesmo executor do build, então a segunda implementação não as testa. Os marcadores do TS05.B04 e do TS12.B01 não têm controle negativo próprio. (b) A evidence_v4 do TS07.B03 cita o acceptance do 2A-TS07R sem sha, e o passo 0 não o fixa. Conferi: sha a849da06...c0849, igual ao unit-manifest da admissão 2AC, e blob 32671992 igual ao do 1353e1bd.",
+      "required_action": "Gravar sha256 na evidence_v4 e conferir no passo 0 ou no validador. Ligar cada observed_scope ou not_observed a passos e predicados da evidência, com controle negativo. Dar controles próprios aos marcadores carregados."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "next-task.json",
+      "title": "A lição de discriminação cita só o PY05.B10, e a parte do 2B-2 de 2B-SPEC/R2-F04 só entra por referência",
+      "evidence": [
+        "next-task.json:40-46",
+        "../sdk-source-batch-2b-spec/next-task.json#/carry_over (R2-F04: 2B-PY13E e 2B-PY17A)",
+        "../sdk-batch-2b1-admission/state.json#/carry_over_spec_r2/R2-F04 (implementado só para casos do 2B-1)"
+      ],
+      "detail": "Os 8 carry-overs da admissão estão textualmente iguais a state.json#/carry_over_2b2, e os sha da especificação conferem. R1-F01 a R1-F03 mostram um padrão geral, de o perfil não conseguir produzir o ramo contrário: codex_cli_bin ausente, config_overrides vazio, versão inválida que cai na mesma mensagem, assinatura tardia sem evento retido. A primeira etapa do 2B-2 deveria conferir esse padrão. A classificação de esperas do R2-F04 para 2B-PY13E e 2B-PY17A segue pendente e só aparece via spec_next_task.",
+      "required_action": "Generalizar o first_step_additions com esses padrões e listar explicitamente o R2-F04 da especificação, no escopo do 2B-2, como carry-over."
+    }
+  ],
+  "checks_run": [
+    "Caminhos relativos à pasta da unidade /home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/.",
+    "sha256 do review-freeze-r1.json e sha e bytes dos 11 arquivos listados, antes e depois: iguais.",
+    "Passo 0 refeito com git só de leitura (ls-tree, hash-object --stdin-paths sem -w). Pastas comparadas contra 1353e1bd: especificação 2B (51 arquivos), BIND 2AC (35) e admissão 2B-1 (579). Admissão comparada também contra 6b971829 (578, sem commit-receipt). Zero diferenças e zero arquivos a mais. O 1353e1bd não tem ref; é só o HEAD destacado do worktree /mnt/dados/cvg-work/cvg-d9ef-docs-pr-20261019. client.py tem o sha da âncora do 2B-PY05X e o mesmo blob em HEAD.",
+    "Consumo: bind_consumes_only tem os 15 SDK e o CONTROL fica fora; as 3 vagas condicionais estão em RUN; final_reading e attribution de cada observação vêm da adjudicação; os sha dos 15 acceptance conferem; 22 referências em 15 documentos.",
+    "Status: contagens recomputadas, 29/15. PY01, PY02, PY11 e PY12 mudam pela status_rule, com todos os primários usados e consumíveis. PY05, PY08 e PY10 só ganham observações. As linhas do 2B-2 e as demais têm o status do v3.",
+    "Braços: verificador próprio refeito sobre os 46 braços (chaves de probe, passos ok, tokens de ordem e de gancho, entradas de gancho, consumidores, regras do peer, classe e predicado congelado): 0 ausências. Leitura caso a caso de case_input, expected_observation, known_bad e da fonte (client.py, _runtime_requirements.py, _initialize_metadata.py, _message_router.py, api.py) para avaliar a discriminação. PY05.B10 em aberto confirmado: client.py:337/342; 0.152.0a1.post2 >= 0.151.0, então o passo 15 passa nos dois ramos.",
+    "Validade PEP 440 testada só com o re da stdlib, sobre o _VERSION_PATTERN lido de python-deps/packaging/version.py (sha igual à âncora): '0.151.0-alpha.1.2' e '0.152.0-alpha.1.2' inválidos; as formas normalizadas são válidas.",
+    "Ausência de codex_cli_bin nas árvores preparadas, no identity-freeze e no runtime /mnt/dados/cvg-work/cvg-codex100-batch2b1-runtime-20261019 (só leitura).",
+    "Qualificações conferidas contra os acceptance: falha declarada do PY02.B08 (sigterm_ignored, zumbi com exit 9, returncode None, 2,002 s); janela do PY08.B07 (W5 e W6 com got null); ordem forçada do PY10.B04 (entradas h_set_result e h_sub_close A10 entre CANCEL:7 e API_CANCELLED:8); lançador do PY02.B06; env sem ordem; formas SIGTERM e SIGKILL do carry-over da admissão.",
+    "Herança: carried_from_v3 é igual à linha do v3 nas 44 linhas, salvo TS07.B03 e TS12. O texto do R2-F01 é igual ao erratum_text da disposição. 'objs=[{k = 1, \"bad key\" = 2}]' está no argv.exact_vector do 2A-TS07R. O texto do TS12 é o da disposição mais 'testemunhou a existência do filho', apoiado pela qualificação do TS12.B01 no v3 (1 IN_OPEN). arms_closed_v3_carried tem 14 entradas, com a errata.",
+    "Lacunas recomputadas: 10/13, 8/11, 3/4, 1/3, 15/15, 1/12; 6 OPEN. Comparei os precedentes de rótulo do v1 e do v2.",
+    "Projeção do 2B-2 recomputada (PY09, PY13, PY17, PY18 -> 33/11; lacunas 13/13, 11/11, 4/4, 1/3, 15/15, 1/12): igual a projection-2b-on-v3.json, after_2B_1 e after_2B_1_and_2B_2.",
+    "next-task: sha de spec next-task, execution-budget-2b-2 e cases-2b-2 conferidos; os 8 carry-overs são iguais a state.json#/carry_over_2b2 da admissão.",
+    "Validador rodado em memória com Node v22.23.2, lido por stdin com o writeFileSync removido e cwd na raiz: PASS, 0 erros, 43/43 controles. Nenhum arquivo foi escrito."
+  ],
+  "limits": "Não rodei os scripts verify, build e close; o build e o fechamento foram conferidos por leitura e por recomputação própria. O validador rodou só em memória, sem escrita. Não importei nem executei o SDK nem o packaging; o comportamento de versão foi conferido por leitura da fonte e pelo regex com a stdlib. Tomei como dados as definições dos braços (coverage-plan-2b.json e cases-2b-1.json) e o conteúdo dos contratos G01. O secret-scan.json ainda não existe e não foi conferido. A âncora 1353e1bd não tem ref local; a durabilidade dela depende da publicação pelo Lead. Revisão sem serviço, rede, Docker, PG, commit ou branch.",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "transcription_note": "Texto do crítico gravado sem edição em verdict.raw.txt (JSON puro, sem cerca de código, como veio no SubagentHandback); este arquivo é o mesmo JSON, reformatado, com esta nota acrescentada pelo executor."
+}

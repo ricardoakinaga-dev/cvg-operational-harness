@@ -1,0 +1,75 @@
+{
+  "round": 1,
+  "head": "410e01114f38b245c5330f20651dfc577472587c",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "R1-M1",
+      "file": "packages/sdk/python/cvg_sdk/contract_v1.json (source_sha256 de packages/contracts/src/contracts.ts), verificado por packages/sdk/python/tests/test_protocol.py::test_source_pins_and_catalog_exact_copy",
+      "problem": "Regressão em relação ao root: o SDK Python fixa o SHA-256 de packages/contracts/src/contracts.ts. A candidata leva para o root o contracts.ts da linha Claude100 (a72422be acrescenta `readonly maxOutputTokens?: number` em ModelRequest) sem atualizar esse pin. O teste unitário Python que passa no root falha na candidata. Os gates do executor (npm test, typecheck, lint, format) não rodam a suíte Python, por isso a falha não apareceu.",
+      "evidence": "contract_v1.json (igual em 6cb965ff, 219061a3 e HEAD) fixa contracts.ts = 32432899d2dea8b5504093541fe884e8ef73751b9e70ba3b878f15f8f212004f. Os blobs têm sha256 32432899… em 6cb965ff e 5707561407299bdd4f09bdf02010f57b7044c1239e6918bb21e422ad4759ce62 em 219061a3 e HEAD. test_protocol.py:73-75 faz assertEqual de cada source_sha256 contra o arquivo real (root = run.BASE.parents[2]). No HEAD, os outros 3 pins (protocol.ts, stdio.ts, session-event-schemas.v1.json) e a cópia do catálogo conferem; só contracts.ts diverge. Esse teste passou no root: docs/04_audit/evidence/PARE100-EXEC-20261014/integration/python-r6/gates/python47.stderr.log:11 (`test_source_pins_and_catalog_exact_copy ... ok`). Varredura de pins: é o único pin de teste ou contrato fora de evidência que referencia a versão do root de um arquivo alterado pela integração, além das tabelas históricas inativas (check-product-boundary.mjs e manifesto do corpus).",
+      "fix": "Escolher a menor saída e registrar em fixes/. (a) Fazer o repin de source_sha256['packages/contracts/src/contracts.ts'] para 5707561407299bdd4f09bdf02010f57b7044c1239e6918bb21e422ad4759ce62, com justificativa: o único delta R4->HEAD em contracts.ts é o campo opcional aditivo ModelRequest.maxOutputTokens, e STOP_REASONS e o vocabulário projetado não mudam. O hash do próprio contract_v1.json só aparece em evidência histórica (149 arquivos), sem nenhum teste fixando esse arquivo. Depois, rodar `python3 -I -S -B packages/sdk/python/tests/run.py --suite unit` na candidata. (b) Se o repin exigir decisão do dono da SPEC0218, registrar a falha como regressão conhecida, explícita no registro de integração, antes do FF."
+    },
+    {
+      "id": "R1-M2",
+      "file": "refs: integrate/c100-foundation-20261018 (410e0111) vs archive/local-audit-records-20261011 (root)",
+      "problem": "A candidata deixou de ser fast-forward do root. Depois do corte da base 6cb965ff, o root avançou 2 commits: e6ba0e46 (docs(codex100) DX100-G02, 16:26) e 4fdf938f (docs(claude100) journal0225 J07 + aprovações SPEC0238/0239, 16:27). 4fdf938f não é ancestral de 410e0111, então `git merge --ff-only` é impossível no estado atual.",
+      "evidence": "`git rev-parse HEAD` no root = 4fdf938f36a0aa8feb1ebdfbb960984162ccd09e. `git merge-base --is-ancestor 4fdf938f 410e0111` = falso. `6cb965ff..4fdf938f` altera 2284 paths, todos em docs/04_audit/evidence (CLAUDE100 journal0225-build 2035, CODEX100 g02 247, g04 1, CLAUDE100 spec0238-decision 1). A interseção com os 2885 paths que a candidata altera em relação a 6cb965ff é zero. A árvore de trabalho do root (10 M e 145 ??, lida com --no-optional-locks) não toca nenhum path da candidata.",
+      "fix": "Antes do FF, integrar a ponta atual do root na candidata (merge de 4fdf938f, ou da ponta vigente no momento, em integrate/c100-foundation-20261018; não há sobreposição de paths, então o merge é trivial). Depois, conferir de novo o catálogo de vazios: a ponta do root tem 25 vazios sem registro, contra 7 em 6cb965ff. Por fim, levar o resultado ao root por fast-forward."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-O1",
+      "file": "docs/08_runtime/agent_coordination.md",
+      "problem": "O gate format:check falha (registro r1-format-check.json). A causa é herdada: o arquivo na candidata é byte a byte o de 6cb965ff (resolução OURS correta).",
+      "evidence": "prettier --check (config do repositório, cópias no rascunho): 6cb965ff exit 1, HEAD exit 1, 44971c60 exit 0, 219061a3 exit 0. sha256 em HEAD = 6cb965ff = 3b95bab8….",
+      "fix": "Não é defeito do merge. Registrar como pendência pré-existente do root (o checkout do root tem modificação não commitada desse arquivo por outro agente). Não formatar dentro desta integração."
+    },
+    {
+      "id": "R1-O2",
+      "file": "docs/04_audit/evidence/empty-artifact-status.json / HISO005-P2-BUILD-0240-20261018/test-builder/*",
+      "problem": "A higiene de evidência (gate docs:check-links -> check-evidence-hygiene) acusa 7 vazios sem registro, herdados de 6cb965ff (44971c60). A união do catálogo feita no merge está correta.",
+      "evidence": "Verificação sobre a árvore git: HEAD tem 835 registros, 842 vazios e 7 erros, iguais aos de 6cb965ff (693/700/7). 219061a3 tem 494/494/0. O conjunto do HEAD é exatamente a união O∪T, sem duplicata, sem registro divergente e sem perda (B⊂O, B⊂T). O merge de 3 vias com base R4 reproduz o HEAD byte a byte. Todos os 37268 JSON não vazios de evidência fazem parse.",
+      "fix": "Pendência do root: catalogar os vazios pelo dono (HISO005, e também os 18 novos da ponta 4fdf938f). Fora do escopo desta integração, mas o gate docs vai falhar na candidata e no root."
+    },
+    {
+      "id": "R1-O3",
+      "file": "docs/architecture/PUBLIC_API.md",
+      "problem": "A seção SPEC0217 trazida da linha Claude100 diz 'ainda sem promoção ao checkout principal ou aceite final'. Depois do FF, a frase 'sem promoção ao checkout principal' fica desatualizada.",
+      "evidence": "Linhas 469-476 do HEAD. O merge de 3 vias com base R4 é limpo e igual ao HEAD.",
+      "fix": "Ajustar o texto na rodada de atualização de ledgers e documentos pós-FF, sem reabrir o merge."
+    },
+    {
+      "id": "R1-O4",
+      "file": "merge-resolutions.json",
+      "problem": "O registro lista 32 conflitos e só a correção de auto-merge de iterative-runtime e o lockfile. Os outros 6 paths alterados pelos dois lados e auto-mesclados não aparecem nominalmente: execute-published-agent.ts, contracts.ts, createOperationalHarness.ts, iterative-dispatch.ts, scripts/ci-bar.mjs e scripts/check-product-boundary.mjs.",
+      "evidence": "A classificação independente encontra 40 paths alterados pelos dois lados (32 conflitos + 8 auto-mesclados). Todos os 8 coincidem com o resultado de base efetiva R4: 7 com O==R4 resultam em T, e check-product-boundary.mjs, com T==R4, resulta em O.",
+      "fix": "Para rastreabilidade, acrescentar esses 6 paths ao registro com a regra aplicada."
+    },
+    {
+      "id": "R1-O5",
+      "file": "docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md, docs/08_runtime/agent_coordination.md",
+      "problem": "Os ledgers da candidata são os do root. Ainda não há entrada desta integração, nem do achado R1-M1.",
+      "evidence": "M=O nos 4 arquivos. Todas as linhas acrescentadas por T desde B estão no resultado (0 faltando). R4->T não acrescenta nada, só não tem as entradas f5 do root, que foram preservadas.",
+      "fix": "Atualizar os ledgers no root depois do FF, como pede o AGENTS.md (a claim marca os ledgers como somente leitura nesta tarefa)."
+    }
+  ],
+  "checked": [
+    "Grafo: e2f5479c = cherry-pick fiel de ae5538cf (diff idêntico, só packages/harness/tsconfig.json exclude __tests__; nenhum import de dist/__tests__ no HEAD). 12cd269c tem pais e2f5479c e 219061a3. Merge-base ca565391. 38f3e18d é ancestral do root; a72422be (pai ca565391) é ancestral de 219061a3.",
+    "Classificação completa de 102k paths com ls-tree (modo+blob) em B/O/T/M: 37405 só do root (M=O), 2820 só da Claude100 (M=T, sem deleções), 27520 iguais, 10 irmãos novos e 40 alterados pelos dois lados. Nenhum revert unilateral escondido pela base (0 casos). Nenhum marcador de conflito.",
+    "Base efetiva: os 18 paths de código com M=T têm blob R4 == source_sha256 do plan.json root-r4 (cópia fiel da worktree). Nos 113 arquivos do plano, 89 têm O==T, 18 têm O==R4->T, 4 têm T==R4->O e 2 exigem merge real; o resultado confere em todos.",
+    "Merges reais refeitos com git merge-file -p (base R4) em cópias. PUBLIC_API e empty-artifact-status batem byte a byte com M. doc-source-moves tem 1 conflito; a resolução combinada mantém assertFrozenDocTarget e as asserções de amendment, e os dois lados concordam em 0207 = 6f936605…, original = b03badb2….",
+    "Contenção de linhas (difflib) nos ledgers, PUBLIC_API e doc-source-moves, a partir das bases B e R4.",
+    "iterative-runtime: o merge do git com base B gera 2736 linhas, com o bloco effect_settlement_failed duplicado (4 ocorrências contra 2). M=T (2684 linhas) é o resultado correto com base R4.",
+    "10 evidências add/add: o caminho original tem os bytes do root e o irmão tem os bytes de 219061a3. O hash do root é referenciado no HEAD (CLAUDE100 q03, HISO005, CODEX100); o hash Claude100 não é referenciado.",
+    "Lockfile: delta contra o root = 2 devDependencies de packages/persistence (@cvg/harness-orchestrator link de workspace, typescript 6.0.3 já hoisted), coerente com package.json.",
+    "a051c9d3: a única mudança é o limite do laço de diretórios virtuais (até /tmp/cvg-pare100-exec-20261014-6az3hlay). physicalPath só exige que os ancestrais não sejam symlink. Os negativos de symlink (S04) usam scratch real e não mudaram. Nenhuma asserção alterada.",
+    "6b8a5eea: transformação esbuild minifySyntax+minifyWhitespace idêntica antes/depois nos 8 arquivos, e TS transpileModule igual módulo espaços/parênteses (script próprio). Só posições de tipo mudam; os especificadores de runtime dist são os mesmos.",
+    "410e0111: os 29 pins (união das propostas seladas, sem conflito entre grupos; propostas idênticas em 6cb965ff/219061a3/HEAD) batem com o manifesto, e sha256 de cada blob <sha>.source.txt = pin, com tamanho conferido. As fontes batem com 38f3e18d. pinnedBytes reverifica o hash. expectPinsValid continua comparando com as propostas, e copiedAuditor exige os pins no checker vivo. Todos os negativos usam pinnedText. Contagens de it/expect iguais às do root, sem skip/todo/only. node --check OK.",
+    "Varredura de pins de 64 hex em tests/scripts/packages/apps/examples/products/legacy/.github/deploy e specs/docs não-evidência contra versões O e T de arquivos alterados. Achado: só o pin Python (R1-M1). O resto é tabela histórica inativa ou fixture de leitor original.",
+    "Imports relativos dos 135 arquivos de código alterados resolvem para arquivos rastreados (o único não resolvido é uma string de fixture negativa).",
+    "Árvore da candidata limpa (status --no-optional-locks vazio). Root lido sem locks: ponta 4fdf938f, 10 M e 145 ??, sem interseção com a candidata (R1-M2).",
+    "Não executado (por instrução): vitest/suíte, PG, build, certify e a suíte Python. Os resultados de teste alegados pelo executor (93/93, 83/83) não foram reproduzidos."
+  ]
+}

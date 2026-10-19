@@ -1,0 +1,49 @@
+{
+  "round": 2,
+  "head": "f18b6ba6c03362703062241f1471fd07f96e2709",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "R2-M1",
+      "file": "vitest.config.mts (coverage.include/exclude) + packages/persistence/src/__tests__/*.integration.ts e fixtures/journal-result-{process,resource}.ts",
+      "problem": "O gate de cobertura agregada deve cair abaixo dos pisos (statements, lines e functions 90; branches 85) na candidata. Ele passa no root. Causa: código de teste de integração entra no denominador com 0%. coverage.include é 'packages/**/*.ts', e coverage.exclude remove só '**/*.test.ts' (mais os globs de test.include que o Vitest acrescenta). Os 10 *.integration.ts da linha Claude100 e os 2 fixtures que só eles importam não são carregados no npm test e, por isso, contam como arquivos não testados. O rename 598ce7d8 acrescenta o 11º arquivo: estava excluído como .test.ts e agora entra com 0%. Também me escapou no R1; já existia em 410e0111. Não foi visto porque test:coverage não está na cadeia de gates do executor.",
+      "evidence": "Mecanismo: node_modules/vitest/dist/chunks/coverage.DM_a_rWm.js:344-353 (exclude efetivo = config + test.include + node_modules) e :683-697 (getUntestedFiles com coverage.include). node_modules/@vitest/coverage-v8/dist/provider.js:52-57 junta untested files numa execução completa. Precedente no repo: products/shift-assistant/src/sandbox/chat.ts nunca é importado por teste e aparece com 0% (99 statements / 91 lines) em docs/04_audit/evidence/PDSH-031-20261012/per-file-gate-coverage-summary.json. Contagem AST calibrada nesse arquivo (95/90 contra 99/91): 11 *.integration.ts somam ≈3577 statements, 3532 lines e 663 funções; os 2 fixtures exclusivos somam ≈604 statements. O bound-fence sozinho tem ≈150 statements e 20 funções. Base do root: q04 cert-r1 (18/10), statements 17862/18975 (94,13%), lines 16882/17773, functions 3405/3547. Projeção: statements ≈17862/(18975+4181) ≈ 77%. Mesmo com +5k statements novos 100% cobertos, ficaria ≈81%, abaixo de 90. Rodando coverage na candidata como está, a expectativa é falha da coverage do CI e do certify. O root (6cb965ff/4fdf938f) tem 0 arquivos *.integration.ts.",
+      "fix": "Tirar código de teste do denominador sem tocar em fonte de produção: acrescentar '**/*.integration.ts' e '**/__tests__/**' (ou ao menos '**/__tests__/fixtures/**') a coverage.exclude em vitest.config.mts. Isso segue o comentário existente ('PostgreSQL adapters have dedicated ... integration gates. Keep them out of the unit denominator') e o exclude de '**/*.test.ts'. Registrar a lista exata de arquivos que saem (só arquivos de teste ou fixture, nenhum src de produção) e confirmar com npm run test:coverage, com claim, e com o gate coverage do ci-bar. Se a execução mostrar os pisos atendidos sem a mudança, o item cai."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "file": "packages/persistence/src/__tests__/*.integration.ts (provas nativas SPEC0224/SPEC0225)",
+      "problem": "O rename é uma reclassificação honesta, não skip disfarçado. Mas nenhuma das 11 provas *.integration.ts tem comando ou script no repositório: hoje só rodam por config privada PARE100/Claude100. Ficam fora de qualquer gate do repo.",
+      "evidence": "Nenhuma referência a .integration.ts em package.json, vitest*.config.mts ou scripts/*.mjs. vitest.config.mts não inclui *.integration.ts no glob de unidade.",
+      "fix": "Registrar no backlog um gate ou comando versionado para as provas nativas com recurso atribuído, ou declarar explicitamente que são provas manuais com recurso dedicado."
+    },
+    {
+      "id": "R2-O2",
+      "file": "docs/04_audit/evidence/empty-artifact-status.json; docs/08_runtime/agent_coordination.md; docs/architecture/PUBLIC_API.md",
+      "problem": "R1-O1, R1-O2 e R1-O3 continuam como pendências herdadas do root. Agora são 25 arquivos vazios sem registro no HEAD, iguais aos de 4fdf938f (7 HISO005 + 18 dos commits e6ba0e46/4fdf938f). O catálogo não mudou desde o R1.",
+      "evidence": "Verificação de higiene sobre a árvore git: HEAD tem 835 registros, 860 vazios e 25 erros; 4fdf938f tem 693, 718 e 25.",
+      "fix": "Manter no ledger-delta para o Lead, como já aceito."
+    },
+    {
+      "id": "R2-O3",
+      "file": "docs/08_runtime/agent_coordination.md:1026,1237",
+      "problem": "Duas entradas históricas de coordenação citam o nome antigo complete-checkpoint-bound-fence.test.ts.",
+      "evidence": "Estas são as únicas referências fora de docs/04_audit/evidence (292 arquivos de evidência histórica). Nenhuma está em código, config ou script.",
+      "fix": "Nenhuma ação necessária: são registros históricos. Opcionalmente, citar o rename no ledger-delta."
+    }
+  ],
+  "checked": [
+    "Grafo: 410e0111 -> ba9b70fe -> 598ce7d8 -> f18b6ba6 (pais 598ce7d8 e 4fdf938f). 4fdf938f e 410e0111 são ancestrais do HEAD. Ponta do root = 4fdf938f, então o FF de root para f18b6ba6 é possível no estado atual. Árvore da candidata limpa.",
+    "f18b6ba6: verificação path a path (modo+blob). HEAD = 598ce7d8 mais as 2284 mudanças de 6cb965ff..4fdf938f, com 0 divergências. Interseção entre os lados igual a 0. Todos os paths do lado do root estão em docs/04_audit/evidence; o merge não altera nenhum path de código.",
+    "Paths fora de evidência que mudaram entre 410e0111 e o HEAD: apenas contract_v1.json e o par do rename. Por isso tudo o que o R1 verificou (merge de 40 paths, siblings, catálogo, lockfile, a051c9d3, 6b8a5eea, corpus de 29 pins) continua válido.",
+    "ba9b70fe: só muda source_sha256['packages/contracts/src/contracts.ts'], para 5707561407…, que é igual ao sha256 do HEAD. Os outros 3 pins, a cópia do catálogo, os fingerprints, STOP_REASONS e methods não mudam. Delta R4->HEAD em contracts.ts: +2 linhas (maxOutputTokens?: number).",
+    "O drift não chega ao cliente Python. O catálogo v1 de eventos tem request com additionalProperties:false e sem maxOutputTokens, e o append de evento TS valida contra o catálogo (session/events.ts validateAppendRecord). Os emissores de model/request via runModelCall (kernel-runtime, iterative-dispatch RESPONSE, runtime-kernel-bridge) não definem maxOutputTokens. Só o pedido de decisão do hybrid-orchestrator usa o campo.",
+    "Logs do executor (leitura): python-pre deu 47 testes com 1 FAIL (test_source_pins, linha 74), e python-post deu 47 com OK, sem skipped. SPEC0218:210/231 prevê reconciliação e novo hash diante de drift.",
+    "598ce7d8: rename com blob idêntico (c5ba159d). O caminho antigo não existe mais. A guarda continua lançando 'never skip' no import sem SPEC0224_FENCE_*, e a recusa de recurso não atribuído continua. No npm test a suíte nunca produzia teste, então a contagem de testes não muda. As irmãs SPEC0224/0225 já são *.integration.ts. Não há referência ao nome antigo em código, config ou script. Efeito colateral no denominador de cobertura: ver R2-M1.",
+    "Vitest: test.include não cobre *.integration.ts. A cobertura inclui arquivos não testados (código lido do vitest 4.1.11 e do @vitest/coverage-v8 instalados).",
+    "merge-resolutions.json ganhou autoMergedBothSidesChanged e postMergeCommits (R1-O4 atendido). review-r1/lead-acceptance.json foi lido.",
+    "Não executado (por instrução): vitest, test:coverage, suíte Python, PG, build e certify. R2-M1 se baseia no mecanismo do código e em contagem calibrada, não em execução."
+  ]
+}

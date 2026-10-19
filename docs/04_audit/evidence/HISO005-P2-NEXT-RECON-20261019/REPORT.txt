@@ -1,0 +1,47 @@
+HISO005-P2-NEXT-RECON-20261019 — recon T1 das barreiras da B6 e pacote de decisão T3 (CONT-20261018-D9EF)
+
+Escopo: só a pasta desta evidência e um runtime privado, já removido. Sem código promovível, commit, push, PG nem edição de ledger, coordenação, catálogo ou docs/02_spec. B6 continua INCOMPLETE.
+
+Q1 — barreira do maxContexts
+- Causa: o corte vem do helper de nomeação do bundler, __name (node_modules/chai/index.js:212). Ele é chamado no topo do módulo uma vez por função nomeada, com um literal diferente a cada vez: 145 contextos para a mesma função, contra o teto de 64. É largura, não profundidade: pilha vazia no corte e profundidade máxima de 8 no corpo inteiro.
+- Onde se concentra: helpers de registro de bibliotecas de teste e validação. Passam de 64 contextos: __name (145), $constructor do zod (98), wrapAssertion (74) e assertTypes (66). O máximo de primeira parte é 17.
+- Necessidade sem corte: 145 contextos, 125.460 estados, profundidade 8 e 4 valores de união; 1.341/1.341 módulos e 1.535 arestas contidas.
+- Cortes sucessivos: 64 e 128 contextos cortam no módulo 23; 256 e 512 cortam por maxStates no módulo 1.026.
+- Custo: linear, cerca de 6 mil estados/s e 4,9 kB de heap por estado, com RSS máximo de 1,28 GB. Memoização não ajuda.
+- Pipeline com 256/250.000 e prazo de 120 s: 108,7 s (normal) e 109,8 s (strict). Saiu com validation false.
+  - A segunda barreira é o relógio de 120 s do comparador de identidade, contado desde a criação do verificador e não por fase.
+  - Sob load ~10, até a configuração oficial atual estourou o prazo (135 s).
+  - Com o relógio por fase (L3), executado como diagnóstico com 256/250.000/300 s, a validação deu true em normal e strict, com 13.521 diagnósticos.
+  - Conservação contra a T2: só some a tupla de envelope do corte; violações 0 e 0.
+- Proposta (SPEC0242): maxContexts 64→256, maxStates 100.000→250.000 e prazo semântico 120→300 s. O teto de 120 s do comparador passa a contar por fase, sem mudar o valor. A conservação e os aceites LB01–LB08 estão na SPEC.
+- Widening, corte por módulo e memoização foram descartados: mudam a semântica ou não resolvem, e ainda exigiriam subir maxStates.
+
+Q2 — teto de 4 GiB da referência instalada
+- A evidência é 98,9% do snapshot de fontes e cresce cerca de 205 MB por dia.
+- Margens em 228e7918: 22 MB no snapshot instalado e 188 MB no tar compilado. Em ae14b824, a margem instalada estimada é de cerca de 336 MB, o que dá cerca de 1,6 dia na média.
+- A exclusão de docs/04_audit/evidence/**, preferência do lead, foi confirmada.
+  - O snapshot cai para 280,6 MB.
+  - Os pacotes instalados (304) e as entradas e saídas compiladas ficam iguais.
+  - A medição B6 fica igual, tupla a tupla (2.410).
+  - Os recibos mudam só nos campos de uma lista fechada: sourceSha256, usage, sourceExclusions e, na compilada, recipeVersion v2 e digests.
+- Elevar o teto foi descartado. Afrouxaria o leitor, o comparador, a varredura instalada de produto e fingerprintToolchain, e o teto de entradas chegaria em cerca de 18 dias.
+- A receita compilada precisa da mesma decisão.
+- Proposta (SPEC0243): exclusão constante e fechada, com guarda fail-closed, archive literal e conferência física do snapshot, sem mudar nenhum limite. Aceites RS01–RS09.
+
+Crítica: crítico novo, não-fork, 2 rodadas
+- R1: REVISE nas duas, com 8 obrigatórios e 11 P3, todos corrigidos em r2.
+- R2: REVISE nas duas, só por R2-01 (ordem de BUILD e linhas de base). Os outros sete obrigatórios ficaram RESOLVED; o R1-05 ficou PARTIAL pelo mesmo motivo.
+- R2-01 e os 7 P3 foram corrigidos em r3, com ordem fixa 0243 → 0242 e regra de base e conservação por commit. Não houve terceira rodada; a autoverificação está em r2-corrections.json. O lead confere o diff r2→r3.
+
+SPEC materializadas (para copiar byte a byte para docs/02_spec)
+- SPEC0242 materialized/0242_b6_body_caps_deadlines.md: fa22cf4e5d102421aec49ced674ca5d1720444de53998741d123184ef2b14677
+- SPEC0243 materialized/0243_b6_reference_source_scope.md: 6db49cf51280a2f0867d45f98eaf4d0fae5b9f94b49d96bb21692df0657afd06
+
+Perguntas T3
+- Q1: Você aprova o BUILD local da SPEC0242 (SHA fa22cf4e…), que sobe maxContexts para 256, maxStates para 250.000 e o prazo semântico para 300 s, e passa a contar o prazo de 120 s do comparador de identidade por fase?
+- Q2: Você aprova o BUILD local da SPEC0243 (SHA 6db49cf5…), que tira docs/04_audit/evidence/** do snapshot e do archive das duas receitas de referência, sem mudar nenhum limite?
+
+Recursos
+- Removidos o worktree eval-228e (git worktree remove) e 9,7 GB de runtime, depois de registrar os hashes.
+- Não houve PG nem portas, e não há processos vivos.
+- A candidata T2 e a raiz do BUILD0241 foram usadas só em leitura.

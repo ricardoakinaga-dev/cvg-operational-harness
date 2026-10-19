@@ -1,0 +1,418 @@
+// DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1 - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-binding-2b1.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a partir das entradas: casos consumidos, status por linha, braços observados e abertos, contagens, sha das fontes e dos
+// acceptance.json citados, lacunas e projeção do 2B-2. Confere o conteúdo (2AC-BIND/R2-F02): cada evidência de braço contra o
+// acceptance (predicado aprovado e congelado, chaves de probe, passos, tokens, ganchos, consumidores, regras), os marcadores das
+// qualificações, os escopos, as erratas do v3 e a cópia carried_from_v3 linha a linha; roda controles negativos em cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const G02 = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02'
+const UNIT = G02 + '/sdk-batch-2b1-binding'
+const ADM = G02 + '/sdk-batch-2b1-admission'
+const C = G02 + '/sdk-batch-2ac-binding'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const shaFile = (p) => sha(readFileSync(p))
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const J = (x) => JSON.stringify(x)
+const armId = (a) => (/^((?:TS|PY|PK)\d\d\.B\d\d)/.exec(a) || [])[1] ?? null
+const strings = (x) => (typeof x === 'string' ? [x] : Array.isArray(x) ? x.flatMap(strings) : x && typeof x === 'object' ? Object.values(x).flatMap(strings) : [])
+
+const cNext = load(join(C, 'next-task.json'))
+const adj = load(join(ADM, 'adjudication-r1.json'))
+const inputs = {
+  v3: load(join(C, 'coverage-observed-v3.json')), gaps3: load(join(C, 'gaps-review-v3.json')), proj3: load(join(C, 'projection-2b-on-v3.json')),
+  disp: load(join(C, 'review-r2/executor-disposition.json')), adj,
+  cases: Object.fromEntries(load(join(ADM, 'inputs/spec-2b/cases-2b-1.json')).cases.map((c) => [c.id, c])),
+  cases2: Object.fromEntries(load(join(ADM, 'inputs/spec-2b/cases-2b-2.json')).cases.map((c) => [c.id, c])),
+  plan: load(join(ADM, 'inputs/spec-2b/coverage-plan-2b.json')),
+  acc: Object.fromEntries(adj.rows.map((r) => [r.case, load(join(ADM, r.dir, 'acceptance.json'))])),
+}
+
+// Regras de conteúdo fixas desta unidade (o build escreve os textos; aqui só os marcadores mínimos e as decisões).
+const NOT_DISCRIMINATED = new Set(['PY05|PY05.B10'])
+const QUAL_MARKERS = {
+  'PY02|PY02.B02': ['ordem das chaves não é comparada'], 'PY02|PY02.B06': ['lançador', 'Popen.args'], 'PY02|PY02.B07': ['ordem das chaves não é comparada'],
+  'PY02|PY02.B08': ['falha declarada', 'não foi observado'], 'PY08|PY08.B07': ['não é afirmado'], 'PY10|PY10.B04': ['forçada pelo harness', 'não é afirmada'],
+}
+const CARRIED_QUAL_MARKERS = { 'TS05.B04': ['inferidos', 'não foram testemunhados'], 'TS10.B04': ['inferida'], 'TS12.B01': ['NOT_WITNESSED'] }
+// Reparo R1-F01 a R1-F04: escopos de braços só em parte distinguidos; o observado não pode afirmar o ramo não distinguido.
+const SCOPE_RULES = {
+  'PY05|PY05.B06': { must: 'rejeitada antes de escrever', mustNot: ['normaliz', 'pré-release', 'acima do mínimo'], notObserved: 'normalização' },
+  'PY02|PY02.B02': { must: 'PATH igual ao do driver', mustNot: ['sem prefixo', 'não prefixa'], notObserved: 'prefixo de PATH' },
+  'PY02|PY02.B07': { must: 'PATH igual ao do driver', mustNot: ['sem prefixo', 'não prefixa'], notObserved: 'prefixo de PATH' },
+  'PY02|PY02.B01': { must: 'não tem config_overrides', mustNot: ['sem --config'], notObserved: 'config_overrides não vazio' },
+  'PY12|PY12.B03': { must: 'já podados', mustNot: ['sem histórico'], notObserved: 'eventos retidos' },
+}
+const MUST_CONDITIONS_RESOLVED = new Set(['PY02'])
+const ADM2AC = G02 + '/sdk-batch-2ac-admission'
+const adm2acManifest = load(join(ADM2AC, 'unit-manifest.json'))
+const CASE_QUAL_MARKERS = { '2B-PY01A': 'CLIENT_TERMINATED_SIGTERM', '2B-PY01D': 'CLIENT_TERMINATED_SIGTERM', '2B-PY02A': 'CLIENT_TERMINATED_SIGTERM', '2B-PY02K': 'falha declarada' }
+const MUST_REMAIN_ADD = new Set(['PY02', 'PY05', 'PY10'])
+const MUST_REMAIN_ADD_V3 = ['TS03', 'TS05', 'TS07', 'TS10', 'TS12']
+const LIFT = ['source_contract', 'gaps']
+
+function verifyEvidence(cid, it) {
+  const a = inputs.acc[cid]
+  const p = a.predicates.find((x) => x.id === it.predicate)
+  if (!p) return 'predicate absent'
+  if (!p.ok) return 'predicate not ok'
+  if (!(inputs.cases[cid]?.predicates ?? []).includes(it.predicate)) return 'predicate not frozen for the case'
+  if (it.class !== p.class) return 'class differs'
+  const d = p.detail
+  if (it.keys) for (const k of it.keys) if (!(d && typeof d === 'object' && !Array.isArray(d) && k in d)) return `probe key ${k} absent`
+  if (it.steps) for (const s of it.steps) if (!(Array.isArray(d) && d.some((x) => x.step === s && x.ok === true))) return `step ${s} absent`
+  if (it.tokens) {
+    const pools = it.predicate === 'hook.events_exact' ? d.chains : d
+    for (const t of it.tokens) if (!(Array.isArray(pools) && pools.some((o) => o && t in o))) return `token ${t} absent`
+  }
+  if (it.entries) for (const e of it.entries) if (!(d.entries ?? []).some((x) => x.matched?.length && Object.entries(e).every(([k, v]) => x.entry?.[k] === v))) return `hook entry ${J(e)} absent`
+  if (it.workers) for (const w of it.workers) if (d?.[w]?.ok !== true) return `worker ${w} absent`
+  if (it.rules) for (const r of it.rules) if (!(d.checked ?? []).some((x) => x.rule === r && x.ok === true)) return `peer rule ${r} absent`
+  return null
+}
+
+function verifyBasis(b, inp) {
+  if (b.probe) {
+    const p = inp.acc[b.case]?.predicates.find((x) => x.id === 'probe.values_exact')
+    return p && J(p.detail?.[b.probe]) === J(b.equals) ? null : `probe ${b.probe} of ${b.case} is not ${J(b.equals)}`
+  }
+  const path = normalize(join(UNIT, b.source))
+  let text
+  try { text = readFileSync(path, 'utf8') } catch { return `source ${b.source} unreadable` }
+  if (sha(Buffer.from(text, 'utf8')) !== b.sha256) return `source sha of ${b.source}`
+  if (b.lines) {
+    const seg = text.split('\n').slice(b.lines[0] - 1, b.lines[1])
+    if (!seg.some((l) => l.includes(b.contains))) return `snippet not in ${b.source}:${b.lines.join('-')}`
+    return null
+  }
+  if (b.absent) return text.includes(b.absent) ? `${b.absent} present in ${b.source}` : null
+  if (b.config_absent_key) {
+    const cfg = inp.cases[b.case]?.case_input.sdk_calls.find((x) => x.step === b.step)?.config ?? {}
+    return !(b.config_absent_key in cfg) && b.config_present_key in cfg ? null : `config of ${b.case} step ${b.step}`
+  }
+  return 'unknown basis kind'
+}
+
+function expected(inp) {
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  const adjRows = Object.fromEntries(inp.adj.rows.map((r) => [r.case, r]))
+  const plan = Object.fromEntries(inp.plan.rows.map((r) => [r.source_contract, r]))
+  const out = {}
+  for (const r3 of inp.v3.rows) {
+    const c = r3.source_contract
+    const p = plan[c]
+    const in1 = Boolean(p) && J(p.sub_lots) === J(['2B-1'])
+    let status = r3.status
+    const observed = {}, open = []
+    if (in1) {
+      for (const x of p.cases.filter((y) => consumed.has(y))) {
+        for (const b of inp.cases[x].branches_targeted.filter((y) => y.startsWith(c + '.'))) {
+          const id = armId(b)
+          if (NOT_DISCRIMINATED.has(`${c}|${id}`)) open.push(`${id}|${x}|${b}`)
+          else (observed[id] ??= []).push(`${x}|${b}`)
+        }
+      }
+      const used = p.primary_cases.filter((x) => adjRows[x] && adjRows[x].outcome !== 'NOT_RUN')
+      if (r3.status !== 'OBSERVED_CLIENT_PARTIAL') status = used.length && used.every((x) => consumed.has(x)) ? 'OBSERVED_CLIENT_PARTIAL' : 'OPEN_REQUIRED_FUTURE_PROFILE'
+    }
+    out[c] = { status, in1, p, observed, open, obs: in1 ? p.cases.filter((x) => consumed.has(x)) : [] }
+  }
+  return out
+}
+
+function expectedCarried(inp, c, v4row) {
+  const r3 = clone(inp.v3.rows.find((x) => x.source_contract === c))
+  for (const k of LIFT) delete r3[k]
+  if (c === 'TS07') {
+    const a = r3.arms_closed_v3.find((x) => armId(x.arm) === 'TS07.B03')
+    Object.assign(a, inp.disp.items.find((i) => i.id === 'R2-F01').erratum_text)
+    a.evidence_v4 = v4row?.carried_from_v3?.arms_closed_v3?.find((x) => armId(x.arm) === 'TS07.B03')?.evidence_v4
+  }
+  if (c === 'TS12') r3.remaining_after_continuation_additions = v4row?.carried_from_v3?.remaining_after_continuation_additions
+  return r3
+}
+
+function validate(docs, inp) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  const v4 = docs['coverage-observed-v4.json']
+  const g4 = docs['gaps-review-v4.json']
+  const pj = docs['projection-2b2-on-v4.json']
+  const v3 = inp.v3
+  if (shaFile(join(C, 'coverage-observed-v3.json')) !== cNext.review_records.coverage_observed_v3.sha256) err('v3 changed on disk')
+  const exp = expected(inp)
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  const adjRows = Object.fromEntries(inp.adj.rows.map((r) => [r.case, r]))
+  if (v4.rows.length !== 44 || v3.rows.length !== 44) err('row count')
+  if (J([...v4.bound_cases_2b1].sort()) !== J([...consumed].sort()) || consumed.has('2B1-CTRL01')) err('bound cases differ from bind_consumes_only')
+  if (v4.control_slot?.counts_as_sdk_observation !== false) err('bound cases: CONTROL counted')
+  if (J(v4.conditional_slots) !== J(inp.adj.conditional_slots)) err('conditional slots differ from the adjudication')
+  const F01 = inp.disp.items.find((i) => i.id === 'R2-F01')
+  const caseArmEvidence = {}
+  for (const r of v4.rows) {
+    const c = r.source_contract
+    const e = exp[c]
+    if (!e) { err(`unknown row ${c}`); continue }
+    const r3 = v3.rows.find((x) => x.source_contract === c)
+    if (r.status !== e.status) err(`${c}: status ${r.status} != ${e.status}`)
+    if (r.status_v3 !== r3.status || J(r.gaps) !== J(r3.gaps)) err(`${c}: status_v3 or gaps`)
+    if (r.status_changed !== (r.status !== r3.status)) err(`${c}: status_changed flag`)
+    // cópia do v3 com só as erratas declaradas
+    if (J(r.carried_from_v3) !== J(expectedCarried(inp, c, r))) err(`${c}: carried_from_v3 differs from the v3 row beyond the declared errata`)
+    if (c === 'TS07') {
+      const a = r.carried_from_v3.arms_closed_v3.find((x) => armId(x.arm) === 'TS07.B03')
+      if (a.observed_scope !== F01.erratum_text.observed_scope || a.not_observed !== F01.erratum_text.not_observed || a.observed_scope.includes('chave vazia')) err('TS07.B03 erratum not applied in the row')
+      for (const ev of a.evidence_v4 ?? []) {
+        const accPath = normalize(join(C, ev.acceptance))
+        const rel = accPath.slice(ADM2AC.length + 1)
+        if (shaFile(accPath) !== ev.sha256 || adm2acManifest.files[rel]?.sha256 !== ev.sha256) err('TS07.B03 erratum evidence sha differs from the file or the 2AC admission manifest')
+        const acc = load(accPath)
+        const p = acc.predicates.find((x) => x.id === ev.predicate)
+        if (!(p && p.ok && ev.contains.every((s) => strings(p.detail).some((t) => t.includes(s))))) err('TS07.B03 erratum evidence not in the 2A-TS07R acceptance')
+      }
+      if (!(a.evidence_v4 ?? []).length) err('TS07.B03 erratum evidence missing')
+    }
+    if (c === 'TS12') {
+      const t = r.carried_from_v3.remaining_after_continuation_additions ?? ''
+      if (!t.includes('pergunta T3 nova') || t.includes('condicionada à pergunta T3 contingente') || !t.includes('NOT_WITNESSED')) err('TS12 destination (2AC-BIND/R2-F05) not applied')
+    }
+    for (const a of r.carried_from_v3.arms_closed_v3 ?? []) {
+      for (const m of CARRIED_QUAL_MARKERS[armId(a.arm)] ?? []) if (!(a.qualification ?? '').includes(m)) err(`${c}: carried qualification marker '${m}' missing in ${armId(a.arm)}`)
+    }
+    if (MUST_REMAIN_ADD_V3.includes(c) && !(r.carried_from_v3.remaining_after_continuation_additions ?? '').length) err(`${c}: carried remaining additions missing`)
+    if (e.in1) {
+      // observações
+      if (J((r.observations_2b1 ?? []).map((o) => o.case)) !== J(e.obs)) err(`${c}: observations differ`)
+      for (const o of r.observations_2b1 ?? []) {
+        const ar = adjRows[o.case]
+        if (!consumed.has(o.case)) err(`${c}: ${o.case} not consumable`)
+        if (o.final_reading !== ar.final_reading || o.attribution !== ar.attribution) err(`${o.case}: reading not from the adjudication`)
+        if (o.acceptance_service.path !== '../sdk-batch-2b1-admission/' + ar.dir + '/acceptance.json') err(`${o.case}: acceptance pointer is not the adjudication dir`)
+        if (shaFile(normalize(join(UNIT, o.acceptance_service.path))) !== o.acceptance_service.sha256) err(`${o.case}: acceptance sha`)
+        const acc = inp.acc[o.case]
+        if (o.capture_form !== acc.capture_form || o.predicates !== acc.predicates.length || J(o.failed_predicates) !== J(acc.failed_predicates)) err(`${o.case}: capture form or predicates differ from acceptance`)
+        if (J(o.analytic_branch_arms_targeted) !== J(inp.cases[o.case].branches_targeted.filter((b) => b.startsWith(c + '.')))) err(`${o.case}: targeted arms differ from branches_targeted`)
+        const q = (o.qualifications ?? []).join(' ')
+        if (CASE_QUAL_MARKERS[o.case] && !q.includes(CASE_QUAL_MARKERS[o.case])) err(`${o.case}: case qualification marker '${CASE_QUAL_MARKERS[o.case]}' missing`)
+      }
+      // braços observados e abertos
+      const gotObs = Object.fromEntries((r.arms_observed_2b1 ?? []).map((a) => [a.arm_id, a.observed_by.map((x) => `${x.case}|${x.label}`)]))
+      if (J(Object.keys(gotObs).sort()) !== J(Object.keys(e.observed).sort())) err(`${c}: observed arms differ`)
+      for (const [id, list] of Object.entries(e.observed)) if (J(gotObs[id]) !== J(list)) err(`${c}: observed_by of ${id} differs`)
+      const gotOpen = (r.arms_open_explicit_2b1 ?? []).map((a) => `${a.arm_id}|${a.case}|${a.arm}`)
+      if (J(gotOpen) !== J(e.open)) err(`${c}: not discriminated arms differ`)
+      for (const a of r.arms_open_explicit_2b1 ?? []) {
+        if (a.reason !== 'NOT_DISCRIMINATED' || !(a.detail ?? '').includes('py/client.py:342')) err(`${c}: not discriminated arm ${a.arm_id} without reason`)
+        if (!(a.basis ?? []).length) err(`${c}: not discriminated arm ${a.arm_id} without basis`)
+        for (const b of a.basis ?? []) { const v = verifyBasis(b, inp); if (v) err(`${c}: basis of ${a.arm_id}: ${v}`) }
+        for (const it of a.evidence_non_discriminating ?? []) { const v = verifyEvidence(a.case, it); if (v) err(`${c}: evidence of ${a.arm_id} (${a.case}, ${it.predicate}): ${v}`) }
+      }
+      for (const a of r.arms_observed_2b1 ?? []) {
+        const key = `${c}|${a.arm_id}`
+        for (const ob of a.observed_by) {
+          if (ob.capture_form !== inp.acc[ob.case].capture_form) err(`${c}: capture form of ${a.arm_id}`)
+          if (!(ob.evidence ?? []).length) err(`${c}: evidence of ${a.arm_id} (${ob.case}) empty`)
+          for (const it of ob.evidence ?? []) {
+            const v = verifyEvidence(ob.case, it)
+            if (v) err(`${c}: evidence of ${a.arm_id} (${ob.case}, ${it.predicate}): ${v}`)
+            ;(caseArmEvidence[ob.case] ??= new Set()).add(it.predicate)
+          }
+          if (!(ob.evidence ?? []).some((it) => it.class === 'client')) err(`${c}: no client-class evidence for ${a.arm_id} (${ob.case})`)
+        }
+        for (const m of QUAL_MARKERS[key] ?? []) if (!(a.qualification ?? '').includes(m)) err(`${c}: qualification marker '${m}' missing in ${a.arm_id}`)
+        if (!QUAL_MARKERS[key] && a.qualification) err(`${c}: undeclared qualification in ${a.arm_id}`)
+        const sr = SCOPE_RULES[key]
+        const os = a.observed_scope ?? ''
+        if (sr && !(os.includes(sr.must) && sr.mustNot.every((m) => !os.includes(m)) && (a.not_observed ?? '').includes(sr.notObserved))) err(`${c}: scope of ${a.arm_id} is not the observed one`)
+        if (!sr && (a.observed_scope || a.not_observed)) err(`${c}: undeclared scope in ${a.arm_id}`)
+        if (sr) {
+          const have = new Set(a.observed_by.flatMap((ob) => ob.evidence.map((x) => x.predicate)))
+          if (!(a.observed_scope_evidence ?? []).length) err(`${c}: scope evidence of ${a.arm_id} missing`)
+          for (const it of a.observed_scope_evidence ?? []) {
+            if (!have.has(it.predicate)) err(`${c}: scope evidence of ${a.arm_id} outside the arm evidence (${it.predicate})`)
+            const v = verifyEvidence(it.case, it)
+            if (v) err(`${c}: scope evidence of ${a.arm_id} (${it.predicate}): ${v}`)
+          }
+          if (!(a.not_observed_basis ?? []).length) err(`${c}: scoped arm ${a.arm_id} without basis`)
+          for (const b of a.not_observed_basis ?? []) { const v = verifyBasis(b, inp); if (v) err(`${c}: basis of ${a.arm_id}: ${v}`) }
+        }
+      }
+      if (r.remaining_after_2b1 !== e.p.remaining_after) err(`${c}: remaining differs from the plan`)
+      if (MUST_REMAIN_ADD.has(c) && !(r.remaining_after_2b1_additions ?? '').length) err(`${c}: remaining additions missing`)
+      if (MUST_CONDITIONS_RESOLVED.has(c) && !(r.remaining_after_2b1_conditions_resolved ?? '').includes('Condição resolvida')) err(`${c}: conditions resolved note missing`)
+      const joined = [r.remaining_after_2b1, r.remaining_after_2b1_conditions_resolved, r.remaining_after_2b1_additions].filter(Boolean).join(' ')
+      if (v4.remaining_open_by_contract[c] !== joined) err(`${c}: remaining_open_by_contract`)
+      if (!(r.residual_planned_profile_proposal ?? '').endsWith(': ' + joined)) err(`${c}: residual proposal`)
+    } else {
+      if (r.observations_2b1 || r.arms_observed_2b1) err(`${c}: 2B-1 fields in a row outside the 2B-1 plan`)
+      if (e.p) {
+        if (J(r.cases_2b2_pending) !== J(e.p.cases)) err(`${c}: 2B-2 pending cases`)
+        for (const k of ['planned_profile_proposal', 'residual_planned_profile_proposal']) if (r3[k] !== undefined && r3[k].startsWith('SOURCE_BATCH_2B') && !(r[k] ?? '').startsWith('SOURCE_BATCH_2B_2')) err(`${c}: 2B-2 proposal not relabelled`)
+      } else {
+        for (const k of ['planned_profile_proposal', 'residual_planned_profile_proposal']) {
+          if (r3[k] === undefined) continue
+          if (r3[k].includes('SOURCE_BATCH_2B')) {
+            if (r[k] !== r3[k].replace('SOURCE_BATCH_2B', 'SOURCE_BATCH_CONTINUATION') || r[k + '_v3'] !== r3[k]) err(`${c}: SOURCE_BATCH_2B residue outside the plan not relabelled`)
+          } else if (r[k] !== r3[k]) err(`${c}: proposal changed outside the plan`)
+        }
+      }
+    }
+    if (r.whole_requirement_covered !== false || r.parity_credit !== 0 || r.functional_receipt !== null) err(`${c}: claims coverage, receipt or credit`)
+  }
+  // known_bad de cada caso coberto por alguma evidência de braço
+  for (const cid of consumed) for (const jb of inp.acc[cid].known_bad.judged_by) if (!(caseArmEvidence[cid]?.has(jb))) err(`${cid}: known_bad predicate ${jb} not linked to any arm`)
+  // topo
+  const counts = { OBSERVED_CLIENT_PARTIAL: 0, OPEN_REQUIRED_FUTURE_PROFILE: 0 }
+  for (const e of Object.values(exp)) counts[e.status] += 1
+  if (J(v4.counts) !== J(counts)) err(`counts ${J(v4.counts)} != ${J(counts)}`)
+  if (J(v4.counts_v3) !== J(v3.counts)) err('counts_v3 differs from the v3')
+  const changes = v4.rows.filter((r) => r.status !== r.status_v3).map((r) => ({ contract: r.source_contract, from: r.status_v3, to: r.status }))
+  if (J(changes) !== J(v4.status_changes)) err('status_changes differ from rows')
+  if (J(v4.still_not_consumed_2a) !== J(v3.still_not_consumed_2a)) err('still_not_consumed_2a differs from the v3')
+  const union = v4.rows.flatMap((r) => (r.arms_observed_2b1 ?? []).map((a) => ({ ...a, contract: r.source_contract })))
+  if (J(union) !== J(v4.arms_observed_2b1)) err('top arms_observed_2b1 differs from the union of rows')
+  const openU = [...v3.arms_open_explicit_v3, ...v4.rows.flatMap((r) => (r.arms_open_explicit_2b1 ?? []).map((a) => ({ ...a, contract: r.source_contract })))]
+  if (J(openU) !== J(v4.arms_open_explicit_v4)) err('top arms_open_explicit_v4 differs from v3 plus rows')
+  const closed = clone(v3.arms_closed_v3)
+  const ts07 = v4.rows.find((r) => r.source_contract === 'TS07').carried_from_v3.arms_closed_v3.find((x) => armId(x.arm) === 'TS07.B03')
+  for (const a of closed) if (armId(a.arm) === 'TS07.B03') Object.assign(a, F01.erratum_text, { evidence_v4: ts07.evidence_v4 })
+  if (J(closed) !== J(v4.arms_closed_v3_carried)) err('TS07.B03 erratum: arms_closed_v3_carried differs from the v3 with the erratum')
+  const ids = (v4.errata_applied ?? []).map((x) => x.id)
+  if (J(ids) !== J(['2AC-BIND/R2-F01', '2AC-BIND/R2-F05'])) err('errata_applied list')
+  const ea = Object.fromEntries((v4.errata_applied ?? []).map((x) => [x.id, x]))
+  if (ea['2AC-BIND/R2-F01'] && (J(ea['2AC-BIND/R2-F01'].v4) !== J(F01.erratum_text) || J(ea['2AC-BIND/R2-F01'].v3) !== J(F01.wrong_text))) err('errata_applied R2-F01 texts')
+  const ts12v3 = v3.rows.find((r) => r.source_contract === 'TS12').remaining_after_continuation_additions
+  const ts12v4 = v4.rows.find((r) => r.source_contract === 'TS12').carried_from_v3.remaining_after_continuation_additions
+  if (ea['2AC-BIND/R2-F05'] && (ea['2AC-BIND/R2-F05'].v3 !== ts12v3 || ea['2AC-BIND/R2-F05'].v4 !== ts12v4)) err('errata_applied R2-F05 texts')
+  const rem = { ...v3.remaining_open_by_contract, TS12: v3.remaining_open_by_contract.TS12.replace(ts12v3, ts12v4) }
+  for (const k of Object.keys(v4.remaining_open_by_contract)) if (!(k in rem) && !exp[k]?.in1) err(`remaining_open_by_contract: extra ${k}`)
+  for (const [k, t] of Object.entries(rem)) if (v4.remaining_open_by_contract[k] !== t) err(`remaining_open_by_contract: ${k} differs from the v3 with the errata`)
+  const voc = J(v4.status_vocabulary)
+  if (!voc.includes('coverage-plan-2b.json') || !voc.includes('2B-2') || voc === J(v3.status_vocabulary)) err('status_vocabulary not updated for v4')
+  for (const [k, s] of Object.entries(v4.sources)) if (shaFile(normalize(join(UNIT, s.path))) !== s.sha256) err(`source sha ${k}`)
+  // lacunas
+  const st = Object.fromEntries(Object.entries(exp).map(([k, v]) => [k, v.status]))
+  const st3 = Object.fromEntries(v3.rows.map((r) => [r.source_contract, r.status]))
+  const obsV4 = {}
+  for (const g of inp.gaps3.rows) {
+    const o4 = g.contracts.filter((c) => st[c] === 'OBSERVED_CLIENT_PARTIAL')
+    const o3 = g.contracts.filter((c) => st3[c] === 'OBSERVED_CLIENT_PARTIAL')
+    obsV4[g.id] = o4
+    const gr = g4.rows.find((x) => x.id === g.id)
+    if (!gr) { err(`${g.id}: gap row missing`); continue }
+    if (J(gr.contracts_observed_client_partial_v4) !== J(o4) || J(gr.contracts_observed_client_partial_v3) !== J(o3)) err(`${g.id}: observed contracts`)
+    if (J(gr.newly_observed_2b1) !== J(o4.filter((c) => !o3.includes(c)))) err(`${g.id}: newly observed`)
+    if (gr.status_after !== 'OPEN' || gr.whole_requirement_covered !== false) err(`${g.id}: gap closed`)
+    if (g4.summary.observed_v4[g.id] !== `${o4.length}/${g.contracts_total}`) err(`${g.id}: gap summary`)
+    if (gr.observed_count_changed !== (o4.length !== o3.length)) err(`${g.id}: observed_count_changed`)
+    if (gr.newly_observed_2b1.length && !gr.progress_changed && !gr.progress_after.includes('CLIENT_OBSERVED_PARTIAL') && !(gr.progress_justification ?? '').length) err(`${g.id}: progress label kept without progress justification`)
+  }
+  if (g4.summary.OPEN !== 6) err('gap summary: OPEN count')
+  // projeção do 2B-2 (lacunas recalculadas como na variante do v3: gp)
+  const rows2 = inp.plan.rows.filter((r) => J(r.sub_lots) === J(['2B-2']))
+  for (const r of rows2) if (r.primary_cases.some((x) => inp.cases2[x]?.sub_lot !== '2B-2')) err(`projection: ${r.source_contract} primary case outside 2B-2`)
+  const a2 = rows2.filter((r) => st[r.source_contract] === 'OPEN_REQUIRED_FUTURE_PROFILE').map((r) => r.source_contract)
+  const pc = (n) => ({ OBSERVED_CLIENT_PARTIAL: counts.OBSERVED_CLIENT_PARTIAL + n, OPEN_REQUIRED_FUTURE_PROFILE: counts.OPEN_REQUIRED_FUTURE_PROFILE - n })
+  const gp = (newly) => Object.fromEntries(inp.gaps3.rows.map((g) => [g.id, `${new Set([...obsV4[g.id], ...newly.filter((x) => g.contracts.includes(x))]).size}/${g.contracts_total}`]))
+  if (J(pj.after_2B_2.rows_becoming_observed) !== J(a2)) err('projection rows')
+  if (J(pj.after_2B_2.counts) !== J(pc(a2.length))) err('projection counts')
+  if (J(pj.after_2B_2.gaps) !== J(gp(a2))) err('projection gaps')
+  if (J(pj.base.counts_v4) !== J(counts)) err('projection base counts')
+  const pv = pj.previous_projection_check
+  const conf1 = J(inp.proj3.after_2B_1.counts) === J(counts) && J(inp.proj3.after_2B_1.gaps) === J(gp([]))
+  const conf2 = J(inp.proj3.after_2B_1_and_2B_2.counts) === J(pc(a2.length)) && J(inp.proj3.after_2B_1_and_2B_2.gaps) === J(gp(a2))
+  if (pv.after_2B_1_confirmed !== conf1 || pv.after_2B_2_confirmed !== conf2) err('previous projection check')
+  if (J(pj.conditional_slots_2b2) !== J([...new Set(rows2.flatMap((r) => r.conditional_cases))].sort())) err('projection conditional slots')
+  for (const [n, d] of Object.entries(docs)) if (('functional_receipts' in d && d.functional_receipts !== 0) || ('parity_credit' in d && d.parity_credit !== 0)) err(`${n}: receipts or credit`)
+  return errors
+}
+
+const FILES = ['coverage-observed-v4.json', 'gaps-review-v4.json', 'projection-2b2-on-v4.json']
+const docs = Object.fromEntries(FILES.map((f) => [f, load(join(UNIT, f))]))
+const errors = validate(docs, inputs)
+for (const f of readdirSync(UNIT)) { const s = statSync(join(UNIT, f)); if (s.isFile() && s.size === 0) errors.push(`empty file ${f}`) }
+const V = 'coverage-observed-v4.json'
+const row = (d, c) => d[V].rows.find((r) => r.source_contract === c)
+const arm = (d, c, id) => row(d, c).arms_observed_2b1.find((a) => a.arm_id === id)
+const controls = [
+  ['linha do 2B-2 promovida', 'status', (d) => { row(d, 'PY09').status = 'OBSERVED_CLIENT_PARTIAL' }],
+  ['braço observado extra', 'observed arms differ', (d) => { row(d, 'PY11').arms_observed_2b1.push({ arm_id: 'PY11.B07', labels: [], observed_by: [] }) }],
+  ['PY05.B10 dado como observado', 'not discriminated arms differ', (d) => { row(d, 'PY05').arms_open_explicit_2b1 = [] }],
+  ['chave de probe inexistente na evidência', 'probe key', (d) => { arm(d, 'PY01', 'PY01.B04').observed_by[0].evidence[0].keys = ['waiters_at_barrier_x'] }],
+  ['passo inexistente na evidência', 'step 99 absent', (d) => { arm(d, 'PY05', 'PY05.B08').observed_by[0].evidence[0].steps = [99] }],
+  ['token de ordem inexistente', 'token', (d) => { arm(d, 'PY11', 'PY11.B03').observed_by[0].evidence[0].tokens = ['RAW_READ:turn/start#3'] }],
+  ['gancho de outro estado', 'hook entry', (d) => { arm(d, 'PY10', 'PY10.B06').observed_by[0].evidence[0].entries = [{ id: 'h_sub_close', 'self._state.id': 'Z10' }] }],
+  ['consumidor inexistente', 'worker W9 absent', (d) => { arm(d, 'PY08', 'PY08.B07').observed_by[0].evidence[0].workers = ['W9'] }],
+  ['predicado ausente do acceptance', 'predicate absent', (d) => { arm(d, 'PY12', 'PY12.B06').observed_by[0].evidence.push({ predicate: 'hook.events_exact', class: 'client', ok: true }) }],
+  ['só evidência de captura', 'no client-class evidence', (d) => { arm(d, 'PY01', 'PY01.B03').observed_by[0].evidence = [{ predicate: 'barrier.witnesses_in_order', class: 'capture_order_or_cleanup', ok: true }] }],
+  ['predicado do known_bad desligado', 'known_bad predicate proc.no_extra_subprocess', (d) => { const e = arm(d, 'PY05', 'PY05.B01').observed_by[0]; e.evidence = e.evidence.filter((x) => x.predicate !== 'proc.no_extra_subprocess') }],
+  ['errata TS07.B03 desfeita (2AC-BIND/R2-F01)', 'TS07.B03 erratum', (d) => { const a = row(d, 'TS07').carried_from_v3.arms_closed_v3.find((x) => x.arm.startsWith('TS07.B03')); a.observed_scope = 'objeto inline com chave vazia lança (2A-TS07R)'; a.not_observed = 'filho undefined pulado em objeto inline' }],
+  ['errata TS07.B03 só no topo desfeita', 'arms_closed_v3_carried differs', (d) => { d[V].arms_closed_v3_carried.find((x) => x.arm.startsWith('TS07.B03')).observed_scope = 'objeto inline com chave vazia lança (2A-TS07R)' }],
+  ['evidência da errata trocada', 'erratum evidence not in the 2A-TS07R acceptance', (d) => { row(d, 'TS07').carried_from_v3.arms_closed_v3.find((x) => x.arm.startsWith('TS07.B03')).evidence_v4[0].contains = ['"" = 2'] }],
+  ['destino do TS12 do v3 (2AC-BIND/R2-F05)', 'TS12 destination', (d) => { row(d, 'TS12').carried_from_v3.remaining_after_continuation_additions = inputs.v3.rows.find((r) => r.source_contract === 'TS12').remaining_after_continuation_additions }],
+  ['campo do v3 alterado na cópia', 'carried_from_v3 differs', (d) => { row(d, 'TS03').carried_from_v3.status_rule_applied = 'x' }],
+  ['acréscimo do resto do TS03 apagado (2AC-BIND/R2-F02)', 'TS03: carried remaining additions missing', (d) => { delete row(d, 'TS03').carried_from_v3.remaining_after_continuation_additions }],
+  ['marcador da qualificação do TS10.B04 apagado (2AC-BIND/R2-F02)', "carried qualification marker 'inferida'", (d) => { row(d, 'TS10').carried_from_v3.arms_closed_v3[0].qualification = 'ok' }],
+  ['qualificação do PY02.B08 trocada por ok', "qualification marker 'falha declarada'", (d) => { arm(d, 'PY02', 'PY02.B08').qualification = 'ok' }],
+  ['escopo do PY05.B06 ampliado', 'scope of PY05.B06', (d) => { arm(d, 'PY05', 'PY05.B06').observed_scope += '; alpha acima do mínimo aprovada' }],
+  ['qualificação não declarada', 'undeclared qualification', (d) => { arm(d, 'PY12', 'PY12.B03').qualification = 'texto' }],
+  ['qualificação SIGTERM apagada do caso', "case qualification marker 'CLIENT_TERMINATED_SIGTERM'", (d) => { const o = row(d, 'PY01').observations_2b1[0]; o.qualifications = o.qualifications.filter((x) => !x.includes('SIGTERM')) }],
+  ['lacunas da projeção alteradas (2AC-BIND/R2-F02)', 'projection gaps', (d) => { d['projection-2b2-on-v4.json'].after_2B_2.gaps['GAP-PY-API'] = '12/13' }],
+  ['contagem da projeção alterada', 'projection counts', (d) => { d['projection-2b2-on-v4.json'].after_2B_2.counts.OBSERVED_CLIENT_PARTIAL = 34 }],
+  ['conferência da projeção anterior invertida', 'previous projection check', (d) => { d['projection-2b2-on-v4.json'].previous_projection_check.after_2B_1_confirmed = false }],
+  ['counts_v3 alterado (2AC-BIND/R2-F02)', 'counts_v3 differs', (d) => { d[V].counts_v3.OBSERVED_CLIENT_PARTIAL = 22 }],
+  ['vocabulário esvaziado (2AC-BIND/R2-F02)', 'status_vocabulary not updated', (d) => { d[V].status_vocabulary.OPEN_REQUIRED_FUTURE_PROFILE = '' ; d[V].status_vocabulary.OBSERVED_CLIENT_PARTIAL = '' }],
+  ['CONTROL consumido', 'bound cases differ', (d) => { d[V].bound_cases_2b1.push('2B1-CTRL01') }],
+  ['leitura final fora da adjudicação', 'reading not from the adjudication', (d) => { row(d, 'PY11').observations_2b1[0].final_reading = 'MISMATCH' }],
+  ['sha de acceptance trocado', 'acceptance sha', (d) => { row(d, 'PY12').observations_2b1[0].acceptance_service.sha256 = '0'.repeat(64) }],
+  ['ponteiro de acceptance de outro caso', 'acceptance pointer is not the adjudication dir', (d) => { const o = row(d, 'PY11').observations_2b1; o[0].acceptance_service = o[1].acceptance_service }],
+  ['contagem alterada', 'counts {', (d) => { d[V].counts.OBSERVED_CLIENT_PARTIAL = 30 }],
+  ['requisito inteiro afirmado', 'claims coverage', (d) => { row(d, 'PY01').whole_requirement_covered = true }],
+  ['lacuna fechada', 'gap closed', (d) => { d['gaps-review-v4.json'].rows[0].status_after = 'CLOSED' }],
+  ['summary de lacuna alterado', 'gap summary', (d) => { d['gaps-review-v4.json'].summary.observed_v4['GAP-PY-RPC'] = '9/11' }],
+  ['crédito de paridade', 'receipts or credit', (d) => { d['gaps-review-v4.json'].parity_credit = 1 }],
+  ['resto do plano alterado', 'remaining differs from the plan', (d) => { row(d, 'PY11').remaining_after_2b1 = '' }],
+  ['acréscimo do resto do PY02 apagado', 'PY02: remaining additions missing', (d) => { delete row(d, 'PY02').remaining_after_2b1_additions }],
+  ['status_changes esvaziado', 'status_changes differ', (d) => { d[V].status_changes = [] }],
+  ['braço do topo trocado', 'top arms_observed_2b1 differs', (d) => { d[V].arms_observed_2b1[0].arm_id = 'PY01.B99' }],
+  ['errata retirada da lista', 'errata_applied list', (d) => { d[V].errata_applied.pop() }],
+  ['still_not_consumed esvaziado', 'still_not_consumed_2a differs', (d) => { d[V].still_not_consumed_2a = [] }],
+  ['destino do 2B-2 sem o sub-lote', '2B-2 proposal not relabelled', (d) => { row(d, 'PY13').planned_profile_proposal = 'SOURCE_BATCH_2B' }],
+  ['escopo do PY05.B06 com normalização (R1-F01)', 'scope of PY05.B06', (d) => { arm(d, 'PY05', 'PY05.B06').observed_scope = 'alpha no mínimo normalizada como pré-release e rejeitada antes de escrever' }],
+  ['escopo do PY02.B07 com PATH sem prefixo (R1-F02)', 'scope of PY02.B07', (d) => { arm(d, 'PY02', 'PY02.B07').observed_scope += '; codex_bin explícito sem prefixo de PATH' }],
+  ['escopo do PY12.B03 sem histórico (R1-F03)', 'scope of PY12.B03', (d) => { arm(d, 'PY12', 'PY12.B03').observed_scope = 'assinatura tardia começa em next_event, sem histórico (já podados)' }],
+  ['escopo do PY02.B01 sem a ressalva (R1-F04)', 'scope of PY02.B01', (d) => { arm(d, 'PY02', 'PY02.B01').not_observed = '' }],
+  ['base de fonte com trecho trocado (R1-F08)', 'snippet not in', (d) => { arm(d, 'PY12', 'PY12.B03').not_observed_basis[0].contains = 'state.first_event)' }],
+  ['base de fonte com sha trocado (R1-F08)', 'source sha of', (d) => { arm(d, 'PY02', 'PY02.B07').not_observed_basis[0].sha256 = '0'.repeat(64) }],
+  ['base de ausência contrariada (R1-F08)', 'present in', (d) => { arm(d, 'PY02', 'PY02.B02').not_observed_basis[2].absent = 'openai_codex' }],
+  ['base de config contrariada (R1-F08)', 'config of 2B-PY02A', (d) => { arm(d, 'PY02', 'PY02.B01').not_observed_basis[0].config_absent_key = 'cwd' }],
+  ['base de probe contrariada (R1-F08)', 'probe first_event_1', (d) => { arm(d, 'PY12', 'PY12.B03').not_observed_basis[1].equals = [0] }],
+  ['base do não discriminado removida (R1-F08)', 'without basis', (d) => { row(d, 'PY05').arms_open_explicit_2b1[0].basis = [] }],
+  ['evidência do escopo fora da evidência do braço (R1-F08)', 'outside the arm evidence', (d) => { arm(d, 'PY05', 'PY05.B06').observed_scope_evidence.push({ predicate: 'peer.no_unscripted_request', case: '2B-PY05X', class: 'client', ok: true }) }],
+  ['sha da evidência da errata trocado (R1-F08)', 'erratum evidence sha', (d) => { row(d, 'TS07').carried_from_v3.arms_closed_v3.find((x) => x.arm.startsWith('TS07.B03')).evidence_v4[0].sha256 = '0'.repeat(64) }],
+  ['marcador do TS05.B04 apagado (R1-F08)', "carried qualification marker 'não foram testemunhados'", (d) => { const a = row(d, 'TS05').carried_from_v3.arms_closed_v3[0]; a.qualification = a.qualification.replace('não foram testemunhados', 'foram vistos') }],
+  ['marcador do TS12.B01 apagado (R1-F08)', "carried qualification marker 'NOT_WITNESSED'", (d) => { const a = row(d, 'TS12').carried_from_v3.arms_closed_v3[0]; a.qualification = a.qualification.replaceAll('NOT_WITNESSED', 'visto') }],
+  ['resíduo do PY15 sem rótulo novo (R1-F06)', 'PY15: SOURCE_BATCH_2B residue', (d) => { row(d, 'PY15').residual_planned_profile_proposal = row(d, 'PY15').residual_planned_profile_proposal_v3 }],
+  ['justificativa de progresso apagada (R1-F07)', 'progress justification', (d) => { d['gaps-review-v4.json'].rows.find((g) => g.id === 'GAP-PLATFORM-PACKAGING').progress_justification = null }],
+  ['condição resolvida apagada (R1-F05)', 'conditions resolved note missing', (d) => { delete row(d, 'PY02').remaining_after_2b1_conditions_resolved }],
+  ['destino sem os acréscimos (R1-F05)', 'PY10: residual proposal', (d) => { const r = row(d, 'PY10'); r.residual_planned_profile_proposal = 'NATIVE + SOURCE_BATCH_CONTINUATION: ' + r.remaining_after_2b1 }],
+]
+const negative = controls.map(([name, want, mutate]) => {
+  const d = clone(docs)
+  mutate(d)
+  const e = validate(d, inputs)
+  const hit = e.find((x) => x.includes(want))
+  return { control: name, expected_error_substring: want, rejected: Boolean(hit), matching_error: hit ?? null }
+})
+const doc = {
+  kind: 'BINDING_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:BIND-SDK-SOURCE-BATCH-2B-1',
+  note: 'segunda implementação do mesmo executor; não é revisão independente', node: process.version,
+  result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors, negative_controls: negative, validated_at: new Date().toISOString(),
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)
+if (errors.length) console.log(errors.slice(0, 30).join('\n'))
+for (const n of negative) if (!n.rejected) console.log('NOT REJECTED:', n.control)

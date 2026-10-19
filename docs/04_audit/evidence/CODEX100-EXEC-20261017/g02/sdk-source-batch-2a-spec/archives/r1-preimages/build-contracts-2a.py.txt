@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A - contratos do peer v2, avaliador r3, captura,
+# vaga CONTROL, orçamento e avaliação T3. Lê cases-2a.json para conferir referências.
+# Uso: python3 -I build-contracts-2a.py.txt <repo_root> <out_dir>
+import hashlib
+import json
+import os
+import sys
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017")
+ADM = os.path.join(E, "g02/sdk-admission")
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A"
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def ref(p):
+    return {"path": os.path.relpath(p, OUT), "sha256": sha(p)}
+
+
+cases = json.load(open(os.path.join(OUT, "cases-2a.json")))
+CASES = cases["cases"]
+
+# ------------------------------------------------------------------ peer v2
+peer_v2 = {
+    "kind": "PEER_V2_CONTRACT",
+    "task": TASK,
+    "replaces": ref(os.path.join(ADM, "python/fixture-rpc.py")),
+    "scope": "Peer JSON-RPC sintético atrás do adapter Python. Não é app-server do Codex. O peer TS (fixture-cli) não recebe pedidos e não usa este contrato.",
+    "script": {
+        "format": "peer_script com version=2 em cada caso Python de cases-2a.json",
+        "rules": "on_request é uma lista ordenada; cada regra é de uso único; a primeira regra ainda não usada cujo match casa é aplicada.",
+        "match": {
+            "method": "igualdade exata do método",
+            "params": "igualdade JSON exata do objeto params",
+            "params_absent": "a chave params não existe na linha recebida",
+            "params_subset": "cada chave listada existe em params com valor JSON igual",
+            "nth": "ordinal entre as regras com o mesmo match, para pedidos repetidos idênticos",
+        },
+        "actions": {
+            "reply": "escreve {id: <id capturado>, result|error: ...}",
+            "hold": "'until_RELEASE_REPLY' segura a resposta até o controle do supervisor; 'forever' nunca responde e descarta o pedido segurado em FINISH_PEER",
+            "before_reply": "lista de quadros escritos antes da resposta",
+            "after_reply": "lista de quadros escritos depois da resposta",
+            "after_receipt": "lista de quadros escritos logo depois de receber o pedido segurado",
+        },
+        "frames": {
+            "notification": "{method, params} sem id",
+            "server_request": "{id, method, params}; params pode ser não-objeto quando o caso pede",
+            "response": "{id, result|error} com id alheio, para testar roteamento",
+            "exit": "'close_stdout_then_exit_0': fecha o stdout, emite PEER_MILESTONE EXIT_AFTER_SCRIPT e sai com 0",
+        },
+        "ids": "Respostas usam sempre o id capturado do pedido; nenhum UUID fixo, exceto o id alheio declarado em 'response'.",
+    },
+    "unscripted_request": {
+        "rule": "Todo pedido sem regra aplicável recebe resposta de erro com o id capturado, em vez de ficar sem resposta.",
+        "declared_per_case": "peer_script.unscripted_error em cases-2a.json",
+        "default_in_2A": {"code": -32601, "message": "cvg synthetic: unscripted request",
+                          "data": {"cvg_synthetic": True, "method": "<método recebido>"},
+                          "sdk_class": "openai_codex.errors.MethodNotFoundError"},
+        "forbidden": [
+            "qualquer ocorrência de 'server_overloaded' em data, em qualquer profundidade (aciona is_retryable_error)",
+            "códigos de -32099 a -32000 (faixa de servidor; o SDK pode classificar como ServerBusyError ou RetryLimitExceededError pelo texto)",
+            "-32600 (InvalidRequestError) em casos cujo assunto é o prefixo de InvalidRequestError, como PY14; no lote 2A nenhum caso usa -32600 para pedido sem script",
+            "mensagem com 'retry limit' ou 'too many failed attempts'",
+        ],
+        "milestones": ["UNSCRIPTED {method, id_sha256}", "UNSCRIPTED_ERROR_WRITTEN {bytes, sha256}"],
+        "fail_closed": "Se o cliente ainda assim bloquear (não lê a resposta), o watchdog do driver leva a INVALID_CAPTURE, nunca a PASS.",
+        "carry_over": "R1-F01 e R2-F02 da admissão: o known-bad bloqueante passa a ser alcançável como MISMATCH.",
+    },
+    "unchanged": ["RAW_READ do adapter continua a captura autoritativa", "sinais e prazos do peer atual", "limite de linha 262144 bytes"],
+    "selftests_required": [
+        "pedido sem script recebe o erro declarado com o id capturado",
+        "erro declarado com server_overloaded ou código -32000..-32099 é recusado na admissão",
+        "regra de uso único e nth respeitados",
+        "exit close_stdout_then_exit_0 fecha o stdout antes de sair",
+    ],
+}
+
+# ------------------------------------------------------------------ avaliador r3
+evaluator = {
+    "kind": "EVALUATOR_R3_CONTRACT",
+    "task": TASK,
+    "base": ref(os.path.join(ADM, "python/acceptance.py")),
+    "clauses": [
+        {"id": "R3-01", "carry_over": "R2-F01 (admissão)",
+         "rule": "Predicados de ordem entre processos são provas unilaterais: a condição usa <= no mesmo CLOCK_MONOTONIC (por exemplo, mono_ns do RAW_READ do initialized no adapter <= mono_ns do API_ERROR no driver). Se valer, o predicado passa. Se não valer, o resultado do caso é INCONCLUSIVE ou INVALID_CAPTURE, NUNCA MISMATCH. O avaliador r3 trata essa classe à parte da regra atual de acceptance.py:537-540, que marca MISMATCH para qualquer predicado falho.",
+         "applies_in_2A": ["order.kill_and_rm_before_return_resolved (2A-TS04)"],
+         "applies_later": "wire.initialized_before_guard em reexecuções de casos PY05; fecha só a parte de ordem do R1-F05"},
+        {"id": "R3-02", "carry_over": "R2-F02 (admissão)",
+         "rule": "O goal path e o interrupt do SDKPY07 ficam alcançáveis como MISMATCH pelo peer v2 e pelo pause_reply (2A-PY10R); a prova de alcance em serviço é a vaga 2A-CTRL01."},
+        {"id": "R3-03", "carry_over": "R2-F03 (admissão)",
+         "rule": "A errata da unidade de execução cita só IDs alcançáveis (por exemplo acceptance.SDKPY07.known_bad_closed_false_mismatch). A errata.json da admissão permanece congelada; a correção da citação fica registrada na unidade nova."},
+        {"id": "R3-04", "carry_over": "R2-F04 (admissão) e R2-F04 (ligação)",
+         "rule": "reevaluate: docstring e código alinhados; comparação por predicado com o acceptance de serviço (id, ok e detalhe normalizado por JSON); sem o documento r3, saída 1 com mensagem explícita; autoteste para os dois caminhos. client_fact_only, parity_receipt e functional_receipts levam o rótulo da versão do avaliador."},
+        {"id": "R3-05",
+         "rule": "peer.no_unscripted_request passa a julgar o cliente: um pedido sem script respondido pelo peer v2, num caso cujo known-bad o proíbe, é MISMATCH. Se o cliente bloquear mesmo assim, o caso é INVALID_CAPTURE por prazo (fail-closed), nunca PASS."},
+        {"id": "R3-06",
+         "rule": "Classe de juiz decide o desfecho de um predicado falho com forma de captura aceita: client -> MISMATCH; peer_or_capture_sanity e capture_order_or_cleanup -> INVALID_CAPTURE; order_unilateral -> INCONCLUSIVE (R3-01). Cada predicado de cases-2a.json recebe uma classe na implementação, registrada no plano de casos."},
+        {"id": "R3-07",
+         "rule": "A vaga CONTROL roda antes dos casos SDK e deve terminar MISMATCH. PASS ou INVALID_CAPTURE na CONTROL para a unidade antes de qualquer caso SDK. O resultado da CONTROL nunca conta como observação do SDK."},
+        {"id": "R3-08",
+         "rule": "INCONCLUSIVE só por prazo e só nos casos com inconclusive_on_deadline=true (2A-TS10 e 2A-TS12), além do SDKTS10 existente. No 2A-TS10, PASS exige exatamente uma das duas formas declaradas (A: ENOENT relançado; B: erro sem listener no stdin registrado pelo recorder), e a forma observada é registrada."},
+        {"id": "R3-09",
+         "rule": "Expectativas congeladas em cases-2a.json não mudam depois da execução. Divergência entre o valor capturado e o congelado é MISMATCH preservado, com bytes brutos."},
+        {"id": "R3-10",
+         "rule": "Novas formas de captura reconhecidas: NO_CHILD (spawn falhou, nenhum processo do adapter na unidade) e PREREADY_SIGNAL_TERMINATION (adapter terminado por sinal antes do READY). Só valem nos casos que as declaram em accepted_capture_forms."},
+    ],
+    "never": "Nenhuma regra produz recibo funcional ou crédito de paridade.",
+}
+
+# ------------------------------------------------------------------ captura
+CAPS = {
+    "CAP-TS-SDKCALLS": "ts-driver executa os sdk_calls congelados por caso (opções de Codex, thread e turn, entrada, modo de consumo, marcadores $UNDEFINED e $ac.signal), em vez das opções fixas atuais.",
+    "CAP-TS-DRIVER-TMPDIR": "O processo do driver TS recebe TMPDIR=/work/tmp, para que os.tmpdir() aponte para o diretório testemunhado. O env do filho continua o do caso.",
+    "CAP-ARGV-CAP": "Limite do argv repassado do adapter ao fixture-cli sobe de 512 para 2048 bytes de JSON; o limite de 64 argumentos fica. Maior argv do lote: 655 bytes e 37 argumentos (2A-TS05).",
+    "CAP-ENV-EXACT": "O env do adapter é comparado ao child_env congelado do caso, chave a chave, por /proc/<pid>/environ lido pelo supervisor e por autorrelato do adapter repassado ao fixture-cli. Generaliza o predicado env.adapter_sdk_env_only.",
+    "CAP-TMP-WITNESS": "Listagem de /work/tmp antes e depois de cada chamada SDK e eventos inotify (IN_CREATE, IN_DELETE) do diretório do host montado em /work/tmp, registrados pelo supervisor. O fixture-cli lê o arquivo de schema indicado no argv e relata bytes e sha256. Se o inotify não puder ser admitido, a parte 'criado' fica NOT_OBSERVED e só o estado final é julgado.",
+    "CAP-EMPTY-STDIN": "O fixture-cli aceita stdin vazio quando o caso declara allow_empty_stdin (2A-TS02B); nos demais casos, stdin vazio continua inválido.",
+    "CAP-STDOUT-CHUNKS": "O fixture-cli escreve stdout_chunks_hex como escritas separadas, sem LF acrescido; o adapter encaminha cada leitura como escrita própria e registra as fronteiras.",
+    "CAP-WRITE-THEN-HOLD": "O fixture-cli escreve as linhas declaradas e mantém o stdout aberto até sinal ou FINISH_PEER (2A-TS04).",
+    "CAP-ZERO-SPAWN-WITNESS": "O supervisor testemunha que não há processo do adapter na cgroup da unidade nos pontos declarados (passos com expect.spawns=0) e conta os spawns do caso inteiro.",
+    "CAP-LAZY-BARRIER": "O driver emite LAZY_POINT; o supervisor confere zero processo do adapter e zero diretório de schema antes de liberar o passo seguinte (2A-TS01).",
+    "CAP-RESOLVER-ABSENCE": "A admissão testemunha a ausência de node_modules na cadeia de resolução de /profile/sdk-emitted e das pastas globais do Node no sandbox, para que o override vazio do 2A-TS01 falhe só por ausência, sem carregar código.",
+    "CAP-PREREADY-SIGNAL": "Forma de captura PREREADY_SIGNAL_TERMINATION para adapter morto por sinal antes do READY (2A-TS12).",
+    "CAP-SPAWN-ENOENT": "Forma de captura NO_CHILD para spawn que falha sem processo (2A-TS10, e 2A-TS12 se o Node não chegar a criar o filho).",
+    "CAP-PY-SDKCALLS": "python-driver executa os sdk_calls congelados por caso (CodexClient, Thread, modelos e entradas públicas do SDK), além dos casos existentes.",
+    "CAP-PEER-V2": "Peer JSON-RPC conforme peer-v2-contract.json.",
+    "CAP-PEER-EXIT-EARLY": "Variante de barreira em que o peer sai antes do CALLS_DONE do driver; o adapter propaga o EOF do peer fechando o stdout do SDK (2A-PY08).",
+    "CAP-PEER-HOLD-FOREVER": "Pedido segurado com hold=forever é descartado em FINISH_PEER, sem erro de estado (2A-PY07R).",
+    "CAP-CUSTOM-HANDLER": "O driver passa ao CodexClient um approval_handler próprio que registra (method, params) e lança a exceção declarada (2A-PY07R).",
+    "CAP-TS-UNCAUGHT-RECORDER": "Só no 2A-TS10: o driver TS instala um recorder de uncaughtException que emite DIAGNOSTIC com nome, código e mensagem do erro e encerra o driver com código próprio. É instrumentação de observação, como o setprofile do SDKPY07; não muda o SDK.",
+    "CAP-CONTROL-CLIENT": "Cliente de controle sem SDK, /profile/control-client.py, conforme control-slot-contract.json.",
+}
+used = {cap for c in CASES for cap in c["infra"]}
+assert used == set(CAPS), (used ^ set(CAPS))
+capture = {
+    "kind": "CAPTURE_EXTENSION_CONTRACT",
+    "task": TASK,
+    "bases": {k: ref(os.path.join(ADM, p)) for k, p in {
+        "fixture-cli": "node/fixture-cli.mjs", "adapter-typescript": "node/adapter-typescript", "ts-driver": "node/ts-driver.mjs",
+        "python-driver": "python/python-driver.py", "supervisor": "python/supervisor.py", "observer": "python/observer.py",
+        "interface-bindings-v2": "interface-bindings-v2.json"}.items()},
+    "capabilities": {k: {"text": v, "used_by": sorted(c["id"] for c in CASES if k in c["infra"])} for k, v in CAPS.items()},
+    "fixture_cli_capture": {
+        "argv": "EXEC_ARGV com o vetor exato recebido do SDK (via adapter), limite 2048 bytes e 64 argumentos.",
+        "env": "ADAPTER_ENV com o env recebido pelo adapter, chaves ordenadas; testemunha independente por /proc/<pid>/environ.",
+        "work_tmp": "TMP_LISTING antes e depois e SCHEMA_FILE {path, bytes, sha256, trailing_lf} quando o argv tem --output-schema.",
+        "values": "Todos os valores de env e argv do lote são sintéticos; nenhum segredo, credencial ou dado real.",
+    },
+    "freeze": "Todas as mudanças entram num source-freeze-r3 e num identity freeze r3 antes de qualquer serviço; o emit TS selado é reutilizado se os .ts e o transpile não mudarem.",
+}
+
+# ------------------------------------------------------------------ CONTROL
+ctrl = [c for c in CASES if c["kind"] == "CONTROL"]
+assert len(ctrl) == 1
+control = {
+    "kind": "CONTROL_SLOT_CONTRACT",
+    "task": TASK,
+    "case": ctrl[0]["id"],
+    "purpose": "Provar em serviço que o peer v2 responde a pedido sem script e que o avaliador r3 classifica o known-bad como MISMATCH, sem depender de um SDK que se comporte mal.",
+    "client": ctrl[0]["control_client"],
+    "rules": [
+        "O cliente de controle não importa o SDK nem Pydantic; escreve linhas JSON-RPC fixas e lê uma resposta por pedido com prazo.",
+        "Usa o mesmo adapter Python, o mesmo peer v2, o mesmo supervisor e o mesmo observador dos casos SDK.",
+        "É julgado com o predicado wire.no_turn_interrupt do SDKPY07; o desfecho esperado é MISMATCH.",
+        "Roda primeiro. Qualquer desfecho diferente de MISMATCH para a unidade antes dos casos SDK (R3-07).",
+        "Conta 1 das 24 vagas e não gera observação de cliente nem crédito.",
+    ],
+    "source_freeze": "control-client.py entra no source-freeze-r3 com sha registrado.",
+}
+
+# ------------------------------------------------------------------ orçamento
+budget = {
+    "kind": "EXECUTION_BUDGET_FOR_NEXT_UNIT",
+    "task_next": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2A",
+    "max_from_HOW": {"case_slots": 24, "control_slots": 1, "services": 12, "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+    "planned": {
+        "case_slots": len(CASES), "sdk_cases": len(CASES) - 1, "control_slots": 1,
+        "qualification_services_planned": 8,
+        "qualification_services": ["DIAG-PY-RPC", "DIAG-TS-ECHO", "DIAG-TS-ABORT", "DIAG-TS-LARGE", "DIAG-PY-STAGE",
+                                   "DIAG-PY-UNSCRIPTED (peer v2)", "DIAG-TS-ARGVENV (argv 2048 e env exato)", "DIAG-TS-TMPWATCH (inotify e listagem de /work/tmp)"],
+        "services_reserve": "4 serviços de qualificação de reserva, só para diagnósticos novos de admissão; nunca para repetir um caso",
+        "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0,
+    },
+    "order": [
+        "1. Implementar peer v2, avaliador r3, extensões de captura e cliente de controle; autotestes offline.",
+        "2. source-freeze-r3 e identity freeze r3.",
+        "3. Requalificar os DIAG com o freeze r3 e qualificar os três DIAG novos.",
+        "4. CONTROL 2A-CTRL01; se não for MISMATCH, parar.",
+        "5. 23 casos SDK, uma vez cada, em série, sem retry; falhas e bytes parciais preservados.",
+        "6. Revisão independente (até 2 rodadas, 1 reparo agrupado offline).",
+    ],
+    "stops": ["qualquer DIAG novo falha", "CONTROL diferente de MISMATCH", "dependência, rede ou instalação necessária", "orçamento esgotado"],
+    "not_authorized": ["rede", "wheel/npm distribuídos", "Codex CLI real", "provider", "credencial", "dado real", "push", "produção"],
+}
+assert budget["planned"]["case_slots"] <= 24 and budget["planned"]["qualification_services_planned"] <= 12
+
+# ------------------------------------------------------------------ T3
+t3 = {
+    "kind": "T3_ASSESSMENT",
+    "task": TASK,
+    "rule": ref(os.path.join(ROOT, "docs/07_agents/AGENTS.md")),
+    "rule_section": "Governança proporcional (D-12): T3 = mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval; T4 = provider, canal, conhecimento, efeito externo real, dado real ou release candidate.",
+    "plan_section": ref(os.path.join(ROOT, "docs/03_build/0384_plano_executivo_paridade_codex.md")),
+    "decision": "NAO_EXIGE_T3",
+    "decision_t4": "NAO_EXIGE_T4",
+    "why": [
+        "A execução do lote 2A observa os clientes SDK do upstream contra peers sintéticos num sandbox contido. Não muda código de produto do CVG, contrato público, schema, migration, segurança, identidade, policy nem approval do harness.",
+        "As mudanças ficam em ferramentas privadas de evidência sob docs/04_audit/evidence (drivers, peer, adapter, supervisor, avaliador), como na admissão, que rodou sob claim do Lead sem T3.",
+        "Não há provider, credencial, rede, dado real nem efeito externo; os valores de env e argv são sintéticos (T4 não se aplica).",
+        "O approval_handler do 2A-PY07R e o ExternalMessage do 2A-PY16 observam o comportamento literal do cliente; não alteram nem concedem approval institucional.",
+    ],
+    "would_require_t3_if": [
+        "a unidade precisar alterar código de produto ou contrato público do CVG para executar os casos",
+        "algum caso passar a depender de mudança de policy, approval ou identidade do harness",
+    ],
+    "would_require_t4_if": [
+        "for preciso rede, aquisição de wheel/npm distribuídos, Codex CLI real com provider, credencial ou dado real",
+    ],
+    "user_question": None,
+}
+
+for name, obj in (("peer-v2-contract.json", peer_v2), ("evaluator-r3-contract.json", evaluator), ("capture-contract.json", capture),
+                  ("control-slot-contract.json", control), ("execution-budget.json", budget), ("t3-assessment.json", t3)):
+    with open(os.path.join(OUT, name), "w") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+print(json.dumps({"caps": len(CAPS), "slots": len(CASES), "services_planned": 8, "t3": t3["decision"]}))

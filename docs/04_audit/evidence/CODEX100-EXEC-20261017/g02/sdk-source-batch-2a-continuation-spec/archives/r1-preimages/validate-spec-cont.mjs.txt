@@ -1,0 +1,157 @@
+// DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-spec-cont.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a partir das entradas: cópia fiel dos casos R e do CONTROL, case_input_sha256, tabela de predicados, âncoras, chaves numéricas,
+// limites de argv, plano de cobertura, orçamento, T3 e encaixe do 2B; roda controles negativos em cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const UNIT = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-continuation-spec'
+const SPEC2A = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-spec'
+const BIND = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2a-binding'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const shaFile = (p) => sha(readFileSync(p))
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const compact = (x) => JSON.stringify(x)
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const spec2a = load(join(SPEC2A, 'cases-2a.json'))
+const cases2a = Object.fromEntries(spec2a.cases.map((c) => [c.id, c]))
+const cov2 = load(join(BIND, 'coverage-observed-v2.json'))
+const IDS = ['2A-TS03R', '2A-TS06R', '2A-TS07R', '2A-TS12R', '2A-TS10E', '2A-TS06X', '2A-TS07X', '2A-TS08X', '2AC-CTRL01']
+const CLASSES = ['client', 'peer_or_capture_sanity', 'capture_order_or_cleanup', 'informational', 'order_unilateral']
+const UNCHANGED = ['contracts', 'branches_targeted', 'fixture', 'sdk_calls', 'expected', 'expected_observation', 'known_bad', 'accepted_capture_forms',
+  'inconclusive_on_deadline', 'anchors', 'inputs']
+
+function checkAnchor(a, inputs, err, where) {
+  const meta = inputs[a.input]
+  if (!meta) return err(`${where}: anchor input ${a.input} not declared`)
+  const p = normalize(join(UNIT, meta.path))
+  const raw = readFileSync(p)
+  if (sha(raw) !== meta.sha256 || a.sha256 !== meta.sha256) err(`${where}: anchor sha ${a.input}`)
+  const lines = raw.toString('utf8').split('\n')
+  const found = lines.map((l, i) => (l.includes(a.text) ? i + 1 : 0)).filter(Boolean)
+  if (JSON.stringify(found) !== JSON.stringify(a.lines)) err(`${where}: anchor lines ${a.input} ${JSON.stringify(a.lines)} != ${JSON.stringify(found)}`)
+}
+
+function intKeys(x, path = '$', out = []) {
+  if (Array.isArray(x)) x.forEach((v, i) => intKeys(v, `${path}[${i}]`, out))
+  else if (x && typeof x === 'object') for (const [k, v] of Object.entries(x)) { if (/^(?:0|[1-9][0-9]*)$/.test(k)) out.push(`${path}.${k}`); intKeys(v, `${path}.${k}`, out) }
+  return out
+}
+
+function validate(d, plan, budget, t3, fit, freeze, control) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  const ids = d.cases.map((c) => c.id)
+  if (JSON.stringify(ids) !== JSON.stringify(IDS)) err(`case ids ${ids}`)
+  if (JSON.stringify(d.cases.map((c) => c.slot)) !== JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9])) err('slots must be 1..9 in order')
+  if (d.cases.filter((c) => c.kind === 'CONTROL').length !== 1) err('exactly one CONTROL')
+  if (d.counts.slots !== d.cases.length || d.cases.length > 24) err('slot count')
+  if (shaFile(join(SPEC2A, 'cases-2a.json')) !== '147a906d2aa6616157c50d8e4cc9cb7e8f5d9cec7be749b77eca1e0e1dbc1c2c') err('spec 2A drifted')
+  for (const c of d.cases) {
+    const where = c.id
+    // case_input frozen bytes
+    const row = c.kind === 'CONTROL' ? { control_client: c.control_client, peer_script: c.peer_script } : { sdk_calls: c.sdk_calls, fixture: c.fixture }
+    if (compact(row) !== compact(c.case_input)) err(`${where}: case_input differs from the case fields`)
+    if (sha(Buffer.from(compact(c.case_input), 'utf8')) !== c.case_input_sha256) err(`${where}: case_input_sha256`)
+    if (c.language === 'typescript' && intKeys(c.case_input).length) err(`${where}: integer-like keys ${intKeys(c.case_input)}`)
+    if (!c.predicates.includes('capture.case_input_frozen_bytes')) err(`${where}: capture predicate missing`)
+    for (const p of c.predicates) {
+      const t = d.predicate_table[p]
+      if (!t) { err(`${where}: predicate ${p} not in table`); continue }
+      if (!CLASSES.includes(t.class)) err(`${p}: class ${t.class}`)
+      if (spec2a.predicate_table[p] && JSON.stringify(spec2a.predicate_table[p]) !== JSON.stringify(t)) err(`${p}: reused predicate differs from the 2A table`)
+    }
+    for (const p of c.known_bad.judged_by) if (!d.predicate_table[p] || d.predicate_table[p].class !== 'client') err(`${where}: known_bad judged by non-client ${p}`)
+    if (c.runtime_status !== 'NOT_RUN' || c.receipt !== null) err(`${where}: runtime/receipt`)
+    // copies of the frozen 2A cases
+    if (['2A-TS03R', '2A-TS06R', '2A-TS07R'].includes(c.id)) {
+      const src = cases2a[c.replay_of.case]
+      if (sha(Buffer.from(compact(src), 'utf8')) !== c.replay_of.case_object_sha256) err(`${where}: replay sha`)
+      for (const f of UNCHANGED) if (compact(src[f]) !== compact(c[f])) err(`${where}: field ${f} differs from ${src.id}`)
+      if (compact(src.predicates.concat(['capture.case_input_frozen_bytes'])) !== compact(c.predicates)) err(`${where}: predicates`)
+      if (compact(src.infra.concat(['F4-01 entrega do case_input pelos bytes congelados'])) !== compact(c.infra)) err(`${where}: infra`)
+    }
+    if (c.id === '2AC-CTRL01') {
+      const src = cases2a['2A-CTRL01']
+      for (const f of ['peer_script', 'expected', 'known_bad', 'accepted_capture_forms', 'anchors']) if (compact(src[f]) !== compact(c[f])) err(`${where}: ${f} differs from 2A-CTRL01`)
+      if (compact(src.control_client.lines) !== compact(c.control_client.lines)) err(`${where}: control lines`)
+      if (c.control_client.argv.at(-1) !== '2AC-CTRL01') err(`${where}: control argv`)
+    }
+    if (c.id === '2A-TS12R') {
+      if (c.accepted_capture_forms.includes('NO_CHILD') || !c.accepted_capture_forms.includes('PREFRAME_TERMINATION')) err(`${where}: forms`)
+      if (!c.predicates.includes('abort.os_witness_recorded_r4') || c.predicates.includes('abort.os_witness_recorded')) err(`${where}: witness predicate`)
+      if (!c.gate || !/DIAG-TS-PREABORT/.test(c.gate)) err(`${where}: gate`)
+      if (!c.sdk_calls.some((s) => s.barrier === 'WITNESS_WINDOW_OPEN')) err(`${where}: witness window`)
+    }
+    if (c.id === '2A-TS10E') {
+      if (!c.fixture.adapter_close_stdin_at_start || !c.fixture.allow_empty_stdin) err(`${where}: fault fixture`)
+      if (!/DIAG-TS-EPIPE/.test(c.gate)) err(`${where}: gate`)
+    }
+    // anchors
+    const inputs = c.anchor_inputs || d.inputs
+    for (const a of c.anchors) checkAnchor(a, inputs, err, where)
+    // argv limits
+    if (c.expected && c.expected.argv) {
+      const n = Buffer.byteLength(JSON.stringify(c.expected.argv))
+      if (n > 768 || c.expected.argv.length > 64) err(`${where}: argv limits`)
+      if ('argv_json_bytes' in c.expected && c.expected.argv_json_bytes !== n) err(`${where}: argv_json_bytes`)
+    }
+  }
+  // coverage plan
+  const rows2 = Object.fromEntries(cov2.rows.map((r) => [r.source_contract, r]))
+  const covered = new Set(plan.rows.flatMap((r) => r.cases))
+  for (const id of IDS.filter((x) => x !== '2AC-CTRL01')) if (!covered.has(id)) err(`plan: ${id} not in any row`)
+  const promoted = plan.rows.filter((r) => rows2[r.source_contract].status !== 'OBSERVED_CLIENT_PARTIAL').map((r) => r.source_contract)
+  const obs = cov2.rows.filter((r) => r.status === 'OBSERVED_CLIENT_PARTIAL').length + promoted.length
+  if (plan.projection_if_all_pass.OBSERVED_CLIENT_PARTIAL !== obs || plan.projection_if_all_pass.OPEN_REQUIRED_FUTURE_PROFILE !== 44 - obs) err('plan projection')
+  const openV2 = cov2.arms_open_explicit_2a.map((a) => a.arm).sort()
+  if (JSON.stringify(plan.arms_targeted_from_v2_open) !== JSON.stringify([...new Set(openV2)].sort())) err('plan: not every v2 open arm targeted')
+  // budget, T3, 2B, freeze, control
+  if (budget.planned.case_slots !== d.cases.length || budget.planned.qualification_services_planned > 12 || budget.planned.automatic_retries !== 0) err('budget')
+  if (JSON.stringify(budget.planned.qualification_services) !== JSON.stringify(freeze.qualification_diags)) err('budget diags != freeze diags')
+  if (t3.decision !== 'NAO_EXIGE_T3' || t3.user_question !== null || !t3.contingent_question || !/2A-TS12R/.test(t3.contingent_question.question)) err('t3')
+  const minimum = fit.contracts.reduce((s, c) => s + c.minimum_slots, 0)
+  if (fit.batch_2b_minimum_slots !== minimum || fit.total_if_combined !== d.cases.length + minimum + 1 || fit.fits !== (fit.total_if_combined <= 24)) err('2B fit arithmetic')
+  if (JSON.stringify(fit.contracts.map((c) => c.id)) !== JSON.stringify(['PY01', 'PY02', 'PY09', 'PY11', 'PY12', 'PY13', 'PY17', 'PY18'])) err('2B contracts')
+  const fids = freeze.items.map((i) => i.id)
+  if (JSON.stringify(fids) !== JSON.stringify(Array.from({ length: 11 }, (_, i) => `F4-${String(i + 1).padStart(2, '0')}`))) err('freeze items')
+  for (const it of freeze.items) for (const a of it.defect || []) checkAnchor(a, d.inputs, err, it.id)
+  if (control.case !== '2AC-CTRL01' || control.client.argv.at(-1) !== '2AC-CTRL01') err('control contract')
+  if (d.functional_receipts !== 0 || d.parity_credit !== 0) err('receipts/credit')
+  return errors
+}
+
+const d = load(join(UNIT, 'cases-2a-cont.json'))
+const plan = load(join(UNIT, 'coverage-plan-2a-cont.json'))
+const budget = load(join(UNIT, 'execution-budget.json'))
+const t3 = load(join(UNIT, 't3-assessment.json'))
+const fit = load(join(UNIT, 'batch-2b-fit-assessment.json'))
+const freeze = load(join(UNIT, 'freeze-r4-contract.json'))
+const control = load(join(UNIT, 'control-slot-contract.json'))
+const args = () => [clone(d), clone(plan), clone(budget), clone(t3), clone(fit), clone(freeze), clone(control)]
+const errors = validate(...args())
+const caseOf = (doc, id) => doc.cases.find((c) => c.id === id)
+const controls = [
+  ['valor esperado do 2A-TS07R mudado', (a) => { caseOf(a[0], '2A-TS07R').expected.argv[3] = 'a={}' }],
+  ['predicado de captura removido', (a) => { const c = caseOf(a[0], '2A-TS08X'); c.predicates = c.predicates.filter((p) => p !== 'capture.case_input_frozen_bytes') }],
+  ['chave numérica no case_input TS', (a) => { const c = caseOf(a[0], '2A-TS06X'); c.sdk_calls[3].options.config['1'] = 1; c.case_input = { sdk_calls: c.sdk_calls, fixture: c.fixture } }],
+  ['classe reclassificada', (a) => { a[0].predicate_table['argv.exact_vector'].class = 'informational' }],
+  ['âncora com linha errada', (a) => { caseOf(a[0], '2A-TS10E').anchors[0].lines = [1] }],
+  ['projeção alterada', (a) => { a[1].projection_if_all_pass.OBSERVED_CLIENT_PARTIAL = 26 }],
+  ['orçamento acima de 12 serviços', (a) => { a[2].planned.qualification_services_planned = 13 }],
+  ['2B declarado como cabendo', (a) => { a[4].fits = true }],
+  ['CONTROL removido', (a) => { a[0].cases = a[0].cases.filter((c) => c.kind !== 'CONTROL') }],
+  ['known-bad julgado por sanidade', (a) => { caseOf(a[0], '2A-TS10E').known_bad.judged_by.push('fault.adapter_closed_stdin_unread') }],
+  ['NO_CHILD aceito no 2A-TS12R', (a) => { caseOf(a[0], '2A-TS12R').accepted_capture_forms.push('NO_CHILD') }],
+  ['case_input_sha256 alterado', (a) => { caseOf(a[0], '2A-TS03R').case_input_sha256 = '0'.repeat(64) }],
+  ['pergunta T3 pendente sem contingência', (a) => { a[3].contingent_question = null }],
+  ['braço aberto do v2 sem alvo', (a) => { a[1].arms_targeted_from_v2_open.pop() }],
+]
+const negative = controls.map(([name, mutate]) => { const a = args(); mutate(a); const e = validate(...a); return { control: name, rejected: e.length > 0, first_error: e[0] ?? null } })
+const doc = {
+  kind: 'SPEC_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION', note: 'segunda implementação do mesmo executor; não é revisão independente',
+  node: process.version, result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors, negative_controls: negative, validated_at: new Date().toISOString()
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)

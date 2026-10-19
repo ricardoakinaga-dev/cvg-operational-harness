@@ -1,0 +1,134 @@
+# Veredito R2: DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A
+
+**Veredito: REVISE.** Há 2 achados obrigatórios (P2) e 4 recomendações (P3). Não há P1.
+
+O reparo R1 resolveu os 13 achados da R1. A exceção é o R1-F02, que ficou parcial por uma regressão no 2A-TS04.
+
+- Os valores esperados alterados conferem com a fonte do pin: `return()` do TS04, forma C do TS10, `pause_reply` do PY10R e resposta do CTRL01.
+- As novas listagens do driver depois de cada passo também conferem.
+- A tabela de predicados está completa, com 79 entradas, todas usadas, e todo `known_bad.judged_by` é `client`.
+
+Os dois P2 tratam do mesmo risco que a R1 combatia: um MISMATCH falso, preservado pelo R3-09, numa vaga sem retry.
+1. O TS04 passou a julgar um predicado de cliente que o fixture congelado não pede.
+2. O avaliador r3 não define o desfecho quando falham ao mesmo tempo predicados de classes diferentes. Assim, uma falha de sanidade ainda pode acabar em MISMATCH.
+
+## Estado dos achados R1
+
+| Achado | Estado | Evidência |
+| --- | --- | --- |
+| R1-F01 (P2) | RESOLVED | O fixture do 2A-TS15 tem `write_then_hold: true` (cases-2a.json:2665) e o caso está em `CAP-WRITE-THEN-HOLD.used_by`. O validador exige hold em todo caso TS que só aceita KNOWN_SIGNAL_TERMINATION (`validate-spec.mjs.txt:112-113`), e há controle negativo `ts15_without_hold`. Pela fonte, o `turn.failed` faz o `break` (thread.ts:133-135) e o finally chama `kill()` com o filho vivo (exec.ts:260). |
+| R1-F02 (P2) | **PARTIAL** | No TS03 e no TS06, os `tmp.fs_events_*` foram trocados por `tmp.driver_listing_after_settle` (client) e `tmp.inotify_informational` (informational), e a contenção (/work tmpfs, vigia por `/proc/<pid>/root`) foi declarada. Os valores step3/step4 = 0 (TS03), step3/step6 = 0 (TS06), step6/step7 = 0 (TS01) e step3/step4 = 1 (TS04) conferem com outputSchemaFile.ts:15-35 e thread.ts:74, 76, 98 e 113-114. Mas o TS04 ganhou `fixture.schema_file_present_during_child` sem a chave do fixture que pede essa leitura (ver R2-F01). |
+| R1-F03 (P2) | RESOLVED | `R3-01.applies_in_2A = []`. O `order.kill_and_rm_before_return_resolved` saiu, e `order_informational` só registra. O R3-08 limita INCONCLUSIVE a prazo (TS10, TS12) ou a `order_unilateral`, que não aparece em nenhum predicado da tabela. Os três já não conflitam. |
+| R1-F04 (P2) | RESOLVED | `predicate_table` tem 79 entradas, com classe e oráculo, sem predicado usado fora dela nem entrada não usada (conferido em memória). `control.*` são `peer_or_capture_sanity`, e `control.outcome_is_mismatch` saiu. PY10R e TS12 têm `judged_by` só com client. `peer.exit_after_script_witnessed` e `wire.fixture_chunks_relayed` são sanidade. R3-11 e R3-12 entraram, e o passo 3 do orçamento faz o autoteste R3-12. A composição entre classes ficou indefinida (ver R2-F02). |
+| R1-F05 (P2) | RESOLVED | `peer-v2-contract.json#/unscripted_request/data_merge_rule` foi criado, com `data_declared` e `data_written`; os 8 casos têm `data_merge_rule`. O esperado do CTRL01 `{cvg_synthetic: true, method: "turn/interrupt"}` é igual ao data declarado mais `method`. O validador confere (`control.expected_reply_matches_merge_rule`). |
+| R1-F06 (P3) | RESOLVED | `return_result = {done: true, value_judged: false}` e o oráculo de `ret.return_resolved_done` diz que value não é julgado. Isso confere com o `return()` de async generator, que resolve `{value: undefined, done: true}`. |
+| R1-F07 (P3) | RESOLVED | Barreira por chunk (`chunk_barrier`, CHUNK_RELEASE), `wire.fixture_chunks_relayed` como sanidade, `wire.chunk_boundaries_recorded` informativo, `credit_condition` e a linha TS11 do plano. Resta a ressalva do R2-F03. |
+| R1-F08 (P3) | RESOLVED | A forma C foi declarada (`expected.C`, R3-08), o DIAG-TS-ENOENT faz o pré-gate e os créditos de TS10.B02/B04 e TS11.B02 ficam condicionados à forma observada no plano. Serviços planejados: 9 de 12. |
+| R1-F09 (P3) | RESOLVED | `implementation_surface` lista os 8 itens. Conferi as linhas citadas na admissão: channel.cjs:4-5, 15, 20, 37, 150, 174, 227 e 238; channel.py:21, 42, 187 e 338; observer.py:294; fixture-cli.mjs:10, 44-45 e 54; adapter-typescript:95. Falta uma chave (ver R2-F03). |
+| R1-F10 (P3) | RESOLVED | Campo `version_dependent` em TS01, TS03, TS04, TS10, TS11, TS12, TS13, TS14 e PY03. |
+| R1-F11 (P3) | RESOLVED | O `goal` do `pause_reply` tem todos os campos obrigatórios de `ThreadGoal` (v2_all.py:10028-10037: createdAt, objective, status="paused" válido, threadId, timeUsedSeconds, tokensUsed, updatedAt). `ThreadGoalSetResponse.goal` é obrigatório (v2_all.py:10074-10078). |
+| R1-F12 (P3) | RESOLVED | `implementation_base` (OwnClient, python-driver.py:209-271), `channel_role`, `milestones`, `execution_order` e a regra "slot não é ordem" em cases-2a.json#/execution_order. |
+| R1-F13 (P3) | RESOLVED | `incidental_code_without_credit` no TS01, linha TS01 do plano e CAP-RESOLVER-ABSENCE com os 6 caminhos e a ausência de NODE_PATH. |
+
+## Achados novos
+
+### R2-F01 (P2, obrigatório: sim): 2A-TS04 julga SCHEMA_FILE sem que o fixture congelado peça a leitura do schema
+- **Local:**
+  - `cases-2a.json#/cases[id=2A-TS04]/fixture` (linha ~1139) e `/predicates`;
+  - `predicate_table["fixture.schema_file_present_during_child"]` (classe `client`);
+  - `capture-contract.json#/implementation_surface[2]`, `/capabilities/CAP-TMP-WITNESS` e `/fixture_cli_capture/work_tmp`.
+- **Evidência:**
+  - Os comportamentos novos do fixture-cli são todos acionados por chave do fixture congelado: `allow_empty_stdin` (TS02B), `read_schema_file_from_argv` (TS03, linha 972), `write_then_hold` (TS04, TS15), `stdout_chunks_hex` e `chunk_barrier` (TS11), `no_child` (TS10). A superfície de implementação lista `read_schema_file_from_argv` como chave nova aceita.
+  - O fixture do TS04 é `{JSONL, exit_code, stderr, write_then_hold}`, sem `read_schema_file_from_argv`. Mesmo assim, o reparo pôs no TS04 o predicado `fixture.schema_file_present_during_child`, de classe client, que depende do relato SCHEMA_FILE do fixture-cli. O `build-spec-2a.py.txt:239` gera o mesmo fixture.
+  - O `fixture_cli_capture.work_tmp` diz "quando o argv tem --output-schema". Há, portanto, dois gatilhos contraditórios.
+  - O fixture não pode ganhar a chave depois do freeze: `selectedFixture` exige igualdade com `fixture-cases.json` (fixture-cli.mjs:18-23), e o R3-09 congela as expectativas.
+  - Uma implementação que leia o schema por chave não relata SCHEMA_FILE no TS04. O predicado de cliente falha, e um SDK correto recebe um MISMATCH falso.
+  - O momento da leitura também não está fixado ("enquanto o filho roda"). No TS04 o filho fica vivo por hold, e o `rm` (thread.ts:114) vem logo depois do `kill()` (exec.ts:260), assim que o driver chama `return()` após o primeiro evento. Uma leitura feita depois da escrita do JSONL corre contra o `rm`. No TS03 não há corrida, porque o `rm` só vem depois da saída do filho.
+  - O validador não confere a relação entre predicados `fixture.*` e a chave.
+- **Correção sugerida:**
+  - Acrescentar `"read_schema_file_from_argv": true` ao fixture do TS04, ou eliminar a chave e declarar um único gatilho: o argv com `--output-schema`.
+  - Fixar que o fixture-cli lê e relata SCHEMA_FILE antes da primeira escrita de stdout.
+  - Acrescentar ao validador a checagem "todo caso com predicado `fixture.*` declara o gatilho", com controle negativo.
+
+### R2-F02 (P2, obrigatório: sim): o avaliador r3 não define o desfecho quando falham predicados de classes diferentes
+- **Local:**
+  - `evaluator-r3-contract.json#/clauses[id=R3-06]` e `[id=R3-12]`;
+  - `cases-2a.json#/predicate_classes`;
+  - base `../sdk-admission/python/acceptance.py:528-529, 535-540`.
+- **Evidência:**
+  - O R3-06 dá o desfecho por predicado falho: client vira MISMATCH; sanidade, ordem ou cleanup viram INVALID_CAPTURE.
+  - Não há regra de composição para o caso quando falham ao mesmo tempo um predicado client e um de sanidade. Procurei termos de precedência em todos os arquivos da pasta e não há nenhum.
+  - A base marca MISMATCH para qualquer predicado falho (acceptance.py:540).
+  - Há co-falhas plausíveis:
+    - TS11: uma falha de relay derruba `wire.fixture_chunks_relayed` (sanidade) e `api.run_result_exact` (client).
+    - PY08: `peer.exit_after_script_witnessed` (sanidade) cai junto com `api.closure_wakes_both_queues` (client).
+    - TS02, TS05 e TS08: `peer.exit_status` cai com `api.run_result_exact`.
+  - Se a implementação priorizar MISMATCH, uma falha de sanidade produz MISMATCH falso, e o R3-09 o preserva. Isso contraria o critério D3 ("nenhuma falha de sanidade leva a MISMATCH"). Só o CTRL01 está protegido, pelo critério explícito do gate.
+  - Os predicados implícitos da base, `evaluation_completed` (exceção do avaliador, que pelo `judges()` de acceptance.py:109-114 é client, logo MISMATCH) e `capture_form_accepted`, não estão na tabela congelada.
+  - O autoteste R3-12, que compara o mapa de classes com a tabela, ou para a unidade por divergência ou deixa esses dois sem classe.
+- **Correção sugerida:** acrescentar ao R3-06 e a `predicate_classes` a seguinte regra de composição:
+  - com forma aceita, qualquer falha de `peer_or_capture_sanity` ou `capture_order_or_cleanup` torna o caso INVALID_CAPTURE, e os predicados client ficam só informativos, como em acceptance.py com forma INVALID_CAPTURE;
+  - MISMATCH só quando todas as falhas são client; `informational` nunca decide;
+  - `evaluation_completed` falho vira INVALID_CAPTURE;
+  - `capture_form_accepted` segue acceptance.py:535-537;
+  - o R3-12 compara só os predicados de caso;
+  - validador e autoteste com um caso de co-falha.
+
+### R2-F03 (P3, obrigatório: não): 2A-TS11, chave `chunk_note` fora da lista e crédito UTF-8 com condição só necessária
+- **Local:** `cases-2a.json#/cases[id=2A-TS11]/fixture/chunk_note` (linha 2172), `/expected/credit_condition` e `capture-contract.json#/implementation_surface[2]`.
+- **Evidência:**
+  - O fixture congelado carrega `chunk_note` (texto), mas a lista de chaves novas aceitas por fixture-cli.mjs:10 não a inclui.
+  - Uma implementação estrita de `C.keys` recusa o fixture, o que dá INVALID_CAPTURE e consome a vaga. É fail-closed, mas desperdiça a vaga.
+  - A `credit_condition` credita o braço do UTF-8 dividido pelos FORWARD_COMMIT separados do adapter. O próprio `chunk_note` admite que o SDK pode juntar os chunks 3 e 4 numa leitura, sem testemunha. A condição é necessária, mas não suficiente.
+- **Correção sugerida:** tirar as notas do fixture (ou listar `chunk_note`). No BIND, rotular o braço UTF-8 como "fronteira do adapter observada; leitura do SDK não testemunhada".
+
+### R2-F04 (P3, obrigatório: não): reclassificações em relação à admissão não declaradas e predicados de registro classificados como client
+- **Local:** `predicate_table` em `wire.client_lines_complete_json`, `cleanup.child_terminated_by_SIGTERM`, `abort.api_outcome_recorded` e `abort.no_remote_stop_claim`; R3-05/R3-06.
+- **Evidência:**
+  - Na admissão, `wire.client_lines_complete_json` é client (fora de PEER_SANITY, acceptance.py:104-114). Na tabela, é sanidade, com o oráculo "Como na admissão".
+  - O prefixo `cleanup.` é capture_order_or_cleanup na base (acceptance.py:112), mas `cleanup.child_terminated_by_SIGTERM` é client.
+  - A tabela é autoritativa, e as escolhas são defensáveis (o hold torna o SIGTERM ação do SDK). Porém só a reclassificação de `peer.no_unscripted_request` está declarada, no R3-05.
+  - `abort.api_outcome_recorded` só registra, sem valor esperado. Sua falha seria de captura, mas resulta em MISMATCH.
+- **Correção sugerida:**
+  - listar no R3-06 as reclassificações deliberadas em relação a `judges()` da admissão;
+  - passar `abort.api_outcome_recorded` para sanidade ou capture_order_or_cleanup.
+
+### R2-F05 (P3, obrigatório: não): textos de caso desalinhados com o reparo
+- **Local:** `cases-2a.json#/cases[id=2A-TS12]/known_bad` e `#/cases[id=2A-TS06]/expected/inotify_informational`.
+- **Evidência:**
+  - TS12: o `judged_by` passou a `[abort.no_remote_stop_claim, abort.no_yield_after_abort]`, mas o texto ainda descreve "supor que o filho nunca existiu sem testemunha do SO". Isso agora é julgado só por `abort.os_witness_recorded` (capture_order_or_cleanup), e o texto não menciona o yield depois do aborto.
+  - TS06: o texto diz que o schema do passo 3 é "criado e removido dentro do try do thread". Pela fonte, ele é criado em thread.ts:74, antes do `try` de thread.ts:98, e removido no finally (113-114). É só informativo.
+- **Correção sugerida:** alinhar os textos à fonte e ao `judged_by`.
+
+### R2-F06 (P3, obrigatório: não): `repair-r1.json#/unchanged_values` impreciso
+- **Evidência:**
+  - Diz que mudaram "a resposta esperada do CTRL01", mas `#/cases[id=2A-CTRL01]/expected` é idêntico ao da preimagem. Mudaram a regra do contrato e o `data_merge_rule`.
+  - Omite mudanças em vetores de entrada e expectativas: fixture do TS10 (`null` para `{no_child: true}`), fixture do TS15 (`write_then_hold`), fixture do TS11 (`chunk_barrier`), troca de `work_tmp_schema_dirs_at_end` e `fs_events*` por `driver_listing_after_settle` e `inotify_informational`, e `judged_by` do TS12.
+  - Essas mudanças aparecem nos textos `how`, mas a frase-resumo é inexata.
+- **Correção sugerida:** reescrever `unchanged_values` com a lista exata.
+
+## Checagens feitas
+- **Hashes do objeto e das preimagens:**
+  - Os sha256 dos 20 arquivos da tabela do brief R2 batem.
+  - As 18 preimagens em `archives/r1-preimages/` batem com o brief R1 e com `repair-r1.json#/files[*].sha256_r1`.
+  - Os `sha256_r2` batem com o objeto atual; `changed: false` confere para t3-assessment, input-verification e verify-inputs.
+  - `review-r1/verdict.md` é igual a `verdict.raw.txt`, salvo espaços e traços de tabela.
+- **Diff semântico preimagem contra atual**, em memória, para cases-2a, coverage-plan, peer-v2, evaluator-r3, capture, control-slot, execution-budget, next-task, validation e negative-controls, e diff textual do ledger-delta. Toda mudança corresponde a um achado R1, salvo o que está em R2-F01 e R2-F06. Os vetores argv, stdin, env, payloads JSON-RPC e resultados conferidos pela R1 não mudaram.
+- **Fonte do pin** (`sdk-reference-profile/inputs/sdk/`):
+  - os 10 `.ts` e os sha das entradas conferem;
+  - li outputSchemaFile.ts, thread.ts e exec.ts por inteiro e v2_all.py (`ThreadGoal`/`ThreadGoalSetResponse`) e errors.py (-32601 dá MethodNotFoundError);
+  - conferi pela fonte: listagens do driver (TS01, TS03, TS04, TS06), `return()` do TS04, TS15 com hold, TS11 (hex decodificado: CRLF, "ação" dividido, última linha sem LF, `cache_write_input_tokens` 0), TS13 e TS14.
+- **Âncoras e argv:** recalculei por programa as 35 entradas e as 67 âncoras (0 divergências), além de `argv_json_bytes`/`argv_count` dos 12 casos com argv exato.
+- **Tabela de predicados:** 79 entradas; usados = tabela; todo `known_bad.judged_by` é client e consta dos predicados do caso; nenhum `order_unilateral`; informativos (`tmp.inotify_informational`, `wire.chunk_boundaries_recorded`) fora de qualquer `judged_by`. Comparei com `judges()` e `PEER_SANITY` de acceptance.py e com o fluxo de desfecho de acceptance.py:521-540.
+- **Infra da admissão:** li fixture-cli.mjs, adapter-typescript, python-driver.py (OwnClient, `sdk_py07`, `run_diag`), fixture-rpc.py (pedido contra notificação, UNSCRIPTED) e as linhas da `implementation_surface`. `git diff b70cb6df` sobre sdk-admission, sdk-coverage-binding e as entradas do perfil sai vazio; coverage-observed `49de5da5`, unit-manifest `b5a52f6c` e identity-freeze `ebfb308f`.
+- **D4:**
+  - Nenhum arquivo afirma execução de SDK, recibo, paridade ou autorização: `functional_receipts` e `parity_credit` são 0, `runtime_status` é NOT_RUN e `receipt` é null nos 24 casos.
+  - Orçamento: 24 vagas (1 CONTROL), 9 + 3 = 12 serviços, 2 revisões, 1 reparo, 0 retries; 20 capacidades, que batem com `next-task`.
+  - T3: AGENTS.md (`8306af1b`, seção D-12) e 0384 (`8ff6f573`) conferem; NAO_EXIGE_T3/T4 é coerente com D-12.
+- Li `validate-spec.mjs.txt` e `negative-controls.py.txt` sem executar. As checagens que eles declaram correspondem ao que reproduzi em memória.
+
+## Limites
+- Nada foi executado: nem SDK, nem Node, nem Pydantic, nem os scripts da pasta. O comportamento do Node v24.20.0 (formas do TS10, TS12 pré-abortado, readline e StringDecoder) e da vigia por `/proc/<pid>/root` foi raciocinado a partir da fonte, sem verificação.
+- `validation.json` e `negative-controls.json` registram execuções do executor; não as reproduzi, só conferi a coerência com o conteúdo.
+- Não auditei `build-spec-2a.py.txt` e `build-contracts-2a.py.txt` linha a linha; conferi só trechos (fixture do TS04, tabela de classes).
+- O `state.json` stub e links para `review-r2/verdict.md` não foram tratados como achado, conforme o brief.

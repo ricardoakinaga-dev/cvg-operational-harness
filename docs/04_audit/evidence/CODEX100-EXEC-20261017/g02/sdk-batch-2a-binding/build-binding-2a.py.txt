@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2A - gera coverage-observed-v2.json e gaps-review-v2.json (somente leitura das entradas).
+# Uso: python3 -I -B build-binding-2a.py.txt <repo_root> <out_dir>
+# Regra (next-task.json da admissão 2A e adjudication-r1.json):
+#   1. só os casos de adjudication-r1.json#/bind_consumes_only (19) são consumidos;
+#   2. a observação de um caso consumido é registrada em cada contrato de cases-2a.json#/cases[id]/contracts, com os
+#      braços de branches_targeted daquele contrato; braços condicionais (forma do 2A-TS10, fronteira UTF-8 do 2A-TS11)
+#      só contam se a condição congelada foi observada;
+#   3. status OBSERVED_CLIENT_PARTIAL se o contrato já era observado no v1 ou se todos os casos 2A da linha do plano de
+#      cobertura foram consumidos; senão OPEN_REQUIRED_FUTURE_PROFILE;
+#   4. casos não consumidos (2A-TS03, 2A-TS06, 2A-TS07, 2A-TS12) ficam listados por contrato com a atribuição e os braços
+#      OPEN explícitos, sem crédito parcial por predicados que passaram;
+#   5. nenhuma linha cobre o requisito inteiro; 0 recibos funcionais, 0 crédito de paridade. O v1 não é editado.
+# Reparo R1 (review-r1/review.json): vocabulário igual à regra e status_rule_applied com os casos excluídos (R1-F01);
+# destino depois do 2A por linha e por braço OPEN (R1-F02, R1-F06); contagem de documentos distintos (R1-F03);
+# GAP-GENERATED com observação creditada separada do fato incidental (R1-F09); nota global de ordem de chaves (R1-F10).
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+OUT = sys.argv[2]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+ADM = os.path.join(G02, "sdk-batch-2a-admission")
+V1 = os.path.join(G02, "sdk-coverage-binding")
+ADMR = "../sdk-batch-2a-admission/"
+V1R = "../sdk-coverage-binding/"
+TS_REF = {"path": "../../g01/sdk-open-contracts/typescript/contracts.json"}
+PY_REF = {"path": "../../g01/sdk-open-contracts/python-contracts.json"}
+CONTINUATION = "SOURCE_BATCH_2A_CONTINUATION"
+# Destino depois do lote 2A, lido de coverage-plan-2a.json#/rows[]/remaining_after_2A (R1-F02). Nenhum aponta para o 2A já executado.
+AFTER_2A = {
+    "TS01": ["SOURCE_BATCH_2A_CONTINUATION"], "TS02": ["SOURCE_BATCH_2A_CONTINUATION"], "TS03": ["SOURCE_BATCH_2A_CONTINUATION"],
+    "TS04": ["SOURCE_BATCH_2A_CONTINUATION"], "TS05": ["DISTRIBUTED_PROFILE"], "TS06": ["SOURCE_BATCH_2A_CONTINUATION"],
+    "TS07": ["SOURCE_BATCH_2A_CONTINUATION"], "TS08": ["SOURCE_BATCH_2A_CONTINUATION"], "TS09": ["SOURCE_BATCH_2A_CONTINUATION", "DISTRIBUTED_PROFILE"],
+    "PY03": ["SOURCE_BATCH_2A_CONTINUATION"], "PY04": ["SOURCE_BATCH_2A_CONTINUATION"], "PY08": ["SOURCE_BATCH_2B"],
+    "PY15": ["SOURCE_BATCH_2A_CONTINUATION", "SOURCE_BATCH_2B"], "PY16": ["SOURCE_BATCH_2A_CONTINUATION"],
+    "PY07": ["NATIVE_BUILD (EQ02/SPEC0239, fora dos perfis SDK)"], "PY10": ["SOURCE_BATCH_2B"],
+    "TS10": ["SOURCE_BATCH_2A_CONTINUATION"], "TS11": ["SOURCE_BATCH_2A_CONTINUATION"],
+    "TS12": ["SOURCE_BATCH_2A_CONTINUATION", "DISTRIBUTED_OR_PLATFORM_PROFILE (outras versões de Node)"],
+    "TS13": ["SOURCE_BATCH_2A_CONTINUATION"], "TS14": ["SOURCE_BATCH_2A_CONTINUATION"], "TS15": ["SOURCE_BATCH_2A_CONTINUATION"],
+}
+ARM_DEST = {
+    "2A-TS03": "2A-TS03R (SOURCE_BATCH_2A_CONTINUATION, vaga própria depois da correção da entrega do case_input)",
+    "2A-TS06": "2A-TS06R (SOURCE_BATCH_2A_CONTINUATION, vaga própria depois da correção da entrega do case_input)",
+    "2A-TS07": "2A-TS07R (SOURCE_BATCH_2A_CONTINUATION, vaga própria depois da correção da entrega do case_input)",
+    "2A-TS12": "2A-TS12R (SOURCE_BATCH_2A_CONTINUATION), condicional a uma testemunha do SO admitida em DIAG; sem ela, segue OPEN",
+    "2A-TS10": "injeção de falha de write do lado Node na continuação 2A (filho existente que fecha o stdin antes do write: EPIPE), sem depender da versão do Node",
+}
+EXTRA_QUAL = {
+    "2A-PY03": "o match do peer v2 neste caso comparou params {\"k\": 1} e {\"k\": 2} com == do Python, não estrito por tipo; o fio observado tem inteiros (review-r2 R2-F01 da admissão)",
+    "2A-TS04": "ret.child_terminated_by_SIGTERM testemunhado pelo quadro SIGNAL do handler do adapter, entregue pelo kernel, como na admissão (R1-F08)",
+    "2A-TS15": "cleanup.child_terminated_by_SIGTERM testemunhado pelo quadro SIGNAL do handler do adapter, entregue pelo kernel, como na admissão (R1-F08)",
+}
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def ref(rel_from_out, abs_path):
+    return {"path": rel_from_out, "sha256": sha(abs_path)}
+
+
+v1 = load(os.path.join(V1, "coverage-observed.json"))
+gaps_v1 = load(os.path.join(V1, "gaps-review.json"))
+adj = load(os.path.join(ADM, "adjudication-r1.json"))
+cases = {c["id"]: c for c in load(os.path.join(ADM, "inputs/spec-2a/cases-2a.json"))["cases"]}
+plan = {r["source_contract"]: r for r in load(os.path.join(ADM, "inputs/spec-2a/coverage-plan-2a.json"))["rows"]}
+adj_rows = {r["case"]: r for r in adj["rows"]}
+consumed = set(adj["bind_consumes_only"])
+acc31 = {cid: load(os.path.join(ADM, r["dir"], "acceptance-r3_1.json")) for cid, r in adj_rows.items()}
+
+
+def pred(cid, pid):
+    return [p for p in acc31[cid]["predicates"] if p["id"] == pid][0]
+
+
+def arms_of(cid, contract):
+    """Branches of case cid attributed to contract (prefix 'TSxx.' or the single contract of the case)."""
+    c = cases[cid]
+    out = []
+    for b in c["branches_targeted"]:
+        m = re.match(r"^((?:TS|PY|PK)\d\d)\.", b)
+        owner = m.group(1) if m else (c["contracts"][0] if len(c["contracts"]) == 1 else None)
+        if owner is None:
+            raise SystemExit("branch without owner: %s %s" % (cid, b))
+        if owner == contract:
+            out.append(b)
+    return out
+
+
+def split_conditional(cid, arms):
+    """-> (observed arms, open arms with reason, condition records)."""
+    observed, opened, cond = [], [], []
+    if cid == "2A-TS10":
+        form = pred(cid, "api.enoent_form_A_or_B_exclusive")["detail"]["form"]
+        cond.append({"condition": "forma observada do 2A-TS10 (cases-2a.json expected.source_consistent_forms)", "observed_form": form})
+        for a in arms:
+            want = "A" if "forma A" in a else "B" if "forma B" in a else None
+            if want is None or want == form:
+                observed.append(a)
+            else:
+                opened.append({"arm": a, "reason": "forma %s não ocorreu (forma %s observada); braço sem observação" % (want, form)})
+        return observed, opened, cond
+    if cid == "2A-TS11":
+        det = pred(cid, "wire.chunk_boundaries_recorded")["detail"]
+        ok = det["chunk3_and_chunk4_in_separate_commits"] is True
+        cond.append({"condition": "credit_condition do 2A-TS11: chunks 3 e 4 em FORWARD_COMMIT separados do adapter",
+                     "observed": ok, "adapter_stdout_commits": det["adapter_stdout_commits"], "label": det["label"]})
+        for a in arms:
+            if "UTF-8 dividido" in a and not ok:
+                observed.append(a.replace("UTF-8 dividido, ", ""))
+                opened.append({"arm": "UTF-8 dividido (%s)" % a.split(" ")[0], "reason": "chunks 3 e 4 não ficaram em commits separados"})
+            elif "UTF-8 dividido" in a:
+                observed.append(a + " [UTF-8 dividido: fronteira do adapter observada; leitura do SDK não testemunhada]")
+            else:
+                observed.append(a)
+        return observed, opened, cond
+    return list(arms), [], cond
+
+
+def observation(cid, contract):
+    a = acc31[cid]
+    r = adj_rows[cid]
+    obs_arms, open_arms, cond = split_conditional(cid, arms_of(cid, contract))
+    q = [x for x in (r.get("qualification"), EXTRA_QUAL.get(cid)) if x]
+    return {
+        "case": cid,
+        "final_reading": r["final_reading"],
+        "attribution": r["attribution"],
+        "service_outcome_r3": r["service_outcome_r3"],
+        "offline_outcome_r3_1": r["offline_outcome_r3_1"],
+        "r3_1_composition_rule": a["composition_rule"],
+        "capture_form": a["capture_form"],
+        "predicates": len(a["predicates"]),
+        "failed_predicates_r3_1": [p["id"] for p in a["predicates"] if not p["ok"]],
+        "analytic_branch_arms_observed": obs_arms,
+        "arms_open_from_conditions": open_arms,
+        "conditions": cond,
+        "qualifications": q,
+        "acceptance_r3_1": ref(ADMR + r["dir"] + "/acceptance-r3_1.json", os.path.join(ADM, r["dir"], "acceptance-r3_1.json")),
+        "acceptance_service": ref(ADMR + r["dir"] + "/acceptance.json", os.path.join(ADM, r["dir"], "acceptance.json")),
+        "adjudication_pointer": ADMR + "adjudication-r1.json#/rows[case=%s]" % cid,
+        "client_fact_only": True,
+        "parity_receipt": None,
+        "functional_receipts": 0,
+    }
+
+
+def excluded(cid, contract):
+    r = adj_rows[cid]
+    return {"case": cid, "final_reading": r["final_reading"], "attribution": r["attribution"], "why": r["why"],
+            "bind_rule": r["bind_rule"], "arms_open": arms_of(cid, contract),
+            "credit": "NONE: nenhum crédito parcial por predicados que passaram",
+            "adjudication_pointer": ADMR + "adjudication-r1.json#/rows[case=%s]" % cid}
+
+
+rows = []
+for r1 in v1["rows"]:
+    cid = r1["source_contract"]
+    p = plan.get(cid)
+    row = {"source_contract": cid, "gaps": r1["gaps"], "status_v1": r1["status"],
+           "selected_case_ids_v1": r1["selected_case_ids"], "v1_pointer": V1R + "coverage-observed.json#/rows[source_contract=%s]" % cid,
+           "batch_2a_role": p["batch_role"] if p else None, "cases_2a": p["cases"] if p else []}
+    obs = [observation(c, cid) for c in row["cases_2a"] if c in consumed]
+    exc = [excluded(c, cid) for c in row["cases_2a"] if c not in consumed]
+    arms_obs = [a for o in obs for a in o["analytic_branch_arms_observed"]]
+    arms_open = [{"arm": a, "case": e["case"], "reason": e["final_reading"] + " (" + e["attribution"] + ")", "destination": ARM_DEST[e["case"]]}
+                 for e in exc for a in e["arms_open"]]
+    arms_open += [dict(x, case=o["case"], destination=ARM_DEST[o["case"]]) for o in obs for x in o["arms_open_from_conditions"]]
+    if r1["status"] == "OBSERVED_CLIENT_PARTIAL":
+        status = "OBSERVED_CLIENT_PARTIAL"
+        rule = "já observado no v1 (%s); " % ", ".join(r1["selected_case_ids"])
+        rule += ("o lote 2A acrescenta observações (%s)" % ", ".join(o["case"] for o in obs)) if obs else "sem caso 2A consumido"
+        if exc:
+            rule += ("; %s não consumido: braços %s ficam OPEN em arms_open_explicit_2a sem afetar o status herdado"
+                     % (", ".join(e["case"] for e in exc), ", ".join(a for e in exc for a in e["arms_open"])))
+    elif p and not exc:
+        status, rule = "OBSERVED_CLIENT_PARTIAL", "todos os casos 2A da linha do plano de cobertura foram consumidos (%s)" % ", ".join(p["cases"])
+    elif p:
+        status, rule = "OPEN_REQUIRED_FUTURE_PROFILE", "caso 2A não consumível: %s" % ", ".join(e["case"] for e in exc)
+    else:
+        status, rule = "OPEN_REQUIRED_FUTURE_PROFILE", "sem caso 2A; destino do v1 mantido"
+    row.update({"observations_2a": obs, "excluded_cases_2a": exc, "analytic_branch_arms_observed_2a": arms_obs, "arms_open_explicit_2a": arms_open,
+                "status": status, "status_rule_applied": rule, "status_changed": status != r1["status"]})
+    if p:
+        row["remaining_after_2a"] = p["remaining_after_2A"]
+        row["remaining_open_scope_exhaustive"] = False
+    if status == "OPEN_REQUIRED_FUTURE_PROFILE":
+        row["planned_profile_proposal"] = (CONTINUATION + " (reexecução com vaga própria depois da correção da entrega do case_input)"
+                                           if exc else r1.get("planned_profile_proposal"))
+    elif cid in AFTER_2A:
+        row["residual_planned_profile_proposal"] = " + ".join(AFTER_2A[cid]) + ": " + p["remaining_after_2A"]
+        row["residual_planned_profile_proposal_v1"] = r1.get("residual_planned_profile_proposal")
+    else:
+        row["residual_planned_profile_proposal"] = r1.get("residual_planned_profile_proposal")
+    if r1.get("authoritative_residual_refs"):
+        row["authoritative_residual_refs"] = r1["authoritative_residual_refs"]
+    else:
+        base = TS_REF if cid.startswith(("TS", "PK")) else PY_REF
+        pointer = ("contracts[id=%s].expectation|branches" % cid) if cid.startswith(("TS", "PK")) else ("rows[id=%s].source_contract|future_positive|future_known_bad" % cid)
+        row["authoritative_residual_refs"] = [{"path": base["path"], "sha256": sha(os.path.normpath(os.path.join(V1, base["path"]))), "pointer": pointer}]
+    row.update({"whole_requirement_covered": False, "functional_receipt": None, "parity_credit": 0})
+    rows.append(row)
+
+counts = {s: sum(1 for r in rows if r["status"] == s) for s in ("OBSERVED_CLIENT_PARTIAL", "OPEN_REQUIRED_FUTURE_PROFILE")}
+observed_with_excluded = [r["source_contract"] for r in rows if r["status"] == "OBSERVED_CLIENT_PARTIAL" and r["excluded_cases_2a"]]
+arms_open_all = [dict(a, contract=r["source_contract"]) for r in rows for a in r["arms_open_explicit_2a"]]
+src = {
+    "coverage_observed_v1": ref(V1R + "coverage-observed.json", os.path.join(V1, "coverage-observed.json")),
+    "gaps_review_v1": ref(V1R + "gaps-review.json", os.path.join(V1, "gaps-review.json")),
+    "adjudication": ref(ADMR + "adjudication-r1.json", os.path.join(ADM, "adjudication-r1.json")),
+    "case_results": ref(ADMR + "case-results.json", os.path.join(ADM, "case-results.json")),
+    "unit_manifest": ref(ADMR + "unit-manifest.json", os.path.join(ADM, "unit-manifest.json")),
+    "evaluator_freeze_r3_1": ref(ADMR + "evaluator-freeze-r3_1.json", os.path.join(ADM, "evaluator-freeze-r3_1.json")),
+    "cases_2a": ref(ADMR + "inputs/spec-2a/cases-2a.json", os.path.join(ADM, "inputs/spec-2a/cases-2a.json")),
+    "coverage_plan_2a": ref(ADMR + "inputs/spec-2a/coverage-plan-2a.json", os.path.join(ADM, "inputs/spec-2a/coverage-plan-2a.json")),
+    "input_order_errata": ref(ADMR + "input-order-errata.json", os.path.join(ADM, "input-order-errata.json")),
+    "input_order_errata_addendum": ref(ADMR + "input-order-errata-addendum-r1.json", os.path.join(ADM, "input-order-errata-addendum-r1.json")),
+    "g01_integration": v1["sources"]["g01_integration"] | {"path": "../../g01/sdk-open-contracts/integration.json"},
+    "g01_python_contracts": v1["sources"]["g01_python_contracts"],
+    "g01_typescript_contracts": v1["sources"]["g01_typescript_contracts"],
+}
+cov = {
+    "kind": "SDK_COVERAGE_OBSERVED_BINDING",
+    "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A",
+    "version": 2,
+    "meaning": ("Versão 2 do mapa observado, ao lado do v1 (" + V1R + "coverage-observed.json, não editado). Liga as observações do lote 2A aos 44 "
+                "contratos fonte. OBSERVED_CLIENT_PARTIAL continua significando observação parcial de cliente no perfil de referência (fonte do SDK do pin "
+                "contra peers sintéticos, Linux x86-64, Python 3.12, Node v24.20.0, TS 5.9.2 por transpile); não é qualificação, recibo funcional nem paridade."),
+    "binding_rule": [
+        "Só os 19 casos de adjudication-r1.json#/bind_consumes_only são consumidos (leitura final PASS_CLIENT_OBSERVATION, avaliador r3.1).",
+        "A observação de um caso consumido é registrada em cada contrato do caso, com os braços de branches_targeted daquele contrato; braços condicionais só contam com a condição congelada observada.",
+        "Status OBSERVED_CLIENT_PARTIAL quando o contrato já era observado no v1 ou quando todos os casos 2A da linha do plano de cobertura foram consumidos; senão OPEN_REQUIRED_FUTURE_PROFILE, com as observações consumíveis registradas sem mudar o status.",
+        "2A-TS03, 2A-TS06, 2A-TS07 (MISMATCH não atribuível ao cliente) e 2A-TS12 (INVALID_CAPTURE) não são consumidos: braços OPEN explícitos, sem crédito parcial por predicados que passaram.",
+        "Atribuição, leitura final e regra de consumo vêm de adjudication-r1.json, nunca dos acceptance-r3_1.json por caso.",
+        "Nenhuma linha cobre o requisito inteiro; 0 recibos funcionais; 0 crédito de paridade.",
+    ],
+    "status_vocabulary": {
+        "OBSERVED_CLIENT_PARTIAL": ("Contrato já observado no v1 (todos os casos v1 com PASS_CLIENT_OBSERVATION) ou contrato cujos casos 2A da linha do plano de cobertura foram "
+                                    "todos consumidos. Num contrato já observado no v1, um caso 2A não consumível fica em excluded_cases_2a, com braços OPEN, e não muda "
+                                    "o status herdado. Parte do contrato e todo o requisito seguem abertos."),
+        "OPEN_REQUIRED_FUTURE_PROFILE": ("Sem caso selecionado, ou contrato não observado no v1 com algum caso 2A da linha não consumível; requisito obrigatório em perfil "
+                                         "futuro. Observações consumíveis ficam registradas sem mudar o status."),
+    },
+    "contracts_observed_with_excluded_case_2a": [],
+    "input_key_order_note": ("Todos os casos consumidos receberam o case_input com chaves de objeto em ordem de code point (" + ADMR + "input-order-errata.json#/root_cause). "
+                             "Nos 19 consumidos os predicados comparam valores ou o objeto tem uma só chave (#/order_insensitive_elsewhere); o 2A-TS05 tem config cuja ordem "
+                             "congelada coincide com a de code point, então não discrimina ordem de inserção de ordem ordenada. Os efeitos no fio estão no adendo "
+                             "(" + ADMR + "input-order-errata-addendum-r1.json) e nas qualificações por observação."),
+    "evaluator_note": "acceptance.json é o documento de serviço (avaliador r3, source-freeze-r3); acceptance-r3_1.json é a reavaliação offline depois do reparo (evaluator-freeze-r3_1). A leitura final é a de adjudication-r1.json.",
+    "sources": src,
+    "source_contract_count": len(rows),
+    "counts_v1": v1["counts"],
+    "counts": counts,
+    "status_changes": [{"contract": r["source_contract"], "from": r["status_v1"], "to": r["status"]} for r in rows if r["status_changed"]],
+    "bound_cases_2a": sorted(consumed, key=lambda c: cases[c]["slot"]),
+    "excluded_cases_2a": [{"case": c, "final_reading": adj_rows[c]["final_reading"], "attribution": adj_rows[c]["attribution"]}
+                          for c in sorted(set(adj_rows) - consumed - {"2A-CTRL01"}, key=lambda c: cases[c]["slot"])],
+    "control_slot": {"case": "2A-CTRL01", "final_reading": adj_rows["2A-CTRL01"]["final_reading"], "counts_as_sdk_observation": False},
+    "arms_open_explicit_2a": arms_open_all,
+    "cited_acceptance_references_2a": sum(2 for r in rows for _ in r["observations_2a"]),
+    "cited_acceptance_documents_2a_distinct": len({o[k]["path"] for r in rows for o in r["observations_2a"] for k in ("acceptance_r3_1", "acceptance_service")}),
+    "rows": rows,
+    "six_gaps": "OPEN (ver gaps-review-v2.json)",
+    "all_509_catalog_records": "Inalterados NOT_RUN/null; nenhum recibo emitido.",
+    "distributed_and_platform_profiles": "Obrigatórios depois; não removidos pelo perfil de fonte.",
+    "functional_receipts": 0,
+    "parity_credit": 0,
+    "built_at": datetime.now(timezone.utc).isoformat(),
+}
+cov["contracts_observed_with_excluded_case_2a"] = observed_with_excluded
+
+status = {r["source_contract"]: r["status"] for r in rows}
+status1 = {r["source_contract"]: r["status"] for r in v1["rows"]}
+NEW_LABEL = "+CLIENT_OBSERVED_PARTIAL_REFERENCE_PROFILE"
+OBS_SUMMARY = {
+    "GAP-GENERATED": ("Observações creditadas (contratos PY04, PY15, PY16): 2A-PY04 observou model_dump(by_alias, exclude_none) de ThreadResumeParams gerado; 2A-PY15 e "
+                      "2A-PY16 observaram TurnResult e itens de entrada tipados no fio, contra Pydantic 2.13.4/core 2.46.4 admitido. Oráculos de alias além do "
+                      "model_dump(by_alias) de um modelo, nullable, default, extra, union e root seguem sem observação (PY18 aberto)."),
+}
+INCIDENTAL = {
+    "GAP-PLATFORM-PACKAGING": "Fato incidental, sem crédito: o passo 1 do 2A-TS01 executou o resolver do SDK com codexPathOverride vazio e falhou com a mensagem congelada (findCodexPath, PK01/PK02), com a ausência dos caminhos de pacote testemunhada (RESOLVER_ABSENCE); nenhum pacote ou plataforma real foi exercido.",
+    "GAP-GENERATED": "Nenhum fato incidental novo além das observações creditadas (ver observations_2a_summary).",
+    "GAP-PROVENANCE": "Nenhuma observação nova: o lote 2A não toca identidade de artefato distribuído.",
+}
+gap_rows = []
+for g in gaps_v1["rows"]:
+    obs2 = [c for c in g["contracts"] if status[c] == "OBSERVED_CLIENT_PARTIAL"]
+    obs1 = [c for c in g["contracts"] if status1[c] == "OBSERVED_CLIENT_PARTIAL"]
+    new = [c for c in obs2 if c not in obs1]
+    prog = g["progress_after"]
+    if new and NEW_LABEL not in prog:
+        prog = prog + NEW_LABEL
+    gap_rows.append({
+        "id": g["id"], "owner": g["owner"], "contracts": g["contracts"], "contracts_total": g["contracts_total"],
+        "contracts_observed_client_partial_v1": obs1, "contracts_observed_client_partial_v2": obs2, "newly_observed_2a": new,
+        "contracts_open": [c for c in g["contracts"] if c not in obs2],
+        "contracts_open_with_excluded_2a_case": [c for c in g["contracts"] if c not in obs2 and any(r["source_contract"] == c and r["excluded_cases_2a"] for r in rows)],
+        "status_before": g["status_after"], "status_after": "OPEN",
+        "progress_before": g["progress_after"], "progress_after": prog, "progress_changed": prog != g["progress_after"],
+        "observations_2a_summary": OBS_SUMMARY.get(g["id"]),
+        "incidental_facts_2a": INCIDENTAL.get(g["id"]),
+        "remaining_boundaries_unchanged": g["remaining_boundaries_unchanged"],
+        "qualification": "NOT_RUN", "receipt": None, "whole_requirement_covered": False,
+    })
+gaps = {
+    "kind": "SDK_GAPS_REVIEW", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2A", "version": 2,
+    "source": gaps_v1["source"] | {"path": "../../g01/sdk-open-contracts/integration.json"},
+    "base": {"path": V1R + "gaps-review.json", "sha256": sha(os.path.join(V1, "gaps-review.json"))},
+    "binding": "coverage-observed-v2.json",
+    "decision_rule": gaps_v1["decision_rule"],
+    "rows": gap_rows,
+    "summary": {"OPEN": sum(1 for g in gap_rows if g["status_after"] == "OPEN"),
+                "observed_v2": {g["id"]: "%d/%d" % (len(g["contracts_observed_client_partial_v2"]), g["contracts_total"]) for g in gap_rows},
+                "progress_changed_in_v2": [g["id"] for g in gap_rows if g["progress_changed"]],
+                "progress_unchanged_in_v2": [g["id"] for g in gap_rows if not g["progress_changed"]]},
+    "functional_receipts": 0, "parity_credit": 0,
+}
+for name, doc in (("coverage-observed-v2.json", cov), ("gaps-review-v2.json", gaps)):
+    with open(os.path.join(OUT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(json.dumps({"counts": counts, "changes": cov["status_changes"], "arms_open": len(arms_open_all), "gaps": gaps["summary"]}, ensure_ascii=False))

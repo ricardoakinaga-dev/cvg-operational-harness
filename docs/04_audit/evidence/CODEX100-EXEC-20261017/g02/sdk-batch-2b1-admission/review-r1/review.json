@@ -1,0 +1,236 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-BATCH-2B-1",
+  "reviewer": "subagente Claude Code novo, sem contexto herdado; somente leitura fora de review-r1/",
+  "reviewed_at": "2026-10-19T11:31:14Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "c00191ba5341d730fdb11a6db56b4c10d8cb8d37eafd681be1a979c88bdbf779",
+  "subject_hash_check": {
+    "before": {
+      "freeze_sha256": "c00191ba5341d730fdb11a6db56b4c10d8cb8d37eafd681be1a979c88bdbf779",
+      "files_listed": 568,
+      "files_bytes_and_sha_equal": 568,
+      "files_outside_freeze": [],
+      "pycache_dirs": [],
+      "ok": true
+    },
+    "after": {
+      "freeze_sha256": "c00191ba5341d730fdb11a6db56b4c10d8cb8d37eafd681be1a979c88bdbf779",
+      "files_listed": 568,
+      "files_bytes_and_sha_equal": 568,
+      "files_outside_freeze": [
+        "review-r1/review.json (exclusão declarada no freeze)"
+      ],
+      "pycache_dirs": [],
+      "ok": true
+    }
+  },
+  "verdict": "APPROVE",
+  "verdict_reason": "Nenhum P1 ou P2. Os 15 PASS_CLIENT_OBSERVATION e o MISMATCH do 2B1-CTRL01 (regra 6, só wire.no_turn_interrupt, sanidades aprovadas) se sustentam: reavaliação offline em cópia reproduz 16/16 no nível de predicado e de desfecho; reavaliação com a ordem de emissão (mono_ns dos quadros e t0+t_ns das ações) no lugar do gidx dá os mesmos 16 resultados, então nenhuma cadeia depende das inversões entre lotes admitidas pelo DV5; 14 perturbações em cópias levam o avaliador à classe certa (cliente -> MISMATCH regra 6; sanidade/captura/barreira -> INVALID_CAPTURE regra 4; forma sem testemunha do SO -> INVALID_CAPTURE regra 1; E2B-12 -> INVALID_CAPTURE). Autotestes 66/66 e validador (8/8 controles negativos) reproduzidos byte a byte em cópia. Freezes antes do primeiro serviço, 9 DIAG + 16 vagas = 25 unidades (9/12 serviços, 16/16 vagas, 0 retry), CONTROL depois da diag-admission e antes dos SDK, condicionais só com decisão RUN, sandbox --unshare-all/--clearenv, 50 vazios catalogados com metadados conferidos contra result.json/command.json. R2-F01 aprovado nos três pontos. Os 8 achados P3 são endurecimentos e registros, quase todos com efeito só no 2B-2; nenhum muda desfecho do 2B-1. Observação de cliente não é paridade: 0 recibos, 0 crédito.",
+  "r2_f01": {
+    "verdict": "APPROVED",
+    "interpretation_accepted": "ocorrência e token HOOK:<id>#k contados por (id, event) (lead-decision-r2-f01.json); nenhuma errata T1 do 2B-2 é necessária.",
+    "points": {
+      "1_count_per_id_event_driver_frame_evaluator": {
+        "ok": true,
+        "driver": "harness2b.py:286-296 HookSet._record conta por key=(h.id, event) sob o lock e emite HOOK_EVENT com event e occurrence; despacho real call+return por sys.setprofile/threading.setprofile conferido pelos autotestes CONC 3 e CONC 6 e, em serviço, pela DIAG-PY-BARRIER (h_gen call 1..3 e return 1..3, check generator_call_return_counted_per_event).",
+        "frame_D2B_15": "channel.py:56,218-220 e observer.py:40,366-368: HOOK_EVENT {id, event in (call, return), occurrence>=1, thread_name, record} só no papel driver.",
+        "evaluator_E2B_04": "acceptance.py:238-241 indexa tokens como HOOK:<id>:<event>#<occurrence>; Seq.lookup (295-305) resolve HOOK:<id>#k pelo evento único do gancho e recusa gancho call+return ou não declarado (a gramática congelada não tem campo de evento).",
+        "evaluator_E2B_06": "acceptance.py:327-358 hook_entry_matches filtra por event (declarado ou o evento único do gancho) e depois por occurrence.",
+        "data_check": "Nos 6 slots com ganchos (2B-PY01A, 2B-PY01D, 2B-PY10X, DIAG-PY-BARRIER, DIAG-PY-ASYNC, DIAG-PY-KILLWAIT) as ocorrências são consecutivas por (id, event) na ordem dos quadros."
+      },
+      "2_selftest_call_return_twice_vs_frozen_2B_PY13D": {
+        "ok": true,
+        "positive": "selftest_2b1.py:771-812: HookSet com h_cleanup_cb e h_stop call+return, eventos registrados em threads codex-goal-start/codex-goal-start-cleanup (cleanup call+return, stop call+return, cleanup call+return), casados pelo hook_entry_matches do avaliador contra expected.hooks congelado do 2B-PY13D lido de cases-2b-2.json (sha ligado).",
+        "negative": "selftest_2b1.py:803-813: a mesma sequência com contagem global por id deixa a entrada h_cleanup_cb call #2 sem casamento (o #2 global é um return).",
+        "reproduced": "autoteste rodado em cópia: 66/66, mesmos nomes de teste e mesmos sha das fontes do selftest-results.json congelado.",
+        "caveat": "o autoteste chama HookSet._record diretamente (não passa pelo despacho do profiler para as funções); o despacho está coberto por CONC 3/CONC 6 e DIAG-PY-BARRIER (ver R1-F02)."
+      },
+      "3_validator_requires_event_when_occurrence_gt_1": {
+        "ok": true,
+        "rule": "validate_unit.py:93-96 recusa entrada de expected.hooks de gancho call+return com occurrence > 1 sem event; aplicada a todos os 18 casos do cases-2b-2.json (nenhum problema) e aos 16 do 2B-1.",
+        "negative_control": "validate_unit.py:128-132 remove event das entradas occurrence>1 do 2B-PY13D e o validador recusa (negative_controls_refused.occurrence_without_event = true).",
+        "reproduced": "validador rodado em cópia: validation-unit.json byte a byte igual (sha d79c0e91...)."
+      }
+    },
+    "forward_notes_for_2B_2": [
+      "R1-F01: a condição de gatilho de barreira do supervisor ainda não conhece event/occurrence; necessária para 2B-PY13D passos 10 e 16.",
+      "R1-F02: recontagem independente da ocorrência e recusa estática de token HOOK de gancho call+return."
+    ],
+    "evidence": [
+      "python/harness2b.py:266-307",
+      "python/channel.py:56,218-220",
+      "python/observer.py:40,366-368",
+      "python/acceptance.py:238-241,291-305,318-358",
+      "selftests/selftest_2b1.py:276-282,770-819",
+      "tools/validate_unit.py:93-96,128-132",
+      "validation-unit.json#/negative_controls_refused/occurrence_without_event",
+      "diagnostics/a5b6dd97c302-DIAG-PY-BARRIER/result.json#/diag_checks/generator_call_return_counted_per_event",
+      "inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY13D]/expected/hooks"
+    ]
+  },
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P3",
+      "area": "D2B-11 / R2-F01 (supervisor)",
+      "title": "Gatilho de barreira por gancho no supervisor ignora event e occurrence",
+      "evidence": [
+        "python/supervisor.py:1120-1121",
+        "python/supervisor.py:300-317",
+        "inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY13D]/case_input/sdk_calls (passos 10 e 16)"
+      ],
+      "detail": "A condição ('hook', id, record_subset) libera com qualquer HOOK_EVENT daquele id cujo record contenha o subconjunto, sem filtro de event nem contagem. No 2B-1 os únicos gatilhos de gancho são h_request_ret/h_req_ret (gancho só return, primeira ocorrência), então nada muda (conferido: STEP_RELEASE do passo 15 do 2B-PY10X em gidx 86 depois do evento em 84). O 2B-PY13D (2B-2) declara 'STEP_RELEASE depois do return de h_stop' e 'depois do segundo return de h_cleanup_cb' sobre ganchos call+return, o que exige (id, event, occurrence) contado por (id, event), coerente com R2-F01.",
+      "required_action": "Na IMPLEMENT do 2B-2 (ou no reparo, se houver), estender a condição para (id, event, occurrence, record_subset), com autoteste positivo e controle negativo (call em vez de return; primeira em vez de segunda ocorrência), e registrar como carry-over do 2B-2."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "R2-F01 (endurecimento) / E2B-04 / E2B-06",
+      "title": "Ocorrência confiada ao driver; token HOOK de gancho call+return só falha na avaliação; autoteste R2-F01 sem despacho do profiler",
+      "evidence": [
+        "python/acceptance.py:238-241,295-305,327-333",
+        "python/observer.py:366-368",
+        "tools/validate_unit.py:58-83",
+        "selftests/selftest_2b1.py:787-791"
+      ],
+      "detail": "(a) O avaliador usa o campo occurrence relatado pelo driver e o observador só valida o tipo; não há recontagem independente por (id, event) na ordem dos quadros. (b) Um token HOOK:<id>#k de gancho call+return ou não declarado leva a ValueError em tempo de avaliação (regra 3, INVALID_CAPTURE); o validador não recusa isso antes da execução. Nenhuma cadeia congelada dos dois sub-lotes usa HOOK de gancho call+return (conferido), e as do 2B-1 resolvem. (c) O autoteste R2-F01 registra os eventos chamando HookSet._record com quadro falso; o despacho call+return real por sys.setprofile está provado em outros autotestes e na DIAG-PY-BARRIER. Nesta revisão as ocorrências conferem consecutivas por (id, event) em todos os slots.",
+      "required_action": "Recontar ou conferir a ocorrência por (id, event) no avaliador ou no observador (divergência = INVALID_CAPTURE); no validador, recusar token HOOK de gancho call+return ou não declarado, com controle negativo; opcionalmente, no autoteste R2-F01, chamar as funções próprias em threads com os nomes do 2B-PY13D para passar pelo profiler."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "R2-F07 (validador)",
+      "title": "threadId de RAW_READ e COMMIT_REPLY não é conferido, embora o state.json declare que é",
+      "evidence": [
+        "tools/validate_unit.py:72-83",
+        "tools/validate_unit.py:100-105",
+        "state.json:79",
+        "inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY13D]/expected/wire/order"
+      ],
+      "detail": "O validador só confere @threadId de RELEASE_REPLY contra a regra segurada; para RAW_READ e COMMIT_REPLY confere o método, não o threadId, e não há controle negativo para isso. R2-F07 pede métodos e threadId dos três tipos, cada um com controle negativo. Sem efeito no 2B-1 (nenhum token RAW_READ/COMMIT_REPLY do 2B-1 usa @threadId); o 2B-2 usa (RAW_READ:thread/goal/set@t13d1#2), e para o cases-2b-2.json o validador só roda a regra R2-F01.",
+      "required_action": "Conferir @threadId de RAW_READ/COMMIT_REPLY contra params.threadId dos pedidos de expected.wire.requests ou do match do peer_script, com controle negativo; rodar as regras completas também sobre o cases-2b-2.json antes da IMPLEMENT do 2B-2; corrigir o texto de state.json#/carry_over_spec_r2/R2-F07."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "E2B-03 / CAP-2B-PROC-WITNESS",
+      "title": "Classificador CLIENT_TERMINATED_SIGTERM aceita peer encerrado por END próprio; alargamento não registrado",
+      "evidence": [
+        "python/acceptance.py:674-676",
+        "python/observer.py:11-12",
+        "python/observer.py:633-639",
+        "inputs/spec-2b/capability-contracts-2b.json#/capabilities[id=CAP-2B-PROC-WITNESS]/contract/4"
+      ],
+      "detail": "O contrato pede 'peer terminado pelo sinal repassado'; a implementação aceita também p.status() == 'END'. A escolha está documentada só na docstring do observador, não entre DV1..DV7. Sem efeito: em 2B-PY01A, 2B-PY01D, 2B-PY02A e na DIAG-PY-CLOSETERM o peer terminou por SIGTERM (peer_signal SIGTERM, SIGNAL_WITHOUT_END).",
+      "required_action": "Registrar como desvio DV8 com a justificativa (peer que já saiu pelo roteiro antes do sinal) ou estreitar para peer_signal == SIGTERM; reavaliar offline sem serviço."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "avaliador (completude de oráculo)",
+      "title": "Três checagens mais fracas que o oráculo, conferidas à mão nesta revisão",
+      "evidence": [
+        "python/acceptance.py:852-883",
+        "python/acceptance.py:935-943",
+        "python/acceptance.py:886-910,1187-1192",
+        "python/supervisor.py:300-327"
+      ],
+      "detail": "(a) barrier.witnesses_in_order confere testemunha < gate < liberações e a lista de comandos, mas não as condições por ação do plano ('received' initialized antes do STEP_RELEASE do passo 10 do 2B-PY01C; evento h_request_ret synthetic/slow antes do STEP_RELEASE do passo 15 do 2B-PY10X); conferido nos dados: gidx 48 < 49 e 84 < 86. (b) proc.termination_exact com no_termination_before olha só absent_t_ns, não zombie_t_ns; conferido no 2B-PY01C: zumbi em 1,2717 s depois do CALLS_DONE em 1,2644 s. (c) A DIAG-PY-BEFOREREPLY pede 'BEFORE_REPLY_WRITTEN antes da resposta', mas a checagem só exige a presença do marco por regra; conferido: o marco precede o commit da resposta em gidx e mono_ns na DIAG e em 2B-PY11A, 2B-PY11B e 2B1-CTRL01. Nenhum desfecho muda.",
+      "required_action": "Acrescentar as três checagens ao avaliador (condições por ação do plano; zombie_t_ns antes do ponto declarado; marco BEFORE_REPLY_WRITTEN antes do FORWARD_COMMIT da resposta) e reavaliar offline as pastas existentes, sem serviço."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "R2-F04 / D2B-11 (registro)",
+      "title": "Testemunha do supervisor 'peer RECEIVED turn/start = 1' do 2B-PY11B virou registro, decisão só em comentário de código",
+      "evidence": [
+        "python/supervisor.py:318-320",
+        "cases/2B-PY11B-9fa9c1b5f851/result.json#/barrier_log (received_turn_start = 1)",
+        "state.json:76",
+        "state.json#/implementation/deviations[id=DV7]"
+      ],
+      "detail": "A escolha é correta pelo espírito de R2-F04 (o known_bad, segundo turn/start em voo, é julgado por wire.order_constraints COMMIT_REPLY:turn/start#1 < RAW_READ:turn/start#2, que passou) e o valor ficou registrado (1), mas nem a disposição de R2-F04 nem o DV7 citam essa testemunha de barreira que deixou de ser gatilho.",
+      "required_action": "Registrar no state.json (R2-F04 ou DV7) que a testemunha do passo 9 do 2B-PY11B é registro e não gatilho, com o valor observado."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "provas D2B-13 / E2B-01",
+      "title": "Autoteste do D2B-13 sem o roteiro do 2B2-CTRL01 e autoteste R3-12 tautológico",
+      "evidence": [
+        "selftests/selftest_2b1.py:705-723",
+        "inputs/spec-2b/freeze-r4-2b-delta.json#/items[id=D2B-13]/proof",
+        "selftests/selftest_2b1.py:96-101",
+        "python/acceptance.py:71-72"
+      ],
+      "detail": "(a) A prova do D2B-13 pede o roteiro do 2B1-CTRL01 e do 2B2-CTRL01 contra peer próprio; só o primeiro foi autotestado. O 2B2-CTRL01 depende do login sintético do 2B-2, então o adiamento é razoável, mas não está registrado. (b) class_of lê a classe da própria tabela congelada, de modo que o teste R3-12 compara a tabela com ela mesma; a propriedade vale por construção, mas o teste não pegaria uma reclassificação em outro ponto (por exemplo CAPTURE_CLASSES).",
+      "required_action": "Registrar o roteiro 2B2-CTRL01 do D2B-13 como carry-over do 2B-2; trocar o R3-12 por um teste que confira as classes usadas pela composição (CAPTURE_CLASSES e client) contra predicate_classes congelado."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "reavaliação offline / hook.code_identity",
+      "title": "hook.code_identity lê o fonte do SDK no runtime externo sem conferir o sha da identity freeze",
+      "evidence": [
+        "python/acceptance.py:818-829",
+        "identity-freeze-r4-2b1.json#/trees/sdk-python"
+      ],
+      "detail": "source_line_ok abre /mnt/dados/cvg-work/cvg-codex100-batch2b1-runtime-20261019/sdk-python/... (fora de U) para conferir a linha def; a reavaliação passa a depender de uma árvore externa não reconferida. Conferido nesta revisão: os 22 arquivos da árvore e as 7 âncoras da stdlib batem com a identity freeze.",
+      "required_action": "Antes de ler, conferir o sha do arquivo contra identity-freeze-r4-2b1.json (divergência = predicado falho), ou guardar em U as linhas usadas."
+    }
+  ],
+  "assessments": {
+    "outcomes": {
+      "control": "2B1-CTRL01 MISMATCH pela regra 6 com failed_predicates == [wire.no_turn_interrupt]; control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed aprovados (com PRE_REPLY_NOTIFICATION turn/started antes da resposta de ctrl-2); control_gate do supervisor exige exatamente isso.",
+      "sdk": "15/15 PASS_CLIENT_OBSERVATION pela regra 7; predicados substantivos e não vazios (wire.order_constraints, hook.events_exact e barrier.witnesses_in_order recusam lista vazia); formas de término só com testemunhas do SO e do canal (tracker de /proc, SIGNAL/END/FAULT do adapter, peer), returncode do Popen só em proc.termination_exact e probe.values_exact.",
+      "signal_forms": "2B-PY01A, 2B-PY01D, 2B-PY02A: SIGNAL SIGTERM do adapter, END complete=false, peer SIGTERM, zumbi exit 15/ausente, SIGNAL antes do API_ERROR e depois de h_close_call (2B-PY01A, 2B-PY01D) ou dentro do passo 7 do close (2B-PY02A); 2B-PY02K: FAULT sigterm_ignored uma vez, sem END, zumbi exit 9, returncode None logo depois do close, reap -9, close >= 2,0 s.",
+      "gidx_DV5": "Sem gidx duplicado; inversões entre lotes existem (2B-PY02B, 05X, 11A, 11C, DIAG-PY-BEFOREREPLY, < 0,6 ms) mas a reavaliação com a ordem de emissão dá predicados idênticos nos 16 slots."
+    },
+    "deviations": {
+      "DV1": "Aceito: a forma da tupla LAUNCH (cmdline, environ, cwd /work/tmp, autorrelato) é testemunhada na DIAG-PY-CLOSETERM (gate_proc_witness_launch_form, fora do critério da CLOSETERM) e a decisão procwitness_slots exige as duas; leitura forçada antes do BEGIN recusada na DIAG-PY-PROCWITNESS.",
+      "DV2": "Aceito: conferi as 13 entradas de BARRIER_PLAN dos slots SDK do 2B-1 (e as 10 das DIAG) contra os textos witness/release congelados; plan_check vazio; cada RELEASE_REPLY soltou o pedido do texto (initialize, turn/start t10a, synthetic/slow, turn/start first).",
+      "DV3": "Aceito: auditoria estática por vaga no autoteste e os 15 casos exercem os passos de SDK em serviço; maquinaria comum nas DIAG com código próprio.",
+      "DV4": "Aceito (campos herdados; PROBE {id, value} como D2B-15).",
+      "DV5": "Aceito e verificado (ver assessments.outcomes.gidx_DV5).",
+      "DV6": "Aceito: a testemunha h_notify_ret com arg:method initialized existe em 2B-PY01A e 2B-PY01D; perturbação que move o RAW_READ do initialized para depois do SIGNAL dá INVALID_CAPTURE pela regra 1.",
+      "DV7": "Aceito: zero_spawn e proc_witness registram e liberam; adapter_killed com limite de 5 s; nenhum BARRIER_GATE_TIMEOUT ocorreu."
+    },
+    "carry_overs": {
+      "R2-F01": "APROVADO (ver r2_f01).",
+      "R2-F02": "Correto: thread.join por nome sem thread vivo conta como terminado, sem espera (autoteste); escopo 2B-2.",
+      "R2-F03": "Correto: avaliador (acceptance.py:832-849) e validador (validate_unit.py:84-92) exigem espera só para expectativa não vazia; controle negativo recusado; 2B-PY10X julgado no snapshot vazio.",
+      "R2-F04": "Classificação revisada e aceita: CLIENT_EFFECT para 2B-PY11B passo 8, 2B-PY02A passo 12, worker.join e worker.still_parked; HARNESS_PRECONDITION para yield_until do 2B-PY01B, worker.parked de 2B-PY08X/2B-PY12B, probe.until do 2B-PY12A e block_release_wait_cancel do 2B-PY10X (pontos de sincronização do roteiro); espelho driver/avaliador conferido pelo autoteste. Registro incompleto do passo 9 do 2B-PY11B em R1-F06.",
+      "R2-F05": "Correto como não aplicável ao 2B-1; segue para o 2B-2.",
+      "R2-F06": "Correto: STEP_WITNESS e CLOCK_MARK como marcos DIAGNOSTIC do driver, STEP_RELEASE como comando do supervisor, dependency_identity 2.13.4/2.46.4 no BEGIN do driver e conferida pelo avaliador.",
+      "R2-F07": "Parcial: WORKER, métodos, threadId de RELEASE_REPLY, passo de CANCEL, guarda de excepthook e regra de ocorrência com controle negativo; falta threadId de RAW_READ/COMMIT_REPLY (R1-F03).",
+      "continuation": "R1-F06 (gate do CONTROL), R1-F07 (identity freeze antes dos serviços), R1-F12 (fault só do case_input) implementados e conferidos; R1-F03/R1-F04 mantidos; R1-F05/F11/F08 não aplicáveis ao 2B-1 (pista TS)."
+    },
+    "containment_and_rules": "source freeze 11:05:33.58Z e identity freeze 11:05:33.92Z antes do primeiro serviço (11:05:39.07Z); todos os command.json ligam os dois sha; 25 unidades (9 DIAG + 16 vagas), 25 pastas de tentativa no runtime, todas liberadas; serviços 9/12, vagas 16/16, 0 retry; CONTROL às 11:06:10.59Z depois da diag-admission (11:06:10.47Z) e antes do primeiro SDK; casos em ordem de slot, em série; condicionais com decisão RUN; bwrap --unshare-all --clearenv; sem PG, porta ou rede declarados; identity freeze (22 arquivos do SDK e 7 âncoras da stdlib) sem drift hoje; 50 vazios catalogados, todos os vazios de U, metadados conferidos com result.json e command.json; nenhum __pycache__ em U."
+  },
+  "checks_run": [
+    "Freeze: sha de review-freeze-r1.json, bytes e sha dos 568 arquivos, nenhum arquivo fora do freeze, nenhum __pycache__ (antes e depois).",
+    "Cópia de U para o scratchpad; todas as execuções em cópias com /usr/bin/python3.12 -I -B.",
+    "tools/validate_unit.py em cópia: ok=true, 8/8 controles negativos recusados, validation-unit.json igual byte a byte.",
+    "selftests/selftest_2b1.py em cópia: 66/66, sdk_imported=false, mesmos testes e mesmos sha de fontes do selftest-results.json congelado; scratch do runtime criado e apagado pelo próprio autoteste.",
+    "python/acceptance.py reevaluate nas 16 pastas de caso (cópia): 16/16 iguais em predicado e desfecho.",
+    "Reavaliação com ordem de emissão no lugar do gidx (16 slots): resultados idênticos.",
+    "Perturbações em cópias (14): sonda (MISMATCH r6), ocorrência de gancho 1->2 (MISMATCH r6), atributo de gancho (MISMATCH r6), thread_name do quadro (MISMATCH r6), thread_name só no record (sem efeito: o julgado é o do quadro, como desenhado), identidade de código (INVALID r4), tracker do SO 15->9 e ausente no 2B-PY01A (INVALID r1), tracker 9->15 no 2B-PY02K (INVALID r1), E2B-12 (INVALID r1), UNSCRIPTED do CONTROL (INVALID r4), liberação antes do gate (INVALID r4), environ do /proc (MISMATCH r6), quadro corrompido (INVALID r1).",
+    "Leitura de next-task.json, lead-decision-r2-f01.json, executor-disposition R2, freeze-r4-2b-delta, evaluator-r4-2b-delta, capability-contracts-2b, control-slot-contract-2b, execution-budget-2b-1, tabela de predicados e composição do cases-2b-1.",
+    "Leitura das fontes: harness2b.py, acceptance.py (inteiro), trechos de python-driver.py, supervisor.py, observer.py, channel.py, adapter-python.py, adapter-python-exec, validate_unit.py e selftest_2b1.py.",
+    "BARRIER_PLAN conferido contra os textos witness/release congelados; liberações observadas conferidas contra os pedidos segurados.",
+    "Classificação R2-F04 por passo revisada em case-plan.json.",
+    "known_bad.judged_by de todos os slots presentes nos predicados e de classe client.",
+    "Inversões gidx x mono_ns, ocorrências consecutivas por (id, event), marco BEFORE_REPLY_WRITTEN antes do commit da resposta.",
+    "command.json/result.json: sha das freezes, sandbox, load wait, timed_out; budget, case-ledger, resource-receipt-final, diag-admission (decisões e horários).",
+    "empty-artifact-delta.json: 50 entradas = todos os arquivos vazios de U; exitCode e bytes conferidos com result.json.",
+    "input-verification.json: re-serialização indent=2 (ensure_ascii=False, newline final) dos registros da R2 reproduz os sha de next-task.json.",
+    "Leitura (sem importar) da árvore do SDK no runtime para a linha do park point (client.py:693) e sha dos 22 arquivos e 7 âncoras da stdlib contra a identity freeze."
+  ],
+  "not_done": [
+    "Nenhum serviço, systemd-run, bwrap, rede, PostgreSQL, porta, import do SDK ou da Pydantic; nenhuma escrita em U além de review-r1/review.json; nenhum comando git."
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

@@ -6,7 +6,21 @@ Programa `CODEX100`, 17/10/2026. [Plano 0384](0384_plano_executivo_paridade_code
 
 ## Situação vigente — 18/10/2026
 
-Próxima ação canônica: `DX100-G02:IMPLEMENT-SDK-OBSERVATION-DRIVERS`, [checkpoint de sessão](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/SESSION_CHECKPOINT.md) e [task de retomada](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/next-task.json). Conferir hashes/claims e continuar fontes parciais; nenhum reset de budget. Quatro fontes Node ainda sem checks; Python/supervisor e emit/loader pendentes. 2/12 serviços usados, 0/2 críticas. Todos os agentes/jobs próprios encerrados. Unidade NÃO concluída nem qualificada.
+Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`, documental, pela [admissão do 2B-2](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/next-task.json). Concluídas localmente, em ordem:
+
+- drivers de observação SDK ([relatório](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/REPORT.md));
+- admissão do perfil, com 19 casos `PASS_CLIENT_OBSERVATION` ([delta](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-admission/ledger-delta-cont-d9ef.md));
+- ligação v1, com 11 contratos observados ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/coverage-observed.json));
+- lote 2A: [especificação](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-spec/state.json) e [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2a-admission/state.json), com o CONTROL em MISMATCH, 19 PASS, 3 MISMATCH atribuídos ao harness e o TS12 como `INVALID_CAPTURE`;
+- ligação v2, com 21 contratos observados e 23 abertos ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2a-binding/coverage-observed-v2.json));
+- continuação do 2A: [especificação](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2a-continuation-spec/state.json) e [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-admission/state.json), com o CONTROL em MISMATCH e 8/8 PASS (case_input pelos bytes congelados);
+- ligação v3, com 25 contratos observados e 19 abertos ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2ac-binding/coverage-observed-v3.json));
+- especificação do 2B ([estado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2b-spec/state.json)), em dois sub-lotes: 2B-1 com 16 vagas e 2B-2 com 18.
+- lote 2B-1: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-admission/state.json), com o CONTROL em MISMATCH e 15/15 PASS, sem capability nova;
+- ligação v4, com 29 contratos observados e 15 abertos ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/coverage-observed-v4.json));
+- lote 2B-2: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/state.json), com o CONTROL em MISMATCH e 17/17 PASS; [decisão do lead](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/lead-decision-f01.json) sobre o known_bad do 2B-PY13E.
+
+Zero recibos funcionais e zero crédito de paridade; as seis lacunas SDK seguem `OPEN`. SPEC0239 aprovada; o BUILD depende de 0029 → 0030 → 0031.
 
 [AquisiçãoSDK concluída](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-profile-artifacts/REPORT.md):7artefatos/7.116.743bytes raw, seiswheels eTS5.9.2;6RECORDs/tags/metadata/closure/301arquivos e169cópiasPython exatas.8contraprovas de dados rejeitadas. Coletor inicial exit1 apósEOF preservado; todosbytes autenticadosoffline,7HTTPtotais/0retries/sem substituição. Bibliotecas nativas ainda não carregadas; sourceclient/SDKdistribuído/CLI separados, nenhum crédito funcional.
 
@@ -87,7 +101,8 @@ Todos509registros/14CQ/30NJ/19EA permanecemNOT_RUN/nullreceipt. G01/G04/Q01/prog
 - Preparo documental inicial: [receita isolada de referência](../04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-language-contracts/reference/README.md), Rust1.95.0/Cargo.lock/bin codex e artefato autenticado. Toolchain ausente no PATH observado; sem instalação, compilação ou execução do alvo. Versões Python0.153.4/companheiro0.163.0/fonte pinada são identidades distintas.
 - Ambiente no checkpoint anterior: [Rust1.95 isolado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/reference-environment/README.md), seis componentes/versões verificados,2480entradas vinculadas por hash,4sondas bwrap e limites reais4GiB/2CPU/128tasks. Cinco scopes próprios inativos; nenhum Codex compilado/executado, sem instalação global ou PATH alterado. Essa preparação não fecha G02 nem sua dependência de G01.
 - Aquisição atual: [cópia e dependências verificadas](../04_audit/evidence/CODEX100-EXEC-20261017/g02/locked-dependencies/README.md),9288paths/1311pacotes remotos/1293archives registry+18Git/8commits;78372entradas vendor. Prova direta archive→vendor e corpos Git,514metadados omitidos e18manifestações Cargo normalizadas registrados. Revisão EuclidR1 aceitou25+2inputs congelados/zero drift/zero obrigatórios; crítico encerrado, não fecha G02.
-- Próxima ação: DX100-G02:IMPLEMENT-SDK-OBSERVATION-DRIVERS — drivers privados/admissão conforme HOW e dados autenticados; sem SDK/compilador antes de gate concreto, sem produção ou paridade concedida.
+- Ligação das observações SDK concluída no recorte T1 (19/10/2026): [mapa observado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/coverage-observed.json) com 11 contratos `OBSERVED_CLIENT_PARTIAL` e 33 abertos, [seis lacunas](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/gaps-review.json) `OPEN` e 0 recibos. Revisão R1 REVISE, um reparo, R2 APPROVE. Próximo: perfil de fonte, lote 2A ([HOW](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-coverage-binding/HOW-next-profile.md)); o perfil distribuído vem depois da decisão de identidade. O cartão segue `IN_PROGRESS` e não incrementa o numerador.
+- Próxima ação: DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A, documental; sem SDK ou compilador antes de gate concreto, sem produção nem paridade concedida.
 
 - Pré-requisitos atuais: job98092 terminou101 por OpenSSLheaders ausentes, falha preservada. [Sysroot privado autenticado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/native-prerequisites/README.md) fornece OpenSSL/libcap,4packages/246entradas/assinaturaUbuntu+SHAindex+SHAdebs/2verificaçõesPASS,sem instalação global/postinst. Adendo vinculado ao novo job; linker/OpenSSL/libcap mínimosPASS, sem desabilitar bwrap/alterar features/otimização/lock.
 
