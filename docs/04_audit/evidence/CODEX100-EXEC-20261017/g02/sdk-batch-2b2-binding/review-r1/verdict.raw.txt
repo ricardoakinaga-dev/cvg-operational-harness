@@ -1,0 +1,153 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T10:26:00-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "aec231c3d05c450ff9d782666929da7c0f09cee094da89038ab4bbbc7a6229b1",
+  "subject_hash_check": {
+    "before": "ok (11/11 arquivos com sha256 e bytes iguais ao freeze; freeze aec231c3…)",
+    "after": "ok (11/11 iguais; freeze aec231c3…; pasta sem arquivo novo além de review-r1/brief.md)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 4 P2, 4 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02", "R1-F03", "R1-F04"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "HOW-next-profile-v2.md (Limites)",
+      "title": "O HOW v2 diz que a SPEC0239 segue aguardando a decisão T3, mas o usuário aprovou o contrato em 18/10",
+      "evidence": [
+        "HOW-next-profile-v2.md:117-118 ('A SPEC0239 segue aguardando a decisão T3 já solicitada; o BUILD nativo depende dela.')",
+        "../../g04/native-journey-recovery-plan/user-decision-20261018.json (decision APPROVED_CONTRACT, specSha256 ccdf3a75…, at_approx 2026-10-18T21:15-03:00, scope: BUILD local contido só depois de qualificar as dependências)",
+        "../sdk-coverage-binding/HOW-next-profile.md:192-193 (HOW v1, que o v2 substitui: 'A SPEC0239 está aprovada pelo usuário, mas o BUILD depende de 0029 → 0030 → 0031 qualificadas')",
+        "../sdk-batch-2a-binding/HOW-next-step.md:133 (mesma frase do v1)",
+        "docs/03_build/0386_backlog_paridade_codex.md:9 e docs/99_runtime_state.md:51 ('SPEC0239 aprovada; o BUILD depende de 0029 → 0030 → 0031')"
+      ],
+      "detail": "A frase reverte um fato registrado. O 'human_approval: PENDING_NEW_SPEC0239_T3_ONLY' do state.json do programa é de 18/10 às 13:26, antes da decisão das 21:15. O HOW v1, o HOW-next-step do 2A e o 0386 já registram a aprovação, com o BUILD dependente de 0029 → 0030 → 0031. O brief pede que os fatos citados no HOW v2 batam com as fontes. Esta frase não bate. Ela também levaria o leitor a uma pergunta T3 que já foi respondida.",
+      "required_action": "Trocar por: 'A SPEC0239 foi aprovada pelo usuário (g04/native-journey-recovery-plan/user-decision-20261018.json); o BUILD nativo depende de 0029 → 0030 → 0031 qualificadas e segue não autorizado nesta trilha.' Conferir que nenhum outro arquivo da unidade repete a versão errada."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "HOW-next-profile-v2.md Q1 e Q2 (cópias em state.json#/result/user_decisions_for_distributed_profile e next-task.json#/user_decisions_pending)",
+      "title": "A Q1 não define o conjunto de pacotes, afirma um fato não estabelecido e não oferece as opções do cartão; a Q2 (T4) herda esse conjunto indefinido",
+      "evidence": [
+        "HOW-next-profile-v2.md:39-46 (fatos), :56-58 (Q1), :66-70 (Q2)",
+        "../sdk-reference-profile/inputs/sdk/python/pyproject.toml:7 (version 0.0.0-dev) e :19 (openai-codex-cli-bin==0.153.4, a única versão publicada que o pin indica)",
+        "../sdk-reference-profile/inputs/sdk/typescript/package.json:2-3 (@openai/codex-sdk 0.0.0-dev, sem dependência de @openai/codex)",
+        "../../g01/sdk-open-contracts/typescript/contracts.json#/rows[id=PK01|PK04] (@openai/codex e seis pacotes de plataforma, @openai/codex-linux-x64 etc.)",
+        "docs/03_build/0386_backlog_paridade_codex.md:79 ('Vincular um executável à fonte-alvo por build reproduzível ou decisão explícita de outro pin')",
+        "../sdk-coverage-binding/HOW-next-profile.md:173-175 (HOW v1: escolher as versões de openai-codex, codex-cli-bin, @openai/codex-sdk e @openai/codex com os pacotes de plataforma e decidir a relação delas com o pin)",
+        "../../g02-reference-acceptance.json#/installed0.163_equivalence = UNKNOWN",
+        "docs/07_agents/AGENTS.md:104 (T4: pacote de decisão hash-bound com SHA-256 e candidato congelado)"
+      ],
+      "detail": "(a) O pin só indica openai-codex-cli-bin==0.153.4, pelo lock Python. O SDK Python e o TS estão em 0.0.0-dev, e o pacote TS não depende de @openai/codex. Por isso 'os pacotes do SDK correspondentes' não tem versão determinada. Os pacotes npm do CLI (@openai/codex e os seis de plataforma), que PK01 a PK08 exigem, nem aparecem na pergunta. O usuário aceitaria um conjunto que ninguém fixou. (b) 'Registrando que eles não foram compilados a partir do pin 8d9f6466' afirma um fato negativo que não foi estabelecido. O que se sabe é que não há prova de vínculo com o pin. (c) O cartão admite build reproduzível ou decisão explícita de outro pin. A Q1 pede uma dispensa sem designar pin, ou seja, não pede nenhuma das duas opções. O HOW v1 pedia a escolha das versões e da relação com o pin. (d) A Q2 é T4. Pelo AGENTS.md, T4 exige pacote hash-bound com candidato congelado, e 'desses pacotes' não congela nomes, versões nem digests esperados.",
+      "required_action": "Reescrever a Q1 em uma frase que nomeie os artefatos e as versões: wheel openai-codex-cli-bin 0.153.4, o wheel do SDK Python, @openai/codex-sdk, @openai/codex e o pacote de plataforma linux-x64. A frase deve oferecer as opções do cartão: adotar como outro pin o commit ou tag do release escolhido, ou exigir build reproduzível. Deve registrar 'sem prova de vínculo com 8d9f6466' no lugar de 'não foram compilados'. Fazer a Q2 apontar para essa lista congelada (nomes, versões e digests esperados), que o pacote T4 vai ligar por sha. Propagar o texto para state.json e next-task.json."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "HOW-next-profile-v2.md ('O que resta' e 'O que cabe sem decisão nova') e next-task.json#/what; linha PY18",
+      "title": "O resíduo de fonte do PY18 falta no HOW v2 e na próxima unidade, embora o v5 o destine a SOURCE_BATCH_CONTINUATION",
+      "evidence": [
+        "coverage-observed-v5.json:13267 (rows[PY18].residual_planned_profile_proposal = 'SOURCE_BATCH_CONTINUATION + DISTRIBUTED_PROFILE: Comparação com referência de schema independente…, modelos gerados fora dos exercitados e compatibilidade com pydantic>=2.12 além de 2.13.4')",
+        "coverage-observed-v5.json:5442 (remaining_open_by_contract/PY18)",
+        "gaps-review-v5.json#/rows[id=GAP-GENERATED]/observations_2b2_summary ('schema de referência independente segue aberto')",
+        "HOW-next-profile-v2.md:25-32 (PY18 ausente), :94-97 (lista do 2B sem PY18), :99-100 (diz que a lista autoritativa é remaining_open_by_contract, que contém PY18)",
+        "next-task.json:8 ('continuação do lote 2B (PY02, PY05, PY08, PY10, PY12, PY13, PY14, PY17)')",
+        "validate-binding-2b2.mjs.txt (LABELS só lê os acréscimos; o PY18 não tem acréscimo, então o destino dele nunca é conferido)"
+      ],
+      "detail": "O brief pede que a lista do que cabe sem decisão nova esteja completa. O v5 manda parte do resto do PY18 para a continuação de fonte: a comparação com os schemas JSON do pin como referência independente e os modelos gerados não exercitados. O HOW v2 não cita o PY18 em nenhuma das duas tabelas e contradiz a própria fonte autoritativa que aponta. O next-task#/what, que guia a SPECIFY seguinte, também o omite, e o resíduo da GAP-GENERATED se perderia.",
+      "required_action": "Acrescentar o PY18 à tabela 'O que cabe sem decisão nova' (parte de fonte) e ao next-task.json#/what. Pôr a compatibilidade com outras versões de pydantic na parte distribuída, ou dizer se ela exige decisão. Se possível, separar no texto do resto o destino de cada parte."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P2",
+      "area": "PY09 / braço PY09.B02",
+      "title": "A evidência ligada ao PY09.B02 (só 2B-PY09A) não sustenta 'min(max, delay)' nem 'delay dobra até o teto'",
+      "evidence": [
+        "coverage-observed-v5.json:2251 (arms_observed_2b2[PY09.B02].observed_by só com 2B-PY09A: clock.recorder_exact e passo 5)",
+        "build-binding-2b2.py.txt:72",
+        "../sdk-batch-2b2-admission/inputs/spec-2b/cases-2b-2.json#/cases[id=2B-PY09A] passo 5 sem initial_delay_s e max_delay_s, ou seja, defaults 0.25 e 2.0 (../sdk-reference-profile/inputs/sdk/python/src/openai_codex/retry.py:16-17, :38, :41)",
+        "../sdk-batch-2b2-admission/cases/2B-PY09A-36c3ff0aaeec/acceptance.json#/predicates[id=clock.recorder_exact] (uniform ±0.05 e ±0.1, sleeps 0.3 e 0.4)",
+        "../sdk-batch-2b2-admission/cases/2B-PY09D-ca414b9240ff/acceptance.json#/predicates[id=clock.recorder_exact] (sleep 1.3 = min(1, 1.5) + 0.3; segundo uniform ±0.2 = min(1, 3) * 0.2)",
+        "../sdk-batch-2b2-admission/discrimination-check-2b2.json#/arms[case=2B-PY09A,arm=PY09.B02]/basis ('o teto do delay é distinguido no 2B-PY09D')"
+      ],
+      "detail": "No 2B-PY09A o delay vai de 0.25 a 0.5 e nunca chega ao máximo de 2.0. Então min(max, delay) é igual a delay e o teto não age, e um cliente sem o min ou sem o teto deixaria o mesmo registro. A própria tabela atribui a distinção do teto ao 2B-PY09D. Só que o 2B-PY09D não mira o PY09.B02, e o v5 não liga a evidência dele ao braço. O crédito continua de pé, porque os dois casos estão ligados ao PY09, mas a evidência do braço não sustenta o texto dele, o que contraria binding_rule[4].",
+      "required_action": "Ligar ao PY09.B02 o clock.recorder_exact e o passo 5 do 2B-PY09D, por exemplo como evidência de outro caso, com o campo case. No validador, conferir essa ligação com controle negativo. A alternativa é registrar o PY09.B02 como parcial no 2B-PY09A, com a parte do teto atribuída ao 2B-PY09D."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "PY17.B01, PY17.B06, PY14.B04 (evidência ligada)",
+      "title": "Três braços DISCRIMINATED não ligam o predicado que cobre parte do texto, embora ele exista e tenha passado",
+      "evidence": [
+        "build-binding-2b2.py.txt:119 (PY17.B01 só com os passos 2/5 e probes; falta peer.before_reply_order_witnessed regra 1, que o PY13.B02 e o PY13.B03 ligam)",
+        "../sdk-batch-2b2-admission/cases/2B-PY17A-8a106da8dae2/acceptance.json#/predicates[id=peer.before_reply_order_witnessed] (rule 1 ok)",
+        "coverage-observed-v5.json arms_observed_2b2[PY17.B06] (o 'nem entrega terminal' depende do passo 5, ligado só ao PY17.B07)",
+        "coverage-observed-v5.json arms_observed_2b2[PY14.B04] (o 'desregistra' depende de routes_end, ligado só ao PY14.B06)"
+      ],
+      "detail": "O crédito não muda. A testemunha de que a conclusão chegou antes da resposta do start, o retorno do wait depois do ACK e a rota liberada existem no acceptance, mas não estão na evidência desses braços.",
+      "required_action": "Acrescentar esses itens à evidência dos três braços."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "PY13.B17 e PY13.B13 (qualificação e resto aberto)",
+      "title": "O lado natural da ordem forçada (PY13.B17) e o timeout real (PY13.B13) não entram no resto aberto, ao contrário do precedente PY10.B04 do v4",
+      "evidence": [
+        "coverage-observed-v5.json:3478 (qualificação do PY13.B17 sem 'a corrida natural não é afirmada')",
+        "../sdk-batch-2b1-binding/coverage-observed-v4.json arms_observed_2b1[PY10.B04].qualification e rows[PY10].remaining_after_2b1_additions ('Corrida natural … sem bloqueio forçado do loop (PY10.B04): continuação seguinte')",
+        "coverage-observed-v5.json rows[PY13].remaining_after_2b2_additions (sem esses itens) e rows[PY09].remaining_after_2b2 ('tempo real de sleep … perfil distribuído')"
+      ],
+      "detail": "O PY13.B17 usa o mesmo loop.block_release_wait_cancel do PY10.B04. O v4 declarou para o PY10.B04 que a corrida natural não é afirmada e a mandou para a continuação. O PY13.B13 usa relógio controlado, e o v5 não registra o timeout real em nenhum destino, ao contrário do PY09, que registra o sleep real.",
+      "required_action": "Escrever na qualificação do PY13.B17 que a corrida natural não é afirmada. Acrescentar aos acréscimos do PY13, com destino, a corrida natural do PY13.B17 e o timeout real de 30 s do PY13.B13."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "HOW-next-profile-v2.md ('O que resta', limite de plataformas, TS12)",
+      "title": "A tabela 'O que resta' omite resíduos distribuídos que o v5 registra, e o HOW dá como pronta a pergunta do TS12",
+      "evidence": [
+        "HOW-next-profile-v2.md:25-31 e :85-86",
+        "coverage-observed-v5.json rows[PY08] ('leitura com processo real … perfil distribuído'), rows[PY13|PY14] (destino com DISTRIBUTED_PROFILE), rows[TS09] ('pathDirs do resolver … perfil distribuído'), rows[TS12] ('outras versões de Node')",
+        "../../g01/sdk-open-contracts/typescript/contracts.json#/rows[id=PK01] (seis targets) e [id=PK03] (chaves PATH do Windows)",
+        "coverage-observed-v5.json#/remaining_open_by_contract/TS12 ('pergunta T3 nova …') e next-task.json#/user_decisions_pending/ts12_privileged_witness"
+      ],
+      "detail": "A linha 'Comportamento contra Codex CLI real' não traz PY08, PY13, PY14, TS09 nem TS12, cujos destinos no v5 incluem o perfil distribuído. O limite de plataformas cita só PY20 e PK04, mas o PK01 também tem seis targets, e o PK03 e o PY02 dependem do Windows. A linha do TS12 diz 'pergunta T3 já registrada no mapa', mas o mapa só registra que falta escrever uma pergunta T3 nova.",
+      "required_action": "Completar a tabela com esses resíduos. Citar PK01, PK03 e o PATH do Windows do PY02 no limite de plataformas. Dizer que a pergunta do TS12 ainda está por escrever, ou escrevê-la em uma frase."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "PY13.B15 (not_observed)",
+      "title": "Um ponteiro relativo copiado da tabela agora aponta para a pasta errada",
+      "evidence": [
+        "coverage-observed-v5.json:3370 e :10510 ('(correção da R1, review-r1/review.json#/arm_discrimination)')"
+      ],
+      "detail": "Lido a partir de sdk-batch-2b2-binding, o ponteiro cai em review-r1/review.json desta unidade, que é a revisão do BIND, e não na R1 da admissão.",
+      "required_action": "Qualificar o ponteiro como ../sdk-batch-2b2-admission/review-r1/review.json#/arm_discrimination, ou anotar a origem sem mudar o texto da tabela."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 11 arquivos do freeze antes e depois (iguais); sha do freeze aec231c3… conferido",
+    "commit 7e1da11a resolvido e contido em refs/remotes/origin/candidate/d9ef-docs-20261019; blob git igual ao arquivo local para adjudication-r1, discrimination-check-2b2, lead-decision-f01, coverage-observed-v4, gaps-review-v4, projection-2b2-on-v4, executor-disposition R2, coverage-plan-2b e cases-2b-2",
+    "17 casos consumidos = bind_consumes_only; leitura e atribuição vêm da adjudicação; CONTROL fora; 17 ponteiros de acceptance com sha certo; os 17 sha de sources e os sha de authoritative_residual_refs e de gaps source/base conferidos",
+    "status por linha: só PY09, PY13, PY17 e PY18 mudam; PY14 só ganha observações; contagens 33/11; whole_requirement_covered false, functional_receipt null e parity_credit 0 em todas as 44 linhas",
+    "77 pares caso×braço iguais à tabela (68/8/1); todas as 76 evidências ligadas existem no acceptance (predicado ok, classe, congelado no caso, passos, chaves de probe, regras do peer, tokens de ordem, entradas de gancho); leitura semântica dos predicados dos 17 acceptance contra o texto de cada braço e contra os sete padrões de patterns_checked",
+    "fonte do SDK conferida para PY13 (client.py:613-646, async_client.py:250-288), PY17 (_login.py, client.py:441-456) e PY09 (retry.py); peer_script e kwargs do 2B-PY09A, 2B-PY09B, 2B-PY09D e 2B-PY18A",
+    "escopos parciais iguais ao texto da tabela (8); qualificações das falhas injetadas, do relógio controlado, da ordem forçada, da decisão F01 (2B-PY13E NOT_CREDITED; PY13.B17/B18 só pela observação positiva) e do PY17.B04",
+    "carried_from_v4 igual à linha do v4 nas 44 linhas, salvo as erratas R2-F01 (PY12.B03) e R2-F02 (PY02.B02/B07), conferidas contra a disposição R2; still_not_consumed_2a, arms_closed_v3_carried e arms_open_explicit (PY05.B10 + PY13.B06) conferidos",
+    "remaining_open_by_contract = v4 + linhas do 2B-2; acréscimos e destinos das linhas PY09/13/14/17/18 e das linhas fora do plano",
+    "gaps-review-v5: 13/13, 11/11, 4/4, 1/3, 15/15, 1/12, todas OPEN; projeção do v4 confirmada",
+    "árvores sdk-python das identity freezes 2B-1 e 2B-2 iguais; sha de client.py, async_client.py, retry.py e _runtime_requirements.py iguais à freeze",
+    "fatos do HOW v2: 0.0.0-dev, openai-codex-cli-bin==0.153.4, mínimo 0.151.0, ELF 5cce7264… em g02-reference-acceptance.json, texto do cartão DX100-G02 (0386:79), status da SPEC0239 (user-decision-20261018.json), níveis T3/T4 no AGENTS.md, precedente da aquisição em sdk-profile-artifacts",
+    "validador executado em memória com Node v22.23.2, com a linha de escrita do validation.json desligada por pipe: PASS, 0 erros, 49/49 controles; código do validador e do passo 0 lido para ver o que cada checagem testa"
+  ],
+  "limits": "O build e o close não foram reexecutados; as saídas foram conferidas com reimplementação própria em Python. O validador rodou em memória, a partir da raiz do repositório, com a escrita desligada por pipe, e nenhum arquivo foi gravado no repositório; fora dele foi criado apenas um diretório vazio no scratchpad. Os blobs foram conferidos por amostra (9 arquivos); os 641/644 arquivos do passo 0 não foram refeitos um a um. Não foram feitos gitleaks nem secret-scan. Os braços PY18 do 2B-PY18B a D foram lidos pelo acceptance sem reconstituir todos os peer_scripts. Um grep foi negado pelo controle de permissões e foi refeito de outra forma.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

@@ -15,12 +15,14 @@
 
   - Antes da consolidação: correções de CI do PR #3, promoção do BUILD0240, aprovação da SPEC0241, journal0225 J07, integração da fundação Claude100 e portabilidade dos testes, todos já na `main` pelo PR #4.
 
+- Atualização (mesmo dia):
+  - **HISO-005:** o BUILD0243 tirou a evidência do snapshot das receitas (279 MB contra 3,78 GB) e o BUILD0242 subiu os tetos e passou a contar o prazo por fase. Os dois foram promovidos neste PR, com certify 16/16 CONDITIONAL_GO. A B6 mediu o corpo inteiro (1.341/1.341 módulos) com `validation: true`: 13.521 diagnósticos, zero provas e zero violações, e segue `INCOMPLETE`. [BUILD0243](04_audit/evidence/HISO005-P2-BUILD-0243-20261019/REPORT.txt), [BUILD0242](04_audit/evidence/HISO005-P2-BUILD-0242-20261019/REPORT.txt).
+  - **Codex100:** o perfil de fonte terminou com 33 contratos observados e 11 abertos ([v5](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/coverage-observed-v5.json)), e a continuação 3 foi especificada. O usuário adotou o pin 0.153.4 para o perfil distribuído, autorizou uma única aquisição da lista do Codex, aceitou o modo só keyless e negou capability nova ([decisões](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json)).
 - `next_action`:
-  1. Merge do PR #6 com os checks obrigatórios verdes.
-  2. `HISO005-P2-BUILD-0243` e, depois, `HISO005-P2-BUILD-0242`.
-  3. `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`. Já fecharam: ligação v3 (25/19), lote 2B-1 (CONTROL em MISMATCH, 15/15 PASS), ligação v4 (29/15) e lote 2B-2 (CONTROL em MISMATCH, 17/17 PASS).
+  1. HISO-005: recon das causas dos 13.521 diagnósticos, agora que o corpo é visível por inteiro.
+  2. Codex100: IMPLEMENT da continuação 3 (C3-1 e depois C3-2) e a aquisição única do perfil distribuído, já autorizada.
 
-  As evidências seguintes entram em PR documental próprio. Push, merge e gates T3 só com autorização do usuário.
+  Tudo à `main` por PR, sob a autorização permanente desta sessão.
 
 # MAIN-CONSOLIDATION — reparo do E2E hospedado — 19/10/2026
 

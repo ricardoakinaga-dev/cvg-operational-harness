@@ -1,0 +1,120 @@
+{
+  "kind": "FREEZE_R4_C3_DELTA",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3",
+  "base": {
+    "freeze_r4": {
+      "path": "../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json",
+      "sha256": "14ad70297aa907e5a88add489196c1b38dfdbf15ef50454f40250185957688ed"
+    },
+    "freeze_r4_2b_delta": {
+      "path": "../sdk-source-batch-2b-spec/freeze-r4-2b-delta.json",
+      "sha256": "55c561192009c44a0b0de25c561f9f95bb675285221124a35edb7f7d67d93136"
+    },
+    "capability_contracts_2b": {
+      "path": "../sdk-source-batch-2b-spec/capability-contracts-2b.json",
+      "sha256": "78bc3c9fb3789134b1e8d37527dcbfbed867a39f7d618546d1f00ed1da2bdf3a"
+    },
+    "admitted_ts_driver": {
+      "path": "../sdk-batch-2ac-admission/node/ts-driver.mjs",
+      "sha256": "748603cb94186e5d804d5839c216f1cde4b0feb924822803a603e2aa87906e01"
+    },
+    "admitted_fixture_cli": {
+      "path": "../sdk-batch-2ac-admission/node/fixture-cli.mjs",
+      "sha256": "9b21680451f140dc62a430c8b67a0cdff8fc3bf045d231b873db1fdeab75c525"
+    },
+    "admitted_python_driver": {
+      "path": "../sdk-batch-2b2-admission/python/python-driver.py",
+      "sha256": "e09c47e29db921d9f24810d15ed88731c1953af30634f699c9e360171e01e900"
+    },
+    "admitted_harness2b": {
+      "path": "../sdk-batch-2b2-admission/python/harness2b.py",
+      "sha256": "fa535e4e2e12cc7bff0fb8a3dbaf123b92e05567af01ff8bee4250e5ee31c59e"
+    }
+  },
+  "inheritance": "F4-01..F4-12 do freeze r4 e D2B-01..D2B-15 do delta 2B valem sem mudança. Os itens D3 são deltas declarados de vocabulário, testemunha e identificação; nenhum altera F4-xx ou D2B-xx. Nenhum item cria capacidade nova de harness (injeção de falha de fs ou do lado Node, testemunha privilegiada, rede, artefato distribuído): o que exigiria isso ficou fora (coverage-plan-c3.json#/residuals).",
+  "items": [
+    {
+      "id": "D3-01",
+      "title": "IDs e fonte de casos",
+      "rule": "Listas e regex de channel.py, constantes do supervisor e dos drivers aceitam C3-TS01..C3-TS15 (com C3-TS09A e C3-TS09B), C3-PY02..C3-PY18 (com C3-PY13H, C3-PY13F, C3-PY13ER, C3-PY15A e C3-PY16S), C31-CTRL01, C32-CTRL01, DIAG-TS-C3VOCAB e DIAG-PY-C3VOCAB; a fonte de casos do supervisor é cases-c3-1.json no C3-1 e cases-c3-2.json no C3-2, ligados por sha; contagens 15 e 14.",
+      "proof": [
+        "autoteste de ID aceito e rejeitado",
+        "autoteste de contagem de slots por sub-lote"
+      ],
+      "sub_lots": ["C3-1", "C3-2"]
+    },
+    {
+      "id": "D3-02",
+      "title": "vocabulário do driver TypeScript (CAP-TS-SDKCALLS-C3)",
+      "rule": "Sobre o ts-driver.mjs admitido no 2AC: (a) new Codex sem a chave options chama new Codex() sem argumento; (b) options_as em new Codex, X.startThread e X.resumeThread guarda o objeto de opções materializado, o mesmo passado ao SDK; (c) passo mutate {target, key, value}; (d) passo events.consume {events_of_step, consume} sobre o gerador guardado do run_streamed com consume none; (e) modos de consumo first_then_witness_then_throw {barrier: SUSPENDED, throw: {name, message}} e next_abort_at_barrier {barrier: CHILD_HELD, abort}; (f) barreiras SUSPENDED (testemunha: listagem do driver e processo do adapter vivo) e CHILD_HELD (testemunha: REQUEST_HELD do peer), como STEP_WITNESS + STEP_RELEASE (F4-12); (g) marcadores $SELF_REF, $NONENUM, $GETTER, $FUNCTION e $SYMBOL (cases-c3-1.json#/encoding); (h) observação thread_id_is_undefined; (i) RESOLVER_ABSENCE também no passo 1 do C3-TS01. Passo, modo ou marcador fora da lista é INVALID_CAPTURE.",
+      "proof": [
+        "autoteste de cada passo, modo e marcador com objetos e geradores próprios",
+        "DIAG-TS-C3VOCAB (código próprio, sem SDK)",
+        "R3-12 sobre a tabela do C3-1"
+      ],
+      "sub_lots": ["C3-1"]
+    },
+    {
+      "id": "D3-03",
+      "title": "janela inotify de /work/tmp decisiva (CAP-TMP-WITNESS)",
+      "rule": "A vigia inotify de /work/tmp, admitida como informativa no 2A, passa a ser decisiva no C3-TS03 e no C3-TS05: a janela abre na barreira WITNESS_WINDOW_OPEN do passo anterior e fecha no TMP_LISTING do passo julgado; o supervisor registra nome, máscara (IN_CREATE, IN_DELETE, IN_ISDIR) e sequência única. Sem privilégio (inotify do mesmo usuário, como F4-06). Se o DIAG-TS-TMPWATCH não qualificar, as duas vagas não são usadas.",
+      "proof": [
+        "DIAG-TS-TMPWATCH com diretório próprio criado e removido dentro da janela",
+        "autoteste do oráculo com eventos sintéticos (positivo e negativo)"
+      ],
+      "sub_lots": ["C3-1"]
+    },
+    {
+      "id": "D3-04",
+      "title": "vocabulário do driver Python (CAP-PY-SDKCALLS-C3)",
+      "rule": "Sobre o python-driver.py admitido no 2B-2: (a) marcadores de entrada do 2A ($TextInput, $ImageInput, $LocalImageInput, $SkillInput, $MentionInput, $ExternalMessage) reintroduzidos no value(); (b) alvos novos no fault.install existente, sem modo novo: CodexClient._write_message e CodexClient.next_login_notification (raise_before_call); (c) ganchos por identidade em _GoalOperationState.finish, CodexClient.reserve_goal_operation, CodexClient.cancel_goal_operation e CodexClient.unregister_goal_operation (mecanismo de ganchos existente); (d) sondas em slots (TurnHandle._subscription, TurnResult) pela leitura estática existente. Nada importa SDK fora do sdkCase.",
+      "proof": [
+        "autoteste dos marcadores e dos alvos com objetos próprios",
+        "DIAG-PY-C3VOCAB (código próprio, sem SDK)",
+        "R3-12 sobre a tabela do C3-2"
+      ],
+      "sub_lots": ["C3-2"]
+    },
+    {
+      "id": "D3-05",
+      "title": "classe de espera declarada no passo",
+      "rule": "Passos de espera (thread.join, hook.wait, excepthook.wait, worker.join, probe.until) podem declarar wait_class CLIENT_EFFECT: o estouro do prazo (e, no thread.join, o thread ausente) é registrado em WAIT_RESULT e o caso segue; o desfecho vem dos predicados de cliente. Sem o campo vale HARNESS_PRECONDITION (E2B-14). Para as vagas C3, substitui a tabela CLIENT_EFFECT_WAITS por (caso, passo) do driver 2B-2. Usado no C3-PY08 (passo 9) e no C3-PY13ER (passos 11, 12 e 13, errata T1 do lead-decision-f01).",
+      "proof": [
+        "DIAG-PY-C3VOCAB: espera CLIENT_EFFECT que estoura segue e registra; HARNESS_PRECONDITION que estoura invalida",
+        "autoteste negativo do C3-PY13ER (E3-07)"
+      ],
+      "sub_lots": ["C3-2"]
+    },
+    {
+      "id": "D3-06",
+      "title": "freezes por sub-lote",
+      "rule": "C3-1: source-freeze-r4-c31 e identity-freeze-r4-c31 com D3-01..D3-03 e D3-07, mais a pilha Python do CONTROL (D2B-13). C3-2: source-freeze-r4-c32 e identity-freeze-r4-c32 com D3-01, D3-04, D3-05 e D3-07. A identity freeze reconfere o sha dos arquivos da stdlib, da Pydantic e do packaging usados como âncora. Os carry-overs 2B2-ADM/R1-F02, R1-F03 e R1-F04 entram antes do source freeze do C3-2 (D3-08).",
+      "proof": [
+        "source e identity freeze antes de qualquer serviço do sub-lote"
+      ],
+      "sub_lots": ["C3-1", "C3-2"]
+    },
+    {
+      "id": "D3-07",
+      "title": "CONTROL por cópia",
+      "rule": "C31-CTRL01 é o 2B1-CTRL01 e C32-CTRL01 é o 2B2-CTRL01, com o ID no argv do cliente de controle trocado; linhas, peer_script e predicados iguais (control-slot-contract-c3.json).",
+      "proof": [
+        "autoteste: case_input do CONTROL igual ao da base fora do último elemento do argv"
+      ],
+      "sub_lots": ["C3-1", "C3-2"]
+    },
+    {
+      "id": "D3-08",
+      "title": "carry-over da admissão do 2B-2",
+      "rule": "2B2-ADM/R1-F02: expand_parts, Seq e capture_extra dentro do try do evaluate (ou INVALID_CAPTURE pela regra 3) com autoteste; 2B2-ADM/R1-F03: plano da pasta do caso conferido contra case-plan.json ou BARRIER_PLAN e os passos de barreira do case_input, com controle negativo; 2B2-ADM/R1-F04: autoteste positivo e negativo de zombie_t_ns em no_termination_before. Valem para o avaliador e o supervisor reusados no C3-2 (e na pilha Python do CONTROL do C3-1).",
+      "proof": ["autotestes listados, antes do source freeze"],
+      "sub_lots": ["C3-1", "C3-2"]
+    }
+  ],
+  "diagnostics": {
+    "DIAG-TS-C3VOCAB": "Código próprio, sem import do SDK: materializa cada marcador novo e confere o objeto (ciclo, enumerabilidade, getter, typeof); guarda opções por options_as, aplica mutate e confere identidade; itera um gerador assíncrono próprio guardado por events.consume; roda first_then_witness_then_throw e next_abort_at_barrier sobre um gerador próprio e um filho próprio do adapter; emite thread_id_is_undefined.",
+    "DIAG-PY-C3VOCAB": "Código próprio, sem import do SDK: classe própria com _write_message e next_login_notification para o fault.install; espera CLIENT_EFFECT que estoura registra WAIT_RESULT e segue; espera sem a classe que estoura invalida; thread.join de thread ausente registra found=false."
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

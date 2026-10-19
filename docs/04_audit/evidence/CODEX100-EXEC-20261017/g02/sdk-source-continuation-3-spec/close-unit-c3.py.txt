@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3 - escreve next-task.json e state.json com os sha atuais dos documentos da especificação.
+# Uso: python3 -I -B close-unit-c3.py.txt <spec_dir> <phase>
+#   phase: draft (antes da revisão) | final (depois da R2; lê review-r1/review.json, repair-r1.json, review-r2/review.json e,
+#   se existir, review-r2/executor-disposition.json)
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+SPEC, PHASE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3"
+UNIT = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec"
+
+
+def sha(name):
+    with open(os.path.join(SPEC, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(name):
+    with open(os.path.join(SPEC, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def exists(name):
+    return os.path.exists(os.path.join(SPEC, name))
+
+
+def ref(name):
+    return {"path": UNIT + "/" + name, "sha256": sha(name)}
+
+
+c1, c2 = load("cases-c3-1.json"), load("cases-c3-2.json")
+b1, b2 = load("execution-budget-c3-1.json"), load("execution-budget-c3-2.json")
+cov, fr, ev, t3 = load("coverage-plan-c3.json"), load("freeze-r4-c3-delta.json"), load("evaluator-r4-c3-delta.json"), load("t3-assessment.json")
+val, iv = load("validation.json"), load("input-verification.json")
+adm = load("../sdk-batch-2b2-admission/state.json")
+review, carry, status = None, [], "IN_REVIEW"
+if PHASE == "final":
+    r1, rep, r2 = load("review-r1/review.json"), load("repair-r1.json"), load("review-r2/review.json")
+    disp = load("review-r2/executor-disposition.json") if exists("review-r2/executor-disposition.json") else None
+    review = {"R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (r1["verdict"], r1.get("summary_counts", "")),
+              "repair": "repair-r1.json (1/1), preimagens em archives/r1-preimages/",
+              "R2": "%s (%s) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt" % (r2["verdict"], r2.get("summary_counts", "")),
+              "R2_disposition": "review-r2/executor-disposition.json" if disp else None,
+              "critic": "subagente novo por rodada, somente leitura; o executor grava brief e veredito sem edição"}
+    if disp:
+        carry = [{"finding": "C3-SPEC/" + i["id"], "text": i["note"]} for i in disp["items"] if i["disposition"].startswith("CARRIED")]
+    open_mandatory = r2.get("open_mandatory", 0)
+    status = "COMPLETED_LOCAL" if r2["verdict"] == "APPROVE" and not carry else (
+        "COMPLETED_LOCAL_WITH_CARRIED_P2" if open_mandatory == 0 or disp else "BLOCKED_REVIEW")
+
+
+def slots(doc):
+    return [{"slot": c["slot"], "case": c["id"], "kind": c["kind"], "contracts": c["contracts"], "role": c["role"], "gate": bool(c.get("gate")),
+             "arms": [b.split(" ")[0] for b in c["branches_targeted"]]} for c in doc["cases"]]
+
+
+spec = {k: ref(v) for k, v in {
+    "cases_c3_1": "cases-c3-1.json", "cases_c3_2": "cases-c3-2.json", "coverage_plan": "coverage-plan-c3.json",
+    "freeze_r4_c3_delta": "freeze-r4-c3-delta.json", "evaluator_r4_c3_delta": "evaluator-r4-c3-delta.json",
+    "control": "control-slot-contract-c3.json", "budget_c3_1": "execution-budget-c3-1.json", "budget_c3_2": "execution-budget-c3-2.json",
+    "t3": "t3-assessment.json", "validation": "validation.json", "input_verification": "input-verification.json"}.items()}
+for k, b in list(fr["base"].items()) + list(ev["base"].items()):
+    spec["base_" + k] = {"path": os.path.normpath(os.path.join(UNIT, b["path"])), "sha256": b["sha256"]}
+carry_adm = [{"finding": "2B2-ADM/" + c["finding"], "text": c["text"], "where": "D3-08 (freeze-r4-c3-delta.json)" if "DV1" not in c["finding"]
+              else "aplicado: errata T1 no C3-PY13ER (D3-05, E3-07)"} for c in adm["carry_over_next"]]
+by_class = cov["counts"]["by_class"]
+out_summary = {k: [r["id"] for r in cov["residuals"] if r["class"] == k] for k in by_class if k != "IN_SPEC"}
+
+next_task = {
+    "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1 (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": status if PHASE == "final" else "IN_REVIEW",
+    "status": "READY_PENDING_LEAD_CLAIM" if PHASE == "final" else "DRAFT_PENDING_REVIEW",
+    "track": "T1 com execução local contida, como as admissões 2A, 2AC e 2B (serviços transientes próprios, sem rede, sem provider, sem dado real)",
+    "t3_required": False, "t3_assessment": UNIT + "/t3-assessment.json", "resume_checkpoint": UNIT + "/state.json",
+    "spec": spec,
+    "precondition": "As entradas desta especificação seguem com o sha de input-verification.json; o freeze r4, o delta 2B e as admissões 2AC e 2B-2 não mudaram. Se mudaram, reconferir cada D3 antes de qualquer escrita, ou parar e voltar à especificação.",
+    "what": "Implementar D3-01, D3-02, D3-03, D3-07 e D3-08 (pilha Python do CONTROL) e as cláusulas E3 do C3-1 numa pasta nova da unidade; autotestes offline (R3-12 da tabela de cases-c3-1.json e os de E3-02 a E3-06); source-freeze-r4-c31 e identity-freeze-r4-c31; requalificar e qualificar %s; CONTROL C31-CTRL01 primeiro (MISMATCH só por wire.no_turn_interrupt); depois os %d casos SDK em ordem de slot, uma vez cada, em série, sem retry; revisão independente e adjudicação." % (
+        ", ".join(b1["planned"]["qualification_services"]), b1["planned"]["sdk_cases"]),
+    "first_step": "Lead registra claim novo. Conferir state.json desta pasta e os sha da especificação acima antes de qualquer escrita.",
+    "budget": {"case_slots": b1["planned"]["case_slots"], "sdk_cases": b1["planned"]["sdk_cases"], "control_slots": 1,
+               "conditional_slots": b1["planned"]["conditional_slots"], "qualification_services_planned": b1["planned"]["qualification_services_planned"],
+               "qualification_services": b1["planned"]["qualification_services"], "services_reserve": b1["planned"]["services_reserve"],
+               "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0, "max": b1["max"]},
+    "stops": b1["stops"], "conditional_diags": b1["conditional_diags"],
+    "carry_over": carry_adm + carry,
+    "not_authorized_now": b1["not_authorized"] + ["alterar código de produto ou contrato público do CVG (exigiria T3)", "SPEC0239 BUILD"],
+    "after_this": [
+        "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-2 (%d vagas, %d serviços), com D3-04, D3-05 e D3-08 e as cláusulas E3 do C3-2" % (
+            b2["planned"]["case_slots"], b2["planned"]["qualification_services_planned"]),
+        "BIND da continuação 3 (mapa v6 ao lado do v5)",
+        "pacote de decisão com Q1-Q5 (errata do BIND do 2B-2), em paralelo, sem bloquear estes passos",
+        "itens OUT_NEW_CAPABILITY de coverage-plan-c3.json só com unidade própria que especifique a capacidade",
+    ],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente",
+    "status": status,
+    "write_scope": UNIT + "/**",
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])),
+                                 "anchor_commit": iv["anchor_commit"], "record": "input-verification.json"},
+    "result": {
+        "sub_lots": {
+            "C3-1": {"language": "typescript (CONTROL em Python)", "slots": slots(c1), "counts": c1["counts"],
+                     "services": b1["planned"]["qualification_services"], "conditional": b1["planned"]["conditional_slots"]},
+            "C3-2": {"language": "python", "slots": slots(c2), "counts": c2["counts"], "services": b2["planned"]["qualification_services"],
+                     "conditional": b2["planned"]["conditional_slots"]}},
+        "totals": {"slots": len(c1["cases"]) + len(c2["cases"]), "sdk_cases": c1["counts"]["sdk_cases"] + c2["counts"]["sdk_cases"], "controls": 2,
+                   "conditional": c1["counts"]["conditional"] + c2["counts"]["conditional"],
+                   "services": b1["planned"]["qualification_services_planned"] + b2["planned"]["qualification_services_planned"]},
+        "freeze": "freeze r4 + D2B-01..D2B-15 + D3-01..D3-08 (freeze-r4-c3-delta.json)",
+        "evaluator": "avaliador r4 + E2B-01..E2B-14 + E3-01..E3-09 (evaluator-r4-c3-delta.json)",
+        "predicates": {"C3-1": len(c1["predicate_table"]), "C3-2": len(c2["predicate_table"]),
+                       "new": sorted({k for d in (c1, c2) for k, v in d["predicate_table"].items() if v["source"].startswith("NEW")})},
+        "residuals": {"total": cov["counts"]["residuals"], "by_class": by_class, "out": out_summary},
+        "new_arm_ids": cov["new_arm_ids"]["arms"],
+        "projection_if_all_pass": cov["projection_if_all_pass"],
+        "t3": {"decision": t3["decision"], "decision_t4": t3["decision_t4"], "user_question": t3["user_question"],
+               "pending_user_questions_not_asked_here": t3["pending_user_questions_not_asked_here"]["ids"]},
+        "validation": "%s (%d/%d verificações; %d/%d controles negativos rejeitados)" % (
+            val["result"], sum(c["ok"] for c in val["checks"]), len(val["checks"]),
+            sum(n["rejected"] for c in val["checks"] if c["check"].startswith("negative") for n in c["detail"]), val["negative_controls"]),
+        "next_task": "next-task.json (IMPLEMENT-AND-ADMIT do C3-1, sem T3)",
+    },
+    "scripts": ["verify-inputs-c3.py.txt", "build-spec-c3.py.txt", "validate-spec-c3.mjs.txt", "close-unit-c3.py.txt"],
+    "budget": {"services": 0, "reviews": "2/2" if PHASE == "final" else "0/2", "grouped_repairs": "1/1" if PHASE == "final" else "0/1"},
+    "review": review,
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": "Sem serviço, SDK, compilador, Codex CLI, rede, PG, commit, branch ou worktree. Docker só para o gitleaks pedido, sobre cópia da pasta (registro em secret-scan.json, gravado depois do fechamento). Ledgers, coordenação, 0384-0386, catálogo central e código não editados.",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+for name, obj in (("next-task.json", next_task), ("state.json", state)):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], state["result"]["validation"])

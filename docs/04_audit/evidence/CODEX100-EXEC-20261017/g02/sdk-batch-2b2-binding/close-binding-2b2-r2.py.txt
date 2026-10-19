@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2 - fechamento depois da R2 (script novo; close-binding-2b2.py.txt, revisado, não é reescrito).
+# Uso: python3 -I -B close-binding-2b2-r2.py.txt <unit_dir>
+# Roda depois de "close-binding-2b2.py.txt <unit_dir> final". Troca as perguntas do usuário pelas da errata R2-F01 da disposição e
+# registra o que mudou depois da R2.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+U = sys.argv[1]
+
+
+def load(name):
+    with open(os.path.join(U, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(os.path.join(U, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+state, nt, r2, disp = load("state.json"), load("next-task.json"), load("review-r2/review.json"), load("review-r2/executor-disposition.json")
+assert state["status"] == "COMPLETED_LOCAL_WITH_CARRIED_P2" and r2["verdict"] == "REVISE", "rode antes close-binding-2b2.py.txt em modo final"
+items = {i["id"]: i for i in disp["items"]}
+assert sorted(items) == sorted(f["id"] for f in r2["findings"]), "a disposição deve cobrir todos os achados da R2"
+err = items["R2-F01"]
+src = "review-r2/executor-disposition.json#/items[id=R2-F01]"
+
+state["result"]["user_decisions"] = err["erratum_questions"]
+state["result"]["user_decisions_source"] = src + "/erratum_questions (prevalece sobre as perguntas do HOW-next-profile-v2.md)"
+state["result"]["decision_map"] = err["erratum_table"]
+state["result"]["how_next_profile"]["read_with"] = src
+state["post_review_r2"] = {
+    "changed": ["state.json", "next-task.json"],
+    "added": ["review-r2/verdict.raw.txt", "review-r2/review.json", "review-r2/executor-disposition.json", "close-binding-2b2-r2.py.txt",
+              "ledger-delta-cont-d9ef.md", "secret-scan.json"],
+    "not_rewritten": "coverage-observed-v5.json, gaps-review-v5.json, HOW-next-profile-v2.md, validation.json, input-verification.json, repair-r1.json e os scripts revisados ficam como no review-freeze-r2.json",
+    "keys_renamed_in_r1_repair": items["R2-F05"]["note"],
+}
+state["scripts"] = state["scripts"] + ["close-binding-2b2-r2.py.txt"]
+state["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+nt["user_decisions_pending"] = {
+    "questions": err["erratum_questions"],
+    "source": src + "/erratum_questions",
+    "decision_map": err["erratum_table"],
+    "note": ("Não bloqueiam esta unidade. O pacote de decisão vai ao usuário em paralelo. Sem Q1, Q2 e Q3, PY19, PY20 e PK01 a PK09 seguem "
+             "OPEN_REQUIRED_FUTURE_PROFILE; Q4 decide a testemunha do TS12; Q5 a aquisição de outras versões da pydantic e do Node; turns reais "
+             "(PY13 e PY14) e login real (PY17) ficam para gates T4 próprios."),
+}
+nt["mandatory_carry_over"] = [
+    "2B2-BIND/R2-F01 (P2): o HOW-next-profile-v2.md deve ser lido com a errata de review-r2/executor-disposition.json#/items[id=R2-F01]; as perguntas Q1 a Q5 e o mapa de decisões dela prevalecem sobre as seções correspondentes do HOW. O pacote de decisão do usuário usa o texto da errata.",
+]
+nt["previous_review"] = "R1 REVISE (0 P1, 4 P2, 4 P3) -> reparo agrupado -> R2 REVISE (%s): review-r2/executor-disposition.json" % r2["summary_counts"]
+nt["after_this"] = [
+    "IMPLEMENT-AND-ADMIT da continuação 3 (com o carry-over 2B2-ADM/R1-F02 a R1-F04)",
+    "BIND da continuação 3 (coverage-observed-v6 ao lado do v5)",
+    "com Q1, Q2 e Q3 respondidas: SPECIFY do perfil distribuído no linux-x64 (PY19, PY20, PK01 a PK09, ramo empacotado do PY02)",
+    "com Q5: aquisição de outras versões da pydantic (PY18) e do Node (TS12); com Q4: testemunha privilegiada do TS12",
+]
+nt["review_records"]["disposition_r2"] = {"path": "review-r2/executor-disposition.json", "sha256": sha("review-r2/executor-disposition.json")}
+nt["review_records"]["review_r2"] = {"path": "review-r2/review.json", "sha256": sha("review-r2/review.json")}
+for name, obj in (("state.json", state), ("next-task.json", nt)):
+    with open(os.path.join(U, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], [q["id"] for q in state["result"]["user_decisions"]])

@@ -6,7 +6,7 @@ Programa `CODEX100`, 17/10/2026. [Plano 0384](0384_plano_executivo_paridade_code
 
 ## Situação vigente — 18/10/2026
 
-Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`, documental, pela [admissão do 2B-2](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/next-task.json). Concluídas localmente, em ordem:
+Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1`, pela [especificação da continuação 3](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec/next-task.json), e a aquisição única do perfil distribuído 0.153.4, autorizada pelo usuário ([decisões](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json)). Concluídas localmente, em ordem:
 
 - drivers de observação SDK ([relatório](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/REPORT.md));
 - admissão do perfil, com 19 casos `PASS_CLIENT_OBSERVATION` ([delta](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-admission/ledger-delta-cont-d9ef.md));
@@ -18,7 +18,9 @@ Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:BIND-SDK-
 - especificação do 2B ([estado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-batch-2b-spec/state.json)), em dois sub-lotes: 2B-1 com 16 vagas e 2B-2 com 18.
 - lote 2B-1: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-admission/state.json), com o CONTROL em MISMATCH e 15/15 PASS, sem capability nova;
 - ligação v4, com 29 contratos observados e 15 abertos ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b1-binding/coverage-observed-v4.json));
-- lote 2B-2: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/state.json), com o CONTROL em MISMATCH e 17/17 PASS; [decisão do lead](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/lead-decision-f01.json) sobre o known_bad do 2B-PY13E.
+- lote 2B-2: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/state.json), com o CONTROL em MISMATCH e 17/17 PASS; [decisão do lead](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/lead-decision-f01.json) sobre o known_bad do 2B-PY13E;
+- ligação v5: perfil de fonte concluído, com 33 contratos observados e 11 abertos, todos do perfil distribuído ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/coverage-observed-v5.json));
+- especificação da continuação 3, em C3-1 (15 vagas) e C3-2 (14 vagas) ([estado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec/state.json)).
 
 Zero recibos funcionais e zero crédito de paridade; as seis lacunas SDK seguem `OPEN`. SPEC0239 aprovada; o BUILD depende de 0029 → 0030 → 0031.
 

@@ -1,0 +1,36 @@
+HISO005-P2-BUILD-0242 — crítica R1 de código (crítico novo, não-fork, só leitura)
+Data: 2026-10-19T12:55Z
+SPEC0242 sha256 fa22cf4e…2b14677. Freeze: source-freeze-r1.json, sha256 fc7f52d5…3c82fce. Pai: 131ee6cd…
+
+VEREDITO: APPROVE. Nenhum achado obrigatório (0 P0, 0 P1, 0 P2).
+
+Resumo
+- Os 6 arquivos da candidata batem com o freeze. A base são as pós-imagens da 0243 (§5), e nada fora dos 6 caminhos mudou.
+- L1/L2: os valores exatos (256 / 250.000 / 300.000) são constantes e congeladas. Entrada só reduz, e nenhum env ou flag eleva limite. O prazo continua único, global e fail-closed; só o valor mudou.
+- L3 correta:
+  - a fase 1 vai da criação ao fim da 1ª finalização;
+  - cada finalização posterior tem relógio próprio;
+  - checkTime e o _deadline de collect() usam o início da fase;
+  - compare() depois da 1ª finalização dá COMPARISON_AFTER_FINALIZE e invalida tudo;
+  - o corpo da revalidação não mudou;
+  - a opção testOnly só reduz, com TEST_LIMIT_INVALID;
+  - os relógios de fingerprintToolchain e de scanBounded não mudaram.
+  O checker não faz compare() no verificador principal depois da 1ª finalização. Nenhum fail-closed ficou mais fraco além do que a SPEC aprova.
+- Desvio de escopo (espelho INTERPRETER): é necessário, porque o engine passa SEMANTIC_LIMITS inteiro ao helper; sem o espelho, tudo sai UNKNOWN_INVALID_LIMITS (green-a1). Ele é igual aos valores aprovados. O helper continua consumindo só os tetos de aquisição e resolução, e maxNodes não mudou. O registro veio 20 ms antes da edição.
+- Telemetria: identityPhaseMs = [fase 1, finalização final]. Fica em semanticTelemetry, fora da igualdade normal/strict.
+- A2: migração literal (só os 3 valores), registrada antes da edição. A primeira falha está em first-red-0242-a2.
+- Primeiras falhas preservadas: first-red-0242 (10/12 no pai) e first-red-0242-b (COMPARISON_TIMEOUT na pré-imagem). O sha do teste é o mesmo no vermelho e no verde.
+- Sem regressão provável: os testes de teto leem SEMANTIC_LIMITS dinamicamente, e nenhum gate ou CI roda --semantic na árvore real. O focal deu 822/822, com duração igual à da 0243, e o perfil nativo 79/79.
+- Reexecutei só o teste novo com o Node pinado: 12/12 em 7,16 s.
+
+Achados opcionais (não bloqueiam)
+- R1-O01: falta teste do checker para semanticTelemetry.identityPhaseMs.
+- R1-O02: falta teste de mutação durante o intervalo longo entre finalizações (revalidação depois do intervalo).
+- R1-O03: falta testar a forma de testOnly (chave extra, null, {}).
+- R1-O04: focal-a1 e native-a1 não registram o sha do arquivo do desvio; o aceite deve usar as execuções frozen-r1-*.
+- R1-O05: o patch congelado não se reproduz com git diff, porque a abreviação de hash cresceu; usar --full-index.
+
+Pendências fora desta crítica
+- LB02, cláusula da raiz real 228e7918: hoje só existe como diagnóstico da recon. Registrar no lado-base da LB04.
+- frozen-r1 do focal e do perfil nativo: não existiam na hora da revisão.
+- LB04–LB08 não foram avaliadas aqui (medição real, gates, promoção).

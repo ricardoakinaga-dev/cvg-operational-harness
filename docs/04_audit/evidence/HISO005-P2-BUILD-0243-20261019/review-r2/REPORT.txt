@@ -1,0 +1,46 @@
+HISO005-P2-BUILD-0243 — crítica R2 de código (mesmo crítico independente da R1, só leitura)
+SPEC0243 6db49cf5…; pai bcd49fa6…; freeze source-freeze-r2.json fb18a206…
+Os 13 arquivos, o patch (df8eac52…) e os blobs do pai conferem.
+
+VEREDITO: REVISE. Obrigatório novo: R2-01 (P2).
+
+Estado dos obrigatórios da R1
+- R1-01 RESOLVED: o portátil (16/16), o nativo (79/79) e o focal (809/809) rodaram depois do freeze,
+  nos bytes r2, com o SHA de cada arquivo no comando. Meu portátil nos mesmos bytes: 16/16.
+- R1-02 RESOLVED: a guarda recusa qualquer diretório sob o prefixo alcançado pelo glob.
+  Há testes portátil e nativo; a primeira falha contra r1 está registrada.
+- R1-03 RESOLVED: com --dependencies-root diferente, a origem precisa do mesmo compilador.
+  O fechamento é calculado sempre na origem, antes do archive, e tem de ser igual ao do snapshot.
+  O teste nativo usa um .d.ts incluído pelo tsconfig.
+  A migração de b6-0236 foi registrada antes da edição e mantém a intenção.
+  O recibo real de 228e com r2 dá PROVEN (121 arquivos).
+- R1-04 RESOLVED: -c core.quotePath=true foi adicionado ao prefixo git.
+  O teste não UTF-8 roda com quotePath=false local e falhou contra r1.
+- R1-05 RESOLVED: o registro da RT03 foi corrigido. O formato do campo fica em P3 (R2-03).
+
+Defeito novo, introduzido pela correção do R1-07
+- R2-01 (P2), scripts/boundary-installed-identity.mjs:68.
+  Acima de 16 MiB, json() devolve undefined e a guarda deixa de conferir as chaves, os links
+  e os file: do package-lock.json.
+  Nenhuma recusa adiante cobre esse tamanho: a instalada faz o parse do lock do snapshot sem teto
+  (linhas 624–625) e segue para o npm, e a compilada herda o recibo instalado.
+  Por isso, um lock entre 16 MiB e cerca de 512 MiB com chave ou link sob o prefixo passa sem
+  SOURCE_EXCLUSION_CONFLICT. A r1 conferia esse caso.
+  O comentário "existing refusals keep deciding it" vale para o package.json (readJson 16 MiB),
+  mas não para o lock.
+  Hoje não há impacto: o lock real tem 193.286 bytes. Ainda assim é uma lacuna da §3.3(2), e a §5
+  lista "guarda que não recusa um caso da §3.3" como impeditivo.
+  Correção mínima: um manifesto ou lock rastreado acima do teto deve virar conflito, em vez de
+  não decidir (ou o teto sai só do lock). Acrescentar um caso portátil com lock de 16 MiB + 1 byte.
+
+Opcionais (P3)
+- R2-02: a divergência de fechamento reusa o código COMPILED_SOURCE_EXCLUSION_CONFLICT,
+  embora também possa ter outras causas.
+- R2-03: o registeredAt da RT03 virou texto livre.
+- R2-04: workspaceMatches roda sem memoização sobre os 11.017 diretórios sob o prefixo;
+  é só disponibilidade, contra um manifesto hostil.
+
+Sem regressão vista: a árvore real passa pela guarda, a listagem inteira tem 0 entradas não
+regulares e nenhum limite, pin, asserção ou skip foi relaxado.
+RS06 (B6 normal e strict) ainda está N/A.
+Arquivos escritos: só review-r2/review.json e review-r2/REPORT.txt. A candidata não foi alterada.
