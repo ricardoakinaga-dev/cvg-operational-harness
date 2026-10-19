@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-REFERENCE-RECIPE-T2-20261019",
+  "round": "R1",
+  "role": "crítico novo e independente (não-fork, sem descendentes)",
+  "contract": "review-r1-contract.json (sha256 c6ffbf1b0cd3...)",
+  "observedAt": "2026-10-19T04:12:00Z",
+  "sourceCommit": "a5b8a888",
+  "baseCommit": "228e7918",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-20261019 (HEAD a5b8a8884c4e, worktree limpo)",
+  "verdict": "REVISE",
+  "trackJudgement": {
+    "track": "T2",
+    "holds": true,
+    "reason": [
+      "Nenhum valor de teto muda: INSTALLED_IDENTITY_LIMITS (boundary-installed-identity.mjs, bytes iguais à base), maxOutputBytes 8 MiB do runOwnedProcess (helper inalterado), maxBuffer 8 MiB de command(), COMPILED_SOURCE_LIMIT 4 GiB e os dois tetos de 8 MiB do leitor ficam fora de qualquer hunk (raw/p6-diff-integrity.txt). O teto de entradas só ganha um uso novo como limite de páginas (build-installed-reference.mjs:443, boundary-semantic-compiled.mjs:346), sem mudar valor.",
+      "Contratos congelados preservados: shape do recibo instalado e do recibo compilado, recipeVersion 'shared-contracts-fresh-force-v1' (SPEC0241 §5), leitor loadCompiledBuildReference sem hunk. Sem paginação o comportamento é idêntico, medido fisicamente: recibo instalado difere da base só em tempos e hash do trace (PIDs), mesmo número de processos (raw/p3-installed-small-vs-base.json); commands.json compilado idêntico byte a byte após normalizar o caminho de saída, recibo difere só em recipeSha256/commandsSha256 (raw/p4-compiled-small-vs-base.json).",
+      "F2 não toca coleta nem comparação: sampling=true só em :619 (resourceCheck durante o npm); a varredura final (:633), a reconferência pós-inventário (:695), revalidate()/sourceDigest e o comparador seguem estritos. ID-11 e SPEC0234 §3.2 tratam corrida na coleta e na referência já construída, não na observação de teto durante o npm, que a própria SPEC chama de observação e não sandbox.",
+      "A compactação do log atinge só as linhas de listagem (antes de archive/tsc); a SPEC0236 §6 manda registrar argv/cwd/saída/exit0 do build tsc, e essa linha fica intacta (raw/p4-compiled-plain-paged.json). recipeSha256 muda por construção e a SPEC0236 §1 admite correção interna que preserve o contrato.",
+      "SPEC0234 §3.1 ('saída parcial produz UNAVAILABLE, sem manifesto de sucesso parcial'): a saída parcial da página estourada é descartada, não consumida; isso é compatível desde que a união das páginas seja de fato completa. R1-01 mostra que hoje nem sempre é. A correção é interna e não exige mudar contrato, então os achados não promovem a unidade a T3."
+    ]
+  },
+  "requiredFindings": [
+    {
+      "id": "R1-01",
+      "severity": "P2",
+      "confidence": "alta (reprodução física nas duas receitas); probabilidade baixa na árvore real (nenhum nome afetado em 228e7918)",
+      "criterion": "(2) listagem paginada igual, entrada a entrada e na ordem, ao `ls-tree -r`; SPEC0234 §3.1 (snapshot das fontes versionadas, sem manifesto de sucesso parcial); verificação de tipo COMPILED_SOURCE_TYPE / SOURCE_LINK_UNSUPPORTED",
+      "summary": "Cada página filha é pedida por `git ls-tree ... -- <nome>` (instalada :444-446 e :450-456; compilada :348, :378, :389-390), e o git interpreta esse argumento como pathspec. (a) Um nome de árvore no topo que começa com ':' vira 'magic' de pathspec: `-- :big` lista `big/...` (raw/p2-pathspec.txt). (b) Na receita instalada o nome vem de `children.toString('utf8')` (:458-462); um byte que não é UTF-8 vira U+FFFD e o pathspec não casa com nada. Em ambos os casos a página volta vazia ou errada, com exit 0, e é aceita: a instalada devolve [Buffer(0)] sem refutar, e nenhuma das receitas confere que a página não está vazia e que toda linha fica sob `prefix/`. Efeito medido: a receita instalada publica recibo de SUCESSO omitindo 2.601 arquivos rastreados e o symlink rastreado `:big/link`, com sourceSha256 diferente do digest da listagem completa; os mesmos nomes sem paginação são recusados. Nome não UTF-8: sem paginação REFUSED ENOENT; com paginação BUILT omitindo 2.600 arquivos. Na compilada, `:big` + `big`: sem paginação COMPILED_SOURCE_TYPE; com paginação BUILT, snapshot com `:big/link -> /etc/passwd` e leitor PROVEN. Isso é falha aberta: a recusa vira sucesso incompleto. Os tetos da lista final (:482-489) são avaliados sobre a lista incompleta, mas o conteúdo omitido também não é materializado. A árvore 228e7918 não tem esses nomes (raw/p5-real-tree-shape.json), mas a propriedade central do F1 ('a união é exatamente ls-tree -r') é falsa para árvores válidas.",
+      "repro": [
+        "raw/p2-pathspec.txt: `git ls-tree -r <c> -- :x` imprime `x/only-in-x`, `-- ':(top)y'` imprime `y/f2`, inexistente sai 0 sem saída; com `git --literal-pathspecs` ou `:(literal)` sai `:x/link` e `:x/only-in-colon-x`.",
+        "raw/p3-installed-colon.json: status BUILT, sourceSha256EqualsFullListing=false, snapshotMissingCount=2601, fullSymlinks=[':big/link'] (probe: raw/probes/p3-installed-probe.mjs colon).",
+        "raw/p3-installed-nonutf8-nopage.json (REFUSED ENOENT) versus raw/p3-installed-nonutf8.json (BUILT, snapshotMissingCount=2600).",
+        "raw/p4-compiled-colon-nopage.json (COMPILED_SOURCE_TYPE) versus raw/p4-compiled-colon.json (exit 0, snapshotHasColonSymlink.link='/etc/passwd', reader PROVEN, argv da página '-- :big').",
+        "Correção sugerida (T2): usar `git --literal-pathspecs` (ou o prefixo `:(literal)`) nas chamadas paginadas; na instalada, recusar nome cujo round-trip UTF-8 difere dos bytes crus; nas duas, recusar página vazia de árvore conhecida e linha fora de `prefix + '/'`; acrescentar regressões com ':' e com nome não UTF-8, e comparar o sourceSha256 do recibo com o digest da listagem completa."
+      ]
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "confidence": "alta no mecanismo (RangeError reproduzido); impacto latente: falha fechada, a árvore 228e7918 fica abaixo do limite",
+      "criterion": "(2) a união paginada deve ser igual ao `ls-tree -r` para árvores dentro dos tetos (200.000 entradas, citado em measuredMargins); RT02",
+      "summary": "boundary-semantic-compiled.mjs:390 faz `result.push(...listTree(child))`. Cada página bem-sucedida devolve um elemento por linha e o pai espalha o array inteiro da subárvore como argumentos, o que estoura a pilha do V8 acima de cerca de 125 mil elementos (Node v22.23.2: máximo medido 125.315, raw/p1-spread-limit.json). Uma árvore válida com 132.610 entradas (menos de 200.000, todas 100644, caminhos seguros, raiz acima de 8 MiB) termina em COMPILED_BUILD_UNAVAILABLE por `RangeError: Maximum call stack size exceeded at listTree (boundary-semantic-compiled.mjs:390)`. Na árvore real, o maior array espalhado é `docs`, com 80.058 linhas (raw/p5-real-tree-shape.json): a receita compilada quebra com cerca de 45 mil arquivos a mais em docs, bem antes do teto de 200.000 em que a tarefa apoia a margem. A instalada tem a mesma construção em :464, mas espalha Buffers (páginas e blobs filhos de diretório paginado) e só chega ao limite em formas patológicas.",
+      "repro": [
+        "raw/p4-compiled-spread.json: fullListing 132.610 linhas / 11,8 MB, nonRegular=[], build exit 2 COMPILED_BUILD_UNAVAILABLE logo após a página '-- many' (probe: raw/probes/p4-compiled-probe.mjs spread).",
+        "raw/p4b-spread-inprocess.json: mesma fixture chamada em processo, `RangeError: Maximum call stack size exceeded` em boundary-semantic-compiled.mjs:390:18.",
+        "Correção sugerida (T2): trocar o spread por laço (`for (const line of page) result.push(line)`) ou passar o acumulador para a recursão; o mesmo em build-installed-reference.mjs:464; acrescentar regressão com uma subárvore de mais de 130 mil linhas curtas."
+      ]
+    }
+  ],
+  "optionalFindings": [
+    {
+      "id": "R1-O1",
+      "severity": "P3",
+      "summary": "F2 cobre ENOENT em readdirSync e lstatSync, mas na amostragem `fs.readlinkSync` (build-installed-reference.mjs:215) continua sendo chamado e não é tolerado, e ENOTDIR também não. Um link de node_modules/.bin removido entre lstat e readlink durante o npm ainda mata o npm. O resíduo é fechado e improvável para os opcionais observados (fsevents, lightningcss-*), que não têm bin."
+    },
+    {
+      "id": "R1-O2",
+      "severity": "P3",
+      "summary": "A paginação acumula a listagem inteira em memória (até páginas × 8 MiB) antes de aplicar SOURCE_LIMIT (:482-489). Antes, o teto de 8 MiB por processo limitava isso implicitamente. As contagens de não excluídos, de bytes e de profundidade são monotônicas, então dá para recusar a cada página com resultado equivalente e memória limitada. A compilada também recursa de forma síncrona."
+    },
+    {
+      "id": "R1-O3",
+      "severity": "P3",
+      "summary": "Os testes novos não verificam ordem nem identidade: o RT02 da instalada compara conjuntos ordenados e o RT02 da compilada só confere PROVEN. A ordem foi provada aqui por sonda (raw/p3-installed-order.json: o sourceSha256 do recibo é igual ao digest da listagem completa, com paginação na raiz e aninhada e irmãos '-', '.', '/', '0'). Vale fixar isso em teste junto das regressões de R1-01 e R1-02."
+    },
+    {
+      "id": "R1-O4",
+      "severity": "P3",
+      "confidence": "média (estimado por leitura, não reproduzido)",
+      "summary": "Janela preexistente, não regressão: uma listagem sem paginação logo abaixo de 8 MiB entra inteira em commands.json com escape JSON, o arquivo pode passar de 8 MiB e o leitor recusa COMPILED_BUILD_EVENT_INVALID (:647-651). A compactação só vale quando pages > 1 (:396), o que preserva a identidade sem paginação."
+    }
+  ],
+  "scenariosChecked": [
+    "S01 escopo: o diff 228e7918..a5b8a888 toca só os 4 caminhos; o helper e as outras fontes congeladas têm bytes iguais à base; os hashes conferem com source-freeze.json; worktree limpo (raw/p6-diff-integrity.txt).",
+    "S02 tetos: nenhum hunk toca INSTALLED_IDENTITY_LIMITS, maxOutputBytes, maxBuffer, COMPILED_SOURCE_LIMIT nem os tetos de 8 MiB do leitor.",
+    "S03 sem paginação idêntico: instalada contra a base (raw/p3-installed-small-vs-base.json) e compilada contra a base (raw/p4-compiled-small-vs-base.json).",
+    "S04 ordem e completude com paginação, nomes comuns: instalada 2.612/2.612 arquivos, sourceSha256 igual ao da listagem completa, paginação na raiz e em bulk/ (raw/p3-installed-order.json); compilada com paginação, leitor PROVEN, commands.json de 46 KB (raw/p4-compiled-plain-paged.json).",
+    "S05 diretório cujos filhos imediatos passam do teto continua recusado: a listagem de filhos fica fora do try (instalada :450, compilada :372); os testes novos de recusa passaram na minha execução.",
+    "S06 tetos na lista final: a instalada mantém :482-489 sobre `files`; a compilada mantém o teto de 4 GiB do archive. Ressalva: com R1-01 a lista pode estar incompleta.",
+    "S07 escopo do F2: sampling=true só em :619; varredura final :633, reconferência :695, revalidate e comparador estritos; o RT03 negativo cobre a varredura final.",
+    "S08 compactação: atinge só as linhas de listagem, antes de archive/tsc; a linha do build mantém stdout e exit 0; o leitor não mudou (amarração ao evento de build, hash de commands.json, teto de 8 MiB).",
+    "S09 testes: nenhum assert antigo mudou (só a linha de import em b6-0234); a primeira falha registrada mostra 3 positivos novos falhando na base; vitest focal 53/53, zero skips, com --no-cache e cache/status da candidata iguais antes e depois (raw/vitest-focal-summary.json).",
+    "S10 SPECs: 0234 §3.1/§3.2/§4/ID-11, 0236 §1/§6 (proveniência compilada v1), 0241 §5 (receita inalterada), 0240 sem cláusula sobre as receitas; D-12 (AGENTS.md).",
+    "S11 árvore real 228e7918 (git ls-tree só leitura): paginam raiz, docs, docs/04_audit e docs/04_audit/evidence; nenhum nome de topo com ':'; maior spread 80.058 (raw/p5-real-tree-shape.json).",
+    "S12 o pathspec do ls-tree trata glob como literal (`a*` só lista `a*/f`, raw/p2-pathspec.txt); o problema é só a magia ':' e o nome reconstruído."
+  ],
+  "notJudged": [
+    "RT06/RT07: referências reais e medição B6 na árvore 228e7918 (o líder está construindo installed-reference-r1 no runtime; não executei nem li o resultado).",
+    "Focal B6 de 816 testes (só reexecutei os dois arquivos de receita permitidos).",
+    "Lint/prettier (fora dos comandos permitidos).",
+    "Requisitos de gate T2 da D-12 (npm test, test:postgres, E2E): o contrato da tarefa declara certify como não previsto; a decisão é do líder/usuário.",
+    "Spread da receita instalada (:464) reproduzido fisicamente: só por leitura, porque exige forma patológica.",
+    "Comportamento de npm hostil (fora do contrato da SPEC0234)."
+  ],
+  "rawDir": "raw/",
+  "runtime": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-runtime-20261019/review-r1 (fixtures em work/, base extraída por git show em work/base-scripts, vitest em vitest-focal/)"
+}

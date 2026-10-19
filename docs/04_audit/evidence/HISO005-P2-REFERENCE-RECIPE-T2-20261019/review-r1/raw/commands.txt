@@ -1,0 +1,22 @@
+# Comandos do crítico R1 (HISO005-P2-REFERENCE-RECIPE-T2-20261019), todos com Node v22.23.2
+# NODE=/home/ricardo/.nvm/versions/node/v22.23.2/bin/node  RT=/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-runtime-20261019/review-r1
+# env mínimo: env -i HOME=$RT/tmp PATH=<dir do NODE>:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC TMPDIR=$RT/tmp
+$NODE $RT/probes/p1-spread-limit.mjs                                   -> raw/p1-spread-limit.json
+$RT/probes/p2-pathspec.sh $RT/work/p2-repo                              -> raw/p2-pathspec.txt
+$NODE $RT/probes/p3-installed-probe.mjs order  $RT/work/p3-order       -> raw/p3-installed-order.json
+$NODE $RT/probes/p3-installed-probe.mjs colon  $RT/work/p3-colon       -> raw/p3-installed-colon.json
+$NODE $RT/probes/p3-installed-probe.mjs nonutf8-nopage $RT/work/p3-nonutf8-nopage -> raw/p3-installed-nonutf8-nopage.json
+$NODE $RT/probes/p3-installed-probe.mjs nonutf8 $RT/work/p3-nonutf8    -> raw/p3-installed-nonutf8.json
+PROBE_BASE_RECIPE=$RT/work/base-scripts/scripts/build-installed-reference.mjs $NODE $RT/probes/p3-installed-probe.mjs small $RT/work/p3-small -> raw/p3-installed-small-vs-base.json
+$NODE $RT/probes/p4-compiled-probe.mjs colon-nopage $RT/work/p4-colon-nopage -> raw/p4-compiled-colon-nopage.json
+$NODE $RT/probes/p4-compiled-probe.mjs colon $RT/work/p4-colon         -> raw/p4-compiled-colon.json
+$NODE $RT/probes/p4-compiled-probe.mjs plain-paged $RT/work/p4-plain-paged -> raw/p4-compiled-plain-paged.json
+$NODE $RT/probes/p4-compiled-probe.mjs spread $RT/work/p4-spread       -> raw/p4-compiled-spread.json
+$NODE $RT/probes/p4b-spread-inprocess.mjs $RT/work/p4-spread           -> raw/p4b-spread-inprocess.json
+PROBE_BASE_SCRIPT=$RT/work/base-scripts/scripts/boundary-semantic-compiled.mjs $NODE $RT/probes/p4-compiled-probe.mjs small $RT/work/p4-small -> raw/p4-compiled-small-vs-base.json
+$NODE $RT/probes/p5-real-tree-shape.mjs <candidata> 228e7918 (git ls-tree só leitura) -> raw/p5-real-tree-shape.json
+git -C <candidata> diff/show 228e7918 a5b8a888 (só leitura)              -> raw/p6-diff-integrity.txt
+# base-scripts: git show 228e7918:scripts/{boundary-semantic-compiled,build-installed-reference,boundary-installed-identity,boundary-reference-process}.mjs > $RT/work/base-scripts/scripts/ (só leitura do git)
+# vitest focal (cwd candidata, --no-cache para não gravar node_modules/.vite; cache e git status conferidos iguais antes/depois):
+$NODE node_modules/vitest/vitest.mjs run tests/b6-0234-reference-recipe.test.js tests/b6-0236-compiled-provenance.test.js --no-file-parallelism --maxWorkers=2 --no-cache --reporter=json --outputFile=$RT/vitest-focal/report.json
+#   início 2026-10-19T04:05:14Z fim 2026-10-19T04:06:28Z exit=0 -> raw/vitest-focal-summary.json, raw/vitest-focal-report.json

@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-BUILD-0241",
+  "round": "R1",
+  "role": "crítico fresco e independente (sem contexto herdado, não-fork, sem descendentes)",
+  "observedAt": "2026-10-19T01:10:00Z",
+  "sourceCommit": "228e79180d6d635ae1013e5069fc10f2f79a1cf6",
+  "baseCommit": "af63ba6072c6b60c6d5d45e5986f882ce54c1dbd",
+  "boundInputs": {
+    "reviewContractSha256": "259db2e96eb3e6cf8b6cd872d946fd3b0ff4e98b5ff48e563741509c6ad89b89",
+    "specSha256": "e09f635a8d2385fd0f412655ece8be104776ba599a748cc0cf61c3abbd62a00b",
+    "errataSha256": "b03582454e7a744e54eab928404d2993eaddf60b72c093fee4c0ce4f41daf568",
+    "taskContractSha256": "403197f5530e32c8360d9a9d9954e929a72f80bf1be878e1747b784dfcb61a02",
+    "sourceFreezeSha256": "eb35bc006046fbfaa8fe418a6e5e32d7fbf1ae64dd3192a715e3273a75a72e73",
+    "frozenEngineSha256": "b9246972c4e27257af11800ba82895a5c6db52a25fa82a030c9b5c75a8c48cc8",
+    "frozenCheckerSha256": "14ab9a8b941f314f868c09e772490cc4bf302e9ec8b96478294813fd3881ca75",
+    "v3OracleEngineSha256": "99b72bf91155fad76aac30fa6274eb7d3da5bc8cfe6388df036abaef18315f96",
+    "node": "v22.23.2 sha256 3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327"
+  },
+  "verdict": "APPROVE",
+  "verdictSummary": "Zero achados obrigatórios (P0/P1/P2). Nenhum falso PROVEN, nenhuma perda de violação, nenhuma tupla v3 sumida fora das três exceções da §3.5 (com E5/E7), contenção restrita à lista fechada de 36 motivos, corte determinístico só pelos quatro contadores da fase de corpo, D2 só aceita com todas as premissas e nunca com receipt, census idêntico à v3, limites e prazo inalterados e migração de testes sem enfraquecimento. Sete observações P3 opcionais.",
+  "requiredFindings": [],
+  "optionalFindings": [
+    {
+      "id": "R1-P3-01",
+      "severity": "P3",
+      "confidence": "alta",
+      "criterion": "RC5 (I8, defesa em profundidade do pai)",
+      "summary": "O pai valida só os registros presentes no trace. revalidateInstalledFileIdentity (engine 1985–2014, chamada em 2127) não exige que todo arquivo instalado com prova K5 tenha registro, nem que proof.derivation.installedFileIdentity seja igual ao registro do trace. Um worker honesto sempre registra (load(), 1455–1464). Só um resultado de worker forjado com prova instalada e derivação nula passaria por essa checagem; as demais checagens de prova (id, perfil, digest de resolução) não pegam esse caso. Sugestão: exigir no pai que cada prova cujo file contém node_modules tenha derivation.installedFileIdentity igual ao registro do trace.",
+      "repro": "Leitura de código: scripts/boundary-semantic-engine.mjs 1985–2014 e 2113–2128 em 228e7918. A G5 cobre só registro adulterado e inventorySha256 trocado, não omissão.",
+      "rawArtifact": null
+    },
+    {
+      "id": "R1-P3-02",
+      "severity": "P3",
+      "confidence": "alta",
+      "criterion": "RC1 (E6/I2), cobertura de teste",
+      "summary": "A parada residual E6 (motivo listado lançado pelo load(file) do laço de topo, engine 1639–1643) está correta, mas nenhum teste a exercita. Nenhuma asserção de tests/b6-0241-integral-body.test.js espera body = SKIPPED:<motivo listado>. A sonda deste crítico confirma o comportamento: body SKIPPED:UNKNOWN_ACQUISITION_EACCES, pós-corpo e revalidação COMPLETED, tupla na forma do catch externo e conservação v3 sem defeito. Sugestão: transformar a sonda em teste de regressão.",
+      "repro": "raw/probe-e6-residual.mjs: EACCES injetado no n-ésimo open de package.json no processo chamador (análise in-process). at=8, 9 e 10 dão body=SKIPPED:UNKNOWN_ACQUISITION_EACCES, postBody=COMPLETED e revalidation=COMPLETED; a tupla v3 [node_modules/p/package.json, UNKNOWN_ACQUISITION_EACCES, …] persiste igual.",
+      "rawArtifact": "raw/probe-e6-residual.json"
+    },
+    {
+      "id": "R1-P3-03",
+      "severity": "P3",
+      "confidence": "média",
+      "criterion": "RC2 (phases, I1)",
+      "summary": "Depois de um erro global, phases.revalidation fica SKIPPED:<motivo> (engine 1752–1755), embora a revalidação final (segundo try, 1759–1766) rode e conclua. Isso é compatível com I1, porque a revalidação do try principal não rodou, mas o campo pode ser lido como se nenhuma revalidação tivesse rodado. Sugestão: documentar a semântica ou separar as duas revalidações.",
+      "repro": "raw/probe-differential.json, caso N5-global-on-body-edge (maxLinks=0 numa aresta só de corpo): as quatro fases depois da aquisição ficam SKIPPED:UNKNOWN_RESOLUTION_LIMIT e validation.valid=true.",
+      "rawArtifact": "raw/probe-differential.json"
+    },
+    {
+      "id": "R1-P3-04",
+      "severity": "P3",
+      "confidence": "alta",
+      "criterion": "RC4 (§3.3)",
+      "summary": "ANONYMOUS_DECLARATION é código morto com TS 6.0.3, que dá identificador vazio à declaração sem nome; a F1 documenta isso. Se o ramo fosse alcançado (engine 1329–1334), as outras categorias da mesma função (por exemplo ASYNC) não seriam emitidas, porque functionValue não é chamada para declaração não exportada sem nome. Não há efeito de segurança: o arquivo fica UNKNOWN_PARSE.",
+      "repro": "raw/probe-differential.json, caso F-categories: v4 dá UNKNOWN_PARSE mais ASYNC, GENERATOR, PARAMETER_INITIALIZER, PARAMETER_PATTERN e PARAMETER_REST, sem ANONYMOUS_DECLARATION; v3 dava UNKNOWN_FUNCTION '' (exceção 3).",
+      "rawArtifact": "raw/probe-differential.json"
+    },
+    {
+      "id": "R1-P3-05",
+      "severity": "P3",
+      "confidence": "alta",
+      "criterion": "RC6 / IB01 (rastreabilidade de evidência)",
+      "summary": "differential-v3-v4-pre-freeze.json e controls-candidate-v4-pre-freeze.json rodaram no engine f6c799ce, não no congelado b9246972. A diferença é só de formatação (4 hunks) e a re-execução deste crítico no congelado reproduz PASS. O teste novo congelado (105ff6c5) também não tem os mesmos bytes do registro de primeira falha (e4182711). O mapeamento de linhas é compatível com formatação (deslocamentos de -2 a +14), mas não há primeira falha registrada sobre os bytes congelados. Por fim, a passagem 7bc50efc→e4182711, depois da tentativa 1 em v4 (B1, F1 e G4 falhando), ajustou expectativas. Os ajustes conferidos são compatíveis com a SPEC e não enfraquecem negativos, mas não foram registrados como migração. Sugestão: registrar no freeze.",
+      "repro": "raw/static-checks.txt (diff draft f6c799ce × congelado); new-v4-attempt1-command.json, new-v4-attempt2-command.json, first-red-v3-final-command.json e focal-v4-attempt1-command.json (sourceSha256 do teste novo).",
+      "rawArtifact": "raw/static-checks.txt"
+    },
+    {
+      "id": "R1-P3-06",
+      "severity": "P3",
+      "confidence": "alta",
+      "criterion": "RC5 (chave única), pré-existente",
+      "summary": "Com registros duplicados em input.installed para a mesma chave (MATCH bom primeiro, MISMATCH depois), a premissa usa o primeiro e out.installed marca os dois como PROVEN. O comportamento é idêntico na v3 e não é alcançável pelo checker, que tem um registro por manifesto. Não é regressão da 0241.",
+      "repro": "raw/probe-dup-v3.mjs: v3 e v4 dão PROVEN com installed [PROVEN, PROVEN].",
+      "rawArtifact": "raw/probe-dup-v3.json"
+    },
+    {
+      "id": "R1-P3-07",
+      "severity": "P3",
+      "confidence": "média",
+      "criterion": "RC3 (cobertura), herdado",
+      "summary": "Uma aresta só de corpo para arquivo existente mas não adquirido resolve e o load devolve UNKNOWN_MODULE (engine 1433) sem medir o corpo do alvo. Aresta de produto dentro desse alvo não aparece. O status fica UNKNOWN, nunca PASS, e a v3 faz o mesmo. Está fora do delta da 0241, mas vale declarar em phases/bodyCoverage ou numa SPEC futura.",
+      "repro": "Leitura de código: load() 1432–1433 e edgeLoad() 892–904. bodyCoverage não conta esse alvo.",
+      "rawArtifact": null
+    }
+  ],
+  "scenariosChecked": [
+    "Hashes vinculantes: contrato, SPEC, errata, task-contract e source-freeze iguais aos declarados; HEAD 228e7918 com árvore rastreada limpa; diff af63ba60..228e7918 toca exatamente os 7 caminhos do freeze; fontes congeladas inalteradas iguais à base; oráculo v3 com bytes iguais ao blob de af63ba60 (raw/static-checks.txt).",
+    "Leitura integral do diff do engine e do checker contra RC1–RC6, SPEC §3.1–§3.5, errata E1–E7 e I1–I11.",
+    "RC1: CONTAINED_EDGE_REASONS igual à lista da §3.1 (36) e à reason-census-base; todo UNKNOWN_* lançado por literal ou ternário no engine/helper está classificado; prefixo aberto UNKNOWN_ACQUISITION_ só contém os 5 errno (raw/reason-crosscheck.json).",
+    "RC1: as quatro arestas (import estático, export-from, alternativas de import dinâmico e loader) passam por edgeLoad; tupla no formato da aquisição; valor U sem consulta de propriedade; CONTAINED não vaza; exceções contidas só nascem em resolve() ou no preâmbulo de load() antes de modules.set, sem módulo meio carregado.",
+    "RC1/E6: parada residual no laço de topo confirmada fisicamente (raw/probe-e6-residual.json).",
+    "Diferencial v3 (oráculo) × v4 congelado em 32 entradas privadas (20 do lead re-executadas no congelado + 12 do crítico: cadeia aninhada, export-from, loader CJS, união dinâmica com produto, erro global em aresta de corpo, D2 positivo/SHA divergente, lib MATCH sem inventário, receipt citando instalado, categorias em expressões, violação atrás de aresta contida em módulo aninhado): census idêntico 32/32; zero defeitos de conservação; multiset de violações contido; só o D2 positivo vira PROVEN (raw/probe-differential.json).",
+    "RC2: corte por maxStates/maxContexts/maxCallDepth/maxUnionValues depois de aresta contida e produto: CUT:<cap>, pós-corpo e revalidação COMPLETED, validation válida, duas execuções iguais, positivo no cap, conservação v3 sem defeito; maxNodes e timeoutMs continuam globais; o envelope de prazo do pai tem phases e bodyCoverage null (raw/probe-cut.json).",
+    "RC3: violações só de corpo em módulos distintos e atrás de aresta contida aparecem (N12, X1, C6); produto registrado antes da contenção; status VIOLATION prevalece.",
+    "RC4: categorias fechadas, todas por função, uma por arquivo e categoria; o census mantém UNKNOWN_FUNCTION ''; momento da recusa inalterado (função nunca chamada continua UNKNOWN).",
+    "RC5/D2: premissas completas (MATCH, digest hex, inventário com digest recomputado pelo canonicalJson importado do comparador 0234, entrada regular com SHA igual ao snapshot); chave física pela última ocorrência de node_modules; receipt ignorado para instalado; dist de primeira parte mantém a receita v1; o checker passa o inventário de referência conferido contra o receipt e compara antes/depois; perfil carrega installedIdentitySha256; o pai revalida o trace.",
+    "RC5 adversarial: arquivo instalado symlink, diretório dist symlink, registros duplicados (MISMATCH primeiro), diretório sem manifesto sob node_modules aninhado e usage inválido: nenhum PROVEN indevido; pacote aninhado com registro próprio é positivo (raw/probe-d2-adversarial.json).",
+    "RC6: migração dos 4 testes antigos limitada ao literal do kernel e ao inventário 0234 em registros MATCH sintéticos; nenhum assert removido ou alterado; 31 primeiras falhas registradas.",
+    "Diff pré-freeze f6c799ce × congelado b9246972 só de formatação.",
+    "Vitest focal de tests/b6-0241-integral-body.test.js no congelado: 28/28 PASS, sem alteração rastreada na candidata (raw/vitest-0241-summary.json)."
+  ],
+  "notJudged": [
+    "Medição B6 real v4 normal/strict e v3 no mesmo input (IB09 na árvore real, IB11), ledger 537/1.721/1.072/581, prazo de 120 s e ENOBUFS na árvore real: etapas posteriores do DAG.",
+    "16 gates Node22, verificador com 38 hashes, consumidor físico fresco, paridade SDK e compat default/P1 byte a byte (IB01 parcial, IB10, IB12): não executados (proibidos ou fora do escopo da crítica).",
+    "Regressão focal completa de 747 testes: não re-executada; confiei no registro focal-v4-attempt1 com os mesmos SHAs do freeze e re-executei só o teste novo.",
+    "Motivos só de classificador (UNKNOWN_TARGET_URL, UNKNOWN_PACKAGE_ESCAPE, UNKNOWN_LINK_FORMAT, UNKNOWN_PATH): não reproduzidos fisicamente; aceito o método I11.",
+    "Manifestos package.json instalados não passam pela premissa por arquivo D2; continuam cobertos por MATCH do pacote, snapshot de resolução e finalize do comparador. É comportamento v3, fora do delta.",
+    "Tempo do census com o input maior (inventários): não medido; o efeito esperado é desprezível."
+  ],
+  "rawArtifacts": [
+    "raw/harness.mjs",
+    "raw/probe-differential.mjs",
+    "raw/probe-differential.json",
+    "raw/probe-e6-residual.mjs",
+    "raw/probe-e6-residual.json",
+    "raw/probe-d2-adversarial.mjs",
+    "raw/probe-d2-adversarial.json",
+    "raw/probe-dup-v3.mjs",
+    "raw/probe-dup-v3.json",
+    "raw/probe-cut.mjs",
+    "raw/probe-cut.json",
+    "raw/reason-crosscheck.mjs",
+    "raw/reason-crosscheck.json",
+    "raw/static-checks.txt",
+    "raw/vitest-0241-summary.json"
+  ],
+  "method": "Node pinado v22.23.2 com env mínimo (PATH do bin, LANG=C, LC_ALL=C, TZ=UTC, TMPDIR no runtime review-r1). Os métodos do engine rodam num chamador cujo hook de carga recusa file: fora do diretório do engine (exceto o parser pinado). Fixtures privadas em /mnt/dados/cvg-work/cvg-hiso005-build0241-runtime-20261018/review-r1/fixtures. Nenhuma escrita fora das pastas próprias, nenhum git mutante, rede, PG, Docker, certify ou subagente."
+}

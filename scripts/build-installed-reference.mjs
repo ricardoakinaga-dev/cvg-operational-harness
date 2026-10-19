@@ -162,19 +162,38 @@ function sourceDigest(root, files) {
   return hash(canonicalJson(entries))
 }
 
-function allFiles(root, limits, digest = true) {
+// `sampling` is only the in-flight ceiling walk while npm runs: an entry that
+// npm removes or replaces between readdir, lstat and readlink is skipped in
+// that sample (it still counted as an entry). Every other walk, including the
+// final inventory after npm, stays strict and refuses a vanished entry.
+function allFiles(root, limits, digest = true, sampling = false) {
   let entries = 0,
     regularBytes = 0,
     maxDepth = 0
   const list = []
+  const vanished = (error) =>
+    sampling && ['ENOENT', 'ENOTDIR'].includes(error?.code)
   const visit = (dir, depth) => {
     maxDepth = Math.max(maxDepth, depth)
     if (depth > limits.maxDepth) throw unavailable('REFERENCE_DEPTH_LIMIT')
-    for (const name of fs.readdirSync(dir).sort()) {
+    let names
+    try {
+      names = fs.readdirSync(dir).sort()
+    } catch (error) {
+      if (vanished(error)) return
+      throw error
+    }
+    for (const name of names) {
       if (++entries > limits.maxEntries)
         throw unavailable('REFERENCE_ENTRIES_LIMIT')
-      const file = path.join(dir, name),
+      const file = path.join(dir, name)
+      let stat
+      try {
         stat = fs.lstatSync(file)
+      } catch (error) {
+        if (vanished(error)) continue
+        throw error
+      }
       if (stat.isDirectory()) {
         list.push({ path: path.relative(root, file), type: 'directory' })
         visit(file, depth + 1)
@@ -190,13 +209,16 @@ function allFiles(root, limits, digest = true) {
             size: stat.size,
             executableBits: stat.mode & 0o111
           })
-      } else if (stat.isSymbolicLink())
-        list.push({
-          path: path.relative(root, file),
-          type: 'link',
-          target: fs.readlinkSync(file)
-        })
-      else throw unavailable('REFERENCE_SPECIAL_FILE')
+      } else if (stat.isSymbolicLink()) {
+        let target
+        try {
+          target = fs.readlinkSync(file)
+        } catch (error) {
+          if (vanished(error)) continue
+          throw error
+        }
+        list.push({ path: path.relative(root, file), type: 'link', target })
+      } else throw unavailable('REFERENCE_SPECIAL_FILE')
     }
   }
   visit(root, 0)
@@ -416,7 +438,73 @@ export async function buildInstalledReference(options) {
       (await git('rev-parse', '--verify', 'HEAD')).toString().trim() !== commit
     )
       throw unavailable('SOURCE_COMMIT_ASSERTION')
-    const rawTree = await git('ls-tree', '-r', '-l', '-z', commit)
+    // One owned process keeps the 8 MiB output cap of runOwnedProcess. A larger
+    // listing is paged per subtree, in git order, so the union is exactly
+    // `ls-tree -r` of the commit; a directory whose immediate children alone
+    // exceed the cap stays refused. A page is addressed by a literal pathspec
+    // (never pathspec magic) and must round-trip UTF-8, be non-empty and lie
+    // under its own prefix. The SOURCE_LIMIT ceilings apply below.
+    let pages = 0
+    const pageLines = (buffer, prefix, direct) => {
+      const text = buffer.toString('utf8')
+      if (!Buffer.from(text, 'utf8').equals(buffer))
+        throw unavailable('SOURCE_PATH_INVALID')
+      const lines = text.split('\0').filter(Boolean)
+      if (!lines.length) throw unavailable('SOURCE_TREE_PAGE_INVALID')
+      for (const line of lines) {
+        const name = line.slice(line.indexOf('\t') + 1)
+        const rest = !prefix
+          ? name
+          : name.startsWith(prefix + '/')
+            ? name.slice(prefix.length + 1)
+            : ''
+        if (!rest || (direct && rest.includes('/')))
+          throw unavailable('SOURCE_TREE_PAGE_INVALID')
+      }
+      return lines
+    }
+    const listTree = async (prefix, out) => {
+      if (++pages > limits.maxEntries) throw unavailable('SOURCE_LIMIT')
+      try {
+        const listing = prefix
+          ? await git(
+              '--literal-pathspecs',
+              'ls-tree',
+              '-r',
+              '-l',
+              '-z',
+              commit,
+              '--',
+              prefix
+            )
+          : await git('ls-tree', '-r', '-l', '-z', commit)
+        if (prefix) pageLines(listing, prefix, false)
+        out.push(listing)
+        return
+      } catch (error) {
+        if (error.code !== 'PROCESS_OUTPUT_LIMIT') throw error
+      }
+      const children = prefix
+        ? await git(
+            '--literal-pathspecs',
+            'ls-tree',
+            '-l',
+            '-z',
+            commit,
+            '--',
+            prefix + '/'
+          )
+        : await git('ls-tree', '-l', '-z', commit)
+      for (const line of pageLines(children, prefix, true)) {
+        const match = /^\d{6} (\w+) [a-f0-9]{40}\s+\S+\t(.+)$/.exec(line)
+        if (!match) throw unavailable('SOURCE_TYPE_UNSUPPORTED')
+        if (match[1] === 'tree') await listTree(match[2], out)
+        else out.push(Buffer.from(line + '\0', 'utf8'))
+      }
+    }
+    const listed = []
+    await listTree('', listed)
+    const rawTree = Buffer.concat(listed)
     const files = rawTree
       .toString('utf8')
       .split('\0')
@@ -566,7 +654,7 @@ export async function buildInstalledReference(options) {
         resourceCheck: () => {
           if (exists(trace) && regular(trace).size > 8 * 1024 * 1024)
             throw unavailable('PROCESS_TRACE_LIMIT')
-          allFiles(snapshot, limits, false)
+          allFiles(snapshot, limits, false, true)
         }
       }
     )

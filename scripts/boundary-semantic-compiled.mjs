@@ -10,7 +10,8 @@ import {
   fingerprintToolchain,
   collectPackageInventory,
   createInstalledIdentityComparator,
-  pinnedToolchainLocation
+  pinnedToolchainLocation,
+  INSTALLED_IDENTITY_LIMITS
 } from './boundary-installed-identity.mjs'
 
 // Location only (CVG_PINNED_NODE/CVG_PINNED_NPM or the running Node); the
@@ -333,14 +334,109 @@ export function buildCompiledReference({
       commit
     )
       throw error('COMPILED_SOURCE_COMMIT_MISMATCH')
-    const tree = command(
-      [...git, 'ls-tree', '-r', '--format=%(objectmode) %(path)', commit],
-      source,
-      env,
-      commands
-    )
-      .trim()
-      .split('\n')
+    // One git process keeps the 8 MiB buffer of command(). A larger listing is
+    // paged per subtree, in git order (the union is `ls-tree -r` of the
+    // commit); a directory whose immediate children alone exceed the buffer
+    // stays refused. A page is addressed by a literal pathspec (never pathspec
+    // magic) and must be non-empty, unquoted and under its own prefix. The
+    // discarded partial stdout is not kept in the log, and a paged listing
+    // keeps only the digest/size of each page in the log so commands.json
+    // stays within the reader's 8 MiB bound.
+    let pages = 0
+    const listingRows = commands.length
+    const tree = []
+    const under = (names, prefix, direct) => {
+      if (!names.length) throw error('COMPILED_SOURCE_TYPE')
+      for (const name of names) {
+        const rest = !prefix
+          ? name
+          : name.startsWith(prefix + '/')
+            ? name.slice(prefix.length + 1)
+            : ''
+        if (!rest || name.startsWith('"') || (direct && rest.includes('/')))
+          throw error('COMPILED_SOURCE_TYPE')
+      }
+    }
+    const listTree = (prefix) => {
+      if (++pages > INSTALLED_IDENTITY_LIMITS.maxEntries)
+        throw error('COMPILED_SOURCE_LIMIT')
+      const literal = prefix ? ['--literal-pathspecs'] : []
+      const spec = prefix ? ['--', prefix] : []
+      let page
+      try {
+        page = command(
+          [
+            ...git,
+            ...literal,
+            'ls-tree',
+            '-r',
+            '--format=%(objectmode) %(path)',
+            commit,
+            ...spec
+          ],
+          source,
+          env,
+          commands
+        )
+          .trim()
+          .split('\n')
+      } catch (cause) {
+        const row = commands.at(-1)
+        if (row?.errorCode !== 'ENOBUFS') throw cause
+        row.stdoutDiscardedBytes = Buffer.byteLength(row.stdout)
+        row.stdout = ''
+      }
+      if (page) {
+        if (prefix)
+          under(
+            page.map((line) => line.slice(line.indexOf(' ') + 1)),
+            prefix,
+            false
+          )
+        for (const line of page) tree.push(line)
+        return
+      }
+      const children = command(
+        [
+          ...git,
+          ...literal,
+          'ls-tree',
+          '--format=%(objecttype) %(objectmode) %(path)',
+          commit,
+          ...(prefix ? ['--', prefix + '/'] : [])
+        ],
+        source,
+        env,
+        commands
+      )
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const a = line.indexOf(' '),
+            b = line.indexOf(' ', a + 1)
+          return {
+            type: line.slice(0, a),
+            mode: line.slice(a + 1, b),
+            name: line.slice(b + 1)
+          }
+        })
+      under(
+        children.map(({ name }) => name),
+        prefix,
+        true
+      )
+      for (const child of children)
+        if (child.type === 'tree') listTree(child.name)
+        else tree.push(child.mode + ' ' + child.name)
+    }
+    listTree('')
+    if (pages > 1)
+      for (const row of commands.slice(listingRows))
+        if (row.stdout) {
+          row.stdoutBytes = Buffer.byteLength(row.stdout)
+          row.stdoutSha256 = hash(row.stdout)
+          row.stdout = ''
+        }
     if (
       tree.some(
         (line) => !/^100(?:644|755) /.test(line) || !safe(line.slice(7))

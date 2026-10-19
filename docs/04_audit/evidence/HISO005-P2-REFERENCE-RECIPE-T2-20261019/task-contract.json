@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-REFERENCE-RECIPE-T2-20261019",
+  "stage": "BUILD",
+  "observedAt": "2026-10-19T03:21:35.220844+00:00",
+  "status": "IN_PROGRESS",
+  "requestedBy": "lead (sessão CONT-20261018-D9EF), depois da aceitação do BUILD0241 (raiz bee0f010/a443ea9b/d33ff0f9)",
+  "base": "228e7918 (fonte do BUILD0241)",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-20261019 (worktree detached, sem branch)",
+  "runtime": "/mnt/dados/cvg-work/cvg-hiso005-recipe-t2-runtime-20261019",
+  "problem": [
+    {
+      "id": "P1",
+      "what": "Receita instalada (scripts/build-installed-reference.mjs) lista a árvore com `git ls-tree -r -l -z <commit>` pelo runOwnedProcess, cujo teto padrão de saída por processo é 8 MiB (scripts/boundary-reference-process.mjs). Na árvore 228e7918 a listagem tem ~15 MB (81.607 caminhos) e a receita aborta com PROCESS_OUTPUT_LIMIT.",
+      "evidence": "../HISO005-P2-BUILD-0241-20261018/reference-recipe-blocker.json"
+    },
+    {
+      "id": "P2",
+      "what": "Receita compilada (scripts/boundary-semantic-compiled.mjs) roda `git ls-tree -r --format=%(objectmode) %(path)` por spawnSync com maxBuffer de 8 MiB; a saída tem ~11,2 MB e falha com ENOBUFS (COMPILED_COMMAND_FAILED).",
+      "evidence": "../HISO005-P2-BUILD-0241-20261018/reference-recipe-blocker.json"
+    },
+    {
+      "id": "P3",
+      "what": "O leitor compilado exige sourceRoot === evaluatedRoot === raiz avaliada. Não é defeito: é a amarração de proveniência da SPEC0236 e fica como está; com P2 corrigido, a referência compilada passa a ser construída da própria raiz avaliada."
+    },
+    {
+      "id": "P4",
+      "what": "Corrida na receita instalada: o monitor do runOwnedProcess chama resourceCheck a cada 100 ms, que varre o snapshot inteiro (allFiles) enquanto o npm cria e remove opcionais de outras plataformas; um lstat/readdir de entrada que sumiu lança ENOENT e mata o npm. Observado em r2, r3, r5 e r8 do BUILD0241 (observador passivo: fsevents e lightningcss-*).",
+      "evidence": [
+        "../HISO005-P2-BUILD-0241-20261018/references-attempts.json",
+        "../HISO005-P2-BUILD-0241-20261018/reference-race-observer-r9.json"
+      ]
+    }
+  ],
+  "minimalFix": [
+    {
+      "id": "F1",
+      "for": [
+        "P1",
+        "P2"
+      ],
+      "what": "Listagem paginada da árvore do commit nas duas receitas: tentar `ls-tree -r` do caminho; se a saída de UM processo passar do teto vigente (8 MiB, inalterado), listar só os filhos imediatos daquele diretório e repetir a tentativa recursiva por filho, preservando a ordem do git. Blob entra direto. A união é exatamente a listagem recursiva completa. Um diretório cujos filhos imediatos sozinhos passem do teto continua recusado (fecha). Os tetos da SPEC0234 (200.000 entradas, profundidade 64, 4 GiB) seguem aplicados à lista final como hoje."
+    },
+    {
+      "id": "F2",
+      "for": [
+        "P4"
+      ],
+      "what": "Somente na varredura de amostragem do resourceCheck (allFiles com digest=false, chamada durante o npm), entrada que some entre readdir e lstat é pulada naquela amostra; as demais continuam contadas contra os tetos. A varredura final depois do npm (allFiles com digest), revalidate() e a comparação 0234 permanecem estritas: entrada que some ali continua recusada."
+    },
+    {
+      "id": "F3",
+      "for": [
+        "P3"
+      ],
+      "what": "Nenhuma mudança no leitor."
+    }
+  ],
+  "track": {
+    "decision": "T2",
+    "rule": "D-12 (docs/07_agents/AGENTS.md): T2 = mudança de código sem efeito externo e sem mudança de contrato público; T3 se mudar contrato, segurança, identidade, policy ou approval. Critério do lead: se alterar limite ou contrato congelado por SPEC aprovada (0234/0236/0240/0241), é T3.",
+    "justification": [
+      "Nenhum valor de teto muda: os tetos enumerados da SPEC0234 §4 (2 GiB, 4 GiB, 512 MiB, 200.000 entradas, profundidade 64, 8 processos, 180 s, 120 s) e o teto de saída de 8 MiB por processo do wrapper ficam iguais; F1 só divide a listagem em processos que respeitam esse teto.",
+      "A definição da fonte não muda: a SPEC0234 §3.1 pede snapshot das fontes versionadas sem .env, credenciais, dist e node_modules; o conjunto de arquivos, a ordem, as exclusões, os argumentos do npm, o arquivo tar e os campos dos recibos ficam iguais.",
+      "A SPEC0236 fixa o helper da receita por receipt (recipeSha256 confere o próprio arquivo); receipts antigos deixam de valer e os novos nascem com o hash novo, como na portabilidade 916fd247/3da079ca (T2) que já mudou esses mesmos scripts. A SPEC0236 §1 admite correção interna que preserve o contrato sem nova aprovação.",
+      "F2 não dispensa incerteza: a amostragem é observação de teto durante o npm (a SPEC0234 diz que não é sandbox de npm hostil); a varredura final estrita, a revalidação e a comparação seguem recusando corrida.",
+      "Sem produto, manifests, lock, API pública, runtime, engine ou checker."
+    ],
+    "measuredMargins": {
+      "installedSnapshotBytes": "fontes rastreadas após exclusões 4.036.453.095 + pacotes instalados ~235.990.509 ≈ 4,272 GB contra 4 GiB = 4.294.967.296 (margem ~22 MB)",
+      "compiledArchiveBytes": "tar da árvore ~4,10 GB contra COMPILED_SOURCE_LIMIT de 4 GiB (margem ~190 MB)",
+      "entries": "~81,6 mil arquivos de fonte + ~22 mil do node_modules, contra 200.000"
+    },
+    "forwardRiskT3": "Se a árvore rastreada crescer mais ~22 MB (a evidência de auditoria é 3,99 GB dos 4,04 GB), a referência instalada passa do teto de 4 GiB e só uma decisão T3 resolve. Pergunta pronta para esse caso: \"Você aprova elevar o teto de 4 GiB da referência instalada da SPEC0234 ou tirar docs/04_audit/evidence do snapshot das receitas de referência?\""
+  },
+  "sourceOwnership": [
+    "scripts/build-installed-reference.mjs",
+    "scripts/boundary-semantic-compiled.mjs",
+    "tests/b6-0234-reference-recipe.test.js (só acréscimos)",
+    "tests/b6-0236-compiled-provenance.test.js (só acréscimos)"
+  ],
+  "readOnly": [
+    "scripts/boundary-reference-process.mjs",
+    "scripts/boundary-semantic-engine.mjs",
+    "scripts/check-product-boundary.mjs",
+    "scripts/boundary-installed-identity.mjs",
+    "produto",
+    "manifests",
+    "lock",
+    "raiz",
+    "runtime 0237 em /mnt/ia",
+    "recursos do Codex e da frente Codex100"
+  ],
+  "acceptance": [
+    {
+      "id": "RT01",
+      "criterion": "Primeira falha antes de editar: receita instalada e compilada reais na árvore 228e7918 falham pelo teto; teste determinístico de listagem acima do teto e de entrada que some durante a amostragem falha na fonte atual.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT02",
+      "criterion": "Listagem paginada igual, entrada a entrada e na ordem, à listagem recursiva completa; diretório cujos filhos imediatos passam do teto continua recusado; tetos de entradas/profundidade/bytes intactos.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT03",
+      "criterion": "Entrada que some durante a amostragem não mata o npm; a mesma entrada sumindo na varredura final ou na revalidação continua recusada.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT04",
+      "criterion": "Regressões b6-0234-reference-recipe, b6-0236-compiled-provenance e os focais B6 do BUILD0241 sem falha nem skip; lint e formato.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT05",
+      "criterion": "Crítico novo não-fork, até 2 rodadas, zero obrigatórios.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT06",
+      "criterion": "Referências instalada e compilada construídas pela receita corrigida a partir da própria raiz avaliada (árvore 228e7918), sem snapshot de desvio; leitor compilado PROVEN.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT07",
+      "criterion": "Medição B6 normal e strict nos mesmos inputs (árvore 228e7918 do BUILD0241) com as referências novas; conservação da §3.5 contra a v3 nos mesmos inputs; comparação com os 2.410 diagnósticos do BUILD0241 sem crédito.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "RT08",
+      "criterion": "Lista de caminhos para promoção com pré-imagens; recursos liberados com recibo; sem commit na raiz, push, PR ou edição de ledgers/coordenação/catálogo.",
+      "status": "NOT_RUN"
+    }
+  ],
+  "evaluationRoot": "worktree detached adicional em 228e7918 dentro do runtime (eval-228e), só leitura depois de criada; o checker de medição vem da candidata T2 (engine e checker com bytes iguais aos de 228e7918; mudam só as receitas).",
+  "certify": "Não previsto: a base mantém as falhas conhecidas e a mudança não toca código de aplicação; repetir certify só reproduziria o mesmo NO_GO.",
+  "resources": {
+    "postgres": "não previsto",
+    "ports": "nenhuma"
+  },
+  "budget": {
+    "lead": 1,
+    "freshCritic": 1,
+    "maxRounds": 2,
+    "descendants": 0
+  },
+  "gitleaksHygiene": "SHA abreviado nos arquivos de evidência; nenhum nome de regra do scanner junto de SHA completo.",
+  "amendments": [
+    {
+      "at": "2026-10-19T03:32:30.377536+00:00",
+      "before": "medição e referências",
+      "field": "evaluationRoot",
+      "text": "Raiz avaliada = a própria candidata do BUILD0241 (/mnt/dados/cvg-work/cvg-hiso005-build0241-20261018, HEAD 228e7918), sem mudança desde a medição de 2.410 diagnósticos (mesmos dist/outputs gerados); só leitura. Referência instalada: receita corrigida sobre worktree limpo de 228e7918 no runtime (eval-228e), porque a receita confere os arquivos rastreados e a candidata antiga tem certification/** alterado pelo certify; o conteúdo instalado depende só do lock/config, iguais. Referência compilada: receita corrigida com --source-root = raiz avaliada (o leitor exige isso). Checker de medição = scripts da candidata T2 congelada (engine e checker com bytes de 228e7918). v3 nos mesmos inputs = ferramentas af63ba60 com o módulo compilado T2 trocado (único arquivo), para aceitar o mesmo receipt compilado.",
+      "reason": "garantir inputs idênticos aos do BUILD0241 sem escrever na candidata antiga"
+    }
+  ]
+}

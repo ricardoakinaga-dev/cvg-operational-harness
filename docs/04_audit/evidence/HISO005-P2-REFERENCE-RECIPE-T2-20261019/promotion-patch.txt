@@ -1,0 +1,861 @@
+From a5b8a8884c4ea236606e216335f420d728c05b50 Mon Sep 17 00:00:00 2001
+From: Ricardo Akinaga <245769618+ricardoakinaga-dev@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 00:50:56 -0300
+Subject: [PATCH 1/2] fix(boundary): page B6 reference recipe tree listings and
+ tolerate npm churn in sampling
+
+HISO005-P2-REFERENCE-RECIPE-T2-20261019 (T2, no limit or contract change).
+
+The installed and compiled reference recipes listed the whole commit tree in
+one git process bounded at 8 MiB of output; the consolidated tree lists about
+15 MB and 11.2 MB. Both recipes now page the listing per subtree in git order
+when one process would exceed that same per-process bound; the union equals
+`ls-tree -r` and a directory whose immediate children alone exceed it is
+still refused. A paged compiled listing keeps only page digests in
+commands.json so the reader's 8 MiB bound holds. The installed recipe's
+in-flight sampling walk skips an entry npm removed between readdir and lstat;
+the final inventory, revalidation and comparison stay strict.
+
+No SPEC0234 ceiling (2/4 GiB, 512 MiB, 200,000 entries, depth 64, 8
+processes, 180 s, 120 s), recipe input set, receipt schema or reader binding
+changed. Focal B6 816/816.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/boundary-semantic-compiled.mjs    |  77 +++++++++++--
+ scripts/build-installed-reference.mjs     |  60 +++++++++-
+ tests/b6-0234-reference-recipe.test.js    | 133 +++++++++++++++++++++-
+ tests/b6-0236-compiled-provenance.test.js |  90 +++++++++++++++
+ 4 files changed, 345 insertions(+), 15 deletions(-)
+
+diff --git a/scripts/boundary-semantic-compiled.mjs b/scripts/boundary-semantic-compiled.mjs
+index 39c7a983..01cc1489 100644
+--- a/scripts/boundary-semantic-compiled.mjs
++++ b/scripts/boundary-semantic-compiled.mjs
+@@ -10,7 +10,8 @@ import {
+   fingerprintToolchain,
+   collectPackageInventory,
+   createInstalledIdentityComparator,
+-  pinnedToolchainLocation
++  pinnedToolchainLocation,
++  INSTALLED_IDENTITY_LIMITS
+ } from './boundary-installed-identity.mjs'
+ 
+ // Location only (CVG_PINNED_NODE/CVG_PINNED_NPM or the running Node); the
+@@ -333,14 +334,72 @@ export function buildCompiledReference({
+       commit
+     )
+       throw error('COMPILED_SOURCE_COMMIT_MISMATCH')
+-    const tree = command(
+-      [...git, 'ls-tree', '-r', '--format=%(objectmode) %(path)', commit],
+-      source,
+-      env,
+-      commands
+-    )
+-      .trim()
+-      .split('\n')
++    // One git process keeps the 8 MiB buffer of command(). A larger listing is
++    // paged per subtree, in git order (the union is `ls-tree -r` of the
++    // commit); a directory whose immediate children alone exceed the buffer
++    // stays refused. The discarded partial stdout is not kept in the log, and
++    // a paged listing keeps only the digest/size of each page in the log so
++    // commands.json stays within the reader's 8 MiB bound.
++    let pages = 0
++    const listingRows = commands.length
++    const listTree = (prefix) => {
++      if (++pages > INSTALLED_IDENTITY_LIMITS.maxEntries)
++        throw error('COMPILED_SOURCE_LIMIT')
++      const spec = prefix ? ['--', prefix] : []
++      try {
++        return command(
++          [
++            ...git,
++            'ls-tree',
++            '-r',
++            '--format=%(objectmode) %(path)',
++            commit,
++            ...spec
++          ],
++          source,
++          env,
++          commands
++        )
++          .trim()
++          .split('\n')
++      } catch (cause) {
++        const row = commands.at(-1)
++        if (row?.errorCode !== 'ENOBUFS') throw cause
++        row.stdoutDiscardedBytes = Buffer.byteLength(row.stdout)
++        row.stdout = ''
++      }
++      const result = []
++      const children = command(
++        [
++          ...git,
++          'ls-tree',
++          '--format=%(objecttype) %(objectmode) %(path)',
++          commit,
++          ...(prefix ? ['--', prefix + '/'] : [])
++        ],
++        source,
++        env,
++        commands
++      )
++        .split('\n')
++        .filter(Boolean)
++      for (const line of children) {
++        const type = line.slice(0, line.indexOf(' '))
++        const rest = line.slice(type.length + 1)
++        if (type === 'tree')
++          result.push(...listTree(rest.slice(rest.indexOf(' ') + 1)))
++        else result.push(rest)
++      }
++      return result
++    }
++    const tree = listTree('')
++    if (pages > 1)
++      for (const row of commands.slice(listingRows))
++        if (row.stdout) {
++          row.stdoutBytes = Buffer.byteLength(row.stdout)
++          row.stdoutSha256 = hash(row.stdout)
++          row.stdout = ''
++        }
+     if (
+       tree.some(
+         (line) => !/^100(?:644|755) /.test(line) || !safe(line.slice(7))
+diff --git a/scripts/build-installed-reference.mjs b/scripts/build-installed-reference.mjs
+index ca54d93f..2f991346 100644
+--- a/scripts/build-installed-reference.mjs
++++ b/scripts/build-installed-reference.mjs
+@@ -162,19 +162,37 @@ function sourceDigest(root, files) {
+   return hash(canonicalJson(entries))
+ }
+ 
+-function allFiles(root, limits, digest = true) {
++// `sampling` is only the in-flight ceiling walk while npm runs: an entry that
++// npm removes between readdir and lstat is skipped in that sample (it still
++// counted as an entry). Every other walk, including the final inventory after
++// npm, stays strict and refuses a vanished entry.
++function allFiles(root, limits, digest = true, sampling = false) {
+   let entries = 0,
+     regularBytes = 0,
+     maxDepth = 0
+   const list = []
++  const vanished = (error) => sampling && error?.code === 'ENOENT'
+   const visit = (dir, depth) => {
+     maxDepth = Math.max(maxDepth, depth)
+     if (depth > limits.maxDepth) throw unavailable('REFERENCE_DEPTH_LIMIT')
+-    for (const name of fs.readdirSync(dir).sort()) {
++    let names
++    try {
++      names = fs.readdirSync(dir).sort()
++    } catch (error) {
++      if (vanished(error)) return
++      throw error
++    }
++    for (const name of names) {
+       if (++entries > limits.maxEntries)
+         throw unavailable('REFERENCE_ENTRIES_LIMIT')
+-      const file = path.join(dir, name),
++      const file = path.join(dir, name)
++      let stat
++      try {
+         stat = fs.lstatSync(file)
++      } catch (error) {
++        if (vanished(error)) continue
++        throw error
++      }
+       if (stat.isDirectory()) {
+         list.push({ path: path.relative(root, file), type: 'directory' })
+         visit(file, depth + 1)
+@@ -416,7 +434,39 @@ export async function buildInstalledReference(options) {
+       (await git('rev-parse', '--verify', 'HEAD')).toString().trim() !== commit
+     )
+       throw unavailable('SOURCE_COMMIT_ASSERTION')
+-    const rawTree = await git('ls-tree', '-r', '-l', '-z', commit)
++    // One owned process keeps the 8 MiB output cap of runOwnedProcess. A larger
++    // listing is paged per subtree, in git order, so the union is exactly
++    // `ls-tree -r` of the commit; a directory whose immediate children alone
++    // exceed the cap stays refused. The SOURCE_LIMIT ceilings apply below.
++    let pages = 0
++    const listTree = async (prefix) => {
++      if (++pages > limits.maxEntries) throw unavailable('SOURCE_LIMIT')
++      const spec = prefix ? ['--', prefix] : []
++      try {
++        return [await git('ls-tree', '-r', '-l', '-z', commit, ...spec)]
++      } catch (error) {
++        if (error.code !== 'PROCESS_OUTPUT_LIMIT') throw error
++      }
++      const children = await git(
++        'ls-tree',
++        '-l',
++        '-z',
++        commit,
++        ...(prefix ? ['--', prefix + '/'] : [])
++      )
++      const result = []
++      for (const line of children
++        .toString('utf8')
++        .split('\0')
++        .filter(Boolean)) {
++        const match = /^\d{6} (\w+) [a-f0-9]{40}\s+\S+\t(.+)$/.exec(line)
++        if (!match) throw unavailable('SOURCE_TYPE_UNSUPPORTED')
++        if (match[1] === 'tree') result.push(...(await listTree(match[2])))
++        else result.push(Buffer.from(line + '\0', 'utf8'))
++      }
++      return result
++    }
++    const rawTree = Buffer.concat(await listTree(''))
+     const files = rawTree
+       .toString('utf8')
+       .split('\0')
+@@ -566,7 +616,7 @@ export async function buildInstalledReference(options) {
+         resourceCheck: () => {
+           if (exists(trace) && regular(trace).size > 8 * 1024 * 1024)
+             throw unavailable('PROCESS_TRACE_LIMIT')
+-          allFiles(snapshot, limits, false)
++          allFiles(snapshot, limits, false, true)
+         }
+       }
+     )
+diff --git a/tests/b6-0234-reference-recipe.test.js b/tests/b6-0234-reference-recipe.test.js
+index 80096f92..094b5cd2 100644
+--- a/tests/b6-0234-reference-recipe.test.js
++++ b/tests/b6-0234-reference-recipe.test.js
+@@ -1,5 +1,5 @@
+ // @vitest-environment node
+-import { afterEach, expect, test } from 'vitest'
++import { afterEach, expect, test, vi } from 'vitest'
+ import fs from 'node:fs'
+ import path from 'node:path'
+ import net from 'node:net'
+@@ -612,3 +612,134 @@ test('ID-05/09: timeout kills observed detached owned descendant while leaving u
+     expect(fs.readFileSync('/proc/' + pid + '/stat', 'utf8')).toMatch(/\) Z /)
+   expect(() => process.kill(process.pid, 0)).not.toThrow()
+ }, 30000)
++
++// HISO005-P2-REFERENCE-RECIPE-T2-20261019: the tree listing may exceed the
++// 8 MiB output cap of ONE owned process; it is paged into processes that each
++// keep that cap. The in-flight sampling walk tolerates an entry that vanishes
++// while npm runs; the final inventory after npm stays strict.
++const LONG_SEGMENT = 's'.repeat(200)
++function deepFiles(root, top, segments, count, name) {
++  const dir = path.join(root, top, ...Array(segments).fill(LONG_SEGMENT))
++  fs.mkdirSync(dir, { recursive: true })
++  for (let i = 0; i < count; i++)
++    fs.writeFileSync(
++      path.join(dir, name ? name(i) : 'f' + String(i).padStart(4, '0')),
++      ''
++    )
++}
++function recommit(f, top) {
++  git(f.sourceRoot, 'add', '-f', '--', top)
++  git(f.sourceRoot, 'commit', '-qm', 'synthetic long listing fixture')
++  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
++  return execFileSync('/usr/bin/git', ['ls-tree', '-r', '-l', '-z', f.commit], {
++    cwd: f.sourceRoot,
++    env: referenceEnvironment(NODE),
++    maxBuffer: 64 * 1024 * 1024
++  })
++}
++
++test('RT02: a tree listing above the per-process output cap is paged and complete', async () => {
++  const f = fixture()
++  for (let i = 0; i < 26; i++)
++    deepFiles(f.sourceRoot, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
++  const listing = recommit(f, 'bulk')
++  expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
++  const tracked = listing
++    .toString('utf8')
++    .split('\0')
++    .filter(Boolean)
++    .map((line) => line.slice(line.indexOf('\t') + 1))
++    .filter((name) => name.startsWith('bulk/'))
++  expect(tracked).toHaveLength(2600)
++  const result = await buildInstalledReference(options(f))
++  expect(result.receipt.packages).toHaveLength(1)
++  const copied = []
++  const walk = (dir) => {
++    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
++      const full = path.join(dir, item.name)
++      if (item.isDirectory()) walk(full)
++      else copied.push(path.relative(result.receipt.root, full))
++    }
++  }
++  walk(path.join(result.receipt.root, 'bulk'))
++  expect(copied.sort()).toEqual([...tracked].sort())
++}, 300000)
++
++test('RT02: a directory whose immediate children alone exceed the cap stays refused', async () => {
++  const f = fixture()
++  deepFiles(
++    f.sourceRoot,
++    'wide',
++    10,
++    4000,
++    (i) => 'n' + String(i).padStart(4, '0') + 'x'.repeat(195)
++  )
++  expect(recommit(f, 'wide').length).toBeGreaterThan(8 * 1024 * 1024)
++  await refuses(f, {}, 'PROCESS_OUTPUT_LIMIT')
++}, 300000)
++
++function vanishOnce(target) {
++  const original = fs.lstatSync
++  const state = { armed: false, fired: 0 }
++  const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(function (
++    file,
++    ...rest
++  ) {
++    if (state.armed && !state.fired && String(file) === target) {
++      state.fired++
++      throw Object.assign(new Error('synthetic vanished entry'), {
++        code: 'ENOENT'
++      })
++    }
++    return original.call(this, file, ...rest)
++  })
++  cleanup.push(() => spy.mockRestore())
++  return state
++}
++
++test('RT03: an entry that vanishes during the in-flight sampling walk does not kill npm', async () => {
++  const f = fixture()
++  const sentinel = path.join(f.outputRoot, 'snapshot', 'zz-sampling-sentinel')
++  const state = vanishOnce(sentinel)
++  const result = await buildInstalledReference(
++    options(f, {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          // Untracked: only the whole-snapshot sampling walk visits it.
++          beforeNpm: () => {
++            write(sentinel, 'sampling sentinel')
++            state.armed = true
++          },
++          afterNpm: () => {
++            state.armed = false
++          }
++        }
++      }
++    })
++  )
++  expect(state.fired).toBe(1)
++  expect(result.receipt.packages).toHaveLength(1)
++}, 120000)
++
++test('RT03: the same vanished entry in the final strict inventory is still refused', async () => {
++  const f = fixture()
++  const sentinel = path.join(f.outputRoot, 'snapshot', 'zz-sampling-sentinel')
++  const state = vanishOnce(sentinel)
++  await refuses(
++    f,
++    {
++      testOnly: {
++        context: 'synthetic-fixture',
++        hooks: {
++          beforeNpm: () => write(sentinel, 'sampling sentinel'),
++          afterNpm: () => {
++            state.armed = true
++          }
++        }
++      }
++    },
++    'ENOENT'
++  )
++  expect(state.fired).toBe(1)
++}, 120000)
+diff --git a/tests/b6-0236-compiled-provenance.test.js b/tests/b6-0236-compiled-provenance.test.js
+index e4c07864..811f5f3e 100644
+--- a/tests/b6-0236-compiled-provenance.test.js
++++ b/tests/b6-0236-compiled-provenance.test.js
+@@ -525,3 +525,93 @@ describe('SPEC0236 compiler-only provenance', () => {
+     })
+   })
+ })
++
++// HISO005-P2-REFERENCE-RECIPE-T2-20261019: the compiled recipe pages a tree
++// listing that exceeds the 8 MiB buffer of ONE git process; each page keeps
++// that buffer. A directory whose immediate children alone exceed it stays
++// refused. The reader still binds the evaluated root itself.
++describe('SPEC0236 compiled recipe listing above the per-process buffer', () => {
++  const LONG_SEGMENT = 's'.repeat(200)
++  function variant(name) {
++    const root = path.join(parent, name)
++    fs.cpSync(evaluated, root, { recursive: true, verbatimSymlinks: true })
++    return root
++  }
++  function deepFiles(root, top, segments, count, name) {
++    const dir = path.join(root, top, ...Array(segments).fill(LONG_SEGMENT))
++    fs.mkdirSync(dir, { recursive: true })
++    for (let i = 0; i < count; i++)
++      fs.writeFileSync(
++        path.join(dir, name ? name(i) : 'f' + String(i).padStart(4, '0')),
++        ''
++      )
++  }
++  function recommit(root, top) {
++    run(['/usr/bin/git', 'add', '-f', '--', top], root)
++    run(
++      [
++        '/usr/bin/git',
++        '-c',
++        'user.name=CVG Synthetic',
++        '-c',
++        'user.email=synthetic@example.invalid',
++        '-c',
++        'commit.gpgsign=false',
++        '-c',
++        'core.hooksPath=/dev/null',
++        'commit',
++        '-qm',
++        'Synthetic long listing fixture'
++      ],
++      root
++    )
++    const head = run(['/usr/bin/git', 'rev-parse', 'HEAD'], root)
++    const listing = spawnSync(
++      '/usr/bin/git',
++      ['ls-tree', '-r', '--format=%(objectmode) %(path)', head],
++      { cwd: root, maxBuffer: 64 * 1024 * 1024 }
++    ).stdout
++    return { head, listing }
++  }
++  const compile = (root, head, output) =>
++    run(
++      [
++        NODE,
++        path.resolve('scripts/boundary-semantic-compiled.mjs'),
++        '--source-root=' + root,
++        '--commit=' + head,
++        '--output-root=' + path.join(parent, output),
++        '--installed-reference=' + installedReference.manifestPath,
++        '--installed-reference-sha256=' + installedReference.expectedSha256
++      ],
++      root
++    )
++  it('RT02 pages a listing above 8 MiB and proves the analyzed mirror of that same root', () => {
++    const root = variant('evaluated-long-listing')
++    for (let i = 0; i < 26; i++)
++      deepFiles(root, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
++    const { head, listing } = recommit(root, 'bulk')
++    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
++    const fresh = JSON.parse(compile(root, head, 'fresh-long-listing'))
++    expect(
++      loadCompiledBuildReference(root, fresh, { installedReference }).status
++    ).toBe('PROVEN')
++    // The receipt stays bound to its own evaluated root, never another one.
++    expect(load(fresh).status).not.toBe('PROVEN')
++  }, 300000)
++  it('RT02 still refuses a directory whose immediate children exceed the buffer', () => {
++    const root = variant('evaluated-wide-listing')
++    deepFiles(
++      root,
++      'wide',
++      10,
++      4000,
++      (i) => 'n' + String(i).padStart(4, '0') + 'x'.repeat(195)
++    )
++    const { head, listing } = recommit(root, 'wide')
++    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
++    expect(() => compile(root, head, 'fresh-wide-listing')).toThrow(
++      /COMPILED_COMMAND_FAILED/
++    )
++  }, 300000)
++})
+-- 
+2.43.0
+
+
+From d6203875af13ed9468fbb0379e0ac7e0c671d10c Mon Sep 17 00:00:00 2001
+From: Ricardo Akinaga <245769618+ricardoakinaga-dev@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 02:04:23 -0300
+Subject: [PATCH 2/2] fix(boundary): address listing review R1 (literal page
+ pathspecs, page validation, no spread)
+
+HISO005-P2-REFERENCE-RECIPE-T2-20261019 R1 fixes (T2 confirmed by the critic).
+
+R1-01: a page with a pathspec now uses `git --literal-pathspecs`; every paged
+page must be non-empty and lie under its own prefix (immediate children with
+no extra separator); the installed recipe refuses a paged page that does not
+round-trip UTF-8 and the compiled recipe refuses a git-quoted name. A
+magic-looking tree name is listed literally, so the existing archive step
+refuses it exactly as without paging; no silent partial receipt.
+R1-02: the array spread over a subtree listing became an accumulator.
+R1-O1: the sampling walk also tolerates readlink and ENOTDIR of an entry npm
+changed; the final inventory stays strict.
+Calls without a pathspec are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/boundary-semantic-compiled.mjs    |  65 +++++++++++---
+ scripts/build-installed-reference.mjs     | 100 +++++++++++++++-------
+ tests/b6-0234-reference-recipe.test.js    |  82 ++++++++++++++++++
+ tests/b6-0236-compiled-provenance.test.js |  16 ++++
+ 4 files changed, 218 insertions(+), 45 deletions(-)
+
+diff --git a/scripts/boundary-semantic-compiled.mjs b/scripts/boundary-semantic-compiled.mjs
+index 01cc1489..2c4aaeb1 100644
+--- a/scripts/boundary-semantic-compiled.mjs
++++ b/scripts/boundary-semantic-compiled.mjs
+@@ -337,19 +337,37 @@ export function buildCompiledReference({
+     // One git process keeps the 8 MiB buffer of command(). A larger listing is
+     // paged per subtree, in git order (the union is `ls-tree -r` of the
+     // commit); a directory whose immediate children alone exceed the buffer
+-    // stays refused. The discarded partial stdout is not kept in the log, and
+-    // a paged listing keeps only the digest/size of each page in the log so
+-    // commands.json stays within the reader's 8 MiB bound.
++    // stays refused. A page is addressed by a literal pathspec (never pathspec
++    // magic) and must be non-empty, unquoted and under its own prefix. The
++    // discarded partial stdout is not kept in the log, and a paged listing
++    // keeps only the digest/size of each page in the log so commands.json
++    // stays within the reader's 8 MiB bound.
+     let pages = 0
+     const listingRows = commands.length
++    const tree = []
++    const under = (names, prefix, direct) => {
++      if (!names.length) throw error('COMPILED_SOURCE_TYPE')
++      for (const name of names) {
++        const rest = !prefix
++          ? name
++          : name.startsWith(prefix + '/')
++            ? name.slice(prefix.length + 1)
++            : ''
++        if (!rest || name.startsWith('"') || (direct && rest.includes('/')))
++          throw error('COMPILED_SOURCE_TYPE')
++      }
++    }
+     const listTree = (prefix) => {
+       if (++pages > INSTALLED_IDENTITY_LIMITS.maxEntries)
+         throw error('COMPILED_SOURCE_LIMIT')
++      const literal = prefix ? ['--literal-pathspecs'] : []
+       const spec = prefix ? ['--', prefix] : []
++      let page
+       try {
+-        return command(
++        page = command(
+           [
+             ...git,
++            ...literal,
+             'ls-tree',
+             '-r',
+             '--format=%(objectmode) %(path)',
+@@ -368,10 +386,20 @@ export function buildCompiledReference({
+         row.stdoutDiscardedBytes = Buffer.byteLength(row.stdout)
+         row.stdout = ''
+       }
+-      const result = []
++      if (page) {
++        if (prefix)
++          under(
++            page.map((line) => line.slice(line.indexOf(' ') + 1)),
++            prefix,
++            false
++          )
++        for (const line of page) tree.push(line)
++        return
++      }
+       const children = command(
+         [
+           ...git,
++          ...literal,
+           'ls-tree',
+           '--format=%(objecttype) %(objectmode) %(path)',
+           commit,
+@@ -383,16 +411,25 @@ export function buildCompiledReference({
+       )
+         .split('\n')
+         .filter(Boolean)
+-      for (const line of children) {
+-        const type = line.slice(0, line.indexOf(' '))
+-        const rest = line.slice(type.length + 1)
+-        if (type === 'tree')
+-          result.push(...listTree(rest.slice(rest.indexOf(' ') + 1)))
+-        else result.push(rest)
+-      }
+-      return result
++        .map((line) => {
++          const a = line.indexOf(' '),
++            b = line.indexOf(' ', a + 1)
++          return {
++            type: line.slice(0, a),
++            mode: line.slice(a + 1, b),
++            name: line.slice(b + 1)
++          }
++        })
++      under(
++        children.map(({ name }) => name),
++        prefix,
++        true
++      )
++      for (const child of children)
++        if (child.type === 'tree') listTree(child.name)
++        else tree.push(child.mode + ' ' + child.name)
+     }
+-    const tree = listTree('')
++    listTree('')
+     if (pages > 1)
+       for (const row of commands.slice(listingRows))
+         if (row.stdout) {
+diff --git a/scripts/build-installed-reference.mjs b/scripts/build-installed-reference.mjs
+index 2f991346..08c1aa8a 100644
+--- a/scripts/build-installed-reference.mjs
++++ b/scripts/build-installed-reference.mjs
+@@ -163,15 +163,16 @@ function sourceDigest(root, files) {
+ }
+ 
+ // `sampling` is only the in-flight ceiling walk while npm runs: an entry that
+-// npm removes between readdir and lstat is skipped in that sample (it still
+-// counted as an entry). Every other walk, including the final inventory after
+-// npm, stays strict and refuses a vanished entry.
++// npm removes or replaces between readdir, lstat and readlink is skipped in
++// that sample (it still counted as an entry). Every other walk, including the
++// final inventory after npm, stays strict and refuses a vanished entry.
+ function allFiles(root, limits, digest = true, sampling = false) {
+   let entries = 0,
+     regularBytes = 0,
+     maxDepth = 0
+   const list = []
+-  const vanished = (error) => sampling && error?.code === 'ENOENT'
++  const vanished = (error) =>
++    sampling && ['ENOENT', 'ENOTDIR'].includes(error?.code)
+   const visit = (dir, depth) => {
+     maxDepth = Math.max(maxDepth, depth)
+     if (depth > limits.maxDepth) throw unavailable('REFERENCE_DEPTH_LIMIT')
+@@ -208,13 +209,16 @@ function allFiles(root, limits, digest = true, sampling = false) {
+             size: stat.size,
+             executableBits: stat.mode & 0o111
+           })
+-      } else if (stat.isSymbolicLink())
+-        list.push({
+-          path: path.relative(root, file),
+-          type: 'link',
+-          target: fs.readlinkSync(file)
+-        })
+-      else throw unavailable('REFERENCE_SPECIAL_FILE')
++      } else if (stat.isSymbolicLink()) {
++        let target
++        try {
++          target = fs.readlinkSync(file)
++        } catch (error) {
++          if (vanished(error)) continue
++          throw error
++        }
++        list.push({ path: path.relative(root, file), type: 'link', target })
++      } else throw unavailable('REFERENCE_SPECIAL_FILE')
+     }
+   }
+   visit(root, 0)
+@@ -437,36 +441,70 @@ export async function buildInstalledReference(options) {
+     // One owned process keeps the 8 MiB output cap of runOwnedProcess. A larger
+     // listing is paged per subtree, in git order, so the union is exactly
+     // `ls-tree -r` of the commit; a directory whose immediate children alone
+-    // exceed the cap stays refused. The SOURCE_LIMIT ceilings apply below.
++    // exceed the cap stays refused. A page is addressed by a literal pathspec
++    // (never pathspec magic) and must round-trip UTF-8, be non-empty and lie
++    // under its own prefix. The SOURCE_LIMIT ceilings apply below.
+     let pages = 0
+-    const listTree = async (prefix) => {
++    const pageLines = (buffer, prefix, direct) => {
++      const text = buffer.toString('utf8')
++      if (!Buffer.from(text, 'utf8').equals(buffer))
++        throw unavailable('SOURCE_PATH_INVALID')
++      const lines = text.split('\0').filter(Boolean)
++      if (!lines.length) throw unavailable('SOURCE_TREE_PAGE_INVALID')
++      for (const line of lines) {
++        const name = line.slice(line.indexOf('\t') + 1)
++        const rest = !prefix
++          ? name
++          : name.startsWith(prefix + '/')
++            ? name.slice(prefix.length + 1)
++            : ''
++        if (!rest || (direct && rest.includes('/')))
++          throw unavailable('SOURCE_TREE_PAGE_INVALID')
++      }
++      return lines
++    }
++    const listTree = async (prefix, out) => {
+       if (++pages > limits.maxEntries) throw unavailable('SOURCE_LIMIT')
+-      const spec = prefix ? ['--', prefix] : []
+       try {
+-        return [await git('ls-tree', '-r', '-l', '-z', commit, ...spec)]
++        const listing = prefix
++          ? await git(
++              '--literal-pathspecs',
++              'ls-tree',
++              '-r',
++              '-l',
++              '-z',
++              commit,
++              '--',
++              prefix
++            )
++          : await git('ls-tree', '-r', '-l', '-z', commit)
++        if (prefix) pageLines(listing, prefix, false)
++        out.push(listing)
++        return
+       } catch (error) {
+         if (error.code !== 'PROCESS_OUTPUT_LIMIT') throw error
+       }
+-      const children = await git(
+-        'ls-tree',
+-        '-l',
+-        '-z',
+-        commit,
+-        ...(prefix ? ['--', prefix + '/'] : [])
+-      )
+-      const result = []
+-      for (const line of children
+-        .toString('utf8')
+-        .split('\0')
+-        .filter(Boolean)) {
++      const children = prefix
++        ? await git(
++            '--literal-pathspecs',
++            'ls-tree',
++            '-l',
++            '-z',
++            commit,
++            '--',
++            prefix + '/'
++          )
++        : await git('ls-tree', '-l', '-z', commit)
++      for (const line of pageLines(children, prefix, true)) {
+         const match = /^\d{6} (\w+) [a-f0-9]{40}\s+\S+\t(.+)$/.exec(line)
+         if (!match) throw unavailable('SOURCE_TYPE_UNSUPPORTED')
+-        if (match[1] === 'tree') result.push(...(await listTree(match[2])))
+-        else result.push(Buffer.from(line + '\0', 'utf8'))
++        if (match[1] === 'tree') await listTree(match[2], out)
++        else out.push(Buffer.from(line + '\0', 'utf8'))
+       }
+-      return result
+     }
+-    const rawTree = Buffer.concat(await listTree(''))
++    const listed = []
++    await listTree('', listed)
++    const rawTree = Buffer.concat(listed)
+     const files = rawTree
+       .toString('utf8')
+       .split('\0')
+diff --git a/tests/b6-0234-reference-recipe.test.js b/tests/b6-0234-reference-recipe.test.js
+index 094b5cd2..c7f64f6b 100644
+--- a/tests/b6-0234-reference-recipe.test.js
++++ b/tests/b6-0234-reference-recipe.test.js
+@@ -663,6 +663,88 @@ test('RT02: a tree listing above the per-process output cap is paged and complet
+   }
+   walk(path.join(result.receipt.root, 'bulk'))
+   expect(copied.sort()).toEqual([...tracked].sort())
++  // Order and identity: the receipt digest equals the digest of the complete
++  // `ls-tree -r` listing with the recipe's own exclusion rule.
++  expect(result.receipt.recipe.sourceSha256).toBe(fullListingDigest(listing))
++}, 300000)
++
++function fullListingDigest(listing) {
++  const excludedParts = [
++    'node_modules',
++    'dist',
++    '.git',
++    '.ssh',
++    '.aws',
++    '.gnupg',
++    '.agent',
++    '.npm',
++    'coverage',
++    'test-results'
++  ]
++  const secret =
++    /^(\.env(?:\..*)?|\.netrc|\.npm-token|credentials(?:\..*)?|secrets?(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i
++  const entries = listing
++    .toString('utf8')
++    .split('\0')
++    .filter(Boolean)
++    .map((line) => {
++      const [, mode, oid, size, name] =
++        /^(\d{6}) blob ([a-f0-9]{40})\s+(\d+)\t(.+)$/.exec(line)
++      return { path: name, oid, mode, size: Number(size) }
++    })
++    .filter(
++      (entry) =>
++        !entry.path
++          .split('/')
++          .some((part) => excludedParts.includes(part) || secret.test(part))
++    )
++  return createHash('sha256').update(canonicalJson(entries)).digest('hex')
++}
++
++test('RT02: a magic-looking tree name never yields a silent partial receipt, paged or not', async () => {
++  // Unpaged control: the existing archive step already refuses such a name.
++  const small = fixture()
++  write(path.join(small.sourceRoot, ':small/plain.txt'), 'magic-looking')
++  git(small.sourceRoot, '--literal-pathspecs', 'add', '-f', '--', ':small')
++  git(small.sourceRoot, 'commit', '-qm', 'synthetic magic-looking name')
++  small.commit = git(small.sourceRoot, 'rev-parse', 'HEAD')
++  await refuses(small, {}, 'PROCESS_NONZERO')
++  // Paged: the page is addressed literally, so the same refusal follows
++  // instead of a receipt that silently drops the tree.
++  const f = fixture()
++  for (let i = 0; i < 26; i++)
++    deepFiles(f.sourceRoot, ':big/' + String(i).padStart(2, '0'), 17, 100)
++  write(path.join(f.sourceRoot, 'big/plain.txt'), 'plain sibling')
++  git(f.sourceRoot, '--literal-pathspecs', 'add', '-f', '--', ':big', 'big')
++  git(f.sourceRoot, 'commit', '-qm', 'synthetic magic-looking tree name')
++  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
++  const listing = execFileSync(
++    '/usr/bin/git',
++    ['ls-tree', '-r', '-l', '-z', f.commit],
++    {
++      cwd: f.sourceRoot,
++      env: referenceEnvironment(NODE),
++      maxBuffer: 64 * 1024 * 1024
++    }
++  )
++  expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
++  await refuses(f, {}, 'PROCESS_NONZERO')
++}, 300000)
++
++test('RT02: a paged child name that does not round-trip UTF-8 is refused', async () => {
++  const f = fixture()
++  for (let i = 0; i < 26; i++)
++    deepFiles(f.sourceRoot, 'bulk/' + String(i).padStart(2, '0'), 17, 100)
++  const odd = Buffer.concat([
++    Buffer.from(f.sourceRoot + '/nonutf8-'),
++    Buffer.from([0xff])
++  ])
++  fs.mkdirSync(odd)
++  fs.writeFileSync(Buffer.concat([odd, Buffer.from('/f.txt')]), 'x')
++  git(f.sourceRoot, 'add', '-f', '--', 'bulk', 'nonutf8-*')
++  git(f.sourceRoot, 'commit', '-qm', 'synthetic non-UTF-8 tree name')
++  f.commit = git(f.sourceRoot, 'rev-parse', 'HEAD')
++  await refuses(f, {}, 'SOURCE_PATH_INVALID')
+ }, 300000)
+ 
+ test('RT02: a directory whose immediate children alone exceed the cap stays refused', async () => {
+diff --git a/tests/b6-0236-compiled-provenance.test.js b/tests/b6-0236-compiled-provenance.test.js
+index 811f5f3e..6bddfcff 100644
+--- a/tests/b6-0236-compiled-provenance.test.js
++++ b/tests/b6-0236-compiled-provenance.test.js
+@@ -599,6 +599,22 @@ describe('SPEC0236 compiled recipe listing above the per-process buffer', () =>
+     // The receipt stays bound to its own evaluated root, never another one.
+     expect(load(fresh).status).not.toBe('PROVEN')
+   }, 300000)
++  it('RT02 lists a magic-looking tree name literally: its tracked link is still refused', () => {
++    const root = variant('evaluated-magic-listing')
++    for (let i = 0; i < 26; i++)
++      deepFiles(root, ':big/' + String(i).padStart(2, '0'), 17, 100)
++    fs.symlinkSync('/etc/passwd', path.join(root, ':big/link'))
++    write(root, 'big/plain.txt', 'plain sibling')
++    run(
++      ['/usr/bin/git', '--literal-pathspecs', 'add', '-f', '--', ':big', 'big'],
++      root
++    )
++    const { head, listing } = recommit(root, 'big')
++    expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
++    expect(() => compile(root, head, 'fresh-magic-listing')).toThrow(
++      /COMPILED_SOURCE_TYPE/
++    )
++  }, 300000)
+   it('RT02 still refuses a directory whose immediate children exceed the buffer', () => {
+     const root = variant('evaluated-wide-listing')
+     deepFiles(
+-- 
+2.43.0
+

@@ -1,0 +1,50 @@
+{
+  "round": "R1",
+  "critic": "subagente crítico novo (general-purpose, não-fork), somente leitura; escrita só no scratchpad próprio da sessão",
+  "subject": "working tree do worktree /mnt/dados/cvg-work/cvg-hiso005-port-main-20261019 sobre 3704e3f8, antes do commit",
+  "verdict": "APPROVE",
+  "findings": [
+    {
+      "id": "R1-P3-01",
+      "severity": "P3",
+      "path": "docs/04_audit/evidence/HISO005-P2-PORT-TO-MAIN-20261019/",
+      "claim": "The port's evidence folder holds only port-plan.json, which still says status PLANNED_BEFORE_EDIT. There is no record yet of the post-apply state: byte checks, the focalDefault run, test:boundary:native, or the gates in verificationPlan.",
+      "evidence": "ls of the folder shows only port-plan.json. verificationPlan lists focalDefault (13 files, including b6-0241 and the pare100 tests), focalNative, and the gates prettier/lint/typecheck/docs:check-links/security-scan-config/evidence-hygiene/gitleaks.",
+      "requiredAction": "Before committing, record an apply receipt with the sha256 values checked here, plus the results of focalDefault and test:boundary:native, as the plan says. This does not block the semantics of the port."
+    }
+  ],
+  "checks": [
+    {
+      "id": "V1",
+      "result": "PASS",
+      "evidence": "I compared blob ids (git rev-parse / hash-object) and checked sha256 of the working tree against git cat-file. For the APPLY paths from 228e7918, main has the same blob as af63 and the working tree has the approved blob: engine e770337a0bac→3f337133f78a (sha b9246972c4e2), checker 01b12ee7b96a→07da1fde0e33 (14ab9a8b941f), 0236-boundary-integration 5a57e72fd902→af045f21ac7b (f9bf0e28af70), 0237 5d36805af852→858289051d13 (50cae961b73d), 0240 613148b8e28c→e4a48070cdf9 (66ac36bb7f65). For the APPLY paths from d6203875, main and af63 and 228e all have the same blob: build-installed-reference ca54d93f86ea→08c1aa8a7612 (70f6c43a788a), compiled 39c7a9835f6b→2c4aaeb16abc (dd006347388d). ADD: b6-0241 is absent in af63 and in main; the working tree has 23e836f712c0 (105ff6c50c68). MIGRATE: main's *.integration.js equals the af63/228e .test.js blob (80096f929e70, e4c07864568a), and the working tree equals the d6203875 .test.js blob (c7f64f6b538e sha 8b5534a14ef7; 6bddfcff9bd8 sha ddc42f29abc5). The old .test.js files are ABSENT. git diff --summary shows no mode change. The index is clean. Lineage is af63→228e→a5b8→d620 (each parent checked). The T2 review-r2 says APPROVE with head d6203875."
+    },
+    {
+      "id": "V2",
+      "result": "PASS",
+      "evidence": "I reran git merge-file -p ours(main) base(af63) theirs(228e) in the scratchpad: rc=0 with no conflicts, and cmp shows the result is identical to the working-tree file. Both diffs survive intact: the changed lines ours→wt equal those of base→theirs, and theirs→wt equal those of base→ours (cmp OK). Counts: expect( 132 base / 136 main / 136 wt; it( 50/50/50; skip/only/todo/runIf 0. The two main-side asserts removed by the approved delta in 0236-boundary-integration are equivalent reformulations. The negative-caller test ('rejects the actual caller runtime…') uses fixture() with installed=[], so matchRecord/collectPackageInventory does not take part. The mechanism is unchanged in v4: in the parent, runSemanticBoundary→checkTCB() compares sha of realpath(process.execPath) with NODE_SHA and throws UNKNOWN_TOOLCHAIN_RUNTIME before the census or worker. The only 228e hunk in checkTCB adds installedIdentitySha256/premise to the profile after that comparison. empty() keeps the tuple {reason} and only adds phases/bodyCoverage/installedFileIdentity=null. The trailered copy is still Node 22.23.2 with a different sha, so the engine refuses it the same way. collectPackageInventory exists in boundary-installed-identity.mjs, whose blob is the same in af63 and main (b32c38a39782)."
+    },
+    {
+      "id": "V3",
+      "result": "PASS",
+      "evidence": "I grepped the added lines of git diff 3704e3f8 and the 5 default-profile tests for /home/, /mnt/, .nvm, v24., ricardo and cvg-work: no hits. The only remaining hit is CVG_NEGATIVE_NODE, which is main's own optional override. b6-0241 is collected by 'tests/**/*.test.js'. It spawns only the pinned Node (pinnedToolchainLocation) together with the engine/checker and the parser. It uses no git, tar, strace, build-installed-reference or buildCompiledReference. Its compiled inputs are synthetic records handed straight to the engine. Case I1 runs the checker without --compiled-build-reference, so the compiled toolchain()/AUX pins are never reached. boundary-installed-identity.mjs and check-product-boundary.mjs contain no rev-parse, ls-tree, tar or strace calls. b6-0241 has the same Node22/NODE_SHA precondition as b6-0236-semantic-engine, which main keeps in the default profile."
+    },
+    {
+      "id": "V4",
+      "result": "PASS",
+      "evidence": "vitest.boundary-native.config.mts includes only the two *.integration.js (passWithNoTests=false). tests/vitest-hermetic.test.ts asserts exactly that list and that both are absent from the default collection. Neither file was changed by the port. Grepping outside docs/ and certification/ for 'reference-recipe.test' or 'compiled-provenance.test' finds nothing. The only remaining references are the native config and the hermetic test, both using the .integration.js names. The integration files contain no self-reference: they have no import.meta, no __filename and no 'tests/b6-' or '.test.js' strings. ownedRunParent('b6-0234-runner') is a run label, not a filename. No code reads boundary-native-renames.json or pins the old sha of those tests."
+    },
+    {
+      "id": "V5",
+      "result": "PASS",
+      "evidence": "git status and git diff 3704e3f8 outside the evidence folders touch exactly the 11 code paths (10 M plus 1 untracked). The only other untracked items are the three evidence folders. No staged changes. Removed lines in scripts/ with limit, timeout, pin or MiB terms: only the approved signature/argument changes (allFiles(...,sampling), empty(SEMANTIC_LIMITS) → early with phases). No teto/pin/NODE_SHA/AUX is touched. In the tests, expect and it counts are kept or increased in every file (0234 integration 47→57 expect; 0236 compiled 20→27 expect and 15→18 it), with 0 skips. Main's beforeAll in semantic-engine stays intact (realpath, distinct sha, real --version execution). No code anywhere pins the sha of the changed scripts."
+    },
+    {
+      "id": "V6",
+      "result": "PASS",
+      "evidence": "I ran git grep for consumers (engine, checker, compiled, installed-identity, resolution, kernelVersion, boundary:products) in main, excluding docs/ and certification/: 23 files. All of them except package.json, the two renames and semantic-engine have the same blob in af63 and main: pare100-compiled-kernel, pare100-sdk, product-boundary, b6-0228, b6-0234-boundary-integration, b6-0234-installed-identity, b6-0237-resolution-helper, tests/fixtures/b6-0237-d8-checker/*, boundary-manifests. None of them uses --semantic or runSemanticBoundary. The checker loads the engine only on semantic opt-in, and the checker delta touches only the semantic path. The pare100 tests read and copy the checker without semantic mode. The package.json diff adds only scripts (test:boundary:native and others), and .github/ci-bar do not invoke the engine. In the BUILD0241 certify-r1 run at 228e (testScope all), the unit stage shows 6551 passed and 1 failed, and the failure is unrelated: security-scan-config. The focal run at 228e covered b6-* and product-boundary. The port plan adds pare100 and the hermetic test to focalDefault."
+    }
+  ],
+  "notes": "I found no mandatory issues. The port is byte-faithful: 10 paths match the approved delta exactly, and the merge is reproducible with both semantics intact. The T2 regression now runs only in the native profile, as main decided, so hosted CI does not exercise it; it remains local evidence of the native profile. b6-0241 is heavy (spawn timeout 600 s, I1 test 300 s) and enters the default collection, so CI must have Node 22.23.2 with the pinned sha, just as b6-0236-semantic-engine already requires. Under the read-only scope, I ran no tests, so this is static analysis only. The only file I wrote was the temporary merge output in the session scratchpad (critic-r1/).",
+  "leadDisposition": "R1-P3-01 aceito: o recibo de aplicação, os testes focais (padrão e nativo), os gates e o gitleaks ficam em apply-receipt.json, focal-*.json, gates.json e secret-scan.json desta pasta antes do commit. Sem obrigatórios; não há rodada R2."
+}

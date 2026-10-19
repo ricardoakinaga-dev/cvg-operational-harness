@@ -1,0 +1,50 @@
+HISO005-P2-REFERENCE-RECIPE-T2-20261019 — crítico R1 (novo, não-fork)
+Fonte: a5b8a888 (base 228e7918). Contrato: review-r1-contract.json (c6ffbf1b0cd3...).
+
+VEREDITO: REVISE (2 obrigatórios P2, 4 opcionais P3)
+TRILHA: T2 se sustenta. Nenhum valor de teto muda e nenhum contrato congelado
+(0234/0236/0240/0241) muda. Sem paginação as duas receitas são idênticas à base,
+medido fisicamente. F2 atua só na amostragem durante o npm. A compactação do log
+atinge só as linhas de ls-tree e o leitor não mudou. Os dois achados são defeitos
+de correção que se resolvem em T2.
+
+OBRIGATÓRIOS
+R1-01 (P2): página endereçada por pathspec reconstruído; página vazia ou errada é
+  aceita em silêncio. Um nome de topo com ':' é lido como "magia" de pathspec do
+  git (`-- :big` lista `big/`). Na receita instalada, um nome não UTF-8 vira U+FFFD.
+  Resultado: recusa que vira sucesso incompleto. A receita instalada publicou
+  recibo omitindo 2.601 arquivos rastreados e o symlink `:big/link`, quando os
+  mesmos nomes sem paginação são recusados. Com nome não UTF-8: sem paginação
+  ENOENT, com paginação BUILT omitindo 2.600 arquivos. A compilada fez BUILT com
+  `:big/link -> /etc/passwd` no snapshot e o leitor deu PROVEN. A árvore real não
+  tem esses nomes. Correção: `git --literal-pathspecs` (ou `:(literal)`), recusar
+  nome sem round-trip UTF-8, exigir página não vazia e linhas sob `prefix/`.
+  Provas: raw/p2-pathspec.txt, raw/p3-installed-colon.json,
+  raw/p3-installed-nonutf8*.json e raw/p4-compiled-colon*.json.
+R1-02 (P2): `result.push(...listTree(child))` (compilada :390, instalada :464)
+  estoura a pilha acima de ~125 mil elementos (Node 22: 125.315). Uma árvore
+  válida de 132.610 entradas, abaixo do teto de 200.000, termina em
+  COMPILED_BUILD_UNAVAILABLE (RangeError). Na árvore real o maior spread é docs,
+  com 80.058 linhas: a receita compilada quebra com cerca de 45 mil arquivos a mais.
+  Correção: laço de push ou acumulador. Provas: raw/p1-spread-limit.json,
+  raw/p4-compiled-spread.json e raw/p4b-spread-inprocess.json.
+
+OPCIONAIS (P3)
+O1: readlinkSync (:215) e ENOTDIR não são tolerados na amostragem (resíduo fechado).
+O2: sem teto incremental durante a paginação; a memória chega a páginas x 8 MiB
+    antes de SOURCE_LIMIT.
+O3: os testes novos não fixam ordem/digest nem os nomes problemáticos; a ordem
+    foi provada por sonda (raw/p3-installed-order.json).
+O4: janela preexistente de listagem sem paginação perto de 8 MiB que deixa
+    commands.json acima do teto do leitor.
+
+CONFIRMADO
+Diff restrito aos 4 caminhos, com hashes iguais ao source-freeze. Nenhum assert
+antigo mudou. Vitest focal 53/53, zero skips (com --no-cache, cache e status da
+candidata intactos). Ordem e completude com nomes comuns estão iguais ao
+ls-tree -r. A recusa de diretório cujos filhos imediatos passam do teto segue
+valendo. A varredura final, revalidate e a comparação continuam estritas.
+
+NÃO JULGADO
+RT06/RT07 (referências reais em andamento pelo líder), focal B6 816, lint, e
+os itens de gate T2 da D-12 (npm test/PG/E2E).

@@ -11,6 +11,7 @@ import {
   SEMANTIC_LIMITS
 } from '../scripts/boundary-semantic-engine.mjs'
 import {
+  collectPackageInventory,
   fingerprintToolchain,
   pinnedToolchainLocation
 } from '../scripts/boundary-installed-identity.mjs'
@@ -129,6 +130,29 @@ function origin(
 }
 const reflect =
   'const data = {x: 3}; const descriptor = Object.getOwnPropertyDescriptor(data, "x"); export const answer = descriptor.value;'
+// SPEC0241 D2 (registered migration): a synthetic MATCH premise also carries
+// the 0234 reference inventory of the physical package, read when the input
+// is serialized, exactly what the checker supplies for a MATCH package.
+function matchRecord(root, key, referenceDigest = 'a'.repeat(64)) {
+  const read = () => collectPackageInventory(path.join(root, key))
+  return {
+    key,
+    manifest: key + '/package.json',
+    identityStatus: 'MATCH',
+    referenceDigest,
+    get inventorySha256() {
+      return read().inventorySha256
+    },
+    get inventory() {
+      const inventory = read()
+      return {
+        entries: inventory.entries,
+        nestedPackages: inventory.nestedPackages,
+        usage: inventory.usage
+      }
+    }
+  }
+}
 function depFixture() {
   const input = fixture(
     'import {answer} from "closed"; export const result = answer;',
@@ -139,14 +163,7 @@ function depFixture() {
         'const data={x:42}; export const answer=Object.getOwnPropertyDescriptor(data,"x").value;'
     }
   )
-  input.installed = [
-    {
-      key: 'node_modules/closed',
-      manifest: 'node_modules/closed/package.json',
-      identityStatus: 'MATCH',
-      referenceDigest: 'a'.repeat(64)
-    }
-  ]
+  input.installed = [matchRecord(input.root, 'node_modules/closed')]
   return input
 }
 
@@ -497,14 +514,7 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
         'node_modules/closed/index.js': 'export const answer=42;'
       }
     )
-    input.installed = [
-      {
-        key: 'node_modules/closed',
-        manifest: 'node_modules/closed/package.json',
-        identityStatus: 'MATCH',
-        referenceDigest: 'a'.repeat(64)
-      }
-    ]
+    input.installed = [matchRecord(input.root, 'node_modules/closed')]
     const out = runSemanticBoundary(input)
     expect(out.status).toBe('PROVEN')
     fs.writeFileSync(
@@ -602,14 +612,7 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
         '{"name":"products","type":"module","exports":"./index.js"}',
       'node_modules/products/index.js': 'export const x=42;'
     })
-    input.installed = [
-      {
-        key: 'node_modules/products',
-        manifest: 'node_modules/products/package.json',
-        identityStatus: 'MATCH',
-        referenceDigest: 'a'.repeat(64)
-      }
-    ]
+    input.installed = [matchRecord(input.root, 'node_modules/products')]
     expect(runSemanticBoundary(input).status).toBe('PROVEN')
   })
   it('requires MATCH independently for the actual nested runtime dependency', () => {
@@ -629,12 +632,7 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
       'export const x=42;'
     )
     expect(runSemanticBoundary(input).status).toBe('UNKNOWN')
-    input.installed.push({
-      key,
-      manifest: key + '/package.json',
-      identityStatus: 'MATCH',
-      referenceDigest: 'b'.repeat(64)
-    })
+    input.installed.push(matchRecord(input.root, key, 'b'.repeat(64)))
     const out = runSemanticBoundary(input)
     expect(out.status).toBe('PROVEN')
     expect(out.installed.every((x) => x.proofIds.length > 0)).toBe(true)
@@ -649,14 +647,7 @@ describe('BUILD0236 semantic kernel: physical proofs, never execute targets', ()
         'node_modules/closed/index.js': 'module.exports=42;'
       }
     )
-    input.installed = [
-      {
-        key: 'node_modules/closed',
-        manifest: 'node_modules/closed/package.json',
-        identityStatus: 'MATCH',
-        referenceDigest: 'a'.repeat(64)
-      }
-    ]
+    input.installed = [matchRecord(input.root, 'node_modules/closed')]
     const out = runSemanticBoundary(input)
     expect(out.status).toBe('PROVEN')
     expect(out.installed[0].proofIds.length).toBeGreaterThan(0)

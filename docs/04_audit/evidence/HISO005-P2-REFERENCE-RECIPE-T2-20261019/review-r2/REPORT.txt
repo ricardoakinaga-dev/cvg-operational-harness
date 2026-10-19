@@ -1,0 +1,48 @@
+HISO005-P2-REFERENCE-RECIPE-T2-20261019 — crítico R2 (final; novo, não-fork)
+Fonte: d6203875af13 (anterior a5b8a888, base 228e7918). Contrato: review-r2-contract.json (d0d9568f16de..., conferido).
+
+VEREDITO: APPROVE (0 obrigatórios, 4 opcionais P3)
+TRILHA: T2 se sustenta.
+- Só os 4 caminhos mudam. As fontes congeladas têm bytes iguais à base.
+- Nenhum teto muda de valor. O leitor compilado tem o mesmo hash da base. recipeVersion e o formato dos recibos são os mesmos.
+- Sem paginação, as chamadas ficam idênticas, medido fisicamente: o argv da instalada é igual em 228e7918, a5b8a888 e d6203875, e o commands.json da compilada é idêntico após normalização contra a base e contra a5b8a888.
+- --literal-pathspecs aparece só onde há pathspec.
+
+R1-01: CORRIGIDO
+- As páginas usam pathspec literal e são validadas (não vazias, sob o próprio prefixo, UTF-8 na instalada, sem nome citado na compilada).
+- No formato do teste final, a5b8a888 dá BUILT omitindo 2.600 arquivos; d6203875 recusa.
+- ':big' com symlink é recusado com o mesmo código, paginado ou não (SOURCE_LINK_UNSUPPORTED na instalada, COMPILED_SOURCE_TYPE na compilada).
+- Nome não UTF-8 é recusado nos três formatos.
+- Na compilada, ':big' só com arquivos regulares dá BUILT com leitor PROVEN e listagem igual ao ls-tree -r.
+
+R1-02: CORRIGIDO
+- Nenhum push(...) restante.
+- A fixture de 132.610 entradas (130.000 numa única página) agora dá BUILT com leitor PROVEN.
+
+CRITÉRIOS DO R1 NA FONTE ATUAL
+- Página igual ao ls-tree -r: a reconstrução das páginas capturadas é igual, byte a byte e na ordem, à listagem completa em todos os casos sintéticos.
+- Árvore real 228e7918: a receita compilada atual, executada até antes do archive, reproduz as 81.607 linhas na ordem, passa na checagem de tipo e confere os 162 digests de página.
+- O recibo instalado do líder (r2, construído com d6203875) tem sourceSha256 igual ao digest que calculei de forma independente da listagem completa.
+- Recusas preservadas.
+- A amostragem tolerante é chamada só durante o npm (:657); a varredura final, revalidate e sourceDigest seguem estritos.
+- Leitor compilado intacto.
+- Vitest focal 56/56, zero skips, candidata intacta.
+
+OPCIONAIS (P3, não bloqueiam)
+O1: subárvore vazia (só por plumbing) num diretório paginado é recusada, enquanto sem paginação dá BUILT. O desvio é fechado; a árvore real não tem nenhuma.
+O2: r1-fix-decision atribui a recusa a PROCESS_NONZERO, mas o código depende do conteúdo: o archive pode sair 0 e a recusa vir como ENOENT no snapshot, ou como SOURCE_LINK_UNSUPPORTED. Ajustar a redação.
+O3: a primeira falha das correções de R1 foi registrada com bytes intermediários do teste 0234. O vermelho da versão final foi reproduzido aqui por sonda.
+O4: a tolerância a readlink/ENOTDIR na amostragem não tem teste próprio.
+
+O2/O4 DO R1 (não aplicados; julgados só como registro): os dois registros são aceitáveis.
+- O2: a memória acumulada fica perto do tamanho da listagem completa (cerca de 15,6 MB real), não páginas × 8 MiB.
+- O4: janela preexistente e fechada. Mudá-la alteraria o caminho sem paginação, e a árvore real pagina e é compactada.
+
+NÃO JULGADO
+- RT06/RT07: compiled-reference-r2 e a medição do líder.
+- Focal B6 de 819 testes, lint/prettier.
+- Gate T2 da D-12 (npm test, test:postgres, E2E).
+- Árvores forjadas inválidas.
+- Semântica preexistente do pathspec do git archive para nomes com magia ou glob.
+
+Higiene: `git status` sem GIT_OPTIONAL_LOCKS em eval-228e/candidata (pode só atualizar o cache de stat do índice). O vitest atualizou a mtime de node_modules/.vite-temp. Detalhes em review.json/hygiene.

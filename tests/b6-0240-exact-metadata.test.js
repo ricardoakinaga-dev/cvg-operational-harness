@@ -25,7 +25,7 @@ const ENGINE = path.resolve(
 )
 const PARENT = ownedRunParent('b6-0240-metadata')
 const PROFILE = 'node22-linux-exact-metadata-v1'
-const KERNEL = 'semantic-kernel-v3-exact-metadata'
+const KERNEL = 'semantic-kernel-v4-integral-body'
 const roots = [],
   sessions = []
 const env = {
