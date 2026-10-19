@@ -1,0 +1,154 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: ux-accessibility.spec.ts >> switching tenant clears the previous identity data
+- Location: tests/e2e/ux-accessibility.spec.ts:166:5
+
+# Error details
+
+```
+TimeoutError: locator.fill: Timeout 10000ms exceeded.
+Call log:
+  - waiting for getByLabel('ID do operador')
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]: "[plugin:vite:import-analysis] Failed to resolve import \"@cvg/shared\" from \"apps/web/src/features/journeys/index.tsx\". Does the file exist?"
+  - generic [ref=e5]: /tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/index.tsx:2:31
+  - generic [ref=e6]: "1 | import { useEffect, useRef, useState } from \"react\"; 2 | import { createDomainId } from \"@cvg/shared\"; | ^ 3 | import { apiClient } from \"../../api/client.ts\"; 4 | var _jsxFileName = \"/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/apps/web/src/features/journeys/in..."
+  - generic [ref=e7]: at TransformPluginContext._formatLog (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31147:39) at TransformPluginContext.error (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:31144:14) at normalizeUrl (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28083:18) at async file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28153:30 at async Promise.all (index 1) at async TransformPluginContext.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:28119:4) at async EnvironmentPluginContainer.transform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:30932:14) at async loadAndTransform (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:20671:26) at async viteTransformMiddleware (file:///tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate/node_modules/vite/dist/node/chunks/node.js:25205:20)
+  - generic [ref=e8]:
+    - text: Click outside, press Esc key, or fix the code to dismiss.
+    - text: You can also disable this overlay by setting
+    - code [ref=e9]: server.hmr.overlay
+    - text: to
+    - code [ref=e10]: "false"
+    - text: in
+    - code [ref=e11]: vite.config.mts
+    - text: .
+```
+
+# Test source
+
+```ts
+  1   | import AxeBuilder from '@axe-core/playwright'
+  2   | import { expect, test } from '@playwright/test'
+  3   | 
+  4   | async function fillIdentity(
+  5   |   page: import('@playwright/test').Page,
+  6   |   operatorId: string,
+  7   |   tenantId: string,
+  8   |   role = 'Operator'
+  9   | ) {
+> 10  |   await page.getByLabel('ID do operador').fill(operatorId)
+      |                                           ^ TimeoutError: locator.fill: Timeout 10000ms exceeded.
+  11  |   await page.getByLabel('Papel operacional').selectOption(role)
+  12  |   await page.getByLabel('Tenant ID').fill(tenantId)
+  13  | }
+  14  | 
+  15  | test('axe finds no serious or critical violations on identity and console views', async ({
+  16  |   page
+  17  | }) => {
+  18  |   await page.setViewportSize({ width: 1440, height: 900 })
+  19  |   await page.goto('/', { waitUntil: 'networkidle' })
+  20  |   const identityResults = await new AxeBuilder({ page })
+  21  |     .withTags(['wcag2a', 'wcag2aa'])
+  22  |     .analyze()
+  23  |   expect(
+  24  |     identityResults.violations.filter((violation) =>
+  25  |       ['serious', 'critical'].includes(violation.impact ?? '')
+  26  |     ),
+  27  |     JSON.stringify(identityResults.violations.map((v) => v.id))
+  28  |   ).toEqual([])
+  29  | 
+  30  |   await fillIdentity(
+  31  |     page,
+  32  |     'operator.axe',
+  33  |     'tenant_00000000-0000-4000-8000-000000000a11'
+  34  |   )
+  35  |   await expect(
+  36  |     page.getByRole('heading', { name: 'CVG Agent Secretary' })
+  37  |   ).toBeVisible()
+  38  |   const consoleResults = await new AxeBuilder({ page })
+  39  |     .withTags(['wcag2a', 'wcag2aa'])
+  40  |     .analyze()
+  41  |   expect(
+  42  |     consoleResults.violations.filter((violation) =>
+  43  |       ['serious', 'critical'].includes(violation.impact ?? '')
+  44  |     ),
+  45  |     JSON.stringify(consoleResults.violations.map((v) => v.id))
+  46  |   ).toEqual([])
+  47  | })
+  48  | 
+  49  | test('keyboard-only operators reach, activate and see focus on key controls', async ({
+  50  |   page
+  51  | }) => {
+  52  |   await page.setViewportSize({ width: 1440, height: 900 })
+  53  |   await page.goto('/', { waitUntil: 'networkidle' })
+  54  |   await page.keyboard.press('Tab')
+  55  |   const focused = await page.evaluate(() => {
+  56  |     const element = document.activeElement
+  57  |     return {
+  58  |       tag: element?.tagName,
+  59  |       role: element?.getAttribute('role'),
+  60  |       label:
+  61  |         element?.getAttribute('aria-label') ??
+  62  |         element?.textContent?.trim().slice(0, 80)
+  63  |     }
+  64  |   })
+  65  |   expect(focused.tag).toBeTruthy()
+  66  |   const skipLink = page.getByRole('link', {
+  67  |     name: 'Pular para o console operacional'
+  68  |   })
+  69  |   await skipLink.focus()
+  70  |   await expect(skipLink).toBeFocused()
+  71  |   await skipLink.press('Enter')
+  72  |   await expect(page.locator('#console-operacional')).toBeFocused()
+  73  |   const operatorInput = page.getByLabel('ID do operador')
+  74  |   await operatorInput.focus()
+  75  |   await expect(operatorInput).toBeFocused()
+  76  |   await page.keyboard.type('operator.keyboard', { delay: 10 })
+  77  |   await expect(operatorInput).toHaveValue('operator.keyboard')
+  78  | })
+  79  | 
+  80  | test('empty, loading, error and overflow states stay comprehensible', async ({
+  81  |   page
+  82  | }, testInfo) => {
+  83  |   await page.setViewportSize({ width: 375, height: 812 })
+  84  |   // Loading: block the API without responding; a loading status appears.
+  85  |   await page.route('**/v1/conversations**', () => undefined)
+  86  |   await page.goto('/', { waitUntil: 'domcontentloaded' })
+  87  |   await fillIdentity(
+  88  |     page,
+  89  |     'operator.states',
+  90  |     'tenant_00000000-0000-4000-8000-000000000a12'
+  91  |   )
+  92  |   await expect(page.getByRole('status').first()).toContainText('Carregando')
+  93  |   // Error: fail every API call; an alert renders instead of a blank crash.
+  94  |   await page.unroute('**/v1/conversations**')
+  95  |   await page.route('**/v1/**', (route) =>
+  96  |     route.fulfill({
+  97  |       status: 500,
+  98  |       contentType: 'application/json',
+  99  |       body: JSON.stringify({
+  100 |         success: false,
+  101 |         data: null,
+  102 |         error: { code: 'internal_error', message: 'synthetic outage' },
+  103 |         meta: { correlationId: 'corr_synthetic_outage' }
+  104 |       })
+  105 |     })
+  106 |   )
+  107 |   await page.reload({ waitUntil: 'networkidle' })
+  108 |   await fillIdentity(
+  109 |     page,
+  110 |     'operator.states',
+```

@@ -1,0 +1,318 @@
+{
+  "round": "R1",
+  "specSha256": "55a3de340ad5083d9ca97253ed5316c22be1a3a959a31e47773be29f8f43c0ba",
+  "verdict": "REVISE",
+  "required": [
+    {
+      "id": "R1-01",
+      "severity": "P2",
+      "section": "§3.1 (D1, conjunto fechado de motivos contidos)",
+      "finding": "A SPEC descreve o conjunto contido por categorias e deixa a enumeração para o BUILD. Com isso, a fronteira com os erros globais fica ambígua e omite um caso que a própria recon exercita. (a) O helper registra a violação e depois lança UNKNOWN_PRODUCT_TARGET. Esse motivo não cabe em nenhuma categoria listada, então continuaria no catch externo: a fase de corpo seguiria parando no primeiro alvo de produto descoberto no corpo, e as violações seguintes ficariam ocultas. Não há falso PASS, porque o status já é FAIL, mas o multiset de violações e a cobertura ficam truncados. (b) \"aquisição\" (contida) e \"mutação\" (global) se sobrepõem. O helper lança UNKNOWN_INPUT_MUTATION durante leituras de aquisição e UNKNOWN_ACQUISITION_<errno> com sufixo aberto. UNKNOWN_RESOLUTION_LIMIT:* (maxLinks, maxOpenDescriptors, maxWorkspaces) não aparece nem como \"limite de análise\" nem como motivo por aresta. Também ficam sem classificação UNKNOWN_RESOLUTION, UNKNOWN_PATH, UNKNOWN_INVALID_MANIFEST, UNKNOWN_CJS_FILE_PACKAGE, UNKNOWN_PACKAGE_*, UNKNOWN_TARGET_URL, UNKNOWN_BLOCKED_EXPORT, UNKNOWN_EXPORTS_DEPTH, UNKNOWN_EXACT_EXPORTS_TARGET, UNKNOWN_LINK_FORMAT e UNKNOWN_METADATA_ENCODING. Não há risco de falso PROVEN, porque toda contenção registra UNKNOWN. Mas essa classificação decide a cobertura declarada e as violações encontradas, e por isso é decisão T3 que não pode ficar para o BUILD.",
+      "evidence": [
+        "scripts/boundary-semantic-resolution.mjs:845-847 (product(file, from) seguido de fail('UNKNOWN_PRODUCT_TARGET', file))",
+        "scripts/boundary-semantic-resolution.mjs:188 (fail('UNKNOWN_ACQUISITION_' + code, file), sufixo errno aberto); scripts/boundary-semantic-resolution.mjs:403,407,426,528 (UNKNOWN_INPUT_MUTATION durante leitura); scripts/boundary-semantic-resolution.mjs:544,555 (UNKNOWN_RESOLUTION_LIMIT:maxLinks)",
+        "Controle privado X1 no engine congelado (/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json): b.mjs com import(m.p) e import(m.q) visíveis só no corpo, mais c.mjs com import(n.r), dá status VIOLATION com 1 violação (products/x.mjs), unknown (products/x.mjs, UNKNOWN_PRODUCT_TARGET) e states=7; products/y.mjs e products/z.mjs não aparecem",
+        "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261018/body-controls.json: o controle C6 também mostra (products/x.mjs, UNKNOWN_PRODUCT_TARGET) vindo do catch externo",
+        "SPEC linhas 57 e 61 (lista por categorias; \"O BUILD enumera esse conjunto a partir do código antes de editar\")"
+      ],
+      "requiredChange": "Enumerar na própria SPEC a lista fechada exata: os motivos lançados por resolve() do engine e por fail() do helper, cada um classificado como por aresta ou global. Incluir UNKNOWN_PRODUCT_TARGET como contido depois do registro da violação. Classificar explicitamente UNKNOWN_RESOLUTION_LIMIT:* e as mutações lançadas durante a aquisição. Acrescentar a IB03/IB04 o par com várias arestas de produto só no corpo, no mesmo módulo e em módulos distintos: na v4 aparecem todas as violações; a v3 congelada mostra só a primeira, preservada como primeira falha."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "section": "§3.2 (D1, prazo e margem) e §6",
+      "finding": "O prazo não é compatível com a arquitetura real do worker, e o objetivo declarado (\"impedir que o corte do corpo faça o pai trocar toda a fronteira por empty()\") não é alcançável como especificado. (1) O worker se valida recomputando a análise inteira: validateSemanticBoundary roda analyzeSemanticBoundary(input) de novo e compara o payload sem telemetria. Qualquer divergência leva o pai a lançar UNKNOWN_INVALID_WORKER_RESULT e a substituir tudo por empty(). Um corte por relógio não é determinístico: as duas passagens param em pontos diferentes, os contadores divergem, e o resultado é o próprio empty(). (2) O census de recusas roda antes, com o mesmo prazo, e pela §3.5 passará a percorrer o corpo integral. São três passagens de corpo (census, análise e recomputação) num único orçamento de 120 s. Estimativa a partir da telemetria selada: census 15,1 s e total 52,3 s com o corpo parado em 7 módulos, cerca de 18,6 s por passagem do worker. A margem de 20 s não cobre nem a aquisição da recomputação. (3) Passar o orçamento restante por input.limits altera out.limits, que entra no payload comparado entre normal e strict e na recomputação. (4) Com margem, a primeira passagem tem menos tempo que a v3 para encontrar violações num corpo sem aresta que lança, e \"multiset v3 ⊆ v4\" deixa de valer por construção sob corte por tempo. Sempre que houver corte por tempo, IB05 e IB09 (\"normal/strict iguais\") entram em conflito. A 0237 exige normal/strict idênticos \"sem timeout\" e mantém a recomputação no worker.",
+      "evidence": [
+        "scripts/boundary-semantic-engine.mjs:1601-1611 (comparable() remove só telemetry/validation; no worker, validateSemanticBoundary chama analyzeSemanticBoundary(input))",
+        "scripts/boundary-semantic-engine.mjs:1844 (output.validation = validateSemanticBoundary(input, output) no worker)",
+        "scripts/boundary-semantic-engine.mjs:1776-1780 e 1800-1804 (validation inválida -> UNKNOWN_INVALID_WORKER_RESULT -> output = empty(...))",
+        "scripts/boundary-semantic-engine.mjs:1724-1756 (census e worker compartilham um prazo: timeout = limits.timeoutMs - decorrido)",
+        "scripts/boundary-semantic-engine.mjs:204 (out = empty(limits, '') leva limits ao payload)",
+        "docs/04_audit/evidence/HISO005-P2-BUILD-0240-20261018/real-postcert-normal-report.json.gz semanticTelemetry: elapsedMs 52317.7, negativeCensusElapsedMs 15095.2; usage.states=7",
+        "docs/02_spec/0237_b6_runtime_resolution_profile.md: \"Worker recomputa os passos...\" e \"Normal/strict precisam de payload semântico idêntico ... sem timeout\"",
+        "SPEC linhas 67, 95 (census recebe a mesma contenção), 139 (IB05) e 143 (IB09)"
+      ],
+      "requiredChange": "Especificar um corte determinístico, por contador e não por relógio, ou explicar como a recomputação reproduz o mesmo ponto de corte. Definir a divisão do orçamento entre census, análise e recomputação e o canal pelo qual o prazo chega ao worker sem entrar no payload comparado. Dizer o que vale para normal/strict e para a conservação de violações quando houver corte por tempo. Acrescentar ao IB05 o par: corte com limite reduzido internamente produz validation.valid=true no worker, nenhum empty() no pai e normal/strict iguais. Registrar o risco no §6."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "section": "§3.5 (conservação; três exceções nominais)",
+      "finding": "As três exceções não cobrem todos os desaparecimentos que um D1 correto produz. (a) O catch externo atribui a entrada a error.file quando o helper define esse campo (fail(reason, file)). Para aresta visível só no corpo, a tupla v3 fica no arquivo-alvo, e não \"sem arquivo\". Com D1 ela vira (importador, motivo, edge:<specifier>), e a tupla v3 some fora da exceção 1. (b) Tuplas de limite e prazo mudam de forma ou de cap quando D1 e a margem entram. O empty() do pai gera ('', UNKNOWN_ANALYSIS_LIMIT, 'timeoutMs'); o corte do worker gera ('', UNKNOWN_ANALYSIS_LIMIT, 'UNKNOWN_ANALYSIS_LIMIT:<cap>'). (c) UNKNOWN_REVALIDATION pode aparecer ou sumir. Como a §3.5 diz que \"qualquer outro desaparecimento é defeito\", um BUILD correto reprovaria IB09, ou seria levado a manter atribuições artificiais.",
+      "evidence": [
+        "scripts/boundary-semantic-resolution.mjs:38-41 (fail define error.file); scripts/boundary-semantic-engine.mjs:1461-1466 (catch externo usa error.file quando relativo)",
+        "Controle privado X2 (/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json): a.mjs com const m = { p: './missing.mjs' }; import(m.p); export const after = missingGlobal. A v3 dá só ('missing.mjs', UNKNOWN_ACQUISITION_ENOENT, 'UNKNOWN_ACQUISITION_ENOENT:missing.mjs') com states=6; o UNKNOWN_BINDING de missingGlobal fica oculto",
+        "scripts/boundary-semantic-engine.mjs:1762, 1798 (empty com detalhe timeoutMs) versus scripts/boundary-semantic-engine.mjs:237-242 (bump: UNKNOWN_ANALYSIS_LIMIT:<cap> no worker); scripts/boundary-semantic-engine.mjs:1850-1858 (UNKNOWN_REVALIDATION)",
+        "SPEC linhas 89-95"
+      ],
+      "requiredChange": "Ampliar a exceção 1: a entrada do catch externo produzida por aresta contida, com ou sem arquivo, passa ao importador e ao specifier. Alternativa: exigir que a contenção também registre a tupla original (error.file ou importador, motivo, error.message). Definir regra explícita para tuplas de limite, prazo e revalidação: comparar somente fora de corte, ou criar exceção nominal. Acrescentar o par X2 a IB02/IB09."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "section": "§1 (efeitos da parada) e §3.2/§3.4 (cobertura)",
+      "finding": "O §1 não registra que a parada também pula as verificações posteriores ao laço de corpo. A exceção que sai da linha 1367 salta o laço de identidade instalada (UNKNOWN_INSTALLED_IDENTITY), o de entradas instaladas não alcançadas (UNKNOWN_UNREACHED_INSTALLED_ENTRY) e a validação de origens (UNKNOWN_INVALID_ORIGIN). Na v3, 303 pacotes entram em input.installed e só 21 têm código adquirido. Ficam latentes até cerca de 282 entradas UNKNOWN_UNREACHED_INSTALLED_ENTRY (estimativa e limite superior: reachedPackages também pode receber owners sem código adquirido). A §3.4 apresenta essas regras como \"existentes\" que \"continuam\", mas elas nunca rodaram na árvore real, nem em v2 nem em v3. A §3.2 não diz se rodam depois de corte por limite ou de erro global, nem as inclui nos contadores. Um BUILD que implemente o corte lançando até o catch externo cumpriria a SPEC e continuaria pulando essas verificações sem declarar, ao contrário de \"sem parada silenciosa\".",
+      "evidence": [
+        "scripts/boundary-semantic-engine.mjs:1367-1378 (laço de load seguido de UNKNOWN_INSTALLED_IDENTITY e UNKNOWN_UNREACHED_INSTALLED_ENTRY); scripts/boundary-semantic-engine.mjs:1380-1426 (UNKNOWN_INVALID_ORIGIN)",
+        "Controle privado X3 (/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json): com import 'node:fs' antes, o pacote MATCH não alcançado não gera UNKNOWN_UNREACHED_INSTALLED_ENTRY (só '' e a.mjs NATIVE, states=1); sem o import, gera (node_modules/pkgu/package.json, UNKNOWN_UNREACHED_INSTALLED_ENTRY)",
+        "real-postcert-normal-report.json.gz: 303 entradas em semanticBoundary.installed; pacotes com código adquirido em inputs = 21; nenhuma tupla UNKNOWN_UNREACHED_INSTALLED_ENTRY/UNKNOWN_INSTALLED_IDENTITY/UNKNOWN_INVALID_ORIGIN na v3",
+        "SPEC linhas 40, 65 e 83"
+      ],
+      "requiredChange": "Registrar no §1 os efeitos ocultos (pós-corpo e origens), com a estimativa rotulada como tal. Na §3.2, exigir que o payload declare em todo caminho de saída (conclusão, corte por limite ou prazo, erro global) quais fases pós-corpo rodaram, e especificar se elas rodam depois de um corte. Acrescentar a IB02/IB05 o par X3: depois de aresta contida, a verificação pós-corpo está presente na v4."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-05",
+      "severity": "P3",
+      "section": "§1 Achado 1",
+      "finding": "As linhas 807 (import dinâmico) e 834 (loader) ficam em expression(), que começa na linha 683, e não em block(), que começa na 998. Os números de linha conferem; a atribuição \"Em block()\" está imprecisa.",
+      "evidence": "scripts/boundary-semantic-engine.mjs:683, 807, 834, 998, 1047, 1157",
+      "requiredChange": "Trocar por \"Em block() e expression()\"."
+    },
+    {
+      "id": "R1-06",
+      "severity": "P3",
+      "section": "§1 (denominadores latentes)",
+      "finding": "\"Pelo menos 686 módulos de entrada\": o engine recebeu 1.095 starts, ou seja, todo código alcançado fora de node_modules. O número 686 é graph.starts, que inclui 24 package.json (662 de código). O limite inferior é verdadeiro, mas a base está errada. \"Latentes 194 arquivos dist de primeira parte fora do receipt\": 194 é só o recorte analisável. load() aplica a regra dist também a .d.ts, e há 371 starts sob dist fora do receipt (194 .js e 177 .d.ts).",
+      "evidence": "scripts/check-product-boundary.mjs:2110-2118 (starts = seen filtrado por extensão de código e sem node_modules); real-postcert-normal-graph.json.gz: nodes de código fora de node_modules = 1095, graph.starts = 686 (24 .json); scripts/boundary-semantic-engine.mjs:1240 (regra dist sem exceção para .d.ts)",
+      "requiredChange": "Citar 1.095 starts do engine e 371 arquivos dist de primeira parte fora do receipt (194 analisáveis), ou qualificar os números."
+    },
+    {
+      "id": "R1-07",
+      "severity": "P3",
+      "section": "Cabeçalho, §2 D2 e §8 (consistência com 0240)",
+      "finding": "A 0240 §2 diz \"`dist` de dependência instalada continua sujeito à política existente\", e a MS04 fixa dist sem receipt como UNKNOWN. D2 substitui isso na v4. A SPEC afirma que não reabre a 0240 e que as aprovações seguem resolvidas, mas não cita o trecho que D2 supera.",
+      "evidence": "docs/02_spec/0240_b6_node_metadata_resolution_scope.md §2 (último parágrafo) e MS04; SPEC linhas 3, 47 e 150",
+      "requiredChange": "Declarar que D2 supera, somente para a v4, a frase da 0240 §2 e a cláusula de dist instalado da MS04, e que os testes v3 permanecem como testemunhos."
+    },
+    {
+      "id": "R1-08",
+      "severity": "P3",
+      "section": "§3.4 (D2)",
+      "finding": "(a) A lista de falhas que produz UNKNOWN_INSTALLED_FILE_IDENTITY não inclui a falha da premissa de pacote (MATCH e digest hexadecimal), embora a exceção 2 diga que COMPILED_PROVENANCE \"vira\" FILE_IDENTITY. Assim, o motivo por arquivo de um pacote não MATCH dependeria do laço pós-corpo (ver R1-04). (b) referenceDigest é o digest do receipt inteiro, não do pacote. A SPEC não diz como a entrada por arquivo se amarra ao inventorySha256 do pacote no receipt, nem como o worker a revalida. (c) \"Mesma função usada para reachedPackages\": há duas derivações, owner.key do helper em resolve() e lastIndexOf em load().",
+      "evidence": "scripts/boundary-installed-identity.mjs:956 (referenceDigest: expectedSha256), :994 (reference.inventorySha256 contra o receipt); scripts/boundary-semantic-engine.mjs:329-339 (owner.key do helper) e 1196-1214 (lastIndexOf em load)",
+      "requiredChange": "Produzir UNKNOWN_INSTALLED_FILE_IDENTITY no arquivo para qualquer premissa falha, inclusive a de pacote; amarrar a entrada ao inventário de referência validado pelo receipt; nomear uma única derivação da chave."
+    },
+    {
+      "id": "R1-09",
+      "severity": "P3",
+      "section": "§7 IB08",
+      "finding": "Faltam negativos de delimitação para D2. A construção atual é fail-closed (nestedBoundary separa pacotes aninhados, e o helper canonicaliza links de workspace para packages/), mas o BUILD pode errar a chave. Faltam: arquivo de pacote aninhado node_modules/a/node_modules/b com a MATCH e b ausente ou MISMATCH; workspace alcançado via node_modules/@escopo/x, que deve permanecer primeira parte e sob receipt; entrada de inventário de outro pacote com o mesmo caminho relativo; diretório com prefixo ponto (.vite) dentro de pacote.",
+      "evidence": "scripts/boundary-installed-identity.mjs:42-55 (nestedPath exclui nomes com ponto); scripts/boundary-semantic-resolution.mjs:694-717 (canonical = packages/<tail>)",
+      "requiredChange": "Acrescentar esses pares ao IB08."
+    },
+    {
+      "id": "R1-10",
+      "severity": "P3",
+      "section": "§3.3 e IB06",
+      "finding": "Uma função pode cair em mais de uma categoria (por exemplo, async com default). A SPEC fala em \"uma categoria\" e não define se o engine emite todas ou se há precedência fixa; o determinismo fica implícito.",
+      "evidence": "physical-recon.json functionCensus: a soma de byCategory (4.564) passa do número de rejeitadas (4.426) nas fontes de primeira parte",
+      "requiredChange": "Definir a regra (todas as categorias ou ordem fixa) e cobri-la no IB06."
+    },
+    {
+      "id": "R1-11",
+      "severity": "P3",
+      "section": "§3.2 e IB05",
+      "finding": "A margem consta como \"proposta: 20 s\", deixando para o BUILD um valor do tipo limite. O IB05 não traz o \"positivo imediatamente abaixo\" que a 0236 §6 exige para cada contador.",
+      "evidence": "SPEC linha 67; docs/02_spec/0236_b6_semantic_boundary_proof.md §6 (\"Teste negativo separado para cada contador ... e positivo imediatamente abaixo\")",
+      "requiredChange": "Fixar o valor da margem na SPEC e acrescentar o positivo imediatamente abaixo para a margem e os contadores novos."
+    },
+    {
+      "id": "R1-12",
+      "severity": "P3",
+      "section": "§2 e §4",
+      "finding": "A frase \"D1 ... só pode acrescentar UNKNOWN e violações\" conflita com as exceções 1 e 3, que reatribuem e reclassificam tuplas. A §4 não lista UNKNOWN_DYNAMIC_IMPORT_PROMISE (todo import dinâmico continua UNKNOWN), UNKNOWN_UNREACHED_INSTALLED_ENTRY nem o corte UNKNOWN_ANALYSIS_LIMIT que a §6 considera provável.",
+      "evidence": "SPEC linhas 46 e 97-105; scripts/boundary-semantic-engine.mjs:809-810",
+      "requiredChange": "Ajustar a redação e completar a §4."
+    },
+    {
+      "id": "R1-13",
+      "severity": "P3",
+      "section": "§6 (riscos)",
+      "finding": "Faltam riscos: ENOBUFS no stdout do worker (maxBuffer de 64 MiB) leva a empty(); o input do worker cresce com o inventário por arquivo de 303 pacotes; o detalhe edge:<specifier> difere do detalhe da aquisição (error.message) e duplica tuplas da mesma aresta; specifier absoluto ou URL no detalhe \"sem caminho absoluto\" não tem regra.",
+      "evidence": "scripts/boundary-semantic-engine.mjs:1733 e 1763-1764; scripts/boundary-semantic-engine.mjs:501-505",
+      "requiredChange": "Registrar esses riscos e a regra de normalização do detalhe."
+    },
+    {
+      "id": "R1-14",
+      "severity": "P3",
+      "section": "Higiene da evidência",
+      "finding": "task.json registra proposedSpecPath = docs/02_spec/0241_b6_body_frontier_installed_provenance.md, que difere do arquivo revisado. O campo interpretation de cause-partition.json cita chain-witness.json, que não existe; o conteúdo está em physical-recon.json, chave chainWitness.",
+      "evidence": "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261018/task.json (proposedSpecPath); cause-partition.json bodyPhaseTruncation.interpretation",
+      "requiredChange": "Reconciliar na próxima versão da evidência, sem alterar os artefatos já congelados."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "what": "SHA da SPEC e dos 16 insumos de contract-freeze-r1.json",
+      "result": "PASS",
+      "evidence": "sha256sum da SPEC = 55a3de340ad5083d9ca97253ed5316c22be1a3a959a31e47773be29f8f43c0ba; os 16 insumos conferem em bytes e SHA"
+    },
+    {
+      "id": "S02",
+      "what": "Bytes dos scripts no root contra f22a74a0 e fb4a723e (git show, só leitura)",
+      "result": "PASS",
+      "evidence": "engine 0497362b…, resolution 6e614138…, checker 35cba39f…, compiled 80a66806… e identity 3d282e4f… iguais nos três; checker igual ao checkerSha256 dos receipts"
+    },
+    {
+      "id": "S03",
+      "what": "Reprodução de run-recon.py com fixtures e saída privadas",
+      "result": "PASS",
+      "evidence": "/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out: os 4 passos com exit 0; cause-partition, physical-recon, resolve-oracle e body-controls iguais aos selados, exceto observedAt e fixtureRoot"
+    },
+    {
+      "id": "S04",
+      "what": "Contagens do §1 contra o relatório selado (gunzip com SHA = receipt 4b5f3f8d…)",
+      "result": "PASS",
+      "evidence": "1118 diag = 581 + 303 + 161 + 69 + 4; unknowns 581 por motivo idênticos à tabela; FORMAT .d.ts 198, .tsx 37, .json 3, .css 1; PARSE 29, todos em apps/web; COMPILED_PROVENANCE 6 e FUNCTION 4, todos em dist do Vitest; 1 tupla sem arquivo; 303 UNKNOWN_INSTALLED_CLOSURE; v2 = 1072 e 1609"
+    },
+    {
+      "id": "S05",
+      "what": "Linhas do engine 595, 807, 834, 1047, 1157, 1240, 1367 e 1461",
+      "result": "PASS_WITH_NOTE",
+      "evidence": "Todas conferem com o texto; 807 e 834 estão em expression(), não em block() (R1-05)"
+    },
+    {
+      "id": "S06",
+      "what": "Cadeia de 7 módulos até tinyrainbow, campo browser e oráculo",
+      "result": "PASS",
+      "evidence": "physical-recon chainWitness: 7 arquivos, último sem registro de resolução para tinyrainbow; r5 tinyrainbow/package.json fdc6f8a2… com browser ./dist/index.js; resolution.mjs:979-981 lança AMBIGUOUS sem file quando há browser; oráculo resolve para dist/index.js regular (3f400034…)"
+    },
+    {
+      "id": "S07",
+      "what": "Contadores de uso v3 e v2",
+      "result": "PASS",
+      "evidence": "v3 states 7, contexts 0, unionValues 0; v2 states 1. Com unionValues 0, nenhum literal foi avaliado: cada módulo parou na 1ª instrução"
+    },
+    {
+      "id": "S08",
+      "what": "dist instalado 32 em 12 pacotes; receipt 112, dos quais 22 adquiridos; 194 fora",
+      "result": "PASS_WITH_NOTE",
+      "evidence": "Recontado no relatório selado; nota: 371 starts sob dist fora do receipt quando se contam .d.ts (R1-06)"
+    },
+    {
+      "id": "S09",
+      "what": "\"Pelo menos 686 módulos de entrada\"",
+      "result": "PARTIAL",
+      "evidence": "O engine recebe 1.095 starts; 686 é graph.starts, com 24 package.json (R1-06)"
+    },
+    {
+      "id": "S10",
+      "what": "Censo de funções, 42 declarações em 4 arquivos e afirmações sobre functionValue",
+      "result": "PASS",
+      "evidence": "chainWitness: 4 + 35 + 1 + 2 = 42; dedup por (file, reason, originId, detail) com detail vazio; pré-declaração na linha 1016"
+    },
+    {
+      "id": "S11",
+      "what": "Controles C1–C6 reproduzidos",
+      "result": "PASS",
+      "evidence": "16/16 expectativas; C5 tem a tupla sem arquivo e a do importador; C6 dá UNKNOWN sem violação na testemunha e VIOLATION no controle; validation válida e zero cargas de alvo"
+    },
+    {
+      "id": "S12",
+      "what": "Interpretação central (parada na 1ª exceção) e explicações alternativas",
+      "result": "PASS",
+      "evidence": "Sem tupla de limite, elapsed 52 s < 120 s, validation válida, states=7 e unionValues=0, assinatura sem arquivo reproduzida por C1/C2/C5; nenhuma alternativa explica os números. Efeito omitido: R1-04"
+    },
+    {
+      "id": "S13",
+      "what": "X1: várias arestas de produto só no corpo (engine congelado)",
+      "result": "FINDING",
+      "evidence": "/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json: 1 de 3 violações; UNKNOWN_PRODUCT_TARGET aborta o corpo (R1-01)"
+    },
+    {
+      "id": "S14",
+      "what": "X2: aresta só do corpo com alvo ausente",
+      "result": "FINDING",
+      "evidence": "/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json: tupla atribuída ao alvo, não sem arquivo (R1-03)"
+    },
+    {
+      "id": "S15",
+      "what": "X3: verificações pós-corpo puladas pela parada",
+      "result": "FINDING",
+      "evidence": "/mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json: UNKNOWN_UNREACHED_INSTALLED_ENTRY presente só no controle (R1-04)"
+    },
+    {
+      "id": "S16",
+      "what": "Prazo de D1 contra a arquitetura de worker, census e recomputação",
+      "result": "FINDING",
+      "evidence": "engine.mjs:1601-1611, 1724-1804, 1844 (R1-02)"
+    },
+    {
+      "id": "S17",
+      "what": "Segurança e delimitação de D2 (link, aninhado, receipt, mutação, inventário) e classificação T3",
+      "result": "PASS_WITH_NOTES",
+      "evidence": "Workspace canonicalizado para packages/ (resolution.mjs:694-717); comparador por inventário completo e MATCH (identity.mjs:953-1042); \"Receipt nunca serve de autoridade\" presente; T3 correto (ampliação positiva). Notas em R1-08 e R1-09"
+    },
+    {
+      "id": "S18",
+      "what": "Falso PROVEN, perda de violação e UNKNOWN escondido por D1",
+      "result": "PASS_WITH_NOTES",
+      "evidence": "Toda contenção registra UNKNOWN, e a supressão global (engine.mjs:1507-1511) impede prova; violações são registradas antes do lançamento (product). Ressalvas de multiset e prazo em R1-01 e R1-02"
+    },
+    {
+      "id": "S19",
+      "what": "Crédito antecipado ou aceite implícito",
+      "result": "PASS",
+      "evidence": "Cabeçalho \"BUILD ainda não autorizado\"; \"não promete prova, queda de contagem ou fechamento de B6\"; \"expectativa é de zero provas\"; IB todos NOT_RUN; IB11 sem promessa de ganho"
+    },
+    {
+      "id": "S20",
+      "what": "Riscos §6 e rótulo de estimativa",
+      "result": "PASS_WITH_NOTES",
+      "evidence": "Estimativa de estados rotulada \"grosseira, não medição\" (physical-recon topLevelStateEstimate.label); faltam riscos de R1-02 e R1-13"
+    },
+    {
+      "id": "S21",
+      "what": "Consistência com 0236, 0237 e 0240",
+      "result": "PARTIAL",
+      "evidence": "0236 §6 (barreira declarada) é coerente com D1; 0237 (recomputação no worker, normal/strict sem timeout) entra em conflito com o prazo (R1-02); 0240 §2/MS04 superada por D2 sem citação (R1-07)"
+    },
+    {
+      "id": "S22",
+      "what": "Links relativos da SPEC",
+      "result": "PASS",
+      "evidence": "11 alvos existem"
+    }
+  ],
+  "commands": [
+    {
+      "cmd": "sha256sum SPEC e scripts root",
+      "summary": "SPEC 55a3de34… confere; engine 0497362b… confere"
+    },
+    {
+      "cmd": "python3 -I (verificação de contract-freeze-r1.json)",
+      "summary": "16/16 insumos OK em bytes e SHA"
+    },
+    {
+      "cmd": "sed/grep de leitura em scripts/boundary-semantic-engine.mjs, boundary-semantic-resolution.mjs, boundary-installed-identity.mjs e check-product-boundary.mjs",
+      "summary": "Leitura das linhas citadas, do worker, da validação e do comparador"
+    },
+    {
+      "cmd": "git show f22a74a0:<script> | sha256sum; git show fb4a723e:<script> | sha256sum; git log/status (só leitura)",
+      "summary": "Bytes idênticos ao root"
+    },
+    {
+      "cmd": "python3 -I /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/scripts/inspect.py e inspect2.py <BUILD-0240>",
+      "summary": "Contagens independentes nos relatórios v3/v2 selados, receipt 112/22/194 e dist instalado 32/12"
+    },
+    {
+      "cmd": "python3 -I (graph.json.gz: starts e nodes)",
+      "summary": "graph.starts 686 (24 .json); starts do engine 1.095; 371 dist fora do receipt"
+    },
+    {
+      "cmd": "env -i ... python3 -I run-recon.py /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/fixtures /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out",
+      "summary": "Exit 0; 4 saídas iguais às seladas, exceto timestamps e fixtureRoot"
+    },
+    {
+      "cmd": "sha256sum em /mnt/ia/.../installed-reference-r5/snapshot (só leitura)",
+      "summary": "pretty-format 8a0595b2…, tinyrainbow/package.json fdc6f8a2… e vitest/dist/index.js 3986618d… iguais aos medidos"
+    },
+    {
+      "cmd": "env -i ... node22.23.2 /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/scripts/extra-controls.mjs <engine root> <fixtures2 privadas> /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/out/extra-controls.json",
+      "summary": "X1/X2/X3 no engine congelado com o hook que recusa carregar alvo; blocked=0 e validation válida em todos"
+    }
+  ]
+}

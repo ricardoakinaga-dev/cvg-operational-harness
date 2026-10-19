@@ -4,12 +4,12 @@
 - Estado: `APPROVED` pelo usuário em 16/10/2026 (decisões D1 a D7, registro abaixo e na [evidência](../04_audit/evidence/PARE100-GAP-20261016/decisions-d1-d7.json)). Documento T1: define medida, fases, marcos e decisões; não autoriza BUILD, provider real, dado real, push ou deploy. Cada cartão T3 ou T4 continua exigindo sua própria SPEC e revisão.
 - Backlog: [0380](0380_backlog_paridade_100_deepseek.md), com 111 cartões. Evidência: [análise de lacunas PARE100-GAP-20261016](../04_audit/evidence/PARE100-GAP-20261016/README.md).
 - Referência congelada: DeepSeek `0.2.0-rc.1`, commit `768fb1f3d3dcf9a16659ee354e927d05475f22dd`. Mudança posterior da referência entra como delta separado e não move o alvo sozinha.
-- Planos anteriores: este roadmap revisa o roadmap 0377 (linha de trabalho: `docs/03_build/0377_roadmap_paridade_integral.md`) a partir de uma análise por capacidade, mantém as regras de medição do plano executivo 0376 (linha de trabalho: `docs/03_build/0376_plano_executivo_paridade_integral.md`) e propõe as mudanças listadas em "Decisões".
+- Planos anteriores: este roadmap revisa o [roadmap 0377](0377_roadmap_paridade_integral.md) a partir de uma análise por capacidade, mantém as regras de medição do [plano executivo 0376](0376_plano_executivo_paridade_integral.md) e propõe as mudanças listadas em "Decisões".
 
 ## Resumo para decisão
 
 - **Ponto de partida:** das 266 capacidades da referência levantadas em 16/10, o CVG tem 9 presentes, 76 parciais e 175 ausentes; 6 são divergência deliberada ou não se aplicam. A cobertura indicativa por leitura é de cerca de **18%** (parcial vale meio). Nenhuma capacidade tem ainda `PASS_CURRENT`.
-- **Por que não 70%:** a auditoria 0611 (linha de trabalho: `docs/04_audit/0611_harness_deepseek_pairing_2026-10-14.md`) mediu só o motor, com peso alto em governança, onde o CVG é forte. Aqui cada capacidade conta igual e entram interface, orquestração, protocolos e ferramentas, onde o CVG quase não tem nada.
+- **Por que não 70%:** a [auditoria 0611](../04_audit/0611_harness_deepseek_pairing_2026-10-14.md) mediu só o motor, com peso alto em governança, onde o CVG é forte. Aqui cada capacidade conta igual e entram interface, orquestração, protocolos e ferramentas, onde o CVG quase não tem nada.
 - **Tamanho:** 111 cartões, cerca de **1.440 dias de engenharia** (faixa de 950 a 1.890).
 - **Prazo estimado com 5 frentes em paralelo:** paridade hospitalar (tudo menos a cauda F6) em cerca de **13 meses**; paridade integral em cerca de **19 meses**. Com 3 frentes, 21 e 32 meses. Com um executor só, a paridade integral leva anos e não é um plano viável.
 - **Cauda de baixo valor:** a fase F6 (desktop, computer use, SSH, ACP, LSP, terminal PTY, guest em Web Worker, backends JSON/SQLite e afins) tem 28 cartões e um terço do esforço, com relevância hospitalar baixa ou nenhuma. Ela fica no plano, e a decisão D2 sobre ela é tomada no marco M3, com dados.
@@ -90,7 +90,7 @@ Os dias são equivalentes de engenharia humana e incluem SPEC curta, revisão e 
 Leitura do calendário:
 
 - Com 5 frentes, o intervalo de M4 vai de novembro de 2027 a novembro de 2028. Com 3 frentes, M4 fica entre meados de 2028 e 2030.
-- O plano 0376 (linha de trabalho: `docs/03_build/0376_plano_executivo_paridade_integral.md`) estimou 8 a 12 meses antes de medir as lacunas. A análise por capacidade mostra 175 capacidades ausentes. Mantido o tamanho dos cartões, aquela estimativa só se confirma se os agentes entregarem cerca de duas vezes a velocidade de uma equipe humana equivalente.
+- O [plano 0376](0376_plano_executivo_paridade_integral.md) estimou 8 a 12 meses antes de medir as lacunas. A análise por capacidade mostra 175 capacidades ausentes. Mantido o tamanho dos cartões, aquela estimativa só se confirma se os agentes entregarem cerca de duas vezes a velocidade de uma equipe humana equivalente.
 - Agentes podem codificar mais rápido que pessoas, mas o PARE100 entregou 2 cartões de higiene em três dias com o processo atual. A velocidade real (dias estimados entregues por semana) será medida nos dois primeiros sprints e o calendário recalculado com ela. Até lá, as datas acima são a referência.
 - O caminho crítico de M3 é PAR-G01 → PAR-K01 → PAR-K03 → PAR-S01 → PAR-A01 → PAR-O03 → PAR-O04 → PAR-U03 → PAR-Q06 → PAR-Q07 → PAR-Q09. Ele encurta se os contratos de PAR-K03, PAR-S01 e PAR-A01 forem congelados cedo, para que os dependentes comecem sobre o contrato e não sobre a entrega final.
 

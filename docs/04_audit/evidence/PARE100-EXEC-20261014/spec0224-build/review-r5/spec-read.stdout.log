@@ -1,0 +1,171 @@
+100: Domínio completo: null, boolean, string sem surrogate isolado, número finito
+101: diferente de -0, array denso de valores admissíveis ou objeto simples com
+102: propriedades próprias de dados e valores admissíveis. Rejeitar undefined
+103: inclusive em campos, BigInt, NaN/Infinity, ciclos, holes, accessor, symbol,
+104: propriedades extras de array, instâncias com protótipo próprio e toJSON.
+105: Não executar getters/toJSON para tentar obter um valor. Alias acíclico pode
+106: ser serializado como valor repetido. Não se oferece isolamento contra Proxy
+107: ou código JS hostil no mesmo processo; ferramentas instaladas são código
+108: confiável e seus resultados são dados sem autoridade.
+109: 
+110: Canonicalização recursiva: chaves próprias de objeto em ordem lexicográfica,
+111: array na ordem original, strings/chaves com escaping JSON determinístico,
+112: números pela representação JSON do número JS admissível. Sem normalização
+113: Unicode, trim, coercion ou alteração de tipo. Usar o mesmo algoritmo em
+114: snapshot, digest, persistência e pedido. Verificação é por valor e também
+115: pelos bytes canônicos. Não usar a ordem de inserção de objeto como contrato.
+116: 
+117: `Observation.payload` de TOOL_RESULT no modo novo passa a ter união explícita
+118: `schemaVersion:1`, preservando `status`, `sideEffect`, `completion` e
+119: `resultAvailability` separadamente. Ramos:
+120: 
+121: - `completion: COMPLETE`: `output` JSON admissível obrigatório,
+122:   `outputBytes` e `outputSha256` calculados do valor completo. Somente quando
+123:   o pipeline nativo retornou SUCCEEDED e a captura integral foi válida.
+124: - `completion: UNAVAILABLE`: sem campo output, com motivo estável
+125:   INVALID_JSON/RESULT_TOO_LARGE/RESULT_COMPLEXITY. `status` continua sendo o
+126:   resultado do pipeline; não inventar FAILED quando ele confirmou SUCCEEDED.
+127:   Sem digest do conteúdo que não foi integralmente validado. Tamanho pode
+128:   ser um lower bound explicitamente rotulado, nunca um total inventado.
+129: - Resultado nativo FAILED/REJECTED: envelope de diagnóstico versionado,
+130:   `completion: NOT_APPLICABLE`, `resultAvailability: UNAVAILABLE`, sem output
+131:   completo e com erro redigido; nunca elegível como evidência de
+132:   efeito confirmado. O journal mantém sua classificação original.
+133: 
+134: `resultAvailability` indica AVAILABLE ou UNAVAILABLE; a condição de entrega
+135: ao modelo fica no estado do contexto, não no texto do resultado. Nenhum
+136: campo do output pode sobrescrever o envelope. `summary` continua prévia
+137: limitada300unidades e não participa da prova de completude. Não aplicar
+138: `boundedPayload` ao output ou envelope versionado. Conhecimento e outras
+139: observações permanecem sob seus contratos atuais e não são promovidos a
+140: fonte institucional aprovada por esta mudança.
+141: 
+142: SUCCEEDED sem campo output é INVALID_JSON, não sucesso completo. No modo1,
+143: passar explicitamente a opção antiga maxObservationPayloadChars é erro de
+144: configuração: não permitir que ela volte a truncar o envelope por acidente.
+145: 
+146: ### 3.2 Checkpoint, retenção e efeito
+147: 
+148: V1 mantém o digest existente. Em V2, normalizar campos opcionais internos
+149: ausentes pelo schema do checkpoint, sem alterar o output JSON estrito, e
+150: calcular SHA-256 de `cvg.checkpoint.v2` seguido de newline e dos bytes
+151: canônicos do unsigned. CheckpointId/createdAt ficam fora desse unsigned,
+152: como no contrato anterior; tenant, execução, modo, estado e orçamento ficam
+153: dentro. Ausência não declarada pelo schema é erro. O mesmo codec serve aos
+154: stores e ao validador. Integridade não permite inventar dados de V1.
+155: 
+156: Checkpoint do novo modo usa `checkpointVersion:2` e carrega no estado
+157: `toolResultContext:{version:1,deliveredThroughStep,pendingDecisionAdmission,decisionAdmissions}`.
+158: decisionAdmissions retém os receipts nativos de todas as tentativas desta
+159: execução: admissionId, tenant/execution/step/attempt/purpose, requestSha256,
+160: contador/versão, limites reservados, status RESERVED/SETTLED/UNKNOWN e uso
+161: real se SETTLED. pendingDecisionAdmission é nulo ou o ID do único RESERVED.
+162: Receipts não são apagados pelo cursor; seu tamanho entra no limite8MiB e
+163: uma nova tentativa é recusada se não houver espaço para seu receipt.
+164: Repetição de settle de um receipt SETTLED com o mesmo digest/uso é no-op
+165: idempotente; dados diferentes, receipt UNKNOWN ou binding diferente são
+166: conflito. Não exigir que um receipt já SETTLED volte a ser o pendente.
+167: `deliveredThroughStep` começa0, é monotônico e avança somente depois de uma
+168: decisão de modelo válida admitida e aceita pelo runtime, até o maior passo
+169: de TOOL_RESULT que o pedido continha. Reparos e decisões inválidas não
+170: avançam; decisões só por regra não afirmam entrega ao modelo.
+171: 
+172: Todos os TOOL_RESULT da execução, inclusive já entregues, são obrigatórios
+173: e retidos até o estado terminal, ordenados por stepNumber/observationId.
+174: O cursor é somente recibo de entrega; não prova que um resultado deixou de
+175: ser necessário para um modelo sem memória. Não expulsar nenhum TOOL_RESULT
+176: pelo slice50, trimming ou avanço do cursor. Nesta primeira fatia não há
+177: liberação semântica/compactação de resultados. Observações opcionais de
+178: outros tipos podem sair inteiras; nunca remover o original de ferramenta.
+179: Se não houver slot, parar antes da próxima ferramenta. O cursor e a decisão
+180: aceita são gravados no mesmo checkpoint antes do próximo despacho. Se essa
+181: gravação falhar, nenhum novo corpo é invocado.
+182: 
+183: Antes de invocar ferramenta, o runtime verifica um checkpoint prospectivo
+184: com o estado atual, os campos nativos que serão adicionados e espaço para
+185: um envelope de até36864bytes. Também reserva64KiB de folga para alterações
+186: de estado do passo; não pode confiar apenas em `sizeAtual + outputBytes`.
+187: Se não conseguir limitar os campos que mudarão, recusar a invocação. Após o
+188: retorno, medir o checkpoint real antes de gravar. O limite do wrapper não
+189: substitui a verificação final, nem a disponibilidade do banco.
+190: 
+191: Após resultado SUCCEEDED, o journal/settlement continua autoridade do efeito.
+192: O checkpoint completo é gravado antes da próxima decisão de modelo. Se
+193: output for indisponível, não cabe no contexto ou o save falhar depois do
+194: efeito, interromper. Conservar operationKey, status nativo, provenance e
+195: settlement, sem emitir ACTION_CONFIRMED com base em uma prévia. Falha da
+196: serialização no próprio journal continua falha nativa/efeito incerto;
+197: esta SPEC não pode convertê-la em confirmação.
+198: 
+199: Se o checkpoint não foi confirmado, a retomada usa a fronteira durável0217
+200: e seu journal para resolver o efeito antes de qualquer novo despacho.
+201: Resultado confirmado recuperado do journal precisa passar pela mesma
+202: validação; não chamar o corpo novamente para reconstruir texto perdido.
+203: Sem prova de settlement ou sem dado recuperável: handoff/estado incerto,
+204: não replay. Nenhuma nova semântica de exatamente-uma-vez é concedida aqui.
+205: 
+206: ### 3.3 Codec físico V2 para o state JSONB
+207: 
+208: O domínio lógico inclui U+0000 em valores e chaves. PostgreSQL JSONB não
+209: aceita esse caractere decodificado, mesmo quando escrito como escape JSON;
+210: a restrição está na [documentação oficial17, seção8.14](https://www.postgresql.org/docs/17/datatype-json.html).
+211: Essa leitura é evidência documental, não teste do banco instalado.
+212: 
+213: O adaptador não grava state lógico diretamente em JSONB no modo2. Grava um
+214: wrapper de chaves fixas ASCII: storageCodec=`cvg.checkpoint-state/2`,
+215: encoding=`base64`, decodedBytes, decodedSha256 e data. data contém base64
+216: canônico RFC4648 com padding dos bytes UTF-8 canônicos do state lógico.
+217: O hash decodedSha256 é desses bytes; o digest geral do checkpoint continua
+218: sendo do unsigned lógico com separação de domínio3.2. BudgetUsage tem schema
+219: fechado de números/metadados nativos sem conteúdo arbitrário e permanece
+220: na coluna existente. IDs/versões externos ao state recusam U+0000.
+221: 
+222: Limite lógico de8MiB inclui o unsigned inteiro, não só state. Para leitura,
+223: limitar data a `4 * ceil(8388608 / 3)` caracteres ASCII e o wrapper físico a
+224: esse total +512bytes. A query deve recusar linhas acima desse teto antes de
+225: entregar JSON ao parser do driver; depois validar chaves/tipos/comprimentos,
+226: padding e reencode base64 exato. Decodificar UTF-8 estrito, exigir bytecount
+227: e hash, validar JSON limitado (profundidade total64 e1000000nós) e schema
+228: V2, exigir reserialização canônica byte a byte igual e conferir digest do
+229: checkpoint. Duplicatas de chave, lixo final, base64 permissivo ou Unicode
+230: malformado são erro, não reparo silencioso. Limites se aplicam antes da
+231: alocação/parse correspondente e novamente ao unsigned reconstruído.
+232: 
+233: Memória e PostgreSQL exercitam o mesmo encode/decode lógico V2; load devolve
+234: ExecutionCheckpoint lógico, nunca o wrapper ao runtime/modelo. O protocolo
+235: wire do modelo continua JSON lógico e não base64. Não há migração de coluna,
+236: SQL dinâmico, compressão, blob externo ou endpoint de decode. Base64 não é
+237: criptografia nem controle de acesso. V1 permanece no formato existente;
+238: V2 sem wrapper ou com storageCodec desconhecido é recusado, sem autodetect
+239: por chaves arbitrárias dentro de output. Não alterar a autoridade/formato
+240: dos journals por supor que uma classe de digest-only seja store de output.
+241: Falha nativa de journal anterior ao checkpoint mantém efeito incerto; o
+242: codec não pode forjar uma confirmação ou reconstruir dado não recuperável.
+243: 
+244: ## 4. Seleção única e pedido real
+245: 
+246: ContextBuildInput/StepContext recebem um campo opcional versionado
+247: `toolResultContext`. No modo novo sua ausência ou inconsistência é erro;
+248: não existe fallback silencioso para summary. O runtime valida a saída de
+249: ContextEngine customizado, inclusive IDs/cursor, integridade do envelope e
+250: conjunto obrigatório. HybridOrchestrator anuncia suporte ao protocolo1;
+251: modo novo com orquestrador sem suporte é erro de composição antes de run.
+252: Esse anúncio é contrato de código confiável, não isolamento de plugin hostil.
+253: 
+254: ContextEngine seleciona primeiro instruções/governança, objetivo/usuário e
+255: todos os TOOL_RESULT da execução. Dados de usuário e ferramentas
+256: são UNTRUSTED. Conhecimento/histórico opcionais são considerados em ordem
+257: de prioridade já existente e só entram inteiros. A seleção retorna os IDs
+258: e o valor completo de cada resultado; não usa summarizeObservation para
+259: reconstruir payload nem lê uma segunda lista paralela para renderizar.
+260: 
+261: Formato wire interno: exatamente duas mensagens, ambas ModelMessage atual:
+262: 
+263: 1. system: instruções de governança do host, instruções de agente confiáveis,
+264:    esquema de decisão, tipos/reasons permitidos e catálogo registrado.
+265: 2. user: JSON versionado `cvg.decision-context/1` contendo objetivo do usuário,
+266:    userMessage, estado descritivo, itens selecionados e dados de reparo.
+267:    Cada item inclui contextId, prioridade, trust, source, observationId,
+268:    provenance e o payload completo quando aplicável. Dados arbitrários não
+269:    são interpolados no texto de system. Diagnóstico de erro do modelo é
+270:    dado de reparo UNTRUSTED, não instrução do host.

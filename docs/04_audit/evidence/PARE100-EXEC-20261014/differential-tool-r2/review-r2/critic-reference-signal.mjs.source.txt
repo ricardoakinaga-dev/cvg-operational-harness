@@ -1,0 +1,60 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {createRequire,syncBuiltinESMExports} from 'node:module'
+import {pathToFileURL} from 'node:url'
+import net from 'node:net'
+import tls from 'node:tls'
+import http from 'node:http'
+import https from 'node:https'
+import http2 from 'node:http2'
+import dgram from 'node:dgram'
+import {createPortRequestCapture} from './tests/differential/capture-port-data.mjs'
+import {validateToolCase} from './tests/differential/tool-case.mjs'
+const root='/home/ricardo/deepseek-harness-session-fixes',pin='768fb1f3d3dcf9a16659ee354e927d05475f22dd'
+const fixture=validateToolCase(JSON.parse(fs.readFileSync(process.argv[2],'utf8'))),mode=process.argv[3]??'baseline'
+const packages=['cordis','dsh-agent-loop-testkit','dsh-llm','dsh-session','dsh-agent','dsh-agent-loop','dsh-session-projection','dsh-system-prompt','dsh-tools'].map(x=>'@deepseek-ai/'+x)
+const require=createRequire(root+'/packages/test-support/agent-loop-testkit/package.json')
+const authenticated=JSON.parse(fs.readFileSync(new URL('../review-packet/executed-reference-inventory.json',import.meta.url)))
+const artifacts=packages.map(name=>{const file=fs.realpathSync(require.resolve(name));return {package:name,file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}})
+if(JSON.stringify(artifacts)!==JSON.stringify(authenticated))throw Error('independent nine-export authentication failed')
+const attempts=[];const deny=n=>()=>{attempts.push(n);throw Error('network prohibited')}
+for(const [name,mod,keys] of [['net',net,['connect','createConnection']],['tls',tls,['connect']],['http',http,['request','get']],['https',https,['request','get']],['http2',http2,['connect']],['dgram',dgram,['createSocket']]])for(const key of keys)mod[key]=deny(name+'.'+key)
+net.Server.prototype.listen=deny('net.listen');globalThis.fetch=deny('fetch');syncBuiltinESMExports()
+const modules=await Promise.all(artifacts.slice(0,4).map(x=>import(pathToFileURL(x.file))))
+const {Context}=modules[0],{mountAgentLoopTestDependencies,mountAgentLoopTestHarness}=modules[1],{LlmAdapter}=modules[2],{SessionId}=modules[3]
+const clone=x=>JSON.parse(JSON.stringify(x)),ctx=new Context(),events=[],requests=[],chunks=[],toolBodies=[],capture=createPortRequestCapture();let calls=0
+class IndependentAdapter extends LlmAdapter{
+ async prepareCall(...args){const actual=await super.prepareCall(...args);return {...actual,stream:request=>{
+  // Trusted provider-boundary data negatives. Public engine remains genuine.
+  let delivered=request
+  if(mode==='signal-spoof'){if(!globalThis.criticSignal){const c=new AbortController();c.abort("actual-abort");Object.defineProperties(c.signal,{aborted:{value:false},reason:{value:undefined}});globalThis.criticSignal=c.signal}delivered={...request,signal:globalThis.criticSignal};fs.writeFileSync(process.env.HOME+"/signal-diagnostic.json",JSON.stringify({nativeAborted:Object.getOwnPropertyDescriptor(AbortSignal.prototype,"aborted").get.call(globalThis.criticSignal),nativeReason:Object.getOwnPropertyDescriptor(AbortSignal.prototype,"reason").get.call(globalThis.criticSignal)}))}
+  if(mode==='empty-tools')delivered={...request,tools:[]}
+  if(mode==='forged-schema')delivered={...request,tools:request.tools.map(t=>({...t,parameters:{type:'string'}}))}
+  if(mode==='routing')delivered={...request,provider:'wrong-provider',model:'wrong-model'}
+  if(mode==='history')delivered={...request,toolHistory:{...request.toolHistory,updates:[{forged:true}]}}
+  return this.stream(delivered)
+ }}}
+ async *stream(options){
+  calls++;if(calls>2)throw Error('extra model call');requests.push(capture(options))
+  if(mode==='fault-exit'){process.stdout.write('OWN_FAULT_STDOUT\n');process.stderr.write('OWN_FAULT_STDERR\n');process.exitCode=23;throw Error('external provider child fault')}
+  if(mode==='fault-hang'){process.stdout.write('OWN_HANG_STDOUT\n');process.stderr.write('OWN_HANG_STDERR\n');await new Promise(()=>{});return}
+  let script
+  if(calls===1)script=[{type:'block-start',index:0,blockType:'tool-call'},{type:'block-end',index:0,block:{type:'tool-call',id:'call-'+fixture.id,name:'pare100_echo',arguments:JSON.stringify({text:fixture.text})}},{type:'usage',usage:{inputTokens:1,outputTokens:2}},{type:'finish',reason:{kind:'tool-calls'}}]
+  else {const result=options.messages.filter(m=>m.role==='tool');if(result.length!==1||result[0].toolCallId!=='call-'+fixture.id||result[0].source.callId!=='call-'+fixture.id||result[0].isError||toolBodies.length!==1)throw Error('invalid causal binding');const text=result[0].content.map(x=>{if(x.type!=='text')throw Error('not text');return x.text}).join('');if(text!==toolBodies[0].output)throw Error('causal text mismatch');script=[{type:'block-start',index:0,blockType:'text'},{type:'text-delta',index:0,text},{type:'block-end',index:0,block:{type:'text',text}},{type:'usage',usage:{inputTokens:1,outputTokens:2}},{type:'finish',reason:{kind:'stop'}}]}
+  for(const chunk of script){chunks.push(clone(chunk));yield chunk}
+ }
+}
+try{
+ await mountAgentLoopTestDependencies(ctx)
+ ctx.tools.register({name:'pare100_echo',description:'Pure synthetic echo; no external capabilities',parameters:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},output:{schema:{type:'string'},render:(_a,v)=>[{type:'text',text:v}]},execute:async args=>{if(toolBodies.length||Object.keys(args).join(',')!=='text'||typeof args.text!=='string')throw Error('invalid echo');toolBodies.push({name:'pare100_echo',input:clone(args),output:args.text});return args.text}})
+ ctx.on('session/event',(_session,event)=>events.push(clone(event)))
+ ctx.llm.registerAdapter(['pare100-synthetic'],new IndependentAdapter())
+ const driver=await mountAgentLoopTestHarness(ctx),agent=await driver.create(SessionId('pare100-'+fixture.id),{provider:'pare100-synthetic',model:'keyless-v1',maxTokens:128},{cwd:process.cwd()})
+ agent.followup({id:'message-'+fixture.id,role:'user',content:[{type:'text',text:fixture.message}],source:{kind:'user'}})
+ await agent.whenIdle()
+ const messages=clone(agent.session.deriveMessages()),last=messages.filter(x=>x.role==='assistant').at(-1)
+ if(calls!==2||toolBodies.length!==1||!last)throw Error('incomplete native turn')
+ const native={events,messages,requests,chunks,modelCalls:calls,toolBodies,toolCalls:events.filter(x=>x.type==='tool/call').length,finalText:last.content.map(b=>b.text).join('')}
+ process.stdout.write(JSON.stringify({version:1,fixtureId:fixture.id,reference:{root,head:pin,artifacts,transitiveArtifactClosure:'NOT_VERIFIED'},native,networkAttempts:attempts,observationStatus:'NATIVE_TOOL_TURN_MEASUREMENT_NOT_PARITY'})+'\n')
+}finally{await ctx.fiber.dispose()}

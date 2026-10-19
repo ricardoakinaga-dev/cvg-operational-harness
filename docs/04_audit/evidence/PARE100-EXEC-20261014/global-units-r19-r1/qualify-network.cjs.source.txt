@@ -1,0 +1,16 @@
+'use strict';
+const net = require('node:net');
+const assert = require('node:assert/strict');
+(async () => {
+  assert.throws(() => net.connect(443, '203.0.113.1'), /CVG_GLOBAL_TEST_NETWORK_BLOCKED/);
+  assert.throws(() => net.connect(5432, '127.0.0.1'), /CVG_GLOBAL_TEST_NETWORK_BLOCKED/);
+  const server = net.createServer(socket => { socket.end('SYNTHETIC_OWN_LISTENER'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const text = await new Promise((resolve, reject) => {
+    const socket = net.connect(server.address().port, '127.0.0.1'); let value = '';
+    socket.on('data', chunk => { value += chunk; }); socket.on('end', () => resolve(value)); socket.on('error', reject);
+  });
+  assert.equal(text, 'SYNTHETIC_OWN_LISTENER');
+  await new Promise(resolve => server.close(resolve));
+  console.log('PASS local owned listener; external and unowned default PG blocked before connect');
+})().catch(error => { console.error(error); process.exitCode = 1; });

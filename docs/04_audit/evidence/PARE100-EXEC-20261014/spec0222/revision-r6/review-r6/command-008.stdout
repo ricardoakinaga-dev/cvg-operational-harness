@@ -1,0 +1,900 @@
+FILE cvg/packages/contracts/src/contracts.ts
+22: export interface AgentProfile {
+23:   readonly id: AgentId
+24:   readonly version: AgentVersion
+25:   readonly objective: string
+26:   readonly instructions: readonly string[]
+27:   readonly skills: readonly SkillRequirement[]
+28:   readonly tools: readonly string[]
+29:   readonly policies: readonly string[]
+30:   /** Phase 3 completion strategy; ignored by the single-pass runtime. */
+31:   readonly completionStrategy?: 'DETERMINISTIC' | 'EVIDENCE_BASED' | 'HYBRID'
+32: }
+33: 
+34: export const STOP_REASONS = [
+35:   'COMPLETED',
+36:   'NEEDS_USER_INPUT',
+37:   'APPROVAL_REQUIRED',
+38:   'HUMAN_TAKEOVER',
+39:   'POLICY_DENIED',
+40:   'INSUFFICIENT_EVIDENCE',
+41:   'MAX_STEPS',
+42:   'MAX_COST',
+43:   'MAX_DURATION',
+44:   'MAX_TOKENS',
+45:   'MAX_MODEL_CALLS',
+46:   'MAX_TOOL_CALLS',
+47:   'MAX_REPLANS',
+48:   'MAX_KNOWLEDGE_CALLS',
+108: }
+109: 
+110: export interface ToolExecutionContext {
+111:   readonly tenantId: TenantId
+112:   readonly agentId: AgentId
+113:   readonly correlationId: CorrelationId
+114:   readonly traceId: TraceId
+115:   readonly operationKey?: string
+116:   readonly signal?: AbortSignal
+117:   /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+118:   readonly sandboxHandle?: SandboxHandle
+119: }
+120: 
+121: export interface ToolDescriptor {
+122:   readonly id: string
+123:   readonly version: string
+124:   readonly description: string
+125:   readonly inputSchema: unknown
+126:   readonly outputSchema: unknown
+127:   readonly risk: RiskLevel
+128:   readonly sideEffect: SideEffect
+129:   readonly idempotent: boolean
+130:   readonly requiresApproval: boolean
+131:   /**
+132:    * Containment this capability requires before it may run (SPEC 0195 §5).
+133:    * Absent or `'NONE'` means no gate; any other mode makes the pipeline fail
+134:    * closed when no `SandboxGate` is configured.
+135:    */
+136:   readonly sandbox?: SandboxMode
+137: }
+138: 
+139: export interface ToolDefinition extends ToolDescriptor {
+140:   execute(input: unknown, context: ToolExecutionContext): Promise<ToolResult>
+141: }
+142: 
+143: export interface ContextSnapshot {
+144:   readonly values: Readonly<Record<string, unknown>>
+145:   readonly sourceIds: readonly string[]
+146:   readonly capturedAt: string
+147: }
+148: 
+149: export interface StateSnapshot {
+150:   readonly version: number
+151:   readonly values: Readonly<Record<string, unknown>>
+152:   readonly updatedAt: string
+153: }
+267: export interface ModelRequest {
+268:   readonly messages: readonly ModelMessage[]
+269:   readonly context: ContextSnapshot
+270:   readonly budget: ExecutionBudget
+271:   readonly correlationId: CorrelationId
+272:   /** Phase 3 accounting hint; providers may ignore it. */
+273:   readonly purpose?: ModelCallPurpose
+274:   /**
+275:    * Aborted by the runtime when the execution deadline passes, so a provider
+276:    * can stop the in-flight request instead of spending connection and cost.
+277:    */
+278:   readonly signal?: AbortSignal
+279: }
+280: 
+281: export interface ModelResult {
+282:   readonly text: string
+283:   readonly provider: string
+284:   readonly model: string
+285:   readonly inputTokens: number
+286:   readonly outputTokens: number
+287:   readonly costUsd: number
+288: }
+289: 
+290: export interface ModelGateway {
+291:   complete(request: ModelRequest): Promise<ModelResult>
+292: }
+293: 
+294: export interface PolicyRequest {
+295:   readonly tenantId: TenantId
+296:   readonly agentId: AgentId
+297:   readonly action: string
+298:   readonly tool: ToolDefinition
+299:   readonly invocation: ToolInvocation
+300:   readonly correlationId: CorrelationId
+301: }
+302: 
+303: export type PolicyOutcome = 'ALLOW' | 'DENY' | 'REQUIRE_APPROVAL' | 'HANDOFF'
+304: 
+305: export interface PolicyDecision {
+306:   readonly outcome: PolicyOutcome
+307:   readonly reason: string
+308:   readonly policyVersion: string
+309: }
+310: 
+311: export interface PolicyEngine {
+312:   evaluate(request: PolicyRequest): Promise<PolicyDecision>
+313: }
+403:   list(): readonly ToolDefinition[]
+404:   resolve(toolId: string, version?: string): ToolDefinition | undefined
+405: }
+406: 
+407: export type CapabilityOrigin = 'core' | 'skill' | 'plugin' | 'knowledge' | 'mcp'
+408: 
+409: /** Data-only identity for a capability exposed to a governed runtime. */
+410: export interface CapabilityDescriptor extends ToolDescriptor {
+411:   readonly origin: CapabilityOrigin
+412:   readonly providerId: string
+413:   readonly providerVersion: string
+414: }
+415: 
+416: /** Executable code is intentionally separate from the descriptor contract. */
+417: export interface CapabilityImplementation {
+418:   validateInput(input: unknown): boolean
+419:   execute(input: unknown, context: ToolExecutionContext): Promise<ToolResult>
+420:   validateOutput(output: unknown): boolean
+421: }
+422: 
+423: export interface CapabilityRegistration {
+424:   readonly descriptor: CapabilityDescriptor
+425:   readonly implementation: CapabilityImplementation
+426: }
+427: 
+428: /** Explicit data-only registry port; implementations stay behind the harness. */
+429: export interface CapabilityRegistry {
+430:   register(registration: CapabilityRegistration): CapabilityRegistry
+431:   listDescriptors(): readonly CapabilityDescriptor[]
+432:   resolveDescriptor(
+433:     capabilityId: string,
+434:     version: string
+435:   ): CapabilityDescriptor | undefined
+436:   compositionFingerprint(): string
+437: }
+438: 
+439: /* -------------------------------------------------------------------------- */
+440: /* Sandbox seam (PDSH-010 / SPEC 0195).                                       */
+448: export type SandboxMode =
+449:   | 'NONE'
+450:   | 'IN_PROCESS'
+451:   | 'WORKSPACE'
+452:   | 'PROCESS'
+453:   | 'EGRESS'
+454: 
+455: /** Resolved containment for one tool call; the only channel to fs/net/exec. */
+456: export interface SandboxHandle {
+457:   readonly mode: SandboxMode
+458:   /** Present only in WORKSPACE; the tenant-scoped writable root. */
+459:   readonly workspaceRoot?: string
+460:   readonly allowNetwork: boolean
+461:   readonly allowSubprocess: boolean
+462:   readonly deadlineMs?: number
+463: }
+464: 
+465: export type SandboxGateOutcome =
+466:   | {
+467:       readonly kind: 'allowed'
+468:       readonly mode: SandboxMode
+469:       readonly handle: SandboxHandle
+470:     }
+471:   | { readonly kind: 'denied'; readonly reason: string }
+472:   | { readonly kind: 'unavailable'; readonly reason: string }
+473: 
+474: export interface SandboxPolicy {
+475:   readonly requiredMode: SandboxMode
+476:   readonly workspaceScoped: boolean
+477:   readonly networkAllowed: boolean
+478:   readonly subprocessAllowed: boolean
+479:   readonly timeoutMs?: number
+480: }
+481: 
+482: export interface SandboxEvaluationInput {
+483:   readonly descriptor: ToolDescriptor
+484:   readonly context: ToolExecutionContext
+485:   readonly policy?: SandboxPolicy
+486: }
+487: 
+488: /** Enforcement port the harness calls between decision and capability body. */
+489: export interface SandboxGate {
+490:   evaluate(input: SandboxEvaluationInput): Promise<SandboxGateOutcome>
+491: }
+492: 
+493: export interface AuditEvent {
+494:   readonly actor: string | null
+495:   readonly agent: AgentId
+496:   readonly tenant: TenantId
+497:   readonly action: string
+498:   readonly policy: string | null
+499:   readonly approval: ApprovalId | null
+500:   readonly tool: string | null
+501:   readonly result: string
+502:   readonly timestamp: string
+503:   readonly traceId: TraceId
+504:   readonly correlationId: CorrelationId
+505: }
+506: 
+507: export interface AuditSink {
+508:   append(event: AuditEvent): Promise<void>
+509: }
+510: 
+FILE cvg/packages/harness/src/kernel/types.ts
+1: import type {
+2:   ApprovalEngine,
+3:   ApprovalId,
+4:   ApprovalExecutionHandle,
+5:   ApprovalExecutionRequest,
+6:   AuditSink,
+7:   ModelGateway,
+8:   ModelRequest,
+9:   Orchestrator,
+10:   PolicyDecision,
+11:   PolicyEngine,
+12:   RuntimeInput,
+13:   RuntimeResult,
+14:   SandboxGate,
+15:   SandboxHandle,
+16:   TelemetrySink,
+17:   ToolDefinition,
+18:   ToolInvocation,
+19:   ToolRegistry,
+20:   ToolResult
+21: } from '@cvg/harness-contracts'
+22: 
+23: /**
+24:  * Kernel de plugins (SPEC 0181, ADR-011). Referência de arquitetura: DeepSeek
+25:  * Harness (`docs/cordis-primer.md`, `docs/tool-execution-pipeline.md`).
+26:  */
+27: 
+28: export type PluginKind = 'control' | 'capability'
+29: 
+30: /** Disposer returned by every registration; awaiting it reaches quiescence. */
+31: export type Disposer = () => Promise<void>
+32: 
+33: /** One governed turn: identity, budget clock and the linked cancel signal. */
+34: export interface TurnState {
+35:   readonly input: RuntimeInput
+36:   readonly startedAt: number
+37:   readonly signal: AbortSignal
+38:   readonly budget: TurnBudget
+39:   readonly metadata: TurnMetadata
+40: }
+41: 
+42: export interface TurnMetadata {
+43:   policy: string | null
+44:   approval: ApprovalId | null
+45:   tool: string | null
+46:   provider: string | null
+47:   inputTokens: number
+48:   outputTokens: number
+49:   costUsd: number
+50:   toolDurationMs: number
+51: }
+52: 
+53: /** Early stop produced by a control: the turn ends with this result. */
+54: export interface KernelStop {
+55:   readonly kind: 'stop'
+56:   readonly stopReason: RuntimeResult['stopReason']
+57:   readonly response: string
+58:   readonly approvalId?: ApprovalId
+59:   readonly modelCalls?: number
+60:   readonly toolCalls?: number
+61:   readonly usage?: {
+62:     readonly inputTokens: number
+63:     readonly outputTokens: number
+64:     readonly costUsd: number
+65:   }
+66:   /** Which control decided, so a loop can record the right step. */
+67:   readonly cause?: StopCause
+68: }
+69: 
+70: export type StopCause =
+71:   | 'policy_denied'
+72:   | 'policy_handoff'
+73:   | 'policy_unsupported'
+74:   | 'policy_failed'
+75:   | 'approval_pending'
+76:   | 'approval_denied'
+77:   | 'approval_failed'
+78:   | 'approval_unbound'
+79:   | 'operator_paused'
+80: 
+81: export interface KernelProceed {
+82:   readonly kind: 'proceed'
+83: }
+84: 
+85: export type KernelGate = KernelProceed | KernelStop
+86: 
+87: export const PROCEED: KernelProceed = Object.freeze({ kind: 'proceed' })
+88: 
+89: export function stop(
+90:   stopReason: RuntimeResult['stopReason'],
+91:   response: string,
+92:   extra: Omit<KernelStop, 'kind' | 'stopReason' | 'response'> = {}
+93: ): KernelStop {
+94:   return { kind: 'stop', stopReason, response, ...extra }
+95: }
+96: 
+97: /** Shared, cooperative state of one tool call through the pipeline. */
+98: export interface ToolCallState {
+99:   readonly turn: TurnState
+100:   readonly tool: ToolDefinition
+210:   | {
+211:       readonly type: 'model/result'
+212:       readonly correlationId: string
+213:       readonly provider: string
+214:       readonly inputTokens: number
+215:       readonly outputTokens: number
+216:     }
+217:   | {
+218:       readonly type: 'tool/call'
+219:       readonly correlationId: string
+220:       readonly toolId: string
+221:       readonly operationKey: string
+222:       readonly input: unknown
+223:     }
+224:   | {
+225:       readonly type: 'tool/result'
+226:       readonly correlationId: string
+227:       readonly toolId: string
+228:       readonly outcome: ToolOutcome['kind']
+229:     }
+230:   | {
+231:       readonly type: 'turn/end'
+232:       readonly correlationId: string
+233:       readonly stopReason: RuntimeResult['stopReason']
+234:     }
+235: 
+236: export interface KernelLog {
+237:   append(event: KernelLogEvent): void | Promise<void>
+238: }
+239: 
+240: /** Pause switch: a paused tenant starts no new step and no new effect. */
+241: export interface PauseSwitch {
+242:   isPaused(tenantId: string): boolean | Promise<boolean>
+243: }
+244: 
+245: /** Effect ledger: lifecycle of each dispatched effect, before and after. */
+246: export interface EffectLedger {
+247:   started(ref: EffectRef): void | Promise<void>
+248:   finished(ref: EffectRef, outcome: ToolOutcome['kind']): void | Promise<void>
+249: }
+250: 
+251: export interface EffectRef {
+252:   readonly tenantId: string
+253:   readonly correlationId: string
+254:   readonly toolId: string
+255:   readonly operationKey: string
+256: }
+257: 
+258: /** Per-turn budget view: the only place that computes budget (I11). */
+259: export interface TurnBudget {
+260:   remainingMs(): number
+261:   /** Computes the window first, then starts `operation`. */
+262:   withDeadline<T>(
+263:     operation: () => Promise<T>,
+264:     ms?: number
+265:   ): Promise<T | typeof DEADLINE>
+266:   /**
+267:    * Single before-model gate (PDSH-004 / I11): consumes one model slot.
+268:    * Tokens/cost are recorded post-result at the single accounting site;
+269:    * callers never re-check model-call budgets.
+270:    */
+271:   beginModelRequest(): KernelStop | undefined
+272:   /** Single post-result accounting (tokens, cost); checks totals. */
+273:   recordModelResult(result: {
+274:     readonly inputTokens: number
+275:     readonly outputTokens: number
+276:     readonly costUsd: number
+277:   }): KernelStop | undefined
+278: }
+279: 
+280: export interface BudgetService {
+281:   begin(input: RuntimeInput, startedAt: number): TurnBudget
+282: }
+283: 
+284: export const DEADLINE: unique symbol = Symbol('kernel-deadline-exceeded')
+285: 
+286: export interface Services {
+287:   planner: Orchestrator
+288:   model: ModelGateway
+289:   tools: ToolRegistry
+290:   policy: PolicyEngine
+291:   approvals: ApprovalEngine
+292:   audit: AuditSink
+293:   telemetry: TelemetrySink
+294:   budget: BudgetService
+295:   pause: PauseSwitch
+296:   log: KernelLog
+297:   effects: EffectLedger
+298:   /** Optional containment gate; absent means fail-closed for contained tools. */
+299:   sandbox?: SandboxGate
+300: }
+301: 
+302: export type ServiceKey = keyof Services
+303: 
+304: /** Services only control plugins may provide (SPEC 0181 I1/I2). */
+305: export const CONTROL_SERVICES = [
+306:   'policy',
+307:   'approvals',
+308:   'effects',
+309:   'audit',
+310:   'budget',
+311:   'pause',
+312:   'log'
+313: ] as const satisfies readonly ServiceKey[]
+314: 
+315: /**
+316:  * Containment is optional (SPEC 0195): the pipeline resolves it via
+317:  * `host.get('sandbox')` and fails closed when it is absent, so it must never
+318:  * join REQUIRED_SERVICES.
+319:  */
+320: export const OPTIONAL_SERVICES = [
+321:   'sandbox'
+322: ] as const satisfies readonly ServiceKey[]
+323: 
+324: /** Capabilities the single-turn loop needs to run. */
+325: export const LOOP_CAPABILITIES = [
+326:   'planner',
+327:   'model',
+328:   'tools',
+329:   'telemetry'
+330: ] as const satisfies readonly ServiceKey[]
+331: 
+332: export interface KernelContext {
+333:   provide<K extends ServiceKey>(key: K, service: Services[K]): Disposer
+334:   get<K extends ServiceKey>(key: K): Services[K]
+335:   on<P extends HookPoint>(point: P, listener: HookMap[P]): Disposer
+336:   /** Control plugins only. */
+337:   guard(guard: ToolGuard): Disposer
+338:   /** Register teardown work for resources the plugin owns. */
+339:   effect(dispose: Disposer): void
+340: }
+341: 
+342: export interface KernelPlugin {
+343:   readonly name: string
+344:   readonly kind: PluginKind
+345:   readonly provides?: readonly ServiceKey[]
+346:   readonly requires?: readonly ServiceKey[]
+347:   apply(ctx: KernelContext): void | Promise<void>
+348: }
+FILE cvg/packages/harness/src/capability-boundary.ts
+1: import { createHash } from 'node:crypto'
+2: import type {
+3:   CapabilityDescriptor,
+4:   CapabilityImplementation,
+5:   CapabilityOrigin,
+6:   CapabilityRegistration,
+7:   CapabilityRegistry as CapabilityRegistryPort,
+8:   ToolDefinition,
+9:   ToolExecutionContext,
+10:   ToolRegistry,
+11:   ToolResult
+12: } from '@cvg/harness-contracts'
+13: 
+14: const CAPABILITY_ID_PATTERN = /^[A-Za-z0-9._:-]+$/
+15: const MAX_ID_LENGTH = 120
+16: const MAX_VERSION_LENGTH = 80
+17: const MAX_DESCRIPTION_LENGTH = 4000
+18: const MAX_JSON_DEPTH = 64
+19: const MAX_JSON_NODES = 20_000
+20: const MAX_JSON_STRING_LENGTH = 16_384
+21: const MAX_JSON_KEY_LENGTH = 512
+22: const MAX_JSON_KEYS = 512
+23: const MAX_JSON_ARRAY_LENGTH = 512
+24: const MAX_JSON_BYTES = 256 * 1024
+25: const UNSAFE_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+26: const AUTHORITY_FIELDS = [
+27:   'tenantId',
+28:   'agentId',
+29:   'correlationId',
+30:   'traceId'
+31: ] as const
+32: const ORIGINS: readonly CapabilityOrigin[] = [
+33:   'core',
+34:   'skill',
+35:   'plugin',
+36:   'knowledge',
+37:   'mcp'
+38: ]
+39: 
+40: export type CapabilityRegistryErrorCode =
+41:   | 'invalid_descriptor'
+42:   | 'invalid_implementation'
+43:   | 'duplicate_capability'
+44: 
+45: export class CapabilityRegistryError extends Error {
+46:   public readonly code: CapabilityRegistryErrorCode
+47: 
+48:   public constructor(code: CapabilityRegistryErrorCode, message: string) {
+49:     super(message)
+50:     this.name = 'CapabilityRegistryError'
+51:     this.code = code
+52:   }
+53: }
+54: 
+55: interface StoredRegistration {
+56:   readonly descriptor: CapabilityDescriptor
+57:   readonly implementation: CapabilityImplementation
+58: }
+59: 
+60: const registrationsByRegistry = new WeakMap<
+61:   object,
+62:   readonly StoredRegistration[]
+63: >()
+64: 
+65: /**
+66:  * Explicit, immutable capability composition for the neutral harness.
+67:  * Implementations are retained in a private module-owned store. The
+68:  * executable adapter is only reachable from the composition root.
+69:  */
+70: export class CapabilityRegistry implements CapabilityRegistryPort {
+71:   public constructor(registrations: readonly CapabilityRegistration[] = []) {
+72:     const stored: StoredRegistration[] = []
+73:     for (const registration of registrations) {
+74:       const normalized = normalizeRegistration(registration)
+75:       if (
+76:         stored.some(
+77:           (candidate) =>
+78:             candidate.descriptor.id === normalized.descriptor.id &&
+79:             candidate.descriptor.version === normalized.descriptor.version
+80:         )
+81:       ) {
+82:         throw new CapabilityRegistryError(
+83:           'duplicate_capability',
+84:           `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+85:         )
+86:       }
+87:       stored.push(normalized)
+88:     }
+89:     registrationsByRegistry.set(this, Object.freeze(stored))
+90:   }
+91: 
+92:   public register(registration: CapabilityRegistration): CapabilityRegistry {
+93:     const normalized = normalizeRegistration(registration)
+94:     if (
+95:       getRegistrations(this).some(
+96:         (candidate) =>
+97:           candidate.descriptor.id === normalized.descriptor.id &&
+98:           candidate.descriptor.version === normalized.descriptor.version
+99:       )
+100:     ) {
+101:       throw new CapabilityRegistryError(
+102:         'duplicate_capability',
+103:         `Capability already registered: ${normalized.descriptor.id}@${normalized.descriptor.version}`
+104:       )
+105:     }
+106: 
+107:     return CapabilityRegistry.fromStored([
+108:       ...getRegistrations(this),
+109:       normalized
+110:     ])
+111:   }
+112: 
+113:   public listDescriptors(): readonly CapabilityDescriptor[] {
+114:     return sorted(getRegistrations(this)).map(({ descriptor }) =>
+115:       cloneDescriptor(descriptor)
+116:     )
+117:   }
+118: 
+119:   public resolveDescriptor(
+120:     capabilityId: string,
+121:     version: string
+122:   ): CapabilityDescriptor | undefined {
+123:     if (!isBoundedIdentifier(capabilityId, MAX_ID_LENGTH)) return undefined
+124:     if (!isBoundedVersion(version)) return undefined
+125:     const registration = getRegistrations(this).find(
+126:       (candidate) =>
+127:         candidate.descriptor.id === capabilityId &&
+128:         candidate.descriptor.version === version
+129:     )
+130:     return registration ? cloneDescriptor(registration.descriptor) : undefined
+131:   }
+132: 
+133:   public compositionFingerprint(): string {
+134:     const descriptors = sorted(getRegistrations(this)).map(
+135:       ({ descriptor }) => descriptor
+136:     )
+137:     return createHash('sha256')
+138:       .update(
+139:         stableSerialize({
+140:           schemaVersion: 'capability-composition-v1',
+141:           descriptors
+142:         })
+143:       )
+144:       .digest('hex')
+145:   }
+146: 
+147:   private static fromStored(
+148:     registrations: readonly StoredRegistration[]
+149:   ): CapabilityRegistry {
+150:     const registry = Object.create(
+151:       CapabilityRegistry.prototype
+152:     ) as CapabilityRegistry
+153:     registrationsByRegistry.set(registry, Object.freeze([...registrations]))
+154:     return registry
+155:   }
+156: }
+157: 
+158: /** Creates an empty registry without requiring callers to know the class. */
+159: export function createCapabilityRegistry(
+160:   registrations: readonly CapabilityRegistration[] = []
+280:     throw new CapabilityRegistryError(
+281:       'invalid_descriptor',
+282:       'Capability registration contains unsupported data'
+283:     )
+284:   }
+285: }
+286: 
+287: function getRegistrations(
+288:   registry: CapabilityRegistryPort
+289: ): readonly StoredRegistration[] {
+290:   const registrations = registrationsByRegistry.get(registry as object)
+291:   if (!registrations) {
+292:     throw new CapabilityRegistryError(
+293:       'invalid_descriptor',
+294:       'Capability registry was not created by the neutral registry factory'
+295:     )
+296:   }
+297:   return registrations
+298: }
+299: 
+300: function normalizeImplementation(value: unknown): CapabilityImplementation {
+301:   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+302:     throw new CapabilityRegistryError(
+303:       'invalid_implementation',
+304:       'Capability implementation requires input validation, execution, and output validation'
+305:     )
+306:   }
+307: 
+308:   let validateInput: CapabilityImplementation['validateInput']
+309:   let execute: CapabilityImplementation['execute']
+310:   let validateOutput: CapabilityImplementation['validateOutput']
+311:   try {
+312:     const implementation = value as Record<string, unknown>
+313:     if (
+314:       typeof implementation.validateInput !== 'function' ||
+315:       typeof implementation.execute !== 'function' ||
+316:       typeof implementation.validateOutput !== 'function'
+317:     ) {
+318:       throw new Error('missing implementation method')
+319:     }
+320:     validateInput = (
+321:       implementation.validateInput as CapabilityImplementation['validateInput']
+322:     ).bind(value)
+323:     execute = (
+324:       implementation.execute as CapabilityImplementation['execute']
+325:     ).bind(value)
+326:     validateOutput = (
+327:       implementation.validateOutput as CapabilityImplementation['validateOutput']
+328:     ).bind(value)
+329:   } catch {
+330:     throw new CapabilityRegistryError(
+331:       'invalid_implementation',
+332:       'Capability implementation requires input validation, execution, and output validation'
+333:     )
+334:   }
+335:   return Object.freeze({
+336:     validateInput,
+337:     execute,
+338:     validateOutput
+339:   }) as CapabilityImplementation
+340: }
+341: 
+342: function toTool(registration: StoredRegistration): ToolDefinition {
+343:   const descriptor = cloneDescriptor(registration.descriptor)
+344:   return {
+345:     ...descriptor,
+346:     execute: (input: unknown, context: ToolExecutionContext) =>
+347:       executeBound(registration.implementation, input, context)
+348:   }
+349: }
+350: 
+351: async function executeBound(
+352:   implementation: CapabilityImplementation,
+353:   input: unknown,
+354:   context: ToolExecutionContext
+355: ): Promise<ToolResult> {
+356:   let safeInput: unknown
+357:   try {
+358:     safeInput = cloneJsonValue(input)
+359:     if (!inputMatchesExecutionContext(safeInput, context)) {
+360:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+361:     }
+362:     if (implementation.validateInput(safeInput) !== true) {
+363:       return { status: 'REJECTED', error: 'capability_input_invalid' }
+364:     }
+365:   } catch {
+366:     return { status: 'REJECTED', error: 'capability_input_invalid' }
+367:   }
+368: 
+369:   let result: ToolResult
+370:   try {
+371:     const safeContext = Object.freeze({ ...context }) as ToolExecutionContext
+372:     const rawResult = await implementation.execute(safeInput, safeContext)
+373:     const normalizedResult = normalizeToolResult(rawResult)
+374:     if (!normalizedResult) {
+375:       return { status: 'REJECTED', error: 'capability_result_invalid' }
+376:     }
+377:     result = normalizedResult
+378:   } catch {
+379:     return { status: 'FAILED', error: 'capability_execution_failed' }
+380:   }
+381: 
+382:   if (result.status === 'SUCCEEDED') {
+383:     try {
+384:       if (implementation.validateOutput(result.output) !== true) {
+385:         return { status: 'REJECTED', error: 'capability_output_invalid' }
+386:       }
+387:     } catch {
+388:       return { status: 'REJECTED', error: 'capability_output_invalid' }
+389:     }
+390:   }
+391: 
+392:   try {
+393:     return {
+394:       status: result.status,
+395:       ...(result.output !== undefined
+396:         ? { output: cloneJsonValue(result.output) }
+397:         : {}),
+398:       ...(result.error !== undefined ? { error: result.error } : {})
+399:     }
+400:   } catch {
+401:     return { status: 'REJECTED', error: 'capability_result_invalid' }
+402:   }
+403: }
+404: 
+405: function cloneDescriptor(
+406:   descriptor: CapabilityDescriptor
+407: ): CapabilityDescriptor {
+408:   return deepFreeze({
+409:     ...descriptor,
+410:     inputSchema: cloneJsonValue(descriptor.inputSchema),
+411:     outputSchema: cloneJsonValue(descriptor.outputSchema)
+412:   }) as CapabilityDescriptor
+413: }
+414: 
+415: function sorted(
+416:   registrations: readonly StoredRegistration[]
+417: ): readonly StoredRegistration[] {
+418:   return [...registrations].sort((left, right) => {
+419:     const idOrder = compareCodeUnits(left.descriptor.id, right.descriptor.id)
+420:     if (idOrder !== 0) return idOrder
+421:     return compareCodeUnits(left.descriptor.version, right.descriptor.version)
+422:   })
+423: }
+424: 
+425: function compareCodeUnits(left: string, right: string): number {
+426:   return left < right ? -1 : left > right ? 1 : 0
+427: }
+428: 
+429: function inputMatchesExecutionContext(
+430:   value: unknown,
+500:       error !== undefined &&
+501:       (typeof error !== 'string' || error.length > 240)
+502:     ) {
+503:       return undefined
+504:     }
+505:     const output = safeValue.output
+506:     return {
+507:       status,
+508:       ...(output !== undefined ? { output } : {}),
+509:       ...(error !== undefined ? { error } : {})
+510:     }
+511:   } catch {
+512:     return undefined
+513:   }
+514: }
+515: 
+516: function isToolStatus(value: unknown): value is ToolResult['status'] {
+517:   return value === 'SUCCEEDED' || value === 'FAILED' || value === 'REJECTED'
+518: }
+519: 
+520: function cloneJsonValue(value: unknown): unknown {
+521:   return JSON.parse(stableSerialize(value)) as unknown
+522: }
+523: 
+524: interface SerializationState {
+525:   readonly seen: WeakSet<object>
+526:   nodes: number
+527: }
+528: 
+529: function stableSerialize(
+530:   value: unknown,
+531:   state: SerializationState = { seen: new WeakSet<object>(), nodes: 0 },
+532:   depth = 0
+533: ): string {
+534:   state.nodes += 1
+535:   if (state.nodes > MAX_JSON_NODES) {
+536:     throw new Error('JSON node budget exceeded')
+537:   }
+538:   if (depth > MAX_JSON_DEPTH) {
+539:     throw new Error('JSON depth budget exceeded')
+540:   }
+541: 
+542:   if (value === null) return 'null'
+543:   if (typeof value === 'string') {
+544:     if (value.length > MAX_JSON_STRING_LENGTH) {
+545:       throw new Error('JSON string budget exceeded')
+546:     }
+547:     return JSON.stringify(value)
+548:   }
+549:   if (typeof value === 'boolean') return value ? 'true' : 'false'
+550:   if (typeof value === 'number') {
+551:     if (!Number.isFinite(value)) throw new Error('Non-finite value')
+552:     return JSON.stringify(value)
+553:   }
+554:   if (typeof value !== 'object' || value === undefined) {
+555:     throw new Error('Value is not JSON serializable')
+556:   }
+557:   if (state.seen.has(value)) throw new Error('Value contains a cycle')
+558:   state.seen.add(value)
+559:   try {
+560:     if (Array.isArray(value)) {
+561:       if (value.length > MAX_JSON_ARRAY_LENGTH) {
+562:         throw new Error('JSON array budget exceeded')
+563:       }
+564:       const items: string[] = []
+565:       for (let index = 0; index < value.length; index += 1) {
+566:         if (!Object.prototype.hasOwnProperty.call(value, index)) {
+567:           throw new Error('Sparse arrays are not supported')
+568:         }
+569:         items.push(stableSerialize(value[index], state, depth + 1))
+570:       }
+571:       return boundedSerialized(`[${items.join(',')}]`)
+572:     }
+573:     if (!isPlainRecord(value)) throw new Error('Value is not a plain object')
+574:     const keys = Object.keys(value)
+575:     if (
+576:       keys.length > MAX_JSON_KEYS ||
+577:       Object.getOwnPropertySymbols(value).length > 0 ||
+578:       Object.getOwnPropertyNames(value).length !== keys.length
+579:     ) {
+580:       throw new Error('JSON object budget or shape exceeded')
+581:     }
+582:     const parts: string[] = []
+583:     for (const key of keys.sort()) {
+584:       if (key.length > MAX_JSON_KEY_LENGTH || UNSAFE_JSON_KEYS.has(key)) {
+585:         throw new Error('Unsafe JSON object key')
+586:       }
+587:       const property = Object.getOwnPropertyDescriptor(value, key)
+588:       if (!property || !('value' in property)) {
+589:         throw new Error('Accessor properties are not supported')
+590:       }
+591:       parts.push(
+592:         `${JSON.stringify(key)}:${stableSerialize(property.value, state, depth + 1)}`
+593:       )
+594:     }
+595:     return boundedSerialized(`{${parts.join(',')}}`)
+596:   } finally {
+597:     state.seen.delete(value)
+598:   }
+599: }
+600: 
+601: function boundedSerialized(value: string): string {
+602:   if (value.length > MAX_JSON_BYTES) {
+603:     throw new Error('JSON byte budget exceeded')
+604:   }
+605:   return value
+606: }
+607: 
+608: function deepFreeze<T>(value: T): T {
+609:   if (typeof value !== 'object' || value === null) return value
+610:   Object.freeze(value)
+611:   for (const child of Object.values(value)) deepFreeze(child)
+612:   return value
+613: }
+614: 
+615: function isPlainRecord(value: unknown): value is Record<string, unknown> {
+616:   try {
+617:     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+618:       return false
+619:     }
+620:     const prototype = Object.getPrototypeOf(value)
+621:     return prototype === Object.prototype || prototype === null
+622:   } catch {
+623:     return false
+624:   }
+625: }

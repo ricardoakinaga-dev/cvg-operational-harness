@@ -1,0 +1,213 @@
+"""Recompute the completed reference experiment from raw bytes, never run ELF."""
+from pathlib import Path
+from decimal import Decimal
+import datetime
+import hashlib
+import json
+import os
+import re
+import subprocess
+
+HERE = Path(__file__).resolve().parent
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def sha(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def decode(data):
+    return json.loads(data, parse_float=Decimal)
+
+
+def identity(value):
+    return type(value).__name__, value
+
+
+def main():
+    contract = read(HERE / 'contract.json')
+    review = read(HERE / 'review-status.json')
+    assert review['status'] == 'APPROVED_BOUNDED_HOW'
+    for name, digest in review['input_sha256'].items():
+        assert sha(HERE / name) == digest, name + ' drift'
+    terminal = read(HERE / 'live.json')
+    attempt = terminal['attempt']
+    assert re.fullmatch(r'settled-[0-9a-f]{10}', attempt)
+    directory = HERE / attempt
+    assert terminal == read(directory / 'terminal.json')
+    assert terminal['status'] == 'TERMINAL' and terminal['exit'] == 0
+    assert terminal['first_supervisor_failure'] is None and not terminal['secondary_failures']
+    assert terminal['contract_sha256'] == sha(HERE / 'contract.json')
+    assert terminal['runner_sha256'] == sha(HERE / 'run.py')
+    assert terminal['driver_sha256'] == sha(HERE / 'driver.py')
+    assert terminal['cleanup']['cleanup_verified'] and terminal['reference_unchanged']
+    assert terminal['final_storage_bytes'] <= contract['monitored_storage_limit_bytes']
+    assert terminal['preserved_bytes'] <= contract['preservation_limit_bytes']
+    artifact = terminal['reference_artifact']
+    path = Path(artifact['path'])
+    assert not path.is_symlink() and path.stat().st_size == artifact['bytes']
+    assert sha(path) == artifact['sha256']
+    raw = directory / 'raw'
+    for name, expected in [('driver.py', sha(HERE / 'driver.py')),
+                           ('target-guard.py', sha(HERE / 'target-guard.py')),
+                           ('cases.json', sha(HERE / 'cases.json')),
+                           ('base-driver.py', contract['base_driver_input']['sha256'])]:
+        assert sha(raw / 'control' / name) == expected, 'copied control drift'
+    first = (raw / 'supervisor.stderr.log').read_bytes().split(b'\n', 1)[0]
+    prefix = b'CVG_REFERENCE_PROBE_KERNEL '
+    assert first.startswith(prefix)
+    kernel = json.loads(first[len(prefix):])
+    assert kernel == terminal['kernel_proof']
+    limits = kernel['limits']
+    assert limits['memory.max'] == '4294967296' and limits['memory.swap.max'] == '0'
+    assert limits['pids.max'] == '256'
+    quota, period = limits['cpu.max'].split()
+    assert quota != 'max' and int(quota) == 2 * int(period)
+    scope = terminal['scope']
+    assert scope == 'cvg-codex100-ref-probe-' + attempt + '.scope'
+    assert kernel['cgroup'].endswith('/' + scope)
+    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
+           'XDG_RUNTIME_DIR': '/run/user/' + str(os.getuid()),
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(os.getuid()) + '/bus'}
+    query = subprocess.run(['systemctl', '--user', 'show', scope, '-p', 'LoadState',
+                            '-p', 'ActiveState', '-p', 'ControlGroup'],
+                           env=env, capture_output=True, text=True, timeout=10)
+    assert query.returncode == 0, 'fresh scope query unavailable'
+    fields = dict(line.split('=', 1) for line in query.stdout.splitlines() if '=' in line)
+    assert fields['ActiveState'] in ['inactive', 'failed']
+    group = Path('/sys/fs/cgroup') / kernel['cgroup'].lstrip('/')
+    if group.exists():
+        events = dict(line.split() for line in (group / 'cgroup.events').read_text().splitlines())
+        assert events['populated'] == '0'
+        populated = '0'
+    else:
+        populated = 'REMOVED'
+    output = raw / 'output'
+    namespace = read(output / 'namespace-proof.json')
+    for key in ['host_namespaces_distinct', 'environment_exact', 'host_home_and_sockets_absent',
+                'network_routes_absent', 'reference_native_controller_usr_readonly']:
+        assert namespace[key] is True
+    plan = read(HERE / 'cases.json')
+    prior = read(HERE.parent / 'lossless-wire-probe/cases.json')
+    assert plan['all_historical_cases'] == prior['cases']
+    positive = [r for r in plan['all_historical_cases'] if r['source_category'].startswith('SOURCE_')]
+    edges = [r for r in plan['all_historical_cases'] if r['source_category'] == 'EDGE_OBSERVE']
+    assert len(positive) == 12 and len(edges) == 11
+    assert plan['execute_names'] == [r['name'] for r in positive]
+    assert plan['deferred_edge_names'] == [r['name'] for r in edges]
+    observations = read(output / 'observations.json')
+    assert observations['positive_cases'] == positive
+    assert observations['processes'] == 1 and observations['same_connection'] is True
+    assert observations['wire_writes'] == observations['response_settlements'] == 14
+    assert observations['deferred_edges'] == [r['name'] for r in edges]
+    assert observations['EOF_after_all_responses'] is True
+    capture = read(output / 'settled.capture.json')
+    assert capture['exit'] == 0 and not capture['forced_cleanup'] and not capture['secondary_failures']
+    assert capture['args'] == ['/reference/codex', 'app-server', '--listen', 'stdio://']
+    streams = {}
+    for stream in ['stdout', 'stderr']:
+        file = output / ('settled.' + stream + '.log')
+        data = file.read_bytes()
+        assert len(data) == capture['bytes'][stream] and sha(file) == capture['sha256'][stream]
+        streams[stream] = data
+    assert sum(map(len, streams.values())) <= 8388608
+    guard_prefix = b'CVG_INNER_REFERENCE_GUARD '
+    line = streams['stderr'].split(b'\n', 1)[0]
+    assert line.startswith(guard_prefix)
+    guard = json.loads(line[len(guard_prefix):])
+    assert guard == read(output / 'settled.inner-guard.json')
+    assert guard['target_argv'] == capture['args']
+    assert all(guard[k] is True for k in ['environment_exact', 'readonly_inputs', 'collector_paths_absent'])
+    params = {'clientInfo': {'name': 'cvg-reference-probe', 'title': 'Synthetic', 'version': '0.synthetic'},
+              'capabilities': {'explicitGatewayOauth': True, 'experimentalApi': False, 'requestAttestation': False}}
+    requests = (output / 'settled.requests.ndjson').read_bytes().splitlines(keepends=True)
+    expected = [(json.dumps({'id': 'init', 'method': 'initialize', 'params': params}, ensure_ascii=True) + '\n').encode()]
+    expected += [('{"id":' + r['raw_id_token'] + ',"method":"thread/list","params":{"limit":1}}\n').encode() for r in positive]
+    expected.append(b'{"id":"barrier","method":"thread/list","params":{"limit":1}}\n')
+    assert requests == expected and len(requests) == 14
+    ledger = read(output / 'settled.requests.json')['writes']
+    order = read(output / 'settled.order.json')
+    assert len(ledger) == len(order['settlements']) == 14
+    assert order['eof_started'] is True and order['settlements_before_eof'] == 14
+    names = ['initialize', *[r['name'] for r in positive], 'barrier']
+    offset = 0
+    for index, (line, entry) in enumerate(zip(requests, ledger)):
+        assert entry['raw_utf8'].encode() == line and entry['delivered_to_stdin'] is True
+        assert entry['byte_start'] == offset and entry['byte_end_exclusive'] == offset + len(line)
+        assert entry['sha256'] == hashlib.sha256(line).hexdigest()
+        assert entry['case'] == names[index] and entry['settlements_before_write'] == index
+        offset += len(line)
+    lines = streams['stdout'].splitlines(keepends=True)
+    messages = [decode(line) for line in lines]
+    assert [json.loads(line) for line in lines] == capture['messages']
+    assert all(isinstance(m, dict) and 'jsonrpc' not in m for m in messages)
+    assert not any('id' in m and 'method' in m for m in messages)
+    request_ids = [decode(line)['id'] for line in requests]
+    response_indices = [i for i, m in enumerate(messages) if 'id' in m]
+    responses = [messages[i] for i in response_indices]
+    assert len(response_indices) == len(request_ids) == 14
+    assert [identity(m['id']) for m in responses] == [identity(value) for value in request_ids]
+    frame_ends = []
+    frame_starts = []
+    offset = 0
+    for line in lines:
+        frame_starts.append(offset)
+        offset += len(line)
+        frame_ends.append(offset)
+    for index, (item, response, frame_index) in enumerate(zip(order['settlements'], responses, response_indices)):
+        assert item['case'] == names[index] and item['wire_ordinal'] == index
+        assert item['response_frame_index'] == frame_index
+        own_write = ledger[index]
+        assert own_write['messages_seen_before_write'] <= frame_index
+        assert own_write['stdout_bytes_seen_before_write'] <= frame_starts[frame_index]
+        assert item['response_frame_byte_start'] == frame_starts[frame_index]
+        assert item['response_frame_byte_end_exclusive'] == frame_ends[frame_index]
+        assert frame_index < item['messages_seen_at_settlement'] <= len(messages)
+        assert frame_ends[frame_index] <= item['stdout_bytes_seen_at_settlement'] <= len(streams['stdout'])
+        assert item['typed_id_kind'] == type(request_ids[index]).__name__
+        assert set(response) == {'id', 'result'}
+        if index == 0:
+            assert set(response['result']) == {'userAgent', 'codexHome', 'platformFamily', 'platformOs'}
+            assert response['result']['codexHome'] == '/reference-home/.codex'
+        else:
+            assert response['result'] == {'data': [], 'readStates': {}, 'nextCursor': None, 'backwardsCursor': None}
+        if index > 0:
+            before = ledger[index]['messages_seen_before_write']
+            assert response_indices[index - 1] < before <= len(messages)
+            assert order['settlements'][index - 1]['messages_seen_at_settlement'] <= before
+        written = [identity(value) for value in request_ids[:index + 1]]
+        prefix = messages[:item['messages_seen_at_settlement']]
+        prefix_ids = [identity(m['id']) for m in prefix if 'id' in m]
+        assert all(key in written for key in prefix_ids), 'early response for future/unwritten ID'
+        assert len(set(prefix_ids)) == len(prefix_ids), 'duplicate prefix response'
+    assert response_indices[-1] < order['messages_seen_before_eof'] <= len(messages)
+    assert order['settlements'][-1]['messages_seen_at_settlement'] <= order['messages_seen_before_eof']
+    results = []
+    for row, frame_index, response in zip(positive, response_indices[1:-1], responses[1:-1]):
+        assert identity(decode(row['raw_id_token'])) == identity(response['id'])
+        results.append({**row, 'status': 'EXACT_TYPED_REFERENCE_ID_ROUNDTRIP_OBSERVED',
+                        'response_frame_index': frame_index,
+                        'raw_response_utf8': lines[frame_index].decode(),
+                        'raw_response_sha256': hashlib.sha256(lines[frame_index]).hexdigest(),
+                        'same_connection': True, 'observed_before_next_send_and_EOF': True})
+    result = {'kind': 'RECOMPUTED_SETTLED_POSITIVE_REFERENCE_ID_CASES_NOT_CVG_PARITY',
+              'observed_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'attempt': attempt, 'contract_sha256': sha(HERE / 'contract.json'),
+              'reference_artifact': artifact, 'fresh_scope_query': fields, 'cgroup_populated': populated,
+              'positive_cases': results, 'positive_count': 12, 'wire_writes': 14,
+              'responses': 14, 'single_connection': True, 'settlement_order_verified': True,
+              'EOF_after_all_responses': True, 'notification_methods': [m['method'] for m in messages if 'id' not in m],
+              'deferred_edge_names': [r['name'] for r in edges], 'deferred_edge_status': 'OPEN_NOT_EXECUTED',
+              'historical23cases_retained': True, 'prior_inconclusive_experiment_not_rewritten': True,
+              'functional_receipts': 0, 'native_CVG_executed': False, 'all_numeric_domains_closed': False}
+    (HERE / 'recomputed-observations.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    print(json.dumps({k: result[k] for k in ['attempt', 'positive_count', 'wire_writes', 'responses',
+                                           'single_connection', 'settlement_order_verified', 'cgroup_populated', 'functional_receipts']}))
+
+
+if __name__ == '__main__':
+    main()

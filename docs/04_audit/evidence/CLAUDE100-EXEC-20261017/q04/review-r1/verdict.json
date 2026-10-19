@@ -1,0 +1,176 @@
+{
+  "task": "PAR-Q04-FAULTS-001",
+  "role": "independent fresh critic, readonly implementation review",
+  "round": 1,
+  "correctiveRoundsUsed": 0,
+  "maximumCorrectiveRounds": 2,
+  "verdict": "REVISE",
+  "approved": false,
+  "scope": "Private T2 helper MF01–MF06 plus bounded focal MF07 only; no overall parity/release decision",
+  "candidate": "/tmp/cvg-claude100-exec-20261017/q04-candidate",
+  "head": "cff0e7c3b1e5b9baa40e0c2c62d398109da0889d",
+  "specSha256": "8f8ecd2934fd3dbfd7b82141efb6a97e2a653782eefe10ef8c177b01a408fe93",
+  "criteria": {
+    "MF01": {
+      "status": "PASS_SCOPED",
+      "evidence": "Existing native provider and ModelGateway positive tests independently executed for ok-json/chunked-json; exact wire, output, usage3/2, one attempt, real events. No fetchImpl in these positive tests."
+    },
+    "MF02": {
+      "status": "PASS_SCOPED",
+      "evidence": "Independent existing public provider/gateway fault tests: rate_limited/provider_rate_limited, timeout/cancelled, connection/provider_connection_reset, malformed_response/provider_malformed_response. Native timeout difference preserved and explicitly accepted as observed existing behavior."
+    },
+    "MF03": {
+      "status": "PASS_SCOPED",
+      "evidence": "All7 scenarios independently recorded and replayed over native HTTP, bytes checked against independently spelled literals; actual read callback bytes/order and monotonic timings retained; UTF-8 C3/A1 application-write split; native complete/disconnect/timeout outcomes.13 independently rehashed mutations rejected. Builder static probe separately rerun under scrubbed own environment.",
+      "limits": "Recording delayMs is scheduled delay, not measured elapsed time; application writes are not TCP packet boundaries; SSE synthetic only."
+    },
+    "MF04": {
+      "status": "PASS_SCOPED",
+      "evidence": "13 fake environment names x factory/persistence x record/refresh =52 actual negative calls, zero listen/open calls; descriptors/getters/unknown fields/URL/callbacks refused before resources; exact wire duplicate hidden prompts, extra payloads, auth/header duplicates and over-header requests refused without record/history."
+    },
+    "MF05": {
+      "status": "FAIL",
+      "blockingFindings": [
+        "Q04-R1-F01",
+        "Q04-R1-F02"
+      ],
+      "positiveEvidence": "Existing exact/+1 request/ID/delay/input caps and actual chunked receive tests passed; independent cancellation/pending-write/partial-body/5-second timeout checks closed real listeners and tracked resources, zero extra native handles; cause-preservation regression is EXPECTED_RED exit1."
+    },
+    "MF06": {
+      "status": "PASS_OBSERVED_BOUNDARIES_WITH_LIMITATION",
+      "evidence": "Exclusive0600 canonical writes; old bytes unchanged after sibling refresh; collision/traversal/symlink/hardlink/directory/FIFO/noncanonical/duplicate/oversize/writable-child rejection; deterministic path-component swap proves FD-anchored output remains in parked original directory, with redirected destination untouched. Entire candidate hash/status snapshots unchanged.",
+      "limits": "Foreign-UID negative not run: own fixture chown was denied. Current owned UID/mode observed and rejection conditions inspected in source; not runtime proof of a different-UID fixture. No hostile same-UID sandbox or crash consistency claim."
+    },
+    "MF07": {
+      "status": "FOCAL_PASS_FULL_GENERAL_LEAD_PENDING_REVIEW_REVISE",
+      "existingTests": {
+        "passed": 212,
+        "skipped": 2,
+        "filesPassed": 5,
+        "exit": 0,
+        "reasonForTwoSkips": "Exact source test hardcodes q04-builder output root, outside reviewer write scope. No test/source mutation; two static subprocess probe modes independently executed with own HOME/TMPDIR and exit0."
+      },
+      "generalGates": "NOT_RUN: full unit/PG/E2E/certify/SBOM/licenses/install and broad gates prohibited in this review; Q01 resources never accessed."
+    }
+  },
+  "blockingFindings": [
+    {
+      "id": "Q04-R1-F01",
+      "severity": "P2",
+      "blocking": true,
+      "criterion": "MF05",
+      "confidence": "CONFIRMED_RUNTIME",
+      "title": "Persistence drops real primary and FD-cleanup causes before aggregation",
+      "file": "tests/support/model-fault-server/persistence.js",
+      "line": 141,
+      "related_lines": [
+        135,
+        147,
+        148,
+        149,
+        153
+      ],
+      "expected": "Preserve real primary and cleanup failures together, with primary as the causal root and cleanup separately available; do not replace both with cause-free placeholders.",
+      "actual": "Exclusive collision produces native EEXIST/open but returns a cause-free generic rejection. Invalidating only the new owned output FD makes native writeFile and FileHandle.close return EBADF/write and EBADF/close. Returned AggregateError contains only generic messages; both errors have no code, syscall, or cause. The native errors are absent from the causal graph.",
+      "reproduction": {
+        "script": "/tmp/cvg-claude100-exec-20261017/q04-review-r1/scripts/repro-mf05-causes.mjs",
+        "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-claude100-exec-20261017/q04-review-r1/scripts/repro-mf05-causes.mjs",
+        "environment": "Explicit scrubbed HOME/TMPDIR/config/cache as recorded in command artifacts; no credential variables. Script creates a fresh directory under its own temporary root on every run.",
+        "exit": 1,
+        "boundary": "Native filesystem syscalls. Node-only child uses real open, closeSync on its own newly-created FD, and transparent observation of actual FileHandle method failures. No fabricated Error replaces write/close."
+      },
+      "evidence": [
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/repro-mf05-causes.log",
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/persistence-observations.json",
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/persist-attempt2.log"
+      ],
+      "impact": "Private helper violates its frozen failure-diagnostic contract; a pure AggregateError helper test cannot establish failure preservation at the persistence boundary.",
+      "closure": "Builder preserves actual causes/code through both catches, adds a regression through native filesystem/FD boundaries, and reruns unchanged relevant tests plus the red reproducer. No public/app/security-schema change needed."
+    },
+    {
+      "id": "Q04-R1-F02",
+      "severity": "P2",
+      "blocking": true,
+      "criterion": "MF05",
+      "confidence": "CONFIRMED_RUNTIME_WITH_EXPLICIT_CLEANUP_INJECTION_LIMIT",
+      "title": "HTTP handler and close paths erase incoming errors before preservePrimaryError",
+      "file": "tests/support/model-fault-server/index.js",
+      "line": 91,
+      "related_lines": [
+        71,
+        72,
+        112,
+        224,
+        238,
+        275,
+        277,
+        302
+      ],
+      "expected": "Retain the actual handler failure, and preserve it alongside an eventual cleanup error when close rejects.",
+      "actual": "Delegating ServerResponse.writeHead to the real native method with invalid status creates ERR_HTTP_INVALID_STATUS_CODE. The handler catch discards it; close rejects with only \"synthetic fault server: handler failed\" and no cause/code. Exercising the actual close callback branch with a fake cleanup error after real successful native closure returns an AggregateError with two newly-created generic errors, retaining neither incoming cause.",
+      "reproduction": {
+        "script": "/tmp/cvg-claude100-exec-20261017/q04-review-r1/scripts/repro-mf05-causes.mjs",
+        "command": "/home/ricardo/.nvm/versions/node/v22.23.2/bin/node /tmp/cvg-claude100-exec-20261017/q04-review-r1/scripts/repro-mf05-causes.mjs",
+        "exit": 1,
+        "dual_failure_script": "/tmp/cvg-claude100-exec-20261017/q04-review-r1/scripts/probe-http-errors.mjs",
+        "boundary": "Real loopback request/handler and actual listener/socket closure; native Node RangeError induced through a test-only method interposition. Cleanup callback failure is synthetic, not an actual OS Server.close failure."
+      },
+      "evidence": [
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/repro-mf05-causes.log",
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/http-error-observations.json",
+        "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/http-errors.log"
+      ],
+      "impact": "The aggregation utility preserves what it receives, but the actual lifecycle has already discarded the causes. Existing generated interruption-message coverage does not cover this contract.",
+      "closure": "Builder threads actual handler/server/response/close errors into preserved causal chains, with a test through the HTTP lifecycle rather than only preservePrimaryError. Keep current provider/gateway mapping and public sources unchanged."
+    }
+  ],
+  "integrity": {
+    "observedAt": "2026-10-17T23:52:59.462177+00:00",
+    "packetPinOccurrences": 40,
+    "allMatch": true,
+    "candidateFilesUnchanged": 38103,
+    "candidateGitStatusUnchanged": true,
+    "approvedQ01SourcesUnchanged": 35,
+    "Q03ArchivedEvidenceFilesUnchanged": 161,
+    "qualifiedQ03": "16 gates,38 official verifier artifact hashes (historical qualification remains unchanged)",
+    "head": "cff0e7c3b1e5b9baa40e0c2c62d398109da0889d",
+    "sourceWrites": 0,
+    "commits": 0,
+    "descendantAgents": 0
+  },
+  "rawArtifactsRoot": "/tmp/cvg-claude100-exec-20261017/q04-review-r1",
+  "archiveMetadata": "raw-artifacts.json",
+  "limitations": [
+    "No actual OS Server.close failure induced; callback failure probe is explicitly synthetic after successful native closure. Real OS FD close EBADF was induced.",
+    "Different-UID negative fixture unavailable; static guard inspection only for that branch.",
+    "A partial output file remains after injected write failure (observed zero bytes); no crash-atomicity guarantee was inferred from the SPEC.",
+    "Two hardcoded-path tests excluded from Vitest and their unchanged static child modes run separately; no no-skip/full-suite certification claim.",
+    "One non-informative self-equality assertion remains preserved in probe-record.mjs; it contributes no evidence. Separate resource assertions and the native lifetime probe supply the close evidence."
+  ],
+  "harnessMistakes": [
+    {
+      "kind": "SETUP_ERROR_NOT_CANDIDATE_FAILURE",
+      "evidence": "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/persist-attempt1.log",
+      "detail": "Probe root was prepared for FIFO fixture, then first script attempted nonrecursive mkdir of same root. Preserved first script/log; corrected harness saved separately as probe-persist-r2.mjs."
+    },
+    {
+      "kind": "METADATA_COUNT_ERROR_NOT_CANDIDATE_FAILURE",
+      "evidence": "/tmp/cvg-claude100-exec-20261017/q04-review-r1/logs/metadata-harness-mistake.json",
+      "detail": "Initial supplemental audit incorrectly equated official38 verified artifact hashes with archive file count. Archive has161 files; all161 match. Historical Q03 remains16gates/38official-verifier hashes."
+    }
+  ],
+  "state": {
+    "status": "REVIEW_COMPLETE_REVISE",
+    "last_completed_action": "Independent bounded tests/probes and before/after integrity audit completed; mandatory MF05 cause-preservation failures reproduced.",
+    "next_action": "Lead routes F01/F02 to private T2 builder, adds real-boundary regression, refreezes exact source and requests a corrective review; full MF07 remains separately pending.",
+    "sharedLedgers": "Readonly by delegated claim; Lead must merge this handoff into its own runtime/log/backlog continuity."
+  },
+  "noChanges": {
+    "candidateSourceWrites": 0,
+    "applicationContractSecuritySchemaWrites": 0,
+    "descendantAgents": 0,
+    "commits": 0,
+    "otherCandidateOrQ01ServiceOperations": 0
+  },
+  "observedAt": "2026-10-17T23:54:38.060851+00:00"
+}

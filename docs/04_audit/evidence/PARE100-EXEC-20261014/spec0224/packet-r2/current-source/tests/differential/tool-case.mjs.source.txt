@@ -1,0 +1,27 @@
+export const TOOL_NAME = 'pare100_echo'
+
+export function validateToolCase(value) {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Reflect.ownKeys(value).length !== 4 ||
+    Object.values(Object.getOwnPropertyDescriptors(value)).some(
+      (d) => !Object.hasOwn(d, 'value')
+    ) ||
+    Object.keys(value).sort().join(',') !== 'id,message,text,version' ||
+    value.version !== 1 ||
+    typeof value.id !== 'string' ||
+    !/^[a-z0-9_-]{1,64}$/.test(value.id) ||
+    ![value.message, value.text].every(
+      (s) =>
+        typeof s === 'string' &&
+        s.length > 0 &&
+        Buffer.byteLength(s, 'utf8') <= 4096
+    ) ||
+    Buffer.byteLength(JSON.stringify(value)) > 65536
+  )
+    throw new Error('invalid tool fixture')
+  return Object.freeze(JSON.parse(JSON.stringify(value)))
+}

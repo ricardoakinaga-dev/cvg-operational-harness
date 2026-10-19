@@ -1,0 +1,35 @@
+import pathlib,json,subprocess,datetime,hashlib,sys
+O=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-json-boundaries/review-r1');base=json.loads((O/'memory-command.json').read_text());records=[]
+for label,argv in [('sentinel-after',['/usr/bin/python3',str(O/'sentinel.py'),'after']),('integrity-after',['/usr/bin/python3',str(O/'verify.py'),'integrity-after'])]:
+ rec={'argv':argv,'cwd':base['cwd'],'env':base['env'],'start':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ p=subprocess.run(argv,cwd=rec['cwd'],env=rec['env'],capture_output=True);(O/(label+'.stdout.log')).write_bytes(p.stdout);(O/(label+'.stderr.log')).write_bytes(p.stderr);rec.update(exit=p.returncode,end=datetime.datetime.now(datetime.timezone.utc).isoformat());records.append(rec);assert p.returncode==0,p.stderr
+(O/'final-verification-commands.json').write_text(json.dumps(records,indent=2)+'\n')
+for idx in ['toolchain-inputs.json','transitive-source-index.json']:
+ for e in json.loads((O/idx).read_text())['entries']:
+  p=pathlib.Path(e.get('live',e.get('path')));b=p.read_bytes();assert len(b)==e['bytes'] and hashlib.sha256(b).hexdigest()==e['sha256']
+  if 'copy' in e:assert (O/e['copy']).read_bytes()==b
+r=json.loads((O/'report.json').read_text());r['integrityAfter']=json.loads((O/'integrity-after.json').read_text())['ok'];before=json.loads((O/'source-sentinel-before.json').read_text());after=json.loads((O/'source-sentinel-after.json').read_text());assert before['entries']==after['entries'];r['sourceMutationSentinel']={'before':before['aggregateSha256'],'after':after['aggregateSha256'],'files':len(before['entries']),'unchanged':True};r['completedAt']=datetime.datetime.now(datetime.timezone.utc).isoformat();r['finalVerificationCommands']='final-verification-commands.json';(O/'report.json').write_text(json.dumps(r,indent=2)+'\n')
+with (O/'report.md').open('a') as f:f.write('\nFinal verification: all443 sealed instances still match; all599 independently inventoried source/config/lock/migration entries are unchanged. Sentinel aggregate SHA256 `'+after['aggregateSha256']+'`. Completion UTC: `'+r['completedAt']+'`. Exact final verification argv/env/times/exits and full separate streams are retained.\n')
+def measured(p):
+ b=p.read_bytes();return {'path':str(p.relative_to(O)),'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b)}
+exclusions=[]
+private={'actual-resource-private.json','resource-prototype-private.json'};excludedDirs={'cache','tmp','home','xdg','node-compile-cache'};indexNames={'artifact-manifest.json','artifact-exclusions.json'}
+for p in sorted(O.rglob('*')):
+ if not p.is_file():continue
+ rel=p.relative_to(O);reason=None
+ if str(rel) in indexNames:continue
+ if str(rel) in private:reason='private credential resource; retained mode0600; safe identity+hash proof is public'
+ elif rel.parts[0] in excludedDirs:reason='cache or generated temporary runtime data; not primary evidence'
+ elif p.stat().st_size==0:reason='zero-byte stream/file retained; no content to hash as primary evidence'
+ if reason:
+  e=measured(p);e['reason']=reason
+  if str(rel) in private:e['private']=True;assert p.stat().st_mode & 0o077==0
+  exclusions.append(e)
+exclusions.append({'path':'artifact-manifest.json','reason':'self excluded from entries to avoid recursive hash'})
+# artifact-exclusions itself is primary/indexed, and lists only the artifact manifest as recursive exclusion.
+(O/'artifact-exclusions.json').write_text(json.dumps({'entries':exclusions,'excludedDirectoryPrefixes':sorted(excludedDirs),'privateOriginalsPreserved':True,'zeroStreamsPreserved':True},indent=2)+'\n')
+skip={e['path'] for e in exclusions}
+entries=[measured(p) for p in sorted(O.rglob('*')) if p.is_file() and str(p.relative_to(O)) not in skip and p.stat().st_size>0]
+(O/'artifact-manifest.json').write_text(json.dumps({'entries':entries,'exclusionsIndex':'artifact-exclusions.json','generatedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()},indent=2)+'\n')
+manifest=json.loads((O/'artifact-manifest.json').read_text());assert all(measured(O/e['path'])==e for e in manifest['entries']);assert all(not pathlib.Path(e['path']).is_absolute() for e in manifest['entries']);assert {'report.md','report.json','artifact-exclusions.json'}<=set(e['path'] for e in entries)
+print(json.dumps({'verdict':r['verdict'],'sealedFinal':r['integrityAfter'],'sourceSentinelUnchanged':True,'primaryArtifacts':len(entries),'exclusions':len(exclusions),'requiredFunctionalFailures':r['execution']['postgres']['requiredFunctionalFailures'],'memoryPassed':43,'postgresTestsPassed':35,'postgresMatrixCases':34}))

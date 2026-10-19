@@ -1,0 +1,623 @@
+FILE cvg/packages/contracts/src/contracts.ts
+22: export interface AgentProfile {
+118:   readonly sandboxHandle?: SandboxHandle
+121: export interface ToolDescriptor {
+134:    * closed when no `SandboxGate` is configured.
+136:   readonly sandbox?: SandboxMode
+139: export interface ToolDefinition extends ToolDescriptor {
+178:   readonly agent: AgentProfile
+230:   readonly availableTools: readonly ToolDescriptor[]
+267: export interface ModelRequest {
+291:   complete(request: ModelRequest): Promise<ModelResult>
+294: export interface PolicyRequest {
+298:   readonly tool: ToolDefinition
+305: export interface PolicyDecision {
+312:   evaluate(request: PolicyRequest): Promise<PolicyDecision>
+403:   list(): readonly ToolDefinition[]
+404:   resolve(toolId: string, version?: string): ToolDefinition | undefined
+410: export interface CapabilityDescriptor extends ToolDescriptor {
+440: /* Sandbox seam (PDSH-010 / SPEC 0195).                                       */
+448: export type SandboxMode =
+456: export interface SandboxHandle {
+457:   readonly mode: SandboxMode
+465: export type SandboxGateOutcome =
+468:       readonly mode: SandboxMode
+469:       readonly handle: SandboxHandle
+474: export interface SandboxPolicy {
+475:   readonly requiredMode: SandboxMode
+482: export interface SandboxEvaluationInput {
+483:   readonly descriptor: ToolDescriptor
+485:   readonly policy?: SandboxPolicy
+489: export interface SandboxGate {
+490:   evaluate(input: SandboxEvaluationInput): Promise<SandboxGateOutcome>
+493: export interface AuditEvent {
+508:   append(event: AuditEvent): Promise<void>
+FILE cvg/packages/harness/src/kernel/host.ts
+1: import {
+2:   CONTROL_SERVICES,
+3:   type Disposer,
+4:   type HookMap,
+5:   type HookPoint,
+6:   type KernelContext,
+7:   type KernelPlugin,
+8:   type PluginKind,
+9:   type ServiceKey,
+10:   type Services,
+11:   type ToolGuard
+12: } from './types.ts'
+14: export class KernelBootError extends Error {
+15:   public constructor(
+16:     public readonly code:
+17:       | 'duplicate_plugin'
+18:       | 'missing_service'
+19:       | 'dependency_cycle'
+20:       | 'duplicate_service'
+21:       | 'control_service_from_capability'
+22:       | 'guard_from_capability'
+23:       | 'undeclared_service'
+24:       | 'host_sealed'
+25:       | 'plugin_apply_failed',
+26:     message: string
+27:   ) {
+28:     super(message)
+29:     this.name = 'KernelBootError'
+30:   }
+31: }
+33: export interface Listener<P extends HookPoint> {
+34:   readonly kind: PluginKind
+35:   readonly plugin: string
+36:   readonly fn: HookMap[P]
+37: }
+39: type ListenerTable = { [P in HookPoint]: Listener<P>[] }
+41: const isControlService = (key: ServiceKey): boolean =>
+42:   (CONTROL_SERVICES as readonly ServiceKey[]).includes(key)
+44: /**
+45:  * Plugin host (SPEC 0181 §2). Plugins find each other by service key, load in
+46:  * dependency order and register reversible effects. After boot the host is
+47:  * sealed: no plugin, agent or configuration can add, remove or reorder a
+48:  * registration while turns run (I2).
+49:  */
+50: export class KernelHost {
+51:   readonly #services = new Map<ServiceKey, { owner: string; value: unknown }>()
+52:   readonly #listeners: ListenerTable = {
+53:     'turn/before-step': [],
+54:     'model/before-call': [],
+55:     'tool/pre-execute': [],
+56:     'tool/execute': [],
+57:     'tool/post-execute': [],
+58:     'turn/end': []
+59:   }
+60:   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
+61:   readonly #disposers: Disposer[] = []
+62:   #sealed = false
+64:   private constructor() {}
+66:   /**
+67:    * Boots a profile. Fails closed: a missing required service, a cycle, a
+68:    * control service offered by a capability or a throwing `apply` aborts the
+69:    * boot and unwinds everything already registered.
+70:    */
+71:   public static async boot(
+72:     plugins: readonly KernelPlugin[],
+73:     required: readonly ServiceKey[]
+74:   ): Promise<KernelHost> {
+75:     const host = new KernelHost()
+76:     try {
+77:       for (const plugin of KernelHost.order(plugins)) {
+78:         await host.#apply(plugin)
+79:       }
+80:       for (const key of required) {
+81:         if (!host.#services.has(key)) {
+82:           throw new KernelBootError(
+83:             'missing_service',
+84:             `Required service "${key}" is not provided by the profile.`
+85:           )
+86:         }
+87:       }
+88:     } catch (error) {
+89:       await host.dispose()
+90:       if (error instanceof KernelBootError) throw error
+91:       throw new KernelBootError(
+92:         'plugin_apply_failed',
+93:         error instanceof Error ? error.message : 'plugin apply failed'
+94:       )
+95:     }
+96:     host.#sealed = true
+97:     return host
+98:   }
+100:   public get<K extends ServiceKey>(key: K): Services[K] {
+101:     const entry = this.#services.get(key)
+102:     if (!entry) {
+103:       throw new KernelBootError(
+104:         'missing_service',
+105:         `Service "${key}" is not available.`
+106:       )
+107:     }
+108:     return entry.value as Services[K]
+109:   }
+111:   public has(key: ServiceKey): boolean {
+112:     return this.#services.has(key)
+113:   }
+115:   /** Controls first, then capabilities; registration order inside each. */
+116:   public listeners<P extends HookPoint>(point: P): readonly Listener<P>[] {
+117:     const table = this.#listeners[point] as Listener<P>[]
+118:     return [
+119:       ...table.filter((entry) => entry.kind === 'control'),
+120:       ...table.filter((entry) => entry.kind === 'capability')
+121:     ]
+122:   }
+124:   public guards(): readonly ToolGuard[] {
+125:     return this.#guards.map((entry) => entry.fn)
+126:   }
+128:   /** Unwinds registrations in reverse order and waits for each to finish. */
+129:   public async dispose(): Promise<void> {
+130:     while (this.#disposers.length > 0) {
+131:       const dispose = this.#disposers.pop()
+132:       try {
+133:         await dispose?.()
+134:       } catch {
+135:         // One failing disposer must not leave the remaining ones running.
+136:       }
+137:     }
+138:   }
+140:   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
+141:     const byName = new Map<string, KernelPlugin>()
+142:     const provider = new Map<ServiceKey, string>()
+143:     for (const plugin of plugins) {
+144:       if (byName.has(plugin.name)) {
+145:         throw new KernelBootError(
+146:           'duplicate_plugin',
+147:           `Plugin "${plugin.name}" is declared twice.`
+148:         )
+149:       }
+150:       byName.set(plugin.name, plugin)
+151:       for (const key of plugin.provides ?? []) {
+152:         if (provider.has(key)) {
+153:           throw new KernelBootError(
+154:             'duplicate_service',
+155:             `Service "${key}" is provided by "${provider.get(key)}" and "${plugin.name}".`
+156:           )
+157:         }
+158:         provider.set(key, plugin.name)
+159:       }
+160:     }
+161:     const ordered: KernelPlugin[] = []
+162:     const state = new Map<string, 'visiting' | 'done'>()
+163:     const visit = (plugin: KernelPlugin): void => {
+164:       const current = state.get(plugin.name)
+165:       if (current === 'done') return
+166:       if (current === 'visiting') {
+167:         throw new KernelBootError(
+168:           'dependency_cycle',
+169:           `Plugin "${plugin.name}" is part of a dependency cycle.`
+170:         )
+171:       }
+172:       state.set(plugin.name, 'visiting')
+173:       for (const key of plugin.requires ?? []) {
+174:         const owner = provider.get(key)
+175:         if (!owner) {
+176:           throw new KernelBootError(
+177:             'missing_service',
+178:             `Plugin "${plugin.name}" requires "${key}", which no plugin provides.`
+179:           )
+180:         }
+181:         visit(byName.get(owner) as KernelPlugin)
+182:       }
+183:       state.set(plugin.name, 'done')
+184:       ordered.push(plugin)
+185:     }
+186:     plugins.forEach(visit)
+187:     return ordered
+188:   }
+190:   async #apply(plugin: KernelPlugin): Promise<void> {
+191:     const declared = new Set(plugin.provides ?? [])
+192:     const context: KernelContext = {
+193:       provide: (key, service) => {
+194:         this.#assertOpen()
+195:         if (!declared.has(key)) {
+196:           throw new KernelBootError(
+197:             'undeclared_service',
+198:             `Plugin "${plugin.name}" provides "${key}" without declaring it.`
+199:           )
+200:         }
+201:         if (plugin.kind === 'capability' && isControlService(key)) {
+202:           throw new KernelBootError(
+203:             'control_service_from_capability',
+204:             `Capability "${plugin.name}" cannot provide control service "${key}".`
+205:           )
+206:         }
+207:         this.#services.set(key, { owner: plugin.name, value: service })
+208:         const dispose: Disposer = async () => {
+209:           this.#services.delete(key)
+210:         }
+211:         this.#disposers.push(dispose)
+212:         return dispose
+213:       },
+214:       get: (key) => this.get(key),
+215:       on: (point, listener) => {
+216:         this.#assertOpen()
+217:         const table = this.#listeners[point] as Listener<typeof point>[]
+218:         const entry: Listener<typeof point> = {
+219:           kind: plugin.kind,
+220:           plugin: plugin.name,
+221:           fn: listener
+222:         }
+223:         table.push(entry)
+224:         const dispose: Disposer = async () => {
+225:           const index = table.indexOf(entry)
+226:           if (index >= 0) table.splice(index, 1)
+227:         }
+228:         this.#disposers.push(dispose)
+229:         return dispose
+230:       },
+231:       guard: (guard) => {
+232:         this.#assertOpen()
+233:         if (plugin.kind !== 'control') {
+234:           throw new KernelBootError(
+235:             'guard_from_capability',
+236:             `Capability "${plugin.name}" cannot register a guard.`
+237:           )
+238:         }
+239:         const entry = { plugin: plugin.name, fn: guard }
+240:         this.#guards.push(entry)
+241:         const dispose: Disposer = async () => {
+242:           const index = this.#guards.indexOf(entry)
+243:           if (index >= 0) this.#guards.splice(index, 1)
+244:         }
+245:         this.#disposers.push(dispose)
+246:         return dispose
+247:       },
+248:       effect: (dispose) => {
+249:         this.#assertOpen()
+250:         this.#disposers.push(dispose)
+251:       }
+252:     }
+253:     await plugin.apply(context)
+254:     for (const key of declared) {
+255:       if (!this.#services.has(key)) {
+256:         throw new KernelBootError(
+257:           'missing_service',
+258:           `Plugin "${plugin.name}" declared "${key}" but did not provide it.`
+259:         )
+260:       }
+261:     }
+262:   }
+264:   #assertOpen(): void {
+265:     if (this.#sealed) {
+266:       throw new KernelBootError(
+267:         'host_sealed',
+268:         'The kernel is sealed; registrations are only allowed during boot.'
+269:       )
+270:     }
+271:   }
+272: }
+FILE cvg/packages/harness/src/createOperationalHarness.ts
+1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+2: import type {
+3:   AgenticKnowledgeProvider,
+4:   Claim,
+5:   CompletionEvaluator,
+6:   ContextEngine,
+7:   ExecutionStepStore,
+8:   IterativeOrchestrator,
+9:   RuntimeInput,
+10:   RuntimeProfile,
+11:   RuntimeResult,
+12:   SandboxGate,
+13:   SufficiencyEvaluator,
+14:   CapabilityRegistry,
+15:   ToolRegistry
+16: } from '@cvg/harness-contracts'
+17: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+18: import {
+19:   createJournaledToolRegistry,
+20:   type EffectJournal,
+21:   type JournaledToolRegistryOptions
+22: } from './effect-journal.ts'
+23: import {
+24:   SinglePassGovernedRuntime,
+25:   type HarnessRuntimeOptions
+26: } from './runtime.ts'
+27: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+29: export interface OperationalHarnessOptions extends Omit<
+30:   HarnessRuntimeOptions,
+31:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+32: > {
+33:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+34:   /**
+35:    * Explicit capability composition. Its adapter is the only runtime-facing
+36:    * registry for this path; callers cannot provide both registries.
+37:    */
+38:   readonly capabilities?: CapabilityRegistry
+39:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+40:   readonly tools?: ToolRegistry
+41:   /** Required for capability composition and optional for compatibility tools. */
+42:   readonly effectJournal?: EffectJournal
+43:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+44:   /**
+45:    * Required to run the iterative profile. The runtime registry resolves the
+46:    * requested profile here; the worker never selects a runtime class.
+47:    */
+48:   readonly iterativeOrchestrator?: IterativeOrchestrator
+49:   readonly stepStore?: ExecutionStepStore
+50:   readonly contextEngine?: ContextEngine
+51:   readonly knowledge?: AgenticKnowledgeProvider
+52:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+53:   readonly completionEvaluator?: CompletionEvaluator
+54:   readonly claimExtractor?: (response: string) => readonly Claim[]
+55:   readonly defaultRuntimeProfile?: RuntimeProfile
+56:   readonly clock?: () => Date
+57:   /** Optional containment gate; absent means fail-closed for contained tools. */
+58:   readonly sandbox?: SandboxGate
+59: }
+61: export interface OperationalHarness {
+62:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+63:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+64:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+65:   readonly capabilityFingerprint?: string
+66: }
+68: /**
+69:  * Canonical public composition root for the neutral harness packages. Product
+70:  * adapters provide the ports; this function only wires them together and
+71:  * resolves the runtime profile through a registry-like selection.
+72:  */
+73: export function createOperationalHarness(
+74:   options: OperationalHarnessOptions
+75: ): OperationalHarness {
+76:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+77:   if (options.capabilities && !options.effectJournal) {
+78:     throw new Error(
+79:       'Capability composition requires an explicit effect journal'
+80:     )
+81:   }
+82:   const tools = resolveTools(options, capabilityFingerprint)
+83:   const singlePass = new SinglePassGovernedRuntime({
+84:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+85:     modelGateway: options.modelGateway,
+86:     policy: options.policy,
+87:     approvals: options.approvals,
+88:     tools,
+89:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+90:     audit: options.audit,
+91:     telemetry: options.telemetry,
+92:     ...(options.pause ? { pause: options.pause } : {}),
+93:     ...(options.effects ? { effects: options.effects } : {}),
+94:     ...(options.log ? { log: options.log } : {}),
+95:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+96:   })
+98:   const iterative =
+99:     options.iterativeOrchestrator && options.stepStore
+100:       ? new IterativeGovernedRuntime({
+101:           orchestrator: options.iterativeOrchestrator,
+102:           modelGateway: options.modelGateway,
+103:           policy: options.policy,
+104:           approvals: options.approvals,
+105:           tools,
+106:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+107:           audit: options.audit,
+108:           telemetry: options.telemetry,
+109:           ...(options.pause ? { pause: options.pause } : {}),
+110:           ...(options.effects ? { effects: options.effects } : {}),
+111:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+112:           ...(options.log ? { log: options.log } : {}),
+113:           stepStore: options.stepStore,
+114:           ...(options.contextEngine
+115:             ? { contextEngine: options.contextEngine }
+116:             : {}),
+117:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+118:           ...(options.sufficiencyEvaluator
+119:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+120:             : {}),
+121:           ...(options.completionEvaluator
+122:             ? { completionEvaluator: options.completionEvaluator }
+123:             : {}),
+124:           ...(options.claimExtractor
+125:             ? { claimExtractor: options.claimExtractor }
+126:             : {}),
+127:           ...(options.clock ? { clock: options.clock } : {})
+128:         })
+129:       : undefined
+131:   const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
+132:     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+134:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+135:     const governedInput = capabilityFingerprint
+136:       ? { ...input, capabilityFingerprint }
+137:       : input
+138:     if (
+139:       capabilityFingerprint &&
+140:       input.executionId &&
+141:       input.capabilityFingerprint === undefined
+142:     ) {
+143:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+144:       return {
+145:         response:
+146:           'Capability composition fingerprint is required for durable execution.',
+147:         stopReason: 'STATE_CONFLICT',
+148:         steps: 0,
+149:         modelCalls: 0,
+150:         toolCalls: 0,
+151:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+152:       }
+153:     }
+154:     if (
+155:       capabilityFingerprint &&
+156:       input.capabilityFingerprint !== undefined &&
+157:       input.capabilityFingerprint !== capabilityFingerprint
+158:     ) {
+159:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+160:       return {
+161:         response:
+162:           'Capability composition fingerprint does not match the runtime.',
+163:         stopReason: 'STATE_CONFLICT',
+164:         steps: 0,
+165:         modelCalls: 0,
+166:         toolCalls: 0,
+167:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+168:       }
+169:     }
+170:     const profile = resolveProfile(governedInput)
+171:     if (profile === 'iterative') {
+172:       if (!iterative) {
+173:         await safeAudit(
+174:           options,
+175:           governedInput,
+176:           'runtime.stopped',
+177:           'STATE_CONFLICT'
+178:         )
+179:         return {
+180:           response:
+181:             'The iterative runtime profile is not configured in this composition.',
+182:           stopReason: 'STATE_CONFLICT',
+183:           steps: 0,
+184:           modelCalls: 0,
+185:           toolCalls: 0,
+186:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+187:         }
+188:       }
+189:       return iterative.execute(governedInput)
+190:     }
+191:     return singlePass.execute(governedInput)
+192:   }
+194:   return {
+195:     run: (input) => execute(input),
+196:     execute,
+197:     resolveProfile,
+198:     ...(options.capabilities
+199:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+200:       : {})
+201:   }
+202: }
+204: function resolveTools(
+205:   options: OperationalHarnessOptions,
+206:   capabilityFingerprint: string | undefined
+207: ): ToolRegistry {
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+210:       'Operational harness composition accepts capabilities or tools, not both'
+211:     )
+212:   }
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+216:   if (!registry) {
+217:     throw new Error(
+218:       'Operational harness composition requires an explicit capability or tool registry'
+219:     )
+220:   }
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+224:     ...(capabilityFingerprint
+225:       ? { compositionFingerprint: capabilityFingerprint }
+226:       : {})
+227:   })
+228: }
+230: async function safeAudit(
+231:   options: OperationalHarnessOptions,
+232:   input: RuntimeInput,
+233:   action: string,
+234:   result: string
+235: ): Promise<void> {
+236:   try {
+237:     await options.audit.append({
+238:       actor: input.agent.id,
+239:       agent: input.agent.id,
+240:       tenant: input.tenantId,
+241:       action,
+242:       policy: null,
+243:       approval: null,
+244:       tool: null,
+245:       result,
+246:       timestamp: new Date().toISOString(),
+247:       traceId: input.traceId,
+248:       correlationId: input.correlationId
+249:     })
+250:   } catch {
+251:     // misconfiguration must still fail closed without an unhandled error
+252:   }
+253: }
+FILE cvg/packages/harness/src/kernel/profile.ts
+1: import type {
+2:   ApprovalEngine,
+3:   AuditSink,
+4:   ModelGateway,
+5:   Orchestrator,
+6:   PolicyEngine,
+7:   SandboxGate,
+8:   TelemetrySink,
+9:   ToolRegistry
+10: } from '@cvg/harness-contracts'
+11: import {
+12:   approvalsControl,
+13:   auditControl,
+14:   budgetControl,
+15:   effectsControl,
+16:   logControl,
+17:   modelCapability,
+18:   pauseControl,
+19:   plannerCapability,
+20:   policyControl,
+21:   sandboxControl,
+22:   telemetryCapability,
+23:   toolsCapability
+24: } from './controls.ts'
+25: import { KernelRuntime } from './kernel-runtime.ts'
+26: import type {
+27:   EffectLedger,
+28:   KernelLog,
+29:   KernelPlugin,
+30:   PauseSwitch
+31: } from './types.ts'
+33: export interface StandardKernelOptions {
+34:   readonly orchestrator: Orchestrator
+35:   readonly modelGateway: ModelGateway
+36:   readonly policy: PolicyEngine
+37:   readonly approvals: ApprovalEngine
+38:   readonly tools: ToolRegistry
+39:   readonly capabilityFingerprint?: string
+40:   readonly audit: AuditSink
+41:   readonly telemetry: TelemetrySink
+42:   readonly pause?: PauseSwitch
+43:   readonly log?: KernelLog
+44:   readonly effects?: EffectLedger
+45:   /** Optional containment gate; absent means fail-closed for contained tools. */
+46:   readonly sandbox?: SandboxGate
+47:   /** Audit action and telemetry event name; defaults to `harness.kernel`. */
+48:   readonly eventName?: string
+49:   /** Extra plugins mounted after the standard profile. */
+50:   readonly plugins?: readonly KernelPlugin[]
+51: }
+53: /**
+54:  * The standard profile: every control the kernel requires (I1), in a fixed
+55:  * order, followed by the capabilities of the single-turn loop.
+56:  */
+57: export function standardKernelPlugins(
+58:   options: StandardKernelOptions
+59: ): KernelPlugin[] {
+60:   const eventName = options.eventName ?? 'harness.kernel'
+61:   return [
+62:     budgetControl(),
+63:     pauseControl(options.pause),
+64:     logControl(options.log),
+65:     effectsControl(options.effects),
+66:     policyControl(options.policy),
+67:     approvalsControl(
+68:       options.approvals,
+69:       options.capabilityFingerprint
+70:         ? { capabilityFingerprint: options.capabilityFingerprint }
+71:         : {}
+72:     ),
+73:     auditControl(options.audit, { action: eventName }),
+74:     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+75:     plannerCapability(options.orchestrator),
+76:     modelCapability(options.modelGateway),
+77:     toolsCapability(options.tools),
+78:     telemetryCapability(options.telemetry, { name: eventName }),
+79:     ...(options.plugins ?? [])
+80:   ]
+81: }
+83: /** Kernel runtime with the standard profile, booted on first use. */
+84: export function createKernelRuntime(
+85:   options: StandardKernelOptions
+86: ): KernelRuntime {
+87:   return KernelRuntime.lazy(standardKernelPlugins(options))
+88: }

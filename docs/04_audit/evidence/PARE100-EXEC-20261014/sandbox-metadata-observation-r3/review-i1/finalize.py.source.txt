@@ -1,0 +1,153 @@
+"""Finish I1 review without modifying any candidate or source artifact."""
+from pathlib import Path
+import datetime
+import hashlib
+import json
+
+D=Path(__file__).resolve().parent
+P=D.parent
+W=P.parent/'worktree'
+
+def load(p):
+    return json.loads(p.read_bytes())
+
+def put(p, obj):
+    p.write_text(json.dumps(obj,indent=2,ensure_ascii=False,allow_nan=False)+'\n')
+
+before=load(D/'integrity-before.json')
+after={}
+for name in ['files','hashOnlyConstraints','authoritySources']:
+    after[name]=[]
+    for old in before[name]:
+        path=Path(old['path'])
+        raw=path.read_bytes()  # Hash only: constraints are NEVER decoded.
+        sha=hashlib.sha256(raw).hexdigest()
+        after[name].append({'path':str(path),'sha256':sha,'bytes':len(raw),
+                            'expectedSHA256':old['expectedSHA256'],
+                            'matchesExpected':sha==old['expectedSHA256'],
+                            'unchanged':sha==old['sha256'] and len(raw)==old['bytes']})
+raw=(P/'review-packet.json').read_bytes()
+after['packet']={'path':str(P/'review-packet.json'),'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw)}
+after['packet']['unchanged']=after['packet']['sha256']==before['packet']['sha256'] and len(raw)==before['packet']['bytes']
+after['authority']=next(x for x in after['files'] if x['path']==str(P/'authority.json'))
+unchanged=after['packet']['unchanged'] and all(x['unchanged'] and x['matchesExpected'] for n in ['files','hashOnlyConstraints','authoritySources'] for x in after[n])
+assert unchanged
+integrity={'schema':'i1-before-after-integrity-v1','before':before,'after':after,
+           'afterUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           'counts':{'files':24,'hashOnlyConstraints':6,'authoritySources':1061},
+           'allExternalPinsMatch':True,'allReviewedInputsUnchanged':unchanged,
+           'constraintSemanticReads':0,
+           'scope':'Complete enumerated 24+6+1061, packet, authority; not a claim of a filesystem-wide snapshot.'}
+put(D/'integrity.json',integrity)
+put(D/'integrity-after.json',after)
+
+adversarial=load(D/'adversarial-results-02.json')
+assert len(adversarial)==23
+unexpected=[x for x in adversarial if not x['meetsExpectation']]
+assert [x['test'] for x in unexpected]==['tool-duration-exceeds-turn-latency','tool-duration-exceeds-outer-execution']
+quality=load(D/'quality/results.json')
+assert all(x['exit']==0 for x in quality)
+controls=load(D/'controls-01/results.json')
+assert len(controls['validatorControls'])==41 and len(controls['lifecycleControls'])==4
+
+finding={
+ 'id':'I1-F1','severity':'MEDIUM','priority':'P2','confidence':0.99,
+ 'criteria':['OBS-SBX04','review-requirements.md:9'],
+ 'anchor':str(P/'validate.py')+':101',
+ 'relatedAnchors':[str(P/'validate.py')+':104',str(W/'packages/harness/src/kernel/kernel-runtime.ts')+':221',str(W/'packages/harness/src/kernel/pipeline.ts')+':499',str(W/'packages/harness/src/kernel/pipeline.ts')+':515',str(W/'packages/harness/src/kernel/controls.ts')+':785'],
+ 'title':'Telemetry validation accepts a tool interval longer than its enclosing turn',
+ 'evidence':'A full validate_run on an explicitly TEST ONLY copied run accepts capability-WORKSPACE latencyMs=0, toolDurationMs=5000. A second copy accepts 5000ms latency/tool duration inside a 232586814ns outer execution. Receipt membership, source hashes, environment relocation and byte counts are recomputed so this is a semantic test beyond transport hashes.',
+ 'impact':'OBS-SBX04 malformed/forged telemetry and clock-anomaly rejection is incomplete. This does not falsify the three actual captures or show an attacker can mint an accepted actual receipt.',
+ 'requiredResolution':'For this fixed local fixture, reject or mark inconclusive temporal impossibilities, including toolDurationMs greater than latencyMs. Validate consistency against captured execution bounds with an explicit clock/tolerance model if using cross-clock comparisons. Add full copied-record negative coverage and retain honest actual receipts. Do not normalize raw clocks or change the engine.',
+ 'diagnosticArtifacts':[str(D/'adversarial-results-02.json'),str(D/'adversarial-copies-02/tool-duration-exceeds-turn-latency'),str(D/'adversarial-copies-02/tool-duration-exceeds-outer-execution')]
+}
+limitations=[
+ 'Bootstrap deviation: first shell hashed packet and 24+6, but not the 1061 authority sources. Second shell failed on dictionary schema; third persisted all 1061 before semantic reads. Initial exact shell commands/streams/exits remain in tool transcript, not fully reproduced as wrapper records in D. The error is retained in integrity-before.json and this report.',
+ 'Later command records capture exact child argv/cwd/exit and full raw streams through capture.py. Python outer wrapper inherits its host environment plus documented cache overrides; every executed Node observation, fixed child and focused quality command uses the recorded allowlist and private HOME/TMP/XDG. Wrapper itself has no independent output cap/deadline; trusted candidate launcher enforces its own bounds.',
+ 'Tool display truncated some long outputs; D/*.stdout files are complete. No claim of globally complete hostile-host provenance, compiled/native/ABI dependency attestation, OS containment, or sandbox security PASS.',
+ 'The prescribed current runner internally reads the frozen 465-pin inventory in source_paths(). I1 did not manually inspect that historical proposal or prior reviews/reports/results. Its only role in the prescribed execution is source path/hash inventory, checked against the externally pinned 1061-source authority.',
+ 'Source/cache assertions cover the enumerated 24+6+1061 set and controlled output paths, not a complete host filesystem trace. Node compile/tsx caches disabled; Python -B/PYTHONDONTWRITEBYTECODE used. No network/services/providers/PG/native helper/install/shared-cache write was invoked by I1.'
+]
+verdict={
+ 'schema':'i1-scoped-observation-verdict-v1','verdict':'REVISE',
+ 'reviewer':'fresh independent I1; fork_context:false; no descendant agents',
+ 'task':'P100-004/P100-024/SBX-METADATA-OBS-003',
+ 'confidence':0.99,'findings':[finding],
+ 'criteria':{'OBS-SBX01':'PASS','OBS-SBX02':'PASS','OBS-SBX03':'PASS_TRUTHFUL_OBSERVATION_OF_INVARIANT_FAILURE','OBS-SBX04':'REVISE_I1-F1','OBS-SBX05':'FOCUSED_CHECKS_AND_FAULT_PATHS_PASS; ACCEPTANCE_PENDING_OBS04'},
+ 'observedInvariant':{'status':'FAIL','target':'capability-WORKSPACE','sandbox':'ABSENT','gateCalls':0,'bodyCalls':1,'stopReason':'COMPLETED','sameFingerprintsAsNONE':True},
+ 'observerValidity':{'actualCaptureIntegrity':'PASS_SCOPED','actualRawChronology':'PASS_FOR_ALL_THREE_CAPTURED_RUNS','validatorSemanticCompleteness':'INCOMPLETE_I1-F1','processExitIsSecurityPass':False},
+ 'actualCaptures':['attempt-01','attempt-02','i1-01'],
+ 'ownReceiptSHA256':'2978c1e84680fe0794a8b68246625b2bd5d1e6205e8827d754084371f67c379a',
+ 'diagnosticCopies':'All re-signed copies under D are TEST ONLY; none is an accepted actual capture.',
+ 'verification':{'candidateValidatorControls':41,'fixedChildFaultControls':4,'independentAdditionalDiagnosticCases':23,'independentNegativeCasesRejected':20,'independentUnexpectedNegativeAcceptances':2,'positiveDiagnosticCopies':1,'focusedQuality':'format/typecheck/lint PASS','allInputHashesUnchanged':unchanged},
+ 'trustBoundary':'Externally expected authority/packet/attempt receipt hashes are operator/Lead inputs. Own receipt hashed independently from controlled I1 capture. A digest/receipt binds captured bytes, not arbitrary host/code provenance.',
+ 'limits':limitations,
+ 'unproven':['native containment','compiled ABI','production policy','ML29','two-engine parity','full parity','36 cards','eight phases','100% parity','release acceptance'],
+ 'humanApprovals':'Human220/221/222 pending; no permission inferred',
+ 'candidateChanged':False,'productionChanged':False,'releaseGranted':False
+}
+put(D/'verdict.json',verdict)
+
+report=f'''# Independent I1 — REVISE
+
+Task: P100-004/P100-024/SBX-METADATA-OBS-003, private observation0223R3, T2 only. Fresh independent verifier; no descendant agents. Candidate and source were preserved.
+
+## Finding I1-F1 — MEDIUM / P2, confidence 0.99
+
+Anchor: `{P}/validate.py:101` (also lines 104–107). Criteria: OBS-SBX04 and `{P}/review-requirements.md:9`.
+
+The validator checks successful telemetry timing fields independently against 0–5000 and then copies those same values into its expected event. It never checks whether the tool interval fits inside the enclosing turn. In `adversarial-results-02.json`, `tool-duration-exceeds-turn-latency` is ACCEPTED after setting capability-WORKSPACE `latencyMs=0`, `toolDurationMs=5000`. The full file/receipt validator is exercised, not merely `evaluate()`. A second test is accepted with 5000ms tool/turn durations inside the unchanged 232.587ms outer execution.
+
+Real source establishes the nested interval: `kernel/kernel-runtime.ts:221` starts the turn, `kernel/pipeline.ts:499`/`:515` measures the dispatched tool, and `kernel/controls.ts:785` measures the completed turn. A 5000ms inner interval with a zero-ms enclosing interval is inconsistent without a clock anomaly. The fixed local evidence contract makes anomalies invalid/inconclusive. This is one telemetry chronology defect; the cross-clock outer-bound test is corroboration requiring an explicit tolerance model, not an assumed universal clock rule.
+
+Required resolution: reject or mark these contradictions inconclusive, retain raw clocks, and add full copied-record semantic negatives. No production engine change is requested by this review. These receipts are explicitly TEST ONLY and do not demonstrate an attacker can create a valid actual-capture receipt. Existing real measurements remain intact.
+
+## Observed invariant and observer validity
+
+All three authenticated captures—attempt-01, attempt-02, and independent i1-01—agree:
+
+| Case | Submitted sandbox | Gate | Body | Result |
+|---|---|---:|---:|---|
+| direct-WORKSPACE | WORKSPACE | 1 | 0 | UNSAFE_REQUEST |
+| capability-WORKSPACE | ABSENT | 0 | 1 | COMPLETED |
+| capability-NONE | ABSENT | 0 | 1 | COMPLETED |
+
+The target loses its sandbox metadata. WORKSPACE and NONE have identical composition fingerprints and proposal hashes. Model and approval calls are empty; only a synthetic memory echo is dispatched. The security invariant fails; process success is only measurement-process success. OBS-SBX03 passes because the observation truthfully reports that failure.
+
+The imported public `index.ts` exports the real factory and registry. Factory `createOperationalHarness.ts:82`/`:213` composes the capability adapter; `runtime.ts:46` uses the actual kernel. `capability-boundary.ts:249` reconstructs the descriptor without sandbox, and `kernel/pipeline.ts:352` defaults missing sandbox to NONE. The observer supplies synthetic ports; it neither copies an engine nor patches production behavior.
+
+The actual captures pass independent receipt byte/hash membership, source-before/after authority equality, process argv/cwd/streams/durations, cleanup, telemetry nesting, and journal createdAt<=updatedAt<=audit checks. Full candidate validation also checks native results, gate/body context, policy and decision payloads, complete log/event schemas, recomputed capability/proposal hashes, UUID shape, booleans versus counters, and strict duplicate/nonfinite JSON rejection. Independent mutations confirm rejection for altered causal identity/log ordering, audit, numeric types, JSON, source count, unknown teardown, caps and duration/accounting. The validator remains incomplete because of I1-F1.
+
+## Verification evidence
+
+- `controls-01/results.json`: 41 validator controls, consisting of 40 rejections and one explicitly copied-evidence positive control; four trusted fixed-child fault controls passed. No existing control-results files were consulted.
+- EOF-close-then-wait: 150.157ms execution at a 150ms deadline, timeout retained, 10.292ms cleanup, joined, no remaining group. Scheduler overrun is recorded as failure, never success.
+- Output cap: retained exactly 1024 bytes at its test cap, overflow recorded; read fault: synthetic error retained; after-snapshot fault: 26 stdout bytes and capture record survived in finally, with sourcesUnchanged false. All joined with no remaining group.
+- `adversarial-results-02.json`: 23 copied-record diagnostics; one expected positive, 20 expected negative rejections, two unexpected acceptances supporting I1-F1. Original 17-case pass is retained separately. Every copy/receipt is TEST ONLY, never an accepted actual capture.
+- `quality/results.json`: private focused Prettier check, TypeScript noEmit with incremental false, ESLint through private config/no-cache: all exit 0. No source emission.
+- `independent-raw-audit.json`: independent byte/receipt/source and actual chronology checks for both externally pinned attempts and I1's own capture.
+- Own actual run: `{P}/runs/i1-01`; receipt: `{P}/receipt-i1-01.json`; independently calculated SHA256 `2978c1e84680fe0794a8b68246625b2bd5d1e6205e8827d754084371f67c379a`.
+
+## Integrity and trust limits
+
+`integrity.json` contains complete before/after path, SHA256, byte length and comparison records for all 24 packet files, all six hash-only constraints and all 1061 authority sources, plus packet and authority. All expected pins match and all enumerated inputs are unchanged. The six SPEC/AGENTS constraints were never semantically read. External packet SHA256: `9743074d4a8c95eb28edfceb1aa115ae27dc00ae655683c3081e1c55a105d451`; authority SHA256: `2f526748d30c66ca9d36af4ba5554d3784dd94005296dac1e855f2c8222f23e4`. Both externally supplied attempt receipt pins match.
+
+Authority and receipt expected hashes originate outside observation JSON at the operator/Lead boundary. I1 independently hashes its receipt after controlling capture. Re-signed diagnostic copies establish semantic tests only. The source authority inventories current source/launcher paths; it does not prove arbitrary hostile host provenance or transitive native/compiled identity.
+
+'''+''.join('- '+x+'\n' for x in limitations)+f'''
+
+Writes were confined to `{D}/**`, the own raw run, and its receipt. No candidate, production contract/policy/identity/approval/SQL/lock/checker changes, push, network/provider/PG/service/real-data operation or install occurred. No repository runtime/backlog/coordination files were changed because this task expressly restricts writes to the private review destinations.
+
+## Verdict and scope
+
+REVISE for I1-F1 (OBS-SBX04). OBS-SBX01/02 pass; OBS-SBX03 passes as a truthful observation of invariant failure. OBS-SBX05 focused quality, immutable-source and fixed-fault evidence passed, with acceptance pending the semantic-validator gap.
+
+Native containment, compiled ABI, production policy, ML29, two-engine/full parity and release acceptance are unproven. The 36 cards, eight phases and 100% parity remain unproven; Human220/221/222 remain pending. No release or new approval is granted.
+
+`artifact-manifest.json` inventories all review artifacts plus the own raw run/receipt; excludes itself. It is emitted after the final wrapper command/streams are persisted and verified immediately. Lead must independently hash the manifest; no self-hash trust is asserted.
+'''
+(D/'report.md').write_text(report)
+print(json.dumps({'verdict':'REVISE','finding':'I1-F1','integrityUnchanged':unchanged,'counts':integrity['counts'],'quality':'PASS','ownReceiptSHA256':verdict['ownReceiptSHA256']}))
+for name in ['report.md','verdict.json','integrity.json']:
+    raw=(D/name).read_bytes()
+    print(name,hashlib.sha256(raw).hexdigest(),len(raw))

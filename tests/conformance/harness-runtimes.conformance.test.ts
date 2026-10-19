@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type {
   ApprovalEngine,
-  AuditEvent,
   AuditSink,
   HarnessRuntime,
   ModelGateway,
@@ -9,7 +8,6 @@ import type {
   PolicyDecision,
   PolicyEngine,
   RuntimeInput,
-  TelemetryEvent,
   ToolDefinition,
   ToolRegistry
 } from '@cvg/harness-contracts'
@@ -17,6 +15,10 @@ import {
   ScriptedModelGateway,
   ScriptedOrchestrator
 } from '@cvg/harness-orchestrator'
+import {
+  RecordingAudit as Audit,
+  RecordingTelemetry as Telemetry
+} from '../support/governed-test-kit/index.js'
 import { SinglePassGovernedRuntime } from '../../packages/harness/src/runtime.ts'
 import { IterativeGovernedRuntime } from '../../packages/harness/src/iterative-runtime.ts'
 import { DefaultContextEngine } from '../../packages/harness/src/context-engine.ts'
@@ -55,20 +57,6 @@ interface Setup {
   readonly respond?: boolean
   readonly signal?: AbortSignal
   readonly pause?: InMemoryPauseSwitch
-}
-
-class Audit implements AuditSink {
-  readonly events: AuditEvent[] = []
-  async append(event: AuditEvent): Promise<void> {
-    this.events.push(event)
-  }
-}
-
-class Telemetry {
-  readonly events: TelemetryEvent[] = []
-  record(event: TelemetryEvent): void {
-    this.events.push(event)
-  }
 }
 
 class RecordingModel implements ModelGateway {

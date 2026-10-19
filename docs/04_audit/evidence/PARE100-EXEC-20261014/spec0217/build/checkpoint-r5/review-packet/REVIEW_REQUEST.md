@@ -1,0 +1,5 @@
+# Independent review request — SPEC0217
+
+Review the frozen sources against approved SPEC0217 D01–D14 and acceptance K01–K12. Inspect the connected API/worker/kernel/persistence path, saved-state integrity, approval consumption, transaction/fence behavior, compatibility of unbound least-privilege roles and process recovery. Judge actual sources and reject any requirement without evidence. Return concrete findings with criterion, file/line, severity/confidence, reproduction/evidence and limitations; do not infer release or parity acceptance.
+
+Inputs are sealed by manifest. Treat application sources as read-only; any probes need private resources and no real data, provider or effects. Do not edit the candidate or create descendants. The public source worktree is provided only for dependency resolution; do not read history, old review reports, builder rationale or .gauntlet. Fresh-context execution is not available in the Lead host at packet creation. This file and its manifest do not constitute an executed review.

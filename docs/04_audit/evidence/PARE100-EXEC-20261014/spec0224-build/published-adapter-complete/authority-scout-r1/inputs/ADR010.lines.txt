@@ -1,0 +1,18 @@
+8: ## Decisão de direção
+9: 
+10: O `cvg-operational-harness` é a infraestrutura reutilizável: contratos, orquestração, execução governada e adapters compartilhados. O Assistente de Plantão é um **produto consumidor**, com domínio, configuração, estado, testes, operação e liberação próprios.
+11: 
+12: Esta decisão substitui a identificação do repositório inteiro com o Assistente de Plantão na ADR-009. As decisões D1–D4, o princípio de confirmação humana, a SPEC 0177 e a barra 0368 continuam aplicáveis **ao produto**. A separação não autoriza dado real, integração externa, piloto ou release do harness, nem reabre automaticamente UP91/0356/0367.
+33: Direção permitida: **produto → exports públicos de contratos/runtime/adapters suportados → dependências de infraestrutura**. O harness e seus hosts não importam o produto, não carregam suas variáveis `SHIFT_*`, não montam seus webhooks e não iniciam seu agendador. Hospedar tudo no mesmo monorepo não concede acesso de um processo aos dados ou segredos do outro.
+34: 
+35: O consumidor atual importa `@cvg/model-gateway` e `zod`; não compõe `createOperationalHarness` nem `ModelGateway.complete`. A extração não deve fingir que essa integração já existe. A SPEC deve decidir quais exports do adapter são suportados e se o organizador precisa atravessar o gateway de budgets/telemetria, observando a ADR-004; mudança observável nesse caminho exige gate T3. Não adicionar loop autônomo ou ferramentas clínicas para tornar o consumidor artificialmente “genérico”.
+36: 
+37: ## Critérios de isolamento
+38: 
+39: 1. Domínio, prompts, comandos, identidade de pacientes, regras de lembrete e retenção do assistente ficam no produto.
+40: 2. Imports estáticos, dinâmicos, relativos, por alias e dependências transitivas do harness para o produto são recusados por gate executável com caso negativo conhecido.
+41: 3. Harness compila e executa uma jornada sintética sem arquivos, variáveis, volume, simuladores ou processo do produto; isolamento é comprovado em cópia descartável.
+42: 4. Consumidor tem entrypoint, comandos, configuração, imagem e volume próprios. Um não importa, inicializa ou precisa parar o processo do outro.
+43: 5. Testes e coverage têm denominadores identificados por proprietário; o gate agregado conserva as regressões existentes durante a migração. Mover arquivos não remove testes nem esconde falhas.
+44: 6. API/schema/export públicos e eventos/documentos persistidos são preservados pela extração. Adaptação de formato de estado requer SPEC, backup sintético e recuperação demonstrada.
+45: 7. Backlog, evidência, nota e release de um produto não representam qualidade ou autorização do harness inteiro; barra 0368 permanece própria do assistente.

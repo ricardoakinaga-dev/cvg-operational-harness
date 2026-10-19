@@ -1,0 +1,46 @@
+import json,hashlib,base64,datetime
+from pathlib import Path
+b=Path("/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build")
+c=Path("/tmp/cvg-claude100-exec-20261017/journal0225-candidate")
+binding=json.loads((b/"native-1792326951539-binding.json").read_text());run=binding["runId"]
+load=lambda p:json.loads(p.read_text())
+sha=lambda v:hashlib.sha256(v).hexdigest()
+def strict(a,z):
+ assert type(a) is type(z),(type(a),type(z))
+ if isinstance(a,dict):
+  assert set(a)==set(z)
+  for k in a: strict(a[k],z[k])
+ elif isinstance(a,list):
+  assert len(a)==len(z)
+  for x,y in zip(a,z):strict(x,y)
+ else:assert a==z
+ids=['null','false','true','zero','negative','minimum','maximum','empty-string','empty-array','empty-object','number-string','null-string','object-string','ascii-4096-canonical-bytes','unicode-4096-canonical-bytes','nul-4096','escapes','reserved-keys','apparent-envelope','nested','apparent-envelope-0','apparent-envelope-1']
+root=b/(run+"-public");assert {x.name for x in root.iterdir()}=={p+"-"+i for p in ['cas','journal','commit-ack'] for i in ids}
+pids=set();receipts=[];current_drift=[]
+for x in binding['inputs']:
+ assert sha((b/"native-1792326951539-sources"/x['path']).read_bytes())==x['sha256']
+ if sha((c/x['path']).read_bytes())!=x['sha256']:current_drift.append(x['path'])
+for point in ['cas','journal','commit-ack']:
+ for id in ids:
+  d=root/(point+'-'+id);done=load(d/'PASS.json');before=load(d/'before-kill.json');prior=load(d/'before-reader.json');after=load(d/'after-reader.json');wt=load(d/'writer.trace.json');rt=load(d/'reader.trace.json')
+  before.pop('backendPid');prior.pop('backendPid');strict(before,prior)
+  strict(before['journal'],after['journal']);row=before['journal'][0];assert row['state']=='CONFIRMED' and row['result_storage_version']==1 and row['result'] is None and not row['result_present']
+  env=row['result_storage_payload'];raw=base64.b64decode(env['data'],validate=True);assert len(raw)==env['decodedBytes']==done['fullOutputBytes'];assert sha(raw)==env['decodedSha256']==done['fullOutputSha256']
+  result=json.loads(raw);frame=json.loads(rt['requests'][0]['messages'][1]['content']);tools=[x['value'] for x in frame['items'] if isinstance(x.get('value'),dict) and x['value'].get('type')=='TOOL_RESULT'];assert len(tools)==1;payload=tools[0]['payload'];strict(result,payload['output']);assert payload['outputSha256']==sha(raw) and payload['outputBytes']==len(raw)
+  if id=='nul-4096':assert result=='\0'*4096
+  if '4096-canonical-bytes' in id:assert len(raw)==4096
+  bodies=[json.loads(x) for x in (d/'bodies.jsonl').read_text().splitlines()];assert len(bodies)==1 and bodies[0]['sha256']==sha(raw)
+  writer=load(d/'writer.command.json');reader=load(d/'reader.command.json');assert writer['signal']=='SIGKILL' and reader['code']==0 and reader['signal'] is None and writer['captureError'] is None and reader['captureError'] is None
+  assert writer['pid']!=reader['pid'];assert writer['pid'] not in pids and reader['pid'] not in pids;pids.update([writer['pid'],reader['pid']])
+  assert len(wt['requests'])==len(rt['requests'])==1
+  if point=='commit-ack':assert not wt['journal'] and load(d/'ready.json')['phase']=='J08_COMMIT_DURABLE_ACK_NOT_RETURNED'
+  usage=wt['results']+rt['results'];assert len(usage)==2
+  cp=after['checkpoint'];admissions=cp['state']['toolResultContext']['decisionAdmissions'];assert [x['status'] for x in admissions]==['SETTLED','SETTLED'];assert len({x['admissionId'] for x in admissions})==2
+  for a,u in zip(admissions,usage):strict(a['actual'],dict(modelCalls=1,inputTokens=u['inputTokens'],outputTokens=u['outputTokens'],costUsd=u['costUsd']))
+  for field in ['inputTokens','outputTokens','costUsd']:assert cp['budgetUsage'][field]==sum(x[field] for x in usage)
+  assert cp['budgetUsage']['modelCalls']==2
+  precomplete=[x for x in before['checkpoint']['state']['observations'] if x.get('type')=='TOOL_RESULT' and x.get('payload',{}).get('completion')=='COMPLETE'];assert bool(precomplete)==(point=='cas')
+  receipts.append(dict(point=point,id=id,bytes=len(raw),sha256=sha(raw),pids=[writer['pid'],reader['pid']]))
+assert len(receipts)==66 and len(pids)==132
+out=dict(at=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='PASS_SCOPED_66',runId=run,cases=66,distinctOSprocesses=132,frozenInputsVerified=34,currentInputDrift=current_drift,sourceProjection='test-only drift listed; no inherited fullqualification',checks=['actual committedjournal/base64/bytes/SHA','strict frame value/type','distinct crashpoints and stable independentprekill reread','singlebody/freshOSreader','twoactualcalls/twosettledreceipts/exactusage'],receipts=receipts,otherJs='OWED',functional_credit=0)
+(b/'recovery-current-public66-lead-audit.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps({k:out[k] for k in ['status','cases','distinctOSprocesses','frozenInputsVerified','currentInputDrift']}))

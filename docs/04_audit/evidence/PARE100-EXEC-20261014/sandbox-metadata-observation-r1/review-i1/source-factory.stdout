@@ -1,0 +1,776 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/createOperationalHarness.ts
+1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+2: import type {
+3:   AgenticKnowledgeProvider,
+4:   Claim,
+5:   CompletionEvaluator,
+6:   ContextEngine,
+7:   ExecutionStepStore,
+8:   IterativeOrchestrator,
+9:   RuntimeInput,
+10:   RuntimeProfile,
+11:   RuntimeResult,
+12:   SandboxGate,
+13:   SufficiencyEvaluator,
+14:   CapabilityRegistry,
+15:   ToolRegistry
+16: } from '@cvg/harness-contracts'
+17: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+18: import {
+19:   createJournaledToolRegistry,
+20:   type EffectJournal,
+21:   type JournaledToolRegistryOptions
+22: } from './effect-journal.ts'
+23: import {
+24:   SinglePassGovernedRuntime,
+25:   type HarnessRuntimeOptions
+26: } from './runtime.ts'
+27: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+28: 
+29: export interface OperationalHarnessOptions extends Omit<
+30:   HarnessRuntimeOptions,
+31:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+32: > {
+33:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+34:   /**
+35:    * Explicit capability composition. Its adapter is the only runtime-facing
+36:    * registry for this path; callers cannot provide both registries.
+37:    */
+38:   readonly capabilities?: CapabilityRegistry
+39:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+40:   readonly tools?: ToolRegistry
+41:   /** Required for capability composition and optional for compatibility tools. */
+42:   readonly effectJournal?: EffectJournal
+43:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+44:   /**
+45:    * Required to run the iterative profile. The runtime registry resolves the
+46:    * requested profile here; the worker never selects a runtime class.
+47:    */
+48:   readonly iterativeOrchestrator?: IterativeOrchestrator
+49:   readonly stepStore?: ExecutionStepStore
+50:   readonly contextEngine?: ContextEngine
+51:   readonly knowledge?: AgenticKnowledgeProvider
+52:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+53:   readonly completionEvaluator?: CompletionEvaluator
+54:   readonly claimExtractor?: (response: string) => readonly Claim[]
+55:   readonly defaultRuntimeProfile?: RuntimeProfile
+56:   readonly clock?: () => Date
+57:   /** Optional containment gate; absent means fail-closed for contained tools. */
+58:   readonly sandbox?: SandboxGate
+59: }
+60: 
+61: export interface OperationalHarness {
+62:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+63:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+64:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+65:   readonly capabilityFingerprint?: string
+66: }
+67: 
+68: /**
+69:  * Canonical public composition root for the neutral harness packages. Product
+70:  * adapters provide the ports; this function only wires them together and
+71:  * resolves the runtime profile through a registry-like selection.
+72:  */
+73: export function createOperationalHarness(
+74:   options: OperationalHarnessOptions
+75: ): OperationalHarness {
+76:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+77:   if (options.capabilities && !options.effectJournal) {
+78:     throw new Error(
+79:       'Capability composition requires an explicit effect journal'
+80:     )
+81:   }
+82:   const tools = resolveTools(options, capabilityFingerprint)
+83:   const singlePass = new SinglePassGovernedRuntime({
+84:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+85:     modelGateway: options.modelGateway,
+86:     policy: options.policy,
+87:     approvals: options.approvals,
+88:     tools,
+89:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+90:     audit: options.audit,
+91:     telemetry: options.telemetry,
+92:     ...(options.pause ? { pause: options.pause } : {}),
+93:     ...(options.effects ? { effects: options.effects } : {}),
+94:     ...(options.log ? { log: options.log } : {}),
+95:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+96:   })
+97: 
+98:   const iterative =
+99:     options.iterativeOrchestrator && options.stepStore
+100:       ? new IterativeGovernedRuntime({
+101:           orchestrator: options.iterativeOrchestrator,
+102:           modelGateway: options.modelGateway,
+103:           policy: options.policy,
+104:           approvals: options.approvals,
+105:           tools,
+106:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+107:           audit: options.audit,
+108:           telemetry: options.telemetry,
+109:           ...(options.pause ? { pause: options.pause } : {}),
+110:           ...(options.effects ? { effects: options.effects } : {}),
+111:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+112:           ...(options.log ? { log: options.log } : {}),
+113:           stepStore: options.stepStore,
+114:           ...(options.contextEngine
+115:             ? { contextEngine: options.contextEngine }
+116:             : {}),
+117:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+118:           ...(options.sufficiencyEvaluator
+119:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+120:             : {}),
+121:           ...(options.completionEvaluator
+122:             ? { completionEvaluator: options.completionEvaluator }
+123:             : {}),
+124:           ...(options.claimExtractor
+125:             ? { claimExtractor: options.claimExtractor }
+126:             : {}),
+127:           ...(options.clock ? { clock: options.clock } : {})
+128:         })
+129:       : undefined
+130: 
+131:   const resolveProfile = (input: RuntimeInput): RuntimeProfile =>
+132:     input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+133: 
+134:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+135:     const governedInput = capabilityFingerprint
+136:       ? { ...input, capabilityFingerprint }
+137:       : input
+138:     if (
+139:       capabilityFingerprint &&
+140:       input.executionId &&
+141:       input.capabilityFingerprint === undefined
+142:     ) {
+143:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+144:       return {
+145:         response:
+146:           'Capability composition fingerprint is required for durable execution.',
+147:         stopReason: 'STATE_CONFLICT',
+148:         steps: 0,
+149:         modelCalls: 0,
+150:         toolCalls: 0,
+151:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+152:       }
+153:     }
+154:     if (
+155:       capabilityFingerprint &&
+156:       input.capabilityFingerprint !== undefined &&
+157:       input.capabilityFingerprint !== capabilityFingerprint
+158:     ) {
+159:       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+160:       return {
+161:         response:
+162:           'Capability composition fingerprint does not match the runtime.',
+163:         stopReason: 'STATE_CONFLICT',
+164:         steps: 0,
+165:         modelCalls: 0,
+166:         toolCalls: 0,
+167:         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+168:       }
+169:     }
+170:     const profile = resolveProfile(governedInput)
+171:     if (profile === 'iterative') {
+172:       if (!iterative) {
+173:         await safeAudit(
+174:           options,
+175:           governedInput,
+176:           'runtime.stopped',
+177:           'STATE_CONFLICT'
+178:         )
+179:         return {
+180:           response:
+181:             'The iterative runtime profile is not configured in this composition.',
+182:           stopReason: 'STATE_CONFLICT',
+183:           steps: 0,
+184:           modelCalls: 0,
+185:           toolCalls: 0,
+186:           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+187:         }
+188:       }
+189:       return iterative.execute(governedInput)
+190:     }
+191:     return singlePass.execute(governedInput)
+192:   }
+193: 
+194:   return {
+195:     run: (input) => execute(input),
+196:     execute,
+197:     resolveProfile,
+198:     ...(options.capabilities
+199:       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+200:       : {})
+201:   }
+202: }
+203: 
+204: function resolveTools(
+205:   options: OperationalHarnessOptions,
+206:   capabilityFingerprint: string | undefined
+207: ): ToolRegistry {
+208:   if (options.capabilities && options.tools) {
+209:     throw new Error(
+210:       'Operational harness composition accepts capabilities or tools, not both'
+211:     )
+212:   }
+213:   const registry = options.capabilities
+214:     ? createCapabilityToolRegistry(options.capabilities)
+215:     : options.tools
+216:   if (!registry) {
+217:     throw new Error(
+218:       'Operational harness composition requires an explicit capability or tool registry'
+219:     )
+220:   }
+221:   if (!options.effectJournal) return registry
+222:   return createJournaledToolRegistry(registry, options.effectJournal, {
+223:     ...options.effectJournalOptions,
+224:     ...(capabilityFingerprint
+225:       ? { compositionFingerprint: capabilityFingerprint }
+226:       : {})
+227:   })
+228: }
+229: 
+230: async function safeAudit(
+231:   options: OperationalHarnessOptions,
+232:   input: RuntimeInput,
+233:   action: string,
+234:   result: string
+235: ): Promise<void> {
+236:   try {
+237:     await options.audit.append({
+238:       actor: input.agent.id,
+239:       agent: input.agent.id,
+240:       tenant: input.tenantId,
+241:       action,
+242:       policy: null,
+243:       approval: null,
+244:       tool: null,
+245:       result,
+246:       timestamp: new Date().toISOString(),
+247:       traceId: input.traceId,
+248:       correlationId: input.correlationId
+249:     })
+250:   } catch {
+251:     // misconfiguration must still fail closed without an unhandled error
+252:   }
+253: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/profile.ts
+1: import type {
+2:   ApprovalEngine,
+3:   AuditSink,
+4:   ModelGateway,
+5:   Orchestrator,
+6:   PolicyEngine,
+7:   SandboxGate,
+8:   TelemetrySink,
+9:   ToolRegistry
+10: } from '@cvg/harness-contracts'
+11: import {
+12:   approvalsControl,
+13:   auditControl,
+14:   budgetControl,
+15:   effectsControl,
+16:   logControl,
+17:   modelCapability,
+18:   pauseControl,
+19:   plannerCapability,
+20:   policyControl,
+21:   sandboxControl,
+22:   telemetryCapability,
+23:   toolsCapability
+24: } from './controls.ts'
+25: import { KernelRuntime } from './kernel-runtime.ts'
+26: import type {
+27:   EffectLedger,
+28:   KernelLog,
+29:   KernelPlugin,
+30:   PauseSwitch
+31: } from './types.ts'
+32: 
+33: export interface StandardKernelOptions {
+34:   readonly orchestrator: Orchestrator
+35:   readonly modelGateway: ModelGateway
+36:   readonly policy: PolicyEngine
+37:   readonly approvals: ApprovalEngine
+38:   readonly tools: ToolRegistry
+39:   readonly capabilityFingerprint?: string
+40:   readonly audit: AuditSink
+41:   readonly telemetry: TelemetrySink
+42:   readonly pause?: PauseSwitch
+43:   readonly log?: KernelLog
+44:   readonly effects?: EffectLedger
+45:   /** Optional containment gate; absent means fail-closed for contained tools. */
+46:   readonly sandbox?: SandboxGate
+47:   /** Audit action and telemetry event name; defaults to `harness.kernel`. */
+48:   readonly eventName?: string
+49:   /** Extra plugins mounted after the standard profile. */
+50:   readonly plugins?: readonly KernelPlugin[]
+51: }
+52: 
+53: /**
+54:  * The standard profile: every control the kernel requires (I1), in a fixed
+55:  * order, followed by the capabilities of the single-turn loop.
+56:  */
+57: export function standardKernelPlugins(
+58:   options: StandardKernelOptions
+59: ): KernelPlugin[] {
+60:   const eventName = options.eventName ?? 'harness.kernel'
+61:   return [
+62:     budgetControl(),
+63:     pauseControl(options.pause),
+64:     logControl(options.log),
+65:     effectsControl(options.effects),
+66:     policyControl(options.policy),
+67:     approvalsControl(
+68:       options.approvals,
+69:       options.capabilityFingerprint
+70:         ? { capabilityFingerprint: options.capabilityFingerprint }
+71:         : {}
+72:     ),
+73:     auditControl(options.audit, { action: eventName }),
+74:     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+75:     plannerCapability(options.orchestrator),
+76:     modelCapability(options.modelGateway),
+77:     toolsCapability(options.tools),
+78:     telemetryCapability(options.telemetry, { name: eventName }),
+79:     ...(options.plugins ?? [])
+80:   ]
+81: }
+82: 
+83: /** Kernel runtime with the standard profile, booted on first use. */
+84: export function createKernelRuntime(
+85:   options: StandardKernelOptions
+86: ): KernelRuntime {
+87:   return KernelRuntime.lazy(standardKernelPlugins(options))
+88: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts
+1: import type {
+2:   AgenticKnowledgeProvider,
+3:   AgentProfile,
+4:   ApprovalDecision,
+5:   ApprovalEngine,
+6:   ApprovalExecutionPort,
+7:   ApprovalRequest,
+8:   AuditEvent,
+9:   AuditSink,
+10:   KnowledgeSearchRequest,
+11:   KnowledgeSearchResult,
+12:   LoopDecision,
+13:   ModelGateway,
+14:   ModelResult,
+15:   PolicyDecision,
+16:   PolicyEngine,
+17:   PolicyRequest,
+18:   RuntimeInput,
+19:   SufficiencyEvaluation,
+20:   SufficiencyEvaluator,
+21:   TelemetryEvent,
+22:   TelemetrySink,
+23:   ToolDefinition,
+24:   ToolRegistry,
+25:   ToolResult
+26: } from '@cvg/harness-contracts'
+27: import { EMPTY_MODEL_USAGE } from '@cvg/harness-contracts'
+28: 
+29: export const PHASE3_TENANT =
+30:   'tenant_00000000-0000-4000-8000-000000000003' as RuntimeInput['tenantId']
+31: 
+32: export const PHASE3_TOOL_AVAILABILITY = 'synthetic.phase3.availability'
+33: export const PHASE3_TOOL_RESERVE = 'synthetic.phase3.reserve'
+34: 
+35: export function phase3RuntimeInput(
+36:   overrides: Partial<RuntimeInput> = {}
+37: ): RuntimeInput {
+38:   return {
+39:     agent: phase3AgentProfile(),
+40:     tenantId: PHASE3_TENANT,
+41:     executionId: 'exec_phase3_fixture',
+42:     conversationId:
+43:       'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+44:     sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+45:     correlationId:
+46:       'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+47:     traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+48:     userMessage: 'phase 3 controlled fixture',
+49:     context: {
+50:       values: { fixture: 'phase3' },
+51:       sourceIds: ['phase3-fixture'],
+52:       capturedAt: '2026-09-15T00:00:00.000Z'
+53:     },
+54:     state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+55:     budget: {
+56:       maxSteps: 8,
+57:       maxModelCalls: 4,
+58:       maxToolCalls: 4,
+59:       maxDurationMs: 30_000,
+60:       maxCostUsd: 1,
+61:       maxTokens: 4_000,
+62:       maxKnowledgeCalls: 3,
+63:       maxReplans: 2,
+64:       maxVerificationCalls: 3,
+65:       maxDecisionRepairs: 1
+66:     },
+67:     runtimeProfile: 'iterative',
+68:     ...overrides
+69:   }
+70: }
+71: 
+72: export function phase3AgentProfile(
+73:   overrides: Partial<AgentProfile> = {}
+74: ): AgentProfile {
+75:   return {
+76:     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+77:     version: 'v1' as AgentProfile['version'],
+78:     objective: 'Complete the synthetic operational goal.',
+79:     instructions: ['synthetic only', 'never act without authorization'],
+80:     skills: [],
+81:     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+82:     policies: ['synthetic-only'],
+83:     ...overrides
+84:   }
+85: }
+86: 
+87: export interface Phase3ToolObserver {
+88:   (event: { toolId: string; operationKey: string; input: unknown }): void
+89: }
+90: 
+91: export function createPhase3ToolRegistry(options: {
+92:   readonly availability: 'AVAILABLE' | 'UNAVAILABLE'
+93:   readonly reserveFails?: boolean
+94:   readonly observe?: Phase3ToolObserver
+95: }): ToolRegistry {
+96:   const availabilityTool: ToolDefinition = {
+97:     id: PHASE3_TOOL_AVAILABILITY,
+98:     version: 'v1',
+99:     description: 'Checks the synthetic resource availability.',
+100:     inputSchema: { type: 'object' },
+101:     outputSchema: { type: 'object' },
+102:     risk: 'LOW',
+103:     sideEffect: 'READ',
+104:     idempotent: true,
+105:     requiresApproval: false,
+106:     execute: async (input, context): Promise<ToolResult> => {
+107:       options.observe?.({
+108:         toolId: availabilityTool.id,
+109:         operationKey: context.operationKey ?? '',
+110:         input
+111:       })
+112:       return {
+113:         status: 'SUCCEEDED',
+114:         output:
+115:           options.availability === 'AVAILABLE'
+116:             ? { available: true }
+117:             : { available: false, reason: 'occupied' }
+118:       }
+119:     }
+120:   }
+121:   const reserveTool: ToolDefinition = {
+122:     id: PHASE3_TOOL_RESERVE,
+123:     version: 'v1',
+124:     description: 'Creates a synthetic reservation.',
+125:     inputSchema: { type: 'object' },
+126:     outputSchema: { type: 'object' },
+127:     risk: 'MEDIUM',
+128:     sideEffect: 'WRITE',
+129:     idempotent: false,
+130:     requiresApproval: false,
+131:     execute: async (input, context): Promise<ToolResult> => {
+132:       options.observe?.({
+133:         toolId: reserveTool.id,
+134:         operationKey: context.operationKey ?? '',
+135:         input
+136:       })
+137:       if (options.reserveFails) {
+138:         return { status: 'FAILED', error: 'synthetic failure' }
+139:       }
+140:       return {
+141:         status: 'SUCCEEDED',
+142:         output: { reservationRef: 'reservation-0001', applied: true }
+143:       }
+144:     }
+145:   }
+146:   const tools = [availabilityTool, reserveTool]
+147:   return {
+148:     list: () => tools,
+149:     resolve: (toolId, version) =>
+150:       tools.find(
+151:         (tool) =>
+152:           tool.id === toolId &&
+153:           (version === undefined || tool.version === version)
+154:       )
+155:   }
+156: }
+157: 
+158: export interface SyntheticKnowledgeItem {
+159:   readonly itemId: string
+160:   readonly text: string
+161:   readonly sourceId: string
+162:   readonly category: string
+163: }
+164: 
+165: export class SyntheticKnowledgeProvider implements AgenticKnowledgeProvider {
+166:   public readonly queries: string[] = []
+167: 
+168:   public constructor(
+169:     private readonly catalog: readonly SyntheticKnowledgeItem[]
+170:   ) {}
+171: 
+172:   public async search(
+173:     request: KnowledgeSearchRequest
+174:   ): Promise<KnowledgeSearchResult> {
+175:     this.queries.push(request.query)
+176:     const tokens = request.query.toLowerCase().split(/\s+/)
+177:     const items = this.catalog.filter((item) => {
+178:       const text = `${item.text} ${item.category}`.toLowerCase()
+179:       return tokens.some((token) => token.length > 2 && text.includes(token))
+180:     })
+181:     return {
+182:       query: request.query,
+183:       items: items.map((item) => ({
+184:         itemId: item.itemId,
+185:         text: item.text,
+186:         sourceId: item.sourceId,
+187:         sourceVersion: 'v1',
+188:         category: item.category
+189:       })),
+190:       provenance: items.map((item) => ({
+191:         sourceId: item.sourceId,
+192:         sourceVersion: 'v1',
+193:         category: item.category
+194:       }))
+195:     }
+196:   }
+197: }
+198: 
+199: /** Requires all requested categories to be present before SUFFICIENT. */
+200: export class CategorySufficiencyEvaluator implements SufficiencyEvaluator {
+201:   public async evaluate(input: {
+202:     readonly query: string
+203:     readonly requestedCategories: readonly string[]
+204:     readonly observations: readonly {
+205:       readonly payload: unknown
+206:     }[]
+207:   }): Promise<SufficiencyEvaluation> {
+208:     const found = new Map<string, Set<string>>()
+209:     for (const observation of input.observations) {
+210:       const payload = observation.payload as {
+211:         items?: readonly {
+212:           itemId: string
+213:           category?: string
+214:           sourceId: string
+215:         }[]
+216:       } | null
+217:       for (const item of payload?.items ?? []) {
+218:         const category = item.category ?? 'unknown'
+219:         const sources = found.get(category) ?? new Set<string>()
+220:         sources.add(item.sourceId)
+221:         found.set(category, sources)
+222:       }
+223:     }
+224:     const requested =
+225:       input.requestedCategories.length > 0
+226:         ? input.requestedCategories
+227:         : [...found.keys()]
+228:     const missing = requested.filter((category) => !found.has(category))
+229:     const conflicting = requested.filter(
+230:       (category) => (found.get(category)?.size ?? 0) > 1
+231:     )
+232:     const covered = requested.filter((category) => found.has(category))
+233:     if (missing.length === 0 && conflicting.length === 0) {
+234:       return {
+235:         level: 'SUFFICIENT',
+236:         reasonCode: 'ALL_CATEGORIES_COVERED',
+237:         missingCategories: [],
+238:         conflictingSources: [],
+239:         coveredCategories: covered
+240:       }
+241:     }
+242:     if (missing.length === 0) {
+243:       return {
+244:         level: 'CONFLICTING',
+245:         reasonCode: 'CONFLICTING_SOURCES',
+246:         missingCategories: [],
+247:         conflictingSources: conflicting,
+248:         coveredCategories: covered
+249:       }
+250:     }
+251:     return {
+252:       level: covered.length > 0 ? 'PARTIAL' : 'INSUFFICIENT',
+253:       reasonCode: 'MISSING_CATEGORIES',
+254:       missingCategories: missing,
+255:       conflictingSources: conflicting,
+256:       coveredCategories: covered
+257:     }
+258:   }
+259: }
+260: 
+261: export const PHASE3_KNOWLEDGE_ITEMS: readonly SyntheticKnowledgeItem[] = [
+262:   {
+263:     itemId: 'evidence-infectious-1',
+264:     text: 'condition-X infectious causes include pathogen-alpha.',
+265:     sourceId: 'source-infectious',
+266:     category: 'infectious'
+267:   },
+268:   {
+269:     itemId: 'evidence-nutritional-1',
+270:     text: 'condition-X nutritional causes include diet-deficiency-beta.',
+271:     sourceId: 'source-nutritional',
+272:     category: 'nutritional'
+273:   },
+274:   {
+275:     itemId: 'evidence-metabolic-1',
+276:     text: 'condition-X metabolic causes include enzyme-gamma.',
+277:     sourceId: 'source-metabolic',
+278:     category: 'metabolic'
+279:   }
+280: ]
+281: 
+282: export class ScriptedPolicyEngine implements PolicyEngine {
+283:   public readonly evaluations: PolicyRequest[] = []
+284: 
+285:   public constructor(
+286:     private readonly deniedTools: readonly string[] = [],
+287:     private readonly handoffTools: readonly string[] = [],
+288:     private readonly approvalTools: readonly string[] = []
+289:   ) {}
+290: 
+291:   public async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
+292:     this.evaluations.push(request)
+293:     if (this.deniedTools.includes(request.tool.id)) {
+294:       return {
+295:         outcome: 'DENY',
+296:         reason: `Policy denies ${request.tool.id}.`,
+297:         policyVersion: 'synthetic-policy-v1'
+298:       }
+299:     }
+300:     if (this.handoffTools.includes(request.tool.id)) {
+301:       return {
+302:         outcome: 'HANDOFF',
+303:         reason: `Policy requires a human for ${request.tool.id}.`,
+304:         policyVersion: 'synthetic-policy-v1'
+305:       }
+306:     }
+307:     if (this.approvalTools.includes(request.tool.id)) {
+308:       return {
+309:         outcome: 'REQUIRE_APPROVAL',
+310:         reason: `Policy requires approval for ${request.tool.id}.`,
+311:         policyVersion: 'synthetic-policy-v1'
+312:       }
+313:     }
+314:     return {
+315:       outcome: 'ALLOW',
+316:       reason: 'Allowed by synthetic policy.',
+317:       policyVersion: 'synthetic-policy-v1'
+318:     }
+319:   }
+320: }
+321: 
+322: export class RecordingAuditSink implements AuditSink {
+323:   public readonly events: AuditEvent[] = []
+324: 
+325:   public async append(event: AuditEvent): Promise<void> {
+326:     this.events.push(event)
+327:   }
+328: }
+329: 
+330: export class RecordingTelemetrySink implements TelemetrySink {
+331:   public readonly events: TelemetryEvent[] = []
+332: 
+333:   public record(event: TelemetryEvent): void {
+334:     this.events.push(event)
+335:   }
+336: }
+337: 
+338: export class InMemoryApprovalEngine implements ApprovalEngine {
+339:   private readonly decisions = new Map<string, ApprovalDecision>()
+340:   private readonly executionStates = new Map<
+341:     string,
+342:     'RESERVED' | 'CONSUMED' | 'UNCERTAIN'
+343:   >()
+344: 
+345:   public readonly requests: ApprovalRequest[] = []
+346:   public approveOnRequest = false
+347: 
+348:   /** Single-use execution lifecycle, mirroring the durable authority. */
+349:   public execution: ApprovalExecutionPort = {
+350:     begin: async (request) => {
+351:       const state = this.executionStates.get(request.approvalId)
+352:       if (state !== undefined) {
+353:         throw new Error(`Approval execution is ${state.toLowerCase()}`)
+354:       }
+355:       this.executionStates.set(request.approvalId, 'RESERVED')
+356:       return {
+357:         approvalId: request.approvalId,
+358:         reservationId: `reservation_${request.approvalId}`
+359:       }
+360:     },
+361:     complete: async ({ request }) => {
+362:       this.executionStates.set(request.approvalId, 'CONSUMED')
+363:     },
+364:     fail: async ({ request }) => {
+365:       this.executionStates.delete(request.approvalId)
+366:     },
+367:     uncertain: async ({ request }) => {
+368:       this.executionStates.set(request.approvalId, 'UNCERTAIN')
+369:     }
+370:   }
+371: 
+372:   public async request(request: ApprovalRequest): Promise<ApprovalDecision> {
+373:     this.requests.push(request)
+374:     const existing = this.decisions.get(request.operationKey)
+375:     if (existing) return existing
+376:     if (this.approveOnRequest) {
+377:       const decision: ApprovalDecision = {
+378:         status: 'APPROVED',
+379:         approvalId: `approval_${request.operationKey}` as never,
+380:         reason: 'approved by fixture'
+381:       }
+382:       this.decisions.set(request.operationKey, decision)
+383:       return decision
+384:     }
+385:     const decision: ApprovalDecision = {
+386:       status: 'PENDING',
+387:       approvalId: `approval_${request.operationKey}` as never,
+388:       reason: 'approval pending'
+389:     }
+390:     this.decisions.set(request.operationKey, decision)
+391:     return decision
+392:   }
+393: 
+394:   public approve(operationKey: string): void {
+395:     this.decisions.set(operationKey, {
+396:       status: 'APPROVED',
+397:       approvalId: `approval_${operationKey}` as never,
+398:       reason: 'approved by operator'
+399:     })
+400:   }
+401: 
+402:   public deny(operationKey: string): void {
+403:     this.decisions.set(operationKey, {
+404:       status: 'DENIED',
+405:       approvalId: `approval_${operationKey}` as never,
+406:       reason: 'denied by operator'
+407:     })
+408:   }
+409: }
+410: 
+411: export class ThrowingModelGateway implements ModelGateway {
+412:   public calls = 0
+413: 
+414:   public async complete(): Promise<ModelResult> {
+415:     this.calls += 1
+416:     throw new Error('synthetic model outage')
+417:   }
+418: }
+419: 
+420: export function decision(
+421:   value: Omit<LoopDecision, 'reasonCode'> &
+422:     Partial<Pick<LoopDecision, 'reasonCode'>>
+423: ): LoopDecision {
+424:   return { reasonCode: 'TOOL_REQUIRED', ...value }
+425: }
+426: 
+427: export function orchestratorTurn(decisionValue: LoopDecision): {
+428:   decision: LoopDecision
+429:   usage: typeof EMPTY_MODEL_USAGE
+430: } {
+431:   return { decision: decisionValue, usage: EMPTY_MODEL_USAGE }
+432: }

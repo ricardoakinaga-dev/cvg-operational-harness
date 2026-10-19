@@ -5,7 +5,18 @@ e estados: [glossário operacional](architecture/GLOSSARY.md).
 
 Navegação derivada dos registros correntes: [índice operacional](99_operational_index.md).
 
-## Navegação corrente — 30/09/2026 — AUD0592 / UP91
+## Navegação corrente — 17/10/2026 — Operational Harness
+
+- [ADR-010](architecture/adrs/ADR-010-harness-product-isolation.md), [roadmap0369](03_build/0369_harness_product_isolation_roadmap.md) e [backlog0370](03_build/0370_harness_product_isolation_backlog.md): missão, isolamento e status canônico dos cartões HISO.
+- [Barra0373](03_build/0373_barra_producao_harness.md), [plano0374](03_build/0374_plano_producao_harness.md) e [runbook local0803](08_runtime/0803_runbook_gates_locais.md): critérios e reprodução por candidata/artefato. Aprovação de B5 não é execução de CI.
+- [Fechamento SPEC0228](04_audit/evidence/B6-0228-BUILD-20261017/REPORT.md):14aceites/16gates locais na candidataf11; fronteira INCOMPLETE e código sem integração automática ao principal.
+- [Produto Assistente de Plantão](../products/shift-assistant/docs/README.md): docs próprias, backlog PISO e correspondência AP–PISO–HISO. D1–D4, SPEC0177 e barra0368 pertencem ao consumidor.
+- [Estado operacional](99_runtime_state.md), [log](20_master_execution_log.md), [backlog mestre](30_backlog_master.md) e [coordenação](08_runtime/agent_coordination.md): registros atuais e ownership. Paridades e outras frentes conservam seus planos e donos; esta reconciliação não reabre UP91.
+- [Reconciliação documental0388](03_build/0388_documentation_isolation_reconciliation.md): critérios, preservação histórica e evidências de HISO-002/HISO-008.
+
+O isolamento positivo e a produção ainda dependem das provas de suas trilhas. As seções seguintes preservam a navegação e os resultados de suas datas; não são ordens atuais de execução nem novas aprovações.
+
+## Histórico — Navegação em30/09/2026 — AUD0592 / UP91
 
 - [Roadmap atualizado M0–M9](03_build/0366_program_roadmap_reaudit_2026-09-30.md) e [backlog corrente](03_build/0367_program_backlog_reaudit_2026-09-30.md): 52 cartões e 83 origens/13 gates preservados; 0356 conserva statusPR,0367 possui status UP91.
 - [AUD0592 com 42 notas e13 gates](04_audit/0592_repository_reaudit_2026-09-30.md): maturidade60,24/100, prontidão24,23/100; parecer FAIL/NO_GO, checks atuais isolados e limitações explícitas.

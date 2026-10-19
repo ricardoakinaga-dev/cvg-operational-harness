@@ -1,0 +1,301 @@
+
+FILE packages/harness/src/effect-journal.ts
+ 322:       if (reservation.state === 'CONFIRMED') {
+ 323:         return { status: 'SUCCEEDED', output: reservation.result }
+ 324:       }
+ 325:       if (
+ 326:         reservation.state === 'UNCERTAIN' ||
+ 327:         reservation.state === 'EFFECT_STARTED'
+ 328:       ) {
+ 329:         return {
+ 330:           status: 'REJECTED',
+ 331:           error:
+ 332:             'unknown_effect: explicit reconciliation is required before retry'
+ 333:         }
+ 334:       }
+ 335:       if (reservation.attemptId !== attemptId) {
+ 336:         return {
+ 337:           status: 'REJECTED',
+ 338:           error:
+ 339:             'unknown_effect: an existing reservation requires reconciliation'
+ 340:         }
+ 341:       }
+ 342:       await journal.markStarted({
+ 343:         tenantId: context.tenantId,
+ 344:         operationKey,
+ 345:         attemptId
+ 346:       })
+ 347:       try {
+ 348:         const result = await tool.execute(input, context)
+ 349:         if (
+ 350:           options.crashAfterEffectBeforeConfirm &&
+ 351:           result.status === 'SUCCEEDED'
+ 352:         ) {
+ 353:           await journal.markUncertain({
+ 354:             tenantId: context.tenantId,
+ 355:             operationKey,
+ 356:             attemptId,
+ 357:             reason: 'synthetic crash after effect before confirmation'
+ 358:           })
+ 359:           return {
+ 360:             status: 'REJECTED',
+ 361:             error:
+ 362:               'unknown_effect: synthetic crash after effect before confirmation'
+ 363:           }
+ 364:         }
+ 365:         if (result.status === 'SUCCEEDED') {
+ 366:           await journal.confirm({
+ 367:             tenantId: context.tenantId,
+ 368:             operationKey,
+ 369:             attemptId,
+ 370:             result: result.output
+ 371:           })
+ 372:         } else {
+ 373:           await journal.fail({
+ 374:             tenantId: context.tenantId,
+ 375:             operationKey,
+ 376:             attemptId,
+ 377:             error: result.error ?? 'tool failed'
+ 378:           })
+ 379:         }
+ 380:         return result
+ 381:       } catch (error) {
+ 382:         const message =
+ 383:           error instanceof Error ? error.message : 'tool execution failed'
+ 384:         await journal.markUncertain({
+ 385:           tenantId: context.tenantId,
+ 386:           operationKey,
+ 387:           attemptId,
+ 388:           reason: `unknown effect after executor failure: ${message}`
+ 389:         })
+ 390:         return {
+ 391:           status: 'REJECTED',
+ 392:           error: 'unknown_effect: executor outcome is uncertain'
+ 393:         }
+ 394:       }
+ 395:     }
+ 396:   }
+ 397: }
+
+FILE packages/persistence/src/controlled-published-fencing.ts
+   1: import { OperationalExecutionError } from '@cvg/harness'
+   2: import { TenantIdSchema } from '@cvg/platform'
+   3: import type { FencedOuterClaimRef } from './outbox.ts'
+   4: import type { PostgresQueryable } from './postgres.ts'
+   5: 
+   6: /** Private persistence fence, reconstructed by the trusted worker, never HTTP. */
+   7: export interface ControlledPublishedDatabaseFence {
+   8:   readonly tenantId: string
+   9:   readonly executionId: string
+  10:   readonly workerId: string
+  11:   readonly attempt: number
+  12:   readonly outer: FencedOuterClaimRef
+  13:   readonly signal?: AbortSignal
+  14:   readonly cancellation?: {
+  15:     readonly eventSequence: string
+  16:     readonly attempt: number
+  17:   }
+  18: }
+  19: 
+  20: export interface ControlledPublishedBindingRow extends Record<string, unknown> {
+  21:   tenant_id: string
+  22:   execution_id: string
+  23:   inbound_message_id: string
+  24:   conversation_id: string
+  25:   session_id: string
+  26:   outbox_id: string
+  27:   agent_id: string
+  28:   version_id: string
+  29:   trace_id: string
+  30:   correlation_id: string
+  31:   request_digest: string
+  32:   capability_fingerprint: string
+  33:   prepared: unknown
+  34:   prepared_digest: string | null
+  35:   state: unknown
+  36:   state_digest: string | null
+  37:   state_revision: string | number
+  38:   evidence_sequence: number
+  39:   evidence_bytes: number
+  40:   evidence_hash: string
+  41:   started_at: Date | string | null
+  42:   expires_at: Date | string | null
+  43:   dispatch_closed: boolean
+  44:   fault: unknown
+  45:   closed_trace: unknown
+  46:   closed_trace_digest: string | null
+  47:   phase_state: 'IDLE_SEALED' | 'OPEN' | 'FAULTED' | 'CLOSED'
+  48:   phase_revision: string | number
+  49:   seal_id: string
+  50:   seal_checkpoint_digest: string | null
+  51:   sealed_checkpoint: unknown
+  52:   seal_state_digest: string | null
+  53:   sealed_through_sequence: number
+  54:   consumed_seal_id: string | null
+  55:   open_phase_id: string | null
+  56:   open_phase_type: string | null
+  57:   open_phase_input_digest: string | null
+  58:   open_phase_attempt: number | null
+  59:   open_phase_acked: boolean
+  60:   active_outer_attempt: number | null
+  61:   active_outer_worker_id: string | null
+  62:   active_outer_attempt_row_id: string | null
+  63:   approval_receipt: unknown
+  64: }
+  65: 
+  66: interface ParentRow extends Record<string, unknown> {
+  67:   tenant_id: string
+  68:   id: string
+  69:   state: string
+  70:   attempt: number
+  71:   lease_owner: string | null
+  72:   lease_until: Date | string | null
+  73: }
+  74: 
+  75: export function publishedFenceError(code = 'lease_lost'): never {
+  76:   throw new OperationalExecutionError(
+  77:     code === 'conflict' ? 'conflict' : 'lease_lost',
+  78:     'Controlled published execution guard rejected the operation'
+  79:   )
+  80: }
+  81: 
+  82: export function publishedIso(value: Date | string): string {
+  83:   const date = value instanceof Date ? value : new Date(value)
+  84:   if (!Number.isFinite(date.getTime())) publishedFenceError('conflict')
+  85:   return date.toISOString()
+  86: }
+  87: 
+  88: export async function publishedDbNow(client: PostgresQueryable): Promise<Date> {
+  89:   const result = await client.query<{ now: Date | string }>(
+  90:     'SELECT clock_timestamp() AS now'
+  91:   )
+  92:   const now = result.rows[0]?.now
+  93:   if (now === undefined) publishedFenceError()
+  94:   return new Date(publishedIso(now))
+  95: }
+  96: 
+  97: export async function setPublishedWriteContext(
+  98:   client: PostgresQueryable,
+  99:   fence: Pick<
+ 100:     ControlledPublishedDatabaseFence,
+ 101:     'executionId' | 'workerId' | 'attempt'
+ 102:   >,
+ 103:   mode: 'active' | 'settlement' | 'claim' | 'close' | 'cancel' | 'cancel_close'
+ 104: ): Promise<void> {
+ 105:   await client.query(
+ 106:     `SELECT set_config('cvg.published_execution',$1,true),
+ 107:     set_config('cvg.published_worker',$2,true),set_config('cvg.published_attempt',$3,true),
+ 108:     set_config('cvg.published_mode',$4,true)`,
+ 109:     [fence.executionId, fence.workerId, String(fence.attempt), mode]
+ 110:   )
+ 111: }
+ 112: 
+ 113: export async function boundExecutionIdForOperation(
+ 114:   client: PostgresQueryable,
+ 115:   tenantId: string,
+ 116:   operationKey: string
+ 117: ): Promise<string | null> {
+ 118:   const result = await client.query<{ execution_id: string }>(
+ 119:     `SELECT id AS execution_id FROM operational_executions
+ 120:      WHERE tenant_id=$1 AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'
+ 121:        AND left($2,length(id)+2)=id||':s' LIMIT 1`,
+ 122:     [tenantId, operationKey]
+ 123:   )
+ 124:   return result.rows[0]?.execution_id ?? null
+ 125: }
+ 126: 
+ 127: export async function guardOptionalPublishedWrite(
+ 128:   client: PostgresQueryable,
+ 129:   tenantId: string,
+ 130:   executionId: string,
+ 131:   fence: ControlledPublishedDatabaseFence | undefined,
+ 132:   settlement = false
+ 133: ): Promise<Awaited<ReturnType<typeof guardControlledPublishedFence>> | null> {
+ 134:   const bound = await client.query(
+ 135:     `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2
+ 136:      AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,
+ 137:     [tenantId, executionId]
+ 138:   )
+ 139:   if (!bound.rows.length) {
+ 140:     if (fence) publishedFenceError()
+ 141:     return null
+ 142:   }
+ 143:   if (
+ 144:     !fence ||
+ 145:     fence.tenantId !== tenantId ||
+ 146:     fence.executionId !== executionId
+ 147:   )
+ 148:     publishedFenceError()
+ 149:   return guardControlledPublishedFence(client, fence, {
+ 150:     settlement,
+ 151:     requirePhase: true
+ 152:   })
+ 153: }
+ 154: 
+ 155: /** One client/one transaction; global lock order is shared by every bound port. */
+ 156: export async function guardControlledPublishedFence(
+ 157:   client: PostgresQueryable,
+ 158:   fence: ControlledPublishedDatabaseFence,
+ 159:   options: {
+ 160:     settlement?: boolean
+ 161:     requirePhase?: boolean
+ 162:     skipPause?: boolean
+ 163:     signal?: AbortSignal
+ 164:   } = {}
+ 165: ): Promise<{
+ 166:   binding: ControlledPublishedBindingRow
+ 167:   now: Date
+ 168:   recheck: () => Promise<Date>
+ 169:   leaseUntil: string
+ 170: }> {
+ 171:   options = {
+ 172:     ...options,
+ 173:     ...(!options.settlement && !options.signal && fence.signal
+ 174:       ? { signal: fence.signal }
+ 175:       : {})
+ 176:   }
+ 177:   TenantIdSchema.parse(fence.tenantId)
+ 178:   if (fence.cancellation) {
+ 179:     if (!options.settlement || options.requirePhase) publishedFenceError()
+ 180:     return guardCancelledPublishedFence(client, fence)
+ 181:   }
+ 182:   const outer = fence.outer
+ 183:   if (
+ 184:     !Number.isSafeInteger(fence.attempt) ||
+ 185:     fence.attempt < 1 ||
+ 186:     outer.tenantId !== fence.tenantId ||
+ 187:     outer.processWorkerId !== fence.workerId ||
+ 188:     !Number.isSafeInteger(outer.expectedOuterAttempt) ||
+ 189:     outer.expectedOuterAttempt < 1 ||
+ 190:     !/^[1-9]\d*$/.test(outer.expectedAttemptRowId) ||
+ 191:     options.signal?.aborted
+ 192:   )
+ 193:     publishedFenceError()
+ 194:   const parentResult = await client.query<ParentRow>(
+ 195:     'SELECT tenant_id,id,state,attempt,lease_owner,lease_until FROM operational_executions WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+ 196:     [fence.tenantId, fence.executionId]
+ 197:   )
+ 198:   const parent = parentResult.rows[0]
+ 199:   const bindingResult = await client.query<ControlledPublishedBindingRow>(
+ 200:     'SELECT * FROM controlled_published_bindings WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',
+ 201:     [fence.tenantId, fence.executionId]
+ 202:   )
+ 203:   const binding = bindingResult.rows[0]
+ 204:   if (
+ 205:     !parent ||
+ 206:     !binding ||
+ 207:     binding.outbox_id !== outer.eventId ||
+ 208:     binding.active_outer_attempt !== outer.expectedOuterAttempt ||
+ 209:     binding.active_outer_worker_id !== outer.processWorkerId ||
+ 210:     String(binding.active_outer_attempt_row_id) !==
+ 211:       outer.expectedAttemptRowId ||
+ 212:     parent.attempt !== fence.attempt ||
+ 213:     parent.lease_owner !== fence.workerId ||
+ 214:     !['CLAIMED', 'RUNNING'].includes(parent.state) ||
+ 215:     binding.phase_state === 'CLOSED'
+ 216:   )
+ 217:     publishedFenceError()
+ 218:   if (
+ 219:     !options.settlement &&
+ 220:     (binding.dispatch_closed ||
+

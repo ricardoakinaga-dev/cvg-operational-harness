@@ -1,0 +1,26 @@
+import json,pathlib,hashlib,collections
+R=pathlib.Path(__file__).resolve().parents[1];P=R.parent/'review-packet-r3';m=json.loads((P/'manifest.json').read_text());inputs={e['copy']:e for e in m['inputs']};deps=m['allowedDependencyMirror'];external=m['externalReadOnlyDependencies'];b=json.loads((R/'sentinel-before.json').read_text());sent={e['path']:e for e in b['entries']};observed=[];misses=[];seen=set();readcounts={}
+for p in sorted((R/'raw').glob('*-reads.jsonl')):
+ rows=[json.loads(l)for l in p.read_text().splitlines()];readcounts[p.name]={'events':len(rows),'denied':[e for e in rows if e.get('denied')]}
+ for e in rows:
+  if e.get('denied')or not e.get('sha256'):continue
+  key=(e['path'],e['sha256'])
+  if key in seen:continue
+  seen.add(key);path=e['path'];logical=deps+path[len(external):]if path.startswith(external+'/')else path
+  if path.startswith(m['artifactRoot']+'/node_modules/'):logical=deps+path[len(m['artifactRoot']+'/node_modules'):]
+  category=inputs[path]['category']if path in inputs else 'dependency'if logical.startswith(deps+'/')else 'owned'if path.startswith(str(R)+'/')else 'scope-package'if path==m['allowedScopeMetadata']['path']else 'assigned-node'if path.startswith(str(pathlib.Path(m['node']).parent.parent)+'/')else 'unclassified'
+  record={**e,'viaAllowedPath':logical,'category':category}
+  if category=='unclassified':misses.append(record)
+  if pathlib.Path(logical).suffix in ['.js','.mjs','.cjs','.ts','.mts','.json'] or category in ['source','constraints']:
+   try:
+    content=pathlib.Path(logical).read_bytes()
+    if hashlib.sha256(content).hexdigest()==e['sha256']:
+     dest=R/'snapshots'/(e['sha256']+'.txt');dest.write_bytes(content);record['preservedSnapshot']=str(dest.relative_to(R))
+    else:record['snapshotNotCopied']='current bytes differ from prior read; earlier transform snapshots may preserve old bytes'
+   except Exception as err:record['snapshotNotCopied']=str(err)
+  observed.append(record)
+transforms=[json.loads(l)for l in (R/'raw/transforms.jsonl').read_text().splitlines()];pre=[e for e in transforms if e['stage']=='pre'and e['id']in inputs];binding=[]
+for e in pre:
+ content=pathlib.Path(e['snapshot']).read_bytes();binding.append({'id':e['id'],'category':inputs[e['id']]['category'],'stage':e['stage'],'snapshot':e['snapshot'],'pass':hashlib.sha256(content).hexdigest()==e['sha256']==inputs[e['id']]['sha256']})
+result={'note':'User-space NodeFS interception and Vite pre/post plugin snapshots, not OS attestation, executed instruction coverage, or final loader byte attestation. Enumerated input inventory is not observed read/transform coverage. Bootstrap input-index and realpath precede guard installation. Optional denied probes yielded no read bytes.','readRuns':readcounts,'observedReads':observed,'unclassifiedReads':misses,'observedCategories':dict(collections.Counter(e['category']for e in observed)),'transformEvents':len(transforms),'transformedManifestFiles':len(set(e['id']for e in pre)),'transformBindings':binding,'bindingsClean':all(e['pass']for e in binding),'guardUnmodified':(R/'configs/trace-reads.cjs').read_bytes()==pathlib.Path(m['environmentTemplates'][0]['copy']).read_bytes()}
+(R/'evidence/observation-summary.json').write_text(json.dumps(result,indent=2)+'\n');print({'uniqueReadVersions':len(observed),'categories':result['observedCategories'],'unclassified':len(misses),'transformedManifestFiles':result['transformedManifestFiles'],'bindingsClean':result['bindingsClean'],'guardUnmodified':result['guardUnmodified']})

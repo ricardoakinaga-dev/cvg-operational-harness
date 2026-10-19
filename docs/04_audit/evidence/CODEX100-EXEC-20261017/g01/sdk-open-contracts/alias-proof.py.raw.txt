@@ -1,0 +1,18 @@
+from pathlib import Path
+import ast,json,hashlib
+p=Path('docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts');load=lambda f:json.loads((p/f).read_text());s={x['path']:x for x in load('source-inputs.json')['inputs']};sp={x['path']+':'+str(x['start_line'])+'-'+str(x['end_line']):x for x in load('source-spans.json')['spans']};rows=[]
+items=[('api','Codex','_client','client','CodexClient'),('api','AsyncCodex','_client','async_client','AsyncCodexClient'),('api','Thread','_client','client','CodexClient'),('api','AsyncThread','_codex','api','AsyncCodex'),('api','TurnHandle','_client','client','CodexClient'),('api','AsyncTurnHandle','_codex','api','AsyncCodex'),('async_client','AsyncCodexClient','_sync','client','CodexClient'),('client','CodexClient','_router','_message_router','MessageRouter')]
+for mod,cls,field,tm,tc in items:
+ f='sdk/python/src/openai_codex/'+mod+'.py';t=(p/s[f]['archive']).read_text();tree=ast.parse(t);cl=next(x for x in tree.body if isinstance(x,ast.ClassDef) and x.name==cls);candidates=[]
+ for n in cl.body:
+  if isinstance(n,ast.AnnAssign) and isinstance(n.target,ast.Name) and n.target.id==field and ast.unparse(n.annotation)==tc:candidates.append(n)
+  if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name=='__init__':
+   for q in ast.walk(n):
+    if isinstance(q,ast.Assign) and isinstance(q.value,ast.Call) and ast.unparse(q.value.func)==tc and any(isinstance(z,ast.Attribute) and ast.unparse(z)=='self.'+field for z in q.targets):candidates.append(q)
+ assert candidates,(mod,cls,field)
+ refs=[]
+ for n in candidates:
+  key=f+':'+str(n.lineno)+'-'+str(n.end_lineno);ex='\n'.join(t.splitlines()[n.lineno-1:n.end_lineno]);sp[key]={'path':f,'archive':s[f]['archive'],'git_blob':s[f]['git_blob'],'source_sha256':s[f]['sha256'],'start_line':n.lineno,'end_line':n.end_lineno,'excerpt':ex,'excerpt_sha256':hashlib.sha256(ex.encode()).hexdigest()};refs.append(key)
+ rows.append({'id':mod+'.'+cls+'.'+field,'source_module':mod,'source_class':cls,'receiver_field':field,'target_module':tm,'target_class':tc,'declaration_evidence':refs,'semantics':'STATIC_CONSTRUCTOR_OR_TYPE_ANNOTATION_BINDING_NOT_RUNTIME_DISPATCH_GUARANTEE'})
+edges=load('python-call-edges.json')
+(p/'python-call-edges.json').write_text(json.dumps(edges,ensure_ascii=False,indent=2)+'\n');(p/'python-alias-evidence.json').write_text(json.dumps({'kind':'SOURCE_RECEIVER_ALIAS_EVIDENCE_NOT_IMPORT_OR_RUNTIME_PROOF','bindings':rows,'count':len(rows)},ensure_ascii=False,indent=2)+'\n');(p/'source-spans.json').write_text(json.dumps({'kind':'EXACT_INCLUSIVE_UTF8_SOURCE_EXCERPTS','spans':list(sp.values()),'count':len(sp)},ensure_ascii=False,indent=2)+'\n');print(json.dumps({'receiver_aliases':len(rows),'exact_spans':len(sp)}))

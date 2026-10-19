@@ -1,0 +1,37 @@
+import json,pathlib,hashlib,datetime,collections
+ROOT=pathlib.Path.cwd();T=pathlib.Path('/tmp/cvg-codex100-exec-20261017/delivery-audit-20261018/reviewer');P=ROOT/'docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision';Q=P.parent/'qualifier-build'
+baseline=json.loads((T/'input-hashes-first.json').read_text());records={r['path']:r for r in baseline['files']}
+def read(p):
+ p=pathlib.Path(p);p=p if p.is_absolute() else ROOT/p;b=p.read_bytes();s=str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else str(p)
+ if s not in records:records[s]={'path':s,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'first_observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ return b
+def get(p):return json.loads(read(p))
+def sha(p):return hashlib.sha256(read(p)).hexdigest()
+O={r['id']:r for r in get(P/'source-inputs.json')['files']}; A1=get(P/O['A01']['archive']);O2=get(P/O['O02']['archive']);O4=get(P/O['O04']['archive']);O7=get(P/O['O07']['archive'])
+result={}
+result['authorities0221_0225']={'originals_match_authority':all(A1['gates']['SPEC'+i]['sha256']==O[a]['sha256'] and A1['gates']['SPEC'+i]['decision']=='APPROVED_WITH_ADJUSTMENTS' for i,a in [('0221','A02'),('0225','A03')]),'0221_review_binds_original_delta_authority':O2['original_spec_sha256']==O['A02']['sha256'] and O2['proposal_sha256']==O['O01']['sha256'] and O2['canonical_authority_sha256']==O['A01']['sha256'] and O2['mandatory_count']==0,'0225_review_binds_original_delta_authority':O4['subject']['original_sha256']==O['A03']['sha256'] and O4['subject']['proposal_sha256']==O['O03']['sha256'] and O4['subject']['authority_sha256']==O['A01']['sha256'] and O4['mandatory_count']==0}
+qual_authority=get(Q/'authority.json');result['authority0231_subject_SHA']=sha(qual_authority['subject'])==qual_authority['SPEC_sha256']
+reviews={}
+for round in ['r1','r2']:
+ j=get(P/f'review-{round}/review.json'); subj=j['subject']; checks={}
+ for key,file in [('sha256',f'review-freeze-{round}.json'),('task_sha256','task.json')]:checks[key]=sha(P/file)==subj[key]
+ if round=='r1':checks['decision_sha256']=sha(P/'r1-subject-preimages/DECISION.md.raw.txt')==subj['decision_sha256']
+ else:
+  for key,file in [('decision_sha256','DECISION.md'),('port_bindings_sha256','port-bindings.json'),('source_spans_sha256','source-spans.json')]:checks[key]=sha(P/file)==subj[key]
+ reviews[round]={'verdict':j['verdict'],'mandatory_count':j['mandatory_count'],'bindings':checks}
+result['port_reviews_exact_subjects']=reviews
+freeze=get(Q/'code-freeze-r2.json');review=get(Q/'code-review-r2/review.json');result['qualifier_R2_binding']={'code_freeze':sha(Q/'code-freeze-r2.json')==review['code_freeze_r2_sha256'],'SPEC':review['SPEC_sha256']==qual_authority['SPEC_sha256'],'verdict':review['verdict'],'mandatory_count':review['mandatory_count'],'new_runtime_credit':False}
+cert=get(Q/'certification-r1/certification/phase10-result.json');manifest=get(Q/'certification-r1/certification/candidate-manifest.json');copy=get(Q/'certificate-copy-verification.json')
+units=get(Q/'certification-r1/certification/unit-test-report.json');pg=get(Q/'certification-r1/certification/postgres-test-report.json');e2e=get(Q/'certification-r1/certification/e2e-test-report.json');cov=get(Q/'certification-r1/coverage/coverage-summary.json');root=get(Q/'Root-focused.report.json')
+result['certificate_historical']={'candidate_id':manifest['candidateId'],'commit':manifest['git']['head'],'certificate_manifest_SHA_matches_copy':sha(Q/'certification-r1/certification/manifest.json')==copy['manifest_sha256'],'identity_matches':manifest['candidateId']==copy['candidate_id']==cert['candidate']['candidateId'] and manifest['git']['head']==copy['source_commit']==cert['commit'],'9codepaths_match_manifest':all(any(f['path']==r['path'] and f['sha256']==r['sha256'] for f in manifest['files']) for r in freeze['files']),'gates':[{k:g[k] for k in ['id','status','exitCode']} for g in cert['gates']],'unit':{k:units[k] for k in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','success']},'postgres':{k:pg[k] for k in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','success']},'E2E':e2e['stats'],'coverage_total':cov['total'],'Root_focused':{k:root[k] for k in ['numPassedTests','numFailedTests','numPendingTests','success']},'decision':cert['decision'],'certification':cert['certification'],'external_gates':cert['externalGates'],'current_reexecution':False}
+# Check report numbers against actual assertions, not only reporter summaries.
+for name,data in [('unit',units),('postgres',pg),('Root_focused',root)]:
+ statuses=collections.Counter(a['status'] for suite in data['testResults'] for a in suite['assertionResults']); result['certificate_historical'][name+'_assertion_statuses']=dict(statuses)
+sp=get(P/'source-spans.json')['spans']; duplicates={k:[r for r in sp if r['id']==k] for k,n in collections.Counter(r['id'] for r in sp).items() if n>1};result['ranges_record_count']={'records':len(sp),'unique_ids':len({r['id'] for r in sp}),'duplicate_ids':list(duplicates),'duplicate_coordinates_hash_excerpt_identical':all(len({json.dumps({k:v for k,v in r.items() if k!='anchor'},sort_keys=True) for r in rows})==1 for rows in duplicates.values()),'interpretation':'80 exact range records, 78 distinct IDs; repeated search anchors point to same bytes, no contrary source or behavioral credit'}
+bind=get(P/'port-bindings.json');result['full_CQ_preserved']=bind['full_journey_required']==['CQ%02d'%i for i in range(1,15)];result['all9_gaps_NOT_RUN']=len(bind['gaps'])==9 and all(g['functional_status']=='NOT_RUN' for g in bind['gaps'])
+result['root_inventory_current']={r['path']:(ROOT/r['path']).exists() for r in get(P/'Root-inventory.json')['paths']}
+for p in ['AGENTS.md','docs/07_agents/AGENTS.md','docs/99_runtime_state.md','docs/20_master_execution_log.md','docs/30_backlog_master.md','docs/08_runtime/agent_coordination.md','docs/architecture/adrs/ADR-010-harness-product-isolation.md','.prettierrc.json','/home/ricardo/.agents/skills/engineering-framework/SKILL.md','/home/ricardo/.agents/skills/engineering-framework/references/13-audit-evolution.md','/home/ricardo/.agents/skills/engineering-framework/references/09-verification-quality.md','/home/ricardo/.codex/skills/gauntlet-loop/SKILL.md']:
+ read(p)
+baseline['files']=sorted(records.values(),key=lambda r:r['path']);(T/'input-hashes-first.json').write_text(json.dumps(baseline,indent=2)+'\n');(T/'supplement.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps({k:v for k,v in result.items() if k!='certificate_historical'},indent=2))
+print('historical certificate',json.dumps({k:v for k,v in result['certificate_historical'].items() if k not in ['coverage_total','gates']},indent=2));print('exact_inputs',len(records))

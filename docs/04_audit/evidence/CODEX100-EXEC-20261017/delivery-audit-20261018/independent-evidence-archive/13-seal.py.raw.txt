@@ -1,0 +1,46 @@
+import pathlib,json,hashlib,datetime,re,urllib.parse,os
+R=pathlib.Path.cwd();T=pathlib.Path('/tmp/cvg-codex100-exec-20261017/delivery-audit-20261018/reviewer');O=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017/delivery-audit-20261018/independent-review'
+def sha(b):return hashlib.sha256(b).hexdigest()
+def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def record(p):
+ b=p.read_bytes();return {'path':str(p.relative_to(R)) if p.is_relative_to(R) else str(p),'bytes':len(b),'sha256':sha(b)}
+def dump(p,v):p.write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n')
+first=json.loads((T/'input-hashes-first.json').read_text());findings=json.loads((O/'findings.json').read_text());assert len(findings['substantive_claim_checks'])==12
+context={'AGENTS.md','docs/07_agents/AGENTS.md','docs/99_runtime_state.md','docs/20_master_execution_log.md','docs/30_backlog_master.md','docs/08_runtime/agent_coordination.md','docs/architecture/adrs/ADR-010-harness-product-isolation.md'}
+inputs=[];drift=[];sealed_drift=[];when=stamp()
+for before in first['files']:
+ p=pathlib.Path(before['path']);p=p if p.is_absolute() else R/p
+ last=record(p);changed=last['sha256']!=before['sha256'] or last['bytes']!=before['bytes'];kind='MUTABLE_INSTRUCTION_CONTEXT' if before['path'] in context or before['path'].startswith('/home/ricardo/.agents/skills/') or before['path'].startswith('/home/ricardo/.codex/skills/') else 'BOUNDED_DELIVERY_SOURCE_OR_VERIFICATION_INPUT'
+ row={'path':before['path'],'classification':kind,'first':{'bytes':before['bytes'],'sha256':before['sha256'],'observed_at':before.get('first_observed_at',first['observed_at'])},'last':{'bytes':last['bytes'],'sha256':last['sha256'],'observed_at':when},'unchanged':not changed};inputs.append(row)
+ if changed:
+  drift.append(row)
+  if kind!='MUTABLE_INSTRUCTION_CONTEXT':sealed_drift.append(row)
+assert not sealed_drift, 'A reviewed subject drifted: preserve artifacts and report before acceptance'
+# No new subject is opened here. Validate the locations already cited in the report.
+known={r['path'] for r in inputs};locs=[]
+for c in findings['substantive_claim_checks']:
+ locs.extend(c['evidence'])
+for g in findings['tracked_gaps']:
+ locs.append(g['expected_source']);locs.extend(g['actual_evidence'])
+for loc in locs:
+ assert loc['path'] in known, 'Unfingerprinted citation: '+loc['path']
+ assert 1<=loc['line']<=len((R/loc['path']).read_bytes().splitlines()),loc
+# The manifest is an output index and deliberately has no record of its own hash.
+claim=json.loads((T/'claim.json').read_text());claim['status']='COMPLETED_BOUNDED_SOURCE_AUDIT';claim['completed_at']=when;dump(T/'claim.json',claim)
+lastfiles={'observed_at':when,'files':[{'path':r['path'],**r['last']} for r in inputs]};dump(T/'input-hashes-last.json',lastfiles)
+manifest={'schema_version':1,'kind':'INDEPENDENT_POST_DELIVERY_BOUNDED_SOURCE_AUDIT_NOT_RUNTIME_CERTIFICATION','task':findings['task'],'completed_at':when,'verdict':findings['verdict'],'whole_Lead_task_accepted':False,'role':findings['role'],'independence':'Fresh post-delivery auditor; not builder, no redelegation; model-family diversity not established','task_contract':findings['task_contract'],'scope':'Only original sealed g04 delivery assertions; no review of Lead new reports/proposal; no whole-system recertification','rounds':{'this_new_audit_used':1,'this_new_audit_max':2,'documentary_followup_needed':False,'old_R1_R2_reopened':False},'substantive_claim_checks':findings['substantive_claim_checks'],'substantive_claim_check_count':12,'new_defect_count':0,'tracked_existing_gaps':[g['id'] for g in findings['tracked_gaps']],'valid_acceptance_scope':findings['valid_acceptance_scope'],'largest_remaining_technical_blocker':findings['largest_remaining_technical_blocker'],'input_count':len(inputs),'inputs':inputs,'input_integrity':{'first_observed_at':first['observed_at'],'last_observed_at':when,'compared':len(inputs),'unchanged':sum(r['unchanged'] for r in inputs),'immutable_reviewed_subject_mismatches':sealed_drift,'mutable_context_drift':drift,'context_fingerprint_limitation':findings['limitations'][-1]},'observations':json.loads((T/'observations.json').read_text()),'supplemental_observations':json.loads((T/'supplement.json').read_text()),'performed_methods':['stdlib file SHA256/byte lengths','JSON parsing and exact range reconstruction','read-only text source inspection','readonly git cat-file blob and rev-parse commit:path for G01/G02','Node22 Prettier own REPORT.md only with --ignore-path /dev/null','own report local-link target and citation line validation'],'formatting':json.loads((T/'formatting.json').read_text()),'own_checks':{'json_findings_parsed':True,'claim_count_exactly12':True,'cited_known_input_locations_checked':len(locs),'no_runtime_tests_or_application_imports':True,'no_network_PG_Docker_install_broad_gates':True,'local_links':None,'own_empty_files':[],'descendants':0,'persistent_jobs_created':0},'outputs':[record(O/'REPORT.md'),record(O/'findings.json')],'temporary_evidence':[record(p) for p in sorted(T.iterdir()) if p.is_file()],'self_excluded':'manifest.json; no selfhash','limitations':findings['limitations'],'functional_receipts_added':0,'full_goal_complete':False,'next_route':findings['next_route']}
+dump(O/'manifest.json',manifest)
+links=[];broken=[]
+for target in re.findall(r'(?<!!)\[[^\]]+\]\(([^)\n]+)\)',(O/'REPORT.md').read_text()):
+ target=target.strip('<>');parsed=urllib.parse.urlsplit(target)
+ assert not parsed.scheme and not target.startswith('/'),'Non-relative report link: '+target
+ path=(O/urllib.parse.unquote(parsed.path)).resolve();links.append(target)
+ if not path.exists():broken.append(target)
+assert not broken,broken
+manifest['own_checks']['local_links']={'checked':len(links),'broken':broken,'relative_only':True};manifest['own_checks']['json_manifest_parsed']=True
+assert all(p.stat().st_size>0 for p in O.iterdir() if p.is_file())
+dump(O/'manifest.json',manifest)
+json.loads((O/'manifest.json').read_text())
+# Confirm durable non-manifest outputs still match the final manifest.
+assert all(record(R/r['path'])==r for r in manifest['outputs'])
+print(json.dumps({'verdict':manifest['verdict'],'claim_checks':12,'new_defects':0,'tracked_gaps':9,'inputs':len(inputs),'unchanged':manifest['input_integrity']['unchanged'],'mutable_context_drift':len(drift),'frozen_subject_drift':len(sealed_drift),'own_relative_links':len(links),'own_JSON_valid':True,'outputs':manifest['outputs'],'manifest':str((O/'manifest.json').relative_to(R))},ensure_ascii=False,indent=2))

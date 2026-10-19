@@ -1,0 +1,29 @@
+from pathlib import Path
+import json,hashlib,shutil,datetime
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness');p=Path(__file__).parent.parent;w=p/'worktree';r=Path(__file__).parent;n=r/'native-proof';h=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
+sent=json.loads((p/'coverage-defaults-r1/native-proof/W-sentinels-before.json').read_text());assert all(h(w/e['path'])==e['sha256'] for e in sent)
+source=json.loads((r/'source-freeze.json').read_text());assert all(h(w/k)==v for k,v in source.items());proposal=json.loads((p/'spec217-build/qualification0220-draft/review-r9-frozen/proposal.json').read_text());pins=proposal['newGroups'][0]['pins'];assert len(pins)==465;assert all(h(w/k)==v and not (w/k).is_symlink() for k,v in pins.items());m=json.loads((n/'manifest.json').read_text());assert all(h(n/e['path'])==e['sha256'] for e in m['files'])
+for f in ['lint-command.json','types-command.json','green-regression-command.json']:assert json.loads((r/f).read_text())['exit']==0
+verification={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'T2delta verification pending fresh I1; not wholecandidate certification','unchanged825WInputsMatchR1':True,'sourceDeltasFromR1Outside825':['scripts/ci-bar.mjs','tests/ci-coverage-defaults.test.js'],'current9InputsVerified':source,'compositionPinsVerified':465,'human0220':'PENDING','nativeManifestSHA256':h(n/'manifest.json'),'nativeFilesVerified':len(m['files']),'currentNativeToyCases':10,'unchangedPhase10SHA256':source['scripts/phase10-certify.mjs'],'red':{'failed':7,'passed':18,'exit':1},'greenFocused':{'passed':161,'skipped':0,'files':8,'exit':0},'fullUnitPGEEECertification':'PENDING','P100050':'OPEN','parity':'NOT_MEASURED','fullGoalComplete':False};(r/'lead-integrity.json').write_text(json.dumps(verification,indent=2)+'\n')
+rel=Path('docs/04_audit/evidence/PARE100-EXEC-20261014/coverage-defaults-r2');out=root/rel;out.mkdir();entries=[];empty=[]
+def cp(f,d):
+ if not f.stat().st_size:empty.append({'source':str(f),'sha256':h(f),'bytes':0});return
+ dest=out/d;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(f,dest);entries.append({'path':str(d),'sha256':h(dest),'bytes':dest.stat().st_size,'source':str(f)})
+for f in ['source-freeze.json','red.log','red-command.json','green-regression.log','green-regression-command.json','lint.log','lint-command.json','types.log','types-command.json','source-format.log','source-format-command.json','lead-integrity.json']:cp(r/f,Path('lead')/f)
+for f in ['run-check.py','native-r2.py','persist.py']:cp(r/f,Path('recipes')/(f+'.source.txt'))
+for f in ['matrix.json','manifest.json','toolchain-before.json','toolchain-after.json','environment-base.json']:cp(n/f,Path('native')/f)
+for f in (n/'cases').rglob('*'):
+ if not f.is_file() or f.is_symlink() or any(x in f.parts for x in ['node_modules','.git']):continue
+ sub=f.relative_to(n)
+ if 'fixture' in sub.parts:
+  q=sub.parts[sub.parts.index('fixture')+1:]
+  if not q or q[0] not in ['coverage','certification']:continue
+ if f.suffix not in ['.log','.json','.jsonl']:continue
+ cp(f,Path('native')/sub)
+for cat in ['current','before','original-before']:
+ for f in (r/'review-packet'/cat).rglob('*'):
+  if f.is_file():cp(f,Path('source-snapshots')/cat/(str(f.relative_to(r/'review-packet'/cat))+'.source.txt'))
+(out/'omitted-empty-logs.json').write_text(json.dumps({'reason':'success commands represented by exact argv/exit and empty SHA; originals retained','files':empty},indent=2)+'\n');(out/'initial-evidence-manifest.json').write_text(json.dumps({'scope':'R2currentdriver scoped proof; fresh I1 pending','files':entries},indent=2)+'\n');(out/'status.json').write_text(json.dumps({'status':'UNDER_REVIEW','sourceSHA256':source,'critic':'01a14235-24d1-76a3-b46c-072255e63a22','priorR1':'REVISE_I1_FRESH_001_P1','fullGoalComplete':False},indent=2)+'\n');shutil.copytree(out,w/rel)
+prior=Path('docs/04_audit/evidence/PARE100-EXEC-20261014/coverage-defaults-r1/status.json')
+for base in [root,w]:(base/prior).write_text(json.dumps({'status':'REVISE','finding':'I1-FRESH-001 P1 historicalreport copied as current','review':'review-r1/verdict.json','R1ciSourceSHA256':'d2f7e968f1480d3c5055b9d6dcbb33337636d164fee8b8ef56ec338fd71b57c6','followup':'../coverage-defaults-r2/status.json','acceptanceGranted':False},indent=2)+'\n')
+print('R2evidence files',len(entries),'omittedEmpty',len(empty),'bytes',sum(e['bytes'] for e in entries),'465pins/825sentinels intact')

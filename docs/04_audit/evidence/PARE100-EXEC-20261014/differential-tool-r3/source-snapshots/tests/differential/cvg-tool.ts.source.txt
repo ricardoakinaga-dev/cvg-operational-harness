@@ -1,0 +1,305 @@
+import {
+  createOperationalHarness,
+  createSessionKernelLog,
+  InMemoryExecutionStepStore,
+  InMemorySessionEventStore
+} from '@cvg/harness'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
+import { ApprovalEngine, InMemoryApprovalStore } from '@cvg/approval-engine'
+import type {
+  ModelGateway,
+  ModelResult,
+  RuntimeInput,
+  ToolDefinition
+} from '@cvg/harness-contracts'
+import { TOOL_NAME, validateToolCase } from './tool-case.mjs'
+import {
+  capturePortData,
+  createPortRequestCapture
+} from './capture-port-data.mjs'
+
+export interface ToolTurnProbeOptions {
+  /** Trusted test-only provider seam, before the observation adapter. */
+  readonly transformProviderResult?: (
+    result: ModelResult,
+    call: number
+  ) => ModelResult
+}
+
+export async function runCvgToolTurn(
+  input: unknown,
+  probe: ToolTurnProbeOptions = {}
+) {
+  const fixture = validateToolCase(input)
+  const tenantId = 'pare100_synthetic'
+  const sessionId = `pare100-${fixture.id}`
+  const executionId = `execution-${fixture.id}`
+  const correlationId = `correlation-${fixture.id}`
+  const traceId = `trace-${fixture.id}`
+  const timestamp = '2026-10-16T00:00:00.000Z'
+  const sessions = new InMemorySessionEventStore()
+  const steps = new InMemoryExecutionStepStore()
+  const policy = new PolicyEngine({ profile: REFERENCE_POLICY_PROFILE })
+  const approval = new ApprovalEngine({ store: new InMemoryApprovalStore() })
+  const toolBodies: { name: string; input: unknown; output: string }[] = []
+  const requests: unknown[] = []
+  const responses: string[] = []
+  let providerBodies = 0
+  const modelResults: ModelResult[] = []
+  const decisionTurns: unknown[] = []
+  const captureRequest = createPortRequestCapture()
+  const policyDecisions: unknown[] = []
+  const approvalRequests: unknown[] = []
+  const audit: unknown[] = []
+  const tool: ToolDefinition = {
+    id: TOOL_NAME,
+    version: 'v1',
+    description: 'Pure synthetic echo',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+      required: ['text'],
+      additionalProperties: false
+    },
+    outputSchema: { type: 'string' },
+    risk: 'LOW',
+    sideEffect: 'NONE',
+    idempotent: true,
+    requiresApproval: false,
+    execute: async (args) => {
+      if (
+        toolBodies.length ||
+        !args ||
+        typeof args !== 'object' ||
+        Object.keys(args).join(',') !== 'text' ||
+        typeof (args as { text?: unknown }).text !== 'string'
+      )
+        throw new Error('unexpected CVG tool body')
+      const text = (args as { text: string }).text
+      toolBodies.push({
+        name: TOOL_NAME,
+        input: structuredClone(args),
+        output: text
+      })
+      return { status: 'SUCCEEDED', output: text }
+    }
+  }
+  const provider: ModelGateway = {
+    complete: async ({ signal, ...request }) => {
+      if (++providerBodies > 2) throw new Error('unexpected provider body')
+      if (signal?.aborted)
+        throw new Error('cancelled before synthetic provider')
+      let text: string
+      if (requests.length === 1) {
+        text = JSON.stringify({
+          decisionType: 'CALL_TOOL',
+          reasonCode: 'TOOL_REQUIRED',
+          toolId: TOOL_NAME,
+          toolInput: { text: fixture.text }
+        })
+      } else if (requests.length === 2) {
+        const prompt =
+          request.messages.find((m) => m.role === 'system')?.content ?? ''
+        const observed = prompt.match(/\[TOOL\/TOOL_RESULT\] (.*)/)?.[1]
+        if (
+          toolBodies.length !== 1 ||
+          observed === undefined ||
+          observed !== toolBodies[0]!.output
+        )
+          throw new Error('missing real CVG tool observation')
+        text = JSON.stringify({
+          decisionType: 'RESPOND',
+          reasonCode: 'GOAL_SATISFIED',
+          responseText: observed
+        })
+      } else throw new Error('unexpected CVG model call')
+      return {
+        text,
+        provider: 'pare100-synthetic',
+        model: 'keyless-v1',
+        inputTokens: 1,
+        outputTokens: 2,
+        costUsd: 0
+      }
+    }
+  }
+  // Capture the actual provider result at the consumer-facing port, after
+  // provider faults/transforms. The engine receives this detached frozen data.
+  const model: ModelGateway = Object.freeze({
+    complete: async (request: Parameters<ModelGateway['complete']>[0]) => {
+      requests.push(captureRequest(request))
+      const original = await provider.complete(request)
+      const delivered = capturePortData(
+        probe.transformProviderResult === undefined
+          ? original
+          : probe.transformProviderResult(original, requests.length)
+      )
+      modelResults.push(delivered)
+      responses.push(delivered.text)
+      return delivered
+    }
+  })
+  const realOrchestrator = Object.freeze(
+    new HybridOrchestrator({ decisionModel: model, maxDecisionRepairs: 0 })
+  )
+  const orchestrator = {
+    version: realOrchestrator.version,
+    decide: async (input: Parameters<HybridOrchestrator['decide']>[0]) => {
+      const before = modelResults.length
+      const result = await realOrchestrator.decide(input)
+      const delivered = modelResults.slice(before)
+      if (
+        result.usage?.modelCalls !== delivered.length ||
+        result.usage.inputTokens !==
+          delivered.reduce((n, value) => n + value.inputTokens, 0) ||
+        result.usage.outputTokens !==
+          delivered.reduce((n, value) => n + value.outputTokens, 0) ||
+        result.usage.costUsd !==
+          delivered.reduce((n, value) => n + value.costUsd, 0)
+      )
+        throw new Error('consumer model usage differs from observed results')
+      decisionTurns.push(capturePortData(result))
+      return result
+    }
+  }
+  await sessions.openSession({ tenantId, sessionId, formatVersion: 1 })
+  await sessions.append({
+    tenantId,
+    sessionId,
+    formatVersion: 1,
+    eventId: `user-${fixture.id}`,
+    timestamp,
+    correlationId,
+    traceId,
+    type: 'message/user',
+    payload: { text: fixture.message }
+  })
+  const harness = createOperationalHarness({
+    modelGateway: model,
+    iterativeOrchestrator: orchestrator,
+    stepStore: steps,
+    tools: {
+      list: () => [tool],
+      resolve: (id, version) =>
+        id === tool.id && (!version || version === 'v1') ? tool : undefined
+    },
+    policy: {
+      evaluate: async (request) => {
+        const result = policy.evaluate({
+          tenantId: request.tenantId,
+          agentId: request.agentId,
+          operatorId: 'synthetic_operator',
+          operatorRole: 'Operator',
+          agentProfile: 'assistant',
+          capability: 'resource.read',
+          action: 'resource.read',
+          correlationId: request.correlationId,
+          context: { dataClassification: 'PUBLIC' }
+        })
+        const decision = {
+          outcome: result.decision,
+          reason: result.reason,
+          policyVersion: result.policyVersion
+        }
+        policyDecisions.push({
+          request: JSON.parse(
+            JSON.stringify(request, (_key, value) =>
+              typeof value === 'function' ? { nativeFunction: true } : value
+            )
+          ),
+          decision
+        })
+        return decision
+      }
+    },
+    approvals: {
+      request: async (request) => {
+        approvalRequests.push(structuredClone(request))
+        const record = approval.request({
+          ...request,
+          payload: request.payload,
+          operatorId: request.operatorId!,
+          agentVersion: request.agentVersion!,
+          action: request.action!,
+          resource: request.resource!,
+          policyVersion: request.policyVersion!,
+          executionRef: request.executionRef!,
+          reason: 'Synthetic comparison never approves an effect'
+        })
+        return {
+          status: 'PENDING',
+          approvalId: record.approvalId as never,
+          reason: 'No effect approved'
+        }
+      }
+    },
+    audit: {
+      append: async (event) => {
+        audit.push(structuredClone(event))
+      }
+    },
+    telemetry: { record: () => {} },
+    log: createSessionKernelLog({
+      tenantId,
+      sessionId,
+      formatVersion: 1,
+      correlationId,
+      traceId,
+      store: sessions
+    })
+  })
+  const runtimeInput: RuntimeInput = {
+    tenantId: tenantId as never,
+    sessionId: sessionId as never,
+    executionId,
+    conversationId: sessionId as never,
+    correlationId: correlationId as never,
+    traceId: traceId as never,
+    agent: {
+      id: 'synthetic-agent' as never,
+      version: 'v1' as never,
+      objective: 'Return the pure echo result',
+      instructions: [],
+      skills: [],
+      tools: [TOOL_NAME],
+      policies: []
+    },
+    userMessage: fixture.message,
+    context: { values: {}, sourceIds: [], capturedAt: timestamp },
+    state: { version: 0, values: {}, updatedAt: timestamp },
+    budget: {
+      maxSteps: 3,
+      maxModelCalls: 2,
+      maxToolCalls: 1,
+      maxDurationMs: 5000,
+      maxTokens: 100,
+      maxCostUsd: 1,
+      maxDecisionRepairs: 0
+    },
+    runtimeProfile: 'iterative'
+  }
+  const turn = await harness.execute(runtimeInput)
+  const events = await sessions.read({ tenantId, sessionId })
+  const recordedSteps = await steps.listSteps(tenantId, executionId)
+  return {
+    version: 1,
+    fixtureId: fixture.id,
+    native: {
+      turn,
+      events,
+      steps: recordedSteps,
+      modelBodies: providerBodies,
+      requests,
+      responses,
+      modelResults,
+      decisionTurns,
+      toolBodies,
+      policyDecisions,
+      approvalRequests,
+      audit
+    },
+    observationStatus: 'NATIVE_TOOL_TURN_MEASUREMENT_NOT_PARITY',
+    entrypoint: 'PUBLIC_ITERATIVE_HARNESS_NOT_SDK'
+  }
+}

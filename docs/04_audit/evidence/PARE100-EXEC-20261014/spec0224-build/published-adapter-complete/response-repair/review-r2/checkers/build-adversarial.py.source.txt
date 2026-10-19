@@ -1,0 +1,72 @@
+import pathlib,json
+O=pathlib.Path(__file__).resolve().parents[1];P=O.parent/'review-packet-r2';A=P/'artifact'
+s=(A/'packages/harness/src/__tests__/complete-response-path-public.test.ts').read_text()
+s=s.replace("from '../index.ts'","from '@cvg/harness'").replace("from './fixtures/phase3-fixtures.ts'", "from '"+str(A/'packages/harness/src/__tests__/fixtures/phase3-fixtures.ts')+"'")
+s=s.replace("    id: string\n", "    fault?: string\n    id: string\n")
+start=s.index('  }> = [');end=s.index('\n  for (const scenario',start)
+cases=['positive','empty','whitespace','model-throw','selector-throw','selector-malformed','step-before','step-after','checkpoint-before','checkpoint-after','result-log-cost','request-log','selector-deadline','model-deadline','selector-mutate']
+arr=[{'id':'AX'+str(i+1).zfill(2),'name':f,'mode':'rules','fault':f} for i,f in enumerate(cases)]
+s=s[:start]+'  }> = '+json.dumps(arr,indent=4)+s[end:]
+s=s.replace('      const output = {', '      const faults: unknown[] = []\n      const fault = scenario.fault\n      const output = {',1)
+s=s.replace("          const result: ModelResult = {", """          if(fault === 'model-throw') {faults.push('model-throw');throw new Error('I1 synthetic model failure')}
+          if(fault === 'model-deadline') {faults.push('model-delay');await new Promise(resolve=>setTimeout(resolve,450))}
+          const result: ModelResult = {""",1)
+s=s.replace('            text,\n            provider:', "            text: fault === 'empty' ? '' : fault === 'whitespace' ? '   ' : text,\n            provider:",1)
+s=s.replace('            costUsd: 0\n          }\n          modelResults.push', '            costUsd: 0.03125\n          }\n          modelResults.push',1)
+s=s.replace('      const nativeCAS = steps.compareAndSwapCheckpoint.bind(steps)', """      const nativeStep = steps.recordStep.bind(steps)
+      steps.recordStep = async row => {
+        if(row.stepType==='RESPOND' && fault==='step-before') {faults.push({kind:'step-before',row});throw new Error('I1 step before write')}
+        await nativeStep(row)
+        if(row.stepType==='RESPOND' && fault==='step-after') {faults.push({kind:'step-after',row});throw new Error('I1 step write ACK lost')}
+      }
+      const nativeCAS = steps.compareAndSwapCheckpoint.bind(steps)""",1)
+s=s.replace('          return await nativeCAS(input)', """          if(input.next.state.stopReason && fault==='checkpoint-before') {faults.push({kind:'checkpoint-before',checkpoint:input.next});throw new Error('I1 terminal checkpoint unavailable')}
+          const cas = await nativeCAS(input)
+          if(input.next.state.stopReason && fault==='checkpoint-after') {faults.push({kind:'checkpoint-after',checkpoint:input.next});throw new Error('I1 terminal checkpoint ACK lost')}
+          return cas""",1)
+s=s.replace('          contextBuilds += 1\n', """          contextBuilds += 1
+          if(contextBuilds===3 && fault==='selector-throw') {faults.push('selector-throw');throw new Error('I1 selector throw')}
+          if(contextBuilds===3 && fault==='selector-deadline') {faults.push('selector-delay');await new Promise(resolve=>setTimeout(resolve,450))}
+""",1)
+s=s.replace('          if (scenario.selectorAlias && contextBuilds === 3) {', """          if(contextBuilds===3 && fault==='selector-malformed') {faults.push('selector-malformed');return {...value,contextItems: value.contextItems.map(x=>x.priority==='FRESH_TOOL_RESULTS'?{...x,content:'not valid JSON'}:x)}}
+          if ((scenario.selectorAlias || fault==='selector-mutate') && contextBuilds === 3) {""",1)
+s=s.replace("                observation.payload.output = {", "                faults.push('mutation-executed');\n                observation.payload.output = {",1)
+s=s.replace('        ...(scenario.overflow ||\n        scenario.invalidSelector ||\n        scenario.selectorAlias', '        ...(fault || scenario.overflow ||\n        scenario.invalidSelector ||\n        scenario.selectorAlias',1)
+s=s.replace('        ...(scenario.resultLogFails\n', "        ...(scenario.resultLogFails || fault==='result-log-cost' || fault==='request-log'\n",1)
+s=s.replace("                  if (event.type === 'model/result')\n                    throw new Error('synthetic_result_log_veto')", "                  if (event.type === (fault==='request-log' ? 'model/request' : 'model/result')) {faults.push({kind:'log-veto',event});throw new Error('synthetic_result_log_veto')}",1)
+s=s.replace('          maxTokens: 10000,', "          maxTokens: 10000,\n          ...(fault?.endsWith('deadline')?{maxDurationMs:250}:{}),",1)
+s=s.replace('        case: scenario.id,','        case: scenario.id,\n        faults,',1)
+start=s.index('      expect(bodies).toBe(1)')
+s=s[:start]+"""      expect(bodies).toBe(1)
+      expect(journals[0]?.state).toBe('CONFIRMED')
+      expect((checkpoint?.state.observations.find(o=>o.type==='TOOL_RESULT')?.payload as any)?.output).toEqual(output)
+      expect(result.modelCalls).toBe(fault?.startsWith('selector-') && fault!=='selector-mutate' ? 0 : 1)
+      const rows=await steps.listSteps(input.tenantId,input.executionId)
+      if(fault==='positive' || fault==='selector-mutate') {
+        expect(result.stopReason).toBe('COMPLETED');expect(result.response).toBe(expected)
+        if(fault==='selector-mutate') expect(faults).toContain('mutation-executed')
+      } else if(fault!=='whitespace') expect(result.stopReason).not.toBe('COMPLETED')
+      if(!fault?.startsWith('checkpoint-')) expect(checkpoint?.state.stopReason).toBe(result.stopReason)
+      if(fault==='step-before') {
+        expect(rows.some(s=>s.stepType==='RESPOND')).toBe(false)
+        expect(checkpoint?.stepNumber).toBe(1)
+        expect(checkpoint?.budgetUsage.steps).toBe(1)
+        expect(checkpoint?.state.toolResultContext?.acceptedDecision?.stepNumber).toBe(2)
+      } else if(!fault?.startsWith('checkpoint-')) {
+        expect(rows).toContainEqual(expect.objectContaining({stepNumber:2,stepType:'RESPOND',status: ['positive','selector-mutate','step-after','whitespace'].includes(fault!)?'SUCCEEDED':'FAILED'}))
+        expect(checkpoint?.stepNumber).toBe(2);expect(checkpoint?.budgetUsage.steps).toBe(2)
+        expect(checkpoint?.state.toolResultContext?.acceptedDecision).toBeUndefined()
+      }
+      if(fault==='result-log-cost') {
+        expect(result.usage.costUsd).toBe(0.03125);expect(checkpoint?.budgetUsage.costUsd).toBe(0.03125)
+      }
+    })
+  }
+})
+"""
+(O/'variants/adversarial').mkdir()
+(O/'variants/adversarial/public.test.ts').write_text(s)
+c=(O/'config/baseline.mjs').read_text().replace(str(O/'cache/baseline'),str(O/'cache/adversarial')).replace('"packages/harness/src/__tests__/complete-response-path-public.test.ts"',json.dumps(str(O/'variants/adversarial/public.test.ts')))
+(O/'config/adversarial.mjs').write_text(c)
+(O/'variants/adversarial/README.txt').write_text('Owned tests based on enumerated public factory test scaffolding; implementation aliases still point to immutable packet artifact. fault variants are injected through public trusted ports, not implementation changes.\n')
+print('created',len(cases),'adversarial cases')

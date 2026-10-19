@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "task": "DX100-G02:SPECIFY-SDK-REFERENCE-PROFILE",
+  "role": "independent technical critic",
+  "round": 1,
+  "verdict": "REVISE",
+  "mandatory_findings": [
+    {
+      "id": "R1-F01",
+      "mandatory": true,
+      "severity": "P2",
+      "criterion_ids": [
+        "SDKHOW05",
+        "SDKHOW07"
+      ],
+      "title": "Specify a realizable relay/control-channel topology across the SDK-owned subprocess boundary",
+      "direct_evidence": [
+        {
+          "path": "containment-and-observer.json",
+          "lines": [
+            47,
+            50
+          ],
+          "observation": "Independent host supervisor and raw relays are required; fixture barrier/ACK must use a separate inherited pipe/socketpair."
+        },
+        {
+          "path": "execution-profile.json",
+          "lines": [
+            23,
+            31
+          ],
+          "observation": "Python directly launches /runtime/python -I -S /profile/fixture-rpc.py CASE_ID; SDK source patches and monkeypatches are forbidden."
+        },
+        {
+          "path": "inputs/sdk/python/src/openai_codex/client.py",
+          "lines": [
+            268,
+            278
+          ],
+          "observation": "SDK creates stdin/stdout/stderr pipes itself and supplies neither pass_fds nor close_fds."
+        },
+        {
+          "path": "/usr/lib/python3.12/subprocess.py",
+          "lines": [
+            807,
+            813,
+            1883,
+            1887
+          ],
+          "sha256": "baa9f9138d8d20df6284f67e7d2e790f847f65e2c5370de322d54cccd737f2d9",
+          "observation": "Actual local CPython defaults are close_fds=True and pass_fds=(); unrelated inherited descriptors are closed."
+        },
+        {
+          "path": "inputs/sdk/typescript/src/exec.ts",
+          "lines": [
+            203,
+            206
+          ],
+          "observation": "SDK spawn supplies env and signal, without extra stdio descriptors."
+        }
+      ],
+      "consequence": "The driver cannot simply pre-open an extra control FD and expect either direct SDK child to receive it. The HOW also does not select where independent relays attach to the SDK-owned streams. SDKPY07's request/cancel/reply barrier and complete-capture cutpoints therefore depend on an unspecified transport construction.",
+      "required_change": "One grouped T1 HOW repair: select and describe the process/channel topology for both clients, identifying adapter versus synthetic peer, relay and supervisor endpoints, and how control reaches them without modifying the SDK, mixing control into SDK stdout, or exposing ambient host sockets. A separately identified launch adapter creating its own peer/control FDs, or an explicitly confined per-attempt FIFO design, are possible approaches; the HOW must choose a coherent one. Keep concrete implementation and admission NOT_RUN, and require relay/barrier/EOF/truncation selftests before SDK import.",
+      "confidence": "HIGH",
+      "confidence_basis": "Direct SDK launch AST inspection plus actual local CPython default/FD handling; this is a missing HOW construction, not an assertion that all alternative implementations are impossible.",
+      "validation_expected": "R2 can review the revised topology statically. Later private driver qualification must witness both raw directions and the barrier, and reject missing/late/corrupt capture without SDK patches. No SDK/compiler execution is required to repair this finding."
+    }
+  ],
+  "optional_findings": [],
+  "largest_gap": {
+    "finding_id": "R1-F01",
+    "summary": "Specify a realizable relay/control-channel topology across the SDK-owned subprocess boundary",
+    "scope": "T1 execution HOW feasibility; no runtime qualification requested"
+  },
+  "subject": {
+    "path": "../review-freeze-r1.json",
+    "sha256": "dc4530aff72413bb54707d324370dc4dd29452ec66cf5ad195417909ed86b89d",
+    "frozen_input_count": 57,
+    "source_pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133"
+  },
+  "task_contract": {
+    "path": "../task.json",
+    "sha256": "6b58f3a1a8753da848826d1d4cf198144820d58c58d885b80a7b46a630e5f00d"
+  },
+  "observed_at": "2026-10-18T15:39:07.129943+00:00",
+  "criteria": [
+    {
+      "id": "SDKHOW01",
+      "status": "PASS_T1",
+      "evidence_checks": "R01,R07",
+      "assessment": "All 39 selected snapshots match Git path/mode/blob at the pin and physical checkout; complete Python package 22 files and TS source 10 files.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW02",
+      "status": "PASS_T1",
+      "evidence_checks": "R07",
+      "assessment": "Actual Python/Node executable hashes are distinct from source, fixture, dependency, driver and observer identities. Loaded-library/OS closure admission remains NOT_RUN.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW03",
+      "status": "PASS_T1",
+      "evidence_checks": "R02,R12",
+      "assessment": "Six wheel selections and TS5.9.2 integrity are lock-bound; finite acquisition, metadata/tag/closure and extraction stops are explicit. No availability or execution claim.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW04",
+      "status": "PASS_T1",
+      "evidence_checks": "R07,R08,R09,R10",
+      "assessment": "Selected real SDK source boundaries are identified, including internal Python helpers and instrumented cancellation; TS source-transpile is explicitly distinct from tsup/typecheck/distribution.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW05",
+      "status": "REVISE",
+      "evidence_checks": "R03,R08,R09,R11,R12",
+      "assessment": "Selected source semantics and finite fixture values are supportable; deterministic barriers and capture-complete cutpoints need the topology in R1-F01.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW06",
+      "status": "PASS_T1",
+      "evidence_checks": "R07,R12",
+      "assessment": "Finite identity/resource/namespace/secret/loader admission and no-uncontained-fallback stops are explicit and remain unexecuted.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW07",
+      "status": "REVISE",
+      "evidence_checks": "R12",
+      "assessment": "Independent captures, honest absence and cleanup rules are specified, but attachment/control transport across the actual spawn boundary is unresolved (R1-F01).",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW08",
+      "status": "PASS_T1",
+      "evidence_checks": "R01-R12",
+      "assessment": "Reviewer used file/hash/Git metadata, stdlib AST/regex and the permitted read-only verifier only. No targets, compiler, imports of target dependencies, acquisition or old probes.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW09",
+      "status": "PASS_T1",
+      "evidence_checks": "task.json; this independent R1 review",
+      "assessment": "Direct independent critic, zero descendants, R1 within fixed two-review/one-grouped-Lead-repair budget. No native authority inferred.",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "SDKHOW10",
+      "status": "PASS_T1",
+      "evidence_checks": "R04,R05,R06; checks.json#/integrity",
+      "assessment": "57 frozen inputs and freeze digest intact before/after; 2807 old checkpoint files unchanged on both verifier runs; subject JSON/local links/hygiene pass. Lead owns continuity outside this write set.",
+      "confidence": "HIGH"
+    }
+  ],
+  "missing_execution_prerequisites": [
+    {
+      "id": "EP01",
+      "status": "NOT_RUN",
+      "prerequisite": "Separately registered acquisition of exactly seven artifacts, digest/size/tag/name/version/closure/RECORD verification and sealed extracted trees, under the stated caps; no installs/hooks/imports."
+    },
+    {
+      "id": "EP02",
+      "status": "NOT_RUN",
+      "prerequisite": "Resolve R1-F01; then build and hash-bind concrete drivers, adapters/peers, relays, control channels, supervisor, loader and SDKPY07 profile collector. Qualify their synthetic positive/negative controls before SDK imports."
+    },
+    {
+      "id": "EP03",
+      "status": "NOT_RUN",
+      "prerequisite": "Bind current executable/interpreter/stdlib/native-library/OS/libc closure, exact argv/env/mounts and private storage; reject drift/unknown writable code and inspect actual mappings after execution."
+    },
+    {
+      "id": "EP04",
+      "status": "NOT_RUN",
+      "prerequisite": "Current bwrap/systemd/cgroup admission: denied network/home/outside writes, positive private writes, effective 512MiB/32-task/CPU/time and capture limits, timeout/orphan/truncation controls and separate exit/reap or cgroup-empty plus service-exit evidence."
+    },
+    {
+      "id": "EP05",
+      "status": "NOT_RUN",
+      "prerequisite": "Qualify authenticated TS5.9.2 in containment before compiler import; transpile exactly ten frozen files with the defined ES2022/ESNext profile; reject open diagnostics/unselected emitted imports, seal emits, and test exact loader entry/import allowlists."
+    },
+    {
+      "id": "EP06",
+      "status": "NOT_RUN",
+      "prerequisite": "Validate frozen Python payloads with actual selected Pydantic, execute the 19 cases once serially only after admission, and independently judge API results/raw transport/exit/EOF/cancellation/cleanup completeness. Preserve failures and partial captures; no auto retries."
+    }
+  ],
+  "checks_summary": {
+    "discriminating_checks": 12,
+    "passed": 11,
+    "failed": 1,
+    "verifier_static_checks": 6,
+    "additional_source_static_checks": 6,
+    "scope": "Static/HOW only; repeat integrity seals do not add scenarios."
+  },
+  "runtime_status": "NOT_RUN",
+  "compiler_status": "NOT_RUN",
+  "acquisition_status": "NOT_RUN",
+  "functional_receipts": 0,
+  "integrity": {
+    "observed_at": "2026-10-18T15:39:07.129943+00:00",
+    "freeze_sha256": "dc4530aff72413bb54707d324370dc4dd29452ec66cf5ad195417909ed86b89d",
+    "all_57_frozen_hashes_and_sizes": "EXACT_BEFORE_AND_AFTER",
+    "upstream_physical_39_files": "EXACT_BEFORE_AND_AFTER",
+    "host_file_identities_5": "EXACT_BEFORE_AND_AFTER",
+    "supporting_stdlib": "EXACT_BEFORE_AND_AFTER",
+    "task_contract_path": "task.json",
+    "task_contract_sha256": "6b58f3a1a8753da848826d1d4cf198144820d58c58d885b80a7b46a630e5f00d",
+    "SDK_runtime": "NOT_RUN",
+    "compiler": "NOT_RUN",
+    "network_acquisition": "NOT_RUN"
+  },
+  "scope_limits": [
+    "No SDK, Pydantic, TypeScript compiler, Codex/backend, application tests, PG, containers, network or acquisitions executed or imported by this reviewer.",
+    "Static AST/field/regex checks do not establish Pydantic validation, emitted-code behavior, Node abort/readline behavior, barrier correctness or containment/cleanup admission.",
+    "This source profile may be accepted after the HOW repair while acquisition, private concrete implementation/admission and actual SDK tests remain NOT_RUN.",
+    "Official wheel/npm/tsup/typecheck, real Codex and other-platform profiles remain required future program work, not added mandatory scope for this unit.",
+    "No native SPEC0239 approval, public API/schema extension, receipt or release follows. Routine local reference preparation does not require a new human T3 decision."
+  ],
+  "budget": {
+    "max_review_rounds": 2,
+    "this_round": 1,
+    "remaining_review_rounds": 1,
+    "max_grouped_Lead_repairs": 1,
+    "reviewer_repairs": 0,
+    "descendants": 0
+  },
+  "continuity_handoff": "Lead owns continuity/closure outside frozen inputs; reviewer writes only review-r1/** and does not edit shared ledgers, claims or controls.",
+  "next_action": "Lead makes one grouped documentary topology repair, freezes R2 inputs and returns the bounded HOW for the remaining review; do not execute SDKs to resolve R1-F01."
+}
+

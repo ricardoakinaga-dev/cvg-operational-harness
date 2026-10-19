@@ -1,0 +1,48 @@
+{
+  "task": "DX100-G01:PYTHON-PUBLIC-SDK-CONTRACTS",
+  "scope": "Own reader development and diagnostics only; no SDK execution",
+  "failures": [
+    {
+      "id": "FIRST_GENERATED_CENSUS",
+      "command": "python3 docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-language-contracts/python/reader.py --write",
+      "exit": 1,
+      "output": { "error": "generated census drift", "exit": 1 },
+      "cause": "Reported 1075 count disagrees with authenticated AST and accepted prior generated definitions.",
+      "correction": "Preserve reported count in census_discrepancy OPEN; explicitly recount 1056 classes + one top-level assignment + four methods; validate 1057/1061 rather than fabricate 1075."
+    },
+    {
+      "id": "SPAN_LINE_END",
+      "command": "python3 docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-language-contracts/python/reader.py --write",
+      "exit": 1,
+      "output": { "error": "source line end", "exit": 1 },
+      "cause": "Historical spans can include a trailing newline; inclusive end line belongs to byte_end minus one.",
+      "correction": "Check half-open UTF-8 byte slices with inclusive end line at final included byte, then rerun full derivation and source span checks."
+    },
+    {
+      "id": "DIAGNOSTIC_OLD_ARTIFACT",
+      "command": "Inline stdlib JSON diagnostic while updated reader --write was still running",
+      "exit": 1,
+      "output": "KeyError: 'deferred_lambda'",
+      "cause": "Diagnostic read previous inventory before regeneration completed, using newly introduced field.",
+      "correction": "Wait for writer completion before inspecting the refreshed artifact; no target data or source change required."
+    }
+  ],
+  "tool_failure": {
+    "id": "HANDOFF_PATCH_CONTEXT",
+    "tool": "apply_patch",
+    "exit": null,
+    "output": "Failed to find expected lines in handoff.md",
+    "cause": "Prettier padded Markdown table cells, invalidating the original patch context.",
+    "correction": "Read the formatted file and use stable prose context; the rejected patch wrote no files."
+  },
+  "format_failure": {
+    "id": "SEALED_MANIFEST_FORMAT",
+    "command": "Node22 Prettier --ignore-path /dev/null --check '*.json' '*.md' in python/",
+    "exit": 1,
+    "output": "[warn] manifest.json; Code style issues found in the above file.",
+    "cause": "Stdlib indented JSON prints the one-element excludes array on multiple lines; Prettier prints it inline.",
+    "correction": "Keep excludes metadata byte-compatible in the stdlib sealer; format all lane JSON/Markdown, recheck links, reseal and rerun read-only verification."
+  },
+  "failed_target_executions": 0,
+  "functional_receipts": 0
+}

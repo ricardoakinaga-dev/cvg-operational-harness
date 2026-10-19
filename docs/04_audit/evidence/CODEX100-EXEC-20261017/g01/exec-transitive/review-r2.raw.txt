@@ -1,0 +1,127 @@
+**Parecer consolidado: ACCEPT_BOUNDED_EXEC_TRANSITIVE_SOURCE_BINDING — R2 ativo.**
+
+Crítico independente fresh-context da unidade T1 `DX100-G01:RESOLVE-EXEC-TRANSITIVE-TYPES`. Este texto consolida exclusivamente procedimentos e resultados já observados. Não executei nova revisão, reexecução ou escrita para produzi-lo.
+
+**Escopo e independência.** Atuei somente em leitura, sem descendentes, sem editar relatórios, implementação, catálogo ou ledgers. Não executei alvo/crates, Cargo, instalação, compilação, modelo/provider, aplicação, PG/Docker, gates amplos, `root verify_current.py`, commit, push ou deploy. A revisão semântica iniciada sobre R1 foi preservada após comprovar que R2 manteve os leitores, inventários e verificações derivados de fonte.
+
+**Execuções observadas sobre R2.** Diretório de trabalho: `/home/ricardo/Área de trabalho/cvg-operational-harness`. Os quatro comandos abaixo terminaram efetivamente com **exit 0**:
+
+```sh
+GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-transitive/internal/reader.py --check
+
+GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-transitive/internal/join_flows.py --check
+
+GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-transitive/external/reader.py --check
+
+GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/exec-transitive/integrate.py --check
+```
+
+| Procedimento | Resultado efetivamente observado |
+|---|---|
+| Leitor interno | PASS; 20 referências históricas, 14 símbolos, 31 tipos adicionados, 46 campos/payloads, 45 variantes, 68 arestas, 19 vínculos de codecs, 64 corpos de suporte; zero referências/helpers OPEN no recorte lexical; 15 negativos rejeitados. |
+| Join | PASS; 137 tipos anteriores + 31 novos = 168 selecionados; 32 operações; 13 alcançam tipos novos; 17 têm fronteira externa; seis negativos rejeitados. |
+| Leitor externo | PASS offline readonly; três crates, seis owners históricos, 24 membros selecionados, 141 fontes, três codecs locais, 246 declarações locais de features/dependências, 2.503 spans lexicais e 2.677 spans UTF-8 conferidos; 38 negativos rejeitados. |
+| Integração | PASS; 20 referências, 14 vínculos internos, seis externos, três contratos; 582 ocorrências de spans internos; 244 arquivos preservados nos seis pacotes anteriores; nove negativos rejeitados. |
+
+Total observado dos controles incorporados aos quatro procedimentos: **68 negativos rejeitados**. Esses controles verificam evidência/leitores; não são testes funcionais do alvo.
+
+**Censo independente executado.** Executei um procedimento próprio de leitura de metadados, sem importar os leitores da entrega nem módulos do alvo. Ele terminou com **exit 0** e realizou:
+
+- Extração estrutural própria, mínima e delimitada, dos textos-fonte das 31 declarações selecionadas: conferência de nomes, campos, tipos textuais, variantes e payloads de tuplas. Resultado: **31 declarações, 46 campos/payloads e 45 variantes**, com formas exatas coincidentes.
+- Conferência recursiva dos fragmentos internos contra os bytes das fontes: limites usados para recortar o texto e SHA256 de cada fragmento comparado.
+- Igualdade da lista de referências históricas com `g01/exec-server/types/inventory.json.unresolved_references`, preservando owner/símbolo e ordem.
+- Reconstrução própria da adjacência por campos/aliases e vínculos privados selecionados, seguida de busca de alcance independente para cada operação.
+- Comparação dos conjuntos exatos de roots, tipos alcançados, tipos novos e fronteiras externas; comparação de requirement, owner e method com flows, type-links e catálogo.
+
+Resultado da reconstrução: **168 tipos selecionados, 32 operações, 13 alcançando tipos adicionados e 17 com fronteira externa**. Não foi somente comparação dos contadores publicados. O extrator próprio é lexical e limitado; não foi apresentado como parser Rust completo.
+
+**Seis negativos próprios executados somente em memória.** Cada mutação foi aplicada a cópias dos dados; nenhuma alterou arquivo. Todos foram rejeitados pelas verificações indicadas, e o procedimento conjunto terminou com **exit 0**:
+
+| ID | Mutação e mecanismo de rejeição |
+|---|---|
+| `drop_private_tuple_payload` | Esvaziou os campos do payload da variante Legacy de `PermissionProfileDe`. Rejeitado pela igualdade estrutural com a declaração-fonte extraída independentemente. |
+| `omit_historical_reference` | Removeu uma referência histórica. Rejeitado pela igualdade da lista com os 20 registros do inventário anterior. |
+| `forge_reachable_counterpart` | Removeu um tipo de `reachable_selected_type_ids` de operação que alcançava tipos novos. Rejeitado pela comparação com o conjunto recalculado pela busca independente. |
+| `wrong_operation_owner` | Substituiu o owner por `DX100-FAKE`. Rejeitado pela comparação com catálogo e fluxo histórico. |
+| `value_initialized_as_builtin` | Esvaziou as fronteiras externas de `initialized`. Rejeitado pela reconstrução independente da fronteira `serde_json::Value`. |
+| `tamper_legacy_default_body` | Substituiu por `CHANGED` o texto do suporte `impl From<LegacyPermissionProfile> for PermissionProfile`. Rejeitado pela comparação do texto com o fragmento correspondente dos bytes-fonte. |
+
+**Amostras semânticas e proveniência inspecionadas.** Os caminhos Rust abaixo são relativos ao upstream pinado. Os intervalos identificam trechos efetivamente lidos; não representam execução:
+
+| Fonte/trecho | Objeto da inspeção e resultado |
+|---|---|
+| `codex-rs/protocol/src/models.rs`, trechos 80–265, 290–485 e 710–815 | `FileSystemPermissions`, representações canônica/legada, `ManagedFileSystemPermissions`, `SerializedManagedFileSystemPermissions`, `PermissionProfile`, `TaggedPermissionProfile`, `LegacyPermissionProfile` e `PermissionProfileDe`. Confirmados codecs privados, conversões, tags, defaults e distinção wire/domain. |
+| `models.rs:758`, particularmente `:774` | Conversão legada: rede ausente/sem enabled resulta em `.unwrap_or(false)` e política Restricted; filesystem ausente produz Restricted com entradas vazias. |
+| `protocol/src/permissions.rs:120`, `:141`, `:192`, `:470` | Alias `none` de Deny, alias `current_working_directory`, variante Unknown, tipos raw, atributos e campos opcionais. |
+| `network-proxy/src/config.rs:23–116` | Precedência `None < Allow < Deny`, mapa efetivo serializado, estrutura interna de entradas e `flatten` dos sockets. |
+| `network-proxy/src/lib.rs:43–50` e imports de `remote_config.rs` | Reexports concretos de NetworkMode, NetworkDomainPermissions e NetworkUnixSocketPermissions, sem escolha global arbitrária por nome. |
+| `protocol/src/capabilities.rs:63–92` | CapabilityRootLocation e helper que tenta PathUri antes da conversão do caminho legado. Tipo preservado fora do alcance dos payloads atuais. |
+| `utils/path-uri/src/api_path_string.rs` | `LegacyAppPathString`, transparência serde, string privada, conversões e limites de convenção nativa. |
+| `utils/absolute-path/src/lib.rs:341`, `:396` | Guard e desserialização de AbsolutePathBuf com contexto de base; sem executar filesystem. |
+| `exec-server-protocol/src/rpc.rs:26`, `:49`, `:61–231`, `:240–273` | Budget, alias Result, wrapper limitado, Number/RawValue, reparse/end e rejeição de duplicatas. Preservada a diferença para desserializadores derivados diretos dos envelopes. |
+| `utils/path-uri/src/lib.rs:635–695`, `:934–963` | Scheme file, validações, remoção de localhost, normalização de drive, codec String → parse e exceção de fallback para bytes NUL. |
+| `protocol/src/thread_id.rs:27–113` | `now_v7` na criação/default, entrada por String/parse_str, saída collect_str; ausência de restrição v7 na entrada. |
+| Archive `serde_json-1.0.149`: `src/number.rs:16–73`, `:183–198`; `src/value/de.rs:120–145`; `src/de.rs:932–1015`, `:1296–1303`; `src/map.rs:23–36` | Representações numéricas condicionais, finiteza, tokens privados, raw/arbitrary_precision e BTreeMap versus IndexMap. |
+| Archive `uuid-1.20.0`: `src/parser.rs:147–162`; `src/external/serde_support.rs:26–34`, `:163–175`; `src/fmt.rs:31–58`; `src/lib.rs:943–947` | Formas simple/hyphenated/braced/URN, branches serde legível/binário, Display lowercase/hyphenated e default nil distinto de ThreadId. |
+| Archive `url-2.5.8`: `src/lib.rs:341–343`, `:2899–2941` | Encaminhamento do parse e codecs serde condicionados à feature; distinção do codec próprio de PathUri. |
+
+Conferi também as declarações locais de `arbitrary_precision`/`raw_value` em exec-server-protocol, `preserve_order` no TUI e features UUID. Não inferi ativação Cargo dessas declarações.
+
+**Archives e segurança do leitor.** Em procedimento próprio, autentiquei os três archives em cache contra os registros do Cargo.lock antes de abrir o tar e comparei os bytes dos **24 membros selecionados** com as fontes conservadas no inventário. Leitura dos membros somente em memória.
+
+Na inspeção de `external/reader.py:56–91`, confirmei checksum antes de gzip/tar; limites de 8 MiB comprimidos, 32 MiB de dados regulares, 40 MiB de stream tar e 10.000 membros; rejeição de links, dispositivos, traversal, absolutos, duplicatas e prefixos alheios. Inspecionei a separação do fetch e do caminho `--check`, incluindo `:611–633`. Não executei fetch nem novos testes próprios de tar; os negativos de tar observados foram os incorporados ao `--check` externo.
+
+**Inputs congelados e recuperação R1 → R2.** O procedimento independente de integridade terminou com **exit 0**:
+
+- 33/33 inputs ativos R2 e catálogo root com hashes coincidentes.
+- 30/30 arquivos R1 arquivados com SHA256 e tamanho idênticos aos registros R1, usando `review-r1-archive-map.json`.
+- Exatamente três paths antigos diferentes: `external/README.md`, `external/manifest.json` e `integration.json`.
+- README equivalente após normalização delimitada de padding/separadores da tabela, whitespace e escape literal `256\*1024`.
+- Manifest externo equivalente após desconsiderar somente bytes/SHA256 do README.
+- Integração equivalente após desconsiderar somente `lane_manifests.external`.
+- Nova conferência final dos 33 inputs e catálogo: MATCH, exit 0.
+- HEAD upstream igual ao pin e `git status --porcelain` vazio.
+
+Hashes SHA256 principais efetivamente conferidos:
+
+```text
+review-r2-inputs.json
+f151ff99d6f1db393e2374173e96de1b38a7f7152594ff799a559a1895ee1c61
+
+review-r1-inputs.json
+24c7e7666961ac1a98263212d4a12e20988f3658ee41286cd98a72625028dde8
+
+review-r1-archive-map.json
+f60a276f94e6c5830ee5f6ab9a498a31a8f0fc0153d0ba7727dedc4d9f1d194b
+
+contract.json
+d3f493fcd507a405533994692ef2cd235bd5d31dabb351afb9ea6e3bb15d4288
+
+external-contract.json
+c2912831cd59136cb76dfd3c37443e80d5059fb18abc62ea8ea884a0ae29fcfb
+
+docs/03_build/tracking/codex100_catalog_v1.json
+7526e9d172abb1eeffa6981d98f1317fe91af2b617aab2b18a6645a5fd101fa7
+
+codex-rs/Cargo.lock
+6f63e126b80490d838f618f48a209ccaabe202d8dfd8c27d4ca692c7be4d6bfd
+
+url-2.5.8.crate — 86512 bytes
+ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed
+
+uuid-1.20.0.crate — 60654 bytes
+ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f
+
+serde_json-1.0.149.crate — 155994 bytes
+83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86
+```
+
+Pin Git conferido: `8d9f6466ff0294785d56f55b1fe363d132fe4133`.
+
+**Achados e limites do parecer.** Não identifiquei achado bloqueante no contrato delimitado; nenhum segundo retrabalho foi solicitado. O primeiro retrabalho permaneceu restrito à formatação e atualização dos digests derivados.
+
+As quatro referências Value do transporte compartilhado, o adendo de `initialized.params` e CapabilityRootLocation fora dos payloads permanecem explícitos. Ausência de referências abertas neste grafo lexical não equivale a fechamento de dependências em runtime.
+
+Continuam OPEN: dependências terceiras não auditadas; unificação Cargo/features/target; URL/IDNA/plataforma; gramática/runtime; G01/paridade. O método cobre campos/aliases e intermediários serde selecionados do mesmo arquivo, sem comprovar callgraph completo, macros, cfg, enforcement ou efeitos.
+
+Este aceite autoriza somente o registro do encerramento do recorte T1 de vínculo delimitado a fontes. Não aprova G01 integral, BUILD, implementação nativa, produção ou grant CVG. Os seis gaps SDK/componentes e G02/G03/G04 continuam mandatórios.

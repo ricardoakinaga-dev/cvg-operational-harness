@@ -1,0 +1,63 @@
+import sys, json, subprocess, pathlib, datetime, hashlib, os
+
+BASE = pathlib.Path(__file__).resolve().parent
+W = pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+ID = '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+
+def save(path, value):
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + '\n')
+
+def run(label, argv, overrides=None):
+    d = BASE / 'commands' / label
+    d.mkdir(parents=True, exist_ok=False)
+    start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    env = dict(os.environ, **(overrides or {}))
+    p = subprocess.run(argv, cwd=W, env=env, capture_output=True)
+    (d / 'stdout.log').write_bytes(p.stdout)
+    (d / 'stderr.log').write_bytes(p.stderr)
+    save(d / 'command.json', dict(argv=argv, cwd=str(W), overrides=overrides or {}, startedAt=start,
+        finishedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), exitCode=p.returncode))
+    print(label, p.returncode, p.stdout.decode(errors='replace')[-6000:], p.stderr.decode(errors='replace')[-3000:])
+    return p
+
+def sentinel(label):
+    paths = []
+    for root in ['packages', 'legacy/packages']:
+        for p in (W / root).rglob('*'):
+            if p.is_file() and not any(x in p.parts for x in ['node_modules', 'dist', '.cache']) and p.suffix in ['.ts', '.sql', '.json']:
+                if '__tests__' not in p.parts and not p.name.endswith('.test.ts'):
+                    paths.append(p)
+    paths += [W / 'package-lock.json', W / 'vitest.config.mts', W / 'docs/02_spec/0224_pare100_complete_tool_result_context.md',
+              W / 'packages/harness/src/__tests__/fixtures/phase3-fixtures.ts']
+    save(BASE / f'source-sentinel-{label}.json', [dict(path=str(p), bytes=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(set(paths))])
+
+if sys.argv[1] == 'sentinel':
+    sentinel(sys.argv[2])
+elif sys.argv[1] == 'start':
+    r = run('001-inspect-before', ['docker', 'inspect', ID])
+    assert r.returncode == 0
+    c = json.loads(r.stdout)[0]
+    assert c['Id'] == ID and c['Name'] == '/cvg-pare100-224-pg' and c['Config']['Image'] == 'postgres:16.4-alpine'
+    assert c['Image'] == 'sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c'
+    assert c['State']['Status'] == 'exited' and not c['State']['Running']
+    assert c['HostConfig']['PortBindings'] == {'5432/tcp': [{'HostIp': '127.0.0.1', 'HostPort': ''}]}
+    assert run('002-start-assigned', ['docker', 'start', ID]).returncode == 0
+    c = json.loads(run('003-inspect-running', ['docker', 'inspect', ID]).stdout)[0]
+    ports = c['NetworkSettings']['Ports']['5432/tcp']
+    assert len(ports) == 1 and ports[0]['HostIp'] == '127.0.0.1'
+    old = json.loads((BASE.parent.parent / 'fence-r1/resource.json').read_text())
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(old['test_database_url'])
+    resource = dict(containerId=ID, containerName=c['Name'], imageId=c['Image'], synthetic=True,
+        schemaName='pare224_json_r1', roleName='pare224_json_r1_service', hostPort=ports[0],
+        exclusiveClaim='PUBLIC-JSON-001 synthetic PG224 only',
+        test_database_url=urlunsplit((u.scheme, u.netloc.rsplit(':',1)[0]+':'+ports[0]['HostPort'], u.path, '', '')))
+    save(BASE / 'resource-private.json', resource)
+elif sys.argv[1] == 'stop':
+    assert run('090-stop-assigned', ['docker', 'stop', '-t', '10', ID]).returncode == 0
+    c = json.loads(run('091-inspect-stopped', ['docker', 'inspect', ID]).stdout)[0]
+    assert c['Id'] == ID and c['State']['Status'] == 'exited' and not c['State']['Running']
+    save(BASE / 'stop-verification.json', dict(containerId=c['Id'], state=c['State'], mounts=c['Mounts'], volumePreserved=True))
+elif sys.argv[1] == 'run':
+    overrides = json.loads(sys.argv[3])
+    sys.exit(run(sys.argv[2], sys.argv[4:], overrides).returncode)

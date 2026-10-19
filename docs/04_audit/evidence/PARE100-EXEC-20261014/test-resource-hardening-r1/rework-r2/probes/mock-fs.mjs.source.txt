@@ -1,0 +1,7 @@
+import * as actual from 'node:fs/promises';
+export * from 'node:fs/promises';
+const files=globalThis.I1files;
+const stat=(size=0,file=false)=>({uid:process.getuid(),mode:file?0o100600:0o40700,size,isFile:()=>file,isDirectory:()=>!file,isSocket:()=>false,isSymbolicLink:()=>false});
+export async function lstat(p){return stat(files.get(p)?.length??0,files.has(p));}
+export async function realpath(p){return p;}
+export async function open(p){if(!files.has(p))throw new Error('Unexpected read '+p);const bytes=files.get(p);return{stat:async()=>stat(bytes.length,true),close:async()=>{},read:async(buffer)=>{bytes.copy(buffer);return{bytesRead:bytes.length}},readFile:async()=>bytes};}

@@ -1,0 +1,53 @@
+**Image drift reconciled statically:** 24 of the 29 differing schemas repeat this family’s eight JSON-pointer changes. No writes, target execution, tests, generators, network or descendants. Upstream HEAD matched `8d9f6466ff0294785d56f55b1fe363d132fe4133`; inspected source paths had no tracked diff against HEAD.
+
+Verified requirement: **`CDX100-19-03` — “Geração de imagem/artefatos”**, owner `DX100-I01`, [catalogue entry](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/03_build/tracking/codex100_catalog_v1.json:3612>). No qualification or G01 closure implied.
+
+**Family mapping**
+
+| Surface | Pin contract and companion difference |
+|---|---|
+| `ThreadItem::ImageGeneration(ImageGenerationItem)` | Flattened `GeneratedImageRef`: **`File { fileId: String }` first**, then `Inline { result: String }`. Companion snapshot requires inline `result`; pin adds `anyOf` branches and removes unconditional `result`. |
+| `inputImages` | Pin adds optional array plus `ImageGenerationInputImage` definition. Entries contain required **`path`, `sha256` only**. |
+| Repeated exports | `ServerNotification`, aggregate schemas, item started/completed, turn started/completed/start response, review response, thread responses/notifications embedding `ThreadItem`. These are repeated embeddings, not 24 independent behaviors. |
+
+[Comparison](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/entrypoints/exports/comparison.json>) records the companion differences. [Pinned representative schema](</home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/entrypoints/exports/reference/pinned-ServerNotification.json:5420>) uses **`anyOf`, not exclusive `oneOf`**, inside the image variant; common required fields are `id`, `status`, `type`.
+
+**Source anchors**
+
+All following paths are relative to `/tmp/cvg-rea-codex-20261017/upstream/`.
+
+| Anchor | What the code establishes |
+|---|---|
+| [`ext/items/src/image_generation.rs:22`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/ext/items/src/image_generation.rs:22>) | Public fields, flattening, defaults and union order. `input_images`: `#[serde(default, skip_serializing_if = "Vec::is_empty")]`; analytics IDs excluded from wire/persistence. |
+| [`ext/items/src/tests.rs:32`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/ext/items/src/tests.rs:32>) | Tests explicitly cover legacy inline, `fileId:null` fallback, both populated fields preferring File, canonical File serialization, and input observations round-trip. |
+| [`ext/image-generation/src/tool.rs:259`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/ext/image-generation/src/tool.rs:259>) | UI item retains upload result: File, Inline, or original inline on decode/upload failure. Model output separately retains original bytes. |
+| [`ext/image-generation/src/tool.rs:638`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/ext/image-generation/src/tool.rs:638>) | Reads local bytes, computes lowercase SHA-256 **before normalization**, records identity after successful processing. History-selected images produce no local input observations. |
+| [`ext/image-generation/src/tool.rs:717`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/ext/image-generation/src/tool.rs:717>) | Output projection constructs `data:image/png;base64,…`; code-mode returns `image_url` plus optional `output_hint`. Tests at `tests.rs:474,507`. |
+| [`app-server-protocol/src/protocol/v2/item.rs:1004`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/app-server-protocol/src/protocol/v2/item.rs:1004>) | Extension conversion passes item through; older core image variant becomes Inline with empty input observations. |
+| [`rollout/src/policy.rs:127`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/rollout/src/policy.rs:127>) | Legacy stores `ImageGenerationEnd`; paginated stores canonical completed item. Tests `policy_tests.rs:29,60,89` cover File/Inline preservation. |
+| [`thread-store/src/local/rollout_migration/legacy_event.rs:215`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/thread-store/src/local/rollout_migration/legacy_event.rs:215>) | Migration copies representation and input observations. History replay corroboration: `thread_history.rs:2672`; migration observation test: `rollout_migration_tests.rs:593`. |
+
+**Behavioral cases for future acceptance**
+
+These are source-derived expectations, **not executed results**.
+
+| Case | Expected |
+|---|---|
+| `result:"bytes"` alone | Inline. |
+| `fileId:"file-1"` alone | File; serialization omits `result`. |
+| Both strings, including empty or stale `result` | File wins. Rust deserialization order matters; JSON Schema array order does not impose precedence. |
+| `fileId:null`, valid `result` | Inline fallback; explicitly tested. |
+| Neither representation, or neither branch has a valid string | Deserialization failure. Empty strings themselves have no public validation constraint. |
+| Missing `inputImages` / `[]` | Empty vector; omitted on serialization. |
+| `inputImages:null` / malformed entries | Rejected by nonnullable Vec/required entry fields. No SHA length/hex validator in the public type/schema. |
+| Relative input path | Requires deserialization base guard; otherwise rejected. Guard may resolve it—do not assert universal relative-path rejection (`utils/absolute-path/src/lib.rs:346,396`). |
+| Upload returns File / Inline / error | Public item follows File / encoded Inline / original Inline fallback. |
+| Started / backend-failed item | Empty Inline result and empty observations; source emits `in_progress` / `failed`. Public `status` remains unrestricted String. |
+
+**MIME/URL boundary and unknowns**
+
+`GeneratedImageRef` and `inputImages` perform **no MIME/URL validation**. Code-mode normalization rejects HTTP(S), missing schemes and non-data schemes, but does not fully validate payload/MIME there: [`runtime/value.rs:47`](</tmp/cvg-rea-codex-20261017/upstream/codex-rs/code-mode-runtime/src/runtime/value.rs:47>). Corroborating negative tests: `service_tests.rs:1953,1990`.
+
+Later image preparation rejects remote URLs; data decoding checks comma, base64 marker/payload and size, then detects format from bytes rather than trusting declared MIME: `core/src/image_preparation.rs:393`, `utils/image/src/lib.rs:258,130`.
+
+Unproven here: actual runtime outcomes, storage backend durability/resolution/TTL, executable companion behavior, and CVG equivalence. Companion differences describe the captured schema snapshot; they do not establish its implementation’s behavior.

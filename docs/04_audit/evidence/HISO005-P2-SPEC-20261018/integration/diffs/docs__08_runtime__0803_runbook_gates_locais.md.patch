@@ -1,0 +1,44 @@
+diff --git a/docs/08_runtime/0803_runbook_gates_locais.md b/docs/08_runtime/0803_runbook_gates_locais.md
+index ace8b963fe01026d9a8764431224f7eb84678e8a..649b191ad973ff35c82ca128c87ca95a8c4d01ce 100644
+--- a/docs/08_runtime/0803_runbook_gates_locais.md
++++ b/docs/08_runtime/0803_runbook_gates_locais.md
+@@ -55,10 +55,35 @@ rodar gates em paralelo sem interferência.
+ 3. **Variáveis das fases.** Fases 2/3/4A e a prova rem21-010 não pulam quando falta o
+    banco: falham fechado com mensagem explícita. Isso é intencional (AUD20 skip
+    governance).
+-4. **`boundary:products`.** O checker percorre `node_modules` e termina `INCOMPLETE`
+-   (0 violações, milhares de `UNVERIFIED_INSTALLED_DEPENDENCY`) após ~20 min. Está em
+-   qualificação no HISO-005; não o encadeie com outros gates e não o trate como prova
+-   de fronteira aceita.
++4. **`boundary:products` (SPEC0228).** Execute `npm run boundary:products`
++   separadamente. Metadados de pacotes instalados não provam conteúdo: o gate
++   registra `UNVERIFIED_INSTALLED_CONTENT` ou `INSTALLED_VERSION_MISMATCH` e
++   preserva o drift. A tabela histórica de exceções não suprime diagnósticos;
++   `--strict` permanece aceito e aplica a mesma recusa. A baseline fica
++   `INCOMPLETE` (exit1), sem aceite de isolamento. Violações conhecidas continuam
++   `FAIL`; só ausência de violações e incertezas permite `PASS` (exit0).
++   Não reinterpretar INCOMPLETE como verde nem reativar a tabela para certificar.
++
++   Opt-in0234 (somente na candidata que contém o componente): construir uma
++   referência independente com `node scripts/build-installed-reference.mjs`
++   e flags explícitas `--source-root`, `--commit`, `--output-root`, `--cache-source`.
++   O diretório de saída deve ser novo; cache original é readonly. Usar somente
++   Node22.23.2/npm10.9.8 pinados. A receita sanitiza configurações, desativa scripts
++   e update notifier, observa processos/rede e recusa instalação parcial.
++   Não consumir um recibo antes de revisar logs, origem, inventário e digest.
++
++   Depois da revisão, o checker recebe sempre o par
++   `--installed-reference=<reference.json>` e
++   `--installed-reference-sha256=<sha256-revisado>`. Opção incompleta, digest
++   inválido ou arquivo não regular falha estruturalmente (exit2). A identidade
++   aparece por pacote no grafo (`--graph=<arquivo>`) ou em
++   `installedContentIdentity` quando não há grafo. MATCH/MISMATCH/UNAVAILABLE/
++   UNSUPPORTED conservam `verified:false`, motivos semânticos e drift originais.
++   MATCH não concede PASS/B6; normal e strict continuam equivalentes.
++   Arquivos extras, ocultos, gerados, links, races e limites são evidenciados;
++   não há exclusão permissiva nem fallback online. Recibo/digest fixam bytes,
++   não autenticam um operador malicioso. Fontes e ferramentas são revalidadas.
++
+ 5. **Gates concorrentes no mesmo worktree.** `certify` reescreve
+    `certification/*-report.json`; um `skip:governance` disparado ao mesmo tempo falha
+    com `skip_report_missing_input`. Rode um de cada vez por worktree.

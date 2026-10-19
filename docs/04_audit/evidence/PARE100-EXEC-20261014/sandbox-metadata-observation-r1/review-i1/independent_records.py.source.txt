@@ -1,0 +1,104 @@
+"""Independent checks of actual raw observations; no candidate validator import."""
+import hashlib
+import json
+from pathlib import Path
+
+D = Path(__file__).resolve().parent
+P = D.parent
+ECHO = {'text': 'synthetic echo only'}
+ID = 'synthetic.sandbox.metadata'
+
+
+def strict_pairs(pairs):
+    output = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError('duplicate JSON key: ' + key)
+        output[key] = value
+    return output
+
+
+def load(path):
+    return json.loads(path.read_bytes(), object_pairs_hook=strict_pairs,
+                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+frozen = load(P / 'runs/attempt-03/sources-before.json')
+records = []
+for run_name in ['attempt-03', 'i1-01']:
+    folder = P / 'runs' / run_name
+    raw = folder / 'stdout.txt'
+    data = load(raw)
+    process = load(folder / 'process.json')
+    assert load(folder / 'sources-before.json') == load(folder / 'sources-after.json') == frozen
+    assert process['sourceFiles'] == len(frozen) == 1054
+    assert process['durationMs'] < 5000 and process['limits'] == {'deadlineMs': 5000, 'combinedOutputBytes': 1048576}
+    assert process['exitCode'] == 0 and process['joined'] is True and process['remainingProcessGroup'] is False and process['violation'] is None
+    assert process['pid'] == process['dedicatedProcessGroup'] > 0 and process['subreaper'] is True
+    assert 0 < raw.stat().st_size < 1048576
+    assert digest(raw) == process['streams']['stdout']['sha256']
+    assert not (folder / 'stderr.txt').exists()
+    assert process['streams']['stderr'] == {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}
+    assert process['env']['TSX_DISABLE_CACHE'] == '1' and 'NODE_OPTIONS' not in process['env']
+    assert process['argv'][1] == '--import' and process['argv'][-1] == str(P / 'observe.mts')
+    assert data['syntheticPorts'] == ['orchestrator', 'model', 'policy', 'approval', 'audit', 'telemetry', 'sandbox-deny']
+    assert [c['caseId'] for c in data['cases']] == ['direct-WORKSPACE', 'capability-WORKSPACE', 'capability-NONE']
+    cases = []
+    for index, c in enumerate(data['cases']):
+        inp = c['input']
+        invocation = inp['requestedTool']
+        submitted = {k: v for k, v in c['submittedDescriptor'].items() if k != 'execute'}
+        assert inp['runtimeProfile'] == 'single_pass' and 'executionId' not in inp
+        assert c['modelCalls'] == c['approvalRequests'] == []
+        assert invocation['input'] == ECHO and invocation['toolId'] == ID
+        assert c['beforeDescriptor']['sandbox'] == c['mode']
+        runtime = dict(inp)
+        if index:
+            assert 'sandbox' not in submitted and c['registeredDescriptors'] == [submitted]
+            fingerprint = hashlib.sha256(json.dumps({'schemaVersion': 'capability-composition-v1', 'descriptors': [submitted]}, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+            assert c['capabilityFingerprint'] == fingerprint
+            runtime['capabilityFingerprint'] = fingerprint
+        else:
+            assert submitted == c['beforeDescriptor'] and submitted['sandbox'] == 'WORKSPACE'
+        assert c['decisions'] == [{'input': {'runtime': runtime, 'availableTools': [submitted], 'step': 1}, 'decision': {'action': 'CALL_TOOL', 'toolInvocation': invocation}}]
+        assert len(c['policyEvaluations']) == 1
+        policy = c['policyEvaluations'][0]
+        assert policy['invocation'] == invocation and {k: v for k, v in policy['tool'].items() if k != 'execute'} == submitted
+        expected_context = {'tenantId': inp['tenantId'], 'agentId': inp['agent']['id'], 'correlationId': inp['correlationId'], 'traceId': inp['traceId'], 'operationKey': invocation['operationKey']}
+        logs = c['kernelLogEvents']
+        outcome = 'not_started' if index == 0 else 'succeeded'
+        stop = 'UNSAFE_REQUEST' if index == 0 else 'COMPLETED'
+        assert logs == [{'type': 'turn/start', 'correlationId': inp['correlationId']}, {'type': 'tool/call', 'correlationId': inp['correlationId'], 'toolId': ID, 'operationKey': invocation['operationKey'], 'input': ECHO}, {'type': 'tool/result', 'correlationId': inp['correlationId'], 'toolId': ID, 'outcome': outcome}, {'type': 'turn/end', 'correlationId': inp['correlationId'], 'stopReason': stop}]
+        native = c['nativeResult']
+        assert all(type(native[k]) is int for k in ['steps', 'modelCalls', 'toolCalls'])
+        assert native['stopReason'] == stop and native['steps'] == 1 and native['modelCalls'] == 0 and native['toolCalls'] == int(index != 0)
+        if index == 0:
+            assert len(c['gateCalls']) == 1 and c['bodyCalls'] == [] and c['journalRecord'] is None
+            gate = c['gateCalls'][0]
+            assert gate['context'] == expected_context
+            assert gate['policy'] == {'requiredMode': 'WORKSPACE', 'workspaceScoped': True, 'networkAllowed': False, 'subprocessAllowed': False}
+            assert {k: v for k, v in gate['descriptor'].items() if k != 'execute'} == submitted
+        else:
+            assert c['gateCalls'] == [] and len(c['bodyCalls']) == 1
+            body = c['bodyCalls'][0]
+            assert body['input'] == ECHO
+            assert body['context'] == {**expected_context, 'signal': {'$type': 'AbortSignal', 'aborted': False, 'reason': {'$type': 'undefined'}}}
+            assert native['toolResult'] == {'status': 'SUCCEEDED', 'output': ECHO} and json.loads(native['response']) == ECHO
+            journal = c['journalRecord']
+            assert journal['state'] == 'CONFIRMED' and journal['tenantId'] == inp['tenantId'] and journal['operationKey'] == invocation['operationKey'] and journal['result'] == ECHO
+        assert len(c['auditEvents']) == len(c['telemetryEvents']) == 1
+        audit = c['auditEvents'][0]
+        assert audit['actor'] == audit['agent'] == inp['agent']['id'] and audit['tenant'] == inp['tenantId'] and audit['tool'] == ID and audit['result'] == stop and audit['policy'] == 'ALLOW' and audit['approval'] is None
+        telemetry = c['telemetryEvents'][0]
+        assert telemetry['name'] == 'harness.single_pass' and telemetry['steps'] == 1 and telemetry['errors'] == int(index == 0) and telemetry['costUsd'] == telemetry['inputTokens'] == telemetry['outputTokens'] == 0
+        for event in [audit, telemetry]:
+            assert event['traceId'] == inp['traceId'] and event['correlationId'] == inp['correlationId']
+        cases.append({'caseId': c['caseId'], 'submittedSandbox': submitted.get('sandbox', 'ABSENT'), 'gateCalls': len(c['gateCalls']), 'bodyCalls': len(c['bodyCalls']), 'stopReason': stop})
+    assert data['cases'][1]['capabilityFingerprint'] == data['cases'][2]['capabilityFingerprint']
+    records.append({'run': str(folder), 'rawSha256': digest(raw), 'strictRawChecks': 'PASS', 'durationMs': process['durationMs'], 'cases': cases, 'sandboxPreservationInvariant': 'FAIL', 'securityPass': False})
+(D / 'independent-record-check.json').write_text(json.dumps({'checks': records, 'scope': 'actual pinned attempt03 and own reproduction only; does not repair candidate validator'}, indent=2) + '\n')
+print(json.dumps(records, indent=2))

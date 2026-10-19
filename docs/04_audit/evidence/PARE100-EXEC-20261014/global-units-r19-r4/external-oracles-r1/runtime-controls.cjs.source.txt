@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),net=require('node:net'),dns=require('node:dns');
+let dnsQueries=0;
+dns.lookup=(host,opts,cb)=>{if(typeof opts==='function')cb=opts;if(!net.isIP(host)){dnsQueries++;throw Error('DNS_FORBIDDEN');}process.nextTick(cb,null,...(opts?.all?[[{address:host,family:net.isIP(host)}]]:[host,net.isIP(host)]));};
+const s=net.createServer(x=>{x.on('error',()=>{});x.end();});
+(async()=>{
+await new Promise(r=>s.listen(0,'127.0.0.1',r));const port=s.address().port;
+for(const item of [{name:'native numeric-string plus',args:['+'+port,'127.0.0.1']},{name:'native numeric-string whitespace',args:[' '+port+' ','127.0.0.1']},{name:'native empty path TCP',args:[{path:'',host:'127.0.0.1',port}]}]){
+const result=await new Promise(resolve=>{const x=new net.Socket();const t=setTimeout(()=>{x.destroy();resolve('TIMEOUT');},1000);x.once('error',e=>{clearTimeout(t);resolve(e.code);});x.once('connect',()=>{clearTimeout(t);x.destroy();resolve('CONNECTED');});try{x.connect(...item.args);}catch(e){clearTimeout(t);resolve(e.code||e.message);}});
+console.log(JSON.stringify({name:item.name,result,expected:'CONNECTED',pass:result==='CONNECTED'}));
+}
+console.log(JSON.stringify({node:process.version,dnsQueries}));await new Promise(r=>s.close(r));
+})().catch(e=>{console.error(e);s.close();process.exitCode=1;});

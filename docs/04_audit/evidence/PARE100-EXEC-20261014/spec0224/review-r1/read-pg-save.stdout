@@ -1,0 +1,101 @@
+ * Durable Phase 3 step/checkpoint authority. Tenant scoping is inherited from
+ * the Phase 2 connection discipline; checkpoint integrity is validated before
+ * every write and after every read.
+ */
+export class PostgresExecutionStepStore implements ExecutionStepStore {
+  private readonly clock: () => Date
+  private readonly fence: ControlledPublishedDatabaseFence | undefined
+
+  public constructor(
+    private readonly connection: OperationalStepPostgresConnection,
+    options: PostgresExecutionStepStoreOptions = {}
+  ) {
+    this.clock = options.clock ?? (() => new Date())
+    this.fence = options.fence
+  }
+
+  public recordStep(step: ExecutionStep): Promise<void> {
+    const tenant = TenantIdSchema.parse(step.tenantId)
+    if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {
+      throw new CheckpointError(
+        'step_conflict',
+        'A step number must be a positive integer'
+      )
+    }
+    return this.run(tenant, (client) =>
+      transaction(client, async () => {
+        const guard = await guardOptionalPublishedWrite(
+          client,
+          tenant,
+          step.executionId,
+          this.fence,
+          ['SUCCEEDED', 'FAILED', 'SKIPPED', 'WAITING'].includes(step.status)
+        )
+        await recordOperationalStepOnClient(client, tenant, step, guard)
+        await guard?.recheck()
+      })
+    )
+  }
+
+  public listSteps(
+    tenantId: string,
+    executionId: string
+  ): Promise<readonly ExecutionStep[]> {
+    const tenant = TenantIdSchema.parse(tenantId)
+    const id = text(executionId, 'executionId')
+    return this.run(tenant, async (client) => {
+      const result = await client.query<StepRow>(
+        `SELECT ${stepColumns}
+           FROM operational_execution_steps
+          WHERE tenant_id = $1 AND execution_id = $2
+          ORDER BY step_number ASC`,
+        [tenant, id]
+      )
+      return result.rows.map(mapStep)
+    })
+  }
+
+  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+    const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+    validateCheckpointIntegrity(checkpoint, {
+      tenantId: checkpoint.tenantId,
+      executionId: checkpoint.executionId
+    })
+    return this.run(tenant, (client) =>
+      transaction(client, async () => {
+        const guard = await guardOptionalPublishedWrite(
+          client,
+          tenant,
+          checkpoint.executionId,
+          this.fence,
+          !!checkpoint.state.stopReason
+        )
+        await guard?.recheck()
+        await saveOperationalCheckpointOnClient(client, tenant, checkpoint)
+        await guard?.recheck()
+      })
+    )
+  }
+
+  public loadCheckpoint(
+    tenantId: string,
+    executionId: string
+  ): Promise<ExecutionCheckpoint | null> {
+    const tenant = TenantIdSchema.parse(tenantId)
+    const id = text(executionId, 'executionId')
+    return this.run(tenant, async (client) => {
+      const result = await client.query<CheckpointRow>(
+        `SELECT ${checkpointColumns}
+           FROM operational_execution_checkpoints
+          WHERE tenant_id = $1 AND execution_id = $2`,
+        [tenant, id]
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      const checkpoint = mapCheckpoint(row)
+      validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })
+      return checkpoint
+    })
+  }
+
+  private async run<T>(

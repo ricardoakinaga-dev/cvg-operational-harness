@@ -1,0 +1,25 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import {spawnSync} from 'node:child_process'
+import {measureToolTurn} from './tests/differential/compare-tool-turn.mjs'
+import {createDifferentialEvidence} from './tests/differential/evidence-lifecycle.mjs'
+const root=process.cwd(),node=process.execPath,sha=s=>crypto.createHash('sha256').update(s??'').digest('hex'),records=[]
+const fixtures=['tool-ascii','tool-unicode','tool-json'].map(id=>JSON.parse(fs.readFileSync('evidence/focus-explicit-with-primary-extra/tool-turn/'+id+'.native.json','utf8')))
+for(const kind of ['explicit','default']){
+ if(kind==='default')delete process.env.CVG_DIFFERENTIAL_EVIDENCE_DIR;else process.env.CVG_DIFFERENTIAL_EVIDENCE_DIR=root+'/evidence/real-faults-explicit'
+ const life=createDifferentialEvidence('tool');fs.mkdirSync(life.directory,{recursive:true})
+ for(const [item,mode] of [...(kind==='explicit'?fixtures.map(f=>[f,'baseline']):[]),...(kind==='explicit'?['empty-tools','forged-schema','routing','history'].map(m=>[fixtures[0],m]):[]),...[['fault-exit'],['fault-hang']].map(([m])=>[fixtures[0],m])]){
+  const home=fs.mkdtempSync(root+'/tmp/owned-reference-'),file=home+'/fixture.json',fixture=item.fixture
+  fs.writeFileSync(file,JSON.stringify(fixture));const env={PATH:path.dirname(node)+':/usr/bin:/bin',HOME:home,TMPDIR:home,TMP:home,TEMP:home,XDG_CONFIG_HOME:home+'/config',XDG_CACHE_HOME:home+'/cache',XDG_DATA_HOME:home+'/data',XDG_STATE_HOME:home+'/state',DSH_HOME:home+'/dsh',LANG:'C.UTF-8',NODE_ENV:'test'}
+  const started=Date.now(),args=[root+'/critic-reference.mjs',file,mode],r=spawnSync(node,args,{cwd:home,env,encoding:'utf8',timeout:5000,maxBuffer:1048576,killSignal:'SIGKILL'}),tag=fixture.id+'-'+mode
+  fs.writeFileSync(life.directory+'/'+tag+'.stdout',r.stdout??'');fs.writeFileSync(life.directory+'/'+tag+'.stderr',r.stderr??'')
+  let measurement=null;try{measurement={accepted:true,value:measureToolTurn(JSON.parse(r.stdout),item.cvg,fixture)}}catch(e){measurement={accepted:false,error:String(e)}}
+  const meta={kind,mode,argv:[node,...args],cwd:home,environment:env,pid:r.pid,elapsedMs:Date.now()-started,timeoutMs:5000,maxBuffer:1048576,status:r.status,signal:r.signal,error:r.error?.message??null,childExitObserved:r.status!==null||r.signal!==null,stdoutSHA256:sha(r.stdout),stderrSHA256:sha(r.stderr),measurement,evidence:life.directory,helperDataNegative:!['baseline','fault-exit','fault-hang'].includes(mode)}
+  fs.writeFileSync(life.directory+'/'+tag+'.command.json',JSON.stringify(meta,null,2));records.push(meta)
+  fs.rmSync(home,{recursive:true,force:true});meta.homeRemoved=!fs.existsSync(home)
+  if(mode.startsWith('fault'))life.failed()
+ }
+ life.finish();records.push({kind,directory:life.directory,retained:fs.existsSync(life.directory),private:life.directory.startsWith(root+'/')})
+}
+fs.writeFileSync('evidence/critic/reference-runs.json',JSON.stringify(records,null,2));console.log(records.map(x=>({kind:x.kind,mode:x.mode,status:x.status,signal:x.signal,measurement:x.measurement?.accepted,elapsedMs:x.elapsedMs,retained:x.retained})))

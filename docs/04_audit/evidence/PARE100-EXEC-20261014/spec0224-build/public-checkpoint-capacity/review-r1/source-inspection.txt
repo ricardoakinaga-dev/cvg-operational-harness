@@ -1,0 +1,1274 @@
+FILE docs/02_spec/0224_pare100_complete_tool_result_context.md SHA256 f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea
+78: 
+79: | Recurso                        | Limite e unidade                                                                                                                     | Consequência                                                                           |
+80: | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+81: | Output completo                | 32768 bytes UTF-8 da representação JSON canônica                                                                                     | Acima: UNAVAILABLE/RESULT_TOO_LARGE; sem corte de valor.                               |
+82: | Estrutura JSON                 | Profundidade32 e10000nós, raiz contada como profundidade1; cada valor (objeto, array ou escalar) é um nó, chaves não contam como nós | Acima: UNAVAILABLE/RESULT_COMPLEXITY.                                                  |
+83: | Metadados de identidade        | Cada campo textual até512unidades UTF-16; envelope de observação até4096bytes além do output                                         | Metadado nativo inválido: parar, sem confiar no payload para substituí-lo.             |
+84: | Observações no checkpoint      | Máximo50, preservando todas as TOOL_RESULT da execução                                                                               | Sem espaço: recusar nova ferramenta antes de invocar seu corpo.                        |
+85: | Checkpoint unsigned canônico   | 8388608bytes UTF-8                                                                                                                   | Preflight antes de ferramenta e de gravação; exceder interrompe, nunca grava truncado. |
+86: | Mensagem system de decisão     | 16000unidades UTF-16                                                                                                                 | Não cabe: CONTEXT_OVERFLOW, zero chamadas.                                             |
+87: | Mensagem user de decisão       | 32000unidades UTF-16                                                                                                                 | Mesmo tratamento; não fragmentar nem cortar JSON.                                      |
+88: | Pedido de decisão serializado  | 131072bytes UTF-8, incluindo context/budget/purpose/IDs                                                                              | Mesmo tratamento; signal é controle local não serializável.                            |
+89: | Reserva de saída por tentativa | 512tokens e limite expresso no ModelRequest                                                                                          | Recusar se não houver capacidade para a reserva completa.                              |
+90: 
+91: São limites PROPOSED de contenção desta fatia, não capacidade medida do
+92: PostgreSQL ou do provider.32768bytes acomodam a serialização de uma string
+93: de4096bytes UTF-8 inclusive escapes JSON de caracteres de controle. Isso
+147: 
+148: V1 mantém o digest existente. Em V2, normalizar campos opcionais internos
+149: ausentes pelo schema do checkpoint, sem alterar o output JSON estrito, e
+150: calcular SHA-256 de `cvg.checkpoint.v2` seguido de newline e dos bytes
+151: canônicos do unsigned. CheckpointId/createdAt ficam fora desse unsigned,
+152: como no contrato anterior; tenant, execução, modo, estado e orçamento ficam
+153: dentro. Ausência não declarada pelo schema é erro. O mesmo codec serve aos
+154: stores e ao validador. Integridade não permite inventar dados de V1.
+155: 
+156: Checkpoint do novo modo usa `checkpointVersion:2` e carrega no estado
+157: `toolResultContext:{version:1,deliveredThroughStep,pendingDecisionAdmission,decisionAdmissions}`.
+158: decisionAdmissions retém os receipts nativos de todas as tentativas desta
+159: execução: admissionId, tenant/execution/step/attempt/purpose, requestSha256,
+160: contador/versão, limites reservados, status RESERVED/SETTLED/UNKNOWN e uso
+161: real se SETTLED. pendingDecisionAdmission é nulo ou o ID do único RESERVED.
+162: Receipts não são apagados pelo cursor; seu tamanho entra no limite8MiB e
+163: uma nova tentativa é recusada se não houver espaço para seu receipt.
+164: Repetição de settle de um receipt SETTLED com o mesmo digest/uso é no-op
+165: idempotente; dados diferentes, receipt UNKNOWN ou binding diferente são
+166: conflito. Não exigir que um receipt já SETTLED volte a ser o pendente.
+167: `deliveredThroughStep` começa0, é monotônico e avança somente depois de uma
+168: decisão de modelo válida admitida e aceita pelo runtime, até o maior passo
+169: de TOOL_RESULT que o pedido continha. Reparos e decisões inválidas não
+170: avançam; decisões só por regra não afirmam entrega ao modelo.
+171: 
+172: Todos os TOOL_RESULT da execução, inclusive já entregues, são obrigatórios
+173: e retidos até o estado terminal, ordenados por stepNumber/observationId.
+174: O cursor é somente recibo de entrega; não prova que um resultado deixou de
+175: ser necessário para um modelo sem memória. Não expulsar nenhum TOOL_RESULT
+176: pelo slice50, trimming ou avanço do cursor. Nesta primeira fatia não há
+177: liberação semântica/compactação de resultados. Observações opcionais de
+178: outros tipos podem sair inteiras; nunca remover o original de ferramenta.
+179: Se não houver slot, parar antes da próxima ferramenta. O cursor e a decisão
+180: aceita são gravados no mesmo checkpoint antes do próximo despacho. Se essa
+181: gravação falhar, nenhum novo corpo é invocado.
+182: 
+183: Antes de invocar ferramenta, o runtime verifica um checkpoint prospectivo
+184: com o estado atual, os campos nativos que serão adicionados e espaço para
+185: um envelope de até36864bytes. Também reserva64KiB de folga para alterações
+186: de estado do passo; não pode confiar apenas em `sizeAtual + outputBytes`.
+187: Se não conseguir limitar os campos que mudarão, recusar a invocação. Após o
+188: retorno, medir o checkpoint real antes de gravar. O limite do wrapper não
+189: substitui a verificação final, nem a disponibilidade do banco.
+190: 
+191: Após resultado SUCCEEDED, o journal/settlement continua autoridade do efeito.
+192: O checkpoint completo é gravado antes da próxima decisão de modelo. Se
+193: output for indisponível, não cabe no contexto ou o save falhar depois do
+194: efeito, interromper. Conservar operationKey, status nativo, provenance e
+195: settlement, sem emitir ACTION_CONFIRMED com base em uma prévia. Falha da
+196: serialização no próprio journal continua falha nativa/efeito incerto;
+469: | ID   | Procedimento exigido e observação que rejeita a implementação                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+470: | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+471: | TR01 | Fábrica pública com capabilities e HybridOrchestrator reais, porta de modelo/counter sintéticos e eco puro: três fixtures anteriores +ASCII4096 +Unicode4096bytes +escapes. Provider deriva resposta somente do frame realmente recebido; valor/bytes/hash/provenance/output final exatos. Qualquer fixture externa usada para fabricar resposta rejeita.                                                                                                                                     |
+472: | TR02 | JSON admissível nas fronteiras: null/boolean/número/objeto/array/string vazia; byte32768/32769, profundidade32/33, nós10000/10001, surrogate, -0, cycle, hole, accessor/toJSON. Valor transformado silenciosamente, getter executado ou envelope truncado rejeitam.                                                                                                                                                                                                                           |
+473: | TR03 | System/usuário/catálogo/histórico/reparo grandes e múltiplos resultados: pedido real igual ao snapshot admitido; zero chamadas se obrigatório não cabe; opcionais removidos inteiros. Limites exato/mais um, contador inválido/ausente, janela e saída insuficientes. A17KiB entregue, decisão pedindo B17KiB e pedido posterior dependente de A+B: conservar ambos e recusar o pedido combinado; jamais admitir sóB por avanço do cursor.                                                    |
+474: | TR04 | Alterar output, summary, hash, IDs, cursor, set obrigatório ou payload no ContextEngine customizado. O runtime deve rejeitar adulteração antes de modelo/corpo; JSON com instrução/approval forjados não concede autoridade. Modelo sintético não prova robustez semântica de LLM real.                                                                                                                                                                                                       |
+475: | TR05 | Reserva antes do modelo, uma cobrança por tentativa e reparo, settlement idempotente e sem débito duplo; timeout/throw/cancel/uso inválido/falha de save/cross-tenant/late result. Falha de pre-save implica zero chamadas; UNKNOWN conserva limites e impede avanço. Disputar CAS inicial e reserva com dois processos, perder fence, repetir token antigo e tentar saveCheckpoint2 simples: um único receipt/call e nenhum bypass de CAS.                                                   |
+476: | TR06 | Checkpoint2 com resultado completo: store memória e PostgreSQL sintético real, perda/recriação do processo e retomada sem novo corpo. Checkpoint1 legado e com/sem TOOL_RESULT, reader antigo, mudança de modo, digest/tenant/version/reserva corrompidos. Comparar valor/bytes/usage/settlement antes/depois, não apenas exit0. Incluir4096U+0000 e chaves comU+0000 no codec V2, base64/padding/hash/UTF-8/JSON inválidos, wrapper/dados grandes e retorno lógico idêntico nos dois stores. |
+477: | TR07 | Efeito sintético confirmado seguido de overflow ou falha de save: um único corpo, operationKey/settlement conservados, objetivo não declarado completo e nenhum replay na retomada. Falha nativa do journal continua incerta. Sem efeito externo real.                                                                                                                                                                                                                                        |
+478: | TR08 | Mais de50observações, várias ferramentas por regras antes do modelo e reserva de espaço próxima8MiB: nenhum TOOL_RESULT, entregue ou não, expulso; recusa pré-corpo quando não cabe; checkpoint jamais truncado.                                                                                                                                                                                                                                                                              |
+479: | TR09 | Modo legado e single_pass, custom ports, SDK/worker consumidores: regressão explícita; opção incompatível falha cedo. Schema de gateway governado aceita a representação comum quando testada diretamente, sem alegar integração de rota que não foi implementada.                                                                                                                                                                                                                            |
+480: | TR10 | Reexecutar diferencial real de dois motores para os novos casos e controles de admissão quando a infra qualificada permitir; preservar testemunho vermelho original. Prova CVG isolada não satisfaz equivalência dos dois motores nem os36cartões.                                                                                                                                                                                                                                            |
+481: 
+482: Fixtures de efeitos são in-memory/puramente sintéticas; usar PostgreSQL
+483: dedicado e claim de recursos antes de execução. Counter/modelo são
+484: substituições declaradas; fábrica, seleção, despacho, composição, journal,
+485: store e retomada alegados devem ser reais. Uma unit test do serializador
+486: não substitui a fatia pública. Injetar ao menos um pedido truncado e um
+487: checkpoint/reservation adulterado para demonstrar rejeição do próprio
+488: observador; controle positivo integral para evitar validador que rejeita tudo.
+FILE packages/harness/src/__tests__/complete-checkpoint-capacity-public.test.ts SHA256 457cfc32c23ac87ad29aefba8a9468e5d4e9709614b38fb4e47877522f2ef909
+34: const traces: unknown[] = []
+35: afterAll(() => {
+36:   if (process.env.CVG_COMPLETE_CAPACITY_EVIDENCE)
+37:     writeFileSync(
+38:       process.env.CVG_COMPLETE_CAPACITY_EVIDENCE,
+39:       JSON.stringify(traces, null, 2) + '\n'
+40:     )
+41: })
+42: const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+43: function unsigned(checkpoint: ExecutionCheckpoint) {
+44:   const { checkpointId, createdAt, digest, ...value } = checkpoint
+45:   void checkpointId
+46:   void createdAt
+47:   void digest
+48:   return value
+49: }
+50: function logicalBytes(checkpoint: ExecutionCheckpoint): number {
+51:   return Buffer.byteLength(
+52:     canonicalizeCompleteJson(unsigned(checkpoint), limits)
+53:   )
+54: }
+55: // Evidence uses a lossless, explicitly labelled recipe to avoid storing many
+56: // identical 8 MiB padding strings. This projection never enters the runtime.
+57: function snapshot(checkpoint: ExecutionCheckpoint) {
+58:   const { fixturePadding, ...resolvedInputs } = checkpoint.state.resolvedInputs
+59:   expect(
+60:     typeof fixturePadding === 'string' || fixturePadding === undefined
+61:   ).toBe(true)
+62:   const padding = typeof fixturePadding === 'string' ? fixturePadding : ''
+63:   const bytes = logicalBytes(checkpoint)
+64:   expect(checkpoint.digest).toBe(
+65:     sha(
+66:       'cvg.checkpoint.v2\n' +
+67:         canonicalizeCompleteJson(unsigned(checkpoint), limits)
+68:     )
+69:   )
+70:   return {
+71:     checkpointWithoutFixturePadding: {
+72:       ...checkpoint,
+73:       state: { ...checkpoint.state, resolvedInputs }
+74:     },
+75:     paddingRecipe: {
+76:       field: 'state.resolvedInputs.fixturePadding',
+77:       present: fixturePadding !== undefined,
+78:       character: 'p',
+79:       repeat: padding.length,
+80:       sha256: sha(padding)
+81:     },
+82:     logicalUnsignedBytes: bytes,
+83:     remainingBytes: COMPLETE_CHECKPOINT_MAX_BYTES - bytes
+84:   }
+85: }
+86: 
+87: describe('SPEC0224 TR08 public prospective checkpoint capacity', () => {
+88:   for (const priorResult of [false, true]) {
+92:         const id = 'synthetic.checkpoint.capacity'
+93:         const pauseStep = priorResult ? 2 : 1
+94:         const attemptStep = pauseStep + 1
+95:         let bodies = 0
+96:         let modelCalls = 0
+97:         const ruleContexts: unknown[] = []
+98:         const bodyCalls: unknown[] = []
+99:         const writes: unknown[] = []
+100:         const call = (step: number): LoopDecision => ({
+101:           decisionType: 'CALL_TOOL',
+102:           reasonCode: 'TOOL_REQUIRED',
+103:           toolId: id,
+104:           toolVersion: '1',
+105:           toolInput: { round: step }
+106:         })
+107:         const rule = (context: StepContext): LoopDecision => {
+108:           ruleContexts.push({
+109:             stepNumber: context.stepNumber,
+110:             observations: structuredClone(context.observations),
+111:             stateSummary: context.stateSummary,
+112:             requiredObservationIds:
+113:               context.toolResultContext?.requiredObservationIds
+114:           })
+115:           if (priorResult && context.stepNumber === 1) return call(1)
+116:           if (context.stepNumber === pauseStep)
+117:             return {
+118:               decisionType: 'ASK_USER',
+119:               reasonCode: 'MISSING_INFORMATION',
+120:               requestedInput: {
+121:                 questionType: 'CLARIFICATION',
+122:                 missingFields: ['syntheticAnswer'],
+123:                 promptIntent: 'Supply the synthetic answer.'
+124:               }
+125:             }
+126:           if (context.stepNumber === attemptStep) return call(attemptStep)
+127:           return {
+128:             decisionType: 'RESPOND',
+129:             reasonCode: 'GOAL_SATISFIED',
+130:             responseText: 'Synthetic capacity control complete.'
+131:           }
+132:         }
+133:         const capabilities = createCapabilityRegistry([
+134:           {
+135:             descriptor: {
+136:               id,
+137:               version: '1',
+138:               description: 'Pure synthetic checkpoint capacity probe',
+139:               inputSchema: { type: 'object' },
+140:               outputSchema: {},
+141:               risk: 'LOW',
+142:               sideEffect: 'NONE',
+143:               idempotent: true,
+144:               requiresApproval: false,
+145:               origin: 'core',
+171:         }
+172:         const store = new InMemoryExecutionStepStore()
+173:         const cas = store.compareAndSwapCheckpoint.bind(store)
+174:         // Read-only observation of genuine CAS: no injected refusal or guard.
+175:         store.compareAndSwapCheckpoint = async (input) => {
+176:           const result = await cas(input)
+177:           const committed = await store.loadCheckpoint(
+178:             input.tenantId,
+179:             input.executionId
+180:           )
+181:           writes.push({ result, next: snapshot(committed!) })
+182:           return result
+183:         }
+184:         const journal = new InMemoryEffectJournal()
+185:         const harness = createOperationalHarness({
+186:           toolResultContext: { version: 1 },
+187:           capabilities,
+188:           effectJournal: journal,
+189:           stepStore: store,
+190:           iterativeOrchestrator: new HybridOrchestrator({
+191:             rules: [rule],
+192:             decisionModel: model
+193:           }),
+194:           modelGateway: model,
+195:           policy: new ScriptedPolicyEngine(),
+196:           approvals: new InMemoryApprovalEngine(),
+197:           audit: new RecordingAuditSink(),
+198:           telemetry: new RecordingTelemetrySink()
+199:         })
+200:         const input = phase3RuntimeInput({
+201:           executionId: `exec_capacity_${remainingBytes}_${priorResult}`,
+202:           capabilityFingerprint: capabilities.compositionFingerprint(),
+203:           agent: phase3AgentProfile({ tools: [id] })
+204:         })
+205:         // Obtain an actual resumable checkpoint and, when requested, an actual
+206:         // native CONFIRMED result. Only the large synthetic data field is seeded.
+207:         const first = await harness.run(input)
+208:         expect(first.stopReason).toBe('NEEDS_USER_INPUT')
+209:         expect(bodies).toBe(priorResult ? 1 : 0)
+210:         const paused = (await store.loadCheckpoint(
+211:           input.tenantId,
+212:           input.executionId!
+213:         ))!
+214:         const base = {
+215:           ...unsigned(paused),
+216:           state: {
+217:             ...paused.state,
+218:             resolvedInputs: {
+219:               ...paused.state.resolvedInputs,
+220:               fixturePadding: ''
+221:             }
+222:           }
+223:         }
+224:         const paddingLength =
+225:           COMPLETE_CHECKPOINT_MAX_BYTES -
+226:           remainingBytes -
+227:           Buffer.byteLength(canonicalizeCompleteJson(base, limits))
+228:         const seeded = sealCheckpoint({
+229:           ...base,
+230:           state: {
+231:             ...base.state,
+232:             resolvedInputs: {
+233:               ...base.state.resolvedInputs,
+234:               fixturePadding: 'p'.repeat(paddingLength)
+235:             }
+236:           }
+237:         })
+238:         expect(logicalBytes(seeded)).toBe(
+239:           COMPLETE_CHECKPOINT_MAX_BYTES - remainingBytes
+240:         )
+241:         expect(
+242:           await store.compareAndSwapCheckpoint({
+243:             tenantId: input.tenantId,
+244:             executionId: input.executionId!,
+245:             expected: {
+246:               checkpointId: paused.checkpointId,
+247:               digest: paused.digest
+248:             },
+249:             next: seeded
+250:           })
+251:         ).toMatchObject({ status: 'APPLIED' })
+252:         const oldResults = seeded.state.observations.filter(
+253:           (o) => o.type === 'TOOL_RESULT'
+254:         )
+255:         const oldJournal = priorResult
+256:           ? await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+257:           : null
+258:         const result = await harness.run({
+259:           ...input,
+260:           resume: { kind: 'user_input', message: 'synthetic answer' }
+261:         })
+262:         const after = (await store.loadCheckpoint(
+263:           input.tenantId,
+264:           input.executionId!
+265:         ))!
+266:         const attemptedJournal = await journal.get(
+267:           input.tenantId,
+268:           `${input.executionId}:s${attemptStep}:${id}`
+269:         )
+270:         const afterResults = after.state.observations.filter(
+271:           (o) => o.type === 'TOOL_RESULT'
+272:         )
+273:         traces.push({
+274:           name: `free-${remainingBytes}-prior-${priorResult}`,
+275:           fixtureProvenance:
+276:             'Real native tool/pause, one CAS adding only synthetic resolvedInputs.fixturePadding, real user resume; no fabricated result/receipt/approval.',
+277:           first,
+278:           before: snapshot(seeded),
+279:           result,
+280:           after: snapshot(after),
+281:           bodies,
+282:           modelCalls,
+283:           bodyCalls,
+284:           oldJournal,
+285:           attemptedJournal,
+286:           steps: await store.listSteps(input.tenantId, input.executionId!),
+287:           ruleContexts,
+288:           writes,
+289:           scope:
+290:             'In-memory public factory, rules only; no model admission/PG/process restart proof. Checkpoint identity and duration may change on refusal; original results and spend must survive.'
+291:         })
+292:         expect(modelCalls).toBe(0)
+293:         expect(
+294:           ruleContexts.some(
+295:             (c) => (c as { stepNumber: number }).stepNumber === attemptStep
+296:           )
+297:         ).toBe(true)
+298:         expect(after.state.resolvedInputs.fixturePadding).toBe(
+299:           'p'.repeat(paddingLength)
+300:         )
+301:         expect(afterResults.slice(0, oldResults.length)).toEqual(oldResults)
+302:         expect(after.state.toolResultContext!.decisionAdmissions).toEqual([])
+303:         expect(after.state.toolResultContext!.deliveredThroughStep).toBe(0)
+304:         for (const field of [
+305:           'modelCalls',
+306:           'inputTokens',
+307:           'outputTokens',
+308:           'costUsd',
+309:           'decisionRepairs'
+310:         ] as const)
+311:           expect(after.budgetUsage[field]).toBe(seeded.budgetUsage[field])
+312:         if (priorResult) {
+313:           expect(oldJournal?.state).toBe('CONFIRMED')
+314:           expect(
+315:             await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+316:           ).toEqual(oldJournal)
+317:         }
+318:         if (refusal) {
+319:           expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+320:           expect(result.response).toBe(
+321:             'CONTEXT_OVERFLOW: Prospective checkpoint cannot reserve full tool result and step overhead.'
+322:           )
+323:           expect(bodies).toBe(priorResult ? 1 : 0)
+324:           expect(afterResults).toEqual(oldResults)
+325:           expect(attemptedJournal).toBeNull()
+326:           expect(after.budgetUsage.toolCalls).toBe(seeded.budgetUsage.toolCalls)
+327:           expect(after.budgetUsage.steps).toBe(seeded.budgetUsage.steps)
+328:           expect(
+329:             (await store.listSteps(input.tenantId, input.executionId!)).some(
+330:               (s) => s.stepNumber === attemptStep
+331:             )
+332:           ).toBe(false)
+333:         } else {
+334:           expect(result.stopReason).toBe('COMPLETED')
+335:           expect(bodies).toBe(priorResult ? 2 : 1)
+336:           expect(attemptedJournal).toMatchObject({
+337:             state: 'CONFIRMED',
+338:             result: { round: attemptStep, full: 'retained' }
+339:           })
+340:           expect(afterResults).toHaveLength(oldResults.length + 1)
+341:           expect(afterResults.at(-1)!.payload).toMatchObject({
+342:             completion: 'COMPLETE',
+343:             output: { round: attemptStep, full: 'retained' }
+344:           })
+345:           expect(after.budgetUsage.toolCalls).toBe(
+346:             seeded.budgetUsage.toolCalls + 1
+347:           )
+348:         }
+349:       }, 60_000)
+350:     }
+FILE packages/harness/src/createOperationalHarness.ts SHA256 08e2c4bd510f00ee280a7b721edd42d680e91a550dfac7c7f49078860986edab
+80:   options: OperationalHarnessOptions
+81: ): OperationalHarness {
+82:   if (
+83:     options.toolResultContext &&
+84:     (!options.iterativeOrchestrator || !options.stepStore)
+85:   ) {
+86:     throw new Error(
+87:       'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+88:     )
+89:   }
+90:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+91:   if (options.capabilities && !options.effectJournal) {
+92:     throw new Error(
+93:       'Capability composition requires an explicit effect journal'
+94:     )
+95:   }
+96:   const tools = resolveTools(options, capabilityFingerprint)
+97:   const singlePass = new SinglePassGovernedRuntime({
+98:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+99:     modelGateway: options.modelGateway,
+100:     policy: options.policy,
+101:     approvals: options.approvals,
+102:     tools,
+103:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+104:     audit: options.audit,
+105:     telemetry: options.telemetry,
+106:     ...(options.pause ? { pause: options.pause } : {}),
+107:     ...(options.effects ? { effects: options.effects } : {}),
+108:     ...(options.log ? { log: options.log } : {}),
+109:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+110:   })
+111: 
+112:   const iterative =
+113:     options.iterativeOrchestrator && options.stepStore
+114:       ? new IterativeGovernedRuntime({
+115:           orchestrator: options.iterativeOrchestrator,
+116:           modelGateway: options.modelGateway,
+117:           policy: options.policy,
+118:           approvals: options.approvals,
+119:           tools,
+120:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+121:           audit: options.audit,
+122:           telemetry: options.telemetry,
+123:           ...(options.pause ? { pause: options.pause } : {}),
+124:           ...(options.effects ? { effects: options.effects } : {}),
+125:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+126:           ...(options.log ? { log: options.log } : {}),
+127:           stepStore: options.stepStore,
+128:           ...(options.toolResultContext
+129:             ? { toolResultContext: options.toolResultContext }
+130:             : {}),
+131:           ...(options.contextEngine
+132:             ? { contextEngine: options.contextEngine }
+133:             : {}),
+134:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+135:           ...(options.sufficiencyEvaluator
+136:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+137:             : {}),
+138:           ...(options.completionEvaluator
+139:             ? { completionEvaluator: options.completionEvaluator }
+140:             : {}),
+141:           ...(options.claimExtractor
+142:             ? { claimExtractor: options.claimExtractor }
+143:             : {}),
+144:           ...(options.clock ? { clock: options.clock } : {})
+145:         })
+146:       : undefined
+147: 
+148:   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+149:     const profile =
+150:       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+151:     if (options.toolResultContext && profile !== 'iterative') {
+152:       throw new Error(
+153:         'complete-tool-v1 is only supported by the iterative profile.'
+154:       )
+155:     }
+156:     return profile
+157:   }
+158: 
+159:   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+160:     const governedInput = capabilityFingerprint
+240:         options.capabilities,
+241:         options.toolResultContext ? prepareCompleteToolResult : undefined
+242:       )
+243:     : options.tools
+244:   if (!baseRegistry) {
+245:     throw new Error(
+246:       'Operational harness composition requires an explicit capability or tool registry'
+247:     )
+248:   }
+249:   const registry = options.toolResultContext
+250:     ? prepareCompleteToolRegistry(baseRegistry)
+251:     : baseRegistry
+252:   if (!options.effectJournal) return registry
+253:   return createJournaledToolRegistry(registry, options.effectJournal, {
+254:     ...options.effectJournalOptions,
+255:     ...(capabilityFingerprint
+256:       ? { compositionFingerprint: capabilityFingerprint }
+257:       : {})
+258:   })
+259: }
+260: 
+261: async function safeAudit(
+262:   options: OperationalHarnessOptions,
+263:   input: RuntimeInput,
+264:   action: string,
+265:   result: string
+266: ): Promise<void> {
+FILE packages/harness/src/context-engine.ts SHA256 daa2dd67bce30d1ec2feed25cad6ab796540a79b399bdf4fa855a6a91f80b522
+81:     this.maxHistoryItems = options.maxHistoryItems ?? 12
+82:   }
+83: 
+84:   public async build(input: ContextBuildInput): Promise<StepContext> {
+85:     const complete = input.toolResultContext?.version === 1
+86:     const recentObservations = complete
+87:       ? [...input.state.observations]
+88:       : input.state.observations.slice(-this.maxObservations)
+89:     const items = this.assembleItems(input, recentObservations)
+90:     const withUserMessage = complete ? items : this.trim(items)
+91:     return {
+92:       ...(complete
+93:         ? {
+94:             toolResultContext: {
+95:               version: 1 as const,
+96:               requiredObservationIds: recentObservations
+97:                 .filter((value) => value.type === 'TOOL_RESULT')
+98:                 .map((value) => value.observationId),
+99:               settledDecisionAdmissionIds:
+100:                 input.state.toolResultContext?.decisionAdmissions
+101:                   .filter(
+102:                     (value) =>
+103:                       value.stepNumber === input.stepNumber &&
+104:                       value.status === 'SETTLED'
+105:                   )
+106:                   .map((value) => value.admissionId) ?? []
+107:             }
+108:           }
+109:         : {}),
+110:       executionId: input.runtime.executionId ?? 'execution_unbound',
+111:       tenantId: input.runtime.tenantId,
+112:       conversationId: input.runtime.conversationId,
+113:       stepNumber: input.stepNumber,
+114:       runtimeProfile: input.profile,
+115:       agentId: input.runtime.agentId,
+116:       agentVersion: input.runtime.agentVersion,
+271:     const contextEntries = Object.entries(input.runtime.context.values)
+272:     for (const [key, value] of contextEntries.slice(0, 10)) {
+273:       items.push(
+274:         item(
+275:           `captured.${key}`,
+276:           'OLDER_CONTEXT',
+277:           'UNTRUSTED',
+278:           'captured-context',
+279:           `${key}: ${safeString(value)}`
+280:         )
+281:       )
+282:     }
+283:     return items
+284:   }
+285: 
+286:   private stateSummary(
+287:     input: ContextBuildInput,
+288:     observations: readonly Observation[]
+289:   ): string {
+290:     const resolved = Object.entries(input.state.resolvedInputs)
+291:       .map(([key, value]) => `${key}=${safeString(value)}`)
+292:       .join(', ')
+293:     const lastObservation = observations[observations.length - 1]
+294:     const parts = [
+295:       `goal=${input.goal}`,
+296:       `step=${input.state.stepNumber}`,
+297:       `observations=${observations.length}`,
+298:       `openQuestions=${input.state.openQuestions.length}`
+299:     ]
+300:     if (resolved) parts.push(`resolved={${resolved}}`)
+301:     if (input.state.pendingApprovalId) {
+302:       parts.push(`pendingApproval=${input.state.pendingApprovalId}`)
+303:     }
+304:     if (input.state.pendingQuestion) {
+305:       parts.push(`pendingQuestion=${input.state.pendingQuestion.promptIntent}`)
+306:     }
+307:     if (input.state.lastEvaluation) {
+308:       parts.push(
+309:         `lastEvaluation=${input.state.lastEvaluation.outcome}/${input.state.lastEvaluation.reasonCode}`
+310:       )
+311:     }
+312:     if (lastObservation) {
+313:       parts.push(
+314:         `lastObservation=${lastObservation.source}/${lastObservation.type}:${lastObservation.summary}`
+315:       )
+316:     }
+317:     return parts.join(' | ')
+318:   }
+319: 
+320:   private trim(items: readonly ContextItem[]): ContextItem[] {
+321:     const selected: ContextItem[] = []
+322:     let used = 0
+323:     for (const priority of PRIORITY_ORDER) {
+324:       const group = items.filter((entry) => entry.priority === priority)
+325:       for (const entry of group) {
+326:         const mandatory = MANDATORY_PRIORITIES.has(entry.priority)
+327:         if (!mandatory && used + entry.tokenEstimate > this.tokenBudget) {
+328:           continue
+329:         }
+330:         selected.push(entry)
+FILE packages/orchestrator/src/hybrid-orchestrator.ts SHA256 9236b3ac271be8ff21c464082f6b933b8adaa6dd713ae53fddffe705e88c4700
+418:   public async decide(
+419:     input: IterativeOrchestratorInput
+420:   ): Promise<IterativeOrchestratorTurn> {
+421:     const context = input.context
+422:     for (const rule of this.rules) {
+423:       const decision = rule(context)
+424:       if (!decision) continue
+425:       const validation = validateLoopDecision(decision)
+426:       if (!validation.valid) {
+427:         throw new OrchestratorDecisionError(
+428:           'decision_invalid',
+429:           `Deterministic rule produced an invalid decision: ${validation.errors.join('; ')}`
+430:         )
+431:       }
+432:       return context.toolResultContext
+433:         ? {
+434:             decision,
+435:             decisionAdmissionIds: [
+436:               ...(context.toolResultContext.settledDecisionAdmissionIds ?? [])
+437:             ]
+438:           }
+439:         : { decision, usage: EMPTY_MODEL_USAGE }
+440:     }
+441: 
+442:     if (context.toolResultContext) return this.decideComplete(input)
+443: 
+444:     if (!this.decisionModel) {
+FILE packages/harness/src/iterative-runtime.ts SHA256 fd2e46d27ea4ab2d0779fa16da7e8766cc079972088119428159401ef7196cbf
+1081:       let decisionAdmissionIds: readonly string[] | undefined
+1082:       let modelDecision = false
+1083: 
+1084:       if (run.state.pendingDecision && run.state.pendingStepNumber) {
+1085:         decision = run.state.pendingDecision
+1086:         stepNumber = run.state.pendingStepNumber
+1087:         run.lastDecision = decision
+1088:       } else if (
+1089:         this.options.toolResultContext &&
+1090:         run.state.toolResultContext?.acceptedDecision
+1091:       ) {
+1092:         const accepted = run.state.toolResultContext.acceptedDecision
+1093:         if (accepted.stepNumber !== run.stepNumber + 1)
+1094:           throw new ToolResultContextError(
+1095:             'STATE_CONFLICT',
+1096:             'Accepted decision is bound to another step.',
+1097:             'STATE_CONFLICT'
+1098:           )
+1099:         decision = accepted.decision
+1100:         stepNumber = accepted.stepNumber
+1101:         decisionAdmissionIds = accepted.decisionAdmissionIds
+1102:         run.lastDecision = decision
+1103:       } else {
+1104:         stepNumber = run.stepNumber + 1
+1105:         if (stepNumber > run.input.budget.maxSteps) {
+1106:           return this.stop('MAX_STEPS', 'Step budget exhausted.')
+1107:         }
+1108:         const decisionResult = await this.decide(run, stepNumber)
+1109:         if (decisionResult.outcome) return decisionResult.outcome
+1110:         decision = sanitizeLoopDecision(decisionResult.decision)
+1111:         decisionAdmissionIds = decisionResult.decisionAdmissionIds
+1112:         modelDecision = decisionResult.modelDecision ?? false
+1113:         run.lastDecision = decision
+1114:       }
+1115: 
+1116:       const validation = this.validateDecision(run, decision)
+1117:       if (!validation.valid) {
+1118:         if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
+1119:         run.lastDecisionErrors = validation.errors
+1120:         const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+1121:         if (
+1122:           (this.options.toolResultContext
+1123:             ? run.usage.decisionRepairs + 1
+1124:             : run.usage.decisionRepairs) <= repairBudget &&
+1125:           !run.state.pendingDecision
+1126:         ) {
+1127:           continue
+1128:         }
+1129:         const capabilityOnly = validation.errors.every((error) =>
+1130:           error.startsWith('capability:')
+1131:         )
+1132:         return this.stop(
+1133:           capabilityOnly ? 'STATE_CONFLICT' : 'MODEL_FAILURE',
+1134:           `Orchestrator decision was rejected: ${validation.errors.join('; ')}`
+1135:         )
+1136:       }
+1137:       run.lastDecisionErrors = []
+1138:       if (this.options.toolResultContext && !run.state.pendingDecision) {
+1139:         const state = run.state.toolResultContext!
+1140:         run.state.toolResultContext = {
+1141:           ...state,
+1142:           deliveredThroughStep: modelDecision
+1143:             ? Math.max(
+1144:                 state.deliveredThroughStep,
+1145:                 ...run.observations
+1146:                   .filter((value) => value.type === 'TOOL_RESULT')
+1147:                   .map((value) => value.stepNumber)
+1148:               )
+1149:             : state.deliveredThroughStep,
+1150:           acceptedDecision: {
+1151:             stepNumber,
+1152:             decision,
+1153:             decisionAdmissionIds: decisionAdmissionIds ?? []
+1154:           }
+1155:         }
+1156:         await this.persistCheckpoint(run)
+1157:       }
+1158: 
+1159:       const signature = decisionSignature(decision)
+1337:     const complete = Boolean(this.options.toolResultContext)
+1338:     const nativeInput = complete ? structuredClone(buildInput) : buildInput
+1339:     const building = this.contextEngine.build(
+1340:       complete ? structuredClone(nativeInput) : nativeInput
+1341:     )
+1342:     const built = complete
+1343:       ? await this.withDeadline(building, this.remainingDuration(run))
+1344:       : await building
+1345:     if (built === DEADLINE_EXCEEDED) {
+1346:       return {
+1347:         outcome: this.stop(
+1348:           'MAX_DURATION',
+1349:           'Context assembly exceeded the execution deadline.'
+1350:         )
+1351:       }
+1352:     }
+1353:     const context = built
+1354:     if (complete) {
+1355:       const native = await new DefaultContextEngine({
+1356:         tokenBudget: context.tokenBudget
+1357:       }).build(nativeInput)
+1358:       validateCompleteStepContext(context, native)
+1359:       for (const observation of run.observations) {
+1360:         if (observation.type === 'TOOL_RESULT') {
+1361:           assertCompleteToolObservation(observation)
+1362:           if (
+1363:             (observation.payload as { completion: string }).completion ===
+1364:             'UNAVAILABLE'
+1365:           ) {
+1366:             throw new ToolResultContextError(
+1367:               'RESULT_UNAVAILABLE',
+1368:               'A complete tool result is unavailable.'
+1369:             )
+1370:           }
+1371:         }
+1961: 
+1962:   private async persistCheckpoint(run: LoopRun): Promise<void> {
+1963:     const checkpoint = sealCheckpoint({
+1964:       executionId: run.executionId,
+1965:       tenantId: run.input.tenantId,
+1966:       checkpointVersion: this.options.toolResultContext ? 2 : 1,
+1967:       runtimeProfile: 'iterative',
+1968:       runtimeVersion: RUNTIME_V2_VERSION,
+1969:       orchestratorVersion: this.orchestratorVersion,
+1970:       stepNumber: run.state.stepNumber,
+1971:       state: {
+1972:         ...run.state,
+1973:         observations: this.options.toolResultContext
+1974:           ? retainCompleteObservations(run.observations)
+1975:           : run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+1976:       },
+1977:       budgetUsage: { ...run.usage }
+1978:     })
+1979:     if (this.options.toolResultContext) {
+1980:       const result = await this.options.stepStore.compareAndSwapCheckpoint!({
+1981:         tenantId: run.input.tenantId,
+1982:         executionId: run.executionId,
+1983:         expected: run.checkpointToken ?? null,
+1984:         next: checkpoint
+1985:       })
+1986:       if (
+1987:         result.status !== 'APPLIED' ||
+1988:         result.token.checkpointId !== checkpoint.checkpointId ||
+1989:         result.token.digest !== checkpoint.digest
+1990:       ) {
+1991:         run.checkpointConflict = true
+1992:         throw new ToolResultContextError(
+1993:           'STATE_CONFLICT',
+1994:           'Checkpoint compare-and-swap did not commit this writer.',
+1995:           'STATE_CONFLICT'
+1996:         )
+1997:       }
+1998:       run.checkpointToken = result.token
+1999:     } else {
+2000:       await this.options.stepStore.saveCheckpoint(checkpoint)
+2001:     }
+2002:   }
+2003: 
+2004:   private preflightCompleteTool(
+2005:     run: LoopRun,
+2006:     decision: LoopDecision,
+2007:     stepNumber: number
+2008:   ): void {
+2009:     if (!this.options.toolResultContext) return
+2010:     const tool = this.options.tools.resolve(
+2011:       decision.toolId ?? '',
+2012:       decision.toolVersion
+2013:     )
+2014:     if (!tool)
+2015:       throw new ToolResultContextError(
+2016:         'STATE_CONFLICT',
+2017:         'Missing native tool.',
+2018:         'STATE_CONFLICT'
+2019:       )
+2020:     if (
+2021:       run.observations.filter((value) => value.type === 'TOOL_RESULT').length >=
+2022:       MAX_CHECKPOINT_OBSERVATIONS
+2023:     ) {
+2024:       throw new ToolResultContextError(
+2025:         'CONTEXT_OVERFLOW',
+2026:         'No retention slot remains before tool dispatch.'
+2027:       )
+2028:     }
+2029:     const placeholder = this.makeObservation(run, {
+2030:       stepId: `step_${run.executionId}_${stepNumber}_tool`,
+2031:       stepNumber,
+2032:       type: 'TOOL_RESULT',
+2033:       source: 'TOOL',
+2034:       trust: 'UNTRUSTED',
+2035:       payload: { status: 'SUCCEEDED', output: 'x'.repeat(32_766) },
+2036:       summary: 'x'.repeat(500),
+2037:       provenance: {
+2038:         sourceId: tool.id,
+2039:         sourceVersion: tool.version,
+2040:         operationKey: this.operationKey(run, stepNumber, tool.id),
+2041:         effectRef: this.operationKey(run, stepNumber, tool.id)
+2042:       }
+2043:     })
+2044:     const prospective = {
+2045:       executionId: run.executionId,
+2046:       tenantId: run.input.tenantId,
+2047:       checkpointVersion: 2,
+2048:       runtimeProfile: 'iterative',
+2049:       runtimeVersion: RUNTIME_V2_VERSION,
+2050:       orchestratorVersion: this.orchestratorVersion,
+2051:       stepNumber: run.state.stepNumber,
+2052:       state: {
+2053:         ...run.state,
+2054:         pendingDecision: decision,
+2055:         pendingStepNumber: stepNumber,
+2056:         observations: retainCompleteObservations([
+2057:           ...run.observations,
+2058:           placeholder
+2059:         ])
+2060:       },
+2061:       budgetUsage: { ...run.usage, toolCalls: run.usage.toolCalls + 1 }
+2062:     }
+2063:     try {
+2064:       // Optional internal fields are absent on the wire. Real saves use the
+2065:       // stricter schema-owned checkpoint codec, not this size-only projection.
+2066:       canonicalizeCompleteJson(JSON.parse(JSON.stringify(prospective)), {
+2067:         maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES - 65_536,
+2068:         maxDepth: 64,
+2069:         maxNodes: 1_000_000
+2070:       })
+2071:     } catch {
+2072:       throw new ToolResultContextError(
+2073:         'CONTEXT_OVERFLOW',
+2074:         'Prospective checkpoint cannot reserve full tool result and step overhead.'
+2075:       )
+2076:     }
+2077:   }
+2078: 
+2079:   private operationKey(
+2080:     run: LoopRun,
+FILE packages/harness/src/iterative-dispatch.ts SHA256 0a496a62bfe3f1bef26c17b956e52a071dfd177531fe4a763bca2dcc9923c9d9
+335: export async function dispatchTool(
+336:   ctx: IterativeDispatchContext,
+337:   run: LoopRun,
+338:   decision: LoopDecision,
+339:   stepNumber: number,
+340:   forceApproval: boolean
+341: ): Promise<DispatchOutcome> {
+342:   // A previous successful dispatch is trajectory evidence, not the result
+343:   // of this attempt. Only this dispatch's success may populate toolResult.
+344:   run.lastToolObservation = null
+345:   // A resumed in-flight step was already counted when it reached dispatch.
+346:   const alreadyCounted =
+347:     run.inFlightCounted && run.state.pendingStepNumber === stepNumber
+348:   if (
+349:     !alreadyCounted &&
+350:     run.usage.toolCalls + 1 > run.input.budget.maxToolCalls
+351:   ) {
+352:     return ctx.stop(
+353:       'MAX_TOOL_CALLS',
+354:       'Tool-call budget exhausted before the tool could run.'
+355:     )
+356:   }
+357:   const tool = ctx.options.tools.resolve(
+358:     decision.toolId as string,
+359:     decision.toolVersion
+360:   )
+361:   if (!tool) {
+362:     return ctx.stop(
+363:       'STATE_CONFLICT',
+364:       `Tool "${decision.toolId}" is unavailable.`
+365:     )
+366:   }
+367:   const operationKey = ctx.operationKey(run, stepNumber, tool.id)
+368:   if (ctx.options.toolResultContext) {
+369:     if (!ctx.preflightCompleteTool)
+370:       return ctx.stop(
+371:         'STATE_CONFLICT',
+372:         'Complete tool dispatch requires its native capacity guard.'
+373:       )
+374:     ctx.preflightCompleteTool(run, decision, stepNumber)
+375:   }
+376:   const invocation = {
+377:     toolId: tool.id,
+378:     ...(tool.version ? { toolVersion: tool.version } : {}),
+379:     input: decision.toolInput ?? {},
+380:     operationKey
+381:   }
+382:   if (ctx.remainingDuration(run) <= 0) {
+383:     return ctx.stop(
+384:       'MAX_DURATION',
+385:       'Duration budget exhausted before tool execution.'
+386:     )
+387:   }
+388: 
+389:   const stepId = `step_${run.executionId}_${stepNumber}_tool`
+FILE packages/harness/src/step-store.ts SHA256 c3f0c81baacb1a4c523d87acab9201feabeb67e41b494d0803cc9eda5882e0c9
+210:   }
+211: 
+212:   public async compareAndSwapCheckpoint(
+213:     input: CheckpointCompareAndSwapInput
+214:   ): Promise<CheckpointCompareAndSwapResult> {
+215:     // The entire comparison/validation/replacement is synchronous: no await gap.
+216:     validateCheckpointIntegrity(input.next, input)
+217:     const identity = key(input.tenantId, input.executionId)
+218:     const current = this.checkpoints.get(identity) ?? null
+219:     if (current) validateCheckpointIntegrity(current, input)
+220:     if (
+221:       input.expected &&
+222:       input.expected.checkpointId === input.next.checkpointId
+223:     ) {
+224:       throw new CheckpointError(
+225:         'checkpoint_integrity',
+226:         'CAS requires a fresh checkpoint ID'
+227:       )
+228:     }
+229:     const token = current
+230:       ? { checkpointId: current.checkpointId, digest: current.digest }
+231:       : undefined
+232:     if (
+233:       input.expected === null
+234:         ? current !== null
+235:         : !current ||
+236:           input.expected.checkpointId !== current.checkpointId ||
+237:           input.expected.digest !== current.digest
+238:     ) {
+239:       return { status: 'CONFLICT', ...(token ? { currentToken: token } : {}) }
+240:     }
+241:     validateCompleteCheckpointTransition(current, input.next)
+242:     const next = copy(input.next)
+243:     if (next.checkpointVersion === 2) {
+244:       // Exercise the same physical codec as persistent storage without leaking its wrapper to callers.
+245:       const state = decodeCompleteCheckpointState(
+246:         encodeCompleteCheckpointState(next.state)
+247:       )
+248:       this.checkpoints.set(identity, { ...next, state })
+249:     } else this.checkpoints.set(identity, next)
+250:     return {
+251:       status: 'APPLIED',
+252:       token: { checkpointId: next.checkpointId, digest: next.digest }
+253:     }
+254:   }
+255: 
+256:   public async loadCheckpoint(
+257:     tenantId: string,
+258:     executionId: string
+259:   ): Promise<ExecutionCheckpoint | null> {
+260:     const checkpoint = this.checkpoints.get(key(tenantId, executionId))
+261:     if (!checkpoint) return null
+262:     validateCheckpointIntegrity(checkpoint, { tenantId, executionId })
+263:     return copy(checkpoint)
+264:   }
+265: }
+266: 
+267: export function createInMemoryExecutionStepStore(): InMemoryExecutionStepStore {
+268:   return new InMemoryExecutionStepStore()
+269: }
+FILE packages/harness/src/effect-journal.ts SHA256 4be83546e0898429d8c0fcc8ce74d6c02fe15d4f74106d4a873bab53cb61261c
+174:   public fail(input: {
+175:     tenantId: string
+176:     operationKey: string
+177:     attemptId: string
+178:     error: string
+179:   }): Promise<EffectJournalRecord> {
+180:     return this.transition(input, 'FAILED', {
+181:       error: bounded(input.error, 'error')
+182:     })
+183:   }
+184: 
+185:   public markUncertain(input: {
+186:     tenantId: string
+187:     operationKey: string
+188:     attemptId: string
+189:     reason: string
+190:   }): Promise<EffectJournalRecord> {
+191:     return this.transition(input, 'UNCERTAIN', {
+192:       error: bounded(input.reason, 'reason')
+193:     })
+194:   }
+195: 
+196:   public async get(
+197:     tenantId: string,
+198:     operationKey: string
+199:   ): Promise<EffectJournalRecord | null> {
+200:     const record = this.records.get(key(tenantId, operationKey))
+201:     return record ? clone(record) : null
+202:   }
+203: 
+342:         operationKey,
+343:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+344:         attemptId
+345:       })
+346:       if (reservation.state === 'CONFIRMED') {
+347:         return { status: 'SUCCEEDED', output: reservation.result }
+348:       }
+349:       if (
+350:         reservation.state === 'UNCERTAIN' ||
+351:         reservation.state === 'EFFECT_STARTED'
+352:       ) {
+353:         return {
+354:           status: 'REJECTED',
+355:           error:
+356:             'unknown_effect: explicit reconciliation is required before retry'
+357:         }
+358:       }
+359:       if (reservation.attemptId !== attemptId) {
+360:         return {
+361:           status: 'REJECTED',
+362:           error:
+363:             'unknown_effect: an existing reservation requires reconciliation'
+364:         }
+365:       }
+366:       await journal.markStarted({
+367:         tenantId: context.tenantId,
+368:         operationKey,
+369:         attemptId
+370:       })
+371:       try {
+372:         const result = await tool.execute(input, context)
+373:         if (
+374:           options.crashAfterEffectBeforeConfirm &&
+375:           result.status === 'SUCCEEDED'
+376:         ) {
+377:           await journal.markUncertain({
+378:             tenantId: context.tenantId,
+379:             operationKey,
+380:             attemptId,
+381:             reason: 'synthetic crash after effect before confirmation'
+382:           })
+383:           return {
+384:             status: 'REJECTED',
+385:             error:
+386:               'unknown_effect: synthetic crash after effect before confirmation'
+387:           }
+388:         }
+389:         if (result.status === 'SUCCEEDED') {
+390:           await journal.confirm({
+391:             tenantId: context.tenantId,
+392:             operationKey,
+393:             attemptId,
+394:             result: result.output
+395:           })
+396:         } else {
+397:           await journal.fail({
+398:             tenantId: context.tenantId,
+399:             operationKey,
+400:             attemptId,
+401:             error: result.error ?? 'tool failed'
+402:           })
+403:         }
+404:         return result
+405:       } catch (error) {
+406:         const message =
+407:           error instanceof Error ? error.message : 'tool execution failed'
+408:         await journal.markUncertain({
+409:           tenantId: context.tenantId,
+410:           operationKey,
+411:           attemptId,
+412:           reason: `unknown effect after executor failure: ${message}`
+413:         })
+414:         return {
+415:           status: 'REJECTED',
+416:           error: 'unknown_effect: executor outcome is uncertain'
+417:         }
+418:       }
+419:     }
+420:   }
+421:   return wrapped
+422: }
+FILE packages/harness/src/complete-checkpoint.ts SHA256 4962fe127711c930c181388acde9214403288de374a762df9447f360b28cc8f0
+466:   canonicalizeCompleteJson(state, LIMITS)
+467:   return state
+468: }
+469: 
+470: function normalizedUnsigned(value: unknown): UnsignedCheckpoint {
+471:   preflight(value)
+472:   const unsigned = unsignedSchema(value) as UnsignedCheckpoint
+473:   validateState(unsigned.state, unsigned)
+474:   canonicalizeCompleteJson(unsigned, LIMITS)
+475:   if (
+476:     unsigned.state.stepNumber !== unsigned.stepNumber ||
+477:     unsigned.budgetUsage.steps < unsigned.stepNumber
+478:   )
+479:     fail('Checkpoint step mismatch')
+480:   const sum = { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
+481:   let repairs = 0
+482:   for (const r of unsigned.state.toolResultContext!.decisionAdmissions) {
+483:     for (const key of Object.keys(sum) as (keyof typeof sum)[]) {
+484:       sum[key] +=
+485:         r.status === 'SETTLED'
+486:           ? r.actual![key]
+487:           : Math.max(r.reserved[key], r.actual?.[key] ?? 0)
+488:     }
+489:     if (r.purpose === 'REPAIR') repairs++
+490:   }
+491:   for (const key of Object.keys(sum) as (keyof typeof sum)[]) {
+492:     if (unsigned.budgetUsage[key] + (key === 'costUsd' ? 1e-12 : 0) < sum[key])
+493:       fail('Budget does not cover admission ledger')
+494:   }
+495:   if (unsigned.budgetUsage.decisionRepairs < repairs)
+496:     fail('Repair budget does not cover ledger')
+497:   return unsigned
+498: }
+499: 
+500: export function completeCheckpointDigest(unsigned: UnsignedCheckpoint): string {
+501:   return sha(
+502:     'cvg.checkpoint.v2\n' +
+503:       canonicalizeCompleteJson(normalizedUnsigned(unsigned), LIMITS)
+504:   )
+505: }
+506: 
+507: export function encodeCompleteCheckpointState(
+508:   state: AgentLoopState
+509: ): CompleteCheckpointStorageState {
+510:   const raw = canonicalizeCompleteJson(normalizedState(state), LIMITS)
+511:   const bytes = Buffer.from(raw, 'utf8')
+512:   return {
+513:     storageCodec: 'cvg.checkpoint-state/2',
+514:     encoding: 'base64',
+607: export function decodeCompleteCheckpointState(raw: unknown): AgentLoopState {
+608:   try {
+609:     if (typeof raw === 'string') {
+610:       if (Buffer.byteLength(raw) > COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES)
+611:         fail('Physical checkpoint limit')
+612:       boundedJsonText(raw)
+613:       raw = JSON.parse(raw) as unknown
+614:     }
+615:     const wrapper = record({
+616:       storageCodec: one('cvg.checkpoint-state/2'),
+617:       encoding: one('base64'),
+618:       decodedBytes: integer,
+619:       decodedSha256: digest,
+620:       data: str
+621:     })(raw) as CompleteCheckpointStorageState
+622:     if (
+623:       wrapper.decodedBytes > COMPLETE_CHECKPOINT_MAX_BYTES ||
+624:       wrapper.data.length > COMPLETE_CHECKPOINT_DATA_MAX_CHARS
+625:     )
+626:       fail('Physical checkpoint limit')
+627:     if (
+628:       Buffer.byteLength(
+629:         canonicalizeCompleteJson(wrapper, {
+630:           ...LIMITS,
+631:           maxBytes: COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES
+632:         })
+633:       ) > COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES
+634:     )
+635:       fail()
+636:     if (
+637:       wrapper.data.length !== 4 * Math.ceil(wrapper.decodedBytes / 3) ||
+638:       !/^[A-Za-z0-9+/]*={0,2}$/.test(wrapper.data)
+639:     )
+640:       fail('Invalid base64')
+641:     const bytes = Buffer.from(wrapper.data, 'base64')
+642:     if (
+643:       bytes.length !== wrapper.decodedBytes ||
+644:       bytes.toString('base64') !== wrapper.data ||
+645:       sha(bytes) !== wrapper.decodedSha256
+646:     )
+647:       fail('Physical checkpoint integrity mismatch')
+648:     const text = new TextDecoder('utf-8', {
+649:       fatal: true,
+650:       ignoreBOM: true
+651:     }).decode(bytes)
+652:     boundedJsonText(text)
+653:     const state = normalizedState(JSON.parse(text) as unknown)
+654:     if (canonicalizeCompleteJson(state, LIMITS) !== text)
+655:       fail('Noncanonical checkpoint state')
+656:     return state
+664: export function validateCompleteCheckpointTransition(
+665:   current: ExecutionCheckpoint | null,
+666:   next: ExecutionCheckpoint
+667: ): void {
+668:   if (!current) return
+669:   if (current.checkpointId === next.checkpointId)
+670:     fail('Checkpoint ID must change on every CAS')
+671:   const fromLegacy =
+672:     current.checkpointVersion === 1 &&
+673:     next.checkpointVersion === 2 &&
+674:     !current.state.observations.some((o) => o.type === 'TOOL_RESULT')
+675:   if (current.checkpointVersion !== next.checkpointVersion && !fromLegacy)
+676:     fail('Checkpoint mode cannot change through CAS')
+677:   if (next.checkpointVersion !== 2) return
+678:   if (
+679:     current.runtimeProfile !== next.runtimeProfile ||
+680:     current.runtimeVersion !== next.runtimeVersion ||
+681:     current.orchestratorVersion !== next.orchestratorVersion ||
+682:     current.state.capabilityFingerprint !== next.state.capabilityFingerprint ||
+683:     current.state.goal !== next.state.goal ||
+684:     next.stepNumber < current.stepNumber ||
+685:     next.state.toolResultContext!.deliveredThroughStep <
+686:       (current.state.toolResultContext?.deliveredThroughStep ?? 0)
+687:   )
+688:     fail('Checkpoint binding or cursor changed')
+689:   if (fromLegacy) return
+690:   const accepted = current.state.toolResultContext!.acceptedDecision
+691:   if (
+692:     accepted &&
+693:     next.stepNumber < accepted.stepNumber &&
+694:     canonicalizeCompleteJson(accepted, LIMITS) !==
+695:       canonicalizeCompleteJson(
+696:         next.state.toolResultContext!.acceptedDecision,
+697:         LIMITS
+698:       )
+699:   )
+700:     fail('Accepted decision cannot change before its step completes')
+701:   const nextObservations = new Map(
+702:     next.state.observations.map((o) => [o.observationId, o])
+703:   )
+704:   for (const old of current.state.observations) {
+705:     if (
+706:       old.type === 'TOOL_RESULT' &&
+707:       canonicalizeCompleteJson(
+708:         nextObservations.get(old.observationId),
+709:         LIMITS
+710:       ) !== canonicalizeCompleteJson(old, LIMITS)
+711:     )
+712:       fail('Tool observation retention violated')
+713:   }
+714:   const receipts = new Map(
+715:     next.state.toolResultContext!.decisionAdmissions.map((r) => [
+716:       r.admissionId,
+FILE packages/harness/src/__tests__/fixtures/phase3-fixtures.ts SHA256 7455a3a9762c24b7d11c6c1f880e8c4f3824b2ad672714c16be0237453c8fd16
+39:     agent: phase3AgentProfile(),
+40:     tenantId: PHASE3_TENANT,
+41:     executionId: 'exec_phase3_fixture',
+42:     conversationId:
+43:       'conversation_phase3_fixture' as RuntimeInput['conversationId'],
+44:     sessionId: 'session_phase3_fixture' as RuntimeInput['sessionId'],
+45:     correlationId:
+46:       'correlation_phase3_fixture' as RuntimeInput['correlationId'],
+47:     traceId: 'trace_phase3_fixture' as RuntimeInput['traceId'],
+48:     userMessage: 'phase 3 controlled fixture',
+49:     context: {
+50:       values: { fixture: 'phase3' },
+51:       sourceIds: ['phase3-fixture'],
+52:       capturedAt: '2026-09-15T00:00:00.000Z'
+53:     },
+54:     state: { version: 1, values: {}, updatedAt: '2026-09-15T00:00:00.000Z' },
+55:     budget: {
+56:       maxSteps: 8,
+57:       maxModelCalls: 4,
+58:       maxToolCalls: 4,
+59:       maxDurationMs: 30_000,
+60:       maxCostUsd: 1,
+61:       maxTokens: 4_000,
+62:       maxKnowledgeCalls: 3,
+63:       maxReplans: 2,
+64:       maxVerificationCalls: 3,
+65:       maxDecisionRepairs: 1
+66:     },
+67:     runtimeProfile: 'iterative',
+68:     ...overrides
+69:   }
+70: }
+71: 
+72: export function phase3AgentProfile(
+73:   overrides: Partial<AgentProfile> = {}
+74: ): AgentProfile {
+75:   return {
+76:     id: 'agent.phase3.synthetic' as AgentProfile['id'],
+77:     version: 'v1' as AgentProfile['version'],
+78:     objective: 'Complete the synthetic operational goal.',
+79:     instructions: ['synthetic only', 'never act without authorization'],
+80:     skills: [],
+81:     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+82:     policies: ['synthetic-only'],
+83:     ...overrides

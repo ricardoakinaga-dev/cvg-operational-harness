@@ -1,0 +1,40 @@
+import pathlib,json,hashlib,subprocess,datetime
+root=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+b=root/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-diagnostics-build'
+w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate')
+q=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-diagnostics-build/qualification')
+out=b/'qualification-r1'
+def sha(raw):return hashlib.sha256(raw).hexdigest()
+def at():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def write(p,d):p.write_text(json.dumps(d,indent=2,ensure_ascii=False)+'\n')
+launch=json.loads((q/'launch.json').read_text());assert launch['state']=='COMPLETED','Current qualification still active; do not finalize'
+assert not (out/'finalize-start.json').exists(),'No duplicate finalization without inspection'
+assert launch['head']=='99c9e5bce5e5ffb9e19ab56a9b294085ff1bad68'
+write(out/'finalize-start.json',{'at':at(),'launch_sha256':sha((q/'launch.json').read_bytes()),'controller_sha256':sha(pathlib.Path(__file__).read_bytes())})
+records=[]
+for f in ['launch.json','resources.json','resource-commands.json','source-preflight.json','certify.log']:
+ raw=(q/f).read_bytes();(out/f).write_bytes(raw);records.append({'source':str(q/f),'path':f,'sha256':sha(raw),'bytes':len(raw)})
+env=launch['environment'];argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','scripts/phase10-verify.mjs'];started=at();p=subprocess.run(argv,cwd=w,env=env,capture_output=True,timeout=120)
+(out/'verify.stdout.log').write_bytes(p.stdout);(out/'verify.stderr.log').write_bytes(p.stderr)
+write(out/'verify-command.json',{'argv':argv,'cwd':str(w),'environment':env,'started_at':started,'ended_at':at(),'exit':p.returncode})
+result=json.loads((w/'certification/phase10-result.json').read_text());manifest=json.loads((w/'certification/manifest.json').read_text())
+import re
+match=re.search(r'\[certify\] candidate=([0-9a-f]{64}) run=(\S+)',(q/'certify.log').read_text());assert match,'Missing current launch binding'
+assert result['candidate']['candidateId']==match[1] and result['runId']==match[2],'Final result is stale/different run; do not use inherited certificate'
+assert manifest['candidateId']==match[1] and manifest['runId']==match[2],'Final manifest not current launch'
+artifacts={x['path']:x for x in manifest['artifacts']};extra=['certification/phase10-result.json','certification/manifest.json','certification/candidate-manifest.json','certification/skip-inventory.json','coverage/coverage-summary.json'];errors=[];optional_missing=[]
+for rel in sorted(set(artifacts)|set(extra)):
+ src=w/rel
+ if not src.exists():
+  (errors if rel in artifacts else optional_missing).append({'path':rel,'error':'missing'});continue
+ assert src.resolve().is_relative_to(w.resolve()),'Artifact outside own candidate'
+ raw=src.read_bytes();dest=out/'artifacts'/rel;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw)
+ expected=artifacts.get(rel,{});match=not expected or (expected['sha256']==sha(raw) and expected['size']==len(raw))
+ if not match:errors.append({'path':rel,'error':'manifest_hash_or_size_mismatch'})
+ records.append({'source':str(src),'path':str(dest.relative_to(out)),'sha256':sha(raw),'bytes':len(raw),'official_artifact':rel in artifacts,'official_hash_match':match})
+freeze=json.loads((b/'source-freeze-r1.json').read_text());source_errors=[]
+for row in freeze['files']:
+ raw=(w/row['path']).read_bytes()
+ if sha(raw)!=row['sha256']:source_errors.append(row['path'])
+summary={'at':at(),'task':'C100-FND-DIAGNOSTICS-BUILD-001','head':launch['head'],'candidate_id':result['candidate']['candidateId'],'run_id':result['runId'],'certify_exit':launch['exit'],'official_verifier_exit':p.returncode,'gates':[{k:x.get(k) for k in ['id','status','exitCode','durationMs']} for x in result['gates']],'decision':result['decision'],'certification':result['certification'],'metrics':result['metrics'],'official_manifest_artifacts':len(manifest['artifacts']),'artifact_hash_errors':errors,'optional_outputs_missing':optional_missing,'frozen_sources_checked':len(freeze['files']),'frozen_source_errors':source_errors,'source_git_diff':subprocess.check_output(['git','diff','--name-only','HEAD'],cwd=w,text=True).splitlines(),'integration_allowed':launch['exit']==0 and p.returncode==0 and not errors and not source_errors,'functional_credit':0,'root_promoted':False}
+write(out/'summary.json',summary);write(out/'capture-manifest.json',{'at':at(),'artifacts':records,'qualification_is_not_implied_by_hash_match':True});print(json.dumps({'certify_exit':launch['exit'],'verify_exit':p.returncode,'gate_statuses':[(x['id'],x['status']) for x in result['gates']],'artifact_hash_errors':errors,'source_errors':source_errors,'integration_allowed':summary['integration_allowed']}),flush=True)

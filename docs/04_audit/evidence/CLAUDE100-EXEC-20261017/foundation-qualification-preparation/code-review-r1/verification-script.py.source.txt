@@ -1,0 +1,221 @@
+import collections
+import datetime
+import hashlib
+import json
+import pathlib
+import re
+import subprocess
+
+ROOT = pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+PACKET = ROOT / 'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-qualification-preparation'
+OUT = PACKET / 'code-review-r1'
+CANDIDATE = pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-candidate')
+PREP = pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-qualification-preparation')
+BASE = '99c9e5bce5e5ffb9e19ab56a9b294085ff1bad68'
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+def write(name, value):
+    (OUT / name).write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(CANDIDATE), *args])
+
+def snapshot(name, data):
+    dest = OUT / 'snapshots' / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return str(dest.relative_to(OUT))
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result, 'Duplicate JSON key: ' + key
+        result[key] = value
+    return result
+
+def load(data):
+    return json.loads(data, object_pairs_hook=unique_object)
+
+def delta(old, new, prefix=()):
+    if type(old) is not type(new):
+        return [{'op': 'replace', 'path': list(prefix), 'old': old, 'new': new}]
+    if isinstance(old, dict):
+        changes = []
+        for key in sorted(old.keys() | new.keys()):
+            if key not in old:
+                changes.append({'op': 'add', 'path': list(prefix + (key,)), 'new': new[key]})
+            elif key not in new:
+                changes.append({'op': 'remove', 'path': list(prefix + (key,)), 'old': old[key]})
+            else:
+                changes.extend(delta(old[key], new[key], prefix + (key,)))
+        return changes
+    if old != new:
+        return [{'op': 'replace', 'path': list(prefix), 'old': old, 'new': new}]
+    return []
+
+head = git('rev-parse', 'HEAD').decode().strip()
+status = git('status', '--porcelain=v1', '--untracked-files=all').decode()
+assert head == BASE
+assert sorted(status.splitlines()) == [' M package-lock.json', ' M packages/persistence/package.json']
+raw_diff = git('diff', '--no-ext-diff', '--', 'package-lock.json', 'packages/persistence/package.json')
+(OUT / 'candidate.diff.source.txt').write_bytes(raw_diff)
+assert len([line for line in raw_diff.splitlines() if line.startswith(b'+') and not line.startswith(b'+++')]) == 2
+assert not [line for line in raw_diff.splitlines() if line.startswith(b'-') and not line.startswith(b'---')]
+paths = ['packages/persistence/package.json', 'package-lock.json']
+changes = []
+objects = {}
+for name in paths:
+    current_bytes = (CANDIDATE / name).read_bytes()
+    base_bytes = git('show', 'HEAD:' + name)
+    current, base = load(current_bytes), load(base_bytes)
+    expected_path = ['devDependencies', 'typescript'] if name == paths[0] else ['packages', 'packages/persistence', 'devDependencies', 'typescript']
+    actual = delta(base, current)
+    assert actual == [{'op': 'add', 'path': expected_path, 'new': '^6.0.3'}]
+    changes.append(dict(path=name, delta=actual, sha256=sha(current_bytes), base_sha256=sha(base_bytes), base_snapshot=snapshot('base/' + name + '.source.txt', base_bytes)))
+    objects[name] = (base, current)
+
+root = load((CANDIDATE / 'package.json').read_bytes())
+old_lock, lock = objects['package-lock.json']
+installed = load((CANDIDATE / 'node_modules/typescript/package.json').read_bytes())
+assert root['devDependencies']['typescript'] == '^6.0.3'
+assert lock['packages']['']['devDependencies']['typescript'] == '^6.0.3'
+assert installed['version'] == lock['packages']['node_modules/typescript']['version'] == '6.0.3'
+assert old_lock['packages']['node_modules/typescript'] == lock['packages']['node_modules/typescript']
+assert objects[paths[0]][1]['private'] is True
+imports = []
+for source in sorted((CANDIDATE / 'packages/persistence/src').rglob('*')):
+    if source.is_file() and source.suffix in ('.ts', '.tsx', '.js', '.mjs'):
+        for line_num, line in enumerate(source.read_text().splitlines(), 1):
+            if re.search(r"(?:from\s*|import\s*\(|require\s*\()['\"]typescript['\"]", line):
+                imports.append(dict(path=str(source.relative_to(CANDIDATE)), line=line_num, text=line))
+assert imports and all('/__tests__/' in item['path'] for item in imports)
+write('structural-analysis.json', dict(observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), head=head, status=status, exact_two_additions=True, complete_json_comparison=True, duplicate_keys_rejected=True, changes=changes, all_other_lock_nodes_identical=True, typescript_node=lock['packages']['node_modules/typescript'], root_range=root['devDependencies']['typescript'], installed_version=installed['version'], test_only_imports=imports, method='Read current bytes and HEAD blobs; recursively compare every JSON value, including full lock package map; no generator rerun'))
+
+# Preserve raw producer evidence without using its summary as the verdict.
+producer = []
+for file in sorted(PACKET.rglob('*')):
+    relative = file.relative_to(PACKET)
+    if file.is_file() and relative.parts[0] not in ('resource-recon', 'code-review-r1'):
+        data = file.read_bytes()
+        local = snapshot('producer/' + str(relative) + '.source.txt', data)
+        producer.append(dict(path=str(relative), bytes=len(data), sha256=sha(data), snapshot=local))
+write('producer-artifacts-manifest.json', dict(artifacts=producer, provenance='Producer bytes observed by independent critic; hashes authenticate retained bytes, not historical process execution'))
+manifest = ''.join(f"{v['sha256']}  {v['snapshot']}\n" for v in producer)
+(OUT / 'producer-artifacts.manifest.sha256').write_text(manifest)
+(OUT / 'producer-artifacts.manifest.sha256.sha256').write_text(sha(manifest.encode()) + '  producer-artifacts.manifest.sha256\n')
+
+commands = {}
+for name in ['lock-generator', 'runtime-build', 'sandbox-prerequisite', 'runtime-build-r2', 'original-three-suites']:
+    cmd = load((PACKET / name / 'command.json').read_bytes())
+    assert cmd['cwd'] == str(CANDIDATE)
+    commands[name] = dict(argv=cmd['argv'], exit=cmd['exit'], started_at=cmd['started_at'])
+assert commands['lock-generator']['argv'] == ['npm', 'install', '--package-lock-only', '--offline', '--ignore-scripts', '--no-audit', '--no-fund']
+assert [commands[n]['exit'] for n in commands] == [0, 1, 0, 0, 1]
+assert 'TS2307' in (PACKET / 'runtime-build/stdout.log').read_text()
+assert "Cannot find module '@cvg/sandbox'" in (PACKET / 'runtime-build/stdout.log').read_text()
+assert (PACKET / 'build-prerequisite-entry.json').stat().st_size
+amendment = load((PACKET / 'build-prerequisite-entry.json').read_bytes())
+assert amendment['at'] < commands['sandbox-prerequisite']['started_at']
+assert commands['sandbox-prerequisite']['started_at'] < commands['runtime-build-r2']['started_at']
+build_source = (CANDIDATE / 'scripts/build-runtime.mjs').read_text()
+runtime_list = re.search(r'export const RUNTIME_WORKSPACES = \[(.*?)\n\]', build_source, re.S).group(1)
+runtime_workspaces = re.findall(r"^  '([^']+)'", runtime_list, re.M)
+assert len(runtime_workspaces) == 19 and 'packages/sandbox' not in runtime_workspaces
+public_source = (CANDIDATE / 'scripts/build-public-workspace.mjs').read_text()
+assert 'paths: {}' in public_source and 'noEmitOnError: true' in public_source
+workspace_by_name = {}
+for pattern in root['workspaces']:
+    for directory in sorted(CANDIDATE.glob(pattern)):
+        file = directory / 'package.json'
+        if file.is_file():
+            pkg = load(file.read_bytes())
+            workspace_by_name[pkg['name']] = (str(directory.relative_to(CANDIDATE)), pkg)
+seen = set()
+ordered = []
+def visit(name):
+    if name in seen:
+        return
+    seen.add(name)
+    workspace, pkg = workspace_by_name[name]
+    for dependency in pkg.get('dependencies', {}):
+        if dependency in workspace_by_name:
+            visit(dependency)
+    ordered.append(workspace)
+visit('@cvg/sandbox')
+prerequisite = load((PACKET / 'sandbox-prerequisite/stdout.log').read_bytes())
+assert ordered == prerequisite['workspaces'] == ['packages/contracts', 'packages/sandbox']
+assert prerequisite['sourceAliases'] is False
+outputs = load((PACKET / 'emitted-inputs.json').read_bytes())['outputs']
+for output in outputs:
+    data = (CANDIDATE / output['path']).read_bytes()
+    assert sha(data) == output['sha256'] and len(data) == output['bytes']
+    output['snapshot'] = snapshot('emits/' + output['path'] + '.source.txt', data)
+context = PREP / 'tmp/cvg-runtime-prepared'
+context_meta = load((context / 'runtime-context.json').read_bytes())
+assert context_meta['compiledWorkspaces'] == runtime_workspaces
+assert not (context / 'packages/sandbox/dist').exists()
+assert (context / 'packages/sandbox/package.json').is_file()
+config_dir = PREP / 'tmp/cvg-runtime-tsconfigs'
+config_base = load((config_dir / 'base.json').read_bytes())
+assert config_base['compilerOptions']['noEmitOnError'] is True
+assert 'paths' not in config_base['compilerOptions']
+generated = []
+for kind, parent, files in [('runtime-configs', config_dir, sorted(config_dir.glob('*.json'))), ('context-metadata', context, [context / 'runtime-context.json'])]:
+    for file in files:
+        data = file.read_bytes()
+        generated.append(dict(kind=kind, path=str(file.relative_to(parent)), sha256=sha(data), snapshot=snapshot(kind + '/' + str(file.relative_to(parent)) + '.source.txt', data)))
+artifact_inventory = []
+for kind, parent, workspaces in [('candidate', CANDIDATE, runtime_workspaces + ['packages/sandbox']), ('context', context, runtime_workspaces)]:
+    for workspace in workspaces:
+        files = sorted((parent / workspace / 'dist').rglob('*'))
+        assert files
+        for file in files:
+            if file.is_file():
+                assert not file.is_symlink()
+                data = file.read_bytes()
+                artifact_inventory.append(dict(root=kind, path=str(file.relative_to(parent)), bytes=len(data), sha256=sha(data)))
+write('build-artifacts.json', dict(commands=commands, real_sandbox_closure=ordered, runtime_workspace_count=19, missing_packaged_sandbox_dist=True, deployment_qualified=False, outputs=outputs, generated_configs=generated, artifact_inventory=artifact_inventory, observation='Static inspection and hashing of producer logs, commands, source, configs and present emits; critic did not rebuild or execute target modules'))
+
+report = load((PACKET / 'original-three-suites/report.json').read_bytes())
+suites = []
+totals = collections.Counter()
+for suite in report['testResults']:
+    counts = collections.Counter(a['status'] for a in suite['assertionResults'])
+    totals.update(counts)
+    suites.append(dict(path=str(pathlib.Path(suite['name']).relative_to(CANDIDATE)), assertions=len(suite['assertionResults']), counts=dict(counts)))
+assert len(suites) == 3 and dict(totals) == {'passed': 51, 'failed': 43}
+pins = []
+extra = {}
+for proposal in ['docs/04_audit/evidence/PARE100-EXEC-20261014/spec0215/revision-r4/proposed-exceptions.json', 'docs/04_audit/evidence/PARE100-EXEC-20261014/spec0216/proposed-exceptions.json']:
+    data = (CANDIDATE / proposal).read_bytes()
+    extra[proposal] = sha(data)
+    snapshot('extra/' + proposal + '.source.txt', data)
+    for group in load(data)['groups']:
+        for name, expected in group['pins'].items():
+            source = CANDIDATE / name
+            actual = sha(source.read_bytes()) if source.is_file() else None
+            state = 'MISSING' if actual is None else 'MATCH' if actual == expected else 'DRIFT'
+            pins.append(dict(proposal=proposal, group=group['id'], path=name, expected=expected, actual=actual, status=state))
+            if actual is not None:
+                extra[name] = actual
+                snapshot('extra/' + name + '.source.txt', source.read_bytes())
+pin_counts = collections.Counter(p['status'] for p in pins)
+assert dict(pin_counts) == {'MATCH': 41, 'DRIFT': 7}
+assert pins == load((PACKET / 'focused-observations.json').read_bytes())['pins']
+checker = 'scripts/check-product-boundary.mjs'
+extra[checker] = sha((CANDIDATE / checker).read_bytes())
+snapshot('extra/' + checker + '.source.txt', (CANDIDATE / checker).read_bytes())
+extra_base = []
+for name, digest in extra.items():
+    if '/dist/' not in name:
+        base_digest = sha(git('show', 'HEAD:' + name))
+        assert digest == base_digest
+        extra_base.append(dict(path=name, sha256=digest, equal_HEAD=True))
+write('native-observations.json', dict(suites=suites, assertion_counts=dict(totals), total=94, skipped=0, pin_counts=dict(pin_counts), pins=pins, extra_protected_hashes=extra, source_and_proposal_equal_HEAD=extra_base, rerun_by_critic=False, limitation='Recount of retained producer JSON and independent rehash of proposal pins, not an independent test execution; 7 drift entries include repeated paths across groups'))
+
+for item in load((PACKET / 'how-entry.json').read_bytes())['dependency_copy']:
+    assert sha((CANDIDATE / item['path']).read_bytes()) == item['sha256']
+write('verification-summary.json', dict(head=head, exact_dirty_paths=paths, source_freeze_sha256=sha((PACKET / 'source-freeze-r1.json').read_bytes()), producer_artifacts_manifest_sha256=sha((OUT / 'producer-artifacts-manifest.json').read_bytes()), producer_checksum_manifest_sha256=sha(manifest.encode()), structural_check='PASS', inspected_build_prep='PASS_WITH_DISCLOSED_DEPLOYMENT_GAP', original_native_suites='FAIL_51_PASS_43_FAIL_0_SKIP', full_qualification='NOT_QUALIFIED', parity_credit=0, independent_tests_run=0, builds_run=0, network_calls=0, descendants=0))
+print(json.dumps(dict(structural='EXACT_TWO_ADDITIONS', source_entries=17, frozen_inputs=10, producer_artifacts=len(producer), measured_artifacts=len(artifact_inventory), native_counts=dict(totals), pin_counts=dict(pin_counts), full_qualification='NOT_QUALIFIED')))

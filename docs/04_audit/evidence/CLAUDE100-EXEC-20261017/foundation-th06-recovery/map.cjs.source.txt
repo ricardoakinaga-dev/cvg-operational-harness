@@ -1,0 +1,16 @@
+const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const root='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree';
+const ts=require(path.join(root,'node_modules/typescript'));
+const recon=JSON.parse(fs.readFileSync('docs/04_audit/evidence/CLAUDE100-EXEC-20261017/functional-capture-recon/foundation-th06-recovery-cut-map.json'));
+const mapped=[];
+for (const row of recon.sources) {
+ const bytes=fs.readFileSync(path.join(root,row.path)),sha=crypto.createHash('sha256').update(bytes).digest('hex');if(sha!==row.sha256)throw Error('Input drift');
+ const source=ts.createSourceFile(row.path,bytes.toString(),ts.ScriptTarget.Latest,true);
+ const rows=[];
+ function walk(n){ if(ts.isTryStatement(n)||ts.isNewExpression(n)||ts.isCallExpression(n)&&/^(open|mkdtemp|spawn|execFile|connect|observeCompleteChild|trackPare217Process)$/.test(n.expression.getText(source))) {
+   let owner=n.parent;while(owner&&!ts.isFunctionLike(owner))owner=owner.parent;
+   rows.push({line:source.getLineAndCharacterOfPosition(n.getStart(source)).line+1,kind:ts.SyntaxKind[n.kind],owner:owner?.name?.getText(source)||'callback/module',text:n.getText(source).slice(0,ts.isTryStatement(n)?180:100),catch:n.catchClause?.getText(source),finally:n.finallyBlock?.getText(source)});
+ }ts.forEachChild(n,walk)}walk(source); mapped.push({...row,scopes:rows});
+}
+const out='docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-th06-recovery/source-resource-map.json';fs.writeFileSync(out,JSON.stringify({task:'C100-FND-TH06-RECOVERY-001',stage:'STATIC_DIAGNOSIS',target_code_executed:false,sources:mapped},null,2)+'\n');
+for(const f of mapped){console.log('\n'+f.path);for(const x of f.scopes)if(x.kind==='TryStatement')console.log(x.line,x.owner,'CATCH',x.catch?.replace(/\s+/g,' ').slice(0,210),'FINALLY',x.finally?.replace(/\s+/g,' ').slice(0,330));}

@@ -1,0 +1,15 @@
+import pathlib,hashlib,json,sys,datetime
+W=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree');O=W.parent/'spec0224-build/public-json-boundaries/review-r1';files=set()
+for root in ['packages','legacy/packages']:
+ for p in (W/root).rglob('*'):
+  rel=p.relative_to(W)
+  if any(s in rel.parts for s in ['node_modules','.git','dist','coverage','.agent','.gauntlet']):continue
+  if p.is_file() and (p.suffix in ['.ts','.mts','.js','.mjs','.json','.sql']):files.add(p)
+for pattern in ['package.json','*lock*','tsconfig*.json','vitest*.mts']:
+ files.update(p for p in W.glob(pattern) if p.is_file())
+rows=[]
+for p in sorted(files):
+ b=p.read_bytes();rows.append({'path':str(p.relative_to(W)),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+result={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'entries':rows,'aggregateSha256':hashlib.sha256(json.dumps(rows,separators=(',',':')).encode()).hexdigest()}
+(O/('source-sentinel-'+sys.argv[1]+'.json')).write_text(json.dumps(result,indent=2)+'\n');print(len(rows),result['aggregateSha256'])
+if sys.argv[1]=='after':assert rows==json.loads((O/'source-sentinel-before.json').read_text())['entries']

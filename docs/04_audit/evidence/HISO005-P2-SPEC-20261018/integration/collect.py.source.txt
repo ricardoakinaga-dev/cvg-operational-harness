@@ -1,0 +1,131 @@
+import subprocess,os,json,hashlib,pathlib,datetime,re,difflib,collections,stat
+R=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+C=pathlib.Path('/home/ricardo/cvg-candidates/hiso005-0234-20261017')
+E=R/'docs/04_audit/evidence/HISO005-P2-SPEC-20261018/integration'
+T=pathlib.Path('/tmp/cvg-hiso005-p2-20261018/integration')
+B='5a199668eef5db4ca7aa2adc3853169ca0953cbf'; F='f11f762f6a176417a40d2d53bdb67c633d7e1cef'; Z='b7032f8245fbfbec5570c585518172de9ab7f075'
+ENV={**os.environ,'GIT_OPTIONAL_LOCKS':'0','GIT_PAGER':'cat'}
+commands=[]
+def sha(b):return hashlib.sha256(b).hexdigest()
+def write(p,b):
+ p=pathlib.Path(p); assert p.is_relative_to(E) or p.is_relative_to(T),str(p); assert not p.exists(),str(p)
+ p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(b)
+def js(p,v):write(p,(json.dumps(v,ensure_ascii=False,indent=2)+'\n').encode())
+def cmd(args,cwd=R):
+ t=datetime.datetime.now(datetime.timezone.utc).isoformat(); q=subprocess.run(args,cwd=cwd,env=ENV,capture_output=True)
+ commands.append({'argv':args,'cwd':str(cwd),'startedAt':t,'exitCode':q.returncode,'stdoutBytes':len(q.stdout),'stdoutSha256':sha(q.stdout),'stderrBytes':len(q.stderr),'stderrSha256':sha(q.stderr)})
+ return q
+cache={}
+def blob(rev,p):
+ k=(rev,p)
+ if k not in cache:
+  r=cmd(['git','show',rev+':'+p]); cache[k]=r.stdout if r.returncode==0 else None
+ return cache[k]
+def meta(b):return {'exists':b is not None,'bytes':len(b) if b is not None else None,'sha256':sha(b) if b is not None else None}
+def disk(root,p):
+ f=root/p
+ if not os.path.lexists(f):return {'exists':False,'bytes':None,'sha256':None,'kind':'absent'}
+ s=f.lstat()
+ if not stat.S_ISREG(s.st_mode):return {'exists':True,'bytes':s.st_size,'sha256':None,'kind':'symlink' if stat.S_ISLNK(s.st_mode) else 'other'}
+ return {**meta(f.read_bytes()),'kind':'regular','mode':oct(s.st_mode&0o777)}
+def changes(a,b):
+ x=cmd(['git','diff','--no-ext-diff','--name-status',a,b,'--','scripts','tests','docs/08_runtime/0803_runbook_gates_locais.md'])
+ assert x.returncode==0
+ return [dict(zip(['change','path'],r.split('\t'))) for r in x.stdout.decode().splitlines()]
+H=cmd(['git','rev-parse','HEAD']).stdout.decode().strip(); CH=cmd(['git','rev-parse','HEAD'],C).stdout.decode().strip()
+assert CH==Z
+for p in ['AGENTS.md','docs/07_agents/AGENTS.md','docs/08_runtime/agent_coordination.md','docs/99_runtime_state.md','docs/20_master_execution_log.md','docs/30_backlog_master.md']:
+ b=(R/p).read_bytes(); js(E/'inputs'/ (p.replace('/','__')+'.identity.json'),{'path':p,**meta(b)})
+initialStatus=cmd(['git','status','--porcelain=v1','--untracked-files=normal']).stdout
+candidateStatus=cmd(['git','status','--porcelain=v1','--untracked-files=normal'],C).stdout
+write(E/'root-status.initial.txt',initialStatus); write(E/'candidate-status.initial.txt',candidateStatus)
+ancestry=[]
+for a,b in [(B,F),(F,Z),(H,Z),(B,H)]:
+ q=cmd(['git','merge-base','--is-ancestor',a,b]); ancestry.append({'ancestor':a,'descendant':b,'isAncestor':q.returncode==0,'exitCode':q.returncode})
+mergebase=cmd(['git','merge-base',H,Z]).stdout.decode().strip()
+phases={'0228':changes(B,F),'0234':changes(F,Z)}
+paths=sorted(set(x['path'] for phase in phases.values() for x in phase)); code=[p for p in paths if not p.startswith('docs/')]
+freeze_path='docs/04_audit/evidence/HISO005-0234-BUILD-20261017/source-freeze-r2.json'; freeze=json.loads((R/freeze_path).read_bytes())
+b6freeze_path='docs/04_audit/evidence/B6-0228-BUILD-20261017/source-freeze.json'; b6freeze=json.loads((R/b6freeze_path).read_bytes()); b6pins={v['path']:v['sha256'] for v in b6freeze['files']}
+rows=[]
+for p in paths:
+ bs={rev:blob(rev,p) for rev in [H,B,F,Z]}; dm=disk(R,p); cm=disk(C,p)
+ row={'path':p,'phases':[k for k,v in phases.items() if any(x['path']==p for x in v)],'rootHead':meta(bs[H]),'rootWorking':dm,'rootIndex':meta(blob(':',p)) if False else None,'coreFix5a':meta(bs[B]),'b6f11':meta(bs[F]),'candidateCommit':meta(bs[Z]),'candidateWorking':cm,'rootCleanOnPath':dm['sha256']==meta(bs[H])['sha256'] and dm['exists']==(bs[H] is not None),'rootAlreadyCandidate':dm['sha256']==meta(bs[Z])['sha256'] and dm['exists']==(bs[Z] is not None),'rootHeadEquals5a':bs[H]==bs[B],'candidateSourceFreezeR2Sha256':freeze['paths'].get(p),'candidateFreezeMatches':None,'b6FreezeMatchesF11':None}
+ index=cmd(['git','show',':'+p]);row['rootIndex']=meta(index.stdout if index.returncode==0 else None)
+ if p in freeze['paths']:row['candidateFreezeMatches']=cm['sha256']==freeze['paths'][p]==meta(bs[Z])['sha256']
+ if p in b6pins:row['b6FreezeMatchesF11']=b6pins[p]==meta(bs[F])['sha256']
+ if p.startswith('docs/'):
+  row['promotion']='RETAIN_ROOT_DOCUMENT; candidate document is older, merge wording only after source promotion under lead claim'
+ elif not row['rootCleanOnPath']:
+  row['promotion']='BLOCKED_DIRTY_SOURCE'
+ elif bs[H]!=bs[B]:
+  row['promotion']='BLOCKED_DIVERGENT_ROOT_COMMITTED_SOURCE; textual 3-way review required'
+ else:row['promotion']='MECHANICAL_FORWARD_ARTIFACT_ONLY; entire integration still blocked on checker'
+ rows.append(row)
+ # preserve per-path diffs only in owned evidence
+ if bs[H]!=bs[Z]:
+  q=cmd(['git','diff','--no-ext-diff','--binary','--full-index',H,Z,'--',p]); assert q.returncode==0
+  write(E/'diffs'/(p.replace('/','__')+'.patch'),q.stdout)
+# Scope-safe patch is partial, explicitly excludes divergent checker and dirty runbook.
+safe=[r['path'] for r in rows if r['promotion'].startswith('MECHANICAL_')]
+p=cmd(['git','diff','--no-ext-diff','--binary','--full-index',H,Z,'--',*safe]); assert p.returncode==0
+write(E/'forward-source-safe-subset.patch',p.stdout)
+# 3way textual conflict evidence, never source/index application.
+p='scripts/check-product-boundary.mjs'
+for label,rev in [('root',H),('base',B),('candidate',Z)]:write(T/('checker-'+label+'.mjs.txt'),blob(rev,p))
+q=cmd(['git','merge-file','-p','--diff3','-L','ROOT_HEAD','-L','CORE_FIX_5A','-L','CANDIDATE_B703',str(T/'checker-root.mjs.txt'),str(T/'checker-base.mjs.txt'),str(T/'checker-candidate.mjs.txt')]); write(E/'checker-three-way.review.txt',q.stdout)
+conflicts={'path':p,'base':B,'root':H,'candidate':Z,'mergeFileExitCode':q.returncode,'conflictMarkerCount':len(re.findall(rb'^<<<<<<< ',q.stdout,re.M)),'reviewArtifact':'checker-three-way.review.txt','applied':False}
+# Relative static module closure, checked without import/execution.
+relative=set(); imports=[]
+for p in code:
+ text=blob(Z,p).decode()
+ for match in re.finditer(r'''(?:from\s*|import\s*\(\s*)['"]([^'"]+)['"]''',text):
+  spec=match.group(1)
+  if not spec.startswith('.'):continue
+  dep=os.path.normpath(str(pathlib.PurePosixPath(p).parent/spec)); relative.add(dep); imports.append({'from':p,'specifier':spec,'path':dep})
+# include toolchain/resolution and earlier core build dependencies; never promote them here
+extra=['scripts/build-runtime.mjs','scripts/ci-bar.mjs','scripts/boundary-code-execution.mjs','scripts/boundary-lexical.mjs','scripts/tsconfig-path-grammar.mjs','package.json','package-lock.json','packages/platform/package.json','vitest.config.mts','tsconfig.json']
+deps=[]
+for p in sorted((relative|set(extra))-set(code)):
+ vals={rev:blob(rev,p) for rev in [H,B,F,Z]}; deps.append({'path':p,'rootHead':meta(vals[H]),'rootWorking':disk(R,p),'coreFix5a':meta(vals[B]),'b6f11':meta(vals[F]),'candidateCommit':meta(vals[Z]),'rootMatchesCandidate':vals[H]==vals[Z],'rootMatchesCoreFix':vals[H]==vals[B],'action':'READONLY dependency, do not copy earlier base wholesale'})
+# exact committed root-only edits relative to 5a; distinguish syntactic source collision from ownership
+sourcep='scripts/check-product-boundary.mjs'; old=blob(B,sourcep).decode().splitlines(); new=blob(H,sourcep).decode().splitlines(); hunks=[]
+for op,a,b,c,d in difflib.SequenceMatcher(a=old,b=new).get_opcodes():
+ if op=='equal':continue
+ hunks.append({'operation':op,'baseStartLine':a+1,'baseEndLine':b,'rootStartLine':c+1,'rootEndLine':d,'rootAddedLines':d-c,'beforeSha256':sha(('\n'.join(old[a:b])+'\n').encode()),'afterSha256':sha(('\n'.join(new[c:d])+'\n').encode()),'preview':new[c:d] if d-c<12 else new[c:c+4]})
+def ids(rev):
+ text=blob(rev,sourcep).decode(); start=text.index('const capabilityExceptions = ['); end=text.index('\nconst ',start+len('const capabilityExceptions = ['));return re.findall(r"id: '([^']+)'",text[start:end])
+legacy={rev:ids(rev) for rev in [H,B,F,Z]}
+# catalog additive proposal retains original bytes and existing rows; never writes central
+cp='docs/04_audit/evidence/empty-artifact-status.json'; dp='docs/04_audit/evidence/HISO005-0234-BUILD-20261017/empty-artifact-central-delta.json'
+cb=(R/cp).read_bytes();db=(R/dp).read_bytes();c=json.loads(cb);delta=json.loads(db)
+ix=collections.defaultdict(list)
+for x in c['files']:ix[x['path']].append(x)
+cr=[];missing=[]
+for x in delta['files']:
+ found=ix[x['path']]; equal=any(r==x for r in found)
+ cr.append({'path':x['path'],'centralOccurrences':len(found),'alreadyIncludedExact':equal,'classification':'ALREADY_INCLUDED_EXACT' if equal else 'CONFLICT_SAME_PATH_DIFFERENT_METADATA' if found else 'NOT_INCLUDED','artifact':disk(R,'docs/04_audit/evidence/'+x['path']),'deltaRecordSha256':sha(json.dumps(x,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()),'centralRows':found})
+ if not found:missing.append(x)
+assert len(cr)==23
+catalogConflict=any(r['classification'].startswith('CONFLICT_') for r in cr)
+# Locate files array closing bracket and append serialized rows; parser verifies entire old prefix is byte-identical.
+oldtxt=cb.decode();decoder=json.JSONDecoder(); k=oldtxt.index('"files"'); a=oldtxt.index('[',k); _,arrend=decoder.raw_decode(oldtxt[a:]); close=a+arrend-1; assert oldtxt[close]==']'
+if not catalogConflict:
+ # preserve bytes through the closing bracket's indentation; no byte of an existing record changes
+ before=oldtxt[:close]; after=oldtxt[close:]; m=re.search(r'\s*$',before); cut=m.start(); insertion=',\n'+',\n'.join('\n'.join('    '+l for l in json.dumps(x,ensure_ascii=False,indent=2).splitlines()) for x in missing)
+ proposal=before[:cut]+insertion+before[cut:]+after if missing else oldtxt
+ obj=json.loads(proposal);assert obj['files'][:len(c['files'])]==c['files'];assert obj['files'][len(c['files']):]==missing
+ for k,v in c.items():
+  if k!='files':assert obj[k]==v
+ write(E/'central-catalog-additive-proposal.json',proposal.encode())
+ patch=''.join(difflib.unified_diff(oldtxt.splitlines(True),proposal.splitlines(True),fromfile='a/'+cp,tofile='b/'+cp))
+ write(E/'central-catalog-additive.review-only.patch',patch.encode())
+ catalogProposal={'path':'central-catalog-additive-proposal.json','sha256':sha(proposal.encode()),'oldRows':len(c['files']),'newRows':len(obj['files']),'retainedAllExistingRows':True,'retainedExistingBytesThroughLastRecord':proposal.startswith(before[:cut]),'allNonFilesMetadataRetained':True,'patch':'central-catalog-additive.review-only.patch','applyAllowed':False,'reason':'Central writer Claude100 still owns catalog; exact preimage must be revalidated after release'}
+else:catalogProposal=None
+tracked=[]
+for line in initialStatus.decode().splitlines():
+ if line[:2]=='??':continue
+ p=line[3:]; category='code_or_tests' if p.startswith(('scripts/','tests/','packages/','apps/')) else 'documentation' if p.endswith('.md') else 'evidence_catalog' if p==cp else 'other'
+ tracked.append({'status':line[:2],'path':p,'category':category,'working':disk(R,p)})
+js(E/'collection.json',{'generatedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'rootHead':H,'candidateHead':CH,'mergeBase':mergebase,'ancestry':ancestry,'phaseChanges':phases,'ownedPaths':rows,'safeSubsetPaths':safe,'checkerConflict':conflicts,'rootOnlyCheckerHunks':hunks,'legacyExceptionIds':legacy,'rootOnlyLegacyExceptionIds':sorted(set(legacy[H])-set(legacy[Z])),'staticImports':imports,'dependencies':deps,'rootTrackedDirty':tracked,'catalog':{'centralPath':cp,'deltaPath':dp,'centralCurrent':meta(cb),'centralHead':meta(blob(H,cp)),'delta':meta(db),'centralRows':len(c['files']),'deltaRows':len(cr),'notIncluded':len(missing),'alreadyIncludedExact':sum(r['alreadyIncludedExact'] for r in cr),'keyConflicts':catalogConflict,'rows':cr,'proposal':catalogProposal},'commands':commands})
+print(json.dumps({'rootHead':H,'candidateHead':CH,'ownedPaths':len(rows),'safeSubset':safe,'checkerConflict':conflicts,'rootOnlyLegacyExceptionIds':sorted(set(legacy[H])-set(legacy[Z])),'dependencyDifferences':[d['path'] for d in deps if not d['rootMatchesCandidate']],'catalogRows':len(c['files']),'missing23':len(missing),'keyConflicts':catalogConflict},ensure_ascii=False,indent=2))

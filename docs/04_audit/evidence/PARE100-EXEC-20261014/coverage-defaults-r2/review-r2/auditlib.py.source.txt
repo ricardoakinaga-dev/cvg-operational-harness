@@ -1,0 +1,98 @@
+from pathlib import Path
+import os, json, hashlib, subprocess, selectors, signal, time, re, shutil
+
+O=Path(__file__).parent
+R=O.parent
+P=R/'review-packet'
+N=R/'native-proof'
+T=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1/native-proof/toolchain')
+NODE=Path('/home/ricardo/.nvm/versions/node/v22.23.2/bin/node')
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def dump(p,x):
+    p=Path(p); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps(x,indent=2,ensure_ascii=False)+'\n')
+def inventory(root):
+    result=[]
+    for p in sorted(root.rglob('*')):
+        if p.is_symlink(): result.append({'path':str(p),'link':os.readlink(p),'resolved':str(p.resolve())})
+        elif p.is_file():
+            s=p.stat();result.append({'path':str(p),'sha256':sha(p),'size':s.st_size,'mtime_ns':s.st_mtime_ns,'mode':s.st_mode})
+    return result
+def env(base):
+    d=O/'private'/base;d.mkdir(parents=True,exist_ok=True)
+    e={'PATH':f'{NODE.parent}:/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','CI':'true',
+       'NPM_CONFIG_OFFLINE':'true','NPM_CONFIG_AUDIT':'false','NPM_CONFIG_FUND':'false',
+       'NPM_CONFIG_UPDATE_NOTIFIER':'false','NPM_CONFIG_REGISTRY':'http://127.0.0.1:1',
+       'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':str(d/'gitconfig')}
+    for k,n in {'HOME':'home','TMPDIR':'tmp','TMP':'tmp','TEMP':'tmp','XDG_CACHE_HOME':'cache',
+                'XDG_CONFIG_HOME':'config','XDG_DATA_HOME':'data','XDG_STATE_HOME':'state',
+                'XDG_RUNTIME_DIR':'runtime','NPM_CONFIG_CACHE':'npm-cache','NPM_CONFIG_PREFIX':'npm-prefix'}.items():
+        (d/n).mkdir(exist_ok=True);e[k]=str(d/n)
+    for k,n in {'NPM_CONFIG_USERCONFIG':'npm-userconfig','NPM_CONFIG_GLOBALCONFIG':'npm-globalconfig'}.items():
+        (d/n).write_text('');e[k]=str(d/n)
+    (d/'gitconfig').write_text('')
+    return e
+def run(name,argv,cwd,e,timeout=80):
+    assert 0<timeout<=90
+    assert 'NODE_OPTIONS' not in e
+    assert str(cwd).startswith(str(O))
+    out=O/'commands'/name;out.mkdir(parents=True,exist_ok=True)
+    started=time.time();p=subprocess.Popen([str(a) for a in argv],cwd=cwd,env=e,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+    sel=selectors.DefaultSelector();sel.register(p.stdout,selectors.EVENT_READ,'stdout');sel.register(p.stderr,selectors.EVENT_READ,'stderr')
+    logs={'stdout':bytearray(),'stderr':bytearray()};reason=None
+    while sel.get_map():
+        if time.time()-started>timeout: reason='timeout'
+        if reason and p.poll() is None: os.killpg(p.pid,signal.SIGKILL)
+        for key,_ in sel.select(.1):
+            b=os.read(key.fileobj.fileno(),65536)
+            if not b:sel.unregister(key.fileobj);continue
+            remaining=2*1024*1024-sum(map(len,logs.values()))
+            logs[key.data].extend(b[:max(0,remaining)])
+            if len(b)>remaining:reason='output_bound'
+    p.wait();duration=time.time()-started
+    alive=[]
+    for item in Path('/proc').iterdir():
+        if item.name.isdigit():
+            try:
+                data=(item/'stat').read_text().rsplit(')',1)[1].split()
+                if int(data[2])==p.pid:alive.append(int(item.name))
+            except (OSError,ValueError,IndexError):pass
+    for pid in alive:
+        try:os.kill(pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+    for k,b in logs.items():(out/(k+'.log')).write_bytes(b)
+    record={'argv':[str(a) for a in argv],'cwd':str(cwd),'environment':e,'pid':p.pid,'process_group':p.pid,
+            'timeout_seconds':timeout,'output_bound_bytes':2*1024*1024,'termination_reason':reason,
+            'exit':p.returncode,'elapsed_seconds':round(duration,4),'started_unix':started,'remaining_process_group':alive,
+            'logs':{k:{'path':str(out/(k+'.log')),'sha256':sha(out/(k+'.log')),'bytes':len(b)} for k,b in logs.items()}}
+    dump(out/'command.json',record)
+    assert reason is None and not alive,record
+    print(name,'exit',p.returncode,'seconds',round(duration,3),flush=True)
+    return p.returncode,{k:bytes(b).decode(errors='replace') for k,b in logs.items()}
+def source(relative):
+    a=P/'current'/relative
+    if a.exists():return a
+    return N/'cases/green-r2-ci-good-default/fixture'/relative
+def graph(relative,root,seen=None):
+    if seen is None:seen=set()
+    if relative in seen:return
+    seen.add(relative);s=source(relative);text=s.read_text();d=root/relative;d.parent.mkdir(parents=True,exist_ok=True);d.write_text(text)
+    for m in re.finditer(r'''^\s*(?:import|export)\s[^'\"]*?from\s+['\"]([^'\"]+)['\"]|^\s*import\s+['\"]([^'\"]+)['\"]''',text,re.M):
+        spec=m[1] or m[2]
+        if spec.startswith('.'):
+            target=os.path.normpath(str(Path(relative).parent/spec));graph(target,root,seen)
+    return seen
+def deps(root):
+    d=root/'node_modules';d.mkdir(exist_ok=True)
+    for f in (T/'node_modules').iterdir():
+        if f.name in ['.vite','.vite-temp','.cache']:continue
+        assert '/worktree' not in str(f.resolve())
+        (d/f.name).symlink_to(f,target_is_directory=f.is_dir())
+def testfixture(name,driver='current'):
+    root=O/'fixtures'/name;root.mkdir(parents=True)
+    graph('scripts/ci-bar.mjs',root)
+    if driver!='current':shutil.copyfile(P/driver/'scripts/ci-bar.mjs',root/'scripts/ci-bar.mjs')
+    shutil.copyfile(P/'current/tests/ci-coverage-defaults.test.js',root/'test.tmp')
+    (root/'tests').mkdir();(root/'test.tmp').rename(root/'tests/ci-coverage-defaults.test.js')
+    (root/'package.json').write_text('{"type":"module"}\n')
+    (root/'vitest.config.mjs').write_text("export default {test:{environment:'node',include:['tests/ci-coverage-defaults.test.js']},cacheDir:'.vite-local'}\n")
+    deps(root);return root

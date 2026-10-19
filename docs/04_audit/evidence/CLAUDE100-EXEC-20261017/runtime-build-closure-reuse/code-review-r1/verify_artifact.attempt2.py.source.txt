@@ -1,0 +1,100 @@
+from pathlib import Path, PurePosixPath
+import json,hashlib,subprocess,os,tarfile,datetime,collections
+r=Path('/home/ricardo/Área de trabalho/cvg-operational-harness'); p=r/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/runtime-build-closure-reuse';o=p/'code-review-r1';q=Path('/tmp/cvg-claude100-exec-20261017/runtime-build-closure-reuse/code-review-r1');w=Path('/tmp/cvg-claude100-exec-20261017/runtime-build-closure-candidate');c=q.parent/'tmp/cvg-runtime-closure';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';env={**os.environ,'GIT_OPTIONAL_LOCKS':'0','PYTHONDONTWRITEBYTECODE':'1'}
+def sha(x):return hashlib.sha256(x).hexdigest()
+def save(name,obj):(o/name).write_text(json.dumps(obj,indent=2,ensure_ascii=False)+'\n')
+def load(path):return json.loads(path.read_text())
+commands=[]
+def run(argv,cwd):
+ z=subprocess.run(argv,cwd=cwd,env=env,capture_output=True);commands.append({'argv':argv,'cwd':str(cwd),'exit':z.returncode,'stdout_sha256':sha(z.stdout),'stderr':z.stderr.decode()});assert z.returncode==0,(argv,z.stderr);return z.stdout
+freeze=load(p/'source-freeze-r1.json');before=load(o/'before.json');assert all(x['matches_freeze'] for x in before['files']);assert all(x.get('producer_snapshot_matches',True) for x in before['files'])
+current=(w/'scripts/build-runtime.mjs').read_bytes();committed=run(['git','show','7ecc5b53944dcbc50fc26a95cfaec05bb1c62eb5:scripts/build-runtime.mjs'],r);prior=run(['git','show',freeze['base_head']+':scripts/build-runtime.mjs'],w)
+(o/'snapshots/root-commit-builder.source.txt').write_bytes(committed);(o/'snapshots/base-commit-builder.source.txt').write_bytes(prior)
+assert current==committed==(p/'root-build-runtime.source.txt').read_bytes();assert prior==(p/'prior-build-runtime.source.txt').read_bytes();assert sha(current)=='937792b348686c07da8dcc4ef2c2ad89f1970fcbc90240fa15e05755bc1ea034'
+assert (o/'git-head.source.txt').read_text().strip()==freeze['base_head'];assert (o/'git-status.source.txt').read_text()==' M scripts/build-runtime.mjs\n';assert not (o/'git-cached.source.txt').read_bytes();assert (o/'git-diff.source.txt').read_bytes()==(p/'source-diff.source.txt').read_bytes()
+ast=json.loads(run([node,str(q/'read-array.cjs'),str(o/'snapshots/base-commit-builder.source.txt')],q));save('ast.json',ast);ws=ast['workspaces'];assert len(ws)==20 and len(ast['prior'])==19;assert [x for x in ws if x not in ast['prior']]==['packages/sandbox'];assert [x for x in ws if x!='packages/sandbox']==ast['prior']
+# Enumerate real manifests from package.json workspace globs, separately from producer inventory.
+rootpkg=load(w/'package.json');byname={};manifests={}
+for glob in rootpkg['workspaces']:
+ for d in w.glob(glob):
+  if not (d/'package.json').is_file():continue
+  path=d.relative_to(w).as_posix();obj=load(d/'package.json');assert obj['name'] not in byname;byname[obj['name']]=path;manifests[path]=obj
+assert len(set(ws))==20 and all(x in manifests for x in ws)
+edges=[];external=[];entries=[];nonruntime_sections=[]
+def leaves(x):
+ if isinstance(x,str):return [x]
+ if x is None:return []
+ if isinstance(x,dict):return [t for v in x.values() for t in leaves(v)]
+ if isinstance(x,list):return [t for v in x for t in leaves(v)]
+ raise AssertionError('Invalid export shape')
+for src in ws:
+ m=manifests[src];assert (w/src/'package.json').read_bytes()==(c/src/'package.json').read_bytes()
+ for dep,version in m.get('dependencies',{}).items():
+  if dep in byname:
+   dst=byname[dep];assert dst in ws;edges.append({'from':src,'dependency':dep,'to':dst})
+  else:external.append({'from':src,'dependency':dep})
+ for section in ['optionalDependencies','peerDependencies','devDependencies']:
+  if m.get(section):nonruntime_sections.append({'workspace':src,'section':section,'dependencies':m[section]})
+ for rel in sorted(set(leaves(m.get('exports'))+[m[k] for k in ['main','types'] if m.get(k)])):
+  v=PurePosixPath(rel);assert not v.is_absolute() and '..' not in v.parts and '*' not in rel
+  f=c/src/rel;assert f.resolve().is_relative_to((c/src).resolve()) and f.is_file() and not f.is_symlink();entries.append({'workspace':src,'path':rel,'bytes':f.stat().st_size,'sha256':sha(f.read_bytes())})
+assert len(edges)==65
+assert {'from':'packages/channel-gateway','dependency':'@cvg/sandbox','to':'packages/sandbox'} in edges
+# Match every context file and every tar member; never extract archive paths.
+files={}
+for f in sorted(c.rglob('*')):
+ assert not f.is_symlink()
+ if f.is_file():
+  rel=f.relative_to(c).as_posix();data=f.read_bytes();files[rel]={'path':rel,'bytes':len(data),'sha256':sha(data)}
+  assert not rel.endswith(('.test.js','.spec.js')) and '__tests__' not in PurePosixPath(rel).parts
+  assert not (rel.endswith('.ts') and not rel.endswith('.d.ts'))
+archive=p/'runtime-context.snapshot.tar.gz';tarrows={}
+with tarfile.open(archive,'r:gz') as t:
+ for member in t:
+  name=PurePosixPath(member.name);assert member.isfile() and not name.is_absolute() and '..' not in name.parts and name.parts[0]=='runtime-context'
+  rel='/'.join(name.parts[1:]);assert rel not in tarrows and rel in files
+  data=t.extractfile(member).read();row={'path':rel,'bytes':len(data),'sha256':sha(data)};assert row==files[rel];tarrows[rel]=row
+assert set(files)==set(tarrows) and len(files)==914
+producer=load(p/'context-verification.json');assert files=={x['path']:x for x in producer['artifacts']};assert collections.Counter(tuple(sorted(e.items())) for e in edges)==collections.Counter(tuple(sorted(e.items())) for e in producer['dependency_edges']);assert external==producer['external_dependencies_not_installed_or_executed'];assert producer['archive']['sha256']==sha(archive.read_bytes())
+# Independently reconstruct builder's copy plan and compare byte provenance, including SQL and runtime scripts as inert data.
+expected={'runtime-context.json'};copied=[]
+copied_manifest_paths=[(f.relative_to(w)).as_posix() for group in ['apps','packages','legacy/packages'] for f in sorted((w/group).glob('*/package.json'))]
+for rel in ['package.json','package-lock.json']+copied_manifest_paths+['scripts/runtime-image-smoke.mjs','scripts/runtime-healthcheck.mjs','scripts/migrate-job.mjs']:
+ if (c/rel).exists():
+  assert (c/rel).read_bytes()==(w/rel).read_bytes();expected.add(rel);copied.append(rel)
+ else:raise AssertionError('Manifest or script not copied: '+rel)
+for base in [x+'/dist' for x in ws]+['packages/persistence/migrations']:
+ assert (w/base).is_dir()
+ for f in (w/base).rglob('*'):
+  assert not f.is_symlink()
+  if f.is_file():
+   rel=f.relative_to(w).as_posix();expected.add(rel);assert (c/rel).read_bytes()==f.read_bytes()
+assert expected==set(files)
+meta=load(c/'runtime-context.json');assert meta['compiledWorkspaces']==ws and meta['sourceIncluded'] is False and meta['testIncluded'] is False;assert (c/'packages/sandbox/dist/index.js').is_file()
+# Record historical cold command evidence as producer-owned, cross-checking timestamps and live configs; do not rerun it.
+cold=load(p/'cold-build/command.json');pre=load(p/'cold-preflight.json');entry=load(p/'build-entry.json');rows=next(v for v in pre.values() if isinstance(v,list));assert len(rows)==20 and [x['workspace'] for x in rows]==ws and all(not x['dist_exists'] and not x['buildinfo_exists'] for x in rows);assert pre['context_exists'] is False and pre['generated_configs_exist'] is False and pre['prebuild_or_seed'] is False
+assert cold['argv']==['npm','run','build:runtime','--','--context-dir',str(c)] and cold['cwd']==str(w) and cold['state']=='COMPLETED' and cold['exit']==0 and cold['seconds']>0;assert (p/'cold-build/stderr.log').stat().st_size==0
+iso=lambda s:datetime.datetime.fromisoformat(s.replace('Z','+00:00'))
+assert iso(entry['at'])<iso(pre['at'])<iso(cold['at'])<iso(meta['generatedAt'])<iso(cold['ended_at'])
+assert entry['short_spec_sha256']==sha((p/'short-spec.md').read_bytes()) and entry['task_sha256']==sha((p/'task.json').read_bytes())
+stdout=(p/'cold-build/stdout.log').read_text();out=json.loads(stdout.strip().splitlines()[-1]);assert out['compiledWorkspaces']==ws and out['contextDir']==str(c) and out['sourceIncluded'] is False;assert rootpkg['scripts']['build:runtime']=='node scripts/build-runtime.mjs'
+confroot=q.parent/'tmp/cvg-runtime-tsconfigs';cfgrows=[]
+for src in ws:
+ cfg=load(confroot/(src.replace('/','-')+'.json'));refs=[x['path'] for x in cfg['references']];wanted=[str(confroot/(x['to'].replace('/','-')+'.json')) for x in edges if x['from']==src];assert refs==wanted;assert cfg['compilerOptions']['outDir']==str(w/src/'dist');assert cfg['compilerOptions']['tsBuildInfoFile']==str(w/src/'dist/tsconfig.runtime.tsbuildinfo');cfgrows.append({'workspace':src,'references':refs,'config_sha256':sha((confroot/(src.replace('/','-')+'.json')).read_bytes())})
+assert 'prebuild:runtime' not in rootpkg['scripts'] and 'postbuild:runtime' not in rootpkg['scripts']
+checks={}
+for label in ['typecheck','lint','format','unit']:
+ folder=p/'checks'/label;cmd=load(folder/'command.json');assert cmd['exit']==0 and cmd['cwd']==str(w);assert (folder/'stderr.log').stat().st_size==0;checks[label]={'record_owner':'producer; reviewed, not rerun by critic','argv':cmd['argv'],'exit':cmd['exit'],'stdout_sha256':sha((folder/'stdout.log').read_bytes()),'stderr_bytes':0,'at':cmd['at']}
+ for stream in ['stdout.log','stderr.log']:(o/'snapshots'/f'check-{label}-{stream}.source.txt').write_bytes((folder/stream).read_bytes())
+assert checks['typecheck']['argv']==['npm','run','typecheck'] and rootpkg['scripts']['typecheck']=='tsc -p tsconfig.typecheck.json --noEmit';assert checks['lint']['argv']==['npm','run','lint'] and rootpkg['scripts']['lint']=='eslint .'
+assert checks['format']['argv'][-2:]==['--check','scripts/build-runtime.mjs'];assert checks['unit']['argv'][3]=='tests/runtime-image-contract.test.js'
+report=load(p/'checks/unit/report.json');assert report['success'] is True and report['numTotalTests']==report['numPassedTests']==3 and report['numFailedTests']==report['numPendingTests']==report['numTodoTests']==0;tests=report['testResults'];assert len(tests)==1 and tests[0]['name']==str(w/'tests/runtime-image-contract.test.js') and len(tests[0]['assertionResults'])==3 and all(x['status']=='passed' for x in tests[0]['assertionResults'])
+pincomp=load(p/'prior-pin-input-comparison.json');pinrows=[]
+for row in pincomp['pins']:
+ actual=sha((w/row['path']).read_bytes());assert actual==row['actual']==row['prior_actual'];base=run(['git','show',freeze['base_head']+':'+row['path']],w);assert sha(base)==actual;pinrows.append({'path':row['path'],'actual':actual,'equals_prior_and_base':True,'approved_expected':row['approved_expected']})
+assert len(pinrows)==48
+save('source-identity.json',{'candidate_head':freeze['base_head'],'root_commit':'7ecc5b53944dcbc50fc26a95cfaec05bb1c62eb5','builder_sha256':sha(current),'prior_builder_sha256':sha(prior),'only_delta':'scripts/build-runtime.mjs','old_workspace_count':19,'new_workspace_count':20,'protected_sources_and_inputs_match':True,'pin_inputs':pinrows})
+save('context-independent.json',{'method':'critic-owned AST, direct manifest enumeration, byte comparison, tar streaming (no extraction)','workspace_count':len(ws),'all_workspace_manifest_count':len(manifests),'workspace_dependency_edges':len(edges),'dependency_edges':edges,'entry_targets':entries,'external_dependency_declarations':external,'nonruntime_dependency_sections':nonruntime_sections,'missing':[],'sandbox_dist_index_present':True,'all_copied_manifests_scripts_equal':copied,'context_metadata':meta,'artifact_count':len(files),'artifacts':list(files.values()),'archive_member_count':len(tarrows),'archive_sha256':sha(archive.read_bytes()),'archive_bytes':archive.stat().st_size,'archive_all_bytes_equal_context_and_producer_inventory':True,'copy_plan_exact':True,'target_execution':False,'external_installation_or_deployability_claimed':False})
+save('producer-record-review.json',{'ownership':'Producer ran build and checks; critic reviewed raw records and retained artifacts only. Historical absence cannot be re-observed; cold preflight is a historical producer record, corroborated by unconditional dist removal, force compile, timings and retained config/context.','cold_command':cold,'cold_preflight':pre,'generated_configs':cfgrows,'checks':checks,'unit_report_tests':3,'critic_tests_run':0,'critic_builds_run':0,'no_certificate_transfer':True,'BR5':'NOT_QUALIFIED','functional_credit':0})
+save('inspection-commands.json',commands)
+print(json.dumps({'status':'PASS_INDEPENDENT_STATIC_ARTIFACT_CHECKS','source_inputs':30,'artifact_inputs':17,'workspaces':20,'edges':65,'artifacts':914,'tar_members':len(tarrows),'literal_entry_targets':len(entries),'all_workspace_manifests':len(manifests),'pins_unchanged':48,'external_dependency_declarations':len(external),'critic_tests':0}))

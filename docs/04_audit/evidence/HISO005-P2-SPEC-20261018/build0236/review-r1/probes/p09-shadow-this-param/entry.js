@@ -1,0 +1,1 @@
+export function inspect(Object){return Object.getPrototypeOf({})}

@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { verifyNativeJournalBinding,journalCredentials } from '/tmp/cvg-claude100-exec-20261017/journal0225-candidate/packages/persistence/src/__tests__/fixtures/journal-result-process.ts'
+import pg from '/tmp/cvg-claude100-exec-20261017/journal0225-candidate/node_modules/pg/lib/index.js'
+const binding=verifyNativeJournalBinding()
+const client=new pg.Client({...journalCredentials('admin'),application_name:'c100-j225-readonly-checkpoint',connectionTimeoutMillis:5000,statement_timeout:10000})
+try {
+ await client.connect()
+ const state=(await client.query(`SELECT to_regnamespace('c100_j225_active') IS NULL AS active_schema_absent,(SELECT count(*)::integer FROM pg_roles WHERE rolname IN ('c100_j225_service','c100_j225_old')) AS runtime_roles,(SELECT count(*)::integer FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()) AS other_clients,(SELECT count(*)::integer FROM c100_j225_expand.operational_effect_journal) AS legacy_rows,(SELECT count(*)::integer FROM c100_j225_expand.operational_effect_journal WHERE result_storage_version<>0 OR result_storage_payload IS NOT NULL) AS legacy_changed`)).rows[0]
+ assert.deepEqual(state,{active_schema_absent:true,runtime_roles:0,other_clients:0,legacy_rows:22,legacy_changed:0})
+ const out={at:new Date().toISOString(),status:'OWN_RESERVED_IDLE',resourceId:binding.containerId,port:55880,runId:binding.runId,...state,credentials_in_evidence:false,peer_resources_touched:false}
+ writeFileSync(join(binding.evidenceRoot,'recovery-final-resource-checkpoint.json'),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify(out))
+}finally{await client.end()}

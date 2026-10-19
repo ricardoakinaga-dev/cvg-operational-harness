@@ -1,0 +1,479 @@
+   817	      } catch (error) {
+   818	        if (
+   819	          result &&
+   820	          Number.isSafeInteger(result.inputTokens) &&
+   821	          result.inputTokens >= 0 &&
+   822	          Number.isSafeInteger(result.outputTokens) &&
+   823	          result.outputTokens >= 0 &&
+   824	          finiteNonnegative(result.costUsd) &&
+   825	          error instanceof ToolResultContextError &&
+   826	          error.code === 'ADMISSION_BREACH'
+   827	        ) {
+   828	          // Let the native runtime retain finite observed overuse. An UNKNOWN
+   829	          // without this result would charge only the breached upper bound.
+   830	          await decisionAdmission.settle({
+   831	            kind: 'RESULT',
+   832	            admissionId: reserved.admissionId,
+   833	            requestSha256,
+   834	            result
+   835	          })
+   836	          throw error
+   837	        }
+   838	        await decisionAdmission.settle({
+   839	          kind: 'UNKNOWN',
+   840	          admissionId: reserved.admissionId,
+   841	          requestSha256,
+   842	          reason:
+   843	            error instanceof ToolResultContextError &&
+   844	            error.code === 'ADMISSION_BREACH'
+   845	              ? 'ADMISSION_BREACH'
+   846	              : 'DECISION_USAGE_UNKNOWN'
+   847	        })
+   848	        if (
+   849	          error instanceof ToolResultContextError &&
+   850	          error.code === 'ADMISSION_BREACH'
+   851	        )
+   852	          throw error
+   853	        throw new ToolResultContextError(
+   854	          'DECISION_USAGE_UNKNOWN',
+   855	          'Model call failed, was cancelled, returned invalid data or missed its deadline'
+   856	        )
+   857	      }
+   858	      const settled = await decisionAdmission.settle({
+   859	        kind: 'RESULT',
+   860	        admissionId: reserved.admissionId,
+   861	        requestSha256,
+   862	        result
+   863	      })
+   864	      checkReceipt(
+   865	        settled,
+   866	        context,
+   867	        snapshot,
+   868	        measured,
+   869	        requestSha256,
+   870	        'SETTLED',
+   871	        reserved
+   872	      )
+   873	      if (
+   874	        settled.actual?.modelCalls !== 1 ||
+   875	        settled.actual.inputTokens !== result.inputTokens ||
+   876	        settled.actual.outputTokens !== result.outputTokens ||
+   877	        settled.actual.costUsd !== result.costUsd ||
+   878	        (settled.resultSha256 !== undefined &&
+   879	          settled.resultSha256 !== completeDigest(result))
+   880	      ) {
+   881	        throw new ToolResultContextError(
+   882	          'STATE_CONFLICT',
+   883	          'Settlement does not bind the native result',
+   884	          'STATE_CONFLICT'
+   885	        )
+   886	      }
+   887	      decisionAdmissionIds.push(settled.admissionId)
+   888	      ensureTime()
+   889	      let parsed: unknown
+   890	      try {
+   891	        parsed = parseDecisionText(result.text)
+   892	      } catch (error) {
+   893	        if (repairs >= this.maxDecisionRepairs) throw error
+   894	        repairs += 1
+   895	        errors = [
+   896	          error instanceof Error ? error.message : 'unparseable decision'
+   897	        ]
+   898	        continue
+   899	      }
+   900	      const validation = validateLoopDecision(parsed)
+   901	      errors = validation.valid
+   902	        ? disallowedTypeErrors(sanitizeLoopDecision(parsed), context)
+   903	        : validation.errors
+   904	      if (errors.length === 0)
+   905	        return { decision: sanitizeLoopDecision(parsed), decisionAdmissionIds }
+   906	      if (repairs >= this.maxDecisionRepairs) {
+   907	        throw new OrchestratorDecisionError(
+   908	          'decision_invalid',
+   909	          `Orchestrator decision stayed invalid after ${repairs} repairs: ${errors.join('; ')}`
+   910	        )
+   911	      }
+   912	      repairs += 1
+   913	    }
+   914	  }
+   915	}
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:22:  readonly result?: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:44:    result: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:64:export class EffectJournalError extends Error {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:106:export class InMemoryEffectJournal implements EffectJournal {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:169:    result: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:171:    return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:211:    values: { result?: unknown; error?: string } = {}
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:234:      ...(values.result !== undefined ? { result: values.result } : {}),
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:258:      JSON.stringify({
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:323:        return { status: 'SUCCEEDED', output: reservation.result }
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:332:            'unknown_effect: explicit reconciliation is required before retry'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:339:            'unknown_effect: an existing reservation requires reconciliation'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:348:        const result = await tool.execute(input, context)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:351:          result.status === 'SUCCEEDED'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:362:              'unknown_effect: synthetic crash after effect before confirmation'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:365:        if (result.status === 'SUCCEEDED') {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:370:            result: result.output
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:377:            error: result.error ?? 'tool failed'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:380:        return result
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/effect-journal.ts:392:          error: 'unknown_effect: executor outcome is uncertain'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:318:    const result = await this.client.query<DurableOutboxRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:325:    return result.rows[0] ? mapDurableOutboxRow(result.rows[0]) : null
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:338:    const result = await this.client.query<DurableOutboxRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:345:    return result.rows[0] ? mapDurableOutboxRow(result.rows[0]) : null
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:526:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:547:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:638:    const result = await this.client.query<AuditEventRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:649:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:669:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:688:    return result.rows.map((row) => ({
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:708:    const result = await this.client.query<AuditEventRow & { total: number }>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:717:    const items = result.rows.map((row) => this.mapAuditEvent(row))
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:718:    const total = result.rows[0]?.total ?? 0
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:737:    const result = await this.client.query<AuditEventRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:745:      result.rows.map((row) => this.mapAuditEvent(row))
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:767:    const result = await this.client.query<AuditEventRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:775:    return result.rows.map((row) => this.mapAuditEvent(row))
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:797:    const result = await this.client.query<AuditEvidenceCheckpointRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:804:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:812:    const result = await this.client.query<AuditEvidenceCheckpointRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:820:    return result.rows.map(mapAuditEvidenceCheckpoint)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:984:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1002:    return result.rows.map((row) => this.mapTask(row))
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1015:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1034:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1053:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1071:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1079:    const result = await this.client.query(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1087:    if (result.rows.length === 0) {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1103:      const result = await this.client.query(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1120:      if (!result.rows.length)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1123:      const result = await this.client.query(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1139:      if (!result.rows.length)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1163:      const result = await this.client.query(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1176:      if (!result.rows.length)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1206:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1225:    const row = result.rows[0]
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1238:    const result = await this.client.query<{
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/postgres.ts:1256:    return result.rows.map((row) => this.mapApproval(row))
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:67:  result: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:107:  result: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:115:  lease_owner, lease_until, result, failure, approval_id, resume,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:120:  e.attempt, e.lease_owner, e.lease_until, e.result, e.failure,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:124:  tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:136:  'SUCCEEDED',
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:179:    serialized = JSON.stringify(value)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:238:    result: jsonValue(row.result) as ExecutionRecord['result'],
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:277:    const result = await operation()
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:279:    return result
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:346:      const result = await client.query<ExecutionRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:352:      return result.rows[0] ? mapOperationalExecutionRow(result.rows[0]) : null
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:403:                      lease_until = NULL, failure = $3::jsonb,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:595:          current.state === 'SUCCEEDED' ||
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:621:                  lease_until = NULL, failure = $3::jsonb,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:624:              AND state NOT IN ('SUCCEEDED', 'FAILED_TERMINAL', 'CANCELLED', 'CLAIMED', 'RUNNING')
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:732:          result: current.result,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:741:                  failure = $4::jsonb, updated_at = $5, completed_at = $6,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:742:                  resume = $8::jsonb
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:860:                  resume = $3::jsonb, updated_at = $4
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:988:      const result = await client.query<EventRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:996:      return result.rows.map(mapEvent)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1068:export class PostgresOperationalEffectJournal implements EffectJournal {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1088:        const result = await reserveOperationalEffectOnClient(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1094:        return result
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1111:    result: unknown
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1113:    return this.transition(input, 'CONFIRMED', { result: input.result })
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1145:      const result = await client.query<EffectRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1151:      return result.rows[0] ? mapEffect(result.rows[0]) : null
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1162:    values: { result?: unknown; error?: string } = {}
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1176:        const result = await transitionOperationalEffectOnClient(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1182:        return result
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1238:    // A JSON string is the result itself, not another serialized document.
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1239:    ...(row.result !== null ? { result: row.result } : {}),
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1281:  if (state === 'SUCCEEDED') return 'SUCCEEDED'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1334:      attempt, lease_owner, lease_until, result, failure,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1336:   VALUES ($1, $2, $3, $4, $5::jsonb, 'RECEIVED', 0, NULL, NULL,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1437:     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1492:    input.approvalId ?? input.result?.approvalId ?? current.approvalId
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1499:    'SUCCEEDED',
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1506:    targetState === 'SUCCEEDED' ||
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1518:  const result = input.result !== undefined ? input.result : current.result
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1525:    result: result as ExecutionRecord['result'],
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1532:          result = $6::jsonb, failure = $7::jsonb, approval_id = $8,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1542:      result === null ? null : jsonText(result, 'Execution result'),
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1601:  const result = await client.query<ExecutionRow>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1608:  if (!result.rows[0]) {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1611:  return mapOperationalExecutionRow(result.rows[0])
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1671:    to === 'SUCCEEDED' ||
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1709:  const result = await client.query<{ present: boolean }>(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1712:  return result.rows[0]?.present === true
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1719:  const result = await client.query(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1724:  if (result.rows.length)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1747:      result, error, created_at, updated_at)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1776:            result = NULL, error = NULL, updated_at = $4
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1794:    values: { result?: unknown; error?: string }
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1835:      SET state = $3, result = $4::jsonb, error = $5,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1843:      values.result === undefined
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-execution-postgres.ts:1845:        : jsonText(values.result, 'effect result'),
+   160	  return { valid: true, errors: [] }
+   161	}
+   162	
+   163	export function applyResume(
+   164	  ctx: IterativeDispatchContext,
+   165	  run: LoopRun,
+   166	  checkpoint: ExecutionCheckpoint | null
+   167	): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+   168	  const resume = run.input.resume
+   169	  if (!resume) return null
+   170	  if (!checkpoint) {
+   171	    return {
+   172	      kind: 'stop',
+   173	      stopReason: 'STATE_CONFLICT',
+   174	      response: 'Resume input arrived without a durable checkpoint.'
+   175	    }
+   176	  }
+   177	  if (resume.kind === 'approval') {
+   178	    if (run.state.pendingQuestion) {
+   179	      // Wrong-kind resume: the execution is paused for an answer, not for an
+   180	      // approval. Never let this open the loop with a question unresolved.
+   181	      return {
+   182	        kind: 'stop',
+   183	        stopReason: 'STATE_CONFLICT',
+   184	        response: 'Approval resume arrived while a user question is pending.',
+   185	        preserveCheckpoint: true
+   186	      }
+   187	    }
+   188	    if (!run.state.pendingApprovalId) {
+   189	      if (run.state.stopReason === 'APPROVAL_REQUIRED') {
+   190	        return {
+   191	          kind: 'stop',
+   192	          stopReason: 'STATE_CONFLICT',
+   193	          response: 'The paused approval binding is missing.',
+   194	          preserveCheckpoint: true
+   195	        }
+   196	      }
+   197	      // The approval was already consumed and the checkpoint cleared the
+   198	      // binding; a retry of the same attempt is a safe no-op.
+   199	      return null
+   200	    }
+   201	    if (run.state.pendingApprovalId !== resume.approvalId) {
+   202	      return {
+   203	        kind: 'stop',
+   204	        stopReason: 'STATE_CONFLICT',
+   205	        response: 'Approval does not match the paused execution binding.',
+   206	        preserveCheckpoint: true
+   207	      }
+   208	    }
+   209	    return null
+   210	  }
+   211	  if (run.state.pendingApprovalId) {
+   212	    return {
+   213	      kind: 'stop',
+   214	      stopReason: 'STATE_CONFLICT',
+   215	      response: 'User input arrived while an approval is pending.',
+   216	      preserveCheckpoint: true
+   217	    }
+   218	  }
+   219	  if (!run.state.pendingQuestion) {
+   220	    const alreadyResolved = Object.values(run.state.resolvedInputs).includes(
+   221	      resume.message
+   222	    )
+   223	    if (alreadyResolved) {
+   224	      if (ctx.options.toolResultContext)
+   225	        run.resumeObservation = userResumeObservation(ctx, run, resume.message)
+   226	      return null
+   227	    }
+   228	    return {
+   229	      kind: 'stop',
+   230	      stopReason: 'STATE_CONFLICT',
+   231	      response: 'User input arrived without a pending question.',
+   232	      preserveCheckpoint: true
+   233	    }
+   234	  }
+   235	  const stepNumber = Math.max(1, run.state.stepNumber)
+   236	  const observation = userResumeObservation(ctx, run, resume.message)
+   237	  if (ctx.options.toolResultContext) run.resumeObservation = observation
+   238	  run.observations = ctx.options.toolResultContext
+   239	    ? retainCompleteObservations([...run.observations, observation])
+   240	    : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+   241	  const pendingQuestion = run.state.pendingQuestion
+   242	  run.state = {
+   243	    ...run.state,
+   244	    pendingQuestion: undefined,
+   245	    openQuestions: run.state.openQuestions.filter(
+   246	      (question) => question !== pendingQuestion.promptIntent
+   247	    ),
+   248	    resolvedInputs: {
+   249	      ...run.state.resolvedInputs,
+   250	      [`answer_${stepNumber}`]: resume.message
+   251	    }
+   252	  }
+   253	  return null
+   254	}
+   255	
+   256	function userResumeObservation(
+   257	  ctx: IterativeDispatchContext,
+   258	  run: LoopRun,
+   259	  message: string
+   260	): Observation {
+   261	  const stepNumber = Math.max(1, run.state.stepNumber)
+   262	  return ctx.makeObservation(run, {
+   263	    stepId: `step_${run.executionId}_${stepNumber}_user_input`,
+   264	    stepNumber,
+   265	    type: 'USER_MESSAGE',
+   266	    source: 'USER',
+   267	    trust: 'UNTRUSTED',
+   268	    payload: { message },
+   269	    summary: 'User answered the pending question.',
+   270	    provenance: { sourceId: 'user' }
+   920	            },
+   921	            startedAtMs
+   922	          )
+   923	        }
+   924	        await this.persistCheckpoint(run)
+   925	      }
+   926	      await this.safeAudit(run, 'runtime_v2.started', {
+   927	        result: checkpoint ? 'resumed' : 'started'
+   928	      })
+   929	      const outcome = await this.runLoop(run)
+   930	      return await this.finalize(run, outcome, startedAtMs)
+   931	    } catch (error) {
+   932	      return await this.finalize(
+   933	        run,
+   934	        {
+   935	          kind: 'stop',
+   936	          stopReason:
+   937	            error instanceof ToolResultContextError
+   938	              ? error.stopReason
+   939	              : 'INTERNAL_FAILURE',
+   940	          response:
+   941	            error instanceof ToolResultContextError
+   942	              ? `${error.code}: ${error.message}`
+   943	              : `Execution failed internally: ${errorMessage(error)}.`,
+   944	          ...(run.checkpointConflict ? { preserveCheckpoint: true } : {})
+   945	        },
+   946	        startedAtMs
+   947	      )
+   948	    }
+   949	  }
+   950	
+   951	  private rejectCheckpoint(
+   952	    checkpoint: ExecutionCheckpoint,
+   953	    input: RuntimeInput
+   954	  ): string | null {
+   955	    if (checkpoint.checkpointVersion === 2 && !this.options.toolResultContext) {
+   956	      return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+   957	    }
+   958	    if (checkpoint.runtimeProfile !== 'iterative') {
+   959	      return 'Execution checkpoint belongs to a different runtime profile.'
+   960	    }
+   961	    if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+   962	      return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+   963	    }
+   964	    if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+   965	      return 'Execution checkpoint conflicts with the requested runtime profile.'
+   966	    }
+   967	    if (
+   968	      this.options.capabilityFingerprint &&
+   969	      checkpoint.state.capabilityFingerprint !==
+   970	        this.options.capabilityFingerprint
+   971	    ) {
+   972	      return 'Execution checkpoint belongs to a different capability composition.'
+   973	    }
+   974	    if (
+   975	      checkpoint.state.stopReason &&
+   976	      TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+   977	      checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+   978	      checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+   979	    ) {
+   980	      return 'Terminal execution cannot be resumed.'
+   981	    }
+   982	    return null
+   983	  }
+   984	
+   985	  private applyResume(
+   986	    run: LoopRun,
+   987	    checkpoint: ExecutionCheckpoint | null
+   988	  ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+   989	    return applyResume(this.dispatchContext, run, checkpoint)
+   990	  }
+   991	
+   992	  private async runLoop(
+   993	    run: LoopRun
+   994	  ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+   995	    if (run.state.pendingQuestion) {
+   996	      // Deterministic rule: a pending question must not be answered by a new
+   997	      // model decision. Re-pause without spending a model call.
+   998	      return this.pause(run, Math.max(1, run.state.stepNumber), {
+   999	        kind: 'pause',
+  1000	        pausedKind: 'NEEDS_USER_INPUT',
+  1001	        decision: null
+  1002	      })
+  1003	    }
+  1004	    while (true) {
+  1005	      // I8: cancellation is honored before every step.
+  1006	      if (this.#turns.get(run)?.signal.aborted) {
+  1007	        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+  1008	      }
+  1009	      // I12: pause (and any other step control) is checked before each step.
+  1010	      const beforeStep = await runGate(
+  1011	        this.kernelFor(run),
+  1012	        'turn/before-step',
+  1013	        this.turnFor(run)
+  1014	      )
+  1015	      if (beforeStep.kind === 'stop') {
+  1016	        // An operator pause is not terminal: the durable checkpoint, with any
+  1017	        // pending approval or question, stays resumable (AUD-0597 F03).
+  1018	        return {
+  1019	          ...this.stop(beforeStep.stopReason, beforeStep.response),
+  1020	          /* v8 ignore next -- the pause control is the only before-step control */
+  1021	          ...(beforeStep.cause === 'operator_paused'
+  1022	            ? { preserveCheckpoint: true }
+  1023	            : {})
+  1024	        }
+  1025	      }
+  1026	      const budgetStop = this.checkBudget(run)
+  1027	      if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
+  1028	
+  1029	      let decision: LoopDecision
+  1030	      let stepNumber: number
+  1031	      let decisionAdmissionIds: readonly string[] | undefined
+  1032	      let modelDecision = false
+  1033	
+  1034	      if (run.state.pendingDecision && run.state.pendingStepNumber) {
+  1035	        decision = run.state.pendingDecision
+  1036	        stepNumber = run.state.pendingStepNumber
+  1037	        run.lastDecision = decision
+  1038	      } else if (
+  1039	        this.options.toolResultContext &&
+  1040	        run.state.toolResultContext?.acceptedDecision
+  1041	      ) {
+  1042	        const accepted = run.state.toolResultContext.acceptedDecision
+  1043	        if (accepted.stepNumber !== run.stepNumber + 1)
+  1044	          throw new ToolResultContextError(
+  1045	            'STATE_CONFLICT',
+  1046	            'Accepted decision is bound to another step.',
+  1047	            'STATE_CONFLICT'
+  1048	          )
+  1049	        decision = accepted.decision
+  1050	        stepNumber = accepted.stepNumber
+  1051	        decisionAdmissionIds = accepted.decisionAdmissionIds
+  1052	        run.lastDecision = decision
+  1053	      } else {
+  1054	        stepNumber = run.stepNumber + 1
+  1055	        if (stepNumber > run.input.budget.maxSteps) {
+  1056	          return this.stop('MAX_STEPS', 'Step budget exhausted.')
+  1057	        }
+  1058	        const decisionResult = await this.decide(run, stepNumber)
+  1059	        if (decisionResult.outcome) return decisionResult.outcome
+  1060	        decision = sanitizeLoopDecision(decisionResult.decision)
+  1061	        decisionAdmissionIds = decisionResult.decisionAdmissionIds
+  1062	        modelDecision = decisionResult.modelDecision ?? false
+  1063	        run.lastDecision = decision
+  1064	      }
+  1065	
+  1066	      const validation = this.validateDecision(run, decision)
+  1067	      if (!validation.valid) {
+  1068	        if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
+  1069	        run.lastDecisionErrors = validation.errors
+  1070	        const repairBudget = run.input.budget.maxDecisionRepairs ?? 1

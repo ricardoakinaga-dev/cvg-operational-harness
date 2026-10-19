@@ -1,0 +1,1 @@
+export type T=number; export const productOnly=1;

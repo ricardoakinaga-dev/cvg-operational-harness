@@ -1,0 +1,24 @@
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+
+export interface StrictJsonOptions {
+  /** Internal profile selected by the closed qualifier export; default is legacy. */
+  numericDomain?: 'LEGACY_FINITE' | 'CODEX_EXACT_DECIMAL'
+  /** Container nesting, 0..64 inclusive. Root containers count as 1. */
+  maxDepth?: number
+  /** Per decoded string (including keys), UTF-8 bytes, 0..65536 inclusive. */
+  maxStringBytes?: number
+  /** Source UTF-8 bytes, 0..4194304 inclusive; checked before decoding. */
+  maxBytes?: number
+}
+
+/** Detached JSON data; invalid input/options throw QualificationError INVALID_INPUT. */
+export function parseStrictJson(
+  input: Uint8Array | string,
+  options?: StrictJsonOptions
+): JsonValue

@@ -1,0 +1,24 @@
+import pathlib
+R=pathlib.Path(__file__).parent.parent;s=(R/'checkers/adversarial.test.ts').read_text().split('for(const output of ')[0]
+s=s.replace('maxCalls?:number}','maxCalls?:number,userMessage?:string,instructions?:string[],contextPadding?:number}')
+s=s.replace("phase3AgentProfile({tools:[id]})","phase3AgentProfile({tools:[id],...(o.instructions?{instructions:o.instructions}:{})})")
+s=s.replace("userMessage:'UNTRUSTED_USER_I1',signal:","userMessage:o.userMessage??'UNTRUSTED_USER_I1',...(o.contextPadding?{context:{...base.context,values:{padding:'p'.repeat(o.contextPadding)}}}:{}),signal:")
+s += """
+it('actual user-message frame exactly 32000 UTF16 units and plus one',async()=>{
+ const id='user-boundary';const baseline=await probe({id,output:'x'.repeat(1000)})
+ const frame=JSON.parse(baseline.requests[0].messages[1].content)
+ const val=frame.items.find((i:any)=>i.priority==='FRESH_TOOL_RESULTS').value
+ const render=(n:number)=>{const output='x'.repeat(n);val.payload.output=output;val.payload.outputBytes=Buffer.byteLength(canon(output));val.payload.outputSha256=digest(output);return canon(frame)}
+ let n=1000+(32000-render(1000).length);n+=32000-render(n).length
+ expect(render(n).length).toBe(32000)
+ const exact=await probe({id,output:'x'.repeat(n)});expect(exact.requests).toHaveLength(1);expect(exact.requests[0].messages[1].content.length).toBe(32000);expect(exact.result.stopReason).toBe('COMPLETED')
+ const over=await probe({id,output:'x'.repeat(n+1)});expect(over.requests).toHaveLength(0);expect(over.result.response).toContain('CONTEXT_OVERFLOW');expect(over.nativeSteps).toContainEqual(expect.objectContaining({stepType:'RESPOND',status:'FAILED'}))
+})
+it('system boundary remains bounded and rejects next increment',async()=>{
+ const id='system-boundary';const base=await probe({id,output:{v:1},instructions:['i']});const n=1+Math.floor((16000-base.requests[0].messages[0].content.length)/2)
+ const exact=await probe({id,output:{v:1},instructions:['i'.repeat(n)]});expect(exact.result.stopReason).toBe('COMPLETED');expect(exact.requests[0].messages[0].content.length).toBeLessThanOrEqual(16000);expect(exact.requests[0].messages[0].content.length).toBeGreaterThanOrEqual(15999)
+ const over=await probe({id,output:{v:1},instructions:['i'.repeat(n+1)]});expect(over.requests).toHaveLength(0);expect(over.result.response).toContain('CONTEXT_OVERFLOW')
+})
+it('whole native request exceeds 131072 UTF8 bytes and refuses provider',async()=>{const s=await probe({id:'request-overflow',output:{v:1},contextPadding:131072});expect(s.requests).toHaveLength(0);expect(s.result.response).toContain('CONTEXT_OVERFLOW')})
+"""
+(R/'checkers/boundary.test.ts').write_text(s)

@@ -1,0 +1,6 @@
+const fs=require('node:fs'), cp=require('node:child_process');
+const allowed=process.cwd()+'/packages/harness/src/iterative-runtime.ts';
+const source=fs.readFileSync(allowed,'utf8');const records=[{control:'enumerated source read',pass:source.includes('responseCheckpointControl')}];
+try{fs.readFileSync(process.cwd()+'/.I1-KNOWN-BAD-UNENUMERATED-NONEXISTENT');records.push({control:'unenumerated guard',pass:false})}catch(e){records.push({control:'unenumerated guard',pass:e.message.includes('I1 strict denied unenumerated NodeFS read'),error:e.message})}
+try{cp.execFileSync(process.execPath,['--version']);records.push({control:'child process guard',pass:false})}catch(e){records.push({control:'child process guard',pass:e.message.includes('I1 strict denied child process'),error:e.message})}
+console.log(JSON.stringify(records,null,2));if(records.some(x=>!x.pass))process.exitCode=1

@@ -1,0 +1,416 @@
+{
+  "task": "DX100-G01:RECONCILE-OPEN-SDK-CONTRACTS",
+  "round": "R1",
+  "role": "FRESH_INDEPENDENT_SOURCE_CRITIC",
+  "prior_participation": false,
+  "descendants": 0,
+  "verdict": "REVISE",
+  "scope": "T1 bounded source contracts only; no runtime/functional/production acceptance",
+  "observed_at": "2026-10-18T14:55:24.119360+00:00",
+  "freeze": {
+    "path": "../review-freeze-r1.json",
+    "sha256": "80f98219346ee93a6750d6eeca39404bf1c699b8d341b60a1523a4171d1d7ba3",
+    "files": 70
+  },
+  "mandatory_count": 2,
+  "findings": [
+    {
+      "id": "R1-01",
+      "severity": "P2",
+      "mandatory": true,
+      "criteria": [
+        "SK02",
+        "SK03"
+      ],
+      "title": "PY04 inverte a precedência de threadId em resume e omite o mesmo contraste em fork",
+      "subject_sources": [
+        {
+          "path": "python-contracts.json",
+          "line_start": 78,
+          "line_end": 99
+        }
+      ],
+      "primary_sources": [
+        {
+          "path": "sdk/python/src/openai_codex/client.py",
+          "line_start": 84,
+          "line_end": 110
+        },
+        {
+          "path": "sdk/python/src/openai_codex/client.py",
+          "line_start": 485,
+          "line_end": 491
+        },
+        {
+          "path": "sdk/python/src/openai_codex/client.py",
+          "line_start": 505,
+          "line_end": 511
+        },
+        {
+          "path": "sdk/python/src/openai_codex/client.py",
+          "line_start": 672,
+          "line_end": 678
+        }
+      ],
+      "archived_sources": [
+        {
+          "path": "inputs/P02.source.txt",
+          "line_start": 485,
+          "line_end": 491
+        },
+        {
+          "path": "inputs/P02.source.txt",
+          "line_start": 505,
+          "line_end": 511
+        },
+        {
+          "path": "inputs/P02.source.txt",
+          "line_start": 672,
+          "line_end": 678
+        }
+      ],
+      "generated_declaration_sources": [
+        {
+          "path": "inputs/P17.source.txt",
+          "line_start": 6105,
+          "line_end": 6107
+        },
+        {
+          "path": "inputs/P17.source.txt",
+          "line_start": 10016,
+          "line_end": 10018
+        }
+      ],
+      "actual": "thread_resume e thread_fork constroem {\"threadId\": thread_id, **_params_dict(params)}. O dict params vence por estar à direita; até threadId:null explícito vence no caminho dict. _start_turn faz a ordem oposta: **params antes de threadId/input, portanto o argumento e o input normalizado vencem apenas nesse caminho.",
+      "contradiction": "PY04.source_contract diz resume enforces threadId argument, e future_known_bad condena permitir params.threadId substituir o argumento. Assim classifica comportamento literal correto como incorreto. As expressões de payload em python-rpc-bindings só dizem payload e não corrigem esse oráculo narrativo.",
+      "evidence_method": "Leitura dos snapshots pinados e interpretação independente somente de AST Dict/ordem de overlay em dados sintéticos, sem eval/compile/import ou chamada SDK. Exemplos registrados em data-observations.json:F_R1_01_dictionary_precedence.",
+      "impact": "Um futuro oráculo derivado de PY04 exigiria a sessão errada e rejeitaria o cliente de referência por cumprir a própria fonte. A limitação Pydantic/runtime NOT_RUN não cobre esta contradição de formação de payload.",
+      "required_disposition": "Corrigir PY04/futuros positivos e conhecidos ruins para separar resume/fork de _start_turn, acrescentar ref fork e casos conflitantes A/B, dict None e params sem conflito; manter a distinção modelo versus dict sem assumir resultado Pydantic. Acrescentar contraprova de dados/AST capaz de distinguir a ordem invertida. Não alterar SDK nem executar runtime para este reparo T1.",
+      "status": "OPEN"
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "mandatory": true,
+      "criteria": [
+        "SK02"
+      ],
+      "title": "Cancelamento de goal para no nome do helper e perde os ramos de startup diferido e pause/interrupt",
+      "subject_sources": [
+        {
+          "path": "python-contracts.json",
+          "line_start": 224,
+          "line_end": 240
+        },
+        {
+          "path": "python-contracts.json",
+          "line_start": 298,
+          "line_end": 343
+        }
+      ],
+      "primary_sources": [
+        {
+          "path": "sdk/python/src/openai_codex/async_client.py",
+          "line_start": 244,
+          "line_end": 290
+        },
+        {
+          "path": "sdk/python/src/openai_codex/client.py",
+          "line_start": 568,
+          "line_end": 597
+        },
+        {
+          "path": "sdk/python/src/openai_codex/async_client.py",
+          "line_start": 301,
+          "line_end": 326
+        },
+        {
+          "path": "sdk/python/src/openai_codex/_goal.py",
+          "line_start": 417,
+          "line_end": 448
+        }
+      ],
+      "archived_sources": [
+        {
+          "path": "inputs/P03.source.txt",
+          "line_start": 244,
+          "line_end": 290
+        },
+        {
+          "path": "inputs/P02.source.txt",
+          "line_start": 568,
+          "line_end": 597
+        },
+        {
+          "path": "inputs/P05.source.txt",
+          "line_start": 417,
+          "line_end": 448
+        }
+      ],
+      "actual": "AsyncCodexClient.start_goal_operation cria worker daemon e aguarda shield(wrap_future(operation)). CancelledError registra callback e relança; callback retorna se completed.result falha, ou inicia outro daemon para cancel_goal_operation, com finish/unregister em finally. O helper síncrono tenta pause_goal via thread/goal/set(status=paused), suprime Exception e depois tenta interrupt; ID ausente pula RPC, InvalidRequestError com prefixo específico permite um único segundo interrupt com ID alterado extraído da mensagem ou state.current_turn; demais falhas/IDs iguais ou ausentes não repetem.",
+      "omission": "PY10 descreve somente startup ordinary-turn (301–326); PY13 descreve startup síncrono e chama isso de cancels; PY14 termina em cancel_goal antes de close/rethrow. Nenhum dos 20 contratos nomeia shield/callback/daemon de startup cancelado, a política pause→interrupt ou o retry limitado de rollover, nem fornece seus cutpoints/known-bad específicos. Há arestas e excertos desses helpers, mas sem o contrato de defaults/erros/cleanup solicitado por SK02.",
+      "evidence_method": "Comparação direta das três linhas de contrato com os corpos dos métodos nos snapshots; AST/arestas usados como localização, sem afirmar execução dos callbacks ou liveness.",
+      "impact": "Os futuros genéricos normal close vs cancel não discriminam startup de goal que continua depois de entregar CancelledError, remoção indevida de pause, nem perda/duplicação do retry de interrupt. Uma diferença crítica para cancelamento fica escondida atrás do limite geral runtime unproven.",
+      "required_disposition": "Expandir os contratos existentes PY13/PY14 (ou outro registro delimitado) com essas cadeias e refs/excertos exatos; nomear futuros de cancel antes/depois do resultado, resultado falho, pause falho ainda seguido de interrupt, ID ausente/igual/alterado e no máximo duas tentativas. Contrastar com ordinary-turn cancellation e normal close; preservar que nenhum callback, RPC, fim de processo ou ausência de efeito foi observado. Reparo somente de fonte/dados, sem runtime e sem exigir grafo exaustivo.",
+      "status": "OPEN"
+    }
+  ],
+  "substantive_check_count": 18,
+  "substantive_checks": [
+    {
+      "id": "C01",
+      "criteria": "SK06,SK07",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Freeze e proveniência",
+      "evidence": "Freeze SHA esperado/70 arquivos idênticos; 24 Python +12 TS/wrappers comparados a git show PIN:PATH, SHA256, blob SHA1, snapshots e worktree; 724 excertos PY e269 ocorrências de refs TS conferidos independentemente."
+    },
+    {
+      "id": "C02",
+      "criteria": "SK01",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Donos, requisitos e catálogo",
+      "evidence": "Seis IDs/gap owners/variant IDs/requisitos idênticos à integração histórica; todos os joins existentes apontam IDs reais. OPEN/NOT_RUN/null e whole_requirement_covered=false preservados."
+    },
+    {
+      "id": "C03",
+      "criteria": "SK02",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "25 sites RPC e resultados",
+      "evidence": "20 requests+1 notification initialized+4 dynamic. Conferidos 21 IDs literais reais e inexistência de ClientRequest-initialized; notification sem waiter/model/ACK; bindings locais de response_model ligados a imports, caller models continuam abertos."
+    },
+    {
+      "id": "C04",
+      "criteria": "SK02,SK06",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Aliases e relações",
+      "evidence": "8 declarações reais,350 arestas,7 multihop,32 callable references; todos from/to e ranges de métodos alvos conferem com AST recursiva. AsyncThread/AsyncTurnHandle passam por _codex→AsyncCodex._client; não é grafo completo nem execução."
+    },
+    {
+      "id": "C05",
+      "criteria": "SK02,SK03",
+      "disposition": "REVISE",
+      "concern": "Precedência de parâmetros",
+      "evidence": "R1-01: PY04 contradiz a ordem literal dos dicts resume/fork versus _start_turn. Contraprova de interpretação AST/dados registrada."
+    },
+    {
+      "id": "C06",
+      "criteria": "SK03",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Declarações geradas e biblioteca externa",
+      "evidence": "33 modelos verificados pelo checker, amostra dirigida de ThreadResumeParams/ThreadForkParams/TurnStartParams/RootModel/respostas. Aliases, ConfigDict, default syntax/required e serializer flags são fatos; Pydantic2.13.4/coerção/nullable herdados continuam sem qualificação."
+    },
+    {
+      "id": "C07",
+      "criteria": "SK02,SK05",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Initialize e guard de campos",
+      "evidence": "P02:304–366/P11/P12:16–64 confirmam extração de versão, notification e guard só para campos não-None;0.0.0 exige schema do executável/config capturados. Sem falsa versão institucional ou transferência do pin de distribuição."
+    },
+    {
+      "id": "C08",
+      "criteria": "SK02",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Init/processo e encerramento",
+      "evidence": "P01:85–92/329–353 eP02:242–302: sync eager, async lazy lock/Exception distinto de BaseException; env/argv/custom launch; kill sem wait subsequente. Fonte não prova reaping ou liveness."
+    },
+    {
+      "id": "C09",
+      "criteria": "SK02",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Respostas, notifications, erros e retry",
+      "evidence": "P02:327–392/810–901,P04:258–351,P15:12–41/P16:86–121: waiter pré-write, roteamento, fallback UnknownNotification, fail_all e retry explícito com jitter além do cap nominal; default accept separado de grant institucional."
+    },
+    {
+      "id": "C10",
+      "criteria": "SK02",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Turn/subscribers/coleta",
+      "evidence": "P02:659–699/P04:145–206/P01:822–893/P07:45–135: registro antes da resposta, cursors/retenção limitada, fechamento local e terminal correspondente obrigatório na coleta Python. Sem replay durável inferido."
+    },
+    {
+      "id": "C11",
+      "criteria": "SK02",
+      "disposition": "REVISE",
+      "concern": "Goal: startup, cancel e close",
+      "evidence": "R1-02: há distinção correta ordinary-turn/goal-stream/normal-close, mas faltam contratos nomeados de startup async diferido e cancel_goal_operation→pause/interrupt/rollover. Não é pedido de prova runtime."
+    },
+    {
+      "id": "C12",
+      "criteria": "SK02,SK03",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Login e inputs",
+      "evidence": "P06:29–43/109–115,P02:441–456/763–779,P04:114–124,P08:70–103: login wait/cancel separados, retenção de evento precoce, ExternalMessage tool-level sem autoridade institucional e toolOutput guard."
+    },
+    {
+      "id": "C13",
+      "criteria": "SK04",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "TS lazy/input/schema/cleanup",
+      "evidence": "TS01–04 contra codex/thread/schema: nenhuma iteração não aloca; schema antes de normalize e try; normalize pode deixar temporário; stringify/write tentam cleanup, rm falho suprimido. Limites são nomeados."
+    },
+    {
+      "id": "C14",
+      "criteria": "SK04",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "TS config/options/ambiente",
+      "evidence": "TS05–09 contra exec:94–206/268–354: argv ordenado, TOML raso/colisões/empty/null/undefined, web legacy, override env integral inclusive{}, originator/apiKey e PATH; precedência CLI não presumida."
+    },
+    {
+      "id": "C15",
+      "criteria": "SK04",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "TS JSONL/agregado/EOF",
+      "evidence": "TS13–15 contra thread:98–141: JSON.parse sem validação, usage ??=0, mutação id antes de yield, último texto/usage, turn.failed truthy distinto de evento error, EOF/exit0 sem terminal retorna parcial; OB02 separa terminal nativo."
+    },
+    {
+      "id": "C16",
+      "criteria": "SK04",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "TS Abort/process lifecycle",
+      "evidence": "TS10–12 contra exec:203–264: fronteiras de try, error armazenado, exitPromise não close, stdout/readline/stdio, Abort passado ao spawn, killed sem prova de fim e sem wait/reap; obrigações futuras não escondem falhas."
+    },
+    {
+      "id": "C17",
+      "criteria": "SK05",
+      "disposition": "SATISFIED_STATIC",
+      "concern": "Distribuição/plataforma/proxy",
+      "evidence": "PY19/20,PK01–09 e versões: seis assets PY/oito pares TS, layouts SDK vs wrapper/proxy, ownership PM, self-signal sem garantia de saída, marker sem autenticação;0.0.0-dev/0.153.4/min0.151.0/lock2.13.4/Git distintos."
+    },
+    {
+      "id": "C18",
+      "criteria": "SK06,SK07,SK08",
+      "disposition": "SATISFIED_BOUNDED_REVIEW_DELIVERY",
+      "concern": "Preservação, metachecks e higiene",
+      "evidence": "Ambos checkers existentes executados UMA vez em --check/exit0,18+10 contraprovas de dados. Checkpoint2690:2687 exatos e3 controles próprios autorizados diferentes, zero drift indevido. SPECccdf/oito anexos/requestpending e14CQ íntegros; catálogo509NOT_RUN/null/487+22.24 links locais dos índices válidos. Seal de atores/continuidade do Lead continua responsabilidade do Lead após entrega desta R1."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "SK01",
+      "disposition": "SATISFIED_STATIC",
+      "checks": [
+        "C02"
+      ],
+      "findings": []
+    },
+    {
+      "id": "SK02",
+      "disposition": "REVISE",
+      "checks": [
+        "C03",
+        "C04",
+        "C05",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12"
+      ],
+      "findings": [
+        "R1-01",
+        "R1-02"
+      ]
+    },
+    {
+      "id": "SK03",
+      "disposition": "REVISE",
+      "checks": [
+        "C05",
+        "C06",
+        "C12"
+      ],
+      "findings": [
+        "R1-01"
+      ],
+      "note": "As declarações/modelos e os limites externos estão adequados; o problema é a expectativa falsa de payload composto em PY04."
+    },
+    {
+      "id": "SK04",
+      "disposition": "SATISFIED_STATIC_BOUNDED",
+      "checks": [
+        "C13",
+        "C14",
+        "C15",
+        "C16"
+      ],
+      "findings": []
+    },
+    {
+      "id": "SK05",
+      "disposition": "SATISFIED_STATIC_BOUNDED",
+      "checks": [
+        "C07",
+        "C17"
+      ],
+      "findings": []
+    },
+    {
+      "id": "SK06",
+      "disposition": "SATISFIED_STATIC_BOUNDED",
+      "checks": [
+        "C01",
+        "C04",
+        "C18"
+      ],
+      "findings": [],
+      "note": "Detectores rejeitam relações materialmente erradas; não validam automaticamente a verdade da prosa PY04, detectada pela revisão independente."
+    },
+    {
+      "id": "SK07",
+      "disposition": "SATISFIED_STATIC",
+      "checks": [
+        "C01",
+        "C18"
+      ],
+      "findings": []
+    },
+    {
+      "id": "SK08",
+      "disposition": "R1_DELIVERED_PENDING_LEAD_FINAL_SEAL",
+      "checks": [
+        "C18"
+      ],
+      "findings": [],
+      "note": "Crítico não edita coord/masters/programstate; Lead integra resultado e fecha ator após esta entrega. Não usar esta disposição como aceite final da unidade."
+    }
+  ],
+  "checker_executions": [
+    {
+      "command": "python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts/verify-source.py --check",
+      "times": 1,
+      "exit_code": 0,
+      "output": "python-check.log",
+      "kind": "metadata_AST_data_only",
+      "negative_controls_rejected": 18
+    },
+    {
+      "command": "python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts/typescript/reader.py --check",
+      "times": 1,
+      "exit_code": 0,
+      "output": "typescript-check.log",
+      "kind": "metadata_local_TS_parser_only_no_typechecker",
+      "negative_controls_rejected": 10
+    }
+  ],
+  "limits": [
+    "No SDK/app/runtime/reference/provider imports or execution; no network/install/PG/Docker/functional gates.",
+    "24 Python and12 TS/wrapper sources authenticated as text; selected semantics sampled, no whole-dispatch graph or exhaustive implicit-exception/runtime coverage.",
+    "Pydantic/library behavior and installed wheel/npm/runtime/binary artifacts unqualified; platform maps are source contracts only.",
+    "Client default accept is not institutional grant; TS EOF partial return is not native terminal; cancellation/close is not remote effect absence.",
+    "All6mandatorygaps remain OPEN. No G01 closure, functional receipts, release, parity or new BUILD authorization.",
+    "SPEC0239 ccdf3a75 and8annexes/request remain pending user; unrelated T3 does not block this T1 verdict.",
+    "REPORT/Lead acceptance used only as indices; raw scout report preserved and formatting is not a finding."
+  ],
+  "disposition": {
+    "required": "One grouped documentary repair for R1-01 andR1-02, then only authorized R2 within original unit budget. No repair executed by critic.",
+    "remaining_review_rounds": 1,
+    "grouped_repairs_available": 1,
+    "runtime_tests": "NOT_RUN",
+    "functional_receipts": 0,
+    "gaps_open": 6,
+    "program_state_modified_by_reviewer": false,
+    "write_scope": "review-r1/** only; no files written under /tmp needed",
+    "handoff": "Lead integrates this verdict/continuity and closes reviewer actor. Do not emit ACCEPT_BOUNDED_SOURCE_CONTRACTS for this R1."
+  }
+}

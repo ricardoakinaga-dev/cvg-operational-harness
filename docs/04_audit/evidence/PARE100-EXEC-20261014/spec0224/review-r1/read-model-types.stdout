@@ -1,0 +1,174 @@
+54-  'INTERNAL_FAILURE',
+55-  'STATE_CONFLICT',
+56-  'CANCELLED',
+57-  'UNSAFE_REQUEST'
+58-] as const
+59-
+60-export type StopReason = (typeof STOP_REASONS)[number]
+61-
+62:export interface ExecutionBudget {
+63-  readonly maxSteps: number
+64-  readonly maxModelCalls: number
+65-  readonly maxToolCalls: number
+66-  readonly maxDurationMs: number
+67-  readonly maxCostUsd: number
+68-  readonly maxTokens: number
+69-  /**
+70-   * Phase 3 optional iterative budgets. Absent means "not constrained beyond
+71-   * the shared budgets"; the iterative runtime never grants an unlimited
+72-   * loop because maxSteps and maxDurationMs remain mandatory.
+73-   */
+74-  readonly maxKnowledgeCalls?: number
+75-  readonly maxReplans?: number
+76-  readonly maxVerificationCalls?: number
+77-  readonly maxDecisionRepairs?: number
+78-}
+79-
+80-export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+81-export type SideEffect = 'NONE' | 'READ' | 'WRITE' | 'EXTERNAL'
+82-
+83-export interface SkillRequirement {
+84-  readonly id: string
+85-  readonly version?: string
+86-}
+87-
+88-export interface SkillDefinition {
+89-  readonly id: string
+90-  readonly version: string
+91-  readonly description: string
+92-  readonly requiredTools: readonly string[]
+93-  readonly requiredKnowledge: readonly string[]
+94-  readonly riskLevel: RiskLevel
+95-}
+96-
+97-export interface ToolInvocation {
+98-  readonly toolId: string
+99-  readonly toolVersion?: string
+100-  readonly input: unknown
+101-  readonly operationKey: string
+102-}
+103-
+104-export interface ToolResult {
+105-  readonly status: 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+106-  readonly output?: unknown
+107-  readonly error?: string
+108-}
+109-
+110-export interface ToolExecutionContext {
+111-  readonly tenantId: TenantId
+112-  readonly agentId: AgentId
+113-  readonly correlationId: CorrelationId
+114-  readonly traceId: TraceId
+115-  readonly operationKey?: string
+116-  readonly signal?: AbortSignal
+117-  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+118-  readonly sandboxHandle?: SandboxHandle
+119-}
+120-
+121-export interface ToolDescriptor {
+122-  readonly id: string
+123-  readonly version: string
+124-  readonly description: string
+125-  readonly inputSchema: unknown
+126-  readonly outputSchema: unknown
+127-  readonly risk: RiskLevel
+--
+248-  readonly toolInvocation?: ToolInvocation
+249-  readonly reason?: string
+250-}
+251-
+252-export interface Orchestrator {
+253-  decideNextStep(input: OrchestratorInput): Promise<OrchestratorDecision>
+254-}
+255-
+256:export interface ModelMessage {
+257-  readonly role: 'system' | 'user' | 'assistant' | 'tool'
+258-  readonly content: string
+259-}
+260-
+261-export type ModelCallPurpose =
+262-  | 'ORCHESTRATION'
+263-  | 'RESPONSE'
+264-  | 'EVALUATION'
+265-  | 'REPAIR'
+266-
+267:export interface ModelRequest {
+268-  readonly messages: readonly ModelMessage[]
+269-  readonly context: ContextSnapshot
+270-  readonly budget: ExecutionBudget
+271-  readonly correlationId: CorrelationId
+272-  /** Phase 3 accounting hint; providers may ignore it. */
+273-  readonly purpose?: ModelCallPurpose
+274-  /**
+275-   * Aborted by the runtime when the execution deadline passes, so a provider
+276-   * can stop the in-flight request instead of spending connection and cost.
+277-   */
+278-  readonly signal?: AbortSignal
+279-}
+280-
+281:export interface ModelResult {
+282-  readonly text: string
+283-  readonly provider: string
+284-  readonly model: string
+285-  readonly inputTokens: number
+286-  readonly outputTokens: number
+287-  readonly costUsd: number
+288-}
+289-
+290-export interface ModelGateway {
+291-  complete(request: ModelRequest): Promise<ModelResult>
+292-}
+293-
+294-export interface PolicyRequest {
+295-  readonly tenantId: TenantId
+296-  readonly agentId: AgentId
+297-  readonly action: string
+298-  readonly tool: ToolDefinition
+299-  readonly invocation: ToolInvocation
+300-  readonly correlationId: CorrelationId
+301-}
+302-
+303-export type PolicyOutcome = 'ALLOW' | 'DENY' | 'REQUIRE_APPROVAL' | 'HANDOFF'
+304-
+305-export interface PolicyDecision {
+306-  readonly outcome: PolicyOutcome
+307-  readonly reason: string
+308-  readonly policyVersion: string
+309-}
+310-
+311-export interface PolicyEngine {
+312-  evaluate(request: PolicyRequest): Promise<PolicyDecision>
+313-}
+314-
+315-export interface ApprovalRequest {
+316-  readonly tenantId: TenantId
+317-  readonly agentId: AgentId
+318-  readonly operationKey: string
+319-  readonly toolId: string
+320-  readonly summary: string
+321-  readonly correlationId: CorrelationId
+322-  /** Durable execution identity injected by the worker before approval request. */
+323-  readonly executionRef?: string
+324-  /** Optional durable-binding fields supplied by the governed runtime. */
+325-  readonly operatorId?: string
+326-  readonly agentVersion?: AgentVersion
+327-  readonly action?: string
+328-  readonly resource?: { readonly type: string; readonly id?: string }
+329-  readonly payload?: unknown
+330-  readonly policyVersion?: string
+331-}
+332-
+333-export type ApprovalStatus = 'APPROVED' | 'DENIED' | 'PENDING'
+334-
+335-export type ApprovalDecision =
+336-  | {
+337-      readonly status: 'APPROVED'
+338-      readonly approvalId: ApprovalId
+339-      readonly reason: string
+340-    }
+341-  | {
+342-      readonly status: 'DENIED' | 'PENDING'
+343-      readonly approvalId?: ApprovalId
+344-      readonly reason: string
+345-    }
+346-

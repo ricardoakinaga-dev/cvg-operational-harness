@@ -1,0 +1,121 @@
+"""Prepare a sealed fresh-review packet after the final source has executed.
+
+Usage: freeze.py <raw-run-dir> <execution-dir> <vitest-config> <command-json>
+Builder summaries and prior reviews/ledgers are deliberately excluded.
+"""
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parent
+w = b.parent / 'worktree'
+actor = base / 'builder-r1'
+run, execution, config, command = map(Path, sys.argv[1:])
+assert run.is_relative_to(actor) and execution.is_relative_to(actor)
+assert config.is_relative_to(actor) and command.is_relative_to(actor)
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+source = 'packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts'
+current = sha((w / source).read_bytes())
+cmd = json.loads(command.read_text())
+before = cmd.get('sourceBeforeSHA256', cmd.get('sourceSha256', cmd.get('sourceSHA256')))
+after = cmd.get('sourceAfterSHA256')
+assert before == after == current, 'Final executed source identity must be bound before/after'
+assert cmd.get('exit', cmd.get('exitCode')) == 0, 'No green packet from failing execution'
+old = json.loads((b / 'candidate-r12.json').read_text())
+bindings = list(old['sourceBindings'])
+for entry in bindings:
+    assert sha(Path(entry['live']).read_bytes()) == entry['sha256'], entry['path']
+raw = (w / source).read_bytes()
+bindings.append({'path': source, 'live': str(w / source), 'copy': 'source/' + source,
+                 'bytes': len(raw), 'sha256': current})
+cd = b / 'candidate-r13'
+cd.mkdir(exist_ok=False)
+for entry in bindings:
+    path = cd / entry['copy']
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(Path(entry['live']).read_bytes())
+candidate = {'scope': 'R13 new local synthetic native settlement/failure fixture only; no fullTR05/global/consumerroute/providerbilling or program closure.',
+             'sourceBindings': bindings}
+raw = (json.dumps(candidate, indent=2) + '\n').encode()
+(cd / 'manifest.json').write_bytes(raw)
+(b / 'candidate-r13.json').write_text(json.dumps(dict(candidate, manifest=str(cd / 'manifest.json'),
+    manifestSha256=sha(raw), sourceCount=len(bindings)), indent=2) + '\n')
+packet = base / 'review-packet-r1'
+packet.mkdir(exist_ok=False)
+artifact = packet / 'artifact'
+oldpacket = json.loads((b / 'bound-admission/review-packet-r1/manifest.json').read_text())
+inputs = []
+for entry in oldpacket['inputs']:
+    raw = Path(entry['copy']).read_bytes()
+    assert sha(raw) == entry['sha256'] and len(raw) == entry['bytes']
+    out = artifact / entry['relative']
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(raw)
+    inputs.append(dict(entry, copy=str(out)))
+out = artifact / source
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_bytes((w / source).read_bytes())
+inputs.append({'category': 'source', 'relative': source, 'original': str(w / source),
+               'copy': str(out), 'bytes': out.stat().st_size, 'sha256': sha(out.read_bytes())})
+(packet / 'candidate-manifest.json').write_bytes((cd / 'manifest.json').read_bytes())
+(packet / 'package.json').write_bytes((w / 'package.json').read_bytes())
+for path in [packet / 'node_modules', artifact / 'node_modules']:
+    path.symlink_to(w / 'node_modules', target_is_directory=True)
+contract = json.loads((base / 'contract.json').read_text())
+criteria = {'authority': contract['authority'], 'cases': contract['cases'],
+            'limits': contract['limits'], 'scope': contract['scope'],
+            'evidenceRequirements': 'Judge actual provider entries, live returned usage and durable receipts independently. UNKNOWN write may fail under actual native fencing and leave RESERVED. Reject invented successful settlement or rollback. Bound trusted synthetic support is not published consumer route. Preserve functional breach failures; containment is not provider qualification. No fullTR05/global claim.'}
+proofs = []
+
+
+def add(path, relative):
+    raw = path.read_bytes()
+    if not raw:
+        return
+    out = packet / 'proof' / relative
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(raw)
+    proofs.append({'copy': str(out), 'relative': relative, 'bytes': len(raw), 'sha256': sha(raw)})
+
+
+(base / 'criteria.json').write_text(json.dumps(criteria, indent=2) + '\n')
+add(base / 'criteria.json', 'criteria.json')
+for path in sorted(run.rglob('*.json')):
+    if 'private' not in path.name and not any(part in ['cache', 'tmp', 'node_modules'] for part in path.relative_to(run).parts):
+        add(path, str(path.relative_to(run)))
+for path in sorted(execution.iterdir()):
+    if path.is_file() and 'private' not in path.name and any(s in path.name for s in ['command.json', 'stdout.log', 'stderr.log', 'connection-close', 'container-stopped']):
+        add(path, 'execution/' + path.name)
+resource = json.loads((b / 'public-json-boundaries/assigned-i1-resource-prototype-private.json').read_text())
+resource.update(schemaName='pare224_settle_i1_r1', roleName='pare224_settle_i1_r1_service',
+                exclusiveClaim='New fresh I1 resource only224/schema settle_i1_r1/service after absence; never old namespaces, only after Lead claim.')
+private = base / 'assigned-i1-resource-private-prototype.json'
+private.write_text(json.dumps(resource, indent=2) + '\n')
+private.chmod(0o600)
+env = packet / 'environment'
+env.mkdir()
+template = config.read_text().replace(str(w), str(artifact))
+# Config cache must be assigned by the reviewer, never the producer directory.
+template = template.replace(str(actor / 'cache'), "__I1_ASSIGNED_CACHE__")
+(env / 'vitest-template.mjs').write_text(template)
+shutil.copyfile(b / 'bound-admission/review-packet-r1/environment/trace-reads.cjs', env / 'trace-reads.cjs')
+manifest = {'scope': 'Fresh I1 FIRST read this manifest ONLY. All candidate/constraint/proof copies readonly. Never read original repos, AGENTS, ledgers, .agent/.gauntlet, prior packets/reports/history or producer summaries. Write only explicitly assigned review-r1. No descendants.',
+            'artifactRoot': str(artifact), 'candidateManifestCopy': str(packet / 'candidate-manifest.json'),
+            'candidateManifestSha256': sha((cd / 'manifest.json').read_bytes()),
+            'inputs': inputs, 'proofs': proofs,
+            'allowedScopeMetadata': {'path': str(packet / 'package.json'), 'bytes': (packet / 'package.json').stat().st_size,
+                                     'sha256': sha((packet / 'package.json').read_bytes())},
+            'environmentTemplates': [{'copy': str(p), 'bytes': p.stat().st_size, 'sha256': sha(p.read_bytes())} for p in sorted(env.iterdir())],
+            'allowedDependencyMirror': str(packet / 'node_modules'), 'externalReadOnlyDependencies': str(w / 'node_modules'),
+            'node': '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
+            'privateResource': {'path': str(private), 'bytes': private.stat().st_size, 'sha256': sha(private.read_bytes()),
+                                'private': True, 'omitPublication': True, 'rule': 'Explicit resource claim required; readonly prototype clone0600/rediscoverport, no credential output.'}}
+(packet / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+result = {'status': 'FROZEN_NOT_ACCEPTED', 'sources': len(bindings), 'inputs': len(inputs), 'proofs': len(proofs),
+          'sourceSHA256': current, 'candidateSHA256': manifest['candidateManifestSha256'],
+          'packetSHA256': sha((packet / 'manifest.json').read_bytes())}
+(base / 'freeze.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps(result))

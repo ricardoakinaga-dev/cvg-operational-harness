@@ -1,0 +1,51 @@
+from pathlib import Path
+import ast,json
+P=Path('docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts');q=P/'payload-and-goal-facts.json';d=json.loads(q.read_text());src={x['path']:x for x in json.loads((P/'source-inputs.json').read_text())['inputs']};af=ast.parse((P/src['sdk/python/src/openai_codex/async_client.py']['archive']).read_text());start=next(n for n in ast.walk(af) if isinstance(n,ast.AsyncFunctionDef) and n.name=='start_goal_operation');cb=next(n for n in ast.walk(start) if isinstance(n,ast.FunctionDef) and n.name=='cleanup_cancelled_start');tr=next(n for n in cb.body if isinstance(n,ast.Try));d['goal']['callback_result_failure_handler']=ast.unparse(tr.handlers[0].type);d['goal']['callback_result_failure_returns']=any(isinstance(n,ast.Return) for n in tr.handlers[0].body);d['goal']['done_callback_expression']=ast.unparse(next(n for n in ast.walk(start) if isinstance(n,ast.Call) and ast.unparse(n.func)=='operation.add_done_callback').args[0])
+for row in d['payloads']:
+ vectors=[]
+ for params in [None,{}, {'model':'SYNTHETIC'}, {'threadId':'B'}, {'threadId':None}]+([{'threadId':'B','input':[{'type':'text','text':'Y'}]}] if row['method']=='_start_turn' else []):
+  result={};pp=params or {}
+  for ent in row['ordered_dict_entries']:
+   if ent['key'] is None:result.update(pp)
+   elif ent['key']=='threadId':result['threadId']='A'
+   elif ent['key']=='input':result['input']=[{'type':'text','text':'X'}]
+  vectors.append({'argument_thread_id':'A','params':params,'normalized_input':[{'type':'text','text':'X'}],'expected_payload_from_plain_data_overlay':result})
+ row['source_only_overlay_examples']=vectors
+q.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+V=P/'verify-source.py';t=V.read_text();at=t.index('result={\'kind\':');block='''# R1 repair: discriminate actual source overlay order and goal cancellation guards.
+def validate_repaired_facts(d):
+ f='sdk/python/src/openai_codex/client.py';cl=next(x for x in trees[f].body if isinstance(x,ast.ClassDef) and x.name=='CodexClient')
+ for row in d['payloads']:
+  fn=next(x for x in cl.body if isinstance(x,ast.FunctionDef) and x.name==row['method']);ass=next(n for n in ast.walk(fn) if isinstance(n,ast.Assign) and any(isinstance(z,ast.Name) and z.id=='payload' for z in n.targets));assert isinstance(ass.value,ast.Dict)
+  entries=[{'key':ast.literal_eval(k) if k is not None else None,'value_expression':ast.unparse(v)} for k,v in zip(ass.value.keys,ass.value.values)];assert row['ordered_dict_entries']==entries
+  ti=next(i for i,x in enumerate(entries) if x['key']=='threadId');pi=next(i for i,x in enumerate(entries) if x['key'] is None);assert row['precedence']==('PARAMS_THREAD_ID_WINS' if ti<pi else 'EXPLICIT_ARGUMENT_AND_INPUT_WIN')
+  assert len(row['source_only_overlay_examples'])>=5
+  for v in row['source_only_overlay_examples']:
+   out={}
+   for x in entries:
+    if x['key'] is None:out.update(v['params'] or {})
+    elif x['key']=='threadId':out['threadId']=v['argument_thread_id']
+    elif x['key']=='input':out['input']=v['normalized_input']
+   assert out==v['expected_payload_from_plain_data_overlay']
+ g=d['goal'];af='sdk/python/src/openai_codex/async_client.py';startup=next(n for n in ast.walk(trees[af]) if isinstance(n,ast.AsyncFunctionDef) and n.name=='start_goal_operation');aw=[ast.unparse(n.value) for n in ast.walk(startup) if isinstance(n,ast.Await)];assert g['await_expressions']==aw and g['shield_present']==any('asyncio.shield(' in s for s in aw)
+ th=[{k.arg:ast.unparse(k.value) for k in n.keywords} for n in ast.walk(startup) if isinstance(n,ast.Call) and ast.unparse(n.func)=='threading.Thread'];assert g['worker_thread_keywords']==th
+ cb=next(n for n in ast.walk(startup) if isinstance(n,ast.FunctionDef) and n.name=='cleanup_cancelled_start');tr=next(n for n in cb.body if isinstance(n,ast.Try));assert g['callback_result_failure_handler']==ast.unparse(tr.handlers[0].type) and g['callback_result_failure_returns']==any(isinstance(n,ast.Return) for n in tr.handlers[0].body)
+ callback=next(n for n in ast.walk(startup) if isinstance(n,ast.Call) and ast.unparse(n.func)=='operation.add_done_callback');assert g['done_callback_expression']==ast.unparse(callback.args[0])
+ stop=next(n for n in ast.walk(startup) if isinstance(n,ast.FunctionDef) and n.name=='stop_cancelled_goal');fin=next(n for n in stop.body if isinstance(n,ast.Try));fc=[ast.unparse(n.value.func) for n in fin.finalbody if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call)];assert g['cleanup_finally_calls']==fc==['state.finish','self._sync.unregister_goal_operation']
+ pol=next(n for n in cl.body if isinstance(n,ast.FunctionDef) and n.name=='cancel_goal_operation');body=[n for n in pol.body if not(isinstance(n,ast.Expr) and isinstance(n.value,ast.Constant) and isinstance(n.value.value,str))];assert g['cancel_policy_statements']==[ast.unparse(n) for n in body]
+ assert isinstance(body[0],ast.Try) and ast.unparse(body[0].body[0].value.func)=='self.pause_goal' and ast.unparse(body[0].handlers[0].type)==g['pause_exception_type']=='Exception';assert ast.unparse(body[1].value.func)=='self._interrupt_goal_operation' and g['interrupt_after_pause_exception'] is True
+ intr=next(n for n in cl.body if isinstance(n,ast.FunctionDef) and n.name=='_interrupt_goal_operation');calls=[n for n in ast.walk(intr) if isinstance(n,ast.Call) and ast.unparse(n.func)=='self.turn_interrupt'];assert g['interrupt_call_sites']==len(calls)==2 and not any(isinstance(n,(ast.For,ast.While)) for n in ast.walk(intr))
+ handler=next(n for n in ast.walk(intr) if isinstance(n,ast.ExceptHandler) and isinstance(n.type,ast.Name) and n.type.id=='InvalidRequestError');assert g['retry_exception_type']==ast.unparse(handler.type);pre=next(n for n in ast.walk(handler) if isinstance(n,ast.Call) and ast.unparse(n.func)=='exc.message.startswith');assert g['retry_message_prefix']==ast.literal_eval(pre.args[0])
+ ass=next(n for n in handler.body if isinstance(n,ast.Assign) and any(isinstance(v,ast.Name) and v.id=='next_turn_id' for v in n.targets));assert g['candidate_expression']==ast.unparse(ass.value);guard=next(n for n in handler.body if isinstance(n,ast.If) and 'next_turn_id' in ast.unparse(n.test));assert g['no_retry_predicate']==ast.unparse(guard.test)
+ sf='sdk/python/src/openai_codex/_goal.py';sel=next(n for n in ast.walk(trees[sf]) if isinstance(n,ast.FunctionDef) and n.name=='turn_for_interrupt');priority=[ast.unparse(n.value) for n in sorted([x for x in ast.walk(sel) if isinstance(x,ast.Return)],key=lambda x:x.lineno)];assert g['turn_id_priority']==priority
+ assert g['runtime_status']=='NOT_RUN' and g['receipt'] is None and d['all_cutpoints_status']=='NOT_RUN'
+repairfacts=load(P/'payload-and-goal-facts.json');validate_repaired_facts(repairfacts)
+reject('invert-resume-fork-precedence',repairfacts,lambda d:d['payloads'][0].update(precedence='EXPLICIT_ARGUMENT_AND_INPUT_WIN'),validate_repaired_facts)
+reject('invert-start-turn-precedence',repairfacts,lambda d:d['payloads'][2].update(precedence='PARAMS_THREAD_ID_WINS'),validate_repaired_facts)
+reject('omit-goal-startup-shield',repairfacts,lambda d:d['goal'].update(shield_present=False),validate_repaired_facts)
+reject('omit-cancelled-goal-cleanup-finally',repairfacts,lambda d:d['goal']['cleanup_finally_calls'].pop(),validate_repaired_facts)
+reject('skip-pause-before-goal-interrupt',repairfacts,lambda d:d['goal'].update(interrupt_after_pause_exception=False),validate_repaired_facts)
+reject('invent-third-interrupt-attempt',repairfacts,lambda d:d['goal'].update(interrupt_call_sites=3),validate_repaired_facts)
+checks.append({'id':'REPAIR_SOURCE_GUARDS','status':'PASS_STATIC','payload_precedence_methods':3,'plain_data_overlays':sum(len(x['source_only_overlay_examples']) for x in repairfacts['payloads']),'goal_startup_and_control_guards':'SOURCE_ONLY','future_runtime':'NOT_RUN'})
+'''
+t=t[:at]+block+t[at:];V.write_text(t);Path('/tmp/cvg-codex100-exec-20261017/sdk-open-contracts/verify-r2.py').write_text(t);print('Additional source predicates installed; no SDK executed')

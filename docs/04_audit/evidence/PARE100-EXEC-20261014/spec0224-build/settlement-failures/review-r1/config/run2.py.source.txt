@@ -1,0 +1,50 @@
+import pathlib,os,json,subprocess,hashlib,time
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/settlement-failures/review-packet-r1');O=P.parent/'review-r1';M=json.loads((P/'manifest.json').read_bytes());N=M['node'];CID='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+os.umask(0o077)
+env=os.environ.copy()
+for k,v in {'TMPDIR':O/'tmp','TMP':O/'tmp','TEMP':O/'tmp','NODE_COMPILE_CACHE':O/'nodecache','XDG_CACHE_HOME':O/'cache','XDG_CONFIG_HOME':O/'config','npm_config_cache':O/'cache/npm','I1_READ_LOG':O/'logs/reads.jsonl','I1_REVIEW':O,'I1_SCOPE_PACKAGE':P/'package.json','I1_PACKET_DEPS':P/'node_modules','SPEC0224_SETTLE_ASSIGNED_ROOT':O,'SPEC0224_SETTLE_RESOURCE':O/'resource-private.json','SPEC0224_SETTLE_SERVICE_RESOURCE':O/'service-private.json','SPEC0224_SETTLE_EVIDENCE':O/'run'}.items():env[k]=str(v)
+env['NODE_OPTIONS']='--require='+str(O/'config/trace-reads.cjs')
+# Keep every invocation and exit, never environment credentials.
+def command(name,args,extra=None):
+ name='r2-'+name
+ e=env.copy();e.update(extra or {})
+ start=time.time()
+ with (O/('logs/'+name+'.stdout')).open('wb') as out,(O/('logs/'+name+'.stderr')).open('wb') as err:
+  r=subprocess.run(args,cwd=M['artifactRoot'],env=e,stdout=out,stderr=err)
+ (O/('logs/'+name+'.command.json')).write_text(json.dumps({'argv':args,'cwd':M['artifactRoot'],'exit':r.returncode,'start':start,'end':time.time()},indent=2))
+ return r.returncode
+fmt='{{json .Id}} {{json .Name}} {{json .Config.Image}} {{json .Image}} {{json .State}} {{json .NetworkSettings.Ports}}'
+def inspect(name):
+ name='r2-'+name
+ r=subprocess.run(['docker','inspect','--format',fmt,CID],capture_output=True,text=True)
+ (O/('logs/'+name+'.json')).write_text(json.dumps({'exit':r.returncode,'selected':r.stdout,'stderr':r.stderr},indent=2));assert r.returncode==0
+ return r.stdout
+sentinel=command('sentinel',[N,'-e',"require('node:fs').readFileSync('/tmp/cvg-prohibited-I1-sentinel-DO-NOT-READ')"])
+assert sentinel!=0 and 'I1 prohibited read' in (O/'logs/sentinel.stderr').read_text()
+pre=inspect('container-before');assert '"Running":false' in pre
+assert 'postgres:16.4-alpine' in pre and 'sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c' in pre
+started=False
+try:
+ assert command('docker-start',['docker','start',CID])==0;started=True
+ inspect('container-live')
+ port=json.loads(subprocess.check_output(['docker','inspect','--format','{{json .NetworkSettings.Ports}}',CID],text=True))['5432/tcp'];assert len(port)==1 and port[0]['HostIp']=='127.0.0.1'
+ resource=json.loads(pathlib.Path(M['privateResource']['path']).read_bytes())
+ from urllib.parse import urlsplit,urlunsplit
+ u=urlsplit(resource['test_database_url']);resource['test_database_url']=urlunsplit((u.scheme,u.netloc.rsplit(':',1)[0]+':'+port[0]['HostPort'],u.path,u.query,u.fragment));resource['hostPort']=port[0]
+ assert resource['schemaName']=='pare224_settle_i1_r1' and resource['roleName']=='pare224_settle_i1_r1_service'
+ with (O/'resource-private.json').open('w') as f:json.dump(resource,f,indent=2)
+ for readiness in range(30):
+  if command('pg-isready-'+str(readiness),['docker','exec',CID,'pg_isready','-U','pare224','-d','pare224_synthetic'])==0:break
+  time.sleep(0.2)
+ else:raise RuntimeError('database not ready before any test/namespace creation')
+ # Connection readiness is pre-resource; no namespace retry.
+ ready=[N,'-e',"const {Client}=require('pg');const fs=require('fs');const r=JSON.parse(fs.readFileSync(process.env.SPEC0224_SETTLE_RESOURCE));const c=new Client({connectionString:r.test_database_url});(async()=>{try{await c.connect();let q=await c.query(\"SELECT count(*)::int AS clients FROM pg_stat_activity WHERE datname=current_database() AND usename='pare224_settle_i1_r1_service'\");fs.writeFileSync(process.env.I1_REVIEW+'/logs/pre-clients.json',JSON.stringify(q.rows));}finally{await c.end()}})().catch(e=>{console.error(e.message);process.exitCode=1})"]
+ assert command('database-ready',ready)==0
+ rc=command('vitest',[N,str(P/'node_modules/vitest/vitest.mjs'),'run','--config',str(O/'config/vitest.mjs'),'--configLoader','native','--reporter=verbose','--reporter=json','--outputFile='+str(O/'logs/vitest-results.json')])
+ (O/'logs/test-exit.json').write_text(json.dumps({'exit':rc}))
+finally:
+ if started:
+  # Monitor own role only while live; admin observer excludes itself from count.
+  check="const {Client}=require('pg');const fs=require('fs');const r=JSON.parse(fs.readFileSync(process.env.SPEC0224_SETTLE_RESOURCE));const c=new Client({connectionString:r.test_database_url});(async()=>{try{await c.connect();let q=await c.query(\"SELECT pid,usename,application_name,state FROM pg_stat_activity WHERE datname=current_database() AND usename='pare224_settle_i1_r1_service'\");fs.writeFileSync(process.env.I1_REVIEW+'/logs/zero-own-clients.json',JSON.stringify({rows:q.rows,count:q.rowCount}));if(q.rowCount)process.exitCode=2;}finally{await c.end()}})().catch(e=>{console.error(e.message);process.exitCode=1})"
+  command('check-clients',[N,'-e',check]);inspect('container-before-stop')
+  command('docker-stop',['docker','stop',CID]);inspect('container-final')

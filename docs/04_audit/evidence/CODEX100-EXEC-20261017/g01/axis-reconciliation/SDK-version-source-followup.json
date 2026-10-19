@@ -1,0 +1,54 @@
+{
+  "kind": "UNREVIEWED_FOLLOWUP_SOURCE_FINDING_NOT_CURRENT_REVIEW_INPUT_OR_RUNTIME_PROOF",
+  "observed_at": "2026-10-18T07:28:09.137416+00:00",
+  "pin": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "source_root": "/tmp/cvg-rea-codex-20261017/upstream",
+  "source_spans": [
+    {
+      "path": "sdk/python/src/openai_codex/_runtime_requirements.py",
+      "file_sha256": "dab856ff4ff4a02c567b3f362c5b1298b0cdeaed6d2a84384c5dc87765447d28",
+      "start_line": 13,
+      "end_line": 29,
+      "span_sha256": "fe637b2c49bd633bdeeaa8360618c420eb4779db7b51d1161e2a1d13085ecb80",
+      "span_utf8": "MINIMUM_RUNTIME_VERSION = \"0.151.0\"\n\n\ndef require_runtime_version(version: str | None) -> None:\n    \"\"\"Reject unknown or unsupported versions, including prereleases at the minimum.\"\"\"\n    # CLI alpha hotfixes use 0.154.0-alpha.1.2; PEP 440 spells that a1.post2.\n    normalized = re.sub(r\"-alpha\\.(\\d+)\\.(\\d+)$\", r\"a\\1.post\\2\", version or \"\")\n    try:\n        if Version(normalized) >= Version(MINIMUM_RUNTIME_VERSION):\n            return\n    except InvalidVersion:\n        pass\n    raise ValueError(\n        f\"Codex CLI {MINIMUM_RUNTIME_VERSION} or newer is required; \"\n        f\"reported version is {version or 'unknown'!r}\"\n    )\n\n"
+    },
+    {
+      "path": "sdk/python/src/openai_codex/_runtime_requirements.py",
+      "file_sha256": "dab856ff4ff4a02c567b3f362c5b1298b0cdeaed6d2a84384c5dc87765447d28",
+      "start_line": 32,
+      "end_line": 70,
+      "span_sha256": "3a0b419a1d94e7bf11ca8ddc9bd14f72b834ff0a861cd5643a19bb4237d4abfc",
+      "span_utf8": "class CheckoutCapabilities:\n    \"\"\"Lazily inspect the same executable and configuration as a running checkout.\"\"\"\n\n    command: tuple[str, ...]\n    cwd: str | None\n    env: dict[str, str]\n\n    @cached_property\n    def fields(self) -> dict[str, frozenset[str]]:\n        try:\n            with TemporaryDirectory(prefix=\"codex-sdk-schema-\") as directory:\n                subprocess.run(\n                    [*self.command, \"generate-json-schema\", \"--experimental\", \"--out\", directory],\n                    cwd=self.cwd,\n                    env=self.env,\n                    capture_output=True,\n                    check=True,\n                    timeout=30,\n                )\n                result = {}\n                for method, name in (\n                    (\"turn/start\", \"TurnStartParams\"),\n                    (\"thread/resume\", \"ThreadResumeParams\"),\n                    (\"thread/fork\", \"ThreadForkParams\"),\n                ):\n                    schema = json.loads((Path(directory) / \"v2\" / f\"{name}.json\").read_text())\n                    properties = schema.get(\"properties\") if isinstance(schema, dict) else None\n                    if not isinstance(properties, dict):\n                        raise ValueError(f\"Missing properties in {name} schema\")\n                    result[method] = frozenset(properties)\n                return result\n        except (OSError, subprocess.SubprocessError, ValueError) as exc:\n            raise ValueError(\"Could not inspect the unversioned CLI's experimental schema\") from exc\n"
+    },
+    {
+      "path": "sdk/python/src/openai_codex/client.py",
+      "file_sha256": "8452afbd8148ea212c94e8a6727468054b175acb0daf95002c84b66b604d05a6",
+      "start_line": 242,
+      "end_line": 269,
+      "span_sha256": "17f5bb49fcfeceb16ba018bd7cdd696cd81e2400d6682c904942b4128eb158df",
+      "span_utf8": "    def start(self) -> None:\n        if self._proc is not None:\n            return\n\n        path_dirs: tuple[Path, ...] = ()\n        if self.config.launch_args_override is not None:\n            args = list(self.config.launch_args_override)\n        else:\n            codex_bin = _resolve_codex_bin(self.config)\n            if self.config.codex_bin is None:\n                path_dirs = _installed_codex_path_dirs()\n            args = [str(codex_bin)]\n            for kv in self.config.config_overrides:\n                args.extend([\"--config\", kv])\n            args.extend([\"app-server\", \"--listen\", \"stdio://\"])\n\n        env = os.environ.copy()\n        if self.config.env:\n            env.update(self.config.env)\n        _prepend_path_dirs(env, path_dirs)\n\n        if self.config.launch_args_override is None:\n            self._checkout_capabilities = CheckoutCapabilities(\n                command=tuple(args[:-2]), cwd=self.config.cwd, env=env.copy()\n            )\n\n        self._proc = subprocess.Popen(\n            args,\n"
+    },
+    {
+      "path": "sdk/python/src/openai_codex/client.py",
+      "file_sha256": "8452afbd8148ea212c94e8a6727468054b175acb0daf95002c84b66b604d05a6",
+      "start_line": 304,
+      "end_line": 360,
+      "span_sha256": "66ad4a9fa3b5a54bb1ef4c29543370311a83b55f274d7fd5c02e556486136241",
+      "span_utf8": "    def initialize(self) -> InitializeResponse:\n        self._runtime_version = None\n        result = self.request(\n            \"initialize\",\n            {\n                \"clientInfo\": {\n                    \"name\": self.config.client_name,\n                    \"title\": self.config.client_title,\n                    \"version\": self.config.client_version,\n                },\n                \"capabilities\": {\n                    \"experimentalApi\": self.config.experimental_api,\n                },\n            },\n            response_model=InitializeResponse,\n        )\n        version = result.serverInfo.version if result.serverInfo is not None else None\n        if not version or not version.strip():\n            _, version = _split_user_agent(result.userAgent or \"\")\n        self._runtime_version = version.split()[0] if version and version.strip() else None\n        self.notify(\"initialized\", None)\n        return result\n\n    def request(\n        self,\n        method: str,\n        params: JsonObject | None,\n        *,\n        response_model: type[ModelT],\n    ) -> ModelT:\n        runtime_fields = {\n            \"turn/start\": (\"toolOutput\", \"turnTrigger\", \"serviceTierForTurn\"),\n            \"thread/resume\": (\"excludeTurns\",),\n            \"thread/fork\": (\"excludeTurns\",),\n        }\n        supplied_fields = [\n            field\n            for field in runtime_fields.get(method, ())\n            if (params or {}).get(field) is not None\n        ]\n        if supplied_fields:\n            try:\n                if self._runtime_version == \"0.0.0\":\n                    if self._checkout_capabilities is None:\n                        raise ValueError(\n                            \"Cannot verify an unversioned CLI with a custom launch command\"\n                        )\n                    supported = self._checkout_capabilities.fields[method]\n                    if missing := set(supplied_fields) - supported:\n                        raise ValueError(\n                            f\"The checkout does not support {', '.join(sorted(missing))}\"\n                        )\n                else:\n                    require_runtime_version(self._runtime_version)\n            except ValueError as exc:\n                raise CodexError(\n                    f\"{method} with {', '.join(supplied_fields)}: {exc}. \"\n"
+    }
+  ],
+  "observed_build_version": "codex-cli 0.0.0 per acceptedrawcorpus",
+  "source_claims": [
+    "Python request version guard is conditional on selected newer supplied fields for turn/start,thread/resume,thread/fork; it is not a universal minimum-version check for every RPC.",
+    "For runtimeversion0.0.0 it has an explicit checkout capability/schema inspection branch, onlyif checkoutcapabilitiesexists; customlaunch_args_override leaves that verifier unavailable.",
+    "This source branch may allow a future correctlybound SDK reference probe without pretending compileddevbinary is release0.153.4."
+  ],
+  "not_proven": [
+    "SDK dependencies/runtime are not installed or imported inthisunit.",
+    "Pydantic decode/actualSDKinitialize/requests/checkoutschema invocation and cancellation/cleanup remain NOT_RUN.",
+    "No authority to bypass version guard,replace version string,patch source or forwardCVG toCodex."
+  ],
+  "next_action": "Prepare a separate bounded SDK/keyless reference contract with actualPythondependency provenance and sameELF/schema binding before execution; preserve current6SDK gaps and human0231pending.",
+  "functional_receipts": 0,
+  "review_status": "NOT_IN_R2_DO_NOT_CLAIM_INDEPENDENT_ACCEPTANCE"
+}

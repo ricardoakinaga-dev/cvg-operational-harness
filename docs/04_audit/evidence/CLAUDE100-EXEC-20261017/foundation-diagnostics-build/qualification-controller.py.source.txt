@@ -1,0 +1,39 @@
+# Prepared controller; execution requires recorded postreview approval + resource claim.
+import json,pathlib,hashlib,subprocess,datetime,os,socket,time,sys
+repo=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness');base=repo/'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-diagnostics-build';w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/diagnostic-ownership-candidate');q=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-diagnostics-build/qualification')
+def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+review=json.loads((base/'review-r1/result.json').read_text());assert review.get('verdict')=='APPROVE_SCOPED_DIAGNOSTIC_CODE','No accepted postreview; must not execute'
+assert (base/'qualification-resource-claim.json').exists(),'Missing separate resource claim'
+freeze=json.loads((base/'source-freeze-r1.json').read_text());head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=w,text=True).strip();assert head==freeze['head'];assert not subprocess.check_output(['git','status','--porcelain'],cwd=w,text=True)
+for row in freeze['files']:assert hashlib.sha256((w/row['path']).read_bytes()).hexdigest()==row['sha256']
+assert not (q/'launch.json').exists(),'Existing launch is not retry authority'
+import shutil
+q.mkdir(parents=True,exist_ok=True)
+for part in ['certification','coverage']:
+ if (w/part).exists():shutil.copytree(w/part,q/('inherited-'+part),copy_function=shutil.copy2)
+(q/'source-preflight.json').write_text(json.dumps({'head':head,'files_verified':len(freeze['files']),'git_clean':True,'review_verdict':review['verdict']},indent=2)+'\n')
+for port in [55878,3392,4392]:
+ with socket.socket() as probe:probe.bind(('127.0.0.1',port))
+for part in ['home','tmp','npm-cache','config','cache','data','state','docker-config']:(q/part).mkdir(parents=True,exist_ok=True)
+(q/'config/user.npmrc').write_text('fund=false\nupdate-notifier=false\n');(q/'config/global.npmrc').write_text('; isolated synthetic qualification\n')
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin';env={'PATH':node+':/usr/bin:/bin','HOME':str(q/'home'),'LANG':'C.UTF-8','TZ':'UTC','CI':'true','TMPDIR':str(q/'tmp'),'TMP':str(q/'tmp'),'TEMP':str(q/'tmp'),'XDG_CONFIG_HOME':str(q/'config'),'XDG_CACHE_HOME':str(q/'cache'),'XDG_DATA_HOME':str(q/'data'),'XDG_STATE_HOME':str(q/'state'),'NPM_CONFIG_CACHE':str(q/'npm-cache'),'NPM_CONFIG_USERCONFIG':str(q/'config/user.npmrc'),'NPM_CONFIG_GLOBALCONFIG':str(q/'config/global.npmrc'),'TEST_DATABASE_URL':'postgresql://postgres:c100_diagnostic_synthetic@127.0.0.1:55878/c100_diagnostic_synthetic','CVG_API_PORT':'3392','CVG_WEB_PORT':'4392','PLAYWRIGHT_BROWSERS_PATH':'/home/ricardo/.cache/ms-playwright'}
+records=[];docker=['/usr/bin/docker','--host','unix:///var/run/docker.sock','--config',str(q/'docker-config')]
+def run(argv,check=True):
+ p=subprocess.run(argv,env=env,text=True,capture_output=True,timeout=35);records.append({'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'at':stamp()});(q/'resource-commands.json').write_text(json.dumps(records,indent=2)+'\n');
+ if check and p.returncode:raise RuntimeError('Owned qualification resource command failed: '+str(p.returncode))
+ return p
+name='cvg-claude100-diagnostic-pg';old=run(docker+['container','inspect',name],False);assert old.returncode!=0,'Existing container name; do not replace or restart'
+image='sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94';run(docker+['image','inspect',image,'--format','{{.Id}}'])
+p=run(docker+['run','--detach','--rm','--pull=never','--name',name,'--label','cvg.task=C100-FND-DIAGNOSTICS-BUILD-001','--label','cvg.owner=CLAUDE100-EXEC-20261017','--memory=1g','--cpus=1','--pids-limit=128','--tmpfs','/var/lib/postgresql/data:rw,nosuid,nodev,size=768m','--publish','127.0.0.1:55878:5432','--env','POSTGRES_PASSWORD=c100_diagnostic_synthetic','--env','POSTGRES_DB=c100_diagnostic_synthetic',image]);container=p.stdout.strip();assert len(container)==64
+resource={'task':'C100-FND-DIAGNOSTICS-BUILD-001','at':stamp(),'id':container,'name':name,'pg_port':55878,'api_port':3392,'web_port':4392,'state':'CREATED_SYNTHETIC_OWNED'};(q/'resources.json').write_text(json.dumps(resource,indent=2)+'\n')
+for n in range(30):
+ ready=run(docker+['exec',container,'pg_isready','-U','postgres','-d','c100_diagnostic_synthetic'],False)
+ if ready.returncode==0:break
+ time.sleep(0.5)
+else:raise RuntimeError('Own synthetic PG not ready; preserve ID for cleanup')
+log=q/'certify.log';launch={'task':'C100-FND-DIAGNOSTICS-BUILD-001:QUALIFY','argv':['npm','run','certify'],'cwd':str(w),'environment':env,'head':head,'started_at':stamp(),'log':str(log),'container_id':container,'state':'STARTING','controller_sha256':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()}
+with log.open('wb') as stream:
+ process=subprocess.Popen(launch['argv'],cwd=w,env=env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
+ launch.update(pid=process.pid,process_start_token=pathlib.Path('/proc/'+str(process.pid)+'/stat').read_text().split(') ')[1].split()[19],state='RUNNING');(q/'launch.json').write_text(json.dumps(launch,indent=2)+'\n');print(json.dumps({'pid':process.pid,'container_id':container,'head':head,'log':str(log)}),flush=True)
+ code=process.wait()
+launch.update(exit=code,ended_at=stamp(),state='COMPLETED');(q/'launch.json').write_text(json.dumps(launch,indent=2)+'\n');print('certify exit',code,flush=True);sys.exit(code)

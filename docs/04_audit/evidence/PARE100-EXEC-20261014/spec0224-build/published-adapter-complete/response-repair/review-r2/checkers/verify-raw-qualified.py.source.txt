@@ -1,0 +1,72 @@
+import json,pathlib,hashlib,copy,sys
+O=pathlib.Path(__file__).resolve().parents[1]
+def canon(v):return json.dumps(v,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+def sha(v):return hashlib.sha256(canon(v)).hexdigest()
+def verify(c):
+ errors=[]
+ def ck(ok,msg):
+  if not ok:errors.append(msg)
+ cp=c['checkpoint'];usage=cp['budgetUsage'];result=c['result'];req=c['requests'];results=c['modelResults'];legacy=c['scenario'].get('legacy',False)
+ ck(result['stopReason']==cp['state'].get('stopReason'),'returned/durable stop mismatch')
+ ck(result['modelCalls']==usage['modelCalls']==len(req),'native model slot total')
+ for key in ['inputTokens','outputTokens','costUsd']:
+  expected=sum(r[key] for r in results)
+  ck(expected==usage[key]==result['usage'][key],'native '+key+' sum')
+ ck(c['bodies']==len(c['journals'])==1,'one body and one journal')
+ ck(c['journals'][0]['state']=='CONFIRMED','confirmed native effect')
+ if not legacy:
+  ck(cp['stepNumber']==cp['state']['stepNumber']==usage['steps']==2,'aligned terminal step/counters')
+  ck(len(c['nativeSteps'])==2 and c['nativeSteps'][1]['stepType']=='RESPOND','native response terminal row exists')
+  ck(not cp['state']['toolResultContext'].get('acceptedDecision'),'accepted decision cleared')
+  obs=next(o for o in cp['state']['observations'] if o['type']=='TOOL_RESULT');payload=obs['payload']
+  ck(payload['output']==c['output'] and payload['outputBytes']==len(canon(c['output'])) and payload['outputSha256']==sha(c['output']),'checkpoint complete value/bytes/digest')
+  ck(c['journals'][0]['result']==payload['output'],'journal/checkpoint complete value')
+  receipts=cp['state']['toolResultContext']['decisionAdmissions']
+  orch=[r for r in req if r['purpose']!='RESPONSE']
+  ck(len(receipts)==len(orch),'decision-only receipt ownership')
+  for receipt,r in zip(receipts,orch):
+   ck(receipt['status']=='SETTLED' and receipt['purpose']==r['purpose'],'settled decision receipt')
+   ck(receipt['requestSha256']==sha(r),'receipt exact request digest')
+  for n,r in enumerate(req):
+   ck(len(canon(r))<=131072,'serialized request bytes')
+   ck(len(r['messages'])==2,'two messages')
+   # Fixtures contain ASCII only; UTF16-unit length equals Python length here.
+   ck(r['messages'][0]['role']=='system' and len(r['messages'][0]['content'])<=16000,'system role/bound')
+   ck(r['messages'][1]['role']=='user' and len(r['messages'][1]['content'])<=32000,'user role/bound')
+   frame=json.loads(r['messages'][1]['content']);ck(frame['schema']=='cvg.decision-context' and frame['version']==1,'versioned frame')
+   if r['purpose']=='RESPONSE' or n>0:
+    items=[i for i in frame['items'] if i['priority']=='FRESH_TOOL_RESULTS']
+    ck(len(items)==1,'one required native tool item')
+    if len(items)==1:
+     item=items[0];value=item.get('value')
+     ck(item['trust']=='UNTRUSTED' and item['source']==obs['provenance']['sourceId'],'data trust/source')
+     ck(isinstance(value,dict) and value.get('type')=='TOOL_RESULT','structured native observation')
+     if isinstance(value,dict) and value.get('type')=='TOOL_RESULT':
+      p=value['payload'];ck(p['output']==c['output'] and p['outputBytes']==len(canon(p['output'])) and p['outputSha256']==sha(p['output']),'actual wire value/bytes/digest')
+      ck(value['observationId']==obs['observationId'] and value['provenance']==obs['provenance'],'wire native identity/provenance')
+   if c['case']=='RR08':
+    ck(all(marker not in r['messages'][0]['content'] for marker in ['UNTRUSTED_INTENT_224','UNTRUSTED_TOOL_224','UNTRUSTED_USER_224']),'untrusted data absent from system')
+ return errors
+base=json.loads((O/'raw/baseline-strict-cases.json').read_text());proof=json.loads((O.parent/'review-packet-r2/proof/raw-cases.json').read_text());bad=json.loads((O/'raw/known-bad-strict-cases.json').read_text())
+out={label:[{'case':c['case'],'errors':verify(c)} for c in rows] for label,rows in [('actualBaseline',base),('suppliedProofNotIndependentExecution',proof),('executedKnownBad',bad)]}
+rr=next(c for c in base if c['case']=='RR02');controls=[]
+for kind in ['usage-mismatch','wire-drop','wire-provenance','system-promotion','cursor-mismatch']:
+ c=copy.deepcopy(rr)
+ if kind=='usage-mismatch':c['checkpoint']['budgetUsage']['inputTokens']+=1
+ elif kind=='cursor-mismatch':c['checkpoint']['stepNumber']=1
+ else:
+  frame=json.loads(c['requests'][0]['messages'][1]['content'])
+  if kind=='wire-drop':frame['items']=[i for i in frame['items'] if i['priority']!='FRESH_TOOL_RESULTS']
+  elif kind=='wire-provenance':next(i for i in frame['items'] if i['priority']=='FRESH_TOOL_RESULTS')['value']['provenance']['sourceId']='forged'
+  else:
+   c['case']='RR08';c['requests'][0]['messages'][0]['content']+=' UNTRUSTED_TOOL_224'
+  c['requests'][0]['messages'][1]['content']=canon(frame).decode()
+ errors=verify(c);controls.append({'mutation':kind,'errors':errors,'detected':bool(errors)})
+ (O/'raw'/('KNOWN_BAD_qualified_evidence_'+kind+'.json')).write_text(json.dumps(c,indent=2)+'\n')
+out['posteriorEvidenceMutationControls']=controls
+(O/'raw/independent-verification-qualified.json').write_text(json.dumps(out,indent=2)+'\n')
+print(json.dumps({k:[{'case':x['case'],'errors':x['errors']} for x in v if x['errors']] if isinstance(v,list) and k!='posteriorEvidenceMutationControls' else v for k,v in out.items()},indent=2))
+assert all(not e['errors'] for e in out['actualBaseline'])
+assert all(not e['errors'] for e in out['suppliedProofNotIndependentExecution'])
+assert any(e['errors'] for e in out['executedKnownBad'])
+assert all(e['detected'] for e in controls)

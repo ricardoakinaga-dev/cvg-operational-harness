@@ -1,0 +1,190 @@
+import { afterAll, describe, expect, it } from 'vitest'
+import { writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import * as publicApi from '@cvg/harness'
+import { canonicalizeCompleteJson } from '@cvg/harness-contracts'
+import type {
+  ExecutionCheckpoint,
+  ExecutionStep,
+  ToolDefinition,
+  ToolRegistry
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import {
+  createJournaledToolRegistry,
+  createOperationalHarness,
+  InMemoryEffectJournal,
+  InMemoryExecutionStepStore,
+  type EffectJournal
+} from '@cvg/harness'
+import {
+  phase3AgentProfile,
+  phase3RuntimeInput,
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine
+} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+const toolId = 'synthetic.recovery.write'
+type JournalMode = 'none' | 'factory' | 'prewrapped'
+
+function fixture(mode: JournalMode, fixtureOptions: any = {}) {
+  const journal = new InMemoryEffectJournal()
+  const initialStore = new InMemoryExecutionStepStore()
+  const base = phase3RuntimeInput()
+  const input = {
+    ...base,
+    agent: phase3AgentProfile({ tools: [toolId] }),
+    userMessage: 'Perform one synthetic in-memory operation.',
+    budget: { ...base.budget, maxDurationMs: 5000 }
+  }
+  const requests: any[] = []
+  const operationKeys: string[] = []
+  let bodies = 0
+  let captured: ExecutionCheckpoint
+  let capturedSteps: readonly ExecutionStep[]
+  let entered!: () => void
+  const bodyEntered = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const factory = (
+    store: InMemoryExecutionStepStore,
+    suspend: boolean,
+    recovery?: { mode?: JournalMode; journal?: EffectJournal; version?: string; sideEffect?: any; policy?: any; approvals?: any; flags?: any; wrapperOptions?: any; model?: boolean }
+  ) => {
+    const selectedMode = recovery?.mode ?? mode
+    const authority = recovery?.journal ?? journal
+    const tool: ToolDefinition = {
+      id: toolId,
+      version: recovery?.version ?? '1',
+      ...(recovery?.flags ?? {}),
+      description: 'Synthetic in-memory counter only',
+      inputSchema: { type: 'object' },
+      outputSchema: {},
+      risk: 'LOW',
+      sideEffect: recovery?.sideEffect ?? 'WRITE',
+      idempotent: false,
+      requiresApproval: false,
+      execute: async (_input, context) => {
+        bodies++
+        operationKeys.push(context.operationKey!)
+        if (suspend) {
+          captured = (await initialStore.loadCheckpoint(
+            input.tenantId,
+            input.executionId!
+          ))!
+          capturedSteps = await initialStore.listSteps(
+            input.tenantId,
+            input.executionId!
+          )
+          entered()
+          await new Promise<void>(() => {})
+        }
+        return { status: 'SUCCEEDED', output: fixtureOptions.output ?? 'synthetic operation done' }
+      }
+    }
+    const raw: ToolRegistry = {
+      list: () => [tool],
+      resolve: (id) => (id === toolId ? tool : undefined)
+    }
+    return createOperationalHarness({
+      toolResultContext: { version: 1 },
+      ...(selectedMode === 'factory' ? { effectJournal: authority, effectJournalOptions: recovery?.wrapperOptions } : {}),
+      tools:
+        selectedMode === 'prewrapped'
+          ? createJournaledToolRegistry(raw, authority, recovery?.wrapperOptions)
+          : raw,
+      stepStore: store,
+      iterativeOrchestrator: new HybridOrchestrator({
+        ...(recovery?.model ? { decisionModel: model, decisionInputCounter: counter, decisionModelSupportsMaxOutputTokens: true } : {}),
+        rules: [
+          (context) =>
+            context.stepNumber === 1
+              ? {
+                  decisionType: 'CALL_TOOL',
+                  reasonCode: 'TOOL_REQUIRED',
+                  toolId,
+                  toolVersion: '1',
+                  toolInput: {}
+                }
+              : recovery?.model ? undefined : {
+                  decisionType: 'RESPOND',
+                  reasonCode: 'GOAL_SATISFIED',
+                  responseText: 'Synthetic operation done.'
+                }
+        ]
+      }),
+      modelGateway: {
+        complete: async () => {
+          throw new Error('Must never call a model')
+        }
+      },
+      policy: recovery?.policy ?? new ScriptedPolicyEngine(),
+      approvals: recovery?.approvals ?? new InMemoryApprovalEngine(),
+      audit: new RecordingAuditSink(),
+      telemetry: new RecordingTelemetrySink()
+    })
+  }
+  const model = { complete: async ({ signal: _signal, ...request }: any) => {
+    requests.push(structuredClone(request))
+    return { text: JSON.stringify({ decisionType: 'RESPOND', reasonCode: 'GOAL_SATISFIED', responseText: 'Synthetic result recovered.' }), provider: 'synthetic.i1', model: 'toy-i1', inputTokens: 20, outputTokens: 10, costUsd: 0.00001 }
+  } }
+  const counter = { measure: async () => ({ counterId: 'toy-i1', counterVersion: '1', provider: 'synthetic.i1', model: 'toy-i1', formattingVersion: '1', inputUpperBoundTokens: 500, contextWindowTokens: 100000, costUpperBoundUsd: 0.001 }) }
+  const interrupt = async (failed = false) => {
+    const controller = new AbortController()
+    const running = factory(initialStore, true).run({
+      ...input,
+      signal: controller.signal
+    })
+    await bodyEntered
+    controller.abort()
+    await running
+    // Recreate only state durable before the body completed. This is a memory
+    // crash reconstruction; the interrupted process's later writes are absent.
+    const restored = new InMemoryExecutionStepStore()
+    await restored.compareAndSwapCheckpoint({
+      tenantId: input.tenantId,
+      executionId: input.executionId!,
+      expected: null,
+      next: captured
+    })
+    for (const step of capturedSteps)
+      await restored.recordStep(
+        failed && step.stepType === 'TOOL'
+          ? { ...step, status: 'FAILED', errorCode: 'unknown_effect' }
+          : step
+      )
+    return restored
+  }
+  return {
+    input,
+    factory,
+    initialStore,
+    interrupt,
+    journal,
+    operationKeys,
+    requests,
+    bodyCount: () => bodies,
+    checkpoint: () => captured
+  }
+}
+
+
+
+// Focused positive control for the WAITING exception to unresolved-dispatch checks.
+it('initial approval wait resumes to exactly one authorized invocation without a prior journal reservation',async()=>{
+ const lane=fixture('factory');const approvals=new InMemoryApprovalEngine();const policy=new ScriptedPolicyEngine([],[],[toolId])
+ const paused=await lane.factory(lane.initialStore,false,{policy,approvals}).run(lane.input)
+ expect(paused.stopReason).toBe('APPROVAL_REQUIRED');expect(lane.bodyCount()).toBe(0);expect(paused.toolCalls).toBe(0)
+ const operationKey=lane.input.executionId+':s1:'+toolId
+ expect(await lane.journal.get(lane.input.tenantId,operationKey)).toBeNull()
+ const before=await lane.initialStore.loadCheckpoint(lane.input.tenantId,lane.input.executionId!)
+ const steps=await lane.initialStore.listSteps(lane.input.tenantId,lane.input.executionId!)
+ expect(steps.find(x=>x.stepType==='TOOL')?.status).toBe('WAITING')
+ approvals.approve(operationKey)
+ const result=await lane.factory(lane.initialStore,false,{policy,approvals}).run({...lane.input,resume:{kind:'approval',approvalId:paused.approvalId!}})
+ expect(result.stopReason).toBe('COMPLETED');expect(lane.bodyCount()).toBe(1);expect(result.toolCalls).toBe(1);expect(result.modelCalls).toBe(0)
+ const native=await lane.journal.get(lane.input.tenantId,operationKey);expect(native?.state).toBe('CONFIRMED')
+ writeFileSync('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-r5/approval-wait-observations.json',JSON.stringify({paused,before,steps,result,native,bodies:lane.bodyCount()},null,2)+'\n')
+})

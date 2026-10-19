@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict'
+import {createOperationalHarness,InMemoryExecutionStepStore,sealCheckpoint} from '@cvg/harness'
+import {HybridOrchestrator} from '@cvg/harness-orchestrator'
+import {EMPTY_BUDGET_USAGE} from '@cvg/harness-contracts'
+import {phase3RuntimeInput,InMemoryApprovalEngine,RecordingAuditSink,RecordingTelemetrySink,ScriptedPolicyEngine} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/evals/phase3-fixtures.ts'
+const input=phase3RuntimeInput(),store=new InMemoryExecutionStepStore();let models=0
+const cp=sealCheckpoint({tenantId:input.tenantId,executionId:input.executionId!,checkpointVersion:1,runtimeProfile:'iterative',runtimeVersion:'2.0.0',orchestratorVersion:'different-orchestrator-version',stepNumber:0,state:{goal:input.agent.objective,stepNumber:0,observations:[],openQuestions:[],resolvedInputs:{},loopSignatures:[]},budgetUsage:{...EMPTY_BUDGET_USAGE}})
+await store.saveCheckpoint(cp)
+const h=createOperationalHarness({toolResultContext:{version:1},stepStore:store,iterativeOrchestrator:new HybridOrchestrator({rules:[()=>({decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseText:'synthetic'})]}),modelGateway:{complete:async()=>{models++;throw Error('unexpected')}},tools:{list:()=>[],resolve:()=>undefined},policy:new ScriptedPolicyEngine(),approvals:new InMemoryApprovalEngine(),audit:new RecordingAuditSink(),telemetry:new RecordingTelemetrySink()})
+const result=await h.run(input)
+console.log(JSON.stringify({result,models,checkpointPreserved:JSON.stringify(await store.loadCheckpoint(input.tenantId,input.executionId!))===JSON.stringify(cp)}))
+assert.equal(result.stopReason,'STATE_CONFLICT')
+assert.equal(models,0)

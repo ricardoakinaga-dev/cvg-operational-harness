@@ -1,0 +1,82 @@
+from pathlib import Path
+import json,hashlib,datetime,subprocess,re,urllib.parse
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';D=E/'g04/persistence-port-decision';h=lambda b:hashlib.sha256(b).hexdigest();results=[]
+def check(name,action):
+ try:detail=action();results.append({'id':name,'result':'PASS','detail':detail})
+ except Exception as e:results.append({'id':name,'result':'FAIL','detail':str(e)})
+inputs=json.loads((D/'source-inputs.json').read_text());lookup={x['id']:x for x in inputs['files']};bindings=json.loads((D/'port-bindings.json').read_text());spans=json.loads((D/'source-spans.json').read_text())['spans']
+def sourcecheck():
+ for x in inputs['files']:
+  raw=(D/x['archive']).read_bytes();assert len(raw)==x['bytes'] and h(raw)==x['sha256'],x['id']
+  if 'commit' in x:now=subprocess.check_output(['git','-C',x['repository'],'show',x['commit']+':'+x['path']])
+  else:now=(R/x['path']).read_bytes()
+  assert raw==now,x['id']+' SOURCE_DRIFT'
+ return str(len(lookup))+' original/archive bytes exact;2Git objects from fixed owner baseline'
+check('PV01_INPUTS_PRE_POST',sourcecheck)
+def spancheck():
+ for x in spans:
+  source=lookup[x['input']];assert x['input_sha256']==source['sha256'];lines=(D/source['archive']).read_text().splitlines();assert '\n'.join(lines[x['start_line']-1:x['end_line']])==x['excerpt'],x['id']
+ return str(len(spans))+' exact range excerpts and full input hashes'
+check('PV02_EXACT_RANGES',spancheck)
+def bcheck():
+ assert {x['id'] for x in bindings['ports']}=={'PP%02d'%i for i in range(1,6)}
+ assert {q for p in bindings['ports'] for q in p['CQ']}=={'CQ07','CQ09','CQ10','CQ11','CQ12'}
+ assert bindings['full_journey_required']==['CQ%02d'%i for i in range(1,15)]
+ assert len(bindings['gaps'])==9 and len({g['id'] for g in bindings['gaps']})==9
+ valid={r['id'] for r in spans}
+ for p in bindings['ports']:assert p['evidence'] and set(p['evidence'])<=valid,p['id']
+ assert bindings['functional_receipts']==0 and bindings['new_runtime_code']==0 and bindings['new_stores_or_migrations']==0
+ assert bindings['ports'][1]['limits']['journal_output_canonical_bytes']==1048576
+ assert bindings['ports'][2]['standalone_restrictions']['CAS_scope']=='STATE_AND_BUDGET_ONLY_NOT_WORKER_LEASE_OR_EXTERNAL_ACK'
+ assert bindings['ports'][2]['standalone_restrictions']['foreign_pending_reservation']=='UNKNOWN_STOP_NO_SETTLE_NO_CANCEL_NO_NEW_CALL'
+ assert bindings['ports'][3]['path_eligibility']['standalone_epoch_owner_guard']=='UNKNOWN_BUILD_BLOCKER_FOR_PATH'
+ assert bindings['ports'][3]['path_eligibility']['generic_worker_claim_lease_dispatch_settlement']=='UNKNOWN_BUILD_BLOCKER_FOR_PATH'
+ assert next(g for g in bindings['gaps'] if g['id']=='CP09')['path_BUILD_entry']=='BLOCKED_UNTIL_ELIGIBLE_GUARD_SOURCES_AND_CONTRACT_RESOLVED'
+
+ return '5ports/5CQ/14fullCQ/9gaps/80range references resolve; no implementation/parity claim'
+check('PV03_BINDINGS_COMPLETENESS',bcheck)
+def ac():
+ a=json.loads((D/lookup['A01']['archive']).read_text())
+ for spec,original,delta,review in [('SPEC0221','A02','O01','O02'),('SPEC0225','A03','O03','O04')]:
+  assert a['gates'][spec]['sha256']==lookup[original]['sha256'];d=json.loads((D/lookup[review]['archive']).read_text());assert d['mandatory_count']==0 and d['verdict']=='APPROVE_APPROVED_ADJUSTMENTS';assert (d.get('proposal_sha256') or d['subject']['proposal_sha256'])==lookup[delta]['sha256']
+ assert a['gates']['SPEC0226']['decision']=='DEFERRED'
+ return 'Both original subjects and exact accepted documentary deltas authenticated;0226 stays deferred'
+check('PV04_AUTHORITY_BINDING',ac)
+def owner():
+ rows=inputs['owner_R3_projection']['records'];assert len(rows)==27
+ for x in rows:assert h((R/x['path']).read_bytes())==x['sha256'],x['path']
+ return '27ownerfrozenR3 inputs exact;44cases/88processes remain reported bounded observation, not reexecuted'
+check('PV05_OWNER_SNAPSHOT',owner)
+def seals():
+ total=0
+ for p in [E/'g04/qualifier-build/manifest.json',E/'g04/native-journey-contract-recon/manifest.json']:
+  d=json.loads(p.read_text());assert d['file_count']==len(d['files'])
+  for x in d['files']:
+   b=(R/x['path']).read_bytes();assert len(b)==x['bytes'] and h(b)==x['sha256'],x['path']
+  total+=len(d['files'])
+ freeze=json.loads((E/'g04/qualifier-build/code-freeze-r2.json').read_text())
+ for x in freeze['files']:assert h((R/x['path']).read_bytes())==x['sha256'],x['path']
+ return f'{total}previous sealed payloads and9qualifierRootpostimages unchanged'
+check('PV06_PRIOR_SEALS_AND_CODE',seals)
+def catalog():
+ p=R/'docs/03_build/tracking/codex100_catalog_v1.json';assert h(p.read_bytes())=='7526e9d172abb1eeffa6981d98f1317fe91af2b617aab2b18a6645a5fd101fa7';d=json.loads(p.read_text());assert len(d['requirements'])==509
+ for x in d['requirements']:assert x['status']=='NOT_RUN' and x['receipt'] is None
+ assert d['functional_denominator']==487 and d['mandatory_cvg_controls']==22
+ return '509NOT_RUN/nullreceipt;487functional+22controls byte-exact'
+check('PV07_CATALOG_INVARIANT',catalog)
+# Only own navigable markdown; raw archives are intentionally .txt.
+docs=[D/'DECISION.md',R/'.agent/plans/codex100-exec-20261017.md',R/'docs/03_build/0386_backlog_paridade_codex.md',R/'docs/08_runtime/handoffs/codex100_exec_20261017.md']
+def links():
+ count=0;bad=[]
+ for p in docs:
+  for value in re.findall(r'\]\(([^)]+)\)',p.read_text()):
+   target=value.split()[0].strip('<>');parsed=urllib.parse.urlsplit(target)
+   if parsed.scheme or not parsed.path:continue
+   if target.startswith('/'):bad.append([str(p),'absolute_href',target]);continue
+   dest=p.parent/urllib.parse.unquote(parsed.path);count+=1
+   if not dest.exists():bad.append([str(p),target])
+ assert not bad,bad
+ return {'documents':len(docs),'local_links_resolved':count,'broken':[]}
+check('PV08_OWN_LINKS',links)
+now=datetime.datetime.now(datetime.timezone.utc).isoformat();out={'kind':'T1_DOCUMENTARY_INTEGRITY_CHECK_NOT_RUNTIME_ACCEPTANCE','observed_at':now,'checks':results,'passed':sum(x['result']=='PASS' for x in results),'failed':sum(x['result']=='FAIL' for x in results),'functional_receipts':0,'runtime_tests_executed':False}
+(D/'verification-r2.json').write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n');print(json.dumps(out,ensure_ascii=False));raise SystemExit(bool(out['failed']))

@@ -1,0 +1,62 @@
+"""Close documentary I1 review; reads frozen manifest/copies and own outputs only."""
+from pathlib import Path
+import json,hashlib,datetime,stat
+BASE=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete')
+MANIFEST=BASE/'published-contract-review-packet-r3/manifest.json'
+OUT=BASE/'published-contract-review-r3'
+INVENTORY=OUT/'output-inventory.json'
+SEAL=OUT/'seal.detached.json'
+EXPECTED_MANIFEST='f8bb306b400cf5c7736d0b60e3039b1552336de39bba557f4252362f5ce9c169'
+def sha(b): return hashlib.sha256(b).hexdigest()
+def write(p,obj): p.write_bytes((json.dumps(obj,ensure_ascii=False,indent=2)+'\n').encode('utf-8'))
+def descriptor(p):
+ data=p.read_bytes()
+ return {'path':str(p.relative_to(OUT)),'bytes':len(data),'sha256':sha(data)}
+mb=MANIFEST.read_bytes(); assert sha(mb)==EXPECTED_MANIFEST
+m=json.loads(mb); assert Path(m['ownedOutput'])==OUT and len(m['inputs'])==53
+before=json.loads((OUT/'input-fingerprints-before.json').read_bytes())
+after=[]
+for item in [{'id':'manifest','copy':str(MANIFEST),'bytes':len(mb),'sha256':EXPECTED_MANIFEST}]+m['inputs']:
+ p=Path(item['copy']); data=p.read_bytes(); h=sha(data)
+ after.append({'id':item['id'],'path':str(p),'bytes':len(data),'sha256':h,'matches_manifest':len(data)==item['bytes'] and h==item['sha256']})
+write(OUT/'input-fingerprints-after.json',after)
+differences=[{'before':a,'after':b} for a,b in zip(before,after) if a!=b]
+unchanged=before==after and len(before)==54 and all(x['matches_manifest'] for x in after)
+write(OUT/'integrity-comparison.json',{'verification_kind':'file byte/SHA-256 comparison, not a runtime test','manifest_sha256':EXPECTED_MANIFEST,'enumerated_copies':53,'total_fingerprinted_with_manifest':54,'before_after_identical':unchanged,'all_manifest_hashes_and_bytes_match':all(x['matches_manifest'] for x in after),'changed_files':differences,'before_file':descriptor(OUT/'input-fingerprints-before.json'),'after_file':descriptor(OUT/'input-fingerprints-after.json'),'external_originals_not_read':True})
+assert unchanged, 'Frozen input drift: do not issue normal closure'
+decision=json.loads((OUT/'decision.json').read_bytes()); assert decision['decision']=='REVISE' and len(decision['findings'])==1
+readset=json.loads((OUT/'read-set.json').read_bytes()); assert len(readset['inputs'])==53
+categories={
+ 'REVIEW.md':'independent technical review and decision',
+ 'decision.json':'machine-readable decision/findings',
+ 'transition-audit.md':'documentary transition/outcome/writer audit',
+ 'read-set.json':'enumerated input provenance and inspection scope',
+ 'scope-and-checks.json':'scope, authority and NOT_RUN statuses',
+ 'input-fingerprints-before.json':'input integrity before review',
+ 'input-fingerprints-after.json':'input integrity after review',
+ 'integrity-comparison.json':'before/after integrity comparison'
+}
+files=[]; directories=[]; empty_directories=[]
+for p in sorted(OUT.rglob('*')):
+ mode=p.lstat().st_mode
+ if stat.S_ISLNK(mode): raise RuntimeError('Unexpected output symlink')
+ if stat.S_ISDIR(mode):
+  directories.append(str(p.relative_to(OUT)))
+  if not any(p.iterdir()): empty_directories.append(str(p.relative_to(OUT)))
+ elif stat.S_ISREG(mode):
+  if p in (INVENTORY,SEAL): continue
+  row=descriptor(p); rel=row['path']; parts=p.relative_to(OUT).parts
+  is_cache=any(v in ('__pycache__','.cache','.pytest_cache','.mypy_cache','.ruff_cache') for v in parts) or p.suffix in ('.pyc','.pyo')
+  row['category']='cache' if is_cache else categories.get(rel,'review inspection/closure script' if p.suffix=='.py' else 'other ordinary output')
+  row['empty']=row['bytes']==0; row['cache']=is_cache; files.append(row)
+ else: raise RuntimeError('Unexpected non-ordinary output')
+write(INVENTORY,{'schema':'cvg.independent-documentary-output-inventory/1','root':str(OUT),'algorithm':'SHA-256','scope':'Every ordinary file recursively, hidden/empty/cache files included; all directories listed separately','excluded_only':[{'path':INVENTORY.name,'reason':'non-circular inventory self-exclusion; bytes/hash in detached seal'},{'path':SEAL.name,'reason':'detached closing object; its SHA-256 returned outside the sealed tree'}],'ordinary_file_count':len(files),'ordinary_bytes':sum(x['bytes'] for x in files),'empty_file_count':sum(x['empty'] for x in files),'cache_file_count':sum(x['cache'] for x in files),'directories':directories,'empty_directories':empty_directories,'files':files})
+write(SEAL,{'schema':'cvg.independent-documentary-detached-seal/1','sealed_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'reviewer':'I1 novo, modelo herdado, sem descendentes','decision':'REVISE','finding_ids':['I1-R3-001'],'human_spec_approval':'NOT_GRANTED','build_authorization':'NOT_AUTHORIZED','all_future_tests':'NOT_RUN','spec225':'PENDING','manifest':{'path':str(MANIFEST),'bytes':len(mb),'sha256':sha(mb)},'input_integrity':'54/54 same bytes and SHA-256 before/after; 53 enumerated copies plus manifest','inventory':descriptor(INVENTORY),'ordinary_outputs':[{'path':x['path'],'bytes':x['bytes'],'sha256':x['sha256']} for x in files],'closure':'Inventory excludes only itself and this seal. This detached seal binds the inventory and every ordinary output. Seal SHA-256 is reported externally; no identity-signature or runtime acceptance claim.'})
+# Read-only closure verification. No file may be written after this point.
+inv=json.loads(INVENTORY.read_bytes()); seal=json.loads(SEAL.read_bytes())
+actual={str(p.relative_to(OUT)) for p in OUT.rglob('*') if p.is_file()}
+assert actual=={x['path'] for x in inv['files']}|{INVENTORY.name,SEAL.name}
+for entry in inv['files']:
+ assert descriptor(OUT/entry['path'])=={k:entry[k] for k in ('path','bytes','sha256')}
+assert descriptor(INVENTORY)==seal['inventory']
+print(json.dumps({'decision':'REVISE','finding_count':1,'severity':'HIGH','inputs_unchanged':True,'ordinary_files_in_inventory':len(files),'empty_files':inv['empty_file_count'],'cache_files':inv['cache_file_count'],'empty_directories':inv['empty_directories'],'report':str(OUT/'REVIEW.md'),'decision_json':str(OUT/'decision.json'),'inventory':str(INVENTORY),'inventory_sha256':sha(INVENTORY.read_bytes()),'seal':str(SEAL),'seal_sha256':sha(SEAL.read_bytes()),'closure_verification':'all output paths, bytes and hashes match; inventory bound by seal'},ensure_ascii=False,indent=2))

@@ -1,0 +1,13 @@
+import os,sys,subprocess,pathlib,json,time,hashlib
+root=pathlib.Path.cwd(); label=sys.argv[1]; args=sys.argv[2:]
+p=root/'outputs'/'commands'/label; p.mkdir(parents=True,exist_ok=False)
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(root/'home'),'TMPDIR':str(root/'tmp'),'TMP':str(root/'tmp'),'TEMP':str(root/'tmp'),'XDG_CONFIG_HOME':str(root/'xdg/config'),'XDG_CACHE_HOME':str(root/'xdg/cache'),'XDG_DATA_HOME':str(root/'xdg/data'),'XDG_STATE_HOME':str(root/'xdg/state'),'npm_config_cache':str(root/'npm-cache'),'DSH_HOME':str(root/'home/dsh'),'NODE_ENV':'test','LANG':'C.UTF-8','TZ':'UTC','NO_COLOR':'1'}
+if label.startswith('focus-explicit'): env['CVG_DIFFERENTIAL_EVIDENCE_DIR']=str(root/'outputs'/label/'evidence')
+start=time.time()
+with (p/'stdout.log').open('wb') as out,(p/'stderr.log').open('wb') as err:
+ proc=subprocess.Popen(args,cwd=root,env=env,stdout=out,stderr=err)
+ try: code=proc.wait(timeout=180)
+ except subprocess.TimeoutExpired: proc.kill(); code=proc.wait()
+meta={'argv':args,'cwd':str(root),'environment':env,'pid':proc.pid,'exit':code,'elapsedMs':round((time.time()-start)*1000),'stdoutBytes':(p/'stdout.log').stat().st_size,'stderrBytes':(p/'stderr.log').stat().st_size}
+for n in ['stdout','stderr']: meta[n+'SHA256']=hashlib.sha256((p/(n+'.log')).read_bytes()).hexdigest(); meta[n+'Empty']=meta[n+'Bytes']==0
+(p/'metadata.json').write_text(json.dumps(meta,indent=2)+'\n'); print(json.dumps(meta)); print((p/'stdout.log').read_text()[-4000:]); print((p/'stderr.log').read_text()[-4000:])

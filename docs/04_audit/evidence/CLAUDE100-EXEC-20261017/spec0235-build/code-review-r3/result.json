@@ -1,0 +1,332 @@
+{
+  "version": 1,
+  "task": "C100-Q01-REF-PORT-001",
+  "round": 3,
+  "role": "independent security/code critic",
+  "observed_at": "2026-10-18T03:00:33.837802+00:00",
+  "verdict": "REJECT",
+  "scope": "FIRST_BOUNDED_NATIVE_LAUNCH_ELIGIBILITY_ONLY",
+  "boundedLaunchEligible": false,
+  "qualityBarState": "SCOPED_FAILED_QUALITY_BAR",
+  "codeCorrectionsConsumed": 2,
+  "codeCorrectionsRemaining": 0,
+  "finalPositiveControls": "NOT_RUN",
+  "finalNPAcceptance": "NOT_RUN",
+  "nativeExecution": "NOT_RUN",
+  "actualReferenceContainers": "NOT_RUN",
+  "M1": "NOT_RUN",
+  "functionalCatalogCredit": "NONE",
+  "candidate": "/tmp/cvg-claude100-exec-20261017/ref-port-candidate",
+  "candidateCheckpoint": "f3d6de87e206b04411fb1c576a1ccaaf6ffb5dca",
+  "bindings": {
+    "specSha256": "aaa12b3ee55021e357fc9a17518316135eb4ca423b87215af754cd18dbb41f04",
+    "sourceFreezeSha256": "292d3a2fa40fd196715482c4679172180bab4cd564422822511278a3d39f273f",
+    "reviewContractSha256": "459d7ca7cf339f2a8e442f5cc721afa64512aa04083e8cd4a01d6b0e75bd51b1",
+    "correctionContractSha256": "2ac0442cf5f4a7f6b6237603bb078b3bcc9d9bcd2bc792c83ca77b2897d194e3",
+    "inputsManifestSha256": "bd8abba2a8b4f56356397043acb089bd03f3efc0b6f8ae5bde1280efa50df56c",
+    "evidenceManifest": "manifest.json"
+  },
+  "mandatoryFindingCount": 1,
+  "findings": [
+    {
+      "id": "R3-01",
+      "severity": "MEDIUM",
+      "confidence": "HIGH",
+      "mandatory": true,
+      "affectedNP": [
+        "NP07",
+        "NP08"
+      ],
+      "title": "Failure ledger is not required to preserve the trace cause set, primary cause or chronology",
+      "expected": "Immutable SPEC0235 lines418\u2013423 requires an ordered failures.json preserving chronological primary and additional causes; lines397\u2013409 requires rejecting contradictory evidence bindings. R3 review contract explicitly requires actual status/failure/record bindings.",
+      "code": [
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 104,
+          "detail": "Terminal status is checked from the supplied ledger, but many distinct priority1 cause sets have the same INFRA_FAILURE outcome."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 105,
+          "detail": "For each supplied ledger entry, validates its referenced FAILURE record only. No reverse coverage requirement, unique-reference requirement or ordered/consecutive order requirement."
+        },
+        {
+          "path": "tests/claude100/reference-port/report.mjs",
+          "line": 1038,
+          "detail": "Reached-proof validation runs for all statuses, but the one-way failure relation still permits contradictory failure ledgers."
+        }
+      ],
+      "reproducer": "Run the real frozen controller with a wholly simulated peer that emits forbidden auth then refuses cleanup. Its actual report is INFRA_FAILURE/exit1; original failures.json contains PRIVACY order0 followed by four CLEANUP causes, with unchanged matching HOST FAILURE events. Clone only the report/retained map and replace/re-hash the failures artifact three ways: remove PRIVACY, reverse the five causes, or duplicate PRIVACY. assertEvidenceBindings accepts all three mutated artifact sets unchanged. Original artifact set is also confirmed valid first.",
+      "results": [
+        {
+          "mutation": "drop_primary",
+          "accepted": true,
+          "originalCodes": [
+            "PRIVACY",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP"
+          ],
+          "changedCodes": [
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP"
+          ]
+        },
+        {
+          "mutation": "reverse_order",
+          "accepted": true,
+          "changedCodes": [
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP",
+            "PRIVACY"
+          ]
+        },
+        {
+          "mutation": "duplicate_primary",
+          "accepted": true,
+          "changedCodes": [
+            "PRIVACY",
+            "PRIVACY",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP",
+            "CLEANUP"
+          ]
+        }
+      ],
+      "evidence": [
+        "failure-ledger-r3.json",
+        "failure-ledger-drop_primary.json",
+        "failure-ledger-reverse_order.json",
+        "failure-ledger-duplicate_primary.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r3/artifacts/privacy_and_cleanup_failure/run/failures.json",
+        "/tmp/cvg-claude100-exec-20261017/ref-port-review-r3/artifacts/privacy_and_cleanup_failure/run/control-trace.json"
+      ],
+      "impact": "The artifact verifier can accept a cause ledger that loses the primary privacy violation, invents a duplicate or reverses chronology while its retained trusted trace contradicts it. The process still reports failure; this is an audit/evidence-integrity contract defect, not a demonstrated native escape, automatic positive-status bypass or evidence that the controller normally omits its causes.",
+      "safeCorrection": "Require an exact ordered correspondence between the complete retained HOST FAILURE record set and failures.json: each reachable cause represented once, correct artifactRef and fields, consecutive unique order in canonical chronology, primary cause first. Preserve the explicitly defined record-cap/null-reference case rather than requiring nonexistent future records. Add the three counterexamples as rejects. No correction was made by this reviewer."
+    }
+  ],
+  "r2ResidualRecheck": [
+    {
+      "id": "R2-01",
+      "origin": "R1-03",
+      "judgment": "EXACT_NEGATIVE_STATUS_PASS_COUNTEREXAMPLES_RESOLVED; ADDITIONAL_VERIFIER_FINDING_R3_01_REMAINS",
+      "evidence": [
+        "continued-proof-r3.json",
+        "focused-suite-r3.json"
+      ],
+      "detail": "Rehashed privileged inspect and uid0/marker-present preflight are rejected in both PORT_OBSERVED and genuine privacy INFRA_FAILURE reports. Reached PASS proof validation now precedes terminal-status branches. Additional failure-ledger completeness/order property is defeated by R3-01."
+    },
+    {
+      "id": "R2-02",
+      "origin": "R1-02",
+      "judgment": "RESOLVED_WITHIN_BOUNDED_TESTS",
+      "evidence": [
+        "signal-r3.json",
+        "focused-suite-r3.json"
+      ],
+      "detail": "Both direct bootstrap signals are preserved as SIGNAL with actual signal in the error chain, no remaining owned snapshot/FDs, and restored handlers. Four copied-controller signal cases preserve SIGNAL, cleanup and graph disposal; two byte-identical copied CLI/inert-controller import cancellation tests and original ownership-transfer unit test also pass."
+    }
+  ],
+  "sixOriginalFindingRecheck": [
+    {
+      "id": "R1-01",
+      "judgment": "RESOLVED_IN_RETEST",
+      "detail": "Six consumed input/profile mutations refused before native and after port (12cases), plus two exact-empty-directory mutations refused. All exit1 with DRIFT_RUNTIME; physical drift leaves partial evidence when coherent publication is impossible."
+    },
+    {
+      "id": "R1-02",
+      "judgment": "ORIGINAL_COUNTEREXAMPLES_RESOLVED",
+      "detail": "Both direct bootstrap signals are preserved as SIGNAL with actual signal in the error chain, no remaining owned snapshot/FDs, and restored handlers. Four copied-controller signal cases preserve SIGNAL, cleanup and graph disposal; two byte-identical copied CLI/inert-controller import cancellation tests and original ownership-transfer unit test also pass."
+    },
+    {
+      "id": "R1-03",
+      "judgment": "ORIGINAL_INSPECT_PREFLIGHT_COUNTEREXAMPLES_RESOLVED; RELATED_EVIDENCE_INTEGRITY_GAP_REMAINS",
+      "detail": "Rehashed privileged inspect and uid0/marker-present preflight are rejected in both PORT_OBSERVED and genuine privacy INFRA_FAILURE reports. Reached PASS proof validation now precedes terminal-status branches. Additional failure-ledger completeness/order property is defeated by R3-01."
+    },
+    {
+      "id": "R1-04",
+      "judgment": "RESOLVED_IN_RETEST",
+      "detail": "Nonzero actual wrapper exit preserves failure and still removes both virtual identities; actual simulated native port exit1 stays distinct from wrapper exit."
+    },
+    {
+      "id": "R1-05",
+      "judgment": "RESOLVED_IN_RETEST",
+      "detail": "Terminal body without trusted REQUEST/RESPONSE is PROTOCOL/INFRA_FAILURE with retained partial evidence, not intact clean absence."
+    },
+    {
+      "id": "R1-06",
+      "judgment": "RESOLVED_REPRESENTATION_PRESERVED",
+      "detail": "Only builtin trusted bootstrap precedes pinning/copy; host controller/helper graph imports copied bytes through one fixed verified within-closure path. Fixed12builtin allowlist appears in profile and matches AST; graph disposal precedes publication."
+    }
+  ],
+  "compatibilityQuestions": [
+    {
+      "id": "Q1",
+      "judgment": "COMPATIBLE_FAIL_CLOSED_NOT_RUNTIME_PROVEN",
+      "detail": "No ordinal4 invented. Simulated observer incomplete EOF/nonzero after a valid exchange is refused as INFRA_FAILURE and virtual resources are removed. Actual fifth HTTP attempt remains NOT_RUN; host does not infer an observed CAP code from EOF alone."
+    },
+    {
+      "id": "Q2",
+      "judgment": "COMPATIBLE_DEADLINE_INTERPRETATION_NOT_RUNTIME_PROVEN",
+      "detail": "Unchanged fixed local Enginev1.51 attach handshake counts within24calls and <=2s call budget; observation stream is bounded by shared30s controller deadline. Real Engine/socket/image compatibility NOT_RUN."
+    },
+    {
+      "id": "Q3",
+      "judgment": "COMPATIBLE_TERMINALS_AND_BODY_JOIN_RETESTED",
+      "detail": "Zero-length terminal representation unchanged; original fragmentation/duplicate/after-terminal/EOF tests pass. Complete orphan body without trusted control is rejected. Real cross-pipe scheduling NOT_RUN."
+    },
+    {
+      "id": "Q4",
+      "judgment": "COMPATIBLE_CONSERVATIVE_WINDOW_NOT_RUNTIME_PROVEN",
+      "detail": "No global native/HTTP pipe order invented. Raw observer bytes after host STOP cause exit1/no positive report and virtual cleanup. R3 refuses incoherent raw evidence publication, leaving partialfiles; practical false negatives remain possible, actual scheduling NOT_RUN."
+    }
+  ],
+  "profileBootstrapImportInterpretation": {
+    "profileTopKey": "R2 accepted interpretation preserved: top-level profile description says cont\u00e9m while Docker config and Reportv1 are closed; fixed builtinAllowlist fulfils an explicit existing requirement and grants no configurable capability.",
+    "fixedImport": "R2 accepted interpretation preserved: one fixed verified dynamic import inside copied closure is allowed; outside-closure resolution and generic target-selected module imports remain forbidden.",
+    "trustedBootstrap": "Independent AST confirms only builtin imports before fixed graph entry;20sources/271496bytes/12builtins/one within-closure dynamic import/zero unresolved edges. Original and copied graph pins are checked; actual copied controller run is explicitly simulated and snapshot disposal precedes final publication."
+  },
+  "tests": {
+    "completeOriginalFocusedSuite": {
+      "status": "PASS",
+      "files": 12,
+      "tests": 228,
+      "failures": 0,
+      "skips": 0,
+      "todo": 0,
+      "exitCode": 0,
+      "evidence": "focused-suite-r3.json",
+      "environment": "Pinned Node22.23.2;privateTMPDIR/cache; original tests unchanged; expressly authorized own random marker children only"
+    },
+    "independentScenarios": {
+      "completedNonSignalScenarios": 23,
+      "results": "Preserved in scenario-index.json; original exact counterexamples refused; dual-failure specimen used to test ledger integrity",
+      "evidence": "scenario-index.json"
+    },
+    "independentSignalSubprocesses": {
+      "status": "PASS_IN_BOUNDED_SCOPE",
+      "cases": 6,
+      "controllerCases": 4,
+      "bootstrapCases": 2,
+      "exitCode": 0,
+      "evidence": "signal-r3.json"
+    },
+    "priorValidatorMutants": {
+      "status": "ALL4_REJECTED",
+      "cases": 4,
+      "exitCode": 0,
+      "evidence": "continued-proof-r3.json"
+    },
+    "failureLedgerMutants": {
+      "status": "CONTRACT_FAILURE_REPRODUCED_ALL3_ACCEPTED",
+      "cases": 3,
+      "exitCode": 0,
+      "evidence": "failure-ledger-r3.json",
+      "meaning": "Harness exit0 means the observed result was recorded, not that candidate complies"
+    },
+    "initialLegacyHarness": {
+      "status": "INTERRUPTED_BY_MEASUREMENT_EXPECTATION",
+      "exitCode": 1,
+      "completedScenarios": 21,
+      "evidence": "adversarial-r3.log",
+      "explanation": "R2 harness required a published INFRA_FAILURE for raw observer bytes after STOP. R3 correctly refuses incoherent proof publication (exit1, partialfiles, PROTOCOL, zero virtual resources). The old assertion/source/log are preserved; a separate continuation explicitly confirms refusal and cleanup rather than weakening or deleting a candidate test."
+    },
+    "closure": {
+      "sources": 20,
+      "bytes": 271496,
+      "builtins": 12,
+      "fixedWithinClosureDynamicImports": 1,
+      "unresolved": 0,
+      "evidence": "closure-independent-r3.json"
+    },
+    "notRunByReviewer": [
+      "Original valid probe CLI/main or selected observer/client mains",
+      "Actual Docker/container/HTTP/network/Claude/native/account/model/provider",
+      "Broad gates/fullcert/PG/E2E/SBOM/licenses",
+      "Any source correction or delegated agent"
+    ]
+  },
+  "preservation": {
+    "source35BeforeAfter": "MATCH",
+    "protected7Versus26d866c3": "MATCH",
+    "R1Seal": "680/680MATCH",
+    "R2Seal": "1259/1259MATCH",
+    "currentBinaryPins": "Node,DockerCLI,Claude allMATCH; image runtimeNOT_RUN",
+    "sourceModifications": false,
+    "sharedLedgerWrites": false,
+    "delegatedAgents": 0,
+    "networkCalls": 0,
+    "dockerCommands": 0
+  },
+  "criteria": [
+    {
+      "id": "NP01",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP02",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP03",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP04",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP05",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP06",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP07",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": [
+        "R3-01"
+      ]
+    },
+    {
+      "id": "NP08",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": [
+        "R3-01"
+      ]
+    },
+    {
+      "id": "NP09",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    },
+    {
+      "id": "NP10",
+      "finalAcceptance": "NOT_RUN",
+      "mandatoryFinding": []
+    }
+  ],
+  "limitations": [
+    "All Engine/native/preflight/HTTP messages in independent controller scenarios are synthetic. No runtime-positive acceptance follows.",
+    "Actual process signals target only owned Node test children. Copied CLI uses an inert substituted controller, never the original valid real probe.",
+    "The remaining counterexample mutates only new review-owned artifact representations; no candidate code or original sealed evidence changed.",
+    "The counterexample does not demonstrate a native escape or a false positive terminal status; it defeats required cause-set/ordering validation.",
+    "Pinned binary bytes match; image,API,ELF,real containment,lineage,HTTP,cleanup remain NOT_RUN.",
+    "No web references fetched and no Lead jobs/resources controlled. Fullgates and actual output review still required after eligible source exists."
+  ],
+  "nextAction": "Lead records SCOPED_FAILED_QUALITY_BAR and keeps native/fullgate launch ineligible. Preserve R1/R2/R3 and exhausted2of2 budget; prepare explicit bounded evidence-based recovery for failure-ledger bijection/chronology before any new implementation attempt, re-freeze, review or native launch. No automatic third correction or scope reset."
+}

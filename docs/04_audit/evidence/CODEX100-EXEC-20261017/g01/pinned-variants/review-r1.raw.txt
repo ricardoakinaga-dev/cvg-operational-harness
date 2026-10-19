@@ -1,0 +1,15 @@
+**NEEDS_CHANGES**
+
+Two mandatory P2 findings:
+
+1. **The graph omits schema sites and reference edges inside the combined export’s `v2` namespace.** [build_matrix.py:83](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/pinned-variants/build_matrix.py:83) visits `/definitions/v2` as one schema object, then stops. In archive member `codex_app_server_protocol.schemas.json`, **730 of 1,245 contained `$ref` occurrences have no indexed edge**. Missing sites include `/definitions/v2/ImageGenerationInputImage`, `ThreadItem`, and the metadata-patch, voice-session and MCP-metadata fields. The image-input definition has no syntax profile, including its required `path`/`sha256` obligations.
+
+   Raw JSON remains lossless; the reference/profile index is incomplete. [verify_matrix.py:38](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/pinned-variants/verify_matrix.py:38) repeats the same traversal limitation, so its coverage comparison at line 118 cannot detect this omission. **Fix:** traverse the pinned namespace and referenced schema targets with bounded visitation; independently check namespace coverage and regenerate affected evidence.
+
+2. **The verifier can report four reconciled families after their dispositions disappear.** [verify_matrix.py:86](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/pinned-variants/verify_matrix.py:86) checks counts separately, then validates only family definitions that remain. By code inspection, replacing `families["families"]` with `{}` skips every source/disposition check while line 156 still reports `families: 4`. Removing `source_disposition` also goes unchecked. The eight negatives do not cover these cases.
+
+   **Risk:** all 215 difference rows can remain while losing their source-family explanations, producing false bounded closure. **Fix:** require exactly the four expected family definitions, enforce row-to-family linkage and required disposition content, and add deletion negatives.
+
+Verified independently: all 11 frozen hashes and 11 protected-input hashes match; upstream is clean at `8d9f6466ff0294785d56f55b1fe363d132fe4133`. All 455 documents reconstruct losslessly; 274 contract links, 186 response obligations and 215 prior difference identities remain preserved. Independent Rust inspection sampled all four families without finding an additional contradictory behavioral claim.
+
+Limits: no writes, descendants, network, generators, tests or target execution. The eight negatives and two hash-seed regeneration receipts were inspected, not rerun. Other declared G01/runtime gaps remain allowed. **No approval of full G01, runtime, gates or reuse.**

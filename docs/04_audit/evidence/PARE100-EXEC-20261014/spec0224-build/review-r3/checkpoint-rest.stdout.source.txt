@@ -1,0 +1,345 @@
+   403       if (
+   404         !entry.actual ||
+   405         !entry.resultSha256 ||
+   406         entry.unknownReason !== undefined ||
+   407         entry.actual.modelCalls !== 1 ||
+   408         entry.actual.inputTokens > r.inputTokens ||
+   409         entry.actual.outputTokens > r.outputTokens ||
+   410         entry.actual.costUsd > r.costUsd
+   411       )
+   412         fail('Invalid settled admission')
+   413     } else if (
+   414       !entry.unknownReason ||
+   415       (entry.actual !== undefined &&
+   416         entry.unknownReason !== 'ADMISSION_BREACH') ||
+   417       entry.resultSha256 !== undefined
+   418     )
+   419       fail('Invalid unknown admission')
+   420   }
+   421   if (pending !== ctx.pendingDecisionAdmission)
+   422     fail('Pending admission does not match ledger')
+   423   const accepted = ctx.acceptedDecision
+   424   if (accepted) {
+   425     if (
+   426       accepted.stepNumber !== state.stepNumber + 1 &&
+   427       accepted.stepNumber !== state.stepNumber
+   428     )
+   429       fail('Accepted decision step mismatch')
+   430     if (!validateLoopDecision(accepted.decision).valid || pending !== null)
+   431       fail('Invalid accepted decision')
+   432     const ids = new Set(accepted.decisionAdmissionIds)
+   433     if (ids.size !== accepted.decisionAdmissionIds.length)
+   434       fail('Duplicate accepted receipt')
+   435     for (const admissionId of ids) {
+   436       const entry = admissions.get(admissionId)
+   437       if (
+   438         !entry ||
+   439         entry.status !== 'SETTLED' ||
+   440         entry.stepNumber !== accepted.stepNumber
+   441       )
+   442         fail('Accepted receipt binding mismatch')
+   443     }
+   444     const nativeIds = ctx.decisionAdmissions
+   445       .filter((r) => r.stepNumber === accepted.stepNumber)
+   446       .map((r) => r.admissionId)
+   447     if (
+   448       nativeIds.length !== ids.size ||
+   449       nativeIds.some((admissionId) => !ids.has(admissionId))
+   450     )
+   451       fail('Accepted decision omits native receipt')
+   452     if (
+   453       state.pendingDecision &&
+   454       (state.pendingStepNumber !== accepted.stepNumber ||
+   455         canonicalizeCompleteJson(state.pendingDecision, LIMITS) !==
+   456           canonicalizeCompleteJson(accepted.decision, LIMITS))
+   457     )
+   458       fail('Pending and accepted decisions disagree')
+   459   }
+   460 }
+   461 
+   462 function normalizedState(value: unknown): AgentLoopState {
+   463   preflight(value)
+   464   const state = stateSchema(value) as AgentLoopState
+   465   validateState(state)
+   466   canonicalizeCompleteJson(state, LIMITS)
+   467   return state
+   468 }
+   469 
+   470 function normalizedUnsigned(value: unknown): UnsignedCheckpoint {
+   471   preflight(value)
+   472   const unsigned = unsignedSchema(value) as UnsignedCheckpoint
+   473   validateState(unsigned.state, unsigned)
+   474   canonicalizeCompleteJson(unsigned, LIMITS)
+   475   if (
+   476     unsigned.state.stepNumber !== unsigned.stepNumber ||
+   477     unsigned.budgetUsage.steps < unsigned.stepNumber
+   478   )
+   479     fail('Checkpoint step mismatch')
+   480   const sum = { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
+   481   let repairs = 0
+   482   for (const r of unsigned.state.toolResultContext!.decisionAdmissions) {
+   483     for (const key of Object.keys(sum) as (keyof typeof sum)[]) {
+   484       sum[key] +=
+   485         r.status === 'SETTLED'
+   486           ? r.actual![key]
+   487           : Math.max(r.reserved[key], r.actual?.[key] ?? 0)
+   488     }
+   489     if (r.purpose === 'REPAIR') repairs++
+   490   }
+   491   for (const key of Object.keys(sum) as (keyof typeof sum)[]) {
+   492     if (unsigned.budgetUsage[key] + (key === 'costUsd' ? 1e-12 : 0) < sum[key])
+   493       fail('Budget does not cover admission ledger')
+   494   }
+   495   if (unsigned.budgetUsage.decisionRepairs < repairs)
+   496     fail('Repair budget does not cover ledger')
+   497   return unsigned
+   498 }
+   499 
+   500 export function completeCheckpointDigest(unsigned: UnsignedCheckpoint): string {
+   501   return sha(
+   502     'cvg.checkpoint.v2\n' +
+   503       canonicalizeCompleteJson(normalizedUnsigned(unsigned), LIMITS)
+   504   )
+   505 }
+   506 
+   507 export function encodeCompleteCheckpointState(
+   508   state: AgentLoopState
+   509 ): CompleteCheckpointStorageState {
+   510   const raw = canonicalizeCompleteJson(normalizedState(state), LIMITS)
+   511   const bytes = Buffer.from(raw, 'utf8')
+   512   return {
+   513     storageCodec: 'cvg.checkpoint-state/2',
+   514     encoding: 'base64',
+   515     decodedBytes: bytes.length,
+   516     decodedSha256: sha(bytes),
+   517     data: bytes.toString('base64')
+   518   }
+   519 }
+   520 
+   521 /** Reject excessive nesting/node counts before JSON.parse allocates a tree. */
+   522 function boundedJsonText(raw: string): void {
+   523   let inString = false,
+   524     escaped = false,
+   525     nodes = 0,
+   526     inAtom = false,
+   527     stringStart = 0
+   528   const stack: (Set<string> | null)[] = []
+   529   const value = (): void => {
+   530     if (stack.length > LIMITS.maxDepth || ++nodes > LIMITS.maxNodes)
+   531       fail('JSON complexity limit')
+   532   }
+   533   for (let i = 0; i < raw.length; i++) {
+   534     const char = raw[i]!
+   535     if (inString) {
+   536       if (escaped) escaped = false
+   537       else if (char === '\\') escaped = true
+   538       else if (char === '"') {
+   539         inString = false
+   540         let next = i + 1
+   541         while (next < raw.length && /\s/.test(raw[next]!)) next++
+   542         if (raw[next] === ':') {
+   543           const keys = stack[stack.length - 1]
+   544           if (!keys) fail('Invalid JSON object key')
+   545           const key = JSON.parse(raw.slice(stringStart, i + 1)) as string
+   546           if (keys!.has(key)) fail('Duplicate JSON key')
+   547           keys!.add(key)
+   548           if (keys!.size > LIMITS.maxNodes) fail('JSON node limit')
+   549         } else value()
+   550       }
+   551       continue
+   552     }
+   553     if (char === '"') {
+   554       inString = true
+   555       stringStart = i
+   556       inAtom = false
+   557     } else if (char === '{' || char === '[') {
+   558       value()
+   559       stack.push(char === '{' ? new Set() : null)
+   560       inAtom = false
+   561     } else if (char === '}' || char === ']') {
+   562       stack.pop()
+   563       inAtom = false
+   564     } else if (char === ',' || char === ':' || /\s/.test(char)) inAtom = false
+   565     else if (!inAtom) {
+   566       value()
+   567       inAtom = true
+   568     }
+   569   }
+   570 }
+   571 
+   572 /** Bound work before schema normalization. This is a lower-bound measurement,
+   573  * not validation: only the schema may omit an undefined optional field. */
+   574 function preflight(value: unknown): void {
+   575   let nodes = 0,
+   576     bytes = 0
+   577   const ancestors = new Set<object>()
+   578   const visit = (input: unknown, depth: number): void => {
+   579     if (input === undefined) return
+   580     if (++nodes > LIMITS.maxNodes || depth > LIMITS.maxDepth)
+   581       fail('Checkpoint complexity limit')
+   582     bytes += typeof input === 'string' ? input.length + 2 : 1
+   583     if (bytes > LIMITS.maxBytes) fail('Checkpoint byte limit')
+   584     if (!input || typeof input !== 'object') return
+   585     if (ancestors.has(input)) fail('Checkpoint cycle')
+   586     ancestors.add(input)
+   587     const array = Array.isArray(input)
+   588     if (array && input.length > LIMITS.maxNodes - nodes)
+   589       fail('Checkpoint node limit')
+   590     const keys = Reflect.ownKeys(input)
+   591     if (keys.length > LIMITS.maxNodes + 1) fail('Checkpoint node limit')
+   592     for (const key of keys) {
+   593       if (array && key === 'length') continue
+   594       if (typeof key !== 'string') fail('Checkpoint symbol')
+   595       const descriptor = Object.getOwnPropertyDescriptor(input, key)
+   596       if (!descriptor || !('value' in descriptor)) fail('Checkpoint accessor')
+   597       if (descriptor.value === undefined) continue
+   598       if (!array) bytes += (key as string).length + 3
+   599       if (bytes > LIMITS.maxBytes) fail('Checkpoint byte limit')
+   600       visit(descriptor.value, depth + 1)
+   601     }
+   602     ancestors.delete(input)
+   603   }
+   604   visit(value, 0)
+   605 }
+   606 
+   607 export function decodeCompleteCheckpointState(raw: unknown): AgentLoopState {
+   608   try {
+   609     if (typeof raw === 'string') {
+   610       if (Buffer.byteLength(raw) > COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES)
+   611         fail('Physical checkpoint limit')
+   612       boundedJsonText(raw)
+   613       raw = JSON.parse(raw) as unknown
+   614     }
+   615     const wrapper = record({
+   616       storageCodec: one('cvg.checkpoint-state/2'),
+   617       encoding: one('base64'),
+   618       decodedBytes: integer,
+   619       decodedSha256: digest,
+   620       data: str
+   621     })(raw) as CompleteCheckpointStorageState
+   622     if (
+   623       wrapper.decodedBytes > COMPLETE_CHECKPOINT_MAX_BYTES ||
+   624       wrapper.data.length > COMPLETE_CHECKPOINT_DATA_MAX_CHARS
+   625     )
+   626       fail('Physical checkpoint limit')
+   627     if (
+   628       Buffer.byteLength(
+   629         canonicalizeCompleteJson(wrapper, {
+   630           ...LIMITS,
+   631           maxBytes: COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES
+   632         })
+   633       ) > COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES
+   634     )
+   635       fail()
+   636     if (
+   637       wrapper.data.length !== 4 * Math.ceil(wrapper.decodedBytes / 3) ||
+   638       !/^[A-Za-z0-9+/]*={0,2}$/.test(wrapper.data)
+   639     )
+   640       fail('Invalid base64')
+   641     const bytes = Buffer.from(wrapper.data, 'base64')
+   642     if (
+   643       bytes.length !== wrapper.decodedBytes ||
+   644       bytes.toString('base64') !== wrapper.data ||
+   645       sha(bytes) !== wrapper.decodedSha256
+   646     )
+   647       fail('Physical checkpoint integrity mismatch')
+   648     const text = new TextDecoder('utf-8', {
+   649       fatal: true,
+   650       ignoreBOM: true
+   651     }).decode(bytes)
+   652     boundedJsonText(text)
+   653     const state = normalizedState(JSON.parse(text) as unknown)
+   654     if (canonicalizeCompleteJson(state, LIMITS) !== text)
+   655       fail('Noncanonical checkpoint state')
+   656     return state
+   657   } catch (error) {
+   658     if (error instanceof CheckpointError) throw error
+   659     fail('Malformed complete checkpoint encoding')
+   660   }
+   661 }
+   662 
+   663 /** CAS transition validation; cannot erase retained observations or settled receipts. */
+   664 export function validateCompleteCheckpointTransition(
+   665   current: ExecutionCheckpoint | null,
+   666   next: ExecutionCheckpoint
+   667 ): void {
+   668   if (!current) return
+   669   if (current.checkpointId === next.checkpointId)
+   670     fail('Checkpoint ID must change on every CAS')
+   671   const fromLegacy =
+   672     current.checkpointVersion === 1 &&
+   673     next.checkpointVersion === 2 &&
+   674     !current.state.observations.some((o) => o.type === 'TOOL_RESULT')
+   675   if (current.checkpointVersion !== next.checkpointVersion && !fromLegacy)
+   676     fail('Checkpoint mode cannot change through CAS')
+   677   if (next.checkpointVersion !== 2) return
+   678   if (
+   679     current.runtimeProfile !== next.runtimeProfile ||
+   680     current.runtimeVersion !== next.runtimeVersion ||
+   681     current.orchestratorVersion !== next.orchestratorVersion ||
+   682     current.state.capabilityFingerprint !== next.state.capabilityFingerprint ||
+   683     current.state.goal !== next.state.goal ||
+   684     next.stepNumber < current.stepNumber ||
+   685     next.state.toolResultContext!.deliveredThroughStep <
+   686       (current.state.toolResultContext?.deliveredThroughStep ?? 0)
+   687   )
+   688     fail('Checkpoint binding or cursor changed')
+   689   if (fromLegacy) return
+   690   const accepted = current.state.toolResultContext!.acceptedDecision
+   691   if (
+   692     accepted &&
+   693     next.stepNumber < accepted.stepNumber &&
+   694     canonicalizeCompleteJson(accepted, LIMITS) !==
+   695       canonicalizeCompleteJson(
+   696         next.state.toolResultContext!.acceptedDecision,
+   697         LIMITS
+   698       )
+   699   )
+   700     fail('Accepted decision cannot change before its step completes')
+   701   const nextObservations = new Map(
+   702     next.state.observations.map((o) => [o.observationId, o])
+   703   )
+   704   for (const old of current.state.observations) {
+   705     if (
+   706       old.type === 'TOOL_RESULT' &&
+   707       canonicalizeCompleteJson(
+   708         nextObservations.get(old.observationId),
+   709         LIMITS
+   710       ) !== canonicalizeCompleteJson(old, LIMITS)
+   711     )
+   712       fail('Tool observation retention violated')
+   713   }
+   714   const receipts = new Map(
+   715     next.state.toolResultContext!.decisionAdmissions.map((r) => [
+   716       r.admissionId,
+   717       r
+   718     ])
+   719   )
+   720   for (const old of current.state.toolResultContext!.decisionAdmissions) {
+   721     const updated = receipts.get(old.admissionId)
+   722     if (!updated) fail('Admission retention violated')
+   723     if (old.status === 'RESERVED') {
+   724       const {
+   725         status: _s,
+   726         actual: _a,
+   727         unknownReason: _u,
+   728         resultSha256: _h,
+   729         ...immutable
+   730       } = updated!
+   731       const { status: _old, ...previous } = old
+   732       void _s
+   733       void _a
+   734       void _u
+   735       void _h
+   736       void _old
+   737       if (
+   738         canonicalizeCompleteJson(immutable, LIMITS) !==
+   739         canonicalizeCompleteJson(previous, LIMITS)
+   740       )
+   741         fail('Admission binding changed')
+   742     } else if (
+   743       canonicalizeCompleteJson(old, LIMITS) !==
+   744       canonicalizeCompleteJson(updated, LIMITS)
+   745     )
+   746       fail('Settled admission changed')
+   747   }

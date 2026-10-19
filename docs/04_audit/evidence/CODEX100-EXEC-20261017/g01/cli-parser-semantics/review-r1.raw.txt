@@ -1,0 +1,92 @@
+**ACCEPT_BOUNDED_CLI_PARSER_SOURCE_BINDING**
+
+Parecer independente fresh-context, nível I1, restrito à unidade T1 `DX100-G01:RESOLVE-CLI-PARSER-SEMANTICS`. **Nenhum achado obrigatório P0–P3; nenhum rework solicitado — 0/2 utilizados.** Evidência suficiente para o vínculo estático contratado.
+
+Revisão totalmente somente leitura, sem descendentes ou arquivos escritos. Li a constituição, o claim `CODEX100-EXEC`, os contratos e os insumos congelados. O fingerprint dos insumos revisados e dos arquivos históricos permaneceu idêntico ao final.
+
+A classificação é honesta: as **1.459 famílias futuras estão todas `NOT_RUN`**, com resultados explicitamente por observar. Não são testes executados, resultados previstos ou recibos de paridade.
+
+| Conferência independente | Resultado |
+|---|---:|
+| Campos históricos preservados integralmente | 305 |
+| Classificação histórica | 227 arg / 33 flatten / 16 subcommand / 21 skip / 8 dados manuais |
+| Campos adicionais Windows | 4; total integrado 309 |
+| Tipos / variantes históricos | 105 / 82 |
+| Seleções explícitas / expressões distintas | 14 / 10 |
+| Definições escalares / variantes / impls | 18 / 34 / 46 |
+| Corpos de função/helper | 39 |
+| Adapters / mutações / superfícies manuais | 4 / 7 / 12 |
+| Blobs Git autenticados | 69 |
+| Ocorrências de spans / coordenadas únicas | 3.146 / 1.426 |
+| Catálogo preservado | 487 funcionais + 22 controles |
+| Recibos funcionais novos | 0 |
+
+A integração preserva identidade, tipo e owner declarativo dos campos históricos, acrescenta requisito/owner do catálogo e mantém contexto sem avaliar cfg. Os 14 parsers explícitos conservam `LEAD_EXPLICIT`, com `implicit_candidates` vazio. Conferi isso contra os dados concretos e a integração em [`integrate.py:50`](/home/ricardo/Área%20de%20trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/cli-parser-semantics/integrate.py:50).
+
+Os fundamentos semânticos examinados foram:
+
+| Fonte pinada e linhas | Evidência observada e suficiência |
+|---|---|
+| `utils/cli/src/config_override.rs:42–102` | Prepend da raiz; divisão no primeiro `=`; trim de chave **e valor**; rejeição de chave vazia/separador ausente; TOML por tabela sentinela `_x_`; fallback com remoção de aspas nas extremidades; canonicalização `use_legacy_landlock`. Dotted key continua texto nesse parser. Suficiente para preservar a regra de fonte, mantendo loader/TOML efetivo abertos. |
+| `cli/src/mcp_cmd.rs:1126–1139` | Env divide no primeiro `=`, aplica trim somente à chave e conserva o valor, inclusive vazio, espaços e outros `=`. Sem confusão com o tratamento de config. |
+| `cli/src/lib.rs:101–104`, `cli/src/main.rs:752–755`, `utils/absolute-path/src/lib.rs:85–95` | Caminho/socket relativo é resolvido contra CWD; erros locais distintos preservados. O nome `AbsolutePathBuf` não foi convertido em rejeição automática de entradas relativas. |
+| `cloud-tasks/src/cli.rs:52–72` | Attempts usa `usize`, intervalo inclusivo 1–4; limit usa `i64`, 1–20; mensagens de parse e intervalo distintas. A expressão de throughput `u64.range(1..)` permanece fonte de macro, sem expansão. |
+| `app-server/src/code_mode_host.rs:39–79` | Declaração e impl completo de `TypedValueParser`, inclusive `type Value = Url`; UTF-8, `InvalidUtf8` e `ValueValidation`; http/https com host; rejeições de fragmento, credenciais, query e path diferente de `/`. Redação dos erros preservada, sem certificar comportamento externo da biblioteca URL. |
+| `protocol/src/thread_id.rs:27–73` | Geração usa UUIDv7; parsing usa `Uuid::parse_str`, sem enforcement v7. Conversões e Default não foram confundidos com gramática efetiva do Clap. |
+| `protocol/src/config_types.rs:117–173`, `protocol/src/protocol.rs:2970–3026`, `exec-server/src/server/request_dispatcher.rs:325–368` | Validação/erro de ProfileV2Name; fallback `ThreadSource::Feature`; parsing por `NonZeroUsize`, Inline para 1 e clamp por `Semaphore::MAX_PERMITS`. Corpos e fronteiras externos mantidos. |
+| `exec/src/cli.rs:88–104`, `utils/cli/src/approval_mode_cli_arg.rs:7–25`, `sandboxing/src/linux_pid_namespace.rs:4–23` | `rename_all`, variantes, conversões, marcador Default e FromStr preservados. Destinos de conversão ligados por imports/reexports concretos, inclusive Cyber; sem resolução global por nome. |
+| `cli/src/sandbox_setup.rs:13–84`, `cli/src/main.rs:78–79,1723–1736` | Quatro campos Windows, grupo obrigatório `sandbox_user`, relações entre user/current-user/codex-home, seletor literal `setup`, cfg do módulo/dispatch e exigência de `--elevated` em `setup_level`, **após parse**. Provisionamento continua fronteira não executada. |
+| `cli/src/main.rs:444–461`, adapters exec/TUI/ResumeArgs; `utils/cli/src/shared_options.rs:43–215` | Delegação Args/FromArgMatches, sete mutações e conversões manuais conservadas. Aliases `yolo`/`not-so-yolo`, conflitos e precedência permanecem dados de fonte; nenhum grant CVG foi inferido. |
+| `cli/src/main.rs:991–997,2228–2285,2573–2606`, `tui/src/lib.rs:474–520` | Feature registry/aliases, worktree, strict-config e endpoint/auth preservados como validações pós-parse, sem alegação de runtime. |
+
+Os caminhos da tabela são relativos a `codex-rs/`, no pin completo `8d9f6466ff0294785d56f55b1fe363d132fe4133`.
+
+O grupo MCP também permanece lossless: `group(ArgGroup::new("transport").args(["command","url"]).required(true).multiple(false))`. A projeção histórica `group: true` é complementada pela expressão completa. Conferi o contexto em `rules/inventory.json:30642`, o TypedValueParser em `:35495`, Windows em `:36509` e config/pós-parse em `:40532`.
+
+Executei exatamente os três checks documentados:
+
+```sh
+python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/cli-parser-semantics/rules/reader.py --check
+python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/cli-parser-semantics/scalars/reader.py --check
+python3 -B docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/cli-parser-semantics/integrate.py --check
+```
+
+| Comando | Exit | Resultado |
+|---|---:|---|
+| Rules | 0 | `PASS`; 19 negativos rejeitados |
+| Scalars | 0 | `PASS_STATIC_ONLY`; 28 negativos rejeitados |
+| Integração | 0 | `PASS`; 13 negativos rejeitados |
+
+Além deles, executei scripts `python3 -B - <<'PY'` exclusivamente em memória e leituras Git:
+
+- **Censo/atestação independente — exit 0:** leitura dos 69 blobs por `git show <pin>:<path>`, comparação com bytes locais, SHA-256/OID Git, limites UTF-8, textos, linhas iniciais e excerpts dos 3.146 spans; identidade dos campos históricos, owners, variantes extraídas das declarações e impls completos.
+- **16 negativos próprios — exit 0:** omissão de skip, candidato implícito indevido, owner errado, perda de cfg Windows, membros do grupo, tipo associado do parser, variante, Default, destino Profile, falso PASS futuro, restrição query, UTF-8, trim indevido do valor env, sentinela TOML, alias config e enforcement v7 inventado. Todos detectados por sentinelas semânticas, sem comparação integral de JSON ou dependência exclusiva de hashes.
+- **8 probes adicionais de fonte — exit 0:** introdução de alias/hide/skip/cfg/Default; troca de reexport mantendo nome visível; `reqwest::Url` sem dependência declarada; mudança de braço de conversão. Metadata e mudanças semânticas foram conservadas. O reexport alterou apenas consumidores dessa rota; import direto permaneceu intacto. `reqwest::Url` ficou `OPEN`, sem ID inventado, conservando precedência explícita.
+- `git rev-parse HEAD` e `git status --porcelain` no upstream — **exit 0**, pin correto e status vazio.
+
+Houve um `KeyError` num script auxiliar de inspeção e três tentativas malsucedidas dos probes adicionais, por expectativas minhas incorretas sobre import direto/reexport e `reqwest` não declarado. Corrigi os probes; a execução final passou. Essas tentativas não são contabilizadas como verificações aprovadas nem como falhas do artefato.
+
+Conferi individualmente os **313 arquivos anteriores** contra SHA-256 e tamanho dos manifests: entrypoints 46, pinned-variants 37, exec-server 59, cli-adapters 27, dynamic-factories 45, component-surfaces 30 e exec-transitive 69. Zero divergências. Os 23 arquivos congelados locais e o catálogo também permaneceram intactos.
+
+Hashes SHA-256 finais:
+
+```text
+contract.json
+7970342087422d7aa651437d6f74d786eb7e3a5d0b498b6e43aef69a3aa47c2b
+scalars-contract.json
+56c28025ceaa75ad1ed5fde49304df4614a8fd35b5c821208d43e116baeb829b
+review-r1-inputs.json
+677a742f3532a1e9d0044790b03ac18f1dd561b19e173ab66892513d11be2aab
+rules/manifest.json
+415ba3cfebd7c0b005b41c8a1ed52f8f5a0e77c236c84fd35733150e6372b774
+scalars/manifest.json
+3c3be62d9410ec29731ceb50ae43fe2675230c40fba6eecdaac8d4a5f3cb3623
+integration.json
+343e32cf5ba76196bb41d22901d77ea5a5f638b8407dfa0086a6de3981939069
+catálogo
+7526e9d172abb1eeffa6981d98f1317fe91af2b617aab2b18a6645a5fd101fa7
+fingerprint pré/pós — 23+1 insumos congelados e 313 anteriores
+133c8826a3033fce37d5165928a21dbc7031a1e3a4d65350514c9c6a7825b4e5
+```
+
+A suficiência limita-se ao **vínculo estático de fonte**. Não executei `verify_current.py`, código do alvo, compilação, Clap/codegen, rede, instalações ou gates de aplicação. Std/bibliotecas/Cargo, seleção efetiva de parser, cfg, runtime, TUI/plataformas e efeitos continuam abertos. Persistem os seis gaps SDK, cinco limites externos e G02/G03/G04. Este aceite não aprova G01 integral, Native BUILD, release ou paridade.

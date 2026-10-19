@@ -1,6 +1,12 @@
 # 0369 — Roadmap do Operational Harness e isolamento do consumidor
 
-## Estado atual — checkpoint 61
+## Navegação vigente — 17/10/2026
+
+A direção é ADR-010: Operational Harness reutilizável, Assistente de Plantão consumidor. O [backlog0370](0370_harness_product_isolation_backlog.md) possui o status HISO; o [backlog PISO](../../products/shift-assistant/docs/backlog.md) possui o status funcional do produto e a [matriz AP–PISO–HISO](../../products/shift-assistant/docs/requisitos-ap.md) conserva a origem dos requisitos. HISO-002/HISO-008 têm critérios documentais verificados pelo [plano0388](0388_documentation_isolation_reconciliation.md), sem concluir dependências técnicas ou piloto.
+
+A [SPEC0228](../04_audit/evidence/B6-0228-BUILD-20261017/REPORT.md) foi concluída na candidataf11; a fronteira continua INCOMPLETE, sem integração automática ao principal ou aceite positivo B6/HISO-014. B5 tem revisão humana aprovada em16/10; CI real/check obrigatório do produto ainda precisam de comprovação no HISO-010. O [plano0374](0374_plano_producao_harness.md) governa produção do núcleo. Os checkpoints privados e baselines abaixo preservam seus resultados/datas; não são instruções para reiniciar PIDs ou promover código histórico.
+
+## Histórico — checkpoint61 da candidata privada
 
 R56 corrigiu mídia primária com payloadR53, preparação build/tipos/lint PASS e suíte completa atual PASS; cobertura e demais gates ainda RUNNING em PostgreSQL55599. Novo críticoR58 REJECT: backups retidos da migração divergem de migration.inventory e offline/backup/restore aceitavam. R63 reproduziu baseline e corrigiu três caminhos isolados: validação hash/tamanho/inventorycanônico antes de healthy, guardlive dos originais retidos; 127 testes/4arquivos, 10 casos adicionais sem novo arquivo, prefixoR38/R53exato; compiledbefore aceita/after rejeita, tipos/lint/formato/publicbuild PASS. Novo críticoDockerR61 REJECT: truncamento ativo para vazio detectado live, restart perde estado de incidente e permite replay/envio duplicado. R65 corrige isolated com fallback de retenção de lock jáexistente, sem schema ou liberação. R50 neutral full5100/385, PG288/35, E2E12 sem retries/skips, SBOM/licenças/audit/criticalcoveragePASS. R62 I1 confirmou números mas INCOMPLETE por proveniência/inputs faltantes e contador V8 negativo; supplement32exactfiles fornecido, nenhum contador sanitizado. R55checker finite entregue: literal/direct1→0, 1065testes/5arquivosPASS, originais intactos, unknownsretidos; R64novo críticoRUNNING, sem wholeclosureaceite. Evidência durável e commits próprios,2.083inputsR56 reconstruíveis dos archives; caches não trackeados no Gitprivado. Históricos R44qualificationDENIED e R49REJECT preservados. SomenteHISO001DONE; todos24critérios mantidos, globalFAIL/produçãoNO_GO. NO_MODEL, zero inferências externas, sem Rootpromoção/providerexecute/push/dadosreais/piloto/deploy; T4/egress/humano separados.
 
@@ -10,7 +16,7 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 
 Um Operational Harness que pode ser compilado, testado e executado sem o Assistente de Plantão. Um consumidor isolado que usa interfaces suportadas do harness/adapters e tem domínio, processo, dados, deploy, testes e backlog próprios. As correções do produto ficam no consumidor; as correções compartilhadas ficam no pacote que realmente as implementa.
 
-A prioridade imediata é retirar o programa de `apps/worker/src/shift-assistant/` para um workspace privado em `products/shift-assistant/`. Repositório separado pode ser uma evolução futura, mas não é pressuposto para executar este plano.
+A fatia estrutural levou o programa de `apps/worker/src/shift-assistant/` ao workspace privado em `products/shift-assistant/`, conforme SPEC0178; a independência integral ainda exige os aceites técnicos do0370. Repositório separado pode ser uma evolução futura, mas não é pressuposto para executar este plano.
 
 ## Baseline e acoplamentos confirmados
 

@@ -1,0 +1,346 @@
+   188     }
+   189     if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+   190       throw new ToolResultContextError(
+   191         'CONTEXT_OVERFLOW',
+   192         'No decision model-call slot remains.',
+   193         'MAX_MODEL_CALLS'
+   194       )
+   195     }
+   196     if (
+   197       run.usage.inputTokens +
+   198         run.usage.outputTokens +
+   199         inputTokens +
+   200         COMPLETE_DECISION_OUTPUT_TOKENS >
+   201       run.input.budget.maxTokens
+   202     ) {
+   203       throw new ToolResultContextError(
+   204         'CONTEXT_OVERFLOW',
+   205         'Insufficient decision token reserve.',
+   206         'MAX_TOKENS'
+   207       )
+   208     }
+   209     if (
+   210       run.usage.costUsd + measurement.costUpperBoundUsd >
+   211       run.input.budget.maxCostUsd
+   212     ) {
+   213       throw new ToolResultContextError(
+   214         'CONTEXT_OVERFLOW',
+   215         'Insufficient decision cost reserve.',
+   216         'MAX_COST'
+   217       )
+   218     }
+   219     if (
+   220       purpose === 'REPAIR' &&
+   221       run.usage.decisionRepairs + 1 > (run.input.budget.maxDecisionRepairs ?? 1)
+   222     ) {
+   223       throw new ToolResultContextError(
+   224         'ADMISSION_UNAVAILABLE',
+   225         'Decision repair limit exhausted.',
+   226         'MODEL_FAILURE'
+   227       )
+   228     }
+   229     const record: DecisionAdmissionRecord = {
+   230       admissionId: `admission_${randomUUID()}`,
+   231       tenantId: run.input.tenantId,
+   232       executionId: run.executionId,
+   233       stepNumber,
+   234       attempt: state.decisionAdmissions.filter(
+   235         (value) => value.stepNumber === stepNumber
+   236       ).length,
+   237       purpose,
+   238       requestSha256,
+   239       measurement: structuredClone(measurement),
+   240       reserved: {
+   241         modelCalls: 1,
+   242         inputTokens,
+   243         outputTokens: COMPLETE_DECISION_OUTPUT_TOKENS,
+   244         costUsd: measurement.costUpperBoundUsd
+   245       },
+   246       status: 'RESERVED'
+   247     }
+   248     run.usage.modelCalls += 1
+   249     run.usage.inputTokens += record.reserved.inputTokens
+   250     run.usage.outputTokens += record.reserved.outputTokens
+   251     run.usage.costUsd += record.reserved.costUsd
+   252     if (purpose === 'REPAIR') run.usage.decisionRepairs += 1
+   253     run.state.toolResultContext = {
+   254       ...state,
+   255       pendingDecisionAdmission: record.admissionId,
+   256       decisionAdmissions: [...state.decisionAdmissions, record]
+   257     }
+   258     await this.options.persist()
+   259     await this.options.audit('decision.admission.reserved', requestSha256)
+   260     // The receipt is returned only after the checkpoint commit and audit.
+   261     return structuredClone(record)
+   262   }
+   263 
+   264   private async replace(record: DecisionAdmissionRecord): Promise<void> {
+   265     const state = this.state()
+   266     this.options.run.state.toolResultContext = {
+   267       ...state,
+   268       pendingDecisionAdmission:
+   269         record.status === 'RESERVED' ? record.admissionId : null,
+   270       decisionAdmissions: state.decisionAdmissions.map((value) =>
+   271         value.admissionId === record.admissionId ? record : value
+   272       )
+   273     }
+   274     try {
+   275       await this.options.persist()
+   276     } catch (error) {
+   277       this.options.run.state.toolResultContext = state
+   278       throw error
+   279     }
+   280   }
+   281 
+   282   private async unknown(
+   283     record: DecisionAdmissionRecord,
+   284     reason: string,
+   285     actual?: ModelUsage
+   286   ): Promise<DecisionAdmissionRecord> {
+   287     const next: DecisionAdmissionRecord = {
+   288       ...record,
+   289       status: 'UNKNOWN',
+   290       unknownReason: /^[a-zA-Z0-9_:-]{1,128}$/.test(reason)
+   291         ? reason
+   292         : 'decision_model_failed',
+   293       ...(actual ? { actual } : {})
+   294     }
+   295     if (actual) {
+   296       const usage = this.options.run.usage
+   297       usage.inputTokens +=
+   298         Math.max(record.reserved.inputTokens, actual.inputTokens) -
+   299         record.reserved.inputTokens
+   300       usage.outputTokens +=
+   301         Math.max(record.reserved.outputTokens, actual.outputTokens) -
+   302         record.reserved.outputTokens
+   303       usage.costUsd +=
+   304         Math.max(record.reserved.costUsd, actual.costUsd) -
+   305         record.reserved.costUsd
+   306     }
+   307     await this.replace(next)
+   308     return structuredClone(next)
+   309   }
+   310 
+   311   private async settleNow(
+   312     input: DecisionAdmissionSettlement
+   313   ): Promise<DecisionAdmissionRecord> {
+   314     const { run } = this.options
+   315     const record = this.state().decisionAdmissions.find(
+   316       (value) => value.admissionId === input.admissionId
+   317     )
+   318     if (
+   319       !record ||
+   320       record.stepNumber !== this.options.stepNumber ||
+   321       record.tenantId !== run.input.tenantId ||
+   322       record.executionId !== run.executionId ||
+   323       record.requestSha256 !== input.requestSha256
+   324     )
+   325       throw this.conflict()
+   326     if (record.status === 'SETTLED') {
+   327       if (
+   328         input.kind !== 'RESULT' ||
+   329         digest(input.result) !== record.resultSha256
+   330       )
+   331         throw this.conflict()
+   332       return structuredClone(record)
+   333     }
+   334     if (
+   335       record.status !== 'RESERVED' ||
+   336       this.state().pendingDecisionAdmission !== record.admissionId
+   337     )
+   338       throw this.conflict()
+   339     if (input.kind === 'UNKNOWN') return this.unknown(record, input.reason)
+   340     if (
+   341       this.closed ||
+   342       this.options.signal.aborted ||
+   343       this.options.remainingMs() <= 0
+   344     ) {
+   345       await this.unknown(record, 'decision_closed')
+   346       throw new ToolResultContextError(
+   347         'DECISION_USAGE_UNKNOWN',
+   348         'A late decision result cannot be accepted.'
+   349       )
+   350     }
+   351     const actual = finiteUsage(input.result)
+   352     if (
+   353       !actual ||
+   354       input.result.provider !== record.measurement.provider ||
+   355       input.result.model !== record.measurement.model ||
+   356       actual.inputTokens > record.reserved.inputTokens ||
+   357       actual.outputTokens > record.reserved.outputTokens ||
+   358       actual.costUsd > record.reserved.costUsd
+   359     ) {
+   360       await this.unknown(record, 'ADMISSION_BREACH', actual ?? undefined)
+   361       await this.options.audit(
+   362         'decision.admission.breach',
+   363         record.requestSha256
+   364       )
+   365       throw new ToolResultContextError(
+   366         'ADMISSION_BREACH',
+   367         'The model violated its qualified decision bounds.'
+   368       )
+   369     }
+   370     const resultSha256 = digest(input.result)
+   371     const usage = run.usage
+   372     const previous = {
+   373       inputTokens: usage.inputTokens,
+   374       outputTokens: usage.outputTokens,
+   375       costUsd: usage.costUsd
+   376     }
+   377     usage.inputTokens += actual.inputTokens - record.reserved.inputTokens
+   378     usage.outputTokens += actual.outputTokens - record.reserved.outputTokens
+   379     usage.costUsd += actual.costUsd - record.reserved.costUsd
+   380     const settled: DecisionAdmissionRecord = {
+   381       ...record,
+   382       status: 'SETTLED',
+   383       actual,
+   384       resultSha256
+   385     }
+   386     try {
+   387       await this.replace(settled)
+   388     } catch (error) {
+   389       // No acknowledged settlement: retain the pre-call conservative charge.
+   390       Object.assign(usage, previous)
+   391       throw error
+   392     }
+   393     await this.options.audit('decision.admission.settled', record.requestSha256)
+   394     return structuredClone(settled)
+   395   }
+   396 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/complete-tool-context.ts SHA256 e3df9a5a00f255aad9ddcf726bc16c131419582ee642d6415508e4b1cf6b84ef
+     1 /** SPEC0224: opt-in complete-tool-v1. Legacy protocols do not use these fields. */
+     2 import type {
+     3   ModelRequest,
+     4   ModelResult,
+     5   SideEffect,
+     6   StopReason
+     7 } from './contracts.ts'
+     8 import type {
+     9   ExecutionCheckpoint,
+    10   LoopDecision,
+    11   ModelUsage
+    12 } from './execution-v2.ts'
+    13 
+    14 export const COMPLETE_TOOL_RESULT_MAX_BYTES = 32_768
+    15 export const COMPLETE_TOOL_RESULT_MAX_DEPTH = 32
+    16 export const COMPLETE_TOOL_RESULT_MAX_NODES = 10_000
+    17 export const COMPLETE_CHECKPOINT_MAX_BYTES = 8_388_608
+    18 export const COMPLETE_DECISION_SYSTEM_MAX_UNITS = 16_000
+    19 export const COMPLETE_DECISION_USER_MAX_UNITS = 32_000
+    20 export const COMPLETE_DECISION_REQUEST_MAX_BYTES = 131_072
+    21 export const COMPLETE_DECISION_OUTPUT_TOKENS = 512
+    22 
+    23 export interface CompleteToolContextConfiguration {
+    24   readonly version: 1
+    25 }
+    26 
+    27 export type CompleteJsonValue =
+    28   | null
+    29   | boolean
+    30   | number
+    31   | string
+    32   | readonly CompleteJsonValue[]
+    33   | { readonly [key: string]: CompleteJsonValue }
+    34 
+    35 export interface CompleteJsonLimits {
+    36   readonly maxBytes?: number
+    37   readonly maxDepth?: number
+    38   readonly maxNodes?: number
+    39 }
+    40 
+    41 export type CompleteJsonErrorCode =
+    42   | 'INVALID_JSON'
+    43   | 'RESULT_TOO_LARGE'
+    44   | 'RESULT_COMPLEXITY'
+    45 
+    46 export type CompleteToolObservationPayload =
+    47   | {
+    48       readonly schemaVersion: 1
+    49       readonly status: 'SUCCEEDED'
+    50       readonly sideEffect: SideEffect
+    51       readonly completion: 'COMPLETE'
+    52       readonly resultAvailability: 'AVAILABLE'
+    53       readonly output: CompleteJsonValue
+    54       readonly outputBytes: number
+    55       readonly outputSha256: string
+    56     }
+    57   | {
+    58       readonly schemaVersion: 1
+    59       readonly status: 'SUCCEEDED'
+    60       readonly sideEffect: SideEffect
+    61       readonly completion: 'UNAVAILABLE'
+    62       readonly resultAvailability: 'UNAVAILABLE'
+    63       readonly reason: CompleteJsonErrorCode
+    64     }
+    65   | {
+    66       readonly schemaVersion: 1
+    67       readonly status: 'FAILED' | 'REJECTED'
+    68       readonly sideEffect: SideEffect
+    69       readonly completion: 'NOT_APPLICABLE'
+    70       readonly resultAvailability: 'UNAVAILABLE'
+    71       readonly error: string
+    72     }
+    73 
+    74 export type DecisionModelRequestSnapshot = Omit<ModelRequest, 'signal'> & {
+    75   readonly maxOutputTokens: typeof COMPLETE_DECISION_OUTPUT_TOKENS
+    76 }
+    77 
+    78 /** Trusted adapter contract; qualification applies only to its paired model. */
+    79 export interface DecisionInputMeasurement {
+    80   readonly counterId: string
+    81   readonly counterVersion: string
+    82   readonly provider: string
+    83   readonly model: string
+    84   readonly formattingVersion: string
+    85   readonly inputUpperBoundTokens: number
+    86   readonly contextWindowTokens: number
+    87   readonly costUpperBoundUsd: number
+    88 }
+    89 
+    90 export interface DecisionInputCounter {
+    91   measure(
+    92     request: DecisionModelRequestSnapshot
+    93   ): DecisionInputMeasurement | Promise<DecisionInputMeasurement>
+    94 }
+    95 
+    96 export interface DecisionAdmissionRecord {
+    97   readonly admissionId: string
+    98   readonly tenantId: string
+    99   readonly executionId: string
+   100   readonly stepNumber: number
+   101   readonly attempt: number
+   102   readonly purpose: 'ORCHESTRATION' | 'REPAIR'
+   103   readonly requestSha256: string
+   104   readonly measurement: DecisionInputMeasurement
+   105   readonly reserved: ModelUsage
+   106   readonly status: 'RESERVED' | 'SETTLED' | 'UNKNOWN'
+   107   readonly actual?: ModelUsage
+   108   /** Binds idempotent settlement to the full native result, including text. */
+   109   readonly resultSha256?: string
+   110   readonly unknownReason?: string
+   111 }
+   112 
+   113 export interface CompleteToolContextState {
+   114   readonly version: 1
+   115   readonly deliveredThroughStep: number
+   116   readonly pendingDecisionAdmission: string | null
+   117   readonly decisionAdmissions: readonly DecisionAdmissionRecord[]
+   118   /** Accepted decision and delivery cursor checkpointed before native dispatch. */
+   119   readonly acceptedDecision?:
+   120     | {
+   121         readonly stepNumber: number
+   122         readonly decision: LoopDecision
+   123         readonly decisionAdmissionIds: readonly string[]
+   124       }
+   125     | undefined
+   126 }
+   127 
+   128 /** contextItems is the single selected representation, including full results. */
+   129 export interface CompleteToolModelContext {
+   130   readonly version: 1
+   131   readonly requiredObservationIds: readonly string[]
+   132   /** Native settled attempts already recorded for this same decision step. */
+   133   readonly settledDecisionAdmissionIds?: readonly string[]
+   134 }
+   135 

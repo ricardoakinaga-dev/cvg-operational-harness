@@ -1,0 +1,183 @@
+import fs from 'node:fs'
+import { spawn } from 'node:child_process'
+
+export function unavailable(code) {
+  return Object.assign(new Error(code), { code, status: 'UNAVAILABLE' })
+}
+
+// Never inherit provider/npm/Git configuration, NODE_OPTIONS or loader variables.
+// HOME is deliberately absent rather than reassigned. All npm config paths are explicit.
+export function referenceEnvironment(nodePath, configRoot) {
+  return {
+    PATH: nodePath.slice(0, nodePath.lastIndexOf('/')) + ':/usr/bin:/bin',
+    LANG: 'C',
+    LC_ALL: 'C',
+    TZ: 'UTC',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: '0',
+    GIT_TERMINAL_PROMPT: '0',
+    ...(configRoot
+      ? {
+          NPM_CONFIG_USERCONFIG: configRoot + '/user.npmrc',
+          NPM_CONFIG_GLOBALCONFIG: configRoot + '/global.npmrc',
+          NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+          TMPDIR: configRoot + '/tmp'
+        }
+      : {})
+  }
+}
+
+function processes() {
+  const found = []
+  for (const name of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue
+    try {
+      const stat = fs.readFileSync('/proc/' + name + '/stat', 'utf8')
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+      if (fields[0] !== 'Z')
+        found.push({
+          pid: Number(name),
+          parent: Number(fields[1]),
+          group: Number(fields[2]),
+          start: fields[19]
+        })
+    } catch (error) {
+      if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
+    }
+  }
+  return found
+}
+
+// A detached, owned process group bounds cleanup to this invocation. These are
+// refusal ceilings and sampled observations, not a sandbox for a hostile npm.
+export async function runOwnedProcess(
+  command,
+  args,
+  {
+    cwd,
+    env,
+    timeoutMs,
+    maxProcesses = 8,
+    maxOutputBytes = 8 * 1024 * 1024,
+    stdoutPath,
+    stderrPath,
+    input,
+    resourceCheck
+  }
+) {
+  if (
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0 ||
+    maxProcesses < 1 ||
+    maxProcesses > 8
+  )
+    throw unavailable('PROCESS_LIMIT_INVALID')
+  const started = Date.now()
+  const out = stdoutPath ? fs.openSync(stdoutPath, 'wx', 0o600) : null
+  const err = stderrPath ? fs.openSync(stderrPath, 'wx', 0o600) : null
+  const chunks = []
+  let bytes = 0,
+    peak = 0,
+    failure,
+    lastResourceCheck = 0
+  const owned = new Map()
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+  const observe = () => {
+    const current = processes()
+    let added
+    do {
+      added = false
+      for (const proc of current) {
+        if (
+          !owned.has(proc.pid) &&
+          (proc.pid === child.pid ||
+            proc.group === child.pid ||
+            owned.has(proc.parent))
+        ) {
+          owned.set(proc.pid, proc.start)
+          added = true
+        }
+      }
+    } while (added)
+    return current.filter((proc) => owned.get(proc.pid) === proc.start)
+  }
+  const kill = () => {
+    if (!child.pid) return
+    // Also reap observed descendants that have called setsid/setpgid. Validate
+    // Linux starttime before every signal so a recycled PID is never targeted.
+    for (const proc of observe().reverse()) {
+      try {
+        process.kill(proc.pid, 'SIGKILL')
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error
+      }
+    }
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error
+    }
+  }
+  const refuse = (code) => {
+    failure ??= unavailable(code)
+    kill()
+  }
+  function capture(chunk, fd, collect) {
+    bytes += chunk.length
+    if (bytes > maxOutputBytes) return refuse('PROCESS_OUTPUT_LIMIT')
+    if (fd !== null) fs.writeSync(fd, chunk)
+    if (collect) chunks.push(chunk)
+  }
+  child.stdout.on('data', (chunk) => capture(chunk, out, out === null))
+  child.stderr.on('data', (chunk) => capture(chunk, err, false))
+  child.stdin.on('error', (error) => {
+    if (error.code !== 'EPIPE') refuse('PROCESS_INPUT_FAILED')
+  })
+  child.stdin.end(input)
+  const timer = setTimeout(() => refuse('PROCESS_TIMEOUT'), timeoutMs)
+  const monitor = setInterval(() => {
+    try {
+      const count = observe().length
+      peak = Math.max(peak, count)
+      if (count > maxProcesses) refuse('PROCESS_COUNT_LIMIT')
+      if (resourceCheck && Date.now() - lastResourceCheck >= 100) {
+        lastResourceCheck = Date.now()
+        resourceCheck()
+      }
+    } catch (error) {
+      refuse(error.code ?? 'PROCESS_OBSERVATION_FAILED')
+    }
+  }, 10)
+  let code, signal
+  try {
+    ;[code, signal] = await new Promise((resolve, reject) => {
+      child.once('error', () => reject(unavailable('PROCESS_START_FAILED')))
+      child.once('close', (exitCode, exitSignal) =>
+        resolve([exitCode, exitSignal])
+      )
+    })
+  } finally {
+    clearTimeout(timer)
+    clearInterval(monitor)
+    kill()
+    if (out !== null) fs.closeSync(out)
+    if (err !== null) fs.closeSync(err)
+  }
+  const observation = {
+    exitCode: code,
+    signal,
+    elapsedMs: Date.now() - started,
+    maxProcesses: peak,
+    outputBytes: bytes
+  }
+  if (failure) throw Object.assign(failure, { observation })
+  if (code !== 0)
+    throw Object.assign(unavailable('PROCESS_NONZERO'), { observation })
+  return { ...observation, stdout: Buffer.concat(chunks) }
+}

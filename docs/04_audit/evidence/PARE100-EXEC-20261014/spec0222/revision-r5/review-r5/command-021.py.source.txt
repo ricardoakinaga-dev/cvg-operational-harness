@@ -1,0 +1,102 @@
+from pathlib import Path
+import json
+O=Path.cwd();sha='f14435019803d2c74996315f71faddf9296c9e59f87030c675fef27eedf28003'
+finding={
+'id':'I1-R5-001','severity':'HIGH / P1 design contract','confidence':0.94,
+'title':'Mandatory CapabilityRegistry route has no containment-preservation or explicit incompatibility contract',
+'candidateLines':[36,38,119,121,133,136,156,300,312],
+'nativeEvidence':[
+ {'path':'cvg/packages/contracts/src/contracts.ts','lines':'121-136','fact':'ToolDescriptor.sandbox is the native optional declaration of required containment; absent/NONE skips the gate.'},
+ {'path':'cvg/packages/harness/src/capability-boundary.ts','lines':'207-262,265-276','fact':'normalizeRegistration normalizes descriptor; the constructed normalized descriptor omits sandbox without rejecting its presence.'},
+ {'path':'cvg/packages/harness/src/capability-boundary.ts','lines':'133-144,184-202,342-347','fact':'The actual normalized descriptors determine compositionFingerprint and are spread into the executable ToolDefinition.'},
+ {'path':'cvg/packages/harness/src/kernel/pipeline.ts','lines':'299-306,346-370','fact':'enforceSandbox runs in the common pipeline but requiredSandboxMode maps missing sandbox to NONE and returns before evaluating the configured gate.'}
+],
+'invariant':'A reviewed requirement for containment must remain effective through the mandatory managed composition path, or that capability must be rejected as incompatible before activation/publication. A capability cannot silently weaken the fixed security control.',
+'permittedCounterexample':'A trusted catalog entry supplies an otherwise valid reviewed tool registration with sandbox WORKSPACE (equivalently EGRESS), correct nativeProviderVersion/config/artifact/target binding, and ordinary policy/approval permission. Its activation constructs the required CapabilityRegistry and provides that registry. The current normalizer drops sandbox; the resulting descriptors still satisfy the explicitly listed provider/tool identity checks. A builder preserving the current adapter as instructed and implementing only those checks can publish it. At dispatch the native sandbox port may even be present and deny every request, but requiredSandboxMode sees no sandbox field and returns NONE, so the gate is not called before the body. This requires neither hostile code nor control-service replacement.',
+'whyCandidateDefect':'The spec newly mandates this exact adapter for every managed tool (119), explicitly protects the sandbox control (36), but has no rule to preserve this security declaration or to reject unsupported containment requirements before normalization. Correct provider binding/fingerprint hashes the already lossy descriptor; it cannot restore containment. General descriptor/catalog correspondence is not an exact pre/post security-field rule, especially once the public registry has discarded the field. This is an unresolved composition compatibility contract, not a demand to implement the proposed lifecycle now or to add new native isolation.',
+'smallestNormativeCorrection':'For this foundation, explicitly limit compatible managed tools to reviewed sandbox absent/NONE. Require the trusted catalog to retain each tool containment requirement independently of the normalized registry and reject any non-NONE requirement before activate; reject a mismatch or stripped security declaration instead of treating absence after normalization as NONE. Alternatively specify a concrete preservation/validation path through normalized descriptors, fingerprint and executable ToolDefinition, with compatibility impact explicitly reviewed. Do not silently modify a fingerprinted descriptor after registration. Keep unsupported contained tools and stronger isolation in the original backlog; this restriction is not a parity waiver.',
+'futureProof':'Extend ML03 with a synthetic reviewed WORKSPACE/EGRESS registration through the actual public managed factory and actual CapabilityRegistry: either reject before activate with zero body calls, or preserve the mode through publication and show a missing/denying gate prevents body invocation. Check the normalized fingerprinted descriptor and descriptor received by the native gate. Also retain the supported NONE positive path. NOT_RUN.',
+'evidenceClass':'STATIC_SOURCE_COUNTEREXAMPLE_NOT_MEASURED_EXPLOIT','runtimeMeasured':False
+}
+verdict={
+'schemaVersion':1,'role':'Fresh independent I1 technical-design critic','candidate':'SPEC0222 R5','candidateSha256':sha,
+'verdict':'REVISE','findingCount':1,'findings':[finding],
+'scope':'Design readiness for explicit human T3 SPEC review of this exact candidate only.',
+'authority':False,'implementationPermission':False,'runtimeApproval':False,'releaseApproval':False,'fullParity':False,'acceptsDescendants':False,
+'procedures':{**{f'ML{i:02d}':'NOT_RUN' for i in range(1,29)},**{f'PL{i:02d}':'NOT_RUN' for i in range(1,13)}},
+'integrity':{'status':'PASS','sourcePairs':43,'packetFilesIncludingManifest':48,'frozenChecksPre':142,'frozenChecksPost':142,'extraSources':3,'sourceMutations':0},
+'protocolDeviations':[json.loads(Path('pre-fingerprint.json').read_text())['protocolDeviation']],
+'limitations':json.loads(Path('source-integrity.json').read_text())['limitations'],
+'reportPath':str(O/'report.md'),'sourceIntegrityPath':str(O/'source-integrity.json')}
+Path('verdict.json').write_text(json.dumps(verdict,indent=2)+'\n')
+report='''# Independent I1 design-readiness review — SPEC0222 R5
+
+**REVISE**, for the exact `spec.md` SHA-256 `'''+sha+'''` only. One material contract gap remains. This opinion is for explicit human T3 SPEC review; authority=false. It gives no implementation, runtime, release, descendant, or full-parity approval.
+
+## Material finding
+
+### I1-R5-001 — Mandatory registry path can lose the containment requirement
+
+Severity: **HIGH / P1 design contract**. Confidence: **0.94**. Evidence class: static source counterexample; no measured exploit, executed body, sandbox experiment, or runtime result.
+
+The candidate protects `sandbox` as a security service and forbids a capability from supplying/replacing it (`spec.md:36-38`). It requires every managed tool to enter through `provideCapabilities(CapabilityRegistry)` and the current factory adapters, rejecting raw ToolRegistry alternatives (`spec.md:119`). It retains the existing descriptor fingerprint mechanism (`spec.md:121`) and specifies exact provider/tool identity checks at `spec.md:154-158`. Its observer contract also promises that capabilities do not alter sandbox authority (`spec.md:133-136`).
+
+That mandatory native path currently loses an existing security declaration:
+
+- `cvg/packages/contracts/src/contracts.ts:121-136`: `ToolDescriptor.sandbox` declares the containment required before execution. Its documented absence/NONE means no gate.
+- `cvg/packages/harness/src/capability-boundary.ts:207-262`: `normalizeDescriptor` accepts a descriptor, validates selected fields, then constructs a new descriptor containing neither `sandbox` nor a rejection of a supplied sandbox declaration. `normalizeRegistration` uses it at lines265-276.
+- The same file at lines133-144 fingerprints the normalized descriptors; lines184-202 adapt those registrations into a ToolRegistry; lines342-347 spread the normalized descriptor into the actual executable tool. No later step restores the omitted mode.
+- `cvg/packages/harness/src/kernel/pipeline.ts:299-306` reaches the native sandbox check, but lines346-366 map an absent declaration to NONE and return without calling the gate. Lines367-370 only enforce fail-closed absence of a sandbox port when a non-NONE mode survived.
+
+**Concrete permitted counterexample.** A reviewed catalog entry declares an otherwise valid tool with `sandbox: 'WORKSPACE'` (or EGRESS), valid derived providerVersion and the correct effective config/artifact/target binding. Ordinary tool policy and any required approval allow that invocation. During activation it constructs the mandatory CapabilityRegistry and provides it. Normalization drops the sandbox field. A builder preserving the native adapter and enforcing the explicitly enumerated provider/tool identity checks can still prepare/publish the candidate. The dispatch pipeline then sees sandbox absent and skips the gate, even if the owner captured a gate that would deny every WORKSPACE request. The body can be invoked without that required gate. This does not require hostile JavaScript, an unload, a hook changing state, or replacement of a control service.
+
+**Invariant.** A reviewed containment requirement must survive the actual composition path, or make the capability explicitly incompatible and rejected before activation/publication. Hashing the already stripped descriptor does not establish preservation. The provider identity fix in section5.2 protects effect replay/config identity, not this metadata loss.
+
+**Why this is a design gap.** This is not a finding merely because the baseline lacks the proposed lifecycle implementation. The new design chooses a concrete existing adapter whose lossy behavior is visible in the packet, while promising fixed security controls. It does not specify a pre-normalization containment compatibility check, a preservation rule, or an explicit incompatibility restriction. General catalog correspondence does not define which security fields must match before and after normalization; checking only the received public registry cannot recover the original mode. Protecting registration of the sandbox service addresses a different boundary. Deferral of stronger native containment to P100-024 does not authorize dropping a declaration that already exists in ToolDescriptor.
+
+**Smallest normative correction.** This foundation may explicitly support only tools whose reviewed containment requirement is absent/NONE. Keep each catalog tool's required mode independently of the normalized registry; reject non-NONE entries before activate and reject any declaration mismatch or stripping rather than interpreting it as NONE. A broader correction can instead specify the exact preservation/validation path through normalized descriptors, fingerprint, and ToolDefinition, with its compatibility impact reviewed. Do not repair the mode after fingerprinting by silently changing the descriptor. Either choice leaves stronger containment and unsupported tools in the original backlog without a parity waiver.
+
+**Required future proof, still NOT_RUN.** Extend ML03 with WORKSPACE/EGRESS fixtures through the real managed factory and real CapabilityRegistry. Either reject before activate with zero body calls, or preserve the mode through publication and prove that a missing/denying gate prevents invocation. Inspect the descriptor actually fingerprinted and the descriptor delivered to the native gate. Retain a supported NONE positive path. This is an acceptance correction for a future implementation, not permission to execute it now.
+
+## Other reviewed contracts
+
+No additional material design blocker was established in the bounded inspection. These are design assessments, not assertions that the future code passes:
+
+| Boundary | Candidate contract and native cross-check |
+| --- | --- |
+| Public authority and snapshots | Sections3-4 bind a local owner to trusted controls/catalog/operator, authenticate leases/receipts privately, detach full profiles/turn inputs, reject durable root fields, and do not expose a raw runtime/host. RuntimeInput's actual authority-bearing fields are visible in contracts.ts:177-209. |
+| One host and native wiring | Sections5-5.1 require one prepared host, eager readiness, generation-specific planner/model/tools/telemetry, and a trusted iterative factory; they forbid a second hidden boot. Native factory profile routing and tool adapters are at createOperationalHarness.ts:132-225; native lazy hosts at kernel-runtime.ts:160-209 and iterative-runtime.ts:430-449 explain the integration work still needed. Baseline absence of that helper is expected. |
+| Hooks and finalization | The finite observer matrix removes next/mutable outcomes and rejects finalization hooks. Sections5.1/7.2 require native profile finalizers and close body admission before finalization. Native single-pass finish is kernel-runtime.ts:635-669; iterative finalize/audit/telemetry/earlyFinish are iterative-runtime.ts:1569-1761. The stated plan to fix early exits is concrete enough; no duplicate manager finalizer is authorized. |
+| Policy and audit shapes | Sections3.1/3.3 project management authorization onto actual PolicyRequest fields and lifecycle facts onto AuditEvent.result as bounded ML1 JSON. contracts.ts:294-312 and493-508 support those shapes. Synthetic authorization targets are inert, require explicit trusted-policy ALLOW, and never become execution tools. Exact vocabulary, attempts, failed appends and unknown ACKs are separated. |
+| Commit, ACK, fences and close | Sections6-6.1 distinguish bootstrap BOOTING and replace OPEN eligibility, commit-to-EVIDENCE_PENDING, a single eligible ACK helper and close dominance. Reconcile cannot repeat activation/commit. An unacknowledged physical close remains evidence-uncertain; no operational success is inferred. |
+| Producer lifetime and body permission | Sections7/7.2 separate native original promises, descendant subtrees, passive bindings and bodyAdmissionOpen. Wrappers must precede native races, including planner/control/store IO. Native races at pipeline.ts:139-184 and iterative-runtime.ts:1764-1777 justify retaining original producers. The contract forbids late model/tool admission after terminal/deadline even if the producer is still alive. |
+| Cleanup and ownership | Sections3/7/7.1 distinguish borrowed from owned resources, retain late acquisitions, require one reverse-order reporting primitive, and await each disposer's descendant subtree before an earlier resource closes. Native host.ts:88-94 and128-137 currently swallow cleanup errors; the candidate explicitly proposes the needed reporting correction. |
+| Cancellation and passive bindings | Section7.3 expressly owns and detaches actual kernel signal/timer bindings after the last original subtree, charges their memory, handles partial installation, and preserves caller listeners/signals. This addresses concrete anonymous once listeners at kernel-runtime.ts:222-225 and iterative-runtime.ts:648-653; it is not a runtime/GC result. |
+| Memory, idempotence and reentrancy | Sections3.2/6.1 bound aggregate snapshots, bookkeeping, live bindings and lifetime tombstones; duplicates precede new-ID quotas/revision checks. Sections6.2/7.1 separate controller joins from work and refuse owned-callback management recursion and cyclic waits. Hidden external dependencies remain explicitly outside the graph's guarantee. |
+| Shared journal identity | Section5.2 derives provider versions from full effective config, reviewed artifacts, stable target bindings and journal scope, with rules for concurrent old/new leases and other participants. Native descriptor fingerprinting at capability-boundary.ts:133-144, native proposalHash at effect-journal.ts:251-278, and reservation/replay at109-141/314-345 support the need and the proposed A/K versus B/K conflict proof. No per-generation journal or hidden operationKey rewrite is allowed. |
+| Compatibility and rollout | Sections9-10 opt in through a new local factory, leave existing durable roots and pending SPEC0220/0221 authority unchanged, preserve existing contracts bytes, and require a new gate if those must change. Rollback drains owners without claiming resources disappeared. This does not approve an owner0221 adapter or durable lease integration. |
+
+## Original scope and evidence ceiling
+
+The exact `requirements.md:1-8` remains binding: services/hooks/config, profiles/bundles, full lifecycle and explicit HMR/auto-review differences. The foundation's finite capability slots and observer restrictions are not completion of management/installation/presets/inventory. Candidate sections5.1/9/11 preserve those obligations rather than declaring them PASS.
+
+The original program remains **36 cards / eight phases / 100% functional parity unproven**. `original-leaf-bindings.json` independently contains271 records:242 STATIC,29 UNKNOWN, and271 NOT_VERIFIED. The candidate's four unassociated-file claim and denominator44132 were not independently reconstructed in this lane. File associations are not semantic coverage. No historical recon or prior critic report was opened.
+
+**ML01..ML28 and PL01..PL12 all remain NOT_RUN.** No engines, unit tests, simulations, services, PostgreSQL, providers, network, installations, code changes, or descendants were used. Static counterexamples do not establish exploitability measurements, runtime parity, quiescence execution, performance, or GC reclamation. Frozen prior SPECs were hashed as constraints, not approved anew.
+
+## Integrity and execution record
+
+Pre/post integrity PASS:43 live/copy pairs,47 packet-manifest entries plus the manifest itself =48 actual packet files, exact membership,142 frozen checks before semantic reading and142 after analysis, all expected/pre/post hashes equal. Three explicitly named technical extra sources were hashed before and after reading and again at the end; all unchanged. Source mutations:0. Both manifests and constraints retain their identity. Normative projection bytes and frozen D12 origin match. The provenance-only whole-backlog origin was neither read nor hashed. The repository AGENTS origin was hashed only for D12; no semantic AGENTS/coordination/history/ledger/private-report reading occurred.
+
+Every shell invocation used exactly this private output directory as workdir. Writes stayed here; no repository, primary, reference, packet or other revision was written. No descendants or external skills were loaded. Full bounded-excerpt stdout/stderr and command/exit records are retained as command-NNN files and commands.jsonl; truncation in tool responses does not truncate those originals. `rg`'s no-match exit1 in command015 is an unsuccessful declaration-resolution search, not a build/test result; outer invocations completed with exit0.
+
+**Protocol deviation:** the first invocation was python3 hashing-only and completed all43 live/copy hashes,47 packet entry hashes and manifest self. It parsed the constraints but deferred sourceSpecs/projection/frozen-D12 hashing to invocation002 after discovering the explicit manifest schema. This does not satisfy the requirement to finish all those hashes inside the first invocation. All142 expected checks passed before the first semantic reading in003. Commands001/002 source and stdout were reconstructed from the tool-call transcript before sealing; later commands were captured at invocation.
+
+Three bounded extra-source reads attempted to resolve the native CapabilityDescriptor declaration: contracts/src/index.ts, its exact canonical-json.ts re-export, and contracts/package.json. Export resolution remained inconclusive; none is needed as normative support for the finding, which relies on the packet's explicit ToolDescriptor/normalizer/pipeline. Their precise paths, rationale and pre/post hashes are retained in extra-source-001..003.json and source-integrity.json. No broad directory/history search followed.
+
+A diagnostic in command018 counted a nonexistent candidate_cvg_files key and therefore does **not** establish an association count. Command019 preserves the correction; that value is excluded from the verdict. This did not change the independently counted242/29/271 values or the material finding.
+
+Deliverables: report.md, verdict.json, source-integrity.json and artifact-manifest.json. The artifact manifest records nonempty private outputs with path/SHA-256/size, excludes itself, and lists empty files/streams separately. No stale draft report/verdict is retained. Lead must independently recompute and integrate; no human T3 decision has been made here.
+'''
+Path('report.md').write_text(report)
+print(json.dumps({'verdict':'REVISE','findings':1,'findingId':finding['id'],'authority':False,'reportBytes':Path('report.md').stat().st_size,'verdictBytes':Path('verdict.json').stat().st_size,'all40Procedures':'NOT_RUN'}))

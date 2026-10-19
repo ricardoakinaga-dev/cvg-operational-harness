@@ -1,0 +1,472 @@
+FILE reference/packages/boot/plugin-manager/src/index.ts
+22: import { bundleManifest, readProfileRegistry, registryArguments, runProfilePnpm, saveManifest, viewProfilePackage } from './operations.ts'
+43:   /** Maximum retained package-operation diagnostic bytes. */
+115: class InstallCancelledError extends Error {
+125:   /** `applying` once pnpm has exited and the bundle is being selected and loaded, which cannot be stopped. */
+126:   phase: 'installing' | 'applying'
+159: function inspectionOf(kind: 'registry' | 'path', manifest: object, registry: Registry): Extract<PluginSpecInspection, { status: 'accepted' }> {
+167:     status: 'accepted', kind, bundle, registry,
+175:   return { status: 'refused', problem, reason }
+207: /** Manage profile files and apply their declared reload lifecycle. */
+208: export class PluginManager extends TypertRemoteService {
+243:     this.ownerEntryId = ctx.fiber.entry?.id
+259:     ctx.effect(() => async () => {
+265:   /** Read exact plugin-version exemptions saved in this profile.
+280:    * @returns Saved and runtime outcomes. Startup-only profiles require restart.
+284:     return this.change(result => this.configure(async () => {
+286:       result.warnings = await this.reload()
+294:   async listPlugins(): Promise<PluginInfo[]> {
+302:         return { ...entry, readOnlyReason: 'management-required' as const }
+305:         || actual?.parent.tree.ctx.fiber.entry?.id !== 'include') {
+331:       const readOnlyReason = this.protectsManager(name) ? 'management-required' as const : undefined
+336:             ...(readOnlyReason === undefined ? {} : { readOnlyReason }), error: { code: 'not-bundle' }, rows: [], overrides: [] })
+352:             ...(readOnlyReason === undefined ? {} : { readOnlyReason }), error: managementError(error), rows: [], overrides: [] })
+363:   async registries(): Promise<PluginRegistries> {
+379:   async inspect(spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection> {
+399:       case 'git': return { status: 'accepted', kind: 'git', bundle: null, registry, host: parsed.host }
+402:         return { status: 'accepted', kind: 'tarball', bundle: null, registry, ...parsed.host === undefined ? {} : { host: parsed.host } }
+423:           ({ status: 'refused', problem, reason, registries })
+464:   /** Persist a plugin entry's desired enablement and apply it on live profiles.
+467:    * @returns Saved and runtime outcomes, including higher-priority overrides.
+471:     return this.change(result => this.configure(async () => {
+476:       result.warnings = await this.reload(enabled ? [row.patchId] : [])
+478:       return current?.enabled !== enabled && this.ownerContext.get('hmr') !== undefined ? 'overridden' : undefined
+482:   /** Select or remove a bundle layer while retaining installed dependencies.
+489:     return this.change(result => this.configure(async () => {
+491:       result.warnings = await this.reload(enabled ? this.bundleRows(name).map(row => row.id) : [])
+515:     const result = this.change(async (result) => {
+579:         // A terminated run reports no usable exit status, so neither its files nor its bundle are trusted.
+595:         // Registry retries can retain the saved range after a partial installation.
+612:       control.phase = 'applying'
+613:       announce('applying')
+617:       return this.configure(async () => {
+619:         if (Object.hasOwn(before, name)) return 'restart-required'
+620:         if (options?.enabled === true) result.warnings = await this.reload()
+630:    * Completed results are not retained; null establishes neither success nor cancellation.
+633:   async waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null> {
+643:   async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation> {
+645:     if (control === undefined) return { status: 'not-running' }
+646:     if (control.phase === 'applying') return { status: 'too-late' }
+651:     return { status: 'cancelled' }
+660:     return this.change(async (result) => {
+661:       await this.configure(async () => {
+666:             .some(entry => entry.options.id === row.id && entry.fiber !== undefined))))) {
+672:           result.warnings = await this.reload()
+674:         if ([...this.ctx.loader.entries()].some(entry => entry.fiber?.uid != null
+687:   private declaredRows(name: string, info: ProfileManifest): Pick<BundleInfo, 'rows' | 'overrides'> {
+690:     if (bundle === undefined) return { rows: [], overrides: [] }
+713:     const overrides = [...new Set(patches.flatMap(item =>
+715:     return { rows, overrides }
+719:   private async runPnpm(
+758:   private async readRestoredFiles(): Promise<Map<string, string | undefined>> {
+768:   private async restoreFiles(files: Map<string, string | undefined>): Promise<void> {
+775:   private async selectBundle(name: string, enabled: boolean): Promise<void> {
+794:       if (this.protectsManager(name)) throw new ManagementFailure('management-required')
+799:     await saveManifest(this.profile.dir, manifest)
+834:     const apply = () => { this.abort.signal.throwIfAborted(); return operation() }
+835:     return hmr === undefined ? apply() : hmr.runExclusive(apply)
+838:   private async reload(requiredIds: readonly string[] = []): Promise<string[]> {
+840:     return reconcileProfilePatches(this.ownerContext.root, readProfilePatches('dsh', this.profile), 'dsh', requiredIds)
+843:   private async change(
+848:     return withFileLock(join(this.profile.dir, 'package.json'), async () => {
+852:         application: this.ownerContext.get('hmr') !== undefined ? 'applied' : 'restart-required' }
+FILE reference/packages/boot/plugin-manager/src/types.ts
+2: import type { Branded } from '@deepseek-ai/dsh-brand'
+3: import type { PluginLocalizedMeta } from '@deepseek-ai/dsh-package-manifest'
+4: import type { PluginInventoryEntry } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+5: export type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+6: import type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+9: export type ReadOnlyReason = 'management-required' | 'unaddressable'
+12: export interface IncompatiblePlugin {
+21: export interface ManagementError {
+29: export type PluginInfo = PluginInventoryEntry & (
+35: export interface BundleRowInfo {
+47: export interface BundleInfo {
+69:   overrides: string[]
+73: export type Registry = string | null
+76: export interface PluginRegistries {
+84: export type PluginInstallFailureKind =
+97: export interface PackageResult {
+111: export interface ChangeResult {
+114:   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
+127:   /** Package script permissions saved before this installation attempt. */
+139: export type PluginInstallRequestId = Branded<'PluginInstallRequestId'>
+142: export interface InstallBundleOptions {
+153: export interface InspectOptions {
+159: export type InstallSpecKind = 'registry' | 'path' | 'git' | 'tarball'
+162: export type PluginInspectProblem =
+176: export type PluginSpecInspection =
+178:     readonly status: 'accepted'
+192:     readonly status: 'refused'
+201: export interface PluginInstallProgress {
+209: export interface PluginInstallCancellation {
+210:   readonly status: 'cancelled' | 'too-late' | 'not-running'
+214: export interface PluginInstallLogChunk {
+230: export interface PluginChange {
+236:   interface Events {
+239:      * operation completed. A patch generation applied outside the manager,
+FILE reference/packages/boot/hmr/src/index.ts
+1: /** Serialized module and profile-configuration reloads. */
+21:     /** Serialized plugin-code and configuration reloads. */
+33:      * @param reloads Replaced plugins and their module locations.
+35:     'hmr/reload'(reloads: Map<Plugin, Reload>): void
+66: async function loadDependencies(job: ModuleJob, ignored = new Set<string>()) {
+68:   async function traverse(job: ModuleJob) {
+73:     await Promise.all(Array.prototype.map.call(children, traverse))
+85: /** Hot reload service with Cordis-compatible module configuration and events. */
+88: class Hmr extends Service {
+110:    * Changes from externals will always trigger a full reload.
+116:    * Files that should be reloaded (accepted changes).
+122:    * Files that should NOT be reloaded.
+129:   private operations: Promise<unknown> = Promise.resolve()
+131:   private applicationReady: Promise<boolean> = Promise.resolve(true)
+135:   /** Serialize a caller-owned mutation with all automatic reload paths.
+139:   runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+140:     if (this.executing.getStore()) return Promise.reject(new Error('HMR transactions cannot be nested'))
+141:     const task = this.operations.then(async () => {
+142:       if (this.closing) throw new Error('HMR is disposed')
+149:   private runReload(operation: () => Promise<void>): Promise<void> {
+150:     return this.runExclusive(async () => {
+155:   /** Watch a configuration path through the same queue as module replacement.
+158:    * @returns Disposer closing this registration and waiting for its pending refresh.
+160:   async watchConfig(filename: string, refresh: () => Promise<void>): Promise<() => Promise<void>> {
+165:       const dispose = await this.executing.exit(() => watchExactConfig(
+168:       return async () => {
+169:         await dispose()
+191:   private async _resolve(specifier: string, parentURL: string, attrs: ImportAttributes): Promise<ResolveResult> {
+198:   async* [Service.init](): AsyncGenerator<() => Promise<void>, void, unknown> {
+199:     yield async () => {
+202:       // A configuration reload may remove its own HMR entry.
+210:       const started = Promise.withResolvers<boolean>()
+213:       yield () => { unsubscribe(); started.resolve(false); return Promise.resolve() }
+218:       const refresh = async (manifestOnly: boolean): Promise<void> => {
+269:       void this.runExclusive(async () => {
+307:     const ready = Promise.withResolvers<void>()
+308:     let readyState: 'pending' | 'resolved' | 'rejected' = root.length === 0 ? 'resolved' : 'pending'
+318:       if (readyState === 'pending') {
+337:   async getLinked(url: string): Promise<string[]> {
+345:    * Classify changed files into accepted (should reload) and declined (should not).
+351:   private async analyzeChanges() {
+352:     const pending: string[] = []
+359:     await Promise.all([...this.stashed].map(async (url) => {
+363:         pending.push(child)
+367:     while (pending.length) {
+369:       while (index < pending.length) {
+370:         const url = pending[index] as string
+380:             if (!pending.includes(child)) {
+382:               pending.push(child)
+388:           pending.splice(index, 1)
+401:     for (const url of pending) {
+406:   private async partialReload() {
+409:     const pending = new Map<ModuleJob, Plugin>()
+410:     const reloads = new Map<Plugin, Reload>()
+413:     // Plugin entry files are treated as atomic reload units.
+423:     // Resolve each plugin name to its file URL and check if it needs reload
+432:           pending.set(job, plugin)
+440:     // Check each pending plugin's dependency tree for accepted files
+441:     for (const [job, plugin] of pending) {
+449:       reloads.set(plugin, {
+500:     const generations = [...reloads].map(([previous, info]) => ({
+520:     const reload = async (plugin: Plugin, fibers: (typeof generations)[number]['fibers']) => {
+531:       await Promise.all(activated.map(fiber => fiber.await()))
+543:           await Promise.all(fibers.map(({ fiber }) => fiber.await()))
+545:           this.ctx.logger.warn('failed to dispose plugin at %C', path)
+550:           await reload(replacement, fibers)
+551:           this.ctx.logger.info('reload plugin at %C', path)
+553:           this.ctx.logger.warn('failed to reload plugin at %C', path)
+568:           await Promise.allSettled(replacementFibers.map(fiber => fiber.await()))
+569:           await reload(plugin, fibers)
+578:     this.ctx.emit('hmr/reload', reloads)
+FILE reference/packages/host/plugin-inventory/src/index.ts
+1: /** Read-only projection of the current Cordis Loader plugin entries. */
+3: import type { Context, FiberState } from '@deepseek-ai/cordis'
+4: import type {} from '@deepseek-ai/cordis-plugin-loader'
+5: // Type-only: the optional agent-preset roster resolved through `ctx.get`.
+6: import type {} from '@deepseek-ai/dsh-agent-preset-registry'
+7: import type {} from '@deepseek-ai/dsh-app-boot'
+8: import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
+9: // Typert-generated ./typert and ./remote artifacts import Zod at runtime.
+10: import type {} from 'zod'
+11: import type {
+12:   AgentPresetPluginGroup,
+13:   PluginEntryId,
+14:   PluginFiberPhase,
+15:   PluginInventoryEntry,
+16:   PluginInventorySnapshot,
+17: } from './types.ts'
+19: export type * from './types.ts'
+21: /**
+22:  * Brand an existing Loader-tree entry id at the owning boundary.
+23:  * @param value - the entry id as the Loader tree spells it.
+24:  * @returns the same id as the inventory's branded entry id.
+25:  */
+26: export function pluginEntryId(value: string): PluginEntryId {
+27:   return value as PluginEntryId
+28: }
+30: /** Runtime mirror: FiberState is a cross-package const enum. */
+31: const FIBER_STATE = {
+32:   PENDING: 0 as FiberState.PENDING,
+33:   LOADING: 1 as FiberState.LOADING,
+34:   ACTIVE: 2 as FiberState.ACTIVE,
+35:   FAILED: 3 as FiberState.FAILED,
+36:   DISPOSED: 4 as FiberState.DISPOSED,
+37:   UNLOADING: 5 as FiberState.UNLOADING,
+38: } as const
+40: /** Complete public projection of Cordis Fiber states. */
+41: const FIBER_PHASE = {
+42:   [FIBER_STATE.PENDING]: 'pending',
+43:   [FIBER_STATE.LOADING]: 'loading',
+44:   [FIBER_STATE.ACTIVE]: 'active',
+45:   [FIBER_STATE.FAILED]: 'failed',
+46:   [FIBER_STATE.DISPOSED]: null,
+47:   [FIBER_STATE.UNLOADING]: 'unloading',
+48: } as const satisfies Record<FiberState, PluginFiberPhase>
+50: /** Remote-only service exposing the Loader's current non-group entry state. */
+51: export class PluginInventoryGateway extends TypertRemoteService {
+52:   static inject = ['loader']
+54:   constructor(ctx: Context) {
+55:     super(ctx, 'pluginInventory')
+56:   }
+58:   /**
+59:    * Read the Loader directly on every call. Cordis's internal plugin/status
+60:    * events already maintain Entry.fiber and Fiber.state, so a second cache
+61:    * would only add another lifecycle truth to keep synchronized.
+62:    *
+63:    * When an agent-preset roster is composed, the snapshot also carries each
+64:    * preset's composition rows, because those rows — not the Loader's own
+65:    * entries — are where a deployment that mounts the roster runs its
+66:    * model-facing plugins.
+67:    * @returns Current non-group Loader entries in Loader order, with optional display metadata
+68:    * and per-preset compositions when a roster is composed.
+69:    */
+70:   @Remote('list')
+71:   async list(): Promise<PluginInventorySnapshot> {
+72:     return readPluginInventory(this.ctx)
+73:   }
+74: }
+76: export default PluginInventoryGateway
+78: /** Read current Loader entries and optional preset compositions.
+79:  * @param ctx Context with the Loader service.
+80:  * @returns Current inventory with optional display metadata and no separate runtime cache.
+81:  */
+82: export async function readPluginInventory(ctx: Context): Promise<PluginInventorySnapshot> {
+83:   const entries: PluginInventoryEntry[] = []
+84:   const packages = ctx.get('pluginPackages')
+85:   for (const entry of ctx.loader.entries()) {
+86:     if (entry.options.group) continue
+87:     const base = entry.parent.tree.ctx.baseUrl
+88:     const meta = base === undefined ? undefined : packages?.metaOf(entry.options.name, base)
+89:     entries.push({
+90:       entryId: pluginEntryId(entry.id),
+91:       moduleName: entry.options.name,
+92:       enabled: !entry.disabled,
+93:       fiberPhase: entry.fiber === undefined ? null : FIBER_PHASE[entry.fiber.state],
+94:       ...meta === undefined ? {} : { meta },
+95:     })
+96:   }
+97:   const presets = ctx.get('agentPresets')
+98:   const management = ctx.get('pluginManager') === undefined ? {} : { managementAvailable: true }
+99:   if (presets === undefined) return { entries, ...management }
+100:   const agentPresets: AgentPresetPluginGroup[] = (await presets.compositionInventory()).map(
+101:     composition => ({
+102:       ...composition,
+103:       rows: composition.rows.map(({ fiberState, ...row }) => {
+104:         const meta = ctx.baseUrl === undefined ? undefined : packages?.metaOf(row.moduleName, ctx.baseUrl)
+105:         return {
+106:           ...row,
+107:           fiberPhase: fiberState === undefined ? null : FIBER_PHASE[fiberState],
+108:           ...meta === undefined ? {} : { meta },
+109:         }
+110:       }),
+111:     }),
+112:   )
+113:   return { entries, agentPresets, ...management }
+114: }
+FILE reference/packages/host/plugin-inventory/src/types.ts
+1: import type { Branded } from '@deepseek-ai/dsh-brand'
+2: import type { PluginLocalizedMeta } from '@deepseek-ai/dsh-package-manifest'
+4: /** Stable Loader-tree identity of one configured plugin entry. */
+5: export type PluginEntryId = Branded<'PluginEntryId'>
+7: /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
+8: export type PluginFiberPhase =
+9:   | 'pending'
+10:   | 'loading'
+11:   | 'active'
+12:   | 'failed'
+13:   | 'unloading'
+14:   | null
+16: /** One non-group Loader entry exposed to trusted clients. */
+17: export interface PluginInventoryEntry {
+18:   readonly entryId: PluginEntryId
+19:   /** Exact module specifier imported by the Loader entry. */
+20:   readonly moduleName: string
+21:   /** Local package display metadata, independent of whether the entry is enabled. */
+22:   readonly meta?: PluginLocalizedMeta
+23:   /** Effective Loader enablement, including disabled ancestor groups. */
+24:   readonly enabled: boolean
+25:   readonly fiberPhase: PluginFiberPhase
+26: }
+28: /** Effective enablement of one preset composition row. */
+29: export type PresetPluginEnablement = boolean | 'conditional'
+31: /** One plugin row an agent preset's composition names. */
+32: export interface AgentPresetPluginRow {
+33:   /** Composition row id, or null when the row declares none. */
+34:   readonly entryId: string | null
+35:   /** Module specifier the row names. */
+36:   readonly moduleName: string
+37:   /** Local package display metadata, independent of whether the preset is mounted. */
+38:   readonly meta?: PluginLocalizedMeta
+39:   /**
+40:    * Effective enablement, including disabled ancestor groups. `'conditional'`
+41:    * marks a `!!js` disabled expression on a composition no session has
+42:    * mounted, which only a Loader context can decide.
+43:    */
+44:   readonly enabled: PresetPluginEnablement
+45:   /** The row's own `!!js` disabled expression, when it carries one. */
+46:   readonly condition?: string
+47:   /** Root-fiber phase when the composition is live; null otherwise. */
+48:   readonly fiberPhase: PluginFiberPhase
+49: }
+51: /** One agent preset's identity and flattened composition in the inventory. */
+52: export interface AgentPresetPluginGroup {
+53:   /** Stable preset id. */
+54:   readonly id: string
+55:   /** Display name the preset published; a reader falls back to the id. */
+56:   readonly name?: string
+57:   /** Whether a session naming no preset composes this one. */
+58:   readonly isDefault: boolean
+59:   /** Why this preset's composition cannot be read; absent when rows answer. */
+60:   readonly broken?: string
+61:   /** Plugin rows in composition order; empty when the preset is broken. */
+62:   readonly rows: readonly AgentPresetPluginRow[]
+63: }
+65: /** Point-in-time inventory returned by the plugin inventory Remote. */
+66: export interface PluginInventorySnapshot {
+67:   /** Whether this Host exposes persistent current-profile management. */
+68:   readonly managementAvailable?: boolean
+69:   readonly entries: readonly PluginInventoryEntry[]
+70:   /**
+71:    * Per-preset compositions, present only when an agent-preset roster is
+72:    * composed in this deployment.
+73:    */
+74:   readonly agentPresets?: readonly AgentPresetPluginGroup[]
+75: }
+FILE reference/packages/preset/agent-preset-registry/src/invariant.ts
+1: /**
+2:  * Package-owned invariant companion for `@deepseek-ai/dsh-agent-preset-registry`.
+3:  * @module @deepseek-ai/dsh-agent-preset-registry/invariant
+4:  */
+6: import type { Context } from '@deepseek-ai/cordis'
+7: import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
+8: // Type-only: resolves the `system-prompt/assemble` waterfall this companion
+9: // joins, and the `agent` field `dsh-agent` merges into its context.
+10: import type {} from '@deepseek-ai/dsh-system-prompt'
+11: import type {} from '@deepseek-ai/dsh-agent'
+12: // Imported through the package name, not `./mount.ts`: a module shared between
+13: // the two build entry points becomes a third chunk that the published `files`
+14: // list does not carry, which `verify-built-package-invariants` rejects.
+15: import { leakedServices, livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'
+17: const PACKAGE_NAME = '@deepseek-ai/dsh-agent-preset-registry'
+19: /** Cordis companion plugin name. */
+20: export const name = 'agent-presets-invariant'
+21: /** Service required before the companion can reserve package ownership. */
+22: export const inject = ['invariants']
+24: /**
+25:  * Assert that no installed preset composition reaches the root service realm,
+26:  * and that a deployment configuring a roster composes every agent from it.
+27:  *
+28:  * `mountPreset` proves the first once, when the subtree settles. A row that
+29:  * publishes later — from a timer, or an asynchronous continuation after its
+30:  * plugin returned — would escape that one-shot audit, so re-check every live
+31:  * mount whenever a service registration changes.
+32:  */
+33: const install: InvariantInstaller = (ctx, fail) => {
+34:   ctx.on('internal/service', function (this: Context, name) {
+35:     for (const mount of livePresetMounts()) {
+36:       const leaked = leakedServices(ctx, mount.fiber)
+37:       if (leaked.length === 0) continue
+38:       fail(
+39:         `preset "${mount.presetId}" published process-global service(s) [${leaked.join(', ')}] `
+40:         + `after its mount was audited (observed while notifying "${name}") — `
+41:         + 'a preset service must sit behind an `isolate` realm or move to the host composition',
+42:       )
+43:     }
+44:   }, { global: true })
+46:   // Bare Agents are valid until model assembly. Cold scoped reads carry no
+47:   // Agent and do not require a session binding.
+48:   ctx.on('system-prompt/assemble', (_assembly, context, next) => {
+49:     const presets = ctx.get('agentPresets')
+50:     const agent = context.agent
+51:     if (presets !== undefined
+52:       && agent !== undefined && presets.composedPreset(agent.ctx) === undefined) {
+53:       fail(
+54:         `agent "${agent.id}" addressed a model without joining any agent preset while a roster is `
+55:         + 'composed; its tools, prompt sections, and skill catalog resolve against the empty global layer',
+56:       )
+57:     }
+58:     return next()
+59:   })
+60: }
+62: /**
+63:  * Register this package's invariant companion.
+64:  * @param ctx - Cordis context carrying the invariant service.
+65:  * @returns the installed registration's disposer after setup succeeds.
+66:  */
+67: export const apply = (ctx: Context): Promise<() => void> =>
+68:   Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
+FILE reference/packages/preset/agent-preset-registry/src/mount.ts
+9: class PresetTree extends EntryTree {
+11:     const owner = ctx.fiber.entry
+30:   /** The mounted subtree's fiber. */
+31:   readonly fiber: Fiber
+38: const mounts = new Set<PresetMount>()
+41:  * Every preset composition retained by the registry.
+45:  * fiber so another runtime mounting the same preset id (a second embedded
+47:  * @param within - when present, only mounts inside this fiber's subtree.
+48:  * @returns the live mounts.
+51:   const all = [...mounts]
+52:   return within === undefined ? all : all.filter(mount => withinFiber(mount.fiber, within))
+56:  * Whether `fiber` is `root` itself or is mounted anywhere inside its subtree.
+59:  * per-registry counter, so fibers in two different roots collide on it and a
+61:  * @param fiber - the fiber to locate.
+63:  * @returns true when `fiber` belongs to `root`'s subtree.
+65: function withinFiber(fiber: Fiber, root: Fiber): boolean {
+66:   let current = fiber
+69:     const parent = current.parent.fiber
+76:  * Service names the mounted subtree published into the root realm.
+83:  * @param mount - the mounted subtree's fiber.
+86: export function leakedServices(ctx: Context, mount: Fiber): string[] {
+96:     if (!withinFiber(impl.fiber, mount)) continue
+102: /** A live standing mount located through one agent already joined to it. */
+111:  * The agent's own key is parented to its preset's standing key, so the mount
+113:  * the mount is not under the agent's fiber. An agent that joined no preset —
+117:  * @returns the mount the agent joined, or undefined when it joined none.
+130:  * One agent's instance of a service its preset mounted.
+146:  * @param agent - the agent whose mounted composition to look inside.
+148:  * @returns the agent's instance, or undefined when its preset mounts none.
+155:   const mount = standingMountFor(agent.ctx)
+156:   if (mount === undefined) return undefined
+163:     if (withinFiber(impl.fiber, mount.fiber)) return impl.value as Context[K]
+181:  * Audit the rows of a mounted subtree.
+185:  * @param tree - the mounted subtree.
+188: export async function auditRows(tree: EntryTree): Promise<RowAudit> {
+194:     const fiber = entry.fiber
+195:     if (fiber === undefined) {
+200:       await fiber.await()
+202:       const detail = mountDetail(error)
+206:     const missing = Object.keys(fiber.inject).filter(name => fiber.ctx.get(name) === undefined)
+228:  * The reportable text of a mount failure.
+232:  * @param error - the value the mount rejected with.
+235: function mountDetail(error: unknown): string {
+241:     ...branches.map(branch => `- ${mountDetail(branch).replaceAll('\n', '\n  ')}`),
+247:  * Failed rows and root-realm service leaks reject the mount. Rows waiting for
+248:  * a Host service stay mounted: they activate by themselves once the provider
+251:  * plugin the profile denies mounts disabled, so the audit reads it as
+258: export async function mountPreset(ctx: Context, id: string, plugins: PresetDefinition['plugins']): Promise<PresetMount> {
+259:   if (scopeOf(ctx) === undefined) throw new Error('agent-preset: mounting requires a scope')
+260:   await ctx.fiber.await()
+265:   const leaked = leakedServices(ctx, ctx.fiber)
+268:   const mount = { presetId: id, fiber: ctx.fiber, tree, key: scopeOf(ctx) }
+269:   mounts.add(mount)
+270:   ctx.effect(() => () => { mounts.delete(mount) }, 'agent-preset.mount')
+271:   return mount

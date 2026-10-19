@@ -1,0 +1,211 @@
+  2099     await this.recordStep(run, {
+  2100       stepNumber,
+  2101       stepType: 'TOOL',
+  2102       status: 'FAILED',
+  2103       sideEffecting: step.sideEffecting,
+  2104       ...(step.reasonCode ? { reasonCode: step.reasonCode } : {}),
+  2105       errorCode:
+  2106         step.status === 'RUNNING'
+  2107           ? 'unknown_effect'
+  2108           : stopReason === 'CANCELLED'
+  2109             ? 'cancelled'
+  2110             : stopReason === 'MAX_DURATION'
+  2111               ? 'deadline'
+  2112               : 'not_started'
+  2113     })
+  2114   }
+  2115 
+  2116   private async finalize(
+  2117     run: LoopRun,
+  2118     outcome: Extract<DispatchOutcome, { kind: 'stop' }>,
+  2119     startedAtMs: number
+  2120   ): Promise<RuntimeResult> {
+  2121     let stopReason: StopReason = outcome.stopReason
+  2122     run.usage.activeDurationMs += Date.now() - startedAtMs
+  2123     if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+  2124       try {
+  2125         await this.closePendingStep(run, stopReason)
+  2126       } catch {
+  2127         // The open step could not be closed: the terminal checkpoint must not
+  2128         // claim a clean stop while the step store disagrees.
+  2129         stopReason = 'INSUFFICIENT_EVIDENCE'
+  2130       }
+  2131     }
+  2132     run.state = { ...run.state, stopReason }
+  2133     let checkpointProven = true
+  2134     if (outcome.preserveCheckpoint) {
+  2135       // Intentional no-write: the durable pause must stay resumable after a
+  2136       // rejected resume binding.
+  2137     } else {
+  2138       try {
+  2139         await this.persistCheckpoint(run)
+  2140       } catch {
+  2141         checkpointProven = false
+  2142       }
+  2143     }
+  2144     const claimedReason: StopReason = checkpointProven
+  2145       ? stopReason
+  2146       : 'INSUFFICIENT_EVIDENCE'
+  2147     if (!checkpointProven) {
+  2148       run.state = { ...run.state, stopReason: claimedReason }
+  2149     }
+  2150     const result: RuntimeResult = {
+  2151       response: outcome.response,
+  2152       stopReason: claimedReason,
+  2153       ...(outcome.kind === 'stop' && outcome.approvalId
+  2154         ? { approvalId: outcome.approvalId }
+  2155         : {}),
+  2156       steps: run.usage.steps,
+  2157       modelCalls: run.usage.modelCalls,
+  2158       toolCalls: run.usage.toolCalls,
+  2159       usage: {
+  2160         inputTokens: run.usage.inputTokens,
+  2161         outputTokens: run.usage.outputTokens,
+  2162         costUsd: run.usage.costUsd
+  2163       },
+  2164       ...(run.lastToolObservation
+  2165         ? {
+  2166             toolResult: {
+  2167               /* v8 ignore next -- only a successful tool observation is stored */
+  2168               status:
+  2169                 (run.lastToolObservation.payload as { status?: string } | null)
+  2170                   ?.status === 'SUCCEEDED'
+  2171                   ? ('SUCCEEDED' as const)
+  2172                   : ('REJECTED' as const),
+  2173               output: (
+  2174                 run.lastToolObservation.payload as {
+  2175                   output?: unknown
+  2176                 } | null
+  2177               )?.output
+  2178             }
+  2179           }
+  2180         : {})
+  2181     }
+  2182     const finalResult = await this.recordAuditOutcome(
+  2183       run,
+  2184       result,
+  2185       claimedReason
+  2186     )
+  2187     this.recordTelemetry(run, finalResult, startedAtMs)
+  2188     return finalResult
+  2189   }
+  2190 
+  2191   private async recordAuditOutcome(
+  2192     run: LoopRun,
+  2193     result: RuntimeResult,
+  2194     stopReason: StopReason
+  2195   ): Promise<RuntimeResult> {
+  2196     const action =
+  2197       stopReason === 'COMPLETED'
+  2198         ? 'runtime.completed'
+  2199         : stopReason === 'NEEDS_USER_INPUT' ||
+  2200             stopReason === 'APPROVAL_REQUIRED'
+  2201           ? 'runtime.paused'
+  2202           : 'runtime.stopped'
+  2203     // Audit always gets at least a bounded grace window, so a budget stop
+  2204     // (possibly after an effect) is still recorded. If even that fails, the
+  2205     // result is degraded like any other unaudited outcome (ENG-008).
+  2206     try {
+  2207       const deadlineMs = Math.max(this.remainingDuration(run), AUDIT_GRACE_MS)
+  2208       const auditOrDeadline = await this.withDeadline(
+  2209         this.options.audit.append({
+  2210           actor: run.input.agent.id,
+  2211           agent: run.input.agent.id,
+  2212           tenant: run.input.tenantId,
+  2213           action,
+  2214           policy: null,
+  2215           approval: (result.approvalId as ApprovalId | undefined) ?? null,
+  2216           tool: run.lastToolObservation?.provenance.sourceId ?? null,
+  2217           result: stopReason,
+  2218           timestamp: this.clock().toISOString(),
+  2219           traceId: run.input.traceId,
+  2220           correlationId: run.input.correlationId
+  2221         }),
+  2222         deadlineMs
+  2223       )
+  2224       if (auditOrDeadline === DEADLINE_EXCEEDED) {
+  2225         throw new Error('audit deadline exceeded')
+  2226       }
+  2227       return result
+  2228     } catch {
+  2229       return {
+  2230         ...result,
+  2231         response:
+  2232           'Execution could not be completed because audit recording failed.',
+  2233         stopReason: 'INSUFFICIENT_EVIDENCE'
+  2234       }
+  2235     }
+  2236   }
+  2237 
+  2238   private recordTelemetry(
+  2239     run: LoopRun,
+  2240     result: RuntimeResult,
+  2241     startedAtMs: number
+  2242   ): void {
+  2243     const telemetry: TelemetryEvent = {
+  2244       name: 'harness.iterative',
+  2245       latencyMs: Date.now() - startedAtMs,
+  2246       errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+  2247       costUsd: result.usage.costUsd,
+  2248       inputTokens: result.usage.inputTokens,
+  2249       outputTokens: result.usage.outputTokens,
+  2250       provider: null,
+  2251       toolDurationMs: 0,
+  2252       steps: result.steps,
+  2253       traceId: run.input.traceId,
+  2254       correlationId: run.input.correlationId,
+  2255       attributes: {
+  2256         outcome: result.stopReason,
+  2257         model_calls: result.modelCalls,
+  2258         tool_calls: result.toolCalls,
+  2259         knowledge_calls: run.usage.knowledgeCalls,
+  2260         replans: run.usage.replans,
+  2261         verification_calls: run.usage.verificationCalls
+  2262       }
+  2263     }
+  2264     try {
+  2265       this.options.telemetry.record(telemetry)
+  2266     } catch {
+  2267       // telemetry is best effort
+  2268     }
+  2269   }
+  2270 
+  2271   private async earlyFinish(
+  2272     input: RuntimeInput,
+  2273     response: string,
+  2274     stopReason: StopReason,
+  2275     startedAtMs: number
+  2276   ): Promise<RuntimeResult> {
+  2277     void startedAtMs
+  2278     const result: RuntimeResult = {
+  2279       response,
+  2280       stopReason,
+  2281       steps: 0,
+  2282       modelCalls: 0,
+  2283       toolCalls: 0,
+  2284       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  2285     }
+  2286     try {
+  2287       await this.options.audit.append({
+  2288         actor: input.agent.id,
+  2289         agent: input.agent.id,
+  2290         tenant: input.tenantId,
+  2291         action: 'runtime.stopped',
+  2292         policy: null,
+  2293         approval: null,
+  2294         tool: null,
+  2295         result: stopReason,
+  2296         timestamp: this.clock().toISOString(),
+  2297         traceId: input.traceId,
+  2298         correlationId: input.correlationId
+  2299       })
+  2300     } catch {
+  2301       return {
+  2302         ...result,
+  2303         response:
+  2304           'Execution could not be completed because audit recording failed.',
+  2305         stopReason: 'INSUFFICIENT_EVIDENCE'
+  2306       }
+  2307     }
+  2308     return result
+  2309   }

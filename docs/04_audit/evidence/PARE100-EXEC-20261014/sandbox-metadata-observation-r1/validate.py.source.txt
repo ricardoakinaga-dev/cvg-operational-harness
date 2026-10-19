@@ -1,0 +1,143 @@
+from pathlib import Path
+import copy
+import hashlib
+import json
+import sys
+
+UNDEFINED = {'$type': 'undefined'}
+ECHO = {'text': 'synthetic echo only'}
+ID = 'synthetic.sandbox.metadata'
+CASES = ['direct-WORKSPACE', 'capability-WORKSPACE', 'capability-NONE']
+CASE_KEYS = set('caseId route mode input beforeDescriptor registeredDescriptors submittedDescriptor capabilityFingerprint nativeResult gateCalls bodyCalls modelCalls decisions policyEvaluations approvalRequests auditEvents telemetryEvents kernelLogEvents journalRecord'.split())
+
+def require(condition, reason):
+    if not condition:
+        raise ValueError(reason)
+
+def metadata(descriptor):
+    return {key: value for key, value in descriptor.items() if key != 'execute'}
+
+def evaluate(data):
+    require(set(data) == {'schema', 'boundary', 'syntheticPorts', 'cases'}, 'top-level shape')
+    require(data['schema'] == 'cvg-sandbox-metadata-observation-v1', 'schema')
+    require(data['boundary'] == 'public source factory, single_pass only', 'boundary')
+    require(data['syntheticPorts'] == ['orchestrator', 'model', 'policy', 'approval', 'audit', 'telemetry', 'sandbox-deny'], 'ports')
+    require([c['caseId'] for c in data['cases']] == CASES, 'case membership/order')
+    summaries = []
+    for c in data['cases']:
+        require(set(c) == CASE_KEYS, 'case shape')
+        require(c['caseId'] == c['route'] + '-' + c['mode'], 'route/mode identity')
+        inp = c['input']
+        require('executionId' not in inp and inp['runtimeProfile'] == 'single_pass', 'non-durable profile')
+        require(inp['agent']['tools'] == [ID], 'agent tool binding')
+        require(c['modelCalls'] == c['approvalRequests'] == [], 'unexpected model/approval')
+        expected_invocation = {'toolId': ID, 'toolVersion': '1.0.0', 'operationKey': 'sandbox-metadata-' + c['caseId'], 'input': ECHO}
+        require(inp['requestedTool'] == expected_invocation, 'input invocation')
+        require(len(c['decisions']) == 1 and c['decisions'][0]['decision'] == {'action': 'CALL_TOOL', 'toolInvocation': expected_invocation}, 'native decision')
+        before = c['beforeDescriptor']
+        require(before == {
+            'id': ID, 'version': '1.0.0', 'description': 'Synthetic memory-only metadata observation',
+            'inputSchema': {'type': 'object', 'required': ['text']},
+            'outputSchema': {'type': 'object', 'required': ['text']},
+            'risk': 'LOW', 'sideEffect': 'NONE', 'sandbox': c['mode'], 'idempotent': True,
+            'requiresApproval': False, 'origin': 'core', 'providerId': 'synthetic-memory', 'providerVersion': '1.0.0'
+        }, 'input descriptor')
+        submitted = metadata(c['submittedDescriptor'])
+        if c['route'] == 'direct':
+            require(submitted == before and c['registeredDescriptors'] == UNDEFINED and c['capabilityFingerprint'] == UNDEFINED, 'direct route binding')
+        else:
+            require(c['registeredDescriptors'] == [submitted], 'registry snapshot linkage')
+            require(submitted == before or submitted == {k: v for k, v in before.items() if k != 'sandbox'}, 'unexpected normalization')
+            fp = c['capabilityFingerprint']
+            require(isinstance(fp, str) and len(fp) == 64 and all(ch in '0123456789abcdef' for ch in fp), 'capability fingerprint')
+        require(len(c['policyEvaluations']) == 1, 'policy count')
+        policy = c['policyEvaluations'][0]
+        require(policy['invocation'] == expected_invocation and metadata(policy['tool']) == submitted, 'policy tool linkage')
+        require(policy['tenantId'] == inp['tenantId'] and policy['agentId'] == inp['agent']['id'] and policy['action'] == 'tool.execute', 'policy actor linkage')
+        result = c['nativeResult']
+        bodies = c['bodyCalls']
+        gates = c['gateCalls']
+        blocked = len(gates) == 1 and not bodies and result['stopReason'] == 'UNSAFE_REQUEST'
+        completed = not gates and len(bodies) == 1 and result['stopReason'] == 'COMPLETED'
+        require(blocked or completed, 'unexpected execution topology')
+        require(result['steps'] == 1 and result['modelCalls'] == 0 and result['toolCalls'] == len(bodies), 'result counters')
+        require(result['usage'] == {'inputTokens': 0, 'outputTokens': 0, 'costUsd': 0}, 'unexpected usage')
+        require(len(c['auditEvents']) == 1 and c['auditEvents'][0]['result'] == result['stopReason'] and c['auditEvents'][0]['policy'] == 'ALLOW', 'audit result linkage')
+        logs = c['kernelLogEvents']
+        require(logs[0]['type'] == 'turn/start' and logs[-1]['type'] == 'turn/end' and logs[-1]['stopReason'] == result['stopReason'], 'log turn linkage')
+        if blocked:
+            require(set(result) == {'response', 'stopReason', 'steps', 'modelCalls', 'toolCalls', 'usage'}, 'blocked result shape')
+            require(result['response'] == f'Sandbox denied tool "{ID}": synthetic deny, no native backend.', 'denial response')
+            require(metadata(gates[0]['descriptor']) == submitted and gates[0]['policy']['requiredMode'] == c['mode'], 'gate metadata linkage')
+            require(c['journalRecord'] is None, 'blocked journal')
+            require([x['type'] for x in logs] == ['turn/start', 'tool/call', 'tool/result', 'turn/end'] and logs[2]['outcome'] == 'not_started', 'blocked log topology')
+        else:
+            require(set(result) == {'response', 'stopReason', 'steps', 'modelCalls', 'toolCalls', 'usage', 'toolResult'}, 'completed result shape')
+            require(result['toolResult'] == {'status': 'SUCCEEDED', 'output': ECHO} and json.loads(result['response']) == ECHO, 'echo result linkage')
+            require(bodies[0]['input'] == ECHO and bodies[0]['context']['operationKey'] == expected_invocation['operationKey'], 'body input linkage')
+            journal = c['journalRecord']
+            require(journal['state'] == 'CONFIRMED' and journal['result'] == ECHO and journal['operationKey'] == expected_invocation['operationKey'], 'journal linkage')
+            require([x['type'] for x in logs] == ['turn/start', 'tool/call', 'tool/result', 'turn/end'] and logs[2]['outcome'] == 'succeeded', 'completed log topology')
+        summaries.append({'case': c['caseId'], 'gateCalls': len(gates), 'bodyCalls': len(bodies), 'stopReason': result['stopReason'], 'submittedSandbox': submitted.get('sandbox', 'ABSENT')})
+    require(summaries[0]['gateCalls'] == 1 and summaries[0]['bodyCalls'] == 0, 'direct WORKSPACE control failed')
+    require(summaries[2]['gateCalls'] == 0 and summaries[2]['bodyCalls'] == 1, 'capability NONE control failed')
+    target = summaries[1]
+    violation = target['submittedSandbox'] == 'ABSENT' and target['gateCalls'] == 0 and target['bodyCalls'] == 1
+    preserved = target['submittedSandbox'] == 'WORKSPACE' and target['gateCalls'] == 1 and target['bodyCalls'] == 0
+    require(violation or preserved, 'target observation inconclusive')
+    return {
+        'controls': 'PASS', 'sandboxPreservationInvariant': 'FAIL' if violation else 'PASS_SCOPED',
+        'finding': 'OBS-SBX-METADATA-001' if violation else None,
+        'sameCapabilityFingerprints': data['cases'][1]['capabilityFingerprint'] == data['cases'][2]['capabilityFingerprint'],
+        'cases': summaries, 'fullParity': 'NOT_MEASURED', 'nativeIsolation': 'NOT_TESTED',
+        'policyProduction': 'NOT_TESTED', 'managedLifecycleML29': 'NOT_TESTED'
+    }
+
+def check_run(folder):
+    meta = json.loads((folder / 'process.json').read_text())
+    require(meta['exitCode'] == 0 and meta['joined'] and not meta['remainingProcessGroup'] and meta['violation'] is None and meta['subreaper'], 'process lifecycle')
+    require(meta['sourcesUnchanged'] and not meta['newSourcePaths'] and meta['pins'] == 465, 'source integrity metadata')
+    before = json.loads((folder / 'sources-before.json').read_text())
+    after = json.loads((folder / 'sources-after.json').read_text())
+    require(before == after and len(before) == meta['sourceFiles'], 'source sentinel')
+    for file, expected in before.items():
+        require(hashlib.sha256(Path(file).read_bytes()).hexdigest() == expected, 'live source drift: ' + file)
+    stream = folder / 'stdout.txt'
+    raw = stream.read_bytes()
+    require(0 < len(raw) <= 1048576 and len(raw) == meta['streams']['stdout']['bytes'] and hashlib.sha256(raw).hexdigest() == meta['streams']['stdout']['sha256'], 'stdout integrity')
+    require(meta['streams']['stderr'] == {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}, 'stderr not empty')
+    return json.loads(raw), meta
+
+if __name__ == '__main__':
+    folder = Path(sys.argv[1])
+    data, process = check_run(folder)
+    result = evaluate(data)
+    mutations = []
+    def reject(name, change):
+        mutant = copy.deepcopy(data)
+        change(mutant)
+        try:
+            evaluate(mutant)
+        except (ValueError, KeyError, TypeError, IndexError):
+            mutations.append({'name': name, 'result': 'REJECTED'})
+            return
+        raise ValueError('Invalid observation accepted: ' + name)
+    reject('missing target', lambda d: d['cases'].pop(1))
+    reject('duplicate case', lambda d: d['cases'].append(copy.deepcopy(d['cases'][1])))
+    reject('forged body count', lambda d: d['cases'][1]['bodyCalls'].clear())
+    reject('forged completion', lambda d: d['cases'][1]['nativeResult'].__setitem__('stopReason', 'UNSAFE_REQUEST'))
+    reject('missing direct gate', lambda d: d['cases'][0]['gateCalls'].clear())
+    reject('extra model call', lambda d: d['cases'][1]['modelCalls'].append({}))
+    reject('extra approval', lambda d: d['cases'][1]['approvalRequests'].append({}))
+    reject('forged metadata retention', lambda d: d['cases'][1]['submittedDescriptor'].__setitem__('sandbox', 'WORKSPACE'))
+    reject('changed echo', lambda d: d['cases'][1]['nativeResult']['toolResult']['output'].__setitem__('text', 'forged'))
+    reject('lost kernel event', lambda d: d['cases'][1]['kernelLogEvents'].pop(1))
+    reject('wrong requested key', lambda d: d['cases'][1]['input']['requestedTool'].__setitem__('operationKey', 'forged'))
+    result['observerControls'] = mutations
+    result['run'] = str(folder)
+    result['processExit'] = process['exitCode']
+    result['sourceFiles'] = process['sourceFiles']
+    result['independence'] = 'I0_PENDING_I1'
+    result['validatorSHA256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    (folder / 'lead-observation-validation.json').write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps(result))

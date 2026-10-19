@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-BUILD-0240",
+  "round": "R2",
+  "finalRound": true,
+  "reviewer": "crítico fresco independente (sem contexto herdado, sem descendentes)",
+  "sourceCommit": "f22a74a09fe1abefd3eaf0b11f65815b02c5c63d",
+  "previousRoundCommit": "b766ffc594057c52a4e34bc57ebb2448fe7808d1",
+  "baseCommit": "84d8d4b4ed053493533d7e9ad55e574a9e6f9047",
+  "specSha256": "1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161",
+  "sourceFreezeSha256": "2b2e02a15a789bc67285d07fd808eb6b39d584635806c60a504648254e94cbb4",
+  "taskContractSha256": "8dc37b5f18c25df7a3dfa51f246b7cdffa44a77ef271acd4dc82e7ff940288e7",
+  "reviewContractSha256": "d6a7b10d08be6312f7ecf63ce8df2718a6977141b1863b7252282737aa18b258",
+  "priorReviewSha256": "f89780122dc99b84b8438cf9edb5fbf10becd86e21e0791fc3e5d69dc6d7f22e",
+  "v2DifferentialOracle": {
+    "tree": "/mnt/ia/cvg-hiso005-build0237-20261018",
+    "head": "84d8d4b4ed053493533d7e9ad55e574a9e6f9047",
+    "note": "engine/helper com sha256 iguais aos blobs de 84d8 (raw/env-and-hashes.json); somente leitura, usado só como oracle diferencial v2"
+  },
+  "verdict": "APPROVE",
+  "requiredFindings": [],
+  "r1FindingsStatus": [
+    {
+      "id": "R1-REQ-01",
+      "fixed": true,
+      "evidence": "Reprodução da própria sonda R1 (raw/r1-s01-budget-census-loss.mjs 6000) na fonte f22a74a0: v2 VIOLATION [{entry.mjs, PRODUCT_DEPENDENCY, products/x}] e v3 VIOLATION com o MESMO multiset (v2ViolationRetainedByV3=true; antes v3 UNKNOWN violations=[]). A refinação ainda esgota maxFiles (UNKNOWN_ANALYSIS_LIMIT:maxFiles nas unknowns), mas o census de recusa v2 roda em processo/sessão própria com o mesmo orçamento por sessão e sua violação é unida no pai. Generalização C10: três mecanismos v2 distintos (alias direto, alias relativo, alvo negativo de pacote com nome divergente) = 5 violações v2, 5 na v3, multiset idêntico sob o mesmo esgotamento. Mecanismo: scripts/boundary-semantic-engine.mjs runSemanticBoundary (census --refusal-census antes da refinação; remember/known/união).",
+      "rawArtifacts": [
+        "raw/out/s01-budget-census-loss-n6000.json",
+        "raw/out/r2-C10.json",
+        "raw/out/r2-C3-census-equals-v2-helper.json"
+      ]
+    },
+    {
+      "id": "R1-REQ-02",
+      "fixed": true,
+      "evidence": "Reprodução da sonda R1 (raw/r1-s05-known-product-lost-by-timeout.mjs 3000 5000): v2 VIOLATION em 862 ms; v3 agora VIOLATION com a mesma violação e unknowns [['','UNKNOWN_ANALYSIS_LIMIT','timeoutMs']], elapsed 5062 ms para timeoutMs=5000 (prazo único; antes v3 UNKNOWN violations=[]). Generalizações: C1 (census morto pelo prazo DEPOIS de descobrir: violação sobrevive via stream; v2 perde), C8 (refinação parada por SIGSTOP com produto conhecido: VIOLATION em 3039 ms/3000), C6 (refinação sozinha PROVEN mas census conhecia produto: VIOLATION com 0 provas).",
+      "rawArtifacts": [
+        "raw/out/s05-known-product-lost-by-timeout-n3000-t5000.json",
+        "raw/out/r2-C1.json",
+        "raw/out/r2-C8-stopped-worker-deadline.json",
+        "raw/out/r2-C6-union-proof-suppression.json"
+      ]
+    }
+  ],
+  "optionalFindings": [
+    {
+      "id": "R2-OPT-01",
+      "severity": "info",
+      "criterion": "MS07/MS10 (cobertura de teste do worker parado)",
+      "summary": "O teste legado tests/b6-0236-semantic-engine.test.js 'kills and reaps an exactly identified stalled parser worker by the overall deadline' faz SIGSTOP no PRIMEIRO filho '--semantic-worker' (supervisedObservation, depth 1); com a correção esse filho passa a ser o census de recusa, não a refinação. O teste continua válido (prazo e reaping), mas nenhum teste automatizado para a refinação parada. Fisicamente verificado aqui (C8): parar census ou refinação dá 3001–3039 ms para timeoutMs=3000, nenhum processo restante, produto conhecido preservado. Sugestão: parear o caso 'refinação parada' em b6-0240.",
+      "rawArtifact": "raw/out/r2-C8-stopped-worker-deadline.json"
+    },
+    {
+      "id": "R2-OPT-02",
+      "severity": "info",
+      "criterion": "MS11 (folga de tempo; contexto, não medido aqui)",
+      "summary": "Cada execução semântica agora faz census (1 análise com recusas v2) + refinação (análise + recomputação no worker) + revalidação no pai sob o MESMO limits.timeoutMs. Os limites por sessão não mudaram (diff sem alteração de SEMANTIC_LIMITS/RESOLUTION_LIMITS/HARD/maxBuffer), mas o trabalho físico total por execução sobe de 2 para 3 sessões limitadas, e quando o census consome o prazo a refinação recebe ~1 ms (C2/C8: UNKNOWN timeoutMs, fail-closed). Na árvore real v2 usou 31,3 s/120 s; a MS11 deve registrar telemetry.elapsedMs e negativeCensusElapsedMs para mostrar a folga. Risco é UNKNOWN, não falso PROVEN nem perda de violação.",
+      "rawArtifact": "raw/out/r2-C2-n6000.json"
+    },
+    {
+      "id": "R2-OPT-03",
+      "severity": "info",
+      "criterion": "RC3/RC4 (auditabilidade da união)",
+      "summary": "Quando a união acrescenta violação conhecida só pelo census a uma saída válida da refinação, o pai reescreve status/proofs/installed, mas mantém validation.valid=true e unknowns=[] da refinação (C6). O checker trata corretamente (violações viram FAIL; provas vazias), porém não há marcador explícito no payload de que o resultado foi unido com evidência do census (só telemetry.negativeCensusElapsedMs). Sugestão: marcador/unknown explícito ou nota em validation para auditoria.",
+      "rawArtifact": "raw/out/r2-C6-union-proof-suppression.json"
+    },
+    {
+      "id": "R2-OPT-04",
+      "severity": "info",
+      "criterion": "RC3 (modelo de confiança do stream)",
+      "summary": "knownViolation aceita somente {file,reason:'PRODUCT_DEPENDENCY',target:'products'|'products/...'} com exatamente essas três chaves, de stdout ou do stream (linha JSON escapada; linha truncada falha no JSON.parse e é ignorada). Um stream forjado/worker comprometido só pode ACRESCENTAR violação de produto (status VIOLATION, provas zeradas, installed UNKNOWN); não pode introduzir prova, unknown, perfil ou remover nada. O campo file não é validado como caminho relativo (apenas relatório), o que é equivalente à confiança da v2 nas violações do stdout do worker.",
+      "rawArtifact": "raw/r1fix-diff-b766-f22a.patch.txt"
+    },
+    {
+      "id": "R2-OPT-05",
+      "severity": "info",
+      "criterion": "MS11 (limite preexistente observado)",
+      "summary": "Na tentativa 1 de C6, uma fixture fechada com 2000 módulos relativos ficou UNKNOWN por outputBytes (ENOBUFS do maxBuffer 64 MiB: cada prova K5 carrega todas as premissas, tamanho O(N²)). É comportamento v2 preexistente e fail-closed, não introduzido pela 0240; registrado porque a 0240 pode tornar alcançáveis árvores maiores fechadas.",
+      "rawArtifact": "raw/out/r2-C6-attempt1-n2000-control-enobufs.json"
+    },
+    {
+      "id": "R2-OPT-06",
+      "severity": "info",
+      "criterion": "RC4 trace (herdado de R1-OPT-03)",
+      "summary": "metadataSelection.exports.selectedKey continua registrando o subpath requisitado também para exports string/condicional (sugar); a correção R1 não tocou nisso. Sem impacto de segurança (a revalidação rederiva e compara o trace inteiro).",
+      "rawArtifact": "raw/out/s04-revalidation-limits.json"
+    }
+  ],
+  "scenariosChecked": [
+    {
+      "id": "SC01",
+      "criterion": "RC5",
+      "expected": "sha256 dos 9 paths do freeze e das 12 fontes inalteradas iguais ao source-freeze-r2; candidata limpa em f22a74a0; delta 84d8..f22a só nos 9 paths; R1-fix só nos 3 paths declarados",
+      "observed": "allMatch=true (21/21), porcelain 0 linhas, HEAD f22a74a0; diff 84d8..f22a = 9 paths; diff b766..f22a = engine, helper, b6-0240 test",
+      "pass": true,
+      "rawArtifact": "raw/env-and-hashes.json"
+    },
+    {
+      "id": "SC02",
+      "criterion": "RC5/MS10 (estático)",
+      "expected": "testes antigos só com migração literal de versão/pais de fixture; teste 0240 da R1-fix só acrescenta casos",
+      "observed": "6 arquivos legados: 5 literais de pasta-pai e 3 literais de kernel v2->v3, nenhum assert removido; diff b766..f22a do teste 0240 é só um describe novo (+141 linhas, 0 remoções)",
+      "pass": true,
+      "rawArtifact": "raw/legacy-tests-diff-84d8-f22a.patch.txt"
+    },
+    {
+      "id": "SC03",
+      "criterion": "RC3/MS05/MS07 (R1-REQ-01)",
+      "expected": "mesma fixture e limites da R1 (N=6000): violação v2 retida pela v3",
+      "observed": "v2 VIOLATION products/x; v3 VIOLATION products/x (+ UNKNOWN_ANALYSIS_LIMIT:maxFiles), 0 provas, multiset igual",
+      "pass": true,
+      "rawArtifact": "raw/out/s01-budget-census-loss-n6000.json"
+    },
+    {
+      "id": "SC04",
+      "criterion": "RC3/RC4/MS05/MS07 (R1-REQ-02)",
+      "expected": "produto conhecido + deadline posterior (N=3000, timeoutMs=5000): VIOLATION, prazo único",
+      "observed": "v3 VIOLATION products/x, unknown timeoutMs, elapsed 5062 ms (v2 VIOLATION 862 ms)",
+      "pass": true,
+      "rawArtifact": "raw/out/s05-known-product-lost-by-timeout-n3000-t5000.json"
+    },
+    {
+      "id": "SC05",
+      "criterion": "RC3/MS05 (multiset v2)",
+      "expected": "três mecanismos v2 distintos sob esgotamento de maxFiles pela refinação: multiset v2 ⊆ v3",
+      "observed": "v2 5 violações (products/x, products/y, products/y/index.mjs, products/z, products/z/index.mjs); v3 as mesmas 5 (sameMultiset=true), 0 provas, refinação com maxFiles",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C10.json"
+    },
+    {
+      "id": "SC06",
+      "criterion": "RC3 (census == recusas v2)",
+      "expected": "createResolutionSession({refusalCensus:true}) dá exatamente o resultado e os callbacks onProduct/onNegativeTarget do helper 84d8 (imports presente, chaves de pattern, censusEntry), e a refinação só acrescenta",
+      "observed": "64/64 casos idênticos (60 casos s02 da R1 + 4 casos de census negativo com alias de produto); refinação difere só onde a 0240 relaxa e só acrescenta detecções de produto (ex.: X-misnamed-pattern-alias-product: v2/census 0 callbacks, refinação 9)",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C3-census-equals-v2-helper.json"
+    },
+    {
+      "id": "SC07",
+      "criterion": "RC4 (census nunca autoridade)",
+      "expected": "census pelo worker real: status UNKNOWN, 0 provas, validation false, perfil node22-linux-v2-refusal-census-v1; snapshot do census rejeitado por revalidateSemanticInputs, inclusive trocado dentro de uma saída PROVEN (lavagem)",
+      "observed": "eligibleMetadata e noMetadata: census UNKNOWN/0 provas (noMetadata só com UNKNOWN_NEGATIVE_CENSUS_ONLY), perfil distinto, revalCensus=false, laundered=false; caminho completo PROVEN (2 provas) e revalFull=true (C4 in-process confirma o mesmo perfil/rejeição)",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C4b.json"
+    },
+    {
+      "id": "SC08",
+      "criterion": "RC3 (união suprime prova)",
+      "expected": "census conhece produto e refinação sozinha seria PROVEN (mutação entre os filhos): saída VIOLATION, 0 provas",
+      "observed": "mutação com census vivo; saída VIOLATION products/x, proofs 0 (validation da refinação true, unknowns []); controle do estado final do zero: PROVEN com 401 provas",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C6-union-proof-suppression.json"
+    },
+    {
+      "id": "SC09",
+      "criterion": "RC3/MS05/MS07 (census morto após descoberta)",
+      "expected": "alias de produto antes de 1500 módulos, timeoutMs=3000: violação sobrevive à morte do próprio census; prazo único",
+      "observed": "v3 VIOLATION products/x, elapsed 3026 ms (census 3024 ms, refinação ~1 ms); v2 UNKNOWN violations=[] (v3 só acrescenta)",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C1.json"
+    },
+    {
+      "id": "SC10",
+      "criterion": "MS05/MS07 (prazo antes de conhecer)",
+      "expected": "6000 módulos antes do alias, timeoutMs=3000: UNKNOWN explícito, 0 provas, nenhuma violação inventada, sem dobrar o prazo",
+      "observed": "v2 e v3 UNKNOWN timeoutMs, violations [], 0 provas; v3 3017 ms. Variante N=1500: o census alcançou o alias antes do prazo e v3 reportou VIOLATION onde v2 perdia (acréscimo permitido)",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C2-n6000.json"
+    },
+    {
+      "id": "SC11",
+      "criterion": "RC4/MS07 (worker parado/kill respeita o prazo)",
+      "expected": "SIGSTOP no pid exato do census ou da refinação, timeoutMs=3000: término no prazo, processo parado colhido, 0 provas, produto conhecido preservado",
+      "observed": "4/4: 3035–3039 ms; nenhum processo parado restante; census parado -> refinação 1 ms -> UNKNOWN; refinação parada com produto -> VIOLATION; sem produto -> sem violação",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C8-stopped-worker-deadline.json"
+    },
+    {
+      "id": "SC12",
+      "criterion": "RC4 (argv/stream do worker)",
+      "expected": "argv do worker fechado; census emite stream e nunca valida/prova",
+      "observed": "--refusal-census: validation false, 0 provas, 1 linha de stream; --refusal-census duplicado, '--refusal-census=1' e argumento extra: exit 2, stdout vazio",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C7.json"
+    },
+    {
+      "id": "SC13",
+      "criterion": "MS05/MS07 (produto só no corpo recusado pela v2, orçamento esgotado antes)",
+      "expected": "falta de conhecimento: UNKNOWN/0 provas; nenhuma violação v2 perdida",
+      "observed": "v3 UNKNOWN maxFiles, 0 provas; v2 UNKNOWN sem violação",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C9.json"
+    },
+    {
+      "id": "SC14",
+      "criterion": "RC1/MS01 (positivo pelo caminho completo)",
+      "expected": "imports elegível + pattern inativo (ESM e CJS) continuam PROVEN com census+união; v2 vermelho",
+      "observed": "esm-both e cjs-both PROVEN na v3, v2 UNKNOWN; telemetry.negativeCensusElapsedMs presente",
+      "pass": true,
+      "rawArtifact": "raw/out/r2-C5.json"
+    },
+    {
+      "id": "SC15",
+      "criterion": "RC1/MS01-MS03/MS06 (regressão helper)",
+      "expected": "sonda s02 da R1 contra f22a: positivos = oracle Node22 ESM/CJS; inelegíveis, pattern sem chave exata, chaves malformadas, mistura, array/null/condição, targets inválidos/ausente, '#' ativo e interop continuam UNKNOWN",
+      "observed": "60/60 pass",
+      "pass": true,
+      "rawArtifact": "raw/out/s02-helper-selection.json"
+    },
+    {
+      "id": "SC16",
+      "criterion": "RC2/RC3/MS04/MS05 (regressão engine)",
+      "expected": "sonda s03 da R1 contra f22a: K5/closure, '#'/reflexão/browser/dist UNKNOWN, produto selecionado VIOLATION com caps posteriores",
+      "observed": "14/14 pass (E1/E2 PROVEN; E3–E10 UNKNOWN; E11–E14 VIOLATION com alvo canônico)",
+      "pass": true,
+      "rawArtifact": "raw/out/s03-engine-closure-violation.json"
+    },
+    {
+      "id": "SC17",
+      "criterion": "RC4/MS07/MS08 (regressão revalidação/limites)",
+      "expected": "sonda s04 da R1 contra f22a: trace adulterado, perfil v2, prova v2, mutação de campo inativo rejeitados; FD/limites fail-closed; limites inalterados",
+      "observed": "14/14 pass",
+      "pass": true,
+      "rawArtifact": "raw/out/s04-revalidation-limits.json"
+    },
+    {
+      "id": "SC18",
+      "criterion": "RC5/MS10 (default/P1) e RC1 (perfil customizado)",
+      "expected": "checker sem --semantic byte-igual v2/v3; --conditions/NODE_OPTIONS UNKNOWN",
+      "observed": "byteEqualAfterRootNormalization=true (exit 1 em ambos); plain PROVEN, --conditions e NODE_OPTIONS UNKNOWN_RUNTIME_PROFILE",
+      "pass": true,
+      "rawArtifact": "raw/out/s06-profile-and-default.json"
+    },
+    {
+      "id": "SC19",
+      "criterion": "RC4 (nenhum limite aumentado)",
+      "expected": "nenhuma linha de limite alterada em 84d8..f22a; prazo calculado de um único started",
+      "observed": "grep do diff: única ocorrência é comentário; spawn() usa timeout = timeoutMs - (now - started) para os dois filhos; maxBuffer/killSignal iguais",
+      "pass": true,
+      "rawArtifact": "raw/r1fix-diff-b766-f22a.patch.txt"
+    },
+    {
+      "id": "SC20",
+      "criterion": "MS01-MS08 (vitest focal novo)",
+      "expected": "tests/b6-0240-exact-metadata.test.js verde sem skip",
+      "observed": "79/79 pass, 0 skip/todo (inclui os 4 casos novos da correção R1)",
+      "pass": true,
+      "rawArtifact": "raw/out/vitest-0240-exact-metadata.json"
+    },
+    {
+      "id": "SC21",
+      "criterion": "MS10 (regressão 0236 engine, inclui prazo/worker parado)",
+      "expected": "tests/b6-0236-semantic-engine.test.js verde sem skip",
+      "observed": "100/100 pass, 0 skip/todo; inclui 'supervisor deadline invalidates all partial output' e 'kills and reaps an exactly identified stalled parser worker by the overall deadline' (este agora para o census, ver R2-OPT-01)",
+      "pass": true,
+      "rawArtifact": "raw/out/vitest-0236-semantic-engine.json"
+    }
+  ],
+  "msJudgement": {
+    "MS01": "PASS (SC14, SC15, SC16, SC20)",
+    "MS02": "PASS (SC15)",
+    "MS03": "PASS (SC15)",
+    "MS04": "PASS (SC16)",
+    "MS05": "PASS em fixtures (SC03-SC11, SC13, SC16); multiset na árvore real depende da MS11 (NOT_RUN)",
+    "MS06": "PASS parcial: discriminação ESM/CJS contra oracle Node22 e alvo ausente (SC15); observação do pacote real Vitest não executada nesta crítica",
+    "MS07": "PASS (SC03, SC04, SC09-SC11, SC13, SC17)",
+    "MS08": "PASS (SC07, SC17, SC20)",
+    "MS09": "NOT_JUDGED (ledger depende da medição MS11)",
+    "MS10": "Parte estática PASS (SC01, SC02, SC18, SC21); gates/38 hashes/consumidor NOT_RUN e não são falha desta crítica"
+  },
+  "notJudged": [
+    "MS09 ledger, MS10 gates/38 hashes/consumidor, MS11 medição real e MS12 promoção: fora do escopo",
+    "Suítes legadas 0234/0237/0236-integration não reexecutadas por completo; reexecutados 0240 (79) e 0236-semantic-engine"
+  ],
+  "rulesObserved": "Escrita somente em review-r2/ (evidência) e no runtime review-r2/ (fixtures/vitest). Os vitest focais permitidos usam pastas-pai fixas dos próprios testes no runtime 0240: b6-0240 criou e removeu fixtures em test-builder/; b6-0236-semantic-engine deixou ~113 diretórios de fixture novos em legacy0236-engine/ (comportamento do próprio teste, sem limpeza). Nenhuma alteração de fonte/candidata/oracle; git só leitura; sem rede/npm/PG/Docker/certify/e2e/npm test; Node v22.23.2; alvos das fixtures nunca importados; SIGSTOP apenas em pid exato de worker próprio identificado por /proc (sem pkill/killall); sem subagentes. REPORT.md foi bloqueado pelo ambiente; o relatório está em reportText.",
+  "reportText": "Crítica R2 (final) — HISO005-P2-BUILD-0240. Fonte f22a74a0 (base 84d8, rodada anterior b766). Hashes dos 21 arquivos do freeze conferem; candidata limpa; oracle v2 em 84d8.\n\nVEREDITO: APPROVE — zero achados obrigatórios novos.\n\nR1-REQ-01 (orçamento maxFiles compartilhado): CORRIGIDO. A sonda da R1 (N=6000) dá v2 VIOLATION products/x e v3 VIOLATION products/x, com o mesmo multiset. A refinação ainda esgota maxFiles, mas o census de recusa v2 roda em processo/sessão própria. Generalização C10: 3 mecanismos v2 distintos, 5 violações nas duas versões, multiset idêntico.\n\nR1-REQ-02 (produto perdido por timeout via empty()): CORRIGIDO. A sonda da R1 (N=3000, timeoutMs=5000) dá v3 VIOLATION em 5062 ms. Casos derivados:\n- C1: census morto pelo prazo depois de descobrir; a violação sobrevive pelo stream.\n- C8: refinação parada por SIGSTOP; VIOLATION em 3039 ms/3000.\n- C6: TOCTOU; a refinação sozinha seria PROVEN e o census conhecia o produto; saída VIOLATION com 0 provas, contra controle PROVEN com 401 provas.\n\nCorreção nova contra SPEC0240 §3.3/§4:\n(1) O census reproduz exatamente a v2. 64/64 casos com resultado e callbacks onProduct/onNegativeTarget idênticos ao helper 84d8. A guarda de carregamento é textualmente igual à v2. A refinação só acrescenta.\n(2) O census nunca é autoridade de prova. Status sempre UNKNOWN (UNKNOWN_NEGATIVE_CENSUS_ONLY), 0 provas, validation false. Perfil próprio node22-linux-v2-refusal-census-v1. Snapshot rejeitado na revalidação, inclusive quando lavado dentro de uma saída PROVEN. O pai só lê violações do census.\n(3) Prazo único. Os dois filhos recebem timeoutMs - (now - started): 3017–3039 ms para 3000 e 5062 ms para 5000. Nenhum limite mudou.\n(4) A união cobre timeout, erro, ENOBUFS, revalidação falha e prova inválida. Só aceita {file, PRODUCT_DEPENDENCY, products/...}: acrescenta, zera provas e marca installed UNKNOWN. Linha truncada é ignorada; stream forjado só piora o status.\n(5) Prazo antes de conhecer o alvo: UNKNOWN/0 provas, sem violação inventada (C2 com N=6000; C9).\n\nRegressões:\n- sondas R1 contra f22a: s02 60/60, s03 14/14, s04 14/14; s06 default/P1 byte-igual v2/v3 e perfil customizado UNKNOWN;\n- positivos MS01 PROVEN pelo caminho completo; argv do worker fechado;\n- vitest b6-0240 79/79; vitest b6-0236-semantic-engine 100/100.\n\nOpcionais (info):\n- OPT-01: o teste legado do worker parado agora para o census; falta um teste da refinação parada (verificado fisicamente em C8).\n- OPT-02: cada execução tem census + refinação + recomputação no mesmo prazo; a MS11 deve registrar a folga. Se faltar tempo, o risco é UNKNOWN.\n- OPT-03: a saída unida mantém validation.valid=true da refinação, sem marcador explícito de união.\n- OPT-04: o campo file das violações aceitas não é validado (só relatório; equivale à confiança da v2).\n- OPT-05: ENOBUFS por provas O(N²) com 2000 módulos fechados; preexistente na v2, fail-closed.\n- OPT-06: R1-OPT-03 (selectedKey sugar) inalterado.\n\nNão julgados: MS09; MS10 gates/38 hashes/consumidor; MS11 medição real; MS12; observação do pacote real Vitest (parte da MS06)."
+}

@@ -1,0 +1,17 @@
+import subprocess,pathlib,json,time,concurrent.futures
+out=pathlib.Path(__file__).parent
+w='/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(out/'privateHOME'),'TMPDIR':str(out/'TMP'),'TMP':str(out/'TMP'),'TEMP':str(out/'TMP'),'XDG_CONFIG_HOME':str(out/'privateHOME/config'),'XDG_CACHE_HOME':str(out/'cache'),'XDG_DATA_HOME':str(out/'privateHOME/data'),'XDG_STATE_HOME':str(out/'privateHOME/state'),'LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1','NO_COLOR':'1'}
+files=[w+'/'+x['path'] for x in json.loads((out/'builder-inputs/manifest.json').read_text())['writeScope']]
+checks={'synthetic':[node,w+'/node_modules/vitest/vitest.mjs','run','--config',str(out/'configs/review.config.mjs'),'--configLoader','native'],'typecheck':[node,str(out/'configs/typecheck.cjs')],'lint':[node,w+'/node_modules/eslint/bin/eslint.js','--config',w+'/eslint.config.js','--no-cache',*files],'format':[node,w+'/node_modules/prettier/bin/prettier.cjs','--check',*files]}
+def run(item):
+ name,argv=item; start=time.monotonic()
+ with (out/'reports'/f'{name}.stdout').open('wb') as so,(out/'reports'/f'{name}.stderr').open('wb') as se:
+  try: code=subprocess.run(argv,cwd=w,env=env,stdout=so,stderr=se,timeout=55).returncode
+  except subprocess.TimeoutExpired: code='TIMEOUT'
+ result={'argv':argv,'cwd':w,'env':env,'exit':code,'seconds':time.monotonic()-start}
+ (out/'reports'/f'{name}.json').write_text(json.dumps(result,indent=2)+'\n')
+ return name,code,result['seconds']
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+ for result in executor.map(run,checks.items()):print(result,flush=True)

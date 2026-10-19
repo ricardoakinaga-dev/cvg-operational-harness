@@ -1,0 +1,75 @@
+import pathlib,json,hashlib,subprocess,difflib,re,datetime,collections,os
+R=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness'); E=R/'docs/04_audit/evidence/HISO005-P2-SPEC-20261018/integration';T=pathlib.Path('/tmp/cvg-hiso005-p2-20261018/integration');d=json.loads((E/'collection.json').read_bytes());H=d['rootHead'];Z=d['candidateHead'];B=d['checkerConflict']['base'];F=d['phaseChanges'];env={**os.environ,'GIT_OPTIONAL_LOCKS':'0'}
+def sha(b):return hashlib.sha256(b).hexdigest()
+def write(p,b):
+ p=pathlib.Path(p);assert p.is_relative_to(E) or p.is_relative_to(T);assert not p.exists();p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b)
+def js(p,v):write(p,(json.dumps(v,ensure_ascii=False,indent=2)+'\n').encode())
+def blob(rev,p):return subprocess.check_output(['git','show',rev+':'+p],cwd=R,env=env)
+def gitblob(b):return hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+p='scripts/check-product-boundary.mjs';m=(E/'checker-three-way.review.txt').read_bytes();root=blob(H,p);cand=blob(Z,p)
+def catalog(b):
+ s=b.decode();a=s.index('const capabilityExceptions = [');b=s.index('\nconst ',a+len('const capabilityExceptions = ['));return s[a:b]
+# Text invariants of merge, not executable acceptance or semantic proof.
+conditions={
+ 'textMergeExit0':d['checkerConflict']['mergeFileExitCode']==0,
+ 'noConflictMarkers':not re.search(rb'^(<<<<<<<|=======|>>>>>>>|\|\|\|\|\|\|\|)',m,re.M),
+ 'rootLegacyCatalogBytesPreserved':catalog(m)==catalog(root),
+ 'inactiveExceptionsDeclaration':b'const exceptions = []' in m,
+ 'exceptionsAppliedFalse':b'exceptionsApplied: false' in m,
+ 'requestedExceptionRejected':b"reason: 'UNAPPROVED_EXCEPTION_REQUEST'" in m,
+ 'rootPinsPhysicalRegularCheckRetained':b'fs.lstatSync(target).isFile()' in m and b'fs.realpathSync(target) === target' in m,
+ 'rootLiteralExampleSiteRetained':b"const sdkExampleSite = 'examples/consumers/sdk-stdio/index.mts'" in m,
+ 'rootLiteralChildSiteRetained':b"file === 'examples/consumers/sdk-stdio/child.mts'" in m,
+ 'candidateInstalledReferenceOptionRetained':b'installedReference' in m,
+ 'noExceptionPush':b'exceptions.push' not in m,
+ 'noDiagnosticsFilterByException':b'diagnostics.splice(index, 1)' in m and m.count(b'diagnostics.splice(index, 1)')==1,
+}
+assert all(conditions.values())
+# Reconstruct merge against candidate using exactly original 5a->root edits; confirms no unrelated hand-edit.
+# Forward checker delta uses root committed/working preimage, already frozen in collection.
+checkerpatch=('diff --git a/'+p+' b/'+p+'\nindex '+gitblob(root)+'..'+gitblob(m)+' 100644\n'+''.join(difflib.unified_diff(root.decode().splitlines(True),m.decode().splitlines(True),fromfile='a/'+p,tofile='b/'+p))).encode()
+write(E/'forward-checker-merged.review-only.patch',checkerpatch)
+combined=(E/'forward-source-safe-subset.patch').read_bytes()+checkerpatch
+write(E/'forward-source-complete.review-only.patch',combined)
+check={'path':p,'sha256':sha(m),'bytes':len(m),'rootSha256':sha(root),'candidateSha256':sha(cand),'rootGitBlob':gitblob(root),'proposedGitBlob':gitblob(m),'mergeBase':B,'construction':'git merge-file -p --diff3 ROOT_HEAD CORE_FIX_5A CANDIDATE_B703; exit 0; no manual source edit','textInvariants':conditions,'independentReview':'NOT_RUN','runtimeChecks':'NOT_RUN','priorCertificationApplies':False}
+js(E/'checker-merge-preservation.json',check)
+# Structured promotion manifest and decision. Source promotion is outside this scout authority.
+owned=d['ownedPaths']
+for r in owned:
+ if r['path']==p:
+  r['forwardProposal']={'kind':'three_way_text_merge','postimageSha256':sha(m),'postimageGitBlob':gitblob(m),'candidateByteExact':False,'promotionState':'PREPARED_REVIEW_ONLY; root-specific code preserved; new claim/review/gates needed'}
+ elif r['path'].startswith('docs/'):
+  r['forwardProposal']={'kind':'retain_root_working_document','postimageSha256':r['rootWorking']['sha256'],'candidateByteExact':False,'promotionState':'DO_NOT_REPLACE; lead later adjusts present-tense status after actual promotion'}
+ else:r['forwardProposal']={'kind':'candidate_exact','postimageSha256':r['candidateCommit']['sha256'],'candidateByteExact':True,'promotionState':'PREPARED_REVIEW_ONLY; deploy all source paths atomically after preimage recheck'}
+counts=collections.Counter(x['category'] for x in d['rootTrackedDirty'])
+collisions=[
+ {'path':'docs/04_audit/evidence/empty-artifact-status.json','owner':'CLAUDE100-EXEC-20261017','kind':'ACTIVE_WRITE_RESERVATION','observed':'dirty; coordination line112 explicitly reserves additive rows','required':'writer release or writer-owned additive integration; re-read latest central before append; preserve every other row and byte'},
+ {'path':'docs/08_runtime/0803_runbook_gates_locais.md','owner':'DOCS-ISOLATION concluded + HISO005 lead current documentary updates; this scout readonly','kind':'DIRTY_DOCUMENT','observed':'root working already describes f11 and b703 and additional root-only reproduction/status paragraphs; frozen candidate older','required':'retain working bytes; no candidate whole-file copy; update only when lead promotes source'},
+ {'path':'scripts/check-product-boundary.mjs','owner':'HISO005 source future integration, PARE100 historical committed delta; no root-source-write grant in current P2 claim','kind':'COMMITTED_DIVERGENCE_NOT_DIRTY_FILE','observed':'root preimage clean but not equal5a; six PARE100 catalog groups plus changed canonical pin group, physical-pin hardening and literal example/child site rules would be lost by whole candidate copy','required':'use prepared three-way proposal, reconcile historical PARE claim at coordination1274/previous root promotion and claim source explicitly; independent review and fresh gates'},
+ {'path':'tests/conformance/harness-runtimes.conformance.test.ts, tests/consumers-sdk-session.test.ts, tests/doc-source-moves.test.js, tests/replay/execute-fixture.ts; tests/claude100/**, tests/support/**, tests/fixtures/**, tests/model-fault-server.test.ts, scripts/claude100-qualify.mjs','owner':'CLAUDE100-EXEC-20261017','kind':'DISJOINT_DIRTY_CODE_AND_NEW_SOURCE','observed':'tracked/untracked changes outside the 10 HISO owned code paths, matching released Q03/Q04 promotion; subsequent235 candidate reserved separately','required':'retain exactly; no whole branch merge/reset/stash or certify root; mixed checkout is not historical candidate'},
+ {'path':'docs/99_runtime_state.md, docs/20_master_execution_log.md, docs/30_backlog_master.md, docs/02_spec/0190_spec_validation.md, docs/03_build/0370_harness_product_isolation_backlog.md, docs/08_runtime/agent_coordination.md','owner':'HISO005-P2 lead plus historical shared entries; all readonly in scout lane','kind':'SHARED_DIRTY_CONTROLS','required':'lead records handoff/status in its own claim; scout writes only integration/**'},
+ {'path':'docs/03_build/0380_backlog_paridade_100_deepseek.md, docs/03_build/0381..0386 + catalogs, .agent/**, PARE100 W and CODEX100/CLAUDE100 candidates','owner':'PARE100/CODEX100/CLAUDE100 active programs','kind':'OTHER_ACTIVE_SURFACES','required':'retain all; no merge of predecessor branch or source promotion outside own path list'}]
+steps=[
+ {'order':1,'action':'Close this readonly preflight as IMPLEMENTED; lead reviews artifacts and exact claim collisions. No selfapproval or source promotion.','gate':'current scout lane only; satisfied by deliverables'},
+ {'order':2,'action':'Before integration, register new explicit claim for exact10sourcepaths, runbook block if needed and own gates/outputs. Reconcile legacy root-checker/PARE ownership; central writer remains separate. Refresh rootHEAD/index/working preimages, candidateHEAD/freeze and absence of all seven new files; abort on any drift.','gate':'claim and preimage equality; not granted/executed by scout'},
+ {'order':3,'action':'Prepare isolated integration on current root base retaining its manifests/lock/PARE changes and disjoint Claude sources. Compose0228 before0234, or use full forward patch after confirming each postimage. Carry three-way checker exactly as reviewed; retain root runbook and all other sources. Never merge/revert whole candidate/base branch.','gate':'proposed merged checker is new hash outside b703 certification; requires review, not blanket byteexact certification transfer'},
+ {'order':4,'action':'Fresh independent review of forward delta and merged checker preservation/0228 refusal; inspect existing regression source assertions, normal/strict equivalence, invalidoptin exit2, known product FAIL and identity still verifiedfalse; no fallbackonline/no exception revival.','gate':'future review and scoped controls in owned candidate; NOT_RUN here'},
+ {'order':5,'action':'In explicitly claimed isolated integration, Node22 typecheck/lint/npmtest + PG/E2E; compiled consumers and new resolution-specific reference only via existing approved recipe, private cache/resources. Use full required certification plus verify evidence hashes at candidate close under exclusive claim. Preserve exit1/INCOMPLETE as expected uncertainty, mismatch not suppressed.','gate':'future approved-scope gates, not run here; current reference cannot transfer across different lock/config'},
+ {'order':6,'action':'Only after scoped review/gates, promote exact approved10sourcepostimages to root after revalidating preimages/owners and run scoped verification with ownoutputs; root concurrent docs/code retain bytes. Update runbook present-tense status and lead ledgers.','gate':'new source promotion authority/claim required; no global rootcertification inferred'},
+ {'order':7,'action':'Catalog independent of source promotion: Claude writer either appends23rows or explicitly releases catalog. Re-read latest baseline; dedupe bypath exact; conflictingmetadata requires owner decision; append only missingrows preserving all oldbytes/order/metadata.','gate':'central ownership release/writer-owned append; prepared382-row proposal only valid for359-row sha8031b765...'},
+ {'order':8,'action':'Keep semantic P2 and receiver/loaders/compiled mirrors proof separate from mechanical P1 integration. New T3 semantic contract reviewed before BUILD; P3/newB6 after those proofs.','gate':'no B6/production acceptance; lead maps semantics independently'}]
+report={
+ 'schemaVersion':1,'kind':'HISO005-P2-INTEGRATION-readonly-preflight','status':'IMPLEMENTED','selfApproved':False,'observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+ 'scope':{'root':str(R),'candidate':str(R.parent.parent/'cvg-candidates/hiso005-0234-20261017'),'rootHead':H,'candidateHead':Z,'b6Ancestor':d['checkerConflict']['base'] if False else 'f11f762f6a176417a40d2d53bdb67c633d7e1cef','coreFix':B,'mergeBaseRootCandidate':d['mergeBase'],'ancestry':d['ancestry'],'sourceWrites':False,'candidateWrites':False,'catalogWrites':False,'indexWrites':False,'testsGatesInstallsNetworkPG':False,'descendants':0,'writeAllowlist':[str(E)+'/**',str(T)+'/**'],'authority':'user scout delegation + agent_coordination first HISO005-P2 claim; no coordinator edits'},
+ 'result':{'ownedPathsIncludingDocument':len(owned),'requiredCodePaths':len(owned)-1,'mechanicallyCandidateExactPaths':len(d['safeSubsetPaths']),'mergedCheckerPaths':1,'retainDirtyRunbook':True,'completeForwardPrepared':True,'promotionPerformed':False,'rootCertified':False,'B6Approved':False,'semanticProofGranted':False,'sourceFreezeR2All9MatchCandidateCommitAndDisk':all(r['candidateFreezeMatches'] is True for r in owned if r['candidateSourceFreezeR2Sha256']),'sourcePreimagesCleanAll10':all(r['rootCleanOnPath'] for r in owned if not r['path'].startswith('docs/'))},
+ 'rootDirty':{'trackedCounts':dict(counts),'tracked':d['rootTrackedDirty'],'statusArtifact':'root-status.initial.txt','untrackedSummary':'Root contains new Claude100 source and multiple active docs/evidence bundles; full normalstatus frozen. Four tracked test changes mean root is not docs-only dirty.'},
+ 'ownedSourceAndDocumentPaths':owned,'phaseChanges':d['phaseChanges'],'dependencies':d['dependencies'],'staticRelativeImports':d['staticImports'],
+ 'baseDependenciesDecision':{'retainEarlierRootFixes':True,'buildRuntimeAlreadyMatches5aAndCandidate':True,'unchangedHelpersAlreadyPresent':True,'noNeedToCopyEarlierBasePaths':True,'resolutionDiverges':['package.json','package-lock.json','packages/platform/package.json'],'ciBarDiverges':'root retains maxBuffer16MiB handling; do not overwrite','rootManifestExtraDependencies':'platform @cvg/harness and @cvg/harness-contracts retained; lock/config identity differs from frozen candidate','referenceReuse':'DO_NOT_TRANSFER cd897a3831dbe0713eeb2e251f327dfb55d203149f4c739c76c437b27df43cdf to root; resolution fingerprints differ, new approved-scope recipe needed later','exactByteSourceCopy':'all code paths except checker are exact b703 bytes; checker is new merged output requiring independent review/gates'},
+ 'checkerMerge':check,'checkerRootOnlyHunks':d['rootOnlyCheckerHunks'],'rootOnlyLegacyExceptionIds':d['rootOnlyLegacyExceptionIds'],'collisionWithActiveOwners':collisions,
+ 'patches':[{'path':'forward-source-safe-subset.patch','paths':d['safeSubsetPaths'],'complete':False,'sha256':sha((E/'forward-source-safe-subset.patch').read_bytes()),'warning':'partial source patch; not runnable alone; excludes checker and dirtyrunbook'}, {'path':'forward-source-complete.review-only.patch','paths':[r['path'] for r in owned if not r['path'].startswith('docs/')],'completeCodeOnly':True,'sha256':sha(combined),'applyAllowed':False,'warning':'concrete full source proposal, 9exact +1cleantextmerge; no runtime gates or independent approval; rootrunbook omitted and retained'}, {'path':'central-catalog-additive.review-only.patch','applyAllowed':False,'sha256':sha((E/'central-catalog-additive.review-only.patch').read_bytes()),'reason':'active Claude100 writer'}],
+ 'centralCatalog':d['catalog'],'promotionOrderAndGates':steps,'notExecuted':['source integration','Git index mutation','commits','install','tests','gates','network/apps','PostgreSQL/Docker','descendants','root/candidate certification'],
+ 'commandsArtifact':'collection.json#commands','preflightLimit':'Point-in-time read-only observation; no certification of mixed root or semantic proof. Future drift invalidates prepared preimages and catalog proposal. Stop after this preflight.'}
+# Correct actual candidate absolutepath without cwd-derived assumptions.
+report['scope']['candidate']='/home/ricardo/cvg-candidates/hiso005-0234-20261017'
+js(E/'integration-preflight.json',report)
+print(json.dumps({'completePatchSha256':sha(combined),'mergedCheckerSha256':sha(m),'allTextInvariants':all(conditions.values()),'report':'integration-preflight.json','status':'IMPLEMENTED'},indent=2))

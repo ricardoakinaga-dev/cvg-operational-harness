@@ -1,0 +1,50 @@
+# Discovery0021 — funcionalidades Codex no motor nativo do harness
+
+Task DX100-G04; documentação T1,18/10/2026. Estado **VALIDATED_FOR_PRD_DOCUMENTATION_LEAD_T1**. A direção já escolhida pelo usuário nos planos0384/0385/0386 é incorporar integralmente as funções do openai/codex ao Operational Harness. Este documento explicita o problema e suas evidências para o pipeline CVG. A validação Lead T1 autoriza somente derivar o PRD documental deste escopo; não é revisão humana de SPEC, autorização de BUILD ou gate operacional do controller compartilhado.
+
+## Problema e pessoas atendidas
+
+Desenvolvedores de clientes, operadores e integradores precisam acessar no harness as capacidades de interação, execução, contexto, ferramentas, sessões, mídia, colaboração, operação e integração oferecidas pelo Codex. O harness já possui motor governado e portas reutilizáveis, mas isso não demonstra a presença ou a equivalência de todas as funções nos caminhos públicos.
+
+Acoplar a execução de um Codex instalado a uma fachada local deixaria o resultado dependente do programa externo. A necessidade escolhida é incorporar o comportamento ao motor nativo e expô-lo pelos hosts e clientes, com isolamento de consumidor, identidade, policy, approval, orçamento, journal e recuperação verificáveis. Conforme a [ADR010](../architecture/adrs/ADR-010-harness-product-isolation.md), o núcleo permanece infraestrutura reutilizável; domínio e prontidão do Assistente de Plantão pertencem ao produto isolado.
+
+## Resultado integral escolhido
+
+O [plano executivo0384](../03_build/0384_plano_executivo_paridade_codex.md), o [roadmap0385](../03_build/0385_roadmap_paridade_codex.md) e o [backlog0386](../03_build/0386_backlog_paridade_codex.md) conservam22famílias/49cartões/10fases. O [catálogo atual](../03_build/tracking/codex100_catalog_v1.json) ampliou as379obrigações funcionais iniciais para487, mantendo22controles CVG separados. As adições não substituem requisitos anteriores ou retiram variantes difíceis da meta.
+
+Cada função precisa de comportamento observável, variantes aplicáveis, fonte e referência identificadas, execução real da candidata, comparador que rejeite desvios e recibo auditável. Classes de equivalência literal e governada devem ser declaradas e decididas; um bloqueio CVG obrigatório não vira implementação literal de bypass. Nenhuma média entre programas PAR/Claude/Codex ou percentual de arquivos existentes satisfaz a meta. Ausência de acesso, comportamento desconhecido e teste não executado continuam pendências explícitas.
+
+## O que a inspeção demonstrou
+
+A [auditoria0620](../04_audit/0620_codex_capabilities_2026-10-17.md) e os pacotes G01 vinculam a superfície ao fonte oficial pinado8d9f6466ff0294785d56f55b1fe363d132fe4133. Há contratos públicos, métodos experimentais, SDKs distintos, CLI/TUI, configurações, contribuições dinâmicas e variantes de plataforma. O levantamento documental já propôs360casos para179requisitos públicos e registrou54eixos ainda sem cenário próprio. Contrato de fonte não prova comportamento executado nem fecha todas essas lacunas.
+
+A preparação G02 autenticou toolchain, dependências e pré-requisitos nativos; compilou e inspecionou estaticamente por REA o helperbwrap separado. A CLI principal ainda está em compilação release após recuperação delimitada de memória/storage. A existência do helper e do Codex instalado0.163.0 não autentica a CLI do pin. As [sondas keyless](../04_audit/evidence/CODEX100-EXEC-20261017/g02/keyless-cli-probe/README.md) só podem executar após atestado do mesmo ELF e aceite do HOW. Nenhum dos487requisitos funcionais ou22controles possui recibo de paridade nesta etapa.
+
+O [diagnóstico nativo real](../04_audit/evidence/CODEX100-EXEC-20261017/g03/native-delivery-probe/REPORT.md) usou a factory do harness e um READ cujo corpo gerou um nonce ausente do input/decisões fixas. O próximo StepContext recebeu esse resultado, mas a chamada RESPONSE de composição final por responseIntent não o recebeu. É uma falha observada desse caminho, sem afirmar que toda chamada de modelo ou resposta direta perde contexto. A [disposição de reuso](../04_audit/evidence/CODEX100-EXEC-20261017/g03-native-gap-reuse-disposition.json) identifica mecanismo PAR0224 já construído em candidata própria; sua integração e qualificação no caminho Codex continuam necessárias.
+
+A [proposta de compatibilidade wire](../04_audit/evidence/CODEX100-EXEC-20261017/g04/wire-contract-proposal/decision.md) registra diferenças concretas com SDKv1: envelope sem jsonrpc obrigatório, initialize distinto de sdk.hello, IDs i64 além de Number seguro, sentidos de requests/notifications e escopos de capabilities. São restrições para o desenho e hipóteses falsificáveis por runtime, sem novo protocolo aprovado ou implementação pública iniciada.
+
+## Primeira necessidade verificável
+
+A primeira jornada preserva a sequência completa: abrir sessão; READ real; propor WRITE que fica retida; decidir aprovação pela porta institucional; retomar a intenção exata; entregar stream incremental governado; reiniciar em outro processo sem repetir efeito confirmado. Também precisa exercitar cancelamento, falhas de persistência/ACK, concorrência e escritor com fence antigo. Uma demonstração em memória ou com resposta pronta fatiada não satisfaz durabilidade ou stream.
+
+A [proposta da primeira jornada](../04_audit/evidence/CODEX100-EXEC-20261017/g04/first-native-journey/contract-proposal.md) contém14resultados e14estímulos iniciais, com decisões de engenharia ainda abertas. O mecanismo de resultado completo pertence a PAR0224; sessão durável e journal precisam reconciliar os contratos0221/0225 e suas candidatas/aceites. Não criar store/migration ou mutador de aprovação paralelo para contornar dependência. A adoção publicada/default0226 foi adiada pelo usuário e permanece fora da autoridade desta preparação.
+
+## Hipóteses e riscos decisivos
+
+| Hipótese ou risco                                                 | Como será resolvido ou recusado                                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Fonte e executável têm comportamento correspondente               | Fonte/lock/compiler/features/ELF hash-bound e captura real do pin; versões do instalado/SDK não são intercambiáveis por nome                           |
+| Reuso existente satisfaz a função no caminho público              | Conferir bytes, wiring, schema, composição, hosts e testes atuais; aceite em memória de outro programa não transfere durabilidade ou crédito Codex     |
+| Cliente compatível pode consumir os mesmos envelopes              | Casos reais de inicialização, IDs, erros, eventos, tipos, framing e reconexão; um hello ou schema positivo não fecha o contrato                        |
+| Aprovação/restart preservam uma única intenção e o fato de efeito | Corpos/contadores duráveis e dois processos reais; perda de ACK/commit/fence permanece incerta até reconciliação, sem retry automático                 |
+| Capacidades externas/plataformas podem ser qualificadas           | Dono e acesso por variante, fixtures sintéticas e gates aplicáveis; indisponibilidade não exclui a função nem gera PASS                                |
+| O diagnóstico e o comparador são confiáveis                       | Evidências fora dos mounts graváveis do alvo, controles de adulteração, primeira causa e cleanup comprovados; revisão estática não é runtime observado |
+
+Usar somente dados sintéticos. Nenhuma ação clínica, financeira, prontuário definitivo, agenda real automática, RAG sem fonte institucional aprovada ou produção irrestrita pertence a esta autorização. Efeitos sensíveis continuam exigindo approval/handoff e os gates próprios. Sem mudança de domínio, release ou redução silenciosa de controles para buscar paridade.
+
+## Encaminhamento documental
+
+A [validação documental própria](../04_audit/evidence/CODEX100-EXEC-20261017/g04/canonical-product-definition/discovery-review.json) confronta problema/resultado/usuários/escopo/evidências/limites com o pedido e os planos. Registrar o aceite T1 no [índice canônico Discovery](0090_discovery_validation.md) antes de derivar o PRD da primeira qualificação. O PRD precisa manter a meta integral e dar critérios observáveis para a primeira jornada; a SPEC posterior deve decidir tipos, transações, owners, limites, oráculos, localização e wiring antes de BUILD. Mudanças públicas/schema/segurança/identidade/policy/approval exigem a revisão humana T3 da SPEC concreta. Este documento não a solicita nem a presume.
+
+G01/G02/G03/G04 permanecem em andamento nos respectivos recortes; as pendências não tornam o objetivo menor. A continuidade executiva está no [ExecPlan próprio](../../.agent/plans/codex100-exec-20261017.md) e no [handoff](../08_runtime/handoffs/codex100_exec_20261017.md), sem sobrescrever ledgers de outros agentes.

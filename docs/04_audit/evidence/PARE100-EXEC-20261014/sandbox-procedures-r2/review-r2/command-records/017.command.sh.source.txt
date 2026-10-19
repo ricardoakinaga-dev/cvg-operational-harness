@@ -1,0 +1,42 @@
+python3 - <<'PY'
+import pathlib,json,hashlib,sys,traceback,re
+O=pathlib.Path.cwd();P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-packet')
+def sha(p):
+ h=hashlib.sha256()
+ with open(p,'rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return h.hexdigest()
+exitcode=0;stderr='';summary={}
+try:
+ pre=json.load(open(O/'pre-fingerprint.json'));records=[]
+ for r in pre['records']:
+  actual=sha(r['path']);records.append({**r,'preActual':r['actual'],'actual':actual,'match':actual in r['expected'],'equalPre':actual==r['actual']})
+ members=sorted(str(p.relative_to(P)) for p in P.rglob('*') if p.is_file());manifest={**pre['manifest'],'preActual':pre['manifest']['actual'],'actual':sha(pre['manifest']['path'])};manifest['equalPre']=manifest['actual']==manifest['preActual']==manifest['expected']
+ integrity={'passed':all(r['match'] and r['equalPre'] for r in records) and members==pre['membership'] and len(members)==29 and manifest['equalPre'],'records':records,'counts':pre['counts'],'manifest':manifest,'membershipPre':pre['membership'],'membershipPost':members,'membershipEqual':members==pre['membership'],'manifestIdentities':[{k:r[k] for k in ['path','actual','preActual','equalPre']} for r in records if r['group']=='packet-manifest' and pathlib.Path(r['path']).name in ['source-manifest.json','packet-manifest.json','external-inputs.json','constraints.json']],'forbiddenMutableOrigin':'NOT_OPENED_NOT_HASHED','additionalTechnicalSources':[],'firstCallProtocolCompliant':False,'preHashSequence':'Completed across first three shells; all hashes before semantic reads','semanticHashOnlyRestrictions':'All non-primary provenance, sourceSpecs and frozenD12Origin stayed hash-only.'}
+ (O/'source-integrity.json').write_text(json.dumps(integrity,indent=2)+'\n')
+ assert integrity['passed'],'posthash mismatch'
+ validation=json.load(open(O/'static-validation.json'));assert all(validation['checks'].values())
+ verdict=json.load(open(O/'verdict.json'));verdict['sourceIntegrity']='PASS; every primary/live/copy, external, constraint, packet path and manifest identity unchanged; membership 29 equals pre';verdict['protocolDeviations'].append('Final raw tool transport metadata and artifact-manifest self-hash are delegated to Lead to avoid recursive self-logging. Final Python stdout/stderr and exit are recorded before artifact inventory.');(O/'verdict.json').write_text(json.dumps(verdict,indent=2)+'\n')
+ captures=sorted((O/'command-records').glob('*.capture.json'));truncated=[]
+ for path in captures:
+  capture=json.load(open(path));output=capture['toolResult']['output'];markers=re.findall(r'.{0,60}(?:tokens truncated|output truncated|truncated output).{0,80}',output)
+  if markers:truncated.append({'capture':str(path.relative_to(O)),'markers':markers})
+ trunc={'toolReturnedTruncationMarkers':truncated,'rendering':'Functions presentation also truncated some large outputs independently. Exact tool-returned output is preserved in capture.json; this does not recover discarded original bytes.','privateOutputFormat':'capture.json preserves merged output as an exact JSON string. merged.txt is a readable LF-terminated rendering; stdout/stderr are not separately attributable in exec_command.','finalCapture':'017 self-records Python stdout, stderr and exit; outer transport metadata delegated to Lead.'};(O/'stream-format.json').write_text(json.dumps(trunc,indent=2)+'\n')
+ summary={'verdict':'REVISE','findings':1,'severity':'MEDIUM','posthashPassed':True,'frozenFiles':29,'primaryPairs':11,'externalPaths':55,'constraints':5,'originalRows':427,'proposed':140,'pending':287,'proceduresNotRun':12,'mutations':4,'reportSHA256':sha(O/'report.md'),'verdictSHA256':sha(O/'verdict.json'),'sourceIntegritySHA256':sha(O/'source-integrity.json'),'artifactManifestSelfHash':'DELEGATED_TO_LEAD'}
+except Exception:
+ exitcode=1;stderr=traceback.format_exc();summary={'completed':False,'error':stderr}
+stdout=json.dumps(summary,ensure_ascii=False)+'\n'
+(O/'command-records/017.capture.json').write_text(json.dumps({'commandFile':'command-records/017.command.sh','workdir':str(O),'exitCode':exitcode,'stdout':stdout,'stderr':stderr,'streamFormat':'Python self-capture; outer tool envelope delegated to Lead; no target execution'},indent=2)+'\n')
+(O/'command-records/017.stdout.txt').write_text(stdout);(O/'command-records/017.stderr.txt').write_text(stderr)
+artifacts=[];empties=[]
+for path in sorted(O.rglob('*')):
+ if path.is_file() and path!=O/'artifact-manifest.json':
+  size=path.stat().st_size
+  if size:artifacts.append({'path':str(path),'relative':str(path.relative_to(O)),'sha256':sha(path),'size':size})
+  else:empties.append(str(path))
+(O/'artifact-manifest.json').write_text(json.dumps({'algorithm':'SHA-256','artifacts':artifacts,'nonemptyCount':len(artifacts),'emptyPaths':empties,'excluded':['artifact-manifest.json'],'selfHash':'DELEGATED_TO_LEAD','outputRoot':str(O)},indent=2)+'\n')
+sys.stdout.write(stdout)
+if stderr:sys.stderr.write(stderr)
+sys.exit(exitcode)
+PY
+

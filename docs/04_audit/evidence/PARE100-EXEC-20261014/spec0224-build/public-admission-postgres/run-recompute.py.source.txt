@@ -1,0 +1,21 @@
+import json,hashlib,subprocess,sys,shutil,datetime
+from pathlib import Path
+base=Path(__file__).parent;source=base/'builder-r1/runs/r3';dest=base/'lead-recompute';dest.mkdir(exist_ok=True);checks=[]
+def execute(name,run,expected):
+ p=subprocess.run([sys.executable,str(base/'recompute.py'),str(run)],capture_output=True);(dest/(name+'.stdout.log')).write_bytes(p.stdout);(dest/(name+'.stderr.log')).write_bytes(p.stderr)
+ assert (p.returncode==0)==expected,(name,p.returncode,p.stderr[-600:]);checks.append({'name':name,'exit':p.returncode,'expectedPass':expected})
+ if expected:(base/'lead-recompute.json').write_bytes(p.stdout)
+execute('actual-final',source,True)
+for name in ['domain-digest','physical-wire','committed-order','ghost-debit']:
+ run=dest/name;shutil.copytree(source,run,dirs_exist_ok=True)
+ case=run/'cases/free-2000-prior-false-ASCII';positive=run/'cases/free-20000-prior-false-ASCII'
+ if name=='physical-wire':
+  path=case/'physical-checkpoints.json';d=json.loads(path.read_text());d[0]['wire']['sqlTextSha256']='0'*64
+ elif name=='committed-order':
+  path=positive/'observed.json';d=json.loads(path.read_text());d['calls'][0]['priorCASEvent']=d['calls'][0]['completeEntry']
+ else:
+  path=case/'observed.json';d=json.loads(path.read_text())
+  if name=='domain-digest':d['after']['checkpointWithoutFixturePadding']['digest']='0'*64
+  else:d['result']['modelCalls']+=1
+ path.write_text(json.dumps(d,indent=2)+'\n');execute(name,run,False)
+report={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'PASS','realEvidenceVerified':True,'negativeControlsRejected':4,'runs':checks,'verifierSha256':hashlib.sha256((base/'recompute.py').read_bytes()).hexdigest(),'scope':'Knownbad evidencecontrols, no source/nativecode mutation; not independent runtime rerun.'};(base/'lead-controls.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))

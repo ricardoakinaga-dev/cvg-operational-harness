@@ -1,0 +1,1 @@
+import "./other.js"; export const x=1;

@@ -1,0 +1,221 @@
+{
+ "round": 1,
+ "subject_sha256": "3ff69a68188d24335565f6f129b13c0f9b9be543b4265a0f149508357962e06c",
+ "verdict": "REVISE",
+ "subject_hash_check": "source-freeze-r1.json e os 27 arquivos listados (sha256 e modo) conferidos no inicio e no fim da revisao: 0 divergencias.",
+ "findings": [
+  {
+   "id": "R1-F01",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "python/observer.py",
+   "line": 447,
+   "title": "KNOWN_SIGNAL_TERMINATION aceita telemetria ausente ou INVALID do peer",
+   "evidence": "reconcile() decide KNOWN_SIGNAL_TERMINATION apenas com SIGNAL do adapter, END(complete=false) do adapter e END do driver (observer.py:441-448). O status do peer (MISSING, NO_TERMINAL, INVALID) nao entra em `reasons` nem no predicado, e um INVALID declarado por qualquer papel so vira reason se for `violation`. supervisor.diag_checks aceita `p.terminal == 'INVALID'` como 'peer_received_forwarded_signal' (supervisor.py:715), e DIAG-TS-ABORT nao confere o peer (supervisor.py:733-737). Nas 3 tentativas com sinal o peer ficou SIGNAL_WITHOUT_END, entao o furo nao disparou, mas o codigo o aceita.",
+   "impact": "Um peer morto sem frame (SIGKILL, teardown), um peer que declarou INVALID (prazo, cap, controle inesperado) ou um peer que nunca iniciou produzem o veredito esperado de DIAG-PY-TERM, DIAG-TS-ABORT e SDKTS10. Isso contraria transport-topology relay.signal ('missing telemetry ... means INVALID_CAPTURE') e interface-bindings terminal_frames.",
+   "fix": "Em reconcile, qualquer papel com status INVALID, MISSING, NO_TERMINAL ou VIOLATION resulta em INVALID_CAPTURE. KNOWN_SIGNAL_TERMINATION passa a exigir peer END ou SIGNAL_WITHOUT_END com saida testemunhada (alive=False). Remover `or p.terminal == 'INVALID'` de supervisor.py:715 e acrescentar a mesma checagem do peer em DIAG-TS-ABORT."
+  },
+  {
+   "id": "R1-F02",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "node/adapter-typescript",
+   "line": 41,
+   "title": "Commit desconhecido em voo no fim da janela de sinal vira KNOWN_SIGNAL_TERMINATION",
+   "evidence": "signalTimer (adapter-typescript:50) chama finishSignal aos 90 ms sem checar `active`. finishSignal escreve END(complete=false) com summaries() do ledger (l.41). Se um writeChunk esta pendente, com libuv aguardando POLLOUT por contrapressao do SDK ou do peer, o write pode concluir no SO na fase poll. O callback, e portanto ledger.commit e FORWARD_COMMIT, so roda na fase pending da iteracao seguinte, depois dos timers. O END sai sem esse chunk em committed, embora os bytes ja tenham chegado ao destino. O observer so ve read>committed e aceita (observer.py:277-279, 447): nao distingue 'nao escrito' de 'escrito sem commit', e SIGNAL.inflight nao entra no veredito.",
+   "impact": "Um commit escondido pelo sinal e aceito como terminacao conhecida. Isso viola interface-v1 semantics ('Unknown partial on error invalidates') e a topology ('unknown commit window means INVALID_CAPTURE').",
+   "fix": "No adapter Node, se active>0 quando a janela expira, declarar INVALID('in-flight forward with unknown completion at signal deadline') em vez de END. No observer, END apos SIGNAL com read_bytes diferente de committed_bytes em typescript resulta em INVALID_CAPTURE. No Python, os.write nao bloqueante de ate 2048 bytes num pipe e tudo-ou-EAGAIN, entao o pendente e conhecido; documentar essa diferenca."
+  },
+  {
+   "id": "R1-F03",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "python/adapter-python.py",
+   "line": 140,
+   "title": "O limite de 100 ms do sinal nao e imposto nem medido a partir da entrega",
+   "evidence": "O adapter Python so testa state['signal'] no topo do laco (l.140-141). Na iteracao em que select retorna por wake_r, ele ainda faz leituras novas (l.160-171) e emits RAW_READ/FORWARD_COMMIT; cada emit pode esperar EAGAIN ate o prazo do caso (channel.py:433-441, limit=self.deadline). So depois sai o SIGNAL. O observer mede apenas SIGNAL->END no relogio do proprio papel (observer.py:277-279). O supervisor registra o envio do SIGTERM (supervisor.py:518-524, acao SIGTERM_ADAPTER) e tem recv_ns de cada frame, mas nao compara os dois. Em 05988f48932b, SIGNAL->END foi 0,087 ms; a latencia envio->SIGNAL nunca foi verificada. O peer Python (fixture-rpc.py:183-186) tem o mesmo padrao.",
+   "impact": "Um sinal adiado por segundos sob contrapressao do FIFO de eventos, ou seguido de leituras novas, ainda resulta em KNOWN_SIGNAL_TERMINATION/DIAG_PASS. A regra 'Missing100ms commit deadline invalidates' nao esta provada, e H09 fica sem qualificacao.",
+   "fix": "Checar o sinal logo apos select e antes de cada leitura. Registrar time.monotonic() no handler e limitar o laco EAGAIN de emit a signal_t+0,09 quando houver sinal pendente; se now-signal_t>0,1 antes do END, declarar INVALID. No supervisor, para DIAG-PY-TERM, exigir recv(SIGNAL)-t(SIGTERM)<=100 ms e recv(END)-t(SIGTERM)<=100 ms, e passar a usar recv_ns no observer, nao so o mono_ns autodeclarado."
+  },
+  {
+   "id": "R1-F04",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "python/supervisor.py",
+   "line": 656,
+   "title": "O veredito ignora o status de saida do driver (rc do systemd-run) e, no Python, a saida do adapter",
+   "evidence": "checks['service_exited'] = rc is not None (l.656). O rc propaga a saida do driver (125 em 83877570774a e b491ac832d0f, 255 em 6a2a2a432465), mas PASS e KNOWN_SIGNAL nao o exigem. python-driver.py:385-391 e ts-driver.mjs:138-140 emitem END e so depois chamam ch.close() (read_controls, decoder.finish, 'unconsumed control'); uma falha nesse ponto sai com 125 sem frame, porque terminal ja esta setado. adapter-python.py:184-196 tem o mesmo padrao. O ramo Python de reconcile nao compara OWN_CLIENT_CLOSED.returncode com o status do END do adapter; o ramo TS compara (observer.py:397-401).",
+   "impact": "Uma barreira que envia um controle a mais, um frame de controle truncado ou outra falha apos o END sai como PASS. Em modo SDK Python, a saida do adapter nunca e conferida.",
+   "fix": "Exigir rc==0 para PASS e KNOWN_SIGNAL_TERMINATION (o driver deve terminar normalmente). Em todos os papeis, fazer read_controls, decoder.finish e a checagem da fila ANTES de escrever END, fechando os FDs depois. No ramo Python de reconcile, comparar returncode com child_exit_code/child_signal do END completo do adapter."
+  },
+  {
+   "id": "R1-F05",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "source-freeze-r1.json",
+   "line": 147,
+   "title": "A tabela diagnostic_attempts omite a deriva do supervisor do host e superestima a qualificacao",
+   "evidence": "A tabela so lista role_sources_differing_from_freeze (as fontes de papel batem com os profile-manifest). Ja o command.json de a7a36bffa213 (PY-TERM), c2aa18debe4d (TS-LARGE) e f0f8d8dae307 (TS-ABORT) registra python/supervisor.py diferente do congelado (d97a6cd4...). f09e572cd41c (PY-RPC) e 4a7368df759f (TS-ECHO) nem registram host_sources, e diagnostics/source-identity-r1.json mostra o supervisor c9e094c8..., diferente do congelado. post_diagnostic_deltas nao menciona supervisor.py. Resultado: a unica prova real da barreira cancel/reply (H08, PY-RPC), a do loader e do gate de transpile (H05, TS-ECHO) e todas as provas TS rodaram com supervisor, channel.py/channel.cjs e adapter-typescript diferentes dos congelados. So 6a2a2a432465 e b491ac832d0f rodaram fontes congeladas de papel e de host. Alem disso, o qualified_by do delta 1 (l.264) cita DIAG-PY-KILL/STALL para node/channel.cjs, que eles nao executam.",
+   "impact": "Quem ler o freeze pode tomar o DIAG_PASS de PY-RPC e TS-* como qualificacao das fontes congeladas (barreiras e veredito do supervisor, caminho de sinal Node), o que nao ocorreu.",
+   "fix": "Acrescentar host_sources_differing_from_freeze (supervisor/observer) por tentativa. Marcar PY-RPC e TS-ECHO como 'identidade do host nao registrada (snapshot posterior c9e094...)'. Listar o delta de supervisor.py (gatilho >=16384 e signal_mid_large_stream). Restringir o qualified_by do channel.cjs aos selftests. Declarar H05, H08 e H09-TS qualificados so por identidades anteriores."
+  },
+  {
+   "id": "R1-F06",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "python/channel.py",
+   "line": 27,
+   "title": "O limite case_artifacts (2 MiB por caso) foi relaxado para 2 MiB por papel, e a saida do servico e truncada sem aviso",
+   "evidence": "interface-v1 limits.case_artifacts=2097152, e a topology diz que 'Capture channels consume the same case artifact budget'. channel.py ROLE_BYTES (l.27, 430, 463), channel.cjs ROLE_BYTES (l.21, 281, 299) e observer.RoleLog (l.158) aplicam 2 MiB por papel; nada soma os tres papeis, os controles, service-stdout/err e o result. supervisor.py:600-601 corta service stdout/stderr em 64 KiB sem razao nem flag.",
+   "impact": "Um caso pode produzir mais de 6 MiB de captura e passar; o contrato congelado foi relaxado, e ha truncamento silencioso de evidencia.",
+   "fix": "Criar um contador agregado no supervisor (eventos dos tres papeis, controles e saida do servico) com INVALID_CAPTURE ao exceder 2097152. Quando a saida do servico exceder o cap, registrar e invalidar em vez de truncar em silencio."
+  },
+  {
+   "id": "R1-F07",
+   "severity": "P2",
+   "mandatory": true,
+   "file": "node/extension-loader.mjs",
+   "line": 121,
+   "title": "A identidade dos modulos SDK emitidos nao e verificada antes do import (sem fechamento do diretorio nem hash do manifesto)",
+   "evidence": "decide() libera emitted_dir+<nome>.js so pelo nome listado em node-loader.json.emitted (l.118, 121-127). Os hashes desse mapa nunca sao comparados com os arquivos nem com admission.files (validateConfig, l.102, so valida o formato). sdkCase (ts-driver.mjs:23-25) exige apenas index.js e package.json em admission.files, e nao ha equivalente a channel.verify_tree para /profile/sdk-emitted/. Os builtins liberados para pais emitidos sao LOADER_BUILTINS (inclui node:net, node:crypto e node:util), mais amplos que allowed_imports do transpile (SDK_BUILTINS).",
+   "impact": "Um modulo emitido que esteja no loader mas falte na admissao, ou um arquivo extra no diretorio, seria importado sem verificacao de hash. Isso contraria 'Hash drift in ... emitted file ... rejected before importing SDK' (containment-and-observer) e o loader_contract ('manifest-listed emitted .js').",
+   "fix": "Antes do import em sdkCase, exigir para cada nome em emitted que admission.files['/profile/sdk-emitted/'+nome] === emitted[nome], e exigir fechamento exato do diretorio (emitted mais package.json, sem symlink nem arquivo especial). Restringir os builtins de pais emitidos a SDK_BUILTINS e acrescentar selftests negativos."
+  },
+  {
+   "id": "R1-F08",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "node/ts-driver.mjs",
+   "line": 136,
+   "title": "TS sem barreira final; o plano de TS02/03/07/08 ignora o kill do finally do SDK; role_done aceita SIGNAL sozinho",
+   "evidence": "ts-driver emite END e sai logo apos a API (l.136-139), sem esperar adapter e peer. O driver e o PID 2 do bwrap, e sua saida encerra o servico (KillMode=control-group: SIGTERM aos restantes e SIGKILL apos 3 s). exec.ts faz child.kill() no finally quando o gerador fecha cedo (erro de parse ou turn.failed com break), entao em SDKTS02/03/07/08 o adapter tende a ser morto pelo SDK enquanto o peer espera RELEASE_EXIT, mas case-plan (supervisor.py:205-207) descreve RELEASE_EXIT apos REPLY_WRITTEN. supervisor.role_done (l.485) aceita um SIGNAL como termino, e o observer nao ordena sinais entre papeis.",
+   "impact": "Esses casos ficam com desfecho dependente de corrida, e um SIGTERM de teardown e indistinguivel do sinal do caso.",
+   "fix": "ts-driver passa a aguardar RELEASE_EXIT, enviado apos END/INVALID ou saida testemunhada de adapter e peer, nao apos SIGNAL sozinho. Atualizar o plano e o resultado esperado desses quatro casos. O observer passa a rejeitar SIGNAL recebido depois do END do driver."
+  },
+  {
+   "id": "R1-F09",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "diagnostics/05988f48932b-DIAG-PY-TERM/events-adapter.jsonl",
+   "line": 1,
+   "title": "Escrita parcial e stderr do peer Python nunca exercitados",
+   "evidence": "Ha 0 FORWARD_COMMIT parciais nos 9 events-adapter.jsonl. fixture-rpc.py nunca escreve em fd 2, e DIAG-PY-LARGE nao foi executado. Chunks de 2048 bytes num pipe sao atomicos (<= PIPE_BUF), entao o ramo de commit parcial e inalcancavel em pipes. O stderr so foi exercitado no TS (ECHO e LARGE, com o adapter anterior).",
+   "impact": "O item 'Two-direction raw identity with partial writes, separate stderr' fica so parcialmente qualificado.",
+   "fix": "Registrar H03 como parcial e documentar que nao ha escrita parcial com <= PIPE_BUF. Incluir stderr no peer Python num diagnostico futuro."
+  },
+  {
+   "id": "R1-F10",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/python-driver.py",
+   "line": 50,
+   "title": "Truncamento por caracteres, mas validacao por bytes UTF-8",
+   "evidence": "error_data usa str(exc)[:360] e [:200] (l.50-51); ts-driver.mjs:16-17 usa slice(0,360/200); invalid() usa [:400] (channel.py:520, channel.cjs:341). Os validadores exigem <=400/<=200 bytes UTF-8.",
+   "impact": "Uma mensagem nao ASCII faz o API_ERROR falhar na validacao e o caso vira INVALID (fail-closed, mas perde o dado da API). Um INVALID com reason nao ASCII pode nao ser escrito.",
+   "fix": "Truncar pelo comprimento codificado em UTF-8 sem cortar um caractere no meio."
+  },
+  {
+   "id": "R1-F11",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "node/adapter-typescript",
+   "line": 113,
+   "title": "Sinal engolido apos finalized ou apos o fim do laco; re-raise sem saida de recurso",
+   "evidence": "No Node, `finalized = true` antes de writeTerminal('END', ..., ch.deadline) (l.113-114) faz onSignal retornar sem efeito, e writeTerminal pode bloquear o event loop ate o prazo. No Python, um sinal depois do break (adapter-python.py:181-194) e ignorado e o processo sai com o codigo do peer. Em l.117, process.kill(self, status.signal) nao tem saida de recurso: com SIGPIPE, ignorado pelo Node, o processo nao termina.",
+   "impact": "A janela costuma ser curta; sob EAGAIN ou SIGPIPE ha supressao ou espera indevida.",
+   "fix": "Limitar writeTerminal do END normal a uma janela curta. Apos o terminal, restaurar SIG_DFL antes de qualquer espera. Fazer process.exit(125) apos o kill."
+  },
+  {
+   "id": "R1-F12",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/observer.py",
+   "line": 442,
+   "title": "PASS nao exige complete=true no END do driver e do peer; o ramo Python nao exige stderr vazio",
+   "evidence": "complete (l.442) so olha o END do adapter. O peer Python nunca escreve stderr, mas a.data['stderr'] nao e conferido contra isso em modo SDK.",
+   "impact": "Uma declaracao incompleta de driver ou peer passa como PASS (hoje o codigo proprio sempre envia true).",
+   "fix": "Exigir complete=true nos tres END para PASS, e no Python exigir stderr do adapter vazio ou casado com milestone do peer."
+  },
+  {
+   "id": "R1-F13",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 77,
+   "title": "Rotulo da acao de DIAG-PY-TERM diverge do gatilho real",
+   "evidence": "DIAG['DIAG-PY-TERM'].action='SIGTERM_ADAPTER_ON_FIRST_STDOUT_COMMIT' (l.77), mas o gatilho e committed['stdout']>=16384 (l.518). O rotulo vai para profile-manifest.diag_spec das tentativas.",
+   "impact": "A evidencia descreve o diagnostico de forma errada (foi o defeito anotado em a7a36bffa213).",
+   "fix": "Renomear para SIGTERM_ADAPTER_AFTER_16384_STDOUT_COMMITTED."
+  },
+  {
+   "id": "R1-F14",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 268,
+   "title": "Os predicados de aceitacao dos 19 casos SDK nao existem; o supervisor nao prepara subarvores do perfil",
+   "evidence": "Attempt recusa casos que nao sejam DIAG (l.269). Nao ha codigo que compare expected_observation/known_bad com o lane da API e a captura (por exemplo SDKPY02/04 'nao enviar turn/start', SDKPY07 'closed=True e sem turn/interrupt', SDKPY09 'sem segundo interrupt'). self.files so cobre o nivel superior de /profile (l.343), e sha_path falharia em diretorios sdk-python/, python-deps/ e sdk-emitted/. HOOK_CLOSED dispara FINISH_PEER sem olhar closed.",
+   "impact": "Correto enquanto o SDK estiver NOT_RUN, mas H04 so cobre drivers e peers, nao a aceitacao.",
+   "fix": "Implementar e revisar os predicados por caso, o staging recursivo selado e o diagnostico de kill-no-finally (TS) e terminate-no-close (Python) antes da proxima porta."
+  },
+  {
+   "id": "R1-F15",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 365,
+   "title": "Escritores dos FIFOs nao sao autenticados por papel",
+   "evidence": "Os seis FIFOs sao montados para todos os processos (uid 0 no sandbox, modo 0600). Qualquer papel pode abrir o .events/.control de outro e escrever frames atomicos com pid autodeclarado; o observer so checa consistencia do pid (observer.py:188-189).",
+   "impact": "Risco residual aceito no HOW. Com codigo SDK real dentro do driver, a origem dos frames continua sem prova.",
+   "fix": "Documentar como limite, ou montar para cada papel so os seus dois nos via namespaces de montagem separados, se viavel."
+  },
+  {
+   "id": "R1-F16",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "python/supervisor.py",
+   "line": 466,
+   "title": "Caminhos de excecao do supervisor nao gravam veredito",
+   "evidence": "assert em send (l.467), BlockingIOError do write de controle, TimeoutExpired de systemctl (l.382), KeyError em reconcile ou diag_checks com detail malformado (observer.py:380-401) e leitura de cgroup.events apos a remocao (l.625) abortam sem result.json. O budget fica STARTED e a unidade roda ate RuntimeMaxSec.",
+   "impact": "Nao gera falso PASS, mas deixa a evidencia sem INVALID e a limpeza sem testemunho.",
+   "fix": "Envolver run/finish num try que sempre grave INVALID_CAPTURE com a excecao, pare a unidade e testemunhe o cgroup."
+  },
+  {
+   "id": "R1-F17",
+   "severity": "P3",
+   "mandatory": false,
+   "file": "node/extension-loader.mjs",
+   "line": 109,
+   "title": "require CommonJS via createRequire contorna o allowlist do loader ESM",
+   "evidence": "node:module esta liberado; exec.ts cria moduleRequire = createRequire(import.meta.url) no topo do modulo, e o require CJS nao passa pelo hook resolve. Com codexPathOverride o findCodexPath nao e chamado (transpile.mjs:69 ja registra isso). Os picos de TasksMax nos TS foram 24/32, e o modo SDK nao foi medido.",
+   "impact": "O limite e conhecido, mas nao ha checagem ativa de que esse caminho fique inalcancavel.",
+   "fix": "Em sdkCase, afirmar que codexPathOverride esta presente antes de qualquer chamada. Medir pids.peak no modo SDK."
+  }
+ ],
+ "checks_run": [
+  "sha256sum source-freeze-r1.json = 3ff69a68...e06c; conferencia de sha256, tamanho e modo dos 27 arquivos do freeze (0 divergencias, repetida no fim)",
+  "node --check nos 7 fontes Node: channel.cjs, adapter-typescript, fixture-cli.mjs, ts-driver.mjs, extension-loader.mjs, transpile.mjs, selftest.mjs (todos OK)",
+  "cd U && python3 -I python/selftest_python.py (sem argumento): Python 96/96 PASS, Node 83/83 PASS, rc 0",
+  "leitura linha a linha de todas as fontes Node e Python, de interface-v1, interface-bindings-v1, task, quality-bar, HOW.md, transport-topology, execution-profile, containment-and-observer e cases.json (19 casos)",
+  "conferencia das chamadas SDK contra as fontes pinadas: client.py (CodexConfig, start/initialize/request/cancel_goal_operation/turn_interrupt/close com terminate), async_client.py (_TURN_START_EXECUTOR, _start_turn, discard_cancelled_result), _message_router.py (_TurnSubscription.close, _state.id, _closed), _goal.py, models.py (InitializeResponse opcional), codex.ts, thread.ts (run/runStreamed {events}), exec.ts (spawn signal, finally child.kill, createRequire), turnOptions.ts e outputSchemaFile.ts",
+  "reconciliacao das 9 tentativas: result.json (verdict, reasons, diag_checks, os_checks, role_status), events-*.jsonl (linhas do tempo de SIGNAL/END), actions, rc do systemd-run por tentativa e profile-manifest/command.json host_sources contra o freeze",
+  "diff das copias de perfil executadas (/mnt/ia/.../attempts/*/profile, so leitura) contra as fontes congeladas: channel.py (limite until), channel.cjs (writeNow/invalid) e adapter-typescript (maybeFinishSignal sem status)",
+  "contagem de FORWARD_COMMIT parciais (0 em todas as tentativas) e PIDs namespace/host (driver = PID 2 do bwrap)"
+ ],
+ "criteria": {
+  "H01": "PARCIAL. Identidades de fonte ligadas pela admissao, BEGIN e exe dev/ino do cgroup; nenhum import alvo no topo nem em modo diagnostico (confirmado no codigo). A identidade do supervisor do host falta ou diverge do freeze em 5 das 9 tentativas (R1-F05), e os modulos emitidos do modo SDK nao tem identidade imposta (R1-F07).",
+  "H02": "ATENDIDO no codigo e nos diagnosticos: reabertura apos exec com NOFOLLOW/CLOEXEC/NONBLOCK, stat antes e depois (inode, tipo, modo 0600, uid 0), PIPE_BUF externo, framing estrito, seq e papel no observer, e known-bad nos selftests. Escritor de FIFO nao autenticado por papel (R1-F15, P3).",
+  "H03": "PARCIAL. Relays reais nos dois sentidos com commit por chunk (PY-TERM 59.557 B, TS-LARGE 180.003 B). Escrita parcial nunca exercitada e inalcancavel em pipes; stderr Python nao exercitado (R1-F09). adapter-typescript e channel.cjs congelados nunca rodaram em servico.",
+  "H04": "PARCIAL. Drivers e peers dos 19 casos existem e as chamadas SDK batem com as fontes pinadas, com catch da API isolado da telemetria nas duas linguagens. Faltam os predicados de aceitacao (R1-F14), o plano de TS02/03/07/08 nao reflete o kill do finally do SDK (R1-F08) e os emitidos nao estao ligados (R1-F07).",
+  "H05": "PARCIAL. transpile.mjs recusa antes de qualquer require do compilador (codigo e TS-ECHO, com channel.cjs anterior e supervisor nao congelado). O allowlist ESM esta correto nos testes de decide(), mas o hash e o fechamento dos emitidos nao sao impostos (R1-F07), e o require CJS contorna o loader (R1-F17).",
+  "H06": "ATENDIDO para os diagnosticos atuais: containment em PY-RPC (rede, socket abstrato, bus, escrita externa e em /profile negadas; env exato; rlimits; NoNewPrivs), limites do cgroup lidos e netns diferente do host. Sentinela de HOME, orfao e caps de memoria e tarefas nao foram exercitados.",
+  "H07": "PARCIAL. Selftests rejeitam captura omitida, corrompida, commit falso, seq e caps; STALL resultou em INVALID. O cap por caso foi relaxado para por papel (R1-F06), e commit desconhecido sob sinal e aceito (R1-F02).",
+  "H08": "PARCIAL. As barreiras sao por evento, sem sleep como prova, e a ordem em PY-RPC esta correta, mas sob supervisor e channel nao congelados (R1-F05). O TS nao tem barreira final (R1-F08), e o veredito ignora o peer (R1-F01) e o rc do driver (R1-F04).",
+  "H09": "NAO ATENDIDO. Limpeza testemunhada por cgroup removido, unidade coletada e EOF real dos FIFOs. Porem os 100 ms nao sao medidos a partir da entrega (R1-F03), KNOWN_SIGNAL aceita peer sem telemetria (R1-F01) e commit em voo (R1-F02), e o caminho de sinal do adapter TS congelado esta NOT_YET (o freeze declara).",
+  "H10": "ATENDIDO para R1: critico fresco sobre freeze conferido, orcamento reviews 1/2 e reparo agrupado 0/1, sem reinicio de orcamento observado no budget.json.",
+  "H11": "NAO VERIFICADO/PENDENTE. Runtime state, master log e backlog nao trazem esta rodada (so o claim ativo em agent_coordination). Cabe ao Lead fechar.",
+  "H12": "ATENDIDO. Todos os result.json declaram CONSTANT_DIAGNOSTIC_NOT_SDK_EXECUTION, SDK_imports 0, compiler_imports 0 e functional_receipts 0; o freeze declara SDK_runtime e compiler_runtime NOT_RUN."
+ },
+ "repair_note": "Os sete obrigatorios cabem num unico reparo agrupado. R1-F01, F04 e F06 e a guarda do observer de F02 e F03 mudam observer/supervisor e nao gastam servico. F02 (Node) e F03 (Python) mudam os adapters. F07 muda ts-driver e o loader. F05 e so documental. O unico servico restante deveria requalificar o caminho de sinal com fontes e supervisor congelados pos-reparo; isso nao cobre TS e PY ao mesmo tempo, o que precisa ficar explicito.",
+ "limits": "Nao executei servicos, bwrap, SDK, Pydantic nem o compilador. Nao testei em execucao: a ordem de fases do libuv no fim da janela de sinal Node (R1-F02, analise estatica), o comportamento do PID 1 do bwrap e do stop do systemd quando o driver sai (inferido do PID 2 na evidencia e da semantica conhecida), require CJS dentro de modulos carregados pelo loader ESM, nem o comportamento real dos SDKs (casos NOT_RUN). Nao foi possivel ver o diff do supervisor c9e094... para d97a6cd4... (sem pre-imagem). A analise de H11 limitou-se a grep nos documentos de estado."
+}

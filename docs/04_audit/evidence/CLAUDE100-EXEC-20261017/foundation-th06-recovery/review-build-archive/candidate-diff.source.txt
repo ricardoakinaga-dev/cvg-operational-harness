@@ -1,0 +1,2122 @@
+diff --git a/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts b/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts
+index 5e0db187..deb59a37 100644
+--- a/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts
++++ b/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts
+@@ -1,6 +1,8 @@
+ import {
+   inspectCompleteResource,
+-  assignedResource
++  assignedResource,
++  withCompleteCleanup,
++  cleanupCompleteChildren
+ } from './fixtures/complete-process-support.ts'
+ import { createHash } from 'node:crypto'
+ import { mkdir, realpath, writeFile } from 'node:fs/promises'
+@@ -339,7 +341,7 @@ async function readPhysical(
+   writerPid: number
+ ) {
+   const reader = new Client(servingOptions)
+-  try {
++  return await withCompleteCleanup(async () => {
+     await reader.connect()
+     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [
+       tenantId
+@@ -450,9 +452,7 @@ async function readPhysical(
+         }
+       }
+     }
+-  } finally {
+-    await reader.end()
+-  }
++  }, [() => reader.end()])
+ }
+ // This deliberately named synthetic pair uses ceil(canonical UTF8 bytes/64),
+ // including JSON framing for text. It claims no tokenizer/provider equivalence.
+@@ -472,15 +472,9 @@ const modelName = 'toy64.'.padEnd(512, 'm')
+ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
+   beforeAll(provision, 60_000)
+   afterAll(async () => {
+-    try {
++    return await withCompleteCleanup(async () => {
+       await save(join(evidence!, 'matrix-summary.json'), traces)
+-    } finally {
+-      try {
+-        await pool?.end()
+-      } finally {
+-        await admin?.end()
+-      }
+-    }
++    }, [() => pool?.end(), () => admin?.end()])
+   })
+   for (const priorReceipts of [false, true]) {
+     for (const [freeBytes, paddingCharacter] of [
+@@ -846,6 +840,7 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
+           telemetry
+         })
+         let checkError: unknown
++        let primary: { error: unknown } | undefined
+         const observation: Record<string, unknown> = {
+           caseName,
+           freeBytes,
+@@ -1101,32 +1096,42 @@ describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
+           observation.verdict = 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
+         } catch (error) {
+           checkError = error
++          primary = { error }
+           observation.verdict = 'UNPROVEN_FAILURE'
+           observation.error = errorInfo(error)
+           throw error
+         } finally {
+-          observation.countsAtFinally = {
+-            bodies,
+-            completeEntries,
+-            calls: calls.length,
+-            measurements: measurements.length
+-          }
+-          observation.events = events
+-          observation.writes = writes
+-          observation.observerErrors = observerErrors
+-          observation.measurements = measurements
+-          observation.calls = calls
+-          observation.responses = responses
+-          observation.audit = audit.events
+-          observation.telemetry = telemetry.events
+-          traces.push({
+-            caseName,
+-            verdict: observation.verdict,
+-            error: checkError ? errorInfo(checkError) : undefined
+-          })
+-          await save(join(dir, 'observed.json'), observation)
+-          await save(join(dir, 'physical-checkpoints.json'), physicalRecords)
+-          await save(join(dir, 'native-journal-trace.json'), journalTrace)
++          await cleanupCompleteChildren(
++            [],
++            [
++              async () => {
++                observation.countsAtFinally = {
++                  bodies,
++                  completeEntries,
++                  calls: calls.length,
++                  measurements: measurements.length
++                }
++                observation.events = events
++                observation.writes = writes
++                observation.observerErrors = observerErrors
++                observation.measurements = measurements
++                observation.calls = calls
++                observation.responses = responses
++                observation.audit = audit.events
++                observation.telemetry = telemetry.events
++                traces.push({
++                  caseName,
++                  verdict: observation.verdict,
++                  error: primary ? errorInfo(checkError) : undefined
++                })
++              },
++              () => save(join(dir, 'observed.json'), observation),
++              () =>
++                save(join(dir, 'physical-checkpoints.json'), physicalRecords),
++              () => save(join(dir, 'native-journal-trace.json'), journalTrace)
++            ],
++            primary
++          )
+         }
+       }, 60_000)
+     }
+diff --git a/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts b/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts
+index 889f5185..80eea00a 100644
+--- a/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts
++++ b/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts
+@@ -5,7 +5,8 @@ import {
+   assignedService,
+   privateBytes,
+   startCompleteChild,
+-  stopCompleteChildren
++  withCompleteCleanup,
++  cleanupCompleteChildren
+ } from './fixtures/complete-process-support.ts'
+ /** Assigned synthetic SPEC217/224 bound factory proof; not the published adapter. */
+ import type { ChildProcess } from 'node:child_process'
+@@ -360,7 +361,7 @@ async function snapshot(db: Pool) {
+ }
+ async function physical(dbConnection: Connection, executionId: string) {
+   const reader = new Client(dbConnection)
+-  try {
++  return await withCompleteCleanup(async () => {
+     await reader.connect()
+     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [
+       tenantId
+@@ -430,9 +431,7 @@ async function physical(dbConnection: Connection, executionId: string) {
+       execution_state: 'RUNNING'
+     })
+     return { identity, row, checkpoint: cp, authority: authority[0] }
+-  } finally {
+-    await reader.end()
+-  }
++  }, [() => reader.end()])
+ }
+ interface AttemptInput {
+   input: RuntimeInput
+@@ -635,12 +634,19 @@ async function attempt(args: AttemptInput, db: Pool, conn: Connection) {
+     await save(join(args.dir, 'result.json'), record)
+     return record
+   } catch (error) {
+-    await save(join(args.dir, 'error.json'), {
+-      error: errorInfo(error),
+-      events,
+-      calls,
+-      measurements
+-    })
++    await cleanupCompleteChildren(
++      [],
++      [
++        () =>
++          save(join(args.dir, 'error.json'), {
++            error: errorInfo(error),
++            events,
++            calls,
++            measurements
++          })
++      ],
++      { error }
++    )
+     throw error
+   }
+ }
+@@ -869,8 +875,8 @@ async function finishWorker(item: Worker) {
+     await readFile(join(item.dir, 'result.json'), 'utf8')
+   ) as Awaited<ReturnType<typeof attempt>>
+ }
+-async function settleWorkers(primary?: unknown) {
+-  await stopCompleteChildren(workers, primary)
++async function settleWorkers(primary?: { error: unknown }) {
++  await cleanupCompleteChildren(workers, [], primary)
+ }
+ if (childInput) {
+   describe('SPEC224 assigned bound process', () => {
+@@ -885,11 +891,9 @@ if (childInput) {
+         throw new Error('Child output outside assigned evidence')
+       const conn = await service(),
+         db = new Pool({ ...conn, max: 2, application_name: writerApplication })
+-      try {
++      return await withCompleteCleanup(async () => {
+         await attempt(args, db, conn)
+-      } finally {
+-        await db.end()
+-      }
++      }, [() => db.end()])
+     }, 60000)
+   })
+ } else {
+@@ -897,8 +901,7 @@ if (childInput) {
+     beforeAll(provision, 60000)
+     afterAll(async () => {
+       await settleWorkers()
+-      await pool?.end()
+-      await admin?.end()
++      await cleanupCompleteChildren([], [() => pool?.end(), () => admin?.end()])
+     })
+     it('BA01 commits one actual receipt before model, settles, rejects old token/simple V2 saves', async () => {
+       const db = pool!
+@@ -1050,7 +1053,7 @@ if (childInput) {
+         async () => {
+           const prepared = await prepare(pool!, 'race-' + kind),
+             base = { input: prepared.input, fence: prepared.fence, kind }
+-          let primary: unknown
++          let primary: { error: unknown } | undefined
+           try {
+             const left = await worker({
+               ...base,
+@@ -1143,7 +1146,7 @@ if (childInput) {
+                 'Actual distinct Node processes with native CAS/PG guards; same legitimate native bound claim. Losing generic-CAS live usage remains conservative; no rollback or provider-billing inference.'
+             })
+           } catch (error) {
+-            primary = error
++            primary = { error }
+             throw error
+           } finally {
+             await settleWorkers(primary)
+diff --git a/packages/persistence/src/__tests__/complete-process-support.test.ts b/packages/persistence/src/__tests__/complete-process-support.test.ts
+index 06862001..82cc7640 100644
+--- a/packages/persistence/src/__tests__/complete-process-support.test.ts
++++ b/packages/persistence/src/__tests__/complete-process-support.test.ts
+@@ -1,4 +1,5 @@
+ // @vitest-environment node
++import ts from 'typescript'
+ import { spawn, execFile, type ChildProcess } from 'node:child_process'
+ import { createHash } from 'node:crypto'
+ import { EventEmitter } from 'node:events'
+@@ -23,7 +24,9 @@ import {
+   assignedResource,
+   inspectCompleteResource,
+   stopCompleteChildren,
+-  cleanupCompleteChildren
++  cleanupCompleteChildren,
++  withCompleteCleanup,
++  completeCleanupError
+ } from './fixtures/complete-process-support.ts'
+ 
+ const virtual = vi.hoisted(() => ({
+@@ -1035,3 +1038,680 @@ it.each(['store-restart', 'public-restart'] as const)(
+     }
+   }
+ )
++
++// Recovery controls execute actual private consumer scopes with finite I/O replacements.
++async function cleanupConsumerSource(name: string) {
++  const native =
++    await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
++  const text = await native.readFile(new URL(name, import.meta.url), 'utf8')
++  return ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true)
++}
++function cleanupSourceFunction(source: ts.SourceFile, name: string) {
++  const node = source.statements.find(
++    (n): n is ts.FunctionDeclaration =>
++      ts.isFunctionDeclaration(n) && n.name?.text === name
++  )
++  if (!node) throw new Error('Missing real consumer function: ' + name)
++  return node.getText(source)
++}
++function compileCleanupScope(code: string, names: string[], values: unknown[]) {
++  const output = ts.transpileModule(code, {
++    compilerOptions: {
++      target: ts.ScriptTarget.ES2022,
++      module: ts.ModuleKind.None
++    }
++  }).outputText
++  return new Function('exports', ...names, output)({}, ...values)
++}
++function cleanupGraphContains(
++  error: unknown,
++  target: unknown,
++  seen = new Set<unknown>()
++): boolean {
++  if (Object.is(error, target)) return true
++  if (!error || typeof error !== 'object' || seen.has(error)) return false
++  seen.add(error)
++  return (
++    ('cause' in error && cleanupGraphContains(error.cause, target, seen)) ||
++    (error instanceof AggregateError &&
++      error.errors.some((e) => cleanupGraphContains(e, target, seen)))
++  )
++}
++async function cleanupOutcome(action: () => unknown) {
++  try {
++    return { ok: true as const, value: await action() }
++  } catch (error) {
++    return { ok: false as const, error }
++  }
++}
++it.each([undefined, null, false, 0, '', new Error('primary')])(
++  'retains exact primary %s through all safe cleanup failures',
++  async (primary) => {
++    const one = new Error('first cleanup'),
++      two = new Error('second cleanup')
++    const order: number[] = []
++    const result = await cleanupOutcome(() =>
++      withCompleteCleanup(() => {
++        throw primary
++      }, [
++        () => {
++          order.push(1)
++          throw one
++        },
++        async () => {
++          order.push(2)
++          throw two
++        }
++      ])
++    )
++    expect(result.ok).toBe(false)
++    if (result.ok) throw new Error('Unexpected cleanup success')
++    expect((result.error as AggregateError).cause).toBe(primary)
++    for (const error of [primary, one, two])
++      expect(cleanupGraphContains(result.error, error)).toBe(true)
++    expect(order).toEqual([1, 2])
++  }
++)
++it('retains return values and singular error identity without closing transferred owners', async () => {
++  const value = {},
++    primary = new Error('singular'),
++    close = vi.fn()
++  expect(await withCompleteCleanup(() => value, [close])).toBe(value)
++  expect(close).toHaveBeenCalledTimes(1)
++  const failure = await cleanupOutcome(() =>
++    withCompleteCleanup(() => {
++      throw primary
++    }, [])
++  )
++  expect(failure).toEqual({ ok: false, error: primary })
++  expect(completeCleanupError([])).toBeUndefined()
++  expect(completeCleanupError([undefined])).toEqual({ error: undefined })
++})
++it('observes every stop even when an earlier stop throws synchronously; no DB after failed join', async () => {
++  const primary = false,
++    join = new Error('sync stop'),
++    seen = vi.fn(),
++    db = vi.fn()
++  const result = await cleanupOutcome(() =>
++    cleanupCompleteChildren(
++      [
++        {
++          stop: () => {
++            throw join
++          }
++        },
++        {
++          stop: async () => {
++            seen()
++          }
++        }
++      ],
++      [db],
++      { error: primary }
++    )
++  )
++  expect(seen).toHaveBeenCalledTimes(1)
++  expect(db).not.toHaveBeenCalled()
++  if (result.ok) throw new Error('Unconfirmed join accepted')
++  expect(cleanupGraphContains(result.error, primary)).toBe(true)
++  expect(cleanupGraphContains(result.error, join)).toBe(true)
++})
++it.each([
++  'complete-bound-admission-postgres.integration.ts',
++  'complete-tool-process-restart.test.ts',
++  'complete-tool-public-restart.test.ts',
++  'complete-admission-capacity-postgres.integration.ts',
++  'complete-settlement-public-postgres.integration.ts',
++  'fixtures/complete-process-support.ts'
++])('real resource wrappers in %s preserve all four outcomes', async (name) => {
++  const source = await cleanupConsumerSource(name)
++  const calls: ts.CallExpression[] = []
++  function visit(node: ts.Node) {
++    if (
++      ts.isCallExpression(node) &&
++      node.expression.getText(source) === 'withCompleteCleanup' &&
++      node.arguments.length === 2 &&
++      /^\[\s*\(\) => (?:pool|db|reader|handle|executable)\??\.(?:end|close)\(\)/.test(
++        node.arguments[1]!.getText(source)
++      )
++    )
++      calls.push(node)
++    ts.forEachChild(node, visit)
++  }
++  visit(source)
++  expect(calls.length).toBeGreaterThan(0)
++  const printer = ts.createPrinter()
++  for (const call of calls)
++    for (const bodyFails of [false, true])
++      for (const closeFails of [false, true]) {
++        const primary = new Error('body'),
++          secondary = new Error('end'),
++          closes: string[] = []
++        const body = ts.createSourceFile(
++          'stub.ts',
++          'async () => body()',
++          ts.ScriptTarget.Latest,
++          true
++        ).statements[0] as ts.ExpressionStatement
++        const expression = ts.factory.updateCallExpression(
++          call,
++          call.expression,
++          call.typeArguments,
++          [body.expression, call.arguments[1]!]
++        )
++        const text = printer.printNode(
++          ts.EmitHint.Expression,
++          expression,
++          source
++        )
++        const pool = {
++          end: () => {
++            closes.push('end')
++            if (closeFails) throw secondary
++          },
++          close: () => {
++            closes.push('close')
++            if (closeFails) throw secondary
++          }
++        }
++        const result = await cleanupOutcome(() =>
++          compileCleanupScope(
++            'return ' + text,
++            [
++              'withCompleteCleanup',
++              'body',
++              'pool',
++              'db',
++              'reader',
++              'handle',
++              'executable',
++              'admin'
++            ],
++            [
++              withCompleteCleanup,
++              () => {
++                if (bodyFails) throw primary
++                return 17
++              },
++              pool,
++              pool,
++              pool,
++              pool,
++              pool,
++              pool
++            ]
++          )
++        )
++        expect(closes.length).toBeGreaterThan(0)
++        expect(result.ok).toBe(!bodyFails && !closeFails)
++        if (!result.ok) {
++          if (bodyFails)
++            expect(cleanupGraphContains(result.error, primary)).toBe(true)
++          if (closeFails)
++            expect(cleanupGraphContains(result.error, secondary)).toBe(true)
++        } else expect(result.value).toBe(17)
++      }
++})
++it.each([
++  'complete-tool-process-restart.test.ts',
++  'complete-tool-public-restart.test.ts'
++])('real connect in %s closes failed construction only', async (name) => {
++  const source = await cleanupConsumerSource(name),
++    code = cleanupSourceFunction(source, 'connect')
++  for (const constructFails of [false, true]) {
++    const primary = new Error('constructor'),
++      secondary = new Error('pool end'),
++      closes = vi.fn(() => {
++        throw secondary
++      })
++    class Pool {
++      end = closes
++    }
++    class Store {
++      constructor() {
++        if (constructFails) throw primary
++      }
++    }
++    const assigned = {
++      claim: { config: 'fixed' },
++      resource: {
++        synthetic: true,
++        exclusiveClaim: 'owned',
++        schemaName: 'pare224_runtime',
++        containerId:
++          '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c',
++        test_database_url: 'postgres://synthetic@127.0.0.1/synthetic'
++      }
++    }
++    const result = await cleanupOutcome(() =>
++      compileCleanupScope(
++        code + '; return connect();',
++        [
++          'assignedResource',
++          'process',
++          'role',
++          'resourcePath',
++          'Pool',
++          'PostgresExecutionStepStore',
++          'PostgresOperationalEffectJournal',
++          'cleanupCompleteChildren'
++        ],
++        [
++          async () => assigned,
++          {
++            env: {
++              SPEC0224_PG_CHILD_CONFIG: 'fixed',
++              SPEC0224_PUBLIC_CHILD_CONFIG: 'fixed'
++            }
++          },
++          undefined,
++          'fixed',
++          Pool,
++          Store,
++          Store,
++          cleanupCompleteChildren
++        ]
++      )
++    )
++    expect(closes).toHaveBeenCalledTimes(constructFails ? 1 : 0)
++    expect(result.ok).toBe(!constructFails)
++    if (!result.ok) {
++      expect(cleanupGraphContains(result.error, primary)).toBe(true)
++      expect(cleanupGraphContains(result.error, secondary)).toBe(true)
++    }
++  }
++})
++it.each(['sync', 'promise', 'callback'])(
++  'real SQL diagnostic in %s form retains native errors and callback delivery',
++  async (mode) => {
++    const source = await cleanupConsumerSource(
++        'complete-settlement-public-postgres.integration.ts'
++      ),
++      code = cleanupSourceFunction(source, 'instrumentSql')
++    const primary = new Error('SQL'),
++      diagnostic = new Error('wire'),
++      end = new Error('end')
++    let delivered: unknown,
++      count = 0
++    const client = {
++      query: (...args: unknown[]): unknown => {
++        if (mode === 'sync') throw primary
++        if (mode === 'promise') return Promise.reject(primary)
++        ;(args.at(-1) as (error: unknown) => void)(primary)
++        return 'native-handle'
++      }
++    }
++    compileCleanupScope(
++      code + '; instrumentSql(client,"synthetic");',
++      [
++        'client',
++        'appendFileSync',
++        'join',
++        'output',
++        'tagged',
++        'sqlSequence',
++        'sqlScope',
++        'errorInfo',
++        'completeCleanupError'
++      ],
++      [
++        client,
++        (_path: unknown, bytes: string) => {
++          if (JSON.parse(bytes).type !== 'SQL-entry') throw diagnostic
++        },
++        join,
++        '/synthetic',
++        (_k: unknown, v: unknown) => v,
++        0,
++        'case',
++        (e: unknown) => ({ error: String(e) }),
++        completeCleanupError
++      ]
++    )
++    const result = await cleanupOutcome(() =>
++      withCompleteCleanup(async () => {
++        const handle = await client.query(
++          'SELECT synthetic',
++          ...(mode === 'callback'
++            ? [
++                (error: unknown) => {
++                  count++
++                  delivered = error
++                }
++              ]
++            : [])
++        )
++        if (mode === 'callback') {
++          expect(handle).toBe('native-handle')
++          throw delivered
++        }
++      }, [
++        () => {
++          throw end
++        }
++      ])
++    )
++    if (result.ok) throw new Error('SQL/diagnostic errors hidden')
++    for (const error of [primary, diagnostic, end])
++      expect(cleanupGraphContains(result.error, error)).toBe(true)
++    expect(count).toBe(mode === 'callback' ? 1 : 0)
++  }
++)
++async function realSettlementBoundary() {
++  const source = await cleanupConsumerSource(
++    'complete-settlement-public-postgres.integration.ts'
++  )
++  const quiesce = cleanupSourceFunction(source, 'quiesceAttempts'),
++    caseRun = cleanupSourceFunction(source, 'caseRun')
++  let after: ts.Expression | undefined
++  function visit(n: ts.Node) {
++    if (ts.isCallExpression(n) && n.expression.getText(source) === 'afterAll')
++      after = n.arguments[0]
++    ts.forEachChild(n, visit)
++  }
++  visit(source)
++  if (!after) throw new Error('Missing actual afterAll')
++  const events: string[] = [],
++    summaries: unknown[] = [],
++    ownedAttempts = new Set<unknown>()
++  const api = compileCleanupScope(
++    `let settlementBarrierFailure; const caseIndex=[]; ${quiesce}; ${caseRun}; return {caseRun, afterAll:${after.getText(source)}, ownedAttempts};`,
++    [
++      'completeCleanupError',
++      'cleanupCompleteChildren',
++      'withCompleteCleanup',
++      'sqlScope',
++      'output',
++      'join',
++      'mkdir',
++      'snapshot',
++      'pool',
++      'admin',
++      'tenantB',
++      'save',
++      'savedFiles',
++      'errorInfo',
++      'ownedAttempts'
++    ],
++    [
++      completeCleanupError,
++      cleanupCompleteChildren,
++      withCompleteCleanup,
++      'case',
++      '/synthetic',
++      join,
++      async () => {},
++      async () => {
++        events.push('snapshot')
++        return {}
++      },
++      {
++        end: async () => {
++          events.push('pool.end')
++        }
++      },
++      {
++        end: async () => {
++          events.push('admin.end')
++        }
++      },
++      'tenantB',
++      async (path: string, value: unknown) => {
++        if (path.endsWith('case-summary-index.json')) summaries.push(value)
++      },
++      [],
++      (e: unknown) => ({ error: String(e) }),
++      ownedAttempts
++    ]
++  )
++  return {
++    api: api as {
++      caseRun: (
++        id: string,
++        body: (attempts: unknown[]) => Promise<void>
++      ) => Promise<void>
++      afterAll: () => Promise<void>
++      ownedAttempts: Set<unknown>
++    },
++    events,
++    summaries
++  }
++}
++it('real caseRun and hook wait for every delayed runtime before finish, snapshot or end', async () => {
++  const { api, events, summaries } = await realSettlementBoundary()
++  let release!: () => void
++  const late = new Promise<void>((yes) => {
++    release = yes
++  })
++  const attempt = (runResult: Promise<unknown>) => ({
++    release: { resolve() {} },
++    runResult,
++    joinDelivery: async () => {},
++    finish: async () => {
++      events.push('finish')
++    },
++    dir: '/synthetic/a',
++    prepared: { dir: '/synthetic', input: {} },
++    events: [],
++    calls: 0,
++    measurements: 0
++  })
++  const a = attempt(Promise.resolve()),
++    b = attempt(late)
++  const result = cleanupOutcome(() =>
++    api.caseRun('finite', async (attempts) => {
++      attempts.push(a, b)
++      api.ownedAttempts.add(a)
++      api.ownedAttempts.add(b)
++      throw false
++    })
++  )
++  await new Promise((yes) => setTimeout(yes, 0))
++  // Two before snapshots belong to setup, before any attempts exist.
++  expect(events).toEqual(['snapshot', 'snapshot'])
++  release()
++  const observed = await result
++  expect(observed).toEqual({ ok: false, error: false })
++  expect(events).toEqual([
++    'snapshot',
++    'snapshot',
++    'finish',
++    'finish',
++    'snapshot',
++    'snapshot'
++  ])
++  expect((summaries[0] as { containment: string }).containment).toBe('FAIL')
++  await api.afterAll()
++  expect(events.slice(-2)).toEqual(['pool.end', 'admin.end'])
++})
++it('real failed settlement barrier retains falsy primary, observes others, and forbids hook ends', async () => {
++  const { api, events } = await realSettlementBoundary(),
++    joinError = new Error('join'),
++    seen = vi.fn()
++  const attempt = (stop: () => Promise<void>) => ({
++    release: { resolve() {} },
++    runResult: Promise.resolve(),
++    joinDelivery: stop,
++    finish: async () => {
++      events.push('finish')
++    }
++  })
++  const a = attempt(async () => {
++      throw joinError
++    }),
++    b = attempt(async () => {
++      seen()
++    })
++  const result = await cleanupOutcome(() =>
++    api.caseRun('finite', async (attempts) => {
++      attempts.push(a, b)
++      api.ownedAttempts.add(a)
++      api.ownedAttempts.add(b)
++      throw undefined
++    })
++  )
++  if (result.ok) throw new Error('Failed barrier accepted')
++  expect(cleanupGraphContains(result.error, undefined)).toBe(true)
++  expect(cleanupGraphContains(result.error, joinError)).toBe(true)
++  expect(seen).toHaveBeenCalledTimes(1)
++  const hook = await cleanupOutcome(() => api.afterAll())
++  expect(hook.ok).toBe(false)
++  const subsequent = await cleanupOutcome(() =>
++    api.caseRun('after-unconfirmed-join', async () => {})
++  )
++  expect(subsequent.ok).toBe(false)
++  expect(events).toEqual(['snapshot', 'snapshot'])
++  expect(seen).toHaveBeenCalledTimes(2)
++})
++
++it('real HOME acquisition preserves creation/removal failures and transfers success', async () => {
++  const source = await cleanupConsumerSource(
++    'fixtures/complete-process-support.ts'
++  )
++  const code = cleanupSourceFunction(source, 'privateEnvironment')
++  for (const createFails of [false, true])
++    for (const removeFails of [false, true]) {
++      const primary = new Error('mkdir'),
++        secondary = new Error('rm'),
++        rm = vi.fn(async () => {
++          if (removeFails) throw secondary
++        })
++      const result = await cleanupOutcome(() =>
++        compileCleanupScope(
++          code + '; return privateEnvironment("/synthetic");',
++          [
++            'physicalPath',
++            'mkdtemp',
++            'mkdir',
++            'rm',
++            'join',
++            'cleanupCompleteChildren'
++          ],
++          [
++            async () => {},
++            async () => '/synthetic/home',
++            async () => {
++              if (createFails) throw primary
++            },
++            rm,
++            join,
++            cleanupCompleteChildren
++          ]
++        )
++      )
++      expect(rm).toHaveBeenCalledTimes(createFails ? 1 : 0)
++      expect(result.ok).toBe(!createFails)
++      if (!result.ok) {
++        expect(cleanupGraphContains(result.error, primary)).toBe(true)
++        if (removeFails)
++          expect(cleanupGraphContains(result.error, secondary)).toBe(true)
++      }
++    }
++})
++it.each([
++  'complete-tool-public-restart.test.ts',
++  'complete-bound-admission-postgres.integration.ts'
++])(
++  'real diagnostic catches in %s retain primary and all safe saves',
++  async (name) => {
++    const source = await cleanupConsumerSource(name),
++      catches: ts.CatchClause[] = []
++    function visit(n: ts.Node) {
++      if (
++        ts.isCatchClause(n) &&
++        n.block.getText(source).includes('cleanupCompleteChildren') &&
++        /\btrace\b|error\.json/.test(n.block.getText(source))
++      )
++        catches.push(n)
++      ts.forEachChild(n, visit)
++    }
++    visit(source)
++    expect(catches.length).toBeGreaterThan(0)
++    for (const clause of catches) {
++      const primary = new Error('native'),
++        diagnostic = new Error('diagnostic'),
++        end = new Error('end'),
++        seen: string[] = []
++      const result = await cleanupOutcome(() =>
++        compileCleanupScope(
++          'return withCompleteCleanup(async()=>{ try {throw primary} ' +
++            clause.getText(source) +
++            ' }, [()=>{throw end}]);',
++          [
++            'withCompleteCleanup',
++            'cleanupCompleteChildren',
++            'primary',
++            'end',
++            'trace',
++            'save',
++            'join',
++            'dir',
++            'childRole',
++            'errorInfo',
++            'args',
++            'events',
++            'calls',
++            'measurements',
++            'journalTrace',
++            'method'
++          ],
++          [
++            withCompleteCleanup,
++            cleanupCompleteChildren,
++            primary,
++            end,
++            async () => {
++              seen.push('trace')
++              throw diagnostic
++            },
++            async () => {
++              seen.push('save')
++              throw diagnostic
++            },
++            join,
++            '/synthetic',
++            'writer',
++            (e: unknown) => ({ error: String(e) }),
++            { dir: '/synthetic' },
++            [],
++            [],
++            [],
++            [],
++            'get'
++          ]
++        )
++      )
++      if (result.ok) throw new Error('Diagnostic swallowed native error')
++      for (const error of [primary, diagnostic, end])
++        expect(cleanupGraphContains(result.error, error)).toBe(true)
++      expect(seen.length).toBeGreaterThan(0)
++      if (
++        clause.getText(source).includes('[\n          trace,') ||
++        /\[\s*trace,/.test(clause.getText(source))
++      )
++        expect(seen).toEqual(['trace', 'save'])
++    }
++  }
++)
++it('real createAttempt registration tail transfers every attempt to hook ownership', async () => {
++  const source = await cleanupConsumerSource(
++    'complete-settlement-public-postgres.integration.ts'
++  )
++  const fn = source.statements.find(
++    (n): n is ts.FunctionDeclaration =>
++      ts.isFunctionDeclaration(n) && n.name?.text === 'createAttempt'
++  )!
++  const tail = fn
++    .body!.statements.slice(-2)
++    .map((n) => n.getText(source))
++    .join('\n')
++  const ownedAttempts = new Set(),
++    attempt = { synthetic: true }
++  const returned = compileCleanupScope(
++    tail,
++    ['ownedAttempts', 'attempt'],
++    [ownedAttempts, attempt]
++  )
++  expect(returned).toBe(attempt)
++  expect(ownedAttempts.has(attempt)).toBe(true)
++})
+diff --git a/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts b/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts
+index 051b730e..491f9429 100644
+--- a/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts
++++ b/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts
+@@ -1,7 +1,10 @@
+ import {
+   inspectCompleteResource,
+   assignedResource,
+-  ownedPath
++  ownedPath,
++  withCompleteCleanup,
++  cleanupCompleteChildren,
++  completeCleanupError
+ } from './fixtures/complete-process-support.ts'
+ /** SPEC217/224 synthetic settlement containment; trusted prepared fixture, not consumer lifecycle. */
+ import { appendFileSync } from 'node:fs'
+@@ -130,6 +133,14 @@ function instrumentSql(client: Client | PoolClient, label: string) {
+       JSON.stringify(value, tagged) + '\n',
+       { mode: 0o600 }
+     )
++  const failed = (error: unknown, record: unknown): never => {
++    try {
++      wire(record)
++    } catch (diagnostic) {
++      throw completeCleanupError([error, diagnostic])!.error
++    }
++    throw error
++  }
+   client.query = ((...args: unknown[]) => {
+     const sequence = ++sqlSequence
+     const callback = args.at(-1)
+@@ -143,13 +154,33 @@ function instrumentSql(client: Client | PoolClient, label: string) {
+     })
+     if (typeof callback === 'function') {
+       args[args.length - 1] = (...returned: unknown[]) => {
+-        wire({
+-          sequence,
+-          type: 'SQL-callback',
+-          error: returned[0] ? errorInfo(returned[0]) : null,
+-          result: returned[1]
+-        })
+-        return Reflect.apply(callback, undefined, returned)
++        let diagnostic: { error: unknown } | undefined
++        try {
++          wire({
++            sequence,
++            type: 'SQL-callback',
++            error: returned[0] ? errorInfo(returned[0]) : null,
++            result: returned[1]
++          })
++        } catch (error) {
++          diagnostic = { error }
++        }
++        const errors =
++          returned[0] === null || returned[0] === undefined ? [] : [returned[0]]
++        const delivered = diagnostic ? [...returned] : returned
++        if (diagnostic)
++          delivered[0] = completeCleanupError([
++            ...errors,
++            diagnostic.error
++          ])!.error
++        try {
++          return Reflect.apply(callback, undefined, delivered)
++        } catch (error) {
++          if (diagnostic)
++            throw completeCleanupError([...errors, diagnostic.error, error])!
++              .error
++          throw error
++        }
+       }
+     }
+     try {
+@@ -160,15 +191,20 @@ function instrumentSql(client: Client | PoolClient, label: string) {
+             wire({ sequence, type: 'SQL-return', result })
+             return result
+           },
+-          (error: unknown) => {
+-            wire({ sequence, type: 'SQL-error', error: errorInfo(error) })
+-            throw error
+-          }
++          (error: unknown) =>
++            failed(error, {
++              sequence,
++              type: 'SQL-error',
++              error: errorInfo(error)
++            })
+         )
+       return value
+     } catch (error) {
+-      wire({ sequence, type: 'SQL-error', error: errorInfo(error) })
+-      throw error
++      return failed(error, {
++        sequence,
++        type: 'SQL-error',
++        error: errorInfo(error)
++      })
+     }
+   }) as typeof client.query
+ }
+@@ -392,7 +428,7 @@ async function physical(
+   tenant = tenantId
+ ) {
+   const reader = new Client(dbConnection)
+-  try {
++  return await withCompleteCleanup(async () => {
+     await reader.connect()
+     instrumentSql(reader, 'fresh-authenticated-service-reader')
+     await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [tenant])
+@@ -465,9 +501,7 @@ async function physical(
+         fields: physicalQuery.fields
+       }
+     }
+-  } finally {
+-    await reader.end()
+-  }
++  }, [() => reader.end()])
+ }
+ async function prepare(
+   db: Pool,
+@@ -1106,6 +1140,7 @@ function createAttempt(
+       return record
+     }
+   }
++  ownedAttempts.add(attempt)
+   return attempt
+ }
+ async function awaitProvider(a: Attempt) {
+@@ -1209,11 +1244,38 @@ function assertUnaccepted(cp: ExecutionCheckpoint) {
+   expect(cp.state.toolResultContext?.deliveredThroughStep).toBe(0)
+ }
+ 
++const ownedAttempts = new Set<Attempt>()
++let settlementBarrierFailure: { error: unknown } | undefined
++async function quiesceAttempts(attempts: readonly Attempt[]) {
++  // Release every body before awaiting any runtime; native rejections are settled observations.
++  for (const attempt of attempts) attempt.release.resolve()
++  const results = await Promise.allSettled(
++    attempts.map(async (attempt) => {
++      await attempt.runResult.then(
++        () => {},
++        () => {}
++      )
++      await attempt.joinDelivery()
++    })
++  )
++  const errors = results.flatMap((result) =>
++    result.status === 'rejected' ? [result.reason] : []
++  )
++  const failure = completeCleanupError([
++    ...(settlementBarrierFailure ? [settlementBarrierFailure.error] : []),
++    ...errors
++  ])
++  if (failure) {
++    settlementBarrierFailure = failure
++    throw failure.error
++  }
++}
+ const caseIndex: Array<Record<string, unknown>> = []
+ async function caseRun(
+   id: string,
+   body: (attempts: Attempt[]) => Promise<void>
+ ) {
++  if (settlementBarrierFailure) throw settlementBarrierFailure.error
+   sqlScope = id
+   const dir = join(output, id),
+     attempts: Attempt[] = []
+@@ -1223,54 +1285,78 @@ async function caseRun(
+     tenant225: await snapshot(pool!, tenantB)
+   }
+   await save(join(dir, 'db18-before-private.json'), before)
+-  let failure: unknown
++  let failure: { error: unknown } | undefined
+   try {
+     await body(attempts)
+   } catch (error) {
+-    failure = error
+-  } finally {
+-    for (const a of attempts) {
+-      try {
+-        await a.finish()
+-      } catch (error) {
+-        failure ??= error
+-        await save(join(a.dir, 'finish-error.json'), {
+-          error: errorInfo(error),
+-          events: a.events,
+-          calls: a.calls,
+-          measurements: a.measurements
+-        })
+-      }
+-    }
+-    await save(join(dir, 'db18-after-private.json'), {
+-      tenant224: await snapshot(pool!),
+-      tenant225: await snapshot(pool!, tenantB)
+-    })
+-    const record = {
+-      id,
+-      containment: failure ? 'FAIL' : 'PASS',
+-      error: failure ? errorInfo(failure) : null,
+-      functionalQualification:
+-        id === 'SP06' || id === 'SP07'
+-          ? 'FAIL_INVALID_PAIR_NOT_QUALIFIED'
+-          : 'NOT_A_PROVIDER_QUALIFICATION',
+-      privateByDefault: true,
+-      rawFiles: savedFiles.filter((p) => p.startsWith(dir + '/')),
+-      attempts: attempts.map((a) => ({
+-        result: join(a.dir, 'result.json'),
+-        inputAuthority: join(a.prepared.dir, 'native-authority.json'),
+-        calls: a.calls,
+-        measurements: a.measurements,
+-        executionId: a.prepared.input.executionId,
+-        tenantId: a.prepared.input.tenantId
+-      })),
+-      limitations:
+-        'Synthetic trusted prepared support; actual public factory/Hybrid/native admission/CAS/claim. Parent RUNNING/OPEN or FAULTED remains; no consumer ACK, lifecycle completion, real billing, full TR05 or global/program closure.'
++    failure = { error }
++  }
++  const remember = (action: () => Promise<unknown>) => async () => {
++    try {
++      return await action()
++    } catch (error) {
++      failure ??= { error }
++      throw error
+     }
+-    await save(join(dir, 'case-summary-index.json'), record)
+-    caseIndex.push(record)
+   }
+-  if (failure) throw failure
++  await cleanupCompleteChildren(
++    [{ stop: () => quiesceAttempts(attempts) }],
++    [
++      ...attempts.map((a) =>
++        remember(async () => {
++          try {
++            await a.finish()
++          } catch (error) {
++            await cleanupCompleteChildren(
++              [],
++              [
++                () =>
++                  save(join(a.dir, 'finish-error.json'), {
++                    error: errorInfo(error),
++                    events: a.events,
++                    calls: a.calls,
++                    measurements: a.measurements
++                  })
++              ],
++              { error }
++            )
++          }
++        })
++      ),
++      remember(async () => {
++        await save(join(dir, 'db18-after-private.json'), {
++          tenant224: await snapshot(pool!),
++          tenant225: await snapshot(pool!, tenantB)
++        })
++      }),
++      remember(async () => {
++        const record = {
++          id,
++          containment: failure ? 'FAIL' : 'PASS',
++          error: failure ? errorInfo(failure.error) : null,
++          functionalQualification:
++            id === 'SP06' || id === 'SP07'
++              ? 'FAIL_INVALID_PAIR_NOT_QUALIFIED'
++              : 'NOT_A_PROVIDER_QUALIFICATION',
++          privateByDefault: true,
++          rawFiles: savedFiles.filter((p) => p.startsWith(dir + '/')),
++          attempts: attempts.map((a) => ({
++            result: join(a.dir, 'result.json'),
++            inputAuthority: join(a.prepared.dir, 'native-authority.json'),
++            calls: a.calls,
++            measurements: a.measurements,
++            executionId: a.prepared.input.executionId,
++            tenantId: a.prepared.input.tenantId
++          })),
++          limitations:
++            'Synthetic trusted prepared support; actual public factory/Hybrid/native admission/CAS/claim. Parent RUNNING/OPEN or FAULTED remains; no consumer ACK, lifecycle completion, real billing, full TR05 or global/program closure.'
++        }
++        await save(join(dir, 'case-summary-index.json'), record)
++        caseIndex.push(record)
++      })
++    ],
++    failure
++  )
+ }
+ function addAttempt(
+   attempts: Attempt[],
+@@ -1306,7 +1392,7 @@ async function uncertain(a: Attempt, status = 'UNKNOWN') {
+ describe('SPEC217/224 native public persistent settlement/failure proof', () => {
+   beforeAll(provision, 60000)
+   afterAll(async () => {
+-    try {
++    return await withCompleteCleanup(async () => {
+       await save(join(output, 'case-summary-index.json'), {
+         cases: caseIndex,
+         sqlWire: join(output, 'sql-wire-private.jsonl'),
+@@ -1315,10 +1401,15 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () =>
+         schema:
+           'R12-compatible result.json and physical {row,checkpoint,identity,authority}; all file paths are actual saved raw files'
+       })
+-    } finally {
+-      await pool?.end()
+-      await admin?.end()
+-    }
++    }, [
++      async () => {
++        await quiesceAttempts([...ownedAttempts])
++        await cleanupCompleteChildren(
++          [],
++          [() => pool?.end(), () => admin?.end()]
++        )
++      }
++    ])
+   })
+   it('SP01 identical native RESULT after SETTLED and port close is an exact no-op', () =>
+     caseRun('SP01', async (attempts) => {
+@@ -1525,7 +1616,7 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () =>
+             'main',
+             { fault: 'hold' }
+           )
+-          try {
++          return await withCompleteCleanup(async () => {
+             await awaitProvider(a)
+             if (id === 'SP11') {
+               a.event('external-native-abort', { bodyAlreadyComputed: true })
+@@ -1567,11 +1658,13 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () =>
+               nativeFenceError: 'lease_lost',
+               note: 'RESERVED is not called UNKNOWN; terminal diagnostic may be saved while original receipt remains RESERVED.'
+             })
+-          } finally {
+-            a.release.resolve()
+-            await a.joinDelivery()
+-            await a.runResult
+-          }
++          }, [
++            async () => {
++              a.release.resolve()
++              await a.joinDelivery()
++              await a.runResult
++            }
++          ])
+         })
+     )
+   it(
+@@ -1587,7 +1680,7 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () =>
+           1000
+         )
+         const a = addAttempt(attempts, prepared, 'main', { fault: 'hold' })
+-        try {
++        return await withCompleteCleanup(async () => {
+           await awaitProvider(a)
+           const lease = await withTenantContext(pool!, tenantId, async (c) => {
+             const sql = `SELECT p.attempt,p.lease_owner,p.lease_until AS parent_lease_until,q.attempts AS queue_attempt,q.lease_owner AS queue_owner,q.lease_until AS queue_lease_until,o.attempts AS outer_attempt,o.lease_owner AS outer_owner,o.lease_until AS outer_lease_until,b.expires_at AS prepared_expires_at,clock_timestamp() AS observed_at,GREATEST(p.lease_until,q.lease_until,o.lease_until) AS max_lease_until FROM operational_executions p JOIN operational_execution_outbox q ON q.tenant_id=p.tenant_id AND q.execution_id=p.id JOIN controlled_published_bindings b ON b.tenant_id=p.tenant_id AND b.execution_id=p.id JOIN outbox_events o ON o.tenant_id=b.tenant_id AND o.id=b.outbox_id WHERE p.tenant_id=$1 AND p.id=$2`
+@@ -1684,11 +1777,13 @@ describe('SPEC217/224 native public persistent settlement/failure proof', () =>
+             noSecondModel: a.calls === 1,
+             nativeFenceRefusalRequired: true
+           })
+-        } finally {
+-          a.release.resolve()
+-          await a.joinDelivery()
+-          await a.runResult
+-        }
++        }, [
++          async () => {
++            a.release.resolve()
++            await a.joinDelivery()
++            await a.runResult
++          }
++        ])
+       }),
+     60000
+   )
+diff --git a/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts b/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
+index 5cd6cc8b..458027c5 100644
+--- a/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
++++ b/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
+@@ -5,7 +5,8 @@ import {
+   cleanupCompleteChildren,
+   completeArgv,
+   privateBytes,
+-  ownedPath
++  ownedPath,
++  withCompleteCleanup
+ } from './fixtures/complete-process-support.ts'
+ /** Store-process evidence only: no public runtime, model, or tool body is run. */
+ import { createHash, randomUUID } from 'node:crypto'
+@@ -77,7 +78,12 @@ async function connect() {
+     options: `-c search_path=${r.schemaName},public`,
+     max: 2
+   })
+-  return { pool, store: new PostgresExecutionStepStore(pool) }
++  try {
++    return { pool, store: new PostgresExecutionStepStore(pool) }
++  } catch (error) {
++    await cleanupCompleteChildren([], [() => pool.end()], { error })
++    throw error
++  }
+ }
+ 
+ function fixture(
+@@ -269,7 +275,7 @@ if (role) {
+       ).toString()
+     )
+     const { pool, store } = await connect()
+-    try {
++    return await withCompleteCleanup(async () => {
+       if (role === 'writer') {
+         const checkpoint = fixture(input.executionId)
+         expect(
+@@ -322,9 +328,7 @@ if (role) {
+           JSON.stringify({ pid: process.pid, result, next: input.cas.next })
+         )
+       }
+-    } finally {
+-      await pool.end()
+-    }
++    }, [() => pool.end()])
+   }, 30000)
+ } else {
+   describe.skipIf(!resourcePath)(
+diff --git a/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts b/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
+index 5bae8b9d..d74fcf86 100644
+--- a/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
++++ b/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
+@@ -2,10 +2,11 @@ import {
+   assignedResource,
+   startCompleteChild,
+   completeReadiness,
+-  stopCompleteChildren,
+   completeArgv,
+   privateBytes,
+-  ownedPath
++  ownedPath,
++  withCompleteCleanup,
++  cleanupCompleteChildren
+ } from './fixtures/complete-process-support.ts'
+ /** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
+ import { createHash, randomUUID } from 'node:crypto'
+@@ -131,15 +132,20 @@ async function connect() {
+     options: `-c search_path=${r.schemaName},public`,
+     max: 3
+   })
+-  return {
+-    pool,
+-    store: new PostgresExecutionStepStore(pool),
+-    journal: new PostgresOperationalEffectJournal(pool)
++  try {
++    return {
++      pool,
++      store: new PostgresExecutionStepStore(pool),
++      journal: new PostgresOperationalEffectJournal(pool)
++    }
++  } catch (error) {
++    await cleanupCompleteChildren([], [() => pool.end()], { error })
++    throw error
+   }
+ }
+ async function snapshot(dir: string, label: string, executionId: string) {
+   const { pool, store } = await connect()
+-  try {
++  return await withCompleteCleanup(async () => {
+     const rows = await withTenantContext(pool, tenantId, async (c) => ({
+       execution: (
+         await c.query(
+@@ -173,22 +179,18 @@ async function snapshot(dir: string, label: string, executionId: string) {
+     }
+     await save(join(dir, `${label}.json`), value)
+     return value
+-  } finally {
+-    await pool.end()
+-  }
++  }, [() => pool.end()])
+ }
+ async function seed(executionId: string) {
+   const { pool } = await connect()
+-  try {
++  return await withCompleteCleanup(async () => {
+     await withTenantContext(pool, tenantId, (c) =>
+       c.query(
+         "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+         [tenantId, executionId, sha(executionId)]
+       )
+     )
+-  } finally {
+-    await pool.end()
+-  }
++  }, [() => pool.end()])
+ }
+ 
+ async function runChild(
+@@ -197,248 +199,252 @@ async function runChild(
+   childRole: string
+ ) {
+   const { pool, store, journal } = await connect()
+-  const audit = new RecordingAuditSink(),
+-    telemetry = new RecordingTelemetrySink()
+-  const requests: unknown[] = [],
+-    results: unknown[] = [],
+-    casTrace: unknown[] = [],
+-    journalTrace: unknown[] = []
+-  const trace = async () =>
+-    save(join(dir, `${childRole}.trace.json`), {
+-      pid: process.pid,
+-      requests,
+-      results,
+-      casTrace,
+-      journalTrace,
+-      audit: audit.events
+-    })
+-  // Observational wrappers call the native methods unchanged and rethrow native failures.
+-  for (const method of [
+-    'reserve',
+-    'markStarted',
+-    'confirm',
+-    'fail',
+-    'markUncertain',
+-    'get'
+-  ] as const) {
+-    const original = journal[method].bind(journal)
+-    Object.defineProperty(journal, method, {
+-      value: async (...args: unknown[]) => {
+-        try {
+-          const result = await (
+-            original as (...a: unknown[]) => Promise<unknown>
+-          )(...args)
+-          journalTrace.push({ method, args, result })
+-          await trace()
+-          if (
+-            childRole === 'writer' &&
+-            input.name === 'json-null-value' &&
+-            method === 'confirm'
+-          ) {
+-            await save(join(dir, 'committed.json'), {
+-              pid: process.pid,
+-              phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
+-              checkpoint: await store.loadCheckpoint(
+-                tenantId,
+-                input.executionId
+-              ),
+-              result
+-            })
+-            process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
+-            await new Promise(() => {
+-              setInterval(() => {}, 1000)
+-            })
+-          }
+-          return result
+-        } catch (e) {
+-          journalTrace.push({ method, args, error: errorInfo(e) })
+-          await trace()
+-          throw e
+-        }
+-      }
+-    })
+-  }
+-  const cas = store.compareAndSwapCheckpoint.bind(store)
+-  store.compareAndSwapCheckpoint = async (value) => {
+-    if (childRole.startsWith('race') && value.expected === null) {
+-      await save(join(dir, `${childRole}.initial-ready.json`), {
++  return await withCompleteCleanup(async () => {
++    const audit = new RecordingAuditSink(),
++      telemetry = new RecordingTelemetrySink()
++    const requests: unknown[] = [],
++      results: unknown[] = [],
++      casTrace: unknown[] = [],
++      journalTrace: unknown[] = []
++    const trace = async () =>
++      save(join(dir, `${childRole}.trace.json`), {
+         pid: process.pid,
+-        expected: null
++        requests,
++        results,
++        casTrace,
++        journalTrace,
++        audit: audit.events
+       })
+-      process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
+-      await gate(join(dir, 'race-start.gate'))
+-    }
+-    const result = await cas(value)
+-    casTrace.push({ input: value, result })
+-    await trace()
+-    if (childRole.startsWith('race') && value.expected === null)
+-      await save(join(dir, `${childRole}.initial-cas.json`), {
+-        pid: process.pid,
+-        result
+-      })
+-    const full = value.next.state.observations.find(
+-      (o) =>
+-        o.type === 'TOOL_RESULT' &&
+-        (o.payload as { completion?: string }).completion === 'COMPLETE'
+-    )
+-    if (childRole === 'writer' && result.status === 'APPLIED' && full) {
+-      await save(join(dir, 'committed.json'), {
+-        pid: process.pid,
+-        checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
+-        cas: value,
+-        result
+-      })
+-      process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
+-      await new Promise(() => {
+-        setInterval(() => {}, 1000)
++    // Observational wrappers call the native methods unchanged and rethrow native failures.
++    for (const method of [
++      'reserve',
++      'markStarted',
++      'confirm',
++      'fail',
++      'markUncertain',
++      'get'
++    ] as const) {
++      const original = journal[method].bind(journal)
++      Object.defineProperty(journal, method, {
++        value: async (...args: unknown[]) => {
++          try {
++            const result = await (
++              original as (...a: unknown[]) => Promise<unknown>
++            )(...args)
++            journalTrace.push({ method, args, result })
++            await trace()
++            if (
++              childRole === 'writer' &&
++              input.name === 'json-null-value' &&
++              method === 'confirm'
++            ) {
++              await save(join(dir, 'committed.json'), {
++                pid: process.pid,
++                phase: 'CONFIRMED_JOURNAL_BEFORE_RESULT_CHECKPOINT',
++                checkpoint: await store.loadCheckpoint(
++                  tenantId,
++                  input.executionId
++                ),
++                result
++              })
++              process.stdout.write('PUBLIC224_READY CONFIRMED_JOURNAL\n')
++              await new Promise(() => {
++                setInterval(() => {}, 1000)
++              })
++            }
++            return result
++          } catch (e) {
++            journalTrace.push({ method, args, error: errorInfo(e) })
++            await cleanupCompleteChildren([], [trace], { error: e })
++            throw e
++          }
++        }
+       })
+     }
+-    return result
+-  }
+-  const capabilities = createCapabilityRegistry([
+-    {
+-      descriptor: {
+-        id: toolId,
+-        version: '1',
+-        description: 'Pure synthetic echo',
+-        inputSchema: { type: 'object' },
+-        outputSchema: {},
+-        risk: 'LOW',
+-        sideEffect: 'NONE',
+-        idempotent: true,
+-        requiresApproval: false,
+-        origin: 'core',
+-        providerId: 'synthetic.public.restart',
+-        providerVersion: '1'
+-      },
+-      implementation: {
+-        validateInput: () => true,
+-        validateOutput: () => true,
+-        execute: async (toolInput) => {
+-          const output = (toolInput as { text: string | null }).text
+-          await appendFile(
+-            join(dir, 'body-markers.jsonl'),
+-            JSON.stringify({
+-              pid: process.pid,
+-              role: childRole,
+-              input: toolInput,
+-              output
+-            }) + '\n'
+-          )
+-          process.stdout.write('PUBLIC224_BODY\n')
+-          return { status: 'SUCCEEDED', output }
+-        }
++    const cas = store.compareAndSwapCheckpoint.bind(store)
++    store.compareAndSwapCheckpoint = async (value) => {
++      if (childRole.startsWith('race') && value.expected === null) {
++        await save(join(dir, `${childRole}.initial-ready.json`), {
++          pid: process.pid,
++          expected: null
++        })
++        process.stdout.write('PUBLIC224_READY INITIAL_CAS\n')
++        await gate(join(dir, 'race-start.gate'))
+       }
+-    }
+-  ])
+-  const model: ModelGateway = {
+-    complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+-      void _signal
+-      requests.push(structuredClone(request))
++      const result = await cas(value)
++      casTrace.push({ input: value, result })
+       await trace()
+-      await appendFile(
+-        join(dir, 'model-markers.jsonl'),
+-        JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
++      if (childRole.startsWith('race') && value.expected === null)
++        await save(join(dir, `${childRole}.initial-cas.json`), {
++          pid: process.pid,
++          result
++        })
++      const full = value.next.state.observations.find(
++        (o) =>
++          o.type === 'TOOL_RESULT' &&
++          (o.payload as { completion?: string }).completion === 'COMPLETE'
+       )
+-      expect(request.maxOutputTokens).toBe(512)
+-      if (childRole.startsWith('race')) await gate(join(dir, 'race-model.gate'))
+-      const frame = JSON.parse(request.messages[1]!.content)
+-      const observed = frame.items.find(
+-        (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
+-      )
+-      // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
+-      const decision = childRole.startsWith('race')
+-        ? {
+-            decisionType: 'RESPOND',
+-            reasonCode: 'GOAL_SATISFIED',
+-            responseText: 'one synthetic race decision'
++      if (childRole === 'writer' && result.status === 'APPLIED' && full) {
++        await save(join(dir, 'committed.json'), {
++          pid: process.pid,
++          checkpoint: await store.loadCheckpoint(tenantId, input.executionId),
++          cas: value,
++          result
++        })
++        process.stdout.write('PUBLIC224_READY COMMITTED_FULL_TOOL_RESULT\n')
++        await new Promise(() => {
++          setInterval(() => {}, 1000)
++        })
++      }
++      return result
++    }
++    const capabilities = createCapabilityRegistry([
++      {
++        descriptor: {
++          id: toolId,
++          version: '1',
++          description: 'Pure synthetic echo',
++          inputSchema: { type: 'object' },
++          outputSchema: {},
++          risk: 'LOW',
++          sideEffect: 'NONE',
++          idempotent: true,
++          requiresApproval: false,
++          origin: 'core',
++          providerId: 'synthetic.public.restart',
++          providerVersion: '1'
++        },
++        implementation: {
++          validateInput: () => true,
++          validateOutput: () => true,
++          execute: async (toolInput) => {
++            const output = (toolInput as { text: string | null }).text
++            await appendFile(
++              join(dir, 'body-markers.jsonl'),
++              JSON.stringify({
++                pid: process.pid,
++                role: childRole,
++                input: toolInput,
++                output
++              }) + '\n'
++            )
++            process.stdout.write('PUBLIC224_BODY\n')
++            return { status: 'SUCCEEDED', output }
+           }
+-        : observed
++        }
++      }
++    ])
++    const model: ModelGateway = {
++      complete: async ({ signal: _signal, ...request }: ModelRequest) => {
++        void _signal
++        requests.push(structuredClone(request))
++        await trace()
++        await appendFile(
++          join(dir, 'model-markers.jsonl'),
++          JSON.stringify({ pid: process.pid, role: childRole, request }) + '\n'
++        )
++        expect(request.maxOutputTokens).toBe(512)
++        if (childRole.startsWith('race'))
++          await gate(join(dir, 'race-model.gate'))
++        const frame = JSON.parse(request.messages[1]!.content)
++        const observed = frame.items.find(
++          (i: { value?: { type?: string } }) => i.value?.type === 'TOOL_RESULT'
++        )
++        // The resumed answer comes solely from the actual user JSON TOOL_RESULT payload.
++        const decision = childRole.startsWith('race')
+           ? {
+               decisionType: 'RESPOND',
+               reasonCode: 'GOAL_SATISFIED',
+-              responseText:
+-                typeof observed.value.payload.output === 'string'
+-                  ? observed.value.payload.output
+-                  : canonicalizeCompleteJson(observed.value.payload.output)
+-            }
+-          : {
+-              decisionType: 'CALL_TOOL',
+-              reasonCode: 'TOOL_REQUIRED',
+-              toolId,
+-              toolVersion: '1',
+-              toolInput: { text: fixture(input.name) }
++              responseText: 'one synthetic race decision'
+             }
+-      const text = JSON.stringify(decision)
+-      expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
+-      const result = {
+-        text,
++          : observed
++            ? {
++                decisionType: 'RESPOND',
++                reasonCode: 'GOAL_SATISFIED',
++                responseText:
++                  typeof observed.value.payload.output === 'string'
++                    ? observed.value.payload.output
++                    : canonicalizeCompleteJson(observed.value.payload.output)
++              }
++            : {
++                decisionType: 'CALL_TOOL',
++                reasonCode: 'TOOL_REQUIRED',
++                toolId,
++                toolVersion: '1',
++                toolInput: { text: fixture(input.name) }
++              }
++        const text = JSON.stringify(decision)
++        expect(tokens(text)).toBeLessThanOrEqual(request.maxOutputTokens!)
++        const result = {
++          text,
++          provider: 'synthetic.public.restart',
++          model: 'toy64-v1',
++          inputTokens: tokens(request),
++          outputTokens: tokens(text),
++          costUsd: 0
++        }
++        results.push(result)
++        await trace()
++        return result
++      }
++    }
++    const counter: DecisionInputCounter = {
++      measure: async (request) => ({
++        counterId: 'toy64',
++        counterVersion: '1',
+         provider: 'synthetic.public.restart',
+         model: 'toy64-v1',
+-        inputTokens: tokens(request),
+-        outputTokens: tokens(text),
+-        costUsd: 0
+-      }
+-      results.push(result)
+-      await trace()
+-      return result
++        formattingVersion: '1',
++        inputUpperBoundTokens: tokens(request),
++        contextWindowTokens: 100_000,
++        costUpperBoundUsd: 0
++      })
+     }
+-  }
+-  const counter: DecisionInputCounter = {
+-    measure: async (request) => ({
+-      counterId: 'toy64',
+-      counterVersion: '1',
+-      provider: 'synthetic.public.restart',
+-      model: 'toy64-v1',
+-      formattingVersion: '1',
+-      inputUpperBoundTokens: tokens(request),
+-      contextWindowTokens: 100_000,
+-      costUpperBoundUsd: 0
++    const harness = createOperationalHarness({
++      toolResultContext: { version: 1 },
++      capabilities,
++      effectJournal: journal,
++      stepStore: store,
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        decisionInputCounter: counter,
++        decisionModelSupportsMaxOutputTokens: true
++      }),
++      modelGateway: model,
++      policy: new ScriptedPolicyEngine(),
++      approvals: new InMemoryApprovalEngine(),
++      audit,
++      telemetry
+     })
+-  }
+-  const harness = createOperationalHarness({
+-    toolResultContext: { version: 1 },
+-    capabilities,
+-    effectJournal: journal,
+-    stepStore: store,
+-    iterativeOrchestrator: new HybridOrchestrator({
+-      decisionModel: model,
+-      decisionInputCounter: counter,
+-      decisionModelSupportsMaxOutputTokens: true
+-    }),
+-    modelGateway: model,
+-    policy: new ScriptedPolicyEngine(),
+-    approvals: new InMemoryApprovalEngine(),
+-    audit,
+-    telemetry
+-  })
+-  const base = phase3RuntimeInput({
+-    tenantId: tenantId as RuntimeInput['tenantId'],
+-    executionId: input.executionId
+-  })
+-  const runtimeInput = {
+-    ...base,
+-    capabilityFingerprint: capabilities.compositionFingerprint(),
+-    agent: phase3AgentProfile({ tools: [toolId] }),
+-    userMessage: 'Echo the full synthetic tool output.',
+-    budget: { ...base.budget, maxTokens: 10_000 }
+-  }
+-  await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
+-  try {
+-    const result = await harness.run(runtimeInput)
+-    await trace()
+-    await save(join(dir, `${childRole}.outcome.json`), {
+-      pid: process.pid,
+-      result
++    const base = phase3RuntimeInput({
++      tenantId: tenantId as RuntimeInput['tenantId'],
++      executionId: input.executionId
+     })
+-    process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
+-  } catch (e) {
+-    await trace()
+-    await save(join(dir, `${childRole}.error.json`), errorInfo(e))
+-    throw e
+-  } finally {
+-    await pool.end()
+-  }
++    const runtimeInput = {
++      ...base,
++      capabilityFingerprint: capabilities.compositionFingerprint(),
++      agent: phase3AgentProfile({ tools: [toolId] }),
++      userMessage: 'Echo the full synthetic tool output.',
++      budget: { ...base.budget, maxTokens: 10_000 }
++    }
++    await save(join(dir, `${childRole}.runtime-input.json`), runtimeInput)
++    try {
++      const result = await harness.run(runtimeInput)
++      await trace()
++      await save(join(dir, `${childRole}.outcome.json`), {
++        pid: process.pid,
++        result
++      })
++      process.stdout.write(`PUBLIC224_FINISHED ${result.stopReason}\n`)
++    } catch (e) {
++      await cleanupCompleteChildren(
++        [],
++        [trace, () => save(join(dir, `${childRole}.error.json`), errorInfo(e))],
++        { error: e }
++      )
++      throw e
++    }
++  }, [() => pool.end()])
+ }
+ async function child(childRole: string, dir: string, inputPath: string) {
+   const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
+@@ -543,7 +549,7 @@ if (role) {
+           await seed(executionId)
+           let writer: Awaited<ReturnType<typeof child>> | undefined
+           const ownedChildren: Awaited<ReturnType<typeof child>>[] = []
+-          let primary: unknown
++          let primary: { error: unknown } | undefined
+           try {
+             writer = await child('writer', dir, inputPath)
+             ownedChildren.push(writer)
+@@ -659,10 +665,10 @@ if (role) {
+               fencebound: 'NOT_RUN'
+             })
+           } catch (error) {
+-            primary = error
++            primary = { error }
+             throw error
+           } finally {
+-            await stopCompleteChildren(ownedChildren, primary)
++            await cleanupCompleteChildren(ownedChildren, [], primary)
+           }
+         },
+         90000
+@@ -676,7 +682,7 @@ if (role) {
+         await save(inputPath, { executionId, name: 'race' })
+         await seed(executionId)
+         const children: Awaited<ReturnType<typeof child>>[] = []
+-        let primary: unknown
++        let primary: { error: unknown } | undefined
+         try {
+           children.push(await child('race-a', dir, inputPath))
+           children.push(await child('race-b', dir, inputPath))
+@@ -727,10 +733,10 @@ if (role) {
+             reservationRaceSeparate: 'NOT_RUN'
+           })
+         } catch (error) {
+-          primary = error
++          primary = { error }
+           throw error
+         } finally {
+-          await stopCompleteChildren(children, primary)
++          await cleanupCompleteChildren(children, [], primary)
+         }
+       }, 90000)
+     }
+diff --git a/packages/persistence/src/__tests__/fixtures/complete-process-support.ts b/packages/persistence/src/__tests__/fixtures/complete-process-support.ts
+index 04154d36..9febf405 100644
+--- a/packages/persistence/src/__tests__/fixtures/complete-process-support.ts
++++ b/packages/persistence/src/__tests__/fixtures/complete-process-support.ts
+@@ -95,7 +95,7 @@ export async function ownedPath(
+ export async function privateBytes(root: string, path: string) {
+   await ownedPath(root, path, 'file')
+   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+-  try {
++  return await withCompleteCleanup(async () => {
+     const stat = await handle.stat()
+     if (
+       !stat.isFile() ||
+@@ -109,9 +109,7 @@ export async function privateBytes(root: string, path: string) {
+     if (bytesRead !== stat.size)
+       throw new Error('Private file changed while reading')
+     return bytes.subarray(0, bytesRead)
+-  } finally {
+-    await handle.close()
+-  }
++  }, [() => handle.close()])
+ }
+ export async function privateEnvironment(root: string) {
+   await physicalPath(root, 'directory')
+@@ -120,7 +118,9 @@ export async function privateEnvironment(root: string) {
+     for (const part of ['tmp', 'config', 'cache', 'data', 'state'])
+       await mkdir(join(home, part), { mode: 0o700 })
+   } catch (error) {
+-    await rm(home, { recursive: true })
++    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
++      error
++    })
+     throw error
+   }
+   const env: NodeJS.ProcessEnv = {
+@@ -560,7 +560,9 @@ export async function startCompleteChild(args: {
+       stdio: ['ignore', 'pipe', 'pipe']
+     })
+   } catch (error) {
+-    await rm(home, { recursive: true })
++    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
++      error
++    })
+     throw error
+   }
+   const owned = observeCompleteChild(child, home, {
+@@ -588,12 +590,10 @@ export async function inspectCompleteResource(
+     throw new Error('Owned local Docker identity required')
+   await physicalPath(claim.docker, 'file')
+   const executable = await open(claim.docker, 'r')
+-  try {
++  await withCompleteCleanup(async () => {
+     if (sha(await executable.readFile()) !== claim.dockerSHA256)
+       throw new Error('Docker executable differs from claim')
+-  } finally {
+-    await executable.close()
+-  }
++  }, [() => executable.close()])
+   const socket = claim.dockerHost.slice('unix://'.length)
+   if (
+     resolve(socket) !== socket ||
+@@ -630,7 +630,9 @@ export async function inspectCompleteResource(
+       (error, stdout) => (error ? no(error) : yes(stdout))
+     )
+   } catch (error) {
+-    await rm(home, { recursive: true })
++    await cleanupCompleteChildren([], [() => rm(home, { recursive: true })], {
++      error
++    })
+     throw error
+   }
+   const owned = observeCompleteChild(child, home, {
+@@ -640,8 +642,7 @@ export async function inspectCompleteResource(
+     termGraceMs: 1000,
+     killGraceMs: 2000
+   })
+-  let primary: unknown
+-  try {
++  return await withCompleteCleanup(async () => {
+     const stdout = await Promise.race([
+       callback,
+       owned.done.then(() => {
+@@ -668,22 +669,7 @@ export async function inspectCompleteResource(
+     )
+       throw new Error('Inspect identity/shape mismatch')
+     return stdout.toString()
+-  } catch (error) {
+-    primary = error
+-    throw error
+-  } finally {
+-    try {
+-      await owned.stop()
+-    } catch (error) {
+-      if (primary && primary !== error)
+-        throw new AggregateError(
+-          [primary, error],
+-          'Inspect failed; cleanup also failed',
+-          { cause: primary }
+-        )
+-      throw error
+-    }
+-  }
++  }, [() => owned.stop()])
+ }
+ 
+ /** Join every owned child before callers clean any DB/role; retain primary cause. */
+@@ -692,7 +678,7 @@ export async function stopCompleteChildren(
+   primary?: unknown
+ ) {
+   const results = await Promise.allSettled(
+-    children.map((child) => child.stop())
++    children.map((child) => Promise.resolve().then(() => child.stop()))
+   )
+   const errors = results.flatMap((result) =>
+     result.status === 'rejected' ? [result.reason] : []
+@@ -705,19 +691,47 @@ export async function stopCompleteChildren(
+     )
+ }
+ 
++/** A presence wrapper retains even a thrown undefined; one policy for all scopes. */
++export function completeCleanupError(
++  errors: readonly unknown[]
++): { error: unknown } | undefined {
++  const distinct = [...new Set(errors)]
++  if (!distinct.length) return undefined
++  return {
++    error:
++      distinct.length === 1
++        ? distinct[0]
++        : new AggregateError(distinct, 'Fixture and resource cleanup failed', {
++            cause: distinct[0]
++          })
++  }
++}
++
++/** The action owns its resource until all safe finalizers have completed. */
++export async function withCompleteCleanup<T>(
++  action: () => T | Promise<T>,
++  cleanups: readonly (() => unknown)[]
++): Promise<T> {
++  let result!: T
++  let primary: { error: unknown } | undefined
++  try {
++    result = await action()
++  } catch (error) {
++    primary = { error }
++  }
++  await cleanupCompleteChildren([], cleanups, primary)
++  return result
++}
++
+ /** Child join is mandatory before DB cleanup; every safe cleanup is attempted. */
+ export async function cleanupCompleteChildren(
+   children: { stop: () => Promise<unknown> }[],
+-  cleanups: readonly (() => Promise<unknown>)[],
++  cleanups: readonly (() => unknown)[],
+   primary?: { error: unknown }
+ ) {
+   const errors: unknown[] = primary ? [primary.error] : []
+   const reject = (): never => {
+-    const distinct = [...new Set(errors)]
+-    if (distinct.length === 1) throw distinct[0]
+-    throw new AggregateError(distinct, 'Fixture and resource cleanup failed', {
+-      cause: distinct[0]
+-    })
++    throw completeCleanupError(errors)!.error
+   }
+   try {
+     await stopCompleteChildren(children)

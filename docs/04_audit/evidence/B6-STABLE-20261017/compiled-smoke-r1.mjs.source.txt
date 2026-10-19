@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { registerHooks, syncBuiltinESMExports } from 'node:module'
+import net from 'node:net'
+import tls from 'node:tls'
+import http from 'node:http'
+import https from 'node:https'
+const root=path.resolve(fileURLToPath(new URL('..',import.meta.url)))
+const resolved=[]
+const hook=registerHooks({resolve(specifier,context,next){const result=next(specifier,context);if(result.url.startsWith('file:')){const p=fileURLToPath(result.url);assert.ok(p.startsWith(root+path.sep),'module outside variant: '+p);assert.ok(!p.includes('/products/'),'product module: '+p);assert.ok(!/\/(?:packages|apps|legacy)\/.*\/src\//.test(p),'private source loaded: '+p);assert.ok(!/\.[cm]?tsx?$/.test(p),'TypeScript runtime loader: '+p);resolved.push({specifier,url:result.url})}return result}})
+let networkAttempts=0
+const noNetwork=()=>{networkAttempts++;throw new Error('network denied in synthetic compiled-consumer smoke')}
+globalThis.fetch=noNetwork;net.Socket.prototype.connect=noNetwork;tls.connect=noNetwork;http.request=noNetwork;http.get=noNetwork;https.request=noNetwork;https.get=noNetwork;syncBuiltinESMExports()
+assert.equal(fs.existsSync(path.join(root,'products')),false)
+const exports=JSON.parse(fs.readFileSync(new URL('supported-exports.json',import.meta.url),'utf8'))
+const packages=[]
+let runtimeExports=0
+for(const name of [...new Set(exports.map(x=>x.package))]){
+ const url=import.meta.resolve(name);assert.match(url,/\/packages\/[^/]+\/dist\/index\.js$/)
+ const module=await import(name)
+ const values=exports.filter(x=>x.package===name&&x.kind==='valor')
+ for(const entry of values){assert.ok(Object.hasOwn(module,entry.name),name+':'+entry.name);runtimeExports++}
+ packages.push({name,url,valueExportsChecked:values.length})
+}
+const {importCount}=await import('./dist/public-imports.mjs');assert.equal(importCount,exports.length)
+const consumer=await import('./dist/reception-agent.mjs')
+const journey=await consumer.runReceptionJourney()
+assert.deepEqual([journey.greeting.stopReason,journey.openingHours.stopReason,journey.appointment.stopReason,journey.clinicalQuestion.stopReason],['COMPLETED','COMPLETED','APPROVAL_REQUIRED','HUMAN_TAKEOVER'])
+assert.equal(journey.fixture.capabilityCalls.lookup,1);assert.equal(journey.fixture.capabilityCalls.appointment,0)
+assert.equal(journey.openingHours.toolResult.output.sourceId,consumer.SYNTHETIC_OPENING_HOURS_SOURCE.sourceId)
+assert.equal(journey.fixture.auditEvents.length,4);assert.equal(journey.fixture.telemetryEvents.length,4)
+assert.deepEqual(journey.fixture.modelEvents.map(e=>e.type),['model.call.started','model.call.completed'])
+const deniedFixture=consumer.createReceptionAgentFixture({approvalDecision:'DENIED'})
+const denied=await deniedFixture.harness.run(consumer.createReceptionAgentInput('Quero marcar uma consulta.','denied'))
+assert.equal(denied.stopReason,'POLICY_DENIED');assert.equal(deniedFixture.capabilityCalls.appointment,0)
+const auditFixture=consumer.createReceptionAgentFixture({auditFailure:true})
+const auditFailed=await auditFixture.harness.run(consumer.createReceptionAgentInput('Qual o horário de funcionamento?','audit-fail'))
+assert.equal(auditFailed.stopReason,'AUDIT_FAILED')
+assert.equal(networkAttempts,0)
+hook.deregister()
+const report={task:'B6-STABLE-20261017',candidate:'5a199668eef5db4ca7aa2adc3853169ca0953cbf',status:'PASS',node:process.version,sourceAliases:false,productSourcesPresent:false,documentedImportsCompiled:exports.length,runtimeExportsChecked:runtimeExports,packages,journey:{greeting:journey.greeting.stopReason,openingHours:journey.openingHours.stopReason,appointment:journey.appointment.stopReason,clinicalQuestion:journey.clinicalQuestion.stopReason,denied:denied.stopReason,auditFailure:auditFailed.stopReason,lookupCalls:journey.fixture.capabilityCalls.lookup,appointmentCalls:journey.fixture.capabilityCalls.appointment},networkAttempts,moduleResolutions:resolved}
+fs.writeFileSync(process.argv[2],JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({...report,moduleResolutions:resolved.length}))

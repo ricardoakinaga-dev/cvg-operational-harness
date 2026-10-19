@@ -1,0 +1,57 @@
+import json,pathlib,hashlib,datetime,subprocess,collections
+ROOT=pathlib.Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+TMP=pathlib.Path('/tmp/cvg-codex100-exec-20261017/delivery-audit-20261018/reviewer')
+P=ROOT/'docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision';Q=P.parent/'qualifier-build'
+base=json.loads((TMP/'input-hashes-first.json').read_text());records={r['path']:r for r in base['files']}
+def rec(p):
+ p=pathlib.Path(p);p=p if p.is_absolute() else ROOT/p
+ b=p.read_bytes(); path=str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else str(p)
+ if path not in records:records[path]={'path':path,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'first_observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ return b
+def get(p):return json.loads(rec(p))
+def checkfiles(rows,resolve=lambda x:ROOT/x['path']):
+ bad=[]
+ for r in rows:
+  p=resolve(r)
+  try:b=rec(p)
+  except FileNotFoundError:bad.append({'path':str(p),'problem':'MISSING'});continue
+  if hashlib.sha256(b).hexdigest()!=r['sha256'] or ('bytes'in r and len(b)!=r['bytes']):bad.append({'path':str(p),'expected':r,'actual_sha256':hashlib.sha256(b).hexdigest(),'actual_bytes':len(b)})
+ return {'count':len(rows),'mismatches':bad}
+results={}
+for name,p in [('ports_seal',P/'manifest.json'),('qualifier_seal',Q/'manifest.json'),('R2_freeze',P/'review-freeze-r2.json')]:
+ j=get(p);results[name]=checkfiles(j['files']);results[name]['declared_count']=j.get('file_count')
+r1=get(P/'review-freeze-r1.json');recovery=get(P/'R1-subject-recovery.json')
+recover={r['original_path']:r for r in recovery['checks']}
+results['R1_original38']=checkfiles(r1['files'],lambda r:ROOT/recover[r['path']]['recovery_path'])
+results['R1_recovery_metadata']=checkfiles(recovery['checks'],lambda r:ROOT/r['recovery_path'])
+results['R1_freeze_binding']=hashlib.sha256(rec(P/'review-freeze-r1.json')).hexdigest()==get(P/'review-freeze-r2.json')['R1_freeze_sha256']
+for review in ['review-r1','review-r2']:
+ j=get(P/review/'manifest.json');print(review,'manifest_keys',list(j))
+ results[review+'_seal']=checkfiles(j['files'],lambda r:P/review/r['path']) if 'files'in j else {'needs_mapping':j}
+inputs=get(P/'source-inputs.json'); spans=get(P/'source-spans.json');inp={r['id']:r for r in inputs['files']}
+results['primary31_archives']=checkfiles(inputs['files'],lambda r:P/r['archive'])
+results['primary_current_origins']=checkfiles([r for r in inputs['files'] if not r['id'].startswith('G')])
+results['owner27_projection']=checkfiles(inputs['owner_R3_projection']['records'])
+git=[]
+for r in inputs['files']:
+ if not r['id'].startswith('G'):continue
+ b=subprocess.check_output(['git','-C',r['repository'],'cat-file','blob',r['git_blob']]);bound_blob=subprocess.check_output(['git','-C',r['repository'],'rev-parse',r['commit']+':'+r['path']],text=True).strip();git.append({'commit_path_binding':bound_blob==r['git_blob'],'id':r['id'],'blob':r['git_blob'],'sha256':hashlib.sha256(b).hexdigest(),'archive_match':b==rec(P/r['archive'])})
+results['git_primary_blobs']=git
+spanbad=[]; excerpts=[]
+for s in spans['spans']:
+ r=inp[s['input']]; lines=rec(P/r['archive']).decode().splitlines(); extracted='\n'.join(lines[s['start_line']-1:s['end_line']])
+ if extracted!=s['excerpt'] or s['input_sha256']!=r['sha256'] or s['path']!=r['path'] or not (1<=s['start_line']<=s['end_line']<=len(lines)):spanbad.append(s['id'])
+ excerpts.append('\n### '+s['id']+' '+r['archive']+'\n'+'\n'.join(f'{i+1}: {v}' for i,v in enumerate(lines) if s['start_line']-1<=i<s['end_line']))
+results['ranges80']={'count':len(spans['spans']),'mismatches':spanbad}
+refs=[e for port in get(P/'port-bindings.json')['ports'] for e in port['evidence']];ids={s['id'] for s in spans['spans']}
+results['port_evidence_references']={'count':len(refs),'missing':sorted(set(refs)-ids),'unique_ranges':len(set(refs))}
+(TMP/'source-excerpts.txt').write_text('\n'.join(excerpts)+'\n')
+results['Root_codefreeze9']=checkfiles(get(Q/'code-freeze-r2.json')['files'])
+results['certificate_copy38']=checkfiles(get(Q/'certificate-copy-verification.json')['files'],lambda r:Q/'certification-r1'/r['path'])
+for name in ['authority.json','integration-result.json','acceptance-status.json','code-review-r2/review.json','certification-r1/certification/phase10-result.json','certification-r1/certification/candidate-manifest.json']:
+ j=get(Q/name);(TMP/(name.replace('/','_')+'.keys.json')).write_text(json.dumps({'keys':list(j),'small_fields':{k:v for k,v in j.items() if not isinstance(v,(dict,list))}},indent=2)+'\n')
+cat=get(ROOT/'docs/03_build/tracking/codex100_catalog_v1.json');results['catalog509']={'records':len(cat['requirements']),'kinds':dict(collections.Counter(r['kind'] for r in cat['requirements'])),'all_NOT_RUN_null_receipt':all(r['status']==r['cvg_validation']=='NOT_RUN' and r['receipt'] is None for r in cat['requirements']),'numerator_pass_current':cat['numerator_pass_current'],'full_parity':cat['full_codex_parity_claim']}
+results['catalog509']['reference_validation_inventory_only']=dict(collections.Counter(r['reference_validation'] for r in cat['requirements']))
+base['files']=sorted(records.values(),key=lambda x:x['path']);(TMP/'input-hashes-first.json').write_text(json.dumps(base,indent=2)+'\n')
+(TMP/'observations.json').write_text(json.dumps(results,indent=2)+'\n')
+print(json.dumps(results,ensure_ascii=False,indent=2))

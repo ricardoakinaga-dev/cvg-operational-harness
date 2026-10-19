@@ -1,0 +1,331 @@
+1600:       stepNumber,
+1601:       forceApproval
+1602:     )
+1603:   }
+1604: 
+1605:   private async dispatchKnowledge(
+1606:     run: LoopRun,
+1607:     decision: LoopDecision,
+1608:     stepNumber: number
+1609:   ): Promise<DispatchOutcome> {
+1610:     return dispatchKnowledge(this.dispatchContext, run, decision, stepNumber)
+1611:   }
+1612: 
+1613:   private async dispatchVerify(
+1614:     run: LoopRun,
+1615:     decision: LoopDecision,
+1616:     stepNumber: number
+1617:   ): Promise<DispatchOutcome> {
+1618:     const verificationLimit =
+1619:       run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+1620:     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+1621:     if (run.usage.verificationCalls + 1 > verificationLimit) {
+1622:       return this.stop(
+1623:         'MAX_VERIFICATION_CALLS',
+1624:         'Verification budget exhausted.'
+1625:       )
+1626:     }
+1627:     run.usage.verificationCalls += 1
+1628:     await this.persistCheckpoint(run)
+1629:     const target = decision.verificationTarget as string
+1630:     const verification = this.verify(run, target)
+1631:     await this.recordObservation(
+1632:       run,
+1633:       this.makeObservation(run, {
+1634:         stepId: `step_${run.executionId}_${stepNumber}_verify`,
+1635:         stepNumber,
+1636:         type: 'VERIFICATION',
+1637:         source: 'SYSTEM',
+1638:         trust: 'TRUSTED',
+1639:         payload: { target, ...verification },
+1640:         summary: `Verification ${verification.valid ? 'passed' : 'failed'} for target ${target}.`,
+1641:         provenance: { sourceId: 'runtime-verifier' }
+1642:       })
+1643:     )
+1644:     await this.recordStep(run, {
+1645:       stepNumber,
+1646:       stepType: 'VERIFY',
+1647:       status: verification.valid ? 'SUCCEEDED' : 'FAILED',
+1648:       sideEffecting: false,
+1649:       reasonCode: decision.reasonCode,
+1650:       ...(verification.valid ? {} : { errorCode: 'verification_failed' })
+1651:     })
+1652:     if (!verification.valid) {
+1653:       run.skipEvaluationOnce = true
+1654:       const revisionEvaluation = {
+1655:         outcome: 'INCOMPLETE' as const,
+1656:         reasonCode: 'VERIFICATION_FAILED' as const,
+1657:         deterministic: true,
+1658:         detail: verification.details.join('; ')
+1659:       }
+1660:       run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+1661:       run.lastEvaluation = revisionEvaluation
+1662:     }
+1663:     return { kind: 'continue' }
+1664:   }
+1665: 
+1666:   private verify(
+1667:     run: LoopRun,
+1668:     target: string
+1669:   ): { valid: boolean; details: readonly string[] } {
+1670:     if (target === 'tool-result') {
+1671:       const succeeded =
+1672:         run.lastToolObservation !== null &&
+1673:         (run.lastToolObservation.payload as { status?: string } | null)
+1674:           ?.status === 'SUCCEEDED'
+1675:       return {
+1676:         valid: succeeded,
+1677:         details: succeeded ? [] : ['no successful tool result is available']
+1678:       }
+1679:     }
+1680:     if (target === 'evidence-coverage') {
+1681:       const valid = run.lastSufficiency === 'SUFFICIENT'
+1682:       return {
+1683:         valid,
+1684:         details: valid
+1685:           ? []
+1686:           : [`evidence sufficiency is ${run.lastSufficiency ?? 'unknown'}`]
+1687:       }
+1688:     }
+1689:     if (target === 'response-claims') {
+1690:       const validation = this.validateClaims(run, run.responseText ?? '')
+1691:       return {
+1692:         valid: validation.valid,
+1693:         details: validation.unsupportedClaims
+1694:       }
+1695:     }
+1696:     return {
+1697:       valid: false,
+1698:       details: [`unsupported verification target ${target}`]
+1699:     }
+1700:   }
+1701: 
+1702:   private validateClaims(run: LoopRun, responseText: string): ClaimValidation {
+1703:     const extractor = this.options.claimExtractor
+1704:     if (!extractor || !responseText.trim()) {
+1705:       return { valid: true, unsupportedClaims: [] }
+1706:     }
+1707:     return defaultClaimValidation(extractor(responseText), run.observations)
+1708:   }
+1709: 
+1710:   private async dispatchReplan(
+1711:     run: LoopRun,
+1712:     decision: LoopDecision,
+1713:     stepNumber: number
+1714:   ): Promise<DispatchOutcome> {
+1715:     const replanLimit = run.input.budget.maxReplans ?? run.input.budget.maxSteps
+1716:     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+1717:     if (run.usage.replans + 1 > replanLimit) {
+1718:       return this.stop('MAX_REPLANS', 'Replan budget exhausted.')
+1719:     }
+1720:     run.usage.replans += 1
+1721:     await this.persistCheckpoint(run)
+1722:     await this.recordObservation(
+1723:       run,
+1724:       this.makeObservation(run, {
+1725:         stepId: `step_${run.executionId}_${stepNumber}_replan`,
+1726:         stepNumber,
+1727:         type: 'SYSTEM_EVENT',
+1728:         source: 'SYSTEM',
+1729:         trust: 'TRUSTED',
+1730:         payload: { event: 'replan', reasonCode: decision.reasonCode },
+1731:         summary: `Strategy changed: ${decision.reasonCode}.`,
+1732:         provenance: { sourceId: 'runtime-replan' }
+1733:       })
+1734:     )
+1735:     await this.recordStep(run, {
+1736:       stepNumber,
+1737:       stepType: 'MODEL',
+1738:       status: 'SUCCEEDED',
+1739:       sideEffecting: false,
+1740:       reasonCode: decision.reasonCode
+1741:     })
+1742:     await this.safeAudit(run, 'runtime.replanned', {
+1743:       result: decision.reasonCode
+1744:     })
+1745:     return { kind: 'continue' }
+1746:   }
+1747: 
+1748:   private async dispatchRespond(
+1749:     run: LoopRun,
+1750:     decision: LoopDecision,
+1751:     stepNumber: number
+1752:   ): Promise<DispatchOutcome> {
+1753:     return dispatchRespond(this.dispatchContext, run, decision, stepNumber)
+1754:   }
+1755: 
+1756:   private async composeResponse(
+1757:     run: LoopRun,
+1758:     decision: LoopDecision
+1759:   ): Promise<
+1760:     { response: string } | { stopReason: StopReason; response: string }
+1761:   > {
+1762:     return composeResponse(this.dispatchContext, run, decision)
+1763:   }
+1764: 
+1765:   private evaluatorFor(run: LoopRun): CompletionEvaluator {
+1766:     if (this.completionEvaluatorOverride) {
+1767:       return this.completionEvaluatorOverride
+1768:     }
+1769:     const strategy = run.input.agent.completionStrategy ?? 'DETERMINISTIC'
+1770:     const cached = this.completionEvaluators.get(strategy)
+1771:     if (cached) return cached
+1772:     const evaluator = new DeterministicCompletionEvaluator({ strategy })
+1773:     this.completionEvaluators.set(strategy, evaluator)
+1774:     return evaluator
+1775:   }
+1776: 
+1777:   private async evaluate(
+1778:     run: LoopRun,
+1779:     decision: LoopDecision
+1780:   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }> | null> {
+1781:     return evaluate(this.dispatchContext, run, decision)
+1782:   }
+1783: 
+1784:   private async pause(
+1785:     run: LoopRun,
+1786:     stepNumber: number,
+1787:     outcome: Extract<DispatchOutcome, { kind: 'pause' }>
+1788:   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+1789:     return pause(this.dispatchContext, run, stepNumber, outcome)
+1790:   }
+1791: 
+1792:   /**
+1793:    * Post-usage gate for orchestrator-reported usage (PDSH-004). The
+1794:    * beginModelRequest pre-model slot already gates the kernel's model call;
+1795:    * this catches reported overages so the loop still stops honestly.
+1796:    */
+1797:   private checkAfterUsage(
+1798:     run: LoopRun
+1799:   ): { reason: StopReason; response: string } | null {
+1800:     if (run.usage.modelCalls > run.input.budget.maxModelCalls) {
+1801:       return {
+1802:         reason: 'MAX_MODEL_CALLS',
+1803:         response: 'Model-call budget exhausted.'
+1804:       }
+1805:     }
+1806:     if (
+1807:       run.usage.inputTokens + run.usage.outputTokens >
+1808:       run.input.budget.maxTokens
+1809:     ) {
+1810:       return { reason: 'MAX_TOKENS', response: 'Token budget exhausted.' }
+1811:     }
+1812:     if (run.usage.costUsd > run.input.budget.maxCostUsd) {
+1813:       return { reason: 'MAX_COST', response: 'Cost budget exhausted.' }
+1814:     }
+1815:     return null
+1816:   }
+1817: 
+1818:   private accountUsage(run: LoopRun, usage: ModelUsage): void {
+1819:     run.usage.modelCalls += usage.modelCalls
+1820:     run.usage.inputTokens += usage.inputTokens
+1821:     run.usage.outputTokens += usage.outputTokens
+1822:     run.usage.costUsd += usage.costUsd
+1823:   }
+1824: 
+1825:   private effectiveDuration(run: LoopRun): number {
+1826:     return run.usage.activeDurationMs + (Date.now() - run.startedAtMs)
+1827:   }
+1828: 
+1829:   private remainingDuration(run: LoopRun): number {
+1830:     return run.input.budget.maxDurationMs - this.effectiveDuration(run)
+1831:   }
+1832: 
+1833:   private makeObservation(
+1834:     run: LoopRun,
+1835:     input: {
+1836:       stepId: string
+1837:       stepNumber: number
+1838:       type: Observation['type']
+1839:       source: Observation['source']
+1840:       trust: Observation['trust']
+1841:       payload: unknown
+1842:       summary: string
+1843:       provenance: Observation['provenance']
+1844:     }
+1845:   ): Observation {
+1846:     let payload = input.payload
+1847:     if (this.options.toolResultContext && input.type === 'TOOL_RESULT') {
+1848:       const value = payload as {
+1849:         schemaVersion?: number
+1850:         status?: string
+1851:         output?: unknown
+1852:         error?: unknown
+1853:       }
+1854:       const tool = this.options.tools.resolve(
+1855:         input.provenance.sourceId,
+1856:         input.provenance.sourceVersion
+1857:       )
+1858:       if (!tool)
+1859:         throw new ToolResultContextError(
+1860:           'STATE_CONFLICT',
+1861:           'Tool observation has no native registry binding.',
+1862:           'STATE_CONFLICT'
+1863:         )
+1864:       if (value.schemaVersion !== 1) {
+1865:         payload =
+1866:           value.status === 'SUCCEEDED'
+1867:             ? completeToolPayload(value.output, tool.sideEffect)
+1868:             : {
+1869:                 schemaVersion: 1,
+1870:                 status: value.status === 'REJECTED' ? 'REJECTED' : 'FAILED',
+1871:                 sideEffect: tool.sideEffect,
+1872:                 completion: 'NOT_APPLICABLE',
+1873:                 resultAvailability: 'UNAVAILABLE',
+1874:                 error:
+1875:                   typeof value.error === 'string'
+1876:                     ? value.error.slice(0, 512)
+1877:                     : 'tool_failed'
+1878:               }
+1879:       }
+1880:     }
+1881:     const observation: Observation = {
+1882:       observationId: `obs_${randomUUID()}`,
+1883:       executionId: run.executionId,
+1884:       stepId: input.stepId,
+1885:       stepNumber: input.stepNumber,
+1886:       type: input.type,
+1887:       source: input.source,
+1888:       trust: input.trust,
+1889:       payload:
+1890:         this.options.toolResultContext && input.type === 'TOOL_RESULT'
+1891:           ? payload
+1892:           : boundedPayload(payload, this.maxObservationPayloadChars),
+1893:       summary: input.summary.slice(0, 500),
+1894:       provenance: input.provenance,
+1895:       timestamp: this.clock().toISOString()
+1896:     }
+1897:     if (this.options.toolResultContext && input.type === 'TOOL_RESULT')
+1898:       assertCompleteToolObservation(observation)
+1899:     return observation
+1900:   }
+1901: 
+1902:   private async recordObservation(
+1903:     run: LoopRun,
+1904:     observation: Observation
+1905:   ): Promise<void> {
+1906:     run.observations = this.options.toolResultContext
+1907:       ? retainCompleteObservations([...run.observations, observation])
+1908:       : [...run.observations, observation].slice(-MAX_CHECKPOINT_OBSERVATIONS)
+1909:     run.state = { ...run.state, observations: run.observations }
+1910:     await this.safeAudit(run, 'observation.recorded', {
+1911:       result: `${observation.source}:${observation.type}`
+1912:     })
+1913:   }
+1914: 
+1915:   private async recordStep(
+1916:     run: LoopRun,
+1917:     input: {
+1918:       stepNumber: number
+1919:       stepType: ExecutionStep['stepType']
+1920:       status: ExecutionStep['status']
+1921:       sideEffecting: boolean
+1922:       decisionType?: ExecutionStep['decisionType']
+1923:       reasonCode?: ExecutionStep['reasonCode']
+1924:       errorCode?: string
+1925:       observationRefs?: readonly string[]
+1926:     }
+1927:   ): Promise<void> {
+1928:     const stepId = `step_${run.executionId}_${input.stepNumber}_${input.stepType.toLowerCase()}`
+1929:     const terminal = input.status === 'SUCCEEDED' || input.status === 'FAILED'
+1930:     const decisionType =

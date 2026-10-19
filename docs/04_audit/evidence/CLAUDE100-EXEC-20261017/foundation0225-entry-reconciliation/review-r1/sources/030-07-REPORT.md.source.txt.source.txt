@@ -1,0 +1,141 @@
+# Follow-up G01 — targeted T1 acceptance and0225 local entry
+
+Status: **COMPLETED_READ_ONLY_FOLLOWUP / PROVISIONAL_FOR_LEAD_AND_INDEPENDENT_REVIEW**. One follow-up only; no descendants, code, tests, app, PG/Docker, network, gates, source/SPEC/claim/ledger/status edits, commit or push. All writes are confined to `followup-g01/**`. Original sealed outputs are preserved and separately checked before/after.
+
+**Finding:** The explicit PAR-G01 **T1 preservation, recorded-decision and mapping criteria are substantively evidenced now**. They do not state a requirement for all-project certification or fully operational0217 acceptance. The prior Q3 requirement for a completely qualified0217 source slice remains relevant to that hypothetical **functional promotion**, but importing it as a prerequisite for G01's documentary/preservation acceptance would conflate gates. This follows the changed precise contract question; it does not rewrite the original report or resolve its UNKNOWN operational proof.
+
+A technical reconciliation can plausibly preserve0029→0030 ordering and existing0225 approval while limiting work to local BUILD. **It has not yet resolved the stronger root/support entry words in the accepted adjusted proposal.** Thus there is an existing-authority reconciliation path, not immediate BUILD entry or an automatic G01 DONE. No new human refusal or approval is invented here.
+
+## Primary checks and bounded inputs
+
+Eight current relevant input files were frozen (parent fact receipt, own coordination,0380, human spec decisions, adjusted0225, its acceptedR2, glossary,0379); two already-used primary authorities (constitution and exact original0225) were rechecked. Two named a724 Git blobs (0029 SQL and its migration registry) were read, never executed. Parent `g01-primary-facts.json` is a claim to verify, not authority by itself. All named Git queries and exact output/exit records are in `git-primary-before.json`; source snapshots and before/after hashes are in the integrity files.
+
+Direct Git observations:
+
+- PARE worktree `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` is clean including untracked files, HEAD `a72422bee3730ecc98226e3ff8f4c7fb51a4e7fe`, branch `codex/pare100-exec-20261014-6az3hlay`.
+- Its common Git directory is `/home/ricardo/Área de trabalho/cvg-operational-harness/.git`, a real persistent directory outside/tmp. The persistent branch ref resolves to that exact commit.
+- 0029 SQL is in that commit, SHA `a738b4031d4ef06bfc5508cb9c459d7133d419b3271962f4ea9b1a808965745d`. The same commit's `defaultPostgresMigrations` registers `0029_controlled_published_kernel` at L49 ([frozen registry](snapshots/GIT-a724-postgres-migrations.ts.source.txt#L49)). This is actual branch source integration, not merely a loose SQL file or an applied-database claim. No0030 files were found in the bounded root/PARE migration directories.
+- Root checkout is `archive/local-audit-records-20261011`@`7ecc5b53944dcbc50fc26a95cfaec05bb1c62eb5`; actual local `main` is `503ded798ccb64e35b9fc591817d23f5130daff4`. a724 is not ancestor of either;0029 is absent from root filesystem and from main's tree. **Do not equate root checkout with main.**
+- Canonical `docs/02_spec/0227*` is empty. No new qualification contract is supplied by that name.
+
+Primary actor evidence matters: coordination says “A worktree em `/tmp` também foi commitada pelo usuário em `a72422be`, na sua branch `codex/pare100-exec-20261014-6az3hlay`” ([F02 L507](snapshots/F02-agent_coordination.md.source.txt#L507)). Git author/committer are Ricardo Akinaga. We can establish preservation on the owner's branch; we cannot claim Codex executed that commit. The user performed the requested preservation action. Repeating the commit solely to satisfy an actor label is not a stated acceptance requirement.
+
+## Criterion-by-criterion G01 T1 assessment
+
+Actual card:
+
+> - Fase F0 · prioridade P0 · tamanho P · trilha T1 · relevância hospitalar alta · estado `TODO`.
+> - Origem: Estado do programa em 16/10/2026. Absorve: P100-001..004, 010, 012, 025; SPECs 0217–0226.
+> - Hoje: 182 caminhos alterados sem commit na worktree `/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree` (o `/tmp` é limpo no boot); cinco gates T3 pendentes (0220, 0221, 0222, 0225, 0226); 2 de 36 cartões P100 concluídos localmente.
+> - Entrega: Commit em branch própria do trabalho da worktree, pelo dono (Codex); decisão do usuário sobre os cinco gates num único pacote; cartões P100 em andamento remapeados para os IDs PAR desta carteira.
+> - Depende de: nenhuma.
+> - Aceite: Nenhum código aceito existe só em `/tmp`; cada gate pendente tem decisão registrada; a tabela de correspondência P100→PAR está publicada.
+
+[F03 L100–105](snapshots/F03-0380_backlog_paridade_100_deepseek.md.source.txt#L100)
+
+| Criterion | Evidence-grounded assessment | What is not proved |
+| --- | --- | --- |
+| Commit worktree work in own branch | **CURRENT: preservation MET.** Actual clean branch and reachable persistent a724; primary record attributes commit to user on Codex branch. | No claim that Codex personally executed commit; no approval of WIP source implied. |
+| No accepted code exists only in/tmp | **INFERRED: MET for current PARE worktree scope.** Its committed source survives via persistent root.git/ref even though working directory is/tmp. | Not an exhaustive historical scratch-artifact inventory or functional acceptance. |
+| Each pending gate has recorded decision | **CURRENT: MET.**0220/0226 DEFERRED;0221/0222/0225 APPROVED_WITH_ADJUSTMENTS. | Deferred means decision recorded, not implementation approved. |
+| P100→PAR correspondence published | **CURRENT: MET.** Canonical0380 L61–83 includes the mapping. | No promise of downstream cards DONE. |
+| Integrate0029 first in PAR-G01 (human/0379 action, not extra G01 L105 wording) | **CURRENT:** SQL and default-loader registration coexist in persistent a724; no0030 there. **INFERRED:** this can satisfy branch-level G01 integration if Lead+review confirm target interpretation. | Root/main integration and DB application are absent; “integrated” target is not explicitly defined as main in human/0379 text. |
+| Formal T1 closeout | **UNKNOWN / not done by scout.**0379 asks formatting/links green, ledgers current; D3 independent review. | This read-only recon cannot demonstrate new T1 checks, reconcile stale TODO administratively or grant final card acceptance. |
+
+The mapping is directly present ([F03 L61–83](snapshots/F03-0380_backlog_paridade_100_deepseek.md.source.txt#L61)); decisions are directly present ([F04 L8–80](snapshots/F04-spec-gates.json.source.txt#L8)). The `Hoje:182 caminhos...sem commit` and five-pending description is factually stale against the inspected commit and decisions. The card remains `TODO`; evidence for correcting stale status is not itself permission for this scout to change status.
+
+0379 preserves separate gates:
+
+> ## Gates por cartão
+> 
+> - T1 (catálogo, medidor, documentos): formatação e links verdes; ledgers atualizados.
+> - T2 (kit de testes, CLI, contratos internos): SPEC curta, typecheck, lint, unit, PostgreSQL e E2E verdes em Node 22.
+> - T3 (contrato público, schema, segurança, policy, approval): T2 mais revisão da SPEC pelo usuário antes do BUILD, no pacote semanal (D3).
+> - T4 (provider, canal, rede ou dado real; candidata): gate hash-bound, certificação completa e decisão humana. Fixture e simulador não validam provider real.
+
+[F08 L130–135](snapshots/F08-0379_roadmap_paridade_100_deepseek.md.source.txt#L130)
+
+D3 calls for independent review ([F08 L124](snapshots/F08-0379_roadmap_paridade_100_deepseek.md.source.txt#L124)). **FullT2 is not a hidden test for preservation-only G01 T1.** It does apply to a subsequent code-changing round, a real qualified source promotion or the T2 portion of0225's approvedT3 BUILD. Constitution separately requires certification at the end of a code round, not every documentary edit ([I01 L101–111](snapshots/I01-AGENTS.md.source.txt#L101)). Calling a functional merge a G01 T1 record cannot downgrade that merge.
+
+## Four distinct meanings
+
+1. **Preservation/commit:** persistent source history/ref; presently evidenced. It may preserve unfinished or failed work without endorsing it.
+2. **Integration in G01 as defined:** consolidation on owner's branch, five decisions and mapping. The0029 integration action is also present in0379; a724 contains0029 plus its loader registration. Branch-level reading is plausible; target acceptance is provisional.
+3. **Promotion to root/main:** changes shared/runtime source baseline and requires the applicable qualification, own claim, preimages and integration authority. It has not occurred for0029. A documentary G01 acceptance cannot grant it.
+4. **Functional PAR-K01 acceptance:**0380 L182 requires “Conformidade I1–I12 verde nos três modos; teste de arquitetura prova que não sobra caminho de execução fora do kernel; restart retoma a execução” ([F03 L175–182](snapshots/F03-0380_backlog_paridade_100_deepseek.md.source.txt#L175)). It is separate from G01 and remains unproved. Original full0217 operational qualification remains **UNKNOWN**; no117functional+17controls credit is gained.
+
+The glossary defines a gate by its **named scope and criteria**, and says a local positive result does not release another stage ([F07 L13–16](snapshots/F07-GLOSSARY.md.source.txt#L13)). It does not define every use of integration as merge to main. Conversely it does not turn a preserved branch into a qualified runtime.
+
+## Ordered integration versus local0225 BUILD
+
+Binding human source:
+
+>   "bindingRule": "A decisão vale para o SHA-256 abaixo. Nas aprovações com ajustes, a revisão que aplicar SOMENTE os ajustes listados (redução de escopo, fatiamento, número de migration) segue com uma revisão técnica independente, sem novo gate humano (D3 do roadmap 0379). Qualquer ampliação de escopo, contrato, schema ou segurança além do aprovado exige novo gate T3.",
+>   "migrationOrder": "0029 (composição 0217, hoje só na worktree do PARE100) é integrada primeiro no PAR-G01; depois 0030 = SPEC0225 (PAR-K03 precede PAR-S01 no backlog 0380); depois 0031 = SPEC0221. A SPEC0226 está adiada e não reserva número. Reconfirmar o inventário antes de cada BUILD.",
+
+[F04 L5–6](snapshots/F04-spec-gates.json.source.txt#L5)
+
+0379's specific action says:
+
+> 1. **PAR-G01:** o Codex faz commit, em branch própria, do trabalho da worktree em `/tmp` e integra a migration 0029. Os cinco gates T3 pendentes foram decididos em 16/10/2026 (0221, 0222 e 0225 aprovadas com ajustes; 0220 e 0226 adiadas), [registro](../04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json).
+
+[F08 L99–99](snapshots/F08-0379_roadmap_paridade_100_deepseek.md.source.txt#L99)
+
+Neither sentence explicitly names root/main as the integration target. Nor does either sentence expressly require full PAR-K01 functional completion before starting the approved local0225 implementation.0379 even distinguishes starting dependent work on a frozen contract from waiting for final delivery:
+
+> - O caminho crítico de M3 é PAR-G01 → PAR-K01 → PAR-K03 → PAR-S01 → PAR-A01 → PAR-O03 → PAR-O04 → PAR-U03 → PAR-Q06 → PAR-Q07 → PAR-Q09. Ele encurta se os contratos de PAR-K03, PAR-S01 e PAR-A01 forem congelados cedo, para que os dependentes comecem sobre o contrato e não sobre a entrega final.
+
+[F08 L95–95](snapshots/F08-0379_roadmap_paridade_100_deepseek.md.source.txt#L95)
+
+However,0380 still lists PAR-K03 depending on PAR-K01 ([F03 L193–200](snapshots/F03-0380_backlog_paridade_100_deepseek.md.source.txt#L193)). A reconciliation must state whether this governs card delivery/functional acceptance versus a bounded approved implementation on the frozen dependency contract. Do not simply erase that edge or claim PAR-K01 complete. The actual local0225 candidate must contain the required0029 source/registration and honor0029-before0030 in both installation and source integration; no database application has been verified here.
+
+Existing0225 human authority is exact original SHA `04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5`; approved adjustments and review path are recorded ([F04 L51–65](snapshots/F04-spec-gates.json.source.txt#L51)). Original body requires approval and task/resource before BUILD ([I02 L374–378](snapshots/I02-0225_pare100_complete_tool_result_journal.md.source.txt#L374)), reserves ordering/claims and protects0016/0029 ([I02 L313–316](snapshots/I02-0225_pare100_complete_tool_result_journal.md.source.txt#L313)), and states its facts refer to the isolated PARE worktree rather than integrated root ([I02 L35–37](snapshots/I02-0225_pare100_complete_tool_result_journal.md.source.txt#L35)). It does **not contain an explicit root-before-local BUILD clause** in the inspected original. Its immutable pre-decision `BUILD_AUTHORIZED=false` banner is historical, superseded for the granted scope by the later human decision; it is not a new refusal.
+
+**Explicit contrary technical condition still exists.** The exact adjusted proposal SHA `f26ccead3ad43d55d480ba08533e55bc9792a299608667570850668b0d12b315`, acceptedR2/zero mandatory, says:
+
+> Tudo abaixo está NOT_RUN. A decisão reservou0030 à0225, depois da integração
+> da0029 no PAR-G01 e antes da0031 da0221. O inventário corrente ainda não tem
+> 0029 no checkout compartilhado; presença na candidata PARE não é integração
+> canônica. Reconciliar essa dependência e registrar claim antes do BUILD. Não editar0016/0029 ou remover guards,
+> checksums, RLS e verificações de owner/role existentes.
+
+[F05 L325–329](snapshots/F05-adjusted-spec-proposal.md.source.txt#L325)
+
+> ## 10. Critério de pronto e limite desta proposta
+> 
+> Pronto para BUILD somente após recomposição limitada aos ajustes humanos,
+> fontes autenticadas e revisão técnica independente sem obrigatório aberto,
+> além de task/recurso e dependências satisfeitas. A decisão humana do original
+> com ajustes já está registrada; não será solicitada novamente para esta redução.
+
+[F05 L393–398](snapshots/F05-adjusted-spec-proposal.md.source.txt#L393)
+
+> J13 mantém os guards0029 em AND, sem editar0016/0029 ou abrir fencebound novo.
+> J16 mantém regressões e os gates atuais; não presume que o suporte de testes
+> TH06 reprovado seja qualificado. J01/J08–J10 usam processo real e retomada
+> sequencial/crashpoints distintos; não são substituídos por mocks ou pelo J14
+> adiado. Todos continuam NOT_RUN nesta preparação documental.
+> 
+> A fundação TH06 e sua recuperação terminaram sem aceite; migration0029 ainda
+> não está integrada no checkout compartilhado. Esta cópia não supera esses
+> pré-requisitos. Não há BUILD, instalação SQL, conta/modelo/Claude executado,
+> produção ou crédito M1/funcional nesta unidade.
+
+[F05 L425–434](snapshots/F05-adjusted-spec-proposal.md.source.txt#L425)
+
+ReviewR2 explicitly retains root0029 absence and qualified-support dependencies ([F06 L5–7](snapshots/F06-REPORT.md.source.txt#L5), [F06 L24](snapshots/F06-REPORT.md.source.txt#L24), [F06 L35](snapshots/F06-REPORT.md.source.txt#L35)). This is stronger assistant-authored **reviewed technical entry wording**, not an additional user decision. It remains a constraint of that reviewed implementation proposal until reconciled; a plain declaration that G01 T1 criteria are met does not silently remove it.
+
+**Provisional answer:** a technical reconciliation **can be considered under existing human0225 approval without a new human gate**, because it can restore the separation between branch preservation/integration and root promotion without adding schema, security authority or functional scope. The alternative branch-level interpretation has primary support in the G01 T1 contract and0379's contract-first allowance. It is **not established as accepted or ready merely by this report**, given the explicit adjusted-proposal/root prerequisite and card dependency edge. No inspected human primary constraint specifically forbids bounded local-before-root implementation; there is an unresolved reviewed technical condition, not proof of human prohibition or automatic permission.
+
+## Exact missing condition and next action
+
+**Next action for Lead, with independent review:** prepare one bounded T1 reconciliation of the existing entry conditions, preserving the frozen original/adjusted proposal and reviews. It should explicitly determine:
+
+- Whether actual persistent a724+0029 registration meets G01's integration action and how the user-performed commit satisfies preservation delivery; resolve the unstated target without labeling it main promotion.
+- Whether root-before-local and whole-card functional completion were over-applied to local0225 entry; account expressly for adjusted§8/§10/§11, reviewR2 and PAR-K03→PAR-K01, using0379's frozen-contract allowance. A reviewer must accept that reconciliation; this scout does not.
+- The exact local candidate/base/pathset, existing0225 approved scope,0030 reservation/current inventory, task/resource claim and short HOW, while0029 is already included/registered first; no root/main promotion,0226 activation, newscope, guard removal or test weakening.
+- Which support qualification is needed for a valid J13/J16/native proof and when it must be available. Current failed TH06/qualification units cannot supply it by relabeling. Implementation entry must not be confused with successful tests or code-round closure; all required currentT2/certification and canonical tests remain owed before code-round/integration closure. Where a proof cannot run, retain NOT_RUN/P0 rather than claim PASS. No implementation permission is granted here.
+
+This is the **missing technical reconciliation/independent acceptance and bounded execution packet**, not missing repeat human approval of0225 and not a demand to prove full0217 solely to preserve G01 code. Only an actual enlargement of approved scope/contract/schema/security triggers the human bindingRule; constitutional material-decision triggers remain applicable. A technical clarification that stays inside the approved contract does not require a human gate merely because conflicting assistant readiness prose exists.
+
+No automatic status/claimT1DONE, no execution approval and no functional credit. OldFAILED budgets/verdicts and the original UNKNOWN full0217 proof remain intact. The original scout's HISO owner dependency remains relevant to qualification/promotion; it is **not established as a prerequisite for the separate G01 T1 preservation acceptance**.

@@ -1,0 +1,281 @@
+../review-packet/reference/packages/boot/hmr/src/index.ts:1:/** Serialized module and profile-configuration reloads. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:3:import { watchConfig as watchExactConfig } from './watch-config.ts'
+../review-packet/reference/packages/boot/hmr/src/index.ts:5:import { ModuleLoader, type ModuleJob, type ResolveResult } from '@deepseek-ai/cordis-plugin-loader'
+../review-packet/reference/packages/boot/hmr/src/index.ts:21:    /** Serialized plugin-code and configuration reloads. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:26:    /** A watched file has no module or configuration handler.
+../review-packet/reference/packages/boot/hmr/src/index.ts:31:    /** Module replacements have finished loading.
+../review-packet/reference/packages/boot/hmr/src/index.ts:33:     * @param reloads Replaced plugins and their module locations.
+../review-packet/reference/packages/boot/hmr/src/index.ts:35:    'hmr/reload'(reloads: Map<Plugin, Reload>): void
+../review-packet/reference/packages/boot/hmr/src/index.ts:51:export interface HmrConfig extends ChokidarOptions {
+../review-packet/reference/packages/boot/hmr/src/index.ts:54:  /** Module watch roots; an empty list leaves only explicit configuration watches. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:63: * Recursively collect all module dependencies from a ModuleJob.
+../review-packet/reference/packages/boot/hmr/src/index.ts:66:async function loadDependencies(job: ModuleJob, ignored = new Set<string>()) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:67:  const dependencies = new Set<string>()
+../review-packet/reference/packages/boot/hmr/src/index.ts:68:  async function traverse(job: ModuleJob) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:69:    if (ignored.has(job.url) || dependencies.has(job.url)) return
+../review-packet/reference/packages/boot/hmr/src/index.ts:71:    dependencies.add(job.url)
+../review-packet/reference/packages/boot/hmr/src/index.ts:76:  return dependencies
+../review-packet/reference/packages/boot/hmr/src/index.ts:79:/** Module location and runtime retained during a replacement. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:80:export interface Reload {
+../review-packet/reference/packages/boot/hmr/src/index.ts:85:/** Hot reload service with Cordis-compatible module configuration and events. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:86:@Inject('loader')
+../review-packet/reference/packages/boot/hmr/src/index.ts:110:   * Changes from externals will always trigger a full reload.
+../review-packet/reference/packages/boot/hmr/src/index.ts:116:   * Files that should be reloaded (accepted changes).
+../review-packet/reference/packages/boot/hmr/src/index.ts:122:   * Files that should NOT be reloaded.
+../review-packet/reference/packages/boot/hmr/src/index.ts:133:  private readonly configPaths = new Set<string>()
+../review-packet/reference/packages/boot/hmr/src/index.ts:135:  /** Serialize a caller-owned mutation with all automatic reload paths.
+../review-packet/reference/packages/boot/hmr/src/index.ts:136:   * @param operation Work that must not overlap module or configuration replacement.
+../review-packet/reference/packages/boot/hmr/src/index.ts:141:    const task = this.operations.then(async () => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:142:      if (this.closing) throw new Error('HMR is disposed')
+../review-packet/reference/packages/boot/hmr/src/index.ts:149:  private runReload(operation: () => Promise<void>): Promise<void> {
+../review-packet/reference/packages/boot/hmr/src/index.ts:150:    return this.runExclusive(async () => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:155:  /** Watch a configuration path through the same queue as module replacement.
+../review-packet/reference/packages/boot/hmr/src/index.ts:157:   * @param refresh Rebuilds configuration from its current files and awaits Loader completion.
+../review-packet/reference/packages/boot/hmr/src/index.ts:160:  async watchConfig(filename: string, refresh: () => Promise<void>): Promise<() => Promise<void>> {
+../review-packet/reference/packages/boot/hmr/src/index.ts:162:    if (paths.some(path => this.configPaths.has(path))) throw new Error(`config path already registered: ${filename}`)
+../review-packet/reference/packages/boot/hmr/src/index.ts:163:    for (const path of paths) this.configPaths.add(path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:165:      const dispose = await this.executing.exit(() => watchExactConfig(
+../review-packet/reference/packages/boot/hmr/src/index.ts:166:        this.ownerContext, filename, this.config, () => this.runReload(refresh), () => this.executing.getStore() === true,
+../review-packet/reference/packages/boot/hmr/src/index.ts:168:      return async () => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:169:        await dispose()
+../review-packet/reference/packages/boot/hmr/src/index.ts:170:        for (const path of paths) this.configPaths.delete(path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:173:      for (const path of paths) this.configPaths.delete(path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:178:  constructor(ctx: Context, public config: HmrConfig) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:181:    if (!this.ctx.loader.internal) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:184:    this.internal = this.ctx.loader.internal
+../review-packet/reference/packages/boot/hmr/src/index.ts:185:    this.baseDir = fileURLToPath(new URL(config.base || '.', ctx.baseUrl))
+../review-packet/reference/packages/boot/hmr/src/index.ts:191:  private async _resolve(specifier: string, parentURL: string, attrs: ImportAttributes): Promise<ResolveResult> {
+../review-packet/reference/packages/boot/hmr/src/index.ts:199:    yield async () => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:202:      // A configuration reload may remove its own HMR entry.
+../review-packet/reference/packages/boot/hmr/src/index.ts:215:      const patchFiles = [profile.patchPath, join(profile.home, PROFILE_PATCH_FILENAME)]
+../review-packet/reference/packages/boot/hmr/src/index.ts:218:      const refresh = async (manifestOnly: boolean): Promise<void> => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:221:        const inputs = JSON.stringify([bundles, ...patchFiles.map((filename) => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:229:        const patches = readProfilePatches('dsh', profile)
+../review-packet/reference/packages/boot/hmr/src/index.ts:230:        const warnings = await reconcileProfilePatches(this.ownerContext.root, patches, 'dsh')
+../review-packet/reference/packages/boot/hmr/src/index.ts:235:      for (const filename of patchFiles) await this.watchConfig(filename, () => refresh(false))
+../review-packet/reference/packages/boot/hmr/src/index.ts:239:    const { loader } = this.ctx
+../review-packet/reference/packages/boot/hmr/src/index.ts:240:    const { root, ignored } = this.config
+../review-packet/reference/packages/boot/hmr/src/index.ts:241:    if (!this.config.base) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:253:      : this.internal.loadCache.get(pathToFileURL(resolve(process.argv[1])).href)
+../review-packet/reference/packages/boot/hmr/src/index.ts:255:      this.externals = await loadDependencies(mainJob)
+../review-packet/reference/packages/boot/hmr/src/index.ts:261:      ...this.config,
+../review-packet/reference/packages/boot/hmr/src/index.ts:268:    const dispatch = this.ctx.debounce(() => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:269:      void this.runExclusive(async () => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:274:        let fullReload = false
+../review-packet/reference/packages/boot/hmr/src/index.ts:277:          const configuredFilename = resolve(this.baseDir, path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:278:          if (this.configPaths.has(filename) || this.configPaths.has(configuredFilename)) continue
+../review-packet/reference/packages/boot/hmr/src/index.ts:281:            fullReload = true
+../review-packet/reference/packages/boot/hmr/src/index.ts:284:          if (this.internal.loadCache.has(url)) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:288:          const include = [...loader.entries()].map(entry => entry.subtree as Include | undefined)
+../review-packet/reference/packages/boot/hmr/src/index.ts:289:            .find(tree => tree?.filename === filename || tree?.filename === configuredFilename)
+../review-packet/reference/packages/boot/hmr/src/index.ts:293:        if (!fullReload && includes.size === 0 && this.stashed.size === 0) return
+../review-packet/reference/packages/boot/hmr/src/index.ts:294:        if (fullReload) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:295:          loader.exit()
+../review-packet/reference/packages/boot/hmr/src/index.ts:300:          try { await this.partialReload() } finally { this.stashed.clear() }
+../review-packet/reference/packages/boot/hmr/src/index.ts:302:        await loader.await()
+../review-packet/reference/packages/boot/hmr/src/index.ts:304:    }, this.config.debounce)
+../review-packet/reference/packages/boot/hmr/src/index.ts:305:    this.watcher.on('change', (path) => { changed.add(path); dispatch() })
+../review-packet/reference/packages/boot/hmr/src/index.ts:333:  /** Read direct module dependency URLs from the active Node loader.
+../review-packet/reference/packages/boot/hmr/src/index.ts:337:  async getLinked(url: string): Promise<string[]> {
+../review-packet/reference/packages/boot/hmr/src/index.ts:338:    const job = this.internal.loadCache.get(url)
+../review-packet/reference/packages/boot/hmr/src/index.ts:345:   * Classify changed files into accepted (should reload) and declined (should not).
+../review-packet/reference/packages/boot/hmr/src/index.ts:351:  private async analyzeChanges() {
+../review-packet/reference/packages/boot/hmr/src/index.ts:359:    await Promise.all([...this.stashed].map(async (url) => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:406:  private async partialReload() {
+../review-packet/reference/packages/boot/hmr/src/index.ts:410:    const reloads = new Map<Plugin, Reload>()
+../review-packet/reference/packages/boot/hmr/src/index.ts:412:    // Build a map of plugin names per config tree URL.
+../review-packet/reference/packages/boot/hmr/src/index.ts:413:    // Plugin entry files are treated as atomic reload units.
+../review-packet/reference/packages/boot/hmr/src/index.ts:415:    for (const entry of this.ctx.loader.entries()) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:423:    // Resolve each plugin name to its file URL and check if it needs reload
+../review-packet/reference/packages/boot/hmr/src/index.ts:429:          const job = this.internal.loadCache.get(url)
+../review-packet/reference/packages/boot/hmr/src/index.ts:430:          const plugin = this.ctx.loader.unwrapExports(job?.module?.getNamespace()) as Plugin | undefined
+../review-packet/reference/packages/boot/hmr/src/index.ts:443:      const dependencies = [...await loadDependencies(job, this.declined)]
+../review-packet/reference/packages/boot/hmr/src/index.ts:446:      if (!dependencies.some(dep => this.accepted.has(dep))) continue
+../review-packet/reference/packages/boot/hmr/src/index.ts:447:      dependencies.forEach(dep => this.accepted.add(dep))
+../review-packet/reference/packages/boot/hmr/src/index.ts:449:      reloads.set(plugin, {
+../review-packet/reference/packages/boot/hmr/src/index.ts:459:     * 1. ESM loadCache — managed by Node's internal ModuleLoader
+../review-packet/reference/packages/boot/hmr/src/index.ts:462:     * In Node 24, CJS modules loaded via import() appear in both caches.
+../review-packet/reference/packages/boot/hmr/src/index.ts:463:     * If we only clear loadCache, the CJS cache may serve stale modules.
+../review-packet/reference/packages/boot/hmr/src/index.ts:465:     * We use Map.prototype methods directly on loadCache because:
+../review-packet/reference/packages/boot/hmr/src/index.ts:466:     * - In Node 22/23, loadCache is a plain Map<url, ModuleJob>
+../review-packet/reference/packages/boot/hmr/src/index.ts:467:     * - In Node 24, loadCache is a LoadCache extends Map<url, { [type]: ModuleJob }>
+../review-packet/reference/packages/boot/hmr/src/index.ts:475:      // Backup and clear ESM loadCache
+../review-packet/reference/packages/boot/hmr/src/index.ts:476:      const job: unknown = Map.prototype.get.call(this.internal.loadCache, filename)
+../review-packet/reference/packages/boot/hmr/src/index.ts:478:      Map.prototype.delete.call(this.internal.loadCache, filename)
+../review-packet/reference/packages/boot/hmr/src/index.ts:494:        Map.prototype.set.call(this.internal.loadCache, filename, job)
+../review-packet/reference/packages/boot/hmr/src/index.ts:500:    const generations = [...reloads].map(([previous, info]) => ({
+../review-packet/reference/packages/boot/hmr/src/index.ts:502:      fibers: [...info.runtime?.fibers ?? []].map((fiber) => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:503:        const entry = fiber.entry?.fiber?.uid === fiber.uid ? fiber.entry : undefined
+../review-packet/reference/packages/boot/hmr/src/index.ts:504:        const config: unknown = entry === undefined ? fiber._config : entry.options.config
+../review-packet/reference/packages/boot/hmr/src/index.ts:505:        return { fiber, entry, config }
+../review-packet/reference/packages/boot/hmr/src/index.ts:511:        const replacement = this.ctx.loader.unwrapExports(await this.ctx.loader.import(generation.filename, this.getOuterStack)) as Plugin
+../review-packet/reference/packages/boot/hmr/src/index.ts:520:    const reload = async (plugin: Plugin, fibers: (typeof generations)[number]['fibers']) => {
+../review-packet/reference/packages/boot/hmr/src/index.ts:522:      for (const previousFiber of fibers) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:523:        if (previousFiber.fiber.parent.fiber.uid === null) continue
+../review-packet/reference/packages/boot/hmr/src/index.ts:524:        const fiber = previousFiber.fiber.parent.registry.plugin(plugin, previousFiber.config, this.getOuterStack).ctx.fiber
+../review-packet/reference/packages/boot/hmr/src/index.ts:526:          fiber.entry = previousFiber.entry
+../review-packet/reference/packages/boot/hmr/src/index.ts:527:          previousFiber.entry.fiber = fiber
+../review-packet/reference/packages/boot/hmr/src/index.ts:529:        activated.push(fiber)
+../review-packet/reference/packages/boot/hmr/src/index.ts:531:      await Promise.all(activated.map(fiber => fiber.await()))
+../review-packet/reference/packages/boot/hmr/src/index.ts:536:      for (const { previous: plugin, replacement, filename, runtime, fibers } of attempts) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:543:          await Promise.all(fibers.map(({ fiber }) => fiber.await()))
+../review-packet/reference/packages/boot/hmr/src/index.ts:545:          this.ctx.logger.warn('failed to dispose plugin at %C', path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:550:          await reload(replacement, fibers)
+../review-packet/reference/packages/boot/hmr/src/index.ts:551:          this.ctx.logger.info('reload plugin at %C', path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:553:          this.ctx.logger.warn('failed to reload plugin at %C', path)
+../review-packet/reference/packages/boot/hmr/src/index.ts:561:      for (const { previous: plugin, replacement, fibers } of attempts) {
+../review-packet/reference/packages/boot/hmr/src/index.ts:565:          const replacementFibers = [...replacementRuntime?.fibers ?? []]
+../review-packet/reference/packages/boot/hmr/src/index.ts:567:          // Failed startup errors remain on fibers after their teardown finishes.
+../review-packet/reference/packages/boot/hmr/src/index.ts:568:          await Promise.allSettled(replacementFibers.map(fiber => fiber.await()))
+../review-packet/reference/packages/boot/hmr/src/index.ts:569:          await reload(plugin, fibers)
+../review-packet/reference/packages/boot/hmr/src/index.ts:577:    await this.ctx.loader.await()
+../review-packet/reference/packages/boot/hmr/src/index.ts:578:    this.ctx.emit('hmr/reload', reloads)
+../review-packet/reference/packages/boot/hmr/src/index.ts:584:  /** Cordis-compatible configuration type. */
+../review-packet/reference/packages/boot/hmr/src/index.ts:585:  export type Config = HmrConfig
+../review-packet/reference/packages/boot/hmr/src/index.ts:590:export default Hmr
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:5:export type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:9:export type ReadOnlyReason = 'management-required' | 'unaddressable'
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:12:export interface IncompatiblePlugin {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:21:export interface ManagementError {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:29:export type PluginInfo = PluginInventoryEntry & (
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:30:  | { patchId: string; readOnlyReason?: never }
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:31:  | { patchId?: never; readOnlyReason: ReadOnlyReason }
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:34:/** One row a bundle's patch declares, with its live entry while the bundle contributes it. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:35:export interface BundleRowInfo {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:36:  /** The row id as the patch declares it. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:47:export interface BundleInfo {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:54:  /** Selected in the profile manifest; a load error means its layer was skipped. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:56:  /** Whether the profile's own dependencies hold the package; false for a bundle the dsh installation supplies. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:60:   * held by the installation's dependencies, selected by no shipped template, and never removable.
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:66:  /** The rows the bundle's patch inserts, in declaration order; empty when the patch cannot be read. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:68:  /** Ids of rows the bundle's patch changes without declaring them: the built-in rows it configures or disables. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:72:/** A registry to install from: an http(s) URL, or null for the one pnpm's own configuration names. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:73:export type Registry = string | null
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:75:/** The registries the manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:76:export interface PluginRegistries {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:79:  /** The URL pnpm's own configuration names in the profile, read from pnpm; null when it could not be read. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:84:export type PluginInstallFailureKind =
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:97:export interface PackageResult {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:111:export interface ChangeResult {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:114:  application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:139:export type PluginInstallRequestId = Branded<'PluginInstallRequestId'>
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:142:export interface InstallBundleOptions {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:148:  /** The registry asked first; absent, the configured one. The configured fallbacks follow while a registry is unreachable or stale. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:153:export interface InspectOptions {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:154:  /** The registry asked first; absent, the configured one. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:159:export type InstallSpecKind = 'registry' | 'path' | 'git' | 'tarball'
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:162:export type PluginInspectProblem =
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:176:export type PluginSpecInspection =
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:184:    /** Whether the package declares a bundle patch; null when the spec's form does not say. */
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:201:export interface PluginInstallProgress {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:203:  readonly phase: 'installing' | 'cancelling' | 'applying'
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:209:export interface PluginInstallCancellation {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:214:export interface PluginInstallLogChunk {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:230:export interface PluginChange {
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:239:     * operation completed. A patch generation applied outside the manager,
+../review-packet/reference/packages/boot/plugin-manager/src/types.ts:253:     * installation asks, with the attempt's registry and position; `cancelling` and `applying` once.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:9:import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:15:  readPluginMeta, readProfileManifest, resolveBundleDir, loadOverlayPatches, composeEntries,
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:26:import { writePluginEnabled } from './patch.ts'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:35:export type * from './types.ts'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:36:export { classifyInstallFailure, type InstallFailureFacts } from './install-failure.ts'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:37:export { InvalidInstallSpecError, parseInstallSpec, type ParsedInstallSpec } from './install-spec.ts'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:40:export interface Config {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:43:  /** Maximum retained package-operation diagnostic bytes. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:57:  /** The registry lookups and installations ask first, as an http(s) URL; absent, the one pnpm's own configuration names. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:61:   * A registry outside this set and `registry` is asked alone, and so is the one pnpm's own configuration names
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:71:  '@deepseek-ai/dsh-plugin-manager', '@deepseek-ai/cordis-plugin-loader',
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:88:/** Flatten only the groups addressable by the profile's patch composer. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:90:  return rows.flatMap(row => [row, ...(row.group && Array.isArray(row.config) ? flatten(row.config as EntryOptions[]) : [])])
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:125:  /** `applying` once pnpm has exited and the bundle is being selected and loaded, which cannot be stopped. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:126:  phase: 'installing' | 'applying'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:155:  dependencies?: Record<string, string>
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:207:/** Manage profile files and apply their declared reload lifecycle. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:208:export class PluginManager extends TypertRemoteService {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:209:  static inject = ['loader', 'profileContext']
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:235:  private readonly configuredRegistries: Omit<PluginRegistries, 'resolved'>
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:241:  constructor(ctx: Context, config: Config) {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:243:    this.ownerEntryId = ctx.fiber.entry?.id
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:247:    this.outputBytes = (config as Required<Config>).outputBytes
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:248:    this.lockWaitMs = (config as Required<Config>).lockWaitMs
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:249:    this.inspectTimeoutMs = (config as Required<Config>).inspectTimeoutMs
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:250:    this.githubConnectionTimeoutMs = (config as Required<Config>).githubConnectionTimeoutMs
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:251:    this.idleTimeoutMs = (config as Required<Config>).idleTimeoutMs
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:252:    this.pnpmCommand = (config as Required<Config>).pnpmCommand
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:253:    this.allowedSources = new Set((config as Required<Config>).allowedSources)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:254:    this.allowedPublishers = new Set((config as Required<Config>).allowedPublishers.map(publisher => publisher.trim()).filter(Boolean))
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:255:    this.configuredRegistries = {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:256:      registry: config.registry === undefined ? null : normalizeRegistry(config.registry),
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:257:      fallbackRegistries: (config as Required<Config>).fallbackRegistries.map(normalizeRegistry),
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:259:    ctx.effect(() => async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:280:   * @returns Saved and runtime outcomes. Startup-only profiles require restart.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:284:    return this.change(result => this.configure(async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:286:      result.warnings = await this.reload()
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:290:  /** Read current plugins, including why a row cannot be changed through the profile patch.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:291:   * @returns Current runtime entries with persistent patch targets.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:294:  async listPlugins(): Promise<PluginInfo[]> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:298:      const actual = [...this.ctx.loader.entries()].find(row => row.id === entry.entryId)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:305:        || actual?.parent.tree.ctx.fiber.entry?.id !== 'include') {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:308:      return { ...entry, patchId: candidate.id }
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:313:   * A dependency without a bundle patch is listed, as a `not-bundle` problem, only while it is selected.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:322:    const dependencies = Object.keys(manifest.dependencies ?? {})
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:324:    const names = [...new Set([...selected, ...dependencies, ...Object.keys(installation.dependencies ?? {})])]
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:327:      const installed = dependencies.includes(name)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:329:      const removable = installed && !Object.hasOwn(installation.dependencies ?? {}, name)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:359:  /** Read the registries this manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:360:   * @returns The registries in pnpm's comparison form; null is the one pnpm's own configuration names, `resolved` as pnpm reads it now.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:363:  async registries(): Promise<PluginRegistries> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:365:      ...this.configuredRegistries, fallbackRegistries: [...this.configuredRegistries.fallbackRegistries],
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:379:  async inspect(spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:394:      ...manifest.dsh?.profile?.bundles ?? [], ...Object.keys(manifest.dependencies ?? {}), ...Object.keys(installation.dependencies ?? {}),
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:464:  /** Persist a plugin entry's desired enablement and apply it on live profiles.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:471:    return this.change(result => this.configure(async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:475:      await writePluginEnabled(this.profile.patchPath, row.patchId, row.moduleName, enabled)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:476:      result.warnings = await this.reload(enabled ? [row.patchId] : [])
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:482:  /** Select or remove a bundle layer while retaining installed dependencies.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:484:   * @param enabled Whether the bundle contributes its patch layer.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:489:    return this.change(result => this.configure(async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:491:      result.warnings = await this.reload(enabled ? this.bundleRows(name).map(row => row.id) : [])
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:499:   * that fails, is cancelled, or adds a package without a bundle patch restores
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:500:   * `package.json` and `pnpm-lock.yaml` as they were; downloaded files can stay.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:515:    const result = this.change(async (result) => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:532:      const before = readProfileManifest('dsh', this.profile.dir).dependencies ?? {}
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:593:        const after = readProfileManifest('dsh', this.profile.dir).dependencies ?? {}
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:595:        // Registry retries can retain the saved range after a partial installation.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:606:        for (const file of bundlePatchPaths(dir, manifest.dsh.bundle)) loadOverlayPatches('dsh', file)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:612:      control.phase = 'applying'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:613:      announce('applying')
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:617:      return this.configure(async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:619:        if (Object.hasOwn(before, name)) return 'restart-required'
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:620:        if (options?.enabled === true) result.warnings = await this.reload()
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:630:   * Completed results are not retained; null establishes neither success nor cancellation.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:633:  async waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:643:  async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:646:    if (control.phase === 'applying') return { status: 'too-late' }
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:654:  /** Unload and remove a profile-owned bundle dependency through dsh plugin's pnpm path.
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:660:    return this.change(async (result) => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:661:      await this.configure(async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:665:          || (bundle.error === undefined && this.bundleRows(name).some(row => [...this.ctx.loader.entries()]
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:666:            .some(entry => entry.options.id === row.id && entry.fiber !== undefined))))) {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:672:          result.warnings = await this.reload()
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:674:        if ([...this.ctx.loader.entries()].some(entry => entry.fiber?.uid != null
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:686:  /** The rows a bundle's patch inserts and the existing rows it changes; an unreadable patch throws. */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:689:    /* v8 ignore next -- bundleManifest answers only manifests that declare a patch */
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:692:    const patches: PatchOptions[] = bundlePatchPaths(dir, bundle).flatMap(file => loadOverlayPatches('dsh', file))
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:695:    for (const entry of this.ctx.loader.entries()) {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:703:    for (const row of flatten(composeEntries([patches.filter(item => item.insert !== undefined)]))) {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:713:    const overrides = [...new Set(patches.flatMap(item =>
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:719:  private async runPnpm(
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:758:  private async readRestoredFiles(): Promise<Map<string, string | undefined>> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:768:  private async restoreFiles(files: Map<string, string | undefined>): Promise<void> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:775:  private async selectBundle(name: string, enabled: boolean): Promise<void> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:807:    return flatten(composeEntries([bundlePatchPaths(dir, info.dsh.bundle).flatMap(file => loadOverlayPatches('dsh', file))]))
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:832:  private configure<T>(operation: () => Promise<T>): Promise<T> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:834:    const apply = () => { this.abort.signal.throwIfAborted(); return operation() }
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:835:    return hmr === undefined ? apply() : hmr.runExclusive(apply)
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:838:  private async reload(requiredIds: readonly string[] = []): Promise<string[]> {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:843:  private async change(
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:848:    return withFileLock(join(this.profile.dir, 'package.json'), async () => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:852:        application: this.ownerContext.get('hmr') !== undefined ? 'applied' : 'restart-required' }
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:870:    return ['package.json', 'cordis.patch.yml', 'pnpm-workspace.yaml', PROFILE_COMPATIBILITY_FILENAME].map((file) => {
+../review-packet/reference/packages/boot/plugin-manager/src/index.ts:880:export default PluginManager

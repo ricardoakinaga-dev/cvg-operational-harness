@@ -1,0 +1,460 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-execution-postgres.ts
+94:   attempts: number
+95:   lease_owner: string | null
+96:   lease_until: Date | string | null
+97:   last_error: string | null
+98:   processed_at: Date | string | null
+99: }
+100: 
+101: interface EffectRow extends QueryResultRow {
+102:   result_present?: boolean
+103:   tenant_id: string
+104:   operation_key: string
+105:   proposal_hash: string
+106:   state: EffectJournalState
+107:   attempt_id: string
+108:   result: unknown
+109:   error: string | null
+110:   created_at: Date | string
+111:   updated_at: Date | string
+112: }
+113: 
+114: const executionColumns = `
+115:   tenant_id, id, idempotency_key, request_hash, request, state, attempt,
+116:   lease_owner, lease_until, result, failure, approval_id, resume,
+117:   created_at, updated_at, completed_at`
+118: 
+119: const executionColumnsFromJoin = `
+120:   e.tenant_id, e.id, e.idempotency_key, e.request_hash, e.request, e.state,
+121:   e.attempt, e.lease_owner, e.lease_until, e.result, e.failure,
+122:   e.approval_id, e.resume, e.created_at, e.updated_at, e.completed_at`
+123: 
+124: const effectColumns = `
+125:   tenant_id, operation_key, proposal_hash, state, attempt_id, result,
+126:   result IS NOT NULL AS result_present, error,
+127:   created_at, updated_at`
+128: 
+129: const eventTypes = new Set<ExecutionEvent['type']>([
+130:   'RECEIVED',
+131:   'QUEUED',
+132:   'CLAIMED',
+133:   'RUNNING',
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-execution-postgres.ts
+1070: export class PostgresOperationalEffectJournal implements EffectJournal {
+1071:   public constructor(
+1072:     private readonly connection: OperationalExecutionPostgresConnection,
+1073:     private readonly options: { fence?: ControlledPublishedDatabaseFence } = {}
+1074:   ) {}
+1075: 
+1076:   public reserve(input: {
+1077:     tenantId: string
+1078:     operationKey: string
+1079:     proposalHash: string
+1080:     attemptId: string
+1081:   }): Promise<EffectJournalRecord> {
+1082:     const tenant = TenantIdSchema.parse(input.tenantId)
+1083:     const operationKey = text(input.operationKey, 'operationKey', 240)
+1084:     const proposalHash = text(input.proposalHash, 'proposalHash', 160)
+1085:     const attemptId = text(input.attemptId, 'attemptId', 240)
+1086:     const timestamp = new Date()
+1087:     return this.run(tenant, (client) =>
+1088:       transaction(client, async () => {
+1089:         const guard = await this.guardWrite(client, tenant, operationKey, false)
+1090:         const result = await reserveOperationalEffectOnClient(
+1091:           client,
+1092:           { tenant, operationKey, proposalHash, attemptId, timestamp },
+1093:           guard
+1094:         )
+1095:         await guard?.recheck()
+1096:         return result
+1097:       })
+1098:     )
+1099:   }
+1100: 
+1101:   public markStarted(input: {
+1102:     tenantId: string
+1103:     operationKey: string
+1104:     attemptId: string
+1105:   }): Promise<EffectJournalRecord> {
+1106:     return this.transition(input, 'EFFECT_STARTED')
+1107:   }
+1108: 
+1109:   public confirm(input: {
+1110:     tenantId: string
+1111:     operationKey: string
+1112:     attemptId: string
+1113:     result: unknown
+1114:   }): Promise<EffectJournalRecord> {
+1115:     return this.transition(input, 'CONFIRMED', { result: input.result })
+1116:   }
+1117: 
+1118:   public fail(input: {
+1119:     tenantId: string
+1120:     operationKey: string
+1121:     attemptId: string
+1122:     error: string
+1123:   }): Promise<EffectJournalRecord> {
+1124:     return this.transition(input, 'FAILED', {
+1125:       error: text(input.error, 'error')
+1126:     })
+1127:   }
+1128: 
+1129:   public markUncertain(input: {
+1130:     tenantId: string
+1131:     operationKey: string
+1132:     attemptId: string
+1133:     reason: string
+1134:   }): Promise<EffectJournalRecord> {
+1135:     return this.transition(input, 'UNCERTAIN', {
+1136:       error: text(input.reason, 'reason')
+1137:     })
+1138:   }
+1139: 
+1140:   public get(
+1141:     tenantId: string,
+1142:     operationKey: string
+1143:   ): Promise<EffectJournalRecord | null> {
+1144:     const tenant = TenantIdSchema.parse(tenantId)
+1145:     const operation = text(operationKey, 'operationKey', 240)
+1146:     return this.run(tenant, async (client) => {
+1147:       const result = await client.query<EffectRow>(
+1148:         `SELECT ${effectColumns}
+1149:            FROM operational_effect_journal
+1150:           WHERE tenant_id = $1 AND operation_key = $2`,
+1151:         [tenant, operation]
+1152:       )
+1153:       return result.rows[0] ? mapEffect(result.rows[0]) : null
+1154:     })
+1155:   }
+1156: 
+1157:   private transition(
+1158:     input: {
+1159:       tenantId: string
+1160:       operationKey: string
+1161:       attemptId: string
+1162:     },
+1163:     state: EffectJournalState,
+1164:     values: { result?: unknown; error?: string } = {}
+1165:   ): Promise<EffectJournalRecord> {
+1166:     const tenant = TenantIdSchema.parse(input.tenantId)
+1167:     const operation = text(input.operationKey, 'operationKey', 240)
+1168:     const attemptId = text(input.attemptId, 'attemptId', 240)
+1169:     const timestamp = new Date()
+1170:     return this.run(tenant, (client) =>
+1171:       transaction(client, async () => {
+1172:         const guard = await this.guardWrite(
+1173:           client,
+1174:           tenant,
+1175:           operation,
+1176:           state !== 'EFFECT_STARTED'
+1177:         )
+1178:         const result = await transitionOperationalEffectOnClient(
+1179:           client,
+1180:           { tenant, operation, attemptId, timestamp, state, values },
+1181:           guard
+1182:         )
+1183:         await guard?.recheck()
+1184:         return result
+1185:       })
+1186:     )
+1187:   }
+1188: 
+1189:   private async guardWrite(
+1190:     client: PostgresQueryable,
+1191:     tenant: TenantId,
+1192:     operationKey: string,
+1193:     settlement: boolean
+1194:   ) {
+1195:     const executionId = await boundExecutionIdForOperation(
+1196:       client,
+1197:       tenant,
+1198:       operationKey
+1199:     )
+1200:     if (!executionId) {
+1201:       if (this.options.fence) publishedFenceError()
+1202:       return null
+1203:     }
+1204:     if (operationKey !== `${executionId}:s2:find_available_slots`)
+1205:       publishedFenceError()
+1206:     return guardOptionalPublishedWrite(
+1207:       client,
+1208:       tenant,
+1209:       executionId,
+1210:       this.options.fence,
+1211:       settlement
+1212:     )
+1213:   }
+1214: 
+1215:   private async run<T>(
+1216:     tenant: TenantId,
+1217:     operation: (client: PostgresQueryable) => Promise<T>
+1218:   ): Promise<T> {
+1219:     if (isPool(this.connection)) {
+1220:       return withTenantContext(
+1221:         this.connection,
+1222:         tenant,
+1223:         (client: PostgresPoolClient) => operation(client)
+1224:       )
+1225:     }
+1226:     return operation(this.connection)
+1227:   }
+1228: }
+1229: 
+1230: function mapEffect(row: EffectRow): EffectJournalRecord {
+1231:   return {
+1232:     tenantId: row.tenant_id,
+1233:     operationKey: row.operation_key,
+1234:     proposalHash: row.proposal_hash,
+1235:     state: row.state,
+1236:     attemptId: row.attempt_id,
+1237:     createdAt: asIso(row.created_at) as string,
+1238:     updatedAt: asIso(row.updated_at) as string,
+1239:     // This column is JSONB: the native driver has already decoded its value.
+1240:     // A JSON string is the result itself, not another serialized document.
+1241:     ...(row.result_present === true || row.result !== null
+1242:       ? { result: row.result }
+1243:       : {}),
+1244:     ...(row.error !== null ? { error: row.error } : {})
+1245:   }
+1246: }
+1247: 
+1248: function validateFailure(failure: ExecutionFailure): ExecutionFailure {
+1249:   if (
+1250:     failure.kind !== 'TECHNICAL_RETRYABLE' &&
+1251:     failure.kind !== 'SEMANTIC_TERMINAL' &&
+1252:     failure.kind !== 'POLICY_DENIED' &&
+1253:     failure.kind !== 'UNKNOWN_EFFECT' &&
+1254:     failure.kind !== 'CANCELLED'
+1255:   ) {
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-execution-postgres.ts
+1630:   ) {
+1631:     throw new OperationalExecutionError(
+1632:       'lease_lost',
+1633:       'Execution lease is not owned by this worker'
+1634:     )
+1635:   }
+1636: }
+1637: 
+1638: function operationalQueueUpdateForTransition(
+1639:   to: ExecutionState,
+1640:   failure: ExecutionFailure | null,
+1641:   now: Date,
+1642:   current: ExecutionRecord,
+1643:   retryDelayMs: number
+1644: ): {
+1645:   status: QueueRow['status']
+1646:   availableAt: Date
+1647:   leaseOwner: string | null
+1648:   leaseUntil: Date | null
+1649:   lastError: string | null
+1650:   processedAt: Date | null
+1651: } {
+1652:   if (to === 'FAILED_RETRYABLE') {
+1653:     return {
+1654:       status: 'failed',
+1655:       availableAt: failure?.retryAt
+1656:         ? new Date(failure.retryAt)
+1657:         : new Date(now.getTime() + retryDelayMs),
+1658:       leaseOwner: null,
+1659:       leaseUntil: null,
+1660:       lastError: failure?.message ?? 'retryable execution failure',
+1661:       processedAt: null
+1662:     }
+1663:   }
+1664:   if (to === 'FAILED_TERMINAL') {
+1665:     return {
+1666:       status: 'dead_letter',
+1667:       availableAt: now,
+1668:       leaseOwner: null,
+1669:       leaseUntil: null,
+1670:       lastError: failure?.message ?? 'terminal execution failure',
+1671:       processedAt: now
+1672:     }
+1673:   }
+1674:   if (
+1675:     to === 'SUCCEEDED' ||
+1676:     to === 'WAITING_APPROVAL' ||
+1677:     to === 'WAITING_USER' ||
+1678:     to === 'CANCELLED'
+1679:   ) {
+1680:     return {
+1681:       status: 'processed',
+1682:       availableAt: now,
+1683:       leaseOwner: null,
+1684:       leaseUntil: null,
+1685:       lastError: null,
+1686:       processedAt: now
+1687:     }
+1688:   }
+1689:   if (to === 'QUEUED') {
+1690:     return {
+1691:       status: 'pending',
+1692:       availableAt: failure?.retryAt ? new Date(failure.retryAt) : now,
+1693:       leaseOwner: null,
+1694:       leaseUntil: null,
+1695:       lastError: null,
+1696:       processedAt: null
+1697:     }
+1698:   }
+1699:   return {
+1700:     status: 'processing',
+1701:     availableAt: now,
+1702:     leaseOwner: current.leaseOwner,
+1703:     leaseUntil: current.leaseUntil ? new Date(current.leaseUntil) : null,
+1704:     lastError: null,
+1705:     processedAt: null
+1706:   }
+1707: }
+1708: 
+1709: /** Schemas predating0029 have no bound rows; do not break their unbound ABI. */
+1710: export async function hasControlledPublishedBindings(
+1711:   client: PostgresQueryable
+1712: ): Promise<boolean> {
+1713:   const result = await client.query<{ present: boolean }>(
+1714:     "SELECT to_regclass('controlled_published_bindings') IS NOT NULL AS present"
+1715:   )
+1716:   return result.rows[0]?.present === true
+1717: }
+1718: export async function assertOperationalExecutionUnboundOnClient(
+1719:   client: PostgresQueryable,
+1720:   tenant: TenantId,
+1721:   id: string
+1722: ): Promise<void> {
+1723:   const result = await client.query(
+1724:     `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2
+1725:      AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,
+1726:     [tenant, id]
+1727:   )
+1728:   if (result.rows.length)
+1729:     throw new OperationalExecutionError(
+1730:       'lease_lost',
+1731:       'Bound execution requires its controlled published fence'
+1732:     )
+1733: }
+1734: 
+1735: /** Transaction-free neutral journal body, also used by the bound composition. */
+1736: export async function reserveOperationalEffectOnClient(
+1737:   client: PostgresQueryable,
+1738:   input: {
+1739:     tenant: TenantId
+1740:     operationKey: string
+1741:     proposalHash: string
+1742:     attemptId: string
+1743:     timestamp: Date
+1744:   },
+1745:   guard?: { recheck: () => Promise<Date> } | null
+1746: ): Promise<EffectJournalRecord> {
+1747:   const { tenant, operationKey, proposalHash, attemptId, timestamp } = input
+1748:   await client.query(
+1749:     `INSERT INTO operational_effect_journal
+1750:      (tenant_id, operation_key, proposal_hash, state, attempt_id,
+1751:       result, error, created_at, updated_at)
+1752:    VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)
+1753:    ON CONFLICT (tenant_id, operation_key) DO NOTHING`,
+1754:     [tenant, operationKey, proposalHash, attemptId, timestamp]
+1755:   )
+1756:   const selected = await client.query<EffectRow>(
+1757:     `SELECT ${effectColumns}
+1758:      FROM operational_effect_journal
+1759:     WHERE tenant_id = $1 AND operation_key = $2
+1760:     FOR UPDATE`,
+1761:     [tenant, operationKey]
+1762:   )
+1763:   await guard?.recheck()
+1764:   const row = selected.rows[0]
+1765:   if (!row)
+1766:     throw new OperationalExecutionError(
+1767:       'conflict',
+1768:       'Effect reservation could not be read'
+1769:     )
+1770:   if (row.proposal_hash !== proposalHash) {
+1771:     throw new OperationalExecutionError(
+1772:       'conflict',
+1773:       'Operation key is bound to a different proposal'
+1774:     )
+1775:   }
+1776:   if (row.state === 'FAILED') {
+1777:     const retried = await client.query<EffectRow>(
+1778:       `UPDATE operational_effect_journal
+1779:         SET state = 'RESERVED', attempt_id = $3,
+1780:             result = NULL, error = NULL, updated_at = $4
+1781:       WHERE tenant_id = $1 AND operation_key = $2
+1782:       RETURNING ${effectColumns}`,
+1783:       [tenant, operationKey, attemptId, timestamp]
+1784:     )
+1785:     if (retried.rows[0]) return mapEffect(retried.rows[0])
+1786:   }
+1787:   return mapEffect(row)
+1788: }
+1789: 
+1790: export async function transitionOperationalEffectOnClient(
+1791:   client: PostgresQueryable,
+1792:   input: {
+1793:     tenant: TenantId
+1794:     operation: string
+1795:     attemptId: string
+1796:     timestamp: Date
+1797:     state: EffectJournalState
+1798:     values: { result?: unknown; error?: string }
+1799:   },
+1800:   guard?: { recheck: () => Promise<Date> } | null
+1801: ): Promise<EffectJournalRecord> {
+1802:   const { tenant, operation, attemptId, timestamp, state, values } = input
+1803:   const selected = await client.query<EffectRow>(
+1804:     `SELECT ${effectColumns}
+1805:      FROM operational_effect_journal
+1806:     WHERE tenant_id = $1 AND operation_key = $2
+1807:     FOR UPDATE`,
+1808:     [tenant, operation]
+1809:   )
+1810:   await guard?.recheck()
+1811:   const row = selected.rows[0]
+1812:   if (!row)
+1813:     throw new OperationalExecutionError(
+1814:       'not_found',
+1815:       'Effect reservation is missing'
+1816:     )
+1817:   if (row.attempt_id !== attemptId) {
+1818:     throw new OperationalExecutionError(
+1819:       'lease_lost',
+1820:       'Effect attempt is fenced'
+1821:     )
+1822:   }
+1823:   if (state === 'EFFECT_STARTED' && row.state !== 'RESERVED') {
+1824:     if (row.state === state) return mapEffect(row)
+1825:     throw new OperationalExecutionError(
+1826:       'invalid_action',
+1827:       'Effect cannot start from its current state'
+1828:     )
+1829:   }
+1830:   if (state !== 'EFFECT_STARTED' && row.state !== 'EFFECT_STARTED') {
+1831:     if (row.state === state) return mapEffect(row)
+1832:     throw new OperationalExecutionError(
+1833:       'invalid_action',
+1834:       'Effect outcome is not valid for its current state'
+1835:     )
+1836:   }
+1837:   const updated = await client.query<EffectRow>(
+1838:     `UPDATE operational_effect_journal
+1839:       SET state = $3, result = $4::jsonb, error = $5,
+1840:           updated_at = $6
+1841:     WHERE tenant_id = $1 AND operation_key = $2
+1842:     RETURNING ${effectColumns}`,
+1843:     [
+1844:       tenant,
+1845:       operation,
+1846:       state,
+1847:       values.result === undefined
+1848:         ? null
+1849:         : jsonText(values.result, 'effect result'),
+1850:       values.error ?? null,
+1851:       timestamp
+1852:     ]
+1853:   )
+1854:   if (!updated.rows[0])
+1855:     throw new OperationalExecutionError('conflict', 'Effect transition lost')
+1856:   return mapEffect(updated.rows[0])
+1857: }

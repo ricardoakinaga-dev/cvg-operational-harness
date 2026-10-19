@@ -1,0 +1,140 @@
+FILE cvg/packages/platform/src/plugin-gateway.ts
+120: export class PluginRegistry {
+127:   register(plugin: RegisteredPlugin): PluginRegistry {
+643:             policyVersion: 'capability-approval-v1',
+880:       capabilities: [...plugin.manifest.capabilities],
+FILE cvg/packages/platform/src/controlled-kernel-execution.ts
+7:   createOperationalHarness,
+79:     effectJournal: new InMemoryEffectJournal(),
+373:     createOperationalHarness({
+517:           executionId: host.identity.executionId,
+518:           capabilityFingerprint: fingerprint
+540:     runtimeProfile: 'iterative',
+551:               executionId: host.identity.executionId,
+554:               capabilityFingerprint: fingerprint,
+788:             executionId: host.identity.executionId,
+846:           evidence.fail('resume.seal')
+847:           await durable.poison('resume.seal')
+848:           throw new Error('controlled_resume_seal_unavailable')
+853:     result = await harness.execute(runtimeInput)
+897:   // This is a closure projection, never a new resume seal. safePoint retains
+FILE cvg/packages/platform/src/controlled-kernel-continuation.ts
+74:   executionId: string
+111:   executionId: string
+147:   executionId: string
+177:   executionId: string
+312:   executionId: string
+411:     !/^exec_[0-9a-f-]{36}$/.test(original.executionId) ||
+421:     original.executionId,
+437:     executionId: original.executionId,
+522:     executionId: input.executionId,
+523:     capabilityFingerprint: fingerprint,
+530:     runtimeProfile: 'iterative',
+567:     'executionId',
+612:       host.ports.effectJournal,
+688:     s.executionId !== i.executionId ||
+726:       executionId: i.executionId
+738:     c.executionId !== i.executionId ||
+750:     c.state.capabilityFingerprint !== fingerprint
+810:       a.operationKey !== `${i.executionId}:s2:${a.command.execution.toolName}`
+827:         a.approvalReceipt.executionId !== i.executionId ||
+FILE cvg/packages/sdk/src/composition.ts
+1: import { InMemorySessionEventStore } from '@cvg/harness'
+2: import type { SessionEvent } from '@cvg/harness-contracts'
+3: import {
+4:   createInProcessTransport,
+5:   createSdkClient,
+6:   type SdkClient,
+7:   type SdkReadEventsOptions
+8: } from './client.ts'
+9: import {
+10:   createSdkServer,
+11:   type SdkServer,
+12:   type SdkServerOptions
+13: } from './server.ts'
+14: import type {
+15:   SdkHelloResult,
+16:   SessionOpenResult,
+17:   TurnSendResult
+18: } from './protocol.ts'
+20: export type SdkCompositionOptions = SdkServerOptions
+22: export interface SdkFacade {
+23:   readonly server: SdkServer
+24:   readonly client: SdkClient
+25:   hello(): Promise<SdkHelloResult>
+26:   openSession(sessionId: string): Promise<SessionOpenResult>
+27:   sendTurn(sessionId: string, userMessage: string): Promise<TurnSendResult>
+28:   readEvents(
+29:     sessionId: string,
+30:     options?: SdkReadEventsOptions
+31:   ): Promise<readonly SessionEvent[]>
+32: }
+34: /**
+35:  * Full SDK composition: session events enabled. The store defaults to the
+36:  * in-memory fixture; hosts inject a durable store for multi-process use.
+37:  */
+38: export function createSdk(options: SdkCompositionOptions): SdkFacade {
+39:   const server = createSdkServer({
+40:     ...options,
+41:     sessions: options.sessions ?? new InMemorySessionEventStore()
+42:   })
+43:   const client = createSdkClient(createInProcessTransport(server))
+44:   return {
+45:     server,
+46:     client,
+47:     hello: () => client.hello(),
+48:     openSession: (sessionId) => client.openSession(sessionId),
+49:     sendTurn: (sessionId, userMessage) =>
+50:       client.sendTurn(userMessage, sessionId),
+51:     readEvents: (sessionId, readOptions) =>
+52:       client.readEvents(sessionId, readOptions)
+53:   }
+54: }
+56: /** Session methods are not part of the minimal composition. */
+57: export type SdkMinimalOptions = Omit<SdkServerOptions, 'sessions'>
+59: export interface SdkMinimalFacade {
+60:   readonly server: SdkServer
+61:   readonly client: SdkClient
+62:   hello(): Promise<SdkHelloResult>
+63:   sendTurn(userMessage: string): Promise<TurnSendResult>
+64: }
+66: /** Minimal SDK composition: stateless turns, no session store. */
+67: export function createSdkMinimal(options: SdkMinimalOptions): SdkMinimalFacade {
+68:   const server = createSdkServer(options)
+69:   const client = createSdkClient(createInProcessTransport(server))
+70:   return {
+71:     server,
+72:     client,
+73:     hello: () => client.hello(),
+74:     sendTurn: (userMessage) => client.sendTurn(userMessage)
+75:   }
+76: }
+FILE cvg/packages/orchestrator/src/hybrid-orchestrator.ts
+18:   public constructor(
+141:   public constructor(options: HybridOrchestratorOptions = {}) {
+151:   public async decide(
+179:       if (input.signal?.aborted) {
+196:       const modelResult = await this.decisionModel.complete({
+209:         ...(input.signal ? { signal: input.signal } : {})
+FILE cvg/packages/contracts/src/execution-v2.ts
+417: export interface ExecutionStepStore {
+471: export interface CompletionEvaluator {
+491: export interface SufficiencyEvaluator {
+615: export interface ContextEngine {
+623: export interface IterativeOrchestratorInput {
+647: export interface IterativeOrchestratorTurn {
+652: export interface IterativeOrchestrator {
+679: export interface AgenticKnowledgeProvider {
+FILE cvg/packages/harness/src/iterative-dispatch.ts
+67:   withDeadline<T>(
+315: export async function dispatchTool(
+722: export async function dispatchKnowledge(
+749:     const searchOrDeadline = await ctx.withDeadline(
+750:       provider.search({
+810:     const sufficiency = await ctx.options.sufficiencyEvaluator.evaluate({
+835: export async function dispatchRespond(
+924: export async function composeResponse(
+990: export async function evaluate(
+995:   const evaluation = await ctx.evaluatorFor(run).evaluate({
+1010:   await ctx.safeAudit(run, 'evaluation.completed', {
+1067: export async function pause(

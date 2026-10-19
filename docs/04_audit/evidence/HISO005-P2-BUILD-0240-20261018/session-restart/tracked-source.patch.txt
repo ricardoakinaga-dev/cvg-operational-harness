@@ -1,0 +1,266 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index a8dc3893..546d4b6b 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -17,10 +17,11 @@ import {
+   createResolutionSession,
+   revalidateResolutionSnapshot,
+   RESOLUTION_LIMITS,
+-  RESOLUTION_PROFILE
++  RESOLUTION_PROFILE,
++  isInactiveImportsMapEligible
+ } from './boundary-semantic-resolution.mjs'
+ 
+-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v2-resolution'
++export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v3-exact-metadata'
+ 
+ const SELF = fileURLToPath(import.meta.url)
+ const isWorker = () =>
+@@ -1197,7 +1198,11 @@ export function analyzeSemanticBoundary(input) {
+       reachedPackages.get(key).entries.add(file)
+     }
+     const manifest = manifestAt(file)
+-    if (manifest?.body.imports || manifest?.body.browser)
++    if (
++      (manifest?.body.imports &&
++        !isInactiveImportsMapEligible(manifest.body.imports)) ||
++      manifest?.body.browser
++    )
+       unknown(file, 'UNKNOWN_AMBIGUOUS_RESOLUTION')
+     const mode =
+       /\.c(?:js|ts)$/.test(file) ||
+diff --git a/scripts/boundary-semantic-resolution.mjs b/scripts/boundary-semantic-resolution.mjs
+index 9543c7ce..a4610c83 100644
+--- a/scripts/boundary-semantic-resolution.mjs
++++ b/scripts/boundary-semantic-resolution.mjs
+@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
+ import { isBuiltin } from 'node:module'
+ import { fileURLToPath, pathToFileURL } from 'node:url'
+ 
+-export const RESOLUTION_PROFILE = 'linux-rootfd-workspace-v1'
++export const RESOLUTION_PROFILE = 'node22-linux-exact-metadata-v1'
+ export const RESOLUTION_LIMITS = Object.freeze({
+   maxWorkspaces: 512,
+   maxLinks: 512,
+@@ -93,6 +93,28 @@ const asciiPart = (v) =>
+   v !== '.' &&
+   v !== '..' &&
+   v.toLowerCase() !== 'node_modules'
++// SPEC0240: eligibility of metadata that cannot select a non-# request.
++// Values stay opaque; json() binds the entire manifest before this predicate.
++export function isInactiveImportsMapEligible(value) {
++  return (
++    object(value) &&
++    Object.keys(value).every(
++      (key) => key.startsWith('#') && key.slice(1).split('/').every(asciiPart)
++    )
++  )
++}
++const exactMapKey = (key) => {
++  if (key === '.') return true
++  if (!key.startsWith('./')) return false
++  const tail = key.slice(2)
++  const stars = tail.split('*').length - 1
++  if (stars > 1) return false
++  return tail
++    .split('/')
++    .every((part) =>
++      part.includes('*') ? /^[A-Za-z0-9_@+.*-]+$/.test(part) : asciiPart(part)
++    )
++}
+ const packagePart = (v) =>
+   /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v) && v !== '.' && v !== '..'
+ const dirname = (v) =>
+@@ -751,14 +773,9 @@ export function createResolutionSession({
+       const keys = Object.keys(value),
+         mapped = keys.some((k) => k.startsWith('.'))
+       if (mapped) {
+-        if (
+-          !keys.every(
+-            (k) =>
+-              k === '.' ||
+-              (k.startsWith('./') && k.slice(2).split('/').every(asciiPart))
+-          )
+-        )
+-          fail('UNKNOWN_UNSUPPORTED_EXPORTS')
++        // Global map classification precedes the exact hit. Patterns are
++        // eligible only as unselected keys; no matching/substitution follows.
++        if (!keys.every(exactMapKey)) fail('UNKNOWN_UNSUPPORTED_EXPORTS')
+         if (!Object.hasOwn(value, subpath)) fail('UNKNOWN_UNRESOLVED_EXPORT')
+         branch.push(subpath)
+         const result = select(value[subpath])
+@@ -878,6 +895,7 @@ export function createResolutionSession({
+       logicalURL,
+       exact = false
+     const branch = []
++    const metadataSelection = { imports: null, exports: null }
+     if (specifier.startsWith('./') || specifier.startsWith('../')) {
+       classifyRaw(specifier, from, dirname(from))
+       // Normalization here only selects metadata for conservative negative
+@@ -945,8 +963,17 @@ export function createResolutionSession({
+       }
+       if (!owner) fail('UNKNOWN_RESOLUTION')
+       const body = owner.body
+-      if (Object.hasOwn(body, 'browser') || Object.hasOwn(body, 'imports'))
++      const hasImports = Object.hasOwn(body, 'imports')
++      const eligibleImports =
++        hasImports && isInactiveImportsMapEligible(body.imports)
++      if (Object.hasOwn(body, 'browser') || (hasImports && !eligibleImports))
+         fail('UNKNOWN_AMBIGUOUS_RESOLUTION')
++      metadataSelection.imports = {
++        present: hasImports,
++        eligible: eligibleImports,
++        inactive: eligibleImports,
++        keys: eligibleImports ? Object.keys(body.imports) : []
++      }
+       // A selected explicit null is outside the positive legacy subset: it
+       // must reach the blocked export branch, never open main/index fallback.
+       exact = Object.hasOwn(body, 'exports')
+@@ -957,6 +984,14 @@ export function createResolutionSession({
+         : subpath !== '.'
+           ? subpath
+           : body.main || './index.js'
++      if (exact)
++        metadataSelection.exports = {
++          requestedSubpath: subpath,
++          selectedKey: subpath,
++          unselectedPatternKeys: object(body.exports)
++            ? Object.keys(body.exports).filter((key) => key.includes('*'))
++            : []
++        }
+       const target = urlTarget(entry, owner, from, exact)
+       file = target.file
+       logicalURL = target.logicalURL
+@@ -972,6 +1007,7 @@ export function createResolutionSession({
+           : ['require', 'node', 'node-addons', 'module-sync'],
+       branch,
+       exact,
++      metadataSelection,
+       logicalURL,
+       canonicalFile: file,
+       canonicalURL: pathToFileURL(path.join(root, file)).href,
+@@ -1146,6 +1182,7 @@ function validateTraces(saved, root) {
+       isBuiltin(trace.specifier) ||
+       !['import', 'require'].includes(trace.mode) ||
+       typeof trace.exact !== 'boolean' ||
++      !object(trace.metadataSelection) ||
+       !Array.isArray(trace.branch) ||
+       trace.branch.some(
+         (v) => typeof v !== 'string' || /[\u0000-\u001f\u007f]/.test(v)
+@@ -1237,10 +1274,19 @@ export function revalidateResolutionSnapshot({ root, snapshot, limits } = {}) {
+   const session = createResolutionSession({ root, limits })
+   try {
+     for (const premise of saved.premises) REPLAY.get(session)(premise)
++    // Re-derive the selected branch and inactive-metadata premises. A
++    // valid-looking edited trace is never authority for a selection.
++    for (const trace of saved.resolutions)
++      session.resolve({
++        from: trace.from,
++        specifier: trace.specifier,
++        mode: trace.mode
++      })
+     const current = session.snapshot()
+     if (
+       !same(current.premises, saved.premises) ||
+-      !same(current.inputs, saved.inputs)
++      !same(current.inputs, saved.inputs) ||
++      !same(current.resolutions, saved.resolutions)
+     )
+       fail('UNKNOWN_RESOLUTION_MUTATION')
+     return true
+diff --git a/tests/b6-0234-installed-identity.test.js b/tests/b6-0234-installed-identity.test.js
+index a9e3789c..12e1136f 100644
+--- a/tests/b6-0234-installed-identity.test.js
++++ b/tests/b6-0234-installed-identity.test.js
+@@ -13,7 +13,7 @@ import {
+   INSTALLED_IDENTITY_LIMITS
+ } from '../scripts/boundary-installed-identity.mjs'
+ 
+-const TMP = '/tmp/cvg-hiso005-0234-20261017/comparer'
++const TMP = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-comparer'
+ const roots = []
+ const hash = (value) => createHash('sha256').update(value).digest('hex')
+ const KEY = 'node_modules/vendor'
+diff --git a/tests/b6-0234-reference-recipe.test.js b/tests/b6-0234-reference-recipe.test.js
+index 3f5e88ab..6f75c22a 100644
+--- a/tests/b6-0234-reference-recipe.test.js
++++ b/tests/b6-0234-reference-recipe.test.js
+@@ -20,7 +20,7 @@ import {
+ } from '../scripts/boundary-reference-process.mjs'
+ 
+ const NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+-const BASE = '/tmp/cvg-hiso005-0234-20261017/runner'
++const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0234-runner'
+ fs.mkdirSync(BASE, { recursive: true })
+ const roots = []
+ const cleanup = []
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index 4fdfd47c..be39ce7f 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -343,7 +343,7 @@ describe('SPEC0236 real checker/CLI integration', () => {
+     expect(after.graph.installed).toHaveLength(1)
+     expect(after.graph.installed[0]).toMatchObject({
+       verified: true,
+-      source: 'semantic-kernel-v2-resolution',
++      source: 'semantic-kernel-v3-exact-metadata',
+       contentIdentity: { status: 'MATCH' }
+     })
+     expect(after.report.resolvedDiagnostics).toHaveLength(1)
+diff --git a/tests/b6-0236-semantic-engine.test.js b/tests/b6-0236-semantic-engine.test.js
+index f1110cd2..d4cc9280 100644
+--- a/tests/b6-0236-semantic-engine.test.js
++++ b/tests/b6-0236-semantic-engine.test.js
+@@ -13,7 +13,7 @@ import {
+ 
+ const require = createRequire(import.meta.url)
+ const ts = require('typescript')
+-const parent = '/tmp/cvg-hiso005-integration-20261018/engine'
++const parent = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0236-engine'
+ const hash = (x) => createHash('sha256').update(x).digest('hex')
+ const pinnedNode = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+ const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
+diff --git a/tests/b6-0237-resolution-helper.test.js b/tests/b6-0237-resolution-helper.test.js
+index facade38..8c1be99f 100644
+--- a/tests/b6-0237-resolution-helper.test.js
++++ b/tests/b6-0237-resolution-helper.test.js
+@@ -11,7 +11,7 @@ import {
+   RESOLUTION_PROFILE
+ } from '../scripts/boundary-semantic-resolution.mjs'
+ 
+-const BASE = '/mnt/ia/cvg-hiso005-build0237-runtime-20261018/helper'
++const BASE = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-helper'
+ const parents = [],
+   sessions = []
+ const hash = (b) => createHash('sha256').update(b).digest('hex')
+diff --git a/tests/b6-0237-runtime-resolution.test.js b/tests/b6-0237-runtime-resolution.test.js
+index 40c67e1c..9ea1748f 100644
+--- a/tests/b6-0237-runtime-resolution.test.js
++++ b/tests/b6-0237-runtime-resolution.test.js
+@@ -16,7 +16,7 @@ const ENGINE = path.resolve('scripts/boundary-semantic-engine.mjs')
+ const CHECKER = path.resolve('scripts/check-product-boundary.mjs')
+ const BASELINE =
+   '/home/ricardo/cvg-candidates/hiso005-resolver-fix-20261018/scripts/check-product-boundary.mjs'
+-const PARENT = '/mnt/ia/cvg-hiso005-build0237-runtime-20261018/lead'
++const PARENT = '/mnt/ia/cvg-hiso005-build0240-runtime-20261018/legacy0237-lead'
+ const hash = (x) => createHash('sha256').update(x).digest('hex')
+ const env = {
+   PATH: path.dirname(NODE) + ':/usr/bin:/bin',
+@@ -128,7 +128,7 @@ function proven(input) {
+   expect(out.status, JSON.stringify(out.unknowns)).toBe('PROVEN')
+   expect(out.validation.valid).toBe(true)
+   expect(out.proofs.length).toBeGreaterThan(0)
+-  expect(out.kernelVersion).toBe('semantic-kernel-v2-resolution')
++  expect(out.kernelVersion).toBe('semantic-kernel-v3-exact-metadata')
+   return out
+ }
+ function refused(input) {
+@@ -708,7 +708,7 @@ describe('BUILD0237 actual CLI: compatibility, origins and strict determinism',
+     const normal = f.run([...f.flags, '--semantic'])
+     const strict = f.run([...f.flags, '--semantic', '--strict'])
+     expect(normal.body.semanticBoundary.kernelVersion).toBe(
+-      'semantic-kernel-v2-resolution'
++      'semantic-kernel-v3-exact-metadata'
+     )
+     delete normal.body.semanticTelemetry
+     delete strict.body.semanticTelemetry

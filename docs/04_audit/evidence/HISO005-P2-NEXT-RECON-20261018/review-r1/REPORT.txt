@@ -1,0 +1,34 @@
+Revisão documental independente R1 — SPEC0241 (corpo integral e proveniência instalada da fronteira B6)
+SPEC: docs/02_spec/0241_b6_integral_body_installed_provenance.md
+SHA-256 conferido: 55a3de340ad5083d9ca97253ed5316c22be1a3a959a31e47773be29f8f43c0ba (igual ao do contract-freeze-r1; os 16 insumos conferem)
+
+VEREDITO: REVISE. Há 4 achados obrigatórios, todos P2, e nenhum P1.
+
+O que se sustenta
+- Os fatos do §1 conferem com o relatório selado v3. O SHA dos bytes descomprimidos é igual ao do receipt. Totais: 1.118 = 537 + 581, e a tabela de causas está correta: .d.ts 198, .tsx 37, 3 JSON, 1 CSS, PARSE 29 em apps/web, 6 COMPILED_PROVENANCE e 4 FUNCTION em dist do Vitest, 1 tupla sem arquivo.
+- As oito linhas citadas do engine conferem. A cadeia de 7 módulos até tinyrainbow também, com o campo browser verificado nos bytes de r5. Contadores: v3 com states 7, contexts 0 e unionValues 0; v2 com states 1. Receipt: 112 arquivos, 22 adquiridos e 194 fora. dist instalado: 32 arquivos em 12 pacotes. Funções: 42 declarações recusadas.
+- Os quatro operadores foram reproduzidos em pasta privada e geraram as mesmas saídas, exceto timestamps. C1–C6 passaram 16/16, e C5 tem as duas assinaturas.
+- A interpretação central está correta e suficientemente provada: a fase de corpo aborta na primeira exceção, e por isso as contagens 6/4 são artefatos. Não há tupla de limite, o tempo ficou em 52 s de 120 s, a validação é válida, unionValues = 0 mostra que nenhum literal foi avaliado, e os controles reproduzem a assinatura. Nenhuma explicação alternativa se sustenta.
+- D1 não gera falso PROVEN, porque toda contenção registra UNKNOWN e a supressão global impede prova. D2 está bem delimitado por construção (workspace canonicalizado para packages/, inventário completo no comparador, receipt sem autoridade sobre arquivo instalado), e a classificação T3 está correta.
+- Não há crédito antecipado: o cabeçalho diz que o BUILD não está autorizado, a SPEC espera zero provas e os IB estão todos NOT_RUN. A estimativa de estados está rotulada como estimativa.
+
+Obrigatórios
+R1-01 (§3.1) O conjunto fechado de motivos contidos não está enumerado na SPEC e fica para o BUILD. Ele omite UNKNOWN_PRODUCT_TARGET: o helper registra a violação e depois lança essa exceção, que continuaria abortando o corpo. No controle privado X1, no engine congelado, 3 arestas de produto visíveis só no corpo geram 1 violação. A SPEC também não separa "aquisição" de "mutação" (UNKNOWN_INPUT_MUTATION durante leitura; UNKNOWN_ACQUISITION_<errno> com sufixo aberto) nem classifica UNKNOWN_RESOLUTION_LIMIT:*. Correção: enumerar e classificar cada motivo, incluir UNKNOWN_PRODUCT_TARGET como contido e acrescentar o par a IB03/IB04.
+R1-02 (§3.2/§6) O prazo por relógio não é determinístico. O worker se valida recomputando a análise inteira, e qualquer divergência faz o pai trocar a fronteira por empty(), que é justamente o resultado que D1 quer evitar. Census, análise e recomputação dividem 120 s. Pela telemetria selada, são cerca de 18,6 s por passagem já com o corpo parado; a margem de 20 s não cobre a recomputação. Passar o orçamento por input.limits contamina o payload. IB05 entra em conflito com IB09 (normal/strict iguais) e com a 0237. Correção: corte determinístico ou recomputação que reproduza o mesmo corte, divisão explícita do orçamento, canal do prazo fora do payload e par de teste.
+R1-03 (§3.5) As três exceções de conservação não bastam. (a) Para arestas visíveis só no corpo, o catch externo atribui a tupla ao arquivo-alvo via error.file, e não "sem arquivo" (controle X2: alvo ausente). (b) Tuplas de limite e prazo mudam de forma ou de cap: empty('timeoutMs') no pai contra UNKNOWN_ANALYSIS_LIMIT:<cap> no worker. (c) UNKNOWN_REVALIDATION pode aparecer ou sumir. Pela regra "qualquer outro desaparecimento é defeito", um BUILD correto reprovaria. Correção: ampliar a exceção 1 ou preservar a tupla original, e definir regra para limite, prazo e revalidação.
+R1-04 (§1/§3.2) A parada também pula as verificações pós-corpo: UNKNOWN_INSTALLED_IDENTITY, UNKNOWN_UNREACHED_INSTALLED_ENTRY e UNKNOWN_INVALID_ORIGIN (controle X3). Na v3, 303 pacotes são instalados e só 21 têm código adquirido, então até cerca de 282 entradas estão latentes (estimativa). A §3.4 trata essas regras como "existentes", mas elas nunca rodaram na árvore real. A §3.2 não diz se rodam após corte. Correção: registrar isso no §1 e declarar, em todo caminho de saída, quais fases pós-corpo rodaram.
+
+Opcionais (P3, sem efeito no veredito)
+- R1-05: as linhas 807 e 834 ficam em expression(), não em block().
+- R1-06: o engine recebeu 1.095 starts, e não "pelo menos 686"; há 371 arquivos dist de primeira parte fora do receipt, contando .d.ts.
+- R1-07: citar explicitamente que D2 supera a 0240 §2 e a MS04 para a v4.
+- R1-08: produzir FILE_IDENTITY também quando falha a premissa de pacote; amarrar a entrada ao inventorySha256 do receipt; usar uma derivação única da chave.
+- R1-09: acrescentar negativos ao IB08: pacote aninhado, workspace via node_modules, inventário de outro pacote, diretório com prefixo ponto.
+- R1-10: definir a regra para função com várias categorias.
+- R1-11: fixar a margem na SPEC e incluir positivo imediatamente abaixo.
+- R1-12: corrigir a redação "só acrescenta" e completar a §4.
+- R1-13: acrescentar riscos: ENOBUFS, tamanho do input, duplicação de detalhe e specifier absoluto.
+- R1-14: corrigir higiene da evidência: proposedSpecPath divergente no task.json e chain-witness.json inexistente citado.
+
+Escopo e limites desta revisão
+Só leitura no repositório, exceto este arquivo e review.json. Fixtures e saídas ficaram em /mnt/dados/tmp/ricardo/claude-1000/review-0241-r1/. Foram usados o Node 22.23.2 pinado e env mínimo. Os controles extras X1–X3 rodaram no engine congelado com hook que recusa carregar alvo (blocked=0). Nenhum módulo do Vitest ou de pacote analisado foi importado ou avaliado. Não houve git com escrita, gates, PG ou Docker, e nada foi escrito em /mnt/ia.

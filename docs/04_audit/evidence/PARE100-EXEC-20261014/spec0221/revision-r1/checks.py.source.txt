@@ -1,0 +1,40 @@
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+PRIVATE = Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0221-r1')
+WORK = PRIVATE.parent / 'worktree'
+NODE = '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+name = sys.argv[1]
+out = PRIVATE / 'checks' / name
+assert not out.exists(), 'Keep every attempt'
+out.mkdir(parents=True)
+owned = ['docs/02_spec/0221_pare100_public_session_persistence.md', 'docs/03_build/0378_backlog_paridade_integral.md', 'docs/08_runtime/agent_coordination.md', 'docs/99_runtime_state.md', 'docs/20_master_execution_log.md', 'docs/30_backlog_master.md', '.agent/plans/pare100-execplan.md']
+commands = [
+    ('format-root', ROOT, [NODE, 'node_modules/prettier/bin/prettier.cjs', '--check', *owned]),
+    ('format-worktree', WORK, [NODE, 'node_modules/prettier/bin/prettier.cjs', '--check', *owned]),
+    ('links-root', ROOT, [NODE, 'scripts/check-doc-links.mjs', 'README.md', 'AGENTS.md', 'docs', 'products']),
+    ('links-worktree', WORK, [NODE, 'scripts/check-doc-links.mjs', 'README.md', 'AGENTS.md', 'docs', 'products']),
+    ('hygiene-root', ROOT, [NODE, 'scripts/check-evidence-hygiene.mjs']),
+    ('hygiene-worktree', WORK, [NODE, 'scripts/check-evidence-hygiene.mjs']),
+    ('documentary', ROOT, ['python3', str(PRIVATE / 'verify-docs.py')]),
+]
+results = []
+for label, cwd, argv in commands:
+    result = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=60)
+    record = {'label': label, 'cwd': str(cwd), 'argv': argv, 'exit_code': result.returncode, 'streams': {}}
+    for stream in ['stdout', 'stderr']:
+        data = getattr(result, stream)
+        if data:
+            path = out / (label + '.' + stream + '.txt')
+            path.write_bytes(data)
+            record['streams'][stream] = {'path': str(path), 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        else:
+            record['streams'][stream] = {'bytes': 0, 'status': 'expected_empty', 'file_omitted': True}
+    results.append(record)
+    print(label, result.returncode)
+(out / 'commands.json').write_text(json.dumps(results, indent=2, ensure_ascii=False) + '\n')
+sys.exit(any(r['exit_code'] != 0 for r in results))

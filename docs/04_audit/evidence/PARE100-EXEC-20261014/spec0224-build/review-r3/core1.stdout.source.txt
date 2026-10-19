@@ -1,0 +1,891 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/createOperationalHarness.ts SHA256 08e2c4bd510f00ee280a7b721edd42d680e91a550dfac7c7f49078860986edab
+     1 import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+     2 import type {
+     3   AgenticKnowledgeProvider,
+     4   Claim,
+     5   CompletionEvaluator,
+     6   CompleteToolContextConfiguration,
+     7   ContextEngine,
+     8   ExecutionStepStore,
+     9   IterativeOrchestrator,
+    10   RuntimeInput,
+    11   RuntimeProfile,
+    12   RuntimeResult,
+    13   SandboxGate,
+    14   SufficiencyEvaluator,
+    15   CapabilityRegistry,
+    16   ToolRegistry
+    17 } from '@cvg/harness-contracts'
+    18 import { createCapabilityToolRegistry } from './capability-boundary.ts'
+    19 import {
+    20   createJournaledToolRegistry,
+    21   type EffectJournal,
+    22   type JournaledToolRegistryOptions
+    23 } from './effect-journal.ts'
+    24 import {
+    25   SinglePassGovernedRuntime,
+    26   type HarnessRuntimeOptions
+    27 } from './runtime.ts'
+    28 import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+    29 import {
+    30   prepareCompleteToolRegistry,
+    31   prepareCompleteToolResult
+    32 } from './complete-tool-results.ts'
+    33 
+    34 export interface OperationalHarnessOptions extends Omit<
+    35   HarnessRuntimeOptions,
+    36   'orchestrator' | 'tools' | 'capabilityFingerprint'
+    37 > {
+    38   readonly toolResultContext?: CompleteToolContextConfiguration
+    39   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+    40   /**
+    41    * Explicit capability composition. Its adapter is the only runtime-facing
+    42    * registry for this path; callers cannot provide both registries.
+    43    */
+    44   readonly capabilities?: CapabilityRegistry
+    45   /** Compatibility port retained for existing Phase 2/3 consumers. */
+    46   readonly tools?: ToolRegistry
+    47   /** Required for capability composition and optional for compatibility tools. */
+    48   readonly effectJournal?: EffectJournal
+    49   readonly effectJournalOptions?: JournaledToolRegistryOptions
+    50   /**
+    51    * Required to run the iterative profile. The runtime registry resolves the
+    52    * requested profile here; the worker never selects a runtime class.
+    53    */
+    54   readonly iterativeOrchestrator?: IterativeOrchestrator
+    55   readonly stepStore?: ExecutionStepStore
+    56   readonly contextEngine?: ContextEngine
+    57   readonly knowledge?: AgenticKnowledgeProvider
+    58   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+    59   readonly completionEvaluator?: CompletionEvaluator
+    60   readonly claimExtractor?: (response: string) => readonly Claim[]
+    61   readonly defaultRuntimeProfile?: RuntimeProfile
+    62   readonly clock?: () => Date
+    63   /** Optional containment gate; absent means fail-closed for contained tools. */
+    64   readonly sandbox?: SandboxGate
+    65 }
+    66 
+    67 export interface OperationalHarness {
+    68   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+    69   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+    70   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+    71   readonly capabilityFingerprint?: string
+    72 }
+    73 
+    74 /**
+    75  * Canonical public composition root for the neutral harness packages. Product
+    76  * adapters provide the ports; this function only wires them together and
+    77  * resolves the runtime profile through a registry-like selection.
+    78  */
+    79 export function createOperationalHarness(
+    80   options: OperationalHarnessOptions
+    81 ): OperationalHarness {
+    82   if (
+    83     options.toolResultContext &&
+    84     (!options.iterativeOrchestrator || !options.stepStore)
+    85   ) {
+    86     throw new Error(
+    87       'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+    88     )
+    89   }
+    90   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+    91   if (options.capabilities && !options.effectJournal) {
+    92     throw new Error(
+    93       'Capability composition requires an explicit effect journal'
+    94     )
+    95   }
+    96   const tools = resolveTools(options, capabilityFingerprint)
+    97   const singlePass = new SinglePassGovernedRuntime({
+    98     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+    99     modelGateway: options.modelGateway,
+   100     policy: options.policy,
+   101     approvals: options.approvals,
+   102     tools,
+   103     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+   104     audit: options.audit,
+   105     telemetry: options.telemetry,
+   106     ...(options.pause ? { pause: options.pause } : {}),
+   107     ...(options.effects ? { effects: options.effects } : {}),
+   108     ...(options.log ? { log: options.log } : {}),
+   109     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+   110   })
+   111 
+   112   const iterative =
+   113     options.iterativeOrchestrator && options.stepStore
+   114       ? new IterativeGovernedRuntime({
+   115           orchestrator: options.iterativeOrchestrator,
+   116           modelGateway: options.modelGateway,
+   117           policy: options.policy,
+   118           approvals: options.approvals,
+   119           tools,
+   120           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+   121           audit: options.audit,
+   122           telemetry: options.telemetry,
+   123           ...(options.pause ? { pause: options.pause } : {}),
+   124           ...(options.effects ? { effects: options.effects } : {}),
+   125           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+   126           ...(options.log ? { log: options.log } : {}),
+   127           stepStore: options.stepStore,
+   128           ...(options.toolResultContext
+   129             ? { toolResultContext: options.toolResultContext }
+   130             : {}),
+   131           ...(options.contextEngine
+   132             ? { contextEngine: options.contextEngine }
+   133             : {}),
+   134           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+   135           ...(options.sufficiencyEvaluator
+   136             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+   137             : {}),
+   138           ...(options.completionEvaluator
+   139             ? { completionEvaluator: options.completionEvaluator }
+   140             : {}),
+   141           ...(options.claimExtractor
+   142             ? { claimExtractor: options.claimExtractor }
+   143             : {}),
+   144           ...(options.clock ? { clock: options.clock } : {})
+   145         })
+   146       : undefined
+   147 
+   148   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+   149     const profile =
+   150       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'
+   151     if (options.toolResultContext && profile !== 'iterative') {
+   152       throw new Error(
+   153         'complete-tool-v1 is only supported by the iterative profile.'
+   154       )
+   155     }
+   156     return profile
+   157   }
+   158 
+   159   const execute = async (input: RuntimeInput): Promise<RuntimeResult> => {
+   160     const governedInput = capabilityFingerprint
+   161       ? { ...input, capabilityFingerprint }
+   162       : input
+   163     if (
+   164       capabilityFingerprint &&
+   165       input.executionId &&
+   166       input.capabilityFingerprint === undefined
+   167     ) {
+   168       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+   169       return {
+   170         response:
+   171           'Capability composition fingerprint is required for durable execution.',
+   172         stopReason: 'STATE_CONFLICT',
+   173         steps: 0,
+   174         modelCalls: 0,
+   175         toolCalls: 0,
+   176         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+   177       }
+   178     }
+   179     if (
+   180       capabilityFingerprint &&
+   181       input.capabilityFingerprint !== undefined &&
+   182       input.capabilityFingerprint !== capabilityFingerprint
+   183     ) {
+   184       await safeAudit(options, input, 'runtime.stopped', 'STATE_CONFLICT')
+   185       return {
+   186         response:
+   187           'Capability composition fingerprint does not match the runtime.',
+   188         stopReason: 'STATE_CONFLICT',
+   189         steps: 0,
+   190         modelCalls: 0,
+   191         toolCalls: 0,
+   192         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+   193       }
+   194     }
+   195     const profile = resolveProfile(governedInput)
+   196     if (profile === 'iterative') {
+   197       if (!iterative) {
+   198         await safeAudit(
+   199           options,
+   200           governedInput,
+   201           'runtime.stopped',
+   202           'STATE_CONFLICT'
+   203         )
+   204         return {
+   205           response:
+   206             'The iterative runtime profile is not configured in this composition.',
+   207           stopReason: 'STATE_CONFLICT',
+   208           steps: 0,
+   209           modelCalls: 0,
+   210           toolCalls: 0,
+   211           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+   212         }
+   213       }
+   214       return iterative.execute(governedInput)
+   215     }
+   216     return singlePass.execute(governedInput)
+   217   }
+   218 
+   219   return {
+   220     run: (input) => execute(input),
+   221     execute,
+   222     resolveProfile,
+   223     ...(options.capabilities
+   224       ? { capabilityFingerprint: options.capabilities.compositionFingerprint() }
+   225       : {})
+   226   }
+   227 }
+   228 
+   229 function resolveTools(
+   230   options: OperationalHarnessOptions,
+   231   capabilityFingerprint: string | undefined
+   232 ): ToolRegistry {
+   233   if (options.capabilities && options.tools) {
+   234     throw new Error(
+   235       'Operational harness composition accepts capabilities or tools, not both'
+   236     )
+   237   }
+   238   const baseRegistry = options.capabilities
+   239     ? createCapabilityToolRegistry(
+   240         options.capabilities,
+   241         options.toolResultContext ? prepareCompleteToolResult : undefined
+   242       )
+   243     : options.tools
+   244   if (!baseRegistry) {
+   245     throw new Error(
+   246       'Operational harness composition requires an explicit capability or tool registry'
+   247     )
+   248   }
+   249   const registry = options.toolResultContext
+   250     ? prepareCompleteToolRegistry(baseRegistry)
+   251     : baseRegistry
+   252   if (!options.effectJournal) return registry
+   253   return createJournaledToolRegistry(registry, options.effectJournal, {
+   254     ...options.effectJournalOptions,
+   255     ...(capabilityFingerprint
+   256       ? { compositionFingerprint: capabilityFingerprint }
+   257       : {})
+   258   })
+   259 }
+   260 
+   261 async function safeAudit(
+   262   options: OperationalHarnessOptions,
+   263   input: RuntimeInput,
+   264   action: string,
+   265   result: string
+   266 ): Promise<void> {
+   267   try {
+   268     await options.audit.append({
+   269       actor: input.agent.id,
+   270       agent: input.agent.id,
+   271       tenant: input.tenantId,
+   272       action,
+   273       policy: null,
+   274       approval: null,
+   275       tool: null,
+   276       result,
+   277       timestamp: new Date().toISOString(),
+   278       traceId: input.traceId,
+   279       correlationId: input.correlationId
+   280     })
+   281   } catch {
+   282     // misconfiguration must still fail closed without an unhandled error
+   283   }
+   284 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/complete-decision-admission.ts SHA256 2abc2a32b65ac811062a34de5a3ea21d8899410688a895866fe6b54291386ecd
+     1 import { createHash, randomUUID } from 'node:crypto'
+     2 import type {
+     3   DecisionAdmissionPort,
+     4   DecisionAdmissionRecord,
+     5   DecisionAdmissionReserveInput,
+     6   DecisionAdmissionSettlement,
+     7   ModelResult,
+     8   ModelUsage
+     9 } from '@cvg/harness-contracts'
+    10 import {
+    11   canonicalizeCompleteJson,
+    12   COMPLETE_DECISION_OUTPUT_TOKENS,
+    13   COMPLETE_DECISION_REQUEST_MAX_BYTES,
+    14   ToolResultContextError
+    15 } from '@cvg/harness-contracts'
+    16 import type { LoopRun } from './iterative-runtime.ts'
+    17 
+    18 interface AdmissionOptions {
+    19   readonly run: LoopRun
+    20   readonly stepNumber: number
+    21   readonly tokenBudget: number
+    22   readonly signal: AbortSignal
+    23   readonly remainingMs: () => number
+    24   readonly persist: () => Promise<void>
+    25   readonly audit: (action: string, result: string) => Promise<void>
+    26 }
+    27 
+    28 function digest(value: unknown): string {
+    29   return createHash('sha256')
+    30     .update(
+    31       canonicalizeCompleteJson(value, {
+    32         maxBytes: COMPLETE_DECISION_REQUEST_MAX_BYTES,
+    33         maxDepth: 64,
+    34         maxNodes: 20_000
+    35       })
+    36     )
+    37     .digest('hex')
+    38 }
+    39 
+    40 function finiteUsage(result: ModelResult): ModelUsage | null {
+    41   if (
+    42     !result ||
+    43     typeof result.text !== 'string' ||
+    44     typeof result.provider !== 'string' ||
+    45     typeof result.model !== 'string' ||
+    46     !Number.isSafeInteger(result.inputTokens) ||
+    47     result.inputTokens < 0 ||
+    48     !Number.isSafeInteger(result.outputTokens) ||
+    49     result.outputTokens < 0 ||
+    50     !Number.isFinite(result.costUsd) ||
+    51     result.costUsd < 0
+    52   )
+    53     return null
+    54   return {
+    55     modelCalls: 1,
+    56     inputTokens: result.inputTokens,
+    57     outputTokens: result.outputTokens,
+    58     costUsd: result.costUsd
+    59   }
+    60 }
+    61 
+    62 /** Native, checkpoint-backed decision accounting. The model cannot issue receipts. */
+    63 export class CompleteDecisionAdmission implements DecisionAdmissionPort {
+    64   private queue: Promise<unknown> = Promise.resolve()
+    65   private closed = false
+    66 
+    67   public constructor(private readonly options: AdmissionOptions) {}
+    68 
+    69   private serial<T>(operation: () => Promise<T>): Promise<T> {
+    70     const next = this.queue.then(operation)
+    71     this.queue = next.catch(() => undefined)
+    72     return next
+    73   }
+    74 
+    75   public reserve(
+    76     input: DecisionAdmissionReserveInput
+    77   ): Promise<DecisionAdmissionRecord> {
+    78     return this.serial(() => this.reserveNow(input))
+    79   }
+    80 
+    81   public settle(
+    82     input: DecisionAdmissionSettlement
+    83   ): Promise<DecisionAdmissionRecord> {
+    84     return this.serial(() => this.settleNow(input))
+    85   }
+    86 
+    87   /** Close synchronously, then persist uncertainty before accepting a late result. */
+    88   public close(reason = 'decision_closed'): Promise<void> {
+    89     this.closed = true
+    90     return this.serial(async () => {
+    91       const state = this.state()
+    92       if (state.pendingDecisionAdmission) {
+    93         const record = state.decisionAdmissions.find(
+    94           (value) => value.admissionId === state.pendingDecisionAdmission
+    95         )
+    96         if (
+    97           !record ||
+    98           record.status !== 'RESERVED' ||
+    99           record.stepNumber !== this.options.stepNumber
+   100         )
+   101           throw this.conflict()
+   102         await this.unknown(record, reason)
+   103       }
+   104     })
+   105   }
+   106 
+   107   private state() {
+   108     const state = this.options.run.state.toolResultContext
+   109     if (!state || state.version !== 1) throw this.conflict()
+   110     return state
+   111   }
+   112 
+   113   private conflict(): ToolResultContextError {
+   114     return new ToolResultContextError(
+   115       'STATE_CONFLICT',
+   116       'Decision admission identity or state conflicts.',
+   117       'STATE_CONFLICT'
+   118     )
+   119   }
+   120 
+   121   private async reserveNow(
+   122     input: DecisionAdmissionReserveInput
+   123   ): Promise<DecisionAdmissionRecord> {
+   124     const { run, stepNumber, signal } = this.options
+   125     if (this.closed || signal.aborted) {
+   126       throw new ToolResultContextError(
+   127         'DECISION_USAGE_UNKNOWN',
+   128         'Decision admission is closed.',
+   129         'CANCELLED'
+   130       )
+   131     }
+   132     if (this.options.remainingMs() <= 0) {
+   133       throw new ToolResultContextError(
+   134         'DECISION_USAGE_UNKNOWN',
+   135         'Decision deadline elapsed.',
+   136         'MAX_DURATION'
+   137       )
+   138     }
+   139     const state = this.state()
+   140     if (
+   141       state.pendingDecisionAdmission ||
+   142       state.decisionAdmissions.some((value) => value.status === 'UNKNOWN')
+   143     )
+   144       throw this.conflict()
+   145     const { request, measurement } = input
+   146     const purpose = request.purpose
+   147     if (
+   148       (purpose !== 'ORCHESTRATION' && purpose !== 'REPAIR') ||
+   149       request.correlationId !== run.input.correlationId ||
+   150       request.maxOutputTokens !== COMPLETE_DECISION_OUTPUT_TOKENS ||
+   151       !Number.isSafeInteger(input.attempt) ||
+   152       input.attempt < 0 ||
+   153       !Number.isSafeInteger(measurement.inputUpperBoundTokens) ||
+   154       measurement.inputUpperBoundTokens < 0 ||
+   155       !Number.isSafeInteger(measurement.contextWindowTokens) ||
+   156       measurement.contextWindowTokens < 1 ||
+   157       !Number.isFinite(measurement.costUpperBoundUsd) ||
+   158       measurement.costUpperBoundUsd < 0 ||
+   159       [
+   160         measurement.counterId,
+   161         measurement.counterVersion,
+   162         measurement.provider,
+   163         measurement.model,
+   164         measurement.formattingVersion
+   165       ].some(
+   166         (value) =>
+   167           typeof value !== 'string' ||
+   168           !value ||
+   169           value.length > 512 ||
+   170           value.includes('\0')
+   171       )
+   172     )
+   173       throw new ToolResultContextError(
+   174         'ADMISSION_UNAVAILABLE',
+   175         'Invalid qualified decision measurement.'
+   176       )
+   177     const requestSha256 = digest(request)
+   178     const inputTokens = measurement.inputUpperBoundTokens
+   179     if (
+   180       inputTokens > this.options.tokenBudget ||
+   181       inputTokens + COMPLETE_DECISION_OUTPUT_TOKENS >
+   182         measurement.contextWindowTokens
+   183     ) {
+   184       throw new ToolResultContextError(
+   185         'CONTEXT_OVERFLOW',
+   186         'The complete decision input does not fit its qualified context.'
+   187       )
+   188     }
+   189     if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+   190       throw new ToolResultContextError(
+   191         'CONTEXT_OVERFLOW',
+   192         'No decision model-call slot remains.',
+   193         'MAX_MODEL_CALLS'
+   194       )
+   195     }
+   196     if (
+   197       run.usage.inputTokens +
+   198         run.usage.outputTokens +
+   199         inputTokens +
+   200         COMPLETE_DECISION_OUTPUT_TOKENS >
+   201       run.input.budget.maxTokens
+   202     ) {
+   203       throw new ToolResultContextError(
+   204         'CONTEXT_OVERFLOW',
+   205         'Insufficient decision token reserve.',
+   206         'MAX_TOKENS'
+   207       )
+   208     }
+   209     if (
+   210       run.usage.costUsd + measurement.costUpperBoundUsd >
+   211       run.input.budget.maxCostUsd
+   212     ) {
+   213       throw new ToolResultContextError(
+   214         'CONTEXT_OVERFLOW',
+   215         'Insufficient decision cost reserve.',
+   216         'MAX_COST'
+   217       )
+   218     }
+   219     if (
+   220       purpose === 'REPAIR' &&
+   221       run.usage.decisionRepairs + 1 > (run.input.budget.maxDecisionRepairs ?? 1)
+   222     ) {
+   223       throw new ToolResultContextError(
+   224         'ADMISSION_UNAVAILABLE',
+   225         'Decision repair limit exhausted.',
+   226         'MODEL_FAILURE'
+   227       )
+   228     }
+   229     const record: DecisionAdmissionRecord = {
+   230       admissionId: `admission_${randomUUID()}`,
+   231       tenantId: run.input.tenantId,
+   232       executionId: run.executionId,
+   233       stepNumber,
+   234       attempt: state.decisionAdmissions.filter(
+   235         (value) => value.stepNumber === stepNumber
+   236       ).length,
+   237       purpose,
+   238       requestSha256,
+   239       measurement: structuredClone(measurement),
+   240       reserved: {
+   241         modelCalls: 1,
+   242         inputTokens,
+   243         outputTokens: COMPLETE_DECISION_OUTPUT_TOKENS,
+   244         costUsd: measurement.costUpperBoundUsd
+   245       },
+   246       status: 'RESERVED'
+   247     }
+   248     run.usage.modelCalls += 1
+   249     run.usage.inputTokens += record.reserved.inputTokens
+   250     run.usage.outputTokens += record.reserved.outputTokens
+   251     run.usage.costUsd += record.reserved.costUsd
+   252     if (purpose === 'REPAIR') run.usage.decisionRepairs += 1
+   253     run.state.toolResultContext = {
+   254       ...state,
+   255       pendingDecisionAdmission: record.admissionId,
+   256       decisionAdmissions: [...state.decisionAdmissions, record]
+   257     }
+   258     await this.options.persist()
+   259     await this.options.audit('decision.admission.reserved', requestSha256)
+   260     // The receipt is returned only after the checkpoint commit and audit.
+   261     return structuredClone(record)
+   262   }
+   263 
+   264   private async replace(record: DecisionAdmissionRecord): Promise<void> {
+   265     const state = this.state()
+   266     this.options.run.state.toolResultContext = {
+   267       ...state,
+   268       pendingDecisionAdmission:
+   269         record.status === 'RESERVED' ? record.admissionId : null,
+   270       decisionAdmissions: state.decisionAdmissions.map((value) =>
+   271         value.admissionId === record.admissionId ? record : value
+   272       )
+   273     }
+   274     try {
+   275       await this.options.persist()
+   276     } catch (error) {
+   277       this.options.run.state.toolResultContext = state
+   278       throw error
+   279     }
+   280   }
+   281 
+   282   private async unknown(
+   283     record: DecisionAdmissionRecord,
+   284     reason: string,
+   285     actual?: ModelUsage
+   286   ): Promise<DecisionAdmissionRecord> {
+   287     const next: DecisionAdmissionRecord = {
+   288       ...record,
+   289       status: 'UNKNOWN',
+   290       unknownReason: /^[a-zA-Z0-9_:-]{1,128}$/.test(reason)
+   291         ? reason
+   292         : 'decision_model_failed',
+   293       ...(actual ? { actual } : {})
+   294     }
+   295     if (actual) {
+   296       const usage = this.options.run.usage
+   297       usage.inputTokens +=
+   298         Math.max(record.reserved.inputTokens, actual.inputTokens) -
+   299         record.reserved.inputTokens
+   300       usage.outputTokens +=
+   301         Math.max(record.reserved.outputTokens, actual.outputTokens) -
+   302         record.reserved.outputTokens
+   303       usage.costUsd +=
+   304         Math.max(record.reserved.costUsd, actual.costUsd) -
+   305         record.reserved.costUsd
+   306     }
+   307     await this.replace(next)
+   308     return structuredClone(next)
+   309   }
+   310 
+   311   private async settleNow(
+   312     input: DecisionAdmissionSettlement
+   313   ): Promise<DecisionAdmissionRecord> {
+   314     const { run } = this.options
+   315     const record = this.state().decisionAdmissions.find(
+   316       (value) => value.admissionId === input.admissionId
+   317     )
+   318     if (
+   319       !record ||
+   320       record.stepNumber !== this.options.stepNumber ||
+   321       record.tenantId !== run.input.tenantId ||
+   322       record.executionId !== run.executionId ||
+   323       record.requestSha256 !== input.requestSha256
+   324     )
+   325       throw this.conflict()
+   326     if (record.status === 'SETTLED') {
+   327       if (
+   328         input.kind !== 'RESULT' ||
+   329         digest(input.result) !== record.resultSha256
+   330       )
+   331         throw this.conflict()
+   332       return structuredClone(record)
+   333     }
+   334     if (
+   335       record.status !== 'RESERVED' ||
+   336       this.state().pendingDecisionAdmission !== record.admissionId
+   337     )
+   338       throw this.conflict()
+   339     if (input.kind === 'UNKNOWN') return this.unknown(record, input.reason)
+   340     if (
+   341       this.closed ||
+   342       this.options.signal.aborted ||
+   343       this.options.remainingMs() <= 0
+   344     ) {
+   345       await this.unknown(record, 'decision_closed')
+   346       throw new ToolResultContextError(
+   347         'DECISION_USAGE_UNKNOWN',
+   348         'A late decision result cannot be accepted.'
+   349       )
+   350     }
+   351     const actual = finiteUsage(input.result)
+   352     if (
+   353       !actual ||
+   354       input.result.provider !== record.measurement.provider ||
+   355       input.result.model !== record.measurement.model ||
+   356       actual.inputTokens > record.reserved.inputTokens ||
+   357       actual.outputTokens > record.reserved.outputTokens ||
+   358       actual.costUsd > record.reserved.costUsd
+   359     ) {
+   360       await this.unknown(record, 'ADMISSION_BREACH', actual ?? undefined)
+   361       await this.options.audit(
+   362         'decision.admission.breach',
+   363         record.requestSha256
+   364       )
+   365       throw new ToolResultContextError(
+   366         'ADMISSION_BREACH',
+   367         'The model violated its qualified decision bounds.'
+   368       )
+   369     }
+   370     const resultSha256 = digest(input.result)
+   371     const usage = run.usage
+   372     const previous = {
+   373       inputTokens: usage.inputTokens,
+   374       outputTokens: usage.outputTokens,
+   375       costUsd: usage.costUsd
+   376     }
+   377     usage.inputTokens += actual.inputTokens - record.reserved.inputTokens
+   378     usage.outputTokens += actual.outputTokens - record.reserved.outputTokens
+   379     usage.costUsd += actual.costUsd - record.reserved.costUsd
+   380     const settled: DecisionAdmissionRecord = {
+   381       ...record,
+   382       status: 'SETTLED',
+   383       actual,
+   384       resultSha256
+   385     }
+   386     try {
+   387       await this.replace(settled)
+   388     } catch (error) {
+   389       // No acknowledged settlement: retain the pre-call conservative charge.
+   390       Object.assign(usage, previous)
+   391       throw error
+   392     }
+   393     await this.options.audit('decision.admission.settled', record.requestSha256)
+   394     return structuredClone(settled)
+   395   }
+   396 }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/contracts/src/complete-tool-context.ts SHA256 e3df9a5a00f255aad9ddcf726bc16c131419582ee642d6415508e4b1cf6b84ef
+     1 /** SPEC0224: opt-in complete-tool-v1. Legacy protocols do not use these fields. */
+     2 import type {
+     3   ModelRequest,
+     4   ModelResult,
+     5   SideEffect,
+     6   StopReason
+     7 } from './contracts.ts'
+     8 import type {
+     9   ExecutionCheckpoint,
+    10   LoopDecision,
+    11   ModelUsage
+    12 } from './execution-v2.ts'
+    13 
+    14 export const COMPLETE_TOOL_RESULT_MAX_BYTES = 32_768
+    15 export const COMPLETE_TOOL_RESULT_MAX_DEPTH = 32
+    16 export const COMPLETE_TOOL_RESULT_MAX_NODES = 10_000
+    17 export const COMPLETE_CHECKPOINT_MAX_BYTES = 8_388_608
+    18 export const COMPLETE_DECISION_SYSTEM_MAX_UNITS = 16_000
+    19 export const COMPLETE_DECISION_USER_MAX_UNITS = 32_000
+    20 export const COMPLETE_DECISION_REQUEST_MAX_BYTES = 131_072
+    21 export const COMPLETE_DECISION_OUTPUT_TOKENS = 512
+    22 
+    23 export interface CompleteToolContextConfiguration {
+    24   readonly version: 1
+    25 }
+    26 
+    27 export type CompleteJsonValue =
+    28   | null
+    29   | boolean
+    30   | number
+    31   | string
+    32   | readonly CompleteJsonValue[]
+    33   | { readonly [key: string]: CompleteJsonValue }
+    34 
+    35 export interface CompleteJsonLimits {
+    36   readonly maxBytes?: number
+    37   readonly maxDepth?: number
+    38   readonly maxNodes?: number
+    39 }
+    40 
+    41 export type CompleteJsonErrorCode =
+    42   | 'INVALID_JSON'
+    43   | 'RESULT_TOO_LARGE'
+    44   | 'RESULT_COMPLEXITY'
+    45 
+    46 export type CompleteToolObservationPayload =
+    47   | {
+    48       readonly schemaVersion: 1
+    49       readonly status: 'SUCCEEDED'
+    50       readonly sideEffect: SideEffect
+    51       readonly completion: 'COMPLETE'
+    52       readonly resultAvailability: 'AVAILABLE'
+    53       readonly output: CompleteJsonValue
+    54       readonly outputBytes: number
+    55       readonly outputSha256: string
+    56     }
+    57   | {
+    58       readonly schemaVersion: 1
+    59       readonly status: 'SUCCEEDED'
+    60       readonly sideEffect: SideEffect
+    61       readonly completion: 'UNAVAILABLE'
+    62       readonly resultAvailability: 'UNAVAILABLE'
+    63       readonly reason: CompleteJsonErrorCode
+    64     }
+    65   | {
+    66       readonly schemaVersion: 1
+    67       readonly status: 'FAILED' | 'REJECTED'
+    68       readonly sideEffect: SideEffect
+    69       readonly completion: 'NOT_APPLICABLE'
+    70       readonly resultAvailability: 'UNAVAILABLE'
+    71       readonly error: string
+    72     }
+    73 
+    74 export type DecisionModelRequestSnapshot = Omit<ModelRequest, 'signal'> & {
+    75   readonly maxOutputTokens: typeof COMPLETE_DECISION_OUTPUT_TOKENS
+    76 }
+    77 
+    78 /** Trusted adapter contract; qualification applies only to its paired model. */
+    79 export interface DecisionInputMeasurement {
+    80   readonly counterId: string
+    81   readonly counterVersion: string
+    82   readonly provider: string
+    83   readonly model: string
+    84   readonly formattingVersion: string
+    85   readonly inputUpperBoundTokens: number
+    86   readonly contextWindowTokens: number
+    87   readonly costUpperBoundUsd: number
+    88 }
+    89 
+    90 export interface DecisionInputCounter {
+    91   measure(
+    92     request: DecisionModelRequestSnapshot
+    93   ): DecisionInputMeasurement | Promise<DecisionInputMeasurement>
+    94 }
+    95 
+    96 export interface DecisionAdmissionRecord {
+    97   readonly admissionId: string
+    98   readonly tenantId: string
+    99   readonly executionId: string
+   100   readonly stepNumber: number
+   101   readonly attempt: number
+   102   readonly purpose: 'ORCHESTRATION' | 'REPAIR'
+   103   readonly requestSha256: string
+   104   readonly measurement: DecisionInputMeasurement
+   105   readonly reserved: ModelUsage
+   106   readonly status: 'RESERVED' | 'SETTLED' | 'UNKNOWN'
+   107   readonly actual?: ModelUsage
+   108   /** Binds idempotent settlement to the full native result, including text. */
+   109   readonly resultSha256?: string
+   110   readonly unknownReason?: string
+   111 }
+   112 
+   113 export interface CompleteToolContextState {
+   114   readonly version: 1
+   115   readonly deliveredThroughStep: number
+   116   readonly pendingDecisionAdmission: string | null
+   117   readonly decisionAdmissions: readonly DecisionAdmissionRecord[]
+   118   /** Accepted decision and delivery cursor checkpointed before native dispatch. */
+   119   readonly acceptedDecision?:
+   120     | {
+   121         readonly stepNumber: number
+   122         readonly decision: LoopDecision
+   123         readonly decisionAdmissionIds: readonly string[]
+   124       }
+   125     | undefined
+   126 }
+   127 
+   128 /** contextItems is the single selected representation, including full results. */
+   129 export interface CompleteToolModelContext {
+   130   readonly version: 1
+   131   readonly requiredObservationIds: readonly string[]
+   132   /** Native settled attempts already recorded for this same decision step. */
+   133   readonly settledDecisionAdmissionIds?: readonly string[]
+   134 }
+   135 
+   136 export interface DecisionAdmissionReserveInput {
+   137   readonly request: DecisionModelRequestSnapshot
+   138   readonly measurement: DecisionInputMeasurement
+   139   readonly attempt: number
+   140 }
+   141 
+   142 export type DecisionAdmissionSettlement =
+   143   | {
+   144       readonly kind: 'RESULT'
+   145       readonly admissionId: string
+   146       readonly requestSha256: string
+   147       readonly result: ModelResult
+   148     }
+   149   | {
+   150       readonly kind: 'UNKNOWN'
+   151       readonly admissionId: string
+   152       readonly requestSha256: string
+   153       readonly reason: string
+   154     }
+   155 
+   156 export interface DecisionAdmissionPort {
+   157   reserve(
+   158     input: DecisionAdmissionReserveInput
+   159   ): Promise<DecisionAdmissionRecord>
+   160   settle(input: DecisionAdmissionSettlement): Promise<DecisionAdmissionRecord>
+   161 }
+   162 
+   163 export interface CheckpointToken {
+   164   readonly checkpointId: string
+   165   readonly digest: string
+   166 }
+   167 
+   168 export interface CheckpointCompareAndSwapInput {
+   169   readonly tenantId: string
+   170   readonly executionId: string
+   171   readonly expected: CheckpointToken | null
+   172   readonly next: ExecutionCheckpoint
+   173 }
+   174 
+   175 export type CheckpointCompareAndSwapResult =
+   176   | { readonly status: 'APPLIED'; readonly token: CheckpointToken }
+   177   | { readonly status: 'CONFLICT'; readonly currentToken?: CheckpointToken }
+   178 
+   179 export interface CompleteCheckpointStorageState {
+   180   readonly storageCodec: 'cvg.checkpoint-state/2'
+   181   readonly encoding: 'base64'
+   182   readonly decodedBytes: number
+   183   readonly decodedSha256: string
+   184   readonly data: string
+   185 }
+   186 
+   187 export type ToolResultContextErrorCode =
+   188   | 'RESULT_UNAVAILABLE'
+   189   | 'CONTEXT_OVERFLOW'
+   190   | 'ADMISSION_UNAVAILABLE'
+   191   | 'ADMISSION_BREACH'
+   192   | 'DECISION_USAGE_UNKNOWN'
+   193   | 'STATE_CONFLICT'
+   194   | 'LEGACY_RESULT_UNKNOWN'
+   195 
+   196 export class ToolResultContextError extends Error {
+   197   public constructor(
+   198     public readonly code: ToolResultContextErrorCode,
+   199     message: string,
+   200     public readonly stopReason: StopReason = 'INSUFFICIENT_EVIDENCE'
+   201   ) {
+   202     super(message)
+   203     this.name = 'ToolResultContextError'
+   204   }
+   205 }
+

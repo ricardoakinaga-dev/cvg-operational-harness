@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-RESOLUTION-SPEC-20261018",
+  "round": "R1",
+  "status": "IMPLEMENTED",
+  "verdict": "REVISE",
+  "reviewType": "independent static documentary security/correctness review",
+  "reviewedAt": "2026-10-18T04:31:21.538584+00:00",
+  "specSha256": "60e16e1ae92443cee9aaed017a4cfc262688e41127af284a34a330b774671ef7",
+  "priorSpec0236Sha256": "cf07fd5dd87220cd3c41704a64d2bd294a8b972bfbf230e38fb6c3453fbffa49",
+  "candidateHead": "75dfef50d0b5bc5a8063829ea4c63af8b4ab8b54",
+  "inputContract": {
+    "path": "input-contract.json",
+    "sha256": "e9b6030f501c33a9806273480ba6240600224addb7237f34d6e07000b99ce526"
+  },
+  "inputManifest": {
+    "path": "input-manifest.json",
+    "sha256": "6ee6c2b1eec889bacd188d7a8d0219c98602b137709656f8507519337ff9db07"
+  },
+  "rawBindingEvidence": {
+    "path": "static-bindings.json",
+    "sha256": "5bc3d3e67acc8c380848edebaf4ef3635aa2f27493002793a981d59917ec9d20",
+    "checks": 18,
+    "matches": 18
+  },
+  "artifactManifest": "artifact-manifest.json",
+  "requiredFindings": [
+    {
+      "id": "R1-01",
+      "title": "Bind the raw symlink target to the physical workspace before lexical normalization",
+      "severity": "P1",
+      "confidence": "HIGH",
+      "required": true,
+      "section": "SPEC0237 sections 3.2–3.4 and 4",
+      "specLines": [
+        30,
+        32,
+        43,
+        47
+      ],
+      "criterion": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "RS02",
+        "RS04",
+        "RS05"
+      ],
+      "evidence": [
+        {
+          "path": "inputs/SPEC0237.source.txt",
+          "lines": [
+            30,
+            32,
+            43,
+            47
+          ],
+          "observation": "The traversal only admits canonical single components; link acceptance uses normalized target equality and then separately acquires the canonical workspace. No raw-target resolution or closed link-text grammar binds these two paths."
+        },
+        {
+          "path": "inputs/node-internal-modules-package_json_reader.source.txt",
+          "lines": [
+            294,
+            314
+          ],
+          "observation": "Node checks the actual package directory through internalModuleStat before selecting the package."
+        },
+        {
+          "path": "inputs/node-internal-modules-esm-resolve.source.txt",
+          "lines": [
+            252,
+            290
+          ],
+          "observation": "Native finalization checks the actual file and applies realpath when symlink preservation is disabled."
+        }
+      ],
+      "counterexample": {
+        "status": "NOT_RUN",
+        "kind": "documentary deduction, not a reproduction",
+        "setup": "Root has a regular packages/demo workspace and a direct node_modules/demo symlink. Its raw relative link text is ../missing/../packages/demo, with missing absent.",
+        "consequence": "Lexical normalization yields the approved packages/demo, which can be read safely via rootfd. The real link is broken because the missing component must first be traversed. A canceled intermediate symlink can likewise make the real target differ. Hashing the raw text and lstat/readlink/lstat do not establish target equivalence."
+      },
+      "impact": "A K5 proof may bind a safe canonical body that the runtime link does not select. Content containment alone does not prove resolution identity. The general prohibition of ancestor aliases needs an actual check that cannot erase them first.",
+      "requiredChange": "Specify a closed grammar for canonical relative/absolute workspace-link texts, or a bounded metadata-only component algorithm preserving raw traversal semantics. Reject canceled missing/non-directory/symlink components before normalization. Bind every necessary physical premise, revalidate it, and never follow a link to acquire foreign content.",
+      "futureControls": [
+        "Valid direct scoped/unscoped relative and canonical absolute link positives.",
+        "Raw ../missing/../packages/demo, ../regular-file/../packages/demo and canceled intermediate symlink negatives; include a known-product variant with FAIL priority.",
+        "Compare accepted logical and canonical targets to pinned resolution without executing any target; mutations invalidate the same premises."
+      ]
+    },
+    {
+      "id": "R1-02",
+      "title": "Define package-owner selection before applying the exports algorithm",
+      "severity": "P1",
+      "confidence": "HIGH",
+      "required": true,
+      "section": "SPEC0237 sections 4, 5 and 6",
+      "specLines": [
+        41,
+        43,
+        47,
+        53,
+        57,
+        61,
+        71
+      ],
+      "criterion": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "RS02",
+        "RS03",
+        "RS05",
+        "RS06",
+        "RS07"
+      ],
+      "evidence": [
+        {
+          "path": "inputs/SPEC0237.source.txt",
+          "lines": [
+            41,
+            43,
+            47,
+            55,
+            61
+          ],
+          "observation": "The finite algorithm starts after a package has been chosen. It does not define valid bare-specifier parsing, nearest package-scope/self-reference precedence, node_modules search/stop rules or refusal for unsupported owner selection."
+        },
+        {
+          "path": "inputs/node-internal-modules-package_json_reader.source.txt",
+          "lines": [
+            237,
+            314
+          ],
+          "observation": "parsePackageName validates bare names; getPackageJSONURL performs ResolveSelf before the node_modules search and tests the package directory, not only manifest existence."
+        },
+        {
+          "path": "inputs/node-internal-modules-cjs-loader.source.txt",
+          "lines": [
+            1405,
+            1415
+          ],
+          "observation": "CJS attempts trySelf before Module._findPath."
+        },
+        {
+          "path": "inputs/candidate-boundary-semantic-engine.source.txt",
+          "lines": [
+            304,
+            353
+          ],
+          "observation": "Integration navigation: current resolve searches ancestor node_modules/package.json. The new positive rule cannot assume this is a complete runtime package-selection contract. This is not a verdict on BUILD0236."
+        }
+      ],
+      "counterexample": {
+        "status": "NOT_RUN",
+        "kind": "documentary deduction, not a reproduction",
+        "setup": "packages/demo is the registered demo workspace, with a valid node_modules/demo link and exports {node:\"./outer.mjs\"}. A regular nested packages/demo/sub/package.json also names demo and has exports {node:\"./inner.mjs\"}. packages/demo/sub/entry.mjs imports demo. The nested scope is not a second direct workspace.",
+        "consequence": "Pinned Node ResolveSelf selects the nested manifest and inner.mjs. Choosing the root workspace link first selects outer.mjs. Direct-workspace name uniqueness does not exclude this case. Both branch shapes are inside the proposed new conditional subset."
+      },
+      "impact": "Correct condition evaluation over the wrong manifest is still a false runtime identity. Negative probes cannot cover a lookup candidate that the contract never requires examining.",
+      "requiredChange": "Specify a bounded owner-selection algorithm or an explicit supported subset: validate specifiers; inspect the nearest package scope; handle or refuse self-reference before workspace substitution; search canonical importer ancestry in the correct mode; stop/refuse on shadowing, unsupported entries or root escape. Record and revalidate all selection and absence premises. Unsupported selection must stay UNKNOWN instead of selecting a convenient registered workspace.",
+      "futureControls": [
+        "Nested self-reference versus outer workspace link, in ESM and CJS modes.",
+        "Nearer node_modules shadowing, including a package directory without package.json; missing/unreadable metadata must not silently justify an outer positive.",
+        "Canonical versus logical importer base after a workspace link, invalid bare names and root-boundary lookup; preserve known-product FAIL."
+      ]
+    },
+    {
+      "id": "R1-03",
+      "title": "Specify exports target URL-to-path finalization, not only string validation",
+      "severity": "P1",
+      "confidence": "HIGH",
+      "required": true,
+      "section": "SPEC0237 sections 5.2 and 6",
+      "specLines": [
+        53,
+        58,
+        63,
+        67,
+        73
+      ],
+      "criterion": [
+        "AC1",
+        "AC2",
+        "AC4",
+        "RS06",
+        "RS07",
+        "RS08"
+      ],
+      "evidence": [
+        {
+          "path": "inputs/SPEC0237.source.txt",
+          "lines": [
+            53,
+            58,
+            67,
+            73
+          ],
+          "observation": "The target exclusions do not exclude control characters/URL-trimmed whitespace, and do not define conversion from the selected JSON string to the acquired filesystem name."
+        },
+        {
+          "path": "inputs/node-internal-modules-esm-resolve.source.txt",
+          "lines": [
+            423,
+            427
+          ],
+          "observation": "resolvePackageTargetString constructs new URL(target, packageJSONUrl), then checks the URL pathname."
+        },
+        {
+          "path": "inputs/node-internal-modules-cjs-loader.source.txt",
+          "lines": [
+            1444,
+            1456
+          ],
+          "observation": "Even for CJS exports, finalization converts that URL with fileURLToPath and tries the exact file."
+        },
+        {
+          "path": "inputs/candidate-boundary-semantic-engine.source.txt",
+          "lines": [
+            345,
+            373
+          ],
+          "observation": "Integration navigation: existing resolver uses filesystem string normalization and has a separate require extension-candidate stage. Merely adding condition selection there does not define new-profile URL finalization."
+        }
+      ],
+      "counterexample": {
+        "status": "NOT_RUN",
+        "kind": "documentary deduction from URL semantics and pinned call sites, not a reproduction",
+        "setup": "A selected conditional export target has a JSON-escaped tab inside the filename: ./sa\\tfe.mjs (after JSON.parse, the character is a literal tab). Both the tab-named file and safe.mjs may exist with different bodies.",
+        "consequence": "The listed string exclusions permit the tab. URL parsing removes ASCII tabs, while direct filesystem acquisition preserves that byte. The contract does not fix which name feeds K5. Similar normalization-sensitive strings need explicit handling."
+      },
+      "impact": "The selected branch and metadata hash can be right while the body hash belongs to the wrong physical filename. An oracle comparison limited to ordinary filenames does not eliminate this ambiguity.",
+      "requiredChange": "Specify the exact pinned URL construction and fileURLToPath conversion before canonical acquisition, including validation/containment of the resulting path; alternatively reject all strings for which the permitted URL and filesystem interpretations differ. Explicitly keep exports terminal at the exact converted target in both modes, including absence/directory errors and no main/extension/index retry. The existing ban on new fallbacks should be made unambiguous at this integration point.",
+      "futureControls": [
+        "Ordinary explicit .mjs/.cjs targets positive; URL-normalization-sensitive tab/newline/trailing-whitespace targets either faithfully resolved or explicitly UNKNOWN.",
+        "A tab-named and normal-named file with different bodies must never be confused.",
+        "CJS exports to an absent extensionless target with only target.js present stays unresolved; an exact regular target is the paired positive."
+      ]
+    }
+  ],
+  "optionalClarity": [
+    {
+      "id": "O1",
+      "severity": "P3",
+      "confidence": "HIGH",
+      "required": false,
+      "section": "SPEC0237 section 6; RS06",
+      "criterion": [
+        "AC4",
+        "RS06"
+      ],
+      "evidence": [
+        {
+          "path": "inputs/SPEC0237.source.txt",
+          "lines": [
+            71,
+            73
+          ]
+        }
+      ],
+      "title": "Make branch provenance observable in oracle fixtures",
+      "detail": "import.meta.resolve/createRequire.resolve return a URL/path, not the conditional-key trace. Give tested branches distinct target names and derive the expected trace independently from the pinned source/fixture. If multiple branches share a target, describe the branch trace as a separate documentary check, not an observation returned by the native oracle."
+    }
+  ],
+  "criterionAssessment": {
+    "AC1": "REVISE: conditions and caps concrete; raw-link, package-owner and URL-finalization algorithms incomplete.",
+    "AC2": "REVISE: UNKNOWN/product/no-execution/identity policy is conservative, but exact K5 runtime identity is not fully specified.",
+    "AC3": "REVISE: descriptor anchoring, file generation checks, budgets, revalidation and compatibility are substantive; raw-link and owner-selection premise sets need completion.",
+    "AC4": "REVISE: meaningful paired controls and honest T3/B6 boundary; add the discriminating controls named in R1-01 through R1-03."
+  },
+  "positiveObservations": [
+    "Pinned ESM/CJS condition sets, including module-sync, agree with supplied native call sites; property order, NOT_MATCHED continuation and BLOCKED/UNSUPPORTED stopping are conservative.",
+    "Explicit Linux/procfs/rootfd trust boundary, regular nofollow/nonblock file acquisition, size-before-allocation, revalidation, negative probes, cache lifetime, FD cleanup and fixed resource limits.",
+    "No semantic transfer from declarations, names, manifests, link metadata or identity MATCH; original installed nodes and occurrence identity/multiplicity remain.",
+    "The document preserves known-product FAIL, real UNKNOWN and INCOMPLETE B6. New human T3 is required before code; prior certification/provenance cannot be transferred."
+  ],
+  "futureBuildAcceptances": {
+    "RS01": "NOT_RUN",
+    "RS02": "NOT_RUN",
+    "RS03": "NOT_RUN",
+    "RS04": "NOT_RUN",
+    "RS05": "NOT_RUN",
+    "RS06": "NOT_RUN",
+    "RS07": "NOT_RUN",
+    "RS08": "NOT_RUN",
+    "RS09": "NOT_RUN",
+    "RS10": "NOT_RUN",
+    "RS11": "NOT_RUN",
+    "RS12": "NOT_RUN",
+    "RS13": "NOT_RUN",
+    "RS14": "NOT_RUN"
+  },
+  "remainingB6": {
+    "status": "INCOMPLETE",
+    "openDiagnostics": 2399,
+    "baseline": 537,
+    "new": 1862,
+    "MATCH": 303,
+    "semanticVerified": 0,
+    "resolved": 0,
+    "source": "Frozen prior-build REPORT and remaining-semantic-frontier inputs; no new measurement."
+  },
+  "authority": {
+    "build0237": "NONE",
+    "build0236": "UNCHANGED; not reviewed or requalified",
+    "humanT3": "Not granted by this review",
+    "globalB6Acceptance": false,
+    "release": false,
+    "descendants": 0,
+    "sharedLedgerWrites": false
+  },
+  "limitations": [
+    "Static documentary review only; no test, prototype, fixture/application target, native oracle, npm, installation, PG, Docker or network job was run. Counterexamples are deductions, not observed reproductions.",
+    "No BUILD0237 implementation exists under this review authority. These findings identify omissions in the proposed HOW, not demonstrated implementation bugs or an acceptance/rejection of BUILD0236.",
+    "Native source text provenance is inherited from the supplied recon. Its five file hashes and the independently read Node binary hash match; the native extraction was not rerun.",
+    "Prior-build REPORT/frontier are factual navigation only. Reported 16 gates/38 hashes/17 promoted paths were not requalified. Shared ledgers may change concurrently under the Lead; their copies are context snapshots.",
+    "Physical race/resource/descriptor, positive/negative, compatibility and full frontier controls remain future obligations. No proof of immutable host snapshots, arbitrary JavaScript semantics, global isolation or release is issued."
+  ],
+  "nextAction": "Lead revises only the frozen proposal through an explicit new revision and adds controls for R1-01–03; rebind the SHA for the permitted second documentary round before a human T3 decision. No code authority is created."
+}

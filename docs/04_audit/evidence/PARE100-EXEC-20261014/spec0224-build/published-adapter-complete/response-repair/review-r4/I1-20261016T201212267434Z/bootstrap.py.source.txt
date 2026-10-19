@@ -1,0 +1,40 @@
+import os,json,pathlib,hashlib,collections,datetime
+R=pathlib.Path(__file__).parent
+M=R.parent.parent/'review-packet-r4'/'manifest.json'
+m=json.loads(M.read_bytes()); assert hashlib.sha256(M.read_bytes()).hexdigest()=='d7ef69b98b705a4f560f5ed9857cd3452a0424855da54b2af025ac6c6e33cd32'
+def dump(p,x): p.write_text(json.dumps(x,indent=2,ensure_ascii=False)+'\n')
+entries=m['inputs']+[dict(e,category='proof') for e in m['proofs']]+[dict(e,category='environmentTemplate') for e in m['environmentTemplates']]+[dict(copy=str(M),category='packetManifest'),dict(copy=m['candidateManifestCopy'],category='candidateManifest',sha256=m['candidateManifestSha256']),dict(copy=m['allowedScopeMetadata']['path'],category='scopePackage',**{k:v for k,v in m['allowedScopeMetadata'].items() if k!='path'})]
+dump(R/'input-index.json',{'inputs':entries})
+for n in ['raw','checkers','snapshots','configs','controls']: (R/n).mkdir()
+errors=[]; out=[]
+for e in entries:
+ b=pathlib.Path(e['copy']).read_bytes();h=hashlib.sha256(b).hexdigest();q=R/'snapshots'/h;q.write_bytes(b) if not q.exists() else None
+ out.append(dict(e,observedBytes=len(b),observedSHA256=h,snapshot=str(q)))
+ if ('sha256' in e and h!=e['sha256']) or ('bytes'in e and len(b)!=e['bytes']): errors.append(e)
+dump(R/'before-inputs.json',out)
+c=json.loads(pathlib.Path(m['candidateManifestCopy']).read_bytes());by={e['relative']:e for e in m['inputs']};bindings=[]
+for e in c['sourceBindings']:
+ x=by.get(e['path']);bindings.append({'path':e['path'],'match':bool(x and x['sha256']==e['sha256'] and x['bytes']==e['bytes']), 'category':x['category'] if x else None})
+dump(R/'candidate81-bindings.json',{'count':len(bindings),'bindings':bindings});assert len(bindings)==81 and all(e['match']for e in bindings)
+# Mirror files only, reject escaped symlink targets; fingerprint symlinks separately.
+def inventory(base):
+ result=[]
+ def walk(p):
+  s=p.lstat();e={'path':str(p),'relative':str(p.relative_to(base)),'mode':s.st_mode}
+  if p.is_symlink(): e.update(type='symlink',target=os.readlink(p));result.append(e);return
+  if p.is_dir():
+   e['type']='directory';result.append(e)
+   for c in sorted(p.iterdir()):walk(c)
+  elif p.is_file():
+   h=hashlib.sha256()
+   with p.open('rb')as f:
+    for b in iter(lambda:f.read(1024*1024),b''):h.update(b)
+   e.update(type='file',bytes=s.st_size,sha256=h.hexdigest());result.append(e)
+  else: e['type']='other';result.append(e)
+ walk(base);return result
+dump(R/'before-dependencies.json',inventory(pathlib.Path(m['allowedDependencyMirror'])))
+b=pathlib.Path(m['node']).read_bytes();dump(R/'before-node.json',{'path':m['node'],'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+a=pathlib.Path(m['artifactRoot'])/'node_modules';dump(R/'dependency-binding.json',{'path':str(a),'isSymlink':a.is_symlink(),'target':os.readlink(a) if a.is_symlink() else None,'resolved':str(a.resolve())});assert a.resolve()==pathlib.Path(m['allowedDependencyMirror']).resolve()
+dump(R/'immutableclean-before.json',{'ok':not errors,'errors':errors,'candidate81':all(e['match']for e in bindings),'inputs':len(out),'dependencies':len(json.loads((R/'before-dependencies.json').read_text())),'time':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+assert not errors
+print('OWNED',R,'INPUTS',len(entries),'CANDIDATE',len(bindings),'DEPENDENCIES',len(json.loads((R/'before-dependencies.json').read_text())))

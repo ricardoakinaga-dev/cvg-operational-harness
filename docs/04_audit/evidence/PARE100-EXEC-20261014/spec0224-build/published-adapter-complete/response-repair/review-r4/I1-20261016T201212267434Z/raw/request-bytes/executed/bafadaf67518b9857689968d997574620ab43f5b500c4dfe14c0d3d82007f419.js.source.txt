@@ -1,0 +1,17 @@
+const fs=require('node:fs'); const {syncBuiltinESMExports}=require('node:module'); const {createHash}=require('node:crypto');
+const append=fs.appendFileSync.bind(fs), read=fs.readFileSync.bind(fs); const dest=process.env.I1_READ_LOG; const seen=new Set();
+const root=process.cwd(), review=process.env.I1_REVIEW; const deps=fs.realpathSync(root+'/node_modules'); const scopePackage=process.env.I1_SCOPE_PACKAGE; const packetDeps=process.env.I1_PACKET_DEPS;
+const allowFiles=new Set(JSON.parse(read(review+'/input-index.json','utf8')).inputs.map(e=>e.copy));
+const record=(p)=>{if(typeof p!=='string'&&!(p instanceof URL))return; p=String(p).replace(/^file:\/\//,'');
+ if(!allowFiles.has(p) && p!==scopePackage && !(packetDeps&&p.startsWith(packetDeps+'/')) && !p.startsWith(review+'/') && !p.startsWith(deps+'/') && !p.startsWith('/home/ricardo/.nvm/versions/node/v22.23.2/')) {const error='I1 strict denied unenumerated NodeFS read '+p;append(dest,JSON.stringify({pid:process.pid,path:p,denied:true,error})+'\n');throw new Error(error)}
+
+ if((p.startsWith('/tmp/cvg-')||p.startsWith('/home/ricardo/')) && p!==scopePackage && !(packetDeps && p.startsWith(packetDeps+'/')) && !p.startsWith(root+'/') && !p.startsWith(review+'/') && !p.startsWith(deps+'/') && !p.startsWith('/home/ricardo/.nvm/versions/node/v22.23.2/')) throw new Error('I1 prohibited read '+p);
+ if(seen.has(p))return; seen.add(p); let meta={pid:process.pid,path:p};
+ try{const b=read(p);meta.bytes=b.length;meta.sha256=createHash('sha256').update(b).digest('hex')}catch{};
+ append(dest,JSON.stringify(meta)+'\n');
+};
+for(const name of ['readFileSync','readFile','openSync','open']) {const old=fs[name];fs[name]=function(p,...a){record(p);return old.call(this,p,...a)}}
+for(const name of ['readFile','open']) {const old=fs.promises[name];fs.promises[name]=function(p,...a){record(p);return old.call(this,p,...a)}}
+syncBuiltinESMExports();
+
+const cp=require('node:child_process');for(const method of ['exec','execSync','execFile','execFileSync','spawn','spawnSync','fork']){cp[method]=function(...args){const error='I1 strict denied child process '+method;append(dest,JSON.stringify({pid:process.pid,denied:true,childProcess:method,error})+'\n');throw new Error(error)}}syncBuiltinESMExports();

@@ -1,0 +1,314 @@
+{
+  "task": "DX100-G04:REPAIR-FULL-NATIVE-SPEC-R1",
+  "kind": "NATIVE_PHYSICAL_OVERLAY_AND_CROSS_EXECUTION_QUOTA_PLAN",
+  "inherited": {
+    "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/execution-authority-design/test-plan.json",
+    "sha256": "327b96a9d663d1a3ec88b63fcd6aac19e64562f0a3b4537cec2cd1a45f160fb3",
+    "original19unchanged": true
+  },
+  "physical_protocols": {
+    "expired_live_backend": [
+      "Aprocess andbackend alive, writeradvisoryheld; pausebefore native admission usingbarrier",
+      "Observerpg_clock proves realleaseexpiry, not TTLoverride; Brequestsphysicalwriter",
+      "Bmustrefusebeforeepochincrease; resumeA reachesactualguard andrefusesexpiredlease; body0/write0",
+      "Knownbad: removelease-expirationpredicate inprivatecandidate; sameA livebackend mustattemptwrite/body andobserverrejects"
+    ],
+    "lost_backend_live_process": [
+      "Ahasgenuinewriter/claim; record AprocessPID/starttime,AbackendPID andrealadvisorykey,epochE",
+      "Observerownspermission inownPGfixtureonly: terminateAbackend; waitactualsession/lockabsence, whileAprocessremainsalive atbarrier",
+      "Bopensnewphysicalwriter onlyafterrealrelease; acquireExact commits E+1; recordBbackendPID,processstarttime andeventrow",
+      "ReleaseA andBbarriers concurrently; Aoldcap/handle attemptsdispatch/write/settle/CAS/terminal,allreject; Bonlylegalowner",
+      "No socketdestroyassumedlockrelease; no Aprocessrestart; nativeDB/session/counterobservables recorded"
+    ],
+    "database_predicate_discriminator": [
+      "Inseparateintegrationcase useactualprivate assertNativeAuthority(client,expected) calledby productionea1helper, underrealnonownerPG/RLS",
+      "Bcurrentphysicalclient andgenuinetenant/transaction: currentexpectedworker/epoch/lease passes; retiredAexpectedvaluesfail inDBguard",
+      "Thiscall isbelowlocalopaque-capabilityprecheck inprivate testmodule, notpublicbypass orreplacementofpublicA/Bscenario",
+      "Sourcebinding proves bothprivateharness andpublicmutationhelper callidenticalguard; mutantremovingworker/epoch orleasepredicates mustbeobservablyrejectedbytheoracle",
+      "No duplicateSQLfakeguard; thisprovesdatabasepredicate, publicclaimpathandlocalcapabilitydenialprovedseparately",
+      "Isolateeachpredicate: wrongworker/currentepoch/livelease; currentworker/oldepoch/livelease; currentworker/currentepoch/actuallyexpiredlease withbackendalive. Currentallvalidpositive succeeds. Eachspecificsingle-predicatemutant mustdefeatitsownnegativeandberejected; donotchangeworkerandepochtogetherandclaimbothguardsdiscriminated."
+    ]
+  },
+  "EA_overlays": [
+    {
+      "inherited_id": "EA01",
+      "title": "Directed claim exact identity",
+      "disposition": "SAME_PARENT_PLAN",
+      "local_schedule": [
+        "DifferentIDs andsessions,simultaneousexactclaim; eachownexecutiononly"
+      ],
+      "retained_observable_acceptance": "Each receives only its requested execution/fingerprint; no stolen queue item",
+      "retained_known_bad": "Replace directedacquire with tenantclaimNext; wrong execution mustreject",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA02",
+      "title": "Forged or foreign authority",
+      "disposition": "SAME_PARENT_PLAN",
+      "local_schedule": [
+        "Forged/foreigncapspreIO0; nohelperIOqualificationclaimedfromthistestalone"
+      ],
+      "retained_observable_acceptance": "Reject beforebody and protectedwrite; current positive still admitted",
+      "retained_known_bad": "Dataobject/crossbackend accepted as privatecapability",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA03",
+      "title": "Loss before admission",
+      "disposition": "PHYSICAL_RECONCILIATION_REQUIRED",
+      "local_schedule": [
+        "Runexpired_live_backend thenlost_backend_live_process beforeadmission; separateDBpredicatediscriminator. Body0beforeEFFECT_STARTED"
+      ],
+      "retained_observable_acceptance": "One valid nativeadmission/body; A no newdispatch/journal/checkpoint/terminalsettlement",
+      "retained_known_bad": "Remove parentguard from effect-start transaction",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA04",
+      "title": "Loss after durable effect admission",
+      "disposition": "PHYSICAL_RECONCILIATION_REQUIRED",
+      "local_schedule": [
+        "AcommitsEFFECT_STARTED first; realbackendloss whileAprocess/bodyalive; BclaimsbutUNKNOWN preventsanotherbody; Alateresult cannotsettle"
+      ],
+      "retained_observable_acceptance": "No repeated body; pendingfact/UNKNOWN retained; staleA directsettlement/checkpoint/terminal denied",
+      "retained_known_bad": "Treat expired lease as cleanFAILED/retrySafe",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA05",
+      "title": "Post-admission scheduling gap",
+      "disposition": "PHYSICAL_RECONCILIATION_REQUIRED",
+      "local_schedule": [
+        "PauseAafterknownadmissioncommit andbeforebodyinvoke, preservepublicAprocess; killonlyAbackend andwitnesslockrelease; Bclaims/observesinflightobligation thenhold",
+        "ReleaseA: earlieradmittedbody MAYinvoke/continue; no newBbody, Astalepersistence0. DoNOTassert externalrevocation"
+      ],
+      "retained_observable_acceptance": "Earlieradmission not erased; Bdispatch0; effect mayfinishonce with unknownoutcomeuntilqualifiedreconciliation. No claim that locallease stops nonfenced target",
+      "retained_known_bad": "Claim zero staleexternaldispatch from DBcheck alone",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA06",
+      "title": "Lease expires while waiting for write lock",
+      "disposition": "LIVE_WRITER_EXPIRY_NO_TAKEOVER",
+      "local_schedule": [
+        "KeepAbackend/writeralive, observerholdsseparateexecutionrowlock; Ahelperpasseslocalprecheck thenwaits",
+        "Clockexpireslease duringwait; unlock, actualsameclientDBclockguarddenieswrite/body. Bwriteracquisitionstilldenied; doNOTpretendBepochchanged"
+      ],
+      "retained_observable_acceptance": "DBclock checkedafterwait; no protectedwrite/ACK underexpiredowner",
+      "retained_known_bad": "Use captured applicationnow before lockwait",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA07",
+      "title": "Foreign model reservation pending",
+      "disposition": "PHYSICAL_RECONCILIATION_REQUIRED",
+      "local_schedule": [
+        "Amodelreservationcommitted; realbackendloss/processAalive; Bnewwriter/epochseespendingforeignreceipt asUNKNOWN,chargedupperretained. No settle/cancel/newcall"
+      ],
+      "retained_observable_acceptance": "UNKNOWN; chargedupperbounds retained; no settle/cancel/newmodelcall to bypassforeignreservation",
+      "retained_known_bad": "Free reservation or charge second attempt automatically",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA08",
+      "title": "Journal confirmed before checkpoint",
+      "disposition": "ACTUAL_PROCESS_RESTART",
+      "local_schedule": [
+        "ObserverseesjournalCONFIRMED thenkillAprocessbeforecheckpoint,waitactualbackendlockrelease; newBprocessrecoversfullsamevalue/no bodyrepeat"
+      ],
+      "retained_observable_acceptance": "Exacttypedresult includingnull/NUL/falsy whenadmitted, sameintent; body1; validCAS/accounting, no counterfeitreceipt. Bothresponsebranches remain fulljourneyrequirements",
+      "retained_known_bad": "Reader recomputeswitness fromdriver or repeatsbody",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA09",
+      "title": "Terminal versus cancellation both orders",
+      "disposition": "INDEPENDENT_CONTROL_TRANSACTION",
+      "local_schedule": [
+        "AworkerholdsphysicalwriterbutnolongDBtransactionwhilemodel/bodyruns; Ccancelusesseparatecontrolslot withoutacquiringsessionwriter",
+        "Barriersforce cancelcommitfirst andsuccesscommitfirst; terminalone, priorfactsretained; Ccannotbypassroworder"
+      ],
+      "retained_observable_acceptance": "Exactlyone terminal perexecution; earlierjournalfacts retained; requestACK distinguishedfrom terminalACK",
+      "retained_known_bad": "Lastwriter overwritesterminal or cancelledsignal convertedintosuccess",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA10",
+      "title": "Cancellation with in-flight effect",
+      "disposition": "INDEPENDENT_CONTROL_TRANSACTION",
+      "local_schedule": [
+        "ActiveAadmittedbody; controlcancelwins withoutrequiringwriterdeath; potentialcontinuedbody recorded, terminalUNKNOWNpreserved; no memoryconfirmation"
+      ],
+      "retained_observable_acceptance": "Cancellation closesnewadmissions; terminaldeclaresunknown/confirmedeffects honestly; stale worker cannotpublishsuccess",
+      "retained_known_bad": "CANCELLED interpreted as proofnoexternaleffect",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA11",
+      "title": "COMMIT ACK lost",
+      "disposition": "ACK_BOUNDARIES_UNCHANGED",
+      "local_schedule": [
+        "Actualcommit/ACKloss atadmission/checkpoint/journal/terminal; no leaseexpiryimaginedasrollback; onlycommittedfactsreadbynewprocess"
+      ],
+      "retained_observable_acceptance": "Classifyknown vsunknownwithoutblindbodyretry; queryfactsunderproperauthority; onlyackfactsactuallyconfirmed",
+      "retained_known_bad": "Assume socketcloseor thrownpromise provesrollback",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA12",
+      "title": "CAS and operation binding",
+      "disposition": "NATIVE_DB_GUARD_AND_CAS",
+      "local_schedule": [
+        "Bothwritersvalidforthespecifictransaction; compareactualCAS/intentbindings; retiredexpectedinputstestactualprivateguardindependentlyoflocalclosedhandle"
+      ],
+      "retained_observable_acceptance": "OneCASwinner; bindingmismatch preventswrite/call; operationidentity stableacrossepoch, no oldbodyreplay",
+      "retained_known_bad": "Inferexecutionparentfrom stringkey alone or bypassCAS",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA13",
+      "title": "Old/new writers and roles",
+      "disposition": "EXCLUSIVE_CUTOVER",
+      "local_schedule": [
+        "Qualifiedschema/principal/oldwriterexclusion underrealroles; no sessionlockremovedtoforcecompetition"
+      ],
+      "retained_observable_acceptance": "Preflight/grants enforceadmittedprofiles; no mixedwriter claim; alllegacydataunchanged",
+      "retained_known_bad": "Toggle GUC/tag as authority or grant DDL toservingrole",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA14",
+      "title": "Bound guard composition",
+      "disposition": "QUALIFIED_BOUND_ONLY",
+      "local_schedule": [
+        "Fullparent/outer/phase/session/pause/approvalANDguardssamequalifiedroot; unsupportedboundfactoryrejects beforeanytestexecution"
+      ],
+      "retained_observable_acceptance": "Boundroot usesfullownertransaction/lockorder; no fallback tobaregenericlease/fixedkeybypass",
+      "retained_known_bad": "Stripouterfence to make generictool work",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA15",
+      "title": "Target fencing limitation",
+      "disposition": "TARGET_FENCING_LIMITATION",
+      "local_schedule": [
+        "Recordmaycontinueafteradmission evenwhenAbackenddies; targetfencingonlyifactualtargetcontracttested, no epoch-basedfiction"
+      ],
+      "retained_observable_acceptance": "Qualifiedtargetrejects staleepoch ifclaimed; nonfencedtargetcase remainsconservativeUNKNOWN and cannotserve as globalexactlyonceproof",
+      "retained_known_bad": "Assumeprovider endpoint enforcesDBepoch without contract",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA16",
+      "title": "Reconciliation failure and first cause",
+      "disposition": "FIRST_CAUSE_UNCHANGED",
+      "local_schedule": [
+        "Reconciliationfailed/diagnosticfailed preservefirstcause andUNKNOWN; no extraeffect orcounterrelease"
+      ],
+      "retained_observable_acceptance": "Originalfailureandpendingfact preserved; no falseFAILED/SUCCEEDED or autoeffectretry",
+      "retained_known_bad": "Diagnosticthrow replaces originalcause or in-memoryreturn promotedtocommit",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA17",
+      "title": "Per-claim close and late renewal",
+      "disposition": "PHYSICAL_LIFECYCLE",
+      "local_schedule": [
+        "Closejoinsclaimqueue/lateacquireanddestroysonlyownsession; observepgactualrelease; lateheartbeatcannotreviveLOSTcapability"
+      ],
+      "retained_observable_acceptance": "No revivedcapability/newdispatch; known/unknownoutcomesretained; own resourcesjoined. No SessionPersistence.globalshutdown assumption",
+      "retained_known_bad": "Late renewedlease revivesLOST context or closeerasespendingeffect",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA18",
+      "title": "Governance unchanged by authority",
+      "disposition": "GOVERNANCE_UNCHANGED",
+      "local_schedule": [
+        "Validexecutionauthoritycannotunpause/grantapproval/sandbox/budgetorforeignresource; no newallowflag"
+      ],
+      "retained_observable_acceptance": "Authoritynevergrants policy/approval; retainednegatives havebody0; positive executesonce in fullcomposition",
+      "retained_known_bad": "Usevalidlease as substitute forsingle-useapproval",
+      "status": "NOT_RUN",
+      "receipt": null
+    },
+    {
+      "inherited_id": "EA19",
+      "title": "Reserved effect proven not started versus unknown",
+      "disposition": "PHYSICAL_RECONCILIATION_REQUIRED",
+      "local_schedule": [
+        "Variant1: RESERVEDcommitted, noEFFECT_STARTED; terminateAbackend whileAprocesspausedbeforeadmission,actualrelease, Bnewwriter/epoch",
+        "Bunderlocksprovesstate/intent/attempt andnolegacywriters, rebindsonce; resumeAoldcap concurrentlydenied; Bbody1",
+        "Variant2: EFFECT_STARTED orACKunknown/foreignmodelpending: BmustNOTreassignorinvoke. No provenancefroman in-memoryflag"
+      ],
+      "retained_observable_acceptance": "Onlyproof-of-no-start undercontainedwriters permits newattempt ofsameintent/key; no epoch changes effectidentity; otherwise UNKNOWN/noautomaticbody/modelretry",
+      "retained_known_bad": "Treat every RESERVED or leaseexpiry as safe retry, includingforeignmodelreservation",
+      "status": "NOT_RUN",
+      "receipt": null
+    }
+  ],
+  "overlay_count": 19,
+  "NJ26_quota": {
+    "limit_logical_bytes": 67108864,
+    "closure_bundle_max_bytes": 65536,
+    "closure_reserved_slots": 3,
+    "preparation": "Seedonlysyntheticvalidhistoricalprefixes withcanonicalcodec/IDs/digests/terminal/checkpointbindings verifiedbyrealreader; usevalidassistanttexttoattainquota, no unknownpaddingfields. Setupevidenceisfixture,notfunctionalreceipt. ObserverSUM(octet_length(native_record)) vsstoredcounters mustagree. Neverlower64MiB orpermitinvalidprefixjusttofillit.",
+    "actors": "A/BdifferentOSprocesses andPGbackendPIDs, twoownedsessions/executionssametenant; observerthirdownconnection; no commonexecutionrowmutex",
+    "barrier": "Actualhelper afteraggregatesnapshot,beforewrite; bothtransactionsaliveconcurrently,deadline<=1s withinDBop2s andlease30s. No externalbodywhileDBlockheld.",
+    "cases": [
+      {
+        "id": "Q01",
+        "operations": "start/start",
+        "setup": "Prefill sofreebudget >=one65536reservation and<two; existingthreadssessiondistinct",
+        "assertion": "Atmostoneinitialadmissioncommits againstthatcommon snapshot; noacceptedreceipt/eventfromabortedxact; retry<=1knownrollbackthenCAPACITYifnoheadroom"
+      },
+      {
+        "id": "Q02",
+        "operations": "append/append",
+        "setup": "Twoclaimedexecs/ownwriterlocks; freeheadroomfitsonecapturednativeeventbutnottwo; allperexecutionlimitslegal",
+        "assertion": "Bothcannotpublishagainstoldsum; serializableconflictorcorrectserializedguard; finalcharged_sum<=limit"
+      },
+      {
+        "id": "Q03",
+        "operations": "append/terminal",
+        "setup": "Aappendnormal; Bdifferentexec replacesclosure-reservationwithactualterminalbundle",
+        "assertion": "Serialorderandcounters/actualbytesconsistent; no eventfromabortedtransaction; reservationreleasedonlywithcompletevalidterminal"
+      },
+      {
+        "id": "Q04",
+        "operations": "append/cancel",
+        "setup": "Aappendnormal; Ccontrolslot cancelsBownexec,includingcancel.requested+optionaluncertainty+terminal; no writeradvisoryrequiredbyC",
+        "assertion": "Closurebundleatomic<=65536includingescaping/envelopesand<=3slots; nohalfclosure, staleACK orlostreservation"
+      },
+      {
+        "id": "Q05",
+        "operations": "normal-slot-exhaustion/closure",
+        "setup": "Lastnormalpositionsandeventbytesnearcap; textwithJSONescaping, noextrafields",
+        "assertion": "Threeclosurepositionsandwhole64KiBbundle preserved; overflowofsinglemembercannotcommitaprefix"
+      }
+    ],
+    "known_bad": "Privatecandidate mutantchangesnativeaggregatetransactions toREADCOMMITTED/removesaggregateconservation. ForQ01/Q02 forcebothsnapshotreadsbeforewrites; bothcommitscauseoversubscription and independentobserverMUSTreject. Nativecandidatepositive mustkeeporiginalbarrier/caps/criteria. Mutantneverpromoted.",
+    "observer": "Independentlyquerycommittedrows/counters/journal/ordinals/reservations/terminalrefs fromthirdconnection; compareackledger. before/afterrollupswithactualSQL/hash/OSprocessidentity recorded, notdump64MiBthrough4MiBqualifierartifact.",
+    "status": "NOT_RUN",
+    "receipt": null
+  },
+  "runtime_tests_run": 0,
+  "functional_receipts": 0
+}

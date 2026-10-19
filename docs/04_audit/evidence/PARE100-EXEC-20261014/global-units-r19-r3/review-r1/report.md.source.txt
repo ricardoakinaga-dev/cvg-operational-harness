@@ -1,0 +1,46 @@
+# Independent I1 review: REVISE
+
+Current private Node TCP/IPC verification diagnostic only. No product/global acceptance or release is granted. All 30 immutable inputs match their packet manifest before and after review. See [pre sentinel](sentinel-pre.json), [post sentinel](sentinel-post.json), [machine review](review.json) and [output manifest](manifest.json).
+
+| Criterion | Binary result | Basis |
+| --- | --- | --- |
+| V01 | PASS | 30/30 current digests and byte counts match; no independent historical rehash claimed. |
+| V02 | FAIL | Actual Node endpoint selection permits an unowned local TCP connection; valid TCP forms also misclassified. |
+| V03 | PASS | Supplied raw qualifications and five-file outputs retained as bounded observations, including the original failure. |
+| V04 | PASS | Inherited Node-only scope and all material limitations remain explicit. |
+
+## Strongest counterexample: endpoint mismatch
+
+The guard chooses host = options.host || options.hostname || localhost ([raw guard](../review-packet-r1/current/network-guard.cjs), line 61). If that value is an IP, it checks ownership and bypasses its lookup wrapper (lines 68–80). Actual Node v22.23.2 chooses only options.host || localhost ([embedded runtime](node22-net.js), line 1313). This is a transport-selection difference, not a source-history inference.
+
+In the bounded probe an unregistered IPv4 stand-in was listening before guard installation. A guarded server then owned ::1 on the same port. net.connect({hostname:"::1",port:44757,autoSelectFamily:false,lookup:pinIPv4}) passed validation against ::1, but Node invoked the untouched pin with localhost and connected to 127.0.0.1:44757. The stand-in accepted exactly one connection. [Raw probe output](probes.stdout.log), lines 21–24, shows the owned control, CONNECTED result, actual remote endpoint, lookup arguments and unownedAcceptDelta=1. [Registry](run-network.jsonl), line 4, registers ::1:44757 only; [blocked log](run-blocked.jsonl) has the earlier ordinary denial of 127.0.0.1:44757 but no denial of the bypass.
+
+F01 requires validating the destination actually selected by Node, including omitted/falsy host and custom lookup, with a regression that observes zero unowned accepts. No implementation changes were made in this review.
+
+## Signatures, option combinations and ownership
+
+Node normalizes positional calls using isPipeName/toNumber ([runtime](node22-net.js), lines 205–206, 282–314 and 1828). The guard uses a digits-only regex for direct Socket.connect (raw guard line 58). Direct numeric strings with a leading plus or whitespace are valid native TCP inputs but receive UNOWNED_IPC under the guard. Node selects IPC using !!path (runtime lines 1265–1286); the guard selects any string path (raw guard lines 64–67), so an empty path wrongly blocks an otherwise owned TCP connection. [Guarded raw outcomes](probes.stdout.log), lines 4–5 and 11, and [native controls](runtime-controls.stdout.log), lines 1–3, reproduce all three differences. F02 requires native-compatible normalization and truthy-path selection for supported forms.
+
+The final probe records 22 connection attempts: 18 expectations met and 4 failed, plus a separate passing HTTP authority check. It confirms ordinary owned IPv4/IPv6, callback/positional calls, scalar and all:true pinned lookups, no-DNS localhost, owned IPC, owned IPC plus unrelated TCP options, closed-listener denial and asynchronous distinct errors for ordinary unregistered TCP/IPC. Nonempty unowned IPC plus an owned TCP port is correctly denied before any IPC accept. See [raw probes](probes.stdout.log), lines 1–27, [blocked rows](run-blocked.jsonl) and [probe results](probe-results.json). No external-address attempt was made independently.
+
+The ownership check replays listen/close rows, filters by process liveness, and compares loopback address/port (with wildcard allowances) or IPC path/prefix (raw guard lines 18–45, 65–67). This is cooperative registry evidence, not proof of OS endpoint identity. PID/thread lifecycle, path aliases/replacement and registry tampering were not exhaustively qualified.
+
+## Supplied evidence and honest failure
+
+The supplied main qualification reports success and an empty stderr: [stdout](../review-packet-r1/current/preflight-qualification.stdout.log), line 1; [blocked controls](../review-packet-r1/current/preflight-qualification-blocked.jsonl), lines 1–6; [listener lifecycle](../review-packet-r1/current/preflight-qualification-network.jsonl), lines 1–5. Its [source](../review-packet-r1/current/qualify-network.cjs), lines 6–39, checks distinct asynchronous blocking, pinned HTTP authority and owned IPC. Those supplied controls include external IP, unpinned hostname, mixed-address lookup, local port 5432 and closed listeners. They were inspected, not rerun.
+
+The supplied mixed-IPC qualification has exit 0, empty stderr, two UNOWNED_IPC rows, and zero accepts: [command](../review-packet-r1/current/mixed-command.json), [raw stdout](../review-packet-r1/current/mixed.stdout.log), lines 1–3, [blocked rows](../review-packet-r1/current/mixed-blocked.jsonl), lines 1–2, and [network rows](../review-packet-r1/current/mixed-network.jsonl). Its [source](../review-packet-r1/current/qualify-mixed-ipc.cjs), lines 10–26, creates the stand-in before installing the guard. This supports only those option combinations.
+
+The original five-file run remains exit 1, success false: 27 passed, 1 failed, 0 pending/todo; four files passed and one failed. [Raw stdout](../review-packet-r1/current/stdout.log), lines 8–25, identifies all five files. The worker lifecycle and redaction tests passed, as did the 14 model/channel bound-transport cases and the response byte-cap case. [Raw stderr](../review-packet-r1/current/stderr.log), lines 4–22, retains the precise smoke mismatch: expected ECONNREFUSED, received CVG_GLOBAL_TEST_NETWORK_BLOCKED. The [unchanged test copy](../review-packet-r1/sources/tests/production-target-smoke.test.ts), line 362, retains that expectation. Assertions about smoke-internal SKIPPED results on lines 363–368 follow the failed assertion and were not reached in that test; they are not passed assertions or skipped Vitest cases.
+
+The [raw JSON results](../review-packet-r1/current/results.json), line 1, report suite counters 11 total/9 passed/2 failed alongside five file entries and 28 assertions; these counters are preserved without equating suite nodes to files. The [run blocked log](../review-packet-r1/current/run-blocked.jsonl), lines 1–4, records two closed synthetic-target attempts and two local port-1 attempts. The [run registry](../review-packet-r1/current/run-network.jsonl) shows guard activation in processes/thread and local listener activity, including IPC rows without close rows; it does not establish universal descendant coverage. [Packet analysis](packet-analysis.json) retains every qualification row, all test assertion statuses and cross-checks of result/stdout/stderr hashes.
+
+## Provenance, execution limits and retained gaps
+
+The two 1042-entry source inventories match each other, and source-changes.json is empty. Seven actual source copies in this packet match their inventory metadata. Of 81 candidate bindings, 78 are represented and agree; the runner selection excludes two docs and one SQL migration. See [metadata analysis](metadata-analysis.json), [runner](../review-packet-r1/current/run.py), [candidate metadata](../review-packet-r1/candidate-r19.json), and [command record](../review-packet-r1/current/command.json). candidate81Unchanged is a supplied runner assertion. Referenced paths were not followed; this review independently hashes only the 30 current packet copies and its own output, not unavailable historical live sources.
+
+Only Node code installing/inheriting this guard is in scope. No OS, UDP, noninheriting/native-child sandbox attestation, product acceptance or global acceptance is supported. Independent probes used Node v22.23.2, loopback TCP and IPC under outputRoot, with a literal-only DNS shim and synthetic pins (zero nonliteral DNS requests). No external endpoint, PG, Docker, provider, installation, npm or full suite was run. No agents were delegated, no history/reviews/AGENTS/ledgers were read, and no source files were changed.
+
+The first probe harness failed because its DNS tripwire also rejected literal-IP listen setup ([initial stderr](probes-initial.stderr.log)). The second used the wrong all:true return shape and hit unhandled accepted-socket ECONNRESET ([second stderr](second-probes.stderr.log), [second registry](second-run-network.jsonl)). Both script versions and logs are retained. The final literal shim returns the correct shape and accepted sockets handle reset errors. Final stderr is empty, and exit 1 reflects the four substantive mismatches. The three native controls exit 0. [Command journal](commands.json) records commands, failures and inspection operations; it distinguishes exact probe commands from summarized stdin inspection operations.
+
+This bounded review is complete with REVISE. Required follow-up is limited to the private guard semantics and focused qualification evidence; the original smoke failure must remain visible unless separately addressed under an authorized scope. No product engineering was undertaken.

@@ -1,0 +1,154 @@
+"""Independent offline checks over owned raw inputs, no producer summaries or external reads."""
+import json,hashlib,base64,pathlib,copy,datetime,collections,re
+O=pathlib.Path(__file__).resolve().parent.parent
+checks=[]
+def ck(ok,label,detail=None):
+ checks.append({'check':label,'ok':bool(ok),**({'detail':detail} if detail is not None else {})})
+ if not ok:raise AssertionError(label)
+def load(p):return json.loads(p.read_bytes())
+def canon(x):return json.dumps(x,sort_keys=True,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+def sha(x):return hashlib.sha256(x if isinstance(x,bytes) else x.encode()).hexdigest()
+def time(x):return datetime.datetime.fromisoformat(x.replace('Z','+00:00'))
+def cpcheck(cp):
+ unsigned={k:v for k,v in cp.items() if k not in ['checkpointId','createdAt','digest']}
+ ck(cp['digest']==sha('cvg.checkpoint.v2\n'+canon(unsigned)),'checkpoint digest')
+ ctx=cp['state']['toolResultContext'];pending=ctx.get('pendingDecisionAdmission');rs=ctx['decisionAdmissions']
+ ck([x['admissionId'] for x in rs if x['status']=='RESERVED']==([pending] if pending else []),'pending receipt exact')
+ for r in rs:
+  ck(r['tenantId']==cp['tenantId'] and r['executionId']==cp['executionId'],'receipt CP binding')
+  ck(r['reserved']['modelCalls']==1 and r['reserved']['outputTokens']==512,'reserve charge')
+ ck(cp['budgetUsage']['modelCalls']==len(rs),'one debit per receipt')
+ return ctx
+
+def wrapper(w):
+ ck(w['storageCodec']=='cvg.checkpoint-state/2' and w['encoding']=='base64','physical codec')
+ b=base64.b64decode(w['data'],validate=True)
+ ck(base64.b64encode(b).decode()==w['data'],'canonical base64')
+ ck(len(b)==w['decodedBytes'] and sha(b)==w['decodedSha256'],'physical decoded hash/bytes')
+ value=json.loads(b.decode('utf8'));ck(canon(value).encode()==b,'physical canonical logical JSON');return value
+
+def phys(v):
+ cp=v['checkpoint'];cpcheck(cp);r=v['row'];ck(wrapper(r['state'])==cp['state'],'physical logical identity')
+ ck(json.loads(r['physical_state_text'])==r['state'],'actual state::text wrapper identity')
+ for a,b in {'tenant_id':'tenantId','execution_id':'executionId','checkpoint_id':'checkpointId','checkpoint_version':'checkpointVersion','runtime_profile':'runtimeProfile','runtime_version':'runtimeVersion','orchestrator_version':'orchestratorVersion','step_number':'stepNumber','budget_usage':'budgetUsage','digest':'digest','created_at':'createdAt'}.items():ck(r[a]==cp[b],'physical column '+a)
+ ck(v['wire']['command']=='SELECT' and v['wire']['rowCount']==1 and any(x['name']=='physical_state_text' for x in v['wire']['fields']),'physical SQL result fields')
+ i=v['identity'];ck(i['current_user']==i['session_user'] and i['current_user'].endswith('_service'),'fresh authenticated service')
+ ck(i['tenant_context']==cp['tenantId'],'fresh reader tenant context')
+ a=v['authority'];runtime=a['request']['runtime'];ck(runtime['tenantId']==cp['tenantId'] and a['execution_id']==cp['executionId'] and a['tenant_id']==cp['tenantId'],'native request authority binding')
+ ck(runtime['context']['values']['adapterVersion']=='controlled-published-v1','actual bound request marker')
+ ck(a['request_digest']==runtime['context']['values']['requestDigest'] and a['capability_fingerprint']==cp['state']['capabilityFingerprint'],'native digest/fingerprint')
+ return cp
+
+def walk(v):
+ if isinstance(v,dict):
+  if set(['identity','row','checkpoint','authority','wire'])<=v.keys():phys(v)
+  elif set(['checkpointId','checkpointVersion','state','budgetUsage','digest'])<=v.keys():cpcheck(v)
+  elif v.get('storageCodec')=='cvg.checkpoint-state/2':wrapper(v)
+  for x in v.values():walk(x)
+ elif isinstance(v,list):
+  for x in v:walk(x)
+
+def evs(r,t):return [e for e in r['events'] if e['type']==t]
+def context(cp):return cp['state']['toolResultContext']
+def receipt(r):return context(r['final'])['decisionAdmissions'][0]
+def unaccepted(cp):
+ c=context(cp);ck(c.get('acceptedDecision') is None and c['deliveredThroughStep']==0,'no accepted decision/cursor advance')
+def stability(a,b):ck(a['row']==b['row'] and a['checkpoint']==b['checkpoint'],'exact late/probe CP bytes and columns stable')
+def resultcheck(r,name,root):
+ cp=r['final'];cpcheck(cp);es=r['events'];ck(all(e['pid']==r['pid'] for e in es),'result PID event linkage')
+ ck([e['sequence'] for e in es]==list(range(1,len(es)+1)),'event sequence monotonic')
+ ck(r['calls']==len(evs(r,'model.complete-entry'))==len(evs(r,'native-fake-provider-return')),'actual entries independent of counters')
+ ck(r['measurements']==len(evs(r,'counter-entry')),'actual pure measurements')
+ if 'fresh-bound' in name:
+  ck(r['calls']==r['measurements']==cp['budgetUsage']['modelCalls']==0,'breached same pair blocks before count/model')
+  ck(context(cp)['decisionAdmissions']==[] and any(e['error']['code']=='ADMISSION_UNAVAILABLE' for e in evs(r,'hybrid-error')),'fresh bound unavailable, no receipt');return
+ ck(r['calls']==r['measurements']==1,'one model/count each native path')
+ rec=receipt(r);model=evs(r,'model.complete-entry')[0];request=model['request'];res=evs(r,'native-reserve-entry')[0]
+ ck(request==res['args']['request']==evs(r,'counter-entry')[0]['request'],'counter reserve actual request same')
+ ck(sha(canon(request))==rec['requestSha256'],'request digest reconstructed')
+ ck(rec['measurement']['inputUpperBoundTokens']==(len(canon(request).encode())+63)//64,'Toy64 input derived from real request')
+ ck(request['maxOutputTokens']==512 and request['correlationId']==r['input']['correlationId'],'actual cap and correlation')
+ ck(evs(r,'decide-native-port')[0]['nativeClass']=='CompleteDecisionAdmission','native port instance')
+ fresh=evs(r,'fresh-service-SQL')[0];observed=fresh['physical'];phys(observed);ctx=context(observed['checkpoint']);rr=ctx['decisionAdmissions'][0]
+ ck(rr['status']=='RESERVED' and ctx['pendingDecisionAdmission']==rr['admissionId'],'fresh DB reserved before provider body')
+ commit=next(e for e in es if e['sequence']==fresh['commit']);ck(commit['type']=='CAS-return-after-transaction' and commit['result']['status']=='APPLIED' and commit['checkpointId']==observed['checkpoint']['checkpointId'] and commit['digest']==observed['checkpoint']['digest'],'APPLIED commit exact physical checkpoint')
+ ck(commit['sequence']<model['sequence']<fresh['sequence'],'committed before actual call entry')
+ ck(observed['identity']['backend_pid'] not in fresh['writerBackends'],'fresh service connection independent backend')
+ ar=r['actualProviderResult'];ne=evs(r,'native-fake-provider-return')[0]
+ ck(ar==ne['actualProviderResult'] and ar['text']==ne['nativeResult']['text'] and ne['nativeResult']['externalCall'] is False,'actual deterministic provider and synthetic wrapper')
+ ck(ar['outputTokens']==(len(canon(ar['text']).encode())+63)//64,'Toy64 output exact')
+ if rec['status']=='SETTLED':ck(rec['resultSha256']==sha(canon(ar)) and rec['actual']=={'modelCalls':1,**{k:ar[k] for k in ['inputTokens','outputTokens','costUsd']}},'settled result digest and actual usage')
+ if name.startswith(('SP01','SP02','SP03','SP04')):
+  ck(r['result']['stopReason']=='COMPLETED' and rec['status']=='SETTLED','positive native path')
+  ck(r['result']['usage']=={k:cp['budgetUsage'][k] for k in ['inputTokens','outputTokens','costUsd']},'positive returned and durable usage')
+ else:
+  ck(r['result']['stopReason']!='COMPLETED','failure never completed');unaccepted(cp)
+ if name.startswith('SP05'):
+  ck(rec['status']=='UNKNOWN' and rec['unknownReason']=='DECISION_USAGE_UNKNOWN' and len(evs(r,'model.complete-error'))==1 and not evs(r,'model.complete-return'),'body computed but gateway unknown')
+ if name.startswith('SP06'):
+  ck(ar['inputTokens']=={'$number':'NaN'} and rec['unknownReason']=='ADMISSION_BREACH' and rec['status']=='UNKNOWN','lossless NaN invalid pair remains failure')
+ if name.startswith('SP07'):
+  ck(ar['outputTokens']>512 and rec['status']=='UNKNOWN' and rec['unknownReason']=='ADMISSION_BREACH' and rec['actual']['outputTokens']==ar['outputTokens']==cp['budgetUsage']['outputTokens'],'finite overuse retained, invalid pair remains failure')
+ if name.startswith('SP08'):
+  inj=evs(r,'CAS-fault-injection');ck(len(inj)==1 and inj[0]['stage']=='BEFORE_NATIVE_CAS' and inj[0]['nativeInvoked'] is False and rec['status']=='UNKNOWN' and cp['budgetUsage']['outputTokens']==512,'failure before actual CAS conserves reserve')
+ if name.startswith('SP09'):
+  inj=evs(r,'CAS-fault-injection');ck(len(inj)==1 and inj[0]['stage']=='AFTER_NATIVE_CAS_APPLIED_BEFORE_ACK','actual ACK loss injection');phys(inj[0]['physicalAfterCommit'])
+  ck(rec['status']=='SETTLED' and cp['budgetUsage']['outputTokens']==ar['outputTokens'] and r['result']['usage']['outputTokens']==512,'ACK loss durable actual vs conservative caller')
+  ck(any(e['result']['status']=='CONFLICT' for e in evs(r,'CAS-return-after-transaction')),'ACK lost stale token cannot rollback durable settled')
+ if name.startswith(('SP10','SP11','SP12')):
+  held=evs(r,'provider-reply-held')[0];release=evs(r,'provider-reply-released')[0];body=ne
+  ck(body['sequence']<held['sequence']<release['sequence'],'actual body then hold then release')
+  ck(any(e.get('error',{}).get('code')=='lease_lost' for e in evs(r,'CAS-error')),'actual native fence refusal')
+  if name.startswith(('SP10','SP11')):
+   ret=evs(r,'runtime-return')[0];ck(ret['sequence']<release['sequence'],'runtime returns before late delivery')
+   ck(rec['status'] in ['RESERVED','UNKNOWN'] and cp['budgetUsage']['outputTokens']==512,'late reserve conservative')
+   if name.startswith('SP10'):ck((time(ret['at'])-time(evs(r,'runtime-entry')[0]['at'])).total_seconds()>=0.8,'real 1000ms native timeout, no fake clock')
+   else:ck(held['sequence']<evs(r,'external-native-abort')[0]['sequence']<ret['sequence'],'actual abort while reply held')
+  else:ck(rec['status']=='RESERVED' and r['result']['stopReason']=='INSUFFICIENT_EVIDENCE','old fence fails late terminal write')
+
+def verify_tree(root,label):
+ start=len(checks);files={str(f.relative_to(root)):load(f) for f in root.rglob('*.json') if 'summary' not in f.name and '/execution/' not in str(f)}
+ for v in files.values():walk(v)
+ ident=files['identity-rls-grants.json'];i=ident['identity'];ck(i['current_user']==i['session_user'] and i['current_database']=='pare224_synthetic','serving actual identity')
+ ck(all(i[k] is False for k in ['rolsuper','rolbypassrls','rolinherit','rolcreatedb','rolcreaterole']) and all(i[k]==0 for k in ['memberships','owned_schemas','owned_relations']),'nonowner unprivileged role')
+ ck(len(ident['rls'])==18 and all(x['relrowsecurity'] and x['relforcerowsecurity'] for x in ident['rls']),'18 FORCE RLS tables')
+ grants=collections.defaultdict(set)
+ for g in ident['grants']:grants[g['table_name']].add(g['privilege_type'])
+ ck(len(grants)==18 and all(v==({'SELECT','INSERT'} if t=='controlled_published_evidence' else {'SELECT','INSERT','UPDATE'}) for t,v in grants.items()),'exact explicit grants and append-only evidence')
+ ck(files['preexistence.json']=={'schema_exists':False,'role_exists':False},'namespace/role absent before create')
+ results={k:v for k,v in files.items() if k.endswith('/result.json')};ck(len(results)==14,'14 actual attempts across12 tests')
+ out=[]
+ for name,r in sorted(results.items()):
+  resultcheck(r,name,root);rs=context(r['final'])['decisionAdmissions'];out.append({'path':name,'pid':r['pid'],'calls':r['calls'],'measurements':r['measurements'],'stopReason':r['result']['stopReason'],'returnedUsage':r['result']['usage'],'durableUsage':r['final']['budgetUsage'],'receipts':rs,'functionalQualification':'FAIL_INVALID_PAIR_NOT_QUALIFIED' if name.startswith(('SP06/A','SP07')) else 'NOT_PROVIDER_QUALIFICATION'})
+  auth=files[str(pathlib.PurePosixPath(name).parent.parent/'native-authority.json')];h=auth['hostIdentity'];cl=auth['claim'];ck(cl['disposition']=='ACTIVE' and h['executionId']==r['input']['executionId']==cl['executionId'] and h['tenantId']==r['input']['tenantId']==cl['fence']['tenantId'],'real native admission/host identity linkage')
+  ck(auth['started']['preparedDigest']=='sha256-'+sha(canon(auth['prepared'])),'prepared digest reconstructed')
+  ck(auth['phase']['phaseId'] and auth['phase']['attempt']==cl['fence']['attempt'],'native phase attempt')
+  case=name.split('/')[0];tenant='tenant225' if '/B/' in name else 'tenant224';after=files[case+'/db18-after-private.json'][tenant]
+  rows=[x['row'] for x in after['operational_execution_checkpoints'] if x['row']['execution_id']==r['input']['executionId']];ck(len(rows)==1 and rows[0]['digest']==r['final']['digest'] and wrapper(rows[0]['state'])==r['final']['state'],'raw18 durable CP joins final actual execution')
+ for k,v in files.items():
+  if k.endswith('-probe.json'):
+   stem=k[:-len('-probe.json')];stability(files[stem+'-before.json'],files[stem+'-after.json']);ck(v['dbBefore']==v['dbAfter'],'probe all18 stable')
+   if v['expected']=='STATE_CONFLICT':ck(v['error']['code']=='STATE_CONFLICT','real native conflict')
+   else:ck(not v.get('error') and v['result']['status']=='SETTLED','real identical settle no-op')
+  if k.endswith('/replay.json'):
+   base=k[:-len('replay.json')];a=files[base+'replay-before.json'];b=files[base+'replay-after.json'];ck(context(a['checkpoint'])==context(b['checkpoint']),'replay receipts/context stable');ck(v['countsBefore']==v['countsAfter'],'replay zero extra provider/count');ck(all(a['checkpoint']['budgetUsage'][q]==b['checkpoint']['budgetUsage'][q] for q in ['modelCalls','inputTokens','outputTokens','costUsd']),'replay usage stable')
+  if k.endswith(('late-delivery.json','takeover-late-result.json')):
+   base=str(pathlib.PurePosixPath(k).parent)+'/';stem='takeover-' if 'takeover' in k else ''
+   a=files[base+('takeover-before-late.json' if stem else 'late-before.json')];b=files[base+('takeover-after-late.json' if stem else 'late-after.json')];stability(a,b);ck(v['dbBefore']==v['dbAfter'],'late all18 stable')
+  if k.endswith('db18-before-private.json') or k.endswith('db18-after-private.json'):
+   ck(set(v)=={'tenant224','tenant225'} and all(len(t)==18 for t in v.values()),'two tenants 18-table raw cut')
+ f=files['SP04/B/main/foreign-receipt-origin.json'];a=results['SP04/A/main/result.json'];probe=files['SP04/B/main/actual-A-receipt-on-B-probe.json'];ck(f['actualAArgs']==evs(a,'native-settle-entry')[0]['args']==probe['args'] and f['beforeA']==f['afterA'],'actual foreign A receipt immutable on B')
+ v=files['SP12/main/takeover-native-claims.json'];l=v['lease'];obs=l['observed'];mx=max(time(obs[q]) for q in ['parent_lease_until','queue_lease_until','outer_lease_until']);ck(time(obs['max_lease_until'])==mx and time(l['slept'][0]['after_expiry'])>=mx,'true DB maximum lease expiry')
+ ck(time(obs['prepared_expires_at'])>mx and 'clock_timestamp' in l['sleepSql'] and 'pg_sleep' in l['sleepSql'],'real server clock sleep before original deadline')
+ ck(v['next']['disposition']=='SETTLEMENT' and v['next']['fence']['attempt']>v['oldClaim']['fence']['attempt'] and v['newOuter']['claimRef']['expectedAttemptRowId']!=v['oldOuter']['claimRef']['expectedAttemptRowId'],'native takeover changes attempts and enters settlement')
+ p=files['SP12/main/takeover-before-late.json'];ck(p['authority']['phase_state']=='FAULTED' and p['authority']['dispatch_closed'] is True and p['authority']['lease_owner']==v['newWorker'] and time(p['authority']['observed_at'])<time(p['authority']['expires_at']),'takeover authority faulted before prepared expiry')
+ return {'label':label,'assertions':len(checks)-start,'files':len(files),'attempts':out,'actualCalls':sum(x['calls'] for x in out),'functionalQualification':{'SP06':'FAIL_INVALID_PAIR_NOT_QUALIFIED','SP07':'FAIL_INVALID_PAIR_NOT_QUALIFIED'}}
+
+if __name__=='__main__':
+ try:
+  reports=[verify_tree(O/'inputs/producer','producer'),verify_tree(O/'run','fresh-I1')]
+  (O/'checks/reconstructed-results.json').write_text(json.dumps(reports,indent=2))
+  (O/'checks/assertions.json').write_text(json.dumps({'checks':checks,'count':len(checks),'pass':all(x['ok'] for x in checks)},indent=2))
+  print(json.dumps({'pass':True,'assertions':len(checks),'sets':[{k:v for k,v in r.items() if k!='attempts'} for r in reports]}))
+ except BaseException as e:
+  (O/'checks/assertions-failed.json').write_text(json.dumps({'checks':checks,'error':repr(e)},indent=2));raise

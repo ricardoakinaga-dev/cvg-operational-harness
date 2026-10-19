@@ -1,0 +1,77 @@
+6:  ExecutionCheckpoint,
+14:import { CheckpointError, validateCheckpointIntegrity } from '@cvg/harness'
+52:interface CheckpointRow extends QueryResultRow {
+55:  checkpoint_id: string
+56:  checkpoint_version: number
+58:  runtime_version: string
+59:  orchestrator_version: string
+63:  digest: string
+72:const checkpointColumns = `
+73:  tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+74:  runtime_version, orchestrator_version, step_number, state, budget_usage,
+75:  digest, created_at`
+79:    throw new CheckpointError('checkpoint_binding', `${label} is required`)
+82:    throw new CheckpointError('checkpoint_binding', `${label} is too long`)
+97:    return JSON.parse(value) as unknown
+99:    throw new CheckpointError(
+100:      'checkpoint_integrity',
+101:      'Persisted step JSON is invalid'
+108:    const serialized = JSON.stringify(value)
+112:    throw new CheckpointError(
+113:      'checkpoint_integrity',
+147:function mapCheckpoint(row: CheckpointRow): ExecutionCheckpoint {
+149:    checkpointId: row.checkpoint_id,
+152:    checkpointVersion: row.checkpoint_version,
+154:      row.runtime_profile as ExecutionCheckpoint['runtimeProfile'],
+155:    runtimeVersion: row.runtime_version,
+156:    orchestratorVersion: row.orchestrator_version,
+158:    state: jsonValue(row.state) as ExecutionCheckpoint['state'],
+161:    ) as ExecutionCheckpoint['budgetUsage'],
+163:    digest: row.digest
+174: * Durable Phase 3 step/checkpoint authority. Tenant scoping is inherited from
+175: * the Phase 2 connection discipline; checkpoint integrity is validated before
+193:      throw new CheckpointError(
+231:  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+232:    const tenant = TenantIdSchema.parse(checkpoint.tenantId)
+233:    validateCheckpointIntegrity(checkpoint, {
+234:      tenantId: checkpoint.tenantId,
+235:      executionId: checkpoint.executionId
+242:          checkpoint.executionId,
+244:          !!checkpoint.state.stopReason
+247:        await saveOperationalCheckpointOnClient(client, tenant, checkpoint)
+253:  public loadCheckpoint(
+256:  ): Promise<ExecutionCheckpoint | null> {
+260:      const result = await client.query<CheckpointRow>(
+261:        `SELECT ${checkpointColumns}
+262:           FROM operational_execution_checkpoints
+268:      const checkpoint = mapCheckpoint(row)
+269:      validateCheckpointIntegrity(checkpoint, { tenantId, executionId: id })
+270:      return checkpoint
+321:      throw new CheckpointError(
+330:      throw new CheckpointError(
+371:    throw new CheckpointError(
+403:/** Package-internal; used by the atomic snapshot/checkpoint seal. */
+404:export async function saveOperationalCheckpointOnClient(
+407:  checkpoint: ExecutionCheckpoint
+409:  validateCheckpointIntegrity(checkpoint, {
+411:    executionId: checkpoint.executionId
+414:    `INSERT INTO operational_execution_checkpoints
+415:     (tenant_id, execution_id, checkpoint_id, checkpoint_version,
+416:      runtime_profile, runtime_version, orchestrator_version,
+417:      step_number, state, budget_usage, digest, created_at)
+421:     SET checkpoint_id = EXCLUDED.checkpoint_id,
+422:         checkpoint_version = EXCLUDED.checkpoint_version,
+424:         runtime_version = EXCLUDED.runtime_version,
+425:         orchestrator_version = EXCLUDED.orchestrator_version,
+429:         digest = EXCLUDED.digest,
+433:      checkpoint.executionId,
+434:      checkpoint.checkpointId,
+435:      checkpoint.checkpointVersion,
+436:      checkpoint.runtimeProfile,
+437:      checkpoint.runtimeVersion,
+438:      checkpoint.orchestratorVersion,
+439:      checkpoint.stepNumber,
+440:      jsonText(checkpoint.state, 'checkpoint state'),
+441:      jsonText(checkpoint.budgetUsage, 'checkpoint budget usage'),
+442:      checkpoint.digest,
+443:      checkpoint.createdAt

@@ -1,0 +1,181 @@
+1000:       return 'Complete checkpoint requires the explicitly configured complete-tool-v1 mode.'
+1001:     }
+1002:     if (checkpoint.runtimeProfile !== 'iterative') {
+1003:       return 'Execution checkpoint belongs to a different runtime profile.'
+1004:     }
+1005:     if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+1006:       return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+1007:     }
+1008:     if (
+1009:       this.options.toolResultContext &&
+1010:       checkpoint.orchestratorVersion !== this.orchestratorVersion
+1011:     ) {
+1012:       return 'Execution checkpoint belongs to a different orchestrator version.'
+1013:     }
+1014:     if (input.runtimeProfile && input.runtimeProfile !== 'iterative') {
+1015:       return 'Execution checkpoint conflicts with the requested runtime profile.'
+1016:     }
+1017:     if (
+1018:       this.options.capabilityFingerprint &&
+1019:       checkpoint.state.capabilityFingerprint !==
+1020:         this.options.capabilityFingerprint
+1021:     ) {
+1022:       return 'Execution checkpoint belongs to a different capability composition.'
+1023:     }
+1024:     if (
+1025:       checkpoint.state.stopReason &&
+1026:       TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+1027:       checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+1028:       checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+1029:     ) {
+1030:       return 'Terminal execution cannot be resumed.'
+1031:     }
+1032:     return null
+1033:   }
+1034: 
+1035:   private applyResume(
+1036:     run: LoopRun,
+1037:     checkpoint: ExecutionCheckpoint | null
+1038:   ): Extract<DispatchOutcome, { kind: 'stop' }> | null {
+1039:     return applyResume(this.dispatchContext, run, checkpoint)
+1040:   }
+1041: 
+1042:   private async runLoop(
+1043:     run: LoopRun
+1044:   ): Promise<Extract<DispatchOutcome, { kind: 'stop' }>> {
+1045:     if (run.state.pendingQuestion) {
+1046:       // Deterministic rule: a pending question must not be answered by a new
+1047:       // model decision. Re-pause without spending a model call.
+1048:       return this.pause(run, Math.max(1, run.state.stepNumber), {
+1049:         kind: 'pause',
+1050:         pausedKind: 'NEEDS_USER_INPUT',
+1051:         decision: null
+1052:       })
+1053:     }
+1054:     while (true) {
+1055:       // I8: cancellation is honored before every step.
+1056:       if (this.#turns.get(run)?.signal.aborted) {
+1057:         return this.stop('CANCELLED', CANCELLED_RESPONSE)
+1058:       }
+1059:       // I12: pause (and any other step control) is checked before each step.
+1060:       const beforeStep = await runGate(
+1061:         this.kernelFor(run),
+1062:         'turn/before-step',
+1063:         this.turnFor(run)
+1064:       )
+1065:       if (beforeStep.kind === 'stop') {
+1066:         // An operator pause is not terminal: the durable checkpoint, with any
+1067:         // pending approval or question, stays resumable (AUD-0597 F03).
+1068:         return {
+1069:           ...this.stop(beforeStep.stopReason, beforeStep.response),
+1070:           /* v8 ignore next -- the pause control is the only before-step control */
+1071:           ...(beforeStep.cause === 'operator_paused'
+1072:             ? { preserveCheckpoint: true }
+1073:             : {})
+1074:         }
+1075:       }
+1076:       const budgetStop = this.checkBudget(run)
+1077:       if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
+1078: 
+1079:       let decision: LoopDecision
+1080:       let stepNumber: number
+1081:       let decisionAdmissionIds: readonly string[] | undefined
+1082:       let modelDecision = false
+1083: 
+1084:       if (run.state.pendingDecision && run.state.pendingStepNumber) {
+1085:         decision = run.state.pendingDecision
+1086:         stepNumber = run.state.pendingStepNumber
+1087:         run.lastDecision = decision
+1088:       } else if (
+1089:         this.options.toolResultContext &&
+1090:         run.state.toolResultContext?.acceptedDecision
+1091:       ) {
+1092:         const accepted = run.state.toolResultContext.acceptedDecision
+1093:         if (accepted.stepNumber !== run.stepNumber + 1)
+1094:           throw new ToolResultContextError(
+1095:             'STATE_CONFLICT',
+1096:             'Accepted decision is bound to another step.',
+1097:             'STATE_CONFLICT'
+1098:           )
+1099:         decision = accepted.decision
+1100:         stepNumber = accepted.stepNumber
+1101:         decisionAdmissionIds = accepted.decisionAdmissionIds
+1102:         run.lastDecision = decision
+1103:       } else {
+1104:         stepNumber = run.stepNumber + 1
+1105:         if (stepNumber > run.input.budget.maxSteps) {
+1106:           return this.stop('MAX_STEPS', 'Step budget exhausted.')
+1107:         }
+1108:         const decisionResult = await this.decide(run, stepNumber)
+1109:         if (decisionResult.outcome) return decisionResult.outcome
+1110:         decision = sanitizeLoopDecision(decisionResult.decision)
+1111:         decisionAdmissionIds = decisionResult.decisionAdmissionIds
+1112:         modelDecision = decisionResult.modelDecision ?? false
+1113:         run.lastDecision = decision
+1114:       }
+1115: 
+1116:       const validation = this.validateDecision(run, decision)
+1117:       if (!validation.valid) {
+1118:         if (!this.options.toolResultContext) run.usage.decisionRepairs += 1
+1119:         run.lastDecisionErrors = validation.errors
+1120:         const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+1121:         if (
+1122:           (this.options.toolResultContext
+1123:             ? run.usage.decisionRepairs + 1
+1124:             : run.usage.decisionRepairs) <= repairBudget &&
+1125:           !run.state.pendingDecision
+1126:         ) {
+1127:           continue
+1128:         }
+1129:         const capabilityOnly = validation.errors.every((error) =>
+1130:           error.startsWith('capability:')
+1131:         )
+1132:         return this.stop(
+1133:           capabilityOnly ? 'STATE_CONFLICT' : 'MODEL_FAILURE',
+1134:           `Orchestrator decision was rejected: ${validation.errors.join('; ')}`
+1135:         )
+1136:       }
+1137:       run.lastDecisionErrors = []
+1138:       if (this.options.toolResultContext && !run.state.pendingDecision) {
+1139:         const state = run.state.toolResultContext!
+1140:         run.state.toolResultContext = {
+1141:           ...state,
+1142:           deliveredThroughStep: modelDecision
+1143:             ? Math.max(
+1144:                 state.deliveredThroughStep,
+1145:                 ...run.observations
+1146:                   .filter((value) => value.type === 'TOOL_RESULT')
+1147:                   .map((value) => value.stepNumber)
+1148:               )
+1149:             : state.deliveredThroughStep,
+1150:           acceptedDecision: {
+1151:             stepNumber,
+1152:             decision,
+1153:             decisionAdmissionIds: decisionAdmissionIds ?? []
+1154:           }
+1155:         }
+1156:         await this.persistCheckpoint(run)
+1157:       }
+1158: 
+1159:       const signature = decisionSignature(decision)
+1160:       if (decision.decisionType !== 'STOP') {
+1161:         const repeats = run.state.loopSignatures.filter(
+1162:           (candidate) => candidate === signature
+1163:         ).length
+1164:         const threshold = this.effectiveRepeatThreshold(run, decision)
+1165:         const cycle = detectDecisionCycle(run.state.loopSignatures, signature)
+1166:         if (repeats >= threshold || cycle) {
+1167:           await this.recordStep(run, {
+1168:             stepNumber,
+1169:             stepType: 'POLICY',
+1170:             status: 'FAILED',
+1171:             sideEffecting: false,
+1172:             errorCode: 'loop_detected',
+1173:             reasonCode: 'LOOP_SUSPECTED'
+1174:           })
+1175:           return this.stop(
+1176:             'LOOP_DETECTED',
+1177:             cycle
+1178:               ? 'A repeated decision cycle was detected; the loop stopped without executing another effect.'
+1179:               : 'Repeated identical decisions were detected; the loop stopped without executing another effect.'
+1180:           )

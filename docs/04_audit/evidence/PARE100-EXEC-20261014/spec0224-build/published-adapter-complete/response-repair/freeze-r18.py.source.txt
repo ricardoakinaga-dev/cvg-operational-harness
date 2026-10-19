@@ -1,0 +1,87 @@
+"""Freeze exact repaired source and a no-history memory-only I1 packet."""
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parents[1]
+w = b.parent / 'worktree'
+repro = base.parent / 'response-repro'
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+old = json.loads((b / 'candidate-r17.json').read_text())
+changed = {'packages/harness/src/iterative-runtime.ts', 'packages/harness/src/__tests__/complete-response-path-public.test.ts'}
+new = 'packages/harness/src/__tests__/complete-response-path-public.test.ts'
+bindings = []
+for entry in old['sourceBindings']:
+    raw = Path(entry['live']).read_bytes()
+    digest = sha(raw)
+    if entry['path'] not in changed:
+        assert digest == entry['sha256'], entry['path']
+    bindings.append(dict(entry, bytes=len(raw), sha256=digest))
+for name in ['r18-focused30-01', 'r18-regression04', 'r18-types01', 'r18-lint01', 'r18-prior26-final', 'r18-repro-green-final']:
+    command = json.loads((repro / (name + '.command.json')).read_text())
+    assert command['exit'] == 0, name
+    assert command['nativeBeforeSHA256'] == command['nativeAfterSHA256'], name
+    for rel, digest in command['nativeAfterSHA256'].items():
+        assert sha((w / rel).read_bytes()) == digest
+cd = b / 'candidate-r18'
+cd.mkdir(exist_ok=False)
+for entry in bindings:
+    dest = cd / entry['copy']
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(Path(entry['live']).read_bytes())
+candidate = {'scope': 'Local synthetic complete-mode RESPONSE context and native terminal-step repair only; no published217 topology/default/PG/newcounter or global parity claim.', 'sourceBindings': bindings}
+raw = (json.dumps(candidate, indent=2) + '\n').encode()
+(cd / 'manifest.json').write_bytes(raw)
+(b / 'candidate-r18.json').write_text(json.dumps(dict(candidate, manifest=str(cd / 'manifest.json'), manifestSha256=sha(raw), sourceCount=len(bindings)), indent=2) + '\n')
+packet = base / 'review-packet-r5'
+packet.mkdir(exist_ok=False)
+artifact = packet / 'artifact'
+prior = json.loads((base / 'review-packet-r4/manifest.json').read_text())
+inputs = []
+for entry in prior['inputs']:
+    original = w / entry['relative']
+    raw = original.read_bytes() if entry['relative'] in changed else Path(entry['copy']).read_bytes()
+    if entry['relative'] not in changed:
+        assert sha(raw) == entry['sha256']
+    dest = artifact / entry['relative']
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(raw)
+    inputs.append(dict(entry, copy=str(dest), bytes=len(raw), sha256=sha(raw)))
+(packet / 'candidate-manifest.json').write_bytes((cd / 'manifest.json').read_bytes())
+(packet / 'package.json').write_bytes((w / 'package.json').read_bytes())
+for path in [packet / 'node_modules', artifact / 'node_modules']:
+    path.symlink_to(w / 'node_modules', target_is_directory=True)
+criteria = {'authority': 'Approved immutable SPEC224, existing opt-in complete mode; response calls keep native pipeline accounting and controls, no second gate.',
+            'cases': json.loads((base / 'contract.json').read_text())['criteria'] + ['RR09 selected context snapshot immutable', 'RR10 result-log fault charges actual call once', 'RR11 terminal audit veto conservative durable stop', 'RR12 step audit veto acknowledges actual native row', 'RR13 legacy result-log fault charges actual call once', 'RR14 empty model text yields native FAILED RESPOND, durable refusal/actual usage, terminal replay no additional model/effect', 'RR15 whitespace-only text yields same truthful refusal/replay invariants'],
+            'required': 'Verify complete selected tool result reaches actual RESPONSE request, native effects/usage/receipt ownership, bounded messages/request, data vs trusted system framing, custom selector/deadline/legacy, durable terminal response refusal. Public factory and native in-memory stores; no privileged private-run substitution.',
+            'limits': 'Memory-only synthetic Toy64, no real tokenization/provider billing; no public217 extra call/literal response/default adoption or PG/global/fullTR01-10/all36 closure.'}
+criteria['additionalRequired'] = ['Immutable validated context snapshot across awaits; supplied selector may retain and mutate plain JSON objects.', 'Healthy native writer: framing/selection/model/result-log failures must record a truthful failed RESPOND step and aligned terminal cursor without fabricated model charges.', 'Audit veto after acknowledged native write preserves actual SUCCEEDED fact; returned and durable final refusal must agree when writer remains available.', 'Unavailable or uncertain step/checkpoint writer remains conservative, does not invent ACK or erase effects; legacy wire unchanged and result-log fault charges actual model once.']
+criteria['durableResponseRequired'] = ['RR16-18 Native persisted RESPOND intent plus same-pipeline native slot ACK before provider; post-model checkpoint outage cannot re-invoke from an older checkpoint with maxModelCalls1 or spare slots; recreated public factory uses same native stores.', 'RR19-20 A missing pre-model checkpoint ACK (before commit or ACKlost) permits zero provider entries. Existing native gate may conservatively hold a slot; never label that an actual invocation or billing.', 'RR21 Missing observed-usage ACK withholds response; preserve actual committed values when commit occurred, no replay.', 'RR22-23 Missing RUNNING intent ACK permits zero provider entries; native truthful failedstep/conservative terminal refusal.', 'Known healthy writer: exact native observed usage once; unavailable writer: retain pre-call hold and durable attempt, refuse recovery with explicit uncertainty/reconciliation, preserve stored checkpoint/journal rather than invent retrospective settled token/cost or claim a completed outcome. No new RESPONSE counter/gate/receipt.']
+criteria['stoppedResponseRequired'] = ['RR24/25/30 transient post-model checkpoint failure, including empty text, may later persist known actual usage and native terminal row at same cursor; recreated factory refuses even with spare budget or maxModelCalls1 and never mutates the stopped checkpoint/journal or invokes response again.', 'RR26/27 terminal response row before-write or lost-ACK fault: preserve actual FAILED or SUCCEEDED fact respectively; aligned stopped checkpoint is not permission to retry.', 'RR28/29 model throw or selector throw retains original first failure category and native intent/counts; complete stopped response cannot reopen on new factory even if provider entry was zero.', 'Complete-mode-only stopped response recovery; global legacy terminal-stop set, explicit user/approval pauses and active progress past an earlier successful response remain their existing contracts. No new budget/decision gate/counter/receipt. Known usage once; missing result/ACK remains explicit uncertainty, not invented billing.']
+(base / 'criteria-r18.json').write_text(json.dumps(criteria, indent=2) + '\n')
+proofs = []
+for source, relative in [(base / 'criteria-r18.json', 'criteria.json'), (repro / 'r18-focused30-01-trace-private.json', 'raw-cases.json'),
+                         (repro / 'r18-focused30-01.command.json', 'test-command.json'), (repro / 'r18-focused30-01.stdout.log', 'test-stdout.log')]:
+    dest = packet / 'proof' / relative
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    raw = source.read_bytes()
+    dest.write_bytes(raw)
+    proofs.append({'copy': str(dest), 'relative': relative, 'bytes': len(raw), 'sha256': sha(raw)})
+env = packet / 'environment'
+env.mkdir()
+template = (repro / 'vitest.config.mjs').read_text().replace(str(w), str(artifact)).replace(str(repro / 'cache'), '__I1_ASSIGNED_CACHE__')
+(env / 'vitest-template.mjs').write_text(template)
+(env / 'trace-reads.cjs').write_bytes((base / 'review-r2/config/trace-reads-strict.cjs').read_bytes())
+manifest = {'scope': 'FIRST tool read this manifest only. All source/constraint/proof copies readonly; no originals/AGENTS/ledgers/otherpackets/history/producer summaries/rationale. No descendants. Classify allowed source by manifest category, never filename substrings.',
+            'artifactRoot': str(artifact), 'inputs': inputs, 'proofs': proofs,
+            'candidateManifestCopy': str(packet / 'candidate-manifest.json'), 'candidateManifestSha256': sha((cd / 'manifest.json').read_bytes()),
+            'allowedScopeMetadata': {'path': str(packet / 'package.json'), 'bytes': (packet / 'package.json').stat().st_size, 'sha256': sha((packet / 'package.json').read_bytes())},
+            'environmentTemplates': [{'copy': str(p), 'bytes': p.stat().st_size, 'sha256': sha(p.read_bytes())} for p in sorted(env.iterdir())],
+            'externalReadOnlyDependencies': str(w / 'node_modules'), 'allowedDependencyMirror': str(packet / 'node_modules'),
+            'node': '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node', 'resource': 'Memory only. No PG/Docker/network/providers; write only assigned review-r5, including configs/temp/cache/nodecache/checkers/evidence.'}
+(packet / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+result = {'status': 'FROZEN_PENDING_I1_NOT_ACCEPTED', 'sourceCount': len(bindings), 'copiedInputs': len(inputs), 'proofs': len(proofs),
+          'candidateSHA256': manifest['candidateManifestSha256'], 'packetSHA256': sha((packet / 'manifest.json').read_bytes())}
+(base / 'freeze-r18.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps(result))

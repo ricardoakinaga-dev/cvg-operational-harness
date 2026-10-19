@@ -1,0 +1,58 @@
+'use strict';
+const fs = require('node:fs');
+const net = require('node:net');
+const { threadId } = require('node:worker_threads');
+const registry = process.env.CVG_GLOBAL_TEST_NET_REGISTRY;
+const blocked = process.env.CVG_GLOBAL_TEST_NET_BLOCKED;
+const assigned = process.env.CVG_GLOBAL_TEST_ROOT;
+if (!registry || !blocked || !assigned) throw new Error('Missing assigned global test scope');
+let serial = 0;
+const append = (file, value) => fs.appendFileSync(file, JSON.stringify({ pid: process.pid, threadId, ...value }) + '\n');
+append(registry, { event: 'guard-active' });
+const originalListen = net.Server.prototype.listen;
+net.Server.prototype.listen = function (...args) {
+  const id = `${process.pid}:${threadId}:${++serial}`;
+  this.once('listening', () => {
+    const address = this.address();
+    if (address && typeof address === 'object') append(registry, { event: 'listen', id, port: address.port });
+  });
+  this.once('close', () => append(registry, { event: 'close', id }));
+  return originalListen.apply(this, args);
+};
+let registrySize = -1;
+let listeners = [];
+function currentListeners() {
+  const size = fs.statSync(registry).size;
+  if (size !== registrySize) {
+    const active = new Map();
+    for (const line of fs.readFileSync(registry, 'utf8').split('\n')) {
+      if (!line) continue;
+      const row = JSON.parse(line);
+      if (row.event === 'listen') active.set(row.id, row);
+      if (row.event === 'close') active.delete(row.id);
+    }
+    listeners = [...active.values()]; registrySize = size;
+  }
+  return listeners;
+}
+const originalConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const input = Array.isArray(args[0]) ? args[0] : args;
+  const first = input[0];
+  const options = first && typeof first === 'object' ? first : { port: first, host: typeof input[1] === 'string' ? input[1] : undefined };
+  const host = options.host || options.hostname || 'localhost';
+  const port = Number(options.port);
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0', '::'].includes(host);
+  const ipc = typeof options.path === 'string' && options.path.startsWith(assigned + '/');
+  const owned = local && currentListeners().some(row => {
+    if (row.port !== port) return false;
+    try { process.kill(row.pid, 0); return true; } catch { return false; }
+  });
+  if (!ipc && !owned) {
+    append(blocked, { host, port: Number.isFinite(port) ? port : null, reason: local ? 'NO_OWNED_TEST_LISTENER' : 'EXTERNAL_HOST' });
+    const error = new Error('CVG_GLOBAL_TEST_NETWORK_BLOCKED: unowned synthetic test connection');
+    error.code = 'CVG_GLOBAL_TEST_NETWORK_BLOCKED';
+    throw error;
+  }
+  return originalConnect.apply(this, args);
+};

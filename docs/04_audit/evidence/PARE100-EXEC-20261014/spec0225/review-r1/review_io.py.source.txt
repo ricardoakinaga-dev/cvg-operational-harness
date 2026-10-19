@@ -1,0 +1,35 @@
+import sys,json,hashlib,pathlib,os,datetime,re
+r=pathlib.Path(__file__).resolve().parent; p=r.parent/'packet-r1'
+os.chdir(r)
+for k in ('TMPDIR','TMP','TEMP','XDG_CACHE_HOME'): os.environ[k]=str(r)
+def emit(s):
+ n=len(list(r.glob('stream-*.stdout.log')))+1
+ (r/f'stream-{n:03}.stdout.log').write_text(s)
+ (r/f'stream-{n:03}.stderr.log').write_text('EMPTY: no stderr\n')
+ with (r/'rawcommands.jsonl').open('a') as f: f.write(json.dumps({'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'argv':sys.argv,'cwd':str(r),'stream':n})+'\n')
+ print(s)
+mode=sys.argv[1] if len(sys.argv)>1 else None
+if mode=='hash':
+ m=json.loads((p/'manifest.json').read_text()); entries=[(p/'manifest.json',13971,'6df4e9ab351706ab42c84f989f78c3e8917bb49d8691e98546ff295082ae4e78','manifest')]
+ for s in m['sources']:
+  entries.extend([(pathlib.Path(s['live']),s['bytes'],s['sha256'],'live/W'),(p/s['copy'],s['bytes'],s['sha256'],'copy')])
+ for s in m['proofs']: entries.append((p/s['path'],s['bytes'],s['sha256'],'proof'))
+ s=m['rootCandidate']; entries.append((pathlib.Path(s['path']),s['bytes'],s['sha256'],'ROOTcandidate'))
+ rows=[]
+ for f,n,h,role in entries:
+  b=f.read_bytes(); actual=hashlib.sha256(b).hexdigest(); rows.append({'path':str(f),'resolved':str(f.resolve()),'role':role,'bytes':len(b),'sha256':actual,'matches_manifest':len(b)==n and actual==h})
+ result={'all_match':all(x['matches_manifest'] for x in rows),'count':len(rows),'inputs':rows}
+ (r/(sys.argv[2]+'.json')).write_text(json.dumps(result,indent=2)+'\n'); emit(json.dumps(result,indent=2))
+elif mode=='read':
+ out=[]
+ for arg in sys.argv[2:]:
+  parts=arg.split('@'); f=p/parts[0]; lines=f.read_text().splitlines(); a,b=(map(int,parts[1].split(':')) if len(parts)>1 else (1,len(lines)))
+  out.append('\nFILE '+str(f)+'\n'+'\n'.join(f'{i+1}: {line}' for i,line in enumerate(lines) if a<=i+1<=b))
+ emit('\n'.join(out))
+elif mode=='search':
+ pattern=sys.argv[2]; out=[]
+ for arg in sys.argv[3:]:
+  f=p/arg
+  for i,line in enumerate(f.read_text().splitlines(),1):
+   if re.search(pattern,line,re.I): out.append(f'{arg}:{i}: {line}')
+ emit('\n'.join(out))

@@ -1,0 +1,97 @@
+{
+  "kind": "SELECTED_LINUX_NAMED_FIFO_TOPOLOGY_NOT_IMPLEMENTED",
+  "status": "PROPOSED_HOW_ADMISSION_NOT_RUN",
+  "finding": "R1-F01",
+  "selection": "Per-attempt host-created named FIFOs, reopened by each role after exec. No control FD is expected to survive an SDK launch; no host Unix socket or TCP endpoint is exposed.",
+  "process_graph": {
+    "python": [
+      "outside-cgroup host supervisor",
+      "contained python-driver + real CodexClient",
+      "SDK Popen of Python stdio adapter",
+      "adapter Popen of synthetic Python RPC peer"
+    ],
+    "typescript": [
+      "outside-cgroup host supervisor",
+      "contained node ts-driver + real SDK",
+      "SDK spawn of Node stdio adapter executable",
+      "adapter spawn of synthetic Node JSONL peer"
+    ],
+    "roles": "Each of driver, adapter and peer opens its own two fixed /observer FIFO paths after its own exec. Python SDK close_fds and Node default stdio need not be changed.",
+    "identity": "Adapter and peer are distinct code/config hashes and PIDs. The SDK-owned child is explicitly the synthetic adapter endpoint, not a Codex executable. Every process and descendant stays in the claimed cgroup; no upstream process behavior is inferred."
+  },
+  "argv": {
+    "python_driver": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/python-driver.py",
+      "--case",
+      "CASE_ID"
+    ],
+    "python_SDK_launch_args_override": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/adapter-python.py"
+    ],
+    "python_adapter_peer": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/fixture-rpc.py",
+      "--case",
+      "CASE_ID"
+    ],
+    "TS_codexPathOverride": "/profile/adapter-typescript",
+    "TS_adapter_executable": "Regular executable file with single shebang #!/runtime/node; same hash-bound adapter source, not a shell or external command resolver.",
+    "TS_adapter_peer": [
+      "/runtime/node",
+      "/profile/fixture-cli.mjs",
+      "--case",
+      "CASE_ID",
+      "--sdk-argv-json",
+      "JSON_ENCODED_ORIGINAL_SDK_ARGV"
+    ],
+    "per_case_config": "/profile/adapter-config.json contains the frozen case ID/language, exact peer executable/argv and six FIFO paths. It is read-only, file-hash bound and replaces any arbitrary CLI command input. SDK env contains the same fixed allowlist, no ambient host environment."
+  },
+  "channels": {
+    "host_paths": "New private attempt directory beneath this task runtime, mode0700, owned by supervisor; create exactly driver.events,driver.control,adapter.events,adapter.control,peer.events,peer.control as FIFOs, not regular files or sockets.",
+    "sandbox_paths": [
+      "/observer/driver.events",
+      "/observer/driver.control",
+      "/observer/adapter.events",
+      "/observer/adapter.control",
+      "/observer/peer.events",
+      "/observer/peer.control"
+    ],
+    "mounts": "Bind only these six individual FIFO nodes to their fixed sandbox paths; parent directory, host /tmp, other sockets, cgroup filesystem and repository are not mounted. Use read-only node binds to prohibit namespace replacement; the admission test must prove data I/O on these mounted FIFOs works. If unsupported, stop and replan, no looser mount fallback.",
+    "FD_creation": "Supervisor opens events read/nonblock and control read-write/nonblock before target start, with explicit keeper writer FDs where needed. Roles reopen their own events write/nonblock and control read/nonblock by pathname after exec. They do not inherit or guess supervisor FDs. Mark all local FDs non-inheritable. Peers also reopen their own nodes; adapters need no pass_fds/extra stdio contract.",
+    "frames": "One atomic OS write per frame, uint32be length then UTF8 JSON payload <=4092 bytes; maximum entire frame4096 and raw chunk2048 bytes (base64). Admission requires observed fpathconf(PC_PIPE_BUF)>=4096 and each full write size<=PIPE_BUF. Header bounded1024bytes; oversize, EAGAIN beyond case deadline, short atomic write, invalid UTF8/schema/sequence/digest or missing frame => INVALID_CAPTURE; never truncate/drop/retry a target case.",
+    "roles_protocol": "BEGIN binds attempt/case/role, local PID+PIDnamespace, expected code hash and nonce from readonly config; monotonic per-role sequence; raw chunks carry stream/direction/offset/count/digest. Supervisor maps namespace PIDs to independently observed host cgroup members/startticks and admission identities; a self-reported PID/hash alone is not proof.",
+    "control_protocol": "Supervisor sends only allowlisted READY,RELEASE_REPLY,RELEASE_EXIT,ABORT_NOW,FINISH_PEER acknowledgments bound to case/role/sequence. No code, paths or arbitrary commands over control; each role has its own control FIFO. Control is never part of SDK stdin/stdout/stderr.",
+    "exposure": "These dedicated observer FIFOs are the only writable host IPC endpoints exposed to target processes. No ambient host socket is mounted. This is a reference-test control channel, not a production or harness public contract."
+  },
+  "relay": {
+    "stdio": "Adapter owns peer stdin/stdout/stderr pipes (normal child_process/subprocess); SDK owns adapter stdin/stdout/stderr. Adapter forwards bytes unmodified in both directions and stderr; no JSON parse, normalization, reordering, added delimiter or swallowed error in SDK streams.",
+    "capture": "Adapter emits RAW_READ chunks and separate FORWARD_COMMIT byte counts after successful OS writes; partial writes are counted accurately. Before returning to next forwarding operation, commit the corresponding telemetry frame. Supervisor retains originals/digests and receipt timestamps. Peer reports only control/write milestones and never supplies the authoritative raw capture.",
+    "normal_exit": "Drain peer stdout/stderr; emit per-stream final counters/digests and END, then propagate the peer exit code or re-raise its terminating signal. Do not wait forever for Python SDK stdin EOF after peer exit. For persistent RPC cases supervisor FINISH_PEER follows completed API/control assertions, then peer exit/drain, then driver closes SDK.",
+    "signal": "Adapters record/handle SIGTERM as part of this explicitly synthetic endpoint. Defer signal termination only while a bounded forward+telemetry commit is active, at most100ms; finish/declare incomplete counters and then terminate by the same signal. No indefinite signal suppression. SIGKILL/host death/missing telemetry/unknown commit window means INVALID_CAPTURE/INCONCLUSIVE, even if API result looks expected.",
+    "limits": "Same stdout/stderr/wire/case/cgroup caps; backpressure is bounded by the30s case deadline. Capture channels consume the same case artifact budget. No extra process/thread outside TasksMax32 or outside the service."
+  },
+  "SDKPY07_barrier": [
+    "Driver opens its channels before real SDK start; adapter/peer each open theirs after SDK/adapter exec.",
+    "Supervisor observes adapter RAW_READ+FORWARD_COMMIT for turn/start, plus peer REQUEST_HELD. Only then sends ABORT_NOW to driver.",
+    "Driver cancels real async task and reports actual CancelledError witness; only then supervisor sends RELEASE_REPLY to peer.",
+    "Peer writes the frozen real TurnStartResponse, adapter records/forwards reply; exact observation-only close-return hook reports turnA _closed=True.",
+    "Supervisor waits for the matching hook event before FINISH_PEER; peer exits, adapter drains/END/exits; only then driver closes SDK. Absence of interrupt is judged only over that complete declared call interval."
+  ],
+  "TS_barriers": "For abort test supervisor waits for independent child/cgroup witness plus adapter+peer READY then sends ABORT_NOW to driver. For early iterator break/kill, preserve actual API lane and require complete commit/exit/EOF evidence separately; missing capture invalidates the case rather than repairing Node/SDK behavior.",
+  "shutdown": "After driver/service exit and independently observed cgroup populated=0, supervisor closes its keeper writers and drains events to actual FIFO EOF. Reconcile role sequences, counters, END or explicitly known termination, raw hashes and OS identity. FIFO EOF alone is not child exit. Preserve metadata/raw bytes; close descriptors and unmount only own service resources; no peer file deletion.",
+  "required_admission_controls": [
+    "Six inode/type/mode/symlink/race/attempt ownership checks and exact mounted-node I/O; roles reopen after exec under Python close_fds=True and normal Node stdio, using constant diagnostic helpers only.",
+    "Two-direction raw identity with partial writes, separate stderr and named-control barriers; a known omitted/late/corrupted chunk or false FORWARD_COMMIT must invalidate capture.",
+    "FIFO backpressure, missing reader, producer crash, orphan, normal exit, SIGTERM mid-commit and SIGKILL all bounded; cleanup must be witnessed independently. Missing100ms commit deadline invalidates, never passes a result.",
+    "Supervisor control cannot be injected into SDK streams, FIFO frame limits observed and unclaimed host sockets remain inaccessible."
+  ],
+  "scope_limits": "Instrumented adapters/relay timing is a property of this synthetic peer profile, not a claim about the official CLI process lifecycle. Admission/control implementation and every SDK/compiler execution remain NOT_RUN."
+}

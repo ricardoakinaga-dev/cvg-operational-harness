@@ -1,0 +1,77 @@
+# Persistência e retomada da jornada nativa Codex
+
+Task `DX100-G04:RESOLVE-CANONICAL-PERSISTENCE-PORTS`. Decisão técnica proposta para a próxima SPEC; **não implementa a jornada nem concede BUILD**. Reutilizar os contratos e componentes dos owners PAR/C100, mediante qualificação da composição efetiva. Manter uma autoridade por fato: sessão para entrega, journal para resultado do efeito, checkpoint para estado do loop e fence de execução para admissão e settlement. Esses registros não formam uma transação única por serem PostgreSQL.
+
+As fontes estão congeladas em [31 inputs](source-inputs.json), com [trechos exatos](source-spans.json) e [cinco contratos associados aos CQ](port-bindings.json). `R` identifica fonte atual do checkout; `A`, contrato/autoridade canônica; `O`, documento ou observação delimitada do owner; `S`, snapshot da candidata C100; `G`, objeto Git histórico do baseline do owner. Código lido não equivale a comportamento executado ou aceito.
+
+## Autoridade e elegibilidade verificadas
+
+As decisões humanas de0221 e0225 já estão resolvidas em `USER-DECISIONS-20261016/spec-gates.json` (A01). Seus hashes conferem com os originais A02/A03. Os deltas aceitos são0221/f64a1b89 (O01/O02) e0225/f26ccead (O03/O04), ambos com zero achados obrigatórios na revisão documental. Não se pede novamente essa aprovação nem se amplia seu alcance. A aprovação0231 já entregou o qualificador local; não autoriza esta jornada.
+
+| Fundação               | Contrato aplicável                                                                                                                           | Disponibilidade observada                                                                                | Consequência para Codex                                                                                  |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Sessões0221            | Primeira fatia: `identity/create/open`, handle `read/append/flush/close/asyncDispose`, factory `{ service }`, ponte para `SessionEventStore` | Desenho aprovado; API/factory/migration0031 ausentes nos paths inspecionados do Root                     | Reuso condicionado à implementação e qualificação pelo owner; nenhum método adiado entra silenciosamente |
+| Resultado completo0225 | `EffectJournal` lógico inalterado; `resultStorage:{version:1}` explícito, journal1MiB                                                        | Candidata própria em BUILD; snapshotR3 oferece código e observação delimitada, sem qualificação integral | Aceitar como insumo de desenho; não copiar WIP nem transferir seus testes/certificado                    |
+| Checkpoint0224         | Resultado completo/admissão e checkpointV2 pertencem ao owner PAR                                                                            | Root inspecionado tem versão1 e port sem CAS; snapshotC100 tem evolução e CAS                            | Vincular futura composição aos exports e manifests efetivamente qualificados; não criar codec paralelo   |
+| Fence0217/0029         | Guard de execução, tentativa e outer claim na composição controlada do owner                                                                 | Objetos do baseline2f0 e referências do snapshot; ausente no Root inspecionado                           | Investigar a costura genérica antes de adotar; não ligar rota published0226                              |
+
+A revisão da recomposição0225 registrava entrada impedida; o checklist posterior O05 registra **entrada local de BUILD permitida**, mantendo promoção/qualificação integral bloqueadas. A observação O07 relata44 casos e88 processos no perfil público sequencial do owner. Os27 inputs congelados desse perfil foram rehasheados contra O06; nenhum teste foi reexecutado nesta task. O07 preserva drift posterior de um teste. Isso não fecha J14, CQ12, nem demonstra concorrência entre writers. Os demais J, a revisão de código e a qualificação composta não são concedidos por esses registros.
+
+## Invariantes e escolha mínima
+
+1. Nenhum ACK de conclusão durável antes do commit dos fatos que ele afirma. Confirmação do journal, gravação de checkpoint, terminal e entrega são fronteiras distintas.
+2. Um resultado `CONFIRMED` só pode ser reutilizado sob os mesmos bindings e o domínio admitido. `EFFECT_STARTED/UNCERTAIN` nunca autoriza repetir corpo automaticamente.
+3. Posse de sessão não substitui fence da execução; `attemptId` do efeito não substitui lease/fence do worker. Todos são ligados a tenant, execução e composição confiáveis.
+4. Retomar entrega lê fatos já persistidos; não chama modelo/ferramenta para reconstruí-los. Retomar execução só continua a partir de estado e admissão válidos.
+5. Snapshot em memória, sinal abortado, socket fechado e método que retornou não são provas intercambiáveis de commit, settlement ou cancelamento remoto.
+
+| Alternativa                                                               | Avaliação                                                                                                                         |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Usar somente o Root atual                                                 | Insuficiente: SDK single_pass, ausência dos novos handles, sem contrato incremental/CAS integrado; `cancel` recusa execução ativa |
+| Criar stores e migrations Codex independentes                             | Rejeitada: duplica autoridade de sessão/journal/checkpoint e exige reconciliação nova sem necessidade demonstrada                 |
+| Copiar a candidata C100 ou habilitar published0226                        | Rejeitada: BUILD ainda delimitado, domínio/fence específico e0226 adiada; nenhuma equivalência genérica demonstrada               |
+| Reutilizar fundações canônicas e especificar somente as costuras ausentes | Selecionada para desenho: conserva owners e fatos; exige seus gates atuais e provas Codex da composição completa                  |
+
+Não se adicionam broker, log espelho, blob store, Saga ou transação distribuída. O custo herdado de0221 é uma conexão física por writer, `maxOpenWriters` explícito e recusa de pooling transaction/reconnect transparente. Limites de fila, cursor de entrega e retenção ainda precisam de definição na SPEC da jornada; não são inventados como capacidades presentes.
+
+## As cinco portas
+
+**PP01 — eventos e ownership da sessão (CQ07/10/12).** O Root oferece `PostgresSessionEventStore.openSession/append/read` (R01/R02) e `createSessionKernelLog` (R11); isso não é `SessionPersistence`. O desenho0221 retém uma fila por handle e a ponte `sessionEventStoreForHandle` para o mesmo log v1, sem `read` seguido de `append` em transações separadas. `read(offset,length)` usa offset0 para sequence1; `afterSequence` do store v1 é exclusivo. Uma tradução futura deve manter sequence/eventId/digest e validar tenant/stream. Nenhum desses números é automaticamente cursor de delta Codex.
+
+O writer mantém sessão física e advisory lock; triggers previstos guardam mutações legadas. Essa proteção cobre fatos persistidos, não impede por si só um host antigo de executar efeitos. O primeiro BUILD não contém `stat/list`, flush global, owner público, tickets ou shutdown agregado. Sem esses métodos, perda de ACK continua `commit-unknown`; reabrir após queda permite ler fatos, mas não reconstrói a intenção perdida nem autoriza retry. Manter esses requisitos maiores abertos, sem reintroduzi-los na0221 já reduzida.
+
+**PP02 — resultado do efeito (CQ09/10/11/12).** Reutilizar `EffectJournal.reserve/markStarted/confirm/fail/markUncertain/get` e seus bindings operationKey/proposalHash/attemptId (R06). A composição seleciona explicitamente o adapter operacional0225 com codec1; o resultado lógico não é envelope/base64/hash. O journal de `@cvg/agent-runtime` em `effect-journal-postgres.ts` guarda outra estrutura, inclusive digest: não satisfaz esse port por compartilhar o nome journal.
+
+O limite aprovado do output canônico é1048576bytes, contexto32768bytes, capture de todo `ToolResult` e checkpoint8388608bytes cada, com seus próprios envelopes/overhead. Não inferir um máximo público único. NUL suportado no journal não prova suporte nos eventos v1, resultado final, outbox ou SDK. Cutover de0225 é exclusivo por schema/principal; a coexistência legada prevista para sessão0221 não autoriza leitores antigos nesse journal ativado.
+
+**PP03 — loop, checkpoint e accounting (CQ09/10/11).** Reutilizar `ExecutionStepStore.recordStep/listSteps/saveCheckpoint/loadCheckpoint` e a evolução CAS do owner0224 (R03/R04/S02/S04). `AgentLoopState`, versões, fingerprint, `budgetUsage`, observações e digest pertencem à mesma execução. O port Root não promete commit conjunto com o journal. Na futura composição, caso o journal confirme e o checkpoint não seja gravado, o reader deve recuperar o valor confirmado sem repetir o corpo, preservar accounting e só então avançar sob CAS/fence válido. Essa obrigação depende da prova completa em processos distintos.
+
+**PP04 — admissão, fence e terminal (CQ09/11/12).** O lease Root verifica worker/attempt/expiração, mas `cancel` recusa CLAIMED/RUNNING (R05). No baseline2f0, `ControlledPublishedDatabaseFence` liga tenant/execution/worker/attempt/outer e, opcionalmente, cancellation; os guards são chamados na transação do write (G01/G02). Esse desenho é candidato a reuso, não port genérico qualificado para Codex.
+
+Há restrição concreta no snapshotS01: `guardWrite` só aceita, para execução bound, operationKey igual a `${executionId}:s2:find_available_slots`. Usá-lo para ferramentas Codex arbitrárias não está demonstrado. A próxima SPEC precisa nomear o ponto genérico de ligação e sua autoridade, sem copiar a rota de produto ou ampliar um matcher para passar. Dois processos sequenciais não provam CQ12; o teste futuro deve intercalar concorrentes e tentativa stale, observando dispatch, journal, checkpoint, terminal e accounting.
+
+Cancelamento admitido e terminal cancelado são fatos diferentes. A SPEC completa deve fixar a ordem nativa de commit nas duas corridas: cancel antes de conclusão e conclusão antes de cancel. Um terminal vencedor persiste; confirmação anterior de efeito continua verdadeira. O cancelamento não apaga journal nem transforma efeito incerto em FAILED. Nenhuma semântica nova de cancelamento é implementada aqui.
+
+**PP05 — entrega, reconexão e ACK (CQ07/09/10/11).** SDK v1 tem quatro métodos e o server compõe `single_pass` (R08/R09). Polling de eventos e close local não demonstram stream incremental, retomada remota ou cancel remoto. O log de sessão é candidato à recuperação de entrega; faltam contrato de delta, identidade de frame, cursor durável, pressão e retenção. Não representar tokens/deltas como eventos v1 desconhecidos nem acrescentar novos métodos sem SPEC/gate.
+
+Para a SPEC seguinte, propor dois reconhecimentos com semânticas explícitas: recepção de pedido não afirma resultado; ACK de conclusão durável só referencia fatos confirmados do resultado/checkpoint/terminal e posição de entrega válida. Perda de resposta depois do commit pode causar reentrega identificada, nunca novo corpo. Detalhes wire, atomicidade do terminal com a posição de entrega e regras de cursor permanecem decisões a fechar antes de BUILD.
+
+## Falhas e provas obrigatórias da composição futura
+
+| Ponto de falha                                  | Comportamento exigido                                                             | Prova que permanece NOT_RUN                                                   |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Antes de iniciar IO/corpo                       | Recusa sem efeito; pre-abort distinto de commit-unknown                           | Zero corpo/IO nos negativos; mesma identidade e causas                        |
+| Depois de EFFECT_STARTED, antes de confirmar    | UNCERTAIN/UNKNOWN preservado; falha de markUncertain não mascara a primeira causa | Processo real, observador persistente e falha da reconciliação                |
+| Journal confirmado, antes do checkpoint         | Recuperar resultado admitido e accounting sem repetir corpo                       | Kill de A após testemunha durável, reader B novo; nonce só produzido no corpo |
+| Checkpoint/terminal commitado, resposta perdida | Reentregar fatos identificados; não reexecutar efeito                             | Desconexão e reader novo com cursor validado                                  |
+| Cancel e conclusão em ambas as ordens           | Um terminal conforme ordem nativa; journal anterior preservado                    | Barreiras no commit/CAS e transcript das duas ordens                          |
+| Sessão/lease perdida ou fence stale             | Sem reconexão/reclaim silencioso; writes/dispatch/settlement indevidos recusados  | Dois processos concorrentes, tentativa antiga e roles reais                   |
+| Buffer/cursor inválido ou leitor lento          | Limites finitos; erro/pressão explícitos, ordem e identidade preservadas          | Delta antes do terminal retido, pressão medida e reconexão sem calls extras   |
+
+A implementação futura deve usar pool/roles/tenant confiáveis, RLS e parâmetros de durabilidade qualificados; nenhum input de cliente escolhe tenant/schema/storage/fence. Não incluir credenciais/corpos sensíveis em erros ou recibos. Snapshot, ACK, lease e efeito possuem identidades separadas, reconciliadas pelo manifesto de composição. Métricas futuras devem distinguir rejeição de fence, commit-unknown, estado UNCERTAIN, replay de entrega e nova chamada real.
+
+## Handoff executável
+
+Esta unidade fecha o **vínculo documental das cinco portas**, preservando CQ01–14 e zero receipts funcionais. As lacunas e os critérios que impedem BUILD estão em [port-bindings.json](port-bindings.json). A ordem aprovada permanece0029→0030→0031; inventário, integração e qualificação precisam ser conferidos no gate efetivo. Não editar migrations, consumir WIP ou pedir novamente os ajustes0221/0225.
+
+Próxima ação: `DX100-G04:SPECIFY-FULL-NATIVE-JOURNEY`. Preparar uma SPEC concreta para CQ01–14 usando estes vínculos, resolvendo stream/wire/limites, costura genérica de fence, terminal/cancel/ACK e matriz de compatibilidade/restart. Dependências dos owners permanecem gates de entrada de BUILD, não justificativa para duplicar suas implementações. A revisão humana da nova SPEC ocorrerá somente sobre o pacote completo revisável e o SHA efetivo.

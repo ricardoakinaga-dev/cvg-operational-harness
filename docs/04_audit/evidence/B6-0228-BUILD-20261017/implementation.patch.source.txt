@@ -1,0 +1,653 @@
+diff --git a/docs/08_runtime/0803_runbook_gates_locais.md b/docs/08_runtime/0803_runbook_gates_locais.md
+index ace8b963..c8169825 100644
+--- a/docs/08_runtime/0803_runbook_gates_locais.md
++++ b/docs/08_runtime/0803_runbook_gates_locais.md
+@@ -55,10 +55,14 @@ rodar gates em paralelo sem interferência.
+ 3. **Variáveis das fases.** Fases 2/3/4A e a prova rem21-010 não pulam quando falta o
+    banco: falham fechado com mensagem explícita. Isso é intencional (AUD20 skip
+    governance).
+-4. **`boundary:products`.** O checker percorre `node_modules` e termina `INCOMPLETE`
+-   (0 violações, milhares de `UNVERIFIED_INSTALLED_DEPENDENCY`) após ~20 min. Está em
+-   qualificação no HISO-005; não o encadeie com outros gates e não o trate como prova
+-   de fronteira aceita.
++4. **`boundary:products` (SPEC0228).** Execute `npm run boundary:products`
++   separadamente. Metadados de pacotes instalados não provam conteúdo: o gate
++   registra `UNVERIFIED_INSTALLED_CONTENT` ou `INSTALLED_VERSION_MISMATCH` e
++   preserva o drift. A tabela histórica de exceções não suprime diagnósticos;
++   `--strict` permanece aceito e aplica a mesma recusa. A baseline fica
++   `INCOMPLETE` (exit1), sem aceite de isolamento. Violações conhecidas continuam
++   `FAIL`; só ausência de violações e incertezas permite `PASS` (exit0).
++   Não reinterpretar INCOMPLETE como verde nem reativar a tabela para certificar.
+ 5. **Gates concorrentes no mesmo worktree.** `certify` reescreve
+    `certification/*-report.json`; um `skip:governance` disparado ao mesmo tempo falha
+    com `skip_report_missing_input`. Rode um de cada vez por worktree.
+diff --git a/scripts/boundary-manifests.mjs b/scripts/boundary-manifests.mjs
+index 082fabf8..4870a5e3 100644
+--- a/scripts/boundary-manifests.mjs
++++ b/scripts/boundary-manifests.mjs
+@@ -379,18 +379,10 @@ function readLockfile(filename) {
+   return value.packages
+ }
+ 
+-// Installed third-party code is not parsed file by file. An installed package
+-// is accepted as a terminal graph node only when the committed lockfile
+-// (package-lock.json, a reviewed and versioned file) records that exact
+-// installation path as a registry artifact (https tarball plus integrity)
+-// whose package name matches the installed manifest. npm's untracked
+-// installed-tree record (node_modules/.package-lock.json) is deliberately not
+-// a trust root, and a link entry is never a registry artifact.
+-//
+-// The version field is not a content-integrity proof (npm does not keep the
+-// tarball to re-hash), so an installed version that differs from the committed
+-// lockfile is returned as drift for the report instead of being mistaken for
+-// verification. Tampered contents are covered only by the product tripwire.
++// SPEC0228: lock metadata identifies a declared package, never its installed
++// bytes or semantic module frontier. Until a separately approved proof exists,
++// every third-party installation remains unverified. The caller must still
++// expand declared dependencies and scan known product references and links.
+ export function createInstalledPackageVerifier(
+   root,
+   { productReferences = [] } = {}
+@@ -453,8 +445,11 @@ export function createInstalledPackageVerifier(
+     const entry = lookup(committed, key)
+     if (accepts(entry))
+       return {
+-        verified: true,
+-        source: 'package-lock.json',
++        verified: false,
++        reason:
++          entry.version === manifest.version
++            ? 'UNVERIFIED_INSTALLED_CONTENT'
++            : 'INSTALLED_VERSION_MISMATCH',
+         dependencies,
+         ...(entry.version === manifest.version
+           ? {}
+diff --git a/scripts/check-product-boundary.mjs b/scripts/check-product-boundary.mjs
+index d58dd441..332a2397 100644
+--- a/scripts/check-product-boundary.mjs
++++ b/scripts/check-product-boundary.mjs
+@@ -9,17 +9,9 @@ import {
+   invalidTsconfigPathPatterns,
+   expandSingleWildcard
+ } from './tsconfig-path-grammar.mjs'
+-// HISO-005 status (PLAN0374 B1, 2026-10-07): the gate completes on the real
+-// repository in minutes and its known negative cases (direct, intermediary,
+-// alias, workspace/installed dependency, dynamic loaders and the reproduced
+-// T2 counterexamples) are covered by tests/product-boundary.test.js. HISO-005
+-// is NOT accepted: acceptance still depends on an independent re-audit.
+-//
+-// Scope: first-party sources (packages, apps, legacy, products and any local
+-// file a reference reaches) are parsed completely and fail closed. Installed
+-// third-party packages are terminal nodes verified by canonical path, lock
+-// metadata, declared successors and a product-identifier tripwire; their
+-// implementation is not parsed (see createInstalledPackageVerifier).
++// SPEC0228: installed metadata is not a content proof, and the legacy
++// exception catalog is inactive. Uncertainty remains INCOMPLETE; known product
++// edges remain FAIL. This gate does not grant positive isolation acceptance.
+ import fs from 'node:fs'
+ import path from 'node:path'
+ import { isBuiltin, createRequire } from 'node:module'
+@@ -83,7 +75,7 @@ function files(directory, result = [], manifests) {
+ 
+ export function auditProductBoundary(
+   directory = process.cwd(),
+-  { graph: includeGraph = false, exceptions: applyExceptions = true } = {}
++  { graph: includeGraph = false, exceptions: requestedExceptions = false } = {}
+ ) {
+   const root = fs.realpathSync(directory)
+   const metadata = createBoundaryManifestReader(root)
+@@ -110,6 +102,11 @@ export function auditProductBoundary(
+   )
+   const graph = new Map()
+   const diagnostics = []
++  if (requestedExceptions === true)
++    diagnostics.push({
++      file: 'package.json',
++      reason: 'UNAPPROVED_EXCEPTION_REQUEST'
++    })
+   // Keep provenance internal: only diagnostics on the actual core closure
+   // qualify this gate. Unrelated consumers retain their own quality gates.
+   const diagnosticSources = new WeakMap()
+@@ -250,7 +247,8 @@ export function auditProductBoundary(
+   })
+   // Installed third-party packages are terminal nodes keyed by their canonical
+   // directory. They are verified and expanded by settleInstalled() without
+-  // ever entering the parsed source inventory.
++  // ever entering the parsed source inventory. Metadata alone is not proof, so
++  // these nodes remain unverified under SPEC0228.
+   const installedNodes = new Map()
+   const installedQueue = []
+   const installedDrift = new Map()
+@@ -321,7 +319,7 @@ export function auditProductBoundary(
+           reason: 'UNVERIFIED_INSTALLED_PACKAGE',
+           detail: verdict.reason
+         })
+-      else if (verdict.drift) installedDrift.set(node, verdict.drift)
++      if (verdict.drift) installedDrift.set(node, verdict.drift)
+       for (const { name } of verdict.dependencies ?? []) {
+         const located = locateInstalled(
+           root,
+@@ -1713,14 +1711,11 @@ export function auditProductBoundary(
+   }
+   for (const [file, references] of consumerEnvReferences)
+     if (seen.has(file)) diagnostics.push(...references)
+-  // Restricted exceptions apply to core-closure diagnostics only, after the
+-  // provenance filter, and never to any reason outside exceptableReasons.
++  // SPEC0228 keeps the legacy catalog as historical inventory only. Pins and
++  // expression matches do not prove receiver identity, so no diagnostic may be
++  // removed by this catalog, including when a legacy caller requests it.
+   const exceptions = []
+-  const exceptionUse = new Map()
+-  const sourceLines = new Map()
+   const pinState = new Map()
+-  // A group's pins name files its justification depends on (for example the
+-  // callee that receives an escaped capability); any byte change lapses it.
+   const pinsHold = (pins) =>
+     Object.entries(pins).every(([file, digest]) => {
+       if (!pinState.has(file)) {
+@@ -1734,59 +1729,20 @@ export function auditProductBoundary(
+       }
+       return pinState.get(file) === digest
+     })
+-  const exceptionKey = (diagnostic) => {
+-    if (!exceptableReasons.has(diagnostic.reason)) return undefined
+-    const match = /^(.+):(\d+)$/.exec(diagnostic.file ?? '')
+-    if (!match || typeof diagnostic.expression !== 'string') return undefined
+-    const [, file, line] = match
+-    if (!sourceLines.has(file))
+-      sourceLines.set(
++  const unusedExceptions = [...exceptionSites]
++    .filter(([key]) => fs.existsSync(path.join(root, JSON.parse(key)[1])))
++    .map(([key, { id, max, pins }]) => {
++      const [reason, file, line, expression] = JSON.parse(key)
++      return {
++        exception: id,
++        reason,
+         file,
+-        fs.readFileSync(path.join(root, file), 'utf8').split('\n')
+-      )
+-    const text = normalizeLine(sourceLines.get(file)[Number(line) - 1] ?? '')
+-    return JSON.stringify([
+-      diagnostic.reason,
+-      file,
+-      text,
+-      diagnostic.expression
+-    ])
+-  }
+-  for (let index = 0; index < diagnostics.length; ) {
+-    const key = applyExceptions && exceptionKey(diagnostics[index])
+-    const site = key && exceptionSites.get(key)
+-    const used = (key && exceptionUse.get(key)) || 0
+-    if (site && used < site.max && pinsHold(site.pins)) {
+-      exceptionUse.set(key, used + 1)
+-      exceptions.push({
+-        ...diagnostics.splice(index, 1)[0],
+-        exception: site.id
+-      })
+-    } else index += 1
+-  }
+-  // Informational: listed capacity not consumed by a file present in this
+-  // tree (a fixed or edited site, or a lapsed pin). Absent files, such as
+-  // compiled mirrors in a clean checkout, are not listed.
+-  const unusedExceptions = applyExceptions
+-    ? [...exceptionSites]
+-        .filter(
+-          ([key, { max }]) =>
+-            (exceptionUse.get(key) ?? 0) < max &&
+-            fs.existsSync(path.join(root, JSON.parse(key)[1]))
+-        )
+-        .map(([key, { id, max, pins }]) => {
+-          const [reason, file, line, expression] = JSON.parse(key)
+-          return {
+-            exception: id,
+-            reason,
+-            file,
+-            line,
+-            expression,
+-            unused: max - (exceptionUse.get(key) ?? 0),
+-            pinsHold: pinsHold(pins)
+-          }
+-        })
+-    : []
++        line,
++        expression,
++        unused: max,
++        pinsHold: pinsHold(pins)
++      }
++    })
+   // Known product identity in reached code is a failure, not an unknown.
+   const failing = new Set([
+     'CONSUMER_ENV_IN_CORE',
+@@ -1810,7 +1766,7 @@ export function auditProductBoundary(
+     edgeCount: [...graph.values()].reduce((sum, set) => sum + set.size, 0),
+     violations,
+     diagnostics,
+-    exceptionsApplied: applyExceptions,
++    exceptionsApplied: false,
+     exceptions,
+     unusedExceptions,
+     // Informational: lock-verified installed packages whose on-disk version
+@@ -2586,13 +2542,12 @@ if (
+   try {
+     // Usage: check-product-boundary.mjs [root] [--graph=<file>] [--strict]
+     // --graph writes the resolved core closure (evidence) to <file>.
+-    // --strict disables the restricted exception table (raw analysis).
++    // --strict is retained as an alias; normal analysis also applies no exceptions.
+     const args = process.argv.slice(2)
+     const flags = args.filter((arg) => arg.startsWith('--'))
+     const graphFile = flags
+       .find((arg) => arg.startsWith('--graph='))
+       ?.slice('--graph='.length)
+-    const strict = flags.includes('--strict')
+     const unknown = flags.filter(
+       (arg) => !arg.startsWith('--graph=') && arg !== '--strict'
+     )
+@@ -2601,7 +2556,7 @@ if (
+       throw new Error(`invalid_boundary_arguments:${args.join(' ')}`)
+     const result = auditProductBoundary(positional[0] ?? process.cwd(), {
+       graph: graphFile !== undefined,
+-      exceptions: !strict
++      exceptions: false
+     })
+     if (graphFile !== undefined) {
+       fs.writeFileSync(graphFile, `${JSON.stringify(result.graph, null, 2)}\n`)
+diff --git a/tests/b6-0228-boundary-containment.test.js b/tests/b6-0228-boundary-containment.test.js
+new file mode 100644
+index 00000000..adcddcaa
+--- /dev/null
++++ b/tests/b6-0228-boundary-containment.test.js
+@@ -0,0 +1,228 @@
++import { afterEach, describe, expect, it } from 'vitest'
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++import { spawnSync } from 'node:child_process'
++import { auditProductBoundary } from '../scripts/check-product-boundary.mjs'
++import { createInstalledPackageVerifier } from '../scripts/boundary-manifests.mjs'
++
++const roots = []
++function fixture() {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cvg-b6-0228-'))
++  roots.push(root)
++  const write = (file, value) => {
++    const target = path.join(root, file)
++    fs.mkdirSync(path.dirname(target), { recursive: true })
++    fs.writeFileSync(target, value)
++  }
++  write(
++    'package.json',
++    JSON.stringify({ workspaces: ['packages/*', 'products/*'] })
++  )
++  write('packages/core/package.json', JSON.stringify({ name: 'core' }))
++  write('packages/core/src/index.ts', 'export const neutral = 1\n')
++  write(
++    'products/shift-assistant/package.json',
++    JSON.stringify({ name: '@cvg/shift-assistant' })
++  )
++  write('products/shift-assistant/src/index.ts', 'export const product = 1\n')
++  const vendor = (
++    version = '1.0.0',
++    source = 'module.exports = 1\n',
++    dependencies = {}
++  ) => {
++    write(
++      'package-lock.json',
++      JSON.stringify({
++        lockfileVersion: 3,
++        packages: {
++          'node_modules/vendor': {
++            version: '1.0.0',
++            resolved: 'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',
++            integrity: 'sha512-YQ=='
++          }
++        }
++      })
++    )
++    write(
++      'node_modules/vendor/package.json',
++      JSON.stringify({
++        name: 'vendor',
++        version,
++        main: 'index.js',
++        dependencies
++      })
++    )
++    write('node_modules/vendor/index.js', source)
++    write(
++      'packages/core/src/index.ts',
++      "import value from 'vendor'; export { value }\n"
++    )
++  }
++  return { root, write, vendor }
++}
++afterEach(() => {
++  for (const root of roots.splice(0))
++    fs.rmSync(root, { recursive: true, force: true })
++})
++
++const splitProduct =
++  "module.exports = require('../../' + 'products/' + 'shift-assistant/src/index.ts')\n"
++describe('SPEC0228 conservative boundary contract', () => {
++  it('keeps the neutral positive and direct-product negative controls', () => {
++    const { root, write } = fixture()
++    expect(auditProductBoundary(root).status).toBe('PASS')
++    write(
++      'packages/core/src/index.ts',
++      "export * from '../../../products/shift-assistant/src/index.ts'\n"
++    )
++    expect(auditProductBoundary(root).status).toBe('FAIL')
++  })
++  it.each([
++    ['1.0.0', 'UNVERIFIED_INSTALLED_CONTENT'],
++    ['9.9.9', 'INSTALLED_VERSION_MISMATCH']
++  ])(
++    'never verifies metadata-only installed content at %s',
++    (version, reason) => {
++      const { root, vendor } = fixture()
++      vendor(version)
++      const verifier = createInstalledPackageVerifier(root)
++      const verdict = verifier.verify(
++        path.join(root, 'node_modules/vendor'),
++        'node_modules/vendor'
++      )
++      expect(verdict).toMatchObject({
++        verified: false,
++        reason,
++        dependencies: []
++      })
++      expect(verdict).not.toHaveProperty('source')
++      const audit = auditProductBoundary(root)
++      expect(audit.status).toBe('INCOMPLETE')
++      expect(audit.diagnostics).toContainEqual({
++        file: 'node_modules/vendor/package.json',
++        reason: 'UNVERIFIED_INSTALLED_PACKAGE',
++        detail: reason
++      })
++      expect(audit.installedLockDrift).toEqual(
++        version === '1.0.0'
++          ? []
++          : [
++              {
++                package: 'node_modules/vendor',
++                installedVersion: version,
++                lockfileVersion: '1.0.0'
++              }
++            ]
++      )
++    }
++  )
++  it.each(['1.0.0', '9.9.9'])(
++    'refuses the B6 concatenated product path at version %s without executing it',
++    (version) => {
++      const { root, vendor } = fixture()
++      vendor(version, splitProduct)
++      expect(auditProductBoundary(root).status).toBe('INCOMPLETE')
++    }
++  )
++  it('retains FAIL and drift when literal product evidence coexists with unverified bytes', () => {
++    const { root, vendor } = fixture()
++    vendor(
++      '9.9.9',
++      "module.exports = require('../../products/shift-assistant/src/index.ts')\n"
++    )
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.diagnostics.some(
++        (d) => d.reason === 'INSTALLED_PACKAGE_REFERENCES_PRODUCT'
++      )
++    ).toBe(true)
++    expect(
++      audit.diagnostics.some((d) => d.detail === 'INSTALLED_VERSION_MISMATCH')
++    ).toBe(true)
++    expect(audit.installedLockDrift).toHaveLength(1)
++  })
++  it('expands a declared product successor despite refused installed content', () => {
++    const { root, vendor } = fixture()
++    vendor('1.0.0', 'module.exports = 1\n', { '@cvg/shift-assistant': '1.0.0' })
++    fs.mkdirSync(path.join(root, 'node_modules/@cvg'), { recursive: true })
++    fs.symlinkSync(
++      path.join(root, 'products/shift-assistant'),
++      path.join(root, 'node_modules/@cvg/shift-assistant'),
++      'dir'
++    )
++    const audit = auditProductBoundary(root)
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.violations.some(
++        (v) =>
++          v.trail.includes('node_modules/vendor/package.json') &&
++          v.trail.includes('products/shift-assistant/package.json')
++      )
++    ).toBe(true)
++    expect(
++      audit.diagnostics.some((d) => d.detail === 'UNVERIFIED_INSTALLED_CONTENT')
++    ).toBe(true)
++  })
++  it.each([
++    [
++      'apps/api/src/main.ts',
++      "const shutdown = { install(source:any) { source.getBuiltinModule('module').createRequire(__filename)('../../../products/shift-assistant/src/index.ts') } }\nshutdown.install(process)\n"
++    ],
++    [
++      'apps/web/src/__tests__/app.test.tsx',
++      "const vi = { spyOn(source:any, _method:string) { source.process.getBuiltinModule('module').createRequire('/tmp/entry.cjs')('/tmp/products/shift-assistant/src/index.ts'); return { mockImplementation(_callback:any) {} } } }\nvi.spyOn(globalThis, 'fetch').mockImplementation((input) => {\n})\n"
++    ]
++  ])(
++    'refuses substituted receiver at %s in normal, strict and CLI paths',
++    (file, source) => {
++      const { root, write } = fixture()
++      write(
++        'packages/shared/src/lifecycle.ts',
++        fs.readFileSync('packages/shared/src/lifecycle.ts')
++      )
++      write(file, source)
++      const normal = auditProductBoundary(root)
++      const strict = auditProductBoundary(root, { exceptions: false })
++      expect(normal.status).toBe('INCOMPLETE')
++      expect(normal.exceptionsApplied).toBe(false)
++      expect(normal.exceptions).toEqual([])
++      expect(normal.diagnostics).toEqual(strict.diagnostics)
++      for (const flags of [[], ['--strict']]) {
++        const result = spawnSync(
++          process.execPath,
++          ['scripts/check-product-boundary.mjs', root, ...flags],
++          { encoding: 'utf8', timeout: 30000 }
++        )
++        expect(result.status).toBe(1)
++        expect(JSON.parse(result.stdout).diagnostics).toEqual(
++          normal.diagnostics
++        )
++      }
++    }
++  )
++  it('refuses an explicit legacy exception request even on a neutral fixture', () => {
++    const { root } = fixture()
++    const audit = auditProductBoundary(root, { exceptions: true })
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptionsApplied).toBe(false)
++    expect(audit.diagnostics).toContainEqual({
++      file: 'package.json',
++      reason: 'UNAPPROVED_EXCEPTION_REQUEST'
++    })
++  })
++  it('never weakens a known FAIL when legacy exceptions are requested', () => {
++    const { root, write } = fixture()
++    write(
++      'packages/core/src/index.ts',
++      "export * from '../../../products/shift-assistant/src/index.ts'\n"
++    )
++    const audit = auditProductBoundary(root, { exceptions: true })
++    expect(audit.status).toBe('FAIL')
++    expect(
++      audit.diagnostics.some((d) => d.reason === 'UNAPPROVED_EXCEPTION_REQUEST')
++    ).toBe(true)
++    expect(audit.exceptions).toEqual([])
++  })
++})
+diff --git a/tests/product-boundary.test.js b/tests/product-boundary.test.js
+index 821a34e6..435f5130 100644
+--- a/tests/product-boundary.test.js
++++ b/tests/product-boundary.test.js
+@@ -62,7 +62,7 @@ afterEach(() => {
+ })
+ 
+ describe('harness product boundary', () => {
+-  it('pins session JSON reflection and invalidates sites on any validator mutation', () => {
++  it('keeps session JSON reflection unverified before and after validator mutation', () => {
+     const { root, write } = fixture()
+     const file = 'packages/harness/src/session/events.ts'
+     const source = fs.readFileSync(file, 'utf8')
+@@ -75,11 +75,11 @@ describe('harness product boundary', () => {
+       )
+     // This focused fixture does not resolve runtime imports; only the exact
+     // reflection sites are under test. The real-tree gate verifies closure.
+-    expect(dynamic()).toEqual([])
++    expect(dynamic()).toHaveLength(10)
+     write(file, `${source}\n// unreviewed mutation\n`)
+     expect(dynamic()).toHaveLength(10)
+   })
+-  it('pins the reviewed PDSH host probe and still rejects product edges', () => {
++  it('keeps the PDSH host probe unverified and still rejects product edges', () => {
+     const { root, write } = fixture()
+     write(
+       'packages/contracts/package.json',
+@@ -102,7 +102,7 @@ describe('harness product boundary', () => {
+       auditProductBoundary(root).diagnostics.filter((d) =>
+         d.file.startsWith('packages/sandbox/')
+       )
+-    ).toEqual([])
++    ).toHaveLength(1)
+     write(
+       'packages/sandbox/src/capabilities.ts',
+       `${probe}\n// unreviewed mutation\n`
+@@ -123,7 +123,7 @@ describe('harness product boundary', () => {
+     ).toBe(true)
+   })
+ 
+-  it('binds PDSH catalog process sites to both test and generator bytes', () => {
++  it('does not exempt catalog process sites based on test and generator pins', () => {
+     const { root, write } = fixture()
+     write(
+       'packages/vitest/package.json',
+@@ -150,7 +150,7 @@ describe('harness product boundary', () => {
+       auditProductBoundary(root).diagnostics.filter((d) =>
+         d.file.includes('pdsh-014-tool-catalog')
+       )
+-    expect(diagnostics()).toEqual([])
++    expect(diagnostics()).toHaveLength(4)
+     write(
+       'scripts/gen-tool-catalog.mjs',
+       `${generator}\n// generator mutation\n`
+@@ -1123,12 +1123,11 @@ describe('HISO-005 B1 installed frontier', () => {
+   const vendorLock = (entry = {}) =>
+     lockfile({ 'node_modules/vendor': { version: '1.0.0', ...entry } })
+ 
+-  it('treats a lock-verified installed package as a terminal node (not parsed)', () => {
++  it('refuses metadata-only terminal trust for an installed package (not parsed)', () => {
+     const { root, write } = fixture()
+     write('package-lock.json', vendorLock())
+-    // Would be an UNVERIFIED_DYNAMIC_CODE_EXECUTION if third-party code were
+-    // parsed. Registry artifacts recorded in the lockfile are trusted not to
+-    // build product paths; the tripwire below covers literal references.
++    // SPEC0228: opaque third-party code stays unverified even when its
++    // metadata matches. The literal-reference scan remains an extra control.
+     installed(
+       write,
+       'vendor',
+@@ -1139,10 +1138,11 @@ describe('HISO-005 B1 installed frontier', () => {
+     )
+     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
+     const audit = auditProductBoundary(root)
+-    expect(audit.status).toBe('PASS')
++    expect(audit.status).toBe('INCOMPLETE')
+     expect(audit.installedPackageCount).toBe(1)
+     expect(audit.installedLockDrift).toEqual([])
+-    expect(cli(root).status).toBe(0)
++    expect(audit.diagnostics[0].detail).toBe('UNVERIFIED_INSTALLED_CONTENT')
++    expect(cli(root).status).toBe(1)
+   })
+ 
+   it('refuses an installed package absent from the lockfile', () => {
+@@ -1195,13 +1195,14 @@ describe('HISO-005 B1 installed frontier', () => {
+     expect(audit.diagnostics[0].detail).toBe('NOT_IN_LOCKFILE')
+   })
+ 
+-  it('reports installed version drift without treating it as a boundary path', () => {
++  it('refuses installed version drift without treating it as a product edge', () => {
+     const { root, write } = fixture()
+     write('package-lock.json', vendorLock({ version: '2.0.0' }))
+     installed(write, 'vendor', {})
+     write('packages/core/src/entry.cjs', "module.exports = require('vendor')\n")
+     const audit = auditProductBoundary(root)
+-    expect(audit.status).toBe('PASS')
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.diagnostics[0].detail).toBe('INSTALLED_VERSION_MISMATCH')
+     expect(audit.installedLockDrift).toEqual([
+       {
+         package: 'node_modules/vendor',
+@@ -1326,25 +1327,18 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+   // shutdown-signal-source pins the real install() implementation that
+   // receives `process`; the fixture carries a byte-identical copy.
+   const lifecycle = 'packages/shared/src/lifecycle.ts'
+-  const pinMessage = `${lifecycle} changed: re-review the shutdown-signal-source pin in scripts/check-product-boundary.mjs`
+   const withPin = (write) => write(lifecycle, fs.readFileSync(lifecycle))
+ 
+-  it('accepts a listed site only with its file, reason, line, expression and pin', () => {
++  it('refuses a listed site even with matching file, reason, line, expression and pin', () => {
+     const { root, write } = fixture()
+     withPin(write)
+     write(entry, listed)
+     const audit = auditProductBoundary(root)
+-    expect(audit.status, pinMessage).toBe('PASS')
+-    expect(audit.exceptions).toEqual([
+-      {
+-        file: `${entry}:2`,
+-        reason: 'UNVERIFIED_MODULE_LOADER_ESCAPE',
+-        expression: '19ed40bf62c399b8',
+-        exception: 'shutdown-signal-source'
+-      }
+-    ])
+-    expect(cli(root)).toEqual({ status: 0, audit })
+-    // Raw analysis: the same site is a blocking diagnostic without the table.
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptionsApplied).toBe(false)
++    expect(audit.exceptions).toEqual([])
++    expect(cli(root)).toEqual({ status: 1, audit })
++    // Normal analysis now retains every diagnostic from the strict path.
+     const strict = auditProductBoundary(root, { exceptions: false })
+     expect(strict.status).toBe('INCOMPLETE')
+     expect(strict.exceptions).toEqual([])
+@@ -1377,7 +1371,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+       'INCOMPLETE',
+       'UNVERIFIED_MODULE_LOADER_ESCAPE'
+     )
+-    expect(audit.exceptions.length).toBeLessThanOrEqual(1)
++    expect(audit.exceptions).toEqual([])
+   })
+ 
+   it('lapses when a pinned file changes', () => {
+@@ -1399,7 +1393,7 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+     )
+   })
+ 
+-  it('binds the complete flagged expression, not only the line where it starts', () => {
++  it('refuses both listed subprocess expressions and changed arguments', () => {
+     const file =
+       'apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts'
+     const source = (target) =>
+@@ -1417,11 +1411,9 @@ describe('HISO-005 B1 restricted capability exceptions', () => {
+     const listedSpawn = fixture()
+     listedSpawn.write(file, source('apps/worker/src/main.ts'))
+     const audit = auditProductBoundary(listedSpawn.root)
+-    expect(audit.status).toBe('PASS')
+-    expect(audit.exceptions.map((item) => item.exception)).toEqual([
+-      'entrypoint-subprocess'
+-    ])
+-    // Same first line, different arguments: the exception no longer applies.
++    expect(audit.status).toBe('INCOMPLETE')
++    expect(audit.exceptions).toEqual([])
++    // Same first line and different arguments both remain unverified.
+     const changed = fixture()
+     changed.write(file, source('products/shift/src/index.ts'))
+     expectRefused(

@@ -1,0 +1,62 @@
+python3 - <<'PY'
+import json,hashlib,pathlib,re,sys,traceback
+P=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r2/review-packet'); O=pathlib.Path.cwd()
+EXPECTED='52c3d3e3a0a550d12b65476e0b66fa23bb69710034c7674ede0dbe8898563bb7'
+out={'packet':str(P),'records':[],'errors':[],'protocolDeviations':['First shell attempted python hashing script; python unavailable (exit 127), no file was read or changed. Retried with python3.']}
+def sha(p):
+ h=hashlib.sha256()
+ with open(p,'rb') as f:
+  for b in iter(lambda:f.read(1048576),b''):h.update(b)
+ return h.hexdigest()
+def walk(v,trail=(),parents=()):
+ if isinstance(v,dict):
+  for k,x in v.items():yield from walk(x,trail+(str(k),),parents+(v,))
+ elif isinstance(v,list):
+  for i,x in enumerate(v):yield from walk(x,trail+(str(i),),parents)
+ else:yield trail,v,parents
+try:
+ members=sorted(str(p.relative_to(P)) for p in P.rglob('*') if p.is_file());out['membership']=members
+ assert len(members)==29,('membership',len(members))
+ mn=[x for x in members if pathlib.Path(x).name.startswith('packet-manifest')];assert len(mn)==1,mn
+ mp=P/mn[0];mh=sha(mp);out['manifest']={'path':str(mp),'expected':EXPECTED,'actual':mh};assert mh==EXPECTED
+ m=json.load(open(mp));out['manifestStructure']={'type':type(m).__name__,'keys':list(m) if isinstance(m,dict) else None}
+ def checks(data,label):
+  records=[]
+  for trail,v,parents in walk(data):
+   if not isinstance(v,str) or 'originBacklogSnapshotOnly' in trail:continue
+   if re.fullmatch('[0-9a-fA-F]{64}',v):continue
+   p=pathlib.Path(v)
+   if not p.is_absolute():p=P/p
+   if not p.is_file():continue
+   expected=[]
+   for d in reversed(parents):
+    expected=[x.lower() for x in d.values() if isinstance(x,str) and re.fullmatch('[0-9a-fA-F]{64}',x)]
+    if expected:break
+   actual=sha(p)
+   rec={'group':label,'field':'.'.join(trail),'path':str(p),'expected':expected,'actual':actual,'match':actual in expected if expected else False}
+   records.append(rec)
+  out['records']+=records
+  return records
+ mr=checks(m,'packet-manifest');assert len(mr)==28,('manifest_entries',len(mr));assert all(r['match'] for r in mr),('manifest_mismatch',[r for r in mr if not r['match']]);assert sorted(str(pathlib.Path(r['path']).relative_to(P)) for r in mr)==[x for x in members if x!=mn[0]]
+ sm=[x for x in members if 'source-manifest' in x];ex=[x for x in members if 'external-inputs' in x];assert len(sm)==len(ex)==1,(sm,ex)
+ sd=json.load(open(P/sm[0]));sr=checks(sd,'source-manifest');out['sourceStructure']={'type':type(sd).__name__,'keys':list(sd) if isinstance(sd,dict) else None}
+ assert all(r['match'] for r in sr),('source_mismatch',[r for r in sr if not r['match']]);assert len(sr)>=22,('primary_count',len(sr))
+ ed=json.load(open(P/ex[0]));er=checks(ed,'external-inputs');assert len(er)==55,('external_count',len(er));assert all(r['match'] for r in er),('external_mismatch',[r for r in er if not r['match']])
+ constraints=[]
+ for n in members:
+  if n.endswith('.json') and n not in (mn[0],sm[0],ex[0]):
+   d=json.load(open(P/n))
+   for trail,v,parents in walk(d):
+    if trail and trail[-1] in ('sourceSpecs','frozenD12Origin'):
+     cr=checks(v,'constraints:'+n+':'+'.'.join(trail));constraints+=cr
+ out['constraintCount']=len(constraints)
+ assert len(constraints)==5,('constraint_count',len(constraints));assert all(r['match'] for r in constraints),('constraint_mismatch',[r for r in constraints if not r['match']])
+ out['counts']={'packetEntries':len(mr),'packetIncludingManifest':len(members),'primaryPathRecords':len(sr),'externalPaths':len(er),'constraintPaths':len(constraints)};out['passed']=True
+except Exception as e:
+ out['passed']=False;out['errors'].append(repr(e));traceback.print_exc()
+finally:
+ (O/'pre-fingerprint.json').write_text(json.dumps(out,indent=2)+'\n')
+ print(json.dumps({'passed':out.get('passed'),'counts':out.get('counts'),'errors':out['errors'],'membership':out.get('membership'),'manifestStructure':out.get('manifestStructure'),'sourceStructure':out.get('sourceStructure'),'records':len(out['records'])}))
+if not out.get('passed'):sys.exit(1)
+PY
+

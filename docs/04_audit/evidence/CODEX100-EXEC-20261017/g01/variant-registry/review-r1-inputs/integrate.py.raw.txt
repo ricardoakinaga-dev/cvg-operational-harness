@@ -1,0 +1,224 @@
+"""Additive source registry join. No target imports or functional execution."""
+from pathlib import Path
+import collections
+import copy
+import hashlib
+import json
+import subprocess
+import sys
+
+OUT=Path(__file__).resolve().parent
+E=OUT.parents[1]
+ROOT=next(p for p in OUT.parents if (p/'docs/07_agents/AGENTS.md').exists())
+CONTRACT_SHA='4722152a3f4c8be37fb8edc0e3409cd298b58bd5f5eb7f5937b0ea66986ecab2'
+
+
+def require(ok,message):
+    if not ok:raise AssertionError(message)
+
+
+def read(p):return json.loads(p.read_text())
+def sha(b):return hashlib.sha256(b).hexdigest()
+def canon(v):return json.dumps(v,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+def encoded(v):return (json.dumps(v,ensure_ascii=False,indent=2)+'\n').encode()
+
+
+def dereference(value,pointer):
+    require(pointer=='' or pointer.startswith('/'),'Invalid pointer')
+    for token in pointer.split('/')[1:]:
+        token=token.replace('~1','/').replace('~0','~')
+        value=value[int(token)] if isinstance(value,list) else value[token]
+    return value
+
+
+def strict_lane(lane):
+    directory=OUT/lane;manifest=read(directory/'manifest.json');rows=manifest['files']
+    actual={str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file() and p!=directory/'manifest.json'}
+    require(len(rows)==len({r['path'] for r in rows}) and actual=={r['path'] for r in rows},'Strict lane file set '+lane)
+    require(not any(p.is_symlink() for p in directory.rglob('*')),'Lane symlink')
+    require(all(sha((directory/r['path']).read_bytes())==r['sha256'] and (directory/r['path']).stat().st_size==r['bytes'] for r in rows),'Strict lane bytes '+lane)
+    return {'lane':lane,'manifest_sha256':sha((directory/'manifest.json').read_bytes()),'files':len(rows)}
+
+
+def build():
+    require(sha((OUT/'contract.json').read_bytes())==CONTRACT_SHA,'Parent contract changed')
+    contract=read(OUT/'contract.json');checkpoint_path=E/contract['previous_program_checkpoint']['path']
+    require(sha(checkpoint_path.read_bytes())==contract['previous_program_checkpoint']['sha256'],'Checkpoint changed')
+    checkpoint=read(checkpoint_path);protected={r['path']:r for r in checkpoint['files']}
+    require(len(protected)==checkpoint['file_count']==474,'Previous program checkpoint census')
+    require(sha((ROOT/contract['catalog']['path']).read_bytes())==contract['catalog']['sha256'],'Catalog changed')
+    catalog=read(ROOT/contract['catalog']['path']);reqs={r['id']:r for r in catalog['requirements']}
+    require(len(reqs)==509 and all(r['status']==r['cvg_validation']=='NOT_RUN' and r['receipt'] is None for r in reqs.values()),'Catalog omission or qualification')
+    manifests=[strict_lane(lane) for lane in ['capabilities','projections']]
+    caps=read(OUT/'capabilities/inventory.json');projection=read(OUT/'projections/registry.json')
+    require(caps['contract_sha256']==projection['parent_contract_sha256']==CONTRACT_SHA,'Lane contract binding')
+    require(projection['projections_contract_sha256']==sha((OUT/'projections-contract.json').read_bytes()),'Worker contract changed')
+    require(caps['pin']==projection['pin']==contract['pin'] and not caps['full_g01_closure'] and not projection['full_g01_closure'],'False pin or closure')
+    require(len(caps['requirements'])==179 and len(projection['records'])==projection['record_count']==19947,'Lane record counts')
+    inputs=read(OUT/'projections/input-manifest.json');input_cache={};raw_cache={};raw_hashes={}
+    for r in inputs['files']:
+        raw=(ROOT/r['path']).read_bytes()
+        require(sha(raw)==r['sha256']==protected[r['path']]['sha256'] and len(raw)==r['bytes'],'Accepted input changed')
+        raw_cache[r['path']]=raw;raw_hashes[r['path']]=r['sha256']
+        if r['media_type']=='application/json':input_cache[r['path']]=json.loads(raw)
+    require(len(raw_cache)==inputs['file_count']==386,'Accepted packet file census')
+    preserved=[]
+    for p in contract['source_packages']:
+        mf=E/p['manifest'];require(sha(mf.read_bytes())==p['sha256']==protected[str(mf.relative_to(ROOT))]['sha256'],'Previous package manifest changed')
+        rows=read(mf)['files'];paths=[]
+        for r in rows:
+            path=ROOT/r['path'] if r['path'].startswith('docs/') else mf.parent/r['path']
+            require(str(path.relative_to(ROOT)) in raw_cache,'Previous package file omitted')
+            paths.append(path)
+        require(set(paths)=={p for p in mf.parent.rglob('*') if p.is_file() and p!=mf},'Previous package exact set changed')
+        preserved.append({'package':p['package'],'files':len(rows),'manifest_sha256':p['sha256']})
+    index={};ids=set();direct=collections.defaultdict(set);candidates=collections.defaultdict(set);source_owner_relations=[]
+    for fragment in projection['records']:
+        key=(fragment['inputpath'],fragment['json_pointer'])
+        require(key not in index and fragment['id'] not in ids,'Duplicate source fragment identity')
+        require(fragment['inputpath'] in raw_cache,'Unlisted fragment input')
+        require(fragment['input_file_sha256']==raw_hashes[fragment['inputpath']],'Fragment input hash')
+        obj=raw_cache[key[0]] if key[1] is None else dereference(input_cache[key[0]],key[1])
+        require(fragment['source_object_sha256']==sha(obj if isinstance(obj,bytes) else canon(obj)),'Source JSONpointer digest differs')
+        require(fragment['future_qualification']=='NOT_RUN' and fragment['receipt'] is None,'False fragment qualification')
+        index[key]=fragment;ids.add(fragment['id'])
+        for field,table in [('requirement_bindings',direct),('candidate_bindings',candidates)]:
+            for b in fragment[field]:
+                require(b['requirement_id'] in reqs,'Unknown normative requirement binding')
+                canonical_owner=reqs[b['requirement_id']]['owner']
+                if b['owner']!=canonical_owner:
+                    source_owner_relations.append({'fragment_id':fragment['id'],'requirement':b['requirement_id'],
+                        'canonical_requirement_owner':canonical_owner,'source_role_owner':b['owner'],
+                        'binding_role':b['role'],'provenance_pointer':b['provenance_pointer'],
+                        'disposition':'SOURCE_OWNER_NOT_SPECIFIED' if b['owner'] is None else 'DIFFERENT_SOURCE_ROLE_OWNER_NOT_NORMATIVE_TRANSFER',
+                        'semantic_acceptance':'OPEN; canonical requirement owner remains unchanged'})
+                table[b['requirement_id']].add(fragment['id'])
+    extensions=[];cap_bindings={}
+    for row in caps['requirements']:
+        rid=row['id'];require(rid in reqs and row['owner']==reqs[rid]['owner'],'Capability owner changed')
+        require(row['historical_requirement_sha256']==sha(canon(reqs[rid])),'Historical capability object changed')
+        links=[]
+        for link in row['source_fragment_candidates']:
+            path=str((E/link['input']).relative_to(ROOT));key=(path,link['json_pointer'])
+            require(path in input_cache,'Capability input not whitelisted')
+            value=dereference(input_cache[path],link['json_pointer'])
+            require(sha(canon(value))==link['object_sha256'],'Capability source pointer changed')
+            if key not in index:
+                require(link['input']=='g01/component-surfaces/non-rust/inventory.json' and link['json_pointer'].startswith('/packaging/'),'Unreviewed missing projection selector')
+                fragment={'id':'src:'+sha((path+'\0'+key[1]).encode()),'inputpath':path,'json_pointer':key[1],
+                    'source_object_sha256':sha(canon(value)),'fragment_kind':'metadata',
+                    'semantic_class':'PACKAGING_SOURCE_SUPPORT_NOT_PUBLIC_FUNCTION',
+                    'future_qualification':'NOT_RUN','receipt':None}
+                index[key]=fragment;extensions.append(fragment)
+            fragment=index[key]
+            require(fragment['source_object_sha256']==link['object_sha256'],'Crosslane digest differs')
+            links.append({'fragment_id':fragment['id'],'relation':link['relation'],'qualification':'NOT_RUN'})
+        cap_bindings[rid]={'requirement':rid,'owner':row['owner'],'fragment_candidates':links,
+            'seed_function_candidate_count':len(row['seed_function_candidates']),
+            'future_oracle_ids':[o['id'] for o in row['future_oracle_obligations']],
+            'source_closure':row['source_closure']}
+    require(len(extensions)==4,'Four packaging child projections required')
+    requirement_rows=[]
+    for r in reqs.values():
+        functional=r['kind']=='FUNCTIONAL_PARITY';rid=r['id'];cap=cap_bindings.get(rid)
+        any_bindings=bool(direct[rid] or candidates[rid] or (cap and cap['fragment_candidates']))
+        require(not functional or any_bindings,'Unlinked functional requirement '+rid)
+        requirement_rows.append({'id':rid,'family':r['family'],'owner':r['owner'],'kind':r['kind'],
+            'historical_record_sha256':sha(canon(r)),
+            'explicit_source_fragment_ids':sorted(direct[rid]),'candidate_source_fragment_ids':sorted(candidates[rid]),
+            'historical_capability_supplement':cap,
+            'source_registry_role':'FUNCTIONAL_REQUIREMENT_WITH_SOURCE_RELATIONS_NOT_QUALIFIED' if functional else 'CVG_CONTROL_NOT_CODEX_FUNCTION',
+            'source_variant_acceptance':'OPEN; pointer resolution and schema/support census are not semantic completeness' if functional else 'CVG_SPEC_AND_POSITIVE_NEGATIVE_RECOVERY_ORACLE_REQUIRED',
+            'historical_reference_validation':r['reference_validation'],'status':'NOT_RUN','cvg_validation':'NOT_RUN','receipt':None})
+    family_rows=[]
+    for f in catalog['families']:
+        members=[r for r in requirement_rows if r['family']==f['id']]
+        family_rows.append({'id':f['id'],'name':f['name'],'default_owner':f['owner'],
+            'requirement_ids':[r['id'] for r in members],
+            'explicit_fragment_relations':sum(len(r['explicit_source_fragment_ids']) for r in members),
+            'candidate_fragment_relations':sum(len(r['candidate_source_fragment_ids']) for r in members),
+            'historical_generic_requirements':[r['id'] for r in members if r['historical_capability_supplement']],
+            'source_variant_acceptance':'OPEN_REQUIREMENT_SPECIFIC_REVIEW_AND_REFERENCE_ORACLES',
+            'functional_receipts':0})
+    sdk=read(E/'g01/component-surfaces/integration.json')['mandatory_open_variants']
+    external=read(E/'g01/exec-transitive/integration.json')['external_runtime_and_dependency_limits']
+    event_owners=read(E/'g01/tui-interactions/integration.json')['events']
+    require(len(sdk)==6 and len(external)==5 and len(event_owners)==291,'Inherited gaps dropped')
+    require(all(r['effect_owner_disposition'].startswith('OPEN') for r in event_owners),'Event owner silently closed')
+    gaps=[{'id':g['id'],'kind':'LANGUAGE_OR_DISTRIBUTION_SOURCE_AND_EXECUTION_GAP','owner':g['owner'],
+            'required_source_obligation':g,'status':'OPEN','qualification':'NOT_RUN'} for g in sdk]
+    gaps += [{'id':g['id'],'kind':'EXTERNAL_GRAMMAR_DEPENDENCY_OR_RUNTIME_ORACLE','owner':'DX100-R02',
+              'required_source_obligation':g,'status':'OPEN','qualification':'NOT_RUN'} for g in external]
+    gaps += [{'id':'TUI-INTERNAL-EFFECT-CORRELATION','kind':'INTERNAL_SOURCE_CONTEXT_WITH_OPEN_PUBLIC_EFFECT_CORRELATION','owner':'DX100-U01',
+              'source_event_count':291,'source':'g01/tui-interactions/integration.json#/events',
+              'status':'OPEN','qualification':'NOT_RUN',
+              'scope':'Preserve291open source relationships. Do not require literal replication of private Rust event types; prove the exposed commands/interactions and their domain effects under canonical requirement owners.'},
+             {'id':'GENERIC179-SEMANTIC-ACCEPTANCE','kind':'REQUIREMENT_SPECIFIC_SOURCE_VARIANT_REVIEW_AND_FUNCTIONAL_ORACLE','owners':sorted({r['owner'] for r in caps['requirements']}),
+              'requirements':[r['id'] for r in caps['requirements']],'status':'OPEN','qualification':'NOT_RUN',
+              'scope':'1829candidate links/976proposed dimensions supplement placeholders; selectors resolving does not freeze semantic completeness or expected runtime results.'},
+             {'id':'UNASSIGNED_SOURCE_CONTEXT','kind':'TYPED_SOURCE_CONTEXT_DISPOSITION_NOT_MISSING_FUNCTION_COUNT','owner':'DX100-G01',
+              'unassigned_fragment_counts':dict(collections.Counter(r['fragment_kind'] for r in projection['records'] if r['assignment']=='OPEN_UNASSIGNED')),
+              'status':'OPEN_CONTEXT; not automatically new public capability',
+              'scope':'Keep raw/type/support/metadata and unassigned callable candidates. Review public contract holes separately; never sum19947source fragments asfunctions.'}]
+    first=read(OUT/'first-native-journey.json')
+    for source in first['sources']:
+        raw=(ROOT/source['path']).read_bytes();require(sha(raw)==source['sha256'] and len(raw)==source['bytes'],'Current native journey source observation changed')
+    for o in first['observations']:
+        s=o['source'];raw=(ROOT/s['path']).read_bytes()[s['start_byte']:s['end_byte_exclusive']]
+        require(raw.decode()==s['text'] and sha(raw)==s['sha256'],'Native journey source span changed')
+    require(first['functional_receipts']==0 and first['build_status']=='NOT_STARTED_T1_PROPOSAL' and all(v['status']=='NOT_RUN' for v in first['proof_variants']),'False first journey qualification')
+    require(len(family_rows)==22 and len(requirement_rows)==509,'Program scope shrink')
+    return {'kind':'T1_UNIFIED_SOURCE_REGISTRY_NOT_G01_OR_FUNCTIONAL_CLOSURE','pin':contract['pin'],
+        'contract_sha256':CONTRACT_SHA,'catalog_sha256':contract['catalog']['sha256'],
+        'lane_manifests':manifests,'source_packages_preserved':preserved,
+        'requirements':requirement_rows,'families':family_rows,'additional_source_fragments':extensions,
+        'source_role_owner_relations':source_owner_relations,
+        'source_projection_registry':{'path':'projections/registry.json','sha256':sha((OUT/'projections/registry.json').read_bytes()),
+            'records':projection['record_count'],'fragment_counts':projection['fragment_counts'],
+            'coverage':projection['coverage'],'mandatory_open':projection['mandatory_open'],
+            'interpretation':'Typed source fragments/metadata/support/futureoracles; no total functional count or parity numerator'},
+        'remaining_gaps':gaps,
+        'first_native_journey':{'path':'first-native-journey.json','sha256':sha((OUT/'first-native-journey.json').read_bytes()),
+            'proposed_proof_variants':len(first['proof_variants']),'build_status':'NOT_STARTED_T1_PROPOSAL'},
+        'mandatory_gates':['G01 public-source/variant closure','G02 authenticated executable and controlled reference oracles','G03 current source/ownership/proof reuse acceptance','G04 concrete SPEC with applicable explicit review before BUILD'],
+        'counts':{'families':22,'functional_requirements':487,'CVG_controls':22,'all_records_NOT_RUN':509,
+            'historical_generic_supplements':179,'capability_source_candidate_relations':caps['counts']['source_fragment_candidates'],
+            'seed_function_candidate_occurrences':caps['counts']['seed_function_candidate_occurrences'],
+            'proposed_future_oracle_dimensions':caps['counts']['proposed_future_oracle_dimensions'],
+            'normalized_source_fragments':projection['record_count'],'additional_packaging_support_fragments':len(extensions),
+            'source_owner_not_specified_relations':sum(r['source_role_owner'] is None for r in source_owner_relations),
+            'different_source_role_owner_relations':sum(r['source_role_owner'] is not None for r in source_owner_relations),
+            'functional_requirements_with_any_source_relation':sum(r['kind']=='FUNCTIONAL_PARITY' and bool(r['explicit_source_fragment_ids'] or r['candidate_source_fragment_ids'] or r['historical_capability_supplement']) for r in requirement_rows),
+            'previous_package_files_preserved':sum(p['files'] for p in preserved),'previous_package_manifests_preserved':len(preserved)},
+        'limits':['A source relation, field, schema profile, support census or proposed oracle is not a delivered function, semantic ownership acceptance or executable expected result.',
+            'All179sourceacceptances remainOPEN. Preserve6SDKgaps/5external limits/291event effect-correlations and source/binary/runtime/macros/cfg/targets/platform/provider/effect gaps.',
+            'Private Rust implementation details are evidence context, not automatic public ABI replication requirements. Exposed functionality stays mandatory.',
+            'Firstjourney current source observations do not execute SDK/tests/reference and do not transfer approval from Claude/PAR/HISO.'],
+        'functional_receipts':0,'full_g01_closure':False,'full_codex_parity_claim':False}
+
+
+def main():
+    fresh=build();require(fresh==build(),'Nondeterministic registry join')
+    negatives=[]
+    for name,mutation in [
+      ('drop_functional_requirement',lambda x:x['requirements'].pop()),
+      ('drop_family',lambda x:x['families'].pop()),
+      ('wrong_owner',lambda x:x['requirements'][0].update(owner='DX100-Z02')),
+      ('erase_SDK_gap',lambda x:x['remaining_gaps'].pop(0)),
+      ('erase_event_owner_limit',lambda x:x.update(remaining_gaps=[r for r in x['remaining_gaps'] if r['id']!='TUI-INTERNAL-EFFECT-CORRELATION'])),
+      ('drop_packaging_pointer',lambda x:x['additional_source_fragments'].pop()),
+      ('promote_support_count_to_functions',lambda x:x['counts'].update(functional_requirements=19947)),
+      ('close_generic_source_acceptance',lambda x:next(r for r in x['requirements'] if r['historical_capability_supplement']).update(source_variant_acceptance='CLOSED')),
+      ('approve_firstjourney',lambda x:x['first_native_journey'].update(build_status='APPROVED')),
+      ('fake_parity_receipt',lambda x:x.update(functional_receipts=1,full_g01_closure=True)),
+    ]:
+        bad=copy.deepcopy(fresh);mutation(bad);require(bad!=fresh,'Ineffective negative '+name)
+        negatives.append({'id':name,'result':'REJECTED_BY_EXACT_REGENERATION'})
+    report={'result':'PASS','kind':'T1_SOURCE_REGISTRY_JOIN_ONLY','counts':fresh['counts'],'negative_controls':negatives,'functional_receipts':0,'full_g01_closure':False}
+    for name,value in [('integration.json',fresh),('verification.json',report)]:
+        if '--check' in sys.argv:require((OUT/name).read_bytes()==encoded(value),'Join regeneration differs '+name)
+        else:(OUT/name).write_bytes(encoded(value))
+    print(json.dumps(report))
+
+
+if __name__=='__main__':main()

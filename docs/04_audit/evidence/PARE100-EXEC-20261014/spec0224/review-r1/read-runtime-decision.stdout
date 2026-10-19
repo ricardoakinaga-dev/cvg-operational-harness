@@ -1,0 +1,300 @@
+      // Deterministic rule: a pending question must not be answered by a new
+      // model decision. Re-pause without spending a model call.
+      return this.pause(run, Math.max(1, run.state.stepNumber), {
+        kind: 'pause',
+        pausedKind: 'NEEDS_USER_INPUT',
+        decision: null
+      })
+    }
+    while (true) {
+      // I8: cancellation is honored before every step.
+      if (this.#turns.get(run)?.signal.aborted) {
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      }
+      // I12: pause (and any other step control) is checked before each step.
+      const beforeStep = await runGate(
+        this.kernelFor(run),
+        'turn/before-step',
+        this.turnFor(run)
+      )
+      if (beforeStep.kind === 'stop') {
+        // An operator pause is not terminal: the durable checkpoint, with any
+        // pending approval or question, stays resumable (AUD-0597 F03).
+        return {
+          ...this.stop(beforeStep.stopReason, beforeStep.response),
+          /* v8 ignore next -- the pause control is the only before-step control */
+          ...(beforeStep.cause === 'operator_paused'
+            ? { preserveCheckpoint: true }
+            : {})
+        }
+      }
+      const budgetStop = this.checkBudget(run)
+      if (budgetStop) return this.stop(budgetStop.reason, budgetStop.response)
+
+      let decision: LoopDecision
+      let stepNumber: number
+
+      if (run.state.pendingDecision && run.state.pendingStepNumber) {
+        decision = run.state.pendingDecision
+        stepNumber = run.state.pendingStepNumber
+        run.lastDecision = decision
+      } else {
+        stepNumber = run.stepNumber + 1
+        if (stepNumber > run.input.budget.maxSteps) {
+          return this.stop('MAX_STEPS', 'Step budget exhausted.')
+        }
+        const decisionResult = await this.decide(run, stepNumber)
+        if (decisionResult.outcome) return decisionResult.outcome
+        decision = sanitizeLoopDecision(decisionResult.decision)
+        run.lastDecision = decision
+      }
+
+      const validation = this.validateDecision(run, decision)
+      if (!validation.valid) {
+        run.usage.decisionRepairs += 1
+        run.lastDecisionErrors = validation.errors
+        const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+        if (
+          run.usage.decisionRepairs <= repairBudget &&
+          !run.state.pendingDecision
+        ) {
+          continue
+        }
+        const capabilityOnly = validation.errors.every((error) =>
+          error.startsWith('capability:')
+        )
+        return this.stop(
+          capabilityOnly ? 'STATE_CONFLICT' : 'MODEL_FAILURE',
+          `Orchestrator decision was rejected: ${validation.errors.join('; ')}`
+        )
+      }
+      run.lastDecisionErrors = []
+
+      const signature = decisionSignature(decision)
+      if (decision.decisionType !== 'STOP') {
+        const repeats = run.state.loopSignatures.filter(
+          (candidate) => candidate === signature
+        ).length
+        const threshold = this.effectiveRepeatThreshold(run, decision)
+        const cycle = detectDecisionCycle(run.state.loopSignatures, signature)
+        if (repeats >= threshold || cycle) {
+          await this.recordStep(run, {
+            stepNumber,
+            stepType: 'POLICY',
+            status: 'FAILED',
+            sideEffecting: false,
+            errorCode: 'loop_detected',
+            reasonCode: 'LOOP_SUSPECTED'
+          })
+          return this.stop(
+            'LOOP_DETECTED',
+            cycle
+              ? 'A repeated decision cycle was detected; the loop stopped without executing another effect.'
+              : 'Repeated identical decisions were detected; the loop stopped without executing another effect.'
+          )
+        }
+      }
+
+      await this.safeAudit(run, 'orchestrator.decided', {
+        result: `${decision.decisionType}:${decision.reasonCode}`,
+        tool: decision.toolId ?? null
+      })
+
+      const dispatch = await this.dispatch(run, decision, stepNumber)
+      if (dispatch.kind === 'pause') {
+        return await this.pause(run, stepNumber, dispatch)
+      }
+      if (dispatch.kind === 'stop') {
+        run.stepNumber = stepNumber
+        return dispatch
+      }
+
+      const signatures = [...run.state.loopSignatures, signature].slice(
+        -this.maxSignatures
+      )
+      run.stepNumber = stepNumber
+      run.state = {
+        ...run.state,
+        stepNumber,
+        loopSignatures: signatures,
+        pendingDecision: undefined,
+        pendingStepNumber: undefined,
+        selectedCapability:
+          decision.toolId ??
+          decision.selectedCapability ??
+          run.state.selectedCapability
+      }
+      await this.persistCheckpoint(run)
+
+      if (run.skipEvaluationOnce) {
+        run.skipEvaluationOnce = false
+        continue
+      }
+      const evaluationOutcome = await this.evaluate(run, decision)
+      if (evaluationOutcome) return evaluationOutcome
+    }
+  }
+
+  private checkBudget(
+    run: LoopRun
+  ): { reason: StopReason; response: string } | null {
+    if (this.effectiveDuration(run) > run.input.budget.maxDurationMs) {
+      return { reason: 'MAX_DURATION', response: 'Duration budget exhausted.' }
+    }
+    // An in-flight step persisted before a pause/crash is allowed to settle
+    // even when it consumed the last step slot.
+    if (
+      run.stepNumber >= run.input.budget.maxSteps &&
+      !run.state.pendingDecision
+    ) {
+      return { reason: 'MAX_STEPS', response: 'Step budget exhausted.' }
+    }
+    return null
+  }
+
+  private stop(
+    stopReason: StopReason,
+    response: string
+  ): Extract<DispatchOutcome, { kind: 'stop' }> {
+    return { kind: 'stop', stopReason, response }
+  }
+
+  private async decide(
+    run: LoopRun,
+    stepNumber: number
+  ): Promise<{
+    outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
+    decision?: LoopDecision
+  }> {
+    const remaining = this.remainingDuration(run)
+    if (remaining <= 0) {
+      return {
+        outcome: this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted before the next decision.'
+        )
+      }
+    }
+
+    const stateForContext: MutableState = {
+      ...run.state,
+      observations: run.observations
+    }
+    const context = await this.contextEngine.build({
+      runtime: {
+        executionId: run.executionId,
+        tenantId: run.input.tenantId,
+        conversationId: run.input.conversationId,
+        correlationId: run.input.correlationId,
+        traceId: run.input.traceId,
+        userMessage: run.input.userMessage,
+        context: run.input.context,
+        objective: run.input.agent.objective,
+        instructions: run.input.agent.instructions,
+        agentId: run.input.agent.id,
+        agentVersion: run.input.agent.version
+      },
+      profile: 'iterative',
+      stepNumber,
+      goal: run.state.goal,
+      state: stateForContext,
+      capabilities: this.availableTools(run),
+      knowledgeAvailable: Boolean(this.options.knowledge),
+      completionStrategy: run.input.agent.completionStrategy ?? 'DETERMINISTIC',
+      allowedDecisionTypes: this.allowedDecisionTypes(run),
+      budget: run.input.budget,
+      budgetUsage: run.usage,
+      ...(run.usage.decisionRepairs > 0
+        ? {
+            decisionRepair: {
+              attempt: run.usage.decisionRepairs,
+              errors: run.lastDecisionErrors
+            }
+          }
+        : {})
+    })
+    const decisionAbortController = new AbortController()
+    const decisionOrDeadline = await this.withDeadline(
+      this.options.orchestrator.decide({
+        context,
+        signal: decisionAbortController.signal
+      }),
+      remaining
+    )
+    if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+      decisionAbortController.abort()
+      return {
+        outcome: this.stop(
+          'MAX_DURATION',
+          'Duration budget exhausted while deciding the next step.'
+        )
+      }
+    }
+    const turn = decisionOrDeadline
+    const usage = turn.usage ?? EMPTY_MODEL_USAGE
+    this.accountUsage(run, usage)
+    const usageStop = this.checkAfterUsage(run)
+    if (usageStop) {
+      return { outcome: this.stop(usageStop.reason, usageStop.response) }
+    }
+    return { decision: turn.decision }
+  }
+
+  /**
+   * A non-idempotent tool must never be invoked twice for the same decision;
+   * the safe threshold is one repeat (stop before the second effect).
+   */
+  private effectiveRepeatThreshold(
+    run: LoopRun,
+    decision: LoopDecision
+  ): number {
+    if (
+      decision.decisionType === 'CALL_TOOL' ||
+      decision.decisionType === 'REQUEST_APPROVAL'
+    ) {
+      const tool = this.options.tools.resolve(
+        decision.toolId as string,
+        decision.toolVersion
+      )
+      if (tool && tool.idempotent === false && tool.sideEffect !== 'NONE') {
+        return 1
+      }
+    }
+    return this.repeatThreshold
+  }
+
+  private validateDecision(
+    run: LoopRun,
+    decision: LoopDecision
+  ): DecisionValidationResult {
+    return validateDecision(this.dispatchContext, run, decision)
+  }
+
+  private allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][] {
+    const allowed: LoopDecision['decisionType'][] = ['RESPOND', 'ASK_USER']
+    if (this.availableTools(run).length > 0) {
+      allowed.push('CALL_TOOL', 'REQUEST_APPROVAL')
+    }
+    if (this.options.knowledge && this.remaining(run, 'knowledge') > 0) {
+      allowed.push('SEARCH_KNOWLEDGE')
+    }
+    if (this.remaining(run, 'verification') > 0) {
+      allowed.push('VERIFY')
+    }
+    if (this.remaining(run, 'replan') > 0) {
+      allowed.push('REPLAN')
+    }
+    allowed.push('HANDOFF', 'STOP')
+    return allowed
+  }
+
+  private remaining(
+    run: LoopRun,
+    kind: 'knowledge' | 'verification' | 'replan'
+  ): number {
+    const budget = run.input.budget
+    if (kind === 'knowledge') {
+      return Math.max(
+        0,
+        (budget.maxKnowledgeCalls ?? budget.maxSteps) - run.usage.knowledgeCalls
+      )

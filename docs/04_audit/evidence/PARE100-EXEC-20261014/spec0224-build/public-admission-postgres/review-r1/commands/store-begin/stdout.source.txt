@@ -1,0 +1,220 @@
+import {
+  guardOptionalPublishedWrite,
+  type ControlledPublishedDatabaseFence
+} from './controlled-published-fencing.ts'
+import type {
+  ExecutionCheckpoint,
+  ExecutionStep,
+  ExecutionStepStore,
+  CheckpointCompareAndSwapInput,
+  CheckpointCompareAndSwapResult
+} from '@cvg/harness-contracts'
+import {
+  isStepTransitionAllowed,
+  type StepStatus
+} from '@cvg/harness-contracts'
+import {
+  CheckpointError,
+  validateCheckpointIntegrity,
+  encodeCompleteCheckpointState,
+  decodeCompleteCheckpointState,
+  validateCompleteCheckpointTransition,
+  COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES,
+  COMPLETE_CHECKPOINT_DATA_MAX_CHARS
+} from '@cvg/harness'
+import type { TenantId } from '@cvg/platform'
+import { TenantIdSchema } from '@cvg/platform'
+import type { QueryResultRow } from 'pg'
+import type { PostgresQueryable } from './postgres.ts'
+import {
+  withTenantContext,
+  type PostgresPoolClient,
+  type PostgresPoolLike
+} from './tenant-scoped-postgres.ts'
+
+export type OperationalStepPostgresConnection =
+  | PostgresQueryable
+  | PostgresPoolLike
+
+export interface PostgresExecutionStepStoreOptions {
+  readonly clock?: () => Date
+  /** Trusted bound composition only; absent keeps unbound behavior. */
+  readonly fence?: ControlledPublishedDatabaseFence
+}
+
+interface StepRow extends QueryResultRow {
+  tenant_id: string
+  execution_id: string
+  step_number: number
+  step_id: string
+  step_type: ExecutionStep['stepType']
+  status: StepStatus
+  attempt: number
+  side_effecting: boolean
+  decision_type: ExecutionStep['decisionType'] | null
+  reason_code: string | null
+  error_code: string | null
+  observation_refs: unknown
+  started_at: Date | string
+  completed_at: Date | string | null
+}
+
+interface CheckpointRow extends QueryResultRow {
+  tenant_id: string
+  execution_id: string
+  checkpoint_id: string
+  checkpoint_version: number
+  runtime_profile: string
+  runtime_version: string
+  orchestrator_version: string
+  step_number: number
+  state: unknown
+  budget_usage: unknown
+  digest: string
+  created_at: Date | string
+}
+
+const stepColumns = `
+  tenant_id, execution_id, step_number, step_id, step_type, status, attempt,
+  side_effecting, decision_type, reason_code, error_code, observation_refs,
+  started_at, completed_at`
+
+const checkpointColumns = `
+  tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+  runtime_version, orchestrator_version, step_number, state, budget_usage,
+  digest, created_at`
+
+// CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+// octet_length uses expanded text size, not compressed pg_column_size.
+const boundedCheckpointColumns = checkpointColumns.replace(
+  'state, budget_usage',
+  `
+  CASE WHEN checkpoint_version <> 2 OR
+    (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
+     AND length(state->>'data') <= ${COMPLETE_CHECKPOINT_DATA_MAX_CHARS})
+    THEN state ELSE NULL END AS state,
+  CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+    THEN budget_usage ELSE NULL END AS budget_usage`
+)
+
+function text(value: unknown, label: string, max = 200): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new CheckpointError('checkpoint_binding', `${label} is required`)
+  }
+  if (value.length > max) {
+    throw new CheckpointError('checkpoint_binding', `${label} is too long`)
+  }
+  return value.trim()
+}
+
+function asIso(value: Date | string | null): string | null {
+  if (value === null) return null
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(value).toISOString()
+}
+
+function jsonValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new CheckpointError(
+      'checkpoint_integrity',
+      'Persisted step JSON is invalid'
+    )
+  }
+}
+
+function jsonText(value: unknown, label: string): string {
+  try {
+    const serialized = JSON.stringify(value)
+    if (serialized === undefined) throw new Error('undefined')
+    return serialized
+  } catch {
+    throw new CheckpointError(
+      'checkpoint_integrity',
+      `${label} cannot be serialized`
+    )
+  }
+}
+
+function mapStep(row: StepRow): ExecutionStep {
+  const refs = jsonValue(row.observation_refs)
+  return {
+    stepId: row.step_id,
+    executionId: row.execution_id,
+    tenantId: row.tenant_id,
+    stepNumber: row.step_number,
+    stepType: row.step_type,
+    status: row.status,
+    attempt: row.attempt,
+    sideEffecting: row.side_effecting,
+    startedAt: asIso(row.started_at) as string,
+    ...(row.completed_at
+      ? { completedAt: asIso(row.completed_at) as string }
+      : {}),
+    ...(row.decision_type ? { decisionType: row.decision_type } : {}),
+    ...(row.reason_code
+      ? {
+          reasonCode: row.reason_code as NonNullable<
+            ExecutionStep['reasonCode']
+          >
+        }
+      : {}),
+    observationRefs: Array.isArray(refs) ? (refs as string[]) : [],
+    ...(row.error_code ? { errorCode: row.error_code } : {})
+  }
+}
+
+function mapCheckpoint(row: CheckpointRow): ExecutionCheckpoint {
+  return {
+    checkpointId: row.checkpoint_id,
+    executionId: row.execution_id,
+    tenantId: row.tenant_id,
+    checkpointVersion: row.checkpoint_version,
+    runtimeProfile:
+      row.runtime_profile as ExecutionCheckpoint['runtimeProfile'],
+    runtimeVersion: row.runtime_version,
+    orchestratorVersion: row.orchestrator_version,
+    stepNumber: row.step_number,
+    state:
+      row.checkpoint_version === 2
+        ? decodeCompleteCheckpointState(row.state)
+        : (jsonValue(row.state) as ExecutionCheckpoint['state']),
+    budgetUsage: jsonValue(
+      row.budget_usage
+    ) as ExecutionCheckpoint['budgetUsage'],
+    createdAt: asIso(row.created_at) as string,
+    digest: row.digest
+  }
+}
+
+function isPool(
+  connection: OperationalStepPostgresConnection
+): connection is PostgresPoolLike {
+  return typeof (connection as PostgresPoolLike).connect === 'function'
+}
+
+/**
+ * Durable Phase 3 step/checkpoint authority. Tenant scoping is inherited from
+ * the Phase 2 connection discipline; checkpoint integrity is validated before
+ * every write and after every read.
+ */
+export class PostgresExecutionStepStore implements ExecutionStepStore {
+  private readonly clock: () => Date
+  private readonly fence: ControlledPublishedDatabaseFence | undefined
+
+  public constructor(
+    private readonly connection: OperationalStepPostgresConnection,
+    options: PostgresExecutionStepStoreOptions = {}
+  ) {
+    this.clock = options.clock ?? (() => new Date())
+    this.fence = options.fence
+  }
+
+  public recordStep(step: ExecutionStep): Promise<void> {
+    const tenant = TenantIdSchema.parse(step.tenantId)
+    if (!Number.isSafeInteger(step.stepNumber) || step.stepNumber < 1) {
+      throw new CheckpointError(
+        'step_conflict',

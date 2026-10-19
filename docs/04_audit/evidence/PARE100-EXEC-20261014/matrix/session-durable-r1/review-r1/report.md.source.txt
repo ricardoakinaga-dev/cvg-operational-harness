@@ -1,0 +1,56 @@
+# I1 — REVISE
+
+Finite T1 prospective design review of `P100-003/SESSION-DURABLE-PROCEDURES-R1`. Static design acceptance is withheld for I1-01 and I1-02. This decision does not judge CVG functional equivalence. All eighteen procedures remain **NOT_RUN**, functional/parity leaves **NOT_VERIFIED**, and parity **NOT_MEASURED**. No functionalPASS, contractBUILD, T3 or release approval is given.
+
+## Largest material gap: I1-01 — SD07 discrimination
+
+**MEDIUM severity; HIGH confidence.** `review-packet/procedures.json:390`, `:392`, `:396` describe ordinary JSON followed by caller mutation during pending backend work. Reference `packages/session/session-persistence/src/storage-contract.ts:106` and `:123` separately require single-traversal header/batch materialization; the append contract explicitly addresses rereading accessors between checking and copying.
+
+Rejecting example: a hypothetical adapter validates A synchronously, copies A in a second synchronous traversal, then awaits IO. Mutating the original to B after invocation still persists A, exactly as a single snapshot does. It can also reject all listed ordinary non-JSON and invalid-createdAt controls. The proposed transcript therefore does not establish the stated traversal obligation. With a per-access-changing value, the two traversals can see different values. This is a logical witness, not execution of a reference or CVG adapter.
+
+Add an independently observable adversarial witness and a synchronous check-then-copy negative control. Qualify the permitted-input behavior of the materializer closure before specifying whether the witness is captured or refused; this review did not load the imported snapshot utility and does not invent an accessor acceptance/refusal rule. Alternatively retain this exact obligation as an explicit semantic gap. Asynchronous caller-mutation testing should remain for the distinct alias/await obligation.
+
+## I1-02 — default read vector decoding
+
+**MEDIUM severity; HIGH confidence.** `review-packet/procedures.json:987`–`:989` supplies null offset/length for a successful full read. The actual contract at reference `packages/session/session-persistence/src/handle.ts:77` and `:83` is optional numeric arguments. A direct `read(null,null)` is not a valid positive typed consumer call. No null-to-omission rule is specified. Use an explicit no-argument descriptor, or document a lossless vector decoding rule before invoking either public API. Do not add a public null-acceptance requirement.
+
+## I1-03 — sealed manifest namespace
+
+**LOW severity; HIGH confidence; informational to the semantic decision.** `review-packet/manifest.json:8` binds the artifact manifest hash to the envelope's own basename. Hashing that sealed path does not match. The live artifact manifest does match its advertised digest; the other eight sealed payloads match. Package the two manifests under distinct names in the next packet. No packet files were changed by this review.
+
+## Independent identity and coverage checks
+
+The stdlib probe recomputed both original file digests:
+
+- R22 catalogue: **44132 entries**, SHA-256 `4bb8acfeec196b96ba53feb528ab23625316e39c9e19277bd2b9c8d5407385b1`.
+- R23 leaf file: **44132 rows**, SHA-256 `d57e1d15770ba2eff5b78d6b97030b54a2f22df705734d10c6af85dfcfdc3270`.
+- Exactly **75** IDs selected by the two source paths: **55 index / 20 handle**. Every selected ID, contract hash, source hash, kind, symbol, owner, extraction status and parity status matches the frozen originals. **71 STATIC + 4 UNKNOWN** remain unchanged. The remaining **44057** remain in the original denominator.
+- The binding set covers all **18** proposals, with nonempty procedure references, no dangling procedure/gap IDs, **13** explicit gap records and retained P100-020 ownership. Semantic grouping was checked against an independent explicit symbol vocabulary: SERVICE6, CREATE5, OWNERSHIP6, METADATA8, READ10, APPEND4, BARRIER5, CLOSE1, OBSERVE12, VALIDATION6, ERRORS10, SURFACE_PENDING2. Mapping is proposal coverage, not an implementation dependency graph or behavioral proof.
+- All **44** cited source anchors match the exact declared line and SHA. All **16** entries in source-hashes.json also match byte lengths. All **18** externally enumerated input files match their hashes.
+- **36** unique sealed/live/source paths are byte-identical pre/post. The sole expected-hash mismatch is the stable manifest collision above. The reference commit declaration `768fb1f3d3dcf9a16659ee354e927d05475f22dd` agrees across catalogue, proposal and source manifest. File contents are hash-verified; Git history and unlisted Git metadata were deliberately not read.
+
+## Contract assessment retained for revision
+
+| Proposals | Static assessment of intended obligation |
+| --- | --- |
+| SD01 | Instance identity and public shape; abstract service explicitly unqualified as runnable backend. |
+| SD02–SD03 | Local create visibility, duplicate/absent distinction, immutable metadata, explicit fork cut independent of parent length; physical/logical representations distinguished. |
+| SD04–SD05 | Read/write ownership and native contention boundaries explicit; ownership-loss export is not treated as evidence that a backend can produce native loss. |
+| SD06–SD07 | Contiguity, ordered prefix and snapshot obligations stated; SD07 needs the discrimination revision above. |
+| SD08–SD09 | Caller-owned outer array, actual alias state, mixed independently owned/frozen values, empty-slice producer state and same-instance happens-before freshness preserved. Default read vector needs explicit decoding. |
+| SD10–SD12 | Resolved flush crash durability, empty materialization, close drain/release and aggregate partial failure distinguished. Eager persistence is allowed, loss of unflushed events is not required, graceful close is not crash proof. |
+| SD13–SD14 | Opaque revisions restricted to same instance/session, ownership churn invariant, optional metadata, unordered list and pre-start cancellation distinguished from unspecified later rollback. |
+| SD15–SD17 | Current format refusal, corruption, required/ignorable vocabulary and error metadata remain distinct. Helper/API names and compile checks do not grant runtime credit. |
+| SD18 | Torn-tail recovery requires physical evidence; transactional PG requires atomic visibility/rollback proof rather than a fictional JSONL layout. |
+
+Shared header/event literals match the inspected structural types: format4 headers, safe nonnegative createdAt, seeded/unseeded cuts, turn/start and turn/end with completed reason and sequences0–3. These are static observations, not runtime admission results or qualification of branded-value factories. The null default-read descriptor is the concrete exception above. No CVG1/reference4 equivalence is inferred by renumbering.
+
+CVG `packages/contracts/src/session-events.ts:20`, `:37`, `:44` exposes the format1 stream and openSession/append/read port, not the reference handle/service API. `packages/harness/src/session/memory.ts:20`, `:30`, `:57`, `:70` and `packages/persistence/src/session-events.ts:73`, `:111`, `:149`, `:216` support the documented static leads: synthetic memory store, idempotent open, one-based allocated sequences, exclusive afterSequence reads and PG transaction routing. Exports and PUBLIC_API.md were inspected. These establish API/source gaps only; transaction durability and ownership semantics were not executed or inferred from job217.
+
+The proposed CVG bridge remains UNSPECIFIED_NOT_IMPLEMENTED and must preserve fields, ordering, error categories and cancellation when separately specified. The four UNKNOWN extraction records, two source-surface semantic obligations and imported-runtime closure qualification remain explicit. Neither full P100-003 nor full P100-020 nor the 36-goal program closes. Future real execution needs separate authorization and qualified adapters; no approval request is part of this review.
+
+## Evidence and execution boundary
+
+`static_probe.py` is a standalone stdlib data/hash/anchor checker. `static-probe-results.json`, `mapping-evidence.json`, `anchor-evidence.json`, `discrimination-evidence.json`, `integrity-pre.json`, `integrity-post.json` and `command-evidence.json` support this report. `manifest.json` and `manifest.sha256` bind review outputs.
+
+Only plain-file inspection and Python stdlib documentary probes ran. No reference/project module import, backend, service, PG, network, install, compiler, product test, native product child, descendant critic, .dsh, .env, node_modules, history, prior critic/draft or shared operational ledger was used. No reference implementation body was copied into these artifacts. All writes are confined to this review directory. The lead retains claim/ledger responsibilities.

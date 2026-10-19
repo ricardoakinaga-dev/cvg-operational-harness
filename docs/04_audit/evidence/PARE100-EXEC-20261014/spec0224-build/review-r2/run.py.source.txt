@@ -1,0 +1,11 @@
+import subprocess,sys,pathlib,json,datetime,os,time
+out=pathlib.Path(__file__).resolve().parent
+n=time.time_ns()
+p=subprocess.run(sys.argv[1:],cwd=out,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+stem=f'cmd-{n}'
+(out/(stem+'.stdout')).write_text(p.stdout)
+(out/(stem+'.stderr')).write_text(p.stderr)
+r=dict(argv=sys.argv[1:],cwd=str(out),exit=p.returncode,stdout=stem+'.stdout' if p.stdout else 'EMPTY',stderr=stem+'.stderr' if p.stderr else 'EMPTY',at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+(out/(stem+'.json')).write_text(json.dumps(r,indent=2)+'\n')
+print(json.dumps(r));print(p.stdout,end='');print(p.stderr,end='',file=sys.stderr)
+sys.exit(p.returncode)

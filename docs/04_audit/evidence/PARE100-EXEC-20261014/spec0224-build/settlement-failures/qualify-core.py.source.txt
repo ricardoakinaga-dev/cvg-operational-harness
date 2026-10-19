@@ -1,0 +1,57 @@
+"""Qualify the independent verifier against historical real raw input and mutations.
+
+No runtime/database execution. Originals immutable; generated controls retained.
+"""
+import copy
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+base = Path(__file__).parent
+source = base.parent / 'bound-admission/builder-r1/runs/r4/BA01/positive/result.json'
+original = source.read_bytes()
+value = json.loads(original)
+out = base / 'verifier-controls'
+out.mkdir(exist_ok=True)
+
+
+def execute(name, data, expected):
+    root = out / name
+    root.mkdir(exist_ok=True)
+    raw = json.dumps(data, indent=2, allow_nan=False).encode() + b'\n'
+    (root / 'sample.json').write_bytes(raw)
+    argv = ['python3', str(base / 'recompute-core.py'), str(root)]
+    p = subprocess.run(argv, capture_output=True)
+    (out / (name + '.stdout.log')).write_bytes(p.stdout)
+    (out / (name + '.stderr.log')).write_bytes(p.stderr)
+    assert (p.returncode == 0) == expected, (name, p.returncode, p.stderr[-1000:])
+    return {'name': name, 'expectedAcceptance': expected, 'exit': p.returncode,
+            'mutatedInputSHA256': hashlib.sha256(raw).hexdigest(), 'argv': argv,
+            'stdoutSHA256': hashlib.sha256(p.stdout).hexdigest(),
+            'stderrSHA256': hashlib.sha256(p.stderr).hexdigest()}
+
+
+results = [execute('positive', value, True)]
+bad = copy.deepcopy(value)
+bad['final']['digest'] = '0' * 64
+results.append(execute('domain-digest', bad, False))
+bad = copy.deepcopy(value)
+physical = next(e['physical'] for e in bad['events'] if e['type'] == 'fresh-service-SQL')
+physical['row']['state']['decodedSha256'] = '0' * 64
+results.append(execute('physical-wrapper', bad, False))
+bad = copy.deepcopy(value)
+next(e for e in bad['events'] if e['type'] == 'model.complete-entry')['request']['maxOutputTokens'] = 513
+results.append(execute('request-receipt-binding', bad, False))
+bad = copy.deepcopy(value)
+event = next(e for e in bad['events'] if e['type'] == 'fresh-service-SQL')
+bad['events'][event['commit'] - 1]['result'] = {'status': 'CONFLICT'}
+results.append(execute('uncommitted-reserve', bad, False))
+assert source.read_bytes() == original
+report = {'status': 'VERIFIER_QUALIFIED_NOT_NEW_RUNTIME_PROOF',
+          'source': str(source), 'sourceSHA256': hashlib.sha256(original).hexdigest(),
+          'verifierSHA256': hashlib.sha256((base / 'recompute-core.py').read_bytes()).hexdigest(),
+          'positiveAccepted': 1, 'knownBadRejected': 4, 'checks': results,
+          'limits': 'Historical R12 raw artifact qualifies core verifier only. No new settlement cases or runtime invocations asserted.'}
+(base / 'core-qualification.json').write_text(json.dumps(report, indent=2) + '\n')
+print(json.dumps({k: v for k, v in report.items() if k != 'checks'}))

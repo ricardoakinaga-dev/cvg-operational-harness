@@ -1,0 +1,29 @@
+import pathlib,json,hashlib,os,datetime,sys
+R=pathlib.Path(__file__).parent.parent;m=json.loads((R.parent.parent/'review-packet-r4/manifest.json').read_bytes())
+def dump(p,x):p.write_text(json.dumps(x,indent=2)+'\n')
+def sha(p):
+ h=hashlib.sha256()
+ with p.open('rb')as f:
+  for b in iter(lambda:f.read(1024*1024),b''):h.update(b)
+ return h.hexdigest()
+before=json.loads((R/'before-inputs.json').read_text());after=[];diffs=[]
+for e in before:
+ p=pathlib.Path(e['copy']);s=p.stat();h=sha(p);after.append({'path':str(p),'category':e['category'],'bytes':s.st_size,'sha256':h,'matchesBefore':h==e['observedSHA256']and s.st_size==e['observedBytes']})
+ if not after[-1]['matchesBefore']:diffs.append(after[-1])
+dump(R/'after-inputs.json',after)
+base=pathlib.Path(m['allowedDependencyMirror']).resolve();assert str(base)==m['externalReadOnlyDependencies'];dep=[]
+for folder,dirs,files in os.walk(base,followlinks=False):
+ for name in sorted(dirs+files):
+  p=pathlib.Path(folder)/name;s=p.lstat();e={'relative':str(p.relative_to(base)),'mode':s.st_mode}
+  if p.is_symlink():e.update(type='symlink',target=os.readlink(p))
+  elif p.is_dir():e.update(type='directory')
+  else:e.update(type='file',bytes=s.st_size,sha256=sha(p))
+  dep.append(e)
+dep=sorted(dep,key=lambda e:e['relative']);dump(R/'after-resolved-dependencies.json',dep);old=json.loads((R/'before-resolved-dependencies.json').read_text());depmatch=dep==old
+node=pathlib.Path(m['node']);n={'path':str(node),'bytes':node.stat().st_size,'sha256':sha(node)};dump(R/'after-node.json',n);nodematch=n==json.loads((R/'before-node.json').read_text())
+links=[]
+for p in [pathlib.Path(m['artifactRoot'])/'node_modules',pathlib.Path(m['allowedDependencyMirror'])]:links.append({'path':str(p),'target':os.readlink(p),'resolved':str(p.resolve())})
+dump(R/'after-dependency-bindings.json',links)
+bindings=json.loads((R/'candidate81-bindings.json').read_text());cand=sha(pathlib.Path(m['candidateManifestCopy']))==m['candidateManifestSha256']=='fbe9e9610d014512e065cf2ca1750bdd32c9f8343f9f7c1183289b274024e1fe'
+result={'ok':not diffs and depmatch and nodematch and cand and all(e['match']for e in bindings['bindings']),'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'inputsCompared':len(after),'changedInputs':diffs,'dependencyEntriesCompared':len(dep),'dependenciesMatchBefore':depmatch,'nodeMatchBefore':nodematch,'candidate81HashAndBindingsMatch':cand,'manifestSHA256':sha(pathlib.Path(R.parent.parent/'review-packet-r4/manifest.json')),'dependencyBeforeFinishedMtime':datetime.datetime.fromtimestamp((R/'before-resolved-dependencies.json').stat().st_mtime,datetime.timezone.utc).isoformat(),'firstTestStart':json.loads((R/'raw/current23/command.json').read_text())['start'],'scope':'enumerated copied inputs and assigned dependency target only; no live source tree/git/OS integrity attestation'}
+dump(R/'immutableclean-after.json',result);print(json.dumps(result,indent=2));sys.exit(0 if result['ok']else 1)

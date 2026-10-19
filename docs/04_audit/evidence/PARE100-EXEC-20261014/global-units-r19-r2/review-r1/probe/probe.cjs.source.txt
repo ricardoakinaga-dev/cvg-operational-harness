@@ -1,0 +1,47 @@
+'use strict';
+const net = require('node:net');
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const root = __dirname;
+const unregisteredPath = path.join(root, 'u.sock');
+const registeredPath = path.join(root, 'o.sock');
+const registry = path.join(root, 'network.jsonl');
+const blocked = path.join(root, 'blocked.jsonl');
+process.env.CVG_GLOBAL_TEST_NET_REGISTRY = registry;
+process.env.CVG_GLOBAL_TEST_NET_BLOCKED = blocked;
+const servers = [];
+const observation = value => console.log(JSON.stringify(value));
+const bind = (server, ...args) => new Promise((resolve, reject) => {
+  servers.push(server); server.once('error', reject); server.listen(...args, resolve);
+});
+const exchange = options => new Promise(resolve => {
+  let value = '', connected = false;
+  const socket = net.connect(options);
+  socket.on('connect', () => { connected = true; });
+  socket.on('data', chunk => { value += chunk; });
+  socket.once('error', error => resolve({ connected, code: error.code, value }));
+  socket.once('end', () => resolve({ connected, code: null, value }));
+});
+(async () => {
+  observation({ node: process.version, kind: 'private-synthetic-probe', endpoints: 'only private IPC and 127.0.0.1 ephemeral TCP', dns: false });
+  let unregisteredAccepts = 0, tcpAccepts = 0;
+  await bind(net.createServer(socket => { unregisteredAccepts++; socket.end('UNREGISTERED_PRIVATE_IPC'); }), unregisteredPath);
+  require('./network-guard.cjs'); // byte-identical R2 copy; only __dirname relocated
+  const tcp = net.createServer(socket => { tcpAccepts++; socket.end('OWNED_TCP'); });
+  await bind(tcp, 0, '127.0.0.1');
+  const port = tcp.address().port;
+  await bind(net.createServer(socket => socket.end('OWNED_IPC')), registeredPath);
+  const rows = fs.readFileSync(registry, 'utf8').trim().split('\n').map(JSON.parse);
+  assert(!rows.some(row => row.path === unregisteredPath));
+  observation({ registryBefore: rows, unregisteredPath, registeredPath, ownedTcpPort: port });
+  for (const [label, options] of [
+    ['owned_tcp_positive', { host: '127.0.0.1', port }],
+    ['owned_ipc_positive', { path: registeredPath }],
+    ['unregistered_ipc_negative', { path: unregisteredPath }],
+    ['mixed_path_port_unregistered_ipc', { path: unregisteredPath, host: '127.0.0.1', port }]
+  ]) observation({ label, options, ...await exchange(options) });
+  observation({ unregisteredAccepts, tcpAccepts, blockedRows: fs.readFileSync(blocked, 'utf8').trim().split('\n').map(JSON.parse) });
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+  await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+});

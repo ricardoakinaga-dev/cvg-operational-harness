@@ -1,0 +1,13 @@
+const fs = require('node:fs')
+const path = require('node:path')
+const { createRequire } = require('node:module')
+const root = '/tmp/cvg-claude100-exec-20261017/runtime-build-closure-candidate'
+const requireCandidate = createRequire(root + '/package.json')
+const ts = requireCandidate('typescript')
+const text = fs.readFileSync(path.join(root, 'scripts/build-runtime.mjs'), 'utf8')
+const sf = ts.createSourceFile('builder.mjs', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+const decl = sf.statements.filter(ts.isVariableStatement).flatMap(s => [...s.declarationList.declarations]).find(d => d.name.getText(sf) === 'RUNTIME_WORKSPACES')
+if (!decl || !ts.isArrayLiteralExpression(decl.initializer) || !decl.initializer.elements.every(ts.isStringLiteral)) throw Error('Not a finite literal workspace list')
+const workspaces = decl.initializer.elements.map(x => x.text)
+if (new Set(workspaces).size !== workspaces.length) throw Error('Duplicate workspace')
+process.stdout.write(JSON.stringify(workspaces))

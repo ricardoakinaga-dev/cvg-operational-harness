@@ -1,0 +1,121 @@
+import { sessionEventFingerprint, validateSessionEvent } from "./events.ts";
+export class SessionFormatMigrationError extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.name = "SessionFormatMigrationError";
+		this.code = code;
+	}
+}
+function invalidRegistry(message) {
+	throw new SessionFormatMigrationError("format_registry_invalid", message);
+}
+function versionOf(value, code, what) {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+		throw new SessionFormatMigrationError(code, `${what} must be a positive safe integer`);
+	}
+	return value;
+}
+function freezeDeep(value, seen = new Set()) {
+	if (value === null || typeof value !== "object") return value;
+	if (seen.has(value)) return value;
+	seen.add(value);
+	for (const child of Object.values(value)) freezeDeep(child, seen);
+	return Object.freeze(value);
+}
+function describe(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+export function createSessionFormatRegistry(input) {
+	if (!input || typeof input !== "object" || !Array.isArray(input.definitions) || !Array.isArray(input.steps)) {
+		invalidRegistry("Format registry requires definitions and steps arrays");
+	}
+	const definitions = new Map();
+	for (const definition of input.definitions) {
+		if (!definition || typeof definition !== "object" || typeof definition.validate !== "function" || typeof definition.fingerprint !== "function") {
+			invalidRegistry("Every format definition requires validate and fingerprint functions");
+		}
+		const version = versionOf(definition.version, "format_registry_invalid", "Format version");
+		if (definitions.has(version)) {
+			invalidRegistry(`Duplicate format definition for version ${version}`);
+		}
+		definitions.set(version, definition);
+	}
+	if (definitions.size === 0) {
+		invalidRegistry("At least one format definition is required");
+	}
+	const steps = new Map();
+	for (const step of input.steps) {
+		if (!step || typeof step !== "object" || typeof step.transform !== "function") {
+			invalidRegistry("Every format step requires a transform function");
+		}
+		const from = versionOf(step.from, "format_registry_invalid", "Step origin");
+		const to = versionOf(step.to, "format_registry_invalid", "Step target");
+		if (to !== from + 1) {
+			invalidRegistry(`Format steps must be adjacent: ${from} -> ${to}`);
+		}
+		if (!definitions.has(from) || !definitions.has(to)) {
+			invalidRegistry(`Format step ${from} -> ${to} references an undefined version`);
+		}
+		if (steps.has(from)) {
+			invalidRegistry(`Duplicate format step from ${from}`);
+		}
+		steps.set(from, step);
+	}
+	const versions = [...definitions.keys()].sort((left, right) => left - right);
+	return {
+		versions,
+		migrate(event, targetVersion) {
+			const eventVersion = event?.formatVersion;
+			const sourceVersion = versionOf(eventVersion, "unknown_format_version", "Event format version");
+			const source = definitions.get(sourceVersion);
+			if (!source) {
+				throw new SessionFormatMigrationError("unknown_format_version", `Unsupported format version ${sourceVersion}`);
+			}
+			const target = versionOf(targetVersion, "unknown_format_version", "Target format version");
+			const targetDefinition = definitions.get(target);
+			if (!targetDefinition) {
+				throw new SessionFormatMigrationError("unknown_format_version", `Unsupported format version ${target}`);
+			}
+			if (target < sourceVersion) {
+				throw new SessionFormatMigrationError("downgrade_not_supported", `Cannot migrate ${sourceVersion} -> ${target}: downgrade is not supported`);
+			}
+			let current = source.validate(event);
+			while (current.formatVersion < target) {
+				const step = steps.get(current.formatVersion);
+				if (!step) {
+					throw new SessionFormatMigrationError("missing_format_step", `No adjacent format step from ${current.formatVersion}`);
+				}
+				const frozen = freezeDeep({ ...current });
+				let payload;
+				try {
+					payload = step.transform(frozen);
+				} catch (error) {
+					throw new SessionFormatMigrationError("invalid_step_output", `Format step ${step.from} -> ${step.to} failed: ${describe(error)}`);
+				}
+				const nextDefinition = definitions.get(step.to);
+				let next;
+				try {
+					next = nextDefinition.validate({
+						...frozen,
+						formatVersion: step.to,
+						schemaFingerprint: nextDefinition.fingerprint(frozen.type),
+						payload
+					});
+				} catch (error) {
+					throw new SessionFormatMigrationError("invalid_step_output", `Format step ${step.from} -> ${step.to} produced an invalid event: ${describe(error)}`);
+				}
+				current = next;
+			}
+			return current;
+		}
+	};
+}
+/** Ready v1 definition: real schema validation and catalog fingerprints. */
+export function sessionFormatDefinitionV1() {
+	return {
+		version: 1,
+		validate: (event) => validateSessionEvent(event),
+		fingerprint: (type) => sessionEventFingerprint(type)
+	};
+}

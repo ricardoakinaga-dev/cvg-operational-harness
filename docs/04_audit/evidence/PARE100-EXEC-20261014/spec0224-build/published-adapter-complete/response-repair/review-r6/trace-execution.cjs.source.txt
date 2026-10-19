@@ -1,0 +1,9 @@
+const fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto'),wt=require('node:worker_threads');
+const root=process.env.I1_REVIEW, run=process.env.I1_RUN;
+const log=(o)=>fs.appendFileSync(root+'/raw/'+run+'-execution.jsonl',JSON.stringify({pid:process.pid,threadId:wt.threadId,...o})+'\n');
+log({event:'guard-active',guardSHA256:crypto.createHash('sha256').update(fs.readFileSync(root+'/trace-reads.cjs')).digest('hex')});
+for (const method of ['runInThisContext','runInContext']){const orig=vm[method];vm[method]=function(code,...args){const value=orig.call(this,code,...args);const filename=(method==='runInContext'?args[1]:args[0])?.filename;
+ if(typeof value!=='function'||typeof code!=='string'||!filename)return value;
+ const sha256=crypto.createHash('sha256').update(code).digest('hex'),path=root+'/executed/'+sha256+'.js';fs.writeFileSync(path,code);
+ return function(...callArgs){log({event:'executed',method,filename,sha256,bytes:Buffer.byteLength(code),transform:path});return Reflect.apply(value,this,callArgs)};
+}}require('node:module').syncBuiltinESMExports();

@@ -1,0 +1,154 @@
+{
+  "reviewer": "fresh-context I1; no subagents/descendants delegated",
+  "task": "P100-004/P100-024/SBX-METADATA-OBS-001",
+  "verdict": "REVISE",
+  "observerValidity": "REVISE",
+  "observedInvariant": {
+    "status": "FAIL",
+    "finding": "OBS-SBX-METADATA-001",
+    "confidence": "HIGH",
+    "independentlyReproduced": true,
+    "securityPass": false
+  },
+  "expectedPacketSha256": "5844ddc39924126d61f783cc8012ebb54e8df1078c068c2a73c396a9e1d6406f",
+  "actualPacketSha256": "5844ddc39924126d61f783cc8012ebb54e8df1078c068c2a73c396a9e1d6406f",
+  "integrityBefore": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/integrity-before.json",
+  "integrityAfter": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/integrity.json",
+  "reproduction": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/runs/i1-01",
+  "candidateValidationExit": 0,
+  "negativeControls": {
+    "total": 21,
+    "incorrectlyAccepted": 15,
+    "rejected": 6,
+    "fullCliAcceptedCounterexamples": 3
+  },
+  "findings": [
+    {
+      "id": "I1-001",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "title": "Run validator accepts an empty replacement source map and unbound process evidence",
+      "sourceAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/validate.py:96-109"
+      ],
+      "recordAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/negative-controls.json#controls/empty-source-authority",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/forged-cli-empty.command.json",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/forged-cli-duration.command.json",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/negative-controls/uncaptured-stderr-file/stderr.txt"
+      ],
+      "evidence": "Empty before/after maps plus sourceFiles=0 are accepted with pins=465. CLI exit0 and controls PASS. durationMs=6001, missing durationMs, altered limits, forged argv/cwd/env/PID/PGID and concealed nonempty stderr also pass check_run+evaluate. Duration variant independently passes full CLI.",
+      "impact": "OBS-SBX-04 cannot reject source sentinel removal, unverified launch provenance, unknown/out-of-limit duration, or concealed stream evidence. These are observer defects, not proof that the actual pinned runs were forged.",
+      "requiredRevision": "Bind run membership/digests to trusted frozen authority and verify expected process/stream schemas, identity, duration, limits, and actual stderr evidence in test support. Do not alter production."
+    },
+    {
+      "id": "I1-002",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "title": "Observation validator accepts lost telemetry and forged causal payloads",
+      "sourceAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/validate.py:20-87",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/validate.py:109"
+      ],
+      "recordAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/negative-controls.json#controls",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/forged-cli-telemetry.command.json",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/negative-controls/forged-log-payload/stdout.txt"
+      ],
+      "evidence": "Telemetry can be [] or arbitrary malformed objects; full CLI still returns exit0 for lost telemetry. Tool log identity/input/key/correlation, body tenant/agent/signal, direct gate policy flags, decision input, and a fabricated 64-hex fingerprint also pass. Duplicate JSON keys and boolean counters pass. Updated copied stdout hashes rule out a trivial checksum mismatch as the explanation.",
+      "impact": "OBS-SBX-04 requires adulterated evidence rejection; current checks preserve event topology but do not authenticate the full recorded meaning. Correct counters alone cannot establish truthful causal logs or metadata.",
+      "requiredRevision": "Validate required native event payloads/types and links, recompute composition fingerprint, reject ambiguous JSON and boolean numeric counters, and add copied-evidence rejection controls. Test support only."
+    },
+    {
+      "id": "I1-003",
+      "severity": "MEDIUM",
+      "confidence": "HIGH_STATIC",
+      "title": "Execution deadline ceases to be enforced when both pipes reach EOF",
+      "sourceAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/run.py:71-97",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/run.py:141-153"
+      ],
+      "recordAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/static-lifecycle.json#deadline"
+      ],
+      "evidence": "The 5s check is inside while selector.get_map(). After both pipes close, child.wait(timeout=2) grants a fresh 2s without comparing elapsed time. A child that closes both streams at 4.9s and exits at 5.4s takes the success branch, with violation=None. The success predicate never checks durationMs. Static control-flow finding; no altered probe or OS timing experiment executed.",
+      "impact": "The advertised 5s execution bound can be exceeded without rejection; distinct from permitted post-kill cleanup time.",
+      "requiredRevision": "Use the remaining absolute execution deadline for join after EOF and record a deadline violation when execution exceeds it. Keep teardown time separately identified."
+    },
+    {
+      "id": "I1-004",
+      "severity": "MEDIUM",
+      "confidence": "HIGH_STATIC",
+      "title": "Unexpected launcher errors can bypass cleanup and final evidence persistence",
+      "sourceAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/run.py:63-134",
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/run.py:134-151"
+      ],
+      "recordAnchors": [
+        "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/static-lifecycle.json#errors"
+      ],
+      "evidence": "There is no enclosing try/finally after Popen. An os.read/selector error bypasses kill/join and stream persistence. An after-snapshot digest/read error raises after stream writes but before sources-after/process.json; process outcome and teardown record are then missing. killpg in the join-timeout branch also lacks the ProcessLookupError protection used in the earlier branch. Static only; no filesystem fault or source mutation introduced.",
+      "impact": "The promise that failure retains bounded streams, exit/join and source evidence does not cover these failure paths.",
+      "requiredRevision": "Make post-spawn cleanup unconditional and persist partial streams plus explicit error/unknown snapshot metadata even if capture or hashing fails. Reject incomplete runs; do not change production."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "OBS-SBX-01",
+      "status": "PASS_OBSERVED",
+      "evidence": "Both raw runs: direct WORKSPACE gate=1, body=0, UNSAFE_REQUEST."
+    },
+    {
+      "id": "OBS-SBX-02",
+      "status": "PASS_OBSERVED",
+      "evidence": "Both raw runs: capability NONE gate=0, body=1, exact echo, model=0, approval=0."
+    },
+    {
+      "id": "OBS-SBX-03",
+      "status": "PASS_MEASUREMENT_OF_FAILED_INVARIANT",
+      "invariant": "FAIL",
+      "evidence": "Both raw runs: capability WORKSPACE descriptor sandbox absent, gate=0, body=1, COMPLETED; capability fingerprints equal."
+    },
+    {
+      "id": "OBS-SBX-04",
+      "status": "FAIL",
+      "evidence": "15/21 independent copied-JSON controls accepted; three full-CLI counterexamples exit0. Static deadline/error-path findings."
+    },
+    {
+      "id": "OBS-SBX-05",
+      "status": "PARTIAL_NOT_ACCEPTABLE",
+      "evidence": "Frozen 11+1054 intact, no new source paths, focused type/lint/format pass. Review rejects observer. Fresh-review procedure compromised by accidental coordination history exposure. Four protected SPECs are not map members: no independent before/after digest claim for those separate documents, no direct semantic read or write to them."
+    }
+  ],
+  "nonclaims": {
+    "nativeIsolation": "NOT_TESTED",
+    "policyProduction": "NOT_TESTED",
+    "managedLifecycleML29": "NOT_TESTED",
+    "bothEngines": "NOT_TESTED",
+    "fullParity": "NOT_MEASURED",
+    "release": "NOT_TESTED",
+    "globalT2Gates": "NOT_RUN",
+    "transitiveDependencyClosure": "NOT_VERIFIED"
+  },
+  "reviewProcedure": {
+    "historyExposure": true,
+    "freshnessCompliance": "NOT_FULLY_MET",
+    "details": "Required operations read included full agent_coordination.md; historical claim/verdict/spec summaries entered saved stdout and partially tool-visible output. No previous review artifact/ledger/.gauntlet opened separately. This cannot be represented as a clean history-free review.",
+    "privateNodeBytecodeCache": {
+      "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/quality-tmp/node-compile-cache",
+      "fileCount": 835,
+      "kind": "Node22 module bytecode compile cache under reviewer private TMPDIR",
+      "retained": true,
+      "typescriptSourceEmission": false,
+      "worktreeCacheWrite": false,
+      "limitation": "Private quality tooling emitted Node bytecode cache despite noEmit/nonincremental TypeScript configuration. Do not claim an entirely cache-free quality invocation. No production/source cache remediation performed."
+    }
+  },
+  "writes": [
+    "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/review-i1/**",
+    "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r1/runs/i1-01/**"
+  ],
+  "productionChanges": false,
+  "candidateChanges": false,
+  "nextAction": "Lead revises only test-support observer/validator/launcher and freezes a new packet for a truly fresh history-free independent review; production fix remains outside this task."
+}

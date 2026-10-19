@@ -1,0 +1,2555 @@
+--- before/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts
++++ after/packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts
+@@ -1,6 +1,9 @@
++import {
++  inspectCompleteResource,
++  assignedResource
++} from './fixtures/complete-process-support.ts'
+ import { createHash } from 'node:crypto'
+-import { execFileSync } from 'node:child_process'
+-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
++import { mkdir, realpath, writeFile } from 'node:fs/promises'
+ import { join, resolve } from 'node:path'
+ import { Client, Pool } from 'pg'
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+@@ -91,6 +94,13 @@
+       }
+     : { message: String(error) }
+ async function provision() {
++  const assigned = await assignedResource(
++    'capacity',
++    resourcePath!,
++    assignedRoot!
++  )
++  if (assigned.claim.evidence !== evidence)
++    throw new Error('Wrong assigned evidence')
+   // Lexical and physical path guards forbid ../ escapes and symlink aliases.
+   if (
+     (await realpath(assignedRoot!)) !== resolve(assignedRoot!) ||
+@@ -100,12 +110,15 @@
+     throw new Error(
+       'Assigned root/resource/evidence must resolve inside their exact own paths'
+     )
+-  const resource = JSON.parse(await readFile(resourcePath!, 'utf8'))
++  const resource = assigned.resource
+   const url = new URL(resource.test_database_url)
+   const inspected = JSON.parse(
+-    execFileSync('docker', ['inspect', '--format', '{{json .}}', containerId], {
+-      encoding: 'utf8'
+-    })
++    await inspectCompleteResource(
++      'capacity',
++      resourcePath!,
++      assignedRoot!,
++      'object'
++    )
+   )
+   const ports = inspected.NetworkSettings.Ports['5432/tcp']
+   if (
+--- before/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts
++++ after/packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts
+@@ -1,5 +1,14 @@
++import {
++  inspectCompleteResource,
++  assignedResource,
++  ownedPath,
++  assignedService,
++  privateBytes,
++  startCompleteChild,
++  stopCompleteChildren
++} from './fixtures/complete-process-support.ts'
+ /** Assigned synthetic SPEC217/224 bound factory proof; not the published adapter. */
+-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
++import type { ChildProcess } from 'node:child_process'
+ import { createHash, randomBytes, randomUUID } from 'node:crypto'
+ import { mkdir, readFile, writeFile } from 'node:fs/promises'
+ import { join, resolve } from 'node:path'
+@@ -54,8 +63,6 @@
+ const evidence = process.env.SPEC0224_BOUND_EVIDENCE
+ const childInput = process.env.SPEC0224_BOUND_CHILD_INPUT
+ const childConfig = process.env.SPEC0224_BOUND_CHILD_CONFIG
+-const target =
+-  'packages/persistence/src/__tests__/complete-bound-admission-postgres.integration.ts'
+ if (
+   !assignedRoot ||
+   !/^\/tmp\/cvg-pare100-exec-20261014-6az3hlay\/spec0224-build\/bound-admission\/(?:builder-r1|review-r[1-9][0-9]*)$/.test(
+@@ -101,7 +108,10 @@
+   'kernel_pause_switches'
+ ]
+ const save = (path: string, value: unknown) =>
+-  writeFile(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
++  writeFile(path, JSON.stringify(value, null, 2) + '\n', {
++    flag: 'wx',
++    mode: 0o600
++  })
+ const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+ const errorInfo = (error: unknown) =>
+   error instanceof Error
+@@ -166,24 +176,49 @@
+   schema: string,
+   serviceRole: string
+ const privateConnection = resolve(serviceResource!)
++if (privateConnection !== serviceResource)
++  throw new Error('Noncanonical service path')
+ async function service() {
+-  const value = JSON.parse(
+-    await readFile(privateConnection, 'utf8')
+-  ) as Connection
++  const assigned = await assignedService(
++    resourcePath!,
++    root,
++    privateConnection,
++    output
++  )
++  if (assigned.claim.config !== childConfig)
++    throw new Error('Wrong bound child config')
++  const value = assigned.connection
+   if (
++    !value ||
+     value.host !== '127.0.0.1' ||
+     value.database !== 'pare224_synthetic' ||
+     !/^pare224_bound_admission_[a-z0-9_]+_service$/.test(value.user) ||
+-    !value.options.startsWith('-c search_path=pare224_bound_admission_')
++    value.options !==
++      `-c search_path=${assigned.claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`
+   )
+     throw new Error('Unassigned service-only child connection')
+   return value
+ }
+ async function provision() {
+-  const resource = JSON.parse(await readFile(resourcePath!, 'utf8'))
++  const assigned = await assignedResource(
++    'bound-admission',
++    resourcePath!,
++    assignedRoot!
++  )
++  if (assigned.claim.evidence !== evidence)
++    throw new Error('Wrong assigned evidence')
++  await assignedService(resourcePath!, root, privateConnection, output, true)
++  if (assigned.claim.config !== childConfig)
++    throw new Error('Wrong bound child config')
++  const resource = assigned.resource
+   const url = new URL(resource.test_database_url)
+   const inspected = JSON.parse(
+-    execFileSync('docker', ['inspect', containerId], { encoding: 'utf8' })
++    await inspectCompleteResource(
++      'bound-admission',
++      resourcePath!,
++      assignedRoot!,
++      'array'
++    )
+   )[0]
+   const ports = inspected.NetworkSettings.Ports['5432/tcp']
+   if (
+@@ -407,7 +442,7 @@
+   dir: string
+ }
+ async function attempt(args: AttemptInput, db: Pool, conn: Connection) {
+-  await mkdir(args.dir, { recursive: true })
++  await mkdir(args.dir, { recursive: true, mode: 0o700 })
+   const events: Array<Record<string, unknown>> = []
+   const event = (type: string, value: Record<string, unknown> = {}) => {
+     const n = events.length + 1
+@@ -755,7 +790,7 @@
+     controlledDigest({ synthetic: true, label })
+   )
+   const dir = join(output, label)
+-  await mkdir(dir, { recursive: true })
++  await mkdir(dir, { mode: 0o700 })
+   await save(join(dir, 'native-authority.json'), {
+     provenance:
+       'Catalog DML fixture only; native inbound/enqueue/claim/admit/claim/startPrepared/beginPhase; trusted prepared payload is synthetic, not published adapter integration or approval.',
+@@ -773,59 +808,57 @@
+   proc: ChildProcess
+   result: Promise<{ exit: number | null; signal: NodeJS.Signals | null }>
+   dir: string
++  stop: () => Promise<void>
+ }
+ const workers: Worker[] = []
+ async function worker(args: AttemptInput): Promise<Worker> {
+-  if (!childConfig || !resolve(childConfig).startsWith(root + '/'))
++  if (!childConfig)
+     throw new Error('Exact private child Vitest config required')
+-  await mkdir(args.dir, { recursive: true })
++  await mkdir(args.dir, { recursive: true, mode: 0o700 })
+   const path = join(args.dir, 'child-input-private.json')
+   await save(path, args)
+-  const argv = [
+-    resolve('node_modules/vitest/vitest.mjs'),
+-    'run',
+-    '--config',
+-    childConfig,
+-    '--configLoader',
+-    'native',
+-    target
+-  ]
+-  const proc = spawn(process.execPath, argv, {
+-    cwd: process.cwd(),
+-    env: { ...process.env, SPEC0224_BOUND_CHILD_INPUT: path },
+-    stdio: ['ignore', 'pipe', 'pipe']
+-  })
+-  let stdout = '',
+-    stderr = ''
+-  proc.stdout!.on('data', (d) => {
+-    stdout += d.toString()
+-  })
+-  proc.stderr!.on('data', (d) => {
+-    stderr += d.toString()
+-  })
+-  const result = new Promise<{
+-    exit: number | null
+-    signal: NodeJS.Signals | null
+-  }>((yes, no) => {
+-    proc.once('error', no)
+-    proc.once('close', async (exit, signal) => {
+-      try {
+-        await save(join(args.dir, 'command.json'), {
+-          argv,
+-          cwd: process.cwd(),
+-          pid: proc.pid,
+-          exit,
+-          signal
+-        })
+-        await writeFile(join(args.dir, 'stdout.log'), stdout, { flag: 'wx' })
+-        await writeFile(join(args.dir, 'stderr.log'), stderr, { flag: 'wx' })
+-        yes({ exit, signal })
+-      } catch (error) {
+-        no(error)
+-      }
++  const owned = await startCompleteChild({
++    profile: 'bound-admission',
++    role: 'assigned-child-input-only',
++    resource: resourcePath!,
++    config: childConfig,
++    input: path,
++    dir: args.dir,
++    root,
++    service: privateConnection,
++    evidence: output
++  })
++  const { proc, argv } = owned
++  const result = owned.done.then(async ({ code: exit, signal }) => {
++    await save(join(args.dir, 'command.json'), {
++      argv,
++      cwd: process.cwd(),
++      pid: proc.pid,
++      exit,
++      signal
+     })
+-  })
+-  const item = { proc, result, dir: args.dir }
++    await writeFile(
++      join(args.dir, 'stdout.log'),
++      owned.output.bytes('stdout'),
++      { flag: 'wx', mode: 0o600 }
++    )
++    await writeFile(
++      join(args.dir, 'stderr.log'),
++      owned.output.bytes('stderr'),
++      { flag: 'wx', mode: 0o600 }
++    )
++    return { exit, signal }
++  })
++  void result.catch(() => {})
++  const item = {
++    proc,
++    result,
++    dir: args.dir,
++    stop: async () => {
++      await owned.stop()
++      await result
++    }
++  }
+   workers.push(item)
+   return item
+ }
+@@ -836,12 +869,8 @@
+     await readFile(join(item.dir, 'result.json'), 'utf8')
+   ) as Awaited<ReturnType<typeof attempt>>
+ }
+-async function settleWorkers() {
+-  for (const item of workers) {
+-    if (item.proc.exitCode === null && item.proc.signalCode === null)
+-      item.proc.kill('SIGKILL')
+-    await item.result
+-  }
++async function settleWorkers(primary?: unknown) {
++  await stopCompleteChildren(workers, primary)
+ }
+ if (childInput) {
+   describe('SPEC224 assigned bound process', () => {
+@@ -849,8 +878,9 @@
+       if (!resolve(childInput).startsWith(root + '/'))
+         throw new Error('Child input outside assigned root')
+       const args = JSON.parse(
+-        await readFile(childInput, 'utf8')
++        (await privateBytes(root, childInput)).toString()
+       ) as AttemptInput
++      await ownedPath(root, args.dir, 'directory')
+       if (!resolve(args.dir).startsWith(output + '/'))
+         throw new Error('Child output outside assigned evidence')
+       const conn = await service(),
+@@ -1020,6 +1050,7 @@
+         async () => {
+           const prepared = await prepare(pool!, 'race-' + kind),
+             base = { input: prepared.input, fence: prepared.fence, kind }
++          let primary: unknown
+           try {
+             const left = await worker({
+               ...base,
+@@ -1111,8 +1142,11 @@
+               classification:
+                 'Actual distinct Node processes with native CAS/PG guards; same legitimate native bound claim. Losing generic-CAS live usage remains conservative; no rollback or provider-billing inference.'
+             })
++          } catch (error) {
++            primary = error
++            throw error
+           } finally {
+-            await settleWorkers()
++            await settleWorkers(primary)
+           }
+         },
+         60000
+--- before/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts
++++ after/packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts
+@@ -1,8 +1,12 @@
++import {
++  inspectCompleteResource,
++  assignedResource,
++  ownedPath
++} from './fixtures/complete-process-support.ts'
+ /** SPEC217/224 synthetic settlement containment; trusted prepared fixture, not consumer lifecycle. */
+-import { execFileSync } from 'node:child_process'
+ import { appendFileSync } from 'node:fs'
+ import { createHash, randomBytes, randomUUID } from 'node:crypto'
+-import { mkdir, readFile, writeFile } from 'node:fs/promises'
++import { mkdir, writeFile } from 'node:fs/promises'
+ import { join, resolve } from 'node:path'
+ import { Client, Pool, type PoolClient } from 'pg'
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+@@ -219,10 +223,25 @@
+   serviceRole: string
+ const privateConnection = resolve(serviceResource!)
+ async function provision() {
+-  const resource = JSON.parse(await readFile(resourcePath!, 'utf8'))
++  const assigned = await assignedResource(
++    'settlement',
++    resourcePath!,
++    assignedRoot!
++  )
++  if (assigned.claim.evidence !== evidence)
++    throw new Error('Wrong assigned evidence')
++  if (assigned.claim.service !== serviceResource)
++    throw new Error('Wrong assigned service')
++  await ownedPath(assignedRoot!, serviceResource!, 'file', true)
++  const resource = assigned.resource
+   const url = new URL(resource.test_database_url)
+   const inspected = JSON.parse(
+-    execFileSync('docker', ['inspect', containerId], { encoding: 'utf8' })
++    await inspectCompleteResource(
++      'settlement',
++      resourcePath!,
++      assignedRoot!,
++      'array'
++    )
+   )[0]
+   const ports = inspected.NetworkSettings.Ports['5432/tcp']
+   if (
+--- before/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
++++ after/packages/persistence/src/__tests__/complete-tool-process-restart.test.ts
+@@ -1,8 +1,16 @@
++import {
++  assignedResource,
++  startCompleteChild,
++  completeReadiness,
++  stopCompleteChildren,
++  completeArgv,
++  privateBytes,
++  ownedPath
++} from './fixtures/complete-process-support.ts'
+ /** Store-process evidence only: no public runtime, model, or tool body is run. */
+-import { spawn } from 'node:child_process'
+ import { createHash, randomUUID } from 'node:crypto'
+ import { readFile, writeFile, mkdir } from 'node:fs/promises'
+-import { dirname, join, resolve } from 'node:path'
++import { dirname, join } from 'node:path'
+ import { Pool } from 'pg'
+ import { describe, expect, it } from 'vitest'
+ import {
+@@ -27,8 +35,6 @@
+ const tenantId = TenantIdSchema.parse(
+   'tenant_00000000-0000-4000-8000-000000000224'
+ )
+-const target =
+-  'packages/persistence/src/__tests__/complete-tool-process-restart.test.ts'
+ const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+ const token = (c: ExecutionCheckpoint) => ({
+   checkpointId: c.checkpointId,
+@@ -36,7 +42,23 @@
+ })
+ 
+ async function connect() {
+-  const r = JSON.parse(await readFile(resourcePath!, 'utf8')) as {
++  const assigned = await assignedResource('store-restart', resourcePath!)
++  if (process.env.SPEC0224_PG_CHILD_CONFIG !== assigned.claim.config)
++    throw new Error('Wrong assigned config')
++  if (role) {
++    completeArgv(
++      'store-restart',
++      role,
++      assigned.claim.config!,
++      assigned.claim.cwd
++    )
++    await privateBytes(assigned.root, process.env.SPEC0224_PG_CHILD_INPUT!)
++    const dir = process.env.SPEC0224_PG_CHILD_DIR!
++    await ownedPath(assigned.root, dir, 'directory')
++    if (!dir.startsWith(assigned.claim.evidence + '/'))
++      throw new Error('Wrong child evidence')
++  }
++  const r = assigned.resource as {
+     test_database_url: string
+     schemaName: string
+     synthetic: boolean
+@@ -183,100 +205,68 @@
+ 
+ async function child(childRole: string, dir: string, input: string) {
+   const config = process.env.SPEC0224_PG_CHILD_CONFIG
+-  if (!config)
+-    throw new Error(
+-      'SPEC0224_PG_CHILD_CONFIG must select node environment and threads pool'
++  if (!config) throw new Error('Private child config required')
++  const owned = await startCompleteChild({
++    profile: 'store-restart',
++    role: childRole,
++    resource: resourcePath!,
++    config,
++    input: input,
++    dir
++  })
++  const { proc, argv } = owned
++  const readiness = completeReadiness(owned, 'store-restart')
++  const ready = readiness.then((status) => {
++    if (status !== 'ready') throw new Error('Child exited before readiness')
++  })
++  void ready.catch(() => {})
++  const done = owned.done.then(async (exit) => {
++    const omitted: string[] = []
++    for (const name of ['stdout', 'stderr'] as const) {
++      const bytes = owned.output.bytes(name)
++      if (bytes.length)
++        await writeFile(join(dir, `${childRole}.${name}.log`), bytes)
++      else omitted.push(name)
++    }
++    await writeFile(
++      join(dir, `${childRole}.command.json`),
++      JSON.stringify(
++        {
++          executable: '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
++          argv,
++          cwd: process.cwd(),
++          pid: proc.pid,
++          ...exit,
++          emptyStreamsOmitted: omitted
++        },
++        null,
++        2
++      )
+     )
+-  const argv = [
+-    resolve('node_modules/vitest/vitest.mjs'),
+-    'run',
+-    '--config',
+-    config,
+-    target
+-  ]
+-  const overrides = {
+-    SPEC0224_PG_CHILD_ROLE: childRole,
+-    SPEC0224_PG_CHILD_INPUT: input,
+-    SPEC0224_PG_CHILD_DIR: dir
++    return exit
++  })
++  void done.catch(() => {})
++  return {
++    proc,
++    ready,
++    done,
++    stop: async () => {
++      await owned.stop()
++      await done
++    }
+   }
+-  const proc = spawn(process.execPath, argv, {
+-    cwd: process.cwd(),
+-    env: { ...process.env, ...overrides },
+-    stdio: ['ignore', 'pipe', 'pipe']
+-  })
+-  let stdout = '',
+-    stderr = ''
+-  let readyResolve: () => void
+-  let readyReject: (error: Error) => void
+-  const ready = new Promise<void>((yes, no) => {
+-    readyResolve = yes
+-    readyReject = no
+-  })
+-  const timer = setTimeout(() => {
+-    readyReject(new Error('Child readiness timeout'))
+-    proc.kill('SIGKILL')
+-  }, 20000)
+-  proc.stdout.on('data', (data: Buffer) => {
+-    stdout += data.toString()
+-    if (stdout.includes('PG224_READY')) {
+-      clearTimeout(timer)
+-      readyResolve()
+-    }
+-  })
+-  proc.stderr.on('data', (data: Buffer) => {
+-    stderr += data.toString()
+-  })
+-  const done = new Promise<{
+-    code: number | null
+-    signal: NodeJS.Signals | null
+-  }>((yes, no) => {
+-    proc.on('error', no)
+-    proc.on('close', async (code, signal) => {
+-      clearTimeout(timer)
+-      try {
+-        const omitted: string[] = []
+-        for (const [name, text] of [
+-          ['stdout', stdout],
+-          ['stderr', stderr]
+-        ]) {
+-          if (text) await writeFile(join(dir, `${childRole}.${name}.log`), text)
+-          else omitted.push(name!)
+-        }
+-        await writeFile(
+-          join(dir, `${childRole}.command.json`),
+-          JSON.stringify(
+-            {
+-              executable: process.execPath,
+-              argv,
+-              cwd: process.cwd(),
+-              envOverrides: overrides,
+-              pid: proc.pid,
+-              code,
+-              signal,
+-              emptyStreamsOmitted: omitted
+-            },
+-            null,
+-            2
+-          )
+-        )
+-        if (!stdout.includes('PG224_READY'))
+-          readyReject(
+-            new Error(`Child exited before readiness: ${stdout}\n${stderr}`)
+-          )
+-        yes({ code, signal })
+-      } catch (error) {
+-        no(error)
+-      }
+-    })
+-  })
+-  return { proc, ready, done }
+ }
+ 
+ if (role) {
+   it(`synthetic PG child ${role}`, async () => {
+     const dir = process.env.SPEC0224_PG_CHILD_DIR!
+     const input = JSON.parse(
+-      await readFile(process.env.SPEC0224_PG_CHILD_INPUT!, 'utf8')
++      (
++        await privateBytes(
++          dirname(resourcePath!),
++          process.env.SPEC0224_PG_CHILD_INPUT!
++        )
++      ).toString()
+     )
+     const { pool, store } = await connect()
+     try {
+@@ -341,20 +331,25 @@
+     'SPEC0224 actual store process loss and two-process CAS',
+     () => {
+       it('preserves exact NUL output, bytes, usage and SETTLED receipt after writer SIGKILL and reader recreation', async () => {
+-        const dir = join(dirname(resourcePath!), `restart-${randomUUID()}`)
+-        await mkdir(dir)
++        const assigned = await assignedResource('store-restart', resourcePath!)
++        const dir = join(assigned.claim.evidence, `restart-${randomUUID()}`)
++        await mkdir(dir, { mode: 0o700 })
+         const executionId = `spec0224_process_${randomUUID()}`
+         const input = join(dir, 'input.json')
+-        await writeFile(input, JSON.stringify({ executionId }))
++        await writeFile(input, JSON.stringify({ executionId }), { mode: 0o600 })
+         const { pool } = await connect()
+         let writer: Awaited<ReturnType<typeof child>> | undefined
++        const ownedChildren: Awaited<ReturnType<typeof child>>[] = []
++        let primary: unknown
+         try {
+           await seed(pool, executionId)
+           writer = await child('writer', dir, input)
++          ownedChildren.push(writer)
+           await writer.ready
+           expect(writer.proc.kill('SIGKILL')).toBe(true)
+           expect(await writer.done).toEqual({ code: null, signal: 'SIGKILL' })
+           const reader = await child('reader', dir, input)
++          ownedChildren.push(reader)
+           await reader.ready
+           expect(await reader.done).toEqual({ code: 0, signal: null })
+           const before = JSON.parse(
+@@ -410,24 +405,24 @@
+               2
+             )
+           )
++        } catch (error) {
++          primary = error
++          throw error
+         } finally {
+-          if (
+-            writer &&
+-            writer.proc.exitCode === null &&
+-            writer.proc.signalCode === null
+-          )
+-            writer.proc.kill('SIGKILL')
++          await stopCompleteChildren(ownedChildren, primary)
+           await cleanup(pool, executionId)
+           await pool.end()
+         }
+       }, 45000)
+ 
+       it('allows exactly one initial CAS and one reservation CAS across two real processes; refuses stale token and simple V2 save', async () => {
+-        const dir = join(dirname(resourcePath!), `race-${randomUUID()}`)
+-        await mkdir(dir)
++        const assigned = await assignedResource('store-restart', resourcePath!)
++        const dir = join(assigned.claim.evidence, `race-${randomUUID()}`)
++        await mkdir(dir, { mode: 0o700 })
+         const executionId = `spec0224_race_${randomUUID()}`
+         const { pool, store } = await connect()
+         const processes: Awaited<ReturnType<typeof child>>[] = []
++        let primary: unknown
+         try {
+           await seed(pool, executionId)
+           for (const phase of ['initial', 'reservation']) {
+@@ -450,7 +445,8 @@
+                       phase === 'initial' ? 'NONE' : 'RESERVED'
+                     )
+                   }
+-                })
++                }),
++                { mode: 0o600 }
+               )
+               const proc = await child(name, dir, input)
+               processes.push(proc)
+@@ -490,10 +486,11 @@
+             )
+             expect(() => store.saveCheckpoint(winner)).toThrow()
+           }
++        } catch (error) {
++          primary = error
++          throw error
+         } finally {
+-          for (const p of processes)
+-            if (p.proc.exitCode === null && p.proc.signalCode === null)
+-              p.proc.kill('SIGKILL')
++          await stopCompleteChildren(processes, primary)
+           await cleanup(pool, executionId)
+           await pool.end()
+         }
+--- before/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
++++ after/packages/persistence/src/__tests__/complete-tool-public-restart.test.ts
+@@ -1,8 +1,16 @@
++import {
++  assignedResource,
++  startCompleteChild,
++  completeReadiness,
++  stopCompleteChildren,
++  completeArgv,
++  privateBytes,
++  ownedPath
++} from './fixtures/complete-process-support.ts'
+ /** SPEC0224 bounded public runtime proof; local synthetic PG only. No production claim. */
+-import { spawn } from 'node:child_process'
+ import { createHash, randomUUID } from 'node:crypto'
+ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+-import { dirname, join, resolve } from 'node:path'
++import { dirname, join } from 'node:path'
+ import { Pool } from 'pg'
+ import { describe, expect, it } from 'vitest'
+ import {
+@@ -34,8 +42,6 @@
+ if (process.env.SPEC0224_PUBLIC_PG_REQUIRED === '1' && !resourcePath)
+   throw new Error('Assigned synthetic PG resource required')
+ const role = process.env.SPEC0224_PUBLIC_CHILD_ROLE
+-const target =
+-  'packages/persistence/src/__tests__/complete-tool-public-restart.test.ts'
+ const tenantId = TenantIdSchema.parse(
+   'tenant_00000000-0000-4000-8000-000000000224'
+ )
+@@ -67,7 +73,7 @@
+               ? '{}'
+               : '\u0000'.repeat(4096) + 'Olá🙂漢字"\\\n'
+ const save = (path: string, v: unknown) =>
+-  writeFile(path, JSON.stringify(v, null, 2) + '\n')
++  writeFile(path, JSON.stringify(v, null, 2) + '\n', { mode: 0o600 })
+ const errorInfo = (e: unknown) =>
+   e instanceof Error
+     ? {
+@@ -94,7 +100,23 @@
+   }
+ }
+ async function connect() {
+-  const r = JSON.parse(await readFile(resourcePath!, 'utf8'))
++  const assigned = await assignedResource('public-restart', resourcePath!)
++  if (process.env.SPEC0224_PUBLIC_CHILD_CONFIG !== assigned.claim.config)
++    throw new Error('Wrong assigned config')
++  if (role) {
++    completeArgv(
++      'public-restart',
++      role,
++      assigned.claim.config!,
++      assigned.claim.cwd
++    )
++    await privateBytes(assigned.root, process.env.SPEC0224_PUBLIC_CHILD_INPUT!)
++    const dir = process.env.SPEC0224_PUBLIC_CHILD_DIR!
++    await ownedPath(assigned.root, dir, 'directory')
++    if (!dir.startsWith(assigned.claim.evidence + '/'))
++      throw new Error('Wrong child evidence')
++  }
++  const r = assigned.resource
+   const u = new URL(r.test_database_url)
+   if (
+     r.synthetic !== true ||
+@@ -421,75 +443,53 @@
+ async function child(childRole: string, dir: string, inputPath: string) {
+   const config = process.env.SPEC0224_PUBLIC_CHILD_CONFIG
+   if (!config) throw new Error('Private child config required')
+-  const argv = [
+-    resolve('node_modules/vitest/vitest.mjs'),
+-    'run',
+-    '--config',
++  const owned = await startCompleteChild({
++    profile: 'public-restart',
++    role: childRole,
++    resource: resourcePath!,
+     config,
+-    target
+-  ]
+-  const envOverrides = {
+-    SPEC0224_PUBLIC_CHILD_ROLE: childRole,
+-    SPEC0224_PUBLIC_CHILD_DIR: dir,
+-    SPEC0224_PUBLIC_CHILD_INPUT: inputPath
+-  }
+-  const proc = spawn(process.execPath, argv, {
+-    cwd: process.cwd(),
+-    env: { ...process.env, ...envOverrides },
+-    stdio: ['ignore', 'pipe', 'pipe']
++    input: inputPath,
++    dir
+   })
+-  let stdout = '',
+-    stderr = ''
+-  let readyResolve: (s: string) => void
+-  const ready = new Promise<string>((y) => {
+-    readyResolve = y
++  const { proc, argv } = owned
++  const readiness = completeReadiness(owned, 'public-restart')
++  const ready = readiness
++  void ready.catch(() => {})
++  const done = owned.done.then(async (exit) => {
++    const omitted: string[] = []
++    for (const name of ['stdout', 'stderr'] as const) {
++      const bytes = owned.output.bytes(name)
++      if (bytes.length)
++        await writeFile(join(dir, `${childRole}.${name}.log`), bytes)
++      else omitted.push(name)
++    }
++    await writeFile(
++      join(dir, `${childRole}.command.json`),
++      JSON.stringify(
++        {
++          executable: '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',
++          argv,
++          cwd: process.cwd(),
++          pid: proc.pid,
++          ...exit,
++          emptyStreamsOmitted: omitted
++        },
++        null,
++        2
++      )
++    )
++    return exit
+   })
+-  const timer = setTimeout(() => {
+-    readyResolve('timeout')
+-    proc.kill('SIGKILL')
+-  }, 45000)
+-  proc.stdout.on('data', (b: Buffer) => {
+-    stdout += b.toString()
+-    if (stdout.includes('PUBLIC224_READY')) readyResolve('ready')
+-    else if (stdout.includes('PUBLIC224_FINISHED')) readyResolve('finished')
+-  })
+-  proc.stderr.on('data', (b: Buffer) => {
+-    stderr += b.toString()
+-  })
+-  const done = new Promise<{
+-    code: number | null
+-    signal: NodeJS.Signals | null
+-  }>((yes, no) => {
+-    proc.on('error', no)
+-    proc.on('close', async (code, signal) => {
+-      clearTimeout(timer)
+-      readyResolve('exited')
+-      try {
+-        const emptyStreamsOmitted = []
+-        for (const [name, data] of [
+-          ['stdout', stdout],
+-          ['stderr', stderr]
+-        ]) {
+-          if (data)
+-            await writeFile(join(dir, `${childRole}.${name}.log`), data!)
+-          else emptyStreamsOmitted.push(name)
+-        }
+-        await save(join(dir, `${childRole}.command.json`), {
+-          executable: process.execPath,
+-          argv,
+-          envOverrides,
+-          pid: proc.pid,
+-          code,
+-          signal,
+-          emptyStreamsOmitted
+-        })
+-        yes({ code, signal })
+-      } catch (e) {
+-        no(e)
+-      }
+-    })
+-  })
+-  return { proc, ready, done }
++  void done.catch(() => {})
++  return {
++    proc,
++    ready,
++    done,
++    stop: async () => {
++      await owned.stop()
++      await done
++    }
++  }
+ }
+ async function lines(p: string) {
+   return (await exists(p))
+@@ -504,7 +504,12 @@
+   it(`public runtime child ${role}`, async () => {
+     const dir = process.env.SPEC0224_PUBLIC_CHILD_DIR!
+     const input = JSON.parse(
+-      await readFile(process.env.SPEC0224_PUBLIC_CHILD_INPUT!, 'utf8')
++      (
++        await privateBytes(
++          dirname(resourcePath!),
++          process.env.SPEC0224_PUBLIC_CHILD_INPUT!
++        )
++      ).toString()
+     )
+     await runChild(dir, input, role)
+   }, 60000)
+@@ -523,18 +528,25 @@
+       ])(
+         'resumes full %s after APPLIED CAS and SIGKILL without another body',
+         async (name) => {
++          const assigned = await assignedResource(
++            'public-restart',
++            resourcePath!
++          )
+           const dir = join(
+-            dirname(resourcePath!),
++            assigned.claim.evidence,
+             `restart-${name}-${randomUUID()}`
+           )
+-          await mkdir(dir)
++          await mkdir(dir, { mode: 0o700 })
+           const executionId = `spec0224_public_${randomUUID()}`,
+             inputPath = join(dir, 'input.json')
+           await save(inputPath, { executionId, name })
+           await seed(executionId)
+           let writer: Awaited<ReturnType<typeof child>> | undefined
++          const ownedChildren: Awaited<ReturnType<typeof child>>[] = []
++          let primary: unknown
+           try {
+             writer = await child('writer', dir, inputPath)
++            ownedChildren.push(writer)
+             const checkpointReady = await writer.ready
+             if (checkpointReady !== 'ready') {
+               await writer.done
+@@ -566,6 +578,7 @@
+             )
+             expect(before.checkpoint).toEqual(committed.checkpoint)
+             const reader = await child('reader', dir, inputPath)
++            ownedChildren.push(reader)
+             expect(await reader.done).toEqual({ code: 0, signal: null })
+             const after = await snapshot(dir, 'after-reader', executionId)
+             const outcome = JSON.parse(
+@@ -645,32 +658,28 @@
+               actualUsageAndReceipts: true,
+               fencebound: 'NOT_RUN'
+             })
++          } catch (error) {
++            primary = error
++            throw error
+           } finally {
+-            if (
+-              writer &&
+-              writer.proc.exitCode === null &&
+-              writer.proc.signalCode === null
+-            ) {
+-              writer.proc.kill('SIGKILL')
+-              await writer.done
+-            }
++            await stopCompleteChildren(ownedChildren, primary)
+           }
+         },
+         90000
+       )
+       it('admits only one actual model call from an initial CAS race between two public runtime processes', async () => {
+-        const dir = join(dirname(resourcePath!), `race-${randomUUID()}`)
+-        await mkdir(dir)
++        const assigned = await assignedResource('public-restart', resourcePath!)
++        const dir = join(assigned.claim.evidence, `race-${randomUUID()}`)
++        await mkdir(dir, { mode: 0o700 })
+         const executionId = `spec0224_public_race_${randomUUID()}`,
+           inputPath = join(dir, 'input.json')
+         await save(inputPath, { executionId, name: 'race' })
+         await seed(executionId)
+         const children: Awaited<ReturnType<typeof child>>[] = []
++        let primary: unknown
+         try {
+-          children.push(
+-            await child('race-a', dir, inputPath),
+-            await child('race-b', dir, inputPath)
+-          )
++          children.push(await child('race-a', dir, inputPath))
++          children.push(await child('race-b', dir, inputPath))
+           expect(await Promise.all(children.map((c) => c.ready))).toEqual([
+             'ready',
+             'ready'
+@@ -717,14 +726,11 @@
+             fencebound: 'NOT_RUN',
+             reservationRaceSeparate: 'NOT_RUN'
+           })
++        } catch (error) {
++          primary = error
++          throw error
+         } finally {
+-          await Promise.all(
+-            children.map(async (c) => {
+-              if (c.proc.exitCode === null && c.proc.signalCode === null)
+-                c.proc.kill('SIGKILL')
+-              await c.done
+-            })
+-          )
++          await stopCompleteChildren(children, primary)
+         }
+       }, 90000)
+     }
+--- before/packages/persistence/src/__tests__/fixtures/complete-process-support.ts
++++ after/packages/persistence/src/__tests__/fixtures/complete-process-support.ts
+@@ -0,0 +1,755 @@
++/** Private SPEC224 fixtures only. No shell, arbitrary argv or runtime authority. */
++import { execFile, spawn, type ChildProcess } from 'node:child_process'
++import { createHash } from 'node:crypto'
++import { constants } from 'node:fs'
++import {
++  lstat,
++  realpath,
++  open,
++  readFile,
++  mkdir,
++  mkdtemp,
++  rm
++} from 'node:fs/promises'
++import { dirname, join, resolve, sep } from 'node:path'
++import { trackPare217Process } from '../../../../../apps/worker/src/__tests__/fixtures/pare217-process-lifecycle.ts'
++
++export const COMPLETE_NODE =
++  '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
++const NODE_SHA =
++  '3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327'
++const TASK = 'PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224'
++const BASE = '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/'
++const TESTS = 'packages/persistence/src/__tests__/'
++export const completeProfiles = {
++  'store-restart': {
++    target: TESTS + 'complete-tool-process-restart.test.ts',
++    roles: [
++      'writer',
++      'reader',
++      'initial-a',
++      'initial-b',
++      'reservation-a',
++      'reservation-b'
++    ],
++    readinessMs: 20000,
++    maxRuntimeMs: 25000
++  },
++  'public-restart': {
++    target: TESTS + 'complete-tool-public-restart.test.ts',
++    roles: ['writer', 'reader', 'race-a', 'race-b'],
++    readinessMs: 45000,
++    maxRuntimeMs: 75000
++  },
++  'bound-admission': {
++    target: TESTS + 'complete-bound-admission-postgres.integration.ts',
++    roles: ['assigned-child-input-only'],
++    readinessMs: 15000,
++    maxRuntimeMs: 45000
++  }
++} as const
++export type CompleteProfile = keyof typeof completeProfiles
++type ResourceKind = CompleteProfile | 'capacity' | 'settlement'
++const sha = (bytes: Buffer | string) =>
++  createHash('sha256').update(bytes).digest('hex')
++
++export async function physicalPath(path: string, kind: 'file' | 'directory') {
++  if (resolve(path) !== path) throw new Error('Noncanonical path')
++  // realpath equality alone misses ancestor symlinks that resolve back inside.
++  for (let current = path; ; current = dirname(current)) {
++    const stat = await lstat(current)
++    if (stat.isSymbolicLink()) throw new Error('Symlink path component')
++    if (current === dirname(current)) break
++  }
++  const stat = await lstat(path)
++  if (
++    (kind === 'file' ? !stat.isFile() : !stat.isDirectory()) ||
++    (await realpath(path)) !== path
++  )
++    throw new Error('Wrong physical path type')
++  return stat
++}
++export async function ownedPath(
++  root: string,
++  path: string,
++  kind: 'file' | 'directory',
++  fresh = false
++) {
++  await physicalPath(root, 'directory')
++  if (resolve(path) !== path || !path.startsWith(root + sep))
++    throw new Error('Path outside assigned root')
++  if (fresh) {
++    await physicalPath(dirname(path), 'directory')
++    try {
++      await lstat(path)
++    } catch (error) {
++      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
++      throw error
++    }
++    throw new Error('Owned new path already exists')
++  }
++  const stat = await physicalPath(path, kind)
++  if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
++    throw new Error('Private path ownership/mode required')
++}
++export async function privateBytes(root: string, path: string) {
++  await ownedPath(root, path, 'file')
++  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
++  try {
++    const stat = await handle.stat()
++    if (
++      !stat.isFile() ||
++      stat.size > 1048576 ||
++      stat.uid !== process.getuid?.() ||
++      (stat.mode & 0o077) !== 0
++    )
++      throw new Error('Private file exceeds bounds or ownership')
++    const bytes = Buffer.alloc(stat.size + 1)
++    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
++    if (bytesRead !== stat.size)
++      throw new Error('Private file changed while reading')
++    return bytes.subarray(0, bytesRead)
++  } finally {
++    await handle.close()
++  }
++}
++export async function privateEnvironment(root: string) {
++  await physicalPath(root, 'directory')
++  const home = await mkdtemp(join(root, 'complete-home-'))
++  try {
++    for (const part of ['tmp', 'config', 'cache', 'data', 'state'])
++      await mkdir(join(home, part), { mode: 0o700 })
++  } catch (error) {
++    await rm(home, { recursive: true })
++    throw error
++  }
++  const env: NodeJS.ProcessEnv = {
++    PATH: '/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin',
++    HOME: home,
++    TMPDIR: join(home, 'tmp'),
++    TMP: join(home, 'tmp'),
++    TEMP: join(home, 'tmp'),
++    XDG_CONFIG_HOME: join(home, 'config'),
++    XDG_CACHE_HOME: join(home, 'cache'),
++    XDG_DATA_HOME: join(home, 'data'),
++    XDG_STATE_HOME: join(home, 'state'),
++    LANG: 'C.UTF-8',
++    TZ: 'UTC',
++    NODE_ENV: 'test',
++    CI: '1'
++  }
++  return { home, env }
++}
++
++/** Import-free static config; JSON data cannot smuggle setup/loader code.
++ * Future Lead seals these exact bytes in the resource claim before execution. */
++export function completeChildConfig(
++  profile: CompleteProfile,
++  cwd: string,
++  scratch: string
++) {
++  const alias = {
++    '@cvg/harness-contracts': join(cwd, 'packages/contracts/src/index.ts'),
++    '@cvg/harness-orchestrator': join(
++      cwd,
++      'packages/orchestrator/src/index.ts'
++    ),
++    '@cvg/harness': join(cwd, 'packages/harness/src/index.ts'),
++    '@cvg/shared': join(cwd, 'packages/shared/src/index.ts'),
++    '@cvg/platform': join(cwd, 'packages/platform/src/index.ts')
++  }
++  return (
++    'export default ' +
++    JSON.stringify({
++      cacheDir: join(scratch, 'vite-cache'),
++      test: {
++        environment: 'node',
++        pool: 'threads',
++        maxWorkers: 1,
++        fileParallelism: false,
++        include: [completeProfiles[profile].target]
++      },
++      resolve: { alias }
++    }) +
++    '\n'
++  )
++}
++type Claim = {
++  task: string
++  claimId: string
++  kind: ResourceKind
++  root: string
++  cwd: string
++  resource: string
++  resourceSHA256: string
++  evidence: string
++  service?: string
++  config?: string
++  configSHA256?: string
++  containerId: string
++  containerName: string
++  imageId: string
++  port: string
++  database: string
++  user: string
++  schema: string
++  role: string
++  docker: '/usr/bin/docker'
++  dockerSHA256: string
++  dockerHost: string
++}
++export async function assignedResource(
++  kind: ResourceKind,
++  resourcePath: string,
++  expectedRoot = dirname(resourcePath)
++) {
++  const root = expectedRoot
++  if (
++    !root.startsWith(BASE) ||
++    !/^[-a-zA-Z0-9_/]+$/.test(root) ||
++    resolve(root) !== root
++  )
++    throw new Error('Unassigned resource root')
++  const rootStat = await physicalPath(root, 'directory')
++  if (rootStat.uid !== process.getuid?.() || (rootStat.mode & 0o077) !== 0)
++    throw new Error('Private owned root required')
++  const claim = JSON.parse(
++    (
++      await privateBytes(root, join(root, 'complete-process-claim.json'))
++    ).toString()
++  ) as Claim
++  if (
++    claim.task !== TASK ||
++    claim.kind !== kind ||
++    claim.root !== root ||
++    claim.resource !== resourcePath ||
++    claim.claimId !== `${TASK}:${kind}:${root}`
++  )
++    throw new Error('Exact Lead resource claim required')
++  const bytes = await privateBytes(root, resourcePath)
++  if (sha(bytes) !== claim.resourceSHA256)
++    throw new Error('Resource bytes differ from claim')
++  const resource = JSON.parse(bytes.toString())
++  const url = new URL(resource.test_database_url)
++  if (
++    resource.synthetic !== true ||
++    resource.exclusiveClaim !== claim.claimId ||
++    resource.containerId !== claim.containerId ||
++    !/^[a-f0-9]{64}$/.test(claim.containerId) ||
++    resource.containerName !== claim.containerName ||
++    claim.containerName !== '/cvg-pare100-224-pg' ||
++    resource.imageId !== claim.imageId ||
++    !/^sha256:[a-f0-9]{64}$/.test(claim.imageId) ||
++    resource.schemaName !== claim.schema ||
++    !/^pare224_[a-z0-9_]{1,50}$/.test(claim.schema) ||
++    resource.roleName !== claim.role ||
++    claim.role !== claim.schema + '_service' ||
++    url.protocol !== 'postgresql:' ||
++    url.hostname !== '127.0.0.1' ||
++    url.port !== claim.port ||
++    !/^[1-9][0-9]{0,4}$/.test(claim.port) ||
++    Number(claim.port) > 65535 ||
++    claim.database !== 'pare224_synthetic' ||
++    claim.user !== 'pare224' ||
++    url.pathname !== '/' + claim.database ||
++    url.username !== claim.user ||
++    url.search ||
++    url.hash ||
++    resource.hostPort?.HostIp !== '127.0.0.1' ||
++    resource.hostPort?.HostPort !== claim.port
++  )
++    throw new Error('Resource identity differs from owned claim')
++  await physicalPath(claim.cwd, 'directory')
++  if (claim.cwd !== resolve(import.meta.dirname, '../../../../..'))
++    throw new Error('Wrong fixture worktree')
++  await ownedPath(root, claim.evidence, 'directory')
++  if (kind in completeProfiles) {
++    if (!claim.config || !claim.configSHA256) throw new Error('Unsealed config')
++    const config = await privateBytes(root, claim.config)
++    if (
++      sha(config) !== claim.configSHA256 ||
++      config.toString() !==
++        completeChildConfig(kind as CompleteProfile, claim.cwd, root)
++    )
++      throw new Error('Wrong static config')
++  }
++  return { root, claim, resource, url }
++}
++export async function assignedService(
++  resourcePath: string,
++  root: string,
++  service: string,
++  evidence: string,
++  fresh = false
++) {
++  const assigned = await assignedResource('bound-admission', resourcePath, root)
++  const { claim } = assigned
++  if (claim.service !== service || claim.evidence !== evidence)
++    throw new Error('Wrong service/evidence assignment')
++  await ownedPath(root, service, 'file', fresh)
++  if (fresh) return { ...assigned, connection: undefined }
++  const value = JSON.parse((await privateBytes(root, service)).toString())
++  const fields = ['host', 'port', 'database', 'user', 'password', 'options']
++  if (
++    !value ||
++    typeof value !== 'object' ||
++    Array.isArray(value) ||
++    Object.keys(value).length !== fields.length ||
++    Object.keys(value).some((key) => !fields.includes(key)) ||
++    value.host !== '127.0.0.1' ||
++    value.port !== Number(claim.port) ||
++    value.database !== claim.database ||
++    value.user !== claim.role ||
++    typeof value.password !== 'string' ||
++    !value.password ||
++    value.options !==
++      `-c search_path=${claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`
++  )
++    throw new Error('Wrong service connection/options')
++  // Pass only the checked values from this read. A second JSON read could
++  // reintroduce unchecked connectionString/SSL options before Pool receives it.
++  const connection: {
++    host: string
++    port: number
++    database: string
++    user: string
++    password: string
++    options: string
++  } = {
++    host: value.host,
++    port: value.port,
++    database: value.database,
++    user: value.user,
++    password: value.password,
++    options: value.options
++  }
++  return { ...assigned, connection }
++}
++export function completeArgv(
++  profile: CompleteProfile,
++  role: string,
++  config: string,
++  cwd: string
++) {
++  const spec = completeProfiles[profile]
++  if (!spec || !(spec.roles as readonly string[]).includes(role))
++    throw new Error('Unknown finite fixture role/profile')
++  return [
++    join(cwd, 'node_modules/vitest/vitest.mjs'),
++    'run',
++    '--config',
++    config,
++    ...(profile === 'bound-admission' ? ['--configLoader', 'native'] : []),
++    spec.target
++  ]
++}
++
++/** Raw bounded bytes. Once partial, no retained prefix can be a transcript. */
++export function completeCollector(onLimit: (error: Error) => void) {
++  const chunks: Record<'stdout' | 'stderr', Buffer[]> = {
++    stdout: [],
++    stderr: []
++  }
++  const counts = { stdout: 0, stderr: 0 }
++  let failure: Error | undefined
++  return {
++    push(stream: 'stdout' | 'stderr', bytes: Buffer) {
++      if (failure) return
++      counts[stream] += bytes.length
++      if (counts[stream] > 1048576 || counts.stdout + counts.stderr > 2097152) {
++        failure = new Error('OUTPUT_LIMIT: partial transcript is not proof')
++        chunks.stdout = []
++        chunks.stderr = []
++        onLimit(failure)
++      } else chunks[stream].push(Buffer.from(bytes))
++    },
++    bytes(stream: 'stdout' | 'stderr') {
++      if (failure) throw failure
++      return Buffer.concat(chunks[stream])
++    },
++    get failure() {
++      return failure
++    }
++  }
++}
++type LifecycleOptions = Parameters<typeof trackPare217Process>[1]
++export function observeCompleteChild(
++  child: ChildProcess,
++  home: string,
++  options: LifecycleOptions
++) {
++  // First operation after spawn. Tracker bytes remain frozen at 42d57db0.
++  const lifecycle = trackPare217Process(child, options)
++  let failure: Error | undefined
++  let closed = false
++  let rejectFailure!: (error: Error) => void
++  const failed = new Promise<never>((_, reject) => {
++    rejectFailure = reject
++  })
++  void failed.catch(() => {})
++  const latch = (error: Error) => {
++    failure ??= error
++    rejectFailure(failure)
++    void lifecycle.stop().catch(() => {})
++  }
++  const deadline = setTimeout(
++    () =>
++      latch(
++        new Error(`Fixture maxRuntimeMs ${options?.maxRuntimeMs}ms exceeded`)
++      ),
++    options?.maxRuntimeMs ?? 180000
++  )
++  const output = completeCollector(latch)
++  child.stdout!.on('data', (bytes: Buffer) => output.push('stdout', bytes))
++  child.stderr!.on('data', (bytes: Buffer) => output.push('stderr', bytes))
++  child.once('close', () => {
++    closed = true
++    clearTimeout(deadline)
++  })
++  let disposePromise: Promise<void> | undefined
++  const dispose = () =>
++    (disposePromise ??= (async () => {
++      if (!closed) throw new Error('Preserving HOME: stdio close unconfirmed')
++      if (child.pid) {
++        try {
++          process.kill(child.pid, 0)
++        } catch (error) {
++          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
++            await rm(home, { recursive: true })
++            return
++          }
++          throw error
++        }
++        throw new Error('Preserving HOME: PID absence unconfirmed')
++      }
++      await rm(home, { recursive: true })
++    })())
++  const combine = async <T>(action: () => Promise<T>): Promise<T> => {
++    let primary: unknown
++    let result: T | undefined
++    try {
++      result = await action()
++      if (failure) throw failure
++    } catch (error) {
++      primary = error
++    }
++    let cleanup: unknown
++    try {
++      await lifecycle.stop()
++    } catch (error) {
++      cleanup = error
++    }
++    // An async spawn error rejects tracker.stop even after confirmed close.
++    // That original error does not prevent safe removal of an unused HOME.
++    if (closed) {
++      try {
++        await dispose()
++      } catch (error) {
++        cleanup =
++          cleanup && cleanup !== error
++            ? new AggregateError([cleanup, error], 'Join/disposal failed', {
++                cause: cleanup
++              })
++            : error
++      }
++    }
++    clearTimeout(deadline)
++    if (cleanup) {
++      if (primary && primary !== cleanup)
++        throw new AggregateError(
++          [primary, cleanup],
++          'Fixture failed; cleanup also failed',
++          { cause: primary }
++        )
++      throw primary ?? cleanup
++    }
++    if (primary) throw primary
++    return result as T
++  }
++  const done = Promise.race([lifecycle.closed, failed]).then(
++    () => combine(lifecycle.finish),
++    (error: unknown) =>
++      combine(async () => {
++        throw error
++      })
++  )
++  void done.catch(() => {})
++  return {
++    proc: child,
++    output,
++    done,
++    finish: () => combine(lifecycle.finish),
++    stop: () =>
++      combine(async () => {
++        await lifecycle.stop()
++        return lifecycle.finish()
++      }),
++    fail: latch
++  }
++}
++export async function startCompleteChild(args: {
++  profile: CompleteProfile
++  role: string
++  resource: string
++  config: string
++  input: string
++  dir: string
++  root?: string
++  service?: string
++  evidence?: string
++}) {
++  const assigned = await assignedResource(
++    args.profile,
++    args.resource,
++    args.root
++  )
++  const { root, claim } = assigned
++  const argv = completeArgv(args.profile, args.role, args.config, claim.cwd)
++  if (args.config !== claim.config || !claim.configSHA256)
++    throw new Error('Unsealed child config')
++  const config = await privateBytes(root, args.config)
++  if (
++    sha(config) !== claim.configSHA256 ||
++    config.toString() !== completeChildConfig(args.profile, claim.cwd, root)
++  )
++    throw new Error('Wrong static child config bytes')
++  await privateBytes(root, args.input)
++  await ownedPath(root, args.dir, 'directory')
++  if (!args.dir.startsWith(claim.evidence + sep))
++    throw new Error('Wrong child evidence path')
++  if (args.profile === 'bound-admission') {
++    if (!args.service || !args.evidence)
++      throw new Error('Bound service required')
++    await assignedService(args.resource, root, args.service, args.evidence)
++  }
++  await physicalPath(COMPLETE_NODE, 'file')
++  if (sha(await readFile(COMPLETE_NODE)) !== NODE_SHA)
++    throw new Error('Node binary binding differs')
++  const { home, env } = await privateEnvironment(root)
++  if (args.profile === 'store-restart')
++    Object.assign(env, {
++      SPEC0224_PG_REQUIRED: '1',
++      SPEC0224_PG_RESOURCE: args.resource,
++      SPEC0224_PG_CHILD_CONFIG: args.config,
++      SPEC0224_PG_CHILD_ROLE: args.role,
++      SPEC0224_PG_CHILD_INPUT: args.input,
++      SPEC0224_PG_CHILD_DIR: args.dir
++    })
++  else if (args.profile === 'public-restart')
++    Object.assign(env, {
++      SPEC0224_PUBLIC_PG_REQUIRED: '1',
++      SPEC0224_PUBLIC_PG_RESOURCE: args.resource,
++      SPEC0224_PUBLIC_CHILD_CONFIG: args.config,
++      SPEC0224_PUBLIC_CHILD_ROLE: args.role,
++      SPEC0224_PUBLIC_CHILD_INPUT: args.input,
++      SPEC0224_PUBLIC_CHILD_DIR: args.dir
++    })
++  else
++    Object.assign(env, {
++      SPEC0224_BOUND_ASSIGNED_ROOT: root,
++      SPEC0224_BOUND_RESOURCE: args.resource,
++      SPEC0224_BOUND_SERVICE_RESOURCE: args.service,
++      SPEC0224_BOUND_EVIDENCE: args.evidence,
++      SPEC0224_BOUND_CHILD_CONFIG: args.config,
++      SPEC0224_BOUND_CHILD_INPUT: args.input
++    })
++  let child: ChildProcess
++  try {
++    child = spawn(COMPLETE_NODE, argv, {
++      cwd: claim.cwd,
++      env,
++      stdio: ['ignore', 'pipe', 'pipe']
++    })
++  } catch (error) {
++    await rm(home, { recursive: true })
++    throw error
++  }
++  const owned = observeCompleteChild(child, home, {
++    label: args.profile,
++    maxRuntimeMs: completeProfiles[args.profile].maxRuntimeMs,
++    exitTimeoutMs: 5000,
++    termGraceMs: 1000,
++    killGraceMs: 2000
++  })
++  return { ...owned, argv }
++}
++
++/** Only finite Docker inspect variants; a future Lead claim binds executable/socket. */
++export async function inspectCompleteResource(
++  kind: 'capacity' | 'bound-admission' | 'settlement',
++  resource: string,
++  root: string,
++  format: 'object' | 'array'
++) {
++  const { claim } = await assignedResource(kind, resource, root)
++  if (
++    claim.docker !== '/usr/bin/docker' ||
++    !/^unix:\/\/\//.test(claim.dockerHost)
++  )
++    throw new Error('Owned local Docker identity required')
++  await physicalPath(claim.docker, 'file')
++  const executable = await open(claim.docker, 'r')
++  try {
++    if (sha(await executable.readFile()) !== claim.dockerSHA256)
++      throw new Error('Docker executable differs from claim')
++  } finally {
++    await executable.close()
++  }
++  const socket = claim.dockerHost.slice('unix://'.length)
++  if (
++    resolve(socket) !== socket ||
++    (await realpath(socket)) !== socket ||
++    !(await lstat(socket)).isSocket()
++  )
++    throw new Error('Wrong physical Docker socket')
++  const { home, env } = await privateEnvironment(root)
++  env.DOCKER_HOST = claim.dockerHost
++  const argv =
++    format === 'object'
++      ? ['inspect', '--format', '{{json .}}', claim.containerId]
++      : ['inspect', claim.containerId]
++  let child: ChildProcess
++  let yes!: (bytes: Buffer) => void
++  let no!: (error: Error) => void
++  const callback = new Promise<Buffer>((resolve, reject) => {
++    yes = resolve
++    no = reject
++  })
++  void callback.catch(() => {})
++  try {
++    child = execFile(
++      '/usr/bin/docker',
++      argv,
++      {
++        cwd: root,
++        env,
++        timeout: 5000,
++        maxBuffer: 1048576,
++        killSignal: 'SIGKILL',
++        encoding: 'buffer'
++      },
++      (error, stdout) => (error ? no(error) : yes(stdout))
++    )
++  } catch (error) {
++    await rm(home, { recursive: true })
++    throw error
++  }
++  const owned = observeCompleteChild(child, home, {
++    label: 'Docker inspect',
++    maxRuntimeMs: 5000,
++    exitTimeoutMs: 1000,
++    termGraceMs: 1000,
++    killGraceMs: 2000
++  })
++  let primary: unknown
++  try {
++    const stdout = await Promise.race([
++      callback,
++      owned.done.then(() => {
++        throw new Error('Inspect closed without native callback')
++      })
++    ])
++    const exit = await owned.done
++    if (exit.code !== 0 || exit.signal)
++      throw new Error('Inspect did not exit successfully')
++    const parsed = JSON.parse(stdout.toString())
++    const object =
++      format === 'array'
++        ? Array.isArray(parsed) && parsed.length === 1
++          ? parsed[0]
++          : undefined
++        : !Array.isArray(parsed)
++          ? parsed
++          : undefined
++    if (
++      !object ||
++      object.Id !== claim.containerId ||
++      object.Name !== claim.containerName ||
++      object.Image !== claim.imageId
++    )
++      throw new Error('Inspect identity/shape mismatch')
++    return stdout.toString()
++  } catch (error) {
++    primary = error
++    throw error
++  } finally {
++    try {
++      await owned.stop()
++    } catch (error) {
++      if (primary && primary !== error)
++        throw new AggregateError(
++          [primary, error],
++          'Inspect failed; cleanup also failed',
++          { cause: primary }
++        )
++      throw error
++    }
++  }
++}
++
++/** Join every owned child before callers clean any DB/role; retain primary cause. */
++export async function stopCompleteChildren(
++  children: { stop: () => Promise<unknown> }[],
++  primary?: unknown
++) {
++  const results = await Promise.allSettled(
++    children.map((child) => child.stop())
++  )
++  const errors = results.flatMap((result) =>
++    result.status === 'rejected' ? [result.reason] : []
++  )
++  if (errors.length)
++    throw new AggregateError(
++      primary === undefined ? errors : [primary, ...errors],
++      'Owned child cleanup failed; DB cleanup forbidden',
++      { cause: primary ?? errors[0] }
++    )
++}
++
++export function completeReadiness(
++  owned: ReturnType<typeof observeCompleteChild>,
++  profile: 'store-restart' | 'public-restart'
++) {
++  const marker = profile === 'store-restart' ? 'PG224_READY' : 'PUBLIC224_READY'
++  let resolveReady!: (value: string) => void
++  let rejectReady!: (error: unknown) => void
++  const ready = new Promise<string>((yes, no) => {
++    resolveReady = yes
++    rejectReady = no
++  })
++  void ready.catch(() => {})
++  const timer = setTimeout(() => {
++    const error = new Error('Child readiness timeout')
++    if (profile === 'public-restart') resolveReady('timeout')
++    else rejectReady(error)
++    owned.fail(error)
++  }, completeProfiles[profile].readinessMs)
++  owned.proc.stdout!.on('data', () => {
++    try {
++      const stdout = owned.output.bytes('stdout')
++      if (stdout.includes(marker)) {
++        if (profile === 'store-restart') clearTimeout(timer)
++        resolveReady('ready')
++      } else if (
++        profile === 'public-restart' &&
++        stdout.includes('PUBLIC224_FINISHED')
++      )
++        resolveReady('finished')
++      if (profile === 'public-restart' && stdout.includes('PUBLIC224_FINISHED'))
++        void owned.finish().catch((error) => owned.fail(error as Error))
++    } catch (error) {
++      rejectReady(error)
++    }
++  })
++  void owned.done.then(
++    () => {
++      clearTimeout(timer)
++      resolveReady('exited')
++    },
++    (error) => {
++      clearTimeout(timer)
++      rejectReady(error)
++    }
++  )
++  return ready
++}
+--- before/packages/persistence/src/__tests__/complete-process-support.test.ts
++++ after/packages/persistence/src/__tests__/complete-process-support.test.ts
+@@ -0,0 +1,844 @@
++// @vitest-environment node
++import { spawn, execFile, type ChildProcess } from 'node:child_process'
++import { createHash } from 'node:crypto'
++import { EventEmitter } from 'node:events'
++import { PassThrough } from 'node:stream'
++import * as fs from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join, dirname } from 'node:path'
++import { afterEach, expect, it, vi } from 'vitest'
++import {
++  COMPLETE_NODE,
++  completeReadiness,
++  completeArgv,
++  completeChildConfig,
++  completeCollector,
++  completeProfiles,
++  startCompleteChild,
++  assignedService,
++  observeCompleteChild,
++  privateEnvironment,
++  ownedPath,
++  privateBytes,
++  assignedResource,
++  inspectCompleteResource,
++  stopCompleteChildren
++} from './fixtures/complete-process-support.ts'
++
++const virtual = vi.hoisted(() => ({
++  files: new Map<string, Buffer>(),
++  dirs: new Set<string>(),
++  sockets: new Set<string>()
++}))
++vi.mock('node:fs/promises', async (original) => {
++  const native = await original<typeof import('node:fs/promises')>()
++  const stat = (directory = false, socket = false, size = 0) => ({
++    uid: process.getuid!(),
++    mode: directory ? 0o40700 : 0o100600,
++    size,
++    isFile: () => !directory && !socket,
++    isDirectory: () => directory,
++    isSocket: () => socket,
++    isSymbolicLink: () => false
++  })
++  return {
++    ...native,
++    lstat: vi.fn(async (path: string) =>
++      virtual.files.has(path)
++        ? stat(false, false, virtual.files.get(path)!.length)
++        : virtual.dirs.has(path)
++          ? stat(true)
++          : virtual.sockets.has(path)
++            ? stat(false, true)
++            : native.lstat(path)
++    ),
++    realpath: vi.fn(async (path: string) =>
++      virtual.files.has(path) ||
++      virtual.dirs.has(path) ||
++      virtual.sockets.has(path)
++        ? path
++        : native.realpath(path)
++    ),
++    open: vi.fn(async (path: string, ...args: unknown[]) => {
++      if (!virtual.files.has(path))
++        return Reflect.apply(native.open, native, [path, ...args])
++      const bytes = virtual.files.get(path)!
++      return {
++        stat: async () => stat(false, false, bytes.length),
++        close: async () => {},
++        readFile: async () => bytes,
++        read: async (buffer: Buffer) => {
++          bytes.copy(buffer)
++          return { bytesRead: bytes.length, buffer }
++        }
++      }
++    }),
++    mkdtemp: vi.fn(async (prefix: string) =>
++      native.mkdtemp(
++        prefix.startsWith(
++          '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/'
++        )
++          ? join(tmpdir(), 'mock-inspect-')
++          : prefix
++      )
++    )
++  }
++})
++vi.mock('node:child_process', async (original) => {
++  const native = await original<typeof import('node:child_process')>()
++  return { ...native, execFile: vi.fn(), spawn: vi.fn(native.spawn) }
++})
++const homes: string[] = []
++const children: ReturnType<typeof observeCompleteChild>[] = []
++afterEach(async () => {
++  await Promise.allSettled(children.splice(0).map((c) => c.stop()))
++  for (const home of homes.splice(0))
++    await fs.rm(home, { recursive: true, force: true })
++  virtual.files.clear()
++  virtual.dirs.clear()
++  virtual.sockets.clear()
++  vi.clearAllMocks()
++})
++async function scratch() {
++  const root = await fs.mkdtemp(join(tmpdir(), 'complete-support-'))
++  homes.push(root)
++  return root
++}
++const scripts = {
++  normal:
++    'process.stdout.write(Buffer.from([0,240,159,153,130])); process.stderr.write("diagnostic")',
++  exact:
++    'process.stdout.write(Buffer.alloc(1048576,120)); process.stderr.write(Buffer.alloc(1048576,121))',
++  stdoutOverflow:
++    'process.stdout.write("READY PASS\\n"); process.stdout.write(Buffer.alloc(1048576,120)); setInterval(()=>{},1000)',
++  stderrOverflow:
++    'process.stderr.write(Buffer.alloc(1048577,120)); setInterval(()=>{},1000)',
++  readyTimer: 'process.stdout.write("READY\\n"); setInterval(()=>{},1000)',
++  refuse:
++    'process.on("SIGTERM",()=>process.stderr.write("refused")); process.stdout.write("READY\\n"); setInterval(()=>{},1000)',
++  failed: 'process.stdout.write("PASS\\n"); process.exitCode=7'
++} as const
++async function launch(program: keyof typeof scripts, options = {}) {
++  const root = await scratch(),
++    { home, env } = await privateEnvironment(root)
++  const proc = spawn(COMPLETE_NODE, ['-e', scripts[program]], {
++    cwd: root,
++    env,
++    stdio: ['ignore', 'pipe', 'pipe']
++  })
++  const owned = observeCompleteChild(proc, home, {
++    maxRuntimeMs: 5000,
++    exitTimeoutMs: 100,
++    termGraceMs: 100,
++    killGraceMs: 1000,
++    ...options
++  })
++  children.push(owned)
++  return { ...owned, home }
++}
++async function ready(proc: ChildProcess) {
++  await new Promise<void>((yes) => proc.stdout!.once('data', () => yes()))
++}
++it('S01/S02: private allowlist has no ambient Node, provider, PG, npm or Docker fields', async () => {
++  const root = await scratch(),
++    { home, env } = await privateEnvironment(root)
++  const hostileParent = {
++    NODE_OPTIONS: '--require forbidden',
++    NODE_PATH: 'untrusted',
++    PGPASSWORD: 'synthetic',
++    OPENAI_API_KEY: 'synthetic',
++    DOCKER_CONTEXT: 'peer'
++  }
++  const unsafe = { ...hostileParent }
++  expect(unsafe.NODE_OPTIONS).toBeDefined() // original spread's discriminating red control, never executed
++  for (const key of Object.keys(hostileParent)) expect(env[key]).toBeUndefined()
++  expect(Object.keys(env).sort()).toEqual(
++    [
++      'PATH',
++      'HOME',
++      'TMPDIR',
++      'TMP',
++      'TEMP',
++      'XDG_CONFIG_HOME',
++      'XDG_CACHE_HOME',
++      'XDG_DATA_HOME',
++      'XDG_STATE_HOME',
++      'LANG',
++      'TZ',
++      'NODE_ENV',
++      'CI'
++    ].sort()
++  )
++  for (const key of [
++    'HOME',
++    'TMPDIR',
++    'TMP',
++    'TEMP',
++    'XDG_CONFIG_HOME',
++    'XDG_CACHE_HOME',
++    'XDG_DATA_HOME',
++    'XDG_STATE_HOME'
++  ]) {
++    expect(env[key]).toMatch(new RegExp('^' + home))
++    expect((await fs.stat(env[key]!)).mode & 0o777).toBe(0o700)
++  }
++})
++it('S01: complete successful raw bytes, close/PID absence and HOME deletion', async () => {
++  const c = await launch('normal')
++  expect(await c.done).toEqual({ code: 0, signal: null })
++  expect(c.output.bytes('stdout')).toEqual(Buffer.from([0, 240, 159, 153, 130]))
++  expect(c.output.bytes('stderr').toString()).toBe('diagnostic')
++  expect(c.proc.stdout!.closed).toBe(true)
++  expect(() => process.kill(c.proc.pid!, 0)).toThrow(/ESRCH/)
++  await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
++  await c.stop()
++})
++it('S03: finite roles and native loader difference, unknown role/profile reject before launch', () => {
++  for (const profile of Object.keys(
++    completeProfiles
++  ) as (keyof typeof completeProfiles)[]) {
++    for (const role of completeProfiles[profile].roles) {
++      const argv = completeArgv(profile, role, '/owned/config', '/physical/W')
++      expect(argv.at(-1)).toBe(completeProfiles[profile].target)
++      expect(argv.includes('--configLoader')).toBe(
++        profile === 'bound-admission'
++      )
++    }
++    expect(() => completeArgv(profile, 'unknown', '/c', '/w')).toThrow(/role/)
++  }
++  expect(() =>
++    completeArgv('unknown' as 'store-restart', 'writer', '/c', '/w')
++  ).toThrow()
++  const config = completeChildConfig('store-restart', '/w', '/s')
++  const data = JSON.parse(config.slice('export default '.length))
++  expect(data.test).toEqual({
++    environment: 'node',
++    pool: 'threads',
++    maxWorkers: 1,
++    fileParallelism: false,
++    include: [completeProfiles['store-restart'].target]
++  })
++})
++it('S04: owned physical regular files accept; prefix/traversal/file and ancestor symlinks/modes reject', async () => {
++  const root = await scratch(),
++    file = join(root, 'input.json')
++  await fs.writeFile(file, '{}', { mode: 0o600 })
++  expect((await privateBytes(root, file)).toString()).toBe('{}')
++  await expect(ownedPath(root, file, 'file', true)).rejects.toThrow(/exists/)
++  await expect(ownedPath(root, root + '-peer/file', 'file')).rejects.toThrow(
++    /outside/
++  )
++  await expect(ownedPath(root, root + '/../file', 'file')).rejects.toThrow(
++    /outside/
++  )
++  const link = join(root, 'link')
++  await fs.symlink(file, link)
++  await expect(privateBytes(root, link)).rejects.toThrow(/Symlink/)
++  const dir = join(root, 'dir')
++  await fs.mkdir(dir, { mode: 0o700 })
++  await fs.symlink(dir, join(root, 'alias'))
++  await fs.writeFile(join(dir, 'x'), '{}', { mode: 0o600 })
++  await expect(privateBytes(root, join(root, 'alias/x'))).rejects.toThrow(
++    /Symlink/
++  )
++  await fs.chmod(file, 0o644)
++  await expect(privateBytes(root, file)).rejects.toThrow(/mode/)
++  await fs.chmod(file, 0o600)
++  await fs.writeFile(file, Buffer.alloc(1048577))
++  await expect(privateBytes(root, file)).rejects.toThrow(/bounds/)
++})
++it('S05: exact stdout/stderr/combined limits succeed using real harmless Node writes', async () => {
++  const c = await launch('exact')
++  expect(await c.done).toEqual({ code: 0, signal: null })
++  expect(c.output.bytes('stdout').length).toBe(1048576)
++  expect(c.output.bytes('stderr').length).toBe(1048576)
++})
++it.each(['stdoutOverflow', 'stderrOverflow'] as const)(
++  'S05/S06: %s latches, joins and rejects apparent READY/PASS prefix',
++  async (program) => {
++    const c = await launch(program)
++    await expect(c.done).rejects.toThrow(/OUTPUT_LIMIT/)
++    expect(() => c.output.bytes('stdout')).toThrow(/partial/)
++    expect(c.proc.stdout!.closed).toBe(true)
++    await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
++  }
++)
++it('S07: split UTF8/NUL/markers preserve exact bytes; original per-chunk decoding is lossy', () => {
++  const bytes = Buffer.from('READY\u0000🙂FINISHED'),
++    limits: Error[] = []
++  const c = completeCollector((e) => limits.push(e))
++  let old = ''
++  for (const byte of bytes) {
++    const part = Buffer.from([byte])
++    c.push('stdout', part)
++    old += part.toString()
++  }
++  expect(c.bytes('stdout')).toEqual(bytes)
++  expect(old).not.toBe(bytes.toString())
++  expect(limits).toEqual([])
++  c.push('stderr', Buffer.alloc(1048576))
++  c.push('stdout', Buffer.alloc(1048576 - bytes.length))
++  expect(c.bytes('stdout').length).toBe(1048576)
++  c.push('stderr', Buffer.alloc(1))
++  expect(limits).toHaveLength(1)
++  expect(() => c.bytes('stdout')).toThrow(/OUTPUT_LIMIT/)
++})
++it('S08/S10: READY does not clear independent watchdog even if parent abandons done', async () => {
++  const c = await launch('readyTimer', { maxRuntimeMs: 200 })
++  await ready(c.proc)
++  await new Promise((yes) => c.proc.once('close', yes))
++  await expect(c.done).rejects.toThrow(/maxRuntimeMs/)
++  expect(() => process.kill(c.proc.pid!, 0)).toThrow(/ESRCH/)
++})
++it('S09: intentional SIGKILL remains exact; normal nonzero remains observable', async () => {
++  const c = await launch('readyTimer')
++  await ready(c.proc)
++  expect(c.proc.kill('SIGKILL')).toBe(true)
++  expect(await c.done).toEqual({ code: null, signal: 'SIGKILL' })
++  const failed = await launch('failed')
++  expect(await failed.done).toEqual({ code: 7, signal: null })
++})
++it('S09/S10: TERM refusal escalates and concurrent stop/done join without losing bytes', async () => {
++  const c = await launch('refuse')
++  await ready(c.proc)
++  const results = await Promise.all([c.stop(), c.stop(), c.done])
++  expect(results).toEqual(Array(3).fill({ code: null, signal: 'SIGKILL' }))
++  expect(c.output.bytes('stderr').toString()).toContain('refused')
++})
++it('S09: asynchronous ENOENT preserves original cause and joins before removing HOME', async () => {
++  const root = await scratch(),
++    { home, env } = await privateEnvironment(root)
++  // Exact allowed executable, deliberately absent cwd: no arbitrary executable seam.
++  const proc = spawn(COMPLETE_NODE, ['-e', scripts.normal], {
++    cwd: join(root, 'absent'),
++    env,
++    stdio: ['ignore', 'pipe', 'pipe']
++  })
++  const c = observeCompleteChild(proc, home, {
++    maxRuntimeMs: 1000,
++    termGraceMs: 100,
++    killGraceMs: 100,
++    exitTimeoutMs: 100
++  })
++  children.push(c)
++  await expect(c.done).rejects.toMatchObject({ code: 'ENOENT' })
++  await expect(fs.stat(home)).rejects.toMatchObject({ code: 'ENOENT' })
++})
++function fakeChild() {
++  const child = new EventEmitter() as ChildProcess
++  Object.assign(child, {
++    stdout: new PassThrough(),
++    stderr: new PassThrough(),
++    kill: vi.fn(() => true)
++  })
++  return child
++}
++it('S11/S14: exit without close fails boundedly, preserves HOME and primary plus join error', async () => {
++  const root = await scratch(),
++    { home } = await privateEnvironment(root),
++    proc = fakeChild()
++  const c = observeCompleteChild(proc, home, {
++    maxRuntimeMs: 100,
++    exitTimeoutMs: 30,
++    termGraceMs: 30,
++    killGraceMs: 30
++  })
++  proc.emit('exit', 0, null)
++  c.fail(new Error('synthetic observer failure'))
++  await expect(c.done).rejects.toMatchObject({
++    cause: { message: 'synthetic observer failure' }
++  })
++  expect((await fs.stat(home)).isDirectory()).toBe(true)
++  proc.emit('close', 0, null) // no real descendants; finish fixture without claiming joined result
++})
++it('S14: join-all attempts every child, retains primary and blocks subsequent DB cleanup', async () => {
++  const calls: string[] = [],
++    primary = new Error('assertion failed')
++  await expect(
++    stopCompleteChildren(
++      [
++        {
++          stop: async () => {
++            calls.push('one')
++            throw new Error('join')
++          }
++        },
++        {
++          stop: async () => {
++            calls.push('two')
++          }
++        }
++      ],
++      primary
++    )
++  ).rejects.toMatchObject({
++    cause: primary,
++    errors: [primary, expect.any(Error)]
++  })
++  expect(calls.sort()).toEqual(['one', 'two'])
++})
++
++function assignment() {
++  const root =
++      '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-postgres/builder-r1',
++    resource = join(root, 'resource.json')
++  const claimId = `PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224:capacity:${root}`
++  const r = {
++    synthetic: true,
++    exclusiveClaim: claimId,
++    containerId: 'a'.repeat(64),
++    containerName: '/cvg-pare100-224-pg',
++    imageId: 'sha256:' + 'b'.repeat(64),
++    schemaName: 'pare224_synthetic_r1',
++    roleName: 'pare224_synthetic_r1_service',
++    test_database_url:
++      'postgresql://pare224:synthetic@127.0.0.1:54321/pare224_synthetic',
++    hostPort: { HostIp: '127.0.0.1', HostPort: '54321' }
++  }
++  const bytes = Buffer.from(JSON.stringify(r)),
++    docker = Buffer.from('mock executable bytes')
++  const claim = {
++    task: 'PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224',
++    kind: 'capacity',
++    claimId,
++    root,
++    resource,
++    resourceSHA256: createHash('sha256').update(bytes).digest('hex'),
++    cwd: join(import.meta.dirname, '../../../..'),
++    evidence: join(root, 'evidence'),
++    containerId: r.containerId,
++    containerName: r.containerName,
++    imageId: r.imageId,
++    port: '54321',
++    database: 'pare224_synthetic',
++    user: 'pare224',
++    schema: r.schemaName,
++    role: r.roleName,
++    docker: '/usr/bin/docker',
++    dockerSHA256: createHash('sha256').update(docker).digest('hex'),
++    dockerHost: 'unix://' + join(root, 'docker.sock')
++  }
++  virtual.files.set(resource, bytes)
++  virtual.files.set(
++    join(root, 'complete-process-claim.json'),
++    Buffer.from(JSON.stringify(claim))
++  )
++  virtual.files.set('/usr/bin/docker', docker)
++  virtual.sockets.add(join(root, 'docker.sock'))
++  for (
++    let dir = root;
++    dir.startsWith('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build');
++    dir = dirname(dir)
++  )
++    virtual.dirs.add(dir)
++  virtual.dirs.add(claim.evidence)
++  return { root, resource, r, claim }
++}
++it('S13: exact mocked claim accepts; descriptor/claim mismatches reject before Docker spawn', async () => {
++  const a = assignment()
++  expect(
++    (await assignedResource('capacity', a.resource, a.root)).resource
++  ).toEqual(a.r)
++  for (const mutation of [
++    { synthetic: false },
++    { exclusiveClaim: 'peer' },
++    { containerId: 'c'.repeat(64) },
++    { hostPort: { HostIp: '0.0.0.0', HostPort: '54321' } },
++    { schemaName: 'peer' },
++    { roleName: 'peer' },
++    { imageId: 'sha256:' + 'c'.repeat(64) },
++    {
++      test_database_url:
++        'postgresql://pare224:synthetic@localhost:54321/pare224_synthetic'
++    },
++    {
++      test_database_url: 'postgresql://pare224:synthetic@127.0.0.1:54321/peer'
++    },
++    {
++      test_database_url:
++        'postgresql://peer:synthetic@127.0.0.1:54321/pare224_synthetic'
++    }
++  ]) {
++    const bytes = Buffer.from(JSON.stringify({ ...a.r, ...mutation }))
++    virtual.files.set(a.resource, bytes)
++    virtual.files.set(
++      join(a.root, 'complete-process-claim.json'),
++      Buffer.from(
++        JSON.stringify({
++          ...a.claim,
++          resourceSHA256: createHash('sha256').update(bytes).digest('hex')
++        })
++      )
++    )
++    await expect(
++      assignedResource('capacity', a.resource, a.root)
++    ).rejects.toThrow(/identity/)
++  }
++  expect(execFile).not.toHaveBeenCalled()
++})
++it.each([
++  'good-object',
++  'good-array',
++  'timeout',
++  'maxBuffer',
++  'malformed',
++  'prefix',
++  'wrong-shape',
++  'wrong-id',
++  'nonzero',
++  'no-callback'
++] as const)(
++  'S12: mocked native inspect %s with finite options and closed join',
++  async (mode) => {
++    const a = assignment()
++    vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
++      const [executable, argv, options, callback] = args as [
++        string,
++        string[],
++        {
++          timeout: number
++          maxBuffer: number
++          killSignal: string
++          encoding: string
++          env: NodeJS.ProcessEnv
++        },
++        (e: Error | null, b: Buffer) => void
++      ]
++      expect(executable).toBe('/usr/bin/docker')
++      expect(argv).toEqual(
++        mode === 'good-array'
++          ? ['inspect', a.r.containerId]
++          : ['inspect', '--format', '{{json .}}', a.r.containerId]
++      )
++      expect(options).toMatchObject({
++        timeout: 5000,
++        maxBuffer: 1048576,
++        killSignal: 'SIGKILL',
++        encoding: 'buffer',
++        cwd: a.root
++      })
++      expect(options.env.NODE_OPTIONS).toBeUndefined()
++      expect(options.env.DOCKER_HOST).toBe(a.claim.dockerHost)
++      const child = fakeChild()
++      queueMicrotask(() => {
++        const object = {
++          Id: a.r.containerId,
++          Name: a.r.containerName,
++          Image: a.r.imageId
++        }
++        const text =
++          mode === 'good-array'
++            ? JSON.stringify([object])
++            : mode === 'malformed'
++              ? '{'
++              : mode === 'prefix'
++                ? JSON.stringify(object) + 'garbage'
++                : mode === 'wrong-shape'
++                  ? JSON.stringify([object])
++                  : mode === 'wrong-id'
++                    ? JSON.stringify({ ...object, Id: 'peer' })
++                    : JSON.stringify(object)
++        child.emit('exit', mode === 'nonzero' ? 7 : 0, null)
++        child.emit('close', mode === 'nonzero' ? 7 : 0, null)
++        if (mode === 'no-callback') return
++        callback(
++          mode === 'timeout'
++            ? Object.assign(new Error('native timeout'), { code: 'ETIMEDOUT' })
++            : mode === 'maxBuffer'
++              ? Object.assign(new Error('native maxBuffer'), {
++                  code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
++                })
++              : null,
++          Buffer.from(text)
++        )
++      })
++      return child as ReturnType<typeof execFile>
++    })
++    const result = inspectCompleteResource(
++      'capacity',
++      a.resource,
++      a.root,
++      mode === 'good-array' ? 'array' : 'object'
++    )
++    if (mode.startsWith('good')) expect(JSON.parse(await result)).toBeTruthy()
++    else await expect(result).rejects.toThrow()
++    expect(execFile).toHaveBeenCalledTimes(1)
++  }
++)
++
++function profileAssignment(profile: 'store-restart' | 'bound-admission') {
++  const a = assignment()
++  const claimId = `PARE100-EXEC:BUILD-TEST-RESOURCE-HARDENING-0224:${profile}:${a.root}`
++  const resource = { ...a.r, exclusiveClaim: claimId }
++  const bytes = Buffer.from(JSON.stringify(resource))
++  const config = join(a.root, 'child.config.mjs')
++  const configBytes = Buffer.from(
++    completeChildConfig(profile, a.claim.cwd, a.root)
++  )
++  const claim = {
++    ...a.claim,
++    kind: profile,
++    claimId,
++    config,
++    configSHA256: createHash('sha256').update(configBytes).digest('hex'),
++    resourceSHA256: createHash('sha256').update(bytes).digest('hex'),
++    service: join(a.root, 'service.json')
++  }
++  virtual.files.set(a.resource, bytes)
++  virtual.files.set(config, configBytes)
++  virtual.files.set(
++    join(a.root, 'complete-process-claim.json'),
++    Buffer.from(JSON.stringify(claim))
++  )
++  return { ...a, claim, config, configBytes }
++}
++it('S03: exact sealed config accepts; hash, pool, environment, include and executable-code tampering reject', async () => {
++  const a = profileAssignment('store-restart')
++  expect(
++    (await assignedResource('store-restart', a.resource, a.root)).claim.config
++  ).toBe(a.config)
++  const path = join(a.root, 'complete-process-claim.json')
++  for (const altered of [
++    a.configBytes.toString().replace('threads', 'forks'),
++    a.configBytes.toString().replace('node', 'jsdom'),
++    a.configBytes
++      .toString()
++      .replace(completeProfiles['store-restart'].target, 'peer.test.ts'),
++    a.configBytes.toString() + 'process.exit(0)',
++    a.configBytes.toString().replace('"maxWorkers":1', '"maxWorkers":100')
++  ]) {
++    const bytes = Buffer.from(altered)
++    virtual.files.set(a.config, bytes)
++    virtual.files.set(
++      path,
++      Buffer.from(
++        JSON.stringify({
++          ...a.claim,
++          configSHA256: createHash('sha256').update(bytes).digest('hex')
++        })
++      )
++    )
++    await expect(
++      assignedResource('store-restart', a.resource, a.root)
++    ).rejects.toThrow(/static config/)
++  }
++  virtual.files.set(a.config, a.configBytes)
++  virtual.files.set(
++    path,
++    Buffer.from(JSON.stringify({ ...a.claim, configSHA256: '0'.repeat(64) }))
++  )
++  await expect(
++    assignedResource('store-restart', a.resource, a.root)
++  ).rejects.toThrow(/static config/)
++})
++it('S03/S02: exact finite launch uses sealed paths and allowlisted profile env; mocked child never runs app', async () => {
++  const a = profileAssignment('store-restart'),
++    dir = join(a.claim.evidence, 'run'),
++    input = join(dir, 'input.json')
++  virtual.dirs.add(dir)
++  virtual.files.set(input, Buffer.from('{}'))
++  vi.mocked(spawn).mockImplementationOnce((...args: unknown[]) => {
++    const [executable, argv, options] = args as [
++      string,
++      string[],
++      { env: NodeJS.ProcessEnv; cwd: string }
++    ]
++    expect(executable).toBe(COMPLETE_NODE)
++    expect(argv).toEqual(
++      completeArgv('store-restart', 'writer', a.config, a.claim.cwd)
++    )
++    expect(options.cwd).toBe(a.claim.cwd)
++    expect(options.env).toMatchObject({
++      SPEC0224_PG_REQUIRED: '1',
++      SPEC0224_PG_RESOURCE: a.resource,
++      SPEC0224_PG_CHILD_ROLE: 'writer',
++      SPEC0224_PG_CHILD_INPUT: input,
++      SPEC0224_PG_CHILD_DIR: dir
++    })
++    expect(
++      Object.keys(options.env).filter((key) => !key.startsWith('SPEC0224_'))
++    ).not.toContain('NODE_OPTIONS')
++    const child = fakeChild()
++    setImmediate(() => {
++      child.stdout!.emit('data', Buffer.from('PG224_READY'))
++      child.emit('exit', 0, null)
++      child.emit('close', 0, null)
++    })
++    return child as ReturnType<typeof spawn>
++  })
++  const c = await startCompleteChild({
++    profile: 'store-restart',
++    role: 'writer',
++    resource: a.resource,
++    config: a.config,
++    input,
++    dir,
++    root: a.root
++  })
++  expect(await c.done).toEqual({ code: 0, signal: null })
++  expect(c.output.bytes('stdout').toString()).toBe('PG224_READY')
++  const calls = vi.mocked(spawn).mock.calls.length
++  await expect(
++    startCompleteChild({
++      profile: 'store-restart',
++      role: 'unknown',
++      resource: a.resource,
++      config: a.config,
++      input,
++      dir,
++      root: a.root
++    })
++  ).rejects.toThrow(/role/)
++  await expect(
++    startCompleteChild({
++      profile: 'store-restart',
++      role: 'reader',
++      resource: a.resource,
++      config: input,
++      input,
++      dir,
++      root: a.root
++    })
++  ).rejects.toThrow(/Unsealed/)
++  expect(vi.mocked(spawn).mock.calls.length).toBe(calls)
++})
++it('S13: exact bound service options accept; prefixes, extra options, host/port/database/user reject', async () => {
++  const a = profileAssignment('bound-admission')
++  const service = {
++    host: '127.0.0.1',
++    port: 54321,
++    database: a.claim.database,
++    user: a.claim.role,
++    password: 'synthetic',
++    options: `-c search_path=${a.claim.schema} -c statement_timeout=10000 -c lock_timeout=3000`
++  }
++  virtual.files.set(a.claim.service, Buffer.from(JSON.stringify(service)))
++  const accepted = await assignedService(
++    a.resource,
++    a.root,
++    a.claim.service,
++    a.claim.evidence
++  )
++  expect(accepted.connection).toEqual(service)
++  // The consumer receives this checked snapshot even if the file later changes.
++  virtual.files.set(
++    a.claim.service,
++    Buffer.from(JSON.stringify({ ...service, connectionString: 'unchecked' }))
++  )
++  expect(accepted.connection).toEqual(service)
++  expect(Object.keys(accepted.connection!).sort()).toEqual(
++    Object.keys(service).sort()
++  )
++  for (const mutation of [
++    { options: service.options + ' -c search_path=public' },
++    { options: `-c search_path=${a.claim.schema}` },
++    { host: 'localhost' },
++    { port: 54322 },
++    { database: 'peer' },
++    { user: 'peer' },
++    {
++      connectionString: 'postgresql://peer:synthetic@192.0.2.1:54322/peer'
++    },
++    {
++      connectionString:
++        'postgresql://pare224:synthetic@127.0.0.1:54321/pare224_synthetic'
++    },
++    { ssl: { rejectUnauthorized: false } },
++    { application_name: 'unchecked' },
++    { stream: {} }
++  ]) {
++    virtual.files.set(
++      a.claim.service,
++      Buffer.from(JSON.stringify({ ...service, ...mutation }))
++    )
++    await expect(
++      assignedService(a.resource, a.root, a.claim.service, a.claim.evidence)
++    ).rejects.toThrow(/connection/)
++  }
++})
++it('S09: intended result starts exit deadline even when child leaves an active timer', async () => {
++  const c = await launch('readyTimer')
++  await ready(c.proc)
++  await expect(c.finish()).rejects.toThrow(/exitTimeoutMs/)
++  expect(c.proc.stdout!.closed).toBe(true)
++  await expect(fs.stat(c.home)).rejects.toMatchObject({ code: 'ENOENT' })
++})
++it.each(['store-restart', 'public-restart'] as const)(
++  'S07/S08: %s preserves split readiness marker and original readiness lifetime',
++  async (profile) => {
++    const root = await scratch(),
++      { home } = await privateEnvironment(root),
++      proc = fakeChild()
++    vi.useFakeTimers()
++    try {
++      vi.mocked(proc.kill).mockImplementation(() => {
++        queueMicrotask(() => {
++          proc.emit('exit', null, 'SIGTERM')
++          proc.emit('close', null, 'SIGTERM')
++        })
++        return true
++      })
++      const c = observeCompleteChild(proc, home, {
++        maxRuntimeMs: completeProfiles[profile].maxRuntimeMs,
++        exitTimeoutMs: 5000,
++        termGraceMs: 1000,
++        killGraceMs: 2000
++      })
++      const status = completeReadiness(c, profile)
++      for (const byte of Buffer.from(
++        profile === 'store-restart' ? 'PG224_READY' : 'PUBLIC224_READY'
++      ))
++        proc.stdout!.emit('data', Buffer.from([byte]))
++      expect(await status).toBe('ready')
++      if (profile === 'store-restart') {
++        await vi.advanceTimersByTimeAsync(20000)
++        expect(proc.kill).not.toHaveBeenCalled()
++        await vi.advanceTimersByTimeAsync(5000)
++        await expect(c.done).rejects.toThrow(/maxRuntimeMs/)
++      } else {
++        await vi.advanceTimersByTimeAsync(45000)
++        await expect(c.done).rejects.toThrow(/readiness timeout/)
++      }
++      expect(proc.kill).toHaveBeenCalled()
++    } finally {
++      vi.useRealTimers()
++    }
++  }
++)
++
++it.each(['store-restart', 'public-restart'] as const)(
++  'S08: %s without READY fails at the original readiness deadline',
++  async (profile) => {
++    const root = await scratch(),
++      { home } = await privateEnvironment(root),
++      proc = fakeChild()
++    vi.useFakeTimers()
++    try {
++      vi.mocked(proc.kill).mockImplementation(() => {
++        queueMicrotask(() => {
++          proc.emit('exit', null, 'SIGTERM')
++          proc.emit('close', null, 'SIGTERM')
++        })
++        return true
++      })
++      const c = observeCompleteChild(proc, home, {
++        maxRuntimeMs: completeProfiles[profile].maxRuntimeMs,
++        exitTimeoutMs: 5000,
++        termGraceMs: 1000,
++        killGraceMs: 2000
++      })
++      const status = completeReadiness(c, profile)
++      await vi.advanceTimersByTimeAsync(
++        completeProfiles[profile].readinessMs - 1
++      )
++      expect(proc.kill).not.toHaveBeenCalled()
++      await vi.advanceTimersByTimeAsync(1)
++      if (profile === 'store-restart')
++        await expect(status).rejects.toThrow(/readiness timeout/)
++      else expect(await status).toBe('timeout')
++      await expect(c.done).rejects.toThrow(/readiness timeout/)
++    } finally {
++      vi.useRealTimers()
++    }
++  }
++)

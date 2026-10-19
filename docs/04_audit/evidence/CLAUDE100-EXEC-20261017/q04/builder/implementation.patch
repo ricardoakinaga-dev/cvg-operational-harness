@@ -1,0 +1,2044 @@
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/model-fault-server.test.ts b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/model-fault-server.test.ts
+new file mode 100644
+index 00000000..479b76d9
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/model-fault-server.test.ts
+@@ -0,0 +1,618 @@
++// @vitest-environment node
++import { request } from 'node:http'
++import { connect } from 'node:net'
++import { execFile } from 'node:child_process'
++import { mkdir, mkdtemp, readFile, readdir } from 'node:fs/promises'
++import { join, resolve as resolvePath } from 'node:path'
++import { afterEach, describe, expect, it } from 'vitest'
++import {
++  assertSyntheticEnvironment,
++  CREDENTIAL_NAMES,
++  createModelFaultServer,
++  expectedSyntheticRequest,
++  LIMITS,
++  preservePrimaryError,
++  SCENARIOS,
++  type FaultPlan,
++  type ModelFaultServer,
++  type Scenario
++} from './support/model-fault-server/index.js'
++import { canonicalJson, jsonDigest } from './support/governed-test-kit/index.js'
++import { ModelGateway } from '../packages/model-gateway/src/gateway.ts'
++import { PromptRegistry } from '../packages/model-gateway/src/prompt-registry.ts'
++import { OpenAICompatibleProvider } from '../packages/model-gateway/src/providers/openai-compatible.ts'
++import type {
++  ModelGatewayEvent,
++  ProviderRequest
++} from '../packages/model-gateway/src/contracts.ts'
++
++const OWN = '/tmp/cvg-claude100-exec-20261017/q04-builder'
++const servers: ModelFaultServer[] = []
++const planFor = (
++  scenario: Scenario = 'ok-json',
++  overrides: Partial<FaultPlan> = {}
++): FaultPlan => ({
++  version: 1,
++  suiteId: 'mf-suite',
++  caseId: 'mf-case',
++  scenario,
++  maxRequests: 1,
++  chunkDelayMs: 1,
++  ...overrides
++})
++async function start(plan = planFor()) {
++  const server = await createModelFaultServer(plan)
++  servers.push(server)
++  return server
++}
++afterEach(async () => {
++  // An unexpected cleanup failure is a test failure, not silently discarded.
++  const results = await Promise.allSettled(
++    servers.splice(0).map((server) => server.close())
++  )
++  const errors = results.filter((result) => result.status === 'rejected')
++  expect(errors).toEqual([])
++})
++function provider(server: ModelFaultServer) {
++  return new OpenAICompatibleProvider({
++    id: 'mf-local',
++    baseUrl: server.url,
++    model: 'cvg-synthetic-model-v1',
++    location: 'local',
++    allowHttp: true,
++    allowPrivateNetworks: true
++  })
++}
++function providerRequest(plan: FaultPlan, timeoutMs = 300): ProviderRequest {
++  return {
++    requestId: 'mf_request_001',
++    tenantId: 'tenant_00000000-0000-4000-8000-000000000001',
++    correlationId: 'mf_correlation_001',
++    model: 'cvg-synthetic-model-v1',
++    input: {
++      messages: [
++        {
++          role: 'user',
++          content: expectedSyntheticRequest(plan).messages[0].content
++        }
++      ]
++    },
++    temperature: 0,
++    maxTokens: 32,
++    promptSha256: 'a'.repeat(64),
++    signal: new AbortController().signal,
++    timeoutMs
++  }
++}
++function gateway(server: ModelFaultServer, plan: FaultPlan) {
++  const prompts = new PromptRegistry()
++  const prompt = prompts.register({
++    promptId: 'mf-synthetic',
++    version: '1',
++    owner: 'mf-test',
++    approvedBy: 'mf-test',
++    content: expectedSyntheticRequest(plan).messages[0].content,
++    status: 'approved',
++    effectiveFrom: '2020-01-01T00:00:00.000Z',
++    classification: 'INTERNAL'
++  })
++  const events: ModelGatewayEvent[] = []
++  const engine = new ModelGateway({
++    providers: [provider(server)],
++    prompts,
++    onEvent: (event) => events.push(event),
++    profiles: {
++      local: {
++        name: 'local',
++        providerId: 'mf-local',
++        model: 'cvg-synthetic-model-v1',
++        location: 'local',
++        temperature: 0,
++        maxTokens: 32,
++        timeoutMs: 150,
++        maxRetries: 0,
++        maxCostUsd: 0,
++        estimatedCostUsd: 0,
++        pricing: { inputPer1kUsd: 0, outputPer1kUsd: 0 }
++      }
++    },
++    retry: { maxRetries: 0 }
++  })
++  return {
++    engine,
++    events,
++    input: {
++      requestId: 'mf_gateway_001',
++      tenantId: 'tenant_00000000-0000-4000-8000-000000000001',
++      correlationId: 'mf_correlation_001',
++      modelProfile: 'local' as const,
++      dataClassification: 'INTERNAL' as const,
++      promptId: prompt.promptId,
++      promptVersion: prompt.version,
++      promptSha256: prompt.sha256,
++      input: providerRequest(plan).input
++    }
++  }
++}
++function wire(plan: FaultPlan) {
++  const body = expectedSyntheticRequest(plan)
++  return JSON.stringify({
++    model: body.model,
++    messages: body.messages.map(({ role, content }) => ({ role, content })),
++    temperature: body.temperature,
++    max_tokens: body.max_tokens,
++    stream: body.stream
++  })
++}
++async function raw(
++  server: ModelFaultServer,
++  plan: FaultPlan,
++  options: {
++    body?: string
++    headers?: Record<string, string>
++    method?: string
++    path?: string
++  } = {}
++) {
++  return new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
++    const client = request(
++      `${server.url}${options.path ?? '/chat/completions'}`,
++      {
++        method: options.method ?? 'POST',
++        agent: false,
++        headers: { 'content-type': 'application/json', ...options.headers }
++      },
++      (response) => {
++        const chunks: Buffer[] = []
++        response.on('data', (chunk) => chunks.push(chunk))
++        response.on('error', reject)
++        response.on('end', () =>
++          resolve({ status: response.statusCode!, body: Buffer.concat(chunks) })
++        )
++      }
++    )
++    client.on('error', reject)
++    client.setTimeout(1000, () =>
++      client.destroy(new Error('synthetic client deadline'))
++    )
++    client.end(options.body ?? wire(plan))
++  })
++}
++async function settle(server: ModelFaultServer) {
++  for (let i = 0; i < 100 && server.state().active; i++)
++    await new Promise((resolve) => setTimeout(resolve, 2))
++  expect(server.state().active).toBe(0)
++}
++
++describe('SPEC0232 private model fault server', () => {
++  it.each(['ok-json', 'chunked-json'] as const)(
++    'MF01 actual native provider and gateway: %s',
++    async (scenario) => {
++      const plan = planFor(scenario, { maxRequests: 2 })
++      const server = await start(plan)
++      expect(new URL(server.url).hostname).toBe('127.0.0.1')
++      expect(Number(new URL(server.url).port)).toBeGreaterThan(0)
++      expect(
++        await provider(server).execute(providerRequest(plan))
++      ).toMatchObject({
++        text: 'CVG_SYNTHETIC_OK_á',
++        usage: { inputTokens: 3, outputTokens: 2 },
++        finishReason: 'stop',
++        externalCall: false
++      })
++      const { engine, events, input } = gateway(server, plan)
++      expect(await engine.generate(input)).toMatchObject({
++        output: { text: 'CVG_SYNTHETIC_OK_á' },
++        usage: { inputTokens: 3, outputTokens: 2 },
++        attempts: 1
++      })
++      expect(events.map((event) => event.type)).toEqual([
++        'model.call.started',
++        'model.call.completed'
++      ])
++      expect(events[1]).toMatchObject({ inputTokens: 3, outputTokens: 2 })
++      await settle(server)
++      expect(server.requestHistory()).toEqual(
++        [0, 1].map((ordinal) => ({
++          ordinal,
++          requestSha256: jsonDigest(expectedSyntheticRequest(plan)),
++          status: 200,
++          termination: 'complete'
++        }))
++      )
++      const old = server.requestHistory()
++      expect(Object.isFrozen(old)).toBe(true)
++      expect(Object.isFrozen(old[0])).toBe(true)
++      expect(server.state().mode).toBe('replay')
++      if (scenario === 'chunked-json') {
++        const chunks = server.recording().chunks
++        expect(Buffer.from(chunks[0]!.base64, 'base64').at(-1)).toBe(0xc3)
++        expect(Buffer.from(chunks[1]!.base64, 'base64')[0]).toBe(0xa1)
++      }
++    }
++  )
++
++  it.each([
++    ['rate-limit', 'rate_limited', 'provider_rate_limited'],
++    ['timeout', 'timeout', 'cancelled'],
++    ['disconnect', 'connection', 'provider_connection_reset'],
++    ['invalid-json', 'malformed_response', 'provider_malformed_response']
++  ] as const)(
++    'MF02 actual public failure %s (preserve current gateway mapping)',
++    async (scenario, kind, code) => {
++      const plan = planFor(scenario, { maxRequests: 2 })
++      const server = await start(plan)
++      await expect(
++        provider(server).execute(providerRequest(plan, 80))
++      ).rejects.toMatchObject({ kind })
++      const { engine, events, input } = gateway(server, plan)
++      await expect(engine.generate(input)).rejects.toMatchObject({ code })
++      expect(events.map((event) => event.type)).toEqual([
++        'model.call.started',
++        'model.call.failed'
++      ])
++      expect(events[1]).toMatchObject({ code, attempt: 1 })
++      await settle(server)
++      expect(server.requestHistory()).toHaveLength(2)
++    }
++  )
++
++  it('MF03 SSE is finite synthetic protocol bytes only', async () => {
++    const plan = planFor('synthetic-sse')
++    const server = await start(plan)
++    const result = await raw(server, plan)
++    expect(result.status).toBe(200)
++    expect(result.body.toString()).toBe(
++      'data: {"synthetic":"CVG_SYNTHETIC_EVENT_1"}\n\ndata: [DONE]\n\n'
++    )
++    await settle(server)
++    expect(server.recording().chunks.map((chunk) => chunk.ordinal)).toEqual([
++      0, 1
++    ])
++  })
++
++  it.each(CREDENTIAL_NAMES)(
++    'MF04 pure injected environment guard: %s',
++    (name) => {
++      expect(() =>
++        assertSyntheticEnvironment({ [name]: 'HOSTILE_FAKE' })
++      ).toThrow('credential environment blocked')
++      expect(() => assertSyntheticEnvironment({ [name]: '' })).not.toThrow()
++      let read = false
++      expect(() =>
++        assertSyntheticEnvironment(
++          Object.defineProperty({}, name, {
++            enumerable: true,
++            get: () => {
++              read = true
++              return ''
++            }
++          })
++        )
++      ).toThrow()
++      expect(read).toBe(false)
++    }
++  )
++
++  it('MF04 rejects descriptors, prototypes, unknown inputs, free payloads before listen', async () => {
++    const plan = planFor()
++    let reads = 0
++    const hostile = Object.defineProperty({ ...plan }, 'scenario', {
++      enumerable: true,
++      get: () => {
++        reads++
++        return 'ok-json'
++      }
++    })
++    for (const value of [
++      hostile,
++      Object.assign(Object.create({ inherited: 1 }), plan),
++      { ...plan, upstream: 'https://synthetic.invalid' },
++      { ...plan, scenario: 'unknown' },
++      { ...plan, handler: () => {} },
++      { ...plan, synthetic: false },
++      { ...plan, body: 'HOSTILE_FAKE' },
++      { ...plan, caseId: 'a'.repeat(129) },
++      { ...plan, caseId: 'á' },
++      { ...plan, chunkDelayMs: 101 },
++      { ...plan, chunkDelayMs: -1 },
++      { ...plan, maxRequests: 33 },
++      { ...plan, maxRequests: 0 },
++      { ...plan, maxRequests: 1.5 }
++    ])
++      await expect(createModelFaultServer(value as FaultPlan)).rejects.toThrow()
++    expect(reads).toBe(0)
++    for (const options of [
++      { envSnapshot: {} },
++      { mode: 'unknown' },
++      { mode: 'record', recording: { synthetic: true } },
++      { apiKey: 'HOSTILE_FAKE' }
++    ])
++      await expect(
++        createModelFaultServer(plan, options as never)
++      ).rejects.toThrow()
++    for (const mode of ['record', 'refresh'] as const)
++      await expect(
++        createModelFaultServer(planFor('ok-json', { maxRequests: 2 }), { mode })
++      ).rejects.toThrow('single exchange')
++  })
++
++  it.each([
++    { method: 'GET' },
++    { path: '/unknown' },
++    { headers: { authorization: 'Bearer HOSTILE_FAKE' } },
++    { headers: { 'content-type': 'text/plain' } },
++    {
++      body: '{"synthetic":true,"messages":[{"role":"user","content":"HOSTILE_FAKE"}]}'
++    },
++    {
++      body: wire(planFor()).replace(
++        '"messages":',
++        '"messages":[{"role":"user","content":"HOSTILE_FAKE"}],"messages":'
++      )
++    },
++    { body: wire(planFor()) + ' ' }
++  ])(
++    'MF04 rejects hostile request without retaining its content (case %#)',
++    async (options) => {
++      const plan = planFor()
++      const server = await start(plan)
++      const result = await raw(server, plan, options)
++      expect(result.status).toBe(400)
++      expect(result.body.toString()).not.toContain('HOSTILE_FAKE')
++      await settle(server)
++      expect(server.requestHistory()).toEqual([])
++      expect(() => server.recording()).toThrow('no completed recording')
++      expect(canonicalJson(server.state())).not.toContain('HOSTILE_FAKE')
++    }
++  )
++
++  it('MF05 maxRequests exact/+1 and largest plan values; snapshots detached', async () => {
++    const plan = planFor('ok-json', {
++      maxRequests: 32,
++      chunkDelayMs: 100,
++      caseId: 'a'.repeat(128)
++    })
++    const server = await start(plan)
++    // 32 concurrent calls consume the exact cap without exceeding the 5s lifetime.
++    const results = await Promise.all(
++      Array.from({ length: 32 }, () => raw(server, plan))
++    )
++    expect(results.every((result) => result.status === 200)).toBe(true)
++    await settle(server)
++    const before = server.requestHistory()
++    expect(before).toHaveLength(32)
++    expect((await raw(server, plan)).status).toBe(429)
++    expect(server.requestHistory()).toEqual(before)
++    expect(server.requestHistory()).not.toBe(before)
++    expect(LIMITS).toMatchObject({
++      requestBytes: 65536,
++      responseBytes: 262144,
++      chunks: 32,
++      stringBytes: 4096
++    })
++  })
++
++  it.each([65536, 65537])(
++    'MF05 input cap exact/+1, invalid bytes never recorded (%d)',
++    async (size) => {
++      const plan = planFor()
++      const server = await start(plan)
++      const result = await raw(server, plan, { body: 'x'.repeat(size) })
++      expect(result.status).toBe(size === 65536 ? 400 : 413)
++      expect(server.requestHistory()).toEqual([])
++    }
++  )
++
++  it('MF05 enforces the receiving cap on an actual chunked request', async () => {
++    const plan = planFor()
++    const server = await start(plan)
++    expect(
++      (
++        await raw(server, plan, {
++          body: 'x'.repeat(65537),
++          headers: { 'transfer-encoding': 'chunked' }
++        })
++      ).status
++    ).toBe(413)
++    await settle(server)
++    expect(server.requestHistory()).toEqual([])
++  })
++
++  it('MF04 admits only the enumerated synthetic auth sentinels', async () => {
++    const plan = planFor()
++    const server = await start(plan)
++    expect(
++      (
++        await raw(server, plan, {
++          headers: {
++            authorization: 'Bearer cvg-synthetic-token-v1',
++            'x-api-key': 'cvg-synthetic-token-v1',
++            cookie: 'cvg_synthetic=1'
++          }
++        })
++      ).status
++    ).toBe(200)
++    await settle(server)
++    expect(server.requestHistory()).toHaveLength(1)
++    expect(canonicalJson(server.recording())).not.toContain('Bearer')
++  })
++
++  it('MF05 interrupted chunk exchange is refused and close retains the real primary failure', async () => {
++    const plan = planFor('chunked-json', { chunkDelayMs: 100 })
++    const server = await createModelFaultServer(plan)
++    try {
++      await new Promise<void>((resolve, reject) => {
++        const client = request(
++          `${server.url}/chat/completions`,
++          {
++            method: 'POST',
++            agent: false,
++            headers: { 'content-type': 'application/json' }
++          },
++          (response) => {
++            response.on('error', () => {})
++            response.once('data', () => {
++              response.destroy()
++              resolve()
++            })
++          }
++        )
++        client.on('error', reject)
++        client.setTimeout(1000, () =>
++          client.destroy(new Error('synthetic client deadline'))
++        )
++        client.end(wire(plan))
++      })
++      for (let i = 0; i < 100 && server.state().failure === null; i++)
++        await new Promise((resolve) => setTimeout(resolve, 1))
++      expect(server.state().failure).toBe(
++        'synthetic fault server: exchange interrupted'
++      )
++      expect(server.requestHistory()).toEqual([])
++      expect(() => server.recording()).toThrow('no completed recording')
++      const closing = server.close()
++      expect(server.close()).toBe(closing)
++      await expect(closing).rejects.toThrow('exchange interrupted')
++      expect(server.state()).toMatchObject({
++        closed: true,
++        timers: 0,
++        sockets: 0,
++        active: 0
++      })
++    } finally {
++      await server.close().catch((error: Error) => {
++        expect(error.message).toBe(
++          'synthetic fault server: exchange interrupted'
++        )
++      })
++    }
++  })
++
++  it('MF05 cancellation and idempotent close destroy owned handles and real listener', async () => {
++    const plan = planFor('timeout')
++    const server = await start(plan)
++    const controller = new AbortController()
++    const pending = provider(server).execute({
++      ...providerRequest(plan, 1000),
++      signal: controller.signal
++    })
++    const failure = expect(pending).rejects.toMatchObject({ kind: 'cancelled' })
++    while (server.state().requests === 0)
++      await new Promise((resolve) => setTimeout(resolve, 1))
++    controller.abort()
++    await failure
++    await settle(server)
++    const first = server.close()
++    expect(server.close()).toBe(first)
++    await first
++    expect(server.state()).toMatchObject({
++      listening: false,
++      closed: true,
++      timers: 0,
++      sockets: 0,
++      active: 0
++    })
++    await expect(
++      new Promise((resolve, reject) => {
++        const socket = connect(Number(new URL(server.url).port), '127.0.0.1')
++        socket.on('connect', () => {
++          socket.destroy()
++          resolve('connected')
++        })
++        socket.on('error', reject)
++      })
++    ).rejects.toMatchObject({ code: 'ECONNREFUSED' })
++  })
++
++  it('MF05 partial request lifetime expires autonomously within five seconds plus event-loop allowance', async () => {
++    const plan = planFor()
++    const started = Date.now()
++    const server = await start(plan)
++    const socket = connect(Number(new URL(server.url).port), '127.0.0.1')
++    socket.on('error', () => {})
++    socket.write('POST /chat/completions HTTP/1.1\r\nHost: synthetic\r\n')
++    await new Promise((resolve) => socket.once('close', resolve))
++    await server.close()
++    expect(Date.now() - started).toBeLessThan(5500)
++    expect(server.state()).toMatchObject({
++      closed: true,
++      sockets: 0,
++      timers: 0,
++      active: 0
++    })
++  })
++
++  it('MF05 retains primary and cleanup errors in order', () => {
++    const primary = new Error('synthetic primary')
++    const cleanup = new Error('synthetic cleanup')
++    expect(preservePrimaryError(primary, null)).toBe(primary)
++    expect(preservePrimaryError(null, cleanup)).toBe(cleanup)
++    expect(preservePrimaryError(primary, cleanup)).toMatchObject({
++      cause: primary,
++      errors: [primary, cleanup]
++    })
++  })
++
++  it.each(['positive', 'negative'])(
++    'MF03/MF04/MF06 actual guarded subprocess: %s',
++    async (mode) => {
++      await mkdir(OWN, { recursive: true })
++      const root = await mkdtemp(join(OWN, 'test-child-'))
++      const home = join(root, 'home')
++      const temp = join(root, 'tmp')
++      await mkdir(home, { mode: 0o700 })
++      await mkdir(temp, { mode: 0o700 })
++      // No host environment spread, snapshot or credential values enter this child.
++      const env: NodeJS.ProcessEnv = {
++        HOME: home,
++        TMPDIR: temp,
++        LANG: 'C.UTF-8',
++        TZ: 'UTC'
++      }
++      if (mode === 'negative') env.OPENAI_API_KEY = 'HOSTILE_FAKE'
++      const output = await new Promise<string>((resolve, reject) => {
++        execFile(
++          process.execPath,
++          [
++            resolvePath('tests/support/model-fault-server/record-probe.js'),
++            mode
++          ],
++          { env, cwd: root, timeout: 12000, maxBuffer: 65536 },
++          (error, stdout, stderr) => {
++            if (error)
++              reject(
++                new Error(`synthetic child failed: ${stdout}\n${stderr}`, {
++                  cause: error
++                })
++              )
++            else if (stderr)
++              reject(new Error(`synthetic child stderr: ${stderr}`))
++            else resolve(stdout)
++          }
++        )
++      })
++      expect(JSON.parse(output)).toMatchObject({ status: 'observed' })
++      expect(output).not.toContain('HOSTILE_FAKE')
++      const files = await readdir(temp, { recursive: true })
++      for (const path of files.filter(
++        (path) => path.endsWith('.json') && !path.includes('bad-')
++      ))
++        expect(await readFile(join(temp, path), 'utf8')).not.toContain(
++          'HOSTILE_FAKE'
++        )
++    }
++  )
++
++  it('inventory is exactly the frozen seven finite scenarios', () => {
++    expect(SCENARIOS).toEqual([
++      'ok-json',
++      'rate-limit',
++      'timeout',
++      'disconnect',
++      'invalid-json',
++      'chunked-json',
++      'synthetic-sse'
++    ])
++  })
++})
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/README.md b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/README.md
+new file mode 100644
+index 00000000..ed9bfc77
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/README.md
+@@ -0,0 +1,75 @@
++# Private synthetic model fault server
++
++SPEC0232 / PAR-Q04-FAULTS-001. This is a private test package outside the
++workspace packages. It uses Node 22 HTTP on `127.0.0.1:0`; it never proxies,
++resolves an upstream, calls a model, or installs global mocks. Q03 owns all
++canonical JSON, digests and suite manifests. This package adds no engine,
++approval, journal or production security policy.
++
++`createModelFaultServer(plan, options?)` accepts the exact version-1 plan in
++`index.d.ts`. `options` contains only `mode` and `recording`; replay is the
++default. The seven fixed recipes are `ok-json`, `rate-limit`, `timeout`,
++`disconnect`, `invalid-json`, `chunked-json` and `synthetic-sse`. IDs follow the
++Q03 identifier alphabet, with 1–128 ASCII characters. No callbacks, URLs,
++request strings, credentials or response bodies are configurable.
++
++The request must match the native OpenAI adapter's **exact wire bytes**:
++`JSON.stringify({model,messages,temperature,max_tokens,stream})`, including
++`{role,content}` order inside the single message. Use
++`expectedSyntheticRequest(plan)` for the values, rebuilding this insertion
++order when using a raw HTTP client. The request digest is Q03 `jsonDigest`
++of that known document; byte equality additionally rejects duplicate keys,
++whitespace variants and hidden prompts. Rejected payloads and headers never
++enter history or recordings. Only the three SPEC0232 auth sentinels are
++admitted; the positive provider/gateway tests use no authentication.
++
++The instance exposes a real URL, frozen detached `requestHistory()` and
++`state()` snapshots, `recording()`, and an idempotent `close()` Promise.
++Every instance owns its sockets/timers, expires after five seconds, and joins
++actual listener/socket closure and active handlers with a five-second cleanup
++deadline. Unexpected interruption prevents recording and remains the primary
++error on close. `preservePrimaryError` retains both primary and cleanup
++failures through an AggregateError when both exist.
++
++Record/refresh require `maxRequests:1` and a completed real exchange. Their
++factory entrypoints inspect the current enumerated credential environment
++internally before listen; no snapshot override is accepted. The separately
++exported `assertSyntheticEnvironment(snapshot)` is a pure guard for tests.
++Replay never inspects host credentials. `recording()` before completion,
++after rejected traffic, or after an unexpected interruption fails. Captured
++chunk boundaries are successful application writes, not TCP packet or fetch
++read boundaries. Delay fields are bounded scheduled delays, not wall-clock
++measurements. SSE is synthetic protocol evidence only, with no provider
++streaming or parity claim.
++
++`persistSyntheticRecording(recording, {evidenceRoot,path,mode,previousDigest})`
++is separate from HTTP. It guards the current environment before filesystem
++access, validates the recording against the finite local recipes, and uses
++exclusive mode-0600 creation. `evidenceRoot` must already be a private,
++UID-owned directory strictly below the process's temporary directory. Relative
++path components use the Q03 ASCII alphabet and at most 128 bytes. Directory
++components are opened with no-follow directory FDs; files and symlinks are
++refused where inappropriate. This private implementation requires Linux
++`/proc/self/fd`, as on the registered build host; it is not a portable
++filesystem sandbox against a process with the same user privileges.
++
++Record requires `previousDigest:null`. Refresh requires the previous envelope
++digest, validates the entire canonical file bytes (`canonicalJson(record)+"\n"`),
++and creates `<original>.refresh-<new-full-digest>.json` beside it. It never
++rewrites the historical file. Duplicate JSON keys, noncanonical bytes, special
++files, unowned directories, traversal, symlinks and collisions are refused.
++Persistence accepts only single-exchange factory recipes; a recording's full
++plan digest cannot be changed to increase replay request count. Default replay
++without an input recording supports up to 32 identical known requests.
++
++Tests use a static child file with explicitly constructed minimal environment,
++private HOME/TMPDIR and finite deadline for actual record/refresh. The host's
++credential values are never logged or copied into that child. No installation,
++PostgreSQL, E2E or certification is needed for these focal tests. MF07's full
++gates and independent judgment remain the Lead's responsibility.
++
++The native timeout outcome is intentionally preserved: direct provider timeout
++is `timeout`; ModelGateway's own earlier AbortController deadline currently
++becomes `cancelled`. Rate-limit, disconnect and invalid JSON map respectively
++to `provider_rate_limited`, `provider_connection_reset` and
++`provider_malformed_response`. No public source is changed to fit a test.
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/contract.js b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/contract.js
+new file mode 100644
+index 00000000..a76d3899
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/contract.js
+@@ -0,0 +1,320 @@
++import {
++  canonicalJson,
++  createSuiteManifest,
++  jsonDigest
++} from '../governed-test-kit/index.js'
++
++export const SCENARIOS = Object.freeze([
++  'ok-json',
++  'rate-limit',
++  'timeout',
++  'disconnect',
++  'invalid-json',
++  'chunked-json',
++  'synthetic-sse'
++])
++export const CREDENTIAL_NAMES = Object.freeze([
++  'OPENAI_API_KEY',
++  'ANTHROPIC_API_KEY',
++  'AZURE_OPENAI_API_KEY',
++  'AZURE_OPENAI_AD_TOKEN',
++  'AWS_ACCESS_KEY_ID',
++  'AWS_SECRET_ACCESS_KEY',
++  'AWS_SESSION_TOKEN',
++  'GOOGLE_API_KEY',
++  'GEMINI_API_KEY',
++  'GOOGLE_APPLICATION_CREDENTIALS',
++  'GOOGLE_OAUTH_ACCESS_TOKEN',
++  'MODEL_PROVIDER_TOKEN',
++  'MODEL_PROVIDER_COOKIE'
++])
++export const LIMITS = Object.freeze({
++  requests: 32,
++  requestBytes: 64 * 1024,
++  responseBytes: 256 * 1024,
++  chunks: 32,
++  stringBytes: 4096,
++  chunkDelayMs: 100,
++  lifetimeMs: 5000
++})
++
++export function fail(code) {
++  throw new Error(`synthetic fault server: ${code}`)
++}
++
++function freeze(value) {
++  if (value !== null && typeof value === 'object') {
++    Object.values(value).forEach(freeze)
++    Object.freeze(value)
++  }
++  return value
++}
++
++// Q03 alone owns descriptor-safe JSON traversal and canonical semantics.
++export function snapshot(value) {
++  return freeze(JSON.parse(canonicalJson(value)))
++}
++
++export function closed(value, fields, required = fields) {
++  if (
++    !value ||
++    typeof value !== 'object' ||
++    Array.isArray(value) ||
++    Object.keys(value).some((key) => !fields.includes(key)) ||
++    required.some((key) => !Object.hasOwn(value, key))
++  )
++    fail('closed schema')
++}
++
++function integer(value, min, max) {
++  if (!Number.isSafeInteger(value) || value < min || value > max) fail('cap')
++}
++
++function id(value) {
++  if (
++    typeof value !== 'string' ||
++    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
++  )
++    fail('identifier')
++}
++
++export function validatePlan(input) {
++  const plan = snapshot(input)
++  closed(plan, [
++    'version',
++    'suiteId',
++    'caseId',
++    'scenario',
++    'maxRequests',
++    'chunkDelayMs'
++  ])
++  if (plan.version !== 1 || !SCENARIOS.includes(plan.scenario)) fail('plan')
++  id(plan.suiteId)
++  id(plan.caseId)
++  integer(plan.maxRequests, 1, LIMITS.requests)
++  integer(plan.chunkDelayMs, 0, LIMITS.chunkDelayMs)
++  createSuiteManifest({
++    formatVersion: 1,
++    id: plan.suiteId,
++    version: '1.0.0',
++    synthetic: true,
++    cases: [{ id: plan.caseId, family: plan.scenario }]
++  })
++  return plan
++}
++
++export function expectedSyntheticRequest(input) {
++  const plan = validatePlan(input)
++  // Native OpenAI adapter insertion order, deliberately distinct from canonical JSON.
++  return snapshot({
++    model: 'cvg-synthetic-model-v1',
++    messages: [
++      { role: 'user', content: `CVG_SYNTHETIC_REQUEST:${plan.caseId}` }
++    ],
++    temperature: 0,
++    max_tokens: 32,
++    stream: false
++  })
++}
++
++export function expectedRequestBytes(plan) {
++  const request = expectedSyntheticRequest(plan)
++  return Buffer.from(
++    JSON.stringify({
++      model: request.model,
++      messages: request.messages.map(({ role, content }) => ({
++        role,
++        content
++      })),
++      temperature: request.temperature,
++      max_tokens: request.max_tokens,
++      stream: request.stream
++    })
++  )
++}
++
++export function recipe(plan) {
++  const good = Buffer.from(
++    JSON.stringify({
++      choices: [
++        { message: { content: 'CVG_SYNTHETIC_OK_á' }, finish_reason: 'stop' }
++      ],
++      usage: { prompt_tokens: 3, completion_tokens: 2 }
++    })
++  )
++  let bytes = [good]
++  let termination = 'complete'
++  let status = 200
++  let contentType = 'application/json'
++  if (plan.scenario === 'rate-limit') {
++    status = 429
++    bytes = [Buffer.from('{"error":"CVG_SYNTHETIC_RATE_LIMIT"}')]
++  } else if (plan.scenario === 'timeout') {
++    bytes = []
++    termination = 'timeout'
++  } else if (
++    plan.scenario === 'disconnect' ||
++    plan.scenario === 'invalid-json'
++  ) {
++    bytes = [good.subarray(0, 24)]
++    if (plan.scenario === 'disconnect') termination = 'disconnect'
++  } else if (plan.scenario === 'chunked-json') {
++    const split = good.indexOf(Buffer.from('á')) + 1
++    bytes = [good.subarray(0, split), good.subarray(split)]
++  } else if (plan.scenario === 'synthetic-sse') {
++    contentType = 'text/event-stream'
++    bytes = [
++      Buffer.from('data: {"synthetic":"CVG_SYNTHETIC_EVENT_1"}\n\n'),
++      Buffer.from('data: [DONE]\n\n')
++    ]
++  }
++  const chunks = bytes.map((chunk, ordinal) => ({
++    ordinal,
++    delayMs: plan.chunkDelayMs,
++    base64: chunk.toString('base64')
++  }))
++  // Validate concrete recipe caps before opening resources, even though recipes are fixed.
++  if (
++    chunks.length > LIMITS.chunks ||
++    bytes.reduce((n, b) => n + b.length, 0) > LIMITS.responseBytes ||
++    chunks.some((chunk) => Buffer.byteLength(chunk.base64) > LIMITS.stringBytes)
++  )
++    fail('recipe cap')
++  return snapshot({
++    version: 1,
++    suiteId: plan.suiteId,
++    caseId: plan.caseId,
++    synthetic: true,
++    planSha256: jsonDigest(plan),
++    requestSha256: jsonDigest(expectedSyntheticRequest(plan)),
++    status,
++    headers: { 'content-type': contentType },
++    chunks,
++    termination
++  })
++}
++
++export function envelope(data) {
++  return snapshot({ ...data, digest: jsonDigest(data) })
++}
++
++export function validateRecording(input, suppliedPlan) {
++  const value = snapshot(input)
++  closed(value, [
++    'version',
++    'suiteId',
++    'caseId',
++    'synthetic',
++    'planSha256',
++    'requestSha256',
++    'status',
++    'headers',
++    'chunks',
++    'termination',
++    'digest'
++  ])
++  if (value.version !== 1 || value.synthetic !== true)
++    fail('synthetic recording required')
++  id(value.suiteId)
++  id(value.caseId)
++  for (const hash of [value.planSha256, value.requestSha256, value.digest]) {
++    if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) fail('digest')
++  }
++  closed(value.headers, ['content-type'])
++  if (
++    !['application/json', 'text/event-stream'].includes(
++      value.headers['content-type']
++    ) ||
++    ![200, 429].includes(value.status) ||
++    !['complete', 'disconnect', 'timeout'].includes(value.termination) ||
++    !Array.isArray(value.chunks) ||
++    value.chunks.length > LIMITS.chunks
++  )
++    fail('recording shape')
++  let total = 0
++  for (const [ordinal, chunk] of value.chunks.entries()) {
++    closed(chunk, ['ordinal', 'delayMs', 'base64'])
++    if (chunk.ordinal !== ordinal) fail('ordinal')
++    integer(chunk.delayMs, 0, LIMITS.chunkDelayMs)
++    if (
++      typeof chunk.base64 !== 'string' ||
++      chunk.base64.length === 0 ||
++      Buffer.byteLength(chunk.base64) > LIMITS.stringBytes ||
++      Buffer.from(chunk.base64, 'base64').toString('base64') !== chunk.base64
++    )
++      fail('base64')
++    total += Buffer.from(chunk.base64, 'base64').length
++  }
++  if (
++    total > LIMITS.responseBytes ||
++    (value.termination === 'timeout'
++      ? value.chunks.length !== 0
++      : value.chunks.length === 0)
++  )
++    fail('recording cap')
++  const { digest, ...data } = value
++  if (jsonDigest(data) !== digest) fail('digest mismatch')
++  if (suppliedPlan) {
++    if (canonicalJson(envelope(recipe(suppliedPlan))) !== canonicalJson(value))
++      fail('recipe mismatch')
++  } else {
++    // Persistence has no plan argument. Recover only from the finite factory plans,
++    // binding their complete digest; no traffic import or self-attested envelope.
++    let match = false
++    for (const scenario of SCENARIOS) {
++      for (let chunkDelayMs = 0; chunkDelayMs <= 100; chunkDelayMs++) {
++        const plan = {
++          version: 1,
++          suiteId: value.suiteId,
++          caseId: value.caseId,
++          scenario,
++          maxRequests: 1,
++          chunkDelayMs
++        }
++        if (jsonDigest(plan) === value.planSha256) {
++          match = canonicalJson(envelope(recipe(plan))) === canonicalJson(value)
++          break
++        }
++      }
++      if (match) break
++    }
++    if (!match) fail('unknown recipe')
++  }
++  return value
++}
++
++export function assertSyntheticEnvironment(input) {
++  const env = snapshot(input)
++  closed(env, CREDENTIAL_NAMES, [])
++  for (const name of CREDENTIAL_NAMES) {
++    if (
++      Object.hasOwn(env, name) &&
++      (typeof env[name] !== 'string' || env[name] !== '')
++    )
++      fail('credential environment blocked')
++  }
++}
++
++export function guardCurrentEnvironment() {
++  const env = {}
++  for (const name of CREDENTIAL_NAMES) {
++    if (process.env[name] !== undefined) env[name] = process.env[name]
++  }
++  assertSyntheticEnvironment(env)
++}
++
++export function validateOptions(input, plan) {
++  const options = snapshot(input)
++  closed(options, ['mode', 'recording'], [])
++  const mode = options.mode ?? 'replay'
++  if (!['replay', 'record', 'refresh'].includes(mode)) fail('mode')
++  if (mode !== 'replay' && plan.maxRequests !== 1)
++    fail('record requires single exchange')
++  const recording =
++    options.recording === undefined || options.recording === null
++      ? null
++      : validateRecording(options.recording, plan)
++  if (mode !== 'replay' && recording !== null)
++    fail('record requires live exchange')
++  return { mode, recording }
++}
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.d.ts b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.d.ts
+new file mode 100644
+index 00000000..e0035540
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.d.ts
+@@ -0,0 +1,99 @@
++export type Scenario =
++  | 'ok-json'
++  | 'rate-limit'
++  | 'timeout'
++  | 'disconnect'
++  | 'invalid-json'
++  | 'chunked-json'
++  | 'synthetic-sse'
++export interface FaultPlan {
++  readonly version: 1
++  readonly suiteId: string
++  readonly caseId: string
++  readonly scenario: Scenario
++  readonly maxRequests: number
++  readonly chunkDelayMs: number
++}
++export interface SyntheticRecording {
++  readonly version: 1
++  readonly suiteId: string
++  readonly caseId: string
++  readonly synthetic: true
++  readonly planSha256: string
++  readonly requestSha256: string
++  readonly status: 200 | 429
++  readonly headers: Readonly<{
++    'content-type': 'application/json' | 'text/event-stream'
++  }>
++  readonly chunks: readonly Readonly<{
++    ordinal: number
++    delayMs: number
++    base64: string
++  }>[]
++  readonly termination: 'complete' | 'disconnect' | 'timeout'
++  readonly digest: string
++}
++export interface SyntheticRequest {
++  readonly model: 'cvg-synthetic-model-v1'
++  readonly messages: readonly [
++    { readonly role: 'user'; readonly content: string }
++  ]
++  readonly temperature: 0
++  readonly max_tokens: 32
++  readonly stream: false
++}
++export interface ModelFaultServer {
++  readonly url: string
++  requestHistory(): readonly Readonly<{
++    ordinal: number
++    requestSha256: string
++    status: number
++    termination: 'complete' | 'disconnect' | 'timeout'
++  }>[]
++  recording(): SyntheticRecording
++  state(): Readonly<{
++    mode: 'replay' | 'record' | 'refresh'
++    listening: boolean
++    closed: boolean
++    sockets: number
++    timers: number
++    active: number
++    requests: number
++    rejected: boolean
++    failure: string | null
++  }>
++  close(): Promise<void>
++}
++export const SCENARIOS: readonly Scenario[]
++export const CREDENTIAL_NAMES: readonly string[]
++export const LIMITS: Readonly<{
++  requests: 32
++  requestBytes: 65536
++  responseBytes: 262144
++  chunks: 32
++  stringBytes: 4096
++  chunkDelayMs: 100
++  lifetimeMs: 5000
++}>
++export function expectedSyntheticRequest(plan: FaultPlan): SyntheticRequest
++export function assertSyntheticEnvironment(snapshot: unknown): void
++export function preservePrimaryError(
++  primary: unknown,
++  cleanup: unknown
++): unknown
++export function createModelFaultServer(
++  plan: FaultPlan,
++  options?: {
++    mode?: 'replay' | 'record' | 'refresh'
++    recording?: SyntheticRecording | null
++  }
++): Promise<ModelFaultServer>
++export function persistSyntheticRecording(
++  recording: SyntheticRecording,
++  options: {
++    evidenceRoot: string
++    path: string
++    mode: 'record' | 'refresh'
++    previousDigest: string | null
++  }
++): Promise<Readonly<{ path: string; digest: string }>>
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.js b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.js
+new file mode 100644
+index 00000000..08272d93
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/index.js
+@@ -0,0 +1,341 @@
++import { createServer } from 'node:http'
++import {
++  envelope,
++  expectedRequestBytes,
++  fail,
++  guardCurrentEnvironment,
++  LIMITS,
++  recipe,
++  snapshot,
++  validateOptions,
++  validatePlan,
++  validateRecording
++} from './contract.js'
++export {
++  assertSyntheticEnvironment,
++  CREDENTIAL_NAMES,
++  expectedSyntheticRequest,
++  LIMITS,
++  SCENARIOS
++} from './contract.js'
++export { persistSyntheticRecording } from './persistence.js'
++
++/** Keep both failures without disguising a primary failure as a cleanup failure. */
++export function preservePrimaryError(primary, cleanup) {
++  if (primary && cleanup)
++    return new AggregateError(
++      [primary, cleanup],
++      'synthetic primary and cleanup failures',
++      { cause: primary }
++    )
++  return primary ?? cleanup ?? null
++}
++
++function allowedHeaders(request) {
++  const sentinels = {
++    authorization: 'Bearer cvg-synthetic-token-v1',
++    'x-api-key': 'cvg-synthetic-token-v1',
++    cookie: 'cvg_synthetic=1'
++  }
++  const seen = new Set()
++  for (let i = 0; i < request.rawHeaders.length; i += 2) {
++    const name = request.rawHeaders[i].toLowerCase()
++    const value = request.rawHeaders[i + 1]
++    if (name === 'proxy-authorization') return false
++    if (Object.hasOwn(sentinels, name)) {
++      if (seen.has(name) || value !== sentinels[name]) return false
++      seen.add(name)
++    } else if (/auth|token|cookie|api[-_]?key|credential/i.test(name))
++      return false
++  }
++  return request.headers['content-type'] === 'application/json'
++}
++
++export async function createModelFaultServer(input, inputOptions = {}) {
++  const plan = validatePlan(input)
++  const { mode, recording: replay } = validateOptions(inputOptions, plan)
++  const expected = expectedRequestBytes(plan)
++  const template = replay ?? envelope(recipe(plan))
++  if (mode !== 'replay') guardCurrentEnvironment()
++  const timers = new Map()
++  const sockets = new Set()
++  const active = new Set()
++  const history = []
++  let requests = 0
++  let rejected = false
++  let recorded = null
++  let primary = null
++  let closing = null
++  let closed = false
++  let stopping = false
++  const rememberFailure = (code) => {
++    primary ??= new Error(`synthetic fault server: ${code}`)
++  }
++  function schedule(fn, ms, cancel = () => {}) {
++    const handle = setTimeout(() => {
++      timers.delete(handle)
++      fn()
++    }, ms)
++    timers.set(handle, cancel)
++    return handle
++  }
++  const delay = (ms) =>
++    new Promise((resolve) => {
++      schedule(
++        () => resolve(!stopping),
++        ms,
++        () => resolve(false)
++      )
++    })
++  const server = createServer({ maxHeaderSize: 8192 }, (request, response) => {
++    const work = handle(request, response).catch(() => {
++      rememberFailure('handler failed')
++      request.destroy()
++      response.destroy()
++    })
++    active.add(work)
++    void work.finally(() => active.delete(work))
++  })
++  server.maxConnections = LIMITS.requests
++  server.maxHeadersCount = 32
++  server.requestTimeout = LIMITS.lifetimeMs
++  server.headersTimeout = LIMITS.lifetimeMs
++  server.keepAliveTimeout = 1
++  server.on('connection', (socket) => {
++    sockets.add(socket)
++    socket.on('error', () => {}) // protocol/client aborts are observed on response close
++    socket.once('close', () => sockets.delete(socket))
++  })
++  server.on('clientError', (_error, socket) => {
++    rejected = true
++    socket.destroy()
++  })
++  server.on('error', () => rememberFailure('server failed'))
++
++  async function handle(request, response) {
++    const ordinal = requests++
++    let complete = false
++    let completedRead = false
++    let finishExchange
++    const exchange = new Promise((resolve) => {
++      finishExchange = resolve
++    })
++    const chunks = []
++    const settle = (termination) => {
++      if (complete) return
++      complete = true
++      history.push(
++        snapshot({
++          ordinal,
++          requestSha256: template.requestSha256,
++          status: template.status,
++          termination
++        })
++      )
++      if (mode !== 'replay' && !rejected) {
++        const data = { ...template }
++        delete data.digest
++        try {
++          // Only observed writes + real finish/close can authorize this exchange.
++          recorded = validateRecording(
++            envelope({ ...data, chunks, termination }),
++            plan
++          )
++        } catch {
++          rememberFailure('incomplete exchange')
++        }
++      }
++      finishExchange()
++    }
++    const reject = (status) => {
++      rejected = true
++      response.writeHead(status, {
++        'content-type': 'application/json',
++        connection: 'close'
++      })
++      response.end('{"error":"CVG_SYNTHETIC_REJECTED"}')
++      request.resume()
++    }
++    if (stopping || ordinal >= plan.maxRequests) return reject(429)
++    if (
++      request.method !== 'POST' ||
++      request.url !== '/chat/completions' ||
++      !allowedHeaders(request)
++    )
++      return reject(400)
++    const declared = request.headers['content-length']
++    if (
++      declared !== undefined &&
++      (!/^\d+$/.test(declared) || Number(declared) > LIMITS.requestBytes)
++    )
++      return reject(413)
++    const buffers = []
++    let size = 0
++    let over = false
++    await new Promise((resolve) => {
++      request.on('data', (chunk) => {
++        size += chunk.length
++        if (size > LIMITS.requestBytes) {
++          buffers.length = 0
++          if (!over) {
++            over = true
++            reject(413)
++            resolve()
++          }
++        } else if (!over) buffers.push(chunk)
++      })
++      request.once('end', () => {
++        completedRead = true
++        resolve()
++      })
++      request.once('error', () => {
++        rejected = true
++        resolve()
++      })
++      request.once('close', () => {
++        if (!completedRead) {
++          rejected = true
++          resolve()
++        }
++      })
++    })
++    if (over || !completedRead || request.aborted) return
++    const body = Buffer.concat(buffers)
++    buffers.length = 0
++    // Byte equality rejects duplicate keys (including hidden arbitrary prompts),
++    // whitespace variants and invalid UTF-8, without ever parsing hostile JSON.
++    if (!body.equals(expected)) return reject(400)
++    response.once('finish', () => settle('complete'))
++    response.once('close', () => {
++      if (complete) return
++      if (template.termination === 'timeout') settle('timeout')
++      else if (
++        template.termination === 'disconnect' &&
++        chunks.length === template.chunks.length
++      )
++        settle('disconnect')
++      else {
++        rejected = true
++        rememberFailure('exchange interrupted')
++        finishExchange()
++      }
++    })
++    response.on('error', () => {
++      rejected = true
++      rememberFailure('response failed')
++      finishExchange()
++    })
++    if (template.termination === 'timeout') {
++      await exchange
++      return
++    }
++    const headers = { ...template.headers, connection: 'close' }
++    if (template.termination === 'disconnect') headers['content-length'] = '256'
++    response.writeHead(template.status, headers)
++    for (const chunk of template.chunks) {
++      if (!(await delay(chunk.delayMs)) || response.destroyed) return
++      const written = await new Promise((resolve) => {
++        response.write(Buffer.from(chunk.base64, 'base64'), (error) =>
++          resolve(!error)
++        )
++      })
++      if (!written) return
++      chunks.push(snapshot(chunk))
++    }
++    if (template.termination === 'disconnect') response.destroy()
++    else response.end()
++    await exchange
++  }
++
++  function close() {
++    if (closing) return closing
++    stopping = true
++    closing = (async () => {
++      for (const [timer, cancel] of timers) {
++        clearTimeout(timer)
++        cancel()
++      }
++      timers.clear()
++      let cleanup = null
++      let deadline
++      try {
++        await Promise.race([
++          new Promise((_, reject) => {
++            deadline = setTimeout(
++              () => reject(new Error('synthetic cleanup deadline')),
++              LIMITS.lifetimeMs
++            )
++          }),
++          (async () => {
++            const socketClosures = [...sockets].map(
++              (socket) =>
++                new Promise((resolve) => socket.once('close', resolve))
++            )
++            await new Promise((resolve, reject) => {
++              server.close((error) => {
++                if (error && error.code !== 'ERR_SERVER_NOT_RUNNING')
++                  reject(new Error('synthetic cleanup failed'))
++                else resolve()
++              })
++              for (const socket of sockets) socket.destroy()
++            })
++            await Promise.all(socketClosures)
++            await Promise.all(active)
++          })()
++        ])
++      } catch (error) {
++        cleanup = error
++      } finally {
++        clearTimeout(deadline)
++      }
++      closed = !server.listening && sockets.size === 0
++      const error = preservePrimaryError(primary, cleanup)
++      if (error) throw error
++    })()
++    return closing
++  }
++  schedule(() => {
++    void close().catch(() => {})
++  }, LIMITS.lifetimeMs)
++  try {
++    await new Promise((resolve, reject) => {
++      const onError = () => reject(new Error('synthetic listen failed'))
++      server.once('error', onError)
++      server.listen(0, '127.0.0.1', () => {
++        server.off('error', onError)
++        resolve()
++      })
++    })
++  } catch (error) {
++    primary = error
++    await close()
++    throw error
++  }
++  const address = server.address()
++  return Object.freeze({
++    url: `http://127.0.0.1:${address.port}`,
++    requestHistory: () => snapshot(history),
++    recording: () => {
++      if (rejected || primary || history.length === 0)
++        fail('no completed recording')
++      if (mode !== 'replay') {
++        if (!recorded) fail('no completed recording')
++        return snapshot(recorded)
++      }
++      return snapshot(template)
++    },
++    state: () =>
++      snapshot({
++        mode,
++        listening: server.listening,
++        closed,
++        sockets: sockets.size,
++        timers: timers.size,
++        active: active.size,
++        requests,
++        rejected,
++        failure: primary ? primary.message : null
++      }),
++    close
++  })
++}
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/package.json b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/package.json
+new file mode 100644
+index 00000000..4215673d
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/package.json
+@@ -0,0 +1,12 @@
++{
++  "name": "@cvg-private/model-fault-server",
++  "version": "1.0.0",
++  "private": true,
++  "type": "module",
++  "exports": {
++    ".": {
++      "types": "./index.d.ts",
++      "import": "./index.js"
++    }
++  }
++}
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/persistence.js b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/persistence.js
+new file mode 100644
+index 00000000..6dd2e4ec
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/persistence.js
+@@ -0,0 +1,161 @@
++import { constants } from 'node:fs'
++import { open } from 'node:fs/promises'
++import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
++import { tmpdir } from 'node:os'
++import { canonicalJson } from '../governed-test-kit/index.js'
++import {
++  closed,
++  fail,
++  guardCurrentEnvironment,
++  snapshot,
++  validateRecording
++} from './contract.js'
++
++// Linux Node22 private test support: directory FDs anchor each no-follow walk,
++// so replacing a path component after validation cannot redirect an open.
++async function directory(path, handles) {
++  const fd = await open(
++    path,
++    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
++  )
++  handles.push(fd)
++  const stat = await fd.stat()
++  if (!stat.isDirectory()) fail('directory required')
++  return `/proc/self/fd/${fd.fd}`
++}
++
++export async function persistSyntheticRecording(input, inputOptions) {
++  const options = snapshot(inputOptions)
++  closed(options, ['evidenceRoot', 'path', 'mode', 'previousDigest'])
++  if (
++    !['record', 'refresh'].includes(options.mode) ||
++    (options.mode === 'record'
++      ? options.previousDigest !== null
++      : typeof options.previousDigest !== 'string' ||
++        !/^[a-f0-9]{64}$/.test(options.previousDigest))
++  )
++    fail('persistence mode')
++  const recording = validateRecording(input)
++  if (
++    typeof options.evidenceRoot !== 'string' ||
++    Buffer.byteLength(options.evidenceRoot) > 4096 ||
++    !isAbsolute(options.evidenceRoot) ||
++    typeof options.path !== 'string' ||
++    Buffer.byteLength(options.path) > 4096 ||
++    isAbsolute(options.path)
++  )
++    fail('path')
++  const components = options.path.split('/')
++  if (
++    !components.length ||
++    components.some(
++      (part) =>
++        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(part) ||
++        part === '.' ||
++        part === '..'
++    )
++  )
++    fail('relative path')
++  const root = resolve(options.evidenceRoot)
++  const temp = resolve(tmpdir())
++  const rel = relative(temp, root)
++  if (
++    !rel ||
++    rel.startsWith(`..${sep}`) ||
++    rel === '..' ||
++    isAbsolute(rel) ||
++    options.evidenceRoot !== root
++  )
++    fail('owned temporary root required')
++  // No filesystem call precedes the current environment guard.
++  guardCurrentEnvironment()
++  const handles = []
++  let primary = null
++  let result
++  try {
++    let physical = '/'
++    for (const part of root.split('/').filter(Boolean)) {
++      physical = await directory(join(physical, part), handles)
++    }
++    const stat = await handles.at(-1).stat()
++    if (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)
++      fail('root must be private and owned')
++    for (const part of components.slice(0, -1)) {
++      physical = await directory(join(physical, part), handles)
++      const child = await handles.at(-1).stat()
++      if (child.uid !== process.getuid() || (child.mode & 0o022) !== 0)
++        fail('unowned directory')
++    }
++    const name = components.at(-1)
++    if (options.mode === 'refresh') {
++      const old = await open(
++        join(physical, name),
++        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
++      )
++      handles.push(old)
++      const oldStat = await old.stat()
++      if (
++        !oldStat.isFile() ||
++        oldStat.nlink !== 1 ||
++        oldStat.uid !== process.getuid() ||
++        oldStat.size > 400000
++      )
++        fail('historical file required')
++      const bytes = await old.readFile()
++      let parsed
++      try {
++        parsed = JSON.parse(bytes.toString('utf8'))
++      } catch {
++        fail('historical JSON')
++      }
++      const previous = validateRecording(parsed)
++      if (
++        previous.digest !== options.previousDigest ||
++        !bytes.equals(Buffer.from(`${canonicalJson(previous)}\n`)) ||
++        previous.suiteId !== recording.suiteId ||
++        previous.caseId !== recording.caseId
++      )
++        fail('historical identity or canonical bytes')
++    }
++    const target =
++      options.mode === 'record'
++        ? name
++        : `${name}.refresh-${recording.digest}.json`
++    if (Buffer.byteLength(target) >= 255) fail('filename cap')
++    // Exclusive no-follow creation never truncates any historical artifact.
++    const file = await open(
++      join(physical, target),
++      constants.O_WRONLY |
++        constants.O_CREAT |
++        constants.O_EXCL |
++        constants.O_NOFOLLOW,
++      0o600
++    )
++    handles.push(file)
++    await file.writeFile(`${canonicalJson(recording)}\n`)
++    await file.sync()
++    result = snapshot({
++      path: join(dirname(options.path), target),
++      digest: recording.digest
++    })
++  } catch {
++    primary = new Error('synthetic persistence rejected')
++  } finally {
++    let cleanup = null
++    for (const handle of handles.reverse()) {
++      try {
++        await handle.close()
++      } catch {
++        cleanup ??= new Error('synthetic persistence cleanup failed')
++      }
++    }
++    if (primary && cleanup)
++      throw new AggregateError(
++        [primary, cleanup],
++        'synthetic persistence failures',
++        { cause: primary }
++      )
++    if (primary || cleanup) throw primary ?? cleanup
++  }
++  return result
++}
+diff --git a/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/record-probe.js b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/record-probe.js
+new file mode 100644
+index 00000000..7bb380ad
+--- /dev/null
++++ b/tmp/cvg-claude100-exec-20261017/q04-candidate/tests/support/model-fault-server/record-probe.js
+@@ -0,0 +1,370 @@
++// Static, explicitly scrubbed child entrypoint. No argv carries code or traffic.
++import assert from 'node:assert/strict'
++import { request } from 'node:http'
++import {
++  mkdir,
++  readFile,
++  writeFile,
++  symlink,
++  mkdtemp,
++  stat
++} from 'node:fs/promises'
++import { join } from 'node:path'
++import { tmpdir } from 'node:os'
++import {
++  createModelFaultServer,
++  persistSyntheticRecording,
++  SCENARIOS
++} from './index.js'
++import { expectedRequestBytes } from './contract.js'
++import { canonicalJson, jsonDigest } from '../governed-test-kit/index.js'
++
++const planFor = (scenario, chunkDelayMs = 1) => ({
++  version: 1,
++  suiteId: 'mf-child',
++  caseId: 'mf-case',
++  scenario,
++  maxRequests: 1,
++  chunkDelayMs
++})
++async function exchange(server, plan, override = {}) {
++  return new Promise((resolve) => {
++    const parts = []
++    let status = 0
++    const client = request(
++      `${server.url}/chat/completions`,
++      {
++        method: 'POST',
++        agent: false,
++        headers: { 'content-type': 'application/json', ...override.headers }
++      },
++      (response) => {
++        status = response.statusCode
++        response.on('data', (chunk) => parts.push(chunk))
++        response.on('error', () => {})
++        response.on('close', () =>
++          resolve({ status, bytes: Buffer.concat(parts) })
++        )
++      }
++    )
++    client.on('error', () => resolve({ status, bytes: Buffer.concat(parts) }))
++    const deadline = setTimeout(() => client.destroy(), 100)
++    client.once('close', () => clearTimeout(deadline))
++    client.end(override.body ?? expectedRequestBytes(plan))
++  })
++}
++async function settled(server) {
++  // Real I/O completion, no global clock substitutions.
++  const deadline = Date.now() + 500
++  while (server.state().active && Date.now() < deadline)
++    await new Promise((resolve) => setTimeout(resolve, 1))
++  assert.equal(server.state().active, 0)
++}
++function redigest(record) {
++  const body = { ...record }
++  delete body.digest
++  return { ...body, digest: jsonDigest(body) }
++}
++const mode = process.argv[2]
++const root = await mkdtemp(join(tmpdir(), 'record-probe-'))
++await mkdir(join(root, 'nested'), { mode: 0o700 })
++const positive = async () => {
++  let chunked
++  let firstPlan
++  for (const scenario of SCENARIOS) {
++    const plan = planFor(scenario)
++    const server = await createModelFaultServer(plan, { mode: 'record' })
++    assert.throws(() => server.recording())
++    let record
++    let wire
++    try {
++      wire = await exchange(server, plan)
++      await settled(server)
++      record = server.recording()
++      assert.deepEqual(
++        Buffer.concat(
++          record.chunks.map((c) => Buffer.from(c.base64, 'base64'))
++        ),
++        wire.bytes
++      )
++      assert.equal(
++        record.termination,
++        scenario === 'disconnect'
++          ? 'disconnect'
++          : scenario === 'timeout'
++            ? 'timeout'
++            : 'complete'
++      )
++      assert.equal(server.requestHistory().length, 1)
++      assert.equal(record.status, scenario === 'rate-limit' ? 429 : 200)
++      if (scenario === 'chunked-json') {
++        assert.equal(record.chunks.length, 2)
++        assert.equal(
++          Buffer.from(record.chunks[0].base64, 'base64').at(-1),
++          0xc3
++        )
++        assert.equal(Buffer.from(record.chunks[1].base64, 'base64')[0], 0xa1)
++        chunked = record
++        firstPlan = plan
++      }
++    } finally {
++      await server.close()
++    }
++    const replay = await createModelFaultServer(plan, { recording: record })
++    try {
++      assert.deepEqual(await exchange(replay, plan), wire)
++      await settled(replay)
++      assert.deepEqual(replay.recording(), record)
++    } finally {
++      await replay.close()
++    }
++  }
++  const output = await persistSyntheticRecording(chunked, {
++    evidenceRoot: root,
++    path: 'nested/original.json',
++    mode: 'record',
++    previousDigest: null
++  })
++  const original = await readFile(join(root, output.path))
++  assert.equal(original.toString(), `${canonicalJson(chunked)}\n`)
++  assert.equal((await stat(join(root, output.path))).mode & 0o777, 0o600)
++  await assert.rejects(
++    persistSyntheticRecording(chunked, {
++      evidenceRoot: root,
++      path: output.path,
++      mode: 'record',
++      previousDigest: null
++    })
++  )
++  const freshPlan = planFor('ok-json', 2)
++  const fresh = await createModelFaultServer(freshPlan, { mode: 'refresh' })
++  let next
++  try {
++    await exchange(fresh, freshPlan)
++    await settled(fresh)
++    next = fresh.recording()
++  } finally {
++    await fresh.close()
++  }
++  const updated = await persistSyntheticRecording(next, {
++    evidenceRoot: root,
++    path: output.path,
++    mode: 'refresh',
++    previousDigest: chunked.digest
++  })
++  assert.equal(updated.path, `${output.path}.refresh-${next.digest}.json`)
++  assert.deepEqual(await readFile(join(root, output.path)), original)
++  assert.equal(
++    await readFile(join(root, updated.path), 'utf8'),
++    `${canonicalJson(next)}\n`
++  )
++  await assert.rejects(
++    persistSyntheticRecording(next, {
++      evidenceRoot: root,
++      path: output.path,
++      mode: 'refresh',
++      previousDigest: chunked.digest
++    })
++  )
++  for (const path of [
++    '../escape.json',
++    '/tmp/escape.json',
++    'nested/../escape.json',
++    'a'.repeat(129)
++  ])
++    await assert.rejects(
++      persistSyntheticRecording(chunked, {
++        evidenceRoot: root,
++        path,
++        mode: 'record',
++        previousDigest: null
++      })
++    )
++  await symlink(join(root, 'nested'), join(root, 'link'))
++  await assert.rejects(
++    persistSyntheticRecording(chunked, {
++      evidenceRoot: root,
++      path: 'link/no.json',
++      mode: 'record',
++      previousDigest: null
++    })
++  )
++  await symlink(join(root, output.path), join(root, 'linked.json'))
++  await assert.rejects(
++    persistSyntheticRecording(next, {
++      evidenceRoot: root,
++      path: 'linked.json',
++      mode: 'refresh',
++      previousDigest: chunked.digest
++    })
++  )
++  for (const [index, raw] of [
++    ` ${canonicalJson(chunked)}\n`,
++    canonicalJson(chunked),
++    `${canonicalJson(chunked).replace('"synthetic":true', '"synthetic":false,"synthetic":true')}\n`,
++    `${canonicalJson(chunked).replace('"suiteId":"mf-child"', '"suiteId":"HOSTILE_FAKE","suiteId":"mf-child"')}\n`
++  ].entries()) {
++    const path = `bad-${index}.json`
++    await writeFile(join(root, path), raw)
++    await assert.rejects(
++      persistSyntheticRecording(next, {
++        evidenceRoot: root,
++        path,
++        mode: 'refresh',
++        previousDigest: chunked.digest
++      })
++    )
++    assert.equal(await readFile(join(root, path), 'utf8'), raw)
++  }
++  await assert.rejects(
++    persistSyntheticRecording(next, {
++      evidenceRoot: root,
++      path: output.path,
++      mode: 'refresh',
++      previousDigest: '0'.repeat(64)
++    })
++  )
++  // Byte/ordinal/delay/termination/status/headers/digest tampering, even rehashed.
++  for (const alter of [
++    (r) => {
++      r.chunks[0].base64 = Buffer.from('HOSTILE_FAKE').toString('base64')
++    },
++    (r) => {
++      r.chunks[0].ordinal = 1
++    },
++    (r) => {
++      r.chunks.reverse()
++    },
++    (r) => {
++      r.chunks.pop()
++    },
++    (r) => {
++      r.chunks[0].base64 += '='
++    },
++    (r) => {
++      r.chunks[0].delayMs = 101
++    },
++    (r) => {
++      r.chunks[0].base64 = 'YQ=='.repeat(1025)
++    },
++    (r) => {
++      r.chunks = Array.from({ length: 33 }, (_, ordinal) => ({
++        ordinal,
++        delayMs: 0,
++        base64: 'YQ=='
++      }))
++    },
++    (r) => {
++      r.termination = 'disconnect'
++    },
++    (r) => {
++      r.status = 429
++    },
++    (r) => {
++      r.headers['x-extra'] = 'HOSTILE_FAKE'
++    },
++    (r) => {
++      r.synthetic = false
++    },
++    (r) => {
++      r.extra = 'HOSTILE_FAKE'
++    },
++    (r) => {
++      r.requestSha256 = '0'.repeat(64)
++    },
++    (r) => {
++      r.planSha256 = '0'.repeat(64)
++    }
++  ]) {
++    const bad = JSON.parse(canonicalJson(chunked))
++    alter(bad)
++    await assert.rejects(
++      createModelFaultServer(firstPlan, { recording: redigest(bad) })
++    )
++    await assert.rejects(
++      persistSyntheticRecording(redigest(bad), {
++        evidenceRoot: root,
++        path: 'never.json',
++        mode: 'record',
++        previousDigest: null
++      })
++    )
++  }
++  await assert.rejects(
++    createModelFaultServer(firstPlan, {
++      recording: { ...chunked, digest: '0'.repeat(64) }
++    })
++  )
++  // Refuse every hostile request before history/record; no rejected payload storage.
++  const goodBody = expectedRequestBytes(firstPlan).toString()
++  for (const override of [
++    {
++      body: goodBody.replace(
++        '"messages":',
++        '"messages":[{"role":"user","content":"HOSTILE_FAKE"}],"messages":'
++      )
++    },
++    { body: goodBody.replace('CVG_SYNTHETIC_REQUEST:mf-case', 'HOSTILE_FAKE') },
++    { headers: { authorization: 'Bearer HOSTILE_FAKE' } },
++    { headers: { 'x-api-key': 'HOSTILE_FAKE' } },
++    { headers: { cookie: 'HOSTILE_FAKE' } },
++    { headers: { 'proxy-authorization': 'HOSTILE_FAKE' } }
++  ]) {
++    const server = await createModelFaultServer(firstPlan, { mode: 'record' })
++    try {
++      assert.equal((await exchange(server, firstPlan, override)).status, 400)
++      await settled(server)
++      assert.deepEqual(server.requestHistory(), [])
++      assert.throws(
++        () => server.recording(),
++        (error) => !String(error).includes('HOSTILE_FAKE')
++      )
++      assert.ok(!canonicalJson(server.state()).includes('HOSTILE_FAKE'))
++    } finally {
++      await server.close()
++    }
++  }
++  console.log(
++    JSON.stringify({
++      probe: 'record-refresh',
++      scenarios: 7,
++      status: 'observed',
++      digest: next.digest
++    })
++  )
++}
++const negative = async () => {
++  const plan = planFor('ok-json')
++  await assert.rejects(
++    createModelFaultServer(plan, { mode: 'record' }),
++    (error) =>
++      String(error).includes('credential environment blocked') &&
++      !String(error).includes('HOSTILE_FAKE')
++  )
++  await assert.rejects(createModelFaultServer(plan, { mode: 'refresh' }))
++  // Obtain a valid recording through default replay (which does not consult env).
++  const replay = await createModelFaultServer(plan)
++  let recording
++  try {
++    await exchange(replay, plan)
++    await settled(replay)
++    recording = replay.recording()
++  } finally {
++    await replay.close()
++  }
++  await assert.rejects(
++    persistSyntheticRecording(recording, {
++      evidenceRoot: root,
++      path: 'blocked.json',
++      mode: 'record',
++      previousDigest: null
++    }),
++    (error) =>
++      String(error).includes('credential environment blocked') &&
++      !String(error).includes('HOSTILE_FAKE')
++  )
++  console.log(JSON.stringify({ probe: 'credential-block', status: 'observed' }))
++}
++if (mode === 'positive') await positive()
++else if (mode === 'negative') await negative()
++else throw new Error('unknown static probe')

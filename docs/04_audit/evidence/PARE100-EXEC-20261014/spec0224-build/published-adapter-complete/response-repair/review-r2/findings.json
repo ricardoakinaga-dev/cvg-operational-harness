@@ -1,0 +1,85 @@
+{
+  "decision": "INVALID",
+  "technicalDisposition": "REJECT",
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "HIGH",
+      "blocking": true,
+      "title": "Empty native RESPONSE loses its terminal step and first model accounting; accepted decision can replay",
+      "criterion": "A2 and required durable terminal response refusal",
+      "source": [
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/iterative-dispatch.ts",
+          "line": 978,
+          "detail": "Empty composed text returns INSUFFICIENT_EVIDENCE without a FAILED RESPOND write; exception reconciliation is not entered."
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/iterative-runtime.ts",
+          "line": 1200,
+          "detail": "Stop path advances cursor/clears accepted decision despite no response row or counted step."
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/complete-checkpoint.ts",
+          "line": 476,
+          "detail": "Checkpoint validator rejects budgetUsage.steps < stepNumber (Checkpoint step mismatch)."
+        },
+        {
+          "path": "/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/published-adapter-complete/response-repair/review-packet-r2/artifact/packages/harness/src/iterative-runtime.ts",
+          "line": 2262,
+          "detail": "Finalization catches persistence error and returns refusal; last durable accepted decision and old usage survive."
+        }
+      ],
+      "actualEvidence": [
+        "raw/adversarial-strict-cases.json#AX02",
+        "raw/adversarial-strict-stdout.log",
+        "raw/adversarial-strict-stderr.log",
+        "raw/replay-strict-cases.json#REPLAY_EMPTY",
+        "raw/replay-strict-cases.json#REPLAY_EMPTY_SECOND",
+        "raw/replay-strict-summary.json",
+        "raw/codec-strict-cases.json"
+      ],
+      "firstAttempt": {
+        "returnedStop": "INSUFFICIENT_EVIDENCE",
+        "returnedModelCalls": 1,
+        "durableStop": null,
+        "durableModelCalls": 0,
+        "durableStep": 1,
+        "durableAcceptedStep": 2,
+        "nativeRespondRows": 0
+      },
+      "afterReplay": {
+        "actualModelCalls": 2,
+        "durableModelCalls": 1,
+        "actualInputTokens": 276,
+        "durableInputTokens": 138,
+        "actualOutputTokens": 3,
+        "durableOutputTokens": 2,
+        "actualSyntheticCost": 0.0625,
+        "durableSyntheticCost": 0.03125,
+        "toolBodyCalls": 1,
+        "replayReturned": "COMPLETED"
+      },
+      "confidence": "HIGH; reproduced twice with original template and strengthened strict NodeFS tracing. Positive terminal replay refuses without a new call. Public codec witness confirms the mismatched-step error; runtime exact swallowed exception inferred from source plus public codec, not instrumented private runtime state.",
+      "requestedCorrection": "Record a truthful failed RESPOND and align counters/cursor before finalizing empty content; preserve actual native model usage in the acknowledged terminal checkpoint. Review only; no implementation patch made."
+    },
+    {
+      "id": "P-001",
+      "severity": "REVIEW_VALIDITY",
+      "blocking": true,
+      "title": "Initial dependency platform detection read two files outside the literal allowlist",
+      "paths": [
+        "/usr/bin/ldd",
+        "/proc/version"
+      ],
+      "actualEvidence": [
+        "raw/ancillary-runtime-read-disclosure.json",
+        "raw/read-classification.json",
+        "raw/baseline-reads.jsonl",
+        "raw/baseline-strict-reads.jsonl"
+      ],
+      "detail": "Supplied template permits ancillary OS paths. Six initial runs read these files through dependency tooling. Strengthened derivative blocks those reads and all child-process methods; six strict repeats show the same technical outcomes. Historical reads remain a literal scope deviation; no pristine I1 claim is made.",
+      "confidence": "HIGH for observed user-space NodeFS reads; no OS attestation"
+    }
+  ]
+}

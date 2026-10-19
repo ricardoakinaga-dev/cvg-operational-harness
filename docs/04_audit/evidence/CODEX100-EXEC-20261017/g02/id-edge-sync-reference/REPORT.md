@@ -1,0 +1,9 @@
+# Fechamento estático dos IDs de borda
+
+Unidade T1 `DX100-G02:RECON-SYNCHRONOUS-ID-EDGE-ORACLE`. A [revisão independente](source-review-r1/review.json) aceitou apenas o desenho condicional: 18 citações pinadas e o binding de Tokio 1.52.3 conferem, com seis critérios atendidos e zero achados obrigatórios. O [aceite Lead](Lead-source-acceptance.json) reconferiu os quatro inputs e 17 arquivos de fonte do crítico. Dois detalhes de precisão estão em [clarificações](Lead-review-clarifications.json), sem editar os inputs congelados.
+
+A conversão de método desconhecido aguarda o envio do erro à fila, diferentemente do handler assíncrono de thread/list. FIFO, roteador e writer stdio permitem propor um marcador sob SC01–SC08. Isso depende de fila aberta, ausência de overload/desconexão e observação válida na mesma conexão; enqueue não confirma escrita em stdout. Ausência de resposta não distingue Notification de falha de parse e não prova rejeição universal do ID.
+
+Nenhum driver ou HOW novo foi implementado, nenhum alvo foi executado e nenhum dos 11 casos thread/list foi qualificado. Eles continuam OPEN. Os 12 IDs positivos anteriores continuam observados na referência; os 285+143 payloads anteriores foram reconferidos pelo Lead, fora do escopo da crítica atual. Não houve BUILD nativo, recibo funcional ou gate de aplicação nesta rodada.
+
+A rodada encerra esta recon finita; eventual experimento exige contrato, HOW e recursos revisados próprios. Ele não é requisito adicional do BUILD0231. A próxima ação do programa é registrar a resposta humana à SPEC0231 já enviada; depois, se aprovada, implementar o qualificador Q01 em candidata isolada. Os 49 cartões, 22 famílias, dez fases e 487 obrigações funcionais + 22 controles permanecem obrigatórios. A análise de referência não substitui essas entregas.

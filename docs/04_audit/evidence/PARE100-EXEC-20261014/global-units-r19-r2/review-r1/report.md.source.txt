@@ -1,0 +1,58 @@
+# Independent I1 verifier diagnostic — REVISE
+
+The bounded observations are useful, but V02 fails: R2 can authorize an owned TCP tuple and then connect an unregistered IPC path. This is inside the frozen Node TCP/IPC scope. No global PASS or product approval is granted.
+
+Method: static inspection of the manifest's 27 immutable inputs, plus one private synthetic local TCP/IPC probe. No original project test rerun, descendants/subagents, external connections, DNS, PostgreSQL, Docker, installs, full suite or product source edits were performed. Citations below use packet-relative paths with one-based lines, or zero-based JSON pointers. Probe paths are review-output-relative.
+
+| Criterion | Result | Basis |
+|---|---|---|
+| V01 | PASS_WITH_EVIDENCE_LIMITS | Packet intact; both runs report unchanged frozen source. Full historical inventories are absent. Broad R1 failure remains. |
+| V02 | FAIL | Mixed `path` + owned TCP `host`/`port` bypasses IPC ownership. |
+| V03 | PARTIAL | Current real focused results support narrow observations; original qualification raw streams are missing and controls miss the confirmed bypass. |
+| V04 | PASS_SCOPED | Direct observations distinguish guard interference, asynchronous failure behavior and closed-port expectation mismatch without inventing refusal or subtracting test totals. |
+
+## Strongest material defect: I1-01
+
+In `r2/network-guard.cjs:64-69`, IPC ownership is checked only when `options.port === undefined`. A supplied port instead selects TCP authorization. Line 95 forwards the unchanged `path` to Node's original connect implementation. Node uses that IPC path. A valid owned loopback TCP port therefore authorizes a different transport endpoint.
+
+The byte-identical relocated guard has SHA256 `d60c0d613b54f733e8da8e646d8d4c89be7ae607a2fd3d568cbbc890c8719727`, matching the packet R2 guard. On Node v22.23.2, the private probe created an IPC listener before installing the wrapper, leaving it deliberately absent from the guard registry. It then created registered TCP and IPC listeners. Every endpoint belonged to this probe under the authorized output directory, with TCP bound only to `127.0.0.1` on an ephemeral port; there was no DNS or external endpoint.
+
+Raw observations in `probe/stdout.jsonl`:
+
+- Line 2: registry contains the owned TCP port 33857 and owned `o.sock`, but no `u.sock`.
+- Lines 3–4: owned TCP and owned IPC positives connect and receive their distinct payloads.
+- Line 5: `{path: u.sock}` is denied with `CVG_GLOBAL_TEST_NETWORK_BLOCKED`, without connecting.
+- Line 6: `{path: u.sock, host: '127.0.0.1', port: 33857}` connects and receives `UNREGISTERED_PRIVATE_IPC`.
+- Line 7: unregistered IPC accepted exactly one connection; TCP accepted only its positive-control connection. The blocked log contains only the ordinary path-only negative.
+
+`probe/command.json` records the exact argv, minimal environment, 8-second bound, exit 0 and guard hash. Exit 0 records successful probe execution, not verifier approval. `probe/probe.cjs` contains the entire probe. The guard was loaded via `require` after arranging the private unregistered endpoint; the probe validates the installed wrapper's behavior, not startup inheritance. No product implementation or immutable input was changed.
+
+Required revision: authorize the transport Node will actually use, including IPC ownership whenever `path` selects IPC, or reject ambiguous `path`/`port` combinations. Add a mixed-options negative control. This does not require changing the product smoke expectation or synthesizing `ECONNREFUSED`.
+
+## Direct R1/R2 classifications
+
+R1 actually failed: `r1/stdout.log:835-838` records 10 failed files, 413 passed files, 29 skipped files, and 61 failed / 4389 passed / 282 skipped assertions. `r1/results.json` has `success: false`; `r1/command.json:47-50` records exit 1 and zero source changes. The separate fence collection failure is explicit at `r1/stderr.log:10-18`; it is not an additional failed assertion. JSON's nested suite counters are not file counts.
+
+R2 is explicitly five focused files (`r2/command.json:2-13,44`), also exit 1 with `success: false`. Its actual result is four passed files, one failed file, 27 passed assertions and one failed assertion (`r2/stdout.log:8-25`). It cannot replace or repair the broad R1 result.
+
+1. **Pinned transport false denials are directly supported.** R1 blocks the logical names `provider.invalid` and `synthetic.invalid` (`r1/run-blocked.jsonl:5-17`) before consulting transport lookup (`r1/network-guard.cjs:43-55`). The original transports preserve logical authority and install a pinned lookup (`sources/packages/{model,channel}-gateway/src/{providers,adapters}/ssrf-node.ts:35-43,97-108`). Original bound tests create their own loopback server and assert received Host, path, body and response semantics (`sources/packages/model-gateway/src/__tests__/bound-transport-node22.test.ts:24-43,50-115`). R1 errors enter the guard directly (`r1/stderr.log:842-876`). The corresponding R2 assertions pass (`r2/results.json#/testResults/4/assertionResults`). These observations support removal of those false denials in that focused run, not complete transport qualification.
+2. **Byte-cap case now reaches its intended assertion.** Original `pdsh-016-bound-response.test.ts:19-28` expects rejection at four bytes and a five-byte response at five. R1 received the guard error instead (`r1/stderr.log:826-835`); R2 directly passes that same named assertion (`r2/results.json#/testResults/3/assertionResults/0`).
+3. **Worker exit behavior changes are observed, with causal uncertainty.** R1's two real-entrypoint negative tests received exit 0 instead of 1 (`r1/stderr.log:788-822`); both named assertions pass in R2 (`r2/results.json#/testResults/1/assertionResults/2` and `/testResults/2/assertionResults/3`). The original tests inherit the environment, target synthetic localhost port 1, and assert failure/readiness/redaction semantics (`sources/apps/worker/src/__tests__/homolog-worker-lifecycle.test.ts:95-136`; `startup-error-redaction.test.ts:97-143`). Both runs record port-1 denials (`r1/run-blocked.jsonl:1-2`; `r2/run-blocked.jsonl:1-2`). R1 throws synchronously while R2 destroys asynchronously (`r1/network-guard.cjs:51-55`; `r2/network-guard.cjs:63,69`). This is consistent with verifier-induced error-path interference; child raw output and imported worker implementation are absent, so the precise mechanism is not independently established. No real PostgreSQL availability claim follows.
+4. **Closed-port policy mismatch remains a failure.** Original `sources/tests/production-target-smoke.test.ts:225-232` closes an owned ephemeral listener; lines 344–362 expect a real refusal from that port. R2 records listen then close for port 39421 (`r2/run-network.jsonl:28-29`), and two denials for it (`r2/run-blocked.jsonl:3-4`). The received value is honestly `CVG_GLOBAL_TEST_NETWORK_BLOCKED`, not `ECONNREFUSED` (`r2/stderr.log:4-22`). R1 shows the same mismatch (`r1/stderr.log:279-297`). Classify this as guard policy versus original test semantics; leave it failed. Later assertions in that test are not established because execution stops at the mismatch.
+5. **Other broad failures remain unresolved.** R1 directly reports compiled-kernel qualification and SDK qualification mismatches (`r1/results.json#/testResults/20` and `/testResults/22`), undeclared imports (`r1/stderr.log:301-312`), a forbidden `pg` token (`r1/stderr.log:324-325`), and missing assigned fence evidence (`r1/stderr.log:10-18`). Their original implementations/tests were not supplied and they were not rerun in R2. The packet does not establish their deeper cause or resolution.
+
+`raw-observations.json` preserves every failed R1/R2 assertion and collection message with exact JSON pointers, plus all 28 focused comparisons joined by file and full test name. These comparisons are direct observations, not an inferred remainder from aggregate counts.
+
+## Coverage and integrity limits
+
+The qualification programs contain actual positive/negative assertions (`r1/qualify-network.cjs:5-15`; `r2/qualify-network.cjs:6-40`). R2 includes pinned HTTP authority, mixed lookup-address rejection, unpinned host rejection, closed listener rejection and IPC positive. Both command records report `qualificationExit: 0`; `run.py:14-18` shows the gate. However, original qualification stdout/stderr and qualification registries are absent from the 27 inputs. Their raw results cannot be reconstructed or invented. The private probe independently covers ordinary TCP/IPC positives, IPC rejection and the mixed-options counterexample, without repeating external-address controls.
+
+Source preservation is supported by empty `source-changes.json` files and identical recorded before/after digest `a6b96cdcd4c21deb552467a3a4b90c7133ef5ea4c5bdb86c871b83df7ebf2b92` in both commands. `run.py:20-32,49-52` implements snapshots and candidate checks. The 1042-file inventories and 81 candidate bindings are absent, so their complete historical contents cannot be independently rehashed here. The snapshot also deliberately filters roots/extensions and excludes symlinks/build outputs.
+
+The frozen claim is only inherited Node TCP/IPC monkeypatch behavior. There is no OS, UDP, native-child, noninheriting-child, TLS/IPv6 completeness, registry-adversary or product acceptance attestation. The confirmed IPC bypass needs no excluded capability. Existing source/results remain useful diagnostic observations even though verifier adequacy requires revision.
+
+All 27 manifest entries matched expected byte counts and SHA256 before review and after the probe. `pre27hash.json` and `post27hash.json` enumerate each input. Aggregate SHA256 over manifest-ordered `path<TAB>bytes<TAB>sha256<LF>` rows is, both before and after:
+
+`357bf75733e3692c3584a09d97f111c945129311a3223ae6c073e390301a7f84`
+
+Every output file is enumerated with bytes/SHA256 in `manifest.json`, excluding that manifest itself. The review stops at this verifier diagnostic and proposes no product approval.

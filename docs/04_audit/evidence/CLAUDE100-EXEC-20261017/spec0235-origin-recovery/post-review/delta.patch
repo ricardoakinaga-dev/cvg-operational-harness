@@ -1,0 +1,130 @@
+diff --git a/tests/claude100/reference-port/controller.test.js b/tests/claude100/reference-port/controller.test.js
+index fbb977d0..8f83cc3b 100644
+--- a/tests/claude100/reference-port/controller.test.js
++++ b/tests/claude100/reference-port/controller.test.js
+@@ -870,3 +870,66 @@ describe('LR01–LR03 exact ordered failure-ledger recovery', () => {
+       )
+   )
+ })
++
++describe('OR01–OR02 physical trace ownership before global chronology', () => {
++  it.each([
++    'primary_failure',
++    'all_failures',
++    'client_frame',
++    'observer_frame'
++  ])(
++    'rejects rehashed relocation of %s with byte-identical ledger and unchanged global union',
++    (kind) =>
++      scenario(
++        { forbiddenAuth: true, cleanupUnavailable: true },
++        async (r, _docker, root) => {
++          const { retained } = await failureLedgerSpecimen(r, root),
++            changed = structuredClone(r.report)
++          const controls = changed.artifacts.find(
++            (a) => a.role === 'control-trace'
++          )
++          const observers = changed.artifacts.find(
++            (a) => a.role === 'observer-trace'
++          )
++          const failures = changed.artifacts.find((a) => a.role === 'failures')
++          const originalLedger = Buffer.from(retained.get(failures.path))
++          const control = JSON.parse(retained.get(controls.path)),
++            observer = JSON.parse(retained.get(observers.path))
++          const before = [...control.records, ...observer.records].sort(
++            (a, b) => a.ordinal - b.ordinal
++          )
++          const from = kind === 'observer_frame' ? observer : control
++          const to = kind === 'observer_frame' ? control : observer
++          const selected =
++            kind === 'all_failures'
++              ? from.records.filter(
++                  (r) => r.source === 'HOST' && r.type === 'FAILURE'
++                )
++              : [
++                  from.records.find((r) =>
++                    kind === 'primary_failure'
++                      ? r.source === 'HOST' && r.type === 'FAILURE'
++                      : r.source ===
++                          (kind === 'client_frame' ? 'client' : 'observer') &&
++                        r.type === 'FRAME'
++                  )
++                ]
++          expect(selected.length).toBeGreaterThan(0)
++          expect(selected.every(Boolean)).toBe(true)
++          from.records = from.records.filter((r) => !selected.includes(r))
++          to.records = [...to.records, ...selected].sort(
++            (a, b) => a.ordinal - b.ordinal
++          )
++          expect(
++            [...control.records, ...observer.records].sort(
++              (a, b) => a.ordinal - b.ordinal
++            )
++          ).toEqual(before)
++          replaceProofArtifact(changed, retained, 'control-trace', control)
++          replaceProofArtifact(changed, retained, 'observer-trace', observer)
++          expect(retained.get(failures.path)).toEqual(originalLedger)
++          expect(() => assertEvidenceBindings(changed, retained)).toThrow()
++        }
++      )
++  )
++})
+diff --git a/tests/claude100/reference-port/report.mjs b/tests/claude100/reference-port/report.mjs
+index 8f2dcb94..de2a40b1 100644
+--- a/tests/claude100/reference-port/report.mjs
++++ b/tests/claude100/reference-port/report.mjs
+@@ -50,6 +50,22 @@ function assertReachedPassProofs(report, retained, one) {
+     report.containmentChecks.find((c) => c.id === id)?.status === 'PASS'
+   const control = parsed(retained, one('control-trace')),
+     observer = parsed(retained, one('observer-trace'))
++  require(Array.isArray(control.records) && Array.isArray(observer.records))
++  // A declared source cannot move a record across its physical pipe artifact.
++  require(
++    control.records.every(
++      (r) =>
++        r &&
++        typeof r.type === 'string' &&
++        ((r.source === 'HOST' && r.type !== 'FRAME') ||
++          (r.source === 'client' && r.type === 'FRAME'))
++    )
++  )
++  require(
++    observer.records.every(
++      (r) => r && r.source === 'observer' && r.type === 'FRAME'
++    )
++  )
+   const records = [...control.records, ...observer.records].sort(
+     (a, b) => a.ordinal - b.ordinal
+   )
+@@ -103,9 +119,9 @@ function assertReachedPassProofs(report, retained, one) {
+     )
+   })
+   // The trace, not the supplied ledger, defines recorded cause coverage/order.
+-  const causes = records.filter(
+-    (r) => r.source === 'HOST' && r.type === 'FAILURE'
+-  )
++  const causes = control.records
++    .filter((r) => r.source === 'HOST' && r.type === 'FAILURE')
++    .sort((a, b) => a.ordinal - b.ordinal)
+   const codes = new Set([
+     'IO',
+     'CLEANUP',
+@@ -146,7 +162,17 @@ function assertReachedPassProofs(report, retained, one) {
+         phases.has(f.phase)
+     )
+     if (i < causes.length) {
+-      const actual = causes[i]
++      const expected = causes[i],
++        ownerPath = one('control-trace').path
++      require(f.artifactRef === `${ownerPath}#${expected.ordinal}`)
++      const actual = control.records.find(
++        (r) => r.ordinal === Number(f.artifactRef.slice(ownerPath.length + 1))
++      )
++      require(
++        actual === expected &&
++          actual.source === 'HOST' &&
++          actual.type === 'FAILURE'
++      )
+       closed(actual.data, ['code', 'source', 'phase', 'order'], 'PROTOCOL')
+       require(
+         f.artifactRef === `${one('control-trace').path}#${actual.ordinal}` &&

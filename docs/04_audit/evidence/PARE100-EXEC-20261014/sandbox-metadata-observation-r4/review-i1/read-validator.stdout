@@ -1,0 +1,201 @@
+1: from pathlib import Path
+2: import argparse
+3: import copy
+4: import hashlib
+5: import json
+6: import re
+7: from datetime import datetime
+8: from common import CAP, P, authority, digest, env_for, equal, integer, load, require, strict_load
+9: from seal import FILES
+10: 
+11: UNDEFINED = {'$type': 'undefined'}
+12: FUNCTION = {'$type': 'function'}
+13: ECHO = {'text': 'synthetic echo only'}
+14: CASE_IDS = ['direct-WORKSPACE', 'capability-WORKSPACE', 'capability-NONE']
+15: CASE_KEYS = set('caseId route mode input beforeDescriptor registeredDescriptors submittedDescriptor capabilityFingerprint nativeResult gateCalls bodyCalls modelCalls decisions policyEvaluations approvalRequests auditEvents telemetryEvents kernelLogEvents journalRecord'.split())
+16: 
+17: def timestamp(value):
+18:     require(isinstance(value, str) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z', value), 'timestamp shape')
+19:     return datetime.fromisoformat(value.replace('Z', '+00:00'))
+20: 
+21: def fingerprint(descriptor):
+22:     serialized = json.dumps({'schemaVersion': 'capability-composition-v1', 'descriptors': [descriptor]}, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+23:     return hashlib.sha256(serialized.encode()).hexdigest()
+24: 
+25: def evaluate(data, fixture, execution_ns):
+26:     require(integer(execution_ns, 1, 5000000000), 'trusted execution span')
+27:     outer_ms = (execution_ns + 999999) // 1000000
+28:     require(set(data) == {'schema', 'boundary', 'syntheticPorts', 'cases'}, 'observation schema')
+29:     equal(data['schema'], 'cvg-sandbox-metadata-observation-v1', 'schema')
+30:     equal(data['boundary'], 'public source factory, single_pass only', 'boundary')
+31:     equal(data['syntheticPorts'], ['orchestrator', 'model', 'policy', 'approval', 'audit', 'telemetry', 'sandbox-deny'], 'synthetic ports')
+32:     equal([case['caseId'] for case in data['cases']], CASE_IDS, 'case identities')
+33:     results = []
+34:     previous_audit = None
+35:     first_audit = None
+36:     summed_latency = 0
+37:     for case in data['cases']:
+38:         require(set(case) == CASE_KEYS, 'case schema')
+39:         case_id = case['caseId']
+40:         route, mode = case_id.split('-', 1)
+41:         equal(case['route'], route, 'route')
+42:         equal(case['mode'], mode, 'mode')
+43:         original = fixture['cases'][case_id]
+44:         inp = original['input']
+45:         before = original['descriptor']
+46:         equal(case['input'], inp, 'fixed input')
+47:         equal(case['beforeDescriptor'], before, 'fixed descriptor')
+48:         submitted = copy.deepcopy(case['submittedDescriptor'])
+49:         if route == 'direct':
+50:             equal(submitted, {**before, 'execute': FUNCTION}, 'direct tool')
+51:             normalized = before
+52:             equal(case['registeredDescriptors'], UNDEFINED, 'no direct registry')
+53:             equal(case['capabilityFingerprint'], UNDEFINED, 'no direct fingerprint')
+54:         else:
+55:             normalized = case['registeredDescriptors'][0]
+56:             require(len(case['registeredDescriptors']) == 1, 'registry count')
+57:             without_mode = {key: value for key, value in before.items() if key != 'sandbox'}
+58:             # This observation can report preservation or loss, without changing the engine.
+59:             require(normalized == before or normalized == without_mode, 'unexpected normalization')
+60:             equal(normalized, before if 'sandbox' in normalized else without_mode, 'normalized descriptor types')
+61:             equal(submitted, normalized, 'submitted registry descriptor')
+62:             equal(case['capabilityFingerprint'], fingerprint(normalized), 'recomputed capability fingerprint')
+63:         runtime = copy.deepcopy(inp)
+64:         if route == 'capability':
+65:             runtime['capabilityFingerprint'] = fingerprint(normalized)
+66:         invocation = inp['requestedTool']
+67:         tool = {**normalized, 'execute': FUNCTION}
+68:         equal(case['decisions'], [{'input': {'runtime': runtime, 'availableTools': [normalized], 'step': 1},
+69:                                    'decision': {'action': 'CALL_TOOL', 'toolInvocation': invocation}}], 'decision causal payload')
+70:         context = {'tenantId': inp['tenantId'], 'agentId': inp['agent']['id'],
+71:                    'correlationId': inp['correlationId'], 'traceId': inp['traceId'],
+72:                    'operationKey': invocation['operationKey']}
+73:         equal(case['policyEvaluations'], [{'tenantId': inp['tenantId'], 'agentId': inp['agent']['id'],
+74:               'action': 'tool.execute', 'tool': tool, 'invocation': invocation,
+75:               'correlationId': inp['correlationId']}], 'policy causal payload')
+76:         contained = normalized.get('sandbox', 'NONE') != 'NONE'
+77:         equal(case['gateCalls'], [{'descriptor': tool, 'context': context,
+78:               'policy': {'requiredMode': 'WORKSPACE', 'workspaceScoped': True,
+79:                          'networkAllowed': False, 'subprocessAllowed': False}}] if contained else [], 'gate causal payload')
+80:         equal(case['bodyCalls'], [] if contained else [{'input': ECHO, 'context': {**context,
+81:               'signal': {'$type': 'AbortSignal', 'aborted': False, 'reason': UNDEFINED}}}], 'body causal payload')
+82:         equal(case['modelCalls'], [], 'no model')
+83:         equal(case['approvalRequests'], [], 'no approval')
+84:         reason = 'UNSAFE_REQUEST' if contained else 'COMPLETED'
+85:         expected_result = {'response': f'Sandbox denied tool "{before["id"]}": synthetic deny, no native backend.' if contained else json.dumps(ECHO, separators=(',', ':')),
+86:                            'stopReason': reason, 'steps': 1, 'modelCalls': 0, 'toolCalls': 0 if contained else 1,
+87:                            'usage': {'inputTokens': 0, 'outputTokens': 0, 'costUsd': 0}}
+88:         if not contained:
+89:             expected_result['toolResult'] = {'status': 'SUCCEEDED', 'output': ECHO}
+90:         equal(case['nativeResult'], expected_result, 'native result')
+91:         base_log = {'correlationId': inp['correlationId']}
+92:         equal(case['kernelLogEvents'], [
+93:             {'type': 'turn/start', **base_log},
+94:             {'type': 'tool/call', **base_log, 'toolId': before['id'], 'operationKey': invocation['operationKey'], 'input': ECHO},
+95:             {'type': 'tool/result', **base_log, 'toolId': before['id'], 'outcome': 'not_started' if contained else 'succeeded'},
+96:             {'type': 'turn/end', **base_log, 'stopReason': reason}
+97:         ], 'complete kernel log')
+98:         require(len(case['auditEvents']) == 1, 'audit count')
+99:         audit_time = case['auditEvents'][0]['timestamp']
+100:         current_audit = timestamp(audit_time)
+101:         if previous_audit is not None:
+102:             require(previous_audit <= current_audit, 'sequential audit clock reversal: invalid/inconclusive')
+103:         first_audit = first_audit or current_audit
+104:         equal(case['auditEvents'], [{'actor': inp['agent']['id'], 'agent': inp['agent']['id'], 'tenant': inp['tenantId'],
+105:               'action': 'harness.single_pass', 'policy': 'ALLOW', 'approval': None, 'tool': before['id'],
+106:               'result': reason, 'timestamp': audit_time, 'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete audit payload')
+107:         require(len(case['telemetryEvents']) == 1, 'telemetry count')
+108:         event = case['telemetryEvents'][0]
+109:         require(integer(event['latencyMs']) and integer(event['toolDurationMs']), 'telemetry timing types/range')
+110:         require(event['toolDurationMs'] <= event['latencyMs'], 'tool interval exceeds enclosing turn: invalid/inconclusive')
+111:         require(event['latencyMs'] <= outer_ms + 1, 'turn interval exceeds captured execution plus1ms quantization: invalid/inconclusive')
+112:         summed_latency += event['latencyMs']
+113:         if contained:
+114:             equal(event['toolDurationMs'], 0, 'blocked tool was never dispatched')
+115:         equal(case['telemetryEvents'], [{'name': 'harness.single_pass', 'latencyMs': event['latencyMs'],
+116:               'errors': 1 if contained else 0, 'costUsd': 0, 'inputTokens': 0, 'outputTokens': 0,
+117:               'provider': None, 'toolDurationMs': event['toolDurationMs'], 'steps': 1,
+118:               'traceId': inp['traceId'], 'correlationId': inp['correlationId']}], 'complete telemetry payload')
+119:         journal = case['journalRecord']
+120:         if contained:
+121:             equal(journal, None, 'blocked journal')
+122:         else:
+123:             require(set(journal) == {'tenantId', 'operationKey', 'proposalHash', 'state', 'attemptId', 'createdAt', 'updatedAt', 'result'}, 'journal schema')
+124:             require(re.fullmatch(r'attempt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', journal['attemptId']), 'attempt UUID')
+125:             require(timestamp(journal['createdAt']) <= timestamp(journal['updatedAt']), 'journal clock order')
+126:             require(timestamp(journal['updatedAt']) <= timestamp(audit_time), 'journal confirmation precedes turn-end audit; clock anomaly is invalid/inconclusive')
+127:             if previous_audit is not None:
+128:                 require(previous_audit <= timestamp(journal['createdAt']), 'sequential journal clock reversal: invalid/inconclusive')
+129:             proposal = {'schemaVersion': 'effect-proposal-v2', 'compositionFingerprint': fingerprint(normalized),
+130:                         'tool': {key: normalized[key] for key in ['id', 'version', 'sideEffect', 'idempotent', 'providerId', 'providerVersion']}, 'input': ECHO}
+131:             expected_proposal = hashlib.sha256(json.dumps(proposal, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+132:             equal(journal['proposalHash'], expected_proposal, 'recomputed journal proposal hash')
+133:             equal(journal, {**journal, 'tenantId': inp['tenantId'], 'operationKey': invocation['operationKey'],
+134:                            'state': 'CONFIRMED', 'result': ECHO}, 'journal causal payload')
+135:         results.append({'case': case_id, 'gateCalls': len(case['gateCalls']), 'bodyCalls': len(case['bodyCalls']), 'stopReason': reason, 'sandbox': normalized.get('sandbox', 'ABSENT')})
+136:         previous_audit = current_audit
+137:     require(summed_latency <= outer_ms + len(data['cases']), 'sequential turn sum exceeds execution plus1ms/case: invalid/inconclusive')
+138:     audit_span = previous_audit - first_audit
+139:     audit_span_ms = (audit_span.days * 86400 + audit_span.seconds) * 1000 + audit_span.microseconds // 1000
+140:     require(audit_span_ms <= outer_ms + 1, 'audit span exceeds captured execution plus1ms: invalid/inconclusive')
+141:     require(results[0]['gateCalls'] == 1 and results[2]['bodyCalls'] == 1, 'control cases')
+142:     return {'controls': 'PASS', 'invariant': 'FAIL' if results[1]['bodyCalls'] else 'PASS_SCOPED',
+143:             'cases': results, 'sameFingerprints': data['cases'][1]['capabilityFingerprint'] == data['cases'][2]['capabilityFingerprint'],
+144:             'clockModel': 'Sequential fixed local Linux/Node22 fixture, Date resolution1ms, no discontinuities; anomalies invalidate evidence; raw clocks preserved',
+145:             'fullParity': 'NOT_MEASURED', 'nativeContainment': 'NOT_TESTED', 'ML29': 'NOT_TESTED'}
+146: 
+147: def validate_run(folder, trusted, expected_authority_sha, receipt_path, expected_receipt_sha):
+148:     require(digest(receipt_path) == expected_receipt_sha, 'untrusted capture receipt')
+149:     receipt = load(receipt_path)
+150:     require(set(receipt) == {'schema', 'run', 'files'} and receipt['schema'] == 'sandbox-observer-receipt-v2', 'receipt schema')
+151:     equal(receipt['run'], str(folder.resolve()), 'receipt run identity')
+152:     require(set(receipt['files']) == FILES, 'receipt membership')
+153:     require({f.name for f in folder.iterdir() if f.is_file()} == FILES, 'run file membership')
+154:     for name in FILES:
+155:         file = folder / name
+156:         require(file.is_file() and not file.is_symlink(), 'capture file must be regular')
+157:         equal(receipt['files'][name], {'sha256': digest(file), 'bytes': file.stat().st_size}, 'trusted capture file ' + name)
+158:     equal(load(folder / 'sources-before.json'), trusted['sources'], 'source before authority')
+159:     equal(load(folder / 'sources-after.json'), trusted['sources'], 'source after authority')
+160:     process = load(folder / 'process.json')
+161:     require(set(process) == {'schema', 'authoritySHA256', 'capture', 'snapshotErrors', 'sourceCount', 'sourcesUnchanged'}, 'process schema')
+162:     equal({k: v for k, v in process.items() if k != 'capture'}, {
+163:         'schema': 'sandbox-observer-process-v2', 'authoritySHA256': expected_authority_sha,
+164:         'snapshotErrors': [], 'sourceCount': len(trusted['sources']), 'sourcesUnchanged': True}, 'process identity')
+165:     c = process['capture']
+166:     require(set(c) == set('argv cwd env pid processGroup spawned exitCode joined remainingProcessGroup subreaper executionElapsedNs cleanupElapsedNs totalElapsedNs deadlineMs outputLimit discardedBytes eof errors descendantsReaped retainedBytes'.split()), 'capture schema')
+167:     equal(c['argv'], trusted['argv'], 'process argv')
+168:     equal(c['cwd'], trusted['cwd'], 'process cwd')
+169:     equal(c['env'], env_for(folder), 'process environment')
+170:     require(integer(c['pid'], 1, 2**31) and type(c['processGroup']) is int and c['pid'] == c['processGroup'], 'process/group identity')
+171:     for name, expected in {'spawned': True, 'exitCode': 0, 'joined': True, 'remainingProcessGroup': False,
+172:                            'subreaper': True, 'deadlineMs': 5000, 'outputLimit': CAP, 'discardedBytes': 0,
+173:                            'eof': {'stdout': True, 'stderr': True}, 'errors': []}.items():
+174:         equal(c[name], expected, 'capture.' + name)
+175:     require(integer(c['executionElapsedNs'], 1, 5000000000), 'absolute execution deadline')
+176:     require(integer(c['cleanupElapsedNs'], 0, 2200000000), 'cleanup deadline')
+177:     equal(c['totalElapsedNs'], c['executionElapsedNs'] + c['cleanupElapsedNs'], 'elapsed accounting')
+178:     require(isinstance(c['descendantsReaped'], list), 'descendants shape')
+179:     pids = []
+180:     for item in c['descendantsReaped']:
+181:         require(set(item) == {'pid', 'waitStatus'} and integer(item['pid'], 1, 2**31) and integer(item['waitStatus'], 0, 65535), 'reaped descendant')
+182:         pids.append(item['pid'])
+183:     require(len(set(pids)) == len(pids) and c['pid'] not in pids, 'reaped identity')
+184:     raw = (folder / 'stdout.txt').read_bytes()
+185:     equal((folder / 'stderr.txt').read_bytes(), b'', 'actual stderr empty')
+186:     require(0 < len(raw) <= CAP, 'stdout bound')
+187:     equal(c['retainedBytes'], len(raw), 'captured byte accounting')
+188:     return evaluate(strict_load(raw), load(P / 'fixture.json'), c['executionElapsedNs'])
+189: 
+190: if __name__ == '__main__':
+191:     parser = argparse.ArgumentParser()
+192:     parser.add_argument('--run', required=True, type=Path)
+193:     parser.add_argument('--authority', required=True, type=Path)
+194:     parser.add_argument('--authority-sha', required=True)
+195:     parser.add_argument('--receipt', required=True, type=Path)
+196:     parser.add_argument('--receipt-sha', required=True)
+197:     args = parser.parse_args()
+198:     trusted = authority(args.authority, args.authority_sha)
+199:     result = validate_run(args.run.resolve(), trusted, args.authority_sha, args.receipt, args.receipt_sha)
+200:     print(json.dumps(result))
+

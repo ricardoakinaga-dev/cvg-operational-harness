@@ -1,0 +1,246 @@
+import { isDeepStrictEqual } from 'node:util'
+import {
+  validateFailureCase,
+  makeFailure,
+  snapshotFailure
+} from './failure-case.mjs'
+
+const REFERENCE_PIN = '768fb1f3d3dcf9a16659ee354e927d05475f22dd'
+const REFERENCE_ROOT = '/home/ricardo/deepseek-harness-session-fixes/'
+const REFERENCE_PACKAGES = [
+  'cordis',
+  'dsh-agent-loop-testkit',
+  'dsh-llm',
+  'dsh-session',
+  'dsh-agent',
+  'dsh-agent-loop',
+  'dsh-session-projection',
+  'dsh-system-prompt',
+  'dsh-tools'
+].map((name) => `@deepseek-ai/${name}`)
+const REFERENCE_EVENTS = [
+  'agent/inbox/spliced',
+  'turn/start',
+  'agent/inbox/spliced',
+  'step/start',
+  'system/message',
+  'user/message',
+  'request/header',
+  'request/context',
+  'assistant/attempt',
+  'step/end',
+  'turn/end'
+]
+const CVG_EVENTS = ['message/user', 'turn/start', 'model/request', 'turn/end']
+function requireFact(condition) {
+  if (!condition) throw new Error('invalid native failure observation')
+}
+function keys(value, expected) {
+  requireFact(
+    value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      isDeepStrictEqual(Object.keys(value).sort(), [...expected].sort())
+  )
+}
+function events(value, types, sequenceKey, first) {
+  requireFact(Array.isArray(value) && value.length === types.length)
+  value.forEach((event, index) =>
+    requireFact(
+      event?.type === types[index] && event[sequenceKey] === first + index
+    )
+  )
+}
+
+/** Measures two native contracts. It never maps either native stop/error to a
+ * shared success label, drops their events, or declares failure parity. */
+export function measureModelFailureContracts(reference, cvg, input) {
+  const fixture = validateFailureCase(input)
+  const injected = snapshotFailure(makeFailure(fixture))
+  keys(reference, [
+    'version',
+    'fixtureId',
+    'reference',
+    'native',
+    'networkAttempts',
+    'observationStatus'
+  ])
+  keys(cvg, ['version', 'fixtureId', 'native', 'observationStatus'])
+  requireFact(
+    reference?.version === 1 &&
+      cvg?.version === 1 &&
+      reference.fixtureId === fixture.id &&
+      cvg.fixtureId === fixture.id
+  )
+  requireFact(
+    reference.observationStatus === 'NATIVE_FAILURE_MEASUREMENT_NOT_PARITY' &&
+      cvg.observationStatus === reference.observationStatus
+  )
+  requireFact(
+    reference.reference?.head === REFERENCE_PIN &&
+      reference.reference.root + '/' === REFERENCE_ROOT
+  )
+  const artifacts = reference.reference.artifacts
+  requireFact(
+    Array.isArray(artifacts) && artifacts.length === REFERENCE_PACKAGES.length
+  )
+  requireFact(
+    isDeepStrictEqual(
+      artifacts.map((item) => item.package).sort(),
+      [...REFERENCE_PACKAGES].sort()
+    )
+  )
+  artifacts.forEach((artifact) =>
+    requireFact(
+      typeof artifact.file === 'string' &&
+        artifact.file.startsWith(REFERENCE_ROOT) &&
+        /^[a-f0-9]{64}$/.test(artifact.sha256)
+    )
+  )
+  requireFact(
+    Array.isArray(reference.networkAttempts) &&
+      reference.networkAttempts.length === 0
+  )
+  const r = reference.native,
+    c = cvg.native
+  keys(r, [
+    'events',
+    'messages',
+    'requests',
+    'chunks',
+    'modelCalls',
+    'toolCalls',
+    'adapterErrors',
+    'liveErrors'
+  ])
+  keys(c, ['turn', 'events', 'modelBodies', 'requests', 'adapterErrors'])
+  requireFact(
+    r &&
+      c &&
+      r.modelCalls === 1 &&
+      r.toolCalls === 0 &&
+      c.modelBodies === 1 &&
+      c.turn?.modelCalls === 1 &&
+      c.turn.toolCalls === 0
+  )
+  requireFact(
+    isDeepStrictEqual(r.adapterErrors, [injected]) &&
+      isDeepStrictEqual(c.adapterErrors, [injected])
+  )
+  requireFact(
+    Array.isArray(r.requests) &&
+      r.requests.length === 1 &&
+      Array.isArray(c.requests) &&
+      c.requests.length === 1 &&
+      Array.isArray(r.chunks) &&
+      r.chunks.length === 0
+  )
+  events(r.events, REFERENCE_EVENTS, 'seq', 0)
+  events(c.events, CVG_EVENTS, 'sequence', 1)
+  const user = r.events[5].data
+  requireFact(
+    user?.id === `message-${fixture.id}` &&
+      user.role === 'user' &&
+      isDeepStrictEqual(user.content, [{ type: 'text', text: fixture.message }])
+  )
+  requireFact(
+    Array.isArray(r.messages) &&
+      r.messages.filter((message) => message.role === 'assistant').length ===
+        0 &&
+      r.messages.filter((message) => message.role === 'user').length === 1
+  )
+  requireFact(
+    Array.isArray(r.requests[0]) &&
+      isDeepStrictEqual(r.requests[0].at(-1), user) &&
+      c.requests[0]?.request?.messages?.at(-1)?.content === fixture.message
+  )
+  requireFact(
+    c.events[0].payload?.text === fixture.message &&
+      c.turn.sessionId === `pare100-${fixture.id}`
+  )
+  const correlationId = c.events[1].correlationId
+  requireFact(typeof correlationId === 'string' && correlationId.length > 0)
+  c.events.forEach((event) =>
+    requireFact(
+      event.correlationId === correlationId &&
+        event.sessionId === c.turn.sessionId
+    )
+  )
+  requireFact(
+    c.events[2].payload?.correlationId === correlationId &&
+      c.events[3].payload?.correlationId === correlationId
+  )
+  const terminal = r.events.at(-1).data?.reason
+  keys(terminal, ['kind', 'error'])
+  keys(terminal.error, ['code', 'message'])
+  requireFact(
+    terminal?.kind === 'error' &&
+      terminal.error?.code === 'UNKNOWN' &&
+      terminal.error.message === fixture.failure.message
+  )
+  requireFact(
+    c.turn.stopReason === 'MODEL_FAILURE' &&
+      c.events.at(-1).payload?.stopReason === c.turn.stopReason &&
+      c.turn.response === `Model execution failed: ${fixture.failure.message}.`
+  )
+  requireFact(
+    Array.isArray(r.liveErrors) &&
+      r.liveErrors.length === 1 &&
+      r.liveErrors[0].turn === 1 &&
+      r.liveErrors[0].step === 1 &&
+      r.liveErrors[0].error?.message === terminal.error.message
+  )
+  requireFact(
+    isDeepStrictEqual(r.liveErrors[0].error, {
+      name: 'LlmError',
+      message: fixture.failure.message,
+      cause: null
+    })
+  )
+  const finish = r.events[8].data?.stream
+  requireFact(
+    Array.isArray(finish) &&
+      finish.length === 1 &&
+      finish[0].chunk?.type === 'finish' &&
+      finish[0].chunk.reason?.kind === 'error' &&
+      isDeepStrictEqual(finish[0].chunk.reason.failure, terminal.error)
+  )
+  requireFact(
+    isDeepStrictEqual(c.turn.usage, {
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0
+    })
+  )
+  const nativeFields = {
+    terminal: { reference: terminal, cvg: c.turn.stopReason },
+    returnedText: { reference: null, cvg: c.turn.response },
+    eventTypes: {
+      reference: r.events.map((event) => event.type),
+      cvg: c.events.map((event) => event.type)
+    },
+    errorEncoding: {
+      reference: { terminal: terminal.error, notifications: r.liveErrors },
+      cvg: { response: c.turn.response, turnEnd: c.events.at(-1).payload }
+    }
+  }
+  return {
+    status: 'MEASURED_NATIVE_FAILURE_CONTRACTS',
+    fullParity: 'NOT_VERIFIED',
+    commonObservedFacts: {
+      modelCalls: 1,
+      toolCalls: 0,
+      persistedAssistantMessages: 0
+    },
+    injectedError: injected,
+    nativeFields,
+    differences: Object.entries(nativeFields)
+      .filter(([, value]) => !isDeepStrictEqual(value.reference, value.cvg))
+      .map(([field]) => field),
+    limits: [
+      'Native schemas and payloads remain different and preserved in full raw records',
+      'Equal counters are not a failure-parity verdict',
+      'No transitive distribution/source equivalence or OS containment of hostile code is proved'
+    ]
+  }
+}

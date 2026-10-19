@@ -1,0 +1,1071 @@
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { Client, Pool } from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  canonicalizeCompleteJson,
+  COMPLETE_CHECKPOINT_MAX_BYTES,
+  type DecisionInputCounter,
+  type ExecutionCheckpoint,
+  type LoopDecision,
+  type ModelGateway,
+  type ModelRequest,
+  type RuntimeInput,
+  type StepContext
+} from '@cvg/harness-contracts'
+import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+import {
+  createCapabilityRegistry,
+  createOperationalHarness
+} from '../../../harness/src/index.ts'
+import { sealCheckpoint } from '../../../harness/src/step-store.ts'
+import {
+  phase3AgentProfile,
+  phase3RuntimeInput,
+  InMemoryApprovalEngine,
+  RecordingAuditSink,
+  RecordingTelemetrySink,
+  ScriptedPolicyEngine
+} from '../../../harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+import { TenantIdSchema } from '@cvg/platform'
+import { runPostgresMigrations } from '../postgres-migrations.ts'
+import { PostgresOperationalEffectJournal } from '../operational-execution-postgres.ts'
+import { PostgresExecutionStepStore } from '../operational-step-postgres.ts'
+import { withTenantContext } from '../tenant-scoped-postgres.ts'
+import { randomBytes } from 'node:crypto'
+
+const assignedRoot =
+  '/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/public-admission-postgres/builder-r1'
+const resourcePath = process.env.SPEC0224_ADMISSION_PG_RESOURCE
+const evidence = process.env.SPEC0224_ADMISSION_PG_EVIDENCE
+const runId = process.env.SPEC0224_ADMISSION_PG_RUN_ID
+if (
+  !resourcePath ||
+  resolve(resourcePath) !== join(assignedRoot, 'resource-private.json') ||
+  !evidence ||
+  !resolve(evidence).startsWith(assignedRoot + '/runs/') ||
+  !runId ||
+  !/^r[0-9]+$/.test(runId)
+)
+  throw new Error(
+    'Exact assigned PG224 resource/private evidence required; no skip or default resource'
+  )
+const containerId =
+  '0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+const schema = 'pare224_admission_r1'
+const role = 'pare224_admission_r1_service'
+const safeResourceName = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value.length <= 63 &&
+  /^pare224_admission_r1(?:_service)?$/.test(value)
+const tenantId = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000224'
+)
+const otherTenant = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000225'
+)
+const nativeTables = [
+  'operational_executions',
+  'operational_execution_checkpoints',
+  'operational_execution_steps',
+  'operational_effect_journal'
+]
+const traces: unknown[] = []
+let admin: Client | undefined, pool: Pool | undefined
+let servingOptions: ConstructorParameters<typeof Client>[0]
+const save = (path: string, value: unknown) =>
+  writeFile(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
+const errorInfo = (error: unknown) =>
+  error instanceof Error
+    ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        code: (error as Error & { code?: string }).code
+      }
+    : { message: String(error) }
+async function provision() {
+  const resource = JSON.parse(await readFile(resourcePath!, 'utf8'))
+  const url = new URL(resource.test_database_url)
+  const inspected = JSON.parse(
+    execFileSync('docker', ['inspect', '--format', '{{json .}}', containerId], {
+      encoding: 'utf8'
+    })
+  )
+  const ports = inspected.NetworkSettings.Ports['5432/tcp']
+  if (
+    resource.containerId !== containerId ||
+    resource.synthetic !== true ||
+    !safeResourceName(resource.schemaName) ||
+    !safeResourceName(resource.roleName) ||
+    resource.schemaName !== schema ||
+    resource.roleName !== role ||
+    inspected.Id !== containerId ||
+    inspected.Name !== '/cvg-pare100-224-pg' ||
+    inspected.Config.Image !== 'postgres:16.4-alpine' ||
+    inspected.Image !== resource.imageId ||
+    !inspected.State.Running ||
+    !Array.isArray(ports) ||
+    ports.length !== 1 ||
+    ports[0].HostIp !== '127.0.0.1' ||
+    ports[0].HostPort !== url.port ||
+    url.protocol !== 'postgresql:' ||
+    url.hostname !== '127.0.0.1' ||
+    url.search !== '' ||
+    url.hash !== '' ||
+    url.pathname !== '/pare224_synthetic' ||
+    url.username !== 'pare224' ||
+    resource.hostPort.HostIp !== '127.0.0.1' ||
+    resource.hostPort.HostPort !== url.port
+  )
+    throw new Error('Refusing unassigned PG resource')
+  await save(join(evidence!, 'assigned-resource-public.json'), {
+    containerId,
+    containerName: inspected.Name,
+    image: inspected.Config.Image,
+    imageId: inspected.Image,
+    port: ports[0],
+    database: 'pare224_synthetic',
+    schema,
+    role,
+    credentialOmission:
+      'Admin and generated service credentials stay private, never primary publication.'
+  })
+  admin = new Client({ connectionString: url.toString() })
+  await admin.connect()
+  const existing = (
+    await admin.query(
+      'SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1) AS schema_exists, EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$2) AS role_exists',
+      [schema, role]
+    )
+  ).rows[0]
+  await save(join(evidence!, 'preexistence-check.json'), existing)
+  // A fresh namespace and principal are mandatory. On collision do not adopt,
+  // read or delete anything. A rerun needs Lead to resolve its resource claim.
+  expect(existing).toEqual({ schema_exists: false, role_exists: false })
+  await admin.query(`CREATE SCHEMA ${schema}`)
+  await runPostgresMigrations(admin, {
+    schemaName: schema,
+    createSchema: false
+  })
+  const password = randomBytes(24).toString('hex')
+  await admin.query(
+    `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS`
+  )
+  await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+  for (const table of nativeTables)
+    await admin.query(
+      `GRANT SELECT,INSERT,UPDATE ON ${schema}.${table} TO ${role}`
+    )
+  url.username = role
+  url.password = password
+  servingOptions = {
+    connectionString: url.toString(),
+    options: `-c search_path=${schema} -c statement_timeout=5000 -c lock_timeout=1500`
+  }
+  pool = new Pool({ ...servingOptions, max: 2 })
+  const identity = (
+    await pool.query(
+      `SELECT current_user,session_user,current_database(),current_schema(),pg_backend_pid() AS backend_pid,
+    r.rolsuper,r.rolbypassrls,r.rolinherit,r.rolcanlogin,r.rolcreatedb,r.rolcreaterole,
+    (SELECT count(*)::int FROM pg_auth_members WHERE member=r.oid) AS memberships,
+    (SELECT count(*)::int FROM pg_namespace WHERE nspname=$1 AND nspowner=r.oid) AS owned_schemas,
+    (SELECT count(*)::int FROM pg_class WHERE relnamespace=$1::regnamespace AND relowner=r.oid) AS owned_relations
+    FROM pg_roles r WHERE rolname=current_user`,
+      [schema]
+    )
+  ).rows[0]
+  const rls = (
+    await pool.query(
+      `SELECT relname,relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner) AS owner FROM pg_class
+    WHERE relnamespace=$1::regnamespace AND relname=ANY($2) ORDER BY relname`,
+      [schema, nativeTables]
+    )
+  ).rows
+  const grants = (
+    await pool.query(
+      `SELECT table_name,privilege_type FROM information_schema.table_privileges
+    WHERE table_schema=$1 AND grantee=$2 ORDER BY table_name,privilege_type`,
+      [schema, role]
+    )
+  ).rows
+  const policies = (
+    await pool.query(
+      'SELECT schemaname,tablename,policyname,permissive,roles,cmd,qual,with_check FROM pg_policies WHERE schemaname=$1 AND tablename=ANY($2) ORDER BY tablename,policyname',
+      [schema, nativeTables]
+    )
+  ).rows
+  await save(join(evidence!, 'serving-identity-grants-rls-migrations.json'), {
+    identity,
+    rls,
+    grants,
+    policies,
+    migrationRows: (
+      await admin.query(
+        `SELECT * FROM ${schema}.schema_migrations ORDER BY version`
+      )
+    ).rows
+  })
+  expect(identity).toMatchObject({
+    current_user: role,
+    session_user: role,
+    current_database: 'pare224_synthetic',
+    current_schema: schema,
+    rolsuper: false,
+    rolbypassrls: false,
+    rolinherit: false,
+    rolcanlogin: true,
+    rolcreatedb: false,
+    rolcreaterole: false,
+    memberships: 0,
+    owned_schemas: 0,
+    owned_relations: 0
+  })
+  expect(rls).toHaveLength(4)
+  expect(
+    rls.every(
+      (r) => r.relrowsecurity && r.relforcerowsecurity && r.owner !== role
+    )
+  ).toBe(true)
+  expect(grants).toEqual(
+    nativeTables
+      .flatMap((table_name) =>
+        ['INSERT', 'SELECT', 'UPDATE'].map((privilege_type) => ({
+          table_name,
+          privilege_type
+        }))
+      )
+      .sort(
+        (a, b) =>
+          a.table_name.localeCompare(b.table_name) ||
+          a.privilege_type.localeCompare(b.privilege_type)
+      )
+  )
+  // Admin is provisioning-only. The six public cases and observers use service.
+  await admin.end()
+  admin = undefined
+}
+const limits = {
+  maxBytes: COMPLETE_CHECKPOINT_MAX_BYTES,
+  maxDepth: 64,
+  maxNodes: 1_000_000
+}
+const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+function unsigned(checkpoint: ExecutionCheckpoint) {
+  const { checkpointId, createdAt, digest, ...value } = checkpoint
+  void checkpointId
+  void createdAt
+  void digest
+  return value
+}
+// Independent canonical oracle for known-valid synthetic logical checkpoint data.
+// No native decoder/encoder or canonical helper participates in physical checks.
+function golden(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(golden).join(',') + ']'
+  return (
+    '{' +
+    Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          JSON.stringify(key) +
+          ':' +
+          golden((value as Record<string, unknown>)[key])
+      )
+      .join(',') +
+    '}'
+  )
+}
+function snapshot(checkpoint: ExecutionCheckpoint) {
+  const raw = golden(unsigned(checkpoint))
+  expect(sha('cvg.checkpoint.v2\n' + raw)).toBe(checkpoint.digest)
+  const { fixturePadding, ...resolvedInputs } = checkpoint.state.resolvedInputs
+  const padding = typeof fixturePadding === 'string' ? fixturePadding : ''
+  const nulPrefix = padding.lastIndexOf('\u0000') + 1
+  return {
+    checkpointWithoutFixturePadding: {
+      ...checkpoint,
+      state: { ...checkpoint.state, resolvedInputs }
+    },
+    paddingRecipe: {
+      field: 'state.resolvedInputs.fixturePadding',
+      present: fixturePadding !== undefined,
+      character: nulPrefix > 0 ? '\u0000' : 'p',
+      repeat: nulPrefix > 0 ? nulPrefix : padding.length,
+      suffix: nulPrefix > 0 ? padding.slice(nulPrefix) : '',
+      sha256: sha(padding)
+    },
+    logicalUnsignedBytes: Buffer.byteLength(raw),
+    logicalUnsignedSha256: sha(raw),
+    remainingBytes: COMPLETE_CHECKPOINT_MAX_BYTES - Buffer.byteLength(raw)
+  }
+}
+async function readPhysical(
+  executionId: string,
+  native: ExecutionCheckpoint,
+  writerPid: number
+) {
+  const reader = new Client(servingOptions)
+  try {
+    await reader.connect()
+    await reader.query("SELECT set_config('cvg.tenant_id',$1,false)", [
+      tenantId
+    ])
+    const readerIdentity = (
+      await reader.query(
+        "SELECT current_user,session_user,pg_backend_pid() AS backend_pid,current_database(),current_schema(),current_setting('cvg.tenant_id') AS tenant_context,txid_current_snapshot()::text AS transaction_snapshot"
+      )
+    ).rows[0]
+    expect(readerIdentity.current_user).toBe(role)
+    expect(readerIdentity.session_user).toBe(role)
+    expect(readerIdentity.backend_pid).not.toBe(writerPid)
+    expect(readerIdentity.tenant_context).toBe(tenantId)
+    const rows = (
+      await reader.query(
+        `SELECT *,state::text AS physical_state_text,octet_length(state::text) AS physical_state_bytes
+      FROM operational_execution_checkpoints WHERE tenant_id=$1 AND execution_id=$2`,
+        [tenantId, executionId]
+      )
+    ).rows
+    expect(rows).toHaveLength(1)
+    const row = rows[0]
+    const journalRows = (
+      await reader.query(
+        'SELECT * FROM operational_effect_journal WHERE tenant_id=$1 AND left(operation_key,length($2))=$2 ORDER BY operation_key',
+        [tenantId, executionId + ':']
+      )
+    ).rows
+    const stepRows = (
+      await reader.query(
+        'SELECT * FROM operational_execution_steps WHERE tenant_id=$1 AND execution_id=$2 ORDER BY step_number',
+        [tenantId, executionId]
+      )
+    ).rows
+    const wrapper = row.state
+    expect(Object.keys(wrapper).sort()).toEqual([
+      'data',
+      'decodedBytes',
+      'decodedSha256',
+      'encoding',
+      'storageCodec'
+    ])
+    expect(wrapper.storageCodec).toBe('cvg.checkpoint-state/2')
+    expect(wrapper.encoding).toBe('base64')
+    const expectedState = golden(native.state)
+    const expectedData = Buffer.from(expectedState, 'utf8').toString('base64')
+    expect(wrapper.data === expectedData).toBe(true)
+    expect(wrapper.data.length).toBe(4 * Math.ceil(wrapper.decodedBytes / 3))
+    expect(Buffer.byteLength(expectedState)).toBe(wrapper.decodedBytes)
+    expect(sha(expectedState)).toBe(wrapper.decodedSha256)
+    const decoded = Buffer.from(wrapper.data, 'base64')
+    expect(decoded.toString('base64') === wrapper.data).toBe(true)
+    expect(sha(decoded.toString('utf8'))).toBe(wrapper.decodedSha256)
+    const checkpoint: ExecutionCheckpoint = {
+      checkpointId: row.checkpoint_id,
+      executionId: row.execution_id,
+      tenantId: row.tenant_id,
+      checkpointVersion: row.checkpoint_version,
+      runtimeProfile: row.runtime_profile,
+      runtimeVersion: row.runtime_version,
+      orchestratorVersion: row.orchestrator_version,
+      stepNumber: row.step_number,
+      state: JSON.parse(decoded.toString('utf8')),
+      budgetUsage: row.budget_usage,
+      digest: row.digest,
+      createdAt: row.created_at.toISOString()
+    }
+    // Full row/header/domain-digest and native-load logical binding, independently.
+    expect(golden(checkpoint) === golden(native)).toBe(true)
+    const logical = snapshot(checkpoint)
+    const { data, ...wrapperHeader } = wrapper
+    const { state: _state, physical_state_text: wire, ...rowHeader } = row
+    void _state
+    const quotedData = JSON.stringify(data)
+    const offset = wire.indexOf(quotedData)
+    expect(offset).toBeGreaterThanOrEqual(0)
+    expect(wire.lastIndexOf(quotedData)).toBe(offset)
+    const prefix = wire.slice(0, offset),
+      suffix = wire.slice(offset + quotedData.length)
+    expect(prefix + JSON.stringify(expectedData) + suffix === wire).toBe(true)
+    return {
+      checkpoint,
+      record: {
+        readerIdentity,
+        journalRows,
+        stepRows,
+        writerPid,
+        freshPhysicalClient: true,
+        nativeLogicalCheckpoint: logical,
+        rowHeader,
+        wrapperHeader,
+        wire: {
+          sqlTextBytes: Buffer.byteLength(wire),
+          sqlTextSha256: sha(wire),
+          prefixBeforeQuotedBase64Data: prefix,
+          suffixAfterQuotedBase64Data: suffix,
+          canonicalWrapperSha256: sha(golden(wrapper)),
+          base64Chars: data.length,
+          base64Sha256: sha(data),
+          expectedStateCanonicalBytes: Buffer.byteLength(expectedState),
+          expectedStateCanonicalSha256: sha(expectedState),
+          reconstruction:
+            'Restore padding in nativeLogicalCheckpoint, golden(state) recursive lexicographic JSON; UTF8->RFC4648 base64; prefix+JSON.stringify(base64)+suffix reconstructs actual SQL state::text; compare all actual row hashes/lengths/header and cvg.checkpoint.v2 newline unsigned digest.'
+        }
+      }
+    }
+  } finally {
+    await reader.end()
+  }
+}
+// This deliberately named synthetic pair uses ceil(canonical UTF8 bytes/64),
+// including JSON framing for text. It claims no tokenizer/provider equivalence.
+const tokens = (value: unknown) =>
+  Math.ceil(
+    Buffer.byteLength(
+      canonicalizeCompleteJson(value, {
+        maxBytes: 131_072,
+        maxDepth: 64,
+        maxNodes: 20_000
+      })
+    ) / 64
+  )
+const provider = 'synthetic.capacity.'.padEnd(512, 'p')
+const modelName = 'toy64.'.padEnd(512, 'm')
+
+describe('SPEC0224 actual PostgreSQL public decision receipt capacity', () => {
+  beforeAll(provision, 60_000)
+  afterAll(async () => {
+    try {
+      await save(join(evidence!, 'matrix-summary.json'), traces)
+    } finally {
+      try {
+        await pool?.end()
+      } finally {
+        await admin?.end()
+      }
+    }
+  })
+  for (const priorReceipts of [false, true]) {
+    for (const [freeBytes, paddingCharacter] of [
+      [20_000, 'p'],
+      [2_000, 'p'],
+      [2_000, '\u0000']
+    ] as const) {
+      const refusal = freeBytes === 2_000
+      const paddingMode = paddingCharacter === 'p' ? 'ASCII' : 'NUL'
+      it(`${refusal ? 'refuses' : 'admits'} a real synthetic model attempt with ${freeBytes} seed bytes free, prior receipts=${priorReceipts}, padding=${paddingMode}`, async () => {
+        const id = 'synthetic.admission.capacity'
+        const store = new PostgresExecutionStepStore(pool!)
+        const journal = new PostgresOperationalEffectJournal(pool!)
+        const caseName = `free-${freeBytes}-prior-${priorReceipts}-${paddingMode}`
+        const dir = join(evidence!, 'cases', caseName)
+        await mkdir(dir, { recursive: true })
+        const events: Array<Record<string, unknown>> = []
+        const event = (type: string, value: Record<string, unknown> = {}) => {
+          const item = { sequence: events.length + 1, type, ...value }
+          events.push(item)
+          return item.sequence
+        }
+        const physicalRecords: unknown[] = []
+        const journalTrace: unknown[] = []
+        for (const method of [
+          'reserve',
+          'markStarted',
+          'confirm',
+          'fail',
+          'markUncertain',
+          'get'
+        ] as const) {
+          const original = journal[method].bind(journal)
+          Object.defineProperty(journal, method, {
+            value: async (...args: unknown[]) => {
+              const entry = event('journal-entry', { method })
+              try {
+                const result = await (
+                  original as (...a: unknown[]) => Promise<unknown>
+                )(...args)
+                journalTrace.push({ entry, method, args, result })
+                event('journal-return', { method, entry })
+                return result
+              } catch (error) {
+                journalTrace.push({
+                  entry,
+                  method,
+                  args,
+                  error: errorInfo(error)
+                })
+                event('journal-error', { method, entry })
+                throw error
+              }
+            }
+          })
+        }
+        const writes: unknown[] = []
+        const measurements: unknown[] = []
+        const calls: unknown[] = []
+        const responses: unknown[] = []
+        const cas = store.compareAndSwapCheckpoint.bind(store)
+        store.compareAndSwapCheckpoint = async (input) => {
+          const entry = event('native-CAS-entry', {
+            expected: input.expected,
+            checkpointId: input.next.checkpointId,
+            digest: input.next.digest,
+            pendingReceipt:
+              input.next.state.toolResultContext?.pendingDecisionAdmission
+          })
+          try {
+            const result = await cas(input)
+            // Native implementation returns only after its real transaction COMMIT.
+            const returned = event('native-CAS-return-after-transaction', {
+              entry,
+              result,
+              checkpointId: input.next.checkpointId,
+              digest: input.next.digest,
+              pendingReceipt:
+                input.next.state.toolResultContext?.pendingDecisionAdmission
+            })
+            writes.push({
+              entry,
+              returned,
+              expected: input.expected,
+              result,
+              checkpoint: snapshot(input.next)
+            })
+            return result
+          } catch (error) {
+            event('native-CAS-error', { entry, error: errorInfo(error) })
+            writes.push({
+              entry,
+              expected: input.expected,
+              error: errorInfo(error),
+              checkpoint: snapshot(input.next)
+            })
+            throw error
+          }
+        }
+        let bodies = 0
+        let completeEntries = 0
+        let resumed = false
+        const capabilities = createCapabilityRegistry([
+          {
+            descriptor: {
+              id,
+              version: '1',
+              description: 'Pure synthetic prior result',
+              inputSchema: {},
+              outputSchema: {},
+              risk: 'LOW',
+              sideEffect: 'NONE',
+              idempotent: true,
+              requiresApproval: false,
+              origin: 'core',
+              providerId: 'synthetic.capacity',
+              providerVersion: '1'
+            },
+            implementation: {
+              validateInput: () => true,
+              validateOutput: () => true,
+              execute: async () => {
+                bodies++
+                return {
+                  status: 'SUCCEEDED',
+                  output: { full: 'actual synthetic prior result' }
+                }
+              }
+            }
+          }
+        ])
+        const input = phase3RuntimeInput({
+          tenantId: tenantId as RuntimeInput['tenantId'],
+          executionId: `exec_pg224_admission_${freeBytes}_${priorReceipts}_${paddingMode}_${runId}`,
+          agent: phase3AgentProfile({ tools: [id] }),
+          capabilityFingerprint: capabilities.compositionFingerprint()
+        })
+        await withTenantContext(pool!, tenantId, (client) =>
+          client.query(
+            "INSERT INTO operational_executions (tenant_id,id,idempotency_key,request_hash,request,state) VALUES ($1,$2,$2,$3,'{}'::jsonb,'RECEIVED')",
+            [tenantId, input.executionId, sha(input.executionId!)]
+          )
+        )
+        const writerIdentity = (
+          await pool!.query(
+            'SELECT pg_backend_pid() AS backend_pid, current_user'
+          )
+        ).rows[0]
+        await save(join(dir, 'runtime-input.json'), {
+          input,
+          writerIdentity,
+          provenance:
+            'Synthetic unbound request{} parent FK seed only; no published command, claim or approval fabricated.'
+        })
+        const physical = async (label: string) => {
+          const native = await store.loadCheckpoint(
+            input.tenantId,
+            input.executionId!
+          )
+          const observed = await readPhysical(
+            input.executionId!,
+            native!,
+            writerIdentity.backend_pid
+          )
+          physicalRecords.push({ label, ...observed.record })
+          event('physical-SQL-observed', {
+            label,
+            checkpointId: observed.checkpoint.checkpointId,
+            digest: observed.checkpoint.digest,
+            backendPid: observed.record.readerIdentity.backend_pid
+          })
+          return observed.checkpoint
+        }
+        const load = async () =>
+          (await store.loadCheckpoint(input.tenantId, input.executionId!))!
+        const ask: LoopDecision = {
+          decisionType: 'ASK_USER',
+          reasonCode: 'MISSING_INFORMATION',
+          requestedInput: {
+            questionType: 'CLARIFICATION',
+            missingFields: ['syntheticAnswer'],
+            promptIntent: 'Supply a synthetic answer.'
+          }
+        }
+        const counter: DecisionInputCounter = {
+          measure: async (request) => {
+            const counterEntry = event('counter-entry', { resumed })
+            const measurement = {
+              counterId: 'synthetic.toy64.'.padEnd(512, 'c'),
+              counterVersion: '1.'.padEnd(512, 'v'),
+              provider,
+              model: modelName,
+              formattingVersion: 'canonical-json.'.padEnd(512, 'f'),
+              inputUpperBoundTokens: tokens(request),
+              contextWindowTokens: 100_000,
+              costUpperBoundUsd: 0.25
+            }
+            measurements.push({
+              resumed,
+              counterEntry,
+              request: structuredClone(request),
+              measurement,
+              checkpointBeforeReserve: snapshot(await load())
+            })
+            return measurement
+          }
+        }
+        const model: ModelGateway = {
+          complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+            const completeEntry = event('model.complete-entry', {
+              completeEntryCount: ++completeEntries,
+              resumed
+            })
+            void _signal
+            // Fresh physical service backend reads the committed row after entry,
+            // before computing any synthetic response. It is not a provider call.
+            const native = await load()
+            const observed = await readPhysical(
+              input.executionId!,
+              native,
+              writerIdentity.backend_pid
+            )
+            const checkpoint = observed.checkpoint
+            const matchingCAS = [...events]
+              .reverse()
+              .find(
+                (e) =>
+                  e.type === 'native-CAS-return-after-transaction' &&
+                  (e.result as { status?: string })?.status === 'APPLIED' &&
+                  e.checkpointId === checkpoint.checkpointId &&
+                  e.digest === checkpoint.digest &&
+                  e.pendingReceipt ===
+                    checkpoint.state.toolResultContext!.pendingDecisionAdmission
+              )
+            const readEvent = event('fresh-service-SQL-before-response', {
+              completeEntry,
+              priorCASEvent: matchingCAS?.sequence,
+              checkpointId: checkpoint.checkpointId,
+              digest: checkpoint.digest,
+              pendingReceipt:
+                checkpoint.state.toolResultContext!.pendingDecisionAdmission,
+              backendPid: observed.record.readerIdentity.backend_pid
+            })
+            physicalRecords.push({
+              label: `model-entry-${completeEntries}`,
+              readEvent,
+              ...observed.record
+            })
+            expect(matchingCAS).toBeDefined()
+            expect(matchingCAS!.sequence).toBeLessThan(completeEntry)
+            expect(completeEntry).toBeLessThan(readEvent)
+            const ctx = checkpoint.state.toolResultContext!
+            const receipt = ctx.decisionAdmissions.find(
+              (r) => r.admissionId === ctx.pendingDecisionAdmission
+            )
+            // Inspect the real stored reservation inside actual complete, before
+            // returning a synthetic result. No receipt or approval is injected.
+            expect(receipt).toMatchObject({
+              status: 'RESERVED',
+              tenantId: input.tenantId,
+              executionId: input.executionId,
+              requestSha256: sha(
+                canonicalizeCompleteJson(request, {
+                  maxBytes: 131_072,
+                  maxDepth: 64,
+                  maxNodes: 20_000
+                })
+              )
+            })
+            expect(receipt!.reserved.outputTokens).toBe(512)
+            calls.push({
+              resumed,
+              completeEntry,
+              readEvent,
+              priorCASEvent: matchingCAS!.sequence,
+              request: structuredClone(request),
+              receipt: structuredClone(receipt),
+              checkpointAtComplete: snapshot(checkpoint)
+            })
+            event('synthetic-response-computation', {
+              completeEntry,
+              readEvent
+            })
+            const decision: LoopDecision = resumed
+              ? {
+                  decisionType: 'RESPOND',
+                  reasonCode: 'GOAL_SATISFIED',
+                  responseText: 'Synthetic admission control complete.'
+                }
+              : calls.length === 1
+                ? {
+                    decisionType: 'CALL_TOOL',
+                    reasonCode: 'TOOL_REQUIRED',
+                    toolId: id,
+                    toolVersion: '1',
+                    toolInput: {}
+                  }
+                : ask
+            const text = JSON.stringify(decision)
+            expect(request.maxOutputTokens).toBe(512)
+            expect(tokens(text)).toBeLessThanOrEqual(512)
+            const response = {
+              text,
+              provider,
+              model: modelName,
+              inputTokens: tokens(request),
+              outputTokens: tokens(text),
+              costUsd: 0.125
+            }
+            responses.push({ completeEntry, response })
+            event('synthetic-response-return', { completeEntry, response })
+            return response
+          }
+        }
+        const rule = (_context: StepContext): LoopDecision | undefined => {
+          void _context
+          return !priorReceipts && !resumed ? ask : undefined
+        }
+        const audit = new RecordingAuditSink()
+        const telemetry = new RecordingTelemetrySink()
+        const harness = createOperationalHarness({
+          toolResultContext: { version: 1 },
+          capabilities,
+          effectJournal: journal,
+          stepStore: store,
+          iterativeOrchestrator: new HybridOrchestrator({
+            rules: [rule],
+            decisionModel: model,
+            decisionInputCounter: counter,
+            decisionModelSupportsMaxOutputTokens: true
+          }),
+          modelGateway: model,
+          policy: new ScriptedPolicyEngine(),
+          approvals: new InMemoryApprovalEngine(),
+          audit,
+          telemetry
+        })
+        let checkError: unknown
+        const observation: Record<string, unknown> = {
+          caseName,
+          freeBytes,
+          paddingMode,
+          priorReceipts
+        }
+        try {
+          const first = await harness.run(input)
+          observation.first = first
+          expect(first.stopReason).toBe('NEEDS_USER_INPUT')
+          expect(calls).toHaveLength(priorReceipts ? 2 : 0)
+          const paused = await physical('actual-native-pause-before-padding')
+          expect(
+            paused.state.toolResultContext!.decisionAdmissions.map(
+              (r) => r.status
+            )
+          ).toEqual(priorReceipts ? ['SETTLED', 'SETTLED'] : [])
+          const oldJournal = priorReceipts
+            ? await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+            : null
+          observation.actualBeforePadding = {
+            paused: snapshot(paused),
+            oldJournal
+          }
+          const base = {
+            ...unsigned(paused),
+            state: {
+              ...paused.state,
+              resolvedInputs: {
+                ...paused.state.resolvedInputs,
+                fixturePadding: ''
+              }
+            }
+          }
+          const paddingLength =
+            COMPLETE_CHECKPOINT_MAX_BYTES -
+            freeBytes -
+            Buffer.byteLength(canonicalizeCompleteJson(base, limits))
+          const bytesPerCharacter = paddingCharacter === 'p' ? 1 : 6
+          const padding =
+            paddingCharacter.repeat(
+              Math.floor(paddingLength / bytesPerCharacter)
+            ) + 'p'.repeat(paddingLength % bytesPerCharacter)
+          const seeded = sealCheckpoint({
+            ...base,
+            state: {
+              ...base.state,
+              resolvedInputs: {
+                ...base.state.resolvedInputs,
+                fixturePadding: padding
+              }
+            }
+          })
+          expect(snapshot(seeded).remainingBytes).toBe(freeBytes)
+          expect(
+            await store.compareAndSwapCheckpoint({
+              tenantId: input.tenantId,
+              executionId: input.executionId!,
+              expected: {
+                checkpointId: paused.checkpointId,
+                digest: paused.digest
+              },
+              next: seeded
+            })
+          ).toMatchObject({ status: 'APPLIED' })
+          await physical('data-only-padding-CAS-committed')
+          const oldReceipts = seeded.state.toolResultContext!.decisionAdmissions
+          const oldResults = seeded.state.observations.filter(
+            (o) => o.type === 'TOOL_RESULT'
+          )
+          const modelsBefore = calls.length
+          const bodiesBefore = bodies
+          resumed = true
+          const resumeInput = {
+            ...input,
+            resume: { kind: 'user_input' as const, message: 'synthetic answer' }
+          }
+          const result = await harness.run(resumeInput)
+          observation.result = result
+          const after = await physical('after-resume')
+          const afterJournal = priorReceipts
+            ? await journal.get(input.tenantId, `${input.executionId}:s1:${id}`)
+            : null
+          const repeatBaseline = {
+            events: events.length,
+            measurements: measurements.length,
+            completeEntries,
+            writes: writes.length,
+            bodies
+          }
+          const repeated = refusal ? await harness.run(resumeInput) : null
+          const repeatFinal = {
+            events: events.length,
+            measurements: measurements.length,
+            completeEntries,
+            writes: writes.length,
+            bodies
+          }
+          observation.repeatCounts = {
+            before: repeatBaseline,
+            after: repeatFinal
+          }
+          const afterRepeat = refusal ? await physical('after-repeat') : null
+          const afterRepeatJournal =
+            priorReceipts && refusal
+              ? await journal.get(
+                  input.tenantId,
+                  `${input.executionId}:s1:${id}`
+                )
+              : null
+          Object.assign(observation, {
+            name: `free-${freeBytes}-prior-${priorReceipts}-${paddingMode}`,
+            remainingSeedBytes: freeBytes,
+            paddingMode,
+            fixtureProvenance:
+              'Actual public native pause, optional two actual settled model receipts and one actual pure result; one CAS adds only labelled synthetic data; real user resume. All 512-character metadata is legal explicit synthetic pair identity.',
+            first,
+            before: snapshot(seeded),
+            result,
+            after: snapshot(after),
+            repeated,
+            afterRepeat: afterRepeat ? snapshot(afterRepeat) : null,
+            measurements,
+            calls,
+            writes,
+            bodiesBefore,
+            bodiesAfter: bodies,
+            modelsBefore,
+            actualModelsAfter: calls.length,
+            actualCompleteEntries: completeEntries,
+            oldJournal,
+            afterJournal,
+            afterRepeatJournal,
+            scope:
+              'Actual PG public factory, unbound same process, paired synthetic Toy64/cap512. No OS restart/bound host/fence/concurrency/provider/global qualification. Native journal NUL two required failures remain outside this checkpoint-padding proof.'
+          })
+          expect(bodiesBefore).toBe(priorReceipts ? 1 : 0)
+          expect(oldJournal?.state ?? null).toBe(
+            priorReceipts ? 'CONFIRMED' : null
+          )
+          expect(oldResults).toHaveLength(priorReceipts ? 1 : 0)
+          expect(bodies).toBe(bodiesBefore)
+          expect(completeEntries).toBe(modelsBefore + (refusal ? 0 : 1))
+          expect(after.state.resolvedInputs.fixturePadding).toBe(
+            seeded.state.resolvedInputs.fixturePadding
+          )
+          expect(
+            after.state.observations.filter((o) => o.type === 'TOOL_RESULT')
+          ).toEqual(oldResults)
+          expect(afterJournal).toEqual(oldJournal)
+          expect(
+            after.state.toolResultContext!.decisionAdmissions.slice(
+              0,
+              oldReceipts.length
+            )
+          ).toEqual(oldReceipts)
+          expect(measurements.length).toBeGreaterThan(modelsBefore)
+          if (refusal) {
+            expect(calls).toHaveLength(modelsBefore)
+            expect(result.modelCalls).toBe(seeded.budgetUsage.modelCalls)
+            expect(result.usage).toEqual({
+              inputTokens: seeded.budgetUsage.inputTokens,
+              outputTokens: seeded.budgetUsage.outputTokens,
+              costUsd: seeded.budgetUsage.costUsd
+            })
+            expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+            expect(result.response).toBe(
+              'CONTEXT_OVERFLOW: No checkpoint space for the decision receipt.'
+            )
+            expect(after.state.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+            expect(after.state.pendingQuestion).toBeUndefined()
+            expect(after.budgetUsage.activeDurationMs).toBeGreaterThan(
+              seeded.budgetUsage.activeDurationMs
+            )
+            expect(after.state.toolResultContext!.decisionAdmissions).toEqual(
+              oldReceipts
+            )
+            for (const field of [
+              'modelCalls',
+              'inputTokens',
+              'outputTokens',
+              'costUsd',
+              'toolCalls',
+              'steps'
+            ] as const)
+              expect(after.budgetUsage[field]).toBe(seeded.budgetUsage[field])
+            expect(repeatFinal.measurements).toBe(repeatBaseline.measurements)
+            expect(repeatFinal.completeEntries).toBe(
+              repeatBaseline.completeEntries
+            )
+            expect(repeatFinal.writes).toBe(repeatBaseline.writes)
+            expect(repeatFinal.bodies).toBe(repeatBaseline.bodies)
+            expect(repeated!.stopReason).toBe('STATE_CONFLICT')
+            expect(repeated!.response).toContain(
+              'Terminal execution cannot be resumed'
+            )
+            expect(afterRepeat).toEqual(after)
+            expect(measurements).toHaveLength(modelsBefore + 1)
+            expect(afterRepeatJournal).toEqual(oldJournal)
+            expect(
+              afterRepeat!.state.toolResultContext!.decisionAdmissions
+            ).toEqual(oldReceipts)
+          } else {
+            expect(calls).toHaveLength(modelsBefore + 1)
+            expect(result.stopReason).toBe('COMPLETED')
+            const receipts = after.state.toolResultContext!.decisionAdmissions
+            expect(receipts).toHaveLength(oldReceipts.length + 1)
+            expect(receipts.at(-1)!.status).toBe('SETTLED')
+            expect(after.budgetUsage.modelCalls).toBe(
+              seeded.budgetUsage.modelCalls + 1
+            )
+            expect(after.budgetUsage.costUsd).toBe(
+              seeded.budgetUsage.costUsd + 0.125
+            )
+            for (const field of [
+              'inputTokens',
+              'outputTokens',
+              'costUsd'
+            ] as const)
+              expect(after.budgetUsage[field]).toBe(
+                receipts.reduce((sum, r) => sum + r.actual![field], 0)
+              )
+          }
+          const crossTenant = await withTenantContext(
+            pool!,
+            otherTenant,
+            async (client) =>
+              (
+                await client.query(
+                  'SELECT checkpoint_id FROM operational_execution_checkpoints WHERE execution_id=$1',
+                  [input.executionId]
+                )
+              ).rows
+          )
+          expect(crossTenant).toEqual([])
+          expect(
+            await store.loadCheckpoint(otherTenant, input.executionId!)
+          ).toBeNull()
+          const noContext = (
+            await pool!.query(
+              'SELECT checkpoint_id FROM operational_execution_checkpoints WHERE execution_id=$1',
+              [input.executionId]
+            )
+          ).rows
+          expect(noContext).toEqual([])
+          observation.rlsControls = {
+            crossTenant,
+            noContext,
+            storeOtherTenant: null
+          }
+          observation.verdict = 'IMPLEMENTED_SCOPED_EXECUTION_ONLY'
+        } catch (error) {
+          checkError = error
+          observation.verdict = 'UNPROVEN_FAILURE'
+          observation.error = errorInfo(error)
+          throw error
+        } finally {
+          observation.countsAtFinally = {
+            bodies,
+            completeEntries,
+            calls: calls.length,
+            measurements: measurements.length
+          }
+          observation.events = events
+          observation.writes = writes
+          observation.measurements = measurements
+          observation.calls = calls
+          observation.responses = responses
+          observation.audit = audit.events
+          observation.telemetry = telemetry.events
+          traces.push({
+            caseName,
+            verdict: observation.verdict,
+            error: checkError ? errorInfo(checkError) : undefined
+          })
+          await save(join(dir, 'observed.json'), observation)
+          await save(join(dir, 'physical-checkpoints.json'), physicalRecords)
+          await save(join(dir, 'native-journal-trace.json'), journalTrace)
+        }
+      }, 60_000)
+    }
+  }
+})

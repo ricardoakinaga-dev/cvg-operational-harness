@@ -1,0 +1,2056 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/complete-checkpoint.test.ts SHA256 e4a71a1b3c822dfaf05e8076783aca61dee3b9267186dba134f4de55aca14ba0
+     1 import { createHash } from 'node:crypto'
+     2 import { describe, expect, it } from 'vitest'
+     3 import {
+     4   EMPTY_BUDGET_USAGE,
+     5   canonicalizeCompleteJson,
+     6   type AgentLoopState,
+     7   type Observation,
+     8   type DecisionAdmissionRecord,
+     9   type ExecutionCheckpoint
+    10 } from '@cvg/harness-contracts'
+    11 import {
+    12   completeCheckpointDigest,
+    13   encodeCompleteCheckpointState,
+    14   decodeCompleteCheckpointState
+    15 } from '../complete-checkpoint.ts'
+    16 import {
+    17   sealCheckpoint,
+    18   checkpointDigest,
+    19   validateCheckpointIntegrity,
+    20   InMemoryExecutionStepStore
+    21 } from '../step-store.ts'
+    22 
+    23 export function completeFixture(stepNumber = 0) {
+    24   return sealCheckpoint({
+    25     tenantId: 'tenant_test',
+    26     executionId: 'exec_test',
+    27     checkpointVersion: 2,
+    28     runtimeProfile: 'iterative',
+    29     runtimeVersion: '2.0.0',
+    30     orchestratorVersion: '1.0.0',
+    31     stepNumber,
+    32     state: {
+    33       goal: 'synthetic',
+    34       stepNumber,
+    35       observations: [],
+    36       openQuestions: [],
+    37       resolvedInputs: {},
+    38       loopSignatures: [],
+    39       toolResultContext: {
+    40         version: 1,
+    41         deliveredThroughStep: 0,
+    42         pendingDecisionAdmission: null,
+    43         decisionAdmissions: []
+    44       }
+    45     },
+    46     budgetUsage: { ...EMPTY_BUDGET_USAGE, steps: stepNumber }
+    47   })
+    48 }
+    49 
+    50 function reseal(
+    51   checkpoint: ExecutionCheckpoint,
+    52   state: AgentLoopState,
+    53   budgetUsage = checkpoint.budgetUsage
+    54 ) {
+    55   const {
+    56     checkpointId: _id,
+    57     createdAt: _at,
+    58     digest: _digest,
+    59     ...unsigned
+    60   } = checkpoint
+    61   void _id
+    62   void _at
+    63   void _digest
+    64   return sealCheckpoint({
+    65     ...unsigned,
+    66     stepNumber: state.stepNumber,
+    67     state,
+    68     budgetUsage
+    69   })
+    70 }
+    71 function resultObservation(output: unknown, stepNumber = 1): Observation {
+    72   const raw = canonicalizeCompleteJson(output)
+    73   return {
+    74     observationId: `obs_${stepNumber}`,
+    75     stepId: `step_${stepNumber}`,
+    76     stepNumber,
+    77     executionId: 'exec_test',
+    78     type: 'TOOL_RESULT',
+    79     source: 'TOOL',
+    80     trust: 'UNTRUSTED',
+    81     timestamp: '2026-10-16T00:00:00.000Z',
+    82     summary: 'preview',
+    83     provenance: { sourceId: 'tool', operationKey: `op_${stepNumber}` },
+    84     payload: {
+    85       schemaVersion: 1,
+    86       status: 'SUCCEEDED',
+    87       sideEffect: 'NONE',
+    88       completion: 'COMPLETE',
+    89       resultAvailability: 'AVAILABLE',
+    90       output,
+    91       outputBytes: Buffer.byteLength(raw),
+    92       outputSha256: createHash('sha256').update(raw).digest('hex')
+    93     }
+    94   }
+    95 }
+    96 function reservation(
+    97   status: 'RESERVED' | 'SETTLED' | 'UNKNOWN' = 'RESERVED'
+    98 ): DecisionAdmissionRecord {
+    99   return {
+   100     admissionId: 'adm_1',
+   101     tenantId: 'tenant_test',
+   102     executionId: 'exec_test',
+   103     stepNumber: 2,
+   104     attempt: 1,
+   105     purpose: 'ORCHESTRATION',
+   106     requestSha256: 'a'.repeat(64),
+   107     measurement: {
+   108       counterId: 'synthetic',
+   109       counterVersion: '1',
+   110       provider: 'synthetic',
+   111       model: 'model',
+   112       formattingVersion: '1',
+   113       inputUpperBoundTokens: 100,
+   114       contextWindowTokens: 1024,
+   115       costUpperBoundUsd: 1
+   116     },
+   117     reserved: {
+   118       modelCalls: 1,
+   119       inputTokens: 100,
+   120       outputTokens: 512,
+   121       costUsd: 1
+   122     },
+   123     status,
+   124     ...(status === 'SETTLED'
+   125       ? {
+   126           actual: {
+   127             modelCalls: 1,
+   128             inputTokens: 80,
+   129             outputTokens: 20,
+   130             costUsd: 0.5
+   131           },
+   132           resultSha256: 'b'.repeat(64)
+   133         }
+   134       : {}),
+   135     ...(status === 'UNKNOWN' ? { unknownReason: 'timeout' } : {})
+   136   }
+   137 }
+   138 
+   139 describe('complete checkpoint codec and memory CAS', () => {
+   140   it('uses domain-separated logical digest, schema optional normalization and legacy digest', () => {
+   141     const checkpoint = completeFixture()
+   142     const { checkpointId, createdAt, digest, ...unsigned } = checkpoint
+   143     expect(digest).toBe(completeCheckpointDigest(unsigned))
+   144     expect(digest).toBe(
+   145       createHash('sha256')
+   146         .update(
+   147           'cvg.checkpoint.v2\n' +
+   148             canonicalizeCompleteJson(unsigned, {
+   149               maxBytes: 8388608,
+   150               maxDepth: 64,
+   151               maxNodes: 1000000
+   152             })
+   153         )
+   154         .digest('hex')
+   155     )
+   156     expect(
+   157       completeCheckpointDigest({
+   158         ...unsigned,
+   159         state: { ...unsigned.state, pendingDecision: undefined }
+   160       })
+   161     ).toBe(digest)
+   162     expect(() =>
+   163       completeCheckpointDigest({
+   164         ...unsigned,
+   165         state: { ...unsigned.state, resolvedInputs: { invalid: undefined } }
+   166       })
+   167     ).toThrow()
+   168     validateCheckpointIntegrity(checkpoint, {
+   169       tenantId: checkpoint.tenantId,
+   170       executionId: checkpoint.executionId
+   171     })
+   172     const legacy = sealCheckpoint({
+   173       ...unsigned,
+   174       checkpointVersion: 1,
+   175       state: { ...unsigned.state, toolResultContext: undefined }
+   176     })
+   177     expect(legacy.digest).not.toBe(digest)
+   178     expect(checkpointId).toBeTruthy()
+   179     expect(createdAt).toBeTruthy()
+   180   })
+   181 
+   182   it('round trips NUL keys and 4096 NULs with ASCII physical wrapper', () => {
+   183     const state = {
+   184       ...completeFixture().state,
+   185       resolvedInputs: { '\u0000😀': '\u0000'.repeat(4096) }
+   186     }
+   187     const encoded = encodeCompleteCheckpointState(state)
+   188     expect(JSON.stringify(encoded)).not.toContain('\u0000')
+   189     expect(decodeCompleteCheckpointState(encoded)).toEqual(state)
+   190     expect(encoded.data).toBe(
+   191       Buffer.from(
+   192         canonicalizeCompleteJson(state, {
+   193           maxBytes: 8388608,
+   194           maxDepth: 64,
+   195           maxNodes: 1000000
+   196         })
+   197       ).toString('base64')
+   198     )
+   199   })
+   200 
+   201   it('rejects malformed physical wrappers, UTF8, JSON, noncanonical JSON and tamper', () => {
+   202     const encoded = encodeCompleteCheckpointState(completeFixture().state)
+   203     const wrap = (data: Buffer) => ({
+   204       ...encoded,
+   205       data: data.toString('base64'),
+   206       decodedBytes: data.length,
+   207       decodedSha256: createHash('sha256').update(data).digest('hex')
+   208     })
+   209     for (const raw of [
+   210       null,
+   211       {},
+   212       { ...encoded, extra: 1 },
+   213       { ...encoded, data: encoded.data + '=' },
+   214       { ...encoded, decodedBytes: encoded.decodedBytes + 1 },
+   215       { ...encoded, decodedSha256: '0'.repeat(64) },
+   216       wrap(Buffer.from([0xff])),
+   217       wrap(Buffer.from('{"a":1,"a":2}')),
+   218       wrap(Buffer.from('null ')),
+   219       wrap(Buffer.from('{"goal":"x"}')),
+   220       { ...encoded, data: 'A'.repeat(11184816) }
+   221     ]) {
+   222       expect(() => decodeCompleteCheckpointState(raw)).toThrow()
+   223     }
+   224     const tampered = { ...completeFixture(), tenantId: 'other' }
+   225     expect(() =>
+   226       validateCheckpointIntegrity(tampered, {
+   227         tenantId: 'tenant_test',
+   228         executionId: 'exec_test'
+   229       })
+   230     ).toThrow()
+   231     expect(() =>
+   232       encodeCompleteCheckpointState({
+   233         ...completeFixture().state,
+   234         toolResultContext: undefined
+   235       } as AgentLoopState)
+   236     ).toThrow()
+   237   })
+   238 
+   239   it('rejects invalid result hashes, cursor, receipts, external NUL and unsigned size', () => {
+   240     const base = completeFixture()
+   241     expect(() => sealCheckpoint({ ...base, tenantId: 'bad\u0000id' })).toThrow()
+   242     expect(() =>
+   243       encodeCompleteCheckpointState({
+   244         ...base.state,
+   245         goal: 'x'.repeat(8388608)
+   246       })
+   247     ).toThrow()
+   248     expect(() =>
+   249       encodeCompleteCheckpointState({
+   250         ...base.state,
+   251         toolResultContext: {
+   252           ...base.state.toolResultContext!,
+   253           deliveredThroughStep: 1
+   254         }
+   255       })
+   256     ).toThrow()
+   257     expect(() =>
+   258       encodeCompleteCheckpointState({
+   259         ...base.state,
+   260         toolResultContext: {
+   261           ...base.state.toolResultContext!,
+   262           pendingDecisionAdmission: 'missing'
+   263         }
+   264       })
+   265     ).toThrow()
+   266   })
+   267 
+   268   it('has one winner for initial and same-token races; refuses simple V2 and V1 overwrite', async () => {
+   269     const store = new InMemoryExecutionStepStore(),
+   270       first = completeFixture()
+   271     const input = {
+   272       tenantId: first.tenantId,
+   273       executionId: first.executionId,
+   274       expected: null,
+   275       next: first
+   276     }
+   277     const race = await Promise.all([
+   278       store.compareAndSwapCheckpoint(input),
+   279       store.compareAndSwapCheckpoint({ ...input, next: completeFixture() })
+   280     ])
+   281     expect(race.map((x) => x.status).sort()).toEqual(['APPLIED', 'CONFLICT'])
+   282     const token = { checkpointId: first.checkpointId, digest: first.digest }
+   283     const second = completeFixture(1)
+   284     const updates = await Promise.all([
+   285       store.compareAndSwapCheckpoint({
+   286         ...input,
+   287         expected: token,
+   288         next: second
+   289       }),
+   290       store.compareAndSwapCheckpoint({
+   291         ...input,
+   292         expected: token,
+   293         next: completeFixture(1)
+   294       })
+   295     ])
+   296     expect(updates.map((x) => x.status).sort()).toEqual(['APPLIED', 'CONFLICT'])
+   297     await expect(store.saveCheckpoint(first)).rejects.toThrow()
+   298     const {
+   299       checkpointId: _id,
+   300       createdAt: _at,
+   301       digest: _digest,
+   302       ...unsigned
+   303     } = first
+   304     void _id
+   305     void _at
+   306     void _digest
+   307     const legacy = sealCheckpoint({
+   308       ...unsigned,
+   309       checkpointVersion: 1,
+   310       state: { ...first.state, toolResultContext: undefined }
+   311     })
+   312     await expect(store.saveCheckpoint(legacy)).rejects.toThrow()
+   313     const loaded = await store.loadCheckpoint(first.tenantId, first.executionId)
+   314     expect(loaded).toEqual(second)
+   315     await expect(
+   316       store.compareAndSwapCheckpoint({ ...input, tenantId: 'other' })
+   317     ).rejects.toThrow()
+   318     await expect(
+   319       store.compareAndSwapCheckpoint({
+   320         ...input,
+   321         expected: { checkpointId: second.checkpointId, digest: second.digest },
+   322         next: second
+   323       })
+   324     ).rejects.toThrow()
+   325     const old = new InMemoryExecutionStepStore()
+   326     await old.saveCheckpoint(legacy)
+   327     await old.saveCheckpoint(legacy)
+   328     expect(
+   329       await old.loadCheckpoint(legacy.tenantId, legacy.executionId)
+   330     ).toEqual(legacy)
+   331   })
+   332 
+   333   it('retains 50 full TOOL_RESULT observations, validates result integrity and immutable receipts across CAS', async () => {
+   334     const tooMany = completeFixture(51)
+   335     expect(() =>
+   336       reseal(tooMany, {
+   337         ...tooMany.state,
+   338         observations: Array.from({ length: 51 }, (_, i) =>
+   339           resultObservation('bounded', i + 1)
+   340         )
+   341       })
+   342     ).toThrow()
+   343     const store = new InMemoryExecutionStepStore(),
+   344       base = completeFixture(50)
+   345     const observations = Array.from({ length: 50 }, (_, i) =>
+   346       resultObservation({ '\u0000😀': 'a'.repeat(4096) }, i + 1)
+   347     )
+   348     let checkpoint = reseal(base, { ...base.state, observations })
+   349     const update = async (next: ExecutionCheckpoint) => {
+   350       const result = await store.compareAndSwapCheckpoint({
+   351         tenantId: checkpoint.tenantId,
+   352         executionId: checkpoint.executionId,
+   353         expected: {
+   354           checkpointId: checkpoint.checkpointId,
+   355           digest: checkpoint.digest
+   356         },
+   357         next
+   358       })
+   359       if (result.status === 'APPLIED') checkpoint = next
+   360       return result
+   361     }
+   362     await store.compareAndSwapCheckpoint({
+   363       tenantId: checkpoint.tenantId,
+   364       executionId: checkpoint.executionId,
+   365       expected: null,
+   366       next: checkpoint
+   367     })
+   368     await expect(
+   369       update(
+   370         reseal(checkpoint, {
+   371           ...checkpoint.state,
+   372           observations: observations.slice(1)
+   373         })
+   374       )
+   375     ).rejects.toThrow()
+   376     const changed = [...observations]
+   377     changed[0] = { ...changed[0]!, summary: 'altered' }
+   378     await expect(
+   379       update(reseal(checkpoint, { ...checkpoint.state, observations: changed }))
+   380     ).rejects.toThrow()
+   381     const cursor = {
+   382       ...checkpoint.state.toolResultContext!,
+   383       deliveredThroughStep: 50
+   384     }
+   385     expect(
+   386       (
+   387         await update(
+   388           reseal(checkpoint, { ...checkpoint.state, toolResultContext: cursor })
+   389         )
+   390       ).status
+   391     ).toBe('APPLIED')
+   392     expect(
+   393       (await store.loadCheckpoint(checkpoint.tenantId, checkpoint.executionId))!
+   394         .state.observations
+   395     ).toHaveLength(50)
+   396     const receipt = { ...reservation(), stepNumber: 51 }
+   397     const budget = { ...checkpoint.budgetUsage, ...receipt.reserved }
+   398     await update(
+   399       reseal(
+   400         checkpoint,
+   401         {
+   402           ...checkpoint.state,
+   403           toolResultContext: {
+   404             ...cursor,
+   405             decisionAdmissions: [receipt],
+   406             pendingDecisionAdmission: receipt.admissionId
+   407           }
+   408         },
+   409         budget
+   410       )
+   411     )
+   412     const settled = { ...reservation('SETTLED'), stepNumber: 51 }
+   413     await update(
+   414       reseal(
+   415         checkpoint,
+   416         {
+   417           ...checkpoint.state,
+   418           toolResultContext: {
+   419             ...cursor,
+   420             decisionAdmissions: [settled],
+   421             pendingDecisionAdmission: null
+   422           }
+   423         },
+   424         { ...budget, ...settled.actual! }
+   425       )
+   426     )
+   427     // Repeating identical logical settlement with a fresh storage token is harmless.
+   428     expect((await update(reseal(checkpoint, checkpoint.state))).status).toBe(
+   429       'APPLIED'
+   430     )
+   431     expect(
+   432       decodeCompleteCheckpointState(
+   433         encodeCompleteCheckpointState(checkpoint.state)
+   434       ).toolResultContext!.decisionAdmissions[0]!.resultSha256
+   435     ).toBe(settled.resultSha256)
+   436     await expect(
+   437       update(
+   438         reseal(checkpoint, {
+   439           ...checkpoint.state,
+   440           toolResultContext: {
+   441             ...cursor,
+   442             decisionAdmissions: [],
+   443             pendingDecisionAdmission: null
+   444           }
+   445         })
+   446       )
+   447     ).rejects.toThrow()
+   448     await expect(
+   449       update(
+   450         reseal(checkpoint, {
+   451           ...checkpoint.state,
+   452           toolResultContext: {
+   453             ...cursor,
+   454             decisionAdmissions: [{ ...settled, resultSha256: 'c'.repeat(64) }],
+   455             pendingDecisionAdmission: null
+   456           }
+   457         })
+   458       )
+   459     ).rejects.toThrow()
+   460     const bad = structuredClone(observations[0]!)
+   461     ;(bad.payload as Record<string, unknown>).output = 'tampered'
+   462     expect(() =>
+   463       reseal(checkpoint, { ...checkpoint.state, observations: [bad] })
+   464     ).toThrow()
+   465   })
+   466 
+   467   it('rejects corrupt native receipt bindings, budget, enum, pending pointer and missing state fields', () => {
+   468     const base = completeFixture(1),
+   469       reserved = reservation()
+   470     const state = {
+   471       ...base.state,
+   472       toolResultContext: {
+   473         ...base.state.toolResultContext!,
+   474         decisionAdmissions: [reserved],
+   475         pendingDecisionAdmission: reserved.admissionId
+   476       }
+   477     }
+   478     const budget = { ...base.budgetUsage, ...reserved.reserved }
+   479     expect(() => reseal(base, state, budget)).not.toThrow()
+   480     for (const bad of [
+   481       { ...reserved, tenantId: 'other' },
+   482       { ...reserved, executionId: 'other' },
+   483       { ...reserved, attempt: -1 },
+   484       { ...reserved, actual: reserved.reserved },
+   485       { ...reserved, resultSha256: 'c'.repeat(64) },
+   486       { ...reserved, reserved: { ...reserved.reserved, modelCalls: 2 } },
+   487       {
+   488         ...reservation('SETTLED'),
+   489         actual: { ...reserved.reserved, inputTokens: 101 }
+   490       },
+   491       { ...reservation('SETTLED'), resultSha256: undefined },
+   492       { ...reservation('UNKNOWN'), unknownReason: undefined },
+   493       {
+   494         ...reserved,
+   495         measurement: { ...reserved.measurement, contextWindowTokens: 512 }
+   496       }
+   497     ])
+   498       expect(() =>
+   499         reseal(
+   500           base,
+   501           {
+   502             ...state,
+   503             toolResultContext: {
+   504               ...state.toolResultContext,
+   505               decisionAdmissions: [bad as DecisionAdmissionRecord]
+   506             }
+   507           },
+   508           budget
+   509         )
+   510       ).toThrow()
+   511     expect(() => reseal(base, state)).toThrow()
+   512     expect(() =>
+   513       reseal(
+   514         base,
+   515         {
+   516           ...state,
+   517           toolResultContext: {
+   518             ...state.toolResultContext,
+   519             decisionAdmissions: [reserved, reserved]
+   520           }
+   521         },
+   522         budget
+   523       )
+   524     ).toThrow()
+   525     expect(() =>
+   526       encodeCompleteCheckpointState({
+   527         ...base.state,
+   528         invented: null
+   529       } as AgentLoopState)
+   530     ).toThrow()
+   531     expect(() =>
+   532       encodeCompleteCheckpointState({
+   533         ...base.state,
+   534         resolvedInputs: { nested: { a: undefined } }
+   535       })
+   536     ).toThrow()
+   537     expect(() =>
+   538       encodeCompleteCheckpointState({ ...base.state, pendingStepNumber: 9 })
+   539     ).toThrow()
+   540   })
+   541 
+   542   it('enforces exact 8MiB logical bytes and total depth/node limits before decoding', () => {
+   543     const base = completeFixture().state
+   544     const empty = canonicalizeCompleteJson(base, {
+   545       maxBytes: 8388608,
+   546       maxDepth: 64,
+   547       maxNodes: 1000000
+   548     })
+   549     const exact = {
+   550       ...base,
+   551       goal: base.goal + 'a'.repeat(8388608 - Buffer.byteLength(empty))
+   552     }
+   553     const wrapper = encodeCompleteCheckpointState(exact)
+   554     expect(wrapper.decodedBytes).toBe(8388608)
+   555     expect(decodeCompleteCheckpointState(wrapper).goal).toBe(exact.goal)
+   556     expect(() =>
+   557       encodeCompleteCheckpointState({ ...exact, goal: exact.goal + 'a' })
+   558     ).toThrow()
+   559     // The unsigned checkpoint includes bindings and budgets, beyond the state envelope.
+   560     const checkpoint = completeFixture()
+   561     const {
+   562       checkpointId: _id,
+   563       createdAt: _at,
+   564       digest: _digest,
+   565       ...unsigned
+   566     } = checkpoint
+   567     void _id
+   568     void _at
+   569     void _digest
+   570     const unsignedBytes = Buffer.byteLength(
+   571       canonicalizeCompleteJson(unsigned, {
+   572         maxBytes: 8388608,
+   573         maxDepth: 64,
+   574         maxNodes: 1000000
+   575       })
+   576     )
+   577     const exactUnsigned = {
+   578       ...unsigned,
+   579       state: { ...base, goal: base.goal + 'a'.repeat(8388608 - unsignedBytes) }
+   580     }
+   581     expect(() => completeCheckpointDigest(exactUnsigned)).not.toThrow()
+   582     expect(() =>
+   583       completeCheckpointDigest({
+   584         ...exactUnsigned,
+   585         state: { ...exactUnsigned.state, goal: exactUnsigned.state.goal + 'a' }
+   586       })
+   587     ).toThrow()
+   588     let allowedDepth: unknown = 0
+   589     for (let i = 0; i < 61; i++) allowedDepth = [allowedDepth]
+   590     expect(() =>
+   591       encodeCompleteCheckpointState({
+   592         ...base,
+   593         resolvedInputs: { deep: allowedDepth }
+   594       })
+   595     ).not.toThrow()
+   596     expect(() =>
+   597       encodeCompleteCheckpointState({
+   598         ...base,
+   599         resolvedInputs: { deep: [allowedDepth] }
+   600       })
+   601     ).toThrow()
+   602     let deep: unknown = 0
+   603     for (let i = 0; i < 65; i++) deep = [deep]
+   604     expect(() =>
+   605       encodeCompleteCheckpointState({ ...base, resolvedInputs: { deep } })
+   606     ).toThrow()
+   607     const wrap = (raw: string) => ({
+   608       storageCodec: 'cvg.checkpoint-state/2',
+   609       encoding: 'base64',
+   610       data: Buffer.from(raw).toString('base64'),
+   611       decodedBytes: Buffer.byteLength(raw),
+   612       decodedSha256: createHash('sha256').update(raw).digest('hex')
+   613     })
+   614     expect(() =>
+   615       decodeCompleteCheckpointState(wrap('['.repeat(66) + '0' + ']'.repeat(66)))
+   616     ).toThrow()
+   617     expect(() =>
+   618       decodeCompleteCheckpointState(
+   619         wrap('[' + Array(1000000).fill('0').join(',') + ']')
+   620       )
+   621     ).toThrow()
+   622     expect(() =>
+   623       decodeCompleteCheckpointState(wrap('{"a":0,"\\u0061":1}'))
+   624     ).toThrow()
+   625   })
+   626 
+   627   it('retains observed UNKNOWN breach usage and requires componentwise conservative budget coverage', () => {
+   628     const base = completeFixture(1)
+   629     const actual = {
+   630       modelCalls: 1,
+   631       inputTokens: 120,
+   632       outputTokens: 10,
+   633       costUsd: 2
+   634     }
+   635     const breach = {
+   636       ...reservation('UNKNOWN'),
+   637       unknownReason: 'ADMISSION_BREACH',
+   638       actual
+   639     }
+   640     const state = {
+   641       ...base.state,
+   642       toolResultContext: {
+   643         ...base.state.toolResultContext!,
+   644         decisionAdmissions: [breach]
+   645       }
+   646     }
+   647     const covered = {
+   648       ...base.budgetUsage,
+   649       modelCalls: 1,
+   650       inputTokens: 120,
+   651       outputTokens: 512,
+   652       costUsd: 2
+   653     }
+   654     const checkpoint = reseal(base, state, covered)
+   655     validateCheckpointIntegrity(checkpoint, {
+   656       tenantId: base.tenantId,
+   657       executionId: base.executionId
+   658     })
+   659     expect(
+   660       decodeCompleteCheckpointState(encodeCompleteCheckpointState(state))
+   661         .toolResultContext!.decisionAdmissions[0]!.actual
+   662     ).toEqual(actual)
+   663     for (const key of [
+   664       'modelCalls',
+   665       'inputTokens',
+   666       'outputTokens',
+   667       'costUsd'
+   668     ] as const) {
+   669       expect(() =>
+   670         reseal(base, state, { ...covered, [key]: covered[key] - 1 })
+   671       ).toThrow()
+   672     }
+   673     expect(() =>
+   674       reseal(
+   675         base,
+   676         {
+   677           ...state,
+   678           toolResultContext: {
+   679             ...state.toolResultContext,
+   680             decisionAdmissions: [
+   681               {
+   682                 ...reservation('UNKNOWN'),
+   683                 unknownReason: 'ADMISSION_BREACH',
+   684                 attempt: 0
+   685               }
+   686             ]
+   687           }
+   688         },
+   689         covered
+   690       )
+   691     ).not.toThrow()
+   692     expect(() =>
+   693       reseal(
+   694         base,
+   695         {
+   696           ...state,
+   697           toolResultContext: {
+   698             ...state.toolResultContext,
+   699             decisionAdmissions: [{ ...breach, unknownReason: 'timeout' }]
+   700           }
+   701         },
+   702         covered
+   703       )
+   704     ).toThrow()
+   705   })
+   706 
+   707   it('preserves accepted decision separately from counted pendingDecision and binds all settled step receipts', async () => {
+   708     const base = completeFixture(1),
+   709       settled = reservation('SETTLED')
+   710     const acceptedDecision = {
+   711       stepNumber: 2,
+   712       decision: {
+   713         decisionType: 'CALL_TOOL' as const,
+   714         reasonCode: 'TOOL_REQUIRED' as const,
+   715         toolId: 'synthetic',
+   716         toolInput: { key: '\u0000' }
+   717       },
+   718       decisionAdmissionIds: [settled.admissionId]
+   719     }
+   720     const state = {
+   721       ...base.state,
+   722       toolResultContext: {
+   723         ...base.state.toolResultContext!,
+   724         decisionAdmissions: [settled],
+   725         acceptedDecision
+   726       }
+   727     }
+   728     const budget = { ...base.budgetUsage, ...settled.actual! }
+   729     const checkpoint = reseal(base, state, budget)
+   730     expect(
+   731       decodeCompleteCheckpointState(encodeCompleteCheckpointState(state))
+   732     ).toEqual(state)
+   733     expect(checkpoint.state.pendingDecision).toBeUndefined()
+   734     const counted = {
+   735       ...state,
+   736       pendingDecision: acceptedDecision.decision,
+   737       pendingStepNumber: 2
+   738     }
+   739     expect(() => reseal(base, counted, budget)).not.toThrow()
+   740     expect(() =>
+   741       reseal(
+   742         base,
+   743         {
+   744           ...counted,
+   745           pendingDecision: {
+   746             decisionType: 'STOP',
+   747             reasonCode: 'USER_REQUESTED_STOP'
+   748           }
+   749         },
+   750         budget
+   751       )
+   752     ).toThrow()
+   753     for (const invalid of [
+   754       { ...acceptedDecision, stepNumber: 4 },
+   755       { ...acceptedDecision, decisionAdmissionIds: [] },
+   756       { ...acceptedDecision, decisionAdmissionIds: ['missing'] },
+   757       {
+   758         ...acceptedDecision,
+   759         decisionAdmissionIds: [settled.admissionId, settled.admissionId]
+   760       }
+   761     ]) {
+   762       expect(() =>
+   763         reseal(
+   764           base,
+   765           {
+   766             ...state,
+   767             toolResultContext: {
+   768               ...state.toolResultContext,
+   769               acceptedDecision: invalid
+   770             }
+   771           },
+   772           budget
+   773         )
+   774       ).toThrow()
+   775     }
+   776     const store = new InMemoryExecutionStepStore()
+   777     await store.compareAndSwapCheckpoint({
+   778       tenantId: base.tenantId,
+   779       executionId: base.executionId,
+   780       expected: null,
+   781       next: checkpoint
+   782     })
+   783     await expect(
+   784       store.compareAndSwapCheckpoint({
+   785         tenantId: base.tenantId,
+   786         executionId: base.executionId,
+   787         expected: {
+   788           checkpointId: checkpoint.checkpointId,
+   789           digest: checkpoint.digest
+   790         },
+   791         next: reseal(
+   792           checkpoint,
+   793           {
+   794             ...state,
+   795             toolResultContext: {
+   796               ...state.toolResultContext,
+   797               acceptedDecision: undefined
+   798             }
+   799           },
+   800           budget
+   801         )
+   802       })
+   803     ).rejects.toThrow()
+   804     // This intermediate crash state is legal storage; the native runtime must stop it conservatively on resume.
+   805     expect(() =>
+   806       reseal(
+   807         base,
+   808         {
+   809           ...state,
+   810           toolResultContext: {
+   811             ...state.toolResultContext,
+   812             acceptedDecision: undefined
+   813           }
+   814         },
+   815         budget
+   816       )
+   817     ).not.toThrow()
+   818   })
+   819 
+   820   it('permits a V1 transition only without legacy results and refuses downgrade/old token replay', async () => {
+   821     const next = completeFixture(),
+   822       store = new InMemoryExecutionStepStore()
+   823     const { checkpointId: _id, createdAt: _at, digest: _d, ...unsigned } = next
+   824     void _id
+   825     void _at
+   826     void _d
+   827     const legacy = sealCheckpoint({
+   828       ...unsigned,
+   829       checkpointVersion: 1,
+   830       state: { ...unsigned.state, toolResultContext: undefined }
+   831     })
+   832     await store.saveCheckpoint(legacy)
+   833     expect(
+   834       (
+   835         await store.compareAndSwapCheckpoint({
+   836           tenantId: next.tenantId,
+   837           executionId: next.executionId,
+   838           expected: {
+   839             checkpointId: legacy.checkpointId,
+   840             digest: legacy.digest
+   841           },
+   842           next
+   843         })
+   844       ).status
+   845     ).toBe('APPLIED')
+   846     expect(
+   847       (
+   848         await store.compareAndSwapCheckpoint({
+   849           tenantId: next.tenantId,
+   850           executionId: next.executionId,
+   851           expected: {
+   852             checkpointId: legacy.checkpointId,
+   853             digest: legacy.digest
+   854           },
+   855           next: completeFixture()
+   856         })
+   857       ).status
+   858     ).toBe('CONFLICT')
+   859     await expect(
+   860       store.compareAndSwapCheckpoint({
+   861         tenantId: next.tenantId,
+   862         executionId: next.executionId,
+   863         expected: { checkpointId: next.checkpointId, digest: next.digest },
+   864         next: legacy
+   865       })
+   866     ).rejects.toThrow()
+   867     const legacyResult = sealCheckpoint({
+   868       ...unsigned,
+   869       checkpointVersion: 1,
+   870       state: { ...legacy.state, observations: [resultObservation('legacy')] }
+   871     })
+   872     const other = new InMemoryExecutionStepStore()
+   873     await other.saveCheckpoint(legacyResult)
+   874     await expect(
+   875       other.compareAndSwapCheckpoint({
+   876         tenantId: next.tenantId,
+   877         executionId: next.executionId,
+   878         expected: {
+   879           checkpointId: legacyResult.checkpointId,
+   880           digest: legacyResult.digest
+   881         },
+   882         next
+   883       })
+   884     ).rejects.toThrow()
+   885   })
+   886 
+   887   it('preserves legacy hashing, simple saves, step transition fences and defensive copies', async () => {
+   888     const store = new InMemoryExecutionStepStore()
+   889     const step = {
+   890       stepId: 'step_1',
+   891       tenantId: 'tenant_test',
+   892       executionId: 'exec_test',
+   893       stepNumber: 1,
+   894       stepType: 'TOOL' as const,
+   895       status: 'RUNNING' as const,
+   896       attempt: 1,
+   897       sideEffecting: false,
+   898       observationRefs: [] as string[],
+   899       startedAt: '2026-10-16T00:00:00.000Z'
+   900     }
+   901     await store.recordStep(step)
+   902     await expect(
+   903       store.recordStep({ ...step, stepId: 'other' })
+   904     ).rejects.toThrow()
+   905     await expect(
+   906       store.recordStep({ ...step, stepId: 'step_2', stepNumber: 2 })
+   907     ).rejects.toThrow()
+   908     await store.recordStep({ ...step, status: 'SUCCEEDED' })
+   909     await expect(store.recordStep(step)).rejects.toThrow()
+   910     const listed = await store.listSteps(step.tenantId, step.executionId)
+   911     expect(listed[0]!.status).toBe('SUCCEEDED')
+   912     ;(listed[0]!.observationRefs as string[]).push('mutated')
+   913     expect(
+   914       (await store.listSteps(step.tenantId, step.executionId))[0]!
+   915         .observationRefs
+   916     ).toEqual([])
+   917     const v2 = completeFixture()
+   918     const { checkpointId: _id, createdAt: _at, digest: _d, ...unsigned } = v2
+   919     void _id
+   920     void _at
+   921     void _d
+   922     const v1 = {
+   923       ...unsigned,
+   924       checkpointVersion: 1,
+   925       state: { ...unsigned.state, toolResultContext: undefined }
+   926     }
+   927     // Fixed V1 vector independently generated with Python's sorted JSON encoding.
+   928     expect(checkpointDigest(v1)).toBe(
+   929       '580ac62ae308c5e216e4b2a673c43ca6670fa0a5842afbb8dfcd1218e586e3a4'
+   930     )
+   931     const checkpoint = sealCheckpoint(v1)
+   932     await store.saveCheckpoint(checkpoint)
+   933     expect(await store.loadCheckpoint(step.tenantId, step.executionId)).toEqual(
+   934       checkpoint
+   935     )
+   936   })
+   937 })
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/orchestrator/src/__tests__/complete-tool-context.test.ts SHA256 a00eff0b084ff42c07b1184e38c15d31f6d2eff391dd4e85d2a6b0b1d37bca66
+     1 import { createHash } from 'node:crypto'
+     2 import { writeFileSync } from 'node:fs'
+     3 import { afterAll, describe, expect, it, vi } from 'vitest'
+     4 import type {
+     5   ContextItem,
+     6   DecisionAdmissionPort,
+     7   DecisionAdmissionRecord,
+     8   DecisionAdmissionSettlement,
+     9   DecisionInputMeasurement,
+    10   DecisionModelRequestSnapshot,
+    11   IterativeOrchestratorInput,
+    12   ModelRequest,
+    13   ModelResult,
+    14   Observation,
+    15   StepContext
+    16 } from '@cvg/harness-contracts'
+    17 import {
+    18   canonicalizeCompleteJson,
+    19   EMPTY_BUDGET_USAGE,
+    20   ToolResultContextError
+    21 } from '@cvg/harness-contracts'
+    22 import { HybridOrchestrator } from '../hybrid-orchestrator.ts'
+    23 import type { HybridOrchestratorOptions } from '../hybrid-orchestrator.ts'
+    24 
+    25 const jsonLimits = { maxBytes: 131_072, maxDepth: 64, maxNodes: 1_000_000 }
+    26 const canonical = (value: unknown) =>
+    27   canonicalizeCompleteJson(value, jsonLimits)
+    28 const digest = (value: unknown) =>
+    29   createHash('sha256').update(canonical(value)).digest('hex')
+    30 const decision = {
+    31   decisionType: 'RESPOND',
+    32   reasonCode: 'GOAL_SATISFIED',
+    33   responseIntent: 'answer'
+    34 }
+    35 const requestEvidence: unknown[] = []
+    36 
+    37 afterAll(() => {
+    38   if (process.env.CVG_ORCHESTRATOR_EVIDENCE) {
+    39     writeFileSync(
+    40       process.env.CVG_ORCHESTRATOR_EVIDENCE,
+    41       JSON.stringify(requestEvidence, null, 2) + '\n'
+    42     )
+    43   }
+    44 })
+    45 
+    46 function context(overrides: Partial<StepContext> = {}): StepContext {
+    47   return {
+    48     executionId: 'exec.synthetic.complete',
+    49     tenantId: 'tenant.synthetic',
+    50     conversationId: 'conversation.synthetic',
+    51     stepNumber: 3,
+    52     runtimeProfile: 'iterative',
+    53     agentId: 'agent.synthetic' as never,
+    54     agentVersion: 'v1',
+    55     objective: 'Host objective',
+    56     instructions: ['Host instruction'],
+    57     goal: 'Synthetic goal',
+    58     userMessage: 'Synthetic user message',
+    59     stateSummary: 'Synthetic state',
+    60     observations: [],
+    61     capabilities: [],
+    62     knowledgeAvailable: false,
+    63     completionStrategy: 'DETERMINISTIC',
+    64     allowedDecisionTypes: ['RESPOND', 'CALL_TOOL'],
+    65     budget: {
+    66       maxSteps: 10,
+    67       maxModelCalls: 5,
+    68       maxToolCalls: 5,
+    69       maxTokens: 100_000,
+    70       maxCostUsd: 1,
+    71       maxDurationMs: 5_000,
+    72       maxDecisionRepairs: 4
+    73     },
+    74     budgetUsage: { ...EMPTY_BUDGET_USAGE },
+    75     tokenBudget: 4_000,
+    76     contextItems: [],
+    77     correlationId: 'correlation.synthetic' as never,
+    78     traceId: 'trace.synthetic' as never,
+    79     toolResultContext: { version: 1, requiredObservationIds: [] },
+    80     ...overrides
+    81   }
+    82 }
+    83 
+    84 function toolItem(output: unknown, id = 'obs.tool.1', step = 1): ContextItem {
+    85   const observation: Observation = {
+    86     observationId: id,
+    87     executionId: 'exec.synthetic.complete',
+    88     stepId: `step.${step}`,
+    89     stepNumber: step,
+    90     source: 'TOOL',
+    91     type: 'TOOL_RESULT',
+    92     trust: 'UNTRUSTED',
+    93     payload: {
+    94       schemaVersion: 1,
+    95       status: 'SUCCEEDED',
+    96       sideEffect: 'READ',
+    97       completion: 'COMPLETE',
+    98       resultAvailability: 'AVAILABLE',
+    99       output,
+   100       outputBytes: Buffer.byteLength(canonical(output)),
+   101       outputSha256: digest(output)
+   102     },
+   103     summary: 'preview must not enter system',
+   104     provenance: {
+   105       sourceId: 'tool.echo',
+   106       sourceVersion: 'v1',
+   107       operationKey: `op.${id}`
+   108     },
+   109     timestamp: '2026-10-16T00:00:00.000Z'
+   110   }
+   111   return {
+   112     contextId: `tool.${id}`,
+   113     priority: 'FRESH_TOOL_RESULTS',
+   114     trust: 'UNTRUSTED',
+   115     source: 'tool.echo',
+   116     content: canonical(observation),
+   117     tokenEstimate: 0
+   118   }
+   119 }
+   120 
+   121 function withTools(
+   122   items: readonly ContextItem[],
+   123   overrides: Partial<StepContext> = {}
+   124 ): StepContext {
+   125   return context({
+   126     contextItems: items,
+   127     toolResultContext: {
+   128       version: 1,
+   129       requiredObservationIds: items
+   130         .filter((item) => item.priority === 'FRESH_TOOL_RESULTS')
+   131         .map((item) => JSON.parse(item.content).observationId)
+   132     },
+   133     ...overrides
+   134   })
+   135 }
+   136 
+   137 const history = (
+   138   content: string,
+   139   priority: ContextItem['priority'] = 'OLDER_CONTEXT'
+   140 ): ContextItem => ({
+   141   contextId: `history.${priority}`,
+   142   priority,
+   143   trust: 'UNTRUSTED',
+   144   source: 'history',
+   145   content,
+   146   tokenEstimate: 0
+   147 })
+   148 const measurement = (
+   149   overrides: Partial<DecisionInputMeasurement> = {}
+   150 ): DecisionInputMeasurement => ({
+   151   counterId: 'synthetic.counter',
+   152   counterVersion: '1',
+   153   provider: 'synthetic',
+   154   model: 'synthetic.model',
+   155   formattingVersion: '1',
+   156   inputUpperBoundTokens: 100,
+   157   contextWindowTokens: 16_000,
+   158   costUpperBoundUsd: 0.01,
+   159   ...overrides
+   160 })
+   161 const result = (overrides: Partial<ModelResult> = {}): ModelResult => ({
+   162   text: JSON.stringify(decision),
+   163   provider: 'synthetic',
+   164   model: 'synthetic.model',
+   165   inputTokens: 80,
+   166   outputTokens: 10,
+   167   costUsd: 0.001,
+   168   ...overrides
+   169 })
+   170 
+   171 function lane(ctx = context()) {
+   172   const events: string[] = []
+   173   const records: DecisionAdmissionRecord[] = []
+   174   const snapshots: DecisionModelRequestSnapshot[] = []
+   175   const requests: ModelRequest[] = []
+   176   const settlements: DecisionAdmissionSettlement[] = []
+   177   let liveTokens =
+   178     ctx.budget.maxTokens -
+   179     ctx.budgetUsage.inputTokens -
+   180     ctx.budgetUsage.outputTokens
+   181   let liveCost = ctx.budget.maxCostUsd - ctx.budgetUsage.costUsd
+   182   let calls = ctx.budgetUsage.modelCalls
+   183   const measure = vi.fn((request: DecisionModelRequestSnapshot) => {
+   184     expect(request.maxOutputTokens).toBe(512)
+   185     return measurement()
+   186   })
+   187   const reserve = vi.fn(
+   188     async (input: Parameters<DecisionAdmissionPort['reserve']>[0]) => {
+   189       events.push('reserve')
+   190       const { request, measurement: counted } = input
+   191       if (
+   192         calls >= ctx.budget.maxModelCalls ||
+   193         liveTokens < counted.inputUpperBoundTokens + 512 ||
+   194         liveCost < counted.costUpperBoundUsd
+   195       )
+   196         throw new ToolResultContextError(
+   197           'ADMISSION_UNAVAILABLE',
+   198           'Synthetic native balance exhausted',
+   199           'MAX_TOKENS'
+   200         )
+   201       calls += 1
+   202       liveTokens -= counted.inputUpperBoundTokens + 512
+   203       liveCost -= counted.costUpperBoundUsd
+   204       snapshots.push(request)
+   205       const record: DecisionAdmissionRecord = {
+   206         admissionId: `admission.${records.length}`,
+   207         tenantId: ctx.tenantId,
+   208         executionId: ctx.executionId,
+   209         stepNumber: ctx.stepNumber,
+   210         attempt: records.length,
+   211         purpose: request.purpose as 'ORCHESTRATION' | 'REPAIR',
+   212         requestSha256: digest(request),
+   213         measurement: counted,
+   214         reserved: {
+   215           modelCalls: 1,
+   216           inputTokens: counted.inputUpperBoundTokens,
+   217           outputTokens: 512,
+   218           costUsd: counted.costUpperBoundUsd
+   219         },
+   220         status: 'RESERVED'
+   221       }
+   222       records.push(record)
+   223       return record
+   224     }
+   225   )
+   226   const settle = vi.fn(async (input: DecisionAdmissionSettlement) => {
+   227     events.push(`settle.${input.kind}`)
+   228     settlements.push(input)
+   229     const record = records.find(
+   230       (record) => record.admissionId === input.admissionId
+   231     )!
+   232     if (input.kind === 'UNKNOWN')
+   233       return {
+   234         ...record,
+   235         status: 'UNKNOWN' as const,
+   236         unknownReason: input.reason
+   237       }
+   238     const actual = {
+   239       modelCalls: 1,
+   240       inputTokens: input.result.inputTokens,
+   241       outputTokens: input.result.outputTokens,
+   242       costUsd: input.result.costUsd
+   243     }
+   244     liveTokens +=
+   245       record.reserved.inputTokens +
+   246       record.reserved.outputTokens -
+   247       actual.inputTokens -
+   248       actual.outputTokens
+   249     liveCost += record.reserved.costUsd - actual.costUsd
+   250     return {
+   251       ...record,
+   252       status: 'SETTLED' as const,
+   253       actual,
+   254       resultSha256: digest(input.result)
+   255     }
+   256   })
+   257   const complete = vi.fn(
+   258     async (request: ModelRequest): Promise<ModelResult> => {
+   259       events.push('model')
+   260       requests.push(request)
+   261       const { signal: _signal, ...wire } = request
+   262       void _signal // Local cancellation is deliberately absent from the wire hash.
+   263       requestEvidence.push({ request: wire, requestSha256: digest(wire) })
+   264       const frame = JSON.parse(request.messages[1]!.content)
+   265       const outputs = frame.items
+   266         .filter(
+   267           (item: { priority: string }) => item.priority === 'FRESH_TOOL_RESULTS'
+   268         )
+   269         .map(
+   270           (item: { value: Observation }) =>
+   271             (item.value.payload as { output: unknown }).output
+   272         )
+   273       return result({
+   274         text: JSON.stringify({
+   275           ...decision,
+   276           responseText: JSON.stringify(outputs)
+   277         })
+   278       })
+   279     }
+   280   )
+   281   requestEvidence.push({
+   282     kind: 'native-port-lane',
+   283     events,
+   284     records,
+   285     snapshots,
+   286     settlements
+   287   })
+   288   return {
+   289     ctx,
+   290     events,
+   291     records,
+   292     snapshots,
+   293     requests,
+   294     settlements,
+   295     measure,
+   296     reserve,
+   297     settle,
+   298     complete,
+   299     options: {
+   300       decisionModel: { complete },
+   301       decisionInputCounter: { measure },
+   302       decisionModelSupportsMaxOutputTokens: true
+   303     },
+   304     input: { context: ctx, decisionAdmission: { reserve, settle } }
+   305   }
+   306 }
+   307 
+   308 describe('SPEC0224 complete-tool-v1 orchestrator lane (synthetic ports)', () => {
+   309   it('advertises support and returns rules-only empty receipts without qualification or aggregate usage', async () => {
+   310     const l = lane()
+   311     const orchestrator = new HybridOrchestrator({
+   312       rules: [() => decision as never]
+   313     })
+   314     expect(orchestrator.contextProtocol).toBe('complete-tool-v1')
+   315     expect(await orchestrator.decide({ context: l.ctx })).toEqual({
+   316       decision,
+   317       decisionAdmissionIds: []
+   318     })
+   319     expect(l.complete).not.toHaveBeenCalled()
+   320     expect(l.measure).not.toHaveBeenCalled()
+   321   })
+   322 
+   323   it('returns existing native settled receipts from rules without another model call or usage charge', async () => {
+   324     const l = lane()
+   325     const modeled = await new HybridOrchestrator(l.options).decide(l.input)
+   326     const existing = Object.freeze([...modeled.decisionAdmissionIds!])
+   327     const ruleTurn = await new HybridOrchestrator({
+   328       rules: [() => decision as never]
+   329     }).decide({
+   330       ...l.input,
+   331       context: context({
+   332         decisionRepair: {
+   333           attempt: 1,
+   334           errors: ['native validation rejected prior turn']
+   335         },
+   336         toolResultContext: {
+   337           version: 1,
+   338           requiredObservationIds: [],
+   339           settledDecisionAdmissionIds: existing
+   340         }
+   341       })
+   342     })
+   343     expect(ruleTurn).toEqual({
+   344       decision,
+   345       decisionAdmissionIds: ['admission.0']
+   346     })
+   347     expect(existing).toEqual(['admission.0'])
+   348     expect(l.complete).toHaveBeenCalledTimes(1)
+   349     expect(l.measure).toHaveBeenCalledTimes(1)
+   350     expect(l.reserve).toHaveBeenCalledTimes(1)
+   351     expect(l.settle).toHaveBeenCalledTimes(1)
+   352   })
+   353 
+   354   it('prefixes reentered same-step repair receipts with all prior native settled IDs without mutating or charging them', async () => {
+   355     const l = lane()
+   356     const orchestrator = new HybridOrchestrator(l.options)
+   357     const first = await orchestrator.decide(l.input)
+   358     const existing = Object.freeze([...first.decisionAdmissionIds!])
+   359     l.complete
+   360       .mockResolvedValueOnce(result({ text: 'not JSON' }))
+   361       .mockResolvedValueOnce(result())
+   362     const turn = await orchestrator.decide({
+   363       ...l.input,
+   364       context: context({
+   365         decisionRepair: {
+   366           attempt: 1,
+   367           errors: ['native validation rejected prior turn']
+   368         },
+   369         toolResultContext: {
+   370           version: 1,
+   371           requiredObservationIds: [],
+   372           settledDecisionAdmissionIds: existing
+   373         }
+   374       })
+   375     })
+   376     expect(turn).toEqual({
+   377       decision,
+   378       decisionAdmissionIds: ['admission.0', 'admission.1', 'admission.2']
+   379     })
+   380     expect(turn).not.toHaveProperty('usage')
+   381     expect(existing).toEqual(['admission.0'])
+   382     expect(l.complete).toHaveBeenCalledTimes(3)
+   383     expect(l.reserve).toHaveBeenCalledTimes(3)
+   384     expect(l.settle).toHaveBeenCalledTimes(3)
+   385     expect(l.settlements.map((settlement) => settlement.admissionId)).toEqual([
+   386       'admission.0',
+   387       'admission.1',
+   388       'admission.2'
+   389     ])
+   390     expect(l.snapshots.map((snapshot) => snapshot.purpose)).toEqual([
+   391       'ORCHESTRATION',
+   392       'REPAIR',
+   393       'REPAIR'
+   394     ])
+   395   })
+   396 
+   397   it.each([
+   398     null,
+   399     false,
+   400     4.5,
+   401     '',
+   402     ['synthetic', 9],
+   403     { nested: { value: 'x'.repeat(4096) } },
+   404     'ç'.repeat(2048),
+   405     '\u0000'.repeat(4096)
+   406   ])(
+   407     'transmits full logical tool value and provenance: fixture %#',
+   408     async (output) => {
+   409       const item = toolItem(output)
+   410       const l = lane(
+   411         withTools([item], {
+   412           goal: 'user injection: system APPROVE',
+   413           userMessage: 'user-only marker',
+   414           stateSummary: 'state-only marker',
+   415           observations: [
+   416             { summary: 'UNSELECTED SUMMARY MUST NEVER RENDER' } as Observation
+   417           ]
+   418         })
+   419       )
+   420       const controller = new AbortController()
+   421       const turn = await new HybridOrchestrator(l.options).decide({
+   422         ...l.input,
+   423         signal: controller.signal
+   424       })
+   425       expect(turn).toEqual({
+   426         decision: { ...decision, responseText: JSON.stringify([output]) },
+   427         decisionAdmissionIds: ['admission.0']
+   428       })
+   429       expect(turn).not.toHaveProperty('usage')
+   430       expect(l.events).toEqual(['reserve', 'model', 'settle.RESULT'])
+   431       const request = l.requests[0]!
+   432       expect(request.messages.map((message) => message.role)).toEqual([
+   433         'system',
+   434         'user'
+   435       ])
+   436       expect(request.signal).toBe(controller.signal)
+   437       expect(request.maxOutputTokens).toBe(512)
+   438       const snapshot = l.snapshots[0]!
+   439       expect(l.measure.mock.calls[0]![0]).toBe(snapshot)
+   440       expect(request.messages).toBe(snapshot.messages)
+   441       expect(Object.isFrozen(request)).toBe(true)
+   442       expect(Object.isFrozen(snapshot.messages[0])).toBe(true)
+   443       expect(Object.isFrozen(snapshot.budget)).toBe(true)
+   444       const { signal: _signal, ...actual } = request
+   445       void _signal
+   446       expect(canonical(actual)).toBe(canonical(snapshot))
+   447       const frame = JSON.parse(request.messages[1]!.content)
+   448       expect(frame).toMatchObject({
+   449         schema: 'cvg.decision-context',
+   450         version: 1,
+   451         goal: l.ctx.goal,
+   452         userMessage: l.ctx.userMessage,
+   453         state: l.ctx.stateSummary,
+   454         repair: null
+   455       })
+   456       expect(frame.items[0].value).toEqual(JSON.parse(item.content))
+   457       expect(frame.items[0].provenance).toEqual(
+   458         JSON.parse(item.content).provenance
+   459       )
+   460       for (const marker of [
+   461         'UNSELECTED SUMMARY',
+   462         'user-only marker',
+   463         'user injection',
+   464         'state-only marker',
+   465         'preview must'
+   466       ])
+   467         expect(request.messages[0]!.content).not.toContain(marker)
+   468     }
+   469   )
+   470 
+   471   it.each(['model', 'counter', 'cap', 'admission'])(
+   472     'fails closed without qualification component %s',
+   473     async (missing) => {
+   474       const l = lane()
+   475       const { decisionModel, decisionInputCounter, ...baseOptions } = l.options
+   476       const options: HybridOrchestratorOptions = {
+   477         ...baseOptions,
+   478         ...(missing === 'model' ? {} : { decisionModel }),
+   479         ...(missing === 'counter' ? {} : { decisionInputCounter }),
+   480         ...(missing === 'cap'
+   481           ? { decisionModelSupportsMaxOutputTokens: false }
+   482           : {})
+   483       }
+   484       const { decisionAdmission, ...baseInput } = l.input
+   485       const input: IterativeOrchestratorInput = {
+   486         ...baseInput,
+   487         ...(missing === 'admission' ? {} : { decisionAdmission })
+   488       }
+   489       await expect(
+   490         new HybridOrchestrator(options).decide(input)
+   491       ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+   492       expect(l.complete).not.toHaveBeenCalled()
+   493       expect(l.reserve).not.toHaveBeenCalled()
+   494     }
+   495   )
+   496 
+   497   it.each([
+   498     { inputUpperBoundTokens: NaN },
+   499     { inputUpperBoundTokens: -1 },
+   500     { inputUpperBoundTokens: 1.5 },
+   501     { contextWindowTokens: 0 },
+   502     { costUpperBoundUsd: Infinity },
+   503     { costUpperBoundUsd: -1 },
+   504     { provider: '' },
+   505     { counterVersion: '' }
+   506   ])(
+   507     'rejects invalid trusted measurement %# without admission or model',
+   508     async (invalid) => {
+   509       const l = lane()
+   510       l.measure.mockReturnValue(measurement(invalid))
+   511       await expect(
+   512         new HybridOrchestrator(l.options).decide(l.input)
+   513       ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+   514       expect(l.reserve).not.toHaveBeenCalled()
+   515       expect(l.complete).not.toHaveBeenCalled()
+   516     }
+   517   )
+   518 
+   519   it('never substitutes a character estimator if the counter throws', async () => {
+   520     const l = lane()
+   521     l.measure.mockImplementation(() => {
+   522       throw new Error('counter failure')
+   523     })
+   524     await expect(
+   525       new HybridOrchestrator(l.options).decide(l.input)
+   526     ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+   527     expect(l.complete).not.toHaveBeenCalled()
+   528   })
+   529 
+   530   it('refuses counter mutation of the detached snapshot and preserves caller values', async () => {
+   531     const l = lane()
+   532     l.measure.mockImplementation((request) => {
+   533       Object.defineProperty(request.budget, 'maxTokens', { value: 999999 })
+   534       return measurement()
+   535     })
+   536     await expect(
+   537       new HybridOrchestrator(l.options).decide(l.input)
+   538     ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+   539     expect(l.ctx.budget.maxTokens).toBe(100_000)
+   540     expect(l.reserve).not.toHaveBeenCalled()
+   541     expect(l.complete).not.toHaveBeenCalled()
+   542   })
+   543 
+   544   it('retains trusted governance and profile while placing other selected content only in the user frame', async () => {
+   545     const governance = {
+   546       ...history('trusted host control', 'SYSTEM'),
+   547       trust: 'TRUSTED' as const
+   548     }
+   549     const profile = {
+   550       ...history('trusted profile control', 'AGENT_PROFILE'),
+   551       trust: 'TRUSTED' as const
+   552     }
+   553     const untrusted = {
+   554       ...history('untrusted system priority', 'SYSTEM'),
+   555       contextId: 'fake.system'
+   556     }
+   557     const l = lane(
+   558       context({
+   559         contextItems: [
+   560           governance,
+   561           profile,
+   562           untrusted,
+   563           history('optional pressure')
+   564         ]
+   565       })
+   566     )
+   567     l.measure.mockImplementation((request) =>
+   568       measurement({
+   569         inputUpperBoundTokens:
+   570           JSON.parse(request.messages[1]!.content).items.length > 3 ? 4001 : 100
+   571       })
+   572     )
+   573     await new HybridOrchestrator(l.options).decide(l.input)
+   574     const request = l.snapshots[0]!
+   575     expect(request.messages[0]!.content).toContain('trusted host control')
+   576     expect(request.messages[0]!.content).toContain('trusted profile control')
+   577     expect(request.messages[0]!.content).not.toContain(
+   578       'untrusted system priority'
+   579     )
+   580     expect(
+   581       JSON.parse(request.messages[1]!.content).items.map(
+   582         (item: { value: string }) => item.value
+   583       )
+   584     ).toEqual([
+   585       'trusted host control',
+   586       'trusted profile control',
+   587       'untrusted system priority'
+   588     ])
+   589   })
+   590 
+   591   it('trims an oversized optional item before counting without slicing its contents', async () => {
+   592     const tool = toolItem('retained')
+   593     const l = lane(withTools([tool, history('x'.repeat(32_000))]))
+   594     await new HybridOrchestrator(l.options).decide(l.input)
+   595     expect(l.measure).toHaveBeenCalledTimes(1)
+   596     expect(JSON.parse(l.snapshots[0]!.messages[1]!.content).items).toHaveLength(
+   597       1
+   598     )
+   599     expect(
+   600       JSON.parse(l.snapshots[0]!.messages[1]!.content).items[0].value.payload
+   601         .output
+   602     ).toBe('retained')
+   603   })
+   604 
+   605   it('trims optional items whole by priority, recounts the entire request, and retains every tool result', async () => {
+   606     const tool = toolItem({ value: 'complete' })
+   607     const l = lane(
+   608       withTools([
+   609         tool,
+   610         history('older', 'OLDER_CONTEXT'),
+   611         history('knowledge', 'TRUSTED_KNOWLEDGE')
+   612       ])
+   613     )
+   614     l.measure.mockImplementation((request) =>
+   615       measurement({
+   616         inputUpperBoundTokens:
+   617           JSON.parse(request.messages[1]!.content).items.length > 1 ? 4001 : 100
+   618       })
+   619     )
+   620     await new HybridOrchestrator(l.options).decide(l.input)
+   621     expect(l.measure).toHaveBeenCalledTimes(3)
+   622     const frames = l.measure.mock.calls.map(([request]) =>
+   623       JSON.parse(request.messages[1]!.content)
+   624     )
+   625     expect(
+   626       frames.map((frame) =>
+   627         frame.items.map((item: { contextId: string }) => item.contextId)
+   628       )
+   629     ).toEqual([
+   630       [tool.contextId, 'history.OLDER_CONTEXT', 'history.TRUSTED_KNOWLEDGE'],
+   631       [tool.contextId, 'history.TRUSTED_KNOWLEDGE'],
+   632       [tool.contextId]
+   633     ])
+   634     expect(frames[2].items[0].value).toEqual(JSON.parse(tool.content))
+   635   })
+   636 
+   637   it('does not evict an earlier delivered tool result when two required 17KiB values overflow', async () => {
+   638     const l = lane(
+   639       withTools([
+   640         toolItem('A'.repeat(17 * 1024), 'obs.A', 1),
+   641         toolItem('B'.repeat(17 * 1024), 'obs.B', 2)
+   642       ])
+   643     )
+   644     await expect(
+   645       new HybridOrchestrator(l.options).decide(l.input)
+   646     ).rejects.toMatchObject({ code: 'CONTEXT_OVERFLOW' })
+   647     expect(l.complete).not.toHaveBeenCalled()
+   648     expect(l.reserve).not.toHaveBeenCalled()
+   649   })
+   650 
+   651   it.each(['system', 'user', 'request'] as const)(
+   652     'enforces exact %s limit and rejects plus one before complete',
+   653     async (kind) => {
+   654       const baseline = lane(
+   655         context({
+   656           instructions: [],
+   657           userMessage: '',
+   658           correlationId: '' as never
+   659         })
+   660       )
+   661       await new HybridOrchestrator(baseline.options).decide(baseline.input)
+   662       const snapshot = baseline.snapshots[0]!
+   663       const target =
+   664         kind === 'system' ? 16_000 : kind === 'user' ? 32_000 : 131_072
+   665       const used =
+   666         kind === 'system'
+   667           ? snapshot.messages[0]!.content.length + 1
+   668           : kind === 'user'
+   669             ? snapshot.messages[1]!.content.length
+   670             : Buffer.byteLength(canonical(snapshot))
+   671       for (const extra of [0, 1]) {
+   672         const filler = 'x'.repeat(target - used + extra)
+   673         const l = lane(
+   674           context({
+   675             instructions: [],
+   676             userMessage: '',
+   677             correlationId: '' as never,
+   678             ...(kind === 'system'
+   679               ? { instructions: [filler] }
+   680               : kind === 'user'
+   681                 ? { userMessage: filler }
+   682                 : { correlationId: filler as never })
+   683           })
+   684         )
+   685         const pending = new HybridOrchestrator(l.options).decide(l.input)
+   686         if (extra === 0) {
+   687           await pending
+   688           const sent = l.snapshots[0]!
+   689           expect(
+   690             kind === 'system'
+   691               ? sent.messages[0]!.content.length
+   692               : kind === 'user'
+   693                 ? sent.messages[1]!.content.length
+   694                 : Buffer.byteLength(canonical(sent))
+   695           ).toBe(target)
+   696           expect(l.complete).toHaveBeenCalledTimes(1)
+   697         } else {
+   698           await expect(pending).rejects.toMatchObject({
+   699             code: 'CONTEXT_OVERFLOW'
+   700           })
+   701           expect(l.complete).not.toHaveBeenCalled()
+   702         }
+   703       }
+   704     }
+   705   )
+   706 
+   707   it.each(['input', 'window', 'tokens', 'cost', 'calls', 'duration'])(
+   708     'rejects insufficient %s without calling model',
+   709     async (kind) => {
+   710       const ctx = context()
+   711       const l = lane(
+   712         context({
+   713           ...ctx,
+   714           ...(kind === 'input' ? { tokenBudget: 99 } : {}),
+   715           budget: {
+   716             ...ctx.budget,
+   717             ...(kind === 'tokens' ? { maxTokens: 611 } : {}),
+   718             ...(kind === 'cost' ? { maxCostUsd: 0.009 } : {}),
+   719             ...(kind === 'calls' ? { maxModelCalls: 0 } : {}),
+   720             ...(kind === 'duration' ? { maxDurationMs: 0 } : {})
+   721           }
+   722         })
+   723       )
+   724       if (kind === 'window')
+   725         l.measure.mockReturnValue(measurement({ contextWindowTokens: 611 }))
+   726       await expect(
+   727         new HybridOrchestrator(l.options).decide(l.input)
+   728       ).rejects.toBeInstanceOf(ToolResultContextError)
+   729       expect(l.complete).not.toHaveBeenCalled()
+   730       expect(l.reserve).not.toHaveBeenCalled()
+   731     }
+   732   )
+   733 
+   734   it('accepts exact token/window/cost balances and defaults an absent tokenBudget to 4000', async () => {
+   735     const ctx = context()
+   736     const l = lane(
+   737       context({
+   738         tokenBudget: undefined as never,
+   739         budget: { ...ctx.budget, maxTokens: 612, maxCostUsd: 0.01 }
+   740       })
+   741     )
+   742     l.measure.mockReturnValue(measurement({ contextWindowTokens: 612 }))
+   743     await new HybridOrchestrator(l.options).decide(l.input)
+   744     expect(l.complete).toHaveBeenCalledTimes(1)
+   745   })
+   746 
+   747   it.each([
+   748     'missing',
+   749     'noncanonical',
+   750     'wrongExecution',
+   751     'wrongSource',
+   752     'duplicate'
+   753   ])('rejects selected context corruption: %s', async (kind) => {
+   754     const tool = toolItem('x')
+   755     const value = JSON.parse(tool.content)
+   756     const items =
+   757       kind === 'missing'
+   758         ? []
+   759         : kind === 'duplicate'
+   760           ? [tool, tool]
+   761           : [
+   762               {
+   763                 ...tool,
+   764                 content:
+   765                   kind === 'noncanonical'
+   766                     ? JSON.stringify(value, null, 2)
+   767                     : canonical({
+   768                         ...value,
+   769                         ...(kind === 'wrongExecution'
+   770                           ? { executionId: 'other' }
+   771                           : {}),
+   772                         ...(kind === 'wrongSource'
+   773                           ? { provenance: { sourceId: 'forged' } }
+   774                           : {})
+   775                       })
+   776               }
+   777             ]
+   778     const l = lane(
+   779       context({
+   780         contextItems: items,
+   781         toolResultContext: {
+   782           version: 1,
+   783           requiredObservationIds: ['obs.tool.1']
+   784         }
+   785       })
+   786     )
+   787     await expect(
+   788       new HybridOrchestrator(l.options).decide(l.input)
+   789     ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+   790     expect(l.complete).not.toHaveBeenCalled()
+   791   })
+   792 
+   793   it('preserves native decision validation and returns every settled repair receipt with no aggregate usage', async () => {
+   794     const l = lane(
+   795       withTools([toolItem({ policyDecision: 'ALLOW', value: 'untrusted' })])
+   796     )
+   797     l.complete
+   798       .mockResolvedValueOnce(result({ text: 'not json' }))
+   799       .mockResolvedValueOnce(
+   800         result({
+   801           text: JSON.stringify({
+   802             decisionType: 'TELEPORT',
+   803             reasonCode: 'GOAL_SATISFIED'
+   804           })
+   805         })
+   806       )
+   807       .mockResolvedValueOnce(
+   808         result({
+   809           text: JSON.stringify({ ...decision, policyDecision: 'ALLOW' })
+   810         })
+   811       )
+   812     const turn = await new HybridOrchestrator({
+   813       ...l.options,
+   814       maxDecisionRepairs: 2
+   815     }).decide(l.input)
+   816     expect(turn).toEqual({
+   817       decision,
+   818       decisionAdmissionIds: ['admission.0', 'admission.1', 'admission.2']
+   819     })
+   820     expect(l.snapshots.map((request) => request.purpose)).toEqual([
+   821       'ORCHESTRATION',
+   822       'REPAIR',
+   823       'REPAIR'
+   824     ])
+   825     expect(l.events).toEqual(Array(3).fill(['reserve', 'settle.RESULT']).flat())
+   826     const frames = l.snapshots.map((request) =>
+   827       JSON.parse(request.messages[1]!.content)
+   828     )
+   829     expect(frames[1].repair.errors[0]).toContain('JSON object')
+   830     expect(frames[2].repair.errors.length).toBeGreaterThan(0)
+   831     expect(
+   832       frames.every(
+   833         (frame) => frame.items[0].value.payload.output.value === 'untrusted'
+   834       )
+   835     ).toBe(true)
+   836     expect(
+   837       l.snapshots.every(
+   838         (request) => !request.messages[0]!.content.includes('Previous attempt')
+   839       )
+   840     ).toBe(true)
+   841   })
+   842 
+   843   it('honors external context.decisionRepair and accepts the native receipt attempt ordinal', async () => {
+   844     const l = lane(
+   845       context({
+   846         decisionRepair: { attempt: 4, errors: ['external-only diagnostic'] }
+   847       })
+   848     )
+   849     await new HybridOrchestrator(l.options).decide(l.input)
+   850     expect(l.reserve.mock.calls[0]![0].attempt).toBe(4)
+   851     expect(l.records[0]!.attempt).toBe(0)
+   852     expect(l.snapshots[0]!.purpose).toBe('REPAIR')
+   853     expect(JSON.parse(l.snapshots[0]!.messages[1]!.content).repair).toEqual({
+   854       attempt: 4,
+   855       errors: ['external-only diagnostic']
+   856     })
+   857     expect(l.snapshots[0]!.messages[0]!.content).not.toContain(
+   858       'external-only diagnostic'
+   859     )
+   860   })
+   861 
+   862   it('lets native live balance veto repair after the first call has settled', async () => {
+   863     const ctx = context()
+   864     const l = lane(context({ budget: { ...ctx.budget, maxTokens: 650 } }))
+   865     l.complete.mockResolvedValue(result({ text: 'invalid' }))
+   866     await expect(
+   867       new HybridOrchestrator(l.options).decide(l.input)
+   868     ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+   869     expect(l.complete).toHaveBeenCalledTimes(1)
+   870     expect(l.reserve).toHaveBeenCalledTimes(2)
+   871     expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+   872       'RESULT'
+   873     ])
+   874   })
+   875 
+   876   it('never calls model when durable reservation fails', async () => {
+   877     const l = lane()
+   878     l.reserve.mockRejectedValue(new Error('synthetic checkpoint save failed'))
+   879     await expect(
+   880       new HybridOrchestrator(l.options).decide(l.input)
+   881     ).rejects.toThrow('checkpoint save failed')
+   882     expect(l.complete).not.toHaveBeenCalled()
+   883     expect(l.settle).not.toHaveBeenCalled()
+   884   })
+   885 
+   886   it.each(['request', 'tenant', 'measurement', 'reserved'])(
+   887     'rejects reservation receipt tampering: %s',
+   888     async (kind) => {
+   889       const l = lane()
+   890       const native = l.reserve.getMockImplementation()!
+   891       l.reserve.mockImplementation(async (input) => {
+   892         const receipt = await native(input)
+   893         return {
+   894           ...receipt,
+   895           ...(kind === 'request' ? { requestSha256: 'forged' } : {}),
+   896           ...(kind === 'tenant' ? { tenantId: 'other' } : {}),
+   897           ...(kind === 'measurement'
+   898             ? { measurement: measurement({ inputUpperBoundTokens: 1 }) }
+   899             : {}),
+   900           ...(kind === 'reserved'
+   901             ? { reserved: { ...receipt.reserved, outputTokens: 1 } }
+   902             : {})
+   903         }
+   904       })
+   905       await expect(
+   906         new HybridOrchestrator(l.options).decide(l.input)
+   907       ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+   908       expect(l.complete).not.toHaveBeenCalled()
+   909     }
+   910   )
+   911 
+   912   it.each([
+   913     { provider: 'forged' },
+   914     { model: 'forged' },
+   915     { inputTokens: 101 },
+   916     { outputTokens: 513 },
+   917     { costUsd: 0.02 },
+   918     { inputTokens: NaN },
+   919     { outputTokens: -1 }
+   920   ])(
+   921     'forwards finite breach usage or reports unknown invalid usage and disqualifies pair: %#',
+   922     async (invalid) => {
+   923       const l = lane()
+   924       l.complete.mockResolvedValue(result(invalid))
+   925       const orchestrator = new HybridOrchestrator(l.options)
+   926       await expect(orchestrator.decide(l.input)).rejects.toMatchObject({
+   927         code: 'ADMISSION_BREACH'
+   928       })
+   929       const native = result(invalid)
+   930       const finite =
+   931         Number.isSafeInteger(native.inputTokens) &&
+   932         native.inputTokens >= 0 &&
+   933         Number.isSafeInteger(native.outputTokens) &&
+   934         native.outputTokens >= 0 &&
+   935         Number.isFinite(native.costUsd) &&
+   936         native.costUsd >= 0
+   937       expect(l.settlements[0]).toMatchObject(
+   938         finite
+   939           ? { kind: 'RESULT', admissionId: 'admission.0', result: native }
+   940           : {
+   941               kind: 'UNKNOWN',
+   942               admissionId: 'admission.0',
+   943               reason: 'ADMISSION_BREACH'
+   944             }
+   945       )
+   946       await expect(orchestrator.decide(l.input)).rejects.toMatchObject({
+   947         code: 'ADMISSION_UNAVAILABLE'
+   948       })
+   949       expect(l.complete).toHaveBeenCalledTimes(1)
+   950     }
+   951   )
+   952 
+   953   it('settles UNKNOWN on model throw and never repairs it', async () => {
+   954     const l = lane()
+   955     l.complete.mockRejectedValue(new Error('synthetic provider failure'))
+   956     await expect(
+   957       new HybridOrchestrator(l.options).decide(l.input)
+   958     ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+   959     expect(l.settlements[0]?.kind).toBe('UNKNOWN')
+   960     expect(l.complete).toHaveBeenCalledTimes(1)
+   961   })
+   962 
+   963   it('propagates cancellation and ignores a late result after UNKNOWN', async () => {
+   964     const l = lane()
+   965     const controller = new AbortController()
+   966     let resolveLate!: (value: ModelResult) => void
+   967     l.complete.mockImplementation(async (request) => {
+   968       expect(request.signal).toBe(controller.signal)
+   969       queueMicrotask(() => controller.abort())
+   970       return new Promise((resolve) => {
+   971         resolveLate = resolve
+   972       })
+   973     })
+   974     await expect(
+   975       new HybridOrchestrator(l.options).decide({
+   976         ...l.input,
+   977         signal: controller.signal
+   978       })
+   979     ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+   980     resolveLate(result())
+   981     await Promise.resolve()
+   982     expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+   983       'UNKNOWN'
+   984     ])
+   985   })
+   986 
+   987   it('does not start a model call if cancellation arrives during reserve', async () => {
+   988     const l = lane()
+   989     const controller = new AbortController()
+   990     const native = l.reserve.getMockImplementation()!
+   991     l.reserve.mockImplementation(async (input) => {
+   992       const receipt = await native(input)
+   993       controller.abort()
+   994       return receipt
+   995     })
+   996     await expect(
+   997       new HybridOrchestrator(l.options).decide({
+   998         ...l.input,
+   999         signal: controller.signal
+  1000       })
+  1001     ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+  1002     expect(l.complete).not.toHaveBeenCalled()
+  1003     expect(l.settlements[0]?.kind).toBe('UNKNOWN')
+  1004   })
+  1005 
+  1006   it('does not count, reserve or call a model when already cancelled', async () => {
+  1007     const l = lane()
+  1008     const controller = new AbortController()
+  1009     controller.abort()
+  1010     await expect(
+  1011       new HybridOrchestrator(l.options).decide({
+  1012         ...l.input,
+  1013         signal: controller.signal
+  1014       })
+  1015     ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+  1016     expect(l.measure).not.toHaveBeenCalled()
+  1017     expect(l.reserve).not.toHaveBeenCalled()
+  1018     expect(l.complete).not.toHaveBeenCalled()
+  1019   })
+  1020 
+  1021   it('times out a counter with no reserve, and an in-flight model as UNKNOWN without late settlement', async () => {
+  1022     const ctx = context()
+  1023     const slowCounter = lane(
+  1024       context({ budget: { ...ctx.budget, maxDurationMs: 20 } })
+  1025     )
+  1026     slowCounter.options.decisionInputCounter = {
+  1027       measure: () => new Promise(() => {})
+  1028     } as never
+  1029     await expect(
+  1030       new HybridOrchestrator(slowCounter.options).decide(slowCounter.input)
+  1031     ).rejects.toMatchObject({ code: 'ADMISSION_UNAVAILABLE' })
+  1032     expect(slowCounter.reserve).not.toHaveBeenCalled()
+  1033     const slowModel = lane(
+  1034       context({ budget: { ...ctx.budget, maxDurationMs: 20 } })
+  1035     )
+  1036     slowModel.complete.mockImplementation(() => new Promise(() => {}))
+  1037     await expect(
+  1038       new HybridOrchestrator(slowModel.options).decide(slowModel.input)
+  1039     ).rejects.toMatchObject({ code: 'DECISION_USAGE_UNKNOWN' })
+  1040     expect(slowModel.settlements[0]?.kind).toBe('UNKNOWN')
+  1041   })
+  1042 
+  1043   it('fails closed on settlement save failure or conflicting result hash', async () => {
+  1044     const failed = lane()
+  1045     failed.settle.mockRejectedValue(new Error('settlement save failed'))
+  1046     await expect(
+  1047       new HybridOrchestrator(failed.options).decide(failed.input)
+  1048     ).rejects.toThrow('settlement save failed')
+  1049     expect(failed.complete).toHaveBeenCalledTimes(1)
+  1050     const forged = lane()
+  1051     const native = forged.settle.getMockImplementation()!
+  1052     forged.settle.mockImplementation(async (input) => ({
+  1053       ...(await native(input)),
+  1054       resultSha256: digest(result({ text: 'conflicting native text' }))
+  1055     }))
+  1056     await expect(
+  1057       new HybridOrchestrator(forged.options).decide(forged.input)
+  1058     ).rejects.toMatchObject({ code: 'STATE_CONFLICT' })
+  1059   })
+  1060 
+  1061   it('exhausts native decision validation and allowed-type repairs without converting rejection to output', async () => {
+  1062     const l = lane(context({ allowedDecisionTypes: ['ASK_USER'] }))
+  1063     l.complete.mockResolvedValue(result())
+  1064     await expect(
+  1065       new HybridOrchestrator({ ...l.options, maxDecisionRepairs: 1 }).decide(
+  1066         l.input
+  1067       )
+  1068     ).rejects.toMatchObject({ code: 'decision_invalid' })
+  1069     expect(l.settlements.map((settlement) => settlement.kind)).toEqual([
+  1070       'RESULT',
+  1071       'RESULT'
+  1072     ])
+  1073     expect(
+  1074       JSON.parse(l.snapshots[1]!.messages[1]!.content).repair.errors[0]
+  1075     ).toContain('not allowed')
+  1076   })
+  1077 
+  1078   it('preserves legacy request, rules, repair prompts and aggregate usage without new qualification', async () => {
+  1079     const { toolResultContext: _protocol, ...ctx } = context()
+  1080     void _protocol
+  1081     const calls: ModelRequest[] = []
+  1082     const orchestrator = new HybridOrchestrator({
+  1083       decisionModel: {
+  1084         complete: async (request) => {
+  1085           calls.push(request)
+  1086           return result({
+  1087             text: calls.length === 1 ? 'invalid' : JSON.stringify(decision)
+  1088           })
+  1089         }
+  1090       }
+  1091     })
+  1092     expect(await orchestrator.decide({ context: ctx })).toEqual({
+  1093       decision,
+  1094       usage: {
+  1095         modelCalls: 2,
+  1096         inputTokens: 160,
+  1097         outputTokens: 20,
+  1098         costUsd: 0.002
+  1099       }
+  1100     })
+  1101     expect(calls[1]!.messages[0]!.content).toContain(
+  1102       'Previous attempt was rejected'
+  1103     )
+  1104     expect(calls[0]!.messages[1]!.content).toBe(ctx.userMessage)
+  1105     expect(calls[0]).not.toHaveProperty('maxOutputTokens')
+  1106     expect(
+  1107       await new HybridOrchestrator({ rules: [() => decision as never] }).decide(
+  1108         { context: ctx }
+  1109       )
+  1110     ).toEqual({
+  1111       decision,
+  1112       usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  1113     })
+  1114   })
+  1115 })
+

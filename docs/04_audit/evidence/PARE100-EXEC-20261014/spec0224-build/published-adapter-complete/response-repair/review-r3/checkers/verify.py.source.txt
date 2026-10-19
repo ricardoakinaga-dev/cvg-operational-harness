@@ -1,0 +1,57 @@
+import json,hashlib,pathlib,sys,re
+
+def canonical(v):return json.dumps(v,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
+def digest(v):return hashlib.sha256(canonical(v)).hexdigest()
+def walk(v):
+ if isinstance(v,dict):
+  if v.get('type')=='TOOL_RESULT':yield v
+  for c in v.values():yield from walk(c)
+ elif isinstance(v,list):
+  for c in v:yield from walk(c)
+def focused(cases):
+ issues=[]
+ def ck(cond,code):
+  if not cond:issues.append(code)
+ for s in cases:
+  tag=s['case'];cp=s['checkpoint'];r=s['result'];legacy=s['scenario'].get('legacy');reqs=s['requests'];results=s['modelResults'];usage=cp['budgetUsage']
+  ck(s['bodies']==1,tag+':native-body')
+  ck(r['modelCalls']==usage['modelCalls']==len(reqs)==len(results),tag+':model-charge')
+  for key in ['inputTokens','outputTokens','costUsd']:ck(r['usage'][key]==usage[key]==sum(x[key]for x in results),tag+':'+key)
+  ck(cp['state'].get('stopReason')==r['stopReason'],tag+':terminal-agreement')
+  if legacy:
+   ck(cp['checkpointVersion']==1 and reqs[0]['messages'][1]['content']==s['input']['userMessage'],tag+':legacy-wire');continue
+  ck(cp['checkpointVersion']==2,tag+':mode')
+  receipts=cp['state']['toolResultContext']['decisionAdmissions'];orch=[q for q in reqs if q['purpose']!='RESPONSE']
+  ck(len(receipts)==len(orch) and all(x['status']=='SETTLED' and x['purpose']!='RESPONSE' for x in receipts),tag+':single-owner')
+  ck(s['measurements']==len(orch),tag+':response-counter')
+  native=[o for o in cp['state']['observations'] if o['type']=='TOOL_RESULT'];ck(len(native)==1,tag+':native-observation')
+  for o in native:
+   v=o['payload'];ck(v['output']==s['output'] and v['outputSha256']==digest(s['output']) and v['outputBytes']==len(canonical(s['output'])),tag+':native-complete')
+  for q in reqs:
+   ms=q['messages'];ck([x['role']for x in ms]==['system','user'],tag+':roles')
+   ck(len(ms[0]['content'].encode('utf-16-le'))//2<=16000 and len(ms[1]['content'].encode('utf-16-le'))//2<=32000 and len(canonical(q))<=131072,tag+':framing-bounds')
+   ck(not re.search(r'UNTRUSTED_(?:TOOL|USER|INTENT)_224',ms[0]['content']),tag+':data-system')
+   frame=json.loads(ms[1]['content']);ck(frame['schema']=='cvg.decision-context'and frame['version']==1,tag+':wire-schema')
+   os=list(walk(frame))
+   # The first ORCH is allowed to precede the first tool; all actual RESPONSE calls follow it.
+   if q['purpose']=='RESPONSE' or os:
+    ck(len(os)==1 and os[0]==native[0],tag+':actual-frame-value')
+    ck(any(i['priority']=='FRESH_TOOL_RESULTS' and i['trust']=='UNTRUSTED' for i in frame['items']),tag+':tool-untrusted')
+  if s['case']in ['RR14','RR15']:
+   replay=s['replay'];ck(replay['result']['stopReason']=='STATE_CONFLICT' and replay['checkpoint']==cp and replay['journals']==s['journals'] and replay['requests']==reqs and replay['bodies']==1,tag+':terminal-replay')
+  if r['stopReason']=='COMPLETED':ck(r['response']=='sha256:'+digest(s['output']),tag+':actual-answer')
+ return issues
+
+def conservation(s):
+ errors=[];rp=s['replay'];requests=rp['requests'];actual=rp['modelResults'];cp=rp['checkpoint'];r=rp['result'];limit=s['input']['budget']['maxModelCalls']
+ if len(requests)>limit:errors.append('actual-calls-exceed-shared-native-limit')
+ if cp['budgetUsage']['modelCalls']<len(requests):errors.append('durable-native-call-charge-lost')
+ if r['stopReason']!='STATE_CONFLICT' and r['modelCalls']<len(requests):errors.append('returned-native-call-charge-lost')
+ for k in ['inputTokens','outputTokens','costUsd']:
+  total=sum(a[k]for a in actual)
+  if cp['budgetUsage'][k]<total:errors.append('durable-'+k+'-lost')
+  if r['stopReason']!='STATE_CONFLICT' and r['usage'][k]<total:errors.append('returned-'+k+'-lost')
+ if rp['journals']!=s['journals']or rp['bodies']!=s['beforeReplay']['bodies']:errors.append('native-effect-changed')
+ return errors
+if __name__=='__main__':
+ mode=sys.argv[1];value=json.loads(pathlib.Path(sys.argv[2]).read_text());issues=focused(value)if mode=='focused'else conservation(value);print(json.dumps({'mode':mode,'input':sys.argv[2],'pass':not issues,'issues':issues},indent=2));sys.exit(bool(issues))

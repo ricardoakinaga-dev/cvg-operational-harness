@@ -1,0 +1,12 @@
+import pathlib,json,subprocess,time,os,sys
+w=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-th06-candidate');out=pathlib.Path('/tmp/cvg-claude100-exec-20261017/foundation-th06-recovery');tag=sys.argv[1];report=out/tag;report.mkdir(exist_ok=True)
+for p in ['home','tmp','cache','home/config','home/data','home/state']: (report/p).mkdir(exist_ok=True,parents=True)
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','HOME':str(report/'home'),'TMPDIR':str(report/'tmp'),'TMP':str(report/'tmp'),'TEMP':str(report/'tmp'),'XDG_CONFIG_HOME':str(report/'home/config'),'XDG_CACHE_HOME':str(report/'cache'),'XDG_DATA_HOME':str(report/'home/data'),'XDG_STATE_HOME':str(report/'home/state'),'LANG':'C.UTF-8','TZ':'UTC','NODE_ENV':'test','CI':'1','NO_COLOR':'1'}
+config={'root':str(w),'cacheDir':str(report/'cache/vite'),'test':{'environment':'node','pool':'threads','maxWorkers':1,'fileParallelism':False,'include':['packages/persistence/src/__tests__/complete-process-support.test.ts','apps/worker/src/__tests__/pare217-process-lifecycle.test.ts']}}
+(report/'config.mjs').write_text('export default '+json.dumps(config)+'\n')
+argv=['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node',str(w/'node_modules/vitest/vitest.mjs'),'run','--config',str(report/'config.mjs'),'--configLoader','native']
+t=time.monotonic()
+with (report/'stdout.log').open('wb') as so,(report/'stderr.log').open('wb') as se:
+ try: code=subprocess.run(argv,cwd=w,env=env,stdout=so,stderr=se,timeout=100).returncode
+ except subprocess.TimeoutExpired: code='TIMEOUT'
+r={'argv':argv,'cwd':str(w),'env':env,'exit':code,'seconds':time.monotonic()-t};(report/'command.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r));print((report/'stdout.log').read_text()[-2200:]);print((report/'stderr.log').read_text()[-1200:]);sys.exit(0 if code==0 else 1)

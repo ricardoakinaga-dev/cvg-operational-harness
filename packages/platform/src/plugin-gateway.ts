@@ -31,10 +31,14 @@ import type { PluginHookHandler } from './event-bus.ts'
 import {
   blockedResult,
   createSafeExecutionInput,
-  isPlainRecord,
-  normalizePluginHandlerResult,
-  parseToolInput
+  isPlainRecord
 } from './tool-invocation-boundary.ts'
+import {
+  prepareCapabilityCommand,
+  executeAuthorizedPreparedCommand,
+  propagatePluginAttestation,
+  registerGatewayCore
+} from './plugin-execution-core.ts'
 
 export interface PluginHandlerContext {
   tenantId: TenantId
@@ -345,6 +349,28 @@ export class CapabilityGateway {
     private readonly options: CapabilityGatewayOptions = {}
   ) {
     this.now = options.now ?? (() => new Date())
+    registerGatewayCore(this, {
+      options,
+      now: this.now,
+      parseApproval: (value) => {
+        try {
+          const result = CapabilityApprovalSchema.safeParse(value)
+          return result.success ? result.data : null
+        } catch {
+          return null
+        }
+      },
+      catalog: (config, intent) =>
+        this.registry.listPlannedTools(config, intent),
+      resolve: (config, name) => {
+        const result = this.resolveBoundTool(config, name)
+        return result.status === 'resolved' ? result : null
+      },
+      authorize: (input, permission) =>
+        CapabilityActorSchema.safeParse(input.actor).success
+          ? this.authorizeActor(input, permission)
+          : Promise.resolve(null)
+    })
   }
 
   planTools(config: AgentConfig, intent: string): PlannedCapabilityTool[] {
@@ -457,19 +483,16 @@ export class CapabilityGateway {
         return this.blocked(safeInput, correlationId, resolved.reason)
       }
 
-      const parsedToolInput = parseToolInput(
-        resolved.inputValidator,
-        input.input
+      const command = prepareCapabilityCommand(
+        { ...safeInput, input: input.input },
+        resolved
       )
-      if (!parsedToolInput.success) {
+      if (!command) {
         return this.blocked(safeInput, correlationId, 'tool_input_invalid')
       }
 
-      const executionInput = {
-        ...safeInput,
-        input: parsedToolInput.data
-      }
-      const { tool, handler } = resolved
+      const executionInput = command.execution
+      const { tool } = resolved
       if (!this.options.actorAuthorizer) {
         return this.blocked(
           executionInput,
@@ -516,30 +539,10 @@ export class CapabilityGateway {
       }
 
       try {
-        const rawResult = await handler(executionInput.input, {
-          tenantId: executionInput.tenantId,
-          agentId: executionInput.agentId,
-          versionId: executionInput.versionId,
-          toolName: executionInput.toolName,
-          dryRun: executionInput.dryRun
-        })
-        const result = normalizePluginHandlerResult(
-          rawResult,
-          resolved.outputValidator
+        const result = await executeAuthorizedPreparedCommand(
+          command,
+          () => true
         )
-        if (!result) {
-          const audited = await this.auditSafely(
-            executionInput,
-            correlationId,
-            'failed',
-            undefined
-          )
-          return {
-            status: 'failed',
-            reason: audited ? 'tool_result_invalid' : 'audit_unavailable',
-            correlationId
-          }
-        }
         const audited = await this.auditSafely(
           executionInput,
           correlationId,
@@ -852,13 +855,13 @@ function normalizeRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
       return [name, handler]
     })
   )
-  return {
+  return propagatePluginAttestation(plugin, {
     manifest,
     handlers,
     inputValidators: { ...inputValidators },
     outputValidators: { ...outputValidators },
     hooks
-  }
+  })
 }
 
 function safeParseAgentConfig(value: unknown): AgentConfig | null {
@@ -871,7 +874,7 @@ function safeParseAgentConfig(value: unknown): AgentConfig | null {
 }
 
 function cloneRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
-  return {
+  return propagatePluginAttestation(plugin, {
     manifest: {
       ...plugin.manifest,
       capabilities: [...plugin.manifest.capabilities],
@@ -888,7 +891,7 @@ function cloneRegisteredPlugin(plugin: RegisteredPlugin): RegisteredPlugin {
       ? { outputValidators: { ...plugin.outputValidators } }
       : {}),
     ...(plugin.hooks ? { hooks: { ...plugin.hooks } } : {})
-  }
+  })
 }
 
 function cloneTool(tool: PluginTool): PluginTool {

@@ -1,0 +1,11 @@
+import subprocess, pathlib, json, sys, datetime
+label=sys.argv[1]
+command=sys.argv[2:]
+if not label.replace('-','').isalnum(): raise ValueError('label')
+r=subprocess.run(command,cwd=str(pathlib.Path.cwd()),capture_output=True)
+pathlib.Path(label+'.stdout').write_bytes(r.stdout)
+pathlib.Path(label+'.stderr').write_bytes(r.stderr)
+pathlib.Path(label+'.command.json').write_text(json.dumps({'argv':command,'cwd':str(pathlib.Path.cwd()),'exit_code':r.returncode,'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'stdout':label+'.stdout','stderr':label+'.stderr'},indent=2)+'\n')
+sys.stdout.buffer.write(r.stdout)
+sys.stderr.buffer.write(r.stderr)
+raise SystemExit(r.returncode)

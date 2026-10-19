@@ -1,0 +1,13 @@
+#!/bin/bash
+set -eu
+W=/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+B=/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/postgres-runtime
+NODE=/home/ricardo/.nvm/versions/node/v22.23.2/bin/node
+# Lead must claim/restart ONLY container224 first and update B/resource.json
+# with its inspected loopback port (Docker may reassign the ephemeral port).
+# Schema pare224_runtime is already provisioned. Each test uses fresh executions.
+cd "$W"
+export SPEC0224_PUBLIC_PG_REQUIRED=1
+export SPEC0224_PUBLIC_PG_RESOURCE="$B/resource.json"
+export SPEC0224_PUBLIC_CHILD_CONFIG="$B/vitest.config.mts"
+"$NODE" node_modules/vitest/vitest.mjs run --config "$B/vitest.config.mts" packages/persistence/src/__tests__/complete-tool-public-restart.test.ts

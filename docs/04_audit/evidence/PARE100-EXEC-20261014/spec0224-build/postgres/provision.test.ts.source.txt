@@ -1,0 +1,23 @@
+import { readFile } from 'node:fs/promises'
+import { Pool } from '../../worktree/node_modules/pg/lib/index.js'
+import { it, expect } from '../../worktree/node_modules/vitest/dist/index.js'
+import { runPostgresMigrations } from '../../worktree/packages/persistence/src/postgres-migrations.ts'
+
+it('provisions only the empty exclusively claimed synthetic schema through existing migrations', async () => {
+  const r = JSON.parse(await readFile(process.env.SPEC0224_PG_RESOURCE!, 'utf8'))
+  expect(r.synthetic).toBe(true)
+  expect(r.exclusiveClaim).toBe('SPEC0224-PG-TR05-TR06')
+  const pool = new Pool({ connectionString: r.test_database_url })
+  const client = await pool.connect()
+  try {
+    const empty = await client.query('SELECT 1 FROM pg_namespace WHERE nspname=$1', [r.schemaName])
+    expect(empty.rowCount).toBe(0)
+    await runPostgresMigrations(client, { schemaName: r.schemaName })
+    const applied = await client.query(`SELECT version,checksum FROM ${r.schemaName}.schema_migrations ORDER BY version`)
+    console.log(JSON.stringify({ schemaName: r.schemaName, applied: applied.rows }))
+    expect(applied.rows.length).toBeGreaterThan(0)
+  } finally {
+    client.release()
+    await pool.end()
+  }
+})

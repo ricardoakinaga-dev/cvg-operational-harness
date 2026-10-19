@@ -1,0 +1,90 @@
+**REJECT — SPEC0224 local BUILD R1 / fresh independent I1 code review**
+
+The largest defect is a broken recovery boundary after an acknowledged complete tool result. Four independently reproduced contract failures prevent scoped intermediate acceptance. The original 61 source files remain frozen. This review grants no broader program, 36-card, parity or release approval.
+
+**I1-R1-001 — HIGH / P1: A fully persisted tool result cannot resume across the post-result checkpoint boundary (TR06)**
+
+Anchor: `packages/harness/src/iterative-dispatch.ts:465`; related: `packages/harness/src/iterative-dispatch.ts:714`, `packages/harness/src/iterative-dispatch.ts:723`, `packages/harness/src/iterative-runtime.ts:765`, `packages/harness/src/iterative-runtime.ts:983`.
+
+Own public factory reproduction saved a valid V2 checkpoint with stepNumber=0, pendingStepNumber=1 and a COMPLETE 4096-byte result; the native step ledger already had step 1 SUCCEEDED. Subsequent writes were refused to preserve that boundary, then the factory/runtime was recreated over the same memory store and journal. Resume returned INTERNAL_FAILURE: Step transition SUCCEEDED -> RUNNING is not allowed. One body and one model call total; no replay occurred, but the saved result could not reach the next decision.
+
+The missing-result recovery guard only handles SUCCEEDED without an observation. When the full observation exists, pendingDecision is dispatched again and beforeDispatch unconditionally records RUNNING over the already successful native step.
+
+Required behavior: SPEC0224 sections 2, 3.2 and TR06: acknowledged complete results survive recreation and resume without another tool body.
+
+Reproduction: repro.test.ts test 'TR06 resumes a durably saved full result after recreating the public runtime'; run argv in repro-r2.command.json. Deterministic factory/runtime recreation in one process using real in-memory stores and synthetic ports; not an independent PostgreSQL process-restart run. The later public PG addendum fails before this saved-result boundary, so it does not independently corroborate this exact failure.
+
+**I1-R1-002 — MEDIUM / P2: User resume still slices away mandatory tool results at the 50-observation boundary (TR08)**
+
+Anchor: `packages/harness/src/iterative-dispatch.ts:241`; related: `packages/harness/src/complete-checkpoint.ts:701`.
+
+Own factory reproduction ran 50 rules-only synthetic tools, then paused for ASK_USER with exactly 50 retained TOOL_RESULT observations. Supplying the user answer produced INSUFFICIENT_EVIDENCE and 'Value is not strict JSON'. The durable checkpoint stayed at NEEDS_USER_INPUT with all 50 results; no model/body ran during resume.
+
+applyResume appends USER_MESSAGE and applies slice(-MAX_CHECKPOINT_OBSERVATIONS) unconditionally, evicting the first tool result in live state. CAS retention validation then attempts to canonicalize the missing old observation and fails. Durable integrity prevents silent loss, but valid user resumption becomes unusable.
+
+Required behavior: SPEC0224 section 3.2 lines 172–181 and TR08: retain every TOOL_RESULT; optional observations may leave whole, tools may not be removed by slice50.
+
+Reproduction: repro.test.ts test 'TR08 user resume preserves all 50 mandatory tool observations'; run argv in repro-r2.command.json. Actual public factory, rules, native dispatch and memory CAS; no service.
+
+**I1-R1-003 — MEDIUM / P2: The JSON depth limit counts the root at zero instead of the approved depth one (TR02)**
+
+Anchor: `packages/contracts/src/complete-json.ts:136`; related: `packages/contracts/src/complete-json.ts:79`, `packages/contracts/src/__tests__/complete-json.test.ts:70`.
+
+Own public factory returned COMPLETED for 32 nested arrays around null: the leaf has approved depth 33. The observation was COMPLETE and two model calls occurred, whereas RESULT_COMPLEXITY/UNAVAILABLE and no second model call were required.
+
+visit(value, 0) combined with depth > maxDepth accepts one extra level. The shipped unit test explicitly asserts 'root-at-zero' semantics and passes, so the green test encodes a different requirement.
+
+Required behavior: SPEC0224 section 3 table line 82 explicitly counts the root at depth 1, maximum depth 32; TR02 requires rejecting depth 33.
+
+Reproduction: repro.test.ts test 'TR02 root depth 1: rejects a 33-level result before the next model'; run argv in repro-r2.command.json. Public complete-tool-v1 path, not just a serializer mock.
+
+**I1-R1-004 — MEDIUM / P2: Native settlement accepts a receipt belonging to another decision step (TR05)**
+
+Anchor: `packages/harness/src/complete-decision-admission.ts:313`; related: `packages/harness/src/complete-decision-admission.ts:320`.
+
+Own direct native-port reproduction reserved and settled a step-1 receipt, confirmed same-port idempotency, then supplied the same settlement to a step-2 CompleteDecisionAdmission over the same run. It returned the step-1 SETTLED receipt instead of STATE_CONFLICT.
+
+settleNow checks tenant/execution/request digest, but never record.stepNumber against options.stepNumber before its SETTLED fast return.
+
+Required behavior: SPEC0224 sections 3.2 and 5.2: idempotent settlement is allowed for the same binding; a receipt from another step conflicts.
+
+Reproduction: repro.test.ts test 'TR05 same-step settlement is idempotent but another step must reject the binding'; run argv in repro-r2.command.json. Direct native admission port with synthetic run and no-op persistence, not the public factory. This repro does not demonstrate double billing or an unauthorized effect; it demonstrates the missing step-binding rejection.
+
+**Criterion evidence; approved targets unchanged**
+
+| Criterion | Status | Established evidence | Remaining gap |
+| --- | --- | --- | --- |
+| TR01 | PARTIAL | Independent rerun of actual public capability factory and HybridOrchestrator passed ASCII4096, Unicode and escapes; the three existing pinned-reference subprocess comparisons also passed. Own positive control passed ten full JSON-value cases, including 4096 NULs and a NUL key, comparing canonical bytes. | Public sealed Unicode fixture is 2100 UTF-8 bytes, not Unicode4096bytes. Unicode4096 exists at orchestrator level. The newly supplied public PG Unicode4096bytes attempt fails before complete-result commit. All original three historical fixtures and every required provenance/final-value control are not established as a complete public matrix. |
+| TR02 | FAIL | I1-R1-003 reproduces depth33 accepted as COMPLETE through the public factory. Existing strict JSON tests pass other invalid-value, byte and node checks; own public JSON positive control passes. | Passing tests cannot replace the approved root-at-one depth convention. Not every invalid raw-result case is exercised on the public path; getter/-0 are covered there, others largely at serializer level. |
+| TR03 | PARTIAL | Existing rerun verifies immutable request/snapshot identity, whole optional trimming, oversized messages/request, counter/window/budget vetoes and retention of delivered A17KiB plus B17KiB with combined-request refusal. | The entire exact-limit/plus-one public factory matrix for system/user/catalog/history/repair and all native live-budget interactions is not established by these serializer/orchestrator tests. |
+| TR04 | PARTIAL | Public custom-context summary tamper is rejected before the next model. Code compares native immutable context fields/items; existing orchestrator tests keep untrusted values out of system controls. | Full public mutation matrix for output/hash/IDs/cursor/required-set/payload and forged approval text through all native controls remains unproven. Synthetic ports prove no real-LLM semantic injection resistance. |
+| TR05 | FAIL | I1-R1-004 violates step binding. Existing public tests pass presave veto, throw/overuse UNKNOWN retention and no replay. Original PG proof shows store-level initial/reservation snapshot CAS races. New public PG addendum has one passing initial-CAS public two-process race test, which asserts one actual model call and one SETTLED receipt. | Separate native public reservation race, lease/fence loss, stale-token/settlement combinations and all cross-tenant/late/save-failure variants are not fully proved. Bound fence is NOT_RUN. The new passing race is raw supplied evidence, not independently rerun. |
+| TR06 | FAIL | I1-R1-001 fails memory-store public runtime recreation after a complete result was acknowledged. Existing memory codec tests and original four PG store/process tests pass their narrow round trips. New public PG addendum: 4 tests, 1 passed, 3 failed; all restart fixtures exit TOOL_FAILURE/unknown_effect before successful full TOOL_RESULT CAS. | Successful full public PostgreSQL checkpoint/restart/value/usage/native-settlement comparison is NOT_RUN because the attempted tests never reach the required commit boundary. Original killed-process proof is store-only and persists synthetic receipts, with no runtime dispatch. New PG journal dependency is outside the original frozen 61; root cause of that early PG failure is not established here. Old-reader and all legacy/custom-store/version corruption cases are not a complete matrix. |
+| TR07 | PARTIAL | Existing public tests pass synthetic WRITE overflow and post-effect save-loss no-replay controls; the runtime reports no objective completion. Own recreation failure executes one body only. | Full durable PostgreSQL/native-journal failure/recovery coverage and exact operationKey/settlement comparisons across every failure boundary are absent. New public PG unknown_effect cannot be reclassified as confirmed success. |
+| TR08 | FAIL | I1-R1-002 reproduces tool eviction from live state on user resume at capacity50. Existing public rules-only test refuses the 51st tool before its body and retains all 50 results. Earlier delivered A is retained with B. | Prospective near-8MiB public execution/metadata-bound coverage remains partial. Also, complete-checkpoint.test.ts:333 intentionally creates a 60-TOOL_RESULT checkpoint that the executed memory codec/CAS test accepts; complete-checkpoint.ts:331 has no maximum-observation count check. Thus store shape enforcement does not establish the approved max50 checkpoint cap, even though normal tool dispatch preflights it. |
+| TR09 | FAIL | Existing legacy orchestrator hashing/save/repair/aggregate-usage tests pass narrowly. Supplied full core units addendum exits1: 443 files, 4564 tests, 55 failed, 4235 passed, 274 skipped. Eleven dispatch tests fail at iterative-dispatch.ts:353 because ctx.preflightCompleteTool is missing. Other failures: 32 compiled-kernel qualification, 11 SDK qualification, 1 dependency-direction check. | No green full regression gate. Raw failures are retained without claiming all were introduced by this candidate; no baseline/history was inspected. Full single_pass/custom ports/SDK/worker and direct governed ModelInputSchema compatibility tests are not established. Pins/checkers were not refreshed. |
+| TR10 | PARTIAL | Three actual existing differential subprocess tests passed using the pinned installed reference artifact and synthetic provider: ASCII4096, Unicode and escapes. Child argv/cwd/exit/stdout/stderr are retained in focused-r4.requests.json. | Full new-case and admission-negative differential matrix, original red witness preservation and all original parity criteria are not established here. No full parity/36-card/release acceptance. |
+
+**Verification and limits**
+
+The independent focused run passed 118 tests in four files. Own additional run had one passing positive-control test (ten public JSON-value cases) and four failing requirement assertions. Commands, streams, actual requests and observations are in `focused-r4.command.json`, `focused-r4.requests.json`, `repro-r2.command.json`, `repro-r2.observations.json`, `repro.summary.json` and `rawlogs/`. Earlier private configuration/evidence-writer failures are retained and are not counted as code passes.
+
+The separately sealed core-unit addendum reports exit1, 55 failed / 4235 passed / 274 skipped tests across 443 files. It has 32 kernel qualification failures, 11 SDK qualification failures, 1 dependency-direction failure and 11 dispatch failures. No baseline was inspected; causality of every failure is not established. No pins or checkers were changed.
+
+The later public PG addendum reports 1 passed / 3 failed tests. The passing test covers one actual model call in an initial CAS race. All three restart fixtures fail with native TOOL_FAILURE/unknown_effect before successful full TOOL_RESULT CAS. This is different from the independently reproduced post-commit memory recovery defect. Successful full public PG restart, bound fence and separate public reservation race remain unproved; successful restarted delivery is NOT_RUN. The new test SHA is `a314387da5eae67526548c0a37d97de39e280f9185259da4bbcc10a082ce5a0d`; it and its journal dependency were outside the original 61-source seal. Only its supplied test and raw stdout/stderr were inspected. No additional evidence directory or service was accessed.
+
+Certify, E2E, SBOM, licenses and bound-fence gates are NOT_RUN in this review. Supplied typecheck/lint exit0 is narrow raw evidence, not independent whole-candidate qualification. Original PG process proof is store-only with synthetic persisted receipts, not public runtime restart.
+
+**Independence and integrity**
+
+Fresh reviewer read the manifest only to enumerate/hash sealed files, then authenticated 61 live files, 61 copies, manifest and 9 raw proofs before reading semantic source content. No descendants or model/effort override. No history, ledgers, coordination/AGENTS commentary, .agent/.gauntlet files, builder handoffs/reports or previous reviews read. Findings derive from sealed code, actual existing-test execution and independently authored synthetic reproductions. Later evidence was separately hashed/copied before semantic inspection.
+
+Node v22.23.2, installed W/node_modules, private Vitest config/cache/TMPDIR and CWD under review-r1. Source/test directories were read-only symlink inputs; no source/test modifications. Aliases derived from packet vitest.config.mts; private TS transform config was needed for the symlink root. Existing reference subprocess tests ran only as explicitly allowed.
+
+Focused runs also load installed/transitive runtime dependencies beyond the 61 sealed source inputs; those are not certified by the candidate manifest. Own public restart reproduction recreates the runtime/factory in-process, not an OS process. Raw supplied PG and global unit observations were inspected, not independently rerun.
+
+The first manifest hash matched `7449a3f6509d38d6c48f7223124c55dcd082104c6653902c1c50b71949119f43`; approved SPEC matched `f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea`. Pre/post records cover all 132 original inputs. Unit-run and public-PG addenda have independent pre/post hash+size records. Finalization fails on any mutation. Own nonempty regular artifacts are indexed by `own-artifacts-manifest.json`; symlinks are inputs, not owned artifacts. `commands.json` and `commands-tail.json` retain command argv/CWD/exit and returned combined streams; nested test commands retain separate nonempty streams or explicit EMPTY omissions. Existing reference child commands and streams are embedded in the request evidence.
+
+Resource-bounded review completed at Lead request with established material failures and criterion gaps. No further proof expansion, source fixes, pin changes or global certification attempted.
+
+Final post-sentinel: all 144 checks unchanged.

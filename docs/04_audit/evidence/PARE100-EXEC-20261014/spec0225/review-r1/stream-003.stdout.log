@@ -1,0 +1,1060 @@
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/contracts/src/complete-json.ts
+1: import type {
+2:   CompleteJsonErrorCode,
+3:   CompleteJsonLimits
+4: } from './complete-tool-context.ts'
+5: export type { CompleteJsonErrorCode } from './complete-tool-context.ts'
+6: 
+7: export class CompleteJsonError extends Error {
+8:   public constructor(
+9:     public readonly code: CompleteJsonErrorCode,
+10:     message: string
+11:   ) {
+12:     super(message)
+13:     this.name = 'CompleteJsonError'
+14:   }
+15: }
+16: 
+17: /** Strict JSON snapshot. No property reads, hooks, coercion or Unicode normalization. */
+18: export function canonicalizeCompleteJson(
+19:   value: unknown,
+20:   limits: CompleteJsonLimits = {}
+21: ): string {
+22:   const maxBytes = limits.maxBytes ?? 32768
+23:   const maxDepth = limits.maxDepth ?? 32
+24:   const maxNodes = limits.maxNodes ?? 10000
+25:   for (const limit of [maxBytes, maxDepth, maxNodes]) {
+26:     if (!Number.isSafeInteger(limit) || limit < 0)
+27:       throw new CompleteJsonError('RESULT_COMPLEXITY', 'Invalid JSON limit')
+28:   }
+29:   const chunks: string[] = []
+30:   let bytes = 0,
+31:     nodes = 0
+32:   const ancestors = new Set<object>()
+33:   const invalid = (): never => {
+34:     throw new CompleteJsonError('INVALID_JSON', 'Value is not strict JSON')
+35:   }
+36:   const complexity = (): never => {
+37:     throw new CompleteJsonError(
+38:       'RESULT_COMPLEXITY',
+39:       'JSON complexity limit exceeded'
+40:     )
+41:   }
+42:   const append = (part: string): void => {
+43:     bytes += Buffer.byteLength(part, 'utf8')
+44:     if (bytes > maxBytes)
+45:       throw new CompleteJsonError(
+46:         'RESULT_TOO_LARGE',
+47:         'JSON byte limit exceeded'
+48:       )
+49:     chunks.push(part)
+50:   }
+51:   const string = (text: string): void => {
+52:     // UTF-16 units are a lower bound on escaped UTF-8 size, before scanning/allocation.
+53:     if (text.length + 2 > maxBytes - bytes)
+54:       throw new CompleteJsonError(
+55:         'RESULT_TOO_LARGE',
+56:         'JSON byte limit exceeded'
+57:       )
+58:     let encodedBytes = 2
+59:     for (let i = 0; i < text.length; i++) {
+60:       const unit = text.charCodeAt(i)
+61:       if (unit >= 0xd800 && unit <= 0xdbff) {
+62:         const next = text.charCodeAt(++i)
+63:         if (!(next >= 0xdc00 && next <= 0xdfff)) invalid()
+64:         encodedBytes += 4
+65:       } else if (unit >= 0xdc00 && unit <= 0xdfff) invalid()
+66:       else if (unit === 34 || unit === 92 || [8, 9, 10, 12, 13].includes(unit))
+67:         encodedBytes += 2
+68:       else if (unit < 32) encodedBytes += 6
+69:       else encodedBytes += unit < 128 ? 1 : unit < 2048 ? 2 : 3
+70:       if (encodedBytes > maxBytes - bytes)
+71:         throw new CompleteJsonError(
+72:           'RESULT_TOO_LARGE',
+73:           'JSON byte limit exceeded'
+74:         )
+75:     }
+76:     append(JSON.stringify(text))
+77:   }
+78:   const visit = (input: unknown, depth: number): void => {
+79:     if (++nodes > maxNodes || depth > maxDepth) complexity()
+80:     if (input === null) {
+81:       append('null')
+82:       return
+83:     }
+84:     switch (typeof input) {
+85:       case 'string':
+86:         string(input)
+87:         return
+88:       case 'boolean':
+89:         append(input ? 'true' : 'false')
+90:         return
+91:       case 'number':
+92:         if (!Number.isFinite(input) || Object.is(input, -0)) invalid()
+93:         append(JSON.stringify(input))
+94:         return
+95:       case 'object':
+96:         break
+97:       default:
+98:         invalid()
+99:     }
+100:     const object = input as object
+101:     if (ancestors.has(object)) invalid()
+102:     const array = Array.isArray(object)
+103:     const prototype = Object.getPrototypeOf(object)
+104:     if (
+105:       array
+106:         ? prototype !== Array.prototype
+107:         : prototype !== Object.prototype && prototype !== null
+108:     )
+109:       invalid()
+110:     const length = array
+111:       ? (Object.getOwnPropertyDescriptor(object, 'length')?.value as number)
+112:       : 0
+113:     if (array && length > maxNodes - nodes) complexity()
+114:     const keys = Reflect.ownKeys(object)
+115:     if (keys.some((key) => typeof key !== 'string')) invalid()
+116:     if (array && keys.length !== length + 1) invalid()
+117:     if (!array && keys.length > maxNodes - nodes) complexity()
+118:     ancestors.add(object)
+119:     append(array ? '[' : '{')
+120:     const names = array ? null : (keys as string[]).sort()
+121:     const count = array ? length : names!.length
+122:     for (let i = 0; i < count; i++) {
+123:       const name = array ? String(i) : names![i]!
+124:       const descriptor = Object.getOwnPropertyDescriptor(object, name)
+125:       if (!descriptor || !('value' in descriptor)) invalid()
+126:       if (i) append(',')
+127:       if (!array) {
+128:         string(name)
+129:         append(':')
+130:       }
+131:       visit(descriptor!.value, depth + 1)
+132:     }
+133:     append(array ? ']' : '}')
+134:     ancestors.delete(object)
+135:   }
+136:   visit(value, 1)
+137:   return chunks.join('')
+138: }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/harness/src/effect-journal.ts
+1: import { createHash, randomUUID } from 'node:crypto'
+2: import type {
+3:   ToolDefinition,
+4:   ToolExecutionContext,
+5:   ToolRegistry,
+6:   ToolResult
+7: } from '@cvg/harness-contracts'
+8: 
+9: export type EffectJournalState =
+10:   | 'RESERVED'
+11:   | 'EFFECT_STARTED'
+12:   | 'CONFIRMED'
+13:   | 'FAILED'
+14:   | 'UNCERTAIN'
+15: 
+16: export interface EffectJournalRecord {
+17:   readonly tenantId: string
+18:   readonly operationKey: string
+19:   readonly proposalHash: string
+20:   readonly state: EffectJournalState
+21:   readonly attemptId: string
+22:   readonly result?: unknown
+23:   readonly error?: string
+24:   readonly createdAt: string
+25:   readonly updatedAt: string
+26: }
+27: 
+28: export interface EffectJournal {
+29:   reserve(input: {
+30:     tenantId: string
+31:     operationKey: string
+32:     proposalHash: string
+33:     attemptId: string
+34:   }): Promise<EffectJournalRecord>
+35:   markStarted(input: {
+36:     tenantId: string
+37:     operationKey: string
+38:     attemptId: string
+39:   }): Promise<EffectJournalRecord>
+40:   confirm(input: {
+41:     tenantId: string
+42:     operationKey: string
+43:     attemptId: string
+44:     result: unknown
+45:   }): Promise<EffectJournalRecord>
+46:   fail(input: {
+47:     tenantId: string
+48:     operationKey: string
+49:     attemptId: string
+50:     error: string
+51:   }): Promise<EffectJournalRecord>
+52:   markUncertain(input: {
+53:     tenantId: string
+54:     operationKey: string
+55:     attemptId: string
+56:     reason: string
+57:   }): Promise<EffectJournalRecord>
+58:   get(
+59:     tenantId: string,
+60:     operationKey: string
+61:   ): Promise<EffectJournalRecord | null>
+62: }
+63: 
+64: export class EffectJournalError extends Error {
+65:   public constructor(message: string) {
+66:     super(message)
+67:     this.name = 'EffectJournalError'
+68:   }
+69: }
+70: 
+71: function key(tenantId: string, operationKey: string): string {
+72:   return `${tenantId}\u0000${operationKey}`
+73: }
+74: 
+75: function now(): string {
+76:   return new Date().toISOString()
+77: }
+78: 
+79: function bounded(value: string, label: string): string {
+80:   if (typeof value !== 'string' || value.trim().length === 0) {
+81:     throw new EffectJournalError(`${label} is required`)
+82:   }
+83:   if (value.length > 500) throw new EffectJournalError(`${label} is too long`)
+84:   return value.trim()
+85: }
+86: 
+87: export type EffectAttemptIdFactory = () => string
+88: 
+89: /**
+90:  * Generates the fencing identity for one effect attempt. The factory seam is
+91:  * intentionally explicit so synthetic tests can be deterministic; production
+92:  * callers use the node:crypto default and never a weak fallback.
+93:  */
+94: export function createEffectAttemptId(
+95:   factory: EffectAttemptIdFactory = randomUUID
+96: ): string {
+97:   const token = bounded(factory(), 'attemptId token')
+98:   return bounded(`attempt_${token}`, 'attemptId')
+99: }
+100: 
+101: function clone<T>(value: T): T {
+102:   return structuredClone(value)
+103: }
+104: 
+105: /** Process-local journal for synthetic crash/replay proofs. */
+106: export class InMemoryEffectJournal implements EffectJournal {
+107:   private readonly records = new Map<string, EffectJournalRecord>()
+108: 
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+156: 
+157:   public markStarted(input: {
+158:     tenantId: string
+159:     operationKey: string
+160:     attemptId: string
+161:   }): Promise<EffectJournalRecord> {
+162:     return this.transition(input, 'EFFECT_STARTED')
+163:   }
+164: 
+165:   public confirm(input: {
+166:     tenantId: string
+167:     operationKey: string
+168:     attemptId: string
+169:     result: unknown
+170:   }): Promise<EffectJournalRecord> {
+171:     return this.transition(input, 'CONFIRMED', { result: clone(input.result) })
+172:   }
+173: 
+174:   public fail(input: {
+175:     tenantId: string
+176:     operationKey: string
+177:     attemptId: string
+178:     error: string
+179:   }): Promise<EffectJournalRecord> {
+180:     return this.transition(input, 'FAILED', {
+181:       error: bounded(input.error, 'error')
+182:     })
+183:   }
+184: 
+185:   public markUncertain(input: {
+186:     tenantId: string
+187:     operationKey: string
+188:     attemptId: string
+189:     reason: string
+190:   }): Promise<EffectJournalRecord> {
+191:     return this.transition(input, 'UNCERTAIN', {
+192:       error: bounded(input.reason, 'reason')
+193:     })
+194:   }
+195: 
+196:   public async get(
+197:     tenantId: string,
+198:     operationKey: string
+199:   ): Promise<EffectJournalRecord | null> {
+200:     const record = this.records.get(key(tenantId, operationKey))
+201:     return record ? clone(record) : null
+202:   }
+203: 
+204:   private async transition(
+205:     input: {
+206:       tenantId: string
+207:       operationKey: string
+208:       attemptId: string
+209:     },
+210:     state: EffectJournalState,
+211:     values: { result?: unknown; error?: string } = {}
+212:   ): Promise<EffectJournalRecord> {
+213:     const identity = key(input.tenantId, input.operationKey)
+214:     const current = this.records.get(identity)
+215:     if (!current) throw new EffectJournalError('Effect reservation is missing')
+216:     if (current.attemptId !== input.attemptId) {
+217:       throw new EffectJournalError('Effect attempt is fenced')
+218:     }
+219:     if (state === 'EFFECT_STARTED' && current.state !== 'RESERVED') {
+220:       throw new EffectJournalError('Effect cannot start from its current state')
+221:     }
+222:     if (
+223:       (state === 'CONFIRMED' || state === 'FAILED' || state === 'UNCERTAIN') &&
+224:       current.state !== 'EFFECT_STARTED'
+225:     ) {
+226:       if (current.state === state) return clone(current)
+227:       throw new EffectJournalError(
+228:         'Effect outcome is not valid for its current state'
+229:       )
+230:     }
+231:     const next: EffectJournalRecord = {
+232:       ...current,
+233:       state,
+234:       ...(values.result !== undefined ? { result: values.result } : {}),
+235:       ...(values.error !== undefined ? { error: values.error } : {}),
+236:       updatedAt: now()
+237:     }
+238:     this.records.set(identity, next)
+239:     return clone(next)
+240:   }
+241: }
+242: 
+243: export interface JournaledToolRegistryOptions {
+244:   readonly crashAfterEffectBeforeConfirm?: boolean
+245:   /** Binds effect replay to the exact capability composition. */
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: function proposalHash(
+252:   tool: ToolDefinition,
+253:   input: unknown,
+254:   compositionFingerprint: string | undefined
+255: ): string {
+256:   return createHash('sha256')
+257:     .update(
+258:       JSON.stringify({
+259:         schemaVersion: 'effect-proposal-v2',
+260:         compositionFingerprint: compositionFingerprint ?? null,
+261:         tool: {
+262:           id: tool.id,
+263:           version: tool.version,
+264:           sideEffect: tool.sideEffect,
+265:           idempotent: tool.idempotent,
+266:           providerId:
+267:             'providerId' in tool
+268:               ? (tool as { providerId?: unknown }).providerId
+269:               : undefined,
+270:           providerVersion:
+271:             'providerVersion' in tool
+272:               ? (tool as { providerVersion?: unknown }).providerVersion
+273:               : undefined
+274:         },
+275:         input
+276:       })
+277:     )
+278:     .digest('hex')
+279: }
+280: 
+281: /**
+282:  * Wraps only the executor side of a registry. Descriptors remain unchanged,
+283:  * policy and approval still run in the harness before this wrapper is called.
+284:  */
+285: export function createJournaledToolRegistry(
+286:   registry: ToolRegistry,
+287:   journal: EffectJournal,
+288:   options: JournaledToolRegistryOptions = {}
+289: ): ToolRegistry {
+290:   return {
+291:     list: () => registry.list(),
+292:     resolve: (toolId, version) => {
+293:       const tool = registry.resolve(toolId, version)
+294:       if (!tool) return undefined
+295:       return journaledTool(tool, journal, options)
+296:     }
+297:   }
+298: }
+299: 
+300: function journaledTool(
+301:   tool: ToolDefinition,
+302:   journal: EffectJournal,
+303:   options: JournaledToolRegistryOptions
+304: ): ToolDefinition {
+305:   const compositionFingerprint = options.compositionFingerprint
+306:     ? bounded(options.compositionFingerprint, 'compositionFingerprint')
+307:     : undefined
+308:   return {
+309:     ...tool,
+310:     execute: async (
+311:       input: unknown,
+312:       context: ToolExecutionContext
+313:     ): Promise<ToolResult> => {
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+315:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+316:       const reservation = await journal.reserve({
+317:         tenantId: context.tenantId,
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+320:         attemptId
+321:       })
+322:       if (reservation.state === 'CONFIRMED') {
+323:         return { status: 'SUCCEEDED', output: reservation.result }
+324:       }
+325:       if (
+326:         reservation.state === 'UNCERTAIN' ||
+327:         reservation.state === 'EFFECT_STARTED'
+328:       ) {
+329:         return {
+330:           status: 'REJECTED',
+331:           error:
+332:             'unknown_effect: explicit reconciliation is required before retry'
+333:         }
+334:       }
+335:       if (reservation.attemptId !== attemptId) {
+336:         return {
+337:           status: 'REJECTED',
+338:           error:
+339:             'unknown_effect: an existing reservation requires reconciliation'
+340:         }
+341:       }
+342:       await journal.markStarted({
+343:         tenantId: context.tenantId,
+344:         operationKey,
+345:         attemptId
+346:       })
+347:       try {
+348:         const result = await tool.execute(input, context)
+349:         if (
+350:           options.crashAfterEffectBeforeConfirm &&
+351:           result.status === 'SUCCEEDED'
+352:         ) {
+353:           await journal.markUncertain({
+354:             tenantId: context.tenantId,
+355:             operationKey,
+356:             attemptId,
+357:             reason: 'synthetic crash after effect before confirmation'
+358:           })
+359:           return {
+360:             status: 'REJECTED',
+361:             error:
+362:               'unknown_effect: synthetic crash after effect before confirmation'
+363:           }
+364:         }
+365:         if (result.status === 'SUCCEEDED') {
+366:           await journal.confirm({
+367:             tenantId: context.tenantId,
+368:             operationKey,
+369:             attemptId,
+370:             result: result.output
+371:           })
+372:         } else {
+373:           await journal.fail({
+374:             tenantId: context.tenantId,
+375:             operationKey,
+376:             attemptId,
+377:             error: result.error ?? 'tool failed'
+378:           })
+379:         }
+380:         return result
+381:       } catch (error) {
+382:         const message =
+383:           error instanceof Error ? error.message : 'tool execution failed'
+384:         await journal.markUncertain({
+385:           tenantId: context.tenantId,
+386:           operationKey,
+387:           attemptId,
+388:           reason: `unknown effect after executor failure: ${message}`
+389:         })
+390:         return {
+391:           status: 'REJECTED',
+392:           error: 'unknown_effect: executor outcome is uncertain'
+393:         }
+394:       }
+395:     }
+396:   }
+397: }
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/src/operational-execution-postgres.ts
+1: import {
+2:   boundExecutionIdForOperation,
+3:   guardOptionalPublishedWrite,
+4:   publishedFenceError,
+5:   type ControlledPublishedDatabaseFence
+6: } from './controlled-published-fencing.ts'
+7: import { randomUUID } from 'node:crypto'
+8: import type {
+9:   EffectJournal,
+10:   EffectJournalRecord,
+11:   EffectJournalState,
+12:   ExecutionEvent,
+13:   ExecutionFailure,
+14:   ExecutionRecord,
+15:   ExecutionState,
+16:   ExecutionSubmission,
+17:   OperationalExecutionStore,
+18:   SubmitResult,
+19:   ClaimResult,
+20:   ExecutionTransitionInput,
+21:   ExecutionCancellationInput
+22: } from '@cvg/harness'
+23: import type { AuditEvent } from '@cvg/harness-contracts'
+24: import {
+25:   OperationalExecutionError,
+26:   computeExecutionRequestHash,
+27:   DEFAULT_MAX_EXECUTION_ATTEMPTS,
+28:   isExecutionTransitionAllowed,
+29:   parseExecutionSubmission,
+30:   validateExecutionTransitionPayload
+31: } from '@cvg/harness'
+32: import type { TenantId } from '@cvg/platform'
+33: import { TenantIdSchema } from '@cvg/platform'
+34: import type { QueryResultRow } from 'pg'
+35: import type { PostgresQueryable } from './postgres.ts'
+36: import {
+37:   withTenantContext,
+38:   type PostgresPoolClient,
+39:   type PostgresPoolLike
+40: } from './tenant-scoped-postgres.ts'
+41: 
+42: export type OperationalExecutionPostgresConnection =
+43:   | PostgresQueryable
+44:   | PostgresPoolLike
+45: 
+46: export interface PostgresOperationalExecutionStoreOptions {
+47:   readonly leaseMs?: number
+48:   readonly retryDelayMs?: number
+49:   readonly maxAttempts?: number
+50:   readonly clock?: () => Date
+51:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+52:   readonly executionIdFactory?: OperationalExecutionIdFactory
+53: }
+54: 
+55: export type OperationalExecutionIdFactory = () => string
+56: 
+57: interface ExecutionRow extends QueryResultRow {
+58:   tenant_id: string
+59:   id: string
+60:   idempotency_key: string
+61:   request_hash: string
+62:   request: unknown
+63:   state: ExecutionState
+64:   attempt: number
+65:   lease_owner: string | null
+66:   lease_until: Date | string | null
+67:   result: unknown
+68:   failure: unknown
+69:   approval_id: string | null
+70:   resume: unknown
+71:   created_at: Date | string
+72:   updated_at: Date | string
+73:   completed_at: Date | string | null
+74: }
+75: 
+76: interface EventRow extends QueryResultRow {
+77:   sequence: string | number
+78:   execution_id: string
+79:   tenant_id: string
+80:   event_type: ExecutionEvent['type']
+81:   worker_id: string | null
+82:   attempt: number
+83:   reason: string | null
+84:   approval_id: string | null
+85:   audit_events: unknown
+86:   created_at: Date | string
+87: }
+88: 
+89: interface QueueRow extends QueryResultRow {
+90:   tenant_id: string
+91:   execution_id: string
+92:   status: 'pending' | 'processing' | 'processed' | 'failed' | 'dead_letter'
+93:   available_at: Date | string
+94:   attempts: number
+95:   lease_owner: string | null
+96:   lease_until: Date | string | null
+97:   last_error: string | null
+98:   processed_at: Date | string | null
+99: }
+100: 
+101: interface EffectRow extends QueryResultRow {
+102:   result_present?: boolean
+103:   tenant_id: string
+104:   operation_key: string
+105:   proposal_hash: string
+106:   state: EffectJournalState
+107:   attempt_id: string
+108:   result: unknown
+109:   error: string | null
+110:   created_at: Date | string
+111:   updated_at: Date | string
+112: }
+113: 
+114: const executionColumns = `
+115:   tenant_id, id, idempotency_key, request_hash, request, state, attempt,
+116:   lease_owner, lease_until, result, failure, approval_id, resume,
+117:   created_at, updated_at, completed_at`
+118: 
+119: const executionColumnsFromJoin = `
+120:   e.tenant_id, e.id, e.idempotency_key, e.request_hash, e.request, e.state,
+121:   e.attempt, e.lease_owner, e.lease_until, e.result, e.failure,
+122:   e.approval_id, e.resume, e.created_at, e.updated_at, e.completed_at`
+123: 
+124: const effectColumns = `
+125:   tenant_id, operation_key, proposal_hash, state, attempt_id, result,
+126:   result IS NOT NULL AS result_present, error,
+127:   created_at, updated_at`
+128: 
+129: const eventTypes = new Set<ExecutionEvent['type']>([
+130:   'RECEIVED',
+131:   'QUEUED',
+132:   'CLAIMED',
+133:   'RUNNING',
+134:   'RECOVERED',
+135:   'WAITING_APPROVAL',
+136:   'WAITING_USER',
+137:   'USER_INPUT',
+138:   'SUCCEEDED',
+139:   'FAILED_RETRYABLE',
+140:   'FAILED_TERMINAL',
+141:   'CANCELLED'
+142: ])
+143: 
+144: function positiveInt(value: number, label: string): number {
+145:   if (!Number.isSafeInteger(value) || value < 1) {
+146:     throw new OperationalExecutionError(
+147:       'validation_failed',
+148:       `${label} must be a positive integer`
+149:     )
+150:   }
+151:   return value
+152: }
+153: 
+154: function asIso(value: Date | string | null): string | null {
+155:   if (value === null) return null
+156:   const date = value instanceof Date ? value : new Date(value)
+157:   if (Number.isNaN(date.getTime())) {
+158:     throw new OperationalExecutionError(
+159:       'invalid_action',
+160:       'Persisted execution timestamp is invalid'
+161:     )
+162:   }
+163:   return date.toISOString()
+164: }
+165: 
+166: function jsonValue(value: unknown): unknown {
+167:   if (typeof value !== 'string') return value
+168:   try {
+169:     return JSON.parse(value) as unknown
+170:   } catch {
+171:     throw new OperationalExecutionError(
+172:       'invalid_action',
+173:       'Persisted execution JSON is invalid'
+174:     )
+175:   }
+176: }
+177: 
+178: function jsonText(value: unknown, label: string): string {
+179:   let serialized: string
+180:   try {
+181:     serialized = JSON.stringify(value)
+182:   } catch {
+183:     throw new OperationalExecutionError(
+184:       'validation_failed',
+185:       `${label} is not serializable`
+186:     )
+187:   }
+188:   if (!serialized || Buffer.byteLength(serialized, 'utf8') > 256 * 1024) {
+189:     throw new OperationalExecutionError(
+190:       'validation_failed',
+191:       `${label} exceeds the bounded persistence envelope`
+192:     )
+193:   }
+194:   return serialized
+195: }
+196: 
+197: function text(value: string, label: string, max = 500): string {
+198:   if (typeof value !== 'string' || value.trim().length === 0) {
+199:     throw new OperationalExecutionError(
+200:       'validation_failed',
+201:       `${label} is required`
+202:     )
+203:   }
+204:   if (value.length > max) {
+205:     throw new OperationalExecutionError(
+206:       'validation_failed',
+207:       `${label} is too long`
+208:     )
+209:   }
+210:   return value.trim()
+211: }
+212: 
+213: function retryExhaustedFailure(maxAttempts: number): ExecutionFailure {
+214:   return {
+215:     kind: 'SEMANTIC_TERMINAL',
+216:     code: 'retry_exhausted',
+217:     message: `Execution exhausted the maximum of ${maxAttempts} attempts.`
+218:   }
+219: }
+220: 
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/migrations/0016_operational_execution_spine.sql
+1: -- AAA-21: neutral durable execution identity and queue.
+2: --
+3: -- This migration is additive. It is intentionally separate from the
+4: -- Secretary inbound/outbox tables: the neutral harness owns these rows and
+5: -- the worker must consume the execution identity through this authority.
+6: 
+7: CREATE TABLE IF NOT EXISTS operational_executions (
+8:   tenant_id text NOT NULL,
+9:   id text NOT NULL,
+10:   idempotency_key text NOT NULL,
+11:   request_hash text NOT NULL,
+12:   request jsonb NOT NULL,
+13:   request_protection_version text NOT NULL DEFAULT 'execution-r1',
+14:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+15:   state text NOT NULL CHECK (
+16:     state IN (
+17:       'RECEIVED', 'QUEUED', 'CLAIMED', 'RUNNING',
+18:       'WAITING_APPROVAL', 'WAITING_USER', 'SUCCEEDED',
+19:       'FAILED_RETRYABLE', 'FAILED_TERMINAL', 'CANCELLED'
+20:     )
+21:   ),
+22:   attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+23:   lease_owner text,
+24:   lease_until timestamptz,
+25:   result jsonb,
+26:   result_protection_version text,
+27:   failure jsonb,
+28:   approval_id text,
+29:   created_at timestamptz NOT NULL DEFAULT now(),
+30:   updated_at timestamptz NOT NULL DEFAULT now(),
+31:   completed_at timestamptz,
+32:   PRIMARY KEY (tenant_id, id),
+33:   UNIQUE (tenant_id, idempotency_key),
+34:   CHECK (state NOT IN ('CLAIMED', 'RUNNING') OR (lease_owner IS NOT NULL AND lease_until IS NOT NULL)),
+35:   CHECK (state NOT IN ('SUCCEEDED', 'FAILED_TERMINAL', 'CANCELLED') OR completed_at IS NOT NULL)
+36: );
+37: 
+38: ALTER TABLE operational_executions
+39:   ADD COLUMN IF NOT EXISTS approval_id text;
+40: 
+41: CREATE TABLE IF NOT EXISTS operational_execution_outbox (
+42:   tenant_id text NOT NULL,
+43:   execution_id text NOT NULL,
+44:   status text NOT NULL CHECK (status IN ('pending', 'processing', 'processed', 'failed', 'dead_letter')),
+45:   available_at timestamptz NOT NULL DEFAULT now(),
+46:   attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+47:   lease_owner text,
+48:   lease_until timestamptz,
+49:   last_error text,
+50:   created_at timestamptz NOT NULL DEFAULT now(),
+51:   processed_at timestamptz,
+52:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+53:   PRIMARY KEY (tenant_id, execution_id),
+54:   FOREIGN KEY (tenant_id, execution_id) REFERENCES operational_executions (tenant_id, id),
+55:   CHECK (status <> 'processing' OR (lease_owner IS NOT NULL AND lease_until IS NOT NULL))
+56: );
+57: 
+58: CREATE TABLE IF NOT EXISTS operational_execution_events (
+59:   tenant_id text NOT NULL,
+60:   sequence bigint GENERATED BY DEFAULT AS IDENTITY,
+61:   execution_id text NOT NULL,
+62:   event_type text NOT NULL,
+63:   worker_id text,
+64:   attempt integer NOT NULL CHECK (attempt >= 0),
+65:   reason text,
+66:   audit_events jsonb,
+67:   created_at timestamptz NOT NULL DEFAULT now(),
+68:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+69:   PRIMARY KEY (tenant_id, sequence),
+70:   FOREIGN KEY (tenant_id, execution_id) REFERENCES operational_executions (tenant_id, id)
+71: );
+72: 
+73: CREATE TABLE IF NOT EXISTS operational_effect_journal (
+74:   tenant_id text NOT NULL,
+75:   operation_key text NOT NULL,
+76:   proposal_hash text NOT NULL,
+77:   state text NOT NULL CHECK (state IN ('RESERVED', 'EFFECT_STARTED', 'CONFIRMED', 'FAILED', 'UNCERTAIN')),
+78:   attempt_id text NOT NULL,
+79:   result jsonb,
+80:   error text,
+81:   created_at timestamptz NOT NULL DEFAULT now(),
+82:   updated_at timestamptz NOT NULL DEFAULT now(),
+83:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+84:   PRIMARY KEY (tenant_id, operation_key)
+85: );
+86: 
+87: CREATE INDEX IF NOT EXISTS idx_operational_executions_tenant_state
+88:   ON operational_executions (tenant_id, state, updated_at);
+89: CREATE INDEX IF NOT EXISTS idx_operational_executions_approval
+90:   ON operational_executions (tenant_id, approval_id);
+91: CREATE INDEX IF NOT EXISTS idx_operational_execution_outbox_claim
+92:   ON operational_execution_outbox (tenant_id, status, available_at, created_at);
+93: CREATE INDEX IF NOT EXISTS idx_operational_execution_events_lookup
+94:   ON operational_execution_events (tenant_id, execution_id, sequence);
+95: CREATE INDEX IF NOT EXISTS idx_operational_effect_journal_state
+96:   ON operational_effect_journal (tenant_id, state, updated_at);
+97: 
+98: ALTER TABLE operational_executions ENABLE ROW LEVEL SECURITY;
+99: ALTER TABLE operational_executions FORCE ROW LEVEL SECURITY;
+100: ALTER TABLE operational_execution_outbox ENABLE ROW LEVEL SECURITY;
+101: ALTER TABLE operational_execution_outbox FORCE ROW LEVEL SECURITY;
+102: ALTER TABLE operational_execution_events ENABLE ROW LEVEL SECURITY;
+103: ALTER TABLE operational_execution_events FORCE ROW LEVEL SECURITY;
+104: ALTER TABLE operational_effect_journal ENABLE ROW LEVEL SECURITY;
+105: ALTER TABLE operational_effect_journal FORCE ROW LEVEL SECURITY;
+106: 
+107: DROP POLICY IF EXISTS operational_executions_tenant_isolation ON operational_executions;
+108: CREATE POLICY operational_executions_tenant_isolation
+109:   ON operational_executions
+110:   USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))
+111:   WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));
+112: 
+113: DROP POLICY IF EXISTS operational_execution_outbox_tenant_isolation ON operational_execution_outbox;
+114: CREATE POLICY operational_execution_outbox_tenant_isolation
+115:   ON operational_execution_outbox
+116:   USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))
+117:   WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));
+118: 
+119: DROP POLICY IF EXISTS operational_execution_events_tenant_isolation ON operational_execution_events;
+120: CREATE POLICY operational_execution_events_tenant_isolation
+121:   ON operational_execution_events
+122:   USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))
+123:   WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));
+124: 
+125: DROP POLICY IF EXISTS operational_effect_journal_tenant_isolation ON operational_effect_journal;
+126: CREATE POLICY operational_effect_journal_tenant_isolation
+127:   ON operational_effect_journal
+128:   USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))
+129:   WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));
+130: 
+131: REVOKE ALL ON operational_executions FROM PUBLIC;
+132: REVOKE ALL ON operational_execution_outbox FROM PUBLIC;
+133: REVOKE ALL ON operational_execution_events FROM PUBLIC;
+134: REVOKE ALL ON operational_effect_journal FROM PUBLIC;
+135: 
+136: COMMENT ON TABLE operational_executions IS
+137:   'AAA-21 neutral tenant-scoped execution authority; request/result payloads are synthetic or redacted by contract.';
+138: COMMENT ON COLUMN operational_executions.approval_id IS
+139:   'Tenant-scoped durable approval identity required to resolve WAITING_APPROVAL; API and worker must preserve this binding.';
+140: COMMENT ON TABLE operational_execution_outbox IS
+141:   'AAA-21 durable queue paired atomically with an operational execution record.';
+142: COMMENT ON TABLE operational_execution_events IS
+143:   'AAA-21 append-only causal state transitions and recovery evidence.';
+144: COMMENT ON TABLE operational_effect_journal IS
+145:   'AAA-21 tenant-scoped effect authority; UNCERTAIN outcomes require explicit reconciliation.';
+
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0225/packet-r1/source/packages/persistence/migrations/0029_controlled_published_kernel.sql
+1: -- SPEC0217: additive, opt-in controlled published inbound continuation.
+2: -- No legacy turn is backfilled. Migration0028 remains a dedicated schema.
+3: -- The migration owner supplies the serving role's explicit minimal grants:
+4: -- bindings SELECT/INSERT/UPDATE; evidence SELECT/INSERT. PUBLIC gets none.
+5: 
+6: -- messages previously had only a global id PK; a tenant-qualified FK needs
+7: -- this explicit composite key. No row is rewritten or backfilled.
+8: CREATE UNIQUE INDEX controlled_published_message_tenant_key ON messages (tenant_id,id);
+9: 
+10: CREATE TABLE controlled_published_bindings (
+11:   tenant_id text NOT NULL,
+12:   execution_id text NOT NULL,
+13:   inbound_message_id text NOT NULL,
+14:   conversation_id text NOT NULL,
+15:   session_id text NOT NULL,
+16:   outbox_id text NOT NULL,
+17:   agent_id text NOT NULL,
+18:   version_id text NOT NULL,
+19:   trace_id text NOT NULL,
+20:   correlation_id text NOT NULL,
+21:   adapter_version text NOT NULL DEFAULT 'controlled-published-v1'
+22:     CHECK (adapter_version = 'controlled-published-v1'),
+23:   request_digest text NOT NULL CHECK (request_digest ~ '^sha256-[0-9a-f]{64}$'),
+24:   capability_fingerprint text NOT NULL,
+25:   admission_input jsonb NOT NULL CHECK (jsonb_typeof(admission_input)='object'),
+26:   admission_runtime jsonb NOT NULL CHECK (jsonb_typeof(admission_runtime)='object'),
+27:   prepared_runtime jsonb,
+28:   runtime_result jsonb,
+29:   prepared jsonb CHECK (prepared IS NULL OR jsonb_typeof(prepared) = 'object'),
+30:   prepared_digest text CHECK (prepared_digest IS NULL OR prepared_digest ~ '^sha256-[0-9a-f]{64}$'),
+31:   state jsonb CHECK (state IS NULL OR jsonb_typeof(state) = 'object'),
+32:   state_digest text CHECK (state_digest IS NULL OR state_digest ~ '^sha256-[0-9a-f]{64}$'),
+33:   state_revision bigint NOT NULL DEFAULT 0 CHECK (state_revision BETWEEN 0 AND 9007199254740991),
+34:   evidence_sequence integer NOT NULL DEFAULT 0 CHECK (evidence_sequence BETWEEN 0 AND 256),
+35:   evidence_bytes integer NOT NULL DEFAULT 0 CHECK (evidence_bytes BETWEEN 0 AND 4194304),
+36:   evidence_hash text NOT NULL CHECK (evidence_hash ~ '^sha256-[0-9a-f]{64}$'),
+37:   started_at timestamptz,
+38:   expires_at timestamptz,
+39:   dispatch_closed boolean NOT NULL DEFAULT false,
+40:   fault jsonb CHECK (fault IS NULL OR jsonb_typeof(fault) = 'object'),
+41:   closed_trace jsonb CHECK (closed_trace IS NULL OR jsonb_typeof(closed_trace) = 'object'),
+42:   closed_trace_digest text CHECK (closed_trace_digest IS NULL OR closed_trace_digest ~ '^sha256-[0-9a-f]{64}$'),
+43:   phase_state text NOT NULL DEFAULT 'IDLE_SEALED'
+44:     CHECK (phase_state IN ('IDLE_SEALED', 'OPEN', 'FAULTED', 'CLOSED')),
+45:   phase_revision bigint NOT NULL DEFAULT 0 CHECK (phase_revision BETWEEN 0 AND 9007199254740991),
+46:   seal_id text NOT NULL,
+47:   seal_checkpoint_digest text,
+48:   sealed_checkpoint jsonb CHECK (sealed_checkpoint IS NULL OR jsonb_typeof(sealed_checkpoint)='object'),
+49:   seal_state_digest text,
+50:   sealed_through_sequence integer NOT NULL DEFAULT 0 CHECK (sealed_through_sequence BETWEEN 0 AND 256),
+51:   consumed_seal_id text,
+52:   open_phase_id text,
+53:   open_phase_type text,
+54:   open_phase_input_digest text,
+55:   open_phase_attempt integer,
+56:   open_phase_acked boolean NOT NULL DEFAULT false,
+57:   active_outer_attempt integer,
+58:   active_outer_worker_id text,
+59:   active_outer_attempt_row_id bigint,
+60:   approval_receipt jsonb CHECK (approval_receipt IS NULL OR jsonb_typeof(approval_receipt) = 'object'),
+61:   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+62:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+63:   PRIMARY KEY (tenant_id, execution_id),
+64:   UNIQUE (tenant_id, inbound_message_id),
+65:   UNIQUE (tenant_id, trace_id),
+66:   FOREIGN KEY (tenant_id, execution_id) REFERENCES operational_executions (tenant_id, id),
+67:   FOREIGN KEY (tenant_id, inbound_message_id) REFERENCES messages (tenant_id, id),
+68:   FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id),
+69:   FOREIGN KEY (tenant_id, session_id) REFERENCES sessions (tenant_id, id),
+70:   FOREIGN KEY (tenant_id, outbox_id) REFERENCES outbox_events (tenant_id, id),
+71:   FOREIGN KEY (tenant_id, agent_id) REFERENCES platform_agents (tenant_id, id),
+72:   FOREIGN KEY (tenant_id, version_id) REFERENCES platform_agent_versions (tenant_id, id),
+73:   CHECK ((prepared IS NULL) = (prepared_digest IS NULL)),
+74:   CHECK ((state IS NULL) = (state_digest IS NULL)),
+75:   CHECK ((closed_trace IS NULL) = (closed_trace_digest IS NULL)),
+76:   CHECK ((sealed_checkpoint IS NULL) = (seal_checkpoint_digest IS NULL)),
+77:   CHECK ((started_at IS NULL) = (expires_at IS NULL)),
+78:   CHECK (expires_at IS NULL OR (expires_at > started_at AND expires_at <= started_at + interval '120 seconds')),
+79:   CHECK (prepared IS NULL OR octet_length(prepared::text) <= 1048576),
+80:   CHECK (state IS NULL OR octet_length(state::text) <= 1048576),
+81:   CHECK (phase_state <> 'IDLE_SEALED' OR open_phase_id IS NULL),
+82:   CHECK (phase_state <> 'CLOSED' OR (dispatch_closed AND closed_trace IS NOT NULL)),
+83:   CHECK (active_outer_attempt IS NULL OR active_outer_attempt > 0),
+84:   CHECK (active_outer_attempt_row_id IS NULL OR active_outer_attempt_row_id > 0),
+85:   CHECK ((active_outer_attempt IS NULL) = (active_outer_worker_id IS NULL)),
+86:   CHECK ((active_outer_attempt IS NULL) = (active_outer_attempt_row_id IS NULL))
+87: );
+88: 
+89: CREATE TABLE controlled_published_evidence (
+90:   tenant_id text NOT NULL,
+91:   execution_id text NOT NULL,
+92:   sequence integer NOT NULL CHECK (sequence BETWEEN 1 AND 256),
+93:   event_key text NOT NULL CHECK (length(event_key) BETWEEN 1 AND 500),
+94:   event_type text NOT NULL CHECK (length(event_type) BETWEEN 1 AND 100),
+95:   canonical_payload jsonb NOT NULL CHECK (jsonb_typeof(canonical_payload) = 'object'),
+96:   payload_digest text NOT NULL CHECK (payload_digest ~ '^sha256-[0-9a-f]{64}$'),
+97:   previous_hash text NOT NULL CHECK (previous_hash ~ '^sha256-[0-9a-f]{64}$'),
+98:   event_hash text NOT NULL CHECK (event_hash ~ '^sha256-[0-9a-f]{64}$'),
+99:   originating_attempt integer NOT NULL CHECK (originating_attempt >= 0),
+100:   created_at timestamptz NOT NULL,
+101:   tenant_isolation_quarantined boolean NOT NULL DEFAULT false,
+102:   PRIMARY KEY (tenant_id, execution_id, sequence),
+103:   UNIQUE (tenant_id, execution_id, event_key),
+104:   FOREIGN KEY (tenant_id, execution_id) REFERENCES controlled_published_bindings (tenant_id, execution_id),
+105:   CHECK (octet_length(canonical_payload::text) <= 1048576)
+106: );
+107: 
+108: ALTER TABLE controlled_published_bindings ENABLE ROW LEVEL SECURITY;
+109: ALTER TABLE controlled_published_bindings FORCE ROW LEVEL SECURITY;
+110: ALTER TABLE controlled_published_evidence ENABLE ROW LEVEL SECURITY;
+111: ALTER TABLE controlled_published_evidence FORCE ROW LEVEL SECURITY;
+112: CREATE POLICY controlled_published_bindings_tenant_isolation ON controlled_published_bindings
+113:  USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id',true),''))
+114:  WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id',true),''));
+115: CREATE POLICY controlled_published_evidence_tenant_isolation ON controlled_published_evidence
+116:  USING (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id',true),''))
+117:  WITH CHECK (tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id',true),''));
+118: REVOKE ALL ON controlled_published_bindings, controlled_published_evidence FROM PUBLIC;
+119: 
+120: CREATE FUNCTION cvg_controlled_evidence_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+121: BEGIN
+122:   RAISE EXCEPTION 'controlled published evidence is append only' USING ERRCODE = '42501';
+123: END $$;
+124: CREATE TRIGGER controlled_published_evidence_append_only
+125:  BEFORE UPDATE OR DELETE OR TRUNCATE ON controlled_published_evidence
+126:  FOR EACH STATEMENT EXECUTE FUNCTION cvg_controlled_evidence_append_only();
+127: 
+128: CREATE FUNCTION cvg_controlled_binding_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+129: BEGIN
+130:   IF TG_OP = 'DELETE' THEN
+131:     RAISE EXCEPTION 'controlled binding cannot be deleted' USING ERRCODE='42501';
+132:   END IF;
+133:   IF ROW(NEW.tenant_id,NEW.execution_id,NEW.inbound_message_id,NEW.conversation_id,
+134:          NEW.session_id,NEW.outbox_id,NEW.agent_id,NEW.version_id,NEW.trace_id,
+135:          NEW.correlation_id,NEW.adapter_version,NEW.request_digest,NEW.capability_fingerprint,NEW.created_at,NEW.admission_input,NEW.admission_runtime)
+136:      IS DISTINCT FROM
+137:      ROW(OLD.tenant_id,OLD.execution_id,OLD.inbound_message_id,OLD.conversation_id,
+138:          OLD.session_id,OLD.outbox_id,OLD.agent_id,OLD.version_id,OLD.trace_id,
+139:          OLD.correlation_id,OLD.adapter_version,OLD.request_digest,OLD.capability_fingerprint,OLD.created_at,OLD.admission_input,OLD.admission_runtime)
+140:      OR (OLD.prepared IS NOT NULL AND ROW(NEW.prepared,NEW.prepared_digest,NEW.started_at,NEW.expires_at,NEW.prepared_runtime)
+141:            IS DISTINCT FROM ROW(OLD.prepared,OLD.prepared_digest,OLD.started_at,OLD.expires_at,OLD.prepared_runtime))
+142:      OR (OLD.dispatch_closed AND NOT NEW.dispatch_closed)
+143:      OR (OLD.fault IS NOT NULL AND NEW.fault IS DISTINCT FROM OLD.fault)
+144:      OR (OLD.closed_trace IS NOT NULL AND ROW(NEW.closed_trace,NEW.closed_trace_digest)
+145:            IS DISTINCT FROM ROW(OLD.closed_trace,OLD.closed_trace_digest))
+146:      OR NEW.state_revision < OLD.state_revision OR NEW.phase_revision < OLD.phase_revision
+147:      OR NEW.evidence_sequence < OLD.evidence_sequence OR NEW.evidence_bytes < OLD.evidence_bytes
+148:      OR (OLD.phase_state='CLOSED' AND NEW IS DISTINCT FROM OLD)
+149:      OR (OLD.phase_state='FAULTED' AND NEW.phase_state NOT IN ('FAULTED','CLOSED')) THEN
+150:     RAISE EXCEPTION 'controlled binding immutable or monotonic field changed' USING ERRCODE='23514';

@@ -1,0 +1,1490 @@
+import path from 'node:path'
+import {
+  PINS,
+  RESPONSE_BODY,
+  RESPONSE_HEADERS,
+  canonical,
+  sha256,
+  parseControlLine,
+  nativeInvocation,
+  versionMatches,
+  parseHostCommand,
+  STDIN_TEXT,
+  SETTINGS_TEXT,
+  MCP_TEXT,
+  markerVerified
+} from './protocol.mjs'
+import { makeConfig, verifyInspect, verifyNamespaces } from './profile.mjs'
+import { BUILTIN_ALLOWLIST, SOURCE_PATHS } from './bootstrap.mjs'
+import { parseStrictJson } from '../qualification/strict-json.mjs'
+import {
+  statusFor,
+  validateReport,
+  probeError,
+  parseManifest,
+  closed
+} from './schema.mjs'
+
+export const expectedDigests = () => ({
+  claudeSha256: PINS.claudeSha256,
+  nodeSha256: PINS.nodeSha256,
+  dockerSha256: PINS.dockerSha256,
+  imageId: PINS.imageId
+})
+const equal = (a, b) => canonical(a) === canonical(b)
+const parsed = (retained, artifact) =>
+  parseStrictJson(retained.get(artifact.path))
+const chunks64 = (bytes) => {
+  const chunks = []
+  for (let i = 0; i < bytes.length; i += 24576)
+    chunks.push(bytes.subarray(i, i + 24576).toString('base64'))
+  return chunks
+}
+
+/** A failed terminal status never exempts any reached PASS from its proof. */
+function assertReachedPassProofs(report, retained, one) {
+  const require = (value) => {
+    if (!value) throw probeError('PROTOCOL')
+  }
+  const pass = (id) =>
+    report.containmentChecks.find((c) => c.id === id)?.status === 'PASS'
+  const control = parsed(retained, one('control-trace')),
+    observer = parsed(retained, one('observer-trace'))
+  require(Array.isArray(control.records) && Array.isArray(observer.records))
+  // A declared source cannot move a record across its physical pipe artifact.
+  require(
+    control.records.every(
+      (r) =>
+        r &&
+        typeof r.type === 'string' &&
+        ((r.source === 'HOST' && r.type !== 'FRAME') ||
+          (r.source === 'client' && r.type === 'FRAME'))
+    )
+  )
+  require(
+    observer.records.every(
+      (r) => r && r.source === 'observer' && r.type === 'FRAME'
+    )
+  )
+  const records = [...control.records, ...observer.records].sort(
+    (a, b) => a.ordinal - b.ordinal
+  )
+  let offset = -1
+  records.forEach((r, i) => {
+    require(
+      r.ordinal === i &&
+        Number.isInteger(r.offsetMs) &&
+        r.offsetMs >= offset &&
+        r.offsetMs <= 35000
+    )
+    offset = r.offsetMs
+  })
+  const host = (type) => {
+    const found = records.filter((r) => r.source === 'HOST' && r.type === type)
+    require(found.length === 1)
+    return found[0]
+  }
+  const frames = (role, type) =>
+    records.filter(
+      (r) =>
+        r.source === role && r.type === 'FRAME' && r.data.frame.type === type
+    )
+  for (const role of ['client', 'observer']) {
+    let seq = 0
+    for (const r of records.filter(
+      (r) => r.source === role && r.type === 'FRAME'
+    ))
+      require(
+        equal(
+          parseControlLine(
+            Buffer.from(r.data.rawBase64, 'base64'),
+            role,
+            report.runId,
+            seq++
+          ),
+          r.data.frame
+        )
+      )
+  }
+  const failures = parsed(retained, one('failures'))
+  const hasExchange = report.observations.some((o) => {
+    const [file, ordinal] = o.responsePath.split('#')
+    return parsed(
+      retained,
+      report.artifacts.find((a) => a.path === file)
+    ).records.some(
+      (r) =>
+        r.ordinal === Number(ordinal) &&
+        r.data?.frame?.payload?.outcome === 'FINISHED'
+    )
+  })
+  // The trace, not the supplied ledger, defines recorded cause coverage/order.
+  const causes = control.records
+    .filter((r) => r.source === 'HOST' && r.type === 'FAILURE')
+    .sort((a, b) => a.ordinal - b.ordinal)
+  const codes = new Set([
+    'IO',
+    'CLEANUP',
+    'PROTOCOL',
+    'PRIVACY',
+    'CAP',
+    'TIMEOUT',
+    'SIGNAL',
+    'DRIFT_RUNTIME',
+    'TOOLCHAIN_UNAVAILABLE',
+    'INPUT_INVALID',
+    'IDENTITY_MISMATCH',
+    'CONTAINMENT',
+    'NO_ELIGIBLE_EXCHANGE'
+  ])
+  const sources = new Set(['HOST', 'DOCKER', 'CLIENT', 'OBSERVER'])
+  const phases = new Set([
+    'INPUT',
+    'PREFLIGHT',
+    'VERSION',
+    'PORT',
+    'CLEANUP',
+    'PUBLICATION'
+  ])
+  require(
+    records.length <= 1024 &&
+      Array.isArray(failures) &&
+      failures.length <= 64 &&
+      failures.length >= causes.length
+  )
+  for (let i = 0; i < failures.length; i++) {
+    const f = failures[i]
+    closed(f, ['code', 'source', 'phase', 'order', 'artifactRef'], 'PROTOCOL')
+    require(
+      f.order === i &&
+        codes.has(f.code) &&
+        sources.has(f.source) &&
+        phases.has(f.phase)
+    )
+    if (i < causes.length) {
+      const expected = causes[i],
+        ownerPath = one('control-trace').path
+      require(f.artifactRef === `${ownerPath}#${expected.ordinal}`)
+      const actual = control.records.find(
+        (r) => r.ordinal === Number(f.artifactRef.slice(ownerPath.length + 1))
+      )
+      require(
+        actual === expected &&
+          actual.source === 'HOST' &&
+          actual.type === 'FAILURE'
+      )
+      closed(actual.data, ['code', 'source', 'phase', 'order'], 'PROTOCOL')
+      require(
+        f.artifactRef === `${one('control-trace').path}#${actual.ordinal}` &&
+          equal(actual.data, {
+            code: f.code,
+            source: f.source,
+            phase: f.phase,
+            order: i
+          })
+      )
+    } else {
+      // Exhausted trace capacity can explain only an unrecorded suffix. It can
+      // never replace a known primary/additional cause or attest unseen events.
+      require(records.length === 1024 && f.artifactRef === null)
+    }
+  }
+  require(statusFor(failures, hasExchange) === report.status)
+  const artifactRef = (a) => ({
+    path: a.path,
+    sha256: a.sha256,
+    bytes: a.bytes
+  })
+  if (pass('INPUTS')) {
+    const original = host('MANIFEST_INPUT').data,
+      copied = one('manifest')
+    require(
+      original.sha256 === copied.sha256 && original.bytes === copied.bytes
+    )
+    const manifest = parseManifest(retained.get(one('manifest').path))
+    require(
+      manifest.runId === report.runId && manifest.fixtureId === report.fixtureId
+    )
+    for (const [role, text] of [
+      ['stdin', STDIN_TEXT],
+      ['settings', SETTINGS_TEXT],
+      ['mcp', MCP_TEXT]
+    ])
+      require(retained.get(one(role).path).equals(Buffer.from(text)))
+    const consumed = parsed(retained, one('consumed-inputs'))
+    require(
+      equal(
+        Object.keys(consumed).sort(),
+        [
+          'version',
+          'manifest',
+          'stdin',
+          'settings',
+          'mcp',
+          'bundleInventory'
+        ].sort()
+      ) && consumed.version === 1
+    )
+    for (const [key, role] of [
+      ['manifest', 'manifest'],
+      ['stdin', 'stdin'],
+      ['settings', 'settings'],
+      ['mcp', 'mcp'],
+      ['bundleInventory', 'bundle-inventory']
+    ])
+      require(equal(consumed[key], artifactRef(one(role))))
+  }
+  if (pass('BUNDLE')) {
+    const inventoryArtifact = one('bundle-inventory'),
+      inventory = parsed(retained, inventoryArtifact)
+    require(
+      inventory.version === 1 &&
+        inventoryArtifact.sha256 === report.driverSha256
+    )
+    const expected = [
+      ...SOURCE_PATHS,
+      'fixtures/stdin.txt',
+      'fixtures/settings.json',
+      'fixtures/mcp.json',
+      'fixtures/invocation-template.json'
+    ].sort()
+    require(
+      equal(
+        inventory.entries.map((e) => e.path),
+        expected
+      )
+    )
+    const copies = report.artifacts.filter((a) => a.role === 'bundle-source')
+    require(copies.length === expected.length)
+    for (const entry of inventory.entries) {
+      const found = copies.filter((a) =>
+        a.path.endsWith(`/inputs/bundle/${entry.path}`)
+      )
+      require(
+        found.length === 1 &&
+          found[0].sha256 === entry.sha256 &&
+          found[0].bytes === entry.bytes
+      )
+    }
+  }
+  if (pass('TOOLCHAIN')) {
+    require(
+      equal(report.toolchainDigests.expected, report.toolchainDigests.observed)
+    )
+    const pinned = host('PINNED_TOOLCHAINS').data
+    require(equal(pinned.expected, expectedDigests()))
+    for (const key of ['claudeSha256', 'nodeSha256', 'dockerSha256'])
+      require(pinned.observed[key] === report.toolchainDigests.observed[key])
+  }
+  const needProfile = [
+    'CONTAINER_PROFILE',
+    'NAMESPACES',
+    'NATIVE_VERSION',
+    'NATIVE_LINEAGE',
+    'PHASES',
+    'HTTP_EXCHANGE',
+    'PRIVACY_CAPS'
+  ].some(pass)
+  let profile,
+    invocation,
+    inspection = new Map()
+  const getRoleArtifact = (role, kind) => {
+    const found = report.artifacts.filter(
+      (a) => a.role === kind && a.path.endsWith(`/${kind}-${role}.json`)
+    )
+    require(found.length === 1)
+    return found[0]
+  }
+  if (needProfile) {
+    const a = one('profile')
+    profile = parsed(retained, a)
+    require(
+      a.sha256 === report.profileSha256 &&
+        profile.version === 1 &&
+        profile.runId === report.runId &&
+        profile.fixtureId === report.fixtureId &&
+        profile.driverSha256 === report.driverSha256 &&
+        profile.consumedInputsSha256 === one('consumed-inputs').sha256 &&
+        equal(profile.toolchainDigests, report.toolchainDigests) &&
+        equal(profile.builtinAllowlist, BUILTIN_ALLOWLIST)
+    )
+    invocation = nativeInvocation(profile.observer.port)
+    require(
+      equal(profile.client.env, invocation.env) &&
+        profile.client.cwd === invocation.cwd &&
+        equal(profile.client.argv, {
+          version: [invocation.file, ...invocation.versionArgs],
+          port: [invocation.file, ...invocation.args]
+        })
+    )
+    const root = host('EVIDENCE_ROOT').data
+    require(path.isAbsolute(root.root) && typeof root.output === 'string')
+    for (const role of ['observer', 'client']) {
+      const expected = makeConfig(role, {
+        bundle: path.join(root.root, root.output, 'inputs/bundle'),
+        workspace: path.join(root.root, root.output, 'inputs/workspace'),
+        emptyVolume: path.join(root.root, root.output, 'inputs/empty-volume'),
+        runId: report.runId,
+        marker: profile.observer.config.cmd[2],
+        observerId: profile.observer.id
+      })
+      require(equal(expected, profile[role].config))
+      if (pass('CONTAINER_PROFILE')) {
+        const raw = parsed(retained, getRoleArtifact(role, 'inspect'))
+        inspection.set(role, raw)
+        verifyInspect(raw, { ...profile[role], config: expected })
+      }
+    }
+  }
+  if (pass('NAMESPACES')) {
+    require(pass('CONTAINER_PROFILE'))
+    const ready = {}
+    for (const role of ['observer', 'client']) {
+      const found = frames(role, 'READY')
+      require(found.length === 1)
+      ready[role] = parsed(retained, getRoleArtifact(role, 'preflight'))
+      require(equal(ready[role], found[0].data.frame.payload))
+    }
+    require(
+      ready.observer.port === profile.observer.port &&
+        ready.client.port === profile.observer.port &&
+        ready.client.envSha256 === sha256(canonical(invocation.env)) &&
+        ready.client.profileSha256 === report.profileSha256
+    )
+    verifyNamespaces(ready.observer, ready.client, host('HOST_NAMESPACES').data)
+  }
+  const commands = new Map(),
+    commandSeq = { client: 0, observer: 0 }
+  for (const record of records.filter(
+    (r) => r.source === 'HOST' && r.type === 'COMMAND'
+  )) {
+    const { target, type, rawBase64 } = record.data
+    require(['client', 'observer'].includes(target))
+    require(
+      parseHostCommand(
+        Buffer.from(rawBase64, 'base64'),
+        target,
+        report.runId,
+        commandSeq[target]++
+      ).type === type
+    )
+    const key = `${target}/${type}`
+    require(!commands.has(key))
+    commands.set(key, record)
+  }
+  const command = (role, type) => {
+    const found = commands.get(`${role}/${type}`)
+    require(found)
+    return found
+  }
+  const native = (phase) => {
+    const starts = frames('client', 'NATIVE_START').filter(
+      (r) => r.data.frame.payload.phase === phase
+    )
+    const ends = frames('client', 'NATIVE_END').filter(
+      (r) => r.data.frame.payload.phase === phase
+    )
+    require(
+      starts.length === 1 &&
+        ends.length === 1 &&
+        ends[0].ordinal > starts[0].ordinal
+    )
+    const p = starts[0].data.frame.payload,
+      end = ends[0].data.frame.payload,
+      execution = report.nativeExecution[`${phase}Probe`]
+    require(execution.startedAt !== null && execution.endedAt !== null)
+    require(
+      p.pid > 1 &&
+        p.ppid === 1 &&
+        p.argvSha256 === sha256(canonical(profile.client.argv[phase])) &&
+        p.envSha256 === sha256(canonical(invocation.env)) &&
+        p.stdinSha256 ===
+          sha256(phase === 'version' ? Buffer.alloc(0) : invocation.stdin) &&
+        equal(
+          { exitCode: end.exitCode, signal: end.signal, timeout: end.timeout },
+          {
+            exitCode: execution.exitCode,
+            signal: execution.signal,
+            timeout: execution.timeout
+          }
+        )
+    )
+    require(
+      starts[0].ordinal >
+        command('client', phase === 'version' ? 'START_NATIVE' : 'START_PORT')
+          .ordinal
+    )
+    return { start: starts[0], end: ends[0] }
+  }
+  const nativeFile = (phase, channel) => {
+    const found = report.artifacts.filter((a) =>
+      a.path.endsWith(`/native-${phase}-${channel}.bin`)
+    )
+    require(found.length === 1)
+    return retained.get(found[0].path)
+  }
+  if (pass('NATIVE_VERSION')) {
+    require(pass('NAMESPACES'))
+    native('version')
+    require(
+      report.nativeExecution.versionObserved === PINS.version &&
+        versionMatches(
+          nativeFile('version', 'stdout'),
+          report.nativeExecution.versionProbe
+        )
+    )
+  }
+  if (pass('NATIVE_LINEAGE') || pass('PHASES')) {
+    require(pass('NATIVE_VERSION'))
+    const version = native('version'),
+      port = native('port')
+    const top = Buffer.from(
+      host('NO_VERSION_DESCENDANTS').data.stdoutBase64,
+      'base64'
+    )
+      .toString('utf8')
+      .trim()
+      .split('\n')
+    require(
+      top.length === 2 &&
+        Number(top[1].trim().split(/\s+/)[0]) ===
+          inspection.get('client').State.Pid
+    )
+    const arm = command('observer', 'ARM_PORT'),
+      armed = frames('observer', 'ARMED')
+    require(
+      armed.length === 1 &&
+        arm.ordinal > version.end.ordinal &&
+        armed[0].ordinal > arm.ordinal &&
+        command('client', 'START_PORT').ordinal > armed[0].ordinal &&
+        port.start.ordinal > command('client', 'START_PORT').ordinal
+    )
+    require(armed[0].data.frame.payload.port === profile.observer.port)
+  }
+  if (pass('PHASES')) {
+    const requestOrdinals = frames('observer', 'REQUEST').map(
+      (r) => r.data.frame.payload.ordinal
+    )
+    const responseOrdinals = frames('observer', 'RESPONSE').map(
+      (r) => r.data.frame.payload.ordinal
+    )
+    require(
+      equal([...requestOrdinals].sort(), [...responseOrdinals].sort()) &&
+        new Set(requestOrdinals).size === requestOrdinals.length
+    )
+    require(
+      equal(
+        [...requestOrdinals].sort(),
+        [...report.observations.map((o) => o.ordinal)].sort()
+      ) && observer.partialBodies.length === 0
+    )
+    require(
+      !frames('observer', 'REJECTED').some(
+        (r) => r.data.frame.payload.reason === 'EARLY_PHASE'
+      )
+    )
+  }
+  if (pass('HTTP_EXCHANGE')) {
+    require(
+      pass('PHASES') && pass('NATIVE_LINEAGE') && report.observations.length > 0
+    )
+    const start = command('client', 'START_PORT'),
+      stop = command('client', 'STOP')
+    for (const r of [
+      ...frames('observer', 'REQUEST'),
+      ...frames('observer', 'RESPONSE')
+    ])
+      require(r.ordinal > start.ordinal && r.ordinal < stop.ordinal)
+    require(
+      frames('observer', 'RESPONSE').every(
+        (r) => r.data.frame.payload.outcome === 'FINISHED'
+      )
+    )
+  }
+  if (pass('PRIVACY_CAPS')) {
+    require(!control.clientCaptureFailed && !observer.observerCaptureFailed)
+    require(
+      !frames('observer', 'REJECTED').some((r) =>
+        ['CAP', 'FORBIDDEN_AUTH'].includes(r.data.frame.payload.reason)
+      )
+    )
+    let controls = 0
+    for (const [role, document, key] of [
+      ['client', control, 'clientWireBase64Chunks'],
+      ['observer', observer, 'wireBase64Chunks']
+    ]) {
+      const received = records.filter(
+        (r) => r.source === role && r.type === 'FRAME'
+      )
+      const raw = Buffer.concat(
+        received.map((r) => Buffer.from(r.data.rawBase64, 'base64'))
+      )
+      const wire = Buffer.concat(
+        document[key].map((s) => Buffer.from(s, 'base64'))
+      )
+      require(received.length <= 256 && raw.equals(wire))
+      controls += raw.length
+    }
+    require(controls <= 512 * 1024)
+    const bodies = new Map(
+      report.observations.map((o) => [
+        String(o.ordinal),
+        retained.get(o.bodyPath)
+      ])
+    )
+    for (const partial of observer.partialBodies) {
+      const key = String(partial.ordinal)
+      require(
+        !bodies.has(key) &&
+          Number.isInteger(partial.ordinal) &&
+          partial.ordinal >= 0 &&
+          partial.ordinal <= 3
+      )
+      bodies.set(
+        key,
+        Buffer.concat(
+          partial.bytesBase64Chunks.map((s) => Buffer.from(s, 'base64'))
+        )
+      )
+    }
+    const inventory = (items, bytesFor, keyFor, cap) => {
+      const offsets = new Map(),
+        terminals = new Set()
+      let lastTag = -1
+      for (const f of items) {
+        const key = keyFor(f),
+          bytes = bytesFor(key),
+          used = offsets.get(key) ?? 0
+        require(
+          Number.isInteger(f.tag) &&
+            f.tag >= lastTag &&
+            Number.isInteger(f.bytes) &&
+            f.bytes >= 0 &&
+            f.bytes <= 4096 &&
+            !terminals.has(key) &&
+            f.terminal === (f.bytes === 0) &&
+            used + f.bytes <= bytes.length
+        )
+        lastTag = f.tag
+        require(sha256(bytes.subarray(used, used + f.bytes)) === f.sha256)
+        offsets.set(key, used + f.bytes)
+        if (f.terminal) {
+          require(used === bytes.length)
+          terminals.add(key)
+        }
+      }
+      for (const [key, used] of offsets)
+        require(used === bytesFor(key).length && terminals.has(key))
+      require([...offsets.values()].reduce((a, b) => a + b, 0) <= cap)
+    }
+    inventory(
+      observer.rawFrameInventory,
+      (key) => {
+        require(bodies.has(key))
+        return bodies.get(key)
+      },
+      (f) => String(f.tag),
+      2 * 1024 * 1024
+    )
+    for (const bytes of bodies.values()) require(bytes.length <= 512 * 1024)
+    const nativeBytes = new Map()
+    for (const phase of ['version', 'port'])
+      for (const channel of ['stdout', 'stderr']) {
+        const found = report.artifacts.find((a) =>
+          a.path.endsWith(`/native-${phase}-${channel}.bin`)
+        )
+        if (found)
+          nativeBytes.set(
+            `${phase === 'version' ? 0 : 1}/${channel === 'stdout' ? 1 : 2}`,
+            retained.get(found.path)
+          )
+      }
+    inventory(
+      control.nativeRawFrameInventory,
+      (key) => {
+        require(nativeBytes.has(key))
+        return nativeBytes.get(key)
+      },
+      (f) => `${f.tag}/${f.channel}`,
+      2 * 1024 * 1024
+    )
+    for (const channel of [1, 2])
+      require(
+        [...nativeBytes]
+          .filter(([k]) => k.endsWith(`/${channel}`))
+          .reduce((n, [, bytes]) => n + bytes.length, 0) <=
+          1024 * 1024
+      )
+  }
+  if (pass('DRIFT')) {
+    const identities = host('FINAL_INPUT_IDENTITIES').data
+    const original = host('MANIFEST_INPUT').data
+    require(
+      identities.some(
+        (i) =>
+          i.path === original.path &&
+          i.sha256 === original.sha256 &&
+          i.bytes === original.bytes
+      )
+    )
+    const empty = identities.filter(
+      (i) =>
+        i.path ===
+        path.join(
+          host('EVIDENCE_ROOT').data.root,
+          host('EVIDENCE_ROOT').data.output,
+          'inputs/empty-volume'
+        )
+    )
+    require(empty.length === 1 && equal(empty[0].entries, []))
+    require(
+      Array.isArray(identities) && identities.length >= SOURCE_PATHS.length
+    )
+    for (const artifact of report.artifacts.filter((a) =>
+      [
+        'manifest',
+        'stdin',
+        'settings',
+        'mcp',
+        'bundle-inventory',
+        'bundle-source',
+        'consumed-inputs',
+        'profile'
+      ].includes(a.role)
+    ))
+      require(
+        identities.some(
+          (i) =>
+            i.path ===
+              path.join(host('EVIDENCE_ROOT').data.root, artifact.path) &&
+            i.sha256 === artifact.sha256 &&
+            i.bytes === artifact.bytes
+        )
+      )
+  }
+  const cleanup = parsed(retained, one('cleanup'))
+  if (pass('CLEANUP')) {
+    require(
+      cleanup.markerRemoved &&
+        cleanup.attachmentsClosed &&
+        cleanup.pinsClosed &&
+        cleanup.bootstrapDisposed !== false
+    )
+    if (records.some((r) => r.type === 'BOOTSTRAP_GRAPH'))
+      require(cleanup.bootstrapDisposed === true)
+    const intents = records.filter(
+      (r) => r.source === 'HOST' && r.type === 'CREATE_INTENT'
+    )
+    const prepared = records.filter(
+      (r) => r.source === 'HOST' && r.type === 'CREATE_PREPARED'
+    )
+    require(
+      intents.length <= prepared.length &&
+        intents.every((i) => prepared.some((p) => p.data.role === i.data.role))
+    )
+    require(
+      cleanup.containers.length === prepared.length &&
+        new Set(cleanup.containers.map((c) => c.role)).size ===
+          cleanup.containers.length
+    )
+    for (const item of cleanup.containers) {
+      const preparation = prepared.filter((r) => r.data.role === item.role)
+      require(
+        preparation.length === 1 && preparation[0].data.attempted === false
+      )
+      const attempted = intents.filter((r) => r.data.role === item.role)
+      require(attempted.length <= 1)
+      const intent = attempted[0]?.data ?? preparation[0].data
+      if (!attempted.length)
+        require(item.status === 'NOT_CREATED' && item.id === null)
+      else
+        require(
+          intent.attempted === true &&
+            equal(intent, { ...preparation[0].data, attempted: true })
+        )
+      require(
+        intent &&
+          ['REMOVED', 'NOT_CREATED'].includes(item.status) &&
+          item.name === intent.name &&
+          item.imageId === intent.imageId &&
+          item.configSha256 === intent.configSha256 &&
+          equal(item.labels, intent.labels)
+      )
+      const ids = records.filter(
+        (r) =>
+          r.source === 'HOST' &&
+          ['CREATED', 'RECOVERED_FOR_CLEANUP'].includes(r.type) &&
+          r.data.role === item.role
+      )
+      if (item.status === 'REMOVED')
+        require(ids.length === 1 && ids[0].data.id === item.id)
+      else require(ids.length === 0 && item.id === null)
+    }
+  }
+  if (pass('PUBLICATION_PREPARED')) {
+    require(Array.isArray(cleanup.stagedInventory))
+    for (const staged of cleanup.stagedInventory) {
+      const found = report.artifacts.find((a) => a.path === staged.path)
+      require(found && equal(staged, artifactRef(found)))
+    }
+  }
+}
+
+function assertContainmentProofs(report, retained, one, profile) {
+  const require = (condition) => {
+    if (!condition) throw probeError('PROTOCOL')
+  }
+  const control = parsed(retained, one('control-trace'))
+  const observer = parsed(retained, one('observer-trace'))
+  const all = [...control.records, ...observer.records].sort(
+    (a, b) => a.ordinal - b.ordinal
+  )
+  let offset = -1
+  all.forEach((r, i) => {
+    require(
+      r.ordinal === i &&
+        Number.isInteger(r.offsetMs) &&
+        r.offsetMs >= offset &&
+        r.offsetMs <= 35000
+    )
+    offset = r.offsetMs
+  })
+  const hostOne = (type) => {
+    const list = all.filter((r) => r.source === 'HOST' && r.type === type)
+    require(list.length === 1)
+    return list[0]
+  }
+  const root = hostOne('EVIDENCE_ROOT').data
+  require(path.isAbsolute(root.root) && typeof root.output === 'string')
+  const dir = (...parts) => path.join(root.root, root.output, ...parts)
+  const frames = (role, type) =>
+    all.filter(
+      (r) =>
+        r.source === role && r.type === 'FRAME' && r.data.frame.type === type
+    )
+  for (const role of ['observer', 'client']) {
+    const expected = makeConfig(role, {
+      bundle: dir('inputs/bundle'),
+      workspace: dir('inputs/workspace'),
+      emptyVolume: dir('inputs/empty-volume'),
+      runId: report.runId,
+      marker: profile.observer.config.cmd[2],
+      observerId: profile.observer.id
+    })
+    require(equal(profile[role].config, expected))
+    const inspections = report.artifacts.filter(
+      (a) => a.role === 'inspect' && a.path.endsWith(`/inspect-${role}.json`)
+    )
+    const preflights = report.artifacts.filter(
+      (a) =>
+        a.role === 'preflight' && a.path.endsWith(`/preflight-${role}.json`)
+    )
+    require(inspections.length === 1 && preflights.length === 1)
+    verifyInspect(parsed(retained, inspections[0]), {
+      ...profile[role],
+      config: expected
+    })
+    const ready = frames(role, 'READY')
+    require(ready.length === 1)
+    require(equal(parsed(retained, preflights[0]), ready[0].data.frame.payload))
+  }
+  const readyObserver = frames('observer', 'READY')[0].data.frame.payload
+  const readyClient = frames('client', 'READY')[0].data.frame.payload
+  require(
+    readyObserver.port === profile.observer.port &&
+      readyClient.port === profile.observer.port &&
+      readyClient.profileSha256 === report.profileSha256 &&
+      readyClient.envSha256 === sha256(canonical(profile.client.env))
+  )
+  verifyNamespaces(readyObserver, readyClient, hostOne('HOST_NAMESPACES').data)
+  const commands = new Map(),
+    seq = { client: 0, observer: 0 }
+  for (const record of all.filter(
+    (r) => r.source === 'HOST' && r.type === 'COMMAND'
+  )) {
+    const { target, type, rawBase64 } = record.data
+    require(['client', 'observer'].includes(target))
+    const command = parseHostCommand(
+      Buffer.from(rawBase64, 'base64'),
+      target,
+      report.runId,
+      seq[target]++
+    )
+    const key = `${target}/${type}`
+    require(command.type === type && !commands.has(key))
+    commands.set(key, record)
+  }
+  const command = (role, type) => {
+    const r = commands.get(`${role}/${type}`)
+    require(r)
+    return r
+  }
+  const startNative = command('client', 'START_NATIVE'),
+    startPort = command('client', 'START_PORT')
+  const stop = command('client', 'STOP'),
+    arm = command('observer', 'ARM_PORT')
+  const configure = command('client', 'CONFIGURE'),
+    configured = JSON.parse(Buffer.from(configure.data.rawBase64, 'base64'))
+  require(
+    equal(configured.payload, {
+      port: profile.observer.port,
+      profileSha256: report.profileSha256,
+      envSha256: sha256(canonical(profile.client.env))
+    })
+  )
+  const armed = frames('observer', 'ARMED')
+  require(
+    armed.length === 1 &&
+      armed[0].data.frame.payload.port === profile.observer.port
+  )
+  const nativeStarts = frames('client', 'NATIVE_START'),
+    nativeEnds = frames('client', 'NATIVE_END')
+  require(nativeStarts.length === 2 && nativeEnds.length === 2)
+  const byPhase = (list, phase) => {
+    const found = list.filter((r) => r.data.frame.payload.phase === phase)
+    require(found.length === 1)
+    return found[0]
+  }
+  require(
+    readyObserver &&
+      configure.ordinal > frames('observer', 'READY')[0].ordinal &&
+      readyClient &&
+      frames('client', 'READY')[0].ordinal > configure.ordinal &&
+      startNative.ordinal > frames('client', 'READY')[0].ordinal &&
+      byPhase(nativeStarts, 'version').ordinal > startNative.ordinal &&
+      byPhase(nativeEnds, 'version').ordinal >
+        byPhase(nativeStarts, 'version').ordinal &&
+      arm.ordinal > byPhase(nativeEnds, 'version').ordinal &&
+      armed[0].ordinal > arm.ordinal &&
+      startPort.ordinal > armed[0].ordinal &&
+      byPhase(nativeStarts, 'port').ordinal > startPort.ordinal &&
+      byPhase(nativeEnds, 'port').ordinal >
+        byPhase(nativeStarts, 'port').ordinal &&
+      stop.ordinal > byPhase(nativeEnds, 'port').ordinal
+  )
+  const top = Buffer.from(
+    hostOne('NO_VERSION_DESCENDANTS').data.stdoutBase64,
+    'base64'
+  )
+    .toString('utf8')
+    .trim()
+    .split('\n')
+  const clientInspect = report.artifacts.find((a) =>
+    a.path.endsWith('/inspect-client.json')
+  )
+  require(
+    top.length === 2 &&
+      Number(top[1].trim().split(/\s+/)[0]) ===
+        parsed(retained, clientInspect).State.Pid
+  )
+  for (const role of ['client', 'observer']) {
+    const closed = frames(role, 'CLOSED')
+    require(
+      closed.length === 1 && closed[0].ordinal > command(role, 'STOP').ordinal
+    )
+  }
+  for (const r of [
+    ...frames('observer', 'REQUEST'),
+    ...frames('observer', 'RESPONSE')
+  ])
+    require(r.ordinal > startPort.ordinal && r.ordinal < stop.ordinal)
+  const requests = frames('observer', 'REQUEST'),
+    responses = frames('observer', 'RESPONSE')
+  require(
+    requests.length === report.observations.length &&
+      responses.length === requests.length
+  )
+  require(
+    !frames('observer', 'REJECTED').some((r) =>
+      ['FORBIDDEN_AUTH', 'CAP', 'EARLY_PHASE'].includes(
+        r.data.frame.payload.reason
+      )
+    )
+  )
+  require(
+    !control.clientCaptureFailed &&
+      !observer.observerCaptureFailed &&
+      observer.partialBodies.length === 0
+  )
+  const rawInventory = (records, bytesFor, keyFor, terminalOnlyLimit) => {
+    const offsets = new Map(),
+      terminals = new Set()
+    for (const frame of records) {
+      const key = keyFor(frame),
+        bytes = bytesFor(key),
+        used = offsets.get(key) ?? 0
+      require(
+        !terminals.has(key) &&
+          frame.terminal === (frame.bytes === 0) &&
+          frame.bytes <= 4096
+      )
+      require(sha256(bytes.subarray(used, used + frame.bytes)) === frame.sha256)
+      offsets.set(key, used + frame.bytes)
+      if (frame.terminal) {
+        require(used === bytes.length)
+        terminals.add(key)
+      }
+    }
+    require(
+      terminals.size === terminalOnlyLimit &&
+        [...offsets].every(([key, size]) => size === bytesFor(key).length)
+    )
+  }
+  const nativeFiles = new Map()
+  for (const phase of ['version', 'port'])
+    for (const channel of ['stdout', 'stderr']) {
+      const found = report.artifacts.filter((a) =>
+        a.path.endsWith(`/native-${phase}-${channel}.bin`)
+      )
+      require(found.length === 1)
+      nativeFiles.set(
+        `${phase === 'version' ? 0 : 1}/${channel === 'stdout' ? 1 : 2}`,
+        retained.get(found[0].path)
+      )
+    }
+  rawInventory(
+    control.nativeRawFrameInventory,
+    (key) => {
+      require(nativeFiles.has(key))
+      return nativeFiles.get(key)
+    },
+    (f) => `${f.tag}/${f.channel}`,
+    4
+  )
+  for (const channel of [1, 2])
+    require(
+      [...nativeFiles]
+        .filter(([k]) => k.endsWith(`/${channel}`))
+        .reduce((n, [, bytes]) => n + bytes.length, 0) <=
+        1024 * 1024
+    )
+  const bodies = new Map(
+    report.observations.map((o) => [o.ordinal, retained.get(o.bodyPath)])
+  )
+  rawInventory(
+    observer.rawFrameInventory,
+    (key) => {
+      require(bodies.has(key))
+      return bodies.get(key)
+    },
+    (f) => f.tag,
+    bodies.size
+  )
+  require(
+    [...bodies.values()].reduce((n, bytes) => n + bytes.length, 0) <=
+      2 * 1024 * 1024
+  )
+  require(
+    (control.clientRawPendingBase64Chunks ?? []).join('') === '' &&
+      (observer.rawPendingBase64Chunks ?? []).join('') === ''
+  )
+  require(hostOne('FINAL_INPUT_IDENTITIES').data.length >= SOURCE_PATHS.length)
+  const cleanup = parsed(retained, one('cleanup'))
+  require(
+    cleanup.containers.length === 2 && cleanup.bootstrapDisposed !== false
+  )
+  for (const role of ['client', 'observer']) {
+    const found = cleanup.containers.filter((r) => r.role === role)
+    require(found.length === 1)
+    const item = found[0]
+    require(
+      item.status === 'REMOVED' &&
+        item.id === profile[role].id &&
+        item.name === profile[role].name &&
+        item.imageId === PINS.imageId &&
+        equal(item.labels, profile[role].labels) &&
+        item.configSha256 === sha256(canonical(profile[role].config))
+    )
+  }
+}
+
+/** Recompute retained bytes and relationships before the publication boundary. */
+export function assertEvidenceBindings(report, retained) {
+  validateReport(report)
+  if (!equal(report.toolchainDigests.expected, expectedDigests()))
+    throw probeError('PROTOCOL')
+  const artifacts = new Map(report.artifacts.map((a) => [a.path, a]))
+  for (const artifact of report.artifacts) {
+    const bytes = retained.get(artifact.path)
+    if (
+      !bytes ||
+      bytes.length !== artifact.bytes ||
+      sha256(bytes) !== artifact.sha256
+    )
+      throw probeError('PROTOCOL')
+  }
+  const one = (role) => {
+    const list = report.artifacts.filter((a) => a.role === role)
+    if (list.length !== 1) throw probeError('PROTOCOL')
+    return list[0]
+  }
+  const trace = (reference) => {
+    const [filename, ordinal] = reference.split('#')
+    if (!/^\d+$/.test(ordinal ?? '')) throw probeError('PROTOCOL')
+    const artifact = artifacts.get(filename)
+    const document = parsed(retained, artifact)
+    const record = document.records.find((r) => r.ordinal === Number(ordinal))
+    if (!record || record.source !== 'observer' || record.type !== 'FRAME')
+      throw probeError('PROTOCOL')
+    return record.data.frame
+  }
+  for (const observation of report.observations) {
+    const [eventFile, eventOrdinal] = observation.eventPath.split('#')
+    const event = parsed(retained, artifacts.get(eventFile)).records.find(
+      (r) => r.ordinal === Number(eventOrdinal)
+    )
+    if (event?.offsetMs !== observation.offsetMs) throw probeError('PROTOCOL')
+    if (
+      markerVerified(retained.get(observation.bodyPath), observation) !==
+      observation.markerVerified
+    )
+      throw probeError('PROTOCOL')
+    const request = trace(observation.eventPath),
+      response = trace(observation.responsePath)
+    if (
+      request.type !== 'REQUEST' ||
+      response.type !== 'RESPONSE' ||
+      request.role !== 'observer' ||
+      response.role !== 'observer'
+    )
+      throw probeError('PROTOCOL')
+    if (
+      request.runId !== report.runId ||
+      response.runId !== report.runId ||
+      request.payload.ordinal !== observation.ordinal ||
+      response.payload.ordinal !== observation.ordinal
+    )
+      throw probeError('PROTOCOL')
+    for (const key of [
+      'method',
+      'path',
+      'bodySha256',
+      'bytes',
+      'markerVerified',
+      'contentType',
+      'contentEncoding'
+    ]) {
+      if (request.payload[key] !== observation[key])
+        throw probeError('PROTOCOL')
+    }
+    if (
+      response.payload.status !== 503 ||
+      response.payload.headersSha256 !== sha256(canonical(RESPONSE_HEADERS)) ||
+      response.payload.bodySha256 !== sha256(RESPONSE_BODY)
+    )
+      throw probeError('PROTOCOL')
+    if (
+      report.status === 'PORT_OBSERVED' &&
+      response.payload.outcome !== 'FINISHED'
+    )
+      throw probeError('PROTOCOL')
+  }
+  const requiredProofs = {
+    INPUTS: ['manifest', 'consumed-inputs'],
+    TOOLCHAIN: ['control-trace'],
+    BUNDLE: ['bundle-inventory'],
+    CONTAINER_PROFILE: ['inspect', 'profile'],
+    NAMESPACES: ['preflight', 'control-trace'],
+    PHASES: ['control-trace', 'observer-trace'],
+    NATIVE_VERSION: ['control-trace', 'native-stdout'],
+    NATIVE_LINEAGE: ['control-trace'],
+    HTTP_EXCHANGE: ['observer-trace', 'request-body'],
+    PRIVACY_CAPS: ['control-trace', 'observer-trace'],
+    DRIFT: ['control-trace'],
+    CLEANUP: ['cleanup'],
+    PUBLICATION_PREPARED: ['cleanup', 'control-trace']
+  }
+  for (const check of report.containmentChecks.filter(
+    (c) => c.status === 'PASS'
+  ))
+    for (const role of requiredProofs[check.id])
+      if (
+        !check.artifactPaths.some(
+          (reference) => artifacts.get(reference.split('#')[0])?.role === role
+        )
+      )
+        throw probeError('PROTOCOL')
+  assertReachedPassProofs(report, retained, one)
+  if (!['PORT_OBSERVED', 'PORT_NOT_OBSERVED'].includes(report.status))
+    return report
+  const bundle = one('bundle-inventory'),
+    inventory = parsed(retained, bundle)
+  const expectedSourcePaths = [
+    ...SOURCE_PATHS,
+    'fixtures/stdin.txt',
+    'fixtures/settings.json',
+    'fixtures/mcp.json',
+    'fixtures/invocation-template.json'
+  ].sort()
+  if (
+    !equal(
+      inventory.entries.map((entry) => entry.path),
+      expectedSourcePaths
+    )
+  )
+    throw probeError('PROTOCOL')
+  if (
+    bundle.sha256 !== report.driverSha256 ||
+    inventory.version !== 1 ||
+    inventory.entries.length !==
+      report.artifacts.filter((a) => a.role === 'bundle-source').length
+  )
+    throw probeError('PROTOCOL')
+  let previous = ''
+  for (const entry of inventory.entries) {
+    if (entry.path <= previous) throw probeError('PROTOCOL')
+    previous = entry.path
+    const a = report.artifacts.find(
+      (x) =>
+        x.role === 'bundle-source' &&
+        x.path.endsWith(`/inputs/bundle/${entry.path}`)
+    )
+    if (!a || a.sha256 !== entry.sha256 || a.bytes !== entry.bytes)
+      throw probeError('PROTOCOL')
+  }
+  const profileArtifact = one('profile'),
+    profile = parsed(retained, profileArtifact)
+  if (!equal(profile.builtinAllowlist, BUILTIN_ALLOWLIST))
+    throw probeError('PROTOCOL')
+  if (
+    !equal(report.toolchainDigests.expected, report.toolchainDigests.observed)
+  )
+    throw probeError('PROTOCOL')
+  parseManifest(retained.get(one('manifest').path))
+  for (const [role, text] of [
+    ['stdin', STDIN_TEXT],
+    ['settings', SETTINGS_TEXT],
+    ['mcp', MCP_TEXT]
+  ])
+    if (!retained.get(one(role).path).equals(Buffer.from(text)))
+      throw probeError('PROTOCOL')
+  const consumedArtifact = one('consumed-inputs'),
+    consumed = parsed(retained, consumedArtifact)
+  if (
+    profileArtifact.sha256 !== report.profileSha256 ||
+    profile.driverSha256 !== report.driverSha256 ||
+    profile.consumedInputsSha256 !== consumedArtifact.sha256 ||
+    !equal(profile.toolchainDigests, report.toolchainDigests)
+  )
+    throw probeError('PROTOCOL')
+  const invocation = nativeInvocation(profile.observer.port)
+  if (
+    !equal(profile.client.env, invocation.env) ||
+    profile.client.cwd !== invocation.cwd ||
+    !equal(profile.client.argv, {
+      version: [invocation.file, ...invocation.versionArgs],
+      port: [invocation.file, ...invocation.args]
+    })
+  )
+    throw probeError('PROTOCOL')
+  for (const [key, role] of [
+    ['manifest', 'manifest'],
+    ['stdin', 'stdin'],
+    ['settings', 'settings'],
+    ['mcp', 'mcp'],
+    ['bundleInventory', 'bundle-inventory']
+  ]) {
+    const a = one(role)
+    if (
+      !equal(consumed[key], { path: a.path, sha256: a.sha256, bytes: a.bytes })
+    )
+      throw probeError('PROTOCOL')
+  }
+  for (const role of ['client', 'observer']) {
+    const document = parsed(
+      retained,
+      one(role === 'client' ? 'control-trace' : 'observer-trace')
+    )
+    let sequence = 0
+    const starts = new Map(),
+      ends = new Map()
+    for (const record of document.records.filter(
+      (r) => r.source === role && r.type === 'FRAME'
+    )) {
+      const actual = parseControlLine(
+        Buffer.from(record.data.rawBase64, 'base64'),
+        role,
+        report.runId,
+        sequence++
+      )
+      if (!equal(actual, record.data.frame)) throw probeError('PROTOCOL')
+      if (role === 'client' && actual.type === 'NATIVE_START') {
+        const p = actual.payload
+        if (
+          starts.has(p.phase) ||
+          p.ppid !== 1 ||
+          p.pid <= 1 ||
+          p.argvSha256 !== sha256(canonical(profile.client.argv[p.phase])) ||
+          p.envSha256 !== sha256(canonical(invocation.env)) ||
+          p.stdinSha256 !==
+            sha256(p.phase === 'version' ? Buffer.alloc(0) : invocation.stdin)
+        )
+          throw probeError('PROTOCOL')
+        starts.set(p.phase, p)
+      }
+      if (role === 'client' && actual.type === 'NATIVE_END') {
+        const p = actual.payload
+        if (!starts.has(p.phase) || ends.has(p.phase))
+          throw probeError('PROTOCOL')
+        ends.set(p.phase, p)
+      }
+    }
+    if (!sequence) throw probeError('PROTOCOL')
+    if (role === 'client') {
+      for (const phase of ['version', 'port']) {
+        const end = ends.get(phase),
+          execution = report.nativeExecution[`${phase}Probe`]
+        if (
+          !starts.has(phase) ||
+          !end ||
+          !equal(
+            {
+              exitCode: end.exitCode,
+              signal: end.signal,
+              timeout: end.timeout
+            },
+            {
+              exitCode: execution.exitCode,
+              signal: execution.signal,
+              timeout: execution.timeout
+            }
+          )
+        )
+          throw probeError('PROTOCOL')
+      }
+      const versions = report.artifacts.filter((a) =>
+        a.path.endsWith('/native-version-stdout.bin')
+      )
+      if (
+        versions.length !== 1 ||
+        !versionMatches(
+          retained.get(versions[0].path),
+          report.nativeExecution.versionProbe
+        )
+      )
+        throw probeError('PROTOCOL')
+    }
+  }
+  const failures = parsed(retained, one('failures'))
+  const cleanup = parsed(retained, one('cleanup'))
+  if (
+    failures.some(
+      (f) =>
+        report.status !== 'PORT_NOT_OBSERVED' ||
+        f.code !== 'NO_ELIGIBLE_EXCHANGE'
+    ) ||
+    cleanup.containers.some((x) => x.status === 'UNRESOLVED') ||
+    !cleanup.markerRemoved ||
+    !cleanup.attachmentsClosed ||
+    !cleanup.pinsClosed
+  )
+    throw probeError('PROTOCOL')
+  assertContainmentProofs(report, retained, one, profile)
+  return report
+}
+
+export async function persistReport(context) {
+  const {
+    state,
+    evidence,
+    captures,
+    roles,
+    requests,
+    responses,
+    observed,
+    inputs,
+    profileSha256,
+    cleanup
+  } = context
+  let minimumMetadata = evidence.totalBytes
+  for (const capture of Object.values(captures))
+    for (const entry of capture.rawInventory) {
+      minimumMetadata += Buffer.byteLength(JSON.stringify(entry)) + 1
+      if (minimumMetadata > 8 * 1024 * 1024) throw probeError('CAP')
+    }
+  const aliases = state.artifacts
+  for (const artifact of evidence.artifacts)
+    if (!aliases.has(artifact.role)) aliases.set(artifact.role, artifact)
+  async function add(alias, role, name, value, bytes = false) {
+    const artifact = bytes
+      ? await evidence.add(role, name, value)
+      : await evidence.addJson(role, name, value)
+    aliases.set(alias, artifact)
+    return artifact
+  }
+  const observerTracePath = path.posix.join(
+    evidence.outputRelative,
+    'observer-trace.json'
+  )
+  const controlTracePath = path.posix.join(
+    evidence.outputRelative,
+    'control-trace.json'
+  )
+  const observations = [],
+    partialBodies = []
+  for (const [role, capture] of Object.entries(captures)) {
+    if (role === 'client')
+      for (const phase of ['version', 'port'])
+        for (const channel of ['stdout', 'stderr']) {
+          const key = `${phase === 'version' ? 0 : 1}/${channel === 'stdout' ? 1 : 2}`
+          if (capture.parts.has(key))
+            await add(
+              `native-${phase}-${channel}`,
+              `native-${channel}`,
+              `native-${phase}-${channel}.bin`,
+              capture.nativeBytes(phase, channel),
+              true
+            )
+        }
+  }
+  for (const [ordinal, request] of [...requests.entries()].sort(
+    (a, b) => a[0] - b[0]
+  )) {
+    const response = responses.get(ordinal),
+      capture = captures.observer
+    if (!response || !capture?.bodyComplete(ordinal)) continue
+    const bytes = capture.body(ordinal),
+      payload = request.frame.payload
+    if (bytes.length !== payload.bytes || sha256(bytes) !== payload.bodySha256)
+      throw probeError('PROTOCOL')
+    const body = await add(
+      `body-${ordinal}`,
+      'request-body',
+      `body-${ordinal}.bin`,
+      bytes,
+      true
+    )
+    observations.push({
+      ...payload,
+      encodingKnown: payload.contentEncoding !== 'OTHER',
+      offsetMs: state.records[request.ordinal].offsetMs,
+      bodyPath: body.path,
+      eventPath: `${observerTracePath}#${request.ordinal}`,
+      responsePath: `${observerTracePath}#${response.ordinal}`
+    })
+    delete observations.at(-1).phase
+  }
+  if (captures.observer)
+    for (const key of captures.observer.parts.keys()) {
+      if (!observations.some((o) => String(o.ordinal) === key))
+        partialBodies.push({
+          ordinal: Number(key),
+          bytesBase64Chunks: chunks64(captures.observer.body(Number(key))),
+          terminal: captures.observer.bodyComplete(Number(key))
+        })
+    }
+  for (const [role, record] of Object.entries(roles)) {
+    if (record.inspect)
+      await add(
+        `inspect-${role}`,
+        'inspect',
+        `inspect-${role}.json`,
+        record.inspect
+      )
+    if (record.ready)
+      await add(
+        `preflight-${role}`,
+        'preflight',
+        `preflight-${role}.json`,
+        record.ready
+      )
+  }
+  cleanup.stagedInventory = evidence.artifacts.map((a) => ({
+    path: a.path,
+    sha256: a.sha256,
+    bytes: a.bytes
+  }))
+  await add('cleanup', 'cleanup', 'cleanup.json', cleanup)
+  await add('control-trace', 'control-trace', 'control-trace.json', {
+    version: 1,
+    records: state.records.filter((r) => r.source !== 'observer'),
+    dockerCalls: (context.docker?.records ?? []).map(
+      ({ stdoutBase64, stderrBase64, ...record }) => ({
+        ...record,
+        stdoutBase64Chunks: chunks64(Buffer.from(stdoutBase64, 'base64')),
+        stderrBase64Chunks: chunks64(Buffer.from(stderrBase64, 'base64'))
+      })
+    ),
+    clientWireBase64Chunks: chunks64(
+      Buffer.concat(captures.client?.controlWire ?? [])
+    ),
+    clientRawPendingBase64Chunks: chunks64(
+      captures.client?.raw ?? Buffer.alloc(0)
+    ),
+    nativeRawFrameInventory: captures.client?.rawInventory ?? [],
+    clientCaptureFailed: captures.client?.failed ?? false
+  })
+  await add('observer-trace', 'observer-trace', 'observer-trace.json', {
+    version: 1,
+    records: state.records.filter((r) => r.source === 'observer'),
+    wireBase64Chunks: chunks64(
+      Buffer.concat(captures.observer?.controlWire ?? [])
+    ),
+    rawPendingBase64Chunks: chunks64(captures.observer?.raw ?? Buffer.alloc(0)),
+    rawFrameInventory: captures.observer?.rawInventory ?? [],
+    partialBodies,
+    observerCaptureFailed: captures.observer?.failed ?? false
+  })
+  await add(
+    'failures',
+    'failures',
+    'failures.json',
+    state.failures.map(({ recordOrdinal, ...failure }) => ({
+      ...failure,
+      artifactRef:
+        recordOrdinal === null ? null : `${controlTracePath}#${recordOrdinal}`
+    }))
+  )
+  state.check(
+    'PUBLICATION_PREPARED',
+    'PASS',
+    'Exclusive staged files synced and closed; final publication requires successful descriptor cleanup.',
+    ['cleanup', 'control-trace']
+  )
+  const hasExchange = observations.some(
+    (o) => responses.get(o.ordinal).frame.payload.outcome === 'FINISHED'
+  )
+  const status = statusFor(state.failures, hasExchange)
+  const report = {
+    version: 1,
+    runId: context.manifest?.runId ?? null,
+    fixtureId: context.manifest?.fixtureId ?? null,
+    verificationClass: 'REFERENCE_RECON_ONLY',
+    status,
+    exitCode: status === 'PORT_OBSERVED' ? 0 : 1,
+    toolchainDigests: {
+      expected: expectedDigests(),
+      observed: { ...observed }
+    },
+    driverSha256: inputs?.driverSha256 ?? null,
+    profileSha256: profileSha256 ?? null,
+    containmentChecks: state.checks.map(({ proofs, ...check }) => ({
+      ...check,
+      artifactPaths: proofs.map((alias) => {
+        const [name, ordinal] = alias.split('#'),
+          artifact = aliases.get(name)
+        if (!artifact) throw probeError('PROTOCOL')
+        return artifact.path + (ordinal === undefined ? '' : `#${ordinal}`)
+      })
+    })),
+    observations,
+    nativeExecution: state.nativeExecution,
+    artifacts: [...evidence.artifacts],
+    limitations: [...state.limitations],
+    reviewStatus: 'PENDING'
+  }
+  for (const check of report.containmentChecks)
+    if (check.id === 'HTTP_EXCHANGE' && check.status === 'PASS')
+      check.artifactPaths = [
+        ...new Set([
+          ...check.artifactPaths,
+          ...observations.flatMap((o) => [
+            o.bodyPath,
+            o.eventPath,
+            o.responsePath
+          ])
+        ])
+      ]
+  assertEvidenceBindings(report, await evidence.physicalArtifacts())
+  return evidence.publish(report)
+}

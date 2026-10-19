@@ -1,0 +1,228 @@
+## 4. Seleção única e pedido real
+
+ContextBuildInput/StepContext recebem um campo opcional versionado
+`toolResultContext`. No modo novo sua ausência ou inconsistência é erro;
+não existe fallback silencioso para summary. O runtime valida a saída de
+ContextEngine customizado, inclusive IDs/cursor, integridade do envelope e
+conjunto obrigatório. HybridOrchestrator anuncia suporte ao protocolo1;
+modo novo com orquestrador sem suporte é erro de composição antes de run.
+Esse anúncio é contrato de código confiável, não isolamento de plugin hostil.
+
+ContextEngine seleciona primeiro instruções/governança, objetivo/usuário e
+todos os TOOL_RESULT da execução. Dados de usuário e ferramentas
+são UNTRUSTED. Conhecimento/histórico opcionais são considerados em ordem
+de prioridade já existente e só entram inteiros. A seleção retorna os IDs
+e o valor completo de cada resultado; não usa summarizeObservation para
+reconstruir payload nem lê uma segunda lista paralela para renderizar.
+
+Formato wire interno: exatamente duas mensagens, ambas ModelMessage atual:
+
+1. system: instruções de governança do host, instruções de agente confiáveis,
+   esquema de decisão, tipos/reasons permitidos e catálogo registrado.
+2. user: JSON versionado `cvg.decision-context/1` contendo objetivo do usuário,
+   userMessage, estado descritivo, itens selecionados e dados de reparo.
+   Cada item inclui contextId, prioridade, trust, source, observationId,
+   provenance e o payload completo quando aplicável. Dados arbitrários não
+   são interpolados no texto de system. Diagnóstico de erro do modelo é
+   dado de reparo UNTRUSTED, não instrução do host.
+
+O modelo pode propor, mas nenhum texto concede policy/approval/execução.
+JSON framing evita ambiguidade sintática, sem promessa de resistência
+semântica de LLM a prompt injection. Ambas as roles existem nos dois
+contratos atuais; não se introduz role tool nem tool_call_id nesta fatia.
+O gateway governado é rota distinta: testar diretamente ModelInputSchema
+com as duas mensagens prova só compatibilidade do input. Não prova que
+ModelRequest inteiro satisfaz ModelGatewayRequestSchema nem cria adaptação
+de orçamento/maxOutputTokens entre essas rotas.
+
+O orquestrador constrói um snapshot imutável do ModelRequest final, incluindo
+messages, context, budget, correlationId, purpose e o novo campo opcional
+`maxOutputTokens:512`. Faz validação de tamanho e contagem sobre esse mesmo
+snapshot, calcula requestSha256 e envia os mesmos valores. O signal é
+propagado separadamente. Mutação após admissão invalida a chamada.
+
+## 5. Admissão e orçamento, inclusive reparos
+
+### 5.1 Contagem qualificada
+
+HybridOrchestrator recebe uma porta confiável `DecisionInputCounter` pareada
+com o decisionModel. Ela recebe o snapshot final e devolve counterId/version,
+identidade do modelo/formatação, inputUpperBoundTokens, contextWindowTokens
+e costUpperBoundUsd incluindo a reserva de saída. O adaptador deve garantir
+limite superior para todo input realmente enviado, inclusive wrappers do
+provider. ModelRequest.maxOutputTokens precisa ser respeitado pelo par.
+
+Sem esse par qualificado, sem janela conhecida, contagem inválida ou sem
+limite de saída: ADMISSION_UNAVAILABLE, zero chamadas. Não usar o estimador
+legado `ceil(text.length/4)` como substituto. Nesta fatia só se qualificam
+pares sintéticos locais de contador/modelo; não se habilita provider real.
+A contagem sintética é a regra declarada pelo modelo sintético, não medição
+de tokenizer de modelo comercial ou local instalado.
+
+Tentar remover apenas itens opcionais inteiros e reconstruir/medir de novo.
+Nunca remover governança, usuário ou resultado obrigatório. A admissão exige:
+
+- limites de bytes/unidades da seção3 e todas as fronteiras de schema;
+- inputUpperBoundTokens <= tokenBudget do contexto (default4000 no modo1);
+- inputUpperBoundTokens +512 <= janela declarada do par;
+- a mesma soma <= saldo de maxTokens da execução;
+- costUpperBoundUsd <= saldo de maxCostUsd, prazo ainda válido e saldo
+  para uma chamada e, se necessário, um reparo de decisão.
+
+Sem espaço após remover opcionais: CONTEXT_OVERFLOW ou motivo de orçamento
+específico, sem chamada ao modelo. Contagem pura não consome slot de modelo.
+Counter que não respeita deadline, lança ou devolve NaN/números negativos
+faz a admissão falhar. Não há retry de counter nesta fatia.
+
+### 5.2 Reserva persistida antes de cada tentativa
+
+IterativeOrchestratorInput recebe, somente no modo1, a porta do runtime
+`decisionAdmission` com reserve/settle. Há no máximo uma reserva pendente
+por execução; exclusão atômica está definida em5.3. Fence da0217 é revalidado
+quando a composição é publicada/bound; não é presumido em store unbound. A reserva
+vincula tenant, execution, passo, attempt, purpose, requestSha256, contador,
+limites e ID opaco nativo; IDs enviados pelo output não têm efeito.
+
+`reserve` revalida saldos/deadline/cancelamento, cobra um modelCall e os
+limites superiores de tokens/custo, registra repair quando purpose=REPAIR e
+persiste checkpoint antes de retornar receipt. Falha desse save impede
+complete. O orquestrador só chama o modelo com receipt do snapshot atual.
+
+`settle` aceita apenas a reserva corrente, o digest correto e uso nativo
+finito/não negativo dentro dos limites. Substitui a cobrança reservada pelo
+uso real e persiste sua quitação. Repetição idêntica é idempotente; receipt
+de outra execução/passo, resultado conflitante ou tentativa de quitar uma
+reserva diferente são STATE_CONFLICT. Não baixar saldo de outra chamada.
+
+Falha, timeout, cancelamento, perda de processo/lease ou resultado sem uso
+validável conservam a cobrança superior. A reserva passa a UNKNOWN e a
+execução interrompe; não repetir a chamada automaticamente nem liberar
+saldo por falta de resposta. Na retomada, reserva pendente vira UNKNOWN
+antes de qualquer despacho; resolução operacional futura não é autorização
+para prosseguir nesta fatia. Resultado tardio após encerramento não muda
+checkpoint, saldo ou decisão. Se settlement falhar no store, conservar a
+reserva anterior como cobrança e interromper.
+
+Uso acima do limite é ADMISSION_BREACH: não entregar resposta nem despachar
+efeito, marcar par contador/modelo não qualificado e conservar diagnóstico
+do uso observado. Não afirmar que a cobrança real ficou limitada quando o
+adaptador violou o contrato. O caso é critério vermelho, não ajuste para PASS.
+
+No modo1 a contabilidade de decisão pertence exclusivamente à porta do
+runtime. O retorno novo contém decision e decisionAdmissionIds, a lista sem
+repetições de todas as tentativas quitadas deste passo. usage legado deve
+estar ausente; o runtime confere a lista com o ledger nativo desse passo e
+não reaplica ModelUsage agregado. O runtime rejeita retorno com uso duplicado,
+reserva UNKNOWN ou digest divergente. Chamadas de resposta do pipeline
+mantêm sua contabilidade nativa; seu orçamento compartilha o saldo já
+debitado. Não criar segundo gate no pipeline nem omitir seu uso.
+
+Cada reparo produz snapshot/contagem/reserva próprios e repete a admissão
+com os novos erros, prazo e saldos. A observação completa permanece obrigatória em todos os pedidos
+posteriores até o término da execução, mesmo depois do avanço do cursor. Decisão inválida após
+último reparo interrompe pelo erro nativo, com todas as chamadas cobradas.
+
+### 5.3 Exclusão entre escritores e CAS do checkpoint
+
+`ExecutionStepStore.saveCheckpoint` atual não prova exclusão de reservas.
+O modo1 exige a extensão `compareAndSwapCheckpoint` com entrada lógica
+`{tenantId,executionId,expected:{checkpointId,digest}|null,next}` e saída
+APPLIED com token novo ou CONFLICT. Sem essa extensão a composição recusa
+modo1 antes de qualquer corpo/modelo; não emular CAS com load seguido de
+save. Toda escrita de checkpoint2, inclusive inicial, pre-dispatch, reserva,
+settlement, cursor e terminal, usa a extensão. saveCheckpoint simples deve
+recusar escrita2 e, no reader novo, impedir escrita1 sobre execução2.
+
+CAS inicial é INSERT condicional se a linha não existir. Demais CAS são
+UPDATE condicional de tenant/execution/checkpointId/digest esperados em uma
+transação. next tem checkpointId novo a cada escrita, bindings válidos e o
+mesmo modo; alteração zero linhas é conflito e não autoriza chamada. Isso
+impede ABA de digest sem mudar schema. Store memória implementa a mesma
+operação indivisível em seu estado compartilhado, sem await entre comparação
+e troca. Stores que não conseguem cumprir o contrato não suportam modo1.
+
+No adaptador PG, conferir autoridade nativa e fence quando bound, manter a
+ordem de locks existente, checar saldos/reserva vigente e fazer CAS no mesmo
+client/transaction. Não abrir transação aninhada/pool separado. Receipt só
+sai após COMMIT. Não manter transação ou row lock durante chamada ao modelo.
+Se dois processos disputarem a mesma reserva, apenas o CAS vencedor recebe
+receipt; o perdedor retorna STATE_CONFLICT sem chamar modelo/corpo. Ao
+carregar reserva alheia pendente, tratar como UNKNOWN conservador e parar;
+não quitá-la, cancelá-la nem tentar outra chamada.
+
+No caminho unbound, CAS serializa estado/orçamento, mas não cria lease de
+worker/ACK externo. Esta fatia local não mistura writer antigo e novo na
+mesma execução: reader1 é incompatível com escrita2 e a composição isolada
+é o único owner autorizado dos IDs de teste. Deploy com binaries mistos,
+integração nos hosts ou compartilhamento real dessa execução exige o gate
+operacional apropriado; não afirmar que cliente legado arbitrário que já
+tenha acesso direto de escrita ao banco é contido por um contrato novo.
+Na composição bound valem também os fences existentes, sem mudá-los.
+
+## 6. Estados, erros e informação ao operador
+
+| Evento                                                         | Estado/ação                                          | stopReason e diagnóstico estável                                              |
+| -------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Output válido e disponível                                     | Capturar, persistir, selecionar e admitir            | Sem stop; nunca reconstruir de summary.                                       |
+| JSON inválido ou tamanho/complexidade excedidos após SUCCEEDED | Envelope UNAVAILABLE, conservar efeito e interromper | INSUFFICIENT_EVIDENCE + RESULT_UNAVAILABLE.                                   |
+| Resultado obrigatório ou instruções não cabem                  | Interromper antes do modelo                          | INSUFFICIENT_EVIDENCE + CONTEXT_OVERFLOW.                                     |
+| Sem contador/par qualificado                                   | Interromper antes do modelo                          | INSUFFICIENT_EVIDENCE + ADMISSION_UNAVAILABLE.                                |
+| Saldo insuficiente                                             | Interromper antes da tentativa                       | MAX_TOKENS/MAX_COST/MAX_MODEL_CALLS/MAX_DURATION ou limite nativo de reparos. |
+| Checkpoint antigo com TOOL_RESULT sem completude               | Interromper antes de ferramenta/modelo               | INSUFFICIENT_EVIDENCE + LEGACY_RESULT_UNKNOWN.                                |
+| Reserva não resolvida na retomada                              | Cobrança conservada, sem replay                      | INSUFFICIENT_EVIDENCE + DECISION_USAGE_UNKNOWN.                               |
+| Binding/versão incompatível ou contrato corrompido             | Recusar retomada/settlement                          | STATE_CONFLICT + diagnóstico de checkpoint/admission.                         |
+
+Diagnósticos constam em audit/telemetry e mensagem final redigida; não criam
+novos StopReason globais. Incluir mode/version, IDs nativos, operationKey,
+outputBytes/completion quando conhecidos, requestSha256, contador/versão,
+limites/admissão e estado da reserva. Não repetir output, prompt integral,
+segredo ou instrução arbitrária nos logs. Testes conservam o dado sintético
+completo em evidência própria separada. Falha de audit/log segue o veto
+nativo e não pode ser ignorada para continuar.
+
+Completion usa o envelope tipado, nunca cast de uma prévia para objeto.
+UNAVAILABLE e reserva UNKNOWN impedem declaração de conclusão completa.
+Efeito confirmado pode constar no diagnóstico como fato nativo, sem dizer
+que o objetivo ou a resposta do usuário foi concluído. Não enviar mensagem
+a terceiros ou agenda real para materializar handoff nesta fatia.
+
+## 7. Compatibilidade, migração e recuperação
+
+| Writer/reader                          | Política                                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Reader antigo / checkpoint1            | Comportamento legado.                                                                                         |
+| Reader antigo / checkpoint2            | Rejeição de versão; não transformar em1.                                                                      |
+| Reader novo / checkpoint1, modo legado | Comportamento legado, sem alegar completude.                                                                  |
+| Reader novo / checkpoint1, modo1       | Sem TOOL_RESULT: upgrade validado de bindings/estado; com qualquer TOOL_RESULT antigo: LEGACY_RESULT_UNKNOWN. |
+| Reader novo / checkpoint2              | Exigir modo1, versão do envelope, integridade, bindings, cursor e reservas consistentes.                      |
+
+CHECKPOINT_VERSION legado não deve ser trocado globalmente para2 e quebrar
+readers/writers antigos. A validação passa a aceitar versões por modo de
+forma explícita; novos campos não são silenciosamente descartados. Stores
+memória/PostgreSQL usam o mesmo validador e canônico, checando limite antes
+de parse/gravação quando recebem bytes e estrutura depois do parse. Digest
+de checkpoint é integridade, não autenticação nem autorização de tenant.
+
+Cursor só aponta a passos existentes já entregues, sem pular resultado
+pendente; IDs, digest e reservas são vinculados à execução. BudgetUsage
+precisa ser compatível com os débitos reservados. Qualquer ambiguidade
+recusa retomada. Tampering e cross-tenant não podem alcançar corpo ou modelo.
+
+Rollout local: expandir contratos/leitores e testes; habilitar modo1 apenas
+em fixtures e numa composição isolada; verificar persistência/restart e
+regressão do modo legado. Sem alteração em dados reais ou backfill.
+Após escrita2, rollback para reader1 não é recuperação segura: pausar essa
+execução e fazer roll-forward com reader2. Não downgrade/reselar um
+checkpoint ou reexecutar ferramenta para viabilizar rollback. A concessão
+T3 não concede integração no root, promoção ou release T4.
+
+## 8. Critérios rejeitáveis e verificação futura
+
+Todos os itens abaixo estão **NOT_RUN** nesta elaboração. Validação da SPEC
+não é aprovação do runtime. Capturar fonte/artefato exatos antes/depois,
+requests reais, output do corpo, checkpoints, usage, journal e veto nativo;
+preservar falhas e processos/cleanup da infraestrutura de teste.
+
+| ID   | Procedimento exigido e observação que rejeita a implementação                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+

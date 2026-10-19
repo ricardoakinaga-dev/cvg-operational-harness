@@ -1,0 +1,1 @@
+import {value} from 'fs';export const result=value;

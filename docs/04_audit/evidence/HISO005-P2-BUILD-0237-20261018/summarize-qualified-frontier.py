@@ -1,0 +1,19 @@
+from pathlib import Path
+import collections,datetime,gzip,json
+b=Path(__file__).resolve().parent;s=json.loads((b/'state.json').read_text());rec=json.loads((b/'real-postcert-reconciliation.json').read_text());assert rec['status']=='CURRENT_QUALIFIED_MEASUREMENT'and rec['sourceCommit']==s['sourceCommit']
+r=json.loads(gzip.decompress((b/'real-postcert-normal-report.json.gz').read_bytes()));sem=r['semanticBoundary'];groups=collections.defaultdict(list)
+for row in sem['frontierOrigins']:groups[row['semanticPointer']['reason']].append(row)
+rows=[]
+for reason,origins in sorted(groups.items(),key=lambda item:(-len(item[1]),item[0])):
+ rows.append({'reason':reason,'occurrences':len(origins),'distinctPhysicalFiles':len({x['file']for x in origins if x['file']is not None}),'unavailableOrigins':sum(x['file']is None for x in origins),'originIds':[x['id']for x in origins],'physicalExamples':[{'id':x['id'],'file':x['file'],'fileSha256':x['fileSha256'],'pointer':x['semanticPointer']}for x in origins if x['file']is not None][:3]})
+assert sum(x['occurrences']for x in rows)==rec['new']
+result={'status':'QUALIFIED_FRONTIER_RECORDED_B6_OPEN','observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'sourceCommit':s['sourceCommit'],'report':'real-postcert-normal-report.json.gz','baseline':rec['baseline'],'resolved':rec['resolved'],'unresolved':rec['unresolved'],'newFrontier':rec['new'],'diagnostics':rec['diagnostics'],'installedContentMatch':rec['installedContentMatch'],'semanticVerifiedInstalled':rec['semanticVerified'],'consumableProofs':rec['consumableProofs'],'byReason':rows,'b6Accepted':False,'nextStage':'Read-only bounded reconnaissance of the largest unresolved cause and an explicit HOW/SPEC before any positive semantic expansion; no rule, allowlist, larger limit or profile inferred from this inventory.'}
+(b/'qualified-frontier-triage.json').write_text(json.dumps(result,indent=2)+'\n')
+text='# Próxima tarefa — fronteira B6 ainda aberta\n\n'
+text+=f"Fonte qualificada `{s['sourceCommit']}`. A medição integral registra {rec['diagnostics']} diagnósticos: {rec['unresolved']} origens anteriores não resolvidas e {rec['new']} novas ocorrências da fronteira. Das {rec['baseline']} origens anteriores, {rec['resolved']} foram resolvidas. Há {rec['installedContentMatch']} identidades MATCH, {rec['semanticVerified']} pacotes semanticamente verificados e {rec['consumableProofs']} provas consumíveis.\n\n"
+text+='[Reconciliação](real-postcert-reconciliation.json), [inventário com IDs e exemplos físicos](qualified-frontier-triage.json) e [relatório bruto integral](real-postcert-normal-report.json.gz). Cada ocorrência permanece registrada, incluindo origens indisponíveis com hash nulo.\n\n'
+text+='| Motivo da nova fronteira | Ocorrências | Arquivos físicos distintos |\n| --- | ---: | ---: |\n'
+for row in rows:text+=f"| `{row['reason']}` | {row['occurrences']} | {row['distinctPhysicalFiles']} |\n"
+text+='\nA próxima ação do pai HISO005 é estudar uma causa por vez, começando pelo maior grupo, com testemunhos físicos positivos e negativos. O levantamento precisa separar resolução, execução do corpo e proveniência de emissão. Preparar um HOW delimitado antes de qualquer código novo; uma ampliação positiva de contrato exige a revisão T3 própria prevista pelo processo. As aprovações0236/0237 continuam válidas e não devem ser repetidas.\n\n'
+text+='Uma diminuição na contagem de diagnósticos não concede prova nem encerra B6. A integração local do BUILD0237, a certificação da candidata e o aceite integral de isolamento são decisões distintas. Preservar os pacotes selados, o trabalho dos outros agentes e o checkout compartilhado; não reiniciar recursos históricos.\n'
+(b/'NEXT.md').write_text(text);print(json.dumps({k:v for k,v in result.items()if k not in ['byReason']}))

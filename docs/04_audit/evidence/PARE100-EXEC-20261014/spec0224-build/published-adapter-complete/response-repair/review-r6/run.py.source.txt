@@ -1,0 +1,6 @@
+import json,pathlib,subprocess,os,sys
+r=pathlib.Path(__file__).parent;p=r.parent/'review-packet-r6';m=json.loads((p/'manifest.json').read_text());run=sys.argv[1]
+env={'PATH':str(pathlib.Path(m['node']).parent)+':/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','HOME':str(r/'home'),'TMPDIR':str(r/'tmp'),'XDG_CACHE_HOME':str(r/'cache'),'XDG_CONFIG_HOME':str(r/'config'),'NODE_COMPILE_CACHE':str(r/'nodecache'),'I1_REVIEW':str(r),'I1_RUN':run,'I1_READ_LOG':str(r/'raw'/f'{run}-reads.jsonl'),'I1_SCOPE_PACKAGE':m['allowedScopeMetadata']['path'],'I1_PACKET_DEPS':m['allowedDependencyMirror'],'NODE_OPTIONS':'--require '+str(r/'trace-reads.cjs')+' --require '+str(r/'trace-execution.cjs'),'SPEC0224_RESPONSE_EVIDENCE':str(r/'raw'/f'{run}-cases.json')}
+argv=[m['node'],str(pathlib.Path(m['allowedDependencyMirror'])/'vitest/vitest.mjs'),'run','--config',str(r/'config'/f'{run}.mjs'),'--configLoader','native']
+with (r/'raw'/f'{run}-stdout.log').open('w') as f: result=subprocess.run(argv,cwd=p,env=env,stdout=f,stderr=subprocess.STDOUT)
+(r/'raw'/f'{run}-command.json').write_text(json.dumps({'argv':argv,'cwd':str(p),'env':env,'exit':result.returncode},indent=2));print('EXIT',result.returncode);print((r/'raw'/f'{run}-stdout.log').read_text()[-18000:])

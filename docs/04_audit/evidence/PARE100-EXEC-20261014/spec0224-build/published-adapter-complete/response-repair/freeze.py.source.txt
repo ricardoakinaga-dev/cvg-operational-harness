@@ -1,0 +1,90 @@
+"""Freeze exact repaired source and a no-history memory-only I1 packet."""
+import hashlib
+import json
+from pathlib import Path
+
+base = Path(__file__).parent
+b = base.parents[1]
+w = b.parent / 'worktree'
+repro = base.parent / 'response-repro'
+sha = lambda raw: hashlib.sha256(raw).hexdigest()
+old = json.loads((b / 'candidate-r13.json').read_text())
+changed = {'packages/harness/src/iterative-runtime.ts', 'packages/harness/src/iterative-dispatch.ts'}
+new = 'packages/harness/src/__tests__/complete-response-path-public.test.ts'
+bindings = []
+for entry in old['sourceBindings']:
+    raw = Path(entry['live']).read_bytes()
+    digest = sha(raw)
+    if entry['path'] not in changed:
+        assert digest == entry['sha256'], entry['path']
+    bindings.append(dict(entry, bytes=len(raw), sha256=digest))
+raw = (w / new).read_bytes()
+bindings.append({'path': new, 'live': str(w / new), 'copy': 'source/' + new, 'bytes': len(raw), 'sha256': sha(raw)})
+for name in ['focused08-final2', 'regression04-final', 'types-final2', 'lint-final2']:
+    command = json.loads((repro / (name + '.command.json')).read_text())
+    assert command['exit'] == 0, name
+    assert command['nativeBeforeSHA256'] == command['nativeAfterSHA256'], name
+    for rel, digest in command['nativeAfterSHA256'].items():
+        assert sha((w / rel).read_bytes()) == digest
+cd = b / 'candidate-r14'
+cd.mkdir(exist_ok=False)
+for entry in bindings:
+    dest = cd / entry['copy']
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(Path(entry['live']).read_bytes())
+candidate = {'scope': 'Local synthetic complete-mode RESPONSE context and native terminal-step repair only; no published217 topology/default/PG/newcounter or global parity claim.', 'sourceBindings': bindings}
+raw = (json.dumps(candidate, indent=2) + '\n').encode()
+(cd / 'manifest.json').write_bytes(raw)
+(b / 'candidate-r14.json').write_text(json.dumps(dict(candidate, manifest=str(cd / 'manifest.json'), manifestSha256=sha(raw), sourceCount=len(bindings)), indent=2) + '\n')
+packet = base / 'review-packet-r1'
+packet.mkdir(exist_ok=False)
+artifact = packet / 'artifact'
+prior = json.loads((b / 'settlement-failures/review-packet-r1/manifest.json').read_text())
+inputs = []
+for entry in prior['inputs']:
+    original = w / entry['relative']
+    raw = original.read_bytes() if entry['relative'] in changed else Path(entry['copy']).read_bytes()
+    if entry['relative'] not in changed:
+        assert sha(raw) == entry['sha256']
+    dest = artifact / entry['relative']
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(raw)
+    inputs.append(dict(entry, copy=str(dest), bytes=len(raw), sha256=sha(raw)))
+dest = artifact / new
+dest.parent.mkdir(parents=True, exist_ok=True)
+dest.write_bytes((w / new).read_bytes())
+inputs.append({'category': 'source', 'relative': new, 'original': str(w / new), 'copy': str(dest), 'bytes': dest.stat().st_size, 'sha256': sha(dest.read_bytes())})
+(packet / 'candidate-manifest.json').write_bytes((cd / 'manifest.json').read_bytes())
+(packet / 'package.json').write_bytes((w / 'package.json').read_bytes())
+for path in [packet / 'node_modules', artifact / 'node_modules']:
+    path.symlink_to(w / 'node_modules', target_is_directory=True)
+criteria = {'authority': 'Approved immutable SPEC224, existing opt-in complete mode; response calls keep native pipeline accounting and controls, no second gate.',
+            'cases': json.loads((base / 'contract.json').read_text())['criteria'],
+            'required': 'Verify complete selected tool result reaches actual RESPONSE request, native effects/usage/receipt ownership, bounded messages/request, data vs trusted system framing, custom selector/deadline/legacy, durable terminal response refusal. Public factory and native in-memory stores; no privileged private-run substitution.',
+            'limits': 'Memory-only synthetic Toy64, no real tokenization/provider billing; no public217 extra call/literal response/default adoption or PG/global/fullTR01-10/all36 closure.'}
+(base / 'criteria.json').write_text(json.dumps(criteria, indent=2) + '\n')
+proofs = []
+for source, relative in [(base / 'criteria.json', 'criteria.json'), (repro / 'focused08-final2-trace-private.json', 'raw-cases.json'),
+                         (repro / 'focused08-final2.command.json', 'test-command.json'), (repro / 'focused08-final2.stdout.log', 'test-stdout.log')]:
+    dest = packet / 'proof' / relative
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    raw = source.read_bytes()
+    dest.write_bytes(raw)
+    proofs.append({'copy': str(dest), 'relative': relative, 'bytes': len(raw), 'sha256': sha(raw)})
+env = packet / 'environment'
+env.mkdir()
+template = (repro / 'vitest.config.mjs').read_text().replace(str(w), str(artifact)).replace(str(repro / 'cache'), '__I1_ASSIGNED_CACHE__')
+(env / 'vitest-template.mjs').write_text(template)
+(env / 'trace-reads.cjs').write_bytes((b / 'settlement-failures/review-packet-r1/environment/trace-reads.cjs').read_bytes())
+manifest = {'scope': 'FIRST tool read this manifest only. All source/constraint/proof copies readonly; no originals/AGENTS/ledgers/otherpackets/history/producer summaries/rationale. No descendants. Classify allowed source by manifest category, never filename substrings.',
+            'artifactRoot': str(artifact), 'inputs': inputs, 'proofs': proofs,
+            'candidateManifestCopy': str(packet / 'candidate-manifest.json'), 'candidateManifestSha256': sha((cd / 'manifest.json').read_bytes()),
+            'allowedScopeMetadata': {'path': str(packet / 'package.json'), 'bytes': (packet / 'package.json').stat().st_size, 'sha256': sha((packet / 'package.json').read_bytes())},
+            'environmentTemplates': [{'copy': str(p), 'bytes': p.stat().st_size, 'sha256': sha(p.read_bytes())} for p in sorted(env.iterdir())],
+            'externalReadOnlyDependencies': str(w / 'node_modules'), 'allowedDependencyMirror': str(packet / 'node_modules'),
+            'node': '/home/ricardo/.nvm/versions/node/v22.23.2/bin/node', 'resource': 'Memory only. No PG/Docker/network/providers; write only assigned review-r1, including configs/temp/cache/nodecache/checkers/evidence.'}
+(packet / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+result = {'status': 'FROZEN_PENDING_I1_NOT_ACCEPTED', 'sourceCount': len(bindings), 'copiedInputs': len(inputs), 'proofs': len(proofs),
+          'candidateSHA256': manifest['candidateManifestSha256'], 'packetSHA256': sha((packet / 'manifest.json').read_bytes())}
+(base / 'freeze.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps(result))

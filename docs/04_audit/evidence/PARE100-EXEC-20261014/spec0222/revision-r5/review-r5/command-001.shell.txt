@@ -1,0 +1,50 @@
+python3 - <<'PY'
+import pathlib,json,hashlib,sys,traceback,datetime
+out=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/revision-r5/review-r5')
+p=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0222-r1/revision-r5/review-packet')
+record={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'command':'python3 HASHING-ONLY bootstrap; explicit manifest parsing and inventory hashing','manifests':{},'errors':[]}
+def digest(path):
+ b=pathlib.Path(path).read_bytes();return {'path':str(path),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)}
+try:
+ for name in ['source-manifest.json','packet-manifest.json','constraints.json']:
+  path=p/name;record['manifests'][name]=digest(path)
+  obj=json.loads(path.read_bytes());record[name]=obj
+ # Metadata only: no document content. Discover explicit manifest layouts for correct field mapping.
+ for name in ['source-manifest.json','packet-manifest.json']:
+  obj=record[name]
+  def structural(v):
+   if isinstance(v,dict):return {k:structural(x) for k,x in v.items()}
+   if isinstance(v,list):return {'length':len(v),'first':structural(v[0]) if v else None}
+   return v
+  record.setdefault('layouts',{})[name]=structural(obj)
+ # Explicit known manifest containers, rather than recursive traversal of path keys.
+ src=record['source-manifest.json']; pkt=record['packet-manifest.json']; con=record['constraints.json']
+ pairs=src if isinstance(src,list) else next((src[k] for k in ['pairs','sources','files','entries'] if isinstance(src.get(k),list)),None)
+ entries=pkt if isinstance(pkt,list) else next((pkt[k] for k in ['entries','files','artifacts'] if isinstance(pkt.get(k),list)),None)
+ record['source_pairs_layout']=pairs[0] if pairs else None;record['packet_entries_layout']=entries[0] if entries else None
+ # Hash all declared pair fields explicitly by recognized live/copy names.
+ record['pair_hashes']=[]
+ for e in pairs or []:
+  row={'declared':e,'actual':{}}
+  for key in ['live','copy','livePath','copyPath','source','snapshot','sourcePath','snapshotPath','original','copied','packetPath']:
+   v=e.get(key)
+   if isinstance(v,str):
+    q=pathlib.Path(v);q=q if q.is_absolute() else p/q
+    if q.is_file():row['actual'][key]=digest(q)
+  record['pair_hashes'].append(row)
+ record['packet_hashes']=[]
+ for e in entries or []:
+  v=e.get('path') or e.get('file') or e.get('relativePath')
+  if v:
+   q=pathlib.Path(v);q=q if q.is_absolute() else p/q
+   record['packet_hashes'].append({'declared':e,'actual':digest(q)})
+ record['packet_manifest_self']=digest(p/'packet-manifest.json')
+ # Exact constraints sourceSpecs/projection/frozenOrigin D12 are identified from JSON metadata only.
+ record['constraints_metadata']=con
+ record['counts']={'pairs':len(pairs or []),'packet_entries':len(entries or []),'packet_files_plus_manifest':len(record['packet_hashes'])+1}
+except Exception:
+ record['errors'].append(traceback.format_exc())
+(out/'pre-fingerprint-bootstrap.json').write_text(json.dumps(record,indent=2)+'\n')
+(out/'command-001.txt').write_text(record['command']+'\n')
+print(json.dumps({'counts':record.get('counts'),'layouts':record.get('layouts'),'constraints_metadata':record.get('constraints_metadata'),'errors':record['errors']},indent=2))
+PY

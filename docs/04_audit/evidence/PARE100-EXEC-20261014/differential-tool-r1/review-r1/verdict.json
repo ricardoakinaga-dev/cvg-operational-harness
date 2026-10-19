@@ -1,0 +1,80 @@
+{
+  "verdict": "REVISE",
+  "scope": "P100-004/F-DIF-TOOL-001 candidate test-support only",
+  "findings": [
+    {
+      "id": "F01",
+      "priority": "P1",
+      "title": "Reference adapter requests lose tool schemas and routing fields before witness comparison",
+      "locations": [
+        {
+          "file": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/reference-agent-driver.mjs",
+          "lines": "172-175"
+        },
+        {
+          "file": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/compare-tool-turn.mjs",
+          "lines": "65-83"
+        }
+      ],
+      "counterexample": "Delivered tools=[]; alternatively a forged capability/schema, or model=wrong-model/sessionId=wrong-session/maxTokens=1. Both real native model calls and echo body complete; measureToolTurn accepts all three altered deliveries.",
+      "evidence": [
+        "raw/request-probes.commands.json",
+        "raw/request-missing-tools.stderr.log",
+        "raw/request-wrong-schema.stderr.log",
+        "raw/request-wrong-routing.stderr.log",
+        "raw/tamper-probes-v2.json"
+      ],
+      "fix": "Capture the complete actual adapter request at entry before awaiting: all own data fields including tools/toolHistory/provider/model/maxTokens/sessionId and explicit signal presence/state. Validate actual tool availability/schema/routing against the fixture/registered capability; compare the complete captured data. Preserve request/header event differences; add independent missing/extra/changed request-schema and routing controls."
+    },
+    {
+      "id": "F02",
+      "priority": "P1",
+      "title": "CVG observation drops per-call ModelResult usage and provenance",
+      "locations": [
+        {
+          "file": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/cvg-tool.ts",
+          "lines": "99-107"
+        },
+        {
+          "file": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/cvg-tool.ts",
+          "lines": "235-245"
+        }
+      ],
+      "counterexample": "Two delivered ModelResults changed from tokens (1,2)+(1,2) to (0,0)+(2,4); separately both provider/model values replaced by forged-provider/forged-model with an extra result field. Native engine consumes these values; text and aggregate usage remain unchanged, and both altered runs are accepted.",
+      "evidence": [
+        "candidate/tests/i1-probes/model-results.test.ts",
+        "raw/cvg-model-results-probe.json",
+        "raw/cvg-model-results.command.json",
+        "raw/cvg-model-results-probe.log"
+      ],
+      "fix": "Capture immutable complete per-call returned ModelResult objects at the synthetic gateway boundary (not only text), alongside each request/call ordinal. Check native per-call usage/provenance and reconcile totals. Add compensating-usage and missing/extra/provenance tamper controls, without changing production orchestration."
+    },
+    {
+      "id": "F03",
+      "priority": "P2",
+      "title": "Epoch normalization accepts an impossible native timestamp",
+      "locations": [
+        {
+          "file": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/tests/differential/tool-transport.mjs",
+          "lines": "69-75"
+        }
+      ],
+      "counterexample": "Set reference.native.events[0].time=9007199254740991. This is a safe integer but new Date(value).getTime() is NaN. Normalization erases it and measureToolTurn accepts.",
+      "evidence": [
+        "raw/tamper-probes-v2.json",
+        "raw/tamper-probes-v2.log"
+      ],
+      "fix": "Require a valid finite epoch representable by Date in addition to the existing nonnegative safe-integer requirement before normalization; reject out-of-range values. Keep ordinary valid enumerated clock differences permitted and retain all raw time bytes."
+    }
+  ],
+  "limitations": [
+    "Fresh I1 independence requirement was not met: the initial read of docs/08_runtime/agent_coordination.md returned historical coordination entries, including prior-review outcomes and builder summaries. No separate ledger, .agent, .gauntlet, earlier review/report, history file, or other proof directory was subsequently opened. This report cannot serve as the requested uncontaminated fresh I1 acceptance; independently reproducible findings remain usable. No descendants were spawned; model/effort were inherited.",
+    "Scope is this candidate test-support only. SDK single_pass tool journey, SDK/ABI/session-lifecycle equivalence, full parity, source-to-lib correspondence and transitive artifact closure remain NOT_VERIFIED. Production contracts and global/T2 integration/unit/PG/E2E/coverage/certification/release gates are pending and not granted.",
+    "Pre/post integrity covers the sealed packet, 133 source/live pairs, nine actual exported artifacts and 11 explicitly needed extra source files. It does not claim full-worktree/node_modules/transitive closure or an OS-enforced continuous snapshot. Inherited tooling was accessed through a symlink; caches/output remained under review-r1.",
+    "Candidate-supplied types/lint command records report exit 0; these checks were not independently rerun. Own full-focus execution initially lacked SDK source files in the minimal copy, causing two suite-import errors; after copying and fingerprinting the needed live SDK files, explicit/default each passed 23 tests. Initial failure evidence is retained.",
+    "The first fault-injection attempt did not intercept the child and is not fault proof. Both its exit-0 runs are retained. Corrected native builtin interception produced real child exits 23 and runner exits 1 in both modes. Initial probe v1 included an out-of-API wrapper extra-field control and caller-evaluated getter; v2 corrected these controls and recorded zero getter executions."
+  ],
+  "no_full_parity": true,
+  "independence": "Requested fresh I1 invalidated by initial coordination-history exposure; no acceptance granted",
+  "source_integrity_unchanged": true
+}

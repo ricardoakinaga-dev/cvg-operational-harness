@@ -1,0 +1,184 @@
+FILE spec.md 180-226
+180: ## 6. Linearização da troca, policy e evidência
+181: 
+182: Uma fila por owner serializa bootstrap/replace/publication/reconciliação de evidência. Admissão de pins/turnos é síncrona e não segura um lock enquanto plugin/policy/audit arbitrário aguarda. O ÚNICO predicado de admissão nova é owner.status === OPEN. Não há outro flag de fence que possa discordar do status: BOOTING, EVIDENCE_PENDING, CLOSING, CLOSED e FAILED não admitem pins/turnos novos. Árvores já admitidas têm as regras separadas da seção7.
+183: 
+184: Predicados de COMMIT, ambos em uma seção síncrona sem await:
+185: 
+186: | Operação  | Elegibilidade exata                                                                                                                                              | Efeito do commit local                                                                                     |
+187: | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+188: | Bootstrap | status BOOTING, revision0, current null, candidato READY, policy/evidência PREPARED ACK, signal não abortado e closeRequested false                              | current=candidato, revision1, receipt.committed=true, status=EVIDENCE_PENDING                              |
+189: | Replace   | status OPEN, current/revision iguais aos capturados/expectedRevision, candidato READY, policy/evidência PREPARED ACK, signal não abortado e closeRequested false | current=candidato, revision=anterior+1, anterior RETIRING, receipt.committed=true, status=EVIDENCE_PENDING |
+190: 
+191: closeRequested é latch monotônico que só muda false→true por close; ele não é autorização de admissão. Status EVIDENCE_PENDING começa NO commit e inclui o período normal de espera de ACK, não só o erro. Um candidato bootado não torna o owner OPEN antes de evidência.
+192: 
+193: 1. Capturar/reservar request e consultar tombstone com a precedência6.1. Autorizar o actor fixo para bootstrap/replace e validar catálogo/config antes de activate. Bootstrap é a única operação que prepara uma primeira geração em BOOTING. Replace exige OPEN e prepara enquanto a corrente atende usos já admitidos.
+194: 2. Falha/cancel antes de commit não troca current/revision; conservar candidato/recursos e fazer cleanup possuído. No bootstrap sem commit, falha deixa owner FAILED com ready FAILED/cleanup receipt, nunca OPEN; no replace pré-commit falho, a corrente continua OPEN salvo close ou falha independente. Não reativar por retry da mesma chave.
+195: 3. Candidato READY satisfaz serviços/perfis/ports/hooks, todas as promises originais de activate e suas aquisições/tarefas de inicialização já terminaram, pendingAcquire0 e readiness do boot. Um recurso vivo devidamente inicializado não é um callback de boot pendente; task de boot infinita não vira READY por ter fornecido um serviço cedo. Reavaliar policy. Append da linha PREPARED correspondente da tabela3.3 deve ACKar antes de commit; erro não publica. O último check de estado/revisão/signal e a troca só ocorrem depois desse ACK, conforme tabela acima. Close que venceu torna AMBOS os commits inelegíveis.
+196: 4. Após commit, append da linha COMMITTED correspondente (`plugin.lifecycle.v1.published`) é uma observação do ponteiro já fixado. Nenhum rollback automático existe daqui em diante. Se o append lança/rejeita/tem outcome desconhecido, permanecer EVIDENCE_PENDING com receipt imutável do commit. Preparação/activate não são repetidos.
+197: 5. Um único helper `acceptPublicationAck(receipt, attempt)` trata tanto ACK normal de COMMITTED quanto ACK de COMMITTED_OBSERVED. Só abre se status === EVIDENCE_PENDING, closeRequested === false, receipt nativo do owner tem committed=true, current.id/revision coincidem com o commit imutável e attempt pertence a esse receipt. Então status→OPEN uma vez. BOOTING não é admitido aqui: o bootstrap já mudou para EVIDENCE_PENDING no commit. Qualquer CLOSING/CLOSED/FAILED, receipt/attempt alheio ou revisão diferente impede reabertura.
+198: 6. reconcileEvidence só aceita receipt desse commit enquanto EVIDENCE_PENDING e sem closeRequested. Reavalia policy e acrescenta a linha publish_observed/COMMITTED_OBSERVED com attempt novo; não repete activate/commit/revisão. Seu ACK passa pelo MESMO helper5. Se close vence durante o append, o ACK é conservado como fato, mas não reabre. Quando o owner já está CLOSING/CLOSED, recusar novo reconcile antes de IO; cleanup não depende de um grant futuro.
+199: 7. Cancel no último check pré-commit cancela a operação sem publicação; depois de commit é too-late para desfazer o ponteiro. Prazo do observer/caller não altera esses predicados nem abandona recurso. Retirada anterior tem join independente: ACTIVATED_RETIREMENT_PENDING só depois de ACK/OPEN; REPLACED_AND_DISPOSED exige cleanup real. Sem ACK, retornar PUBLICATION_PENDING, nunca sucesso de ativação operacional.
+200: 
+201: pinCurrent reserva snapshot/slot e captura current/revision antes de autorização de leitura. Depois do await, verifica de novo status OPEN e a MESMA geração/revisão antes de emitir lease; se mudou, retorna STALE_REVISION e libera a reserva, sem pin/turno e sem reautorizar silenciosamente outra geração. inventory autoriza o recurso de perfil e só então captura um snapshot local síncrono; CLOSING/CLOSED não inicia IO em controls fechados e só fornece diagnóstico mínimo já possuído conforme6.1.
+202: 
+203: close() de BOOTING/OPEN/EVIDENCE_PENDING/FAILED fixa closeRequested=true e CLOSING ANTES de await. ACK tardio não muda CLOSING. O join de close espera trabalho NATIVO/IO/cleanup, não a chegada de uma decisão futura do operador sobre evidência sem IO vivo. Se recursos fecharam corretamente mas um commit nunca ganhou ACK, reportar OWNER_CLOSED_EVIDENCE_UNCERTAIN com commit/revisão/outcome desconhecido no receipt local; isso não é publicação auditada nem autorização para repetir. Estado físico CLOSED não apaga esse diagnóstico e nunca admite trabalho. Falha/hang real de cleanup mantém os estados/erros da seção7, sem alegar fechamento limpo.
+204: 
+205: ### 6.1. Retenção e precedência bounded do protocolo local
+206: 
+207: O owner tem limites de lifetime além das quotas concorrentes:512requestIds de mutação incluindo bootstrap,4096leases emitidos e16tentativas de evidência por mutação (primeira publicação mais reconciliações),16MiB de bookkeeping reservado. Emitir no máximo um receipt por mutação, um por release de lease e um por close: no máximo4609receipts por owner; ready/wait/retry/reconcile reutilizam os mesmos objetos/joins. Não emitir um receipt novo por poll. Receipt/lease live usa registro autenticado privado; terminal guarda só estado mínimo e IDs/digests, sem closure do plugin/port/recurso já descartado.
+208: 
+209: Request tombstones duram toda a vida desse owner. Depois de uma operação terminal, remover seu plan/config completo, callbacks/ports e objetos de geração descartada; conservar requestId/digest, outcome sanitizado, revisão/generation IDs e identidade do receipt. Inventory mantém no máximo16resumos de gerações DISPOSED/failed sem recursos e16tentativas por mutação; snapshots anteriores são compactados em contadores/digests, sem prometer histórico completo local. Uma geração com qualquer recurso, evidência ou IO pendente nunca é removida/compactada como descartada para caber na quota.
+210: 
+211: Reservar bytes e um slot de request antes de enfileirar/ativar. O limite de bookkeeping cobre a soma de requests/receipts/histórico/attempt snapshots retidos pelo owner; os demais limites de plan/pins/operações continuam independentes. Sem espaço para conservar um resultado final mínimo, recusar o ID NOVO antes de callback. Não aceitar e depois esquecer a chave. Esta é memória do protocolo local, não garantia de RAM de port externo ou de objetos que o caller copia fora da API.
+212: 
+213: Precedência: validar receiver/DTO/digest sem IO; procurar requestId existente antes de expectedRevision ou quota de novos IDs. Digest diferente dá REQUEST_CONFLICT. Igual observa a mesma operação/outcome/receipt, mesmo se a revisão avançou ou a quota está cheia, sem activate novo. Em OPEN/EVIDENCE_PENDING, aplicar autorização de leitura para expor seu resultado; em CLOSING/CLOSED, só diagnóstico mínimo já possuído e o receipt original, sem IO em controls já fechados. Só um ID novo EXTERNO de replace passa por owner OPEN, quota/reserva e expectedRevision/policy para iniciar trabalho. O ID nativo único de bootstrap é reservado pelo constructor em BOOTING/revision0 e entra exclusivamente pelo predicado inicial da seção6; não existe API para um caller criar outro bootstrap ou reutilizar essa exceção. Até uma rejeição terminal de um ID admitido conserva tombstone; corrigir o pedido exige ID novo, não reutilizar uma chave com dados diferentes.
+214: 
+215: Ao esgotar512IDs/4096leases, recusar novas emissões; permitir release/close/wait e observação de IDs antigos. Após16tentativas de evidência, manter o fence e retornar QUOTA_EXCEEDED com o receipt ainda possuído; não repetir append indefinidamente. Close continua disponível, sem reativação ou perda de recursos. Operador pode terminar e criar outro owner somente pelo bootstrap explícito: isso cria outra identidade/escopo de idempotência e não retoma/repete mutações antigas. Nenhum GC, expiração silenciosa ou WeakMap permite reativar um requestId do mesmo owner.
+216: 
+217: ### 6.2. Uma regra de dependência para espera e reentrância
+218: 
+219: O tracker possui grafo nativo de dependências de operações, roots e producers (arestas waiter→trabalho necessário). IDs do payload não criam essas arestas. Antes de qualquer espera ready/release/wait/close ou nova aresta gerenciada, detectar se o alvo depende DIRETA OU TRANSITIVAMENTE do producer ACTIVE atual, incluindo seus ancestrais/roots/descendentes que o join precisa terminar. Recusar a aresta cíclica antes de timer/await com REENTRANT_OPERATION; isso vale mesmo para timeout0, poll repetido e receipt de outra classe. Atualizações de dependência são síncronas antes de admitir o callback correspondente. Não prometer detectar dependências que um port esconde fora do protocolo.
+220: 
+221: release e close fazem primeiro sua mudança monotônica de admissão, mesmo se chamados de dentro do próprio uso; nesse caso retornam imediatamente observação PENDING e receipt, sem esperar o producer que os chamou. owner.wait desse receipt pelo mesmo producer/cadeia recusa imediatamente, não faz polls PENDING autoaguardados. ready a partir do bootstrap/activate/audit que o próprio ready aguarda também recusa; não reinicia boot. Espera externa sem ciclo pode observar a mesma tarefa, e alvo terminal sem dependência não precisa de IO novo. Uma recusa de self-wait é diagnóstico local, não chama audit/policy recursivamente.
+222: 
+223: Métodos que exigem autorização nova ou entrada na fila (`pinCurrent`, `inventory`, `replaceCapabilities`, `reconcileEvidence`) recusam REENTRANT_OPERATION ANTES de policy/queue quando invocados de qualquer callback possuído do MESMO owner: policy/audit, activate/dispose, observer/model/planner, store/journal/control. Assim policy→inventory não chama PolicyEngine.evaluate outra vez, audit→inventory não reentra autorização nem se anuncia read-only seguro. O callback usa seus dados/contexto próprios; não existe bypass de inventory por cache de permissão. Ownership do callback e fase vêm de token/AsyncLocalStorage autenticados, sem aceitar flag do plugin. Close/release continuam disponíveis como limpeza não aguardante sob a regra anterior.
+224: 
+225: Provar separadamente audit→release de seu lease→wait(receipt), policy→inventory, activate→ready, disposer→close→wait e dependência transitiva com producers filhos. Contar as chamadas de policy/audit: a recusa deve ocorrer antes da segunda chamada e sem IO espúrio, mantendo joins e cleanup originais vivos.
+226: 
+HOST SOURCE TESTS, STATIC ONLY
+1: import { describe, expect, it } from 'vitest'
+2: import { KernelBootError, KernelHost } from '../host.ts'
+3: import { InMemoryKernelLog, InMemoryPauseSwitch } from '../controls.ts'
+4: import type { KernelPlugin } from '../types.ts'
+5: 
+6: /** KPLG-003: plugin host lifecycle (SPEC 0181 §2). */
+7: 
+8: function provider(
+9:   name: string,
+10:   key: 'log' | 'pause',
+11:   events: string[],
+12:   requires: KernelPlugin['requires'] = []
+13: ): KernelPlugin {
+14:   return {
+15:     name,
+16:     kind: 'control',
+17:     provides: [key],
+18:     requires,
+19:     apply(ctx) {
+20:       events.push(`apply:${name}`)
+21:       ctx.provide(
+22:         key,
+23:         key === 'log' ? new InMemoryKernelLog() : new InMemoryPauseSwitch()
+24:       )
+25:       ctx.effect(async () => {
+26:         events.push(`dispose:${name}`)
+27:       })
+28:     }
+29:   }
+30: }
+31: 
+32: describe('KernelHost', () => {
+33:   it('loads plugins in dependency order regardless of declaration order', async () => {
+34:     const events: string[] = []
+35:     await KernelHost.boot(
+36:       [
+37:         provider('needs-log', 'pause', events, ['log']),
+38:         provider('log', 'log', events)
+39:       ],
+40:       ['log', 'pause']
+41:     )
+42:     expect(events).toEqual(['apply:log', 'apply:needs-log'])
+43:   })
+44: 
+45:   it('rejects a dependency cycle', () => {
+46:     expect(() =>
+47:       KernelHost.order([
+48:         provider('a', 'log', [], ['pause']),
+49:         provider('b', 'pause', [], ['log'])
+50:       ])
+51:     ).toThrow(expect.objectContaining({ code: 'dependency_cycle' }))
+52:   })
+53: 
+54:   it('rejects two providers of the same service', () => {
+55:     expect(() =>
+56:       KernelHost.order([provider('a', 'log', []), provider('b', 'log', [])])
+57:     ).toThrow(expect.objectContaining({ code: 'duplicate_service' }))
+58:   })
+59: 
+60:   it('rejects a requirement nobody provides', () => {
+61:     expect(() =>
+62:       KernelHost.order([provider('a', 'log', [], ['pause'])])
+63:     ).toThrow(expect.objectContaining({ code: 'missing_service' }))
+64:   })
+65: 
+66:   it('rejects providing a service that was not declared', async () => {
+67:     const plugin: KernelPlugin = {
+68:       name: 'undeclared',
+69:       kind: 'control',
+70:       apply: (ctx) => void ctx.provide('log', new InMemoryKernelLog())
+71:     }
+72:     await expect(KernelHost.boot([plugin], [])).rejects.toMatchObject({
+73:       code: 'undeclared_service'
+74:     })
+75:   })
+76: 
+77:   it('disposes registrations in reverse order', async () => {
+78:     const events: string[] = []
+79:     const host = await KernelHost.boot(
+80:       [
+81:         provider('log', 'log', events),
+82:         provider('pause', 'pause', events, ['log'])
+83:       ],
+84:       []
+85:     )
+86:     await host.dispose()
+87:     expect(events.filter((event) => event.startsWith('dispose'))).toEqual([
+88:       'dispose:pause',
+89:       'dispose:log'
+90:     ])
+91:     expect(host.has('log')).toBe(false)
+92:   })
+93: 
+94:   it('unwinds what was registered when a later plugin fails to apply', async () => {
+95:     const events: string[] = []
+96:     const failing: KernelPlugin = {
+97:       name: 'failing',
+98:       kind: 'control',
+99:       requires: ['log'],
+100:       apply() {
+101:         throw new Error('apply exploded')
+102:       }
+103:     }
+104:     const boot = KernelHost.boot([provider('log', 'log', events), failing], [])
+105:     await expect(boot).rejects.toBeInstanceOf(KernelBootError)
+106:     await expect(boot).rejects.toMatchObject({ code: 'plugin_apply_failed' })
+107:     expect(events).toEqual(['apply:log', 'dispose:log'])
+108:   })
+109: 
+110:   it('orders control listeners before capability listeners', async () => {
+111:     const order: string[] = []
+112:     const capability: KernelPlugin = {
+113:       name: 'capability.first',
+114:       kind: 'capability',
+115:       apply: (ctx) =>
+116:         void ctx.on('turn/before-step', async (_turn, next) => {
+117:           order.push('capability')
+118:           return next()
+119:         })
+120:     }
+121:     const control: KernelPlugin = {
+122:       name: 'control.second',
+123:       kind: 'control',
+124:       apply: (ctx) =>
+125:         void ctx.on('turn/before-step', async (_turn, next) => {
+126:           order.push('control')
+127:           return next()
+128:         })
+129:     }
+130:     const host = await KernelHost.boot([capability, control], [])
+131:     expect(
+132:       host.listeners('turn/before-step').map((entry) => entry.plugin)
+133:     ).toEqual(['control.second', 'capability.first'])
+134:   })
+135: })

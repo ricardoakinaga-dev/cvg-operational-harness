@@ -16,6 +16,9 @@ function shellQuote(value: string): string {
 }
 
 export default defineConfig({
+  // Source identity is sealed separately; the archive diff is too large for
+  // Playwright's optional in-memory metadata collector.
+  captureGitInfo: { commit: true, diff: false },
   testDir: './tests/e2e',
   testMatch: '**/rem21-014-qualification.spec.ts',
   fullyParallel: false,

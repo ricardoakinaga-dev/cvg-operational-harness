@@ -1,0 +1,41 @@
+import os,sys,json,base64,io,contextlib,traceback,datetime
+O='/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-procedures-r1/review-r1'
+if os.getcwd()!=O: raise RuntimeError('workdir mismatch')
+root=os.path.join(O,'commands');os.makedirs(root,exist_ok=True)
+n=len([v for v in os.listdir(root) if v.isdigit()])+1
+dest=os.path.join(root,str(n).zfill(3));os.makedirs(dest)
+cmd="python3 recorder.py '"+sys.argv[1]+"'"
+out=io.StringIO();err=io.StringIO();rc=0
+try:
+ with contextlib.redirect_stdout(out),contextlib.redirect_stderr(err):
+  exec(compile(base64.b64decode(sys.argv[1]),'<documentary-diagnostic>','exec'),{'__name__':'__main__'})
+except BaseException:
+ rc=1
+ traceback.print_exc(file=err)
+stdout=out.getvalue();stderr=err.getvalue()
+open(os.path.join(dest,'stdout.txt'),'w').write(stdout)
+open(os.path.join(dest,'stderr.txt'),'w').write(stderr)
+json.dump({'command':cmd,'workdir':O,'exit':rc,'stdout':'stdout.txt','stderr':'stderr.txt','complete':True,'time':datetime.datetime.now(datetime.timezone.utc).isoformat()},open(os.path.join(dest,'command.json'),'w'),indent=2)
+envelope=json.dumps({'record':dest,'exit':rc,'stdoutBytes':len(stdout.encode()),'stderrBytes':len(stderr.encode())})
+shown=stdout[:58000]
+if len(stdout)>58000: shown+='\n[BOUNDED DISPLAY; complete original stdout retained at '+dest+'/stdout.txt]\n'
+shellout=envelope+'\n'+shown
+shellerr=stderr[:10000]
+open(os.path.join(dest,'shell-stdout.txt'),'w').write(shellout)
+open(os.path.join(dest,'shell-stderr.txt'),'w').write(shellerr)
+print(shellout,end='')
+if shellerr: print(shellerr,end='',file=sys.stderr)
+if os.path.exists(os.path.join(O,'finalize-request.json')):
+ import hashlib
+ entries=[];empty=[]
+ for root,dirs,files in os.walk(O):
+  for name in sorted(files):
+   path=os.path.join(root,name);rel=os.path.relpath(path,O)
+   if rel=='artifact-manifest.json':continue
+   size=os.path.getsize(path)
+   if not size:empty.append({'path':rel,'bytes':0});continue
+   with open(path,'rb') as f: h=hashlib.sha256(f.read()).hexdigest()
+   entries.append({'path':rel,'bytes':size,'sha256':h})
+ manifest={'scope':'O only; nonempty outputs; excludes self','entries':sorted(entries,key=lambda x:x['path']),'emptyFiles':sorted(empty,key=lambda x:x['path']),'nonemptyCount':len(entries),'emptyCount':len(empty),'selfHash':'DELEGATED_TO_LEAD','closure':'Generated after final command stream files and command record were written; Lead independently verifies.'}
+ json.dump(manifest,open(os.path.join(O,'artifact-manifest.json'),'w'),indent=2)
+sys.exit(rc)

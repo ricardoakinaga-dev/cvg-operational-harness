@@ -1,0 +1,255 @@
+"""Scenario reconstruction from raw synthetic native-PG records, no CVG code.
+
+Counts unique executions rather than repeated evidence occurrences. Must run
+alongside recompute-core.py and an independently verified exact source binding.
+"""
+import datetime
+import collections
+import hashlib
+import json
+import math
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+checks = 0
+inputs = {}
+replay_mutations = []
+
+
+def check(condition, message):
+    global checks
+    checks += 1
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path):
+    path = Path(path)
+    path = path if path.is_absolute() else root / path
+    path = path.resolve()
+    check(path.is_relative_to(root), 'Raw pointer escaped assigned run')
+    raw = path.read_bytes()
+    inputs[str(path.relative_to(root))] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+    return json.loads(raw)
+
+
+def iso(value):
+    return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def ctx(cp):
+    return cp['state']['toolResultContext']
+
+
+def receipt(cp):
+    check(len(ctx(cp)['decisionAdmissions']) == 1, 'Expected exactly one native receipt')
+    return ctx(cp)['decisionAdmissions'][0]
+
+
+def no_decision(cp):
+    state = ctx(cp)
+    check('acceptedDecision' not in state and state['deliveredThroughStep'] == 0,
+          'Failed/late decision accepted or delivery cursor advanced')
+
+
+def stable_pair(data, fields=None):
+    before, after = load(data['before']), load(data['after'])
+    if fields is None:
+        check(before['row'] == after['row'] and before['checkpoint'] == after['checkpoint'],
+              'Unexpected late/probe physical checkpoint mutation')
+    else:
+        for field in fields:
+            check(before['checkpoint'][field] == after['checkpoint'][field], 'Replay changed ' + field)
+    if 'dbBefore' in data:
+        check(data['dbBefore'] == data['dbAfter'], 'Unexpected database mutation')
+    return before['checkpoint'], after['checkpoint']
+
+
+pre = load('preexistence.json')
+check(pre == {'schema_exists': False, 'role_exists': False}, 'Namespace was not new')
+priv = load('identity-rls-grants.json')
+for field in ['rolsuper', 'rolbypassrls', 'rolinherit', 'rolcreatedb', 'rolcreaterole']:
+    check(priv['identity'][field] is False, 'Privileged service: ' + field)
+for field in ['memberships', 'owned_schemas', 'owned_relations']:
+    check(priv['identity'][field] == 0, 'Owned/admin service: ' + field)
+check(priv['identity']['current_user'] == priv['identity']['session_user'], 'SET ROLE service evidence')
+check(len(priv['rls']) == 18 and all(x['relrowsecurity'] and x['relforcerowsecurity'] for x in priv['rls']),
+      '18 native tables must force RLS')
+expected = {(t['relname'], p) for t in priv['rls'] for p in ['SELECT', 'INSERT', 'UPDATE']
+            if not(t['relname'] == 'controlled_published_evidence' and p == 'UPDATE')}
+check({(x['table_name'], x['privilege_type']) for x in priv['grants']} == expected, 'Exact scoped grants')
+index = load('case-summary-index.json')['cases']
+check([v['id'] for v in index] == ['SP%02d' % i for i in range(1, 13)], 'Missing/reordered 12 cases')
+attempts = {}
+case_attempts = {}
+case_reports = []
+database_cuts = []
+for case in index:
+    cid = case['id']
+    check(case['containment'] == 'PASS' and case['error'] is None, 'Failed case ' + cid)
+    db_before = load(root / cid / 'db18-before-private.json')
+    db_after = load(root / cid / 'db18-after-private.json')
+    for tenant in ['tenant224', 'tenant225']:
+        expected_tables = {v['relname'] for v in priv['rls']}
+        check(set(db_before[tenant]) == set(db_after[tenant]) == expected_tables,
+              cid + ': missing raw native table cuts')
+        sizes = {}
+        for table in sorted(expected_tables):
+            wire = lambda row: json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            old = collections.Counter(wire(row) for row in db_before[tenant][table])
+            new = collections.Counter(wire(row) for row in db_after[tenant][table])
+            check(not (old - new), cid + ': changed/deleted an earlier case row in ' + tenant + '/' + table)
+            sizes[table] = {'before': sum(old.values()), 'after': sum(new.values())}
+        database_cuts.append({'case': cid, 'tenant': tenant, 'counts': sizes})
+    records = [load(v['result']) for v in case['attempts']]
+    case_attempts[cid] = records
+    for entry, record in zip(case['attempts'], records):
+        identity = (record['input']['tenantId'], record['input']['executionId'])
+        check(identity not in attempts, 'Duplicate execution identity in attempt index')
+        attempts[identity] = record
+        check(entry['tenantId'] == identity[0] and entry['executionId'] == identity[1], 'Index identity mismatch')
+        authority = load(entry['inputAuthority'])
+        check({k: v for k, v in record['input'].items() if k != 'signal'} == authority['admission']['runtime'],
+              'Runtime input was not actual unchanged native admission')
+        check(record['calls'] == entry['calls'] and record['measurements'] == entry['measurements'], 'Index count mismatch')
+        expected_calls = 0 if cid == 'SP06' and identity[1] != records[0]['input']['executionId'] else 1
+        check(record['calls'] == record['measurements'] == expected_calls, cid + ': unexpected native entry count')
+        if expected_calls:
+            returns = [e for e in record['events'] if e['type'] == 'native-fake-provider-return']
+            check(len(returns) == 1, cid + ': missing actual fake return')
+            r = returns[0]
+            canonical = lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+            actual = r['actualProviderResult']
+            check(actual['text'] == r['nativeResult']['text'], 'Usage envelope replaced native provider text')
+            check(actual['outputTokens'] == math.ceil(len(canonical(actual['text'])) / 64), 'Toy64 output not actual bytes')
+            check(actual['costUsd'] == 0, 'Synthetic native zero cost changed')
+        if cid in ['SP01', 'SP02', 'SP03', 'SP04']:
+            cp = record['final']
+            check(receipt(cp)['status'] == 'SETTLED' and cp['state']['stopReason'] == 'COMPLETED', cid + ': positive did not settle')
+        elif expected_calls:
+            no_decision(record['final'])
+            check(record['result']['stopReason'] != 'COMPLETED', cid + ': failure completed')
+    if cid in ['SP06', 'SP07']:
+        check(case['functionalQualification'] == 'FAIL_INVALID_PAIR_NOT_QUALIFIED', 'Invalid pair promoted to qualification')
+    for path in sorted((root / cid).rglob('*-probe.json')):
+        data = load(path)
+        stable_pair(data)
+        if data['expected'] == 'STATE_CONFLICT':
+            check(data['error']['code'] == 'STATE_CONFLICT' and 'result' not in data, 'Native conflict missing')
+        else:
+            check('error' not in data and data['result']['status'] == 'SETTLED', 'Idempotent settle failed')
+            check(data['result']['admissionId'] == data['args']['admissionId'], 'Idempotent receipt identity changed')
+    for path in sorted((root / cid).rglob('replay.json')):
+        data = load(path)
+        before, after = stable_pair(data, [])
+        # A native UNKNOWN handoff can persist a new diagnostic and accumulate
+        # elapsed runtime. Elapsed duration is not another model invocation or
+        # a receipt charge. Preserve and report this observable mutation.
+        charges = lambda cp: {k: v for k, v in cp['budgetUsage'].items() if k != 'activeDurationMs'}
+        check(charges(before) == charges(after), 'Replay changed model/tool/token/cost/repair charges')
+        check(ctx(before) == ctx(after), 'Replay changed receipt/context')
+        check(data['countsBefore'] == data['countsAfter'], 'Replay invoked counter/model')
+        check(data['result']['stopReason'] != 'COMPLETED', 'Replay repeated completion')
+        if before != after:
+            replay_mutations.append({'case': cid, 'path': str(path.relative_to(root)),
+                                     'changedTopFields': [k for k in before if before[k] != after[k]],
+                                     'beforeUsage': before['budgetUsage'], 'afterUsage': after['budgetUsage'],
+                                     'beforeStop': before['state'].get('stopReason'),
+                                     'afterStop': after['state'].get('stopReason')})
+    case_reports.append({'id': cid, 'attempts': len(records),
+                         'actualGatewayEntries': sum(v['calls'] for v in records),
+                         'actualProviderReturns': sum(sum(e['type'] == 'native-fake-provider-return' for e in v['events']) for v in records),
+                         'durableStatuses': [r['status'] for v in records for r in ctx(v['final'])['decisionAdmissions']],
+                         'returned': [v['result'] for v in records],
+                         'durableUsage': [v['final']['budgetUsage'] for v in records]})
+
+# The positive/conflict probes must actually exist, not just be declared by an index.
+for cid, name in [('SP01', 'identical-after-close'), ('SP02', 'wrong-request-reserved'),
+                  ('SP03', 'conflicting-settled'), ('SP04', 'actual-A-receipt-on-B')]:
+    found = list((root / cid).rglob(name + '-probe.json'))
+    check(len(found) == 1, 'Missing required native probe ' + cid)
+
+a, b = case_attempts['SP04']
+check(a['input']['tenantId'] != b['input']['tenantId'], 'Foreign-receipt test has same tenant')
+origin = load(next((root / 'SP04').rglob('foreign-receipt-origin.json')))
+check(origin['beforeA'] == origin['afterA'], 'Foreign probe mutated actual A tenant')
+check(origin['actualAArgs']['admissionId'] == receipt(a['final'])['admissionId'], 'Foreign probe used invented A receipt')
+probe = load(next((root / 'SP04').rglob('actual-A-receipt-on-B-probe.json')))
+check(probe['args'] == origin['actualAArgs'], 'Foreign settle arguments changed')
+
+for cid, reason in [('SP05', 'DECISION_USAGE_UNKNOWN'), ('SP06', 'ADMISSION_BREACH'), ('SP07', 'ADMISSION_BREACH')]:
+    cp = case_attempts[cid][0]['final']
+    check(receipt(cp)['status'] == 'UNKNOWN' and receipt(cp)['unknownReason'] == reason, cid + ': wrong durable uncertainty')
+nan = case_attempts['SP06'][0]
+check(nan['actualProviderResult']['inputTokens'] == {'$number': 'NaN'}, 'NaN was serialized to null or lost')
+fresh = case_attempts['SP06'][1]
+check(ctx(fresh['final'])['decisionAdmissions'] == [] and fresh['final']['budgetUsage']['modelCalls'] == 0,
+      'Breached pair dispatched in fresh execution')
+check(any(e['type'] == 'hybrid-error' and e['error']['code'] == 'ADMISSION_UNAVAILABLE' for e in fresh['events']),
+      'Same pair did not reject before counter/provider')
+same = load(next((root / 'SP06').rglob('same-hybrid-witness.json')))
+check(same['sameHybrid'] is True, 'Did not reuse real Hybrid pair')
+over = case_attempts['SP07'][0]
+actual = over['actualProviderResult']['outputTokens']
+check(actual > 512 and len(over['actualProviderResult']['text']) > 32768, 'No actual over-output')
+check(receipt(over['final'])['actual']['outputTokens'] == actual and over['final']['budgetUsage']['outputTokens'] == actual,
+      'Finite observed overuse was capped/dropped')
+
+for cid, stage in [('SP08', 'BEFORE_NATIVE_CAS'), ('SP09', 'AFTER_NATIVE_CAS_APPLIED_BEFORE_ACK')]:
+    record = case_attempts[cid][0]
+    injections = [e for e in record['events'] if e['type'] == 'CAS-fault-injection']
+    check(len(injections) == 1 and injections[0]['stage'] == stage, cid + ': wrong fault stage')
+    status = 'UNKNOWN' if cid == 'SP08' else 'SETTLED'
+    check(receipt(record['final'])['status'] == status, cid + ': wrong durable receipt')
+    check(record['result']['usage']['outputTokens'] == 512, cid + ': returned conservative bound lost')
+    if cid == 'SP09':
+        check(record['final']['budgetUsage']['outputTokens'] == record['actualProviderResult']['outputTokens'],
+              'Committed settlement was rolled back')
+        check(any(e['type'] == 'CAS-return-after-transaction' and e['result']['status'] == 'CONFLICT'
+                  for e in record['events']), 'Missing actual conflict after lost ACK')
+
+for cid in ['SP10', 'SP11', 'SP12']:
+    path = next((root / cid).rglob('takeover-late-result.json' if cid == 'SP12' else 'late-delivery.json'))
+    data = load(path)
+    before, after = stable_pair(data)
+    record = case_attempts[cid][0]
+    events = record['events']
+    held = next(e for e in events if e['type'] == 'provider-reply-held')
+    released = next(e for e in events if e['type'] == 'provider-reply-released')
+    returned = next(e for e in events if e['type'] == 'runtime-return')
+    check(held['sequence'] < released['sequence'], cid + ': reply not held')
+    if cid != 'SP12':
+        check(returned['sequence'] < released['sequence'], cid + ': not a genuinely late result')
+    no_decision(after)
+    check(receipt(after)['status'] == data['durableStatus'], cid + ': invented durable classification')
+    if receipt(after)['status'] == 'RESERVED':
+        check(any(e['type'] == 'CAS-error' and e['error'].get('code') == 'lease_lost' for e in events),
+              cid + ': RESERVED without actual native fence refusal')
+    linkage = load(Path(path).parent.parent / 'signal-linkage.json')
+    check(linkage['sameRuntimeHostFenceSignal'] is True, 'Abort signal not actually linked to native fence/host')
+    check(record['input']['budget']['maxDurationMs'] == (1000 if cid == 'SP10' else 30000), 'Native duration changed')
+
+take = load(next((root / 'SP12').rglob('takeover-native-claims.json')))
+lease = take['lease']['observed']
+max_lease = max(iso(lease[k]) for k in ['parent_lease_until', 'queue_lease_until', 'outer_lease_until'])
+check(max_lease == iso(lease['max_lease_until']), 'Not actual max native lease')
+check(iso(take['lease']['slept'][0]['after_expiry']) > max_lease, 'Takeover before actual expiry')
+check(iso(lease['prepared_expires_at']) > max_lease, 'Timer expiry substituted for lease loss')
+check(take['next']['disposition'] == 'SETTLEMENT', 'Unsafe takeover dispatched normally')
+check(take['newOuter']['claimRef']['expectedAttemptRowId'] != take['oldOuter']['claimRef']['expectedAttemptRowId'],
+      'Outer native claim identity did not change')
+before = load(take['before'])
+check(before['authority']['phase_state'] == 'FAULTED' and before['authority']['dispatch_closed'] is True,
+      'Native takeover phase not faulted')
+check(before['authority']['lease_owner'] == take['newWorker'], 'Takeover owner missing')
+check(iso(before['authority']['expires_at']) > iso(before['authority']['observed_at']),
+      'Prepared deadline already expired at takeover')
+check(len(attempts) == 14 and sum(v['calls'] for v in attempts.values()) == 13,
+      'Unique execution/model totals wrong')
+print(json.dumps({'status': 'PASS_SCENARIO_RECONSTRUCTION_NOT_FULL_TR05', 'checks': checks,
+                  'uniqueExecutions': len(attempts), 'actualGatewayEntries': sum(v['calls'] for v in attempts.values()),
+                  'cases': case_reports, 'rawInputs': inputs,
+                  'replayDiagnosticMutations': replay_mutations,
+                  'database18TableCuts': database_cuts,
+                  'limits': 'Raw-data reconstruction with frozen exact source required. User-space instrumentation, trusted synthetic support, no consumer lifecycle/realbilling/global or program closure.'}, indent=2))

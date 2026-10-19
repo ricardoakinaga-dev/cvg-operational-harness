@@ -1,0 +1,652 @@
+# Published consumer complete context — concrete T3 delta, r1
+
+Task: `P100-010/P100-020/PUBLISHED-COMPLETE-CONTRACT-DELTA-001`.
+Authoring date: 2026-10-16. Status: **DRAFT_FOR_LEAD_TECHNICAL_REVIEW**.
+Proposed protocol: `published-complete-v1`; writer generation: **2**.
+SPEC approval: **NOT_GRANTED**. BUILD: **NOT_AUTHORIZED**.
+Runtime acceptance: **NOT_ASSESSED**. Every future verification: **NOT_RUN**.
+
+This is a standalone architecture proposal, not an acceptance report or a
+canonical SPEC0226. The lead may integrate a revised candidate under a new
+claim after technical inspection and fresh critique. The author does not
+approve this draft. The CVG sequence remains DISCOVERY → PRD → SPEC → BUILD
+→ AUDIT. Preparing this document does not move the project into BUILD.
+
+Source IDs below resolve to exact paths, bytes and SHA-256 in
+[source-manifest.json](source-manifest.json). The manifest binds consulted
+files; it is not execution evidence or an assertion of exhaustive review.
+[DECISIONS-AND-RISKS.md](DECISIONS-AND-RISKS.md) records the decision matrix;
+[ACCEPTANCE-PLAN.md](ACCEPTANCE-PLAN.md) freezes proposed rejecting oracles.
+
+## 1. Outcome, authority and smallest vertical slice
+
+WHAT: make the **actual durable published inbound consumer** send its native,
+complete, typed tool observation to its final response model and close the
+same inbound through native completion and outer ACK. Keep the present
+single-tool synthetic capability, controls and legacy default. Demonstrate
+the whole route; calling a generic harness with trusted prepared data is
+not this outcome.
+
+The selected route is the existing authenticated synthetic API ingress →
+durable `inbound.process` → actual PostgreSQL controlled worker
+`published-agent/postgres-v1` → `createPublishedKernelHandlers` → native
+admit/claim/createHost → `executePublishedAgent` → `executeConfiguredAgent`
+→ public `createOperationalHarness` → real registered tool and PostgreSQL
+journal/checkpoint → native close → `completeInboundRuntime` → actual outer
+outbox ACK. One public harness factory per active attempt; no alternate
+executor, provider shortcut, prepared substitution or Map fallback.
+
+The first admitted positive profile has exactly one registered/enabled tool:
+`scheduling.controlled@1.0.0/find_available_slots`, its existing input/output
+validators, attested descriptor and unchanged constant synthetic handler
+(S14). It has `sideEffect=NONE`; a tool-call/journal record is not an external
+appointment action. A zero-tool or multi-tool configuration cannot select
+the new profile in r1. Legacy zero-tool behavior remains legacy.
+
+This proposal deliberately adds **one** final model call to the approved217
+topology. It also proposes a narrow extension of native RESPONSE accounting,
+a private host checkpoint/seal contract, a durable mode/version fence and
+new final projection validation. These are T3 decisions requiring explicit
+user SPEC approval for the concrete candidate before BUILD. Existing217/224
+approvals do not authorize these changes. No approval is inferred for
+220/221/222/225. No provider, real data, external effect, production,
+default rollout, commit/push/deploy or product release is authorized.
+
+Unchanged controls remain governed by source-bound SPEC0217 (C01) and
+SPEC0224 (C02): actor/tenant/pinned version, descriptor fingerprint,
+authorizer, policy, bound approval consumption, operation identity,
+effect journal, pause/takeover, paired leases, absolute deadline, output
+guard, evidence integrity and fail-closed projection. Those documents are
+references, not grants for this delta. Harness/product isolation remains
+the root instruction: this route adds no import of `products/shift-assistant`.
+
+## 2. CURRENT facts, separate from the target
+
+| Fact | Static source binding | Consequence for this proposal |
+| --- | --- | --- |
+| `CVG_WORKER_PUBLISHED_DURABILITY=postgres-v1` is opt-in, production-refused, controlled/RLS required, concurrency1/lease10000 constrained. | S01, `resolvePublishedDurability` | Reuse this gate; complete is an additional gate. |
+| The worker obtains trusted context/pin, admits, claims, creates the real host, joins tool callbacks, validates trace and completes inbound. | S01, S02, S03 | Change this composition, not just a generic fixture. |
+| The planner emits initial `RESPOND.responseIntent`, then the configured tool, then `RESPOND.responseText=output.text`; maxModelCalls1. | S04 | Current final response does not consume tool context. |
+| ModelProvider takes prompt/fallback and returns text/provider/model/externalCallfalse; native registry is fake/deterministic-v1. | S07 | It supplies no qualified counter/maxOutput/usage/signal bridge today. |
+| Guarded step ports forward simple save/load, not CAS; published resume validation requires state-v1, one call and S1/S2. | S05, S06 | Merely setting toolResultContext cannot implement this proposal. |
+| Actual PG step store has V2 CAS, rejects simple save2, checks bound native fence and commits before APPLIED; published saveResumePoint still uses its legacy checkpoint save path. | S13, S08 | New composed seal/CAS operation must avoid that legacy write. |
+| Generic complete RESPONSE builds selected structured context but its current request omits maxOutputTokens; its native call path is separate from decision-admission purpose ORCHESTRATION/REPAIR. | S12, C05, S11 | Adding native RESPONSE receipts/qualification is a proposed extension, not a fact about224. |
+| SQL0029 CHECK and bound-writer recognition use exact `controlled-published-v1`; current transaction GUCs fence execution/worker/attempt, not protocol generation. | S10, S09 | Preserve the marker and old guard; add a separate generation fence. |
+| The controlled tool returns a small fixed object; its handler does not generate a4096-byte adversarial fixture. | S14 | Actual-route proof can prove full typed value, not large-result consumer coverage by assertion. |
+
+Recon R01 explicitly distinguishes its static facts from runtime proof.
+R02 requests a future contract delta. All13 recon source bindings match the
+captured files. Entry instructions I03–I06 reported R15 under a separate
+review. A final read of the changed coordination header now reports a
+generic R16 repair lane; the changed RESPONSE frame excerpt in S12 was
+re-read and rebound. The source manifest preserves earlier bindings and
+the byte drift record; it does not relabel either repair accepted. No
+review-r2 contents or outcome are inputs to this draft. Neither concurrent
+repair nor historical generic/PG evidence proves this consumer delta.
+
+## 3. Trusted selection and immutable admission
+
+### 3.1 Server-only selector
+
+Propose new process config **`CVG_WORKER_PUBLISHED_CONTEXT_PROTOCOL`** with
+exact values absent or `legacy`, and `complete-tool-v1-synthetic`. Whitespace
+is trimmed; any other nonempty value is a startup/readiness error. Absent
+and `legacy` select the existing behavior for **new** admissions. Complete
+selection additionally requires all existing durability/preflight gates,
+`NODE_ENV=test`, the exact tool profile in §1, native fake model pair in §5,
+and the generation fence in §8. Development/production do not enable this
+initial proof profile. No HTTP, SDK, agent config, event payload, user text,
+tool output, runtime.context input or database tenant name can enable it.
+
+The worker resolves a frozen in-process `PublishedContextSelection`:
+
+| Field | Complete value |
+| --- | --- |
+| schema | `cvg.published-context-selection/1` |
+| protocol | `published-complete-v1` |
+| writerGeneration | 2 |
+| toolResultContext | `{version:1}` |
+| topology | `guard-tool-response-v1` |
+| projection | `guarded-tool-response-v1` |
+| pair | `fake/deterministic-v1:published-byte64-v1` |
+| limits | `{budget:<exact ExecutionBudget in §5>,contextTokenBudget:4000,contextWindowTokens:4512,maxOutputTokens:512}`; protocol version fixes all other §5 bounds, with no caller overrides |
+
+It is supplied by a new optional **trusted argument** `selection` to
+`prepareControlledPublishedAdmission`, not by an addition to public request
+schemas. `ControlledKernelHostContext` carries the validated persisted
+selection for the facade to recompute admission. `executePublishedAgent`
+continues forwarding the actual host. An unhosted call cannot select this
+published protocol. Missing ports or support declarations cause preflight
+failure before model/body, never a downgrade.
+
+### 3.2 Admission binding
+
+For complete admissions only, add `publishedProtocol` to
+`admission.runtime.context.values`, containing the selection above. Keep
+`adapterVersion:"controlled-published-v1"` **at its existing path**. Bind the
+same selection in the new prepared/snapshot schemas. The complete request
+digest is `controlledDigest` of this closed object:
+
+`{domain:"cvg.published-admission/2",base:{adapter,tenantId,inboundMessageId,context,agentId,versionId,configDigest,fingerprint,message,history,actor,executionMode,requireCapabilityApproval,budget},publishedProtocol,promptChecksum}`.
+
+The `base` fields and normalization are the existing S06 admission fields;
+`adapter` remains `controlled-published-v1`. `actor` is the trusted System
+actor with canonical permission array; `promptChecksum` is the existing
+prompt-profile checksum. Budget is the exact complete budget. Exclude
+retry attempts, worker IDs, wall-clock timestamps, functions and signal.
+Hashes preserve their existing tagged/untagged conventions: this digest
+uses `sha256-<64hex>`; native checkpoint/request hashes use C02/C05 formats.
+No global digest redefinition for legacy rows.
+
+On first admission, the server selector chooses the mode. On redelivery,
+load immutable admission first and use **its mode**, not the current env.
+A generation2 worker in legacy-selection mode can settle/resume existing
+complete rows; switching the env off only stops new complete admissions.
+Unknown protocol/generation is unsupported before claim/renew/dispatch;
+digest/identity mismatch is STATE_CONFLICT. Same inbound with different
+mode, budget, projection, pair, fingerprint or pin conflicts; no new
+execution, overwrite, backfill or V1-to-V2 upgrade of an existing turn.
+
+Prepared complete data uses `controlled-published-prepared-v2`: unchanged
+validated217 preparation fields plus `publishedProtocol` and promptChecksum.
+`startPrepared` remains write-once, records its digest, immutable runtime
+and original absolute deadline before model1. Prepared content comes from
+the real configured facade and trusted version, never a test-supplied
+prepared object. Bootstrap is not executable authority.
+
+## 4. Chosen topology and final projection
+
+The deterministic planner stays deterministic; no Hybrid decision-model
+loop, replanning, arbitrary model tool selection, repair or third call is
+introduced. It advertises complete-context support and validates the same
+native selected context as the generic protocol.
+
+| Step | Deterministic decision / work | Preconditions and durable boundary |
+| --- | --- | --- |
+| 1 | `RESPOND`, reason POLICY_REQUIRED, responseIntent `published.pre_tool_guard.v1`; one purpose RESPONSE model call M1. | Initial V2 checkpoint/CAS; native admission and output guard; only after allowed guard resolve and seal the one canonical command. Commit C1. This intermediate response does not complete the turn. |
+| 2 | `CALL_TOOL` for the sealed command only. | Re-evaluate live policy/actor/pause/cancel/deadline, native approval if required and bound permit; unchanged operationKey `${executionId}:s2:find_available_slots`. Capture full typed observation and all real receipts. Commit C2. |
+| 3 | `RESPOND`, reason GOAL_SATISFIED, responseIntent `published.post_tool_response.v1`; one purpose RESPONSE call M2. No responseText fallback. | Require C2, complete available output, no unknown receipt, same selected full context, native admission, output guard and claim validation. Persist final accepted response, then native terminal close. |
+
+If M1 is rewritten/blocked/high-risk, tool planning and body are suppressed;
+the turn stops under its native reason and guarded safe handoff. No M2.
+If the trusted post-guard planner resolves zero or more than one command,
+or a command outside the exact admitted descriptor, stop UNSAFE_REQUEST
+without C1/body/M2. An enabled-tool inventory is not proof that this input
+has a tool plan. The positive slice uses a synthetic scheduling-intent
+message; other intents do not acquire a new no-tool response topology.
+Failure/deny/approval-required at step2 does not cause M2 or synthesize
+success. Successful step2 followed by M2 overflow/failure remains a native
+effect fact in journal/checkpoint but not a completed user objective.
+
+Both M1 and M2 take the real two-message complete RESPONSE frame from the
+single validated ContextEngine selection. Trusted host/agent instructions
+stay in system. User goal, userMessage, responseIntent, selected items and
+tool output stay in the version1 JSON user frame (current S12 schema value
+`"cvg.decision-context"`, separate `version:1`). Optional history may be
+removed only as whole items; governance, current user and all TOOL_RESULT
+observations are mandatory. Detach/validate/freeze the selected value
+before measurement and reuse its exact bytes for dispatch. Do not render
+a second output list or a cloned bounded preview.
+
+The new fake pair's M1 text is exactly `Verificação sintética.`. M2 validates
+one native COMPLETE/AVAILABLE observation from the selected user frame,
+hashes **that frame's output** using the224 canonical algorithm and returns
+`Resultado sintético: sha256-<output hash>.` This is an intentionally bounded
+synthetic witness of full-value consumption; it does not purport to answer
+a real scheduling request. No expected fixture, host-side output map,
+fallbackText, test oracle or separate journal read supplies the model's
+answer. Native final guards may rewrite it; rewriting cannot be called
+successful complete-context projection.
+
+Completion requires M2's native SETTLED receipt, accepted response digest,
+all required output/claim guards, the tool provenance/receipts and no veto.
+Final response is guarded M2 text, **not M1**, a literal planner response,
+tool summary or raw tool body. Public `PublishedAgentExecutionResult` and
+`TestRunTrace` shapes remain unchanged. Existing stop mappings and redacted
+toolResults projection remain unchanged. Internal evidence adds stage,
+mode, full-output digest and model receipt IDs; public traces do not expose
+full tool output or invent two provider identities. Provider remains fake,
+model deterministic-v1, externalCallfalse, knowledge never answered and
+externalEffectsfalse. A completed transport wrapper alone is not success.
+
+## 5. One native control and budget owner, qualified synthetic pair
+
+### 5.1 Fixed limits and units
+
+| Resource | Complete profile value / consequence |
+| --- | --- |
+| maxSteps / maxModelCalls / maxToolCalls | 3 / 2 / 1; no third model or second tool, even after restart. |
+| maxTokens / maxCostUsd | 9024 synthetic units / 0 USD. Each of two calls needs at most4000 input +512 reserved output. |
+| maxDurationMs | Exactly pinned `config.model.timeoutMs`, at most120000ms; positive crash tests pin60000ms. Existing startPrepared deadline includes downtime. |
+| knowledge / replans / decisionRepairs / verification | 0 / 0 / 0 / 2. Native deterministic evaluator; no evaluation model call. |
+| Model output cap | `ModelRequest.maxOutputTokens=512` on both requests; in addition to pinned config maxTokens, which must be >=512, and existing platform output cap4000 UTF-16. Smaller configured model cap refuses selection. |
+| Qualified context tokenBudget / window | 4000 / 4512 synthetic units; exact input +512 must fit. |
+| Input wire | system16000 UTF-16, user32000 UTF-16, request131072 UTF-8 bytes, depth64/nodes20000 for request canonicalization. No silent increase. |
+| Complete tool / observation retention / logical checkpoint | Existing224 output32768 bytes/depth32/nodes10000, metadata cap4096 bytes, 50 observations, unsigned8388608 bytes and prospective36864+65536 allowance. |
+| Published prepared / snapshot / event / evidence | Existing217 caps:262144 bytes each, 256 events/4194304 total; existing normal/terminal headroom thresholds preserved. Preflight future work before an irreversible call; exhaustion is handoff. |
+
+The 9024 budget is an explicit proposed increase replacing the legacy
+`ceil(prompt.length/4)+1000` formula **only for complete**. It is not a
+tokenizer estimate or approval inherited from217. Context/model counters
+measure the entire frozen ModelRequest snapshot excluding signal, including
+messages, context, budget, IDs, purpose and maxOutputTokens. Receipt bytes
+and metadata capacity must fit before a call/body. All bounds can reject a
+request; complete context does not promise that every32768-byte output plus
+user/history fits32000 UTF-16 or4000 units.
+
+### 5.2 Pair contract
+
+Add an in-process native adapter `PublishedCompleteSyntheticPairV1`,
+selected only by trusted §3 configuration; it does not broaden the provider
+registry or alter the legacy ModelProvider.complete(prompt,fallback) path.
+Provider/model stay `fake`/`deterministic-v1`. CounterId is
+`cvg.synthetic.byte64`, counterVersion `1`, formattingVersion
+`published-byte64-v1`. The fake model's unit is explicitly defined as
+`ceil(UTF8(canonical(requestWithoutSignal)).length/64)` for input, and
+`ceil(UTF8(result.text).length/64)` for output. Declared window4512 and
+costUpperBoundUsd0, actual costUsd0. This is a deterministic synthetic
+byte-unit contract, **not a real tokenizer, inference cost or billing proof**.
+
+The adapter receives the entire immutable ModelRequest plus live signal;
+it checks stage/frame/provider/model/maxOutput/window and returns native
+ModelResult `{text,provider,model,inputTokens,outputTokens,costUsd}`. No
+external network/provider call or prompt/fallback-only bridge. The counter
+is pure, timeout/cancel-bounded, finite/integer/nonnegative and paired by
+all identity fields; unknown pair, mismatch, throw, NaN, over-window or
+missing cap is ADMISSION_UNAVAILABLE before model entry. A returned result
+over512, over measured input or with invalid usage is ADMISSION_BREACH:
+preserve observed diagnostic, withhold response, mark pair unqualified for
+future admissions, and stop. Do not clamp usage to manufacture PASS.
+
+The pair is constructed per execution with the trusted signal/deadline.
+Its DecisionInputCounter-compatible closure checks those controls before
+and after bounded pure measurement; they are not serialized as model input.
+Model stage is checked against the native pending receipt's stepNumber1/3
+and exact root responseIntent, never an arbitrary stage field in tool data.
+
+### 5.3 Extend the existing RESPONSE accounting owner, do not stack gates
+
+Propose extending native `DecisionAdmissionRecord.purpose` and reserve
+validation to permit **RESPONSE**, but only when a complete RESPONSE call
+is being run by the native pipeline with the new trusted factory option
+**`completeResponseAdmission:{version:1,counter:DecisionInputCounter}`**.
+This option requires iterative runtime and `toolResultContext:{version:1}`;
+the published composition supplies the bound pair's counter. It is a code
+composition port, not an HTTP/SDK/agent-config field or permission inferred
+from runtime.context. Absent keeps existing generic RESPONSE accounting;
+legacy published and generic224 consumers are not silently opted in.
+Existing ORCHESTRATION/REPAIR paths keep their contracts. Both published
+stages reuse `ModelGateway.complete`
+and the same runtime-owned admission ledger/LoopRun usage. This is new
+T3 behavior beyond224's existing decision admission; it is not an adapter
+counter layered around an already charged pipeline call.
+
+Within `runModelCall`'s native pre-model boundary for this profile:
+
+1. Recheck host fence/guards, live cancel/deadline, native step/model/token/
+   cost limits; validate and measure the frozen actual request with cap512.
+2. Native reserve atomically charges modelCalls1 + input upper bound +512
+   output, checks checkpoint/evidence capacity, CAS-persists receipt RESERVED
+   before yielding permission. Only COMMIT/APPLIED authorizes model entry.
+3. The pipeline carries that native receipt through model IO, audit/log,
+   usage validation, settlement and final guard. It does **not** also apply
+   the old preModel modelCalls increment or postModel aggregate ModelUsage
+   for this admitted call. Legacy pipeline accounting remains unchanged.
+4. Native settle replaces reserved units with validated actual usage once,
+   binds resultSha256 including text, and persists SETTLED using CAS. Same
+   receipt/result is idempotent; changed/foreign/UNKNOWN receipt conflicts.
+   No adapter return or planner usage aggregate charges the call again.
+
+The native ledger retains both receipts and shared usage; purpose RESPONSE,
+stepNumber1 or3 and attempt0 distinguish M1/M2. Admission attempt0 is not
+the lease attempt. Stage-to-step binding lives in the host snapshot. The
+existing acceptedDecision object and native result record are persisted
+before dispatch/continuation; M2 response acceptance additionally binds
+the native result/guard record to its SETTLED receipt. Delivery cursor may
+advance to tool step2 only with accepted M2 result, never on count/reserve,
+M1, rule-only CALL_TOOL, invalid result, or summary.
+
+The opted-in native checkpoint state adds the optional closed field
+`toolResultContext.acceptedResponse` with exact shape
+`{stepNumber:1|3,decisionAdmissionId,requestSha256,resultSha256,responseText,responseSha256,guardDigest,deliveredThroughStep:0|2}`.
+All digests bind the native measured result and guarded response respectively;
+the actual guarded text is retained, not reconstructed from a hash. Write
+it with native acceptedDecision/cursor after all guards and result ACKs.
+Step1 requires cursor0; step3 requires cursor2 and matching COMPLETE output.
+It may advance from step1 to3 once; original receipts and M1 host guard
+record remain retained. Absent or mismatched acceptedResponse prevents
+successful complete close. Non-opted-in checkpoint writers do not populate
+this field. This is another explicit part of the proposed T3 schema delta.
+Here requestSha256/resultSha256 use the existing native untagged SHA-256
+conventions, responseSha256 is untagged SHA-256 of UTF-8 guarded responseText,
+and guardDigest is tagged controlledDigest of the actual output-guard record.
+
+Timeout, cancellation, lost lease/process, uncertain COMMIT or invalid
+result conserves the reserved upper bounds; unresolved RESERVED becomes
+UNKNOWN on recovery **under a valid settlement fence** before any dispatch.
+If that diagnostic CAS is unavailable, retain RESERVED as uncertainty and
+stop; no guessed rollback, released balance or replay. A late result cannot
+change response, ledger, checkpoint, cursor or projection after closure.
+Reported concurrent live counts may be conservative; only committed native
+receipts establish durable usage. Never sum competing RuntimeResults as
+actual calls/billing. A failed log/ACK cannot charge a second modelCall.
+
+The host/lifecycle signal, runtime deadline and response-call signal must
+propagate to counter and model and be rechecked after awaits. Stop closes
+local dispatch synchronously, cancels/joins native operations and paired
+renewal; no detached SQL, callback or model continuation. Absolute deadline
+and inner/queue/outer leases remain217 (serving10s, renew2s); no deadline
+extension, TTL edit, extra timer owner or runtime budget reset on restart.
+
+## 6. V2 CAS, host seal and safe recovery
+
+### 6.1 Private atomic commit port
+
+Guarded ports must forward `compareAndSwapCheckpoint` with the native
+evidence/phase/cancel checks instead of dropping the method. In complete
+published mode the guarded CAS delegates to a new private host continuation
+operation **`commitCompleteCheckpoint(fence,input)`**, not to legacy
+saveResumePoint/simple save. Input is a closed object:
+
+| Field | Shape / meaning |
+| --- | --- |
+| expectedCheckpoint | `{checkpointId,digest}` or null, the native CAS token. |
+| next | Logical ExecutionCheckpoint, checkpointVersion2, fresh checkpointId, valid complete state and exact mode/bindings. |
+| phase | Actual ControlledPhaseRef, phaseType `complete.checkpoint`, bound inputDigest over expected token/next digest/commit kind/snapshot digest. |
+| expectedHost | `{sealId,stateRevision,phaseRevision,evidenceSequence,evidenceHash}`; phaseRevision from this actual phase, seal/revision and evidence head from the immediately preceding native ACK; never user values. |
+| commitKind | `CHECKPOINT_ONLY` or `RESUME_POINT`. |
+| snapshot | null for CHECKPOINT_ONLY; validated `controlled-published-state-v2` at C1/C2 for RESUME_POINT. |
+
+Return is `{status:"APPLIED",token,ack,seal}` with new checkpoint token,
+native evidence ACK and seal (null for CHECKPOINT_ONLY), or
+`{status:"CONFLICT"}` with no permission to proceed. Unknown COMMIT result
+is not APPLIED. This port is trusted host-only, no HTTP/SDK/config hook and
+no persistence dependency imported into the generic kernel.
+
+The guarded runtime CAS is the only checkpoint writer. The private port
+uses the **same on-client CAS primitive/codec/transition validation** as S13
+inside the host transaction, not a pool call or nested BEGIN. Lock order:
+parent execution → binding → inner queue → outer outbox → latest outer
+attempt → session → pause row → checkpoint, followed by evidence inserts.
+Recheck lease, tenant, protocol generation, cancel/pause and deadline before
+COMMIT, with217's settlement-only exception for terminal diagnostics.
+CAS expected-token mismatch returns CONFLICT, no receipt/model/body/seal.
+
+The `complete.checkpoint` intent must be the sole new evidence tail since
+expectedHost.evidenceSequence/hash: intent sequence=that sequence+1,
+previous_hash=that hash, exact inputDigest/phaseRevision/owner. The port
+compares these under the binding lock before any CAS; an intervening
+callback/event is a conflict, not a head inferred by the caller. The returned
+ACK updates the native continuation's head even for CHECKPOINT_ONLY;
+only the returned nonnull seal updates its resumable state revision.
+
+For CHECKPOINT_ONLY, write next V2 checkpoint, append the exact phase ACK
+and update evidence head in one transaction, leave phase OPEN. For
+RESUME_POINT, also validate all prerequisites, write snapshot, checkpoint
+reference, stateRevision+1, sealId new UUID, state/checkpoint digests,
+sealed-through-sequence and evidence chain, and transition OPEN→IDLE_SEALED
+atomically. Phase intent is committed first by existing beginPhase; this
+port owns its ACK (caller must not ack it again). No lock/transaction is
+held through counter/model/tool IO.
+
+Every complete checkpoint write uses this CAS: initial, pre-dispatch,
+RESERVED, SETTLED/UNKNOWN, observations, accepted decisions/cursor and
+terminal. The native receipt does not escape before its CAS COMMIT. The
+old saveResumePoint path remains for legacy only and must refuse complete
+mode. Simple saveCheckpoint2, save1 over a complete execution, stale token,
+missing phase or forged mode must fail. A direct guarded load+save is not
+a CAS implementation. No wrapper reports unsupported CAS as success.
+
+### 6.2 New snapshot, without copying/truncating the result
+
+Use a strict union by protocol: legacy `controlled-published-state-v1`
+unchanged; complete **`controlled-published-state-v2`**. Complete snapshot
+keeps217 identity/preparedDigest/fingerprint/expiresAt, trusted plan/command
+and actual attempt receipt fields, guards, faults and duration totals.
+Replace single `output/providerInvoked` assumptions with these exact fields:
+
+- `publishedProtocol`: §3 selection; `safePoint`: C1 or C2;
+  `nextPlannerStep`:2 or3, `expectedStep` identical.
+- `preToolResponse`: `{receiptId,requestSha256,resultSha256,guardedOutput,guardDigest}`;
+  `postToolResponse`: null at resumable points, same shape after final call.
+- `checkpointToken`: checkpointId/digest; `observationBindings`: ordered
+  `{observationId,stepNumber,operationKey,completion,outputBytes,outputSha256}`
+  for each full tool observation (empty at C1, exactly one COMPLETE at C2).
+- `decisionReceiptIds`: the complete ordered ledger ID list; `acceptedDecisionDigest`
+  over the actual native acceptedDecision or null; `deliveredThroughStep`;
+  `budgetUsage`; `planDigest`; `finalIssued`; `dispatchClosed`; `stop`.
+
+Absent native values are explicit null in this schema; closed schema
+validation rejects unknown/contradictory fields. Receipt IDs/hashes are
+references to the full ledger in the checkpoint, not substitute receipts.
+Full observations and their provenance stay in the **logical checkpoint**;
+the original result stays in the actual effect journal according to its
+native contract. Summary/log/callback/snapshot metadata never becomes full
+result authority. Retain all tool observations and both decision receipts
+through terminal; enforce224 bounds/preflights and integrity.
+
+For complete only, `controlled_published_bindings.sealed_checkpoint` stores
+`{schema:"controlled-published-checkpoint-ref/2",checkpointId,digest}`.
+Seal digests bind the full logical checkpoint, not just the reference.
+For complete only, seal_checkpoint_digest is exactly the native V2
+checkpoint.digest, validated with C02's full unsigned canonical algorithm;
+seal_state_digest remains controlledDigest of the bounded host snapshot.
+Do not call the262144-byte legacy controlledDigest helper over a potential
+8MiB checkpoint, or hash the JSONB storage wrapper as the logical checkpoint.
+Resume loads the actual bounded decoded V2 row and requires its token and
+full digest equal the sealed reference. This avoids a second raw JSONB
+copy of arbitrary output and the262144-byte legacy host-envelope cap.
+An advance after the seal leaves an OPEN tail: do not reload the older
+reference and erase newer reservations. Settlement reads latest state;
+resumable dispatch requires exact sealed current checkpoint.
+
+V2 state uses the224 reversible codec at S13, with8MiB logical unsigned
+limit. Snapshot/event caps remain217; events reference output/receipt hashes
+rather than embedding the whole checkpoint. Hash raw logical canonical
+values **before** redacted public projection; sanitize operational evidence
+as currently governed. Strict output JSON is not passed through217's
+lossy optional-envelope normalizer or `cloneBoundedValue` to establish
+completeness. Native journal output path still needs separate225 dependency
+for NUL; checkpoint codec alone does not repair it (§9).
+
+### 6.3 Safe-points and uncertainty
+
+| Point / durable state | What may happen on a later valid native claim |
+| --- | --- |
+| S0: original217 pre-preparation boundary, no unsealed complete IO tail | Recompute/validate real preparation under original identities; no test-prepared substitute. |
+| C1: step1 checkpoint2, M1 SETTLED/guard allowed, plan sealed, command PENDING, no tool effect/approval consumed, next2, cursor0, IDLE_SEALED | Rehydrate command without new model1, plan or parse; revalidate current authority; execute step2 once. |
+| C2: step2 checkpoint2, full COMPLETE/AVAILABLE tool observation, native effect/result/log/callback/audit receipts all ACKed, M1 receipt preserved, accepted CALL_TOOL, next3, cursor0, IDLE_SEALED | Load exact full result and native state, execute M2 once using it; no tool/model1 replay, grant reissue or reparse. |
+| OPEN or FAULTED after any intent/reservation/body/ACK without a new coherent seal | Settlement only. Preserve latest full observations, ledger and actual effect; pending reservation UNKNOWN, safe handoff, no model/tool replay. An ACKed checkpoint alone is not a resume seal. |
+| Native CLOSED (S3), including response/result/trace committed together | No factory, model or body; read same closed projection and repeat only idempotent completion/outer ACK. |
+
+Only C1/C2 are new dispatch-resumable points. C1 requires one settled receipt,
+modelCalls1/toolCalls0; C2 requires one settled receipt, modelCalls1/toolCalls1
+and exact observation/provenance/journal bindings. No pending/UNKNOWN
+admission, finalIssued, stop, fault or dispatchClosed at either. Current
+checkpoint, native acceptedDecision/pendingDecision, plan step and guard
+receipts must agree; no reset to expectedStep1. Rule-only decisions carry
+no fictitious model receipt. After M2, final accepted response/receipt and
+cursor are CAS-persisted before close, but **are not a third dispatch resume
+point**. Crash before close from that OPEN segment settles conservatively
+to handoff without calling M2 again, even if its receipt says SETTLED.
+
+An uncertain CAS before model entry authorizes zero new calls. A committed
+resume seal whose return ACK was lost may be used by B only after ordinary
+claim and full state/evidence validation; the rolled-back seal case is
+OPEN and must stop. Heartbeat metadata does not consume or recreate seals.
+No unsafe result/journal tail is discarded to resurrect C1/C2.
+
+## 7. Native controls, callbacks, close and ACK
+
+Retain217 ordering: live native guard → trusted policy/actor authorization
+→ bound approval validation/consumption if required → committed native
+dispatch permit → real tool pipeline → effect journal settlement → native
+result/log/audit/callback ACKs → full observation checkpoint/C2 → response.
+Approval authority comes from approved native ports, not selection/model/
+output. No new sensitive capability, auto-approval or grant reuse; the r1
+tool is pure and does not require approval by default. A trusted
+requireCapabilityApproval=true negative with no valid grant must block the
+actual consumer. Bound0002 semantics remain217, not a new approval route.
+
+`onToolAudit` still validates tenant/execution/tool provenance, persists via
+actual appendToolAudit and returns its actual promise. Registration in the
+worker callback set occurs synchronously before yielding that promise;
+failure requests stop. C2 and final successful close require durable
+callback receipt, not Set membership or a pushed array entry. Before close,
+the facade joins all native durable operations and mirror promises;
+worker joins again before trace validation/completion. Joining again is
+idempotent; no callbacks may be created after this barrier.
+
+Successful close validates both model receipts/usage, final response guard,
+native completed step3, cursor2, exact plan/effect/output bindings and
+absence of fault, and persists runtime result + closed trace + dispatch
+closure atomically under the real native fence. It must not require final
+text=preToolResponse. Failed close persists safe non-success projection
+when authority remains; otherwise outer failure/retry settlement, **no**
+completeInboundRuntime. Failed projection retains native effect receipts
+but never reports a succeeded tool in the public failed turn, as217.
+
+After actual close COMMIT: emit/await existing terminal callbacks, return
+facade trace, worker joins callbacks/lifecycle, validates mode/trace/result,
+then calls native completeInboundRuntime with toolAuditEvents[] (mirror
+already persisted). Outer outbox ACK follows successful idempotent
+completion through the existing two-transaction ACK protocol. Any callback,
+trace, completion, native close or ACK error blocks claimed success; no
+fire-and-forget writes, swallowed poison error or projection-only success.
+Post-close callback failure can leave CLOSED but incomplete inbound; B may
+use the validated stored trace after settlement, not rerun a tool/model.
+
+Crash after close/before completion reuses stored trace. Crash after
+completion/before outer ACK follows already_completed and repeats ACK
+without new facade/factory/model/body. Unknown outer ACK leaves the native
+processed/effect marker to the existing217 protocol, not a fabricated ACK.
+Human takeover/pause winning native locks blocks dispatch and/or completion
+as existing policy requires; unpause never reopens CLOSED/FAULTED. New
+projection text never authorizes a real send; outbound remains suppressed.
+
+## 8. Protocol/version fences and rollback
+
+Application-only fences are insufficient for an old writer that still
+satisfies0029's current transaction context. Propose a **separately reviewed
+additive migration dependency**, logical name
+`published_complete_protocol_fence_v1` (numeric migration slot assigned by
+the lead before canonical SPEC approval). No DDL is generated here and
+0029 bytes/trigger behavior must remain intact. There are no new tables,
+columns or backfill. It adds protocol guard triggers/functions on existing
+bound parent/binding/evidence/queue/event/step/checkpoint/journal writes.
+
+The guard looks up the immutable admitted
+`request.runtime.context.values.publishedProtocol` while retaining the exact
+old adapter marker. For complete rows every supported write additionally
+requires transaction-local `cvg.published_protocol=published-complete-v1`
+and `cvg.published_writer_generation=2`. New trusted writer sets them in
+the same client/transaction as existing fence GUCs. Parent original request,
+selection, checkpointVersion2 and V2 host schema/reference are immutable
+or monotonic as applicable. Reject version1 checkpoint or downgrade,
+unknown generation, deletes and marker relocation. Simple save2 remains
+prohibited in application ports; DB generation fence blocks old software,
+while expected token/phase validation remains the trusted CAS authority.
+
+Queue/outbox claiming must also reject unsupported admission protocol
+**before consuming an attempt**, and renewal/paired takeover must check
+generation. Add mode predicate to actual published candidate selection and
+claim transaction; neutral/unbound workers still exclude all bound markers.
+For an outer event belonging to a complete binding the DB guard also
+covers `outbox_events` claim/update and `outbox_attempts` insert/update,
+using the binding's exact outbox ID. Initial new admission races are
+handled by draining/exclusive upgraded worker ownership before enable;
+unbound events cannot be retroactively classified by untrusted payload.
+An old outer claimant that lacks generation context must roll back all
+claim/attempt changes. No update to immutable original admission on retry.
+
+Preflight verifies migration checksum, both old and new triggers/RLS/grants,
+native CAS+atomic host port, recognized generation/schema and paired model
+identity before enabling selection. Serving roles cannot disable triggers;
+these GUCs are defenses against stale software, not credentials against a
+malicious SQL-capable serving process. Supported rollout is an isolated
+synthetic schema/tenant with **all claimers generation2**, old processes
+drained/stopped and serving grants restricted. Concurrent old/new serving
+is not supported; adversarial tests still must prove old writes/claims
+cannot consume or downgrade complete turns. Missing DB fence blocks enable.
+
+| Reader/writer case | Proposed result |
+| --- | --- |
+| Old binary / legacy admission+checkpoint1 | Existing behavior only in drained/separate legacy scope. |
+| New binary / legacy admission+checkpoint1 | Byte-compatible legacy digest/topology/budget/closure. |
+| New binary / complete admission+checkpoint2 / matching generation | Full mode/codec/hash/identity/phase/token/ledger validation before dispatch. |
+| Old binary or legacy writer / complete row | Unsupported reader; DB guard denies mutation/claim/renew/takeover. Never ignore unknown JSON fields and proceed. |
+| Complete reader / checkpoint1 or state-v1, or legacy reader / checkpoint2 | STATE_CONFLICT; no upgrade, downgrade or promotion of old summary. |
+| Unknown protocol, generation3, corrupt marker/digest/seal/receipt | Read-only diagnosis or fenced safe settlement; no body/model/claim takeover permission. |
+
+Rollback is two operations: disable new complete admissions; drain/pause
+the dedicated scope while retaining generation2 readers/writers to close
+or settle existing complete rows. **No online rollback to an old binary**
+on a schema/tenant with complete bindings, even if env now says legacy or
+the rows appear terminal. Preserve DB guards, checkpoints, journal and
+evidence; no migration down, destructive cleanup, old writer regrant,
+checkpoint rewrite or replay. A new empty isolated legacy scope is a
+different scope, not recovery of old complete turns. Correct recovery of
+written V2 state is roll-forward with generation2. Retention/archival and
+mixed-version online serving are outside this proposal.
+
+## 9. Explicit dependencies and constrained proof staging
+
+1. Lead technical review and fresh independent critique of this draft and
+   source bindings; no author acceptance. Only then canonical task/SPEC
+   candidate, checksum-bound human T3 review and BUILD claim. Changing
+   topology, budgets, projection, mode/security/schema or hook semantics
+   reopens that concrete approval;217/224 are not substituted.
+2. Generic complete RESPONSE repair must obtain its own acceptance at its
+   actual frozen source. Current R16-lane status is reported only by the
+   coordinator; no R15/R16 acceptance verdict is issued or inferred here.
+   Consumer BUILD must rebind/reverify dependencies rather than pinning
+   historical evidence to a changed source.
+3. Additive protocol-fence migration design/checksum/slot and startup
+   integration require explicit T3 approval in the canonical candidate
+   before generating/applying DDL. Current0029 cannot provide this new
+   generation check by config alone. No marker rename is an alternative.
+4. **SPEC0225 remains PENDING.** Recon/instructions identify native PG journal
+   NUL failures.224 logical domain includes U+0000; checkpoint state codec
+   does not fix journal JSONB. The full published complete-domain acceptance
+   is blocked on separately approved/implemented/verified225 storage work
+   (or a future separately reviewed equivalent), not on a silent narrowed
+   output domain, new codec, SQL edit or reinterpretation of SUCCEEDED.
+
+The smallest useful initial proof uses the unchanged actual constant tool,
+which returns NUL-free JSON, and can validate public routing, full typed
+context, two-call accounting, C1/C2 and ACK/close after this delta's gate.
+It **does not require executing225** to run that bounded proof. It also
+does not make full-domain acceptance possible while225 is pending. A future
+unexpected NUL/native journal failure must preserve uncertainty and stop,
+not reconstruct a confirmed effect or claim complete support. Large/NUL
+end-to-end extensions require a separate approved synthetic tool fixture
+through the same actual gateway; do not replace prepared data or lie that
+the constant tool generated them. No extra tool/provider is approved here.
+
+No part of this proposal closes all36 cards/eight phases, fullTR05, parity,
+global P0, CI PostgreSQL profile, E2E/coverage/certification or product
+release. Local technical SPEC approval would authorize only the explicit
+synthetic BUILD scope; acceptance still requires actual runtime evidence,
+fresh critique and authorized acceptance. Acceptance and release are
+separate decisions.
+
+## 10. Bounded HOW and handoff
+
+Future implementation surface (not a current claim): S01/S02/S03 trusted
+selection forwarding/admission recomputation/projection; S04/S05/S06 new
+complete deterministic planner, native model bridge, CAS wrapper and
+versioned host shapes; C05/S11/S12 native RESPONSE admission/accounting
+extension; S08/S09/S13 on-client CAS+seal/generation guards; S18 readiness
+and dedicated additive migration; actual API/worker PG process fixtures
+and new tests beside T01/T02. Inspect additional native pipeline/outer
+claim callers before canonical approval; this document specifies their
+behavior, not an invented current implementation. No implementation or
+mutation of those paths occurs in this lane.
+
+Conditional sequence: reconcile technical findings → lead freezes candidate
+contracts, migration design and acceptance matrix → exact human SPEC gate
+→ registered BUILD task and isolated claims → dependency implementation
+and vertical route → actual acceptance tests → fresh runtime critique →
+scope-bounded acceptance. Every execution in that sequence is NOT_RUN here.
+The present deliverable ends at a concrete proposed contract, with dependency
+gates visible, not at technical or runtime approval.

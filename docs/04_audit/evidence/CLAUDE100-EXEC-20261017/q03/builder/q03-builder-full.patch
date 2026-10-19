@@ -1,0 +1,1218 @@
+diff --git a/tests/conformance/harness-runtimes.conformance.test.ts b/tests/conformance/harness-runtimes.conformance.test.ts
+index 88f139ee..5465e70e 100644
+--- a/tests/conformance/harness-runtimes.conformance.test.ts
++++ b/tests/conformance/harness-runtimes.conformance.test.ts
+@@ -1,7 +1,6 @@
+ import { describe, expect, it } from 'vitest'
+ import type {
+   ApprovalEngine,
+-  AuditEvent,
+   AuditSink,
+   HarnessRuntime,
+   ModelGateway,
+@@ -9,7 +8,6 @@ import type {
+   PolicyDecision,
+   PolicyEngine,
+   RuntimeInput,
+-  TelemetryEvent,
+   ToolDefinition,
+   ToolRegistry
+ } from '@cvg/harness-contracts'
+@@ -17,6 +15,10 @@ import {
+   ScriptedModelGateway,
+   ScriptedOrchestrator
+ } from '@cvg/harness-orchestrator'
++import {
++  RecordingAudit as Audit,
++  RecordingTelemetry as Telemetry
++} from '../support/governed-test-kit/index.js'
+ import { SinglePassGovernedRuntime } from '../../packages/harness/src/runtime.ts'
+ import { IterativeGovernedRuntime } from '../../packages/harness/src/iterative-runtime.ts'
+ import { DefaultContextEngine } from '../../packages/harness/src/context-engine.ts'
+@@ -57,20 +59,6 @@ interface Setup {
+   readonly pause?: InMemoryPauseSwitch
+ }
+ 
+-class Audit implements AuditSink {
+-  readonly events: AuditEvent[] = []
+-  async append(event: AuditEvent): Promise<void> {
+-    this.events.push(event)
+-  }
+-}
+-
+-class Telemetry {
+-  readonly events: TelemetryEvent[] = []
+-  record(event: TelemetryEvent): void {
+-    this.events.push(event)
+-  }
+-}
+-
+ class RecordingModel implements ModelGateway {
+   readonly requests: ModelRequest[] = []
+   readonly #inner = new ScriptedModelGateway({ responses: ['composed'] })
+diff --git a/tests/consumers-sdk-session.test.ts b/tests/consumers-sdk-session.test.ts
+index 5bd90076..ade49506 100644
+--- a/tests/consumers-sdk-session.test.ts
++++ b/tests/consumers-sdk-session.test.ts
+@@ -1,11 +1,23 @@
+ import { readFileSync } from 'node:fs'
+ import { resolve } from 'node:path'
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import { createSdk } from '@cvg/sdk'
+ import {
+   SDK_EXAMPLE_REPLY,
+   SDK_EXAMPLE_SESSION,
+-  runSdkExampleJourney
++  runSdkExampleJourney,
++  sdkExampleModelGateway,
++  sdkExamplePolicy,
++  sdkExampleApprovals
+ } from '../examples/consumers/sdk-session/index.ts'
++import {
++  RecordingAudit,
++  RecordingTelemetry,
++  createSuiteManifest,
++  fixedClock,
++  normalizeLog,
++  sequenceIds
++} from './support/governed-test-kit/index.js'
+ 
+ const exampleSource = readFileSync(
+   resolve(process.cwd(), 'examples/consumers/sdk-session/index.ts'),
+@@ -56,6 +68,69 @@ describe('PDSH-023 neutral SDK consumer', () => {
+     expect(network).not.toHaveBeenCalled()
+   })
+ 
++  it('uses shared recording and injected identities through the public SDK', async () => {
++    const inventory = createSuiteManifest({
++      formatVersion: 1,
++      id: 'sdk-governed-kit',
++      version: '1.0.0',
++      synthetic: true,
++      cases: [{ id: 'recorded-turn', family: 'sdk' }]
++    })
++    const audit = new RecordingAudit()
++    const telemetry = new RecordingTelemetry()
++    const sdk = createSdk({
++      tenantId: 'sdk_kit_synthetic',
++      modelGateway: sdkExampleModelGateway,
++      policy: sdkExamplePolicy,
++      approvals: sdkExampleApprovals,
++      audit,
++      telemetry,
++      clock: fixedClock('2026-10-17T12:00:00.000Z'),
++      newEventId: sequenceIds('sdk_kit_event_'),
++      newTraceId: () => 'sdk_kit_trace',
++      newCorrelationId: () => 'sdk_kit_correlation'
++    })
++    await sdk.openSession('sdk_kit_session')
++    const turn = await sdk.sendTurn('sdk_kit_session', 'synthetic kit request')
++    const events = await sdk.readEvents('sdk_kit_session')
++
++    expect(turn.stopReason).toBe('COMPLETED')
++    expect(turn.response).toBe(SDK_EXAMPLE_REPLY)
++    expect(turn.modelCalls).toBe(1)
++    expect(turn.toolCalls).toBe(0)
++    expect(events.map((event) => event.type)).toEqual([
++      'message/user',
++      'turn/start',
++      'model/request',
++      'model/result',
++      'turn/end',
++      'message/assistant'
++    ])
++    expect(events.map((event) => event.eventId)).toEqual(
++      Array.from({ length: 6 }, (_, i) => `sdk_kit_event_${i + 1}`)
++    )
++    expect(
++      events.every((event) => event.timestamp === '2026-10-17T12:00:00.000Z')
++    ).toBe(true)
++    expect(
++      events.every(
++        (event) =>
++          event.traceId === 'sdk_kit_trace' &&
++          event.correlationId === 'sdk_kit_correlation'
++      )
++    ).toBe(true)
++    expect(normalizeLog(events).projection).toEqual(events)
++    expect(audit.events.length).toBeGreaterThan(0)
++    expect(telemetry.events.length).toBeGreaterThan(0)
++    expect(
++      audit.events.every((event) => event.tenant === 'sdk_kit_synthetic')
++    ).toBe(true)
++    expect(inventory.manifest.cases).toEqual([
++      { id: 'recorded-turn', family: 'sdk' }
++    ])
++    expect(network).not.toHaveBeenCalled()
++  })
++
+   it('imports only supported public package roots', () => {
+     const specifiers = [
+       ...exampleSource.matchAll(/\bfrom\s+'([^']+)'|\bimport\(\s*'([^']+)'/g)
+diff --git a/tests/replay/execute-fixture.ts b/tests/replay/execute-fixture.ts
+index c002aed3..fb1f40b4 100644
+--- a/tests/replay/execute-fixture.ts
++++ b/tests/replay/execute-fixture.ts
+@@ -22,14 +22,17 @@ import type {
+   ToolDefinition
+ } from '@cvg/harness-contracts'
+ import type { ReplayFixture, ReplayTranscript } from './fixture-schema.mjs'
++import {
++  replayJsonClone as json,
++  RecordingAudit,
++  RecordingTelemetry,
++  fixedClock,
++  sequenceIds
++} from '../support/governed-test-kit/index.js'
+ 
+ export const FROZEN_TIME = '2026-10-14T12:00:00.000Z'
+ // No output normalizer: injected IDs and the fake clock remove only UUID/time
+ // nondeterminism at their source. Payloads, errors, accounting and order stay exact.
+-function json<T>(value: T): T {
+-  return JSON.parse(JSON.stringify(value)) as T
+-}
+-
+ export async function executeFixture(
+   f: ReplayFixture,
+   probeControls?: 'pause' | 'effects'
+@@ -47,16 +50,28 @@ export async function executeFixture(
+       toolBodies: unknown[] = []
+     const policyDecisions: unknown[] = [],
+       approvalRequests: unknown[] = []
+-    const approvalEvents: unknown[] = [],
+-      audit: unknown[] = [],
+-      telemetry: unknown[] = []
++    const approvalEvents: unknown[] = []
++    const auditSink = new RecordingAudit<unknown>({
++      copy: json,
++      onAppend: () => {
++        timeline.push('audit/append')
++      }
++    })
++    const telemetrySink = new RecordingTelemetry<unknown>({
++      copy: json,
++      onRecord: () => {
++        timeline.push('telemetry/record')
++      }
++    })
++    const audit = auditSink.events
++    const telemetry = telemetrySink.events
+     const domainPolicy = new DomainPolicy({
+       profile: REFERENCE_POLICY_PROFILE,
+-      clock: () => new Date(FROZEN_TIME)
++      clock: fixedClock(FROZEN_TIME)
+     })
+     const domainApprovals = new DomainApprovals({
+       store: approvalStore,
+-      clock: () => new Date(FROZEN_TIME),
++      clock: fixedClock(FROZEN_TIME),
+       idFactory: () => 'approval_replay_synthetic',
+       onEvent: (event) => {
+         approvalEvents.push(json(event))
+@@ -214,20 +229,7 @@ export async function executeFixture(
+       if (event.type === f.logFailure) throw new Error('synthetic log failure')
+       return append(event)
+     })
+-    const auditSink = {
+-      append: async (event: unknown) => {
+-        audit.push(json(event))
+-        timeline.push('audit/append')
+-      }
+-    }
+-    const telemetrySink = {
+-      record: (event: unknown) => {
+-        telemetry.push(json(event))
+-        timeline.push('telemetry/record')
+-      }
+-    }
+-    let nextEvent = 0
+-    const newEventId = () => `event_replay_${++nextEvent}`
++    const newEventId = sequenceIds('event_replay_')
+     let result: ReplayTranscript['result']
+     if (f.entry === 'sdk') {
+       const sdk = createSdk({
+diff --git a/tests/support/governed-test-kit/README.md b/tests/support/governed-test-kit/README.md
+new file mode 100644
+index 00000000..b77f7b75
+--- /dev/null
++++ b/tests/support/governed-test-kit/README.md
+@@ -0,0 +1,75 @@
++# Private governed test kit (SPEC0230)
++
++Private ESM test support, outside npm workspaces. All consumers import
++`tests/support/governed-test-kit/index.js`; TypeScript uses `index.d.ts`.
++No application exports, install, filesystem, network, process or service helpers.
++
++`RecordingAudit` and `RecordingTelemetry` retain references by default, as the
++conformance sinks did. Optional `copy` and `onAppend`/`onRecord` callbacks are
++injected; copy happens before append, and the hook runs after append. Failures
++propagate. Replay explicitly injects `replayJsonClone`, which remains exactly
++`JSON.parse(JSON.stringify(value))`. This historical, lossy clone is **not**
++strict validation. `fixedClock(ISO)` returns fresh Dates; `sequenceIds(prefix,
++start = 0)` returns local increasing IDs, starting at `start + 1`. Neither changes
++global clocks, timers, IDs or fetch. There is no policy/approval implementation,
++default ALLOW, runtime builder or grant in this package. Callers compose real
++runtime/SDK factories and supply governance ports explicitly.
++
++`normalizeLog(events, policy = [])` returns detached, frozen `raw`, `policy` and
++`projection`, plus SHA-256 `policyDigest` and `projectionDigest`. Empty policy is
++identity. Rules are closed objects:
++
++```js
++;[
++  { field: 'eventId', mode: 'id', namespace: 'event' },
++  { field: 'correlationId', mode: 'id', namespace: 'correlation' },
++  { field: 'traceId', mode: 'id', namespace: 'trace' },
++  {
++    field: 'occurredAt',
++    mode: 'timestamp',
++    value: '2026-10-17T12:00:00.000Z'
++  }
++]
++```
++
++Only these direct properties of each event envelope may be selected. No nested
++path, wildcard, regex selector, deletion or recursive field search is accepted.
++Absent fields stay absent; selected IDs must be nonempty strings, and selected
++times must be canonical ISO UTC strings. Within each declared namespace, IDs
++map bijectively to `id:<namespace>:<ordinal>` in encounter order. Equality and
++distinction survive, including across fields sharing a namespace. New calls
++start fresh maps. Repeated fields and unknown/conflicting modes fail. Object
++key order does not affect digests; event and policy rule order remain significant.
++Session `timestamp` is deliberately not an allowed rewrite: replay still compares
++its exact transcript using injected identities/time. A projection is for
++comparison only; effect/authority evidence must use the raw runtime output.
++
++`createSuiteManifest` validates a closed synthetic inventory:
++
++```js
++{
++  formatVersion: 1,
++  id: 'synthetic-suite',
++  version: '1.0.0',
++  synthetic: true,
++  cases: [{ id: 'recorded-turn', family: 'sdk' }]
++}
++```
++
++The result is `{ manifest, digest }`, detached and frozen. Nonempty IDs/families
++use letters, digits, dots, underscores and hyphens, starting with a letter or
++digit; versions use three nonnegative integers without leading zeroes. Duplicate
++case IDs, empty cases, unknown fields, non-synthetic declarations, and result or
++parity claims fail. Case order is significant. A manifest grants no PASS.
++
++`canonicalJson` and `jsonDigest` use sorted object keys and preserve array order.
++Strict boundaries accept only plain JSON data (including null-prototype objects)
++and reject cycles, unsupported values, nonfinite numbers, sparse/extended arrays,
++symbols, accessors, hidden properties, custom prototypes and prototype-sensitive
++keys (`__proto__`, `constructor`, `prototype`). Getters/toJSON are not invoked.
++
++Real consumers: the three-runtime conformance suite records real audit/telemetry;
++replay uses the original governance engines and exact goldens; the SDK consumer
++test records a public in-process SDK turn with injected clocks/IDs. The kit's
++adversarial tests cover TK02–06; focused regressions and frozen input hashes cover
++TK01/TK07. Global T2 gates, independent review and TK08 belong to the Lead.
+diff --git a/tests/support/governed-test-kit/governed-test-kit.test.ts b/tests/support/governed-test-kit/governed-test-kit.test.ts
+new file mode 100644
+index 00000000..cd652617
+--- /dev/null
++++ b/tests/support/governed-test-kit/governed-test-kit.test.ts
+@@ -0,0 +1,565 @@
++import { describe, expect, it } from 'vitest'
++import {
++  canonicalJson,
++  createSuiteManifest,
++  fixedClock,
++  jsonDigest,
++  normalizeLog,
++  RecordingAudit,
++  RecordingTelemetry,
++  replayJsonClone,
++  sequenceIds,
++  type NormalizationRule
++} from './index.js'
++
++const instant = '2026-10-17T12:00:00.000Z'
++const rules: NormalizationRule[] = [
++  { field: 'eventId', mode: 'id', namespace: 'event' },
++  { field: 'correlationId', mode: 'id', namespace: 'correlation' },
++  { field: 'traceId', mode: 'id', namespace: 'trace' },
++  { field: 'occurredAt', mode: 'timestamp', value: instant }
++]
++const corpus = () => [
++  {
++    eventId: 'a',
++    correlationId: 'shared',
++    traceId: 'a',
++    occurredAt: instant,
++    type: 'tool/result',
++    tenantId: 'tenant_synthetic',
++    payload: {
++      eventId: 'payload-ID-must-stay',
++      occurredAt: 'payload-time-must-stay',
++      input: { message: 'synthetic' },
++      output: { answer: 'answer' },
++      error: null,
++      operationKey: 'operation_synthetic',
++      approval: 'DENIED',
++      effect: 'NOT_STARTED',
++      stopReason: 'POLICY_DENIED',
++      counters: {
++        toolCalls: 0,
++        modelCalls: 1,
++        steps: 1,
++        tokens: 7,
++        costUsd: 0.1
++      }
++    }
++  },
++  {
++    eventId: 'b',
++    correlationId: 'shared',
++    traceId: 'b',
++    occurredAt: instant,
++    type: 'turn/end',
++    tenantId: 'tenant_synthetic',
++    payload: { response: 'done' }
++  },
++  {
++    eventId: 'a',
++    correlationId: 'other',
++    traceId: 'b',
++    occurredAt: instant,
++    type: 'message/assistant',
++    tenantId: 'tenant_synthetic',
++    payload: { response: 'done' }
++  }
++]
++
++describe('SPEC0230 TK02–04 — explicit log projection', () => {
++  it('defaults to complete identity, keeps raw/policy and never aliases input', () => {
++    const input = corpus()
++    const original = replayJsonClone(input)
++    const result = normalizeLog(input)
++    expect(input).toEqual(original)
++    expect(result.projection).toEqual(original)
++    expect(result.raw).toEqual(original)
++    expect(result.projection).not.toBe(result.raw)
++    expect(result.policy).toEqual([])
++    input[0]!.payload.output!.answer = 'changed later'
++    input.pop()
++    expect(result.projection).toEqual(original)
++    expect(result.raw).toEqual(original)
++    expect(Object.isFrozen(result.projection)).toBe(true)
++  })
++
++  it('rewrites only enumerated metadata, preserving equality/distinction by namespace', () => {
++    const input = corpus()
++    input[1]!.eventId = 'id:event:1' // cannot collide with an already mapped input
++    const original = replayJsonClone(input)
++    const policy = replayJsonClone(rules)
++    const result = normalizeLog(input, policy)
++    const projection = result.projection as Record<string, unknown>[]
++    expect(projection.map((event) => event.eventId)).toEqual([
++      'id:event:1',
++      'id:event:2',
++      'id:event:1'
++    ])
++    expect(projection.map((event) => event.correlationId)).toEqual([
++      'id:correlation:1',
++      'id:correlation:1',
++      'id:correlation:2'
++    ])
++    expect(projection.map((event) => event.traceId)).toEqual([
++      'id:trace:1',
++      'id:trace:2',
++      'id:trace:2'
++    ])
++    for (let i = 0; i < input.length; i++) {
++      expect(projection[i]!.payload).toEqual(input[i]!.payload)
++      expect(projection[i]!.tenantId).toEqual(input[i]!.tenantId)
++      expect(projection[i]!.type).toEqual(input[i]!.type)
++    }
++    expect(input).toEqual(original)
++    policy.pop()
++    expect(result.policy).toEqual(rules)
++    expect(result.policyDigest).toBe(jsonDigest(rules))
++    expect(result.projectionDigest).toBe(jsonDigest(result.projection))
++  })
++
++  it('uses one bijection across fields explicitly assigned the same namespace', () => {
++    const result = normalizeLog(corpus(), [
++      { field: 'eventId', mode: 'id', namespace: 'shared' },
++      { field: 'traceId', mode: 'id', namespace: 'shared' }
++    ])
++    const projected = result.projection as Record<string, unknown>[]
++    expect(projected[0]!.eventId).toBe(projected[0]!.traceId)
++    expect(projected[1]!.eventId).toBe(projected[1]!.traceId)
++    expect(projected[0]!.eventId).not.toBe(projected[1]!.eventId)
++  })
++
++  it('permits explicit timestamp replacement, leaves absent fields absent', () => {
++    const input = [
++      {
++        occurredAt: '2026-10-16T00:00:00.000Z',
++        payload: { occurredAt: 'keep' }
++      },
++      { type: 'no-metadata' }
++    ]
++    const rule: NormalizationRule = {
++      field: 'occurredAt',
++      mode: 'timestamp',
++      value: instant
++    }
++    const result = normalizeLog(input, [rule])
++    expect(result.projection).toEqual([
++      { occurredAt: instant, payload: { occurredAt: 'keep' } },
++      { type: 'no-metadata' }
++    ])
++    expect(result.raw).toEqual(input)
++    expect(normalizeLog(input).projectionDigest).not.toBe(
++      result.projectionDigest
++    )
++    expect(normalizeLog(input).policyDigest).not.toBe(result.policyDigest)
++  })
++
++  it.each([
++    ['payload.eventId'],
++    ['tenantId'],
++    ['payload'],
++    ['error'],
++    ['effect'],
++    ['approval'],
++    ['stopReason'],
++    ['toolCalls'],
++    ['costUsd'],
++    ['*'],
++    ['/eventId/'],
++    ['metadata.eventId']
++  ])('rejects unauthorized field/path %s', (field) => {
++    expect(() =>
++      normalizeLog(corpus(), [
++        { field, mode: 'id', namespace: 'event' }
++      ] as NormalizationRule[])
++    ).toThrow()
++  })
++
++  it.each(
++    [
++      [{ field: 'eventId', mode: 'id', namespace: 'event', unknown: true }],
++      [{ field: 'eventId', mode: 'drop', namespace: 'event' }],
++      [{ field: 'eventId', mode: 'timestamp', value: instant }],
++      [{ field: 'occurredAt', mode: 'id', namespace: 'time' }],
++      [{ field: 'eventId', mode: 'id' }],
++      [{ field: 'eventId', mode: 'id', namespace: '' }],
++      [{ field: 'occurredAt', mode: 'timestamp', value: 'not-time' }],
++      [rules[0], rules[0]],
++      [rules[0], { field: 'eventId', mode: 'id', namespace: 'different' }],
++      [null],
++      null,
++      { rules: [] }
++    ].map((policy) => [policy])
++  )('rejects invalid/conflicting policy %#', (policy) => {
++    expect(() =>
++      normalizeLog(corpus(), policy as NormalizationRule[])
++    ).toThrow()
++  })
++
++  it.each([null, '', 123, {}, []])(
++    'rejects malformed selected IDs %#',
++    (eventId) => {
++      expect(() => normalizeLog([{ eventId }], [rules[0]!])).toThrow()
++    }
++  )
++
++  it('rejects malformed selected time and non-event log entries', () => {
++    expect(() =>
++      normalizeLog([{ occurredAt: 'yesterday' }], [rules[3]!])
++    ).toThrow()
++    for (const invalid of [{}, null, [null], [[]], ['event']])
++      expect(() => normalizeLog(invalid)).toThrow()
++  })
++
++  const mutations: [string, (events: ReturnType<typeof corpus>) => void][] = [
++    [
++      'order',
++      (events) => {
++        events.reverse()
++      }
++    ],
++    [
++      'count',
++      (events) => {
++        events.pop()
++      }
++    ],
++    [
++      'tenant',
++      (events) => {
++        events[0]!.tenantId = 'other'
++      }
++    ],
++    [
++      'type',
++      (events) => {
++        events[0]!.type = 'tool/call'
++      }
++    ],
++    [
++      'input',
++      (events) => {
++        events[0]!.payload.input!.message = 'altered'
++      }
++    ],
++    [
++      'output',
++      (events) => {
++        events[0]!.payload.output!.answer = 'altered'
++      }
++    ],
++    [
++      'error',
++      (events) => {
++        Object.assign(events[0]!.payload, { error: 'failure' })
++      }
++    ],
++    [
++      'operation',
++      (events) => {
++        events[0]!.payload.operationKey = 'other'
++      }
++    ],
++    [
++      'approval',
++      (events) => {
++        events[0]!.payload.approval = 'APPROVED'
++      }
++    ],
++    [
++      'effect',
++      (events) => {
++        events[0]!.payload.effect = 'CONFIRMED'
++      }
++    ],
++    [
++      'stopReason',
++      (events) => {
++        events[0]!.payload.stopReason = 'COMPLETED'
++      }
++    ],
++    ...['toolCalls', 'modelCalls', 'steps', 'tokens', 'costUsd'].map(
++      (field): [string, (events: ReturnType<typeof corpus>) => void] => [
++        field,
++        (events) => {
++          Object.assign(events[0]!.payload.counters!, { [field]: 999 })
++        }
++      ]
++    ),
++    [
++      'ID distinction',
++      (events) => {
++        events[1]!.eventId = events[0]!.eventId
++      }
++    ],
++    [
++      'ID equality',
++      (events) => {
++        events[2]!.eventId = 'new'
++      }
++    ]
++  ]
++  it.each(mutations)('keeps changed %s distinguishable', (_label, mutate) => {
++    const input = corpus()
++    const before = replayJsonClone(input)
++    const good = normalizeLog(input, rules)
++    const badInput = replayJsonClone(input)
++    mutate(badInput)
++    const bad = normalizeLog(badInput, rules)
++    expect(bad.projection).not.toEqual(good.projection)
++    expect(bad.projectionDigest).not.toBe(good.projectionDigest)
++    expect(input).toEqual(before)
++    expect(good.raw).toEqual(before)
++  })
++})
++
++describe('SPEC0230 TK04–05 — strict JSON and canonical manifest', () => {
++  const suite = () => ({
++    formatVersion: 1,
++    id: 'synthetic-suite',
++    version: '1.0.0',
++    synthetic: true,
++    cases: [
++      { id: 'a', family: 'conformance' },
++      { id: 'b', family: 'sdk' }
++    ]
++  })
++
++  it('canonicalizes object key order but retains arrays, case order and values', () => {
++    expect(canonicalJson({ z: [2, 1], a: { y: true, x: null } })).toBe(
++      '{"a":{"x":null,"y":true},"z":[2,1]}'
++    )
++    expect(jsonDigest({ b: 2, a: 1 })).toBe(jsonDigest({ a: 1, b: 2 }))
++    expect(jsonDigest([1, 2])).not.toBe(jsonDigest([2, 1]))
++    expect(jsonDigest({ n: 1 })).not.toBe(jsonDigest({ n: '1' }))
++    expect(canonicalJson(Object.assign(Object.create(null), { safe: 1 }))).toBe(
++      '{"safe":1}'
++    )
++    const shared = { safe: true }
++    expect(canonicalJson({ a: shared, b: shared })).toBe(
++      '{"a":{"safe":true},"b":{"safe":true}}'
++    )
++  })
++
++  it('materializes a detached manifest with reproducible digest, no result grant', () => {
++    const input = suite()
++    const first = createSuiteManifest(input)
++    const second = createSuiteManifest({
++      cases: [
++        { family: 'conformance', id: 'a' },
++        { family: 'sdk', id: 'b' }
++      ],
++      synthetic: true,
++      version: '1.0.0',
++      id: input.id,
++      formatVersion: 1
++    })
++    expect(first).toEqual(second)
++    expect(first.digest).toMatch(/^[a-f0-9]{64}$/)
++    expect(first.digest).toBe(jsonDigest(first.manifest))
++    expect(
++      createSuiteManifest({ ...suite(), cases: [...suite().cases].reverse() })
++        .digest
++    ).not.toBe(first.digest)
++    expect(Object.keys(first).sort()).toEqual(['digest', 'manifest'])
++    input.cases[0]!.id = 'changed'
++    input.cases.pop()
++    expect(first.manifest.cases).toEqual(suite().cases)
++    expect(Object.isFrozen(first.manifest.cases[0])).toBe(true)
++  })
++
++  it.each([
++    { formatVersion: 2 },
++    { version: 'next' },
++    { version: '01.0.0' },
++    { version: 1 },
++    { synthetic: false },
++    { synthetic: 'true' },
++    { id: '' },
++    { id: '../escape' },
++    { cases: [] },
++    {
++      cases: [
++        { id: 'a', family: 'sdk' },
++        { id: 'a', family: 'replay' }
++      ]
++    },
++    { cases: [{ id: 'a', family: '' }] },
++    { cases: [{ id: 'a', family: 'sdk', pass: true }] },
++    { cases: [{ id: 'a', family: 'sdk', synthetic: false }] },
++    { pass: true },
++    { status: 'PASS' },
++    { parity: 100 },
++    { extra: null }
++  ])('rejects invalid/unknown/result-bearing manifest %#', (change) => {
++    expect(() => createSuiteManifest({ ...suite(), ...change })).toThrow()
++  })
++
++  it('requires each manifest and case field', () => {
++    for (const field of Object.keys(suite())) {
++      const incomplete: Record<string, unknown> = { ...suite() }
++      delete incomplete[field]
++      expect(() => createSuiteManifest(incomplete)).toThrow()
++    }
++    expect(() =>
++      createSuiteManifest({ ...suite(), cases: [{ id: 'a' }] })
++    ).toThrow()
++    expect(() => createSuiteManifest({ ...suite(), cases: [null] })).toThrow()
++  })
++
++  const cycle: Record<string, unknown> = {}
++  cycle.self = cycle
++  const extended: number[] & { extra?: number } = [1]
++  extended.extra = 2
++  const nonenumerable = Object.defineProperty({}, 'hidden', { value: 1 })
++  const symbol = { [Symbol('hidden')]: 1 }
++  const invalidValues: unknown[] = [
++    undefined,
++    NaN,
++    Infinity,
++    -Infinity,
++    1n,
++    () => 1,
++    Symbol('x'),
++    { invalid: undefined },
++    [undefined],
++    new Array(2),
++    extended,
++    new Date(instant),
++    new Map(),
++    new Set(),
++    /pattern/,
++    new Number(1),
++    cycle,
++    nonenumerable,
++    symbol,
++    JSON.parse('{"__proto__":{"polluted":true}}'),
++    { constructor: {} },
++    { prototype: {} },
++    { toJSON: () => ({}) }
++  ]
++  it.each(invalidValues.map((value, i) => [i, value] as const))(
++    'rejects non-JSON/unsafe data %# at all strict boundaries',
++    (_i, value) => {
++      expect(() => canonicalJson(value)).toThrow()
++      expect(() => jsonDigest(value)).toThrow()
++      expect(() => normalizeLog([{ payload: value }])).toThrow()
++      expect(() => createSuiteManifest({ ...suite(), extra: value })).toThrow()
++    }
++  )
++
++  it('never invokes getters or toJSON while validating', () => {
++    let reads = 0
++    const accessor = Object.defineProperty({}, 'eventId', {
++      enumerable: true,
++      get() {
++        reads++
++        return 'unsafe'
++      }
++    })
++    const toJSON = {
++      toJSON() {
++        reads++
++        return {}
++      }
++    }
++    expect(() => normalizeLog([accessor])).toThrow()
++    expect(() => canonicalJson(toJSON)).toThrow()
++    expect(reads).toBe(0)
++  })
++
++  it('keeps the original replay JSON stringify/parse semantics separate', () => {
++    const input = {
++      absent: undefined,
++      date: new Date(instant),
++      values: [undefined, NaN],
++      nested: { ok: true }
++    }
++    const clone = replayJsonClone(input)
++    expect(clone).toEqual(JSON.parse(JSON.stringify(input)))
++    expect(clone).toEqual({
++      date: instant,
++      values: [null, null],
++      nested: { ok: true }
++    })
++    expect(clone.nested).not.toBe(input.nested)
++    expect(() => replayJsonClone(undefined)).toThrow()
++    expect(() => replayJsonClone(1n)).toThrow()
++    expect(() => replayJsonClone(cycle)).toThrow()
++    expect(() => canonicalJson(input)).toThrow()
++  })
++})
++
++describe('SPEC0230 TK06 — local recording and injected time/IDs', () => {
++  it('retains conformance reference semantics and replay copy/timeline order', async () => {
++    const timeline: string[] = []
++    const input = { nested: { status: 'synthetic' } }
++    const audit = new RecordingAudit<typeof input>()
++    const telemetry = new RecordingTelemetry<typeof input>()
++    await audit.append(input)
++    telemetry.record(input)
++    expect(audit.events[0]).toBe(input)
++    expect(telemetry.events[0]).toBe(input)
++    const copied = new RecordingAudit<typeof input>({
++      copy: replayJsonClone,
++      onAppend: () => {
++        timeline.push(`append:${copied.events.length}`)
++      }
++    })
++    const copiedTelemetry = new RecordingTelemetry<typeof input>({
++      copy: replayJsonClone,
++      onRecord: () => {
++        timeline.push(`record:${copiedTelemetry.events.length}`)
++      }
++    })
++    await copied.append(input)
++    copiedTelemetry.record(input)
++    input.nested.status = 'changed'
++    expect(copied.events[0]).toEqual({ nested: { status: 'synthetic' } })
++    expect(copiedTelemetry.events[0]).toEqual({
++      nested: { status: 'synthetic' }
++    })
++    expect(timeline).toEqual(['append:1', 'record:1'])
++    expect(new RecordingAudit().events).toEqual([])
++  })
++
++  it('propagates copy/hook failures, never records a failed copy', async () => {
++    const failure = new Error('synthetic sink failure')
++    const copy = () => {
++      throw failure
++    }
++    const audit = new RecordingAudit({ copy })
++    await expect(audit.append({} as never)).rejects.toBe(failure)
++    expect(audit.events).toEqual([])
++    const telemetry = new RecordingTelemetry({ copy })
++    expect(() => telemetry.record({} as never)).toThrow(failure)
++    expect(telemetry.events).toEqual([])
++    const afterAppend = new RecordingAudit({ onAppend: copy })
++    await expect(afterAppend.append({} as never)).rejects.toBe(failure)
++    expect(afterAppend.events).toHaveLength(1)
++  })
++
++  it('keeps clocks and sequences local, independent and exhaustion-safe', () => {
++    const dateNow = Date.now
++    const fetch = globalThis.fetch
++    const clock = fixedClock(instant)
++    const a = clock()
++    a.setUTCFullYear(1999)
++    expect(clock().toISOString()).toBe(instant)
++    const first = sequenceIds('event_')
++    const second = sequenceIds('event_')
++    expect([first(), first(), second()]).toEqual([
++      'event_1',
++      'event_2',
++      'event_1'
++    ])
++    expect(sequenceIds('offset_', 9)()).toBe('offset_10')
++    expect(() => sequenceIds('event_', Number.MAX_SAFE_INTEGER)()).toThrow()
++    for (const invalid of ['', 'yesterday', '2026-02-30T00:00:00.000Z'])
++      expect(() => fixedClock(invalid)).toThrow()
++    for (const start of [-1, 1.5, Infinity])
++      expect(() => sequenceIds('id_', start)).toThrow()
++    expect(() => sequenceIds('')).toThrow()
++    expect(Date.now).toBe(dateNow)
++    expect(globalThis.fetch).toBe(fetch)
++  })
++})
+diff --git a/tests/support/governed-test-kit/index.d.ts b/tests/support/governed-test-kit/index.d.ts
+new file mode 100644
+index 00000000..ab4454b3
+--- /dev/null
++++ b/tests/support/governed-test-kit/index.d.ts
+@@ -0,0 +1,64 @@
++import type { AuditEvent, TelemetryEvent } from '@cvg/harness-contracts'
++
++export type Json =
++  | null
++  | boolean
++  | number
++  | string
++  | readonly Json[]
++  | { readonly [key: string]: Json }
++export type NormalizationRule =
++  | {
++      readonly field: 'eventId' | 'correlationId' | 'traceId'
++      readonly mode: 'id'
++      readonly namespace: string
++    }
++  | {
++      readonly field: 'occurredAt'
++      readonly mode: 'timestamp'
++      readonly value: string
++    }
++export interface NormalizedLog {
++  readonly raw: readonly Json[]
++  readonly policy: readonly NormalizationRule[]
++  readonly projection: readonly Json[]
++  readonly policyDigest: string
++  readonly projectionDigest: string
++}
++export interface SuiteManifest {
++  readonly formatVersion: 1
++  readonly id: string
++  readonly version: string
++  readonly synthetic: true
++  readonly cases: readonly { readonly id: string; readonly family: string }[]
++}
++/** Historical lossy clone, intentionally NOT a validation boundary. */
++export function replayJsonClone<T>(value: T): T
++export function canonicalJson(value: unknown): string
++export function jsonDigest(value: unknown): string
++export function normalizeLog(
++  events: unknown,
++  policy?: readonly NormalizationRule[]
++): NormalizedLog
++export function createSuiteManifest(input: unknown): {
++  readonly manifest: SuiteManifest
++  readonly digest: string
++}
++export class RecordingAudit<T = AuditEvent> {
++  readonly events: T[]
++  constructor(options?: {
++    copy?: (event: T) => T
++    onAppend?: (event: T) => void
++  })
++  append(event: T): Promise<void>
++}
++export class RecordingTelemetry<T = TelemetryEvent> {
++  readonly events: T[]
++  constructor(options?: {
++    copy?: (event: T) => T
++    onRecord?: (event: T) => void
++  })
++  record(event: T): void
++}
++export function fixedClock(instant: string): () => Date
++export function sequenceIds(prefix: string, start?: number): () => string
+diff --git a/tests/support/governed-test-kit/index.js b/tests/support/governed-test-kit/index.js
+new file mode 100644
+index 00000000..492acf48
+--- /dev/null
++++ b/tests/support/governed-test-kit/index.js
+@@ -0,0 +1,239 @@
++import { createHash } from 'node:crypto'
++
++// This deliberately retains the replay's lossy JSON clone semantics. It is
++// neither the strict JSON validator below nor a log normalizer.
++export function replayJsonClone(value) {
++  return JSON.parse(JSON.stringify(value))
++}
++
++const hostileKeys = new Set(['__proto__', 'prototype', 'constructor'])
++
++// Inspect descriptors before reading values: getters/toJSON must never run.
++// Shared subtrees are valid JSON; cycles, sparse arrays and hidden data are not.
++function jsonSnapshot(value, ancestors = new Set()) {
++  if (value === null || typeof value === 'string' || typeof value === 'boolean')
++    return value
++  if (typeof value === 'number' && Number.isFinite(value)) return value
++  if (typeof value !== 'object') throw new TypeError('invalid JSON value')
++  if (ancestors.has(value)) throw new TypeError('cyclic JSON value')
++  const array = Array.isArray(value)
++  const proto = Object.getPrototypeOf(value)
++  if (
++    array
++      ? proto !== Array.prototype
++      : proto !== Object.prototype && proto !== null
++  )
++    throw new TypeError('JSON requires plain objects/arrays')
++  const keys = Reflect.ownKeys(value)
++  if (array && keys.length !== value.length + 1)
++    throw new TypeError('sparse or extended JSON array')
++  const result = array ? [] : {}
++  ancestors.add(value)
++  try {
++    for (const key of keys) {
++      if (array && key === 'length') continue
++      if (typeof key !== 'string' || hostileKeys.has(key))
++        throw new TypeError('hostile JSON key')
++      if (array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))
++        throw new TypeError('extended JSON array')
++      const descriptor = Object.getOwnPropertyDescriptor(value, key)
++      if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value'))
++        throw new TypeError('JSON requires enumerable data properties')
++      result[key] = jsonSnapshot(descriptor.value, ancestors)
++    }
++  } finally {
++    ancestors.delete(value)
++  }
++  return result
++}
++
++function canonical(value) {
++  if (value === null || typeof value !== 'object') return JSON.stringify(value)
++  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
++  return `{${Object.keys(value)
++    .sort()
++    .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
++    .join(',')}}`
++}
++
++export function canonicalJson(value) {
++  return canonical(jsonSnapshot(value))
++}
++
++export function jsonDigest(value) {
++  return createHash('sha256').update(canonicalJson(value)).digest('hex')
++}
++
++function freeze(value) {
++  if (value !== null && typeof value === 'object') {
++    for (const child of Object.values(value)) freeze(child)
++    Object.freeze(value)
++  }
++  return value
++}
++
++function closedObject(value, fields, required = fields) {
++  if (value === null || typeof value !== 'object' || Array.isArray(value))
++    throw new TypeError('expected object')
++  if (Object.keys(value).some((key) => !fields.includes(key)))
++    throw new TypeError('unknown field')
++  if (required.some((key) => !Object.hasOwn(value, key)))
++    throw new TypeError('missing field')
++}
++
++function identifier(value) {
++  if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value))
++    throw new TypeError('invalid identifier')
++}
++
++function timestamp(value) {
++  if (
++    typeof value !== 'string' ||
++    !Number.isFinite(Date.parse(value)) ||
++    new Date(value).toISOString() !== value
++  )
++    throw new TypeError('expected ISO UTC timestamp')
++}
++
++function normalizationPolicy(input) {
++  const rules = jsonSnapshot(input)
++  if (!Array.isArray(rules)) throw new TypeError('expected policy array')
++  const seen = new Set()
++  for (const rule of rules) {
++    if (rule?.mode === 'id') {
++      closedObject(rule, ['field', 'mode', 'namespace'])
++      if (!['eventId', 'correlationId', 'traceId'].includes(rule.field))
++        throw new TypeError('field is not ID envelope metadata')
++      identifier(rule.namespace)
++    } else if (rule?.mode === 'timestamp') {
++      closedObject(rule, ['field', 'mode', 'value'])
++      if (rule.field !== 'occurredAt')
++        throw new TypeError('field is not timestamp envelope metadata')
++      timestamp(rule.value)
++    } else throw new TypeError('invalid normalization mode')
++    if (seen.has(rule.field))
++      throw new TypeError('repeated normalization field')
++    seen.add(rule.field)
++  }
++  return rules
++}
++
++/** Explicit, top-level envelope metadata only; never recurse into payloads. */
++export function normalizeLog(events, policy = []) {
++  const raw = jsonSnapshot(events)
++  if (
++    !Array.isArray(raw) ||
++    raw.some(
++      (event) =>
++        event === null || typeof event !== 'object' || Array.isArray(event)
++    )
++  )
++    throw new TypeError('expected log of event objects')
++  const rules = normalizationPolicy(policy)
++  const projection = jsonSnapshot(raw)
++  const namespaces = new Map()
++  for (const event of projection) {
++    for (const rule of rules) {
++      if (!Object.hasOwn(event, rule.field)) continue
++      const value = event[rule.field]
++      if (rule.mode === 'timestamp') {
++        timestamp(value)
++        event[rule.field] = rule.value
++      } else {
++        if (typeof value !== 'string' || value.length === 0)
++          throw new TypeError('expected nonempty metadata ID')
++        let ids = namespaces.get(rule.namespace)
++        if (!ids) namespaces.set(rule.namespace, (ids = new Map()))
++        if (!ids.has(value))
++          ids.set(value, `id:${rule.namespace}:${ids.size + 1}`)
++        event[rule.field] = ids.get(value)
++      }
++    }
++  }
++  return freeze({
++    raw,
++    policy: rules,
++    projection,
++    policyDigest: jsonDigest(rules),
++    projectionDigest: jsonDigest(projection)
++  })
++}
++
++/** An inventory, never a result or an authority/parity assertion. */
++export function createSuiteManifest(input) {
++  const manifest = jsonSnapshot(input)
++  closedObject(manifest, [
++    'formatVersion',
++    'id',
++    'version',
++    'synthetic',
++    'cases'
++  ])
++  identifier(manifest.id)
++  if (
++    manifest.formatVersion !== 1 ||
++    typeof manifest.version !== 'string' ||
++    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(manifest.version)
++  )
++    throw new TypeError('unsupported manifest version')
++  if (manifest.synthetic !== true)
++    throw new TypeError('manifest must be synthetic')
++  if (!Array.isArray(manifest.cases) || manifest.cases.length === 0)
++    throw new TypeError('manifest requires cases')
++  const ids = new Set()
++  for (const entry of manifest.cases) {
++    closedObject(entry, ['id', 'family'])
++    identifier(entry.id)
++    identifier(entry.family)
++    if (ids.has(entry.id)) throw new TypeError('duplicate case ID')
++    ids.add(entry.id)
++  }
++  return freeze({ manifest, digest: jsonDigest(manifest) })
++}
++
++// Recording defaults to the old conformance semantics (retain event reference).
++// Replay explicitly opts into its historical JSON clone and timeline hooks.
++export class RecordingAudit {
++  events = []
++  constructor({ copy = (event) => event, onAppend = () => {} } = {}) {
++    this.copy = copy
++    this.onAppend = onAppend
++  }
++  async append(event) {
++    this.events.push(this.copy(event))
++    this.onAppend(event)
++  }
++}
++
++export class RecordingTelemetry {
++  events = []
++  constructor({ copy = (event) => event, onRecord = () => {} } = {}) {
++    this.copy = copy
++    this.onRecord = onRecord
++  }
++  record(event) {
++    this.events.push(this.copy(event))
++    this.onRecord(event)
++  }
++}
++
++export function fixedClock(instant) {
++  timestamp(instant)
++  return () => new Date(instant)
++}
++
++export function sequenceIds(prefix, start = 0) {
++  if (
++    typeof prefix !== 'string' ||
++    prefix.length === 0 ||
++    !Number.isSafeInteger(start) ||
++    start < 0
++  )
++    throw new TypeError('invalid ID sequence')
++  let next = start
++  return () => {
++    if (!Number.isSafeInteger(next + 1))
++      throw new RangeError('ID sequence exhausted')
++    return `${prefix}${++next}`
++  }
++}
+diff --git a/tests/support/governed-test-kit/package.json b/tests/support/governed-test-kit/package.json
+new file mode 100644
+index 00000000..1690ae5a
+--- /dev/null
++++ b/tests/support/governed-test-kit/package.json
+@@ -0,0 +1,12 @@
++{
++  "name": "@cvg-private/governed-test-kit",
++  "version": "1.0.0",
++  "private": true,
++  "type": "module",
++  "exports": {
++    ".": {
++      "types": "./index.d.ts",
++      "default": "./index.js"
++    }
++  }
++}

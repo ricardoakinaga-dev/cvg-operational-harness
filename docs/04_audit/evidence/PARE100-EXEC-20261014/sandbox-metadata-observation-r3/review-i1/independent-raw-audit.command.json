@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "-c",
+    "from pathlib import Path; import json,hashlib,datetime; p=Path(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r3\"); a=json.loads((p/\"authority.json\").read_bytes()); results=[]; pins={\"attempt-01\":\"5795ec624cb3f71b80ef03850b7504c14f27359b16abf6fb0c2ec73ce1cda393\",\"attempt-02\":\"ff2cd797773a1fb6123215c3069e6c61217e787a07014458c9a4208c5fba47f7\",\"i1-01\":\"2978c1e84680fe0794a8b68246625b2bd5d1e6205e8827d754084371f67c379a\"};\nfor name,pin in pins.items():\n f=p/\"runs\"/name; recpath=p/(\"receipt-\"+name+\".json\"); raw=recpath.read_bytes(); assert hashlib.sha256(raw).hexdigest()==pin; receipt=json.loads(raw); assert receipt[\"run\"]==str(f); assert set(receipt[\"files\"])=={\"process.json\",\"sources-before.json\",\"sources-after.json\",\"stdout.txt\",\"stderr.txt\"};\n for n,expected in receipt[\"files\"].items():\n  b=(f/n).read_bytes(); assert hashlib.sha256(b).hexdigest()==expected[\"sha256\"] and len(b)==expected[\"bytes\"]\n assert json.loads((f/\"sources-before.json\").read_bytes())==a[\"sources\"]==json.loads((f/\"sources-after.json\").read_bytes()); process=json.loads((f/\"process.json\").read_bytes()); c=process[\"capture\"]; assert c[\"argv\"]==a[\"argv\"] and c[\"cwd\"]==a[\"cwd\"]; assert c[\"executionElapsedNs\"]<=5000000000 and c[\"cleanupElapsedNs\"]<=2200000000 and c[\"joined\"] is True and c[\"remainingProcessGroup\"] is False and c[\"errors\"]==[]; assert c[\"retainedBytes\"]==(f/\"stdout.txt\").stat().st_size and not (f/\"stderr.txt\").read_bytes(); data=json.loads((f/\"stdout.txt\").read_bytes()); summaries=[]\n for case in data[\"cases\"]:\n  t=case[\"telemetryEvents\"][0]; assert 0<=t[\"toolDurationMs\"]<=t[\"latencyMs\"]; j=case[\"journalRecord\"]; audit=case[\"auditEvents\"][0];\n  if j: assert j[\"createdAt\"]<=j[\"updatedAt\"]<=audit[\"timestamp\"]\n  summaries.append({\"case\":case[\"caseId\"],\"gateCalls\":len(case[\"gateCalls\"]),\"bodyCalls\":len(case[\"bodyCalls\"]),\"stopReason\":case[\"nativeResult\"][\"stopReason\"],\"sandboxBefore\":case[\"beforeDescriptor\"][\"sandbox\"],\"sandboxSubmitted\":case[\"submittedDescriptor\"].get(\"sandbox\",\"ABSENT\"),\"latencyMs\":t[\"latencyMs\"],\"toolDurationMs\":t[\"toolDurationMs\"],\"auditTimestamp\":audit[\"timestamp\"]})\n assert summaries[0][\"gateCalls\"]==1 and summaries[0][\"bodyCalls\"]==0 and summaries[0][\"stopReason\"]==\"UNSAFE_REQUEST\"; assert summaries[1][\"gateCalls\"]==0 and summaries[1][\"bodyCalls\"]==1 and summaries[1][\"sandboxSubmitted\"]==\"ABSENT\"; assert summaries[2][\"gateCalls\"]==0 and summaries[2][\"bodyCalls\"]==1 and summaries[2][\"stopReason\"]==\"COMPLETED\"; results.append({\"run\":name,\"receiptSHA256\":pin,\"executionElapsedNs\":c[\"executionElapsedNs\"],\"cleanupElapsedNs\":c[\"cleanupElapsedNs\"],\"retainedBytes\":c[\"retainedBytes\"],\"cases\":summaries,\"sameFingerprints\":data[\"cases\"][1][\"capabilityFingerprint\"]==data[\"cases\"][2][\"capabilityFingerprint\"]})\nPath(\"independent-raw-audit.json\").write_text(json.dumps(results,indent=2)+\"\\n\"); print(json.dumps(results,indent=2))"
+  ],
+  "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/sandbox-metadata-observation-r3/review-i1",
+  "exit": 0,
+  "startUTC": "2026-10-16T08:42:09.073383+00:00",
+  "elapsedSeconds": 0.0320985009893775,
+  "stdoutBytes": 3691,
+  "stderrBytes": 0,
+  "truncated": false,
+  "captureLimit": "Full in-memory capture; no independent wrapper timeout/cap. Only trusted fixed commands.",
+  "environmentOverrides": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "NODE_DISABLE_COMPILE_CACHE": "1",
+    "TSX_DISABLE_CACHE": "1"
+  }
+}

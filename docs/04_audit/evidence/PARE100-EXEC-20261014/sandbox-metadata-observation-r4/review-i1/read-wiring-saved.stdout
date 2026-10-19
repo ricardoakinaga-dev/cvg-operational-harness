@@ -1,0 +1,581 @@
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/runtime.ts
+9:   RuntimeResult,
+10:   SandboxGate,
+11:   TelemetrySink,
+12:   ToolRegistry
+13: } from '@cvg/harness-contracts'
+14: import { createKernelRuntime } from './kernel/profile.ts'
+15: import type { KernelRuntime } from './kernel/kernel-runtime.ts'
+16: import type { EffectLedger, KernelLog, PauseSwitch } from './kernel/types.ts'
+17: 
+18: export { ALL_AGENT_TOOLS, agentExposesTool } from './kernel/kernel-runtime.ts'
+19: 
+20: export interface HarnessRuntimeOptions {
+21:   readonly orchestrator: Orchestrator
+29:   /** Kernel controls; in-memory defaults when omitted. */
+30:   readonly pause?: PauseSwitch
+31:   readonly log?: KernelLog
+32:   readonly effects?: EffectLedger
+33:   /** Optional containment gate; absent means fail-closed for contained tools. */
+34:   readonly sandbox?: SandboxGate
+35: }
+36: 
+37: /**
+38:  * Single-pass profile, now a thin facade over the plugin kernel (SPEC 0181,
+39:  * decision D-0181-3). Governance runs as kernel control plugins; this class
+40:  * only keeps the public name and constructor while consumers migrate.
+41:  */
+42: export class SinglePassGovernedRuntime implements HarnessRuntime {
+43:   readonly #kernel: KernelRuntime
+44: 
+45:   public constructor(options: HarnessRuntimeOptions) {
+46:     this.#kernel = createKernelRuntime({
+47:       ...options,
+48:       eventName: 'harness.single_pass'
+49:     })
+50:   }
+51: 
+52:   public execute(input: RuntimeInput): Promise<RuntimeResult> {
+53:     return this.#kernel.execute(input)
+54:   }
+55: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/effect-journal.ts
+14:   | 'UNCERTAIN'
+15: 
+16: export interface EffectJournalRecord {
+17:   readonly tenantId: string
+18:   readonly operationKey: string
+19:   readonly proposalHash: string
+20:   readonly state: EffectJournalState
+21:   readonly attemptId: string
+22:   readonly result?: unknown
+23:   readonly error?: string
+24:   readonly createdAt: string
+25:   readonly updatedAt: string
+26: }
+27: 
+28: export interface EffectJournal {
+29:   reserve(input: {
+30:     tenantId: string
+31:     operationKey: string
+32:     proposalHash: string
+33:     attemptId: string
+34:   }): Promise<EffectJournalRecord>
+35:   markStarted(input: {
+36:     tenantId: string
+37:     operationKey: string
+38:     attemptId: string
+39:   }): Promise<EffectJournalRecord>
+107:   private readonly records = new Map<string, EffectJournalRecord>()
+108: 
+109:   public async reserve(input: {
+110:     tenantId: string
+111:     operationKey: string
+112:     proposalHash: string
+113:     attemptId: string
+114:   }): Promise<EffectJournalRecord> {
+115:     const tenantId = bounded(input.tenantId, 'tenantId')
+116:     const operationKey = bounded(input.operationKey, 'operationKey')
+117:     const proposalHash = bounded(input.proposalHash, 'proposalHash')
+118:     const attemptId = bounded(input.attemptId, 'attemptId')
+119:     const identity = key(tenantId, operationKey)
+120:     const existing = this.records.get(identity)
+121:     if (existing) {
+122:       if (existing.proposalHash !== proposalHash) {
+123:         throw new EffectJournalError(
+124:           'Operation key is bound to a different proposal'
+125:         )
+126:       }
+127:       if (existing.state === 'FAILED') {
+128:         const timestamp = now()
+129:         const retried: EffectJournalRecord = {
+130:           tenantId: existing.tenantId,
+131:           operationKey: existing.operationKey,
+132:           proposalHash: existing.proposalHash,
+133:           state: 'RESERVED',
+134:           attemptId,
+135:           createdAt: existing.createdAt,
+136:           updatedAt: timestamp
+137:         }
+138:         this.records.set(identity, retried)
+139:         return clone(retried)
+140:       }
+141:       return clone(existing)
+142:     }
+143:     const timestamp = now()
+144:     const record: EffectJournalRecord = {
+145:       tenantId,
+146:       operationKey,
+147:       proposalHash,
+148:       state: 'RESERVED',
+149:       attemptId,
+150:       createdAt: timestamp,
+151:       updatedAt: timestamp
+152:     }
+153:     this.records.set(identity, record)
+154:     return clone(record)
+155:   }
+156: 
+157:   public markStarted(input: {
+158:     tenantId: string
+231:     const next: EffectJournalRecord = {
+232:       ...current,
+233:       state,
+234:       ...(values.result !== undefined ? { result: values.result } : {}),
+235:       ...(values.error !== undefined ? { error: values.error } : {}),
+236:       updatedAt: now()
+237:     }
+238:     this.records.set(identity, next)
+239:     return clone(next)
+240:   }
+241: }
+242: 
+243: export interface JournaledToolRegistryOptions {
+246:   readonly compositionFingerprint?: string
+247:   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+248:   readonly attemptIdFactory?: EffectAttemptIdFactory
+249: }
+250: 
+251: function proposalHash(
+252:   tool: ToolDefinition,
+253:   input: unknown,
+254:   compositionFingerprint: string | undefined
+255: ): string {
+256:   return createHash('sha256')
+257:     .update(
+258:       JSON.stringify({
+314:       const operationKey = bounded(context.operationKey ?? '', 'operationKey')
+315:       const attemptId = createEffectAttemptId(options.attemptIdFactory)
+316:       const reservation = await journal.reserve({
+317:         tenantId: context.tenantId,
+318:         operationKey,
+319:         proposalHash: proposalHash(tool, input, compositionFingerprint),
+320:         attemptId
+321:       })
+322:       if (reservation.state === 'CONFIRMED') {
+323:         return { status: 'SUCCEEDED', output: reservation.result }
+324:       }
+325:       if (
+326:         reservation.state === 'UNCERTAIN' ||
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/controls.ts
+331: /**
+332:  * Containment port (SPEC 0195). The pipeline resolves this and enforces it
+333:  * between every control and the capability body; a missing gate on the host
+334:  * is handled in `enforceSandbox` as fail-closed.
+335:  */
+336: export function sandboxControl(sandbox: SandboxGate): KernelPlugin {
+337:   return {
+338:     name: 'control.sandbox',
+339:     kind: 'control',
+340:     provides: ['sandbox'],
+341:     apply(ctx) {
+342:       ctx.provide('sandbox', sandbox)
+343:     }
+344:   }
+345: }
+346: 
+347: export function policyControl(policy: PolicyEngine): KernelPlugin {
+348:   return {
+349:     name: 'control.policy',
+676: }
+677: 
+678: // ----------------------------------------------------------------- audit
+679: 
+680: export interface AuditControlOptions {
+681:   /** Audit action name; the single-pass facade keeps `harness.single_pass`. */
+682:   readonly action?: string
+683: }
+684: 
+685: /**
+686:  * Audit is fail-closed (I10): a failed or late record turns the result into
+687:  * `INSUFFICIENT_EVIDENCE`, and it keeps a minimum window after the budget ran
+688:  * out so an effect is never left unrecorded.
+697:     kind: 'control',
+698:     provides: ['audit'],
+699:     requires: ['budget'],
+700:     apply(ctx) {
+701:       ctx.provide('audit', audit)
+702:       ctx.on('turn/end', async (turn, result) => {
+703:         try {
+704:           const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
+705:           const recorded = await turn.budget.withDeadline(
+706:             () =>
+707:               audit.append({
+708:                 actor: turn.input.agent.id,
+709:                 agent: turn.input.agent.id,
+777:     name: 'capability.telemetry',
+778:     kind: 'capability',
+779:     provides: ['telemetry'],
+780:     apply(ctx) {
+781:       ctx.provide('telemetry', telemetry)
+782:       ctx.on('turn/end', async (turn, result) => {
+783:         const event: TelemetryEvent = {
+784:           name,
+785:           latencyMs: Date.now() - turn.startedAt,
+786:           errors: result.stopReason === 'COMPLETED' ? 0 : 1,
+787:           costUsd: result.usage.costUsd,
+788:           inputTokens: result.usage.inputTokens,
+789:           outputTokens: result.usage.outputTokens,
+790:           provider: turn.metadata.provider,
+791:           toolDurationMs: turn.metadata.toolDurationMs,
+792:           steps: result.steps,
+793:           traceId: turn.input.traceId,
+794:           correlationId: turn.input.correlationId
+795:         }
+796:         try {
+797:           telemetry.record(event)
+798:         } catch {
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/host.ts
+53:     'turn/before-step': [],
+54:     'model/before-call': [],
+55:     'tool/pre-execute': [],
+56:     'tool/execute': [],
+57:     'tool/post-execute': [],
+58:     'turn/end': []
+59:   }
+60:   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
+61:   readonly #disposers: Disposer[] = []
+62:   #sealed = false
+63: 
+64:   private constructor() {}
+65: 
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/kernel-runtime.ts
+14:   appendLog,
+15:   createTurnState,
+16:   race,
+17:   runGate,
+18:   runModelCall,
+19:   runToolCall,
+20:   unrecordedBlock
+21: } from './pipeline.ts'
+22: import {
+23:   CONTROL_SERVICES,
+24:   DEADLINE,
+25:   LOOP_CAPABILITIES,
+26:   stop,
+257:         )
+258:       )
+259:     }
+260: 
+261:     const logged = await appendLog(this.#host, {
+262:       type: 'turn/start',
+263:       correlationId: input.correlationId
+264:     })
+265:     if (logged) return this.#finish(fromStop(logged))
+266: 
+267:     const gate = await runGate(this.#host, 'turn/before-step', this.#state)
+268:     if (gate.kind === 'stop') return this.#finish(fromStop(gate))
+269: 
+503:       tool,
+504:       invocation,
+505:       needsApproval: false
+506:     }
+507: 
+508:     const pipeline = await runToolCall(this.#host, call)
+509:     if (pipeline.kind === 'stopped') {
+510:       const approvalId = pipeline.gate.approvalId ?? call.grant?.approvalId
+511:       return this.#finish(
+512:         fromStop({
+513:           ...pipeline.gate,
+514:           ...(approvalId !== undefined ? { approvalId } : {})
+515:         })
+516:       )
+517:     }
+518:     const settled = pipeline.outcome
+519:     this.#state.metadata.toolDurationMs =
+520:       'durationMs' in settled ? settled.durationMs : 0
+521:     const toolResult = this.#toolResult(call, settled)
+522:     if (pipeline.logFailure) {
+523:       // F04: the effect fact stays in the result; the turn is not a success.
+524:       // A call blocked after its reservation keeps the reason it was blocked
+525:       // (AUD-0599 F01).
+526:       return this.#finish({
+632:       .map(describe)
+633:   }
+634: 
+635:   async #finish(initial: RuntimeResult): Promise<RuntimeResult> {
+636:     let current = initial
+637:     for (const entry of this.#host.listeners('turn/end')) {
+638:       try {
+639:         current = await entry.fn(this.#state, current)
+640:       } catch (error) {
+641:         if (entry.kind === 'control') {
+642:           current = {
+643:             ...current,
+644:             response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+646:           }
+647:         }
+648:       }
+649:     }
+650:     const unrecorded = await appendLog(this.#host, {
+651:       type: 'turn/end',
+652:       correlationId: this.#state.input.correlationId,
+653:       stopReason: current.stopReason
+654:     })
+655:     if (unrecorded) {
+656:       // F04: a turn whose closing record failed is never reported as done.
+657:       // A turn that had already stopped keeps why it stopped (AUD-0600 F01).
+658:       return {
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/pipeline.ts
+55:       tool: null,
+56:       provider: null,
+57:       inputTokens: 0,
+58:       outputTokens: 0,
+59:       costUsd: 0,
+60:       toolDurationMs: 0
+61:     }
+62:   }
+63: }
+64: 
+65: /** Detached copy for the log, so later mutation cannot rewrite history. */
+66: function snapshot<T>(value: T): T {
+67:   try {
+260: 
+261: /**
+262:  * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →
+263:  * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.
+264:  */
+265: export async function runToolCall(
+266:   host: KernelHost,
+267:   call: ToolCallState,
+268:   hooks: ToolPipelineHooks = {}
+269: ): Promise<ToolPipelineResult> {
+270:   const { turn, tool, invocation } = call
+271:   const correlationId = turn.input.correlationId
+272:   // I5: the call is on the log before any policy runs or the body starts.
+300:   if (gate.kind === 'stop') return closeNotStarted(gate)
+301: 
+302:   const denial = await revalidate(host, call)
+303:   if (denial) return closeNotStarted(denial)
+304: 
+305:   const sandbox = await enforceSandbox(host, call)
+306:   if (sandbox) return closeNotStarted(sandbox)
+307: 
+308:   let hooked: KernelStop | undefined
+309:   try {
+310:     hooked = await hooks.beforeDispatch?.(call)
+311:   } catch (error) {
+312:     // The loop's own checkpoint failed: the logged call is still closed once
+313:     // and the original failure reaches the loop unchanged (AUD-0598 R03).
+339: 
+340: /**
+341:  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+342:  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+343:  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+344:  * in-memory and never reaches the sandbox gate.
+345:  */
+346: /**
+347:  * The mode is declared on the descriptor (SPEC 0195 §5). Absent or `'NONE'`
+348:  * means no gate; the harness never infers containment from `sideEffect`, so
+349:  * legacy side-effecting tools keep running until they opt in.
+350:  */
+351: export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+352:   return descriptor.sandbox ?? 'NONE'
+353: }
+354: 
+355: /**
+356:  * Enforcement point between every control decision and the capability body
+357:  * (SPEC 0195 §3/§4). Fails closed: a missing gate, an `unavailable` outcome
+358:  * or a thrown gate stops the call as `UNSAFE_REQUEST` and never downgrades
+359:  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+362:   host: KernelHost,
+363:   call: ToolCallState
+364: ): Promise<KernelStop | undefined> {
+365:   const requiredMode = requiredSandboxMode(call.tool)
+366:   if (requiredMode === 'NONE') return undefined
+367:   if (!host.has('sandbox')) {
+368:     return stop(
+369:       'UNSAFE_REQUEST',
+370:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+371:     )
+372:   }
+373:   const gate = host.get('sandbox')
+374:   if (!gate) {
+375:     // host.has was checked; a missing entry here is a host-integrity fault,
+376:     // so fail closed the same way as an unconfigured gate.
+377:     return stop(
+378:       'UNSAFE_REQUEST',
+379:       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+380:     )
+381:   }
+382:   try {
+383:     const outcome: SandboxGateOutcome = await gate.evaluate({
+384:       descriptor: call.tool,
+385:       context: {
+386:         tenantId: call.turn.input.tenantId,
+436:         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+437:       )
+438:     }
+439:     // Copy only validated grants. Neither a later gate mutation nor model
+440:     // JSON can rewrite the authority passed to the capability body.
+441:     call.sandboxHandle = Object.freeze({
+442:       mode: handle.mode,
+443:       allowNetwork: handle.allowNetwork,
+444:       allowSubprocess: handle.allowSubprocess,
+445:       ...(handle.workspaceRoot !== undefined
+446:         ? { workspaceRoot: handle.workspaceRoot }
+447:         : {}),
+448:       ...(handle.deadlineMs !== undefined
+506:           tenantId: turn.input.tenantId,
+507:           agentId: turn.input.agent.id,
+508:           correlationId: turn.input.correlationId,
+509:           traceId: turn.input.traceId,
+510:           operationKey: call.invocation.operationKey,
+511:           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
+512:           signal: AbortSignal.any([toolController.signal, turn.signal])
+513:         })
+514:       )
+515:       const durationMs = Date.now() - startedAt
+516:       if (value === DEADLINE || value === CANCELLED) {
+517:         toolController.abort()
+518:         return {
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/profile.ts
+16:   logControl,
+17:   modelCapability,
+18:   pauseControl,
+19:   plannerCapability,
+20:   policyControl,
+21:   sandboxControl,
+22:   telemetryCapability,
+23:   toolsCapability
+24: } from './controls.ts'
+25: import { KernelRuntime } from './kernel-runtime.ts'
+26: import type {
+27:   EffectLedger,
+28:   KernelLog,
+41:   readonly telemetry: TelemetrySink
+42:   readonly pause?: PauseSwitch
+43:   readonly log?: KernelLog
+44:   readonly effects?: EffectLedger
+45:   /** Optional containment gate; absent means fail-closed for contained tools. */
+46:   readonly sandbox?: SandboxGate
+47:   /** Audit action and telemetry event name; defaults to `harness.kernel`. */
+48:   readonly eventName?: string
+49:   /** Extra plugins mounted after the standard profile. */
+50:   readonly plugins?: readonly KernelPlugin[]
+51: }
+52: 
+53: /**
+54:  * The standard profile: every control the kernel requires (I1), in a fixed
+55:  * order, followed by the capabilities of the single-turn loop.
+56:  */
+57: export function standardKernelPlugins(
+58:   options: StandardKernelOptions
+59: ): KernelPlugin[] {
+60:   const eventName = options.eventName ?? 'harness.kernel'
+61:   return [
+62:     budgetControl(),
+63:     pauseControl(options.pause),
+64:     logControl(options.log),
+69:       options.capabilityFingerprint
+70:         ? { capabilityFingerprint: options.capabilityFingerprint }
+71:         : {}
+72:     ),
+73:     auditControl(options.audit, { action: eventName }),
+74:     ...(options.sandbox ? [sandboxControl(options.sandbox)] : []),
+75:     plannerCapability(options.orchestrator),
+76:     modelCapability(options.modelGateway),
+77:     toolsCapability(options.tools),
+78:     telemetryCapability(options.telemetry, { name: eventName }),
+79:     ...(options.plugins ?? [])
+80:   ]
+81: }
+82: 
+83: /** Kernel runtime with the standard profile, booted on first use. */
+84: export function createKernelRuntime(
+85:   options: StandardKernelOptions
+86: ): KernelRuntime {
+87:   return KernelRuntime.lazy(standardKernelPlugins(options))
+88: }
+FILE /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/kernel/types.ts
+45:   tool: string | null
+46:   provider: string | null
+47:   inputTokens: number
+48:   outputTokens: number
+49:   costUsd: number
+50:   toolDurationMs: number
+51: }
+52: 
+53: /** Early stop produced by a control: the turn ends with this result. */
+54: export interface KernelStop {
+55:   readonly kind: 'stop'
+56:   readonly stopReason: RuntimeResult['stopReason']
+57:   readonly response: string
+110:   /** Single-use approval reservation, held until post-execute settles it. */
+111:   approval?: {
+112:     readonly request: ApprovalExecutionRequest
+113:     readonly handle: ApprovalExecutionHandle
+114:   }
+115:   /** Containment granted by the sandbox gate; the only fs/net/exec channel. */
+116:   sandboxHandle?: SandboxHandle
+117: }
+118: 
+119: export type ToolOutcome =
+120:   | { readonly kind: 'not_started'; readonly gate: KernelStop }
+121:   | { readonly kind: 'deadline'; readonly durationMs: number }
+122:   | { readonly kind: 'cancelled'; readonly durationMs: number }
+123:   | {
+192:   'tool/post-execute': (
+193:     call: ToolCallState,
+194:     outcome: ToolOutcome
+195:   ) => Promise<ToolOutcome>
+196:   /** serial — finalize the turn result (audit, telemetry). */
+197:   'turn/end': (turn: TurnState, result: RuntimeResult) => Promise<RuntimeResult>
+198: }
+199: 
+200: export type HookPoint = keyof HookMap
+201: 
+202: /** Append-only kernel log: the source for reconstructing a turn (I5, I6). */
+203: export type KernelLogEvent =
+204:   | { readonly type: 'turn/start'; readonly correlationId: string }
+205:   | {
+206:       readonly type: 'model/request'
+207:       readonly correlationId: string
+208:       readonly request: Omit<ModelRequest, 'signal'>
+209:     }
+210:   | {
+211:       readonly type: 'model/result'
+226:       readonly correlationId: string
+227:       readonly toolId: string
+228:       readonly outcome: ToolOutcome['kind']
+229:     }
+230:   | {
+231:       readonly type: 'turn/end'
+232:       readonly correlationId: string
+233:       readonly stopReason: RuntimeResult['stopReason']
+234:     }
+235: 
+236: export interface KernelLog {
+237:   append(event: KernelLogEvent): void | Promise<void>
+238: }
+294:   budget: BudgetService
+295:   pause: PauseSwitch
+296:   log: KernelLog
+297:   effects: EffectLedger
+298:   /** Optional containment gate; absent means fail-closed for contained tools. */
+299:   sandbox?: SandboxGate
+300: }
+301: 
+302: export type ServiceKey = keyof Services
+303: 
+304: /** Services only control plugins may provide (SPEC 0181 I1/I2). */
+305: export const CONTROL_SERVICES = [
+306:   'policy',
+312:   'log'
+313: ] as const satisfies readonly ServiceKey[]
+314: 
+315: /**
+316:  * Containment is optional (SPEC 0195): the pipeline resolves it via
+317:  * `host.get('sandbox')` and fails closed when it is absent, so it must never
+318:  * join REQUIRED_SERVICES.
+319:  */
+320: export const OPTIONAL_SERVICES = [
+321:   'sandbox'
+322: ] as const satisfies readonly ServiceKey[]
+323: 
+324: /** Capabilities the single-turn loop needs to run. */
+325: export const LOOP_CAPABILITIES = [
+326:   'planner',
+327:   'model',
+328:   'tools',
+

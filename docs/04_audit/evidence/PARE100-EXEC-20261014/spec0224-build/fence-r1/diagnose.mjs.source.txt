@@ -1,0 +1,13 @@
+import ts from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/node_modules/typescript/lib/typescript.js'
+import { resolve } from 'node:path'
+const root = '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'
+const test = resolve(root, 'packages/persistence/src/__tests__/complete-checkpoint-bound-fence.test.ts')
+const config = ts.readConfigFile(resolve(root, 'tsconfig.base.json'), ts.sys.readFile)
+const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
+const program = ts.createProgram([test], { ...parsed.options, noEmit: true, composite: false, declaration: false })
+const source = program.getSourceFile(test)
+if (!source) throw new Error('Assigned test not loaded')
+const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)]
+console.log(JSON.stringify({ scope: 'only assigned test syntactic/semantic diagnostics; no global typecheck or emit', node: process.version, count: diagnostics.length }))
+console.log(ts.formatDiagnosticsWithColorAndContext(diagnostics, { getCanonicalFileName: x => x, getCurrentDirectory: () => root, getNewLine: () => '\n' }))
+process.exitCode = diagnostics.length ? 1 : 0

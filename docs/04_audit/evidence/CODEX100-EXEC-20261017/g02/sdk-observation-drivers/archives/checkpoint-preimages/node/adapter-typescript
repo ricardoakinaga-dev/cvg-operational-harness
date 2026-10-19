@@ -1,0 +1,84 @@
+#!/runtime/node
+'use strict';
+const { spawn } = require('node:child_process');
+const C = require('./channel.cjs');
+
+async function main() {
+  const config = C.loadConfig();
+  const ch = new C.Channel(config, 'adapter', '/profile/adapter-typescript');
+  let child; let active = 0; let stopping = false; let signalled = null; let invalidated = false;
+  const ledgers = Object.fromEntries(Object.keys(C.CAPS).map(s => [s, new C.StreamLedger(s)]));
+  const fail = e => {
+    if (!invalidated) { invalidated = true; C.invalid(ch, e); }
+    if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    process.stdin.destroy();
+    // A stuck OS write cannot become success. Supervisor reconciles missing END/EOF.
+    setTimeout(() => process.exit(125), 80);
+  };
+  const onSignal = signal => {
+    if (signalled) return;
+    signalled = signal; stopping = true;
+    // This hard timer includes backpressure on both telemetry and target pipes.
+    setTimeout(() => {
+      try { ch.writeNow('END', { streams: summaries(), child_exit_code: child?.exitCode ?? null, child_signal: child?.signalCode ?? null, complete: false }); } catch {}
+      process.removeListener(signal, signalHandlers[signal]); process.kill(process.pid, signal);
+    }, 90);
+    try { ch.writeNow('SIGNAL', { signal, inflight: active > 0 }); } catch { invalidated = true; }
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(signal);
+    process.stdin.destroy();
+  };
+  const signalHandlers = Object.fromEntries(['SIGTERM', 'SIGINT'].map(signal => [signal, () => onSignal(signal)]));
+  for (const [signal, fn] of Object.entries(signalHandlers)) process.on(signal, fn);
+  const timer = setTimeout(() => fail(new Error('adapter deadline')), config.deadline_seconds * 1000);
+  const summaries = () => Object.fromEntries(Object.entries(ledgers).map(([s, l]) => [s, l.summary()]));
+  try {
+    await ch.start();
+    // No inherited observer descriptors: only the three ordinary child stdio pipes.
+    child = spawn(config.peer_argv[0], [...config.peer_argv.slice(1), JSON.stringify(process.argv.slice(2))], {
+      cwd: '/work', env: { HOME: '/work/home', PATH: '/runtime' }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => { stopping = true; process.stdin.destroy(); resolve({ code, signal }); });
+    });
+    // The pinned runtime exposes its own pipe handle. Never assume this for an SDK FD.
+    C.assert(Number.isInteger(child.stdin?._handle?.fd), 'Node24 peer pipe FD unavailable');
+    const inputFD = child.stdin._handle.fd;
+    child.stdin.on('error', fail);
+    async function relay(stream, readable, fd) {
+      const ledger = ledgers[stream]; let eof = false;
+      try {
+        for await (const chunk of readable) {
+          for (let offset = 0; offset < chunk.length; offset += 2048) {
+            C.assert(!stopping || stream !== 'stdin', 'input interrupted before complete forwarding');
+            const b = chunk.subarray(offset, offset + 2048); active++;
+            try {
+              await ch.emit('RAW_READ', ledger.raw(b));
+              await C.writeAll(fd, b, () => ch.check(), n => ch.emit('FORWARD_COMMIT', ledger.commit(n)));
+            } finally { active--; }
+          }
+        }
+        eof = true;
+      } catch (e) {
+        // Peer exit ends the SDK call interval; no need to wait for SDK stdin EOF.
+        if (!(stream === 'stdin' && stopping && !active && ledger.read === ledger.committed && (e.code === 'ERR_STREAM_PREMATURE_CLOSE' || e.code === 'ABORT_ERR'))) throw e;
+      }
+      if (stream === 'stdin' && eof && !stopping) child.stdin.end();
+      await ch.emit('STREAM_END', { stream, ...ledger.summary() });
+    }
+    const input = relay('stdin', process.stdin, inputFD);
+    const output = relay('stdout', child.stdout, 1);
+    const error = relay('stderr', child.stderr, 2);
+    for (const p of [input, output, error]) p.catch(fail);
+    const status = await exited;
+    await Promise.all([input, output, error]);
+    const streams = summaries();
+    const complete = !invalidated && !signalled && Object.values(streams).every(s => s.read_bytes === s.committed_bytes);
+    await ch.emit('END', { streams, child_exit_code: status.code, child_signal: status.signal, complete });
+    C.assert(complete, 'incomplete capture'); ch.close(); clearTimeout(timer);
+    for (const [signal, fn] of Object.entries(signalHandlers)) process.removeListener(signal, fn);
+    if (status.signal) process.kill(process.pid, status.signal);
+    else { C.assert(Number.isInteger(status.code), 'missing peer exit'); process.exitCode = status.code; }
+  } catch (e) { fail(e); }
+}
+if (require.main === module) main().catch(e => { C.invalid(null, e); });

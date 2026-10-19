@@ -1,0 +1,186 @@
+  1449   private allowedDecisionTypes(run: LoopRun): LoopDecision['decisionType'][] {
+  1450     const allowed: LoopDecision['decisionType'][] = ['RESPOND', 'ASK_USER']
+  1451     if (this.availableTools(run).length > 0) {
+  1452       allowed.push('CALL_TOOL', 'REQUEST_APPROVAL')
+  1453     }
+  1454     if (this.options.knowledge && this.remaining(run, 'knowledge') > 0) {
+  1455       allowed.push('SEARCH_KNOWLEDGE')
+  1456     }
+  1457     if (this.remaining(run, 'verification') > 0) {
+  1458       allowed.push('VERIFY')
+  1459     }
+  1460     if (this.remaining(run, 'replan') > 0) {
+  1461       allowed.push('REPLAN')
+  1462     }
+  1463     allowed.push('HANDOFF', 'STOP')
+  1464     return allowed
+  1465   }
+  1466 
+  1467   private remaining(
+  1468     run: LoopRun,
+  1469     kind: 'knowledge' | 'verification' | 'replan'
+  1470   ): number {
+  1471     const budget = run.input.budget
+  1472     if (kind === 'knowledge') {
+  1473       return Math.max(
+  1474         0,
+  1475         (budget.maxKnowledgeCalls ?? budget.maxSteps) - run.usage.knowledgeCalls
+  1476       )
+  1477     }
+  1478     if (kind === 'verification') {
+  1479       return Math.max(
+  1480         0,
+  1481         (budget.maxVerificationCalls ?? budget.maxSteps) -
+  1482           run.usage.verificationCalls
+  1483       )
+  1484     }
+  1485     return Math.max(
+  1486       0,
+  1487       (budget.maxReplans ?? budget.maxSteps) - run.usage.replans
+  1488     )
+  1489   }
+  1490 
+  1491   private availableTools(run: LoopRun): readonly ToolDescriptor[] {
+  1492     return this.options.tools
+  1493       .list()
+  1494       .filter((tool) => agentExposesTool(run.input.agent.tools, tool.id))
+  1495       .map(describeTool)
+  1496   }
+  1497 
+  1498   private async dispatch(
+  1499     run: LoopRun,
+  1500     decision: LoopDecision,
+  1501     stepNumber: number
+  1502   ): Promise<DispatchOutcome> {
+  1503     switch (decision.decisionType) {
+  1504       case 'CALL_TOOL':
+  1505         return this.dispatchTool(run, decision, stepNumber, false)
+  1506       case 'REQUEST_APPROVAL':
+  1507         return this.dispatchTool(run, decision, stepNumber, true)
+  1508       case 'SEARCH_KNOWLEDGE':
+  1509         return this.dispatchKnowledge(run, decision, stepNumber)
+  1510       case 'VERIFY':
+  1511         return this.dispatchVerify(run, decision, stepNumber)
+  1512       case 'REPLAN':
+  1513         return this.dispatchReplan(run, decision, stepNumber)
+  1514       case 'RESPOND':
+  1515         return this.dispatchRespond(run, decision, stepNumber)
+  1516       case 'ASK_USER':
+  1517         return {
+  1518           kind: 'pause',
+  1519           pausedKind: 'NEEDS_USER_INPUT',
+  1520           decision
+  1521         }
+  1522       case 'HANDOFF':
+  1523         await this.recordStep(run, {
+  1524           stepNumber,
+  1525           stepType: 'HANDOFF',
+  1526           status: 'SUCCEEDED',
+  1527           sideEffecting: false,
+  1528           reasonCode: decision.reasonCode
+  1529         })
+  1530         return this.stop(
+  1531           'HUMAN_TAKEOVER',
+  1532           'Execution handed off to a human operator.'
+  1533         )
+  1534       case 'STOP':
+  1535         await this.recordStep(run, {
+  1536           stepNumber,
+  1537           stepType: 'STOP',
+  1538           status: 'SUCCEEDED',
+  1539           sideEffecting: false,
+  1540           reasonCode: decision.reasonCode
+  1541         })
+  1542         return { kind: 'continue' }
+  1543     }
+  1544   }
+  1545 
+  1546   private async dispatchTool(
+  1547     run: LoopRun,
+  1548     decision: LoopDecision,
+  1549     stepNumber: number,
+  1550     forceApproval: boolean
+  1551   ): Promise<DispatchOutcome> {
+  1552     return dispatchTool(
+  1553       this.dispatchContext,
+  1554       run,
+  1555       decision,
+  1556       stepNumber,
+  1557       forceApproval
+  1558     )
+  1559   }
+  1560 
+  1561   private async dispatchKnowledge(
+  1562     run: LoopRun,
+  1563     decision: LoopDecision,
+  1564     stepNumber: number
+  1565   ): Promise<DispatchOutcome> {
+  1566     return dispatchKnowledge(this.dispatchContext, run, decision, stepNumber)
+  1567   }
+  1568 
+  1569   private async dispatchVerify(
+  1570     run: LoopRun,
+  1571     decision: LoopDecision,
+  1572     stepNumber: number
+  1573   ): Promise<DispatchOutcome> {
+  1574     const verificationLimit =
+  1575       run.input.budget.maxVerificationCalls ?? run.input.budget.maxSteps
+  1576     /* v8 ignore next -- defensive: the allowed-decision gate already stops at the bound */
+  1577     if (run.usage.verificationCalls + 1 > verificationLimit) {
+  1578       return this.stop(
+  1579         'MAX_VERIFICATION_CALLS',
+  1580         'Verification budget exhausted.'
+  1581       )
+  1582     }
+  1583     run.usage.verificationCalls += 1
+  1584     await this.persistCheckpoint(run)
+  1585     const target = decision.verificationTarget as string
+  1586     const verification = this.verify(run, target)
+  1587     await this.recordObservation(
+  1588       run,
+  1589       this.makeObservation(run, {
+  1590         stepId: `step_${run.executionId}_${stepNumber}_verify`,
+  1591         stepNumber,
+  1592         type: 'VERIFICATION',
+  1593         source: 'SYSTEM',
+  1594         trust: 'TRUSTED',
+  1595         payload: { target, ...verification },
+  1596         summary: `Verification ${verification.valid ? 'passed' : 'failed'} for target ${target}.`,
+  1597         provenance: { sourceId: 'runtime-verifier' }
+  1598       })
+  1599     )
+  1600     await this.recordStep(run, {
+  1601       stepNumber,
+  1602       stepType: 'VERIFY',
+  1603       status: verification.valid ? 'SUCCEEDED' : 'FAILED',
+  1604       sideEffecting: false,
+  1605       reasonCode: decision.reasonCode,
+  1606       ...(verification.valid ? {} : { errorCode: 'verification_failed' })
+  1607     })
+  1608     if (!verification.valid) {
+  1609       run.skipEvaluationOnce = true
+  1610       const revisionEvaluation = {
+  1611         outcome: 'INCOMPLETE' as const,
+  1612         reasonCode: 'VERIFICATION_FAILED' as const,
+  1613         deterministic: true,
+  1614         detail: verification.details.join('; ')
+  1615       }
+  1616       run.state = { ...run.state, lastEvaluation: revisionEvaluation }
+  1617       run.lastEvaluation = revisionEvaluation
+  1618     }
+  1619     return { kind: 'continue' }
+  1620   }
+  1621 
+  1622   private verify(
+  1623     run: LoopRun,
+  1624     target: string
+  1625   ): { valid: boolean; details: readonly string[] } {
+  1626     if (target === 'tool-result') {
+  1627       const succeeded =
+  1628         run.lastToolObservation !== null &&
+  1629         (run.lastToolObservation.payload as { status?: string } | null)
+  1630           ?.status === 'SUCCEEDED'
+  1631       return {
+  1632         valid: succeeded,
+  1633         details: succeeded ? [] : ['no successful tool result is available']
+  1634       }

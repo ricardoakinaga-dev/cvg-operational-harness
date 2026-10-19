@@ -4,7 +4,7 @@ CVG Operational Harness is a governed runtime foundation for reusable
 operational AI agents across the CVG ecosystem. The Esmeralda V2 secretary is
 the legacy product being isolated under `legacy/`.
 
-## Estado atual — 2026-10-03 — isolamento do consumidor
+## Estado atual — 17/10/2026 — harness e consumidor
 
 A direção vigente é a [ADR-010](docs/architecture/adrs/ADR-010-harness-product-isolation.md):
 este repositório mantém o Operational Harness; o Assistente de Plantão é um
@@ -14,9 +14,20 @@ e [backlog 0370](docs/03_build/0370_harness_product_isolation_backlog.md) está 
 O núcleo deve compilar e executar sem o consumidor; liberação e piloto são
 gates separados. Decisões D1–D4 e barra 0368 continuam do assistente.
 
-Ledgers e índice modificados por outras rodadas permanecem preservados por
-coordenação; o claim HARNESS-ISO-EXEC identifica os caminhos e recursos próprios.
-Nenhuma nota ou certificação histórica libera produção.
+O [produto](products/shift-assistant/README.md) mantém suas
+[docs e backlog canônico](products/shift-assistant/docs/README.md). Para o harness,
+a [barra 0373](docs/03_build/0373_barra_producao_harness.md) e o
+[plano 0374](docs/03_build/0374_plano_producao_harness.md) governam a prontidão;
+a barra 0368 não certifica o núcleo.
+
+A [SPEC0228 foi concluída na candidata local `f11f762f`](docs/04_audit/evidence/B6-0228-BUILD-20261017/REPORT.md):
+retira falsos PASS da fronteira, que permanece INCOMPLETE. Esse código não foi
+integrado automaticamente ao checkout principal. A prova positiva de isolamento,
+o CI remoto e o aceite de produção continuam nas respectivas trilhas.
+
+Estado vigente nos [ledgers](docs/99_runtime_state.md) e no
+[índice operacional](docs/99_operational_index.md); mudanças concorrentes e
+evidências históricas permanecem preservadas. Nenhuma certificação local libera produção.
 
 ## Histórico — 2026-09-27 — PROD-20260926
 

@@ -1,0 +1,11 @@
+import os,sys,subprocess,json,datetime,pathlib
+R=pathlib.Path(__file__).parent; W=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree'); node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+name=sys.argv[1];config=sys.argv[2];root=sys.argv[3] if len(sys.argv)>3 else str(W)
+for p in ['tmp','cache','empty-env']: (R/p).mkdir(exist_ok=True)
+env={'PATH':'/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin','LANG':'C.UTF-8','TZ':'UTC','TMPDIR':str(R/'tmp'),'XDG_CACHE_HOME':str(R/'cache'),'CVG_TEST_SCOPE':'core','CVG_COMPLETE_CAPACITY_EVIDENCE':str(R/(name+'.observations.json'))}
+cmd=[node,str(W/'node_modules/vitest/vitest.mjs'),'run','packages/harness/src/__tests__/complete-checkpoint-capacity-public.test.ts','--config',str(R/config),'--configLoader','runner','--root',root,'--no-file-parallelism','--maxWorkers=1','--reporter=verbose']
+rec={'name':name,'command':cmd,'cwd':str(W),'env':env,'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+with (R/(name+'.stdout.log')).open('w') as out,(R/(name+'.stderr.log')).open('w') as err:
+ p=subprocess.run(cmd,cwd=W,env=env,stdout=out,stderr=err)
+rec.update(exitCode=p.returncode,finishedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),stdout=name+'.stdout.log',stderr=name+'.stderr.log')
+(R/(name+'.command.json')).write_text(json.dumps(rec,indent=2)+'\n'); print(json.dumps(rec,indent=2));sys.exit(p.returncode)

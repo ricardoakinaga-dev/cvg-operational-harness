@@ -1,0 +1,33 @@
+exec(open('/tmp/cvg-hiso005-integration-20261018/review/setup.py').read().split('freeze=json.loads')[0])
+freeze=json.loads((out.parent/'source-freeze.json').read_text()); base=freeze['base']; head='9b494a4d70c3899e25cb249a78316055c306fc99'; old='b7032f8245fbfbec5570c585518172de9ab7f075'; common='5a199668eef5db4ca7aa2adc3853169ca0953cbf'; p='scripts/check-product-boundary.mjs'
+texts={k:git('show',v+':'+p) for k,v in [('base',base),('common',common),('old',old),('candidate',head)]}
+for k in ['base','common','old']: (tmp/(k+'-checker.mjs')).write_bytes(texts[k])
+merged=subprocess.run(['git','merge-file','-p','--diff3',str(tmp/'base-checker.mjs'),str(tmp/'common-checker.mjs'),str(tmp/'old-checker.mjs')],capture_output=True)
+(tmp/'independent-merged-checker.mjs').write_bytes(merged.stdout)
+def catalog(t): return t[t.index(b'const capabilityExceptions = ['):t.index(b'const exceptableReasons = new Set(')]
+exact=[]
+for f in freeze['files']:
+ if f['path']!=p: exact.append({'path':f['path'],'equalB703':git('show',head+':'+f['path'])==git('show',old+':'+f['path'])})
+helpers=[]
+for h in ['scripts/boundary-code-execution.mjs','scripts/boundary-lexical.mjs','scripts/tsconfig-path-grammar.mjs','scripts/build-runtime.mjs']:
+ vals={k:sha(git('show',v+':'+h)) for k,v in [('base',base),('old',old),('candidate',head)]}; helpers.append({'path':h,**vals,'exact':len(set(vals.values()))==1})
+# Reconstruct forward patch against ONLY base10 preimages in owned directory.
+patchRoot=tmp/'patch-reconstruction'; patchRoot.mkdir(exist_ok=True)
+for f in freeze['files']:
+ try: data=git('show',base+':'+f['path'])
+ except subprocess.CalledProcessError: continue
+ q=patchRoot/f['path']; q.parent.mkdir(parents=True,exist_ok=True); q.write_bytes(data)
+patch=root/'docs/04_audit/evidence/HISO005-P2-SPEC-20261018/integration/forward-source-complete.review-only.patch'
+res=subprocess.run(['git','apply',str(patch)],cwd=patchRoot,capture_output=True)
+recon=[{'path':f['path'],'match':sha((patchRoot/f['path']).read_bytes())==f['sha256']} for f in freeze['files']]
+record={'threeWay':{'exitCode':merged.returncode,'sha256':sha(merged.stdout),'matchesCandidate':merged.stdout==texts['candidate']},'catalogBaseExact':catalog(texts['base'])==catalog(texts['candidate']),'catalogSha256':sha(catalog(texts['candidate'])),'otherNineExactB703':exact,'physicalHelperExactness':helpers,'forwardPatch':{'sha256':sha(patch.read_bytes()),'exitCode':res.returncode,'stderr':res.stderr.decode(),'reconstructedSources':recon}}
+assert merged.returncode==0 and merged.stdout==texts['candidate'] and record['catalogBaseExact'] and all(x['equalB703'] for x in exact) and all(x['exact'] for x in helpers) and res.returncode==0 and all(x['match'] for x in recon)
+write(out/'merge-preservation.independent.json',record)
+# Comparison variants are own physical copies of the minimum helper source, with a private physical semver/typescript closure.
+for name,rev in [('root-base',base),('p1-b703',old)]:
+ dest=tmp/'snapshot'/name; dest.mkdir(exist_ok=True)
+ for f in ['boundary-installed-identity.mjs','boundary-manifests.mjs','boundary-code-execution.mjs','boundary-lexical.mjs','tsconfig-path-grammar.mjs','check-product-boundary.mjs']:
+  try: data=git('show',rev+':scripts/'+f)
+  except subprocess.CalledProcessError: continue
+  (dest/f).write_bytes(data)
+print(json.dumps({'mergeExact':True,'catalogExact':True,'ninePortPathsExact':len(exact),'helpersExact':len(helpers),'patchReconstruction':len(recon)}))

@@ -1,0 +1,33 @@
+"""Lead-only freeze after builder delivery; run argument selects actual final evidence."""
+import sys,json,hashlib,shutil
+from pathlib import Path
+b=Path(__file__).parent.parent;a=b/'public-admission-postgres';w=b.parent/'worktree';packet=a/'review-packet-r1';artifact=packet/'artifact';run=Path(sys.argv[1]);new='packages/persistence/src/__tests__/complete-admission-capacity-postgres.integration.ts'
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+base=json.loads((b/'candidate-r10/manifest.json').read_text());bindings=[]
+for entry in base['sourceBindings']:
+ raw=Path(entry['live']).read_bytes();assert sha(raw)==entry['sha256'];bindings.append(entry)
+raw=(w/new).read_bytes();bindings.append({'path':new,'live':str(w/new),'copy':'source/'+new,'bytes':len(raw),'sha256':sha(raw)})
+candidate={'scope':'R11 adds only actual public PG admission-capacity fixture to immutable72R10 sources. No runtime/SQL/schemaformat changes. Focused proof only, notglobal/fullTR orprogram closure.','sourceBindings':bindings}
+cd=b/'candidate-r11';cd.mkdir(exist_ok=True)
+for e in bindings:
+ out=cd/e['copy'];out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(Path(e['live']).read_bytes())
+raw=(json.dumps(candidate,indent=2)+'\n').encode();(cd/'manifest.json').write_bytes(raw);(b/'candidate-r11.json').write_bytes(raw);(packet/'candidate-manifest.json').write_bytes(raw)
+old=json.loads((b/'receipt-capacity-preflight/review-packet-r1/manifest.json').read_text());inputs=[]
+for e in old['inputs']:
+ raw=Path(e['original']).read_bytes();assert sha(raw)==e['sha256'];out=artifact/e['relative'];assert out.read_bytes()==raw;inputs.append(dict(e,copy=str(out)))
+raw=(w/new).read_bytes();out=artifact/new;out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);inputs.append({'category':'source','original':str(w/new),'copy':str(out),'relative':new,'bytes':len(raw),'sha256':sha(raw)})
+proof=[]
+def add(src,relative):
+ raw=src.read_bytes();out=packet/'proof'/relative;out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);proof.append({'copy':str(out),'relative':relative,'bytes':len(raw),'sha256':sha(raw)})
+add(a/'contract.json','contract.json')
+for name in ['assigned-resource-public.json','preexistence-check.json','serving-identity-grants-rls-migrations.json']:
+ add(run/name,name)
+for case in sorted((run/'cases').iterdir()):
+ for name in ['runtime-input.json','observed.json','physical-checkpoints.json','native-journal-trace.json']:
+  add(case/name,'cases/'+case.name+'/'+name)
+environment=[]
+for p in sorted((packet/'environment').iterdir()):
+ raw=p.read_bytes();environment.append({'copy':str(p),'bytes':len(raw),'sha256':sha(raw)})
+meta=packet/'package.json';deps=w/'node_modules'
+m={'scope':'Independentreview ofsix publicnativePGcapability cases. Firstreadonly thismanifest. No originalrepo/AGENTS/ledgers/.agent/.gauntlet/priorreports. All sourcecopiedreadonly, writesonlyexplicitreviewroot. NofullTR/OS/fence/globalclaim.','candidateManifestSha256':sha((cd/'manifest.json').read_bytes()),'candidateManifestCopy':str(packet/'candidate-manifest.json'),'artifactRoot':str(artifact),'inputs':inputs,'proofs':proof,'environmentTemplates':environment,'allowedScopeMetadata':{'path':str(meta),'bytes':meta.stat().st_size,'sha256':sha(meta.read_bytes())},'allowedDependencyMirror':str(packet/'node_modules'),'externalReadOnlyDependencies':str(deps),'node':'/home/ricardo/.nvm/versions/node/v22.23.2/bin/node','privateResource':json.loads((a/'review-resource-binding.json').read_text())}
+(packet/'manifest.json').write_text(json.dumps(m,indent=2)+'\n');print(json.dumps({'inputs':len(inputs),'sources':len(bindings),'proofs':len(proof),'packetSHA256':sha((packet/'manifest.json').read_bytes()),'candidateSHA256':m['candidateManifestSha256']}))

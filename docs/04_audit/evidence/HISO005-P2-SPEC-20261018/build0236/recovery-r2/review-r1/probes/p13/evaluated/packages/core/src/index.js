@@ -1,0 +1,1 @@
+const data={x:1};Object.getOwnPropertyDescriptor(data,"x");Object.getOwnPropertyDescriptor(data,"x");export function external(input){return Object.getPrototypeOf(input)}

@@ -1,0 +1,32 @@
+import datetime, hashlib, json, os, pathlib, subprocess, sys
+
+ROOT = pathlib.Path(__file__).resolve().parent
+WORK = ROOT.parents[1] / 'worktree'
+label, *command = sys.argv[1:]
+env = os.environ.copy()
+env.update({
+    'PATH': '/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin',
+    'TMPDIR': str(ROOT / 'tmp'), 'XDG_CACHE_HOME': str(ROOT / 'cache'),
+    'NODE_COMPILE_CACHE': str(ROOT / 'node-cache'),
+    'SPEC0224_FENCE_RESOURCE': os.environ.get('SPEC0224_FENCE_RUN_RESOURCE', str(ROOT / 'resource.json')),
+    'SPEC0224_FENCE_EVIDENCE': os.environ.get('SPEC0224_FENCE_RUN_DIRECTORY', str(ROOT)),
+})
+for name in ['tmp', 'cache', 'node-cache']:
+    (ROOT / name).mkdir(exist_ok=True)
+start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+source = WORK / 'packages/persistence/src/__tests__/complete-checkpoint-bound-fence.test.ts'
+source_hash = hashlib.sha256(source.read_bytes()).hexdigest() if source.exists() else None
+p = subprocess.run(command, cwd=WORK, env=env, capture_output=True)
+(ROOT / (label + '.stdout.log')).write_bytes(p.stdout)
+(ROOT / (label + '.stderr.log')).write_bytes(p.stderr)
+(ROOT / (label + '.command.json')).write_text(json.dumps({
+    'argv': command, 'cwd': str(WORK), 'startedAt': start, 'testSha256': source_hash,
+    'finishedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'exitCode': p.returncode, 'stdoutBytes': len(p.stdout),
+    'stderrBytes': len(p.stderr), 'privateEnv': {k: env[k] for k in [
+        'PATH', 'TMPDIR', 'XDG_CACHE_HOME', 'NODE_COMPILE_CACHE',
+        'SPEC0224_FENCE_RESOURCE', 'SPEC0224_FENCE_EVIDENCE']}
+}, indent=2) + '\n')
+sys.stdout.buffer.write(p.stdout)
+sys.stderr.buffer.write(p.stderr)
+sys.exit(p.returncode)

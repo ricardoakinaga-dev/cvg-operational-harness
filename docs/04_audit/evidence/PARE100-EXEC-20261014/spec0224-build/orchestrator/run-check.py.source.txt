@@ -1,0 +1,17 @@
+from pathlib import Path
+import subprocess,json,os,sys,datetime
+out=Path(__file__).parent
+w=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree')
+name=sys.argv[1]
+command=sys.argv[2:]
+env=os.environ.copy();env['CVG_ORCHESTRATOR_EVIDENCE']=str(out/(name+'.requests.json'))
+r=subprocess.run(command,cwd=w,env=env,capture_output=True)
+record={'command':command,'cwd':str(w),'observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'exitCode':r.returncode,'streams':{}}
+for stream,data in [('stdout',r.stdout),('stderr',r.stderr)]:
+ if data:
+  p=out/(name+'.'+stream+'.log');p.write_bytes(data);record['streams'][stream]={'path':str(p),'bytes':len(data)}
+ else:record['streams'][stream]={'omitted':'empty stream','bytes':0}
+(out/(name+'.command.json')).write_text(json.dumps(record,indent=2)+'\n')
+print(json.dumps(record))
+print(r.stdout.decode(errors='replace'));print(r.stderr.decode(errors='replace'))
+sys.exit(r.returncode)

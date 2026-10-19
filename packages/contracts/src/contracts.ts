@@ -114,6 +114,8 @@ export interface ToolExecutionContext {
   readonly traceId: TraceId
   readonly operationKey?: string
   readonly signal?: AbortSignal
+  /** Validated, frozen grant supplied by the kernel after sandbox approval. */
+  readonly sandboxHandle?: SandboxHandle
 }
 
 export interface ToolDescriptor {

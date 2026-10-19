@@ -1017,12 +1017,14 @@ describe('Test Lab dry-run', () => {
     })
 
     expect(trace.policy[0]).toMatchObject({
-      decision: 'requires_approval'
+      decision: 'requires_approval',
+      reason: 'approval_required_by_published_policy'
     })
     expect(trace.handoff).toMatchObject({
       requested: true,
-      reason: 'approval_required_by_published_policy'
+      reason: 'controlled_runtime_policy_denied'
     })
+    expect(trace.status).toBe('blocked')
     expect(trace.response.mode).toBe('handoff')
     expect(trace.tools).toEqual([
       { name: 'find_available_slots', status: 'blocked' }

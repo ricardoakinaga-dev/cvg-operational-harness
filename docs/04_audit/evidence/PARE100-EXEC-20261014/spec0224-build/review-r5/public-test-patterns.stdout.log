@@ -1,0 +1,190 @@
+1: import { createHash } from 'node:crypto'
+2: import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+3: import { spawnSync } from 'node:child_process'
+4: import { tmpdir } from 'node:os'
+5: import { delimiter, dirname, join, resolve } from 'node:path'
+6: import { afterAll, describe, expect, it } from 'vitest'
+7: import type {
+8:   ContextEngine,
+9:   DecisionInputCounter,
+10:   ExecutionCheckpoint,
+11:   LoopDecision,
+12:   ModelGateway,
+13:   ModelRequest,
+14:   RuntimeInput,
+15:   StepContext
+16: } from '@cvg/harness-contracts'
+17: import { canonicalizeCompleteJson } from '@cvg/harness-contracts'
+18: import { HybridOrchestrator } from '@cvg/harness-orchestrator'
+19: import {
+20:   createCapabilityRegistry,
+21:   createOperationalHarness,
+22:   DefaultContextEngine,
+23:   InMemoryEffectJournal,
+24:   InMemoryExecutionStepStore
+25: } from '../index.ts'
+26: import {
+27:   phase3AgentProfile,
+28:   phase3RuntimeInput,
+29:   InMemoryApprovalEngine,
+30:   RecordingAuditSink,
+31:   RecordingTelemetrySink,
+32:   ScriptedPolicyEngine
+33: } from './fixtures/phase3-fixtures.ts'
+34: 
+35: const traces: unknown[] = []
+36: afterAll(() => {
+37:   if (process.env.CVG_COMPLETE_PUBLIC_EVIDENCE)
+38:     writeFileSync(
+39:       process.env.CVG_COMPLETE_PUBLIC_EVIDENCE,
+40:       JSON.stringify(traces, null, 2) + '\n'
+41:     )
+42: })
+43: // Explicit toy tokenizer shared by this synthetic provider/counter. No BPE claim.
+44: const tokens = (value: unknown) =>
+45:   Math.ceil(
+46:     Buffer.byteLength(
+47:       canonicalizeCompleteJson(value, {
+48:         maxBytes: 1_000_000,
+49:         maxDepth: 64,
+50:         maxNodes: 1_000_000
+51:       }),
+52:       'utf8'
+53:     ) / 64
+54:   )
+55: const id = 'synthetic.complete.echo'
+56: function lane(
+57:   output: unknown,
+58:   options: {
+59:     counter?: boolean
+60:     maxTokens?: number
+61:     contextEngine?: ContextEngine
+62:     modelFault?: 'throw' | 'usage'
+63:     sideEffect?: 'NONE' | 'WRITE'
+64:     checkpointGuard?: (next: ExecutionCheckpoint) => void
+65:     secondTool?: boolean
+66:     nextOutput?: unknown
+67:     rules?: readonly ((context: StepContext) => LoopDecision | undefined)[]
+68:     echoText?: string
+69:     sensitiveAttempt?: boolean
+70:   } = {}
+71: ) {
+72:   const requests: unknown[] = []
+73:   const toolBodies: unknown[] = []
+74:   let bodies = 0
+75:   let sensitiveBodies = 0
+76:   let capabilities = createCapabilityRegistry([
+77:     {
+78:       descriptor: {
+79:         id,
+80:         version: '1',
+81:         description: 'Pure synthetic complete result',
+82:         inputSchema: { type: 'object' },
+83:         outputSchema: {},
+84:         risk: 'LOW',
+85:         sideEffect: options.sideEffect ?? 'NONE',
+86:         idempotent: true,
+87:         requiresApproval: false,
+88:         origin: 'core',
+89:         providerId: 'synthetic.complete',
+90:         providerVersion: '1'
+91:       },
+92:       implementation: {
+93:         validateInput: () => true,
+94:         validateOutput: () => true,
+95:         execute: async (input) => {
+96:           bodies++
+97:           const deliveredOutput =
+98:             options.echoText === undefined
+99:               ? bodies === 2 && options.nextOutput !== undefined
+100:                 ? options.nextOutput
+101:                 : output
+102:               : (input as { text: string }).text
+103:           toolBodies.push({
+104:             name: id,
+105:             input: structuredClone(input),
+106:             output: deliveredOutput
+107:           })
+108:           return {
+109:             status: 'SUCCEEDED',
+110:             output: deliveredOutput
+111:           }
+112:         }
+113:       }
+114:     }
+115:   ])
+116:   const sensitiveId = `${id}.sensitive`
+117:   if (options.sensitiveAttempt)
+118:     capabilities = capabilities.register({
+119:       descriptor: {
+120:         id: sensitiveId,
+121:         version: '1',
+122:         description: 'Synthetic approval control, no external effect',
+123:         inputSchema: {},
+124:         outputSchema: {},
+125:         risk: 'MEDIUM',
+126:         sideEffect: 'WRITE',
+127:         idempotent: false,
+128:         requiresApproval: true,
+129:         origin: 'core',
+130:         providerId: 'synthetic.complete',
+131:         providerVersion: '1'
+132:       },
+133:       implementation: {
+134:         validateInput: () => true,
+135:         validateOutput: () => true,
+136:         execute: async () => {
+137:           sensitiveBodies++
+138:           return { status: 'SUCCEEDED', output: 'synthetic only' }
+139:         }
+140:       }
+141:     })
+142:   const model: ModelGateway = {
+143:     complete: async ({ signal: _signal, ...request }: ModelRequest) => {
+144:       void _signal
+145:       requests.push(structuredClone(request))
+146:       if (options.modelFault === 'throw')
+147:         throw new Error('synthetic model loss')
+148:       expect(request.maxOutputTokens).toBe(512)
+149:       const frame = JSON.parse(request.messages[1]!.content)
+150:       const observed = frame.items.find(
+151:         (item: { value?: { type?: string } }) =>
+152:           item.value?.type === 'TOOL_RESULT'
+153:       )
+154:       // The answer is derived only from the actual delivered request, never output above.
+155:       const decision = observed
+156:         ? options.sensitiveAttempt
+157:           ? {
+158:               decisionType: 'CALL_TOOL',
+159:               reasonCode: 'TOOL_REQUIRED',
+160:               toolId: sensitiveId,
+161:               toolVersion: '1',
+162:               toolInput: {}
+163:             }
+164:           : options.secondTool && requests.length === 2
+165:             ? {
+166:                 decisionType: 'CALL_TOOL',
+167:                 reasonCode: 'TOOL_REQUIRED',
+168:                 toolId: id,
+169:                 toolVersion: '1',
+170:                 toolInput: { round: 2 }
+171:               }
+172:             : {
+173:                 decisionType: 'RESPOND',
+174:                 reasonCode: 'GOAL_SATISFIED',
+175:                 responseText:
+176:                   typeof observed.value.payload.output === 'string'
+177:                     ? observed.value.payload.output
+178:                     : canonicalizeCompleteJson(observed.value.payload.output)
+179:               }
+180:         : {
+181:             decisionType: 'CALL_TOOL',
+182:             reasonCode: 'TOOL_REQUIRED',
+183:             toolId: id,
+184:             toolVersion: '1',
+185:             toolInput:
+186:               options.echoText === undefined ? {} : { text: options.echoText }
+187:           }
+188:       const text = JSON.stringify(decision)
+189:       expect(tokens(text)).toBeLessThanOrEqual(512)
+190:       return {

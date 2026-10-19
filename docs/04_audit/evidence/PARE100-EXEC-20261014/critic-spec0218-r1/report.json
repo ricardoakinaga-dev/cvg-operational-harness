@@ -1,0 +1,52 @@
+{
+  "verdict": "REVISE",
+  "review_kind": "fresh_I1_DESIGN_only",
+  "spec_path": "docs/02_spec/0218_pare100_python_sdk_stdio.md",
+  "spec_sha256": "62e7e7c575020fb0709dac0b7be5deef49de8098a67e4efc19bc356c8d6a3d8e",
+  "sentinel_sha256": "032ddb74197965d0444204f657415be1988fc347637c86596ffba51353b62430",
+  "sentinel_file_count": 23,
+  "input_integrity_before": "PASS_23_OF_23",
+  "input_integrity_after": "PASS_23_OF_23",
+  "input_inventory_unchanged": true,
+  "sentinel_bytes_unchanged": true,
+  "symlinks_found": false,
+  "input_hash_mismatches": [],
+  "candidate_execution": false,
+  "network_database_guest_install": false,
+  "descendant_reviewers": false,
+  "build_authorized": false,
+  "runtime_proof_granted": false,
+  "release_granted": false,
+  "full_p100_025_completion_granted": false,
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "P2",
+      "criterion": ["PY02", "PY04"],
+      "title": "Wire transcript oracle contradicts mandatory ASCII escaping",
+      "spec_line": 185,
+      "conflicting_spec_lines": [131],
+      "actual_source": ["packages/sdk/src/stdio.ts:115-119", "packages/sdk/src/client.ts:82-86"],
+      "minimal_counterexample": "The required userMessage Ola-with-accent and leaf (Olá 🌿) is escaped as Ol\\u00e1 \\ud83c\\udf3f by ensure_ascii=True; TS JSON.stringify emits literal Unicode UTF-8. Raw frames differ beyond IDs although decoded values agree.",
+      "requirement_needed": "Retain raw transcripts; check each framing/encoding independently; compare decoded values exactly with explicit typed ID correspondence and permit semantically equivalent JSON serialization spelling/order. Do not normalize event or payload facts. Make the PY02 pass/fail oracle explicit.",
+      "counterexample_executed": false
+    },
+    {
+      "id": "F2",
+      "severity": "P2",
+      "criterion": ["PY03", "PY04", "PY06"],
+      "title": "Parsed-invalid client response has contradictory error classification",
+      "spec_line": 121,
+      "conflicting_spec_lines": [166],
+      "insufficient_oracle_spec_line": 187,
+      "actual_source": ["packages/sdk/src/stdio.ts:156-163", "packages/sdk/src/stdio.ts:324-345", "packages/sdk/src/stdio.ts:529-535", "packages/sdk/src/stdio.ts:12-18"],
+      "minimal_counterexample": "After one fully written pending hello, receive [] followed by LF. TS parses JSON then closes invalid_response/-32085, unknown/false. SPEC line 121 says frame/-32080 whereas line 166 says invalid_response. An ID-less notification has the same disagreement.",
+      "requirement_needed": "Separate parse/framing failures from parsed-invalid client response envelopes and server request ingress. Use invalid_response/-32085 for parsed batches/notifications on client ingress; retain frame/-32080 for framing/JSON failures and declared extra parser restrictions. Specify kind/code and individual queued/written outcomes in the existing negative oracle.",
+      "counterexample_executed": false
+    }
+  ],
+  "physical_catalog": "packages/contracts/src/session-event-schemas.v1.json",
+  "external_linked_evidence_read": false,
+  "external_claims_not_verified": ["linked recon/HOW/decision-gap report contents", "TS example implementation and historical approval", "build-public-workspace script selection", "local Python version and runtime compatibility"],
+  "stop_reason": "Bounded material review complete; two concrete contract/oracle corrections required; no speculative expansion."
+}

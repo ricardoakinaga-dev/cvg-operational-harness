@@ -1,0 +1,36 @@
+import sys,pathlib,io,contextlib,traceback,json,datetime
+out=pathlib.Path(__file__).parent
+idx=sys.argv[1]
+source=sys.stdin.read()
+(out/f'command-{idx}.py').write_text(source)
+stdout=io.StringIO();stderr=io.StringIO();code=0
+with contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(stderr):
+ try:exec(compile(source,f'command-{idx}.py','exec'),{'__name__':'__main__'})
+ except BaseException as e:
+  code=e.code if isinstance(e,SystemExit) and isinstance(e.code,int) else 1
+  traceback.print_exc()
+(out/f'command-{idx}.stdout').write_text(stdout.getvalue())
+(out/f'command-{idx}.stderr').write_text(stderr.getvalue())
+with (out/'commands.jsonl').open('a') as f:f.write(json.dumps({'id':idx,'shell':'python3 runner.py '+idx+' < command-'+idx+'.py','workdir':str(out),'exit':code,'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat()})+'\n')
+if idx == '022':
+ import hashlib
+ excluded={'artifact-manifest.json',f'command-{idx}.stdout',f'command-{idx}.stderr'}
+ entries=[];empty=[]
+ for p in sorted(out.iterdir(),key=lambda p:p.name):
+  if p.is_file() and p.name not in excluded:
+   b=p.read_bytes()
+   if b:entries.append({'path':str(p),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+   else:empty.append(str(p))
+ if stderr.getvalue():
+  b=stderr.getvalue().encode();entries.append({'path':str(out/f'command-{idx}.stderr'),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+ else:empty.append(str(out/f'command-{idx}.stderr'))
+ skeleton={'schemaVersion':1,'root':str(out),'files':entries,'emptyFilesAndStreams':sorted(empty),'excludedSelf':str(out/'artifact-manifest.json')}
+ wire=json.dumps({'runOutput':stdout.getvalue(),'exit':code,'manifestSkeleton':skeleton},indent=2)+'\n'
+ (out/f'command-{idx}.stdout').write_text(wire)
+ b=wire.encode();skeleton['files'].append({'path':str(out/f'command-{idx}.stdout'),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)})
+ skeleton['files'].sort(key=lambda e:e['path'])
+ (out/'artifact-manifest.json').write_text(json.dumps(skeleton,indent=2)+'\n')
+ print(wire,end='');print(stderr.getvalue(),end='',file=sys.stderr)
+else:
+ print(stdout.getvalue(),end='');print(stderr.getvalue(),end='',file=sys.stderr)
+sys.exit(code)

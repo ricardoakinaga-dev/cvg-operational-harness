@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "task": "HISO005-P2-BUILD-0237",
+  "round": "R1",
+  "status": "IMPLEMENTED",
+  "reviewStatus": "COMPLETE",
+  "verdict": "REVISE",
+  "sourceCommit": "9bb8560adf434395bfd1bba7d9fbee24cf1c6be8",
+  "sourceFreezeSha256": "30229b442bd8e233c97cef0ca8140870e0dbb144848e8b4ea73693b535bf09e9",
+  "reviewContractSha256": "a0f8070dd2bf6caad7b7a72d747a89b0f231a60efade0f000a1dd4ec3e0cb711",
+  "specSha256": "81f091fa8edaf3ce89543773e24960b4dc9feff3de15f6552940192e9f1ef5f1",
+  "independence": "Fresh source/raw-probe assessment; no builder conclusions used as pass evidence; no descendants.",
+  "requiredFindings": [
+    {
+      "id": "R1-01",
+      "priority": "P1",
+      "severity": "P1",
+      "confidence": 0.99,
+      "criterion": "RC2",
+      "relatedCriteria": [
+        "RC1"
+      ],
+      "acceptance": [
+        "RS03",
+        "RS04",
+        "RS05"
+      ],
+      "title": "Selected runtime-path aliases to known product are refused without preserving PRODUCT_DEPENDENCY",
+      "locations": [
+        {
+          "path": "scripts/boundary-semantic-resolution.mjs",
+          "line": 802,
+          "symbol": "finishTarget"
+        },
+        {
+          "path": "scripts/boundary-semantic-resolution.mjs",
+          "line": 843,
+          "symbol": "resolve relative branch"
+        },
+        {
+          "path": "scripts/boundary-semantic-resolution.mjs",
+          "line": 541,
+          "symbol": "censusLinks (currently invoked for package owner selection only)"
+        }
+      ],
+      "requirement": "Frozen SPEC0237 sections1/4/5 and RS03 require known product to remain FAIL through direct/intermediate links and refusal; foreign/product content must not be acquired to classify.",
+      "repro": {
+        "fixture": "review-r1 runtime/fixtures/relative-product-file",
+        "files": {
+          "package.json": "module root with approved workspace declarations",
+          "entry.mjs": "import {answer} from \"./alias.mjs\"; export const value=answer;",
+          "alias.mjs": "symlink -> products/private/body.mjs",
+          "products/private/package.json": "{\"name\":\"synthetic-product\",\"type\":\"module\"}",
+          "products/private/body.mjs": "export const answer=42;"
+        },
+        "api": "runSemanticBoundary({root:<fixture>,starts:[\"entry.mjs\"],origins:[],installed:[],compiled:{status:\"UNAVAILABLE\",files:[]}})",
+        "execution": "Replay structured argv/env/cwd/stdin of the raw command receipt against the unchanged candidate and retained fixture; only trusted analyzer is imported. Oracle uses import.meta.resolve(\"./alias.mjs\") without target import.",
+        "expected": "VIOLATION with PRODUCT_DEPENDENCY targeting products/private/body.mjs, no proofs and no product content acquisition.",
+        "observed": "UNKNOWN; validation.valid=true; proofs=[]; violations=[]; UNKNOWN_SYMLINK:alias.mjs. Oracle resolves to the actual products/private/body.mjs.",
+        "variants": "Same loss through relative ancestor-directory and chained links and through a workspace exports-selected leaf symlink in both import and require modes. Direct relative product and root node_modules product-link controls remain VIOLATION."
+      },
+      "cause": "Relative traversal/finishTarget refuses the symlink or nonregular component before reading its metadata for the negative product census. censusLinks exists and preserves the root package-link cases, but is not run on the final/relative target paths.",
+      "impact": "Known forbidden dependency is downgraded to unresolved. These witnesses remain UNKNOWN and have no proofs: no global false PASS or production execution is demonstrated. The mandatory known-product/occurrence classification bar still fails.",
+      "requiredChange": "Preserve anchored, bounded, metadata-only product census for each selected path, including relative and final exports leaves/ancestors/chains, before refusal/cap; retain nofollow refusal and add paired physical negative controls. Do not restore content reads through realpath/symlinks.",
+      "rawartifact": {
+        "path": "raw/relative-product-file-engine.json",
+        "sha256": "43645ee5da8dfb9830a6331308664b3123ee4c0944db2b8652f81a9402b6f099",
+        "bytes": 6652
+      },
+      "evidence": [
+        {
+          "path": "raw/relative-product-file-engine.json",
+          "sha256": "43645ee5da8dfb9830a6331308664b3123ee4c0944db2b8652f81a9402b6f099",
+          "bytes": 6652
+        },
+        {
+          "path": "raw/relative-product-file-helper.json",
+          "sha256": "97481400266bf3c75cf1e6ea7a6f33f1a5c0bc23e73f85eaa0e8512ab9883df6",
+          "bytes": 5025
+        },
+        {
+          "path": "raw/relative-product-file-oracle.json",
+          "sha256": "cd7a832ccde10a44017e6e999aaa1fe10577899b2fea0fc7d00e789f34769b65",
+          "bytes": 788
+        },
+        {
+          "path": "raw/relative-product-directory-engine.json",
+          "sha256": "ed5c38bae173d60e33b1d9cbd0560653b94cfcd43232c2a9b41f1969abb1cd96",
+          "bytes": 6837
+        },
+        {
+          "path": "raw/relative-product-chain-engine.json",
+          "sha256": "3d35c6a263a345eb13471ceddea09f7df018cba3e4209b2c7378b0ccfc9c9559",
+          "bytes": 6655
+        },
+        {
+          "path": "raw/exports-product-alias-import-engine.json",
+          "sha256": "2324ada0a580b42d5b7893292736983f929b23116ecfc083ddef13233c18010b",
+          "bytes": 12993
+        },
+        {
+          "path": "raw/exports-product-alias-import-oracle.json",
+          "sha256": "4433167f870337a91fa01935ec7cd8cef4dc1ec44a1b52a485abdc86b5f99e79",
+          "bytes": 802
+        },
+        {
+          "path": "raw/exports-product-alias-require-engine.json",
+          "sha256": "ffb09034bf7444eab7d2b6ee6114c33ad29190c9fb06d027a9f3d3eeefed222f",
+          "bytes": 12996
+        },
+        {
+          "path": "raw/exports-product-alias-require-oracle.json",
+          "sha256": "84ff50332c3a04f4310cc4c5e6a794616f954b0a4263ae2db1c1d67021c1f2ad",
+          "bytes": 942
+        },
+        {
+          "path": "raw/relative-direct-product-engine.json",
+          "sha256": "39f933ec2cde1e3433e4501293cd4c0aa40617b6ca5af5bfbf4947d3f0f6b3a2",
+          "bytes": 7186
+        },
+        {
+          "path": "raw/root-product-link-cap-helper.json",
+          "sha256": "33e87aa8f3620c6bca1f275bc93170eabf33d288fb123b03a9549ffec518f1dd",
+          "bytes": 7252
+        },
+        {
+          "path": "raw/root-product-link-engine.json",
+          "sha256": "7817d1942803241ee8389a0734ebb8d237eb2d794a64e8443c0b7e1f35e0cfa6",
+          "bytes": 7682
+        }
+      ]
+    }
+  ],
+  "criterionResults": {
+    "RC1": "BOUNDED_CHECKS: native precedence, conditions, exact targets, owner refusal, unsupported links; no general resolver conformance claim.",
+    "RC2": "FAIL R1-01; link/body/manifest/absence mutation and held-directory race otherwise refused; all five reduced caps checked; explicit tracking closed all owned fds in30failed sessions.",
+    "RC3": "PARTIAL: actual worker recomputation and profile/helper/snapshot bindings observed on successful and UNKNOWN outputs; no new complete baseline/origin multiset or real303-node measurement.",
+    "RC4": "STATIC_ONLY_FOR_COMPATIBILITY: changed checker paths are semantic opt-in; original13sources preserved and legacy test deltas inspected. Frozen385tests are navigation evidence, not independently rerun; default/P1 byte comparison and normal/strict full-CLI not run by critic.",
+    "RC5": "PASS_SCOPED_INTEGRITY:7ownsourcepaths/13unchanged hashes and complete commit verified before/after; no source edits, rootpromotion, broad qualification, inherited release or certificate."
+  },
+  "observations": [
+    {
+      "id": "O1",
+      "priority": "P2",
+      "required": false,
+      "topic": "RS08 TypeScript interpretation/qualification limit",
+      "observed": "Direct workspace .ts/.mts/.cts targets return PROVEN under pinned native strip-only grammar with compiled UNAVAILABLE. A workspace-local tsconfig and a divergent dist counterpart are not inputs when runtime export explicitly selects .ts.",
+      "assessment": "Not counted as a demonstrated false semantic proof: actual selected runtime path is the .ts source, no emit substitution was observed, and preserved0236tests explicitly allow direct TS source under the pinned runtime. These probes do not establish the required negative for TS without a demonstrated execution/emit profile. Lead must retain that RS08 negative in qualification and distinguish direct native-TS from unproven emit/browser execution; do not infer emit correctness from these positives.",
+      "evidence": [
+        {
+          "path": "raw/typescript-ts-engine.json",
+          "sha256": "18edba689dd2d7aea2a6251d67b8fc0836f8e2c6e64fce0506d48a92245c45d9",
+          "bytes": 16168
+        },
+        {
+          "path": "raw/typescript-project-no-receipt-engine.json",
+          "sha256": "581cc0abc878bd042f752fd825751a4e53f18d51e44c3db6dd336c5a3f7bf579",
+          "bytes": 16274
+        },
+        {
+          "path": "raw/typescript-config-alias-engine.json",
+          "sha256": "55ba535ea6ab37da35e8124cc111cc564f28e1b304508d47e385c539846c5271",
+          "bytes": 16232
+        }
+      ]
+    },
+    {
+      "id": "O2",
+      "required": false,
+      "topic": "FD observation limit",
+      "observed": "Raw /proc fd totals sometimes rose by one on first-use/instrumented operations. Six repeated workers plateaued; explicit fs.openSync/closeSync tracking across30cap failures had zero owned descriptors at every boundary.",
+      "assessment": "No analyzer-owned descriptor leak established. Coarse total fd counts alone are not treated as proof of a leak or of universal cleanup.",
+      "evidence": [
+        {
+          "path": "raw/repeat-fds.json",
+          "sha256": "443c5e7a5ae9d13b3228fb89db91709bd63da9a8c098aedf47fbec91d79ff7e6",
+          "bytes": 2137
+        },
+        {
+          "path": "raw/fd-owned-tracking.json",
+          "sha256": "85d98e7dbba0b383178072a02142e7bad1d69fee56dcad90c910fc8e6c41cafe",
+          "bytes": 38652
+        },
+        {
+          "path": "raw/race-parent.json",
+          "sha256": "7fcc7172faacaee73150b5478e91569973b5c62ecace8042741dcd3641c19ea6",
+          "bytes": 2140
+        }
+      ]
+    }
+  ],
+  "probeCoverage": {
+    "nodeCommands": 137,
+    "privatePhysicalFixturesOnly": true,
+    "oracle": "Pinned Node import.meta.resolve/createRequire.resolve only, constant operator code/structured arguments; oracle does not prove availability, branch trace or semantics.",
+    "targetExecution": false,
+    "foreignAcquisition": "No foreign content acquisition observed; external-link snapshots refused before reading owned-foreign contents; one actual parent replacement failed UNKNOWN_INPUT_MUTATION. This is bounded evidence, not a proof over all races.",
+    "marker": "hostile-body EXECUTED-MARKER absent; hostile body remained UNKNOWN.",
+    "resourceChecksNotRun": [
+      "real EMFILE injection",
+      "exhaustive EACCES/procfs failure permutations",
+      "120s worker interruption",
+      "all race schedules"
+    ]
+  },
+  "factsNotQualified": {
+    "frozenFocal385": "NAVIGATION_ONLY_NOT_RERUN",
+    "broad16Gates": "NOT_RUN",
+    "current38HashVerifier": "NOT_RUN",
+    "newCompiledReceipt": "LEAD_REPORTS_FRESH_SAME_ROOT_RECEIPT_BUILT; NOT_REVIEWED_BY_CRITIC; PROVENANCE_ONLY",
+    "newConsumer": "NOT_BUILT_BY_REVIEW",
+    "newRealMeasurement": "NOT_RUN",
+    "rootPromoted": false,
+    "b6Accepted": false,
+    "B6BaselineD8": "INCOMPLETE2258=537+1721/303MATCH/zeroverified/zeroresolved"
+  },
+  "nextAction": "Lead addresses R1-01 under existing authorized scope, retains this evidence, freezes any changed candidate and uses remaining R2 if needed. No automatic new review loop or gate/qualification approval.",
+  "inputManifest": {
+    "path": "input-manifest.json",
+    "sha256": "f32bb734b473193514c111b872795e088e5557b1cf1f6ad05c3490e94cb3f380",
+    "bytes": 10012
+  },
+  "rawProbeManifest": {
+    "path": "raw-probe-manifest.json",
+    "sha256": "5bee4650b80ea58e2a3d80e737bcacb95b96e95c108696b3cd76d9a29d958a35",
+    "bytes": 36682
+  },
+  "leadClosingUpdate": {
+    "source": "User/Lead message during review closure",
+    "reviewedSourceUnchanged": true,
+    "compiledReferencePath": "/mnt/ia/cvg-hiso005-build0237-runtime-20261018/compiled-reference-r1/reference.json",
+    "reportedSha256": "4da61ff64a4a52538a7c378a9b507f28f94533554919313995c87e5100d88428",
+    "reportedReaderStatus": "PROVEN112",
+    "reportedGeneration": "45inputs/351compilerSources/304deps/112emits/8events exit0",
+    "verificationByCritic": "NOT_RUN: message recorded for current-state honesty; not used as semantic/source-review pass evidence.",
+    "fullGatesPGConsumerRealMeasurement": "NOT_STARTED per Lead"
+  }
+}

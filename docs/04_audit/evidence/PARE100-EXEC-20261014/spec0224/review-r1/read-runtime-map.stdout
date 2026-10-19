@@ -1,0 +1,100 @@
+11:  ExecutionCheckpoint,
+46:import { sealCheckpoint } from './step-store.ts'
+235:  observations: readonly Observation[]
+238:  for (const observation of observations) {
+268:  observations: Observation[]
+283:  pendingDecision?: LoopDecision | undefined
+294:  modelCalls: number
+313:  observations: Observation[]
+323:   * The checkpoint holds a step that already passed the dispatch checkpoint
+338:       * A rejected resume binding must not overwrite the durable pause with a
+339:       * terminal checkpoint; the operator can retry the correct binding.
+341:      readonly preserveCheckpoint?: boolean
+354: * checkpoints, deterministic budgets and the completion evaluation. It never
+416:      persistCheckpoint: (run) => this.persistCheckpoint(run),
+481:          if (run.usage.modelCalls + 1 > run.input.budget.maxModelCalls) {
+490:            modelCalls: 1,
+500:            modelCalls: 0,
+585:    let checkpoint: ExecutionCheckpoint | null = null
+587:      checkpoint = await this.options.stepStore.loadCheckpoint(
+594:        `Execution checkpoint could not be trusted: ${errorMessage(error)}.`,
+600:    if (checkpoint) {
+601:      const rejection = this.rejectCheckpoint(checkpoint, input)
+611:      stepNumber: checkpoint?.state.stepNumber ?? 0,
+612:      state: checkpoint
+614:            ...checkpoint.state,
+615:            observations: [...checkpoint.state.observations],
+616:            openQuestions: [...checkpoint.state.openQuestions],
+617:            resolvedInputs: { ...checkpoint.state.resolvedInputs },
+618:            loopSignatures: [...checkpoint.state.loopSignatures]
+626:            observations: [],
+631:      usage: checkpoint
+632:        ? { ...checkpoint.budgetUsage }
+634:      observations: checkpoint ? [...checkpoint.state.observations] : [],
+644:        checkpoint?.state.pendingDecision && !checkpoint.state.stopReason
+647:    run.state.observations = run.observations
+660:      checkpoint?.state.pendingStepNumber &&
+661:      (checkpoint.state.pendingDecision?.decisionType === 'CALL_TOOL' ||
+662:        checkpoint.state.pendingDecision?.decisionType === 'REQUEST_APPROVAL')
+678:            preserveCheckpoint: true
+688:            step.stepNumber === checkpoint.state.pendingStepNumber &&
+700:            preserveCheckpoint: true
+707:    const resumeOutcome = this.applyResume(run, checkpoint)
+708:    if (resumeOutcome) {
+709:      return this.finalize(run, resumeOutcome, startedAtMs)
+711:    run.lastDecision = run.state.pendingDecision ?? null
+715:      result: checkpoint ? 'resumed' : 'started'
+734:  private rejectCheckpoint(
+735:    checkpoint: ExecutionCheckpoint,
+738:    if (checkpoint.runtimeProfile !== 'iterative') {
+739:      return 'Execution checkpoint belongs to a different runtime profile.'
+741:    if (checkpoint.runtimeVersion !== RUNTIME_V2_VERSION) {
+742:      return `Execution checkpoint requires runtime ${checkpoint.runtimeVersion}, this runtime is ${RUNTIME_V2_VERSION}.`
+745:      return 'Execution checkpoint conflicts with the requested runtime profile.'
+749:      checkpoint.state.capabilityFingerprint !==
+752:      return 'Execution checkpoint belongs to a different capability composition.'
+755:      checkpoint.state.stopReason &&
+756:      TERMINAL_STOPS.has(checkpoint.state.stopReason) &&
+757:      checkpoint.state.stopReason !== 'NEEDS_USER_INPUT' &&
+758:      checkpoint.state.stopReason !== 'APPROVAL_REQUIRED'
+760:      return 'Terminal execution cannot be resumed.'
+767:    checkpoint: ExecutionCheckpoint | null
+769:    return applyResume(this.dispatchContext, run, checkpoint)
+796:        // An operator pause is not terminal: the durable checkpoint, with any
+802:            ? { preserveCheckpoint: true }
+812:      if (run.state.pendingDecision && run.state.pendingStepNumber) {
+813:        decision = run.state.pendingDecision
+821:        const decisionResult = await this.decide(run, stepNumber)
+834:          !run.state.pendingDecision
+895:        pendingDecision: undefined,
+902:      await this.persistCheckpoint(run)
+923:      !run.state.pendingDecision
+937:  private async decide(
+956:      observations: run.observations
+981:      budgetUsage: run.usage,
+993:      this.options.orchestrator.decide({
+1183:    await this.persistCheckpoint(run)
+1262:    return defaultClaimValidation(extractor(responseText), run.observations)
+1276:    await this.persistCheckpoint(run)
+1355:    if (run.usage.modelCalls > run.input.budget.maxModelCalls) {
+1374:    run.usage.modelCalls += usage.modelCalls
+1420:    run.observations = [...run.observations, observation].slice(
+1423:    run.state = { ...run.state, observations: run.observations }
+1476:  private async persistCheckpoint(run: LoopRun): Promise<void> {
+1477:    const checkpoint = sealCheckpoint({
+1480:      checkpointVersion: 1,
+1487:        observations: run.observations.slice(-MAX_CHECKPOINT_OBSERVATIONS)
+1489:      budgetUsage: { ...run.usage }
+1491:    await this.options.stepStore.saveCheckpoint(checkpoint)
+1576:    if (!outcome.preserveCheckpoint && TERMINAL_STOPS.has(stopReason)) {
+1580:        // The open step could not be closed: the terminal checkpoint must not
+1586:    let checkpointProven = true
+1587:    if (outcome.preserveCheckpoint) {
+1589:      // rejected resume binding.
+1592:        await this.persistCheckpoint(run)
+1594:        checkpointProven = false
+1597:    const claimedReason: StopReason = checkpointProven
+1600:    if (!checkpointProven) {
+1610:      modelCalls: run.usage.modelCalls,
+1710:        model_calls: result.modelCalls,
+1735:      modelCalls: 0,

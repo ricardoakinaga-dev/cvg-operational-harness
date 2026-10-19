@@ -1,0 +1,233 @@
+diff --git a/tests/conformance/harness-runtimes.conformance.test.ts b/tests/conformance/harness-runtimes.conformance.test.ts
+index 88f139ee..5465e70e 100644
+--- a/tests/conformance/harness-runtimes.conformance.test.ts
++++ b/tests/conformance/harness-runtimes.conformance.test.ts
+@@ -1,7 +1,6 @@
+ import { describe, expect, it } from 'vitest'
+ import type {
+   ApprovalEngine,
+-  AuditEvent,
+   AuditSink,
+   HarnessRuntime,
+   ModelGateway,
+@@ -9,7 +8,6 @@ import type {
+   PolicyDecision,
+   PolicyEngine,
+   RuntimeInput,
+-  TelemetryEvent,
+   ToolDefinition,
+   ToolRegistry
+ } from '@cvg/harness-contracts'
+@@ -17,6 +15,10 @@ import {
+   ScriptedModelGateway,
+   ScriptedOrchestrator
+ } from '@cvg/harness-orchestrator'
++import {
++  RecordingAudit as Audit,
++  RecordingTelemetry as Telemetry
++} from '../support/governed-test-kit/index.js'
+ import { SinglePassGovernedRuntime } from '../../packages/harness/src/runtime.ts'
+ import { IterativeGovernedRuntime } from '../../packages/harness/src/iterative-runtime.ts'
+ import { DefaultContextEngine } from '../../packages/harness/src/context-engine.ts'
+@@ -57,20 +59,6 @@ interface Setup {
+   readonly pause?: InMemoryPauseSwitch
+ }
+ 
+-class Audit implements AuditSink {
+-  readonly events: AuditEvent[] = []
+-  async append(event: AuditEvent): Promise<void> {
+-    this.events.push(event)
+-  }
+-}
+-
+-class Telemetry {
+-  readonly events: TelemetryEvent[] = []
+-  record(event: TelemetryEvent): void {
+-    this.events.push(event)
+-  }
+-}
+-
+ class RecordingModel implements ModelGateway {
+   readonly requests: ModelRequest[] = []
+   readonly #inner = new ScriptedModelGateway({ responses: ['composed'] })
+diff --git a/tests/consumers-sdk-session.test.ts b/tests/consumers-sdk-session.test.ts
+index 5bd90076..ade49506 100644
+--- a/tests/consumers-sdk-session.test.ts
++++ b/tests/consumers-sdk-session.test.ts
+@@ -1,11 +1,23 @@
+ import { readFileSync } from 'node:fs'
+ import { resolve } from 'node:path'
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import { createSdk } from '@cvg/sdk'
+ import {
+   SDK_EXAMPLE_REPLY,
+   SDK_EXAMPLE_SESSION,
+-  runSdkExampleJourney
++  runSdkExampleJourney,
++  sdkExampleModelGateway,
++  sdkExamplePolicy,
++  sdkExampleApprovals
+ } from '../examples/consumers/sdk-session/index.ts'
++import {
++  RecordingAudit,
++  RecordingTelemetry,
++  createSuiteManifest,
++  fixedClock,
++  normalizeLog,
++  sequenceIds
++} from './support/governed-test-kit/index.js'
+ 
+ const exampleSource = readFileSync(
+   resolve(process.cwd(), 'examples/consumers/sdk-session/index.ts'),
+@@ -56,6 +68,69 @@ describe('PDSH-023 neutral SDK consumer', () => {
+     expect(network).not.toHaveBeenCalled()
+   })
+ 
++  it('uses shared recording and injected identities through the public SDK', async () => {
++    const inventory = createSuiteManifest({
++      formatVersion: 1,
++      id: 'sdk-governed-kit',
++      version: '1.0.0',
++      synthetic: true,
++      cases: [{ id: 'recorded-turn', family: 'sdk' }]
++    })
++    const audit = new RecordingAudit()
++    const telemetry = new RecordingTelemetry()
++    const sdk = createSdk({
++      tenantId: 'sdk_kit_synthetic',
++      modelGateway: sdkExampleModelGateway,
++      policy: sdkExamplePolicy,
++      approvals: sdkExampleApprovals,
++      audit,
++      telemetry,
++      clock: fixedClock('2026-10-17T12:00:00.000Z'),
++      newEventId: sequenceIds('sdk_kit_event_'),
++      newTraceId: () => 'sdk_kit_trace',
++      newCorrelationId: () => 'sdk_kit_correlation'
++    })
++    await sdk.openSession('sdk_kit_session')
++    const turn = await sdk.sendTurn('sdk_kit_session', 'synthetic kit request')
++    const events = await sdk.readEvents('sdk_kit_session')
++
++    expect(turn.stopReason).toBe('COMPLETED')
++    expect(turn.response).toBe(SDK_EXAMPLE_REPLY)
++    expect(turn.modelCalls).toBe(1)
++    expect(turn.toolCalls).toBe(0)
++    expect(events.map((event) => event.type)).toEqual([
++      'message/user',
++      'turn/start',
++      'model/request',
++      'model/result',
++      'turn/end',
++      'message/assistant'
++    ])
++    expect(events.map((event) => event.eventId)).toEqual(
++      Array.from({ length: 6 }, (_, i) => `sdk_kit_event_${i + 1}`)
++    )
++    expect(
++      events.every((event) => event.timestamp === '2026-10-17T12:00:00.000Z')
++    ).toBe(true)
++    expect(
++      events.every(
++        (event) =>
++          event.traceId === 'sdk_kit_trace' &&
++          event.correlationId === 'sdk_kit_correlation'
++      )
++    ).toBe(true)
++    expect(normalizeLog(events).projection).toEqual(events)
++    expect(audit.events.length).toBeGreaterThan(0)
++    expect(telemetry.events.length).toBeGreaterThan(0)
++    expect(
++      audit.events.every((event) => event.tenant === 'sdk_kit_synthetic')
++    ).toBe(true)
++    expect(inventory.manifest.cases).toEqual([
++      { id: 'recorded-turn', family: 'sdk' }
++    ])
++    expect(network).not.toHaveBeenCalled()
++  })
++
+   it('imports only supported public package roots', () => {
+     const specifiers = [
+       ...exampleSource.matchAll(/\bfrom\s+'([^']+)'|\bimport\(\s*'([^']+)'/g)
+diff --git a/tests/replay/execute-fixture.ts b/tests/replay/execute-fixture.ts
+index c002aed3..fb1f40b4 100644
+--- a/tests/replay/execute-fixture.ts
++++ b/tests/replay/execute-fixture.ts
+@@ -22,14 +22,17 @@ import type {
+   ToolDefinition
+ } from '@cvg/harness-contracts'
+ import type { ReplayFixture, ReplayTranscript } from './fixture-schema.mjs'
++import {
++  replayJsonClone as json,
++  RecordingAudit,
++  RecordingTelemetry,
++  fixedClock,
++  sequenceIds
++} from '../support/governed-test-kit/index.js'
+ 
+ export const FROZEN_TIME = '2026-10-14T12:00:00.000Z'
+ // No output normalizer: injected IDs and the fake clock remove only UUID/time
+ // nondeterminism at their source. Payloads, errors, accounting and order stay exact.
+-function json<T>(value: T): T {
+-  return JSON.parse(JSON.stringify(value)) as T
+-}
+-
+ export async function executeFixture(
+   f: ReplayFixture,
+   probeControls?: 'pause' | 'effects'
+@@ -47,16 +50,28 @@ export async function executeFixture(
+       toolBodies: unknown[] = []
+     const policyDecisions: unknown[] = [],
+       approvalRequests: unknown[] = []
+-    const approvalEvents: unknown[] = [],
+-      audit: unknown[] = [],
+-      telemetry: unknown[] = []
++    const approvalEvents: unknown[] = []
++    const auditSink = new RecordingAudit<unknown>({
++      copy: json,
++      onAppend: () => {
++        timeline.push('audit/append')
++      }
++    })
++    const telemetrySink = new RecordingTelemetry<unknown>({
++      copy: json,
++      onRecord: () => {
++        timeline.push('telemetry/record')
++      }
++    })
++    const audit = auditSink.events
++    const telemetry = telemetrySink.events
+     const domainPolicy = new DomainPolicy({
+       profile: REFERENCE_POLICY_PROFILE,
+-      clock: () => new Date(FROZEN_TIME)
++      clock: fixedClock(FROZEN_TIME)
+     })
+     const domainApprovals = new DomainApprovals({
+       store: approvalStore,
+-      clock: () => new Date(FROZEN_TIME),
++      clock: fixedClock(FROZEN_TIME),
+       idFactory: () => 'approval_replay_synthetic',
+       onEvent: (event) => {
+         approvalEvents.push(json(event))
+@@ -214,20 +229,7 @@ export async function executeFixture(
+       if (event.type === f.logFailure) throw new Error('synthetic log failure')
+       return append(event)
+     })
+-    const auditSink = {
+-      append: async (event: unknown) => {
+-        audit.push(json(event))
+-        timeline.push('audit/append')
+-      }
+-    }
+-    const telemetrySink = {
+-      record: (event: unknown) => {
+-        telemetry.push(json(event))
+-        timeline.push('telemetry/record')
+-      }
+-    }
+-    let nextEvent = 0
+-    const newEventId = () => `event_replay_${++nextEvent}`
++    const newEventId = sequenceIds('event_replay_')
+     let result: ReplayTranscript['result']
+     if (f.entry === 'sdk') {
+       const sdk = createSdk({

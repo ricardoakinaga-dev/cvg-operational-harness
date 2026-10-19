@@ -1,0 +1,89 @@
+import assert from 'node:assert/strict'
+import { readFileSync, writeFileSync, lstatSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import pg from '/tmp/cvg-claude100-exec-20261017/journal0225-candidate/node_modules/pg/lib/index.js'
+import { runPostgresMigrations, readPostgresMigrationSql } from '/tmp/cvg-claude100-exec-20261017/journal0225-candidate/packages/persistence/src/postgres-migrations.ts'
+
+const evidence = '/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build'
+const privatePath = '/tmp/cvg-claude100-exec-20261017/journal0225-build/private/admin.json'
+const stat = lstatSync(privatePath)
+assert(stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o077) === 0 && stat.uid === process.getuid!())
+const credentials = JSON.parse(readFileSync(privatePath, 'utf8'))
+assert.equal(credentials.host, '127.0.0.1')
+assert.equal(credentials.port, 55880)
+assert.equal(credentials.database, 'c100_journal_synthetic')
+assert.equal(credentials.user, 'c100_journal_owner')
+const frozen = JSON.parse(readFileSync(`${evidence}/migration-probe-source-freeze.json`, 'utf8'))
+for (const file of frozen.files) assert.equal(createHash('sha256').update(readFileSync(file.path)).digest('hex'), file.sha256)
+const client = new pg.Client({ ...credentials, application_name: 'c100-j225-migration-probe', connectionTimeoutMillis: 5000, statement_timeout: 30000, query_timeout: 35000 })
+const schema = 'c100_j225_expand'
+const result: Record<string, unknown> = { startedAt: new Date().toISOString(), scope: 'SQL_EXPANSION_COMPONENT_ONLY_NO_JOURNAL_ADAPTER_OR_FUNCTIONAL_CREDIT', modelCalls: 0, toolBodies: 0, schema, checks: [] }
+const checks = result.checks as object[]
+const save = () => writeFileSync(`${evidence}/migration-expansion-result.json`, JSON.stringify(result, null, 2) + '\n')
+const snapshot = async () => (await client.query(`SELECT tenant_id, operation_key, proposal_hash, state, attempt_id, result::text AS result_text, result IS NOT NULL AS result_present, error, created_at::text, updated_at::text, tenant_isolation_quarantined FROM operational_effect_journal ORDER BY tenant_id,operation_key`)).rows
+const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const storageColumns = async () => Number((await client.query(`SELECT count(*)::integer AS count FROM pg_attribute WHERE attrelid='operational_effect_journal'::regclass AND attname=ANY($1::text[]) AND NOT attisdropped`, [['result_storage_version','result_storage_payload']])).rows[0].count)
+try {
+  await client.connect()
+  result.identity = (await client.query('SELECT current_database() AS database,current_user AS principal,inet_server_addr()::text AS address,inet_server_port() AS port,version() AS version')).rows[0]
+  assert.equal((result.identity as any).database, credentials.database)
+  assert.equal((result.identity as any).principal, credentials.user)
+  await client.query("SET lock_timeout='1s'")
+  const absent = (await client.query('SELECT to_regnamespace($1) IS NULL AS absent', [schema])).rows[0]
+  assert.equal(absent.absent, true)
+  const prior = frozen.default_order.filter((v: string) => v !== '0030_complete_tool_result_journal')
+  assert.equal(prior.at(-1), '0029_controlled_published_kernel')
+  await runPostgresMigrations(client, { schemaName: schema, migrations: prior })
+  const fixtures: [string, unknown][] = [['sql-null', undefined],['json-null',null],['false',false],['zero',0],['empty',''],['number-string','42'],['null-string','null'],['object-string','{}'],['array',[]],['nested',{a:[null,false,0,'']}],['envelope',{encoding:'base64',decodedBytes:1,decodedSha256:'apparent',data:'MA=='}]]
+  for (const tenant of ['tenant_00000000-0000-4000-8000-00000000b901','tenant_00000000-0000-4000-8000-00000000b902']) {
+    for (const [label,value] of fixtures) await client.query(`INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result) VALUES($1,$2,'proposal.synthetic','CONFIRMED','attempt.synthetic',$3::jsonb)`, [tenant,'legacy-'+label,value === undefined ? null : JSON.stringify(value)])
+  }
+  const before = await snapshot()
+  result.before = { rows: before, count: before.length, sha256: digest(before) }
+  assert.equal(before.length, 22)
+  assert.equal(await storageColumns(), 0)
+  const expansion = await readPostgresMigrationSql('0030_complete_tool_result_journal')
+  await client.query('BEGIN')
+  await client.query(expansion)
+  assert.equal(await storageColumns(), 2)
+  let interrupted: string | undefined
+  try { await client.query('SELECT 1/0') } catch (error) { interrupted = (error as any).code }
+  assert.equal(interrupted, '22012')
+  await client.query('ROLLBACK')
+  assert.equal(await storageColumns(), 0)
+  assert.equal((await client.query("SELECT to_regprocedure('cvg_journal_result_storage_guard()') IS NULL AS absent")).rows[0].absent, true)
+  assert.equal(digest(await snapshot()), digest(before))
+  checks.push({ id: 'EXPANSION_ABORT_ATOMIC', result: 'PASS', actualSqlError: interrupted, columnsAfterRollback: 0, guardAfterRollback: 'ABSENT', legacyDigestUnchanged: true })
+  await runPostgresMigrations(client, { schemaName: schema, migrations: ['0030_complete_tool_result_journal'] })
+  assert.equal(await storageColumns(), 2)
+  const after = await snapshot()
+  assert.deepEqual(after, before)
+  result.after = { rows: after, count: after.length, sha256: digest(after) }
+  const versions = (await client.query('SELECT result_storage_version,count(*)::integer AS count,bool_and(result_storage_payload IS NULL) AS payload_null FROM operational_effect_journal GROUP BY result_storage_version')).rows
+  assert.deepEqual(versions, [{ result_storage_version: 0, count: 22, payload_null: true }])
+  checks.push({ id: 'LEGACY_PRESERVED', result: 'PASS', rows: 22, tenants: 2, nullPresenceDiscriminated: true, allVersion0PayloadNull: true })
+  let denied: string | undefined
+  try { await client.query(`INSERT INTO operational_effect_journal(tenant_id,operation_key,proposal_hash,state,attempt_id,result_storage_version) VALUES('tenant_00000000-0000-4000-8000-00000000b901','inactive-one','p','RESERVED','a',1)`) } catch (error) { denied = (error as any).code }
+  assert.equal(denied, '42501')
+  checks.push({ id: 'INACTIVE_DENIES_VERSION1', result: 'PASS', sqlState: denied, servingRoleProof: false })
+  let immutable: string | undefined
+  try { await client.query("UPDATE operational_effect_journal SET result_storage_version=1,result=NULL WHERE operation_key='legacy-json-null'") } catch (error) { immutable = (error as any).code }
+  assert.equal(immutable, '23514')
+  assert.equal(digest(await snapshot()), digest(before))
+  checks.push({ id: 'LEGACY_VERSION_IMMUTABLE', result: 'PASS', sqlState: immutable, legacyDigestUnchanged: true })
+  result.constraints = (await client.query(`SELECT conname,pg_get_constraintdef(oid) AS definition,convalidated FROM pg_constraint WHERE conrelid='operational_effect_journal'::regclass AND conname=ANY($1::text[]) ORDER BY conname`, [['journal_result_storage_version','journal_result_storage_shape','journal_result_storage_envelope']])).rows
+  assert.equal((result.constraints as any[]).length, 3)
+  result.guard = (await client.query(`SELECT t.tgname,t.tgtype,t.tgenabled,t.tgqual IS NULL AS unconditional,t.tgnargs,p.prosrc,p.prosecdef,p.proconfig,l.lanname,pg_get_userbyid(p.proowner) AS owner FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang WHERE t.tgrelid='operational_effect_journal'::regclass AND t.tgname='journal_result_storage_guard'`)).rows
+  result.migrations = (await client.query('SELECT version,checksum,applied_at::text FROM schema_migrations ORDER BY version')).rows
+  assert.equal((result.migrations as any[]).at(-1).version, '0030_complete_tool_result_journal')
+  result.status = 'PASS_SCOPED_EXPANSION_ONLY'
+  result.finishedAt = new Date().toISOString()
+  save()
+  console.log(JSON.stringify({ status: result.status, checks, legacyRows: before.length, guardActivated: false }))
+} catch (error) {
+  result.status = 'FAIL'
+  result.error = { name: (error as any).name, code: (error as any).code ?? null, message: (error as any).message }
+  result.finishedAt = new Date().toISOString()
+  save()
+  throw error
+} finally { await client.end() }

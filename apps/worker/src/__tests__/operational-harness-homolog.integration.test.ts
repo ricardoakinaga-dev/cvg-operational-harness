@@ -271,14 +271,41 @@ describeWithPostgres('homologation durable worker smoke (AUD19-008)', () => {
         interruptedExit.signal === 'SIGKILL' || interruptedExit.code === 137
       ).toBe(true)
 
-      await waitFor(async () => {
-        const snapshot = await admin.query(
-          `SELECT state FROM ${schema}.operational_executions
-            WHERE tenant_id = $1 AND id = $2`,
-          [tenantIdRaw, submitted.record.id]
+      try {
+        await waitFor(async () => {
+          const snapshot = await admin.query(
+            `SELECT state FROM ${schema}.operational_executions
+              WHERE tenant_id = $1 AND id = $2`,
+            [tenantIdRaw, submitted.record.id]
+          )
+          return snapshot.rows[0]?.state === 'SUCCEEDED'
+        })
+      } catch (error) {
+        let state: unknown = 'unavailable'
+        let attempt: unknown = 'unavailable'
+        let diagnosticError: unknown
+        try {
+          const snapshot = await admin.query(
+            `SELECT state, attempt FROM ${schema}.operational_executions
+              WHERE tenant_id = $1 AND id = $2`,
+            [tenantIdRaw, submitted.record.id]
+          )
+          state = snapshot.rows[0]?.state
+          attempt = snapshot.rows[0]?.attempt
+        } catch (secondary) {
+          diagnosticError = secondary
+        }
+        const recentEvents = parseJsonLines(recovery.output())
+          .slice(-12)
+          .map((line) => String(line.event ?? 'unknown'))
+        const failure = new Error(
+          `homolog recovery timeout: state=${String(state)} attempt=${String(attempt)} childExit=${String(recovery.child.exitCode)} signal=${String(recovery.child.signalCode)} events=${recentEvents.join(',')}`,
+          { cause: error }
         )
-        return snapshot.rows[0]?.state === 'SUCCEEDED'
-      })
+        if (diagnosticError !== undefined)
+          Object.assign(failure, { diagnosticError })
+        throw failure
+      }
       const recoveryExit = await waitForExit(recovery)
       expect(recoveryExit).toEqual({ code: 0, signal: null })
 

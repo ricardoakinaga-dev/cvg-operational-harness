@@ -1,0 +1,1 @@
+import "./products/shift/index.js"; export const result=1;

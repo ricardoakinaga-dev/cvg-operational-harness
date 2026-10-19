@@ -1,0 +1,233 @@
+diff --git a/tests/claude100/reference-port/controller.test.js b/tests/claude100/reference-port/controller.test.js
+index a09f1d92..fbb977d0 100644
+--- a/tests/claude100/reference-port/controller.test.js
++++ b/tests/claude100/reference-port/controller.test.js
+@@ -746,3 +746,127 @@ describe('R1 mandatory counterexamples — regression controls', () => {
+     }
+   )
+ })
++
++async function failureLedgerSpecimen(r, root) {
++  expect(r.report?.status, r.error?.stack).toBe('INFRA_FAILURE')
++  const retained = new Map(
++    await Promise.all(
++      r.report.artifacts.map(async (a) => [
++        a.path,
++        await readFile(path.join(root, a.path))
++      ])
++    )
++  )
++  expect(assertEvidenceBindings(r.report, retained)).toBe(r.report)
++  const artifact = r.report.artifacts.find((a) => a.role === 'failures')
++  const failures = JSON.parse(retained.get(artifact.path))
++  expect(failures[0].code).toBe('PRIVACY')
++  expect(failures.slice(1).every((f) => f.code === 'CLEANUP')).toBe(true)
++  return { retained, failures }
++}
++function replaceProofArtifact(report, retained, role, document) {
++  const artifact = report.artifacts.find((a) => a.role === role),
++    bytes = Buffer.from(canonical(document))
++  retained.set(artifact.path, bytes)
++  artifact.sha256 = sha256(bytes)
++  artifact.bytes = bytes.length
++}
++const ledgerMutations = [
++  ['drop_primary', (f) => f.slice(1)],
++  ['drop_additional', (f) => f.slice(0, -1)],
++  ['reverse_chronology', (f) => [...f].reverse()],
++  ['duplicate_primary', (f) => [f[0], ...f]],
++  [
++    'unrelated_reference',
++    (f) => [{ ...f[0], artifactRef: f[1].artifactRef }, ...f.slice(1)]
++  ],
++  ['nonconsecutive_order', (f) => [{ ...f[0], order: 99 }, ...f.slice(1)]],
++  [
++    'unknown_field',
++    (f) => [{ ...f[0], invented: 'CVG_SYNTHETIC_FIELD' }, ...f.slice(1)]
++  ],
++  ['unknown_code', (f) => [{ ...f[0], code: 'CVG_UNKNOWN' }, ...f.slice(1)]],
++  [
++    'unknown_source',
++    (f) => [{ ...f[0], source: 'CVG_UNKNOWN' }, ...f.slice(1)]
++  ],
++  ['unknown_phase', (f) => [{ ...f[0], phase: 'CVG_UNKNOWN' }, ...f.slice(1)]]
++]
++describe('LR01–LR03 exact ordered failure-ledger recovery', () => {
++  it.each(ledgerMutations)(
++    'rejects rehashed %s while preserving the original trusted trace',
++    (_name, mutate) =>
++      scenario(
++        { forbiddenAuth: true, cleanupUnavailable: true },
++        async (r, _docker, root) => {
++          const { retained, failures } = await failureLedgerSpecimen(r, root)
++          const changed = structuredClone(r.report)
++          replaceProofArtifact(changed, retained, 'failures', mutate(failures))
++          expect(() => assertEvidenceBindings(changed, retained)).toThrow()
++        }
++      )
++  )
++  it.each([
++    { records: 1024, kind: 'tail', accepts: true },
++    { records: 1023, kind: 'tail', accepts: false },
++    { records: 1025, kind: 'tail', accepts: false },
++    { records: 1024, kind: 'replace_primary', accepts: false },
++    { records: 1024, kind: 'interleave', accepts: false },
++    { records: 1024, kind: 'unknown_code', accepts: false },
++    { records: 1024, kind: 'unknown_source', accepts: false },
++    { records: 1024, kind: 'unknown_phase', accepts: false }
++  ])(
++    'handles explicit synthetic record-cap/null data: $records/$kind',
++    ({ records: count, kind, accepts }) =>
++      scenario(
++        { forbiddenAuth: true, cleanupUnavailable: true },
++        async (r, _docker, root) => {
++          const { retained, failures } = await failureLedgerSpecimen(r, root),
++            changed = structuredClone(r.report)
++          const control = JSON.parse(
++            retained.get(
++              changed.artifacts.find((a) => a.role === 'control-trace').path
++            )
++          )
++          const observer = JSON.parse(
++            retained.get(
++              changed.artifacts.find((a) => a.role === 'observer-trace').path
++            )
++          )
++          const all = [...control.records, ...observer.records].sort(
++            (a, b) => a.ordinal - b.ordinal
++          )
++          for (let ordinal = all.length; ordinal < count; ordinal++)
++            control.records.push({
++              ordinal,
++              offsetMs: all.at(-1).offsetMs,
++              source: 'HOST',
++              type: 'SYNTHETIC_RECORD_CAP_FIXTURE',
++              data: {}
++            })
++          const tail = {
++            code: 'IO',
++            source: 'HOST',
++            phase: 'PUBLICATION',
++            order: failures.length,
++            artifactRef: null
++          }
++          let declared = [...failures, tail]
++          if (kind === 'replace_primary')
++            declared = [
++              { ...failures[0], artifactRef: null },
++              ...failures.slice(1)
++            ]
++          if (kind === 'interleave') declared = [tail, ...failures]
++          if (kind === 'unknown_code') tail.code = 'CVG_UNKNOWN'
++          if (kind === 'unknown_source') tail.source = 'CVG_UNKNOWN'
++          if (kind === 'unknown_phase') tail.phase = 'CVG_UNKNOWN'
++          replaceProofArtifact(changed, retained, 'control-trace', control)
++          replaceProofArtifact(changed, retained, 'failures', declared)
++          if (accepts)
++            expect(assertEvidenceBindings(changed, retained)).toBe(changed)
++          else expect(() => assertEvidenceBindings(changed, retained)).toThrow()
++        }
++      )
++  )
++})
+diff --git a/tests/claude100/reference-port/report.mjs b/tests/claude100/reference-port/report.mjs
+index 315b3a41..8f2dcb94 100644
+--- a/tests/claude100/reference-port/report.mjs
++++ b/tests/claude100/reference-port/report.mjs
+@@ -21,7 +21,8 @@ import {
+   statusFor,
+   validateReport,
+   probeError,
+-  parseManifest
++  parseManifest,
++  closed
+ } from './schema.mjs'
+ 
+ export const expectedDigests = () => ({
+@@ -101,26 +102,68 @@ function assertReachedPassProofs(report, retained, one) {
+         r.data?.frame?.payload?.outcome === 'FINISHED'
+     )
+   })
+-  require(statusFor(failures, hasExchange) === report.status)
+-  for (const f of failures) {
+-    if (f.artifactRef === null) {
+-      require(records.length >= 1024)
+-      continue
+-    }
+-    const [file, ordinal] = f.artifactRef.split('#')
+-    require(file === one('control-trace').path)
+-    const actual = records.find((r) => r.ordinal === Number(ordinal))
++  // The trace, not the supplied ledger, defines recorded cause coverage/order.
++  const causes = records.filter(
++    (r) => r.source === 'HOST' && r.type === 'FAILURE'
++  )
++  const codes = new Set([
++    'IO',
++    'CLEANUP',
++    'PROTOCOL',
++    'PRIVACY',
++    'CAP',
++    'TIMEOUT',
++    'SIGNAL',
++    'DRIFT_RUNTIME',
++    'TOOLCHAIN_UNAVAILABLE',
++    'INPUT_INVALID',
++    'IDENTITY_MISMATCH',
++    'CONTAINMENT',
++    'NO_ELIGIBLE_EXCHANGE'
++  ])
++  const sources = new Set(['HOST', 'DOCKER', 'CLIENT', 'OBSERVER'])
++  const phases = new Set([
++    'INPUT',
++    'PREFLIGHT',
++    'VERSION',
++    'PORT',
++    'CLEANUP',
++    'PUBLICATION'
++  ])
++  require(
++    records.length <= 1024 &&
++      Array.isArray(failures) &&
++      failures.length <= 64 &&
++      failures.length >= causes.length
++  )
++  for (let i = 0; i < failures.length; i++) {
++    const f = failures[i]
++    closed(f, ['code', 'source', 'phase', 'order', 'artifactRef'], 'PROTOCOL')
+     require(
+-      actual?.source === 'HOST' &&
+-        actual.type === 'FAILURE' &&
+-        equal(actual.data, {
+-          code: f.code,
+-          source: f.source,
+-          phase: f.phase,
+-          order: f.order
+-        })
+-    )
++      f.order === i &&
++        codes.has(f.code) &&
++        sources.has(f.source) &&
++        phases.has(f.phase)
++    )
++    if (i < causes.length) {
++      const actual = causes[i]
++      closed(actual.data, ['code', 'source', 'phase', 'order'], 'PROTOCOL')
++      require(
++        f.artifactRef === `${one('control-trace').path}#${actual.ordinal}` &&
++          equal(actual.data, {
++            code: f.code,
++            source: f.source,
++            phase: f.phase,
++            order: i
++          })
++      )
++    } else {
++      // Exhausted trace capacity can explain only an unrecorded suffix. It can
++      // never replace a known primary/additional cause or attest unseen events.
++      require(records.length === 1024 && f.artifactRef === null)
++    }
+   }
++  require(statusFor(failures, hasExchange) === report.status)
+   const artifactRef = (a) => ({
+     path: a.path,
+     sha256: a.sha256,

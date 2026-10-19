@@ -1,0 +1,269 @@
+{
+  "task": "C100-Q01-QUALIFIER-001",
+  "round": 1,
+  "reviewer_role": "fresh independent critic, not builder",
+  "review_mode": "STATIC_REVIEW_ONLY",
+  "verdict": "REVISE_STATIC",
+  "overall_approval": false,
+  "integrated_gates": "PENDING_Q03_EXECUTION_HOLD",
+  "created_at": "2026-10-17T23:13:32.176364+00:00",
+  "candidate": "/tmp/cvg-claude100-exec-20261017/q01-candidate",
+  "frozen_packet": "/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CLAUDE100-EXEC-20261017/spec0229-build/review-r1-inputs.json",
+  "pins_before": "pins-before.json",
+  "pins_after": "pins-after.json",
+  "findings": [
+    {
+      "id": "S0229-R1-001",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Repeated attestations amplify a bounded input into tens of GiB of receipt parsing",
+      "file": "tests/claude100/qualification/qualify.mjs",
+      "line": 166,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 176
+        },
+        {
+          "file": "tests/claude100/qualification/schemas.mjs",
+          "line": 251
+        }
+      ],
+      "criteria": [
+        "CQ02",
+        "CQ03"
+      ],
+      "spec_lines": [
+        15,
+        21,
+        62
+      ],
+      "evidence_kind": "STATIC_CONTROL_FLOW_AND_CONSTRUCTED_INPUT",
+      "confidence": "HIGH",
+      "reachable_example": {
+        "fixture": "/tmp/cvg-claude100-exec-20261017/qualifier-review-r1/attestation-amplification",
+        "manifest_bytes": 162040,
+        "attestations": 40000,
+        "captureId": "r",
+        "receipt_bytes": 1048576,
+        "receipt_content": "Closed valid reference receipt padded with legal JSON whitespace to exactly 1 MiB; capture index hash updated. All data fabricated.",
+        "qualifier_executed": false
+      },
+      "expected": "Schedule at most the one/two relevant distinct capture receipts; reject an invalid attestation list without work proportional to repetitions times receipt size. Preserve final INVALID_INPUT and documented precedence.",
+      "actual_static": "INTEGRITY loops over every unvalidated captureAttestations item and calls checkFile(..., true), reparsing the same receipt 40,000 times. The physical-file cache only deduplicates byte accounting; it does not cache parsing. Uniqueness/cardinality validation runs later at SCHEMAS. This constructs 41,943,040,000 receipt bytes of parser work from a 162,040-byte manifest and one 1 MiB receipt. This is a count derived from source, not a benchmark.",
+      "impact": "A locally supplied malformed manifest can stall qualification despite nominal file/aggregate caps.",
+      "proposed_remedy": "Bound or deduplicate the preflight receipt schedule before IO/parsing (retaining ordered diagnostics), cache parsed immutable receipt snapshots, and enforce exact attestation cardinality/uniqueness at the schema stage.",
+      "closure_evidence": "An isolated later regression with instrumented receipt reads/parse counts must show a constant small number of parses for a repeated-ID manifest; status INVALID_INPUT, no truncation, unsupported/integrity precedence preserved."
+    },
+    {
+      "id": "S0229-R1-002",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Canonical expansion makes valid raw JSON fail as an invalid input during output",
+      "file": "tests/claude100/qualification/safe-io.mjs",
+      "line": 274,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 423
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 426
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 445
+        }
+      ],
+      "criteria": [
+        "CQ02",
+        "CQ04",
+        "CQ06",
+        "CQ07"
+      ],
+      "spec_lines": [
+        15,
+        66,
+        68,
+        70
+      ],
+      "evidence_kind": "STATIC_CONTROL_FLOW_AND_SIZE_ARITHMETIC",
+      "confidence": "HIGH",
+      "reachable_example": {
+        "fixture": "/tmp/cvg-claude100-exec-20261017/qualifier-review-r1/canonical-expansion.json",
+        "elements": 200000,
+        "raw_number": "1e20",
+        "canonical_number": "100000000000000000000",
+        "raw_bytes": 1000001,
+        "canonical_bytes": 4400001,
+        "raw_cap": 4194304,
+        "qualifier_executed": false
+      },
+      "expected": "The raw array is valid, within input limits, finite, depth 1, and has no normalization policy. Equal authenticated sides must be compared completely. Materialize a complete projection within the approved report contract; if output cannot be materialized, classify the output failure INFRA_FAILURE/1 rather than INVALID_INPUT/1.",
+      "actual_static": "CVG-CANON-1 expands the 1,000,001-byte array to 4,400,001 bytes. output.write applies the raw MAX_FILE=4 MiB to this generated projection and throws inputError. The main catch preserves that INVALID_INPUT classification. Both equal inputs can therefore be rejected as malformed at COMPARISON solely because output grew.",
+      "impact": "Admissible numeric JSON produces the wrong terminal error and an unimplemented valid comparison boundary.",
+      "proposed_remedy": "Separate raw-input and generated-output policy/error handling. Materialize the complete canonical stream in bounded parts if supported by the approved normalized-list contract; seek an explicit contract clarification before changing its per-item limit. Never classify comparator-generated output failure as malformed evidence.",
+      "closure_evidence": "After the execution hold is lifted, cover the supplied numeric array on both authenticated sides, validate every output descriptor against the closed report schema, and inject a generated-output limit failure to assert INFRA_FAILURE. No input truncation or dropped values."
+    },
+    {
+      "id": "S0229-R1-003",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Authority can expire after its final check and before report emission",
+      "file": "tests/claude100/qualification/qualify.mjs",
+      "line": 440,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 363
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 466
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 479
+        }
+      ],
+      "criteria": [
+        "CQ06",
+        "CQ07"
+      ],
+      "spec_lines": [
+        64,
+        70
+      ],
+      "evidence_kind": "STATIC_ASYNC_CONTROL_FLOW",
+      "confidence": "HIGH",
+      "reachable_example": {
+        "preconditions": "All bindings valid; authority expiresAt is future at invocation and at line 440.",
+        "schedule": "Pause or delay one input snapshot write/fsync during lines 466-478 until the expiration passes, then resume.",
+        "qualifier_executed": false
+      },
+      "expected": "APPROVED must be unexpired at report emission. The emitted report must be BLOCKED_CVG_SPEC/1 if expiration occurs before emission.",
+      "actual_static": "The last currentAuthority() check precedes all input snapshot writes and input-snapshots.json. Those awaited writes and fsyncs can take arbitrary wall time. report.json is then written with MATCH_REQUIRES_REVIEW/0 without another clock/authority check. Thus a receipt that expired during materialization can still authorize a newly emitted match report.",
+      "impact": "The persisted report can claim a current approved equivalence after its authorization window ended. Local synthetic scope limits current exposure; it still violates the frozen authority boundary.",
+      "proposed_remedy": "Materialize non-final evidence first, then re-evaluate authority at the final report publication boundary and serialize the resulting terminal status. Make the emission/commit instant explicit and apply the rule to all terminal paths that depend on current authority.",
+      "closure_evidence": "Use a controlled clock plus delayed output in the later executable phase: expiration during snapshot writes must yield BLOCKED_CVG_SPEC/1 in both the returned and persisted report; unexpired/null expiration controls retain their expected results."
+    },
+    {
+      "id": "S0229-R1-004",
+      "severity": "P2",
+      "priority": "must_fix",
+      "title": "Output or cleanup failure can leave a saved MATCH report while returning INFRA_FAILURE",
+      "file": "tests/claude100/qualification/qualify.mjs",
+      "line": 479,
+      "related_locations": [
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 481
+        },
+        {
+          "file": "tests/claude100/qualification/qualify.mjs",
+          "line": 489
+        },
+        {
+          "file": "tests/claude100/qualification/safe-io.mjs",
+          "line": 295
+        },
+        {
+          "file": "tests/claude100/qualification/safe-io.mjs",
+          "line": 315
+        }
+      ],
+      "criteria": [
+        "CQ06",
+        "CQ07"
+      ],
+      "spec_lines": [
+        68,
+        70,
+        97
+      ],
+      "evidence_kind": "STATIC_IO_FAILURE_PATH",
+      "confidence": "HIGH",
+      "reachable_example": {
+        "preconditions": "An otherwise matching, authorized synthetic run.",
+        "faults": [
+          "report.json writeFile completes, then that file fsync or close rejects.",
+          "report.json is fully written, then io.close rejects while closing the retained output directory handle."
+        ],
+        "qualifier_executed": false
+      },
+      "expected": "Persisted terminal evidence and the returned/CLI terminal result must agree; incomplete output is visibly a failure and cannot be consumed as a completed match report.",
+      "actual_static": "The bytes serialized at line 479 already contain MATCH_REQUIRES_REVIEW/0. A later write sync/close failure reaches line 481, or cleanup reaches line 490, and mutates only the in-memory object to INFRA_FAILURE/1. There is no invalidation, failure completion marker, or persisted status correction. report.json can remain complete valid JSON claiming MATCH even though the CLI returns failure.",
+      "impact": "A reviewer consuming only the saved report can receive a different verdict from the command that produced it.",
+      "proposed_remedy": "Define an exclusive report publication/completion protocol: stage the terminal report, finish required snapshot/output IO and cleanup, and expose a completed report only when those operations succeeded. Make failure artifacts unmistakably incomplete; verify persisted status and returned status agree for each supported failure path. Do not overwrite prior evidence.",
+      "closure_evidence": "Later controlled fsync/close faults must show INFRA_FAILURE/1 and no completed saved MATCH report, including a failure after report bytes were written; retain the fault and partial artifacts as failure evidence."
+    }
+  ],
+  "findings_count": 4,
+  "severity_counts": {
+    "P0": 0,
+    "P1": 0,
+    "P2": 4,
+    "P3": 0
+  },
+  "executed_by_reviewer": {
+    "qualifier": false,
+    "cli": false,
+    "Q03_kit": false,
+    "integrated_tests": false,
+    "parser_probes": false,
+    "network": false,
+    "models": false,
+    "database": false,
+    "broader_gates": false,
+    "descendants": 0,
+    "commits": 0
+  },
+  "methods": [
+    "Read approved SPEC0229 in full, build authority, current CLAUDE100 claim and repository instructions.",
+    "Recompute all ten packet SHA-256 pins before/after.",
+    "Read every pinned implementation/declaration and CLI; static inspection of the Q03 dependency and existing foundation tests.",
+    "Construct private synthetic data-only recipes and calculate byte/work counts; never run those cases through qualifier/CLI/kit."
+  ],
+  "criterion_assessment": {
+    "CQ01": "STATIC_PARTIAL: membership, uniqueness, counts/classes and family bindings inspected; no independent executable acceptance.",
+    "CQ02": "STATIC_FINDINGS: S0229-R1-001/002; UTF-8, parser bounds, paths and fd-bound snapshot code inspected.",
+    "CQ03": "STATIC_FINDING: S0229-R1-001; receipt/manifest/fixture/execution binding inspected without an observed bypass.",
+    "CQ04": "STATIC_FINDING: S0229-R1-002; byte and complete JSON comparison paths inspected.",
+    "CQ05": "STATIC_PARTIAL: finite metadata-only policy forwarding and protected payload preservation inspected; Q03 qualification and executable topology controls pending.",
+    "CQ06": "STATIC_FINDINGS: S0229-R1-002/003/004; error precedence and CLI argument/exit paths inspected.",
+    "CQ07": "STATIC_FINDINGS: S0229-R1-002/003/004; exclusive output, immutable copies and raw digests inspected.",
+    "CQ08": "NOT_RUN: all integrated/current candidate gates remain pending; preexisting builder logs do not replace independent verification."
+  },
+  "limitations": [
+    "This is not overall approval, current parity, M1 completion, PASS_CURRENT, or permission to run Q03/qualifier.",
+    "Findings are static reachable control-flow conclusions; no qualifier result, fault reproduction, performance timing or integrated pass is claimed.",
+    "Q03 source was read only; its import is outside the ten-pin implementation packet and its current certification remains pending.",
+    "Existing foundation logs were inspected read-only and are builder evidence only. Lead may add disjoint tests; reviewed implementation pins must remain unchanged.",
+    "Only review-r1/** in root evidence and private qualifier-review-r1/** were written. Shared runtime/log/backlog/coordination stay readonly under the explicit review restriction."
+  ],
+  "next_action": "Lead resolves the four frozen findings within at most two corrective rounds, supplies revised exact pins, and explicitly lifts the Q03 execution hold before any independent executable phase. For unchanged-source/new-tests execution, recheck these source pins and freeze the new tests/dependency/gate packet first.",
+  "availability": "Available for the later explicitly authorized executable phase; no autonomous execution or hold polling started.",
+  "integrity": {
+    "before_all_10_match": true,
+    "after_all_10_match": true,
+    "packet_unchanged": true,
+    "packet_sha256": "9b073040d8bc119679fe8fe186bc23894be25ff489fc72af370d37929ba20a98"
+  },
+  "source_read_phase": "COMPLETE",
+  "source_read_phase_closed_at": "2026-10-17T23:14:46.586028+00:00",
+  "lead_correction_round": 1,
+  "lead_acknowledged_findings": true,
+  "source_read_after_closeout": false,
+  "correction_plan_review": {
+    "status": "IMPLEMENTATION_PROPOSAL_ONLY_NOT_APPROVAL",
+    "spec_or_schema_change": false,
+    "execution_hold": "PERSISTS",
+    "concerns": [
+      "A clock read before awaited exclusive hardlink publication leaves an expiry interval; R1-003 remains open until delayed publication satisfies the approved emission-time rule.",
+      "All verdict-affecting required writes/sync/cleanup must finish before publication; no later terminal INFRA_FAILURE may contradict a completed saved MATCH. Clarify whether any post-link directory sync is required before calling hardlink creation the sole boundary.",
+      "Preserve confined generated staging paths, exact inode binding and exclusive no-replace publication; existing evidence untouched.",
+      "Complete projection chunks must reconstruct each side unambiguously and preserve output-failure classification."
+    ]
+  }
+}

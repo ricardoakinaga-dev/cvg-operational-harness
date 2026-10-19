@@ -1,0 +1,42 @@
+import json,subprocess,os,hashlib,datetime,time,urllib.parse
+from pathlib import Path
+base=Path(__file__).parent;b=base.parents[1];w=b.parent/'worktree';node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node';container='0f148bb34b78385de5c7d70bd0f807658918e13295c6645a0daedf4680d2681c'
+source=w/'packages/persistence/src/__tests__/complete-settlement-public-postgres.integration.ts';artifacts=base/'attempt-r1';artifacts.mkdir(mode=0o700,exist_ok=False);run=base/'runs/r1';run.mkdir(parents=True,mode=0o700,exist_ok=False)
+os.umask(0o077)
+def save(name,value):
+ with (artifacts/name).open('x') as f:json.dump(value,f,indent=2);f.write('\n')
+def inspect():
+ d=json.loads(subprocess.run(['docker','inspect',container],capture_output=True,check=True).stdout)[0]
+ assert d['Id']==container and d['Name']=='/cvg-pare100-224-pg' and d['Config']['Image']=='postgres:16.4-alpine' and d['Image']=='sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c'
+ return {'id':d['Id'],'status':d['State']['Status'],'imageId':d['Image'],'image':d['Config']['Image'],'ports':d['NetworkSettings']['Ports']}
+old=inspect();assert old['status']=='exited';save('container-before.json',old)
+for name in ['typecheck-final','eslint-final','vitest-collect']:assert json.loads((base/(name+'.command.json')).read_text())['exit']==0,name
+raw=source.read_bytes();(artifacts/'source-before-pg-r1.ts').write_bytes(raw);before=hashlib.sha256(raw).hexdigest();save('source-before-pg-r1.json',{'sha256':before,'bytes':len(raw)})
+record={'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'sourceBeforeSHA256':before};started=False
+try:
+ subprocess.run(['docker','start',container],capture_output=True,check=True);started=True;live=inspect();save('container-running.json',live);port=live['ports']['5432/tcp'];assert len(port)==1 and port[0]['HostIp']=='127.0.0.1'
+ prototype=b/'public-json-boundaries/assigned-i1-resource-prototype-private.json';r=json.loads(prototype.read_text());url=urllib.parse.urlparse(r['test_database_url']);assert url.scheme=='postgresql' and url.hostname=='127.0.0.1' and url.username=='pare224' and url.path=='/pare224_synthetic' and not url.query and not url.fragment
+ r['test_database_url']=urllib.parse.urlunparse(url._replace(netloc=url.netloc.rsplit(':',1)[0]+':'+port[0]['HostPort']));r.update(schemaName='pare224_settle_r1',roleName='pare224_settle_r1_service',hostPort=port[0],exclusiveClaim='SETTLEMENT-FAILURES-001 builder r1 only own224 freshschema/role after absence; preserve all old namespaces',synthetic=True)
+ private=base/'private/resource-private.json'
+ with private.open('x') as f:json.dump(r,f,indent=2);f.write('\n')
+ private.chmod(0o600)
+ probes=[]
+ for i in range(20):
+  p=subprocess.run(['docker','exec',container,'pg_isready','-U','pare224','-d','pare224_synthetic'],capture_output=True);probes.append({'attempt':i,'exit':p.returncode,'stdout':p.stdout.decode(),'stderr':p.stderr.decode()})
+  if p.returncode==0:break
+  time.sleep(1)
+ save('readiness.json',probes);assert probes[-1]['exit']==0
+ env=os.environ.copy();env.update(PATH=str(Path(node).parent)+':'+env.get('PATH',''),TMPDIR=str(base/'tmp'),TMP=str(base/'tmp'),TEMP=str(base/'tmp'),NODE_COMPILE_CACHE=str(base/'nodecache'),SPEC0224_SETTLE_ASSIGNED_ROOT=str(base),SPEC0224_SETTLE_RESOURCE=str(private),SPEC0224_SETTLE_SERVICE_RESOURCE=str(base/'private/service-connection-private.json'),SPEC0224_SETTLE_EVIDENCE=str(run))
+ argv=[node,str(w/'node_modules/vitest/vitest.mjs'),'run','--config',str(base/'vitest.config.mjs'),'--configLoader','native'];record.update(argv=argv,cwd=str(w),environmentNames=sorted(env),assignedEnvironment={k:v for k,v in env.items() if k.startswith('SPEC0224_SETTLE_') or k in ['TMPDIR','TMP','TEMP','NODE_COMPILE_CACHE']})
+ with (artifacts/'pg-r1.stdout.log').open('xb') as out,(artifacts/'pg-r1.stderr.log').open('xb') as err:p=subprocess.run(argv,cwd=w,env=env,stdout=out,stderr=err,timeout=180)
+ record['exit']=p.returncode
+except Exception as error:
+ record['runnerError']={'type':type(error).__name__,'message':'Resource/runner failure; inspect phase artifacts privately; no functional verdict'}
+finally:
+ if started:
+  env=os.environ.copy();env.update(SETTLE_WORKTREE=str(w),SETTLE_RESOURCE=str(base/'private/resource-private.json'),SETTLE_CONNECTION_PROOF=str(artifacts/'connection-close-proof.json'))
+  try:
+   p=subprocess.run([node,str(base/'connection-check.mjs')],cwd=w,env=env,capture_output=True,timeout=20);record['connectionCheckExit']=p.returncode;(artifacts/'connection-check.stdout.log').write_bytes(p.stdout);(artifacts/'connection-check.stderr.log').write_bytes(p.stderr)
+  finally:
+   p=subprocess.run(['docker','stop',container],capture_output=True);save('container-stopped.json',{'stopExit':p.returncode,'stdout':p.stdout.decode(),'observed':inspect()})
+ record['sourceAfterSHA256']=hashlib.sha256(source.read_bytes()).hexdigest();record['sourceUnchanged']=record['sourceAfterSHA256']==before;record['finishedAt']=datetime.datetime.now(datetime.timezone.utc).isoformat();save('pg-r1.command.json',record);(artifacts/'source-after-pg-r1.ts').write_bytes(source.read_bytes());print(json.dumps({k:v for k,v in record.items() if k not in ['environmentNames','assignedEnvironment']}))

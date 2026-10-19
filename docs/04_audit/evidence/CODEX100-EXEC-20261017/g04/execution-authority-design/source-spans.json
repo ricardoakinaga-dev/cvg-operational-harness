@@ -1,0 +1,246 @@
+{
+  "kind": "SOURCE_FACTS_NOT_RUNTIME_OBSERVATION",
+  "spans": [
+    {
+      "id": "R01-1290-1356",
+      "input": "R01",
+      "path": "packages/harness/src/execution-spine.ts",
+      "input_sha256": "4c5ba558917227efb638b9a38642d9850ee189a0635bb18ec5f5628aa085f968",
+      "start_line": 1290,
+      "end_line": 1356,
+      "meaning": "claim/transition/heartbeat and failure capture",
+      "excerpt": "      this.options.tenantId,\n      this.now()\n    )\n    for (const record of recovered) {\n      this.options.onSignal?.('execution.recovered', record)\n    }\n    if (this.stopping) return { kind: 'idle' }\n    const claimed = await this.options.store.claimNext(\n      this.options.tenantId,\n      this.options.workerId,\n      this.now(),\n      this.options.leaseMs\n    )\n    if (!claimed) return { kind: 'idle' }\n    await this.options.faultInjector?.(\n      OPERATIONAL_EXECUTION_FAULT_POINT_AFTER_CLAIM\n    )\n    this.options.onSignal?.(\n      claimed.recovered ? 'execution.retry_claimed' : 'execution.claimed',\n      claimed.record\n    )\n\n    const running = await this.options.store.transition(\n      {\n        tenantId: this.options.tenantId,\n        executionId: claimed.record.id,\n        to: 'RUNNING',\n        workerId: this.options.workerId,\n        fenceToken: claimed.record.attempt,\n        reason: 'worker_started'\n      },\n      this.now()\n    )\n    this.options.onSignal?.('execution.running', running)\n\n    let result: RuntimeResult\n    const bufferedAudit: AuditEvent[] = []\n    const bufferedTelemetry: TelemetryEvent[] = []\n    let originalSinks: OperationalHarnessOptions | undefined\n    let heartbeatInFlight: Promise<void> | undefined\n    let heartbeatError: unknown\n    const heartbeatMs = Math.max(\n      1,\n      this.options.heartbeatMs ??\n        Math.floor((this.options.leaseMs ?? 30_000) / 3)\n    )\n    const heartbeatTimer = setInterval(() => {\n      if (heartbeatInFlight) return\n      heartbeatInFlight = this.options.store\n        .heartbeat(\n          this.options.tenantId,\n          running.id,\n          this.options.workerId,\n          running.attempt,\n          this.now(),\n          this.options.leaseMs\n        )\n        .then(() => undefined)\n        .catch((error: unknown) => {\n          heartbeatError = error\n        })\n        .finally(() => {\n          heartbeatInFlight = undefined\n        })\n    }, heartbeatMs)\n    try {\n      const harnessOptions ="
+    },
+    {
+      "id": "R01-1370-1445",
+      "input": "R01",
+      "path": "packages/harness/src/execution-spine.ts",
+      "input_sha256": "4c5ba558917227efb638b9a38642d9850ee189a0635bb18ec5f5628aa085f968",
+      "start_line": 1370,
+      "end_line": 1445,
+      "meaning": "harness dispatch receives executionId; final transition fenced",
+      "excerpt": "            bufferedTelemetry.push(copy(event))\n          }\n        }\n      }\n      const composedOptions = this.options.effectJournal\n        ? {\n            ...optionsWithBufferedSinks,\n            effectJournal: this.options.effectJournal,\n            ...(this.options.effectJournalOptions\n              ? { effectJournalOptions: this.options.effectJournalOptions }\n              : {})\n          }\n        : optionsWithBufferedSinks\n      const harness: OperationalHarness =\n        createOperationalHarness(composedOptions)\n      const resume = deriveExecutionResume(running)\n      result = await harness.execute({\n        ...running.request.runtime,\n        executionId: running.id,\n        ...(running.capabilityFingerprint\n          ? { capabilityFingerprint: running.capabilityFingerprint }\n          : {}),\n        ...(resume ? { resume } : {})\n      })\n    } catch (error) {\n      const message =\n        error instanceof Error ? error.message : 'worker execution failed'\n      const failed = await this.options.store.transition(\n        {\n          tenantId: this.options.tenantId,\n          executionId: running.id,\n          to: 'FAILED_RETRYABLE',\n          workerId: this.options.workerId,\n          fenceToken: running.attempt,\n          failure: {\n            kind: 'TECHNICAL_RETRYABLE',\n            code: 'worker_exception',\n            message,\n            retryAt: new Date(this.now().getTime() + 1_000).toISOString()\n          },\n          reason: 'worker_exception'\n        },\n        this.now()\n      )\n      this.options.onSignal?.(`execution.${failed.state.toLowerCase()}`, failed)\n      return { kind: 'processed', record: failed }\n    } finally {\n      clearInterval(heartbeatTimer)\n      if (heartbeatInFlight) await heartbeatInFlight\n      if (heartbeatError) {\n        this.options.onSignal?.('execution.heartbeat_failed', running)\n      }\n    }\n\n    const outcome = classifyRuntimeResult(result)\n    let completed: ExecutionRecord\n    try {\n      completed = await this.options.store.transition(\n        {\n          tenantId: this.options.tenantId,\n          executionId: running.id,\n          to: outcome.state,\n          workerId: this.options.workerId,\n          fenceToken: running.attempt,\n          result: outcome.result,\n          ...(outcome.failure ? { failure: outcome.failure } : {}),\n          /* v8 ignore next -- every outcome path audits at least once, so the buffer is never empty */\n          ...(bufferedAudit.length ? { auditEvents: bufferedAudit } : {}),\n          reason: outcome.reason\n        },\n        this.now()\n      )\n    } catch (error) {\n      if (\n        error instanceof OperationalExecutionError &&\n        error.code === 'lease_lost'"
+    },
+    {
+      "id": "R02-249-270",
+      "input": "R02",
+      "path": "apps/worker/src/operational-harness-worker.ts",
+      "input_sha256": "0d3e2bd5c4d6e3de283df278457f49e99b12ba23b922fbbe928415f0f4073d23",
+      "start_line": 249,
+      "end_line": 270,
+      "meaning": "separate execution/journal/checkpoint construction",
+      "excerpt": "        new PostgresOperationalExecutionStore(\n          pool as unknown as PostgresPoolLike,\n          maxAttempts !== undefined ? { maxAttempts } : {}\n        ))\n      : createInMemoryOperationalExecutionStore(\n          maxAttempts !== undefined ? { maxAttempts } : {}\n        ))\n  const approvalAuthority: ApprovalAuthority = pool\n    ? new PostgresApprovalAuthority(pool as unknown as PostgresPoolLike)\n    : new ApprovalEngine()\n  const effectJournal: EffectJournal | undefined = pool\n    ? new PostgresOperationalEffectJournal(pool as unknown as PostgresPoolLike)\n    : syntheticEffectEnabled || runtimeProfile === 'iterative'\n      ? new InMemoryEffectJournal()\n      : undefined\n  const stepStore: ExecutionStepStore | null =\n    runtimeProfile === 'iterative'\n      ? pool\n        ? new PostgresExecutionStepStore(pool as unknown as PostgresPoolLike)\n        : new InMemoryExecutionStepStore()\n      : null\n  const approvalEngine = new DurableApprovalEngineAdapter(approvalAuthority)"
+    },
+    {
+      "id": "R03-450-485",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 450,
+      "end_line": 485,
+      "meaning": "claim selects tenant queue then execution rows",
+      "excerpt": "  public claimNext(\n    tenantId: string,\n    workerId: string,\n    rawNow?: Date,\n    rawLeaseMs = this.leaseMs\n  ): Promise<ClaimResult | null> {\n    const tenant = TenantIdSchema.parse(tenantId)\n    const worker = text(workerId, 'workerId', 120)\n    const now = rawNow ?? this.clock()\n    const leaseMs = positiveInt(rawLeaseMs, 'leaseMs')\n    const leaseUntil = new Date(now.getTime() + leaseMs)\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        while (true) {\n          const selected = await client.query<ExecutionRow & QueueRow>(\n            `SELECT ${executionColumnsFromJoin}, q.execution_id, q.status, q.available_at,\n                    q.attempts AS queue_attempts, q.lease_owner AS queue_lease_owner,\n                    q.lease_until AS queue_lease_until, q.last_error,\n                    q.processed_at\n               FROM operational_execution_outbox q\n               JOIN operational_executions e\n                 ON e.tenant_id = q.tenant_id AND e.id = q.execution_id\n              WHERE q.tenant_id = $1\n                AND e.state IN ('QUEUED', 'FAILED_RETRYABLE')\n                AND (\n                  (q.status IN ('pending', 'failed') AND q.available_at <= $2)\n                  OR (q.status = 'processing' AND q.lease_until <= $2)\n                )\n              ORDER BY q.available_at ASC, q.created_at ASC, q.execution_id ASC\n              FOR UPDATE OF q, e SKIP LOCKED\n              LIMIT 1`,\n            [tenant, now]\n          )\n          const row = selected.rows[0]\n          if (!row) return null\n"
+    },
+    {
+      "id": "R03-539-588",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 539,
+      "end_line": 588,
+      "meaning": "execution attempt increment and queue pairing",
+      "excerpt": "          }\n\n          const recovered = row.status === 'processing'\n          const updated = await client.query<ExecutionRow>(\n            `UPDATE operational_executions\n                SET state = 'CLAIMED', attempt = attempt + 1,\n                    lease_owner = $3, lease_until = $4,\n                    updated_at = $2,\n                    failure = CASE WHEN state = 'FAILED_RETRYABLE' THEN NULL ELSE failure END\n              WHERE tenant_id = $1 AND id = $5\n                AND state IN ('QUEUED', 'FAILED_RETRYABLE')\n              RETURNING ${executionColumns}`,\n            [tenant, now, worker, leaseUntil, row.execution_id]\n          )\n          if (!updated.rows[0]) {\n            throw new OperationalExecutionError(\n              'conflict',\n              'Execution claim was lost'\n            )\n          }\n          const record = mapRecord(updated.rows[0])\n          const queueUpdated = await client.query(\n            `UPDATE operational_execution_outbox\n                SET status = 'processing', attempts = attempts + 1,\n                    lease_owner = $3, lease_until = $4,\n                    available_at = $2, last_error = NULL\n              WHERE tenant_id = $1 AND execution_id = $5`,\n            [tenant, now, worker, leaseUntil, record.id]\n          )\n          if (queueUpdated.rowCount !== 1) {\n            throw new OperationalExecutionError(\n              'conflict',\n              'Execution claim queue pairing was lost'\n            )\n          }\n          await this.appendEvent(\n            client,\n            record,\n            'CLAIMED',\n            worker,\n            recovered ? 'stale_lease_reclaimed' : 'worker_claimed',\n            undefined,\n            now\n          )\n          return { record, recovered }\n        }\n      })\n    )\n  }\n"
+    },
+    {
+      "id": "R03-589-625",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 589,
+      "end_line": 625,
+      "meaning": "heartbeat supplied clock and expected fence",
+      "excerpt": "  public heartbeat(\n    tenantId: string,\n    executionId: string,\n    workerId: string,\n    fenceToken: number,\n    rawNow?: Date,\n    rawLeaseMs = this.leaseMs\n  ): Promise<ExecutionRecord> {\n    const tenant = TenantIdSchema.parse(tenantId)\n    const id = text(executionId, 'executionId', 200)\n    const worker = text(workerId, 'workerId', 120)\n    const now = rawNow ?? this.clock()\n    const leaseUntil = new Date(\n      now.getTime() + positiveInt(rawLeaseMs, 'leaseMs')\n    )\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const current = await this.lockedRecord(client, tenant, id)\n        this.assertLease(current, worker, now, fenceToken)\n        const updated = await client.query<ExecutionRow>(\n          `UPDATE operational_executions\n              SET lease_until = $3, updated_at = $4\n            WHERE tenant_id = $1 AND id = $2\n              AND lease_owner = $5 AND attempt = $6\n              AND state IN ('CLAIMED', 'RUNNING') AND lease_until > $4\n            RETURNING ${executionColumns}`,\n          [tenant, id, leaseUntil, now, worker, fenceToken]\n        )\n        const queueUpdated = await client.query(\n          `UPDATE operational_execution_outbox\n              SET lease_until = $3\n            WHERE tenant_id = $1 AND execution_id = $2\n              AND lease_owner = $4 AND status = 'processing'\n              AND lease_until > $5`,\n          [tenant, id, leaseUntil, worker, now]\n        )\n        if (!updated.rows[0])"
+    },
+    {
+      "id": "R03-790-839",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 790,
+      "end_line": 839,
+      "meaning": "legacy cancel refuses active execution",
+      "excerpt": "  public cancel(\n    input: ExecutionCancellationInput,\n    rawNow?: Date\n  ): Promise<ExecutionRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const id = text(input.executionId, 'executionId', 200)\n    const actorId = text(input.actorId, 'actorId', 120)\n    const now = rawNow ?? this.clock()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const current = await this.lockedRecord(client, tenant, id)\n        if (current.state === 'CANCELLED') return current\n        if (current.state === 'CLAIMED' || current.state === 'RUNNING') {\n          throw new OperationalExecutionError(\n            'conflict',\n            'Active execution cannot be cancelled safely'\n          )\n        }\n        if (\n          current.state === 'SUCCEEDED' ||\n          current.state === 'FAILED_TERMINAL'\n        ) {\n          throw new OperationalExecutionError(\n            'invalid_action',\n            'Terminal execution cannot be cancelled'\n          )\n        }\n        const failure: ExecutionFailure = {\n          kind: 'CANCELLED',\n          code: 'cancelled_by_operator',\n          message: input.reason?.trim() || 'Execution cancelled by operator.'\n        }\n        validateExecutionTransitionPayload({ to: 'CANCELLED', failure })\n        const updated = await client.query<ExecutionRow>(\n          `UPDATE operational_executions\n              SET state = 'CANCELLED', lease_owner = NULL,\n                  lease_until = NULL, failure = $3::jsonb,\n                  updated_at = $4, completed_at = $4\n            WHERE tenant_id = $1 AND id = $2\n              AND state NOT IN ('SUCCEEDED', 'FAILED_TERMINAL', 'CANCELLED', 'CLAIMED', 'RUNNING')\n            RETURNING ${executionColumns}`,\n          [tenant, id, jsonText(failure, 'Cancellation failure'), now]\n        )\n        if (!updated.rows[0]) {\n          throw new OperationalExecutionError(\n            'conflict',\n            'Execution cancellation lost its state binding'\n          )\n        }\n        const record = mapRecord(updated.rows[0])"
+    },
+    {
+      "id": "R03-1127-1175",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1127,
+      "end_line": 1175,
+      "meaning": "expiry recovery requeues without generic effect inspection",
+      "excerpt": "  ): Promise<readonly ExecutionRecord[]> {\n    const tenant = TenantIdSchema.parse(tenantId)\n    const now = rawNow ?? this.clock()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const selected = await client.query<ExecutionRow>(\n          `SELECT ${executionColumns}\n             FROM operational_executions\n            WHERE tenant_id = $1\n              AND state IN ('CLAIMED', 'RUNNING')\n              AND lease_until <= $2\n            FOR UPDATE SKIP LOCKED`,\n          [tenant, now]\n        )\n        const recovered: ExecutionRecord[] = []\n        for (const row of selected.rows) {\n          const updated = await client.query<ExecutionRow>(\n            `UPDATE operational_executions\n                SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL,\n                    updated_at = $3\n              WHERE tenant_id = $1 AND id = $2\n              RETURNING ${executionColumns}`,\n            [tenant, row.id, now]\n          )\n          if (!updated.rows[0]) continue\n          const record = mapRecord(updated.rows[0])\n          const queueUpdated = await client.query(\n            `UPDATE operational_execution_outbox\n                SET status = 'pending', available_at = $3,\n                    lease_owner = NULL, lease_until = NULL,\n                    last_error = 'stale_lease_recovered', processed_at = NULL\n              WHERE tenant_id = $1 AND execution_id = $2`,\n            [tenant, record.id, now]\n          )\n          if (queueUpdated.rowCount !== 1) {\n            throw new OperationalExecutionError(\n              'conflict',\n              'Execution recovery queue pairing was lost'\n            )\n          }\n          await this.appendEvent(\n            client,\n            record,\n            'RECOVERED',\n            null,\n            'stale_lease_recovered',\n            undefined,\n            now\n          )"
+    },
+    {
+      "id": "R03-1234-1254",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1234,
+      "end_line": 1254,
+      "meaning": "worker/attempt/expiry lease assertion",
+      "excerpt": "  private assertLease(\n    record: ExecutionRecord,\n    workerId: string,\n    now: Date,\n    fenceToken: number | undefined\n  ): void {\n    const worker = text(workerId, 'workerId', 120)\n    if (\n      record.leaseOwner !== worker ||\n      fenceToken !== record.attempt ||\n      !record.leaseUntil ||\n      Date.parse(record.leaseUntil) <= now.getTime()\n    ) {\n      throw new OperationalExecutionError(\n        'lease_lost',\n        'Execution lease is not owned by this worker'\n      )\n    }\n  }\n\n  private queueUpdateForTransition("
+    },
+    {
+      "id": "R03-1356-1372",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1356,
+      "end_line": 1372,
+      "meaning": "current operational journal constructor",
+      "excerpt": "export class PostgresOperationalEffectJournal implements EffectJournal {\n  public constructor(\n    private readonly connection: OperationalExecutionPostgresConnection\n  ) {}\n\n  public reserve(input: {\n    tenantId: string\n    operationKey: string\n    proposalHash: string\n    attemptId: string\n  }): Promise<EffectJournalRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const operationKey = text(input.operationKey, 'operationKey', 240)\n    const proposalHash = text(input.proposalHash, 'proposalHash', 160)\n    const attemptId = text(input.attemptId, 'attemptId', 240)\n    const timestamp = new Date()\n    return this.run(tenant, (client) =>"
+    },
+    {
+      "id": "R03-1473-1537",
+      "input": "R03",
+      "path": "packages/persistence/src/operational-execution-postgres.ts",
+      "input_sha256": "03260335fb32c71e6691d78bcacb539c987db9468a7ce3dc79f3f47c8934c8ac",
+      "start_line": 1473,
+      "end_line": 1537,
+      "meaning": "journal checks its own attemptId inside transaction",
+      "excerpt": "  private transition(\n    input: {\n      tenantId: string\n      operationKey: string\n      attemptId: string\n    },\n    state: EffectJournalState,\n    values: { result?: unknown; error?: string } = {}\n  ): Promise<EffectJournalRecord> {\n    const tenant = TenantIdSchema.parse(input.tenantId)\n    const operation = text(input.operationKey, 'operationKey', 240)\n    const attemptId = text(input.attemptId, 'attemptId', 240)\n    const timestamp = new Date()\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        const selected = await client.query<EffectRow>(\n          `SELECT ${effectColumns}\n             FROM operational_effect_journal\n            WHERE tenant_id = $1 AND operation_key = $2\n            FOR UPDATE`,\n          [tenant, operation]\n        )\n        const row = selected.rows[0]\n        if (!row)\n          throw new OperationalExecutionError(\n            'not_found',\n            'Effect reservation is missing'\n          )\n        if (row.attempt_id !== attemptId) {\n          throw new OperationalExecutionError(\n            'lease_lost',\n            'Effect attempt is fenced'\n          )\n        }\n        if (state === 'EFFECT_STARTED' && row.state !== 'RESERVED') {\n          if (row.state === state) return mapEffect(row)\n          throw new OperationalExecutionError(\n            'invalid_action',\n            'Effect cannot start from its current state'\n          )\n        }\n        if (state !== 'EFFECT_STARTED' && row.state !== 'EFFECT_STARTED') {\n          if (row.state === state) return mapEffect(row)\n          throw new OperationalExecutionError(\n            'invalid_action',\n            'Effect outcome is not valid for its current state'\n          )\n        }\n        const updated = await client.query<EffectRow>(\n          `UPDATE operational_effect_journal\n              SET state = $3, result = $4::jsonb, error = $5,\n                  updated_at = $6\n            WHERE tenant_id = $1 AND operation_key = $2\n            RETURNING ${effectColumns}`,\n          [\n            tenant,\n            operation,\n            state,\n            values.result === undefined\n              ? null\n              : jsonText(values.result, 'effect result'),\n            values.error ?? null,\n            timestamp\n          ]\n        )"
+    },
+    {
+      "id": "R04-18-24",
+      "input": "R04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 18,
+      "end_line": 24,
+      "meaning": "checkpoint options clock only",
+      "excerpt": "  type PostgresPoolLike\n} from './tenant-scoped-postgres.ts'\n\nexport type OperationalStepPostgresConnection =\n  | PostgresQueryable\n  | PostgresPoolLike\n"
+    },
+    {
+      "id": "R04-302-345",
+      "input": "R04",
+      "path": "packages/persistence/src/operational-step-postgres.ts",
+      "input_sha256": "f41e762355b5fa4267cc5074b5ff9e84ffc7bdf53e306ad8eacdf0816b0a4edc",
+      "start_line": 302,
+      "end_line": 345,
+      "meaning": "legacy saveCheckpoint upsert",
+      "excerpt": "  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {\n    const tenant = TenantIdSchema.parse(checkpoint.tenantId)\n    validateCheckpointIntegrity(checkpoint, {\n      tenantId: checkpoint.tenantId,\n      executionId: checkpoint.executionId\n    })\n    return this.run(tenant, (client) =>\n      transaction(client, async () => {\n        await client.query(\n          `INSERT INTO operational_execution_checkpoints\n             (tenant_id, execution_id, checkpoint_id, checkpoint_version,\n              runtime_profile, runtime_version, orchestrator_version,\n              step_number, state, budget_usage, digest, created_at)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb,\n                   $11, $12)\n           ON CONFLICT (tenant_id, execution_id) DO UPDATE\n             SET checkpoint_id = EXCLUDED.checkpoint_id,\n                 checkpoint_version = EXCLUDED.checkpoint_version,\n                 runtime_profile = EXCLUDED.runtime_profile,\n                 runtime_version = EXCLUDED.runtime_version,\n                 orchestrator_version = EXCLUDED.orchestrator_version,\n                 step_number = EXCLUDED.step_number,\n                 state = EXCLUDED.state,\n                 budget_usage = EXCLUDED.budget_usage,\n                 digest = EXCLUDED.digest,\n                 created_at = EXCLUDED.created_at`,\n          [\n            tenant,\n            checkpoint.executionId,\n            checkpoint.checkpointId,\n            checkpoint.checkpointVersion,\n            checkpoint.runtimeProfile,\n            checkpoint.runtimeVersion,\n            checkpoint.orchestratorVersion,\n            checkpoint.stepNumber,\n            jsonText(checkpoint.state, 'checkpoint state'),\n            jsonText(checkpoint.budgetUsage, 'checkpoint budget usage'),\n            checkpoint.digest,\n            checkpoint.createdAt\n          ]\n        )\n      })\n    )\n  }"
+    },
+    {
+      "id": "R05-480-507",
+      "input": "R05",
+      "path": "packages/harness/src/kernel/pipeline.ts",
+      "input_sha256": "b5c6d187bb0c3ec9cbcd58ceca5480f016b379535e578e6692f3578d22fbc272",
+      "start_line": 480,
+      "end_line": 507,
+      "meaning": "last pre-effect revalidation/effect started",
+      "excerpt": "        )\n      }\n    }\n    // Last decision point: after every wrapper (the approval reservation),\n    // a pause or a cancellation still prevents the effect (F01/F02).\n    const blocked = await revalidate(host, call)\n    if (blocked) return { kind: 'not_started', gate: blocked }\n    try {\n      await host.get('effects').started(ref)\n    } catch (error) {\n      return {\n        kind: 'not_started',\n        gate: stop(\n          'INSUFFICIENT_EVIDENCE',\n          `Effect ledger could not record the start: ${errorMessage(error)}.`\n        )\n      }\n    }\n    started = true\n    const startedAt = Date.now()\n    const toolController = new AbortController()\n    try {\n      // Past the decision point the body is always invoked, so a recorded\n      // start never pairs with a body that did not run.\n      const value = await raceInvoked(turn, () =>\n        call.tool.execute(call.invocation.input, {\n          tenantId: turn.input.tenantId,\n          agentId: turn.input.agent.id,"
+    },
+    {
+      "id": "R08-313-349",
+      "input": "R08",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 313,
+      "end_line": 349,
+      "meaning": "confirmed replay and uncertain refusal",
+      "excerpt": "    ): Promise<ToolResult> => {\n      const operationKey = bounded(context.operationKey ?? '', 'operationKey')\n      const attemptId = createEffectAttemptId(options.attemptIdFactory)\n      const reservation = await journal.reserve({\n        tenantId: context.tenantId,\n        operationKey,\n        proposalHash: proposalHash(tool, input, compositionFingerprint),\n        attemptId\n      })\n      if (reservation.state === 'CONFIRMED') {\n        return { status: 'SUCCEEDED', output: reservation.result }\n      }\n      if (\n        reservation.state === 'UNCERTAIN' ||\n        reservation.state === 'EFFECT_STARTED'\n      ) {\n        return {\n          status: 'REJECTED',\n          error:\n            'unknown_effect: explicit reconciliation is required before retry'\n        }\n      }\n      if (reservation.attemptId !== attemptId) {\n        return {\n          status: 'REJECTED',\n          error:\n            'unknown_effect: an existing reservation requires reconciliation'\n        }\n      }\n      await journal.markStarted({\n        tenantId: context.tenantId,\n        operationKey,\n        attemptId\n      })\n      try {\n        const result = await tool.execute(input, context)\n        if ("
+    },
+    {
+      "id": "R08-365-396",
+      "input": "R08",
+      "path": "packages/harness/src/effect-journal.ts",
+      "input_sha256": "84b93f31838433588f4a07fc1ba541657b7bba256fe2ef6c010730ea7742ccf4",
+      "start_line": 365,
+      "end_line": 396,
+      "meaning": "confirm/fail/uncertain transitions",
+      "excerpt": "        if (result.status === 'SUCCEEDED') {\n          await journal.confirm({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            result: result.output\n          })\n        } else {\n          await journal.fail({\n            tenantId: context.tenantId,\n            operationKey,\n            attemptId,\n            error: result.error ?? 'tool failed'\n          })\n        }\n        return result\n      } catch (error) {\n        const message =\n          error instanceof Error ? error.message : 'tool execution failed'\n        await journal.markUncertain({\n          tenantId: context.tenantId,\n          operationKey,\n          attemptId,\n          reason: `unknown effect after executor failure: ${message}`\n        })\n        return {\n          status: 'REJECTED',\n          error: 'unknown_effect: executor outcome is uncertain'\n        }\n      }\n    }\n  }"
+    },
+    {
+      "id": "R11-6-38",
+      "input": "R11",
+      "path": "packages/persistence/migrations/0016_operational_execution_spine.sql",
+      "input_sha256": "b36d08ae7a19dc324bb08cc382afaddf26107e857a11e739e7fa136acfbdfb86",
+      "start_line": 6,
+      "end_line": 38,
+      "meaning": "execution identity/attempt/lease schema",
+      "excerpt": "\nCREATE TABLE IF NOT EXISTS operational_executions (\n  tenant_id text NOT NULL,\n  id text NOT NULL,\n  idempotency_key text NOT NULL,\n  request_hash text NOT NULL,\n  request jsonb NOT NULL,\n  request_protection_version text NOT NULL DEFAULT 'execution-r1',\n  tenant_isolation_quarantined boolean NOT NULL DEFAULT false,\n  state text NOT NULL CHECK (\n    state IN (\n      'RECEIVED', 'QUEUED', 'CLAIMED', 'RUNNING',\n      'WAITING_APPROVAL', 'WAITING_USER', 'SUCCEEDED',\n      'FAILED_RETRYABLE', 'FAILED_TERMINAL', 'CANCELLED'\n    )\n  ),\n  attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0),\n  lease_owner text,\n  lease_until timestamptz,\n  result jsonb,\n  result_protection_version text,\n  failure jsonb,\n  approval_id text,\n  created_at timestamptz NOT NULL DEFAULT now(),\n  updated_at timestamptz NOT NULL DEFAULT now(),\n  completed_at timestamptz,\n  PRIMARY KEY (tenant_id, id),\n  UNIQUE (tenant_id, idempotency_key),\n  CHECK (state NOT IN ('CLAIMED', 'RUNNING') OR (lease_owner IS NOT NULL AND lease_until IS NOT NULL)),\n  CHECK (state NOT IN ('SUCCEEDED', 'FAILED_TERMINAL', 'CANCELLED') OR completed_at IS NOT NULL)\n);\n\nALTER TABLE operational_executions"
+    },
+    {
+      "id": "R11-81-97",
+      "input": "R11",
+      "path": "packages/persistence/migrations/0016_operational_execution_spine.sql",
+      "input_sha256": "b36d08ae7a19dc324bb08cc382afaddf26107e857a11e739e7fa136acfbdfb86",
+      "start_line": 81,
+      "end_line": 97,
+      "meaning": "journal schema has no durable execution parent",
+      "excerpt": "  created_at timestamptz NOT NULL DEFAULT now(),\n  updated_at timestamptz NOT NULL DEFAULT now(),\n  tenant_isolation_quarantined boolean NOT NULL DEFAULT false,\n  PRIMARY KEY (tenant_id, operation_key)\n);\n\nCREATE INDEX IF NOT EXISTS idx_operational_executions_tenant_state\n  ON operational_executions (tenant_id, state, updated_at);\nCREATE INDEX IF NOT EXISTS idx_operational_executions_approval\n  ON operational_executions (tenant_id, approval_id);\nCREATE INDEX IF NOT EXISTS idx_operational_execution_outbox_claim\n  ON operational_execution_outbox (tenant_id, status, available_at, created_at);\nCREATE INDEX IF NOT EXISTS idx_operational_execution_events_lookup\n  ON operational_execution_events (tenant_id, execution_id, sequence);\nCREATE INDEX IF NOT EXISTS idx_operational_effect_journal_state\n  ON operational_effect_journal (tenant_id, state, updated_at);\n"
+    },
+    {
+      "id": "A02-321-332",
+      "input": "A02",
+      "path": "docs/02_spec/0224_pare100_complete_tool_result_context.md",
+      "input_sha256": "f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea",
+      "start_line": 321,
+      "end_line": 332,
+      "meaning": "model admission pending snapshot and bound fence",
+      "excerpt": "\nIterativeOrchestratorInput recebe, somente no modo1, a porta do runtime\n`decisionAdmission` com reserve/settle. Há no máximo uma reserva pendente\npor execução; exclusão atômica está definida em5.3. Fence da0217 é revalidado\nquando a composição é publicada/bound; não é presumido em store unbound. A reserva\nvincula tenant, execution, passo, attempt, purpose, requestSha256, contador,\nlimites e ID opaco nativo; IDs enviados pelo output não têm efeito.\n\n`reserve` revalida saldos/deadline/cancelamento, cobra um modelCall e os\nlimites superiores de tokens/custo, registra repair quando purpose=REPAIR e\npersiste checkpoint antes de retornar receipt. Falha desse save impede\ncomplete. O orquestrador só chama o modelo com receipt do snapshot atual."
+    },
+    {
+      "id": "A02-368-403",
+      "input": "A02",
+      "path": "docs/02_spec/0224_pare100_complete_tool_result_context.md",
+      "input_sha256": "f3bc9a6115d17abb4185644cfc998f7aef39164774afff00042a64202b2c49ea",
+      "start_line": 368,
+      "end_line": 403,
+      "meaning": "CAS semantics, pending reservation UNKNOWN, standalone limits",
+      "excerpt": "### 5.3 Exclusão entre escritores e CAS do checkpoint\n\n`ExecutionStepStore.saveCheckpoint` atual não prova exclusão de reservas.\nO modo1 exige a extensão `compareAndSwapCheckpoint` com entrada lógica\n`{tenantId,executionId,expected:{checkpointId,digest}|null,next}` e saída\nAPPLIED com token novo ou CONFLICT. Sem essa extensão a composição recusa\nmodo1 antes de qualquer corpo/modelo; não emular CAS com load seguido de\nsave. Toda escrita de checkpoint2, inclusive inicial, pre-dispatch, reserva,\nsettlement, cursor e terminal, usa a extensão. saveCheckpoint simples deve\nrecusar escrita2 e, no reader novo, impedir escrita1 sobre execução2.\n\nCAS inicial é INSERT condicional se a linha não existir. Demais CAS são\nUPDATE condicional de tenant/execution/checkpointId/digest esperados em uma\ntransação. next tem checkpointId novo a cada escrita, bindings válidos e o\nmesmo modo; alteração zero linhas é conflito e não autoriza chamada. Isso\nimpede ABA de digest sem mudar schema. Store memória implementa a mesma\noperação indivisível em seu estado compartilhado, sem await entre comparação\ne troca. Stores que não conseguem cumprir o contrato não suportam modo1.\n\nNo adaptador PG, conferir autoridade nativa e fence quando bound, manter a\nordem de locks existente, checar saldos/reserva vigente e fazer CAS no mesmo\nclient/transaction. Não abrir transação aninhada/pool separado. Receipt só\nsai após COMMIT. Não manter transação ou row lock durante chamada ao modelo.\nSe dois processos disputarem a mesma reserva, apenas o CAS vencedor recebe\nreceipt; o perdedor retorna STATE_CONFLICT sem chamar modelo/corpo. Ao\ncarregar reserva alheia pendente, tratar como UNKNOWN conservador e parar;\nnão quitá-la, cancelá-la nem tentar outra chamada.\n\nNo caminho unbound, CAS serializa estado/orçamento, mas não cria lease de\nworker/ACK externo. Esta fatia local não mistura writer antigo e novo na\nmesma execução: reader1 é incompatível com escrita2 e a composição isolada\né o único owner autorizado dos IDs de teste. Deploy com binaries mistos,\nintegração nos hosts ou compartilhamento real dessa execução exige o gate\noperacional apropriado; não afirmar que cliente legado arbitrário que já\ntenha acesso direto de escrita ao banco é contido por um contrato novo.\nNa composição bound valem também os fences existentes, sem mudá-los."
+    },
+    {
+      "id": "O01-127-152",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision/inputs/G01.source.txt",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 127,
+      "end_line": 152,
+      "meaning": "optional unbound guard returns null",
+      "excerpt": "export async function guardOptionalPublishedWrite(\n  client: PostgresQueryable,\n  tenantId: string,\n  executionId: string,\n  fence: ControlledPublishedDatabaseFence | undefined,\n  settlement = false\n): Promise<Awaited<ReturnType<typeof guardControlledPublishedFence>> | null> {\n  const bound = await client.query(\n    `SELECT id FROM operational_executions WHERE tenant_id=$1 AND id=$2\n     AND request#>>'{runtime,context,values,adapterVersion}'='controlled-published-v1'`,\n    [tenantId, executionId]\n  )\n  if (!bound.rows.length) {\n    if (fence) publishedFenceError()\n    return null\n  }\n  if (\n    !fence ||\n    fence.tenantId !== tenantId ||\n    fence.executionId !== executionId\n  )\n    publishedFenceError()\n  return guardControlledPublishedFence(client, fence, {\n    settlement,\n    requirePhase: true\n  })"
+    },
+    {
+      "id": "O01-156-219",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision/inputs/G01.source.txt",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 156,
+      "end_line": 219,
+      "meaning": "bound parent/outer/fence checks",
+      "excerpt": "export async function guardControlledPublishedFence(\n  client: PostgresQueryable,\n  fence: ControlledPublishedDatabaseFence,\n  options: {\n    settlement?: boolean\n    requirePhase?: boolean\n    skipPause?: boolean\n    signal?: AbortSignal\n  } = {}\n): Promise<{\n  binding: ControlledPublishedBindingRow\n  now: Date\n  recheck: () => Promise<Date>\n  leaseUntil: string\n}> {\n  options = {\n    ...options,\n    ...(!options.settlement && !options.signal && fence.signal\n      ? { signal: fence.signal }\n      : {})\n  }\n  TenantIdSchema.parse(fence.tenantId)\n  if (fence.cancellation) {\n    if (!options.settlement || options.requirePhase) publishedFenceError()\n    return guardCancelledPublishedFence(client, fence)\n  }\n  const outer = fence.outer\n  if (\n    !Number.isSafeInteger(fence.attempt) ||\n    fence.attempt < 1 ||\n    outer.tenantId !== fence.tenantId ||\n    outer.processWorkerId !== fence.workerId ||\n    !Number.isSafeInteger(outer.expectedOuterAttempt) ||\n    outer.expectedOuterAttempt < 1 ||\n    !/^[1-9]\\d*$/.test(outer.expectedAttemptRowId) ||\n    options.signal?.aborted\n  )\n    publishedFenceError()\n  const parentResult = await client.query<ParentRow>(\n    'SELECT tenant_id,id,state,attempt,lease_owner,lease_until FROM operational_executions WHERE tenant_id=$1 AND id=$2 FOR UPDATE',\n    [fence.tenantId, fence.executionId]\n  )\n  const parent = parentResult.rows[0]\n  const bindingResult = await client.query<ControlledPublishedBindingRow>(\n    'SELECT * FROM controlled_published_bindings WHERE tenant_id=$1 AND execution_id=$2 FOR UPDATE',\n    [fence.tenantId, fence.executionId]\n  )\n  const binding = bindingResult.rows[0]\n  if (\n    !parent ||\n    !binding ||\n    binding.outbox_id !== outer.eventId ||\n    binding.active_outer_attempt !== outer.expectedOuterAttempt ||\n    binding.active_outer_worker_id !== outer.processWorkerId ||\n    String(binding.active_outer_attempt_row_id) !==\n      outer.expectedAttemptRowId ||\n    parent.attempt !== fence.attempt ||\n    parent.lease_owner !== fence.workerId ||\n    !['CLAIMED', 'RUNNING'].includes(parent.state) ||\n    binding.phase_state === 'CLOSED'\n  )\n    publishedFenceError()\n  if (\n    !options.settlement &&"
+    },
+    {
+      "id": "O01-292-336",
+      "input": "O01",
+      "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision/inputs/G01.source.txt",
+      "input_sha256": "c73c3fa055fb5ad385da86c445dce4a360f262dd179450277a8489713787ce7c",
+      "start_line": 292,
+      "end_line": 336,
+      "meaning": "DBclock and recheck",
+      "excerpt": "      (!options.settlement && pause.rows[0].paused)\n    )\n      publishedFenceError()\n  }\n  const recheck = async (): Promise<Date> => {\n    if (options.signal?.aborted) publishedFenceError()\n    const now = await publishedDbNow(client)\n    for (const value of [\n      parent.lease_until,\n      queue.lease_until,\n      event.lease_until\n    ]) {\n      if (\n        (typeof value !== 'string' && !(value instanceof Date)) ||\n        Date.parse(publishedIso(value)) <= now.getTime()\n      )\n        publishedFenceError()\n    }\n    if (\n      !options.settlement &&\n      binding.expires_at !== null &&\n      Date.parse(publishedIso(binding.expires_at)) <= now.getTime()\n    )\n      publishedFenceError()\n    if (options.signal?.aborted) publishedFenceError()\n    return now\n  }\n  const now = await recheck()\n  await setPublishedWriteContext(\n    client,\n    fence,\n    options.settlement ? 'settlement' : 'active'\n  )\n  await recheck()\n  const leaseUntil = new Date(\n    Math.min(\n      ...[\n        parent.lease_until,\n        queue.lease_until,\n        event.lease_until,\n        ...(binding.expires_at === null ? [] : [binding.expires_at])\n      ].map((value) => new Date(value as string | Date).getTime())\n    )\n  ).toISOString()\n  return { binding, now, recheck, leaseUntil }"
+    },
+    {
+      "id": "O03-1245-1270",
+      "input": "O03",
+      "path": "docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/persistence-port-decision/inputs/S01.source.txt",
+      "input_sha256": "5f792cd888c0720176370771a5096ddef0c5ac4bc7435d3f92a3257dcd57934f",
+      "start_line": 1245,
+      "end_line": 1270,
+      "meaning": "bound journal fixed operation key guard",
+      "excerpt": "  private async guardWrite(\n    client: PostgresQueryable,\n    tenant: TenantId,\n    operationKey: string,\n    settlement: boolean\n  ) {\n    const executionId = await boundExecutionIdForOperation(\n      client,\n      tenant,\n      operationKey\n    )\n    if (!executionId) {\n      if (this.options.fence) publishedFenceError()\n      return null\n    }\n    if (operationKey !== `${executionId}:s2:find_available_slots`)\n      publishedFenceError()\n    return guardOptionalPublishedWrite(\n      client,\n      tenant,\n      executionId,\n      this.options.fence,\n      settlement\n    )\n  }\n"
+    }
+  ],
+  "count": 24
+}

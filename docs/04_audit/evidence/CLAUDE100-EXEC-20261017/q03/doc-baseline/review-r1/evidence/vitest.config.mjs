@@ -1,0 +1,1 @@
+export default {cacheDir:'../vite-cache',test:{environment:'node',include:['tests/doc-source-moves.test.js'],fileParallelism:false,maxWorkers:1,cache:false,reporters:['default','json'],outputFile:{json:'../focal.json'}}};

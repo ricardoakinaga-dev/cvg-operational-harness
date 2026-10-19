@@ -1,0 +1,312 @@
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+
+
+ Test Files  6 passed (6)
+      Tests  143 passed (143)
+   Start at  08:46:36
+   Duration  10.63s (transform 554ms, setup 0ms, import 739ms, tests 5.72s, environment 3.49s)
+
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+
+
+ Test Files  2 passed (2)
+      Tests  4 passed (4)
+   Start at  08:51:00
+   Duration  8.36s (transform 932ms, setup 0ms, import 1.33s, tests 6.81s, environment 0ms)
+
+{
+  "argv": [
+    "node",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "packages/harness",
+    "packages/contracts",
+    "packages/orchestrator",
+    "packages/persistence",
+    "--no-file-parallelism",
+    "--maxWorkers=2"
+  ],
+  "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+  "startedAt": "2026-10-16T11:50:28.760264+00:00",
+  "finishedAt": "2026-10-16T11:51:48.729327+00:00",
+  "durationSeconds": 79.9690545280464,
+  "exitCode": 0,
+  "streams": {
+    "stdout": {
+      "path": "regression-r2-01.stdout.log",
+      "bytes": 272
+    },
+    "stderr": {
+      "path": "regression-r2-01.stderr.log",
+      "bytes": 65
+    }
+  }
+}
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/worktree
+
+
+ Test Files  78 passed | 11 skipped (89)
+      Tests  892 passed | 125 skipped (1017)
+   Start at  08:50:29
+   Duration  79.46s (transform 3.11s, setup 0ms, import 11.63s, tests 9.85s, environment 48.61s)
+
+{
+  "argv": [
+    "node",
+    "node_modules/typescript/bin/tsc",
+    "--project",
+    "tsconfig.typecheck.json",
+    "--noEmit",
+    "--incremental",
+    "false"
+  ],
+  "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+  "startedAt": "2026-10-16T11:50:28.756124+00:00",
+  "finishedAt": "2026-10-16T11:50:44.120965+00:00",
+  "durationSeconds": 15.364831701968797,
+  "exitCode": 0,
+  "streams": {
+    "stdout": {
+      "status": "EMPTY_STREAM_OMITTED"
+    },
+    "stderr": {
+      "status": "EMPTY_STREAM_OMITTED"
+    }
+  }
+}
+{
+  "argv": [
+    "python3",
+    "-c",
+    "import json,subprocess;paths=json.load(open(\"/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/integration/owned-paths.json\"));raise SystemExit(subprocess.call([\"node\",\"node_modules/eslint/bin/eslint.js\",*paths]))"
+  ],
+  "cwd": "/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree",
+  "startedAt": "2026-10-16T11:50:28.760621+00:00",
+  "finishedAt": "2026-10-16T11:50:30.899999+00:00",
+  "durationSeconds": 2.1393762980005704,
+  "exitCode": 0,
+  "streams": {
+    "stdout": {
+      "status": "EMPTY_STREAM_OMITTED"
+    },
+    "stderr": {
+      "status": "EMPTY_STREAM_OMITTED"
+    }
+  }
+}
+
+ RUN  v4.1.11 /tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/retest-r2
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  08:46:21
+   Duration  4.06s (transform 286ms, setup 0ms, import 350ms, tests 3.10s, environment 516ms)
+
+{"status":"PASS","actualRequests":22,"boundaryControls":4,"scope":"Direct governed gateway common input schema only. No adapter, provider, maxOutputTokens transport mapping or integrated route qualification."}
+import {
+  boundExecutionIdForOperation,
+  guardOptionalPublishedWrite,
+  publishedFenceError,
+  type ControlledPublishedDatabaseFence
+} from './controlled-published-fencing.ts'
+import { randomUUID } from 'node:crypto'
+import type {
+  EffectJournal,
+  EffectJournalRecord,
+  EffectJournalState,
+  ExecutionEvent,
+  ExecutionFailure,
+  ExecutionRecord,
+  ExecutionState,
+  ExecutionSubmission,
+  OperationalExecutionStore,
+  SubmitResult,
+  ClaimResult,
+  ExecutionTransitionInput,
+  ExecutionCancellationInput
+} from '@cvg/harness'
+import type { AuditEvent } from '@cvg/harness-contracts'
+import {
+  OperationalExecutionError,
+  computeExecutionRequestHash,
+  DEFAULT_MAX_EXECUTION_ATTEMPTS,
+  isExecutionTransitionAllowed,
+  parseExecutionSubmission,
+  validateExecutionTransitionPayload
+} from '@cvg/harness'
+import type { TenantId } from '@cvg/platform'
+import { TenantIdSchema } from '@cvg/platform'
+import type { QueryResultRow } from 'pg'
+import type { PostgresQueryable } from './postgres.ts'
+import {
+  withTenantContext,
+  type PostgresPoolClient,
+  type PostgresPoolLike
+} from './tenant-scoped-postgres.ts'
+
+export type OperationalExecutionPostgresConnection =
+  | PostgresQueryable
+  | PostgresPoolLike
+
+export interface PostgresOperationalExecutionStoreOptions {
+  readonly leaseMs?: number
+  readonly retryDelayMs?: number
+  readonly maxAttempts?: number
+  readonly clock?: () => Date
+  /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
+  readonly executionIdFactory?: OperationalExecutionIdFactory
+}
+
+export type OperationalExecutionIdFactory = () => string
+
+interface ExecutionRow extends QueryResultRow {
+  tenant_id: string
+  id: string
+  idempotency_key: string
+  request_hash: string
+  request: unknown
+  state: ExecutionState
+  attempt: number
+  lease_owner: string | null
+  lease_until: Date | string | null
+  result: unknown
+  failure: unknown
+  approval_id: string | null
+  resume: unknown
+  created_at: Date | string
+  updated_at: Date | string
+  completed_at: Date | string | null
+}
+
+interface EventRow extends QueryResultRow {
+  sequence: string | number
+  execution_id: string
+  tenant_id: string
+  event_type: ExecutionEvent['type']
+     1	import {
+     2	  guardOptionalPublishedWrite,
+     3	  type ControlledPublishedDatabaseFence
+     4	} from './controlled-published-fencing.ts'
+     5	import type {
+     6	  ExecutionCheckpoint,
+     7	  ExecutionStep,
+     8	  ExecutionStepStore,
+     9	  CheckpointCompareAndSwapInput,
+    10	  CheckpointCompareAndSwapResult
+    11	} from '@cvg/harness-contracts'
+    12	import {
+    13	  isStepTransitionAllowed,
+    14	  type StepStatus
+    15	} from '@cvg/harness-contracts'
+    16	import {
+    17	  CheckpointError,
+    18	  validateCheckpointIntegrity,
+    19	  encodeCompleteCheckpointState,
+    20	  decodeCompleteCheckpointState,
+    21	  validateCompleteCheckpointTransition,
+    22	  COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES,
+    23	  COMPLETE_CHECKPOINT_DATA_MAX_CHARS
+    24	} from '@cvg/harness'
+    25	import type { TenantId } from '@cvg/platform'
+    26	import { TenantIdSchema } from '@cvg/platform'
+    27	import type { QueryResultRow } from 'pg'
+    28	import type { PostgresQueryable } from './postgres.ts'
+    29	import {
+    30	  withTenantContext,
+    31	  type PostgresPoolClient,
+    32	  type PostgresPoolLike
+    33	} from './tenant-scoped-postgres.ts'
+    34	
+    35	export type OperationalStepPostgresConnection =
+    36	  | PostgresQueryable
+    37	  | PostgresPoolLike
+    38	
+    39	export interface PostgresExecutionStepStoreOptions {
+    40	  readonly clock?: () => Date
+    41	  /** Trusted bound composition only; absent keeps unbound behavior. */
+    42	  readonly fence?: ControlledPublishedDatabaseFence
+    43	}
+    44	
+    45	interface StepRow extends QueryResultRow {
+    46	  tenant_id: string
+    47	  execution_id: string
+    48	  step_number: number
+    49	  step_id: string
+    50	  step_type: ExecutionStep['stepType']
+    51	  status: StepStatus
+    52	  attempt: number
+    53	  side_effecting: boolean
+    54	  decision_type: ExecutionStep['decisionType'] | null
+    55	  reason_code: string | null
+    56	  error_code: string | null
+    57	  observation_refs: unknown
+    58	  started_at: Date | string
+    59	  completed_at: Date | string | null
+    60	}
+    61	
+    62	interface CheckpointRow extends QueryResultRow {
+    63	  tenant_id: string
+    64	  execution_id: string
+    65	  checkpoint_id: string
+    66	  checkpoint_version: number
+    67	  runtime_profile: string
+    68	  runtime_version: string
+    69	  orchestrator_version: string
+    70	  step_number: number
+    71	  state: unknown
+    72	  budget_usage: unknown
+    73	  digest: string
+    74	  created_at: Date | string
+    75	}
+    76	
+    77	const stepColumns = `
+    78	  tenant_id, execution_id, step_number, step_id, step_type, status, attempt,
+    79	  side_effecting, decision_type, reason_code, error_code, observation_refs,
+    80	  started_at, completed_at`
+    81	
+    82	const checkpointColumns = `
+    83	  tenant_id, execution_id, checkpoint_id, checkpoint_version, runtime_profile,
+    84	  runtime_version, orchestrator_version, step_number, state, budget_usage,
+    85	  digest, created_at`
+    86	
+    87	// CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+    88	// octet_length uses expanded text size, not compressed pg_column_size.
+    89	const boundedCheckpointColumns = checkpointColumns.replace(
+    90	  'state, budget_usage',
+    91	  `
+    92	  CASE WHEN checkpoint_version <> 2 OR
+    93	    (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
+    94	     AND length(state->>'data') <= ${COMPLETE_CHECKPOINT_DATA_MAX_CHARS})
+    95	    THEN state ELSE NULL END AS state,
+    96	  CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+    97	    THEN budget_usage ELSE NULL END AS budget_usage`
+    98	)
+    99	
+   100	function text(value: unknown, label: string, max = 200): string {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:13:  encodeCompleteCheckpointState,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:14:  decodeCompleteCheckpointState,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:15:  validateCompleteCheckpointTransition
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:191:  public async saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:199:        'V2 checkpoints require compareAndSwapCheckpoint'
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:212:  public async compareAndSwapCheckpoint(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:241:    validateCompleteCheckpointTransition(current, input.next)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:245:      const state = decodeCompleteCheckpointState(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/harness/src/step-store.ts:246:        encodeCompleteCheckpointState(next.state)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:19:  encodeCompleteCheckpointState,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:20:  decodeCompleteCheckpointState,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:21:  validateCompleteCheckpointTransition,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:22:  COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES,
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:87:// CASE suppresses oversized JSONB before node-postgres invokes its JSON parser.
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:88:// octet_length uses expanded text size, not compressed pg_column_size.
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:92:  CASE WHEN checkpoint_version <> 2 OR
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:93:    (octet_length(state::text) <= ${COMPLETE_CHECKPOINT_STORAGE_MAX_BYTES}
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:96:  CASE WHEN checkpoint_version <> 2 OR octet_length(budget_usage::text) <= 4096
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:183:        ? decodeCompleteCheckpointState(row.state)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:257:  public saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:284:  public compareAndSwapCheckpoint(
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:303:        ? encodeCompleteCheckpointState(next.state)
+/tmp/cvg-pare100-exec-20261014-6az3hlay/spec0224-build/review-packet-r2/source/packages/persistence/src/operational-step-postgres.ts:356:        validateCompleteCheckpointTransition(current, next)

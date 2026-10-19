@@ -1,0 +1,61 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import vm from 'node:vm'
+import { createHash } from 'node:crypto'
+import { auditProductBoundary } from './candidate/scripts/check-product-boundary.mjs'
+import { createInstalledPackageVerifier } from './candidate/scripts/boundary-manifests.mjs'
+const base='/tmp/cvg-b6-stable-20261017'
+const candidate=path.join(base,'candidate')
+const cases=[]
+function fixture(id, extra={}) {
+ const root=path.join(base,'fixtures',id)
+ if(fs.existsSync(root))throw new Error('fixture exists:'+id)
+ const data={
+ 'package.json':JSON.stringify({workspaces:['packages/*','products/*']}),
+ 'packages/core/package.json':JSON.stringify({name:'core'}),
+ 'packages/core/src/index.ts':'export const neutral=1;\n',
+ 'products/shift/package.json':JSON.stringify({name:'shift'}),
+ 'products/shift/src/index.ts':'export const marker=1;\n',...extra}
+ for(const [file,source] of Object.entries(data)){
+  const target=path.join(root,file);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,source)
+ }
+ return root
+}
+function probe(id,extra={},options={}){
+ const root=fixture(id,extra)
+ const audit=auditProductBoundary(root,{graph:true,...options})
+ const result={id,root,...audit};cases.push(result);return result
+}
+probe('neutral')
+probe('direct-product',{'packages/core/src/index.ts':"export {marker} from '../../../products/shift/src/index.ts'"})
+const shutdown={
+ 'packages/shared/package.json':JSON.stringify({name:'shared'}),
+ 'packages/shared/src/lifecycle.ts':fs.readFileSync(path.join(candidate,'packages/shared/src/lifecycle.ts'),'utf8'),
+ 'apps/api/src/main.ts':"const shutdown = { install(source:any) { source.getBuiltinModule('module').createRequire(__filename)('../../../products/shift/src/index.ts') } }\nshutdown.install(process)\n"}
+probe('shutdown-receiver-substitution',shutdown)
+probe('shutdown-receiver-substitution-strict',shutdown,{exceptions:false})
+const spy={'apps/web/src/__tests__/app.test.tsx':"const vi = { spyOn(source:any, _method:string) { source.process.getBuiltinModule('module').createRequire('/tmp/audit-entry.cjs')('/tmp/products/shift/src/index.ts'); return { mockImplementation(_callback:any) {} } } }\nvi.spyOn(globalThis, 'fetch').mockImplementation((input) => {\n})\n"}
+probe('fetch-spy-receiver-substitution',spy)
+probe('fetch-spy-receiver-substitution-strict',spy,{exceptions:false})
+const code="module.exports = require('../../' + 'products/' + 'shift/src/index.ts')"
+const vendor={
+ 'packages/core/package.json':JSON.stringify({name:'core',dependencies:{vendor:'1.0.0'}}),
+ 'packages/core/src/index.ts':"import value from 'vendor'; export { value }\n",
+ 'package-lock.json':JSON.stringify({lockfileVersion:3,packages:{'node_modules/vendor':{version:'1.0.0',resolved:'https://registry.npmjs.org/vendor/-/vendor-1.0.0.tgz',integrity:'sha512-YQ=='}}}),
+ 'node_modules/vendor/package.json':JSON.stringify({name:'vendor',version:'9.9.9',main:'index.js'}),
+ 'node_modules/vendor/index.js':code}
+const drift=probe('installed-split-path-version-drift',vendor)
+probe('installed-split-path-same-version',{...vendor,'node_modules/vendor/package.json':JSON.stringify({name:'vendor',version:'1.0.0',main:'index.js'})})
+probe('installed-literal-control',{...vendor,'node_modules/vendor/index.js':"module.exports = require('../../products/shift/src/index.ts')"})
+probe('example-outside-inventory',{'examples/consumers/reception-agent/index.ts':"export const product=process.env.SHIFT_PORT;"})
+probe('core-consumer-env-control',{'packages/core/src/index.ts':"export const product=process.env.SHIFT_PORT;"})
+const verifier=createInstalledPackageVerifier(drift.root,{productReferences:['shift','products/shift']})
+const verification=verifier.verify(path.join(drift.root,'node_modules/vendor'),'node_modules/vendor')
+const scan=verifier.scan(path.join(drift.root,'node_modules/vendor'))
+let requested
+vm.runInNewContext(code,{module:{exports:{}},require:p=>{requested=p;return 'inert-sentinel'}})
+const result={task:'B6-STABLE-20261017',candidate:'5a199668eef5db4ca7aa2adc3853169ca0953cbf',node:process.version,method:'Original checker on physical synthetic fixtures; no execution of fixture application or product code. Concatenation VM has inert require only.',checkerSha256:createHash('sha256').update(fs.readFileSync(path.join(candidate,'scripts/check-product-boundary.mjs'))).digest('hex'),cases,component:{verification,scan,inertRequireArgument:requested}}
+const file=process.argv[2];fs.writeFileSync(file,JSON.stringify(result,null,2)+'\n')
+for(const r of cases)console.log(JSON.stringify({id:r.id,status:r.status,passed:r.passed,violations:r.violations.length,diagnostics:r.diagnostics.length,exceptions:r.exceptions,sourceFiles:r.sourceFiles,exampleInGraph:r.graph.nodes.some(n=>String(n).startsWith('examples/'))}))
+console.log(JSON.stringify(result.component))
+if(cases.find(r=>r.id==='neutral').passed!==true||cases.find(r=>r.id==='direct-product').passed!==false)throw new Error('invalid positive/negative controls')

@@ -1,0 +1,77 @@
+import json,hashlib,copy,re,math
+from pathlib import Path
+from datetime import datetime
+D=Path(__file__).resolve().parent;P=D.parent
+A="5c93abb6b77fdcc79d99bafa623864a28a2c41cc4fb636be591a10171072a456"
+def pairs(items):
+ d={}
+ for k,v in items:
+  assert k not in d,"duplicate key";d[k]=v
+ return d
+def invalid(n):raise ValueError(n)
+def load(p):return json.loads(p.read_bytes(),object_pairs_hook=pairs,parse_constant=invalid)
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def typed(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False,allow_nan=False)
+def eq(a,b):assert typed(a)==typed(b)
+def stable(v):
+ if isinstance(v,dict):return "{"+",".join(json.dumps(k)+":"+stable(v[k]) for k in sorted(v))+"}"
+ if isinstance(v,list):return "["+",".join(stable(x) for x in v)+"]"
+ return json.dumps(v,ensure_ascii=False,separators=(",",":"),allow_nan=False)
+def fp(d):return hashlib.sha256(stable({"schemaVersion":"capability-composition-v1","descriptors":[d]}).encode()).hexdigest()
+a=load(P/"authority.json");assert sha(P/"authority.json")==A
+packet=load(P/"review-packet.json");fixture=load(P/"fixture.json")
+expected_receipts={"attempt-01":"004d9f677ebcc29a56018d714adcd0b5348c92e3a16f3c6d18ad30fa09c2d997","attempt-02":"d6164469ec285c18383c073c14983db430fff8f5e9d04dcbc1bf90bce4d93c3d","i1-01":"6a5c0a11da9dbf7dcaacab00cda74c3578f5202ec1c9f1e66b3b8fa1cd4d4c87"}
+records=[];normalized=[]
+for name,rsha in expected_receipts.items():
+ folder=P/"runs"/name;receipt=P/("receipt-"+name+".json");assert sha(receipt)==rsha
+ rec=load(receipt);assert rec["run"]==str(folder)
+ expected_files={"process.json","stdout.txt","stderr.txt","sources-before.json","sources-after.json"};assert set(rec["files"])==expected_files
+ assert {p.name for p in folder.iterdir() if p.is_file()}==expected_files
+ for n,m in rec["files"].items():eq(m,{"sha256":sha(folder/n),"bytes":(folder/n).stat().st_size})
+ for n in ("sources-before.json","sources-after.json"):eq(load(folder/n),a["sources"])
+ p=load(folder/"process.json");c=p["capture"]
+ assert p["sourcesUnchanged"] is True and p["snapshotErrors"]==[] and type(p["sourceCount"]) is int and p["sourceCount"]==1061
+ eq(c["argv"],a["argv"]);eq(c["cwd"],a["cwd"]);assert c["joined"] is True and c["remainingProcessGroup"] is False and c["errors"]==[]
+ assert type(c["exitCode"]) is int and c["exitCode"]==0 and c["eof"]=={"stdout":True,"stderr":True}
+ assert 0<c["executionElapsedNs"]<=5000000000 and c["cleanupElapsedNs"]<=2200000000
+ assert c["totalElapsedNs"]==c["executionElapsedNs"]+c["cleanupElapsedNs"]
+ assert c["env"]["HOME"]==str(folder/"home") and c["env"]["TSX_DISABLE_CACHE"]=="1" and c["env"]["NODE_DISABLE_COMPILE_CACHE"]=="1"
+ assert (folder/"stderr.txt").read_bytes()==b"" and c["retainedBytes"]==(folder/"stdout.txt").stat().st_size<=1048576
+ data=load(folder/"stdout.txt");eq([x["caseId"] for x in data["cases"]],["direct-WORKSPACE","capability-WORKSPACE","capability-NONE"])
+ clean=copy.deepcopy(data);cases=[]
+ for i,x in enumerate(data["cases"]):
+  eq(x["input"],fixture["cases"][x["caseId"]]["input"]);eq(x["beforeDescriptor"],fixture["cases"][x["caseId"]]["descriptor"])
+  assert len(x["gateCalls"])==(1 if i==0 else 0) and len(x["bodyCalls"])==(0 if i==0 else 1)
+  assert x["nativeResult"]["stopReason"]==("UNSAFE_REQUEST" if i==0 else "COMPLETED")
+  assert x["modelCalls"]==[] and x["approvalRequests"]==[] and len(x["auditEvents"])==len(x["telemetryEvents"])==1
+  eq([e["type"] for e in x["kernelLogEvents"]],["turn/start","tool/call","tool/result","turn/end"])
+  tel=x["telemetryEvents"][0];assert type(tel["latencyMs"]) is type(tel["toolDurationMs"]) is int
+  assert 0<=tel["toolDurationMs"]<=tel["latencyMs"]<=5000
+  if i==0:assert tel["toolDurationMs"]==0
+  else:
+   d=x["registeredDescriptors"][0];assert "sandbox" not in d;eq(x["submittedDescriptor"],d)
+   assert fp(d)==x["capabilityFingerprint"]
+   j=x["journalRecord"];assert j["createdAt"]<=j["updatedAt"]<=x["auditEvents"][0]["timestamp"]
+   assert re.fullmatch(r"attempt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",j["attemptId"])
+   prop={"schemaVersion":"effect-proposal-v2","compositionFingerprint":fp(d),"tool":{k:d[k] for k in ("id","version","sideEffect","idempotent","providerId","providerVersion")},"input":{"text":"synthetic echo only"}}
+   assert hashlib.sha256(json.dumps(prop,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()==j["proposalHash"]
+   for k in ("attemptId","createdAt","updatedAt"):clean["cases"][i]["journalRecord"][k]="<checked-dynamic>"
+  clean["cases"][i]["auditEvents"][0]["timestamp"]="<checked-dynamic>"
+  for k in ("latencyMs","toolDurationMs"):clean["cases"][i]["telemetryEvents"][0][k]="<checked-dynamic>"
+  cases.append({"caseId":x["caseId"],"inputSandbox":x["beforeDescriptor"]["sandbox"],"submittedSandbox":x["submittedDescriptor"].get("sandbox","ABSENT"),"gateCalls":len(x["gateCalls"]),"bodyCalls":len(x["bodyCalls"]),"stopReason":x["nativeResult"]["stopReason"],"fingerprint":x["capabilityFingerprint"]})
+ normalized.append(clean)
+ records.append({"run":name,"receiptSHA256":rsha,"executionElapsedNs":c["executionElapsedNs"],"cleanupElapsedNs":c["cleanupElapsedNs"],"stdoutSHA256":sha(folder/"stdout.txt"),"cases":cases})
+for x in normalized[1:]:eq(x,normalized[0])
+d=load(P/"runs/i1-01/stdout.txt")["cases"][1]["registeredDescriptors"][0]
+fingerprints={"observedNormalized":fp(d),"hypotheticalPreservedWORKSPACE":fp({**d,"sandbox":"WORKSPACE"}),"hypotheticalPreservedNONE":fp({**d,"sandbox":"NONE"})};assert len(set(fingerprints.values()))==3
+controls=load(D/"controls-01/results.json")
+life=[]
+for entry in controls["lifecycleControls"]:
+ c=entry.get("capture",entry.get("record",{}).get("capture"));assert c["joined"] is True and c["remainingProcessGroup"] is False
+ life.append({"test":entry["test"],"executionElapsedNs":c["executionElapsedNs"],"cleanupElapsedNs":c["cleanupElapsedNs"],"errors":c["errors"],"retainedBytes":c["retainedBytes"],"discardedBytes":c["discardedBytes"],"eof":c["eof"],"snapshotErrors":entry.get("record",{}).get("snapshotErrors",[])})
+caches=[]
+for base in (D/"private",P/"runs/i1-01"):
+ for f in base.rglob("*"):
+  if f.is_file() and (base==D/"private" or f.parent.name in {"cache","tmp","home","config","data"}):caches.append({"path":str(f),"bytes":f.stat().st_size})
+r={"independentStdlibAudit":True,"runs":records,"fullPayloadAgreementExcludingCheckedDynamicFields":True,"fingerprints":fingerprints,"validatorControlsCount":len(controls["validatorControls"]),"lifecycle":life,"privateCacheFiles":caches,"observedInvariant":"FAIL_METADATA_LOSS_AND_GATE_BYPASS","actualCaptureReceiptSource":"operator pins for packet attempts; independent hash of controlled I1 seal"}
+(D/"independent-results.json").write_text(json.dumps(r,indent=2)+"\n");print(json.dumps(r,indent=2))

@@ -1,0 +1,58 @@
+import pathlib,json,hashlib,re,shutil,subprocess,os,time,datetime,difflib
+B=pathlib.Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1'); P=B/'review-packet'; R=B/'review-r1'; NODE='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+LIMIT=2*1024*1024
+records=[]
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def run(name,argv,cwd,env):
+ start=time.time(); o=subprocess.run(argv,cwd=cwd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15)
+ assert len(o.stdout)<=LIMIT and len(o.stderr)<=LIMIT
+ (R/(name+'.stdout')).write_bytes(o.stdout);(R/(name+'.stderr')).write_bytes(o.stderr)
+ d=dict(name=name,argv=argv,cwd=str(cwd),environment=env,exit=o.returncode,seconds=round(time.time()-start,3),timeout_seconds=15,max_stdout_bytes=LIMIT,max_stderr_bytes=LIMIT,stdout_sha256=sha(R/(name+'.stdout')),stderr_sha256=sha(R/(name+'.stderr')))
+ records.append(d);(R/'commands.json').write_text(json.dumps(records,indent=2)+'\n');return o
+sources={}; originals=P/'native-raw/originals'
+def copy(relative,root,before=False):
+ if relative in sources and (root/relative).exists():return
+ source=P/'before'/relative if before and relative=='scripts/ci-bar.mjs' else P/'current'/relative
+ if not source.exists():source=originals/relative
+ text=source.read_text();sources[str(source)]=sha(source);target=root/relative; target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
+ for dep in re.findall(r"^\s*(?:import|export)\s[^'\"]*?from\s+['\"]([^'\"]+)['\"]",text,re.M):
+  if dep.startswith('.'):copy(os.path.normpath(str(pathlib.Path(relative).parent/dep)),root,before)
+
+def case(name,mode,flag=None,gate='coverage',before=False):
+ root=R/'probes'/name;root.mkdir(parents=True,exist_ok=True);copy('scripts/ci-bar.mjs',root,before)
+ (root/'package.json').write_text('{"type":"module"}\n');(root/'bin').mkdir(exist_ok=True)
+ producer='#!'+NODE+'\n'+'''import fs from 'node:fs';
+fs.writeFileSync('observed.json',JSON.stringify({flag:process.env.CVG_COVERAGE_PER_FILE,scope:process.env.CVG_TEST_SCOPE,marker:process.env.REVIEW_MARKER,argv:process.argv.slice(2)}));
+if(process.env.MODE==='fail')process.exit(7);
+if(process.env.MODE!=='write')process.exit(0);
+fs.mkdirSync('coverage',{recursive:true});fs.writeFileSync('coverage/coverage-summary.json',fs.readFileSync('input.json'));
+'''
+ (root/'bin/npm').write_text(producer);(root/'bin/npm').chmod(0o700)
+ metric=dict(total=100,covered=100,skipped=0,pct=100);entry={d:dict(metric) for d in ['statements','branches','functions','lines']}; summary={'total':entry,str(root/'packages/contracts/src/toy.ts'):entry}
+ (root/'input.json').write_text(json.dumps(summary))
+ if mode in ['stale','fail']:
+  (root/'coverage').mkdir(exist_ok=True);f=root/'coverage/coverage-summary.json';f.write_text(json.dumps(summary));os.utime(f,(946684800,946684800))
+ art=root/'artifacts';(art/'gates').mkdir(parents=True,exist_ok=True)
+ scope=dict(owner='harness',testScope='core',excludedTestRoots=['products/'])
+ (art/'ci-bar-state.json').write_text(json.dumps(dict(scope=scope,runId='synthetic-review',candidateId='a'*64,nodeVersion='22.23.2',npmVersion='synthetic',startedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),candidateFiles=[],gates=[])))
+ private=root/'private';private.mkdir(exist_ok=True)
+ env=dict(PATH=str(root/'bin')+':'+str(pathlib.Path(NODE).parent)+':/usr/bin:/bin',HOME=str(private/'home'),TMPDIR=str(private/'tmp'),TMP=str(private/'tmp'),TEMP=str(private/'tmp'),LANG='C.UTF-8',CI_ARTIFACT_DIR=str(art),CVG_TEST_SCOPE='all',REVIEW_MARKER='preserve-me',MODE='write' if mode=='fresh' else mode)
+ for k in ['XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME','XDG_RUNTIME_DIR','NPM_CONFIG_CACHE','NPM_CONFIG_PREFIX']:env[k]=str(private/k.lower())
+ for k,v in list(env.items()):
+  if str(private) in v:pathlib.Path(v).mkdir(parents=True,exist_ok=True)
+ for k in ['NPM_CONFIG_USERCONFIG','NPM_CONFIG_GLOBALCONFIG']:
+  f=private/k.lower();f.write_text('');env[k]=str(f)
+ if flag is not None:env['CVG_COVERAGE_PER_FILE']=flag
+ f=root/'coverage/coverage-summary.json';initial={'exists':f.exists(),'sha256':sha(f) if f.exists() else None,'mtime':f.stat().st_mtime if f.exists() else None}
+ result=run(name,[NODE,'scripts/ci-bar.mjs','gate',gate],root,env)
+ parsed=json.loads(result.stdout);snap=art/'gate-outputs'/gate/'coverage/coverage-summary.json'
+ observation=dict(name=name,mode=mode,flag=flag,gate=gate,before=before,entry=parsed,observed=json.loads((root/'observed.json').read_text()),initial=initial,source_after={'exists':f.exists(),'sha256':sha(f) if f.exists() else None,'mtime':f.stat().st_mtime if f.exists() else None},snapshot={'exists':snap.exists(),'sha256':sha(snap) if snap.exists() else None,'mtime':snap.stat().st_mtime if snap.exists() else None})
+ return observation
+out=[]
+for flag in [None,'0','garbage']:
+ out.append(case('fresh-'+str(flag),'fresh',flag));out.append(case('stale-'+str(flag),'stale',flag))
+out.append(case('baseline-stale','stale',before=True));out.append(case('missing','missing'));out.append(case('childfail-stale','fail','0'));out.append(case('format-env','fresh','garbage','format'))
+(R/'probe-results.json').write_text(json.dumps(out,indent=2)+'\n');(R/'source-inputs.json').write_text(json.dumps(sources,indent=2)+'\n')
+for x in out:print(x['name'],x['entry']['status'],x['entry']['exitCode'],x['entry']['outputFailures'],x['observed'])
+for file in ['scripts/ci-bar.mjs','scripts/phase10-certify.mjs']:
+ a=(P/'before'/file).read_text().splitlines(True);b=(P/'current'/file).read_text().splitlines(True);(R/(pathlib.Path(file).name+'.diff')).write_text(''.join(difflib.unified_diff(a,b,fromfile='before/'+file,tofile='current/'+file)))

@@ -1,0 +1,49 @@
+from pathlib import Path
+import os, shutil, json, re, hashlib, time
+P=Path('/tmp/cvg-pare100-exec-20261014-6az3hlay/coverage-defaults-r1/native-proof'); W=P.parent.parent/'worktree'; N=Path('/home/ricardo/.nvm/versions/node/v22.23.2')
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def write(p,s): p.parent.mkdir(parents=True,exist_ok=True); p.write_text(s)
+def dump(p,v): write(p,json.dumps(v,indent=2)+'\n')
+dump(P/'claim.json', {'task':'P100-050/F-COV-CI-001','role':'Builder only; no acceptance','writes':str(P),'W':'readonly','lead_claim':'docs/08_runtime/agent_coordination.md F-COV-CI-001','bounds':{'case_seconds':90,'output_bytes':2097152,'TERM_KILL_join_seconds':5},'quality_bar':['preimage default/flag0 bad erroneously passes','READY current default/flag0 bad fails 100%','READY aggregatebad child succeeds, enclosing gate refuses aggregate','good coverage subgate passes, whole certify NO_GO'],'descendants':'no agent descendants; bounded CLI process descendants only','status':'PREPARING_RED_PENDING_READY'})
+# Sentinels are hashes only; no application code is copied or executed.
+inputs=[]
+for base in ['packages','apps','legacy','docs/02_spec']:
+ for f in (W/base).rglob('*'):
+  if f.is_file() and not f.is_symlink() and not any(x in f.parts for x in ['node_modules','dist','.gauntlet']):
+   if base!='docs/02_spec' or f.name.startswith(('0217','0220')): inputs.append(f)
+inputs += [W/x for x in ['vitest.config.mts','package.json','package-lock.json','scripts/coverage-thresholds.mjs','scripts/critical-coverage.mjs','scripts/lib/coverage-gate.mjs','scripts/critical-coverage-manifest.json']]
+dump(P/'W-sentinels-before.json',[{'path':str(f.relative_to(W)),'sha256':sha(f),'size':f.stat().st_size} for f in sorted(set(inputs))])
+T=P/'toolchain'; (T/'bin').mkdir(parents=True,exist_ok=True)
+shutil.copy2(N/'bin/node',T/'bin/node')
+shutil.copytree(N/'lib/node_modules/npm',T/'npm',symlinks=True)
+for name,js in [('npm','npm-cli.js'),('npx-real','npx-cli.js')]:
+ write(T/'bin'/name,'#!/bin/sh\nexec "'+str(T/'bin/node')+'" "'+str(T/'npm/bin'/js)+'" "$@"\n'); (T/'bin'/name).chmod(0o755)
+shutil.copytree(W/'node_modules',T/'node_modules',symlinks=True)
+links=[]
+for base in [T/'npm',T/'node_modules']:
+ for d,ds,fs in os.walk(base,followlinks=False):
+  for name in ds+fs:
+   f=Path(d)/name
+   if f.is_symlink():
+    target=f.resolve(); confined=target.is_relative_to(P)
+    links.append({'path':str(f.relative_to(P)),'target':os.readlink(f),'confined':confined,'removed':not confined})
+    if not confined: f.unlink()
+dump(P/'toolchain-links.json',links)
+files=[f for f in T.rglob('*') if f.is_file() and not f.is_symlink()]
+dump(P/'toolchain-manifest.json',[{'path':str(f.relative_to(P)),'sha256':sha(f),'size':f.stat().st_size} for f in sorted(files)])
+# dependency closure of immutable script imports only
+S=P/'originals'; queue=['scripts/ci-bar.mjs','scripts/phase10-certify.mjs','scripts/critical-coverage.mjs','scripts/coverage-thresholds.mjs']; seen=set()
+while queue:
+ rel=queue.pop()
+ if rel in seen: continue
+ seen.add(rel); src=W/rel; dest=S/rel; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,dest)
+ for spec in re.findall(r"(?:from\s*|import\s*)['\"]([^'\"]+)['\"]",src.read_text()):
+  if spec.startswith('.'):
+   dep=(src.parent/spec).resolve(); assert dep.is_relative_to(W)
+   queue.append(str(dep.relative_to(W)))
+for rel in ['vitest.config.mts','package.json','package-lock.json','scripts/critical-coverage-manifest.json']:
+ dest=S/rel; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(W/rel,dest)
+for name in ['ci-bar.mjs','phase10-certify.mjs']:
+ dest=P/'preimages/scripts'/name; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(P.parent/'before/scripts'/name,dest)
+dump(P/'source-copies.json',[{'path':str(f.relative_to(P)),'Wpath':str(f.relative_to(S)),'sha256':sha(f)} for f in sorted(S.rglob('*')) if f.is_file()])
+print(json.dumps({'toolchain_files':len(files),'import_closure':sorted(seen),'sentinels':len(inputs),'toolchain_manifest_sha256':sha(P/'toolchain-manifest.json')}))

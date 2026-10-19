@@ -1,0 +1,102 @@
+from pathlib import Path
+import json, hashlib, subprocess, re
+
+lead=Path(__file__).parent
+n=lead.parent
+b=n.parent
+w=b.parent/'worktree'
+root=Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+a=n/'published-contract-draft-r4'
+review=json.loads((lead/'critic-verification.json').read_text())
+assert review['decision']=='APPROVE_FOR_HUMAN_TECHNICAL_REVIEW' and review['allOutputsAuthenticated']
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+main='0226_pare100_published_complete_context.md'
+plan='0226_pare100_published_complete_acceptance.md'
+risks='0226_pare100_published_complete_decisions.md'
+sources='0226_pare100_published_complete_sources.json'
+names=[main,plan,risks,sources]
+for base in [root,w]:
+    for name in names:assert not (base/'docs/02_spec'/name).exists()
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+formatter=w/'node_modules/prettier/bin/prettier.cjs'
+commands=[]
+def formatted(text, name):
+    argv=[node,str(formatter),'--stdin-filepath',name]
+    p=subprocess.run(argv,input=text.encode(),capture_output=True,cwd=w)
+    commands.append({'argv':argv,'exit':p.returncode,'inputSHA256':sha(text.encode()),'outputSHA256':sha(p.stdout),'stderr':p.stderr.decode()})
+    assert p.returncode==0,p.stderr
+    return p.stdout
+mapping={'PROPOSED-SPEC.md':('SPEC0226',main),'ACCEPTANCE-PLAN.md':('plano de aceitação',plan),'DECISIONS-AND-RISKS.md':('decisões e riscos',risks),'source-manifest.json':('fontes vinculadas',sources)}
+def linked(text):
+    for old,(label,target) in mapping.items():
+        text=text.replace('['+old+']('+old+')','['+label+']('+target+')')
+    return text
+original={name:(a/name).read_text() for name in ['PROPOSED-SPEC.md','ACCEPTANCE-PLAN.md','DECISIONS-AND-RISKS.md']}
+pt=linked(original['ACCEPTANCE-PLAN.md'])
+pt=pt.replace('# Plano de aceitação proposto — todos os testes NOT_RUN','# SPEC0226 — plano de aceitação: 80 cenários NOT_RUN',1)
+rt=linked(original['DECISIONS-AND-RISKS.md'])
+old_title=rt.splitlines()[0]
+rt=rt.replace(old_title,'# SPEC0226 — decisões, dependências e riscos',1)
+old_row=next(line for line in rt.splitlines() if line.startswith('| B02 |'))
+parts=old_row.split('|')
+assert len(parts)==7,len(parts)
+parts[3]=' Candidato canônico preparado sob claim do responsável pela integração; usuário decide o candidato concreto revisado. '
+parts[4]=' Sem código ou migration/DDL antes dos gates aplicáveis; a canonicalização documental não concede BUILD. '
+parts[5]=' CANDIDATO_PREPARADO; aprovação humana NOT_GRANTED. '
+new_row='|'.join(parts)
+rt=rt.replace(old_row,new_row,1)
+files={plan:formatted(pt,plan),risks:formatted(rt,risks),sources:(a/'source-manifest.json').read_bytes()}
+supports=[{'path':name,'bytes':len(files[name]),'sha256':sha(files[name])} for name in [plan,risks,sources]]
+source=original['PROPOSED-SPEC.md']
+heading='## 1. Resultado, limites e fatos atuais'
+assert source.count(heading)==1
+intro,body=source.split(heading,1)
+preserved_intro=intro[intro.index('As decisões são normativas'):]
+preserved_intro=linked(preserved_intro)
+header='''# SPEC0226 — contexto completo no consumidor publicado sintético
+
+Data: 16/10/2026. Task: `PUBLISHED-COMPLETE-CONSUMER-226`.
+Estado: `PROPOSED_FOR_HUMAN_REVIEW`; aprovação humana T3 `NOT_GRANTED`;
+BUILD `NOT_AUTHORIZED`; 80 cenários futuros **NOT_RUN**, com dependências
+`DEPENDENCY_PENDING`. Este é o candidato canônico para análise humana,
+sem autorização de implementação, execução, migration ou release.
+
+O delta propõe modo confiável exclusivamente de teste: modelo de guarda →
+uma ferramenta sintética nativa → modelo de resposta que recebe o resultado
+completo da ferramenta, pela rota publicada durável. O limite passa a
+3 passos, 2 chamadas de modelo e 1 ferramenta, com 9024 unidades sintéticas
+e custo sintético0. Legado continua default. A SPEC0225/0030 permanece
+separada e pendente; aplicar0031 e executar a rota PG exige cumprir as
+dependências prescritas abaixo. Não há dado, provider ou agenda real.
+
+A revisão técnica independente aprovou a proposta para análise humana,
+sem aprovação de BUILD/runtime/PG/global/consumidor/default/release.
+Proposta técnica original SHA-256: `d790f5da29eedec0090ff24e0b51d2233a732a20b60650eec291162c3c07e7a8`.
+Selo do parecer técnico: `a5cd1c05d658d555a0996b7213167c9743ca58fb50a05052f100fa9e8891f389`.
+A canonicalização altera cabeçalho, links, formatação e estágio documental
+B02; preserva os valores, literais, transições e 80 oráculos técnicos.
+
+Os três suportes abaixo integram o pacote vinculado por este documento.
+Mudança material em seu contrato requer nova revisão antes do BUILD.
+
+| Suporte | SHA-256 dos bytes exatos |
+| --- | --- |
+'''
+for e in supports:
+    header+='| ['+e['path']+']('+e['path']+') | `'+e['sha256']+'` |\n'
+header+='\n'+preserved_intro
+mt=header+heading+body
+files[main]=formatted(mt,main)
+# Exact normalized body equality: no normative main-body edits.
+main_after=files[main].decode().split(heading,1)[1]
+assert formatted(heading+body,'body.md')==formatted(heading+main_after,'body.md')
+inline=lambda text:re.findall(r'(?<!`)`([^`\n]+)`(?!`)',text)
+assert inline(original['ACCEPTANCE-PLAN.md'])==inline(files[plan].decode())
+assert inline(original['DECISIONS-AND-RISKS.md'])==inline(files[risks].decode())
+ids=lambda text:re.findall(r'^\|\s*((?:PA|R|C|Q|W|U)\d{2})\s+NOT_RUN\b',text,re.M)
+assert ids(original['ACCEPTANCE-PLAN.md'])==ids(files[plan].decode()) and len(ids(files[plan].decode()))==80
+for base in [root,w]:
+    for name,raw in files.items():(base/'docs/02_spec'/name).write_bytes(raw)
+record={'stage':'PREPARED_NOT_SUBMITTED_HUMAN_T3','files':[{'path':'docs/02_spec/'+name,'bytes':len(raw),'sha256':sha(raw)} for name,raw in files.items()],'specSHA256':sha(files[main]),'sourceProposalSHA256':sha(source.encode()),'reviewSealSHA256':review['sealSHA256'],'supportsBoundInMain':supports,'editorialChanges':['Canonical title/header/status, same unapproved BUILD state','Seven local support links/display labels rebound','Prettier markdown formatting','B02 documents canonical candidate prepared and human gate still NOT_GRANTED'],'normativeVerification':{'formattedMainBodyExact':True,'planInlineCodeIdentical':True,'riskInlineCodeIdentical':True,'futureIDsSameOrder':80,'sourceManifestByteIdentical':sha(files[sources])==sha((a/'source-manifest.json').read_bytes())},'riskB02Delta':{'before':old_row,'after':new_row},'formatterCommands':commands,'futureExecution':'80NOT_RUN','225':'PENDING_NOT_REQUESTED_AGAIN','humanApproval':'NOT_GRANTED','BUILD':'NOT_AUTHORIZED'}
+(lead/'canonical-candidate.json').write_text(json.dumps(record,indent=2,ensure_ascii=False)+'\n')
+print(json.dumps({'specSHA256':record['specSHA256'],'canonicalFiles':len(files),'supports':len(supports),'normativeVerification':record['normativeVerification']}))

@@ -1,0 +1,118 @@
+from pathlib import Path
+import ast,json,subprocess,hashlib,tomllib,datetime
+R=Path.cwd();E=R/'docs/04_audit/evidence/CODEX100-EXEC-20261017';P=E/'g01/sdk-open-contracts';U=Path('/tmp/cvg-rea-codex-20261017/upstream');PIN='8d9f6466ff0294785d56f55b1fe363d132fe4133'
+def put(name,d):(P/name).write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
+def sh(b):return hashlib.sha256(b).hexdigest()
+files=['sdk/python/src/openai_codex/'+f for f in ['api.py','client.py','async_client.py','_message_router.py','_goal.py','_login.py','_run.py','_inputs.py','_approval_mode.py','_sandbox.py','_initialize_metadata.py','_runtime_requirements.py','_version.py','models.py','retry.py','errors.py','generated/v2_all.py','generated/notification_registry.py']]+['sdk/python/pyproject.toml','sdk/python/uv.lock','sdk/python/_runtime_setup.py','sdk/python-runtime/hatch_build.py','sdk/python-runtime/pyproject.toml','sdk/python-runtime/src/codex_cli_bin/__init__.py']
+(P/'inputs').mkdir(exist_ok=True);sources=[];texts={};trees={};nodes={};imports={}
+for i,f in enumerate(files,1):
+ b=(U/f).read_bytes();gitb=subprocess.run(['git','-C',str(U),'show',PIN+':'+f],check=True,capture_output=True).stdout;assert b==gitb,f
+ oid=subprocess.run(['git','-C',str(U),'rev-parse',PIN+':'+f],check=True,capture_output=True,text=True).stdout.strip();dest='inputs/P'+f'{i:02d}.source.txt';(P/dest).write_bytes(b);sources.append({'id':f'P{i:02d}','path':f,'git_blob':oid,'bytes':len(b),'sha256':sh(b),'archive':dest});texts[f]=b.decode()
+ if f.endswith('.py'):
+  tree=ast.parse(texts[f]);trees[f]=tree;im={}
+  for n in tree.body:
+   if isinstance(n,ast.ImportFrom):
+    for x in n.names:im[x.asname or x.name]={'module':n.module,'level':n.level,'name':x.name}
+  imports[f]=im
+  def walk(body,scope=''):
+   for n in body:
+    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)):
+     name=scope+n.name;nodes[(f,name)]=n;walk(n.body,name+'.')
+  walk(tree.body)
+sourceby={x['path']:x for x in sources};spans={}
+def span(f,n):
+ key=f+':'+str(n.lineno)+'-'+str(n.end_lineno);text='\n'.join(texts[f].splitlines()[n.lineno-1:n.end_lineno]);spans[key]={'path':f,'archive':sourceby[f]['archive'],'git_blob':sourceby[f]['git_blob'],'source_sha256':sourceby[f]['sha256'],'start_line':n.lineno,'end_line':n.end_lineno,'excerpt':text,'excerpt_sha256':sh(text.encode())};return key
+def fn(short,name):f='sdk/python/src/openai_codex/'+short+'.py';return span(f,nodes[(f,name)])
+def refpath(f,name):return span(f,nodes[(f,name)])
+old=json.loads((E/'g01/sdk-language-contracts/python/inventory.json').read_text());rpc=[]
+for index,x in enumerate(old['rpc'],1):
+ f=x['source']['path'];candidates=[v for v in ast.walk(trees[f]) if isinstance(v,ast.Call) and v.lineno==x['source']['line_start'] and ast.unparse(v.func)==x['callee']];assert len(candidates)==1,(f,x['source']['line_start']);call=candidates[0]
+ selector=x['literal_method'];kw={k.arg:ast.unparse(k.value) for k in call.keywords};rpc.append({'id':f'PY-RPC-{index:02d}','historical_from':x['from'],'callee':x['callee'],'selector_kind':x['selector_kind'],'literal_method':selector,'selector_expression':x['selector']['text'],'argument_expressions':[ast.unparse(a) for a in call.args],'keyword_expressions':kw,'source':span(f,call),'response_model':x.get('response_model'),'common_sync_transport':[fn('client','CodexClient.request'),fn('client','CodexClient._request_raw'),fn('client','CodexClient._write_message')],'response_path':[fn('client','CodexClient._reader_loop'),fn('_message_router','MessageRouter.route_response'),fn('errors','map_jsonrpc_error')],'dynamic_scope':'Arbitrarycaller-suppliedmethod/modelandparams,notafiniteimplementedmethodclaim' if selector is None else 'Literalcallsite;params/response/runtimeguardsareseparate','runtime_status':'NOT_RUN','receipt':None})
+# Preserve the historical site census while separating request, notify, and generic forwarding.
+ids={x['id'] for x in json.loads((R/'docs/03_build/tracking/codex100_catalog_v1.json').read_text())['requirements']}
+for item in rpc:
+    notify=item['callee']=='self.notify'
+    item['dispatch_kind']='CLIENT_NOTIFICATION_NO_RESPONSE' if notify else 'REQUEST_OR_REQUEST_FORWARDING'
+    if notify:
+        item['common_sync_transport']=[fn('client','CodexClient.notify'),fn('client','CodexClient._write_message')]
+        item['response_path']=[]
+    if item['literal_method']:
+        item['catalog_requirement_id']=('CDX100-RPC-ClientNotification-' if notify else 'CDX100-RPC-ClientRequest-')+item['literal_method'].replace('/','.')
+        assert item['catalog_requirement_id'] in ids,item['literal_method']
+    else:item['catalog_requirement_id']=None
+    if not notify:
+        model=item['keyword_expressions'].get('response_model')
+        imported=imports.get('sdk/python/src/openai_codex/client.py',{}).get(model or '')
+        if imported and imported['level']==1 and imported['module'] in ['models','generated.v2_all']:
+            model_file='sdk/python/src/openai_codex/'+imported['module'].replace('.','/')+'.py'
+            model_node=nodes[(model_file,imported['name'])]
+            item['response_model_binding']={'kind':'LOCAL_DECLARED_CLASS','module':imported['module'],'name':imported['name'],'source':span(model_file,model_node),'runtime_validation':'PYDANTIC_NOT_EXECUTED'}
+        else:item['response_model_binding']={'kind':'CALLER_SUPPLIED_MODEL' if model else 'NO_MODEL_AT_INTERNAL_FORWARDING_SITE','expression':model,'runtime_validation':'NOT_RUN'}
+    else:item['response_model_binding']=None
+
+# Resolve only explicit self aliases/imported local helpers; no claim of Python runtime dispatch/MRO resolution.
+alias={'api':{'Codex':('client','CodexClient'),'AsyncCodex':('async_client','AsyncCodexClient'),'Thread':('client','CodexClient'),'AsyncThread':('async_client','AsyncCodexClient'),'TurnHandle':('client','CodexClient'),'AsyncTurnHandle':('async_client','AsyncCodexClient')},'async_client':{'AsyncCodexClient':('client','CodexClient')}}
+edges=[]
+for (f,qual),node in nodes.items():
+ if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) or '/generated/' in f:continue
+ mod=Path(f).stem;cls=qual.split('.')[0] if '.' in qual else None
+ # Nested definition calls belong to their own owner, not an enclosing method.
+ class Calls(ast.NodeVisitor):
+  def visit_FunctionDef(self,n):
+   if n is node:self.generic_visit(n)
+  visit_AsyncFunctionDef=visit_FunctionDef
+  def visit_Lambda(self,n):self.generic_visit(n)
+  def visit_Call(self,c):
+   callee=ast.unparse(c.func);target=None;kind=None
+   if isinstance(c.func,ast.Attribute) and isinstance(c.func.value,ast.Name) and c.func.value.id=='self' and cls:
+    if (f,cls+'.'+c.func.attr) in nodes:target=(f,cls+'.'+c.func.attr);kind='SAME_CLASS_SOURCE_METHOD'
+   if isinstance(c.func,ast.Attribute) and isinstance(c.func.value,ast.Attribute) and isinstance(c.func.value.value,ast.Name) and c.func.value.value.id=='self':
+    attr=c.func.value.attr
+    if attr in ['_client','_sync'] and cls in alias.get(mod,{}):
+     tm,tc=alias[mod][cls];tf='sdk/python/src/openai_codex/'+tm+'.py';candidate=(tf,tc+'.'+c.func.attr)
+     if candidate in nodes:target=candidate;kind='EXPLICIT_CONSTRUCTOR_OR_FIELD_ALIAS'
+    if mod=='client' and cls=='CodexClient' and attr=='_router':
+     candidate=('sdk/python/src/openai_codex/_message_router.py','MessageRouter.'+c.func.attr)
+     if candidate in nodes:target=candidate;kind='EXPLICIT_CONSTRUCTOR_ROUTER'
+   if isinstance(c.func,ast.Name):
+    candidate=(f,c.func.id)
+    if candidate in nodes and isinstance(nodes[candidate],(ast.FunctionDef,ast.AsyncFunctionDef)):target=candidate;kind='LOCAL_FUNCTION'
+    item=imports[f].get(c.func.id)
+    if item and item['level']==1 and item['module'] and '.' not in item['module']:
+     tf='sdk/python/src/openai_codex/'+item['module']+'.py';candidate=(tf,item['name'])
+     if candidate in nodes and isinstance(nodes[candidate],(ast.FunctionDef,ast.AsyncFunctionDef)):target=candidate;kind='RELATIVE_IMPORT_HELPER'
+   if target:
+    edges.append({'from':f+'::'+qual,'callee':callee,'to':target[0]+'::'+target[1],'resolution':kind,'source':span(f,c),'target_source':span(target[0],nodes[target]),'scope':'STATIC_SOURCE_BINDING_NOT_RUNTIME_CALLGRAPH'})
+   self.generic_visit(c)
+ Calls().visit(node)
+# Selected generated declarations for request/response and lifecycle shape; do not infer Pydantic behavior.
+genfile='sdk/python/src/openai_codex/generated/v2_all.py';modelnames=set()
+clientfile='sdk/python/src/openai_codex/client.py'
+for x in rpc:
+ name=x['keyword_expressions'].get('response_model');entry=imports.get(clientfile,{}).get(name or '')
+ if entry and entry['module']=='generated.v2_all':modelnames.add(entry['name'])
+for name in ['ThreadStartParams','ThreadResumeParams','ThreadListParams','ThreadForkParams','TurnStartParams','GetAccountParams','LoginAccountParams','TurnToolOutput','Turn','Thread','ThreadItem','AgentMessageThreadItem','AgentMessageDeltaNotification','TurnCompletedNotification']:
+ modelnames.add(name)
+models=[]
+for name in sorted(modelnames):
+ node=nodes.get((genfile,name));assert isinstance(node,ast.ClassDef),name
+ fields=[];config=None
+ for x in node.body:
+  if isinstance(x,ast.AnnAssign) and isinstance(x.target,ast.Name):
+   aliases=[]
+   for v in ast.walk(x.annotation):
+    if isinstance(v,ast.Call) and ast.unparse(v.func)=='Field':aliases.extend(ast.unparse(k.value) for k in v.keywords if k.arg=='alias')
+   fields.append({'name':x.target.id,'annotation':ast.unparse(x.annotation),'aliases':aliases,'default_expression':ast.unparse(x.value) if x.value is not None else None,'required_syntax':x.value is None,'source':span(genfile,x)})
+  if isinstance(x,ast.Assign) and any(isinstance(v,ast.Name) and v.id=='model_config' for v in x.targets):config=ast.unparse(x.value)
+ models.append({'name':name,'bases':[ast.unparse(x) for x in node.bases],'config_expression':config,'fields':fields,'source':span(genfile,node),'semantic_status':'SOURCE_DECLARATION_ONLY_PYDANTIC_RUNTIME_OPEN'})
+project=tomllib.loads(texts['sdk/python/pyproject.toml']);lock=tomllib.loads(texts['sdk/python/uv.lock']);packages={x['name']:x for x in lock['package']};versions={'sdk_source_project':project['project']['version'],'runtime_source_project':tomllib.loads(texts['sdk/python-runtime/pyproject.toml'])['project']['version'],'sdk_declared_dependencies':project['project']['dependencies'],'minimum_runtime_literal':next(ast.literal_eval(x.value) for x in trees['sdk/python/src/openai_codex/_runtime_requirements.py'].body if isinstance(x,ast.Assign) and any(isinstance(z,ast.Name) and z.id=='MINIMUM_RUNTIME_VERSION' for z in x.targets)),'lock_resolutions':{name:{'version':packages[name]['version'],'source':packages[name].get('source'),'distribution_metadata_is_not_fetched_artifact_authentication':True} for name in ['openai-codex-cli-bin','pydantic','pydantic-core','packaging'] if name in packages},'reference_pin':PIN,'identities_are_not_equivalent':True,'actual_wheel_or_runtime_bytes_authenticated':False}
+put('source-inputs.json',{'kind':'PINNED_PRIMARY_SOURCE_SNAPSHOTS_NO_TARGET_EXECUTION','pin':PIN,'inputs':sources,'count':len(sources),'runtime_imports':0})
+put('python-rpc-bindings.json',{'kind':'SOURCE_TYPED_RPC_TRANSPORT_JOIN','historical_rpc_records':len(old['rpc']),'records':rpc,'literal_calls':sum(x['literal_method'] is not None for x in rpc),'literal_requests':sum(x['literal_method'] is not None and x['dispatch_kind']=='REQUEST_OR_REQUEST_FORWARDING' for x in rpc),'literal_notifications':sum(x['dispatch_kind']=='CLIENT_NOTIFICATION_NO_RESPONSE' for x in rpc),'dynamic_sites':sum(x['literal_method'] is None for x in rpc),'common_request_signature':fn('client','CodexClient.request'),'notify_signature':fn('client','CodexClient.notify'),'initialize_notification_source':fn('client','CodexClient.initialize'),'runtime_tests':'NOT_RUN','functional_receipts':0})
+put('python-call-edges.json',{'kind':'RESTRICTED_EXPLICIT_ALIAS_SOURCE_EDGES_NOT_COMPLETE_RUNTIME_CALLGRAPH','edges':edges,'count':len(edges),'rules':['Onlyexplicitself/localhelper/constructororannotatedfield aliases','NoMRO,inheritedPydantic,callback/dynamicreceiver/computedmethoddispatchclaimed','Nesteddefinitioncallsnotoverattributedtoparent;lambda remainsdeferredinoriginalRPCrow'],'runtime_tests':'NOT_RUN'})
+put('generated-boundaries.json',{'kind':'SELECTED_GENERATED_MODEL_AND_SERIALIZER_SOURCE_CONTRACT','models':models,'selected_count':len(models),'serializer_source':fn('client','_params_dict'),'serializer_flags':{'by_alias':True,'exclude_none':True,'mode':'json'},'dict_input':'Passesthesameobjectfrom_params_dict;higherRPCmethodmaycopy/overwritefields;notclaimedidenticaltoPydanticmodelserialization','response_parser':fn('client','CodexClient.request'),'notification_parser':fn('client','CodexClient._coerce_notification'),'external_runtime':'ActualPydanticvalidation/coercion/default/extra/inheritanceandPythonserializerbehaviorremainNOT_RUN','versions':versions,'functional_receipts':0})
+put('versions-and-packaging.json',{'kind':'DISTINCT_SDK_RUNTIME_AND_DISTRIBUTION_SOURCE_IDENTITIES','versions':versions,'runtime_guard_sources':[fn('client','CodexClient.request'),fn('_runtime_requirements','require_runtime_version'),fn('_runtime_requirements','CheckoutCapabilities.fields')],'binary_selection_sources':[fn('client','resolve_codex_bin'),fn('client','_installed_codex_path'),refpath('sdk/python-runtime/src/codex_cli_bin/__init__.py','bundled_package_dir'),refpath('sdk/python-runtime/src/codex_cli_bin/__init__.py','bundled_codex_path')],'setup_sources':[refpath('sdk/python/_runtime_setup.py',x) for x in ['pinned_runtime_version','ensure_runtime_package_installed','platform_asset_name','_download_release_archive','_stage_runtime_package','_install_runtime_package']],'wheel_hook':refpath('sdk/python-runtime/hatch_build.py','RuntimeBuildHook.initialize'),'platform_variants':['darwin-arm64/aarch64','darwin-x86_64/amd64','linux-arm64/aarch64-musl','linux-x86_64/amd64-musl','windows-arm64/aarch64-msvc','windows-x86_64/amd64-msvc','unsupported-system-or-machine-error'],'critical_compatibility_boundary':'TruthytruthfulCVGinitializemetadataisnotpermittedtomasqueradeasofficialCodexversiontosatisfyguard. Suppliednewfieldsandruntime0.0.0 requirecheckoutCLIcapabilityschema;customlaunchwithunversionedruntimecannotverifyfields. FutureSDKinteroperabilityprofilemustproveversion/capabilitycontract,notbypassguard.','external_artifacts':'Actualwheel/CLI/package/platform/proxybitsandbuildreproducibilityunqualified. ExistingG02CLIpinproofdoesnotauthenticateSDKwheel/runtime0.153.4.','runtime_tests':'NOT_RUN','functional_receipts':0})
+# Store callable source map for the semantic contract author; spans reused instead of copying every body.
+extra_refs=[('api','Codex.__init__'),('api','AsyncCodex._ensure_initialized'),('api','Thread.turn'),('api','TurnHandle.stream'),('api','TurnHandle.run'),('api','AsyncTurnHandle.stream'),('async_client','AsyncCodexClient._call_sync'),('async_client','AsyncCodexClient._start_turn'),('client','CodexClient.start'),('client','CodexClient.close'),('client','CodexClient.initialize'),('client','CodexClient._start_turn'),('client','CodexClient._thread_start_lock'),('client','CodexClient._start_goal_operation'),('client','CodexClient._default_approval_handler'),('client','CodexClient._handle_server_request'),('_message_router','MessageRouter.pending_turn'),('_message_router','MessageRouter.prepare_turn'),('_message_router','MessageRouter.subscribe_turn'),('_message_router','MessageRouter.route_notification'),('_message_router','MessageRouter.fail_all'),('_goal','_GoalStreamCursor.process'),('_goal','_GoalNotificationStream.close'),('_goal','_AsyncGoalNotificationStream.aclose'),('_run','_collect_turn_result'),('_run','_collect_async_turn_result'),('_run','_final_assistant_response_from_items'),('_login','start_chatgpt_login'),('_login','ChatgptLoginHandle.wait'),('_login','ChatgptLoginHandle.cancel'),('client','CodexClient.account_login_start'),('client','CodexClient.wait_for_login_completed'),('retry','retry_on_overload'),('errors','is_retryable_error'),('errors','map_jsonrpc_error'),('_inputs','_to_wire_turn_input')]
+put('selected-source-functions.json',{'functions':[{'module':mod,'name':name,'source':fn(mod,name)} for mod,name in extra_refs],'not_runtime_acceptance':True})
+put('source-spans.json',{'kind':'EXACT_INCLUSIVE_UTF8_SOURCE_EXCERPTS','spans':list(spans.values()),'count':len(spans)})
+print(json.dumps({'sources':len(sources),'RPC':len(rpc),'literal':sum(x['literal_method'] is not None for x in rpc),'dynamic':sum(x['literal_method'] is None for x in rpc),'explicit_source_edges':len(edges),'selected_generated_models':len(models),'spans':len(spans),'version_boundaries':versions,'runtime_executed':0}))

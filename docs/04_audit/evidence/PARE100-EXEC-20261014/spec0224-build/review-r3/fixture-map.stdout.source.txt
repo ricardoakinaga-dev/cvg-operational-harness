@@ -1,0 +1,114 @@
+24:    23   ToolDefinition,
+25:    24   ToolRegistry,
+26:    25   ToolResult
+42:    41     executionId: 'exec_phase3_fixture',
+56:    55     budget: {
+59:    58       maxToolCalls: 4,
+82:    81     tools: [PHASE3_TOOL_AVAILABILITY, PHASE3_TOOL_RESERVE],
+88:    87 export interface Phase3ToolObserver {
+89:    88   (event: { toolId: string; operationKey: string; input: unknown }): void
+92:    91 export function createPhase3ToolRegistry(options: {
+95:    94   readonly observe?: Phase3ToolObserver
+96:    95 }): ToolRegistry {
+97:    96   const availabilityTool: ToolDefinition = {
+107:   106     execute: async (input, context): Promise<ToolResult> => {
+109:   108         toolId: availabilityTool.id,
+122:   121   const reserveTool: ToolDefinition = {
+132:   131     execute: async (input, context): Promise<ToolResult> => {
+134:   133         toolId: reserveTool.id,
+147:   146   const tools = [availabilityTool, reserveTool]
+149:   148     list: () => tools,
+150:   149     resolve: (toolId, version) =>
+151:   150       tools.find(
+152:   151         (tool) =>
+153:   152           tool.id === toolId &&
+154:   153           (version === undefined || tool.version === version)
+287:   286     private readonly deniedTools: readonly string[] = [],
+288:   287     private readonly handoffTools: readonly string[] = [],
+289:   288     private readonly approvalTools: readonly string[] = []
+294:   293     if (this.deniedTools.includes(request.tool.id)) {
+297:   296         reason: `Policy denies ${request.tool.id}.`,
+301:   300     if (this.handoffTools.includes(request.tool.id)) {
+304:   303         reason: `Policy requires a human for ${request.tool.id}.`,
+308:   307     if (this.approvalTools.includes(request.tool.id)) {
+311:   310         reason: `Policy requires approval for ${request.tool.id}.`,
+443:     8   ToolDescriptor
+454:    19   type ToolCallState,
+455:    20   type ToolOutcome,
+463:    28  * approval, guards, pause, cancellation, the log and the effect ledger live in
+473:    38   | 'tool/pre-execute'
+475:    40 /** A fresh turn: identity, budget view and the linked cancel signal. */
+479:    44   budget: TurnBudget,
+486:    51     budget,
+490:    55       tool: null,
+495:    60       toolDurationMs: 0
+573:   138 /** Races an operation against the turn budget and the cancel signal (I8). */
+586:   151     return await Promise.race([turn.budget.withDeadline(operation), cancelled])
+614:   179       turn.budget.withDeadline(() => running),
+625:   190   call: ToolCallState
+653:   218   call: ToolCallState
+663:   228 export type ToolPipelineResult =
+682:   247       readonly outcome: ToolOutcome
+686:   251 export interface ToolPipelineHooks {
+689:   254    * effect; the iterative loop persists its checkpoint here.
+692:   257     call: ToolCallState
+697:   262  * log `tool/call` → `tool/pre-execute` → guards → cancellation → hook →
+698:   263  * `tool/execute` around the body → `tool/post-execute` → log `tool/result`.
+700:   265 export async function runToolCall(
+702:   267   call: ToolCallState,
+703:   268   hooks: ToolPipelineHooks = {}
+704:   269 ): Promise<ToolPipelineResult> {
+705:   270   const { turn, tool, invocation } = call
+709:   274     type: 'tool/call',
+711:   276     toolId: tool.id,
+720:   285   ): Promise<ToolPipelineResult> => {
+722:   287       type: 'tool/result',
+724:   289       toolId: tool.id,
+734:   299   const gate = await runGate(host, 'tool/pre-execute', call)
+750:   315       type: 'tool/result',
+752:   317       toolId: tool.id,
+765:   330     type: 'tool/result',
+767:   332     toolId: tool.id,
+776:   341  * Derives the containment a tool needs from its descriptor (SPEC 0195 §2/§5).
+777:   342  * EXTERNAL effects require an EGRESS gate; WRITE effects require WORKSPACE;
+778:   343  * READ effects require at least IN_PROCESS. A mode-`NONE` capability is pure
+784:   349  * legacy side-effecting tools keep running until they opt in.
+786:   351 export function requiredSandboxMode(descriptor: ToolDescriptor): SandboxMode {
+794:   359  * to in-process execution. Pure (`NONE`) tools skip the gate entirely.
+798:   363   call: ToolCallState
+800:   365   const requiredMode = requiredSandboxMode(call.tool)
+805:   370       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+814:   379       `Tool "${call.tool.id}" requires sandbox mode ${requiredMode} but no sandbox gate is configured.`
+819:   384       descriptor: call.tool,
+837:   402         `Sandbox denied tool "${call.tool.id}": ${outcome.reason}.`
+843:   408         `Sandbox mode ${requiredMode} unavailable for tool "${call.tool.id}": ${outcome.reason}.`
+871:   436         `Sandbox gate returned an invalid handle for tool "${call.tool.id}".`
+891:   456       `Sandbox gate failed for tool "${call.tool.id}": ${errorMessage(error)}.`
+898:   463   call: ToolCallState
+899:   464 ): Promise<ToolOutcome> {
+904:   469     toolId: call.tool.id,
+908:   473   const terminal = async (): Promise<ToolOutcome> => {
+909:   474     if (turn.budget.remainingMs() <= 0) {
+914:   479           'Duration budget exhausted before tool execution.'
+919:   484     // a pause or a cancellation still prevents the effect (F01/F02).
+923:   488       await host.get('effects').started(ref)
+935:   500     const toolController = new AbortController()
+940:   505         call.tool.execute(call.invocation.input, {
+947:   512           signal: AbortSignal.any([toolController.signal, turn.signal])
+952:   517         toolController.abort()
+969:   534   const listeners = host.listeners('tool/execute')
+970:   535   const run = (index: number): Promise<ToolOutcome> => {
+976:   541         (error: unknown): ToolOutcome =>
+995:   560       await host.get('effects').finished(ref, outcome.kind)
+998:   563       // successful effect or permission to retry the body/ledger.
+1001:   566         error: 'unknown_effect: effect_settlement_failed',
+1011:   576   call: ToolCallState,
+1012:   577   outcome: ToolOutcome
+1013:   578 ): Promise<ToolOutcome> {
+1015:   580   for (const entry of host.listeners('tool/post-execute')) {
+1019:   584       // I7: a failing settlement after an effect never reads as success.
+1048:   613  * budget and the cancel signal → log `model/result`.
+1060:   625   const preGate = turn.budget.beginModelRequest()
+1066:   631   const { signal: _signal, ...effective } = full
+1071:   636     request: snapshot(effective)
+1090:   655     const accounted = turn.budget.recordModelResult({

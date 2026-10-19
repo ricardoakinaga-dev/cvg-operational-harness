@@ -1,0 +1,79 @@
+# SPEC0225 — BUILD local em andamento
+
+Checkpoint privado `52a8d9390291a97c08a74e2e8c3ba65791c6bba8`, sem promoção para o checkout compartilhado.
+A aprovação humana0225 e a reconciliação de entrada continuam válidas; esta
+etapa não encerra a SPEC nem concede paridade funcional.
+
+## Alteração e prova atual
+
+O readiness ignorava sessões antigas: PostgreSQL16 mascara backend_type de
+outros usuários como NULL para o role mínimo de serviço. O filtro por
+client backend retornava zero apesar de um login antigo vivo. A correção
+conta a identidade de login visível no banco, excluindo somente principal
+ativo e owner. Nenhum privilégio novo foi concedido.
+
+A [contraprova e correção](readiness-fix-native-lead-audit.json) preservam o
+mesmo teste entre18PASS/1FAIL e19PASS/0FAIL; somente fonte e emit do readiness
+mudaram entre os28inputs congelados. A sessão antiga continua sem acesso42501,
+o serviço recusa admissão enquanto ela vive e volta a aceitar após seu fim.
+
+| Prova atual                                                                    | Resultado e limite                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Perfil PostgreSQL](native-1792323016452-command.json)                         | 19PASS/0FAIL/0SKIP; inclui11casos anteriores e8negativos/readiness/DML: PUBLIC, membership, checksum, trigger, INHERIT, sessão antiga, GUC/tag e insert0. Mudanças sintéticas restauradas e positivos antes/depois. |
+| [Retomada pública](native-1792323093386-command.json)                          | 66PASS/0FAIL/0SKIP na fonte corrigida,22fixtures e3crashpoints distintos.                                                                                                                                           |
+| [Auditoria das retomadas](public-profile-r5-lead-audit.json)                   | 28inputs íntegros,132PIDs distintos, corpo1, frame/tipo/bytes/SHA e dois receipts/usage conferidos.                                                                                                                 |
+| [Fronteiras J11](native-1792323156461-command.json)                            | 10PASS/0FAIL/0SKIP na seleção de fronteiras; caso de perda de save NÃO SELECIONADO e continua vermelho.                                                                                                             |
+| [Auditoria J11](context-profile-r3-lead-audit.json)                            | 20PIDs;32768/+1bytes,depth32/+1,nodes10000/+1 e300KiB completos no journal. Oversize/complexidade sem próximo modelo; positivo pequeno e Unicode permitido chegam integrais.                                        |
+| [Build real](build-runtime-r4-command.json)                                    | 20workspaces compilados.                                                                                                                                                                                            |
+| [Typecheck canônico](typecheck-r7-command.json) e [lint](lint-r5-command.json) | exit0; typecheck usa tsconfig.typecheck.json. Comandos anteriores sem esse -p são evidência limitada, não substituem este gate.                                                                                     |
+
+Codec165 e preclaim45 unitários continuam evidência dos componentes inalterados.
+As13seleções PostgreSQL antigas não executadas no teste unitário não são PASS.
+A expansão inicial preservou22linhas legadas em quatro controles SQL; artefatos
+anteriores permanecem históricos, sem somar execuções como funcionalidades.
+
+## Lacuna J11 preservada
+
+A [reprodução atual estrita](native-1792323489865-command.json) falha:0PASS/1FAIL,
+0SKIP, demais10casos não selecionados. O output mode1 permanece CONFIRMED,
+mas TOOL/SUCCEEDED sem observação salva faz o processo seguinte parar em
+RESULT_UNAVAILABLE. Não houve modelo ou corpo novo. Segurança conservada não
+prova a reconstrução exigida pela0225 §7/J11.
+
+O [scout contratual](j11-contract-recon/agent/REPORT.md), Bohr, examinou quatro
+fontes congeladas; Lead autenticou13artefatos e quatro pares, agente encerrado.
+Há tensão com a expectativa exata do teste0224 em memória. Esse teste e o
+runtime permanecem intactos; nenhum aceite de código foi concedido pelo scout.
+
+O [HOW proposto](settled-recovery-how/proposal.md) distingue recuperação de um
+journal nativo opt-in validado do handoff legacy/custom, sem reabrir o passo,
+modificar settlement/ref ou chamar ferramenta. Está PROPOSED, revisão técnica
+NOT_RUN; não autoriza código adicional nem presume novo gate humano. O teste
+estrito permanece exigido, sem enfraquecer a asserção para declarar verde.
+
+## Saldo e continuidade
+
+J03/J04 ainda precisam dos negativos nativos além do codec; J05/J06/J07 ainda
+precisam dos demais casos da matriz mínima e três readers originais. J08/J09/
+J10 têm provas observadas, mas aguardam crítica de código e pacote completo.
+J11 inclui os dez limites aprovados pela execução, mas a reconstrução está
+aberta. J12 completo e J13 bound permanecem pendentes. ApenasJ14 e o drill
+completoJ15 são adiados pela aprovação original.
+
+J16, crítica independente e type/lint/unit/PG/E2E/certificação atuais completos
+continuam obrigatórios. P0 de qualificação composta/43reds históricos e dívida
+documental selada não são reclassificados. Sem encerramento da rodada de código,
+promoção, repin, checker alterado, produção ou crédito nos117resultados/17controles.
+Crítico de código0/2; uma implementação em curso, retrabalho pós-crítica0.
+
+Todos os jobs e o scout desta etapa foram encerrados. PG4d8/55880 próprio
+permanece reservado; os testes removem schema ativo/roles e preservam22legadas0.
+O [checkpoint final de recurso](gap-final-resource-checkpoint.json) confirma
+schema/roles ativos ausentes, zero outros clientes e22legadas0 intactas após
+a reprodução atual do gap.
+Nenhum recurso de outro agente foi usado. Ledgers99/20/30 continuam readonly
+por alterações de outro dono; delta de continuidade está neste pacote e nos
+registros próprios, sem sobrescrever trabalho alheio.
+
+Próxima ação: revisão técnica delimitada do HOW de reconstrução e seus10inputs
+mais6witnesses congelados, antes de qualquer edição adicional do runtime.

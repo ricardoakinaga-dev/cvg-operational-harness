@@ -1,0 +1,71 @@
+HISO005-P2-NEXT-RECON-20261018 — Recon da causa seguinte e SPEC0241
+
+Preparação T1 da frente HISO005/B6, sobre a fonte f22a74a09fe1abefd3eaf0b11f65815b02c5c63d (BUILD0240), cujos scripts estão no root com os mesmos bytes.
+Nenhum código de aplicação foi alterado, nenhum alvo foi executado e não houve gate, PG ou Docker.
+B6 continua INCOMPLETE: 1.118 diagnósticos, 303 MATCH, zero verified e zero provas.
+
+O QUE FOI OBSERVADO
+
+- cause-partition.json — as 1.118 ocorrências se dividem em 537 baseline e 581 de fronteira. Os SHA dos relatórios selados conferem com os receipts.
+  - Baseline: 303 instaladas e 234 de primeira parte. Nenhuma tem causa individual: só há prova quando o status é PROVEN.
+  - Fronteira: FORMAT 239, NATIVE_BUILTIN 195, ENOENT 60, INTEROP 30, PARSE 29, AMBIGUOUS 10, COMPILED_PROVENANCE 6, FUNCTION 4 e 8 de outros motivos.
+
+- physical-recon.json e resolve-oracle.json — a fase de corpo para na primeira resolução que lança exceção.
+  - Na v3, a análise percorre 7 módulos: teste → vitest → 5 dist do Vitest → @vitest/pretty-format. Para na aresta tinyrainbow, cujo manifesto declara "browser".
+  - Na v2, a parada acontece já na aresta vitest (1 estado).
+  - O Node resolve tinyrainbow sem importá-lo. A recusa vem da guarda browser mantida pela 0240.
+  - As contagens 6/4 da causa designada são artefatos dessa parada.
+  - A origem que antes não tinha atribuição é a assinatura do catch externo: ganha causa, não resolução.
+
+- Causa designada (dist do Vitest)
+  - São 32 arquivos instalados em 12 pacotes, todos MATCH.
+  - A regra dist (linha 1240 do engine) exige um receipt compilado que só cobre shared e contracts. Para pacote instalado, essa exigência é impossível.
+  - UNKNOWN_FUNCTION é emitido já na declaração: 42 declarações recusadas nos 4 arquivos medidos e 251 latentes nos dist instalados.
+
+- body-controls.json — controles C1 a C6 no engine congelado: 16/16 PASS, sem carregar nenhum alvo. Cobrem em pares:
+  - a parada;
+  - dist contra lib com os mesmos bytes;
+  - função declarada e nunca chamada;
+  - o campo browser;
+  - uma violação de produto visível só no corpo, que hoje vira INCOMPLETE em vez de FAIL (não é falso PASS).
+
+- Controles X1 a X3 do revisor (cópia em review-r1-extra-controls.snapshot.json):
+  - UNKNOWN_PRODUCT_TARGET encerra o corpo depois da primeira violação;
+  - a tupla do catch externo é atribuída ao alvo;
+  - as verificações pós-corpo foram puladas, com cerca de 282 pacotes não alcançados latentes (estimativa).
+
+PROPOSTA E REVISÃO
+
+SPEC: docs/02_spec/0241_b6_integral_body_installed_provenance.md
+SHA-256: e09f635a8d2385fd0f412655ece8be104776ba599a748cc0cf61c3abbd62a00b
+
+- D1, medição integral do corpo (não amplia confiança):
+  - contenção por aresta, com lista fechada e enumerada de motivos;
+  - corte só por contador determinístico, que a recomputação do worker reproduz;
+  - bodyCoverage e phases declarados, e verificações pós-corpo executadas;
+  - census inalterado.
+- D2, identidade0234 por arquivo para código instalado:
+  - substitui o receipt compilado exigido hoje para dist instalado;
+  - é T3 e, só na v4, supera a 0240 §2 e a MS04.
+- Os aceites IB01 a IB12 estão todos NOT_RUN e a §4 lista o que continua UNKNOWN.
+- Nada promete prova ou queda de contagem. A contagem deve subir.
+
+Revisão independente, feita por subagente novo e não-fork:
+- R1 (review-r1/): REVISE, com 4 obrigatórios P2: lista de motivos, prazo por relógio, conservação e pós-corpo. Todos foram corrigidos (rework-r1.json, lead-review-r1-verification.json).
+- R2 final (review-r2/): APPROVE_SPEC, zero obrigatórios. Os achados R1 foram conferidos como resolvidos contra o código, e Y1/Y2 confirmam que o corte é reproduzido (review-r2-controls.snapshot.json).
+- Os 7 P3 da R2 entraram como errata vinculante em spec-errata-r2.json (SHA b03582454e7a744e54eab928404d2993eaddf60b72c093fee4c0ce4f41daf568), sem mudar os bytes julgados, como no precedente da 0237. Dois deles corrigem fatos: o inventário inclui diretórios com ponto, e o receipt r5 tem 18.786 entradas.
+- O orçamento de 2 rodadas foi esgotado e o crítico foi encerrado.
+
+LIMITAÇÕES
+
+- A estimativa de estados (cerca de 120 mil nós de topo) e a de ~282 pacotes não alcançados não são medições.
+- Os 194 dist de primeira parte fora do receipt não estão em r5 nem em r6; foram contados pelo caminho.
+- A SPEC trata como condição de parada um estouro de prazo na medição real v4. Hoje cada passagem do worker leva cerca de 18,6 s, com o corpo parado.
+- Uma correção aditiva (r1-corrections.json) ajusta dois rótulos de artefatos congelados no R1.
+- O harness bloqueou a gravação de REPORT.md por subagente; por isso este relatório está em .txt.
+
+PRÓXIMA AÇÃO
+
+- Decisão humana T3 sobre decision-packet.json. Nenhum código 0241 antes dela.
+- As aprovações 0236/0237/0240 não são repetidas.
+- Os ledgers 99/20/30, a coordenação, o 0370 e o 0391 ficam com o lead. O texto proposto está em ledger-delta-cont-d9ef.

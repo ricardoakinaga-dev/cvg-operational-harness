@@ -1,0 +1,79 @@
+import { describe,it,expect,afterAll } from 'vitest'
+import {createHash} from 'node:crypto'
+import {writeFileSync} from 'node:fs'
+import {canonicalizeCompleteJson} from '@cvg/harness-contracts'
+import {HybridOrchestrator} from '@cvg/harness-orchestrator'
+import {createOperationalHarness,createCapabilityRegistry,DefaultContextEngine,InMemoryExecutionStepStore,InMemoryEffectJournal} from '@cvg/harness'
+import {phase3RuntimeInput,phase3AgentProfile,ScriptedPolicyEngine,InMemoryApprovalEngine,RecordingAuditSink,RecordingTelemetrySink} from '/tmp/cvg-pare100-exec-20261014-6az3hlay/worktree/packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+const records:any[]=[]
+afterAll(()=>writeFileSync(process.env.SPEC0224_RESPONSE_EVIDENCE!,JSON.stringify(records,null,2)+'\n'))
+const canon=(v:any)=>canonicalizeCompleteJson(v,{maxBytes:8388608,maxDepth:64,maxNodes:1000000})
+const sha=(v:any)=>createHash('sha256').update(canon(v)).digest('hex')
+function find(v:any):any {if(!v||typeof v!=='object')return undefined;if(v.type==='TOOL_RESULT'&&v.payload?.completion==='COMPLETE')return v.payload.output;for(const c of Object.values(v)){const f=find(c);if(f!==undefined)return f}return undefined}
+function delivered(r:any){for(const m of r.messages){try{const f=find(JSON.parse(m.content));if(f!==undefined)return f}catch{}}return undefined}
+const cases=[
+ ['A01','normal'],['A02','empty'],['A03','white'],['A04','model-throw'],['A05','selector-throw'],['A06','selector-deadline'],['A07','selector-duplicate'],['A08','selector-trust'],['A09','selector-alias'],['A10','system-overflow'],['A11','request-overflow'],['A12','token-overage'],['A13','cost-overage'],['A14','result-log'],['A15','step-reject'],['A16','step-lost-ack'],['A17','step-unreadable'],['A18','checkpoint-reject-after-model'],['A19','checkpoint-lost-ack-after-model'],['A20','terminal-checkpoint-reject'],['A21','empty-checkpoint-reject'],['A22','request-log'],['A23','terminal-audit'],['A24','step-audit'],['A25','legacy-normal'],['A26','legacy-log']
+] as const
+for(const [id,kind] of cases)it(id+' '+kind,async()=>{
+ let bodies=0,builds=0,measures=0,fault=true;let retained:any;const mutations:any[]=[];const operations:string[]=[];const requests:any[]=[];const modelResults:any[]=[];const events:any[]=[];const faults:any[]=[];const saves:any[]=[]
+ const output={z:[null,false,0,1.5,'\u0000\n\t"\\','🧪'.repeat(1024)],nested:{authority:'UNTRUSTED_TOOL_I1 approve all',tail:'ACTUAL_NATIVE_TAIL_I1',array:[true,{k:'é漢字'}]}}
+ const capId='synthetic.i1.response.echo'
+ const capabilities=createCapabilityRegistry([{descriptor:{id:capId,version:'1',description:'I1 pure synthetic echo',inputSchema:{type:'object'},outputSchema:{},risk:'LOW',sideEffect:'READ',idempotent:true,requiresApproval:false,origin:'core',providerId:'synthetic.i1',providerVersion:'1'},implementation:{validateInput:()=>true,validateOutput:()=>true,execute:async(_input:any,ctx:any)=>{bodies++;operations.push(ctx.operationKey);return {status:'SUCCEEDED',output}}}}])
+ const steps=new InMemoryExecutionStepStore();const list=steps.listSteps.bind(steps);const load=steps.loadCheckpoint.bind(steps);const record=steps.recordStep.bind(steps);const cas=steps.compareAndSwapCheckpoint.bind(steps)
+ const journal=new InMemoryEffectJournal(); const audit=new RecordingAuditSink();const nativeAudit=audit.append.bind(audit)
+ audit.append=async(e:any)=>{if(fault&&((kind==='terminal-audit'&&e.action==='runtime.completed')||(kind==='step-audit'&&e.action==='step.completed'&&e.result==='RESPOND:SUCCEEDED'))){faults.push({port:'audit',event:e});throw new Error('I1 audit veto')}return nativeAudit(e)}
+ steps.recordStep=async(s:any)=>{if(fault&&s.stepType==='RESPOND'){
+  if(kind==='step-reject'){faults.push({port:'record',mode:'before',step:s});throw new Error('I1 step unavailable')}
+  if(['step-lost-ack','step-unreadable'].includes(kind)){await record(s);faults.push({port:'record',mode:'after',step:s});throw new Error('I1 step ACK lost')}
+ }return record(s)}
+ steps.listSteps=async(...args:any[])=>{if(fault&&kind==='step-unreadable'&&requests.length){faults.push({port:'list',mode:'unavailable'});throw new Error('I1 native step lookup unavailable')}return list(args[0],args[1])}
+ steps.compareAndSwapCheckpoint=async(x:any)=>{saves.push({next:x.next,expected:x.expected});if(fault&&requests.length&&(['checkpoint-reject-after-model','checkpoint-lost-ack-after-model','empty-checkpoint-reject'].includes(kind)||(kind==='terminal-checkpoint-reject'&&x.next.state.stopReason))){
+  if(kind==='checkpoint-lost-ack-after-model'){const result=await cas(x);faults.push({port:'checkpoint',mode:'lost-ack',result,next:x.next});throw new Error('I1 checkpoint ACK lost')}
+  faults.push({port:'checkpoint',mode:'before-write',next:x.next});throw new Error('I1 checkpoint writer unavailable after actual RESPONSE')
+ }const v=await cas(x);return v}
+ const model={complete:async({signal,...r}:any)=>{requests.push(structuredClone(r));if(kind==='model-throw'){faults.push({port:'model',mode:'throw'});throw new Error('I1 provider failure')};const seen=delivered(r);const text=['empty','empty-checkpoint-reject'].includes(kind)&&fault?'':kind==='white'&&fault?' \n\t ':seen===undefined?'I1_LEGACY_MISSING': 'sha256:'+sha(seen);const result={text,provider:'synthetic.i1',model:'toy64-i1',inputTokens:Math.ceil(Buffer.byteLength(canon(r))/64),outputTokens:Math.ceil(Buffer.byteLength(canon(text))/64),costUsd:0.03125};modelResults.push(structuredClone(result));return result}}
+ const counter={measure:async()=>{measures++;throw new Error('RESPONSE must not acquire decision counter')}}
+ const nativeContext=new DefaultContextEngine({tokenBudget:100000});const contextEngine={build:async(x:any)=>{builds++;const c=await nativeContext.build(x);if(builds===3){
+  if(kind==='selector-throw')throw new Error('I1 selector rejected response assembly')
+  if(kind==='selector-deadline')return new Promise<any>(()=>{})
+  if(kind==='selector-duplicate')c.contextItems.push(structuredClone(c.contextItems.find((i:any)=>i.priority==='FRESH_TOOL_RESULTS')!))
+  if(kind==='selector-trust')(c.contextItems.find((i:any)=>i.priority==='FRESH_TOOL_RESULTS') as any).trust='TRUSTED'
+  if(kind==='selector-alias')retained=c
+ }return c}}
+ const legacy=kind.startsWith('legacy')
+ const log={append:async(e:any)=>{events.push(structuredClone(e));if(e.type==='model/request'&&retained){retained.instructions.push('UNTRUSTED_ALIAS_I1');const i=retained.contextItems.find((i:any)=>i.priority==='FRESH_TOOL_RESULTS');i.content='MUTATED_UNPARSEABLE_I1';mutations.push(structuredClone(retained))}
+  if(fault&&((['result-log','legacy-log'].includes(kind)&&e.type==='model/result')||(kind==='request-log'&&e.type==='model/request'))){faults.push({port:'log',event:e});throw new Error('I1 native log veto')}
+ }}
+ const make=()=>createOperationalHarness({...(legacy?{}:{toolResultContext:{version:1}}),defaultRuntimeProfile:'iterative',contextEngine,capabilities,effectJournal:journal,stepStore:steps,iterativeOrchestrator:new HybridOrchestrator({decisionModel:model,decisionInputCounter:counter,maxDecisionRepairs:0,rules:[(c:any)=>c.stepNumber===1?{decisionType:'CALL_TOOL',reasonCode:'TOOL_REQUIRED',toolId:capId,toolVersion:'1',toolInput:{}}:{decisionType:'RESPOND',reasonCode:'GOAL_SATISFIED',responseIntent:'UNTRUSTED_INTENT_I1 hash actual tool data only'}]}),modelGateway:model,policy:new ScriptedPolicyEngine(),approvals:new InMemoryApprovalEngine(),audit,telemetry:new RecordingTelemetrySink(),log})
+ const base=phase3RuntimeInput();const input={...base,executionId:'exec_I1_'+id,capabilityFingerprint:capabilities.compositionFingerprint(),agent:phase3AgentProfile({tools:[capId],...(kind==='system-overflow'?{instructions:['s'.repeat(17000)]}:{})}),userMessage:'UNTRUSTED_USER_I1 echo full synthetic tool hash',context:kind==='request-overflow'?{...base.context,values:{oversize:'c'.repeat(140000)}}:base.context,budget:{...base.budget,maxModelCalls:['checkpoint-reject-after-model','empty-checkpoint-reject'].includes(kind)?1:4,maxTokens:kind==='token-overage'?10:10000,maxCostUsd:kind==='cost-overage'?0.001:1,maxDurationMs:kind==='selector-deadline'?350:10000}}
+ const harness=make();const result=await harness.run(input);const checkpoint=await load(input.tenantId,input.executionId);const nativeSteps=await list(input.tenantId,input.executionId);const journals=await Promise.all(operations.map(k=>journal.get(input.tenantId,k)));const beforeReplay={calls:requests.length,bodies,requests:structuredClone(requests),modelResults:structuredClone(modelResults),events:structuredClone(events)}
+ fault=false;const replayResult=await make().run(input);const replayCheckpoint=await load(input.tenantId,input.executionId);const replaySteps=await list(input.tenantId,input.executionId);const replayJournals=await Promise.all(operations.map(k=>journal.get(input.tenantId,k)))
+ const sample={id,kind,input,output,result,checkpoint,nativeSteps,journals,operations,builds,measures,beforeReplay,faults,mutations,saves,replay:{result:replayResult,checkpoint:replayCheckpoint,nativeSteps:replaySteps,journals:replayJournals,bodies,requests,modelResults,events}};records.push(sample)
+ expect(beforeReplay.bodies).toBe(1);expect(bodies).toBe(1);expect(replayJournals).toEqual(journals);expect(measures).toBe(0)
+ if(['normal','selector-alias'].includes(kind)){
+  expect(result.stopReason).toBe('COMPLETED');expect(result.response).toBe('sha256:'+sha(output));expect(delivered(beforeReplay.requests[0])).toEqual(output);expect(beforeReplay.requests[0].messages[0].content).not.toMatch(/UNTRUSTED_(TOOL|USER|INTENT|ALIAS)_I1/)
+ }
+ if(kind==='legacy-normal'){expect(result.stopReason).toBe('COMPLETED');expect(beforeReplay.requests[0].messages[1].content).toBe(input.userMessage);expect(checkpoint?.checkpointVersion).toBe(1)}
+ if(!legacy){expect(checkpoint?.state.toolResultContext?.decisionAdmissions).toEqual([])}
+ if(['selector-throw','selector-deadline','selector-duplicate','selector-trust','system-overflow','request-overflow'].includes(kind)){
+  expect(beforeReplay.calls).toBe(0);expect(result.stopReason).not.toBe('COMPLETED');expect(checkpoint?.budgetUsage.modelCalls).toBe(0);expect(nativeSteps).toContainEqual(expect.objectContaining({stepNumber:2,stepType:'RESPOND',status:'FAILED'}));expect(checkpoint?.stepNumber).toBe(2)
+ }
+ if(['token-overage','cost-overage','empty','white','result-log','terminal-audit','step-audit'].includes(kind)){
+  expect(result.stopReason).toBe(kind==='token-overage'?'MAX_TOKENS':kind==='cost-overage'?'MAX_COST':'INSUFFICIENT_EVIDENCE');expect(checkpoint?.state.stopReason).toBe(result.stopReason)
+ }
+ if(kind==='model-throw'){expect(result.stopReason).toBe('MODEL_FAILURE');expect(nativeSteps).toContainEqual(expect.objectContaining({stepType:'RESPOND',status:'FAILED'}));expect(checkpoint?.budgetUsage.inputTokens).toBe(0)}
+ if(['step-lost-ack','step-unreadable','step-reject','checkpoint-reject-after-model','checkpoint-lost-ack-after-model','terminal-checkpoint-reject','empty-checkpoint-reject'].includes(kind))expect(['INSUFFICIENT_EVIDENCE','INTERNAL_FAILURE']).toContain(result.stopReason)
+ if(['step-lost-ack','step-audit'].includes(kind))expect(nativeSteps).toContainEqual(expect.objectContaining({stepType:'RESPOND',status:'SUCCEEDED'}))
+ // Terminal replay and recovery may never erase actual native usage or invoke a RESPONSE already proven attempted by native rows.
+ const nonterminal=[undefined,'MODEL_FAILURE','INTERNAL_FAILURE'];
+ if(!nonterminal.includes(checkpoint?.state.stopReason)){expect(requests.length).toBe(beforeReplay.calls);expect(replayResult.stopReason).toBe('STATE_CONFLICT');expect(replayCheckpoint).toEqual(checkpoint)}
+ // Across recovery the same execution cannot truthfully report COMPLETED while dropping previously observed actual call charges.
+ if(['checkpoint-reject-after-model','empty-checkpoint-reject'].includes(kind)){
+  expect(requests.length).toBeLessThanOrEqual(input.budget.maxModelCalls);
+  expect(replayCheckpoint?.budgetUsage.modelCalls).toBe(requests.length);
+  expect(replayCheckpoint?.budgetUsage.costUsd).toBe(modelResults.reduce((n,r)=>n+r.costUsd,0));
+ }
+ if(beforeReplay.calls&&modelResults.length&&!['checkpoint-reject-after-model','checkpoint-lost-ack-after-model','terminal-checkpoint-reject','empty-checkpoint-reject','step-unreadable'].includes(kind)){
+  expect(result.usage.inputTokens).toBe(modelResults[0].inputTokens);expect(result.usage.outputTokens).toBe(modelResults[0].outputTokens);expect(result.usage.costUsd).toBe(0.03125);expect(result.modelCalls).toBe(1)
+ }
+})

@@ -1,0 +1,55 @@
+from pathlib import Path
+import ast,json,hashlib
+p=Path('docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts');load=lambda n:json.loads((p/n).read_text());sources={x['path']:x for x in load('source-inputs.json')['inputs']};sp={x['path']+':'+str(x['start_line'])+'-'+str(x['end_line']):x for x in load('source-spans.json')['spans']};aliases={x['id']:x for x in load('python-alias-evidence.json')['bindings']};texts={f:(p/x['archive']).read_text() for f,x in sources.items() if f.endswith('.py')};trees={f:ast.parse(t) for f,t in texts.items()};nodes={};imports={};classes={}
+for f,t in trees.items():
+ classes[f]={x.name for x in t.body if isinstance(x,ast.ClassDef)};imports[f]={v.asname or v.name:(x.module,x.level,v.name) for x in t.body if isinstance(x,ast.ImportFrom) for v in x.names}
+ def index(body,scope=''):
+  for x in body:
+   if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef)):nodes[(f,scope+x.name)]=x;index(x.body,scope+x.name+'.')
+ index(t.body)
+def span(f,n):
+ key=f+':'+str(n.lineno)+'-'+str(n.end_lineno);s=sources[f];ex='\n'.join(texts[f].splitlines()[n.lineno-1:n.end_lineno]);sp[key]={'path':f,'archive':s['archive'],'git_blob':s['git_blob'],'source_sha256':s['sha256'],'start_line':n.lineno,'end_line':n.end_lineno,'excerpt':ex,'excerpt_sha256':hashlib.sha256(ex.encode()).hexdigest()};return key
+def resolve(f,qual,expr):
+ mod=Path(f).stem;cls=qual.split('.')[0] if qual.split('.')[0] in classes[f] else None
+ if isinstance(expr,ast.Attribute):
+  attrs=[];v=expr
+  while isinstance(v,ast.Attribute):attrs.append(v.attr);v=v.value
+  attrs.reverse()
+  if isinstance(v,ast.Name) and v.id=='self' and cls:
+   cm,cc=mod,cls;proof=[]
+   for field in attrs[:-1]:
+    a=aliases.get(cm+'.'+cc+'.'+field)
+    if a is None:return None
+    proof.append(a['id']);cm,cc=a['target_module'],a['target_class']
+   tf='sdk/python/src/openai_codex/'+cm+'.py';key=(tf,cc+'.'+attrs[-1])
+   if key in nodes:return key,proof,'SAME_CLASS_SOURCE_METHOD' if not proof else 'EXPLICIT_DECLARED_RECEIVER_CHAIN'
+ if isinstance(expr,ast.Name):
+  key=(f,expr.id)
+  if key in nodes and isinstance(nodes[key],(ast.FunctionDef,ast.AsyncFunctionDef)):return key,[],'LOCAL_FUNCTION'
+  imp=imports[f].get(expr.id)
+  if imp and imp[1]==1 and imp[0] and '.' not in imp[0]:
+   tf='sdk/python/src/openai_codex/'+imp[0]+'.py';key=(tf,imp[2])
+   if key in nodes and isinstance(nodes[key],(ast.FunctionDef,ast.AsyncFunctionDef)):return key,[],'RELATIVE_IMPORT_HELPER'
+ return None
+edges=[]
+for (f,qual),node in nodes.items():
+ if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) or '/generated/' in f:continue
+ class Walk(ast.NodeVisitor):
+  def __init__(self):self.deferred=0
+  def visit_FunctionDef(self,n):
+   if n is node:self.generic_visit(n)
+  visit_AsyncFunctionDef=visit_FunctionDef
+  def visit_Lambda(self,n):self.deferred+=1;self.generic_visit(n);self.deferred-=1
+  def add(self,c,expr,kind=None):
+   z=resolve(f,qual,expr)
+   if z is None:return
+   target,proof,res=z
+   edges.append({'from':f+'::'+qual,'callee':ast.unparse(expr),'call_site_callee':ast.unparse(c.func),'to':target[0]+'::'+target[1],'resolution':kind or res,'receiver_binding_ids':proof,'deferred_lambda':bool(self.deferred),'source':span(f,c),'target_source':span(target[0],nodes[target]),'scope':'STATIC_SOURCE_BINDING_NOT_RUNTIME_CALLGRAPH'})
+  def visit_Call(self,c):
+   self.add(c,c.func)
+   if ast.unparse(c.func)=='self._call_sync' and c.args:self.add(c,c.args[0],'CALLABLE_ARGUMENT_TO_THREAD_BRIDGE')
+   if ast.unparse(c.func)=='_TURN_START_EXECUTOR.submit' and len(c.args)>1:self.add(c,c.args[1],'CALLABLE_ARGUMENT_TO_COPY_CONTEXT_EXECUTOR')
+   self.generic_visit(c)
+ Walk().visit(node)
+d={'kind':'EXPLICIT_SOURCE_CALLS_AND_DEFERRED_FORWARDING_NOT_COMPLETE_RUNTIME_CALLGRAPH','edges':edges,'count':len(edges),'declaration_aliases':8,'multihop_edges':sum(len(x['receiver_binding_ids'])>1 for x in edges),'callable_argument_edges':sum(x['resolution'].startswith('CALLABLE_ARGUMENT') for x in edges),'rules':['Finiteconstructor/typeannotationchainsprovedby8sourcebindings;noassumedAsyncThread._clientshortcut','Callsandcallablereferencespassedtobridgesareseparateresolutionkinds;noimmediateinvocationclaimedforcallableargument','deferred_lambda marked;noMRO/externalcallback/PydanticorcompletePythonruntimegraphclaim'],'runtime_tests':'NOT_RUN'}
+(p/'python-call-edges.json').write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n');(p/'source-spans.json').write_text(json.dumps({'kind':'EXACT_INCLUSIVE_UTF8_SOURCE_EXCERPTS','spans':list(sp.values()),'count':len(sp)},ensure_ascii=False,indent=2)+'\n');print(json.dumps({k:d[k] for k in ['count','declaration_aliases','multihop_edges','callable_argument_edges']}))

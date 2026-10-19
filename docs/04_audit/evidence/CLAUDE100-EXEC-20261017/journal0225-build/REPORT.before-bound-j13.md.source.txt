@@ -1,0 +1,65 @@
+# SPEC0225 — recuperação e causas de falha preservadas localmente
+
+Checkpoint privado `3ac937ac`, fonte limpa na candidata. BUILD em andamento,
+sem promoção ao checkout compartilhado ou aceite integral da SPEC.
+Zero crédito dos 117 resultados funcionais e 17 controles CVG.
+
+A recuperação de resultado confirmado sem observação exige leitura nativa
+validada, identidade/proposta/tentativa/ref compatíveis e CAS confirmado antes
+do modelo. Não repete ferramenta nem altera passo/journal/ref/timestamp;
+restaura somente o contador ausente. Saída fora do contexto vira UNAVAILABLE.
+
+Foi [reproduzido](j12-reproduction-and-fix.json) um defeito adicional: falha
+em markUncertain ocultava a causa do executor ou do encode. Os dois testes
+estritos falharam antes da correção. Agora o ramo de settlement falho produz
+AggregateError com ambas as causas e cause original; mensagem externa fixa.
+Settlement normal, transações, limites e política de repetição foram preservados.
+
+| Evidência atual                                                                                            | Resultado observado                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [Focais](recovery-unit-r4-report.json)                                                                     | 116PASS/0FAIL/0PENDING:41componentes e75legados completos.                                                         |
+| [PostgreSQL](native-1792329519423-command.json)                                                            | 71PASS/0FAIL/0SKIP:26anteriores,43corrupções e2falhas duplas J12.                                                  |
+| [Contexto e falhas](native-1792329525936-command.json)                                                     | 19PASS/0FAIL/0SKIP:12positivos/fronteiras e7falhas get/CAS/ack/auditoria/cancel/pause/deadline.                    |
+| [Reinício público](native-1792329543490-command.json)                                                      | 66PASS/0FAIL/0SKIP:22valores em3crashpoints/132PIDs.                                                               |
+| [Conferência nativa](j12-current-native-lead-audit.json)                                                   | 34inputs atuais por perfil,24corrupções lógicas/19rejeições SQL,59linhas duráveis; causas e replay J12 conferidos. |
+| [Conferência pública](j12-current-public66-lead-audit.json)                                                | 66frames, tipos/valores/bytes/SHA/receipts/uso/corpo único conferidos, zero drift34inputs.                         |
+| [Build](build-runtime-r7-command.json),[tipagem](typecheck-r17-command.json),[lint](lint-r11-command.json) | 20workspaces compilados e exit0; tipagem canônica tsconfig.typecheck.json.                                         |
+| [Recurso](j12-final-resource-checkpoint.json)                                                              | Schema/roles temporários ausentes, clientes0,22legadas0 intactas; PG4d8/55880 reservado.                           |
+
+Nos dois casos J12, a falha de UPDATE UNCERTAIN foi injetada explicitamente
+antes de delegar, no adaptador real: BEGIN/ROLLBACK ocorreram e EFFECT_STARTED
+permaneceu sem payload. O wrapper recusou nova execução sem repetir corpo ou
+alterar bytes. Um caso usa erro real do encode em1048577bytes; o outro, erro
+do corpo sintético. Isso não comprova captura8MiB ou pane física do servidor.
+
+As24corrupções aceitas pela forma física do SQL foram recusadas em get,
+reserve,confirm,fail e markUncertain com JOURNAL_RESULT_CORRUPT; bytes intactos.
+Os19inválidos físicos foram recusados sem desativar constraints/triggers.
+Controle íntegro NUL/null passa antes/depois. O teste de envelope excessivo
+não isola o limite1398616, pois a forma fixa também restringe o envelope.
+Não transferir esse resultado como prova integral de J03/J04.
+
+Nos7cenários de recuperação,15processos distintos e corpo total1 por caso.
+ACK perdido é injetado após CAS real APPLIED; terceiro processo conclui usando
+o checkpoint durável, sem replay. CAS recusado mais veto de auditoria preserva
+checkpoint. Leituras da própria transação não commitada seguem sem marca.
+
+[HOWR2](settled-recovery-how/proposal-r2.md) aceito sob a aprovação0225 existente;
+[revisão técnica](settled-recovery-how/review-r2/REPORT.md),47artefatos/17inputs
+conferidos e Bohr encerrado. Não é crítica de código, cujo orçamento segue0/2.
+
+Próxima ação: fechar HOW boundJ13 sobre os
+[12inputs congelados](bound-j13-preparation/plan.json), sem executar o helper
+antigo ou criar opt-in publicado0226. Prova toolful com0029real/lockorder,
+worker/attempt/outer stale, lease/encode, pause/cancel/deadline e DML permanece
+NOT_RUN. Preparação estática não é prova de runtime.
+
+Restam J03/J04 integrais, saldoJ05–J07, J12 completo/8MiB, J13, crítica fresca e
+J16/gates completos Node22/unit/PG/E2E/certificação. SomenteJ14 e drill completo
+J15 foram adiados. P0 de qualificação composta/43reds históricos permanece;
+nenhum pin/checker foi relaxado. Unbound não qualifica bound; testes locais não
+qualificam paridade/M1/release. Rodada com código ainda não encerrada.
+
+SPEC0238 aguarda resposta humana já solicitada, sem reenvio/BUILD. Sem conta/
+modelo/dados reais, produção, push ou deploy. Jobs próprios terminados;
+ledgers99/20/30 readonly por alterações de outro owner, delta próprio pendente.

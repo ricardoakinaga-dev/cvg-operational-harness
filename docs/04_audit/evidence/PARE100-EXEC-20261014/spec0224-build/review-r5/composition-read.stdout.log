@@ -1,0 +1,150 @@
+1: import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+2: import type {
+3:   AgenticKnowledgeProvider,
+4:   Claim,
+5:   CompletionEvaluator,
+6:   CompleteToolContextConfiguration,
+7:   ContextEngine,
+8:   ExecutionStepStore,
+9:   IterativeOrchestrator,
+10:   RuntimeInput,
+11:   RuntimeProfile,
+12:   RuntimeResult,
+13:   SandboxGate,
+14:   SufficiencyEvaluator,
+15:   CapabilityRegistry,
+16:   ToolRegistry
+17: } from '@cvg/harness-contracts'
+18: import { createCapabilityToolRegistry } from './capability-boundary.ts'
+19: import {
+20:   createJournaledToolRegistry,
+21:   type EffectJournal,
+22:   type JournaledToolRegistryOptions
+23: } from './effect-journal.ts'
+24: import {
+25:   SinglePassGovernedRuntime,
+26:   type HarnessRuntimeOptions
+27: } from './runtime.ts'
+28: import { IterativeGovernedRuntime } from './iterative-runtime.ts'
+29: import {
+30:   prepareCompleteToolRegistry,
+31:   prepareCompleteToolResult
+32: } from './complete-tool-results.ts'
+33: 
+34: export interface OperationalHarnessOptions extends Omit<
+35:   HarnessRuntimeOptions,
+36:   'orchestrator' | 'tools' | 'capabilityFingerprint'
+37: > {
+38:   readonly toolResultContext?: CompleteToolContextConfiguration
+39:   readonly orchestrator?: HarnessRuntimeOptions['orchestrator']
+40:   /**
+41:    * Explicit capability composition. Its adapter is the only runtime-facing
+42:    * registry for this path; callers cannot provide both registries.
+43:    */
+44:   readonly capabilities?: CapabilityRegistry
+45:   /** Compatibility port retained for existing Phase 2/3 consumers. */
+46:   readonly tools?: ToolRegistry
+47:   /** Required for capability composition and optional for compatibility tools. */
+48:   readonly effectJournal?: EffectJournal
+49:   readonly effectJournalOptions?: JournaledToolRegistryOptions
+50:   /**
+51:    * Required to run the iterative profile. The runtime registry resolves the
+52:    * requested profile here; the worker never selects a runtime class.
+53:    */
+54:   readonly iterativeOrchestrator?: IterativeOrchestrator
+55:   readonly stepStore?: ExecutionStepStore
+56:   readonly contextEngine?: ContextEngine
+57:   readonly knowledge?: AgenticKnowledgeProvider
+58:   readonly sufficiencyEvaluator?: SufficiencyEvaluator
+59:   readonly completionEvaluator?: CompletionEvaluator
+60:   readonly claimExtractor?: (response: string) => readonly Claim[]
+61:   readonly defaultRuntimeProfile?: RuntimeProfile
+62:   readonly clock?: () => Date
+63:   /** Optional containment gate; absent means fail-closed for contained tools. */
+64:   readonly sandbox?: SandboxGate
+65: }
+66: 
+67: export interface OperationalHarness {
+68:   readonly run: (input: RuntimeInput) => Promise<RuntimeResult>
+69:   readonly execute: (input: RuntimeInput) => Promise<RuntimeResult>
+70:   readonly resolveProfile: (input: RuntimeInput) => RuntimeProfile
+71:   readonly capabilityFingerprint?: string
+72: }
+73: 
+74: /**
+75:  * Canonical public composition root for the neutral harness packages. Product
+76:  * adapters provide the ports; this function only wires them together and
+77:  * resolves the runtime profile through a registry-like selection.
+78:  */
+79: export function createOperationalHarness(
+80:   options: OperationalHarnessOptions
+81: ): OperationalHarness {
+82:   if (
+83:     options.toolResultContext &&
+84:     (!options.iterativeOrchestrator || !options.stepStore)
+85:   ) {
+86:     throw new Error(
+87:       'complete-tool-v1 requires iterative orchestration and a checkpoint store.'
+88:     )
+89:   }
+90:   const capabilityFingerprint = options.capabilities?.compositionFingerprint()
+91:   if (options.capabilities && !options.effectJournal) {
+92:     throw new Error(
+93:       'Capability composition requires an explicit effect journal'
+94:     )
+95:   }
+96:   const tools = resolveTools(options, capabilityFingerprint)
+97:   const singlePass = new SinglePassGovernedRuntime({
+98:     orchestrator: options.orchestrator ?? new SinglePassOrchestrator(),
+99:     modelGateway: options.modelGateway,
+100:     policy: options.policy,
+101:     approvals: options.approvals,
+102:     tools,
+103:     ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+104:     audit: options.audit,
+105:     telemetry: options.telemetry,
+106:     ...(options.pause ? { pause: options.pause } : {}),
+107:     ...(options.effects ? { effects: options.effects } : {}),
+108:     ...(options.log ? { log: options.log } : {}),
+109:     ...(options.sandbox ? { sandbox: options.sandbox } : {})
+110:   })
+111: 
+112:   const iterative =
+113:     options.iterativeOrchestrator && options.stepStore
+114:       ? new IterativeGovernedRuntime({
+115:           orchestrator: options.iterativeOrchestrator,
+116:           modelGateway: options.modelGateway,
+117:           policy: options.policy,
+118:           approvals: options.approvals,
+119:           tools,
+120:           ...(capabilityFingerprint ? { capabilityFingerprint } : {}),
+121:           audit: options.audit,
+122:           telemetry: options.telemetry,
+123:           ...(options.pause ? { pause: options.pause } : {}),
+124:           ...(options.effects ? { effects: options.effects } : {}),
+125:           ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+126:           ...(options.log ? { log: options.log } : {}),
+127:           stepStore: options.stepStore,
+128:           ...(options.toolResultContext
+129:             ? { toolResultContext: options.toolResultContext }
+130:             : {}),
+131:           ...(options.contextEngine
+132:             ? { contextEngine: options.contextEngine }
+133:             : {}),
+134:           ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+135:           ...(options.sufficiencyEvaluator
+136:             ? { sufficiencyEvaluator: options.sufficiencyEvaluator }
+137:             : {}),
+138:           ...(options.completionEvaluator
+139:             ? { completionEvaluator: options.completionEvaluator }
+140:             : {}),
+141:           ...(options.claimExtractor
+142:             ? { claimExtractor: options.claimExtractor }
+143:             : {}),
+144:           ...(options.clock ? { clock: options.clock } : {})
+145:         })
+146:       : undefined
+147: 
+148:   const resolveProfile = (input: RuntimeInput): RuntimeProfile => {
+149:     const profile =
+150:       input.runtimeProfile ?? options.defaultRuntimeProfile ?? 'single_pass'

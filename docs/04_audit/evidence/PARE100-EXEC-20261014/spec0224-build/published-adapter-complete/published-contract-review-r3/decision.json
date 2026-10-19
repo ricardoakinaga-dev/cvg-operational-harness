@@ -1,0 +1,130 @@
+{
+  "reviewer": "I1 novo; modelo herdado; sem descendentes",
+  "decision": "REVISE",
+  "review_type": "independent_documentary_technical_critique",
+  "manifest_sha256": "f8bb306b400cf5c7736d0b60e3039b1552336de39bba557f4252362f5ce9c169",
+  "findings": [
+    {
+      "id": "I1-R3-001",
+      "severity": "HIGH",
+      "disposition": "BLOCKS_APPROVE_FOR_HUMAN_TECHNICAL_REVIEW",
+      "title": "GUC de tentativa interna impede writers externos sobre binding commitada antes do primeiro claim interno",
+      "proposal_anchors": [
+        {
+          "input": "PROPOSED-SPEC.md",
+          "lines": [
+            913,
+            925
+          ]
+        },
+        {
+          "input": "PROPOSED-SPEC.md",
+          "lines": [
+            936,
+            945
+          ]
+        },
+        {
+          "input": "PROPOSED-SPEC.md",
+          "lines": [
+            968,
+            995
+          ]
+        },
+        {
+          "input": "PROPOSED-SPEC.md",
+          "lines": [
+            758,
+            759
+          ]
+        },
+        {
+          "input": "ACCEPTANCE-PLAN.md",
+          "lines": [
+            167,
+            167
+          ]
+        }
+      ],
+      "source_anchors": [
+        {
+          "input": "S08",
+          "lines": [
+            253,
+            303
+          ]
+        },
+        {
+          "input": "N13",
+          "lines": [
+            1335,
+            1341
+          ]
+        },
+        {
+          "input": "N13",
+          "lines": [
+            1387,
+            1423
+          ]
+        },
+        {
+          "input": "S08",
+          "lines": [
+            438,
+            456
+          ]
+        },
+        {
+          "input": "S01",
+          "lines": [
+            255,
+            285
+          ]
+        },
+        {
+          "input": "N06",
+          "lines": [
+            374,
+            376
+          ]
+        },
+        {
+          "input": "N05",
+          "lines": [
+            468,
+            526
+          ]
+        },
+        {
+          "input": "S09",
+          "lines": [
+            97,
+            110
+          ]
+        }
+      ],
+      "contradiction": "O GUC cvg.published_attempt é o inner attempt nativo, ou zero no bootstrap. A regra permite zero apenas antes de existir binding e proíbe zero a todo outro writer. Mas claim e renew externos são exigidos antes do inner claim, inclusive depois de a binding existir. Nesse estado legítimo o parent ainda é QUEUED/attempt=0. Outer expectedOuterAttempt não é inner attempt.",
+      "counterexample_status": "DOCUMENTARY_COUNTEREXAMPLE; NOT_RUN",
+      "counterexample": [
+        "A obtém claim externo real e executa admit gen2. COMMIT deixa parent QUEUED, attempt=0, sem lease interno, prepared=null e binding complete persistida.",
+        "Antes de store.claim, renewal já iniciado observa a binding; ou A morre e B aguarda expiração externa real, sem alterar relógio/leases.",
+        "Gen2 renew externo ou claimNextFenced de B deve usar o prefixo parent-first e o contexto de geração2. O único inner attempt existente é zero.",
+        "Usar zero viola a proibição de §8.4 porque a binding já existe. Usar expectedOuterAttempt ou antecipar inner attempt=1 viola o significado do GUC e a separação de autoridade. O inner claim que criaria attempt1 só ocorre depois desse claim externo.",
+        "Seguindo literalmente o desenho, a renovação pode parar a tentativa saudável e o reclaim de S0 fica sem transição legal. Não há modelo/tool envolvido; ref exterior válida não elimina a contradição."
+      ],
+      "required_correction": "Fechar na SPEC uma regra discriminada de contexto outer-only para parent admitido/attempt=0, binding já commitada e ausência comprovada de inner claim. Enumerar por operação quais claim/renew/ack_prepare/fail são legais, com seus deltas exatos e provas outer reais, sem conferir lease/dispatch/CAS interno nem substituir innerAttempt pelo outerAttempt. Ajustar a proibição universal de zero ou definir explicitamente um campo/representação distinto para ausência de owner interno. Manter todas as verificações0029 nas tabelas originais; não ampliar active/settlement por consequência.",
+      "future_rejection_oracles": [
+        "NOT_RUN: barreira após COMMIT real de admit e antes de store.claim; tick renew externo com binding presente/parent0 deve funcionar sem criar owner/lease/attempt interno.",
+        "NOT_RUN: SIGKILL nesse ponto; B reclama outbox após expiração real, preserva admission/executionId, adquire primeiro inner attempt por store.claim e percorre M1/tool/M2 uma vez.",
+        "NOT_RUN: zero fora do conjunto fechado (ACTIVE/CAS/dispatch, binding foreign, tentativa já existente, ref inválida ou geração velha) continua recusado sem mutação."
+      ]
+    }
+  ],
+  "human_spec_approval": "NOT_GRANTED",
+  "build_authorization": "NOT_AUTHORIZED",
+  "runtime_acceptance": "NOT_GRANTED",
+  "future_tests": "NOT_RUN",
+  "spec225": "PENDING",
+  "spec217_224_authority": "only their own approved scopes, as stipulated by user and manifest"
+}

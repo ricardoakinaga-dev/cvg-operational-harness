@@ -1,0 +1,1 @@
+const data={x:1}; export const answer=Object.getOwnPropertyDescriptor(data,"x").value;
