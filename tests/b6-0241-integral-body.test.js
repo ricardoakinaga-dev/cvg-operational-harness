@@ -1754,7 +1754,8 @@ describe('SPEC0241 I — checker integration of the reference inventory', () => 
         exitCode: 0,
         offline: true,
         ignoreScripts: true,
-        completed: true
+        completed: true,
+        sourceExclusions: ['docs/04_audit/evidence']
       },
       selection: {
         platform: process.platform,

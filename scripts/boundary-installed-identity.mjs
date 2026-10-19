@@ -13,6 +13,121 @@ export const INSTALLED_IDENTITY_LIMITS = Object.freeze({
   npmTimeoutMs: 180_000,
   comparisonTimeoutMs: 120_000
 })
+// SPEC0243 E1: the one closed list of tracked prefixes that the reference
+// recipes keep out of their source snapshot and archive. It is not taken from
+// a CLI option, the environment, a receipt or any repository file. The
+// listing and its type/path checks still cover these entries.
+export const REFERENCE_SOURCE_EXCLUSIONS = Object.freeze([
+  'docs/04_audit/evidence'
+])
+export function referenceSourceExcluded(name) {
+  return REFERENCE_SOURCE_EXCLUSIONS.some(
+    (prefix) => name === prefix || name.startsWith(prefix + '/')
+  )
+}
+// Same segment semantics as fingerprintResolution's workspace expansion:
+// `*` and `?` inside one component, `**` for any number of components, and
+// node_modules/dist/.git components are never workspaces.
+function workspaceMatches(segments, parts) {
+  if (parts.some((part) => ['node_modules', 'dist', '.git'].includes(part)))
+    return false
+  const segment = (pattern) =>
+    new RegExp(
+      '^' +
+        pattern
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*')
+          .replace(/\?/g, '.') +
+        '$'
+    )
+  const match = (i, j) => {
+    if (i === segments.length) return j === parts.length
+    if (segments[i] === '**')
+      return match(i + 1, j) || (j < parts.length && match(i, j + 1))
+    return (
+      j < parts.length &&
+      segment(segments[i]).test(parts[j]) &&
+      match(i + 1, j + 1)
+    )
+  }
+  return match(0, 0)
+}
+// SPEC0243 §3.3 static guard, evaluated on the complete commit listing
+// (`names`, every tracked path) and the root manifests of the source root,
+// before any resolution, config or archive step. It returns the first
+// conflict found, or null. A tracked manifest above the 16 MiB cap of
+// readJson is a conflict (it cannot be inspected, so it fails closed); a
+// missing or malformed one is left to the existing refusals of the recipe.
+const OVERSIZED = Symbol('oversized')
+export function referenceSourceExclusionConflict(sourceRoot, names) {
+  const tracked = new Set(names)
+  const json = (name) => {
+    if (!tracked.has(name)) return undefined
+    try {
+      const file = path.join(sourceRoot, name)
+      const stat = fs.lstatSync(file)
+      if (!stat.isFile()) return undefined
+      if (stat.size > 16 * 1024 * 1024) return OVERSIZED
+      return JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch {
+      return undefined
+    }
+  }
+  for (const name of names)
+    if (referenceSourceExcluded(name) && path.posix.basename(name) === '.npmrc')
+      return 'npmrc:' + name
+  const manifest = json('package.json')
+  if (manifest === OVERSIZED) return 'oversized:package.json'
+  const workspaces = Array.isArray(manifest?.workspaces)
+    ? manifest.workspaces
+    : Array.isArray(manifest?.workspaces?.packages)
+      ? manifest.workspaces.packages
+      : []
+  const directories = new Set()
+  for (const name of names) {
+    const parts = name.split('/')
+    for (let i = 1; i < parts.length; i++)
+      directories.add(parts.slice(0, i).join('/'))
+  }
+  for (const pattern of workspaces) {
+    if (typeof pattern !== 'string') continue
+    const segments = pattern.split('/')
+    const literal = []
+    for (const part of segments) {
+      if (/[*?]/.test(part)) break
+      literal.push(part)
+    }
+    if (literal.length && referenceSourceExcluded(literal.join('/')))
+      return 'workspace:' + pattern
+    // Any listed directory under the prefix that the pattern reaches is a
+    // conflict, with or without a manifest (the manifest is item 3 below).
+    for (const directory of directories)
+      if (
+        referenceSourceExcluded(directory) &&
+        workspaceMatches(segments, directory.split('/'))
+      )
+        return 'workspace:' + pattern
+  }
+  const lock = json('package-lock.json')
+  if (lock === OVERSIZED) return 'oversized:package-lock.json'
+  const packages =
+    lock?.packages && typeof lock.packages === 'object' ? lock.packages : {}
+  for (const [key, value] of Object.entries(packages)) {
+    if (key && referenceSourceExcluded(key)) return 'lock:' + key
+    if (!value || typeof value.resolved !== 'string') continue
+    const target = value.link
+      ? value.resolved
+      : value.resolved.startsWith('file:')
+        ? value.resolved.slice(5)
+        : null
+    if (
+      target !== null &&
+      referenceSourceExcluded(path.posix.normalize(target).replace(/^\.\//, ''))
+    )
+      return 'lock-target:' + key
+  }
+  return null
+}
 // Only the LOCATION of the pinned Node22/npm toolchain is configurable:
 // CVG_PINNED_NODE / CVG_PINNED_NPM name it explicitly; by default it is the
 // running Node (physical path of process.execPath) and the npm bundled beside
@@ -767,6 +882,13 @@ function readReceipt(manifestPath, expectedSha256) {
     }
     requireValue(flags.has(arg), 'REFERENCE_RECIPE_INVALID')
   }
+  // SPEC0243 §3.4: exactly the closed exclusion list, never absent or extra.
+  requireValue(
+    Array.isArray(recipe.sourceExclusions) &&
+      canonicalJson(recipe.sourceExclusions) ===
+        canonicalJson(REFERENCE_SOURCE_EXCLUSIONS),
+    'REFERENCE_SOURCE_SCOPE_INVALID'
+  )
   requireValue(
     record(r.selection) &&
       r.selection.platform === process.platform &&

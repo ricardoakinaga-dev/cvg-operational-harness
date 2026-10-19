@@ -11,7 +11,10 @@ import {
   fingerprintToolchain,
   collectPackageInventory,
   INSTALLED_IDENTITY_LIMITS,
-  pinnedToolchainLocation
+  pinnedToolchainLocation,
+  REFERENCE_SOURCE_EXCLUSIONS,
+  referenceSourceExcluded,
+  referenceSourceExclusionConflict
 } from './boundary-installed-identity.mjs'
 import {
   referenceEnvironment,
@@ -223,6 +226,26 @@ function allFiles(root, limits, digest = true, sampling = false) {
   }
   visit(root, 0)
   return { entries, regularBytes, maxDepth, list }
+}
+
+// SPEC0243 §3.2: every regular file of the snapshot, relative and sorted.
+// Anything that is not a directory or a regular file is a mismatch.
+function snapshotFiles(root, limits) {
+  const list = []
+  let entries = 0
+  const visit = (dir) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (++entries > limits.maxEntries)
+        throw unavailable('REFERENCE_ENTRIES_LIMIT')
+      const file = path.join(dir, item.name)
+      if (item.isDirectory()) visit(file)
+      else if (item.isFile())
+        list.push(path.relative(root, file).split(path.sep).join('/'))
+      else throw unavailable('SNAPSHOT_MISMATCH')
+    }
+  }
+  visit(root)
+  return list.sort()
 }
 
 function cacheFile(cacheSource, integrity) {
@@ -505,7 +528,11 @@ export async function buildInstalledReference(options) {
     const listed = []
     await listTree('', listed)
     const rawTree = Buffer.concat(listed)
-    const files = rawTree
+    // The whole listing round-trips UTF-8, paged or not (SPEC0243 RS03): a
+    // name under an excluded prefix is still checked, never silently skipped.
+    if (!Buffer.from(rawTree.toString('utf8'), 'utf8').equals(rawTree))
+      throw unavailable('SOURCE_PATH_INVALID')
+    const tracked = rawTree
       .toString('utf8')
       .split('\0')
       .filter(Boolean)
@@ -516,9 +543,34 @@ export async function buildInstalledReference(options) {
         if (!safe(name)) throw unavailable('SOURCE_PATH_INVALID')
         return { mode, oid, size: Number(size), name }
       })
-      .filter(({ name }) => !excluded(name))
-    if (files.some(({ mode }) => !['100644', '100755'].includes(mode)))
+    // The mode check covers the complete listing, the excluded prefix and the
+    // historical denylist included (SPEC0243 §3.2, RS03).
+    if (tracked.some(({ mode }) => !['100644', '100755'].includes(mode)))
       throw unavailable('SOURCE_LINK_UNSUPPORTED')
+    const listedFiles = tracked.filter(({ name }) => !excluded(name))
+    // SPEC0243 §3.3: the static guard runs on the complete listing, before
+    // validateConfigs, fingerprintResolution and the archive.
+    if (
+      referenceSourceExclusionConflict(
+        sourceRoot,
+        tracked.map(({ name }) => name)
+      )
+    )
+      throw unavailable('SOURCE_EXCLUSION_CONFLICT')
+    // Only the snapshot, its limits, its digest and the archive lose the
+    // excluded prefix; the checks above covered it.
+    const files = listedFiles.filter(
+      ({ name }) => !referenceSourceExcluded(name)
+    )
+    const included = files.map(({ name }) => name).sort()
+    const snapshotMatches = () => {
+      const actual = snapshotFiles(snapshot, limits)
+      if (
+        actual.length !== included.length ||
+        actual.some((name, i) => name !== included[i])
+      )
+        throw unavailable('SNAPSHOT_MISMATCH')
+    }
     if (
       files.length > limits.maxEntries ||
       files.reduce((sum, f) => sum + f.size, 0) > limits.maxTotalBytes ||
@@ -540,6 +592,7 @@ export async function buildInstalledReference(options) {
       await run(
         '/usr/bin/git',
         [
+          '--literal-pathspecs',
           'archive',
           '--format=tar',
           commit,
@@ -560,6 +613,7 @@ export async function buildInstalledReference(options) {
       ])
       fs.unlinkSync(archive)
     }
+    snapshotMatches()
     if (
       sourceDigest(snapshot, files) !== sourceSha256 ||
       canonicalJson(fingerprintResolution(snapshot)) !==
@@ -631,6 +685,7 @@ export async function buildInstalledReference(options) {
       validateConfigs(snapshot, files)
     }
     revalidate()
+    snapshotMatches()
     const trace = path.join(logs, 'npm.trace')
     const result = await run(
       '/usr/bin/strace',
@@ -753,6 +808,7 @@ export async function buildInstalledReference(options) {
       completed: true,
       environment: env,
       sourceSha256,
+      sourceExclusions: [...REFERENCE_SOURCE_EXCLUSIONS],
       auxiliaryPins: AUXILIARY_PINS,
       cachePayloads: seeded.payloads,
       cacheUnavailable: seeded.missing,

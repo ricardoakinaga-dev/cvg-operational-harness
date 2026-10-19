@@ -9,7 +9,8 @@ export default defineConfig({
     ...baseConfig.test,
     include: [
       'tests/b6-0234-reference-recipe.integration.js',
-      'tests/b6-0236-compiled-provenance.integration.js'
+      'tests/b6-0236-compiled-provenance.integration.js',
+      'tests/b6-0243-reference-source-scope.integration.js'
     ],
     passWithNoTests: false
   }

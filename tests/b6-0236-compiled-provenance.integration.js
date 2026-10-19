@@ -199,7 +199,8 @@ beforeAll(() => {
       exitCode: 0,
       offline: true,
       ignoreScripts: true,
-      completed: true
+      completed: true,
+      sourceExclusions: ['docs/04_audit/evidence']
     },
     selection: {
       platform: process.platform,
@@ -453,6 +454,23 @@ describe('SPEC0236 compiler-only provenance', () => {
               part.endsWith('.tsbuildinfo')
           )
     })
+    // SPEC0243 (literal migration): with a different dependencies root the
+    // recipe requires the same pinned compiler in the source too, and decides
+    // the input closure on the source before the archive.
+    fs.cpSync(
+      path.join(evaluated, 'node_modules/typescript'),
+      path.join(alternative, 'node_modules/typescript'),
+      { recursive: true }
+    )
+    fs.mkdirSync(path.join(alternative, 'node_modules/@cvg'))
+    fs.symlinkSync(
+      '../../packages/contracts',
+      path.join(alternative, 'node_modules/@cvg/harness-contracts')
+    )
+    fs.symlinkSync(
+      '../../packages/shared',
+      path.join(alternative, 'node_modules/@cvg/shared')
+    )
     write(
       alternative,
       'outside.d.ts',
