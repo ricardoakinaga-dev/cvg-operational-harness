@@ -51,13 +51,82 @@ export const BUILTIN_ALLOWLIST = Object.freeze([
   'node:url',
   'node:util'
 ])
+// SPEC0238 second literal profile: its own closed list, SPEC and entry.
+export const CAPTURE_SOURCE_PATHS = Object.freeze(
+  [
+    'scripts/claude100-reference-capture.mjs',
+    'tests/claude100/reference-capture/client.mjs',
+    'tests/claude100/reference-capture/constants.mjs',
+    'tests/claude100/reference-capture/controller.mjs',
+    'tests/claude100/reference-capture/docker.mjs',
+    'tests/claude100/reference-capture/evidence.mjs',
+    'tests/claude100/reference-capture/inputs.mjs',
+    'tests/claude100/reference-capture/model.mjs',
+    'tests/claude100/reference-capture/observer.mjs',
+    'tests/claude100/reference-capture/profile.mjs',
+    'tests/claude100/reference-capture/protocol.mjs',
+    'tests/claude100/reference-capture/report.mjs',
+    'tests/claude100/reference-capture/script.mjs',
+    'tests/claude100/reference-capture/trace.mjs',
+    'tests/claude100/reference-capture/workspace.mjs',
+    'tests/claude100/qualification/strict-json.mjs',
+    'tests/claude100/qualification/errors.mjs',
+    'tests/claude100/qualification/safe-io.mjs',
+    'tests/support/governed-test-kit/index.js',
+    'tests/support/governed-test-kit/package.json',
+    'docs/02_spec/0238_claude_scripted_reference_capture.md',
+    'tests/claude100/reference-port/bootstrap.mjs'
+  ].sort()
+)
+export const CAPTURE_BUILTIN_ALLOWLIST = Object.freeze([
+  'node:buffer',
+  'node:child_process',
+  'node:crypto',
+  'node:events',
+  'node:fs',
+  'node:fs/promises',
+  'node:http',
+  'node:os',
+  'node:path',
+  'node:perf_hooks',
+  'node:url',
+  'node:util'
+])
+// The single literal transfer point of the SPEC0238 CLI, after this boundary.
+export const CAPTURE_ENTRY = 'tests/claude100/reference-capture/controller.mjs'
+export const CAPTURE_CLI = 'scripts/claude100-reference-capture.mjs'
 const MAX_FILES = 256,
   MAX_BYTES = 1024 * 1024
 const SPEC_SHA256 =
   'aaa12b3ee55021e357fc9a17518316135eb4ca423b87215af754cd18dbb41f04'
+const CAPTURE_SPEC_SHA256 =
+  '73ab205e2a7b84e3db9792bd2833ac515dd332647bfd30480e9fef6b81debadc'
 const SOURCE_ROOT = path.resolve(
   fileURLToPath(new URL('../../../', import.meta.url))
 )
+// Literal profiles only. No data, manifest or CLI argument selects one.
+const PORT_PROFILE = Object.freeze({
+  label: 'Native port bootstrap',
+  sources: SOURCE_PATHS,
+  builtins: BUILTIN_ALLOWLIST,
+  specSuffix: '/0235_claude_native_port_probe.md',
+  specSha256: SPEC_SHA256,
+  prefix: '.native-port-bootstrap-',
+  signals: Object.freeze(['SIGINT', 'SIGTERM']),
+  scanImports: false,
+  cli: null
+})
+const CAPTURE_PROFILE = Object.freeze({
+  label: 'Reference capture bootstrap',
+  sources: CAPTURE_SOURCE_PATHS,
+  builtins: CAPTURE_BUILTIN_ALLOWLIST,
+  specSuffix: '/0238_claude_scripted_reference_capture.md',
+  specSha256: CAPTURE_SPEC_SHA256,
+  prefix: '.reference-capture-bootstrap-',
+  signals: Object.freeze(['SIGHUP', 'SIGINT', 'SIGTERM']),
+  scanImports: true,
+  cli: CAPTURE_CLI
+})
 const tuple = (s) =>
   [
     s.dev,
@@ -72,40 +141,86 @@ const tuple = (s) =>
   ].map(String)
 const directoryTuple = (s) => [s.dev, s.ino, s.mode, s.uid, s.gid].map(String)
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i])
-const error = (code, cause) =>
-  Object.assign(
-    new Error(`Native port bootstrap: ${code}`, cause ? { cause } : undefined),
-    { code }
-  )
-const combined = (code, causes) =>
-  error(
-    code,
-    new AggregateError(causes, 'Native port bootstrap causes', {
-      cause: causes[0]
-    })
-  )
-function requireThat(condition, code = 'INPUT_INVALID') {
-  if (!condition) throw error(code)
-}
-function absolute(filename) {
-  requireThat(
-    typeof filename === 'string' &&
-      path.isAbsolute(filename) &&
-      !filename.includes('\0') &&
-      !filename.includes('\\')
-  )
-  requireThat(
-    filename.split('/').every((part) => part !== '.' && part !== '..')
-  )
-  return path.resolve(filename)
+
+/** Closed static import graph of one literal profile; builtins only from its allowlist. */
+export function scanProfileImports(entries, sources, builtins, cli) {
+  const listed = new Set(sources)
+  for (const { path: relative, bytes } of entries) {
+    if (!/\.(?:mjs|js)$/.test(relative)) continue
+    let text
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      return false
+    }
+    // Whitespace and block/line comments may sit between a keyword and its
+    // target; none of them hides an import from this closed scan.
+    const gap = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*`
+    const dynamic = [
+      ...text.matchAll(new RegExp(String.raw`\bimport${gap}\(`, 'g'))
+    ].length
+    if (dynamic !== (relative === cli ? 1 : 0)) return false
+    const specifiers = [
+      ...[
+        ...text.matchAll(
+          new RegExp(String.raw`\bfrom${gap}['"]([^'"\n]+)['"]`, 'g')
+        )
+      ].map((m) => m[1]),
+      ...[
+        ...text.matchAll(
+          new RegExp(String.raw`\bimport${gap}['"]([^'"\n]+)['"]`, 'g')
+        )
+      ].map((m) => m[1])
+    ]
+    for (const specifier of specifiers) {
+      if (specifier.startsWith('node:')) {
+        if (!builtins.includes(specifier)) return false
+        continue
+      }
+      if (!specifier.startsWith('./') && !specifier.startsWith('../'))
+        return false
+      const target = path.posix.normalize(
+        path.posix.join(path.posix.dirname(relative), specifier)
+      )
+      if (target.startsWith('../') || !listed.has(target)) return false
+    }
+  }
+  return true
 }
 
-/** Freeze the fixed host graph using builtins only, before any protected import. */
-export async function freezeHostGraph(evidenceRoot) {
+/** Freeze one fixed literal graph using builtins only, before any protected import. */
+async function freezeGraph(profile, evidenceRoot) {
+  const error = (code, cause) =>
+    Object.assign(
+      new Error(`${profile.label}: ${code}`, cause ? { cause } : undefined),
+      { code }
+    )
+  const combined = (code, causes) =>
+    error(
+      code,
+      new AggregateError(causes, `${profile.label} causes`, {
+        cause: causes[0]
+      })
+    )
+  function requireThat(condition, code = 'INPUT_INVALID') {
+    if (!condition) throw error(code)
+  }
+  function absolute(filename) {
+    requireThat(
+      typeof filename === 'string' &&
+        path.isAbsolute(filename) &&
+        !filename.includes('\0') &&
+        !filename.includes('\\')
+    )
+    requireThat(
+      filename.split('/').every((part) => part !== '.' && part !== '..')
+    )
+    return path.resolve(filename)
+  }
   const destination = absolute(evidenceRoot)
   let cancellation = null
   const signalHandlers = new Map(
-    ['SIGINT', 'SIGTERM'].map((signal) => [
+    profile.signals.map((signal) => [
       signal,
       () => {
         cancellation ??= Object.assign(error('SIGNAL'), { signal })
@@ -121,7 +236,8 @@ export async function freezeHostGraph(evidenceRoot) {
     pins = [],
     entries = []
   const createdDirectories = [],
-    createdFiles = []
+    createdFiles = [],
+    scanned = []
   let root = null,
     totalBytes = 0,
     disposePromise = null
@@ -398,8 +514,8 @@ export async function freezeHostGraph(evidenceRoot) {
   try {
     checkCancellation()
     requireThat(
-      SOURCE_PATHS.length <= MAX_FILES &&
-        new Set(SOURCE_PATHS).size === SOURCE_PATHS.length
+      profile.sources.length <= MAX_FILES &&
+        new Set(profile.sources).size === profile.sources.length
     )
     const evidence = await directory(destination)
     const evidenceStat = await evidence.handle.stat({ bigint: true })
@@ -410,11 +526,11 @@ export async function freezeHostGraph(evidenceRoot) {
     checkCancellation()
     const base = await newDirectory(
       evidence,
-      `.native-port-bootstrap-${randomBytes(16).toString('hex')}`
+      `${profile.prefix}${randomBytes(16).toString('hex')}`
     )
     root = base.filename
     checkCancellation()
-    for (const relative of SOURCE_PATHS) {
+    for (const relative of profile.sources) {
       checkCancellation()
       requireThat(
         !path.isAbsolute(relative) &&
@@ -429,10 +545,12 @@ export async function freezeHostGraph(evidenceRoot) {
         constants.O_RDONLY
       )
       const { selected } = await pin(original)
-      if (relative.endsWith('/0235_claude_native_port_probe.md'))
-        requireThat(selected.sha256 === SPEC_SHA256, 'IDENTITY_MISMATCH')
+      if (relative.endsWith(profile.specSuffix))
+        requireThat(selected.sha256 === profile.specSha256, 'IDENTITY_MISMATCH')
       totalBytes += selected.size
       requireThat(totalBytes <= MAX_BYTES, 'CAP')
+      if (profile.scanImports)
+        scanned.push({ path: relative, bytes: selected.bytes })
       const parent = await snapshotParent(relative, base)
       const copyName = path.join(root, relative)
       const copy = await selectedFile(
@@ -467,6 +585,15 @@ export async function freezeHostGraph(evidenceRoot) {
         })
       )
     }
+    if (profile.scanImports)
+      requireThat(
+        scanProfileImports(
+          scanned,
+          profile.sources,
+          profile.builtins,
+          profile.cli
+        )
+      )
     for (const selected of pins) {
       checkCancellation()
       await selected.verify()
@@ -478,7 +605,7 @@ export async function freezeHostGraph(evidenceRoot) {
       pins: Object.freeze([...pins]),
       entries: Object.freeze(entries),
       totalBytes,
-      builtinAllowlist: BUILTIN_ALLOWLIST,
+      builtinAllowlist: profile.builtins,
       dispose
     })
   } catch (primary) {
@@ -516,4 +643,14 @@ export async function freezeHostGraph(evidenceRoot) {
   } finally {
     for (const [signal, handler] of signalHandlers) process.off(signal, handler)
   }
+}
+
+/** SPEC0235 profile: unchanged signature, list, signals and behavior. */
+export async function freezeHostGraph(evidenceRoot) {
+  return freezeGraph(PORT_PROFILE, evidenceRoot)
+}
+
+/** SPEC0238 profile: separate literal list, SPEC, CLI and SIGHUP/SIGINT/SIGTERM. */
+export async function freezeCaptureGraph(evidenceRoot) {
+  return freezeGraph(CAPTURE_PROFILE, evidenceRoot)
 }

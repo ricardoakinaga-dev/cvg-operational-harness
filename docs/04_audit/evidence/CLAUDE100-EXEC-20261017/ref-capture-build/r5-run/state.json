@@ -1,0 +1,73 @@
+{
+  "task": "C100-Q01-REF-CAPTURE-001:R5-BUILD-RUN",
+  "recorded_at": "2026-10-19T02:55:00Z",
+  "status": "COMPLETED_LOCAL_STOPPED_BEFORE_ROOT_INTEGRATION",
+  "result": "COLLECTED_REQUIRES_REVIEW/0. TEXT, READ e WRITE_DENIED CAPTURED. Desfechos pré-registrados: READ = R1, WRITE_DENIED = W1",
+  "authority": "APPROVED_SPEC_DELTA do usuário (spec-delta-proposal/user-decision-r5-20261019.json, raiz 0ea5feef) sobre a SPEC0238 revisão 2, 73ab205e2a7b84e3db9792bd2833ac515dd332647bfd30480e9fef6b81debadc",
+  "candidate": {
+    "path": "/mnt/dados/cvg-work/cvg-claude100-refcapture-r5-20261019",
+    "detached": true,
+    "base": "d6f869e5",
+    "commits": [
+      "abe3609f (implementação; R1 REVISE)",
+      "ecb54e2417bdbfaf1b09a8adac13b2d861ae739c (retrabalho 1: R3 do READ; R2 APPROVE_CODE)"
+    ],
+    "focal_tests": "tests/claude100 914/914 (reference-capture 247, reference-port 268), confirmados dentro do gate unit"
+  },
+  "code_review": {
+    "R1": "REVISE, obrigatório único R5-1-01 (P2): o R3 do READ (permission_denials não vazio) não era aplicado. P3 R5-1-02 registrado (W3 com workspace alterado segue a L128) e R5-1-03 aplicado (knobs onlyRead/readDenial)",
+    "R2": "APPROVE_CODE, sem achados (code-review-r2/result.json)",
+    "reworks_used": "1 de 2"
+  },
+  "pin_recheck": "pin-recheck.json: 2.1.302 presente e com sha 60d7eb7f… antes de armar; nenhum binário trocado",
+  "dev_smoke": "smoke-preflight.json: uma smoke só de preflight, sem processo Claude, terminou em TIMEOUT no docker create (2005 ms, sem container criado). Três sondas de create rotuladas, criadas sem start e removidas, mediram cerca de 0,2 s (declaradas, sem bruto próprio). No run3 todas as chamadas Docker ficaram em até 1201 ms",
+  "native_run": {
+    "run_id": "c100_ref_capture_20261019_run3",
+    "nonce": "c9c928707aa452ac16d847196769f13f",
+    "launch": "2026-10-19T01:51:18Z..01:51:30Z, CLI exit 0, executada uma única vez, sem retry",
+    "report_sha256": "deaf04135b57bb8a676380a51c1289681fac3c7e7048b8528f19f21cb116fc90",
+    "artifacts": "172 artefatos, 900201 bytes; cópia em capture-run3/ (174 arquivos, 0 divergências)",
+    "observed": {
+      "version": "processo 0: '2.1.302 (Claude Code)', exit 0",
+      "TEXT": "CAPTURED. POST BETA_TRUE/NONE/SENTINEL com tools [], resposta 200, result CVG_CAPTURE_TEXT_OK_V1 e permission_denials []",
+      "READ": "CAPTURED (R1). Inventário exatamente {Edit, Read}. tool_use Read em /workspace/input.txt; o segundo POST tem um único tool_result do mesmo ID, sem is_error, com content bruto '1\\tCVG_CAPTURE_READ_INPUT_V1\\n2\\t' (formato numerado do cliente, não os bytes do arquivo nem prova de READ_PASS). Result CVG_CAPTURE_READ_DONE_V1; permission_denials []",
+      "WRITE_DENIED": "CAPTURED (W1). Inventário {Edit, Read}. tool_use Edit com o input literal; o segundo POST tem um único tool_result do mesmo ID com is_error true, cujo content começa com 'Permission to use Edit has been denied because Claude Code is running in don't ask mode.'. permission_denials tem exatamente uma entrada {tool_name Edit, tool_use_id toolu_cvg_write_1, tool_input igual ao literal sob C()}; denied.txt continua ausente e o workspace ficou inalterado",
+      "static_prediction": "O inventário {Read, Edit} confirma no observável a previsão (c) da análise estática; (a) e (b) previam {Read} e ficam refutadas como formuladas"
+    },
+    "inferred_not_proven": [
+      "A causa do inventário (modo simples do --bare sem Write) continua sendo leitura estática, corroborada por run2 e run3; o run3 não exercita Write",
+      "Que a negação passou pelo ramo dontAsk é inferido do texto idêntico a pwe('Edit'); a prova da SPEC é permission_denials + is_error",
+      "A natureza das três requests rejeitadas (OTHER/OTHER/EMPTY/ABSENT) não é retida"
+    ],
+    "cleanup": "observer 4ff12500… e client f6094aef… REMOVED; ausência confirmada"
+  },
+  "rc_runtime": {
+    "RC01": "PASS",
+    "RC02": "PASS",
+    "RC03": "PASS",
+    "RC04": "PASS",
+    "RC05": "PASS (captura do callback nativo; sem qualificação semântica)",
+    "RC06": "PASS",
+    "RC07": "PASS",
+    "RC08": "PASS",
+    "RC09": "PASS",
+    "RC10": "NOT_RUN (EXTERNAL_GATE_PENDING)",
+    "RC11": "PASS (só a parte local; RAW3-04)"
+  },
+  "raw_audit": {
+    "verdict": "ACCEPT_RAW_EVIDENCE",
+    "checks": "RA01..RA24 PASS",
+    "outcomes": {
+      "READ": "R1",
+      "WRITE_DENIED": "W1"
+    },
+    "mandatory": "RAW3-01, registro do run3: atendido por este state.json",
+    "p3": "RAW3-02..08 registrados: mecanismo do inventário como inferência; negação provada por permission_denials/is_error; RC11 só local; content do Read numerado; attach fora de calls.json; sondas só declaradas; metadata efêmera, cc_version e custo sintético não são dados reais",
+    "result": "raw-audit-run3/result.json"
+  },
+  "gates": "Todos PASS exceto format, débito do commit base em docs/08_runtime/agent_coordination.md, inalterado. O verify falha só por esse gate (gates/gates-summary.json)",
+  "integration": "integration-candidate.json lista 28 caminhos de ecb54e24 (7 mudaram desde d6f869e5). 25 não existem na raiz; pré-estados conferidos contra a raiz em 6a9329eb: SPEC 48b27084→73ab205e, bootstrap.mjs 6f6a89d9→6e8eeb1a, bootstrap.test.js fa23f559→f3272fd8. Não integrados",
+  "empty_artifacts": "empty-artifact-delta.json propõe 5 registros: quatro stderr.bin vazios e cli-run3.log. O catálogo central não foi editado",
+  "resources": "resources-release.json: nenhum container, rede, processo ou PG próprio; portas 55896/3406/4406 livres; marcadores vazios",
+  "next_action": "Lead e integrador MAIN-CONSOLIDATION: PR único com os 28 caminhos de ecb54e24 e a evidência r5-run/**, aplicando o ledger-delta e o empty-artifact-delta. RC10 (gate externo) e a parte externa de RC11 seguem pendentes. Sem push, produção, M1 ou PAR nesta unidade."
+}

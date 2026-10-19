@@ -1,0 +1,704 @@
+import {
+  CASES,
+  LIMITS,
+  PINS,
+  VERSION_PATTERN,
+  caseOf,
+  caseTag,
+  fault,
+  ordinalOf,
+  sha256
+} from './constants.mjs'
+import { KINDS, RawDecoder, keyName, parseControlLine } from './protocol.mjs'
+import {
+  REJECT_SCRIPT,
+  TURNS,
+  inspectNativeResult,
+  inspectRequestBody,
+  turnScript
+} from './script.mjs'
+import { expectedWorkspaceState } from './workspace.mjs'
+
+export const RAW_PIPES = Object.freeze({
+  client: 'raw/client-stderr.bin',
+  observer: 'raw/observer-stderr.bin'
+})
+export const observerKey = (
+  caseId,
+  requestOrdinal,
+  kind,
+  segmentIndex = null
+) =>
+  keyName({
+    role: 'observer',
+    caseTag: caseTag(caseId),
+    requestOrdinal,
+    kind,
+    segmentIndex
+  })
+export const clientKey = (processOrdinal, channel) =>
+  `client/${processOrdinal}/${channel}`
+
+/** NDJSON control stream of one role: canonical frames, seq from 0, caps. */
+export class ControlStream {
+  constructor(role, runId) {
+    this.role = role
+    this.runId = runId
+    this.pending = Buffer.alloc(0)
+    this.bytes = 0
+    this.parsedBytes = 0
+    this.seq = 0
+    this.error = null
+    this.wire = []
+  }
+  /** Returns parsed {raw, frame} items; the first violation stops parsing. */
+  feed(chunk) {
+    this.wire.push(Buffer.from(chunk))
+    const items = []
+    if (this.error) return items
+    try {
+      this.bytes += chunk.length
+      if (this.bytes > LIMITS.controlBytes) throw fault('CAP')
+      this.pending = Buffer.concat([this.pending, chunk])
+      let end
+      while ((end = this.pending.indexOf(10)) !== -1) {
+        const raw = Buffer.from(this.pending.subarray(0, end + 1))
+        if (raw.length > LIMITS.controlFrameBytes) throw fault('CAP')
+        if (this.seq >= LIMITS.controlFrames) throw fault('CAP')
+        const frame = parseControlLine(raw, this.role, this.runId, this.seq)
+        this.seq++
+        this.pending = this.pending.subarray(end + 1)
+        this.parsedBytes += raw.length
+        items.push({ raw, frame })
+      }
+      if (this.pending.length > LIMITS.controlFrameBytes) throw fault('CAP')
+    } catch (cause) {
+      this.error = cause?.code ? cause : fault('PROTOCOL', cause)
+    }
+    return items
+  }
+  tail() {
+    return Buffer.concat(this.wire).subarray(this.parsedBytes)
+  }
+}
+
+/** Binary keys of one role; payloads are joined only per physical key. */
+export class KeyStore {
+  constructor(role) {
+    this.role = role
+    this.decoder = new RawDecoder(role)
+    this.keys = new Map()
+    this.wire = []
+    this.parsedBytes = 0
+  }
+  get error() {
+    return this.decoder.error ?? null
+  }
+  feed(chunk) {
+    this.wire.push(Buffer.from(chunk))
+    const frames = this.decoder.feed(chunk)
+    for (const frame of frames) this.accept(frame)
+    return frames
+  }
+  accept(frame) {
+    const name = keyName(frame.key)
+    let entry = this.keys.get(name)
+    if (!entry) {
+      entry = { key: frame.key, payloads: [], terminated: false, frames: 0 }
+      this.keys.set(name, entry)
+    }
+    entry.frames++
+    if (frame.payloadBytes === 0) entry.terminated = true
+    else entry.payloads.push(Buffer.from(frame.payload))
+    this.parsedBytes = frame.offset + frame.frame.length
+  }
+  entry(name) {
+    const entry = this.keys.get(name)
+    if (!entry) return null
+    return { ...entry, bytes: Buffer.concat(entry.payloads) }
+  }
+  wireBytes() {
+    return Buffer.concat(this.wire)
+  }
+  tail() {
+    return this.wireBytes().subarray(this.parsedBytes)
+  }
+}
+
+/** POST candidate of SPEC0238 rev.1: POST + MESSAGES + EMPTY/BETA_TRUE + no Expect. */
+export const isCandidate = (b) =>
+  b.methodClass === 'POST' &&
+  b.pathClass === 'MESSAGES' &&
+  (b.queryClass === 'EMPTY' || b.queryClass === 'BETA_TRUE') &&
+  b.expectClass === 'NONE'
+
+// Coupling of REJECTED to its BEGIN. Precedence of the frozen observer:
+// CAP, FORBIDDEN_AUTH, UNSUPPORTED_ROUTE, EARLY_PHASE, MISSING_SENTINEL.
+// A FORBIDDEN BEGIN only admits FORBIDDEN_AUTH or CAP. The single
+// FORBIDDEN_AUTH without authClass FORBIDDEN is the frozen trailers path of an
+// armed SENTINEL candidate, refused after its body (PRIVACY).
+const REJECT_RULES = {
+  EARLY_PHASE: (b) =>
+    isCandidate(b) && b.caseId === null && b.authClass !== 'FORBIDDEN',
+  MISSING_SENTINEL: (b) =>
+    isCandidate(b) && b.caseId !== null && b.authClass === 'ABSENT',
+  FORBIDDEN_AUTH: (b) =>
+    b.authClass === 'FORBIDDEN' ||
+    (isCandidate(b) && b.caseId !== null && b.authClass === 'SENTINEL'),
+  UNSUPPORTED_ROUTE: (b) =>
+    b.authClass !== 'FORBIDDEN' &&
+    (b.methodClass === 'OTHER' ||
+      b.pathClass === 'OTHER' ||
+      b.queryClass === 'OTHER' ||
+      b.expectClass === 'EXPECT'),
+  CAP: () => true
+}
+
+/**
+ * Single admission authority for host commands and wrapper frames, replayed
+ * identically live and from the persisted trace. Violations are codes.
+ */
+export class Sequencer {
+  constructor() {
+    this.commands = { client: [], observer: [] }
+    this.issued = {
+      configure: null,
+      start: new Map(),
+      arm: new Map(),
+      endCase: new Map(),
+      stop: { client: null, observer: null }
+    }
+    this.obs = {
+      count: 0,
+      ready: null,
+      before: null,
+      closed: null,
+      armed: null,
+      armedFrames: new Map(),
+      nextBegin: 0,
+      requests: new Map(),
+      states: new Map(),
+      caseEnded: new Map(),
+      errors: []
+    }
+    this.cli = {
+      count: 0,
+      ready: null,
+      closed: null,
+      starts: new Map(),
+      ends: new Map(),
+      errors: []
+    }
+  }
+  command(to, type, payload, ordinal) {
+    const item = { type, payload, ordinal }
+    this.commands[to].push(item)
+    if (type === 'CONFIGURE') this.issued.configure = item
+    else if (type === 'START_NATIVE')
+      this.issued.start.set(payload.processOrdinal, item)
+    else if (type === 'ARM') this.issued.arm.set(payload.caseId, item)
+    else if (type === 'END_CASE') this.issued.endCase.set(payload.caseId, item)
+    else if (type === 'STOP') this.issued.stop[to] = item
+  }
+  frame(role, frame, ordinal) {
+    const s = role === 'observer' ? this.obs : this.cli
+    const index = s.count++
+    const p = frame.payload,
+      type = frame.type,
+      item = { payload: p, ordinal }
+    if (s.closed) return 'PROTOCOL'
+    if (type === 'READY') {
+      if (index !== 0) return 'PROTOCOL'
+      if (role === 'client' && !this.issued.configure) return 'PROTOCOL'
+      s.ready = item
+      return null
+    }
+    if (index === 0) return 'PROTOCOL'
+    if (type === 'ERROR') {
+      s.errors.push(item)
+      return null
+    }
+    if (type === 'CLOSED') {
+      if (!this.issued.stop[role]) return 'PROTOCOL'
+      s.closed = item
+      return null
+    }
+    return role === 'observer'
+      ? this.observerFrame(type, p, item, index)
+      : this.clientFrame(type, p, item)
+  }
+  observerFrame(type, p, item, index) {
+    const o = this.obs
+    if (type === 'STATE') {
+      if (p.phase === 'BEFORE_VERSION') {
+        if (index !== 1 || o.before) return 'PROTOCOL'
+        o.before = item
+        return null
+      }
+      if (!this.issued.endCase.has(p.caseId) || o.states.has(p.caseId))
+        return 'PROTOCOL'
+      const pending = [...o.requests.values()].some(
+        (r) => r.begin.caseId === p.caseId && !r.decision
+      )
+      if (pending) return 'PROTOCOL'
+      o.states.set(p.caseId, item)
+      return null
+    }
+    if (type === 'ARMED') {
+      const arm = this.issued.arm.get(p.caseId)
+      if (
+        !o.before ||
+        !arm ||
+        arm.payload.processOrdinal !== p.processOrdinal ||
+        o.armedFrames.has(p.caseId) ||
+        o.armed !== null ||
+        p.port !== o.ready.payload.port
+      )
+        return 'PROTOCOL'
+      o.armedFrames.set(p.caseId, item)
+      o.armed = p.caseId
+      return null
+    }
+    if (type === 'REQUEST_BEGIN') {
+      if (p.ordinal !== o.nextBegin) return 'PROTOCOL'
+      o.nextBegin++
+      const allowed =
+        o.armed === null
+          ? [null]
+          : this.issued.endCase.has(o.armed)
+            ? [o.armed, null]
+            : [o.armed]
+      o.requests.set(p.ordinal, {
+        begin: p,
+        beginOrdinal: item.ordinal,
+        decision: null,
+        segments: [],
+        response: null
+      })
+      return allowed.includes(p.caseId) ? null : 'PROTOCOL'
+    }
+    if (type === 'REQUEST' || type === 'REJECTED') {
+      const r = o.requests.get(p.ordinal)
+      if (!r || r.decision || r.begin.caseId !== p.caseId) return 'PROTOCOL'
+      r.decision = { type, payload: p, ordinal: item.ordinal }
+      if (type === 'REQUEST')
+        return isCandidate(r.begin) &&
+          r.begin.authClass === 'SENTINEL' &&
+          p.caseId !== null &&
+          p.queryClass === r.begin.queryClass
+          ? null
+          : 'PROTOCOL'
+      return REJECT_RULES[p.reason](r.begin) ? null : 'PROTOCOL'
+    }
+    if (type === 'RESPONSE_SEGMENT') {
+      const r = o.requests.get(p.ordinal)
+      // expectClass null (clientError) closes the socket without a response.
+      if (
+        !r ||
+        !r.decision ||
+        r.response ||
+        r.begin.expectClass === null ||
+        r.begin.caseId !== p.caseId ||
+        p.segmentIndex !== r.segments.length ||
+        r.segments.some((s) => s.payload.outcome !== 'FINISHED')
+      )
+        return 'PROTOCOL'
+      r.segments.push(item)
+      return null
+    }
+    if (type === 'RESPONSE') {
+      const r = o.requests.get(p.ordinal)
+      if (
+        !r ||
+        !r.decision ||
+        r.response ||
+        r.begin.expectClass === null ||
+        r.begin.caseId !== p.caseId ||
+        p.segmentCount !== r.segments.length
+      )
+        return 'PROTOCOL'
+      r.response = item
+      const accepted =
+        r.decision.type === 'REQUEST' && r.decision.payload.scriptAccepted
+      return (p.status === 200) === accepted ? null : 'PROTOCOL'
+    }
+    if (type === 'CASE_ENDED') {
+      const state = o.states.get(p.caseId)
+      const end = this.issued.endCase.get(p.caseId)
+      const begins = [...o.requests.values()]
+        .filter((r) => r.begin.caseId === p.caseId)
+        .map((r) => r.begin.ordinal)
+        .sort((a, b) => a - b)
+      if (
+        !state ||
+        o.caseEnded.has(p.caseId) ||
+        end.payload.processOrdinal !== p.processOrdinal ||
+        begins.join(',') !== p.requestOrdinals.join(',') ||
+        state.payload.sha256 !== p.workspaceStateSha256 ||
+        state.payload.bytes !== p.workspaceStateBytes
+      )
+        return 'PROTOCOL'
+      o.caseEnded.set(p.caseId, item)
+      if (o.armed === p.caseId) o.armed = null
+      return null
+    }
+    return 'PROTOCOL'
+  }
+  clientFrame(type, p, item) {
+    const c = this.cli
+    if (type === 'NATIVE_START') {
+      if (
+        !this.issued.start.has(p.processOrdinal) ||
+        c.starts.has(p.processOrdinal)
+      )
+        return 'PROTOCOL'
+      c.starts.set(p.processOrdinal, item)
+      return null
+    }
+    if (type === 'NATIVE_END') {
+      const start = c.starts.get(p.processOrdinal)
+      if (!start || c.ends.has(p.processOrdinal) || start.payload.pid !== p.pid)
+        return 'PROTOCOL'
+      c.ends.set(p.processOrdinal, item)
+      return null
+    }
+    return 'PROTOCOL'
+  }
+  /** Host command windows: each launch/arm/close follows its admitted predecessor. */
+  commandViolations() {
+    const v = []
+    const after = (a, b) => a && b && a.ordinal > b.ordinal
+    const i = this.issued
+    if (i.configure && !after(i.configure, this.obs.ready)) v.push('CONFIGURE')
+    for (const [I, start] of i.start) {
+      if (I === 0) {
+        if (!after(start, this.cli.ready) || !after(start, this.obs.before))
+          v.push('START0')
+        continue
+      }
+      const K = caseOf(I)
+      const previousEnd = this.cli.ends.get(I - 1)
+      const armed = this.obs.armedFrames.get(K)
+      const previousCase = I > 1 ? this.obs.caseEnded.get(caseOf(I - 1)) : true
+      if (
+        !after(start, previousEnd) ||
+        !after(start, armed) ||
+        (I > 1 && !after(start, previousCase))
+      )
+        v.push(`START${I}`)
+    }
+    for (const [K, arm] of i.arm) {
+      const I = ordinalOf(K)
+      if (
+        !after(arm, this.cli.ends.get(0)) ||
+        (I > 1 && !after(arm, this.obs.caseEnded.get(caseOf(I - 1))))
+      )
+        v.push(`ARM${I}`)
+    }
+    for (const [K, end] of i.endCase)
+      if (!after(end, this.cli.ends.get(ordinalOf(K)))) v.push(`END${K}`)
+    return v
+  }
+}
+
+const same = (bytes, other) => Buffer.from(bytes).equals(Buffer.from(other))
+
+/** Native lineage of one process: binding of START to the frozen invocation. */
+function startViolations(start, invocation) {
+  const p = start.payload
+  return (
+    p.ppid !== 1 ||
+    p.pid <= 1 ||
+    p.executableSha256 !== PINS.claudeSha256 ||
+    p.argvSha256 !== invocation.argvSha256 ||
+    p.envSha256 !== invocation.envSha256 ||
+    p.stdinSha256 !== invocation.stdinSha256
+  )
+}
+function outputs(model, I, end) {
+  const out = model.keys.client.entry(clientKey(I, 1))
+  const err = model.keys.client.entry(clientKey(I, 2))
+  const ok =
+    out &&
+    err &&
+    out.terminated &&
+    err.terminated &&
+    out.bytes.length === end.payload.stdoutBytes &&
+    err.bytes.length === end.payload.stderrBytes &&
+    sha256(out.bytes) === end.payload.stdoutSha256 &&
+    sha256(err.bytes) === end.payload.stderrSha256
+  return { ok, out, err }
+}
+function endCodes(end) {
+  if (end.payload.timeout) return ['TIMEOUT']
+  if (end.payload.signal !== null) return ['SIGNAL']
+  return []
+}
+
+/** Version process I0: lineage, exact `2.1.302 (Claude Code)` and exit0. */
+export function deriveVersion(model, profile) {
+  const seq = model.seq
+  const dispatched = seq.issued.start.has(0)
+  const derived = []
+  const start = seq.cli.starts.get(0),
+    end = seq.cli.ends.get(0)
+  if (start && startViolations(start, profile.invocations[0]))
+    derived.push('PROTOCOL')
+  let accepted = false
+  if (end) {
+    derived.push(...endCodes(end))
+    const { ok, out } = outputs(model, 0, end)
+    if (!ok) derived.push('PROTOCOL')
+    else if (!derived.length) {
+      let text = null
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(out.bytes)
+      } catch {}
+      accepted =
+        end.payload.exitCode === 0 &&
+        end.payload.descendantsAbsent &&
+        text !== null &&
+        VERSION_PATTERN.test(text)
+      if (!accepted) derived.push('INCOMPATIBLE_TRANSCRIPT')
+    }
+  }
+  return {
+    dispatched,
+    derived: [...new Set(derived)],
+    complete: Boolean(start && end),
+    accepted
+  }
+}
+
+/**
+ * Structural derivation of one case from frames and physical keys. Missing
+ * pieces derive nothing (their cause is the recorded failure); observed but
+ * divergent pieces derive a closed code. Never reads semantic tool content.
+ */
+export function deriveCase(model, caseId, profile, eligibleBefore = 0) {
+  const seq = model.seq,
+    I = ordinalOf(caseId),
+    derived = []
+  const dispatched = seq.issued.start.has(I)
+  if (!dispatched) return { dispatched, derived, complete: false, accepted: 0 }
+  const start = seq.cli.starts.get(I),
+    end = seq.cli.ends.get(I)
+  if (start && startViolations(start, profile.invocations[I]))
+    derived.push('PROTOCOL')
+  let output = null
+  if (end) {
+    derived.push(...endCodes(end))
+    output = outputs(model, I, end)
+    if (!output.ok) derived.push('PROTOCOL')
+  }
+  const requests = [...seq.obs.requests.values()]
+    .filter((r) => r.begin.caseId === caseId)
+    .sort((a, b) => a.begin.ordinal - b.begin.ordinal)
+  let accepted = 0,
+    eligible = eligibleBefore,
+    open = true
+  for (const r of requests) {
+    const q = r.begin.ordinal
+    let script = REJECT_SCRIPT
+    if (r.decision?.type === 'REQUEST') {
+      const p = r.decision.payload
+      eligible++
+      const body = model.keys.observer.entry(
+        observerKey(caseId, q, KINDS.REQUEST_BODY)
+      )
+      if (
+        !body ||
+        !body.terminated ||
+        body.bytes.length !== p.bytes ||
+        sha256(body.bytes) !== p.bodySha256
+      )
+        derived.push('PROTOCOL')
+      else {
+        const verdict = inspectRequestBody(body.bytes, {
+          caseId,
+          turn: p.turn,
+          contentType: p.contentType,
+          contentEncoding: p.contentEncoding
+        })
+        const expectedTurn = eligible - eligibleBefore === 1 ? 1 : 2
+        const scriptAccepted =
+          verdict.scriptAccepted &&
+          open &&
+          p.turn === accepted + 1 &&
+          eligible <= LIMITS.eligiblePosts
+        if (
+          p.turn !== expectedTurn ||
+          verdict.markerVerified !== p.markerVerified ||
+          scriptAccepted !== p.scriptAccepted
+        )
+          derived.push('PROTOCOL')
+      }
+      if (p.scriptAccepted) {
+        accepted++
+        script = turnScript(caseId, p.turn)
+        if (accepted === TURNS[caseId]) open = false
+      } else {
+        open = false
+        derived.push('INCOMPATIBLE_TRANSCRIPT')
+      }
+    }
+    if (r.response) {
+      const verdict = responseVerdict(model, caseId, q, r, script)
+      if (verdict === 'PROTOCOL') derived.push('PROTOCOL')
+      else if (
+        verdict === 'INCOMPLETE' &&
+        r.decision.type === 'REQUEST' &&
+        r.decision.payload.scriptAccepted
+      )
+        derived.push('IO')
+    }
+  }
+  if (
+    end &&
+    !end.payload.timeout &&
+    end.payload.signal === null &&
+    output?.ok
+  ) {
+    const result = inspectNativeResult(output.out.bytes, caseId)
+    if (
+      end.payload.exitCode !== 0 ||
+      !end.payload.descendantsAbsent ||
+      !result.accepted ||
+      accepted !== TURNS[caseId]
+    )
+      derived.push('INCOMPATIBLE_TRANSCRIPT')
+  }
+  const state = seq.obs.states.get(caseId)
+  if (state && !stateMatches(model, caseId, state))
+    derived.push('DRIFT_RUNTIME')
+  // A key of this case without its own frame never joins a clean transcript.
+  // Judged only once the case is settled (observer CASE_ENDED): before that a
+  // response may still be in flight across the two pipes. Abort conclusions
+  // leave orphans to the final check after the attachments close.
+  if (
+    seq.obs.caseEnded.has(caseId) &&
+    orphanEntries(model).some(
+      (o) => o.key.role === 'observer' && o.key.caseTag === I
+    )
+  )
+    derived.push('PROTOCOL')
+  return {
+    dispatched,
+    derived: [...new Set(derived)],
+    complete: Boolean(start && end && state && seq.obs.caseEnded.has(caseId)),
+    accepted,
+    eligible
+  }
+}
+
+/** Observed response keys against the fixed planned script. */
+export function responseVerdict(model, caseId, q, r, script) {
+  const keys = model.keys.observer
+  const response = r.response.payload
+  const headers = keys.entry(observerKey(caseId, q, KINDS.RESPONSE_HEADERS))
+  if (
+    !headers ||
+    !headers.terminated ||
+    !same(headers.bytes, script.headersBytes) ||
+    sha256(headers.bytes) !== response.headersSha256 ||
+    response.status !== script.status ||
+    r.segments.length > script.segments.length
+  )
+    return 'PROTOCOL'
+  const finished = []
+  for (const [i, segment] of r.segments.entries()) {
+    const key = keys.entry(observerKey(caseId, q, KINDS.RESPONSE_SEGMENT, i))
+    if (
+      !key ||
+      !key.terminated ||
+      !same(key.bytes, script.segments[i]) ||
+      sha256(key.bytes) !== segment.payload.sha256 ||
+      key.bytes.length !== segment.payload.bytes
+    )
+      return 'PROTOCOL'
+    if (segment.payload.outcome === 'FINISHED') finished.push(key.bytes)
+  }
+  const body = keys.entry(observerKey(caseId, q, KINDS.RESPONSE_BODY))
+  const expected = Buffer.concat(finished)
+  if (
+    !body ||
+    !body.terminated ||
+    !same(body.bytes, expected) ||
+    sha256(body.bytes) !== response.bodySha256 ||
+    body.bytes.length !== response.bytes
+  )
+    return 'PROTOCOL'
+  const complete =
+    finished.length === script.segments.length &&
+    r.segments.every((s) => s.payload.outcome === 'FINISHED')
+  if (response.coverage === 'COMPLETE' && !complete) return 'PROTOCOL'
+  return response.coverage === 'COMPLETE' && response.outcome === 'FINISHED'
+    ? 'COMPLETE'
+    : 'INCOMPLETE'
+}
+
+export function stateMatches(model, caseId, state) {
+  const expected = expectedWorkspaceState()
+  const key = model.keys.observer.entry(
+    observerKey(caseId, null, KINDS.WORKSPACE_STATE)
+  )
+  return Boolean(
+    key &&
+    key.terminated &&
+    same(key.bytes, expected.bytes) &&
+    state.payload.sha256 === expected.sha256 &&
+    state.payload.bytes === expected.bytes.length
+  )
+}
+
+/** Status of a case from its own recorded causes; never from a declaration. */
+export function caseStatus(outcome, codes) {
+  if (!outcome.dispatched) return 'NOT_RUN'
+  if (codes.some((c) => c !== 'INCOMPATIBLE_TRANSCRIPT')) return 'FAILED'
+  if (codes.length) return 'INCOMPATIBLE'
+  return outcome.complete && outcome.derived.length === 0
+    ? 'CAPTURED'
+    : 'FAILED'
+}
+
+/** Every physical key must be backed by its own control frame/command. */
+export function orphanEntries(model) {
+  const seq = model.seq,
+    orphans = []
+  for (const [name, entry] of model.keys.observer.keys) {
+    const k = entry.key
+    const caseId = k.caseTag === 0 ? null : CASES[k.caseTag - 1]
+    const orphan = () => orphans.push({ name, key: k })
+    if (k.kind === KINDS.WORKSPACE_STATE) {
+      const state =
+        caseId === null ? seq.obs.before : seq.obs.states.get(caseId)
+      if (!state) orphan()
+      continue
+    }
+    const r = seq.obs.requests.get(k.requestOrdinal)
+    if (!r || r.begin.caseId !== caseId || !r.decision) {
+      orphan()
+      continue
+    }
+    // Each key is backed by its own frame: REQUEST, a RESPONSE_SEGMENT with
+    // the same index, or the RESPONSE of that request.
+    if (k.kind === KINDS.REQUEST_BODY && r.decision.type !== 'REQUEST') orphan()
+    if (
+      k.kind === KINDS.RESPONSE_SEGMENT &&
+      k.segmentIndex >= r.segments.length
+    )
+      orphan()
+    if (
+      (k.kind === KINDS.RESPONSE_HEADERS || k.kind === KINDS.RESPONSE_BODY) &&
+      !r.response
+    )
+      orphan()
+  }
+  for (const [name, entry] of model.keys.client.keys)
+    if (!seq.issued.start.has(entry.key.processOrdinal))
+      orphans.push({ name, key: entry.key })
+  return orphans
+}
+export const orphanKeys = (model) => orphanEntries(model).map((o) => o.name)
+
+export { caseOf, ordinalOf }

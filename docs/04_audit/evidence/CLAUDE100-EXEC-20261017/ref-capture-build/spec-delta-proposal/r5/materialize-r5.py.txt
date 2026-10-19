@@ -1,0 +1,162 @@
+"""Materialize SPEC0238 revision 2 from revision 1 (2c25a5c1) by exact edits.
+
+Usage: python3 -I materialize_0238_r5.py BASE_SPEC OUT_UNFORMATTED EDITS_JSON
+Each edit's `old` must occur exactly once in the base text (UTF-8, exact)
+and exactly once at the moment it is applied; the line count is preserved.
+"""
+import hashlib
+import json
+import sys
+
+BASE_SHA = '2c25a5c15788bb12c3853101e7eca33bef8450ad355f1d6fb1a59c807fbf1e18'
+R1_SHA = '48b270842ec83b422ecafeff2a4e802abd2194838ad3669becd2ebf825c464e6'
+EV = 'docs/04_audit/evidence/CLAUDE100-EXEC-20261017/ref-capture-build/spec-delta-proposal/'
+DELTA = EV + 'delta-r5.json'
+STATIC = EV + 'r5/client-static-analysis.json'
+
+EDITS = [
+    ('E01', 'L3 revisão',
+     'Revisão 1 de 18/10/2026 sobre a versão SHA `' + R1_SHA + '`, conforme `'
+     + EV + 'delta-r4.json`.',
+     'Revisão 2 de 18/10/2026 sobre a revisão 1 (SHA `' + BASE_SHA + '`), que por sua '
+     'vez revisou a versão SHA `' + R1_SHA + '`, conforme `' + DELTA + '`.'),
+    ('E02', 'L3 execuções anteriores',
+     'A execução `c100_ref_capture_20261018_r1` sob a versão anterior permanece '
+     '`INCOMPATIBLE_TRANSCRIPT`/1 e não é reaberta.',
+     'As execuções `c100_ref_capture_20261018_r1` (SPEC `48b27084`) e '
+     '`c100_ref_capture_20261018_run2` (SPEC `2c25a5c1`) permanecem '
+     '`INCOMPATIBLE_TRANSCRIPT`/1 e não são reabertas.'),
+    ('E03', 'L9 objetivo',
+     'e tentativa Write negada pelas permissões do cliente.',
+     'e tentativa de criar arquivo pela ferramenta Edit (old_string vazio) negada pelas '
+     'permissões do cliente.'),
+    ('E04', 'L17 leitura estática',
+     'Isso sustenta os nomes propostos, sem provar que esse ramo executa emdontAsk.',
+     'Isso sustenta os nomes propostos, sem provar que esse ramo executa emdontAsk. Na '
+     'revisão 2, uma leitura estática dos bytes do mesmo binário, sem executá-lo '
+     '(`' + STATIC + '`), localiza: o conjunto-base do modo simples ativado por `--bare` '
+     '(Bash e PowerShell condicionais, Read e Edit, nunca Write); o filtro de inventário '
+     'por regras deny e `--tools`, sem modo nem `--allowedTools`; a negação dontAsk de '
+     'ferramenta não pré-aprovada; o tool_result is_error true com a mensagem da decisão; '
+     'e o registro `{tool_name,tool_use_id,tool_input}` em permission_denials para toda '
+     'decisão não-allow, salvo deny por input inválido, e também para recusa de '
+     'validateInput marcada deniedByPermissionRule, que este perfil não alcança por não ter '
+     'regra deny com caminho. Nada disso foi observado em execução.'),
+    ('E05', 'L31 run2',
+     'A execução r1 só é verificável pelo seu próprio pacote (candidata `cda464ea`, SPEC '
+     '`48b27084`).',
+     'A execução r1 só é verificável pelo seu próprio pacote (candidata `cda464ea`, SPEC '
+     '`48b27084`). A execução run2 só é verificável pelo seu próprio pacote (candidata '
+     '`d6f869e5`, SPEC `2c25a5c1`); o validador desta revisão a recusa pelo SHA da SPEC, e '
+     'o wire continua version3.'),
+    ('E06', 'L60 argv',
+     '`--tools Read,Write --allowedTools Read` paraREAD/WRITE_DENIED.',
+     '`--tools Read,Edit --allowedTools Read` paraREAD/WRITE_DENIED. Revisão 2: sob '
+     '`--bare` o cliente 2.1.302 só oferece o conjunto simples (Bash e PowerShell '
+     'condicionais, Read e Edit) e nunca Write, conforme a leitura estática citada acima; '
+     'o restante do argv, o modo dontAsk e o perfil não mudam.'),
+    ('E07', 'L72 inventário',
+     'nos outros dois o conjunto de nomes é exatamente Read/Write, sem duplicatas.',
+     'nos outros dois o conjunto de nomes é exatamente Read/Edit, sem duplicatas e em '
+     'qualquer ordem; um inventário só com Read, com Write ou com qualquer outra '
+     'ferramenta também é divergência.'),
+    ('E08', 'L80 tool_use WRITE_DENIED',
+     'nameWrite, input `{"file_path":"/workspace/denied.txt","content":'
+     '"CVG_CAPTURE_MUST_NOT_WRITE_V1"}`',
+     'nameEdit, input `{"file_path":"/workspace/denied.txt","old_string":"",'
+     '"new_string":"CVG_CAPTURE_MUST_NOT_WRITE_V1","replace_all":false}`'),
+    ('E09', 'L110 nome da negação',
+     'tool_name=Write',
+     'tool_name=Edit'),
+    ('E10', 'L110 contrato',
+     'Essa forma é um contrato proposto, ainda não observado no binário.',
+     'A construção dessa forma foi lida estaticamente no binário (revisão 2), mas ainda '
+     'não foi observada em execução.'),
+    ('E11', 'L110 desfechos pré-registrados',
+     'sem relaxar critério ou chamar um erroRO de approval.',
+     'sem relaxar critério ou chamar um erroRO de approval. Desfechos pré-registrados da '
+     'revisão 2, todos sem relaxar RC e todos sujeitos também aos demais requisitos desta '
+     'seção: READ — (R1) inventário {Read,Edit}, Read executado, tool_result sem is_error e '
+     'coleta completa conforme esta seção: coleta completa; (R2) inventário só {Read}, como '
+     'preveem as hipóteses (a) dontAsk filtra não permitidas e (b) interseção '
+     '`--tools`∩`--allowedTools`, refutadas apenas pela leitura estática, ou qualquer outro '
+     'inventário: `INCOMPATIBLE_TRANSCRIPT`, registrado como evidência contra a leitura '
+     'estática, e WRITE_DENIED fica NOT_RUN pela precedência terminal; (R3) Read negado ou '
+     'permission_denials não vazio: `INCOMPATIBLE_TRANSCRIPT`; (R4) qualquer outra '
+     'divergência, inclusive tool_result com is_error true sem negação, segundo POST '
+     'ausente ou divergente, ou exit, subtype, is_error ou result divergentes: '
+     '`INCOMPATIBLE_TRANSCRIPT`, com a causa registrada. WRITE_DENIED — (W1) inventário '
+     '{Read,Edit}, tool_result is_error true do mesmo ID, permission_denials com exatamente '
+     'uma entrada, igual à entrada Edit literal, denied.txt ausente e coleta completa '
+     'conforme esta seção: coleta completa; (W2) erro de validação ou de FS sem entrada em '
+     'permission_denials: `INCOMPATIBLE_TRANSCRIPT`; (W3) Edit executado ou workspace '
+     'alterado: `INCOMPATIBLE_TRANSCRIPT`, com o estado do workspace preservado; (W4) '
+     'inventário diferente de {Read,Edit}: `INCOMPATIBLE_TRANSCRIPT`; (W5) '
+     'permission_denials com tool_input diferente do literal: `INCOMPATIBLE_TRANSCRIPT`, '
+     'registrado como achado; (W6) qualquer outra divergência, inclusive '
+     'permission_denials vazio ou com mais de uma entrada, tool_name ou tool_use_id '
+     'diferentes, segundo POST ausente ou divergente, ou exit, subtype, is_error ou result '
+     'divergentes: `INCOMPATIBLE_TRANSCRIPT`, com a causa registrada. O texto da mensagem '
+     'de negação não é critério; pela leitura estática ele começa com `Permission to use '
+     'Edit has been denied because Claude Code is running in don\'t ask mode.` e só é '
+     'registrado como dado. A auditoria independente dos brutos registra se o content do '
+     'tool_result de WRITE_DENIED começa com esse prefixo; outro texto, inclusive o '
+     'envelope `<tool_use_error>` de validação, vira achado, sem mudar o desfecho do '
+     'coletor.'),
+    ('E12', 'L122 inputDigests.spec',
+     'inputDigests.spec é o SHA desta revisão, nunca `48b27084`.',
+     'inputDigests.spec é o SHA desta revisão, nunca `48b27084` nem `2c25a5c1`.'),
+    ('E13', 'L215 RC e execuções históricas',
+     'Todos os RC desta revisão são NOT_RUN; a execução r1 (SPEC `48b27084`) é evidência '
+     'histórica e não conta para nenhum RC desta revisão.',
+     'Todos os RC desta revisão são NOT_RUN; as execuções r1 (SPEC `48b27084`) e run2 '
+     '(SPEC `2c25a5c1`) são evidência histórica e não contam para nenhum RC desta '
+     'revisão.'),
+    ('E14', 'L215 candidata detached',
+     'Depois: nova candidata/claim próprios→',
+     'Depois: nova candidata detached (`git worktree add --detach`, sem criar branch) e '
+     'runtime em `/mnt/dados/cvg-work/`, com claim próprio→'),
+    ('E15', 'L215 orçamento',
+     '(orçamento novo, independente dos consumidos até `cda464ea`)',
+     '(orçamento novo, independente dos consumidos até `d6f869e5`)'),
+    ('E16', 'L217 pacote',
+     'o parecer independente do delta e a evidência r1 antes de pedir essa decisão.',
+     'o parecer independente do delta, a leitura estática do cliente e as evidências r1 e '
+     'run2 antes de pedir essa decisão.'),
+    ('E17', 'L110 comparação de tool_input',
+     'tool_input exatamente igual ao input literal',
+     'tool_input igual ao input literal sob C(), independentemente da ordem das chaves'),
+    ('E18', 'L215 pin antes da execução',
+     '→código elegível→exatamente uma execução contida dos três casos',
+     '→código elegível→conferir de novo caminho e SHA do pin Claude, parando sem trocar '
+     'binário se o atualizador o tiver removido→exatamente uma execução contida dos três '
+     'casos'),
+]
+
+
+def main():
+    base_path, out_path, edits_path = sys.argv[1:4]
+    raw = open(base_path, 'rb').read()
+    if hashlib.sha256(raw).hexdigest() != BASE_SHA:
+        raise SystemExit('base SHA mismatch')
+    base = raw.decode('utf-8')
+    text = base
+    records = []
+    for eid, anchor, old, new in EDITS:
+        if base.count(old) != 1:
+            raise SystemExit(f'{eid}: old occurs {base.count(old)}x in base')
+        if text.count(old) != 1:
+            raise SystemExit(f'{eid}: old occurs {text.count(old)}x at apply time')
+        text = text.replace(old, new, 1)
+        records.append({'id': eid, 'anchor': anchor, 'old': old, 'new': new,
+                        'old_sha256': hashlib.sha256(old.encode()).hexdigest()})
+    if text.count('\n') != base.count('\n'):
+        raise SystemExit('line count changed')
+    open(out_path, 'w', encoding='utf-8', newline='').write(text)
+    json.dump(records, open(edits_path, 'w', encoding='utf-8'), ensure_ascii=False,
+              indent=2)
+    print('edits', len(records), 'unformatted_sha256',
+          hashlib.sha256(text.encode()).hexdigest())
+
+
+main()
