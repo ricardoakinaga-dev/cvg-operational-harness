@@ -16,6 +16,9 @@ const e2eBinding =
     : undefined
 
 export default defineConfig({
+  // The sealed CI artifacts bind source identity; embedding the full audit
+  // archive diff in Playwright metadata can exceed Node's string limit.
+  captureGitInfo: { commit: true, diff: false },
   ...(e2eBinding ? { metadata: { cvgE2e: e2eBinding } } : {}),
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',

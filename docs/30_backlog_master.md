@@ -1,3 +1,9 @@
+# MAIN-CONSOLIDATION — reparo do E2E hospedado — 19/10/2026
+
+- `status: IN_PROGRESS`. Verify39190236719 chegou ao E2E após5700unit/zero pending, cobertura e gates de integraçãoPASS, mas falhou antes dos testes no coletor Gitdiff do Playwright. Diff real1,897GB e repro privada confirmada. [Task finita](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-task.md), [evidência](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-proof.json).
+- `last_completed_action`: commitmetadata mantido, diff opcional desativado nas duas configs;E2E12/3browsers15PASS/zero skip em contextoGitHub sintético. Só hash SKIP-PG-014 alinhado à fonte revisada, sem mudar expectativas. Revisões frescasAPPROVE/zero obrigatórios;nenhuma fonte de aplicação ou proteção alterada.
+- `next_action`: publicar revisão finita, antecipar gates leves restantes e repetir CIintegral da nova fonte antes de merge/ativação da main. Nenhum PASS misturado ou execução substituída é certificado.
+
 # MAIN-CONSOLIDATION — scanner da integração protegida — 18/10/2026
 
 - `status: IN_PROGRESS`. A simulação de squash encontrou52achados não secretos já classificados ou identificadores Git da triagem. A correção preserva todos defaults e limita29exceções a detector+caminho+literal exatos, viaAND, vinculados a25fontes congeladas. [Task finita](04_audit/evidence/MAIN-CONSOLIDATION-20261018/merge-secret-compatibility-task.md), [evidência](04_audit/evidence/MAIN-CONSOLIDATION-20261018/merge-secret-compatibility-proof.json).
