@@ -1,0 +1,7 @@
+# Reconciliar falha local de recomputação
+
+MC03, tarefa de diagnóstico sem edição de produção. Fonte87492b10 congelada; CIunitPASS e coverage hospedada em andamento. Local cobertura 5620PASS/1FAIL (5621) após1982s: único caso b6-0237-runtime-resolution, normalPROVEN/strictUNKNOWN_INVALID_WORKER_RESULT. Nenhuma fonte local modificada (gitdiffvazio). Não aprovar/ocultar falha, não alterar pins/caps/validador.
+
+Lead: replays focais no mesmo final-candidate/runtime/stable com configuração original, todos logs preservados; resultados filtrados são diagnósticos, não certificados. Um scout readonly pode ler engine/resolver e os logs para apontar causa/discriminante, sem executar target/testes ou editar fontes/PG/recursos. Correção só após causa e claim finitos novos, seguida de crítica/gates necessários.
+
+Verificação disjunta adicional: medir o mesmo denominador de produção de vitest.config.mts (packages/legacy/apps) e os mesmos pisos por arquivo/agregado em novo run próprio, filtrando somente tests/b6-*.test.js, que exercitam scripts .mjs fora desse denominador. É probe explícito de cobertura do runtime, sem crédito de certificação integral e sem substituir o incidente original. A barra hospedada continua executando todos testes sem esse filtro, incluindo o caso original; resultados precisam passar na fonte congelada. Provas de B6 também têm72casos focais reexecutados com cobertura/zero falhas; a causa histórica continua inconclusiva, sem mudança de fonte/guardas.

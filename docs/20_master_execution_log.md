@@ -1,3 +1,15 @@
+# MAIN-CONSOLIDATION — prazo da certificação ajustado à medição — 18/10/2026
+
+- `status: IN_PROGRESS`. Componentes obrigatórios jáPASS na CI39180525930 somaram3682s (61min22s), antes de E2E/evals/chaos/SBOM/licenças/auditoria, acima dos3600s do parentcertify. [Medição/task](04_audit/evidence/MAIN-CONSOLIDATION-20261018/certify-parent-budget-task.json).
+- `last_completed_action`: somente timeout externo do gatecertify passa a5400s, limitado; outrosgates3600s, limites internos por fase e de análise nativa, comandos, scope/contrato, seals, pins e pisos permanecem idênticos.46regressõesPASS, crítico frescoAPPROVE/zero obrigatórios. Runtime e todas suas provas permanecem byteidênticos à fonte874; nenhum certificado global transferido.
+- `next_action`: MAIN-CONSOLIDATION-20261018:QUALIFY-BUDGETED-CANDIDATE — publicar delta pelo mesmo PR temporário e executar nova barra integral no HEAD atualizado, então merge protegido e limpeza final. A CI anterior é evidência dos componentes/tempos, não aceite do HEAD futuro.
+
+# MAIN-CONSOLIDATION — núcleo validado e barra final em execução — 18/10/2026
+
+- `status: IN_PROGRESS`. Fonte atual87492b10 no PR#4; CI39180525930 passouunit, cobertura, cobertura crítica, mutação, startup, PostgreSQL, recuperação e observabilidade. Gates posteriores e certify/proveniência independentes permanecem obrigatórios antes de merge. [Task atual](04_audit/evidence/MAIN-CONSOLIDATION-20261018/task.json).
+- `last_completed_action`: provas físicas47/47, reply externo4/4 e E2E12/12PASS, todoszero skip. Probe explícito de runtime5080PASS/443arquivos de teste,289fontes de produção e50arquivos críticos100% nas quatro métricas; agregado94,27/90,80/96,13/95,13%. SuítesB6 de scripts fora desse probe continuam na barra hospedada integral. Primeira cobertura local completa teve uma recusa inconclusiva; replays1+72PASS e observação de workers válidos, sem mudança de fonte/pin/cap. [Triagem preservada](04_audit/evidence/MAIN-CONSOLIDATION-20261018/coverage-worker-triage.json), sem crédito de certificado por subconjunto. Recursos locais próprios encerrados comID/label/zero clientes conferidos.
+- `next_action`: MAIN-CONSOLIDATION-20261018:WAIT-CI-CERTIFICATION — concluir barra/certify atuais, integrar por PR protegido, preservar avanços concorrentes em snapshot recuperável e encaminhar root para main; remover branch temporária e última ref local redundante. Programas em andamento e aceite de produto mantêm seus gates próprios.
+
 # MAIN-CONSOLIDATION — reparo da qualificação — 18/10/2026
 
 - `status: IN_PROGRESS`. CI39177487433 da fonte a466 terminou FAIL em cinco arquivos: fixtures com caminhoNode24/identidade física Git/tar/strace, enforcement de cobertura ausente e validação de fingerprints. Nenhum merge aceito. [Task de reparo](04_audit/evidence/MAIN-CONSOLIDATION-20261018/ci-a466-repair-task.md), [perfil físico explícito](04_audit/evidence/MAIN-CONSOLIDATION-20261018/boundary-native-profile-task.md).
