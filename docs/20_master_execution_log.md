@@ -1,3 +1,9 @@
+# MAIN-CONSOLIDATION — reparo da qualificação — 18/10/2026
+
+- `status: IN_PROGRESS`. CI39177487433 da fonte a466 terminou FAIL em cinco arquivos: fixtures com caminhoNode24/identidade física Git/tar/strace, enforcement de cobertura ausente e validação de fingerprints. Nenhum merge aceito. [Task de reparo](04_audit/evidence/MAIN-CONSOLIDATION-20261018/ci-a466-repair-task.md), [perfil físico explícito](04_audit/evidence/MAIN-CONSOLIDATION-20261018/boundary-native-profile-task.md).
+- `last_completed_action`: driverci-bar recupera implementação a724 com per-file obrigatório/validação agregada/recusa de snapshot antigo;109testes focaisPASS. Fixture de runtime portável101/101PASS e negativaNode24realPASS; pins/guardas mantidos. Dois arquivos nativos renomeados byteidênticos, comando próprio sem skip e coleta fechada verificada.16candidatas detached no mesmoHEAD e refs removidas comCAS, arquivos/índices preservados; programas de pares continuam em seus snapshots. Branch local do checkout principal só será removida após merge protegido e preservação final dos avanços concorrentes.
+- `next_action`: MAIN-CONSOLIDATION-20261018:QUALIFY-REPAIRED — executar provas físicas completas e revisão fresca do delta, depois nova CI/cobertura aplicável. O certify local antigo foi interrompido como superseded após FAIL conclusivo da CI, sem certificado. A CI hospedada mantém todos gates e certify completo; provas físicas locais têm denominador próprio. Sem produção.
+
 # MAIN-CONSOLIDATION — seleção das melhorias qualificáveis — 18/10/2026
 
 - `status: IN_PROGRESS` para esta tarefa. A linha promovida834, correções existentes da main, portabilidade e suporte independente são a composição selecionada. [Decisão](04_audit/evidence/MAIN-CONSOLIDATION-20261018/selection-decision.json), [contrato vigente](04_audit/evidence/MAIN-CONSOLIDATION-20261018/composition-contract.md).

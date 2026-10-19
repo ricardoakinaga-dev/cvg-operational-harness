@@ -31,7 +31,9 @@ describe('secret scan configuration (PR-011)', () => {
       .filter((line) => line && !line.startsWith('#'))
     expect(fingerprints.length).toBeGreaterThan(0)
     for (const fingerprint of fingerprints) {
-      expect(fingerprint).toMatch(/^[0-9a-f]{40}:[^:]+:generic-api-key:\d+$/)
+      expect(fingerprint).toMatch(
+        /^[0-9a-f]{40}:[^:]+:(?:generic-api-key|sourcegraph-access-token):\d+$/
+      )
     }
   })
 

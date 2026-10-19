@@ -25,12 +25,29 @@ const pinnedNode = pinnedToolchainLocation().node
 // located Node/npm is not the pinned toolchain.
 beforeAll(() => {
   fingerprintToolchain({ nodePath: pinnedNode })
+  if (!process.env.CVG_NEGATIVE_NODE) {
+    // A second physical ELF with a harmless trailer still executes Node, but
+    // its bytes differ. This tests actual caller identity on single-Node CI
+    // without a downloaded binary, a fake status, or a relaxed trusted pin.
+    fs.copyFileSync(pinnedNode, negativeNode, fs.constants.COPYFILE_EXCL)
+    fs.appendFileSync(negativeNode, '\nCVG synthetic negative runtime\n')
+  }
+  expect(fs.realpathSync(negativeNode)).toBe(negativeNode)
+  expect(hash(fs.readFileSync(negativeNode))).not.toBe(
+    hash(fs.readFileSync(pinnedNode))
+  )
+  const negativeVersion = spawnSync(negativeNode, ['--version'], {
+    encoding: 'utf8',
+    env: {}
+  })
+  expect(negativeVersion.status).toBe(0)
+  expect(negativeVersion.stdout).toMatch(/^v\d+\.\d+\.\d+\s*$/)
 })
 // A real Node binary that is NOT the pinned one, for the negative runtime
-// control. External resource: CVG_NEGATIVE_NODE, default the original path.
+// control. CVG_NEGATIVE_NODE can locate another installed version; the
+// default is an owned physical copy with deliberately different bytes.
 const negativeNode =
-  process.env.CVG_NEGATIVE_NODE ||
-  '/home/ricardo/.nvm/versions/node/v24.20.0/bin/node'
+  process.env.CVG_NEGATIVE_NODE || path.join(parent, 'negative-node')
 const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
 // Vitest itself uses a --require warning hook and resolution conditions. The
 // real API must decline that profile. Exercise positives in a physical clean

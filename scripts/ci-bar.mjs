@@ -24,6 +24,7 @@ import {
   validateE2eReportPair
 } from './lib/e2e-report-binding.mjs'
 import { parsePlaywrightSummary } from './lib/test-log-summaries.mjs'
+import { validateAggregateCoverage } from './coverage-thresholds.mjs'
 import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract.mjs'
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'
@@ -373,11 +374,20 @@ function validateGateOutputs(id, gate, startedMs, state, outputText) {
   }
 
   if (id === 'coverage') {
+    const coverageSummary = readJson('coverage/coverage-summary.json') ?? null
     failures.push(
       ...ciBarScopeFailures(id, {
         root,
-        coverageSummary: readJson('coverage/coverage-summary.json') ?? null
+        coverageSummary
       })
+    )
+    // Per-file mode deliberately has zero global floors in Vitest 4.
+    // Enforce the original aggregate floors on the same current report too.
+    const aggregate = validateAggregateCoverage(coverageSummary)
+    failures.push(
+      ...aggregate.failures.map(
+        (failure) => `coverage_aggregate_invalid:${failure}`
+      )
     )
   }
 
@@ -612,7 +622,17 @@ function runGate(id) {
     CVG_TEST_SCOPE: CI_BAR_SCOPE.testScope,
     CI_RUN_ID: state.runId,
     CI_CANDIDATE_ID: state.candidateId,
-    CI_ARTIFACT_DIR: rootArtifactDir
+    CI_ARTIFACT_DIR: rootArtifactDir,
+    ...(id === 'coverage' || id === 'certify'
+      ? { CVG_COVERAGE_PER_FILE: '1' }
+      : {})
+  }
+  if (id === 'coverage') {
+    // A copied snapshot gets a new mtime even when its source is historical.
+    // Require this invocation to emit its own generated summary instead.
+    fs.rmSync(path.join(root, 'coverage/coverage-summary.json'), {
+      force: true
+    })
   }
   const result = spawnSync(bin, commandArgs, {
     cwd: root,

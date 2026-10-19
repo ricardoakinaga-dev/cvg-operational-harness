@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import vitestConfig from '../vitest.config.mts'
 import referenceConfig from '../vitest.reference.config.mts'
+import nativeConfig from '../vitest.boundary-native.config.mts'
 import { globSync } from 'tinyglobby'
 
 describe('vitest workspace hermeticity', () => {
@@ -40,5 +41,26 @@ describe('reference proof resource ownership', () => {
     expect(referenceConfig.test?.testTimeout).toEqual(
       vitestConfig.test?.testTimeout
     )
+  })
+})
+
+describe('boundary native proof resource ownership', () => {
+  it('collects both physical-toolchain proofs only in their explicit profile', () => {
+    const ordinary = globSync(vitestConfig.test?.include ?? [], {
+      cwd: process.cwd()
+    })
+    const native = globSync(nativeConfig.test?.include ?? [], {
+      cwd: process.cwd()
+    }).sort()
+    expect(native).toEqual([
+      'tests/b6-0234-reference-recipe.integration.js',
+      'tests/b6-0236-compiled-provenance.integration.js'
+    ])
+    for (const file of native) expect(ordinary).not.toContain(file)
+    expect(nativeConfig.resolve).toEqual(vitestConfig.resolve)
+    expect(nativeConfig.test?.testTimeout).toEqual(
+      vitestConfig.test?.testTimeout
+    )
+    expect(nativeConfig.test?.passWithNoTests).toBe(false)
   })
 })
