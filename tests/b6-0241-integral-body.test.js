@@ -31,7 +31,7 @@ const PARSER = path.resolve(
   '../node_modules/typescript/lib/typescript.js'
 )
 const PARENT = ownedRunParent('b6-0241-body')
-const KERNEL = 'semantic-kernel-v6-tsx-parse'
+const KERNEL = 'semantic-kernel-v7-cjs-export-value'
 const PREMISE = 'installed-file-identity-v1'
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const env = () => ({

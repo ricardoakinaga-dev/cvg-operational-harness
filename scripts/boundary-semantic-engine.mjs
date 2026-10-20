@@ -24,7 +24,7 @@ import {
 // reimplemented. Its module hash is part of the profile (worker and parent).
 import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v6-tsx-parse'
+export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v7-cjs-export-value'
 export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -353,6 +353,13 @@ function relative(file) {
 const U = Object.freeze({ t: 'unknown' })
 const primitive = (v) => ({ t: 'primitive', v })
 const VOID = primitive(undefined)
+// SPEC0247 C1: the initial `module.exports` of a CJS module is its own
+// `exports` object, opaque, with identity per file. It decides no `if`, `?:`,
+// `!` or comparison and enters no `+` or template; property read, call,
+// reflection, computed key and specifier over it are refused at the point of
+// use by the existing rules (none of them accepts this value kind).
+const cjsExportsObject = (file) =>
+  Object.freeze({ t: 'cjs-exports-object', id: 'cjs-exports:' + file })
 const valueKey = (v) =>
   v.t === 'primitive'
     ? 'p:' + typeof v.v + ':' + String(v.v)
@@ -1334,6 +1341,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       unknown(file, 'UNKNOWN_EXPORT')
       return
     }
+    // SPEC0247 C1: without a non-delimited handle nothing in the module reaches
+    // its initial exports object, so it emits no tuple here (§2, point 3).
+    if (v.t === 'cjs-exports-object') return
     // Public mutable values escape to consumers the kernel does not model.
     // A later public call may observe an externally changed descriptor or
     // prototype. v1 has no external-alias/strong-update rule to recover it.
@@ -1570,8 +1580,17 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           const r = branch(c.v ? n.thenStatement : n.elseStatement)
           if (r.returned) return r
         } else {
-          const a = branch(n.thenStatement),
-            b = branch(n.elseStatement)
+          // SPEC0247 C2: in a CJS module the tracked value after an undecided
+          // `if` is the union of the values at the end of each branch; an
+          // absent branch contributes the value from before the `if`.
+          const module = modules.get(file),
+            join = module.mode === 'require',
+            before = module.cjs
+          const a = branch(n.thenStatement)
+          const afterThen = module.cjs
+          if (join) module.cjs = before
+          const b = branch(n.elseStatement)
+          if (join) module.cjs = union([afterThen, module.cjs])
           if (a.returned && b.returned)
             return { returned: true, value: union([a.value, b.value]) }
           // Partially returning branches need control-flow continuations absent v1.
@@ -1646,13 +1665,116 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     }
     return { returned: false, value: VOID }
   }
+  // SPEC0247 C0 (§3.1): closed categories of the non-delimited handles of the
+  // CommonJS wrapper, by syntax only. Shadowing is ignored: a local named
+  // `module`, `exports`, `require` or `eval` counts, which only adds U. A
+  // recognized write `module.exports = e` is delimited when its ancestors up
+  // to the file are only blocks and `if`.
+  function cjsHandleCategories(sf) {
+    const found = new Set()
+    // `this` and `arguments` belong to a non-arrow function only inside its
+    // body or parameters; a computed name or a decorator keeps the outer one.
+    const ownFunctionScope = (node) => {
+      for (
+        let child = node, a = node.parent;
+        a && !ts.isSourceFile(a);
+        child = a, a = a.parent
+      )
+        if (
+          ts.isFunctionLike(a) &&
+          !ts.isArrowFunction(a) &&
+          (child === a.body || (a.parameters || []).includes(child))
+        )
+          return true
+      return false
+    }
+    // The closed list of positions where the identifier does not count.
+    const notCounted = (node) => {
+      const p = node.parent
+      return (
+        (ts.isPropertyAccessExpression(p) && p.name === node) ||
+        ((ts.isPropertyAssignment(p) ||
+          ts.isMethodDeclaration(p) ||
+          ts.isPropertyDeclaration(p) ||
+          ts.isGetAccessorDeclaration(p) ||
+          ts.isSetAccessorDeclaration(p) ||
+          ts.isPropertySignature(p) ||
+          ts.isMethodSignature(p) ||
+          ts.isEnumMember(p)) &&
+          p.name === node) ||
+        ((ts.isBindingElement(p) ||
+          ts.isImportSpecifier(p) ||
+          ts.isExportSpecifier(p)) &&
+          p.propertyName === node)
+      )
+    }
+    const recognized = (n) =>
+      ts.isExpressionStatement(n) &&
+      ts.isBinaryExpression(n.expression) &&
+      n.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(n.expression.left) &&
+      ts.isIdentifier(n.expression.left.expression) &&
+      n.expression.left.expression.text === 'module' &&
+      n.expression.left.name.text === 'exports'
+    const delimited = (n) => {
+      for (let a = n.parent; !ts.isSourceFile(a); a = a.parent)
+        if (!ts.isBlock(a) && !ts.isIfStatement(a)) return false
+      return true
+    }
+    const visit = (node) => {
+      if (recognized(node)) {
+        if (!delimited(node))
+          found.add(
+            ts.findAncestor(node.parent, ts.isFunctionLike)
+              ? 'FUNCTION_BODY_WRITE'
+              : 'REFUSED_CONTEXT_WRITE'
+          )
+        // The `module` of a recognized write is the handle being classified.
+        visit(node.expression.right)
+        return
+      }
+      if (node.kind === ts.SyntaxKind.ThisKeyword && !ownFunctionScope(node))
+        found.add('TOP_LEVEL_THIS')
+      if (
+        ts.isReturnStatement(node) &&
+        !ts.findAncestor(node.parent, ts.isFunctionLike)
+      )
+        found.add('TOP_LEVEL_RETURN')
+      if (ts.isIdentifier(node) && !notCounted(node)) {
+        const p = node.parent
+        if (node.text === 'module') found.add('MODULE_REFERENCE')
+        else if (node.text === 'exports') found.add('EXPORTS_REFERENCE')
+        else if (node.text === 'eval') found.add('EVAL_REFERENCE')
+        else if (node.text === 'arguments' && !ownFunctionScope(node))
+          found.add('TOP_LEVEL_ARGUMENTS')
+        else if (
+          node.text === 'require' &&
+          !(ts.isCallExpression(p) && p.expression === node) &&
+          !(
+            ts.isPropertyAccessExpression(p) &&
+            p.expression === node &&
+            p.name.text === 'resolve' &&
+            ts.isCallExpression(p.parent) &&
+            p.parent.expression === p
+          )
+        )
+          found.add('LOADER_REFERENCE')
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    return [...found].sort()
+  }
   function load(file) {
     rules.add('K5')
     if (modules.has(file)) {
       const module = modules.get(file)
       if (module.loading) return unknown(file, 'UNKNOWN_CYCLE')
+      // SPEC0247 C0: U for every importer, from the cache as well.
       return module.mode === 'require'
-        ? module.cjs
+        ? module.cjsUnknown
+          ? U
+          : module.cjs
         : { t: 'namespace', id: file, props: module.exports }
     }
     const sf = astFiles.get(file)
@@ -1723,7 +1845,21 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       )
         unknown(file, 'UNKNOWN_COMPILED_PROVENANCE')
     }
-    const module = { exports: new Map(), cjs: VOID, loading: true, mode }
+    // SPEC0247 C1: a CJS module starts with its opaque exports object. C0: one
+    // UNKNOWN_CJS_EXPORTS root per closed category, before the body, in the
+    // normal pass and in the census; any category leaves U for the importers.
+    const module = {
+      exports: new Map(),
+      cjs: mode === 'require' ? cjsExportsObject(file) : VOID,
+      cjsUnknown: false,
+      loading: true,
+      mode
+    }
+    if (mode === 'require')
+      for (const category of cjsHandleCategories(sf)) {
+        module.cjsUnknown = true
+        unknown(file, 'UNKNOWN_CJS_EXPORTS', category)
+      }
     modules.set(file, module)
     coverage.modules.started++
     if (block(sf.statements, env(), file).returned)
@@ -1734,8 +1870,10 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       mode === 'require'
         ? module.cjs
         : { t: 'namespace', id: file, props: module.exports }
+    // SPEC0247 C3: checkExport runs on the tracked value, also when C0 leaves
+    // the value U for the importers.
     checkExport(result, file)
-    return result
+    return module.cjsUnknown ? U : result
   }
   try {
     if (
