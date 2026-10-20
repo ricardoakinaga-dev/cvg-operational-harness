@@ -1,0 +1,55 @@
+Revisão R1 da SPEC0245 (TSX no kernel B6): crítico novo, não-fork, só leitura
+Tarefa: HISO005-P2-NEXT-RECON-20261020B
+Rascunho: spec0245-r1.md.txt (sha256 c4e6aa5cdf1082ddd3e3c0426b2896273046c8838eda64e87dcf6fa659b146ba)
+Veredito: REVISE. São 6 obrigatórios (1 P1 e 5 P2) e 6 opcionais (P3). Detalhes em review.json.
+
+O que se sustenta
+- O delta A é mínimo: muda só o ScriptKind de .tsx e .jsx, e o JSX cai no fallback que já existe.
+  Sob a regra global, A não cria prova nem valor conhecido indevido. Todo .tsx/.jsx adquirido recebe
+  UNKNOWN_FORMAT incondicional, e raízes sem .tsx/.jsx parseiam igual à v5. Para .jsx, o parse nem
+  muda: no TS 6.0.3, JS e JSX já usam a variante JSX, e a camada léxica já lê .tsx como TSX.
+- Os números da §1 conferem com a recontagem independente:
+  - v5: 12.283 diagnósticos e 11.393 tuplas, 704 delas nos 29 .tsx; 78 arquivos a jusante.
+  - Variantes: A 11.723 (−560, 144 tuplas em .tsx), C 11.729 e B 11.676.
+  - Contextos 229/256; estados de 138.560 para 134.899; normal = strict.
+  - Zero violações, zero provas, validation true.
+  - Os grafos da v5 e da A são iguais: 1.341 arquivos e 2.729 arestas.
+  - Ressalvas: são 430 UNKNOWN_BINDING, e não 412; a base é igual à final do BUILD0244 em tuplas,
+    mas não no payload (compiledProvenance.referenceDigest).
+
+Obrigatórios
+- R1-01 (P1, §2): o argumento de soundness usa duas premissas falsas.
+  - "Objetos importados já são U" não vale: o importador recebe o objeto (F10/F10b).
+  - "Toda função exportada passa pelo K0" não vale: um module.exports reatribuído dentro de corpo de
+    função escapa ao checkExport.
+  - Isso já existe na v5. O engine emite PROVEN, com K5 e K7, para a origem import(x) de uma função
+    nunca avaliada (F3).
+  - O que pedi: trocar pelo argumento válido (UNKNOWN_FORMAT incondicional, regra global, raízes sem
+    .tsx inalteradas, todo arquivo adquirido é carregado) e registrar a lacuna do K0 como achado à
+    parte, fora do delta.
+- R1-02 (P2, §1): "C não muda nenhuma decisão" só vale na raiz medida.
+  - Nos fixtures, C transforma UNKNOWN em VIOLATION (F1, F2, F5, F10b).
+  - O motivo real para rejeitar C é a premissa sobre como o JSX é transformado (avaliação eager), e
+    o custo de A precisa ser declarado.
+- R1-03 (P2, §2/§4): a recusa JSX aparece só em 1 dos 29 .tsx; o que recusa todos é UNKNOWN_FORMAT
+  (F8b, F12).
+- R1-04 (P2, §3.3): a conservação não é decidível como está escrita.
+  - O fecho usa só as arestas da v5. A v6 pode adquirir alvos novos e corretos (F9).
+  - Sumiço a jusante passa só com listagem, sem critério.
+  - O efeito de um .tsx também alcança irmãos que não ficam a jusante (F5).
+  - Os denominadores precisam ser publicados.
+- R1-05 (P2, §3.3.4): a v5 emite violação espúria pela AST recuperada (F13), e a v6 a perde
+  corretamente.
+  - O critério de violação perdida precisa tratar essa classe e declarar o zero da raiz real.
+  - Também precisa dizer como o census é observado à parte.
+- R1-06 (P2, pergunta T3): faltam avisos para o usuário:
+  - a lacuna do K0 e o efeito dela na SPEC0246;
+  - o custo de A;
+  - a dependência de UNKNOWN_FORMAT;
+  - as arestas implícitas do JSX (pragma @jsxImportSource para products/ não é visto, F14);
+  - o ganho só diagnóstico, sem nenhuma prova nova.
+
+Método: cópias privadas do engine (v5, A, B e C, com os patches reconstruídos) no scratchpad do revisor.
+Os fixtures F1–F14 rodaram com Node 22.23.2 pinado, chamador limpo e PATH mínimo, em runSemanticBoundary
+e no census. A recontagem saiu dos relatórios selados. Nada foi alterado fora de review-0245-r1/. Não
+rodei o checker, receitas, certify, npm nem PG.

@@ -1,0 +1,74 @@
+HISO005-P2-BUILD-0245 — BUILD local da SPEC0245 (sha256 04ec44ea…), Claude Code, CONT-20261018-D9EF
+
+COMMIT (só na candidata detached /mnt/dados/cvg-work/cvg-hiso005-build0245-20261020)
+  1d40fe519439 feat(boundary): HISO-005 BUILD0245 parse .tsx as TSX in the B6 kernel (JSX refused in the domain)
+  Parent 6c9fc651, a main com BUILD0244 (PR #9). Sete caminhos, iguais ao freeze r2 byte a byte:
+  - scripts/boundary-semantic-engine.mjs: T1 (tabela fechada de ScriptKind: .tsx→TSX, .jsx→JSX, .[cm]ts→TS, demais→JS)
+    e versão semantic-kernel-v6-tsx-parse. T2 não tem código: o JSX cai no fallback existente;
+  - tests/b6-0245-tsx-parse.test.js, novo, com 18 casos;
+  - literal de versão migrado em 5 testes B6 (0236, 0237, 0240, 0241, 0244), como registrado no contrato antes da edição.
+  A promoção está preparada e não aplicada: promotion-1d40fe519439.json e .patch.txt. Sem push, PR ou deploy.
+
+RAIZ AVALIADA RECONSTITUÍDA (fica para os próximos BUILDs)
+  /mnt/dados/cvg-work/cvg-hiso005-eval-228e, detached em 228e7918. O commit está preservado em refs/backup/cont-d9ef/cvg-hiso005-build0241-20261018.
+  Receita (eval-root-reconstitution.json, operators/reconstitute_eval_root.py):
+    1. worktree add --detach 228e7918;
+    2. cp -a de node_modules e apps/web/node_modules de cvg-d9ef-pr9-20261020 (mesmo lock 1022b677…), sem install;
+    3. node scripts/build-runtime.mjs, com o contexto padrão;
+    4. tsc -p sdk.json, só com o src;
+    5. tsc -b das 5 tsconfig do harness com --force (restaura as 48 saídas de teste compiladas);
+    6. conferência dos 1.410 sha256 do relatório selado: 1.410/1.410;
+    7. v5 medida e comparada campo a campo com o selado: diagnósticos idênticos, inclusive originId; compiledProvenance 121.
+  As referências (receita com escopo) são refeitas por BUILD.
+  A raiz fica tracked clean.
+  A r1 rodou sem o passo 5: compiled 73/121. A lacuna foi apontada pela crítica (R1-01) e corrigida; está declarada.
+
+VEREDITOS (mesmo crítico novo, não-fork, 2 rodadas)
+  - R1: REVISE, com 3 obrigatórios P2 e 6 P3, todos tratados na congelada r2:
+    - R1-01: raiz sem o passo harness;
+    - R1-02: MT04 sem a v5; o mutante que manda .ts para TSX sobrevivia;
+    - R1-03: census à parte e tabela v5→v6 de violações por fixture.
+  - R2: APPROVE, sem obrigatórios. Os 4 P3 (derivação da violationTable, histórico de verificações, __pycache__, tempo sob carga)
+    foram tratados só na evidência, depois da última rodada. Nenhum byte de código mudou depois da R2.
+
+GATES
+  - Testes, sempre nos bytes congelados r2: novo 18/18; focal B6 890/890; perfil nativo 79/79.
+  - Primeira falha na v5: 13/18 (a1: 8/11). Mutante mTsAll: morre no MT04.
+  - certify (Node22), PG próprio em 56262 e portas 3448/4448:
+    - r1: NO_GO, 15/16. O unit deu 6124/6127, com 3 timeouts de 15 s em tests/claude100/reference-capture/controller.test.js sob load ~12–15.
+      O arquivo não tem relação com o delta. Isolado, deu 66/66. O coverage do mesmo run passou.
+      Análise em certify-r1-unit-flake-analysis.json.
+    - r2, com PG novo e load ~2–3: 16/16 PASS, unit 6127/6127, decisão CONDITIONAL_GO, AAA_CONTROLLED.
+  - Consumidor fresco: PASS, com 207 exports documentados e 76 de runtime.
+  - Aceites: MT01–MT08 PASS (acceptance-status.json).
+
+B6 NA RAIZ 228e7918 (receita com escopo, mesmas referências; normal = strict)
+  - Antes, v5: 12.283 diagnósticos, 11.393 tuplas e 890 origens. É igual ao selado do BUILD0244.
+  - Depois, v6: 11.723 diagnósticos (−560), 10.833 tuplas e 890 origens.
+  - Nas duas: 0 provas, 0 violações, validation true e corpo COMPLETED.
+  - Somem 561 tuplas, todas nos 29 .tsx: BINDING 427, UNSUPPORTED 30, PARSE 29, BINDING_VALUE 24, PROPERTY 12, FUNCTION 11, outras 28.
+  - Aparece 1: UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement em apps/web/src/main.tsx.
+  - Fora dos .tsx: zero mudança. 10.449 diagnósticos mudam só de originId, que é posicional.
+  - FORMAT e MODULE_FORMAT preservados; UNKNOWN_PARSE 0.
+  - Grafo igual dos dois lados: 1.341 arquivos e 2.729 arestas, mesmo conjunto. 78 arquivos a jusante, de 2 dependências diretas.
+  - Limites, perfil node22-linux-exact-metadata-v1, receita compilada e inputs iguais.
+  - B6 continua INCOMPLETE.
+
+FOLGA
+  - Contextos 229/256, antes e depois: folga de 27. O pico é z.object do zod.
+  - Estados: de 138.560 para 134.899, de um teto de 250.000.
+  - Tempo do worker: 154–164 s na v6 e 188 s na cópia diag (load ~11), contra o teto de 300 s. É risco operacional.
+
+PROVEN NOVOS: nenhum, nem na raiz real nem nos fixtures.
+  A lacuna CJS do K0 (recon 20261020B) existe também na v6. Esta unidade não a toca.
+
+CAMINHOS PARA PROMOÇÃO
+  - promotion-1d40fe519439.patch.txt (sha256 bfa81aef…). Aplicar só sobre pré-imagens iguais, na main 6c9fc651, por PR do lead.
+  - O registro com pré-imagem e pós-imagem por caminho está em promotion-1d40fe519439.json.
+
+RECURSOS
+  - PG cvg-hiso005-build0245-pg (r1 e r2) parado e removido.
+  - Portas 56262, 3448 e 4448 livres.
+  - Runtime /mnt/dados/cvg-work/cvg-hiso005-build0245-runtime-20261020 removido, com a worktree eval-228e dele, liberando 1,75 GB.
+  - Mantidos: a candidata (âncora do commit) e a raiz avaliada /mnt/dados/cvg-work/cvg-hiso005-eval-228e.
+  - Ledgers, coordenação, catálogo e docs/02_spec não foram editados. O texto está em ledger-delta-cont-d9ef.md.

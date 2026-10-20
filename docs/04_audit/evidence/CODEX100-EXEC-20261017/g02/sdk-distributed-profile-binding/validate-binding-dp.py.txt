@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE - validação independente do v7 e das lacunas v7 (somente leitura das entradas).
+# Uso: python3 -I -B validate-binding-dp.py.txt <repo_root>  -> escreve validation.json na pasta da unidade.
+# Recalcula das entradas (casos congelados, case-results, acceptance.json e plano), sem usar o código do build, o que o v7 afirma, e roda
+# controles negativos por mutação de cópias em memória, cada um recusado por mensagem exata.
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+UNIT = os.path.join(G02, "sdk-distributed-profile-binding")
+PIN, BL = "0.153.4", "NO_BUILD_LINK_DECLARED"
+DP_ROWS = ["PY19", "PY20", "PY02", "PK01", "PK02", "PK03", "PK04", "PK05", "PK06", "PK07", "PK08", "PK09"]
+
+
+def P(rel):
+    return os.path.normpath(os.path.join(UNIT, rel))
+
+
+def load(rel):
+    with open(P(rel), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(rel):
+    with open(P(rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+V7 = load("coverage-observed-v7.json")
+GAPS7 = load("gaps-review-v7.json")
+V6 = load("../sdk-continuation-3-binding/coverage-observed-v6.json")
+GAPS6 = load("../sdk-continuation-3-binding/gaps-review-v6.json")
+FZ6 = load("../sdk-continuation-3-binding/review-freeze-r2.json")["files"]
+PLAN = load("../sdk-distributed-profile-spec/coverage-plan-dp.json")
+ADM = {"DP-1": "../sdk-distributed-profile-dp1-admission", "DP-1R": "../sdk-distributed-profile-dp1r-admission",
+       "DP-2": "../sdk-distributed-profile-dp2-admission"}
+CASEF = {"DP-1": "../sdk-distributed-profile-spec/cases-dp-1.json", "DP-1R": ADM["DP-1R"] + "/cases-dp-1r.json",
+         "DP-2": "../sdk-distributed-profile-spec/cases-dp-2.json"}
+spec, sub_of, cr = {}, {}, {}
+for s in ADM:
+    for c in load(CASEF[s])["cases"]:
+        spec[c["id"]] = c
+    for r in load(ADM[s] + "/case-results.json")["rows"]:
+        cr[r["case"]] = dict(r, dir=r.get("dir") or r.get("attempt_dir"))
+        sub_of[r["case"]] = s
+acc = {c: load(ADM[sub_of[c]] + "/" + r["dir"] + "/acceptance.json") for c, r in cr.items()}
+CONSUMED = sorted(c for c, r in cr.items() if r["kind"] != "CONTROL" and acc[c]["outcome"] == "PASS_CLIENT_OBSERVATION")
+REQ_RECORDS = {"DP1-ADM/R1-F04", "DP1-ADM/R2-F03", "DP1-ADM/R1-F05/R2-F04", "DP1-ADM/R1-F07", "DP1-ADM/R2-F01", "DP1R/PK07", "DP1R/PLATFORM",
+               "DP1R/CONTRARY", "DP1R/BUILD", "DP2-ADM/R1-F04", "DP2-ADM/R1-F05", "DP2-ADM/R1-F09", "DP2-ADM/R1-F10"}
+# independent table: class of coverage-plan-dp.json -> (resolution, needs_new_decision, unlocking decision); exceptions by id
+CLASS_TABLE = {"OUT_PLATFORM_LIMIT": ("OPEN_PLATFORM_LIMIT", True, "D-PLATFORM"), "OUT_T4_GATE": ("OPEN_T4_GATE", True, "D-T4"),
+               "OUT_INPUT_NOT_AVAILABLE": ("OPEN_NEEDS_ACQUISITION", True, "D-ACQUISITION"),
+               "OUT_NEW_ACQUISITION": ("OPEN_NEEDS_ACQUISITION", True, "D-ACQUISITION"), "OUT_T3_QUESTION": ("OPEN_T3_QUESTION", True, "D-T3-TLS"),
+               "OUT_INSTALLER": ("OPEN_INSTALLER_NOT_AUTHORIZED", True, "D-INSTALLER"),
+               "OUT_LATER_UNIT": ("OPEN_LATER_UNIT_NO_NEW_DECISION", False, None), "OUT_NOT_INDUCIBLE": ("OPEN_NOT_INDUCIBLE", False, None),
+               "OUT_UNREACHABLE": ("UNREACHABLE_AT_PIN", False, None), "OUT_NO_DETERMINISTIC_WITNESS": ("OPEN_NO_DETERMINISTIC_PATH", False, None),
+               "OUT_NOT_AVAILABLE": ("NOT_AVAILABLE_AT_PIN", True, "D-PIN-VERSION"), "IN_SPEC": ("RESOLVED_BY_DP", False, None)}
+CLASS_EXCEPTIONS = {"R-PK06-3": ("OPEN_NO_DETERMINISTIC_PATH", True, "D-Q4"), "R-PK08-4": ("OPEN_NO_DETERMINISTIC_PATH", True, "D-Q4")}
+V6_UNLOCK = {"OPEN_T4_GATE": "D-T4", "OPEN_PLATFORM_LIMIT": "D-PLATFORM", "OPEN_DENIED_BY_USER": "D-Q4", "OPEN_NOT_AUTHORIZED": "D-Q5",
+             "OPEN_NATIVE": "D-NATIVE", "OPEN_NEW_CAPABILITY": "D-NEWCAP"}
+ARMID = re.compile(r"\b(?:PY|TS|PK)\d{2}\.B\d{2}\b")
+PK07B_BLOB = ADM["DP-1R"] + "/" + cr["DP-PK07B"]["dir"] + "/blob-stderr-10.txt"
+
+
+def walk(o, path=""):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            yield path + "/" + k, k, v
+            yield from walk(v, path + "/" + k)
+    elif isinstance(o, list):
+        for i, v in enumerate(o):
+            yield from walk(v, "%s[%d]" % (path, i))
+
+
+def arms_of(contract, item, declared):
+    out = set(declared) | set(ARMID.findall(item))
+    for m in re.findall(r"\bB\d{2}\b", item):
+        out.add("%s.%s" % (contract, m))
+    return out
+
+
+def problems(v7, g7, acc=acc):
+    out = []
+    rows = {r["source_contract"]: r for r in v7["rows"]}
+    # counts and status
+    cnt = {"OBSERVED_CLIENT_PARTIAL": sum(1 for r in v7["rows"] if r["status"] == "OBSERVED_CLIENT_PARTIAL"),
+           "OPEN_REQUIRED_FUTURE_PROFILE": sum(1 for r in v7["rows"] if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE")}
+    if cnt != v7["counts"] or cnt != {"OBSERVED_CLIENT_PARTIAL": 44, "OPEN_REQUIRED_FUTURE_PROFILE": 0} or len(v7["rows"]) != 44:
+        out.append("counts differ from the rows or from 44/0")
+    v6rows = {r["source_contract"]: r for r in V6["rows"]}
+    for ct, r in rows.items():
+        if r["carried_from_v6"] != v6rows[ct]:
+            out.append("%s: carried_from_v6 differs from the v6 row" % ct)
+        if ct not in DP_ROWS and (r["status"] != v6rows[ct]["status"] or r["observations_dp"]):
+            out.append("%s: row outside the plan changed" % ct)
+        if r.get("functional_receipt") is not None or r.get("parity_credit") != 0 or r.get("whole_requirement_covered") is not False:
+            out.append("%s: receipt, parity or whole requirement claimed" % ct)
+    plan_rows = {r["source_contract"]: r for r in PLAN["rows"]}
+    changes = []
+    for ct in DP_ROWS:
+        r = rows[ct]
+        used = ["DP-PK07B" if c == "DP-PK07A" else c for c in plan_rows[ct]["cases"]]
+        if r["cases_dp"] != used:
+            out.append("%s: cases used differ from the plan with the DP-PK07B substitution" % ct)
+        want = "OBSERVED_CLIENT_PARTIAL" if all(c in CONSUMED for c in used) else v6rows[ct]["status"]
+        if r["status"] != want:
+            out.append("%s: status does not follow status_if_all_cases_pass" % ct)
+        if want != v6rows[ct]["status"]:
+            changes.append(ct)
+        for o in r["observations_dp"]:
+            if o["pin"] != PIN or o["build_link"] != BL or o["profile"] != "distributed_keyless":
+                out.append("%s/%s: observation without pin %s, %s or the distributed profile" % (ct, o["case"], PIN, BL))
+            if o["case"] not in CONSUMED or o["final_reading"] != "PASS_CLIENT_OBSERVATION":
+                out.append("%s/%s: observation of a case that is not consumed" % (ct, o["case"]))
+            a = o["acceptance_service"]
+            if sha(a["path"]) != a["sha256"]:
+                out.append("%s/%s: acceptance sha differs" % (ct, o["case"]))
+    if sorted(x["source_contract"] for x in v7["status_changes"]) != sorted(changes) or len(changes) != 11:
+        out.append("status_changes differ from the recomputed changes")
+    # never consumed: controls and DP-PK07A
+    for p, k, val in walk(v7.get("arms_observed_dp")):
+        if k == "case" and val not in CONSUMED:
+            out.append("arms_observed_dp cites a case that is not consumed: %s" % val)
+    for r in v7["rows"]:
+        for o in r["observations_dp"]:
+            if o["case"] in ("DP-PK07A", "DP1-CTRL01", "DP1R-CTRL01", "DP2-CTRL01"):
+                out.append("row %s consumes %s" % (r["source_contract"], o["case"]))
+    # parts recomputed from the frozen cases and the service acceptance
+    want_parts = {}
+    for c in CONSUMED:
+        pred = {p["id"]: p["ok"] for p in acc[c]["predicates"]}
+        for i, a in enumerate(spec[c]["arm_discrimination"]):
+            cb = ["api.steps_exact"] if (c, a["arm"]) == ("DP-PY19A", "PY19.B02") else list(a["judged_by"])
+            want_parts[(a["arm"], c, i)] = (all(pred[p] for p in cb), cb)
+    got_parts = {}
+    for a in v7["arms_observed_dp"]:
+        for oc in a["observed_by"]:
+            if oc["pin"] != PIN or oc["build_link"] != BL:
+                out.append("%s/%s: part group without pin or build_link" % (a["arm_id"], oc["case"]))
+            for p in oc["parts"]:
+                got_parts[(a["arm_id"], oc["case"], p["entry_index"])] = (p["credited"], p["credited_by"])
+        cred = sum(p["credited"] for oc in a["observed_by"] for p in oc["parts"])
+        tot = sum(len(oc["parts"]) for oc in a["observed_by"])
+        st = "DISTINGUISHED" if cred == tot else ("PARTIAL_CREDIT" if cred else "NO_PART_CREDITED")
+        if a["status_dp"] != st or a["parts_credited"] != cred or a["parts_total"] != tot:
+            out.append("%s: arm status or part counts differ from its parts" % a["arm_id"])
+        if a["pin"] != PIN or a["build_link"] != BL:
+            out.append("%s: arm without pin or build_link" % a["arm_id"])
+    diff = sorted(k for k in set(got_parts) | set(want_parts) if got_parts.get(k) != want_parts.get(k))
+    if diff:
+        out.append("parts differ from the recomputation: %s" % diff[:5])
+    targeted = sorted({a for r in PLAN["rows"] for a in r["arms_targeted"]})
+    if sorted(a["arm_id"] for a in v7["arms_observed_dp"]) != targeted:
+        out.append("arms differ from the arms targeted by the plan")
+    acp = v7["arm_discrimination_consumed"]
+    if acp["parts_total"] != len(want_parts) or acp["parts_credited"] != sum(v[0] for v in want_parts.values()):
+        out.append("arm_discrimination_consumed differs from the recomputation")
+    # residuals
+    res = {e["id"]: e for e in v7["residuals_dp"]}
+    if sorted(res) != sorted(r["id"] for r in PLAN["residuals"]):
+        out.append("residuals differ from the plan")
+    arm_st = {a["arm_id"]: a["status_dp"] for a in v7["arms_observed_dp"]}
+    for r in PLAN["residuals"]:
+        e = res.get(r["id"])
+        if e is None:
+            continue
+        if r["class"] == "IN_SPEC" and (e["resolution"] == "RESOLVED_BY_DP") != all(arm_st.get(a) == "DISTINGUISHED" for a in r["arms"]):
+            out.append("%s: IN_SPEC resolution differs from its arms" % r["id"])
+        if r["class"] != "IN_SPEC" and e["resolution"].startswith("RESOLVED"):
+            out.append("%s: OUT residual marked resolved" % r["id"])
+        if bool(e["needs_new_decision"]) != bool(e.get("unlocked_by")):
+            out.append("%s: needs_new_decision and unlocked_by disagree" % r["id"])
+        want_r = CLASS_EXCEPTIONS.get(r["id"]) or CLASS_TABLE[r["class"]]
+        if r["class"] == "IN_SPEC" and not all(arm_st.get(a) == "DISTINGUISHED" for a in r["arms"]):
+            want_r = ("OPEN_PART_NOT_CREDITED", False, None)
+        if (e["resolution"], bool(e["needs_new_decision"]), e.get("unlocked_by")) != want_r:
+            out.append("%s: resolution differs from the class table" % r["id"])
+        if e["resolution"] == "RESOLVED_BY_DP" and (e.get("pin") != PIN or e.get("build_link") != BL or e.get("profile") != "distributed_keyless"):
+            out.append("%s: resolved residual without pin, build_link or profile" % r["id"])
+    byres = {}
+    for e in v7["residuals_dp"]:
+        byres[e["resolution"]] = byres.get(e["resolution"], 0) + 1
+    if byres != v7["residual_counts_dp"]["by_resolution"] or v7["residual_counts_dp"]["needs_new_decision"] != sum(
+            1 for e in v7["residuals_dp"] if e["needs_new_decision"]):
+        out.append("residual_counts_dp differ from the residuals")
+    # v6 residuals destined to the distributed profile
+    v6dest = {e["id"] for e in V6["residuals_c3"] if e["resolution"] == "OPEN_DECIDED_DISTRIBUTED_PROFILE"}
+    got = {x["id"]: x for x in v7["v6_distributed_destination_resolved"]}
+    if set(got) != v6dest:
+        out.append("v6 residuals destined to the distributed profile differ")
+    for i, x in got.items():
+        if x["resolution"].startswith("RESOLVED") and (not x["by"] or not all(arm_st.get(a) == "DISTINGUISHED" for a in x["by"])):
+            out.append("%s: resolved without distinguished arms" % i)
+        if bool(x["needs_new_decision"]) != bool(x.get("unlocked_by")):
+            out.append("%s: needs_new_decision and unlocked_by disagree" % i)
+        if x["resolution"].startswith(("RESOLVED", "PARTIAL")) and (x.get("pin") != PIN or x.get("build_link") != BL):
+            out.append("%s: v6 residual resolved by the distributed profile without pin or build_link" % i)
+    # decisions cover every item that needs a new decision, once
+    need = {"dp:" + e["id"] for e in v7["residuals_dp"] if e["needs_new_decision"]}
+    need |= {"v6:" + e["id"] for e in V6["residuals_c3"] if e["needs_new_decision"] and e["id"] not in v6dest}
+    need |= {"v6:" + x["id"] for x in v7["v6_distributed_destination_resolved"] if x["needs_new_decision"]}
+    listed = [i for u in v7["decisions_that_would_unlock"] for i in u["residuals"]]
+    if sorted(listed) != sorted(need):
+        out.append("decisions do not cover each item that needs a new decision exactly once")
+    plan_arms = {r["id"]: set(r.get("arms") or []) | {a for a, xs in PLAN["conditions"].items() for x in xs if x.get("residual") == r["id"]}
+                 for r in PLAN["residuals"]}
+    v6r = {e["id"]: e for e in V6["residuals_c3"]}
+    dpr = {e["id"]: e for e in v7["residuals_dp"]}
+    v6d = {x["id"]: x for x in v7["v6_distributed_destination_resolved"]}
+    for u in v7["decisions_that_would_unlock"]:
+        cts, arms = set(), set()
+        for i in u["residuals"]:
+            ns, rid = i.split(":", 1)
+            if ns == "dp":
+                e = dpr[rid]
+                if e.get("unlocked_by") != u["id"]:
+                    out.append("%s: %s unlocked by another decision" % (u["id"], i))
+                cts.add(e["contract"])
+                arms |= arms_of(e["contract"], e["item"], plan_arms[rid])
+            else:
+                e = v6r[rid]
+                if rid in v6d:
+                    if v6d[rid].get("unlocked_by") != u["id"]:
+                        out.append("%s: %s unlocked by another decision" % (u["id"], i))
+                    declared = v6d[rid].get("by") or []
+                else:
+                    if V6_UNLOCK.get(e["resolution"]) != u["id"]:
+                        out.append("%s: %s unlocked by another decision" % (u["id"], i))
+                    declared = e.get("arms") or []
+                cts.add(e["contract"])
+                arms |= arms_of(e["contract"], e["item"], declared)
+        if sorted(cts) != u["contracts"] or sorted(arms) != u["arms_named"] or (not u.get("contracts_affected") and not u["gain"].startswith(
+                "%d resíduos (" % len(u["residuals"]))):
+            out.append("%s: contracts, arms or gain differ from the recomputation" % u["id"])
+    owners = {u["id"]: u["decision_owner"] for u in v7["decisions_that_would_unlock"]}
+    if owners.get("D-NEWCAP") != "LEAD" or any(v != "USER" for k, v in owners.items() if k != "D-NEWCAP"):
+        out.append("decision owners differ (D-NEWCAP is the Lead's)")
+    # records, qualifications and the D3 reading
+    obs = {(r["source_contract"], o["case"]): o for r in v7["rows"] for o in r["observations_dp"]}
+    if not REQ_RECORDS <= {x["id"] for x in v7["records_for_bind_applied"]}:
+        out.append("records for the BIND missing")
+    r104 = [x for x in v7["records_for_bind_applied"] if x["id"] == "DP1-ADM/R1-F04"]
+    if r104 and (r104[0].get("superseded_by") != "DP1-ADM/R2-F03" or r104[0].get("applied_in")):
+        out.append("superseded R1-F04 reading applied")
+    if "exercidos nos casos" in json.dumps(v7, ensure_ascii=False):
+        out.append("superseded R1-F04 reading applied")
+    for ct, case in (("PK06", "DP-PK06A"), ("PK08", "DP-PK08A")):
+        if not any(q.startswith("DP1-ADM/R2-F03") for q in obs.get((ct, case), {}).get("qualifications", [])):
+            out.append("%s without the corrected R2-F03 reading" % case)
+    anc = [a for a in v7["arms_observed_dp"] if a["arm_id"] == "PK07.B03"]
+    anc = anc[0].get("evidence_anchor") if anc else None
+    if not anc or anc["path"] != PK07B_BLOB or anc["sha256"] != sha(PK07B_BLOB):
+        out.append("PK07.B03 without the anchored stderr of step 10")
+    if [(e["arm"], e["condition"]) for e in v7["conditions_check"]["rows"] if e.get("reached_by_arm_part") is False] != [("PK07.B03", "win32 (.exe)")]:
+        out.append("PK07.B03 win32 condition not marked as seen only via PK07.B01")
+    if not any("DP2-ADM/R1-F04" in q for q in obs.get(("PY19", "DP-PY19A"), {}).get("qualifications", [])):
+        out.append("DP-PY19A without the R1-F04 record")
+    if not any("DP2-ADM/R1-F05" in q for q in obs.get(("PY02", "DP-PY02P"), {}).get("qualifications", [])):
+        out.append("DP-PY02P without the R1-F05 record")
+    q07 = obs.get(("PK07", "DP-PK07B"), {}).get("qualifications", [])
+    if not (any(q.startswith("DP1R/PK07") for q in q07) and any(q.startswith("DP1R/CONTRARY") for q in q07)):
+        out.append("DP-PK07B without the DP1R records")
+    if v7["d3_vocabulary"]["qualified_by_dp"] is not False:
+        out.append("D3 vocabulary qualified by the DP-2")
+    # v6 untouched
+    if sha("../sdk-continuation-3-binding/coverage-observed-v6.json") != FZ6["coverage-observed-v6.json"]["sha256"] \
+            or v7["sources"]["coverage_observed_v6"]["sha256"] != FZ6["coverage-observed-v6.json"]["sha256"]:
+        out.append("v6 differs from its R2 freeze")
+    # gaps
+    obs7 = {r["source_contract"] for r in v7["rows"] if r["status"] == "OBSERVED_CLIENT_PARTIAL"}
+    g6 = {g["id"]: g for g in GAPS6["rows"]}
+    for g in g7["rows"]:
+        if g["status_after"] != "OPEN":
+            out.append("%s: gap left OPEN" % g["id"])
+        if g["contracts_observed_client_partial_v7"] != [c for c in g["contracts"] if c in obs7]:
+            out.append("%s: observed contracts differ" % g["id"])
+        dist = g["id"] in ("GAP-PROVENANCE", "GAP-PLATFORM-PACKAGING")
+        if dist != g["progress_changed"] or (dist and "DISTRIBUTED_PROFILE" not in g["progress_after"]) \
+                or (not dist and g["progress_after"] != g6[g["id"]]["progress_after"]):
+            out.append("%s: progress label does not reflect the distributed profile rule" % g["id"])
+        if dist and g["progress_after"] != "PRECISE_SOURCE_CONTRACT_BOUNDARIES_AND_ORACLES_MAPPED+CLIENT_OBSERVED_PARTIAL_DISTRIBUTED_PROFILE":
+            out.append("%s: progress label outside the single vocabulary" % g["id"])
+        if g["receipt"] is not None or g["qualification"] != "NOT_RUN":
+            out.append("%s: receipt or qualification claimed" % g["id"])
+    # zero receipts and parity everywhere
+    for doc, name in ((v7, "v7"), (g7, "gaps")):
+        for p, k, val in walk(doc):
+            if k == "functional_receipts" and val != 0 or k == "parity_credit" and val != 0:
+                out.append("%s%s: receipts or parity not zero" % (name, p))
+    proj = PLAN["projection_if_all_pass"]
+    rec = (cnt == proj["counts"] and sorted(proj["rows_becoming_observed"]) == sorted(x["source_contract"] for x in v7["status_changes"]))
+    if v7["projection_check"]["confirmed"] != rec:
+        out.append("projection_check differs from the recomputation")
+    return out
+
+
+base = problems(V7, GAPS7)
+negs = []
+
+
+def neg(name, mutate, msg):
+    v, g = copy.deepcopy(V7), copy.deepcopy(GAPS7)
+    mutate(v, g)
+    got = problems(v, g)
+    negs.append({"control": name, "expected_message": msg, "rejected": msg in got, "got": got[:6]})
+
+
+def row(v, ct):
+    return [r for r in v["rows"] if r["source_contract"] == ct][0]
+
+
+def arm(v, a):
+    return [x for x in v["arms_observed_dp"] if x["arm_id"] == a][0]
+
+
+neg("row outside the plan changes status", lambda v, g: row(v, "PY13").update(status="OPEN_REQUIRED_FUTURE_PROFILE"), "PY13: row outside the plan changed")
+neg("PK07 row consumes the DP-PK07A", lambda v, g: row(v, "PK07")["observations_dp"][0].update(case="DP-PK07A"), "row PK07 consumes DP-PK07A")
+neg("PK07 row without the substitution", lambda v, g: row(v, "PK07").update(cases_dp=["DP-PK07A"]),
+    "PK07: cases used differ from the plan with the DP-PK07B substitution")
+neg("observation without the pin", lambda v, g: row(v, "PY20")["observations_dp"][0].update(pin="0.163.0"),
+    "PY20/DP-PY20A: observation without pin 0.153.4, NO_BUILD_LINK_DECLARED or the distributed profile")
+neg("observation with a build link", lambda v, g: row(v, "PK09")["observations_dp"][0].update(build_link="BUILD_LINKED"),
+    "PK09/DP-PK02R: observation without pin 0.153.4, NO_BUILD_LINK_DECLARED or the distributed profile")
+neg("arm without the pin", lambda v, g: arm(v, "PK05.B01").update(pin=None), "PK05.B01: arm without pin or build_link")
+neg("PY19.B02 credited by the full judged_by", lambda v, g: arm(v, "PY19.B02")["observed_by"][0]["parts"][0].update(
+    credited_by=["api.steps_exact", "proc.spawn_count_exact"]), "parts differ from the recomputation: [('PY19.B02', 'DP-PY19A', 1)]")
+def neg_acc(name, case, pred_id, msg):
+    a2 = copy.deepcopy(acc)
+    for p in a2[case]["predicates"]:
+        if p["id"] == pred_id:
+            p["ok"] = False
+    got = problems(copy.deepcopy(V7), copy.deepcopy(GAPS7), acc=a2)
+    negs.append({"control": name, "expected_message": msg, "rejected": msg in got, "got": got[:6]})
+
+
+neg_acc("part kept credited after a judged predicate fails (copy of the acceptance)", "DP-PK06A", "child.signals_received_exact",
+        "parts differ from the recomputation: [('PK06.B03', 'DP-PK06A', 1)]")
+neg("part credit dropped while its predicates pass", lambda v, g: arm(v, "PK06.B02")["observed_by"][0]["parts"][0].update(credited=False),
+    "PK06.B02: arm status or part counts differ from its parts")
+neg("control case consumed", lambda v, g: row(v, "PY02")["observations_dp"][0].update(case="DP2-CTRL01"), "row PY02 consumes DP2-CTRL01")
+neg("status changes list altered", lambda v, g: v["status_changes"].pop(), "status_changes differ from the recomputed changes")
+neg("counts altered", lambda v, g: v["counts"].update(OBSERVED_CLIENT_PARTIAL=43), "counts differ from the rows or from 44/0")
+neg("receipt claimed on a row", lambda v, g: row(v, "PK01").update(functional_receipt="R-1"), "PK01: receipt, parity or whole requirement claimed")
+neg("OUT residual marked resolved", lambda v, g: [e for e in v["residuals_dp"] if e["id"] == "R-PK09-2"][0].update(resolution="RESOLVED_BY_DP"),
+    "R-PK09-2: OUT residual marked resolved")
+neg("decision missing an item", lambda v, g: [u for u in v["decisions_that_would_unlock"] if u["id"] == "D-Q4"][0]["residuals"].remove("dp:R-PK06-3"),
+    "decisions do not cover each item that needs a new decision exactly once")
+neg("needs_new_decision without unlocking decision", lambda v, g: [e for e in v["residuals_dp"] if e["id"] == "R-PY19-6"][0].update(unlocked_by=None),
+    "R-PY19-6: needs_new_decision and unlocked_by disagree")
+neg("v6 destination resolved without arms", lambda v, g: [x for x in v["v6_distributed_destination_resolved"] if x["id"] == "R-TS09-3"][0].update(by=[]),
+    "R-TS09-3: resolved without distinguished arms")
+neg("D3 vocabulary qualified", lambda v, g: v["d3_vocabulary"].update(qualified_by_dp=True), "D3 vocabulary qualified by the DP-2")
+neg("R1-F04 record dropped from DP-PY19A", lambda v, g: row(v, "PY19")["observations_dp"][0].update(qualifications=[]),
+    "DP-PY19A without the R1-F04 record")
+neg("DP1R records dropped", lambda v, g: row(v, "PK07")["observations_dp"][0].update(qualifications=[]), "DP-PK07B without the DP1R records")
+neg("records for the BIND missing", lambda v, g: v["records_for_bind_applied"].pop(0), "records for the BIND missing")
+neg("gap closed", lambda v, g: g["rows"][3].update(status_after="CLOSED"), "GAP-PROVENANCE: gap left OPEN")
+neg("platform gap label unchanged", lambda v, g: g["rows"][5].update(progress_changed=False), "GAP-PLATFORM-PACKAGING: progress label does not reflect the distributed profile rule")
+neg("source gap label changed", lambda v, g: g["rows"][0].update(progress_changed=True, progress_after="X+CLIENT_OBSERVED_PARTIAL_DISTRIBUTED_PROFILE"),
+    "GAP-PY-API: progress label does not reflect the distributed profile rule")
+neg("parity credit in gaps", lambda v, g: g.update(parity_credit=1), "gaps/parity_credit: receipts or parity not zero")
+neg("carried v6 row edited", lambda v, g: row(v, "TS05")["carried_from_v6"].update(status="X"), "TS05: carried_from_v6 differs from the v6 row")
+neg("projection claim flipped", lambda v, g: v["projection_check"].update(confirmed=False), "projection_check differs from the recomputation")
+
+
+def drop_pk072(v, g):
+    [e for e in v["residuals_dp"] if e["id"] == "R-PK07-2"][0].update(resolution="UNREACHABLE_AT_PIN", needs_new_decision=False, unlocked_by=None)
+    [u for u in v["decisions_that_would_unlock"] if u["id"] == "D-PLATFORM"][0]["residuals"].remove("dp:R-PK07-2")
+
+
+neg("platform residual reclassified unreachable and removed from its decision (probe of the R1)", drop_pk072,
+    "R-PK07-2: resolution differs from the class table")
+neg("residual counts altered", lambda v, g: v["residual_counts_dp"]["by_resolution"].update(UNREACHABLE_AT_PIN=9), "residual_counts_dp differ from the residuals")
+neg("decision arms altered", lambda v, g: [u for u in v["decisions_that_would_unlock"] if u["id"] == "D-T4"][0]["arms_named"].append("PY13.B99"),
+    "D-T4: contracts, arms or gain differ from the recomputation")
+neg("D-NEWCAP presented as a user decision", lambda v, g: [u for u in v["decisions_that_would_unlock"] if u["id"] == "D-NEWCAP"][0].update(decision_owner="USER"),
+    "decision owners differ (D-NEWCAP is the Lead's)")
+neg("resolved residual without pin", lambda v, g: [e for e in v["residuals_dp"] if e["id"] == "R-PK01-1"][0].pop("pin"),
+    "R-PK01-1: resolved residual without pin, build_link or profile")
+neg("v6 residual resolved without build_link", lambda v, g: [x for x in v["v6_distributed_destination_resolved"] if x["id"] == "R-TS01-3"][0].pop("build_link"),
+    "R-TS01-3: v6 residual resolved by the distributed profile without pin or build_link")
+neg("superseded R1-F04 reading reapplied", lambda v, g: [x for x in v["records_for_bind_applied"] if x["id"] == "DP1-ADM/R1-F04"][0].update(
+    applied_in=["rows[source_contract=PK06]"]), "superseded R1-F04 reading applied")
+neg("R2-F03 dropped from DP-PK08A", lambda v, g: row(v, "PK08")["observations_dp"][0].update(
+    qualifications=[q for q in row(v, "PK08")["observations_dp"][0]["qualifications"] if not q.startswith("DP1-ADM/R2-F03")]),
+    "DP-PK08A without the corrected R2-F03 reading")
+neg("PK07.B03 anchor altered", lambda v, g: arm(v, "PK07.B03")["evidence_anchor"].update(sha256="0" * 64), "PK07.B03 without the anchored stderr of step 10")
+neg("PK07.B03 win32 condition counted as reached", lambda v, g: [e for e in v["conditions_check"]["rows"] if e.get("reached_by_arm_part") is False][0].pop("reached_by_arm_part"),
+    "PK07.B03 win32 condition not marked as seen only via PK07.B01")
+neg("platform gap with another label", lambda v, g: g["rows"][5].update(progress_after="PRECISE_SOURCE_CONTRACT_BOUNDARIES_AND_ORACLES_MAPPED+CLIENT_OBSERVED_PARTIAL_DISTRIBUTED_PROFILE_LINUX_X64"),
+    "GAP-PLATFORM-PACKAGING: progress label outside the single vocabulary")
+doc = {"kind": "BINDING_VALIDATION", "task": "DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE", "result": "PASS" if not base and all(n["rejected"] for n in negs) else "FAIL",
+       "errors": base, "recomputed": {"consumed_cases": CONSUMED, "parts": sum(len(spec[c]["arm_discrimination"]) for c in CONSUMED)},
+       "negative_controls": negs, "negative_controls_rejected": "%d/%d" % (sum(n["rejected"] for n in negs), len(negs)),
+       "matching": "igualdade exata de mensagem", "inputs": {"coverage-observed-v7.json": sha("coverage-observed-v7.json"),
+                                                            "gaps-review-v7.json": sha("gaps-review-v7.json")},
+       "validated_at": datetime.now(timezone.utc).isoformat()}
+with open(P("validation.json"), "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], len(base), doc["negative_controls_rejected"], base[:5], [n["control"] for n in negs if not n["rejected"]])

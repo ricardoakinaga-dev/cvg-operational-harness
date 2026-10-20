@@ -2,6 +2,19 @@
 
 Estado corrente: BUILD0237 concluído localmente na fonte `84d8d4b4`, sete deltas próprios integrados. Revisão final APPROVE/zero obrigatórios,398 focais,16 gates/38 hashes atuais e5.211 unit/302 PG/12 E2E/zero skips.14 aceites PASS e consumidor fresco207 imports/76 exports/oito pacotes/zero rede. [Resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md), [estado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/state.json). Root77 protegidos/índice/HEAD preservados,PG próprio removido/portas livres. B6 permaneceINCOMPLETE1609=537+1072/zero provas; todas 1721 ocorrências históricas também ficam registradas, sem crédito de resolução. Não repetir aprovações 0236/0237 nem reiniciar jobs encerrados.
 
+## Ação atual do pai — 20/10/2026, segunda atualização (CONT-20261018-D9EF)
+
+O [BUILD0245](../02_spec/0245_b6_tsx_parse.md) passou a parsear `.tsx` como TSX e a recusar o JSX no domínio. A B6 caiu de 12.283 para 11.723 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0245-20261020/REPORT.txt).
+
+O [recon 20261020B](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/REPORT.txt) achou duas coisas:
+
+- uma falha de soundness no kernel: o valor CJS é a última escrita de `module.exports`, o que dá PROVEN falso em raiz limpa com reescrita em função ou em ramo de `if`. A [SPEC0247](../02_spec/0247_b6_cjs_export_soundness.md) corrige isso sem mudar nenhuma tupla na raiz real; o usuário aprovou o BUILD local, que está em andamento;
+- o glob de workspaces que casa com `legacy/packages/README.md`, registrado como `HISO005-P2-WORKSPACE-MAP` no [backlog 0370](0370_harness_product_isolation_backlog.md).
+
+A prova por escopo (SPEC0246) dá zero provas na raiz atual e só é sound sob a premissa nova P-REINO. O usuário a adiou até a 0247 fechar. Riscos: folga de 27 contextos (15 com a correção de workspaces) e tempo do worker de 154 a 188 s sob carga, contra o teto de 300 s.
+
+`active_action_id: HISO005-P2-BUILD-0247`.
+
 ## Ação atual do pai — 20/10/2026 (CONT-20261018-D9EF)
 
 A [SPEC0244](../02_spec/0244_b6_esm_module_shape.md) foi aprovada e construída. A B6 caiu de 13.521 para 12.283 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. Pela [recon de 20/10](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/REPORT.txt), a próxima causa é o TSX parseado como TS (705 tuplas). A primeira prova exige decisões T3 sobre prova por escopo (hoje qualquer UNKNOWN suprime todas as provas), modelo de entrada externa (K0) e `new` de built-in. Risco registrado: o uso de contextos está em 229 de 256, com o pico em `z.object`.

@@ -1,0 +1,132 @@
+{
+  "task": "HISO005-P2-NEXT-RECON-20261020B",
+  "observedAt": "2026-10-20T06:49:24.739349+00:00",
+  "severity": "soundness gap in the current kernel (outside SPEC0245/0246)",
+  "source": "review-0245-r1/review.json (R1-01, F3) e review-0246-r2/review.json (R2-03, S10), reproduzidos aqui",
+  "fixtures": {
+    "F3-function-body": {
+      "package.json": "{}",
+      "entry.js": "const m = require('./m.js');\nmodule.exports = 1;\n",
+      "m.js": "module.exports = function f() { module.exports = function g(x) { return import(x) } }\n"
+    },
+    "S10-top-level-branches": {
+      "package.json": "{}",
+      "entry.js": "const m = require('./m.js')\nmodule.exports = 1",
+      "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nelse module.exports = 1"
+    }
+  },
+  "results": {
+    "F3-function-body": {
+      "v4": {
+        "engineSha256": "a2598fb2c56d333c0b8bc00f652511924222d0be591075f101021b9bd657e88f",
+        "status": "PROVEN",
+        "unknowns": [],
+        "proofs": [
+          [
+            "K5",
+            "entry.js",
+            "SourceFile"
+          ],
+          [
+            "K5",
+            "m.js",
+            "SourceFile"
+          ],
+          [
+            "K7",
+            "m.js",
+            "CallExpression"
+          ]
+        ],
+        "validation": {
+          "valid": true
+        },
+        "error": null
+      },
+      "v5": {
+        "engineSha256": "c724567f82eb4beeab37904ae194366e18c64fb88c73db7fb575f17b31e0130c",
+        "status": "PROVEN",
+        "unknowns": [],
+        "proofs": [
+          [
+            "K7",
+            "m.js",
+            "CallExpression"
+          ],
+          [
+            "K5",
+            "entry.js",
+            "SourceFile"
+          ],
+          [
+            "K5",
+            "m.js",
+            "SourceFile"
+          ]
+        ],
+        "validation": {
+          "valid": true
+        },
+        "error": null
+      }
+    },
+    "S10-top-level-branches": {
+      "v4": {
+        "engineSha256": "a2598fb2c56d333c0b8bc00f652511924222d0be591075f101021b9bd657e88f",
+        "status": "PROVEN",
+        "unknowns": [],
+        "proofs": [
+          [
+            "K5",
+            "m.js",
+            "SourceFile"
+          ],
+          [
+            "K7",
+            "m.js",
+            "CallExpression"
+          ],
+          [
+            "K5",
+            "entry.js",
+            "SourceFile"
+          ]
+        ],
+        "validation": {
+          "valid": true
+        },
+        "error": null
+      },
+      "v5": {
+        "engineSha256": "c724567f82eb4beeab37904ae194366e18c64fb88c73db7fb575f17b31e0130c",
+        "status": "PROVEN",
+        "unknowns": [],
+        "proofs": [
+          [
+            "K7",
+            "m.js",
+            "CallExpression"
+          ],
+          [
+            "K5",
+            "entry.js",
+            "SourceFile"
+          ],
+          [
+            "K5",
+            "m.js",
+            "SourceFile"
+          ]
+        ],
+        "validation": {
+          "valid": true
+        },
+        "error": null
+      }
+    }
+  },
+  "reading": "o valor CJS é a última escrita de module.exports, não a união das escritas alcançáveis: reatribuída dentro de função (F3) ou em ramos de if de condição não primitiva no topo (S10); g nunca é avaliado e a execução sai PROVEN, com K7 para a origem import(x)",
+  "scope": "toda escrita de module.exports que não seja uma única atribuição incondicional no topo (ramos com condição não primitiva, corpos de função, repetição); correção esperada: união das escritas alcançáveis verificada por checkExport, ou UNKNOWN_MUTATION; F3 e S10 como aceites",
+  "notInDelta": "nenhuma das SPEC0244/0245/0246 introduz a lacuna; ela precede a v5",
+  "recommendation": "tarefa própria (T3) antes de qualquer BUILD da SPEC0246; até lá, nenhuma prova emitida pela v5 em raiz com esse padrão é confiável"
+}

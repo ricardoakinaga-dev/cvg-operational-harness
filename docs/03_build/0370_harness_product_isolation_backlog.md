@@ -70,6 +70,14 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - Evidência: grafo resolvido e execução positiva/negativa do gate. Fixtures da sonda não entram no artefato de produção.
 - Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B1): gate `boundary:products` passa a terminar em 26 s com `PASS` (antes ~22 min `INCOMPLETE`); dependências instaladas verificadas contra o lockfile commitado; 50 testes negativos novos cobrem os contraexemplos T2 (`P1-R2-01`, `P1-R2-02`) e as 73 sondas do crítico posterior dão 0 falsos PASS. O PASS depende de uma tabela de 169 exceções de primeira parte vinculadas por arquivo/linha/digest que ainda exige revisão independente (`--strict` mostra `INCOMPLETE`). Estado permanece `IN_PROGRESS` até a reauditoria Codex (B6). [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
+#### Subtask HISO005-P2-WORKSPACE-MAP — TODO, aberta em 20/10/2026
+
+- Estado `TODO`. Prioridade P2. Dono: engenharia do harness (resolvedor B6). Risco/gate: T3, porque muda a resolução que a B6 usa. Depende de nada; deve vir antes da primeira prova de aresta `@cvg/*`.
+- Achado do [recon 20261020B](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/REPORT.txt), item 4: o glob de workspaces `legacy/packages/*` também casa com `legacy/packages/README.md`. O resolvedor (`boundary-semantic-resolution.mjs`) recusa o mapa inteiro com `UNKNOWN_WORKSPACE_CONFIG`, e as 746 arestas `@cvg/*` de 458 importadores viram contidas. O npm só trata como workspace um diretório com `package.json`.
+- Medido na variante diagnóstica `ws_skip_patch.py`, que pula entrada que não é diretório nem link: contidas 1.535 → 790, diagnósticos 12.283 → 12.195, contextos 229 → 241/256 (folga cai para 15), provas iguais (0).
+- WHAT/HOW, duas saídas a decidir na SPEC: (a) alinhar o resolvedor ao npm, pulando só arquivo comum, com controle negativo para link, nome inválido e diretório sem `package.json`; (b) mover o README para fora de `legacy/packages/`, o que muda a raiz avaliada e exige nova base. Medir a folga de contextos antes; se cair abaixo de 16, decidir o teto junto.
+- Aceite: mapa de workspaces resolvido na raiz real (a variante achou 28 workspaces), nenhum falso PROVEN nos controles, normal = strict.
+
 #### Subtask HISO005-P2-BUILD-0240 — IN_PROGRESS/BUILD local autorizado
 
 Usuário aprovou explicitamente SPEC0240/SHA1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161; [autoridade](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/authority-build0240.json), [MS01–12](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/task-contract.json). Candidata84d8 própria preparada/pins/20fontes/137+590selados preservados. Próxima ação V2_BASELINE_FIRST_RED antes de deltahelper/engine; críticas/gates/consumidor/medição atuais obrigatórios antes de promoção. MS01–12NOT_RUN; B6INCOMPLETE1609/zero provas, sem repetição de aprovação/release/push/deploy. Recon/T1abaixo permanece concluído/selado.

@@ -58,10 +58,10 @@
 - Espaço: removidas as referências regeneráveis `compiled-reference-r6` e `installed-reference-r5` do runtime 0240 (5,7 GB; hashes na evidência). Os diretórios `legacy*` ficaram.
 - Estado em 19/10, depois da consolidação. Tudo vai à `main` por PR montado em worktree detached sob `/mnt/dados/cvg-work/`, e a branch temporária é apagada depois do merge. Histórico local preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.
   - Já na `main`: captura r5 da SPEC0238 (PR #5). Em CI: BUILD0241 + T2 da receita (PR #6). Este PR documental leva as evidências e as decisões desta sessão.
-  - Em andamento, com claims ativos (20/10):
-    - `DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE` (T1 documental): `g02/sdk-distributed-profile-binding/`.
-    - Nenhuma candidata de BUILD ativa. Os PGs 56262 e as portas 3448/4448 estão livres. As candidatas detached em `/mnt/dados/cvg-work/` ficam como âncora dos commits até o merge.
-  - Concluídas desde 19/10: BUILD0243, BUILD0242 e BUILD0244 (este PR); Codex100 C3-1, C3-2, v6, aquisição 0.153.4, DP-1, DP-1R e DP-2.
+  - Em andamento, com claims ativos (20/10, depois do PR #9):
+    - `HISO005-P2-BUILD-0247`, aprovado pelo usuário (SPEC0247 `082ad2f4…`): candidata `/mnt/dados/cvg-work/cvg-hiso005-build0247-20261020`; PG `cvg-hiso005-build0247-pg` 56263, API 3449, web 4449; raiz avaliada `/mnt/dados/cvg-work/cvg-hiso005-eval-228e`, só leitura; certify com claim próprio.
+    - A raiz avaliada `228e7918` foi reconstituída pelo BUILD0245 e fica para os próximos BUILDs; a candidata do BUILD0245 fica como âncora do commit `1d40fe51` até o merge.
+  - Concluídas desde 19/10: BUILD0243, BUILD0242 e BUILD0244 (PR #8 e #9); BUILD0245 e o recon 20261020B (este PR); Codex100 C3-1, C3-2, v6, aquisição 0.153.4, DP-1, DP-1R, DP-2 e ligação v7.
 
 ### HISO005-P2-BUILD-0240-20261018 — SPEC0240 aprovada (Codex) (ATIVO BUILD T3 LOCAL)
 

@@ -1,0 +1,225 @@
+{
+  "round": "R2",
+  "task": "HISO005-P2-NEXT-RECON-20261020B",
+  "spec": "SPEC0246",
+  "specFile": "spec0246-r2.md.txt",
+  "specSha256": "af3ffa2054c5772f15600d85e5af8c47ff6a949a65f0771547a70c3d3ba5507c",
+  "predictorSha256": "faa356d72c657ecf2b762aa408f3639f6e1aedb76740740a47e3991dcbf7b0b1",
+  "reviewer": "mesmo crítico do R1 (Claude Code), rodada final",
+  "observedAt": "2026-10-20T06:48:23.426562+00:00",
+  "verdict": "REVISE",
+  "summary": "A r2 resolve R1-02 a R1-06; os números foram conferidos. Restam 3 obrigatórios, todos de texto e todos sobre o que a decisão T3 aprova. R2-01: a P-REINO precisa cobrir o processo inteiro, não só \"antes da avaliação\" (S11). R2-02: a alternativa sem premissa com 5 classes não é sound (S12, bloco estático de classe); a condição sound é o PROVEN global. R2-03: a pré-condição da lacuna do K0 precisa cobrir module.exports condicional no nível superior (S10, que dá PROVEN global já na v5). Nenhum exige nova medição. A recomendação de não construir agora está bem fundamentada.",
+  "r1Status": [
+    {
+      "id": "R1-01",
+      "severity": "P1",
+      "status": "PARTIAL",
+      "note": "Resolvido: P-REINO declarada nova e levada à §8, consumo só condicional, S1 no MP02. Restam dois pontos: a redação da premissa (\"antes da avaliação do fecho\") não cobre alteração posterior (R2-01), e a alternativa \"sem premissa\" com 5 classes não é sound (R2-02)."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P1",
+      "status": "RESOLVED",
+      "note": "installed[] só sob PROVEN global; origens instaladas fora do K7; fixture com 2 entradas e 1 provada no MP03. O preditor ainda calcula installed pela regra por escopo (ver R2-04, P3), sem efeito: dá 0."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "status": "RESOLVED",
+      "note": "Fecho com ciclo não recebe prova, a emissão nunca segue ciclo e S2 está no MP02. O preditor usa Tarjan: 20 arquivos (5×2 + 2×5), conferido."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "status": "RESOLVED",
+      "note": "A base é o kernel anterior, o preditor está congelado por hash e a raiz real exercita 0 provas. O alinhamento do preditor com a §3.1 está incompleto (R2-04, P3)."
+    },
+    {
+      "id": "R1-05",
+      "severity": "P2",
+      "status": "RESOLVED",
+      "note": "Decomposição 50/60/1; +111 tuplas sem efeito em prova; 12.283 → 12.394; census, arquivo sem modo e phases.grammar especificados."
+    },
+    {
+      "id": "R1-06",
+      "severity": "P2",
+      "status": "RESOLVED",
+      "note": "Ganhos em tuplas brutas. NEW = 150, conferido; decomposição Date 72, Set 58, Map 24, WeakMap 8, RegExp 8, WeakSet 4, Error 3, Uint8Array 2, conferida; sem Promise, Proxy e host."
+    },
+    {
+      "id": "R1-07",
+      "severity": "P3",
+      "status": "PARTIAL",
+      "note": "A §3.1 diz união, mas o código do preditor congelado ainda usa precedência (ver R2-04)."
+    },
+    {
+      "id": "R1-08",
+      "severity": "P3",
+      "status": "OPEN",
+      "note": "Continuam \"Hoje a tupla vai só para o alvo\", \"1.061 têm arestas\" e \"1.535 arestas contidas\" (ocorrências)."
+    },
+    {
+      "id": "R1-09",
+      "severity": "P3",
+      "status": "OPEN",
+      "note": "Continua \"11 … só exportam constantes primitivas\": são 7 com constantes, 1 com função que retorna null e 3 só de tipos."
+    },
+    {
+      "id": "R1-10",
+      "severity": "P3",
+      "status": "RESOLVED",
+      "note": "grammar listada nas condições de K5."
+    },
+    {
+      "id": "R1-11",
+      "severity": "P3",
+      "status": "RESOLVED",
+      "note": "Derivação com premissas por digest (§3.3, §6)."
+    },
+    {
+      "id": "R1-12",
+      "severity": "P3",
+      "status": "OPEN",
+      "note": "Falta a nota de instabilidade do piso de 2 classes sob a correção de workspaces."
+    },
+    {
+      "id": "R1-13",
+      "severity": "P3",
+      "status": "OPEN",
+      "note": "A justificativa de R ainda não cobre compilerOptions.plugins (pergunta própria)."
+    },
+    {
+      "id": "R1-14",
+      "severity": "P3",
+      "status": "RESOLVED",
+      "note": "Receita de reconstituição com hash por input (§5)."
+    },
+    {
+      "id": "R1-15",
+      "severity": "P3",
+      "status": "RESOLVED",
+      "note": "Backlog próprio citado."
+    }
+  ],
+  "required": [
+    {
+      "id": "R2-01",
+      "severity": "P1",
+      "section": "§2 (P-REINO), §8",
+      "finding": "A P-REINO como redigida não torna a regra sound. O texto diz \"nenhum módulo fora do fecho altera carregador, cache, intrínsecos ou globalThis antes da avaliação do fecho\". O K5 por escopo, porém, também afirma o comportamento das funções exportadas (superfície K0) e dos require/import dentro de funções. Esse código roda DEPOIS da avaliação do fecho, e uma alteração do reino feita nesse intervalo não é coberta pela premissa.",
+      "evidence": "Cenário S11 (engine v5 em cópia privada; Node 22.23.2). m2.cjs = \"module.exports = function () { return require('./dep.cjs') }\"; dep.cjs e evil.cjs como em S1. Na v5, as 6 tuplas ficam todas em evil.cjs e o fecho {m2.cjs, dep.cjs} está limpo. No Node real, require(m2) primeiro (fecho avaliado, premissa satisfeita), depois require(evil) e então f(): f() devolve \"PRODUCT-LOADED\".",
+      "requiredChange": "Redigir a P-REINO para todo o tempo de vida do processo em que código do fecho possa executar, antes e depois da avaliação: carregadores CJS/ESM (Module.prototype.require, Module._load, Module._resolveFilename, Module._extensions, require.cache, module.register e registerHooks), Object e intrínsecos K4, e globalThis. Acrescentar S11 ao MP02, junto com S1."
+    },
+    {
+      "id": "R2-02",
+      "severity": "P1",
+      "section": "§2 (alternativa sem premissa), §8",
+      "finding": "A alternativa \"sem premissa\" é apresentada como forma sound, mas a lista de 5 classes (MUTATION, REFLECTION, NATIVE_BUILTIN, BINDING e EXPORTED_MUTABLE_STATE) não cobre todo código não analisado que pode tocar o reino. Ficam de fora: corpo de classe (ClassDeclaration recusada, 346 tuplas; blocos estáticos executam código); arestas contidas para código não analisado (addon .node, pacote com resolução recusada); chamadas a valores opacos (UNKNOWN_CALL e PROPERTY); e outras. Pela SPEC0236 §6, \"módulo com side effect opaco\" basta para derrubar a premissa. O usuário escolheria entre duas opções, e uma delas é falsa como descrita.",
+      "evidence": "Cenário S12: evil2.cjs tem um bloco estático de classe que troca module.constructor.prototype.require. Na v5, a ÚNICA tupla é {evil2.cjs, UNKNOWN_UNSUPPORTED_SYNTAX, ClassDeclaration}, que não está entre as 5 classes. A condição \"sem premissa\" passaria e m.cjs receberia K5. No Node real, require(evil2) seguido de require(m) dá \"PRODUCT-LOADED\". Conferido: 1.515 tuplas e 594 arquivos são exatos para as 5 classes. A conclusão \"0 provas\" continua valendo a fortiori.",
+      "requiredChange": "Reescrever a alternativa: sem premissa, a condição sound é não haver tupla de efeito opaco em NENHUM arquivo do perfil, o que na prática é o próprio PROVEN global da SPEC0236 §6. As 5 classes ficam só como subconjunto medido, um limite inferior, com o mesmo resultado de 0 provas. Não apresentar a lista como regra sound. Acrescentar S12 ao MP02."
+    },
+    {
+      "id": "R2-03",
+      "severity": "P1",
+      "section": "§1 (lacuna do K0), §3.5 (pré-condição)",
+      "finding": "A pré-condição \"lacuna do K0 fechada\" está definida estreita demais: \"module.exports reatribuído dentro de corpo de função\". O mesmo defeito, em que o valor CJS é a última escrita e não a união das escritas alcançáveis, aparece no NÍVEL SUPERIOR, com if de condição não primitiva cujos dois ramos atribuem module.exports. A v5 dá PROVEN GLOBAL nesse caso, então isso já é falha da regra atual, fora do delta. Sob escopo viraria prova local. Se a decisão T3 aprovar a ordem com a lacuna estreita, o BUILD pode seguir com essa variante aberta.",
+      "evidence": "Cenário S10: package.json \"{}\"; entry.js = \"const m = require('./m.js')\\nmodule.exports = 1\"; m.js = \"if ({}) module.exports = function g(x) { return import(x) }\\nelse module.exports = 1\". Na v5: status PROVEN, 0 tuplas, K5 para entry.js e m.js, fases todas COMPLETED, validation true. No Node real, require('./m.js') devolve a função g, e g('./products/p.cjs') carrega \"PRODUCT-LOADED\".",
+      "requiredChange": "Definir a lacuna como \"toda escrita de module.exports que não seja uma única atribuição incondicional no nível superior\": ramos de if ou bloco com condição não primitiva, corpos de função, repetição. O valor CJS passa a ser a união das escritas alcançáveis, verificada por checkExport, ou UNKNOWN_MUTATION. Exigir as duas fixtures (a de função do finding e a S10) como aceite da tarefa prévia. Registrar no finding-k0 que a regra global atual também é afetada."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-04",
+      "severity": "P3",
+      "section": "§3.4 (preditor congelado)",
+      "finding": "O preditor congelado (faa356d7…) não está totalmente \"alinhado à §3\". scope_of ainda usa precedência e devolve um só dono, então um alvo contido que seja manifesto de pacote não suja o pacote, contra a união da §3.1. O docstring e o cálculo de installed_ok usam a regra por escopo para installed[], contra a §2/§3.3 (só PROVEN global). Não há efeito nesta raiz: 0 casos e installedProven = 0.",
+      "requiredChange": "Alinhar antes do freeze do BUILD: união real de donos e installed só sob PROVEN global. Ou declarar as duas divergências."
+    },
+    {
+      "id": "R2-05",
+      "severity": "P3",
+      "section": "§8 (NEW)",
+      "finding": "Ponto para a pergunta própria NEW: new Map/Set/WeakMap/WeakSet com argumento iterável usa o protocolo de iteração (código de usuário e Array.prototype[Symbol.iterator], que é reino), e new Error(msg) e new Date(x) fazem ToString ou ToPrimitive de argumento objeto. \"Cria objeto modelado\" precisa condicionar os argumentos.",
+      "requiredChange": "Tratar na SPEC da NEW."
+    },
+    {
+      "id": "R2-06",
+      "severity": "P3",
+      "section": "§1, §3.1",
+      "finding": "Itens P3 do R1 ainda em aberto: R1-08 (redação e unidades), R1-09 (as 13 provas), R1-12 (piso instável), R1-13 (plugins em R).",
+      "requiredChange": "Ajustes de redação."
+    },
+    {
+      "id": "R2-07",
+      "severity": "P3",
+      "section": "§2 (consumo)",
+      "finding": "Para manter a partição do checker (resolved + unresolved = baseline), a origem com K7 de escopo deve continuar em unresolvedOrigins e aparecer também em conditionallyResolvedDiagnostics. O texto implica isso (\"a contagem não muda\"), mas não diz.",
+      "requiredChange": "Dizer isso explicitamente no MP04."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S10",
+      "kind": "lacuna de module.exports no nível superior (R2-03)",
+      "fixture": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1",
+        "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nelse module.exports = 1",
+        "products/p.cjs": "module.exports = 'PRODUCT-LOADED'"
+      },
+      "starts": [
+        "entry.js",
+        "m.js"
+      ],
+      "result": "v5: PROVEN global, unknowns [], K5 entry.js e m.js, validation true. Node real: typeof require(m) = function, e g('./products/p.cjs') carrega PRODUCT-LOADED."
+    },
+    {
+      "id": "S11",
+      "kind": "reino alterado depois da avaliação do fecho (R2-01)",
+      "fixture": {
+        "dep.cjs": "module.exports = 'dep-ok'",
+        "m2.cjs": "module.exports = function () {\n  return require('./dep.cjs')\n}",
+        "evil.cjs": "igual ao S1 do R1"
+      },
+      "starts": [
+        "dep.cjs",
+        "evil.cjs",
+        "m2.cjs"
+      ],
+      "result": "v5: UNKNOWN com as 6 tuplas só em evil.cjs; fecho {m2.cjs, dep.cjs} limpo. Node real: f = require(m2), depois require(evil) e f() dá PRODUCT-LOADED."
+    },
+    {
+      "id": "S12",
+      "kind": "reino alterado por bloco estático de classe (R2-02)",
+      "fixture": {
+        "evil2.cjs": "class Patch {\n  static {\n    const original = module.constructor.prototype.require\n    module.constructor.prototype.require = function (id) {\n      return original.call(this, id === './dep.cjs' ? ['.', 'products', 'p.cjs'].join('/') : id)\n    }\n  }\n}",
+        "m.cjs": "igual ao S1",
+        "dep.cjs": "igual ao S1"
+      },
+      "starts": [
+        "dep.cjs",
+        "evil2.cjs",
+        "m.cjs"
+      ],
+      "result": "v5: UNKNOWN com 1 tupla (evil2.cjs, UNKNOWN_UNSUPPORTED_SYNTAX, ClassDeclaration); body COMPLETED; validation true. Node real: require(evil2) seguido de require(m) dá PRODUCT-LOADED."
+    },
+    {
+      "id": "S13",
+      "kind": "conferência dos números da r2",
+      "result": "Classes de reino: 1.515 tuplas (BINDING 859, EXPORTED_MUTABLE_STATE 335, NATIVE_BUILTIN 254, MUTATION 57, REFLECTION 10) em 594 arquivos. NEW = 150 com a decomposição do texto. K0 = 657. Arquivos em ciclo: 20. Cenários v5tags: 2/0/0/0/0 no escopo; 0/13/0/0/0 em escopo + R, + K0, + NEW e + K0 + NEW (removidas 0/657/150/807). Na v5wstags: idem (K0 652, total 802). Hashes da r2, do preditor e do mapa conferidos com o contract-freeze-r2."
+    }
+  ],
+  "commands": [
+    "cópia privada do engine v5 (c724567f…) em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/eng; caller limpo: env -i PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC /home/ricardo/.nvm/versions/node/v22.23.2/bin/node /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/eng/caller.mjs <fixture> <starts…>  (S10: fx-cjs-branch; S11: fx-late; S12: fx-static)",
+    "Node real (env -i, Node 22.23.2) nas fixtures: S10 \"require('./m.js')('./products/p.cjs')\"; S11 \"f=require('./m2.cjs'); require('./evil.cjs'); f()\"; S12 \"require('./evil2.cjs'); require('./m.cjs')\"",
+    "python3 -I (inline) sobre real-v5tags-normal-report e diag-v5tags-normal: classes de reino, arquivos, NEW por etiqueta e cenários de scope-v5tags.json/scope-v5wstags.json",
+    "sha256sum spec0246-r2.md.txt operators/scope.py r1-corrections-0246.json finding-k0-cjs-exports-gap.json scope-v5*.json, comparados com contract-freeze-r2.json",
+    "leitura: spec0246-r2.md.txt (inteiro), operators/scope.py (r2), r1-corrections-0246.json, finding-k0-cjs-exports-gap.json, document-checks-r2.json, state.json; o diff r1→r2 não foi usado, a r2 foi lida inteira"
+  ],
+  "outsideThisSpec": "S10 é falha de soundness da regra GLOBAL da v5 atual (PROVEN falso), ao lado do finding-k0. Deve ir para a tarefa prévia do K0, independentemente da SPEC0246.",
+  "writes": [
+    "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r2/review.json",
+    "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r2/REPORT.txt"
+  ],
+  "forbiddenRespected": "sem checker na raiz, receitas, certify, PG, recursos do Codex, commit ou push; repositório e runtime só lidos; fixtures só no scratchpad"
+}

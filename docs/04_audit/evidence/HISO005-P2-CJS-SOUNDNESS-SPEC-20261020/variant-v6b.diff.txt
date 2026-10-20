@@ -1,0 +1,67 @@
+--- v5/boundary-semantic-engine.mjs
++++ v6b/boundary-semantic-engine.mjs
+@@ -353,6 +353,8 @@
+ const U = Object.freeze({ t: 'unknown' })
+ const primitive = (v) => ({ t: 'primitive', v })
+ const VOID = primitive(undefined)
++// SPEC0247 C1 variant B (diagnostic): the initial exports object, opaque.
++const CJS_EXPORTS_OBJECT = Object.freeze({ t: 'cjs-exports-object' })
+ const valueKey = (v) =>
+   v.t === 'primitive'
+     ? 'p:' + typeof v.v + ':' + String(v.v)
+@@ -1324,6 +1326,8 @@
+       unknown(file, 'UNKNOWN_EXPORT')
+       return
+     }
++    // SPEC0247 C1 variant B: no capability; every mutation path is a root.
++    if (v === CJS_EXPORTS_OBJECT) return
+     // Public mutable values escape to consumers the kernel does not model.
+     // A later public call may observe an externally changed descriptor or
+     // prototype. v1 has no external-alias/strong-update rule to recover it.
+@@ -1536,7 +1540,13 @@
+           x.left.name.text === 'exports' &&
+           !find(e, 'module')
+         ) {
+-          modules.get(file).cjs = expression(x.right, e, file)
++          const written = expression(x.right, e, file)
++          // SPEC0247 C4 (diagnostic): the kernel cannot bound when a write in a
++          // function body happens; root in the written module, value U.
++          if (ts.findAncestor(n.parent, (a) => ts.isFunctionLike(a))) {
++            unknown(file, 'UNKNOWN_CJS_EXPORTS', 'FUNCTION_BODY_WRITE')
++            modules.get(file).cjs = U
++          } else modules.get(file).cjs = written
+         } else expression(x, e, file)
+         continue
+       }
+@@ -1560,8 +1570,15 @@
+           const r = branch(c.v ? n.thenStatement : n.elseStatement)
+           if (r.returned) return r
+         } else {
+-          const a = branch(n.thenStatement),
+-            b = branch(n.elseStatement)
++          // SPEC0247 C3 (diagnostic): the CJS value after an undecided if is the
++          // union of the values at the end of each branch.
++          const cjsModule = modules.get(file),
++            before = cjsModule.cjs
++          const a = branch(n.thenStatement)
++          const afterThen = cjsModule.cjs
++          cjsModule.cjs = before
++          const b = branch(n.elseStatement)
++          cjsModule.cjs = union([afterThen, cjsModule.cjs])
+           if (a.returned && b.returned)
+             return { returned: true, value: union([a.value, b.value]) }
+           // Partially returning branches need control-flow continuations absent v1.
+@@ -1713,7 +1730,12 @@
+       )
+         unknown(file, 'UNKNOWN_COMPILED_PROVENANCE')
+     }
+-    const module = { exports: new Map(), cjs: VOID, loading: true, mode }
++    const module = {
++      exports: new Map(),
++      cjs: mode === 'require' ? CJS_EXPORTS_OBJECT : VOID,
++      loading: true,
++      mode
++    }
+     modules.set(file, module)
+     coverage.modules.started++
+     if (block(sf.statements, env(), file).returned)

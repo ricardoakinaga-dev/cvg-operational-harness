@@ -1,0 +1,64 @@
+HISO005-P2-NEXT-RECON-20261020B — recon T1 (Claude Code, CONT-20261018-D9EF)
+
+Base: scripts da cabeça do PR #9 (16dd0ce6), com o engine v5 c724567f. Ainda não estão na main 24b1bbc8.
+Raiz: 228e7918. Usei referências novas pela receita com escopo. A cópia de etiquetas reproduz os 12.283 diagnósticos do BUILD0244.
+Nada aqui é promovível.
+
+1. SPEC0245 — TSX (materialized/0245_b6_tsx_parse.md.txt, sha256 04ec44eab0a2110e7804890e8688e4556aa58cd944ef7b279e15d031ec911af4)
+   Problema: o engine parseia .tsx como TS e avalia a AST recuperada.
+   - Os 29 .tsx têm 704 tuplas: UNKNOWN_PARSE em todos e 430 UNKNOWN_BINDING vindos de palavras de JSX.
+   - Os .tsx não são formato de runtime do Node 22; UNKNOWN_FORMAT e MODULE_FORMAT ficam.
+   Variantes diagnósticas (diagnósticos):
+
+   | Variante | O que faz                                              | Diagnósticos  |
+   |----------|--------------------------------------------------------|---------------|
+   | A        | ScriptKind pela extensão; JSX recusado pelo fallback   | 11.723 (−560) |
+   | C        | avalia o conteúdo do JSX                               | 11.729        |
+   | B        | não avalia o corpo de arquivo com erro de parse        | 11.676        |
+
+   Na A:
+   - .tsx ficam com 144 tuplas; UNKNOWN_PARSE vai de 29 para 0;
+   - nada muda fora dos .tsx;
+   - contextos 229/256, iguais;
+   - normal = strict, 0 violações, 0 provas.
+   Proposta: A (menor delta, sem premissa nova).
+   - C embute a premissa de avaliação eager do JSX.
+   - B muda todo arquivo com erro de parse e perde import() finito dentro do JSX.
+   Custo: violações que só a avaliação do JSX exporia ficam UNKNOWN.
+   Crítico novo: R1 REVISE (6 obrigatórios). R2 APPROVE_SPEC. Os 8 P3 entraram na r3, sem terceira rodada.
+
+2. SPEC0246 — prova por escopo (materialized/0246_b6_scope_proof.md.txt, sha256 f22569a2851197c58f8e9dd55664ad7a6a7031f0412e39f2a98c2fdf5a2dd493)
+   Medição (preditor congelado sobre o despejo da cópia diagnóstica):
+   - escopo sozinho: 0 provas. As 2 tuplas de tsconfig são globais.
+   - escopo + R: 13 K5 triviais (folhas sem aresta e sem origem), 0 de aresta, 0 K7, 0 instalados.
+   - K0 (−657 tuplas brutas) e NEW (−150 tuplas brutas): 0 provas novas.
+   - Com a correção de workspaces: mesmo resultado.
+   A regra só é sound sob a premissa nova P-REINO: o reino (carregadores, cache, intrínsecos, globalThis) fica intacto durante todo o processo.
+   Sem premissa, a condição sound é o próprio PROVEN global.
+   Recomendação: adiar.
+   Crítico novo:
+   - R1 REVISE (6 obrigatórios).
+   - R2 REVISE (3 P1, todos de texto).
+   - Os P1 da R2 foram aplicados na r3 DEPOIS do orçamento, sem terceira rodada. Diff: spec0246-r2-to-r3.diff.txt.
+
+3. ACHADO DE SOUNDNESS NO KERNEL ATUAL (finding-k0-cjs-exports-gap.json)
+   O kernel usa a última escrita de module.exports, não a união das escritas.
+   Afeta F3 (reatribuição dentro de função) e S10 (ramos de if no topo).
+   As engines v4 (main) e v5 (PR #9) dão PROVEN global, com K7 para um import(x) que nunca é avaliado.
+   Na raiz real isso não aparece (há UNKNOWN), mas qualquer raiz limpa com o padrão receberia prova falsa.
+   Recomendação: tarefa T3 própria, antes da 0246.
+
+4. ACHADO DE CÓDIGO
+   O glob de workspaces legacy/packages/* casa com legacy/packages/README.md.
+   O resolvedor recusa o mapa inteiro e 746 arestas @cvg/* viram contidas.
+   Na variante corrigida:
+   - contidas: 1.535 → 790;
+   - diagnósticos: −88;
+   - contextos: 241/256 (folga cai para 15).
+   Recomendação: backlog próprio.
+
+5. RECURSOS
+   - Sem PG, porta, commit, ledger, coordenação ou catálogo.
+   - Runtime e worktree eval-228e liberados (runtime-release-receipt.json).
+   - A cópia física da raiz avaliada (cvg-hiso005-build0241-20261018) foi removida por outra sessão depois das medições.
+     O BUILD precisará reconstituí-la conferindo os 1.410 sha256 de input.
