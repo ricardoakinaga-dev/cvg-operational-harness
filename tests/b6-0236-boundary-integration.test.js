@@ -352,7 +352,7 @@ describe('SPEC0236 real checker/CLI integration', () => {
     expect(after.graph.installed).toHaveLength(1)
     expect(after.graph.installed[0]).toMatchObject({
       verified: true,
-      source: 'semantic-kernel-v4-integral-body',
+      source: 'semantic-kernel-v5-esm-module-shape',
       contentIdentity: { status: 'MATCH' }
     })
     expect(after.report.resolvedDiagnostics).toHaveLength(1)

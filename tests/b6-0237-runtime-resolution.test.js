@@ -171,7 +171,7 @@ function proven(input) {
   expect(out.status, JSON.stringify(out.unknowns)).toBe('PROVEN')
   expect(out.validation.valid).toBe(true)
   expect(out.proofs.length).toBeGreaterThan(0)
-  expect(out.kernelVersion).toBe('semantic-kernel-v4-integral-body')
+  expect(out.kernelVersion).toBe('semantic-kernel-v5-esm-module-shape')
   return out
 }
 function refused(input) {
@@ -742,7 +742,7 @@ describe('BUILD0237 actual CLI: compatibility, origins and strict determinism', 
     const normal = f.run([...f.flags, '--semantic'])
     const strict = f.run([...f.flags, '--semantic', '--strict'])
     expect(normal.body.semanticBoundary.kernelVersion).toBe(
-      'semantic-kernel-v4-integral-body'
+      'semantic-kernel-v5-esm-module-shape'
     )
     delete normal.body.semanticTelemetry
     delete strict.body.semanticTelemetry

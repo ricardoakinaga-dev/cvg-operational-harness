@@ -24,7 +24,7 @@ import {
 // reimplemented. Its module hash is part of the profile (worker and parent).
 import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v4-integral-body'
+export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v5-esm-module-shape'
 export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -425,6 +425,20 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
   const reachedPackages = new Map(),
     resolutionEdges = new Map(),
     rules = new Set(['K0', 'K7'])
+  // SPEC0244 (E1/E2, never in the refusal census): the resolved binding of
+  // every export name (module#local after indirect exports and stars, as the
+  // ECMAScript ResolveExport; a re-exported namespace is a binding of the
+  // re-exporting module), namespaces left incomplete, ambiguous names, names
+  // provided by stars and modules with a non-qualified star.
+  const AMBIGUOUS = Symbol('AMBIGUOUS_STAR')
+  const exportIdentity = new Map(),
+    importIdentity = new Map(),
+    incompleteNamespaces = new Set(),
+    starOrigins = new Map(),
+    ambiguousStarNames = new Map(),
+    starNames = new Map(),
+    poisonedStars = new Set(),
+    explicitExports = new Map()
   const bump = (key, value, cap) => {
     out.usage[key] = Math.max(out.usage[key], value)
     if (value > limits[cap]) throw Error('UNKNOWN_ANALYSIS_LIMIT:' + cap)
@@ -1169,6 +1183,140 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
   function exported(n) {
     return !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
   }
+  function ambient(n) {
+    return !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)
+  }
+  function isDefaultExport(n) {
+    return !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)
+  }
+  function identityOf(file, name) {
+    return exportIdentity.get(file)?.get(name) ?? file + '#' + name
+  }
+  function setIdentity(file, name, identity) {
+    if (census) return
+    if (!exportIdentity.has(file)) exportIdentity.set(file, new Map())
+    exportIdentity.get(file).set(name, identity)
+  }
+  function incomplete(file) {
+    if (!census) incompleteNamespaces.add(file)
+  }
+  // SPEC0244 §3.1 rule 3: the names of every explicit runtime export of the
+  // module, wherever it stands; type-only and ambient exports never mask.
+  function explicitRuntimeExports(file) {
+    if (explicitExports.has(file)) return explicitExports.get(file)
+    const names = new Set()
+    const collect = (name) => {
+      if (ts.isIdentifier(name)) names.add(name.text)
+      else if (
+        ts.isObjectBindingPattern(name) ||
+        ts.isArrayBindingPattern(name)
+      )
+        for (const element of name.elements)
+          if (ts.isBindingElement(element)) collect(element.name)
+    }
+    for (const n of astFiles.get(file)?.statements || []) {
+      if (ts.isExportAssignment(n)) {
+        if (!n.isExportEquals) names.add('default')
+      } else if (ts.isExportDeclaration(n)) {
+        if (n.isTypeOnly || !n.exportClause) continue
+        if (ts.isNamedExports(n.exportClause)) {
+          for (const x of n.exportClause.elements)
+            if (!x.isTypeOnly) names.add(x.name.text)
+        } else names.add(n.exportClause.name.text)
+      } else if (!exported(n) || ambient(n)) continue
+      else if (ts.isVariableStatement(n))
+        for (const d of n.declarationList.declarations) collect(d.name)
+      else if (ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) {
+        if (isDefaultExport(n)) names.add('default')
+        else if (n.name) names.add(n.name.text)
+      } else if (
+        (ts.isEnumDeclaration(n) || ts.isModuleDeclaration(n)) &&
+        ts.isIdentifier(n.name)
+      )
+        names.add(n.name.text)
+      else if (ts.isImportEqualsDeclaration(n) && !n.isTypeOnly)
+        names.add(n.name.text)
+    }
+    explicitExports.set(file, names)
+    return names
+  }
+  // SPEC0244 §3.1 rule 5: a non-qualified star keeps its refusal, every name
+  // provided by a star of the module becomes U and its namespace incomplete.
+  function poison(file) {
+    poisonedStars.add(file)
+    incompleteNamespaces.add(file)
+    for (const k of starNames.get(file)) {
+      modules.get(file).exports.set(k, U)
+      setIdentity(file, k, 'opaque:' + file + '#' + k)
+    }
+  }
+  // SPEC0244 E1: `export * from` and `export * as ns from` with ECMAScript
+  // semantics when the source is an analysed ESM module with a complete
+  // namespace (not contained, not a cycle, not U). Returns false when the
+  // source does not qualify; the caller keeps UNKNOWN_REEXPORT.
+  function star(n, namespace, file) {
+    const exports = modules.get(file).exports
+    const explicit = explicitRuntimeExports(file)
+    if (!starNames.has(file)) {
+      starNames.set(file, new Set())
+      starOrigins.set(file, new Map())
+      ambiguousStarNames.set(file, new Set())
+    }
+    const names = starNames.get(file),
+      origins = starOrigins.get(file),
+      ambiguous = ambiguousStarNames.get(file)
+    const qualified =
+      namespace &&
+      namespace !== CONTAINED &&
+      namespace.t === 'namespace' &&
+      !incompleteNamespaces.has(namespace.id)
+    if (n.exportClause) {
+      const name = n.exportClause.name.text
+      if (qualified) {
+        // A re-exported namespace is a binding of this module, as in the
+        // pinned Node 22 (two such stars conflict); conservative versus the
+        // ECMAScript text (SPEC0244 BUILD R1-01). It creates no local binding,
+        // so its identity never equals a local one (BUILD R2-01).
+        exports.set(name, namespace)
+        setIdentity(file, name, file + '#*namespace*' + name)
+        return true
+      }
+      exports.set(name, U)
+      setIdentity(file, name, 'opaque:' + file + '#' + name)
+      poison(file)
+      return false
+    }
+    if (!qualified || poisonedStars.has(file)) {
+      // Names an analysable source would provide exist as U, never absent.
+      if (namespace && namespace !== CONTAINED && namespace.t === 'namespace')
+        for (const k of namespace.props.keys())
+          if (k !== 'default' && !explicit.has(k)) names.add(k)
+      poison(file)
+      return qualified
+    }
+    for (const [k, v] of namespace.props) {
+      if (k === 'default' || explicit.has(k)) continue
+      names.add(k)
+      if (ambiguous.has(k)) continue
+      const identity = identityOf(namespace.id, k)
+      if (
+        identity === AMBIGUOUS ||
+        (origins.has(k) && origins.get(k) !== identity)
+      ) {
+        // Different resolved bindings (or a name already ambiguous in the
+        // source): U with the root here; sticky for every later star.
+        ambiguous.add(k)
+        exports.set(k, U)
+        setIdentity(file, k, AMBIGUOUS)
+        unknown(file, 'UNKNOWN_REEXPORT', 'AMBIGUOUS_STAR:' + k)
+        continue
+      }
+      origins.set(k, identity)
+      exports.set(k, v)
+      setIdentity(file, k, identity)
+    }
+    return true
+  }
   function checkExport(v, file, seen = new Set()) {
     if (seen.has(v)) return
     seen.add(v)
@@ -1239,6 +1387,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         }
       if (ts.isFunctionDeclaration(n) && n.name)
         e.bindings.set(n.name.text, functionValue(n, e, file))
+      // SPEC0244 E2: a class name exists (TDZ) with value U from block entry.
+      if (!census && ts.isClassDeclaration(n) && n.name)
+        e.bindings.set(n.name.text, U)
       if (
         ts.isImportDeclaration(n) &&
         n.importClause &&
@@ -1287,6 +1438,26 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
             get(namespace, primitive('default'), file)
           )
         const bindings = n.importClause?.namedBindings
+        if (!census && namespace?.t === 'namespace') {
+          // SPEC0244: resolved bindings of the imports, for `export { x }`.
+          if (!importIdentity.has(file)) importIdentity.set(file, new Map())
+          const local = importIdentity.get(file)
+          if (n.importClause?.name)
+            local.set(
+              n.importClause.name.text,
+              identityOf(namespace.id, 'default')
+            )
+          // `import * as ns` then `export { ns }` is a local export entry.
+          if (bindings && ts.isNamespaceImport(bindings))
+            local.set(bindings.name.text, file + '#' + bindings.name.text)
+          else
+            for (const x of bindings?.elements || [])
+              if (!x.isTypeOnly)
+                local.set(
+                  x.name.text,
+                  identityOf(namespace.id, x.propertyName?.text || x.name.text)
+                )
+        }
         if (bindings && ts.isNamespaceImport(bindings))
           e.bindings.set(bindings.name.text, namespace)
         else
@@ -1312,8 +1483,13 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           const v = expression(d.initializer, e, file)
           bind(d.name, v, e, file)
           if (exported(n)) {
-            if (!ts.isIdentifier(d.name)) unknown(file, 'UNKNOWN_EXPORT')
-            else modules.get(file).exports.set(d.name.text, v)
+            if (!ts.isIdentifier(d.name)) {
+              incomplete(file)
+              unknown(file, 'UNKNOWN_EXPORT')
+            } else {
+              modules.get(file).exports.set(d.name.text, v)
+              setIdentity(file, d.name.text, file + '#' + d.name.text)
+            }
           }
         }
         continue
@@ -1328,7 +1504,16 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
             : functionValue(n, e, file)
           if (isDefault) modules.get(file).exports.set('default', value)
           else if (n.name) modules.get(file).exports.set(n.name.text, value)
-          else unknown(file, 'UNKNOWN_EXPORT')
+          else {
+            incomplete(file)
+            unknown(file, 'UNKNOWN_EXPORT')
+          }
+          if (isDefault || n.name)
+            setIdentity(
+              file,
+              isDefault ? 'default' : n.name.text,
+              file + '#' + (n.name?.text ?? '*default*')
+            )
         } else if (!n.name)
           unknown(
             file,
@@ -1388,6 +1573,9 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         modules
           .get(file)
           .exports.set('default', expression(n.expression, e, file))
+        // `export =` is not an ESM export form: the namespace is incomplete.
+        if (n.isExportEquals) incomplete(file)
+        setIdentity(file, 'default', file + '#*default*')
         continue
       }
       if (ts.isExportDeclaration(n)) {
@@ -1398,11 +1586,13 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
           ? edgeLoad(file, n.moduleSpecifier.text, 'import')
           : null
         if (!n.exportClause || !ts.isNamedExports(n.exportClause)) {
-          unknown(file, 'UNKNOWN_REEXPORT')
+          if (census || !star(n, namespace, file))
+            unknown(file, 'UNKNOWN_REEXPORT')
           continue
         }
         for (const item of n.exportClause.elements)
-          if (!item.isTypeOnly)
+          if (!item.isTypeOnly) {
+            const local = item.propertyName?.text || item.name.text
             modules
               .get(file)
               .exports.set(
@@ -1410,15 +1600,38 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
                 namespace === CONTAINED
                   ? U
                   : namespace
-                    ? get(
-                        namespace,
-                        primitive(item.propertyName?.text || item.name.text),
-                        file
-                      )
-                    : find(e, item.propertyName?.text || item.name.text) || U
+                    ? get(namespace, primitive(local), file)
+                    : find(e, local) || U
               )
+            setIdentity(
+              file,
+              item.name.text,
+              namespace
+                ? namespace.t === 'namespace'
+                  ? identityOf(namespace.id, local)
+                  : 'opaque:' + file + '#' + item.name.text
+                : (importIdentity.get(file)?.get(local) ?? file + '#' + local)
+            )
+          }
         continue
       }
+      if (!census && ts.isClassDeclaration(n)) {
+        // SPEC0244 E2: the refusal and its root stay; the class body is never
+        // analysed. The name (predeclared U) is exported with U.
+        unknown(file, 'UNKNOWN_UNSUPPORTED_SYNTAX', ts.SyntaxKind[n.kind])
+        if (ambient(n)) unknown(file, 'UNKNOWN_RUNTIME_DECLARATION')
+        if (exported(n)) {
+          const name = isDefaultExport(n) ? 'default' : n.name?.text
+          if (name) {
+            modules.get(file).exports.set(name, U)
+            setIdentity(file, name, file + '#' + (n.name?.text ?? '*default*'))
+          }
+        }
+        continue
+      }
+      // An exported form the kernel does not register leaves the namespace
+      // incomplete (SPEC0244 §3.1).
+      if (exported(n)) incomplete(file)
       unknown(file, 'UNKNOWN_UNSUPPORTED_SYNTAX', ts.SyntaxKind[n.kind])
     }
     return { returned: false, value: VOID }
