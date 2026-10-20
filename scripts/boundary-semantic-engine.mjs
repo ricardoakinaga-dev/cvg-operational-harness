@@ -24,7 +24,7 @@ import {
 // reimplemented. Its module hash is part of the profile (worker and parent).
 import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v5-esm-module-shape'
+export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v6-tsx-parse'
 export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -659,7 +659,17 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
       source,
       ts.ScriptTarget.Latest,
       true,
-      /\.[cm]?tsx?$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS
+      // SPEC0245 T1: closed table of ScriptKind by extension (TypeScript's own
+      // default for the runtime extensions; any other name parses as JS). JSX
+      // forms reach the expression fallback and are refused (T2); .tsx/.jsx and
+      // unknown extensions keep UNKNOWN_FORMAT as non-runtime formats.
+      /\.tsx$/.test(file)
+        ? ts.ScriptKind.TSX
+        : /\.jsx$/.test(file)
+          ? ts.ScriptKind.JSX
+          : /\.[cm]?ts$/.test(file)
+            ? ts.ScriptKind.TS
+            : ts.ScriptKind.JS
     )
     astFiles.set(file, sf)
     if (sf.parseDiagnostics.length) unknown(file, 'UNKNOWN_PARSE')

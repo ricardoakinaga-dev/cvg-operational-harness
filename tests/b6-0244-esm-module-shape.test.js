@@ -13,7 +13,7 @@ import { ownedRunParent } from './support/owned-run-parent.mjs'
 const parent = ownedRunParent('b6-0244-esm')
 const pinnedNode = pinnedToolchainLocation().node
 const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
-const KERNEL = 'semantic-kernel-v5-esm-module-shape'
+const KERNEL = 'semantic-kernel-v6-tsx-parse'
 
 function cleanCall(method, args) {
   const code =
