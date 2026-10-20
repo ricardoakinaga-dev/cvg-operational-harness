@@ -1,0 +1,487 @@
+"""CAP-DP-STAGE (DDP-02, DDP-11) of the distributed profile, sub-lot DP-2. Host side, own code; never executes anything it reads.
+
+Derived from ../sdk-distributed-profile-dp1-admission/dplane/stage.py (DP-1) with the DP-2 deltas:
+- the wheel A1 (zip) is staged at /dist/py/site/ next to the npm layout (cases-dp-2.json#/staging/layout, A7, A2, A3, A4, A1), reading
+  members through zipfile (mode = external_attr >> 16) as well as tarfile;
+- copy_of_profile maps /profile/adapter-python-exec (the admitted 2B-2 launcher) for the PY19 fixture trees;
+- fixture.tree_exact scans the whole root of every declared tree (DP1-ADM/R1-F07): an undeclared entry under a root is a problem;
+- own archives (a tar.gz and a wheel built in memory with declared modes) for DIAG-DP-STAGE and the offline selftests, extracted by the
+  same streaming code path as the cache archives;
+- the M7 cache metadata and the A5 asset members, read by sha (DP-PY20A, CAP-DP-ARTIFACT-CHECK).
+The acquisition cache is never written: archives are opened read-only and streamed in memory.
+"""
+import hashlib
+import io
+import json
+import os
+import stat
+import tarfile
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+UNIT = HERE.parent
+ACQ = UNIT / 'inputs' / 'acquisition'
+LEDGER_PATH = ACQ / 'acquisition-ledger.json'
+META_PATH = ACQ / 'artifact-metadata.json'
+LEDGER_SHA = '56c0efdeb8274f400609091f5a750c2256afe7677a5207154b5d99d24d7efb4b'
+META_SHA = '19ead15183dec63467fcaba28422599158eec6af117f7fb7c2de9614b39d4e77'
+CACHE = '/mnt/dados/cvg-work/cvg-codex100-distributed-cache-20261019'
+# cases-dp-2.json#/staging/layout (archive, member prefix, place under /dist), in that order.
+LAYOUT = [('A7', 'package/', 'npm/node_modules/@openai/codex-sdk/'), ('A2', 'package/', 'npm/node_modules/@openai/codex/'),
+          ('A3', 'package/', 'npm/node_modules/@openai/codex-linux-x64/'), ('A4', 'package/', 'npm/node_modules/@openai/codex-responses-api-proxy/'),
+          ('A1', '', 'py/site/')]
+PROFILE_SOURCES = {'/profile/adapter-python-exec': HERE / 'adapter-python-exec'}
+
+
+def sha_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha_path(p):
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for block in iter(lambda: f.read(1 << 20), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _bound(path, digest):
+    raw = path.read_bytes()
+    assert sha_bytes(raw) == digest, '%s differs from the bound sha256' % path.name
+    return json.loads(raw)
+
+
+LEDGER = _bound(LEDGER_PATH, LEDGER_SHA)
+META = _bound(META_PATH, META_SHA)
+ARCHIVES = {a['id']: a for a in LEDGER['artifacts'] if a.get('result') == 'DIGEST_OK'}
+MEMBERS = {a['id']: {m['name']: m for m in a['members'] if m.get('type', 'file') == 'file'} for a in META['artifacts'] if a.get('inspected')}
+FORMAT = {a['id']: a['format'] for a in META['artifacts'] if a.get('inspected')}
+REQUESTS = {r['id']: r for r in LEDGER['requests']}
+_ARCHIVE_OK = {}
+
+
+def archive_path(aid):
+    p = ARCHIVES[aid]['stored']
+    assert p.startswith(CACHE + '/artifacts/' + aid + '/'), 'archive outside the cache'
+    return p
+
+
+def check_archive(aid):
+    """Archive sha256 recomputed against the ledger (once per process; reset with _ARCHIVE_OK.clear())."""
+    if aid not in _ARCHIVE_OK:
+        got = sha_path(archive_path(aid))
+        assert got == ARCHIVES[aid]['observed']['sha256'], 'cache archive %s differs from acquisition-ledger.json' % aid
+        _ARCHIVE_OK[aid] = got
+    return _ARCHIVE_OK[aid]
+
+
+def mode_of(m):
+    mode = m.get('mode')
+    return int(mode, 8) & 0o777 if isinstance(mode, str) else 0o644
+
+
+def _is_zip(aid):
+    return FORMAT[aid] in ('wheel', 'zip', 'whl') or archive_path(aid).endswith('.whl')
+
+
+def iter_archive(aid):
+    """(name, file object, size, mode) of every regular member, streamed from the archive (tar.gz or zip)."""
+    path = archive_path(aid)
+    if _is_zip(aid):
+        with zipfile.ZipFile(path) as z:
+            for zi in z.infolist():
+                if zi.is_dir():
+                    continue
+                with z.open(zi) as f:
+                    yield zi.filename, f, zi.file_size, (zi.external_attr >> 16) & 0o777
+    else:
+        with tarfile.open(path, 'r:gz') as t:
+            for ti in t:
+                if not ti.isfile():
+                    continue
+                yield ti.name, t.extractfile(ti), ti.size, ti.mode & 0o777
+
+
+def member_bytes(aid, name):
+    """One member read in memory, sha checked against artifact-metadata.json."""
+    check_archive(aid)
+    m = MEMBERS[aid][name]
+    path = archive_path(aid)
+    if _is_zip(aid):
+        with zipfile.ZipFile(path) as z:
+            data = z.read(name)
+    else:
+        with tarfile.open(path, 'r:gz') as t:
+            data = t.extractfile(t.getmember(name)).read()
+    assert sha_bytes(data) == m['sha256'] and len(data) == m['size'], 'member %s:%s differs from artifact-metadata.json' % (aid, name)
+    return data, mode_of(m)
+
+
+def member_sha(aid, name):
+    """sha256 of one member streamed from the archive (no full read in memory), checked against artifact-metadata.json."""
+    check_archive(aid)
+    m = MEMBERS[aid][name]
+    h = hashlib.sha256()
+    n = 0
+    path = archive_path(aid)
+    if _is_zip(aid):
+        with zipfile.ZipFile(path) as z, z.open(name) as f:
+            for block in iter(lambda: f.read(1 << 20), b''):
+                h.update(block)
+                n += len(block)
+    else:
+        with tarfile.open(path, 'r:gz') as t:
+            f = t.extractfile(t.getmember(name))
+            for block in iter(lambda: f.read(1 << 20), b''):
+                h.update(block)
+                n += len(block)
+    got = h.hexdigest()
+    assert got == m['sha256'] and n == m['size'], 'member %s:%s differs from artifact-metadata.json' % (aid, name)
+    return got
+
+
+def member_ref(ref):
+    aid, name = ref.split(':', 1)
+    return aid, name
+
+
+# --------------------------------------------------------------------------------------------- /dist staging
+
+def expected_dist():
+    """Manifest of /dist from artifact-metadata.json: relative path -> {bytes, mode, sha256}."""
+    out = {}
+    for aid, prefix, place in LAYOUT:
+        for name, m in MEMBERS[aid].items():
+            assert name.startswith(prefix), 'member outside %s: %s' % (prefix, name)
+            out[place + name[len(prefix):]] = {'bytes': m['size'], 'mode': oct(mode_of(m))[2:].rjust(4, '0'), 'sha256': m['sha256']}
+    return dict(sorted(out.items()))
+
+
+def dist_manifest(root):
+    out = {}
+    root = Path(root)
+    for top, dirs, names in os.walk(root, followlinks=False):
+        dirs.sort()
+        for d in dirs:
+            p = Path(top) / d
+            st = os.lstat(p)
+            assert stat.S_ISDIR(st.st_mode), 'non-directory in /dist: %s' % p
+            assert (st.st_mode & 0o7777) == 0o755, 'directory mode in /dist: %s' % p
+        for n in sorted(names):
+            p = Path(top) / n
+            st = os.lstat(p)
+            assert stat.S_ISREG(st.st_mode), 'non-regular file in /dist: %s' % p
+            out[str(p.relative_to(root))] = {'bytes': st.st_size, 'mode': oct(st.st_mode & 0o7777)[2:].rjust(4, '0'), 'sha256': sha_path(p)}
+    return dict(sorted(out.items()))
+
+
+def _mkparents(root, q):
+    for parent in reversed(q.relative_to(root).parents):
+        if str(parent) == '.':
+            continue
+        pp = Path(root) / parent
+        if not pp.exists():
+            pp.mkdir(mode=0o755)
+            os.chmod(pp, 0o755)
+
+
+def _write_stream(q, src, digest_want=None):
+    h = hashlib.sha256()
+    with open(q, 'xb') as f:
+        for block in iter(lambda: src.read(1 << 20), b''):
+            h.update(block)
+            f.write(block)
+    if digest_want is not None:
+        assert h.hexdigest() == digest_want, '%s differs from the bound sha256' % q.name
+    return h.hexdigest()
+
+
+def stage_dist(dst):
+    """Write the layout from the cache archives (streamed), then check the closed manifest. Refuses an existing directory."""
+    dst = Path(dst)
+    assert not dst.exists(), 'staging directory already exists: %s' % dst
+    dst.mkdir(mode=0o755)
+    os.chmod(dst, 0o755)
+    for aid, prefix, place in LAYOUT:
+        check_archive(aid)
+        for name, f, _size, _mode in iter_archive(aid):
+            m = MEMBERS[aid].get(name)
+            assert m is not None, 'member not in artifact-metadata.json: %s:%s' % (aid, name)
+            q = dst / (place + name[len(prefix):])
+            _mkparents(dst, q)
+            _write_stream(q, f, m['sha256'])
+            os.chmod(q, mode_of(m))
+    got = dist_manifest(dst)
+    assert got == expected_dist(), 'staged /dist differs from artifact-metadata.json'
+    return got
+
+
+# --------------------------------------------------------------------------------------------- own archives (DIAG and selftests)
+
+OWN_MEMBERS = [('own/bin/tool', b'#!/bin/sh\nexit 0\n', 0o755), ('own/README.txt', b'constant own member\n', 0o644),
+               ('own/lib/data.json', b'{"own":true}\n', 0o644)]
+
+
+def own_targz(members=OWN_MEMBERS):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as t:
+        for name, data, mode in members:
+            ti = tarfile.TarInfo('package/' + name)
+            ti.size, ti.mode, ti.mtime = len(data), mode, 0
+            t.addfile(ti, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def own_wheel(members=OWN_MEMBERS):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for name, data, mode in members:
+            zi = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            zi.external_attr = (stat.S_IFREG | mode) << 16
+            z.writestr(zi, data)
+    return buf.getvalue()
+
+
+def expected_own(place):
+    return {place + name: {'bytes': len(data), 'mode': oct(mode)[2:].rjust(4, '0'), 'sha256': sha_bytes(data)} for name, data, mode in OWN_MEMBERS}
+
+
+def stage_own(dst, members=OWN_MEMBERS, tamper=None):
+    """Stage the own tar.gz at <dst>/tgz/ and the own wheel at <dst>/whl/ by the streaming extraction (mode from the archive). With
+    tamper='member', the declared sha of one member is wrong and the staging is refused (selftest)."""
+    dst = Path(dst)
+    assert not dst.exists(), 'own staging directory exists'
+    dst.mkdir(mode=0o755)
+    os.chmod(dst, 0o755)
+    want = {('package/' + n): sha_bytes(d) for n, d, _ in members}
+    if tamper == 'member':
+        want['package/' + members[0][0]] = '0' * 64
+    with tarfile.open(fileobj=io.BytesIO(own_targz(members)), mode='r:gz') as t:
+        for ti in t:
+            q = dst / 'tgz' / ti.name[len('package/'):]
+            _mkparents(dst, q)
+            _write_stream(q, t.extractfile(ti), want[ti.name])
+            os.chmod(q, ti.mode & 0o777)
+    with zipfile.ZipFile(io.BytesIO(own_wheel(members))) as z:
+        for zi in z.infolist():
+            q = dst / 'whl' / zi.filename
+            _mkparents(dst, q)
+            with z.open(zi) as f:
+                _write_stream(q, f, want['package/' + zi.filename])
+            os.chmod(q, (zi.external_attr >> 16) & 0o777)
+    got = dist_manifest(dst)
+    exp = dict(sorted({**expected_own('tgz/'), **expected_own('whl/')}.items()))
+    assert got == exp, 'own staging differs from the declared members'
+    return got
+
+
+# --------------------------------------------------------------------------------------------- fixture trees
+
+def json_bytes(value):
+    return (json.dumps(value, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+
+
+def entry_bytes(e):
+    """Bytes and mode of a regular-file entry."""
+    k = e['kind']
+    if k == 'copy_of_member':
+        data, mode = member_bytes(*member_ref(e['member']))
+        return data, int(e['mode'], 8) if 'mode' in e else mode
+    if k == 'file':
+        return e['content'].encode('utf-8'), int(e['mode'], 8)
+    if k == 'json':
+        return json_bytes(e['value']), 0o644
+    if k == 'copy_of_profile':
+        assert e['from'] in PROFILE_SOURCES, 'copy_of_profile from an unknown profile file: %s' % e['from']
+        return PROFILE_SOURCES[e['from']].read_bytes(), int(e.get('mode', '0644'), 8)
+    raise AssertionError('not a file entry: %s' % k)
+
+
+def host_path(root, p):
+    assert p.startswith('/fixture/') and '/../' not in p and not p.endswith('/..'), 'fixture path outside /fixture: %s' % p
+    return Path(root) / p[len('/fixture/'):]
+
+
+def _mkdirs(root, q):
+    for parent in reversed(q.relative_to(root).parents):
+        if str(parent) == '.':
+            continue
+        pp = Path(root) / parent
+        if os.path.lexists(pp):
+            assert stat.S_ISDIR(os.lstat(pp).st_mode), 'fixture parent is not a directory: %s' % pp
+            continue
+        pp.mkdir(mode=0o755)
+        os.chmod(pp, 0o755)
+
+
+def t_root(trees, e):
+    for t in trees:
+        if e in t['entries']:
+            return t['root'] + '/'
+    raise AssertionError('entry without tree')
+
+
+def materialize(trees, root):
+    """Build the declared trees under root (the host side of /fixture). Symlinks last, so no parent is created through one."""
+    root = Path(root)
+    entries = [e for t in trees for e in t['entries']]
+    for e in entries:
+        assert e['path'].startswith(t_root(trees, e)), 'entry outside its tree root: %s' % e['path']
+        assert e['kind'] != 'synthetic_child', 'synthetic_child is a DP-1 kind (no synthetic child in the DP-2)'
+    for t in trees:
+        base = host_path(root, t['root'])
+        _mkdirs(root, base / 'x')
+        if not base.exists():
+            base.mkdir(mode=0o755)
+            os.chmod(base, 0o755)
+    for e in [x for x in entries if x['kind'] != 'symlink']:
+        q = host_path(root, e['path'])
+        _mkdirs(root, q)
+        if e['kind'] == 'dir':
+            q.mkdir(mode=0o755)
+            os.chmod(q, 0o755)
+            continue
+        data, mode = entry_bytes(e)
+        with open(q, 'xb') as f:
+            f.write(data)
+        os.chmod(q, mode)
+    for e in [x for x in entries if x['kind'] == 'symlink']:
+        q = host_path(root, e['path'])
+        _mkdirs(root, q)
+        assert e['target'].startswith('/'), 'symlink target must be absolute'
+        os.symlink(e['target'], q)
+    return fixture_manifest(trees, root)
+
+
+def implied_dirs(trees):
+    """Directories implied by the declared paths (parents of entries under each root, the root itself excluded)."""
+    out = set()
+    for t in trees:
+        rt = t['root']
+        for e in t['entries']:
+            p = e['path']
+            while True:
+                p = p.rsplit('/', 1)[0]
+                if len(p) <= len(rt):
+                    break
+                out.add(p)
+    return out
+
+
+def expected_entry(e):
+    """Declared view of one entry (type, mode, bytes, sha256 or target), as fixture.tree_exact compares it."""
+    if e['kind'] == 'dir':
+        return {'type': 'dir', 'mode': '0755'}
+    if e['kind'] == 'symlink':
+        return {'type': 'symlink', 'target': e['target']}
+    data, mode = entry_bytes(e)
+    return {'type': 'file', 'mode': oct(mode)[2:].rjust(4, '0'), 'bytes': len(data), 'sha256': sha_bytes(data)}
+
+
+def expected_fixture(trees):
+    want = {e['path']: expected_entry(e) for t in trees for e in t['entries']}
+    for p in implied_dirs(trees):
+        want.setdefault(p, {'type': 'dir', 'mode': '0755'})
+    return dict(sorted(want.items()))
+
+
+def lview(q):
+    st = os.lstat(q)
+    if stat.S_ISLNK(st.st_mode):
+        return {'type': 'symlink', 'target': os.readlink(q)}
+    if stat.S_ISDIR(st.st_mode):
+        return {'type': 'dir', 'mode': oct(st.st_mode & 0o7777)[2:].rjust(4, '0')}
+    if stat.S_ISREG(st.st_mode):
+        return {'type': 'file', 'mode': oct(st.st_mode & 0o7777)[2:].rjust(4, '0'), 'bytes': st.st_size, 'sha256': sha_path(q)}
+    return {'type': 'other'}
+
+
+def fixture_manifest(trees, root, prefix='/fixture/'):
+    """Every path under each declared root (DP1-ADM/R1-F07: the scan covers the root, not only the declared entries)."""
+    out = {}
+    root = Path(root)
+    for t in trees:
+        base = host_path(root, t['root'])
+        if not os.path.lexists(base):
+            out[t['root']] = {'error': 'root missing'}
+            continue
+        for top, dirs, names in os.walk(base, followlinks=False):
+            dirs.sort()
+            for n in sorted(dirs) + sorted(names):
+                q = Path(top) / n
+                out[prefix + str(q.relative_to(root))] = lview(q)
+    return dict(sorted(out.items()))
+
+
+def check_fixture(trees, manifest):
+    """Problems of a manifest (host or sandbox view) against the declaration; [] means fixture.tree_exact holds."""
+    want = expected_fixture(trees)
+    problems = []
+    for p, w in want.items():
+        got = manifest.get(p)
+        if got != w:
+            problems.append({'path': p, 'want': w, 'got': got})
+    extra = sorted(set(manifest) - set(want))
+    if extra:
+        problems.append({'extra': extra[:10]})
+    return problems
+
+
+# --------------------------------------------------------------------------------------------- artifact check (DP-PY20A)
+
+def m7_metadata():
+    """The M7 release listing from the cache, sha checked against acquisition-ledger.json#/requests[M7]."""
+    r = REQUESTS['M7']
+    assert r['dest'].startswith(CACHE + '/metadata/'), 'M7 outside the cache'
+    raw = Path(r['dest']).read_bytes()
+    assert sha_bytes(raw) == r['sha256'] and len(raw) == r['bytes'], 'cache metadata M7 differs from acquisition-ledger.json'
+    return json.loads(raw), sha_bytes(raw)
+
+
+def wheel_fields(data):
+    out = {}
+    for line in data.decode('utf-8').splitlines():
+        if ': ' in line:
+            k, v = line.split(': ', 1)
+            out.setdefault(k, v)
+    return out
+
+
+def ledger_item(aid):
+    """CAP-DP-ARTIFACT-CHECK ledger_item: name and tag from the path of the resolved URL, observed sha256 of the registry entry."""
+    a = ARCHIVES[aid]
+    path = a['resolution']['url'].split('://', 1)[1].split('/', 1)[1]
+    parts = path.split('/')
+    tag = parts[parts.index('download') + 1] if 'download' in parts else None
+    return {'name': parts[-1], 'release_tag': tag, 'sha256': a['observed']['sha256']}
+
+
+def prefix_shas(ref):
+    """sha256 of every member under one archive prefix, in one streaming pass, each checked against artifact-metadata.json."""
+    aid, prefix = member_ref(ref)
+    check_archive(aid)
+    out = {}
+    for name, f, size, _mode in iter_archive(aid):
+        if not name.startswith(prefix):
+            continue
+        m = MEMBERS[aid][name]
+        h = hashlib.sha256()
+        n = 0
+        for block in iter(lambda: f.read(1 << 20), b''):
+            h.update(block)
+            n += len(block)
+        assert h.hexdigest() == m['sha256'] and n == m['size'], 'member %s:%s differs from artifact-metadata.json' % (aid, name)
+        out[name[len(prefix):]] = h.hexdigest()
+    return out
+
+
+def compare_members(ref_a, ref_b):
+    """sha256 of every member common to two archive prefixes ('A1:codex_cli_bin/' and 'A5:'), read by sha from the cache."""
+    sa, sb = prefix_shas(ref_a), prefix_shas(ref_b)
+    out, problems = {}, []
+    for rel in sorted(set(sa) & set(sb)):
+        out[rel] = sa[rel] if sa[rel] == sb[rel] else None
+        if sa[rel] != sb[rel]:
+            problems.append({'member': rel, ref_a: sa[rel], ref_b: sb[rel]})
+    return out, problems

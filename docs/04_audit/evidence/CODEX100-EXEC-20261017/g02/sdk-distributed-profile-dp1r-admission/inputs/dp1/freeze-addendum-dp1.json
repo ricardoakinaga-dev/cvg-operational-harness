@@ -1,0 +1,102 @@
+{
+  "kind": "FREEZE_ADDENDUM_DP1",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1",
+  "origin": "reparo agrupado R1 (review-r1: R1-F01, R1-F03, R1-F05, R1-F06, R1-F07, R1-F09). Adendo declaratório: nenhum byte congelado muda; vale junto do source freeze e do identity freeze citados.",
+  "binds": {
+    "source_freeze": {
+      "path": "source-freeze-dp1.json",
+      "sha256": "a3bc8d0c6034d7f5e2375a172d406ff58dd539d0e6260d19583b45d9e05da445"
+    },
+    "identity_freeze": {
+      "path": "identity-freeze-dp1.json",
+      "sha256": "48aba57349b47a6fae0eed4e8c60aa3f22f0cffaa10ea675089bb933de9d8383"
+    },
+    "erratum": {
+      "path": "inputs/spec-dp/review-r2/executor-disposition.json",
+      "sha256": "7e0920abf0c947478b62432b08c0aee1e3344f8a6c5d374cd55bc5186f0c9fa0"
+    }
+  },
+  "declared_deltas": [
+    {
+      "id": "DDP-12",
+      "title": "observador da topologia driver_only (errata DP-SPEC/R2-F01, item 2)",
+      "rule": "dplane/observer.py reconcile_driver_only, delta sobre o observer.py do C3-1/2AC: em driver_only os FIFOs de adapter e peer ficam montados e MISSING é o esperado; qualquer quadro ou byte de adapter ou peer é INVALID_CAPTURE; PASS só com END completo do driver, EOF, checagens do SO, BLOBs fechados, CALLS_DONE e cada WRAPPER_RESULT assentado no close seguido do seu LEFTOVER.",
+      "source": {
+        "path": "dplane/observer.py",
+        "sha256": "56eba3aa434c8c30db2a9e8702c12fb55454fccea018e5248c6ca661fe91f76d"
+      }
+    },
+    {
+      "id": "EDP-09",
+      "title": "forma de captura sobre a base driver_only (errata, itens 3 e 4)",
+      "rule": "dplane/acceptance.py capture_form: o PASS do observador em driver_only vira a forma que o caso declara entre PASS, PASS_DECLARED_TERMINATION e REAL_CLI_KEYLESS; qualquer razão extra de captura (maps, negação do loader) vira INVALID_CAPTURE; ARTIFACT_CHECK sem serviço (evaluate_artifact).",
+      "source": {
+        "path": "dplane/acceptance.py",
+        "sha256": "7830a64063baa45408c0ed84bdaae3e30679dadbcac2edf710f0a8b196bca63f"
+      }
+    },
+    {
+      "id": "DDP-13",
+      "title": "canal driver_only e BLOB",
+      "rule": "node/dp-channel.cjs exige topology driver_only no config, aceita só READY e RELEASE_EXIT como controles e os tipos BLOB/BLOB_END do driver (até 2048 bytes decodificados por quadro, fora do teto de metadados como o RAW_READ).",
+      "source": {
+        "path": "node/dp-channel.cjs",
+        "sha256": "80a674bc3e4c2d7a0f979713c21f5ad3b3813244071dda469e60b5291a4b72a3"
+      }
+    }
+  ],
+  "inheritance_corrected": "F4-01..F4-12 e D2B-01..D2B-15 valem no que se aplica a uma pilha só com o driver. Mudam, e só como deltas declarados: o loader e o vocabulário do driver Node (DDP-03), os limites de serviço (DDP-05, com o desvio DV3 de RuntimeMaxSec), o vocabulário de fixture (DDP-11), o observador (DDP-12), a forma de captura (EDP-09) e o canal (DDP-13). DDP-06, o canal realcli.witness e as entradas de barreira do DP-PY19B/DP-PY19C no BARRIER_PLAN do 2B-2 são do DP-2 e não se aplicam aqui. No avaliador, os predicados que leem testemunhas de adapter não são usados no DP-1; capture.case_input_frozen_bytes fica NOT_APPLICABLE para adapter e peer.",
+  "deviations": [
+    {
+      "id": "DV1",
+      "text": "DIAG-TS-ECHO requalificado sobre a pilha DP (driver_only): autoteste do dp-loader, filho próprio com código 3 espelhado e enquadramento do canal; sem adapter, peer nem SDK emitido.",
+      "lead_acceptance": "PENDENTE"
+    },
+    {
+      "id": "DV2",
+      "text": "Modo selftest-sandbox do supervisor (bwrap sem systemd-run, sem livro de vagas nem orçamento), usado antes do freeze só com as 4 linhas de DIAG de código próprio (TS-ECHO, DP-STAGE, DP-NODE, DP-SYNTH-CHILD), uma vez cada. O código congelado aceitaria qualquer linha DIAG, inclusive DIAG-DP-REAL-CLI, mas isso nunca foi usado (runtime dry/ só com as 4 linhas). Restringir no código do DP-2.",
+      "lead_acceptance": "PENDENTE"
+    },
+    {
+      "id": "DV3",
+      "text": "RuntimeMaxSec 90 em vez dos 45 herdados (DDP-05 dizia herdado). Motivo: folga para três esperas limitadas de 5 s nos casos de sinal, para o hash de cerca de 400 MB do /dist dentro do sandbox e para o binário publicado. Efeito observado nulo: o serviço mais longo levou 2,3 s. CPUQuota (100%) segue herdado. No DP-2, usar 45 ou declarar antes do freeze.",
+      "lead_acceptance": "PENDENTE"
+    },
+    {
+      "id": "DV4",
+      "text": "Leitura do contrato do filho sintético: registro em /work/child/run-<n>/record-<pid>.json (aberto com \"w\", um diretório por execução criado pelo driver, um filho por execução) e marcador /work/child/run-<n>/ready-<pid>, em vez de /work/child/records/<n>.json com O_EXCL e /work/child/ready-<n>. A unicidade vem do diretório por execução e do pid; o avaliador lê por passo (child-records:<passo>).",
+      "lead_acceptance": "PENDENTE"
+    }
+  ],
+  "readings": [
+    {
+      "finding": "R1-F07",
+      "text": "fixture.tree_exact compara só as entradas declaradas (host e sandbox), com os diretórios pais implícitos. Um arquivo não declarado não seria detectado; a fixture é nova por tentativa, montada só-leitura e escrita só pelo stage.py. Varrer a raiz no DP-2."
+    },
+    {
+      "finding": "R1-F04",
+      "text": "Os critérios dos DIAG seguem o código congelado: o DIAG-DP-SYNTH-CHILD usa espera de 400 ms (o contrato cita 5 s, exercidos nos casos DP-PK06A/DP-PK08A); o DIAG-DP-NODE exercita o shim de processo (preload_shim), e o shim do driver com restauração foi exercido no DP-PK01A e nos autotestes de capacidade; nothing_written_outside_work vale pela construção e é julgado depois em post-review-checks-dp1.json sobre a lista gravada."
+    },
+    {
+      "finding": "R1-F05/R2-F04",
+      "text": "A frase \"ausentes na fonte\" do PK09.B02 tem fonte no G01, não num package.json do CLI no pin (as entradas do perfil de referência não têm codex-cli/package.json).",
+      "source": {
+        "path": "../../g01/sdk-open-contracts/typescript/contracts.json",
+        "sha256": "b90b17ce1bbcd824ff92c68180b79d4ef428c715ced48a520db379bbfb7275d2",
+        "pointer": "contracts[id=PK09]/branches[id=PK09.B02]/expectation"
+      }
+    }
+  ],
+  "tools": {
+    "tools/preflight_dp1.py": "477bc58f673bfb9d912f106219f851d0f73832c014b76efe8371f1e098ff2793",
+    "tools/collect_results.py": "2d42768e78127bb8a547de1e7734ea16b7718b2292177d144fc94a79f0c81c86",
+    "tools/close_dp1.py": "23be18e78e4471ae99046088c0f136de128c220780a265cd7b74e8407eed0ddb",
+    "tools/post_review_checks.py": "521f8d05a9384e6c9bf1f7d3b1cc3b39c33388f513ef8199dbf82d7b152bc1fa",
+    "tools/freeze_addendum.py": "1baf63d460d41cc7e99810a8591912f1406acf08127a49751204ac44fa4e4c32",
+    "selftests/selftest_dp1_caps.py": "6e3502f4caf3e4853df96f8da17f66475231c37b8acb009bdff4298cdc908a01",
+    "selftests/selftest_dp1_caps_driver.mjs": "368ba0614874029bdff4e892154df1353a742dac9c4d6e9253660d087ef15235"
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "recorded_at": "2026-10-20T02:55:39.634141+00:00"
+}

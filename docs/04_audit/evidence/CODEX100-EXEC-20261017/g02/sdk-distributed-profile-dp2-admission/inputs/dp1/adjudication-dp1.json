@@ -1,0 +1,42 @@
+{
+  "kind": "ADJUDICATION_DP1",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1",
+  "round": 1,
+  "rule": "R4-05/E3-09: a atribuição de um desfecho que não é PASS vem de adjudicação registrada; nada aqui muda acceptance.json, que segue como o serviço o gravou.",
+  "items": [
+    {
+      "case": "DP-PK07A",
+      "outcome": "INVALID_CAPTURE",
+      "composition_rule": 4,
+      "capture_form": "PASS",
+      "failed_predicates": [
+        "child.program_followed",
+        "wrap.exit_mirror_exact",
+        "child.executed_path_exact"
+      ],
+      "acceptance": {
+        "path": "cases/DP-PK07A-5f2fe0c80c5c/acceptance.json",
+        "sha256": "3dfcde42b09040c2473d8484a4ab47c62858640c8dbe2c762b4a118b8199fb50"
+      },
+      "attribution": "HARNESS_FIXTURE_DEFECT_FROM_THE_SPEC (não é fato de cliente)",
+      "evidence": [
+        "cases/DP-PK07A-5f2fe0c80c5c/blob-stderr-7.txt: TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension \".exe\" for /fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-pc-windows-msvc/codex-responses-api-proxy/codex-responses-api-proxy.exe",
+        "cases/DP-PK07A-5f2fe0c80c5c/blob-stderr-8.txt: TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension \".exe\" for /fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-pc-windows-msvc/codex-responses-api-proxy/codex-responses-api-proxy.exe",
+        "child-records:7 e child-records:8 vazios (o filho sintético não chegou a gravar o registro)",
+        "cases-dp-1.json#/cases[id=DP-PK07A]/case_input/trees: o filho sintético .exe fica dentro do pacote copiado do A4, cujo package.json declara \"type\": \"module\""
+      ],
+      "cause": "O Node v24.20.0 carrega o arquivo do filho sintético chamado codex-responses-api-proxy.exe, que está dentro do escopo \"type\": \"module\" do package.json publicado do A4 (cópia de fixture). Como ES module, a extensão .exe é desconhecida e o loader recusa (ERR_UNKNOWN_FILE_EXTENSION). O filho sai com 1 antes do programa e o wrapper espelha 1. O wrapper publicado fez a parte do contrato: montou o caminho .exe e fez o spawn (sem ENOENT). Mas o filho não cumpriu o programa, então child.program_followed (sanidade) falhou e a regra 4 deu INVALID_CAPTURE. Não há MISMATCH falso, e nenhuma observação do caso conta.",
+      "not_counted": "As oito execuções restantes (seis pares não win32, plataforma inválida e layout faltante) bateram com os valores congelados, mas a regra 4 vale para o caso inteiro e nenhuma é contada.",
+      "arms_effect": "PK07.B01, PK07.B02 e PK07.B03 ficam sem observação deste sub-lote (o caso é único para os três braços).",
+      "why_not_caught_before": "Os autotestes cobriram o filho sem extensão sob \"type\": \"module\" e sob CommonJS, mas não o nome .exe sob \"type\": \"module\". No DP-PK04A os pares win32 usam codex.exe dentro de um package.json sintético sem \"type\", carregado como CommonJS, e passaram.",
+      "remedy_proposed": "Errata de fixture para um caso novo: um package.json {\"type\": \"commonjs\"} sintético no diretório do filho .exe (o CommonJS trata extensão desconhecida como .js), ou o filho .exe fora do escopo do A4. Exige vaga nova e decisão do Lead. O DP-1 usou as 12 vagas planejadas (máximo 24 por sub-lote) e não tem retry.",
+      "retry": "NÃO (vaga de uso único; 0 retries automáticos)",
+      "evidence_note": "Citações completas das linhas de erro (reparo R1, R1-F08).",
+      "contributing_factor": "Lacuna de autoteste desta IMPLEMENT: só o filho sem extensão foi testado sob \"type\": \"module\" (review-r1, R1-F08)."
+    }
+  ],
+  "others": "Os outros 10 casos SDK e ARTIFACT_CHECK deram PASS_CLIENT_OBSERVATION pela regra 7. O DP1-CTRL01 deu MISMATCH pela regra 6, só por wrap.exit_mirror_exact. Não há o que atribuir.",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "adjudicated_at": "2026-10-20T02:33:20.248406+00:00"
+}

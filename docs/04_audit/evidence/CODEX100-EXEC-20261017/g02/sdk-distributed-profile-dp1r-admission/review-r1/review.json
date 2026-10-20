@@ -1,0 +1,140 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1R",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-20T05:10:03+00:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "a46045f87b044529e8b342cc370dfe5fd0ebf8872ae75b2b573623972c24686e",
+  "subject_hash_check": {
+    "before": "ok (sha do review-freeze-r1.json confere; 194/194 arquivos com sha igual; só review-freeze-r1.json e review-r1/brief.md fora da lista, como esperado)",
+    "after": "ok (mesmo sha; 194/194 iguais; nenhum arquivo novo na pasta, sem __pycache__; a candidata segue só com a pasta da unidade não rastreada)"
+  },
+  "verdict": "APPROVE",
+  "summary_counts": "0 P1, 0 P2, 7 P3",
+  "mandatory_findings": [],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P3",
+      "area": "next-task.json",
+      "title": "O next-task do BIND zera o carry_over e perde as obrigações abertas que esta unidade marcou como NOT_APPLICABLE",
+      "evidence": [
+        "next-task.json:37 (\"carry_over\": [])",
+        "freeze-deltas-dp1r.json:226,232,238 (DP2-ADM/R1-F02, R1-F03, R1-F08, R1-F09; ACQ/R1-F03; DP1-ADM/R2-F03 = NOT_APPLICABLE)",
+        "inputs/dp2/next-task.json:23-63 (applies_to: 'próxima unidade que reusar a pilha Python do DP-2' e 'aquisição futura ou unidade do driver Node')",
+        "next-task.json#/inputs/dp2 (o BIND lê do DP-2 só adjudication-dp2.json e next-task.json#/record_for_bind)"
+      ],
+      "detail": "NOT_APPLICABLE quer dizer que o item não vale para o DP-1R, e não que foi resolvido. Os itens do DP-2 (endurecimentos para reusar a pilha Python) e o ACQ/R1-F03 (aquisição futura) continuam abertos. O DP-2 levou adiante, com applies_to, os itens do DP-1 que não se aplicavam a ele. O DP-1R quebra essa cadeia: o próximo next-task não os carrega, o BIND não lê o carry_over do DP-2, e depois do BIND o runtime e as worktrees serão apagados. Nenhum desfecho muda e o BIND em si não fica impedido. Classifico como P3, como o precedente DP1-ADM/R2-F06.",
+      "required_action": "No next-task.json, levar adiante com applies_to os carry-overs NOT_APPLICABLE ainda abertos: DP2-ADM/R1-F02, R1-F03, R1-F08, R1-F09, ACQ/R1-F03 e a parte não adotada do DP2-ADM/R1-F01 (arquivar os bytes de fonte substituída). Alternativa: registrar por item onde cada um foi encerrado."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "selftests/selftest_dp1r_driver.mjs",
+      "title": "Autoteste vácuo ('evaluator side of the deadline') sempre passa e conta nos 76",
+      "evidence": [
+        "selftests/selftest_dp1r_driver.mjs:212 (t('evaluator side of the deadline ... covered by selftest_dp1r.py', () => true))",
+        "selftests/selftest_dp1r.py:371 (o teste real: 'deadline of the close (driver INVALID) -> INVALID_CAPTURE by rule 1')",
+        "selftests/selftest-results.json (passed 76, node 34)"
+      ],
+      "detail": "O item é só um ponteiro e devolve true sem testar nada. O caminho que ele diz cobrir está testado de verdade em selftest_dp1r.py:371, então não há lacuna de cobertura. A contagem fica inflada em 1, e o validador (passed >= 70) aceita isso. Os autotestes pedidos pelo R2-F02 não são vácuos. O prazo injetável de 400 ms mata o wrapper, registra WRAPPER_DEADLINE e não deixa WRAPPER_RESULT. O mutante foi construído (mutant_built true) e registrou 0 listeners. O LEFTOVER tem caso positivo e guarda negativa, com o órfão sobrevivendo.",
+      "required_action": "Remover o item ou transformá-lo em referência fora da contagem. Registrar 75 testes efetivos, ou declarar o ponteiro."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "freeze-deltas-dp1r.json / state.json (DP1-ADM/R2-F06)",
+      "title": "A disposição APPLIED_FOR_THE_CAPABILITIES_USED diz mais do que a suíte do DP-1R prova para o CAP-DP-STAGE",
+      "evidence": [
+        "freeze-deltas-dp1r.json:208-209 ('selftests_offline de CAP-DP-STAGE, CAP-DP-NODE-DRIVER e CAP-DP-SYNTH-CHILD com positivo e negativo antes do freeze')",
+        "state.json:91",
+        "selftests/selftest_dp1r.py:293-320 (testes de stage do DP-1R)",
+        "../sdk-distributed-profile-dp1-admission/selftests/selftest_dp1_caps.py:73,78,107,113,147-155 (membro com sha divergente, arquivo compactado divergente, modos num tar.gz próprio, nada sob docs/, negativos do keyless)",
+        "inputs/spec-dp/capability-contracts-dp.json#/capabilities[CAP-DP-STAGE]/selftests_offline",
+        "freeze-deltas-dp1r.json#/files/dplane~1stage.py (41e608d0… -> 219388dd…)"
+      ],
+      "detail": "A suíte do DP-1R não tem estes autotestes do contrato do CAP-DP-STAGE: membro com sha divergente recusado, arquivo compactado divergente recusado e modos preservados num tar.gz próprio. Também faltam 'nada escrito sob docs/' e os negativos do keyless que o DP-1 provou. O stage.py mudou de sha. Os corpos de check_archive, member_bytes e keyless são, porém, idênticos aos do DP-1, onde foram provados, e os casos passaram com os arquivos reais. Nenhum desfecho muda. O texto da disposição é que não corresponde à evidência.",
+      "required_action": "Corrigir a disposição para 'parcial'. Os negativos de staging e keyless ficam provados pelo selftest_dp1_caps.py do DP-1 sobre corpos de função byte-idênticos. Alternativa: rodar offline um autoteste complementar num arquivo novo ligado por sha, sem tocar no selftest-results.json congelado."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "dry-runs-before-freeze.json (escopo DV2)",
+      "title": "As linhas DIAG rodaram duas vezes em selftest-sandbox, e o DV2 aceito diz 'uma vez cada'; não há desvio declarado",
+      "evidence": [
+        "dry-runs-before-freeze.json:132-150 (superseded_rounds: 3 execuções em 04:46:31–37Z, além das 3 finais)",
+        "inputs/dp1/freeze-addendum-dp1.json:57 (DV2: 'só com as 4 linhas de DIAG de código próprio ..., uma vez cada')",
+        "inputs/dp1/lead-decision-dv1-dv4.json:8 ('Escopo do modo selftest-sandbox, como declarado')",
+        "freeze-deltas-dp1r.json:172-173 ('Nenhum desvio novo')",
+        "state.json#/dry_runs (sem menção à rodada substituída)"
+      ],
+      "detail": "A repetição está registrada com transparência e foi contida: bwrap sem systemd-run, só código próprio, antes do freeze, sem vaga nem serviço. O orçamento não foi quebrado. Ainda assim, ela excede a letra do escopo aceito e não aparece como desvio nem no state.json. O sha do supervisor usado na rodada substituída também não foi guardado, e o DP2-ADM/R1-F01, dado como ADOPTED, pede arquivar fontes substituídas.",
+      "required_action": "Declarar a segunda rodada como desvio para aceite do Lead, ou registrar a leitura de que 'uma vez cada' descrevia o DP-1. Citar a rodada no state.json e registrar o que se sabe do supervisor substituído."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "erratum-dp1r.json#/contrary_still_visible",
+      "title": "A lista de contrários está incompleta: o B02 com fallback e o B03 com checagem de existência que lança ENOENT",
+      "evidence": [
+        "erratum-dp1r.json:80-89",
+        "cases-dp-1r.json#/cases/0/expected/wrappers/p_missing/stderr_contains ([\"ENOENT\"])",
+        "cases/DP-PK07B-dc57c93719d2/blob-stderr-10.txt ('Error: spawn … ENOENT', syscall spawn)",
+        "adjudication-dp1r.json#/items/1/observed_arms/PK07.B03/stderr_head",
+        "selftests/selftest_dp1r.py (mutação 'inval': exit 0 com records [])"
+      ],
+      "detail": "Primeiro caso: um wrapper que aceitasse plataforma inválida e saísse com 0 o faria, no cenário mais plausível, executando um filho de fallback. Haveria registro de filho onde child_spawned é false, e o resultado seria INVALID_CAPTURE pela regra 4 via child.program_followed, e não MISMATCH pela regra 6 como a lista diz. A frase geral do reading cobre o caso, mas a lista específica não. Segundo caso: uma checagem de existência por fs.statSync/accessSync que lançasse 'ENOENT: no such file…' satisfaria o needle congelado 'ENOENT', o exit 1 e child_spawned false, e daria PASS. Esse contrário não é visível pelo oráculo. A erratum restringe, com honestidade, o B03 a 'erro diferente de ENOENT', o que segue o arm_discrimination congelado. O PASS do B03 se sustenta pelo stderr retido ('spawn … ENOENT'), e não pelo predicado sozinho. Nenhum resultado é falso.",
+      "required_action": "Completar a lista com o B02 com fallback (INVALID_CAPTURE, regra 4) e com o limite do needle 'ENOENT'. No record_for_bind, citar o stderr 'spawn … ENOENT' do passo 10 como a evidência que discrimina o PK07.B03."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "erratum-dp1r.json#/platform_limit; next-task.json#/record_for_bind/1",
+      "title": "O limite de plataforma não diz que o módulo path de Node fica POSIX sob o shim",
+      "evidence": [
+        "erratum-dp1r.json:92",
+        "next-task.json#/record_for_bind/1 (DP1R/PLATFORM)",
+        "cases/DP-PK07B-dc57c93719d2/events-driver.jsonl (child-records:7 e :8 com caminhos POSIX terminados em .exe)"
+      ],
+      "detail": "A leitura 'não precisa de Windows real' está correta para as decisões do wrapper em JavaScript: triple, nome .exe e spawn sem checagem. O shim, porém, só redefine process.platform e process.arch. O path de Node (join, sep) foi escolhido no bootstrap pela plataforma real, então o caminho win32 observado é a renderização POSIX do layout. O caminho real no Windows, com barras invertidas e unidade, não é observado. Hoje o texto lista como não reivindicados só CreateProcess, a resolução de .exe, as aspas de argv e os sinais.",
+      "required_action": "Acrescentar ao platform_limit e ao DP1R/PLATFORM que a renderização do caminho com path.win32 (separadores e unidade) fica fora da observação. O que se observa são os segmentos vendor/<triple>/codex-responses-api-proxy/<nome>.exe."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "tools/validate_unit.py / tools/post_run_checks.py",
+      "title": "O validador remete a checagem de binários em cases/ e diagnostics/ às ferramentas de fechamento, e nenhuma delas a faz",
+      "evidence": [
+        "tools/validate_unit.py:204 ('cases/ and diagnostics/ checked by the closing tools')",
+        "post-run-checks-dp1r.json#/checks (sem checagem de binário ou tamanho)",
+        "tools/post_run_checks.py, tools/collect_results.py (só catalogam vazios)"
+      ],
+      "detail": "Conferi por conta própria: não há ELF, gzip, zip nem PE na pasta, nenhum arquivo passa de 1 MB, e os únicos não-UTF-8 são os quadros brutos events-*.bin e controls-driver.bin, como no DP-1. A propriedade vale, mas a checagem registrada não existe.",
+      "required_action": "Acrescentar ao post_run_checks.py a varredura de binário e tamanho em cases/ e diagnostics/, com controle negativo, ou corrigir o texto do validador."
+    }
+  ],
+  "checks_run": [
+    "sha do review-freeze-r1.json e dos 194 arquivos antes e depois (script próprio em scratch): tudo igual",
+    "python3 -I -B tools/build_cases_dp1r.py check: 'equal' (rc 0); cases-dp-1r.json e erratum-dp1r.json recalculados byte a byte a partir de inputs/spec-dp/cases-dp-1.json (sha daafcb4e…, igual às cópias do DP-1 e do checkout principal)",
+    "comparação independente DP-PK07A x DP-PK07B: só id, sub_lot, slot, case_input, case_input_sha256, erratum e replaces_observation_of diferem; em case_input, só as 2 entradas json {\"type\":\"commonjs\"} nas folhas win32; sha recalculados ea4e966d… e b20365fd…",
+    "DP1R-CTRL01 x DP1-CTRL01: case_input com os mesmos bytes (b0234bc9…); diferem só id, sub_lot, slot e gate; predicados do acceptance idênticos aos do DP-1; a fixture do host difere só pelas linhas da varredura de raiz (R1-F07)",
+    "leitura 'local ou extensão': legítima. O caminho executado com .exe é a observação congelada (child_executed_path). Deslocar a fronteira do escopo com um package.json declarado tira o filho do escopo 'type': 'module' do A4 sem tocar no que o wrapper monta ou lê. Está declarada como EDP1R-01 antes do freeze; regra do Node provada offline no autoteste e no DIAG-DP-SYNTH-CHILD (exe em commonjs roda, sem extensão em module roda, exe em module recusado com ERR_UNKNOWN_FILE_EXTENSION)",
+    "limite de plataforma: leitura correta; não há braço que exija Windows real (com a ressalva do R1-F06)",
+    "deltas de código: sha base dos 15 arquivos conferidos contra ../sdk-distributed-profile-dp1-admission (3ca3fd3b0); 9 cópias byte a byte; diffs de acceptance.py, stage.py, supervisor.py, dp-driver.mjs, dp-channel.cjs e dp-diag-wrapper.mjs lidos e cobertos pelos DDP1R-01..09 e EDP1R-02..04 (seal_tree removido era código morto no DP-1)",
+    "ordem: claim 04:34Z; erratum 04:45Z; autotestes 04:49:56Z; dry runs 04:50:04-11Z (mais a rodada substituída em 04:46Z); preflight 04:50:28Z; validação 04:50:32Z; source freeze 04:50:56Z (64 arquivos íntegros); identity freeze 04:50:57Z; DIAG STAGE, NODE e SYNTH 04:51:02-18Z; admissão 04:51:24.1Z; CONTROL 04:51:24.5Z; DP-PK07B 04:51:33Z",
+    "gates DDP1R-09: freeze_gates() chamado em 'freeze'; 3 controles negativos do validador com mensagem exata; validation-unit ok com 10 checks e 18/18 negativos",
+    "identity freeze: host, arquivos compactados, ledger e /dist iguais à identity freeze do DP-1; propriedades de serviço iguais (DV3); argv normalizado do systemd-run/bwrap do DP-PK07B idêntico ao do DP-PK07A (148 elementos)",
+    "desfechos: CONTROL MISMATCH pela regra 6, só wrap.exit_mirror_exact (exit 0 contra 3), sanidades aprovadas; DP-PK07B PASS_CLIENT_OBSERVATION pela regra 7, 11/11 predicados, child-records:7 e :8 com os caminhos .exe congelados, shim aplicado nos 10 passos com real linux/x64, stderr 9 'Unsupported platform: freebsd (x64)', stderr 10 'spawn … ENOENT'",
+    "reavaliação offline (acceptance.py reevaluate) nas duas pastas: outcome_equal, predicate_level_equal e plan_binding_ok true, rc 0; igual a reevaluation-dp1r.json",
+    "sondas de mutação numa cópia em scratch (quadros regravados com sha recalculado): triple errado no win32 dá MISMATCH (child.executed_path_exact); registro .exe ausente dá INVALID_CAPTURE (program_followed); exit 0 no p_invalid dá MISMATCH (exit_mirror); shim não aplicado dá INVALID_CAPTURE (shim.platform_scoped). Nenhum oráculo do caso é vácuo; o 'ENOENT' do B03 é fraco (R1-F05)",
+    "carry-overs do driver Node: R2-F02 (prazo injetável, mutante do marcador, LEFTOVER com negativo e guarda), R1-F07 (varredura da raiz no host e no sandbox, com testes e DIAG), R1-F04 (pass dos DIAG alinhados ao contrato: shim com restauração, NO_SIGNAL de 5 a 15 s, symlink com alvo, guarda de limpeza), R2-F04 (status_of em close_dp1r.py: P1 nunca vira CARRIED), R2-F05 (todas as propriedades e o plano com negativos) e PK07A (stage.module_scope_problems com gate antes do lançamento, negativo no validador e linha DIAG): todos aplicados",
+    "contenção: rede só lo, netns diferente do host, sem credencial, NoNewPrivileges, sem PG nem porta; varredura própria sem ELF, gzip, zip ou PE em docs/",
+    "orçamento: 3/4 serviços DIAG, 2/2 vagas, 5 units cvg-dx100-dp1r-*, 0 retries, load máximo 3,94 (limite 12, espera 0), picos de 24 PIDs e 51 MiB",
+    "coerência: state.json, case-results.json, case-ledger.json, budget.json, adjudication-dp1r.json (sha dos acceptance), reevaluation-dp1r.json, resource-receipt-final.json e post-run-checks-dp1r.json coerentes entre si; empty-artifact-delta.json com o mesmo conjunto dos 35 arquivos vazios do freeze; 0 recibos funcionais e 0 crédito em todos os documentos",
+    "inputs: as 36 cópias em inputs/ são byte-iguais às pastas do checkout principal (spec, aquisição, DP-1, DP-2, decisões do Lead e do usuário)"
+  ],
+  "limits": "Não rodei systemctl nem journal (fora do permitido); a liberação das units vem de resource-receipt-final.json e post-run-checks. Não rodei autotestes, validador, preflight nem supervisor; li os resultados gravados e o código. Não li o wrapper do A4 de dentro do cache; usei as âncoras, o sha do membro e os stderr retidos. A observação sobre o módulo path de Node (R1-F06) vem do conhecimento do runtime, sem execução própria. Os bytes do supervisor usado na rodada de dry run substituída não estão disponíveis. Windows real não é observado por construção.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

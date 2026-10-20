@@ -6,7 +6,7 @@ Programa `CODEX100`, 17/10/2026. [Plano 0384](0384_plano_executivo_paridade_code
 
 ## Situação vigente — 18/10/2026
 
-Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1`, pela [especificação da continuação 3](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec/next-task.json), e a aquisição única do perfil distribuído 0.153.4, autorizada pelo usuário ([decisões](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json)). Concluídas localmente, em ordem:
+Próxima ação canônica (20/10/2026, CONT-20261018-D9EF): `DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE` e o fechamento do G02. Concluídas localmente, em ordem:
 
 - drivers de observação SDK ([relatório](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/REPORT.md));
 - admissão do perfil, com 19 casos `PASS_CLIENT_OBSERVATION` ([delta](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-admission/ledger-delta-cont-d9ef.md));
@@ -21,6 +21,8 @@ Próxima ação canônica (19/10/2026, CONT-20261018-D9EF): `DX100-G02:IMPLEMENT
 - lote 2B-2: [execução](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/state.json), com o CONTROL em MISMATCH e 17/17 PASS; [decisão do lead](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-admission/lead-decision-f01.json) sobre o known_bad do 2B-PY13E;
 - ligação v5: perfil de fonte concluído, com 33 contratos observados e 11 abertos, todos do perfil distribuído ([mapa](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding/coverage-observed-v5.json));
 - especificação da continuação 3, em C3-1 (15 vagas) e C3-2 (14 vagas) ([estado](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec/state.json)).
+- continuação 3: [C3-1](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-continuation-3-1-admission/state.json) (14 PASS) e [C3-2](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-continuation-3-2-admission/state.json) (13 PASS); [ligação v6](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-continuation-3-binding/coverage-observed-v6.json), com 33 observados e 11 abertos;
+- perfil distribuído 0.153.4: [aquisição](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-acquisition/state.json) (6 de 7, com digest), [especificação](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-spec/state.json), [DP-1](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-dp1-admission/state.json) (10 PASS), [DP-1R](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-dp1r-admission/state.json) (PK07B PASS) e [DP-2](../04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-dp2-admission/state.json) (5 PASS, binário publicado keyless).
 
 Zero recibos funcionais e zero crédito de paridade; as seis lacunas SDK seguem `OPEN`. SPEC0239 aprovada; o BUILD depende de 0029 → 0030 → 0031.
 

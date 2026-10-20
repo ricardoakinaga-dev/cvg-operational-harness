@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - execução única da aquisição definida em acquisition-plan.json.
+# Uso: python3 -I -B acquire-distributed.py.txt <unit_dir> <cache_dir>
+# Cada pedido (metadado M1-M7 e artefato A1-A7) sai uma vez, por curl, só GET por HTTPS, sem retry, sem credencial
+# (-q ignora .curlrc; sem -n não há .netrc; nenhum cabeçalho de autorização). Nada é instalado nem executado: os
+# arquivos baixados só são lidos para calcular sha256, sha512 e sha1. Divergência de digest move o arquivo para
+# quarantine/<id>/ e marca DIGEST_MISMATCH. Escreve acquisition-ledger.json na pasta da unidade (só JSON).
+import base64
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+UNIT, CACHE = sys.argv[1], sys.argv[2].rstrip("/")
+PLAN_PATH = os.path.join(UNIT, "acquisition-plan.json")
+LEDGER_PATH = os.path.join(UNIT, "acquisition-ledger.json")
+VERSION = "0.153.4"
+UA = "cvg-codex100-acquisition/1 (curl; DX100-G02)"
+if os.path.exists(LEDGER_PATH):
+    raise SystemExit("acquisition-ledger.json já existe: a aquisição é única e não se repete")
+if os.path.exists(CACHE) and any(os.scandir(CACHE)):
+    raise SystemExit("cache não vazio: a aquisição é única e não se repete")
+with open(PLAN_PATH, "rb") as f:
+    plan_bytes = f.read()
+plan = json.loads(plan_bytes)
+assert plan["written_before_any_network"] is True and plan["cache"]["root"] == CACHE
+now = lambda: datetime.now(timezone.utc).isoformat()
+ledger = {"kind": "ACQUISITION_LEDGER", "task": plan["task"], "plan": {"path": "acquisition-plan.json", "sha256": hashlib.sha256(plan_bytes).hexdigest()},
+          "started_at": now(), "curl": subprocess.run(["curl", "--version"], capture_output=True, text=True).stdout.split("\n")[0],
+          "requests": [], "artifacts": [], "functional_receipts": 0, "parity_credit": 0}
+
+
+def digests(path):
+    h256, h512, h1, n = hashlib.sha256(), hashlib.sha512(), hashlib.sha1(), 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h256.update(chunk)
+            h512.update(chunk)
+            h1.update(chunk)
+            n += len(chunk)
+    return {"bytes": n, "sha256": h256.hexdigest(), "sha512_integrity": "sha512-" + base64.b64encode(h512.digest()).decode(), "sha1": h1.hexdigest()}
+
+
+def fetch(rid, url, dest, accept):
+    """One GET, no retry. The destination directory must be new and empty."""
+    d = os.path.dirname(dest)
+    os.makedirs(d, exist_ok=True)
+    assert not os.path.exists(dest), dest
+    cmd = ["curl", "-q", "--silent", "--show-error", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5",
+           "--connect-timeout", "30", "--max-time", "1800", "--user-agent", UA, "-H", "Accept: " + accept, "-o", dest, "-w", "%{json}", url]
+    rec = {"id": rid, "url": url, "method": "GET", "accept": accept, "started_at": now()}
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    rec["finished_at"] = now()
+    rec["curl_exit"] = r.returncode
+    try:
+        w = json.loads(r.stdout)
+        rec["http_code"] = w.get("http_code")
+        rec["url_effective"] = w.get("url_effective")
+        rec["num_redirects"] = w.get("num_redirects")
+        rec["content_type"] = w.get("content_type")
+    except ValueError:
+        rec["curl_write_out"] = r.stdout[:300]
+    if r.stderr:
+        rec["curl_stderr"] = r.stderr.strip()[:300]
+    if r.returncode == 0 and os.path.isfile(dest):
+        rec.update(digests(dest))
+        rec["dest"] = dest
+        rec["result"] = "OK"
+    else:
+        if os.path.exists(dest):
+            os.remove(dest)
+        rec["result"] = "HTTP_ERROR" if rec.get("http_code") and rec["http_code"] >= 400 else "FAILED"
+    ledger["requests"].append(rec)
+    return rec
+
+
+# ---------------------------------------------------------------- phase 1: metadata, once each
+meta = {}
+for m in plan["metadata_requests"]:
+    rec = fetch(m["id"], m["url"], m["dest"], m["accept"])
+    meta[m["id"]] = None
+    if rec["result"] == "OK":
+        try:
+            meta[m["id"]] = json.load(open(m["dest"], encoding="utf-8"))
+        except ValueError:
+            rec["result"] = "NOT_JSON"
+
+# ---------------------------------------------------------------- phase 2: resolution per the plan rules
+art = {a["id"]: a for a in plan["artifacts"]}
+res = {}
+
+
+def npm_version(mid, version):
+    doc = meta.get(mid)
+    if doc is None:
+        return None, "METADATA_UNAVAILABLE"
+    v = (doc.get("versions") or {}).get(version)
+    if v is None:
+        return None, "VERSION_NOT_FOUND"
+    return v, None
+
+
+def npm_res(aid, mid, version):
+    v, err = npm_version(mid, version)
+    if err:
+        return {"status": "NOT_AVAILABLE", "reason": "%s em %s para %s" % (err, mid, version)}
+    dist = v.get("dist") or {}
+    return {"status": "RESOLVED", "url": dist.get("tarball"), "expected": {"integrity": dist.get("integrity"), "shasum": dist.get("shasum")},
+            "registry_version": v.get("version"), "registry_name": v.get("name")}
+
+
+# A1: uv.lock (cross-check M6)
+a1 = art["A1"]
+cross = None
+if meta.get("M6"):
+    hits = [u for u in meta["M6"].get("urls", []) if u.get("filename") == a1["file"]]
+    cross = {"pypi_sha256": hits[0]["digests"]["sha256"], "pypi_size": hits[0].get("size"), "pypi_url": hits[0].get("url")} if len(hits) == 1 else {"found": len(hits)}
+res["A1"] = {"status": "RESOLVED", "url": a1["url"], "expected": {"sha256": a1["expected"]["sha256"], "size": a1["expected"]["size"]}, "cross_check_m6": cross}
+res["A2"] = npm_res("A2", "M1", VERSION)
+# A3: alias declared by @openai/codex@0.153.4
+man, err = npm_version("M1", VERSION)
+if err:
+    res["A3"] = {"status": "NOT_AVAILABLE", "reason": "manifesto de @openai/codex@0.153.4 indisponível (%s)" % err}
+else:
+    alias = (man.get("optionalDependencies") or {}).get("@openai/codex-linux-x64")
+    want = "npm:@openai/codex@%s-linux-x64" % VERSION
+    if alias != want:
+        res["A3"] = {"status": "AMBIGUOUS" if alias else "NOT_AVAILABLE", "reason": "alias declarado %r, esperado %r" % (alias, want)}
+    else:
+        r3 = npm_res("A3", "M1", VERSION + "-linux-x64")
+        r3["alias"] = alias
+        res["A3"] = r3
+m2 = meta.get("M2")
+res.setdefault("A3", {})["standalone_package_m2"] = (
+    {"exists": True, "has_0.153.4": VERSION in (m2.get("versions") or {}), "dist_tags": m2.get("dist-tags")} if m2 else {"exists": False})
+res["A4"] = npm_res("A4", "M3", VERSION)
+# A5: GitHub release asset
+if meta.get("M7") is None:
+    res["A5"] = {"status": "NOT_AVAILABLE", "reason": "metadados da release indisponíveis (M7)"}
+else:
+    assets = [x for x in meta["M7"].get("assets", []) if x.get("name") == art["A5"]["name"]]
+    if len(assets) != 1:
+        res["A5"] = {"status": "NOT_AVAILABLE" if not assets else "AMBIGUOUS", "reason": "assets com o nome: %d" % len(assets)}
+    else:
+        x = assets[0]
+        dg = x.get("digest")
+        res["A5"] = {"status": "RESOLVED", "url": art["A5"]["url"], "browser_download_url": x.get("browser_download_url"),
+                     "expected": {"sha256": dg.split(":", 1)[1] if isinstance(dg, str) and dg.startswith("sha256:") else None, "size": x.get("size"),
+                                  "published_digest": dg if dg else "NO_PUBLISHED_DIGEST"},
+                     "release": {"tag_name": meta["M7"].get("tag_name"), "name": meta["M7"].get("name"), "published_at": meta["M7"].get("published_at"),
+                                 "target_commitish": meta["M7"].get("target_commitish"), "prerelease": meta["M7"].get("prerelease")}}
+        if x.get("browser_download_url") != art["A5"]["url"]:
+            res["A5"] = {"status": "AMBIGUOUS", "reason": "browser_download_url %r difere da URL do plano" % x.get("browser_download_url")}
+# A6: PyPI openai-codex 0.153.4
+if meta.get("M5") is None:
+    res["A6"] = {"status": "NOT_AVAILABLE", "reason": "openai-codex 0.153.4 sem metadados no PyPI (M5)"}
+else:
+    wh = [u for u in meta["M5"].get("urls", []) if u.get("packagetype") == "bdist_wheel"]
+    if len(wh) != 1:
+        res["A6"] = {"status": "NOT_AVAILABLE" if not wh else "AMBIGUOUS", "reason": "bdist_wheel: %d" % len(wh)}
+    else:
+        res["A6"] = {"status": "RESOLVED", "url": wh[0]["url"], "file": wh[0]["filename"],
+                     "expected": {"sha256": wh[0]["digests"]["sha256"], "size": wh[0].get("size")},
+                     "not_downloaded": [u["filename"] for u in meta["M5"].get("urls", []) if u.get("packagetype") != "bdist_wheel"]}
+res["A7"] = npm_res("A7", "M4", VERSION)
+
+# ---------------------------------------------------------------- phase 3: downloads, once each
+for aid in ["A1", "A2", "A3", "A4", "A5", "A6", "A7"]:
+    r = res[aid]
+    a = art[aid]
+    out = {"id": aid, "name": a["name"], "version": VERSION, "resolution": r}
+    if r.get("status") != "RESOLVED" or not r.get("url"):
+        out["result"] = r.get("status", "NOT_AVAILABLE")
+        ledger["artifacts"].append(out)
+        continue
+    fname = r.get("file") or r["url"].rsplit("/", 1)[1]
+    dest = os.path.join(CACHE, "artifacts", aid, fname)
+    rec = fetch(aid, r["url"], dest, "application/octet-stream")
+    out["request"] = {k: rec.get(k) for k in ("url", "url_effective", "http_code", "curl_exit", "result")}
+    if rec["result"] != "OK":
+        out["result"] = "DOWNLOAD_FAILED"
+        ledger["artifacts"].append(out)
+        continue
+    obs = {k: rec[k] for k in ("bytes", "sha256", "sha512_integrity", "sha1")}
+    out["observed"] = obs
+    exp = r["expected"]
+    checks = {}
+    if exp.get("sha256"):
+        checks["sha256"] = obs["sha256"] == exp["sha256"]
+    if exp.get("size") is not None:
+        checks["size"] = obs["bytes"] == exp["size"]
+    if exp.get("integrity"):
+        checks["integrity"] = obs["sha512_integrity"] == exp["integrity"]
+    if exp.get("shasum"):
+        checks["shasum"] = obs["sha1"] == exp["shasum"]
+    if aid == "A1" and isinstance(r.get("cross_check_m6"), dict) and r["cross_check_m6"].get("pypi_sha256"):
+        out["cross_check_m6_sha256_equal"] = obs["sha256"] == r["cross_check_m6"]["pypi_sha256"]
+    out["digest_checks"] = checks
+    if aid == "A5" and not exp.get("sha256") and checks.get("size") is not False:
+        out["result"] = "NO_PUBLISHED_DIGEST"
+        out["stored"] = dest
+    elif not checks:
+        out["result"] = "NO_EXPECTED_DIGEST"
+        out["stored"] = dest
+    elif all(checks.values()):
+        out["result"] = "DIGEST_OK"
+        out["stored"] = dest
+    else:
+        q = os.path.join(CACHE, "quarantine", aid)
+        os.makedirs(q, exist_ok=True)
+        shutil.move(dest, os.path.join(q, fname))
+        out["result"] = "DIGEST_MISMATCH"
+        out["stored"] = os.path.join(q, fname)
+    ledger["artifacts"].append(out)
+
+ledger["finished_at"] = now()
+ledger["summary"] = {a["id"]: a["result"] for a in ledger["artifacts"]}
+with open(LEDGER_PATH, "w", encoding="utf-8") as f:
+    f.write(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n")
+print(json.dumps(ledger["summary"]))
+for q in ledger["requests"]:
+    print(q["id"], q.get("http_code"), q["result"], q.get("bytes"))

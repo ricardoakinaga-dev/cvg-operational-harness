@@ -1,0 +1,363 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1",
+  "lead": "CONT-20261018-D9EF",
+  "track": "T1 com execução local contida (serviços transientes próprios, sem rede, sem provider, sem credencial, sem dado real)",
+  "status": "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS",
+  "git": {
+    "candidate_worktree": "/mnt/dados/cvg-work/cvg-codex100-dp1-20261019",
+    "base": "76c047257 (recibo do C3-2)",
+    "branch": "nenhuma (HEAD destacado)",
+    "push": "não",
+    "pr": "não"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-dp1-runtime-20261019",
+  "spec_inputs": {
+    "folder": "inputs/spec-dp (cópia byte a byte de ../sdk-distributed-profile-spec) e inputs/acquisition",
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "8d29e84b5e39e7c63c524dc1eafce333baca75e6bc40963460e9ac766c7c55e9",
+      "result": "PASS"
+    },
+    "cases_dp_1_sha256": "daafcb4e53e06b284e92f94f221bfd1653fff44a697234051ae8d2da3e60829b",
+    "lead_confirmation": "inputs/spec-dp/lead-confirmation-20261019.json (Q4 lida como capability do kernel; DP-REAL01 dentro da Q3)"
+  },
+  "implementation": {
+    "layout": "Pilha única de host dplane/ (supervisor, observador, avaliador, staging) e node/ (driver, loader, canal, filho sintético, wrapper de controle, shim, módulos próprios de DIAG); derivada da pilha TypeScript do C3-1 (tslane/, node/) no commit 76c047257.",
+    "DDP-01": "node/dp-channel.cjs CASE_ID dos 12 slots e 5 DIAG; supervisor liga cases-dp-1.json por sha.",
+    "DDP-02/DDP-11": "dplane/stage.py: /dist do cache (A2, A3, A4, A7) com modos dos membros, conferido contra artifact-metadata.json; árvores de fixture por tentativa (copy_of_member, file, json, dir, symlink, synthetic_child, copy_of_profile); binds só-leitura.",
+    "DDP-03": "node/dp-loader.mjs: entradas de SDK por sha do membro A7; especificadores nus da lista fechada (child_process, fs, module, os, path, readline) só para essas entradas; node/dp-driver.mjs: vocabulário fechado, wrapper.run com env exato, stdin /dev/null, assentamento no close, send_signal depois do CHILD_READY com espera por SigCgt, LEFTOVER, NOT_REACHED.",
+    "DDP-04": "node/dp-synth-child.mjs: programa por arquivo, registro sincronizado antes da ação terminal, CHILD_READY depois dos listeners, espera limitada (NO_SIGNAL, 97); válido como CommonJS e como ES module.",
+    "DDP-05": "MemoryMax 1073741824 e TasksMax 256 em todo serviço do DP-1, conferidos na cgroup (service.limits_declared); pico observado 35 tarefas (acima dos 32 herdados).",
+    "DDP-07": "DP-PK09A julgado por dplane/acceptance.py evaluate_artifact, sem serviço.",
+    "DDP-09": "node/dp-control-wrapper.mjs (código próprio; sai 0 sempre).",
+    "erratum_DP_SPEC_R2_F01": "Aplicada antes do source freeze: topologia driver_only declarada em todo config (o canal recusa outra); FIFOs de adapter e peer montados e vazios; dplane/observer.py reconcile_driver_only (PASS só com END completo do driver, EOF, checagens do SO, BLOBs fechados e WRAPPER_RESULT seguido de LEFTOVER; quadro de adapter ou peer é INVALID_CAPTURE); dplane/acceptance.py capture_form mapeia a base driver_only para a forma declarada pelo caso (PASS, PASS_DECLARED_TERMINATION, REAL_CLI_KEYLESS); autotestes obrigatórios em selftests/selftest_dp1.py.",
+    "carry_over": {
+      "DP-SPEC/R2-F02": "aplicado: SIGNAL_SENT registra sigcgt_bit_seen como informativo para SIGINT/SIGTERM; o DIAG-DP-NODE usa SIGHUP para o bit; o autoteste com e sem listener entrou no reparo R1 (selftests/selftest-caps-results.json: sem listener SIGHUP falso e SIGINT/SIGTERM verdadeiros; com listener SIGHUP verdadeiro).",
+      "DP-SPEC/R2-F03": "parcial no código congelado: tools/validate_unit.py aceita prefixo (sem ambiguidade nos 9 controles do DP-1); as checagens pós-revisão (post-review-checks-dp1.json) usam igualdade exata; o caso do DP-PY02P vai ao DP-2.",
+      "DP-SPEC/R2-F04": "aplicado: identity-freeze-dp1.json#/pin_bindings (membro A3 bin/codex, sha do executável do pin ligado a g02-reference-acceptance.json e build-provenance.json, package.json e index.ts do pin); a frase \"ausentes na fonte\" do PK09.B02 tem fonte no G01 (freeze-addendum-dp1.json#/readings); a parte do DP-PY20A fica para o DP-2.",
+      "DP-SPEC/R2-F05": "aplicado no DP-1: todos os serviços, inclusive o DIAG-TS-ECHO, com 1 GiB e 256 tarefas; a parte do DIAG-DP-REAL-CLI-APPSERVER fica para o DP-2.",
+      "DP-SPEC/R2-F06": "DP-2.",
+      "2B2-ADM/R1-F02, R1-F03, R1-F04": "DP-2 (DDP-10: avaliador e supervisor Python do 2B-2).",
+      "ACQ/R1-F03": "só numa aquisição futura."
+    },
+    "deviations": [
+      {
+        "id": "DV1",
+        "text": "DIAG-TS-ECHO requalificado sobre a pilha DP (driver_only): autoteste do dp-loader, filho próprio com código 3 espelhado e enquadramento do canal; sem adapter, peer nem SDK emitido.",
+        "lead_acceptance": "PENDENTE"
+      },
+      {
+        "id": "DV2",
+        "text": "Modo selftest-sandbox do supervisor (bwrap sem systemd-run, sem livro de vagas nem orçamento), usado antes do freeze só com as 4 linhas de DIAG de código próprio (TS-ECHO, DP-STAGE, DP-NODE, DP-SYNTH-CHILD), uma vez cada. O código congelado aceitaria qualquer linha DIAG, inclusive DIAG-DP-REAL-CLI, mas isso nunca foi usado (runtime dry/ só com as 4 linhas). Restringir no código do DP-2.",
+        "lead_acceptance": "PENDENTE"
+      },
+      {
+        "id": "DV3",
+        "text": "RuntimeMaxSec 90 em vez dos 45 herdados (DDP-05 dizia herdado). Motivo: folga para três esperas limitadas de 5 s nos casos de sinal, para o hash de cerca de 400 MB do /dist dentro do sandbox e para o binário publicado. Efeito observado nulo: o serviço mais longo levou 2,3 s. CPUQuota (100%) segue herdado. No DP-2, usar 45 ou declarar antes do freeze.",
+        "lead_acceptance": "PENDENTE"
+      },
+      {
+        "id": "DV4",
+        "text": "Leitura do contrato do filho sintético: registro em /work/child/run-<n>/record-<pid>.json (aberto com \"w\", um diretório por execução criado pelo driver, um filho por execução) e marcador /work/child/run-<n>/ready-<pid>, em vez de /work/child/records/<n>.json com O_EXCL e /work/child/ready-<n>. A unicidade vem do diretório por execução e do pid; o avaliador lê por passo (child-records:<passo>).",
+        "lead_acceptance": "PENDENTE"
+      }
+    ],
+    "freeze_addendum": {
+      "path": "freeze-addendum-dp1.json",
+      "sha256": "575b919923b2e96138a9ff3266847f105413db9498a9531dda9d991a7e93b6a2"
+    }
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 69,
+    "failed": 0,
+    "node": {
+      "version": "v24.20.0",
+      "passed": 36,
+      "failed": 0
+    },
+    "capabilities_after_review": {
+      "path": "selftests/selftest-caps-results.json",
+      "passed": 20,
+      "failed": 0,
+      "origin": "reparo R1 (R1-F02), depois dos serviços; arquivos congelados intactos"
+    }
+  },
+  "post_review_checks": {
+    "path": "post-review-checks-dp1.json",
+    "ok": true,
+    "negative_controls_refused": 9
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": 9,
+    "negative_controls": 9
+  },
+  "freezes": {
+    "source": {
+      "path": "source-freeze-dp1.json",
+      "sha256": "a3bc8d0c6034d7f5e2375a172d406ff58dd539d0e6260d19583b45d9e05da445"
+    },
+    "identity": {
+      "path": "identity-freeze-dp1.json",
+      "sha256": "48aba57349b47a6fae0eed4e8c60aa3f22f0cffaa10ea675089bb933de9d8383"
+    },
+    "order": "autotestes, validador e preflight -> source freeze -> identity freeze -> 5 DIAG -> diag-admission -> CONTROL -> slots em ordem"
+  },
+  "diagnostics": {
+    "admission": {
+      "path": "diag-admission-dp1.json",
+      "sha256": "82d4abe214f89c2d16f01bc8fd89669461f17a1712c6b86b3b1f2a475759cdae"
+    },
+    "mandatory": {
+      "DIAG-TS-ECHO": "diagnostics/f2d251da1377-DIAG-TS-ECHO",
+      "DIAG-DP-STAGE": "diagnostics/38c29704b07c-DIAG-DP-STAGE",
+      "DIAG-DP-NODE": "diagnostics/9e8fcac04ade-DIAG-DP-NODE",
+      "DIAG-DP-SYNTH-CHILD": "diagnostics/6a76d2e2868a-DIAG-DP-SYNTH-CHILD"
+    },
+    "conditional": {
+      "DIAG-DP-REAL-CLI": "diagnostics/547201792017-DIAG-DP-REAL-CLI"
+    },
+    "conditional_slots": {
+      "DP-REAL01": "LIBERADA"
+    },
+    "failures": 0
+  },
+  "control": {
+    "case": "DP1-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [
+      "wrap.exit_mirror_exact"
+    ],
+    "gate": "MISMATCH pela regra 6 só com wrap.exit_mirror_exact, sanidades aprovadas, antes dos slots",
+    "gate_passed": true
+  },
+  "cases": {
+    "counts_excluding_control": {
+      "PASS_CLIENT_OBSERVATION": 10,
+      "INVALID_CAPTURE": 1
+    },
+    "rows": [
+      {
+        "slot": 12,
+        "case": "DP1-CTRL01",
+        "kind": "CONTROL",
+        "outcome": "MISMATCH",
+        "composition_rule": 6,
+        "capture_form": "PASS",
+        "failed_predicates": [
+          "wrap.exit_mirror_exact"
+        ],
+        "unit": "cvg-dx100-dp1-b0ee1ed05f60-dp1-ctrl01.service",
+        "dir": "cases/DP1-CTRL01-b0ee1ed05f60",
+        "acceptance_sha256": "52478103596a988ea5ce3182dc802e7d9fbbc1d65f0f5259c0b6f36ef72e50d1",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 1,
+        "case": "DP-PK01A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-851d7e9059bd-dp-pk01a.service",
+        "dir": "cases/DP-PK01A-851d7e9059bd",
+        "acceptance_sha256": "6e44d4e60d885a23ae356f97114c4fe3f6195db2bd4567037b9da36e81f0ba85",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 2,
+        "case": "DP-PK02A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-410006cd133b-dp-pk02a.service",
+        "dir": "cases/DP-PK02A-410006cd133b",
+        "acceptance_sha256": "f2ad6dee6e0e45b722f6312807a3667b75763a4dacb998a1cd8ea102e91fa599",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 3,
+        "case": "DP-PK02R",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-df4a231f9e71-dp-pk02r.service",
+        "dir": "cases/DP-PK02R-df4a231f9e71",
+        "acceptance_sha256": "a6ef99f42d5b3d980c01262843f5a828737cdc539ff16ddbe555a30a1cd32563",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 4,
+        "case": "DP-PK03A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-73404750104a-dp-pk03a.service",
+        "dir": "cases/DP-PK03A-73404750104a",
+        "acceptance_sha256": "4b12ada81de9f96eb5b696dae9b66d6a45ccbd70f2fa0d906ac1ad34889e5813",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 5,
+        "case": "DP-PK04A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-4f9f2e8dcb50-dp-pk04a.service",
+        "dir": "cases/DP-PK04A-4f9f2e8dcb50",
+        "acceptance_sha256": "f5ac092001f436589628e402e2fc59111ff4f94a61bbcc46e9f8f54f38b1c2e6",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 6,
+        "case": "DP-REAL01",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "REAL_CLI_KEYLESS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-b82de6aed789-dp-real01.service",
+        "dir": "cases/DP-REAL01-b82de6aed789",
+        "acceptance_sha256": "cd777238ab3855c905a2a39d915bd677f65cdc8b61668d78b56a78eabc3581ed",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 7,
+        "case": "DP-PK05A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-2265b92ef0d6-dp-pk05a.service",
+        "dir": "cases/DP-PK05A-2265b92ef0d6",
+        "acceptance_sha256": "97cf12724059b9b7408a61d069b6a8ec445f40faa26210376122c6e04eedcc43",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 8,
+        "case": "DP-PK06A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS_DECLARED_TERMINATION",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-dddf3bdd0d70-dp-pk06a.service",
+        "dir": "cases/DP-PK06A-dddf3bdd0d70",
+        "acceptance_sha256": "305a78adebe9f018ae3b18eb864ae8cd05d70324a11a1ef443520ace2bfdb5c4",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 9,
+        "case": "DP-PK07A",
+        "kind": "SDK",
+        "outcome": "INVALID_CAPTURE",
+        "composition_rule": 4,
+        "capture_form": "PASS",
+        "failed_predicates": [
+          "child.program_followed",
+          "wrap.exit_mirror_exact",
+          "child.executed_path_exact"
+        ],
+        "unit": "cvg-dx100-dp1-5f2fe0c80c5c-dp-pk07a.service",
+        "dir": "cases/DP-PK07A-5f2fe0c80c5c",
+        "acceptance_sha256": "3dfcde42b09040c2473d8484a4ab47c62858640c8dbe2c762b4a118b8199fb50",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 10,
+        "case": "DP-PK08A",
+        "kind": "SDK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS_DECLARED_TERMINATION",
+        "failed_predicates": [],
+        "unit": "cvg-dx100-dp1-6c0feae38c36-dp-pk08a.service",
+        "dir": "cases/DP-PK08A-6c0feae38c36",
+        "acceptance_sha256": "2da9a3a0c0a375737718f361115c9e5c25a3b8a966f668822378a15f355153f2",
+        "ledger_status": "EXECUTED"
+      },
+      {
+        "slot": 11,
+        "case": "DP-PK09A",
+        "kind": "ARTIFACT_CHECK",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "ARTIFACT_CHECK",
+        "failed_predicates": [],
+        "unit": null,
+        "dir": "cases/DP-PK09A-a48d24910609",
+        "acceptance_sha256": "d48e728656b37313246f442054d8206357966b388c0d01513df443f1a1da5a8e",
+        "ledger_status": "EXECUTED"
+      }
+    ],
+    "adjudication": {
+      "path": "adjudication-dp1.json",
+      "sha256": "44ea998d5ab29adbcba18eb83eb91c30e6289660681e2ea30f698bf91cc37375",
+      "DP-PK07A": "HARNESS_FIXTURE_DEFECT_FROM_THE_SPEC (não é fato de cliente)"
+    }
+  },
+  "reevaluation": {
+    "path": "reevaluation-dp1.json",
+    "all_equal": true,
+    "cases": 12
+  },
+  "budget": {
+    "case_slots": "12/12",
+    "services": "5/12",
+    "reviews": "2/2",
+    "grouped_repairs": "1/1",
+    "automatic_retries": 0,
+    "conditional_slots": "DP-REAL01 liberada (DIAG-DP-REAL-CLI DIAG_PASS)"
+  },
+  "resources": {
+    "units": 16,
+    "all_released": true,
+    "unit_prefix": "cvg-dx100-dp1-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "network": "nenhuma (namespace só com lo)",
+    "max_loadavg_at_service_start": 9.81,
+    "load_waits_s": 0.0,
+    "max_pids_peak": 35,
+    "max_memory_peak_bytes": 60485632,
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-dp1-20261019 (HEAD destacado)",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-dp1-runtime-20261019 (/dist staged, attempts)"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 112,
+    "by_status": {
+      "expected_empty": 112
+    },
+    "central_catalog": "não editado (merge pelo Lead)"
+  },
+  "capability": "nenhuma capability do kernel nem privilégio (Q4, leitura confirmada pelo Lead); CAP-DP-* são mecanismos de harness sem privilégio",
+  "review": {
+    "R1": "REVISE (0 P1, 3 P2, 6 P3) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt",
+    "critic": "subagente novo por rodada, somente leitura; o executor grava brief e veredito sem edição",
+    "repair": "repair-r1.json (1/1)",
+    "R2": "APPROVE (0 P1, 0 P2, 6 P3) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt",
+    "disposition": "review-r2/executor-disposition.json"
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade. NO_BUILD_LINK_DECLARED em todo acceptance não CONTROL.",
+  "updated_at": "2026-10-20T03:11:10.163262+00:00"
+}

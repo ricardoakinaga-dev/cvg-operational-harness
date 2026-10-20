@@ -1,0 +1,418 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-2",
+  "lead": "CONT-20261018-D9EF",
+  "track": "T1 com execução local contida (serviços transientes próprios, sem rede, sem provider, sem dado real)",
+  "status": "COMPLETED_LOCAL",
+  "git": {
+    "candidate_worktree": "/mnt/dados/cvg-work/cvg-codex100-c32-20261019",
+    "base": "20daa7c75 (recibo do C3-1)",
+    "branch": "nenhuma (HEAD destacado)",
+    "push": "não",
+    "pr": "não"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-c32-runtime-20261019",
+  "spec_inputs": {
+    "folder": "inputs/spec-c3 (cópia byte a byte de ../sdk-source-continuation-3-spec), inputs/spec-r4, inputs/spec-2b, inputs/c31-review (review.json, executor-disposition.json e next-task.json do C3-1)",
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "8c31f2df9da26d70232b1313568ad4f4c54df2fc7293e09d4f085d2d688126be",
+      "result": "PASS"
+    },
+    "cases_c3_2_sha256": "9881180dff444b9193965a9ae85af0b52bbd07a55e4386118b803b3237a06849",
+    "user_decision_q4": "inputs/user-decision-distributed-profile-20261019.json (Q4: DENY_NEW_CAPABILITY)",
+    "lead_decision_f01": "inputs/lead-decision-f01.json (errata T1 do passo 13 do 2B-PY13E, aplicada ao C3-PY13ER pelo D3-05)"
+  },
+  "implementation": {
+    "layout": "Uma pilha Python no host (base python/ do 2B-2) com channel.py, control-client.py e acceptance.py vindos do C3-1 (R1-F02, plan_binding R1-F03 e autoteste R1-F04 já aplicados); um source freeze, um identity freeze, um diag-admission, budget.json e case-ledger.json; serviços sempre em série. Pilha TypeScript (tslane/, node/) não reusada.",
+    "D3-01": "python/channel.py aceita C3-PY* e C32-CTRL01; supervisor e avaliador ligam cases-c3-2.json por sha (9881180d…); 14 vagas (13 SDK + C32-CTRL01), C3-PY02 condicional ao DIAG-PY-PROCWITNESS (autotestes).",
+    "D3-04": {
+      "a": "INPUT_MARKERS ($TextInput, $ImageInput, $LocalImageInput, $SkillInput, $MentionInput, $ExternalMessage) reconstruídos em value() como as classes públicas de openai_codex, só no modo sdk; fora da lista ou em diagnóstico lança.",
+      "b": "fault.install com lista fechada de alvos por modo: sdk = CodexClient.pause_goal, cancel_goal_operation, _write_message, next_login_notification; diag2b = OwnFaulty.work/cleanup e OwnC3Client._write_message/next_login_notification/cleanup; modos e exceções do 2B-2, sem modo novo.",
+      "c": "ganchos por identidade em _GoalOperationState.finish, CodexClient.reserve_goal_operation, cancel_goal_operation, unregister_goal_operation e next_login_notification (R2-F04), pelo mecanismo de ganchos existente; o validador confere os alvos sobre as fontes do pin por ast.",
+      "d": "sondas em slots (TurnHandle._subscription, TurnResult) pela leitura estática existente; E3-08: resumo {class: TurnResult} por jeq."
+    },
+    "D3-05": "wait_class lido do passo (WAIT_APIS: thread.join, hook.wait, excepthook.wait, worker.join, probe.until, worker.parked, worker.still_parked); sem o campo vale HARNESS_PRECONDITION (E2B-14); WAIT_RESULT registra classe, ok, thread_started e thread_alive (null sem thread_name); CLIENT_EFFECT segue; CLIENT_EFFECT_UNLESS_ALIVE segue com thread nunca iniciado ou terminado e lança CaptureFailure com thread vivo (threading.enumerate); registro de threads = HookSet.seen_threads (threading.setprofile do hook.install), publicado no marco THREAD_REGISTRY do epílogo. A tabela CLIENT_EFFECT_WAITS do driver 2B-2 foi retirada. Ver DV-C32-01.",
+    "D3-06": {
+      "source_freeze": {
+        "path": "source-freeze-r4-c32.json",
+        "sha256": "ab262e3ed3a67bb09184b519a3d5a6eecebca047855edb583c6814f8b2937b37",
+        "files": 36
+      },
+      "identity_freeze": {
+        "path": "identity-freeze-r4-c32.json",
+        "sha256": "e996c01224aeeca8de2830cf78a0252f75802226eed2e10af09258a54b415d61"
+      },
+      "order": "autotestes e validador -> source freeze -> identity freeze -> 10 DIAG -> diag-admission -> CONTROL -> 13 vagas SDK em ordem de vaga"
+    },
+    "D3-07": "C32-CTRL01 = 2B2-CTRL01 com só o último elemento do argv trocado (autoteste); control-client.py do C3-1.",
+    "D3-08": {
+      "R1-F02": "acceptance.py do C3-1 (expand_parts, Seq e capture_extra dentro do try -> regra 3); autotestes com os três alvos.",
+      "R1-F03": "plan_binding na reavaliação contra case-plan.json ligado pelo source freeze e os passos de barreira do case_input; autoteste positivo e negativo. Ver DV-C32-02: as pastas não registram o sha do arquivo de plano.",
+      "R1-F04": "autoteste positivo e negativo de zombie_t_ns em no_termination_before."
+    },
+    "erratum_T1_lead_decision_f01": "Aplicada ao C3-PY13ER conforme cases-c3-2.json: passos 11 (hook.wait), 12 (thread.join) e 13 (excepthook.wait) com wait_class CLIENT_EFFECT_UNLESS_ALIVE e thread_name codex-goal-start-cleanup; o known_bad pular o cleanup termina em MISMATCH (autoteste E3-07 a), alvo chamado duas vezes e thread vivo no estouro em INVALID_CAPTURE (b, c).",
+    "evaluator_clauses": [
+      "E3-01 tabela de cases-c3-2.json, R3-12 e classe/oráculo herdados conferidos",
+      "E3-07 wait.client_effect_recorded (sanidade) e fault.fired_as_declared com zero_calls_client_effect_unless_started lido do THREAD_REGISTRY; autotestes (a), (b), (c) e C3-PY08 com W1 estacionado",
+      "E3-08 TurnResult por jeq e sondas estáticas",
+      "E3-09 nenhuma atribuição de MISMATCH fora da adjudicação"
+    ],
+    "carry_over_c31_r1": {
+      "C31-ADM/R1-F01": "aplicado em python/acceptance.py termination_form: zombie 15, ou PID ausente sem zombie observado; zombie 9 seguido de ausência é recusado (autoteste negativo).",
+      "C31-ADM/R1-F02": "não aplicável: o driver TypeScript (node/ts-driver.mjs) não é reusado no C3-2; segue carregado para a próxima unidade que o reusar.",
+      "C31-ADM/R1-F03": "não aplicável: o interpretador TypeScript não é reusado no C3-2; segue carregado.",
+      "C31-ADM/R1-F04": "registrado: o C3-2 não usa SUSPENDED (só Python); o registro para o BIND fica como está."
+    },
+    "carry_over_spec_r2": {
+      "C3-SPEC/R2-F03": "(1) hook.wait do passo 11 do C3-PY13ER usa thread_name nos dois sentidos (filtro dos eventos e thread vigiado), os dois codex-goal-start-cleanup; (2) o autoteste (c) aceita INVALID_CAPTURE (regra 4 no avaliador; no driver real a CaptureFailure dá regra 1); (3) o nunca iniciou do fault vem do mesmo registro que preenche WAIT_RESULT.thread_started (HookSet.seen_threads), ver DV-C32-01; (4) espera CLIENT_EFFECT sem thread_name tem thread_started e thread_alive null; (5) os textos de CLIENT_EFFECT valem para as duas classes.",
+      "C3-SPEC/R2-F04": "gancho por identidade em CodexClient.next_login_notification (C3-PY17) coberto pelo DIAG-PY-C3VOCAB e pelo validador."
+    },
+    "deviations": [
+      {
+        "id": "DV-C32-01",
+        "kind": "FINDING_DISCLOSED",
+        "text": "Registro de threads incompleto por reuso de ident: HookSet._profile registra o nome só no primeiro evento de um threading.get_ident() novo, e o CPython reusa o ident de thread terminado. No C3-PY13ER o thread codex-goal-start-cleanup rodou h_stop (HOOK_EVENT seq 29) e o EXCEPTHOOK_RECORD, o fault disparou uma vez (FAULT_SCOPE removed calls 1), mas THREAD_REGISTRY não o lista; WAIT_RESULT dos passos 11, 12 e 13 registrou thread_started false e o passo 12 (thread.join) ok false. No DIAG-PY-BARRIER o thread cvg-own-raiser também falta no registro (nenhuma espera dependia dele). Reproduzido offline em registry-ident-reuse-repro.json (tools/repro_registry_ident_reuse.py: 50/50 com ident reusado e segundo thread ausente; o gêmeo com threading.local registra 50/50).",
+        "impact": "Nenhum desfecho muda: no C3-PY13ER nunca iniciou e já terminou levam à mesma decisão (seguir), o thread não estava vivo, o fault disparou com contagem 1 (a regra de zero chamadas não foi usada) e wait.client_effect_recorded passou. A telemetria thread_started dos passos 11 a 13 e o ok do passo 12 estão errados. Risco geral: o bug só produz falso nunca iniciou; com zero chamadas isso poderia aceitar como efeito do cliente uma captura que deveria ser INVALID_CAPTURE (atribuição só por adjudicação, E3-09); não produz PASS falso nem esconde thread vivo (vivo vem de threading.enumerate).",
+        "action": "Sem reparo da evidência executada e sem nova execução (0 retries, vagas de uso único). Correção proposta para a próxima unidade que reusar o driver: flag por thread com threading.local() no lugar do conjunto de idents, com autoteste de dois threads em sequência."
+      },
+      {
+        "id": "DV-C32-02",
+        "kind": "FINDING_DISCLOSED",
+        "text": "O supervisor do C3-2 (base 2B-2) não grava case_plan_file no profile-manifest.json (o supervisor Python do C3-1 gravava). Na reavaliação, plan_binding_ok fica false nas 14 pastas só pelo problema case folder records another plan file (registro ausente); o plano da pasta é igual à entrada de case-plan.json ligada pelo sha da source-freeze e cobre exatamente os passos de barreira (reevaluation-c32.json#/all_plan_binding_content_ok true). O autoteste R1-F03 usava manifestos sintéticos com o registro e não pegou a falta.",
+        "impact": "Nenhum desfecho muda; a ligação do plano fica provada pelo conteúdo, não pelo sha registrado na pasta.",
+        "action": "Sem reparo da evidência executada. Correção na próxima unidade: gravar case_plan_file {path, sha256} no manifesto e um autoteste sobre o manifesto real do supervisor."
+      },
+      {
+        "id": "DV-C32-03",
+        "text": "thread.join por nome com registro ativo: thread sem instância viva e ausente do registro dá ok false (nunca iniciou), em vez do já terminou do R2-F02 do 2B-2; sem registro (hook.install ausente) mantém o sentido do 2B-2 (autoteste do DIAG-PY-FAULTCUT). Com o DV-C32-01, o passo 12 do C3-PY13ER registrou ok false com o thread já terminado."
+      },
+      {
+        "id": "DV-C32-04",
+        "text": "Com a tabela CLIENT_EFFECT_WAITS retirada (D3-05), toda espera sem wait_class é HARNESS_PRECONDITION, inclusive worker.join; nenhum caso do C3-2 dependia da tabela além do C3-PY08 passo 9, que declara CLIENT_EFFECT.",
+        "corrected_text_r1_f04": "Com a tabela CLIENT_EFFECT_WAITS retirada (D3-05), toda espera sem wait_class é HARNESS_PRECONDITION. O worker.join, que no 2B-2 era CLIENT_EFFECT fixo no código do driver (não na tabela), também passou a HARNESS_PRECONDITION sem o campo; os passos herdados DIAG-PY-BARRIER 12 e 15 e DIAG-PY-BEFOREREPLY 7 foram requalificados assim e passaram; o C3-PY08 passo 9 declara CLIENT_EFFECT (texto corrigido pelo R1-F04)."
+      },
+      {
+        "id": "DV-C32-05",
+        "text": "FAULT_TARGETS fecha por modo os alvos do fault.install: os do 2B-2 (pause_goal, cancel_goal_operation) e os novos do D3-04 (b); alvo fora da lista lança (controle negativo do validador)."
+      },
+      {
+        "id": "DV-C32-06",
+        "text": "Passo diag.expect_capture_failure só no modo diag2b (DIAG-PY-C3VOCAB, passos 21 e 22): executa uma espera e exige CaptureFailure, para provar dentro de um serviço que thread vivo no estouro e espera sem classe invalidam; recusado fora do diagnóstico."
+      },
+      {
+        "id": "DV-C32-07",
+        "text": "DIAG-PY-PROCWITNESS é a linha do 2B-1 requalificada e serve só de porta para o C3-PY02 (decisão RUN em diag-admission-c32.json)."
+      }
+    ]
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 46,
+    "failed": 0
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": 17,
+    "negative_controls": 17
+  },
+  "diagnostics": {
+    "admission": {
+      "path": "diag-admission-c32.json",
+      "sha256": "9bc0303a2d4c537a2f6b3194a77527eb14098e36947694692500453f505b9d4c"
+    },
+    "passes": {
+      "DIAG-PY-RPC": {
+        "dir": "diagnostics/f789cb8a1c19-DIAG-PY-RPC",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-STAGE": {
+        "dir": "diagnostics/0b547652a6c1-DIAG-PY-STAGE",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-UNSCRIPTED": {
+        "dir": "diagnostics/e98070fe78df-DIAG-PY-UNSCRIPTED",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-ASYNC": {
+        "dir": "diagnostics/d33432282a9a-DIAG-PY-ASYNC",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-BARRIER": {
+        "dir": "diagnostics/596a3e3e25ad-DIAG-PY-BARRIER",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-BEFOREREPLY": {
+        "dir": "diagnostics/c9da5fcfb16e-DIAG-PY-BEFOREREPLY",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-FAULTCUT": {
+        "dir": "diagnostics/6ea8b098967b-DIAG-PY-FAULTCUT",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-LOGIN": {
+        "dir": "diagnostics/3904b8ced8bd-DIAG-PY-LOGIN",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-PROCWITNESS": {
+        "dir": "diagnostics/55913d64c81c-DIAG-PY-PROCWITNESS",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-C3VOCAB": {
+        "dir": "diagnostics/64a62cb4a303-DIAG-PY-C3VOCAB",
+        "verdict": "PASS"
+      }
+    },
+    "failures": 0,
+    "conditional_slots": {
+      "C3-PY02": "RUN"
+    }
+  },
+  "control": {
+    "case": "C32-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [["wire.no_turn_interrupt", "client"]],
+    "gate": "MISMATCH pela regra 6 só com wire.no_turn_interrupt, sanidades aprovadas, antes dos casos SDK",
+    "gate_passed": true,
+    "counts_as_sdk_observation": false
+  },
+  "cases": {
+    "sdk_counts": {
+      "PASS_CLIENT_OBSERVATION": 13,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "rows": [
+      {
+        "slot": 14,
+        "case": "C32-CTRL01",
+        "outcome": "MISMATCH",
+        "composition_rule": 6,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C32-CTRL01-5371ae0237b4"
+      },
+      {
+        "slot": 1,
+        "case": "C3-PY02",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": true,
+        "dir": "cases/C3-PY02-678876f5831c"
+      },
+      {
+        "slot": 2,
+        "case": "C3-PY03",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY03-d15bc656fc85"
+      },
+      {
+        "slot": 3,
+        "case": "C3-PY05",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY05-36d4abcb1b33"
+      },
+      {
+        "slot": 4,
+        "case": "C3-PY08",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY08-116915d1c1a9"
+      },
+      {
+        "slot": 5,
+        "case": "C3-PY12",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY12-b5143763fabc"
+      },
+      {
+        "slot": 6,
+        "case": "C3-PY13H",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY13H-2fe035608e3d"
+      },
+      {
+        "slot": 7,
+        "case": "C3-PY13F",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY13F-f3880c6954cc"
+      },
+      {
+        "slot": 8,
+        "case": "C3-PY13ER",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY13ER-94b0a3389572"
+      },
+      {
+        "slot": 9,
+        "case": "C3-PY14",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY14-b92bfb1e9408"
+      },
+      {
+        "slot": 10,
+        "case": "C3-PY15A",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY15A-7dd4b5a61437"
+      },
+      {
+        "slot": 11,
+        "case": "C3-PY16S",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY16S-f06e7a889b77"
+      },
+      {
+        "slot": 12,
+        "case": "C3-PY17",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY17-bdeedd4d91c3"
+      },
+      {
+        "slot": 13,
+        "case": "C3-PY18",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "conditional": false,
+        "dir": "cases/C3-PY18-b04fd391907d"
+      }
+    ]
+  },
+  "reevaluation": {
+    "path": "reevaluation-c32.json",
+    "predicate_level_equal": true,
+    "outcome_equal": true,
+    "plan_binding_ok": false,
+    "plan_binding_content_ok": true,
+    "cases": 14,
+    "note": "plan_binding_ok false só pelo registro case_plan_file ausente (DV-C32-02)"
+  },
+  "findings_disclosed": {
+    "DV-C32-01": {
+      "repro": "registry-ident-reuse-repro.json",
+      "repro_sha256": "6ec4bbf340538986438af59d2511f627d45668287ba61ace49c824de3bddcde6",
+      "summary": {
+        "frozen_HookSet": {
+          "trials": 50,
+          "ident_reused": 50,
+          "second_missing": 50,
+          "second_missing_when_reused": 50
+        },
+        "local_flag_twin": {
+          "trials": 50,
+          "ident_reused": 50,
+          "second_missing": 0,
+          "second_missing_when_reused": 0
+        }
+      }
+    },
+    "DV-C32-02": {
+      "evidence": "reevaluation-c32.json#/plan_file_record_absent"
+    }
+  },
+  "budget": {
+    "case_slots": "14/14",
+    "services": "10/12",
+    "reviews": "1/2",
+    "grouped_repairs": "0/1",
+    "automatic_retries": 0,
+    "conditional_slots": "C3-PY02 rodou (DIAG-PY-PROCWITNESS DIAG_PASS)"
+  },
+  "resources": {
+    "units": 24,
+    "all_released": true,
+    "prefix": "cvg-dx100-c32-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "network": "nenhuma",
+    "mnt_ia": "não tocado",
+    "max_loadavg_at_service_start": 1.97,
+    "load_waits": 0,
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-c32-20261019",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-c32-runtime-20261019"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 48,
+    "central_catalog": "não editado (merge pelo Lead)",
+    "by_status": {
+      "expected_empty": 48
+    }
+  },
+  "capability": "nenhuma capacidade nova (Q4 negada pelo usuário): sem testemunha privilegiada, rede, artefato distribuído ou injeção de falha nova",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade. Atribuição de MISMATCH só por adjudicação (E3-09).",
+  "updated_at": "2026-10-20T01:49:52.581414+00:00",
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "subject": "review-freeze-r1.json",
+      "subject_sha256": "c758a732d1d1b465f6ccc3510508711337fe8beb25b6508ef0ca1f0c7d77930b",
+      "verdict": "APPROVE",
+      "erratum_t1": "CONFORME",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 4
+      },
+      "declared_findings": {
+        "DV-C32-01": "P3",
+        "DV-C32-02": "P3"
+      },
+      "disposition": "review-r1/executor-disposition.json"
+    }
+  },
+  "adjudication": "adjudication-r1.json",
+  "next_task": "next-task.json",
+  "closing_documents": [
+    "review-r1/executor-disposition.json",
+    "adjudication-r1.json",
+    "next-task.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r1-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ]
+}

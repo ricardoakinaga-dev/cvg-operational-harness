@@ -1,0 +1,82 @@
+HISO005-P2-BUILD-0244 — BUILD local da SPEC0244 (sha256 50463db7…), Claude Code, CONT-20261018-D9EF
+
+COMMIT (só na candidata detached /mnt/dados/cvg-work/cvg-hiso005-build0244-20261019)
+  fd4d641e8f28 feat(boundary): HISO-005 BUILD0244 ESM module shape in the B6 kernel (star re-export, refused class)
+  Parent 1073a9dd (cabeça do PR #8, ainda aberto). Seis caminhos:
+  - scripts/boundary-semantic-engine.mjs (E1, E2 e versão semantic-kernel-v5-esm-module-shape);
+  - tests/b6-0244-esm-module-shape.test.js, novo, com 50 casos;
+  - literal de versão migrado em 4 testes B6, como registrado no contrato.
+  Promoção preparada e não aplicada em promotion-fd4d641e8f28.json e .patch.txt. Sem push, PR ou deploy.
+
+VEREDITOS (crítico novo, não-fork, 2 rodadas)
+  - R1: REVISE, com 4 obrigatórios e 7 P3, todos corrigidos na congelada r2:
+    - identidade de namespace reexportado;
+    - precedência discriminante;
+    - listas tupla a tupla;
+    - folga de uso declarada.
+  - R2: REVISE, com 1 obrigatório (R2-01) e 2 P3.
+  - AVISO AO LEAD: R2-01 foi corrigido DEPOIS do orçamento de crítica, sem terceira rodada.
+    - A mudança: `export * as ns from m` passa a ter a identidade sentinela arquivo#*namespace*ns, que não colide com uma ligação local `ns`.
+    - Testes F37/F38 adicionados.
+    - Diff completo em freeze-r2-to-r3.diff.txt: 1 linha de código, comentário e 1 teste parametrizado.
+    - Conferência:
+      - os bytes finais do teste falham F37/F38 com o engine r2 (48/50) e passam com o r3 (50/50);
+      - a raiz real tem 8 `export * as` e nenhuma colisão;
+      - a v5r3 é igual à v5r2 tupla a tupla.
+
+GATES
+  - Testes, sempre com os bytes congelados r3:
+    - novo 50/50;
+    - focal B6 com pare100 e product-boundary 872/872;
+    - perfil nativo 79/79.
+  - certify (Node22) 16/16 PASS com PG próprio em 56262 e portas 3448/4448:
+    - unit 6109/6109;
+    - decisão CONDITIONAL_GO, AAA_CONTROLLED.
+  - Consumidor fresco PASS: 207 exports documentados e 76 de runtime.
+
+B6 NA RAIZ 228e7918 (receita com escopo, mesmas referências; normal = strict)
+  - Antes, v4: 13.521 diagnósticos, 12.631 tuplas e 890 origens. A v4 da candidata reproduz o oficial.
+  - Depois, v5: 12.283 diagnósticos (−1.238), 11.393 tuplas e 890 origens.
+  - Nas duas: 0 provas, 0 violações, validation true e corpo COMPLETED.
+  - Somem 1.541 tuplas:
+    - 1.402 exports ausentes;
+    - 48 estrelas agora modeladas;
+    - 10 nomes de classe;
+    - 81 propagações no cone.
+  - Aparecem 303:
+    - 183 UNKNOWN_EXPORT;
+    - 56 RUNTIME_DECLARATION;
+    - 41 EXPORTED_MUTABLE_STATE;
+    - 23 outras.
+  - A conservação da §3.3 passa tupla a tupla, com o superconjunto e com o conjunto estrito de módulos tocados.
+  - B6 continua INCOMPLETE.
+
+PROVEN NOVOS
+  - Nenhum na raiz real.
+  - Em fixtures, só os do teste novo: 13 casos com estrela qualificada, UNKNOWN na v4 e PROVEN na v5 (lista em proven-fixtures.json). Exemplos:
+    - `entry.js: export * from './a.js'` + `a.js: export const answer = 42`, que dá PROVEN com K5 dependente da fonte;
+    - barril simples;
+    - `export * as ns` qualificado;
+    - precedência explícita, 7 casos;
+    - type-only que não mascara;
+    - mesma ligação por vários caminhos, inclusive de namespace.
+  - Nenhuma asserção preexistente mudou, salvo o literal de versão.
+
+RISCO
+  - Os contextos subiram de 145 para 229, contra o teto de 256 (folga de 27).
+  - O pico é z.object do zod, agora conhecido pelas estrelas do zod. Cada schema z.object novo no código avaliado consome folga.
+  - Estourar o teto corta o corpo da medição (BODY_CUT). Detalhe em usage-margins.json.
+
+RECURSOS
+  - PG cvg-hiso005-build0244-pg parado e removido; 56262/3448/4448 livres.
+  - Saídas do certify copiadas para certify-r1-artifacts/; certification/ da candidata restaurada para o HEAD.
+  - Runtime e worktree eval-228e removidos; nenhum processo vivo (runtime-release-receipt.json).
+  - A candidata fica como âncora do commit.
+
+TAMANHO DA EVIDÊNCIA
+  - Ficam os relatórios completos da v4 e da v5 final (r3).
+  - Os relatórios das cópias diagnósticas e das rodadas r1/r2 viraram digests em pruned-reports.json:
+    - SHA do gz e do payload;
+    - hashes dos multiconjuntos de diagnósticos e tuplas.
+  - Todas as cópias da v4 têm o mesmo multiconjunto de tuplas, e o mesmo vale para todas as cópias da v5.
+  - A pasta caiu de 51 MB para 17 MB.

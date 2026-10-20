@@ -1,0 +1,286 @@
+{
+  "kind": "CAPABILITY_CONTRACTS_DP",
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "interpretation": "O pedido da unidade ('sem capability nova') foi lido no sentido da Q4 da decisão do usuário: capability do kernel ou privilégio (CAP_SYS_ADMIN, CAP_SYS_PTRACE, fanotify, eBPF). Nenhuma é pedida. Pela regra de classificação das especificações anteriores, os CAP-DP-* são capacidades novas de harness: seguem o mesmo regime das capacidades do SPECIFY-2B (contrato, autotestes offline, DIAG próprio quando rodam serviço e delta declarado no freeze). O CAP-DP-ARTIFACT-CHECK não roda serviço e não tem DIAG, só autotestes. Esta leitura fica para confirmação do Lead. O servidor de loopback da decisão do Lead não é usado (motivo em not_used).",
+  "lead_confirmation_requested": true,
+  "capabilities": [
+    {
+      "id": "CAP-DP-STAGE",
+      "fit_name": "staging do cache",
+      "delta": "DDP-02 e DDP-11",
+      "contract": [
+        "Lê os arquivos compactados do cache só em memória (tarfile e zipfile), confere o sha256 de cada arquivo contra acquisition-ledger.json e o de cada membro contra artifact-metadata.json, e escreve num diretório de trabalho novo em /mnt/dados/cvg-work (fora de docs/), um por sub-lote, apagado no fim do sub-lote.",
+        "Preserva o modo de cada membro (bits de permissão do tar; external_attr >> 16 do zip): 0755 para o ELF e os scripts de bin, 0644 para o resto; diretórios 0755; dono é o usuário do serviço.",
+        "Monta o resultado só-leitura em /dist dentro do sandbox, no layout de staging.layout; nenhum instalador, gerenciador ou script de pacote roda.",
+        "Materializa as árvores de fixture de cada caso em /fixture, só-leitura: copy_of_member (bytes do membro por sha, modo declarado ou o do membro), file (conteúdo e modo), json (json.dumps do valor com separators (',', ':') e ensure_ascii False, mais '\\n', modo 0644), dir (0755), symlink (os.symlink com o alvo absoluto declarado), synthetic_child e copy_of_profile (bytes do arquivo próprio pelo sha do source freeze, modo declarado).",
+        "O cache da aquisição nunca é escrito; divergência de sha em qualquer ponto é INVALID_CAPTURE antes do primeiro passo."
+      ],
+      "observes": "sha256 e modo de cada arquivo do staging e das fixtures",
+      "injects": "nada",
+      "privilege": "Nenhum: arquivos do usuário e bind só-leitura no bwrap.",
+      "layout": [
+        {
+          "archive": "A7",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-sdk/"
+        },
+        {
+          "archive": "A2",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex/"
+        },
+        {
+          "archive": "A3",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-linux-x64/"
+        },
+        {
+          "archive": "A4",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-responses-api-proxy/"
+        },
+        {
+          "archive": "A1",
+          "prefix": "",
+          "to": "/dist/py/site/"
+        }
+      ],
+      "selftests_offline": [
+        "membro com sha divergente recusado",
+        "arquivo compactado divergente recusado",
+        "árvore de fixture com cópia divergente recusada",
+        "modos preservados (0755 para ELF e scripts, 0644 para o resto) num tar.gz e num zip próprios",
+        "symlink criado com o alvo exato",
+        "tentativa de escrita em /dist e /fixture dá EROFS",
+        "nada escrito sob docs/"
+      ],
+      "diag": {
+        "id": "DIAG-DP-STAGE",
+        "own_code": "Staging de um tar.gz e de um wheel próprios e dos arquivos reais do cache num diretório novo; leitura de volta dentro do sandbox por um script próprio.",
+        "pass": "Todos os sha e modos como declarados, symlink com o alvo exato, escrita em /dist e /fixture recusada com EROFS.",
+        "on_fail": "Para o sub-lote."
+      },
+      "t3": "Não exige T3: código próprio de evidência, sem privilégio, sem contrato público do CVG.",
+      "used_by": {
+        "DP-1": [
+          "DP-PK01A",
+          "DP-PK02A",
+          "DP-PK02R",
+          "DP-PK03A",
+          "DP-PK04A",
+          "DP-REAL01",
+          "DP-PK05A",
+          "DP-PK06A",
+          "DP-PK07A",
+          "DP-PK08A"
+        ],
+        "DP-2": ["DP-PY19B", "DP-PY19C", "DP-PY02P"]
+      },
+      "sub_lots": ["DP-1", "DP-2"]
+    },
+    {
+      "id": "CAP-DP-NODE-DRIVER",
+      "fit_name": "driver Node para artefatos publicados",
+      "delta": "DDP-03",
+      "contract": [
+        "Estende o vocabulário do ts-driver.mjs admitido no 2AC com: import {module, as}; shim.platform {platform, arch} e shim.restore; new Codex {sdk, options, as}; startThread e run (vocabulário 2A); probe {id, path}; file.sha256 {id, path_from_probe}; wrapper.run {script, argv, env, cwd, stdin, preload_shim, send_signal, as}; child.program {id, program}.",
+        "Loader (delta sobre o extension-loader.mjs do 2AC): entradas de SDK admitidas são as URLs file: de /dist/npm/node_modules/@openai/codex-sdk/dist/index.js e de cada /fixture/**/@openai/codex-sdk/dist/index.js cujos bytes têm o sha do membro A7:package/dist/index.js (conferido pelo loader antes de carregar). Para um pai que é entrada admitida, os especificadores nus da lista fechada ['child_process', 'fs', 'module', 'os', 'path', 'readline'] resolvem para node:<nome>; node:* segue permitido; qualquer outro especificador é negado com ERR_CVG_LOADER_DENIED. Negação do loader é falha de harness (INVALID_CAPTURE), nunca MISMATCH.",
+        "Resolução de pacotes: sem NODE_PATH; /lib/node, $HOME/.node_modules e $HOME/.node_libraries não existem no sandbox, então só as árvores declaradas resolvem.",
+        "import que lança por outro motivo é API_ERROR do passo, julgado por api.dp_steps_exact. Passo cujo alias não foi ligado porque um passo anterior divergiu é registrado NOT_REACHED e não acrescenta falha (EDP-07).",
+        "probe lê só propriedades de dados próprias ao longo do caminho (sem chamar getter; acessor é recusado com INVALID_CAPTURE); inclui campos privados só no TypeScript, como exec, que no dist são propriedades comuns.",
+        "wrapper.run executa, sem o loader do driver, /runtime/node [--import file:///profile/dp-platform-shim.mjs?platform=<p>&arch=<a>] <script> <argv...> como filho do driver, com env exatamente o declarado (nada herdado), cwd declarado, stdin /dev/null, stdout e stderr capturados (até 64 KiB cada); o passo assenta no evento 'close' (exit e stdio fechados), com prazo de 20 s (estouro é INVALID_CAPTURE), e registra WRAPPER_RESULT {as, pid, exit_code, signal, stdout, stderr}.",
+        "preload_shim: módulo próprio que redefine process.platform e process.arch por Object.defineProperty antes do wrapper e grava o registro em /work/shim/<pid>.json; o env não é usado como canal.",
+        "send_signal {after: CHILD_READY}: o driver espera o marcador /work/child/ready-<n> da execução (prazo 10 s, senão INVALID_CAPTURE), lê /proc/<pid do wrapper>/status até o bit do sinal aparecer em SigCgt ou 1000 ms passarem, chama process.kill(pid, sinal) e registra SIGNAL_SENT {signal, sigcgt_bit_seen, waited_ms}.",
+        "Depois do 'close' de cada wrapper.run, o driver varre /proc do namespace de PID do sandbox e registra LEFTOVER {pids} com os processos além dele e dos auxiliares; depois mata os que sobraram (limpeza registrada)."
+      ],
+      "observes": "Resultados e erros do SDK publicado, sondas, exit/sinal/stdout/stderr dos wrappers publicados, SigCgt do wrapper e processos restantes.",
+      "injects": "process.platform e process.arch só no escopo do shim; sinais declarados ao wrapper.",
+      "privilege": "Nenhum: processos filhos do próprio driver e /proc do mesmo usuário e namespace.",
+      "selftests_offline": [
+        "shim restaurado com os valores reais",
+        "wrapper.run de script próprio com preload_shim",
+        "probe recusada em acessor",
+        "loader: especificador nu fora da lista negado para entrada admitida e qualquer nu negado para pai não admitido",
+        "entrada com sha divergente não é admitida",
+        "NOT_REACHED não acrescenta falha",
+        "prazo do 'close' estourado vira INVALID_CAPTURE",
+        "bit de SigCgt lido de um filho próprio com e sem listener",
+        "LEFTOVER detecta um órfão próprio"
+      ],
+      "diag": {
+        "id": "DIAG-DP-NODE",
+        "own_code": "Módulo ESM próprio com os mesmos imports nus do dist, admitido por um sha de teste; script próprio no papel de wrapper (com listener de sinal) e o filho sintético.",
+        "pass": "Import com o mapeamento node:*, negação do especificador fora da lista, wrapper.run com shim e restauração, sinal enviado depois do CHILD_READY com o bit de SigCgt visto, LEFTOVER vazio.",
+        "on_fail": "Para o sub-lote DP-1."
+      },
+      "t3": "Não exige T3: extensão de código próprio de evidência, sem privilégio.",
+      "used_by": {
+        "DP-1": [
+          "DP-PK01A",
+          "DP-PK02A",
+          "DP-PK02R",
+          "DP-PK03A",
+          "DP-PK04A",
+          "DP-REAL01",
+          "DP-PK05A",
+          "DP-PK06A",
+          "DP-PK07A",
+          "DP-PK08A",
+          "DP1-CTRL01"
+        ],
+        "DP-2": []
+      },
+      "sub_lots": ["DP-1"]
+    },
+    {
+      "id": "CAP-DP-SYNTH-CHILD",
+      "fit_name": "filho sintético",
+      "delta": "DDP-04",
+      "contract": [
+        "Script próprio /profile/dp-synth-child.mjs com shebang #!/runtime/node, copiado nas fixtures como synthetic_child; sha no source freeze.",
+        "Programa: lido no início de /work/child/program.json, que o driver escreve antes de cada passo que pode executar o filho (o último child.program, ou o child_script do caso). Nada vem por env (o env do filho é do cliente observado).",
+        "Registro: /work/child/records/<n>.json com n sequencial (criação O_EXCL), escrito e sincronizado antes de qualquer ação terminal: exec_path (process.argv[1]), argv_tail (process.argv.slice(2)), env (o ambiente inteiro; o avaliador julga só as chaves declaradas, ausente = null), stdin (lido até EOF só com read_stdin; nos wrapper.run o stdin é /dev/null), signals (na ordem), program_id, declared_termination e NO_SIGNAL quando for o caso.",
+        "Com ready_barrier ou on_signal: instala listeners de SIGINT, SIGTERM e SIGHUP, depois cria /work/child/ready-<n> (CHILD_READY). Espera limitada: sem sinal em no_signal_timeout_ms (5000), registra NO_SIGNAL e sai com no_signal_exit_code (97).",
+        "self_signal: registra declared_termination {self_signal}, volta a disposição padrão do sinal e chama process.kill(process.pid, sinal). exit_code: registra declared_termination {exit_code} e chama process.exit.",
+        "stdout_jsonl: escreve as linhas declaradas no stdout antes da ação terminal (casos do SDK)."
+      ],
+      "observes": "Caminho de execução, argv, env, stdin e sinais recebidos.",
+      "injects": "Só o término declarado no programa.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "exit code, self-signal (morte pelo sinal) e on_signal",
+        "NO_SIGNAL depois da espera limitada sai com 97",
+        "registro de env com chaves ausentes como null",
+        "marcador CHILD_READY só depois dos listeners",
+        "registro sincronizado antes da ação terminal"
+      ],
+      "diag": {
+        "id": "DIAG-DP-SYNTH-CHILD",
+        "own_code": "Wrapper próprio (sem código do cache) que executa o filho sintético com cada tipo de programa.",
+        "pass": "Registros, marcadores e términos como declarados; NO_SIGNAL em 5 s sem sinal.",
+        "on_fail": "Para o sub-lote DP-1."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "DP-1": [
+          "DP-PK03A",
+          "DP-PK04A",
+          "DP-PK05A",
+          "DP-PK06A",
+          "DP-PK07A",
+          "DP-PK08A",
+          "DP1-CTRL01"
+        ],
+        "DP-2": []
+      },
+      "sub_lots": ["DP-1"]
+    },
+    {
+      "id": "CAP-DP-REAL-CLI-KEYLESS",
+      "fit_name": "binário publicado keyless",
+      "delta": "DDP-05",
+      "contract": [
+        "Só dois usos: codex --version pelo wrapper publicado (DP-REAL01) e app-server --listen stdio:// iniciado pelo SDK, com initialize e close (DP-PY02P). Nunca turn, thread, login, modelo ou proxy.",
+        "Contenção: bwrap --unshare-all (namespace de rede só com lo, sem rota), tmpfs em /work, HOME=/work/home, CODEX_HOME não definido (padrão /work/home/.codex) e vazio no início; env exatamente o fixo, sem nenhuma variável da lista fechada de credenciais.",
+        "Limites de serviço: memory.max 1073741824 e pids.max 256 (o runtime multithread do binário e três processos Node simultâneos no DP-1 não cabem em 32), cota de CPU e RuntimeMaxSec herdados; valem para todo o DP-1, para o DP-PY02P e para os DIAG desta capacidade. Os supervisores admitidos (2AC no DP-1, 2B-2 no DP-2) passam a pedir MemoryMax 1073741824 e TasksMax 256 nesses serviços e conferem os valores na cgroup (service.limits_declared); os outros casos do DP-2 mantêm 536870912 e 32.",
+        "realcli.witness (DP-PY02P): o driver emite WITNESS_REQUEST {pid} depois do PROC_RETAIN (Popen já retornou, o exec terminou) e espera WITNESS_DONE (prazo 5 s, senão INVALID_CAPTURE); o supervisor mapeia o pid pelo NSpid na cgroup, lê cmdline, environ e o stat de /proc/<pid>/exe e lista os filhos diretos do driver; registra REALCLI_WITNESS.",
+        "stdout e stderr do binário: no DP-REAL01 são os do wrapper (capturados); no DP-PY02P o stdout é o canal JSON-RPC do SDK e o stderr é drenado pelo SDK, sem captura própria."
+      ],
+      "observes": "cmdline, environ, executável e filhos do processo publicado; versão derivada pelo SDK; stdout do --version.",
+      "injects": "Nada.",
+      "privilege": "Nenhum: /proc do mesmo usuário; limites de cgroup do serviço do próprio usuário.",
+      "selftests_offline": [
+        "lista fechada de variáveis de credencial recusada",
+        "CODEX_HOME não vazio recusado",
+        "limites 1 GiB e 256 aplicados só nos casos declarados",
+        "REALCLI_WITNESS de um processo próprio de longa duração, lido depois do PROC_RETAIN"
+      ],
+      "diag": [
+        {
+          "id": "DIAG-DP-REAL-CLI",
+          "own_code": "Cliente Node próprio (sem SDK e sem wrapper) que executa o binário do staging com --version, nos limites declarados.",
+          "pass": "Exit 0 em 10 s, nenhuma conexão para fora (namespace só com lo), nada escrito fora de /work.",
+          "on_fail": "Desliga só o DP-REAL01."
+        },
+        {
+          "id": "DIAG-DP-REAL-CLI-APPSERVER",
+          "own_code": "Cliente de controle Python próprio (sem SDK) que inicia o binário do wheel no staging com app-server --listen stdio://, envia initialize e initialized, lê o resultado e encerra por stdin fechado e SIGTERM, nos limites declarados.",
+          "pass": "Resultado JSON-RPC do initialize em 15 s, processo encerrado em 2 s depois do SIGTERM (ou morto e colhido), nada escrito fora de /work.",
+          "on_fail": "Desliga só o DP-PY02P."
+        }
+      ],
+      "t3": "Não exige T3: execução keyless decidida pelo usuário (Q3), sem capability do kernel (Q4).",
+      "used_by": {
+        "DP-1": ["DP-REAL01"],
+        "DP-2": ["DP-PY02P"]
+      },
+      "sub_lots": ["DP-1", "DP-2"]
+    },
+    {
+      "id": "CAP-DP-PY-RUNTIME",
+      "fit_name": "runtime Python por caso",
+      "delta": "DDP-06",
+      "contract": [
+        "driver_runtime.sys_path_runtime: nenhum, /dist/py/site ou um site de fixture, inserido em sys.path[0] antes do primeiro passo e registrado em SYS_PATH.",
+        "runtime.path {insert, purge_modules}: tira o runtime anterior do sys.path, insere o novo em sys.path[0], apaga os módulos listados de sys.modules, chama importlib.invalidate_caches() e registra SYS_PATH."
+      ],
+      "observes": "sys.path e sys.modules do driver.",
+      "injects": "Nada além do sys.path declarado.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "purga de módulo próprio",
+        "sys.path registrado em cada troca",
+        "import depois da purga devolve o módulo do novo site"
+      ],
+      "diag": {
+        "id": "DIAG-DP-PYRUNTIME",
+        "own_code": "Dois sites próprios com um módulo de mesmo nome.",
+        "pass": "Cada import depois da troca vem do site declarado.",
+        "on_fail": "Para o sub-lote DP-2."
+      },
+      "t3": "Não exige T3.",
+      "used_by": {
+        "DP-1": [],
+        "DP-2": ["DP-PY19A", "DP-PY19B", "DP-PY19C", "DP-PY02P"]
+      },
+      "sub_lots": ["DP-2"]
+    },
+    {
+      "id": "CAP-DP-ARTIFACT-CHECK",
+      "fit_name": "verificação de artefato",
+      "delta": "DDP-07",
+      "contract": [
+        "Casos sem processo: o avaliador lê arquivos compactados e metadados do cache, conferindo o sha de cada um contra o registro, e julga campos congelados.",
+        "Extração: package.json pelo JSON das chaves declaradas; WHEEL por linhas 'Chave: valor'; 'final export statement' pelos nomes do último 'export { ... }' do dist; ledger_item pela entrada do registro (nome e tag do caminho da URL, sha256 observado); compare pelo sha256 de cada membro comum; cache_metadata (M7) pela listagem de assets da release (tag_name e, para cada nome declarado, digest e size)."
+      ],
+      "observes": "Campos de manifestos e metadados.",
+      "injects": "Nada.",
+      "privilege": "Nenhum.",
+      "selftests_offline": [
+        "campo divergente dá MISMATCH",
+        "arquivo do cache divergente dá INVALID_CAPTURE",
+        "último export de um dist próprio",
+        "nome ausente da listagem dá MISMATCH"
+      ],
+      "diag": null,
+      "diag_note": "Sem serviço: só avaliador, coberto pelos autotestes offline.",
+      "t3": "Não exige T3.",
+      "used_by": {
+        "DP-1": ["DP-PK09A"],
+        "DP-2": ["DP-PY20A"]
+      },
+      "sub_lots": ["DP-1", "DP-2"]
+    }
+  ],
+  "not_used": {
+    "loopback_peer": {
+      "decision": {
+        "path": "../sdk-distributed-acquisition/lead-decision-loopback-a5.json",
+        "sha256": "ebc114527ed90a6d555b8a6e88e92ca37e65ce1da2e6dd81e7a3446e21cbdd91"
+      },
+      "reason": "Permitido pelo Lead, mas sem uso aqui: o bootstrap do PY20 (_runtime_setup.py) importa release_version, que não está nas entradas do perfil (só o sha no inventário G01), e falha antes de qualquer download; além disso baixa por URL HTTPS fixa do github.com, e servir o A5 por loopback exigiria uma identidade TLS de github.com confiável no sandbox (um proxy local não evita isso). Ver coverage-plan-dp.json#/residuals."
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

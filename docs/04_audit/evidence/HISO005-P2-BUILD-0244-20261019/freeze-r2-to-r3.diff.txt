@@ -1,0 +1,51 @@
+--- r2/scripts/boundary-semantic-engine.mjs	2026-10-20 02:38:25.369272832 -0300
++++ r3/scripts/boundary-semantic-engine.mjs	2026-10-20 01:05:34.106814238 -0300
+@@ -1275,9 +1275,10 @@
+       if (qualified) {
+         // A re-exported namespace is a binding of this module, as in the
+         // pinned Node 22 (two such stars conflict); conservative versus the
+-        // ECMAScript text for `export * as ns from m` (SPEC0244 BUILD R1-01).
++        // ECMAScript text (SPEC0244 BUILD R1-01). It creates no local binding,
++        // so its identity never equals a local one (BUILD R2-01).
+         exports.set(name, namespace)
+-        setIdentity(file, name, file + '#' + name)
++        setIdentity(file, name, file + '#*namespace*' + name)
+         return true
+       }
+       exports.set(name, U)
+--- r2/tests/b6-0244-esm-module-shape.test.js	2026-10-20 02:38:25.369442499 -0300
++++ r3/tests/b6-0244-esm-module-shape.test.js	2026-10-20 01:05:34.299831741 -0300
+@@ -287,6 +287,33 @@
+       )
+     }
+   )
++  it.each([
++    [
++      'a local const exported under another name',
++      "const ns = 1; export { ns as other }; export * as ns from './m.js';",
++      "import * as r from './r.js'; const pick = {1: 7}; export const y = pick[r.ns];"
++    ],
++    [
++      'a namespace import exported under another name',
++      "import * as ns from './m.js'; export { ns as other }; export * as ns from './m2.js';",
++      "import * as r from './r.js'; const pick = {1: 7}; export const y = pick[r.ns.x];"
++    ]
++  ])(
++    '`export * as ns` never shares the identity of a local binding ns (%s)',
++    (_, a, entry) => {
++      const out = refused({
++        'entry.js': entry,
++        'r.js': "export * from './a.js'; export * from './b.js';",
++        'a.js': a,
++        'b.js': "export { other as ns } from './a.js';",
++        'm.js': 'export const x = 1;',
++        'm2.js': 'export const x = 2;'
++      })
++      expect(has(out, 'r.js', 'UNKNOWN_REEXPORT', 'AMBIGUOUS_STAR:ns')).toBe(
++        true
++      )
++    }
++  )
+   it('the same re-exported namespace binding by several paths is not ambiguous', () => {
+     proven({
+       'entry.js':

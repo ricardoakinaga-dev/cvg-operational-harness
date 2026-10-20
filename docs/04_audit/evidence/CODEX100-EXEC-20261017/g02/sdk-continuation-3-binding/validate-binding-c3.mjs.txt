@@ -1,0 +1,289 @@
+// DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3 - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-binding-c3.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a partir das entradas (v5, gaps v5, plano e casos da continuação 3, adjudicações, case-results, acceptance.json, next-task e
+// decisão do usuário) e confere o v6 e as lacunas v6: linhas e cópia do v5, partes creditadas pela tabela arm_discrimination e pelos
+// predicados do acceptance, o guarda E3-07 sem crédito, os registros para o BIND, a resolução dos 77 resíduos, o resto por contrato, as
+// lacunas e a projeção do plano. Roda controles negativos sobre cópias em memória.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const G02 = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02'
+const UNIT = G02 + '/sdk-continuation-3-binding'
+const B2 = G02 + '/sdk-batch-2b2-binding'
+const SPEC = G02 + '/sdk-source-continuation-3-spec'
+const ADM = { 'C3-1': G02 + '/sdk-continuation-3-1-admission', 'C3-2': G02 + '/sdk-continuation-3-2-admission' }
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const shaFile = (p) => sha(readFileSync(p))
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const J = (x) => JSON.stringify(x)
+const rel2abs = (r) => normalize(join(UNIT, r))
+const armId = (l) => l.split(' ')[0]
+
+const v5 = load(B2 + '/coverage-observed-v5.json')
+const gaps5 = load(B2 + '/gaps-review-v5.json')
+const plan = load(SPEC + '/coverage-plan-c3.json')
+const user = load(B2 + '/user-decision-distributed-profile-20261019.json')
+const cases = {}
+for (const f of ['cases-c3-1.json', 'cases-c3-2.json']) for (const c of load(SPEC + '/' + f).cases) cases[c.id] = c
+const adj = {}, cres = {}, nxt = {}, man = {}
+for (const s of Object.keys(ADM)) {
+  adj[s] = load(ADM[s] + '/adjudication-r1.json'); cres[s] = load(ADM[s] + '/case-results.json')
+  nxt[s] = load(ADM[s] + '/next-task.json'); man[s] = load(ADM[s] + '/unit-manifest.json').files
+}
+const subOf = {}, crRow = {}
+for (const s of Object.keys(ADM)) for (const r of cres[s].rows) { subOf[r.case] = s; crRow[r.case] = r }
+const accOf = {}
+for (const c of Object.keys(crRow)) {
+  if (crRow[c].kind !== 'SDK') continue
+  const p = ADM[subOf[c]] + '/' + crRow[c].attempt_dir + '/acceptance.json'
+  accOf[c] = { rel: '../' + p.split('/g02/')[1], abs: p, acc: load(p), mpath: crRow[c].attempt_dir + '/acceptance.json' }
+}
+// E3-07: the zero-calls rule is declared only by C3-PY13ER; its only part that depends on it is the skip-cleanup contrary of PY13.B17.
+const zeroCallCases = Object.values(cases).filter((c) => J(c).includes('zero_calls_client_effect_unless_started')).map((c) => c.id)
+const NOT_CREDITED = new Set(['C3-PY13ER|PY13.B17|cleanup pulado quando o resultado já existe'])
+const userDec = Object.fromEntries(user.decisions.map((d) => [d.id.split('-')[0], d.decision]))
+
+function validate(v6, g6) {
+  const E = []
+  const err = (m) => E.push(m)
+  // sources and anchor
+  if (v6.sources.coverage_observed_v5.sha256 !== shaFile(B2 + '/coverage-observed-v5.json')) err('v5 sha differs')
+  if (plan.base.sha256 !== v6.sources.coverage_observed_v5.sha256) err('plan base sha differs from v5 sha')
+  for (const [k, s] of Object.entries(v6.sources)) if (shaFile(rel2abs(s.path)) !== s.sha256) err('source sha differs: ' + k)
+  if (J(zeroCallCases) !== J(['C3-PY13ER'])) err('zero-calls rule declared by other cases: ' + J(zeroCallCases))
+  // rows
+  if (v6.rows.length !== v5.rows.length) err('row count differs')
+  v6.rows.forEach((r, i) => {
+    const r5 = v5.rows[i]
+    if (r.source_contract !== r5.source_contract) err('row order differs at ' + i)
+    if (J(r.carried_from_v5) !== J(r5)) err(r.source_contract + ': carried_from_v5 differs from the v5 row')
+    if (r.status !== r5.status || r.status_v5 !== r5.status || r.status_changed !== false) err(r.source_contract + ': status ' + r.status + ' != ' + r5.status)
+    if (r.whole_requirement_covered !== false || r.functional_receipt !== null || r.parity_credit !== 0) err(r.source_contract + ': receipt or parity')
+    const pr = plan.rows.find((x) => x.source_contract === r.source_contract)
+    if (J(r.cases_c3) !== J(pr ? pr.cases : [])) err(r.source_contract + ': cases differ from the plan')
+    for (const o of r.observations_c3) {
+      const a = accOf[o.case]
+      if (!a) { err(r.source_contract + ': unknown case ' + o.case); continue }
+      if (o.acceptance_service.sha256 !== shaFile(a.abs) || man[subOf[o.case]][a.mpath].sha256 !== o.acceptance_service.sha256) err(o.case + ': acceptance sha')
+      if (o.final_reading !== 'PASS_CLIENT_OBSERVATION' || a.acc.outcome !== 'PASS_CLIENT_OBSERVATION' || o.capture_form !== a.acc.capture_form) err(o.case + ': reading')
+      if (o.failed_predicates.length !== 0) err(o.case + ': failed predicates')
+      const q = o.qualifications.join(' ')
+      if (subOf[o.case] === 'C3-2' && !q.includes('DV-C32-02')) err(o.case + ': missing DV-C32-02 qualification')
+      if (['C3-TS04', 'C3-TS12', 'C3-TS13'].includes(o.case) && !q.includes('zombie com status 15')) err(o.case + ': missing zombie 15 record')
+      if (o.case === 'C3-TS04' && !q.includes('C31-ADM/R1-F04')) err(o.case + ': missing C31-ADM/R1-F04')
+      if (o.case === 'C3-PY13ER' && !(q.includes('C32-ADM/R1-F02') && q.includes('Guarda E3-07 não creditado'))) err(o.case + ': missing step-12 or E3-07 record')
+      if (o.case === 'C3-PY08') {
+        const dv = adj['C3-2'].deviations.find((d) => d.id === 'DV-C32-04').corrected_text
+        if (!q.includes(dv)) err(o.case + ': missing corrected DV-C32-04 text')
+      }
+    }
+  })
+  const counts = { OBSERVED_CLIENT_PARTIAL: 0, OPEN_REQUIRED_FUTURE_PROFILE: 0 }
+  for (const r of v6.rows) counts[r.status]++
+  if (J(counts) !== J(v6.counts) || J(counts) !== J({ OBSERVED_CLIENT_PARTIAL: 33, OPEN_REQUIRED_FUTURE_PROFILE: 11 })) err('counts ' + J(v6.counts))
+  if (v6.status_changes.length !== 0) err('status changes')
+  const open11 = v6.rows.filter((r) => r.status === 'OPEN_REQUIRED_FUTURE_PROFILE').map((r) => r.source_contract)
+  if (J(open11) !== J(['PY19', 'PY20', 'PK01', 'PK02', 'PK03', 'PK04', 'PK05', 'PK06', 'PK07', 'PK08', 'PK09'])) err('open contracts ' + J(open11))
+  for (const s of Object.keys(ADM)) if (J(v6.bound_cases_c3[s]) !== J(adj[s].bind_consumes_only)) err('bound cases ' + s)
+  // parts recomputed from the frozen table and the acceptance
+  const expParts = {}
+  for (const c of Object.values(cases)) {
+    if (c.kind !== 'SDK') continue
+    const ok = Object.fromEntries(accOf[c.id].acc.predicates.map((p) => [p.id, p.ok]))
+    c.arm_discrimination.forEach((a, idx) => {
+      const key = c.id + '|' + idx
+      const passed = a.judged_by.every((p) => ok[p] === true)
+      expParts[key] = { passed, credited: passed && !NOT_CREDITED.has(c.id + '|' + a.arm + '|' + a.contrary), judged: a.judged_by.map((p) => [p, ok[p]]),
+        steps: a.steps, obs: a.observable_if_contrary, arm: a.arm, contrary: a.contrary }
+    })
+  }
+  const seen = new Set()
+  const arms = Object.fromEntries(v6.arms_observed_c3.map((a) => [a.arm_id, a]))
+  for (const a of v6.arms_observed_c3) {
+    let n = 0, cr = 0
+    for (const oc of a.observed_by) {
+      if (oc.acceptance.sha256 !== shaFile(accOf[oc.case].abs)) err(a.arm_id + ': acceptance sha of ' + oc.case)
+      for (const p of oc.parts) {
+        const key = oc.case + '|' + p.entry_index
+        const e = expParts[key]
+        if (!e || e.arm !== a.arm_id || e.contrary !== p.contrary) { err(a.arm_id + ': undeclared part ' + key); continue }
+        if (seen.has(key)) err('duplicate part ' + key)
+        seen.add(key); n++
+        if (J(p.judged_by.map((x) => [x.predicate, x.ok])) !== J(e.judged)) err(a.arm_id + ': judged_by differs from the acceptance in ' + key)
+        if (J(p.steps) !== J(e.steps) || p.observable_if_contrary !== e.obs) err(a.arm_id + ': part text differs ' + key)
+        if (p.credited !== e.credited) err(a.arm_id + ': credit of ' + key + ' is ' + p.credited)
+        if (!p.credited && !p.reason_not_credited) err(a.arm_id + ': missing reason for ' + key)
+        if (p.credited) cr++
+      }
+    }
+    const st = cr === n ? 'DISTINGUISHED' : cr ? 'PARTIAL_CREDIT' : 'NO_PART_CREDITED'
+    if (a.status_c3 !== st || a.parts_total !== n || a.parts_credited !== cr) err(a.arm_id + ': status ' + a.status_c3 + ' != ' + st)
+    if (a.arm_id === 'PY13.B17' && !(a.not_observed_after_c3 || '').includes("pular o cleanup")) err('PY13.B17: skip-cleanup not kept open')
+    if (['C3-TS04'].some((c) => a.observed_by.some((o) => o.case === c)) && !a.qualifications.join(' ').includes('C31-ADM/R1-F04')) err(a.arm_id + ': missing F04')
+  }
+  for (const k of Object.keys(expParts)) if (!seen.has(k)) err('part not bound: ' + k)
+  const nc = Object.entries(expParts).filter(([, e]) => !e.credited).map(([k, e]) => k.split('|')[0] + '|' + e.arm + '|' + e.contrary)
+  if (J(nc) !== J([...NOT_CREDITED])) err('not credited parts ' + J(nc))
+  if (v6.arm_discrimination_consumed.parts_credited !== Object.keys(expParts).length - nc.length) err('credited parts count')
+  if (v6.e3_07.credited !== false || v6.e3_07.parts_not_credited.length !== 1) err('E3-07 credited')
+  // v5 arm states and open arms
+  const open5 = v5.arms_open_explicit_v5.map((a) => a.arm_id)
+  const resolved = open5.filter((x) => arms[x] && arms[x].status_c3 === 'DISTINGUISHED')
+  if (J(v6.arms_open_explicit_v5_resolved) !== J(resolved.sort()) || v6.arms_open_explicit_v6.length !== open5.length - resolved.length) err('open explicit arms')
+  if (J(resolved.sort()) !== J(Object.keys(plan.projection_if_all_pass.explicit_open_arms_v5_targeted).sort())) err('projection of open arms')
+  for (const a of v6.arms_observed_c3) {
+    const in2b = [...v5.arms_observed_2b2, ...v5.arms_observed_2b1_carried].find((x) => x.arm_id === a.arm_id)
+    const inv3 = v5.arms_closed_v3_carried.find((x) => armId(x.arm) === a.arm_id)
+    const exp = plan.new_arm_ids.arms[a.arm_id] ? 'NEW_ARM_ID' : open5.includes(a.arm_id) ? 'V5_OPEN_EXPLICIT' : inv3 ? 'V5_ARM_CLOSED_V3'
+      : !in2b ? 'V5_NO_ARM_RECORD' : in2b.not_observed ? 'V5_ARM_PARTIAL_SCOPE' : in2b.qualification ? 'V5_ARM_QUALIFIED_POSITIVE' : 'V5_ARM_OBSERVED'
+    if (a.v5_state !== exp) err(a.arm_id + ': v5 state ' + a.v5_state + ' != ' + exp)
+    const partial5 = !!((in2b && in2b.not_observed) || (inv3 && inv3.not_observed))
+    if (a.v5_partial_scope !== partial5) err(a.arm_id + ': v5_partial_scope ' + a.v5_partial_scope)
+    if (partial5 && a.status_c3 === 'DISTINGUISHED' && !a.v5_gap_closed_by_c3) err(a.arm_id + ': closure text missing')
+  }
+  // v5 arms with a not-observed side (all v5 lists, including arms_closed_v3_carried): closed by the C3 or remaining side with destination
+  const v5partial = {}
+  for (const x of [...v5.arms_observed_2b2, ...v5.arms_observed_2b1_carried]) if (x.not_observed) v5partial[x.arm_id] = x.not_observed
+  for (const x of v5.arms_closed_v3_carried) if (x.not_observed) v5partial[armId(x.arm)] = x.not_observed
+  const closed = Object.keys(v5partial).filter((i) => arms[i] && arms[i].status_c3 === 'DISTINGUISHED').sort()
+  if (J(v6.arms_v5_partial_closed_by_c3) !== J(closed)) err('partial closed list ' + J(v6.arms_v5_partial_closed_by_c3))
+  const notT = Object.keys(v5partial).filter((i) => !arms[i]).sort()
+  if (J(v6.arms_v5_partial_scope_not_targeted) !== J(notT)) err('partial not targeted list')
+  const remIds = (v6.arms_v5_partial_not_targeted_remaining || []).map((x) => x.arm_id)
+  if (J(remIds) !== J(notT)) err('not-targeted arms without remaining side: ' + J(notT.filter((i) => !remIds.includes(i))))
+  const outIds = (v6.open_items_outside_plan || []).map((x) => x.id)
+  for (const x of v6.arms_v5_partial_not_targeted_remaining || []) {
+    if (x.v5_not_observed !== v5partial[x.arm_id]) err(x.arm_id + ': v5 not_observed text')
+    if (!x.sides.length) err(x.arm_id + ': no side')
+    for (const sd of x.sides) {
+      if (!sd.side || !sd.destination) err(x.arm_id + ': side without destination')
+      const res = v6.residuals_c3.find((r) => r.id === sd.residual)
+      if (!res && !outIds.includes(sd.residual)) err(x.arm_id + ': unknown residual ' + sd.residual)
+      if (res && res.needs_new_decision !== sd.needs_new_decision) err(x.arm_id + ': decision flag differs from ' + sd.residual)
+    }
+  }
+  for (const o of v6.open_items_outside_plan || []) {
+    const rem = v6.remaining_open_by_contract[o.contract]
+    if (!rem.outside_plan_open.some((x) => x.id === o.id)) err(o.id + ': not in remaining of ' + o.contract)
+  }
+  if (!outIds.includes('V6-PY02-ENV')) err('V6-PY02-ENV missing')
+  if (!((arms['TS12.B01'] || {}).not_observed_after_c3 || '').includes('R-TS12-5')) err('TS12.B01: pre-aborted termination not kept open')
+  // records for the BIND
+  const recIds = v6.records_for_bind_applied.map((r) => r.id)
+  for (const id of ['C32-ADM/R1-F02', 'C32-ADM/R1-F04', 'C31-ADM/R1-F04', 'C32-ADM/DV-C32-01', 'C32-ADM/DV-C32-02']) if (!recIds.includes(id)) err('record missing ' + id)
+  const r04 = v6.records_for_bind_applied.find((r) => r.id === 'C32-ADM/R1-F04')
+  if (!r04 || r04.corrected_text_dv_c32_04 !== adj['C3-2'].deviations.find((d) => d.id === 'DV-C32-04').corrected_text) err('DV-C32-04 corrected text')
+  // residuals
+  if (J(v6.residuals_c3.map((r) => r.id)) !== J(plan.residuals.map((r) => r.id))) err('residual ids differ from the plan')
+  for (const e of v6.residuals_c3) {
+    const r = plan.residuals.find((x) => x.id === e.id)
+    let exp, dec
+    if (r.class === 'IN_SPEC') {
+      const parts = Object.entries(expParts).filter(([k, p]) => r.cases.includes(k.split('|')[0]) && r.arms.includes(p.arm))
+      exp = r.id === 'R-PY18-1' ? 'PARTIAL_BY_C3' : parts.length && parts.every(([, p]) => p.credited) ? 'RESOLVED_BY_C3' : 'OPEN_PART_NOT_CREDITED'; dec = false
+      if (!parts.length) err(e.id + ': no part')
+    } else if (r.class === 'OUT_USER_DECISION') {
+      const qs = r.questions
+      const YES = { Q1: 'ADOPT_RELEASE_0.153.4_AS_SEPARATE_PIN', Q2: 'AUTHORIZE_SINGLE_ACQUISITION_CODEX_LIST_ONLY', Q3: 'ACCEPT_KEYLESS_ONLY' }
+      const allYes = qs.every((q) => q in YES && YES[q] === userDec[q])
+      exp = allYes ? 'OPEN_DECIDED_DISTRIBUTED_PROFILE' : qs.includes('Q4') && userDec.Q4 === 'DENY_NEW_CAPABILITY' ? 'OPEN_DENIED_BY_USER' : 'OPEN_NOT_AUTHORIZED'
+      dec = !allYes
+      if (qs.includes('Q5') && !user.decisions.find((d) => d.id.startsWith('Q2')).conditions.includes('Q5') ) err('Q5 status not found')
+    } else {
+      exp = { OUT_T4_GATE: 'OPEN_T4_GATE', OUT_NATIVE: 'OPEN_NATIVE', OUT_NEW_CAPABILITY: 'OPEN_NEW_CAPABILITY', OUT_NONDETERMINISTIC: 'OPEN_NO_DETERMINISTIC_PATH',
+        OUT_PLATFORM_LIMIT: 'OPEN_PLATFORM_LIMIT', OUT_NOT_APPLICABLE: 'NOT_APPLICABLE_AT_PIN', OUT_UNREACHABLE: 'UNREACHABLE_AT_PIN', ALREADY_OBSERVED: 'ALREADY_OBSERVED' }[r.class]
+      dec = ['OUT_T4_GATE', 'OUT_NATIVE', 'OUT_NEW_CAPABILITY', 'OUT_PLATFORM_LIMIT'].includes(r.class)
+    }
+    if (e.resolution !== exp) err(e.id + ': resolution ' + e.resolution + ' != ' + exp)
+    if (e.needs_new_decision !== dec) err(e.id + ': needs_new_decision ' + e.needs_new_decision)
+    if (['PARTIAL_BY_C3', 'OPEN_PART_NOT_CREDITED'].includes(e.resolution) && !e.remaining) err(e.id + ': partial without remaining')
+    if (r.class === 'OUT_NEW_CAPABILITY' && !(e.destination.includes('regra da unidade') && e.destination.includes('Q4 negou só'))) err(e.id + ': capability basis')
+  }
+  const byRes = {}
+  for (const e of v6.residuals_c3) byRes[e.resolution] = (byRes[e.resolution] || 0) + 1
+  if (J(byRes) !== J(v6.residual_counts.by_resolution) || v6.residual_counts.total !== 77) err('residual counts')
+  // remaining by contract: partition of the plan residuals
+  for (const r of v6.rows) {
+    const rem = v6.remaining_open_by_contract[r.source_contract]
+    if (J(rem) !== J(r.remaining_after_c3)) err(r.source_contract + ': remaining differs between row and map')
+    const ids = plan.residuals.filter((x) => x.contract === r.source_contract).map((x) => x.id)
+    const part = [...rem.resolved_by_c3, ...rem.partial_by_c3.map((x) => x.id), ...rem.still_open.map((x) => x.id), ...rem.closed_without_observation.map((x) => x.id)]
+    if (J([...part].sort()) !== J([...ids].sort()) || J(rem.plan_residuals) !== J(ids)) err(r.source_contract + ': residual partition')
+    const v5t = v5.remaining_open_by_contract[r.source_contract] || r.carried_from_v5.residual_planned_profile_proposal || null
+    if (rem.v5_text !== v5t) err(r.source_contract + ': v5 text differs')
+  }
+  // gaps
+  if (g6.base.sha256 !== shaFile(B2 + '/gaps-review-v5.json') || g6.rows.length !== 6) err('gaps base')
+  const obsSet = new Set(v6.rows.filter((r) => r.status === 'OBSERVED_CLIENT_PARTIAL').map((r) => r.source_contract))
+  g6.rows.forEach((g, i) => {
+    const g5 = gaps5.rows[i]
+    if (g.id !== g5.id || J(g.contracts) !== J(g5.contracts)) err(g.id + ': contracts')
+    if (g.status_after !== 'OPEN' || g.progress_after !== g5.progress_after || g.receipt !== null || g.whole_requirement_covered !== false) err(g.id + ': status or progress')
+    if (J(g.contracts_observed_client_partial_v6) !== J(g5.contracts.filter((c) => obsSet.has(c)))) err(g.id + ': observed contracts')
+  })
+  if (J(g6.summary.observed_v6) !== J(gaps5.summary.observed_v5)) err('gap counts changed')
+  // projection and parity
+  if (!v6.projection_check.confirmed || J(v6.projection_check.observed_v6) !== J(plan.projection_if_all_pass.counts)) err('projection')
+  if (v6.functional_receipts !== 0 || v6.parity_credit !== 0 || g6.functional_receipts !== 0 || g6.parity_credit !== 0) err('parity')
+  return E
+}
+
+const v6 = load(UNIT + '/coverage-observed-v6.json')
+const g6 = load(UNIT + '/gaps-review-v6.json')
+const errors = validate(v6, g6)
+const NEG = [
+  ['parte do PY13.B17 creditada (guarda E3-07)', (v) => { v.arms_observed_c3.find((a) => a.arm_id === 'PY13.B17').observed_by[0].parts[0].credited = true }, 'PY13.B17: credit of C3-PY13ER|'],
+  ['predicado de julgamento trocado', (v) => { v.arms_observed_c3.find((a) => a.arm_id === 'PY05.B10').observed_by[0].parts[0].judged_by[0].ok = false }, 'judged_by differs'],
+  ['linha do perfil distribuído promovida', (v) => { v.rows.find((r) => r.source_contract === 'PY19').status = 'OBSERVED_CLIENT_PARTIAL' }, 'PY19: status'],
+  ['cópia do v5 alterada', (v) => { v.rows.find((r) => r.source_contract === 'PY13').carried_from_v5.status = 'X' }, 'PY13: carried_from_v5'],
+  ['resíduo apagado', (v) => { v.residuals_c3.pop() }, 'residual ids differ'],
+  ['Q4 negada tratada como decidida', (v) => { v.residuals_c3.find((r) => r.id === 'R-TS12-5').needs_new_decision = false }, 'R-TS12-5: needs_new_decision'],
+  ['Q5 tratada como decidida', (v) => { v.residuals_c3.find((r) => r.id === 'R-PY18-3').resolution = 'OPEN_DECIDED_DISTRIBUTED_PROFILE' }, 'R-PY18-3: resolution'],
+  ['crédito de paridade numa linha', (v) => { v.rows[0].parity_credit = 1 }, 'receipt or parity'],
+  ['registro do zombie 15 removido do C3-TS12', (v) => { const o = v.rows.find((r) => r.source_contract === 'TS12').observations_c3.find((x) => x.case === 'C3-TS12'); o.qualifications = o.qualifications.filter((q) => !q.includes('zombie')) }, 'C3-TS12: missing zombie 15'],
+  ['F04 do C3-1 removido do C3-TS04', (v) => { const o = v.rows.find((r) => r.source_contract === 'TS04').observations_c3[0]; o.qualifications = o.qualifications.filter((q) => !q.includes('C31-ADM/R1-F04')) }, 'C3-TS04: missing C31-ADM/R1-F04'],
+  ['texto do DV-C32-04 sem correção', (v) => { v.records_for_bind_applied.find((r) => r.id === 'C32-ADM/R1-F04').corrected_text_dv_c32_04 = 'x' }, 'DV-C32-04 corrected text'],
+  ['registro do passo 12 removido', (v) => { const o = v.rows.find((r) => r.source_contract === 'PY13').observations_c3.find((x) => x.case === 'C3-PY13ER'); o.qualifications = o.qualifications.filter((q) => !q.includes('C32-ADM/R1-F02')) }, 'C3-PY13ER: missing step-12'],
+  ['R-PY18-1 dado como resolvido', (v) => { v.residuals_c3.find((r) => r.id === 'R-PY18-1').resolution = 'RESOLVED_BY_C3' }, 'R-PY18-1: resolution'],
+  ['R-PY13-4 dado como resolvido', (v) => { v.residuals_c3.find((r) => r.id === 'R-PY13-4').resolution = 'RESOLVED_BY_C3' }, 'R-PY13-4: resolution'],
+  ['R-PY13-4 dado como parcial', (v) => { v.residuals_c3.find((r) => r.id === 'R-PY13-4').resolution = 'PARTIAL_BY_C3' }, 'R-PY13-4: resolution'],
+  ['braço parcial do v5 sem lado restante (PY02.B07)', (v) => { v.arms_v5_partial_not_targeted_remaining = v.arms_v5_partial_not_targeted_remaining.filter((x) => x.arm_id !== 'PY02.B07') }, 'not-targeted arms without remaining side'],
+  ['lado restante sem destino', (v) => { v.arms_v5_partial_not_targeted_remaining[0].sides[1].destination = '' }, 'side without destination'],
+  ['braço parcial do v3 fora da lista de fechados (TS07.B03)', (v) => { v.arms_v5_partial_closed_by_c3 = v.arms_v5_partial_closed_by_c3.filter((x) => x !== 'TS07.B03') }, 'partial closed list'],
+  ['TS03.B03 fora dos não mirados', (v) => { v.arms_v5_partial_scope_not_targeted = v.arms_v5_partial_scope_not_targeted.filter((x) => x !== 'TS03.B03') }, 'partial not targeted list'],
+  ['TS12.B01 sem o pré-abortado', (v) => { v.arms_observed_c3.find((a) => a.arm_id === 'TS12.B01').not_observed_after_c3 = null }, 'TS12.B01: pre-aborted'],
+  ['item fora do plano apagado', (v) => { v.open_items_outside_plan = [] }, 'V6-PY02-ENV missing'],
+  ['base da capacidade nova atribuída à Q4', (v) => { v.residuals_c3.find((r) => r.id === 'R-TS03-2').destination = 'capacidade nova negada pela Q4' }, 'R-TS03-2: capability basis'],
+  ['sha de acceptance trocado', (v) => { v.arms_observed_c3[0].observed_by[0].acceptance.sha256 = '0'.repeat(64) }, 'acceptance sha'],
+  ['braço aberto do v5 mantido aberto', (v) => { v.arms_open_explicit_v5_resolved = ['PY05.B10'] }, 'open explicit arms'],
+  ['estado v5 trocado', (v) => { v.arms_observed_c3.find((a) => a.arm_id === 'PY13.B05').v5_state = 'NEW_ARM_ID' }, 'PY13.B05: v5 state'],
+  ['partição do resto quebrada', (v) => { const r = v.rows.find((x) => x.source_contract === 'PY02'); r.remaining_after_c3.resolved_by_c3 = []; v.remaining_open_by_contract.PY02 = r.remaining_after_c3 }, 'PY02: residual partition'],
+]
+const NEG_G = [
+  ['lacuna fechada', (g) => { g.rows[0].status_after = 'CLOSED' }, 'GAP-PY-API: status or progress'],
+  ['contagem de lacuna trocada', (g) => { g.rows[3].contracts_observed_client_partial_v6 = ['PY05', 'PY19'] }, 'GAP-PROVENANCE: observed contracts'],
+]
+const negative = []
+for (const [name, mut, expect] of NEG) {
+  const v = clone(v6); mut(v)
+  const e = validate(v, g6)
+  const m = e.find((x) => x.includes(expect))
+  negative.push({ control: name, expected_error_substring: expect, rejected: !!m, matching_error: m || null })
+}
+for (const [name, mut, expect] of NEG_G) {
+  const g = clone(g6); mut(g)
+  const e = validate(v6, g)
+  const m = e.find((x) => x.includes(expect))
+  negative.push({ control: name, expected_error_substring: expect, rejected: !!m, matching_error: m || null })
+}
+const out = { kind: 'BINDING_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3',
+  note: 'segunda implementação do mesmo executor; não é revisão independente', node: process.version,
+  result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors,
+  negative_controls_rejected: negative.filter((n) => n.rejected).length + '/' + negative.length, negative_controls: negative,
+  validated_at: new Date().toISOString() }
+writeFileSync(UNIT + '/validation.json', JSON.stringify(out, null, 2) + '\n')
+console.log(out.result, 'errors', errors.length, 'negative', out.negative_controls_rejected)
+if (errors.length) console.log(errors.slice(0, 20).join('\n'))
+for (const n of negative) if (!n.rejected) console.log('NOT REJECTED:', n.control)

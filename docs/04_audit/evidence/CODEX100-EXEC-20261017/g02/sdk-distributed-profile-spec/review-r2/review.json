@@ -1,0 +1,141 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 2,
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T22:58:00-03:00",
+  "subject": "review-freeze-r2.json",
+  "subject_sha256": "21a936e008aabfa8f52498d7d9bfa54e9e9ba8404c23621d93c4ae365ff8cc6d",
+  "subject_hash_check": {
+    "before": "ok (19/19 arquivos, sha e bytes)",
+    "after": "ok (19/19 arquivos, sha e bytes)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 1 P2, 5 P3",
+  "r1_resolution": {
+    "R1-F01": "RESOLVED: o passo 7 só registra o resultado. PY19.B05 é julgado pela sonda _runtime_version (0.153.4), com as âncoras client.py:320-323 e _initialize_metadata.py:11 conferidas. No ELF do A1, lido em memória, 0.153.4 aparece no contexto do user agent (codex_cli_rs), então o caminho pelo userAgent dá 0.153.4.",
+    "R1-F02": "RESOLVED quanto aos predicados: env.adapter_sandbox_env_only saiu do DP-PY19A. DP-PY19B e DP-PY19C têm um spawn cada, e process.argv {popen_args, proc_cmdline, self_report_argv_tail} é exatamente o que acceptance.py:1050-1056 lê. proc_cmdline = LAUNCH + cauda confere com adapter-python-exec:10 e supervisor.py:1013. Os predicados realcli.* são novos e declarados. O realcli.witness é implementável sem corrida: Popen só retorna depois do exec e o app-server fica vivo esperando stdin. Ressalva: a topologia sem adapter do DP-PY19A continua sem forma PASS alcançável (R2-F01).",
+    "R1-F03": "RESOLVED, com ressalva em R2-F02: a espera limitada (5 s, saída 97) faz o contrário virar MISMATCH por wrap.exit_mirror_exact e child.signals_received_exact. O pior caso (3x5 s) cabe nos prazos de 20 s e 30 s. O PK06 ganhou SIGHUP e o PK08 ganhou SIGINT e SIGTERM. child.killed ficou classificado como OUT.",
+    "R1-F04": "RESOLVED: stderr_not_contains \"Unhandled 'error' event\" com wrap.stderr_not_contains (client) em e_spawn_error e x_spawn_error.",
+    "R1-F05": "RESOLVED: as raízes nested, nocli, nopkg com vendor, symok e dangling, e as execuções m_lexical_pnpm, m_canonical_pnpm e m_conflict discriminam. Deduzi cada uma à mão a partir de bin/codex.js:120-220 e dist/index.js:446-517.",
+    "R1-F06": "RESOLVED: (a) proc.executable_sha_exact saiu do DP-REAL01; (b) o término do filho é programa declarado, conferido por child.program_followed; (c) existe a forma PASS_DECLARED_TERMINATION; (d) stdin /dev/null e read_stdin explícito.",
+    "R1-F07": "RESOLVED: a lista fechada cobre todos os imports estáticos do dist (linhas 2-4 e 140-144). Uma sonda própria em Node 22 com --experimental-loader mostrou que createRequire().resolve não passa pelo hook assíncrono, então a resolução de pacotes do dist não é negada. NOT_REACHED e o assentamento no 'close' estão definidos.",
+    "R1-F08": "RESOLVED, com ressalva em R2-F05: formato do 2B, DIAG com own_code/pass/on_fail, modos do staging, canal do filho por arquivo e limites de 1 GiB/256.",
+    "R1-F09": "RESOLVED: DIAG-PY-BARRIER e DIAG-PY-LOGIN entraram (10/12) e o DIAG-PY-PROCWITNESS deixou de ser condicional.",
+    "R1-F10": "RESOLVED: 124 condições, 30 delas fora. Cada braço G01 de PK01 a PK09 e cada braço novo tem condição ligada a um caso que mira o braço ou a um resíduo OUT do contrato. Conferi contra contracts.json.",
+    "R1-F11": "PARTIAL: os membros copiados, os lidos por artifact.check e o M7 estão nos inputs. Ficaram fora o A3 bin/codex (resolved_sha), o A5 e os membros comparados no DP-PY20A, e o sha do executável do pin (R2-F04).",
+    "R1-F12": "RESOLVED: a interpretação no sentido da Q4 está registrada, com lead_confirmation_requested. O regime de capacidade do 2B está cumprido.",
+    "R1-F13": "RESOLVED: R-PY20-5 reclassificado, PY20.B04 criado, symlinks no IN, a pergunta T4 do R-PK09-2 em t3-assessment e o v5_arm_map.",
+    "R1-F14": "RESOLVED: os textos foram corrigidos, not_equal está no oráculo e EDP-05 exclui os CONTROL.",
+    "R1-F15": "PARTIAL: os 23 controles existem e as checagens novas também, mas o controle 'binário real' é aceito pela mensagem do um-spawn (R2-F03)."
+  },
+  "mandatory_findings": ["R2-F01"],
+  "findings": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "area": "formas de captura do DP-1 inteiro, do DP-PY19A e do REAL_CLI_KEYLESS (freeze-r4-dp-delta, evaluator-r4-dp-delta)",
+      "title": "A forma PASS ('como no 2A e no 2B') não é alcançável sem adapter e peer com os observadores admitidos, e nenhum delta declara a regra nova",
+      "evidence": [
+        "cases-dp-1.json:141 e cases-dp-2.json:104 (PASS: 'todos os processos terminaram normalmente, como no 2A e no 2B')",
+        "cases-dp-1.json:395, 987, 1807, 1988, 2366, 3337, 4702, 5626 (PASS) e 4306, 5124 (PASS_DECLARED_TERMINATION): casos do DP-1 sem adapter-typescript e sem peer (driver -> SDK ou wrapper.run -> filho sintético)",
+        "cases-dp-2.json:295-358 (DP-PY19A: spawns 0, accepted_capture_forms ['PASS'])",
+        "../sdk-batch-2ac-admission/python/observer.py:399-412 e 545 (TS sem quadro de adapter/peer vira NO_CHILD; PASS exige END completo de todos os papéis)",
+        "../sdk-batch-2ac-admission/python/acceptance.py:193-205 e 807-809 (NO_CHILD não declarado pelo caso -> INVALID_CAPTURE, R3-F02)",
+        "../sdk-batch-2b2-admission/python/observer.py:481-500 e 634 (NO_CHILD só para typescript; em Python, adapter/peer MISSING vira motivo -> INVALID_CAPTURE)",
+        "freeze-r4-dp-delta.json:34 (herança: só DDP-03, DDP-05 e DDP-11 mudam algo)",
+        "evaluator-r4-dp-delta.json:18 (predicados copiados do 2B só na topologia com um adapter e BEGIN; o DP-PY19A usa capture.case_input_frozen_bytes, api.steps_exact e proc.spawn_count_exact sem adapter)"
+      ],
+      "detail": "Os 10 casos SDK do DP-1, o DP1-CTRL01, o DP-REAL01 e o DP-PY02P rodam sem adapter e sem peer, e o DP-PY19A não cria processo nenhum. Os observadores admitidos derivam a forma dos quadros de adapter e peer. No 2AC, a ausência dos dois dá NO_CHILD, e como nenhum caso aceita NO_CHILD, a R3-F02 leva a INVALID_CAPTURE. No 2B-2, a linguagem Python não admite papel MISSING e o veredito é INVALID_CAPTURE. O EDP-03 declara PASS_DECLARED_TERMINATION, REAL_CLI_KEYLESS e ARTIFACT_CHECK, mas não diz como se forma o PASS (nem a base das outras duas) numa topologia só com o driver. Os deltas dizem que só mudam o loader, os limites e o vocabulário de fixture. Implementado ao pé da letra, o DP1-CTRL01 sai INVALID_CAPTURE e o DP-1 para, e o DP-PY19A fica INVALID_CAPTURE permanente. Se o executor inventar a regra, ela muda o observador, que decide entre PASS e MISMATCH, sem delta congelado e sem autoteste. Não gera resultado falso direto, mas impede a implementação sem uma decisão que não está congelada.",
+      "required_action": "Declarar em DDP e EDP a regra de forma para a topologia só com o driver. Por exemplo, PASS quando: o driver termina com END completo; adapter e peer estão ausentes por declaração do caso; os processos do caso (wrappers, filhos sintéticos, binário real) terminaram e foram testemunhados por WRAPPER_RESULT, LEFTOVER e REALCLI_WITNESS. Dizer também o que fazer com um quadro inesperado de adapter ou peer. Reescrever PASS_DECLARED_TERMINATION e REAL_CLI_KEYLESS sobre essa base. Corrigir a herança em freeze-r4-dp-delta.json:34, incluindo DDP-06, o canal realcli.witness, as entradas novas do BARRIER_PLAN do DP-PY19B e DP-PY19C e o observador. Corrigir também evaluator-r4-dp-delta.json:18 por causa do DP-PY19A. Acrescentar um autoteste ou DIAG em que um caso só com o driver chegue a PASS e o CONTROL do DP-1 chegue a MISMATCH, e uma checagem no validador."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "area": "CAP-DP-NODE-DRIVER send_signal; DP-PK06A e DP-PK08A",
+      "title": "A espera pelo bit em SigCgt não testemunha o listener do wrapper para SIGINT e SIGTERM",
+      "evidence": [
+        "capability-contracts-dp.json:93, 107 e 113",
+        "cases-dp-1.json:265, 4437, 4471, 5226 e 5260 (handler_wait por SigCgt)",
+        "sonda própria em Node 22.23.2: processo Node sem listener já tem SIGINT e SIGTERM em SigCgt (handler nativo SignalExit); SIGHUP só aparece depois de process.on",
+        "A2 package/bin/codex.js:241-272 e A4 bin/codex-responses-api-proxy.js:60-81 (spawn e process.on no mesmo tick síncrono)"
+      ],
+      "detail": "Para SIGINT e SIGTERM a espera termina na hora, então o SIGNAL_SENT não prova que o listener do wrapper já existe. Na prática, quem garante é a ordem do wrapper publicado: os listeners entram logo depois do spawn, antes de o filho Node conseguir criar o CHILD_READY. Sobra uma corrida só sob escalonamento extremo, e ela daria MISMATCH falso por wrap.exit_mirror_exact. O autoteste 'com e sem listener' vai mostrar os bits de SIGINT e SIGTERM nos dois casos.",
+      "required_action": "Declarar que o SigCgt testemunha o listener só para SIGHUP e que, para SIGINT e SIGTERM, a garantia é a ordem spawn -> process.on das linhas citadas mais o CHILD_READY. Ajustar o autoteste e o pass do DIAG-DP-NODE e registrar sigcgt_bit_seen como informativo."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "area": "validate-spec-dp.mjs.txt e validation.json",
+      "title": "O controle negativo do 'binário real' é aceito pela mensagem de outra checagem",
+      "evidence": [
+        "validate-spec-dp.mjs.txt:165, 168, 258 (filtro por substring) e 271",
+        "validation.json:135-138 (first: 'DP-PY02P: 2B process predicates need exactly one spawn')"
+      ],
+      "detail": "A mensagem esperada, '2B process predicates', também é prefixo da mensagem do um-spawn. Como o DP-PY02P não tem expected.process.spawns, a rejeição vem da linha 165, e o controle continuaria passando mesmo sem a checagem da linha 168. É o mesmo defeito que a R1-F15 pediu para isolar.",
+      "required_action": "Usar a mensagem exata 'on the real binary' e montar a cópia corrompida (spawns 1 e process.argv completo) para que só a linha 168 dispare. Ou separar os dois controles."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "area": "inputs de DP-PK02R, DP-PY20A e DP-PK09A",
+      "title": "Valores esperados corretos, mas sem input ou âncora na especificação",
+      "evidence": [
+        "cases-dp-1.json:1785 e 1788 (resolved_sha 56ef98ab... do A3 package/vendor/x86_64-unknown-linux-musl/bin/codex e not_equal 5cce7264...), com inputs só em cases-dp-1.json:1823",
+        "../reference-compilation/build-provenance.json (origem do 5cce7264..., não citada)",
+        "cases-dp-2.json:1335-1347, 1446-1450 e 1470-1477 (asset_binding pelo A5 e payload_identity A1/A5 fora dos inputs)",
+        "cases-dp-1.json:5402 (PK09.B02 'ausentes na fonte' sem o codex-cli/package.json do pin nos inputs)",
+        "validate-spec-dp.mjs.txt:94-99 (caseMembers ignora compare, ledger_item e file.sha256)"
+      ],
+      "detail": "Conferi os valores em memória contra A1, A3, A5 e M7 e todos estão certos. Mesmo assim, a ligação não está na especificação, e a identity-freeze (DDP-08) parte dos inputs de cada caso.",
+      "required_action": "Incluir nos inputs (topo e caso): o membro A3 bin/codex; o A5 pelo ledger e os membros comparados; o sha do executável do pin, com ponteiro para build-provenance.json; e o codex-cli/package.json do pin, ou então tirar a frase. Estender caseMembers para cobrir esses casos."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "area": "CAP-DP-REAL-CLI-KEYLESS, DIAG-DP-REAL-CLI-APPSERVER, EDP-08",
+      "title": "O realcli.witness não tem DIAG, o gate do DP-PY02P é qualificado com argv e env diferentes do caso, e os limites do DIAG-TS-ECHO herdado são ambíguos",
+      "evidence": [
+        "capability-contracts-dp.json:186 e 196 (realcli.witness só com autoteste offline)",
+        "capability-contracts-dp.json:205-209 (DIAG sem SDK, sem --config model=\"cvg-dp\" e sem WITNESS_REQUEST)",
+        "cases-dp-2.json:1066-1073 e 1215",
+        "execution-budget-dp-1.json:20 (DIAG-TS-ECHO no DP-1)",
+        "evaluator-r4-dp-delta.json:49 (EDP-08 'nesses casos')",
+        "../sdk-batch-2ac-admission/python/supervisor.py:77 e 888 (exige 512 MiB e 32)"
+      ],
+      "detail": "O canal WITNESS_REQUEST/WITNESS_DONE e a leitura de /proc de um processo que não é papel são novos no supervisor do 2B-2, e nenhum serviço os exercita antes do DP-PY02P. No 2B, o PROC_WITNESS tinha o DIAG-PY-PROCWITNESS. Além disso, o EDP-08 não diz se o DIAG-TS-ECHO herdado roda com 1 GiB/256 ou com 512 MiB/32. Falhas aqui viram INVALID_CAPTURE ou parada, não resultado falso.",
+      "required_action": "Fazer o DIAG-DP-REAL-CLI-APPSERVER usar o argv e o env do caso e exercitar o realcli.witness, com um controle negativo de leitura antes do PROC_RETAIN. Fixar em EDP-08 os limites do DIAG-TS-ECHO no DP-1."
+    },
+    {
+      "id": "R2-F06",
+      "severity": "P3",
+      "area": "DP-PY19B e DP-PY19C (epílogo)",
+      "title": "A nota do epílogo diz que não há adapter, mas os dois casos usam o lançador e o adapter",
+      "evidence": [
+        "cases-dp-2.json:711 e 970",
+        "build-spec-dp.py.txt:871-872 (EPI_DONE único para todos os casos)"
+      ],
+      "detail": "O epílogo calls_done_release_exit_then_sdk_close_if_open é válido nessa topologia (há precedente no 2B-PY01A), e o close explícito manda SIGTERM ao adapter, o que CLIENT_TERMINATED_SIGTERM cobre. Só o texto está errado.",
+      "required_action": "Escrever uma nota por topologia."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 19 arquivos do review-freeze-r2.json antes e depois da revisão; sha do freeze conferido",
+    "leitura de review-r1/review.json, repair-r1.json e preimagens; ação de cada achado R1 conferida no material reparado",
+    "em memória (tarfile/zipfile, Python -I): sha de A1, A2, A3, A4, A5 e A7 contra o ledger; membros contra os inputs; as 88 âncoras (61 do DP-1, 27 do DP-2) por linha, sha e texto: conferem",
+    "DP-PK02A (11 raízes), DP-PK03A (3 execuções), DP-PK04A (17 wrappers), DP-PK05A (17 execuções), DP-PK06A, DP-PK07A e DP-PK08A deduzidos à mão de dist/index.js, bin/codex.js e codex-responses-api-proxy.js publicados: todos os valores conferem",
+    "DP-PY19A, DP-PY19B, DP-PY19C e DP-PY02P conferidos contra codex_cli_bin/__init__.py do A1, client.py, _initialize_metadata.py, CheckoutCapabilities e FIXED_ENV/LAUNCH do 2B-2: mensagens, argv, PATH, checkout_command e runtime_version",
+    "DP-PY20A: WHEEL, payload A1 = A5 membro a membro (6 sha), digest do A5 e listagem dos seis assets (digest e size) no M7",
+    "DP-PK09A: manifestos A2, A3, A4 e A7, export final e versão 0.0.0-dev do pin",
+    "busca de '0.153.4' no ELF bin/codex do A1 em memória (sha 56ef98ab... conferido)",
+    "sondas próprias em Node 22.23.2 no diretório temporário: SigCgt de processos Node com e sem listener; createRequire().resolve sob --experimental-loader",
+    "acceptance.py, supervisor.py, observer.py e python-driver.py do 2B-2 e extension-loader.mjs, ts-driver.mjs, observer.py e acceptance.py do 2AC: formas de captura, papéis, epílogos, PROC_WITNESS, BARRIER_PLAN e limites",
+    "DP2-CTRL01 contra 2B2-CTRL01 (case_input igual com o último argv trocado); DP1-CTRL01 com código próprio; case_input_sha256 de todos os casos recalculado",
+    "coverage-plan-dp.json: 48 resíduos (14 IN, 34 OUT) e 124 condições (30 fora) recontados e ligados a contracts.json e python-contracts.json do G01",
+    "orçamentos (12/24 e 5/12 no DP-1; 6/24 e 10/12 no DP-2), gates condicionais, t3-assessment contra AGENTS.md (sha 8306af1b... e D-12), decisões Q1-Q4 e do Lead (sha)",
+    "validate-spec-dp.mjs.txt lido e confrontado com validation.json (sem executar o validador); pasta sem ELF, gzip ou zip; NO_BUILD_LINK_DECLARED em todo caso não CONTROL; só URLs .invalid"
+  ],
+  "limits": "Não rodei Node v24.20.0, o SDK, os wrappers nem o binário publicado. Self-signal, SigCgt e o hook do loader foram conferidos em Node 22.23.2 com código próprio. A saída real do initialize e do --version do 0.153.4 é inferida das strings do ELF e da fonte. Os DIAG não existem nem foram executados. O comportamento dos observadores 2AC e 2B-2 numa topologia só com o driver foi deduzido da leitura do código, sem execução. build-spec-dp.py.txt, close-unit-dp.py.txt e verify-inputs-dp.py.txt foram lidos só por amostragem. As sondas ficaram em /mnt/dados/tmp/ricardo/claude-1000/r2probe.e5l2D3, fora do repositório. Nada foi extraído para disco nem gravado no repositório.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

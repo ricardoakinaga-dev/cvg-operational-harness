@@ -1,0 +1,307 @@
+--- spec0244-r1.md
++++ spec0244-r2.md
+@@ -1,120 +1,211 @@
+ # SPEC0244 — Forma de módulo ESM no kernel B6: reexport estrela e export de classe recusada
+ 
+-**PROPOSTA T3. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020`; texto materializado com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0244`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237, 0240, 0241, 0242 e 0243. Autoridade de segurança: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) §6 (K5), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0242](0242_b6_body_caps_deadlines.md). Execução e continuidade: [plano 0391](../03_build/0391_hiso005_semantic_proof_execution.md).
++**PROPOSTA T3, revisão r2. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020`; texto materializado com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0244`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237, 0240, 0241, 0242 e 0243. Autoridade de segurança: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) §6 (K0 e K5), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0242](0242_b6_body_caps_deadlines.md), [SPEC0243](0243_b6_reference_source_scope.md). Execução e continuidade: [plano 0391](../03_build/0391_hiso005_semantic_proof_execution.md). A r2 corrige os obrigatórios R1-01 a R1-09 da [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/review-r1/review.json).
++
++Neste texto, v4 é o kernel atual (`semantic-kernel-v4-integral-body`, cabeça do PR #8 `1073a9dd`) e v5 é o kernel com E1 e E2.
+ 
+ ## 1. CURRENT — problema e evidência
+ 
+-A medição integral pós-gates do BUILD0242 avalia a raiz `228e7918`, normal igual a strict ([resumo](../04_audit/evidence/HISO005-P2-BUILD-0242-20261019/real-final-0242-summary.json)). O corpo está COMPLETED (1.341/1.341 módulos) e há 13.521 diagnósticos: 890 origens de base e 12.631 tuplas de fronteira semântica, com zero provas e zero violações.
++A medição integral pós-gates do BUILD0242 avalia a raiz `228e7918`, com normal igual a strict ([resumo](../04_audit/evidence/HISO005-P2-BUILD-0242-20261019/real-final-0242-summary.json)). O corpo está COMPLETED (1.341/1.341 módulos). Há 13.521 diagnósticos: 12.631 tuplas de fronteira semântica e 890 origens de base. Não há prova nem violação.
++
++### 1.1 Fronteira por família
++
++A [classificação r2](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/classification-r2.json) aplica uma precedência explícita: TSX, depois propagação, forma de módulo, intrínsecos e, por fim, a família do motivo fechado.
++
++| Família | Tuplas | % | Natureza |
++| --- | ---: | ---: | --- |
++| Propagação (gatilho só U) | 5.242 | 41,5 | consequência; a origem do U está na tabela 1.2 |
++| Domínio do intérprete | 3.030 | 24,0 | limitação do analisador |
++| Forma de módulo | 1.411 | 11,2 | limitação do analisador |
++| Resolução, formato e proveniência | 1.082 | 8,6 | limitação do analisador ou da proveniência |
++| TSX parseado como TS | 705 | 5,6 | limitação do analisador |
++| Intrínsecos e built-ins | 683 | 5,4 | limitação de modelo sobre fato do código |
++| Fato do código | 478 | 3,8 | fato do código |
++
++Somando, 6.228 tuplas (49,3%) são limitação do analisador, 683 (5,4%) são limitação de modelo sobre fato, 478 (3,8%) são fato do código e 5.242 (41,5%) são consequência. O dist de primeira parte espelha o src e responde por 3.670 tuplas (29,1%), 2.721 delas com gêmeo no src. Por isso cada causa de primeira parte conta quase duas vezes.
++
++- **Domínio:** inclui ClassDeclaration 346, parâmetro com valor padrão 316, async 280, `new` 210, retorno parcial 152, `throw` 151, função sem corpo 149, sem inicializador 131, `typeof` 114 e regex 101.
++- **Forma de módulo:** 746 tuplas de `UNKNOWN_INHERITED_PROPERTY` em namespace com `export *` (uma delas em .tsx), 656 por classe recusada e 10 `UNKNOWN_BINDING` com nome de classe recusada. Medido: E1 sozinho remove 646. E2 é necessário para 756 (as 656 e mais 100 cuja estrela traz nome de classe recusada no módulo-fonte).
++- **Resolução, formato e proveniência:** dist sem recibo 395, entrada instalada não alcançada 288, formato não JS 217, alvo ausente 102, formato de módulo, interop e parse.
++- **TSX:** 705 tuplas em 29 arquivos .tsx, todos com `UNKNOWN_PARSE`. O engine parseia .tsx como TS e segue avaliando a AST recuperada. Das 430 `UNKNOWN_BINDING` em .tsx, 412 são palavras de JSX ou nomes locais, 8 têm detalhe vazio e 10 são globais.
++- **Intrínsecos e built-ins:** global ECMAScript 337 (`Array`, `Number`, `Date`, `JSON`, `Math`, `Symbol`…), global de host 89 (`process`, `Buffer`…), módulo nativo 254 e global de ambiente sem declaração 3.
++- **Fato do código:** estado mutável exportado 294, `let`/`var` 125, atribuição e reflexão.
++
++### 1.2 Propagação por origem do U
++
++A medição usou uma cópia diagnóstica que etiqueta o binding de parâmetro na criação: entrada K0 via `checkExport` ou chamada comum ([execução](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/diagnostic-measurement-tags-k0.json)). As tuplas emitidas são idênticas às oficiais.
+ 
+-A [classificação](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/classification.json) separa as 12.631 tuplas pela causa:
++| Origem do valor U | Tuplas |
++| --- | ---: |
++| local (const/let/var/catch/for) com inicializador U | 1.251 |
++| import de valor U | 933 |
++| callee U (chamada) | 705 |
++| **K0: parâmetro de função ou método público** | **660** (+223 mistas com K0) |
++| export com valor U | 560 |
++| receptor U | 328 |
++| operando U | 323 |
++| parâmetro de chamada interna com argumento U | 157 |
++| mistas sem K0 (local e argumento) | 40 |
++| função de declaração recusada | 62 |
+ 
+-- **Propagação, 5.343 (42,3%).** Tuplas cujo único gatilho é um valor já desconhecido: binding, callee, receptor, export ou operando U. Inclui as entradas externas do K0 (parâmetros de função exportada).
+-- **Domínio do intérprete, 3.099 (24,5%).** Sintaxe e semântica fora de K0–K7: declaração de classe, `new`, `throw`, `typeof`, regex, `for…of`, `try`, funções K3 (async, padrão, sem corpo), operadores e objetos fora do domínio.
+-- **Forma de módulo, 1.402 (11,1%).** `UNKNOWN_INHERITED_PROPERTY` que não é herança, mas export ausente:
+-  - 746 vêm de `export * from`, recusado com `UNKNOWN_REEXPORT` (56 raízes): o namespace fica sem os nomes reexportados;
+-  - 656 vêm de declaração de classe recusada (`UNKNOWN_UNSUPPORTED_SYNTAX` `ClassDeclaration`, 346 raízes): o nome não é ligado nem exportado.
+-  - Cada importador repete a tupla com o motivo errado.
+-- **Resolução, formato e proveniência, 1.179 (9,3%).** `dist` sem recibo compilado (395), pacote instalado não alcançado (288), formato não JS (254), alvo ausente (102), formato de módulo, interop e parse.
+-- **Intrínsecos e built-ins sem modelo, 1.123 (8,9%).** Global como `process`, `Array`, `JSON`, `Date` (869) e módulo nativo (254). O uso é fato do código; modelá-los exigiria premissa nova.
+-- **Fato do código, 485 (3,8%).** Estado mutável exportado (294), `let`/`var` (125), atribuição (56) e reflexão (10).
++O K0 é causa própria e estrutural: toda leitura de parâmetro de superfície pública é UNKNOWN por regra e responde por 660 a 883 tuplas (5,2% a 7,0%). Nenhuma premissa nova sobre entrada externa a reduz. O resto é consequência de raízes diagnósticas.
+ 
+-As 890 origens de base também são fatos do código: execução dinâmica (505), escape de loader (72) e propriedade de loader (4) em primeira parte, mais pacote instalado sem fecho (303) e referência de módulo não literal (6).
++### 1.3 Origens de base (890)
+ 
+-A causa da forma de módulo foi confirmada por uma cópia de diagnóstico, privada e nunca oficial, que só etiqueta o gatilho de cada emissão sem mudar as tuplas ([execução](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/diagnostic-measurement-tags.json)). Os pontos de emissão no engine da cabeça do PR #8 (`1073a9dd`) são:
++- **581 rótulos léxicos de primeira parte:** 505 de execução dinâmica, 72 de escape de loader e 4 de propriedade de loader. Os rótulos recaem sobre `globalThis` (62), descritores (`descriptor`, `descriptor.value`), `prototype`, `Object.getPrototypeOf`, processo filho (`child`, `child.pid`, `child.kill`) e `process`. A expressão existe no código (fato). O rótulo é sobreaproximação léxica pendente de prova semântica (limitação) e não demonstra execução dinâmica.
++- **303 pacotes instalados:** estado de prova do fecho instalado, que só fica VERIFIED com fecho PROVEN. Desses, 288 nunca são alcançados pelo corpo (limite de escopo) e 15 são alcançados com fecho sujo (consequência). Por exemplo, o zod tem 625 tuplas.
++- **6 referências de módulo não literais:** fato do código que o analisador não resolve.
+ 
+-- `get()`, que dá `UNKNOWN_INHERITED_PROPERTY` para chave ausente em namespace;
++### 1.4 Pontos de emissão e variante diagnóstica
++
++A causa da forma de módulo está nos pontos de emissão do engine da cabeça do PR #8:
++
++- `get()`, para chave ausente em namespace;
+ - o ramo de `ExportDeclaration`, que recusa estrela sem cláusula nomeada;
+ - o fallback de instrução, que recusa `ClassDeclaration` sem ligar o nome.
+ 
+-**Medição de variante, só diagnóstica.** Implementando E1 e E2 numa cópia privada ([variante](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v2.json), [conservação](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v2-conservation.json)):
++As etiquetas vêm de cópias diagnósticas privadas que só etiquetam, nunca oficiais ([tags](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/diagnostic-measurement-tags.json)).
+ 
+-| | Oficial | Variante E1 + E2 |
++**Medição de variante, só diagnóstica.** A v5a implementa E1 e E2 com o texto da §3 ([variante](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v5a.json), [conservação](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v5a-conservation.json)):
++
++| | v4 oficial | v5a diagnóstica |
+ | --- | ---: | ---: |
+-| Diagnósticos | 13.521 | 12.227 (−1.294, −9,6%) |
++| Diagnósticos | 13.521 | 12.285 (−1.236, −9,1%) |
++| Tuplas de fronteira | 12.631 | 11.395 |
+ | Tuplas que somem | | 1.541 |
+-| Tuplas novas | | 247 |
+-
+-- **As 1.541 que somem:** 1.402 exports ausentes, 48 raízes de estrela agora modeladas, 10 nomes de classe agora ligados e 81 consequências em arquivos cujo fecho foi tocado.
+-- **As 247 novas:** 183 `UNKNOWN_EXPORT` (classe exportada com valor U), 41 `UNKNOWN_EXPORTED_MUTABLE_STATE` (objeto mutável agora reexportado de fato) e consequências, todas em arquivos ou fechos tocados.
+-- **Resto da variante:** nenhuma tupla sem explicação; zero violações, zero provas, validation true.
++| Tuplas novas | | 305 |
+ 
+-Abrir corpos novos não é progresso por contagem. A variante que também aceita parâmetro com valor padrão ([v3](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v3.json)) sobe 483 tuplas acima da E1+E2, porque os corpos agora analisados revelam os próprios UNKNOWN. E1 e E2 não abrem corpo nenhum.
++- **Que somem:** 1.402 exports ausentes, 48 estrelas agora modeladas, 10 nomes de classe agora ligados e 81 propagações em arquivo cujo fecho contém módulo tocado. Nenhuma raiz da v4 some fora dessas três classes.
++- **Novas:**
++  - 183 `UNKNOWN_EXPORT`: 27 já com E1 sozinho, em barris que reexportam valor U, e 156 de E2;
++  - 56 `UNKNOWN_RUNTIME_DECLARATION` de `export declare class`;
++  - 41 `UNKNOWN_EXPORTED_MUTABLE_STATE`, de objeto agora reexportado de fato;
++  - 18 `UNKNOWN_BINDING_VALUE`;
++  - 2 `AMBIGUOUS_STAR`;
++  - 5 outras.
++- **Onde as novas caem:** 291 em módulo tocado e 14 a jusante dele, em corpos do zod alcançados porque E1 tornou funções conhecidas no ponto de chamada. **E1 abre corpos**, e abrir corpo não é progresso por contagem: a variante que também aceita parâmetro com valor padrão sobe 483 acima da E1+E2 ([v3](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/variant-v3.json)).
++- **Sem efeito nesta raiz:** zero violações, zero provas e validation true. E1+E2 não cria fecho limpo novo (13 → 13).
++
++**Desvios conhecidos da v5a em relação à §3:**
++
++- **Exports locais de binding importado.** A v5a não segue `import { X } from` seguido de `export { X }` ao comparar ligações. Por isso marca `AMBIGUOUS_STAR:PROCEED` no kernel do harness (src e dist, 2 tuplas), embora as duas estrelas tragam a mesma ligação `types.ts#PROCEED`. O desvio é conservador. O BUILD segue a §3.1 e não dá ambiguidade aí.
++- **Casos raros nesta raiz:**
++  - classe default anônima: 0 ocorrências;
++  - módulo misto com estrela qualificada e não qualificada: 0. Os 8 módulos incompletos são 3 `index.ts` com formato de módulo não determinado e 5 `.d.ts`;
++  - ligação viva sobre binding mutável da fonte: 1 caso alcançado (`zod/v4/classic/external.js` reexporta `compat.js`, que tem `export var`). A raiz `UNKNOWN_MUTABLE_BINDING` da fonte o cobre.
+ 
+ ## 2. PROPOSED — resultado e limite do delta
+ 
+ Dois deltas finitos do K5, decididos juntos:
+ 
+-- **E1 — reexport estrela ESM.** `export * from` e `export * as ns from` passam a ter a semântica ECMAScript quando a fonte é um módulo ESM analisado. Os valores vêm da fonte e continuam U quando são U.
++- **E1 — reexport estrela ESM.** `export * from` e `export * as ns from` passam a ter a semântica ECMAScript quando a fonte é qualificada (§3.1). Os valores vêm da fonte e continuam U quando são U.
+ - **E2 — export de classe recusada.** A declaração de classe continua recusada (raiz `UNKNOWN_UNSUPPORTED_SYNTAX` `ClassDeclaration`), mas o nome passa a existir com valor U no escopo e, quando exportado, no namespace. O corpo da classe continua sem análise.
+ 
+-Nenhuma premissa nova: nenhum valor deixa de ser U por suposição, nenhuma prova nasce e nenhum UNKNOWN é aceito. O efeito é trocar um diagnóstico errado, repetido por importador, pela raiz correta no exportador. Resultado esperado, pela variante: cerca de 1.300 diagnósticos a menos na mesma raiz.
++**Nenhuma premissa nova:** nenhum valor deixa de ser U por suposição e nenhum UNKNOWN é aceito. O efeito é trocar um diagnóstico errado, repetido por importador, pela raiz correta no exportador.
+ 
+-Fora do delta: análise de corpo de classe, `new`, demais sintaxes, K3, intrínsecos e built-ins, interop CJS, receita compilada, limites, regra global de supressão de provas, census e qualquer prova por escopo.
++**E1 pode produzir PROVEN onde a v4 dava UNKNOWN.** Isso acontece num fecho limpo cuja única UNKNOWN era a recusa da estrela qualificada. É precisão: o namespace passa a ter os nomes reais da fonte, com dependência K5 da fonte. Não é premissa nova. E2 nunca produz PROVEN, porque a raiz da classe permanece. Na raiz real a expectativa continua sendo zero provas, por causa das demais UNKNOWN e da regra global (§4).
++
++Resultado esperado, pela variante: cerca de 1.200 diagnósticos a menos na mesma raiz.
++
++Fora do delta:
++
++- análise de corpo de classe, `new` e demais sintaxes;
++- K0, K3, intrínsecos e built-ins;
++- TSX, interop CJS e receita compilada;
++- limites, regra global de supressão de provas e census;
++- qualquer prova por escopo.
+ 
+ ## 3. Contrato
+ 
+ ### 3.1 E1 — reexport estrela
+ 
+-A fonte se qualifica quando três condições valem juntas:
++**Definições.**
+ 
+-- foi carregada como módulo ESM analisado;
+-- o namespace dela está completo;
+-- não é aresta contida, ciclo nem resultado U.
++- *Ligação resolvida* de um nome exportado `N` de um módulo `M` é o par (módulo, nome local) obtido seguindo exports indiretos (`export { N } from`, `import { N } from` seguido de `export { N }`) e estrelas, como o ResolveExport do ECMAScript.
++- *Fonte qualificada* é o alvo de uma estrela que:
++  - foi carregado como módulo ESM analisado;
++  - tem namespace completo;
++  - não é aresta contida, ciclo nem resultado U.
++- *Namespace completo*: toda declaração de export do módulo foi registrada pelo kernel (export local, indireto nomeado, `export * as`, classe por E2), nenhuma forma de export foi recusada (padrão de desestruturação, `export enum`, `export namespace`, `export =` e similares) e toda estrela do módulo é qualificada. A definição é transitiva.
+ 
+-Com fonte qualificada:
++**Regras, com fonte qualificada:**
+ 
+-1. `export * as ns from 'm'` exporta `ns` com o namespace de `m`.
++1. `export * as ns from 'm'` exporta `ns` com o namespace de `m`. Com fonte não qualificada, `ns` é U e a recusa `UNKNOWN_REEXPORT` é mantida.
+ 2. `export * from 'm'` reexporta cada nome `N` de `m`, exceto `default`, com o valor que `m` exporta, inclusive U.
+-3. Export local de mesmo nome prevalece sobre o da estrela, qualquer que seja a ordem no arquivo.
+-4. Duas estrelas com valores diferentes para `N` tornam `N` ambíguo. `N` é exportado como U, com `UNKNOWN_REEXPORT` e detalhe `AMBIGUOUS_STAR:N`.
+-5. Fonte não qualificada (CJS, interop, contida, ciclo, não resolvida) mantém a recusa atual `UNKNOWN_REEXPORT`.
++3. Qualquer export explícito do módulo prevalece sobre os nomes de estrela, qualquer que seja a ordem no arquivo. Isso vale para export local, indireto nomeado e `export * as N`.
++4. Se duas ou mais estrelas fornecem `N` com ligações resolvidas diferentes, `N` é ambíguo. O kernel o exporta como U, com `UNKNOWN_REEXPORT` e detalhe `AMBIGUOUS_STAR:N`. A ambiguidade é sticky: uma estrela posterior com a mesma ligação de uma anterior não a desfaz. Mesma ligação por dois caminhos não é ambígua.
++5. Se o módulo tiver qualquer estrela com fonte não qualificada, essa estrela mantém `UNKNOWN_REEXPORT`. Todos os nomes vindos de estrela no módulo passam a U e o namespace do módulo fica incompleto. Os exports explícitos mantêm o próprio valor.
++6. Ligação viva: a cópia é feita na instrução, como no reexport nomeado da v4. Um binding mutável na fonte (`let`/`var`) já emite `UNKNOWN_MUTABLE_BINDING` na fonte. Essa raiz fica no fecho de todo importador, e a cópia nunca sustenta prova.
+ 
+-A aresta, a identidade e a resolução do alvo seguem as regras atuais.
++A aresta, a identidade e a resolução do alvo seguem as regras atuais. A aresta da estrela continua registrada antes do ramo, e a fonte entra no fecho do módulo.
+ 
+ ### 3.2 E2 — export de classe recusada
+ 
+-Uma `ClassDeclaration` continua emitindo `UNKNOWN_UNSUPPORTED_SYNTAX` com detalhe `ClassDeclaration`. Com nome, o nome é ligado a U no escopo do bloco. Se a declaração for exportada, o export recebe U: `N` para `export class N` e `default` para `export default class`. A verificação de export atual emite `UNKNOWN_EXPORT` para esse valor. `new`, chamada, leitura de propriedade e herança da classe seguem as recusas atuais.
++1. Uma `ClassDeclaration` continua emitindo `UNKNOWN_UNSUPPORTED_SYNTAX` com detalhe `ClassDeclaration`.
++2. O nome da classe é pré-declarado como U na entrada do bloco, como let/const. Referência anterior à declaração lê U, não global.
++3. Uma classe exportada recebe U no export: `N` para `export class N`, `default` para `export default class` nomeada ou anônima. A verificação de export atual emite `UNKNOWN_EXPORT` para esse valor.
++4. `declare class`, inclusive exportada, é declaração de ambiente e não existe em runtime. Emite `UNKNOWN_RUNTIME_DECLARATION`, como `declare const`, e o nome exportado recebe U.
++5. `new`, chamada, leitura de propriedade e herança da classe seguem as recusas atuais. `ClassExpression` não muda.
+ 
+ ### 3.3 Conservação
+ 
+-A regra compara a v4 atual com a v4 com E1+E2, nos mesmos inputs, limites e referências, sem estouro de prazo, ENOBUFS ou erro de worker. Uma tupla da primeira pode sumir na segunda só em quatro casos:
++A regra compara v4 e v5 nos mesmos inputs, limites e referências (receita com escopo, SPEC0243), sem estouro de prazo, ENOBUFS ou erro de worker.
++
++**Definições.**
+ 
+-1. `UNKNOWN_INHERITED_PROPERTY` de nome que agora existe no namespace por E1 ou E2;
+-2. `UNKNOWN_REEXPORT` de estrela agora modelada;
+-3. `UNKNOWN_BINDING` cujo detalhe é o nome de classe recusada no mesmo arquivo;
+-4. tupla de propagação (gatilho só U) em arquivo cujo fecho contém um módulo tocado por E1 ou E2.
++- *Módulo tocado* é aquele em que E1 modelou ao menos uma estrela ou E2 ligou ao menos um nome de classe. O BUILD publica a lista.
++- *Grafo* são as arestas de resolução da passagem não-census da v4, por arquivo.
++- *Fecho* de um arquivo é o conjunto de arquivos alcançados por essas arestas.
++- *Etiqueta de gatilho* de uma tupla da v4 é obtida por uma cópia diagnóstica privada. Essa cópia é provada igual byte a byte à v4, salvo as etiquetas, e reproduz as tuplas oficiais das duas execuções (normal e strict), como `diag_patch.py`/`cause_patch.py`.
++- *Raiz* é toda tupla da v4 cuja etiqueta não é só U-*. *Propagação* é a tupla cuja etiqueta é só U-*.
++
++**Regras.**
++
++1. Toda raiz da v4 persiste na v5, salvo três classes:
++   - `UNKNOWN_INHERITED_PROPERTY` com etiqueta de export ausente por estrela ou classe;
++   - `UNKNOWN_REEXPORT` de estrela agora modelada;
++   - `UNKNOWN_BINDING` cujo detalhe é nome de classe agora ligado no mesmo arquivo.
++2. Uma propagação da v4 só pode sumir em arquivo cujo fecho contém módulo tocado.
++3. Toda tupla nova é colocada por causa. Ela deve estar:
++   - em módulo tocado;
++   - a jusante de módulo tocado (corpo alcançado por nome que E1 ou E2 tornou conhecido); ou
++   - em arquivo cujo fecho contém módulo tocado.
++   Tupla nova sem uma dessas causas é defeito. As novas são reportadas por motivo e família.
++4. O multiset de violações da v4 está contido no da v5. Não há prova na raiz real. O census não muda. Normal e strict são iguais. As tuplas de envelope da SPEC0241 §3.5 ficam fora da regra.
++5. O BUILD publica os denominadores do conjunto admitido: arquivos analisados, módulos tocados, arquivos no cone e a jusante, raízes e propagações da v4, propagações admissíveis e as que sumiram.
+ 
+-Tupla nova só aparece em arquivo tocado ou cujo fecho contém um. As tuplas de envelope da SPEC0241 §3.5 ficam fora da regra. O multiset de violações da primeira está contido no da segunda. O census não muda. Normal e strict são iguais. A explicação é mecânica, tupla a tupla, como em `variant-v2-conservation.json`, e qualquer tupla sem explicação é defeito.
++A explicação é mecânica, tupla a tupla. A v5a passa nesta regra: das 7.288 raízes, somem só as 1.460 das três classes; somem 81 das 3.840 propagações admissíveis (cone de 977 de 1.341 arquivos); e as 305 novas se dividem em 291 em módulo tocado e 14 a jusante. O poder discriminante está nas raízes. A cláusula de propagação é permissiva, e por isso o BUILD publica as tuplas que somem.
+ 
+ ### 3.4 Versão
+ 
+-O kernel recebe a versão nova `semantic-kernel-v5-esm-module-shape`. Prova de versão anterior não é aceita como v5. Perfil de resolução, receitas, limites (SPEC0242) e census não mudam.
++A v5 recebe a versão nova `semantic-kernel-v5-esm-module-shape`. Prova de versão anterior não é aceita como v5. Perfil de resolução, receitas, limites (SPEC0242) e census não mudam.
+ 
+ ## 4. O que permanece UNKNOWN
+ 
+-Tudo fora de E1 e E2, a saber:
++Tudo fora de E1 e E2:
+ 
+-- propagação, inclusive as entradas externas do K0;
++- propagação, inclusive o K0 (660 a 883 tuplas);
+ - domínio, inclusive o corpo das classes;
++- TSX;
+ - intrínsecos e built-ins;
+ - resolução, formato e proveniência;
+ - fatos do código;
+ - as 890 origens de base.
+ 
+-A regra global continua: qualquer UNKNOWN impede todas as provas. B6 segue INCOMPLETE e a expectativa continua sendo de zero provas.
++A regra global continua: qualquer UNKNOWN na execução impede todas as provas. Na raiz real B6 segue INCOMPLETE, e a expectativa é de zero provas. Em fixture limpo, E1 pode levar a PROVEN (§2).
+ 
+ ## 5. Versão, integração e recuperação
+ 
+-A base é a main que contenha, byte a byte, os scripts da cabeça do PR #8 (`1073a9dd`). Fontes previstas:
++A base é a main que contenha, byte a byte, os scripts da cabeça do PR #8 (`1073a9dd`). As SPEC0242 e 0243 estão versionadas na main remota (`ba9492b0`) e na cabeça do PR #8. Fontes previstas:
+ 
+ - `scripts/boundary-semantic-engine.mjs` (E1, E2, versão);
+ - teste novo `tests/b6-0244-esm-module-shape.test.js`.
+ 
+-Migração literal de teste só se necessária, registrada antes da edição, com a primeira falha preservada. Medição real na raiz `228e7918` com as referências da receita com escopo (SPEC0243), as mesmas nas duas execuções da §3.3.
++Migração literal de teste só se necessária, registrada antes da edição, com a primeira falha preservada. A medição real usa a raiz `228e7918` com as referências da receita com escopo, as mesmas nas duas execuções da §3.3.
+ 
+-O rollback é a v4 atual. A promoção para diante de:
++O rollback é a v4. A promoção para diante de:
+ 
+-- perda de violação ou prova indevida;
++- perda de violação ou prova indevida na raiz real;
+ - tupla que some ou aparece fora da §3.3;
+ - validation false sem causa fora do delta;
+ - estouro de prazo, ENOBUFS ou erro de worker;
+@@ -122,28 +213,29 @@
+ 
+ ## 6. Riscos
+ 
+-- **Semântica de estrela.** Ligação viva, ambiguidade, `default`, ciclo e interop. O contrato só modela a fonte ESM analisada e completa; o resto mantém a recusa.
+-- **Contagem.** A redução esperada é de cerca de 10%. A massa restante é estrutural: propagação, K0 e domínio. A contagem não mede progresso para prova.
+-- **Exports novos visíveis.** Objetos reexportados de fato passam a acusar estado mutável exportado. É precisão, não regressão.
+-- **Classe.** O nome ligado a U não autoriza uso. `new` e chamada continuam recusados no ponto de uso.
++- **Semântica de estrela:** ligação resolvida, ambiguidade sticky, completude transitiva, `default`, ciclo e interop. O contrato só modela fonte ESM analisada e completa; o resto mantém a recusa ou vira U.
++- **Prova nova em fixture:** E1 amplia o que pode ser PROVEN sem premissa nova (§2). O MS04 exige a dependência K5 da fonte e a derivação revalidada.
++- **Contagem:** a redução esperada é de cerca de 9%. A massa restante é estrutural: propagação, K0 e domínio. A contagem não mede progresso para prova; E1+E2 não aproxima a primeira prova (13 → 13 fechos limpos, 0 candidatos a aresta).
++- **Exports novos visíveis:** objetos reexportados de fato acusam estado mutável exportado, e `declare class` acusa declaração de runtime. É precisão, não regressão.
++- **Classe:** o nome ligado a U não autoriza uso. `new` e chamada continuam recusados no ponto de uso.
+ 
+ ## 7. Aceites futuros — todos NOT_RUN
+ 
+-Nada abaixo foi demonstrado para uma implementação 0244, que ainda não existe. E1 e E2 rodaram só como variante diagnóstica privada.
++Nada abaixo foi demonstrado para uma implementação 0244, que ainda não existe. E1 e E2 rodaram só como variantes diagnósticas privadas.
+ 
+ | ID   | Critério obrigatório de BUILD |
+ | ---- | --- |
+-| MS01 | Primeiras falhas na v4 atual: fixtures de estrela e de classe exportada dão `UNKNOWN_INHERITED_PROPERTY` no importador. |
+-| MS02 | E1: estrela simples, `as ns`, local prevalece (antes e depois da estrela), `default` excluído, ambiguidade com `AMBIGUOUS_STAR`, valor U preservado, e fonte CJS, contida ou em ciclo com recusa atual. |
+-| MS03 | E2: classe nomeada, exportada, default e anônima. Raiz `ClassDeclaration` mantida, `UNKNOWN_EXPORT` no exportador, `new` e chamada ainda recusados. |
+-| MS04 | Nenhuma prova nova e nenhuma violação perdida nas fixtures; módulo com estrela e classe nunca vira PROVEN só por E1/E2. |
+-| MS05 | Conservação da §3.3 na raiz `228e7918`, tupla a tupla, com explicação mecânica; normal igual a strict; validation true; redução registrada. |
++| MS01 | Primeiras falhas na v4: fixtures de estrela e de classe exportada dão `UNKNOWN_INHERITED_PROPERTY` no importador. |
++| MS02 | E1, um fixture por caso: estrela simples; `as ns` com fonte qualificada e não qualificada; export explícito antes e depois da estrela (local, indireto e `as N`); `default` excluído; mesma ligação por dois caminhos sem ambiguidade (inclusive `import` + `export { X }`); ligações diferentes com `AMBIGUOUS_STAR` e sticky; fonte incompleta transitiva; módulo misto com todos os nomes de estrela U; valor U preservado; binding mutável na fonte; fonte CJS, contida ou em ciclo com recusa atual. |
++| MS03 | E2: classe nomeada, exportada, default nomeada e default anônima; referência antes da declaração lê U (TDZ); `declare class` e `export declare class` com `UNKNOWN_RUNTIME_DECLARATION`; raiz `ClassDeclaration` mantida; `UNKNOWN_EXPORT` no exportador; `new` e chamada ainda recusados. |
++| MS04 | Fixture limpo com estrela qualificada dá PROVEN, com dependência K5 da fonte e derivação revalidada. Estrela não qualificada, ambígua ou com fonte incompleta dá UNKNOWN. Módulo com classe nunca dá PROVEN. Nenhuma violação perdida. |
++| MS05 | Conservação da §3.3 na raiz `228e7918`, tupla a tupla, com etiquetas da cópia provada e denominadores publicados; normal igual a strict; validation true; zero provas na raiz real; redução registrada. |
+ | MS06 | Census e limites iguais; versão do kernel nova; perfil e receitas iguais. |
+ | MS07 | Regressões 0228/0234/0236/0237/0240/0241/0242/0243 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; consumidor fresco. |
+ | MS08 | Promoção só dos deltas próprios; sem push, deploy ou produção. |
+ 
+ ## 8. Autoridade
+ 
+-E1 e E2 mudam o K5 da SPEC0236, que define como import, export e namespace geram valores e arestas. A mudança é de precisão: mais nomes passam a ter o valor real da fonte ou U explícito. Mesmo sem premissa nova, ela altera o kernel de prova, e D-12/T3 exige **revisão explícita da SPEC pelo usuário antes do BUILD**. As aprovações anteriores continuam resolvidas.
++E1 e E2 mudam o K5 da SPEC0236, que define como import, export e namespace geram valores e arestas. A mudança é de precisão: mais nomes passam a ter o valor real da fonte ou U explícito. **E1 pode fazer nascer prova onde a v4 dava UNKNOWN** (§2), sem premissa nova. Mesmo assim, a mudança altera o kernel de prova, e D-12/T3 exige **revisão explícita da SPEC pelo usuário antes do BUILD**. As aprovações anteriores continuam resolvidas.
+ 
+ Esta preparação e as cópias diagnósticas não autorizam código 0244, prova por escopo, produção, release, dados reais, push ou deploy.

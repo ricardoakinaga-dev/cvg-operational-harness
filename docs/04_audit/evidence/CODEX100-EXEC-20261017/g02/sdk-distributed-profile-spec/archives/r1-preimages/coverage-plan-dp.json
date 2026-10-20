@@ -1,0 +1,462 @@
+{
+  "kind": "SDK_DISTRIBUTED_PROFILE_COVERAGE_PLAN",
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "base": {
+    "path": "../sdk-batch-2b2-binding/coverage-observed-v5.json",
+    "sha256": "5b8d1019a817d78080085b287e72bfeb7b81e454f2215b02dd609e6c31d3e4a4"
+  },
+  "decisions": {
+    "user": {
+      "path": "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json",
+      "sha256": "e0bd4960d881cecdc26a11bc5ceb9247b655df4055a5e676bf91a68a1e5b5e00"
+    },
+    "loopback": {
+      "path": "../sdk-distributed-acquisition/lead-decision-loopback-a5.json",
+      "sha256": "ebc114527ed90a6d555b8a6e88e92ca37e65ce1da2e6dd81e7a3446e21cbdd91"
+    }
+  },
+  "scope_rule": "PY19, PY20, PK01-PK09 e o ramo empacotado do PY02, só com artefatos do cache ligados por sha, em linux-x64 e na contenção atual; sem rede, provider, credencial nem capability do kernel; o que depende do A6, de login, de turn ou de modelo fica fora com destino.",
+  "classes": {
+    "IN_SPEC": "entra nesta especificação",
+    "OUT_NOT_AVAILABLE": "depende de artefato inexistente (A6) ou de ramo sem artefato",
+    "OUT_T4_GATE": "exige login, turn, modelo ou credencial",
+    "OUT_PLATFORM_LIMIT": "só linux-x64 é local",
+    "OUT_INPUT_NOT_AVAILABLE": "entrada de fonte ausente do perfil; obtê-la é aquisição com rede",
+    "OUT_T3_QUESTION": "exige mudança de postura de segurança",
+    "OUT_INSTALLER": "exige instalador ou build não autorizados",
+    "OUT_UNREACHABLE": "contrafactual",
+    "OUT_NEW_ACQUISITION": "fora da lista da Q2",
+    "OUT_LATER_UNIT": "unidade posterior do perfil distribuído"
+  },
+  "new_arm_ids": {
+    "rule": "PY19 e PY20 não têm braços no G01; os braços desta especificação começam em B01. O PY02 continua do B09 (o 2B usou até B08).",
+    "arms": {
+      "PY19.B01": "codex_bin explícito precisa existir",
+      "PY19.B02": "sem codex_bin, exige codex_cli_bin (FileNotFoundError sobre o ImportError, sem fallback npm)",
+      "PY19.B03": "codex_cli_bin exige codex-package.json",
+      "PY19.B04": "codex_cli_bin exige bin/codex",
+      "PY19.B05": "identidade do runtime: versão declarada pelo binário publicado igual à do pacote, sem vínculo de build",
+      "PY20.B01": "asset de linux x86_64 do platform_asset_name existe na release com digest publicado igual ao adquirido",
+      "PY20.B02": "wheel do runtime com tag de plataforma e não puro",
+      "PY20.B03": "payload do wheel igual ao do asset, membro a membro",
+      "PY02.B09": "ramo empacotado: argv sem --config quando não há overrides",
+      "PY02.B10": "prefixo de PATH só com codex-path existente",
+      "PY02.B11": "ramo empacotado com o binário publicado: --config, app-server e CheckoutCapabilities com args[:-2]"
+    }
+  },
+  "residuals": [
+    {
+      "id": "R-PY19-1",
+      "contract": "PY19",
+      "item": "codex_bin explícito e codex_cli_bin obrigatório, sem fallback npm",
+      "class": "IN_SPEC",
+      "cases": ["DP-PY19A"],
+      "arms": ["PY19.B01", "PY19.B02"]
+    },
+    {
+      "id": "R-PY19-2",
+      "contract": "PY19",
+      "item": "pacote codex_cli_bin exige codex-package.json e bin/codex",
+      "class": "IN_SPEC",
+      "cases": ["DP-PY19B"],
+      "arms": ["PY19.B03", "PY19.B04"]
+    },
+    {
+      "id": "R-PY19-3",
+      "contract": "PY19",
+      "item": "identidade do runtime publicado (wheel 0.153.4 e binário)",
+      "class": "IN_SPEC",
+      "cases": ["DP-PY02P"],
+      "arms": ["PY19.B05"]
+    },
+    {
+      "id": "R-PY19-4",
+      "contract": "PY19",
+      "item": "identidade de um pacote openai-codex publicado (SDK Python 0.153.4)",
+      "class": "OUT_NOT_AVAILABLE",
+      "reason": "o PyPI não tem openai-codex 0.153.4 (A6 NOT_AVAILABLE na aquisição); o SDK Python observado é a fonte do pin",
+      "destination": "NOT_AVAILABLE"
+    },
+    {
+      "id": "R-PY19-5",
+      "contract": "PY19",
+      "item": "package_version do SDK (fonte, distribuição ou 0+unknown)",
+      "class": "OUT_NOT_AVAILABLE",
+      "reason": "sem distribuição publicada do SDK Python 0.153.4, só o ramo 'fonte' é possível, e ele não é o artefato distribuído",
+      "destination": "NOT_AVAILABLE"
+    },
+    {
+      "id": "R-PY20-1",
+      "contract": "PY20",
+      "item": "asset de linux x86_64, tag não pura do wheel e identidade de payload",
+      "class": "IN_SPEC",
+      "cases": ["DP-PY20A"],
+      "arms": ["PY20.B01", "PY20.B02", "PY20.B03"]
+    },
+    {
+      "id": "R-PY20-2",
+      "contract": "PY20",
+      "item": "execução do bootstrap (_runtime_setup.py: reuso, staging e instalação)",
+      "class": "OUT_INPUT_NOT_AVAILABLE",
+      "reason": "o módulo importa release_version.py e usa scripts/update_sdk_artifacts.py, que não estão nas entradas do perfil (só o sha no inventário G01); obtê-los do repositório do pin é aquisição com rede",
+      "destination": "pergunta T4 de aquisição, se o Lead quiser executar o bootstrap"
+    },
+    {
+      "id": "R-PY20-3",
+      "contract": "PY20",
+      "item": "download do asset pelo bootstrap (loopback permitido pelo Lead)",
+      "class": "OUT_T3_QUESTION",
+      "reason": "a URL é HTTPS fixa de github.com; servir por loopback exigiria identidade TLS de github.com confiável no sandbox, mudança de postura de segurança não coberta pela decisão do Lead",
+      "destination": "pergunta T3 contingente (só se R-PY20-2 for resolvido)"
+    },
+    {
+      "id": "R-PY20-4",
+      "contract": "PY20",
+      "item": "instalação por pip (--force-reinstall) e build do wheel (hatch_build.py)",
+      "class": "OUT_INSTALLER",
+      "reason": "pip install de diretório fonte exige backend de build (hatchling) e rede; instalador e build não estão autorizados",
+      "destination": "unidade posterior com decisão própria"
+    },
+    {
+      "id": "R-PY20-5",
+      "contract": "PY20",
+      "item": "as outras cinco plataformas e o ramo não suportado executados",
+      "class": "OUT_PLATFORM_LIMIT",
+      "reason": "só linux-x64 é local",
+      "destination": "perfil de plataforma"
+    },
+    {
+      "id": "R-PY02-1",
+      "contract": "PY02",
+      "item": "ramo empacotado com codex_cli_bin: argv, PATH e CheckoutCapabilities",
+      "class": "IN_SPEC",
+      "cases": ["DP-PY19B", "DP-PY02P"],
+      "arms": ["PY02.B09", "PY02.B10", "PY02.B11"]
+    },
+    {
+      "id": "R-PY02-2",
+      "contract": "PY02",
+      "item": "chave PATH no Windows",
+      "class": "OUT_PLATFORM_LIMIT",
+      "reason": "depende do Windows",
+      "destination": "perfil de plataforma"
+    },
+    {
+      "id": "R-PY02-3",
+      "contract": "PY02",
+      "item": "turn, login ou modelo pelo app-server publicado",
+      "class": "OUT_T4_GATE",
+      "reason": "exige provider ou credencial (Q3 keyless)",
+      "destination": "gate T4 separado"
+    },
+    {
+      "id": "R-PK01-1",
+      "contract": "PK01",
+      "item": "oito pares e inválidos no resolvedor do SDK publicado; nome .exe",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK01A"],
+      "arms": ["PK01.B01", "PK01.B02", "PK01.B04"]
+    },
+    {
+      "id": "R-PK01-2",
+      "contract": "PK01",
+      "item": "triple sem pacote no mapa (PK01.B03)",
+      "class": "OUT_UNREACHABLE",
+      "reason": "o mapa fixo cobre todos os triples produzidos; o ramo é contrafactual",
+      "destination": "NOT_AVAILABLE"
+    },
+    {
+      "id": "R-PK01-3",
+      "contract": "PK01",
+      "item": "binários reais das outras plataformas",
+      "class": "OUT_PLATFORM_LIMIT",
+      "reason": "só linux-x64 foi adquirido e é local",
+      "destination": "perfil de plataforma"
+    },
+    {
+      "id": "R-PK02-1",
+      "contract": "PK02",
+      "item": "resolução e layouts novo, legacy, ausentes e stat",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK02A", "DP-PK02R"],
+      "arms": ["PK02.B01", "PK02.B02", "PK02.B03", "PK02.B04", "PK02.B05"]
+    },
+    {
+      "id": "R-PK02-2",
+      "contract": "PK02",
+      "item": "symlinks, permissões e TOCTOU externos ao stat",
+      "class": "OUT_PLATFORM_LIMIT",
+      "reason": "dependem do sistema de arquivos do usuário; fora do perfil contido",
+      "destination": "perfil de plataforma"
+    },
+    {
+      "id": "R-PK03-1",
+      "contract": "PK03",
+      "item": "PATH em host não Windows: chave e prepend",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK03A"],
+      "arms": ["PK03.B01", "PK03.B03"]
+    },
+    {
+      "id": "R-PK03-2",
+      "contract": "PK03",
+      "item": "chave Path no Windows e parâmetro platform (PK03.B02 e PK03.B04)",
+      "class": "OUT_PLATFORM_LIMIT",
+      "reason": "simular win32 em host Linux não prova o delimitador nem as chaves do Windows (G01)",
+      "destination": "perfil de plataforma"
+    },
+    {
+      "id": "R-PK04-1",
+      "contract": "PK04",
+      "item": "plataforma, vendor, binário ausente e dica do wrapper",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK04A", "DP-REAL01"],
+      "arms": ["PK04.B01", "PK04.B02", "PK04.B03", "PK04.B04"]
+    },
+    {
+      "id": "R-PK04-2",
+      "contract": "PK04",
+      "item": "executar a dica de instalação",
+      "class": "OUT_INSTALLER",
+      "reason": "instalação global não autorizada",
+      "destination": "nunca nesta trilha"
+    },
+    {
+      "id": "R-PK05-1",
+      "contract": "PK05",
+      "item": "heurísticas de gerenciador e ownership com árvores sintéticas",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK05A"],
+      "arms": ["PK05.B01", "PK05.B02", "PK05.B03", "PK05.B04", "PK05.B05"]
+    },
+    {
+      "id": "R-PK05-2",
+      "contract": "PK05",
+      "item": "instalações reais por pnpm, vite-plus e bun",
+      "class": "OUT_INSTALLER",
+      "reason": "exigem os gerenciadores e rede",
+      "destination": "unidade posterior com decisão própria"
+    },
+    {
+      "id": "R-PK06-1",
+      "contract": "PK06",
+      "item": "env gerenciado, erro de spawn, sinais e saída do wrapper",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK05A", "DP-PK06A"],
+      "arms": ["PK06.B01", "PK06.B02", "PK06.B03", "PK06.B04"]
+    },
+    {
+      "id": "R-PK07-1",
+      "contract": "PK07",
+      "item": "targets, inválido e layout do proxy",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK07A"],
+      "arms": ["PK07.B01", "PK07.B02", "PK07.B03"]
+    },
+    {
+      "id": "R-PK08-1",
+      "contract": "PK08",
+      "item": "spawn herdado, sinais e término do proxy com filho sintético",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK08A"],
+      "arms": ["PK08.B01", "PK08.B02", "PK08.B03"]
+    },
+    {
+      "id": "R-PK08-2",
+      "contract": "PK08",
+      "item": "proxy real com chave e encaminhamento ao provider",
+      "class": "OUT_T4_GATE",
+      "reason": "exige credencial e provider (Q3 keyless)",
+      "destination": "gate T4 separado"
+    },
+    {
+      "id": "R-PK09-1",
+      "contract": "PK09",
+      "item": "manifestos e exports publicados frente à fonte, sem equivalência de build",
+      "class": "IN_SPEC",
+      "cases": ["DP-PK09A", "DP-PK02R", "DP-REAL01"],
+      "arms": ["PK09.B01", "PK09.B02", "PK09.B03"]
+    },
+    {
+      "id": "R-PK09-2",
+      "contract": "PK09",
+      "item": "assinatura e proveniência do registro (npm signatures, attestations)",
+      "class": "OUT_NEW_ACQUISITION",
+      "reason": "não fazem parte da lista da Q2; obtê-las é nova aquisição com rede",
+      "destination": "pergunta T4, se o Lead quiser"
+    },
+    {
+      "id": "R-PK09-3",
+      "contract": "PK09",
+      "item": "bundle, typecheck e declarações do SDK TS publicado",
+      "class": "OUT_LATER_UNIT",
+      "reason": "exige compilador e um caso próprio",
+      "destination": "unidade posterior do perfil distribuído"
+    }
+  ],
+  "rows": [
+    {
+      "source_contract": "PY19",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PY19A", "DP-PY19B", "DP-PY02P"],
+      "arms_targeted": [
+        "PY19.B01",
+        "PY19.B02",
+        "PY19.B03",
+        "PY19.B04",
+        "PY19.B05"
+      ],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PY19-4", "R-PY19-5"]
+    },
+    {
+      "source_contract": "PY20",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PY20A"],
+      "arms_targeted": ["PY20.B01", "PY20.B02", "PY20.B03"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PY20-2", "R-PY20-3", "R-PY20-4", "R-PY20-5"]
+    },
+    {
+      "source_contract": "PY02",
+      "status_v5": "OBSERVED_CLIENT_PARTIAL",
+      "cases": ["DP-PY19B", "DP-PY02P"],
+      "arms_targeted": ["PY02.B09", "PY02.B10", "PY02.B11"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PY02-2", "R-PY02-3"]
+    },
+    {
+      "source_contract": "PK01",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK01A"],
+      "arms_targeted": ["PK01.B01", "PK01.B02", "PK01.B04"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK01-2", "R-PK01-3"]
+    },
+    {
+      "source_contract": "PK02",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK02A", "DP-PK02R"],
+      "arms_targeted": [
+        "PK02.B01",
+        "PK02.B02",
+        "PK02.B03",
+        "PK02.B04",
+        "PK02.B05"
+      ],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK02-2"]
+    },
+    {
+      "source_contract": "PK03",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK03A"],
+      "arms_targeted": ["PK03.B01", "PK03.B03"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK03-2"]
+    },
+    {
+      "source_contract": "PK04",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK04A", "DP-REAL01"],
+      "arms_targeted": ["PK04.B01", "PK04.B02", "PK04.B03", "PK04.B04"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK04-2"]
+    },
+    {
+      "source_contract": "PK05",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK05A"],
+      "arms_targeted": [
+        "PK05.B01",
+        "PK05.B02",
+        "PK05.B03",
+        "PK05.B04",
+        "PK05.B05"
+      ],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK05-2"]
+    },
+    {
+      "source_contract": "PK06",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK05A", "DP-PK06A"],
+      "arms_targeted": ["PK06.B01", "PK06.B02", "PK06.B03", "PK06.B04"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": []
+    },
+    {
+      "source_contract": "PK07",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK07A"],
+      "arms_targeted": ["PK07.B01", "PK07.B02", "PK07.B03"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": []
+    },
+    {
+      "source_contract": "PK08",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK08A"],
+      "arms_targeted": ["PK08.B01", "PK08.B02", "PK08.B03"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK08-2"]
+    },
+    {
+      "source_contract": "PK09",
+      "status_v5": "OPEN_REQUIRED_FUTURE_PROFILE",
+      "cases": ["DP-PK02R", "DP-REAL01", "DP-PK09A"],
+      "arms_targeted": ["PK09.B01", "PK09.B02", "PK09.B03"],
+      "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL",
+      "whole_requirement_covered_after": false,
+      "residuals_out": ["R-PK09-2", "R-PK09-3"]
+    }
+  ],
+  "projection_if_all_pass": {
+    "rows_becoming_observed": [
+      "PY19",
+      "PY20",
+      "PK01",
+      "PK02",
+      "PK03",
+      "PK04",
+      "PK05",
+      "PK06",
+      "PK07",
+      "PK08",
+      "PK09"
+    ],
+    "counts": {
+      "OBSERVED_CLIENT_PARTIAL": 44,
+      "OPEN_REQUIRED_FUTURE_PROFILE": 0
+    },
+    "note": "Projeção de planejamento, com as vagas condicionais liberadas. Nenhuma linha passa a cobrir o requisito inteiro; GAP-PROVENANCE e GAP-PLATFORM-PACKAGING seguem OPEN; build_link segue NO_BUILD_LINK_DECLARED."
+  },
+  "counts": {
+    "residuals": 31,
+    "by_class": {
+      "IN_SPEC": 14,
+      "OUT_INPUT_NOT_AVAILABLE": 1,
+      "OUT_INSTALLER": 3,
+      "OUT_LATER_UNIT": 1,
+      "OUT_NEW_ACQUISITION": 1,
+      "OUT_NOT_AVAILABLE": 2,
+      "OUT_PLATFORM_LIMIT": 5,
+      "OUT_T3_QUESTION": 1,
+      "OUT_T4_GATE": 2,
+      "OUT_UNREACHABLE": 1
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

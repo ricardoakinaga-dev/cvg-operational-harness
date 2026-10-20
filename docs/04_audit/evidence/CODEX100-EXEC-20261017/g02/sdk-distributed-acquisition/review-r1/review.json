@@ -1,0 +1,171 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-20T00:11:22Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "f1af997be853bdc01565a98dab70f69edb14ebdbe5e812683b207b2390f5a1a3",
+  "subject_hash_check": {
+    "before": "ok (9/9 arquivos com sha256 e bytes iguais aos do congelamento)",
+    "after": "ok (9/9 iguais, conferidos às 00:11Z). Observação: durante a revisão surgiu na pasta um arquivo que não está no congelamento, close-acquisition.py.txt (sha256 04174c9c304fdfb5b59ede6cac079828984bbe416544428cc244b7dc01b01e63, mtime 2026-10-20T00:03:31Z), ver R1-F10"
+  },
+  "digests_recomputed": {
+    "A1": "ok: 127000985 B; sha256 584ecdbd…bba6 igual ao uv.lock:336 e ao M6; sha512 e sha1 iguais aos do registro",
+    "A2": "ok: 4904 B; integrity sha512-wbHDmit7… e sha1 7f0283a7… iguais a M1 versions['0.153.4'].dist",
+    "A3": "ok: 129272137 B; integrity sha512-x1EcwBlY… e sha1 8e0c754e… iguais a M1 versions['0.153.4-linux-x64'].dist",
+    "A4": "ok: 19361216 B; integrity sha512-9qRaHuWL… e sha1 734b5ae8… iguais a M3 versions['0.153.4'].dist",
+    "A5": "ok: 126196303 B; sha256 a822187e…1821 igual a M7 assets[].digest e assets[].size; asset único com esse nome, state uploaded",
+    "A6": "NOT_AVAILABLE confirmado: M5 deu 404 no registro; não há artifacts/A6 nem pedido de substituto",
+    "A7": "ok: 21186 B; integrity sha512-z0rN8WMQ… e sha1 f9d45a83… iguais a M4 versions['0.153.4'].dist",
+    "M1,M3,M4,M6,M7": "ok: bytes, sha256, sha512 e sha1 das respostas guardadas iguais aos do registro"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 1 P2, 9 P3",
+  "mandatory_findings": ["R1-F01"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "acquisition-ledger.json (A5 url_effective)",
+      "title": "O registro guarda um token portador: a URL pré-assinada do redirecionamento do A5, com sig= (SAS) e jwt=",
+      "evidence": [
+        "acquisition-ledger.json:221 (/requests/11/url_effective)",
+        "acquisition-ledger.json:419 (/artifacts/4/request/url_effective)",
+        "acquire-distributed.py.txt:61 (url_effective gravado sem filtro)"
+      ],
+      "detail": "O url_effective do A5 aponta para release-assets.githubusercontent.com e traz na query a assinatura SAS sig= (44 caracteres, chave delegada skoid/sktid) e um JWT HS256. Payload do JWT: iss github.com, aud release-assets.githubusercontent.com, exp 2026-10-20T00:59:39Z; se=2026-10-20T00:51:46Z. O token ainda valia durante a revisão (~00:05Z). Não é credencial do usuário: nenhuma credencial foi enviada, o token foi emitido de forma anônima e só dá acesso a um asset público. Mesmo assim, contraria a regra 'sem credencial, token nem segredo nos registros' e iria para docs/ e para o histórico do git. Não rodei o gitleaks. Pela regra jwt padrão, o token precisa terminar em aspas, espaço, ';' ou fim de linha, e aqui ele é seguido de '&'; um gitleaks limpo, portanto, não provaria que o token não está lá.",
+      "required_action": "Redigir a query do url_effective nos dois lugares: manter esquema, host e caminho, e registrar só os nomes dos parâmetros e, se quiser, o sha256 da URL original. Não guardar o original em docs/, nem como preimagem. Registrar o reparo com o sha do ledger anterior e atualizar o vínculo ledger.sha256 em artifact-metadata.json, ou regenerá-lo. Corrigir acquire-distributed.py.txt para tirar a query de url_effective em aquisições futuras."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "verify-digests.py.txt / digest-verification.json",
+      "title": "Duas checagens da conferência afirmam mais do que testam",
+      "evidence": [
+        "verify-digests.py.txt:54-55",
+        "verify-digests.py.txt:103-110",
+        "digest-verification.json:42 e 90"
+      ],
+      "detail": "A checagem 'every request was HTTPS GET with no auth header' olha só o esquema da URL e o método; nenhum cabeçalho é verificado. A ausência de Authorization só aparece na linha de comando do curl (acquire-distributed.py.txt:52-53). A identidade dos binários usa os sha dos membros copiados de artifact-metadata.json, sem recalcular a partir dos arquivos compactados, e cobre só 6 nomes. Recalculei a partir dos compactados: os 6 arquivos comuns a A1, A3 e A5 são o conjunto completo (o A1 só tem a mais o __init__.py), todos idênticos. O resultado não muda.",
+      "required_action": "Renomear a checagem ou passar a conferir de fato o comando do curl (-q, sem -n, sem -H Authorization). Recalcular a identidade a partir dos compactados ou marcá-la como derivada de artifact-metadata.json."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "acquire-distributed.py.txt (resolução npm)",
+      "title": "O dist.tarball do registro é baixado sem conferir a URL esperada pelo plano",
+      "evidence": [
+        "acquire-distributed.py.txt:111 e 179-181",
+        "acquisition-plan.json:107, 125, 138 e 185 ('esperado https://registry.npmjs.org/...')"
+      ],
+      "detail": "Nas quatro resoluções npm, as URLs resolvidas são iguais às esperadas e todos os pedidos foram HTTPS. Mas a garantia de 'nenhum pedido fora do plano' depende do conteúdo do packument, porque não há verificação mecânica.",
+      "required_action": "Em aquisições futuras, comparar a URL resolvida com a esperada (ou pelo menos host e caminho) antes do GET, e registrar essa comparação no ledger."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "artifact-metadata.json / digest-verification.json",
+      "title": "Os bytes congelados não são a saída literal dos scripts geradores",
+      "evidence": [
+        "digest-verification.json:49",
+        "artifact-metadata.json:162, 258-260, 372, 555 e 569",
+        ".prettierrc.json"
+      ],
+      "detail": "O plano, o ledger e o freeze são idênticos a json.dumps(indent=2)+'\\n'. Os outros dois JSON têm listas curtas recolhidas numa linha, no estilo do prettier, e isso o script não produz. O conteúdo é o mesmo, mas rodar os scripts de novo não reproduziria o sha congelado.",
+      "required_action": "Registrar a etapa de formatação (ferramenta e versão) ou gerar os arquivos já no formato final."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "HOW-distributed-profile.md",
+      "title": "O HOW diz que PY02 está OPEN_REQUIRED_FUTURE_PROFILE no v5, e não está",
+      "evidence": [
+        "HOW-distributed-profile.md:60-61",
+        "../sdk-batch-2b2-binding/coverage-observed-v5.json rows[PY02].status = OBSERVED_CLIENT_PARTIAL; remaining_open_by_contract.PY02; counts.OPEN_REQUIRED_FUTURE_PROFILE = 11 (PY19, PY20, PK01–PK09)"
+      ],
+      "detail": "O PY02 está OBSERVED_CLIENT_PARTIAL. Aberto fica só o ramo empacotado, entre os braços restantes.",
+      "required_action": "Corrigir o texto: PY19, PY20 e PK01–PK09 estão OPEN_REQUIRED_FUTURE_PROFILE; o ramo empacotado do PY02 é um braço aberto de um contrato OBSERVED_CLIENT_PARTIAL."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "HOW-distributed-profile.md (regras da SPECIFY)",
+      "title": "Não fica claro onde fica a árvore de staging, o que pode levar ELF para docs/",
+      "evidence": ["HOW-distributed-profile.md:69-71"],
+      "detail": "O HOW fala em 'árvore privada só-leitura dentro da unidade'. Neste repositório, 'pasta da unidade' é a pasta de evidência em docs/, e o staging ali levaria um ELF de 258 MB para docs/. O texto também não diz que o cache da aquisição continua imutável.",
+      "required_action": "Dizer que o staging fica fora de docs/ (num diretório de trabalho em /mnt/dados/cvg-work), que o cache é só leitura e que a árvore de staging se liga por sha256 aos membros de artifact-metadata.json."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "HOW-distributed-profile.md (contenção e PY20)",
+      "title": "A descrição da contenção e o 'servir o A5 por loopback' precisam de precisão diante da Q3",
+      "evidence": [
+        "HOW-distributed-profile.md:67",
+        "HOW-distributed-profile.md:80",
+        "../sdk-reference-profile/containment-and-observer.json (--unshare-all)"
+      ],
+      "detail": "A contenção admitida usa --unshare-all (que inclui o namespace de rede), e não --unshare-net isolado. No PY20, um servidor local que imite github.com/api.github.com é um serviço que substitui a rede. A Q3 diz 'sem rede', e o HOW deixa isso para 'decisão da SPECIFY'.",
+      "required_action": "Alinhar o texto à contenção admitida. Dizer que qualquer loopback fica restrito ao namespace de rede da própria execução, sem saída externa. Se houver dúvida de que isso cabe na Q3, levar a questão ao usuário em vez de deixar só para a SPECIFY."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "HOW-distributed-profile.md (escopo)",
+      "title": "Os demais braços do 'perfil distribuído' do v5 ficam sem destino declarado",
+      "evidence": [
+        "../sdk-batch-2b2-binding/HOW-next-profile-v2.md:27-29",
+        "coverage-observed-v5.json remaining_open_by_contract (PY01, PY05, PY08, PY09, PY11, PY13, PY14, PY18, TS05, TS12)"
+      ],
+      "detail": "O escopo segue o pedido (11 contratos + o ramo empacotado do PY02). Mas o HOW não diz o que acontece com: o bundle, o typecheck e as declarações TS; os braços 'CLI real' (PY01, PY05, PY06, PY08, PY09, PY11, PY13, PY14, TS05, TS09, TS12); e o PY18. Também não diz que o PY18 (pydantic) e o braço de versões de Node do TS12 continuam bloqueados pela Q5.",
+      "required_action": "Acrescentar uma linha 'fora desta SPECIFY' com esses braços e o motivo (unidade posterior, ou Q5 não autorizada)."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "acquisition-plan.json (A1 platform_choice)",
+      "title": "A justificativa do wheel manylinux não aponta evidência do glibc do host",
+      "evidence": [
+        "acquisition-plan.json:87",
+        "../sdk-reference-profile/host-inputs.json:8 (só o CPython 3.12.3)"
+      ],
+      "detail": "A justificativa está correta. Conferi no host: x86_64, 'ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39', Python 3.12.3. Num host glibc, um instalador escolheria o manylinux_2_17_x86_64 e não o musllinux. Só falta o ponteiro para a observação do glibc.",
+      "required_action": "Registrar a observação do glibc (comando e saída) ou um ponteiro para ela no plano ou no HOW."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P3",
+      "area": "close-acquisition.py.txt (fora do assunto congelado)",
+      "title": "Arquivo novo na pasta durante a revisão; o status de fechamento não distingue P1 nem itens corrigidos",
+      "evidence": [
+        "close-acquisition.py.txt (mtime 2026-10-20T00:03:31Z, depois do freeze 00:02:35Z e do brief 00:03:02Z)",
+        "close-acquisition.py.txt:28",
+        "close-acquisition.py.txt:73"
+      ],
+      "detail": "Li o arquivo só como contexto; ele não foi revisado como assunto. O status vira COMPLETED_LOCAL_WITH_CARRIED_P2 sempre que existe uma disposição, sem olhar se o veredito tinha P1 ou se os itens foram corrigidos ou só carregados. A nota conta com um gitleaks que talvez não pegue o R1-F01.",
+      "required_action": "Incluir o arquivo no estado final e no secret-scan. Derivar o status dos itens da disposição: bloquear se houver P1, ou P2 que não esteja FIXED nem CARRIED por decisão. Corrigir o R1-F01 antes de fechar."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 9 arquivos congelados, antes e depois da revisão; sha256 do review-freeze-r1.json = f1af997b…",
+    "sha256 das entradas do plano: decisão e0bd4960…, uv.lock ca4f6314…, _runtime_setup.py 87aaed2e…, inventário G01 4207def8…; strings do inventário (alias npm:{CODEX_NPM_NAME}@…, rust-v0.116.0-alpha.1.2) presentes",
+    "plano: exatamente A1–A7 = lista da Q2; cada item tem URL ou regra de URL, fonte do digest (A1 = uv.lock; npm = dist do registro; A5 = assets[].digest; A6 = PyPI) e destino no cache; uv_lock_wheels = uv.lock:333-340; ponteiros uv.lock:336 e _runtime_setup.py:112/184 conferidos; pyproject 0.0.0-dev com openai-codex-cli-bin==0.153.4",
+    "linha do tempo: written_at 23:58:23.31Z < started_at 23:59:31.42Z; mtimes coerentes (build script 23:58:18Z, plano 23:58:23Z, acquire script 23:59:26Z, ledger 23:59:47Z); sha do plano no ledger = b4c805cf… = arquivo atual",
+    "recálculo em memória (python3 -I, stdlib) de bytes, sha256, sha512/integrity e sha1 dos 6 artefatos e das 5 respostas de metadados do cache; tudo igual ao ledger e ao digest-verification.json",
+    "fontes esperadas: uv.lock (A1); M6 com os 8 wheels iguais ao uv.lock; M1 versions['0.153.4'] e ['0.153.4-linux-x64'].dist; M3; M4; M7 (tag rust-v0.153.4, asset .tar.gz único, digest, size, browser_download_url = URL do plano, uploader github-actions[bot])",
+    "regras da lista: alias do A3 conferido em M1.optionalDependencies e no package.json do A2; package.json do A3 com name @openai/codex, version 0.153.4-linux-x64, os linux, cpu x64; M2 e M5 com 404 e sem arquivo; sem artifacts/A6 e sem quarantine/",
+    "pedidos: 13, ids únicos, todos GET HTTPS; um só redirecionamento (A5) para HTTPS; curl sem --retry, com -q, --proto/--proto-redir =https e sem -n nem Authorization",
+    "metadados: listas de membros (nome, tamanho, modo, tipo, sha256, ELF/shebang) do wheel e dos 5 tar.gz relidas em memória e iguais às de artifact-metadata.json; RECORD do wheel (10 entradas, 0 divergências, nenhum membro fora); METADATA e WHEEL iguais; package.json de A2, A3, A4 e A7 iguais",
+    "identidade: todos os arquivos comuns a A1, A3 e A5 (bin/codex, codex-code-mode-host, rg, bwrap, zsh, codex-package.json) têm o mesmo sha; bin/codex 56ef98ab… ≠ executável do pin 5cce7264… (g02-reference-acceptance.json/artifact)",
+    "host: x86_64, glibc 2.39, CPython 3.12.3; justifica o manylinux_2_17_x86_64",
+    "scripts .py.txt lidos: o único subprocesso é o curl (e curl --version); sem pip, npm ou uv; zipfile e tarfile só em memória; sem extração nem execução de arquivo do cache",
+    "limites: a pasta da unidade tem só texto/JSON (assinaturas de arquivo), sem symlink nem arquivo grande; o cache resolve para /mnt/dados (fora de docs/); nenhum rastro de instalação ou extração depois do plano em ~/.local, ~/.nvm, ~/.npm, ~/.cache/pip, ~/.cache/uv, /mnt/dados/cvg-work e /mnt/dados/tmp",
+    "varredura de padrões de segredo nos registros; decodifiquei cabeçalho e payload do JWT encontrado (R1-F01); conferi .gitleaks.toml (useDefault = true)",
+    "formato: plano, ledger e freeze idênticos a json.dumps(indent=2); artifact-metadata e digest-verification reformatados (R1-F04)",
+    "HOW contra Q1–Q4 da decisão e Q5 (nas condições da Q2), coverage-observed-v5.json, HOW-next-profile-v2.md e a contenção admitida (--unshare-all)"
+  ],
+  "limits": "Sem rede: os digests 'publicados' que conferi são os das respostas guardadas no cache, obtidas na mesma execução e pelo mesmo canal; não verifiquei signatures nem attestations do npm, nem a proveniência do GitHub. Os 404 de M2 e M5 constam só do ledger, porque o --fail descarta o corpo. Não há como provar que não houve pedido fora do script nem uma execução anterior apagada; só a coerência dos horários, as guardas do script (cache vazio e ledger inexistente) e o estado do cache. Não rodei o gitleaks (Docker proibido) nem os scripts geradores (eles gravariam na pasta). close-acquisition.py.txt está fora do assunto congelado e foi lido só como contexto. Nenhum arquivo foi criado: as sondas rodaram como python3 -I por stdin.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

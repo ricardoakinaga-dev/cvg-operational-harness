@@ -1,0 +1,124 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3",
+  "reviewer": "Claude Code (Opus 5.5), revisor independente R1, subagente somente leitura; não é o executor da unidade",
+  "reviewed_at": "2026-10-20T02:23:38Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "88b0c219e3266528e37ee42a14831cd6ccff09b0eee536670f40cac45cd976ad",
+  "subject_hash_check": {
+    "before": "PASS: review-freeze-r1.json com sha256 88b0c219...976ad; os 12 arquivos listados conferem em bytes e sha256; nenhum arquivo fora do freeze além de review-freeze-r1.json e review-r1/ (só brief.md)",
+    "after": "PASS: mesma conferência depois da revisão; os 12 arquivos sem mudança; fora do freeze só review-freeze-r1.json, review-r1/brief.md e este review.json"
+  },
+  "verdict": "REVISE",
+  "verdict_reason": "1 P2 e 4 P3, nenhum P1. O núcleo do BIND está certo e foi recalculado das entradas: 58 partes da arm_discrimination congelada, todas com judged_by aprovado no acceptance.json de serviço, nenhuma omitida ou duplicada (as duas entradas do C3-PY12 entram uma vez cada); 57 creditadas; a única sem crédito é a do PY13.B17, fiel à decisão do Lead e ao item (4) do C32-ADM/R1-F01; 44 linhas com carried_from_v5 igual ao v5, nenhuma muda de status, os 11 contratos do perfil distribuído seguem abertos; as seis lacunas seguem OPEN com contagens e rótulos de progresso do v5; 77 resíduos com classe e needs_new_decision coerentes com Q1-Q5 (34/2/38/3; 23 pedem decisão nova). O bloqueio é do 'que resta': o lado 'cópia versus uso do os.environ do driver' do PY02.B02 e do PY02.B07, registrado como não observado no v5, fica sem resíduo nem destino, e o HOW v3 e o next-task afirmam que o que falta desses braços é o caminho empacotado e que o resto do perfil de fonte sem decisão nova são só R-PY13-4 e R-PY18-1 (R1-F01). Os P3 tratam de listas de braços parciais do v5 que ignoram arms_closed_v3_carried, da base dada à negação de capacidade nova, de afirmações do HOW sem suporte e de registros resumidos com perdas. Cabe no reparo agrupado 1/1, sem serviço. Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade.",
+  "e3_07_reading": {
+    "verdict": "FIEL. A leitura adotada (sem crédito para toda parte cuja discriminação dependa da regra de zero chamadas; partes que dependem só das esperas D3-05 creditadas) cumpre a decisão do Lead ('sem crédito para o guarda E3-07') e o item (4) do C32-ADM/R1-F01. Ela atinge só a parte do PY13.B17 no C3-PY13ER. As partes do PY13.B18 ('exceção engolida ou rota mantida') e do PY08.B08 ('goal fora do fail_all') não dependem da regra nem do registro de threads e seguem creditáveis. A parte do PY13.B17 não pode ser creditada agora.",
+    "evidence": [
+      "cases-c3-2.json: só o C3-PY13ER declara zero_calls_client_effect_unless_started (expected.fault.fired[attr=cancel_goal_operation]); nenhum outro caso do C3-1 ou do C3-2 usa a regra",
+      "PY13.B17, contrary 'cleanup pulado quando o resultado já existe' (passos 9-12 e 14): com o cleanup pulado, cancel_goal_operation tem zero chamadas e o fault.fired_as_declared só passa pelo ramo E3-07 (python/acceptance.py:853-859 da C3-2); sem a regra o desfecho seria INVALID_CAPTURE, como no v5 (lead-decision-f01). A discriminação MISMATCH depende da regra cujo guarda 'nunca iniciou' não tem controle negativo (C32-ADM/R1-F01) e cujo registro perde threads com ident reusado (DV-C32-01). Creditar contrariaria a decisão do Lead e o R1-F01 (4)",
+      "PY13.B18, contrary 'exceção do cleanup engolida ou rota mantida' (passos 13-15, judged_by excepthook.records_exact e probe.values_exact): nos dois contrários o cleanup roda e chama o alvo (fault com uma chamada, ramo normal do fault.fired_as_declared); o estouro do excepthook.wait do passo 13 é CLIENT_EFFECT_UNLESS_ALIVE e segue por thread_alive",
+      "python/python-driver.py:567-586 da C3-2: thread_state tira alive de threading.enumerate; wait_result segue no estouro quando a classe é CLIENT_EFFECT ou CLIENT_EFFECT_UNLESS_ALIVE com not alive; thread_started (registro) só entra no WAIT_RESULT e no ok do thread.join (DV-C32-03), não na decisão de seguir. acceptance.py wait_client_effect_recorded exige thread_alive false quando ok é false",
+      "PY08.B08: passo 9 worker.join com wait_class CLIENT_EFFECT e sem thread_name (WAIT_RESULT com thread_started e thread_alive null; R1 da C3-2, ponto 2 (4)); o contrário 'goal fora do fail_all' é decidido por consumer.results_exact, sem registro de threads nem regra de zero chamadas",
+      "Captura real cases/C3-PY13ER-94b0a3389572: FAULT seq 28 (call 1), h_stop seq 29 no codex-goal-start-cleanup, EXCEPTHOOK_RECORD seq 30, WAIT_RESULT seq 32/35/38 com thread_started false e thread_alive false, THREAD_REGISTRY seq 47 sem codex-goal-start-cleanup; a regra de zero chamadas não foi usada (zero_calls_client_effect null)",
+      "adjudication-r1.json da C3-2, rows[case=C3-PY13ER].not_credited: guarda 'nunca iniciou', WAIT_RESULT.thread_started dos passos 11-13 e ok do passo 12, client_effect_timeout do passo 12; nenhuma parte creditada do v6 se apoia nesses três"
+    ]
+  },
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "HOW v3 / next-task / braços parciais do v5 não mirados",
+      "title": "O lado 'cópia versus uso do os.environ do driver' do PY02.B02 e do PY02.B07 fica sem resíduo nem destino, e o HOW v3 o põe no caminho empacotado do perfil distribuído",
+      "evidence": [
+        "coverage-observed-v5.json#/arms_observed_2b1_carried[arm_id=PY02.B02 e PY02.B07]/not_observed: '...; cópia versus uso do os.environ do driver (efeito no pai não sondado)'. Rótulos: 'env do filho = os.environ copiado + config.env' e 'env = os.environ copiado'",
+        "Origem: ../sdk-batch-2b1-binding/review-r2/review.json R2-F02 (carry-over aplicado no v5, rows[PY02].errata_applied_v5). Nenhum destino foi dado: remaining_open_by_contract.PY02 do v5 cita só o caminho empacotado, a chave PATH no Windows, o kill lento e o ramo 'sem prefixo de PATH'",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py:258 'env = os.environ.copy()': cópia ou uso se distingue no perfil de fonte com uma sonda do os.environ do driver depois do start (LANG e CVG_SYNTH_ENV do config.env), sem codex_cli_bin, rede ou capacidade nova",
+        "coverage-plan-c3.json#/residuals: R-PY02-2 (caminho empacotado) e R-PY02-4 ('sem prefixo de PATH' com codex_cli_bin) não cobrem esse lado; nenhum dos 77 resíduos o cita; coverage-observed-v6.json#/remaining_open_by_contract.PY02 também não",
+        "HOW-next-profile-v3.md:25-26: 'Ficam de escopo parcial no v5 o PY02.B02 e o PY02.B07. O lado que falta deles é o caminho empacotado, que pertence ao perfil distribuído.'",
+        "next-task.json:21 (opção SPECIFY-SDK-SOURCE-CONTINUATION-4): 'Resto do perfil de fonte sem decisão nova: R-PY13-4 ... e R-PY18-1'; o HOW v3 ('Sem decisão nova') tem a mesma tabela de dois itens",
+        "Precedente: ../sdk-batch-2b2-binding/review-r1/review.json R1-F03 (P2), resíduo de fonte ausente do HOW e da próxima unidade"
+      ],
+      "detail": "O BIND não credita nada indevido, mas o HOW v3 erra ao dizer o que resta, e essa é uma das entregas da unidade. Ele atribui ao perfil distribuído, já decidido, um não observado que é do perfil de fonte e não pede decisão. O next-task oferece ao Lead uma continuação 4 'completa' com dois itens. Assim, o lado do os.environ não entra na próxima especificação e some do resto aberto: arms_v5_partial_scope_not_targeted só lista os ids, sem lado restante nem destino.",
+      "required_action": "No reparo agrupado: (1) corrigir HOW v3:25-26; o lado 'sem prefixo de PATH' vai ao perfil distribuído (R-PY02-4) e o lado 'cópia versus uso do os.environ (efeito no pai)' fica no perfil de fonte, sem decisão nova, ou recebe outra classe com base declarada; (2) registrar no v6 o lado restante e o destino de cada braço de arms_v5_partial_scope_not_targeted (ou um item em remaining_open_by_contract.PY02 fora dos resíduos do plano); (3) incluir o item na tabela 'Sem decisão nova' do HOW e na opção da continuação 4 do next-task.json, e corrigir o 'Ganho'; (4) atualizar o state.json; (5) no validador, exigir lado restante e destino para cada braço do v5 com not_observed que o C3 não fecha, com controle negativo."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "estado v5 dos braços / listas de fechamento (ponto 3)",
+      "title": "As listas de braços parciais do v5 ignoram o not_observed e a qualificação de arms_closed_v3_carried: TS07.B03 e TS07.B04, fechados pelo C3, ficam fora dos 11; TS03.B03 falta nos não mirados; TS12.B01 não diz o que segue aberto",
+      "evidence": [
+        "coverage-observed-v5.json#/arms_closed_v3_carried: TS03.B03 not_observed 'mkdtemp rejeita'; TS07.B03 not_observed 'chave vazia lança e filho undefined pulado em objeto inline'; TS07.B04 not_observed 'function e symbol'; TS05.B04 qualification 'criação do schema antes do try e cleanup no finally inferidos da fonte'; TS12.B01 qualification 'término do filho NOT_WITNESSED'",
+        "build-binding-c3.py.txt:214-219: V5_ARM_CLOSED_V3 é testado antes de not_observed. :443-445: arms_v5_partial_scope_not_targeted exclui arms_closed_v3_carried. :180-200: CLOSES sem TS07.B03, TS07.B04 e TS05.B04. validate-binding-c3.mjs.txt:136-142 repete a mesma precedência, então a segunda implementação tem o mesmo ponto cego",
+        "coverage-observed-v6.json#/arms_observed_c3[TS07.B03,TS07.B04]: v5_not_observed copiado, sem v5_gap_closed_by_c3. C3-TS07 cobre de fato: os contrários 'objeto inline sem checagem de chave vazia', 'filho undefined emitido no inline' e 'function ou symbol serializados' passaram (api.ts_steps_exact, spawn.count_exact, argv.exact_vector). O getter do C3-TS05 testemunha a criação e o cleanup do schema",
+        "coverage-observed-v6.json#/arms_observed_c3[TS12.B01]: status DISTINGUISHED, not_observed_after_c3 null, residuals ['R-TS12-1']. O término do filho pré-abortado segue NOT_WITNESSED (R-TS12-5, Q4 negada). O rótulo C3 ('aborto durante a execução') não é o do v5 ('signal pré-abortado')",
+        "PY17.B04: o rótulo do v5 é 'variante inesperada levanta RuntimeError e não registra fila'; o do C3 é 'variante inesperada com loginId ... registra a fila'. O v6 diz 'substituído', mas a lista diz 'fechado'",
+        "HOW-next-profile-v3.md:24-26 ('Os 11 braços ...'; 'Ficam de escopo parcial no v5 o PY02.B02 e o PY02.B07'); state.json#/result/arms_v5_partial_closed_by_c3 e arms_v5_partial_scope_not_targeted"
+      ],
+      "detail": "Nenhum crédito muda. O que segue aberto está nos resíduos (R-TS03-2 e R-TS12-5) e no remaining_after_c3 das linhas. Já as listas-resumo e o HOW contam errado: o C3 fecha 13 parciais do v5 (os 11, mais TS07.B03 e TS07.B04) e ainda resolve a inferência do TS05.B04. Entre os não mirados falta o TS03.B03, que só se distingue com fs injetado. A entrada do TS12.B01 lida sozinha sugere o braço inteiro fechado.",
+      "required_action": "Classificar o escopo parcial também em arms_closed_v3_carried (estado combinado ou campo próprio). Acrescentar v5_gap_closed_by_c3 aos braços TS07.B03, TS07.B04 e TS05.B04. Pôr TS03.B03 (R-TS03-2) entre os não mirados. Preencher not_observed_after_c3 do TS12.B01 com o término do pré-abortado (R-TS12-5). Registrar a mudança de sentido do rótulo do PY17.B04 (o 'não registra fila' do v5 é refutado na variante com loginId e segue vácuo na apiKey). Corrigir as contagens no HOW e no state.json e cobrir isso no validador."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "resíduos OUT_NEW_CAPABILITY / leitura da Q4 (ponto 5)",
+      "title": "'Hoje capacidade nova é negada' estende a Q4 (CAP_SYS_ADMIN/CAP_SYS_PTRACE para a testemunha do TS12) à injeção de falha de fs e do lado Node, e o HOW v3 inverte sem registro a separação do HOW v2",
+      "evidence": [
+        "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json#/decisions[id=Q4-CAPABILITY]: a pergunta trata só de dar ao supervisor CAP_SYS_ADMIN (fanotify) ou CAP_SYS_PTRACE para o término do filho pré-abortado do TS12",
+        "../sdk-batch-2b2-binding/HOW-next-profile-v2.md:109-113 (a errata da R2, executor-disposition.json#/items[id=R2-F01]/erratum_table, não muda isso): injeção de falha de fs e do lado Node está em 'O que cabe sem decisão nova' ('nenhuma pede rede, provider, credencial nem privilégio')",
+        "coverage-plan-c3.json#/classes.OUT_NEW_CAPABILITY: 'fica fora por regra da unidade'. ../sdk-source-continuation-3-spec/next-task.json#/after_this: 'itens OUT_NEW_CAPABILITY ... só com unidade própria que especifique a capacidade'",
+        "build-binding-c3.py.txt:308-311 (destino '... capacidade nova segue negada'); HOW-next-profile-v3.md:103 ('hoje capacidade nova é negada'); next-task.json:74",
+        "O state.json do C3-1 e do C3-2 já dizia 'nenhuma capacidade nova (Q4 negada pelo usuário): ... injeção de falha nova'. É a mesma extensão, herdada"
+      ],
+      "detail": "A classe é conservadora e não credita nada, por isso fica em P3. Mas o pacote de decisão precisa saber quem decide: a Q4 negou só a testemunha privilegiada; a injeção de falha de fs e do lado Node ficou fora da continuação 3 pela regra da unidade, e o HOW v2 a dava como possível sem decisão nova. needs_new_decision true pode ficar, como autorização de unidade própria, desde que a base não atribua ao usuário uma negação que ele não deu.",
+      "required_action": "Reescrever o destino dos 11 OUT_NEW_CAPABILITY no v6, no HOW e no next-task: fora da continuação 3 por regra da unidade; exige unidade própria autorizada que especifique a capacidade. Dizer quem autoriza (Lead ou usuário) e que a Q4 negou só a testemunha privilegiada. Registrar a mudança em relação ao HOW v2."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "HOW v3 / afirmações sem suporte",
+      "title": "O HOW v3 diz que 'o lado forçado de cada corrida já foi observado', o que não vale para R-TS11-3, R-TS11-5 e R-TS12-2, e tira o PK03 (Windows) da linha de plataforma",
+      "evidence": [
+        "HOW-next-profile-v3.md:80-81 sobre os seis OUT_NONDETERMINISTIC. coverage-plan-c3.json#/residuals: R-TS11-3 ('ordem decidida pelo kernel e pelo libuv'), R-TS11-5 ('entrega do stderr depois do exit depende do escalonamento') e R-TS12-2 ('janela entre o fim do readline e o exit') não citam lado forçado observado. O v5 mandava 'aborto ... depois do EOF' à segunda continuação. Só R-PY10-1, R-PY13-5 e, por injeção, R-TS10-4 têm o lado forçado registrado",
+        "HOW-next-profile-v3.md:108: 'as outras cinco plataformas do PY20, do PK01, do PK04 e do PK07'. Já ../sdk-batch-2b2-binding/review-r2/executor-disposition.json#/items[id=R2-F01] e HOW v2:105-106 dizem 'o PK03 e a chave PATH do PY02 dependem do Windows'. O HOW v3:87 e o next-task põem o PK03 entre os 11 'já decididos', sem ressalva"
+      ],
+      "detail": "Nenhum status ou crédito muda. A primeira frase generaliza sem evidência. A omissão do PK03 faz parecer que o perfil distribuído no linux-x64 resolve o PK03 sem decisão de plataforma.",
+      "required_action": "Limitar a frase do lado forçado aos resíduos com evidência, ou citar a evidência de cada um. Recolocar o PK03 na linha 'Plataforma' e ressalvar em 'Já decidido' que PY20, PK01, PK03, PK04 e PK07 só se cobrem em parte no linux-x64."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "registros para o BIND / pré-requisitos da continuação 4 (ponto 4)",
+      "title": "Registros e pré-requisitos resumidos com perdas: falta a condição do DV-C32-02 e o item (3) e o autoteste do C32-ADM/R1-F01; 'duas partes de braço' não vale para o R-PY18-1; R-PY13-4 aparece como PARTIAL sem avanço no próprio item",
+      "evidence": [
+        "../sdk-continuation-3-2-admission/next-task.json#/carry_over[id=C32-ADM/DV-C32-02]: 'Registro para o BIND: plan_binding_content_ok vem de tools/collect_results.py, fora do source freeze, e só vale quando o registro ausente é o único problema'. A qualificação DV02_Q do v6 (build-binding-c3.py.txt:100-102) omite a condição final. Ela se cumpre: em reevaluation-c32.json, plan_binding.problems é ['case folder records another plan file'] nas 14 pastas",
+        "C32-ADM/R1-F01 tem quatro itens. HOW v3 ('Pré-requisitos') e next-task.json:23 resumem como 'threading.local; controle negativo; registro igual ao WAIT_RESULT' e perdem o autoteste de dois threads em sequência com ident reusado e a recusa da regra de zero chamadas quando um HOOK_EVENT ou EXCEPTHOOK_RECORD traz o thread vigiado, o endurecimento que importa para um dia creditar o PY13.B17",
+        "next-task.json:21 e HOW v3:124 dizem 'Ganho: duas partes de braço'. O remaining do R-PY18-1 é 'demais modelos gerados fora dos exercitados', um conjunto aberto, não uma parte",
+        "coverage-observed-v6.json#/residuals_c3[id=R-PY13-4]: PARTIAL_BY_C3 com remaining 'known_bad pular o cleanup como MISMATCH', que é o item inteiro do resíduo; o crédito do PY13.B18 é ganho lateral"
+      ],
+      "detail": "Nenhum desfecho ou crédito muda. São registros que o Lead e a próxima especificação vão ler. Resumidos assim, perdem condições e itens vinculantes.",
+      "required_action": "Copiar no v6 a condição do DV-C32-02 e registrar que ela se cumpre. No HOW e no next-task, citar o C32-ADM/R1-F01 inteiro (por ponteiro ou texto). Trocar 'duas partes de braço' por 'uma parte (PY13.B17) e o escopo aberto do R-PY18-1'. Dizer no R-PY13-4 que o item não avançou e que o PY13.B18 é ganho lateral."
+    }
+  ],
+  "mandatory_points": {
+    "1_credito_por_parte": "CONFORME. Recalculado de cases-c3-1.json, cases-c3-2.json e do acceptance.json de serviço (attempt_dir do case-results.json; uma tentativa por caso). São 58 entradas, 31 do C3-1 e 27 do C3-2, com 74 referências judged_by, todas de classe client, presentes uma vez cada e ok. Nenhuma parte foi omitida, duplicada ou com sha de acceptance divergente. As duas entradas do C3-PY12 (idx 0: passos 6-9, probe.values_exact; idx 1: passos 15-16, api.steps_exact) entram uma vez cada. 57 creditadas e 45 braços (44 DISTINGUISHED; PY13.B17 NO_PART_CREDITED). Endurecimento sem efeito hoje: o NOT_CREDITED do builder e do validador usa a chave (caso, braço, contrary); com contrary repetido, como no C3-PY12, uma exclusão futura pegaria as duas entradas. Melhor chavear por entry_index.",
+    "2_e3_07": "FIEL; ver e3_07_reading.",
+    "3_fechamentos": "Os 11 de arms_v5_partial_closed_by_c3, os dois abertos explícitos (PY05.B10 e PY13.B06) e o PY13.B18 foram conferidos contrary a contrary contra o not_observed ou a razão do v5. Todos cobrem: PY02.B01 (--config no argv), PY05.B06 (normalização e alpha acima do mínimo), PY05.B10 (versão desconhecida aciona a guarda), PY12.B03 (h2_cursor e passo 15), PY13.B05 e PY13.B09 (h_reserve no passo 8), PY13.B06 (efêmero com path), PY13.B10 (h_finish, h_unreg, h_cancel e thread do finish), PY13.B15 (h_finish no cleanup), PY14.B03 (failed que não é o primeiro), PY14.B07 (completed sobre started sem current), PY17.B02 (os dois contrários) e PY17.B04 (substituição, ver R1-F02). Lacunas nas listas: R1-F02 (arms_closed_v3_carried) e R1-F01 (lado os.environ do PY02.B02 e do PY02.B07).",
+    "4_registros_para_o_bind": "C32-ADM/R1-F02: texto igual ao record_for_bind; fatos conferidos em events-driver.jsonl (seq 32, 35 e 38) e no acceptance.json; aplicado no C3-PY13ER, no PY13.B17 e no PY13.B18. C32-ADM/R1-F04: corrected_text_dv_c32_04 igual ao da adjudicação da C3-2; aplicado no C3-PY08 e no PY08.B08. C31-ADM/R1-F04: aplicado ao C3-TS04 nas linhas TS04 e TS12. DV-C32-01: aplicado no e3_07, no PY13.B17 e no R-PY13-4. DV-C32-02 em todas as observações da C3-2, com a perda da R1-F05. Zombie 15 do C31-ADM/R1-F01 no C3-TS04, no C3-TS12 e no C3-TS13 (os três KNOWN_SIGNAL_TERMINATION aceitos pelo caso).",
+    "5_residuos_e_how": "Resolução por classe coerente com as respostas. Q1-Q3: 9 OPEN_DECIDED_DISTRIBUTED_PROFILE. Q4: R-TS12-5 OPEN_DENIED_BY_USER. Q5: R-TS12-6 e R-PY18-3 OPEN_NOT_AUTHORIZED. needs_new_decision true em 23 (11 capacidade, 1 Q4, 2 Q5, 3 T4, 5 nativo, 1 plataforma). A contagem 34/2/38/3 confere (77) e o HOW separa os grupos com os mesmos ids. Nada do perfil distribuído foi promovido: PY19, PY20 e PK01-PK09 seguem OPEN_REQUIRED_FUTURE_PROFILE. Achados: R1-F01, R1-F03, R1-F04 e R1-F05.",
+    "6_lacunas": "CONFORME. Seis OPEN. contracts_observed_client_partial_v6 é igual ao v5 nas seis (13/13, 11/11, 4/4, 1/3, 15/15, 1/12). progress_after é igual ao v5 e o sha da base gaps-review-v5.json confere.",
+    "7_copia_do_v5": "CONFORME. As 44 linhas têm carried_from_v5 igual à linha do v5, sem status_changed, whole_requirement_covered, recibo ou paridade. O v5 tem sha256 5b8d1019...d3e4a4, e o blob e71238fe é igual ao da ref origin/candidate/hiso005-0243-0242-20261019 (1073a9dd).",
+    "8_state_e_next_task": "O state.json deriva do v6 pelo close-binding-c3.py.txt e confere: contagens, partes, braços, resíduos, lacunas, sha do HOW, âncoras e head 3704e3f8. O next-task.json herda as imprecisões do HOW (R1-F01, R1-F03 e R1-F05). Fora do freeze ainda faltam secret-scan e ledger-delta-cont-d9ef.md, como no BIND anterior, que os fez depois da revisão; sem achado."
+  },
+  "reproduction": {
+    "workspace": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/review-bind3-r1 (cópia das cinco pastas de entrada; os scripts rodaram só sobre a cópia)",
+    "build": "python3 -I -B build-binding-c3.py.txt <cópia>: coverage-observed-v6.json e gaps-review-v6.json com conteúdo JSON igual ao entregue (só built_at difere)",
+    "validator": "node v24.20.0 validate-binding-c3.mjs.txt na cópia: PASS, 0 erros, 20/20 controles negativos recusados, igual ao validation.json (só validated_at difere)",
+    "independent_recalc": "Script próprio (recalc_parts.py) sobre os casos congelados e os acceptance.json: 58/58 partes iguais às do v6 em braço, contrary, passos, judged_by, classe, ok e sha do acceptance; o crédito só difere da aprovação dos predicados no PY13.B17 do C3-PY13ER",
+    "inputs": "git hash-object (sem -w): os 13 arquivos do v5, do 2B-2 e da especificação C3 iguais aos blobs da ref em 1073a9dd. As pastas das admissões são iguais às árvores dos commits de recibo 20daa7c7 (631 arquivos) e 76c04725 (587); os commits de conteúdo só não têm commit-receipt.json. git for-each-ref --contains: nenhuma ref contém os quatro commits (ficam no HEAD dos worktrees destacados cvg-codex100-c31 e c32). A decisão do usuário tem o mesmo sha nas três cópias. As 25 fontes do v6 conferem por sha",
+    "hygiene": "prettier --check (somente leitura) aprovado nos JSON e no MD da unidade; nenhum __pycache__ na unidade; links relativos do HOW v3 resolvem"
+  },
+  "summary_counts": "0 P1, 1 P2, 4 P3",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

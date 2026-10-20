@@ -1,0 +1,49 @@
+HISO005-P2-NEXT-RECON-20261020 — recon T1 da medição integral B6 (Claude Code, CONT-20261018-D9EF)
+
+Entrada: medição oficial do BUILD0242 (raiz 228e7918, scripts da cabeça do PR #8 1073a9dd), normal = strict.
+13.521 diagnósticos = 12.631 tuplas de fronteira + 890 origens de base. 0 provas, 0 violações.
+
+1. DISTRIBUIÇÃO DAS CAUSAS (12.631 tuplas; classification-r2.json)
+   A precedência é explícita: TSX, depois propagação, forma de módulo, intrínsecos e família do motivo.
+   - propagação 5.242 (41,5%): só consequência de valor U. Por origem do U:
+     local 1.251, import 933, callee 705, K0 660 (+223 mistas), export 560, receptor 328, operando 323,
+     argumento U 157, função recusada 62. O K0 é o mínimo direto da entrada externa (estrutural).
+   - domínio 3.030 (24,0%), limitação: ClassDeclaration 346, parâmetro padrão 316, async 280, new 210…
+   - forma de módulo 1.411 (11,2%), limitação: export ausente por `export *` (746) ou por classe recusada (656),
+     mais 10 nomes de classe. É a maior causa raiz isolada.
+   - resolução/formato/proveniência 1.082 (8,6%), limitação: dist sem recibo 395, entrada não alcançada 288…
+   - TSX 705 (5,6%), limitação: .tsx parseado como TS, 29 arquivos com UNKNOWN_PARSE.
+   - intrínsecos/built-ins 683 (5,4%), modelo sobre fato: ECMA-262 312, host 114, nativo 254, ambiente 3.
+   - fato do código 478 (3,8%): estado mutável exportado 294, let/var 125…
+   Natureza: limitação do analisador 49,3%; limitação de modelo sobre fato 5,4%; fato 3,8%; consequência 41,5%.
+   O dist responde por 29,1% das tuplas e espelha o src: as causas de primeira parte contam quase em dobro.
+   Origens: 581 rótulos léxicos (a expressão existe, o rótulo é sobreaproximação), 303 pacotes instalados
+   (288 nunca alcançados, 15 com fecho sujo) e 6 referências não literais.
+
+2. PROPOSTA: SPEC0244 (materialized/0244_b6_esm_module_shape.md, sha256 6979ac01bb2af148d2c5c957308db81d0821d92840805372d36e3a7d1372a54a)
+   - E1: `export *` / `export * as ns` com semântica ESM (ResolveExport) quando a fonte é ESM completa.
+   - E2: nome de classe recusada fica U no escopo e no export; a raiz ClassDeclaration é mantida.
+   - Sem premissa nova e sem UNKNOWN aceito. É T3 porque muda o K5. E1 pode tornar PROVEN um fixture limpo.
+   - Variante diagnóstica v5a: 13.521 → 12.285 (−1.236).
+     Somem 1.541 tuplas: 1.460 raízes das 3 classes e 81 propagações no cone.
+     Aparecem 305: 291 em módulo tocado e 14 a jusante. Conservação causal PASS, 0 violações, 0 provas.
+   - Próxima candidata depois dela: TSX (705), ainda não medida.
+   Pergunta T3: decision-packet.json Q1.
+
+3. PRIMEIRA PROVA (first-proof-path-r2.json)
+   - Regra global (engine:1808): qualquer UNKNOWN na execução suprime K5/K7. Sem regra por escopo (T3), não há prova.
+   - Com regra por escopo: 13 provas K5 triviais (folhas sem aresta e sem origem) e 0 de aresta.
+   - Aresta mais próxima sem corpo escondido: apps/api/src/operator-session-route-boundary.ts → routes/health.ts e webhooks.ts.
+     São 8 tuplas: 2 leituras K0, `new Set` e 5 consequências. Falta decidir o modelo de entrada externa (K0) e `new` de built-in.
+   - E1+E2 não aproxima a primeira prova: 13 → 13 fechos limpos e 0 candidatos a aresta.
+
+4. CRÍTICA (crítico novo, não-fork)
+   - R1: REVISE, 9 obrigatórios, corrigidos em r2.
+   - R2: APPROVE_SPEC / recon PASS, 0 obrigatórios.
+   - Os 6 P3 da R2 foram aplicados em r3 sem terceira rodada (autoverificação PASS). O lead confere o diff r2→r3.
+
+5. RECURSOS
+   - Sem PG, porta, commit, push, ledger, coordenação ou catálogo.
+   - Runtime privado removido (1,06 GB) e worktree eval-228e removida com `git worktree remove`; sem processo vivo.
+   - A candidata do build anterior segue intacta como âncora.
+   - Gitleaks: gitleaks-scan.json.

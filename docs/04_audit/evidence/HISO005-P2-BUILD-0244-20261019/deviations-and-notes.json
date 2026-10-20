@@ -1,0 +1,86 @@
+{
+  "task": "HISO005-P2-BUILD-0244",
+  "observedAt": "2026-10-20T04:26:11.929303+00:00",
+  "conservativeDeviations": [
+    {
+      "id": "D1",
+      "what": "namespace reexportado é ligação do módulo reexportador: `import * as ns` + `export { ns }` tem identidade arquivo#ns (local, exata no ECMAScript); `export * as ns from m` tem a identidade sentinela arquivo#*namespace*ns, que nunca coincide com uma ligação local (crítica R2-01)",
+      "ecmascript": "o texto dá (m, NAMESPACE) a `export * as ns from m`; duas dessas estrelas seriam a mesma ligação",
+      "node22": "o Node 22.23.2 fixado trata como conflito (`import { ns }` falha no link)",
+      "effect": "U com AMBIGUOUS_STAR:ns; nunca valor indevido",
+      "source": "crítica R1-01 (F01–F03) e R2-01 (F37/F38)"
+    },
+    {
+      "id": "D2",
+      "what": "`export * as ns` de fonte não qualificada envenena os nomes de estrela do módulo (regra 5 lida literalmente)",
+      "effect": "mais U",
+      "source": "interpretação registrada antes da edição; crítica R1-P3-06(a)"
+    },
+    {
+      "id": "D3",
+      "what": "`export { x }` antes de `import { x }` no mesmo módulo usa identidade local e pode dar ambiguidade espúria",
+      "effect": "U com AMBIGUOUS_STAR; nunca valor indevido",
+      "source": "crítica R1-P3-06(b) (F30)"
+    },
+    {
+      "id": "D4",
+      "what": "`export declare const x` depois de uma estrela sobrescreve x com VOID (comportamento da v4 para declare const)",
+      "effect": "as raízes RUNTIME_DECLARATION/MISSING_INITIALIZER permanecem no fecho; nenhuma prova",
+      "source": "crítica R1-P3-06(c)"
+    },
+    {
+      "id": "D5",
+      "what": "no diamante, o Node 22 mantém x no reexportador com duas estrelas e omite com estrela única; a v5 dá U com AMBIGUOUS_STAR nos dois casos (ResolveExport)",
+      "effect": "mais U",
+      "source": "crítica R1-P3-06(d)"
+    },
+    {
+      "id": "D6",
+      "what": "enum, namespace (inclusive ambient) e `export =` deixam o namespace incompleto; enum/namespace/import = mascaram nomes de estrela",
+      "effect": "mais U ou nome ausente",
+      "source": "interpretações registradas antes da edição"
+    }
+  ],
+  "touchedDefinition": {
+    "published": "superconjunto: módulo onde E1 processou qualquer estrela (qualificada ou não) ou E2 encontrou/pré-declarou classe",
+    "spec": "touchedStrict: E1 modelou estrela qualificada ou E2 ligou nome de classe",
+    "denominators": "conservation-r2.json traz os dois conjuntos (402/772/985/1182 e 394/764/977/1174); o veredito é PASS nos dois",
+    "source": "crítica R1-P3-03"
+  },
+  "censusCaveat": "na raiz real o corpo do census termina em SKIPPED:UNKNOWN_AMBIGUOUS_RESOLUTION depois de 1 módulo, na v4 e na v5; a igualdade de census-comparison.json é verdadeira, mas não exercita E1/E2 no corpo; a desativação no census está provada pelo teste MS06 e pelas 21 fixtures do crítico R1 (crítica R1-P3-04)",
+  "testBytesNote": "first-red-0244 rodou com o teste antes do prettier; o crítico reproduziu 25/40 com os bytes congelados r1; a primeira falha dos bytes r2 está em first-red-0244-r2.json (32/48 na v4) (crítica R1-P3-02)",
+  "mutationEvidence": {
+    "M1 (regra 3 desligada)": "mutation-m1-r2.json: 7 testes de precedência falham",
+    "M2 (propagação de ambíguo da fonte desligada)": "mutation-m2-r2.json: o teste de diamante falha"
+  },
+  "criticIncident": "o crítico R1 regravou o cache ignorado node_modules/.vite/vitest/<hash>/results.json da candidata; cache não rastreado, só afeta ordem de testes; nenhum arquivo rastreado mudou",
+  "usageRisk": {
+    "contexts": {
+      "limit": 256,
+      "v4": 145,
+      "v5": 229,
+      "v5Pct": 89.5,
+      "v5Margin": 27,
+      "v4Margin": 111
+    },
+    "culpritV5": {
+      "file": "node_modules/zod/v4/classic/schemas.js",
+      "pos": 24832,
+      "end": 25023,
+      "contexts": 229,
+      "head": "export function object(shape, params) {\n    const def = {\n        type: \"object\",\n        shape: shape ?? {},\n        ...util.normalizeParams(params),\n    };"
+    },
+    "culpritV4": {
+      "file": "node_modules/chai/index.js",
+      "pos": 212,
+      "end": 288,
+      "contexts": 145,
+      "head": "(target, value) => __defProp(target, \"name\", { value, configurable: true });\nvar __export = (target, all) => {\n  for (var name in all)\n    __defProp(target, na"
+    },
+    "reading": "E1 torna z.object (zod/v4/classic/schemas.js) conhecido através das estrelas do zod; cada chamada de primeira parte com outro shape é um contexto novo. A folga de 27 contextos encolhe a cada schema z.object novo no código avaliado; estourar maxContexts corta o corpo (BODY_CUT)."
+  },
+  "realRootStarAs": {
+    "scan": "8 `export * as` nos 1.341 arquivos analisados (zod external.js e core/index.js), nenhum com ligação local de mesmo nome",
+    "effect": "v5r2 e v5r3 têm diagnósticos e tuplas idênticos na raiz real"
+  }
+}

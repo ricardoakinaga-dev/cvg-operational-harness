@@ -1,0 +1,66 @@
+{
+  "kind": "CONTROL_SLOT_CONTRACT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2A-CONTINUATION",
+  "case": "2AC-CTRL01",
+  "purpose": "Provar sob o freeze r4 que o pedido sem script ainda é respondido pelo peer v2 (agora com match estrito por tipo) e julgado MISMATCH, sem depender de um SDK que se comporte mal. A nova ordem do quadro exit não é exercida por este slot; ela é provada por autoteste (F4-04).",
+  "client": {
+    "argv": [
+      "/runtime/python",
+      "-I",
+      "-S",
+      "/profile/control-client.py",
+      "--case",
+      "2AC-CTRL01"
+    ],
+    "imports_sdk": false,
+    "lines": [
+      {
+        "id": "ctrl-1",
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "cvg_control_client",
+            "title": "CVG control client",
+            "version": "0"
+          },
+          "capabilities": {
+            "experimentalApi": true
+          }
+        }
+      },
+      {
+        "method": "initialized"
+      },
+      {
+        "id": "ctrl-2",
+        "method": "turn/interrupt",
+        "params": {
+          "threadId": "t-ctrl",
+          "turnId": "A"
+        }
+      }
+    ],
+    "reads": "uma linha de resposta por pedido, com prazo; depois fecha o stdin"
+  },
+  "implementation_base": "OwnClient de python-driver.py:209-271 (código próprio constante, já admitido para diagnósticos): Popen de LAUNCH = ('/runtime/python', '-I', '-S', '/profile/adapter-python.py') com pipes, cwd /work, env do sandbox copiado e bufsize 0.",
+  "channel_role": "driver (o cliente de controle ocupa o papel do driver no canal; adapter e peer são os mesmos dos casos Python)",
+  "milestones": [
+    "BEGIN e READY como o driver",
+    "DIAGNOSTIC CALLS_DONE depois de ler a resposta de ctrl-2",
+    "CLIENT_STDIN_CLOSED ao fechar o stdin do adapter (intervalo limitado por EOF, como no SDKPY01)"
+  ],
+  "execution_order": "Primeiro da unidade, antes de qualquer caso SDK; o slot 9 não indica ordem.",
+  "rules": [
+    "O cliente de controle não importa o SDK nem Pydantic; escreve linhas JSON-RPC fixas e lê uma resposta por pedido com prazo.",
+    "Usa o mesmo adapter Python, o mesmo peer v2, o mesmo supervisor e o mesmo observador dos casos SDK.",
+    "control.peer_answered_unscripted e control.client_not_blocked são sanidade: falha leva a INVALID_CAPTURE e para a unidade. O MISMATCH esperado vem só de wire.no_turn_interrupt (classe client).",
+    "Roda primeiro. Qualquer desfecho diferente de MISMATCH para a unidade antes dos casos SDK (R3-07, mantido no r4).",
+    "Conta 1 das 9 vagas e não gera observação de cliente nem crédito.",
+    "capture.case_input_frozen_bytes também é sanidade e precisa passar."
+  ],
+  "source_freeze": "control-client.py entra no source-freeze-r4 com sha registrado.",
+  "base_contract": {
+    "path": "../sdk-source-batch-2a-spec/control-slot-contract.json",
+    "sha256": "001048a4667c443ba675467f44e91d4863f0dafe0b603d452b686d9ad6d36a2d"
+  }
+}

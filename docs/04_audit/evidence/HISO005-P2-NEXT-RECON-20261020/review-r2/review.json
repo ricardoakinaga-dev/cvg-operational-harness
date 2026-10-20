@@ -1,0 +1,102 @@
+{
+  "round": "R2",
+  "task": "HISO005-P2-NEXT-RECON-20261020",
+  "reviewer": "crítico novo não-fork (mesmo crítico da R1), última rodada",
+  "specSha256": "5371ceb1fe46dc8e8c1f4f8a0100deb206f8241c72944d4006bac3e3cb52e103",
+  "verdict": "APPROVE_SPEC",
+  "recon": "PASS",
+  "required": [],
+  "r1Status": {
+    "R1-01": "CORRIGIDO: família TSX (705), intrínsecos 683 = 337 + 89 + 254 + 3, classes em forma de módulo; recontado de forma independente",
+    "R1-02": "CORRIGIDO: 581 léxicas, 303 instaladas (288 não alcançadas, 15 sujas) e 6 não literais (§1.3)",
+    "R1-03": "CORRIGIDO: E1 sozinho 646, E2 necessário para 756; 183 = 27 (E1) + 156 (E2)",
+    "R1-04": "CORRIGIDO: K0 = 660 puras + 223 mistas, medido por cópia que só etiqueta (13.521 iguais); ver R2-O3",
+    "R1-05": "CORRIGIDO: 'E1 abre corpos' declarado; §3.3 com definições, raízes persistentes salvo 3 classes, denominadores no MS05; ver R2-O2",
+    "R1-06": "CORRIGIDO: ligação resolvida (ResolveExport), ambiguidade sticky, completude transitiva, regra do módulo misto, precedência explícita, ligação viva; MS02 com um fixture por caso; ver R2-O1 e R2-O4",
+    "R1-07": "CORRIGIDO: §2, §4, §6 e §8 declaram que E1 pode produzir PROVEN; MS04 reescrito",
+    "R1-08": "CORRIGIDO: first-proof-path-r2.json com edgeProof (0 candidatos), folhas sem aresta e sem origem, 13 → 13, minimumPath",
+    "R1-09": "CORRIGIDO: v5a alinhada (completude, poison, precedência, pré-declaração, declare class, default anônima) e desvio remanescente declarado; ver R2-O5"
+  },
+  "optional": [
+    {
+      "id": "R2-O1",
+      "target": "spec",
+      "severity": "P3",
+      "section": "§3.1 regra 4; MS02",
+      "finding": "Pela definição de 'ligação resolvida como o ResolveExport', um nome ambíguo na fonte também é ambíguo em todo reexportador por estrela, porque o ResolveExport propaga 'ambiguous'. O texto não diz isso explicitamente, e a v5a não segue. Ela guarda a origem da primeira estrela do nome ambíguo; se outra estrela do reexportador trouxer a mesma origem, o reexportador exporta o valor conhecido. Não é perda de segurança: a raiz AMBIGUOUS_STAR da fonte fica no fecho do reexportador pela aresta da estrela, e o caso não ocorre nesta raiz (o harness reexporta PROCEED por export nomeado, não por estrela).",
+      "evidence": "variant_esm_patch.py linhas 82-91 ('origin = __origin.get(namespace.id)?.get(k) || …'; ambiguidade não muda __origin da fonte); packages/harness/src/index.ts linhas 41/65 reexportam PROCEED por 'export { … } from ./kernel/index.ts'.",
+      "requiredChange": "Acrescentar à regra 4: 'nome ambíguo numa fonte é ambíguo em todo reexportador por estrela'. Incluir o diamante no MS02."
+    },
+    {
+      "id": "R2-O2",
+      "target": "spec",
+      "severity": "P3",
+      "section": "§3.3 regra 3 e regra 5; MS05",
+      "finding": "A regra de tupla nova é quase tão permissiva quanto a de propagação. A união de tocado, jusante e cone admite 1.174 dos 1.341 arquivos analisados e cobre 10.785 das 12.631 tuplas. O texto só reconhece a permissividade da cláusula de propagação. Novas tuplas são mais UNKNOWN (direção conservadora), por isso isto não bloqueia.",
+      "evidence": "Recontagem com graph-v5a.json (394 tocados) e semantic-graph.json.gz: jusante 764, cone 977, união 1.174.",
+      "requiredChange": "Declarar que a regra 3 também é permissiva e incluir o denominador da união no MS05."
+    },
+    {
+      "id": "R2-O3",
+      "target": "spec",
+      "severity": "P3",
+      "section": "§1.2, última frase",
+      "finding": "'O resto é consequência de raízes diagnósticas' exagera. Locais, receptores, operandos e callees U podem descender de um parâmetro K0 (ex.: const x = param.campo). Por isso 660 a 883 é o limite inferior da influência do K0, não a parcela total.",
+      "evidence": "Tabela 1.2 recontada de cause-tags-k0.json.gz: local 1.251, receptor 328, operando 323 e callee 705 são etiquetas do gatilho imediato, não da raiz.",
+      "requiredChange": "Escrever que 660 a 883 é o mínimo direto do K0 e que parte das demais linhas descende dele."
+    },
+    {
+      "id": "R2-O4",
+      "target": "spec",
+      "severity": "P3",
+      "section": "§3.1 regra 3",
+      "finding": "'Qualquer export explícito' deveria ser 'export explícito de runtime'. 'export type' e 'export interface' não existem em runtime. A v5a coleta nomes sintáticos, inclusive de tipo, e assim mascara um valor de estrela com o mesmo nome. Isso é conservador (o nome fica ausente e vira U).",
+      "evidence": "variant_esm_patch.py linhas 22-36 (__explicit não exclui InterfaceDeclaration, TypeAliasDeclaration nem isTypeOnly).",
+      "requiredChange": "Qualificar como runtime e acrescentar o fixture 'export type N' com estrela que fornece N."
+    },
+    {
+      "id": "R2-O5",
+      "target": "spec",
+      "severity": "P3",
+      "section": "§1.4, desvios da v5a",
+      "finding": "O desvio declarado está incompleto. A v5a também não segue o reexport indireto nomeado ('export { N } from') ao calcular a origem: usa módulo#N. Há ainda uma diferença menor: para 'export * as ns' de fonte não qualificada, a v5a deixa ns ausente em vez de U. Ambos são conservadores.",
+      "evidence": "variant_esm_patch.py: __origin só registra origens vindas de estrela; ramo poison (linhas 95-115) não define ns.",
+      "requiredChange": "Completar a lista de desvios."
+    },
+    {
+      "id": "R2-O6",
+      "target": "recon",
+      "severity": "P3",
+      "section": "classification-r2.json intrinsics; SPEC §1.1",
+      "finding": "'Global ECMAScript 337' usa o globalThis do Node como critério. Por isso inclui APIs de host como console (7) e structuredClone (7).",
+      "evidence": "classification-r2.json intrinsics.topNames.global_ecmascript; classify_r2.py linhas 56-58 e 128.",
+      "requiredChange": "Usar a lista ECMA-262 para 'ECMAScript' e mover as APIs de host para 'global de host'."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "SHA do freeze r2: 49 entradas, 14 artefatos de runtime, SPEC r2", "result": "PASS", "evidence": "Todos conferem; spec 5371ceb1fe46…"},
+    {"id": "S02", "what": "Cópias = base + patches descritos", "result": "PASS", "evidence": "Reconstrução em memória: tags2 = diag + cause + binding_origin (93172f164ef6…), tags3 = tags2 + k0 (403bba32658a…), v5a = tags2 + esm (099dccc8d854…); os demais scripts são idênticos a tools/"},
+    {"id": "S03", "what": "Execuções de etiqueta reproduzem o oficial", "result": "PASS", "evidence": "tags-binding e tags-k0: 13.521 diagnósticos, diagnosticsEqualOfficial true; chaves de cause-tags-k0 = 12.631 chaves oficiais"},
+    {"id": "S04", "what": "Famílias r2", "result": "PASS", "evidence": "Recontagem independente: 5.242 / 3.030 / 1.411 / 1.082 / 705 / 683 / 478"},
+    {"id": "S05", "what": "Tabela 1.2 e K0", "result": "PASS", "evidence": "local 1.251, import 933, callee 705, K0 660, export 560, receptor 328, operando 323, K0 + argumento 179, argumento 157, função 62, local + argumento 40, local + K0 25, local + K0 + argumento 19; K0 misto 223; o engine não tem cache de chamada (call() reavalia o corpo)"},
+    {"id": "S06", "what": "Origens 581/303/6", "result": "PASS", "evidence": "Igual à recontagem da R1 (288 não alcançadas, 15 sujas)"},
+    {"id": "S07", "what": "Variante v5a e conservação", "result": "PASS", "evidence": "12.285 (−1.236); somem 1.541 = 1.402 + 48 + 10 + 81; 305 novas = 291 em tocado + 14 a jusante; 0 raiz perdida, 0 violações, 0 provas, validation true"},
+    {"id": "S08", "what": "Desvio PROCEED", "result": "PASS", "evidence": "controls.ts importa PROCEED de types.ts (linha 16) e reexporta (linha 807): mesma ligação; o AMBIGUOUS_STAR da v5a é falso positivo conservador"},
+    {"id": "S09", "what": "E1 na §3.1 contra ECMAScript e K5", "result": "PASS", "evidence": "Ligação resolvida, sticky, completude transitiva, módulo misto, precedência explícita, default excluído; ligação viva coberta: qualquer '=' emite UNKNOWN_MUTATION (engine 1067-1068) e let/var emite UNKNOWN_MUTABLE_BINDING. Clarificações em R2-O1 e R2-O4"},
+    {"id": "S10", "what": "E2 na §3.2", "result": "PASS", "evidence": "Pré-declaração U (TDZ), raiz mantida, declare class com RUNTIME_DECLARATION, default anônima; U é conservador para export de ambiente"},
+    {"id": "S11", "what": "Divulgação de PROVEN e MS04", "result": "PASS", "evidence": "§2, §4, §6, §8 e MS04 coerentes com engine 1808-1849"},
+    {"id": "S12", "what": "Poder da §3.3", "result": "PASS", "evidence": "Regra 1 discrimina (7.288 raízes, só as 1.460 das 3 classes somem); regra 3 permissiva (R2-O2)"},
+    {"id": "S13", "what": "Caminho para a primeira prova r2", "result": "PASS", "evidence": "0 candidatos a aresta, folhas sem aresta e sem origem, 13 → 13, regra global na linha 1808, observação K0 e caminho mínimo"},
+    {"id": "S14", "what": "SPEC0242/0243 versionadas", "result": "PASS", "evidence": "git cat-file: presentes em ba9492b0 (origin/main) e em 1073a9dd"},
+    {"id": "S15", "what": "Links e checagem documental", "result": "PASS", "evidence": "document-checks-r2.json PASS, 14 links, 0 quebrados"},
+    {"id": "S16", "what": "Enquadramento T3", "result": "PASS", "evidence": "AGENTS.md D-12 linha 103; §8 declara mudança de kernel de prova que pode fazer nascer prova, sem premissa nova"}
+  ],
+  "commands": [
+    "python3 -I -B: SHA de contract-freeze-r2.json (inputs, runtimeArtifacts, spec)",
+    "python3 -I -B: reconstrução em memória de tools-tags2, tools-tags3 e tools-v5a a partir da base e comparação dos SHA; comparação dos demais scripts",
+    "python3 -I -B: recontagem independente de famílias r2, tabela 1.2 (cause-tags-k0.json.gz) e cobertura da regra 3 (graph-v5a.json + semantic-graph.json.gz)",
+    "sed -n/grep só leitura: engine (call 814-890, atribuição 1067), variant_esm_patch.py, k0_origin_patch.py, binding_origin_patch.py, conservation_roots.py, classify_r2.py",
+    "grep só leitura no root avaliado: packages/harness/src/kernel/{index,controls,types}.ts e packages/harness/src/index.ts",
+    "git cat-file -e ba9492b0/1073a9dd:docs/02_spec/0242…, 0243…"
+  ]
+}

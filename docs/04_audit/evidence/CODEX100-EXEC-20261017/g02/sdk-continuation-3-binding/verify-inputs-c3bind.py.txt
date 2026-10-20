@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3 - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-c3bind.py.txt <repo_root> <out_json>
+# As pastas g02 estão não rastreadas no checkout da main. A conferência é por sha (manifestos, recibos, plano) e por blob git
+# (git hash-object local x git ls-tree do commit). Âncoras: a especificação da continuação 3 e o BIND do 2B-2 estão na ref
+# origin/candidate/hiso005-0243-0242-20261019; as admissões C3-1 e C3-2 só nos commits destacados das candidatas (nenhuma ref os
+# contém; HEAD dos worktrees). Nada é escrito fora do <out_json>.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02"
+SPEC = G02 + "/sdk-source-continuation-3-spec"
+B2 = G02 + "/sdk-batch-2b2-binding"
+ADM = {"C3-1": G02 + "/sdk-continuation-3-1-admission", "C3-2": G02 + "/sdk-continuation-3-2-admission"}
+COMMITS = {"C3-1": ("085aef147412f0e53a3f65ab5964aeb2145b42b1", "20daa7c751658cb343fa45dfe17c13f70d05c2b1"),
+           "C3-2": ("5f8fa79dc3cfa6da63dc8b7b692c41716741754f", "76c0472571ca1ec5a26833edcfed4e48425c9e12")}
+ANCHOR_REF = "refs/remotes/origin/candidate/hiso005-0243-0242-20261019"
+checks = []
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def A(rel):
+    return os.path.join(ROOT, rel)
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+def blob(rel):
+    return git("hash-object", A(rel)).stdout.strip()
+
+
+def tree_blobs(commit, prefix):
+    out = git("ls-tree", "-r", commit, "--", prefix).stdout.splitlines()
+    res = {}
+    for line in out:
+        meta, path = line.split("\t", 1)
+        res[path[len(prefix) + 1:]] = meta.split()[2]
+    return res
+
+
+def local_files(rel):
+    base = A(rel)
+    res = []
+    for d, dirs, files in os.walk(base):
+        for f in files:
+            res.append(os.path.relpath(os.path.join(d, f), base).replace(os.sep, "/"))
+    return sorted(res)
+
+
+# 1. anchors of the specification and of the v5 base
+anchor = git("rev-parse", ANCHOR_REF).stdout.strip()
+anchored = {}
+for rel in [B2 + "/coverage-observed-v5.json", B2 + "/gaps-review-v5.json", B2 + "/HOW-next-profile-v2.md",
+            B2 + "/review-r2/executor-disposition.json", B2 + "/state.json", B2 + "/user-decision-distributed-profile-20261019.json",
+            SPEC + "/coverage-plan-c3.json", SPEC + "/cases-c3-1.json", SPEC + "/cases-c3-2.json", SPEC + "/next-task.json",
+            SPEC + "/state.json", SPEC + "/freeze-r4-c3-delta.json", SPEC + "/evaluator-r4-c3-delta.json"]:
+    b = git("rev-parse", "%s:%s" % (ANCHOR_REF, rel)).stdout.strip()
+    anchored[rel.split("/g02/")[1]] = {"local_blob": blob(rel), "ref_blob": b, "equal": blob(rel) == b}
+check("v5, gaps v5, HOW v2, disposição R2 e decisão do usuário do BIND 2B-2 e a especificação da continuação 3 iguais aos blobs da ref %s (%s)"
+      % (ANCHOR_REF, anchor[:9]), anchor and all(v["equal"] for v in anchored.values()), {"commit": anchor, "files": anchored})
+
+plan = load(A(SPEC + "/coverage-plan-c3.json"))
+v5sha = sha(A(B2 + "/coverage-observed-v5.json"))
+check("coverage-plan-c3.json liga o v5, o HOW v2 e as perguntas pelo sha", plan["base"]["sha256"] == v5sha
+      and plan["how"]["sha256"] == sha(A(B2 + "/HOW-next-profile-v2.md"))
+      and plan["questions"]["sha256"] == sha(A(B2 + "/review-r2/executor-disposition.json")),
+      {"v5": v5sha, "how": plan["how"]["sha256"], "questions": plan["questions"]["sha256"]})
+check("plano: 28 linhas, 77 resíduos e contagem por classe igual à declarada",
+      len(plan["rows"]) == 28 and len(plan["residuals"]) == 77
+      and {c: sum(1 for r in plan["residuals"] if r["class"] == c) for c in plan["counts"]["by_class"]} == plan["counts"]["by_class"],
+      plan["counts"])
+ud = sha(A(B2 + "/user-decision-distributed-profile-20261019.json"))
+check("decisão do usuário (Q1-Q4) igual no BIND 2B-2 e nas entradas das duas admissões",
+      all(sha(A(ADM[s] + "/inputs/user-decision-distributed-profile-20261019.json")) == ud for s in ADM), ud)
+
+# 2. the two admissions: state, manifest, commits
+for sub, rel in ADM.items():
+    st = load(A(rel + "/state.json"))
+    rv = load(A(rel + "/review-r1/review.json"))
+    check("%s: estado COMPLETED_LOCAL e R1 APPROVE sem P1/P2" % sub, st["status"] == "COMPLETED_LOCAL" and rv["verdict"] == "APPROVE"
+          and not [f for f in rv.get("findings", []) if f["severity"] in ("P1", "P2")], {"status": st["status"], "r1": rv["verdict"]})
+    rc = load(A(rel + "/commit-receipt.json"))
+    man = load(A(rel + "/unit-manifest.json"))
+    bad = [p for p, m in man["files"].items() if not os.path.exists(A(rel + "/" + p)) or sha(A(rel + "/" + p)) != m["sha256"]]
+    extra = [p for p in local_files(rel) if p not in man["files"] and p not in ("unit-manifest.json", "commit-receipt.json")]
+    check("%s: sha do unit-manifest igual ao do commit-receipt e todos os %d arquivos conferem" % (sub, len(man["files"])),
+          sha(A(rel + "/unit-manifest.json")) == rc["unit_manifest_sha256"] and not bad and not extra, {"bad": bad, "extra": extra})
+    content, receipt = COMMITS[sub]
+    ok_c = rc["content_commit"] == content and git("cat-file", "-e", content).returncode == 0
+    tb = tree_blobs(content, rel)
+    probs = [p for p, b in tb.items() if b != blob(rel + "/" + p)]
+    miss = [p for p in local_files(rel) if p not in tb and p != "commit-receipt.json"]
+    tr = tree_blobs(receipt, rel)
+    rec_ok = tr.get("commit-receipt.json") == blob(rel + "/commit-receipt.json") and set(tr) == set(tb) | {"commit-receipt.json"}
+    refs = [x for x in git("for-each-ref", "--contains", content, "--format=%(refname)").stdout.split() if x]
+    check("%s: pasta igual ao commit de conteúdo %s e ao recibo %s (blobs); nenhuma ref contém os commits" % (sub, content[:9], receipt[:9]),
+          ok_c and not probs and not miss and rec_ok,
+          {"files_in_content_commit": len(tb), "problems": probs, "missing": miss, "receipt_ok": rec_ok, "refs_containing": refs,
+           "anchor": "HEAD do worktree destacado da candidata"})
+
+# 3. adjudications, case results and acceptance
+c31 = load(A(ADM["C3-1"] + "/state.json"))
+check("C3-1 liga cases-c3-1.json pelo sha da especificação", c31["spec_inputs"]["cases_c3_1_sha256"] == sha(A(SPEC + "/cases-c3-1.json")),
+      c31["spec_inputs"]["cases_c3_1_sha256"])
+c32 = load(A(ADM["C3-2"] + "/state.json"))
+check("C3-2 liga cases-c3-2.json pelo sha da especificação", c32["spec_inputs"]["cases_c3_2_sha256"] == sha(A(SPEC + "/cases-c3-2.json")),
+      c32["spec_inputs"]["cases_c3_2_sha256"])
+plan_cases = sorted({c for r in plan["rows"] for c in r["cases"]})
+consumed = []
+for sub, rel in ADM.items():
+    adj = load(A(rel + "/adjudication-r1.json"))
+    cr = load(A(rel + "/case-results.json"))
+    sdk = [r for r in adj["rows"] if r["kind"] == "SDK"]
+    ok = (adj["review_verdict"] == "APPROVE" and adj["bind_consumes_only"] == [r["case"] for r in sdk]
+          and all(r["final_reading"] == "PASS_CLIENT_OBSERVATION" and r["attribution"] == "CLIENT" for r in sdk)
+          and cr["control"]["gate_passed"] and cr["control"]["counts_as_sdk_observation"] is False)
+    check("%s: bind_consumes_only = %d casos SDK PASS_CLIENT_OBSERVATION/CLIENT; CONTROL só abriu o gate" % (sub, len(sdk)), ok,
+          adj["bind_consumes_only"])
+    consumed += adj["bind_consumes_only"]
+    man = load(A(rel + "/unit-manifest.json"))["files"]
+    accs = {}
+    for r in cr["rows"]:
+        if r["kind"] != "SDK":
+            continue
+        p = r["attempt_dir"] + "/acceptance.json"
+        acc = load(A(rel + "/" + p))
+        accs[r["case"]] = (acc["outcome"] == "PASS_CLIENT_OBSERVATION" and acc["capture_form"] == r["capture_form"]
+                           and all(x["ok"] for x in acc["predicates"]) and man[p]["sha256"] == sha(A(rel + "/" + p)))
+    check("%s: acceptance.json dos casos consumidos conferem com case-results (desfecho, forma, todos os predicados ok, sha do manifesto)"
+          % sub, all(accs.values()), accs)
+check("os casos do plano são exatamente os consumidos pelas duas admissões (27)", sorted(consumed) == plan_cases and len(consumed) == 27,
+      {"plan": plan_cases, "consumed": sorted(consumed)})
+re1 = load(A(ADM["C3-1"] + "/reevaluation-c31.json"))
+re2 = load(A(ADM["C3-2"] + "/reevaluation-c32.json"))
+check("reavaliação offline igual em predicados e desfecho nas duas admissões; C3-2 com plan_binding cumprido em substância (DV-C32-02)",
+      re1["all_predicate_level_equal"] and re1["all_outcome_equal"] and re1["all_plan_binding_ok"]
+      and re2["all_predicate_level_equal"] and re2["all_outcome_equal"] and re2["all_plan_binding_content_ok"]
+      and not re2["all_plan_binding_ok"] and len(re2["plan_file_record_absent"]) == 14,
+      {"c3_1": [re1["all_predicate_level_equal"], re1["all_outcome_equal"], re1["all_plan_binding_ok"]],
+       "c3_2": [re2["all_predicate_level_equal"], re2["all_outcome_equal"], re2["all_plan_binding_ok"], re2["all_plan_binding_content_ok"]]})
+
+# 4. records for the BIND
+n32 = load(A(ADM["C3-2"] + "/next-task.json"))
+rec = {x["id"] for x in n32["record_for_bind"]}
+need = {"C32-ADM/R1-F02", "C32-ADM/R1-F04", "C32-ADM/DV-C32-01", "C32-ADM/DV-C32-02", "C31-ADM/R1-F04"}
+adj2 = load(A(ADM["C3-2"] + "/adjudication-r1.json"))
+dv04 = [d for d in adj2["deviations"] if d["id"] == "DV-C32-04"]
+er = [r for r in adj2["rows"] if r["case"] == "C3-PY13ER"][0]
+n31 = load(A(ADM["C3-1"] + "/next-task.json"))
+f01 = [c for c in n31["carry_over"] if c["id"] == "C31-ADM/R1-F01"]
+check("registros para o BIND presentes: C32-ADM/R1-F02, R1-F04, DV-C32-01, DV-C32-02 e C31-ADM/R1-F04; texto corrigido do DV-C32-04 na "
+      "adjudicação do C3-2; not_credited do C3-PY13ER; registro do zombie 15 no C31-ADM/R1-F01",
+      need <= rec and dv04 and dv04[0].get("corrected_text") and len(er.get("not_credited", [])) == 3 and f01
+      and "zombie 15" in f01[0]["text"], {"record_for_bind": sorted(rec), "dv04_corrected": bool(dv04 and dv04[0].get("corrected_text"))})
+check("a especificação do perfil distribuído existe e é de outra unidade (não lida como entrada nem editada)",
+      os.path.isdir(A(G02 + "/sdk-distributed-profile-spec")), G02 + "/sdk-distributed-profile-spec/")
+
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3",
+       "result": "PASS" if all(c["ok"] for c in checks) else "FAIL", "checks": checks,
+       "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], "%d/%d" % (sum(c["ok"] for c in checks), len(checks)))

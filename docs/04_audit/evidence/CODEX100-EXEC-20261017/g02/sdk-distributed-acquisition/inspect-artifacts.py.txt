@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - metadados dos artefatos adquiridos, lidos só como dados.
+# Uso: python3 -I -B inspect-artifacts.py.txt <unit_dir> <cache_dir>
+# Abre wheels (zip) e tarballs (gzip+tar) só para leitura em memória, com zipfile e tarfile da stdlib: lista os membros,
+# calcula o sha256 de cada arquivo regular, lê RECORD, METADATA, WHEEL e entry_points.txt dos wheels e package.json dos
+# pacotes npm, e marca binários ELF pelo cabeçalho. Nada é extraído para o disco e nada é executado. Escreve
+# artifact-metadata.json na pasta da unidade (só JSON, sem binário).
+import base64
+import hashlib
+import json
+import os
+import sys
+import tarfile
+import zipfile
+from datetime import datetime, timezone
+
+UNIT, CACHE = sys.argv[1], sys.argv[2].rstrip("/")
+ledger = json.load(open(os.path.join(UNIT, "acquisition-ledger.json"), encoding="utf-8"))
+MAX_MEMBER = 512 * 1024 * 1024
+TEXT_MAX = 20000
+
+
+def kind_of(head):
+    if head.startswith(b"\x7fELF"):
+        return "ELF"
+    if head.startswith(b"#!"):
+        return "script-shebang"
+    return None
+
+
+def wheel_meta(path):
+    out = {"format": "wheel (zip)", "members": [], "record": None, "metadata_headers": None, "wheel": None, "entry_points": None}
+    with zipfile.ZipFile(path) as z:
+        recs = {}
+        for info in z.infolist():
+            if info.is_dir():
+                out["members"].append({"name": info.filename, "type": "dir"})
+                continue
+            assert info.file_size <= MAX_MEMBER, info.filename
+            data = z.read(info)
+            mode = (info.external_attr >> 16) & 0o7777
+            m = {"name": info.filename, "type": "file", "size": info.file_size, "mode": oct(mode) if mode else None,
+                 "sha256": hashlib.sha256(data).hexdigest(), "kind": kind_of(data[:4])}
+            out["members"].append(m)
+            recs[info.filename] = data
+        record_name = [n for n in recs if n.endswith(".dist-info/RECORD")]
+        if len(record_name) == 1:
+            rows, bad = [], []
+            for line in recs[record_name[0]].decode("utf-8").splitlines():
+                if not line.strip():
+                    continue
+                name, h, size = line.rsplit(",", 2)
+                rows.append(name)
+                if h:
+                    algo, b64 = h.split("=", 1)
+                    calc = base64.urlsafe_b64encode(hashlib.new(algo, recs[name]).digest()).rstrip(b"=").decode() if name in recs else None
+                    if calc != b64:
+                        bad.append(name)
+            out["record"] = {"path": record_name[0], "entries": len(rows), "hash_mismatches": bad,
+                             "members_not_in_record": sorted(set(recs) - set(rows))}
+        for suffix, key in ((".dist-info/METADATA", "metadata_headers"), (".dist-info/WHEEL", "wheel"), (".dist-info/entry_points.txt", "entry_points")):
+            names = [n for n in recs if n.endswith(suffix)]
+            if len(names) == 1:
+                text = recs[names[0]].decode("utf-8")
+                if key == "metadata_headers":
+                    text = text.split("\n\n", 1)[0]
+                out[key] = text[:TEXT_MAX]
+    return out
+
+
+def tar_meta(path, npm):
+    out = {"format": "tar.gz", "members": []}
+    with tarfile.open(path, mode="r:gz") as t:
+        for m in t:
+            e = {"name": m.name, "size": m.size, "mode": oct(m.mode)}
+            if m.isfile():
+                assert m.size <= MAX_MEMBER, m.name
+                data = t.extractfile(m).read()
+                e.update({"type": "file", "sha256": hashlib.sha256(data).hexdigest(), "kind": kind_of(data[:4])})
+                if npm and m.name == "package/package.json":
+                    out["package_json"] = json.loads(data)
+            elif m.isdir():
+                e["type"] = "dir"
+            elif m.issym() or m.islnk():
+                e.update({"type": "symlink" if m.issym() else "hardlink", "linkname": m.linkname})
+            else:
+                e["type"] = "other"
+            out["members"].append(e)
+    return out
+
+
+doc = {"kind": "ARTIFACT_METADATA", "task": ledger["task"], "rule": "Leitura só como dados: nada extraído no disco, nada executado.",
+       "ledger": {"path": "acquisition-ledger.json", "sha256": hashlib.sha256(open(os.path.join(UNIT, "acquisition-ledger.json"), "rb").read()).hexdigest()},
+       "artifacts": [], "functional_receipts": 0, "parity_credit": 0}
+for a in ledger["artifacts"]:
+    item = {"id": a["id"], "name": a["name"], "result": a["result"]}
+    if a["result"] not in ("DIGEST_OK", "NO_PUBLISHED_DIGEST"):
+        item["inspected"] = False
+        item["reason"] = "não inspecionado: " + a["result"]
+        doc["artifacts"].append(item)
+        continue
+    path = a["stored"]
+    item["file"] = os.path.basename(path)
+    item["sha256"] = a["observed"]["sha256"]
+    if path.endswith(".whl"):
+        item.update(wheel_meta(path))
+    else:
+        item.update(tar_meta(path, npm=a["id"] in ("A2", "A3", "A4", "A7")))
+    item["elf_members"] = [m["name"] for m in item["members"] if m.get("kind") == "ELF"]
+    item["inspected"] = True
+    doc["artifacts"].append(item)
+doc["inspected_at"] = datetime.now(timezone.utc).isoformat()
+with open(os.path.join(UNIT, "artifact-metadata.json"), "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+for it in doc["artifacts"]:
+    print(it["id"], it["result"], it.get("format"), len(it.get("members", [])), it.get("elf_members", [])[:4])

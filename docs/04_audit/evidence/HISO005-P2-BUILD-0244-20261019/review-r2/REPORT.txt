@@ -1,0 +1,29 @@
+HISO005-P2-BUILD-0244 — crítica R2 (última rodada; mesmo crítico do R1)
+Congelada r2: patchSha256 3d8a3d2c551512b6fc9818185704b83d111efded0619f2cbc916dfcadbfb589d (engine 2c0033f2…, teste 81f373c8…)
+Veredito: REVISE (1 P1; 2 P3)
+
+Estado do R1
+- R1-02, R1-03, R1-04 e todos os P3: resolvidos e conferidos.
+  - M1 derruba 7 testes; M2 derruba o diamante.
+  - Primeira falha 32/48 reproduzida na v4.
+  - As listas tupla a tupla batem com o meu recálculo, com tocado e com tocado estrito; v5r1 = v5r2 na raiz.
+  - Margens declaradas; cópias diagnósticas re-derivadas byte a byte.
+  - Focal 870/870 e nativo 79/79.
+- R1-01: parcial. F01–F03 passam a AMBIGUOUS_STAR e F36 segue PROVEN, mas a correção criou o R2-01.
+
+Obrigatório
+- R2-01 (P1), regressão da correção de R1-01. O diff aplicado é o que eu mesmo propus no R1 (M4).
+  - `export * as ns from m` passou a ter identidade `arquivo#ns`, igual à de uma ligação local real `ns`. Como `export * as ns` não cria ligação local, o módulo pode ter um `ns` local (const ou import * as ns) exportado com outro nome. As duas ligações colidem e a ambiguidade some.
+  - F37 (const ns = 1 exportado como other + export * as ns; outro módulo reexporta other como ns) dá PROVEN com r.ns = 1 (primitivo).
+  - F38 (variante com import * as ns) dá PROVEN.
+  - No Node 22 fixado os dois são conflito: ns ausente, e import { ns } dá SyntaxError.
+  - Mudança testada: sentinela `file + '#*namespace*' + name` em star() para `export * as`. F01–F03, F37 e F38 ficam AMBIGUOUS_STAR, F36 segue PROVEN e a suíte segue 48/48.
+  - Acrescentar F37/F38 ao teste, fazer nova congelada e rodar primeira falha, verde e focal.
+  - Na raiz real não há colisão (8 `export * as`, nenhum nome local igual), então as tuplas não mudam. Registrar esse argumento ou remedir; a decisão é do lead.
+
+Opcionais (P3)
+- census-comparison ainda é da r1. O diff r1→r2 fica fora do census; reconferi v4 × v5r2 em 21 fixtures: iguais salvo versão.
+- usage-margins cita só o tempo das execuções r2 (≤ 120 s). As execuções r1, com as mesmas tuplas, mediram 134,8–144,2 s com load ~9.
+
+Cache: nesta rodada usei node_modules sombra e cacheDir próprio; o cache de vitest da candidata não mudou.
+Não avaliado: MS07 e MS08. Detalhes em review.json.

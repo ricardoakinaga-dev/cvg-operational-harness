@@ -1,0 +1,1223 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS - gerador dos JSON da especificação (somente leitura das fontes e do cache).
+# Uso: python3 -I -B build-spec-dp.py.txt <spec_dir> <cache_dir>
+# Lê os textos publicados da release 0.153.4 dentro dos arquivos compactados do cache (zipfile e tarfile da stdlib, em
+# memória, sem extrair e sem executar), as fontes do pin no perfil de referência, a aquisição (ledger, metadados,
+# conferência), a decisão do usuário e a decisão do Lead sobre o loopback. Calcula âncoras (membro + sha256 + linha + texto)
+# e escreve os JSON da unidade. Nenhum binário é lido como código; nada roda.
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+import tarfile
+import zipfile
+from datetime import datetime, timezone
+
+SPEC, CACHE = sys.argv[1], sys.argv[2].rstrip("/")
+TASK = "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS"
+VERSION = "0.153.4"
+SOURCE_PIN = "8d9f6466ff0294785d56f55b1fe363d132fe4133"
+NBL = "NO_BUILD_LINK_DECLARED"
+
+
+def rel(p):
+    return os.path.normpath(os.path.join(SPEC, p))
+
+
+def sha_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha_file(p):
+    return sha_bytes(open(p, "rb").read())
+
+
+def load(p):
+    return json.load(open(rel(p), encoding="utf-8"))
+
+
+def compact(o):
+    return json.dumps(o, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def ptr(p, pointer=None):
+    d = {"path": p, "sha256": sha_file(rel(p))}
+    if pointer:
+        d["pointer"] = pointer
+    return d
+
+
+ACQ = "../sdk-distributed-acquisition/"
+LEDGER = load(ACQ + "acquisition-ledger.json")
+META = load(ACQ + "artifact-metadata.json")
+VERIF = load(ACQ + "digest-verification.json")
+LOOP = load(ACQ + "lead-decision-loopback-a5.json")
+DEC = load("../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json")
+assert VERIF["result"] == "PASS" and LOOP["decision"] == "ALLOWED_AS_SYNTHETIC_LOOPBACK_PEER"
+STORED = {a["id"]: a["stored"] for a in LEDGER["artifacts"] if a["result"] == "DIGEST_OK"}
+ARCH_SHA = {a["id"]: a["observed"]["sha256"] for a in LEDGER["artifacts"] if a["result"] == "DIGEST_OK"}
+MEMBERS = {a["id"]: {m["name"]: m for m in a.get("members", []) if m.get("type") == "file"} for a in META["artifacts"] if a.get("inspected")}
+
+# ------------------------------------------------------------------ inputs: published members (read in memory) and pin sources
+TEXT = {}
+
+
+def member_text(aid, name):
+    key = "%s:%s" % (aid, name)
+    if key in TEXT:
+        return TEXT[key]
+    path = STORED[aid]
+    assert sha_file(path) == ARCH_SHA[aid], aid
+    if path.endswith(".whl"):
+        with zipfile.ZipFile(path) as z:
+            data = z.read(name)
+    else:
+        with tarfile.open(path, "r:gz") as t:
+            data = t.extractfile(t.getmember(name)).read()
+    assert sha_bytes(data) == MEMBERS[aid][name]["sha256"], key
+    TEXT[key] = {"lines": data.decode("utf-8").split("\n"), "sha256": sha_bytes(data), "archive_sha256": ARCH_SHA[aid],
+                 "archive": os.path.basename(path), "mode": MEMBERS[aid][name].get("mode")}
+    return TEXT[key]
+
+
+REF = "../sdk-reference-profile/inputs/sdk/"
+PIN_FILES = {"pin/py/client.py": REF + "python/src/openai_codex/client.py", "pin/py/_runtime_setup.py": REF + "python/_runtime_setup.py",
+             "pin/py/pyproject.toml": REF + "python/pyproject.toml", "pin/ts/exec.ts": REF + "typescript/src/exec.ts",
+             "pin/ts/package.json": REF + "typescript/package.json", "pin/ts/index.ts": REF + "typescript/src/index.ts",
+             "g01/typescript/contracts.json": "../../g01/sdk-open-contracts/typescript/contracts.json",
+             "g01/python-contracts.json": "../../g01/sdk-open-contracts/python-contracts.json"}
+ANCHOR_ERRORS = []
+
+
+def lines_of(key):
+    if ":" in key and key.split(":", 1)[0] in STORED:
+        aid, name = key.split(":", 1)
+        return member_text(aid, name)["lines"]
+    return open(rel(PIN_FILES[key]), encoding="utf-8").read().split("\n")
+
+
+def A(key, text, nth=None, span=0):
+    ls = lines_of(key)
+    hits = [i for i, l in enumerate(ls, 1) if text in l]
+    if (nth is None and len(hits) != 1) or (nth is not None and len(hits) < nth):
+        ANCHOR_ERRORS.append((key, text, hits))
+        return {"input": key, "error": "ambiguous_or_missing"}
+    n = hits[0] if nth is None else hits[nth - 1]
+    if key in PIN_FILES:
+        sha = sha_file(rel(PIN_FILES[key]))
+    else:
+        sha = member_text(*key.split(":", 1))["sha256"]
+    return {"input": key, "sha256": sha, "lines": [n] if not span else [n, n + span], "text": ls[n - 1].strip()}
+
+
+def inputs_of(keys):
+    out = {}
+    for k in sorted(keys):
+        if k in PIN_FILES:
+            out[k] = {"path": PIN_FILES[k], "sha256": sha_file(rel(PIN_FILES[k]))}
+        else:
+            aid, name = k.split(":", 1)
+            t = member_text(aid, name)
+            out[k] = {"cache_archive": "%s/artifacts/%s/%s" % (CACHE, aid, t["archive"]), "archive_sha256": t["archive_sha256"],
+                      "member": name, "member_sha256": t["sha256"], "bound_by": {"path": ACQ + "artifact-metadata.json",
+                                                                                 "sha256": sha_file(rel(ACQ + "artifact-metadata.json"))}}
+    return out
+
+
+WRAP = "A2:package/bin/codex.js"
+PROXY = "A4:package/bin/codex-responses-api-proxy.js"
+SDKJS = "A7:package/dist/index.js"
+RTINIT = "A1:codex_cli_bin/__init__.py"
+for k in (WRAP, PROXY, SDKJS, RTINIT, "A2:package/package.json", "A3:package/package.json", "A4:package/package.json", "A7:package/package.json",
+          "A1:codex_cli_bin/codex-package.json", "A1:openai_codex_cli_bin-0.153.4.dist-info/WHEEL"):
+    member_text(*k.split(":", 1))
+
+# ------------------------------------------------------------------ staging layout (CAP-DP-STAGE)
+NPM = "/dist/npm/node_modules"
+SDK_ROOT = NPM + "/@openai/codex-sdk"
+CLI_ROOT = NPM + "/@openai/codex"
+X64_ROOT = NPM + "/@openai/codex-linux-x64"
+PROXY_ROOT = NPM + "/@openai/codex-responses-api-proxy"
+PYSITE = "/dist/py/site"
+TRIPLE = "x86_64-unknown-linux-musl"
+STAGE = [{"archive": "A7", "prefix": "package/", "to": SDK_ROOT + "/"}, {"archive": "A2", "prefix": "package/", "to": CLI_ROOT + "/"},
+         {"archive": "A3", "prefix": "package/", "to": X64_ROOT + "/"}, {"archive": "A4", "prefix": "package/", "to": PROXY_ROOT + "/"},
+         {"archive": "A1", "prefix": "", "to": PYSITE + "/"}]
+REAL_CODEX = X64_ROOT + "/vendor/%s/bin/codex" % TRIPLE
+PAIRS = [("linux", "x64", "x86_64-unknown-linux-musl", "@openai/codex-linux-x64"), ("android", "x64", "x86_64-unknown-linux-musl", "@openai/codex-linux-x64"),
+         ("linux", "arm64", "aarch64-unknown-linux-musl", "@openai/codex-linux-arm64"), ("android", "arm64", "aarch64-unknown-linux-musl", "@openai/codex-linux-arm64"),
+         ("darwin", "x64", "x86_64-apple-darwin", "@openai/codex-darwin-x64"), ("darwin", "arm64", "aarch64-apple-darwin", "@openai/codex-darwin-arm64"),
+         ("win32", "x64", "x86_64-pc-windows-msvc", "@openai/codex-win32-x64"), ("win32", "arm64", "aarch64-pc-windows-msvc", "@openai/codex-win32-arm64")]
+INVALID = [("freebsd", "x64"), ("linux", "ia32")]
+PLATFORM_PKGS = sorted({(p[3], p[2]) for p in PAIRS})
+# the platform map in the published SDK and wrapper equals PAIRS
+for key in (SDKJS, WRAP):
+    src = "\n".join(lines_of(key))
+    for _, _, triple, pkg in PAIRS:
+        assert '"%s": "%s"' % (triple, pkg) in src, (key, triple)
+
+
+def steps(*items):
+    out = []
+    for i, s in enumerate(items, 1):
+        d = {"step": i}
+        d.update(s)
+        out.append(d)
+    return out
+
+
+def S(api, **kw):
+    d = {"api": api}
+    d.update(kw)
+    return d
+
+
+def DISC(arm, stp, contrary, judged_by, observable):
+    return {"arm": arm, "steps": stp, "contrary": contrary, "observable_if_contrary": observable, "judged_by": judged_by}
+
+
+def COPY(path, member, mode=None):
+    d = {"path": path, "kind": "copy_of_member", "member": member}
+    if mode:
+        d["mode"] = mode
+    return d
+
+
+def FILE(path, content="", mode="0644"):
+    return {"path": path, "kind": "file", "content": content, "mode": mode}
+
+
+def JSONF(path, value):
+    return {"path": path, "kind": "json", "value": value}
+
+
+def DIR(path):
+    return {"path": path, "kind": "dir"}
+
+
+def CHILD(path, mode="0755"):
+    return {"path": path, "kind": "synthetic_child", "mode": mode}
+
+
+def SDK_COPY(root):
+    return [COPY(root + "/@openai/codex-sdk/package.json", "A7:package/package.json"), COPY(root + "/@openai/codex-sdk/dist/index.js", SDKJS)]
+
+
+def CLI_PKG(root):
+    return [COPY(root + "/@openai/codex/package.json", "A2:package/package.json")]
+
+
+def SYN_PLATFORM(root, pkg, triple, exe="codex", marker=True, binary="file"):
+    base = "%s/%s" % (root, pkg)
+    out = [JSONF(base + "/package.json", {"name": pkg, "version": "0.0.0-synthetic"})]
+    if binary == "file":
+        out.append(FILE("%s/vendor/%s/bin/%s" % (base, triple, exe), "synthetic marker file, never executed\n"))
+    elif binary == "dir":
+        out.append(DIR("%s/vendor/%s/bin/%s" % (base, triple, exe)))
+    if marker:
+        out.append(JSONF("%s/vendor/%s/codex-package.json" % (base, triple), {"synthetic": True}))
+    return out
+
+
+VDEP = ["Node v24.20.0: process.platform e process.arch redefiníveis por Object.defineProperty; ordem de resolução do createRequire",
+        "Linux x86-64 com glibc 2.39 (host do perfil)"]
+NODE_PRED = ["capture.case_input_frozen_bytes", "stage.bound_to_cache", "fixture.tree_exact", "keyless.no_network_no_credential"]
+CREDIT = "CLIENT_BEHAVIOR_ONLY_IF_OBSERVED"
+C1 = {}
+
+# ================================================================== DP-1 (Node: PK01-PK09)
+R1 = "/fixture/pk01/node_modules"
+pk01_tree = SDK_COPY(R1) + CLI_PKG(R1)
+for pkg, triple in PLATFORM_PKGS:
+    pk01_tree += SYN_PLATFORM(R1, pkg, triple, exe="codex.exe" if "windows" in triple else "codex")
+pk01_steps = [S("import", module=R1 + "/@openai/codex-sdk/dist/index.js", **{"as": "sdk"})]
+pk01_api = []
+for plat, arch, triple, pkg in PAIRS:
+    exe = "codex.exe" if plat == "win32" else "codex"
+    n = len(pk01_steps)
+    pk01_steps += [S("shim.platform", platform=plat, arch=arch), S("new Codex", sdk="sdk", options={}, **{"as": "c_%s_%s" % (plat, arch)}),
+                   S("probe", id="path_%s_%s" % (plat, arch), path=["c_%s_%s" % (plat, arch), "exec", "executablePath"]),
+                   S("probe", id="dirs_%s_%s" % (plat, arch), path=["c_%s_%s" % (plat, arch), "exec", "pathDirs"]), S("shim.restore")]
+    pk01_api.append(("path_%s_%s" % (plat, arch), "%s/%s/vendor/%s/bin/%s" % (R1, pkg, triple, exe)))
+    pk01_api.append(("dirs_%s_%s" % (plat, arch), []))
+inv_steps = []
+for plat, arch in INVALID:
+    pk01_steps += [S("shim.platform", platform=plat, arch=arch), S("new Codex", sdk="sdk", options={}), S("shim.restore")]
+pk01_calls = steps(*pk01_steps)
+inv_err = [{"step": s["step"], "error": {"name": "Error", "message": "Unsupported platform: %s (%s)" % (s_plat, s_arch)}}
+           for s, (s_plat, s_arch) in zip([x for x in pk01_calls if x["api"] == "new Codex" and "as" not in x], INVALID)]
+C1["DP-PK01A"] = dict(
+    contracts=["PK01"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK01.B01 (os oito pares suportados escolhem o triple e o pacote de plataforma do mapa)",
+                       "PK01.B02 (plataforma ou arch fora dos cases: Unsupported platform)",
+                       "PK01.B04 (nome do binário: codex.exe só com process.platform win32)"],
+    trees=[{"root": "/fixture/pk01", "entries": pk01_tree}],
+    sdk_calls=pk01_calls,
+    expected={"probes": dict(pk01_api), "api": inv_err, "spawns": 0},
+    expected_observation="O findCodexPath do SDK publicado (dist/index.js) lê process.platform e process.arch na chamada: linux e android x64/arm64 vão para os triples musl, darwin e win32 para os seus, e o pacote de plataforma vem do mapa. Com o pacote sintético de cada plataforma e o marcador, o caminho escolhido é vendor/<triple>/bin/codex (codex.exe só em win32). Fora dos cases, lança Unsupported platform. Nada é executado (o binário sintético nem é lido).",
+    known_bad={"text": "Escolher triple errado (por exemplo glibc ou darwin para android), aceitar plataforma inválida ou usar codex.exe fora de win32.",
+               "judged_by": ["probe.dp_values_exact", "api.dp_steps_exact"]},
+    predicates=NODE_PRED + ["api.dp_steps_exact", "probe.dp_values_exact", "shim.platform_scoped", "spawn.none"],
+    accepted_capture_forms=["PASS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (import do SDK publicado, shim de plataforma, sondas)"],
+    anchors=[A(SDKJS, "function findCodexPath() {"), A(SDKJS, "  const { platform, arch } = process;", nth=1),
+             A(SDKJS, "throw new Error(`Unsupported platform: ${platform} (${arch})`);"),
+             A(SDKJS, 'const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";'),
+             A(SDKJS, "const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];")],
+    version_dependent=VDEP,
+    arm_discrimination=[
+        DISC("PK01.B01", [s["step"] for s in pk01_calls if s.get("id", "").startswith("path_")], "triple ou pacote trocado num par", ["probe.dp_values_exact"], "caminho de outro pacote ou triple"),
+        DISC("PK01.B02", [e["step"] for e in inv_err], "plataforma inválida aceita", ["api.dp_steps_exact"], "new Codex sem erro ou erro de resolução"),
+        DISC("PK01.B04", [s["step"] for s in pk01_calls if s.get("id", "").startswith("path_win32") or s.get("id", "").startswith("path_darwin")], "codex.exe fora de win32 ou codex em win32", ["probe.dp_values_exact"], "nome do arquivo errado")],
+    residual_source="v5 rows[PK01] OPEN_REQUIRED_FUTURE_PROFILE; G01 PK01 expectation (fixtures de plataforma/arch pinados, 8 pares e inválidos)",
+)
+
+PK02_ROOTS = {
+    "new": SYN_PLATFORM("/fixture/pk02/new/node_modules", "@openai/codex-linux-x64", TRIPLE)
+           + [DIR("/fixture/pk02/new/node_modules/@openai/codex-linux-x64/vendor/%s/codex-path" % TRIPLE)],
+    "legacy": [JSONF("/fixture/pk02/legacy/node_modules/@openai/codex-linux-x64/package.json", {"name": "@openai/codex-linux-x64", "version": "0.0.0-synthetic"}),
+               FILE("/fixture/pk02/legacy/node_modules/@openai/codex-linux-x64/vendor/%s/codex/codex" % TRIPLE, "synthetic\n"),
+               DIR("/fixture/pk02/legacy/node_modules/@openai/codex-linux-x64/vendor/%s/path" % TRIPLE)],
+    "both": SYN_PLATFORM("/fixture/pk02/both/node_modules", "@openai/codex-linux-x64", TRIPLE)
+            + [FILE("/fixture/pk02/both/node_modules/@openai/codex-linux-x64/vendor/%s/codex/codex" % TRIPLE, "synthetic\n")],
+    "nomarker": SYN_PLATFORM("/fixture/pk02/nomarker/node_modules", "@openai/codex-linux-x64", TRIPLE, marker=False)
+                + [FILE("/fixture/pk02/nomarker/node_modules/@openai/codex-linux-x64/vendor/%s/codex/codex" % TRIPLE, "synthetic\n")],
+    "bindir": SYN_PLATFORM("/fixture/pk02/bindir/node_modules", "@openai/codex-linux-x64", TRIPLE, binary="dir"),
+    "nopkg": [],
+    "pathfile": SYN_PLATFORM("/fixture/pk02/pathfile/node_modules", "@openai/codex-linux-x64", TRIPLE)
+                + [FILE("/fixture/pk02/pathfile/node_modules/@openai/codex-linux-x64/vendor/%s/codex-path" % TRIPLE, "not a directory\n")],
+}
+pk02_trees, pk02_steps, pk02_probes, pk02_err = [], [], {}, []
+UNABLE = "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies."
+UNABLE_T = "Unable to locate Codex CLI binaries for %s. Ensure @openai/codex is installed with optional dependencies." % TRIPLE
+for name, entries in PK02_ROOTS.items():
+    root = "/fixture/pk02/%s/node_modules" % name
+    pk02_trees.append({"root": "/fixture/pk02/" + name, "entries": SDK_COPY(root) + CLI_PKG(root) + entries})
+    base = root + "/@openai/codex-linux-x64/vendor/" + TRIPLE
+    pk02_steps.append(S("import", module=root + "/@openai/codex-sdk/dist/index.js", **{"as": "sdk_" + name}))
+    if name in ("bindir", "nopkg"):
+        pk02_steps.append(S("new Codex", sdk="sdk_" + name, options={}))
+        pk02_err.append((len(pk02_steps), UNABLE_T if name == "bindir" else UNABLE))
+        continue
+    pk02_steps += [S("new Codex", sdk="sdk_" + name, options={}, **{"as": "c_" + name}),
+                   S("probe", id="path_" + name, path=["c_" + name, "exec", "executablePath"]),
+                   S("probe", id="dirs_" + name, path=["c_" + name, "exec", "pathDirs"])]
+    if name in ("new", "both"):
+        pk02_probes["path_" + name], pk02_probes["dirs_" + name] = base + "/bin/codex", ([base + "/codex-path"] if name == "new" else [])
+    elif name in ("legacy", "nomarker"):
+        pk02_probes["path_" + name], pk02_probes["dirs_" + name] = base + "/codex/codex", ([base + "/path"] if name == "legacy" else [])
+    elif name == "pathfile":
+        pk02_probes["path_" + name], pk02_probes["dirs_" + name] = base + "/bin/codex", []
+pk02_calls = steps(*pk02_steps)
+C1["DP-PK02A"] = dict(
+    contracts=["PK02"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK02.B01 (resolve @openai/codex e o pacote de plataforma a partir dele; qualquer falha vira a mensagem genérica)",
+                       "PK02.B02 (layout novo: bin/codex e codex-package.json como arquivos; pathDirs de codex-path)",
+                       "PK02.B03 (layout legacy: codex/codex e path, inclusive quando falta o marcador do novo)",
+                       "PK02.B04 (nenhum layout: erro com o triple)",
+                       "PK02.B05 (stat segue isFile/isDirectory: diretório no lugar do binário e arquivo no lugar de codex-path não contam)"],
+    trees=pk02_trees, sdk_calls=pk02_calls,
+    expected={"probes": pk02_probes, "api": [{"step": n, "error": {"name": "Error", "message": m}} for n, m in pk02_err], "spawns": 0},
+    expected_observation="Sete raízes sintéticas, cada uma com uma cópia do dist/index.js publicado: o layout novo vence o legacy quando os dois existem; sem o marcador codex-package.json, cai no legacy; diretório no lugar de bin/codex não conta e, sem legacy, o erro traz o triple; sem pacote de plataforma, a mensagem genérica; codex-path que é arquivo é omitido de pathDirs.",
+    known_bad={"text": "Aceitar binário sem marcador, preferir o legacy, tratar diretório como binário ou incluir codex-path que não é diretório.",
+               "judged_by": ["probe.dp_values_exact", "api.dp_steps_exact"]},
+    predicates=NODE_PRED + ["api.dp_steps_exact", "probe.dp_values_exact", "spawn.none"],
+    accepted_capture_forms=["PASS"], infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER"],
+    anchors=[A(SDKJS, "const codexPackageJsonPath = moduleRequire.resolve(`${CODEX_NPM_NAME}/package.json`);"),
+             A(SDKJS, "const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);"),
+             A(SDKJS, 'if (isFile(packageBinaryPath) && isFile(path2.join(packageRoot, "codex-package.json"))) {'),
+             A(SDKJS, 'const legacyBinaryPath = path2.join(packageRoot, "codex", codexBinaryName);'),
+             A(SDKJS, "return statSync(filePath).isFile();"), A(SDKJS, "return dirs.filter(isDirectory);")],
+    version_dependent=VDEP,
+    arm_discrimination=[
+        DISC("PK02.B01", [s for s, _ in pk02_err], "erro específico em vez do genérico quando falta o pacote", ["api.dp_steps_exact"], "mensagem com triple na raiz nopkg"),
+        DISC("PK02.B02", [2, 3, 4], "layout novo sem pathDirs ou com outro caminho", ["probe.dp_values_exact"], "dirs_new []"),
+        DISC("PK02.B03", [5, 6, 7], "legacy ignorado sem o marcador", ["probe.dp_values_exact"], "path_nomarker no layout novo ou erro"),
+        DISC("PK02.B04", [s for s, m in pk02_err if m == UNABLE_T], "diretório aceito como binário", ["api.dp_steps_exact"], "new Codex sem erro na raiz bindir"),
+        DISC("PK02.B05", [s["step"] for s in pk02_calls if s.get("id") == "dirs_pathfile"], "codex-path arquivo incluído", ["probe.dp_values_exact"], "dirs_pathfile não vazio")],
+    residual_source="v5 rows[PK02]; G01 PK02 expectation (árvore sintética novo/legacy/ambos/missing marker/missing bin/path absent/stat)",
+)
+# fix PK02.B02/B03 discrimination steps by id
+for d in C1["DP-PK02A"]["arm_discrimination"]:
+    ids = {"PK02.B02": ("path_new", "dirs_new", "path_both"), "PK02.B03": ("path_legacy", "dirs_legacy", "path_nomarker")}.get(d["arm"])
+    if ids:
+        d["steps"] = [s["step"] for s in pk02_calls if s.get("id") in ids]
+
+C1["DP-PK02R"] = dict(
+    contracts=["PK02", "PK09"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK02.B02 (árvore publicada: @openai/codex e o alias de plataforma 0.153.4 resolvem para o layout novo do A3)",
+                       "PK09.B03 (o caminho resolvido tem o hash real do binário publicado, diferente do executável compilado do pin)"],
+    trees=[], sdk_calls=steps(S("import", module=SDK_ROOT + "/dist/index.js", **{"as": "sdk"}), S("new Codex", sdk="sdk", options={}, **{"as": "c"}),
+                              S("probe", id="path", path=["c", "exec", "executablePath"]), S("probe", id="dirs", path=["c", "exec", "pathDirs"]),
+                              S("file.sha256", id="resolved_sha", path_from_probe="path")),
+    expected={"probes": {"path": REAL_CODEX, "dirs": [X64_ROOT + "/vendor/%s/codex-path" % TRIPLE],
+                         "resolved_sha": MEMBERS["A3"]["package/vendor/%s/bin/codex" % TRIPLE]["sha256"]},
+              "not_equal": {"resolved_sha": json.load(open(rel("../../g02-reference-acceptance.json"), encoding="utf-8"))["artifact"]["sha256"]},
+              "spawns": 0, "build_link": NBL},
+    expected_observation="Na árvore publicada (A7, A2 e A3 do cache, por sha), o SDK resolve @openai/codex/package.json e, a partir dele, o diretório do alias @openai/codex-linux-x64 (o pacote @openai/codex@0.153.4-linux-x64); acha bin/codex e codex-package.json e devolve o codex-path existente. O arquivo resolvido tem o sha256 do binário publicado, diferente do executável compilado do pin. Nada é executado.",
+    known_bad={"text": "Resolver outro binário, perder o codex-path ou tratar o binário publicado como o do pin.", "judged_by": ["probe.dp_values_exact"]},
+    predicates=NODE_PRED + ["probe.dp_values_exact", "spawn.none"], accepted_capture_forms=["PASS"], infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER"],
+    anchors=[A(SDKJS, "pathDirs: existingDirs(path2.join(packageRoot, \"codex-path\"))"), A("A2:package/package.json", '"@openai/codex-linux-x64": "npm:@openai/codex@0.153.4-linux-x64",')],
+    version_dependent=VDEP,
+    arm_discrimination=[DISC("PK02.B02", [2, 3, 4], "árvore publicada não resolve pelo alias", ["probe.dp_values_exact"], "erro ou outro caminho"),
+                        DISC("PK09.B03", [5], "binário resolvido igual ao do pin ou diferente do publicado", ["probe.dp_values_exact"], "resolved_sha diferente do membro A3")],
+    residual_source="v5 rows[PK02] e rows[PK09]",
+)
+
+R3 = "/fixture/pk03/node_modules"
+CP3 = R3 + "/@openai/codex-linux-x64/vendor/%s/codex-path" % TRIPLE
+pk03_env_path = "/runtime::%s:/runtime" % CP3
+C1["DP-PK03A"] = dict(
+    contracts=["PK03"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK03.B01 (fora de win32 a chave é PATH)",
+                       "PK03.B03 (prepend: entradas vazias e iguais a pathDirs saem; outras duplicatas ficam)"],
+    trees=[{"root": "/fixture/pk03", "entries": SDK_COPY(R3) + CLI_PKG(R3)
+            + [JSONF(R3 + "/@openai/codex-linux-x64/package.json", {"name": "@openai/codex-linux-x64", "version": "0.0.0-synthetic"}),
+               CHILD(R3 + "/@openai/codex-linux-x64/vendor/%s/bin/codex" % TRIPLE),
+               JSONF(R3 + "/@openai/codex-linux-x64/vendor/%s/codex-package.json" % TRIPLE, {"synthetic": True}), DIR(CP3)]}],
+    sdk_calls=steps(S("import", module=R3 + "/@openai/codex-sdk/dist/index.js", **{"as": "sdk"}),
+                    S("new Codex", sdk="sdk", options={"env": {"HOME": "/work/home", "PATH": pk03_env_path}}, **{"as": "c"}),
+                    S("startThread", on="c", options={}, **{"as": "t"}), S("run", on="t", input="p")),
+    child_script={"behavior": "record_then_exit", "stdout_jsonl": [], "exit_code": 0},
+    expected={"child": {"argv_tail": ["exec", "--experimental-json"], "env": {"HOME": "/work/home", "PATH": "%s:/runtime:/runtime" % CP3,
+                                                                              "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts"},
+                        "stdin": "p", "executed_path": R3 + "/@openai/codex-linux-x64/vendor/%s/bin/codex" % TRIPLE},
+              "api": [{"step": 4, "result": {"items": [], "finalResponse": "", "usage": None}}], "spawns": 1},
+    expected_observation="Com pathDirs [codex-path] vindos do resolvedor, o exec do SDK publicado prepende o diretório ao PATH do env dado: separa por ':', tira entradas vazias e as iguais ao codex-path, e não deduplica o /runtime repetido (dist/index.js prependPathDirs).",
+    known_bad={"text": "Não prepender, deduplicar o /runtime, manter a entrada vazia ou duplicar o codex-path.", "judged_by": ["child.argv_env_exact"]},
+    predicates=NODE_PRED + ["api.dp_steps_exact", "child.argv_env_exact", "child.executed_path_exact"], accepted_capture_forms=["PASS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(SDKJS, "if (this.pathDirs.length > 0) {"), A(SDKJS, 'if (platform !== "win32") {'),
+             A(SDKJS, "const existingEntries = (env[pathKey] ?? \"\").split(path2.delimiter).filter((entry) => entry.length > 0 && !pathDirs.includes(entry));"),
+             A(SDKJS, "env[pathKey] = [...pathDirs, ...existingEntries].join(path2.delimiter);")],
+    version_dependent=VDEP,
+    arm_discrimination=[DISC("PK03.B01", [4], "chave diferente de PATH", ["child.argv_env_exact"], "PATH sem o codex-path"),
+                        DISC("PK03.B03", [4], "deduplicação ou entrada vazia mantida", ["child.argv_env_exact"], "PATH diferente de '<codex-path>:/runtime:/runtime'")],
+    residual_source="v5 rows[PK03]; G01 PK03 expectation (entries vazias/duplicadas, dirs repetidos)",
+)
+
+# ---------------------------------------------------------------- wrapper (A2 bin/codex.js) cases
+F4 = "/fixture/pk04"
+MISSING = "Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: %s"
+assert "Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}" in "\n".join(lines_of(WRAP))
+
+
+def WRAPPER_TREE(root, platform_pkg=True, vendor_bin=True, local_vendor=False, extra=()):
+    nm = root + "/node_modules"
+    out = [COPY(nm + "/@openai/codex/package.json", "A2:package/package.json"), COPY(nm + "/@openai/codex/bin/codex.js", WRAP, mode="0755")]
+    if platform_pkg:
+        out.append(JSONF(nm + "/@openai/codex-linux-x64/package.json", {"name": "@openai/codex-linux-x64", "version": "0.0.0-synthetic"}))
+        if vendor_bin:
+            out.append(CHILD(nm + "/@openai/codex-linux-x64/vendor/%s/bin/codex" % TRIPLE))
+    if local_vendor:
+        out.append(CHILD(nm + "/@openai/codex/vendor/%s/bin/codex" % TRIPLE))
+    return out + list(extra)
+
+
+def WRUN(script, argv, env, as_, shim=None, signal=None, cwd="/work"):
+    d = {"api": "wrapper.run", "script": script, "argv": argv, "env": env, "cwd": cwd, "as": as_}
+    if shim:
+        d["preload_shim"] = {"platform": shim[0], "arch": shim[1]}
+    if signal:
+        d["send_signal"] = signal
+    return d
+
+
+BASE_ENV = {"HOME": "/work/home", "PATH": "/runtime"}
+WRAP_SCRIPT = lambda root: root + "/node_modules/@openai/codex/bin/codex.js"
+pk04_trees = [{"root": F4 + "/local", "entries": WRAPPER_TREE(F4 + "/local", platform_pkg=False, local_vendor=True)},
+              {"root": F4 + "/missing", "entries": WRAPPER_TREE(F4 + "/missing", vendor_bin=False)},
+              {"root": F4 + "/darwin", "entries": WRAPPER_TREE(F4 + "/darwin", platform_pkg=False)
+               + [JSONF(F4 + "/darwin/node_modules/@openai/codex-darwin-arm64/package.json", {"name": "@openai/codex-darwin-arm64", "version": "0.0.0-synthetic"}),
+                  CHILD(F4 + "/darwin/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")]}]
+C1["DP-PK04A"] = dict(
+    contracts=["PK04"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK04.B01 (plataforma do wrapper: triple pelo mapa; inválida lança Unsupported platform)",
+                       "PK04.B02 (vendor: pacote de plataforma resolvido; sem ele, vendor local ao lado do wrapper)",
+                       "PK04.B03 (binário ausente: erro de dependência opcional com dica, sem executar a dica)",
+                       "PK04.B04 (dica por gerenciador: npm por padrão, bun pelo user agent)"],
+    trees=pk04_trees,
+    sdk_calls=steps(WRUN(WRAP_SCRIPT(F4 + "/local"), ["a"], BASE_ENV, "w_local"),
+                    WRUN(WRAP_SCRIPT(F4 + "/missing"), ["a"], BASE_ENV, "w_missing_npm"),
+                    WRUN(WRAP_SCRIPT(F4 + "/missing"), ["a"], dict(BASE_ENV, npm_config_user_agent="bun/1.2.0"), "w_missing_bun"),
+                    WRUN(WRAP_SCRIPT(F4 + "/missing"), ["a"], BASE_ENV, "w_invalid", shim=("freebsd", "x64")),
+                    WRUN(WRAP_SCRIPT(F4 + "/darwin"), ["a"], BASE_ENV, "w_darwin", shim=("darwin", "arm64"))),
+    child_script={"behavior": "record_then_exit", "exit_code": 0},
+    expected={"wrappers": {
+        "w_local": {"exit_code": 0, "signal": None, "child_executed_path": F4 + "/local/node_modules/@openai/codex/vendor/%s/bin/codex" % TRIPLE, "child_argv_tail": ["a"]},
+        "w_missing_npm": {"exit_code": 1, "signal": None, "stderr_contains": [MISSING % "npm install -g @openai/codex@latest"], "child_spawned": False},
+        "w_missing_bun": {"exit_code": 1, "signal": None, "stderr_contains": [MISSING % "bun install -g @openai/codex@latest"], "child_spawned": False},
+        "w_invalid": {"exit_code": 1, "signal": None, "stderr_contains": ["Unsupported platform: freebsd (x64)"], "child_spawned": False},
+        "w_darwin": {"exit_code": 0, "signal": None, "child_executed_path": F4 + "/darwin/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"}},
+        "build_link": NBL},
+    expected_observation="O wrapper publicado acha o triple pelo mapa, resolve o package.json do pacote de plataforma e, sem ele, usa o vendor ao lado do wrapper; confere só existsSync e, faltando o binário, lança o erro de dependência opcional com a dica do gerenciador detectado (npm por padrão, bun pelo user agent). A dica não é executada.",
+    known_bad={"text": "Ignorar o vendor local, sugerir instalação errada, executar a dica, ou aceitar plataforma inválida.",
+               "judged_by": ["wrap.exit_mirror_exact", "wrap.stderr_contains", "child.executed_path_exact"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "wrap.stderr_contains", "child.executed_path_exact", "child.argv_env_exact", "shim.platform_scoped"],
+    accepted_capture_forms=["PASS"], infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run e shim de plataforma)", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(WRAP, "const packageJsonPath = require.resolve(`${platformPackage}/package.json`);"), A(WRAP, 'vendorRoot = path.join(__dirname, "..", "vendor");'),
+             A(WRAP, "if (existsSync(codexExecutable)) {"), A(WRAP, ': "npm install -g @openai/codex@latest";'),
+             A(WRAP, "if (/\\bbun\\//.test(userAgent)) {"), A(WRAP, "throw new Error(`Unsupported platform: ${platform} (${arch})`);")],
+    version_dependent=VDEP,
+    arm_discrimination=[DISC("PK04.B01", [4, 5], "plataforma inválida aceita ou triple errado", ["wrap.exit_mirror_exact", "child.executed_path_exact"], "exit 0 em freebsd ou outro caminho em darwin"),
+                        DISC("PK04.B02", [1], "sem fallback para o vendor local", ["child.executed_path_exact", "wrap.exit_mirror_exact"], "w_local com erro"),
+                        DISC("PK04.B03", [2], "binário ausente não detectado ou dica executada", ["wrap.stderr_contains", "wrap.exit_mirror_exact"], "exit diferente de 1 ou sem a mensagem"),
+                        DISC("PK04.B04", [2, 3], "dica sem considerar o user agent", ["wrap.stderr_contains"], "dica npm com user agent bun")],
+    residual_source="v5 rows[PK04]; G01 PK04 expectation (resolução opcional sucesso/falha, vendor local, binário ausente, dica sem executar)",
+)
+
+C1["DP-REAL01"] = dict(
+    contracts=["PK04", "PK09"], role="DISTRIBUTED_KEYLESS",
+    gate="Só roda se o DIAG-DP-REAL-CLI mostrar o binário publicado rodando keyless dentro da contenção (namespace de rede próprio sem rota, CODEX_HOME vazio, escrita só em /work). Senão a vaga não é usada e os braços seguem com a observação sintética.",
+    branches_targeted=["PK04.B02 (árvore publicada: o wrapper resolve o pacote de plataforma pelo alias e executa o vendor do A3)",
+                       "PK09.B03 (identidade: o binário publicado executado se declara 0.153.4; sem vínculo de build com o pin)"],
+    trees=[], sdk_calls=steps(WRUN(CLI_ROOT + "/bin/codex.js", ["--version"], BASE_ENV, "w_real")),
+    expected={"wrappers": {"w_real": {"exit_code": 0, "signal": None, "stdout_contains": [VERSION]}},
+              "process": {"executed": REAL_CODEX, "executable_sha256": MEMBERS["A3"]["package/vendor/%s/bin/codex" % TRIPLE]["sha256"]},
+              "recorded_not_judged": ["stdout completo", "stderr"], "build_link": NBL},
+    expected_observation="Na árvore publicada (A2 e A3 do cache), o wrapper acha o vendor do alias @openai/codex-linux-x64 e executa o binário publicado com --version, sem rede, provider nem credencial; a saída traz 0.153.4, a versão declarada no codex-package.json. O formato exato da saída é do binário e só é registrado.",
+    known_bad={"text": "Executar outro binário ou tratar a versão como prova de vínculo com o pin.", "judged_by": ["wrap.exit_mirror_exact", "wrap.stdout_contains", "proc.executable_sha_exact"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "wrap.stdout_contains", "proc.executable_sha_exact"], accepted_capture_forms=["REAL_CLI_KEYLESS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run)", "CAP-DP-REAL-CLI-KEYLESS"],
+    anchors=[A(WRAP, "const binaryPath = findCodexExecutable();"), A("A3:package/vendor/%s/codex-package.json" % TRIPLE, '"version": "0.153.4",')],
+    version_dependent=["binário publicado 0.153.4 (formato da saída de --version)"],
+    arm_discrimination=[DISC("PK04.B02", [1], "pacote de plataforma não resolvido na árvore publicada", ["wrap.exit_mirror_exact", "proc.executable_sha_exact"], "erro de dependência opcional ou outro executável"),
+                        DISC("PK09.B03", [1], "binário se declara outra versão", ["wrap.stdout_contains"], "saída sem 0.153.4")],
+    residual_source="v5 rows[PK04] e rows[PK09]",
+)
+
+F5 = "/fixture/pk05"
+pnpm_extra = [FILE(F5 + "/pnpm/node_modules/.modules.yaml", "synthetic: pnpm marker\n")]
+vite_root = F5 + "/vite/packages/@openai/codex/abc/lib"
+vite_extra = [JSONF(F5 + "/vite/packages/@openai/codex.json", {"name": "@openai/codex", "installId": "abc"})]
+pk05_trees = [{"root": F5 + "/plain", "entries": WRAPPER_TREE(F5 + "/plain")},
+              {"root": F5 + "/pnpm", "entries": WRAPPER_TREE(F5 + "/pnpm", extra=pnpm_extra)},
+              {"root": F5 + "/vite", "entries": WRAPPER_TREE(vite_root, extra=vite_extra)},
+              {"root": F5 + "/falsepnpm", "entries": WRAPPER_TREE(F5 + "/falsepnpm/real", extra=[
+                  FILE(F5 + "/falsepnpm/node_modules/.modules.yaml", "synthetic: pnpm marker without the package\n")])}]
+KEEP = ["CODEX_MANAGED_BY_NPM", "CODEX_MANAGED_BY_BUN", "CODEX_MANAGED_BY_PNPM", "CODEX_MANAGED_BY_VITE_PLUS", "CODEX_MANAGED_PACKAGE_ROOT"]
+
+
+def managed(var, root):
+    d = {k: None for k in KEEP}
+    d[var] = "1"
+    d["CODEX_MANAGED_PACKAGE_ROOT"] = root
+    return d
+
+
+C1["DP-PK05A"] = dict(
+    contracts=["PK05", "PK06"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK05.B01 (pnpm: marcador .modules.yaml e realpath igual; marcador sem o pacote não conta)",
+                       "PK05.B02 (vite-plus: packages/@openai/codex.json com installId e o pacote no subdiretório)",
+                       "PK05.B03 (busca nos ancestrais do pacote canônico e do entrypoint)",
+                       "PK05.B04 (bun pelo user agent ou pelo npm_execpath)",
+                       "PK05.B05 (fallback: npm com user agent, null sem; null também marca NPM)",
+                       "PK06.B01 (env gerenciado: package root canônico, quatro flags apagadas, só a escolhida em 1)"],
+    trees=pk05_trees,
+    sdk_calls=steps(WRUN(WRAP_SCRIPT(F5 + "/plain"), [], BASE_ENV, "m_null"),
+                    WRUN(WRAP_SCRIPT(F5 + "/plain"), [], dict(BASE_ENV, npm_config_user_agent="npm/10.8.0 node/v24.20.0"), "m_npm"),
+                    WRUN(WRAP_SCRIPT(F5 + "/plain"), [], dict(BASE_ENV, npm_config_user_agent="bun/1.2.0"), "m_bun_ua"),
+                    WRUN(WRAP_SCRIPT(F5 + "/plain"), [], dict(BASE_ENV, npm_execpath="/opt/bun/bin/bun"), "m_bun_exec"),
+                    WRUN(WRAP_SCRIPT(F5 + "/pnpm"), [], BASE_ENV, "m_pnpm"),
+                    WRUN(WRAP_SCRIPT(vite_root), [], BASE_ENV, "m_vite"),
+                    WRUN(WRAP_SCRIPT(F5 + "/falsepnpm/real"), [], BASE_ENV, "m_false_pnpm"),
+                    WRUN(WRAP_SCRIPT(F5 + "/plain"), [], dict(BASE_ENV, CODEX_MANAGED_BY_BUN="1", CODEX_MANAGED_BY_PNPM="1"), "m_stale")),
+    child_script={"behavior": "record_then_exit", "exit_code": 0, "record_env_keys": KEEP},
+    expected={"children": {
+        "m_null": managed("CODEX_MANAGED_BY_NPM", F5 + "/plain/node_modules/@openai/codex"),
+        "m_npm": managed("CODEX_MANAGED_BY_NPM", F5 + "/plain/node_modules/@openai/codex"),
+        "m_bun_ua": managed("CODEX_MANAGED_BY_BUN", F5 + "/plain/node_modules/@openai/codex"),
+        "m_bun_exec": managed("CODEX_MANAGED_BY_BUN", F5 + "/plain/node_modules/@openai/codex"),
+        "m_pnpm": managed("CODEX_MANAGED_BY_PNPM", F5 + "/pnpm/node_modules/@openai/codex"),
+        "m_vite": managed("CODEX_MANAGED_BY_VITE_PLUS", vite_root + "/node_modules/@openai/codex"),
+        "m_false_pnpm": managed("CODEX_MANAGED_BY_NPM", F5 + "/falsepnpm/real/node_modules/@openai/codex"),
+        "m_stale": managed("CODEX_MANAGED_BY_NPM", F5 + "/plain/node_modules/@openai/codex")},
+        "wrappers_exit": {k: 0 for k in ("m_null", "m_npm", "m_bun_ua", "m_bun_exec", "m_pnpm", "m_vite", "m_false_pnpm", "m_stale")}},
+    expected_observation="detectPackageManager percorre os ancestrais do pacote canônico e do entrypoint: pnpm só com .modules.yaml e realpath igual; vite-plus com packages/@openai/codex.json e o pacote no subdiretório do installId; depois bun pelo user agent, pelo npm_execpath ou pelo caminho global; senão npm com user agent e null sem. O env do filho tem CODEX_MANAGED_PACKAGE_ROOT canônico, as quatro flags apagadas e só a escolhida em 1 (null marca NPM).",
+    known_bad={"text": "Marcar pnpm só pelo marcador, ignorar vite-plus, manter flags antigas ou marcar outra flag quando o gerenciador é null.", "judged_by": ["child.argv_env_exact"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "child.argv_env_exact"], accepted_capture_forms=["PASS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run)", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(WRAP, 'if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {'), A(WRAP, 'if (path.basename(packagesDir) !== "packages") {'),
+             A(WRAP, 'const execPath = process.env.npm_execpath || "";'), A(WRAP, 'return userAgent ? "npm" : null;'),
+             A(WRAP, ': "CODEX_MANAGED_BY_NPM";'), A(WRAP, "delete env.CODEX_MANAGED_BY_BUN;"), A(WRAP, "CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,")],
+    version_dependent=VDEP,
+    arm_discrimination=[DISC("PK05.B01", [5, 7], "marcador sem realpath conta como pnpm", ["child.argv_env_exact"], "m_false_pnpm com PNPM"),
+                        DISC("PK05.B02", [6], "vite-plus não reconhecido", ["child.argv_env_exact"], "m_vite com NPM"),
+                        DISC("PK05.B03", [5, 6], "busca só no diretório do pacote", ["child.argv_env_exact"], "m_pnpm ou m_vite com NPM"),
+                        DISC("PK05.B04", [3, 4], "bun não detectado", ["child.argv_env_exact"], "m_bun_* com NPM"),
+                        DISC("PK05.B05", [1, 2], "null não marca NPM", ["child.argv_env_exact"], "m_null sem flag ou com outra"),
+                        DISC("PK06.B01", [8], "flags antigas mantidas", ["child.argv_env_exact"], "m_stale com BUN ou PNPM em 1")],
+    residual_source="v5 rows[PK05] e rows[PK06]; G01 PK05 expectation (árvores sintéticas, marker falso, metadata, fallback npm/null)",
+)
+
+F6 = "/fixture/pk06"
+pk06_tree = WRAPPER_TREE(F6 + "/ok")
+noexec_tree = WRAPPER_TREE(F6 + "/noexec", vendor_bin=False) + [FILE(F6 + "/noexec/node_modules/@openai/codex-linux-x64/vendor/%s/bin/codex" % TRIPLE, "#!/runtime/node\n", mode="0644")]
+C1["DP-PK06A"] = dict(
+    contracts=["PK06"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK06.B02 (erro de spawn: console.error e exit 1)",
+                       "PK06.B03 (SIGINT, SIGTERM e SIGHUP repassados ao filho vivo)",
+                       "PK06.B04 (saída: código espelhado; sinal do filho re-emitido para si, absorvido pelo próprio handler, termina com 0)"],
+    trees=[{"root": F6 + "/ok", "entries": pk06_tree}, {"root": F6 + "/noexec", "entries": noexec_tree}],
+    sdk_calls=steps(S("child.program", id="exit3", program={"exit_code": 3}),
+                    WRUN(WRAP_SCRIPT(F6 + "/ok"), ["exec", "--flag", "x y"], BASE_ENV, "e_code", ),
+                    S("child.program", id="selfterm", program={"self_signal": "SIGTERM"}),
+                    WRUN(WRAP_SCRIPT(F6 + "/ok"), [], BASE_ENV, "e_selfsig"),
+                    S("child.program", id="wait_term", program={"ready_barrier": True, "on_signal": {"SIGTERM": {"exit_code": 0}}}),
+                    WRUN(WRAP_SCRIPT(F6 + "/ok"), [], BASE_ENV, "e_fwd_term", signal={"after": "CHILD_READY", "signal": "SIGTERM", "to": "wrapper"}),
+                    S("child.program", id="wait_int", program={"ready_barrier": True, "on_signal": {"SIGINT": {"exit_code": 130}}}),
+                    WRUN(WRAP_SCRIPT(F6 + "/ok"), [], BASE_ENV, "e_fwd_int", signal={"after": "CHILD_READY", "signal": "SIGINT", "to": "wrapper"}),
+                    WRUN(WRAP_SCRIPT(F6 + "/noexec"), [], BASE_ENV, "e_spawn_error")),
+    child_script={"behavior": "programmable", "programs_from_steps": True},
+    expected={"wrappers": {
+        "e_code": {"exit_code": 3, "signal": None, "child_argv_tail": ["exec", "--flag", "x y"]},
+        "e_selfsig": {"exit_code": 0, "signal": None, "child_terminated_by": "SIGTERM", "wrapper_self_signal": "SIGTERM",
+                      "note": "o process.kill(process.pid, 'SIGTERM') chega ao handler registrado (forwardSignal), que não encerra; o loop esvazia e o wrapper sai com 0"},
+        "e_fwd_term": {"exit_code": 0, "signal": None, "child_received": ["SIGTERM"]},
+        "e_fwd_int": {"exit_code": 130, "signal": None, "child_received": ["SIGINT"]},
+        "e_spawn_error": {"exit_code": 1, "signal": None, "stderr_contains": ["EACCES"], "child_spawned": False}}},
+    expected_observation="O wrapper repassa argv e herda stdio; espelha o código do filho; no filho morto por sinal, re-emite o sinal para si, mas o próprio handler de SIGTERM (forwardSignal) o absorve e o processo sai com 0 quando o loop esvazia; sinais recebidos com o filho vivo são repassados; binário sem permissão de execução dá erro de spawn tratado com exit 1.",
+    known_bad={"text": "Não espelhar o código, sair 143 em vez de 0 no self-signal (contrário do observado na fonte), não repassar sinais ou não tratar erro de spawn.",
+               "judged_by": ["wrap.exit_mirror_exact", "child.signals_received_exact", "wrap.stderr_contains"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "wrap.stderr_contains", "child.signals_received_exact", "child.argv_env_exact", "signal.delivery_witnessed"],
+    accepted_capture_forms=["PASS"], infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run e envio de sinal)", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(WRAP, 'child.on("error", (err) => {'), A(WRAP, "child.kill(signal);"), A(WRAP, '["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {'),
+             A(WRAP, "process.kill(process.pid, childResult.signal);"), A(WRAP, "resolve({ type: \"code\", exitCode: code ?? 1 });")],
+    version_dependent=VDEP + ["Node v24.20.0: listener de sinal não mantém o loop vivo; self-signal com handler registrado não encerra o processo"],
+    arm_discrimination=[DISC("PK06.B02", [9], "erro de spawn sem tratamento", ["wrap.exit_mirror_exact", "wrap.stderr_contains"], "exit diferente de 1"),
+                        DISC("PK06.B03", [6, 8], "sinal não repassado", ["child.signals_received_exact"], "filho sem SIGTERM ou SIGINT"),
+                        DISC("PK06.B04", [2, 4], "código não espelhado ou self-signal terminando o wrapper", ["wrap.exit_mirror_exact"], "e_code diferente de 3 ou e_selfsig com sinal")],
+    residual_source="v5 rows[PK06]; G01 PK06 expectation (processo sintético, códigos e sinais, sobrevivência por self-signal)",
+)
+
+F7 = "/fixture/pk07"
+PROXY_TRIPLES = sorted({p[2] for p in PAIRS})
+
+
+def proxy_tree(root, triples):
+    nm = root + "/node_modules/@openai/codex-responses-api-proxy"
+    out = [COPY(nm + "/package.json", "A4:package/package.json"), COPY(nm + "/bin/codex-responses-api-proxy.js", PROXY, mode="0755")]
+    for t in triples:
+        name = "codex-responses-api-proxy" + (".exe" if "windows" in t else "")
+        out.append(CHILD("%s/vendor/%s/codex-responses-api-proxy/%s" % (nm, t, name)))
+    return out
+
+
+PROXY_SCRIPT = lambda root: root + "/node_modules/@openai/codex-responses-api-proxy/bin/codex-responses-api-proxy.js"
+pk07_runs, pk07_exp = [], {}
+for plat, arch, triple, _ in PAIRS:
+    rid = "p_%s_%s" % (plat, arch)
+    pk07_runs.append(WRUN(PROXY_SCRIPT(F7 + "/all"), [], BASE_ENV, rid, shim=(plat, arch)))
+    name = "codex-responses-api-proxy" + (".exe" if plat == "win32" else "")
+    pk07_exp[rid] = {"exit_code": 0, "signal": None,
+                     "child_executed_path": "%s/node_modules/@openai/codex-responses-api-proxy/vendor/%s/codex-responses-api-proxy/%s" % (F7 + "/all", triple, name)}
+pk07_runs += [WRUN(PROXY_SCRIPT(F7 + "/all"), [], BASE_ENV, "p_invalid", shim=("freebsd", "x64")),
+              WRUN(PROXY_SCRIPT(F7 + "/partial"), [], BASE_ENV, "p_missing", shim=("linux", "arm64"))]
+pk07_exp["p_invalid"] = {"exit_code": 1, "signal": None, "stderr_contains": ["Unsupported platform: freebsd (x64)"], "child_spawned": False}
+pk07_exp["p_missing"] = {"exit_code": 1, "signal": None, "stderr_contains": ["ENOENT"], "child_spawned": False}
+C1["DP-PK07A"] = dict(
+    contracts=["PK07"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK07.B01 (oito pares para os seis triples do proxy)", "PK07.B02 (sem triple: Unsupported platform)",
+                       "PK07.B03 (layout vendor/<triple>/codex-responses-api-proxy/<nome>[.exe], sem checagem de existência antes do spawn)"],
+    trees=[{"root": F7 + "/all", "entries": proxy_tree(F7 + "/all", PROXY_TRIPLES)}, {"root": F7 + "/partial", "entries": proxy_tree(F7 + "/partial", [TRIPLE])}],
+    sdk_calls=steps(*pk07_runs), child_script={"behavior": "record_then_exit", "exit_code": 0},
+    expected={"wrappers": pk07_exp},
+    expected_observation="O wrapper do proxy acha o triple por determineTargetTriple, monta vendor/<triple>/codex-responses-api-proxy/<nome> (com .exe em win32) e faz spawn sem checar existência: sem o arquivo, o error event dá exit 1 com ENOENT. Plataforma inválida lança antes do spawn. Nenhum proxy real roda e nenhum tráfego existe.",
+    known_bad={"text": "Usar o layout do CLI (bin/codex), checar existência e trocar o caminho, ou aceitar plataforma inválida.", "judged_by": ["child.executed_path_exact", "wrap.exit_mirror_exact"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "wrap.stderr_contains", "child.executed_path_exact", "shim.platform_scoped"], accepted_capture_forms=["PASS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run e shim de plataforma)", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(PROXY, "function determineTargetTriple(platform, arch) {"), A(PROXY, 'const binaryBaseName = "codex-responses-api-proxy";'),
+             A(PROXY, "process.platform === \"win32\" ? `${binaryBaseName}.exe` : binaryBaseName,"), A(PROXY, "`Unsupported platform: ${process.platform} (${process.arch})`,")],
+    version_dependent=VDEP,
+    arm_discrimination=[DISC("PK07.B01", list(range(1, 9)), "triple errado", ["child.executed_path_exact"], "caminho de outro triple"),
+                        DISC("PK07.B02", [9], "plataforma inválida aceita", ["wrap.exit_mirror_exact"], "exit 0"),
+                        DISC("PK07.B03", [10], "checagem de existência ou fallback", ["wrap.stderr_contains", "wrap.exit_mirror_exact"], "erro diferente de ENOENT")],
+    residual_source="v5 rows[PK07]; G01 PK07 expectation (oito pares, inválidos, layout faltante, .exe)",
+)
+
+F8 = "/fixture/pk08"
+C1["DP-PK08A"] = dict(
+    contracts=["PK08"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PK08.B01 (spawn herda o env do processo: nenhuma flag gerenciada; argv repassado)",
+                       "PK08.B02 (SIGINT, SIGTERM e SIGHUP repassados ao filho vivo)",
+                       "PK08.B03 (término: código espelhado com null→1 não exercido; sinal re-emitido e absorvido pelo próprio handler)"],
+    trees=[{"root": F8, "entries": proxy_tree(F8, [TRIPLE])}],
+    sdk_calls=steps(S("child.program", id="exit7", program={"exit_code": 7}),
+                    WRUN(PROXY_SCRIPT(F8), ["--port", "0"], dict(BASE_ENV, CVG_SYNTH_KEY_ABSENT="1"), "x_code"),
+                    S("child.program", id="wait_hup", program={"ready_barrier": True, "on_signal": {"SIGHUP": {"exit_code": 0}}}),
+                    WRUN(PROXY_SCRIPT(F8), [], BASE_ENV, "x_hup", signal={"after": "CHILD_READY", "signal": "SIGHUP", "to": "wrapper"}),
+                    S("child.program", id="selfint", program={"self_signal": "SIGINT"}),
+                    WRUN(PROXY_SCRIPT(F8), [], BASE_ENV, "x_selfsig")),
+    child_script={"behavior": "programmable", "programs_from_steps": True, "record_env_keys": ["CVG_SYNTH_KEY_ABSENT", "CODEX_MANAGED_BY_NPM", "HOME", "PATH"]},
+    expected={"wrappers": {"x_code": {"exit_code": 7, "signal": None, "child_argv_tail": ["--port", "0"],
+                                      "child_env": {"CVG_SYNTH_KEY_ABSENT": "1", "CODEX_MANAGED_BY_NPM": None, "HOME": "/work/home", "PATH": "/runtime"}},
+                           "x_hup": {"exit_code": 0, "signal": None, "child_received": ["SIGHUP"]},
+                           "x_selfsig": {"exit_code": 0, "signal": None, "child_terminated_by": "SIGINT", "wrapper_self_signal": "SIGINT"}}},
+    expected_observation="O wrapper do proxy não passa env (o filho herda o do processo, sem flags gerenciadas), repassa argv e sinais, espelha o código e, no filho morto por sinal, re-emite o sinal para si, que o próprio handler absorve; o processo sai com 0. Filho sintético sem tráfego, sem chave e sem rede.",
+    known_bad={"text": "Acrescentar flags gerenciadas, não repassar sinais ou terminar por sinal no self-signal.", "judged_by": ["wrap.exit_mirror_exact", "child.argv_env_exact", "child.signals_received_exact"]},
+    predicates=NODE_PRED + ["wrap.exit_mirror_exact", "child.argv_env_exact", "child.signals_received_exact", "signal.delivery_witnessed"], accepted_capture_forms=["PASS"],
+    infra=["CAP-DP-STAGE", "CAP-DP-NODE-DRIVER (wrapper.run e envio de sinal)", "CAP-DP-SYNTH-CHILD"],
+    anchors=[A(PROXY, 'const child = spawn(binaryPath, process.argv.slice(2), {'), A(PROXY, "if (!child.killed) {"), A(PROXY, "process.kill(process.pid, childResult.signal);")],
+    version_dependent=VDEP + ["Node v24.20.0: self-signal com handler registrado não encerra o processo"],
+    arm_discrimination=[DISC("PK08.B01", [2], "env com flags gerenciadas ou argv perdido", ["child.argv_env_exact"], "CODEX_MANAGED_BY_NPM presente"),
+                        DISC("PK08.B02", [4], "SIGHUP não repassado", ["child.signals_received_exact"], "filho sem SIGHUP"),
+                        DISC("PK08.B03", [2, 6], "código não espelhado ou self-signal fatal", ["wrap.exit_mirror_exact"], "x_code diferente de 7 ou x_selfsig com sinal")],
+    residual_source="v5 rows[PK08]; G01 PK08 expectation (child sintético sem tráfego proxy, env herdado, códigos e sinais)",
+)
+
+C1["DP-PK09A"] = dict(
+    contracts=["PK09"], role="ARTIFACT_CHECK",
+    branches_targeted=["PK09.B01 (declaração do @openai/codex-sdk publicado frente à fonte 0.0.0-dev: versão 0.153.4, dependência @openai/codex 0.153.4, exports Codex e Thread)",
+                       "PK09.B02 (declaração do @openai/codex publicado: optionalDependencies com os seis aliases 0.153.4-<plataforma>, ausentes na fonte)",
+                       "PK09.B03 (nenhuma equivalência de artefato: os manifestos não provam vínculo de build com o pin)"],
+    trees=[], sdk_calls=steps(S("artifact.check", id="sdk_manifest", member="A7:package/package.json"),
+                              S("artifact.check", id="cli_manifest", member="A2:package/package.json"),
+                              S("artifact.check", id="platform_manifest", member="A3:package/package.json"),
+                              S("artifact.check", id="proxy_manifest", member="A4:package/package.json"),
+                              S("artifact.check", id="sdk_exports", member=SDKJS, extract="final export statement")),
+    expected={"artifacts": {
+        "sdk_manifest": {"name": "@openai/codex-sdk", "version": VERSION, "dependencies": {"@openai/codex": VERSION}, "engines": {"node": ">=18"},
+                         "exports": {".": {"import": "./dist/index.js", "types": "./dist/index.d.ts"}}, "type": "module", "files": ["dist"]},
+        "cli_manifest": {"name": "@openai/codex", "version": VERSION, "bin": {"codex": "bin/codex.js"}, "engines": {"node": ">=16"}, "files": ["bin/codex.js"],
+                         "optionalDependencies": {pkg: "npm:@openai/codex@%s-%s" % (VERSION, pkg.split("codex-", 1)[1]) for pkg in sorted({p[3] for p in PAIRS})}},
+        "platform_manifest": {"name": "@openai/codex", "version": VERSION + "-linux-x64", "os": ["linux"], "cpu": ["x64"], "files": ["vendor"]},
+        "proxy_manifest": {"name": "@openai/codex-responses-api-proxy", "version": VERSION, "bin": {"codex-responses-api-proxy": "bin/codex-responses-api-proxy.js"},
+                           "files": ["bin", "vendor"]},
+        "sdk_exports": ["Codex", "Thread"]},
+        "source_comparison": {"pin_sdk_version": "0.0.0-dev", "pin_sdk_exports_codex_and_thread": True, "build_link": NBL}},
+    expected_observation="Os manifestos publicados da release 0.153.4 (lidos do cache por sha) declaram versão 0.153.4, a dependência do SDK no @openai/codex 0.153.4 e os seis aliases de plataforma; a fonte do pin declara 0.0.0-dev e não tem esses aliases. A coincidência de nomes e exports não prova vínculo de build: NO_BUILD_LINK_DECLARED.",
+    known_bad={"text": "Tratar 0.153.4 e 0.0.0-dev como o mesmo artefato, ou inferir proveniência dos manifestos.", "judged_by": ["artifact.manifest_fields_exact"]},
+    predicates=["capture.case_input_frozen_bytes", "stage.bound_to_cache", "artifact.manifest_fields_exact"], accepted_capture_forms=["ARTIFACT_CHECK"],
+    infra=["CAP-DP-ARTIFACT-CHECK"],
+    anchors=[A("A7:package/package.json", '"@openai/codex": "0.153.4"'), A("A2:package/package.json", '"optionalDependencies": {'),
+             A("pin/ts/package.json", '"version": "0.0.0-dev",'), A("pin/ts/index.ts", 'export { Codex } from "./codex";'), A(SDKJS, "export {")],
+    version_dependent=[],
+    arm_discrimination=[DISC("PK09.B01", [1, 5], "manifesto do SDK diferente do declarado", ["artifact.manifest_fields_exact"], "campo divergente"),
+                        DISC("PK09.B02", [2, 3], "aliases ausentes ou de outra versão", ["artifact.manifest_fields_exact"], "optionalDependencies divergente"),
+                        DISC("PK09.B03", [1, 2], "versão do pin igual à publicada", ["artifact.manifest_fields_exact"], "version 0.0.0-dev no publicado")],
+    residual_source="v5 rows[PK09]; G01 PK09 expectation (recibo de tarball com versão e hash; correlacionar sem equiparar 0.0.0-dev)",
+)
+
+# ================================================================== DP-2 (Python: PY19, PY20, ramo empacotado do PY02)
+C2 = {}
+C2B = {c["id"]: c for f in ("cases-2b-1.json", "cases-2b-2.json") for c in load("../sdk-source-batch-2b-spec/" + f)["cases"]}
+UNSCRIPTED = C2B["2B-PY01A"]["case_input"]["peer_script"]["unscripted_error"]
+CFG0 = {"cwd": "/work"}
+EPI_DONE = {"api": "epilogue", "kind": "calls_done_release_exit_then_sdk_close_if_open",
+            "note": "Sem barreira EOF (não há adapter sintético entre o SDK e o filho): o driver emite CALLS_DONE e pede RELEASE_EXIT; o close do SDK vem no finally do driver se o caso não o chamou."}
+NOT_FOUND = "Unable to locate the pinned Codex runtime. Install the published SDK build with its openai-codex-cli-bin dependency, or set CodexConfig.codex_bin explicitly."
+C2["DP-PY19A"] = dict(
+    contracts=["PY19"], role="DISTRIBUTED_KEYLESS", driver_runtime={"sys_path_runtime": None},
+    branches_targeted=["PY19.B01 (codex_bin explícito precisa existir: FileNotFoundError com o caminho)",
+                       "PY19.B02 (sem codex_bin, exige o pacote codex_cli_bin: FileNotFoundError sobre o ImportError, sem fallback para npm)"],
+    sdk_calls=steps(S("CodexClient.new", config={"codex_bin": "/work/missing-codex", "cwd": "/work"}, **{"as": "c1"}), S("call", on="c1", method="start"),
+                    S("CodexClient.new", config=CFG0, **{"as": "c2"}), S("call", on="c2", method="start"), EPI_DONE),
+    expected={"api": [{"step": 2, "error": {"class": "builtins.FileNotFoundError", "str": "Codex binary not found at /work/missing-codex. Set CodexConfig.codex_bin to a valid binary path."}},
+                      {"step": 4, "error": {"class": "builtins.FileNotFoundError", "str": NOT_FOUND, "cause": {"class": "builtins.ModuleNotFoundError", "str": "No module named 'codex_cli_bin'"}}}],
+              "process": {"spawns": 0}},
+    expected_observation="Com codex_bin explícito inexistente, resolve_codex_bin lança antes do spawn; sem codex_bin e sem codex_cli_bin importável, _installed_codex_path troca o ImportError por FileNotFoundError com a instrução; não há fallback para o pacote npm.",
+    known_bad={"text": "Procurar o binário no PATH ou no pacote npm, ou lançar ImportError cru.", "judged_by": ["api.steps_exact", "proc.spawn_count_exact"]},
+    predicates=["capture.case_input_frozen_bytes", "api.steps_exact", "proc.spawn_count_exact", "runtime.sys_path_exact", "env.adapter_sandbox_env_only"],
+    accepted_capture_forms=["PASS"], infra=["CAP-PY-SDKCALLS-2B", "CAP-DP-PY-RUNTIME (sem runtime no sys.path)"],
+    anchors=[A("pin/py/client.py", 'f"Codex binary not found at {codex_bin}. Set CodexConfig.codex_bin "'), A("pin/py/client.py", "from codex_cli_bin import bundled_codex_path"),
+             A("pin/py/client.py", '"Unable to locate the pinned Codex runtime. Install the published SDK build "')],
+    version_dependent=["CPython 3.12.3 (texto do ModuleNotFoundError)"],
+    arm_discrimination=[DISC("PY19.B01", [1, 2], "codex_bin inexistente aceito", ["api.steps_exact"], "start sem erro ou spawn"),
+                        DISC("PY19.B02", [3, 4], "fallback para outro binário", ["api.steps_exact", "proc.spawn_count_exact"], "spawn ou erro diferente")],
+    residual_source="v5 rows[PY19] OPEN_REQUIRED_FUTURE_PROFILE; G01 PY19 source_contract (codex_bin explícito; codex_cli_bin obrigatório, sem fallback npm)",
+)
+TPY = "/fixture/py19"
+INIT_COPY = lambda root: COPY(root + "/codex_cli_bin/__init__.py", RTINIT)
+PKG_COPY = lambda root: COPY(root + "/codex_cli_bin/codex-package.json", "A1:codex_cli_bin/codex-package.json")
+LAUNCHER = {"kind": "copy_of_profile", "from": "/profile/adapter-python-exec", "mode": "0755"}
+py19b_trees = [{"root": TPY + "/nometa", "entries": [INIT_COPY(TPY + "/nometa/site"), dict(LAUNCHER, path=TPY + "/nometa/site/codex_cli_bin/bin/codex")]},
+               {"root": TPY + "/nobin", "entries": [INIT_COPY(TPY + "/nobin/site"), PKG_COPY(TPY + "/nobin/site")]},
+               {"root": TPY + "/nopath", "entries": [INIT_COPY(TPY + "/nopath/site"), PKG_COPY(TPY + "/nopath/site"), dict(LAUNCHER, path=TPY + "/nopath/site/codex_cli_bin/bin/codex")]},
+               {"root": TPY + "/withpath", "entries": [INIT_COPY(TPY + "/withpath/site"), PKG_COPY(TPY + "/withpath/site"),
+                                                        dict(LAUNCHER, path=TPY + "/withpath/site/codex_cli_bin/bin/codex"), DIR(TPY + "/withpath/site/codex_cli_bin/codex-path")]}]
+INIT_OK = {"serverInfo": {"name": "synthetic-sdk-profile", "version": "0.153.4"}, "userAgent": "synthetic-sdk-profile/0.153.4"}
+C2["DP-PY19B"] = dict(
+    contracts=["PY19", "PY02"], role="DISTRIBUTED_KEYLESS",
+    branches_targeted=["PY19.B03 (codex_cli_bin publicado exige codex-package.json: FileNotFoundError com o caminho)",
+                       "PY19.B04 (exige bin/codex como arquivo: FileNotFoundError com o caminho)",
+                       "PY02.B09 (ramo empacotado: argv [bin, app-server, --listen, stdio://] sem --config quando não há overrides)",
+                       "PY02.B10 (prefixo de PATH só com codex-path existente: sem ele o PATH fica igual)"],
+    trees=py19b_trees,
+    sdk_calls=steps(S("runtime.path", insert=TPY + "/nometa/site", purge_modules=["codex_cli_bin"]), S("CodexClient.new", config=CFG0, **{"as": "a"}), S("call", on="a", method="start"),
+                    S("runtime.path", insert=TPY + "/nobin/site", purge_modules=["codex_cli_bin"]), S("CodexClient.new", config=CFG0, **{"as": "b"}), S("call", on="b", method="start"),
+                    S("runtime.path", insert=TPY + "/nopath/site", purge_modules=["codex_cli_bin"]), S("CodexClient.new", config=CFG0, **{"as": "c"}), S("call", on="c", method="start"),
+                    S("proc.retain", path=["c", "._proc"], **{"as": "pc"}), S("probe", id="argv_nopath", path=["pc", ".args"], fn="value"),
+                    S("barrier", id="proc_witness_nopath", witness={"supervisor": "PROC_WITNESS do adapter: cmdline e environ"}),
+                    S("call", on="c", method="initialize"), S("call", on="c", method="close"),
+                    S("runtime.path", insert=TPY + "/withpath/site", purge_modules=["codex_cli_bin"]), S("CodexClient.new", config=CFG0, **{"as": "d"}), S("call", on="d", method="start"),
+                    S("barrier", id="proc_witness_withpath", witness={"supervisor": "PROC_WITNESS do adapter: environ"}),
+                    S("call", on="d", method="initialize"), S("call", on="d", method="close"), EPI_DONE),
+    peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [{"match": {"method": "initialize"}, "reply": {"result": INIT_OK}}],
+                 "note": "um peer por spawn (dois spawns no caso), cada um com este roteiro"},
+    expected={"api": [{"step": 3, "error": {"class": "builtins.FileNotFoundError", "str": "openai-codex-cli-bin is installed but missing its package metadata at %s/nometa/site/codex_cli_bin/codex-package.json" % TPY}},
+                      {"step": 6, "error": {"class": "builtins.FileNotFoundError", "str": "openai-codex-cli-bin is installed but missing its packaged codex binary at %s/nobin/site/codex_cli_bin/bin/codex" % TPY}},
+                      {"step": 13, "result": {"serverInfo.version": "0.153.4"}}, {"step": 19, "result": {"serverInfo.version": "0.153.4"}}],
+              "probes": {"argv_nopath": [TPY + "/nopath/site/codex_cli_bin/bin/codex", "app-server", "--listen", "stdio://"]},
+              "process": {"spawns": 2, "env_path": {"proc_witness_nopath": "/runtime", "proc_witness_withpath": TPY + "/withpath/site/codex_cli_bin/codex-path:/runtime"},
+                          "self_report_argv_tail": {"proc_witness_nopath": ["app-server", "--listen", "stdio://"]}}},
+    expected_observation="Com a cópia do codex_cli_bin/__init__.py publicado em árvores sintéticas: sem codex-package.json, bundled_package_dir lança; sem bin/codex, bundled_codex_path lança; com os dois e um lançador sintético no lugar do binário, o start do SDK monta [bin, app-server, --listen, stdio://] (sem overrides, sem --config) e só prepende o PATH quando codex-path existe. O peer sintético responde o initialize.",
+    known_bad={"text": "Aceitar pacote sem marcador ou sem binário, acrescentar --config sem overrides, ou prepender PATH sem codex-path.", "judged_by": ["api.steps_exact", "probe.values_exact", "proc.env_path_exact"]},
+    predicates=["capture.case_input_frozen_bytes", "stage.bound_to_cache", "fixture.tree_exact", "api.steps_exact", "probe.values_exact", "proc.argv_exact", "proc.env_path_exact",
+                "proc.witness_recorded", "proc.spawn_count_exact", "runtime.sys_path_exact", "barrier.witnesses_in_order", "wire.initialize_handshake"],
+    accepted_capture_forms=["PASS", "CLIENT_TERMINATED_SIGTERM"], infra=["CAP-PY-SDKCALLS-2B", "CAP-PEER-V2", "CAP-2B-CONC-BARRIER", "CAP-2B-PROC-WITNESS", "CAP-DP-PY-RUNTIME (runtime.path)", "CAP-DP-STAGE"],
+    anchors=[A(RTINIT, 'f"{PACKAGE_NAME} is installed but missing its package metadata at {metadata_path}"'),
+             A(RTINIT, 'f"{PACKAGE_NAME} is installed but missing its packaged codex binary at {path}"'), A(RTINIT, 'path = bundled_package_dir() / "codex-path"'),
+             A("pin/py/client.py", 'args.extend(["app-server", "--listen", "stdio://"])'), A("pin/py/client.py", "_prepend_path_dirs(env, path_dirs)")],
+    version_dependent=["CPython 3.12.3"],
+    arm_discrimination=[DISC("PY19.B03", [1, 2, 3], "pacote sem marcador aceito", ["api.steps_exact"], "start sem erro na árvore nometa"),
+                        DISC("PY19.B04", [4, 5, 6], "pacote sem binário aceito", ["api.steps_exact"], "start sem erro na árvore nobin"),
+                        DISC("PY02.B09", [9, 10, 11], "--config ou argv diferente", ["probe.values_exact", "proc.argv_exact"], "argv com --config ou sem app-server"),
+                        DISC("PY02.B10", [12, 18], "PATH prepende sem codex-path ou não prepende com ele", ["proc.env_path_exact"], "PATH diferente do esperado")],
+    residual_source="v5 rows[PY19]; remaining_open_by_contract.PY02 (ramo empacotado)",
+)
+C2["DP-PY02P"] = dict(
+    contracts=["PY02", "PY19"], role="DISTRIBUTED_KEYLESS", driver_runtime={"sys_path_runtime": PYSITE},
+    gate="Só roda se o DIAG-DP-REAL-CLI-APPSERVER (cliente de controle próprio, sem SDK) mostrar o binário publicado respondendo o initialize keyless dentro da contenção e o DIAG-PY-PROCWITNESS admitir a leitura de /proc. Senão a vaga não é usada e PY02.B11 e PY19.B05 seguem abertos.",
+    branches_targeted=["PY02.B11 (ramo empacotado com o binário publicado: argv com --config, app-server e stdio; CheckoutCapabilities com args[:-2])",
+                       "PY19.B05 (identidade do runtime: o binário publicado se declara 0.153.4 no initialize, igual ao codex-package.json; sem vínculo de build com o pin)"],
+    trees=[],
+    sdk_calls=steps(S("CodexClient.new", config={"config_overrides": ["model=\"cvg-dp\""], "cwd": "/work"}, **{"as": "c"}), S("call", on="c", method="start"),
+                    S("proc.retain", path=["c", "._proc"], **{"as": "p"}), S("probe", id="popen_args", path=["p", ".args"], fn="value"),
+                    S("probe", id="checkout_command", path=["c", "._checkout_capabilities", ".command"], fn="value"),
+                    S("barrier", id="proc_witness", witness={"supervisor": "PROC_WITNESS do binário publicado: cmdline e environ (sem privilégio)"}),
+                    S("call", on="c", method="initialize"), S("probe", id="runtime_version", path=["c", "._runtime_version"], fn="value"),
+                    S("call", on="c", method="close"), EPI_DONE),
+    expected={"probes": {"popen_args": [PYSITE + "/codex_cli_bin/bin/codex", "--config", "model=\"cvg-dp\"", "app-server", "--listen", "stdio://"],
+                         "checkout_command": [PYSITE + "/codex_cli_bin/bin/codex", "--config", "model=\"cvg-dp\"", "app-server"], "runtime_version": VERSION},
+              "api": [{"step": 7, "result": {"serverInfo.version": VERSION}}],
+              "process": {"spawns": 1, "argv": [PYSITE + "/codex_cli_bin/bin/codex", "--config", "model=\"cvg-dp\"", "app-server", "--listen", "stdio://"],
+                          "env_path": PYSITE + "/codex_cli_bin/codex-path:/runtime", "executable_sha256": MEMBERS["A1"]["codex_cli_bin/bin/codex"]["sha256"]},
+              "recorded_not_judged": ["serverInfo.name", "userAgent", "platformFamily", "platformOs", "stderr do binário", "returncode no close"],
+              "build_link": NBL, "keyless": "sem rede (namespace próprio), sem provider, sem credencial; CODEX_HOME vazio no início"},
+    expected_observation="Com o wheel publicado no sys.path, o start resolve bin/codex pelo codex_cli_bin, acrescenta --config k=v, app-server e --listen stdio://, prepende o codex-path e monta CheckoutCapabilities com args[:-2]. O binário publicado roda keyless dentro da contenção e responde o initialize; a versão declarada (0.153.4) é a do codex-package.json. Nenhum turn, login ou modelo.",
+    known_bad={"text": "Lançar outro binário, omitir o --config, não prepender o codex-path, ou tratar a versão 0.153.4 como prova de vínculo com o pin.",
+               "judged_by": ["probe.values_exact", "proc.argv_exact", "proc.env_path_exact", "api.steps_exact"]},
+    predicates=["capture.case_input_frozen_bytes", "stage.bound_to_cache", "keyless.no_network_no_credential", "api.steps_exact", "probe.values_exact", "proc.argv_exact",
+                "proc.env_path_exact", "proc.executable_sha_exact", "proc.witness_recorded", "proc.spawn_count_exact", "runtime.sys_path_exact", "barrier.witnesses_in_order"],
+    accepted_capture_forms=["REAL_CLI_KEYLESS"], infra=["CAP-PY-SDKCALLS-2B", "CAP-2B-CONC-BARRIER", "CAP-2B-PROC-WITNESS", "CAP-DP-PY-RUNTIME", "CAP-DP-STAGE", "CAP-DP-REAL-CLI-KEYLESS"],
+    anchors=[A("pin/py/client.py", 'args.extend(["--config", kv])'), A("pin/py/client.py", "command=tuple(args[:-2]), cwd=self.config.cwd, env=env.copy()"),
+             A("A1:codex_cli_bin/codex-package.json", '"version": "0.153.4",'), A(RTINIT, 'path = bundled_package_dir() / "bin" / exe')],
+    version_dependent=["binário publicado 0.153.4 (resposta do initialize; só serverInfo.version é julgado, contra a declaração do pacote)"],
+    arm_discrimination=[DISC("PY02.B11", [2, 4, 5], "argv sem --config ou CheckoutCapabilities diferente", ["probe.values_exact", "proc.argv_exact"], "popen_args ou checkout_command divergente"),
+                        DISC("PY19.B05", [7, 8], "binário publicado se declara outra versão", ["api.steps_exact", "probe.values_exact"], "serverInfo.version diferente de 0.153.4")],
+    residual_source="remaining_open_by_contract.PY02 (caminho empacotado, codex_cli_bin, prefixo de PATH); v5 rows[PY19]",
+)
+C2["DP-PY20A"] = dict(
+    contracts=["PY20"], role="ARTIFACT_CHECK",
+    branches_targeted=["PY20.B01 (asset de linux x86_64: o nome do platform_asset_name existe na release rust-v0.153.4 com digest publicado igual ao adquirido)",
+                       "PY20.B02 (wheel do runtime não puro: Tag py3-none-manylinux_2_17_x86_64 e Root-Is-Purelib false)",
+                       "PY20.B03 (payload do wheel igual ao do asset da release, membro a membro; vínculo por digest, sem vínculo de build com o pin)"],
+    trees=[], sdk_calls=steps(S("artifact.check", id="wheel_tag", member="A1:openai_codex_cli_bin-0.153.4.dist-info/WHEEL"),
+                              S("artifact.check", id="asset_binding", ledger_item="A5"),
+                              S("artifact.check", id="payload_identity", compare=["A1:codex_cli_bin/", "A5:"])),
+    expected={"artifacts": {"wheel_tag": {"Tag": "py3-none-manylinux_2_17_x86_64", "Root-Is-Purelib": "false"},
+                            "asset_binding": {"name": "codex-package-x86_64-unknown-linux-musl.tar.gz", "release_tag": "rust-v0.153.4",
+                                              "sha256": [a for a in VERIF["artifacts"] if a["id"] == "A5"][0]["observed"]["sha256"]},
+                            "payload_identity": {k: v["A5"] for k, v in VERIF["binary_identity"].items()}},
+              "build_link": NBL},
+    expected_observation="Verificação de artefato, sem execução: o mapeamento de linux x86_64 do _runtime_setup.py do pin dá o nome do asset que existe na release rust-v0.153.4, com o digest publicado igual ao adquirido; o wheel do runtime tem Tag de plataforma e não é puro; o payload do wheel é o mesmo do asset, membro a membro.",
+    known_bad={"text": "Qualificar as seis plataformas a partir de um binário Linux, ou confundir a declaração do wheel com o artefato autenticado.", "judged_by": ["artifact.manifest_fields_exact", "artifact.payload_identity"]},
+    predicates=["capture.case_input_frozen_bytes", "stage.bound_to_cache", "artifact.manifest_fields_exact", "artifact.payload_identity"], accepted_capture_forms=["ARTIFACT_CHECK"],
+    infra=["CAP-DP-ARTIFACT-CHECK"],
+    anchors=[A("pin/py/_runtime_setup.py", 'return "codex-package-x86_64-unknown-linux-musl.tar.gz"'), A("A1:openai_codex_cli_bin-0.153.4.dist-info/WHEEL", "Tag: py3-none-manylinux_2_17_x86_64"),
+             A("A1:openai_codex_cli_bin-0.153.4.dist-info/WHEEL", "Root-Is-Purelib: false")],
+    version_dependent=[],
+    arm_discrimination=[DISC("PY20.B01", [2], "asset ausente ou digest diferente", ["artifact.manifest_fields_exact"], "sha256 do A5 diferente do registrado"),
+                        DISC("PY20.B02", [1], "wheel puro ou com tag genérica", ["artifact.manifest_fields_exact"], "Tag py3-none-any ou Root-Is-Purelib true"),
+                        DISC("PY20.B03", [3], "payload diferente entre canais", ["artifact.payload_identity"], "sha256 diferente em algum membro")],
+    residual_source="v5 rows[PY20]; G01 PY20 future_positive (verificação contida de artefato, tag de build, digest; sem instalação viva)",
+)
+if ANCHOR_ERRORS:
+    for e in ANCHOR_ERRORS:
+        print("ANCHOR", e)
+    raise SystemExit("anchor errors")
+
+# ================================================================== CONTROL slots
+CTRL1 = dict(
+    kind="CONTROL", language="node", contracts=[], role="CONTROL_KNOWN_BAD_REACH",
+    gate="Roda antes de todos os casos do sub-lote DP-1. Critério: MISMATCH vindo só de wrap.exit_mirror_exact, com capture.case_input_frozen_bytes, fixture.tree_exact, keyless.no_network_no_credential e control.own_code_only aprovados. Qualquer outro desfecho para o sub-lote.",
+    branches_targeted=[],
+    trees=[{"root": "/fixture/ctrl1", "entries": [{"path": "/fixture/ctrl1/bin/control-wrapper.mjs", "kind": "copy_of_profile", "from": "/profile/dp-control-wrapper.mjs", "mode": "0755"},
+                                                   CHILD("/fixture/ctrl1/vendor/child")]}],
+    sdk_calls=steps(S("child.program", id="exit3", program={"exit_code": 3}),
+                    WRUN("/fixture/ctrl1/bin/control-wrapper.mjs", [], BASE_ENV, "ctrl")),
+    child_script={"behavior": "programmable", "programs_from_steps": True},
+    expected={"wrappers": {"ctrl": {"exit_code": 3, "signal": None}}, "evaluator_outcome": "MISMATCH", "judged_by": "wrap.exit_mirror_exact",
+              "control_wrapper": "código próprio (não do cache): lança o filho sintético e sai com 0 sempre, o known-bad do espelhamento de código do PK06.B04"},
+    expected_observation="Um wrapper de controle, código próprio e não publicado, ignora o código 3 do filho sintético e sai com 0. O avaliador classifica MISMATCH só por wrap.exit_mirror_exact, sem depender de um artefato publicado que se comporte mal.",
+    known_bad={"text": "Sair com 0 quando o filho sai com 3 é o known-bad do PK06.B04; deve ser julgado MISMATCH por wrap.exit_mirror_exact.", "judged_by": ["wrap.exit_mirror_exact"]},
+    predicates=["capture.case_input_frozen_bytes", "fixture.tree_exact", "keyless.no_network_no_credential", "control.own_code_only", "wrap.exit_mirror_exact"],
+    accepted_capture_forms=["PASS"], infra=["CAP-DP-NODE-DRIVER (wrapper.run)", "CAP-DP-SYNTH-CHILD"], anchors=[], version_dependent=[], credit="NONE_CONTROL_ONLY")
+base_ctrl = copy.deepcopy(C2B["2B2-CTRL01"])
+ci2 = base_ctrl["case_input"]
+assert ci2["control_client"]["argv"][-1] == "2B2-CTRL01"
+ci2["control_client"]["argv"][-1] = "DP2-CTRL01"
+CTRL2 = {k: v for k, v in base_ctrl.items() if k not in ("id", "sub_lot", "slot", "case_input", "case_input_sha256", "gate", "changed_from_base", "base_contract", "inputs", "anchors")}
+CTRL2.update(gate="Roda antes de todos os casos do sub-lote DP-2. Critério: MISMATCH vindo só de wire.no_turn_interrupt, com control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes, peer.before_reply_order_witnessed e peer.login_frames_synthetic aprovados. Qualquer outro desfecho para o sub-lote.",
+             anchors=[], control_case_input=ci2,
+             copy_of={"case": "2B2-CTRL01", "spec": ptr("../sdk-source-batch-2b-spec/cases-2b-2.json"), "case_object_sha256": sha_bytes(compact(C2B["2B2-CTRL01"]).encode()),
+                      "changed_fields": {"id": "slot CONTROL do sub-lote DP-2", "control_client": "só o último elemento do argv", "gate": "texto do sub-lote",
+                                         "anchors": "sem âncora própria (o peer é o mesmo admitido no 2B-2)", "removed": "base_contract, changed_from_base e inputs"}})
+
+# ================================================================== predicate table
+T2B2 = load("../sdk-source-batch-2b-spec/cases-2b-2.json")["predicate_table"]
+T2B1 = load("../sdk-source-batch-2b-spec/cases-2b-1.json")["predicate_table"]
+NEW = {
+    "stage.bound_to_cache": ("peer_or_capture_sanity", "Antes do primeiro passo, todo arquivo do staging em /dist e toda cópia de membro nas árvores de fixture têm o sha256 do membro em artifact-metadata.json, e o arquivo compactado de origem tem o sha256 do acquisition-ledger.json; divergência é INVALID_CAPTURE."),
+    "fixture.tree_exact": ("peer_or_capture_sanity", "As árvores de fixture foram materializadas exatamente como declaradas (caminhos, tipos, modos, conteúdo e cópias por sha), só-leitura dentro da contenção."),
+    "keyless.no_network_no_credential": ("peer_or_capture_sanity", "A execução rodou num namespace de rede próprio sem rota para fora, sem variável de credencial (lista fechada: OPENAI_API_KEY, CODEX_API_KEY, GH_TOKEN, GITHUB_TOKEN e afins) e com CODEX_HOME vazio no início; falha é INVALID_CAPTURE."),
+    "shim.platform_scoped": ("peer_or_capture_sanity", "O shim de process.platform e process.arch valeu só entre shim.platform e shim.restore (ou só no processo do wrapper com preload_shim) e foi restaurado com os valores reais."),
+    "control.own_code_only": ("peer_or_capture_sanity", "O CONTROL executou só código próprio do harness (dp-control-wrapper.mjs e o filho sintético), com sha do source freeze, sem nenhum arquivo do cache."),
+    "spawn.none": ("client", "Nenhum processo foi criado pelo SDK publicado no caso (testemunha do supervisor na cgroup)."),
+    "api.dp_steps_exact": ("client", "Cada item de expected.api de um caso Node tem o resultado ou o erro (name e message exatos) congelado no passo."),
+    "probe.dp_values_exact": ("client", "Cada sonda de campo de objeto JS (caminho de propriedades públicas) tem o valor congelado por jeq; file.sha256 compara o sha256 do arquivo apontado pela sonda."),
+    "wrap.exit_mirror_exact": ("client", "O processo do wrapper termina com o exit_code e o signal congelados (testemunha do SO), e o filho, quando declarado, com o término congelado."),
+    "wrap.stderr_contains": ("client", "O stderr do wrapper contém cada texto congelado em stderr_contains."),
+    "wrap.stdout_contains": ("client", "O stdout do wrapper contém cada texto congelado em stdout_contains."),
+    "child.argv_env_exact": ("client", "O registro do filho sintético tem o argv (cauda), o stdin e as chaves de env congeladas (None = ausente), por jeq."),
+    "child.executed_path_exact": ("client", "O filho sintético registra o caminho pelo qual foi executado igual ao congelado; filho não executado quando child_spawned é false."),
+    "child.signals_received_exact": ("client", "O filho sintético registra exatamente os sinais congelados, na ordem, e o término congelado (child_terminated_by)."),
+    "signal.delivery_witnessed": ("capture_order_or_cleanup", "O sinal enviado pelo supervisor ao wrapper saiu depois do CHILD_READY do filho e foi entregue (testemunha do supervisor); sem isso, INVALID_CAPTURE."),
+    "runtime.sys_path_exact": ("peer_or_capture_sanity", "O sys.path do driver Python tem o runtime declarado (ou nenhum) e o runtime.path trocou o diretório e purgou codex_cli_bin de sys.modules como declarado."),
+    "proc.env_path_exact": ("client", "O PATH do filho lido em /proc/<pid>/environ é o congelado."),
+    "proc.executable_sha_exact": ("client", "O executável do processo filho (/proc/<pid>/exe resolvido no staging) tem o sha256 congelado do membro publicado."),
+    "artifact.manifest_fields_exact": ("client", "Os campos congelados dos manifestos e metadados lidos do cache (package.json, WHEEL, export final do dist, entrada do asset na release) são iguais por jeq."),
+    "artifact.payload_identity": ("client", "Cada arquivo comum entre o wheel e o asset da release tem o sha256 congelado, igual nos dois canais."),
+}
+
+
+def table(names):
+    out = {}
+    for n in sorted(set(names)):
+        if n in NEW:
+            out[n] = {"class": NEW[n][0], "oracle": NEW[n][1], "source": "NEW (EDP-02)"}
+        elif n in T2B2:
+            out[n] = {"class": T2B2[n]["class"], "oracle": T2B2[n]["oracle"], "source": "../sdk-source-batch-2b-spec/cases-2b-2.json#/predicate_table"}
+        elif n in T2B1:
+            out[n] = {"class": T2B1[n]["class"], "oracle": T2B1[n]["oracle"], "source": "../sdk-source-batch-2b-spec/cases-2b-1.json#/predicate_table"}
+        else:
+            raise SystemExit("undefined predicate " + n)
+    return out
+
+
+# ================================================================== assembly
+ORDER = ["id", "kind", "language", "contracts", "role", "sub_lot", "slot", "gate", "branches_targeted", "arm_discrimination", "expected", "expected_observation",
+         "known_bad", "predicates", "accepted_capture_forms", "infra", "anchors", "inputs", "version_dependent", "inconclusive_on_deadline", "credit",
+         "residual_source", "copy_of", "execution_order", "build_link", "runtime_status", "receipt", "case_input_note", "case_input", "case_input_sha256"]
+
+
+def finalize(cases, ctrl_id, ctrl, sub_lot, language):
+    out = []
+    items = list(cases.items()) + [(ctrl_id, ctrl)]
+    for slot, (cid, c) in enumerate(items, 1):
+        c = dict(c)
+        is_ctrl = c.get("kind") == "CONTROL" or "control_case_input" in c
+        if "control_case_input" in c:
+            ci = c.pop("control_case_input")
+        else:
+            ci = {"sdk_calls": c.pop("sdk_calls")}
+            for k in ("trees", "child_script", "peer_script", "driver_runtime"):
+                if c.get(k) not in (None, []):
+                    ci[k] = c[k]
+                c.pop(k, None)
+        for k in ("trees", "child_script", "peer_script", "driver_runtime"):
+            c.pop(k, None)
+        c.update(id=cid, kind="CONTROL" if is_ctrl else ("ARTIFACT_CHECK" if c.get("role") == "ARTIFACT_CHECK" else "SDK"),
+                 language=c.get("language", "python" if language == "python" else "node"), sub_lot=sub_lot, slot=slot)
+        if is_ctrl:
+            c["execution_order"] = 1
+        else:
+            c["inconclusive_on_deadline"] = False
+            c["credit"] = CREDIT
+            c["build_link"] = NBL
+        for a in c.get("anchors", []):
+            assert "error" not in a, (cid, a)
+        c["inputs"] = sorted({a["input"] for a in c.get("anchors", [])})
+        c["runtime_status"] = "NOT_RUN"
+        c["receipt"] = None
+        c["case_input_note"] = "Passos, árvores de fixture, roteiro do filho sintético, roteiro do peer e runtime existem só dentro de case_input (fonte única do supervisor, F4-01)."
+        c["case_input"] = ci
+        c["case_input_sha256"] = sha_bytes(compact(ci).encode("utf-8"))
+        extra = set(c) - set(ORDER)
+        assert not extra, (cid, extra)
+        out.append({k: c[k] for k in ORDER if k in c})
+    return out
+
+
+CASES1 = finalize(C1, "DP1-CTRL01", CTRL1, "DP-1", "node")
+CASES2 = finalize(C2, "DP2-CTRL01", CTRL2, "DP-2", "python")
+NEW_ARMS = {"PY19.B01": "codex_bin explícito precisa existir", "PY19.B02": "sem codex_bin, exige codex_cli_bin (FileNotFoundError sobre o ImportError, sem fallback npm)",
+            "PY19.B03": "codex_cli_bin exige codex-package.json", "PY19.B04": "codex_cli_bin exige bin/codex",
+            "PY19.B05": "identidade do runtime: versão declarada pelo binário publicado igual à do pacote, sem vínculo de build",
+            "PY20.B01": "asset de linux x86_64 do platform_asset_name existe na release com digest publicado igual ao adquirido",
+            "PY20.B02": "wheel do runtime com tag de plataforma e não puro", "PY20.B03": "payload do wheel igual ao do asset, membro a membro",
+            "PY02.B09": "ramo empacotado: argv sem --config quando não há overrides", "PY02.B10": "prefixo de PATH só com codex-path existente",
+            "PY02.B11": "ramo empacotado com o binário publicado: --config, app-server e CheckoutCapabilities com args[:-2]"}
+TSC = load("../../g01/sdk-open-contracts/typescript/contracts.json")
+PK_ARMS = {b["id"] for c in TSC["contracts"] for b in c["branches"] if c["id"].startswith("PK")}
+for c in CASES1 + CASES2:
+    if c["kind"] == "CONTROL":
+        continue
+    arms = [b.split(" ")[0] for b in c["branches_targeted"]]
+    for a in arms:
+        assert a in PK_ARMS or a in NEW_ARMS, (c["id"], a)
+    assert set(arms) == {d["arm"] for d in c["arm_discrimination"]}, c["id"]
+    assert sorted({a[:4] for a in arms}) == sorted(c["contracts"]), (c["id"], arms, c["contracts"])
+    for d in c["arm_discrimination"]:
+        assert set(d["judged_by"]) <= set(c["predicates"]), (c["id"], d)
+        assert all(1 <= s <= len(c["case_input"]["sdk_calls"]) for s in d["steps"]), (c["id"], d)
+TABLE1 = table([p for c in CASES1 for p in c["predicates"]])
+TABLE2 = table([p for c in CASES2 for p in c["predicates"]])
+COMPOSITION = load("../sdk-source-batch-2b-spec/cases-2b-2.json")["composition"]
+CLASSES_DOC = load("../sdk-source-batch-2b-spec/cases-2b-2.json")["predicate_classes"]
+FORMS = {"PASS": "todos os processos terminaram normalmente, como no 2A e no 2B",
+         "CLIENT_TERMINATED_SIGTERM": "como em CAP-2B-PROC-WITNESS (2B-1)",
+         "REAL_CLI_KEYLESS": "o cliente observado é o binário publicado, sem adapter nem peer; a captura são os quadros do driver, a testemunha do SO e o stdout/stderr do processo; término registrado, não julgado, salvo o declarado",
+         "ARTIFACT_CHECK": "caso sem processo: o avaliador lê os arquivos compactados do cache por sha e julga os campos congelados"}
+
+
+def doc(cases, sub, tbl, counts):
+    return {"kind": "SDK_DISTRIBUTED_PROFILE_CASES_FROZEN", "task": TASK, "sub_lot": sub, "status": "FROZEN_SPEC_NOT_RUN",
+            "pins": {"distributed": "release %s (pin próprio, Q1)" % VERSION, "source": SOURCE_PIN, "build_link": NBL},
+            "profile": "Linux x86-64 (glibc 2.39), Node v24.20.0, CPython 3.12.3, pydantic 2.13.4; artefatos da release 0.153.4 do cache, ligados por sha a acquisition-ledger.json e artifact-metadata.json; contenção atual (bwrap --unshare-all, tmpfs em /work); keyless (Q3): sem rede, provider nem credencial.",
+            "inputs": inputs_of({a["input"] for c in cases for a in c.get("anchors", [])}),
+            "staging": {"layout": STAGE, "rule": "Staging fora de docs/, num diretório de trabalho em /mnt/dados/cvg-work, montado só-leitura em /dist; cada arquivo ligado ao sha256 do membro (CAP-DP-STAGE)."},
+            "counts": counts,
+            "expectation_rule": "Valores esperados vêm da leitura dos textos publicados da release 0.153.4 (no cache, por sha) e da fonte do pin, com âncoras de linha e sha. A versão declarada pelo binário publicado é julgada contra a declaração do próprio pacote (codex-package.json); o resto da saída do binário é só registrado. Divergência é MISMATCH preservado; nenhum valor é editado depois da execução.",
+            "capture_forms": FORMS, "predicate_classes": CLASSES_DOC, "composition": COMPOSITION, "predicate_table": tbl,
+            "execution_order": "O CONTROL do sub-lote roda primeiro; depois os casos em ordem de slot, uma vez cada, sem retry. Vaga condicional sem o DIAG que a libera não é usada nem reatribuída.",
+            "cases": cases, "functional_receipts": 0, "parity_credit": 0}
+
+
+COND1 = [c["id"] for c in CASES1 if c.get("gate") and c["kind"] != "CONTROL"]
+COND2 = [c["id"] for c in CASES2 if c.get("gate") and c["kind"] != "CONTROL"]
+DOC1 = doc(CASES1, "DP-1", TABLE1, {"slots": len(CASES1), "cases": len(CASES1) - 1, "control": 1, "conditional": len(COND1),
+                                    "artifact_checks": sum(1 for c in CASES1 if c["kind"] == "ARTIFACT_CHECK")})
+DOC2 = doc(CASES2, "DP-2", TABLE2, {"slots": len(CASES2), "cases": len(CASES2) - 1, "control": 1, "conditional": len(COND2),
+                                    "artifact_checks": sum(1 for c in CASES2 if c["kind"] == "ARTIFACT_CHECK")})
+
+# ================================================================== capability contracts (harness mechanisms, unprivileged)
+CAPS = {"kind": "CAPABILITY_CONTRACTS_DP", "task": TASK,
+        "interpretation": "Nesta unidade, 'capability nova' tem o sentido da Q4: capability do kernel ou privilégio (CAP_SYS_ADMIN, CAP_SYS_PTRACE, fanotify, eBPF). Nenhuma é pedida. Os mecanismos abaixo são de harness, sem privilégio, cada um com contrato, autotestes e DIAG, como as capacidades do SPECIFY-2B; o servidor de loopback da decisão do Lead não é usado nesta especificação (motivo em coverage-plan-dp.json).",
+        "capabilities": [
+            {"id": "CAP-DP-STAGE", "purpose": "Montar, fora de docs/, a árvore só-leitura /dist com os membros dos arquivos do cache e as árvores de fixture declaradas por caso.",
+             "mechanism": "Leitura dos arquivos compactados do cache (tarfile e zipfile, em memória), conferência do sha256 do arquivo (acquisition-ledger.json) e de cada membro (artifact-metadata.json), escrita num diretório de trabalho em /mnt/dados/cvg-work, bind só-leitura no sandbox. Nenhum instalador.",
+             "layout": STAGE, "privilege": "nenhum", "network": "nenhuma", "selftests_offline": ["membro com sha divergente recusado", "arquivo compactado divergente recusado", "árvore de fixture com cópia divergente recusada"],
+             "diag": "DIAG-DP-STAGE", "sub_lots": ["DP-1", "DP-2"]},
+            {"id": "CAP-DP-NODE-DRIVER", "purpose": "Driver Node que importa o SDK publicado (dist/index.js do A7) e roda os wrappers publicados (A2 e A4) como processos.",
+             "vocabulary": ["import {module, as}", "shim.platform {platform, arch} e shim.restore (Object.defineProperty em process)", "new Codex {sdk, options, as}",
+                            "startThread e run (vocabulário 2A sobre o SDK publicado)", "probe {id, path} de propriedades públicas", "file.sha256 {id, path_from_probe}",
+                            "wrapper.run {script, argv, env, cwd, preload_shim, send_signal, as}", "child.program {id, program}", "artifact.check (só avaliador)"],
+             "admission": "O loader admitido do 2AC passa a ligar o dist/index.js publicado e os wrappers pelo sha do membro; nenhum outro módulo do cache é importável.",
+             "privilege": "nenhum", "network": "nenhuma", "selftests_offline": ["shim restaurado com os valores reais", "wrapper.run de script próprio com preload_shim", "probe recusada fora de propriedade pública"],
+             "diag": "DIAG-DP-NODE", "sub_lots": ["DP-1"]},
+            {"id": "CAP-DP-SYNTH-CHILD", "purpose": "Filho sintético no lugar dos binários de vendor nas árvores de fixture: registra caminho de execução, argv, stdin, chaves de env e sinais; sai com o código, sinal ou programa declarado.",
+             "mechanism": "Script próprio com shebang para /runtime/node, sha no source freeze; programas por passo child.program; barreira CHILD_READY para envio de sinal.",
+             "privilege": "nenhum", "network": "nenhuma", "selftests_offline": ["exit code, self-signal e on_signal", "registro de env com chaves ausentes como null"],
+             "diag": "DIAG-DP-SYNTH-CHILD", "sub_lots": ["DP-1"]},
+            {"id": "CAP-DP-REAL-CLI-KEYLESS", "purpose": "Executar o binário publicado 0.153.4 só em modo keyless: --version pelo wrapper e app-server com initialize pelo SDK Python.",
+             "mechanism": "Mesma contenção (bwrap --unshare-all com namespace de rede próprio sem rota, tmpfs em /work, HOME=/work/home com CODEX_HOME vazio), env sem credencial, prazo do supervisor; testemunha do SO (cmdline, environ, exe).",
+             "privilege": "nenhum", "network": "nenhuma (namespace sem rota)", "selftests_offline": ["lista fechada de variáveis de credencial recusada", "CODEX_HOME não vazio recusado"],
+             "diag": "DIAG-DP-REAL-CLI (DP-1) e DIAG-DP-REAL-CLI-APPSERVER (DP-2, cliente de controle próprio, sem SDK)", "sub_lots": ["DP-1", "DP-2"]},
+            {"id": "CAP-DP-PY-RUNTIME", "purpose": "Driver Python (vocabulário 2B) com o runtime codex_cli_bin escolhido por caso: nenhum, o wheel publicado em /dist/py/site ou uma árvore de fixture; passo runtime.path troca o diretório e purga codex_cli_bin de sys.modules.",
+             "privilege": "nenhum", "network": "nenhuma", "selftests_offline": ["purga de módulo próprio", "sys.path registrado em cada troca"],
+             "diag": "DIAG-DP-PYRUNTIME", "sub_lots": ["DP-2"]},
+            {"id": "CAP-DP-ARTIFACT-CHECK", "purpose": "Casos sem processo: o avaliador lê os arquivos compactados do cache por sha e julga manifestos, metadados do wheel, export final do dist, entrada do asset na release e identidade de payload.",
+             "privilege": "nenhum", "network": "nenhuma", "selftests_offline": ["campo divergente dá MISMATCH", "arquivo do cache divergente dá INVALID_CAPTURE"],
+             "diag": "nenhum (só avaliador; autotestes)", "sub_lots": ["DP-1", "DP-2"]}],
+        "not_used": {"loopback_peer": {"decision": ptr(ACQ + "lead-decision-loopback-a5.json"),
+                                       "reason": "Permitido pelo Lead, mas sem uso aqui: o bootstrap do PY20 (_runtime_setup.py) importa release_version, que não está nas entradas do perfil (só o sha no inventário G01), e baixa por URL HTTPS fixa do github.com; servir o A5 por loopback exigiria uma identidade TLS de github.com confiável no sandbox. Ver coverage-plan-dp.json#/residuals."}},
+        "functional_receipts": 0, "parity_credit": 0}
+FREEZE = {"kind": "FREEZE_R4_DP_DELTA", "task": TASK,
+          "base": {"freeze_r4": ptr("../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json"), "freeze_r4_2b_delta": ptr("../sdk-source-batch-2b-spec/freeze-r4-2b-delta.json"),
+                   "admitted_ts_driver": ptr("../sdk-batch-2ac-admission/node/ts-driver.mjs"), "admitted_python_driver": ptr("../sdk-batch-2b2-admission/python/python-driver.py")},
+          "inheritance": "F4-01..F4-12 e D2B-01..D2B-15 valem sem mudança. Os deltas DDP são declarados; nenhum altera F4 ou D2B. Os deltas D3 da continuação 3 não são pré-requisito.",
+          "items": [
+              {"id": "DDP-01", "title": "IDs, fonte de casos e pins", "rule": "Aceitar DP-PK01A..DP-PK09A, DP-REAL01, DP-PY19A, DP-PY19B, DP-PY02P, DP-PY20A, DP1-CTRL01, DP2-CTRL01 e os DIAG-DP; fonte de casos cases-dp-1.json e cases-dp-2.json por sha; todo resultado carrega build_link NO_BUILD_LINK_DECLARED."},
+              {"id": "DDP-02", "title": "staging do cache (CAP-DP-STAGE)", "rule": "Ver capability-contracts-dp.json; staging fora de docs/, só-leitura, por sha; o cache da aquisição não é alterado."},
+              {"id": "DDP-03", "title": "driver Node para artefatos publicados (CAP-DP-NODE-DRIVER)", "rule": "Ver capability-contracts-dp.json; o loader liga o dist/index.js e os wrappers publicados pelo sha do membro."},
+              {"id": "DDP-04", "title": "filho sintético (CAP-DP-SYNTH-CHILD)", "rule": "Ver capability-contracts-dp.json."},
+              {"id": "DDP-05", "title": "binário publicado keyless (CAP-DP-REAL-CLI-KEYLESS)", "rule": "Ver capability-contracts-dp.json; só --version e app-server/initialize; nada de turn, login, modelo ou proxy com chave."},
+              {"id": "DDP-06", "title": "runtime Python por caso (CAP-DP-PY-RUNTIME)", "rule": "Ver capability-contracts-dp.json."},
+              {"id": "DDP-07", "title": "casos de verificação de artefato (CAP-DP-ARTIFACT-CHECK)", "rule": "Ver capability-contracts-dp.json."},
+              {"id": "DDP-08", "title": "freezes por sub-lote", "rule": "DP-1: source-freeze e identity-freeze com DDP-01..05 e DDP-07, incluindo o sha de cada membro do cache usado. DP-2: com DDP-01, 02, 05, 06 e 07 e a pilha Python do 2B-2. A identity freeze reconfere o cache contra acquisition-ledger.json antes de qualquer serviço."},
+              {"id": "DDP-09", "title": "CONTROL", "rule": "DP1-CTRL01: wrapper de controle próprio (dp-control-wrapper.mjs) com o filho sintético; DP2-CTRL01: cópia do 2B2-CTRL01 com o ID trocado."},
+              {"id": "DDP-10", "title": "carry-over da admissão do 2B-2", "rule": "2B2-ADM/R1-F02, R1-F03 e R1-F04 entram antes do source freeze do DP-2 (avaliador e supervisor reusados)."}],
+          "functional_receipts": 0, "parity_credit": 0}
+EVAL = {"kind": "EVALUATOR_R4_DP_DELTA", "task": TASK,
+        "base": {"evaluator_r4": ptr("../sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json"), "evaluator_r4_2b_delta": ptr("../sdk-source-batch-2b-spec/evaluator-r4-2b-delta.json")},
+        "inheritance": "R4-01..R4-10 e E2B-01..E2B-14 valem sem mudança.",
+        "clauses": [
+            {"id": "EDP-01", "rule": "Tabelas de predicados de cases-dp-1.json e cases-dp-2.json; autoteste R3-12 sobre cada tabela; predicado copiado do 2B mantém classe e oráculo."},
+            {"id": "EDP-02", "rule": "Oráculos dos predicados novos como na tabela; jeq em toda comparação de valor JSON; textos de stderr e stdout por inclusão."},
+            {"id": "EDP-03", "rule": "Formas REAL_CLI_KEYLESS e ARTIFACT_CHECK como em capture_forms; só valem onde o caso declara; fora disso, a regra 2 dá MISMATCH."},
+            {"id": "EDP-04", "rule": "Mensagens e comportamentos marcados em version_dependent são julgados exatos; divergência é MISMATCH preservado e a adjudicação registra a dependência de versão."},
+            {"id": "EDP-05", "rule": "Todo acceptance.json de caso do perfil distribuído traz build_link NO_BUILD_LINK_DECLARED; a ausência do campo é falha do avaliador (regra 3)."},
+            {"id": "EDP-06", "rule": "Nenhuma regra produz recibo funcional ou crédito de paridade."}],
+        "never": "Nenhuma regra produz recibo funcional ou crédito de paridade."}
+CONTROL_CONTRACT = {"kind": "CONTROL_SLOT_CONTRACT_DP", "task": TASK,
+                    "slots": [{"case": c["id"], "sub_lot": c["sub_lot"], "slot": c["slot"], "execution_order": 1, "case_input_sha256": c["case_input_sha256"], "gate": c["gate"]}
+                              for c in (CASES1[-1], CASES2[-1])],
+                    "rules": ["Os CONTROL não usam nenhum arquivo do cache.", "Sanidades falhas levam a INVALID_CAPTURE e param o sub-lote.",
+                              "O MISMATCH esperado vem só do predicado client declarado (wrap.exit_mirror_exact no DP-1; wire.no_turn_interrupt no DP-2)."],
+                    "functional_receipts": 0, "parity_credit": 0}
+
+# ================================================================== coverage plan and residuals
+V5 = load("../sdk-batch-2b2-binding/coverage-observed-v5.json")
+ROWS = {r["source_contract"]: r for r in V5["rows"]}
+QPTR = ptr("../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json")
+
+
+def RS(rid, contract, item, cls, cases=(), arms=(), reason=None, destination=None):
+    d = {"id": rid, "contract": contract, "item": item, "class": cls}
+    if cases:
+        d["cases"] = list(cases)
+    if arms:
+        d["arms"] = list(arms)
+    if reason:
+        d["reason"] = reason
+    if destination:
+        d["destination"] = destination
+    return d
+
+
+RES = [
+    RS("R-PY19-1", "PY19", "codex_bin explícito e codex_cli_bin obrigatório, sem fallback npm", "IN_SPEC", ["DP-PY19A"], ["PY19.B01", "PY19.B02"]),
+    RS("R-PY19-2", "PY19", "pacote codex_cli_bin exige codex-package.json e bin/codex", "IN_SPEC", ["DP-PY19B"], ["PY19.B03", "PY19.B04"]),
+    RS("R-PY19-3", "PY19", "identidade do runtime publicado (wheel 0.153.4 e binário)", "IN_SPEC", ["DP-PY02P"], ["PY19.B05"]),
+    RS("R-PY19-4", "PY19", "identidade de um pacote openai-codex publicado (SDK Python 0.153.4)", "OUT_NOT_AVAILABLE",
+       reason="o PyPI não tem openai-codex 0.153.4 (A6 NOT_AVAILABLE na aquisição); o SDK Python observado é a fonte do pin", destination="NOT_AVAILABLE"),
+    RS("R-PY19-5", "PY19", "package_version do SDK (fonte, distribuição ou 0+unknown)", "OUT_NOT_AVAILABLE",
+       reason="sem distribuição publicada do SDK Python 0.153.4, só o ramo 'fonte' é possível, e ele não é o artefato distribuído", destination="NOT_AVAILABLE"),
+    RS("R-PY20-1", "PY20", "asset de linux x86_64, tag não pura do wheel e identidade de payload", "IN_SPEC", ["DP-PY20A"], ["PY20.B01", "PY20.B02", "PY20.B03"]),
+    RS("R-PY20-2", "PY20", "execução do bootstrap (_runtime_setup.py: reuso, staging e instalação)", "OUT_INPUT_NOT_AVAILABLE",
+       reason="o módulo importa release_version.py e usa scripts/update_sdk_artifacts.py, que não estão nas entradas do perfil (só o sha no inventário G01); obtê-los do repositório do pin é aquisição com rede",
+       destination="pergunta T4 de aquisição, se o Lead quiser executar o bootstrap"),
+    RS("R-PY20-3", "PY20", "download do asset pelo bootstrap (loopback permitido pelo Lead)", "OUT_T3_QUESTION",
+       reason="a URL é HTTPS fixa de github.com; servir por loopback exigiria identidade TLS de github.com confiável no sandbox, mudança de postura de segurança não coberta pela decisão do Lead",
+       destination="pergunta T3 contingente (só se R-PY20-2 for resolvido)"),
+    RS("R-PY20-4", "PY20", "instalação por pip (--force-reinstall) e build do wheel (hatch_build.py)", "OUT_INSTALLER",
+       reason="pip install de diretório fonte exige backend de build (hatchling) e rede; instalador e build não estão autorizados", destination="unidade posterior com decisão própria"),
+    RS("R-PY20-5", "PY20", "as outras cinco plataformas e o ramo não suportado executados", "OUT_PLATFORM_LIMIT", reason="só linux-x64 é local", destination="perfil de plataforma"),
+    RS("R-PY02-1", "PY02", "ramo empacotado com codex_cli_bin: argv, PATH e CheckoutCapabilities", "IN_SPEC", ["DP-PY19B", "DP-PY02P"], ["PY02.B09", "PY02.B10", "PY02.B11"]),
+    RS("R-PY02-2", "PY02", "chave PATH no Windows", "OUT_PLATFORM_LIMIT", reason="depende do Windows", destination="perfil de plataforma"),
+    RS("R-PY02-3", "PY02", "turn, login ou modelo pelo app-server publicado", "OUT_T4_GATE", reason="exige provider ou credencial (Q3 keyless)", destination="gate T4 separado"),
+    RS("R-PK01-1", "PK01", "oito pares e inválidos no resolvedor do SDK publicado; nome .exe", "IN_SPEC", ["DP-PK01A"], ["PK01.B01", "PK01.B02", "PK01.B04"]),
+    RS("R-PK01-2", "PK01", "triple sem pacote no mapa (PK01.B03)", "OUT_UNREACHABLE", reason="o mapa fixo cobre todos os triples produzidos; o ramo é contrafactual", destination="NOT_AVAILABLE"),
+    RS("R-PK01-3", "PK01", "binários reais das outras plataformas", "OUT_PLATFORM_LIMIT", reason="só linux-x64 foi adquirido e é local", destination="perfil de plataforma"),
+    RS("R-PK02-1", "PK02", "resolução e layouts novo, legacy, ausentes e stat", "IN_SPEC", ["DP-PK02A", "DP-PK02R"], ["PK02.B01", "PK02.B02", "PK02.B03", "PK02.B04", "PK02.B05"]),
+    RS("R-PK02-2", "PK02", "symlinks, permissões e TOCTOU externos ao stat", "OUT_PLATFORM_LIMIT", reason="dependem do sistema de arquivos do usuário; fora do perfil contido", destination="perfil de plataforma"),
+    RS("R-PK03-1", "PK03", "PATH em host não Windows: chave e prepend", "IN_SPEC", ["DP-PK03A"], ["PK03.B01", "PK03.B03"]),
+    RS("R-PK03-2", "PK03", "chave Path no Windows e parâmetro platform (PK03.B02 e PK03.B04)", "OUT_PLATFORM_LIMIT",
+       reason="simular win32 em host Linux não prova o delimitador nem as chaves do Windows (G01)", destination="perfil de plataforma"),
+    RS("R-PK04-1", "PK04", "plataforma, vendor, binário ausente e dica do wrapper", "IN_SPEC", ["DP-PK04A", "DP-REAL01"], ["PK04.B01", "PK04.B02", "PK04.B03", "PK04.B04"]),
+    RS("R-PK04-2", "PK04", "executar a dica de instalação", "OUT_INSTALLER", reason="instalação global não autorizada", destination="nunca nesta trilha"),
+    RS("R-PK05-1", "PK05", "heurísticas de gerenciador e ownership com árvores sintéticas", "IN_SPEC", ["DP-PK05A"], ["PK05.B01", "PK05.B02", "PK05.B03", "PK05.B04", "PK05.B05"]),
+    RS("R-PK05-2", "PK05", "instalações reais por pnpm, vite-plus e bun", "OUT_INSTALLER", reason="exigem os gerenciadores e rede", destination="unidade posterior com decisão própria"),
+    RS("R-PK06-1", "PK06", "env gerenciado, erro de spawn, sinais e saída do wrapper", "IN_SPEC", ["DP-PK05A", "DP-PK06A"], ["PK06.B01", "PK06.B02", "PK06.B03", "PK06.B04"]),
+    RS("R-PK07-1", "PK07", "targets, inválido e layout do proxy", "IN_SPEC", ["DP-PK07A"], ["PK07.B01", "PK07.B02", "PK07.B03"]),
+    RS("R-PK08-1", "PK08", "spawn herdado, sinais e término do proxy com filho sintético", "IN_SPEC", ["DP-PK08A"], ["PK08.B01", "PK08.B02", "PK08.B03"]),
+    RS("R-PK08-2", "PK08", "proxy real com chave e encaminhamento ao provider", "OUT_T4_GATE", reason="exige credencial e provider (Q3 keyless)", destination="gate T4 separado"),
+    RS("R-PK09-1", "PK09", "manifestos e exports publicados frente à fonte, sem equivalência de build", "IN_SPEC", ["DP-PK09A", "DP-PK02R", "DP-REAL01"], ["PK09.B01", "PK09.B02", "PK09.B03"]),
+    RS("R-PK09-2", "PK09", "assinatura e proveniência do registro (npm signatures, attestations)", "OUT_NEW_ACQUISITION",
+       reason="não fazem parte da lista da Q2; obtê-las é nova aquisição com rede", destination="pergunta T4, se o Lead quiser"),
+    RS("R-PK09-3", "PK09", "bundle, typecheck e declarações do SDK TS publicado", "OUT_LATER_UNIT", reason="exige compilador e um caso próprio", destination="unidade posterior do perfil distribuído"),
+]
+SCOPE = ["PY19", "PY20", "PY02", "PK01", "PK02", "PK03", "PK04", "PK05", "PK06", "PK07", "PK08", "PK09"]
+ALL = {c["id"]: c for c in CASES1 + CASES2}
+assert {r["contract"] for r in RES} == set(SCOPE)
+for r in RES:
+    for cid in r.get("cases", []):
+        assert cid in ALL, r
+    for a in r.get("arms", []):
+        assert any(b.startswith(a + " ") for cid in r["cases"] for b in ALL[cid]["branches_targeted"]), (r["id"], a)
+for c in ALL.values():
+    if c["kind"] == "CONTROL":
+        continue
+    for b in c["branches_targeted"]:
+        a = b.split(" ")[0]
+        assert any(a in r.get("arms", []) and c["id"] in r["cases"] for r in RES if r["class"] == "IN_SPEC"), (c["id"], a)
+rows = []
+for k in SCOPE:
+    cs = [c for c in ALL.values() if c["kind"] != "CONTROL" and k in c["contracts"]]
+    rows.append({"source_contract": k, "status_v5": ROWS[k]["status"], "cases": [c["id"] for c in cs],
+                 "arms_targeted": sorted({b.split(" ")[0] for c in cs for b in c["branches_targeted"] if b.startswith(k + ".")}),
+                 "status_if_all_cases_pass": "OBSERVED_CLIENT_PARTIAL", "whole_requirement_covered_after": False,
+                 "residuals_out": [r["id"] for r in RES if r["contract"] == k and r["class"] != "IN_SPEC"]})
+opened = [k for k in SCOPE if ROWS[k]["status"] == "OPEN_REQUIRED_FUTURE_PROFILE"]
+COVERAGE = {"kind": "SDK_DISTRIBUTED_PROFILE_COVERAGE_PLAN", "task": TASK, "base": ptr("../sdk-batch-2b2-binding/coverage-observed-v5.json"),
+            "decisions": {"user": QPTR, "loopback": ptr(ACQ + "lead-decision-loopback-a5.json")},
+            "scope_rule": "PY19, PY20, PK01-PK09 e o ramo empacotado do PY02, só com artefatos do cache ligados por sha, em linux-x64 e na contenção atual; sem rede, provider, credencial nem capability do kernel; o que depende do A6, de login, de turn ou de modelo fica fora com destino.",
+            "classes": {"IN_SPEC": "entra nesta especificação", "OUT_NOT_AVAILABLE": "depende de artefato inexistente (A6) ou de ramo sem artefato",
+                        "OUT_T4_GATE": "exige login, turn, modelo ou credencial", "OUT_PLATFORM_LIMIT": "só linux-x64 é local",
+                        "OUT_INPUT_NOT_AVAILABLE": "entrada de fonte ausente do perfil; obtê-la é aquisição com rede", "OUT_T3_QUESTION": "exige mudança de postura de segurança",
+                        "OUT_INSTALLER": "exige instalador ou build não autorizados", "OUT_UNREACHABLE": "contrafactual",
+                        "OUT_NEW_ACQUISITION": "fora da lista da Q2", "OUT_LATER_UNIT": "unidade posterior do perfil distribuído"},
+            "new_arm_ids": {"rule": "PY19 e PY20 não têm braços no G01; os braços desta especificação começam em B01. O PY02 continua do B09 (o 2B usou até B08).", "arms": NEW_ARMS},
+            "residuals": RES, "rows": rows,
+            "projection_if_all_pass": {"rows_becoming_observed": opened, "counts": {"OBSERVED_CLIENT_PARTIAL": V5["counts"]["OBSERVED_CLIENT_PARTIAL"] + len(opened),
+                                                                                     "OPEN_REQUIRED_FUTURE_PROFILE": V5["counts"]["OPEN_REQUIRED_FUTURE_PROFILE"] - len(opened)},
+                                       "note": "Projeção de planejamento, com as vagas condicionais liberadas. Nenhuma linha passa a cobrir o requisito inteiro; GAP-PROVENANCE e GAP-PLATFORM-PACKAGING seguem OPEN; build_link segue NO_BUILD_LINK_DECLARED."},
+            "counts": {"residuals": len(RES), "by_class": {k: sum(1 for r in RES if r["class"] == k) for k in sorted({r["class"] for r in RES})}},
+            "functional_receipts": 0, "parity_credit": 0}
+
+# ================================================================== budgets and T3
+SERV1 = ["DIAG-TS-ECHO", "DIAG-DP-STAGE", "DIAG-DP-NODE", "DIAG-DP-SYNTH-CHILD", "DIAG-DP-REAL-CLI"]
+SERV2 = ["DIAG-PY-RPC", "DIAG-PY-STAGE", "DIAG-PY-UNSCRIPTED", "DIAG-PY-BEFOREREPLY", "DIAG-PY-PROCWITNESS", "DIAG-DP-STAGE", "DIAG-DP-PYRUNTIME", "DIAG-DP-REAL-CLI-APPSERVER"]
+NOT_AUTH = ["rede ou nova aquisição", "provider, credencial, login, turn ou chamada a modelo (gate T4 separado)", "capability do kernel ou privilégio (Q4 negada)",
+            "npm install, pip install, gerenciadores ou instalação global", "executar binário do cache fora da contenção", "outras versões de pydantic ou Node (Q5)",
+            "identidade TLS de github.com no sandbox", "push", "produção"]
+
+
+def budget(sub, cases, serv, cond, cond_diags):
+    return {"kind": "EXECUTION_BUDGET_FOR_NEXT_UNIT", "task_next": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-" + sub, "sub_lot": sub,
+            "max": {"case_slots": 24, "control_slots": 1, "services": 12, "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+            "planned": {"case_slots": len(cases), "cases": len(cases) - 1, "control_slots": 1, "conditional_slots": cond, "qualification_services_planned": len(serv),
+                        "qualification_services": serv, "services_reserve": "%d serviço(s) de reserva, só para diagnóstico de admissão" % (12 - len(serv)),
+                        "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+            "conditional_diags": cond_diags,
+            "stops": ["qualquer DIAG não condicional falha", "CONTROL diferente de MISMATCH", "cache divergente de acquisition-ledger.json", "rede, credencial ou instalação necessária", "orçamento esgotado"],
+            "not_authorized": NOT_AUTH}
+
+
+BUDGET1 = budget("DP-1", CASES1, SERV1, COND1, {"DIAG-DP-REAL-CLI": "falha desliga só DP-REAL01"})
+BUDGET2 = budget("DP-2", CASES2, SERV2, COND2, {"DIAG-DP-REAL-CLI-APPSERVER": "falha desliga só DP-PY02P", "DIAG-PY-PROCWITNESS": "falha desliga DP-PY02P (o DP-PY19B usa a mesma testemunha e também fica sem uso)"})
+assert len(SERV1) <= 12 and len(SERV2) <= 12 and len(CASES1) <= 24 and len(CASES2) <= 24
+T3 = {"kind": "T3_ASSESSMENT", "task": TASK, "rule": ptr("../../../../../07_agents/AGENTS.md"),
+      "decision": "NAO_EXIGE_T3", "decision_t4": "NAO_EXIGE_T4",
+      "basis": ["Executar o binário publicado keyless dentro da contenção atual foi decidido pelo usuário (Q3, ACCEPT_KEYLESS_ONLY); nenhuma capability do kernel é pedida (Q4).",
+                "Os mecanismos novos são de harness, sem privilégio, sob docs/04_audit/evidence e /mnt/dados/cvg-work; nada toca código de produto, contrato público, identidade, policy ou approval do CVG.",
+                "Sem rede, provider, credencial, dado real ou efeito externo; nenhuma aquisição nova."],
+      "contingent_questions_not_asked": [
+          {"tier": "T4", "topic": "fontes ausentes do bootstrap do PY20", "question": "Autoriza obter, uma vez, do repositório do pin 8d9f6466, os arquivos sdk/python/release_version.py e sdk/python/scripts/update_sdk_artifacts.py (conferidos contra os sha do inventário G01), para observar o bootstrap do PY20 sem rede na execução?",
+           "when": "só se o Lead quiser executar o bootstrap; esta especificação não depende disso"},
+          {"tier": "T3", "topic": "identidade TLS de github.com no sandbox", "question": "Autoriza, só dentro do sandbox e só no caso do bootstrap, uma autoridade certificadora de teste que faça o peer de loopback se apresentar como github.com, para o download do PY20?",
+           "when": "só depois da pergunta T4 acima e se o Lead quiser o ramo de download"}],
+      "functional_receipts": 0, "parity_credit": 0}
+
+
+def dump(name, obj):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+
+
+dump("cases-dp-1.json", DOC1)
+dump("cases-dp-2.json", DOC2)
+dump("capability-contracts-dp.json", CAPS)
+dump("freeze-r4-dp-delta.json", FREEZE)
+dump("evaluator-r4-dp-delta.json", EVAL)
+dump("control-slot-contract-dp.json", CONTROL_CONTRACT)
+dump("coverage-plan-dp.json", COVERAGE)
+dump("execution-budget-dp-1.json", BUDGET1)
+dump("execution-budget-dp-2.json", BUDGET2)
+dump("t3-assessment.json", T3)
+print("DP-1", len(CASES1), "slots", COND1, len(SERV1), "services")
+print("DP-2", len(CASES2), "slots", COND2, len(SERV2), "services")
+print("residuals", COVERAGE["counts"], "projection", COVERAGE["projection_if_all_pass"]["counts"])

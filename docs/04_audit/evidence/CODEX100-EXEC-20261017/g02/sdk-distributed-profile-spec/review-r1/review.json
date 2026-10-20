@@ -1,0 +1,272 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T22:04:39-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "140b92f69726d88475d2b1c33555edee46d90ad47d899b3bbce05ead6df6d57b",
+  "subject_hash_check": {
+    "before": "ok",
+    "after": "ok"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "2 P1, 8 P2, 5 P3",
+  "mandatory_findings": [
+    "R1-F01",
+    "R1-F02",
+    "R1-F03",
+    "R1-F04",
+    "R1-F05",
+    "R1-F06",
+    "R1-F07",
+    "R1-F08",
+    "R1-F09",
+    "R1-F10"
+  ],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P1",
+      "area": "DP-PY02P (versão anunciada no initialize, PY19.B05)",
+      "title": "O passo 7 espera serverInfo.version 0.153.4, mas o app-server desta família não devolve serverInfo no initialize",
+      "evidence": [
+        "cases-dp-2.json:868-875 (api step 7 result {'serverInfo.version': '0.153.4'})",
+        "cases-dp-2.json:843-848 (PY19.B05 julgado pelo passo 7)",
+        "cases-dp-2.json:889-896 (recorded_not_judged traz serverInfo.name, o que pressupõe o campo)",
+        "build-spec-dp.py.txt:794 (valor escrito à mão, sem âncora)",
+        "../keyless-reference-oracles/source-corroboration.json:30 (codex-rs/app-server-protocol/src/protocol/v1.rs do pin: InitializeResponse só com user_agent, codex_home, platform_family e platform_os)",
+        "../keyless-cli-probe/keyless-b9ab371c1b/raw/output/stdio.capture.json:108-114 (initialize keyless real do ELF do pin, sem serverInfo)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py:320-323 (sem serverInfo, a versão sai do userAgent)"
+      ],
+      "detail": "Nenhuma âncora sustenta que o binário 0.153.4 devolva serverInfo. A fonte do pin, cujo uv.lock fixa este mesmo runtime 0.153.4, define InitializeResponse sem esse campo, e a única observação real do initialize keyless também não o traz. O SDK resolve a versão pelo userAgent quando serverInfo vem nulo, por isso a sonda _runtime_version (0.153.4) é a observação certa. Do jeito que está congelado, o binário respondendo corretamente deixa serverInfo nulo, api.steps_exact (classe client) falha e o resultado vira um MISMATCH falso.",
+      "required_action": "Trocar a expectativa do passo 7 por serverInfo ausente/nulo, ou deixar o passo 7 só registrado. Julgar PY19.B05 pela sonda _runtime_version e, se quiser, pelo prefixo de versão do userAgent, ancorado em client.py:320-323 e _initialize_metadata.py:6-16. Atualizar arm_discrimination, recorded_not_judged e version_dependent."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P1",
+      "area": "DP-PY19A, DP-PY19B, DP-PY02P (predicados herdados do 2B em topologias novas)",
+      "title": "Predicados copiados do 2B com o oráculo intacto não podem passar sem adapter, com dois spawns ou com o binário real",
+      "evidence": [
+        "evaluator-r4-dp-delta.json:17-20 (EDP-01: predicado copiado mantém classe e oráculo; o validador exige oráculo idêntico)",
+        "cases-dp-2.json:318-324 (DP-PY19A lista env.adapter_sandbox_env_only, mas nenhum filho é criado)",
+        "cases-dp-2.json:182-186, 212-216, 227-236 (oráculos herdados: env do adapter, três testemunhas com autorrelato EXEC_ARGV do adapter, contagem de 'processos de adapter', leitura depois do BEGIN do adapter)",
+        "cases-dp-2.json:876-888 e 910-923 (DP-PY02P: binário publicado sem adapter; process.argv é lista plana)",
+        "cases-dp-2.json:484-493 e 504-517 (DP-PY19B: proc.argv_exact sem process.argv/proc_cmdline congelados; dois spawns)",
+        "../sdk-batch-2b2-admission/python/acceptance.py:1039-1056 (o avaliador admitido compara adapter_environ None com FIXED_ENV; process.argv como dict {popen_args, proc_cmdline, self_report_argv_tail}; só a primeira leitura e o primeiro PROC_RETAIN)",
+        "../sdk-batch-2b2-admission/python/supervisor.py:1010-1024 (o papel adapter exige cmdline LAUNCH e executável igual ao runtime ligado)"
+      ],
+      "detail": "No DP-PY19A não há adapter, então env.adapter_sandbox_env_only (client) falha sempre e gera MISMATCH falso. No DP-PY02P o filho é o ELF publicado: não há autorrelato EXEC_ARGV, BEGIN de adapter nem processo de adapter. Por isso proc.argv_exact, proc.spawn_count_exact (0 contra 1) e proc.witness_recorded não fecham; process.argv ainda vem numa forma diferente da que o oráculo lê. No DP-PY19B, proc.argv_exact não tem o cmdline pós-execv congelado (o 2B-PY02B congelava) e o oráculo só olha o primeiro de dois spawns. Nenhum DDP ou EDP declara a mudança. O resultado é MISMATCH falso ou INVALID_CAPTURE permanente.",
+      "required_action": "Tirar env.adapter_sandbox_env_only do DP-PY19A. Para o binário real, declarar predicados ou deltas próprios em EDP e DDP: argv por Popen.args mais /proc/<pid>/cmdline; contagem do processo pelo sha do executável; leitura da testemunha depois que Popen retorna (exec concluído), sem BEGIN. No DP-PY19B, congelar por spawn {popen_args, proc_cmdline, self_report_argv_tail} e dizer como dois spawns são julgados."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "DP-PK06A e DP-PK08A (PK06.B03, PK08.B02)",
+      "title": "Sinal não repassado leva a bloqueio e INVALID_CAPTURE, nunca a MISMATCH; os braços afirmam sinais que não são exercidos",
+      "evidence": [
+        "cases-dp-1.json:2799-2858 (programas wait_term/wait_int com ready_barrier e sem espera limitada)",
+        "cases-dp-1.json:3474-3502 (wait_hup idem)",
+        "cases-dp-1.json:2640-2645 e 3351-3357 (discriminação por child.signals_received_exact)",
+        "cases-dp-1.json:2628 e 3340 (braços afirmam SIGINT, SIGTERM e SIGHUP; o DP-PK06A envia só SIGTERM e SIGINT, o DP-PK08A só SIGHUP)",
+        "../sdk-source-batch-2a-spec/cases-2a.json:178 e ../sdk-source-batch-2b-spec/evaluator-r4-2b-delta.json:66 (prazo leva a INVALID_CAPTURE)",
+        "../../g01/sdk-open-contracts/typescript/contracts.json PK06.B03/PK08.B02 (child.killed / não)"
+      ],
+      "detail": "Se o wrapper não repassasse o sinal, o filho sintético esperaria para sempre e o wrapper absorveria o sinal ou morreria deixando um órfão. Isso termina em prazo ou limpeza, ou seja INVALID_CAPTURE, e não em MISMATCH. O ramo child.killed (segundo sinal não repassado) do G01 não é exercido nem aparece como resíduo.",
+      "required_action": "Dar ao programa do filho uma espera limitada depois do CHILD_READY (por exemplo, registrar NO_SIGNAL e sair com um código próprio) para o contrário cair em MISMATCH. Restringir o texto dos braços aos sinais exercidos ou acrescentar os passos que faltam (SIGHUP no PK06, SIGINT e SIGTERM no PK08). Exercer ou classificar o ramo child.killed."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P2",
+      "area": "DP-PK06A e_spawn_error (PK06.B02)",
+      "title": "Erro de spawn tratado e não tratado dão o mesmo exit 1 e o mesmo EACCES",
+      "evidence": [
+        "cases-dp-1.json:2632-2638 (contrário 'erro de spawn sem tratamento', observável 'exit diferente de 1')",
+        "cases-dp-1.json:2678-2683 (espera exit 1 e stderr com EACCES)",
+        "sonda própria em Node 22.23.2 (sem código do cache): com child.on('error') sai 1 com o objeto do erro; sem listener sai 1 com \"Unhandled 'error' event\" e EACCES"
+      ],
+      "detail": "O ramo contrário produz exatamente o observável esperado, então o braço é afirmado sem discriminação.",
+      "required_action": "Acrescentar stderr_not_contains [\"Unhandled 'error' event\"] (com o predicado e oráculo correspondentes no EDP-02) ou outro observável que só o caminho do handler produza."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P2",
+      "area": "DP-PK02A (PK02.B01) e DP-PK05A (PK05.B03)",
+      "title": "A condição que define o braço não é discriminada pelas árvores congeladas",
+      "evidence": [
+        "cases-dp-1.json:840 e 846-853 (PK02.B01: pacote de plataforma 'a partir dele')",
+        "cases-dp-1.json:1136-1413 (em todas as raízes o pacote de plataforma é irmão de @openai/codex)",
+        "A7 package/dist/index.js:446-448 (moduleRequire e depois createRequire(codexPackageJsonPath))",
+        "cases-dp-1.json:2168 e 2189-2194 (PK05.B03: pacote canônico e entrypoint)",
+        "../../g01/sdk-open-contracts/typescript/contracts.json PK05.B03 (canonical e lexical diferentes/iguais)"
+      ],
+      "detail": "Um resolvedor que buscasse o pacote de plataforma direto da posição do SDK passaria em todos os passos. No PK05 o realpath canônico é igual ao caminho léxico em todas as árvores, então buscar só a partir de um dos dois também passaria.",
+      "required_action": "Acrescentar uma raiz com o pacote de plataforma só em node_modules/@openai/codex/node_modules, e um entrypoint por symlink (tipo de fixture 'symlink' declarado como delta). Ou então restringir o texto dos braços e registrar o resto como resíduo."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P2",
+      "area": "DP-REAL01, DP-PK06A e DP-PK08A (determinismo e oráculos de término)",
+      "title": "Testemunha de /proc/<pid>/exe com corrida, término do neto inobservável e forma PASS ambígua",
+      "evidence": [
+        "cases-dp-1.json:2080-2083 e 2096-2104 (DP-REAL01: proc.executable_sha_exact, classe client, sobre 'codex --version', neto de vida curta reaped pelo wrapper)",
+        "cases-dp-1.json:2661-2667 e 3384-3389 (child_terminated_by e wrapper_self_signal)",
+        "cases-dp-1.json:252-256 e 202-206 (oráculos exigem o término do filho)",
+        "cases-dp-1.json:121 (PASS: todos os processos terminaram normalmente)",
+        "capability-contracts-dp.json:57-66 (wrapper.run sem stdin; o filho sintético registra stdin)"
+      ],
+      "detail": "(a) Nenhuma barreira ou mecanismo garante ler /proc/<pid>/exe de um processo que vive milissegundos; perder a amostra vira falha client e MISMATCH falso. (b) O sinal de término do neto só é conhecido pelo wrapper, que é quem o reapa; sem ptrace nem proc connector (Q4) o oráculo não é implementável ou fica sujeito a corrida com o zumbi. (c) O filho morto pelo próprio SIGTERM ou SIGINT não 'terminou normalmente', então o classificador pode cair na regra 2 e dar MISMATCH. (d) Com stdio inherit e stdin do wrapper não fixado, um filho que lê stdin até EOF bloqueia.",
+      "required_action": "Declarar que testemunha ausente é captura (INVALID_CAPTURE), ou rebaixar proc.executable_sha_exact do DP-REAL01 a informational (a identidade já vem de stage.bound_to_cache mais o caminho). Tratar child_terminated_by como programa declarado, não como observação. Incluir na forma PASS o término por self-signal do filho sintético. Fixar o stdin do wrapper.run (/dev/null) e a regra de EOF do filho."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P2",
+      "area": "CAP-DP-NODE-DRIVER / DDP-03 (vocabulário e loader admitido)",
+      "title": "O dist publicado importa especificadores nus que o loader admitido nega; o delta do loader não foi declarado",
+      "evidence": [
+        "A7 package/dist/index.js:2-4 e 140-144 (import de 'fs', 'os', 'path', 'child_process', 'readline', 'module' sem node:)",
+        "../sdk-batch-2ac-admission/node/extension-loader.mjs:28 e 41-66 (sdk_entry fixo em /profile/sdk-emitted; só node:* para o SDK; o resto negado)",
+        "freeze-r4-dp-delta.json:22 e 35-38 ('nenhum altera F4 ou D2B'; DDP-03 genérico)",
+        "cases-dp-1.json:411-413, 988-1113 e 1505 (import a partir de 8 caminhos /fixture e /dist)"
+      ],
+      "detail": "Com o loader admitido, o import do dist publicado falha. A mudança de allowlist (pais por sha, builtins nus, várias entradas) é relevante para a segurança e não está declarada. Também falta definir o que acontece com falha de import, com sonda sobre alias inexistente (por exemplo depois de um erro inesperado no passo 23 do PK01A: falha client ou de harness?) e quando wrapper.run assenta (exit ou close) para o stdout_contains.",
+      "required_action": "Declarar o delta do loader e dos autotestes no DDP-03: URLs-pai ligadas ao sha do membro e allowlist dos builtins nus só para esses pais. Corrigir a frase de herança e definir essas semânticas do driver."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P2",
+      "area": "capability-contracts-dp.json e DIAG-DP-*",
+      "title": "Capacidades e DIAG sem o nível de definição do 2B: os gates condicionais não são verificáveis",
+      "evidence": [
+        "capability-contracts-dp.json:44, 69, 82, 95, 107 e 119 (DIAG só pelo nome; ARTIFACT-CHECK com 'nenhum')",
+        "../sdk-source-batch-2b-spec/capability-contracts-2b.json (cada DIAG com own_code, pass e on_fail)",
+        "cases-dp-1.json:2051 e cases-dp-2.json:829 (gates dependem de DIAG-DP-REAL-CLI e DIAG-DP-REAL-CLI-APPSERVER)",
+        "cases-dp-1.json:1652-1660 (o env override do PK03A não deixa canal por env para o filho)",
+        "../sdk-batch-2b2-admission/python/supervisor.py:990-994 (cgroup 512 MiB e pids.max 32)"
+      ],
+      "detail": "Sem own_code, pass e on_fail, os gates do DP-REAL01 e do DP-PY02P não são conferíveis. CAP-DP-SYNTH-CHILD não diz por onde o filho registra nem como trata stdin. CAP-DP-STAGE não diz que preserva os modos (0755 para ELF e scripts). CAP-DP-REAL-CLI-KEYLESS não diz os limites de recurso do binário real (os herdados podem ser curtos para threads e memória) nem se o DIAG roda nos mesmos limites. A interpretação afirma 'cada um com contrato, autotestes e DIAG', o que não vale para CAP-DP-ARTIFACT-CHECK.",
+      "required_action": "Completar cada capacidade no formato do 2B (contract, observes, injects, selftests, diag {id, own_code, pass, on_fail}) e fixar canal e stdin do filho, modos do staging e limites do serviço do binário real."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P2",
+      "area": "execution-budget-dp-2.json",
+      "title": "Orçamento do DP-2 omite DIAGs de capacidades herdadas e trata o DP-PY19B como condicional sem declarar",
+      "evidence": [
+        "execution-budget-dp-2.json:17-36",
+        "cases-dp-2.json:519-526, 925-932 e 1224-1229 (usam CAP-2B-CONC-BARRIER e CAP-2B-PEER-LOGIN)",
+        "../sdk-source-continuation-3-spec/execution-budget-c3-2.json:24 e 27 (DIAG-PY-BARRIER e DIAG-PY-LOGIN requalificados)",
+        "cases-dp-2.json:404-410 (DP-PY19B sem gate)"
+      ],
+      "detail": "DIAG-PY-BARRIER e DIAG-PY-LOGIN, que no 2B-2 e na C3-2 qualificam as capacidades usadas pelo sub-lote e pelo CONTROL, não estão no orçamento. Pelo conditional_diags, a falha do DIAG-PY-PROCWITNESS também tira o DP-PY19B, mas o DP-PY19B não é vaga condicional e a regra de parada manda parar em falha de DIAG não condicional.",
+      "required_action": "Incluir os dois DIAG (10/12) e tornar o DP-PY19B condicional, com gate verificável, ou tirar dele a dependência condicional."
+    },
+    {
+      "id": "R1-F10",
+      "severity": "P2",
+      "area": "coverage-plan-dp.json#/residuals",
+      "title": "Resíduos das linhas do escopo sem classificação",
+      "evidence": [
+        "coverage-plan-dp.json:129-152 e 323-333 (PY02)",
+        "../sdk-batch-2b2-binding/coverage-observed-v5.json#/remaining_open_by_contract/PY02 (ramo kill com filho que demora a sair, atribuído ao perfil distribuído)",
+        "coverage-plan-dp.json:209-248 e 389-406 (PK04, PK05 e PK06 sem os sub-ramos abaixo; residuals_out vazio no PK06 e no PK07)",
+        "../../g01/sdk-open-contracts/typescript/contracts.json (PK04.B04 pnpm/vite-plus; PK04 diretório no lugar de bin e só legacy; PK05.B02 metadata #/sem ID/malformada/nome diferente; PK05.B04 .bun global; PK06.B02 lança sync; PK06.B03/PK08.B02 child.killed; PK03.B03 PATH ausente; PK08 processos restantes)"
+      ],
+      "detail": "O plano diz que todo resíduo das 12 linhas está classificado, mas esses itens não são exercidos nem classificados. Vários caberiam sem decisão nova, só com variantes de fixture, por exemplo dica pnpm/vite-plus, installId '#', PATH ausente e diretório no lugar de bin no wrapper.",
+      "required_action": "Para cada item, exercer num caso ou registrar resíduo com classe e destino; corrigir residuals_out e as contagens."
+    },
+    {
+      "id": "R1-F11",
+      "severity": "P3",
+      "area": "inputs de cases-dp-1.json e cases-dp-2.json",
+      "title": "Membros usados fora da tabela inputs",
+      "evidence": [
+        "cases-dp-1.json:12-81 (sem A3:package/package.json e A4:package/package.json)",
+        "cases-dp-1.json:3259-3261, 3305-3307, 3529-3531 e 3732-3741 (cópias e artifact.check desses membros)",
+        "../sdk-distributed-acquisition/artifact-metadata.json (7faa8bf2... e 88e8cf40..., conferidos em memória)"
+      ],
+      "detail": "A ligação existe por artifact-metadata.json, mas a especificação, base do identity-freeze (DDP-08), não declara archive e sha desses membros, e os inputs por caso omitem A2/A7 package.json. O validador não confere isso.",
+      "required_action": "Acrescentar os membros aos inputs (topo e caso) e uma checagem no validador."
+    },
+    {
+      "id": "R1-F12",
+      "severity": "P3",
+      "area": "capability-contracts-dp.json#/interpretation (Q4)",
+      "title": "A leitura de 'capability nova' no sentido da Q4 se sustenta, com condição",
+      "evidence": [
+        "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json (Q4 trata de CAP_SYS_ADMIN/CAP_SYS_PTRACE e da postura de contenção)",
+        "../sdk-source-continuation-3-spec/coverage-plan-c3.json (OUT_NEW_CAPABILITY 'fica fora por regra da unidade')",
+        "../sdk-source-batch-2b-spec/capability-contracts-2b.json (8 capacidades criadas numa SPECIFY T1)",
+        "../sdk-distributed-acquisition/HOW-distributed-profile.md (pede o staging declarado como mecanismo)",
+        "../sdk-reference-profile/inputs/sdk/python/_runtime_setup.py:20-23 e 183-185 (release_version ausente; HTTPS fixo de github.com)"
+      ],
+      "detail": "Contra o texto da Q4 a leitura se sustenta, e ela é compatível com o precedente do 2B. A regra das especificações anteriores é de classificação: os CAP-DP-* são capacidades novas naquele sentido e só cabem com o mesmo rigor das do 2B, o que hoje falta (R1-F08). O motivo para não usar o loopback do A5 também se sustenta: a import de release_version falha antes, e um HTTPS_PROXY local não evitaria a identidade TLS de github.com.",
+      "required_action": "Registrar explicitamente que o pedido da unidade foi lido no sentido da Q4 e que os CAP-DP-* seguem o regime de capacidade nova do 2B, com confirmação do Lead."
+    },
+    {
+      "id": "R1-F13",
+      "severity": "P3",
+      "area": "coverage-plan-dp.json e t3-assessment.json",
+      "title": "Classes e destinos a ajustar",
+      "evidence": [
+        "coverage-plan-dp.json:121-128 (R-PY20-5)",
+        "../sdk-reference-profile/inputs/sdk/python/_runtime_setup.py:99-122 (platform_asset_name é pura)",
+        "coverage-plan-dp.json:185-192 (R-PK02-2)",
+        "coverage-plan-dp.json:281-288 e t3-assessment.json:15-29 (R-PK09-2)",
+        "coverage-plan-dp.json:31-43 (PY02.B09/B10 novos)"
+      ],
+      "detail": "O R-PY20-5 não executa por causa do import bloqueado (R-PY20-2), não por plataforma; a existência dos outros cinco assets na release podia ser verificada como artefato. Symlinks em fixture contida não dependem do sistema de arquivos do usuário. A pergunta T4 do R-PK09-2 não está entre as perguntas contingentes. O PY02.B10 corresponde ao ramo 'sem prefixo de PATH' do PY02.B02/B07 do v5, e esse mapeamento deve ficar explícito para o BIND. O PY20 vira OBSERVED_CLIENT_PARTIAL só com verificação de artefato.",
+      "required_action": "Reclassificar ou ajustar o motivo, incluir a pergunta T4 em t3-assessment e mapear os IDs novos aos braços do v5."
+    },
+    {
+      "id": "R1-F14",
+      "severity": "P3",
+      "area": "textos e oráculos de DP-PK06A, DP-PK02A, DP-PK02R, DP-PK04A e EDP-05",
+      "title": "Descrições imprecisas e campos sem predicado",
+      "evidence": [
+        "cases-dp-1.json:2666 (a nota diz que o self-signal 'chega ao handler'; na sonda Node 22 o handler nem roda, e o exit 0 vem do loop vazio)",
+        "cases-dp-1.json:868-874 (o contrário do PK02.B04 descreve o B05)",
+        "cases-dp-1.json:1453-1455 (not_equal fora do oráculo)",
+        "cases-dp-1.json:1741 ('sem executar a dica' não julgado)",
+        "capability-contracts-dp.json:56-67 ('propriedades públicas' contra o 'private exec' de codex.ts:12)",
+        "evaluator-r4-dp-delta.json:33-35 (EDP-05 sem excluir os CONTROL)"
+      ],
+      "detail": "O valor esperado do e_selfsig está certo, mas o mecanismo descrito não, e wrapper_self_signal não é observável. Há campos esperados sem predicado e o texto de sonda conflita com a fonte.",
+      "required_action": "Corrigir os textos, ligar ou remover os campos sem predicado e esclarecer o escopo do EDP-05."
+    },
+    {
+      "id": "R1-F15",
+      "severity": "P3",
+      "area": "validate-spec-dp.mjs.txt e validation.json",
+      "title": "Checagens e controles negativos mais fracos do que o rótulo",
+      "evidence": [
+        "validate-spec-dp.mjs.txt:185 (aceita diag 'nenhum (...)' como DIAG)",
+        "validate-spec-dp.mjs.txt:202 e validation.json (o controle 'member sha not in artifact-metadata' é rejeitado primeiro pela checagem de sha do input)",
+        "validate-spec-dp.mjs.txt:112-116 (não confere se o membro referenciado está em inputs)",
+        "validate-spec-dp.mjs.txt:153-168 (cobertura por contrato, não por ramo ou condição do G01)"
+      ],
+      "detail": "Os rótulos prometem mais do que as checagens testam, e por isso os pontos R1-F08, R1-F10 e R1-F11 passaram.",
+      "required_action": "Endurecer essas checagens e isolar cada controle negativo no caminho que ele diz testar."
+    }
+  ],
+  "checks_run": [
+    "sha256 e bytes dos 18 arquivos do review-freeze-r1.json antes e depois da revisão: iguais; sha do freeze 140b92f6... conferido",
+    "leitura em memória (tarfile/zipfile, Python -I) de A1, A2, A3, A4 e A7: sha dos membros contra artifact-metadata.json e contra os inputs dos casos; arquivos compactados contra o ledger (os menores recalculados)",
+    "todas as âncoras dos dois casos-*.json (linha e texto) contra os membros do cache e as fontes do pin: conferem",
+    "valores esperados de PK01 a PK09 derivados à mão de dist/index.js (A7), bin/codex.js (A2) e bin/codex-responses-api-proxy.js (A4): tabela de plataformas, createRequire, layouts novo/legacy, prependPathDirs, heurísticas pnpm/vite-plus/bun/npm, env gerenciado, espelhamento de código, mensagens Unsupported/Missing optional dependency",
+    "PY19, PY20 e PY02 contra codex_cli_bin/__init__.py e WHEEL do A1, client.py, _runtime_setup.py e _version.py do pin; payload A1 = A5 pelos metadados",
+    "sondas próprias em Node 22.23.2 no diretório temporário: self-signal com handler registrado sai com 0 (SIGTERM, SIGINT, SIGHUP) e 137 com SIGKILL; spawn EACCES com e sem listener sai 1 com EACCES nos dois casos; descritor de process.platform configurável",
+    "busca de strings no ELF bin/codex do A3 em memória (sha 56ef98ab... conferido)",
+    "DP2-CTRL01 contra o 2B2-CTRL01: só o último argv, slot, âncoras e inputs diferem; case_input_sha256 confere",
+    "DP1-CTRL01: código próprio e MISMATCH esperado só por wrap.exit_mirror_exact",
+    "herança: sha das bases freeze r4, delta 2B e avaliador r4; tabelas copiadas iguais às do 2B (classe e oráculo); comparação com acceptance.py e supervisor.py admitidos do 2B-2",
+    "vocabulário admitido: ts-driver.mjs, extension-loader.mjs e fixture-cli.mjs do 2AC; python-driver.py, adapter-python-exec, acceptance.py e supervisor.py do 2B-2; carry_over_next do 2B-2",
+    "cobertura: resíduos contra os ramos G01 (contracts.json, python-contracts.json) e contra remaining_open_by_contract do v5",
+    "orçamentos (24/12), gates condicionais, t3-assessment, AGENTS.md D-12 (sha conferido), limites keyless, URLs .invalid, NO_BUILD_LINK_DECLARED em todo caso não CONTROL, ausência de binário na pasta",
+    "validate-spec-dp.mjs.txt e validation.json lidos e confrontados com os achados (sem executar o validador)",
+    "decisões Q1-Q4, decisão do Lead sobre o loopback, HOW e executor-disposition da aquisição"
+  ],
+  "limits": "Não rodei Node v24.20.0, o SDK, os wrappers nem o binário publicado. O comportamento de self-signal e de erro de spawn foi conferido em Node 22.23.2 com código próprio. A ausência de serverInfo no 0.153.4 é inferida da fonte do pin e da sonda keyless do ELF do pin, sem observação do binário publicado. A saída exata de 'codex --version' e o consumo de recursos do app-server real não foram observados. Os DIAG não foram executados nem existem. Não verifiquei todos os caminhos do avaliador e do supervisor do 2B-2 para vários adapters. close-unit-dp.py.txt, verify-inputs-dp.py.txt e build-spec-dp.py.txt foram lidos só por amostragem. As sondas ficaram em /mnt/dados/tmp/ricardo/claude-1000/dp-review-r1-XEfB7H, fora do repositório; nada foi extraído para disco nem gravado no repositório.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3 - fechamento depois da R2 (APPROVE). Só reescreve os documentos de fechamento.
+# Uso: python3 -I -B close-binding-c3-r2.py.txt <repo_root>  -> atualiza state.json e next-task.json a partir das versões do
+# review-freeze-r2.json, de review-r2/review.json e de review-r2/executor-disposition.json. Não toca v6, lacunas, HOW, validação,
+# reparo, entradas nem scripts revisados.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+G02R = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/"
+REL = G02R + "sdk-continuation-3-binding"
+UNIT = os.path.join(ROOT, REL)
+NEW_ANCHOR = "24b1bbc895397abaefaab7b8583d6506e146495d"
+
+
+def load(name):
+    with open(os.path.join(UNIT, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(os.path.join(UNIT, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True).stdout.strip()
+
+
+state = load("state.json")
+nt = load("next-task.json")
+v6 = load("coverage-observed-v6.json")
+r2 = load("review-r2/review.json")
+disp = load("review-r2/executor-disposition.json")
+fr2 = load("review-freeze-r2.json")
+for name in ("state.json", "next-task.json"):
+    assert sha(name) == fr2["files"][name]["sha256"], name + " changed after the R2 freeze"
+assert r2["verdict"] == "APPROVE" and not [f for f in r2["findings"] if f["severity"] in ("P1", "P2")]
+
+# re-anchoring (R2-F06): the 13 inputs of step 0 against origin/main
+iv = load("input-verification.json")
+files = [c for c in iv["checks"] if c["check"].startswith("v5, gaps v5")][0]["detail"]["files"]
+re = {}
+for rel in files:
+    p = G02R + rel
+    re[rel] = git("hash-object", os.path.join(ROOT, p)) == git("rev-parse", "%s:%s" % (NEW_ANCHOR, p))
+state["anchors"]["spec_and_v5"]["note_r2_f06"] = ("a ref candidata foi apagada depois do freeze R2 (PR #8 integrado); o commit 1073a9dd não está "
+                                                  "em nenhuma ref")
+state["anchors"]["spec_and_v5_reanchored"] = {"ref": "refs/remotes/origin/main", "commit": NEW_ANCHOR,
+                                               "files_equal": "%d/%d" % (sum(re.values()), len(re)), "checked_at": datetime.now(timezone.utc).isoformat()}
+assert all(re.values()), re
+
+# residual groups (R2-F01 item 4): V6-PY02-ENV is outside the 77
+g = state["result"]["residuals"]["groups"]
+g["source_profile_no_new_decision"] = [x for x in g["source_profile_no_new_decision"] if x.startswith("R-")]
+g["outside_plan_no_new_decision"] = [x["id"] for x in v6["open_items_outside_plan"]]
+g["note"] = "os grupos dos 77 somam 43 resíduos não resolvidos (39 abertos, 1 parcial e 3 fechados sem observação); V6-PY02-ENV é item fora dos 77"
+
+state["status"] = "COMPLETED_LOCAL"
+state["budget"]["reviews"] = "2/2"
+state["review"]["R2"] = {"verdict": r2["verdict"], "counts": r2["summary_counts"], "path": "review-r2/review.json", "sha256": sha("review-r2/review.json"),
+                         "subject": "review-freeze-r2.json", "subject_sha256": r2["subject_sha256"],
+                         "r1_findings_after_r2": disp["r1_findings_after_r2"],
+                         "findings": [{"id": i["id"], "severity": i["severity"], "status": i["status"]} for i in disp["items"]]}
+state["review"]["R2_disposition"] = {"path": "review-r2/executor-disposition.json", "sha256": sha("review-r2/executor-disposition.json")}
+state["post_review_r2"] = {"changed": ["state.json", "next-task.json"],
+                           "added": ["review-r2/review.json", "review-r2/executor-disposition.json", "close-binding-c3-r2.py.txt",
+                                     "ledger-delta-cont-d9ef.md", "secret-scan.json"],
+                           "not_rewritten": ("coverage-observed-v6.json, gaps-review-v6.json, HOW-next-profile-v3.md, validation.json, "
+                                             "input-verification.json, repair-r1.json, archives/ e os scripts revisados ficam como no "
+                                             "review-freeze-r2.json"),
+                           "readings_for_frozen_files": [
+                               "HOW v3, linha dos três braços: 'não estavam no plano' vale como 'não mirados por caso'; só o lado do os.environ "
+                               "(V6-PY02-ENV) está fora do plano (R2-F01)",
+                               "v6 e HOW v3, base da capacidade nova: a 'regra do coordenador' é a mensagem do coordenador de 19/10/2026 ao "
+                               "designar a C3-2, refletida em ../sdk-continuation-3-1-admission/claim.json#/rules e "
+                               "../sdk-continuation-3-2-admission/claim.json#/rules (leitura ampla da Q4); o BIND adota a leitura restrita "
+                               "(R2-F02, ver review-r2/executor-disposition.json)"]}
+state["status_note"] = ("COMPLETED_LOCAL: v6 com 33/11 (nenhuma linha muda), 58 partes e 57 creditadas (PY13.B17 sem crédito pelo guarda E3-07), "
+                        "45 braços, 13 parciais do v5 fechados, PY05.B10 e PY13.B06 resolvidos; 77 resíduos 34/1/39/3 mais V6-PY02-ENV fora do "
+                        "plano; seis lacunas OPEN como no v5; R1 REVISE (1 P2, 4 P3) com reparo 1/1, R2 APPROVE (6 P3 registrados).")
+state["closing_documents"] = ["review-r2/executor-disposition.json", "next-task.json", "ledger-delta-cont-d9ef.md", "secret-scan.json"]
+state["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+# next task (R2-F01 items 1 and 2; R2-F02; carry-overs R2-F03 to R2-F05)
+nt["previous_status"] = "COMPLETED_LOCAL"
+opt = {o["id"]: o for o in nt["options"]}
+opt["DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-4"]["alternative"] = (
+    "levar os três itens (R-PY13-4, R-PY18-1 e V6-PY02-ENV) para o próximo SPECIFY que reusar a pilha Python")
+pk = opt["DECISION_PACKAGE_NEW_DECISIONS"]
+pk["what"] = ("Pacote de decisão só se o usuário ou o Lead quiserem avançar nos itens que exigem decisão nova. Quem decide, como no HOW v3 "
+              "(tabela 'Exige decisão nova'): capacidade nova de harness, o Lead autoriza uma unidade própria que a especifique (T3 do "
+              "usuário se mudar a postura de contenção); testemunha privilegiada do TS12, o usuário (rever a Q4); outras versões de "
+              "dependência, o usuário (Q5); gate T4, o usuário; BUILD nativo, a trilha da SPEC0239; plataformas, acesso a outras plataformas.")
+pk["capability_basis"] = [d["action"] for d in disp["items"] if d["id"] == "R2-F02"][0]
+nt["not_authorized_now"] = [x for x in nt["not_authorized_now"] if not x.startswith("capacidade nova de harness")] + [
+    "capacidade nova de harness (injeção de falha de fs ou do lado Node, fault novo de adapter, testemunha limitada, modo novo de peer, "
+    "oráculo de schema): fora da continuação 3 por regra da unidade (coverage-plan-c3.json#/classes.OUT_NEW_CAPABILITY; "
+    "../sdk-source-continuation-3-spec/next-task.json#/not_authorized_now) e pela regra do coordenador na designação da C3-2"]
+nt["carry_over"] = [{"id": "C3-BIND/" + d["id"], "text": d["action"]} for d in disp["items"] if d["status"] == "CARRIED_OVER"]
+nt["record"] = [{"id": "C3-BIND/" + d["id"], "text": d["action"]} for d in disp["items"] if d["status"] != "CARRIED_OVER"]
+nt["created_at"] = datetime.now(timezone.utc).isoformat()
+
+for name, doc in (("state.json", state), ("next-task.json", nt)):
+    with open(os.path.join(UNIT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], state["budget"], state["anchors"]["spec_and_v5_reanchored"]["files_equal"])

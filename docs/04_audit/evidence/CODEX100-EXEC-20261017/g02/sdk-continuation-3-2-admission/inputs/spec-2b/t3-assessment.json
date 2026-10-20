@@ -1,0 +1,93 @@
+{
+  "kind": "T3_ASSESSMENT",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-BATCH-2B",
+  "rule": {
+    "path": "../../../../../07_agents/AGENTS.md",
+    "sha256": "8306af1bb3a09658bcc9e08102184b78bbd91dd2075e016a8009026f1908bede"
+  },
+  "rule_section": "Governança proporcional (D-12): T3 = mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval; T4 = provider, canal, conhecimento, efeito externo real, dado real ou release candidate.",
+  "plan_section": {
+    "path": "../../../../../03_build/0384_plano_executivo_paridade_codex.md",
+    "sha256": "8ff6f5733f1c422d391ac5dd5d64a01297fa3eac13a9e4806d10487ac497f431"
+  },
+  "decision": "NAO_EXIGE_T3",
+  "decision_t4": "NAO_EXIGE_T4",
+  "per_capability": [
+    {
+      "capability": "CAP-2B-ASYNC-DRIVER",
+      "fit_name": "driver async",
+      "privilege": "Nenhum: só asyncio no processo do driver.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3: código próprio de evidência, sem privilégio, sem contrato público do CVG."
+    },
+    {
+      "capability": "CAP-2B-CONC-BARRIER",
+      "fit_name": "barreira de concorrência",
+      "privilege": "Nenhum: introspecção do próprio processo.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3."
+    },
+    {
+      "capability": "CAP-2B-CLOCK-RANDOM",
+      "fit_name": "controle determinístico de relógio e aleatório",
+      "privilege": "Nenhum: substituição de atributo de módulo no processo do driver.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3."
+    },
+    {
+      "capability": "CAP-2B-FAULT-CUT",
+      "fit_name": "injeção de falha por corte",
+      "privilege": "Nenhum.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3."
+    },
+    {
+      "capability": "CAP-2B-MODEL-ORACLE",
+      "fit_name": "oráculos Pydantic com fixtures de modelo",
+      "privilege": "Nenhum; nenhuma instalação nem rede (dependência já admitida e selada).",
+      "verdict": "KEEP",
+      "t3": "Não exige T3."
+    },
+    {
+      "capability": "CAP-2B-PEER-LOGIN",
+      "fit_name": "peer v2 com login sintético",
+      "privilege": "Nenhum.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3: login sintético do cliente SDK, sem identidade, credencial ou sessão do CVG; login real seria T4 (fora)."
+    },
+    {
+      "capability": "CAP-2B-PEER-BEFORE-REPLY",
+      "fit_name": "peer v2 com notificação antes da resposta",
+      "privilege": "Nenhum.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3."
+    },
+    {
+      "capability": "CAP-2B-PROC-WITNESS",
+      "fit_name": "testemunha de processo do adapter Python",
+      "privilege": "Nenhum esperado (leitura de /proc do mesmo usuário, como o env do adapter TS no 2A). Se a leitura exigir CAP_SYS_PTRACE, os slots 2B-PY02A, 2B-PY02B e 2B-PY02K não são usados e vale a pergunta T3 contingente.",
+      "verdict": "KEEP",
+      "t3": "Não exige T3 enquanto a leitura de /proc for sem privilégio; ver t3-assessment.json."
+    }
+  ],
+  "retired_capabilities": [],
+  "why": [
+    "As oito capacidades ficam em ferramentas privadas de evidência sob docs/04_audit/evidence (driver, peer, adapter, supervisor, avaliador e cliente de controle), como nas unidades anteriores.",
+    "Nenhuma exige privilégio ou capability nova do kernel: introspecção e substituições ficam no processo do driver; a leitura de /proc é do mesmo usuário; o lançador executável e o fault do adapter não mudam a contenção (sem bind mount novo, /work segue tmpfs).",
+    "Nenhuma toca código de produto, contrato público, schema, migration, identidade, policy ou approval do CVG; o login é sintético do cliente SDK, sem credencial, sessão ou rede.",
+    "Sem provider, credencial, rede, dado real ou efeito externo (T4 não se aplica)."
+  ],
+  "would_require_t3_if": [
+    "a leitura de /proc do adapter exigir CAP_SYS_PTRACE ou outra capability",
+    "alguma capacidade precisar alterar código de produto ou contrato público do CVG"
+  ],
+  "would_require_t4_if": [
+    "for preciso login real, credencial, rede, wheel/npm distribuídos ou Codex CLI real"
+  ],
+  "user_question": null,
+  "contingent_question": {
+    "when": "DIAG-PY-PROCWITNESS não conseguir ler /proc/<pid>/cmdline, environ e cwd do adapter sem privilégio",
+    "effect_meanwhile": "2B-PY02A, 2B-PY02B e 2B-PY02K não são usados e PY02.B01-B04, B06-B08 seguem OPEN; o resto do 2B-1 segue.",
+    "question": "Você autoriza dar ao supervisor de evidência a capability CAP_SYS_PTRACE só para ler cmdline, environ e cwd do adapter nos slots 2B-PY02A, 2B-PY02B e 2B-PY02K?"
+  }
+}

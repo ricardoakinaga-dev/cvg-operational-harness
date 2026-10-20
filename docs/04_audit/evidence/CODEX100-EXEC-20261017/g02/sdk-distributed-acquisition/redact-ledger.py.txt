@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - reparo do R1-F01 (sem rede).
+# Uso: python3 -I -B redact-ledger.py.txt <unit_dir>
+# O url_effective do redirecionamento do A5 trazia uma URL pré-assinada (assinatura SAS e JWT na query), emitida de forma anônima
+# para um asset público. Este script troca, no acquisition-ledger.json, toda URL com query por esquema + host + caminho,
+# guarda só os nomes dos parâmetros e o sha256 da URL original, e registra o sha do ledger anterior. O original não é
+# guardado em lugar nenhum. Nenhum outro campo muda.
+import hashlib
+import json
+import os
+import sys
+from urllib.parse import urlsplit, parse_qsl
+
+UNIT = sys.argv[1]
+P = os.path.join(UNIT, "acquisition-ledger.json")
+raw = open(P, "rb").read()
+before = hashlib.sha256(raw).hexdigest()
+doc = json.loads(raw)
+red = []
+
+
+def redact(holder, key, where):
+    url = holder.get(key)
+    if not isinstance(url, str) or "?" not in url:
+        return
+    s = urlsplit(url)
+    holder[key] = "%s://%s%s" % (s.scheme, s.netloc, s.path)
+    holder[key + "_query_redacted"] = {"param_names": sorted({k for k, _ in parse_qsl(s.query, keep_blank_values=True)}),
+                                      "original_url_sha256": hashlib.sha256(url.encode()).hexdigest(),
+                                      "reason": "URL pré-assinada de redirecionamento (assinatura SAS e JWT na query); só esquema, host e caminho ficam (R1-F01)"}
+    red.append(where)
+
+
+for r in doc["requests"]:
+    redact(r, "url_effective", "requests[id=%s].url_effective" % r["id"])
+    redact(r, "url", "requests[id=%s].url" % r["id"])
+for a in doc["artifacts"]:
+    if a.get("request"):
+        redact(a["request"], "url_effective", "artifacts[id=%s].request.url_effective" % a["id"])
+        redact(a["request"], "url", "artifacts[id=%s].request.url" % a["id"])
+doc["redaction"] = {"finding": "R1-F01", "ledger_sha256_before": before, "fields": red,
+                    "rule": "nenhuma URL com query fica no registro; o original não é guardado em docs/ nem como preimagem"}
+text = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+assert "sig=" not in text and "jwt=" not in text and "eyJ" not in text
+open(P, "w", encoding="utf-8").write(text)
+print("redacted", red, "before", before[:12])

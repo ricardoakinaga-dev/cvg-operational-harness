@@ -1,0 +1,163 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T15:19:49Z",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "6caeaec5ce07f5d5faa3da153fdb286c26c55287258d6967604b24a6ba5c01f1",
+  "subject_hash_check": {
+    "before": "ok",
+    "after": "ok"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 2 P2, 7 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "C3-PY13ER / E3-07 / R-PY13-4",
+      "title": "Com a errata T1 das esperas, o known_bad 'pular o cleanup' ainda termina em INVALID_CAPTURE, porque fault.fired_as_declared (sanidade) falha quando o cleanup não roda",
+      "evidence": [
+        "cases-c3-2.json:3214 (C3-PY13ER expected.fault.fired = [{attr: cancel_goal_operation, count: 1}])",
+        "cases-c3-2.json:3265 (known_bad_selftest: MISMATCH pela regra 6, só hook.events_exact, probe.values_exact e excepthook.records_exact falham)",
+        "cases-c3-2.json:190-193 (fault.fired_as_declared, classe peer_or_capture_sanity: 'falha leva a INVALID_CAPTURE')",
+        "evaluator-r4-c3-delta.json:41 (E3-07: autoteste negativo deve dar MISMATCH, não INVALID_CAPTURE)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/async_client.py:276-281 (cancel_goal_operation só é chamado dentro de stop_cancelled_goal, no thread codex-goal-start-cleanup)",
+        "../sdk-batch-2b2-admission/python/harness2b.py:740-748 (o wrapper do fault só emite FAULT quando é chamado)",
+        "../sdk-batch-2b2-admission/python/acceptance.py:800-830 (fault_fired exige len(frames) == count)"
+      ],
+      "detail": "O fault de C3-PY13ER fica em x._sync.cancel_goal_operation e só dispara quando o thread de cleanup chama esse método. No known_bad 'pular o cleanup' esse thread não existe, então há zero quadros FAULT contra count 1 declarado. fault.fired_as_declared falha e, por ser sanidade, a regra 4 decide INVALID_CAPTURE antes da regra 6. Tornar CLIENT_EFFECT os passos 11 a 13 não basta. Uma captura sintética fiel ao known_bad não alcança o autoteste de E3-07 nem o known_bad_selftest. O resíduo R-PY13-4 (IN_SPEC) e a discriminação 'cleanup pulado' do PY13.B17 continuam sem discriminação, a mesma limitação do DV1. O lado 'exceção engolida ou rota mantida' do PY13.B18 é discriminado, porque nele o fault dispara.",
+      "required_action": "Declarar uma cláusula E3 (ou ajustar o caso) para que, no C3-PY13ER, zero disparos do fault declarado sejam efeito do cliente só quando o alvo nunca foi chamado. O FAULT_SCOPE 'removed' já registra calls=0, e h_stop não tem call. Nesse caso decidem os predicados de cliente. Contagem diferente com o alvo chamado, ou disparo não declarado, continua INVALID_CAPTURE. Refazer o known_bad_selftest com todos os predicados avaliados (inclusive wire.requests_exact e api.steps_exact, que também falham) e a regra que decide. Acrescentar um autoteste negativo: fault chamado com contagem errada continua INVALID_CAPTURE."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "D3-03 / E3-03 / C3-TS03 / C3-TS05 (R-TS03-1, R-TS05-1)",
+      "title": "A vigia inotify de /work/tmp nunca foi admitida (nem tentada), mas o D3-03 a dá como 'admitida como informativa no 2A' e a torna decisiva como client, sem sanidade da própria vigia",
+      "evidence": [
+        "freeze-r4-c3-delta.json:60 (D3-03: 'admitida como informativa no 2A')",
+        "../sdk-batch-2a-admission/state.json:57 ('inotify não foi tentado no DIAG-TS-TMPWATCH; tmp.inotify_informational = NOT_OBSERVED')",
+        "../sdk-batch-2ac-admission/python/acceptance.py:368-369 (tmp.inotify_informational: 'vigia inotify não admitida nesta unidade')",
+        "../sdk-source-batch-2a-spec/capture-contract.json:83-84 (vigia em /proc/<pid do driver>/root/work/tmp, 'se não puder ser admitida ... NOT_OBSERVED')",
+        "../sdk-batch-2ac-admission/python/supervisor.py:307-325 (o F4-06 vigia o caminho de host do executável do adapter, não o tmpfs do sandbox)",
+        "cases-c3-1.json:243-246 (tmp.inotify_schema_create_delete, classe client)"
+      ],
+      "detail": "A premissa do D3-03 é falsa: a vigia de /work/tmp nunca foi implementada nem tentada. O mecanismo admitido (F4-06) vigia um caminho de host. Vigiar o tmpfs do bwrap por /proc/<pid>/root é código novo do supervisor, uma testemunha que pela própria interpretação da unidade estaria perto de 'capacidade nova'. O novo predicado tmp.inotify_schema_create_delete é client e não tem predicado de sanidade da vigia. Vigia armada tarde, IN_Q_OVERFLOW, IN_IGNORED, caminho inacessível no meio do caso ou drenagem tardia viram MISMATCH, ou seja, falha de harness vira MISMATCH. O gate do DIAG qualifica uma vez, não por janela. Além disso, a R1-F11 citada recomendava o F4-06 (testemunha do executável) nos passos com spawns=0, não uma vigia de /work/tmp.",
+      "required_action": "Corrigir a premissa do D3-03 e justificar explicitamente por que a vigia por /proc/<pid>/root não é capacidade nova; se não houver justificativa, mover R-TS03-1 e R-TS05-1 para OUT_NEW_CAPABILITY. Acrescentar um predicado peer_or_capture_sanity por janela: vigia armada antes da liberação do WINDOW_OPEN, sem IN_Q_OVERFLOW nem IN_IGNORED, drenagem no fechamento. Assim a falha da vigia dá INVALID_CAPTURE. Incluir no E3-03 um autoteste com vigia quebrada que dê INVALID_CAPTURE."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "C3-PY13F / C3-PY13ER (réplicas) e validador",
+      "title": "As réplicas mudam campos que replay_of.changed_fields não declara, e o validador só compara o case_input",
+      "evidence": [
+        "cases-c3-2.json:2758 (C3-PY13F changed_fields: id, role, sdk_calls, expected, branches_targeted, predicates, anchors)",
+        "cases-c3-2.json:3365 (C3-PY13ER changed_fields: id, role, sdk_calls, expected, known_bad, predicates, infra)",
+        "validate-spec-c3.mjs.txt:240-260 (checagem de réplica restrita ao peer_script e aos sdk_calls)"
+      ],
+      "detail": "Comparei objeto a objeto com o 2B-PY13D e o 2B-PY13E; os sha das bases conferem. O C3-PY13F muda sem declarar known_bad (texto, e judged_by de hook.events_exact/wire.requests_exact/wire.order_constraints/probe.values_exact para hook.events_exact/api.steps_exact), infra (+CAP-PY-SDKCALLS-C3), inputs (+py/_goal.py) e expected_observation. O C3-PY13ER muda sem declarar branches_targeted (textos) e expected_observation. Nos dois casos, peer_script e os passos fora do declarado estão iguais.",
+      "required_action": "Declarar essas mudanças em changed_fields, ou listar unchanged_fields como no 2A-TS12R. Estender o validador para comparar todos os campos de topo, exceto os declarados."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "C3-PY17 (PY17.B02)",
+      "title": "A ordem na fila de login das duas conclusões de L17c depende de uma corrida não controlada",
+      "evidence": [
+        "cases-c3-2.json:5269 (as conclusões 'bad' e válida saem em after_reply)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/_message_router.py:114-124 (register_login põe as pendentes na fila fora do lock)",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/client.py:451-455"
+      ],
+      "detail": "As notificações chegam depois da resposta, em corrida com register_login. Se N1 ficar pendente e N2 for roteada entre a liberação do lock e o put das pendentes, N2 entra na fila antes de N1. Nesse intercalamento, o contrário 'wait devolve a primeira da fila' dá o mesmo resultado e a discriminação do 'pula a não tipada' fica vazia. A janela é estreita e o SDK correto passa sempre.",
+      "required_action": "Emitir as duas conclusões em before_reply, para que ambas fiquem pendentes antes da resposta e sejam enfileiradas em ordem. Opcionalmente, testemunhar o salto, por exemplo com uma contagem de chamadas de next_login_notification igual a 2."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "C3-PY15A (PY15.B11)",
+      "title": "A primeira entrada de arm_discrimination ('itens ou usage de outro turn') não discrimina o filtro do coletor",
+      "evidence": [
+        "cases-c3-2.json:4157",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/_message_router.py:298-321",
+        "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/generated/notification_registry.py:270-296 (ItemCompleted e ThreadTokenUsageUpdated roteados por turnId)"
+      ],
+      "detail": "O roteador manda os eventos com turnId OTHER para outro _TurnState, e a subscription de T15A nunca os vê. Um coletor sem o filtro payload.turn_id == turn_id daria o mesmo r_items 3 e r_total 15. Por isso a âncora _run.py:111 não sustenta essa entrada. O braço continua discriminado pelas outras duas entradas (final_answer; failed versus interrupted).",
+      "required_action": "Remover essa entrada ou reescrevê-la como observação do roteamento, sem atribuí-la ao coletor."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "C3-TS04 / C3-TS12 (predicados herdados)",
+      "title": "Os predicados herdados leem chaves de expected que mudaram de forma, e um oráculo copiado contradiz o caso",
+      "evidence": [
+        "cases-c3-1.json:148, 198, 1040, 1068",
+        "../sdk-batch-2ac-admission/python/acceptance.py:378-381, 434 (exp['first_event'], exp['schema_file_bytes'], exp['schema_file_trailing_lf'])",
+        "cases-c3-1.json:178 (cleanup.child_terminated_by_SIGTERM: 'vindo do finally do exec')",
+        "evaluator-r4-c3-delta.json (E3-06)"
+      ],
+      "detail": "O C3-TS04 usa api.first_event_exact sem expected.first_event e fixture.schema_bytes_exact com expected.schema_file {bytes, trailing_lf}, não com as chaves do 2A. No C3-TS12 o SIGTERM vem do abort do child_process. O finally não mata o filho, porque child.killed é true, mas o oráculo copiado diz 'vindo do finally'. O E3-01 manda manter o oráculo da base.",
+      "required_action": "Declarar no E3 de onde cada predicado herdado lê o valor (first_event = yields[0]; schema_file.bytes) ou acrescentar as chaves do 2A. Esclarecer o oráculo do SIGTERM no C3-TS12: SIGTERM não enviado pelo supervisor nem pelo driver, sem exigir o finally."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "validate-spec-c3.mjs.txt / validation.json",
+      "title": "Dois controles negativos não testam o que o nome diz",
+      "evidence": [
+        "validate-spec-c3.mjs.txt:383",
+        "validate-spec-c3.mjs.txt:393",
+        "validation.json:106, 156"
+      ],
+      "detail": "'new Python arm colliding with a 2B arm' apaga PY03.B11 de new_arm_ids, que não existe no 2B. Testa braço desconhecido, e o caminho de colisão (braço do 2B declarado como novo) não tem controle negativo. 'wait_class on a non-wait step' é rejeitado primeiro por 'infra missing D3-05', então não isola a checagem de wait_class. A checagem de réplicas tem a limitação do R1-F03.",
+      "required_action": "Trocar o primeiro controle por uma colisão real (por exemplo, declarar PY13.B05 como braço novo). No segundo, acrescentar D3-05 à infra da cópia para isolar a checagem de wait_class."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "freeze-r4-c3-delta / coverage-plan / CONTROL / state",
+      "title": "Inconsistências menores de texto e de declaração",
+      "evidence": [
+        "freeze-r4-c3-delta.json:89-91 (D3-06: carry-overs antes do source freeze do C3-2)",
+        "freeze-r4-c3-delta.json:107 (D3-08 com sub_lots C3-1 e C3-2) e execution-budget-c3-1.json (order 2)",
+        "state.json:459 ('Docker (exceto o gitleaks pedido)', sem registro de varredura na pasta)",
+        "control-slot-contract-c3.json (changed_fields)",
+        "coverage-plan-c3.json R-PY13-6 (capability_needed)"
+      ],
+      "detail": "1. O D3-06 põe R1-F02..F04 só antes do freeze do C3-2, mas o D3-08 e o orçamento do C3-1 os aplicam também à pilha Python do CONTROL do C3-1. 2. A nota cita um gitleaks via Docker sem artefato de varredura. 3. Nos CONTROL, copy_of.changed_fields omite inputs, case_input_note, slot, sub_lot e a remoção de base_contract e changed_from_base; as linhas, o peer_script e os predicados conferem. 4. Em R-PY13-6, a 'testemunha limitada' citada já existe (worker.parked e worker.still_parked do 2B-PY08X). O que falta de fato é um modo de peer que feche o stdout mantendo o stdin; a classificação OUT continua defensável.",
+      "required_action": "Alinhar D3-06 com D3-08. Registrar a varredura ou remover a menção. Completar changed_fields dos CONTROL. Corrigir o capability_needed de R-PY13-6."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "C3-PY13ER (passos 12 e 13, CLIENT_EFFECT)",
+      "title": "Um cleanup só lento passa a dar MISMATCH",
+      "evidence": [
+        "cases-c3-2.json:3149 e seguintes (passos 12 e 13 com wait_class CLIENT_EFFECT e timeout_s 3)",
+        "freeze-r4-c3-delta.json (D3-05)"
+      ],
+      "detail": "Com CLIENT_EFFECT, um thread de cleanup vivo além de 3 s por carga de escalonamento (não pelo SDK) leva a routes ['t13e'] e excepthook vazio, e isso vira MISMATCH. O risco é baixo e a adjudicação R4-05 atenua, mas a errata abre esse caminho.",
+      "required_action": "Considerar efeito do cliente só o thread ausente ou nunca iniciado. Thread encontrado e vivo depois do prazo segue HARNESS_PRECONDITION. Alternativa: prazo maior."
+    }
+  ],
+  "checks_run": [
+    "sha dos 17 arquivos do review-freeze-r1 antes e depois (todos iguais; sha do próprio freeze conferido)",
+    "Leitura integral de cases-c3-1.json e cases-c3-2.json, caso a caso, contra exec.ts, thread.ts, codex.ts e outputSchemaFile.ts do pin e contra client.py, async_client.py, _message_router.py, _goal.py, _run.py, _inputs.py, _login.py, _runtime_requirements.py, models.py, errors.py e v2_all.py",
+    "argv (ordem das flags, bytes com TAB, U+0001, U+001F e DEL, argv_json_bytes e argv_count), env (inclusive a herança do bootstrap no C3-TS09B) e stdin de todos os casos TS",
+    "case_input_sha256 dos 29 slots recalculado em Python (compacto) e em Node 22 (JSON.stringify)",
+    "Todas as âncoras (arquivo, sha, linha e texto) recalculadas; sha de entradas, bases dos deltas, AGENTS.md (D-12), v5, HOW v2 e disposição R2",
+    "Sondas Node 22 com código próprio: mensagens do V8 (not iterable, null.type, BigInt, ciclo, estouro de pilha), Object.entries com getter e chave não enumerável, JSON.stringify dos controles, AbortError/ABORT_ERR do child_process com a mesma sequência do exec.ts (killed=true no finally)",
+    "Regex _VERSION_PATTERN lida do packaging preparado e aplicada com re (sem importar packaging): '0.152.0-alpha.1.2' é inválida; '0.152.0a1.post2' é válida e acima de 0.151.0; Version('') dá InvalidVersion",
+    "Discriminação de cada braço mirado, por leitura do roteamento, da poda, dos cursores, do goal stream, do interrupt e dos defaults dos modelos",
+    "Determinismo de C3-TS04 (write_then_hold), C3-TS12 (CHILD_HELD/REQUEST_HELD), C3-PY08 (fail_all/worker.join), C3-PY12 (pending_turn/probe.until), C3-PY13ER, C3-PY14 e C3-PY17",
+    "Composição contra o avaliador e o driver admitidos (fault_fired, hook_identity, CLIENT_EFFECT_WAITS, FaultSet, summary_v2, to_json e enums)",
+    "CONTROL contra 2B1-CTRL01 e 2B2-CTRL01 (sha dos objetos base, linhas, peer_script e predicados) e réplicas contra 2B-PY13D e 2B-PY13E",
+    "Resíduos: os 77 classificados, contagens por classe, IN contra casos e braços, OUT de decisão contra Q1-Q5 e a tabela da errata, PY04 sem default não-None, PY15 'sem terminal' inalcançável",
+    "Orçamento (15/9 e 14/10, até 24/12), vagas condicionais e gates, t3-assessment e limites (URLs sintéticas, sem rede, credencial ou login real; 0 recibos e 0 crédito)",
+    "Leitura do validador e de validation.json, inclusive os 19 controles negativos"
+  ],
+  "limits": "Não executei o SDK, Pydantic, packaging, supervisor, peers nem o validador, que grava validation.json na pasta da unidade. As sondas usaram Node 22, não o v24.20.0 do perfil, e só código próprio. Os valores dependentes da Pydantic (repr, validação lax de bool, dumps) foram conferidos por leitura, não por execução. Não verifiquei a viabilidade real da vigia inotify por /proc/<pid>/root nem tempos de escalonamento. As corridas do C3-PY17 e do C3-PY13ER foram avaliadas por leitura de código. Não revisei a implementação futura dos deltas D3 e E3.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

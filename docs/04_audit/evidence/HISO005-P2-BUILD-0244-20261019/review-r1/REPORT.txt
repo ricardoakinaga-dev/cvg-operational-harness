@@ -1,0 +1,26 @@
+HISO005-P2-BUILD-0244 — crítica R1 (crítico novo, não-fork)
+Congelada: patchSha256 1bc040dddbfe26903f46d2bbc351e090acecc49a0d163230c948fe834f502747 (engine b0e636b4…, teste cb5d5fac…)
+Veredito: REVISE (1 P1, 3 P2, 7 P3)
+
+O que está certo
+- E2 conforme à §3.2: raiz ClassDeclaration mantida, nome pré-declarado U (TDZ, inclusive dentro de função), export U, default nomeada e anônima, declare class com RUNTIME_DECLARATION, new e chamada recusados.
+- E1 conforme à §3.1 em precedência (engine), default excluído, ambiguidade sticky, diamante, regra 5, qualificação transitiva, ciclo, CJS (INTEROP), aresta contida e cópia na instrução.
+- E1/E2 desligados no census: v4 e v5 dão census idêntico, salvo kernelVersion, em 21 fixtures do crítico. Na raiz real o corpo do census para em 1 módulo (P3-04).
+- Migrações de literal: exatamente as registradas.
+- A primeira falha vale para os bytes congelados: 25/40 de novo na v4.
+- §3.3 recalculada de forma independente a partir dos selados, com contagens iguais: somem 1.541 = 1.402 + 48 + 10 + 81; aparecem 303 = 289 + 14. Normal = strict, validation true, zero provas.
+- Cópias diagnósticas re-derivadas dos patches publicados, byte a byte.
+
+Obrigatórios
+- R1-01 (P1) Identidade de namespace reexportado. `import * as ns` + `export { ns }` e `export * as ns from m` recebem `m#*namespace*`. Estrelas ambíguas viram PROVEN: F01 e F02 são ambíguos no ECMAScript e no Node 22.23.2; F03 é ambíguo no Node 22. Mudança: identidade local arquivo#nome nos dois caminhos (testado: F01–F03 passam a AMBIGUOUS_STAR, controle F36 segue PROVEN, suíte 40/40). Depois, testes novos, congelada r2 e nova conservação.
+- R1-02 (P2) Testes de precedência não discriminam. Desligando a regra 3 (mutação M1), 4 dos 5 casos ainda passam por sobrescrita. Faltam indireto antes e `as N` antes (F04/F05) e casos "depois" com duas estrelas conflitantes (F06/F07).
+- R1-03 (P2) A §3.3/MS05 exige publicar tupla a tupla as 1.541 que somem e as 303 que aparecem. A evidência só traz contagens.
+- R1-04 (P2) Risco não declarado: contexts foi de 145 para 229 sobre o teto de 256 (89%; estouro = BODY_CUT). Estados foram de 125.460 para 138.560 sobre 250.000; tempo de ~106 s para ~135 s sobre 300 s. Declarar uso, teto e folga sem mudar limites. Recomendado: achar a função que chega a 229.
+
+Opcionais (P3): F10 na suíte (mutação M2 sobrevive); registrar a troca de bytes do teste após o first-red; definição de "tocado" é superconjunto (denominadores estritos 394/764/977/1174, mesmo veredito); ressalva do census real; classe raiz 1 por subconjunto de etiquetas; documentar desvios conservadores (as ns não qualificado envenena, export antes de import, declare const após estrela, divergência do Node 22 no diamante); fixtures de violação F22a/F22b.
+
+Não avaliado aqui: MS07 (16 gates, consumidor fresco) e MS08.
+
+Incidente do crítico: as execuções de vitest nas cópias de laboratório usaram node_modules por link simbólico para a candidata. Por isso regravaram o cache de resultados do vitest da candidata, node_modules/.vite/vitest/<hash>/results.json, às 00:15 -0300. O cache é ignorado pelo git e regravado a cada execução, inclusive nas do BUILD, e só afeta a ordem dos testes. Nenhum arquivo rastreado foi alterado. Detalhes em review.json, campo incident.
+
+Detalhes, fixtures e comandos: review.json.
