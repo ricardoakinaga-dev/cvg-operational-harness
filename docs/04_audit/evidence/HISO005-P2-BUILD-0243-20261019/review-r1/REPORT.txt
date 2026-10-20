@@ -1,0 +1,44 @@
+HISO005-P2-BUILD-0243, crítica R1 de código (crítico novo, não-fork, só leitura)
+SPEC0243 6db49cf5…, pai bcd49fa6…, freeze source-freeze-r1.json 4a74bd67…
+Os 13 arquivos e o patch conferem com o working tree da candidata.
+
+VEREDITO: REVISE. Obrigatórios: R1-01 (P1), R1-02, R1-03, R1-04 e R1-05 (P2).
+
+O que está certo:
+- §3.1: constante única, fechada e congelada; o prefixo é comparado de forma exata, depois de safe().
+- §3.2 na instalada: a listagem inteira passa por UTF-8, safe, tipo e modo antes da exclusão;
+  o archive usa --literal-pathspecs; o snapshot é conferido exato nos dois sentidos (após extrair e logo antes do npm).
+- §3.2 na compilada: uma pathspec :(exclude) constante, ambiente limpo e conferência física antes do node_modules.
+- §3.3: a ordem bate com a SPEC nas duas receitas, e as recusas nomeadas são SOURCE_/COMPILED_SOURCE_EXCLUSION_CONFLICT.
+  A guarda não recusa a árvore real: sem .npmrc, globs fora de docs, lock sem docs/*, sem file:, links só em apps/packages/legacy/products.
+- §3.4: o leitor instalado recusa exclusão ausente, diferente, extra, vazia ou que não é lista.
+  O leitor v2 recusa recibo v1 e confere o argv exato do archive (a mesma função archiveArgv) e o cwd.
+- §3.5/§3.6: nenhum limite mudou; os campos novos estão dentro da lista fechada.
+  Nenhum skip, asserção, pin ou gate foi relaxado.
+- RS01: a primeira falha está preservada (SOURCE_LIMIT na pré-imagem). Migrações: RT02 e sourceExclusions preservam a intenção.
+
+Obrigatórios:
+R1-01 P1: a evidência verde não cobre os bytes congelados.
+  Os 3 scripts e os 2 testes novos foram regravados às 10:59Z, depois do focal (10:57Z) e antes do freeze (11:00Z).
+  Native 76/76, focal 808/808 e os verdes rodaram com b7441a3c/a7815ce7/909176a2 (testes e44e2b26/e41a4ba1).
+  O freeze tem bd938a0c/2eff2e72/707ea23e (testes 8afaa5fc/11d39cc8). Eu só rodei o portátil: 15/15.
+  Correção: repetir portátil, perfil nativo e focal nos bytes congelados.
+R1-02 P2: a §3.3(1) diz "glob alcança um caminho sob o prefixo", mas a guarda só recusa glob curinga
+  quando o diretório casado tem package.json rastreado (linha 100). Padrão literal já recusa sem manifesto.
+  Correção: tirar a condição de manifesto e testar.
+R1-03 P2: na compilada, com --dependencies-root diferente, o fechamento na origem não roda (linha 486).
+  Uma entrada .d.ts sob o prefixo que o tsc tolera ausente (include/typeRoots) gera recibo,
+  contra o "sempre antes de qualquer recibo" da §3.3 e o RS04. O leitor segue fail-closed.
+  O comentário "the only layout the reader proves" está impreciso.
+R1-04 P2: o RS03 da compilada não tem caso de nome não UTF-8.
+  A recusa depende de core.quotePath=true, e a config local do repo não é neutralizada.
+  Correção: teste mais -c core.quotePath=true, ou listagem -z com ida e volta UTF-8.
+R1-05 P2: a migração RT03 foi registrada 0,71 s depois do mtime do teste editado.
+  O conteúdo está aceito, mas o registro diz "antes da edição". Correção: corrigir o registro.
+
+Opcionais (P3): R1-06 a checagem de link da instalada pula a denylist antiga (node_modules/dist/.env), mesmo sob o prefixo;
+R1-07 a guarda lê manifestos sem teto antes do SOURCE_LIMIT; R1-08 lacunas menores de cobertura;
+R1-09 comparar o fechamento da origem com compilerSources no build; R1-10 preimagesAtParent grava null.
+
+RS06/RS07 (receitas reais): N/A nesta rodada, estão em execução pelo executor.
+Arquivos escritos: só review-r1/review.json e review-r1/REPORT.txt. A candidata não foi alterada.

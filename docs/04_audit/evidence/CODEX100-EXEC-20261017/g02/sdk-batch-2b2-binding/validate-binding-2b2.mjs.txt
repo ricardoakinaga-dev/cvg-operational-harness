@@ -1,0 +1,403 @@
+// DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2 - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-binding-2b2.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Recalcula a partir das entradas: casos consumidos, status por linha, braços observados e abertos pela tabela de discriminação, escopos
+// parciais tirados do texto da tabela, contagens, sha das fontes e dos acceptance.json citados, lacunas e a conferência da projeção do v4.
+// Confere conteúdo: cada evidência de braço contra o acceptance; marcadores das qualificações (inclui a decisão do Lead F01); as erratas
+// 2B1-BIND/R2-F01 e R2-F02 e a cópia carried_from_v4 linha a linha; e o carry-over 2B1-BIND/R2-F03 (todo não observado e todo não
+// discriminado nos acréscimos do resto, com o rótulo no destino; sha de cada base de fonte igual ao da identity freeze). Roda controles negativos.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+
+const G02 = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02'
+const UNIT = G02 + '/sdk-batch-2b2-binding'
+const ADM = G02 + '/sdk-batch-2b2-admission'
+const ADM1 = G02 + '/sdk-batch-2b1-admission'
+const B1 = G02 + '/sdk-batch-2b1-binding'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const shaFile = (p) => sha(readFileSync(p))
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const J = (x) => JSON.stringify(x)
+const armId = (a) => (/^((?:TS|PY|PK)\d\d\.B\d\d)/.exec(a) || [])[1] ?? null
+
+const b1Next = load(join(B1, 'next-task.json'))
+const adj = load(join(ADM, 'adjudication-r1.json'))
+const adj1 = load(join(ADM1, 'adjudication-r1.json'))
+const inputs = {
+  v4: load(join(B1, 'coverage-observed-v4.json')), gaps4: load(join(B1, 'gaps-review-v4.json')), proj4: load(join(B1, 'projection-2b2-on-v4.json')),
+  adj, dc: load(join(ADM, 'discrimination-check-2b2.json')), lead: load(join(ADM, 'lead-decision-f01.json')),
+  cases: Object.fromEntries(load(join(ADM, 'inputs/spec-2b/cases-2b-2.json')).cases.map((c) => [c.id, c])),
+  cases1: Object.fromEntries(load(join(ADM1, 'inputs/spec-2b/cases-2b-1.json')).cases.map((c) => [c.id, c])),
+  plan: load(join(ADM, 'inputs/spec-2b/coverage-plan-2b.json')),
+  acc: Object.fromEntries(adj.rows.map((r) => [r.case, load(join(ADM, r.dir, 'acceptance.json'))])),
+  acc1: Object.fromEntries(adj1.rows.map((r) => [r.case, load(join(ADM1, r.dir, 'acceptance.json'))])),
+  tree: load(join(ADM1, 'identity-freeze-r4-2b1.json')).trees['sdk-python'],
+}
+const DC_PATH = join(ADM, 'discrimination-check-2b2.json')
+
+// Regras fixas desta unidade (marcadores mínimos; os textos vêm do build).
+const QUAL_MARKERS = {
+  'PY13|PY13.B17': ['lead-decision-f01.json', 'INVALID_CAPTURE', 'forçada pelo harness', 'corrida natural'], 'PY13|PY13.B18': ['lead-decision-f01.json', 'INVALID_CAPTURE', 'falha injetada'],
+  'PY13|PY13.B13': ['Relógio controlado', 'não é afirmado'], 'PY14|PY14.B05': ['falha injetada'], 'PY14|PY14.B14': ['falha injetada'],
+  'PY09|PY09.B02': ['shim', 'não é afirmado'], 'PY09|PY09.B12': ['shim', 'não é afirmado'], 'PY09|PY09.B13': ['shim', 'não é afirmado'],
+  'PY17|PY17.B04': ['não generaliza', 'device code'],
+}
+const MUST_REMAIN_ADD = new Set(['PY13', 'PY14', 'PY17', 'PY18'])
+// Reparo R1-F04 e R1-F06: evidência de apoio exigida e itens qualificados que precisam chegar aos acréscimos.
+const MUST_SUPPORT = { 'PY09|PY09.B02': '2B-PY09D' }
+const MUST_IDS_IN_ADD = { PY13: ['PY13.B17', 'PY13.B13'], PY18: ['schemas JSON do pin', 'pydantic'] }
+const LABELS = [['continuação seguinte do perfil de fonte', 'SOURCE_BATCH_CONTINUATION'], ['perfil distribuído', 'DISTRIBUTED_PROFILE']]
+const SPLIT = /^Observado:\s*([\s\S]*?)\s*(Não observado|Não distinguido|Vácuo):\s*([\s\S]*?)\s*(?:Ressalva da R1 para o BIND:[\s\S]*)?$/
+const NOT_OBS_ADD = '; cópia versus uso do os.environ do driver (efeito no pai não sondado)'
+const LIFT = ['source_contract', 'gaps']
+
+function verifyEvidence(acc, frozen, it) {
+  const p = acc.predicates.find((x) => x.id === it.predicate)
+  if (!p) return 'predicate absent'
+  if (!p.ok) return 'predicate not ok'
+  if (!frozen.includes(it.predicate)) return 'predicate not frozen for the case'
+  if (it.class !== p.class) return 'class differs'
+  const d = p.detail
+  if (it.keys) for (const k of it.keys) if (!(d && typeof d === 'object' && !Array.isArray(d) && k in d)) return `probe key ${k} absent`
+  if (it.steps) for (const s of it.steps) if (!(Array.isArray(d) && d.some((x) => x.step === s && x.ok === true))) return `step ${s} absent`
+  if (it.tokens) {
+    const pools = it.predicate === 'hook.events_exact' ? d.chains : d
+    for (const t of it.tokens) if (!(Array.isArray(pools) && pools.some((o) => o && t in o))) return `token ${t} absent`
+  }
+  if (it.entries) for (const e of it.entries) if (!(d.entries ?? []).some((x) => x.matched?.length && Object.entries(e).every(([k, v]) => x.entry?.[k] === v))) return `hook entry ${J(e)} absent`
+  if (it.workers) for (const w of it.workers) if (d?.[w]?.ok !== true) return `worker ${w} absent`
+  if (it.rules) for (const r of it.rules) if (!(d.checked ?? []).some((x) => x.rule === r && x.ok === true)) return `peer rule ${r} absent`
+  return null
+}
+const ev2 = (cid, it) => verifyEvidence(inputs.acc[cid], inputs.cases[cid]?.predicates ?? [], it)
+
+function verifyBasis(b, inp, baseDir) {
+  if (b.source && b.source.endsWith('discrimination-check-2b2.json')) {
+    if (shaFile(DC_PATH) !== b.sha256) return 'discrimination sha'
+    const e = inp.dc.arms.find((x) => x.case === b.case && x.arm === b.arm)
+    return e && e.status === b.status ? null : `discrimination entry ${b.case}/${b.arm} is not ${b.status}`
+  }
+  if (b.probe) {
+    const acc = inp.acc[b.case] ?? inp.acc1[b.case]
+    const p = acc?.predicates.find((x) => x.id === 'probe.values_exact')
+    return p && J(p.detail?.[b.probe]) === J(b.equals) ? null : `probe ${b.probe} of ${b.case} is not ${J(b.equals)}`
+  }
+  const path = normalize(join(baseDir, b.source))
+  let text
+  try { text = readFileSync(path, 'utf8') } catch { return `source ${b.source} unreadable` }
+  if (sha(Buffer.from(text, 'utf8')) !== b.sha256) return `source sha of ${b.source}`
+  if (b.source.includes('/openai_codex/')) {
+    const key = 'openai_codex/' + b.source.split('/openai_codex/')[1]
+    if (inp.tree[key]?.sha256 !== b.sha256) return `source sha of ${b.source} differs from the identity freeze`
+  }
+  if (b.lines) return text.split('\n').slice(b.lines[0] - 1, b.lines[1]).some((l) => l.includes(b.contains)) ? null : `snippet not in ${b.source}`
+  if (b.absent) return text.includes(b.absent) ? `${b.absent} present in ${b.source}` : null
+  if (b.config_absent_key) {
+    const cfg = inp.cases1[b.case]?.case_input.sdk_calls.find((x) => x.step === b.step)?.config ?? {}
+    return !(b.config_absent_key in cfg) && b.config_present_key in cfg ? null : `config of ${b.case} step ${b.step}`
+  }
+  return 'unknown basis kind'
+}
+
+function interventions(c) {
+  return c.case_input.sdk_calls.filter((s) => ['shim.install', 'fault.install', 'loop.block_release_wait_cancel'].includes(s.api) || (s.fault && typeof s.fault === 'object')).length
+}
+
+function expected(inp) {
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  const adjRows = Object.fromEntries(inp.adj.rows.map((r) => [r.case, r]))
+  const plan = Object.fromEntries(inp.plan.rows.map((r) => [r.source_contract, r]))
+  const out = {}
+  for (const r4 of inp.v4.rows) {
+    const c = r4.source_contract
+    const p = plan[c]
+    const in2 = Boolean(p) && J(p.sub_lots) === J(['2B-2'])
+    let status = r4.status
+    const observed = {}, open = []
+    if (in2) {
+      for (const x of p.cases.filter((y) => consumed.has(y))) {
+        for (const b of inp.cases[x].branches_targeted.filter((y) => y.startsWith(c + '.'))) {
+          const id = armId(b)
+          const d = inp.dc.arms.find((a) => a.case === x && a.arm === id)
+          if (!d) { open.push(`MISSING ${id}`); continue }
+          if (d.status === 'NOT_DISCRIMINATED') open.push(`${id}|${x}|${b}`)
+          else (observed[id] ??= []).push(`${x}|${b}|${d.status}`)
+        }
+      }
+      const used = p.primary_cases.filter((x) => adjRows[x] && adjRows[x].outcome !== 'NOT_RUN')
+      if (r4.status !== 'OBSERVED_CLIENT_PARTIAL') status = used.length && used.every((x) => consumed.has(x)) ? 'OBSERVED_CLIENT_PARTIAL' : 'OPEN_REQUIRED_FUTURE_PROFILE'
+    }
+    out[c] = { status, in2, p, observed, open, obs: in2 ? p.cases.filter((x) => consumed.has(x)) : [] }
+  }
+  return out
+}
+
+function expectedCarried(inp, c) {
+  const r4 = clone(inp.v4.rows.find((x) => x.source_contract === c))
+  for (const k of LIFT) delete r4[k]
+  for (const a of r4.arms_observed_2b1 ?? []) {
+    if (a.arm_id === 'PY12.B03') {
+      const p = inp.acc1['2B-PY12A'].predicates
+      const cls = (id) => p.find((x) => x.id === id).class
+      a.observed_scope_evidence = [...a.observed_scope_evidence, { predicate: 'probe.values_exact', keys: ['event_keys_3'], case: '2B-PY12A', class: cls('probe.values_exact'), ok: true },
+        { predicate: 'api.steps_exact', steps: [15], case: '2B-PY12A', class: cls('api.steps_exact'), ok: true }]
+      a.not_observed_basis = [...a.not_observed_basis, { case: '2B-PY12A', probe: 'event_keys_3', equals: [[2, 3]], note: 'no passo 13 os eventos retidos são 2 e 3; h1 lê q como índice 2 no passo 15, então next_event era 2 no passo 9' }]
+    }
+    if (a.arm_id === 'PY02.B07') a.observed_scope = 'env do filho igual ao environ do driver, sem config.env, PATH igual ao do driver; com codex_bin explícito'
+    if (a.arm_id === 'PY02.B02' || a.arm_id === 'PY02.B07') a.not_observed = a.not_observed + NOT_OBS_ADD
+  }
+  return r4
+}
+
+function validate(docs, inp) {
+  const errors = []
+  const err = (m) => errors.push(m)
+  const v5 = docs['coverage-observed-v5.json']
+  const g5 = docs['gaps-review-v5.json']
+  const v4 = inp.v4
+  if (shaFile(join(B1, 'coverage-observed-v4.json')) !== b1Next.review_records.coverage_observed_v4.sha256) err('v4 changed on disk')
+  const exp = expected(inp)
+  const consumed = new Set(inp.adj.bind_consumes_only)
+  const adjRows = Object.fromEntries(inp.adj.rows.map((r) => [r.case, r]))
+  if (v5.rows.length !== 44 || v4.rows.length !== 44) err('row count')
+  if (J([...v5.bound_cases_2b2].sort()) !== J([...consumed].sort()) || consumed.has('2B2-CTRL01')) err('bound cases differ from bind_consumes_only')
+  if (v5.control_slot?.counts_as_sdk_observation !== false) err('bound cases: CONTROL counted')
+  if (v5.lead_decision_f01?.decision !== inp.lead.decision) err('lead decision F01 not recorded')
+  const caseArmEvidence = {}
+  const notObservedIds = {}
+  for (const r of v5.rows) {
+    const c = r.source_contract
+    const e = exp[c]
+    if (!e) { err(`unknown row ${c}`); continue }
+    const r4 = v4.rows.find((x) => x.source_contract === c)
+    if (r.status !== e.status) err(`${c}: status ${r.status} != ${e.status}`)
+    if (r.status_v4 !== r4.status || J(r.gaps) !== J(r4.gaps)) err(`${c}: status_v4 or gaps`)
+    if (r.status_changed !== (r.status !== r4.status)) err(`${c}: status_changed flag`)
+    if (J(r.carried_from_v4) !== J(expectedCarried(inp, c))) err(`${c}: carried_from_v4 differs from the v4 row beyond the declared errata`)
+    // bases das linhas carregadas do 2B-1 (2B1-BIND/R2-F03 b) e não observados carregados (R2-F03 a)
+    for (const a of r.carried_from_v4.arms_observed_2b1 ?? []) {
+      for (const b of a.not_observed_basis ?? []) { const v = verifyBasis(b, inp, UNIT); if (v) err(`${c}: carried basis of ${a.arm_id}: ${v}`) }
+      if (a.not_observed) (notObservedIds[c] ??= new Set()).add(a.arm_id)
+    }
+    for (const a of r.carried_from_v4.arms_open_explicit_2b1 ?? []) {
+      for (const b of a.basis ?? []) { const v = verifyBasis(b, inp, UNIT); if (v) err(`${c}: carried basis of ${a.arm_id}: ${v}`) }
+      ;(notObservedIds[c] ??= new Set()).add(a.arm_id)
+    }
+    if (e.in2) {
+      if (J((r.observations_2b2 ?? []).map((o) => o.case)) !== J(e.obs)) err(`${c}: observations differ`)
+      for (const o of r.observations_2b2 ?? []) {
+        const ar = adjRows[o.case]
+        if (o.final_reading !== ar.final_reading || o.attribution !== ar.attribution) err(`${o.case}: reading not from the adjudication`)
+        if (o.acceptance_service.path !== '../sdk-batch-2b2-admission/' + ar.dir + '/acceptance.json') err(`${o.case}: acceptance pointer is not the adjudication dir`)
+        if (shaFile(normalize(join(UNIT, o.acceptance_service.path))) !== o.acceptance_service.sha256) err(`${o.case}: acceptance sha`)
+        const acc = inp.acc[o.case]
+        if (o.capture_form !== acc.capture_form || o.predicates !== acc.predicates.length || J(o.failed_predicates) !== J(acc.failed_predicates)) err(`${o.case}: capture form or predicates differ from acceptance`)
+        const tg = inp.cases[o.case].branches_targeted.filter((b) => b.startsWith(c + '.'))
+        if (J(o.analytic_branch_arms_targeted) !== J(tg)) err(`${o.case}: targeted arms differ from branches_targeted`)
+        if (J(o.arm_discrimination) !== J(Object.fromEntries(tg.map((b) => [b, inp.dc.arms.find((a) => a.case === o.case && a.arm === armId(b))?.status])))) err(`${o.case}: arm_discrimination differs from the table`)
+        if ((o.harness_interventions ?? []).length !== interventions(inp.cases[o.case])) err(`${o.case}: harness interventions not recorded`)
+        const q = (o.qualifications ?? []).join(' ')
+        if (o.case === '2B-PY13E' && !(q.includes('lead-decision-f01.json') && String(o.known_bad_discrimination).startsWith('NOT_CREDITED'))) err(`${o.case}: lead decision F01 not applied to the case`)
+        if (o.case !== '2B-PY13E' && o.known_bad_discrimination !== 'AS_ADMITTED') err(`${o.case}: known_bad discrimination label`)
+      }
+      const gotObs = Object.fromEntries((r.arms_observed_2b2 ?? []).map((a) => [a.arm_id, a.observed_by.map((x, i) => `${x.case}|${x.label}|${a.discrimination[i]?.status}`)]))
+      if (J(Object.keys(gotObs).sort()) !== J(Object.keys(e.observed).sort())) err(`${c}: observed arms differ`)
+      for (const [id, list] of Object.entries(e.observed)) if (J(gotObs[id]) !== J(list)) err(`${c}: observed_by or discrimination of ${id} differs`)
+      const gotOpen = (r.arms_open_explicit_2b2 ?? []).map((a) => `${a.arm_id}|${a.case}|${a.arm}`)
+      if (J(gotOpen) !== J(e.open)) err(`${c}: not discriminated arms differ`)
+      for (const a of r.arms_open_explicit_2b2 ?? []) {
+        if (a.reason !== 'NOT_DISCRIMINATED' || !(a.basis ?? []).length) err(`${c}: not discriminated arm ${a.arm_id} without basis`)
+        for (const b of a.basis ?? []) { const v = verifyBasis(b, inp, UNIT); if (v) err(`${c}: basis of ${a.arm_id}: ${v}`) }
+        for (const it of a.evidence_non_discriminating ?? []) { const v = ev2(a.case, it); if (v) err(`${c}: evidence of ${a.arm_id} (${a.case}, ${it.predicate}): ${v}`) }
+        ;(notObservedIds[c] ??= new Set()).add(a.arm_id)
+      }
+      for (const a of r.arms_observed_2b2 ?? []) {
+        const key = `${c}|${a.arm_id}`
+        for (const [i, ob] of a.observed_by.entries()) {
+          if (ob.capture_form !== inp.acc[ob.case].capture_form) err(`${c}: capture form of ${a.arm_id}`)
+          if (!(ob.evidence ?? []).length) err(`${c}: evidence of ${a.arm_id} (${ob.case}) empty`)
+          for (const it of ob.evidence ?? []) {
+            const v = ev2(ob.case, it)
+            if (v) err(`${c}: evidence of ${a.arm_id} (${ob.case}, ${it.predicate}): ${v}`)
+            ;(caseArmEvidence[ob.case] ??= new Set()).add(it.predicate)
+          }
+          if (!(ob.evidence ?? []).some((it) => it.class === 'client')) err(`${c}: no client-class evidence for ${a.arm_id} (${ob.case})`)
+          const d = a.discrimination?.[i]
+          if (!d) err(`${c}: discrimination ref of ${a.arm_id} missing`)
+          else { const v = verifyBasis(d, inp, UNIT); if (v) err(`${c}: discrimination ref of ${a.arm_id}: ${v}`) }
+          const entry = inp.dc.arms.find((x) => x.case === ob.case && x.arm === a.arm_id)
+          if (entry?.status === 'PARTIAL_SCOPE') {
+            const m = SPLIT.exec(entry.basis)
+            if (!m || a.observed_scope !== m[1] || a.not_observed !== m[3] || a.not_observed_kind !== m[2]) err(`${c}: scope of ${a.arm_id} differs from the discrimination table`)
+            if (!(a.observed_scope_evidence ?? []).length) err(`${c}: scope evidence of ${a.arm_id} missing`)
+            for (const it of a.observed_scope_evidence ?? []) {
+              if (!ob.evidence.some((x) => x.predicate === it.predicate)) err(`${c}: scope evidence of ${a.arm_id} outside the arm evidence (${it.predicate})`)
+              const v = ev2(it.case, it)
+              if (v) err(`${c}: scope evidence of ${a.arm_id} (${it.predicate}): ${v}`)
+            }
+            if (!(a.not_observed_basis ?? []).length) err(`${c}: scoped arm ${a.arm_id} without basis`)
+            for (const b of a.not_observed_basis ?? []) { const v = verifyBasis(b, inp, UNIT); if (v) err(`${c}: basis of ${a.arm_id}: ${v}`) }
+            ;(notObservedIds[c] ??= new Set()).add(a.arm_id)
+          } else if (a.observed_scope || a.not_observed) err(`${c}: undeclared scope in ${a.arm_id}`)
+        }
+        if (MUST_SUPPORT[key] && !(a.supporting_evidence?.items ?? []).some((it) => it.case === MUST_SUPPORT[key])) err(`${c}: supporting evidence of ${a.arm_id} from ${MUST_SUPPORT[key]} missing`)
+        for (const it of a.supporting_evidence?.items ?? []) {
+          if (!consumed.has(it.case) || !e.p.cases.includes(it.case)) err(`${c}: supporting evidence of ${a.arm_id} from a case outside the row`)
+          const v = ev2(it.case, it)
+          if (v) err(`${c}: supporting evidence of ${a.arm_id} (${it.case}, ${it.predicate}): ${v}`)
+        }
+        if (a.observed_scope && !(a.text_origin ?? '').includes('../sdk-batch-2b2-admission/')) err(`${c}: text_origin of ${a.arm_id} missing`)
+        for (const m of QUAL_MARKERS[key] ?? []) if (!(a.qualification ?? '').includes(m)) err(`${c}: qualification marker '${m}' missing in ${a.arm_id}`)
+        if (!QUAL_MARKERS[key] && a.qualification) err(`${c}: undeclared qualification in ${a.arm_id}`)
+      }
+      if (r.remaining_after_2b2 !== e.p.remaining_after) err(`${c}: remaining differs from the plan`)
+      if (MUST_REMAIN_ADD.has(c) && !(r.remaining_after_2b2_additions ?? '').length) err(`${c}: remaining additions missing`)
+      for (const t of MUST_IDS_IN_ADD[c] ?? []) if (!(r.remaining_after_2b2_additions ?? '').includes(t)) err(`${c}: '${t}' absent from the remaining additions`)
+      const joined = [r.remaining_after_2b2, r.remaining_after_2b2_additions].filter(Boolean).join(' ')
+      if (v5.remaining_open_by_contract[c] !== joined) err(`${c}: remaining_open_by_contract`)
+      if (!(r.residual_planned_profile_proposal ?? '').endsWith(': ' + joined)) err(`${c}: residual proposal`)
+    } else {
+      if (r.observations_2b2 || r.arms_observed_2b2) err(`${c}: 2B-2 fields in a row outside the 2B-2 plan`)
+      for (const k of ['planned_profile_proposal', 'residual_planned_profile_proposal']) if (r4[k] !== undefined && r[k] !== r4[k]) err(`${c}: proposal changed outside the 2B-2 plan`)
+    }
+    // 2B1-BIND/R2-F03 (a): cada não observado ou não discriminado nos acréscimos da linha, com o rótulo no destino
+    const add = e.in2 ? (r.remaining_after_2b2_additions ?? '') : (r.carried_from_v4.remaining_after_2b1_additions ?? '')
+    for (const id of notObservedIds[c] ?? []) if (!add.includes(id)) err(`${c}: ${id} not observed but absent from the remaining additions`)
+    for (const [phrase, label] of LABELS) if (add.includes(phrase) && !(r.residual_planned_profile_proposal ?? '').includes(label)) err(`${c}: destination lacks ${label} named by the additions`)
+    if (r.whole_requirement_covered !== false || r.parity_credit !== 0 || r.functional_receipt !== null) err(`${c}: claims coverage, receipt or credit`)
+  }
+  for (const cid of consumed) for (const jb of inp.acc[cid].known_bad.judged_by) if (!(caseArmEvidence[cid]?.has(jb))) err(`${cid}: known_bad predicate ${jb} not linked to any arm`)
+  // topo
+  const counts = { OBSERVED_CLIENT_PARTIAL: 0, OPEN_REQUIRED_FUTURE_PROFILE: 0 }
+  for (const e of Object.values(exp)) counts[e.status] += 1
+  if (J(v5.counts) !== J(counts)) err(`counts ${J(v5.counts)} != ${J(counts)}`)
+  if (J(v5.counts_v4) !== J(v4.counts)) err('counts_v4 differs from the v4')
+  const changes = v5.rows.filter((r) => r.status !== r.status_v4).map((r) => ({ contract: r.source_contract, from: r.status_v4, to: r.status }))
+  if (J(changes) !== J(v5.status_changes)) err('status_changes differ from rows')
+  if (J(v5.still_not_consumed_2a) !== J(v4.still_not_consumed_2a)) err('still_not_consumed_2a differs from the v4')
+  if (J(v5.arms_closed_v3_carried) !== J(v4.arms_closed_v3_carried)) err('arms_closed_v3_carried differs from the v4')
+  const u1 = v5.rows.flatMap((r) => (r.carried_from_v4.arms_observed_2b1 ?? []).map((a) => ({ ...a, contract: r.source_contract })))
+  if (J(u1) !== J(v5.arms_observed_2b1_carried)) err('arms_observed_2b1_carried differs from the rows')
+  const u2 = v5.rows.flatMap((r) => (r.arms_observed_2b2 ?? []).map((a) => ({ ...a, contract: r.source_contract })))
+  if (J(u2) !== J(v5.arms_observed_2b2)) err('top arms_observed_2b2 differs from the union of rows')
+  const openU = [...v4.arms_open_explicit_v4, ...v5.rows.flatMap((r) => (r.arms_open_explicit_2b2 ?? []).map((a) => ({ ...a, contract: r.source_contract })))]
+  if (J(openU) !== J(v5.arms_open_explicit_v5)) err('top arms_open_explicit_v5 differs from v4 plus rows')
+  if (J((v5.errata_applied ?? []).map((x) => x.id)) !== J(['2B1-BIND/R2-F01', '2B1-BIND/R2-F02'])) err('errata_applied list')
+  const rem = { ...v4.remaining_open_by_contract }
+  for (const r of v5.rows) if (r.remaining_after_2b2) rem[r.source_contract] = [r.remaining_after_2b2, r.remaining_after_2b2_additions].filter(Boolean).join(' ')
+  if (J(rem) !== J(v5.remaining_open_by_contract)) err('remaining_open_by_contract differs from the v4 plus the 2B-2 rows')
+  const dcCounts = {}
+  for (const a of inp.dc.arms) dcCounts[a.status] = (dcCounts[a.status] ?? 0) + 1
+  if (J(Object.entries(v5.arm_discrimination_consumed).sort()) !== J(Object.entries(dcCounts).sort())) err('arm_discrimination_consumed differs from the table')
+  const voc = J(v5.status_vocabulary)
+  if (!voc.includes('discriminação') || !voc.includes('PY19') || voc === J(v4.status_vocabulary)) err('status_vocabulary not updated for v5')
+  for (const [k, s] of Object.entries(v5.sources)) if (shaFile(normalize(join(UNIT, s.path))) !== s.sha256) err(`source sha ${k}`)
+  const changedRows = v5.rows.filter((r) => r.status_changed).map((r) => r.source_contract)
+  const pc = v5.projection_check
+  if (pc.confirmed !== (J(inp.proj4.after_2B_2.counts) === J(counts) && J(inp.proj4.after_2B_2.rows_becoming_observed) === J(changedRows))) err('projection check')
+  // lacunas
+  const st = Object.fromEntries(Object.entries(exp).map(([k, v]) => [k, v.status]))
+  const st4 = Object.fromEntries(v4.rows.map((r) => [r.source_contract, r.status]))
+  const obs5 = {}
+  for (const g of inp.gaps4.rows) {
+    const o5 = g.contracts.filter((c) => st[c] === 'OBSERVED_CLIENT_PARTIAL')
+    const o4 = g.contracts.filter((c) => st4[c] === 'OBSERVED_CLIENT_PARTIAL')
+    obs5[g.id] = `${o5.length}/${g.contracts_total}`
+    const gr = g5.rows.find((x) => x.id === g.id)
+    if (!gr) { err(`${g.id}: gap row missing`); continue }
+    if (J(gr.contracts_observed_client_partial_v5) !== J(o5) || J(gr.contracts_observed_client_partial_v4) !== J(o4)) err(`${g.id}: observed contracts`)
+    if (J(gr.newly_observed_2b2) !== J(o5.filter((c) => !o4.includes(c)))) err(`${g.id}: newly observed`)
+    if (gr.status_after !== 'OPEN' || gr.whole_requirement_covered !== false) err(`${g.id}: gap closed`)
+    if (g5.summary.observed_v5[g.id] !== obs5[g.id]) err(`${g.id}: gap summary`)
+    if (gr.newly_observed_2b2.length && !gr.progress_changed && !gr.progress_after.includes('CLIENT_OBSERVED_PARTIAL') && !(gr.progress_justification ?? '').length) err(`${g.id}: progress label kept without progress justification`)
+  }
+  if (g5.summary.OPEN !== 6) err('gap summary: OPEN count')
+  if (g5.summary.projection_v4_gaps_confirmed !== (J(inp.proj4.after_2B_2.gaps) === J(obs5))) err('projection gaps check')
+  for (const [n, d] of Object.entries(docs)) if (('functional_receipts' in d && d.functional_receipts !== 0) || ('parity_credit' in d && d.parity_credit !== 0)) err(`${n}: receipts or credit`)
+  return errors
+}
+
+const FILES = ['coverage-observed-v5.json', 'gaps-review-v5.json']
+const docs = Object.fromEntries(FILES.map((f) => [f, load(join(UNIT, f))]))
+const errors = validate(docs, inputs)
+for (const f of readdirSync(UNIT)) { const s = statSync(join(UNIT, f)); if (s.isFile() && s.size === 0) errors.push(`empty file ${f}`) }
+const V = 'coverage-observed-v5.json'
+const row = (d, c) => d[V].rows.find((r) => r.source_contract === c)
+const arm = (d, c, id) => row(d, c).arms_observed_2b2.find((a) => a.arm_id === id)
+const carm = (d, c, id) => row(d, c).carried_from_v4.arms_observed_2b1.find((a) => a.arm_id === id)
+const controls = [
+  ['linha fora do 2B promovida', 'status', (d) => { row(d, 'PY19').status = 'OBSERVED_CLIENT_PARTIAL' }],
+  ['PY13.B06 dado como observado', 'not discriminated arms differ', (d) => { row(d, 'PY13').arms_open_explicit_2b2 = [] }],
+  ['braço observado extra', 'observed arms differ', (d) => { row(d, 'PY18').arms_observed_2b2.push({ arm_id: 'PY18.B26', labels: [], observed_by: [], discrimination: [] }) }],
+  ['escopo parcial ampliado (PY17.B04)', 'scope of PY17.B04 differs from the discrimination table', (d) => { arm(d, 'PY17', 'PY17.B04').observed_scope += ' e não registra fila' }],
+  ['parte não observada apagada (PY13.B15)', 'scope of PY13.B15', (d) => { arm(d, 'PY13', 'PY13.B15').not_observed = '' }],
+  ['escopo em braço DISCRIMINATED', 'undeclared scope', (d) => { arm(d, 'PY09', 'PY09.B01').observed_scope = 'x' }],
+  ['status de discriminação trocado', 'discrimination entry', (d) => { arm(d, 'PY14', 'PY14.B03').discrimination[0].status = 'DISCRIMINATED' }],
+  ['sha da tabela de discriminação trocado', 'discrimination sha', (d) => { arm(d, 'PY18', 'PY18.B01').discrimination[0].sha256 = '0'.repeat(64) }],
+  ['chave de probe inexistente', 'probe key', (d) => { arm(d, 'PY17', 'PY17.B05').observed_by[0].evidence[0].keys = ['pending_unknown_x'] }],
+  ['passo inexistente', 'step 99 absent', (d) => { arm(d, 'PY18', 'PY18.B08').observed_by[0].evidence[0].steps = [99] }],
+  ['token de ordem inexistente', 'token', (d) => { arm(d, 'PY13', 'PY13.B14').observed_by[0].evidence[0].tokens = ['API_CANCELLED:99'] }],
+  ['entrada de gancho inexistente', 'hook entry', (d) => { arm(d, 'PY13', 'PY13.B16').observed_by[0].evidence[0].entries = [{ id: 'h_cleanup_cb', occurrence: 3 }] }],
+  ['regra do peer inexistente', 'peer rule 9', (d) => { arm(d, 'PY13', 'PY13.B02').observed_by[0].evidence[0].rules = [9] }],
+  ['predicado ausente do acceptance', 'predicate absent', (d) => { arm(d, 'PY18', 'PY18.B22').observed_by[0].evidence.push({ predicate: 'hook.events_exact', class: 'client', ok: true }) }],
+  ['só evidência de sanidade', 'no client-class evidence', (d) => { arm(d, 'PY13', 'PY13.B02').observed_by[0].evidence = [{ predicate: 'peer.before_reply_order_witnessed', rules: [3], class: 'peer_or_capture_sanity', ok: true }] }],
+  ['predicado do known_bad desligado', 'known_bad predicate model.oracle_exact', (d) => { for (const id of ['PY18.B23', 'PY18.B24', 'PY18.B25']) { const ob = arm(d, 'PY18', id).observed_by[0]; ob.evidence = ob.evidence.filter((x) => x.predicate !== 'model.oracle_exact') } }],
+  ['decisão F01 tirada do PY13.B17', "qualification marker 'lead-decision-f01.json'", (d) => { arm(d, 'PY13', 'PY13.B17').qualification = 'ok' }],
+  ['decisão F01 tirada do caso 2B-PY13E', 'lead decision F01 not applied', (d) => { const o = row(d, 'PY13').observations_2b2.find((x) => x.case === '2B-PY13E'); o.known_bad_discrimination = 'AS_ADMITTED' }],
+  ['falha injetada sem marcador (PY14.B14)', "qualification marker 'falha injetada'", (d) => { arm(d, 'PY14', 'PY14.B14').qualification = 'texto' }],
+  ['generalização do PY17.B04', "qualification marker 'não generaliza'", (d) => { arm(d, 'PY17', 'PY17.B04').qualification = 'variante inesperada nunca registra fila' }],
+  ['qualificação não declarada', 'undeclared qualification', (d) => { arm(d, 'PY18', 'PY18.B01').qualification = 'texto' }],
+  ['intervenção do harness omitida', 'harness interventions not recorded', (d) => { row(d, 'PY09').observations_2b2[0].harness_interventions = [] }],
+  ['errata do PY12.B03 desfeita (2B1-BIND/R2-F01)', 'carried_from_v4 differs', (d) => { const a = carm(d, 'PY12', 'PY12.B03'); a.observed_scope_evidence = a.observed_scope_evidence.slice(0, 2) }],
+  ['base de probe do PY12.B03 contrariada', 'probe event_keys_3', (d) => { carm(d, 'PY12', 'PY12.B03').not_observed_basis.at(-1).equals = [[3]] }],
+  ['errata do PY02.B07 desfeita (2B1-BIND/R2-F02)', 'carried_from_v4 differs', (d) => { carm(d, 'PY02', 'PY02.B07').observed_scope = 'env do filho = environ do driver copiado, sem config.env, PATH igual ao do driver; com codex_bin explícito' }],
+  ['sha de base de fonte fora da identity freeze (2B1-BIND/R2-F03)', 'source sha of', (d) => { carm(d, 'PY05', 'PY05.B06').not_observed_basis[0].sha256 = '0'.repeat(64) }],
+  ['não observado fora dos acréscimos (2B1-BIND/R2-F03)', 'PY13.B09 not observed but absent from the remaining additions', (d) => { const r = row(d, 'PY13'); r.remaining_after_2b2_additions = r.remaining_after_2b2_additions.replace('PY13.B09', 'PY13.Bxx') }],
+  ['acréscimo do PY12 do v4 sem PY12.B03 (2B1-BIND/R2-F03)', 'PY12.B03 not observed but absent', (d) => { const r = row(d, 'PY12'); r.carried_from_v4.remaining_after_2b1_additions = 'x' }],
+  ['destino sem o rótulo dos acréscimos (2B1-BIND/R2-F03)', 'destination lacks SOURCE_BATCH_CONTINUATION', (d) => { const r = row(d, 'PY14'); r.residual_planned_profile_proposal = r.residual_planned_profile_proposal.replace('SOURCE_BATCH_CONTINUATION', 'NATIVE') }],
+  ['destino do PY12 rebaixado (2B1-BIND/R2-F03)', 'PY12: destination lacks SOURCE_BATCH_CONTINUATION', (d) => { const r = row(d, 'PY12'); r.residual_planned_profile_proposal = r.residual_planned_profile_proposal.replace('NATIVE + SOURCE_BATCH_CONTINUATION', 'NATIVE') }],
+  ['resto do plano alterado', 'remaining differs from the plan', (d) => { row(d, 'PY09').remaining_after_2b2 = '' }],
+  ['acréscimo do PY17 apagado', 'PY17: remaining additions missing', (d) => { delete row(d, 'PY17').remaining_after_2b2_additions }],
+  ['CONTROL consumido', 'bound cases differ', (d) => { d[V].bound_cases_2b2.push('2B2-CTRL01') }],
+  ['leitura final fora da adjudicação', 'reading not from the adjudication', (d) => { row(d, 'PY18').observations_2b2[0].final_reading = 'MISMATCH' }],
+  ['sha de acceptance trocado', 'acceptance sha', (d) => { row(d, 'PY17').observations_2b2[0].acceptance_service.sha256 = '0'.repeat(64) }],
+  ['ponteiro de acceptance de outro caso', 'acceptance pointer is not the adjudication dir', (d) => { const o = row(d, 'PY09').observations_2b2; o[0].acceptance_service = o[1].acceptance_service }],
+  ['contagem alterada', 'counts {', (d) => { d[V].counts.OBSERVED_CLIENT_PARTIAL = 34 }],
+  ['counts_v4 alterado', 'counts_v4 differs', (d) => { d[V].counts_v4.OBSERVED_CLIENT_PARTIAL = 25 }],
+  ['status_changes esvaziado', 'status_changes differ', (d) => { d[V].status_changes = [] }],
+  ['braço do topo trocado', 'top arms_observed_2b2 differs', (d) => { d[V].arms_observed_2b2[0].arm_id = 'PY09.B99' }],
+  ['errata retirada da lista', 'errata_applied list', (d) => { d[V].errata_applied.pop() }],
+  ['vocabulário do v4', 'status_vocabulary not updated', (d) => { d[V].status_vocabulary = inputs.v4.status_vocabulary }],
+  ['conferência da projeção invertida', 'projection check', (d) => { d[V].projection_check.confirmed = false }],
+  ['requisito inteiro afirmado', 'claims coverage', (d) => { row(d, 'PY13').whole_requirement_covered = true }],
+  ['lacuna fechada', 'gap closed', (d) => { d['gaps-review-v5.json'].rows[2].status_after = 'CLOSED' }],
+  ['summary de lacuna alterado', 'gap summary', (d) => { d['gaps-review-v5.json'].summary.observed_v5['GAP-PY-API'] = '12/13' }],
+  ['conferência das lacunas da projeção invertida', 'projection gaps check', (d) => { d['gaps-review-v5.json'].summary.projection_v4_gaps_confirmed = false }],
+  ['crédito de paridade', 'receipts or credit', (d) => { d['gaps-review-v5.json'].parity_credit = 1 }],
+  ['destino fora do plano alterado', 'proposal changed outside the 2B-2 plan', (d) => { row(d, 'PY19').planned_profile_proposal = 'SOURCE_BATCH_CONTINUATION' }],
+  ['apoio do 2B-PY09D retirado (R1-F04)', 'supporting evidence of PY09.B02 from 2B-PY09D missing', (d) => { delete arm(d, 'PY09', 'PY09.B02').supporting_evidence }],
+  ['apoio com passo inexistente (R1-F04)', 'supporting evidence of PY09.B02 (2B-PY09D, api.steps_exact): step 9 absent', (d) => { arm(d, 'PY09', 'PY09.B02').supporting_evidence.items[1].steps = [9] }],
+  ['apoio de caso fora da linha (R1-F04)', 'from a case outside the row', (d) => { arm(d, 'PY09', 'PY09.B02').supporting_evidence.items[0].case = '2B-PY13A' }],
+  ['corrida natural do PY13.B17 apagada (R1-F06)', "qualification marker 'corrida natural'", (d) => { const a = arm(d, 'PY13', 'PY13.B17'); a.qualification = a.qualification.replace('corrida natural', 'corrida') }],
+  ['timeout real do PY13.B13 fora dos acréscimos (R1-F06)', "'PY13.B13' absent from the remaining additions", (d) => { const r = row(d, 'PY13'); r.remaining_after_2b2_additions = r.remaining_after_2b2_additions.replace('PY13.B13', 'PY13') }],
+  ['acréscimo do PY18 apagado (R1-F03)', 'PY18: remaining additions missing', (d) => { delete row(d, 'PY18').remaining_after_2b2_additions }],
+  ['origem do texto parcial apagada (R1-F08)', 'text_origin of PY13.B15 missing', (d) => { delete arm(d, 'PY13', 'PY13.B15').text_origin }],
+  ['regra do peer ligada ao PY17.B01 trocada (R1-F05)', 'peer rule 4 absent', (d) => { arm(d, 'PY17', 'PY17.B01').observed_by[0].evidence.at(-1).rules = [4] }],
+]
+const negative = controls.map(([name, want, mutate]) => {
+  const d = clone(docs)
+  mutate(d)
+  const e = validate(d, inputs)
+  const hit = e.find((x) => x.includes(want))
+  return { control: name, expected_error_substring: want, rejected: Boolean(hit), matching_error: hit ?? null }
+})
+const doc = {
+  kind: 'BINDING_VALIDATION_SECOND_IMPLEMENTATION', task: 'DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2',
+  note: 'segunda implementação do mesmo executor; não é revisão independente', node: process.version,
+  result: errors.length === 0 && negative.every((n) => n.rejected) ? 'PASS' : 'FAIL', errors, negative_controls: negative, validated_at: new Date().toISOString(),
+}
+writeFileSync(join(UNIT, 'validation.json'), JSON.stringify(doc, null, 2) + '\n')
+console.log(doc.result, 'errors', errors.length, 'controls rejected', negative.filter((n) => n.rejected).length + '/' + negative.length)
+if (errors.length) console.log(errors.slice(0, 30).join('\n'))
+for (const n of negative) if (!n.rejected) console.log('NOT REJECTED:', n.control)

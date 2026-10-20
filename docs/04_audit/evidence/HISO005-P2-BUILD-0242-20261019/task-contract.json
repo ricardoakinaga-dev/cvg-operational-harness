@@ -1,0 +1,70 @@
+{
+  "task": "HISO005-P2-BUILD-0242",
+  "track": "T3 aprovado (BUILD local)",
+  "registeredAt": "2026-10-19T11:56:39.378041+00:00",
+  "owner": "Claude Code (executor delegado, sessão lead CONT-20261018-D9EF)",
+  "authority": {
+    "spec": "docs/02_spec/0242_b6_body_caps_deadlines.md",
+    "specSha256": "fa22cf4e5d102421aec49ced674ca5d1720444de53998741d123184ef2b14677",
+    "decision": "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261019/user-decision-20261019.json",
+    "decisionSha256": "55ef6dedd56b8957176c402faba619328a28bcb330b118bca14e4fa26259a4aa",
+    "order": "depois do commit da 0243 na mesma candidata (SPEC0242 §5: ordem fixa 0243 → 0242)"
+  },
+  "base": {
+    "parentCommit": "commit da 0243 (preenchido no freeze)",
+    "preimages": "tabela da SPEC0242 §5, com as pós-imagens registradas pela 0243 para boundary-installed-identity.mjs, build-installed-reference.mjs e boundary-semantic-compiled.mjs (ver ../HISO005-P2-BUILD-0243-20261019/commit-0243.json)"
+  },
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019",
+  "runtime": "/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-runtime-20261019",
+  "delta": {
+    "L1": "maxContexts 64→256, maxStates 100.000→250.000",
+    "L2": "timeoutMs 120 s→300 s, global e fail-closed",
+    "L3": "teto de 120 s do comparador de identidade por fase (fase 1 da criação ao fim da 1ª finalização; cada finalização posterior com relógio próprio; checkTime e _deadline de collect() pelo início da fase; compare() depois da 1ª finalização → COMPARISON_AFTER_FINALIZE e verificador inválido; opção só de teste e só de redução com TEST_LIMIT_INVALID)"
+  },
+  "sourcesToChange": [
+    "scripts/boundary-semantic-engine.mjs (L1, L2)",
+    "scripts/boundary-installed-identity.mjs (L3)",
+    "scripts/check-product-boundary.mjs (telemetria da §3.4: duração de cada fase do verificador em semanticTelemetry)",
+    "tests/b6-0242-body-caps-deadlines.test.js (novo)"
+  ],
+  "notChanged": [
+    "algoritmo e definição de contexto",
+    "maxCallDepth, maxUnionValues, maxNodes, maxFiles, bytes",
+    "maxBuffer de 64 MiB",
+    "valores de INSTALLED_IDENTITY_LIMITS",
+    "relógios de fingerprintToolchain e da varredura instalada (scanBounded)",
+    "census",
+    "recomputação do worker",
+    "receitas (0243)"
+  ],
+  "literalMigrationsRegisteredBeforeEdit": [
+    {
+      "file": "tests/b6-0241-integral-body.test.js",
+      "test": "A2 limits, profiles and the census are unchanged; the kernel is v4",
+      "from": "SEMANTIC_LIMITS com maxContexts 64, maxStates 100000, timeoutMs 120000",
+      "to": "maxContexts 256, maxStates 250000, timeoutMs 300000 (SPEC0242 §3.1)",
+      "firstFailure": "first-red-0242-a2 (A2 rodado nos valores novos antes da migração, LB02)",
+      "registeredAt": "2026-10-19T11:56:39.378113+00:00"
+    }
+  ],
+  "acceptance": {
+    "LB01": "valores exatos; sem elevação por flag/env/entrada; redução interna corta, positivo no limite",
+    "LB02": "primeiras falhas: raiz 228e7918 corta por maxContexts nos valores atuais; relógio simulado leva a finalização final a COMPARISON_TIMEOUT na pré-imagem; A2 falha nos valores novos antes da migração",
+    "LB03": "L3 com ≥1 pacote usado: etapa intermediária longa termina COMPLETE; fase sozinha acima do orçamento → COMPARISON_TIMEOUT; compare() depois da 1ª finalização → COMPARISON_AFTER_FINALIZE; opção de teste recusa elevação; duração por fase",
+    "LB04": "conservação §3.3 por multiset na árvore real (commit da 0243 × commit da 0242, mesmas referências), finalizações COMPLETE, normal=strict, validation true",
+    "LB05": "medição real pós-gates sem estouro, registro §3.4 completo (tempos, fases do verificador, RSS do worker, payload, uso de todos os tetos, load); RSS ≤ 3 GiB e payload ≤ 32 MiB",
+    "LB06": "violações do census iguais; tempo do census sem aumento além do ruído",
+    "LB07": "regressões 0228/0234/0236/0237/0240/0241 (inclusive ID-11), crítica fresca, 16 gates Node22 (uma vez, composição 0243+0242), consumidor fresco",
+    "LB08": "promoção só dos deltas próprios; sem push, deploy ou produção"
+  },
+  "review": "crítico novo, não-fork, até 2 rodadas",
+  "scopeDeviationsRegisteredBeforeEdit": [
+    {
+      "registeredAt": "2026-10-19T12:23:39.097972+00:00",
+      "file": "scripts/boundary-semantic-resolution.mjs",
+      "what": "INTERPRETER (maxContexts 64→256, maxStates 100000→250000, timeoutMs 120000→300000)",
+      "why": "o helper de resolução valida o objeto de limites que o engine lhe passa contra um espelho congelado do envelope do intérprete; com L1/L2 só no engine, todo run sai UNKNOWN_INVALID_LIMITS (observado em green-0242-a1: phases SKIPPED:UNKNOWN_INVALID_LIMITS). O espelho precisa acompanhar os valores aprovados; o helper só consome os tetos de aquisição e resolução, que não mudam.",
+      "specCoverage": "SPEC0242 §3.1 fixa os valores de SEMANTIC_LIMITS; o espelho é consequência mecânica, não um teto novo. A §5 não o listava entre as fontes previstas: desvio registrado antes da edição e levado à crítica."
+    }
+  ]
+}

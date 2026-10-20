@@ -2141,6 +2141,16 @@ export function auditProductBoundary(
           compiled
         })
     const finalIdentity = installedPackages.finalize()
+    // SPEC0242 §3.4: the duration of each verifier phase, in the telemetry
+    // only (outside the normal/strict payload equality).
+    if (output.telemetry)
+      output.telemetry = {
+        ...output.telemetry,
+        identityPhaseMs: [
+          identityFinalization?.usage?.phaseMs ?? null,
+          finalIdentity?.usage?.phaseMs ?? null
+        ]
+      }
     let valid =
       output.validation?.valid === true &&
       identityFinalization?.status === 'COMPLETE' &&

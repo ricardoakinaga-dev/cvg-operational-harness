@@ -1,0 +1,107 @@
+{
+  "round": "R2",
+  "task": "HISO005-P2-BUILD-0243",
+  "reviewer": "o mesmo crítico independente da R1 (não-fork), Claude Code, só leitura",
+  "reviewedAt": "2026-10-19T11:55:00Z",
+  "spec": "docs/02_spec/0243_b6_reference_source_scope.md (sha256 6db49cf5…)",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019",
+  "parentCommit": "bcd49fa6…",
+  "sourceFreeze": "source-freeze-r2.json",
+  "sourceFreezeSha256": "fb18a206304ecb3c1c5bd5286d0b76cda6e8c808f2eed9e994d804d920be4501",
+  "sourceFreezeMatchesWorkingTree": "sim: os 13 arquivos têm o mesmo SHA no working tree, o patch confere (df8eac52…) e parentBlobSha256 confere com git show bcd49fa6:<caminho> (amostra de 3)",
+  "verdict": "REVISE",
+  "r1Resolution": [
+    {
+      "id": "R1-01",
+      "status": "RESOLVED",
+      "evidence": "frozen-r2-unit (16/16), frozen-r2-native-profile (79/79) e frozen-r2-focal-b6 (809/809) gravam no próprio comando os SHA 70c5d2ce/d8681aa3/f84d9a3b (scripts) e 0d7e7cbb/0f932f7b/9cc09590/d8eae887 (testes), todos iguais ao freeze r2. Cronologia: última edição na candidata às 11:21:45Z, freeze às 11:25:20Z, execuções entre 11:25:26Z e 11:46:30Z. Repeti o teste portátil nos bytes r2: 16/16. O RS06 em curso (references-post-228e-r2) usa os mesmos três scripts."
+    },
+    {
+      "id": "R1-02",
+      "status": "RESOLVED",
+      "evidence": "Em boundary-installed-identity.mjs:99–106, a condição de manifesto saiu: qualquer diretório da listagem sob o prefixo alcançado pelo glob é conflito. Há teste portátil novo (linha 123, incluindo o controle evidencex) e caso nativo novo ('wildcard glob reaching a directory without manifest', linha 299). A primeira falha está registrada contra os scripts r1: first-red-0243-r1fixes-unit (1 vermelho) e first-red-0243-r1fixes-native (o RS04 curinga). A árvore real não é recusada: a guarda tem só 4 globs (apps/*, packages/*, legacy/packages/*, products/*) e há 11.017 diretórios sob o prefixo, nenhum alcançado; o recibo post-228e-r2 foi construído."
+    },
+    {
+      "id": "R1-03",
+      "status": "RESOLVED",
+      "evidence": "Em boundary-semantic-compiled.mjs:493–507, com depRoot ≠ source a receita exige compilerInventory(source) igual (COMPILED_SOURCE_COMPILER_REQUIRED). O fechamento é calculado sempre na origem, antes do archive. Nas linhas 597–602, compilerSources do snapshot tem de ser igual ao fechamento da origem. O comentário foi corrigido. Há teste nativo novo (linha 979) com .d.ts sob o prefixo incluído pelo tsconfig, com e sem compilador; ele espera OUTSIDE_RECIPE e COMPILER_REQUIRED e confere que não há reference.json. Esse teste falhou contra r1 (first-red native). A migração de b6-0236 foi registrada às 11:20:18Z e editada às 11:20:59Z, mantendo a intenção e a expectativa. O recibo real 228e com r2 dá PROVEN (121 arquivos)."
+    },
+    {
+      "id": "R1-04",
+      "status": "RESOLVED",
+      "evidence": "Em boundary-semantic-compiled.mjs:38–49 (GIT, comentário nas linhas 38–40), GIT passou a incluir -c core.quotePath=true. O leitor usa a mesma constante em archiveArgv. Há teste nativo novo (linha 811): com core.quotePath=false na config local, um nome não UTF-8 sob o prefixo dá COMPILED_SOURCE_TYPE. Esse teste falhou contra r1 (o RS03 compilado, na first-red native)."
+    },
+    {
+      "id": "R1-05",
+      "status": "RESOLVED",
+      "evidence": "Em task-contract.json, na entrada da RT03 em literalMigrationsRegisteredBeforeEdit, a nota agora diz que o registro foi feito 0,71 s depois da edição e cita os carimbos e a primeira falha. A migração nova de b6-0236 tem registeredAt 11:20:18.785Z, antes do mtime do teste (11:20:59Z). O formato do campo registeredAt fica para P3 (R2-03)."
+    }
+  ],
+  "requiredFindings": [
+    {
+      "id": "R2-01",
+      "severity": "P2",
+      "file": "scripts/boundary-installed-identity.mjs:68",
+      "finding": "A correção do R1-07 abriu uma janela fail-open na §3.3(2). Quando package-lock.json passa de 16 MiB, json() devolve undefined e a guarda não confere chaves, links nem file: do lock. Nada adiante recusa esse tamanho. A instalada faz o parse do lock do snapshot sem teto (build-installed-reference.mjs:624–625) e segue para o npm. A compilada não lê o lock e herda o recibo instalado. O comentário das linhas 58–60 ('oversized … the existing refusals keep deciding it') vale para o package.json, cujo fingerprintResolution/readJson recusa acima de 16 MiB, mas não vale para o lock. Na r1, a leitura sem teto conferia o lock até o limite do próprio readFileSync, o mesmo do parse adiante. Na r2, um lock entre 16 MiB e cerca de 512 MiB com chave ou link sob o prefixo passa pela guarda sem SOURCE_EXCLUSION_CONFLICT. A §5 lista 'guarda que não recusa um caso da §3.3' como impeditivo.",
+      "evidence": "Linha 68: `if (!stat.isFile() || stat.size > 16 * 1024 * 1024) return undefined`; linhas 108–123: as checagens do lock dependem de json('package-lock.json'). Não há teto para o lock em build-installed-reference.mjs (grep: nenhum maxBytes ou 16 MiB para o lock). Hoje o lock real tem 193.286 bytes, cerca de 85 vezes abaixo, então não há impacto atual: é uma lacuna de contrato criada nesta rodada.",
+      "requiredChange": "Quando um manifesto ou lock rastreado da raiz passar do teto, a guarda deve recusar (por exemplo, devolver 'oversized:' + nome, o que gera SOURCE_EXCLUSION_CONFLICT/COMPILED_SOURCE_EXCLUSION_CONFLICT), em vez de não decidir. Alternativa: tirar o teto só do lock, voltando ao comportamento da r1, alinhado ao parse adiante. Adicionar um caso portátil com lock rastreado acima do teto (arquivo de 16 MiB + 1 byte em TMPDIR) esperando conflito. O caso 'malformed … left to the existing refusals' (teste da linha 201) pode continuar como está."
+    }
+  ],
+  "optionalFindings": [
+    {
+      "id": "R2-02",
+      "severity": "P3",
+      "file": "scripts/boundary-semantic-compiled.mjs:601",
+      "finding": "A igualdade entre o fechamento do snapshot e o da origem recusa com COMPILED_SOURCE_EXCLUSION_CONFLICT, o código que a §3.3 reserva à guarda estática. Essa divergência pode vir de outras causas: arquivo de src excluído pelo tar (.env*), ou node_modules da origem diferente do depRoot no layout com --dependencies-root. A falha continua fechada; só o diagnóstico fica impreciso.",
+      "evidence": "Linhas 597–602; os filtros --exclude do tar ficam nas linhas 521–528.",
+      "requiredChange": "Opcional: usar um código próprio (por exemplo, COMPILED_SOURCE_CLOSURE_MISMATCH) ou documentar o reúso."
+    },
+    {
+      "id": "R2-03",
+      "severity": "P3",
+      "file": "docs/04_audit/evidence/HISO005-P2-BUILD-0243-20261019/task-contract.json",
+      "finding": "O registeredAt da RT03 virou texto livre ('2026-10-19T10:35:51.469888+00:00 (depois da edição, ver note)') e deixou de ser um carimbo ISO legível por máquina.",
+      "evidence": "Entrada RT03 de literalMigrationsRegisteredBeforeEdit.",
+      "requiredChange": "Opcional: manter registeredAt como ISO puro e pôr a qualificação em um campo à parte (por exemplo, editedBeforeRegistration: true)."
+    },
+    {
+      "id": "R2-04",
+      "severity": "P3",
+      "file": "scripts/boundary-installed-identity.mjs:31",
+      "finding": "Sem o filtro de manifesto, workspaceMatches roda para todo diretório sob o prefixo (11.017 hoje) em cada padrão. A recursão de `**` não tem memoização nem teto, enquanto fingerprintResolution para em RESOLUTION_LIMIT. Com os 4 globs reais o custo é desprezível. Um manifesto da raiz com vários `**` encadeados poderia tornar a guarda muito lenta antes de qualquer teto. É só disponibilidade: a integridade se mantém.",
+      "evidence": "Linhas 31–52 (match sem memoização) e 101–106.",
+      "requiredChange": "Opcional: memoizar match(i, j) ou limitar os passos, recusando ao exceder."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "Freeze r2 confere com o working tree, o patch e os blobs do pai", "result": "PASS", "evidence": "13/13 SHA iguais; patch df8eac52…; parentBlobSha256 confere com git show (identity 78d198c7, 0236 ddc42f29, config nativa 0dd3f546)"},
+    {"id": "S02", "what": "Delta r1→r2 restrito às correções declaradas", "result": "PASS", "evidence": "Reconstruí r1 aplicando source-freeze-r1.patch.txt sobre o pai; os SHA conferem: bd938a0c/707ea23e/2eff2e72/b4d01a3a. O diff r1→r2 só toca a guarda (teto e manifesto), o modo da listagem inteira, quotePath, compilador/fechamento na origem e a igualdade de fechamentos, mais os testes correspondentes e a migração de b6-0236. Os outros 7 arquivos estão idênticos à r1."},
+    {"id": "S03", "what": "Evidência verde amarrada aos bytes congelados r2", "result": "PASS", "evidence": "frozen-r2-* com SHA no comando, iguais ao freeze; as execuções vêm depois do freeze"},
+    {"id": "S04", "what": "Primeiras falhas das correções contra os scripts r1, em árvore separada", "result": "PASS", "evidence": "red_on_previous.py monta runtime/red-<label> com scripts de tools-post-0243 (r1) e os testes atuais, sem tocar a candidata. Unit: 1 vermelho (glob curinga). Native: 4 vermelhos (link na denylist, glob sem manifesto, não UTF-8 com quotePath=false, depRoot ≠ source). Observação: a falha foi coletada depois do verde r2pre (11:22Z → 11:23–11:25Z), por execução contra a versão anterior, o que ainda demonstra a falha."},
+    {"id": "S05", "what": "Guarda recusa glob curinga que alcança diretório sob o prefixo sem manifesto, e não recusa evidencex", "result": "PASS", "evidence": "teste portátil da linha 123 e caso nativo da linha 299"},
+    {"id": "S06", "what": "Guarda: lock rastreado acima de 16 MiB ainda tem chaves, links e file: conferidos", "result": "FAIL", "evidence": "R2-01"},
+    {"id": "S07", "what": "Guarda: package.json acima de 16 MiB segue fail-closed", "result": "PASS", "evidence": "fingerprintResolution/readJson tem teto de 16 MiB e roda antes do archive, nas duas receitas (na compilada, via dependencies → comparador)"},
+    {"id": "S08", "what": "Instalada: modo/link conferido na listagem inteira, inclusive na denylist, sem quebrar a árvore real", "result": "PASS", "evidence": "build-installed-reference.mjs:546–549; teste nativo da linha 253; a árvore real tem 0 entradas não regulares; native 79/79"},
+    {"id": "S09", "what": "Compilada: quotePath forçado, argv do archive igual ao do leitor", "result": "PASS", "evidence": "a constante GIT é compartilhada por archiveArgv no build e no leitor; o leitor dá PROVEN no recibo real r2"},
+    {"id": "S10", "what": "Compilada com --dependencies-root diferente: recusa antes de qualquer recibo, com ou sem compilador na origem", "result": "PASS", "evidence": "linhas 493–507; teste nativo da linha 979"},
+    {"id": "S11", "what": "Compilada: igualdade entre o fechamento da origem e o do snapshot não recusa o fluxo real", "result": "PASS", "evidence": "references-post-228e-r2.json: instalada com 280.569.698 bytes e 21.859 entradas, compilada v2, leitor PROVEN com 121 arquivos"},
+    {"id": "S12", "what": "Migração de b6-0236 (outside inputs): intenção mantida e registro antes da edição", "result": "PASS", "evidence": "a expectativa COMPILED_SOURCE_OUTSIDE_RECIPE não muda; só se acrescentam o compilador e os links @cvg na origem alternativa; registro às 11:20:18Z e mtime às 11:20:59Z"},
+    {"id": "S13", "what": "Casos extras da R1-08: env isolada (instalada), CLI da compilada, chave de lock na compilada", "result": "PASS", "evidence": "linhas 371 e 946 do teste nativo; o CLI recusa com COMPILED_CLI_OPTIONS_INVALID sem criar a saída"},
+    {"id": "S14", "what": "Nenhum limite, pin, asserção, skip ou gate relaxado na r2", "result": "PASS", "evidence": "o diff r1→r2 não remove asserção nem limite; o teto de 16 MiB é novo, mas cria a lacuna de R2-01"},
+    {"id": "S15", "what": "Teste portátil nos bytes r2 (Node pinado, TMPDIR próprio)", "result": "PASS", "evidence": "16/16; a candidata segue com os mesmos 13 caminhos"},
+    {"id": "S16", "what": "node --check nos 3 scripts e nos testes nativos alterados", "result": "PASS", "evidence": "ok"},
+    {"id": "S17", "what": "RS06 B6 normal e strict", "result": "N/A", "evidence": "ainda não rodou; só as referências pré e pós 228e foram construídas"}
+  ],
+  "commands": [
+    {"cmd": "sha256sum EV/source-freeze-r2.json EV/source-freeze-r2.patch.txt; python3 -I -B (SHA dos 13 arquivos contra o freeze)", "summary": "fb18a206…; df8eac52…; 13/13 OK"},
+    {"cmd": "git -C <candidata> show bcd49fa6:<caminho> | sha256sum (3 arquivos)", "summary": "parentBlobSha256 confere"},
+    {"cmd": "python3 -I -B <scratchpad>/r2/tools/apply.py (aplica o patch r1 sobre os blobs do pai) e udiff.py (difflib r1→r2)", "summary": "r1 reconstruída com SHA conferido; diff r1→r2 revisado inteiro"},
+    {"cmd": "python3 -I -B (leitura de first-red-0243-r1fixes-*, check-0243-*-r2pre, frozen-r2-*, references-post-228e-r2, tools-post-0243r2, task-contract)", "summary": "SHA, cronologia, vermelhos e PROVEN conferidos"},
+    {"cmd": "cat EV/operators/red_on_previous.py EV/operators/freeze.py", "summary": "a falha contra a versão anterior roda em árvore separada; o freeze grava os blobs do pai"},
+    {"cmd": "stat -c '%y' (candidata e EV)", "summary": "última edição às 11:21:45Z, antes do freeze às 11:25:20Z; migração de b6-0236 registrada antes da edição"},
+    {"cmd": "git -C <candidata> ls-tree -r --name-only -z HEAD | python3 -I -B", "summary": "11.017 diretórios sob o prefixo, profundidade máxima 15"},
+    {"cmd": "grep/sed nas linhas citadas; ls -la package-lock.json", "summary": "lock real com 193.286 bytes; o lock não tem teto adiante na instalada"},
+    {"cmd": "cd <candidata> && env -i PATH=<node22.23.2>:/usr/bin:/bin LANG=C TZ=UTC TMPDIR=<scratchpad>/r2tmp HOME=<scratchpad>/r2tmp node node_modules/vitest/vitest.mjs run tests/b6-0243-reference-source-scope.test.js --no-file-parallelism --maxWorkers=2", "summary": "16/16; load average 2,9"},
+    {"cmd": "node --check (3 scripts + b6-0243 integration + b6-0236 integration)", "summary": "ok"}
+  ]
+}

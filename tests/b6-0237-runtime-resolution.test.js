@@ -678,7 +678,8 @@ function cliFixture() {
       exitCode: 0,
       offline: true,
       ignoreScripts: true,
-      completed: true
+      completed: true,
+      sourceExclusions: ['docs/04_audit/evidence']
     },
     selection: {
       platform: process.platform,

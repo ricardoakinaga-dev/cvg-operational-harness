@@ -1,0 +1,144 @@
+{
+  "round": "R1",
+  "task": "HISO005-P2-BUILD-0243",
+  "reviewer": "crítico independente novo (não-fork), Claude Code, só leitura",
+  "reviewedAt": "2026-10-19T11:16:00Z",
+  "spec": "docs/02_spec/0243_b6_reference_source_scope.md (sha256 6db49cf5…, conferido)",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019",
+  "parentCommit": "bcd49fa6…",
+  "sourceFreeze": "source-freeze-r1.json",
+  "sourceFreezeSha256": "4a74bd67fec42363f011481ca2340ed0d67896c780463ba08770804ec3a45048",
+  "sourceFreezeMatchesWorkingTree": "sim: os 13 arquivos do freeze têm o mesmo SHA-256 no working tree e o patch confere (9ed5a223…)",
+  "verdict": "REVISE",
+  "requiredFindings": [
+    {
+      "id": "R1-01",
+      "severity": "P1",
+      "file": "docs/04_audit/evidence/HISO005-P2-BUILD-0243-20261019/source-freeze-r1.json:9",
+      "finding": "A evidência verde não cobre os bytes congelados. Os três scripts e os dois testes novos foram regravados às 10:59:18–19Z. Isso aconteceu depois do fim do focal (10:57:53Z) e 45 s antes do freeze (11:00:04Z). green-0243-unit-a1, green-0243-native-a1, native-profile-0243-a2 (76/76) e focal-b6-0243-a1 (808/808) rodaram sobre outra versão desses cinco arquivos. Nos bytes congelados, o perfil nativo e o focal nunca rodaram. Só o teste portátil rodou, nesta revisão.",
+      "evidence": "Freeze: boundary-installed-identity bd938a0c, build-installed-reference 2eff2e72, boundary-semantic-compiled 707ea23e, b6-0243 .test.js 8afaa5fc, .integration.js 11d39cc8. sourceSha256 em native-profile-0243-a2-command.json e focal-b6-0243-a1-command.json: b7441a3c, a7815ce7, 909176a2, e44e2b26 e e41a4ba1. O mtime dos cinco arquivos na candidata vai de 07:59:18.47 a 07:59:19.77 -0300. Os outros oito arquivos do delta têm o mesmo SHA na evidência e no freeze. Nesta revisão, o teste portátil passou 15/15 nos bytes congelados. A pasta runtime/tools-post-0243, usada pelo RS06 em curso, já tem os bytes congelados.",
+      "requiredChange": "Rodar de novo nos bytes congelados o portátil, o perfil nativo (76) e o focal B6 (808), e registrar os SHA no próprio comando. Se a regravação foi só formatação, registrar o diff entre as duas versões como prova, mas repetir o perfil nativo mesmo assim, porque só ele exercita as receitas reais. Se houver mudança semântica, abrir nova rodada de crítica."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "file": "scripts/boundary-installed-identity.mjs:97",
+      "finding": "A §3.3(1) manda recusar quando um glob de workspace, expandido sobre a listagem completa com a semântica de fingerprintResolution, alcança um caminho sob o prefixo. Para glob com curinga, a guarda só recusa se o diretório casado sob o prefixo tiver package.json rastreado (linha 100). Um glob que alcança diretórios sob o prefixo sem manifesto passa. Para padrão literal, a guarda já usa a leitura ampla: a linha 95 recusa mesmo sem manifesto, e há teste para isso. O tratamento fica assimétrico. O manifesto de workspace sob o prefixo já é o item 3 da §3.3, o que indica que o item 1 é mais amplo. A §5 lista 'guarda que não recusa um caso da §3.3' como impeditivo de promoção.",
+      "evidence": "Exemplo pelo código: workspaces ['docs/*/evidence/*'] ou ['*/*/*'], com só docs/04_audit/evidence/w/a.txt rastreado. O literal 'docs' não está excluído e nenhum diretório sob o prefixo tem package.json, então a função retorna null. Os testes RS04 (portátil, linhas 107–127, e nativo) só cobrem globs que alcançam manifesto. Hoje não há efeito de identidade: fingerprint e npm ignoram diretório sem package.json, e chaves e links do lock são verificados. É divergência do texto aprovado.",
+      "requiredChange": "Recusar quando o glob casa qualquer diretório da listagem completa sob o prefixo, inclusive o próprio prefixo e `**` atravessando-o. Basta tirar a condição `tracked.has(directory + '/package.json')` e manter a exclusão de node_modules/dist/.git. Adicionar caso portátil e caso nativo de glob curinga que alcança diretório sob o prefixo sem package.json. A árvore real não é afetada: os globs são apps/*, packages/*, legacy/packages/* e products/*. Se o executor defender a leitura estreita, registrar a interpretação para decisão do usuário, sem decidir sozinho."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "file": "scripts/boundary-semantic-compiled.mjs:486",
+      "finding": "O fechamento das entradas do compilador na origem só roda quando depRoot === source. Com --dependencies-root diferente, uma entrada sob o prefixo que o TypeScript tolera ausente some do snapshot. Exemplos: .d.ts incluído por include/files do tsconfig, ou typeRoots. compilerInputs(snapshot) não vê a entrada, o tsc passa e um recibo é escrito. Antes da 0243, o archive completo levava o arquivo ao snapshot e COMPILED_SOURCE_OUTSIDE_RECIPE recusava no build. A §3.3 diz que essas recusas 'sempre acontecem antes de qualquer recibo', e o RS04 exige 'nenhum recibo'. O leitor continua fail-closed, porque compilerInputs(evaluated) recusa, e não há PROVEN falso. O comentário 'the only layout the reader proves' (linha 485) está impreciso. O leitor prova um recibo com depRoot ≠ source quando a origem tem node_modules iguais: só exige sourceRoot === evaluated, dependencies(evaluated) igual e compilerInventory(evaluated) igual.",
+      "evidence": "Linhas 480–492 (condição de layout); leitor nas linhas 714–721 e 776–804. sourceInputs não confere include, files nem typeRoots (linhas 109–150). Não há teste nativo de entrada sob o prefixo com dependenciesRoot. O teste de b6-0236 com dependenciesRoot usa outside.d.ts fora do prefixo, e o caso nativo da 0243 usa /// <reference>, que falha no tsc quando o arquivo falta.",
+      "requiredChange": "Fechar o caso em todos os layouts, antes do archive. Opção preferida (a): com depRoot ≠ source, exigir compilerInventory(source) igual a `compiler` e rodar compilerInputs(source); se a origem não tiver o compilador fixado, recusar com código nomeado. Opção (b): recusar o layout depRoot ≠ source e migrar o teste de b6-0236 com registro prévio. Corrigir o comentário. Adicionar teste nativo: .d.ts sob o prefixo incluído pelo tsconfig, com dependenciesRoot diferente, recusado e sem reference.json."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "file": "tests/b6-0243-reference-source-scope.integration.js:756",
+      "finding": "O RS03 exige nome não UTF-8 sob o prefixo recusado nas duas receitas. Na compilada, o teste nativo cobre link, submódulo e nome com caractere de controle 0x01, mas não cobre nome não UTF-8. Lá a recusa depende do git citar bytes ≥ 0x80, o que só acontece com core.quotePath=true. A listagem sem -z é decodificada como UTF-8, e só a barra invertida do nome citado faz safe() recusar. environment() anula a config global e a de sistema, mas a config local do repositório continua sendo lida. Com core.quotePath=false local, o nome chega com U+FFFD, cai sob o prefixo, é excluído e nenhuma checagem o recusa. Não é regressão, porque antes também passava, mas o aceite RS03 não está demonstrado para a compilada.",
+      "evidence": "boundary-semantic-compiled.mjs:38–44 (GIT sem -c core.quotePath=true), 393–399 (ls-tree --format sem -z), 465–470 (safe/barra invertida). A instalada tem o caso não UTF-8 nas linhas 269–281 do teste e checagem de ida e volta da listagem inteira (build-installed-reference.mjs:531–534). A compilada não tem. Hoje a config local do repositório não define quotePath, e a árvore real tem 0 nomes que exigem citação.",
+      "requiredChange": "Adicionar à compilada o caso não UTF-8 sob o prefixo, esperando COMPILED_SOURCE_TYPE. Tornar a recusa independente da config local, de um destes modos: incluir '-c', 'core.quotePath=true' em GIT (o argv do archive muda junto e o leitor usa a mesma constante), ou listar com -z e conferir ida e volta UTF-8, como na instalada."
+    },
+    {
+      "id": "R1-05",
+      "severity": "P2",
+      "file": "docs/04_audit/evidence/HISO005-P2-BUILD-0243-20261019/task-contract.json:66",
+      "finding": "O registro da migração RT03 diz 'registrada ... antes da edição do teste'. Os carimbos mostram outra ordem: o registro (10:35:51.469888Z) vem 0,71 s depois do mtime do teste editado, tests/b6-0234-reference-recipe.integration.js (10:35:50.756Z, SHA d8eae887). O conteúdo da migração é aceitável. A intenção se mantém: entrada não rastreada que some na amostragem e é recusada na varredura estrita. A primeira falha (SNAPSHOT_MISMATCH) está preservada em native-profile-0243-a1. O que está errado é a ordem declarada. As outras migrações (RT02 e sourceExclusions) não têm carimbo próprio. O arquivo do contrato foi regravado às 10:35:51Z, então a ordem 'antes da edição' delas depende só do registeredAt geral (10:20:48Z), compatível com o mtime dos testes (10:26:48Z) e com o first-red RT02 (10:30:10Z).",
+      "evidence": "Saída de stat: task-contract.json 07:35:51.470 -0300; tests/b6-0234-reference-recipe.integration.js 07:35:50.756 -0300; native-profile-0243-a2 começou em 10:35:51.501Z.",
+      "requiredChange": "Corrigir o registro: declarar que a RT03 foi registrada junto com a edição, logo depois dela, citando os carimbos, e registrar que esta crítica aceita o conteúdo da migração. Nas próximas migrações, gravar o registro com carimbo próprio antes de qualquer edição."
+    }
+  ],
+  "optionalFindings": [
+    {
+      "id": "R1-06",
+      "severity": "P3",
+      "file": "scripts/build-installed-reference.mjs:546",
+      "finding": "Na instalada, a checagem de modo (link) vale só para entradas fora da denylist anterior (node_modules, dist, .env*, credenciais…). Um link em docs/04_audit/evidence/**/node_modules/** não é recusado, e na compilada é. O comportamento é anterior à 0243, não é regressão, e a árvore real tem 0 links. O texto do RS03 ('link sob o prefixo continua recusado') fica verdadeiro só fora da denylist.",
+      "evidence": "Linhas 546–548: listedFiles = tracked.filter(!excluded). Na compilada, o filtro de tipo das linhas 465–470 vale para todas as entradas.",
+      "requiredChange": "Opcional: aplicar a checagem de modo a `tracked` inteiro, ou registrar a exceção da denylist no relatório do RS03."
+    },
+    {
+      "id": "R1-07",
+      "severity": "P3",
+      "file": "scripts/boundary-installed-identity.mjs:62",
+      "finding": "A guarda lê package.json e package-lock.json da raiz com readFileSync, sem teto, antes do SOURCE_LIMIT. Os leitores existentes usam readJson, com teto de 16 MiB. Um lock gigante é lido inteiro antes da recusa por limite. A falha continua fechada, porque um JSON ilegível vira null na guarda e é recusado depois.",
+      "evidence": "Linhas 62–70.",
+      "requiredChange": "Opcional: ler com teto (readPhysical/readJson) e tratar estouro como recusa nomeada."
+    },
+    {
+      "id": "R1-08",
+      "severity": "P3",
+      "file": "tests/b6-0243-reference-source-scope.integration.js:335",
+      "finding": "Lacunas menores de cobertura. Na instalada, o RS05 testa a flag e a env juntas, então o efeito nulo da env sozinha não fica isolado. Na compilada faltam: teste de override por CLI e env; RS02 com arquivo cujo nome é exatamente o prefixo; e RS04 nativo para chave e link de lock e para file:, hoje cobertos só pelo portátil, que exercita a mesma função. O leitor compilado não tem caso de sourceExclusions com elemento extra; a igualdade canônica cobre esse caso.",
+      "evidence": "Linhas 335–356, 645–700 e 789–846.",
+      "requiredChange": "Opcional: acrescentar esses casos."
+    },
+    {
+      "id": "R1-09",
+      "severity": "P3",
+      "file": "scripts/boundary-semantic-compiled.mjs:486",
+      "finding": "O resultado de compilerInputs(source) no build é descartado. Compará-lo com compilerSources (snapshot) amarraria os dois fechamentos já no build. Hoje só o leitor faz isso.",
+      "evidence": "Linhas 486–492 e 576–581.",
+      "requiredChange": "Opcional: assertSame(closureOrigem, compilerSources, 'COMPILED_SOURCE_OUTSIDE_RECIPE' ou código próprio)."
+    },
+    {
+      "id": "R1-10",
+      "severity": "P3",
+      "file": "docs/04_audit/evidence/HISO005-P2-BUILD-0243-20261019/operators/freeze.py:19",
+      "finding": "O campo preimagesAtParent grava null para os arquivos alterados em vez do SHA no commit pai. O nome engana. As pré-imagens corretas estão em candidate-preflight.json.",
+      "evidence": "source-freeze-r1.json:77–79.",
+      "requiredChange": "Opcional: gravar o SHA do blob no pai (git show pai:caminho) ou renomear o campo."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "Freeze r1 confere com o working tree (13 arquivos) e com o patch", "result": "PASS", "evidence": "sha256sum dos 13 arquivos igual a files[].sha256; patch 9ed5a223… igual a patchSha256; git status mostra exatamente os 13 caminhos"},
+    {"id": "S02", "what": "Pré-imagens por conteúdo (SPEC0242 §5) na base bcd49fa6", "result": "PASS", "evidence": "candidate-preflight.json preimagesMatch=true; os first-red rodaram sobre 78d198c7/70f6c43a/dd006347"},
+    {"id": "S03", "what": "§3.1 constante fechada única, congelada, comparação exata e sensível a maiúsculas, depois de safe()", "result": "PASS", "evidence": "boundary-installed-identity.mjs:20–27; sem leitura de env/CLI/recibo (grep process.env só em pinnedToolchainLocation); teste portátil RS02"},
+    {"id": "S04", "what": "§3.2 instalada: listagem completa com UTF-8 de ida e volta inteira, safe(), tipo blob, modo 100644/100755 e submódulo, antes da exclusão", "result": "PASS", "evidence": "build-installed-reference.mjs:531–548; a exclusão só entra na linha 560; first-red mostra que a pré-imagem não recusava nome não UTF-8 sem paginação (ENOENT); ver P3 R1-06"},
+    {"id": "S05", "what": "§3.2 instalada: archive com --literal-pathspecs e conjunto físico exato antes do npm", "result": "PASS", "evidence": "linha 593 (--literal-pathspecs); snapshotMatches nas linhas 614 e 686 (depois de beforeNpm e revalidate, logo antes do strace/npm); igualdade exata nos dois sentidos; RS08 nativo"},
+    {"id": "S06", "what": "§3.2 compilada: pathspec mágica única e constante, ambiente limpo, nenhum arquivo fora da lista incluída antes da cópia de node_modules, sourceInputs igual", "result": "PASS", "evidence": "boundary-semantic-compiled.mjs:47–56 (archiveArgv), 193–203 (environment explícito, sem GIT_*_PATHSPECS), 519–533 (physical + assertSame COMPILED_DIRTY_SOURCE antes do cpSync); RS08 compilado"},
+    {"id": "S07", "what": "§3.3 ordem na instalada: commit → listagem → guarda → limites → validateConfigs → sourceDigest → fingerprintResolution → archive", "result": "PASS", "evidence": "linhas 460–463, 528–548, 551–557, 572–585; teste 'conflict before an unknown root config' (guarda vence PROJECT_CONFIG_UNKNOWN)"},
+    {"id": "S08", "what": "§3.3 ordem na compilada: commit → listagem → guarda → sourceInputs → compilerInventory → dependencies (fingerprint) → compilerInputs → archive", "result": "PASS", "evidence": "linhas 357–361, 465–470, 474–493; teste nativo RS04 (guarda vence o tsconfig quebrado)"},
+    {"id": "S09", "what": "Recusas nomeadas SOURCE_EXCLUSION_CONFLICT e COMPILED_SOURCE_EXCLUSION_CONFLICT, sem recibo", "result": "PASS", "evidence": "build-installed-reference.mjs:557; boundary-semantic-compiled.mjs:476; testes conferem a ausência de reference.json"},
+    {"id": "S10", "what": "§3.3(1) glob curinga que alcança diretório sob o prefixo sem manifesto", "result": "FAIL", "evidence": "R1-02"},
+    {"id": "S11", "what": "§3.3(1) semântica de fingerprintResolution: segmentos * e ?, ** com zero ou mais componentes, node_modules/dist/.git ignorados, padrão literal", "result": "PASS", "evidence": "workspaceMatches (31–52) equivale a expand (327–358) para diretórios rastreados; caso literal mais conservador; padrões com {}[]! seguem recusados depois por fingerprintResolution"},
+    {"id": "S12", "what": "§3.3(2) chave do lock, alvo de link e resolved file: (com ./ e normalize)", "result": "PASS", "evidence": "linhas 106–121; testes portáteis e nativos"},
+    {"id": "S13", "what": "§3.3(3) qualquer .npmrc sob o prefixo e manifesto de workspace sob o prefixo", "result": "PASS", "evidence": "linhas 72–74 e 97–103; testes portáteis e nativos"},
+    {"id": "S14", "what": "A guarda não recusa indevidamente a árvore real da candidata", "result": "PASS", "evidence": "HEAD da candidata: 0 .npmrc em toda a árvore; workspaces apps/*, packages/*, legacy/packages/*, products/*; lock v3 com 411 pacotes, 0 chaves docs/*, links só em apps/legacy/packages/products, 0 file:"},
+    {"id": "S15", "what": "Compilada: entrada do compilador e tsconfig sob o prefixo recusados antes do recibo (depRoot === source)", "result": "PASS", "evidence": "sourceInputs → COMPILED_CONFIG_UNSUPPORTED; compilerInputs(source) → COMPILED_SOURCE_OUTSIDE_RECIPE; teste nativo RS04"},
+    {"id": "S16", "what": "Compilada com --dependencies-root diferente: fail-closed e mesmo resultado nomeado antes do recibo", "result": "FAIL", "evidence": "R1-03 (o leitor segue fail-closed; no build, o recibo pode ser escrito)"},
+    {"id": "S17", "what": "Leitor instalado recusa sourceExclusions ausente, diferente, extra, vazio ou que não é lista", "result": "PASS", "evidence": "boundary-installed-identity.mjs:878–884; 5 casos portáteis; leitor também exercitado via dependencies() da compilada e boundary-manifests"},
+    {"id": "S18", "what": "Leitor compilado v2 recusa v1, recusa sourceExclusions ausente ou diferente, e confere argv e cwd do archive exatamente como produzidos", "result": "PASS", "evidence": "linhas 703–713 e 760–770; archiveArgv(path.dirname(r.root), r.commit) dá o mesmo argv do build (r.root = target/snapshot); cwd = sourceRoot; testes nativos RS05"},
+    {"id": "S19", "what": "§3.5 nenhum limite alterado (constante, recibo, 4 GiB do archive)", "result": "PASS", "evidence": "o diff não toca INSTALLED_IDENTITY_LIMITS nem o teto das linhas 495–496; teste portátil RS07"},
+    {"id": "S20", "what": "§3.6 campos novos ou alterados dos recibos dentro da lista fechada", "result": "PASS", "evidence": "instalada: só recipe.sourceExclusions novo; compilada: recipeVersion, recipeSha256, sourceExclusions e commandsSha256 (archive e a linha extra de compilerInputs(source) só alteram commands.json). Comparação real RS06: N/A aqui"},
+    {"id": "S21", "what": "RS01 primeira falha preservada: a pré-imagem recusa por limite e a nova receita constrói", "result": "PASS", "evidence": "first-red-0243-native: RS01 falha com SOURCE_LIMIT sobre 70f6c43a; verde em green-0243-native-a1 (bytes pré-freeze, ver R1-01)"},
+    {"id": "S22", "what": "RS03 instalada: link, submódulo, não UTF-8 e nome inseguro sob o prefixo", "result": "PASS", "evidence": "testes nativos das linhas 248–282"},
+    {"id": "S23", "what": "RS03 compilada: nome não UTF-8 sob o prefixo", "result": "FAIL", "evidence": "R1-04 (sem teste; recusa depende de core.quotePath)"},
+    {"id": "S24", "what": "RS08 nomes *, ?, [ e :( fora do prefixo arquivados literalmente; plantio recusado nas duas receitas", "result": "PASS", "evidence": "testes nativos RS08 (instalada: SNAPSHOT_MISMATCH; compilada: COMPILED_DIRTY_SOURCE, sem node_modules)"},
+    {"id": "S25", "what": "Migração RT02: a intenção 'nunca recibo parcial silencioso' se mantém, e a primeira falha está preservada", "result": "PASS", "evidence": "first-red-0243-migration-rt02 (PROCESS_NONZERO na pré-imagem); o novo teste exige o conteúdo literal e sourceSha256 igual ao digest da listagem completa paginada"},
+    {"id": "S26", "what": "Migração RT03: sentinela como diretório, mesma intenção; registro antes da edição", "result": "FAIL", "evidence": "conteúdo PASS (lstat espionado vale para diretório; falha preservada em native-profile-0243-a1); ordem do registro, ver R1-05"},
+    {"id": "S27", "what": "Migração de sourceExclusions nos recibos sintéticos (6 arquivos), sem outro recibo sintético esquecido", "result": "PASS", "evidence": "grep: 8 recibos sintéticos com ignoreScripts e todos com sourceExclusions; fixture D8 antiga aceita campo extra; v1 em b6-0241:1237 é só rótulo para o engine, que não confere recipeVersion"},
+    {"id": "S28", "what": "Nenhum limite, pin, asserção, skip ou gate relaxado", "result": "PASS", "evidence": "o diff não remove asserção; sem .skip/.only/.todo; AUX/AUXILIARY_PINS e TS_SHA iguais; perfil nativo só ganhou um include"},
+    {"id": "S29", "what": "Regressão provável fora do delta (boundary-manifests, check-product-boundary, engine)", "result": "PASS", "evidence": "leitores mudam de propósito (recibos instalados sem exclusão e compilados v1 passam a ser recusados; as referências são reconstruídas a cada medição, §3.4); engine e checker inalterados; focal 808/808 só sobre bytes pré-freeze (R1-01)"},
+    {"id": "S30", "what": "Evidência verde amarra os bytes congelados", "result": "FAIL", "evidence": "R1-01"},
+    {"id": "S31", "what": "Teste portátil 0243 nos bytes congelados (Node pinado, TMPDIR próprio)", "result": "PASS", "evidence": "15/15 em 1,46 s; a candidata segue com o mesmo git status"},
+    {"id": "S32", "what": "node --check dos 3 scripts e dos 2 testes novos", "result": "PASS", "evidence": "5/5 ok"},
+    {"id": "S33", "what": "RS06/RS07 (receitas reais em 228e7918 e no commit vigente)", "result": "N/A", "evidence": "fora do escopo de código desta rodada; o executor está rodando agora (runtime/eval-228e, refs-pre-228e)"}
+  ],
+  "commands": [
+    {"cmd": "sha256sum docs/02_spec/0243_b6_reference_source_scope.md", "summary": "6db49cf5…, igual ao aprovado"},
+    {"cmd": "git -C <candidata> log -1; git -C <candidata> status --short; sha256sum dos 13 arquivos do freeze", "summary": "HEAD bcd49fa6…; 11 M + 2 ??; todos os SHA iguais ao source-freeze-r1.json"},
+    {"cmd": "sha256sum EV/source-freeze-r1.json EV/source-freeze-r1.patch.txt", "summary": "4a74bd67…; 9ed5a223… (igual a patchSha256)"},
+    {"cmd": "git -C <candidata> diff (scripts, testes, config nativa)", "summary": "delta lido por inteiro; os scripts também foram lidos fora do diff (fingerprintResolution, readReceipt, allFiles, fluxo completo das duas receitas e do leitor compilado)"},
+    {"cmd": "python3 -I -B (leitura dos *-command.json e first-red-0243-native.vitest.json)", "summary": "first-red na pré-imagem, verdes e focal; sourceSha256 de cada execução diferente do freeze nos 5 arquivos"},
+    {"cmd": "stat -c '%y' (EV e arquivos da candidata)", "summary": "regravação às 07:59:18–19 -0300, depois do focal; RT03 registrada 0,71 s depois do mtime do teste"},
+    {"cmd": "git -C <candidata> ls-tree -r HEAD (filtros de .npmrc, links, nomes citáveis, nomes mágicos) + python3 -I -B no package.json/lock", "summary": "árvore real sem gatilho da guarda; 0 links/gitlinks; 0 nomes citáveis; 0 nomes mágicos"},
+    {"cmd": "cat <repo>/.git/config; cat <candidata>/.git", "summary": "worktree; sem core.quotePath local"},
+    {"cmd": "node --check (3 scripts + 2 testes)", "summary": "ok"},
+    {"cmd": "cd <candidata> && env -i PATH=<node22.23.2>:/usr/bin:/bin LANG=C TZ=UTC TMPDIR=<scratchpad>/r1tmp HOME=<scratchpad>/r1tmp node node_modules/vitest/vitest.mjs run tests/b6-0243-reference-source-scope.test.js --no-file-parallelism --maxWorkers=2", "summary": "15/15 nos bytes congelados; load average 7,4 antes de rodar"}
+  ]
+}

@@ -59,9 +59,11 @@
 - Estado em 19/10, depois da consolidação. Tudo vai à `main` por PR montado em worktree detached sob `/mnt/dados/cvg-work/`, e a branch temporária é apagada depois do merge. Histórico local preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.
   - Já na `main`: captura r5 da SPEC0238 (PR #5). Em CI: BUILD0241 + T2 da receita (PR #6). Este PR documental leva as evidências e as decisões desta sessão.
   - Em andamento, com claims ativos:
-    - `HISO005-P2-BUILD-0243` e depois `-0242`: candidata `/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019`; PG `cvg-hiso005-build0242-pg` 56262, API 3448, web 4448; evidência `HISO005-P2-BUILD-0243-20261019/` e `-0242-20261019/`.
-    - `DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2`: só documental, `g02/sdk-batch-2b2-binding/`.
-  - Concluídas no Codex100: ligação v3 (25 contratos observados, 19 abertos), lote 2B-1 (CONTROL em MISMATCH, 15/15 PASS) e ligação v4 (29 observados, 15 abertos, com a errata do v3 aplicada) e lote 2B-2 (CONTROL em MISMATCH, 17/17 PASS).
+    - Atualização: BUILD0243 e BUILD0242 promovidos neste PR; candidata e PG liberados (PG 56262 removido, portas 3448/4448 livres).
+    - `DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1`: candidata `/mnt/dados/cvg-work/cvg-codex100-c31-20261019`; unidades `cvg-dx100-c31-*`; sem PG e sem porta; evidência `g02/sdk-continuation-3-1-admission/`.
+    - `DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4` (aquisição única autorizada): cache privado em `/mnt/dados/cvg-work/cvg-codex100-distributed-cache-20261019`, sem instalação global; evidência `g02/sdk-distributed-acquisition/`.
+    - `HISO005-P2-NEXT-RECON-20261020` (T1): causas dos 13.521 diagnósticos; evidência própria.
+  - Concluídas no Codex100: ligações v3 a v5 (33 observados, 11 abertos), lotes 2B-1 e 2B-2 e especificação da continuação 3.
 
 ### HISO005-P2-BUILD-0240-20261018 — SPEC0240 aprovada (Codex) (ATIVO BUILD T3 LOCAL)
 

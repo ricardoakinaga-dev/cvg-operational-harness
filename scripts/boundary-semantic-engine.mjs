@@ -82,16 +82,19 @@ export function semanticOriginId(origin) {
   delete tuple.id
   return hash(semanticCanonicalJson(tuple))
 }
+// SPEC0242 L1/L2 (approved values): the integral body of the real tree needs
+// 145 contexts and 125,460 states; one global deadline for census, analysis
+// and recomputation. Constants only: an input can reduce them, never raise.
 export const SEMANTIC_LIMITS = Object.freeze({
   maxFileBytes: 16 * 1024 ** 2,
   maxTotalBytes: 256 * 1024 ** 2,
   maxFiles: 12000,
   maxNodes: 2000000,
   maxUnionValues: 128,
-  maxContexts: 64,
+  maxContexts: 256,
   maxCallDepth: 64,
-  maxStates: 100000,
-  timeoutMs: 120000
+  maxStates: 250000,
+  timeoutMs: 300000
 })
 function limitsFor(input) {
   const limits = { ...SEMANTIC_LIMITS }

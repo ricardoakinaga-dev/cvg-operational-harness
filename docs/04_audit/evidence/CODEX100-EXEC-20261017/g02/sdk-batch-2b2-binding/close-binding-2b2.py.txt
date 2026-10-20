@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2 - escreve state.json e next-task.json com os sha atuais.
+# Uso: python3 -I -B close-binding-2b2.py.txt <unit_dir> <phase>   (phase: draft antes de cada revisão | final depois da última)
+# O orçamento e a revisão são contados pelos arquivos que existem, em qualquer fase. Na fase final, o status sai do último veredito e
+# da disposição, se houver.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+U, PHASE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2"
+UNIT = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-batch-2b2-binding"
+
+
+def p(*a):
+    return os.path.normpath(os.path.join(U, *a))
+
+
+def has(name):
+    return os.path.exists(p(name))
+
+
+def load(name):
+    with open(p(name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(p(name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+cov, gaps, val, iv = (load(x) for x in ("coverage-observed-v5.json", "gaps-review-v5.json", "validation.json", "input-verification.json"))
+adm_state = load("../sdk-batch-2b2-admission/state.json")
+adm_next = load("../sdk-batch-2b2-admission/next-task.json")
+r1 = load("review-r1/review.json") if has("review-r1/review.json") else None
+r2 = load("review-r2/review.json") if has("review-r2/review.json") else None
+disp = load("review-r2/executor-disposition.json") if has("review-r2/executor-disposition.json") else None
+review = None
+if r1:
+    review = {"R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (r1["verdict"], r1.get("summary_counts", "")),
+              "repair": "repair-r1.json (1/1), preimagens em archives/r1-preimages/" if has("repair-r1.json") else "não usado",
+              "R2": ("%s (%s) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt" % (r2["verdict"], r2.get("summary_counts", ""))) if r2 else "não usada",
+              "disposition": "review-r2/executor-disposition.json" if disp else None,
+              "critic": "subagente novo por rodada, somente leitura; o executor gravou brief e veredito sem edição"}
+    if r2:
+        review["R1_findings_after_R2"] = {s: sum(1 for x in r2.get("r1_findings_status", []) if x["status"] == s) for s in ("RESOLVED", "PARTIAL", "OPEN")}
+status = "IN_REVIEW"
+if PHASE == "final":
+    final = r2 or r1
+    if final["verdict"] == "APPROVE":
+        status = "COMPLETED_LOCAL"
+    elif disp and any(i["severity"] in ("P1", "P2") for i in disp["items"]):
+        status = "COMPLETED_LOCAL_WITH_CARRIED_P2"
+    else:
+        status = "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS"
+
+partial = [a["arm_id"] for a in cov["arms_observed_2b2"] if a.get("observed_scope")]
+qualified = [a["arm_id"] for a in cov["arms_observed_2b2"] if a.get("qualification")]
+QUESTIONS = [
+    {"id": "Q1", "tier": "T3", "topic": "identidade dos artefatos frente ao pin",
+     "question": "Para o perfil distribuído, você adota a release 0.153.4 como outro pin (com openai-codex-cli-bin, @openai/codex e @openai/codex-linux-x64 nessa versão, e o openai-codex e o @openai/codex-sdk publicados com ela), registrando que não há prova de vínculo deles com o pin 8d9f6466, ou exige build reproduzível a partir do pin?"},
+    {"id": "Q2", "tier": "T4", "topic": "aquisição com rede",
+     "question": "Você autoriza uma única aquisição com rede, no PyPI e no npm, só dos artefatos da lista da Q1, com os digests do registry gravados, guarda num cache privado e nenhuma instalação global?"},
+    {"id": "Q3", "tier": "T3", "topic": "recorte keyless",
+     "question": "Você aceita que o perfil distribuído rode o Codex CLI publicado só sem rede, sem provider e sem credencial (modo keyless), deixando login real e chamadas a modelo para um gate T4 separado?"},
+    {"id": "Q4", "tier": "T3", "topic": "testemunha privilegiada do TS12 (fora do perfil distribuído)",
+     "question": "Você autoriza uma testemunha privilegiada (CAP_SYS_PTRACE ou fanotify), só dentro do namespace da unidade e só durante o caso, para observar o término do filho pré-abortado do TS12?"},
+]
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente", "status": status, "write_scope": UNIT + "/**",
+    "repo": iv["repo"], "anchor_commit": iv["anchor_commit"],
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])), "record": "input-verification.json"},
+    "result": {
+        "map": "coverage-observed-v5.json", "v4_unchanged_sha256": cov["sources"]["coverage_observed_v4"]["sha256"],
+        "counts_v4": cov["counts_v4"], "counts_v5": cov["counts"],
+        "status_changes": [x["contract"] for x in cov["status_changes"]],
+        "bound_cases_2b2": cov["bound_cases_2b2"],
+        "arm_discrimination_consumed": cov["arm_discrimination_consumed"],
+        "arms_observed_2b2": len(cov["arms_observed_2b2"]),
+        "arms_observed_by_contract": {c: [a["arm_id"] for a in cov["arms_observed_2b2"] if a["contract"] == c] for c in sorted({a["contract"] for a in cov["arms_observed_2b2"]})},
+        "arms_partial_scope": partial, "arms_qualified": qualified,
+        "arms_open_explicit_v5": [{"arm": a["arm_id"], "case": a["case"], "reason": a["reason"]} for a in cov["arms_open_explicit_v5"]],
+        "lead_decision_f01": cov["lead_decision_f01"],
+        "errata_applied": [{"id": e["id"], "where": e.get("arm") or e.get("arms")} for e in cov["errata_applied"]],
+        "open_contracts": [r["source_contract"] for r in cov["rows"] if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE"],
+        "remaining_open_by_contract": cov["remaining_open_by_contract"],
+        "gaps": gaps["summary"],
+        "projection_v4_confirmed": {"counts_and_rows": cov["projection_check"]["confirmed"], "gaps": gaps["summary"]["projection_v4_gaps_confirmed"]},
+        "how_next_profile": {"path": "HOW-next-profile-v2.md", "sha256": sha("HOW-next-profile-v2.md")},
+        "user_decisions": QUESTIONS,
+        "validation": "%s (%d erros; %d/%d controles negativos rejeitados)" % (val["result"], len(val["errors"]), sum(n["rejected"] for n in val["negative_controls"]), len(val["negative_controls"])),
+        "next_task": "next-task.json (SPECIFY da continuação 3 do perfil de fonte)",
+    },
+    "scripts": ["verify-inputs-2b2.py.txt", "build-binding-2b2.py.txt", "validate-binding-2b2.mjs.txt", "close-binding-2b2.py.txt"],
+    "formatting": {"tool": "prettier 3.8.3 (node_modules do repositório, Node v22.23.2), npx prettier --ignore-path /dev/null --write",
+                   "order": ["verify-inputs-2b2.py.txt grava input-verification.json", "build-binding-2b2.py.txt grava os dois JSON com json.dumps(indent=2)",
+                             "prettier --write nos JSON", "validate-binding-2b2.mjs.txt grava validation.json", "prettier --write validation.json",
+                             "HOW-next-profile-v2.md escrito à mão e passado no prettier", "close-binding-2b2.py.txt grava state.json e next-task.json",
+                             "prettier --write state.json e next-task.json"],
+                   "effect": "Só a forma dos arrays curtos (numa linha) e quebras; o conteúdo JSON é o do script. Rodar os scripts sem o prettier reproduz o conteúdo, não os bytes.",
+                   "not_formatted": ["review-freeze-r*.json (assunto das revisões, ligado por sha)", "review-r*/verdict.raw.txt (texto do crítico sem edição)"]},
+    "budget": {"services": 0, "reviews": "%d/2" % sum(1 for x in (r1, r2) if x), "grouped_repairs": "1/1" if has("repair-r1.json") else "0/1"},
+    "review": review, "functional_receipts": 0, "parity_credit": 0,
+    "note": "Observação de cliente não é paridade. Sem serviço, SDK, rede, PG, commit ou branch; Docker só para o gitleaks. Ledgers, coordenação, 0384-0386 e catálogo central não editados.",
+    "secret_scan": "secret-scan.json: o gitleaks roda por último, sobre uma cópia da pasta final; o registro lista o sha de cada arquivo escaneado.",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+if disp:
+    state["status_note"] = disp["unit_outcome"]
+nt = {
+    "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3 (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": status, "status": "READY_PENDING_LEAD_CLAIM" if PHASE == "final" else "DRAFT_PENDING_REVIEW",
+    "track": "T1 documental", "t3_required": False,
+    "what": ("Especificar a continuação 3 do perfil de fonte com os resíduos que cabem sem decisão nova (HOW-next-profile-v2.md, seção 'O que cabe sem "
+             "decisão nova'): a segunda continuação 2A (TS01 a TS15, PY03, PY04, PY15, PY16) e a continuação do lote 2B (PY02, PY05, PY08, PY10, PY12, "
+             "PY13, PY14, PY17, PY18). Mesmo pin, mesma contenção, peers sintéticos; dividir em sub-lotes se passar de 24 vagas ou 12 serviços. Cada braço "
+             "mirado com passo que distinga o ramo do contrário (padrões de discriminação do 2B-1 e do 2B-2). Nenhum contrato novo; só reduz o resto aberto."),
+    "definition": {"how": {"path": UNIT + "/HOW-next-profile-v2.md", "sha256": sha("HOW-next-profile-v2.md")},
+                   "remaining": {"path": UNIT + "/coverage-observed-v5.json#/remaining_open_by_contract", "sha256": sha("coverage-observed-v5.json")}},
+    "id_convention": "Identificadores de achado prefixados pela origem: 2B2-ADM/... (admissão do 2B-2), 2B1-BIND/... e 2B2-BIND/... (BIND do 2B-1 e deste).",
+    "preconditions_now": [
+        "Perfil de fonte do lote 2 completo: v5 com %d observados e %d abertos; os abertos são todos do perfil distribuído."
+        % (cov["counts"]["OBSERVED_CLIENT_PARTIAL"], cov["counts"]["OPEN_REQUIRED_FUTURE_PROFILE"]),
+        "Admissão do 2B-2: %s, R1 %s, %d/17 PASS_CLIENT_OBSERVATION." % (adm_state["status"], adm_state["review"]["r1"]["verdict"], adm_state["cases"]["counts"]["PASS_CLIENT_OBSERVATION"]),
+    ],
+    "carry_over_from_2b2_admission": ["2B2-ADM/%s: %s" % (x["finding"], x["text"]) for x in adm_state["carry_over_next"]],
+    "carry_over_note": ("Os itens 2B2-ADM/R1-F02, R1-F03 e R1-F04 valem para a próxima unidade que reusar o avaliador (a IMPLEMENT da continuação 3). "
+                        "O DV1 está decidido (lead-decision-f01.json, ACCEPT_FAIL_CLOSED_OUTCOME); a errata T1 do passo 13 do 2B-PY13E entra como opção "
+                        "na especificação, para que o known_bad 'pular o cleanup' possa terminar em MISMATCH."),
+    "user_decisions_pending": {
+        "questions": QUESTIONS,
+        "note": "Não bloqueiam esta unidade. O pacote de decisão vai ao usuário em paralelo; sem Q1, Q2 e Q3, PY19, PY20 e PK01 a PK09 seguem OPEN_REQUIRED_FUTURE_PROFILE. Q4 decide a testemunha do TS12.",
+    },
+    "after_this": [
+        "IMPLEMENT-AND-ADMIT da continuação 3 (com o carry-over 2B2-ADM/R1-F02 a R1-F04)",
+        "BIND da continuação 3 (coverage-observed-v6 ao lado do v5)",
+        "com Q1, Q2 e Q3 respondidas: SPECIFY do perfil distribuído no linux-x64 (PY19, PY20, PK01 a PK09, ramo empacotado do PY02)",
+    ],
+    "not_authorized_now": adm_next["not_authorized_now"],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+if disp:
+    nt["carry_over_from_bind_review"] = ["2B2-BIND/%s (%s, %s): %s" % (i["id"], i["severity"], i["disposition"], i["note"]) for i in disp["items"]]
+if r1:
+    nt["review_records"] = {k: {"path": v, "sha256": sha(v)} for k, v in (("review_r1", "review-r1/review.json"), ("repair_r1", "repair-r1.json"),
+                                                                         ("review_r2", "review-r2/review.json"), ("disposition_r2", "review-r2/executor-disposition.json"),
+                                                                         ("coverage_observed_v5", "coverage-observed-v5.json"),
+                                                                         ("gaps_review_v5", "gaps-review-v5.json"),
+                                                                         ("how_next_profile_v2", "HOW-next-profile-v2.md")) if has(v)}
+for name, obj in (("state.json", state), ("next-task.json", nt)):
+    with open(p(name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(status, state["budget"], state["result"]["validation"])

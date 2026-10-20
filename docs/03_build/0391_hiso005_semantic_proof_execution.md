@@ -2,6 +2,18 @@
 
 Estado corrente: BUILD0237 concluído localmente na fonte `84d8d4b4`, sete deltas próprios integrados. Revisão final APPROVE/zero obrigatórios,398 focais,16 gates/38 hashes atuais e5.211 unit/302 PG/12 E2E/zero skips.14 aceites PASS e consumidor fresco207 imports/76 exports/oito pacotes/zero rede. [Resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md), [estado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/state.json). Root77 protegidos/índice/HEAD preservados,PG próprio removido/portas livres. B6 permaneceINCOMPLETE1609=537+1072/zero provas; todas 1721 ocorrências históricas também ficam registradas, sem crédito de resolução. Não repetir aprovações 0236/0237 nem reiniciar jobs encerrados.
 
+## Ação atual do pai — 19/10/2026 (CONT-20261018-D9EF)
+
+Estado vigente, que substitui as seções abaixo, mantidas como histórico:
+
+- [BUILD0240](../02_spec/0240_b6_node_metadata_resolution_scope.md) promovido.
+- [BUILD0241](../02_spec/0241_b6_integral_body_installed_provenance.md) e a [T2 da receita](../04_audit/evidence/HISO005-P2-REFERENCE-RECIPE-T2-20261019/REPORT.txt) na `main` pelo PR #6.
+- [BUILD0243](../02_spec/0243_b6_reference_source_scope.md) e [BUILD0242](../02_spec/0242_b6_body_caps_deadlines.md) aprovados pelo usuário em T3 e promovidos com certify 16/16.
+
+A B6 mede agora o corpo inteiro (1.341/1.341 módulos, `validation: true`), com 13.521 diagnósticos, zero provas e zero violações. Continua `INCOMPLETE`, sem aceite B6. [Relatório 0242](../04_audit/evidence/HISO005-P2-BUILD-0242-20261019/REPORT.txt).
+
+`active_action_id: HISO005-P2-NEXT-RECON-20261020`: recon T1 das causas dos 13.521 diagnósticos, para escolher a próxima SPEC.
+
 ## Ação atual do pai — BUILD0240 aprovado — 18/10/2026
 
 Usuário aprovou explicitamente “Aprovo o BUILD local da SPEC0240”, SHA1c14d92852a6d33475a67b533aadfd22ce01e54b86252c404258d33ef0895161. [Autoridade](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/authority-build0240.json), [contratoMS01–12](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/task-contract.json), [estado](../04_audit/evidence/HISO005-P2-BUILD-0240-20261018/state.json). M0resolvido, não repetir aprovação0240/0236/0237 nem reabrir revisões antigas.

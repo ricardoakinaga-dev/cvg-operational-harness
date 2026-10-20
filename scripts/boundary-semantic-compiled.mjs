@@ -11,7 +11,10 @@ import {
   collectPackageInventory,
   createInstalledIdentityComparator,
   pinnedToolchainLocation,
-  INSTALLED_IDENTITY_LIMITS
+  INSTALLED_IDENTITY_LIMITS,
+  REFERENCE_SOURCE_EXCLUSIONS,
+  referenceSourceExcluded,
+  referenceSourceExclusionConflict
 } from './boundary-installed-identity.mjs'
 
 // Location only (CVG_PINNED_NODE/CVG_PINNED_NPM or the running Node); the
@@ -29,6 +32,33 @@ const AUX = {
 const TS_SHA =
   '569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39'
 const SELF = fileURLToPath(import.meta.url)
+// SPEC0243: v2 differs from v1 only in the archive scope (the closed
+// REFERENCE_SOURCE_EXCLUSIONS); first-party dist stays outside this recipe.
+const RECIPE_VERSION = 'shared-contracts-fresh-force-v2'
+// core.quotePath=true: a non-ASCII or non-UTF-8 tree name is always quoted,
+// whatever the repository's local config says, so the listing check refuses
+// it even under an excluded prefix (SPEC0243 RS03).
+const GIT = [
+  '/usr/bin/git',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.quotePath=true'
+]
+// The only pathspec magic of the recipe: one constant exclusion per closed
+// prefix, never derived from repository data, in the clean environment().
+const archiveArgv = (target, commit) => [
+  ...GIT,
+  'archive',
+  '--format=tar',
+  '--output=' + path.join(target, 'source.tar'),
+  commit,
+  '--',
+  '.',
+  ...REFERENCE_SOURCE_EXCLUSIONS.map((prefix) => ':(exclude)' + prefix)
+]
 const REQUIRED = 'packages/contracts/dist/canonical-json.js'
 const SOURCE_ROOTS = ['packages/shared/src', 'packages/contracts/src']
 const CONFIGS = [
@@ -298,8 +328,16 @@ export function buildCompiledReference({
   commit,
   outputRoot,
   dependenciesRoot,
-  installedReference
+  installedReference,
+  testOnly
 }) {
+  // testOnly only lets synthetic fixtures mutate the owned snapshot.
+  if (
+    testOnly !== undefined &&
+    (testOnly?.context !== 'synthetic-fixture' ||
+      Object.keys(testOnly.hooks ?? {}).some((key) => key !== 'afterExtract'))
+  )
+    throw error('COMPILED_TEST_CONTEXT_REQUIRED')
   const source = fs.realpathSync(sourceRoot)
   const target = path.resolve(outputRoot)
   const depRoot = fs.realpathSync(dependenciesRoot ?? source)
@@ -312,23 +350,15 @@ export function buildCompiledReference({
     target.startsWith(depRoot + path.sep)
   )
     throw error('COMPILED_OUTPUT_NOT_FRESH')
-  const tools = toolchain(),
-    inputs = sourceInputs(source),
-    compiler = compilerInventory(depRoot),
-    deps = dependencies(depRoot, installedReference)
+  const tools = toolchain()
+  let inputs, compiler, deps
   const env = environment(),
     commands = []
   fs.mkdirSync(target, { mode: 0o700 })
   const snapshot = path.join(target, 'snapshot')
   fs.mkdirSync(snapshot, { mode: 0o700 })
   try {
-    const git = [
-      '/usr/bin/git',
-      '-c',
-      'core.hooksPath=/dev/null',
-      '-c',
-      'core.fsmonitor=false'
-    ]
+    const git = GIT
     if (
       command([...git, 'rev-parse', 'HEAD'], source, env, commands).trim() !==
       commit
@@ -443,13 +473,40 @@ export function buildCompiledReference({
       )
     )
       throw error('COMPILED_SOURCE_TYPE')
-    const archive = path.join(target, 'source.tar')
-    command(
-      [...git, 'archive', '--format=tar', '--output=' + archive, commit],
+    // SPEC0243 §3.3: the static guard runs on the complete listing, before
+    // sourceInputs, the dependency/fingerprint checks, compilerInputs and
+    // the archive.
+    const names = tree.map((line) => line.slice(7))
+    if (referenceSourceExclusionConflict(source, names))
+      throw error('COMPILED_SOURCE_EXCLUSION_CONFLICT')
+    const included = new Set(
+      names.filter((name) => !referenceSourceExcluded(name))
+    )
+    inputs = sourceInputs(source)
+    compiler = compilerInventory(depRoot)
+    deps = dependencies(depRoot, installedReference)
+    // A compiler input under an excluded prefix is absent from the snapshot,
+    // so its existing refusal (COMPILED_SOURCE_OUTSIDE_RECIPE) is decided on
+    // the source itself, before the archive, in every layout. The source must
+    // therefore carry the same pinned compiler as the dependency root, as the
+    // reader already requires of the evaluated root.
+    if (depRoot !== source) {
+      let own
+      try {
+        own = compilerInventory(source)
+      } catch {
+        throw error('COMPILED_SOURCE_COMPILER_REQUIRED')
+      }
+      assertSame(own, compiler, 'COMPILED_SOURCE_COMPILER_REQUIRED')
+    }
+    const sourceClosure = compilerInputs(
       source,
+      deps.map(({ key }) => key),
       env,
       commands
     )
+    const archive = path.join(target, 'source.tar')
+    command(archiveArgv(target, commit), source, env, commands)
     if (fs.statSync(archive).size > 4 * 1024 * 1024 * 1024)
       throw error('COMPILED_SOURCE_LIMIT')
     command(
@@ -474,6 +531,20 @@ export function buildCompiledReference({
       commands
     )
     fs.unlinkSync(archive)
+    testOnly?.hooks?.afterExtract?.({ snapshot })
+    // SPEC0243 §3.2: before node_modules is copied in, no regular file of
+    // the snapshot lies outside the included listing (the tar --exclude rules
+    // may only remove), and nothing but directories and regular files exists.
+    const physical = (dir) => {
+      for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, item.name)
+        const name = path.relative(snapshot, full).split(path.sep).join('/')
+        if (item.isDirectory()) physical(full)
+        else if (!item.isFile() || !included.has(name))
+          throw error('COMPILED_DIRTY_SOURCE')
+      }
+    }
+    physical(snapshot)
     assertSame(sourceInputs(snapshot), inputs, 'COMPILED_DIRTY_SOURCE')
     for (const project of ['packages/contracts', 'packages/shared']) {
       if (
@@ -523,6 +594,12 @@ export function buildCompiledReference({
       env,
       commands
     )
+    // The scoped snapshot compiles exactly the closure of the source.
+    assertSame(
+      compilerSources,
+      sourceClosure,
+      'COMPILED_SOURCE_CLOSURE_MISMATCH'
+    )
     const before = { outputsAbsent: true, incrementalStateAbsent: true }
     const argv = [
       NODE,
@@ -570,8 +647,9 @@ export function buildCompiledReference({
     const receipt = {
       schemaVersion: 1,
       kind: 'cvg-compiled-build-reference',
-      recipeVersion: 'shared-contracts-fresh-force-v1',
+      recipeVersion: RECIPE_VERSION,
       recipeSha256: sha256File(SELF),
+      sourceExclusions: [...REFERENCE_SOURCE_EXCLUSIONS],
       sourceRoot: source,
       commit,
       root: snapshot,
@@ -646,7 +724,10 @@ export function loadCompiledBuildReference(
       canonicalJson(r) !== raw.toString('utf8') ||
       r.schemaVersion !== 1 ||
       r.kind !== 'cvg-compiled-build-reference' ||
-      r.recipeVersion !== 'shared-contracts-fresh-force-v1' ||
+      r.recipeVersion !== RECIPE_VERSION ||
+      !Array.isArray(r.sourceExclusions) ||
+      canonicalJson(r.sourceExclusions) !==
+        canonicalJson(REFERENCE_SOURCE_EXCLUSIONS) ||
       r.exitCode !== 0 ||
       r.recipeSha256 !== sha256File(SELF)
     )
@@ -697,6 +778,17 @@ export function loadCompiledBuildReference(
       )
     )
       throw error('COMPILED_BUILD_EVENT_INVALID')
+    // SPEC0243 §3.4: the recorded archive is the scoped one, from this source.
+    if (
+      !commands.some(
+        (row) =>
+          row.exitCode === 0 &&
+          row.cwd === r.sourceRoot &&
+          canonicalJson(row.argv) ===
+            canonicalJson(archiveArgv(path.dirname(r.root), r.commit))
+      )
+    )
+      throw error('COMPILED_SOURCE_SCOPE_INVALID')
     assertSame(toolchain(), r.toolchain, 'COMPILED_TOOLCHAIN_MUTATED')
     assertSame(
       compilerInventory(evaluated),

@@ -1,0 +1,214 @@
+{
+  "round": "R1",
+  "task": "HISO005-P2-BUILD-0242",
+  "reviewer": "Claude Code, crítico independente novo (não-fork), só leitura",
+  "observedAt": "2026-10-19T12:55:40Z",
+  "spec": "docs/02_spec/0242_b6_body_caps_deadlines.md",
+  "specSha256": "fa22cf4e5d102421aec49ced674ca5d1720444de53998741d123184ef2b14677",
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-build0243-0242-20261019",
+  "parentCommit": "131ee6cd…",
+  "sourceFreeze": "source-freeze-r1.json",
+  "sourceFreezeSha256": "fc7f52d57e19484bb3c8e25ff6b5f5869917d4b20e1bf4ff7589268e03c82fce",
+  "sourceFreezePatchSha256": "6455bf736dfb72f86d62e4b245c81d655575af98583b1c0734255758aaccebbd",
+  "verdict": "APPROVE",
+  "requiredFindings": [],
+  "optionalFindings": [
+    {
+      "id": "R1-O01",
+      "severity": "P3",
+      "blocking": false,
+      "file": "scripts/check-product-boundary.mjs:2144-2153",
+      "finding": "A emissão de semanticTelemetry.identityPhaseMs (§3.4) não tem teste. O comparador tem teste de usage.phaseMs, mas nenhum teste do checker afirma que o campo existe, tem duas durações finitas e fica fora da igualdade normal/strict.",
+      "evidence": "grep -rn identityPhaseMs em scripts/ e tests/ só acha check-product-boundary.mjs:2149. Os testes de igualdade normal/strict apagam semanticTelemetry inteiro (b6-0237-runtime-resolution.test.js:747-749; b6-0236-boundary-integration.test.js:333-337), mas não olham o campo novo.",
+      "requiredChange": "Opcional: num caso de CLI que já passa --installed-reference e --semantic (por exemplo, o de b6-0237-runtime-resolution.test.js:741), afirmar antes do delete que normal.body.semanticTelemetry.identityPhaseMs tem 2 números finitos >= 0, e que normal e strict continuam iguais sem a telemetria. Se não for feito, a LB05 precisa registrar o campo na medição real."
+    },
+    {
+      "id": "R1-O02",
+      "severity": "P3",
+      "blocking": false,
+      "file": "tests/b6-0242-body-caps-deadlines.test.js:251-269",
+      "finding": "A L3 passa a aceitar um intervalo longo entre as finalizações. Antes, esse caso também caía por COMPARISON_TIMEOUT. Agora, uma mutação nesse intervalo só é pega pela revalidação da finalização final. Nenhum teste da 0242 mostra a revalidação pegando uma mutação depois do intervalo longo. O conjunto revalidado está correto por inspeção, porque o corpo de finalize() não mudou, e o ID-11 cobre a revalidação sem intervalo.",
+      "evidence": "No diff de finalize() só mudam as linhas do relógio (patch, hunk @@ -1201). O ID-11 'repeated finalize revalidates live bytes after an earlier successful finalize' (b6-0234-installed-identity.test.js:806-812) passa no focal-b6-0242-a1, com 10/10 ID-11. O teste do intervalo de 200 s só cobre o caso sem mutação (COMPLETE).",
+      "requiredChange": "Opcional: repetir a fixture do intervalo de 200 s, mutar o pacote avaliado (KEY/index.js) durante o intervalo e afirmar UNAVAILABLE com PACKAGE_CHANGED_AFTER_COMPARISON na finalização final. Se possível, fazer o mesmo com a referência e com o package-lock (RESOLUTION_CHANGED). Assim o item 'conjunto revalidado igual ao de hoje' da LB03 fica demonstrado também por teste."
+    },
+    {
+      "id": "R1-O03",
+      "severity": "P3",
+      "blocking": false,
+      "file": "tests/b6-0242-body-caps-deadlines.test.js:314-323",
+      "finding": "Os casos de TEST_LIMIT_INVALID cobrem só o valor (120001, -1, 1.5, '1000', null). Não cobrem a forma de testOnly, embora o código recuse chave extra, testOnly fora de objeto e objeto vazio.",
+      "evidence": "boundary-installed-identity.mjs:993-1006 exige record(testOnly) e todas as chaves iguais a 'comparisonTimeoutMs'. Nenhum caso testa {comparisonTimeoutMs: 1000, limits: {}}, testOnly: null ou testOnly: {}.",
+      "requiredChange": "Opcional: acrescentar esses três casos ao it.each, esperando TEST_LIMIT_INVALID."
+    },
+    {
+      "id": "R1-O04",
+      "severity": "P3",
+      "blocking": false,
+      "file": "EV/focal-b6-0242-a1-command.json; EV/native-profile-0242-a1-command.json",
+      "finding": "As execuções a1 do focal e do perfil nativo não registram em sourceSha256 o hash de scripts/boundary-semantic-resolution.mjs, o arquivo do desvio de escopo. O conteúdo é o congelado (mtime 12:23:39Z, antes das duas execuções, e sha atual igual ao freeze), mas o registro não prova isso sozinho. A frozen-r1-new já registra o hash.",
+      "evidence": "python3: 'scripts/boundary-semantic-resolution.mjs' in sourceSha256 → False para focal-b6-0242-a1 e native-profile-0242-a1 (e green-0242-a2). frozen-r1-new-command.json registra d4eeca021c5d0068…",
+      "requiredChange": "Opcional: usar como aceite do freeze só as execuções frozen-r1-* (focal e perfil nativo ainda não existiam na hora da revisão) e garantir que elas registrem os 6 hashes congelados."
+    },
+    {
+      "id": "R1-O05",
+      "severity": "P3",
+      "blocking": false,
+      "file": "EV/source-freeze-r1.patch.txt",
+      "finding": "O patch congelado não se reproduz byte a byte com git diff: a abreviação dos hashes na linha 'index' passou de 8 para 9 caracteres porque o banco de objetos compartilhado da worktree cresceu. O conteúdo não mudou: os 6 sha256 por arquivo batem com o freeze.",
+      "evidence": "git -C <candidata> diff | grep ^index → 'index 5cd12638a..2e73a4731'. No patch está 'index 5cd12638..2e73a473'. git diff | sha256sum deu valores diferentes em 12:45Z e 12:52Z sem mudança de arquivo.",
+      "requiredChange": "Opcional: nos próximos freezes, gerar o patch com --full-index e tratar os sha256 por arquivo como autoridade."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "what": "A candidata bate com o freeze r1, e o pai é o commit da 0243 com as pós-imagens previstas na §5",
+      "result": "PASS",
+      "evidence": "Os 6 sha256 por arquivo são iguais ao source-freeze-r1.json. HEAD=131ee6cd… Os blobs do pai batem com parentBlobSha256 e com commit-0243.json/postImagesForSpec0242Base: engine b9246972…, checker 14ab9a8b…, identity 723f52ce…, build-installed-reference d8681aa3… e compiled a7965671… (os dois últimos sem alteração), manifests 40cd1375… (sem alteração). git status mostra só os 6 caminhos."
+    },
+    {
+      "id": "S02",
+      "what": "L1/L2: valores exatos em SEMANTIC_LIMITS, demais tetos iguais, versão do kernel igual",
+      "result": "PASS",
+      "evidence": "boundary-semantic-engine.mjs:88-98: maxContexts 256, maxStates 250000, timeoutMs 300000. maxNodes, maxFiles, bytes, maxUnionValues e maxCallDepth não mudaram. SEMANTIC_KERNEL_VERSION fora do diff. O A2 da 0241 e o LB01 da 0242 fixam os valores por igualdade."
+    },
+    {
+      "id": "S03",
+      "what": "Nenhuma elevação por flag, env ou entrada",
+      "result": "PASS",
+      "evidence": "limitsFor (engine:99-115) recusa valor acima de SEMANTIC_LIMITS com UNKNOWN_INVALID_LIMITS. Nenhum process.env/argv lê limite (grep). A CLI não tem flag de limite (check-product-boundary.mjs:3485-3494), e o checker não passa limits a runSemanticBoundary. O teste LB01 confirma env e entrada 257/250001/300001."
+    },
+    {
+      "id": "S04",
+      "what": "L2: prazo único e global para census, análise e recomputação, fail-closed",
+      "result": "PASS",
+      "evidence": "Código sem mudança: o timeout de spawn é o prazo restante sobre o mesmo started (engine:2063-2066); há envelope timeoutMs em 2094-2097 e 2134-2135, e maxBuffer de 64 MiB. Só o valor mudou."
+    },
+    {
+      "id": "S05",
+      "what": "L3: a fase 1 vai da criação ao fim da 1ª finalização",
+      "result": "PASS",
+      "evidence": "phaseStart=started na criação (identity:1024-1025). Na 1ª finalize(), phaseBegin=started (1230). O checkTime final fica dentro da fase. No teste, first.usage.phaseMs===1000, medido da criação (relógio simulado)."
+    },
+    {
+      "id": "S06",
+      "what": "L3: cada finalização posterior tem relógio próprio",
+      "result": "PASS",
+      "evidence": "Com finalizations>0, phaseBegin=performance.now() e phaseStart=phaseBegin (1230-1232). O teste do intervalo de 200 s termina COMPLETE, com packages 1 e phaseMs 0. Na pré-imagem, o mesmo teste deu COMPARISON_TIMEOUT (first-red-0242-b)."
+    },
+    {
+      "id": "S07",
+      "what": "L3: checkTime e o _deadline de collect() usam o início da fase",
+      "result": "PASS",
+      "evidence": "checkTime: performance.now()-phaseStart>=budget (1033). _deadline: phaseStart+budget (1046). collectPackageInventory faz min(próprio 120 s, _deadline) (528-529), então um _deadline antigo faria o teste de 200 s falhar dentro do collect, porque a fixture tem 1 pacote usado."
+    },
+    {
+      "id": "S08",
+      "what": "compare() depois da 1ª finalização dá COMPARISON_AFTER_FINALIZE e invalida o verificador",
+      "result": "PASS",
+      "evidence": "identity:1117-1122: o resultado entra em outputs e invalidate() marca todos os resultados como UNAVAILABLE. Como invalid fica definido, as finalizações seguintes saem UNAVAILABLE. O teste verifica a chamada tardia, a anterior e a finalize seguinte. A checagem vem antes de 'if (invalid)'."
+    },
+    {
+      "id": "S09",
+      "what": "A finalização posterior revalida o mesmo conjunto de antes",
+      "result": "PASS",
+      "evidence": "O corpo do try de finalize() é idêntico: validateInputs, recoleta avaliado e referência de cada used, validateInputs e fingerprintToolchain. O diff só mexe nas linhas do relógio e em usage.phaseMs. ID-11 10/10 no focal-b6-0242-a1. Ver R1-O02 (teste opcional)."
+    },
+    {
+      "id": "S10",
+      "what": "A opção de teste só reduz, com TEST_LIMIT_INVALID, e só é alcançável por API programática",
+      "result": "PASS",
+      "evidence": "identity:991-1006 exige inteiro seguro com 0<=v<=120000 e só a chave comparisonTimeoutMs. A CLI monta installedReference só com manifestPath e expectedSha256 (check-product-boundary.mjs:3535-3540). Nenhum teste existente passa testOnly ao comparador (grep)."
+    },
+    {
+      "id": "S11",
+      "what": "Os relógios de fingerprintToolchain e de scanBounded não mudaram, nem o valor de 120 s",
+      "result": "PASS",
+      "evidence": "fingerprintToolchain (identity:401-417) está fora do diff. boundary-manifests.mjs sha 40cd1375… é igual à pré-imagem, com scanStarted e INSTALLED_SCAN_TIMEOUT intactos. INSTALLED_IDENTITY_LIMITS.comparisonTimeoutMs continua 120_000."
+    },
+    {
+      "id": "S12",
+      "what": "O checker não chama compare() no verificador principal depois da 1ª finalização",
+      "result": "PASS",
+      "evidence": "A única chamada é installedPackages.verify em check-product-boundary.mjs:498, durante a travessia, antes de 1991. Entre 1991 e 2143 não há verify nem scan. loadCompiledBuildReference usa comparadores próprios com uma finalização só (boundary-semantic-compiled.mjs:178-183), sem efeito de L3."
+    },
+    {
+      "id": "S13",
+      "what": "O desvio de escopo (espelho INTERPRETER) é necessário",
+      "result": "PASS",
+      "evidence": "O engine passa {...SEMANTIC_LIMITS,...} a createResolutionSession (engine:1549, 1940, 1964). limitsFor do helper usa INTERPRETER como teto das chaves do intérprete (resolution:76). Sem o espelho, o resultado foi phases SKIPPED:UNKNOWN_INVALID_LIMITS (green-0242-a1). Importar SEMANTIC_LIMITS criaria ciclo, porque o engine importa o helper."
+    },
+    {
+      "id": "S14",
+      "what": "O desvio não amplia nada além dos valores aprovados, e o helper só consome tetos de aquisição e resolução",
+      "result": "PASS",
+      "evidence": "O espelho é igual aos valores aprovados. resolution:84 só atribui chaves de HARD e RESOLUTION_LIMITS. O único uso de INTERPRETER fora da validação é maxNodes (2.000.000, sem mudança) em resolution:1155. O desvio foi registrado em 12:23:39.097972Z e o arquivo mudou em 12:23:39.117652Z."
+    },
+    {
+      "id": "S15",
+      "what": "A telemetria da §3.4 fica fora da igualdade normal/strict",
+      "result": "PASS",
+      "evidence": "identityPhaseMs fica em output.telemetry, que é separado de semanticBoundary e publicado só como result.semanticTelemetry (check-product-boundary.mjs:2364, 2380). As reconstruções de output usam spread e preservam a telemetria. comparable() do engine apaga telemetry (1903-1907). Os testes normal/strict apagam semanticTelemetry."
+    },
+    {
+      "id": "S16",
+      "what": "identityPhaseMs está correto",
+      "result": "PASS",
+      "evidence": "[phaseMs da 1ª finalização (criação até o fim dela), phaseMs da final (duração da própria finalização)]. Sem installedReference, finalize() devolve undefined e os valores saem null. elapsedMs continua contado desde a criação."
+    },
+    {
+      "id": "S17",
+      "what": "A migração do A2 é literal, preserva a intenção e foi registrada antes da edição",
+      "result": "PASS",
+      "evidence": "Registro no contrato em 11:56:39Z. Primeira falha first-red-0242-a2 (12:22:24Z, A2 antigo contra os valores novos). Edição em 12:23:57Z (mtime). O diff troca só os 3 valores e acrescenta um comentário, mantendo a igualdade do objeto inteiro e de RESOLUTION_LIMITS."
+    },
+    {
+      "id": "S18",
+      "what": "As primeiras falhas estão preservadas e o teste não mudou entre o vermelho e o verde",
+      "result": "PASS",
+      "evidence": "first-red-0242 tem 10/12 falhas no pai, com a fixture de largura em CUT:maxContexts, COMPARISON_TIMEOUT e TEST_LIMIT ausente. first-red-0242-b tem a LB02 com ['COMPARISON_TIMEOUT']. O sha do teste novo é 4b2e5b91… no vermelho, no verde e no freeze. Mtime do teste 12:21:31Z, engine 12:21:58Z, depois de first-red."
+    },
+    {
+      "id": "S19",
+      "what": "LB02, primeira cláusula: a raiz 228e7918 corta por maxContexts com os valores atuais",
+      "result": "N/A",
+      "evidence": "Só existe como diagnóstico em HISO005-P2-NEXT-RECON-20261019/diag-official.json, marcado diagnosticOnly e notAcceptanceNotOfficial. Precisa ser registrada pelo lado-base da conservação LB04, que ainda não rodou."
+    },
+    {
+      "id": "S20",
+      "what": "Nenhum limite, pin, asserção, skip ou gate relaxado além do aprovado",
+      "result": "PASS",
+      "evidence": "As linhas removidas do diff são só os 3 valores (engine, espelho e A2), as 2 linhas de relógio, o _deadline e usage. Não há .skip, .only, .todo nem env no teste novo. INSTALLED_IDENTITY_LIMITS, RESOLUTION_LIMITS, maxBuffer e o kernel não mudaram."
+    },
+    {
+      "id": "S21",
+      "what": "Regressão fora do delta (testes que dependiam do corte em 64 contextos ou de 100.000 estados, gates, duração)",
+      "result": "PASS",
+      "evidence": "Os testes de teto leem SEMANTIC_LIMITS dinamicamente (b6-0236-semantic-engine.test.js:404-433; b6-0241 E1:981-1043). Nenhum teste, script ou CI roda --semantic na árvore real (só boundary:products, sem --semantic). Focal 822/822 em 1072 s, contra 1096 s no frozen-r3 da 0243, com tempos por arquivo equivalentes. Perfil nativo 79/79."
+    },
+    {
+      "id": "S22",
+      "what": "Reexecução independente do teste novo com o Node pinado",
+      "result": "PASS",
+      "evidence": "12/12 passed em 7,16 s (12:51:48Z a 12:51:55Z), com TMPDIR próprio no scratchpad. A candidata continuou com os mesmos 6 sha256 depois da execução."
+    },
+    {
+      "id": "S23",
+      "what": "Execuções frozen-r1 do focal e do perfil nativo",
+      "result": "N/A",
+      "evidence": "Até 12:55Z só existia frozen-r1-new (12/12). O focal e o perfil nativo do freeze ainda não estavam na EV e não foram julgados."
+    }
+  ],
+  "commands": [
+    "sha256sum docs/02_spec/0242_b6_body_caps_deadlines.md EV/source-freeze-r1.json EV/source-freeze-r1.patch.txt",
+    "cat EV/task-contract.json EV/state.json EV/source-freeze-r1.json EV/source-freeze-r1.patch.txt",
+    "git -C <candidata> log --oneline -3; git -C <candidata> status --short [--ignored]; git -C <candidata> diff [--stat|--full-index|HEAD -- tests/ scripts/]",
+    "sha256sum dos 6 arquivos na candidata (antes e depois da reexecução); git -C <candidata> show HEAD:<arquivo> | sha256sum para os 5 arquivos modificados",
+    "python3 -I -B leitura de commit-0243.json, first-red-0242*, green-0242-a1/a2, focal-b6-0242-a1, native-profile-0242-a1, frozen-r1-new, focal da 0243 frozen-r3, identity-phase-probe.json, q1-characterization.json, diag-official.json",
+    "sed -n/grep em scripts/boundary-installed-identity.mjs, boundary-semantic-engine.mjs, boundary-semantic-resolution.mjs, check-product-boundary.mjs, boundary-manifests.mjs, boundary-semantic-compiled.mjs, tests/b6-0234-installed-identity.test.js, b6-0236-*.test.js, b6-0237-*.test.js, b6-0241-integral-body.test.js, tests/support/owned-run-parent.mjs, package.json",
+    "ls -l --time-style=full-iso dos 6 arquivos da candidata (linha do tempo)",
+    "node --check nos 4 scripts e no teste novo",
+    "cd <candidata> && env -i PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin LANG=C TZ=UTC TMPDIR=<scratchpad>/review-0242-r1-tmp HOME=<scratchpad>/review-0242-r1-tmp node node_modules/vitest/vitest.mjs run tests/b6-0242-body-caps-deadlines.test.js --no-file-parallelism --maxWorkers=2 (exit 0, 12/12)",
+    "uptime (load 3,61 antes da execução)"
+  ]
+}

@@ -1,0 +1,142 @@
+# Próximo perfil SDK do DX100-G02 — HOW v2, depois do perfil de fonte
+
+Com o BIND do 2B-2, o perfil de fonte do lote 2 está completo: 2A, continuação 2A,
+2B-1 e 2B-2. Este documento diz o que resta, o que o perfil distribuído exige de
+decisão do usuário e o que ainda cabe no perfil de fonte sem decisão nova. É proposta.
+Não registra execução, não concede BUILD e não muda o catálogo de 509 obrigações. A
+versão anterior é o [HOW v1](../sdk-coverage-binding/HOW-next-profile.md).
+
+## Ponto de partida
+
+- [Mapa v5](coverage-observed-v5.json): 33 contratos `OBSERVED_CLIENT_PARTIAL` e 11
+  `OPEN_REQUIRED_FUTURE_PROFILE`. Os 11 abertos são PY19, PY20 e PK01 a PK09, todos
+  do perfil distribuído. O v4 e as versões anteriores não foram editados.
+- [Lacunas](gaps-review-v5.json): as seis seguem OPEN. GAP-PY-API 13/13, GAP-PY-RPC
+  11/11, GAP-GENERATED 4/4 e GAP-TS-LANGUAGE 15/15 têm todos os contratos com
+  observação parcial, mas nenhum cobre o requisito inteiro. GAP-PROVENANCE está em
+  1/3 e GAP-PLATFORM-PACKAGING em 1/12.
+- Braços: o 2B-2 acrescenta 76 braços observados, 8 deles com escopo parcial. Há
+  dois braços abertos explícitos: PY13.B06 (2B-2) e PY05.B10 (2B-1).
+- Perfil de referência: Linux x86-64, CPython 3.12.3, pydantic 2.13.4, Node v24.20.0,
+  peers sintéticos e a fonte do SDK no pin `8d9f6466`.
+
+## O que resta
+
+| Grupo                            | O que fica aberto                                                                                                                                                                                                                                                                                                                                                                                                        | Precisa de decisão nova?              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| Perfil distribuído: pacotes      | PY19 e PY20 (identidade do binário e do pacote, bootstrap do runtime), PK01 a PK09 (resolvedor, wrapper e proxy do pacote npm, identidades), o ramo empacotado do PY02 (`codex_cli_bin`, prefixo de PATH, PATH no Windows) e o bundle, o typecheck e as declarações do TypeScript                                                                                                                                        | Sim: Q1, Q2 e Q3                      |
+| Perfil distribuído: CLI real     | PY01 (tempo real de inicialização), PY05 (identidade de runtime verdadeira), PY06 (CLI real no lugar do peer), PY08 (leitura com processo real), PY09 (sobrecarga real e sleep real), PY11 (início versus junção no servidor), PY13 (timeout real de 30 s), PY14 (ordenações reais de status e turns do servidor), TS05 (precedência dos overrides na CLI), TS09 (pathDirs do resolvedor), TS12 (outras versões de Node) | Sim: Q1, Q2 e Q3                      |
+| Perfil distribuído: dependências | PY18 (compatibilidade com outras versões da pydantic além da 2.13.4)                                                                                                                                                                                                                                                                                                                                                     | Sim: aquisição com rede, como a Q2    |
+| BUILD nativo e portas duráveis   | PY05 (metadados CVG), PY07 (cenário governado EQ02/SPEC0239), PY10 (continuação remota do turn), PY12 (replay frio e reconexão), PY13 e PY14 (efeitos reais do goal e autoridade de pausa)                                                                                                                                                                                                                               | Fora dos perfis SDK; segue a SPEC0239 |
+| Login real                       | PY17 (sessão e artefatos de autenticação)                                                                                                                                                                                                                                                                                                                                                                                | Gate T4 próprio, fora deste plano     |
+| Testemunha privilegiada          | TS12 (término do filho pré-abortado, hoje NOT_WITNESSED)                                                                                                                                                                                                                                                                                                                                                                 | Sim: Q4                               |
+| Resíduos de fonte                | Lista da seção "O que cabe sem decisão nova"                                                                                                                                                                                                                                                                                                                                                                             | Não                                   |
+
+## Perfil distribuído — decisões do usuário
+
+O perfil distribuído observa PY19, PY20, PK01 a PK09 e o ramo empacotado do PY02. Ele
+depende de três decisões que ainda não existem. Os fatos são estes:
+
+- a fonte do SDK no pin `8d9f6466` tem versão `0.0.0-dev`, tanto o wheel Python
+  `openai-codex` quanto o pacote npm `@openai/codex-sdk`;
+- o lock do pin pede `openai-codex-cli-bin==0.153.4`; é a única versão publicada que
+  o pin fixa;
+- o mínimo aceito pelo SDK é `0.151.0`;
+- o CLI npm é o `@openai/codex`, com seis pacotes de plataforma; o local é o
+  `@openai/codex-linux-x64`;
+- o executável compilado do pin (`5cce7264…`) foi atestado na
+  [aceitação da referência](../../g02-reference-acceptance.json), mas é outro binário.
+  Não há prova de vínculo entre os pacotes publicados e o pin.
+
+O cartão DX100-G02 exige ligar o executável à fonte por build reproduzível ou por
+decisão explícita de outro pin.
+
+### Q1. Identidade dos artefatos frente ao pin (T3: identidade)
+
+O que muda: sem esta decisão, nenhum pacote publicado pode ser tratado como "o cliente
+observado", e PY19, PY20 e PK01 a PK09 ficam sem alvo. A resposta fixa a lista de
+artefatos que a Q2 adquire.
+
+Pergunta pronta:
+
+> Para o perfil distribuído, você adota a release 0.153.4 como outro pin (com
+> `openai-codex-cli-bin`, `@openai/codex` e `@openai/codex-linux-x64` nessa versão, e
+> o `openai-codex` e o `@openai/codex-sdk` publicados com ela), registrando que não há
+> prova de vínculo deles com o pin `8d9f6466`, ou exige build reproduzível a partir do
+> pin?
+
+### Q2. Autorização da aquisição com rede (T4: efeito externo real)
+
+O que muda: os pacotes não estão no repositório e só existem nos registries. A
+aquisição segue o padrão de `sdk-profile-artifacts`. O pacote de decisão T4 congela a
+lista da Q1 por nome e versão e liga por sha os digests lidos do registry.
+
+Pergunta pronta:
+
+> Você autoriza uma única aquisição com rede, no PyPI e no npm, só dos artefatos da
+> lista da Q1, com os digests do registry gravados, guarda num cache privado e nenhuma
+> instalação global?
+
+### Q3. Recorte keyless (T3: política de execução)
+
+O que muda: o Codex CLI publicado só pode rodar sem provider e sem credencial. Ficam
+observáveis o lançamento, o resolvedor, o handshake, o `initialize` e as respostas que
+não chamam modelo. Login real, provider e chamadas a modelo continuam fora, num gate T4
+próprio que não está sendo pedido aqui.
+
+Pergunta pronta:
+
+> Você aceita que o perfil distribuído rode o Codex CLI publicado só sem rede, sem
+> provider e sem credencial (modo keyless), deixando login real e chamadas a modelo
+> para um gate T4 separado?
+
+### Q4. Testemunha privilegiada do TS12 (T3: segurança)
+
+Fora do perfil distribuído, o mapa registra que falta uma pergunta T3 para o término
+do filho pré-abortado do TS12. Hoje a testemunha privilegiada não está autorizada
+(`next-task.json#/not_authorized_now`).
+
+Pergunta pronta:
+
+> Você autoriza uma testemunha privilegiada (`CAP_SYS_PTRACE` ou `fanotify`), só dentro
+> do namespace da unidade e só durante o caso, para observar o término do filho
+> pré-abortado do TS12?
+
+Limite que não é pergunta agora: só linux-x64 é local. As outras cinco plataformas do
+PY20, do PK01 e do PK04 seguem abertas até haver acesso; o PK03 e a chave PATH do
+PY02 dependem do Windows.
+
+## O que cabe sem decisão nova
+
+São resíduos de fonte, com o mesmo pin, a mesma contenção e os mesmos peers. Alguns
+pedem capacidade nova de harness (injeção de falha de fs ou do lado Node, testemunha
+limitada), mas nenhuma pede rede, provider, credencial nem privilégio.
+
+| Origem                 | Itens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Segunda continuação 2A | TS01 (options omitido), TS02 (entrada não iterável), TS03 (falhas de mkdtemp, stringify e rm), TS04 (gerador abandonado), TS05.B04 (janela inotify nos passos de erro), TS06 (objeto cíclico, getters), TS07 (controle, chave vazia, filho undefined, function e symbol), TS08 (threadSource), TS09.B03, TS10 (pipes ausentes e spawn síncrono, forma B natural), TS11, TS12 (aborto antes do yield e depois do EOF, close que lança, filho que ignora o sinal), TS13 a TS15, PY03, PY04, PY15 e PY16                                                       |
+| Continuação do lote 2B | PY02.B01 com `config_overrides`; PY05.B10 e a normalização de alpha do PY05.B06; PY08 com goal no `fail_all`; PY10.B04 sem bloqueio forçado; PY12.B03 com eventos retidos; PY13.B06, PY13.B05, PY13.B09, PY13.B10 e PY13.B15; a corrida natural do PY13.B17; o known_bad "pular o cleanup" do PY13 como MISMATCH (errata T1 do passo 13); o corte de transporte do PY13 com testemunha limitada; PY14.B03 e PY14.B07; PY17.B02 e PY17.B04; PY18 (comparação com os schemas JSON do pin como referência independente e modelos gerados fora dos exercitados) |
+
+A lista autoritativa está em `remaining_open_by_contract` do [v5](coverage-observed-v5.json),
+mais os resíduos SECOND_2A_CONTINUATION das linhas fora dos planos. Nenhum desses itens
+abre contrato novo: os contratos já estão observados, e os itens só reduzem o
+resto aberto.
+
+## Ordem proposta
+
+1. **SPECIFY da continuação 3 do perfil de fonte (T1, documental),** com os resíduos
+   da seção anterior, divididos em sub-lotes se passarem do teto de 24 vagas ou 12
+   serviços. É a [próxima unidade](next-task.json).
+2. **Pacote de decisão com Q1 a Q4,** para o usuário responder. Corre em paralelo e
+   não bloqueia o item 1.
+3. Com Q1, Q2 e Q3 respondidas, SPECIFY do perfil distribuído no linux-x64. Sem elas,
+   PY19, PY20 e PK01 a PK09 seguem `OPEN_REQUIRED_FUTURE_PROFILE`.
+
+## Limites
+
+Observação de cliente não é paridade. Recibos funcionais e crédito de paridade
+seguem em 0. As 509 obrigações do catálogo continuam `NOT_RUN`. A SPEC0239 foi
+aprovada pelo usuário
+([decisão](../../g04/native-journey-recovery-plan/user-decision-20261018.json)); o
+BUILD nativo depende de 0029 → 0030 → 0031 qualificadas e segue não autorizado nesta
+trilha.

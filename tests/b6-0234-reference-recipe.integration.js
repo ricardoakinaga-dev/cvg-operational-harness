@@ -702,15 +702,23 @@ function fullListingDigest(listing) {
 }
 
 test('RT02: a magic-looking tree name never yields a silent partial receipt, paged or not', async () => {
-  // Unpaged control: the existing archive step already refuses such a name.
+  // SPEC0243 RS08 (literal migration): the archive now addresses every name
+  // with --literal-pathspecs and the snapshot must equal the included list,
+  // so the magic-looking name is copied as is instead of being refused.
   const small = fixture()
   write(path.join(small.sourceRoot, ':small/plain.txt'), 'magic-looking')
   git(small.sourceRoot, '--literal-pathspecs', 'add', '-f', '--', ':small')
   git(small.sourceRoot, 'commit', '-qm', 'synthetic magic-looking name')
   small.commit = git(small.sourceRoot, 'rev-parse', 'HEAD')
-  await refuses(small, {}, 'PROCESS_NONZERO')
-  // Paged: the page is addressed literally, so the same refusal follows
-  // instead of a receipt that silently drops the tree.
+  const smallResult = await buildInstalledReference(options(small))
+  expect(
+    fs.readFileSync(
+      path.join(smallResult.receipt.root, ':small/plain.txt'),
+      'utf8'
+    )
+  ).toBe('magic-looking')
+  // Paged: the page is addressed literally too, and the receipt covers the
+  // complete listing instead of silently dropping the tree.
   const f = fixture()
   for (let i = 0; i < 26; i++)
     deepFiles(f.sourceRoot, ':big/' + String(i).padStart(2, '0'), 17, 100)
@@ -728,7 +736,12 @@ test('RT02: a magic-looking tree name never yields a silent partial receipt, pag
     }
   )
   expect(listing.length).toBeGreaterThan(8 * 1024 * 1024)
-  await refuses(f, {}, 'PROCESS_NONZERO')
+  const result = await buildInstalledReference(options(f))
+  expect(
+    fs.readFileSync(path.join(result.receipt.root, 'big/plain.txt'), 'utf8')
+  ).toBe('plain sibling')
+  expect(fs.existsSync(path.join(result.receipt.root, ':big/00'))).toBe(true)
+  expect(result.receipt.recipe.sourceSha256).toBe(fullListingDigest(listing))
 }, 300000)
 
 test('RT02: a paged child name that does not round-trip UTF-8 is refused', async () => {
@@ -788,9 +801,11 @@ test('RT03: an entry that vanishes during the in-flight sampling walk does not k
       testOnly: {
         context: 'synthetic-fixture',
         hooks: {
-          // Untracked: only the whole-snapshot sampling walk visits it.
+          // Untracked: only the whole-snapshot sampling walk visits it. An
+          // empty directory, because SPEC0243 §3.2 refuses any regular file
+          // outside the included list before npm (literal migration).
           beforeNpm: () => {
-            write(sentinel, 'sampling sentinel')
+            fs.mkdirSync(sentinel)
             state.armed = true
           },
           afterNpm: () => {
@@ -814,7 +829,7 @@ test('RT03: the same vanished entry in the final strict inventory is still refus
       testOnly: {
         context: 'synthetic-fixture',
         hooks: {
-          beforeNpm: () => write(sentinel, 'sampling sentinel'),
+          beforeNpm: () => fs.mkdirSync(sentinel),
           afterNpm: () => {
             state.armed = true
           }

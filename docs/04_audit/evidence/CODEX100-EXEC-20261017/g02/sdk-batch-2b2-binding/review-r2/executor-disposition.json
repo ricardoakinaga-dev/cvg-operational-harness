@@ -1,0 +1,95 @@
+{
+  "kind": "EXECUTOR_DISPOSITION_R2",
+  "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2",
+  "review": {
+    "path": "review-r2/review.json",
+    "raw": "review-r2/verdict.raw.txt",
+    "subject": "review-freeze-r2.json (6eeecdb7a0d660648839edc23c1b94266c1fce5d1d6c96c2eb516366cceda12a)",
+    "verdict": "REVISE",
+    "summary_counts": "0 P1, 1 P2, 4 P3",
+    "mandatory_findings": ["R2-F01"],
+    "r1_findings_after_r2": "6 RESOLVED, 2 PARTIAL (R1-F02 e R1-F07, cujas partes abertas são o R2-F01), 0 OPEN"
+  },
+  "rule": "R2 é a última revisão e o reparo agrupado (1/1) já foi usado: nenhum documento revisado é reescrito. O P2 está todo no HOW v2 (perguntas e tabela de decisões); o mapa v5, as lacunas e o validador não têm achado obrigatório. O texto certo das perguntas e da tabela fica como errata obrigatória nesta disposição, que prevalece sobre as seções correspondentes do HOW-next-profile-v2.md. O close-binding-2b2-r2.py.txt (script novo; o revisado não é reescrito) leva essas perguntas a state.json e next-task.json. Depois da R2 só mudam state.json, next-task.json, review-r2/, esta disposição, o script novo, ledger-delta-cont-d9ef.md e secret-scan.json.",
+  "unit_outcome": "COMPLETED_LOCAL_WITH_CARRIED_P2: o v5 vale como mapa base (33/11; PY09, PY13, PY17 e PY18 passam a observados; 76 braços observados, 8 com escopo parcial, PY13.B06 aberto; decisão F01 aplicada; erratas do 2B-1 aplicadas; lacunas 13/13, 11/11, 4/4, 1/3, 15/15 e 1/12, todas OPEN). O HOW v2 vale com as perguntas e a tabela de decisões desta errata (Q1 a Q5).",
+  "items": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "disposition": "CARRIED_MANDATORY_ERRATUM",
+      "note": "Errata obrigatória do HOW v2: Q1 amplia a lista (proxy npm do PK07/PK08 e asset do GitHub do bootstrap do PY20), Q2 cobre PyPI, npm e releases do GitHub com o wheel conferido contra o uv.lock, Q4 nomeia as capabilities, Q5 pede a aquisição de outras versões da pydantic e do Node, e o mapa de decisões corrige a coluna 'Precisa de decisão nova?'. Texto em erratum_questions e erratum_table.",
+      "confirmed_by_executor": "Conferido: @openai/codex-responses-api-proxy é pacote npm próprio (g01/component-surfaces/non-rust/inventory.json, fonte codex-rs/responses-api-proxy/npm/bin/codex-responses-api-proxy.js), alvo do PK07 e do PK08; o bootstrap do PY20 baixa codex-package-<triple>.tar.gz de github.com/openai/codex/releases (_runtime_setup.py:105-117, :148 e :184); o uv.lock do pin fixa o sha256 de cada wheel do openai-codex-cli-bin 0.153.4 (uv.lock:329-340).",
+      "erratum_questions": [
+        {
+          "id": "Q1",
+          "tier": "T3",
+          "topic": "identidade dos artefatos frente ao pin",
+          "question": "Você adota a release 0.153.4 do Codex como outro pin para o perfil distribuído (sem prova de vínculo de build com o pin 8d9f6466), cobrindo o wheel openai-codex-cli-bin, os pacotes npm @openai/codex, @openai/codex-linux-x64 e @openai/codex-responses-api-proxy, o asset codex-package-x86_64-unknown-linux-musl.tar.gz das releases do GitHub e o openai-codex e o @openai/codex-sdk dessa release, ou exige build reproduzível a partir do pin?"
+        },
+        {
+          "id": "Q2",
+          "tier": "T4",
+          "topic": "aquisição com rede",
+          "question": "Você autoriza uma única aquisição com rede da lista da Q1, no PyPI, no npm e nas releases do GitHub, conferindo o wheel do openai-codex-cli-bin contra os sha256 do uv.lock do pin e gravando o digest dos demais, com cache privado e sem instalação global?"
+        },
+        {
+          "id": "Q3",
+          "tier": "T3",
+          "topic": "recorte keyless",
+          "question": "Você aceita que o perfil distribuído rode o Codex CLI publicado só sem rede, sem provider e sem credencial (modo keyless), deixando login real e chamadas a modelo para um gate T4 separado?"
+        },
+        {
+          "id": "Q4",
+          "tier": "T3",
+          "topic": "testemunha privilegiada do TS12 (fora do perfil distribuído)",
+          "question": "Você autoriza, só para observar o término do filho pré-abortado do TS12, dar ao supervisor do harness CAP_SYS_ADMIN para fanotify ou CAP_SYS_PTRACE para ptrace fora da árvore de descendentes, sabendo que isso muda a postura de contenção do harness de evidência?"
+        },
+        {
+          "id": "Q5",
+          "tier": "T4",
+          "topic": "aquisição de outras versões de dependência",
+          "question": "Você autoriza uma aquisição com rede de outras versões da pydantic (para o PY18) e do Node (para o TS12), escolhidas e congeladas no pacote de decisão, com conferência de digest, cache privado e sem instalação global?"
+        }
+      ],
+      "erratum_table": [
+        "PY19, PY20 (inclusive o download do bootstrap), PK01 a PK09 (inclusive o proxy do PK07 e do PK08) e o ramo empacotado do PY02: Q1, Q2 e Q3.",
+        "PY01 (tempo real de inicialização e KeyboardInterrupt no init), PY02.B08 com filho lento sem falha declarada, PY05 (identidade de runtime e generate-json-schema real), PY06, PY08 (leitura com processo real), PY09 (sobrecarga e sleep reais), PY11, TS05 e TS09: Q1, Q2 e Q3. remaining_open_by_contract do v5 é autoritativo também para estes resíduos distribuídos.",
+        "PY13 (timeout real de 30 s com turn real) e PY14 (ordenações reais de status e turns): pedem turns reais, que exigem chamada a modelo; ficam para o gate T4 separado que a Q3 cita, e não destravam com Q1 a Q3.",
+        "PY18 (outras versões da pydantic) e TS12 (outras versões de Node): Q5.",
+        "TS12 (término do filho pré-abortado): Q4.",
+        "Limite de plataformas: só linux-x64 é local; as outras cinco plataformas do PY20, do PK01, do PK04 e do PK07 seguem abertas até haver acesso; o PK03 e a chave PATH do PY02 dependem do Windows."
+      ],
+      "supersedes": [
+        "HOW-next-profile-v2.md, seções 'O que resta' (coluna 'Precisa de decisão nova?'), 'Perfil distribuído — decisões do usuário' (Q1 a Q4) e o limite de plataformas",
+        "state.json#/result/user_decisions e next-task.json#/user_decisions_pending/questions da fase final do close revisado (substituídos pelo close-binding-2b2-r2.py.txt)"
+      ],
+      "unchanged": "mapa v5, lacunas v5, validador e o restante do HOW v2 (ponto de partida, o que cabe sem decisão nova, ordem proposta e limites)"
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "disposition": "CARRIED_IN_ERRATUM",
+      "note": "A Q1 da errata diz 'sem prova de vínculo de build' e a Q2 manda conferir o wheel do openai-codex-cli-bin contra os sha256 do uv.lock do pin (uv.lock:329-340) e gravar o digest só dos artefatos sem lock. As versões exatas do openai-codex e do @openai/codex-sdk da release 0.153.4 são fixadas no pacote de decisão T4, antes da aquisição; sem rede, esta unidade não as confirma."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "disposition": "CARRIED_IN_ERRATUM",
+      "note": "A Q4 da errata nomeia a capability de cada mecanismo (CAP_SYS_ADMIN para fanotify no supervisor; CAP_SYS_PTRACE para ptrace fora da árvore de descendentes), avisa da mudança de postura de contenção, como a pergunta-base de ../sdk-source-batch-2a-continuation-spec/t3-assessment.json, e tira a restrição de namespace, que não tinha base."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "disposition": "CARRIED_IN_ERRATUM",
+      "note": "erratum_table do R2-F01: acrescenta PY01 (KeyboardInterrupt no init), PY02.B08 com filho lento e o generate-json-schema real do PY05; declara remaining_open_by_contract autoritativo também para os resíduos distribuídos; manda PY13 (turn real) e PY14 (turns reais) ao gate T4 separado; cita o PK07 no limite de plataformas."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "disposition": "RECORDED",
+      "note": "O reparo da R1 trocou state.json#/result/user_decisions_for_distributed_profile por state.json#/result/user_decisions e next-task.json#/user_decisions_pending/distributed_profile e /ts12_privileged_witness por next-task.json#/user_decisions_pending/questions, porque a Q4 está fora do perfil distribuído. Os ponteiros da R1 para as chaves antigas resolvem em archives/r1-preimages/state.json e archives/r1-preimages/next-task.json."
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

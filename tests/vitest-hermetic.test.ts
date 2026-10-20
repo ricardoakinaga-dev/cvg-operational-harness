@@ -52,9 +52,12 @@ describe('boundary native proof resource ownership', () => {
     const native = globSync(nativeConfig.test?.include ?? [], {
       cwd: process.cwd()
     }).sort()
+    // SPEC0243 (literal migration): the recipe scope proofs run the real
+    // recipes, so they join the same explicit native profile.
     expect(native).toEqual([
       'tests/b6-0234-reference-recipe.integration.js',
-      'tests/b6-0236-compiled-provenance.integration.js'
+      'tests/b6-0236-compiled-provenance.integration.js',
+      'tests/b6-0243-reference-source-scope.integration.js'
     ])
     for (const file of native) expect(ordinary).not.toContain(file)
     expect(nativeConfig.resolve).toEqual(vitestConfig.resolve)

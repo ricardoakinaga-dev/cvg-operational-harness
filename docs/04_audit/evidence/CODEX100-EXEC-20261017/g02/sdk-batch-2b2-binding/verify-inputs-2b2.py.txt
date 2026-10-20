@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2 - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-2b2.py.txt <repo_root> <out_json>
+# As pastas g02 estão não rastreadas no checkout da main. A conferência é por sha (manifestos, freezes, next-task) e por blob git
+# (git hash-object local x git ls-tree do commit). Âncora durável: o commit do PR documental #7 do Lead, que está na ref
+# origin/candidate/d9ef-docs-20261019 e leva a especificação 2B, o BIND do 2B-1 e a admissão 2B-2. Nada é escrito fora do <out_json>.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+E = "docs/04_audit/evidence/CODEX100-EXEC-20261017"
+G02R = E + "/g02"
+LEAD_PR_COMMIT = "7e1da11a4"  # PR documental #7 do Lead; resolvido para o sha completo abaixo
+checks = []
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def A(rel):
+    return os.path.join(ROOT, rel)
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+def same_as_commit(rel, commit, exclude=()):
+    """Todo arquivo da árvore do commit sob rel é igual ao arquivo local (blob git) e não há arquivo local a mais."""
+    lt = git("ls-tree", "-r", commit, "--", rel)
+    if lt.returncode != 0:
+        return False, {"problems": ["ls-tree failed"]}
+    tree = {}
+    for line in lt.stdout.splitlines():
+        meta, path = line.split("\t", 1)
+        tree[path] = meta.split()[2]
+    bad = []
+    for path, blob in tree.items():
+        if os.path.basename(path) in exclude:
+            continue
+        if not os.path.isfile(A(path)):
+            bad.append("missing " + path)
+        elif git("hash-object", A(path)).stdout.strip() != blob:
+            bad.append("differs " + path)
+    for dp, _, fs in os.walk(A(rel)):
+        for f in fs:
+            p = os.path.relpath(os.path.join(dp, f), ROOT)
+            if p not in tree and f not in exclude:
+                bad.append("extra " + p)
+    return (not bad and len(tree) > 0), {"files_in_commit": len(tree), "problems": bad[:10]}
+
+
+PR = git("rev-parse", LEAD_PR_COMMIT).stdout.strip()
+refs = [x for x in git("for-each-ref", "--contains", PR, "--format=%(refname)").stdout.split() if x]
+check("Lead documentary PR commit resolves and is contained in a ref (durable anchor, 2AC-BIND/R2-F04)", len(PR) == 40 and bool(refs), {"commit": PR, "refs": refs})
+
+# 2-9: admissão do 2B-2 (única fonte de observações)
+adm_rel = G02R + "/sdk-batch-2b2-admission"
+adm = A(adm_rel)
+st = load(os.path.join(adm, "state.json"))
+check("2B-2 admission COMPLETED_LOCAL, R1 APPROVE, 17 PASS_CLIENT_OBSERVATION and CONTROL MISMATCH gate passed",
+      st["status"] == "COMPLETED_LOCAL" and st["review"]["r1"]["verdict"] == "APPROVE" and st["cases"]["counts"]["PASS_CLIENT_OBSERVATION"] == 17
+      and st["control"]["outcome"] == "MISMATCH" and st["control"]["gate_passed"] is True,
+      {"status": st["status"], "r1": st["review"]["r1"]["verdict"], "counts": st["cases"]["counts"]})
+man = load(os.path.join(adm, "unit-manifest.json"))
+bad = [p for p, m in man["files"].items() if sha(os.path.join(adm, p)) != m["sha256"]]
+cr = load(os.path.join(adm, "commit-receipt.json"))
+check("2B-2 unit-manifest sha equals commit-receipt and all %d files match (discrimination-check-2b2.json included)" % len(man["files"]),
+      sha(os.path.join(adm, "unit-manifest.json")) == cr["unit_manifest_sha256"] and len(man["files"]) == cr["unit_manifest_file_count"] and not bad
+      and "discrimination-check-2b2.json" in man["files"], {"files": len(man["files"]), "bad": bad[:5]})
+ok, d = same_as_commit(adm_rel, cr["content_commit"], exclude=("commit-receipt.json", "lead-decision-f01.json"))
+check("2B-2 folder equals content commit %s (blob ids; commit-receipt and the later lead decision excluded)" % cr["content_commit"][:8], ok, d)
+ok, d = same_as_commit(adm_rel, PR)
+check("2B-2 folder equals the Lead PR commit %s, lead-decision-f01.json included (blob ids)" % PR[:8], ok, d)
+fr = {f: sha(os.path.join(adm, f)) == st["freezes"][f] for f in ("source-freeze-r4-2b2.json", "identity-freeze-r4-2b2.json", "diag-admission-2b2.json")}
+check("2B-2 source-freeze, identity-freeze and diag-admission sha as recorded in state.json", all(fr.values()), fr)
+adj = load(os.path.join(adm, "adjudication-r1.json"))
+rows = {r["case"]: r for r in adj["rows"]}
+want = [r["case"] for r in adj["rows"] if r["kind"] == "SDK"]
+dc = load(os.path.join(adm, "discrimination-check-2b2.json"))
+by_status = {}
+for a in dc["arms"]:
+    by_status.setdefault(a["status"], []).append(a["arm"])
+ok = (sorted(adj["bind_consumes_only"]) == sorted(want) and len(want) == 17 and "2B2-CTRL01" not in adj["bind_consumes_only"]
+      and all(rows[c]["final_reading"] == "PASS_CLIENT_OBSERVATION" and rows[c]["attribution"] == "CLIENT" for c in want))
+check("adjudication bind_consumes_only = the 17 SDK cases, all PASS_CLIENT_OBSERVATION/CLIENT; CONTROL not consumed", ok, adj["bind_consumes_only"])
+row_arms = {s: sorted(a for c in want for a in rows[c]["arms_" + k]) for s, k in (("DISCRIMINATED", "discriminated"), ("PARTIAL_SCOPE", "partial_scope"), ("NOT_DISCRIMINATED", "not_discriminated"))}
+ok = (dc["counts"] == adj["arm_discrimination"]["counts"] == {"DISCRIMINATED": 68, "PARTIAL_SCOPE": 8, "NOT_DISCRIMINATED": 1}
+      and all(sorted(by_status.get(s, [])) == row_arms[s] for s in row_arms)
+      and sorted(by_status["PARTIAL_SCOPE"]) == sorted(adj["arm_discrimination"]["partial_scope"]) and by_status["NOT_DISCRIMINATED"] == adj["arm_discrimination"]["not_discriminated"])
+check("discrimination-check-2b2.json agrees with adjudication-r1.json (68/8/1, per-case arms, partial and not discriminated lists)", ok, dc["counts"])
+acc_ok = {}
+for c in want:
+    a = load(os.path.join(adm, rows[c]["dir"], "acceptance.json"))
+    acc_ok[c] = (a["case"] == c and a["outcome"] == "PASS_CLIENT_OBSERVATION" and a["failed_predicates"] == [] and a["capture_form"] == rows[c]["capture_form"]
+                 and a["predicate_ids_match_plan"] is True and all(p["ok"] for p in a["predicates"]))
+check("acceptance.json of the 17 cases agree with the adjudication (outcome, capture_form, all predicates ok)", all(acc_ok.values()), acc_ok)
+rv = load(os.path.join(adm, "reevaluation-2b2.json"))
+check("offline reevaluation equal at predicate and outcome level", rv["all_predicate_level_equal"] is True and rv["all_outcome_equal"] is True)
+nt = load(os.path.join(adm, "next-task.json"))
+check("2B-2 admission next-task proposes this unit (T1, no T3)", nt["task"].startswith("DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2") and nt["t3_required"] is False, nt["task"])
+ld = load(os.path.join(adm, "lead-decision-f01.json"))
+check("lead decision F01: ACCEPT_FAIL_CLOSED_OUTCOME, the 2B-PY13E gets no credit for discriminating 'pular o cleanup'",
+      ld["decision"] == "ACCEPT_FAIL_CLOSED_OUTCOME" and "2B-PY13E" in ld["consequence_for_bind"], {"sha256": sha(os.path.join(adm, "lead-decision-f01.json"))})
+
+# 10-12: especificação 2B e BIND do 2B-1 (v4, base do v5)
+b2_rel = G02R + "/sdk-source-batch-2b-spec"
+ok, d = same_as_commit(b2_rel, PR)
+check("2B spec folder equals the Lead PR commit %s (blob ids)" % PR[:8], ok, d)
+copies = {f: sha(os.path.join(adm, "inputs/spec-2b", f)) == sha(A(b2_rel + "/" + f)) for f in ("cases-2b-2.json", "coverage-plan-2b.json", "next-task.json")}
+check("the admission copies inputs/spec-2b (cases-2b-2, coverage-plan-2b, next-task) equal the 2B spec", all(copies.values()), copies)
+b1_rel = G02R + "/sdk-batch-2b1-binding"
+ok, d = same_as_commit(b1_rel, PR)
+check("2B-1 binding folder equals the Lead PR commit %s (blob ids)" % PR[:8], ok, d)
+b1st = load(A(b1_rel + "/state.json"))
+b1nt = load(A(b1_rel + "/next-task.json"))
+rec = {k: sha(A(b1_rel + "/" + v["path"])) == v["sha256"] for k, v in b1nt["review_records"].items()}
+cov4 = load(A(b1_rel + "/coverage-observed-v4.json"))
+disp = load(A(b1_rel + "/review-r2/executor-disposition.json"))
+check("2B-1 binding COMPLETED_LOCAL; v4, R2 and disposition sha as recorded in its next-task; v4 29/15; R2-F01..F03 carried to this BIND",
+      b1st["status"] == "COMPLETED_LOCAL" and all(rec.values()) and cov4["counts"] == {"OBSERVED_CLIENT_PARTIAL": 29, "OPEN_REQUIRED_FUTURE_PROFILE": 15}
+      and all(i["disposition"].startswith("CARRIED_TO_NEXT_BIND") for i in disp["items"]),
+      {"status": b1st["status"], "records": rec, "counts": cov4["counts"], "disposition": [(i["id"], i["disposition"]) for i in disp["items"]]})
+srcs = {k: sha(os.path.normpath(os.path.join(A(b1_rel), v["path"]))) == v["sha256"] for k, v in cov4["sources"].items()}
+check("coverage v4 sources unchanged", all(srcs.values()), srcs)
+
+# 13-14: bases de fonte do v4 contra a identity freeze (2B1-BIND/R2-F03) e contratos G01
+tree = load(A(G02R + "/sdk-batch-2b1-admission/identity-freeze-r4-2b1.json"))["trees"]["sdk-python"]
+tree2 = load(os.path.join(adm, "identity-freeze-r4-2b2.json"))["trees"]["sdk-python"]
+bases = {}
+for a in cov4["arms_observed_2b1"] + cov4["arms_open_explicit_v4"]:
+    for b in a.get("not_observed_basis", []) + a.get("basis", []):
+        src = b.get("source", "")
+        if "/openai_codex/" in src:
+            key = "openai_codex/" + src.split("/openai_codex/", 1)[1]
+            bases[key] = (b["sha256"] == tree.get(key, {}).get("sha256") == sha(os.path.normpath(os.path.join(A(b1_rel), src))))
+check("every SDK source basis of the v4 has the sha of identity-freeze-r4-2b1#/trees/sdk-python and the 2B-2 freeze has the same tree",
+      bool(bases) and all(bases.values()) and tree == tree2, bases)
+g01 = {"python-contracts.json": "25c48bdd75710c2eb5bde33c6b18379892078ca3e5b78f1448dfe42c94e19ad1",
+       "typescript/contracts.json": "b90b17ce1bbcd824ff92c68180b79d4ef428c715ced48a520db379bbfb7275d2"}
+g01ok = {k: sha(A(E + "/g01/sdk-open-contracts/" + k)) == v for k, v in g01.items()}
+check("G01 contracts unchanged", all(g01ok.values()), g01ok)
+
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:BIND-SDK-SOURCE-BATCH-2B-2",
+       "result": "PASS" if all(c["ok"] for c in checks) else "FAIL", "checks": checks,
+       "anchor_commit": {"commit": PR, "what": "commit do PR documental #7 do Lead (CONT-20261018-D9EF), que leva a especificação 2B, o BIND do 2B-1 e a admissão 2B-2",
+                         "refs_containing_commit": refs},
+       "repo": {"branch": git("branch", "--show-current").stdout.strip(), "head": git("rev-parse", "--short=8", "HEAD").stdout.strip(),
+                "note": "as pastas g02 estão não rastreadas no checkout; a conferência é por sha e por blob git contra os commits de origem"},
+       "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))
