@@ -1,3 +1,19 @@
+# CONT-20261018-D9EF — estado em 20/10/2026 (Claude Code)
+
+- `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 19/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`:
+  - **HISO-005:** BUILD0243 e BUILD0242 na `main` (PR #8). O recon de 20/10 classificou os 13.521 diagnósticos: 49% vêm de limitação do analisador, 3,8% são fato do código. A [SPEC0244](02_spec/0244_b6_esm_module_shape.md), sobre `export *` ESM e classe recusada, foi aprovada pelo usuário em T3 e construída, e está neste PR. A B6 caiu de 13.521 para 12.283 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. [Recon](04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/REPORT.txt), [BUILD0244](04_audit/evidence/HISO005-P2-BUILD-0244-20261019/REPORT.txt).
+  - **Codex100 (DX100-G02):**
+    - continuação 3: C3-1 (14 PASS) e C3-2 (13 PASS); a ligação v6 mantém 33 contratos observados e 11 abertos;
+    - perfil distribuído 0.153.4: aquisição única de 6 artefatos com digest conferido (o A6 não existe), DP-1 (10 PASS), DP-1R (PK07B PASS) e DP-2 (5 PASS, com o binário publicado em modo keyless).
+
+    Zero recibos funcionais e zero crédito de paridade. [Especificação do perfil distribuído](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-spec/state.json), [DP-2](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-dp2-admission/state.json).
+
+- `next_action`:
+  1. `DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE` (v7) e o fechamento do G02.
+  2. HISO-005: a próxima causa é o TSX (705 tuplas). A primeira prova B6 exige decisões T3 sobre prova por escopo, entrada externa (K0) e `new` de built-in.
+  3. Relatório final ao usuário, com as decisões pendentes.
+
 # CONT-20261018-D9EF — três frentes depois da consolidação (Claude Code) — 19/10/2026
 
 - `status: IN_PROGRESS`. Claude Code continua HISO-005/B6, Claude100 e Codex100 a pedido do usuário ("continuar até me entrega tudo pronto e resolvido"). [Claim](08_runtime/agent_coordination.md). Com a `main` única, tudo chega por PR montado numa worktree detached. O histórico local anterior à consolidação está preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.

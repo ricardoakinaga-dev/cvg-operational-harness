@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3 - construção do mapa v6 e da revisão das lacunas v6 (somente leitura das entradas).
+# Uso: python3 -I -B build-binding-c3.py.txt <repo_root>  -> escreve coverage-observed-v6.json e gaps-review-v6.json na pasta da unidade.
+# Entradas: v5 e lacunas v5 (BIND do 2B-2, não editados), plano e casos da continuação 3, adjudicações, case-results, acceptance.json e
+# next-task.json das admissões C3-1 e C3-2. Regra: só as partes distinguidas (arm_discrimination congelado cujos predicados de julgamento
+# passaram no acceptance de serviço) entram; o guarda E3-07 não é creditado (decisão do Lead ao aceitar a C3-2).
+import copy
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+UNIT = os.path.join(G02, "sdk-continuation-3-binding")
+B2 = "../sdk-batch-2b2-binding"
+SPEC = "../sdk-source-continuation-3-spec"
+ADM = {"C3-1": "../sdk-continuation-3-1-admission", "C3-2": "../sdk-continuation-3-2-admission"}
+TASK = "DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3"
+
+
+def P(rel):
+    return os.path.normpath(os.path.join(UNIT, rel))
+
+
+def load(rel):
+    with open(P(rel), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(rel):
+    with open(P(rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def src(rel):
+    return {"path": rel, "sha256": sha(rel)}
+
+
+def arm_id(label):
+    return label.split(" ", 1)[0]
+
+
+v5 = load(B2 + "/coverage-observed-v5.json")
+gaps5 = load(B2 + "/gaps-review-v5.json")
+plan = load(SPEC + "/coverage-plan-c3.json")
+spec_cases = {}
+for f in ("cases-c3-1.json", "cases-c3-2.json"):
+    for c in load(SPEC + "/" + f)["cases"]:
+        spec_cases[c["id"]] = (f, c)
+adj = {s: load(ADM[s] + "/adjudication-r1.json") for s in ADM}
+cres = {s: load(ADM[s] + "/case-results.json") for s in ADM}
+nxt = {s: load(ADM[s] + "/next-task.json") for s in ADM}
+sub_of = {}
+rows_cr = {}
+for s in ADM:
+    for r in cres[s]["rows"]:
+        rows_cr[r["case"]] = r
+        sub_of[r["case"]] = s
+
+# ---------------------------------------------------------------- records applied by the BIND
+rec32 = {x["id"]: x["text"] for x in nxt["C3-2"]["record_for_bind"]}
+c31_f01 = [c for c in nxt["C3-1"]["carry_over"] if c["id"] == "C31-ADM/R1-F01"][0]["text"]
+dv04 = [d for d in adj["C3-2"]["deviations"] if d["id"] == "DV-C32-04"][0]["corrected_text"]
+E307 = ("Guarda E3-07 não creditado (decisão do Lead ao aceitar a C3-2; C32-ADM/R1-F01 item 4): a regra de zero chamadas "
+        "zero_calls_client_effect_unless_started e o seu guarda 'só se o thread nunca iniciou' não sustentam discriminação neste mapa; "
+        "WAIT_RESULT.thread_started também não. Leitura adotada: fica sem crédito toda parte cuja discriminação dependa da regra de zero "
+        "chamadas (só o known_bad 'pular o cleanup' do PY13.B17 no C3-PY13ER). As esperas de efeito do cliente (D3-05) decidem por "
+        "thread_alive (threading.enumerate), não pelo registro de threads, e a R1 do C3-2 as manteve válidas; as partes que dependem só "
+        "delas seguem creditadas.")
+RECORDS = [
+    {"id": "C32-ADM/R1-F02", "text": rec32["C32-ADM/R1-F02"],
+     "applied_in": ["rows[source_contract=PY13]/observations_c3[case=C3-PY13ER]/qualifications", "arms_observed_c3[arm_id=PY13.B17]",
+                    "arms_observed_c3[arm_id=PY13.B18]"]},
+    {"id": "C32-ADM/R1-F04", "text": rec32["C32-ADM/R1-F04"], "corrected_text_dv_c32_04": dv04,
+     "applied_in": ["rows[source_contract=PY08]/observations_c3[case=C3-PY08]/qualifications", "arms_observed_c3[arm_id=PY08.B08]"]},
+    {"id": "C31-ADM/R1-F04", "text": [x for x in nxt["C3-1"]["record_for_bind"] if x["id"] == "C31-ADM/R1-F04"][0]["text"],
+     "applied_in": ["rows[source_contract=TS04]/observations_c3[case=C3-TS04]/qualifications",
+                    "rows[source_contract=TS12]/observations_c3[case=C3-TS04]/qualifications", "arms_observed_c3[arm_id=TS04.B03]",
+                    "arms_observed_c3[arm_id=TS12.B02]"]},
+    {"id": "C32-ADM/DV-C32-01", "text": rec32["C32-ADM/DV-C32-01"], "e3_07": E307,
+     "applied_in": ["e3_07", "arms_observed_c3[arm_id=PY13.B17]", "residuals_c3[id=R-PY13-4]"]},
+    {"id": "C32-ADM/DV-C32-02", "text": rec32["C32-ADM/DV-C32-02"],
+     "applied_in": ["rows[*]/observations_c3[sub_lot=C3-2]/qualifications"]},
+    {"id": "C31-ADM/R1-F01 (registro para o BIND)", "text": c31_f01,
+     "applied_in": ["rows[*]/observations_c3[case in C3-TS04, C3-TS12, C3-TS13]/qualifications"]},
+]
+ZOMBIE = ("C31-ADM/R1-F01: o item (2) do PASS (SIGTERM testemunhado pelo SO) se apoia em zombie com status 15 observado; nenhum desfecho "
+          "muda; a regra da testemunha foi endurecida na C3-2.")
+TS04_F04 = ("C31-ADM/R1-F04: a barreira SUSPENDED com adapter vivo (e a espera do mapeamento do adapter no supervisor) foi exercida só por "
+            "este slot, não por um DIAG com filho próprio (no DIAG-TS-C3VOCAB adapter_alive é false por desenho); qualquer reuso futuro de "
+            "SUSPENDED com filho real qualifica o ramo num DIAG antes dos slots. Sem recaptura.")
+PY13ER_Q = ("C32-ADM/R1-F02: no C3-PY13ER, client_effect_timeout true do passo 12 (acceptance.json) e thread_started false dos passos 11 "
+            "a 13 (WAIT_RESULT) são artefatos do DV-C32-01 com o DV-C32-03 (thread de cleanup já terminado; sem estouro de 0,1 ms nem "
+            "efeito do cliente); nenhuma leitura deste mapa se apoia neles.")
+PY13ER_INJ = ("Cleanup que levanta provocado por falha injetada pelo harness (fault call_through_then_raise em cancel_goal_operation; "
+              "fault.fired_as_declared com uma chamada), como no 2B-PY13E; ordem cancel/resultado forçada pelo harness "
+              "(loop.block_release_wait_cancel); a corrida natural não é afirmada.")
+DV02_Q = ("C32-ADM/DV-C32-02: plan_binding cumprido em substância (plano da pasta igual à entrada de case-plan.json ligada pelo source "
+          "freeze; passos de barreira exatos); o registro case_plan_file não existe na pasta; plan_binding_content_ok vem de "
+          "tools/collect_results.py, fora do source freeze.")
+PY08_Q = ("Espera do passo 9 (worker.join) declarada CLIENT_EFFECT no passo (D3-05); o estouro com W1 estacionado seria registrado e "
+          "julgado por consumer.results_exact. Texto do desvio corrigido (C32-ADM/R1-F04): " + dv04)
+PY02_Q = "Vaga condicional C3-PY02: rodou depois do DIAG-PY-PROCWITNESS DIAG_PASS (../sdk-continuation-3-2-admission/diag-admission-c32.json)."
+KST_Q = "Forma KNOWN_SIGNAL_TERMINATION aceita pelo caso (accepted_capture_forms congelado); término do adapter por SIGTERM testemunhado pelo SO."
+TS12_Q = ("Errata C3-SPEC/R2-F01: a ordem do abort entre processos é só registrada (order_recorded_not_judged), nunca julgada; o "
+          "oráculo client julga a forma, o SIGTERM do adapter e da testemunha do SO, nenhum sinal do supervisor, nenhum kill do driver e "
+          "ABORT_REQUESTED/ABORT_RETURNED.")
+
+
+def case_qualifications(case):
+    q = []
+    r = rows_cr[case]
+    if r["capture_form"] == "KNOWN_SIGNAL_TERMINATION":
+        q.append(KST_Q)
+    if case in ("C3-TS04", "C3-TS12", "C3-TS13"):
+        q.append(ZOMBIE)
+    if case == "C3-TS04":
+        q.append(TS04_F04)
+    if case == "C3-TS12":
+        q.append(TS12_Q)
+    if sub_of[case] == "C3-2":
+        q.append(DV02_Q)
+    if case == "C3-PY02":
+        q.append(PY02_Q)
+    if case == "C3-PY08":
+        q.append(PY08_Q)
+    if case == "C3-PY13ER":
+        q += [PY13ER_INJ, PY13ER_Q, E307]
+    return q
+
+
+# ---------------------------------------------------------------- parts (arm_discrimination entries) and credit
+NOT_CREDITED = {("C3-PY13ER", "PY13.B17", "cleanup pulado quando o resultado já existe"): (
+    "Depende da regra de zero chamadas do E3-07 (o alvo cancel_goal_operation nunca seria chamado e o thread de cleanup nunca "
+    "iniciaria); o guarda E3-07 não é creditado (DV-C32-01, C32-ADM/R1-F01, decisão do Lead). O known_bad 'pular o cleanup' como "
+    "MISMATCH segue sem crédito, como no v5 (lead-decision-f01).")}
+acc_cache = {}
+
+
+def acceptance(case):
+    if case not in acc_cache:
+        rel = ADM[sub_of[case]] + "/" + rows_cr[case]["attempt_dir"] + "/acceptance.json"
+        acc_cache[case] = (rel, load(rel))
+    return acc_cache[case]
+
+
+parts_by_arm = {}
+labels_by_arm = {}
+for case, (f, c) in spec_cases.items():
+    if c["kind"] != "SDK":
+        continue
+    rel, acc = acceptance(case)
+    pred = {p["id"]: p for p in acc["predicates"]}
+    for lab in c["branches_targeted"]:
+        labels_by_arm.setdefault(arm_id(lab), [])
+        if lab not in labels_by_arm[arm_id(lab)]:
+            labels_by_arm[arm_id(lab)].append(lab)
+    for idx, a in enumerate(c["arm_discrimination"]):
+        jb = [{"predicate": p, "class": pred[p]["class"], "ok": pred[p]["ok"]} for p in a["judged_by"]]
+        key = (case, a["arm"], a["contrary"])
+        part = {"case": case, "entry_index": idx, "contrary": a["contrary"], "observable_if_contrary": a["observable_if_contrary"], "steps": a["steps"],
+                "judged_by": jb, "judged_by_passed": all(x["ok"] for x in jb), "credited": all(x["ok"] for x in jb) and key not in NOT_CREDITED}
+        if key in NOT_CREDITED:
+            part["reason_not_credited"] = NOT_CREDITED[key]
+        parts_by_arm.setdefault(a["arm"], []).append(part)
+
+# ---------------------------------------------------------------- v5 state of each arm
+v5_arm = {}
+for k in ("arms_observed_2b2", "arms_observed_2b1_carried"):
+    for a in v5[k]:
+        v5_arm.setdefault(a["arm_id"], (k, a))
+for a in v5["arms_closed_v3_carried"]:
+    v5_arm.setdefault(arm_id(a["arm"]), ("arms_closed_v3_carried", a))
+for a in v5["arms_open_explicit_v5"]:
+    v5_arm[a["arm_id"]] = ("arms_open_explicit_v5", a)
+NEW_IDS = set(plan["new_arm_ids"]["arms"])
+# v5 not-observed part closed by the C3 parts (texto do executor, conferido contra o texto da tabela do v5 e o contrary do C3)
+CLOSES = {
+    "PY02.B01": "o 'não observado' do v5 (override com config_overrides não vazio não ganha --config) é o contrary do C3-PY02",
+    "PY05.B06": "o 'não observado' do v5 (normalização -alpha.N.M e alpha acima do mínimo aprovada) é o contrary do C3-PY05 (pré-release "
+                "acima do mínimo rejeitada ou sem normalização)",
+    "PY05.B10": "o braço aberto do v5 (NOT_DISCRIMINATED: a guarda passava nos dois ramos) passa a distinguido: com versão desconhecida o "
+                "passo 5 falha sem escrever o pedido",
+    "PY12.B03": "o 'não observado' do v5 (começar em next_event com eventos retidos ainda não lidos) é o contrary do C3-PY12 nos passos 6-9 "
+                "e 15-16",
+    "PY13.B05": "o 'não observado' do v5 (rejeição antes da reserva, sem testemunha) é distinguido pelo gancho h_reserve no passo 8",
+    "PY13.B06": "o braço aberto do v5 (NOT_DISCRIMINATED: path None rejeitava sozinho) passa a distinguido com thread efêmero com path",
+    "PY13.B09": "o 'não observado' do v5 (ausência de reserva transitória) é distinguido pelo gancho h_reserve no passo 8",
+    "PY13.B10": "o 'não observado' do v5 (finish do estado) é distinguido pelos ganchos h_finish/h_unreg/h_cancel (C3-PY13H) e pelo "
+                "thread do h_finish (C3-PY13F)",
+    "PY13.B15": "o 'não observado' do v5 (state.finish no cleanup) é distinguido pelo h_finish no thread codex-goal-start-cleanup",
+    "PY13.B18": "o v5 creditava só a observação positiva; o C3-PY13ER distingue exceção engolida ou rota mantida (excepthook e routes), "
+                "sem depender da regra de zero chamadas",
+    "PY14.B03": "o 'não distinguido' do v5 (turn failed era o primeiro) é distinguido com o failed que não é o primeiro",
+    "PY14.B07": "o 'não distinguido' do v5 (completed acima de started sem current) é o contrary do C3-PY14",
+    "PY17.B02": "o 'não distinguido' do v5 (o 'casa' e o 'no finally') é distinguido pelos dois contraries do C3-PY17",
+    "PY17.B04": "o vácuo do v5 (resposta apiKey sem loginId) é substituído por variante inesperada com loginId, que registra a fila",
+}
+NOT_OBSERVED_AFTER = {
+    "PY13.B17": ("known_bad 'pular o cleanup' como MISMATCH (depende da regra de zero chamadas do E3-07, não creditada); corrida natural "
+                 "sem bloqueio forçado do loop (R-PY13-5, OUT_NONDETERMINISTIC)."),
+}
+
+arms_c3 = []
+for aid in sorted(parts_by_arm, key=lambda x: (x[:4], x)):
+    parts = parts_by_arm[aid]
+    k_a = v5_arm.get(aid)
+    if aid in NEW_IDS:
+        state = "NEW_ARM_ID"
+    elif k_a is None:
+        state = "V5_NO_ARM_RECORD"
+    elif k_a[0] == "arms_open_explicit_v5":
+        state = "V5_OPEN_EXPLICIT"
+    elif k_a[0] == "arms_closed_v3_carried":
+        state = "V5_ARM_CLOSED_V3"
+    elif k_a[1].get("not_observed"):
+        state = "V5_ARM_PARTIAL_SCOPE"
+    elif k_a[1].get("qualification"):
+        state = "V5_ARM_QUALIFIED_POSITIVE"
+    else:
+        state = "V5_ARM_OBSERVED"
+    entry = {"arm_id": aid, "contract": aid[:4], "labels": labels_by_arm.get(aid, []), "v5_state": state}
+    if k_a is not None:
+        key = "arm_id" if k_a[0] != "arms_closed_v3_carried" else "arm"
+        entry["v5_pointer"] = "%s/coverage-observed-v5.json#/%s[%s=%s]" % (B2, k_a[0], key, aid)
+        for f in ("observed_scope", "not_observed", "not_observed_kind", "qualification", "reason"):
+            if k_a[1].get(f):
+                entry["v5_" + f] = k_a[1][f]
+    by_case = {}
+    for p in parts:
+        rel, acc = acceptance(p["case"])
+        oc = by_case.setdefault(p["case"], {"case": p["case"], "sub_lot": sub_of[p["case"]],
+                                            "capture_form": rows_cr[p["case"]]["capture_form"],
+                                            "acceptance": {"path": rel, "sha256": sha(rel)},
+                                            "adjudication_pointer": "%s/adjudication-r1.json#/rows[case=%s]" % (ADM[sub_of[p["case"]]], p["case"]),
+                                            "parts": []})
+        oc["parts"].append({k: v for k, v in p.items() if k != "case"})
+    entry["observed_by"] = list(by_case.values())
+    entry["parts_total"] = len(parts)
+    entry["parts_credited"] = sum(p["credited"] for p in parts)
+    entry["status_c3"] = "DISTINGUISHED" if entry["parts_credited"] == len(parts) else ("PARTIAL_CREDIT" if entry["parts_credited"] else "NO_PART_CREDITED")
+    if entry["status_c3"] == "NO_PART_CREDITED":
+        entry["positive_observation_note"] = ("Os predicados de julgamento passaram: a observação positiva se repete (como no v5), mas nenhuma "
+                                              "parte discriminante é creditada.")
+    if state == "V5_NO_ARM_RECORD":
+        entry["v5_note"] = ("O v5 não tem objeto de braço com este id (as observações TypeScript do 2A ficam por rótulo nas linhas "
+                            "carregadas); o item estava no resto da linha (remaining_open_by_contract ou residual_planned_profile_proposal).")
+    entry["residuals"] = [r["id"] for r in plan["residuals"] if aid in (r.get("arms") or [])]
+    if aid in CLOSES:
+        entry["v5_gap_closed_by_c3"] = CLOSES[aid]
+    entry["not_observed_after_c3"] = NOT_OBSERVED_AFTER.get(aid)
+    q = []
+    for c in by_case:
+        q += [x for x in case_qualifications(c) if x not in q]
+    entry["qualifications"] = q
+    arms_c3.append(entry)
+arm_index = {a["arm_id"]: a for a in arms_c3}
+
+# ---------------------------------------------------------------- residuals of the plan, resolved
+DECIDED = {"Q1", "Q2", "Q3"}
+residuals = []
+for r in plan["residuals"]:
+    e = {"id": r["id"], "contract": r["contract"], "item": r["item"], "class_plan": r["class"]}
+    for f in ("reason", "questions", "cases", "arms"):
+        if r.get(f):
+            e[f] = r[f]
+    if r["class"] == "IN_SPEC":
+        parts = [p for a in r["arms"] for p in parts_by_arm[a] if p["case"] in r["cases"]]
+        if all(p["credited"] for p in parts) and r["id"] != "R-PY18-1":
+            e.update(resolution="RESOLVED_BY_C3", needs_new_decision=False, destination=None)
+        elif r["id"] == "R-PY18-1":
+            e.update(resolution="PARTIAL_BY_C3", needs_new_decision=False,
+                     remaining="demais modelos gerados fora dos exercitados (o C3-PY18 cobre dois modelos novos por caminhos de roteamento "
+                               "diferentes, escopo parcial declarado no plano)",
+                     destination="continuação seguinte do perfil de fonte (sem decisão nova)")
+        else:
+            e.update(resolution="PARTIAL_BY_C3", needs_new_decision=False,
+                     credited=[p["contrary"] for p in parts if p["credited"]],
+                     not_credited=[{"arm": a, "contrary": p["contrary"], "reason": p["reason_not_credited"]}
+                                   for a in r["arms"] for p in parts_by_arm[a] if p["case"] in r["cases"] and not p["credited"]],
+                     remaining="known_bad 'pular o cleanup' como MISMATCH",
+                     destination=("continuação seguinte do perfil de fonte, depois dos carry-overs C32-ADM/R1-F01 (registro de threads por "
+                                  "threading.local e controle negativo do guarda) e C32-ADM/DV-C32-01; sem decisão nova"))
+        e["parts"] = len(parts)
+    elif r["class"] == "OUT_USER_DECISION":
+        qs = set(r.get("questions") or [])
+        if qs <= DECIDED:
+            e.update(resolution="OPEN_DECIDED_DISTRIBUTED_PROFILE", needs_new_decision=False,
+                     destination=("perfil distribuído (Q1, Q2 e Q3 decididas pelo usuário em 19/10/2026; especificação em andamento em "
+                                  "../sdk-distributed-profile-spec/, outra unidade)"))
+            if r["id"] == "R-PY16-2":
+                e["note"] = "se a observação exigir turn real (chamada a modelo), passa ao gate T4 separado citado pela Q3"
+        elif qs == {"Q4"}:
+            e.update(resolution="OPEN_DENIED_BY_USER", needs_new_decision=True,
+                     destination="Q4 negada (DENY_NEW_CAPABILITY): só com nova decisão do usuário ou perfil de plataforma")
+        elif qs == {"Q5"}:
+            e.update(resolution="OPEN_NOT_AUTHORIZED", needs_new_decision=True,
+                     destination="Q5 (outras versões de pydantic e Node) não autorizada na resposta da Q2: exige decisão nova do usuário")
+        else:
+            raise SystemExit("unexpected questions %s" % qs)
+    elif r["class"] == "OUT_T4_GATE":
+        e.update(resolution="OPEN_T4_GATE", needs_new_decision=True, destination="gate T4 próprio (turn real, chamada a modelo ou login real)")
+    elif r["class"] == "OUT_NATIVE":
+        e.update(resolution="OPEN_NATIVE", needs_new_decision=True,
+                 destination="BUILD nativo e portas duráveis (SPEC0239 aprovada; BUILD depende de 0029 -> 0030 -> 0031 e não está autorizado)")
+    elif r["class"] == "OUT_NEW_CAPABILITY":
+        e.update(resolution="OPEN_NEW_CAPABILITY", needs_new_decision=True,
+                 destination=("capacidade nova de harness: só com unidade própria que a especifique e autorização (capacidade nova segue "
+                              "negada)"))
+    elif r["class"] == "OUT_NONDETERMINISTIC":
+        e.update(resolution="OPEN_NO_DETERMINISTIC_PATH", needs_new_decision=False,
+                 destination="sem forma determinística no perfil de fonte; segue registrado como aberto, sem plano")
+    elif r["class"] == "OUT_PLATFORM_LIMIT":
+        e.update(resolution="OPEN_PLATFORM_LIMIT", needs_new_decision=True, destination="acesso a Windows (só linux-x64 é local)")
+    elif r["class"] == "OUT_NOT_APPLICABLE":
+        e.update(resolution="NOT_APPLICABLE_AT_PIN", needs_new_decision=False, destination=None)
+    elif r["class"] == "OUT_UNREACHABLE":
+        e.update(resolution="UNREACHABLE_AT_PIN", needs_new_decision=False, destination=None)
+    elif r["class"] == "ALREADY_OBSERVED":
+        e.update(resolution="ALREADY_OBSERVED", needs_new_decision=False, destination=None)
+    else:
+        raise SystemExit("unexpected class %s" % r["class"])
+    residuals.append(e)
+res_counts = {}
+for e in residuals:
+    res_counts[e["resolution"]] = res_counts.get(e["resolution"], 0) + 1
+
+# ---------------------------------------------------------------- rows
+plan_rows = {r["source_contract"]: r for r in plan["rows"]}
+case_rows = {}
+for s in ADM:
+    for r in adj[s]["rows"]:
+        if r["kind"] == "SDK":
+            case_rows[r["case"]] = r
+rows = []
+remaining = {}
+for r5 in v5["rows"]:
+    ct = r5["source_contract"]
+    pr = plan_rows.get(ct)
+    row = {"source_contract": ct, "gaps": r5["gaps"], "status_v5": r5["status"],
+           "v5_pointer": "%s/coverage-observed-v5.json#/rows[source_contract=%s]" % (B2, ct)}
+    if pr is None or not pr["cases"]:
+        row.update(plan_c3_row=("%s/coverage-plan-c3.json#/rows[source_contract=%s]" % (SPEC, ct)) if pr else None,
+                   cases_c3=[], status=r5["status"], status_changed=False,
+                   status_rule_applied=("linha do plano sem caso (só resíduos fora do escopo)" if pr else "fora das linhas do plano da continuação 3")
+                   + "; status do v5 mantido",
+                   arms_observed_c3=[], observations_c3=[])
+    else:
+        obs = []
+        for case in pr["cases"]:
+            f, c = spec_cases[case]
+            cr = rows_cr[case]
+            rel, acc = acceptance(case)
+            obs.append({"case": case, "sub_lot": sub_of[case], "slot": c["slot"], "role": c["role"], "conditional": case in pr["conditional_cases"],
+                        "final_reading": case_rows[case]["final_reading"], "attribution": case_rows[case]["attribution"],
+                        "service_outcome": cr["outcome"], "composition_rule": cr["composition_rule"], "capture_form": cr["capture_form"],
+                        "predicates": cr["predicates"], "failed_predicates": cr["failed_predicates"],
+                        "known_bad": c["known_bad"], "arms": sorted({a["arm"] for a in c["arm_discrimination"] if a["arm"][:4] == ct}),
+                        "acceptance_service": {"path": rel, "sha256": sha(rel)},
+                        "adjudication_pointer": "%s/adjudication-r1.json#/rows[case=%s]" % (ADM[sub_of[case]], case),
+                        "qualifications": case_qualifications(case)})
+        row.update(plan_c3_row="%s/coverage-plan-c3.json#/rows[source_contract=%s]" % (SPEC, ct), sub_lots_c3=pr["sub_lots"],
+                   cases_c3=pr["cases"], status=r5["status"], status_changed=False,
+                   status_rule_applied=("status_rule de coverage-plan-c3.json: linha já OBSERVED_CLIENT_PARTIAL só acrescenta observações; "
+                                        "casos usados todos consumíveis (PASS_CLIENT_OBSERVATION adjudicado)"),
+                   arms_observed_c3=sorted({a["arm_id"] for a in arms_c3 if a["contract"] == ct}),
+                   observations_c3=obs)
+    rres = [e for e in residuals if e["contract"] == ct]
+    v5_text = v5["remaining_open_by_contract"].get(ct) or r5.get("residual_planned_profile_proposal") or None
+    rem = {"v5_text": v5_text,
+           "v5_text_source": ("remaining_open_by_contract" if ct in v5["remaining_open_by_contract"]
+                              else ("rows/residual_planned_profile_proposal" if r5.get("residual_planned_profile_proposal") else None)),
+           "plan_residuals": [e["id"] for e in rres],
+           "resolved_by_c3": [e["id"] for e in rres if e["resolution"] == "RESOLVED_BY_C3"],
+           "partial_by_c3": [{"id": e["id"], "remaining": e["remaining"], "destination": e["destination"]} for e in rres if e["resolution"] == "PARTIAL_BY_C3"],
+           "still_open": [{"id": e["id"], "item": e["item"], "resolution": e["resolution"], "needs_new_decision": e["needs_new_decision"],
+                           "destination": e["destination"]} for e in rres if e["resolution"].startswith("OPEN")],
+           "closed_without_observation": [{"id": e["id"], "item": e["item"], "resolution": e["resolution"]} for e in rres
+                                          if e["resolution"] in ("NOT_APPLICABLE_AT_PIN", "UNREACHABLE_AT_PIN", "ALREADY_OBSERVED")],
+           "note": ("contrato fora do plano da continuação 3: o texto do v5 vale sem mudança" if pr is None else
+                    "o texto do v5 vale para o que não está nos resíduos do plano; os resíduos do plano têm a resolução acima")}
+    remaining[ct] = rem
+    row.update(remaining_after_c3=rem, carried_from_v5=copy.deepcopy(r5), whole_requirement_covered=False, functional_receipt=None,
+               parity_credit=0)
+    rows.append(row)
+
+counts = {"OBSERVED_CLIENT_PARTIAL": sum(1 for r in rows if r["status"] == "OBSERVED_CLIENT_PARTIAL"),
+          "OPEN_REQUIRED_FUTURE_PROFILE": sum(1 for r in rows if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE")}
+parts_all = [p for a in arms_c3 for oc in a["observed_by"] for p in oc["parts"]]
+open_explicit_v6 = [a for a in v5["arms_open_explicit_v5"] if arm_index.get(a["arm_id"], {}).get("status_c3") != "DISTINGUISHED"]
+cited = sorted({oc["acceptance"]["path"] for a in arms_c3 for oc in a["observed_by"]})
+v6 = {
+    "kind": "SDK_COVERAGE_OBSERVED_BINDING", "task": TASK, "version": 6,
+    "meaning": ("Versão 6 do mapa observado, ao lado do v5 (%s/coverage-observed-v5.json, não editado). Liga as 27 observações da "
+                "continuação 3 (14 TypeScript do C3-1 e 13 Python do C3-2) aos 44 contratos fonte, limitadas às partes distinguidas da "
+                "tabela arm_discrimination congelada em cases-c3-1.json e cases-c3-2.json. OBSERVED_CLIENT_PARTIAL segue significando "
+                "observação parcial de cliente no perfil de referência (fonte do SDK do pin contra peers sintéticos, Linux x86-64, CPython "
+                "3.12.3, pydantic 2.13.4, Node v24.20.0, freeze r4 com os deltas D3); não é qualificação, recibo funcional nem paridade." % B2),
+    "binding_rule": [
+        "Só os 27 casos de adjudication-r1.json#/bind_consumes_only das admissões C3-1 e C3-2 são consumidos (leitura final "
+        "PASS_CLIENT_OBSERVATION); os CONTROL C31-CTRL01 e C32-CTRL01 só abriram o gate.",
+        "Parte = uma entrada de arm_discrimination do caso (braço, contrary, observable_if_contrary, passos, judged_by). Uma parte é "
+        "creditada quando todos os predicados judged_by passaram no acceptance.json de serviço e ela não depende do guarda E3-07.",
+        E307,
+        "Itens registrados para o BIND aplicados como qualificações: C32-ADM/R1-F02, C32-ADM/R1-F04 (texto corrigido do DV-C32-04), "
+        "C31-ADM/R1-F04, C32-ADM/DV-C32-01, C32-ADM/DV-C32-02 e o registro do zombie 15 do C31-ADM/R1-F01.",
+        "status_rule de coverage-plan-c3.json: linha já OBSERVED_CLIENT_PARTIAL só acrescenta observações; nenhuma linha muda de status.",
+        "Cada linha leva a linha do v5 sem mudança em carried_from_v5.",
+        "Nenhuma linha cobre o requisito inteiro; 0 recibos funcionais; 0 crédito de paridade.",
+    ],
+    "status_vocabulary": v5["status_vocabulary"],
+    "status_vocabulary_note": "Vocabulário do v5 sem mudança; a continuação 3 não abre nem fecha contrato.",
+    "sources": {
+        "coverage_observed_v5": src(B2 + "/coverage-observed-v5.json"), "gaps_review_v5": src(B2 + "/gaps-review-v5.json"),
+        "how_v2": src(B2 + "/HOW-next-profile-v2.md"), "questions_2b2_bind_r2": src(B2 + "/review-r2/executor-disposition.json"),
+        "user_decision_q1_q4": src(B2 + "/user-decision-distributed-profile-20261019.json"),
+        "coverage_plan_c3": src(SPEC + "/coverage-plan-c3.json"), "cases_c3_1": src(SPEC + "/cases-c3-1.json"),
+        "cases_c3_2": src(SPEC + "/cases-c3-2.json"),
+        **{"%s_%s" % (k, s.lower().replace("-", "_")): src(ADM[s] + "/" + f) for s in ADM for k, f in (
+            ("adjudication", "adjudication-r1.json"), ("case_results", "case-results.json"), ("next_task", "next-task.json"),
+            ("review_r1", "review-r1/review.json"), ("disposition_r1", "review-r1/executor-disposition.json"),
+            ("unit_manifest", "unit-manifest.json"), ("commit_receipt", "commit-receipt.json"))},
+        "reevaluation_c3_1": src(ADM["C3-1"] + "/reevaluation-c31.json"), "reevaluation_c3_2": src(ADM["C3-2"] + "/reevaluation-c32.json"),
+        "input_verification": src("input-verification.json"),
+    },
+    "source_contract_count": len(rows), "counts_v5": v5["counts"], "counts": counts, "status_changes": [],
+    "bound_cases_c3": {s: adj[s]["bind_consumes_only"] for s in ADM},
+    "control_slots": [{"case": cres[s]["control"]["case"], "final_reading": "MISMATCH (CONTROL)", "counts_as_sdk_observation": False} for s in ADM],
+    "conditional_slots": {"C3-PY02": "RUN (DIAG-PY-PROCWITNESS DIAG_PASS); consumido"},
+    "records_for_bind_applied": RECORDS,
+    "e3_07": {"credited": False, "reading": E307,
+              "parts_not_credited": [{"case": p["case"], "arm": a, "contrary": p["contrary"], "reason": p["reason_not_credited"]}
+                                     for a, ps in parts_by_arm.items() for p in ps if not p["credited"]]},
+    "arm_discrimination_consumed": {"parts_total": len(parts_all), "parts_credited": sum(p["credited"] for p in parts_all),
+                                    "parts_not_credited": sum(not p["credited"] for p in parts_all),
+                                    "parts_with_failed_judged_by": sum(not p["judged_by_passed"] for p in parts_all)},
+    "arms_c3_counts": {"arms": len(arms_c3), "by_status": {s: sum(1 for a in arms_c3 if a["status_c3"] == s) for s in ("DISTINGUISHED", "PARTIAL_CREDIT", "NO_PART_CREDITED")},
+                       "by_v5_state": {s: sum(1 for a in arms_c3 if a["v5_state"] == s) for s in sorted({a["v5_state"] for a in arms_c3})}},
+    "arms_observed_c3": arms_c3,
+    "new_arm_ids_c3": {k: plan["new_arm_ids"]["arms"][k] for k in sorted(NEW_IDS)},
+    "arms_v5_partial_closed_by_c3": sorted(a["arm_id"] for a in arms_c3 if a["v5_state"] == "V5_ARM_PARTIAL_SCOPE" and a["status_c3"] == "DISTINGUISHED"),
+    "arms_v5_partial_scope_not_targeted": sorted(set(v5_arm_id for v5_arm_id, (k, a) in v5_arm.items() if k != "arms_open_explicit_v5"
+                                                     and k != "arms_closed_v3_carried" and a.get("not_observed")) - set(arm_index)),
+    "arms_open_explicit_v5_resolved": sorted(a["arm_id"] for a in v5["arms_open_explicit_v5"] if a["arm_id"] not in [x["arm_id"] for x in open_explicit_v6]),
+    "arms_open_explicit_v6": open_explicit_v6,
+    "arm_parts_not_credited_v6": [{"arm": "PY13.B17", "part": "known_bad 'pular o cleanup' como MISMATCH", "reason": "guarda E3-07 não creditado",
+                                   "v5_same": "lead-decision-f01 (ACCEPT_FAIL_CLOSED_OUTCOME) já não creditava a discriminação no 2B-PY13E"}],
+    "residuals_c3": residuals,
+    "residual_counts": {"total": len(residuals), "by_resolution": res_counts,
+                        "needs_new_decision": sum(1 for e in residuals if e["needs_new_decision"]),
+                        "no_new_decision_open": sorted(e["id"] for e in residuals if not e["needs_new_decision"] and e["resolution"] not in
+                                                       ("RESOLVED_BY_C3", "NOT_APPLICABLE_AT_PIN", "UNREACHABLE_AT_PIN", "ALREADY_OBSERVED"))},
+    "remaining_open_by_contract": remaining,
+    "projection_check": {"source": SPEC + "/coverage-plan-c3.json#/projection_if_all_pass", "projected": plan["projection_if_all_pass"]["counts"],
+                         "observed_v6": counts, "rows_changing_status_projected": plan["projection_if_all_pass"]["rows_changing_status"],
+                         "rows_changing_status_observed": [],
+                         "explicit_open_arms_v5_targeted": plan["projection_if_all_pass"]["explicit_open_arms_v5_targeted"],
+                         "explicit_open_arms_v5_resolved": sorted(a["arm_id"] for a in v5["arms_open_explicit_v5"] if arm_index.get(a["arm_id"], {}).get("status_c3") == "DISTINGUISHED"),
+                         "confirmed": counts == plan["projection_if_all_pass"]["counts"]},
+    "cited_acceptance_references": len(cited), "cited_acceptance_documents": cited,
+    "rows": rows,
+    "six_gaps": "OPEN (ver gaps-review-v6.json)",
+    "all_509_catalog_records": "Inalterados NOT_RUN/null; nenhum recibo emitido.",
+    "distributed_and_platform_profiles": ("Obrigatórios depois; não removidos pelo perfil de fonte. Os 11 contratos OPEN_REQUIRED_FUTURE_PROFILE "
+                                          "(PY19, PY20, PK01 a PK09) seguem abertos; a especificação do perfil distribuído está em andamento em "
+                                          "../sdk-distributed-profile-spec/ (outra unidade, não lida como entrada nem editada). Ver HOW-next-profile-v3.md."),
+    "functional_receipts": 0, "parity_credit": 0, "built_at": datetime.now(timezone.utc).isoformat(),
+}
+
+# ---------------------------------------------------------------- gaps v6
+touched = {ct for ct, pr in plan_rows.items() if pr["cases"]}
+grows = []
+for g in gaps5["rows"]:
+    obs6 = [c for c in g["contracts"] if c in {r["source_contract"] for r in rows if r["status"] == "OBSERVED_CLIENT_PARTIAL"}]
+    t = sorted(set(g["contracts"]) & touched, key=g["contracts"].index)
+    arms_g = sorted(a["arm_id"] for a in arms_c3 if a["contract"] in g["contracts"])
+    grows.append({"id": g["id"], "owner": g["owner"], "contracts": g["contracts"], "contracts_total": g["contracts_total"],
+                  "contracts_observed_client_partial_v5": g["contracts_observed_client_partial_v5"],
+                  "contracts_observed_client_partial_v6": obs6, "contracts_touched_by_c3": t, "arms_observed_c3": arms_g,
+                  "contracts_open": [c for c in g["contracts"] if c not in obs6], "status_before": g["status_after"], "status_after": "OPEN",
+                  "progress_before": g["progress_after"], "progress_after": g["progress_after"], "progress_changed": False,
+                  "observed_count_changed": obs6 != g["contracts_observed_client_partial_v5"],
+                  "remaining_boundaries_unchanged": g["remaining_boundaries_unchanged"],
+                  "why_still_open": ("nenhum requisito dos donos tem qualificação com recibo; a continuação 3 só acrescenta braços a contratos já "
+                                     "observados" if t else "a continuação 3 não toca contratos desta lacuna"),
+                  "qualification": "NOT_RUN", "receipt": None, "whole_requirement_covered": False,
+                  **({"progress_justification": g["progress_justification"]} if g.get("progress_justification") else {})})
+gaps6 = {"kind": "SDK_GAPS_REVIEW", "task": TASK, "version": 6, "source": gaps5["source"], "base": src(B2 + "/gaps-review-v5.json"),
+         "binding": "coverage-observed-v6.json", "decision_rule": gaps5["decision_rule"], "rows": grows,
+         "summary": {"OPEN": sum(1 for g in grows if g["status_after"] == "OPEN"),
+                     "observed_v6": {g["id"]: "%d/%d" % (len(g["contracts_observed_client_partial_v6"]), g["contracts_total"]) for g in grows},
+                     "observed_count_changed": [g["id"] for g in grows if g["observed_count_changed"]],
+                     "progress_changed": [g["id"] for g in grows if g["progress_changed"]],
+                     "touched_by_c3": [g["id"] for g in grows if g["contracts_touched_by_c3"]]},
+         "functional_receipts": 0, "parity_credit": 0}
+
+for name, doc in (("coverage-observed-v6.json", v6), ("gaps-review-v6.json", gaps6)):
+    with open(os.path.join(UNIT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(json.dumps({"counts": counts, "arms": v6["arms_c3_counts"], "parts": v6["arm_discrimination_consumed"],
+                  "residuals": v6["residual_counts"]["by_resolution"], "gaps": gaps6["summary"]["observed_v6"]}, ensure_ascii=False))

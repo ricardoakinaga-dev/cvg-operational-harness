@@ -1,0 +1,59 @@
+{
+  "kind": "EXECUTOR_DISPOSITION_R2",
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3",
+  "review": {
+    "path": "review-r2/review.json",
+    "sha256": "11858804336d5a96d79beddd0e868b0a6bbbe8736af2732efe0474671a351ce5",
+    "raw": {
+      "path": "review-r2/verdict.raw.txt",
+      "sha256": "0d560449fbfd0aa3b72094d96e57ae64cffc60e110eb1378e6fe3f9b806e7303"
+    },
+    "verdict": "REVISE",
+    "summary_counts": "0 P1, 1 P2, 3 P3",
+    "mandatory_findings": ["R2-F01"],
+    "r1_findings_status": {
+      "R1-F01": "RESOLVED",
+      "R1-F02": "RESOLVED",
+      "R1-F03": "RESOLVED",
+      "R1-F04": "RESOLVED",
+      "R1-F05": "RESOLVED",
+      "R1-F06": "RESOLVED",
+      "R1-F07": "RESOLVED",
+      "R1-F08": "RESOLVED",
+      "R1-F09": "RESOLVED"
+    }
+  },
+  "rule": "R2 é a última revisão e o reparo agrupado (1/1) já foi usado: nenhum documento revisado é reescrito. O P2 restante e os P3 vão para a IMPLEMENT como carry-over explícito em next-task.json; o P2 é obrigatório para a IMPLEMENT do C3-1. Só state.json, next-task.json, ledger-delta-cont-d9ef.md, secret-scan.json, review-r2/ e esta disposição mudam depois da R2.",
+  "unit_outcome": "COMPLETED_LOCAL_WITH_CARRIED_P2: as duas especificações ficam prontas; a IMPLEMENT do C3-1 aplica a errata do R2-F01 antes do source freeze; nenhum valor congelado muda.",
+  "items": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "disposition": "CARRIED_TO_IMPLEMENT_MANDATORY",
+      "scope": "C3-1, único caso afetado: C3-TS12 (predicado abort.child_terminated_by_node_abort, E3-06)",
+      "confirmed_by_executor": "Conferido: o oráculo congelado exige a ordem abort() < SIGTERM do adapter < API_ERROR do passo, que é ordem entre processos (R3-01, classe order_unilateral, falha nunca é MISMATCH); o modo next_abort_at_barrier não define marco do instante do abort(); no padrão admitido do ts-driver.mjs o ABORT_CALLED sai depois do kill. Com o SDK correto a ordem pode parecer invertida por latência de captura, e a classe client levaria isso a MISMATCH.",
+      "erratum_text": "Errata vinculante do oráculo de abort.child_terminated_by_node_abort (classe client, E3-06), aplicada pela IMPLEMENT do C3-1 sem mudar nenhum valor congelado: o predicado julga só (1) a forma KNOWN_SIGNAL_TERMINATION, (2) SIGTERM no SIGNAL do adapter e na testemunha do SO, (3) nenhum sinal enviado pelo supervisor ao adapter, (4) nenhum kill feito por código próprio do driver e (5) o abort() registrado no passo 4 por um marco do driver. As cláusulas 'depois da chamada abort() do passo e antes do API_ERROR do passo' saem do oráculo client. Se a IMPLEMENT quiser julgar a ordem, ela vira um predicado order_unilateral (R3-01) por mono_ns da origem, com o marco ABORT_REQUESTED emitido pelo driver antes da chamada abort(); falha dá INCONCLUSIVE, nunca MISMATCH. Autoteste obrigatório no E3-06: captura sintética em que o SIGNAL do adapter precede o marco do driver não dá MISMATCH. A revisão independente da IMPLEMENT do C3-1 confere esses pontos.",
+      "note": "Errata obrigatória para a IMPLEMENT do C3-1 (R2 é a última rodada e o reparo 1/1 já foi usado). Errata vinculante do oráculo de abort.child_terminated_by_node_abort (classe client, E3-06), aplicada pela IMPLEMENT do C3-1 sem mudar nenhum valor congelado: o predicado julga só (1) a forma KNOWN_SIGNAL_TERMINATION, (2) SIGTERM no SIGNAL do adapter e na testemunha do SO, (3) nenhum sinal enviado pelo supervisor ao adapter, (4) nenhum kill feito por código próprio do driver e (5) o abort() registrado no passo 4 por um marco do driver. As cláusulas 'depois da chamada abort() do passo e antes do API_ERROR do passo' saem do oráculo client. Se a IMPLEMENT quiser julgar a ordem, ela vira um predicado order_unilateral (R3-01) por mono_ns da origem, com o marco ABORT_REQUESTED emitido pelo driver antes da chamada abort(); falha dá INCONCLUSIVE, nunca MISMATCH. Autoteste obrigatório no E3-06: captura sintética em que o SIGNAL do adapter precede o marco do driver não dá MISMATCH. A revisão independente da IMPLEMENT do C3-1 confere esses pontos."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "D3-03 lido assim pela IMPLEMENT do C3-1: o getter de testemunha captura qualquer erro da listagem (readdirSync, lstatSync), devolve value ao SDK e registra o erro no GETTER_WITNESS; erro de listagem faz tmp.getter_witness_recorded falhar (INVALID_CAPTURE), nunca entra no SDK. O registro vale para qualquer passo em que haja invocação (como no encoding), não só run, run_streamed e events.consume. Autoteste no E3-03 com listagem que lança."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "D3-05 e E3-07 lidos assim pela IMPLEMENT do C3-2: (1) no hook.wait do passo 11 do C3-PY13ER, thread_name tem os dois sentidos, o admitido (filtra os eventos do gancho por thread) e o do D3-05 (thread vigiado), e os dois apontam para codex-goal-start-cleanup; (2) o autoteste (c) aceita INVALID_CAPTURE pela regra 1 (CaptureFailure do driver, caminho admitido de HARNESS_PRECONDITION, E2B-14), em vez da regra 4; (3) o 'nunca iniciou' do fault vem do mesmo registro de threads do driver que preenche WAIT_RESULT.thread_started (threading.setprofile instalado no hook.install); (4) em espera CLIENT_EFFECT sem thread_name, thread_started e thread_alive são null; (5) textos 'esperas CLIENT_EFFECT' e 'D3-05 classe de espera CLIENT_EFFECT' valem para as duas classes."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "D3-04 (c) inclui também o gancho por identidade em CodexClient.next_login_notification (C3-PY17), já coberto pelo DIAG-PY-C3VOCAB e pelo validador. Ponteiros do reparo que faltavam: R1-F02 também mudou freeze-r4-c3-delta.json#/items[id=D3-02]/rule (item g) e #/diagnostics/DIAG-TS-C3VOCAB; R1-F04 também mudou #/diagnostics/DIAG-PY-C3VOCAB."
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

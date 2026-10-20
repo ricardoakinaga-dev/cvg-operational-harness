@@ -1,0 +1,365 @@
+{
+  "round": "r1",
+  "task": "HISO005-P2-BUILD-0244",
+  "reviewer": "Claude Code, crítico novo não-fork R1 (Opus 5.5); só leitura no repositório, na candidata e no runtime",
+  "observedAt": "2026-10-20",
+  "spec": {
+    "path": "docs/02_spec/0244_b6_esm_module_shape.md",
+    "sha256": "50463db7af125993d1cbcd966a5977efa9bafc7d0ffd57bdbe6ce10c8c6ec79c"
+  },
+  "sourceFreezeSha256": "1bc040dddbfe26903f46d2bbc351e090acecc49a0d163230c948fe834f502747",
+  "frozenEngineSha256": "b0e636b470f52a0e060c108363fd4fc5ae01820f4ad7cbbbf6300897e58e53d9",
+  "frozenTestSha256": "cb5d5fac3c6efc15c90ebc4556259137645ccacf760fe5fcb9216c77b8e1ec11",
+  "verdict": "REVISE",
+  "summary": "E2 está conforme à §3.2. E1 está conforme à §3.1 em precedência, default, ambiguidade sticky, diamante, regra 5, qualificação, ciclo, CJS e census, com uma exceção. A identidade de namespace reexportado trata `import * as ns` + `export { ns }` e `export * as ns from` como a ligação `m#*namespace*`. Com isso, uma estrela ambígua no ECMAScript e no Node 22 fixado vira PROVEN (R1-01). Também ficam pendentes testes de precedência que não discriminam (R1-02), a publicação tupla a tupla exigida pela §3.3 (R1-03) e a declaração da folga de contextos, de 229 sobre teto de 256 (R1-04). A conservação foi recalculada de forma independente e as contagens batem. Normal = strict, validation true, zero provas, census igual salvo versão e cópias diagnósticas iguais salvo etiquetas. Migrações de literal: só as registradas.",
+  "required": [
+    {
+      "id": "R1-01",
+      "severity": "P1",
+      "section": "SPEC0244 §3.1 (definição de ligação resolvida; regra 4) e MS04 (estrela ambígua dá UNKNOWN)",
+      "finding": "A identidade de namespace reexportado não segue o ResolveExport nem o Node 22.23.2 fixado. O caminho `import * as ns from m` + `export { ns }` recebe `m#*namespace*` em importIdentity (`local.set(bindings.name.text, namespace.id + '#*namespace*')`), e `export * as ns from m` recebe a mesma identidade em star() (`setIdentity(file, name, namespace.id + '#*namespace*')`). No ParseModule do ECMAScript, reexportar um namespace importado é export local: a ligação é (módulo reexportador, \"ns\"). Logo, duas estrelas que trazem `ns` de módulos diferentes têm ligações diferentes e `ns` é ambíguo. A v5 trata os dois caminhos como a mesma ligação, exporta o namespace conhecido e o fixture fica PROVEN, com validation true e sem AMBIGUOUS_STAR (F01 e F02). No Node 22 fixado, `ns` não está no namespace do barril (`'ns' in r` é false, `r.ns` é undefined e `r.ns.x` lança TypeError), e `import { ns } from './r.js'` falha no link com SyntaxError 'contains conflicting star exports for name ns'. O Node 22 também trata duas `export * as ns from m` em módulos diferentes como conflitantes (F03), e a v5 dá PROVEN. Hoje o valor indevido é um namespace onde o runtime tem undefined. As recusas atuais (optional chain, operador sobre não primitivo, typeof, `in`, reflexão sobre namespace) impedem que isso vire primitivo indevido ou violação perdida, mas essa folga depende dessas recusas. Na raiz real o padrão existe em node_modules/zod/index.js (`z`) e node_modules/@vitest/expect/dist/index.js (`chai`), sem estrela concorrente medida (ambiguousStarNames vazio).",
+      "evidence": {
+        "fixtures": {
+          "F01": {
+            "entry.js": "import * as r from './r.js'; const pick = {2: 1}; export const y = pick[r.ns.x];",
+            "r.js": "export * from './a.js'; export * from './b.js';",
+            "a.js": "import * as ns from './m.js'; export { ns };",
+            "b.js": "export * as ns from './m.js';",
+            "m.js": "export const x = 2;"
+          },
+          "F02": {
+            "entry.js": "(igual F01)",
+            "r.js": "(igual F01)",
+            "a.js": "import * as ns from './m.js'; export { ns };",
+            "b.js": "import * as ns from './m.js'; export { ns };",
+            "m.js": "export const x = 2;"
+          },
+          "F03": {
+            "entry.js": "(igual F01)",
+            "r.js": "(igual F01)",
+            "a.js": "export * as ns from './m.js';",
+            "b.js": "export * as ns from './m.js';",
+            "m.js": "export const x = 2;"
+          },
+          "F36": {
+            "entry.js": "(igual F01)",
+            "r.js": "export * from './a.js'; export * from './b.js'; export * from './c.js';",
+            "a.js": "export * as ns from './m.js';",
+            "b.js": "export { ns } from './a.js';",
+            "c.js": "import { ns } from './a.js'; export { ns };",
+            "m.js": "export const x = 2;"
+          }
+        },
+        "v5Frozen": {
+          "F01": "PROVEN, 5 provas, validation true, 0 unknowns",
+          "F02": "PROVEN, 5 provas",
+          "F03": "PROVEN, 5 provas",
+          "F36": "PROVEN (correto: mesma ligação por dois caminhos)"
+        },
+        "v4": {
+          "F01": "UNKNOWN",
+          "F02": "UNKNOWN",
+          "F03": "UNKNOWN"
+        },
+        "node22_23_2": {
+          "F01": "'ns' in r = false; r.ns = undefined; import { ns } -> SyntaxError conflicting star exports",
+          "F02": "'ns' in r = false",
+          "F03": "'ns' in r = false; import { ns } -> SyntaxError conflicting star exports",
+          "F36": "'ns' in r = true; r.ns.x = 2"
+        },
+        "fixCheck": {
+          "M3 (só import*+export{ns} local)": "F01 e F02 -> UNKNOWN com r.js UNKNOWN_REEXPORT AMBIGUOUS_STAR:ns; F03 continua PROVEN; suíte 0244 congelada 40/40",
+          "M4 (M3 + `export * as ns` local)": "F01, F02 e F03 -> UNKNOWN com AMBIGUOUS_STAR:ns; F36 continua PROVEN; suíte 0244 congelada 40/40",
+          "M4 diff": [
+            "star(): setIdentity(file, name, file + '#' + name)",
+            "importIdentity NamespaceImport: local.set(bindings.name.text, file + '#' + bindings.name.text)"
+          ]
+        },
+        "lab": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab (cópias v5, v5m3, v5m4; out-r1-v5.json, out-mut-m3.json, out-mut-m4.json, out-f36-*.json, esm-F01..F03, esm-F36)"
+      },
+      "requiredChange": "Dar identidade local (arquivo#nome) ao namespace reexportado nos dois caminhos: `import * as ns` seguido de `export { ns }` e `export * as ns from m`. Isso é exato no ECMAScript para o primeiro caminho e igual ao Node 22 fixado para os dois. Para F03 é desvio conservador em relação ao texto ECMAScript e deve ser registrado. No mínimo, F01 e F02 não podem dar PROVEN. Incluir F01, F02 e F03 (AMBIGUOUS_STAR:ns, UNKNOWN, sem prova) e o controle F36 (PROVEN) em tests/b6-0244-esm-module-shape.test.js. Fazer nova congelada r2 e refazer a medição real e a conservação §3.3 sobre ela."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "section": "MS02 (export explícito de runtime antes e depois da estrela: local, indireto e `as N`); SPEC0244 §3.1 regra 3",
+      "finding": "Os casos \"depois da estrela\" do teste de precedência passam por sobrescrita na ordem das instruções, não pela regra 3. A mutação M1 remove `|| explicit.has(k)` do laço qualificado de star() e mantém 39/40. Só \"local before the star\" falha; \"local after the star\", \"indirect named export\", \"import then export\" e \"`export * as N` prevails over a star name N\" passam com a regra desligada. Faltam também os casos \"antes\" para indireto e para `as N`, pedidos pelo MS02. O engine está correto: F04 a F07 dão PROVEN na v5.",
+      "evidence": {
+        "mutationM1": "suíte 0244 congelada: 39 passam, 1 falha (local before the star)",
+        "fixtures": {
+          "F04": {
+            "barrel.js": "export { x } from './b.js'; export * from './a.js';",
+            "a.js": "export const x = 1;",
+            "b.js": "export const x = 2;",
+            "entry.js": "import {x} from './barrel.js'; const pick = {2: 1}; export const y = pick[x];"
+          },
+          "F05": {
+            "barrel.js": "export * as x from './b.js'; export * from './a.js';",
+            "a.js": "export const x = 1;",
+            "b.js": "export const x = 2;",
+            "entry.js": "import {x} from './barrel.js'; const pick = {2: 1}; export const y = pick[x.x];"
+          },
+          "F06": {
+            "barrel.js": "export * from './a.js'; export * from './c.js'; export const x = 2;",
+            "a.js": "export const x = 1;",
+            "c.js": "export const x = 3;",
+            "entry.js": "(oráculo pick[x])"
+          },
+          "F07": {
+            "barrel.js": "import { x } from './b.js'; export * from './a.js'; export * from './c.js'; export { x };",
+            "a.js": "export const x = 1;",
+            "b.js": "export const x = 2;",
+            "c.js": "export const x = 3;",
+            "entry.js": "(oráculo pick[x])"
+          }
+        },
+        "v5Frozen": "F04, F05, F06 e F07 PROVEN",
+        "M1": "F04 e F05 UNKNOWN; F06 e F07 UNKNOWN com barrel.js UNKNOWN_REEXPORT AMBIGUOUS_STAR:x"
+      },
+      "requiredChange": "Acrescentar indireto antes da estrela (F04) e `export * as N` antes da estrela (F05). Tornar discriminantes os casos \"depois\", por exemplo com duas estrelas conflitantes seguidas do export explícito: F06 local e F07 import+export, mais os análogos indireto e `as N`. Registrar que a mutação M1 passa a falhar nesses casos."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "section": "SPEC0244 §3.3 (último parágrafo: \"o BUILD publica, tupla a tupla, as que somem e as que aparecem\") e MS05",
+      "finding": "conservation-r1.json publica contagens, classes, denominadores e as listas de falha (vazias), mas não publica tupla a tupla as 1.541 que somem nem as 303 que aparecem. Recalculei de forma independente a partir dos relatórios e dumps selados. As contagens batem: 1.402/48/10/81 somem por classe; 289 novas em módulo tocado e 14 a jusante; nenhuma etiqueta mista na classe raiz 1. A lista exigida pela SPEC, porém, não está na evidência.",
+      "evidence": {
+        "recheck": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab/recheck.py -> recheck-out.json (normal e strict idênticos)",
+        "conservationKeys": "modes.*.{gone,goneClassified,newPlaced,rootsLost[],newWithoutCause[]}; sem goneTuples/newTuples"
+      },
+      "requiredChange": "Publicar, por modo (ou para normal, com a prova de igualdade strict), a lista das tuplas que somem, com classe da §3.3 e etiquetas da cópia, e a lista das que aparecem, com colocação (tocado, jusante ou cone), motivo e família. Pode ser arquivo gz ao lado de conservation-r1/r2."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "section": "Honestidade da evidência; SPEC0244 §5 (parada por estouro) e §6 (riscos); limites da SPEC0242",
+      "finding": "Na raiz real, o uso de contextos subiu de 145 para 229 sobre o teto de 256 (89%, +58%). Os estados foram de 125.460 para 138.560 sobre 250.000, e o tempo do worker de ~106-111 s para ~125-145 s sobre o prazo de 300 s. Estourar maxContexts é BODY_CUT: o corpo é cortado (phases.body CUT), o que é condição de parada da §5 e regressão da medição B6. E1 abre corpos, como a SPEC prevê, e a folga caiu de 111 para 27 contextos. Os números aparecem nos resumos real-*-summary.json, mas nenhum artefato do BUILD declara a folga nem o risco. A conservação registra só limitsEqual.",
+      "evidence": {
+        "real-v4-summary.json": "contexts 145, states 125460, elapsedMs 105934/110900",
+        "real-v5r1-summary.json": "contexts 229, states 138560, elapsedMs 134759/129500",
+        "limits": "maxContexts 256, maxStates 250000, timeoutMs 300000",
+        "engine": "BODY_CUT = /^UNKNOWN_ANALYSIS_LIMIT:(maxStates|maxContexts|maxCallDepth|maxUnionValues)$/"
+      },
+      "requiredChange": "Declarar na evidência do BUILD (estado ou nota de risco ligada à conservação) o uso e o teto de v4 e v5 para contexts, states, callDepth, unionValues e tempo, a folga restante e o risco para a promoção. Os limites não mudam (a SPEC proíbe). Recomendado: identificar, com cópia diagnóstica, a função que chega a 229 contextos."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-P3-01",
+      "severity": "P3",
+      "section": "MS02 (diamante)",
+      "finding": "A mutação M2 remove `identity === AMBIGUOUS ||` e passa 40/40, porque os dois testes de diamante têm uma segunda estrela que já gera conflito. O caso que discrimina é o reexportador de estrela única de um nome ambíguo (F10). A v5 congelada está correta nele: outer.js recebe AMBIGUOUS_STAR:x.",
+      "suggestion": "Acrescentar F10 ao teste 0244."
+    },
+    {
+      "id": "R1-P3-02",
+      "severity": "P3",
+      "section": "MS01 / honestidade da evidência",
+      "finding": "A primeira falha (first-red-0244) foi colhida com o teste de sha256 fe392e1d…, e o congelado é cb5d5fac…. A diferença não está registrada. Rodei o teste congelado contra uma cópia da v4: deu 25/40 falhas, mesmo conjunto e mesma primeira mensagem do first-red. O MS01 vale para os bytes congelados.",
+      "suggestion": "Registrar a mudança ou anexar a primeira falha com os bytes congelados."
+    },
+    {
+      "id": "R1-P3-03",
+      "severity": "P3",
+      "section": "§3.3 (definição de módulo tocado; denominadores)",
+      "finding": "v5_touched_patch marca como tocado qualquer módulo com estrela processada, qualificada ou não, e qualquer classe encontrada. É um superconjunto da definição da SPEC (\"E1 modelou ... ou E2 ligou ...\"). Sem os 8 namespaces incompletos, os números ficam 394 tocados, 764 a jusante, 977 no cone e 1.174 na união, iguais aos da v5a na SPEC. O veredito não muda: as mesmas 1.541/303 tuplas ficam classificadas e colocadas.",
+      "suggestion": "Declarar a definição usada ou alinhar com a SPEC, e publicar os dois conjuntos de denominadores."
+    },
+    {
+      "id": "R1-P3-04",
+      "severity": "P3",
+      "section": "MS06 (census)",
+      "finding": "Na raiz real o census termina o corpo em SKIPPED:UNKNOWN_AMBIGUOUS_RESOLUTION depois de 1 módulo (started 1, completed 0), igual na v4. A igualdade de census-comparison.json é verdadeira, mas não exercita a desativação de E1/E2 no census. Essa desativação está evidenciada pelo teste MS06 de fixture e pela comparação do crítico: census v4 e v5 em 21 fixtures, iguais salvo kernelVersion.",
+      "suggestion": "Anotar a ressalva em census-comparison."
+    },
+    {
+      "id": "R1-P3-05",
+      "severity": "P3",
+      "section": "§3.3 regra 1 (classe raiz 1)",
+      "finding": "conservation.py aceita como raiz 1 a tupla que tem qualquer etiqueta missing-export-star-reexport/refused-class (interseção). Nesta medição não há etiqueta mista, mas uma tupla com outra raiz junto passaria.",
+      "suggestion": "Exigir que as etiquetas estejam contidas em {missing-export-*} ∪ U-*."
+    },
+    {
+      "id": "R1-P3-06",
+      "severity": "P3",
+      "section": "§3.1 (desvios conservadores a documentar)",
+      "finding": "Há quatro desvios, todos conservadores. (a) `export * as ns` com fonte não qualificada envenena os nomes de estrela do módulo (F26). No ECMAScript ele é export indireto, mas a interpretação foi registrada antes da edição. (b) `export { x }` antes de `import { x }` dá identidade local e ambiguidade espúria (F30). (c) `export declare const x` depois de uma estrela sobrescreve com VOID; isso já acontecia na v4 e as raízes RUNTIME_DECLARATION/MISSING_INITIALIZER permanecem. (d) O Node 22 diverge do ECMAScript no diamante: mantém `x` em outer com duas estrelas e omite com estrela única. A v5 dá U com AMBIGUOUS_STAR nos dois casos.",
+      "suggestion": "Listar esses desvios no registro do BUILD."
+    },
+    {
+      "id": "R1-P3-07",
+      "severity": "P3",
+      "section": "MS04 (nenhuma violação perdida)",
+      "finding": "A suíte 0244 não tem fixture de violação. Estrela estática para products/ está coberta pelo 0228, e a união com o census (semântica v4) preserva violações espúrias da v4 (F22c). O caso em que E1 encontra violação nova por valor reexportado (F22b, v4 UNKNOWN, v5 VIOLATION) não está nos testes.",
+      "suggestion": "Acrescentar F22a/F22b ao teste 0244."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "what": "source-freeze-r1.patch.txt aplicado aos blobs de 1073a9dd reproduz os 6 arquivos congelados (sha256) e bate com a candidata",
+      "result": "PASS",
+      "evidence": "git apply num repositório temporário; engine b0e636b4…, teste cb5d5fac…, migrações 7628101d…/834ae07b…/d6018dea…/20ed58fa…"
+    },
+    {
+      "id": "S02",
+      "what": "Teste 0244 congelado contra cópia da v4 (a2598fb2…): primeira falha",
+      "result": "PASS",
+      "evidence": "25/40 falham, mesmo conjunto e mesma primeira linha de mensagem do first-red-0244 (lab/v4-frozen-test.json)"
+    },
+    {
+      "id": "S03",
+      "what": "Teste 0244 congelado contra cópia da v5 congelada",
+      "result": "PASS",
+      "evidence": "40/40 (lab/v5-frozen-test.json)"
+    },
+    {
+      "id": "S04",
+      "what": "F01: import*+export{ns} e export * as ns sob duas estrelas",
+      "result": "FAIL",
+      "evidence": "v5 PROVEN (5 provas, validation true); Node 22: ns ausente e SyntaxError no import nomeado; ECMAScript: ambíguo (R1-01)"
+    },
+    {
+      "id": "S05",
+      "what": "F02: dois import*+export{ns} sob duas estrelas",
+      "result": "FAIL",
+      "evidence": "v5 PROVEN; Node 22 e ECMAScript: ambíguo (R1-01)"
+    },
+    {
+      "id": "S06",
+      "what": "F03: duas export * as ns from m sob duas estrelas",
+      "result": "FAIL",
+      "evidence": "v5 PROVEN; Node 22.23.2: conflicting star exports (R1-01; conservador sob o ECMAScript)"
+    },
+    {
+      "id": "S07",
+      "what": "F36: mesma ligação de namespace por dois caminhos (export { ns } from e import+export de a)",
+      "result": "PASS",
+      "evidence": "v5 e v5m4 PROVEN; Node 22: ns presente, x = 2"
+    },
+    {
+      "id": "S08",
+      "what": "Correção proposta M4 (identidade local de namespace)",
+      "result": "PASS",
+      "evidence": "F01–F03 UNKNOWN com AMBIGUOUS_STAR:ns; F36 PROVEN; suíte 0244 congelada 40/40"
+    },
+    {
+      "id": "S09",
+      "what": "Precedência explícita no engine (F04 indireto antes, F05 as N antes, F06/F07 depois de duas estrelas conflitantes)",
+      "result": "PASS",
+      "evidence": "v5 PROVEN nos quatro; v4 UNKNOWN"
+    },
+    {
+      "id": "S10",
+      "what": "Suíte 0244 detecta remoção da regra 3 (mutação M1)",
+      "result": "FAIL",
+      "evidence": "só 1 de 5 casos de precedência falha (R1-02)"
+    },
+    {
+      "id": "S11",
+      "what": "Suíte 0244 detecta remoção da propagação de nome ambíguo da fonte (mutação M2)",
+      "result": "FAIL",
+      "evidence": "40/40 com M2; F10 detecta (R1-P3-01)"
+    },
+    {
+      "id": "S12",
+      "what": "F10: reexportador de estrela única de nome ambíguo",
+      "result": "PASS",
+      "evidence": "v5: inner.js e outer.js com AMBIGUOUS_STAR:x, entry UNKNOWN_BINDING_VALUE x"
+    },
+    {
+      "id": "S13",
+      "what": "E2: TDZ dentro de função (F12), default nomeada/anônima, declare class (suíte), new/chamada",
+      "result": "PASS",
+      "evidence": "F12 v5 UNKNOWN_BINDING_VALUE C (v4 UNKNOWN_BINDING C); raiz ClassDeclaration mantida"
+    },
+    {
+      "id": "S14",
+      "what": "Violações: estrela estática para products/ (F22a), valor reexportado que leva a products/ (F22b), violação espúria da v4 (F22c)",
+      "result": "PASS",
+      "evidence": "F22a VIOLATION em v4 e v5; F22b v4 UNKNOWN, v5 VIOLATION; F22c VIOLATION nas duas (união com o census)"
+    },
+    {
+      "id": "S15",
+      "what": "Casos conservadores: F26 (as ns não qualificado), F28 (default local = mesma ligação), F29 (default expressão ≠ ligação), F30, F31, F32, F33 (incompleto em 3 níveis), F35 (default excluído)",
+      "result": "PASS",
+      "evidence": "lab/out-r1-v5.json; F28 e F29 conferidos no Node 22 (F28 presente, F29 ausente)"
+    },
+    {
+      "id": "S16",
+      "what": "Census v4 × v5 nos 21 fixtures do crítico",
+      "result": "PASS",
+      "evidence": "saídas idênticas salvo kernelVersion (lab/census-eq-out.json)"
+    },
+    {
+      "id": "S17",
+      "what": "Recalculo independente da §3.3 (normal e strict)",
+      "result": "PASS",
+      "evidence": "gone 1541 = 1402+48+10+81; new 303 = 289 tocado + 14 jusante; sem raiz perdida, sem tupla sem causa, sem etiqueta mista; raízes 7288, propagações 5343; tocado 402, jusante 772, cone 985, união 1182"
+    },
+    {
+      "id": "S18",
+      "what": "Sensibilidade ao conjunto tocado (sem os 8 incompletos)",
+      "result": "PASS",
+      "evidence": "mesmo veredito; denominadores 394/764/977/1174 (R1-P3-03)"
+    },
+    {
+      "id": "S19",
+      "what": "Cópias diagnósticas = engine base + patches publicados",
+      "result": "PASS",
+      "evidence": "diag_patch+cause_patch sobre v4 = eaf51795…; diag_patch+v5_touched_patch sobre v5 = 461c0b1e…; input_dump_patch sobre v4 = 1b7af764…; idênticas byte a byte às de tools-*; patches só etiquetam e despejam"
+    },
+    {
+      "id": "S20",
+      "what": "Normal = strict; validation; zero provas; mesmas referências e entradas",
+      "result": "PASS",
+      "evidence": "conservation-r1.json e resumos: digests instalado/compilado iguais nas 4 execuções; inputs e runtimeResolution iguais"
+    },
+    {
+      "id": "S21",
+      "what": "Migrações de literal de versão",
+      "result": "PASS",
+      "evidence": "exatamente os 6 literais v4 de 4 arquivos registrados; 25 falhas do first-red-version-literal todas de versão (a de 0236 é o campo source); literais v1/v2/v3 intactos"
+    },
+    {
+      "id": "S22",
+      "what": "Folga de limites na raiz real declarada",
+      "result": "FAIL",
+      "evidence": "contexts 145 -> 229/256 sem declaração (R1-04)"
+    },
+    {
+      "id": "S23",
+      "what": "Publicação tupla a tupla (§3.3)",
+      "result": "FAIL",
+      "evidence": "ausente em conservation-r1.json (R1-03)"
+    },
+    {
+      "id": "S24",
+      "what": "Perfil nativo e focal extra congelados",
+      "result": "PASS",
+      "evidence": "frozen-r1-native-profile 79/79 e frozen-r1-focal-extra 224/224 com engine b0e636b4… (state.json ainda lista o nativo como ativo)"
+    }
+  ],
+  "notRunByThisReview": [
+    "MS07: 16 gates Node22 e consumidor fresco (ainda sem evidência no diretório)",
+    "MS08"
+  ],
+  "commands": [
+    "sha256sum da SPEC, do patch congelado e dos 6 arquivos da candidata; git -C <candidata> status/diff (só leitura)",
+    "git apply do source-freeze-r1.patch.txt sobre blobs de 1073a9dd em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab/patchcheck",
+    "cópias de laboratório em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab/{v4,v5,v5m1,v5m2,v5m3,v5m4} (scripts boundary-*.mjs, teste 0244, node_modules por link simbólico para a candidata)",
+    "env -i PATH=<node22>:/usr/bin:/bin HOME=<lab>/home TMPDIR=<lab>/tmp LANG=C TZ=UTC /home/ricardo/.nvm/versions/node/v22.23.2/bin/node node_modules/vitest/vitest.mjs run tests/b6-0244-esm-module-shape.test.js --config vitest.config.mjs --no-file-parallelism --maxWorkers=2 --reporter=json (v4, v5, v5m1..v5m4)",
+    "node drive.mjs <cópia> fixtures-r1.json|fixtures-mut.json|fixtures-f36.json <saída> (runSemanticBoundary em chamador limpo, fixtures físicos sob <cópia>/tmp)",
+    "node census-eq.mjs fixtures-r1.json (analyzeSemanticBoundary refusalCensus v4 × v5)",
+    "python3 -I recheck.py <evidência> recheck-out.json e recheck-strict-touched.py (recalculo da §3.3 sobre os relatórios e dumps selados)",
+    "python3 -I operators/{diag_patch,cause_patch,v5_touched_patch,input_dump_patch}.py sobre cópias em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab/repatch e cmp com tools-*",
+    "node (22.23.2) em fixtures ESM do crítico (/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab/esm-*) para conferir a semântica de estrela do runtime fixado",
+    "grep somente leitura de padrões import*+export{ns} nos 1.341 arquivos analisados da raiz avaliada (sem rodar o checker)"
+  ],
+  "constraintsHonored": "sem checker na raiz real, receitas, certify, npm install, PG, commit, push ou PR; sem recursos Codex/Codex100; load conferido antes das execuções; nenhum arquivo rastreado da candidata, do repositório ou do runtime alterado (git status da candidata igual ao início)",
+  "incident": {
+    "what": "As execuções de vitest nas cópias de laboratório usaram node_modules por link simbólico para a candidata. Por isso o vitest regravou o cache de resultados da candidata, node_modules/.vite/vitest/da39a3ee…/results.json (mtime 2026-10-20 00:15:09 -0300; entrada ':tests/b6-0244-esm-module-shape.test.js' com duration 73550, failed false). Ele também criou e removeu o arquivo temporário de config em node_modules/.vite-temp, o que só mudou o mtime do diretório.",
+    "impact": "Cache ignorado pelo git que o próprio vitest regrava a cada execução, inclusive nas do BUILD (run_vitest.py). Afeta só a ordem de agendamento dos arquivos de teste, nunca resultados. Nenhum artefato da evidência faz hash desse cache. Não restaurei o arquivo porque o conteúdo anterior é desconhecido.",
+    "recommendation": "Se o lead quiser bytes idênticos aos do BUILD, a próxima execução de vitest do BUILD já regrava esse cache."
+  }
+}

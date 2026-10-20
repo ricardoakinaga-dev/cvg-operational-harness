@@ -1,0 +1,120 @@
+{
+  "task": "HISO005-P2-BUILD-0244",
+  "track": "T3 aprovado (BUILD local)",
+  "registeredAt": "2026-10-20T01:48:00.524187+00:00",
+  "owner": "Claude Code (executor delegado, sessão lead CONT-20261018-D9EF)",
+  "authority": {
+    "spec": "docs/02_spec/0244_b6_esm_module_shape.md",
+    "specSha256": "50463db7af125993d1cbcd966a5977efa9bafc7d0ffd57bdbe6ce10c8c6ec79c",
+    "decision": "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/user-decision-20261019.json",
+    "decisionSha256": "41fc236aa7e78b0d66da87fb287766dde5b6acc2874a86591765b7b38c31ba8f",
+    "formatReceipt": "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/materialized/lead-format-receipt.json",
+    "formatReceiptSha256": "88caa274b4b6b36b01c89dc2cfcdb9fe2ccb3c3be648ac101f3d3a13a300b441",
+    "leadInstruction": "executar HISO005-P2-BUILD-0244 em candidata detached sobre 1073a9dd (PR #8 aberto); commits só na candidata; sem push/PR"
+  },
+  "base": {
+    "commit": "1073a9ddf85e601b472c9ade1e437311fd41862d",
+    "what": "cabeça do PR #8 (main ba9492b0 + BUILD0243/0242), PR ainda OPEN",
+    "preimagesByContent": "candidate-preflight.json (10/10 SHA-256 iguais aos bytes da cabeça do PR #8)"
+  },
+  "candidate": "/mnt/dados/cvg-work/cvg-hiso005-build0244-20261019",
+  "runtime": "/mnt/dados/cvg-work/cvg-hiso005-build0244-runtime-20261019",
+  "detached": true,
+  "delta": {
+    "E1": "export * from / export * as ns from com semântica ESM (ResolveExport) quando a fonte é ESM analisada com namespace completo (SPEC0244 §3.1)",
+    "E2": "ClassDeclaration mantém a raiz UNKNOWN_UNSUPPORTED_SYNTAX; nome pré-declarado U no bloco; exportada com U; declare class com UNKNOWN_RUNTIME_DECLARATION (§3.2)",
+    "version": "semantic-kernel-v4-integral-body → semantic-kernel-v5-esm-module-shape (§3.4)"
+  },
+  "sourcesToChange": [
+    "scripts/boundary-semantic-engine.mjs (E1, E2, versão)",
+    "tests/b6-0244-esm-module-shape.test.js (novo, MS01–MS04 e MS06 de fixture)"
+  ],
+  "notChanged": [
+    "checker B6 (check-product-boundary.mjs)",
+    "resolução, receitas, identidade instalada, proveniência compilada",
+    "SEMANTIC_LIMITS e limites de resolução (SPEC0242)",
+    "refusal census (E1/E2 desligados no census: o census não muda)",
+    "regra global de supressão de provas",
+    "lock, manifests, produto, APIs"
+  ],
+  "interpretationsRegisteredBeforeEdit": [
+    "census: E1 e E2 só valem na passagem não-census; o census mantém a recusa da v4 (SPEC0244 §3.3/MS06 \"o census não muda\")",
+    "fonte qualificada: valor namespace de módulo ESM carregado (não CJS, não contido, não ciclo/U) e fora do conjunto de namespaces incompletos; o resolve já recusa .d.ts e formatos não JS como alvo (UNKNOWN_FORMAT)",
+    "namespace incompleto: export por padrão de desestruturação, export de função anônima não default, `export =`, qualquer statement exportado que cai na recusa genérica (enum, namespace, import =) e qualquer estrela não qualificada (transitivo porque a fonte incompleta não qualifica)",
+    "export explícito de runtime (precedência): variável (inclusive nomes de padrão), função, classe, enum, namespace, import =, export default, export { } não type-only e export * as N; ambient (declare) e type-only não mascaram",
+    "ligação resolvida: módulo#local; import seguido de export { x } e export { x } from seguem a identidade da fonte; export * as ns from m tem identidade m#*namespace*; export default expressão tem identidade própria",
+    "regra 5: estrela não qualificada (inclusive export * as ns) envenena: nomes de estrela do módulo viram U e o namespace fica incompleto; uma estrela qualificada depois disso não emite tupla, mas os nomes dela também viram U",
+    "declare class: nome pré-declarado U (como as demais classes) e UNKNOWN_RUNTIME_DECLARATION além da raiz ClassDeclaration"
+  ],
+  "literalMigrationsRegisteredBeforeEdit": [
+    {
+      "files": [
+        "tests/b6-0236-boundary-integration.test.js",
+        "tests/b6-0237-runtime-resolution.test.js",
+        "tests/b6-0240-exact-metadata.test.js",
+        "tests/b6-0241-integral-body.test.js"
+      ],
+      "from": "literal 'semantic-kernel-v4-integral-body' (versão vigente do kernel)",
+      "to": "'semantic-kernel-v5-esm-module-shape' (SPEC0244 §3.4)",
+      "firstFailure": "rodar os quatro arquivos com o engine novo antes de trocar o literal; falha preservada em first-red-0244-version-literal",
+      "note": "os literais históricos de versões anteriores (v2/v3 em testes de recusa de versão antiga) não mudam"
+    }
+  ],
+  "acceptance": {
+    "MS01": "primeiras falhas na v4: estrela e classe exportada dão UNKNOWN_INHERITED_PROPERTY no importador",
+    "MS02": "E1 por caso (estrela simples, as ns qualificado/não, explícito antes/depois, export type não mascara, default excluído, mesma ligação por dois caminhos, ambiguidade sticky, diamante, fonte incompleta transitiva, módulo misto, U preservado, binding mutável, CJS/contida/ciclo)",
+    "MS03": "E2 (nomeada, exportada, default nomeada e anônima, TDZ, declare class, raiz mantida, UNKNOWN_EXPORT, new/chamada recusados)",
+    "MS04": "fixture limpo com estrela qualificada PROVEN com dependência K5 da fonte e validação; não qualificada/ambígua/incompleta UNKNOWN; classe nunca PROVEN",
+    "MS05": "conservação §3.3 na raiz 228e7918 tupla a tupla, etiquetas da cópia provada, denominadores; normal = strict; validation true; zero provas na raiz",
+    "MS06": "census e limites iguais; versão nova; perfil e receitas iguais",
+    "MS07": "regressões B6 preservadas; crítica fresca sem obrigatórios; 16 gates Node22; consumidor fresco",
+    "MS08": "promoção só do delta próprio; sem push, PR, deploy ou produção"
+  },
+  "conservationPlan": {
+    "references": "receita com escopo (SPEC0243) dos scripts da base sobre 228e7918; instalada a partir de worktree limpo do commit avaliado; as mesmas referências em todas as execuções",
+    "runs": [
+      "v4 = scripts da base (git archive 1073a9dd), normal e strict",
+      "v4tags = v4 + diag_patch.py + cause_patch.py (cópia de etiquetas, provada igual salvo etiquetas), normal e strict",
+      "v5 = scripts congelados da candidata, normal e strict",
+      "v5diag = v5 + dump de módulos tocados (só diagnóstico), normal"
+    ],
+    "baselineCrossCheck": "v4 reproduz os 13.521 da medição oficial do BUILD0242"
+  },
+  "resources": {
+    "pg": "só no certify final: cvg-hiso005-build0244-pg em 56262; API 3448; web 4448, conferidos livres",
+    "forbidden": [
+      "recursos do Codex e da frente Codex100 (cvg-codex100-*, cvg-dx100-*)",
+      "push",
+      "PR",
+      "deploy",
+      "produção",
+      "install/lockfile",
+      "ledgers, coordenação, catálogo"
+    ]
+  },
+  "review": "crítico novo, não-fork, até 2 rodadas; mudança depois do orçamento é avisada ao lead explicitamente",
+  "r1Fixes": {
+    "registeredAt": "2026-10-20T03:22:07.063080+00:00",
+    "review": "review-r1/review.json",
+    "plan": [
+      "R1-01: identidade local (arquivo#nome) para o namespace reexportado nos dois caminhos (import * as ns + export { ns }; export * as ns from m), como no Node 22 fixado; para dois export * as ns from m é desvio conservador em relação ao texto ECMAScript (registrado); testes F01–F03 (AMBIGUOUS_STAR:ns) e controle F36 (PROVEN)",
+      "R1-02: precedência discriminante: indireto e as N antes da estrela; local, indireto, import+export e as N depois de duas estrelas conflitantes",
+      "R1-03: listas tupla a tupla das que somem (classe §3.3 e etiquetas) e das que aparecem (colocação, motivo, família) em gz, por modo",
+      "R1-04: uso × teto × folga (contexts, states, callDepth, unionValues, tempo) de v4 e v5 declarados; cópia diagnóstica que identifica a função de maior número de contextos em v4 e v5",
+      "P3: F10 (estrela única de nome ambíguo), F22a/F22b (violações), primeira falha refeita com os bytes r2 do teste, definição de tocado declarada com denominadores estritos, ressalva do census real, classe raiz 1 por subconjunto de etiquetas, desvios conservadores listados"
+    ],
+    "testBytesNote": "R1-P3-02: o first-red-0244 rodou com o teste antes do prettier (fe392e1d…); o congelado r1 (cb5d5fac…) só difere em formatação; o crítico reproduziu 25/40 na v4 com os bytes congelados; a primeira falha r2 é refeita com os bytes r2",
+    "criticIncident": "o crítico R1 regravou o cache ignorado node_modules/.vite/vitest/<hash>/results.json da candidata ao rodar vitest no laboratório; cache não rastreado, regravado a cada execução, só afeta a ordem dos testes; nenhum arquivo rastreado mudou"
+  },
+  "r2Fixes": {
+    "registeredAt": "2026-10-20T04:05:34.086849+00:00",
+    "review": "review-r2/review.json",
+    "afterReviewBudget": true,
+    "plan": [
+      "R2-01 (P1): `export * as ns from m` recebe a identidade sentinela arquivo#*namespace*ns, que nunca colide com uma ligação local (import * as ns + export { ns } mantém arquivo#ns); testes F37 e F38 (AMBIGUOUS_STAR:ns, UNKNOWN); F01–F03 seguem ambíguos e F36 segue PROVEN",
+      "congelada r3, primeira falha dos bytes r3 na v4, verde, focal e nativo nos bytes r3; nova medição real v5r3 (normal, strict e cópia de dump) e conservation-r3 (a raiz não tem colisão: 8 `export * as`, nenhum nome local igual, mas a medição é refeita)",
+      "P3: comparação do census refeita com o engine r3; usage-margins com o tempo de todas as execuções v5 (r1, r2, r3) e a carga de cada uma"
+    ],
+    "notice": "mudança depois do orçamento de crítica (2 rodadas); sem terceira rodada; o lead é avisado explicitamente no relatório"
+  }
+}

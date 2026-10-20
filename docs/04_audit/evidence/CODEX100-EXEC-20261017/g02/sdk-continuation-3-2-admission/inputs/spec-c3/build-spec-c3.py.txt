@@ -1,0 +1,2125 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3 - gerador dos JSON da especificação (somente leitura das fontes).
+# Uso: python3 -I -B build-spec-c3.py.txt <spec_dir> <staged_python_deps_dir>
+# Lê as fontes do pin (snapshots do perfil de referência), as especificações 2A, 2A-cont e 2B, os vocabulários admitidos dos
+# drivers (2AC e 2B-2), o BIND do 2B-2 (v5, HOW v2 e a errata Q1-Q5) e o arquivo packaging/version.py preparado (identity
+# freeze r3). Calcula âncoras (linha + sha + texto exato) e escreve os JSON da unidade. Não importa SDK, Pydantic nem
+# packaging; o único cálculo além de leitura e sha256 é aplicar, com o módulo re da stdlib, o padrão de versão lido do
+# packaging/version.py preparado (valor esperado do C3-PY05).
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+SPEC, DEPS = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3"
+PIN = "8d9f6466ff0294785d56f55b1fe363d132fe4133"
+NOW = datetime.now(timezone.utc).isoformat()
+
+
+def sha_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha_file(p):
+    with open(p, "rb") as f:
+        return sha_bytes(f.read())
+
+
+def rel(p):
+    return os.path.normpath(os.path.join(SPEC, p))
+
+
+def load(p):
+    with open(rel(p), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def compact(o):
+    return json.dumps(o, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+# ------------------------------------------------------------------ inputs (sha-bound)
+REFPY = "../sdk-reference-profile/inputs/sdk/python/src/openai_codex/"
+REFTS = "../sdk-reference-profile/inputs/sdk/typescript/src/"
+IDF = "../sdk-batch-2a-admission/identity-freeze-r3.json"
+INPUTS = {}
+for f in ["codex.ts", "thread.ts", "exec.ts", "outputSchemaFile.ts"]:
+    INPUTS["ts/" + f] = {"path": REFTS + f}
+for f in ["client.py", "api.py", "async_client.py", "_message_router.py", "_goal.py", "_login.py", "_run.py", "_inputs.py",
+          "_runtime_requirements.py", "generated/v2_all.py"]:
+    INPUTS["py/" + f] = {"path": REFPY + f}
+INPUTS["pydeps/packaging/version.py"] = {"path_staged": os.path.join(DEPS, "packaging/version.py"),
+                                         "bound_by": {"path": IDF, "pointer": "trees/python-deps/packaging/version.py"}}
+for f in ["asyncio/tasks.py", "concurrent/futures/_base.py"]:
+    INPUTS["stdlib/" + f] = {"path_host": "/usr/lib/python3.12/" + f,
+                             "bound_by": "host.python de " + IDF + " (CPython 3.12.3); a identity freeze da IMPLEMENT reconfere estes sha"}
+for k, p in {
+    "spec2a/cases-2a.json": "../sdk-source-batch-2a-spec/cases-2a.json",
+    "cont/cases-2a-cont.json": "../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json",
+    "cont/freeze-r4-contract.json": "../sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json",
+    "cont/evaluator-r4-contract.json": "../sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json",
+    "spec2b/cases-2b-1.json": "../sdk-source-batch-2b-spec/cases-2b-1.json",
+    "spec2b/cases-2b-2.json": "../sdk-source-batch-2b-spec/cases-2b-2.json",
+    "spec2b/freeze-r4-2b-delta.json": "../sdk-source-batch-2b-spec/freeze-r4-2b-delta.json",
+    "spec2b/evaluator-r4-2b-delta.json": "../sdk-source-batch-2b-spec/evaluator-r4-2b-delta.json",
+    "spec2b/control-slot-contract-2b.json": "../sdk-source-batch-2b-spec/control-slot-contract-2b.json",
+    "spec2b/capability-contracts-2b.json": "../sdk-source-batch-2b-spec/capability-contracts-2b.json",
+    "adm2ac/node/ts-driver.mjs": "../sdk-batch-2ac-admission/node/ts-driver.mjs",
+    "adm2ac/node/fixture-cli.mjs": "../sdk-batch-2ac-admission/node/fixture-cli.mjs",
+    "adm2ac/python/bootstrap.py": "../sdk-batch-2ac-admission/python/bootstrap.py",
+    "adm2b2/python/python-driver.py": "../sdk-batch-2b2-admission/python/python-driver.py",
+    "adm2b2/python/harness2b.py": "../sdk-batch-2b2-admission/python/harness2b.py",
+    "adm2b2/python/fixture-rpc.py": "../sdk-batch-2b2-admission/python/fixture-rpc.py",
+    "adm2b2/state.json": "../sdk-batch-2b2-admission/state.json",
+    "adm2b2/lead-decision-f01.json": "../sdk-batch-2b2-admission/lead-decision-f01.json",
+    "bind2b2/coverage-observed-v5.json": "../sdk-batch-2b2-binding/coverage-observed-v5.json",
+    "bind2b2/HOW-next-profile-v2.md": "../sdk-batch-2b2-binding/HOW-next-profile-v2.md",
+    "bind2b2/review-r2/executor-disposition.json": "../sdk-batch-2b2-binding/review-r2/executor-disposition.json",
+    "bind2b2/next-task.json": "../sdk-batch-2b2-binding/next-task.json",
+    "g01/typescript/contracts.json": "../../g01/sdk-open-contracts/typescript/contracts.json",
+    "g01/python-contracts.json": "../../g01/sdk-open-contracts/python-contracts.json",
+    "adm2a/identity-freeze-r3.json": IDF,
+}.items():
+    INPUTS[k] = {"path": p}
+for k, v in INPUTS.items():
+    p = v.get("path_staged") or v.get("path_host") or rel(v["path"])
+    v["sha256"] = sha_file(p)
+    v["_abs"] = p
+IDF_DOC = load(IDF)
+assert INPUTS["pydeps/packaging/version.py"]["sha256"] == IDF_DOC["trees"]["python-deps"]["packaging/version.py"]["sha256"]
+SANDBOX_ENV = dict(IDF_DOC["sandbox_env"])
+assert SANDBOX_ENV == {"HOME": "/work/home", "TMPDIR": "/work/tmp", "PATH": "/runtime", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                       "TZ": "UTC", "PYTHONDONTWRITEBYTECODE": "1", "UV_THREADPOOL_SIZE": "2"}, SANDBOX_ENV
+LINES = {}
+ANCHOR_ERRORS = []
+
+
+def lines_of(key):
+    if key not in LINES:
+        with open(INPUTS[key]["_abs"], encoding="utf-8") as f:
+            LINES[key] = f.read().split("\n")
+    return LINES[key]
+
+
+def A(key, text, nth=None, span=0):
+    """Anchor: unique line (or the nth match) containing `text`; optional span of following lines."""
+    ls = lines_of(key)
+    hits = [i for i, l in enumerate(ls, 1) if text in l]
+    if nth is None:
+        if len(hits) != 1:
+            ANCHOR_ERRORS.append((key, text, hits))
+            return {"input": key, "error": "ambiguous_or_missing"}
+        n = hits[0]
+    else:
+        if len(hits) < nth:
+            ANCHOR_ERRORS.append((key, text, hits, nth))
+            return {"input": key, "error": "missing"}
+        n = hits[nth - 1]
+    return {"input": key, "sha256": INPUTS[key]["sha256"], "lines": [n] if not span else [n, n + span], "text": ls[n - 1].strip()}
+
+
+def public_inputs(keys):
+    out = {}
+    for k in sorted(keys):
+        out[k] = {kk: vv for kk, vv in INPUTS[k].items() if kk != "_abs"}
+    return out
+
+
+def ptr(key):
+    return {"path": INPUTS[key]["path"], "sha256": INPUTS[key]["sha256"]}
+
+
+# ------------------------------------------------------------------ bases
+C2A = {c["id"]: c for c in load("../sdk-source-batch-2a-spec/cases-2a.json")["cases"]}
+C2AC_DOC = load("../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json")
+C2B1_DOC = load("../sdk-source-batch-2b-spec/cases-2b-1.json")
+C2B2_DOC = load("../sdk-source-batch-2b-spec/cases-2b-2.json")
+C2B = {c["id"]: c for c in C2B1_DOC["cases"] + C2B2_DOC["cases"]}
+V5 = load("../sdk-batch-2b2-binding/coverage-observed-v5.json")
+DISP = load("../sdk-batch-2b2-binding/review-r2/executor-disposition.json")
+QUESTIONS = {q["id"]: q for it in DISP["items"] if it["id"] == "R2-F01" for q in it["erratum_questions"]}
+assert sorted(QUESTIONS) == ["Q1", "Q2", "Q3", "Q4", "Q5"]
+TSC = load("../../g01/sdk-open-contracts/typescript/contracts.json")
+TS_ARMS = {b["id"]: b for c in TSC["contracts"] for b in c["branches"]}
+PY_ARMS_2B = {}
+for c in C2B.values():
+    for b in c.get("branches_targeted", []):
+        m = re.match(r"(PY\d\d\.B\d\d) \((.*)\)$", b)
+        if m:
+            PY_ARMS_2B.setdefault(m.group(1), m.group(2))
+
+# ------------------------------------------------------------------ shared fixtures (TypeScript)
+ADAPTER = "/profile/adapter-typescript"
+OPT = {"codexPathOverride": ADAPTER, "env": {"HOME": "/work/home", "PATH": "/runtime"}}
+CHILD_ENV = {"HOME": "/work/home", "PATH": "/runtime", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts"}
+FIX0 = {"JSONL": [], "exit_code": 0, "stderr": ""}
+EMPTY_RESULT = {"items": [], "finalResponse": "", "usage": None}
+SCHEMA_RE = {"regex": "^/work/tmp/codex-output-schema-[A-Za-z0-9]{6}/schema\\.json$"}
+V8 = "Node v24.20.0 (V8): texto de mensagem de erro do motor"
+
+
+def tsteps(*items):
+    out = []
+    for i, s in enumerate(items, 1):
+        d = {"step": i}
+        d.update(s)
+        out.append(d)
+    return out
+
+
+def NEWC(as_=None, options="__default__", options_as=None, expect=None, **extra):
+    d = {"api": "new Codex"}
+    if as_:
+        d["as"] = as_
+    if options != "__omit__":
+        o = dict(OPT) if options == "__default__" else options
+        o.update(extra)
+        d["options"] = o
+    if options_as:
+        d["options_as"] = options_as
+    if expect:
+        d["expect"] = expect
+    return d
+
+
+def START(codex, as_, options=None, options_as=None, resume=None):
+    d = {"api": codex + (".resumeThread" if resume is not None else ".startThread")}
+    if resume is not None:
+        d["id"] = resume
+    d["options"] = options if options is not None else {}
+    d["as"] = as_
+    if options_as:
+        d["options_as"] = options_as
+    return d
+
+
+def RUN(on, inp, turn_options=None, expect=None):
+    d = {"on": on, "api": "run", "input": inp, "turn_options": turn_options or {}}
+    if expect:
+        d["expect"] = expect
+    return d
+
+
+def RUNS(on, inp, consume, turn_options=None, expect=None, **kw):
+    d = {"on": on, "api": "run_streamed", "input": inp, "turn_options": turn_options or {}, "consume": consume}
+    d.update(kw)
+    if expect:
+        d["expect"] = expect
+    return d
+
+
+def THROWS(name, message=None, prefix=None):
+    t = {"name": name}
+    if message is not None:
+        t["message"] = message
+    if prefix is not None:
+        t["message_prefix"] = prefix
+    return {"throws": t, "spawns": 0}
+
+
+def ts_err(step, name, message=None, prefix=None, cause_name=None, code=None):
+    e = {"name": name}
+    if message is not None:
+        e["message"] = message
+    if prefix is not None:
+        e["message_prefix"] = prefix
+    if cause_name is not None:
+        e["cause_name"] = cause_name
+    if code is not None:
+        e["code"] = code
+    return {"step": step, "error": e}
+
+
+def argv_meta(argv):
+    return {"argv": argv, "argv_json_bytes": len(compact(argv).encode("utf-8")), "argv_count": len(argv)}
+
+
+def toml_str(s):
+    """exec.ts toTomlValue para string: JSON.stringify(value). Para strings, json.dumps(ensure_ascii=False) dá os mesmos bytes
+    (escapes curtos \\t \\n \\r \\b \\f, \\u00XX minúsculo para os demais controles abaixo de 0x20, 0x7f literal); o
+    validador Node reconfere com JSON.stringify."""
+    return json.dumps(s, ensure_ascii=False)
+
+
+TS_BASE_PRED = ["capture.case_input_frozen_bytes", "spawn.count_exact", "env.child_env_exact", "wire.stdin_exact_then_eof",
+                "api.ts_steps_exact"]
+TS_INFRA = ["CAP-TS-SDKCALLS", "CAP-ENV-EXACT", "F4-01 entrega do case_input pelos bytes congelados"]
+CREDIT = "CLIENT_BEHAVIOR_ONLY_IF_OBSERVED"
+
+
+def DISC(arm, steps, contrary, judged_by, observable):
+    return {"arm": arm, "steps": steps, "contrary": contrary, "observable_if_contrary": observable, "judged_by": judged_by}
+
+
+C1 = {}
+
+# ================================================================== SUB-LOT C3-1 (TypeScript)
+C1["C3-TS01"] = dict(
+    contracts=["TS01"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS01.B01 (options omitido: o default {} chega ao resolver; this.options conserva a referência do objeto de opções)",
+                       "TS01.B02 (o thread conserva a referência de threadOptions)",
+                       "TS01.B04 (opções lidas só no primeiro next: mutação feita depois do runStreamed e antes do next aparece no argv)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC(options="__omit__", expect=THROWS("Error", "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies.")),
+        NEWC("c", options_as="co", baseUrl="http://127.0.0.1:9/c3-a"),
+        START("c", "t", {"model": "m-a"}, options_as="to"),
+        RUNS("t", "lazy-ref", "none"),
+        {"barrier": "LAZY_POINT", "witness": {"adapter_processes": 0, "driver_listing_work_tmp_schema_dirs": 0}},
+        {"api": "mutate", "target": "to", "key": "model", "value": "m-b"},
+        {"api": "mutate", "target": "co", "key": "baseUrl", "value": "http://127.0.0.1:9/c3-b"},
+        {"api": "events.consume", "events_of_step": 4, "consume": "all"}),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(1, "Error", "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies."),
+             {"step": 8, "yields": [], "return": {"events": 0}}],
+        **argv_meta(["exec", "--experimental-json", "--config", "openai_base_url=" + toml_str("http://127.0.0.1:9/c3-b"), "--model", "m-b"]),
+        stdin="lazy-ref", child_env=CHILD_ENV,
+        resolver_absence="DIAGNOSTIC RESOLVER_ABSENCE do passo 1 registra os caminhos do resolvedor ausentes (registro, sem valor esperado)"),
+    expected_observation="new Codex() sem argumento usa o default {}: codexPathOverride ausente vai ao findCodexPath, que não acha @openai/codex e lança antes de qualquer spawn (codex.ts:15-16, exec.ts:85 e 418-420). Com opções, Codex guarda o objeto recebido (this.options) e o thread guarda o objeto de threadOptions; o runStreamed devolve o gerador sem ler nada. A mutação dos dois objetos depois do runStreamed e antes do primeiro next aparece no argv: baseUrl e model são lidos só dentro do gerador (thread.ts:75 e 79).",
+    known_bad={"text": "Lançar TypeError de desestruturação sem argumento, copiar as opções no construtor ou no startThread, ou ler as opções no runStreamed (argv com c3-a e m-a).",
+               "judged_by": ["api.ts_steps_exact", "argv.exact_vector"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "lazy.zero_spawn_at_barrier", "lazy.no_schema_dir_at_barrier"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-TS-SDKCALLS-C3 (D3-02: new Codex sem options, options_as, mutate, events.consume)", "CAP-LAZY-BARRIER",
+           "CAP-ZERO-SPAWN-WITNESS", "CAP-RESOLVER-ABSENCE (D3-02: também no passo 1 do C3-TS01)"],
+    anchors=[A("ts/codex.ts", "constructor(options: CodexOptions = {}) {"), A("ts/codex.ts", "this.options = options;"),
+             A("ts/exec.ts", "const resolved = findCodexPath();"),
+             A("ts/exec.ts", "`Unable to locate Codex CLI binaries. Ensure ${CODEX_NPM_NAME} is installed with optional dependencies.`,"),
+             A("ts/thread.ts", "const options = this._threadOptions;"), A("ts/thread.ts", "baseUrl: this._options.baseUrl,"),
+             A("ts/exec.ts", "commandArgs.push(\"--model\", args.model);")],
+    version_dependent=[],
+    arm_discrimination=[
+        DISC("TS01.B01", [1], "constructor sem default de options", ["api.ts_steps_exact"],
+             "TypeError de desestruturação de undefined no lugar do Error do resolvedor"),
+        DISC("TS01.B01", [2, 7, 8], "Codex copia as opções no construtor", ["argv.exact_vector"], "openai_base_url com c3-a no argv"),
+        DISC("TS01.B02", [3, 6, 8], "thread copia threadOptions", ["argv.exact_vector"], "--model m-a no argv"),
+        DISC("TS01.B04", [4, 5, 8], "opções lidas no runStreamed ou spawn antes do next", ["argv.exact_vector", "lazy.zero_spawn_at_barrier"],
+             "argv com c3-a ou m-a, ou adapter vivo na barreira LAZY_POINT")],
+    residual_source="v5 rows[TS01].residual_planned_profile_proposal: TS01.B01 com options omitido e mutação das referências de options antes do next",
+)
+
+C1["C3-TS02"] = dict(
+    contracts=["TS02"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS02.B04 (entrada não iterável e item null fora do tipo: falha normal de JS na normalização, não erro de validação próprio)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC("c"), START("c", "t"),
+        RUN("t", 7, expect=THROWS("TypeError", "input is not iterable")),
+        RUN("t", {"type": "text", "text": "x"}, expect=THROWS("TypeError", "input is not iterable")),
+        RUN("t", [None], expect=THROWS("TypeError", "Cannot read properties of null (reading 'type')")),
+        RUN("t", "ok")),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(3, "TypeError", "input is not iterable"), ts_err(4, "TypeError", "input is not iterable"),
+             ts_err(5, "TypeError", "Cannot read properties of null (reading 'type')"), {"step": 6, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json"]), stdin="ok", child_env=CHILD_ENV),
+    expected_observation="normalizeInput só trata string à parte; número e objeto caem no for...of e o V8 lança 'input is not iterable'; o item null quebra no acesso a item.type (thread.ts:146-152). Nenhum dos três chega ao spawn. O run seguinte com string spawna normalmente.",
+    known_bad={"text": "Validar a entrada com erro próprio do SDK, aceitar número ou objeto como prompt, ou spawnar com entrada inválida.",
+               "judged_by": ["api.ts_steps_exact", "spawn.count_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-ZERO-SPAWN-WITNESS"],
+    anchors=[A("ts/thread.ts", "if (typeof input === \"string\") {"), A("ts/thread.ts", "for (const item of input) {"),
+             A("ts/thread.ts", "if (item.type === \"text\") {"), A("ts/thread.ts", "const { prompt, images } = normalizeInput(input);")],
+    version_dependent=[V8 + " ('input is not iterable', 'Cannot read properties of null (reading 'type')')"],
+    arm_discrimination=[
+        DISC("TS02.B04", [3, 4, 5], "erro de validação próprio do SDK ou entrada aceita", ["api.ts_steps_exact", "spawn.count_exact"],
+             "mensagem diferente das do V8 congeladas, ou spawn no passo de erro")],
+    residual_source="v5 rows[TS02].residual_planned_profile_proposal: TS02.B04 entrada não iterável e item null fora do tipo além do caso TS04",
+)
+
+WITNESS = "testemunha síncrona de /work/tmp por getter do driver (D3-03)"
+BIGINT_SCHEMA = {"type": "object", "w": {"$GETTER": {"name": "probe", "value": 1, "witness": "w3"}}, "max": {"$BIGINT": "1"}}
+CYCLE_SCHEMA = {"type": "object", "w": {"$GETTER": {"name": "probe", "value": 1, "witness": "w4"}}, "loop": {"$SELF_REF": "self"}}
+C1["C3-TS03"] = dict(
+    contracts=["TS03"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS03.B04 (erro de stringify — BigInt e ciclo — depois do mkdtemp: cleanup remove o diretório e o erro original é relançado)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC("c"), START("c", "t"),
+        RUN("t", "s", {"outputSchema": BIGINT_SCHEMA}, expect=THROWS("TypeError", "Do not know how to serialize a BigInt")),
+        RUN("t", "s", {"outputSchema": CYCLE_SCHEMA}, expect=THROWS("TypeError", prefix="Converting circular structure to JSON")),
+        RUN("t", "ok")),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(3, "TypeError", "Do not know how to serialize a BigInt"),
+             ts_err(4, "TypeError", prefix="Converting circular structure to JSON"), {"step": 5, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json"]), stdin="ok", child_env=CHILD_ENV,
+        driver_listing_after_settle={"step3": 0, "step4": 0, "step5": 0},
+        getter_witnesses=[{"id": "w3", "declared_in_step": 3, "step": 3, "invocations": 1,
+                           "schema_dirs": [{"name_regex": "^codex-output-schema-[A-Za-z0-9]{6}$", "children": []}]},
+                          {"id": "w4", "declared_in_step": 4, "step": 4, "invocations": 1,
+                           "schema_dirs": [{"name_regex": "^codex-output-schema-[A-Za-z0-9]{6}$", "children": []}]}]),
+    expected_observation="createOutputSchemaFile cria o diretório (mkdtemp) e só então avalia JSON.stringify como argumento do writeFile (outputSchemaFile.ts:19-30). O JSON.stringify lê as propriedades em ordem: o getter de testemunha em w roda primeiro e lista /work/tmp com o diretório já criado e ainda vazio (o writeFile não começou); depois BigInt ou o ciclo lançam TypeError, o catch chama o cleanup (rm recursivo) e relança o erro original (outputSchemaFile.ts:31-35). A listagem depois do passo fica vazia e nada spawna.",
+    known_bad={"text": "Vazar o diretório do schema no erro de stringify, embrulhar o erro original, ou serializar antes do mkdtemp.",
+               "judged_by": ["tmp.getter_witness_exact", "tmp.driver_listing_after_settle", "api.ts_steps_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact", "tmp.driver_listing_after_settle", "tmp.getter_witness_exact",
+                               "tmp.getter_witness_recorded"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-ZERO-SPAWN-WITNESS", "F4-08 marcador $BIGINT",
+                      "CAP-TS-SDKCALLS-C3 (D3-02 e D3-03: marcadores $SELF_REF e $GETTER com witness)"],
+    anchors=[A("ts/outputSchemaFile.ts", "const schemaDir = await fs.mkdtemp(path.join(os.tmpdir(), \"codex-output-schema-\"));"),
+             A("ts/outputSchemaFile.ts", "await fs.writeFile(schemaPath, JSON.stringify(schema), \"utf8\");"),
+             A("ts/outputSchemaFile.ts", "await cleanup();"), A("ts/outputSchemaFile.ts", "throw error;"),
+             A("ts/outputSchemaFile.ts", "await fs.rm(schemaDir, { recursive: true, force: true });")],
+    version_dependent=[V8 + " ('Do not know how to serialize a BigInt'; o texto do ciclo é julgado só pelo prefixo; ordem de leitura das propriedades no JSON.stringify)"],
+    arm_discrimination=[
+        DISC("TS03.B04", [3, 4], "diretório vazado no erro de stringify", ["tmp.driver_listing_after_settle"],
+             "listagem com 1 codex-output-schema-* depois do passo"),
+        DISC("TS03.B04", [3, 4], "erro embrulhado ou trocado", ["api.ts_steps_exact"], "nome ou mensagem diferente do TypeError original"),
+        DISC("TS03.B04", [3, 4], "serialização antes do mkdtemp (cleanup não exercido)", ["tmp.getter_witness_exact"],
+             "getter de testemunha sem diretório de schema em /work/tmp")],
+    residual_source="v5 rows[TS03]: TS03.B04 erro de stringify (ciclo, BigInt); remaining_open_by_contract.TS03",
+)
+
+C1["C3-TS04"] = dict(
+    contracts=["TS04", "TS12"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS04.B03 (gerador abandonado suspenso sem return: schema e filho seguem vivos; throw no corpo do for await encerra pelo return implícito)",
+                       "TS12.B02 (ordem do finally depois de saída abrupta do consumidor: kill do filho e cleanup do schema)"],
+    fixture={"JSONL": [{"type": "thread.started", "thread_id": "t4x"}], "exit_code": 0, "stderr": "", "write_then_hold": True,
+             "read_schema_file_from_argv": True},
+    sdk_calls=tsteps(
+        NEWC("c"), START("c", "t"),
+        RUNS("t", "abandon", "first_then_witness_then_throw", {"outputSchema": {"type": "object"}},
+             barrier="SUSPENDED", throw={"name": "Error", "message": "cvg consumer throw"})),
+    expected=dict(
+        spawns_total=1,
+        api=[{"step": 3, "yields": [{"type": "thread.started", "thread_id": "t4x"}]}, ts_err(3, "Error", "cvg consumer throw")],
+        suspended_witness={"step": 3, "driver_listing_schema_dirs": 1, "adapter_alive": True, "adapter_signal_before_release": False},
+        argv_pattern=["exec", "--experimental-json", "--output-schema", SCHEMA_RE], stdin="abandon", child_env=CHILD_ENV,
+        first_event={"type": "thread.started", "thread_id": "t4x"},
+        schema_file_bytes="{\"type\":\"object\"}", schema_file_trailing_lf=False,
+        driver_listing_after_settle={"step3": 0},
+        child_termination="SIGTERM (child.kill sem argumento no finally do exec), testemunhado pelo SO, depois da liberação da barreira SUSPENDED"),
+    expected_observation="Depois do primeiro yield o gerador fica suspenso: sem next nem return nada roda, o diretório do schema continua em /work/tmp e o filho continua vivo (barreira SUSPENDED). Quando o consumidor lança dentro do corpo do for await, o for await chama return(): o finally do exec fecha o readline, remove listeners e mata o filho (SIGTERM), o finally do thread remove o schema, e o erro do consumidor chega intacto ao driver (thread.ts:98-115, exec.ts:256-260).",
+    known_bad={"text": "Limpar o schema ou matar o filho sem return (finalizador implícito), engolir o erro do consumidor, ou deixar o filho vivo depois do return implícito.",
+               "judged_by": ["witness.suspended_resources", "gen.throw_propagated", "ret.child_terminated_by_SIGTERM", "tmp.driver_listing_after_settle"]},
+    predicates=TS_BASE_PRED + ["argv.pattern", "fixture.schema_bytes_exact", "fixture.schema_file_present_during_child", "api.first_event_exact",
+                               "witness.suspended_resources", "gen.throw_propagated", "ret.child_terminated_by_SIGTERM",
+                               "tmp.driver_listing_after_settle"],
+    accepted_capture_forms=["KNOWN_SIGNAL_TERMINATION"],
+    infra=TS_INFRA + ["CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-WRITE-THEN-HOLD", "CAP-TS-SDKCALLS-C3 (D3-02: modo first_then_witness_then_throw e barreira SUSPENDED)"],
+    anchors=[A("ts/thread.ts", "yield parsed;"), A("ts/thread.ts", "await cleanup();"), A("ts/exec.ts", "child.removeAllListeners();"),
+             A("ts/exec.ts", "if (!child.killed) child.kill();")],
+    version_dependent=["Node v24.20.0: protocolo de return() do for await sobre gerador assíncrono"],
+    arm_discrimination=[
+        DISC("TS04.B03", [3], "finalização implícita do gerador abandonado", ["witness.suspended_resources"],
+             "listagem 0 ou adapter terminado antes da liberação da barreira SUSPENDED"),
+        DISC("TS04.B03", [3], "throw do consumidor engolido ou trocado", ["gen.throw_propagated", "api.ts_steps_exact"],
+             "resultado sem erro, ou erro diferente de Error 'cvg consumer throw'"),
+        DISC("TS12.B02", [3], "finally não roda no return implícito", ["ret.child_terminated_by_SIGTERM", "tmp.driver_listing_after_settle"],
+             "adapter vivo até o fim do caso ou listagem 1 depois do passo")],
+    residual_source="v5 rows[TS04].residual_planned_profile_proposal: TS04.B03 gerador abandonado sem return e throw no consumidor",
+)
+
+C1["C3-TS05"] = dict(
+    contracts=["TS05"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS05.B04 (erro de serialização antes do spawn, já dentro do try do thread: o schema criado é removido pelo cleanup; criação e remoção testemunhadas)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC("bad", config={"g": {"$GETTER": {"name": "w", "value": "x", "witness": "w3"}}, "": 1}), START("bad", "tb"),
+        RUN("tb", "x", {"outputSchema": {"type": "object"}}, expect=THROWS("Error", "Codex config override keys must be non-empty strings")),
+        NEWC("good"), START("good", "tg"), RUN("tg", "ok")),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(3, "Error", "Codex config override keys must be non-empty strings"), {"step": 6, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json"]), stdin="ok", child_env=CHILD_ENV,
+        driver_listing_after_settle={"step3": 0, "step6": 0},
+        getter_witnesses=[{"id": "w3", "declared_in_step": 1, "step": 3, "invocations": 1,
+                           "schema_dirs": [{"name_regex": "^codex-output-schema-[A-Za-z0-9]{6}$", "children": ["schema.json"]}]}]),
+    expected_observation="O schema é criado e escrito no início do gerador do thread (thread.ts:74); a serialização dos overrides só roda no primeiro next do gerador do exec, já dentro do try do thread (thread.ts:98-99, exec.ts:97-99). O Object.entries do filho g invoca o getter de testemunha, que lista /work/tmp com o diretório e o schema.json; depois a chave vazia da raiz lança antes do spawn e o finally do thread remove o diretório (listagem vazia depois do passo).",
+    known_bad={"text": "Validar a config antes de criar o schema (getter sem diretório) ou vazar o diretório (listagem 1).",
+               "judged_by": ["tmp.getter_witness_exact", "tmp.driver_listing_after_settle"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact", "tmp.driver_listing_after_settle", "tmp.getter_witness_exact",
+                               "tmp.getter_witness_recorded"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-TS-DRIVER-TMPDIR", "CAP-TMP-WITNESS", "CAP-ZERO-SPAWN-WITNESS", "CAP-TS-SDKCALLS-C3 (D3-02 e D3-03: $GETTER com witness)"],
+    anchors=[A("ts/thread.ts", "const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);"),
+             A("ts/thread.ts", "for await (const item of generator) {"),
+             A("ts/exec.ts", "for (const override of serializeConfigOverrides(this.configOverrides)) {"),
+             A("ts/exec.ts", "const entries = Object.entries(value);"),
+             A("ts/exec.ts", "throw new Error(\"Codex config override keys must be non-empty strings\");", nth=1)],
+    version_dependent=[],
+    arm_discrimination=[
+        DISC("TS05.B04", [1, 3], "erro antes da criação do schema", ["tmp.getter_witness_exact"], "getter sem diretório de schema ou sem schema.json"),
+        DISC("TS05.B04", [3], "cleanup não chamado no erro", ["tmp.driver_listing_after_settle"], "listagem 1 depois do passo")],
+    residual_source="remaining_open_by_contract.TS05: testemunha da criação e do cleanup do schema no passo de erro com spawns=0 (R1-F11 da admissão)",
+)
+
+C1["C3-TS06"] = dict(
+    contracts=["TS06"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS06.B04 (recursão sem detecção de ciclo; Object.entries invoca getter e ignora chave não enumerável)",
+                       "TS06.B02 (objeto filho só com chave não enumerável tem zero entradas e vira prefix={})"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC("cyc", config={"loop": {"$SELF_REF": "self"}}), START("cyc", "tc"),
+        RUN("tc", "x", expect=THROWS("RangeError", "Maximum call stack size exceeded")),
+        NEWC("good", config={"vis": {"$NONENUM": {"own": {"shown": 1}, "non_enumerable": {"hidden": 2}}},
+                             "g": {"$GETTER": {"name": "lazy", "value": "v"}},
+                             "only": {"$NONENUM": {"own": {}, "non_enumerable": {"h": 1}}}}),
+        START("good", "tg"), RUN("tg", "ok")),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(3, "RangeError", "Maximum call stack size exceeded"), {"step": 6, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json", "--config", "vis.shown=1", "--config", "g.lazy=" + toml_str("v"), "--config", "only={}"]),
+        stdin="ok", child_env=CHILD_ENV),
+    expected_observation="flattenConfigOverrides recursa em todo objeto plano sem detectar ciclo; o objeto que aponta para si estoura a pilha (RangeError) antes do spawn (exec.ts:298-307). A iteração é por Object.entries: a chave não enumerável some, o getter é invocado e vira valor, e o filho que só tem chave não enumerável tem zero entradas e vira only={} (exec.ts:288-296).",
+    known_bad={"text": "Detectar ciclo com erro próprio, iterar chaves não enumeráveis (Reflect.ownKeys) ou não invocar o getter.",
+               "judged_by": ["api.ts_steps_exact", "argv.exact_vector"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-ZERO-SPAWN-WITNESS", "CAP-TS-SDKCALLS-C3 (D3-02: marcadores $SELF_REF, $NONENUM e $GETTER)"],
+    anchors=[A("ts/exec.ts", "const entries = Object.entries(value);"), A("ts/exec.ts", "if (prefix && entries.length === 0) {"),
+             A("ts/exec.ts", "flattenConfigOverrides(child, path, overrides);")],
+    version_dependent=[V8 + " ('Maximum call stack size exceeded')"],
+    arm_discrimination=[
+        DISC("TS06.B04", [1, 3], "detecção de ciclo ou limite de profundidade", ["api.ts_steps_exact"], "erro diferente do RangeError do V8"),
+        DISC("TS06.B04", [4, 6], "iteração por chaves próprias além de Object.entries", ["argv.exact_vector"], "vis.hidden no argv ou getter ausente"),
+        DISC("TS06.B02", [4, 6], "objeto com chave não enumerável tratado como não vazio", ["argv.exact_vector"], "only.h=1 no lugar de only={}")],
+    residual_source="v5 rows[TS06].residual_planned_profile_proposal: objeto cíclico e objetos com getters ou chaves não enumeráveis",
+)
+
+CTRL_STR = "a\tb\x01c\x1fd\x7fe"
+C1["C3-TS07"] = dict(
+    contracts=["TS07"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS07.B03 (objeto inline dentro de array: chave vazia lança; filho undefined é pulado)",
+                       "TS07.B04 (function e symbol lançam Unsupported com o typeof e o path)",
+                       "TS07.B01 (string com caracteres de controle vira JSON.stringify)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(
+        NEWC("e1", config={"arr": [{"": 1}]}), START("e1", "t1"),
+        RUN("t1", "x", expect=THROWS("Error", "Codex config override keys must be non-empty strings")),
+        NEWC("e2", config={"f": "$FUNCTION"}), START("e2", "t2"),
+        RUN("t2", "x", expect=THROWS("Error", "Unsupported Codex config override value at f: function")),
+        NEWC("e3", config={"y": "$SYMBOL"}), START("e3", "t3"),
+        RUN("t3", "x", expect=THROWS("Error", "Unsupported Codex config override value at y: symbol")),
+        NEWC("good", config={"s": CTRL_STR, "objs": [{"k": 1, "u": "$UNDEFINED"}]}), START("good", "tg"), RUN("tg", "ok")),
+    expected=dict(
+        spawns_total=1,
+        api=[ts_err(3, "Error", "Codex config override keys must be non-empty strings"),
+             ts_err(6, "Error", "Unsupported Codex config override value at f: function"),
+             ts_err(9, "Error", "Unsupported Codex config override value at y: symbol"), {"step": 12, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json", "--config", "s=" + toml_str(CTRL_STR), "--config", "objs=[{k = 1}]"]),
+        argv_derivation={"element": 3, "rule": "\"s=\" + JSON.stringify(case_input config s)", "checked_by": "validate-spec-c3.mjs.txt"},
+        stdin="ok", child_env=CHILD_ENV),
+    expected_observation="Dentro de array, o objeto vai ao ramo inline de toTomlValue: a chave vazia lança na linha 331 (não na checagem do flatten) e o filho undefined é pulado, ficando {k = 1} (exec.ts:327-338). function e symbol caem no else e lançam com o typeof (exec.ts:342-343). A string com TAB, U+0001, U+001F e DEL vira JSON.stringify: os controles abaixo de 0x20 escapados, o DEL literal (exec.ts:315-316).",
+    known_bad={"text": "Aceitar chave vazia no inline, emitir u = undefined, serializar function ou symbol, ou escapar a string com regra própria.",
+               "judged_by": ["api.ts_steps_exact", "argv.exact_vector"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-ZERO-SPAWN-WITNESS", "F4-08 $UNDEFINED", "CAP-TS-SDKCALLS-C3 (D3-02: marcadores $FUNCTION e $SYMBOL)"],
+    anchors=[A("ts/exec.ts", "throw new Error(\"Codex config override keys must be non-empty strings\");", nth=2),
+             A("ts/exec.ts", "if (child === undefined) {", nth=2),
+             A("ts/exec.ts", "parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path}.${key}`)}`);"),
+             A("ts/exec.ts", "throw new Error(`Unsupported Codex config override value at ${path}: ${typeName}`);"),
+             A("ts/exec.ts", "return JSON.stringify(value);")],
+    version_dependent=[],
+    arm_discrimination=[
+        DISC("TS07.B03", [1, 3], "objeto inline sem checagem de chave vazia", ["api.ts_steps_exact", "spawn.count_exact"], "spawn com arr=[{\"\" = 1}]"),
+        DISC("TS07.B03", [10, 12], "filho undefined emitido no inline", ["argv.exact_vector"], "objs com u no argv"),
+        DISC("TS07.B04", [6, 9], "function ou symbol serializados", ["api.ts_steps_exact"], "sem erro ou typeof diferente"),
+        DISC("TS07.B01", [10, 12], "escape próprio de controles", ["argv.exact_vector"], "bytes do elemento s diferentes de JSON.stringify")],
+    residual_source="v5 rows[TS07]: strings com caracteres de controle e chaves vazias dentro de objeto inline; remaining_open_by_contract.TS07 (filho undefined, function e symbol)",
+)
+
+C1["C3-TS08"] = dict(
+    contracts=["TS08"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS08.B02 (threadSource com id de resume vazio: o id falsy não suprime o source nem vira resume)",
+                       "TS08.B04 (networkAccessEnabled true emite a config)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(NEWC("c"), START("c", "t", {"threadSource": "c3-src", "networkAccessEnabled": True}, resume=""), RUN("t", "src")),
+    expected=dict(
+        spawns_total=1, api=[{"step": 2, "observations": {"thread_id": ""}}, {"step": 3, "result": EMPTY_RESULT}],
+        **argv_meta(["exec", "--experimental-json", "--thread-source", "c3-src", "--config", "sandbox_workspace_write.network_access=true"]),
+        stdin="src", child_env=CHILD_ENV),
+    expected_observation="Com resumeThread(\"\"), o id é falsy: a condição threadSource !== undefined && !threadId emite --thread-source e nenhum resume é acrescentado; networkAccessEnabled true vira sandbox_workspace_write.network_access=true depois do source (exec.ts:120-122, 154-159, 173-175).",
+    known_bad={"text": "Tratar id vazio como resume, suprimir o source por existir id, ou omitir network true.",
+               "judged_by": ["argv.exact_vector"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA,
+    anchors=[A("ts/exec.ts", "if (args.threadSource !== undefined && !args.threadId) {"),
+             A("ts/exec.ts", "`sandbox_workspace_write.network_access=${args.networkAccessEnabled}`,"),
+             A("ts/exec.ts", "if (args.threadId) {")],
+    version_dependent=[],
+    arm_discrimination=[
+        DISC("TS08.B02", [2, 3], "id vazio suprime o source ou vira resume", ["argv.exact_vector"], "sem --thread-source ou com resume \"\""),
+        DISC("TS08.B04", [2, 3], "network true omitido ou com outro texto", ["argv.exact_vector"], "sem sandbox_workspace_write.network_access=true")],
+    residual_source="v5 rows[TS08].residual_planned_profile_proposal: combinações restantes de threadSource com resume e networkAccessEnabled true",
+)
+
+C1["C3-TS09A"] = dict(
+    contracts=["TS09"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS09.B03 (apiKey vazio não apaga CODEX_API_KEY já presente no env)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(NEWC("c", options={"codexPathOverride": ADAPTER, "env": {"HOME": "/work/home", "PATH": "/runtime",
+                                                                              "CODEX_API_KEY": "cvg-synthetic-preexisting"}, "apiKey": ""}),
+                     START("c", "t"), RUN("t", "k")),
+    expected=dict(spawns_total=1, api=[{"step": 3, "result": EMPTY_RESULT}], **argv_meta(["exec", "--experimental-json"]), stdin="k",
+                  child_env={"HOME": "/work/home", "PATH": "/runtime", "CODEX_API_KEY": "cvg-synthetic-preexisting",
+                             "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts"}),
+    expected_observation="apiKey vazio é falsy: o if (args.apiKey) não roda e a chave sintética já presente no override segue para o filho (exec.ts:196-198).",
+    known_bad={"text": "Apagar ou sobrescrever CODEX_API_KEY com string vazia.", "judged_by": ["env.child_env_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA,
+    anchors=[A("ts/exec.ts", "if (args.apiKey) {")],
+    version_dependent=[],
+    arm_discrimination=[DISC("TS09.B03", [1, 3], "apiKey vazio apaga ou sobrescreve a chave", ["env.child_env_exact"],
+                             "CODEX_API_KEY ausente ou vazio no env do filho")],
+    residual_source="v5 rows[TS09].residual_planned_profile_proposal: TS09.B03 apiKey vazio sem apagar a chave existente",
+)
+
+C1["C3-TS09B"] = dict(
+    contracts=["TS09"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS09.B01 (override omitido: o filho recebe a cópia do process.env do driver mais o originator)"],
+    fixture=FIX0,
+    sdk_calls=tsteps(NEWC("c", options={"codexPathOverride": ADAPTER}), START("c", "t"), RUN("t", "inherit")),
+    expected=dict(spawns_total=1, api=[{"step": 3, "result": EMPTY_RESULT}], **argv_meta(["exec", "--experimental-json"]), stdin="inherit",
+                  child_env=dict(SANDBOX_ENV, CODEX_INTERNAL_ORIGINATOR_OVERRIDE="codex_sdk_ts"),
+                  child_env_source="env exato do driver imposto pelo bootstrap (âncora adm2ac/python/bootstrap.py, igual ao sandbox_env de identity-freeze-r3) + originator"),
+    expected_observation="Sem env no construtor, o exec copia as entradas de process.env do driver (o env exato do sandbox, imposto pelo bootstrap) e acrescenta o originator (exec.ts:183-195).",
+    known_bad={"text": "Passar env vazio, só o originator, ou acrescentar chaves que o driver não tem.", "judged_by": ["env.child_env_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA,
+    anchors=[A("ts/exec.ts", "if (this.envOverride) {"), A("ts/exec.ts", "for (const [key, value] of Object.entries(process.env)) {"),
+             A("adm2ac/python/bootstrap.py", "env={'HOME':'/work/home','TMPDIR':'/work/tmp','PATH':'/runtime','LANG':'C.UTF-8',", span=1)],
+    version_dependent=[],
+    arm_discrimination=[DISC("TS09.B01", [1, 3], "sem herança de process.env quando o override falta", ["env.child_env_exact"],
+                             "env do filho sem TMPDIR, LANG, LC_ALL, TZ, PYTHONDONTWRITEBYTECODE ou UV_THREADPOOL_SIZE")],
+    residual_source="v5 rows[TS09].residual_planned_profile_proposal: override omitido (herança de process.env)",
+)
+
+C1["C3-TS12"] = dict(
+    contracts=["TS12", "TS11"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS12.B01 (aborto durante a execução antes do primeiro yield: o SDK só repassa o signal; o AbortError do Node chega ao consumidor)",
+                       "TS11.B02 (erro de spawn guardado é relançado depois do fim do readline, sem esperar o exit)"],
+    fixture={"behavior": "hold"},
+    sdk_calls=tsteps(
+        NEWC("c"), START("c", "t"), {"api": "new AbortController", "as": "ac"},
+        RUNS("t", "abort-held", "next_abort_at_barrier", {"signal": "$ac.signal"}, barrier="CHILD_HELD", abort="ac")),
+    expected=dict(
+        spawns_total=1,
+        api=[{"step": 3, "result": {"aborted": False}}, {"step": 4, "yields": []}, ts_err(4, "AbortError", "The operation was aborted", code="ABORT_ERR")],
+        cause_recorded="cause do AbortError (signal.reason) é registrada, não julgada",
+        **argv_meta(["exec", "--experimental-json"]), stdin="abort-held", child_env=CHILD_ENV,
+        child_termination="SIGTERM do child_process do Node no abort (killSignal padrão), testemunhado pelo SO e pelo SIGNAL do adapter, antes do API_ERROR do passo 4",
+        no_remote_stop_claim=True),
+    expected_observation="Com o filho segurado (peer leu o stdin e não escreve), o next fica pendente; o abort faz o child_process do Node matar o filho e emitir error com AbortError, guardado em spawnError. O stdout fecha, o readline termina sem linhas e o exec relança o erro guardado antes de esperar o exit (exec.ts:203-209, 249). Nenhum evento chega ao consumidor; nenhuma parada remota é afirmada.",
+    known_bad={"text": "Converter o aborto em evento ou em turn.failed, entregar yield depois do aborto, ou esperar o exit e lançar 'Codex Exec exited with signal'.",
+               "judged_by": ["api.abort_error_exact", "abort.no_yield_after_abort", "abort.no_remote_stop_claim"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.abort_error_exact", "abort.no_yield_after_abort", "abort.no_remote_stop_claim",
+                               "abort.child_terminated_by_node_abort"],
+    accepted_capture_forms=["KNOWN_SIGNAL_TERMINATION"],
+    infra=TS_INFRA + ["CAP-PREREADY-SIGNAL", "CAP-TS-SDKCALLS-C3 (D3-02: modo next_abort_at_barrier e barreira CHILD_HELD)"],
+    anchors=[A("ts/exec.ts", "signal: args.signal,"), A("ts/exec.ts", "child.once(\"error\", (err) => (spawnError = err));"),
+             A("ts/exec.ts", "if (spawnError) throw spawnError;")],
+    version_dependent=["Node v24.20.0: classe, mensagem e code do AbortError do child_process e o kill no abort"],
+    arm_discrimination=[
+        DISC("TS12.B01", [4], "conversão do aborto em evento, yield ou erro próprio", ["api.abort_error_exact", "abort.no_yield_after_abort"],
+             "yield, Error do SDK ou 'Codex Exec exited with signal SIGTERM'"),
+        DISC("TS11.B02", [4], "exit esperado antes do erro guardado", ["api.abort_error_exact"], "mensagem 'Codex Exec exited with signal SIGTERM: '")],
+    residual_source="v5 rows[TS12]: aborto antes do yield; rows[TS11]: TS11.B02 dependia da forma A do 2A-TS10",
+)
+
+C1["C3-TS13"] = dict(
+    contracts=["TS13"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS13.B01 (linha JSON truncada: Failed to parse item com a linha e cause SyntaxError)"],
+    fixture={"JSONL": [{"type": "thread.started", "thread_id": "t13"}, "{\"type\":\"item.completed\",\"item\":{\"id\":\"i1\""],
+             "exit_code": 0, "stderr": ""},
+    sdk_calls=tsteps(NEWC("c"), START("c", "t"), RUNS("t", "trunc", "all")),
+    expected=dict(
+        spawns_total=1,
+        api=[{"step": 3, "yields": [{"type": "thread.started", "thread_id": "t13"}]},
+             ts_err(3, "Error", "Failed to parse item: {\"type\":\"item.completed\",\"item\":{\"id\":\"i1\"", cause_name="SyntaxError")],
+        **argv_meta(["exec", "--experimental-json"]), stdin="trunc", child_env=CHILD_ENV),
+    expected_observation="A segunda linha é JSON truncado: JSON.parse lança e o thread lança Error('Failed to parse item: <linha>') com cause igual ao SyntaxError original (thread.ts:101-105). O texto do SyntaxError é do V8 e só é registrado.",
+    known_bad={"text": "Pular a linha inválida, lançar sem a linha ou sem cause.", "judged_by": ["api.ts_steps_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector"],
+    accepted_capture_forms=["PASS", "KNOWN_SIGNAL_TERMINATION"],
+    infra=TS_INFRA,
+    anchors=[A("ts/thread.ts", "parsed = JSON.parse(item) as ThreadEvent;"),
+             A("ts/thread.ts", "throw new Error(`Failed to parse item: ${item}`, { cause: error });")],
+    version_dependent=["Node v24.20.0: texto do SyntaxError (registrado, não julgado)"],
+    arm_discrimination=[DISC("TS13.B01", [3], "linha inválida pulada ou erro sem a linha/cause", ["api.ts_steps_exact"],
+                             "fim normal do iterador, mensagem sem a linha ou cause_name diferente de SyntaxError")],
+    residual_source="v5 rows[TS13].residual_planned_profile_proposal: JSON truncado",
+)
+
+C1["C3-TS14"] = dict(
+    contracts=["TS14"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS14.B01 (thread.started sem thread_id substitui o id por undefined, sem validar o tipo)"],
+    fixture={"JSONL": [{"type": "thread.started", "thread_id": "t14a"}, {"type": "thread.started"},
+                       {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}],
+             "exit_code": 0, "stderr": ""},
+    sdk_calls=tsteps(NEWC("c"), START("c", "t"), RUNS("t", "ids", "all")),
+    expected=dict(
+        spawns_total=1,
+        api=[{"step": 3, "yield_snapshots": [
+            {"event": {"type": "thread.started", "thread_id": "t14a"}, "observations": {"thread_id": "t14a"}},
+            {"event": {"type": "thread.started"}, "observations": {"thread_id_is_undefined": True}},
+            {"event": {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "cache_write_input_tokens": 0}},
+             "observations": {"thread_id_is_undefined": True}}], "return": {"events": 3, "observations": {"thread_id_is_undefined": True}}}],
+        **argv_meta(["exec", "--experimental-json"]), stdin="ids", child_env=CHILD_ENV),
+    expected_observation="Cada thread.started atribui _id = parsed.thread_id antes do yield, sem validar (thread.ts:106-107): o segundo, sem thread_id, troca t14a por undefined, que segue até o fim.",
+    known_bad={"text": "Ignorar thread.started sem id (manter t14a) ou validar o evento.", "judged_by": ["api.ts_steps_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA + ["CAP-TS-SDKCALLS-C3 (D3-02: observação thread_id_is_undefined)"],
+    anchors=[A("ts/thread.ts", "this._id = parsed.thread_id;"), A("ts/thread.ts", "parsed.usage.cache_write_input_tokens ??= 0;")],
+    version_dependent=[],
+    arm_discrimination=[DISC("TS14.B01", [3], "validação do thread_id ou id mantido", ["api.ts_steps_exact"],
+                             "thread_id t14a depois do segundo thread.started")],
+    residual_source="v5 rows[TS14].residual_planned_profile_proposal: vários thread.started com id ausente",
+)
+
+TS15_JSONL = [{"type": "thread.started", "thread_id": "t15"},
+              {"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "first"}},
+              {"type": "item.updated", "item": {"id": "m2", "type": "agent_message", "text": "partial"}},
+              {"type": "cvg.unknown.event", "x": 1},
+              {"type": "item.completed", "item": {"id": "m2", "type": "agent_message", "text": "second"}},
+              {"type": "item.completed", "item": {"id": "r1", "type": "reasoning", "text": "thinking"}},
+              {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}]
+C1["C3-TS15"] = dict(
+    contracts=["TS15", "TS13"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["TS15.B01 (várias mensagens com updated entre completed: entram todos os item.completed; finalResponse é a última agent_message, reasoning não troca)",
+                       "TS15.B04 (tipo desconhecido é ignorado pelo agregador e o run continua)",
+                       "TS13.B02 (objeto de tipo desconhecido passa pelo cast sem validação de schema)"],
+    fixture={"JSONL": TS15_JSONL, "exit_code": 0, "stderr": ""},
+    sdk_calls=tsteps(NEWC("c"), START("c", "t"), RUN("t", "multi")),
+    expected=dict(
+        spawns_total=1,
+        api=[{"step": 3, "result": {"items": [TS15_JSONL[1]["item"], TS15_JSONL[4]["item"], TS15_JSONL[5]["item"]], "finalResponse": "second",
+                                    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "cache_write_input_tokens": 0}}}],
+        **argv_meta(["exec", "--experimental-json"]), stdin="multi", child_env=CHILD_ENV),
+    expected_observation="O run acumula todo item.completed em ordem (m1, m2, r1); só agent_message troca finalResponse, então fica 'second'; item.updated e o tipo desconhecido passam sem efeito; usage é o do turn.completed com cache_write_input_tokens 0 (thread.ts:125-141, 109).",
+    known_bad={"text": "finalResponse da primeira mensagem ou do reasoning, item.updated entrando em items, ou erro no tipo desconhecido.",
+               "judged_by": ["api.ts_steps_exact", "api.run_result_exact"]},
+    predicates=TS_BASE_PRED + ["argv.exact_vector", "api.run_result_exact"],
+    accepted_capture_forms=["PASS"],
+    infra=TS_INFRA,
+    anchors=[A("ts/thread.ts", "finalResponse = event.item.text;"), A("ts/thread.ts", "items.push(event.item);"),
+             A("ts/thread.ts", "if (event.item.type === \"agent_message\") {")],
+    version_dependent=[],
+    arm_discrimination=[
+        DISC("TS15.B01", [3], "finalResponse da primeira mensagem, do reasoning, ou updated em items", ["api.run_result_exact"],
+             "finalResponse 'first' ou 'thinking', ou 4 items"),
+        DISC("TS15.B04", [3], "erro ou parada no tipo desconhecido", ["api.run_result_exact"], "run rejeitado ou items sem m2/r1"),
+        DISC("TS13.B02", [3], "validação de schema do evento", ["api.run_result_exact"], "erro de validação no lugar do resultado")],
+    residual_source="v5 rows[TS15].residual_planned_profile_proposal: mensagens múltiplas com updated entre completed; rows[TS13]: tipo desconhecido no agregador",
+)
+
+# ================================================================== SUB-LOT C3-2 (Python)
+LAUNCH = ["/runtime/python", "-I", "-S", "/profile/adapter-python.py"]
+CFG = {"launch_args_override": "$LAUNCH", "cwd": "/work"}
+UNSCRIPTED = C2B["2B-PY01A"]["case_input"]["peer_script"]["unscripted_error"]
+INIT_OK = {"serverInfo": {"name": "synthetic-sdk-profile", "version": "0.151.0"}, "userAgent": "synthetic-sdk-profile/0.151.0"}
+INIT_DUMP_OK = {"serverInfo": {"name": "synthetic-sdk-profile", "version": "0.151.0"}, "userAgent": "synthetic-sdk-profile/0.151.0",
+                "platformFamily": None, "platformOs": None}
+EMPTY_DUMP = {"serverInfo": None, "userAgent": None, "platformFamily": None, "platformOs": None}
+CLOSED_PREFIX = "Codex process closed stdout."
+PYV = ["CPython 3.12.3 (asyncio, threading, queue, json, subprocess)", "pydantic 2.13.4 / pydantic-core 2.46.4 admitidos"]
+EPI = C2B["2B-PY05X"]["case_input"]["sdk_calls"][-1]
+EPI_ASYNC = C2B["2B-PY13D"]["case_input"]["sdk_calls"][-1]
+EPI_DONE = C2B["2B-PY08X"]["case_input"]["sdk_calls"][-1]
+assert EPI["kind"] == "eof_calls_done_release_exit_then_sdk_close" and EPI_ASYNC["kind"] == "eof_calls_done_release_exit_then_sdk_aclose" \
+    and EPI_DONE["kind"] == "calls_done_release_exit_then_sdk_close_if_open"
+EPI = {k: v for k, v in EPI.items() if k not in ("step", "api")}
+EPI_ASYNC = {k: v for k, v in EPI_ASYNC.items() if k not in ("step", "api")}
+EPI_DONE = {k: v for k, v in EPI_DONE.items() if k not in ("step", "api")}
+
+
+def N(method, params):
+    return {"notification": {"method": method, "params": params}}
+
+
+EXIT = {"exit": "close_stdout_then_exit_0"}
+
+
+def TURN(tid, status="inProgress", **kw):
+    t = {"id": tid, "items": [], "status": status}
+    t.update(kw)
+    return t
+
+
+def THREAD(tid, status=None, ephemeral=False, path="__default__"):
+    return {"cliVersion": "0.151.0", "createdAt": 1, "cwd": "/work", "ephemeral": ephemeral, "id": tid,
+            "modelProvider": "synthetic", "path": ("/work/home/.codex/sessions/" + tid + ".jsonl") if path == "__default__" else path,
+            "preview": "", "sessionId": "s-" + tid, "source": "appServer", "status": status or {"type": "idle"}, "turns": [],
+            "updatedAt": 2}
+
+
+def GOAL(tid, status, objective="synthetic objective"):
+    return {"createdAt": 1, "objective": objective, "status": status, "threadId": tid, "timeUsedSeconds": 0, "tokensUsed": 0,
+            "updatedAt": 2}
+
+
+def R(method, reply=None, error=None, subset=None, params=None, absent=False, before=None, after=None, hold=None):
+    r = {"match": {"method": method}}
+    if params is not None:
+        r["match"]["params"] = params
+    if subset is not None:
+        r["match"]["params_subset"] = subset
+    if absent:
+        r["match"]["params_absent"] = True
+    if before:
+        r["before_reply"] = before
+    if hold:
+        r["hold"] = hold
+    if error is not None:
+        r["reply"] = {"error": error}
+    else:
+        r["reply"] = {"result": reply if reply is not None else {}}
+    if after:
+        r["after_reply"] = after
+    return r
+
+
+def PS(*rules, init=None):
+    return {"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [R("initialize", init or INIT_OK)] + list(rules)}
+
+
+def steps(*items):
+    out = []
+    for i, s in enumerate(items, 1):
+        d = {"step": i}
+        d.update(s)
+        out.append(d)
+    return out
+
+
+def S(api, **kw):
+    d = {"api": api}
+    d.update(kw)
+    return d
+
+
+def CALL(on, method, *args, as_=None, aw=False, **kwargs):
+    d = {"api": "call", "on": on, "method": method}
+    if args:
+        d["args"] = list(args)
+    if kwargs:
+        d["kwargs"] = kwargs
+    if aw:
+        d["await"] = True
+    if as_:
+        d["as"] = as_
+    return d
+
+
+def REQ(on, method, params=None, aw=False):
+    return CALL(on, "request", method, params, aw=aw, response_model="InitializeResponse")
+
+
+def PROBE(pid, path, fn="value"):
+    return {"api": "probe", "id": pid, "path": path, "fn": fn}
+
+
+def NOTE(method, cls, dump=None, **fields):
+    d = {"method": method, "payload_class": cls, "fields": fields}
+    if dump is not None:
+        d["dump"] = dump
+    return d
+
+
+def ERR(cls, s=None, prefix=None, code=None, **kw):
+    e = {"class": cls}
+    if s is not None:
+        e["str"] = s
+    if prefix is not None:
+        e["str_prefix"] = prefix
+    if code is not None:
+        e["code"] = code
+    e.update(kw)
+    return e
+
+
+def JRPC(cls, code, message):
+    return {"class": "openai_codex.errors." + cls, "str": "JSON-RPC error %d: %s" % (code, message), "code": code, "message_attr": message}
+
+
+START3 = [S("CodexClient.new", config=CFG, **{"as": "c"}), CALL("c", "start"), CALL("c", "initialize")]
+PY_BASE_PRED = ["capture.case_input_frozen_bytes", "wire.client_lines_complete_json", "wire.initialize_handshake", "wire.requests_exact",
+                "api.steps_exact", "peer.no_unscripted_request", "env.adapter_sandbox_env_only"]
+PY_INFRA = ["CAP-PY-SDKCALLS-2B", "CAP-PEER-V2"]
+C2 = {}
+
+C2["C3-PY02"] = dict(
+    contracts=["PY02"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    gate="Só roda se o DIAG-PY-PROCWITNESS admitir a leitura de /proc/<pid>/cmdline sem privilégio (como no 2B-PY02A). Senão a vaga não é usada, PY02.B01 segue com o escopo do v5 e vale a pergunta T3 contingente de ../sdk-source-batch-2b-spec/t3-assessment.json, sem pergunta nova.",
+    branches_targeted=["PY02.B01 (launch_args_override com config_overrides não vazio: argv igual ao override, sem --config nem app-server)"],
+    sdk_calls=steps(
+        S("CodexClient.new", config={"launch_args_override": "$LAUNCH", "cwd": "/work", "config_overrides": ["model=\"cvg-c3\"", "features.cvg=1"]},
+          **{"as": "c"}),
+        CALL("c", "start"), CALL("c", "initialize"),
+        S("proc.retain", path=["c", "._proc"], **{"as": "p"}),
+        PROBE("popen_args", ["p", ".args"]),
+        PROBE("config_overrides_kept", ["c", ".config", ".config_overrides"]),
+        S("barrier", id="proc_witness", witness={"supervisor": "PROC_WITNESS do adapter, lido só depois do BEGIN do adapter: /proc/<pid>/cmdline (sem privilégio)"}),
+        S("epilogue", **EPI)),
+    peer_script=PS(),
+    expected={
+        "api": [{"step": 3, "result": INIT_DUMP_OK}],
+        "probes": {"popen_args": LAUNCH, "config_overrides_kept": ["model=\"cvg-c3\"", "features.cvg=1"]},
+        "wire": {"requests": [{"method": "initialize", "handshake": True}], "notifications": [{"method": "initialized", "count": 1}]},
+        "process": {"spawns": 1, "argv": {"popen_args": LAUNCH, "proc_cmdline": LAUNCH, "self_report_argv_tail": []}}},
+    expected_observation="Com launch_args_override, start usa a lista do override como argv e não acrescenta --config nem app-server, mesmo com config_overrides não vazio guardado na config (client.py:247-256).",
+    known_bad={"text": "Acrescentar --config k=v ou app-server ao override quando config_overrides não é vazio.", "judged_by": ["proc.argv_exact", "probe.values_exact"]},
+    predicates=PY_BASE_PRED + ["wire.notifications_exact", "probe.values_exact", "proc.argv_exact", "proc.spawn_count_exact", "proc.witness_recorded",
+                               "barrier.witnesses_in_order", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-2B-PROC-WITNESS"],
+    anchors=[A("py/client.py", "args = list(self.config.launch_args_override)"), A("py/client.py", "for kv in self.config.config_overrides:")],
+    arm_discrimination=[DISC("PY02.B01", [1, 4, 5, 7], "config_overrides acrescentado ao override", ["proc.argv_exact"],
+                             "--config model=\"cvg-c3\" no argv de Popen e no /proc/<pid>/cmdline")],
+    residual_source="remaining_open_by_contract.PY02: override com config_overrides não vazio sem --config (PY02.B01)",
+)
+
+C2["C3-PY03"] = dict(
+    contracts=["PY03"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY03.B11 (falha na escrita do pedido remove o waiter e propaga; o pedido seguinte segue normal)"],
+    sdk_calls=steps(
+        *START3,
+        S("fault.install", on="c", attr="_write_message", mode="raise_before_call", exception={"class": "RuntimeError", "message": "cvg injected write failure"}),
+        REQ("c", "synthetic/never"),
+        PROBE("waiters_after_fault", ["c", "._router", "._response_waiters"], "keys"),
+        S("fault.remove", on="c", attr="_write_message"),
+        REQ("c", "synthetic/after"),
+        PROBE("waiters_after_ok", ["c", "._router", "._response_waiters"], "keys"),
+        S("epilogue", **EPI)),
+    peer_script=PS(R("synthetic/after", {}, absent=True)),
+    expected={
+        "api": [{"step": 5, "error": ERR("builtins.RuntimeError", "cvg injected write failure")}, {"step": 8, "result": EMPTY_DUMP}],
+        "probes": {"waiters_after_fault": [], "waiters_after_ok": []},
+        "fault": {"fired": [{"attr": "_write_message", "count": 1}]},
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "synthetic/after", "params_absent": True}],
+                 "absent": [{"method": "synthetic/never"}]}},
+    expected_observation="_request_raw registra o waiter e, se _write_message lança, o except BaseException descarta o waiter e relança (client.py:368-380). Nada sai no fio para synthetic/never; o mapa de waiters fica vazio e o pedido seguinte funciona.",
+    known_bad={"text": "Deixar o waiter órfão no mapa ou trocar a exceção.", "judged_by": ["probe.values_exact", "api.steps_exact"]},
+    predicates=PY_BASE_PRED + ["wire.absent", "probe.values_exact", "fault.fired_as_declared", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-2B-FAULT-CUT", "CAP-PY-SDKCALLS-C3 (D3-04: alvo novo CodexClient._write_message)"],
+    anchors=[A("py/client.py", "waiter = self._router.create_response_waiter(request_id)"),
+             A("py/client.py", "self._router.discard_response_waiter(request_id)"),
+             A("py/_message_router.py", "self._response_waiters.pop(request_id, None)")],
+    arm_discrimination=[DISC("PY03.B11", [4, 5, 6], "waiter não descartado na falha de escrita", ["probe.values_exact"],
+                             "waiters_after_fault com uma chave UUID")],
+    residual_source="v5 rows[PY03].residual_planned_profile_proposal: falha de escrita removendo o waiter",
+)
+
+# PY05: valor esperado da normalização pela leitura do padrão do packaging preparado (sem importar packaging).
+_pv = open(INPUTS["pydeps/packaging/version.py"]["_abs"], encoding="utf-8").read()
+_m = re.search(r'_VERSION_PATTERN = r"""(.*?)"""', _pv, re.S)
+VERSION_RX = re.compile(r"\s*" + _m.group(1) + r"\s*", re.VERBOSE | re.IGNORECASE)
+ALPHA = "0.152.0-alpha.1.2"
+NORMALIZED = re.sub(r"-alpha\.(\d+)\.(\d+)$", r"a\1.post\2", ALPHA)
+assert NORMALIZED == "0.152.0a1.post2"
+assert VERSION_RX.fullmatch(ALPHA) is None, "sem normalização a versão seria inválida"
+_mm = VERSION_RX.fullmatch(NORMALIZED)
+assert _mm and tuple(map(int, _mm.group("release").split("."))) == (0, 152, 0) and _mm.group("pre_l") == "a"
+PY05_DERIVATION = {"raw": ALPHA, "normalized": NORMALIZED, "raw_matches_pep440": False, "normalized_release": [0, 152, 0],
+                   "rule": "padrão _VERSION_PATTERN lido de pydeps/packaging/version.py aplicado com re (stdlib); 0.152.0a1.post2 >= 0.151.0 pela release",
+                   "consequence": "sem a normalização, Version levantaria InvalidVersion e a guarda rejeitaria; com ela, a pré-release acima do mínimo passa"}
+FORK_MSG = "Codex CLI 0.151.0 or newer is required; reported version is 'unknown'"
+C2["C3-PY05"] = dict(
+    contracts=["PY05"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY05.B10 (thread/fork com excludeTurns false conta como fornecido: a guarda roda com versão desconhecida)",
+                       "PY05.B06 (pré-release acima do mínimo no formato -alpha.N.M passa pela normalização para aN.postM)"],
+    sdk_calls=steps(
+        *START3,
+        PROBE("rv_unknown", ["c", "._runtime_version"]),
+        REQ("c", "thread/fork", {"threadId": "t5c", "excludeTurns": False}),
+        CALL("c", "initialize"),
+        PROBE("rv_alpha", ["c", "._runtime_version"]),
+        REQ("c", "turn/start", {"threadId": "t5c", "input": [], "toolOutput": []}),
+        REQ("c", "thread/fork", {"threadId": "t5c", "excludeTurns": False}),
+        S("epilogue", **EPI)),
+    peer_script={"version": 2, "unscripted_error": UNSCRIPTED, "on_request": [
+        R("initialize", {"userAgent": "synthetic"}),
+        R("initialize", {"serverInfo": {"name": "s", "version": ALPHA}}),
+        R("turn/start", {}, params={"threadId": "t5c", "input": [], "toolOutput": []}),
+        R("thread/fork", {}, params={"threadId": "t5c", "excludeTurns": False})]},
+    expected={
+        "api": [{"step": 3, "result": {"serverInfo": None, "userAgent": "synthetic", "platformFamily": None, "platformOs": None}},
+                {"step": 5, "error": ERR("openai_codex.errors.CodexError",
+                                         "thread/fork with excludeTurns: " + FORK_MSG + ". Configure CodexConfig.codex_bin with a supported CLI.",
+                                         cause={"class": "builtins.ValueError", "str": FORK_MSG})},
+                {"step": 6, "result": {"serverInfo": {"name": "s", "version": ALPHA}, "userAgent": None, "platformFamily": None, "platformOs": None}},
+                {"step": 8, "result": EMPTY_DUMP}, {"step": 9, "result": EMPTY_DUMP}],
+        "probes": {"rv_unknown": None, "rv_alpha": ALPHA},
+        "derivation": PY05_DERIVATION,
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "initialize", "handshake": True},
+                              {"method": "turn/start", "params": {"threadId": "t5c", "input": [], "toolOutput": []}},
+                              {"method": "thread/fork", "params": {"threadId": "t5c", "excludeTurns": False}}],
+                 "notifications": [{"method": "initialized", "count": 2}]}},
+    expected_observation="Com versão desconhecida, thread/fork com excludeTurns false aciona a guarda porque o campo é diferente de None (client.py:337-343) e falha sem escrever o pedido. Com 0.152.0-alpha.1.2, a normalização vira 0.152.0a1.post2 (_runtime_requirements.py:19), que é PEP 440 válida e acima do mínimo: o turn/start com toolOutput e o thread/fork passam.",
+    known_bad={"text": "Tratar excludeTurns false como ausente (o primeiro thread/fork sairia no fio) ou rejeitar a pré-release acima do mínimo.",
+               "judged_by": ["api.steps_exact", "wire.requests_exact"]},
+    predicates=PY_BASE_PRED + ["wire.notifications_exact", "probe.values_exact", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER"],
+    anchors=[A("py/client.py", "\"thread/fork\": (\"excludeTurns\",),"), A("py/client.py", "if (params or {}).get(field) is not None"),
+             A("py/client.py", "require_runtime_version(self._runtime_version)"),
+             A("py/_runtime_requirements.py", "normalized = re.sub("),
+             A("py/_runtime_requirements.py", "if Version(normalized) >= Version(MINIMUM_RUNTIME_VERSION):"),
+             A("pydeps/packaging/version.py", "(?P<post_l>post|rev|r)"), A("pydeps/packaging/version.py", "(?:-(?P<post_n1>[0-9]+))")],
+    arm_discrimination=[
+        DISC("PY05.B10", [3, 4, 5], "excludeTurns false não conta como fornecido", ["api.steps_exact", "wire.requests_exact"],
+             "passo 5 com resultado e dois thread/fork no fio"),
+        DISC("PY05.B06", [6, 7, 8, 9], "sem normalização ou pré-release rejeitada", ["api.steps_exact", "wire.requests_exact"],
+             "CodexError com reported version '0.152.0-alpha.1.2' no passo 8")],
+    residual_source="v5 arms_open_explicit_v5[PY05.B10]; remaining_open_by_contract.PY05: normalização -alpha.N.M -> aN.postM e o lado 'alpha acima do mínimo passa' do PY05.B06",
+)
+
+C2["C3-PY08"] = dict(
+    contracts=["PY08"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY08.B08 (fail_all com operação de goal registrada: goal.fail entrega a mesma falha ao leitor do goal, a fila global recebe o mesmo objeto e o mapa de goals é limpo)"],
+    sdk_calls=steps(
+        *START3,
+        CALL("c", "register_goal_operation", "t8g", as_="g"),
+        S("worker.start", name="W1", call=CALL("c", "next_goal_notification", {"$ref": "g"})),
+        S("worker.start", name="W2", call=CALL("c", "next_notification")),
+        S("worker.parked", names=["W1", "W2"], timeout_s=3),
+        REQ("c", "synthetic/trigger"),
+        S("worker.join", names=["W1", "W2"], timeout_s=3, wait_class="CLIENT_EFFECT",
+          note="D3-05: worker que continua estacionado é efeito do cliente (o known_bad), julgado por consumer.results_exact"),
+        PROBE("goal_routes", ["c", "._router", "._goal_operations"], "keys"),
+        PROBE("goal_failure_none", ["g", "._failure"], "is_none"),
+        S("epilogue", **EPI_DONE)),
+    peer_script=PS(R("synthetic/trigger", {}, absent=True, after=[EXIT])),
+    expected={
+        "api": [{"step": 8, "result": EMPTY_DUMP}],
+        "workers": {"W1": {"error": ERR("openai_codex.errors.TransportClosedError", prefix=CLOSED_PREFIX)},
+                    "W2": {"error": ERR("openai_codex.errors.TransportClosedError", prefix=CLOSED_PREFIX)}},
+        "identity": [{"same_object": ["W1", "W2"]}],
+        "probes": {"goal_routes": [], "goal_failure_none": False},
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "synthetic/trigger", "params_absent": True}]}},
+    expected_observation="Quando o peer fecha o stdout, o leitor chama fail_all: copia e limpa o mapa de goals sob o lock e chama goal_operation.fail(exc) com o mesmo objeto que vai à fila global (_message_router.py:341-351). O leitor do goal (W1) e o da fila global (W2) acordam com a mesma TransportClosedError.",
+    known_bad={"text": "Esquecer a operação de goal no fail_all (W1 estacionado para sempre) ou deixar a rota no mapa.",
+               "judged_by": ["consumer.results_exact", "identity.groups_exact", "probe.values_exact"]},
+    predicates=PY_BASE_PRED + ["consumer.results_exact", "identity.groups_exact", "probe.values_exact", "barrier.witnesses_in_order",
+                               "peer.exit_after_script_witnessed", "wait.client_effect_recorded"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-PEER-EXIT-EARLY", "D3-05 classe de espera CLIENT_EFFECT"],
+    anchors=[A("py/_message_router.py", "self._goal_operations.clear()"), A("py/_message_router.py", "goal_operation.fail(exc)"),
+             A("py/_message_router.py", "self._global_notifications.put(exc)", nth=1), A("py/_goal.py", "self._failure = exc")],
+    arm_discrimination=[
+        DISC("PY08.B08", [5, 7, 8, 9], "goal fora do fail_all", ["consumer.results_exact"], "W1 sem resultado (segue estacionado)"),
+        DISC("PY08.B08", [9, 10, 11], "mapa não limpo ou falha não registrada", ["probe.values_exact"], "goal_routes ['t8g'] ou _failure None"),
+        DISC("PY08.B08", [9], "objetos diferentes por fila", ["identity.groups_exact"], "tokens de identidade diferentes em W1 e W2")],
+    residual_source="remaining_open_by_contract.PY08: falha de transporte com operação de goal registrada (goal.fail pelo fail_all)",
+)
+
+TS12_PATH = ["c", "._router", "._turn_states", "[A12C]"]
+C2["C3-PY12"] = dict(
+    contracts=["PY12"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY12.B03 (assinatura tardia com eventos retidos ainda não lidos começa em next_event, não no primeiro evento retido)"],
+    sdk_calls=steps(
+        *START3,
+        S("Thread.new", client="c", thread_id="t12c", **{"as": "t"}),
+        CALL("t", "turn", "c", as_="h1"),
+        S("probe.until", path=TS12_PATH + [".next_event"], equals=2, timeout_s=3),
+        PROBE("first_event_before", TS12_PATH + [".first_event"]),
+        S("TurnHandle.new", client="c", thread_id="t12c", turn_id="A12C", **{"as": "h2"}),
+        PROBE("h2_cursor", ["h2", "._subscription", "._cursor"]),
+        PROBE("h1_cursor", ["h1", "._subscription", "._cursor"]),
+        PROBE("subscribers", TS12_PATH + [".subscribers"], "len"),
+        REQ("c", "synthetic/trigger"),
+        S("probe.until", path=TS12_PATH + [".next_event"], equals=4, timeout_s=3),
+        PROBE("event_keys", TS12_PATH + [".events"], "keys"),
+        S("stream.next", handle="h2"), S("stream.next", handle="h2"), S("stream.next", handle="h2"),
+        PROBE("first_event_after_h2", TS12_PATH + [".first_event"]),
+        S("stream.next", handle="h1"), S("stream.next", handle="h1"), S("stream.next", handle="h1"), S("stream.next", handle="h1"),
+        S("stream.next", handle="h1"),
+        PROBE("state_removed", ["c", "._router", "._turn_states"], "keys"),
+        S("epilogue", **EPI)),
+    peer_script=PS(
+        R("turn/start", {"turn": TURN("A12C")}, subset={"threadId": "t12c"},
+          before=[N("turn/started", {"threadId": "t12c", "turn": TURN("A12C")})],
+          after=[N("item/agentMessage/delta", {"delta": "p", "itemId": "i1", "threadId": "t12c", "turnId": "A12C"})]),
+        R("synthetic/trigger", {}, absent=True,
+          after=[N("item/agentMessage/delta", {"delta": "q", "itemId": "i2", "threadId": "t12c", "turnId": "A12C"}),
+                 N("turn/completed", {"threadId": "t12c", "turn": TURN("A12C", "completed")})])),
+    expected={
+        "api": [{"step": 5, "result": {"turn_handle.id": "A12C", "thread_id": "t12c"}}, {"step": 12, "result": EMPTY_DUMP},
+                {"step": 15, "result": NOTE("item/agentMessage/delta", "AgentMessageDeltaNotification", delta="q", turnId="A12C")},
+                {"step": 16, "result": NOTE("turn/completed", "TurnCompletedNotification", **{"turn.id": "A12C", "turn.status": "completed"})},
+                {"step": 17, "end": "StopIteration"},
+                {"step": 19, "result": NOTE("turn/started", "TurnStartedNotification", **{"turn.id": "A12C"})},
+                {"step": 20, "result": NOTE("item/agentMessage/delta", "AgentMessageDeltaNotification", delta="p", turnId="A12C")},
+                {"step": 21, "result": NOTE("item/agentMessage/delta", "AgentMessageDeltaNotification", delta="q", turnId="A12C")},
+                {"step": 22, "result": NOTE("turn/completed", "TurnCompletedNotification", **{"turn.id": "A12C", "turn.status": "completed"})},
+                {"step": 23, "end": "StopIteration"}],
+        "probes": {"first_event_before": 0, "h2_cursor": 2, "h1_cursor": 0, "subscribers": 2, "event_keys": [0, 1, 2, 3],
+                   "first_event_after_h2": 0, "state_removed": []},
+        "wire": {"requests": [{"method": "initialize", "handshake": True},
+                              {"method": "turn/start", "params_subset": {"threadId": "t12c", "input": [{"type": "text", "text": "c"}]}},
+                              {"method": "synthetic/trigger", "params_absent": True}]}},
+    expected_observation="h1 não lê nada: os eventos 0 (turn/started) e 1 (delta p) ficam retidos (first_event 0, next_event 2). O TurnHandle tardio assina pelo subscribe_turn, cujo cursor é state.next_event (_message_router.py:177-181): h2 começa em 2 e vê só q, completed e o fim; h1 vê os quatro. A poda segue o menor cursor e o estado sai quando o último assinante fecha.",
+    known_bad={"text": "Assinatura tardia começando no primeiro evento retido (h2 veria turn/started e p) ou poda de eventos ainda não lidos por h1.",
+               "judged_by": ["probe.values_exact", "api.steps_exact"]},
+    predicates=PY_BASE_PRED + ["probe.values_exact", "peer.before_reply_order_witnessed", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-2B-PEER-BEFORE-REPLY"],
+    anchors=[A("py/_message_router.py", "return _TurnSubscription(self, state, state.next_event)"),
+             A("py/_message_router.py", "consumed = min(state.subscribers.values(), default=state.next_event)"),
+             A("py/api.py", "self._subscription = self._client._subscribe_turn_notifications(self.id)", nth=1)],
+    arm_discrimination=[
+        DISC("PY12.B03", [6, 7, 8, 9], "assinatura tardia no primeiro evento retido", ["probe.values_exact"], "h2_cursor 0"),
+        DISC("PY12.B03", [15, 16], "assinatura tardia no primeiro evento retido", ["api.steps_exact"], "passo 15 entrega turn/started")],
+    residual_source="remaining_open_by_contract.PY12: assinatura tardia com eventos retidos ainda não lidos (PY12.B03)",
+)
+
+GOAL_HOOKS = [
+    {"id": "h_reserve", "code": "openai_codex.client.CodexClient.reserve_goal_operation", "event": "call", "record": ["arg:thread_id", "thread_name"]},
+    {"id": "h_finish", "code": "openai_codex._goal._GoalOperationState.finish", "event": "call", "record": ["self.thread_id", "thread_name"]},
+    {"id": "h_cancel", "code": "openai_codex.client.CodexClient.cancel_goal_operation", "event": "call", "record": ["thread_name"]},
+    {"id": "h_unreg", "code": "openai_codex.client.CodexClient.unregister_goal_operation", "event": "call", "record": ["thread_name"]}]
+C2["C3-PY13H"] = dict(
+    contracts=["PY13"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY13.B05 (thread ativo rejeitado antes da reserva: testemunha da reserva)",
+                       "PY13.B06 (thread efêmero com path rejeitado: distingue o ramo do efêmero do ramo do path None)",
+                       "PY13.B09 (falha no read: sem reserva, sem rota, sem cleanup)",
+                       "PY13.B10 (InvalidRequest antes da ativação: reserva, finish e unregister sem cancel)"],
+    sdk_calls=steps(
+        S("hook.install", hooks=GOAL_HOOKS, scope="threading.setprofile + sys.setprofile antes de qualquer thread do SDK"),
+        *START3,
+        CALL("c", "start_goal_operation", "t13h1", "synthetic objective"),
+        CALL("c", "start_goal_operation", "t13h2", "synthetic objective"),
+        CALL("c", "start_goal_operation", "t13h3", "synthetic objective"),
+        S("hook.count", id="h_reserve", event="call"),
+        CALL("c", "start_goal_operation", "t13h4", "synthetic objective"),
+        S("hook.count", id="h_reserve", event="call"),
+        S("hook.count", id="h_finish", event="call"),
+        S("hook.count", id="h_cancel", event="call"),
+        S("hook.count", id="h_unreg", event="call"),
+        PROBE("routes", ["c", "._router", "._goal_operations"], "keys"),
+        S("epilogue", **EPI)),
+    peer_script=PS(
+        R("thread/read", {"thread": THREAD("t13h1", status={"type": "active", "activeFlags": []})}, params={"threadId": "t13h1", "includeTurns": False}),
+        R("thread/read", {"thread": THREAD("t13h2", ephemeral=True)}, params={"threadId": "t13h2", "includeTurns": False}),
+        R("thread/read", error={"code": -32603, "message": "synthetic read failure", "data": None}, params={"threadId": "t13h3", "includeTurns": False}),
+        R("thread/read", {"thread": THREAD("t13h4")}, params={"threadId": "t13h4", "includeTurns": False}),
+        R("thread/goal/clear", error={"code": -32600, "message": "goal clear rejected", "data": None}, params={"threadId": "t13h4"})),
+    expected={
+        "api": [{"step": 5, "error": JRPC("InvalidRequestError", -32600, "thread must be idle before starting a goal: t13h1")},
+                {"step": 6, "error": JRPC("InvalidRequestError", -32600, "thread must be persisted before starting a goal: t13h2")},
+                {"step": 7, "error": JRPC("InternalRpcError", -32603, "synthetic read failure")},
+                {"step": 8, "result": 0},
+                {"step": 9, "error": JRPC("InvalidRequestError", -32600, "goal clear rejected")},
+                {"step": 10, "result": 1}, {"step": 11, "result": 1}, {"step": 12, "result": 0}, {"step": 13, "result": 1}],
+        "probes": {"routes": []},
+        "hooks": [{"id": "h_reserve", "occurrence": 1, "event": "call", "arg:thread_id": "t13h4", "thread_name": "MainThread"},
+                  {"id": "h_finish", "occurrence": 1, "event": "call", "self.thread_id": "t13h4", "thread_name": "MainThread"},
+                  {"id": "h_unreg", "occurrence": 1, "event": "call", "thread_name": "MainThread"}],
+        "order": [["RAW_READ:thread/read@t13h4#1", "HOOK:h_reserve#1", "RAW_READ:thread/goal/clear@t13h4#1", "HOOK:h_finish#1", "HOOK:h_unreg#1",
+                   "API_ERROR:9"]],
+        "wire": {"requests": [{"method": "initialize", "handshake": True},
+                              {"method": "thread/read", "params": {"threadId": "t13h1", "includeTurns": False}},
+                              {"method": "thread/read", "params": {"threadId": "t13h2", "includeTurns": False}},
+                              {"method": "thread/read", "params": {"threadId": "t13h3", "includeTurns": False}},
+                              {"method": "thread/read", "params": {"threadId": "t13h4", "includeTurns": False}},
+                              {"method": "thread/goal/clear", "params": {"threadId": "t13h4"}}],
+                 "absent": [{"method": "thread/goal/set"}, {"method": "turn/interrupt"}]}},
+    expected_observation="Thread ativo, efêmero com path e read com erro saem antes da reserva: nenhum call de reserve_goal_operation (client.py:613-625). O t13h2 tem path não nulo, então só o ramo do efêmero o rejeita. No t13h4 a reserva acontece, o clear falha com InvalidRequest antes da ativação: sem cancel, com finish e unregister (client.py:643-648).",
+    known_bad={"text": "Reservar antes das checagens, aceitar o efêmero com path, cancelar no InvalidRequest antes da ativação, ou não finalizar/desregistrar.",
+               "judged_by": ["api.steps_exact", "hook.events_exact", "wire.requests_exact"]},
+    predicates=PY_BASE_PRED + ["wire.absent", "wire.order_constraints", "probe.values_exact", "hook.events_exact", "hook.code_identity",
+                               "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-PY-SDKCALLS-C3 (D3-04: ganchos em reserve, finish, cancel e unregister)"],
+    anchors=[A("py/client.py", "if not isinstance(thread.status.root, IdleThreadStatus):"), A("py/client.py", "if thread.ephemeral or thread.path is None:"),
+             A("py/client.py", "state = self.reserve_goal_operation(thread_id)"), A("py/client.py", "if activated or not isinstance(exc, InvalidRequestError):"),
+             A("py/_goal.py", "def finish(self) -> None:")],
+    arm_discrimination=[
+        DISC("PY13.B05", [5, 8], "reserva antes da checagem de status", ["api.steps_exact"], "hook.count de h_reserve 1 no passo 8"),
+        DISC("PY13.B06", [6], "só o path None rejeita", ["api.steps_exact", "wire.requests_exact"], "passo 6 sem erro e thread/goal/clear t13h2 no fio"),
+        DISC("PY13.B09", [7, 8], "reserva ou cleanup no read com erro", ["api.steps_exact"], "h_reserve maior que 0 no passo 8"),
+        DISC("PY13.B10", [9, 10, 11, 12, 13], "cancel no InvalidRequest antes da ativação, ou sem finish/unregister", ["api.steps_exact", "hook.events_exact"],
+             "h_cancel 1, h_finish 0 ou h_unreg 0")],
+    residual_source="v5 arms_open_explicit_v5[PY13.B06]; remaining_open_by_contract.PY13: PY13.B05 e PY13.B09 (testemunha da reserva), PY13.B10 (testemunha do finish)",
+)
+
+
+def replay(base_id, new_id, sub_lot, mutate_calls, changed_fields, extra):
+    base = C2B[base_id]
+    ci = copy.deepcopy(base["case_input"])
+    mutate_calls(ci["sdk_calls"])
+    out = {"replay_of": {"case": base_id, "spec": ptr("spec2b/cases-2b-2.json"), "case_object_sha256": sha_bytes(compact(base).encode("utf-8")),
+                         "changed_fields": changed_fields},
+           "contracts": base["contracts"], "sub_lot_base": base["sub_lot"],
+           "sdk_calls": ci["sdk_calls"], "peer_script": ci["peer_script"], "driver_mode": ci.get("driver_mode")}
+    out.update(extra)
+    return out
+
+
+def _py13f(calls):
+    calls[0]["hooks"].append({"id": "h_finish", "code": "openai_codex._goal._GoalOperationState.finish", "event": "call",
+                              "record": ["self.thread_id", "thread_name"]})
+    epi = calls.pop()
+    calls.append({"step": len(calls) + 1, "api": "hook.count", "id": "h_finish", "event": "call"})
+    epi["step"] = len(calls) + 1
+    calls.append(epi)
+
+
+B13D = C2B["2B-PY13D"]
+C2["C3-PY13F"] = replay("2B-PY13D", "C3-PY13F", "C3-2", _py13f, {
+    "id": "caso novo de vaga própria", "role": "REPLAY_WITH_WITNESS: reexecução com testemunha do finish do estado",
+    "sdk_calls": "passo 1 ganha o gancho h_finish (call de _GoalOperationState.finish); passo 19 novo hook.count de h_finish; o epílogo passa a ser o passo 20",
+    "expected": "acrescenta o resultado do passo 19 e os dois eventos de h_finish; o resto é igual ao 2B-PY13D",
+    "branches_targeted": "PY13.B15 e PY13.B10 com testemunha do finish", "anchors": "acrescenta _goal.py finish e async_client.py:280",
+    "known_bad": "texto reescrito; judged_by hook.events_exact e api.steps_exact, que julgam a testemunha do finish",
+    "infra": "acrescenta CAP-PY-SDKCALLS-C3 (D3-04, gancho em _GoalOperationState.finish)", "inputs": "acrescenta py/_goal.py",
+    "expected_observation": "reescrita para a testemunha do finish", "case_input_note": "texto da unidade"},
+    dict(role="REPLAY_WITH_WITNESS",
+         branches_targeted=["PY13.B15 (resultado bem-sucedido depois do cancel: o daemon de cleanup pausa, interrompe e finaliza o estado no thread codex-goal-start-cleanup)",
+                            "PY13.B10 (InvalidRequest antes da ativação no caminho assíncrono: finish no thread codex-goal-start, sem cancel)"],
+         expected=dict(copy.deepcopy(B13D["expected"]),
+                       api=B13D["expected"]["api"] + [{"step": 19, "result": 2}],
+                       hooks=B13D["expected"]["hooks"] + [
+                           {"id": "h_finish", "occurrence": 1, "event": "call", "thread_name": "codex-goal-start-cleanup", "self.thread_id": "t13d1"},
+                           {"id": "h_finish", "occurrence": 2, "event": "call", "thread_name": "codex-goal-start", "self.thread_id": "t13d2",
+                            "after": "RELEASE_REPLY:thread/goal/set@t13d2#1"}]),
+         expected_observation="Replay do 2B-PY13D com testemunha do finish: no t13d1 o set tem sucesso depois do cancel e o daemon de cleanup chama cancel_goal_operation e, no finally, state.finish() (async_client.py:276-281); no t13d2 o set falha com InvalidRequest antes da ativação e o próprio thread codex-goal-start finaliza sem cancel (client.py:643-648). Duas finalizações, em threads diferentes.",
+         known_bad={"text": "Não finalizar o estado no cleanup do resultado tardio, ou finalizar no caminho de erro só depois do callback.",
+                    "judged_by": ["hook.events_exact", "api.steps_exact"]},
+         predicates=B13D["predicates"], accepted_capture_forms=B13D["accepted_capture_forms"],
+         infra=B13D["infra"] + ["CAP-PY-SDKCALLS-C3 (D3-04: gancho em _GoalOperationState.finish)"],
+         anchors=B13D["anchors"] + [A("py/_goal.py", "def finish(self) -> None:"), A("py/async_client.py", "state.finish()")],
+         arm_discrimination=[
+             DISC("PY13.B15", [10, 19], "cleanup sem finish do estado", ["hook.events_exact", "api.steps_exact"],
+                  "sem h_finish no thread codex-goal-start-cleanup; hook.count 1"),
+             DISC("PY13.B10", [16, 19], "finish ausente ou fora do thread codex-goal-start", ["hook.events_exact"],
+                  "h_finish#2 em outro thread ou ausente")],
+         residual_source="remaining_open_by_contract.PY13: PY13.B10 e PY13.B15 (testemunha do finish do estado)"))
+
+
+def _py13er(calls):
+    by = {s["step"]: s for s in calls}
+    assert by[11]["api"] == "hook.wait" and by[12]["api"] == "thread.join" and by[13]["api"] == "excepthook.wait"
+    for n in (11, 12, 13):
+        by[n]["wait_class"] = "CLIENT_EFFECT_UNLESS_ALIVE"
+        by[n]["thread_name"] = "codex-goal-start-cleanup"
+    by[12]["note"] = ("espera só lendo o fim do thread de cleanup; thread nunca iniciado ou já terminado no estouro é efeito do cliente; "
+                      "thread vivo no estouro é pré-condição de harness (D3-05, errata T1 do lead-decision-f01)")
+    by[13]["note"] = ("estouro com o thread de cleanup nunca iniciado ou já terminado é efeito do cliente (D3-05, errata T1 do lead-decision-f01): "
+                      "o known_bad 'pular o cleanup' termina em MISMATCH; thread vivo no estouro segue INVALID_CAPTURE")
+
+
+B13E = C2B["2B-PY13E"]
+C2["C3-PY13ER"] = replay("2B-PY13E", "C3-PY13ER", "C3-2", _py13er, {
+    "id": "caso novo de vaga própria", "role": "REPLAY_ERRATUM_T1: errata T1 das esperas (opção futura do lead-decision-f01)",
+    "sdk_calls": "passos 11, 12 e 13 ganham wait_class CLIENT_EFFECT_UNLESS_ALIVE e thread_name codex-goal-start-cleanup; notas dos passos 12 e 13 trocadas; nenhum outro campo muda",
+    "expected": "igual ao 2B-PY13E; expected.fault.fired ganha zero_calls_client_effect_unless_started (E3-07) e entra known_bad_selftest",
+    "case_input_note": "texto da unidade",
+    "predicates": "acrescenta wait.client_effect_recorded (sanidade: cada espera com classe de efeito do cliente registrou WAIT_RESULT)",
+    "infra": "acrescenta D3-05", "branches_targeted": "textos reescritos para a errata (mesmos braços PY13.B17 e PY13.B18)",
+    "expected_observation": "reescrita para a errata T1"},
+    dict(role="REPLAY_ERRATUM_T1",
+         branches_targeted=["PY13.B17 (cancelar depois do resultado com o loop bloqueado: o callback roda no thread do loop e inicia o cleanup; known_bad 'pular o cleanup' julgado MISMATCH)",
+                            "PY13.B18 (cleanup que levanta: o finally finaliza e desregistra; a exceção vai ao excepthook)"],
+         expected=dict(copy.deepcopy(B13E["expected"]),
+                       fault={"fired": [{"attr": "cancel_goal_operation", "count": 1,
+                                         "zero_calls_client_effect_unless_started": "codex-goal-start-cleanup"}]},
+                       known_bad_selftest=[
+                           {"capture": "sintética: cleanup pulado (thread codex-goal-start-cleanup nunca iniciado; alvo do fault nunca chamado)",
+                            "waits": "passos 11, 12 e 13 estouram como efeito do cliente e o caso segue",
+                            "fault": "zero chamadas do alvo com o thread nunca iniciado não é falha de sanidade (E3-07)",
+                            "failed_client_predicates": ["api.steps_exact", "wire.requests_exact", "probe.values_exact", "hook.events_exact",
+                                                         "excepthook.records_exact"],
+                            "outcome": "MISMATCH", "composition_rule": 6},
+                           {"capture": "sintética: alvo do fault chamado duas vezes", "outcome": "INVALID_CAPTURE", "composition_rule": 4,
+                            "by": "fault.fired_as_declared"},
+                           {"capture": "sintética: thread de cleanup iniciado e ainda vivo no estouro do passo 12", "outcome": "INVALID_CAPTURE",
+                            "composition_rule": 4, "by": "wait.client_effect_recorded (espera HARNESS_PRECONDITION estourada)"}]),
+         expected_observation="Replay do 2B-PY13E com a errata T1 das esperas: nos passos 11 a 13, o estouro com o thread de cleanup nunca iniciado ou já terminado passa a ser efeito do cliente, e o fault declarado sem nenhuma chamada nesse mesmo caso deixa de ser falha de sanidade. Com o SDK correto o desfecho é igual ao do 2B-PY13E; com o cleanup pulado, os predicados de cliente decidem MISMATCH (regra 6), em vez do INVALID_CAPTURE do 2B-2 (DV1). Cleanup lento (thread vivo no estouro) e fault com contagem errada continuam INVALID_CAPTURE.",
+         known_bad={"text": "Pular o cleanup quando o resultado já existe, ou deixar a rota registrada quando o cancel levanta.",
+                    "judged_by": ["hook.events_exact", "probe.values_exact", "excepthook.records_exact"]},
+         predicates=B13E["predicates"] + ["wait.client_effect_recorded"], accepted_capture_forms=B13E["accepted_capture_forms"],
+         infra=B13E["infra"] + ["D3-05 classe de espera CLIENT_EFFECT"],
+         anchors=B13E["anchors"],
+         arm_discrimination=[
+             DISC("PY13.B17", [9, 10, 11, 12, 14], "cleanup pulado quando o resultado já existe", ["hook.events_exact", "probe.values_exact"],
+                  "sem h_stop e routes ['t13e']; esperas CLIENT_EFFECT estouradas não invalidam"),
+             DISC("PY13.B18", [13, 14, 15], "exceção do cleanup engolida ou rota mantida", ["excepthook.records_exact", "probe.values_exact"],
+                  "excepthook vazio ou routes ['t13e']")],
+         residual_source="remaining_open_by_contract.PY13: o known_bad 'pular o cleanup' do 2B-PY13E como MISMATCH (errata T1 do passo 13, opção futura do lead-decision-f01)"))
+
+PY14_TRIGGER = [
+    N("turn/started", {"threadId": "t14x", "turn": TURN("P1", startedAt=100)}),
+    N("thread/goal/updated", {"threadId": "t14x", "turnId": "P1", "goal": GOAL("t14x", "active")}),
+    N("turn/completed", {"threadId": "t14x", "turn": TURN("P1", "completed", startedAt=100, completedAt=103)}),
+    N("turn/started", {"threadId": "t14x", "turn": TURN("P2", startedAt=104)}),
+    N("turn/completed", {"threadId": "t14x", "turn": TURN("P2", "failed", startedAt=104, completedAt=108, error={"message": "second failed"})}),
+    N("thread/goal/updated", {"threadId": "t14x", "turnId": "P2", "goal": GOAL("t14x", "complete")})]
+C2["C3-PY14"] = dict(
+    contracts=["PY14"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY14.B03 (turn failed que não é o primeiro vira o terminal lógico quando o goal termina; duração desde o primeiro start)",
+                       "PY14.B07 (prioridade do id para o interrupt: completed acima de started quando não há current)"],
+    sdk_calls=steps(
+        *START3,
+        CALL("c", "register_goal_operation", "t14x", as_="s1"),
+        S("GoalStream.new", kind="sync", state="s1", client="c", **{"as": "gs1"}),
+        REQ("c", "synthetic/trigger"),
+        S("gstream.next", stream="gs1"), S("gstream.next", stream="gs1"), S("gstream.next", stream="gs1"),
+        PROBE("s1_finished", ["s1", "._finished"]),
+        PROBE("routes", ["c", "._router", "._goal_operations"], "keys"),
+        CALL("c", "cancel_goal_operation", {"$model": "_GoalOperationState", "fields": {
+            "thread_id": "t14x7", "completed_turn": {"$model": "Turn", "fields": {"id": "C7", "items": [], "status": "completed"}},
+            "started_turn": {"$model": "Turn", "fields": {"id": "S7", "items": [], "status": "inProgress"}}}}),
+        S("epilogue", **EPI)),
+    peer_script=PS(R("synthetic/trigger", {}, absent=True, after=PY14_TRIGGER),
+                   R("thread/goal/set", {"goal": GOAL("t14x7", "paused")}, params={"threadId": "t14x7", "status": "paused"}),
+                   R("turn/interrupt", {}, params={"threadId": "t14x7", "turnId": "C7"})),
+    expected={
+        "api": [{"step": 6, "result": EMPTY_DUMP},
+                {"step": 7, "result": NOTE("turn/started", "TurnStartedNotification", **{"turn.id": "P1", "turn.startedAt": 100})},
+                {"step": 8, "result": NOTE("turn/completed", "TurnCompletedNotification", **{
+                    "turn.id": "P1", "turn.status": "failed", "turn.startedAt": 100, "turn.completedAt": 108, "turn.durationMs": 8000,
+                    "turn.error.message": "second failed"})},
+                {"step": 9, "end": "StopIteration"}, {"step": 12, "result": None}],
+        "probes": {"s1_finished": True, "routes": []},
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "synthetic/trigger", "params_absent": True},
+                              {"method": "thread/goal/set", "params": {"threadId": "t14x7", "status": "paused"}},
+                              {"method": "turn/interrupt", "params": {"threadId": "t14x7", "turnId": "C7"}}],
+                 "absent": [{"method": "turn/interrupt", "params_subset": {"turnId": "S7"}}]}},
+    expected_observation="O cursor lógico guarda o primeiro started (P1, 100). P1 completa com o goal ativo (sem terminal); P2 falha ainda ativo e vira failed_completion; o goal/updated complete fecha: a conclusão lógica é a do P2 failed, com id P1, startedAt 100 e duração (108 - 100) * 1000 (_goal.py:283-288, 313-324, 234-237). No cancel com completed e started e sem current, o interrupt vai ao completed (_goal.py:180-189).",
+    known_bad={"text": "Duração desde o start do turn que falhou (4000), terminal do último completed, ou interrupt do started.",
+               "judged_by": ["api.steps_exact", "wire.requests_exact"]},
+    predicates=PY_BASE_PRED + ["wire.absent", "probe.values_exact", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-2B-MODEL-ORACLE"],
+    anchors=[A("py/_goal.py", "self.failed_completion = payload"),
+             A("py/_goal.py", "started_at = started.started_at if started is not None else final_turn.started_at"),
+             A("py/_goal.py", "duration_ms = max(0, final_turn.completed_at - started_at) * 1000"),
+             A("py/_goal.py", "return self.completed_turn.id"), A("py/client.py", "turn_id = state.turn_for_interrupt()")],
+    arm_discrimination=[
+        DISC("PY14.B03", [6, 8], "duração desde o start do turn que falhou ou terminal do completed", ["api.steps_exact"],
+             "turn.durationMs 4000, turn.startedAt 104 ou status completed"),
+        DISC("PY14.B07", [12], "started acima de completed, ou nenhum interrupt sem current", ["wire.requests_exact", "wire.absent"],
+             "turn/interrupt com S7 ou nenhum turn/interrupt")],
+    residual_source="remaining_open_by_contract.PY14: PY14.B03 ('desde o primeiro start' com um turn failed que não seja o primeiro) e PY14.B07",
+)
+
+
+def PY15_NOTES(tid, turn):
+    return [N("item/completed", {"threadId": tid, "turnId": "OTHER", "completedAtMs": 1700000000001,
+                                 "item": {"type": "agentMessage", "id": "o1", "text": "other turn", "phase": "final_answer"}}),
+            N("item/completed", {"threadId": tid, "turnId": turn, "completedAtMs": 1700000000002,
+                                 "item": {"type": "agentMessage", "id": "m1", "text": "final A", "phase": "final_answer"}}),
+            N("item/completed", {"threadId": tid, "turnId": turn, "completedAtMs": 1700000000003,
+                                 "item": {"type": "agentMessage", "id": "m2", "text": "later unknown phase"}}),
+            N("item/completed", {"threadId": tid, "turnId": turn, "completedAtMs": 1700000000004,
+                                 "item": {"type": "agentMessage", "id": "m3", "text": "commentary text", "phase": "commentary"}}),
+            N("thread/tokenUsage/updated", {"threadId": tid, "turnId": "OTHER", "tokenUsage": {
+                "total": {"cachedInputTokens": 0, "inputTokens": 999, "outputTokens": 999, "reasoningOutputTokens": 0, "totalTokens": 1998},
+                "last": {"cachedInputTokens": 0, "inputTokens": 999, "outputTokens": 999, "reasoningOutputTokens": 0, "totalTokens": 1998}}}),
+            N("thread/tokenUsage/updated", {"threadId": tid, "turnId": turn, "tokenUsage": {
+                "total": {"cachedInputTokens": 0, "inputTokens": 10, "outputTokens": 5, "reasoningOutputTokens": 0, "totalTokens": 15},
+                "last": {"cachedInputTokens": 0, "inputTokens": 4, "outputTokens": 2, "reasoningOutputTokens": 0, "totalTokens": 6}}}),
+            N("turn/completed", {"threadId": tid, "turn": TURN(turn, "completed")})]
+
+
+assert PY15_NOTES("t15", "T15") == C2A["2A-PY15"]["peer_script"]["on_request"][1]["after_reply"], "notificações do 2A-PY15"
+C2["C3-PY15A"] = dict(
+    contracts=["PY15"], role="RESIDUAL_SOURCE_DETERMINISTIC", driver_mode="async",
+    branches_targeted=["PY15.B11 (coleta assíncrona _collect_async_turn_result: final_answer vence a mensagem posterior sem phase, failed lança, interrupted devolve; itens e usage de outro turn não chegam, pela rota do turn)"],
+    sdk_calls=steps(
+        S("AsyncCodex.new", config=CFG, **{"as": "x"}),
+        S("async_with.enter", on="x"),
+        S("AsyncThread.new", codex="x", thread_id="t15a", **{"as": "t"}),
+        CALL("t", "run", "synthetic", aw=True, as_="r"),
+        PROBE("r_id", ["r", ".id"]), PROBE("r_status", ["r", ".status"]), PROBE("r_final", ["r", ".final_response"]),
+        PROBE("r_items", ["r", ".items"], "len"), PROBE("r_total", ["r", ".usage", ".total", ".total_tokens"]),
+        PROBE("r_last", ["r", ".usage", ".last", ".total_tokens"]), PROBE("r_error_none", ["r", ".error"], "is_none"),
+        S("AsyncThread.new", codex="x", thread_id="t15f", **{"as": "tf"}),
+        CALL("tf", "run", "synthetic", aw=True),
+        S("AsyncThread.new", codex="x", thread_id="t15i", **{"as": "ti"}),
+        CALL("ti", "run", "synthetic", aw=True, as_="ri"),
+        PROBE("ri_status", ["ri", ".status"]), PROBE("ri_final_none", ["ri", ".final_response"], "is_none"),
+        PROBE("ri_usage_none", ["ri", ".usage"], "is_none"),
+        S("epilogue", **EPI_ASYNC)),
+    peer_script=PS(
+        R("turn/start", {"turn": TURN("T15A")}, subset={"threadId": "t15a"}, after=PY15_NOTES("t15a", "T15A")),
+        R("turn/start", {"turn": TURN("T15F")}, subset={"threadId": "t15f"},
+          after=[N("turn/completed", {"threadId": "t15f", "turn": TURN("T15F", "failed", error={"message": "synthetic turn failure"})})]),
+        R("turn/start", {"turn": TURN("T15I")}, subset={"threadId": "t15i"},
+          after=[N("turn/completed", {"threadId": "t15i", "turn": TURN("T15I", "interrupted")})])),
+    expected={
+        "api": [{"step": 4, "result": {"class": "TurnResult"}}, {"step": 13, "error": ERR("builtins.RuntimeError", "synthetic turn failure")},
+                {"step": 15, "result": {"class": "TurnResult"}}],
+        "probes": {"r_id": "T15A", "r_status": "completed", "r_final": "final A", "r_items": 3, "r_total": 15, "r_last": 6, "r_error_none": True,
+                   "ri_status": "interrupted", "ri_final_none": True, "ri_usage_none": True},
+        "wire": {"requests": [{"method": "initialize", "handshake": True},
+                              {"method": "turn/start", "params_subset": {"threadId": "t15a", "input": [{"type": "text", "text": "synthetic"}]}},
+                              {"method": "turn/start", "params_subset": {"threadId": "t15f", "input": [{"type": "text", "text": "synthetic"}]}},
+                              {"method": "turn/start", "params_subset": {"threadId": "t15i", "input": [{"type": "text", "text": "synthetic"}]}}]}},
+    expected_observation="AsyncThread.run usa AsyncTurnHandle.run e _collect_async_turn_result (api.py:895-899, _run.py:102-135): mesmas regras da coleta síncrona do 2A-PY15, agora pelo caminho assíncrono. Os eventos com turnId OTHER vão a outro estado de turn pelo roteador e não chegam à subscription de T15A, então r_items 3 e r_total 15 são observação do roteamento, não do filtro do coletor. O resultado é um dataclass TurnResult com slots, lido por sondas estáticas.",
+    known_bad={"text": "Incluir itens ou usage de outro turn, escolher a mensagem posterior sem phase, ou não lançar no failed.",
+               "judged_by": ["probe.values_exact", "api.steps_exact"]},
+    predicates=PY_BASE_PRED + ["probe.values_exact", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-ASYNC-DRIVER", "CAP-2B-CONC-BARRIER"],
+    anchors=[A("py/api.py", "return await _collect_async_turn_result(stream, turn_id=self.id)"),
+             A("py/_run.py", "async for event in stream:"),
+             A("py/_run.py", "if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:", nth=2),
+             A("py/_run.py", "if agent_message.phase == MessagePhase.final_answer:"), A("py/_run.py", "raise RuntimeError(turn.error.message)")],
+    arm_discrimination=[
+        DISC("PY15.B11", [7], "mensagem posterior sem phase vence", ["probe.values_exact"], "r_final 'later unknown phase'"),
+        DISC("PY15.B11", [13, 15], "failed sem exceção ou interrupted lançando", ["api.steps_exact"], "passo 13 com resultado ou passo 15 com erro")],
+    residual_source="v5 rows[PY15].residual_planned_profile_proposal: versão assíncrona (_collect_async_turn_result)",
+)
+
+C2["C3-PY16S"] = dict(
+    contracts=["PY16"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY16.B11 (ExternalMessage com conteúdo estruturado: lista de itens validada por TurnToolOutput, extra ignorado, None omitido)"],
+    sdk_calls=steps(
+        *START3,
+        S("Thread.new", client="c", thread_id="t16s", **{"as": "t"}),
+        CALL("t", "turn", {"$ExternalMessage": {"tool_name": "synthetic_tool", "content": [
+            {"type": "input_text", "text": "structured", "cvgExtra": 1},
+            {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}}, as_="h"),
+        S("epilogue", **EPI)),
+    peer_script=PS(R("turn/start", {"turn": TURN("T16S")}, params={"threadId": "t16s", "input": [], "toolOutput": {
+        "name": "synthetic_tool", "output": [{"text": "structured", "type": "input_text"},
+                                             {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}})),
+    expected={
+        "api": [{"step": 5, "result": {"turn_handle.id": "T16S", "thread_id": "t16s"}}],
+        "wire": {"requests": [{"method": "initialize", "handshake": True},
+                              {"method": "turn/start", "params": {"threadId": "t16s", "input": [], "toolOutput": {
+                                  "name": "synthetic_tool", "output": [{"text": "structured", "type": "input_text"},
+                                                                       {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}}}],
+                 "must_not_contain_keys": ["approvalPolicy", "approvalsReviewer", "namespace", "detail", "cvgExtra", "retain"]}},
+    expected_observation="ExternalMessage com lista vira TurnToolOutput.model_validate({name, namespace, output}) (_inputs.py:96-102): cada item é validado pelo literal type, a chave extra é ignorada e os None somem no dump exclude_none dos params (client.py:99-104). O input fica [].",
+    known_bad={"text": "Serializar a lista como string, passar o dict cru (cvgExtra no fio) ou recusar conteúdo estruturado.",
+               "judged_by": ["wire.requests_exact", "wire.payloads_exact"]},
+    predicates=PY_BASE_PRED + ["wire.payloads_exact", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-PY-SDKCALLS-C3 (D3-04: marcador $ExternalMessage reintroduzido do 2A)"],
+    anchors=[A("py/_inputs.py", "{\"name\": input.tool_name, \"namespace\": input.namespace, \"output\": input.content}"),
+             A("py/_inputs.py", "content: str | Sequence[JsonObject | FunctionCallOutputContentItem]"),
+             A("py/generated/v2_all.py", "class TurnToolOutput(BaseModel):", span=6)],
+    arm_discrimination=[DISC("PY16.B11", [5], "conteúdo estruturado não validado ou recusado", ["wire.requests_exact", "wire.payloads_exact"],
+                             "cvgExtra no toolOutput, output string, ou ValidationError no passo 5")],
+    residual_source="v5 rows[PY16].residual_planned_profile_proposal: conteúdo estruturado de ExternalMessage (lista de itens)",
+)
+
+C2["C3-PY17"] = dict(
+    contracts=["PY17"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY17.B02 (wait pula a conclusão não tipada da mesma loginId e devolve a válida; o finally desregistra também na saída por exceção)",
+                       "PY17.B04 (variante inesperada com loginId no login_chatgpt registra a fila antes do RuntimeError)"],
+    sdk_calls=steps(
+        S("hook.install", hooks=[{"id": "h_next_login", "code": "openai_codex.client.CodexClient.next_login_notification", "event": "call",
+                                  "record": ["arg:login_id", "thread_name"]}],
+          scope="threading.setprofile + sys.setprofile antes de qualquer thread do SDK"),
+        S("Codex.new", config=CFG, **{"as": "x"}),
+        CALL("x", "login_chatgpt", as_="h1"),
+        CALL("h1", "wait"),
+        S("hook.count", id="h_next_login", event="call"),
+        PROBE("registered_after_wait", ["x", "._client", "._router", "._login_notifications"], "keys"),
+        CALL("x", "login_chatgpt", as_="h2"),
+        S("fault.install", on="x._client", attr="next_login_notification", mode="raise_before_call",
+          exception={"class": "RuntimeError", "message": "cvg injected login wait failure"}),
+        CALL("h2", "wait"),
+        PROBE("registered_after_fault", ["x", "._client", "._router", "._login_notifications"], "keys"),
+        S("fault.remove", on="x._client", attr="next_login_notification"),
+        CALL("x", "login_chatgpt"),
+        PROBE("registered_after_unexpected", ["x", "._client", "._router", "._login_notifications"], "keys"),
+        S("epilogue", **EPI)),
+    peer_script=PS(
+        R("account/login/start", {"type": "chatgpt", "loginId": "L17c", "authUrl": "https://login.invalid/cvg-l17c"}, params={"type": "chatgpt"},
+          before=[N("account/login/completed", {"loginId": "L17c", "success": "bad"}),
+                  N("account/login/completed", {"loginId": "L17c", "success": True})]),
+        R("account/login/start", {"type": "chatgpt", "loginId": "L17d", "authUrl": "https://login.invalid/cvg-l17d"}, params={"type": "chatgpt"}),
+        R("account/login/start", {"type": "chatgptDeviceCode", "loginId": "L17e", "userCode": "CVG-0001",
+                                  "verificationUrl": "https://login.invalid/cvg-device"}, params={"type": "chatgpt"})),
+    expected={
+        "api": [{"step": 3, "result": {"class": "ChatgptLoginHandle", "login_id": "L17c", "auth_url": "https://login.invalid/cvg-l17c"}},
+                {"step": 4, "result": {"error": None, "loginId": "L17c", "onboardingEntrypoint": None, "success": True}},
+                {"step": 5, "result": 2},
+                {"step": 7, "result": {"class": "ChatgptLoginHandle", "login_id": "L17d", "auth_url": "https://login.invalid/cvg-l17d"}},
+                {"step": 9, "error": ERR("builtins.RuntimeError", "cvg injected login wait failure")},
+                {"step": 12, "error": ERR("builtins.RuntimeError", prefix="unexpected ChatGPT login response: ChatgptDeviceCodeLoginAccountResponse(")}],
+        "probes": {"registered_after_wait": [], "registered_after_fault": [], "registered_after_unexpected": ["L17e"]},
+        "hooks": [{"id": "h_next_login", "occurrence": 1, "event": "call", "arg:login_id": "L17c", "thread_name": "MainThread"},
+                  {"id": "h_next_login", "occurrence": 2, "event": "call", "arg:login_id": "L17c", "thread_name": "MainThread"}],
+        "fault": {"fired": [{"attr": "next_login_notification", "count": 1}]},
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "account/login/start", "params": {"type": "chatgpt"}},
+                              {"method": "account/login/start", "params": {"type": "chatgpt"}},
+                              {"method": "account/login/start", "params": {"type": "chatgpt"}}],
+                 "absent": [{"method": "account/login/cancel"}]}},
+    expected_observation="As duas conclusões de L17c chegam antes da resposta do start: sem fila registrada, ficam pendentes em ordem e o register_login as põe na fila nessa ordem (_message_router.py:114-124, 287-294). A primeira tem success inválido, vira UnknownNotification e é roteada pela loginId crua; o wait a pula (segunda chamada de next_login_notification) e devolve a válida (client.py:770-777). Com a leitura injetada levantando, o finally desregistra L17d. A resposta device code ao login_chatgpt registra L17e no account_login_start antes do RuntimeError do _login.py:38 (client.py:451-455).",
+    known_bad={"text": "Devolver a primeira notificação da fila, manter L17d registrado depois da exceção, ou não registrar L17e.",
+               "judged_by": ["api.steps_exact", "probe.values_exact", "hook.events_exact"]},
+    predicates=PY_BASE_PRED + ["wire.absent", "probe.values_exact", "hook.events_exact", "hook.code_identity", "fault.fired_as_declared",
+                               "peer.login_frames_synthetic", "peer.before_reply_order_witnessed", "wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-CONC-BARRIER", "CAP-2B-PEER-LOGIN", "CAP-2B-PEER-BEFORE-REPLY", "CAP-2B-FAULT-CUT",
+                      "CAP-PY-SDKCALLS-C3 (D3-04: alvo novo CodexClient.next_login_notification no fault.install e no gancho)"],
+    anchors=[A("py/client.py", "notification = self.next_login_notification(login_id)"),
+             A("py/client.py", "and notification.payload.login_id == login_id"),
+             A("py/client.py", "self.register_login_notifications(response_root.login_id)"),
+             A("py/_login.py", "raise RuntimeError(f\"unexpected ChatGPT login response: {response_root!r}\")", nth=1),
+             A("py/_message_router.py", "pending = self._pending_login_notifications.pop(login_id, deque())"),
+             A("py/_message_router.py", "raw_login_id = payload.params.get(\"loginId\")")],
+    arm_discrimination=[
+        DISC("PY17.B02", [3, 4, 5], "wait devolve a primeira notificação da fila", ["api.steps_exact", "hook.events_exact"],
+             "passo 4 com UnknownNotification ou erro; hook.count 1 no passo 5"),
+        DISC("PY17.B02", [8, 9, 10], "sem desregistro na saída por exceção", ["probe.values_exact"], "registered_after_fault ['L17d']"),
+        DISC("PY17.B04", [12, 13], "variante inesperada sem registro de fila", ["probe.values_exact"], "registered_after_unexpected []")],
+    residual_source="remaining_open_by_contract.PY17: PY17.B02 e PY17.B04",
+)
+
+PY18_TOKEN = {"total": {"cachedInputTokens": 0, "inputTokens": 3, "outputTokens": 2, "reasoningOutputTokens": 0, "totalTokens": 5},
+              "last": {"cacheWriteInputTokens": None, "cachedInputTokens": 0, "inputTokens": 1, "outputTokens": 1, "reasoningOutputTokens": 0,
+                       "totalTokens": 2}}
+PY18_DUMP = {"threadId": "t18e", "tokenUsage": {
+    "last": {"cacheWriteInputTokens": None, "cachedInputTokens": 0, "inputTokens": 1, "outputTokens": 1, "reasoningOutputTokens": 0, "totalTokens": 2},
+    "modelContextWindow": None,
+    "total": {"cacheWriteInputTokens": 0, "cachedInputTokens": 0, "inputTokens": 3, "outputTokens": 2, "reasoningOutputTokens": 0, "totalTokens": 5}},
+    "turnId": "u18e"}
+C2["C3-PY18"] = dict(
+    contracts=["PY18"], role="RESIDUAL_SOURCE_DETERMINISTIC",
+    branches_targeted=["PY18.B26 (ThreadNameUpdatedNotification, fora dos exercitados: opcional ausente vira None no dump da notificação global)",
+                       "PY18.B27 (TokenUsageBreakdown, fora dos exercitados: int | None = 0 dá 0 quando ausente e None com null explícito, aninhado em notificação de turn)"],
+    sdk_calls=steps(
+        *START3,
+        CALL("c", "register_turn_notifications", "u18e"),
+        REQ("c", "synthetic/trigger"),
+        CALL("c", "next_notification"),
+        CALL("c", "next_turn_notification", "u18e"),
+        S("epilogue", **EPI)),
+    peer_script=PS(R("synthetic/trigger", {}, absent=True, after=[
+        N("thread/name/updated", {"threadId": "t18e"}),
+        N("thread/tokenUsage/updated", {"threadId": "t18e", "turnId": "u18e", "tokenUsage": PY18_TOKEN})])),
+    expected={
+        "api": [{"step": 5, "result": EMPTY_DUMP},
+                {"step": 6, "result": NOTE("thread/name/updated", "ThreadNameUpdatedNotification", dump={"threadId": "t18e", "threadName": None},
+                                           threadId="t18e")},
+                {"step": 7, "result": NOTE("thread/tokenUsage/updated", "ThreadTokenUsageUpdatedNotification", dump=PY18_DUMP, turnId="u18e")}],
+        "wire": {"requests": [{"method": "initialize", "handshake": True}, {"method": "synthetic/trigger", "params_absent": True}]}},
+    expected_observation="thread/name/updated sem threadName valida com o default None e vai à fila global (sem turnId). thread/tokenUsage/updated vai ao turn u18e registrado; no TokenUsageBreakdown o campo anulável com default 0 vira 0 quando ausente (total) e fica None com null explícito (last); modelContextWindow ausente vira None (v2_all.py:5744-5749, 6440-6449, 10559-10574).",
+    known_bad={"text": "Aplicar o default 0 ao null explícito, deixar o ausente como None, ou rotear a notificação de token ao global.",
+               "judged_by": ["api.steps_exact"]},
+    predicates=PY_BASE_PRED + ["wire.eof_bounded_interval"],
+    accepted_capture_forms=["PASS"],
+    infra=PY_INFRA + ["CAP-2B-MODEL-ORACLE"],
+    anchors=[A("py/generated/v2_all.py", "thread_name: Annotated[str | None, Field(alias=\"threadName\")] = None"),
+             A("py/generated/v2_all.py", "cache_write_input_tokens: Annotated[int | None, Field(alias=\"cacheWriteInputTokens\")] = 0"),
+             A("py/generated/v2_all.py", "model_context_window: Annotated[int | None, Field(alias=\"modelContextWindow\")] = None")],
+    arm_discrimination=[
+        DISC("PY18.B26", [6], "opcional ausente sem default ou validação falhando", ["api.steps_exact"], "UnknownNotification ou dump sem threadName"),
+        DISC("PY18.B27", [7], "default aplicado ao null ou ausente como None", ["api.steps_exact"],
+             "last.cacheWriteInputTokens 0 ou total.cacheWriteInputTokens null")],
+    residual_source="remaining_open_by_contract.PY18: modelos gerados fora dos exercitados (parte que cabe na continuação seguinte do perfil de fonte)",
+)
+
+# ================================================================== CONTROL slots (copies of the 2B CONTROL)
+
+
+def control_copy(base_id, new_id, sub_lot, extra_gate):
+    base = copy.deepcopy(C2B[base_id])
+    ci = base["case_input"]
+    assert ci["control_client"]["argv"][-1] == base_id
+    ci["control_client"]["argv"][-1] = new_id
+    out = {k: v for k, v in base.items() if k not in ("id", "sub_lot", "slot", "case_input", "case_input_sha256", "gate", "changed_from_base",
+                                                       "base_contract", "inputs", "anchors", "expected_observation")}
+    out["anchors"] = [A("adm2b2/python/fixture-rpc.py", "for f in rule.get('before_reply', []):"),
+                      A("adm2b2/python/fixture-rpc.py", "{'milestone': 'UNSCRIPTED', 'detail': {'method': method, 'id_sha256'")]
+    out["expected_observation"] = ("Cópia do %s sob o freeze do sub-lote %s: um cliente de controle, sem SDK, recebe o quadro antes da resposta de ctrl-2 "
+                                   "e envia um turn/interrupt sem script; o peer responde com erro sintético, o cliente não bloqueia e o avaliador "
+                                   "classifica MISMATCH só por wire.no_turn_interrupt." % (base_id, sub_lot))
+    out["copy_of"] = {"case": base_id, "spec": ptr("spec2b/cases-2b-1.json" if base_id.startswith("2B1") else "spec2b/cases-2b-2.json"),
+                      "case_object_sha256": sha_bytes(compact(C2B[base_id]).encode("utf-8")),
+                      "changed_fields": {"id": "slot CONTROL do sub-lote " + sub_lot,
+                                         "control_client": "só o último elemento do argv (ID do caso); linhas iguais",
+                                         "gate": "texto do gate para o sub-lote " + sub_lot,
+                                         "anchors": "reancoradas no fixture-rpc.py da admissão 2B-2 (peer vigente), mesmas linhas de código",
+                                         "inputs": "a chave de entrada passa a ser adm2b2/python/fixture-rpc.py",
+                                         "expected_observation": "texto do sub-lote",
+                                         "case_input_note": "texto da unidade",
+                                         "removed": "base_contract e changed_from_base saem; copy_of os substitui"}}
+    out["gate"] = ("Roda antes de todos os casos SDK do sub-lote %s. Critério: MISMATCH vindo só de wire.no_turn_interrupt, com %s aprovados. "
+                   "Qualquer outro desfecho para o sub-lote." % (sub_lot, extra_gate))
+    out["control_case_input"] = ci
+    return out
+
+
+CTRL1 = control_copy("2B1-CTRL01", "C31-CTRL01", "C3-1", "control.peer_answered_unscripted, control.client_not_blocked, "
+                     "capture.case_input_frozen_bytes e peer.before_reply_order_witnessed")
+CTRL2 = control_copy("2B2-CTRL01", "C32-CTRL01", "C3-2", "control.peer_answered_unscripted, control.client_not_blocked, "
+                     "capture.case_input_frozen_bytes, peer.before_reply_order_witnessed e peer.login_frames_synthetic")
+
+# ================================================================== predicate tables
+T2A = load("../sdk-source-batch-2a-spec/cases-2a.json")["predicate_table"]
+T2AC = C2AC_DOC["predicate_table"]
+T2B1, T2B2 = C2B1_DOC["predicate_table"], C2B2_DOC["predicate_table"]
+NEW_PRED = {
+    "api.ts_steps_exact": {"class": "client", "clause": "E3-02",
+                           "oracle": "Para cada item de expected.api de um caso TypeScript, o API_RESULT/API_ERROR do passo (rótulo '<n>:<api>') é o congelado: error por name, message exata ou message_prefix, cause_name (nome do cause) e code (do DIAGNOSTIC ERROR_DETAIL do mesmo passo) quando declarados; result por jeq; yields como a lista exata dos API_RESULT '<n>:yield' em ordem; yield_snapshots com event por jeq e observations (thread_id ou thread_id_is_undefined, D3-02); return pelo API_RESULT '<n>:return' com events e observations; observations do startThread/resumeThread por jeq. Passos não listados só são registrados."},
+    "tmp.getter_witness_exact": {"class": "client", "clause": "E3-03",
+                                 "oracle": "Para cada item de expected.getter_witnesses, o GETTER_WITNESS do passo tem o número de invocações congelado e, na primeira invocação, a listagem síncrona de /work/tmp feita dentro do getter tem exatamente os diretórios congelados (nome pela regex) com os filhos congelados, e nenhuma outra entrada."},
+    "tmp.getter_witness_recorded": {"class": "peer_or_capture_sanity", "clause": "E3-03",
+                                    "oracle": "Depois do assentamento de cada passo run, run_streamed ou events.consume e antes do seu TMP_LISTING, o driver emitiu um GETTER_WITNESS {id, step, invocations, entries} para cada witness invocado durante o passo; no CALLS_DONE emitiu o resumo {id, invocations_total} de todo witness declarado no case_input, inclusive com 0 invocações. Ausência do resumo, duplicata ou id não declarado é INVALID_CAPTURE."},
+    "witness.suspended_resources": {"class": "client", "clause": "E3-04",
+                                    "oracle": "Na barreira SUSPENDED (depois do primeiro yield e antes de qualquer next/return/throw do consumidor), a listagem do driver tem exatamente um codex-output-schema-* e o supervisor vê o processo do adapter vivo (não colhido, sem SIGNAL do adapter) até a liberação da barreira."},
+    "gen.throw_propagated": {"class": "client", "clause": "E3-05",
+                             "oracle": "O erro lançado pelo consumidor dentro do corpo do for await chega ao driver como API_ERROR do passo com o mesmo name e message, sem cause trocado, e só depois da liberação da barreira SUSPENDED."},
+    "api.abort_error_exact": {"class": "client", "clause": "E3-06",
+                              "oracle": "O passo termina com API_ERROR name AbortError e message 'The operation was aborted', e o ERROR_DETAIL do passo tem code ABORT_ERR; nenhum API_RESULT '<n>:yield' antes do erro; a cause (signal.reason) é só registrada."},
+    "abort.child_terminated_by_node_abort": {"class": "client", "clause": "E3-06",
+                                             "oracle": "O adapter termina por SIGTERM (SIGNAL do adapter e testemunha do SO) depois da chamada abort() do passo e antes do API_ERROR do passo, sem SIGTERM enviado pelo supervisor ou por código próprio do driver; o finally do exec não precisa matar o filho (child.killed já é true)."},
+    "wait.client_effect_recorded": {"class": "peer_or_capture_sanity", "clause": "E3-07",
+                                    "oracle": "Cada passo com wait_class CLIENT_EFFECT ou CLIENT_EFFECT_UNLESS_ALIVE emitiu WAIT_RESULT {step, ok, class, elapsed_ms, thread_started, thread_alive}; ausência do registro é INVALID_CAPTURE. Em CLIENT_EFFECT_UNLESS_ALIVE, estouro com o thread nomeado vivo é HARNESS_PRECONDITION (INVALID_CAPTURE); estouro com o thread nunca iniciado ou já terminado é efeito do cliente. ok=false de efeito do cliente não decide sozinho: o desfecho vem dos predicados de cliente do caso."},
+}
+
+
+def predicate_table(names, prefer):
+    out, src = {}, {}
+    for n in sorted(set(names)):
+        if n in NEW_PRED:
+            out[n] = {"class": NEW_PRED[n]["class"], "oracle": NEW_PRED[n]["oracle"], "source": "NEW (%s)" % NEW_PRED[n]["clause"]}
+            continue
+        for label, t in prefer:
+            if n in t:
+                out[n] = {"class": t[n]["class"], "oracle": t[n]["oracle"], "source": label}
+                break
+        else:
+            raise SystemExit("predicate without definition: " + n)
+    return out
+
+
+# ================================================================== assembly
+
+
+def case_input_of(c):
+    if "control_case_input" in c:
+        return c["control_case_input"]
+    if c["language"] == "typescript":
+        return {"sdk_calls": c["sdk_calls"], "fixture": c["fixture"]}
+    ci = {"sdk_calls": c["sdk_calls"], "peer_script": c["peer_script"]}
+    if c.get("driver_mode"):
+        ci["driver_mode"] = c["driver_mode"]
+    return ci
+
+
+ORDER = ["id", "kind", "language", "contracts", "role", "sub_lot", "slot", "gate", "branches_targeted", "arm_discrimination", "expected",
+         "expected_observation", "known_bad", "predicates", "accepted_capture_forms", "infra", "anchors", "inputs", "version_dependent",
+         "inconclusive_on_deadline", "credit", "residual_source", "replay_of", "copy_of", "execution_order", "runtime_status", "receipt",
+         "case_input_note", "case_input", "case_input_sha256"]
+
+
+def finalize(cases, control, sub_lot, language):
+    out, slot = [], 0
+    for cid, c in list(cases.items()) + [(control["copy_of"]["case"].replace("2B1", "C31").replace("2B2", "C32"), control)]:
+        slot += 1
+        c = dict(c)
+        is_ctrl = "control_case_input" in c
+        c["id"] = cid
+        c["kind"] = "CONTROL" if is_ctrl else "SDK"
+        c["language"] = "python" if is_ctrl else language
+        c["sub_lot"] = sub_lot
+        c["slot"] = slot
+        ci = case_input_of(c)
+        for k in ("sdk_calls", "fixture", "peer_script", "driver_mode", "control_case_input"):
+            c.pop(k, None)
+        if is_ctrl:
+            c["execution_order"] = 1
+        else:
+            c.setdefault("version_dependent", [] if language == "typescript" else PYV)
+            if language == "python" and c["version_dependent"] == []:
+                c["version_dependent"] = PYV
+            c["inconclusive_on_deadline"] = False
+            c["credit"] = CREDIT
+            c.pop("sub_lot_base", None)
+        keys = sorted({a["input"] for a in c["anchors"]})
+        for a in c["anchors"]:
+            assert "error" not in a, a
+            assert a["sha256"] == INPUTS[a["input"]]["sha256"], ("anchor sha", cid, a)
+        c["inputs"] = keys
+        c["runtime_status"] = "NOT_RUN"
+        c["receipt"] = None
+        c["case_input_note"] = ("sdk_calls e fixture do slot existem só dentro de case_input (fonte única do supervisor, F4-01)." if language == "typescript" and not is_ctrl
+                                else "sdk_calls, peer_script, control_client e driver_mode do slot existem só dentro de case_input (fonte única do supervisor, F4-01).")
+        c["case_input"] = ci
+        c["case_input_sha256"] = sha_bytes(compact(ci).encode("utf-8"))
+        out.append({k: c[k] for k in ORDER if k in c})
+        extra = set(c) - set(ORDER)
+        assert not extra, (cid, extra)
+    return out
+
+
+CASES1 = finalize(C1, CTRL1, "C3-1", "typescript")
+CASES2 = finalize(C2, CTRL2, "C3-2", "python")
+if ANCHOR_ERRORS:
+    for e in ANCHOR_ERRORS:
+        print("ANCHOR", e)
+    raise SystemExit("anchor errors")
+# arm discrimination completeness and arm ids
+for c in CASES1 + CASES2:
+    if c["kind"] != "SDK":
+        continue
+    arms = [re.match(r"((?:TS|PY)\d\d\.B\d\d) ", b).group(1) for b in c["branches_targeted"]]
+    disc = {d["arm"] for d in c["arm_discrimination"]}
+    assert set(arms) == disc, (c["id"], arms, disc)
+    for d in c["arm_discrimination"]:
+        assert set(d["judged_by"]) <= set(c["predicates"]), (c["id"], d)
+NEW_ARMS = {"PY03.B11": "falha na escrita do pedido remove o waiter e propaga; o pedido seguinte segue normal",
+            "PY08.B08": "fail_all com operação de goal registrada: goal.fail com o mesmo objeto da fila global e mapa limpo",
+            "PY15.B11": "coleta assíncrona _collect_async_turn_result",
+            "PY16.B11": "ExternalMessage com conteúdo estruturado validado por TurnToolOutput",
+            "PY18.B26": "ThreadNameUpdatedNotification: opcional ausente vira None no dump",
+            "PY18.B27": "TokenUsageBreakdown: int | None = 0 dá 0 quando ausente e None com null explícito"}
+for c in CASES1:
+    for b in c["branches_targeted"]:
+        assert b.split(" ")[0] in TS_ARMS, b
+for c in CASES2:
+    for b in c["branches_targeted"]:
+        a = b.split(" ")[0]
+        assert (a in PY_ARMS_2B) != (a in NEW_ARMS), b
+
+STRUCTURAL = {"id", "slot", "sub_lot", "case_input", "case_input_sha256", "replay_of", "copy_of", "runtime_status", "receipt",
+              "arm_discrimination", "residual_source", "execution_order"}
+CI_KEYS = {"sdk_calls", "peer_script", "driver_mode", "control_client"}
+
+
+def account_fields(c, base, decl):
+    keys = (set(c) | set(base)) - STRUCTURAL
+    differ = sorted(k for k in keys if c.get(k, "__absent__") != base.get(k, "__absent__"))
+    removed = sorted(k for k in differ if k not in c)
+    declared = set(decl) - {"removed", "id"}
+    ci_changed = {k for k in CI_KEYS if base["case_input"].get(k) != c["case_input"].get(k)}
+    want = (set(differ) - set(removed)) | ci_changed
+    assert declared == want, (c["id"], "declared", sorted(declared - want), "missing", sorted(want - declared))
+    if removed:
+        assert "removed" in decl and all(k in decl["removed"] for k in removed), (c["id"], removed)
+    return sorted(k for k in keys if k not in differ)
+
+
+for c in CASES2 + [CASES1[-1]]:
+    if c.get("replay_of"):
+        c["replay_of"]["unchanged_fields"] = account_fields(c, C2B[c["replay_of"]["case"]], c["replay_of"]["changed_fields"])
+    if c.get("copy_of"):
+        c["copy_of"]["unchanged_fields"] = account_fields(c, C2B[c["copy_of"]["case"]], c["copy_of"]["changed_fields"])
+TABLE1 = predicate_table([p for c in CASES1 for p in c["predicates"]],
+                         [("../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json#/predicate_table", T2AC),
+                          ("../sdk-source-batch-2b-spec/cases-2b-1.json#/predicate_table", T2B1),
+                          ("../sdk-source-batch-2a-spec/cases-2a.json#/predicate_table", T2A)])
+TABLE2 = predicate_table([p for c in CASES2 for p in c["predicates"]],
+                         [("../sdk-source-batch-2b-spec/cases-2b-2.json#/predicate_table", T2B2),
+                          ("../sdk-source-batch-2b-spec/cases-2b-1.json#/predicate_table", T2B1),
+                          ("../sdk-source-batch-2a-spec/cases-2a.json#/predicate_table", T2A)])
+# control predicates use the 2B oracles (control client with ctrl-3)
+for n in ("control.peer_answered_unscripted", "control.client_not_blocked", "wire.no_turn_interrupt", "peer.before_reply_order_witnessed"):
+    TABLE1[n] = {"class": T2B1[n]["class"], "oracle": T2B1[n]["oracle"], "source": "../sdk-source-batch-2b-spec/cases-2b-1.json#/predicate_table"}
+
+ENCODING_TS = dict(C2AC_DOC["encoding"])
+ENCODING_TS.update({
+    "case_input": "Bytes congelados: case_input_sha256 é o sha256 da serialização compacta (separadores , e :, UTF-8, ensure_ascii=False, ordem de inserção) do case_input do slot, como no freeze r4 (F4-01). Para as strings do C3-TS07 com controles, a serialização compacta do Python e o JSON.stringify do Node dão os mesmos bytes (escapes curtos, \\u00XX minúsculo, DEL literal); o validador reconfere. Nos arquivos JSON desta pasta o DEL aparece escrito como \\u007f, o que não muda o valor.",
+    "new Codex sem options": "Passo sem a chave options chama new Codex() sem argumento (D3-02).",
+    "options_as": "Nome que guarda o objeto de opções materializado, o mesmo passado ao SDK (D3-02).",
+    "mutate": "{target, key, value}: atribui value (materializado) à propriedade própria key do objeto guardado em target (D3-02).",
+    "events.consume": "{events_of_step, consume}: itera o gerador guardado pelo run_streamed com consume none do passo indicado (D3-02).",
+    "consume first_then_witness_then_throw": "for await sobre events: depois do primeiro yield, barreira SUSPENDED; liberada, o driver lança Error(throw.message) dentro do corpo do laço (D3-02).",
+    "consume next_abort_at_barrier": "Chama next() sem aguardar, abre a barreira CHILD_HELD (liberada depois do REQUEST_HELD do peer), chama abort() do AbortController nomeado em abort e aguarda o next (D3-02).",
+    "$SELF_REF": "{\"$SELF_REF\": k}: objeto plano cuja propriedade própria k aponta para ele mesmo.",
+    "$NONENUM": "{\"$NONENUM\": {own, non_enumerable}}: objeto plano com as chaves de own enumeráveis e as de non_enumerable definidas por Object.defineProperty com enumerable false.",
+    "$GETTER": "{\"$GETTER\": {name, value[, witness]}}: objeto plano com getter enumerável name que devolve value. Com witness, cada invocação conta e a primeira faz uma listagem síncrona de /work/tmp (a mesma função do TMP_LISTING), emitida como GETTER_WITNESS depois do assentamento do passo em que o SDK leu a propriedade (expected.getter_witnesses[].step), que pode ser posterior ao passo que declara o marcador (declared_in_step); o resumo de invocações sai no CALLS_DONE (D3-03).",
+    "$FUNCTION / $SYMBOL": "Strings marcadoras trocadas por uma função própria do driver e por Symbol('cvg').",
+    "thread_id_is_undefined": "Observação booleana acrescentada pelo driver quando thread.id é undefined (o JSON do canal não carrega undefined).",
+})
+ENCODING_PY = dict(C2B2_DOC["encoding"])
+ENCODING_PY.update({
+    "$ExternalMessage / $TextInput": "Marcadores de entrada do 2A reintroduzidos (D3-04): instância da classe pública openai_codex correspondente com os campos dados.",
+    "wait_class": "Em passo de espera (thread.join, hook.wait, excepthook.wait, worker.join, probe.until): CLIENT_EFFECT faz o estouro ser registrado e o caso seguir; CLIENT_EFFECT_UNLESS_ALIVE com thread_name faz o mesmo só se o thread nomeado nunca iniciou ou já terminou, e trata o thread vivo no estouro como HARNESS_PRECONDITION (D3-05). Sem o campo, vale HARNESS_PRECONDITION (E2B-14).",
+    "zero_calls_client_effect_unless_started": "Em expected.fault.fired: zero chamadas do alvo do fault, com o thread nomeado nunca iniciado, é efeito do cliente e não falha de sanidade (E3-07).",
+})
+
+
+def cases_doc(cases, sub_lot, table, encoding, inputs_keys, counts, rules_doc):
+    return {"kind": "SDK_SOURCE_CONTINUATION_3_CASES_FROZEN", "task": TASK, "sub_lot": sub_lot, "status": "FROZEN_SPEC_NOT_RUN", "pin": PIN,
+            "profile": "Mesmo perfil de fonte admitido: Linux x86-64, Python 3.12.3, pydantic 2.13.4, Node v24.20.0, TS 5.9.2 por transpile e loader restrito; emit selado reutilizado; peers sintéticos. Freeze r4 com os deltas 2B (freeze-r4-2b-delta.json) e os deltas desta unidade (freeze-r4-c3-delta.json).",
+            "inputs": public_inputs(inputs_keys), "counts": counts,
+            "expectation_rule": "Valores esperados vêm da leitura da fonte do pin, com âncoras de linha e sha. Divergência na execução é MISMATCH preservado; nenhuma expectativa é editada depois da execução. Mensagens marcadas em version_dependent são julgadas exatas e, se divergirem, a adjudicação registra a dependência de versão (R4-05). Réplicas declaram replay_of.changed_fields; CONTROL declara copy_of.changed_fields.",
+            "encoding": encoding,
+            "execution_order": "slot não é ordem de execução: o CONTROL do sub-lote roda primeiro (gate); depois os casos SDK em ordem de slot, uma vez cada, sem retry. Vaga condicional sem o DIAG que a libera não é usada nem reatribuída.",
+            "predicate_classes": rules_doc["predicate_classes"], "composition": rules_doc["composition"],
+            "composition_source": "../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json" if rules_doc is C2AC_DOC else "../sdk-source-batch-2b-spec/cases-2b-2.json",
+            "predicate_table": table,
+            "cases": cases, "functional_receipts": 0, "parity_credit": 0}
+
+
+def anchor_keys(cases):
+    return {a["input"] for c in cases for a in c["anchors"]}
+
+
+CONDITIONAL1 = [c["id"] for c in CASES1 if c.get("gate") and c["kind"] == "SDK"]
+CONDITIONAL2 = [c["id"] for c in CASES2 if c.get("gate") and c["kind"] == "SDK"]
+DOC1 = cases_doc(CASES1, "C3-1", TABLE1, ENCODING_TS, anchor_keys(CASES1),
+                 {"slots": len(CASES1), "sdk_cases": len(CASES1) - 1, "control": 1, "conditional": len(CONDITIONAL1), "typescript": len(CASES1) - 1,
+                  "python_control": 1}, C2AC_DOC)
+DOC2 = cases_doc(CASES2, "C3-2", TABLE2, ENCODING_PY, anchor_keys(CASES2),
+                 {"slots": len(CASES2), "sdk_cases": len(CASES2) - 1, "control": 1, "conditional": len(CONDITIONAL2),
+                  "replays": sum(1 for c in CASES2 if c.get("replay_of")), "python": len(CASES2)}, C2B2_DOC)
+assert DOC1["counts"]["slots"] <= 24 and DOC2["counts"]["slots"] <= 24
+
+# ================================================================== freeze r4 delta (D3) and evaluator r4 delta (E3)
+FREEZE = {
+    "kind": "FREEZE_R4_C3_DELTA", "task": TASK,
+    "base": {"freeze_r4": ptr("cont/freeze-r4-contract.json"), "freeze_r4_2b_delta": ptr("spec2b/freeze-r4-2b-delta.json"),
+             "capability_contracts_2b": ptr("spec2b/capability-contracts-2b.json"),
+             "admitted_ts_driver": ptr("adm2ac/node/ts-driver.mjs"), "admitted_fixture_cli": ptr("adm2ac/node/fixture-cli.mjs"),
+             "admitted_python_driver": ptr("adm2b2/python/python-driver.py"), "admitted_harness2b": ptr("adm2b2/python/harness2b.py")},
+    "inheritance": "F4-01..F4-12 do freeze r4 e D2B-01..D2B-15 do delta 2B valem sem mudança. Os itens D3 são deltas declarados de vocabulário, testemunha e identificação; nenhum altera F4-xx ou D2B-xx. Nenhum item cria capacidade nova de harness (injeção de falha de fs ou do lado Node, testemunha privilegiada, rede, artefato distribuído): o que exigiria isso ficou fora (coverage-plan-c3.json#/residuals).",
+    "items": [
+        {"id": "D3-01", "title": "IDs e fonte de casos",
+         "rule": "Listas e regex de channel.py, constantes do supervisor e dos drivers aceitam C3-TS01..C3-TS15 (com C3-TS09A e C3-TS09B), C3-PY02..C3-PY18 (com C3-PY13H, C3-PY13F, C3-PY13ER, C3-PY15A e C3-PY16S), C31-CTRL01, C32-CTRL01, DIAG-TS-C3VOCAB e DIAG-PY-C3VOCAB; a fonte de casos do supervisor é cases-c3-1.json no C3-1 e cases-c3-2.json no C3-2, ligados por sha; contagens %d e %d." % (len(CASES1), len(CASES2)),
+         "proof": ["autoteste de ID aceito e rejeitado", "autoteste de contagem de slots por sub-lote"], "sub_lots": ["C3-1", "C3-2"]},
+        {"id": "D3-02", "title": "vocabulário do driver TypeScript (CAP-TS-SDKCALLS-C3)",
+         "rule": "Sobre o ts-driver.mjs admitido no 2AC: (a) new Codex sem a chave options chama new Codex() sem argumento; (b) options_as em new Codex, X.startThread e X.resumeThread guarda o objeto de opções materializado, o mesmo passado ao SDK; (c) passo mutate {target, key, value}; (d) passo events.consume {events_of_step, consume} sobre o gerador guardado do run_streamed com consume none; (e) modos de consumo first_then_witness_then_throw {barrier: SUSPENDED, throw: {name, message}} e next_abort_at_barrier {barrier: CHILD_HELD, abort}; (f) barreiras SUSPENDED (testemunha: listagem do driver e processo do adapter vivo) e CHILD_HELD (testemunha: REQUEST_HELD do peer), como STEP_WITNESS + STEP_RELEASE (F4-12); (g) marcadores $SELF_REF, $NONENUM, $GETTER (com witness opcional, D3-03), $FUNCTION e $SYMBOL (cases-c3-1.json#/encoding); (h) observação thread_id_is_undefined; (i) RESOLVER_ABSENCE também no passo 1 do C3-TS01. Passo, modo ou marcador fora da lista é INVALID_CAPTURE.",
+         "proof": ["autoteste de cada passo, modo e marcador com objetos e geradores próprios", "DIAG-TS-C3VOCAB (código próprio, sem SDK)", "R3-12 sobre a tabela do C3-1"],
+         "sub_lots": ["C3-1"]},
+        {"id": "D3-03", "title": "testemunha de /work/tmp no meio do passo por getter do driver (CAP-TMP-WITNESS)",
+         "rule": "O marcador $GETTER com witness cria um getter do próprio driver; quando o SDK lê a propriedade (JSON.stringify do outputSchema ou Object.entries da config), o getter conta a invocação e, na primeira, faz a listagem síncrona de /work/tmp com a mesma função do TMP_LISTING admitido (CAP-TS-DRIVER-TMPDIR). O registro sai como DIAGNOSTIC GETTER_WITNESS depois do assentamento do passo. Não há vigia nova: a vigia inotify de /work/tmp nunca foi admitida (state.json da admissão 2A: NOT_OBSERVED) e não é usada; observar o tmpfs do sandbox de fora seria mecanismo novo do supervisor. A testemunha roda no processo do driver, sem privilégio, no instante em que o próprio SDK chama o getter.",
+         "proof": ["DIAG-TS-C3VOCAB: getter com witness lido por JSON.stringify e por Object.entries de objetos próprios, com diretório próprio criado antes", "autoteste do oráculo tmp.getter_witness_exact (positivo e negativos: sem diretório, filho a mais, 0 invocações) e de tmp.getter_witness_recorded (registro ausente dá INVALID_CAPTURE)"],
+         "sub_lots": ["C3-1"]},
+        {"id": "D3-04", "title": "vocabulário do driver Python (CAP-PY-SDKCALLS-C3)",
+         "rule": "Sobre o python-driver.py admitido no 2B-2: (a) marcadores de entrada do 2A ($TextInput, $ImageInput, $LocalImageInput, $SkillInput, $MentionInput, $ExternalMessage) reintroduzidos no value(); (b) alvos novos no fault.install existente, sem modo novo: CodexClient._write_message e CodexClient.next_login_notification (raise_before_call); (c) ganchos por identidade em _GoalOperationState.finish, CodexClient.reserve_goal_operation, CodexClient.cancel_goal_operation e CodexClient.unregister_goal_operation (mecanismo de ganchos existente); (d) sondas em slots (TurnHandle._subscription, TurnResult) pela leitura estática existente. Nada importa SDK fora do sdkCase.",
+         "proof": ["autoteste dos marcadores e dos alvos com objetos próprios", "DIAG-PY-C3VOCAB (código próprio, sem SDK)", "R3-12 sobre a tabela do C3-2"],
+         "sub_lots": ["C3-2"]},
+        {"id": "D3-05", "title": "classe de espera declarada no passo",
+         "rule": "Passos de espera (thread.join, hook.wait, excepthook.wait, worker.join, probe.until) podem declarar wait_class. CLIENT_EFFECT: o estouro é registrado em WAIT_RESULT e o caso segue. CLIENT_EFFECT_UNLESS_ALIVE com thread_name: o estouro só é efeito do cliente se o thread nomeado nunca iniciou ou já terminou; thread vivo no estouro é HARNESS_PRECONDITION (cleanup só lento não vira MISMATCH). O driver registra o nome de todo thread iniciado depois do hook.install pelo threading.setprofile que o mecanismo de ganchos já instala, e o estado vivo pelo threading.enumerate no estouro. Sem o campo vale HARNESS_PRECONDITION (E2B-14). Para as vagas C3, substitui a tabela CLIENT_EFFECT_WAITS por (caso, passo) do driver 2B-2. Usado no C3-PY08 (passo 9, CLIENT_EFFECT, workers próprios do driver) e no C3-PY13ER (passos 11, 12 e 13, CLIENT_EFFECT_UNLESS_ALIVE, errata T1 do lead-decision-f01).",
+         "proof": ["DIAG-PY-C3VOCAB: espera CLIENT_EFFECT que estoura segue e registra; CLIENT_EFFECT_UNLESS_ALIVE com thread próprio nunca iniciado segue, com thread próprio vivo invalida; espera sem a classe que estoura invalida", "autotestes do C3-PY13ER (E3-07)"],
+         "sub_lots": ["C3-2"]},
+        {"id": "D3-06", "title": "freezes por sub-lote",
+         "rule": "C3-1: source-freeze-r4-c31 e identity-freeze-r4-c31 com D3-01..D3-03 e D3-07, mais a pilha Python do CONTROL (D2B-13). C3-2: source-freeze-r4-c32 e identity-freeze-r4-c32 com D3-01, D3-04, D3-05 e D3-07. A identity freeze reconfere o sha dos arquivos da stdlib, da Pydantic e do packaging usados como âncora. Os carry-overs 2B2-ADM/R1-F02, R1-F03 e R1-F04 entram antes do source freeze de cada sub-lote: no C3-1, na pilha Python do CONTROL; no C3-2, no avaliador e no supervisor (D3-08).",
+         "proof": ["source e identity freeze antes de qualquer serviço do sub-lote"], "sub_lots": ["C3-1", "C3-2"]},
+        {"id": "D3-07", "title": "CONTROL por cópia",
+         "rule": "C31-CTRL01 é o 2B1-CTRL01 e C32-CTRL01 é o 2B2-CTRL01, com o ID no argv do cliente de controle trocado; linhas, peer_script e predicados iguais (control-slot-contract-c3.json).",
+         "proof": ["autoteste: case_input do CONTROL igual ao da base fora do último elemento do argv"], "sub_lots": ["C3-1", "C3-2"]},
+        {"id": "D3-08", "title": "carry-over da admissão do 2B-2",
+         "rule": "2B2-ADM/R1-F02: expand_parts, Seq e capture_extra dentro do try do evaluate (ou INVALID_CAPTURE pela regra 3) com autoteste; 2B2-ADM/R1-F03: plano da pasta do caso conferido contra case-plan.json ou BARRIER_PLAN e os passos de barreira do case_input, com controle negativo; 2B2-ADM/R1-F04: autoteste positivo e negativo de zombie_t_ns em no_termination_before. Valem para o avaliador e o supervisor reusados no C3-2 (e na pilha Python do CONTROL do C3-1).",
+         "proof": ["autotestes listados, antes do source freeze"], "sub_lots": ["C3-1", "C3-2"]},
+    ],
+    "diagnostics": {
+        "DIAG-TS-C3VOCAB": "Código próprio, sem import do SDK: materializa cada marcador novo e confere o objeto (ciclo, enumerabilidade, getter, typeof); getter com witness lido por JSON.stringify e por Object.entries com diretório próprio em /work/tmp, conferindo GETTER_WITNESS; guarda opções por options_as, aplica mutate e confere identidade; itera um gerador assíncrono próprio guardado por events.consume; roda first_then_witness_then_throw e next_abort_at_barrier sobre um gerador próprio e um filho próprio do adapter; emite thread_id_is_undefined.",
+        "DIAG-PY-C3VOCAB": "Código próprio, sem import do SDK: classe própria com _write_message e next_login_notification para o fault.install e o gancho; espera CLIENT_EFFECT que estoura registra WAIT_RESULT e segue; CLIENT_EFFECT_UNLESS_ALIVE com thread próprio nunca iniciado segue e com thread próprio vivo invalida; espera sem a classe que estoura invalida; fault declarado com zero chamadas e thread nomeado nunca iniciado não falha a sanidade.",
+    },
+    "functional_receipts": 0, "parity_credit": 0,
+}
+EVAL = {
+    "kind": "EVALUATOR_R4_C3_DELTA", "task": TASK,
+    "base": {"evaluator_r4": ptr("cont/evaluator-r4-contract.json"), "evaluator_r4_2b_delta": ptr("spec2b/evaluator-r4-2b-delta.json")},
+    "inheritance": "R4-01..R4-10 e E2B-01..E2B-14 valem sem mudança: E2B no C3-2 e no CONTROL do C3-1; R4 e as regras de TypeScript do 2A-cont nos casos SDK do C3-1. R4-06 e R4-10 não se aplicam (não há 2A-TS12R).",
+    "clauses": [
+        {"id": "E3-01", "rule": "Tabela de predicados de cases-c3-1.json e cases-c3-2.json; autoteste R3-12 (classe do avaliador igual à congelada) sobre cada tabela; predicado copiado de uma base mantém classe e oráculo da base (source)."},
+        {"id": "E3-02", "rule": "api.ts_steps_exact (client): oráculo da tabela. Mensagens version_dependent são exatas; message_prefix só onde congelado. Autoteste com capturas sintéticas do C3-TS02 (erro), do C3-TS14 (thread_id_is_undefined) e do C3-TS01 (events.consume sem yield)."},
+        {"id": "E3-03", "rule": "tmp.getter_witness_exact (client) e tmp.getter_witness_recorded (sanidade): oráculos da tabela. O registro do getter é telemetria do driver (falta dele é INVALID_CAPTURE); o conteúdo (invocações e listagem) é fato do cliente, porque o SDK decide quando lê a propriedade. Autoteste positivo e negativos (sem diretório, filho a mais, 0 invocações dão MISMATCH; registro ausente dá INVALID_CAPTURE)."},
+        {"id": "E3-04", "rule": "witness.suspended_resources (client): oráculo da tabela. Autoteste negativo com adapter colhido antes da liberação."},
+        {"id": "E3-05", "rule": "gen.throw_propagated (client): oráculo da tabela; com ret.child_terminated_by_SIGTERM e tmp.driver_listing_after_settle julga o return implícito do for await."},
+        {"id": "E3-06", "rule": "api.abort_error_exact e abort.child_terminated_by_node_abort (client): oráculos da tabela; a forma KNOWN_SIGNAL_TERMINATION do C3-TS12 vem do SIGTERM do child_process do Node no abort (não do finally do exec, que vê child.killed true), testemunhado pelo SO e pelo SIGNAL do adapter. Predicados herdados do 2A leem as chaves do 2A: api.first_event_exact lê expected.first_event e fixture.schema_bytes_exact lê expected.schema_file_bytes e expected.schema_file_trailing_lf (C3-TS04)."},
+        {"id": "E3-07", "rule": "Esperas de efeito do cliente (D3-05): WAIT_RESULT ok=false de efeito do cliente não é falha de captura; wait.client_effect_recorded é sanidade. fault.fired_as_declared: item com zero_calls_client_effect_unless_started aceita zero chamadas do alvo (FAULT_SCOPE removed com calls=0, nenhum FAULT) como efeito do cliente só se o thread nomeado nunca iniciou; alvo chamado com contagem diferente, disparo não declarado ou escopo não restaurado seguem INVALID_CAPTURE. Autotestes do C3-PY13ER: (a) cleanup pulado (thread nunca iniciado, alvo nunca chamado) dá MISMATCH pela regra 6, com api.steps_exact, wire.requests_exact, probe.values_exact, hook.events_exact e excepthook.records_exact falhando; (b) alvo chamado duas vezes dá INVALID_CAPTURE; (c) thread de cleanup vivo no estouro do passo 12 dá INVALID_CAPTURE. Autoteste do C3-PY08 com W1 estacionado dá MISMATCH por consumer.results_exact."},
+        {"id": "E3-08", "rule": "TurnResult (dataclass com slots) tem resumo {class: TurnResult} por jeq (E2B-11) e é julgado pelas sondas estáticas dos campos (E2B-08); nenhuma serialização nova."},
+        {"id": "E3-09", "rule": "Atribuição de MISMATCH só por adjudicação depois da revisão (R4-05); nenhuma regra produz recibo funcional ou crédito de paridade."},
+    ],
+    "never": "Nenhuma regra produz recibo funcional ou crédito de paridade.",
+}
+CONTROL_CONTRACT = {
+    "kind": "CONTROL_SLOT_CONTRACT_C3", "task": TASK, "base_contract": ptr("spec2b/control-slot-contract-2b.json"),
+    "purpose": "Provar, em cada sub-lote e sob o seu freeze, que o peer v2 responde ao pedido sem script e que o avaliador classifica o known-bad como MISMATCH, sem depender de um SDK que se comporte mal.",
+    "slots": [{"case": c["id"], "sub_lot": c["sub_lot"], "slot": c["slot"], "execution_order": 1, "case_input_sha256": c["case_input_sha256"],
+               "copy_of": c["copy_of"], "gate": c["gate"]} for c in (CASES1[-1], CASES2[-1])],
+    "rules": ["O cliente de controle não importa o SDK nem Pydantic.", "No C3-1 a pilha Python do CONTROL (adapter Python, peer v2, cliente de controle) entra no source freeze do sub-lote ao lado do driver TypeScript.",
+              "control.peer_answered_unscripted, control.client_not_blocked, capture.case_input_frozen_bytes e peer.before_reply_order_witnessed (e peer.login_frames_synthetic no C3-2) são sanidade: falha leva a INVALID_CAPTURE e para o sub-lote.",
+              "O MISMATCH esperado vem só de wire.no_turn_interrupt (classe client).", "Roda primeiro; qualquer outro desfecho para o sub-lote antes dos casos SDK.",
+              "Conta 1 vaga do sub-lote e não gera observação de cliente nem crédito."],
+    "functional_receipts": 0, "parity_credit": 0,
+}
+
+# ================================================================== coverage plan and residual classification
+Q = "bind2b2/review-r2/executor-disposition.json"
+QPTR = dict(ptr(Q), pointer="items[id=R2-F01].erratum_questions")
+CLASSES = {"IN_SPEC": "entra nesta especificação",
+           "OUT_NEW_CAPABILITY": "exige capacidade nova de harness (fica fora por regra da unidade)",
+           "OUT_NONDETERMINISTIC": "corrida natural sem forma determinística no perfil de fonte",
+           "OUT_USER_DECISION": "exige decisão do usuário (perguntas Q1-Q5 da errata do BIND do 2B-2)",
+           "OUT_T4_GATE": "exige gate T4 próprio (turn real, chamada a modelo ou login real)",
+           "OUT_NATIVE": "BUILD nativo e portas duráveis, fora dos perfis SDK",
+           "OUT_PLATFORM_LIMIT": "limite de plataforma (só linux-x64 é local)",
+           "OUT_NOT_APPLICABLE": "não há o que observar na fonte do pin",
+           "OUT_UNREACHABLE": "inalcançável pela API pública na fonte do pin",
+           "ALREADY_OBSERVED": "já observado; nenhum passo novo"}
+
+
+def RS(rid, contract, item, source, cls, cases=(), arms=(), reason=None, questions=(), capability=None, basis=None):
+    d = {"id": rid, "contract": contract, "item": item, "source": source, "class": cls}
+    if cases:
+        d["cases"] = list(cases)
+    if arms:
+        d["arms"] = list(arms)
+    if reason:
+        d["reason"] = reason
+    if questions:
+        d["questions"] = list(questions)
+        d["questions_source"] = QPTR
+    if capability:
+        d["capability_needed"] = capability
+    if basis:
+        d["basis"] = basis
+    return d
+
+
+V5R = "bind2b2/coverage-observed-v5.json#/remaining_open_by_contract/"
+V5P = "bind2b2/coverage-observed-v5.json#/rows[source_contract=%s]/residual_planned_profile_proposal"
+HOWT = "bind2b2/HOW-next-profile-v2.md#o-que-cabe-sem-decisão-nova"
+Q13 = ("Q1", "Q2", "Q3")
+NODE_FAULT = "injeção de falha do lado Node (child_process, stream ou readline do driver) sem import do SDK fora do sdkCase"
+RESIDUALS = [
+    RS("R-TS01-1", "TS01", "TS01.B01 com options omitido", V5P % "TS01", "IN_SPEC", ["C3-TS01"], ["TS01.B01"]),
+    RS("R-TS01-2", "TS01", "mutação das referências de options antes do next", V5P % "TS01", "IN_SPEC", ["C3-TS01"], ["TS01.B02", "TS01.B04"]),
+    RS("R-TS01-3", "TS01", "resolvedor com @openai/codex instalado (findCodexPath com sucesso; PK01/PK02)", V5P % "TS01", "OUT_USER_DECISION",
+       reason="só existe com o pacote distribuído", questions=Q13),
+    RS("R-TS02-1", "TS02", "TS02.B04 entrada não iterável e item null fora do tipo", V5P % "TS02", "IN_SPEC", ["C3-TS02"], ["TS02.B04"]),
+    RS("R-TS03-1", "TS03", "TS03.B04 erro de stringify (ciclo, BigInt)", V5R + "TS03", "IN_SPEC", ["C3-TS03"], ["TS03.B04"],
+       reason="criação testemunhada pelo getter do driver dentro do JSON.stringify (D3-03), sem vigia nova"),
+    RS("R-TS03-2", "TS03", "TS03.B03 falha de mkdtemp", V5R + "TS03", "OUT_NEW_CAPABILITY", reason="mkdtemp só falha com fs injetado",
+       capability="injeção de falha de fs (mkdtemp) no processo do driver Node"),
+    RS("R-TS03-3", "TS03", "TS03.B05 falha de rm", V5R + "TS03", "OUT_NEW_CAPABILITY", reason="rm com force só falha com fs injetado",
+       capability="injeção de falha de fs (rm) no processo do driver Node"),
+    RS("R-TS04-1", "TS04", "TS04.B03 gerador abandonado sem return e throw no consumidor", V5P % "TS04", "IN_SPEC", ["C3-TS04"], ["TS04.B03", "TS12.B02"],
+       reason="o throw no corpo do for await também exerce a ordem do finally do TS12.B02 por outro caminho de saída"),
+    RS("R-TS05-1", "TS05", "TS05.B04 testemunha da criação e do cleanup do schema no passo de erro", V5R + "TS05", "IN_SPEC", ["C3-TS05"], ["TS05.B04"],
+       reason="criação testemunhada pelo getter do driver dentro do Object.entries da config (D3-03), sem vigia nova; a vigia inotify de /work/tmp nunca foi admitida e não é usada"),
+    RS("R-TS05-2", "TS05", "precedência efetiva dos overrides repetidos na CLI", V5R + "TS05", "OUT_USER_DECISION", reason="exige o Codex CLI real",
+       questions=Q13),
+    RS("R-TS06-1", "TS06", "objeto cíclico (recursão sem limite)", V5R + "TS06", "IN_SPEC", ["C3-TS06"], ["TS06.B04"]),
+    RS("R-TS06-2", "TS06", "objetos com getters ou chaves não enumeráveis", V5R + "TS06", "IN_SPEC", ["C3-TS06"], ["TS06.B04", "TS06.B02"]),
+    RS("R-TS07-1", "TS07", "chave vazia dentro de objeto inline", V5R + "TS07", "IN_SPEC", ["C3-TS07"], ["TS07.B03"]),
+    RS("R-TS07-2", "TS07", "filho undefined pulado em objeto inline (TS07.B03)", V5R + "TS07", "IN_SPEC", ["C3-TS07"], ["TS07.B03"]),
+    RS("R-TS07-3", "TS07", "function e symbol (TS07.B04)", V5R + "TS07", "IN_SPEC", ["C3-TS07"], ["TS07.B04"]),
+    RS("R-TS07-4", "TS07", "caracteres de controle além do LF já observado", V5R + "TS07", "IN_SPEC", ["C3-TS07"], ["TS07.B01"]),
+    RS("R-TS08-1", "TS08", "threadSource com resume e networkAccessEnabled true", V5R + "TS08", "IN_SPEC", ["C3-TS08"], ["TS08.B02", "TS08.B04"]),
+    RS("R-TS09-1", "TS09", "TS09.B03 apiKey vazio sem apagar a chave existente", V5P % "TS09", "IN_SPEC", ["C3-TS09A"], ["TS09.B03"]),
+    RS("R-TS09-2", "TS09", "override omitido (herança de process.env)", V5P % "TS09", "IN_SPEC", ["C3-TS09B"], ["TS09.B01"]),
+    RS("R-TS09-3", "TS09", "pathDirs do resolvedor", V5P % "TS09", "OUT_USER_DECISION", reason="pathDirs só vem do resolvedor com o pacote instalado",
+       questions=Q13),
+    RS("R-TS10-1", "TS10", "stdin, stdout ou stderr ausentes (B03, B05, B06)", V5R + "TS10", "OUT_NEW_CAPABILITY",
+       reason="o spawn do Node sempre cria os três pipes com stdio padrão", capability=NODE_FAULT),
+    RS("R-TS10-2", "TS10", "spawn que lança sincronicamente (B01)", V5R + "TS10", "OUT_NEW_CAPABILITY", reason="exige spawn injetado", capability=NODE_FAULT),
+    RS("R-TS10-3", "TS10", "falha síncrona de write, end ou kill antes do try", V5R + "TS10", "OUT_NEW_CAPABILITY", reason="exige stream injetado",
+       capability=NODE_FAULT),
+    RS("R-TS10-4", "TS10", "forma B natural do Node sem injeção de falha", V5R + "TS10", "OUT_NONDETERMINISTIC",
+       reason="a forma A ou B do ENOENT depende do escalonamento do libuv; o 2A registrou a forma do perfil"),
+    RS("R-TS11-1", "TS11", "TS11.B02 dependia da forma A do 2A-TS10", V5P % "TS11", "IN_SPEC", ["C3-TS12"], ["TS11.B02"],
+       reason="o erro guardado é o AbortError do abort durante a execução, sem ENOENT"),
+    RS("R-TS11-2", "TS11", "UTF-8 dividido conforme as fronteiras observadas no 2A-TS11", V5P % "TS11", "ALREADY_OBSERVED",
+       reason="condição de crédito já registrada no 2A-TS11; passo novo não muda a leitura dentro do SDK, que não é testemunhada"),
+    RS("R-TS11-3", "TS11", "ordem EOF versus exit", V5P % "TS11", "OUT_NONDETERMINISTIC", reason="ordem decidida pelo kernel e pelo libuv"),
+    RS("R-TS11-4", "TS11", "code null e signal com stderr", V5P % "TS11", "OUT_NEW_CAPABILITY",
+       reason="exige o adapter terminar por sinal externo depois de escrever stderr", capability="fault do adapter TypeScript que se encerra por sinal depois do stderr"),
+    RS("R-TS11-5", "TS11", "stderr tardio", V5P % "TS11", "OUT_NONDETERMINISTIC", reason="entrega do stderr depois do exit depende do escalonamento"),
+    RS("R-TS11-6", "TS11", "readline que lança (TS11.B05)", V5P % "TS11", "OUT_NEW_CAPABILITY", reason="exige createInterface injetado",
+       capability=NODE_FAULT),
+    RS("R-TS12-1", "TS12", "aborto antes do yield", V5R + "TS12", "IN_SPEC", ["C3-TS12"], ["TS12.B01"]),
+    RS("R-TS12-2", "TS12", "aborto depois do EOF", V5R + "TS12", "OUT_NONDETERMINISTIC", reason="janela entre o fim do readline e o exit"),
+    RS("R-TS12-3", "TS12", "close ou removeAllListeners que lançam (TS12.B03)", V5R + "TS12", "OUT_NEW_CAPABILITY", reason="exige readline ou ChildProcess injetado",
+       capability=NODE_FAULT),
+    RS("R-TS12-4", "TS12", "filho que ignora o sinal", V5R + "TS12", "OUT_NEW_CAPABILITY",
+       reason="o SDK não escala o kill; o filho ficaria vivo até o harness matá-lo", capability="fault do adapter TypeScript que ignora SIGTERM, com testemunha limitada de término"),
+    RS("R-TS12-5", "TS12", "término do filho pré-abortado (NOT_WITNESSED)", V5R + "TS12", "OUT_USER_DECISION", reason="testemunha privilegiada",
+       questions=["Q4"]),
+    RS("R-TS12-6", "TS12", "outras versões de Node", V5R + "TS12", "OUT_USER_DECISION", reason="aquisição com rede", questions=["Q5"]),
+    RS("R-TS13-1", "TS13", "JSON truncado", V5P % "TS13", "IN_SPEC", ["C3-TS13"], ["TS13.B01"]),
+    RS("R-TS13-2", "TS13", "tipo desconhecido no agregador", V5P % "TS13", "IN_SPEC", ["C3-TS15"], ["TS13.B02", "TS15.B04"]),
+    RS("R-TS14-1", "TS14", "vários thread.started com id ausente", V5P % "TS14", "IN_SPEC", ["C3-TS14"], ["TS14.B01"]),
+    RS("R-TS15-1", "TS15", "mensagens múltiplas com updated entre completed", V5P % "TS15", "IN_SPEC", ["C3-TS15"], ["TS15.B01"]),
+    RS("R-PY02-1", "PY02", "override com config_overrides não vazio sem --config (PY02.B01)", V5R + "PY02", "IN_SPEC", ["C3-PY02"], ["PY02.B01"],
+       reason="vaga condicional ao DIAG-PY-PROCWITNESS"),
+    RS("R-PY02-2", "PY02", "caminho empacotado (codex_cli_bin, prefixo de PATH, resolver padrão)", V5R + "PY02", "OUT_USER_DECISION", questions=Q13),
+    RS("R-PY02-3", "PY02", "ramo kill com filho lento sem falha declarada (PY02.B08)", V5R + "PY02", "OUT_USER_DECISION", questions=Q13),
+    RS("R-PY02-4", "PY02", "ramo 'sem prefixo de PATH' do PY02.B02 e do PY02.B07 com codex_cli_bin instalado", V5R + "PY02", "OUT_USER_DECISION",
+       questions=Q13),
+    RS("R-PY02-5", "PY02", "chave PATH no Windows", V5R + "PY02", "OUT_PLATFORM_LIMIT", reason="depende do Windows"),
+    RS("R-PY03-1", "PY03", "falha de escrita removendo o waiter", V5P % "PY03", "IN_SPEC", ["C3-PY03"], ["PY03.B11"],
+       reason="usa o fault.install existente (CAP-2B-FAULT-CUT) em CodexClient._write_message, sem capacidade nova"),
+    RS("R-PY04-1", "PY04", "modelos gerados de fork e turn/start com campos de default não-None, se existirem", V5P % "PY04", "OUT_NOT_APPLICABLE",
+       reason="ThreadForkParams, ThreadResumeParams e TurnStartParams não têm default diferente de None",
+       basis={"path": "input-verification.json", "check": "PY04 residual not applicable: ThreadForkParams, ThreadResumeParams and TurnStartParams have no non-None default"}),
+    RS("R-PY05-1", "PY05", "PY05.B10 (excludeTurns false conta como fornecido)", V5R + "PY05", "IN_SPEC", ["C3-PY05"], ["PY05.B10"]),
+    RS("R-PY05-2", "PY05", "normalização -alpha.N.M -> aN.postM e lado 'alpha acima do mínimo passa' do PY05.B06", V5R + "PY05", "IN_SPEC", ["C3-PY05"],
+       ["PY05.B06"]),
+    RS("R-PY05-3", "PY05", "generate-json-schema real com versão 0.0.0 e identidade de runtime verdadeira", V5R + "PY05", "OUT_USER_DECISION", questions=Q13),
+    RS("R-PY05-4", "PY05", "metadados CVG verdadeiros", V5R + "PY05", "OUT_NATIVE"),
+    RS("R-PY08-1", "PY08", "falha de transporte com operação de goal registrada (goal.fail pelo fail_all)", V5R + "PY08", "IN_SPEC", ["C3-PY08"], ["PY08.B08"]),
+    RS("R-PY08-2", "PY08", "leitura com processo real", V5R + "PY08", "OUT_USER_DECISION", questions=Q13),
+    RS("R-PY10-1", "PY10", "corrida natural entre cancelamento e resultado síncrono, sem bloqueio forçado (PY10.B04)", V5R + "PY10", "OUT_NONDETERMINISTIC",
+       reason="sem o bloqueio do loop, o ramo depende do escalonador; o lado forçado já foi observado no 2B"),
+    RS("R-PY10-2", "PY10", "continuação remota do turn depois do cancelamento", V5R + "PY10", "OUT_NATIVE"),
+    RS("R-PY12-1", "PY12", "assinatura tardia com eventos retidos ainda não lidos (PY12.B03)", V5R + "PY12", "IN_SPEC", ["C3-PY12"], ["PY12.B03"]),
+    RS("R-PY12-2", "PY12", "replay frio durável e reconexão", V5R + "PY12", "OUT_NATIVE"),
+    RS("R-PY13-1", "PY13", "PY13.B06 (efêmero com path)", V5R + "PY13", "IN_SPEC", ["C3-PY13H"], ["PY13.B06"]),
+    RS("R-PY13-2", "PY13", "PY13.B05 e PY13.B09 (testemunha da reserva transitória)", V5R + "PY13", "IN_SPEC", ["C3-PY13H"], ["PY13.B05", "PY13.B09"]),
+    RS("R-PY13-3", "PY13", "PY13.B10 e PY13.B15 (testemunha do finish do estado)", V5R + "PY13", "IN_SPEC", ["C3-PY13H", "C3-PY13F"], ["PY13.B10", "PY13.B15"]),
+    RS("R-PY13-4", "PY13", "known_bad 'pular o cleanup' do 2B-PY13E como MISMATCH (errata T1)", V5R + "PY13", "IN_SPEC", ["C3-PY13ER"], ["PY13.B17", "PY13.B18"],
+       basis=ptr("adm2b2/lead-decision-f01.json")),
+    RS("R-PY13-5", "PY13", "corrida natural do PY13.B17, sem bloqueio forçado do loop", V5R + "PY13", "OUT_NONDETERMINISTIC",
+       reason="o cancel antes ou depois do resultado depende do escalonador"),
+    RS("R-PY13-6", "PY13", "corte ativado por fechamento de transporte com pedido cuja escrita ainda tem sucesso (espera sem leitor)", V5R + "PY13",
+       "OUT_NEW_CAPABILITY", reason="o pedido cuja escrita tem sucesso espera sem leitor; o peer v2 só fecha o stdout saindo",
+       capability="modo de peer que fecha o stdout mantendo o stdin aberto (corte de transporte só na leitura); a espera estacionada já tem testemunha (worker.parked e worker.still_parked do 2B-PY08X)"),
+    RS("R-PY13-7", "PY13", "efeitos autônomos reais do goal e persistência", V5R + "PY13", "OUT_NATIVE"),
+    RS("R-PY13-8", "PY13", "timeout real de 30 s do PY13.B13 com turn real", V5R + "PY13", "OUT_T4_GATE",
+       reason="turn real exige chamada a modelo; gate T4 separado citado pela Q3 (errata do BIND do 2B-2)"),
+    RS("R-PY14-1", "PY14", "PY14.B03 e PY14.B07", V5R + "PY14", "IN_SPEC", ["C3-PY14"], ["PY14.B03", "PY14.B07"]),
+    RS("R-PY14-2", "PY14", "ordenações reais de status e turns do servidor", V5R + "PY14", "OUT_T4_GATE", reason="turns reais exigem chamada a modelo"),
+    RS("R-PY14-3", "PY14", "autoridade nativa de pausa e aprovação", V5R + "PY14", "OUT_NATIVE"),
+    RS("R-PY15-1", "PY15", "versão assíncrona (_collect_async_turn_result)", V5P % "PY15", "IN_SPEC", ["C3-PY15A"], ["PY15.B11"]),
+    RS("R-PY15-2", "PY15", "turn sem terminal (RuntimeError 'turn completed event not received')", V5P % "PY15", "OUT_UNREACHABLE",
+       reason="o stream do handle só termina normalmente depois do turn/completed correspondente; falha de transporte levanta antes",
+       basis=[A("py/api.py", "and event.payload.turn.id == self.id", nth=1), A("py/_run.py", "raise RuntimeError(\"turn completed event not received\")", nth=2)]),
+    RS("R-PY16-1", "PY16", "conteúdo estruturado de ExternalMessage (lista de itens)", V5P % "PY16", "IN_SPEC", ["C3-PY16S"], ["PY16.B11"]),
+    RS("R-PY16-2", "PY16", "join de turn ativo", V5P % "PY16", "OUT_USER_DECISION",
+       reason="o SDK só envia turn/start; juntar ao turn ativo é semântica do servidor, como o PY11", questions=Q13),
+    RS("R-PY17-1", "PY17", "PY17.B02 e PY17.B04", V5R + "PY17", "IN_SPEC", ["C3-PY17"], ["PY17.B02", "PY17.B04"]),
+    RS("R-PY17-2", "PY17", "login real, sessão e artefatos de autenticação", V5R + "PY17", "OUT_T4_GATE", reason="gate T4 próprio"),
+    RS("R-PY18-1", "PY18", "modelos gerados fora dos exercitados", V5R + "PY18", "IN_SPEC", ["C3-PY18"], ["PY18.B26", "PY18.B27"],
+       reason="escopo parcial: dois modelos novos por caminhos de roteamento diferentes"),
+    RS("R-PY18-2", "PY18", "comparação com os schemas JSON do pin como referência independente", V5R + "PY18", "OUT_NEW_CAPABILITY",
+       reason="os JSON schema do pin não são entradas do perfil e não há oráculo de schema",
+       capability="oráculo de schema independente e entradas novas do pin (JSON schema), com identity freeze própria"),
+    RS("R-PY18-3", "PY18", "compatibilidade com outras versões da pydantic", V5R + "PY18", "OUT_USER_DECISION", reason="aquisição com rede", questions=["Q5"]),
+]
+SCOPE = ["TS%02d" % i for i in range(1, 16)] + ["PY02", "PY03", "PY04", "PY05", "PY08", "PY10", "PY12", "PY13", "PY14", "PY15", "PY16", "PY17", "PY18"]
+assert {r["contract"] for r in RESIDUALS} == set(SCOPE)
+ALL_CASES = {c["id"]: c for c in CASES1 + CASES2}
+for r in RESIDUALS:
+    assert r["class"] in CLASSES
+    assert (r["class"] == "IN_SPEC") == bool(r.get("cases")), r["id"]
+    for cid in r.get("cases", []):
+        assert cid in ALL_CASES, (r["id"], cid)
+    for a in r.get("arms", []):
+        assert any(b.startswith(a + " ") for cid in r["cases"] for b in ALL_CASES[cid]["branches_targeted"]), (r["id"], a)
+    if r["class"] == "OUT_USER_DECISION":
+        assert r["questions"] and set(r["questions"]) <= set(QUESTIONS), r["id"]
+    if r["class"] == "OUT_NEW_CAPABILITY":
+        assert r.get("capability_needed"), r["id"]
+for c in CASES1 + CASES2:
+    if c["kind"] == "SDK":
+        for b in c["branches_targeted"]:
+            a = b.split(" ")[0]
+            assert any(a in r.get("arms", []) and c["id"] in r["cases"] for r in RESIDUALS if r["class"] == "IN_SPEC"), (c["id"], a)
+ROWS_V5 = {r["source_contract"]: r for r in V5["rows"]}
+rows = []
+for k in SCOPE:
+    cs = [c for c in CASES1 + CASES2 if c["kind"] == "SDK" and k in c["contracts"]]
+    rows.append({"source_contract": k, "status_v5": ROWS_V5[k]["status"], "sub_lots": sorted({c["sub_lot"] for c in cs}),
+                 "cases": [c["id"] for c in cs], "conditional_cases": [c["id"] for c in cs if c.get("gate")],
+                 "arms_targeted": sorted({b.split(" ")[0] for c in cs for b in c["branches_targeted"] if b.startswith(k + ".")}),
+                 "residuals_in": [r["id"] for r in RESIDUALS if r["contract"] == k and r["class"] == "IN_SPEC"],
+                 "residuals_out": [r["id"] for r in RESIDUALS if r["contract"] == k and r["class"] != "IN_SPEC"],
+                 "status_if_all_cases_pass": ROWS_V5[k]["status"],
+                 "status_rule": "Linha já OBSERVED_CLIENT_PARTIAL só acrescenta observações no BIND; braço de vaga condicional não usada segue como está no v5.",
+                 "whole_requirement_covered_after": False})
+COVERAGE = {
+    "kind": "SDK_SOURCE_CONTINUATION_3_COVERAGE_PLAN", "task": TASK,
+    "base": ptr("bind2b2/coverage-observed-v5.json"), "how": ptr("bind2b2/HOW-next-profile-v2.md"), "questions": QPTR,
+    "scope_rule": "Escopo do HOW v2 ('O que cabe sem decisão nova'), com a errata Q1-Q5 do BIND do 2B-2 prevalecendo sobre o HOW. Fica fora tudo que exige capacidade nova de harness, rede ou artefato distribuído; os itens de decisão apontam para as perguntas Q1-Q5.",
+    "interpretation": "Capacidade nova = mecanismo novo de harness (injeção de falha de fs ou do lado Node, fault novo de adapter, testemunha limitada ou privilegiada, oráculo novo de schema). Passos, modos de consumo, marcadores, observações, alvos novos de fault.install e de ganchos existentes e classe de espera declarada são extensões de vocabulário declaradas como deltas (freeze-r4-c3-delta.json), sem mecanismo novo. A testemunha de /work/tmp no meio do passo é feita pelo próprio driver dentro de um getter que o SDK lê (D3-03); a vigia inotify de /work/tmp nunca foi admitida e não é usada, porque observar o tmpfs do sandbox de fora seria mecanismo novo do supervisor.",
+    "classes": CLASSES,
+    "new_arm_ids": {"rule": "Braços Python novos recebem o próximo número livre da linha; para PY03, PY15 e PY16, cujos braços do 2A não têm número, B01-B10 ficam reservados para uma numeração futura desses rótulos e os braços novos começam em B11.",
+                    "arms": NEW_ARMS},
+    "residuals": RESIDUALS,
+    "rows": rows,
+    "projection_if_all_pass": {
+        "counts": V5["counts"], "rows_changing_status": [],
+        "explicit_open_arms_v5_targeted": {"PY05.B10": "C3-PY05", "PY13.B06": "C3-PY13H"},
+        "gaps": "as seis lacunas seguem OPEN; nenhuma linha passa a cobrir o requisito inteiro",
+        "note": "Projeção de planejamento. Só o BIND da continuação 3 muda o mapa (v6); vagas condicionais sem DIAG não contam."},
+    "counts": {"residuals": len(RESIDUALS), "by_class": {k: sum(1 for r in RESIDUALS if r["class"] == k) for k in CLASSES if any(r["class"] == k for r in RESIDUALS)}},
+    "functional_receipts": 0, "parity_credit": 0,
+}
+
+# ================================================================== budgets and T3
+SERV1 = ["DIAG-TS-ECHO", "DIAG-TS-ABORT", "DIAG-TS-ARGVENV", "DIAG-TS-C3VOCAB", "DIAG-PY-RPC", "DIAG-PY-STAGE",
+         "DIAG-PY-UNSCRIPTED", "DIAG-PY-BEFOREREPLY"]
+SERV2 = ["DIAG-PY-RPC", "DIAG-PY-STAGE", "DIAG-PY-UNSCRIPTED", "DIAG-PY-ASYNC", "DIAG-PY-BARRIER", "DIAG-PY-BEFOREREPLY", "DIAG-PY-FAULTCUT",
+         "DIAG-PY-LOGIN", "DIAG-PY-PROCWITNESS", "DIAG-PY-C3VOCAB"]
+NOT_AUTH = ["rede", "wheel/npm distribuídos", "Codex CLI real", "provider", "credencial", "login real", "dado real", "push", "produção",
+            "testemunha privilegiada (CAP_SYS_PTRACE, CAP_SYS_ADMIN/fanotify, eBPF, audit) sem resposta à Q4",
+            "injeção de falha de fs ou do lado Node, fault novo de adapter (capacidade nova, fora desta continuação)"]
+
+
+def budget(sub_lot, cases, services, conditional, cond_diags, order_extra):
+    return {"kind": "EXECUTION_BUDGET_FOR_NEXT_UNIT", "task_next": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-" + sub_lot[-1],
+            "sub_lot": sub_lot,
+            "max": {"case_slots": 24, "control_slots": 1, "services": 12, "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+            "planned": {"case_slots": len(cases), "sdk_cases": len(cases) - 1, "control_slots": 1, "conditional_slots": conditional,
+                        "qualification_services_planned": len(services), "qualification_services": services,
+                        "services_reserve": "%d serviço(s) de reserva, só para diagnóstico de admissão; nunca para repetir um caso" % (12 - len(services)),
+                        "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0},
+            "conditional_diags": cond_diags,
+            "order": ["1. Conferir que as entradas desta especificação seguem com o sha de input-verification.json e que o freeze r4 e o delta 2B não mudaram; se mudaram, reconferir cada D3 ou parar."]
+            + order_extra
+            + ["3. Source freeze e identity freeze do sub-lote (D3-06).",
+               "4. Requalificar os DIAG herdados e qualificar os DIAG novos do sub-lote; DIAG condicional só desliga as vagas que decide.",
+               "5. CONTROL do sub-lote primeiro; se não for MISMATCH vindo de wire.no_turn_interrupt com as sanidades aprovadas, parar.",
+               "6. Casos SDK em ordem de slot, uma vez cada, em série, sem retry; vaga condicional sem gate fica sem uso e não é reatribuída.",
+               "7. Revisão independente (até 2 rodadas, 1 reparo agrupado offline) e adjudicação."],
+            "stops": ["qualquer DIAG não condicional falha", "CONTROL diferente de MISMATCH", "dependência, rede ou instalação necessária", "orçamento esgotado"],
+            "not_authorized": NOT_AUTH}
+
+
+BUDGET1 = budget("C3-1", CASES1, SERV1, CONDITIONAL1, {},
+                 ["2. Implementar D3-01, D3-02, D3-03, D3-07 e D3-08 (pilha Python do CONTROL) e as cláusulas E3 do sub-lote; autotestes offline (R3-12 da tabela do C3-1 e os de E3-02 a E3-06)."])
+BUDGET2 = budget("C3-2", CASES2, SERV2, CONDITIONAL2, {"DIAG-PY-PROCWITNESS": "falha desliga só C3-PY02 e mantém a pergunta T3 contingente do 2B, sem pergunta nova"},
+                 ["2. Implementar D3-01, D3-04, D3-05, D3-07 e D3-08 e as cláusulas E3 do sub-lote; autotestes offline (R3-12 da tabela do C3-2, E3-07 e os carry-overs R1-F02, R1-F03 e R1-F04)."])
+assert len(SERV1) <= 12 and len(SERV2) <= 12
+T3 = {
+    "kind": "T3_ASSESSMENT", "task": TASK,
+    "rule": {"path": "../../../../../07_agents/AGENTS.md", "sha256": sha_file(rel("../../../../../07_agents/AGENTS.md"))},
+    "rule_section": "Governança proporcional (D-12): T3 = mudança de contrato público, schema ou migration, segurança, identidade, policy ou approval; T4 = provider, canal, conhecimento, efeito externo real, dado real ou release candidate.",
+    "decision": "NAO_EXIGE_T3", "decision_t4": "NAO_EXIGE_T4",
+    "per_delta": [
+        {"delta": "D3-02", "privilege": "Nenhum: extensões de vocabulário no processo do driver Node.", "t3": "Não exige T3."},
+        {"delta": "D3-03", "privilege": "Nenhum: listagem síncrona de /work/tmp pelo próprio driver, dentro de um getter que o SDK lê; nenhuma vigia nova.", "t3": "Não exige T3."},
+        {"delta": "D3-04", "privilege": "Nenhum: marcadores, alvos de fault e ganchos no processo do driver Python.", "t3": "Não exige T3."},
+        {"delta": "D3-05", "privilege": "Nenhum: classe de espera no driver e no avaliador.", "t3": "Não exige T3."}],
+    "why": ["Todas as mudanças ficam em ferramentas privadas de evidência sob docs/04_audit/evidence; nada toca código de produto, contrato público, schema, migration, identidade, policy ou approval do CVG.",
+            "Sem provider, credencial, rede, artefato distribuído, dado real ou efeito externo.",
+            "O que exigiria decisão (Q1-Q5) ou capacidade nova ficou fora e está classificado em coverage-plan-c3.json#/residuals."],
+    "user_question": None,
+    "contingent": {"DIAG-PY-PROCWITNESS": "se a leitura de /proc exigir privilégio, vale a pergunta T3 contingente já registrada em ../sdk-source-batch-2b-spec/t3-assessment.json; o C3-PY02 não é usado"},
+    "pending_user_questions_not_asked_here": {"source": QPTR, "ids": sorted(QUESTIONS)},
+}
+
+# ================================================================== write
+if ANCHOR_ERRORS:
+    for e in ANCHOR_ERRORS:
+        print("ANCHOR", e)
+    raise SystemExit("anchor errors")
+
+
+def dump(name, doc):
+    text = json.dumps(doc, ensure_ascii=False, indent=2).replace("\x7f", "\\u007f") + "\n"
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+dump("cases-c3-1.json", DOC1)
+dump("cases-c3-2.json", DOC2)
+dump("coverage-plan-c3.json", COVERAGE)
+dump("freeze-r4-c3-delta.json", FREEZE)
+dump("evaluator-r4-c3-delta.json", EVAL)
+dump("control-slot-contract-c3.json", CONTROL_CONTRACT)
+dump("execution-budget-c3-1.json", BUDGET1)
+dump("execution-budget-c3-2.json", BUDGET2)
+dump("t3-assessment.json", T3)
+print("C3-1 slots", len(CASES1), "conditional", CONDITIONAL1, "services", len(SERV1))
+print("C3-2 slots", len(CASES2), "conditional", CONDITIONAL2, "services", len(SERV2))
+print("residuals", COVERAGE["counts"])

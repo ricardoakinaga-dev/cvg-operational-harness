@@ -1,0 +1,149 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 2,
+  "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T15:51:11Z",
+  "subject": "review-freeze-r2.json",
+  "subject_sha256": "ebc9a90615b68542e2851f043bf150e63020d2a6d64931198561ab30fc7b4e61",
+  "subject_hash_check": {
+    "before": "ok",
+    "after": "ok"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 1 P2, 3 P3",
+  "mandatory_findings": ["R2-F01"],
+  "r1_findings_status": [
+    {
+      "id": "R1-F01",
+      "status": "RESOLVED",
+      "note": "Com E3-07, zero_calls_client_effect_unless_started (aceito só com o thread nunca iniciado) e CLIENT_EFFECT_UNLESS_ALIVE nos passos 11 a 13, pular o cleanup dá MISMATCH pela regra 6 (api.steps_exact, wire.requests_exact, probe.values_exact, hook.events_exact e excepthook.records_exact falham; a sanidade passa). Thread vivo no estouro e contagem errada seguem INVALID_CAPTURE. Com o SDK correto o thread sempre inicia no passo 10 (async_client.py:268-289, _base.py:424), então não abre MISMATCH falso. Ressalvas P3 em R2-F03."
+    },
+    {
+      "id": "R1-F02",
+      "status": "RESOLVED",
+      "note": "A vigia inotify saiu. O getter é lido pelo SDK no ponto certo: no C3-TS03, dentro do JSON.stringify avaliado como argumento do writeFile, depois do mkdtemp (outputSchemaFile.ts:19,30), na ordem type, w e depois max ou loop, com 1 invocação e diretório vazio. No C3-TS05, no Object.entries(g) da chamada recursiva (exec.ts:288,307), antes da chave vazia (exec.ts:299-300), com schema.json já escrito (thread.ts:74). Sondas em Node 22 confirmaram. É extensão de vocabulário defensável: $GETTER já estava no D3-02(g), listing() é a função admitida e não há privilégio. O isolamento de erro fica em R2-F02."
+    },
+    {
+      "id": "R1-F03",
+      "status": "RESOLVED",
+      "note": "changed_fields e unchanged_fields conferem campo a campo contra 2B-PY13D e 2B-PY13E (sha do objeto base confere). fieldAccounting compara todo campo de topo, exceto os estruturais; arm_discrimination e residual_source não existem nas bases."
+    },
+    {
+      "id": "R1-F04",
+      "status": "RESOLVED",
+      "note": "Com before_reply, o leitor roteia N1 e N2 para as pendentes antes de entregar a resposta, e register_login enfileira as duas em ordem (_message_router.py:114-124, 283-294). h_next_login conta 2. No passo 9, o wrapper raise_before_call não executa o código do gancho."
+    },
+    {
+      "id": "R1-F05",
+      "status": "RESOLVED",
+      "note": "A entrada saiu de arm_discrimination. A observação atribui r_items 3 e r_total 15 ao roteamento por turnId."
+    },
+    {
+      "id": "R1-F06",
+      "status": "RESOLVED",
+      "note": "O C3-TS04 traz first_event, schema_file_bytes e schema_file_trailing_lf, as chaves que acceptance.py:378-381,434 do 2AC lê. No C3-TS12, o predicado não exige mais o finally. O oráculo novo, porém, introduziu ordem entre processos: regressão à parte em R2-F01."
+    },
+    {
+      "id": "R1-F07",
+      "status": "RESOLVED",
+      "note": "O controle de colisão é real (PY13.B05 declarado novo) e o de wait_class está isolado. Os 5 controles novos conferem. O validador rodado em memória deu PASS 14/14 e 24/24."
+    },
+    {
+      "id": "R1-F08",
+      "status": "RESOLVED",
+      "note": "D3-06 está alinhado ao D3-08. A nota do Docker/gitleaks foi esclarecida. Os copy_of dos CONTROL estão completos e iguais no contrato e nos casos. O capability_needed de R-PY13-6 foi corrigido."
+    },
+    {
+      "id": "R1-F09",
+      "status": "RESOLVED",
+      "note": "Com CLIENT_EFFECT_UNLESS_ALIVE, thread vivo no estouro é HARNESS_PRECONDITION. Como o h_stop e o excepthook são registrados dentro do thread antes de ele terminar, 'já terminou' não gera MISMATCH falso com o SDK correto."
+    }
+  ],
+  "findings": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "area": "C3-TS12 / abort.child_terminated_by_node_abort / E3-06",
+      "title": "O predicado novo do C3-TS12 é client e embute ordem entre processos (abort() do driver, SIGTERM do adapter, API_ERROR do driver), sem relógio nem testemunha definidos, contra o R3-01 herdado",
+      "evidence": [
+        "cases-c3-1.json:133-137 (classe client; 'depois da chamada abort() do passo e antes do API_ERROR do passo')",
+        "cases-c3-1.json:2410, 2432 (C3-TS12: child_termination e predicados)",
+        "cases-c3-1.json:62 (consume next_abort_at_barrier sem marco do instante do abort())",
+        "evaluator-r4-c3-delta.json:37-38 (E3-06)",
+        "../sdk-source-batch-2a-spec/evaluator-r3-contract.json:10-12 (R3-01: ordem entre processos é prova unilateral; falha nunca é MISMATCH)",
+        "cases-c3-1.json:75, 104 (order_unilateral -> INCONCLUSIVE, R3-01)",
+        "../sdk-batch-2ac-admission/node/ts-driver.mjs:370-372 (padrão admitido: ABORT_CALLED emitido depois do kill)",
+        "../sdk-batch-2ac-admission/python/observer.py:441-445 (o terminal do adapter pode preceder o ABORT_CALLED; só há limite superior)",
+        "../sdk-batch-2ac-admission/python/acceptance.py:390-395 (sdk_sigterm, usado pelo predicado anterior, não julgava ordem)"
+      ],
+      "detail": "O reparo do R1-F06 trocou cleanup.child_terminated_by_SIGTERM, cuja implementação admitida não julga ordem, por um predicado NEW de classe client. O oráculo novo exige que o término por SIGTERM do adapter (SIGNAL e testemunha do SO) fique depois da chamada abort() e antes do API_ERROR, ou seja, uma ordem entre driver, adapter e SO/supervisor. O R3-01, herdado sem mudança via r4 e E3, manda tratar essa ordem como prova unilateral: se falhar, INCONCLUSIVE ou INVALID_CAPTURE, nunca MISMATCH. Além disso, a testemunha da 'chamada abort()' não está definida. O modo next_abort_at_barrier não emite marco, e no padrão admitido o ABORT_CALLED sai depois do kill. Como o abort() do Node mata o filho de forma síncrona, o SIGNAL do adapter pode ter mono_ns anterior ao marco do driver com o SDK correto. Se o término for medido pela testemunha do SO no supervisor contra o API_ERROR, a latência do supervisor pode inverter a ordem. Nos dois casos, uma falha de ordem de captura vira MISMATCH pela regra 6. A ordem não discrimina braço: não está em arm_discrimination nem em known_bad.judged_by.",
+      "required_action": "Retirar as cláusulas de ordem do oráculo client. Manter: forma KNOWN_SIGNAL_TERMINATION, SIGTERM no SIGNAL do adapter e na testemunha do SO, nenhum sinal do supervisor, nenhum kill de código próprio do driver e abort() registrado no passo. Se a ordem for desejada, criar um predicado order_unilateral (R3-01) por mono_ns da origem, com um marco do driver emitido antes da chamada abort(). Acrescentar ao E3-06 um autoteste em que o SIGNAL precede o marco do driver e o caso não dá MISMATCH."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "area": "D3-03 / E3-03 / C3-TS03 / C3-TS05",
+      "title": "O getter de testemunha roda telemetria do driver dentro da chamada do SDK sem isolamento de erro, e o oráculo de registro só cobre passos run",
+      "evidence": [
+        "freeze-r4-c3-delta.json:58-66 (D3-03)",
+        "cases-c3-1.json:65 (encoding $GETTER: emissão depois do passo em que o SDK leu a propriedade, qualquer passo)",
+        "cases-c3-1.json:248 (tmp.getter_witness_recorded: só passos run, run_streamed e events.consume)",
+        "../sdk-batch-2ac-admission/node/ts-driver.mjs:41 (convenção admitida: telemetria depois da chamada; falha é INVALID, nunca API_ERROR)",
+        "../sdk-batch-2ac-admission/node/ts-driver.mjs:67-75 (listing() com readdirSync e lstatSync, que podem lançar)"
+      ],
+      "detail": "Os valores conferem com a fonte do pin, mas a listagem roda dentro do JSON.stringify ou do Object.entries do SDK. Se readdirSync ou lstatSync lançar, a exceção entra no SDK. No C3-TS03, o catch faz o cleanup e relança o erro do driver no lugar do TypeError. No C3-TS05, o erro sobe pelo gerador. api.ts_steps_exact (client) falha, e o registro do getter pode faltar ou não. O risco é quase nulo (tmpfs privado, sem escrita concorrente nesse instante), mas contraria a convenção admitida. O encoding manda emitir GETTER_WITNESS depois de qualquer passo com invocação; o oráculo de sanidade só olha passos run. Uma leitura indevida no new Codex fica sem regra de registro, embora ainda dê MISMATCH pelo tmp.getter_witness_exact.",
+      "required_action": "Declarar no D3-03 que o getter captura qualquer erro da listagem, devolve value e registra o erro. Erro de listagem faz tmp.getter_witness_recorded falhar (INVALID_CAPTURE). Alinhar o oráculo de registro ao encoding (qualquer passo com invocação). Incluir esse caso nos autotestes do E3-03."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "area": "C3-PY13ER / D3-05 / E3-07 / wait.client_effect_recorded",
+      "title": "Ambiguidades residuais da errata T1: thread_name no hook.wait tem dois sentidos, a regra do autoteste (c) diverge do caminho admitido e a fonte do 'nunca iniciou' não está fixada",
+      "evidence": [
+        "cases-c3-2.json:3526-3532 (passo 11, hook.wait com thread_name)",
+        "../sdk-batch-2b2-admission/python/python-driver.py:661-666 e harness2b.py:338-343 (no driver admitido, thread_name do hook.wait filtra os eventos do gancho)",
+        "cases-c3-2.json:3302-3306 (autoteste (c): composition_rule 4 por wait.client_effect_recorded)",
+        "../sdk-batch-2b2-admission/python/python-driver.py:637-638, 650-654, 665-666 (espera HARNESS_PRECONDITION estourada levanta CaptureFailure, logo regra 1; E2B-14)",
+        "evaluator-r4-c3-delta.json:41-42 (E3-07 não diz de qual registro vem o 'nunca iniciou')",
+        "cases-c3-2.json:251 (WAIT_RESULT com thread_started e thread_alive exigidos também no worker.join do C3-PY08, sem thread_name)",
+        "cases-c3-2.json:1252, 3345 (infra 'D3-05 classe de espera CLIENT_EFFECT'); arm_discrimination do C3-PY13ER ('esperas CLIENT_EFFECT')"
+      ],
+      "detail": "O desfecho está correto nos três cenários. Faltam declarações. (1) No passo 11, thread_name passa a filtrar o h_stop por thread, pelo sentido admitido, além de nomear o thread vigiado do D3-05. Não muda o desfecho, porque o h_stop correto roda nesse thread, mas não está declarado. (2) O autoteste (c) espera a regra 4, mas o caminho admitido para HARNESS_PRECONDITION é CaptureFailure no driver, isto é, forma INVALID_CAPTURE pela regra 1. (3) O E3-07 não fixa que o 'nunca iniciou' do fault vem de WAIT_RESULT.thread_started, ou de outro registro do driver. (4) thread_started e thread_alive ficam indefinidos para CLIENT_EFFECT sem thread_name. (5) Há textos desatualizados.",
+      "required_action": "Declarar no D3-05 o duplo sentido de thread_name no hook.wait, ou usar um campo próprio. No autoteste (c), aceitar INVALID_CAPTURE pela regra 1 ou fixar que o driver registra e segue, com a sanidade decidindo. Fixar no E3-07 o registro que prova 'nunca iniciou'. Definir os campos para esperas sem thread_name. Atualizar infra e textos."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "area": "freeze-r4-c3-delta.json D3-04 / repair-r1.json",
+      "title": "D3-04 não declara o gancho novo em CodexClient.next_login_notification usado pelo C3-PY17 reparado, e os ponteiros do reparo estão incompletos",
+      "evidence": [
+        "freeze-r4-c3-delta.json:68-70 (D3-04 (c) lista só finish, reserve_goal_operation, cancel_goal_operation e unregister_goal_operation)",
+        "cases-c3-2.json:5224 (hook.install h_next_login em openai_codex.client.CodexClient.next_login_notification)",
+        "freeze-r4-c3-delta.json (diagnostics.DIAG-PY-C3VOCAB menciona 'o gancho')",
+        "validate-spec-c3.mjs.txt:79-81 (D304_HOOKS inclui next_login_notification)",
+        "repair-r1.json items[R1-F04].where e items[R1-F02].where (sem ponteiro para D3-02(g) nem para o texto dos diagnósticos, que mudaram)"
+      ],
+      "detail": "O mecanismo admitido resolve qualquer caminho (resolve_code sem lista fechada), e o DIAG e o validador cobrem o alvo, então o caso funciona. Mas a regra D3-04 enumera os alvos de gancho e ficou sem este. As mudanças em D3-02(g) e nos textos dos DIAG são consequentes e coerentes, mas não estão nos ponteiros do reparo.",
+      "required_action": "Acrescentar CodexClient.next_login_notification ao D3-04 (c) e registrar na disposição os ponteiros que faltam."
+    }
+  ],
+  "checks_run": [
+    "sha256 do review-freeze-r2.json (confere) e dos 36 arquivos listados, com bytes, antes e depois da revisão: todos iguais",
+    "Preimagens em archives/r1-preimages conferem com o review-freeze-r1; diff estrutural preimagem->atual dos 14 arquivos alterados; os 3 declarados inalterados conferem",
+    "C3-TS03 e C3-TS05 contra outputSchemaFile.ts, thread.ts, exec.ts e codex.ts do pin (sha conferido): ponto de leitura do getter, ordem das propriedades, número de invocações, conteúdo de /work/tmp no instante (vazio; schema.json), erro relançado, listagem 0 depois, spawns 0",
+    "Sondas Node 22 com node -e, sem gravar arquivo: getter invocado 1 vez antes do TypeError do BigInt e do ciclo (mensagens conferidas); Object.keys da config ['g',''], Object.entries da raiz não invoca o getter e Object.entries(g) invoca 1 vez",
+    "ts-driver.mjs admitido: materialize, listing() síncrona, ordem API_ERROR, TMP_LISTING e ZERO_SPAWN; capturas de TMP_LISTING das admissões 2A e 2AC (/work/tmp só com codex-output-schema-*)",
+    "C3-PY13ER contra async_client.py:244-290, client.py:572-596, concurrent/futures/_base.py:424 e asyncio/tasks.py:906; HookSet, FaultSet, fault_fired, hook_identity, esperas e CLIENT_EFFECT_WAITS do 2B-2 admitido; known_bad e autotestes (a), (b) e (c); 2B-PY13E com PASS na admissão",
+    "C3-PY17 contra _message_router.py:114-140, 283-296, 377-389, client.py:398-408, 441-456, 763-779 e _login.py:29-43, 100-114: ordem determinística das pendentes, 2 chamadas de next_login_notification, wrapper raise_before_call sem evento de gancho, registro de L17e",
+    "C3-TS04 e C3-TS12 contra acceptance.py (378-381, 390-395, 434), observer.py (441-445), adapter-typescript e ts-driver.mjs (ABORT_CALLED depois do kill) do 2AC; R3-01 do evaluator-r3-contract herdado pelo r4",
+    "C3-PY15A, C3-PY13F e C3-PY13ER contra 2B-PY13D e 2B-PY13E (sha do objeto base, campos de topo, passos e peer_script)",
+    "case_input_sha256 dos 29 slots e todas as âncoras (arquivo, sha, texto da linha) recalculados em Python -I",
+    "Validador rodado só em memória (stdin, com a escrita do validation.json trocada por console.log): PASS 14/14 e 24/24 controles negativos; validation.json confere com os sha atuais",
+    "Coerência: coverage-plan (77 resíduos; R-TS03-1 e R-TS05-1 IN_SPEC sem vaga condicional), orçamentos (C3-1: 15 vagas, 8 serviços mais 4 de reserva; C3-2: 14 e 10), CONTROL (copy_of igual no contrato e nos casos), t3-assessment, state.json (fase draft do close-unit), next-task.json (sha da especificação e das bases conferidos), close-unit e build-spec (trechos alterados)",
+    "Limites: URLs sintéticas (login.invalid, 127.0.0.1:9), sem credencial nem login real; 0 recibos e 0 crédito em todos os documentos que carregam os campos"
+  ],
+  "limits": "Não executei SDK, Pydantic, packaging, supervisor, drivers, peers nem serviços. O validador rodou só em memória, sem gravar arquivo. O build-spec não foi executado (gravaria arquivos). As sondas usaram Node 22, não o v24.20.0 do perfil; a ordem de JSON.stringify e Object.entries é da especificação ECMAScript, e as mensagens foram conferidas no 22. Mecanismo de ganchos, fault, esperas e timestamps foram avaliados por leitura do código admitido. Corridas e latências foram avaliadas por leitura, sem medição. As âncoras do packaging preparado do C3-PY05 não foram reconferidas (não mudaram no reparo). Não revisei a implementação futura dos deltas D3 e E3.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

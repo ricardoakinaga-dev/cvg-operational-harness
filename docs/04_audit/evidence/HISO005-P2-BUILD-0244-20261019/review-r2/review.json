@@ -1,0 +1,247 @@
+{
+  "round": "r2",
+  "task": "HISO005-P2-BUILD-0244",
+  "reviewer": "Claude Code, crítico novo não-fork (o mesmo do R1; Opus 5.5); só leitura no repositório, na candidata e no runtime",
+  "observedAt": "2026-10-20",
+  "spec": {
+    "path": "docs/02_spec/0244_b6_esm_module_shape.md",
+    "sha256": "50463db7af125993d1cbcd966a5977efa9bafc7d0ffd57bdbe6ce10c8c6ec79c"
+  },
+  "sourceFreezeSha256": "3d8a3d2c551512b6fc9818185704b83d111efded0619f2cbc916dfcadbfb589d",
+  "frozenEngineSha256": "2c0033f275c53392f1f117d827e4161c9c9de5ecc408070bd62f89b6a141476b",
+  "frozenTestSha256": "81f373c884b7c2be65488ba54a2f2ac44b2a4108cf3c3bc1b6704ed1c9cab3bc",
+  "verdict": "REVISE",
+  "summary": "As correções de R1-02, R1-03, R1-04 e de todos os P3 estão completas e conferidas. A correção de R1-01 resolve F01–F03 e mantém F36, mas cria um defeito novo, e o diff aplicado é o que eu mesmo propus no R1 (M4). A identidade de `export * as ns from m` passou a ser `arquivo#ns`, a mesma forma da identidade de uma ligação local real chamada `ns`. Um módulo pode ter `export * as ns` e, ao mesmo tempo, uma ligação local `ns` (const, import * as ns, função) exportada com outro nome. Nesse caso as duas ligações recebem a mesma identidade, a ambiguidade some e o kernel dá PROVEN com valor indevido, inclusive primitivo (F37 e F38). O Node 22 fixado trata esses casos como conflito. A correção mínima, testada, é um sentinela que não colide com nome local. Na raiz real não há colisão, e o efeito medido da troca de identidade na raiz é nulo (v5r1 = v5r2 tupla a tupla).",
+  "r1Status": [
+    {
+      "id": "R1-01",
+      "status": "PARCIAL",
+      "note": "F01–F03 viram AMBIGUOUS_STAR:ns e F36 segue PROVEN (conferido), mas a identidade `arquivo#nome` de `export * as` colide com ligação local (R2-01)"
+    },
+    {
+      "id": "R1-02",
+      "status": "RESOLVIDO",
+      "note": "M1 reconstruída no laboratório (engine f9b70a06…, igual a tools-m1): 7 testes de precedência falham, como em mutation-m1-r2.json"
+    },
+    {
+      "id": "R1-03",
+      "status": "RESOLVIDO",
+      "note": "conservation-r2-tuples-{normal,strict}.json.gz batem com o meu recálculo (multiconjuntos gone/new iguais; classes 1402/81/48/10; colocação 289/14); classe raiz 1 por subconjunto; veredito com tocado e tocado estrito (394/764/977/1174), PASS nos dois"
+    },
+    {
+      "id": "R1-04",
+      "status": "RESOLVIDO",
+      "note": "usage-margins.json declara uso, teto e folga, função de pico (zod object 229; chai __name 145) e risco; cópias v4ctx e v5r2diag re-derivadas dos patches publicados, byte a byte"
+    },
+    {
+      "id": "R1-P3-01",
+      "status": "RESOLVIDO",
+      "note": "F10 no teste de diamante; M2 (0de60d9a…) derruba 1 teste"
+    },
+    {
+      "id": "R1-P3-02",
+      "status": "RESOLVIDO",
+      "note": "first-red-0244-r2: 32/48 na v4; reproduzi o mesmo conjunto e a mesma primeira linha de mensagem com cópia da v4"
+    },
+    {
+      "id": "R1-P3-03",
+      "status": "RESOLVIDO",
+      "note": "touchedStrict publicado; recálculo com tocado estrito também dá 48 raiz 2, 0 propagação fora do cone e 0 nova sem causa"
+    },
+    {
+      "id": "R1-P3-04",
+      "status": "RESOLVIDO",
+      "note": "ressalva do census em deviations-and-notes.json"
+    },
+    {
+      "id": "R1-P3-05",
+      "status": "RESOLVIDO",
+      "note": "operators/conservation.py exige subconjunto de etiquetas"
+    },
+    {
+      "id": "R1-P3-06",
+      "status": "RESOLVIDO",
+      "note": "D1–D6 listados; o \"nunca valor indevido\" de D1 só vale depois de R2-01"
+    },
+    {
+      "id": "R1-P3-07",
+      "status": "RESOLVIDO",
+      "note": "F22a/F22b no teste (VIOLATION)"
+    }
+  ],
+  "required": [
+    {
+      "id": "R2-01",
+      "severity": "P1",
+      "section": "SPEC0244 §3.1 (ligação resolvida; regra 4) e MS04 (estrela ambígua dá UNKNOWN); regressão da correção de R1-01",
+      "finding": "Em star(), `export * as ns from m` agora recebe `setIdentity(file, name, file + '#' + name)`. Essa é a mesma forma da identidade de uma ligação local real (`arquivo#local`, usada por export local, por `export { x }` e pelo `import * as ns` local). Mas `export * as ns` não cria ligação local chamada `ns`. O módulo pode ter, ao mesmo tempo, uma ligação local `ns` exportada com outro nome. Nesse caso duas ligações diferentes recebem a mesma identidade `a#ns`. Uma estrela que traz `ns` do módulo e outra que traz o `ns` local (via `export { other as ns } from a`) deixam de ser ambíguas, e a segunda estrela sobrescreve o valor. F37: `const ns = 1` exportado como `other`, mais `export * as ns`. A v5 r2 dá PROVEN (5 provas, validation true) com `r.ns` igual ao primitivo 1. No Node 22.23.2, `ns` não existe em r (undefined) e `import { ns }` falha com 'conflicting star exports'. F38: `import * as ns from m` exportado como `other`, mais `export * as ns from m2`. A v5 r2 dá PROVEN com r.ns = namespace de m; o Node 22 diz ambíguo. Com a identidade do r1 (`m#*namespace*`) os dois davam AMBIGUOUS_STAR. A regressão vem do diff que eu propus no R1 (M4). Não testei a colisão ali. Na raiz 228e7918 não há colisão: são 8 `export * as` e nenhum nome local igual. As violações seguem protegidas pela união com o census, e PROVEN exige zero UNKNOWN, então import dinâmico nunca fica provado. Mesmo assim, o kernel emite prova para estrela ambígua no runtime fixado, com valor primitivo indevido.",
+      "evidence": {
+        "fixtures": {
+          "F37": {
+            "entry.js": "import * as r from './r.js'; const pick = {1: 7}; export const y = pick[r.ns];",
+            "m.js": "export const x = 2;",
+            "a.js": "const ns = 1; export { ns as other }; export * as ns from './m.js';",
+            "b.js": "export { other as ns } from './a.js';",
+            "r.js": "export * from './a.js'; export * from './b.js';"
+          },
+          "F38": {
+            "entry.js": "import * as r from './r.js'; const pick = {1: 7}; export const y = pick[r.ns.x];",
+            "m.js": "export const x = 1;",
+            "m2.js": "export const x = 2;",
+            "a.js": "import * as ns from './m.js'; export { ns as other }; export * as ns from './m2.js';",
+            "b.js": "export { other as ns } from './a.js';",
+            "r.js": "export * from './a.js'; export * from './b.js';"
+          }
+        },
+        "v5r2": {
+          "F37": "PROVEN, 5 provas, validation true, 0 unknowns (r.ns = 1)",
+          "F37b (estrelas em ordem inversa)": "PROVEN (r.ns = namespace de m)",
+          "F38": "PROVEN, 6 provas, 0 unknowns"
+        },
+        "node22_23_2": {
+          "F37": "'ns' in r = false; r.ns = undefined; import { ns } -> SyntaxError conflicting star exports",
+          "F38": "'ns' in r = false; r.ns = undefined"
+        },
+        "identidadeR1 (m0, 7702efef…)": "F37 e F37b UNKNOWN com r.js AMBIGUOUS_STAR:ns",
+        "correcaoTestada (m5, 7ef9faf5…)": {
+          "diff": "star(): setIdentity(file, name, file + '#*namespace*' + name)  (import * as ns + export { ns } mantém arquivo#local)",
+          "resultado": "F01, F02, F03, F37, F37b e F38 UNKNOWN com AMBIGUOUS_STAR:ns; F36 PROVEN; suíte 0244 congelada r2 48/48"
+        },
+        "raizReal": "grep nos 1.341 arquivos analisados: 8 `export * as`, 0 colisões com nome local; v5r1 e v5r2 têm as mesmas tuplas",
+        "lab": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab2 (out-f37-*.json, out-f38-*.json, out-ns-*.json, esm-F37, esm-F38, test-m5.json)"
+      },
+      "requiredChange": "Dar a `export * as ns from m` uma identidade sentinela que não possa coincidir com `arquivo#local`, por exemplo `file + '#*namespace*' + name`. Isso segue o padrão de `*default*`. A identidade local de `import * as ns` + `export { ns }` continua. Acrescentar F37 e F38 ao teste 0244 (AMBIGUOUS_STAR:ns, UNKNOWN, sem prova) e manter F01–F03 e F36. Ajustar o comentário do engine e o D1 de deviations-and-notes.json. Nova congelada com primeira falha, verde e focal B6. Sobre a raiz real: não há colisão e as identidades só passam a diferir onde houvesse colisão, então as tuplas não mudam. Registrar esse argumento junto com o grep, ou remedir. A decisão é do lead."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-P3-01",
+      "severity": "P3",
+      "section": "MS06 (census)",
+      "finding": "census-comparison.json continua da v5 r1. O diff r1→r2 só toca código fora do census (star() e importIdentity com guarda !census). Rodei census v4 × v5 r2 nos 21 fixtures do R1: saídas iguais salvo kernelVersion.",
+      "suggestion": "Anotar que a comparação vale para r2 por construção, ou refazê-la na próxima congelada."
+    },
+    {
+      "id": "R2-P3-02",
+      "severity": "P3",
+      "section": "R1-04 (tempo)",
+      "finding": "usage-margins.json e r1-corrections citam tempo máximo do worker ≤ 120 s, só das execuções v5r2 (load 1,8–3,7). As execuções v5r1, com as mesmas tuplas, mediram 134,8 s (load 9,65) e v5r1diag 144,2 s. A folga continua grande (<50% de 300 s).",
+      "suggestion": "Citar também o máximo observado com carga maior."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "what": "source-freeze-r2.patch.txt aplicado aos blobs de 1073a9dd reproduz os 6 arquivos congelados",
+      "result": "PASS",
+      "evidence": "engine 2c0033f2…, teste 81f373c8…, migrações iguais às do r1"
+    },
+    {
+      "id": "S02",
+      "what": "Diff do engine r1→r2",
+      "result": "PASS",
+      "evidence": "só as duas linhas de identidade de namespace e comentários"
+    },
+    {
+      "id": "S03",
+      "what": "Suíte 0244 r2 em cópia da v5 r2 (node_modules sombra, cache de vitest próprio)",
+      "result": "PASS",
+      "evidence": "48/48; cache da candidata intocado (mtime 00:47:49 antes e depois)"
+    },
+    {
+      "id": "S04",
+      "what": "Suíte 0244 r2 em cópia da v4 (primeira falha)",
+      "result": "PASS",
+      "evidence": "32/48 falham, mesmo conjunto e mesma primeira linha de mensagem de first-red-0244-r2.json"
+    },
+    {
+      "id": "S05",
+      "what": "Mutação M1 (regra 3 desligada)",
+      "result": "PASS",
+      "evidence": "7 testes de precedência falham (antes e depois de duas estrelas conflitantes)"
+    },
+    {
+      "id": "S06",
+      "what": "Mutação M2 (propagação de ambíguo da fonte desligada)",
+      "result": "PASS",
+      "evidence": "teste de diamante falha (variante de estrela única F10)"
+    },
+    {
+      "id": "S07",
+      "what": "Mutação M0 (identidade de namespace do r1)",
+      "result": "PASS",
+      "evidence": "os 3 testes F01–F03 falham"
+    },
+    {
+      "id": "S08",
+      "what": "F01–F03 e F36 na v5 r2",
+      "result": "PASS",
+      "evidence": "F01–F03 UNKNOWN com AMBIGUOUS_STAR:ns; F36 PROVEN; demais 18 fixtures do R1 com o mesmo resultado da v5 r1"
+    },
+    {
+      "id": "S09",
+      "what": "F37: `export * as ns` com ligação local `ns` exportada como other",
+      "result": "FAIL",
+      "evidence": "v5 r2 PROVEN com r.ns = 1; Node 22: ns ausente e SyntaxError no import nomeado (R2-01)"
+    },
+    {
+      "id": "S10",
+      "what": "F38: `export * as ns` com `import * as ns` exportado como other",
+      "result": "FAIL",
+      "evidence": "v5 r2 PROVEN; Node 22: ns ausente (R2-01)"
+    },
+    {
+      "id": "S11",
+      "what": "Correção sentinela m5",
+      "result": "PASS",
+      "evidence": "F01–F03, F37, F37b e F38 com AMBIGUOUS_STAR:ns; F36 PROVEN; suíte r2 48/48"
+    },
+    {
+      "id": "S12",
+      "what": "Census v4 × v5 r2 nos 21 fixtures do R1",
+      "result": "PASS",
+      "evidence": "iguais salvo kernelVersion"
+    },
+    {
+      "id": "S13",
+      "what": "Recálculo independente da §3.3 com v5r2 (tocado e tocado estrito, normal e strict)",
+      "result": "PASS",
+      "evidence": "1541 = 1402 + 81 + 48 + 10; 303 = 289 + 14; nada fora do cone, nada sem causa; denominadores 402/772/985/1182 e 394/764/977/1174; listas publicadas iguais ao recálculo; v5r1 = v5r2 tupla a tupla"
+    },
+    {
+      "id": "S14",
+      "what": "Cópias diagnósticas r2 (v5r2diag, v4ctx) e mutantes (m1, m2)",
+      "result": "PASS",
+      "evidence": "v5r2diag 42325fb2… e v4ctx fed3e8bd… re-derivados dos patches publicados e idênticos a tools-*; m1/m2 idênticos aos meus mutantes"
+    },
+    {
+      "id": "S15",
+      "what": "Margens de uso declaradas",
+      "result": "PASS",
+      "evidence": "usage-margins.json: contexts 229/256 (folga 27), states 138.560/250.000, nodes 84,7% (já na v4), pico em zod object(shape, params)"
+    },
+    {
+      "id": "S16",
+      "what": "Regressões congeladas r2",
+      "result": "PASS",
+      "evidence": "frozen-r2-focal-b6 870/870 e frozen-r2-native-profile 79/79 com engine 2c0033f2…"
+    }
+  ],
+  "notRunByThisReview": [
+    "MS07: 16 gates Node22 e consumidor fresco",
+    "MS08"
+  ],
+  "commands": [
+    "git apply de source-freeze-r2.patch.txt sobre blobs de 1073a9dd em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab2/patchcheck; diff engine r1 × r2",
+    "node_modules sombra em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab2/shadow_nm (diretório real com links por entrada, sem .vite/.vite-temp/.cache) e cacheDir próprio no vitest.config.mjs de cada cópia",
+    "env -i PATH=<node22>:/usr/bin:/bin HOME=<cópia>/home TMPDIR=<cópia>/tmp LANG=C TZ=UTC node node_modules/vitest/vitest.mjs run tests/b6-0244-esm-module-shape.test.js --config vitest.config.mjs --no-file-parallelism --maxWorkers=2 --reporter=json (v5r2, v4, m1, m2, m0, m5)",
+    "node drive.mjs <cópia> fixtures-r1.json|fixtures-f36.json|fixtures-f37.json|fixtures-f38.json|fixtures-ns.json <saída>",
+    "node census-eq.mjs fixtures-r1.json (v4 × v5r2)",
+    "python3 -I recheck2.py <evidência> (recálculo §3.3 e comparação com as listas publicadas)",
+    "python3 -I operators/{diag_patch,v5_touched_patch,contexts_patch}.py sobre cópias e cmp com tools-v5r2diag e tools-v4ctx",
+    "node 22.23.2 em fixtures ESM próprios (/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/lab2/esm-F37, esm-F38)",
+    "grep somente leitura de `export * as` e nomes locais nos 1.341 arquivos analisados da raiz avaliada",
+    "stat do cache de vitest da candidata antes e depois (sem mudança)"
+  ],
+  "constraintsHonored": "só escrita em review-r2/ e no scratchpad; cache de vitest da candidata intocado nesta rodada; sem checker na raiz real, receitas, certify, npm install, PG, commit, push ou PR; sem recursos Codex/Codex100; load < 3 durante as execuções"
+}

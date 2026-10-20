@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - plano de aquisição, escrito ANTES de qualquer acesso à rede.
+# Uso: python3 -I -B build-acquisition-plan.py.txt <unit_dir> <cache_dir>
+# Lê só arquivos locais: a decisão do usuário (Q1-Q5), o uv.lock e o _runtime_setup.py do pin e o inventário G01 dos manifestos
+# npm. Não acessa a rede, não instala nada e não executa nada baixado. Escreve acquisition-plan.json.
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+UNIT, CACHE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4"
+VERSION = "0.153.4"
+SOURCE_PIN = "8d9f6466ff0294785d56f55b1fe363d132fe4133"
+
+
+def rel(p):
+    return os.path.normpath(os.path.join(UNIT, p))
+
+
+def sha(p):
+    with open(rel(p), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def ptr(p, pointer=None):
+    d = {"path": p, "sha256": sha(p)}
+    if pointer:
+        d["pointer"] = pointer
+    return d
+
+
+DECISION = "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json"
+UVLOCK = "../sdk-reference-profile/inputs/sdk/python/uv.lock"
+RUNTIME_SETUP = "../sdk-reference-profile/inputs/sdk/python/_runtime_setup.py"
+PYPROJECT = "../sdk-reference-profile/inputs/sdk/python/pyproject.toml"
+G01_NPM = "../../g01/component-surfaces/non-rust/inventory.json"
+dec = json.load(open(rel(DECISION), encoding="utf-8"))
+by = {d["id"]: d for d in dec["decisions"]}
+assert by["Q1-PIN"]["decision"] == "ADOPT_RELEASE_0.153.4_AS_SEPARATE_PIN"
+assert by["Q2-ACQUISITION"]["decision"] == "AUTHORIZE_SINGLE_ACQUISITION_CODEX_LIST_ONLY"
+assert by["Q3-KEYLESS"]["decision"] == "ACCEPT_KEYLESS_ONLY"
+assert by["Q4-CAPABILITY"]["decision"] == "DENY_NEW_CAPABILITY"
+
+# uv.lock: the wheel list of openai-codex-cli-bin 0.153.4 (url, sha256, size), read as text
+lock = open(rel(UVLOCK), encoding="utf-8").read().split("\n")
+start = lock.index('name = "openai-codex-cli-bin"')
+assert lock[start + 1] == 'version = "%s"' % VERSION
+wheels = []
+i = start
+while not lock[i].startswith("wheels = ["):
+    i += 1
+i += 1
+while lock[i].strip() != "]":
+    m = re.match(r'\s*\{ url = "([^"]+)", hash = "sha256:([0-9a-f]{64})", size = (\d+), upload-time = "([^"]+)" \},', lock[i])
+    assert m, lock[i]
+    wheels.append({"url": m.group(1), "sha256": m.group(2), "size": int(m.group(3)), "upload_time": m.group(4), "uv_lock_line": i + 1})
+    i += 1
+chosen = [w for w in wheels if w["url"].endswith("-py3-none-manylinux_2_17_x86_64.whl")]
+assert len(chosen) == 1
+WHEEL = chosen[0]
+pyproject = open(rel(PYPROJECT), encoding="utf-8").read()
+assert '"openai-codex-cli-bin==0.153.4"' in pyproject
+rs = open(rel(RUNTIME_SETUP), encoding="utf-8").read().split("\n")
+asset_line = [n for n, l in enumerate(rs, 1) if '"codex-package-x86_64-unknown-linux-musl.tar.gz"' in l]
+url_line = [n for n, l in enumerate(rs, 1) if 'f"https://github.com/{REPO_SLUG}/releases/download/{release_tag}/{asset_name}"' in l]
+api_line = [n for n, l in enumerate(rs, 1) if 'url = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags/{release_tag}"' in l]
+assert len(asset_line) == 1 and len(url_line) == 1 and len(api_line) == 1
+inv = open(rel(G01_NPM), encoding="utf-8").read()
+assert "'codex-linux-x64': {'npm_name': '@openai/codex-linux-x64', 'npm_tag': 'linux-x64'" in inv
+assert "npm:{CODEX_NPM_NAME}@{compute_platform_package_version(version" in inv
+assert "rust-v0.116.0-alpha.1.2" in inv
+
+GH_TAG = "rust-v" + VERSION
+GH_API = "https://api.github.com/repos/openai/codex/releases/tags/" + GH_TAG
+NPM = "https://registry.npmjs.org/"
+DEST = CACHE.rstrip("/")
+metadata_requests = [
+    {"id": "M1", "url": NPM + "@openai%2Fcodex", "purpose": "packument do @openai/codex: dist da versão 0.153.4 e da versão de plataforma do alias linux-x64 (itens A2 e A3)",
+     "accept": "application/json", "dest": DEST + "/metadata/M1-npm-openai-codex.json"},
+    {"id": "M2", "url": NPM + "@openai%2Fcodex-linux-x64", "purpose": "existência de um pacote npm próprio com o nome @openai/codex-linux-x64 (registro; o alvo do A3 é o alias declarado pelo manifesto 0.153.4)",
+     "accept": "application/json", "dest": DEST + "/metadata/M2-npm-openai-codex-linux-x64.json"},
+    {"id": "M3", "url": NPM + "@openai%2Fcodex-responses-api-proxy", "purpose": "packument do @openai/codex-responses-api-proxy (A4)",
+     "accept": "application/json", "dest": DEST + "/metadata/M3-npm-openai-codex-responses-api-proxy.json"},
+    {"id": "M4", "url": NPM + "@openai%2Fcodex-sdk", "purpose": "packument do @openai/codex-sdk (A7)",
+     "accept": "application/json", "dest": DEST + "/metadata/M4-npm-openai-codex-sdk.json"},
+    {"id": "M5", "url": "https://pypi.org/pypi/openai-codex/%s/json" % VERSION, "purpose": "arquivos e digests do openai-codex 0.153.4 no PyPI (A6)",
+     "accept": "application/json", "dest": DEST + "/metadata/M5-pypi-openai-codex-0.153.4.json"},
+    {"id": "M6", "url": "https://pypi.org/pypi/openai-codex-cli-bin/%s/json" % VERSION,
+     "purpose": "conferência cruzada do digest publicado pelo PyPI para o wheel do A1 (o digest de referência é o do uv.lock)",
+     "accept": "application/json", "dest": DEST + "/metadata/M6-pypi-openai-codex-cli-bin-0.153.4.json"},
+    {"id": "M7", "url": GH_API, "purpose": "metadados da release %s: existência do asset do A5 e digest publicado (assets[].digest), sem token" % GH_TAG,
+     "accept": "application/vnd.github+json", "dest": DEST + "/metadata/M7-github-release-%s.json" % GH_TAG},
+]
+artifacts = [
+    {"id": "A1", "name": "openai-codex-cli-bin", "registry": "PyPI", "version": VERSION, "file": WHEEL["url"].rsplit("/", 1)[1],
+     "platform_choice": "manylinux_2_17_x86_64: o perfil roda em Linux x86-64 com glibc 2.39 (Ubuntu) e CPython 3.12.3; o wheel musllinux_1_1_x86_64 do mesmo lock não é o que um instalador escolheria nesse host",
+     "url": WHEEL["url"], "url_source": ptr(UVLOCK, "linha %d" % WHEEL["uv_lock_line"]),
+     "expected": {"sha256": WHEEL["sha256"], "size": WHEEL["size"], "source": "uv.lock do pin %s (Q1/Q2: o wheel é conferido contra o uv.lock)" % SOURCE_PIN[:8]},
+     "cross_check": "M6 (digest publicado pelo PyPI; só registro)",
+     "dest": DEST + "/artifacts/A1/" + WHEEL["url"].rsplit("/", 1)[1]},
+    {"id": "A2", "name": "@openai/codex", "registry": "npm", "version": VERSION,
+     "url": "dist.tarball de versions['0.153.4'] em M1 (esperado https://registry.npmjs.org/@openai/codex/-/codex-0.153.4.tgz)",
+     "expected": {"integrity": "dist.integrity (sha512) de versions['0.153.4'] em M1", "shasum": "dist.shasum (sha1) de versions['0.153.4'] em M1",
+                  "source": "digest publicado pelo registro npm"},
+     "dest": DEST + "/artifacts/A2/codex-0.153.4.tgz"},
+    {"id": "A3", "name": "@openai/codex-linux-x64", "registry": "npm", "version": VERSION,
+     "resolution": "Alvo = o alias que o manifesto de @openai/codex@0.153.4 (versions['0.153.4'] em M1) declara em optionalDependencies['@openai/codex-linux-x64']; pela fonte de staging (inventário G01), espera-se 'npm:@openai/codex@0.153.4-linux-x64'. Se o alias não existir, não for exatamente desse release ou a versão-alvo não estiver em M1, o item fica NOT_AVAILABLE ou AMBIGUOUS, sem substituto. M2 só registra se existe um pacote npm próprio com esse nome; ele não substitui o alias.",
+     "resolution_source": ptr(G01_NPM),
+     "url": "dist.tarball da versão-alvo do alias em M1 (esperado https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-x64.tgz)",
+     "expected": {"integrity": "dist.integrity da versão-alvo em M1", "shasum": "dist.shasum da versão-alvo em M1", "source": "digest publicado pelo registro npm"},
+     "dest": DEST + "/artifacts/A3/codex-0.153.4-linux-x64.tgz"},
+    {"id": "A4", "name": "@openai/codex-responses-api-proxy", "registry": "npm", "version": VERSION,
+     "url": "dist.tarball de versions['0.153.4'] em M3 (esperado https://registry.npmjs.org/@openai/codex-responses-api-proxy/-/codex-responses-api-proxy-0.153.4.tgz)",
+     "expected": {"integrity": "dist.integrity de versions['0.153.4'] em M3", "shasum": "dist.shasum de versions['0.153.4'] em M3", "source": "digest publicado pelo registro npm"},
+     "dest": DEST + "/artifacts/A4/codex-responses-api-proxy-0.153.4.tgz"},
+    {"id": "A5", "name": "codex-package-x86_64-unknown-linux-musl.tar.gz", "registry": "GitHub releases", "version": VERSION, "release_tag": GH_TAG,
+     "url": "https://github.com/openai/codex/releases/download/%s/codex-package-x86_64-unknown-linux-musl.tar.gz" % GH_TAG,
+     "url_source": dict(ptr(RUNTIME_SETUP, "linhas %d e %d (nome do asset e URL de download)" % (asset_line[0], url_line[0])),
+                        tag_note="tag rust-v<versão>, pela função codex_release_tag citada no inventário G01 (exemplo rust-v0.116.0-alpha.1.2); confirmada por M7"),
+     "expected": {"sha256": "assets[name=codex-package-x86_64-unknown-linux-musl.tar.gz].digest em M7, quando houver",
+                  "size": "assets[].size em M7", "source": "digest publicado pela release do GitHub; sem digest publicado, registra NO_PUBLISHED_DIGEST e só o sha256 observado"},
+     "dest": DEST + "/artifacts/A5/codex-package-x86_64-unknown-linux-musl.tar.gz"},
+    {"id": "A6", "name": "openai-codex", "registry": "PyPI", "version": VERSION,
+     "url": "url do único arquivo packagetype bdist_wheel de M5; o sdist, se houver, não é baixado",
+     "expected": {"sha256": "digests.sha256 do mesmo arquivo em M5", "size": "size em M5", "source": "digest publicado pelo PyPI"},
+     "rule": "Se M5 der 404, ou houver zero ou mais de um bdist_wheel, o item fica NOT_AVAILABLE ou AMBIGUOUS, sem substituto.",
+     "dest": DEST + "/artifacts/A6/<nome do arquivo de M5>"},
+    {"id": "A7", "name": "@openai/codex-sdk", "registry": "npm", "version": VERSION,
+     "url": "dist.tarball de versions['0.153.4'] em M4 (esperado https://registry.npmjs.org/@openai/codex-sdk/-/codex-sdk-0.153.4.tgz)",
+     "expected": {"integrity": "dist.integrity de versions['0.153.4'] em M4", "shasum": "dist.shasum de versions['0.153.4'] em M4", "source": "digest publicado pelo registro npm"},
+     "dest": DEST + "/artifacts/A7/codex-sdk-0.153.4.tgz"},
+]
+plan = {
+    "kind": "ACQUISITION_PLAN", "task": TASK, "written_before_any_network": True, "written_at": datetime.now(timezone.utc).isoformat(),
+    "authorization": {"decision": ptr(DECISION), "Q1": by["Q1-PIN"]["decision"], "Q2": by["Q2-ACQUISITION"]["decision"],
+                      "Q3": by["Q3-KEYLESS"]["decision"], "Q4": by["Q4-CAPABILITY"]["decision"],
+                      "Q5": "não autorizada (outras versões de pydantic e Node), conforme Q2-ACQUISITION.conditions"},
+    "pin": {"distributed_pin": "release %s do Codex, pin próprio do perfil distribuído" % VERSION,
+            "source_pin": SOURCE_PIN, "build_link": "NO_BUILD_LINK_DECLARED: não há prova de que os artefatos da release 0.153.4 foram compilados a partir do pin de fonte %s; todo resultado deste perfil carrega esta declaração" % SOURCE_PIN[:8]},
+    "list_rule": "Só os sete itens da lista do Codex, todos da release 0.153.4. Item ausente ou ambíguo nessa versão é registrado como NOT_AVAILABLE ou AMBIGUOUS e não é substituído por outra versão nem por outro arquivo.",
+    "network_rules": ["Uma única execução de aquisição; cada pedido (metadado ou artefato) uma vez, sem retry automático (curl sem --retry).",
+                      "Só GET por HTTPS, com redirecionamento só para HTTPS (--proto =https --proto-redir =https), sem credencial, sem token, sem cookie e sem .netrc.",
+                      "Sem npm install, pip install, uv ou qualquer instalador; sem instalação global; sem executar nenhum arquivo baixado.",
+                      "Cada artefato em diretório novo e vazio do cache; o cache fica fora de docs/. Em docs/ entram só JSON e metadados."],
+    "metadata_requests": metadata_requests,
+    "artifacts": artifacts,
+    "uv_lock_wheels": [{k: w[k] for k in ("url", "sha256", "size", "uv_lock_line")} for w in wheels],
+    "digest_check": {"A1": "sha256 e tamanho iguais aos do uv.lock; M6 registrado como conferência cruzada",
+                     "npm (A2, A3, A4, A7)": "integrity sha512 (base64) e shasum sha1 iguais aos do dist da versão em M1, M3 ou M4",
+                     "A5": "sha256 igual a assets[].digest de M7 quando houver; senão NO_PUBLISHED_DIGEST",
+                     "A6": "sha256 e tamanho iguais aos de M5",
+                     "mismatch": "arquivo vai para quarantine/<id>/, o item fica DIGEST_MISMATCH e não é usado"},
+    "after_download": "Extração de metadados só como dados (lista de arquivos, RECORD, METADATA, package.json; no tar do A5, lista e sha256 de cada arquivo), lendo os arquivos compactados sem extrair no disco e sem executar nada.",
+    "cache": {"root": DEST, "layout": {"metadata/": "respostas M1-M7", "artifacts/<id>/": "um artefato por diretório", "quarantine/<id>/": "divergência de digest"}},
+    "functional_receipts": 0, "parity_credit": 0,
+}
+with open(os.path.join(UNIT, "acquisition-plan.json"), "w", encoding="utf-8") as f:
+    f.write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+print("plan written:", len(metadata_requests), "metadata requests,", len(artifacts), "artifacts; wheel", WHEEL["url"].rsplit("/", 1)[1], WHEEL["sha256"][:12])

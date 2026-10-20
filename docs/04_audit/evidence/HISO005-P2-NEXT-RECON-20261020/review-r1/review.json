@@ -1,0 +1,179 @@
+{
+  "round": "R1",
+  "task": "HISO005-P2-NEXT-RECON-20261020",
+  "reviewer": "crítico novo não-fork R1 (Claude Code)",
+  "specSha256": "18ec154adcad85f6c7d75c96814968708ff33aecfd16564967e8403d6bae0162",
+  "verdict": "REVISE",
+  "recon": "REVISE",
+  "required": [
+    {
+      "id": "R1-01",
+      "target": "recon",
+      "severity": "P1",
+      "section": "classification.json refinedFamilies/intrinsecos_builtins; SPEC0244 §1 (Intrínsecos e built-ins, 869)",
+      "finding": "UNKNOWN_BINDING (869) não é só global intrínseco. Só 440 tuplas são globais reais (process, Array, Number, Date, JSON…). 411 são palavras de JSX e nomes locais em .tsx ('aria', 'label', 'Aprovar', 'de', 'para', 'uma', 'div', 'span', 'error', 'event'…), 8 têm detalhe vazio (também .tsx) e 10 são nomes de classe recusada (E2). A causa é o engine parsear .tsx como TS e seguir avaliando a AST recuperada após o erro de parse. Por isso o rascunho chama de 'fato do código' o que é artefato do analisador, e uma causa de 705 tuplas (5,6%, mais que a família 'fato do código', de 485) ficou omitida.",
+      "evidence": "Engine base (a2598fb2c56d…) linha 648: '/\\.[cm]?tsx?$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS'; linha 651: UNKNOWN_PARSE quando há parseDiagnostics; linha 947: UNKNOWN_BINDING com n.text. Recontagem sobre o relatório oficial normal: as 29 UNKNOWN_PARSE estão todas em .tsx; há 705 tuplas em 29 arquivos .tsx, sendo 430 UNKNOWN_BINDING. Das 869 UNKNOWN_BINDING: global 440, other 411 (todas .tsx, 213 delas em apps/web/src/features/platform/index.tsx), class 10, empty 8. A família refinada intrinsecos_builtins inclui 430 tuplas de .tsx. SPEC0241 linha 63 e SPEC0237 linha 87 mantêm TSX fora do domínio, mas não fazem dele intrínseco.",
+      "requiredChange": "Reclassificar as 419 tuplas (411 + 8) como limitação do analisador: TSX fora do domínio, artefato da recuperação de parse. Mover as 10 de classe para forma de módulo/E2. Recalcular famílias e percentuais: intrínsecos e built-ins passa de 1.123 para cerca de 694 (440 + 254). Registrar a causa 'TSX parseado como TS' com o peso dela (705 tuplas em 29 arquivos) entre as causas dominantes e como candidata a delta futuro. Corrigir o parágrafo da SPEC0244 §1."
+    },
+    {
+      "id": "R1-02",
+      "target": "recon",
+      "severity": "P1",
+      "section": "SPEC0244 §1, parágrafo das 890 origens; classification.json classes/origins",
+      "finding": "O rascunho diz que 'as 890 origens de base também são fatos do código'. Não são. (a) As 303 UNVERIFIED_INSTALLED_PACKAGE são estado de prova do fecho instalado: só se resolvem com fecho semântico PROVEN. Dessas, 288 pacotes nunca foram alcançados pelo corpo (limite de escopo da análise) e 15 foram alcançados com fecho sujo (consequência da fronteira). (b) As 505 UNVERIFIED_DYNAMIC_CODE_EXECUTION são rótulos léxicos conservadores do loader-diagnostic sobre descritores reflexivos e handles de processo filho; não demonstram execução dinâmica, e parte deles é justamente o que o K4 da SPEC0236 modela.",
+      "evidence": "Relatório oficial: as 303 têm detail UNVERIFIED_INSTALLED_CONTENT. check-product-boundary.mjs (cerca das linhas 2269-2284) só converte a origem em VERIFIED quando closedInstalled (fecho PROVEN). reachedPackages do grafo semântico tem 15 pacotes e casa com 15 das 303. UNKNOWN_UNREACHED_INSTALLED_ENTRY = 288. Expressões das 505: 'Object.getOwnPropertyDescriptor(…)' 37, 'descriptor' 34, 'prototype' 28, 'Object.getPrototypeOf(…)' 24, 'child' 23, 'descriptor.value' 17, 'child.once(…)' 15, 'Reflect.get(…)' 14, 'child.pid' 13. Elas são emitidas por loaderDiagnostic em boundary-code-execution.mjs:339/506. O K4 da SPEC0236 (linha 88) dá transferência a getPrototypeOf e getOwnPropertyDescriptor(s), e o teste b6-0236-semantic-engine.test.js:140-158 prova um fixture com Object.getOwnPropertyDescriptor(data,'x').value.",
+      "requiredChange": "Separar as origens assim: o fato do código é que a expressão existe; o rótulo é sobreaproximação léxica pendente de prova semântica (limitação). Registrar as 303 como estado do fecho instalado: 288 não alcançados (escopo) e 15 com fecho sujo (consequência). Corrigir SPEC0244 §1 e §4 e a observação 'fora do grafo' (ver R1-08)."
+    },
+    {
+      "id": "R1-03",
+      "target": "recon",
+      "severity": "P2",
+      "section": "classification.json causeTagsByReason; SPEC0244 §1 (746/656) e §1 tabela (183 UNKNOWN_EXPORT)",
+      "finding": "A divisão 746 por estrela e 656 por classe é artefato da precedência da etiqueta. Ela olha só o módulo dono do namespace, e não de onde vem o nome. 100 das 746 tuplas etiquetadas como estrela só somem com E2: a classe recusada está no módulo-fonte da estrela. Do mesmo modo, 27 das 183 UNKNOWN_EXPORT novas já aparecem com E1 sozinho (barris index.ts reexportando U) e não são 'classe exportada com valor U'.",
+      "evidence": "variant-v1.json (só E1): goneByReason.UNKNOWN_INHERITED_PROPERTY = 646. Recontagem: na v1, 100 das 746 tuplas com tag missing-export-star-reexport continuam presentes; na v2 são 0. cause_patch.py linhas 31-34: testa refused-class e depois '*' sobre __refused.get(v.id), onde v.id é o módulo do namespace. Recontagem: 27 UNKNOWN_EXPORT novas na v1 (ex.: packages/agent-core/src/index.ts, packages/approval-engine/src/index.ts), todas contidas nas 183 da v2.",
+      "requiredChange": "Reportar a divisão medida: E1 sozinho remove 646; E2 é necessário para 756 (656 + 100 de classe alcançada por estrela). Ou qualificar '746 em namespace com estrela, dos quais 100 dependem de classe na fonte'. Corrigir '183 UNKNOWN_EXPORT (classe exportada)' para cerca de 156 de E2 e 27 de E1."
+    },
+    {
+      "id": "R1-04",
+      "target": "recon",
+      "severity": "P2",
+      "section": "classification.json familyNature.propagacao; SPEC0244 §1 (Propagação 5.343)",
+      "finding": "A maior família (42,3%) é descrita como 'consequência de outro UNKNOWN', mas mistura duas naturezas que a recon não separa. Uma é a leitura de parâmetros de função exportada (K0), que não tem tupla raiz e é estrutural. A outra é a consequência de raízes diagnósticas, como import de valor U ou sintaxe recusada. Sem essa separação, a parcela da causa possivelmente dominante (K0) fica sem número, e o objetivo 2 fica incompleto.",
+      "evidence": "Engine linhas 941-946: qualquer leitura de binding U emite UNKNOWN_BINDING_VALUE. checkExport (linhas 1172-1215) chama função exportada com todos os parâmetros U. Estimativa heurística por regex (aproximada, não exata) sobre as 3.379 UNKNOWN_BINDING_VALUE: cerca de 979 têm nome importado no arquivo e cerca de 2.400 não têm (top: value 101, input 74, options 57, raw 25). first-proof-path.json structural.K0 reconhece a regra, mas não a quantifica.",
+      "requiredChange": "Dividir a propagação por origem do valor U, com método mecânico. Exemplo: na cópia diagnóstica, etiquetar o binding na criação (parâmetro K0, import de namespace U, local com inicializador U, predeclaração). Reportar a parcela K0 como causa própria e irredutível sem premissa nova. Ajustar familyNature."
+    },
+    {
+      "id": "R1-05",
+      "target": "spec",
+      "severity": "P1",
+      "section": "SPEC0244 §1 (frase 'E1 e E2 não abrem corpo nenhum') e §3.3 Conservação; MS05",
+      "finding": "(a) É falso que E1 não abre corpo. Com E1, funções reexportadas por estrela passam a ser conhecidas no ponto de chamada, e o engine analisa corpos antes não alcançados. (b) A regra de tupla nova ('arquivo tocado ou cujo fecho contém um') não é causal. Os corpos são avaliados no arquivo do callee, cujo fecho não precisa conter módulo tocado; na v2 a regra passou por acaso. (c) A regra é muito permissiva, com fraco poder discriminante. (d) 'Tocado' e 'fecho' não estão definidos. Os casos 1 e 4 exigem a etiqueta de gatilho por emissão, que o engine v5 não emite, e a SPEC não diz como o BUILD a obtém. Do jeito que está, a §3.3 não é verificável de forma confiável.",
+      "evidence": "Recontagem v1 (só E1, sem mudança de classe): 13 tuplas novas dentro de corpos do zod, por exemplo zod/v4/classic/errors.js UNKNOWN_BINDING_VALUE 'inst' e 'issues', iso.js 'def' e 'schemas', schemas.js 'createStandardJSONSchemaMethod' e INHERITED 'map', compat.js INHERITED 'customError' (compat.js:26 'core.config().customError'). Esses arquivos não estão em refused; passam só porque o fecho contém zod/v4/core/core.js (classes Definition, $ZodAsyncError, $ZodEncodeError). Poder da regra com o mesmo grafo e os mesmos 402 módulos 'tocados' de variant_conservation.py: 985 de 1.341 arquivos analisados admitidos para tupla nova, 8.782 de 12.631 tuplas oficiais nesses arquivos, e o caso 4 admite sumir 3.843 das 5.343 tuplas de propagação.",
+      "requiredChange": "Remover a afirmação de §1. Definir 'tocado' (módulo com estrela modelada por E1 ou classe ligada por E2) e o grafo (arestas de resolução da passagem não-census). Acrescentar uma categoria causal para tuplas em corpos de funções que passaram a ser conhecidas via E1. Amarrar o caso 4 ao gatilho: etiqueta por emissão numa cópia privada provada igual byte a byte ao v4/v5 salvo as etiquetas, como diag_patch/cause_patch, e que reproduza as tuplas oficiais das duas execuções. Exigir no MS05 a publicação dos denominadores do conjunto admitido."
+    },
+    {
+      "id": "R1-06",
+      "target": "spec",
+      "severity": "P1",
+      "section": "SPEC0244 §3.1 E1 (regras 3, 4 e 5 e 'namespace completo'); MS02",
+      "finding": "E1 não segue a semântica ESM e o K5 em pontos que podem expor nome não resolvido. (a) Ambiguidade 'por valores diferentes': o ECMAScript compara a ligação resolvida (módulo e nome), não o valor. A mesma ligação por dois caminhos não é ambígua. Ligações distintas de mesmo valor são ambíguas: o nome é excluído do namespace e o import nomeado é SyntaxError. (b) 'Namespace completo' não está definido. Uma fonte com estrela recusada própria ou com export não registrado (export enum, export namespace, export const {a}, export class antes de E2) esconde nomes que podem causar ambiguidade. (c) O módulo com estrela qualificada e não qualificada ao mesmo tempo não tem regra: a não qualificada pode trazer o mesmo nome. (d) A regra 3 diz 'export local', mas no ECMAScript qualquer export explícito prevalece, inclusive o indireto 'export { N } from' e 'export * as N'. (e) Ligação viva: a cópia é feita no momento da instrução, e a SPEC não diz o que acontece com binding mutável da fonte.",
+      "evidence": "SPEC0236 linha 89 (K5): 'objeto namespace só expõe exports efetivamente resolvidos'. Variante (variant_star_patch.py linhas 29-38): compara pela identidade de referência JS ('starred.get(k) !== v'), sem ser sticky. Com uma terceira estrela de mesmo valor que a primeira, 'starred.set(k, v); own.set(k, v)' sobrescreve o U ambíguo. Também não verifica completude: só testa namespace.t === 'namespace'. Nesta raiz não houve ambiguidade (0 AMBIGUOUS_STAR na v1/v2), e os 8 UNKNOWN_REEXPORT restantes são módulos inteiros em formato CJS ou .d.ts, sem mistura observada; o defeito é de contrato e não muda os números desta raiz.",
+      "requiredChange": "Reescrever a §3.1. Resolver por identidade de ligação (fonte e nome após seguir indiretos e estrelas) ou pela regra conservadora 'N fornecido por 2 ou mais estrelas é U, salvo mesma ligação resolvida'. Tornar a ambiguidade sticky. Definir completude transitiva da fonte. Em módulo com qualquer estrela não qualificada, todos os nomes vindos de estrela são U, e UNKNOWN_REEXPORT é mantido. Precedência de qualquer export explícito. Ligação viva: snapshot como no reexport nomeado, e binding mutável da fonte vira U ou desqualifica a fonte. Acrescentar ao MS02 um fixture para cada caso."
+    },
+    {
+      "id": "R1-07",
+      "target": "spec",
+      "severity": "P1",
+      "section": "SPEC0244 §2 ('nenhuma prova nasce'), §4, §8 (T3) e MS04",
+      "finding": "E1 correto pode fazer nascer prova. Num fixture limpo em que a única UNKNOWN da v4 é o UNKNOWN_REEXPORT de uma estrela qualificada, E1 remove essa tupla, o status global vira PROVEN e saem provas K5. Isso inclui fecho instalado. Assim, 'nenhuma prova nasce' só vale para a raiz real, por causa das outras UNKNOWN. O MS04 ('nenhuma prova nova nas fixtures; módulo com estrela … nunca vira PROVEN só por E1/E2') fica insatisfazível para uma E1 correta ou força fixture artificial. A decisão T3 precisa saber que E1 amplia o que pode ser PROVEN, mesmo sem premissa nova.",
+      "evidence": "Engine linhas 1808-1811: PROVEN quando não há unknowns; linhas 1813-1849: emite K5 para cada astFile e K7 para as origens. A aresta da estrela é registrada por edgeLoad antes do ramo (linhas 1397-1399). Fixtures atuais já chegam a PROVEN: b6-0236-semantic-engine.test.js:140-158, 'proves a minimal JS module with an actually installed closed MATCH dependency'. Basta trocar o export desse fixture por 'export * from' de uma fonte ESM limpa para obter UNKNOWN na v4 e PROVEN sob E1.",
+      "requiredChange": "Declarar em §2, §4 e §8 que E1 pode produzir PROVEN onde a v4 dava UNKNOWN: é precisão, não premissa nova, e a raiz real continua com expectativa de 0. Reescrever o MS04: fixture limpo com estrela dá PROVEN, com dependência K5 da fonte e derivação revalidada; estrela não qualificada, ambígua ou incompleta dá UNKNOWN; módulo com classe nunca dá PROVEN (E2 mantém a raiz)."
+    },
+    {
+      "id": "R1-08",
+      "target": "recon",
+      "severity": "P2",
+      "section": "first-proof-path.json (modulesWithCleanClosure, origins, nearest); classification.json graph",
+      "finding": "O caminho para a primeira prova não descreve a prova de aresta, que é metade do objetivo 4. Os 13 módulos de fecho limpo não têm nenhuma aresta: são folhas que só exportam constantes. Nenhum dos 849 importadores tem fecho limpo, e o candidato mais próximo tem 6 tuplas. E1+E2 não cria nenhum fecho limpo novo. O rótulo 'fora do grafo' das 303 origens instaladas é artefato da chave package.json.",
+      "evidence": "Recontagem sobre semantic-graph.json.gz: os 13 limpos têm 0 arestas de resolução. Exemplos: apps/api/src/routes/health.ts ('export const healthRoute = …'), packages/policy/src/policy-version.ts, além de @tanstack/react-query/build/modern/types.js e zod/v4/core/json-schema.js. Menor fecho sujo com aresta: apps/api/src/oidc-state-postgres.ts, 6 tuplas e 2 arquivos (ClassDeclaration, RegularExpressionLiteral, UNKNOWN_OPERATOR, e pg/esm/index.mjs com BINDING_VALUE 'pg', EXPORT e PROPERTY). 19 arestas apontam para as folhas limpas, mas todos os importadores estão sujos (ex.: apps/api/src/server.ts → routes/health.ts). Na v2 seguem 13 fechos limpos (0 novos). 15 das 303 origens instaladas correspondem a pacotes em reachedPackages.",
+      "requiredChange": "Acrescentar ao first-proof-path os seguintes pontos. Candidatos a prova de aresta hoje: 0. O importador mais próximo e os seus bloqueadores. As provas de módulo possíveis por regra de escopo (T3) são folhas sem aresta, ou seja, triviais. E1+E2 não aproxima a primeira prova (13 → 13). O mínimo para a primeira prova de aresta é regra por escopo (T3) mais a remoção dos bloqueadores do importador mais próximo, incluindo a observação K0. Corrigir 'fora do grafo' para os 15 pacotes alcançados."
+    },
+    {
+      "id": "R1-09",
+      "target": "spec",
+      "severity": "P2",
+      "section": "SPEC0244 §1 (variante 'implementando E1 e E2'), §3.2 E2, MS03",
+      "finding": "As variantes não implementam exatamente o texto, e a E2 tem lacunas de contrato. (i) A v1 não verifica 'namespace completo'. (ii) A v1 trata ambiguidade por referência, sem ser sticky (ver R1-06). (iii) A v1 implementa precedência de export explícito ('own.has'), mais ampla que o 'local' do texto. (iv) A v2 não exporta a classe default anônima, embora a §3.2 e o MS03 exijam. (v) A E2 não diz quando o nome é ligado. A variante liga na execução da instrução, enquanto o engine pré-declara let/const como U para que 'TDZ never become globals'; sem pré-declaração, a referência anterior cai no fallback global ('Object' é intrínseco especial na linha 944). (vi) A E2 não trata 'export declare class' (ambiente, apagado no runtime): ela criaria export U inexistente, de forma diferente do UNKNOWN_RUNTIME_DECLARATION de 'declare const'.",
+      "evidence": "variant_class_patch.py linha 62: condição 'ts.isClassDeclaration(n) && n.name', que exclui anônima; linha 66: 'e.bindings.set' só ao alcançar a instrução. Engine linhas 1229-1240: predeclare de let/const. Contagem nos 1.341 arquivos analisados: 0 'export default class' anônima, 0 nomeada, 112 'export declare class'. O impacto numérico de (iv) nesta raiz é 0.",
+      "requiredChange": "Listar na §1, junto dos números, os desvios da variante e o impacto medido de cada um (0 ambiguidades, 0 módulos mistos, 0 default anônima), ou alinhar a variante. Na §3.2: pré-declarar o nome da classe como U na entrada do bloco, como let/const; decidir 'declare class' (não ligar e não exportar, ou U com UNKNOWN_RUNTIME_DECLARATION); acrescentar fixtures ao MS03."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-O1",
+      "target": "spec",
+      "severity": "P3",
+      "section": "SPEC0244 §1 ('56 raízes', '346 raízes')",
+      "finding": "As tuplas são deduplicadas por (arquivo, motivo, detalhe). '56 raízes' e '346 raízes' são arquivos com ao menos uma estrela ou classe recusada, não declarações.",
+      "evidence": "unknown() no engine, linhas 398-414 (unknownKeys); cause-tags.json.gz refused: 56 módulos com '*' e 346 com nome de classe.",
+      "requiredChange": "Escrever 'arquivos' em vez de 'raízes', ou explicar a deduplicação."
+    },
+    {
+      "id": "R1-O2",
+      "target": "spec",
+      "severity": "P3",
+      "section": "SPEC0244 §3.3 e §3.4",
+      "finding": "A §3.3 fala em 'v4 com E1+E2', mas a §3.4 dá a versão nova semantic-kernel-v5-esm-module-shape.",
+      "evidence": "spec0244-r1.md linhas 80 e 91.",
+      "requiredChange": "Usar v4 contra v5 de forma consistente."
+    },
+    {
+      "id": "R1-O3",
+      "target": "recon",
+      "severity": "P3",
+      "section": "classification.json byCategory",
+      "finding": "29% das tuplas (3.670) estão em dist de primeira parte, que espelha o src. Cada causa de primeira parte conta em dobro, e as parcelas por causa ficam infladas por esse multiplicador estrutural.",
+      "evidence": "byCategory.primeira-parte-dist = 3.670. Exemplos de pares: packages/contracts/src/complete-json.ts e dist/complete-json.js com os mesmos bloqueadores em first-proof-path nearest.",
+      "requiredChange": "Mencionar o multiplicador src/dist ao apresentar as parcelas."
+    },
+    {
+      "id": "R1-O4",
+      "target": "recon",
+      "severity": "P3",
+      "section": "first-proof-path.json modulesWithCleanClosure.meaning",
+      "finding": "O texto diz 'sem origem de base', mas classify.py só soma tuplas UNKNOWN no fecho e não confere origens. Pelos dados a afirmação vale: os 13 módulos não têm origem nem aresta.",
+      "evidence": "classify.py linhas 188-193 (closureTuples só a partir de node_tuples).",
+      "requiredChange": "Tornar a checagem de origens explícita no operador."
+    },
+    {
+      "id": "R1-O5",
+      "target": "recon",
+      "severity": "P3",
+      "section": "operators/measure_graph.py e measure_tags.py",
+      "finding": "O cause_patch foi aplicado no mesmo diretório tools-diag. Por isso o engine 2a9dba564739… da primeira medição não existe mais em disco. Reconstruí em memória diag_patch sobre a base e obtive o mesmo SHA, mas a auditoria fica mais simples com diretórios separados.",
+      "evidence": "runtime-setup.json e diagnostic-measurement.json têm diagEngineSha256 2a9dba564739…; freeze tools-diag tem eaf517952892…; a reconstrução em memória confere as cinco cópias.",
+      "requiredChange": "Manter cada cópia diagnóstica em diretório próprio."
+    },
+    {
+      "id": "R1-O6",
+      "target": "spec",
+      "severity": "P3",
+      "section": "SPEC0244 cabeçalho (links)",
+      "finding": "Os links para 0242 e 0243 resolvem no worktree, mas esses arquivos estão não rastreados (??) na main local.",
+      "evidence": "git status: '?? docs/02_spec/0242_b6_body_caps_deadlines.md' e '?? docs/02_spec/0243_b6_reference_source_scope.md'.",
+      "requiredChange": "Garantir que 0242 e 0243 estejam versionados antes de materializar a 0244 em docs/02_spec."
+    }
+  ],
+  "scenarios": [
+    {"id": "S01", "what": "SHA do freeze: 30 inputs, 9 artefatos de runtime, 2 relatórios selados e a SPEC", "result": "PASS", "evidence": "Todos conferem; spec 18ec154adcad…"},
+    {"id": "S02", "what": "Engine base igual à cabeça do PR #8 e à candidata 32b92121", "result": "PASS", "evidence": "git show 1073a9dd e 32b92121 dão a2598fb2c56d…, igual a tools/; o HEAD local (99b72bf91155…) difere, como esperado"},
+    {"id": "S03", "what": "13.521 diagnósticos, normal = strict, classes", "result": "PASS", "evidence": "12.631 + 505 + 303 + 72 + 6 + 4; multiset normal == strict; 0 provas, 0 violações, validation true"},
+    {"id": "S04", "what": "Famílias refinadas recalculadas", "result": "PASS", "evidence": "propagação 5.343, domínio 3.099, forma 1.402, resolução 1.179, intrínsecos 1.123, fato 485; as chaves de tags coincidem com as 12.631 chaves oficiais"},
+    {"id": "S05", "what": "Cópias diagnósticas = base + patches descritos", "result": "PASS", "evidence": "Reconstrução em memória: diag 2a9dba564739…, diag+cause eaf517952892…, v1 59af11a263a1…, v2 e19bf6801cbf…, v3 c261d2e4785a…; diff do diag só acrescenta etiquetas, o registro de recusas, o despejo do grafo e a variável de ambiente"},
+    {"id": "S06", "what": "Divisão 746 (estrela) / 656 (classe)", "result": "FAIL", "evidence": "A v1 remove 646; 100 etiquetadas como estrela só somem na v2 (R1-03)"},
+    {"id": "S07", "what": "UNKNOWN_BINDING = intrínsecos", "result": "FAIL", "evidence": "440 globais, 411 JSX/locais em .tsx, 8 vazios, 10 classes (R1-01)"},
+    {"id": "S08", "what": "890 origens = fato do código", "result": "FAIL", "evidence": "303 são estado de fecho (288 não alcançados); 505 são rótulos léxicos sobre descritores e processo filho (R1-02)"},
+    {"id": "S09", "what": "Números da variante E1+E2", "result": "PASS", "evidence": "12.227 (−1.294); somem 1.541, novas 247; as 1.402 etiquetadas somem; 0 violações, 0 provas"},
+    {"id": "S10", "what": "v3 acima da v2", "result": "PASS", "evidence": "12.710 − 12.227 = +483; a v3 remove 319 PARAMETER_INITIALIZER e cria 468 BINDING_VALUE, 114 UNSUPPORTED_SYNTAX etc."},
+    {"id": "S11", "what": "'E1 e E2 não abrem corpo nenhum'", "result": "FAIL", "evidence": "13 tuplas novas em corpos do zod já na v1 (R1-05)"},
+    {"id": "S12", "what": "Poder discriminante da §3.3", "result": "FAIL", "evidence": "985/1.341 arquivos, 8.782/12.631 tuplas, 3.843/5.343 de propagação admitidos (R1-05)"},
+    {"id": "S13", "what": "E1 pode fazer nascer prova em fixture", "result": "FAIL", "evidence": "Derivado do código (linhas 1808-1849 e fixture PROVEN existente); contradiz §2 e MS04 (R1-07)"},
+    {"id": "S14", "what": "Regra global no engine", "result": "PASS", "evidence": "boundary-semantic-engine.mjs:1808: VIOLATION, senão UNKNOWN se houver unknowns, senão PROVEN; K5/K7 só com PROVEN"},
+    {"id": "S15", "what": "13 módulos de fecho limpo e 0 origens limpas", "result": "PASS", "evidence": "Recontagem igual; os 13 têm 0 arestas"},
+    {"id": "S16", "what": "Caminho para prova de aresta descrito", "result": "FAIL", "evidence": "0 importadores com fecho limpo; o mais próximo tem 6 tuplas; v2 continua com 13 (R1-08)"},
+    {"id": "S17", "what": "Observação estrutural K0", "result": "PASS", "evidence": "Engine 941-946 e checkExport 1172-1215; SPEC0236 K0 linha 84"},
+    {"id": "S18", "what": "Mistura de estrela qualificada e recusada nesta raiz", "result": "PASS", "evidence": "Os 8 UNKNOWN_REEXPORT restantes são módulos em formato CJS ou .d.ts sem arestas; nenhum importador ganhou nome deles"},
+    {"id": "S19", "what": "Links relativos da SPEC", "result": "PASS", "evidence": "11/11 resolvem a partir de docs/02_spec"},
+    {"id": "S20", "what": "Enquadramento T3", "result": "PASS", "evidence": "AGENTS.md D-12 linha 103: mudança de segurança exige revisão explícita da SPEC pelo usuário; a 0244 se declara T3. O texto da §8 precisa refletir R1-07"}
+  ],
+  "commands": [
+    "python3 -I -B: conferência dos SHA de contract-freeze-r1.json (inputs, runtimeArtifacts, sealedInputs, spec)",
+    "git cat-file / git show 1073a9dd…:scripts/boundary-semantic-engine.mjs | sha256sum; idem 32b92121 e HEAD",
+    "python3 -I -B difflib: diff das cópias tools-diag/v1/v2/v3 contra tools/; comparação dos demais scripts (só o engine difere)",
+    "python3 -I -B: reconstrução em memória dos engines aplicando diag/cause/star/class/default patch à base e conferência dos SHA",
+    "sed -n sobre boundary-semantic-engine.mjs (380-440, 636-665, 745-790, 925-960, 1160-1530, 1795-1860), boundary-code-execution.mjs (320-345, 490-510), check-product-boundary.mjs (465-560, 2255-2300)",
+    "python3 -I -B: recontagem de classes, famílias refinadas, tags, UNKNOWN_BINDING por categoria, tuplas .tsx, origens, fechos limpos, candidatos de aresta e v1/v2/v3 contra o oficial (scripts em scratchpad/rev/c1..c16.py)",
+    "grep/sed só leitura no root avaliado (zod v4 classic/core, routes/health.ts, policy-version.ts) e nos testes b6-0236",
+    "grep em docs/02_spec 0236/0237/0240/0241 e docs/07_agents/AGENTS.md (D-12/T3)"
+  ]
+}

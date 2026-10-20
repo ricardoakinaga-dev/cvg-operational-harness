@@ -1,0 +1,134 @@
+{
+  "kind": "CAPABILITY_CONTRACTS_DP",
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "interpretation": "Nesta unidade, 'capability nova' tem o sentido da Q4: capability do kernel ou privilégio (CAP_SYS_ADMIN, CAP_SYS_PTRACE, fanotify, eBPF). Nenhuma é pedida. Os mecanismos abaixo são de harness, sem privilégio, cada um com contrato, autotestes e DIAG, como as capacidades do SPECIFY-2B; o servidor de loopback da decisão do Lead não é usado nesta especificação (motivo em coverage-plan-dp.json).",
+  "capabilities": [
+    {
+      "id": "CAP-DP-STAGE",
+      "purpose": "Montar, fora de docs/, a árvore só-leitura /dist com os membros dos arquivos do cache e as árvores de fixture declaradas por caso.",
+      "mechanism": "Leitura dos arquivos compactados do cache (tarfile e zipfile, em memória), conferência do sha256 do arquivo (acquisition-ledger.json) e de cada membro (artifact-metadata.json), escrita num diretório de trabalho em /mnt/dados/cvg-work, bind só-leitura no sandbox. Nenhum instalador.",
+      "layout": [
+        {
+          "archive": "A7",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-sdk/"
+        },
+        {
+          "archive": "A2",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex/"
+        },
+        {
+          "archive": "A3",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-linux-x64/"
+        },
+        {
+          "archive": "A4",
+          "prefix": "package/",
+          "to": "/dist/npm/node_modules/@openai/codex-responses-api-proxy/"
+        },
+        {
+          "archive": "A1",
+          "prefix": "",
+          "to": "/dist/py/site/"
+        }
+      ],
+      "privilege": "nenhum",
+      "network": "nenhuma",
+      "selftests_offline": [
+        "membro com sha divergente recusado",
+        "arquivo compactado divergente recusado",
+        "árvore de fixture com cópia divergente recusada"
+      ],
+      "diag": "DIAG-DP-STAGE",
+      "sub_lots": ["DP-1", "DP-2"]
+    },
+    {
+      "id": "CAP-DP-NODE-DRIVER",
+      "purpose": "Driver Node que importa o SDK publicado (dist/index.js do A7) e roda os wrappers publicados (A2 e A4) como processos.",
+      "vocabulary": [
+        "import {module, as}",
+        "shim.platform {platform, arch} e shim.restore (Object.defineProperty em process)",
+        "new Codex {sdk, options, as}",
+        "startThread e run (vocabulário 2A sobre o SDK publicado)",
+        "probe {id, path} de propriedades públicas",
+        "file.sha256 {id, path_from_probe}",
+        "wrapper.run {script, argv, env, cwd, preload_shim, send_signal, as}",
+        "child.program {id, program}",
+        "artifact.check (só avaliador)"
+      ],
+      "admission": "O loader admitido do 2AC passa a ligar o dist/index.js publicado e os wrappers pelo sha do membro; nenhum outro módulo do cache é importável.",
+      "privilege": "nenhum",
+      "network": "nenhuma",
+      "selftests_offline": [
+        "shim restaurado com os valores reais",
+        "wrapper.run de script próprio com preload_shim",
+        "probe recusada fora de propriedade pública"
+      ],
+      "diag": "DIAG-DP-NODE",
+      "sub_lots": ["DP-1"]
+    },
+    {
+      "id": "CAP-DP-SYNTH-CHILD",
+      "purpose": "Filho sintético no lugar dos binários de vendor nas árvores de fixture: registra caminho de execução, argv, stdin, chaves de env e sinais; sai com o código, sinal ou programa declarado.",
+      "mechanism": "Script próprio com shebang para /runtime/node, sha no source freeze; programas por passo child.program; barreira CHILD_READY para envio de sinal.",
+      "privilege": "nenhum",
+      "network": "nenhuma",
+      "selftests_offline": [
+        "exit code, self-signal e on_signal",
+        "registro de env com chaves ausentes como null"
+      ],
+      "diag": "DIAG-DP-SYNTH-CHILD",
+      "sub_lots": ["DP-1"]
+    },
+    {
+      "id": "CAP-DP-REAL-CLI-KEYLESS",
+      "purpose": "Executar o binário publicado 0.153.4 só em modo keyless: --version pelo wrapper e app-server com initialize pelo SDK Python.",
+      "mechanism": "Mesma contenção (bwrap --unshare-all com namespace de rede próprio sem rota, tmpfs em /work, HOME=/work/home com CODEX_HOME vazio), env sem credencial, prazo do supervisor; testemunha do SO (cmdline, environ, exe).",
+      "privilege": "nenhum",
+      "network": "nenhuma (namespace sem rota)",
+      "selftests_offline": [
+        "lista fechada de variáveis de credencial recusada",
+        "CODEX_HOME não vazio recusado"
+      ],
+      "diag": "DIAG-DP-REAL-CLI (DP-1) e DIAG-DP-REAL-CLI-APPSERVER (DP-2, cliente de controle próprio, sem SDK)",
+      "sub_lots": ["DP-1", "DP-2"]
+    },
+    {
+      "id": "CAP-DP-PY-RUNTIME",
+      "purpose": "Driver Python (vocabulário 2B) com o runtime codex_cli_bin escolhido por caso: nenhum, o wheel publicado em /dist/py/site ou uma árvore de fixture; passo runtime.path troca o diretório e purga codex_cli_bin de sys.modules.",
+      "privilege": "nenhum",
+      "network": "nenhuma",
+      "selftests_offline": [
+        "purga de módulo próprio",
+        "sys.path registrado em cada troca"
+      ],
+      "diag": "DIAG-DP-PYRUNTIME",
+      "sub_lots": ["DP-2"]
+    },
+    {
+      "id": "CAP-DP-ARTIFACT-CHECK",
+      "purpose": "Casos sem processo: o avaliador lê os arquivos compactados do cache por sha e julga manifestos, metadados do wheel, export final do dist, entrada do asset na release e identidade de payload.",
+      "privilege": "nenhum",
+      "network": "nenhuma",
+      "selftests_offline": [
+        "campo divergente dá MISMATCH",
+        "arquivo do cache divergente dá INVALID_CAPTURE"
+      ],
+      "diag": "nenhum (só avaliador; autotestes)",
+      "sub_lots": ["DP-1", "DP-2"]
+    }
+  ],
+  "not_used": {
+    "loopback_peer": {
+      "decision": {
+        "path": "../sdk-distributed-acquisition/lead-decision-loopback-a5.json",
+        "sha256": "ebc114527ed90a6d555b8a6e88e92ca37e65ce1da2e6dd81e7a3446e21cbdd91"
+      },
+      "reason": "Permitido pelo Lead, mas sem uso aqui: o bootstrap do PY20 (_runtime_setup.py) importa release_version, que não está nas entradas do perfil (só o sha no inventário G01), e baixa por URL HTTPS fixa do github.com; servir o A5 por loopback exigiria uma identidade TLS de github.com confiável no sandbox. Ver coverage-plan-dp.json#/residuals."
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

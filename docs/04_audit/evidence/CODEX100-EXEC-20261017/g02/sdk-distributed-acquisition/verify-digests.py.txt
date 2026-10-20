@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - conferência independente dos digests, sem rede.
+# Uso: python3 -I -B verify-digests.py.txt <unit_dir> <cache_dir>
+# Segunda implementação, separada do script de aquisição: recalcula sha256, sha512 (integrity) e sha1 de cada arquivo do
+# cache, relê o uv.lock do pin e as respostas de metadados guardadas (M1-M7) e compara com o observado; confere que os
+# binários do mesmo nome são idênticos entre wheel, pacote npm de plataforma e asset da release; confere que a pasta da
+# unidade não tem binário. Não acessa a rede e não executa nada do cache. Escreve digest-verification.json.
+import base64
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+UNIT, CACHE = sys.argv[1], sys.argv[2].rstrip("/")
+checks = []
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def dig(path):
+    h256, h512, h1, n = hashlib.sha256(), hashlib.sha512(), hashlib.sha1(), 0
+    with open(path, "rb") as f:
+        for c in iter(lambda: f.read(1 << 20), b""):
+            h256.update(c)
+            h512.update(c)
+            h1.update(c)
+            n += len(c)
+    return {"bytes": n, "sha256": h256.hexdigest(), "integrity": "sha512-" + base64.b64encode(h512.digest()).decode(), "sha1": h1.hexdigest()}
+
+
+def U(p):
+    return os.path.normpath(os.path.join(UNIT, p))
+
+
+def sha_file(p):
+    return hashlib.sha256(open(p, "rb").read()).hexdigest()
+
+
+plan = json.load(open(U("acquisition-plan.json"), encoding="utf-8"))
+ledger = json.load(open(U("acquisition-ledger.json"), encoding="utf-8"))
+meta_doc = json.load(open(U("artifact-metadata.json"), encoding="utf-8"))
+check("ledger bound to the current plan", ledger["plan"]["sha256"] == sha_file(U("acquisition-plan.json")))
+# inputs of the plan unchanged
+inputs = [plan["authorization"]["decision"], plan["artifacts"][0]["url_source"], plan["artifacts"][4]["url_source"], plan["artifacts"][2]["resolution_source"]]
+check("plan inputs unchanged (decision, uv.lock, _runtime_setup.py, G01 npm inventory)", all(sha_file(U(i["path"])) == i["sha256"] for i in inputs),
+      [i["path"] for i in inputs])
+# one request per id, no repeat
+ids = [r["id"] for r in ledger["requests"]]
+check("each request id appears once (no retry)", len(ids) == len(set(ids)), ids)
+check("every request URL and effective URL is HTTPS and the method is GET", all(r["url"].startswith("https://") and r["method"] == "GET" for r in ledger["requests"])
+      and all((r.get("url_effective") or "https://").startswith("https://") for r in ledger["requests"]))
+acq = open(U("acquire-distributed.py.txt"), encoding="utf-8").read()
+cmd_line = [l for l in acq.split("\n") if l.strip().startswith('cmd = ["curl"')]
+check("curl command line of the acquisition: -q (no .curlrc), no -n/--netrc, no --retry, no Authorization or cookie, HTTPS-only redirects",
+      len(cmd_line) == 1 and '"-q"' in cmd_line[0] and '"--proto", "=https", "--proto-redir", "=https"' in cmd_line[0]
+      and not any(x in acq for x in ('"-n"', "--netrc", "--retry", "Authorization", "--cookie", '"-b"', "-u ")), cmd_line)
+check("no URL with query and no token material left in the ledger (R1-F01)",
+      not any("?" in (r.get("url_effective") or "") or "?" in r["url"] for r in ledger["requests"])
+      and not any(x in open(U("acquisition-ledger.json"), encoding="utf-8").read() for x in ("sig=", "jwt=", "eyJ")))
+# metadata files unchanged since acquisition
+mfiles = {r["id"]: r for r in ledger["requests"] if r["id"].startswith("M") and r["result"] == "OK"}
+check("stored metadata responses equal their ledger sha256", all(dig(r["dest"])["sha256"] == r["sha256"] for r in mfiles.values()), sorted(mfiles))
+meta = {k: json.load(open(r["dest"], encoding="utf-8")) for k, r in mfiles.items()}
+
+# expected values recomputed independently
+lock = open(U("../sdk-reference-profile/inputs/sdk/python/uv.lock"), encoding="utf-8").read()
+m = re.search(r'\{ url = "([^"]*openai_codex_cli_bin-0\.153\.4-py3-none-manylinux_2_17_x86_64\.whl)", hash = "sha256:([0-9a-f]{64})", size = (\d+)', lock)
+exp = {"A1": {"sha256": m.group(2), "bytes": int(m.group(3)), "source": "uv.lock"}}
+
+
+def npm_dist(mid, version):
+    d = meta[mid]["versions"][version]["dist"]
+    return {"integrity": d["integrity"], "sha1": d["shasum"], "source": "%s versions[%s].dist" % (mid, version)}
+
+
+exp["A2"] = npm_dist("M1", "0.153.4")
+alias = meta["M1"]["versions"]["0.153.4"]["optionalDependencies"]["@openai/codex-linux-x64"]
+check("A3 alias declared by @openai/codex@0.153.4 is npm:@openai/codex@0.153.4-linux-x64", alias == "npm:@openai/codex@0.153.4-linux-x64", alias)
+exp["A3"] = npm_dist("M1", "0.153.4-linux-x64")
+exp["A4"] = npm_dist("M3", "0.153.4")
+exp["A7"] = npm_dist("M4", "0.153.4")
+asset = [a for a in meta["M7"]["assets"] if a["name"] == "codex-package-x86_64-unknown-linux-musl.tar.gz"]
+check("A5 asset listed once in release rust-v0.153.4", len(asset) == 1 and meta["M7"]["tag_name"] == "rust-v0.153.4", meta["M7"].get("tag_name"))
+exp["A5"] = {"sha256": asset[0]["digest"].split(":", 1)[1], "bytes": asset[0]["size"], "source": "M7 assets[].digest"}
+m6 = [u for u in meta["M6"]["urls"] if u["filename"].endswith("manylinux_2_17_x86_64.whl")]
+check("A1 cross-check: PyPI sha256 (M6) equals the uv.lock sha256", len(m6) == 1 and m6[0]["digests"]["sha256"] == exp["A1"]["sha256"])
+
+results = []
+for a in ledger["artifacts"]:
+    aid = a["id"]
+    if aid not in exp:
+        results.append({"id": aid, "name": a["name"], "status": a["result"], "reason": a["resolution"].get("reason")})
+        continue
+    path = a["stored"]
+    obs = dig(path)
+    e = exp[aid]
+    ok = {k: obs[k] == e[k] for k in ("sha256", "bytes", "integrity", "sha1") if k in e}
+    results.append({"id": aid, "name": a["name"], "file": os.path.basename(path), "in_quarantine": "/quarantine/" in path, "observed": obs,
+                    "expected": e, "equal": ok, "status": "DIGEST_OK" if all(ok.values()) else "DIGEST_MISMATCH"})
+check("every acquired artifact matches its expected digest (recomputed now)", all(r["status"] == "DIGEST_OK" for r in results if r["id"] in exp),
+      {r["id"]: r["status"] for r in results})
+check("ledger results agree with this recomputation", all(r["status"] == a["result"] for r, a in zip(results, ledger["artifacts"])))
+check("A6 openai-codex 0.153.4 not available (PyPI 404), no substitute fetched",
+      [r for r in results if r["id"] == "A6"][0]["status"] == "NOT_AVAILABLE" and not os.path.exists(os.path.join(CACHE, "artifacts", "A6")))
+
+# binary identity across channels, recomputed now from the compressed files (read in memory, nothing extracted)
+import tarfile
+import zipfile
+
+
+def members_sha(aid, path):
+    out = {}
+    if path.endswith(".whl"):
+        with zipfile.ZipFile(path) as z:
+            for i in z.infolist():
+                if not i.is_dir():
+                    out[i.filename] = hashlib.sha256(z.read(i)).hexdigest()
+    else:
+        with tarfile.open(path, mode="r:gz") as t:
+            for m in t:
+                if m.isfile():
+                    out[m.name] = hashlib.sha256(t.extractfile(m).read()).hexdigest()
+    return out
+
+
+stored = {a["id"]: a["stored"] for a in ledger["artifacts"] if a["id"] in ("A1", "A3", "A5")}
+prefix = {"A1": "codex_cli_bin/", "A3": "package/vendor/x86_64-unknown-linux-musl/", "A5": ""}
+rel_members = {}
+for aid in ("A1", "A3", "A5"):
+    ms = members_sha(aid, stored[aid])
+    rel_members[aid] = {k[len(prefix[aid]):]: v for k, v in ms.items() if k.startswith(prefix[aid])}
+common = sorted(set(rel_members["A1"]) & set(rel_members["A3"]) & set(rel_members["A5"]))
+names = common
+ident = {n: {aid: rel_members[aid][n] for aid in ("A1", "A3", "A5")} for n in common}
+check("binary identity recomputed from the archives covers every file common to A1, A3 and A5",
+      set(common) == set(rel_members["A5"]) and set(common) <= set(rel_members["A3"]), {"common": common, "only_A1": sorted(set(rel_members["A1"]) - set(common))})
+mem = {a["id"]: {m["name"]: m["sha256"] for m in a.get("members", []) if m.get("type") == "file"} for a in meta_doc["artifacts"] if a.get("inspected")}
+check("artifact-metadata.json member hashes equal the recomputation for A1, A3 and A5",
+      all(mem[aid].get(prefix[aid] + n) == ident[n][aid] for n in common for aid in ("A1", "A3", "A5")))
+check("same binaries in the wheel (A1), the npm platform package (A3) and the release asset (A5)",
+      all(len(set(v.values())) == 1 and None not in v.values() for v in ident.values()), {k: list(set(v.values())) for k, v in ident.items()})
+ref = json.load(open(U("../../g02-reference-acceptance.json"), encoding="utf-8"))["artifact"]
+check("the published codex binary is not the attested pin-built executable (declared: no build link)",
+      ident["bin/codex"]["A5"] != ref["sha256"], {"published": ident["bin/codex"]["A5"], "pin_built": ref["sha256"]})
+# no binary in the unit folder
+bad = []
+for dp, _, fs in os.walk(UNIT):
+    for f in fs:
+        p = os.path.join(dp, f)
+        head = open(p, "rb").read(4)
+        if head.startswith(b"\x7fELF") or head.startswith(b"PK\x03\x04") or head.startswith(b"\x1f\x8b") or os.path.getsize(p) > 5 * 1024 * 1024:
+            bad.append(os.path.relpath(p, UNIT))
+check("unit folder has only text/JSON (no ELF, zip, gzip or file over 5 MB)", not bad, bad)
+
+ok = all(c["ok"] for c in checks)
+doc = {"kind": "DIGEST_VERIFICATION", "task": plan["task"], "result": "PASS" if ok else "FAIL", "network": False, "checks": checks,
+       "artifacts": results, "binary_identity": ident,
+       "build_link": "NO_BUILD_LINK_DECLARED: os binários publicados da release 0.153.4 não são o executável compilado do pin 8d9f6466 atestado em g02-reference-acceptance.json",
+       "verified_at": datetime.now(timezone.utc).isoformat(), "functional_receipts": 0, "parity_credit": 0}
+with open(U("digest-verification.json"), "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))
+for c in checks:
+    if not c["ok"]:
+        print("FAIL", c["check"], json.dumps(c["detail"])[:400])

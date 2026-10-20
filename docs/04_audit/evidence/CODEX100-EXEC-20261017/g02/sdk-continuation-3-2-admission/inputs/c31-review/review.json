@@ -1,0 +1,156 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1",
+  "reviewer": "Claude Code (Opus 5.5), revisor independente R1, somente leitura; sessão d9ef2deb; trabalho em cópias em scratchpad/review-c31-r1",
+  "reviewed_at": "2026-10-20T00:59:03.115797+00:00",
+  "candidate": {
+    "worktree": "/mnt/dados/cvg-work/cvg-codex100-c31-20261019",
+    "head": "bd97df32351103b5440f884936dd6aaaa1efceca (destacado)"
+  },
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "fa574e2f7608b52dec3b8e04ceba045f4a856abcedbd74fadbb6b0e15e5daef9",
+  "subject_hash_check": {
+    "before": {
+      "checked_at": "2026-10-20T00:43:07Z",
+      "freeze_sha256": "fa574e2f7608b52dec3b8e04ceba045f4a856abcedbd74fadbb6b0e15e5daef9",
+      "freeze_sha256_matches": true,
+      "files_declared": 619,
+      "files_checked_bytes_and_sha256": 619,
+      "mismatches": 0,
+      "missing": 0,
+      "files_outside_freeze_except_review_r1": 0,
+      "pycache_dirs": 0,
+      "review_r1_contents": [
+        "brief.md"
+      ],
+      "ok": true
+    },
+    "after": {
+      "checked_at": "2026-10-20T00:57:01Z",
+      "freeze_sha256": "fa574e2f7608b52dec3b8e04ceba045f4a856abcedbd74fadbb6b0e15e5daef9",
+      "freeze_sha256_matches": true,
+      "files_declared": 619,
+      "files_checked_bytes_and_sha256": 619,
+      "mismatches": 0,
+      "missing": 0,
+      "files_outside_freeze_except_review_r1": 0,
+      "pycache_dirs": 0,
+      "review_r1_contents": [
+        "brief.md"
+      ],
+      "ok": true
+    },
+    "note": "Conferência feita antes da primeira leitura de código e depois de todas as execuções em cópia, antes de gravar este arquivo. Os 619 arquivos listados conferem em bytes e sha256; nenhum arquivo fora do freeze além de review-r1/ (brief.md do Lead); nenhum __pycache__."
+  },
+  "verdict": "APPROVE",
+  "verdict_reason": "Nenhum P1/P2. A errata C3-SPEC/R2-F01 está aplicada como pedida (itens 1-5 só; ordem entre processos só registrada; ABORT_REQUESTED emitido e escrito antes do abort(); autoteste obrigatório presente e verdadeiro, reproduzido). R2-F02, os carry-overs 2B2-ADM R1-F02/F03/F04, o vocabulário fechado no nível do passo e a ausência de capacidade nova conferem. Reproduzi em cópia: autotestes 94/94, validador ok com 15/15 controles negativos recusados, reavaliação offline 15/15 igual por predicado e desfecho com plan_binding ok, e perturbações nas capturas reais (os PASS dependem de dados reais e caem para MISMATCH/INVALID_CAPTURE quando a captura é alterada). Ficam 4 P3: a testemunha do SO aceita ausência mesmo com status de zombie contraditório (herdado do E2B-03); a sonda do driver para R2-F02 não discrimina; o fechamento do vocabulário não alcança subchaves nem o alvo de mutate; e o registro do DV2.",
+  "erratum_r2_f01": {
+    "verdict": "CONFORME",
+    "evidence": [
+      "tslane/acceptance.py:438-462 (node_abort_termination): o resultado é all(items) só dos itens 1_form_known_signal_termination, 2_sigterm_adapter_signal_and_os, 3_no_supervisor_signal, 4_no_driver_own_kill e 5_abort_recorded_at_step; a ordem (abort_requested_mono_ns, adapter_signal_mono_ns, api_error_mono_ns) só entra em detail.order_recorded_not_judged (linha 460).",
+      "O item 5 usa só a ordem interna do driver (seq de ABORT_REQUESTED < seq de ABORT_RETURNED, mesmo processo), o controller do passo e aborted=true; nenhuma comparação entre processos entra no booleano.",
+      "Nenhum predicado order_unilateral novo: Preds.add (tslane/acceptance.py:95-101) recusa id fora da tabela congelada e só guarda os predicados do caso; a tabela de C3-TS12 não tem order_unilateral (autoteste E3-06 final).",
+      "node/ts-driver.mjs:272-274: await ch.emit(ABORT_REQUESTED) antes de ac.abort() e ABORT_RETURNED depois; Channel.emit (node/channel.cjs:292-309) só resolve depois do writeSync e o mono_ns é tirado na montagem do quadro, antes do abort().",
+      "Autoteste obrigatório: selftests/selftest_c31.py:355 (SIGNAL do adapter em mono 50 antes do ABORT_REQUESTED em mono 100 -> predicado true e composição PASS_CLIENT_OBSERVATION regra 7); true em selftests/selftest-results.json e na minha reexecução em cópia (94/94).",
+      "Autoteste do driver (selftests/selftest_c31_driver.mjs, teste next_abort_at_barrier): ordem STEP_WITNESS < STEP_RELEASE < ABORT_REQUESTED < listener do abort < ABORT_RETURNED < API_ERROR; discriminante para ABORT_REQUESTED depois do abort().",
+      "Captura real C3-TS12 (cases/C3-TS12-7fad7cad1403/acceptance.json): itens 1-5 true, zombie_exit_code 15, sem kill do supervisor, sem ABORT_CALLED; ordem registrada 115619225914365 < 115619226510973 < 115619230458672.",
+      "Perturbação em cópia da captura real: SIGNAL do adapter movido para antes do ABORT_REQUESTED (mono e recv) -> PASS regra 7; SIGNAL depois do API_ERROR -> PASS regra 7; sem ABORT_REQUESTED, controller trocado, ABORT_NOW do supervisor, SIGKILL no SIGNAL ou ABORT_CALLED do driver -> MISMATCH regra 6. A ordem nunca produz MISMATCH.",
+      "Item 4 também tem prova estrutural: no caminho sdkCase de node/ts-driver.mjs não há kill; os únicos kill/ABORT_CALLED estão em diagnostic(), transpileGate(), ownChild() e OwnThread (código próprio de DIAG), e o arquivo está no source freeze."
+    ]
+  },
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P3",
+      "area": "DV4 / testemunha do SO / abort.child_terminated_by_node_abort item (2) / ret.child_terminated_by_SIGTERM",
+      "title": "A testemunha do SO aceita PID ausente mesmo quando o status de zombie observado contradiz SIGTERM",
+      "evidence": [
+        "tslane/acceptance.py:207-210 (os_sigterm: zombie_exit_code == 15 or absent is True), usado em ret_sigterm (406) e no item 2 de node_abort_termination (449)",
+        "tslane/supervisor.py:1309 e 1394 (diag_checks e c3vocab_checks com a mesma expressão)",
+        "python/acceptance.py:958 (termination_form do E2B-03 herdado do 2B-2: mesma disjunção)",
+        "Perturbação em cópia: C3-TS12 com termination.adapter.zombie_exit_code=9 (absent=true mantido) -> PASS_CLIENT_OBSERVATION regra 7; C3-TS04 idem; com absent=false -> MISMATCH regra 6; só ausência (zombie None) também passa nos dois casos",
+        "Capturas reais: cases/C3-TS04-*/result.json, C3-TS12-*, C3-TS13-* #/termination/adapter/zombie_exit_code = 15"
+      ],
+      "detail": "Quando o rastreador vê o zombie e depois a ausência, a ausência sozinha satisfaz a testemunha, mesmo que o status observado seja outro (por exemplo 9). Nesse caso, a parte \"testemunha do SO\" do item (2) da errata e do ret.child_terminated_by_SIGTERM deixa de ser independente do autorrelato do adapter. Com só ausência, o SO prova o término, não o sinal. É a regra herdada do E2B-03, declarada no DV4. Nenhum PASS desta unidade depende dela: os três casos de término por sinal tiveram zombie 15 observado. Sem recaptura.",
+      "required_action": "Na próxima unidade que reusar o rastreador (C3-2 ou BIND), trocar por zombie_exit_code == 15 or (zombie_exit_code is None and absent is True), nas duas pilhas e nos diag_checks. Acrescentar autoteste negativo (zombie 9 seguido de ausência falha). Registrar no BIND que o item (2) dos PASS de C3-TS04 e C3-TS12 se apoia em zombie 15 observado."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "R2-F02 / D3-03 / autoteste do driver e DIAG-TS-C3VOCAB",
+      "title": "A sonda do driver para o erro de listagem dentro do getter não discrimina: passa também com o guard removido",
+      "evidence": [
+        "node/ts-driver.mjs:465-466 (getter_listing_error_recorded lança \"recorded\" quando o registro está certo; o laço conta qualquer exceção como recusa)",
+        "selftests/selftest_c31_driver.mjs:57 (o teste R2-F02 do driver é só Object.values(vp.refused).every(Boolean))",
+        "tslane/supervisor.py:1345 (unknown_vocabulary_refused do DIAG usa a mesma sonda)",
+        "Teste de mutação em cópia (scratchpad/review-c31-r1/mut): sem o try/catch de node/ts-driver.mjs:101, o erro EACCES sobe para quem lê a propriedade, e a sonda ainda dá refused=true",
+        "Teste direto do código congelado: valor 1 devolvido, error=EACCES, entries=null registrados, nada lançado; o comportamento exigido existe"
+      ],
+      "detail": "O código do getter atende ao R2-F02 (inspeção e teste direto), e o lado do avaliador tem autoteste discriminante: listagem que lança leva tmp.getter_witness_recorded a falhar, INVALID_CAPTURE pela regra 4 (selftest E3-03; perturbação em cópia do C3-TS03 confirma). Mas o autoteste do driver citado em state.json#/implementation/carry_over_R2_F02 (\"listagem que lança no driver\") não distingue o comportamento certo do vazamento do erro para o SDK.",
+      "required_action": "Separar a sonda: capturar a leitura de o.p num try próprio e exigir, sem exceção, value === 1, error === \"EACCES\" e entries === null. Um vazamento deve dar false. Aplicar no autoteste do driver e no check do DIAG da próxima unidade que reusar o driver."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "D3-02 vocabulário fechado",
+      "title": "O fechamento do vocabulário vale no nível do passo, mas não alcança subchaves nem o alvo de mutate",
+      "evidence": [
+        "node/ts-driver.mjs:43-51 e 208-226 (checkStep fecha as chaves do passo, o modo e a barreira do modo)",
+        "Sonda em cópia: aceitos expect {spawnz, bogus}, throw {name, message, extra}, witness arbitrário em barreira LAZY_POINT e $REPEAT {text, count, extra}; recusados chave extra no passo, modo desconhecido, barreira errada para o modo, marcador desconhecido, $ac.signal e $HOLE fora do lugar",
+        "node/ts-driver.mjs:333-336 (mutate resolve target em qualquer objeto do env, inclusive Codex, Thread e AbortController); tools/validate_unit.py só aceita alvo options_as",
+        "node/ts-driver.mjs:308 (new Codex com qualquer expect emite ZERO_SPAWN) e 368 (run só com expect.spawns === 0); tslane/supervisor.py:324 (o plano conta qualquer expect)"
+      ],
+      "detail": "Para os 14 slots congelados não há efeito. O fechamento das chaves do passo, dos modos e dos marcadores foi conferido sobre a tabela inteira (autoteste node D3-02 e validador), e nenhum caminho do driver mata o filho do SDK. Mas o driver aceita conteúdo fora do vocabulário dentro de expect, throw, witness e $REPEAT, e o mutate do driver é mais largo que o do validador. Num caso futuro com erro de digitação em expect, o plano do supervisor e as testemunhas ZERO_SPAWN do driver divergiriam sem INVALID.",
+      "required_action": "Na próxima unidade que reusar o interpretador: fechar as subchaves de expect ({throws, spawns}), throw ({name, message}), witness da barreira e $REPEAT/$INSTANCE no driver. Limitar mutate a nomes guardados por options_as. Unificar a regra de ZERO_SPAWN (expect.spawns === 0) entre driver, plano e validador. Acrescentar controles negativos."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "DV2 / DIAG-TS-C3VOCAB / barreira SUSPENDED",
+      "title": "Registro do DV2: o ramo SUSPENDED com adapter vivo só foi exercido pelo próprio slot C3-TS04, não pelo DIAG",
+      "evidence": [
+        "diagnostics/14d54cd4407a-DIAG-TS-C3VOCAB/result.json#/step_witness: SUSPENDED do passo 10 com adapter_processes 0, adapter_alive false; só o CHILD_HELD do passo 11 tem adapter vivo",
+        "tslane/supervisor.py:993 (SUSPENDED espera o mapeamento do adapter quando há processo dele; ramo não exercido no DIAG)",
+        "tslane/supervisor.py:1378 (suspended_witness_and_throw do DIAG não exige adapter vivo)",
+        "cases/C3-TS04-ca98cf33e9b6/acceptance.json witness.suspended_resources: adapter_mapped true, adapter_alive true, 0 SIGNAL, liberação em 691570214 ns, zombie 15 em 697395028 ns"
+      ],
+      "detail": "O DV2 é aceitável: um serviço tem um só canal de adapter, e o texto do DIAG admite as duas leituras. A testemunha de adapter vivo foi qualificada no CHILD_HELD. O caminho do supervisor que espera o mapeamento do adapter na SUSPENDED só rodou no slot SDK. Ali ele funcionou, e a perturbação em cópia confirma que o predicado cai para MISMATCH com adapter não vivo, listagem sem diretório ou zombie antes da liberação.",
+      "required_action": "Registrar no BIND que a SUSPENDED com adapter vivo foi qualificada pelo C3-TS04, não pelo DIAG. Se o C3-2 ou um perfil futuro reusar SUSPENDED com filho real, qualificar esse ramo num DIAG com filho próprio antes dos slots. Sem recaptura."
+    }
+  ],
+  "summary_counts": {
+    "P1": 0,
+    "P2": 0,
+    "P3": 4
+  },
+  "mandatory_points": {
+    "1_errata_R2_F01": "CONFORME (ver erratum_r2_f01).",
+    "2_R2_F02": "CONFORME no código e no avaliador. O getter captura o erro, devolve o valor e registra error (node/ts-driver.mjs:101). tmp.getter_witness_recorded falha com error (tslane/acceptance.py:350): INVALID_CAPTURE regra 4 no autoteste e na perturbação em cópia do C3-TS03. O registro vale para qualquer passo: há dreno depois de new Codex, thread, mutate, events.consume, run/run_streamed e barreira, e a checagem de posição do avaliador cobre qualquer passo. O autoteste do driver não discrimina (R1-F02).",
+    "3_carry_overs_2B2_ADM": "R1-F02: expand_parts, Seq, capture_extra e capture_form estão dentro de try em python/acceptance.py:1471-1483; o autoteste com os três alvos dá regra 3 e é discriminante, porque fora do try a exceção sairia do evaluate. R1-F03: plan_binding nas duas pilhas, com controles negativos nos autotestes. Nas minhas perturbações de pastas reais em cópia (plano adulterado, barreira removida do case_input, barrier_plan extra no CONTROL), as três dão false; a reavaliação dá 15/15 plan_binding_ok. R1-F04: autoteste positivo/negativo de zombie_t_ns em no_termination_before (selftest_c31.py t_r1_f04), true.",
+    "4_vocabulario_D3_02": "CONFORME no nível do passo. Passo, chave do passo, modo, barreira do modo e marcador desconhecidos lançam ChannelError antes do primeiro passo, e o driver termina INVALID (main -> fail -> C.invalid). Nenhum caminho de sdkCase mata o filho do SDK. Ressalvas de endurecimento em R1-F03.",
+    "5_capacidade": "CONFORME. bwrap --unshare-all (sem rede), sem CAP, ptrace, fanotify, eBPF ou audit, e a inotify foi retirada (DV3). A testemunha do SO é o rastreador /proc do 2B-2 (estado, status de zombie e ausência; tslane/supervisor.py:894-912, igual ao do 2B-2). Não há artefato distribuído (árvores admitidas e emit selado) nem fault novo; Q4 negada e respeitada.",
+    "6_predicados_nao_vazios": "CONFORME. Capturas reais: GETTER_WITNESS com diretórios reais (C3-TS03 codex-output-schema-4RRAAT [], PiPhpx []; C3-TS05 QPPwKO [schema.json]); SUSPENDED do C3-TS04 com adapter vivo e mapeado e listagem com schema.json; liberação antes do SIGNAL e do zombie 15; argv com opções mutadas (C3-TS01 c3-b/m-b); env herdado (C3-TS09B); yields com thread_id_is_undefined (C3-TS14). Em 27 perturbações das capturas reais em cópia, cada alteração derruba o predicado esperado (MISMATCH regra 6 ou INVALID_CAPTURE regra 4). As exceções são as do R1-F01 (zombie 9 seguido de ausência, ou só ausência, aceitos pela regra herdada) e as de ordem do R2-F01, que devem passar.",
+    "7_desvios": "Ver deviations_assessment."
+  },
+  "deviations_assessment": {
+    "DV1": "ACEITO. Duas pilhas com SOURCE_SET, tabelas de spec, freezes, budget, ledger e prefixo idênticos (autoteste D3-06), serviços em série (budget.json/case-ledger.json sem sobreposição de horários).",
+    "DV2": "ACEITO com registro (R1-F04).",
+    "DV3": "ACEITO. Nenhum caso do C3-1 usa os DIAG retirados nem WINDOW_OPEN; BARRIER_KINDS e o vocabulário não os admitem. A capacidade só diminui.",
+    "DV4": "ACEITO. O rastreador é o mesmo do 2B-2 e mais forte que o sdk_sigterm do 2AC (que não tinha testemunha do SO). Endurecimento em R1-F01.",
+    "DV5": "ACEITO. Mais estrito que o 2AC e necessário com SUSPENDED/CHILD_HELD; autoteste t_spawn_zero discriminante.",
+    "DV6": "ACEITO. cases-c3-1.json#/inputs tem só bootstrap.py, fixture-rpc.py e quatro .ts, sem âncora de stdlib. O identity freeze cobre as árvores sdk-python e python-deps (Pydantic, pydantic_core), packaging/version.py, typescript.js, as fontes .ts, o emit selado e as âncoras de entrada."
+  },
+  "reproduction": {
+    "workspace": "scratchpad/review-c31-r1/g02 (cópia da unidade; irmãos de g02 por symlink, só leitura); SCRATCH do autoteste redirecionado para o scratchpad",
+    "selftests": "94/94; lista de testes e sources_sha256 iguais ao selftests/selftest-results.json congelado",
+    "validator": "ok; validation-unit.json byte a byte igual ao congelado; 15/15 controles negativos recusados",
+    "reevaluation": "15/15 com predicate_level_equal, outcome_equal e plan_binding_ok (python3 -I -B {tslane,python}/acceptance.py reevaluate)",
+    "source_freeze": "51/51 arquivos iguais ao source-freeze-r4-c31.json; ordem freeze (00:38:21Z) -> 8 DIAG (00:38:26-48Z) -> CONTROL (00:38:57Z) -> 14 slots em ordem (00:39:08-34Z), uma vez cada",
+    "perturbations": 27,
+    "no_service_no_network": "Nenhum systemd-run, bwrap, PG, porta TCP, rede ou /mnt/ia; Node do host só para node --check, o autoteste do driver e sondas de código próprio; SDK e Pydantic nunca importados no host."
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade. Atribuição de MISMATCH só por adjudicação (E3-09)."
+}

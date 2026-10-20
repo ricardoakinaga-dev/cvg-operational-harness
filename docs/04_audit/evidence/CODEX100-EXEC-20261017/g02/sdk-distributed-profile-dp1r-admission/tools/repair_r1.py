@@ -1,0 +1,96 @@
+"""Grouped repair R1 (1/1) of DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1R: writes freeze-deltas-addendum-dp1r.json
+(record-level corrections bound to the frozen files by sha, and the declared deviation DV-DP1R-01 pending Lead acceptance) and
+repair-r1.json. No frozen file changes, no service, no slot. Usage: python3 -I -B tools/repair_r1.py   (cwd = unit folder)
+"""
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+U = Path(__file__).resolve().parent.parent
+
+
+def sha(p):
+    return hashlib.sha256((U / p).read_bytes()).hexdigest()
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+sup = (U / 'dplane' / 'supervisor.py').read_bytes()
+needle = b", 'tools/write_deltas.py'"
+assert sup.count(needle) == 1
+reconstructed = hashlib.sha256(sup.replace(needle, b'')).hexdigest()
+pk = sorted((U / 'cases').glob('DP-PK07B-*'))[0].name
+comp = json.loads((U / 'selftests' / 'selftest-stage-complement-results.json').read_text())
+add = {
+    'kind': 'FREEZE_DELTAS_ADDENDUM_DP1R', 'task': 'DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1R', 'origin': 'repair-r1 (review-r1/review.json, APPROVE com 7 P3)',
+    'binds': {'source_freeze': {'path': 'source-freeze-dp1r.json', 'sha256': sha('source-freeze-dp1r.json')},
+              'identity_freeze': {'path': 'identity-freeze-dp1r.json', 'sha256': sha('identity-freeze-dp1r.json')},
+              'freeze_deltas': {'path': 'freeze-deltas-dp1r.json', 'sha256': sha('freeze-deltas-dp1r.json')},
+              'erratum': {'path': 'erratum-dp1r.json', 'sha256': sha('erratum-dp1r.json')}},
+    'rule': 'Os arquivos congelados não mudam. Este adendo corrige por registro o que eles dizem e prevalece sobre eles nos pontos abaixo.',
+    'corrections': [
+        {'finding': 'R1-F02', 'target': 'selftests/selftest-results.json (passed 76)',
+         'text': ('76 autotestes registrados, 75 efetivos. O item node "evaluator side of the deadline ... covered by selftest_dp1r.py" é um ponteiro '
+                  'que devolve true sem testar; o caminho que ele cita é testado de verdade em selftest_dp1r.py ("deadline of the close (driver '
+                  'INVALID) -> INVALID_CAPTURE by rule 1 (EDP-07)"). Na próxima unidade que reusar a suíte, o ponteiro sai da contagem.')},
+        {'finding': 'R1-F03', 'target': 'freeze-deltas-dp1r.json#/carry_over[id=DP1-ADM/R2-F06]',
+         'text': ('Disposição corrigida para PARTIAL_IN_FROZEN_SUITE_COMPLETED_IN_REPAIR. A suíte congelada não repetia os negativos de staging '
+                  '(membro e arquivo compactado divergentes, modos num tar.gz próprio, nada sob docs/) nem os do keyless. Eles foram rodados '
+                  'depois dos serviços, offline e sem tocar em arquivo congelado, em selftests/selftest_dp1r_stage_complement.py '
+                  '(%d/%d), com prova por AST de que as funções exercitadas são idênticas às do DP-1, onde já tinham sido provadas.' % (comp['passed'], comp['passed'] + comp['failed'])),
+         'evidence': {'path': 'selftests/selftest-stage-complement-results.json', 'sha256': sha('selftests/selftest-stage-complement-results.json'),
+                      'tool': {'path': 'selftests/selftest_dp1r_stage_complement.py', 'sha256': sha('selftests/selftest_dp1r_stage_complement.py')}}},
+        {'finding': 'R1-F05', 'target': 'erratum-dp1r.json#/contrary_still_visible',
+         'text': ('A lista é completada assim. (a) PK07.B02 com fallback, isto é, plataforma inválida aceita executando um filho: haveria registro onde child_spawned é '
+                  'false, e o resultado seria INVALID_CAPTURE pela regra 4 via child.program_followed, não MISMATCH. (b) Limite do texto congelado "ENOENT" '
+                  'do B03: uma checagem de existência por fs.statSync ou accessSync que lançasse "ENOENT: no such file" satisfaria o texto, o exit 1 e '
+                  'child_spawned false, e não seria visível pelo oráculo. A arm_discrimination congelada só cobre "erro diferente de ENOENT". A '
+                  'observação do PK07.B03 no DP-PK07B se apoia também no stderr retido do passo 10: "Error: spawn <caminho> ENOENT" com '
+                  'ChildProcess._handle.onexit, que é erro do spawn e não de uma checagem prévia.'),
+         'evidence': {'path': 'cases/%s/blob-stderr-10.txt' % pk, 'sha256': sha('cases/%s/blob-stderr-10.txt' % pk)}},
+        {'finding': 'R1-F06', 'target': 'erratum-dp1r.json#/platform_limit',
+         'text': ('Acrescenta-se ao limite de plataforma o seguinte. O shim só redefine process.platform e process.arch, e o módulo path do Node segue '
+                  'POSIX. Os caminhos win32 observados são a renderização POSIX dos segmentos vendor/<triple>/codex-responses-api-proxy/<nome>.exe. '
+                  'A renderização com path.win32 (separadores e unidade) não é observada e não é reivindicada.')},
+        {'finding': 'R1-F07', 'target': 'tools/validate_unit.py (texto "checked by the closing tools")',
+         'text': ('A varredura de binário e tamanho em cases/ e diagnostics/ foi acrescentada a tools/post_run_checks.py, com 2 controles negativos de '
+                  'mensagem exata (post-run-checks-dp1r.json). A preimagem está em archives/r1-preimages/.')},
+        {'finding': 'R1-F01', 'target': 'next-task.json#/carry_over',
+         'text': ('Os carry-overs abertos que o DP-1R marcou NOT_APPLICABLE ou adotou só em parte seguem no next-task com o applies_to original: '
+                  'DP2-ADM/R1-F01, R1-F02, R1-F03, R1-F06, R1-F08 e R1-F09, ACQ/R1-F03 e DP1-ADM/R2-F03. NOT_APPLICABLE quer dizer "não vale para o '
+                  'DP-1R", não "resolvido".')},
+    ],
+    'deviations': [
+        {'id': 'DV-DP1R-01', 'finding': 'R1-F04', 'lead_acceptance': 'PENDENTE',
+         'text': ('As três linhas DIAG de código próprio rodaram duas vezes em selftest-sandbox antes do freeze. O DV2 aceito diz "uma vez cada". A '
+                  'primeira rodada (04:46:31-37Z, todas DIAG_PASS) usou um supervisor anterior ao acréscimo de tools/write_deltas.py ao '
+                  'SOURCE_SET. Ela foi refeita com o código final para que dry-runs-before-freeze.json ligasse as fontes congeladas. Tudo ficou '
+                  'contido: bwrap sem systemd-run, só código próprio, antes do freeze, sem serviço e sem vaga.'),
+         'superseded_supervisor': {'archived': False, 'reconstructed_sha256': reconstructed,
+                                   'reconstruction': ('supervisor.py congelado sem a entrada ", \'tools/write_deltas.py\'" do SOURCE_SET, a única edição do '
+                                                      'supervisor entre as rodadas segundo o histórico do executor. É reconstrução, não arquivo; os bytes '
+                                                      'originais não foram guardados.')},
+         'superseded_runs': json.loads((U / 'dry-runs-before-freeze.json').read_text())['superseded_rounds'],
+         'node_sources_of_the_superseded_round': 'iguais às congeladas (profile-manifest.json de cada execução substituída comparado com node/)'},
+    ],
+    'functional_receipts': 0, 'parity_credit': 0, 'written_at': now()}
+(U / 'freeze-deltas-addendum-dp1r.json').write_text(json.dumps(add, ensure_ascii=False, indent=2) + '\n')
+rep = {'kind': 'GROUPED_REPAIR', 'round': 1, 'used': '1/1', 'task': add['task'], 'review': {'path': 'review-r1/review.json', 'sha256': sha('review-r1/review.json'), 'verdict': 'APPROVE', 'counts': '0 P1, 0 P2, 7 P3'},
+       'frozen_files_changed': 0, 'services': 0, 'slots': 0,
+       'changed_or_added': [
+           {'path': 'freeze-deltas-addendum-dp1r.json', 'why': 'R1-F01, R1-F02, R1-F03, R1-F05, R1-F06, R1-F07 por registro; DV-DP1R-01 (R1-F04)'},
+           {'path': 'selftests/selftest_dp1r_stage_complement.py', 'why': 'R1-F03'},
+           {'path': 'selftests/selftest-stage-complement-results.json', 'why': 'R1-F03'},
+           {'path': 'tools/post_run_checks.py', 'why': 'R1-F07', 'preimage': 'archives/r1-preimages/tools/post_run_checks.py'},
+           {'path': 'post-run-checks-dp1r.json', 'why': 'R1-F07 (8/8, 12/12 negativos)', 'preimage': 'archives/r1-preimages/post-run-checks-dp1r.json'},
+           {'path': 'tools/close_dp1r.py', 'why': 'R1-F01 (carry_over) e R1-F04/R1-F06/R1-F05 no state e no record_for_bind; desvios do adendo no status', 'preimage': 'archives/r1-preimages/tools/close_dp1r.py'},
+           {'path': 'state.json', 'why': 'fechamento', 'preimage': 'archives/r1-preimages/state.json'},
+           {'path': 'next-task.json', 'why': 'fechamento e R1-F01', 'preimage': 'archives/r1-preimages/next-task.json'},
+           {'path': 'tools/repair_r1.py', 'why': 'gera este registro e o adendo'}],
+       'no_second_review': 'A revisão é 1/1. O reparo não tem nova rodada; o Lead vê o reparo pela disposição e por este registro.',
+       'functional_receipts': 0, 'parity_credit': 0, 'repaired_at': now()}
+(U / 'repair-r1.json').write_text(json.dumps(rep, ensure_ascii=False, indent=2) + '\n')
+print('addendum and repair written; reconstructed', reconstructed[:12])

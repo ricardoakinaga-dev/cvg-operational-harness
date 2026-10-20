@@ -58,12 +58,10 @@
 - Espaço: removidas as referências regeneráveis `compiled-reference-r6` e `installed-reference-r5` do runtime 0240 (5,7 GB; hashes na evidência). Os diretórios `legacy*` ficaram.
 - Estado em 19/10, depois da consolidação. Tudo vai à `main` por PR montado em worktree detached sob `/mnt/dados/cvg-work/`, e a branch temporária é apagada depois do merge. Histórico local preservado em `refs/backup/cont-d9ef-archive-tip-20261019`.
   - Já na `main`: captura r5 da SPEC0238 (PR #5). Em CI: BUILD0241 + T2 da receita (PR #6). Este PR documental leva as evidências e as decisões desta sessão.
-  - Em andamento, com claims ativos:
-    - Atualização: BUILD0243 e BUILD0242 promovidos neste PR; candidata e PG liberados (PG 56262 removido, portas 3448/4448 livres).
-    - `DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1`: candidata `/mnt/dados/cvg-work/cvg-codex100-c31-20261019`; unidades `cvg-dx100-c31-*`; sem PG e sem porta; evidência `g02/sdk-continuation-3-1-admission/`.
-    - `DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4` (aquisição única autorizada): cache privado em `/mnt/dados/cvg-work/cvg-codex100-distributed-cache-20261019`, sem instalação global; evidência `g02/sdk-distributed-acquisition/`.
-    - `HISO005-P2-NEXT-RECON-20261020` (T1): causas dos 13.521 diagnósticos; evidência própria.
-  - Concluídas no Codex100: ligações v3 a v5 (33 observados, 11 abertos), lotes 2B-1 e 2B-2 e especificação da continuação 3.
+  - Em andamento, com claims ativos (20/10):
+    - `DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE` (T1 documental): `g02/sdk-distributed-profile-binding/`.
+    - Nenhuma candidata de BUILD ativa. Os PGs 56262 e as portas 3448/4448 estão livres. As candidatas detached em `/mnt/dados/cvg-work/` ficam como âncora dos commits até o merge.
+  - Concluídas desde 19/10: BUILD0243, BUILD0242 e BUILD0244 (este PR); Codex100 C3-1, C3-2, v6, aquisição 0.153.4, DP-1, DP-1R e DP-2.
 
 ### HISO005-P2-BUILD-0240-20261018 — SPEC0240 aprovada (Codex) (ATIVO BUILD T3 LOCAL)
 

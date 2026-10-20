@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+# DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4 - escreve state.json e next-task.json com os sha atuais.
+# Uso: python3 -I -B close-acquisition.py.txt <unit_dir>  (depois da revisão única; lê review-r1/review.json e, se houver,
+# review-r1/executor-disposition.json)
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+UNIT = sys.argv[1]
+TASK = "DX100-G02:ACQUIRE-DISTRIBUTED-PROFILE-0.153.4"
+REL = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-acquisition"
+
+
+def sha(n):
+    return hashlib.sha256(open(os.path.join(UNIT, n), "rb").read()).hexdigest()
+
+
+def load(n):
+    return json.load(open(os.path.join(UNIT, n), encoding="utf-8"))
+
+
+plan, ledger, ver, meta = load("acquisition-plan.json"), load("acquisition-ledger.json"), load("digest-verification.json"), load("artifact-metadata.json")
+rev = load("review-r1/review.json")
+disp = load("review-r1/executor-disposition.json") if os.path.exists(os.path.join(UNIT, "review-r1/executor-disposition.json")) else None
+carry = [{"finding": "ACQ/" + i["id"], "text": i["note"]} for i in (disp or {}).get("items", []) if i["disposition"].startswith("CARRIED")]
+# Status pelos itens: P1 aberto bloqueia; P2 só fecha como FIXED ou CARRIED; P2 corrigido depois da rodada única, sem
+# re-revisão, é declarado no status.
+items = {i["id"]: i for i in (disp or {}).get("items", [])}
+mand = [f for f in rev["findings"] if f["severity"] in ("P1", "P2")]
+if rev["verdict"] == "APPROVE" and not mand:
+    status = "COMPLETED_LOCAL"
+elif any(f["severity"] == "P1" for f in mand) or any(f["id"] not in items or not items[f["id"]]["disposition"].startswith(("FIXED", "CARRIED")) for f in mand):
+    status = "BLOCKED_REVIEW"
+elif any(items[f["id"]]["disposition"].startswith("CARRIED") for f in mand):
+    status = "COMPLETED_LOCAL_WITH_CARRIED_P2"
+else:
+    status = "COMPLETED_LOCAL_P2_FIXED_AFTER_SINGLE_ROUND"
+arts = {a["id"]: {"name": a["name"], "result": a["result"], "bytes": (a.get("observed") or {}).get("bytes"), "sha256": (a.get("observed") or {}).get("sha256"),
+                  "integrity": (a.get("observed") or {}).get("sha512_integrity")} for a in ledger["artifacts"]}
+spec = {n.replace(".json", "").replace("-", "_"): {"path": REL + "/" + n, "sha256": sha(n)}
+        for n in ("acquisition-plan.json", "acquisition-ledger.json", "artifact-metadata.json", "digest-verification.json")}
+spec["how"] = {"path": REL + "/HOW-distributed-profile.md", "sha256": sha("HOW-distributed-profile.md")}
+spec["user_decision"] = plan["authorization"]["decision"]
+next_task = {
+    "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": status, "status": "READY_PENDING_LEAD_CLAIM", "track": "T1 documental, sem rede",
+    "t3_required": False,
+    "what": "Especificar o perfil distribuído keyless do SDK com os artefatos 0.153.4 do cache (ligados por sha256 ao registro da aquisição): PY19, PY20, PK01 a PK09 e o ramo empacotado do PY02. Execução futura sem rede, sem provider e sem credencial, dentro da contenção atual, só linux-x64; todo resultado declara NO_BUILD_LINK_DECLARED. Detalhes em HOW-distributed-profile.md.",
+    "spec": spec,
+    "cache": {"root": plan["cache"]["root"], "artifacts": arts},
+    "facts": ["openai-codex 0.153.4 não existe no PyPI (A6 NOT_AVAILABLE, sem substituto): o SDK Python do perfil é a fonte do pin com o runtime 0.153.4",
+              "@openai/codex-linux-x64 é o alias npm:@openai/codex@0.153.4-linux-x64; não há pacote npm próprio com esse nome",
+              "bin/codex e os demais binários são idênticos no wheel, no pacote npm de plataforma e no asset da release, e diferentes do executável compilado do pin"],
+    "decisions": {"Q1": plan["authorization"]["Q1"], "Q2": plan["authorization"]["Q2"] + " (usada; nova aquisição exige decisão nova)",
+                  "Q3": plan["authorization"]["Q3"], "Q4": plan["authorization"]["Q4"], "Q5": plan["authorization"]["Q5"]},
+    "carry_over": carry,
+    "not_authorized_now": ["rede ou nova aquisição", "provider, credencial, login real ou chamada a modelo (gate T4 separado)",
+                           "executar binário do cache fora da contenção", "npm install, pip install ou instalação global",
+                           "capability nova (Q4 negada)", "outras versões de pydantic ou Node (Q5)", "push", "produção"],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T4 autorizado (aquisição de dados), sem execução de artefato",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente", "status": status, "write_scope": [REL + "/**", plan["cache"]["root"] + "/**"],
+    "authorization": plan["authorization"],
+    "timeline": {"plan_written_at": plan["written_at"], "acquisition_started_at": ledger["started_at"], "acquisition_finished_at": ledger["finished_at"],
+                 "plan_before_network": plan["written_at"] < ledger["started_at"]},
+    "result": {
+        "requests": {r["id"]: {"http": r.get("http_code"), "result": r["result"]} for r in ledger["requests"]},
+        "artifacts": arts,
+        "digest_verification": "%s (%d/%d)" % (ver["result"], sum(c["ok"] for c in ver["checks"]), len(ver["checks"])),
+        "binary_identity": {"bin/codex": ver["binary_identity"]["bin/codex"]["A5"], "same_in": ["A1", "A3", "A5"]},
+        "build_link": ver["build_link"],
+        "divergences": [a["id"] for a in ledger["artifacts"] if a["result"] == "DIGEST_MISMATCH"],
+        "not_available": [a["id"] for a in ledger["artifacts"] if a["result"] in ("NOT_AVAILABLE", "AMBIGUOUS")],
+        "next_task": "next-task.json (SPECIFY do perfil distribuído keyless)"},
+    "scripts": ["build-acquisition-plan.py.txt", "acquire-distributed.py.txt", "inspect-artifacts.py.txt", "verify-digests.py.txt", "redact-ledger.py.txt",
+                "close-acquisition.py.txt"],
+    "formatting": "JSON gerado por json.dumps(indent=2) e depois formatado por prettier 3.8.3 (npx prettier --ignore-path /dev/null --write), na ordem plano, ledger, metadados, conferência; o conteúdo não muda, só a quebra de listas curtas (R1-F04)",
+    "review": {"R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (rev["verdict"], rev.get("summary_counts", "")),
+               "disposition": "review-r1/executor-disposition.json" if disp else None, "rounds": "1/1",
+               "critic": "subagente novo, somente leitura no repositório e no cache"},
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": "Rede só na execução única do acquire-distributed.py.txt (curl, GET por HTTPS, sem credencial, sem retry). Nada instalado nem executado; binários só no cache, fora de docs/. Docker só para o gitleaks pedido, sobre cópia da pasta (secret-scan.json). Sem commit, branch ou worktree; ledgers, coordenação, 0384-0386 e catálogo central não editados.",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+for name, obj in (("next-task.json", next_task), ("state.json", state)):
+    with open(os.path.join(UNIT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(status, state["result"]["digest_verification"], state["timeline"]["plan_before_network"])

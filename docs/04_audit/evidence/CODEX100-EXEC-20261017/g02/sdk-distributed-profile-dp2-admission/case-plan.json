@@ -1,0 +1,1000 @@
+{
+  "kind": "CASE_PLAN_FROM_SUPERVISOR_TABLES",
+  "cases": {
+    "DP2-CTRL01": {
+      "language": "python",
+      "kind": "control",
+      "topology": "adapter_peer",
+      "driver": "control-client.py (own constant client, no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "control.peer_answered_unscripted",
+          "control.client_not_blocked",
+          "wire.no_turn_interrupt",
+          "capture.case_input_frozen_bytes",
+          "peer.before_reply_order_witnessed",
+          "peer.login_frames_synthetic"
+        ],
+        "classes": {
+          "control.peer_answered_unscripted": "peer_or_capture_sanity",
+          "control.client_not_blocked": "peer_or_capture_sanity",
+          "wire.no_turn_interrupt": "client",
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "peer.before_reply_order_witnessed": "peer_or_capture_sanity",
+          "peer.login_frames_synthetic": "peer_or_capture_sanity"
+        },
+        "known_bad": {
+          "text": "O turn/interrupt sem script do cliente de controle é o known-bad do SDKPY07; deve ser julgado MISMATCH por wire.no_turn_interrupt.",
+          "judged_by": [
+            "wire.no_turn_interrupt"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": null,
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DP-PY19A": {
+      "language": "python",
+      "kind": "sdk",
+      "topology": "driver_only",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": null,
+      "barriers": [
+        "READY to the driver after its BEGIN identity + cgroup/PID witness (adapter and peer FIFOs bound and empty, DDP-12)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE (no adapter or peer frame allowed)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": "Sem adapter nem peer: o driver emite CALLS_DONE e o supervisor libera RELEASE_EXIT sem FINISH_PEER (FIFOs do adapter e do peer vazios por declaração); o close do SDK vem no finally do driver se o caso não o chamou; o término do binário publicado (DP-PY02P) é registrado, não julgado.",
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": {
+        "sys_path_runtime": null
+      },
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "api.steps_exact",
+          "proc.spawn_count_exact",
+          "runtime.sys_path_exact"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "api.steps_exact": "client",
+          "proc.spawn_count_exact": "client",
+          "runtime.sys_path_exact": "peer_or_capture_sanity"
+        },
+        "known_bad": {
+          "text": "Procurar o binário no PATH ou no pacote npm, ou lançar ImportError cru.",
+          "judged_by": [
+            "api.steps_exact",
+            "proc.spawn_count_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": "NO_BUILD_LINK_DECLARED",
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DP-PY19B": {
+      "language": "python",
+      "kind": "sdk",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 12: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "12": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": "Sem barreira EOF: o driver emite CALLS_DONE; o supervisor manda FINISH_PEER se o peer ainda não terminou e libera RELEASE_EXIT depois das saídas do adapter e do peer testemunhadas pelo SO; o close do SDK vem no finally do driver se o caso não o chamou (no DP-PY19B e no DP-PY19C o caso chama close antes do epílogo).",
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": true,
+        "/fixture": true
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS",
+          "CLIENT_TERMINATED_SIGTERM"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "stage.bound_to_cache",
+          "fixture.tree_exact",
+          "api.steps_exact",
+          "probe.values_exact",
+          "proc.argv_exact",
+          "proc.env_path_exact",
+          "proc.witness_recorded",
+          "proc.spawn_count_exact",
+          "runtime.sys_path_exact",
+          "barrier.witnesses_in_order",
+          "wire.initialize_handshake"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "stage.bound_to_cache": "peer_or_capture_sanity",
+          "fixture.tree_exact": "peer_or_capture_sanity",
+          "api.steps_exact": "client",
+          "probe.values_exact": "client",
+          "proc.argv_exact": "client",
+          "proc.env_path_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup",
+          "proc.spawn_count_exact": "client",
+          "runtime.sys_path_exact": "peer_or_capture_sanity",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "wire.initialize_handshake": "client"
+        },
+        "known_bad": {
+          "text": "Aceitar pacote sem marcador ou sem binário, acrescentar --config sem overrides, ou prepender PATH sem codex-path.",
+          "judged_by": [
+            "api.steps_exact",
+            "probe.values_exact",
+            "proc.argv_exact",
+            "proc.env_path_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": "NO_BUILD_LINK_DECLARED",
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DP-PY19C": {
+      "language": "python",
+      "kind": "sdk",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE, unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": "Sem barreira EOF: o driver emite CALLS_DONE; o supervisor manda FINISH_PEER se o peer ainda não terminou e libera RELEASE_EXIT depois das saídas do adapter e do peer testemunhadas pelo SO; o close do SDK vem no finally do driver se o caso não o chamou (no DP-PY19B e no DP-PY19C o caso chama close antes do epílogo).",
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": true,
+        "/fixture": true
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "PASS",
+          "CLIENT_TERMINATED_SIGTERM"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "stage.bound_to_cache",
+          "fixture.tree_exact",
+          "probe.values_exact",
+          "proc.argv_exact",
+          "proc.env_path_exact",
+          "proc.witness_recorded",
+          "proc.spawn_count_exact",
+          "runtime.sys_path_exact",
+          "barrier.witnesses_in_order",
+          "wire.initialize_handshake"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "stage.bound_to_cache": "peer_or_capture_sanity",
+          "fixture.tree_exact": "peer_or_capture_sanity",
+          "probe.values_exact": "client",
+          "proc.argv_exact": "client",
+          "proc.env_path_exact": "client",
+          "proc.witness_recorded": "capture_order_or_cleanup",
+          "proc.spawn_count_exact": "client",
+          "runtime.sys_path_exact": "peer_or_capture_sanity",
+          "barrier.witnesses_in_order": "capture_order_or_cleanup",
+          "wire.initialize_handshake": "client"
+        },
+        "known_bad": {
+          "text": "Não prepender o codex-path existente ou trocar o argv.",
+          "judged_by": [
+            "proc.env_path_exact",
+            "proc.argv_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": "NO_BUILD_LINK_DECLARED",
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DP-PY02P": {
+      "language": "python",
+      "kind": "sdk",
+      "topology": "driver_only",
+      "driver": "python-driver.py Interp (frozen sdk_calls)",
+      "peer": null,
+      "barriers": [
+        "READY to the driver after its BEGIN identity + cgroup/PID witness (adapter and peer FIFOs bound and empty, DDP-12)",
+        "step 6: WITNESS_REQUEST -> REALCLI_WITNESS (pid mapped by NSpid; refused before a PROC_RETAIN) -> WITNESS_DONE->driver",
+        "RELEASE_EXIT->driver after driver CALLS_DONE (no adapter or peer frame allowed)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": "Sem adapter nem peer: o driver emite CALLS_DONE e o supervisor libera RELEASE_EXIT sem FINISH_PEER (FIFOs do adapter e do peer vazios por declaração); o close do SDK vem no finally do driver se o caso não o chamou; o término do binário publicado (DP-PY02P) é registrado, não julgado.",
+      "service_properties": {
+        "MemoryMax": "1073741824",
+        "TasksMax": "256",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {
+        "MemoryMax": [
+          "536870912",
+          "1073741824"
+        ],
+        "TasksMax": [
+          "32",
+          "256"
+        ]
+      },
+      "binds": {
+        "/dist": true,
+        "/fixture": false
+      },
+      "driver_runtime": {
+        "sys_path_runtime": "/dist/py/site"
+      },
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "REAL_CLI_KEYLESS"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "stage.bound_to_cache",
+          "keyless.no_network_no_credential",
+          "service.limits_declared",
+          "probe.values_exact",
+          "realcli.argv_exact",
+          "realcli.env_path_exact",
+          "realcli.children_exact",
+          "realcli.exe_identity",
+          "realcli.witness_read",
+          "runtime.sys_path_exact"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "stage.bound_to_cache": "peer_or_capture_sanity",
+          "keyless.no_network_no_credential": "peer_or_capture_sanity",
+          "service.limits_declared": "peer_or_capture_sanity",
+          "probe.values_exact": "client",
+          "realcli.argv_exact": "client",
+          "realcli.env_path_exact": "client",
+          "realcli.children_exact": "client",
+          "realcli.exe_identity": "peer_or_capture_sanity",
+          "realcli.witness_read": "capture_order_or_cleanup",
+          "runtime.sys_path_exact": "peer_or_capture_sanity"
+        },
+        "known_bad": {
+          "text": "Lançar outro binário, omitir o --config, não prepender o codex-path, ou tratar a versão 0.153.4 como prova de vínculo com o pin.",
+          "judged_by": [
+            "probe.values_exact",
+            "realcli.argv_exact",
+            "realcli.env_path_exact"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": "NO_BUILD_LINK_DECLARED",
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DP-PY20A": {
+      "language": "python",
+      "kind": "artifact_check",
+      "topology": "none (no service; evaluator only, CAP-DP-ARTIFACT-CHECK)",
+      "service": null,
+      "acceptance_predicates": {
+        "accepted_capture_forms": [
+          "ARTIFACT_CHECK"
+        ],
+        "predicates": [
+          "capture.case_input_frozen_bytes",
+          "stage.bound_to_cache",
+          "artifact.manifest_fields_exact",
+          "artifact.payload_identity"
+        ],
+        "classes": {
+          "capture.case_input_frozen_bytes": "peer_or_capture_sanity",
+          "stage.bound_to_cache": "peer_or_capture_sanity",
+          "artifact.manifest_fields_exact": "client",
+          "artifact.payload_identity": "client"
+        },
+        "known_bad": {
+          "text": "Qualificar as seis plataformas a partir de um binário Linux ou da listagem, ou confundir a declaração do wheel com o artefato autenticado.",
+          "judged_by": [
+            "artifact.manifest_fields_exact",
+            "artifact.payload_identity"
+          ]
+        },
+        "inconclusive_on_deadline": false,
+        "composition": "inputs/spec-dp/cases-dp-2.json#/composition",
+        "build_link": "NO_BUILD_LINK_DECLARED",
+        "evaluator": "acceptance-r4-dp2 (DX100-G02 distributed profile DP-2; frozen predicate table and composition of cases-dp-2.json; E2B-01..E2B-14, EDP-01..EDP-08, erratum DP-SPEC/R2-F01)"
+      }
+    },
+    "DIAG-PY-RPC": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "ABORT_NOW->driver after peer REQUEST_HELD and the held line fully committed by the adapter",
+        "RELEASE_REPLY->peer after driver API_CANCELLED",
+        "FINISH_PEER->peer after driver LATE_REPLY_OBSERVED and peer STDIN_EOF",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-STAGE": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": null,
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 6: gate [('held', 'own/heldearly', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "6": {
+          "gate": [
+            [
+              "held",
+              "own/heldearly",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "7": {
+          "api": "worker.join",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-BARRIER": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 11: gate [('held', 'own/held', {})] -> actions [('RELEASE_REPLY', []), ('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "11": {
+          "gate": [
+            [
+              "held",
+              "own/held",
+              {}
+            ]
+          ],
+          "actions": [
+            [
+              "RELEASE_REPLY",
+              []
+            ],
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {
+        "9": {
+          "api": "worker.parked",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        },
+        "12": {
+          "api": "worker.join",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        },
+        "15": {
+          "api": "worker.join",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        },
+        "20": {
+          "api": "excepthook.wait",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-LOGIN": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {
+        "7": {
+          "api": "probe.until",
+          "class": "HARNESS_PRECONDITION",
+          "thread_name": null
+        }
+      },
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-PY-PROCWITNESS": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "adapter_peer",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": "fixture-rpc ScriptV2 (peer v2, D2B-09) or v1 constant rows",
+      "barriers": [
+        "READY to each role after BEGIN identity + cgroup/PID witness",
+        "step 4: gate [('proc_witness',)] -> actions [('STEP_RELEASE', [])]",
+        "FINISH_PEER->peer after driver CALLS_DONE + CLIENT_STDIN_CLOSED + peer STDIN_EOF (EOF-bounded interval), unless the peer already ended (exit frame or forwarded signal)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE and adapter and peer exits witnessed by the OS (dead, zombie or absent)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {
+        "4": {
+          "gate": [
+            [
+              "proc_witness"
+            ]
+          ],
+          "actions": [
+            [
+              "STEP_RELEASE",
+              []
+            ]
+          ]
+        }
+      },
+      "wait_classes_r2_f04": {},
+      "epilogue": "eof_calls_done_release_exit_then_sdk_close",
+      "eof_bounded": true,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile"
+    },
+    "DIAG-DP-STAGE": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "driver_only",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": null,
+      "barriers": [
+        "READY to the driver after its BEGIN identity + cgroup/PID witness (adapter and peer FIFOs bound and empty, DDP-12)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE (no adapter or peer frame allowed)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": true,
+        "/fixture": true
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile_driver_only"
+    },
+    "DIAG-DP-PYRUNTIME": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "driver_only",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": null,
+      "barriers": [
+        "READY to the driver after its BEGIN identity + cgroup/PID witness (adapter and peer FIFOs bound and empty, DDP-12)",
+        "RELEASE_EXIT->driver after driver CALLS_DONE (no adapter or peer frame allowed)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "536870912",
+        "TasksMax": "32",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {},
+      "binds": {
+        "/dist": false,
+        "/fixture": true
+      },
+      "driver_runtime": {
+        "sys_path_runtime": "/fixture/pyrt/siteA"
+      },
+      "acceptance_predicates": "diag_checks + observer.reconcile_driver_only"
+    },
+    "DIAG-DP-REAL-CLI-APPSERVER": {
+      "language": "python",
+      "kind": "diag",
+      "topology": "driver_only",
+      "driver": "python-driver.py own code (no SDK)",
+      "peer": null,
+      "barriers": [
+        "READY to the driver after its BEGIN identity + cgroup/PID witness (adapter and peer FIFOs bound and empty, DDP-12)",
+        "step 2: WITNESS_REQUEST -> REALCLI_WITNESS (pid mapped by NSpid; refused before a PROC_RETAIN) -> WITNESS_DONE->driver",
+        "step 4: WITNESS_REQUEST -> REALCLI_WITNESS (pid mapped by NSpid; refused before a PROC_RETAIN) -> WITNESS_DONE->driver",
+        "RELEASE_EXIT->driver after driver CALLS_DONE (no adapter or peer frame allowed)",
+        "driver /proc maps sampled right before RELEASE_EXIT->driver (loaded-code identity)"
+      ],
+      "barrier_plan": {},
+      "wait_classes_r2_f04": {},
+      "epilogue": "calls_done_release_exit_then_sdk_close_if_open",
+      "eof_bounded": false,
+      "epilogue_note_r2_f06": null,
+      "service_properties": {
+        "MemoryMax": "1073741824",
+        "TasksMax": "256",
+        "CPUQuota": "100%",
+        "RuntimeMaxSec": "45",
+        "KillMode": "control-group",
+        "TimeoutStopSec": "3",
+        "NoNewPrivileges": "yes",
+        "LimitNOFILE": "128",
+        "LimitFSIZE": "8388608",
+        "LimitCORE": "0"
+      },
+      "service_properties_diff_from_inherited": {
+        "MemoryMax": [
+          "536870912",
+          "1073741824"
+        ],
+        "TasksMax": [
+          "32",
+          "256"
+        ]
+      },
+      "binds": {
+        "/dist": true,
+        "/fixture": false
+      },
+      "driver_runtime": null,
+      "acceptance_predicates": "diag_checks + observer.reconcile_driver_only"
+    }
+  },
+  "diagnostics": {
+    "DIAG-PY-RPC": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-STAGE": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-UNSCRIPTED": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-BARRIER": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-BEFOREREPLY": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-LOGIN": {
+      "expect": "PASS"
+    },
+    "DIAG-PY-PROCWITNESS": {
+      "expect": "PASS"
+    },
+    "DIAG-DP-STAGE": {
+      "expect": "PASS"
+    },
+    "DIAG-DP-PYRUNTIME": {
+      "expect": "PASS"
+    },
+    "DIAG-DP-REAL-CLI-APPSERVER": {
+      "expect": "PASS"
+    }
+  },
+  "admission_diagnostics": [
+    "DIAG-PY-RPC",
+    "DIAG-PY-STAGE",
+    "DIAG-PY-UNSCRIPTED",
+    "DIAG-PY-BEFOREREPLY",
+    "DIAG-PY-BARRIER",
+    "DIAG-PY-LOGIN",
+    "DIAG-PY-PROCWITNESS",
+    "DIAG-DP-STAGE",
+    "DIAG-DP-PYRUNTIME",
+    "DIAG-DP-REAL-CLI-APPSERVER"
+  ],
+  "conditional_diags": {
+    "DIAG-DP-REAL-CLI-APPSERVER": [
+      "DP-PY02P"
+    ]
+  },
+  "conditional_slots": {
+    "DP-PY02P": "DIAG-DP-REAL-CLI-APPSERVER"
+  },
+  "topology": {
+    "DP2-CTRL01": "adapter_peer",
+    "DP-PY19A": "driver_only",
+    "DP-PY19B": "adapter_peer",
+    "DP-PY19C": "adapter_peer",
+    "DP-PY02P": "driver_only",
+    "DP-PY20A": "none (no service; evaluator only, CAP-DP-ARTIFACT-CHECK)",
+    "DIAG-PY-RPC": "adapter_peer",
+    "DIAG-PY-STAGE": "adapter_peer",
+    "DIAG-PY-UNSCRIPTED": "adapter_peer",
+    "DIAG-PY-BEFOREREPLY": "adapter_peer",
+    "DIAG-PY-BARRIER": "adapter_peer",
+    "DIAG-PY-LOGIN": "adapter_peer",
+    "DIAG-PY-PROCWITNESS": "adapter_peer",
+    "DIAG-DP-STAGE": "driver_only",
+    "DIAG-DP-PYRUNTIME": "driver_only",
+    "DIAG-DP-REAL-CLI-APPSERVER": "driver_only"
+  },
+  "dry_rows": [
+    "DIAG-DP-STAGE",
+    "DIAG-DP-PYRUNTIME",
+    "DIAG-PY-BARRIER"
+  ]
+}

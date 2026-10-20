@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3 - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-c3.py.txt <repo_root> <staged_python_deps_dir> <out_json>
+# Confere por sha e por blob git as entradas da especificação da continuação 3: o BIND do 2B-2 (v5, HOW v2, disposição
+# com as perguntas Q1-Q5), a especificação 2B, o BIND do 2B-1 e a admissão do 2B-2 (commit do PR documental #7 do Lead),
+# as especificações 2A e 2A-cont, os vocabulários admitidos dos drivers (2AC e 2B-2), as fontes do SDK no pin contra a
+# identity freeze, os contratos G01 e o fato de fonte que torna o PY04 não aplicável. Não importa SDK, Pydantic nem
+# packaging; não executa nada além de leitura, sha256 e git local. Nada é escrito fora do <out_json>.
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, DEPS, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
+E = "docs/04_audit/evidence/CODEX100-EXEC-20261017"
+G02R = E + "/g02"
+LEAD_PR_COMMIT = "7e1da11a4"  # PR documental #7 do Lead (ref origin/candidate/d9ef-docs-20261019)
+# Shas do BIND do 2B-2 aceito pelo Lead ("BIND 2B-2 aceito: o v5 vale e a errata das perguntas prevalece sobre o HOW").
+BIND2B2 = {
+    "next-task.json": "f258f0500929e9177e720b739aedf7894644c38f1688257964dae73d027a5448",
+    "coverage-observed-v5.json": "5b8d1019a817d78080085b287e72bfeb7b81e454f2215b02dd609e6c31d3e4a4",
+    "gaps-review-v5.json": "79493e8eff3b6d7fee9ced921bc241a630fa7ce9376a3ad87e9ee522f14658f8",
+    "HOW-next-profile-v2.md": "cac263ecd30943d4e79dd2ae05b1f3611403f5cbdadda9c82254b70d4ef84a10",
+    "review-r2/executor-disposition.json": "c4bccb49e03ebf197b1e20a89952b18fb47b5229e62c5adc1d43ff9f644fad0b",
+}
+checks = []
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def A(rel):
+    return os.path.join(ROOT, rel)
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+def same_as_commit(rel, commit):
+    """Todo arquivo da árvore do commit sob rel é igual ao arquivo local (blob git) e não há arquivo local a mais."""
+    lt = git("ls-tree", "-r", commit, "--", rel)
+    if lt.returncode != 0:
+        return False, {"problems": ["ls-tree failed"]}
+    tree = {}
+    for line in lt.stdout.splitlines():
+        meta, path = line.split("\t", 1)
+        tree[path] = meta.split()[2]
+    bad = []
+    for path, blob in tree.items():
+        if not os.path.isfile(A(path)):
+            bad.append("missing " + path)
+        elif git("hash-object", A(path)).stdout.strip() != blob:
+            bad.append("differs " + path)
+    for dp, _, fs in os.walk(A(rel)):
+        for f in fs:
+            p = os.path.relpath(os.path.join(dp, f), ROOT)
+            if p not in tree:
+                bad.append("extra " + p)
+    return (not bad and len(tree) > 0), {"files_in_commit": len(tree), "problems": bad[:10]}
+
+
+# 1: âncora durável
+PR = git("rev-parse", LEAD_PR_COMMIT).stdout.strip()
+refs = [x for x in git("for-each-ref", "--contains", PR, "--format=%(refname)").stdout.split() if x]
+check("Lead documentary PR commit resolves and is contained in a ref (durable anchor)", len(PR) == 40 and bool(refs), {"commit": PR, "refs": refs})
+
+# 2: BIND do 2B-2 (não rastreado; conferido pelos shas aceitos pelo Lead)
+b2 = A(G02R + "/sdk-batch-2b2-binding")
+got = {k: sha(os.path.join(b2, k)) for k in BIND2B2}
+check("2B-2 BIND files equal the shas accepted by the Lead (v5, gaps v5, HOW v2, next-task, R2 disposition)", got == BIND2B2,
+      {k: got[k] == v for k, v in BIND2B2.items()})
+st2 = load(os.path.join(b2, "state.json"))
+nt2 = load(os.path.join(b2, "next-task.json"))
+check("2B-2 BIND COMPLETED_LOCAL_WITH_CARRIED_P2 and its next-task points to this unit with the HOW and v5 bound by sha",
+      st2["status"] == "COMPLETED_LOCAL_WITH_CARRIED_P2" and nt2["task"].startswith("DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3")
+      and nt2["definition"]["how"]["sha256"] == BIND2B2["HOW-next-profile-v2.md"]
+      and nt2["definition"]["remaining"]["sha256"] == BIND2B2["coverage-observed-v5.json"],
+      {"status": st2["status"], "next": nt2["task"]})
+v5 = load(os.path.join(b2, "coverage-observed-v5.json"))
+open_arms = sorted(a["arm_id"] for a in v5["arms_open_explicit_v5"])
+check("v5: 33 OBSERVED_CLIENT_PARTIAL / 11 OPEN_REQUIRED_FUTURE_PROFILE; explicit open arms PY05.B10 and PY13.B06",
+      v5["counts"] == {"OBSERVED_CLIENT_PARTIAL": 33, "OPEN_REQUIRED_FUTURE_PROFILE": 11} and open_arms == ["PY05.B10", "PY13.B06"],
+      {"counts": v5["counts"], "open_arms": open_arms})
+rows = {r["source_contract"]: r for r in v5["rows"]}
+scope = ["TS%02d" % i for i in range(1, 16)] + ["PY02", "PY03", "PY04", "PY05", "PY08", "PY10", "PY12", "PY13", "PY14", "PY15", "PY16", "PY17", "PY18"]
+check("v5: every contract in the continuation-3 scope is OBSERVED_CLIENT_PARTIAL (no row opens or closes here)",
+      all(rows[c]["status"] == "OBSERVED_CLIENT_PARTIAL" for c in scope), {c: rows[c]["status"] for c in scope})
+disp = load(os.path.join(b2, "review-r2/executor-disposition.json"))
+qids = [q["id"] for it in disp["items"] if it["id"] == "R2-F01" for q in it.get("erratum_questions", [])]
+check("2B-2 BIND R2 disposition carries the questions Q1-Q5 that prevail over the HOW", qids == ["Q1", "Q2", "Q3", "Q4", "Q5"], qids)
+
+# 3-9: pastas no commit do PR documental
+for name in ["sdk-source-batch-2b-spec", "sdk-batch-2b1-binding", "sdk-batch-2b2-admission", "sdk-source-batch-2a-spec",
+             "sdk-source-batch-2a-continuation-spec", "sdk-batch-2ac-admission", "sdk-batch-2a-admission"]:
+    ok, det = same_as_commit(G02R + "/" + name, PR)
+    check("%s equals commit %s (blob by blob, no extra file)" % (name, LEAD_PR_COMMIT), ok, det)
+
+# 10: especificação 2B e o que ela ligou
+s2b = A(G02R + "/sdk-source-batch-2b-spec")
+c2b1 = load(os.path.join(s2b, "cases-2b-1.json"))
+c2b2 = load(os.path.join(s2b, "cases-2b-2.json"))
+st2b = load(os.path.join(s2b, "state.json"))
+check("2B spec COMPLETED_LOCAL (R2) with 16 + 18 slots", st2b["status"].startswith("COMPLETED_LOCAL") and len(c2b1["cases"]) == 16
+      and len(c2b2["cases"]) == 18, {"status": st2b["status"], "slots": [len(c2b1["cases"]), len(c2b2["cases"])]})
+fr = load(os.path.join(s2b, "freeze-r4-2b-delta.json"))
+ev = load(os.path.join(s2b, "evaluator-r4-2b-delta.json"))
+check("freeze r4 2B delta D2B-01..15 and evaluator r4 2B delta E2B-01..14 (bases of the C3 deltas)",
+      [i["id"] for i in fr["items"]] == ["D2B-%02d" % i for i in range(1, 16)] and [c["id"] for c in ev["clauses"]] == ["E2B-%02d" % i for i in range(1, 15)],
+      {"freeze": len(fr["items"]), "evaluator": len(ev["clauses"])})
+base_fr = A(G02R + "/sdk-source-batch-2a-continuation-spec/freeze-r4-contract.json")
+base_ev = A(G02R + "/sdk-source-batch-2a-continuation-spec/evaluator-r4-contract.json")
+check("freeze r4 and evaluator r4 bases unchanged (sha bound by the 2B deltas)",
+      sha(base_fr) == fr["base"]["freeze_r4"]["sha256"] and sha(base_ev) == ev["base"]["evaluator_r4"]["sha256"],
+      {"freeze_r4": sha(base_fr), "evaluator_r4": sha(base_ev)})
+check("2A spec cases-2a.json sha bound by the 2A continuation replays", sha(A(G02R + "/sdk-source-batch-2a-spec/cases-2a.json"))
+      == "147a906d2aa6616157c50d8e4cc9cb7e8f5d9cec7be749b77eca1e0e1dbc1c2c", None)
+
+# 11: admissão do 2B-2 (vocabulário Python vigente) e carry-over
+a22 = A(G02R + "/sdk-batch-2b2-admission")
+sta = load(os.path.join(a22, "state.json"))
+man = load(os.path.join(a22, "unit-manifest.json"))["files"]
+vocab_ok = {p: sha(os.path.join(a22, p)) == man[p]["sha256"] for p in ["python/python-driver.py", "python/harness2b.py", "python/fixture-rpc.py",
+                                                                    "python/control-client.py", "python/acceptance.py"]}
+check("2B-2 admission driver, harness, peer, control client and evaluator equal its unit manifest", all(vocab_ok.values()), vocab_ok)
+co = [c["finding"] for c in sta.get("carry_over_next", [])]
+check("2B-2 admission COMPLETED_LOCAL with carry-over R1-F02, R1-F03, R1-F04 and R1-F01 (DV1)",
+      sta["status"] == "COMPLETED_LOCAL" and co == ["R1-F02", "R1-F03", "R1-F04", "R1-F01 (DV1)"], co)
+ld = load(os.path.join(a22, "lead-decision-f01.json"))
+check("lead-decision-f01: ACCEPT_FAIL_CLOSED_OUTCOME with the T1 erratum of step 13 as a future option",
+      ld["decision"] == "ACCEPT_FAIL_CLOSED_OUTCOME" and "errata T1" in ld["rationale"], ld["decision"])
+
+# 12: admissão 2AC (vocabulário TypeScript vigente)
+a2c = A(G02R + "/sdk-batch-2ac-admission")
+man2c = load(os.path.join(a2c, "unit-manifest.json"))["files"]
+ts_ok = {p: sha(os.path.join(a2c, p)) == man2c[p]["sha256"] for p in ["node/ts-driver.mjs", "node/fixture-cli.mjs", "node/adapter-typescript",
+                                                                    "node/channel.cjs"]}
+check("2AC admission TS driver, fixture CLI, adapter and channel equal its unit manifest", all(ts_ok.values()), ts_ok)
+
+# 13: fontes do SDK no pin contra a identity freeze r3
+idf = load(A(G02R + "/sdk-batch-2a-admission/identity-freeze-r3.json"))
+pyref = A(G02R + "/sdk-reference-profile/inputs/sdk/python/src/")
+tsref = A(G02R + "/sdk-reference-profile/inputs/sdk/typescript/src/")
+py_files = ["client.py", "api.py", "async_client.py", "_message_router.py", "_goal.py", "_login.py", "_run.py", "_inputs.py",
+            "_runtime_requirements.py", "models.py", "errors.py", "generated/v2_all.py", "generated/notification_registry.py"]
+py_ok = {f: sha(pyref + "openai_codex/" + f) == idf["trees"]["sdk-python"]["openai_codex/" + f]["sha256"] for f in py_files}
+check("SDK Python sources used as anchors equal identity-freeze-r3 trees/sdk-python", all(py_ok.values()), py_ok)
+ts_files = ["codex.ts", "thread.ts", "exec.ts", "outputSchemaFile.ts", "events.ts", "items.ts"]
+ts_ok2 = {f: sha(tsref + f) == idf["ts_sources"][f] for f in ts_files}
+check("SDK TypeScript sources used as anchors equal identity-freeze-r3 ts_sources", all(ts_ok2.values()), ts_ok2)
+pv = os.path.join(DEPS, "packaging/version.py")
+check("staged packaging/version.py (regex read for PY05) equals identity-freeze-r3 trees/python-deps",
+      os.path.isfile(pv) and sha(pv) == idf["trees"]["python-deps"]["packaging/version.py"]["sha256"], sha(pv) if os.path.isfile(pv) else None)
+
+# 14: contratos G01
+g01 = A(E + "/g01/sdk-open-contracts/")
+check("G01 contracts unchanged (python-contracts.json, typescript/contracts.json)",
+      sha(g01 + "python-contracts.json") == "25c48bdd75710c2eb5bde33c6b18379892078ca3e5b78f1448dfe42c94e19ad1"
+      and sha(g01 + "typescript/contracts.json") == "b90b17ce1bbcd824ff92c68180b79d4ef428c715ced48a520db379bbfb7275d2", None)
+tsc = load(g01 + "typescript/contracts.json")
+arm_ids = sorted(b["id"] for c in tsc["contracts"] for b in c["branches"] if c["id"].startswith("TS"))
+check("G01 TypeScript arm catalog has TS01.B01..TS15.B05 (ids cited by the C3-1 cases)", len(arm_ids) == 64 and arm_ids[0] == "TS01.B01" and arm_ids[-1] == "TS15.B05", len(arm_ids))
+
+# 15: PY04 não aplicável: modelos de fork, resume e turn/start sem default diferente de None
+v2 = open(pyref + "openai_codex/generated/v2_all.py", encoding="utf-8").read().split("\n")
+
+
+def non_none_defaults(name):
+    start = [i for i, l in enumerate(v2) if l.startswith("class %s(" % name)]
+    if len(start) != 1:
+        return None
+    out, i = [], start[0] + 1
+    while i < len(v2) and (v2[i].startswith(" ") or v2[i] == ""):
+        line = v2[i]
+        m = re.match(r"^    (?:\]|\w+: .*?) = (.+)$", line)
+        if m and not line.startswith("    model_config") and m.group(1).strip() != "None":
+            out.append([i + 1, line.strip()])
+        i += 1
+    return out
+
+
+nd = {n: non_none_defaults(n) for n in ["ThreadForkParams", "ThreadResumeParams", "TurnStartParams"]}
+check("PY04 residual not applicable: ThreadForkParams, ThreadResumeParams and TurnStartParams have no non-None default", all(v == [] for v in nd.values()), nd)
+
+ok = all(c["ok"] for c in checks)
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3", "result": "PASS" if ok else "FAIL",
+       "anchor_commit": PR, "checks": checks, "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    json.dump(doc, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))
+for c in checks:
+    if not c["ok"]:
+        print("FAIL", c["check"], json.dumps(c["detail"], ensure_ascii=False)[:600])

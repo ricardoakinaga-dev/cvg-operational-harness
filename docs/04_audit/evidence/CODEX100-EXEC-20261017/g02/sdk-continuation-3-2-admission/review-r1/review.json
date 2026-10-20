@@ -1,0 +1,179 @@
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-2",
+  "reviewer": "Claude Code (Opus 5.5), revisor independente R1, somente leitura fora de review-r1/; sessão d9ef2deb",
+  "reviewed_at": "2026-10-20T01:48:17.413472+00:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "c758a732d1d1b465f6ccc3510508711337fe8beb25b6508ef0ca1f0c7d77930b",
+  "subject_hash_check": {
+    "before": {
+      "ok": true,
+      "freeze_sha256": "c758a732d1d1b465f6ccc3510508711337fe8beb25b6508ef0ca1f0c7d77930b",
+      "files_listed": 575,
+      "files_equal_bytes_and_sha256": 575,
+      "differing_or_missing": [],
+      "extra_files_outside_review_r1": [],
+      "pycache_dirs": [],
+      "checked_at": "início da revisão, antes da cópia para o scratchpad (review-r1/ só com brief.md)"
+    },
+    "after": {
+      "ok": true,
+      "freeze_sha256": "c758a732d1d1b465f6ccc3510508711337fe8beb25b6508ef0ca1f0c7d77930b",
+      "files_listed": 575,
+      "files_equal_bytes_and_sha256": 575,
+      "differing_or_missing": [],
+      "extra_files_outside_review_r1": [],
+      "pycache_dirs": [],
+      "checked_at": "2026-10-20T01:48:17.413437+00:00"
+    }
+  },
+  "verdict": "APPROVE",
+  "verdict_reason": "Nenhum P1 ou P2. Os 13 PASS_CLIENT_OBSERVATION e o MISMATCH do C32-CTRL01 se apoiam em capturas reais: reproduzi 46/46 autotestes, o validador (17/17 controles negativos recusados) e a reavaliação offline 14/14 igual em predicados e desfecho, e as perturbações em cópia mudam o desfecho em todo frame que a expectativa nomeia. A errata T1 do C3-PY13ER está aplicada como congelada e o PASS dele não depende do registro de threads. DV-C32-01 e DV-C32-02 confirmados, P3, sem efeito em desfecho. Quatro achados P3 novos: o guarda \"só se nunca iniciou\" do E3-07 não tem controle negativo e o registro real o desarma no fluxo do C3-PY13ER (R1-F01); fato derivado errado no acceptance.json do C3-PY13ER (R1-F02); wait_class aceito além da lista do D3-05 (R1-F03); texto impreciso do DV-C32-04 (R1-F04). Todos são registro ou carry-over vinculante; nenhum pede reparo da evidência executada nem serviço novo. Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito.",
+  "erratum_t1": {
+    "verdict": "CONFORME",
+    "evidence": [
+      "inputs/spec-c3/cases-c3-2.json#/cases[id=C3-PY13ER]/case_input/sdk_calls passos 11 (hook.wait), 12 (thread.join) e 13 (excepthook.wait) com wait_class CLIENT_EFFECT_UNLESS_ALIVE e thread_name codex-goal-start-cleanup; expected.fault.fired com zero_calls_client_effect_unless_started; validador sem problemas no caso.",
+      "cases/C3-PY13ER-94b0a3389572/events-driver.jsonl seq 31-38: WAIT_RESULT dos passos 11, 12 e 13 com class CLIENT_EFFECT_UNLESS_ALIVE; nenhum estouro de prazo (11 e 13 ok true em 1.1 e 0.1 ms; 12 ok false em 0.1 ms só pelo DV-C32-01/DV-C32-03); FAULT seq 28 e FAULT_SCOPE removed calls 1 (regra de zero chamadas não usada).",
+      "Autotestes reproduzidos (selftests/selftest_c32.py em cópia, 46/46): E3-07 (a) MISMATCH regra 6 com api.steps_exact, wire.requests_exact, probe.values_exact, hook.events_exact e excepthook.records_exact; (b) INVALID_CAPTURE regra 4 por fault.fired_as_declared; (c) INVALID_CAPTURE com wait.client_effect_recorded (regra 4 no avaliador; no driver real a CaptureFailure leva à regra 1, R2-F03 (2)); C3-PY08 com W1 estacionado MISMATCH regra 6 por consumer.results_exact.",
+      "Mesmas perturbações sobre a captura real do C3-PY13ER (scratchpad tools/perturb_13er.py): cleanup pulado -> MISMATCH regra 6 com os mesmos 5 predicados; alvo duas vezes -> INVALID_CAPTURE regra 4; passo 12 com thread vivo -> INVALID_CAPTURE regra 4; sem WAIT_RESULT do passo 13 -> INVALID_CAPTURE regra 4; rota deixada, h_stop ausente ou em outro thread -> MISMATCH regra 6.",
+      "Captura real do C3-PY08 com W1 estacionado (scratchpad tools/perturb_py08.py): MISMATCH regra 6 por consumer.results_exact e identity.groups_exact; sem o WAIT_RESULT do passo 9 -> INVALID_CAPTURE regra 4.",
+      "Limite: o lado \"só se nunca iniciou\" da regra de zero chamadas não tem controle negativo e é desarmado pelo DV-C32-01 no fluxo do C3-PY13ER (R1-F01). A discriminação do known_bad \"pular o cleanup\" não depende desse lado (nesse known_bad o thread de fato nunca inicia, e o registro só erra para \"nunca iniciou\" falso)."
+    ]
+  },
+  "declared_findings": {
+    "DV-C32-01": {
+      "assessment": "CONFIRMADO; tratamento (sem reparo, sem nova execução, correção na próxima unidade) adequado, mas a correção deve ser carry-over vinculante, não só proposta (ver R1-F01). harness2b.py:281 registra o nome só no primeiro evento de um ident novo; reproduzi tools/repro_registry_ident_reuse.py em cópia (50/50 reusos, 50/50 segundo thread ausente; gêmeo threading.local 0/50). Na captura, o codex-goal-start-cleanup rodou h_stop (seq 29) e o EXCEPTHOOK_RECORD (seq 30) antes do fim do passo 11 e falta no THREAD_REGISTRY (seq 47); no DIAG-PY-BARRIER falta o cvg-own-raiser. Varri as 7 capturas com registro instalado: só essas duas têm thread nomeado nos frames e ausente do registro. A afirmação \"nenhum desfecho muda\" confere: as esperas decidem por thread_alive (threading.enumerate, python-driver.py:570), não pelo registro; o alvo foi chamado uma vez, então fault.fired_as_declared seguiu o caminho normal; wait.client_effect_recorded só exige thread_started booleano. Perturbações em cópia: sem o marco THREAD_REGISTRY o C3-PY13ER segue PASS (regra 7), e com a telemetria corrigida (registro com o thread, thread_started true, passo 12 ok true) também. O PASS do C3-PY13ER é válido. Provas do D3-05/E3-07: os autotestes (a), (b) e (c) são do avaliador sobre captura sintética com registro correto e seguem válidos; o DIAG-PY-C3VOCAB prova nunca iniciou, vivo e terminado sem reuso de ident (registro com cvg-c3-held) e segue válido. O que não fica provado em serviço é o guarda \"só se nunca iniciou\" do E3-07: sem controle negativo e desarmado no fluxo do C3-PY13ER (R1-F01). O risco descrito pelo executor (INVALID_CAPTURE que viraria efeito do cliente; nenhum PASS falso; vivo nunca escondido) está correto e foi demonstrado sobre a forma real da captura (R1-F01). Falta citar o fato derivado client_effect_timeout true do passo 12 no acceptance.json (R1-F02).",
+      "severity": "P3",
+      "evidence": [
+        "python/harness2b.py:276-283 (_profile com _seen_idents)",
+        "registry-ident-reuse-repro.json e reprodução em cópia: frozen_HookSet 50/50 ausente com ident reusado; local_flag_twin 0/50",
+        "cases/C3-PY13ER-94b0a3389572/events-driver.jsonl seq 28 FAULT, 29 HOOK_EVENT h_stop (codex-goal-start-cleanup), 30 EXCEPTHOOK_RECORD, 32/35/38 WAIT_RESULT thread_started false, 34 THREAD_JOIN found false, 44 FAULT_SCOPE removed calls 1, 47 THREAD_REGISTRY sem codex-goal-start-cleanup",
+        "diagnostics/596a3e3e25ad-DIAG-PY-BARRIER/events-driver.jsonl: excepthook do cvg-own-raiser e THREAD_REGISTRY sem ele; esperas do DIAG sem thread_name",
+        "cases/C3-PY13F-f3880c6954cc: THREAD_REGISTRY com codex-goal-start-cleanup (cleanup iniciado pelo codex-goal-start ainda vivo)",
+        "python/python-driver.py:566-588 (thread_state e wait_result: decisão por alive) e 701-709 (thread.join com never pelo registro)",
+        "python/acceptance.py:840-866 (fault_fired: zero_rule só com name fora do registro) e 875-896 (wait_client_effect_recorded)",
+        "Perturbações P10 e P11 (scratchpad perturb_13er.out): PASS_CLIENT_OBSERVATION regra 7 nos dois"
+      ]
+    },
+    "DV-C32-02": {
+      "assessment": "CONFIRMADO; R1-F03 (D3-08) cumprido em substância. O texto congelado pede conferir o plano da pasta contra case-plan.json (sha do source freeze) ou BARRIER_PLAN e os passos de barreira do case_input, com controle negativo. Na minha reavaliação em cópia (python/acceptance.py reevaluate nas 14 pastas) o único problema em todas é \"case folder records another plan file\": o case-plan.json está ligado pelo source-freeze-r4-c32.json (sha f26fb9be...), o plano da pasta é igual à entrada do caso e as chaves do barrier_plan são exatamente os passos de barreira. O registro case_plan_file é exigência extra da pilha do C3-1; o supervisor do C3-2 (supervisor.py:1371, base 2B-2) nunca o grava. Ressalvas para registro: (1) o autoteste R1-F03 (selftest_c32.py:563) usa manifesto sintético com case_plan_file e não reflete o manifesto real; (2) o reevaluate sai com código 1 nas 14 pastas, embora o docstring (acceptance.py:56) prometa 0 quando predicados e desfecho são iguais (acceptance.py:1928 exige também plan_binding_ok); (3) plan_binding_content_ok é classificação posterior feita por tools/collect_results.py, fora do source freeze, mas reproduzível e conservadora (só vale quando o registro ausente é o único problema). Nenhum desfecho muda.",
+      "severity": "P3",
+      "evidence": [
+        "reevaluation-c32.json#/all_plan_binding_ok false, #/all_plan_binding_content_ok true, #/plan_file_record_absent (14)",
+        "Reavaliação em cópia: 14/14 predicate_level_equal e outcome_equal true; plan_binding.problems == [\"case folder records another plan file\"] em todas; código de saída 1 nas 14",
+        "cases/*/profile-manifest.json: chaves files, admission_sha256, admission, config_sha256, case_plan, deadline_seconds (sem case_plan_file)",
+        "python/acceptance.py:1883-1903 (plan_binding), 56 (docstring) e 1928 (exit)",
+        "selftests/selftest_c32.py:546-569 (R1-F03 com manifesto sintético, negativos drop e extra)",
+        "tools/collect_results.py (classificação plan_binding_content_ok; não está em source-freeze-r4-c32.json)"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P3",
+      "area": "E3-07 fault.fired_as_declared / D3-05 registro de threads / autotestes",
+      "title": "O guarda \"só se o thread nunca iniciou\" da regra de zero chamadas não tem controle negativo e, com o DV-C32-01, fica desarmado justamente no fluxo do C3-PY13ER",
+      "evidence": [
+        "python/acceptance.py:859: mutação em cópia que remove \"name not in started\" mantém 46/46 autotestes e o validador ok (17/17); nenhum teste exige INVALID_CAPTURE para zero chamadas com o thread no registro",
+        "selftests/selftest_c32.py:453-475 (E3-07 a) e python/acceptance.py:1813-1814 (DIAG-PY-C3VOCAB, cvg-c3-never-started) só exercitam o lado positivo",
+        "Perturbação em cópia da captura real do C3-PY13ER: cleanup pulado com o registro sem o thread -> MISMATCH regra 6; o mesmo com o registro listando codex-goal-start-cleanup -> INVALID_CAPTURE regra 4 por fault.fired_as_declared (o guarda do avaliador funciona quando o registro está certo)",
+        "Perturbação P3: o thread de cleanup rodou (HOOK_EVENT h_stop seq 29 mantido), alvo com zero chamadas, sem EXCEPTHOOK_RECORD, registro como o driver emitiu -> MISMATCH regra 6 (api.steps_exact, excepthook.records_exact); com o registro corrigido -> INVALID_CAPTURE regra 4. É a troca INVALID_CAPTURE -> efeito do cliente que o DV-C32-01 admite, sobre a forma real da captura",
+        "cases/C3-PY13ER-94b0a3389572/events-driver.jsonl seq 21-24: h_set_result volta no codex-goal-start, depois CANCEL e h_cleanup_cb no MainThread; o cleanup nasce do callback no thread do loop depois do fim do codex-goal-start, o que favorece o reuso de ident; no C3-PY13F o callback roda no próprio codex-goal-start, ainda vivo, e o codex-goal-start-cleanup entrou no registro",
+        "python/python-driver.py:571 (thread_started = registro ou vivo) e 842 (THREAD_REGISTRY publica só o registro): o \"mesmo registro\" do R2-F03 (3) difere quando o thread está vivo e não registrado"
+      ],
+      "detail": "Nenhum desfecho desta unidade muda: no C3-PY13ER o alvo foi chamado uma vez e a regra de zero chamadas não foi usada. O problema está na metade discriminante da cláusula E3-07 (\"aceita zero chamadas ... só se o thread nomeado nunca iniciou\"): ela não tem autoteste negativo nem DIAG que a exercite, e o registro real tende a dizer \"nunca iniciou\" em falso exatamente no fluxo para o qual a regra existe (cleanup iniciado pelo thread do loop depois do fim do codex-goal-start). Uma captura em que o cleanup rodou sem chamar o alvo seria aceita como efeito do cliente e decidida pelos predicados de cliente (candidato a MISMATCH, só atribuível por adjudicação, E3-09), quando a regra manda INVALID_CAPTURE. Não há caminho para PASS falso: sem a chamada não existe o RuntimeError esperado no excepthook. Um autoteste do driver com dois threads em sequência, como o repro do executor, teria pegado o DV-C32-01 antes do source freeze.",
+      "required_action": "Sem reparo da evidência executada e sem serviço novo. Carry-over vinculante para a próxima unidade que reusar driver ou avaliador: (1) registro por threading.local (ou equivalente) com autoteste do driver de dois threads em sequência com ident reusado; (2) controle negativo do avaliador: zero chamadas com o thread no THREAD_REGISTRY dá INVALID_CAPTURE regra 4; (3) endurecimento: a regra de zero chamadas também é recusada quando algum frame (HOOK_EVENT, EXCEPTHOOK_RECORD) traz o thread_name vigiado, e o THREAD_REGISTRY publica a mesma união (registro ou vivo) usada no WAIT_RESULT; (4) adjudicação e BIND não creditam o guarda \"nunca iniciou\" do E3-07 nem WAIT_RESULT.thread_started como provados em serviço no C3-2."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P3",
+      "area": "evidência executada do C3-PY13ER / acceptance.json",
+      "title": "O acceptance.json do C3-PY13ER registra client_effect_timeout true no passo 12 sem estouro de prazo e sem efeito do cliente",
+      "evidence": [
+        "cases/C3-PY13ER-94b0a3389572/acceptance.json#/predicates[id=wait.client_effect_recorded]/detail[1]: step 12, client_effect_timeout true, WAIT_RESULT ok false, elapsed_ms 0.1",
+        "events-driver.jsonl seq 34 THREAD_JOIN found false, alive_after false, elapsed_ms 0.0; seq 35 WAIT_RESULT ok false, thread_started false",
+        "seq 29 HOOK_EVENT h_stop (codex-goal-start-cleanup, state._finished true) e seq 30 EXCEPTHOOK_RECORD antes do fim do passo 11: o thread rodou e terminou",
+        "python/acceptance.py:894 (client_effect_timeout = ok is False) e python/python-driver.py:707 (never pelo registro, DV-C32-03)"
+      ],
+      "detail": "O DV-C32-01 do state.json diz que o ok do passo 12 está errado, mas não cita o fato derivado client_effect_timeout true do acceptance.json, que um leitor do BIND pode tomar como efeito do cliente observado no passo 12. Não houve estouro nem efeito do cliente: o thread de cleanup já tinha terminado. O predicado é sanidade e passou; o desfecho não muda.",
+      "required_action": "Registrar na adjudicação e no BIND que, no C3-PY13ER, o client_effect_timeout true do passo 12 e o thread_started false dos passos 11 a 13 são artefatos do DV-C32-01 com o DV-C32-03; nenhuma atribuição ou leitura de efeito do cliente se apoia neles. Sem reparo da evidência."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P3",
+      "area": "D3-05 vocabulário fechado",
+      "title": "wait_class é aceito também em worker.parked e worker.still_parked, fora da lista do D3-05, sem desvio registrado",
+      "evidence": [
+        "inputs/spec-c3/freeze-r4-c3-delta.json#/items[id=D3-05]/rule: passos de espera thread.join, hook.wait, excepthook.wait, worker.join e probe.until",
+        "python/python-driver.py:191 e python/acceptance.py:89: WAIT_APIS inclui worker.parked e worker.still_parked",
+        "tools/validate_unit.py:226 usa DRV.WAIT_APIS; o controle negativo wait_class_on_non_wait_step (linha 274) só testa probe",
+        "state.json#/implementation/D3-05 lista os sete; nenhum DV cita a ampliação; nenhum caso do C3-2 usa wait_class nesses passos",
+        "python/python-driver.py worker_parked: com still, ok é sempre verdadeiro (ok or still), então uma classe em worker.still_parked não tem efeito"
+      ],
+      "detail": "Sem efeito nos 14 slots, mas o vocabulário aceito por driver, avaliador e validador é mais largo que o congelado, e o validador não recusa wait_class em worker.parked.",
+      "required_action": "Na próxima unidade que reusar o driver: fechar WAIT_APIS na lista do D3-05 (ou registrar a ampliação como desvio justificado) e acrescentar controle negativo do validador com wait_class em worker.parked."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "DV-C32-04 / DIAG herdados",
+      "title": "O DV-C32-04 atribui à tabela a mudança do worker.join, que no 2B-2 era CLIENT_EFFECT fixo, e não cita os DIAG herdados afetados",
+      "evidence": [
+        "sdk-batch-2b2-admission/python/python-driver.py:612-616: estouro do worker.join emitia WORKER_JOIN_TIMEOUT com class CLIENT_EFFECT fixo e nunca lançava; o worker.join não estava em CLIENT_EFFECT_WAITS",
+        "python/python-driver.py:678-688 com wait_result: sem wait_class, o estouro lança CaptureFailure (HARNESS_PRECONDITION)",
+        "DIAG-PY-BARRIER passos 12 e 15 e DIAG-PY-BEFOREREPLY passo 7 são worker.join sem wait_class; requalificados já sob a regra nova (WAIT_RESULT ok true em 0.3 a 0.5 ms)",
+        "state.json#/implementation/deviations[id=DV-C32-04]: \"nenhum caso do C3-2 dependia da tabela além do C3-PY08 passo 9\""
+      ],
+      "detail": "A regra nova segue o D3-05 (\"sem o campo vale HARNESS_PRECONDITION\") e vai na direção fail-closed; o C3-PY08 passo 9 declara CLIENT_EFFECT. Só o texto do desvio é impreciso: o passo 9 do C3-PY08 não estava na tabela, e a mudança alcança três passos de DIAG herdados.",
+      "required_action": "Corrigir o texto do DV-C32-04 no registro de adjudicação (worker.join sem classe deixou de ser CLIENT_EFFECT fixo; DIAG-PY-BARRIER 12/15 e DIAG-PY-BEFOREREPLY 7 requalificados como HARNESS_PRECONDITION). Sem reparo."
+    }
+  ],
+  "mandatory_points": {
+    "1_erratum_t1": "CONFORME; ver erratum_t1 e R1-F01.",
+    "2_c3_spec_r2_f03_f04": "CONFORME. (1) hook_wait passa thread_name ao filtro de HookSet.wait e ao wait_result (python-driver.py:733-738); (2) autoteste (c) dá INVALID_CAPTURE pela regra 4 no avaliador e, no driver, a CaptureFailure com thread vivo foi testemunhada no DIAG-PY-C3VOCAB passo 21 (\"named thread alive\"), caminho da regra 1 (E2B-14); (3) mesmo registro, com a ressalva de R1-F01; (4) WAIT_RESULT sem thread_name com thread_started e thread_alive null (C3-PY08 passo 9, DIAG-PY-C3VOCAB passo 18); (5) wait.client_effect_recorded cobre as duas classes. R2-F04: gancho por identidade em CodexClient.next_login_notification no C3-PY17 (hook.code_identity), validador por ast e check hook_by_identity_next_login_notification do DIAG; perturbar o HOOK_EVENT h_next_login dá MISMATCH.",
+    "3_d3_04": "CONFORME. Marcadores só em modo sdk (python-driver.py:352-355; autoteste recusa em diag e fora da lista); FAULT_TARGETS fechado por modo (python-driver.py:195-198, validador fault_target_outside_closed_list, autoteste refused_target); ganchos por identidade com code_identity contra o identity freeze e alvos conferidos no pin por ast; sondas em slots (C3-PY12 ._subscription._cursor, C3-PY15A TurnResult {class} por jeq). SDK só importado em modo sdk (python-driver.py:261-264); SDK_imports 0 nos 10 DIAG; sdk_imported false nos autotestes.",
+    "4_d3_05": "CONFORME com R1-F01 e R1-F03. Classe lida do passo (python-driver.py:555-564), HARNESS_PRECONDITION sem o campo, tabela CLIENT_EFFECT_WAITS só citada em docstrings; nenhum ramo por (caso, passo).",
+    "5_c31_carry_overs": "CONFORME. F01 em acceptance.py:1035-1038 com autoteste negativo (zombie9_then_absent -> None); F02 e F03 não aplicáveis (sem node/ nem tslane/ na unidade; preflight confere python/ igual ao 2B-2 e ao C3-1); F04 registrado (sem SUSPENDED no C3-2).",
+    "6_control_and_conditional_slot": "CONFORME. C32-CTRL01 iniciou em 01:19:49.95Z, antes do C3-PY02 (01:19:56Z); MISMATCH regra 6 só por wire.no_turn_interrupt, sanidades aprovadas (inclusive peer.login_frames_synthetic); cópia do 2B2-CTRL01 fora do último elemento do argv (autoteste e validador). C3-PY02 rodou depois do DIAG-PY-PROCWITNESS DIAG_PASS (01:19:43Z) e da decisão RUN de diag-admission-c32.json.",
+    "7_capability": "CONFORME. Os 24 serviços usam bwrap --unshare-all e NoNewPrivileges=yes; nenhum argumento de capability, ptrace, fanotify, bpf ou audit; os alvos novos do fault usam raise_before_call (C3-PY03 _write_message, C3-PY17 next_login_notification); a testemunha de processo é a do 2B-1, sem privilégio; o socket do driver é a sonda de contenção herdada (conexão negada).",
+    "8_predicates_not_empty": "CONFORME. Perturbação de cada API_RESULT, ERROR_DETAIL, PROBE, WORKER_RESULT, HOOK_EVENT e fim de stream nas 13 capturas PASS: todo frame que a expectativa nomeia muda o desfecho. Ficam sem efeito só passos de preparação fora da expectativa (new/start/initialize), eventos de ganchos não esperados (h_set_result no asyncio_0, eventos return usados só pelo plano de barreira) e o EXCEPTHOOK_RECORD avulso (herdado: excepthook.records_exact julga o snapshot). wire.absent discrimina no C3-PY03, C3-PY13F e C3-PY14.",
+    "9_deviations": "Ver deviations_assessment."
+  },
+  "deviations_assessment": {
+    "DV-C32-03": "ACEITO como registro. Com registro correto, \"nunca iniciou\" diferente de \"terminou\" segue o D3-05. Com o DV-C32-01, um thread.join por nome sem classe depois do hook.install poderia invalidar em falso (fail-closed); no C3-2 só o passo 12 do C3-PY13ER e os passos 19/21/24 do DIAG-PY-C3VOCAB fazem thread.join por nome com registro. A correção do DV-C32-01 cobre.",
+    "DV-C32-04": "ACEITO; texto impreciso (R1-F04).",
+    "DV-C32-05": "ACEITO. Lista fechada por modo, controle negativo do validador e autoteste; a checagem do driver é por nome de classe, com o validador mapeando o dono estaticamente.",
+    "DV-C32-06": "ACEITO. Só em diag2b (python-driver.py:743), usado nos passos 21 e 22 do DIAG-PY-C3VOCAB, motivo gravado (\"named thread alive\", \"HARNESS_PRECONDITION\") e conferido com o WAIT_RESULT do mesmo passo.",
+    "DV-C32-07": "ACEITO. DIAG-PY-PROCWITNESS DIAG_PASS com 16 checks, inclusive o controle negativo de leitura antes do BEGIN; serve só de porta para o C3-PY02."
+  },
+  "reproduction": {
+    "workspace": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/review-c32-r1 (cópia da unidade em g02/sdk-continuation-3-2-admission, com sdk-batch-2b2-admission, cases-2a.json e o src do pin copiados ao lado; SCRATCH do autoteste redirecionado para o scratchpad)",
+    "selftests": "46/46 (mesmos nomes e resultados do selftest-results.json da unidade)",
+    "validator": "ok true, 17/17 controles negativos recusados, validation-unit.json byte-igual",
+    "reevaluation": "14/14 predicate_level_equal e outcome_equal; plan_binding_ok false nas 14 só pelo registro ausente; saída 1 nas 14",
+    "repro_dv_c32_01": "frozen_HookSet 50/50 ausente com ident reusado; local_flag_twin 0/50",
+    "perturbation_scripts": [
+      "tools/perturb_13er.py",
+      "tools/perturb_py08.py",
+      "tools/perturb_all.py",
+      "tools/perturb_round2.py",
+      "tools/perturb_absent.py"
+    ],
+    "mutation_test": "acceptance.py:859 sem \"name not in started\" em cópia separada: 46/46 e validador ok (R1-F01); cópia apagada",
+    "constraints": "python3 -I -B; sem SDK nem Pydantic no host; sem serviço, rede, PG, porta TCP ou /mnt/ia; nenhum __pycache__"
+  },
+  "summary_counts": {
+    "P1": 0,
+    "P2": 0,
+    "P3": 4,
+    "declared_findings_confirmed": 2,
+    "declared_findings_severity": {
+      "DV-C32-01": "P3",
+      "DV-C32-02": "P3"
+    }
+  },
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

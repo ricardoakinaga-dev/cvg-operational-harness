@@ -1,0 +1,450 @@
+// DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3 - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: CVG_STAGED_DEPS=<python-deps preparado> node --input-type=module < validate-spec-c3.mjs.txt  (cwd = raiz do repositório)
+//      -> escreve validation.json na pasta da unidade.
+// Recalcula: case_input_sha256 (JSON.stringify), âncoras (sha e texto da linha), tabela de predicados e classes contra as bases,
+// formato e existência dos IDs de braço, discriminação por braço, passos referenciados, vocabulário e capacidades por caso,
+// bytes do argv com controles (JSON.stringify), réplicas e cópias de CONTROL, limites de vagas e serviços, classificação de
+// todo resíduo do escopo, deltas e avaliação T3; roda controles negativos em cópias em memória. Não importa SDK nem executa nada.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs'
+import { join, normalize, isAbsolute } from 'node:path'
+
+const UNIT = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-source-continuation-3-spec'
+const DEPS = process.env.CVG_STAGED_DEPS
+if (!DEPS) throw new Error('CVG_STAGED_DEPS ausente')
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const U = (f) => join(UNIT, f)
+const R = (p) => normalize(join(UNIT, p))
+const CLASSES = ['client', 'peer_or_capture_sanity', 'capture_order_or_cleanup', 'informational', 'order_unilateral']
+const checks = []
+const check = (name, ok, detail = null) => checks.push({ check: name, ok: !!ok, detail })
+
+const D1 = load(U('cases-c3-1.json'))
+const D2 = load(U('cases-c3-2.json'))
+const COV = load(U('coverage-plan-c3.json'))
+const FR = load(U('freeze-r4-c3-delta.json'))
+const EV = load(U('evaluator-r4-c3-delta.json'))
+const CC = load(U('control-slot-contract-c3.json'))
+const B1 = load(U('execution-budget-c3-1.json'))
+const B2 = load(U('execution-budget-c3-2.json'))
+const T3 = load(U('t3-assessment.json'))
+const IV = load(U('input-verification.json'))
+// bases
+const BASE = {
+  t2a: load(R('../sdk-source-batch-2a-spec/cases-2a.json')).predicate_table,
+  t2ac: load(R('../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json')).predicate_table,
+  c2b1: load(R('../sdk-source-batch-2b-spec/cases-2b-1.json')),
+  c2b2: load(R('../sdk-source-batch-2b-spec/cases-2b-2.json')),
+}
+const TABLES = {
+  '../sdk-source-batch-2a-spec/cases-2a.json#/predicate_table': BASE.t2a,
+  '../sdk-source-batch-2a-continuation-spec/cases-2a-cont.json#/predicate_table': BASE.t2ac,
+  '../sdk-source-batch-2b-spec/cases-2b-1.json#/predicate_table': BASE.c2b1.predicate_table,
+  '../sdk-source-batch-2b-spec/cases-2b-2.json#/predicate_table': BASE.c2b2.predicate_table,
+}
+const C2B = Object.fromEntries([...BASE.c2b1.cases, ...BASE.c2b2.cases].map((c) => [c.id, c]))
+const TS_CATALOG = new Set(load(R('../../g01/sdk-open-contracts/typescript/contracts.json')).contracts.flatMap((c) => c.branches.map((b) => b.id)))
+const PY_ARMS_2B = new Set()
+for (const c of Object.values(C2B)) for (const b of c.branches_targeted ?? []) { const m = /^(PY\d\d\.B\d\d) \(/.exec(b); if (m) PY_ARMS_2B.add(m[1]) }
+const V5 = load(R('../sdk-batch-2b2-binding/coverage-observed-v5.json'))
+const DISP_PATH = R('../sdk-batch-2b2-binding/review-r2/executor-disposition.json')
+const QIDS = load(DISP_PATH).items.find((i) => i.id === 'R2-F01').erratum_questions.map((q) => q.id)
+
+function inputPath(key, spec) {
+  if (spec.path_staged) return join(DEPS, key.replace(/^pydeps\//, ''))
+  if (spec.path_host) return spec.path_host
+  return R(spec.path)
+}
+const lineCache = new Map()
+function linesOf(p) { if (!lineCache.has(p)) lineCache.set(p, readFileSync(p, 'utf8').split('\n')); return lineCache.get(p) }
+
+// ------------------------------------------------------------------ vocabulary
+const TS_APIS = new Set(['new Codex', 'new AbortController', 'run', 'run_streamed', 'mutate', 'events.consume'])
+const TS_CONSUME = new Set(['all', 'first_next_only', 'first_then_return', 'none', 'first_then_witness_then_throw', 'next_abort_at_barrier'])
+const TS_BARRIERS = new Set(['LAZY_POINT', 'WITNESS_WINDOW_OPEN'])
+const TS_MARK_OBJ = new Set(['$REPEAT', '$BIGINT', '$DATE', '$INSTANCE', '$SELF_REF', '$NONENUM', '$GETTER'])
+const TS_MARK_STR = new Set(['$NAN', '$INFINITY', '$UNDEFINED', '$HOLE', '$FUNCTION', '$SYMBOL', '$ac.signal'])
+const C3_TS_MARKERS = new Set(['$SELF_REF', '$NONENUM', '$GETTER', '$FUNCTION', '$SYMBOL'])
+const PY_APIS = new Set(['CodexClient.new', 'AsyncCodex.new', 'AsyncCodexClient.new', 'Codex.new', 'Thread.new', 'AsyncThread.new', 'TurnHandle.new',
+  'ChatgptLoginHandle.new', 'GoalStream.new', 'call', 'stream.next', 'astream.next', 'astream.aclose', 'gstream.next', 'gstream.close', 'agstream.next',
+  'probe', 'probe.until', 'worker.start', 'worker.parked', 'worker.still_parked', 'worker.join', 'task.create', 'task.cancel', 'task.await',
+  'loop.yield_until', 'loop.block_release_wait_cancel', 'heartbeat', 'async_with.enter', 'hook.install', 'hook.wait', 'hook.count', 'excepthook.install',
+  'excepthook.wait', 'excepthook.snapshot', 'fault.install', 'fault.remove', 'shim.install', 'shim.remove', 'model.validate', 'model.construct',
+  'model.dump', 'proc.retain', 'clock.mark', 'driver.reap', 'thread.join', 'attr', 'barrier', 'epilogue'])
+const WAIT_APIS = new Set(['thread.join', 'hook.wait', 'excepthook.wait', 'worker.join', 'probe.until'])
+const PY_MARKERS = new Set(['$ref', '$model', '$enum', '$TextInput', '$ImageInput', '$LocalImageInput', '$SkillInput', '$MentionInput', '$ExternalMessage'])
+const D304_FAULTS = new Set(['_write_message', 'next_login_notification'])
+const D304_HOOKS = new Set(['openai_codex._goal._GoalOperationState.finish', 'openai_codex.client.CodexClient.reserve_goal_operation',
+  'openai_codex.client.CodexClient.next_login_notification',
+  'openai_codex.client.CodexClient.cancel_goal_operation', 'openai_codex.client.CodexClient.unregister_goal_operation'])
+const NEW_PRED_CLAUSES = { 'api.ts_steps_exact': 'E3-02', 'tmp.getter_witness_exact': 'E3-03', 'tmp.getter_witness_recorded': 'E3-03',
+  'witness.suspended_resources': 'E3-04', 'gen.throw_propagated': 'E3-05', 'api.abort_error_exact': 'E3-06',
+  'abort.child_terminated_by_node_abort': 'E3-06', 'wait.client_effect_recorded': 'E3-07' }
+const WAIT_CLASSES = new Set(['CLIENT_EFFECT', 'CLIENT_EFFECT_UNLESS_ALIVE'])
+const STRUCTURAL = new Set(['id', 'slot', 'sub_lot', 'case_input', 'case_input_sha256', 'replay_of', 'copy_of', 'runtime_status', 'receipt',
+  'arm_discrimination', 'residual_source', 'execution_order'])
+const CI_KEYS = ['sdk_calls', 'peer_script', 'driver_mode', 'control_client']
+// Every top-level field that differs from the base must be declared in changed_fields (removed ones under 'removed'); the rest is unchanged_fields.
+function fieldAccounting(c, base, holder) {
+  const p = []
+  const keys = [...new Set([...Object.keys(c), ...Object.keys(base)])].filter((k) => !STRUCTURAL.has(k))
+  const same = (k) => JSON.stringify(c[k]) === JSON.stringify(base[k])
+  const differ = keys.filter((k) => !same(k)); const removed = differ.filter((k) => !(k in c))
+  const want = new Set([...differ.filter((k) => k in c), ...CI_KEYS.filter((k) => JSON.stringify(base.case_input[k]) !== JSON.stringify(c.case_input[k]))])
+  const declared = new Set(Object.keys(holder.changed_fields).filter((k) => k !== 'removed' && k !== 'id'))
+  for (const k of want) if (!declared.has(k)) p.push(c.id + ': undeclared change ' + k)
+  for (const k of declared) if (!want.has(k)) p.push(c.id + ': declared but unchanged ' + k)
+  for (const k of removed) if (!(holder.changed_fields.removed ?? '').includes(k)) p.push(c.id + ': removed not declared ' + k)
+  if (JSON.stringify([...(holder.unchanged_fields ?? [])].sort()) !== JSON.stringify(keys.filter(same).sort())) p.push(c.id + ': unchanged_fields')
+  return p
+}
+
+function* objects(x) {
+  if (Array.isArray(x)) for (const v of x) yield* objects(v)
+  else if (x && typeof x === 'object') { yield x; for (const v of Object.values(x)) yield* objects(v) }
+}
+function* strings(x) {
+  if (typeof x === 'string') yield x
+  else if (Array.isArray(x)) for (const v of x) yield* strings(v)
+  else if (x && typeof x === 'object') for (const v of Object.values(x)) yield* strings(v)
+}
+function deriveTsInfra(c) {
+  const ci = c.case_input; const caps = new Set(['CAP-TS-SDKCALLS', 'CAP-ENV-EXACT'])
+  for (const st of ci.sdk_calls) {
+    if ((st.api === 'new Codex' && !('options' in st)) || st.options_as || st.api === 'mutate' || st.api === 'events.consume'
+      || ['first_then_witness_then_throw', 'next_abort_at_barrier'].includes(st.consume)) caps.add('CAP-TS-SDKCALLS-C3')
+    if (st.expect?.spawns === 0 || st.barrier === 'LAZY_POINT') caps.add('CAP-ZERO-SPAWN-WITNESS')
+    if (st.barrier === 'LAZY_POINT') caps.add('CAP-LAZY-BARRIER')
+    if (st.api === 'new AbortController') caps.add('CAP-PREREADY-SIGNAL')
+    if (st.barrier === 'WITNESS_WINDOW_OPEN') caps.add('F4-12')
+  }
+  for (const o of objects(ci.sdk_calls)) for (const k of Object.keys(o)) if (C3_TS_MARKERS.has(k)) caps.add('CAP-TS-SDKCALLS-C3')
+  for (const s of strings(ci.sdk_calls)) if (C3_TS_MARKERS.has(s)) caps.add('CAP-TS-SDKCALLS-C3')
+  if (JSON.stringify(c.expected).includes('thread_id_is_undefined')) caps.add('CAP-TS-SDKCALLS-C3')
+  if (ci.fixture.write_then_hold) caps.add('CAP-WRITE-THEN-HOLD')
+  if (c.predicates.some((p) => p.startsWith('tmp.') || p.startsWith('fixture.schema'))) { caps.add('CAP-TS-DRIVER-TMPDIR'); caps.add('CAP-TMP-WITNESS') }
+  return [...caps].sort()
+}
+const STEP_CAP = {
+  'CAP-2B-ASYNC-DRIVER': ['AsyncCodex.new', 'AsyncCodexClient.new', 'AsyncThread.new', 'async_with.enter', 'task.create', 'task.cancel', 'task.await',
+    'loop.yield_until', 'loop.block_release_wait_cancel', 'heartbeat', 'astream.next', 'astream.aclose', 'agstream.next'],
+  'CAP-2B-CONC-BARRIER': ['worker.start', 'worker.join', 'worker.parked', 'worker.still_parked', 'barrier', 'probe', 'probe.until', 'hook.install',
+    'hook.wait', 'hook.count', 'thread.join', 'excepthook.install', 'excepthook.wait', 'excepthook.snapshot', 'clock.mark', 'loop.yield_until',
+    'loop.block_release_wait_cancel'],
+  'CAP-2B-FAULT-CUT': ['fault.install', 'fault.remove'],
+  'CAP-2B-MODEL-ORACLE': ['model.validate', 'model.construct', 'model.dump'],
+  'CAP-2B-PROC-WITNESS': ['proc.retain', 'driver.reap'],
+}
+function derivePyInfra(c) {
+  const ci = c.case_input; const caps = new Set(['CAP-PY-SDKCALLS-2B', 'CAP-PEER-V2'])
+  for (const st of objects(ci.sdk_calls)) {
+    for (const [cap, apis] of Object.entries(STEP_CAP)) if (apis.includes(st.api)) caps.add(cap)
+    if ('$model' in st) caps.add('CAP-2B-MODEL-ORACLE')
+    if ('$ExternalMessage' in st || (st.api === 'fault.install' && D304_FAULTS.has(st.attr))) caps.add('CAP-PY-SDKCALLS-C3')
+    if (st.api === 'hook.install' && st.hooks.some((h) => D304_HOOKS.has(h.code))) caps.add('CAP-PY-SDKCALLS-C3')
+    if (st.wait_class) caps.add('D3-05')
+    if (st.api === 'barrier' && /PROC_WITNESS/.test(JSON.stringify(st))) caps.add('CAP-2B-PROC-WITNESS')
+  }
+  if (ci.driver_mode === 'async') caps.add('CAP-2B-ASYNC-DRIVER')
+  if (c.contracts.includes('PY18')) caps.add('CAP-2B-MODEL-ORACLE')
+  for (const r of ci.peer_script.on_request) {
+    if (r.before_reply?.length) caps.add('CAP-2B-PEER-BEFORE-REPLY')
+    if (r.match.method.startsWith('account/login/')) caps.add('CAP-2B-PEER-LOGIN')
+    for (const f of objects(r)) if (f.exit) caps.add('CAP-PEER-EXIT-EARLY')
+  }
+  return [...caps].sort()
+}
+const ARM_RE = { typescript: /^TS(0[1-9]|1[0-5])\.B0[1-6]$/, python: /^PY\d\d\.B\d\d$/ }
+
+// ------------------------------------------------------------------ per-file checks (pure; reused by the negative controls)
+function checkCases(doc, sub, lang, cov) {
+  const p = []
+  const n = doc.cases.length
+  if (doc.task !== 'DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3' || doc.sub_lot !== sub || doc.status !== 'FROZEN_SPEC_NOT_RUN') p.push('header')
+  if (doc.functional_receipts !== 0 || doc.parity_credit !== 0) p.push('credit')
+  if (n > 24 || doc.counts.slots !== n) p.push('slots ' + n)
+  const slots = doc.cases.map((c) => c.slot)
+  if (JSON.stringify(slots) !== JSON.stringify([...Array(n).keys()].map((i) => i + 1))) p.push('slot numbering')
+  const ctrls = doc.cases.filter((c) => c.kind === 'CONTROL')
+  if (ctrls.length !== 1 || ctrls[0].slot !== n || ctrls[0].execution_order !== 1) p.push('control slot')
+  for (const [k, spec] of Object.entries(doc.inputs)) {
+    let got = null
+    try { got = sha(readFileSync(inputPath(k, spec))) } catch { got = null }
+    if (got !== spec.sha256) p.push('input sha ' + k)
+  }
+  const newArms = cov.new_arm_ids.arms
+  for (const c of doc.cases) {
+    const id = c.id
+    const ci = c.case_input
+    if (sha(JSON.stringify(ci)) !== c.case_input_sha256) p.push(id + ': case_input sha')
+    if (c.runtime_status !== 'NOT_RUN' || c.receipt !== null) p.push(id + ': runtime')
+    // anchors
+    for (const a of c.anchors) {
+      const spec = doc.inputs[a.input]
+      if (!spec || !c.inputs.includes(a.input)) { p.push(id + ': anchor input ' + a.input); continue }
+      if (a.sha256 !== spec.sha256) p.push(id + ': anchor sha ' + a.input)
+      const ls = linesOf(inputPath(a.input, spec))
+      if ((ls[a.lines[0] - 1] ?? '').trim() !== a.text) p.push(id + ': anchor text ' + a.input + ':' + a.lines[0])
+      if (a.lines.length === 2 && !(a.lines[1] > a.lines[0] && a.lines[1] <= ls.length)) p.push(id + ': anchor span')
+    }
+    // predicates
+    for (const pr of c.predicates) if (!doc.predicate_table[pr]) p.push(id + ': undefined predicate ' + pr)
+    if (c.kind === 'CONTROL') {
+      const base = C2B[c.copy_of.case]
+      const want = clone(base.case_input); want.control_client.argv[want.control_client.argv.length - 1] = id
+      if (JSON.stringify(want) !== JSON.stringify(ci)) p.push(id + ': control copy')
+      if (sha(JSON.stringify(base)) !== c.copy_of.case_object_sha256) p.push(id + ': control base sha')
+      p.push(...fieldAccounting(c, base, c.copy_of))
+      if (JSON.stringify(c.predicates) !== JSON.stringify(base.predicates)) p.push(id + ': control predicates')
+      continue
+    }
+    if (c.language !== lang) p.push(id + ': language')
+    const wantKeys = lang === 'typescript' ? ['sdk_calls', 'fixture'] : ['sdk_calls', 'peer_script'].concat(ci.driver_mode ? ['driver_mode'] : [])
+    if (JSON.stringify(Object.keys(ci)) !== JSON.stringify(wantKeys)) p.push(id + ': case_input keys')
+    const stepNums = new Set(ci.sdk_calls.map((s) => s.step))
+    if (JSON.stringify([...stepNums]) !== JSON.stringify(ci.sdk_calls.map((_, i) => i + 1))) p.push(id + ': step numbering')
+    // arms and discrimination
+    const arms = c.branches_targeted.map((b) => b.split(' ')[0])
+    for (const a of arms) {
+      if (!ARM_RE[lang].test(a)) p.push(id + ': arm format ' + a)
+      if (lang === 'typescript' && !TS_CATALOG.has(a)) p.push(id + ': arm not in G01 ' + a)
+      if (lang === 'python' && (PY_ARMS_2B.has(a) === (a in newArms))) p.push(id + ': arm id unknown or colliding ' + a)
+    }
+    if (JSON.stringify([...new Set(arms.map((a) => a.slice(0, 4)))].sort()) !== JSON.stringify([...c.contracts].sort())) p.push(id + ': contracts differ from targeted arms')
+    const disc = new Set(c.arm_discrimination.map((d) => d.arm))
+    if (JSON.stringify([...new Set(arms)].sort()) !== JSON.stringify([...disc].sort())) p.push(id + ': discrimination arms')
+    for (const d of c.arm_discrimination) {
+      if (!d.contrary || !d.observable_if_contrary || !d.judged_by?.length) p.push(id + ': discrimination fields ' + d.arm)
+      if (!d.judged_by.every((j) => c.predicates.includes(j))) p.push(id + ': judged_by outside predicates ' + d.arm)
+      if (!d.judged_by.some((j) => doc.predicate_table[j]?.class === 'client')) p.push(id + ': no client predicate ' + d.arm)
+      if (!d.steps.every((s) => stepNums.has(s))) p.push(id + ': discrimination step ' + d.arm)
+    }
+    if (!c.known_bad.judged_by.every((j) => c.predicates.includes(j) && doc.predicate_table[j]?.class === 'client')) p.push(id + ': known_bad judged_by')
+    for (const e of c.expected.api ?? []) if (!stepNums.has(e.step)) p.push(id + ': expected step ' + e.step)
+    // vocabulary and capabilities
+    const declared = c.infra
+    const derived = lang === 'typescript' ? deriveTsInfra(c) : derivePyInfra(c)
+    for (const cap of derived) if (!declared.some((d) => d === cap || d.startsWith(cap + ' '))) p.push(id + ': infra missing ' + cap)
+    if (lang === 'typescript') {
+      for (const st of ci.sdk_calls) {
+        if (st.barrier && !st.api) { if (!TS_BARRIERS.has(st.barrier)) p.push(id + ': barrier ' + st.barrier); continue }
+        if (st.barrier && !((st.consume === 'first_then_witness_then_throw' && st.barrier === 'SUSPENDED' && st.throw?.name)
+          || (st.consume === 'next_abort_at_barrier' && st.barrier === 'CHILD_HELD' && st.abort))) p.push(id + ': consume barrier ' + st.step)
+        if (!TS_APIS.has(st.api) && !/^\w+\.(startThread|resumeThread)$/.test(st.api)) p.push(id + ': ts api ' + st.api)
+        if (st.consume && !TS_CONSUME.has(st.consume)) p.push(id + ': consume ' + st.consume)
+        if (st.expect?.throws) {
+          const e = (c.expected.api ?? []).find((x) => x.step === st.step && x.error)
+          const t = st.expect.throws
+          if (!e || e.error.name !== t.name || e.error.message !== t.message || e.error.message_prefix !== t.message_prefix) p.push(id + ': expect/expected ' + st.step)
+        }
+      }
+      for (const o of objects(ci.sdk_calls)) for (const k of Object.keys(o)) if (k.startsWith('$') && !TS_MARK_OBJ.has(k)) p.push(id + ': marker ' + k)
+      for (const s of strings(ci.sdk_calls)) if (/^\$[A-Za-z]/.test(s) && !TS_MARK_STR.has(s)) p.push(id + ': string marker ' + s)
+      const witnessSteps = []
+      for (const st of ci.sdk_calls) for (const o of objects(st)) if (o.$GETTER?.witness) witnessSteps.push([o.$GETTER.witness, st.step])
+      const gw = c.expected.getter_witnesses ?? []
+      if (JSON.stringify(witnessSteps.map(([w, n]) => w + '@' + n).sort()) !== JSON.stringify(gw.map((g) => g.id + '@' + g.declared_in_step).sort())) p.push(id + ': getter witnesses')
+      for (const g of gw) {
+        const inv = ci.sdk_calls.find((x) => x.step === g.step)
+        if (!inv || !['run', 'run_streamed', 'events.consume'].includes(inv.api) || g.step < g.declared_in_step) p.push(id + ': getter witness step ' + g.id)
+      }
+      if (witnessSteps.length && !['tmp.getter_witness_exact', 'tmp.getter_witness_recorded'].every((x) => c.predicates.includes(x))) p.push(id + ': witness predicates')
+      if (c.expected.argv) {
+        if (c.expected.argv_json_bytes !== Buffer.byteLength(JSON.stringify(c.expected.argv)) || c.expected.argv_count !== c.expected.argv.length) p.push(id + ': argv bytes')
+      }
+      const errs = (c.expected.api ?? []).filter((x) => x.error)
+      const v8msg = errs.some((x) => /is not iterable|Cannot read properties|serialize a BigInt|Maximum call stack|operation was aborted/.test(x.error.message ?? ''))
+      if (v8msg && !c.version_dependent.length) p.push(id + ': version_dependent missing')
+    } else {
+      for (const st of objects(ci.sdk_calls)) {
+        if (typeof st.api === 'string' && !PY_APIS.has(st.api)) p.push(id + ': py api ' + st.api)
+        if (st.wait_class !== undefined && (!WAIT_CLASSES.has(st.wait_class) || !WAIT_APIS.has(st.api)
+          || (st.wait_class === 'CLIENT_EFFECT_UNLESS_ALIVE') !== (typeof st.thread_name === 'string'))) p.push(id + ': wait_class ' + st.step)
+        for (const k of Object.keys(st)) if (k.startsWith('$') && !PY_MARKERS.has(k)) p.push(id + ': py marker ' + k)
+      }
+      if (ci.sdk_calls.some((s) => s.wait_class) && !c.predicates.includes('wait.client_effect_recorded')) p.push(id + ': wait predicate')
+      if (ci.sdk_calls.at(-1).api !== 'epilogue') p.push(id + ': epilogue last')
+    }
+    if (c.gate && id !== 'C3-PY02') p.push(id + ': unexpected gate')
+    const zc = (c.expected.fault?.fired ?? []).filter((f) => 'zero_calls_client_effect_unless_started' in f)
+    if (zc.length && (id !== 'C3-PY13ER' || !zc.every((f) => ci.sdk_calls.some((s) => s.thread_name === f.zero_calls_client_effect_unless_started)))) p.push(id + ': zero-calls fault rule')
+    if (c.replay_of) {
+      const base = C2B[c.replay_of.case]
+      if (sha(JSON.stringify(base)) !== c.replay_of.case_object_sha256) p.push(id + ': replay base sha')
+      if (!Object.keys(c.replay_of.changed_fields).length) p.push(id + ': replay changed_fields')
+      p.push(...fieldAccounting(c, base, c.replay_of))
+      if (JSON.stringify(base.case_input.peer_script) !== JSON.stringify(ci.peer_script)) p.push(id + ': replay peer_script changed')
+      const bs = base.case_input.sdk_calls
+      if (id === 'C3-PY13ER') {
+        for (const [i, st] of ci.sdk_calls.entries()) {
+          const b = clone(bs[i]); const s = clone(st)
+          if ([11, 12, 13].includes(st.step)) { delete s.wait_class; if (!('thread_name' in b)) delete s.thread_name; delete s.note; delete b.note }
+          if (JSON.stringify(b) !== JSON.stringify(s)) p.push(id + ': replay diff outside steps 11-13 at ' + st.step)
+        }
+        if (ci.sdk_calls.length !== bs.length) p.push(id + ': replay length')
+      }
+      if (id === 'C3-PY13F') {
+        const b0 = clone(bs[0]); const s0 = clone(ci.sdk_calls[0]); const added = s0.hooks.pop()
+        if (JSON.stringify(b0) !== JSON.stringify(s0) || added.code !== 'openai_codex._goal._GoalOperationState.finish') p.push(id + ': replay hooks')
+        for (let i = 1; i < bs.length - 1; i++) if (JSON.stringify(bs[i]) !== JSON.stringify(ci.sdk_calls[i])) p.push(id + ': replay step ' + (i + 1))
+        const last = ci.sdk_calls.at(-1); const prev = ci.sdk_calls.at(-2)
+        if (prev.api !== 'hook.count' || prev.id !== 'h_finish' || last.api !== 'epilogue' || ci.sdk_calls.length !== bs.length + 1) p.push(id + ': replay tail')
+      }
+    }
+  }
+  return p
+}
+
+function checkTable(doc) {
+  const p = []
+  for (const [k, v] of Object.entries(doc.predicate_table)) {
+    if (!CLASSES.includes(v.class)) p.push('class ' + k)
+    if (v.source.startsWith('NEW')) {
+      const clause = NEW_PRED_CLAUSES[k]
+      if (!clause || !v.source.includes(clause) || !EV.clauses.some((c) => c.id === clause)) p.push('new predicate clause ' + k)
+    } else {
+      const base = TABLES[v.source]?.[k]
+      if (!base || base.class !== v.class || base.oracle !== v.oracle) p.push('base mismatch ' + k)
+    }
+  }
+  const used = new Set(doc.cases.flatMap((c) => c.predicates))
+  for (const k of Object.keys(doc.predicate_table)) if (!used.has(k)) p.push('unused ' + k)
+  return p
+}
+
+function checkControlChars(doc) {
+  const p = []
+  const c = doc.cases.find((x) => x.id === 'C3-TS07')
+  const good = c.case_input.sdk_calls.find((s) => s.api === 'new Codex' && s.as === 'good')
+  const s = good.options.config.s
+  if (!/[\t\u0001\u001f\u007f]/.test(s)) p.push('control string lost')
+  if (c.expected.argv[3] !== 's=' + JSON.stringify(s)) p.push('argv element 3 differs from JSON.stringify')
+  if (!c.expected.argv[3].includes('\\t') || !c.expected.argv[3].includes('\\u0001') || !c.expected.argv[3].includes('\u007f')) p.push('escape form')
+  return p
+}
+
+function checkCoverage(cov, cases) {
+  const p = []
+  const byId = Object.fromEntries(cases.map((c) => [c.id, c]))
+  const ids = cov.residuals.map((r) => r.id)
+  if (new Set(ids).size !== ids.length) p.push('residual ids not unique')
+  const scope = ['TS01', 'TS02', 'TS03', 'TS04', 'TS05', 'TS06', 'TS07', 'TS08', 'TS09', 'TS10', 'TS11', 'TS12', 'TS13', 'TS14', 'TS15',
+    'PY02', 'PY03', 'PY04', 'PY05', 'PY08', 'PY10', 'PY12', 'PY13', 'PY14', 'PY15', 'PY16', 'PY17', 'PY18']
+  for (const k of scope) if (!cov.residuals.some((r) => r.contract === k)) p.push('scope contract without residual ' + k)
+  for (const k of Object.keys(V5.remaining_open_by_contract)) if (scope.includes(k) && !cov.residuals.some((r) => r.contract === k && r.source.includes('remaining_open_by_contract'))) p.push('v5 remaining not cited ' + k)
+  const disp = sha(readFileSync(DISP_PATH))
+  for (const r of cov.residuals) {
+    if (!(r.class in cov.classes)) { p.push(r.id + ': class'); continue }
+    if (r.class === 'IN_SPEC') {
+      if (!r.cases?.length || !r.arms?.length) p.push(r.id + ': IN without cases/arms')
+      for (const cid of r.cases ?? []) if (!byId[cid]) p.push(r.id + ': unknown case ' + cid)
+      for (const a of r.arms ?? []) if (!(r.cases ?? []).some((cid) => byId[cid]?.branches_targeted.some((b) => b.startsWith(a + ' ')))) p.push(r.id + ': arm not targeted ' + a)
+    } else if (r.cases) p.push(r.id + ': OUT with cases')
+    if (r.class === 'OUT_USER_DECISION' && (!r.questions?.length || !r.questions.every((q) => QIDS.includes(q)) || r.questions_source?.sha256 !== disp)) p.push(r.id + ': questions')
+    if (r.class === 'OUT_NEW_CAPABILITY' && !r.capability_needed) p.push(r.id + ': capability')
+    if (['OUT_NONDETERMINISTIC', 'OUT_UNREACHABLE', 'OUT_NOT_APPLICABLE', 'ALREADY_OBSERVED'].includes(r.class) && !r.reason) p.push(r.id + ': reason')
+  }
+  for (const c of cases) {
+    if (c.kind !== 'SDK') continue
+    for (const b of c.branches_targeted) {
+      const a = b.split(' ')[0]
+      if (!cov.residuals.some((r) => r.class === 'IN_SPEC' && r.cases.includes(c.id) && r.arms.includes(a))) p.push(c.id + ': arm without residual ' + a)
+    }
+  }
+  if (JSON.stringify(cov.projection_if_all_pass.counts) !== JSON.stringify(V5.counts) || cov.projection_if_all_pass.rows_changing_status.length) p.push('projection')
+  for (const a of Object.keys(cov.new_arm_ids.arms)) if (PY_ARMS_2B.has(a)) p.push('new arm collides ' + a)
+  for (const row of cov.rows) {
+    const want = cases.filter((c) => c.kind === 'SDK' && c.contracts.includes(row.source_contract)).map((c) => c.id)
+    if (JSON.stringify(want) !== JSON.stringify(row.cases)) p.push('row cases ' + row.source_contract)
+    if (row.status_if_all_cases_pass !== 'OBSERVED_CLIENT_PARTIAL' || row.whole_requirement_covered_after !== false) p.push('row status ' + row.source_contract)
+  }
+  if (cov.functional_receipts !== 0 || cov.parity_credit !== 0) p.push('credit')
+  return p
+}
+
+function checkBudget(b, doc, sub) {
+  const p = []
+  const gated = doc.cases.filter((c) => c.kind === 'SDK' && c.gate).map((c) => c.id)
+  if (b.sub_lot !== sub || b.max.case_slots !== 24 || b.max.services !== 12) p.push('max')
+  if (b.planned.case_slots !== doc.cases.length || b.planned.case_slots > 24) p.push('slots')
+  if (b.planned.qualification_services.length !== b.planned.qualification_services_planned || b.planned.qualification_services_planned > 12) p.push('services')
+  if (JSON.stringify(b.planned.conditional_slots) !== JSON.stringify(gated)) p.push('conditional')
+  if (b.planned.automatic_retries !== 0 || b.max.automatic_retries !== 0) p.push('retries')
+  return p
+}
+
+// ------------------------------------------------------------------ run
+const ALL = [...D1.cases, ...D2.cases]
+const p1 = checkCases(D1, 'C3-1', 'typescript', COV)
+check('C3-1 cases: slots, CONTROL, inputs, case_input sha, anchors, predicates, arms, discrimination, vocabulary, infra', !p1.length, p1.slice(0, 20))
+const p2 = checkCases(D2, 'C3-2', 'python', COV)
+check('C3-2 cases: slots, CONTROL, inputs, case_input sha, anchors, predicates, arms, discrimination, vocabulary, infra, replays', !p2.length, p2.slice(0, 20))
+const t1 = checkTable(D1); check('C3-1 predicate table: classes, base copies equal (class and oracle), new predicates bound to E3 clauses, no unused', !t1.length, t1)
+const t2 = checkTable(D2); check('C3-2 predicate table: classes, base copies equal (class and oracle), new predicates bound to E3 clauses, no unused', !t2.length, t2)
+const cc = checkControlChars(D1); check('C3-TS07 control-character argv element equals "s=" + JSON.stringify(config.s)', !cc.length, cc)
+const pc = checkCoverage(COV, ALL); check('coverage plan: every scope residual classified, IN residuals bound to cases and arms, OUT reasons, Q1-Q5 pointers, projection unchanged', !pc.length, pc.slice(0, 20))
+const b1 = checkBudget(B1, D1, 'C3-1'); const b2 = checkBudget(B2, D2, 'C3-2')
+check('execution budgets: <= 24 slots and <= 12 services per sub-lot, conditional slots equal gated cases, no retry', !b1.length && !b2.length, { b1, b2 })
+check('freeze delta D3-01..D3-08 and evaluator delta E3-01..E3-09 with base shas',
+  JSON.stringify(FR.items.map((i) => i.id)) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8].map((i) => 'D3-0' + i))
+  && JSON.stringify(EV.clauses.map((i) => i.id)) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => 'E3-0' + i))
+  && Object.values(FR.base).every((b) => sha(readFileSync(R(b.path))) === b.sha256) && Object.values(EV.base).every((b) => sha(readFileSync(R(b.path))) === b.sha256),
+  null)
+check('control slot contract equals the two CONTROL slots',
+  CC.slots.length === 2 && CC.slots.every((s) => { const c = ALL.find((x) => x.id === s.case); return c && c.kind === 'CONTROL' && c.case_input_sha256 === s.case_input_sha256 && c.slot === s.slot }), null)
+check('T3 assessment NAO_EXIGE_T3 / NAO_EXIGE_T4, rule sha current, questions only referenced',
+  T3.decision === 'NAO_EXIGE_T3' && T3.decision_t4 === 'NAO_EXIGE_T4' && sha(readFileSync(R(T3.rule.path))) === T3.rule.sha256 && T3.user_question === null, null)
+check('input verification PASS', IV.result === 'PASS' && IV.checks.every((c) => c.ok), IV.checks.length)
+const files = readdirSync(UNIT, { recursive: true }).filter((f) => statSync(join(UNIT, f)).isFile())
+check('no empty file in the unit folder', files.every((f) => statSync(join(UNIT, f)).size > 0), files.length)
+const zero = [D1, D2, COV, FR, CC].every((d) => d.functional_receipts === 0 && d.parity_credit === 0)
+check('0 functional receipts and 0 parity credit in every document that carries them', zero, null)
+
+// ------------------------------------------------------------------ negative controls
+const neg = []
+function expectFail(name, fn) {
+  let probs
+  try { probs = fn() } catch (e) { probs = ['threw ' + e.message] }
+  neg.push({ control: name, rejected: probs.length > 0, first: probs[0] ?? null })
+}
+expectFail('case_input value changed (sha mismatch)', () => { const d = clone(D1); d.cases[1].case_input.sdk_calls[2].input = 8; return checkCases(d, 'C3-1', 'typescript', COV) })
+expectFail('anchor text changed', () => { const d = clone(D2); d.cases[0].anchors[0].text += ' '; return checkCases(d, 'C3-2', 'python', COV) })
+expectFail('arm without discrimination entry', () => { const d = clone(D2); d.cases[5].arm_discrimination.pop(); return checkCases(d, 'C3-2', 'python', COV) })
+expectFail('discrimination judged only by non-client predicate', () => { const d = clone(D2); d.cases[3].arm_discrimination[0].judged_by = ['capture.case_input_frozen_bytes']; return checkCases(d, 'C3-2', 'python', COV) })
+expectFail('unknown arm id', () => { const d = clone(D1); d.cases[0].branches_targeted[0] = 'TS01.B09 (inventado)'; return checkCases(d, 'C3-1', 'typescript', COV) })
+expectFail('new Python arm colliding with a 2B arm (PY13.B05 declared new)', () => { const cv = clone(COV); cv.new_arm_ids.arms['PY13.B05'] = 'x'; return checkCases(D2, 'C3-2', 'python', cv) })
+expectFail('unknown Python arm (neither 2B nor new)', () => { const cv = clone(COV); delete cv.new_arm_ids.arms['PY03.B11']; return checkCases(D2, 'C3-2', 'python', cv) })
+expectFail('undefined predicate', () => { const d = clone(D1); d.cases[2].predicates.push('tmp.not_defined'); return checkCases(d, 'C3-1', 'typescript', COV) })
+expectFail('predicate class differs from base', () => { const d = clone(D2); d.predicate_table['wire.requests_exact'].class = 'informational'; return checkTable(d) })
+expectFail('slot budget exceeded (25 slots)', () => { const b = clone(B1); b.planned.case_slots = 25; const d = clone(D1); while (d.cases.length < 25) d.cases.unshift(clone(d.cases[0])); return checkBudget(b, d, 'C3-1') })
+expectFail('services budget exceeded (13)', () => { const b = clone(B2); b.planned.qualification_services = [...b.planned.qualification_services, 'X', 'Y', 'Z']; b.planned.qualification_services_planned = 13; return checkBudget(b, D2, 'C3-2') })
+expectFail('CONTROL lines changed', () => { const d = clone(D2); d.cases.at(-1).case_input.control_client.lines[3].method = 'turn/steer'; d.cases.at(-1).case_input_sha256 = sha(JSON.stringify(d.cases.at(-1).case_input)); return checkCases(d, 'C3-2', 'python', COV) })
+expectFail('residual without class', () => { const cv = clone(COV); cv.residuals[0].class = 'MAYBE'; return checkCoverage(cv, ALL) })
+expectFail('OUT_USER_DECISION without questions', () => { const cv = clone(COV); const r = cv.residuals.find((x) => x.class === 'OUT_USER_DECISION'); delete r.questions; return checkCoverage(cv, ALL) })
+expectFail('scope contract without residual', () => { const cv = clone(COV); cv.residuals = cv.residuals.filter((r) => r.contract !== 'PY04'); return checkCoverage(cv, ALL) })
+expectFail('control-character argv with wrong escaping', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'C3-TS07'); c.expected.argv[3] = c.expected.argv[3].replace('\\u0001', '\\x01'); return checkControlChars(d) })
+expectFail('wait_class on a non-wait step (infra completed to isolate the check)', () => { const d = clone(D2); const c = d.cases.find((x) => x.id === 'C3-PY03'); c.case_input.sdk_calls[3].wait_class = 'CLIENT_EFFECT'; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); c.infra.push('D3-05'); c.predicates.push('wait.client_effect_recorded'); return checkCases(d, 'C3-2', 'python', COV).filter((x) => x.includes('wait_class')) })
+expectFail('CLIENT_EFFECT_UNLESS_ALIVE without thread_name', () => { const d = clone(D2); const c = d.cases.find((x) => x.id === 'C3-PY13ER'); delete c.case_input.sdk_calls[11].thread_name; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'C3-2', 'python', COV).filter((x) => x.includes('wait_class')) })
+expectFail('replay field changed without declaration', () => { const d = clone(D2); const c = d.cases.find((x) => x.id === 'C3-PY13F'); c.accepted_capture_forms = ['PASS', 'KNOWN_SIGNAL_TERMINATION']; return checkCases(d, 'C3-2', 'python', COV).filter((x) => x.includes('undeclared change')) })
+expectFail('getter witness without expected entry', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'C3-TS05'); c.expected.getter_witnesses = []; return checkCases(d, 'C3-1', 'typescript', COV).filter((x) => x.includes('getter witnesses')) })
+expectFail('zero-calls fault rule outside C3-PY13ER', () => { const d = clone(D2); const c = d.cases.find((x) => x.id === 'C3-PY03'); c.expected.fault.fired[0].zero_calls_client_effect_unless_started = 'x'; return checkCases(d, 'C3-2', 'python', COV).filter((x) => x.includes('zero-calls')) })
+expectFail('replay changes a step outside the erratum', () => { const d = clone(D2); const c = d.cases.find((x) => x.id === 'C3-PY13ER'); c.case_input.sdk_calls[13].fn = 'len'; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'C3-2', 'python', COV) })
+expectFail('infra missing a derived capability', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'C3-TS04'); c.infra = c.infra.filter((i) => !i.startsWith('CAP-TS-SDKCALLS-C3')); return checkCases(d, 'C3-1', 'typescript', COV) })
+expectFail('V8 message without version_dependent', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'C3-TS02'); c.version_dependent = []; return checkCases(d, 'C3-1', 'typescript', COV) })
+const negOk = neg.every((n) => n.rejected)
+check('negative controls: every corrupted copy is rejected', negOk, neg)
+
+const ok = checks.every((c) => c.ok)
+const out = { kind: 'VALIDATION', task: 'DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-3', validator: 'validate-spec-c3.mjs.txt', node: process.version,
+  result: ok ? 'PASS' : 'FAIL', checks, negative_controls: neg.length, validated_files: {
+    'cases-c3-1.json': sha(readFileSync(U('cases-c3-1.json'))), 'cases-c3-2.json': sha(readFileSync(U('cases-c3-2.json'))),
+    'coverage-plan-c3.json': sha(readFileSync(U('coverage-plan-c3.json'))), 'freeze-r4-c3-delta.json': sha(readFileSync(U('freeze-r4-c3-delta.json'))),
+    'evaluator-r4-c3-delta.json': sha(readFileSync(U('evaluator-r4-c3-delta.json'))), 'control-slot-contract-c3.json': sha(readFileSync(U('control-slot-contract-c3.json'))),
+    'execution-budget-c3-1.json': sha(readFileSync(U('execution-budget-c3-1.json'))), 'execution-budget-c3-2.json': sha(readFileSync(U('execution-budget-c3-2.json'))),
+    't3-assessment.json': sha(readFileSync(U('t3-assessment.json'))), 'input-verification.json': sha(readFileSync(U('input-verification.json'))) },
+  functional_receipts: 0, parity_credit: 0 }
+writeFileSync(U('validation.json'), JSON.stringify(out, null, 2) + '\n')
+console.log(out.result, checks.filter((c) => c.ok).length + '/' + checks.length, 'negatives', neg.filter((n) => n.rejected).length + '/' + neg.length)
+for (const c of checks) if (!c.ok) console.log('FAIL', c.check, JSON.stringify(c.detail).slice(0, 1500))

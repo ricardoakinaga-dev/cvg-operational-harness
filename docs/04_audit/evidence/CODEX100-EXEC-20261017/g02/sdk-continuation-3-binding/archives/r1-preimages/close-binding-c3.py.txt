@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3 - estado e próxima unidade (somente leitura das entradas).
+# Uso: python3 -I -B close-binding-c3.py.txt <repo_root>  -> escreve state.json (EXECUTED_PENDING_REVIEW) e next-task.json.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+REL = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-continuation-3-binding"
+UNIT = os.path.join(ROOT, REL)
+G02R = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/"
+
+
+def load(name):
+    with open(os.path.join(UNIT, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(name):
+    with open(os.path.join(UNIT, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+v6 = load("coverage-observed-v6.json")
+g6 = load("gaps-review-v6.json")
+iv = load("input-verification.json")
+val = load("validation.json")
+head = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+anchor = [c for c in iv["checks"] if c["check"].startswith("v5, gaps v5")][0]["detail"]["commit"]
+res = v6["residual_counts"]
+by_dec = {"needs_new_decision": sorted(e["id"] for e in v6["residuals_c3"] if e["needs_new_decision"]),
+          "decided_distributed_profile": sorted(e["id"] for e in v6["residuals_c3"] if e["resolution"] == "OPEN_DECIDED_DISTRIBUTED_PROFILE"),
+          "source_profile_no_new_decision": sorted(e["id"] for e in v6["residuals_c3"] if e["resolution"] == "PARTIAL_BY_C3"),
+          "no_deterministic_path": sorted(e["id"] for e in v6["residuals_c3"] if e["resolution"] == "OPEN_NO_DETERMINISTIC_PATH"),
+          "closed_without_observation": sorted(e["id"] for e in v6["residuals_c3"] if e["resolution"] in
+                                               ("NOT_APPLICABLE_AT_PIN", "UNREACHABLE_AT_PIN", "ALREADY_OBSERVED"))}
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": "DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3", "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente", "status": "EXECUTED_PENDING_REVIEW", "write_scope": REL + "/**",
+    "repo": {"branch": "main", "head": head, "note": "as pastas g02 estão não rastreadas no checkout; a conferência é por sha e por blob git"},
+    "anchors": {"spec_and_v5": {"ref": "refs/remotes/origin/candidate/hiso005-0243-0242-20261019", "commit": anchor},
+                "admissions": {"C3-1": "085aef147412f0e53a3f65ab5964aeb2145b42b1 (conteúdo) e 20daa7c751658cb343fa45dfe17c13f70d05c2b1 (recibo)",
+                               "C3-2": "5f8fa79dc3cfa6da63dc8b7b692c41716741754f (conteúdo) e 76c0472571ca1ec5a26833edcfed4e48425c9e12 (recibo)",
+                               "durability": "nenhuma ref contém os commits das admissões; só o HEAD dos worktrees destacados das candidatas. O PR "
+                                             "documental do Lead ainda não os leva."}},
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])),
+                                 "record": "input-verification.json"},
+    "result": {
+        "map": "coverage-observed-v6.json", "v5_unchanged_sha256": v6["sources"]["coverage_observed_v5"]["sha256"],
+        "counts_v5": v6["counts_v5"], "counts_v6": v6["counts"], "status_changes": v6["status_changes"],
+        "bound_cases_c3": v6["bound_cases_c3"], "control_slots_not_consumed": [c["case"] for c in v6["control_slots"]],
+        "conditional_slots": v6["conditional_slots"],
+        "parts": v6["arm_discrimination_consumed"], "arms": v6["arms_c3_counts"],
+        "arms_v5_partial_closed_by_c3": v6["arms_v5_partial_closed_by_c3"],
+        "arms_v5_partial_scope_not_targeted": v6["arms_v5_partial_scope_not_targeted"],
+        "arms_open_explicit_v5_resolved": v6["arms_open_explicit_v5_resolved"], "arms_open_explicit_v6": v6["arms_open_explicit_v6"],
+        "new_arm_ids_c3": sorted(v6["new_arm_ids_c3"]), "arm_parts_not_credited_v6": v6["arm_parts_not_credited_v6"],
+        "e3_07": {"credited": False, "parts_not_credited": v6["e3_07"]["parts_not_credited"]},
+        "records_for_bind_applied": [r["id"] for r in v6["records_for_bind_applied"]],
+        "residuals": {"total": res["total"], "by_resolution": res["by_resolution"], "groups": by_dec},
+        "open_contracts": [r["source_contract"] for r in v6["rows"] if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE"],
+        "open_contracts_note": "seguem abertos; especificação do perfil distribuído em andamento em ../sdk-distributed-profile-spec/ (outra unidade)",
+        "gaps": {"OPEN": g6["summary"]["OPEN"], "observed_v6": g6["summary"]["observed_v6"],
+                 "observed_count_changed": g6["summary"]["observed_count_changed"], "progress_changed": g6["summary"]["progress_changed"],
+                 "touched_by_c3": g6["summary"]["touched_by_c3"], "record": "gaps-review-v6.json"},
+        "projection_confirmed": v6["projection_check"]["confirmed"],
+        "how_next_profile": {"path": "HOW-next-profile-v3.md", "sha256": sha("HOW-next-profile-v3.md")},
+        "user_decisions": "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json: Q1, Q2 (só a lista do Codex) e Q3 decididas; "
+                          "Q4 negada (DENY_NEW_CAPABILITY); Q5 não autorizada",
+    },
+    "validation": {"result": val["result"], "errors": len(val["errors"]), "negative_controls_rejected": val["negative_controls_rejected"],
+                   "record": "validation.json"},
+    "scripts": ["verify-inputs-c3bind.py.txt", "build-binding-c3.py.txt", "validate-binding-c3.mjs.txt", "close-binding-c3.py.txt"],
+    "formatting": {"tool": "prettier do node_modules do repositório, --ignore-path /dev/null --write",
+                   "order": ["verify-inputs-c3bind.py.txt grava input-verification.json; prettier",
+                             "build-binding-c3.py.txt grava coverage-observed-v6.json e gaps-review-v6.json (o v6 liga o sha do "
+                             "input-verification.json formatado); prettier",
+                             "validate-binding-c3.mjs.txt grava validation.json; prettier", "HOW-next-profile-v3.md escrito à mão; prettier",
+                             "close-binding-c3.py.txt grava state.json e next-task.json; prettier"],
+                   "effect": "Só a forma (arrays curtos numa linha e quebras); o conteúdo JSON é o do script."},
+    "budget": {"services": 0, "reviews": "0/2", "grouped_repairs": "0/1"},
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": ("Observação de cliente não é paridade. Sem serviço, SDK, rede, PG, commit ou branch; Docker só para o gitleaks. Ledgers, "
+             "coordenação, 0384-0386 e catálogo central não editados."),
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+nt = {
+    "task": "Decisão do Lead entre as opções abaixo (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": "DX100-G02:BIND-SDK-SOURCE-CONTINUATION-3", "previous_status": "COMPLETED_LOCAL (depois da revisão)",
+    "status": "READY_PENDING_LEAD_DECISION", "resume_checkpoint": G02R + "sdk-continuation-3-binding/state.json",
+    "map": G02R + "sdk-continuation-3-binding/coverage-observed-v6.json", "how": G02R + "sdk-continuation-3-binding/HOW-next-profile-v3.md",
+    "options": [
+        {"id": "DISTRIBUTED_PROFILE", "what": ("Perfil distribuído no linux-x64 (Q1 a Q3 decididas): os 11 contratos abertos e os resíduos "
+                                              + ", ".join(by_dec["decided_distributed_profile"]) + "."),
+         "owner": "outra unidade: " + G02R + "sdk-distributed-profile-spec/ (especificação em andamento; não editada por este BIND)",
+         "recommended_first": True, "new_decision_needed": False},
+        {"id": "DX100-G02:SPECIFY-SDK-SOURCE-CONTINUATION-4", "optional": True, "track": "T1 documental",
+         "what": ("Resto do perfil de fonte sem decisão nova: R-PY13-4 (known_bad 'pular o cleanup' do PY13.B17 julgado MISMATCH) e "
+                  "R-PY18-1 (demais modelos gerados fora dos exercitados). Ganho: duas partes de braço; nenhuma linha muda de status."),
+         "prerequisites": ["C32-ADM/R1-F01 (registro de threads por threading.local; controle negativo do guarda E3-07; registro igual ao "
+                           "do WAIT_RESULT)", "C32-ADM/R1-F03 (WAIT_APIS fechado na lista do D3-05)",
+                           "C32-ADM/DV-C32-02 (case_plan_file no manifesto; autoteste sobre o manifesto real)",
+                           "C31-ADM/R1-F02 e C31-ADM/R1-F03 só se o driver TypeScript for reusado"],
+         "alternative": "levar os dois resíduos para o próximo SPECIFY que reusar a pilha Python", "new_decision_needed": False},
+        {"id": "DECISION_PACKAGE_NEW_DECISIONS", "optional": True,
+         "what": ("Pacote de decisão só se o usuário quiser avançar nos itens que exigem decisão nova: capacidade nova de harness, revisão "
+                  "da Q4, Q5, gate T4, BUILD nativo e acesso a plataformas."),
+         "residuals": by_dec["needs_new_decision"], "new_decision_needed": True, "blocks_other_options": False},
+    ],
+    "not_authorized_now": ["rede fora da aquisição decidida na Q2", "Codex CLI real fora do perfil distribuído", "provider", "credencial",
+                           "login real", "dado real", "push", "produção", "testemunha privilegiada (Q4 negada)",
+                           "capacidade nova de harness (injeção de falha de fs ou do lado Node, fault novo de adapter)",
+                           "outras versões de pydantic e Node (Q5)", "SPEC0239 BUILD"],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).isoformat(),
+}
+for name, doc in (("state.json", state), ("next-task.json", nt)):
+    with open(os.path.join(UNIT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], state["validation"], len(by_dec["needs_new_decision"]))

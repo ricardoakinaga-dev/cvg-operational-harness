@@ -1,0 +1,136 @@
+# Próximo perfil SDK do DX100-G02 — HOW v3, depois da continuação 3
+
+A continuação 3 do perfil de fonte foi executada em dois sub-lotes: C3-1, com 14 casos
+TypeScript, e C3-2, com 13 casos Python. Este documento diz o que resta do perfil de
+fonte depois dela e separa o que exige decisão nova do que não exige. É uma proposta:
+não registra execução, não concede BUILD e não muda o catálogo de 509 obrigações. A
+versão anterior é o [HOW v2](../sdk-batch-2b2-binding/HOW-next-profile-v2.md).
+
+## Ponto de partida
+
+- **Mapa:** o [mapa v6](coverage-observed-v6.json) tem 33 contratos
+  `OBSERVED_CLIENT_PARTIAL` e 11 `OPEN_REQUIRED_FUTURE_PROFILE`. Os 11 abertos são
+  PY19, PY20 e PK01 a PK09, todos do perfil distribuído. A continuação 3 não mudou o
+  status de nenhuma linha, como o plano projetava. O v5 e as versões anteriores não
+  foram editados.
+- **Braços:** a continuação 3 liga 45 braços e 58 partes da tabela `arm_discrimination`
+  congelada. Foram creditadas 57 partes.
+  - A parte sem crédito é o known_bad "pular o cleanup" do PY13.B17 no C3-PY13ER. Ela
+    depende da regra de zero chamadas do E3-07, cujo guarda não é creditado: o registro
+    de threads perdia threads com ident reusado (DV-C32-01), e o Lead decidiu não
+    creditar o guarda ao aceitar a C3-2.
+  - Os dois braços abertos explícitos do v5, PY05.B10 e PY13.B06, passaram a
+    distinguidos.
+  - Os 11 braços de escopo parcial que o plano mirava foram fechados.
+  - Ficam de escopo parcial no v5 o PY02.B02 e o PY02.B07. O lado que falta deles é o
+    caminho empacotado, que pertence ao perfil distribuído.
+- **Lacunas:** as [seis lacunas](gaps-review-v6.json) seguem OPEN, com as mesmas
+  contagens do v5:
+  - GAP-PY-API 13/13;
+  - GAP-PY-RPC 11/11;
+  - GAP-GENERATED 4/4;
+  - GAP-PROVENANCE 1/3;
+  - GAP-TS-LANGUAGE 15/15;
+  - GAP-PLATFORM-PACKAGING 1/12.
+
+  A continuação 3 só acrescenta braços a contratos já observados, e nenhum requisito
+  tem qualificação com recibo.
+
+- **Resíduos do plano:** são 77. A continuação 3 resolveu 34 e resolveu parcialmente 2.
+  Dos outros 41, 38 seguem abertos e 3 fecharam sem observação. A tabela por resíduo
+  está em `residuals_c3` do v6.
+- **Decisões do usuário em 19/10/2026**
+  ([registro](../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json)):
+  - Q1 adota a release 0.153.4 como pin separado;
+  - Q2 autoriza uma aquisição só da lista do Codex;
+  - Q3 aceita o modo keyless;
+  - Q4 foi negada: nenhuma capacidade nova;
+  - Q5 (outras versões de pydantic e de Node) não foi autorizada.
+
+## O que resta do perfil de fonte
+
+### Sem decisão nova
+
+| Item                                                                | Resíduo                                              | Destino                                                                |
+| ------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
+| Known_bad "pular o cleanup" do PY13.B17 julgado MISMATCH            | R-PY13-4 (parte; a parte do PY13.B18 está creditada) | Continuação seguinte do perfil de fonte, depois dos carry-overs abaixo |
+| Demais modelos gerados fora dos exercitados (o C3-PY18 cobriu dois) | R-PY18-1 (parte)                                     | Continuação seguinte do perfil de fonte                                |
+
+Pré-requisitos de qualquer reuso da pilha Python, vindos da R1 do C3-2:
+
+- C32-ADM/R1-F01: registro de threads por `threading.local`, controle negativo do guarda
+  E3-07 e registro alinhado ao `WAIT_RESULT`;
+- C32-ADM/R1-F03: fechar `WAIT_APIS` na lista do D3-05;
+- C32-ADM/DV-C32-02: `case_plan_file` no manifesto, com autoteste sobre o manifesto real.
+
+Se o driver TypeScript for reusado, valem também C31-ADM/R1-F02 (sonda do getter) e
+C31-ADM/R1-F03 (subchaves do vocabulário).
+
+### Sem decisão nova e sem caminho determinístico
+
+São seis resíduos `OUT_NONDETERMINISTIC`:
+
+- R-TS10-4: forma B natural do ENOENT;
+- R-TS11-3: ordem entre EOF e exit;
+- R-TS11-5: stderr tardio;
+- R-TS12-2: aborto depois do EOF;
+- R-PY10-1: corrida natural do PY10.B04;
+- R-PY13-5: corrida natural do PY13.B17.
+
+Seguem registrados como abertos, sem plano. O lado forçado de cada corrida já foi
+observado no 2A ou no 2B.
+
+### Já decidido: perfil distribuído
+
+As decisões Q1, Q2 e Q3 já foram tomadas, então estes itens não pedem decisão nova:
+
+- os 11 contratos abertos: PY19, PY20 e PK01 a PK09;
+- os resíduos R-TS01-3, R-TS05-2, R-TS09-3, R-PY02-2, R-PY02-3, R-PY02-4, R-PY05-3,
+  R-PY08-2 e R-PY16-2;
+- os restos do v5 que já iam ao perfil distribuído: PY01 (tempo real de inicialização e
+  KeyboardInterrupt no init), PY06 (CLI real no lugar do peer), PY09 (sobrecarga e sleep
+  reais) e PY11 (início versus junção no servidor).
+
+A especificação desse perfil está em andamento em
+`../sdk-distributed-profile-spec/`, outra unidade. Esta unidade não a leu como entrada
+nem a editou. Se algum desses itens exigir turn real, com chamada a modelo, ele passa ao
+gate T4 separado que a Q3 cita. É o caso possível do R-PY16-2.
+
+### Exige decisão nova
+
+| Grupo                                               | Resíduos                                                                                                     | Decisão necessária                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Capacidade nova de harness                          | R-TS03-2, R-TS03-3, R-TS10-1, R-TS10-2, R-TS10-3, R-TS11-4, R-TS11-6, R-TS12-3, R-TS12-4, R-PY13-6, R-PY18-2 | Autorizar uma unidade que especifique a capacidade; hoje capacidade nova é negada    |
+| Testemunha privilegiada do TS12                     | R-TS12-5 (término do filho pré-abortado, NOT_WITNESSED)                                                      | Rever a Q4, negada em 19/10/2026, ou levar a um perfil de plataforma                 |
+| Outras versões de dependência                       | R-TS12-6 (Node), R-PY18-3 (pydantic)                                                                         | Q5: aquisição com rede, não autorizada                                               |
+| Gate T4 (turn real, chamada a modelo ou login real) | R-PY13-8 (timeout real de 30 s), R-PY14-2 (ordenações reais do servidor), R-PY17-2 (login real)              | Gate T4 próprio, fora deste plano                                                    |
+| BUILD nativo e portas duráveis                      | R-PY05-4, R-PY10-2, R-PY12-2, R-PY13-7, R-PY14-3 e o PY07 (cenário governado EQ02/SPEC0239)                  | BUILD nativo: SPEC0239 aprovada, BUILD não autorizado; depende de 0029 → 0030 → 0031 |
+| Plataforma                                          | R-PY02-5 (PATH no Windows) e as outras cinco plataformas do PY20, do PK01, do PK04 e do PK07                 | Acesso a outras plataformas; só linux-x64 é local                                    |
+
+### Fechados sem observação
+
+Estes resíduos estão registrados no v6 e não pedem trabalho:
+
+- R-PY04-1: não há default diferente de None nos modelos do pin.
+- R-PY15-2: inalcançável pela API pública do pin.
+- R-TS11-2: já observado no 2A.
+
+## Ordem proposta
+
+1. **Perfil distribuído no linux-x64.** Já tem decisão (Q1 a Q3) e está em
+   especificação em outra unidade. É o próximo passo com ganho real de contratos: os 11
+   abertos.
+2. **Continuação 4 do perfil de fonte, pequena e opcional.** Teria R-PY13-4 e R-PY18-1,
+   depois dos carry-overs da R1 do C3-2. O ganho é de duas partes de braço. O Lead decide
+   se vale uma unidade própria ou se esses itens entram no próximo SPECIFY que reusar a
+   pilha Python. A [próxima unidade](next-task.json) registra as duas opções.
+3. **Pacote de decisão para o grupo "Exige decisão nova",** só se o usuário quiser
+   avançar nesses itens. Nenhum bloqueia os itens 1 e 2.
+
+## Limites
+
+Observação de cliente não é paridade. Recibos funcionais e crédito de paridade seguem
+em 0. As 509 obrigações do catálogo continuam `NOT_RUN`. A SPEC0239 foi aprovada pelo
+usuário
+([decisão](../../g04/native-journey-recovery-plan/user-decision-20261018.json)), mas o
+BUILD nativo segue não autorizado nesta trilha.

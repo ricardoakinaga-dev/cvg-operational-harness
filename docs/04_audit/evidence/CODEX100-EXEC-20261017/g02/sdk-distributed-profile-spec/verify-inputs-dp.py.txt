@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS - passo 0 (somente leitura, sem rede).
+# Uso: python3 -I -B verify-inputs-dp.py.txt <repo_root> <cache_dir> <out_json>
+# Confere a aquisição (estado, conferência de digests, registro), o cache contra o registro e os membros contra os
+# metadados, as decisões (usuário e Lead), o mapa v5, os contratos G01, as bases da especificação 2B e as admissões no
+# commit do PR documental, e as fontes do pin contra a identity freeze. Lê arquivos compactados só em memória; não executa nada.
+# Reparo R1: confere também o metadado M7 do cache (listagem da release) contra o registro e _initialize_metadata.py contra a identity freeze.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import zipfile
+from datetime import datetime, timezone
+
+ROOT, CACHE, OUT = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02"
+LEAD_PR_COMMIT = "7e1da11a4"
+checks = []
+
+
+def A(r):
+    return os.path.join(ROOT, r)
+
+
+def sha(p):
+    return hashlib.sha256(open(p, "rb").read()).hexdigest()
+
+
+def load(p):
+    return json.load(open(p, encoding="utf-8"))
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+acq = A(G02 + "/sdk-distributed-acquisition")
+st = load(os.path.join(acq, "state.json"))
+check("acquisition unit closed (COMPLETED_LOCAL*) with digest verification PASS",
+      st["status"].startswith("COMPLETED_LOCAL") and load(os.path.join(acq, "digest-verification.json"))["result"] == "PASS", st["status"])
+led = load(os.path.join(acq, "acquisition-ledger.json"))
+arts = {a["id"]: a for a in led["artifacts"]}
+check("ledger: A1-A5 and A7 DIGEST_OK, A6 NOT_AVAILABLE, no URL with query left", all(arts[i]["result"] == "DIGEST_OK" for i in ("A1", "A2", "A3", "A4", "A5", "A7"))
+      and arts["A6"]["result"] == "NOT_AVAILABLE" and "redaction" in led, {i: a["result"] for i, a in arts.items()})
+ok_arch = {i: sha(a["stored"]) == a["observed"]["sha256"] and a["stored"].startswith(CACHE + "/artifacts/") for i, a in arts.items() if a["result"] == "DIGEST_OK"}
+check("cache archives equal the ledger sha256 (recomputed now)", all(ok_arch.values()), ok_arch)
+meta = load(os.path.join(acq, "artifact-metadata.json"))
+check("artifact-metadata bound to the current ledger", meta["ledger"]["sha256"] == sha(os.path.join(acq, "acquisition-ledger.json")))
+mem = {a["id"]: {m["name"]: m["sha256"] for m in a.get("members", []) if m.get("type") == "file"} for a in meta["artifacts"] if a.get("inspected")}
+used = {"A1": ["codex_cli_bin/__init__.py", "codex_cli_bin/codex-package.json", "codex_cli_bin/bin/codex", "openai_codex_cli_bin-0.153.4.dist-info/WHEEL"],
+        "A2": ["package/bin/codex.js", "package/package.json"], "A3": ["package/package.json", "package/vendor/x86_64-unknown-linux-musl/codex-package.json",
+                                                                      "package/vendor/x86_64-unknown-linux-musl/bin/codex"],
+        "A4": ["package/bin/codex-responses-api-proxy.js", "package/package.json"], "A7": ["package/dist/index.js", "package/package.json"]}
+bad = []
+for aid, names in used.items():
+    path = arts[aid]["stored"]
+    for n in names:
+        if path.endswith(".whl"):
+            with zipfile.ZipFile(path) as z:
+                data = z.read(n)
+        else:
+            with tarfile.open(path, "r:gz") as t:
+                data = t.extractfile(t.getmember(n)).read()
+        if hashlib.sha256(data).hexdigest() != mem[aid][n]:
+            bad.append(aid + ":" + n)
+check("archive members used by the spec equal artifact-metadata.json (read in memory)", not bad, bad)
+ld = load(os.path.join(acq, "lead-decision-loopback-a5.json"))
+check("lead decision on the A5 loopback present (ALLOWED_AS_SYNTHETIC_LOOPBACK_PEER, 4 conditions)", ld["decision"] == "ALLOWED_AS_SYNTHETIC_LOOPBACK_PEER" and len(ld["conditions"]) == 4)
+dec = load(A(G02 + "/sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json"))
+d = {x["id"]: x["decision"] for x in dec["decisions"]}
+check("user decision Q1-Q4 (pin 0.153.4, single acquisition, keyless, capability denied)", d == {"Q1-PIN": "ADOPT_RELEASE_0.153.4_AS_SEPARATE_PIN",
+      "Q2-ACQUISITION": "AUTHORIZE_SINGLE_ACQUISITION_CODEX_LIST_ONLY", "Q3-KEYLESS": "ACCEPT_KEYLESS_ONLY", "Q4-CAPABILITY": "DENY_NEW_CAPABILITY"}, d)
+v5 = load(A(G02 + "/sdk-batch-2b2-binding/coverage-observed-v5.json"))
+rows = {r["source_contract"]: r["status"] for r in v5["rows"]}
+openr = ["PY19", "PY20"] + ["PK%02d" % i for i in range(1, 10)]
+check("v5: PY19, PY20 and PK01-PK09 OPEN_REQUIRED_FUTURE_PROFILE; PY02 OBSERVED_CLIENT_PARTIAL", all(rows[k] == "OPEN_REQUIRED_FUTURE_PROFILE" for k in openr)
+      and rows["PY02"] == "OBSERVED_CLIENT_PARTIAL", {k: rows[k] for k in openr + ["PY02"]})
+check("G01 contracts unchanged", sha(A("docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts/python-contracts.json")) == "25c48bdd75710c2eb5bde33c6b18379892078ca3e5b78f1448dfe42c94e19ad1"
+      and sha(A("docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/sdk-open-contracts/typescript/contracts.json")) == "b90b17ce1bbcd824ff92c68180b79d4ef428c715ced48a520db379bbfb7275d2")
+PR = git("rev-parse", LEAD_PR_COMMIT).stdout.strip()
+for name in ["sdk-source-batch-2b-spec", "sdk-batch-2b2-admission", "sdk-batch-2ac-admission", "sdk-source-batch-2a-continuation-spec"]:
+    lt = git("ls-tree", "-r", PR, "--", G02 + "/" + name).stdout.splitlines()
+    tree = {l.split("\t", 1)[1]: l.split()[2] for l in lt}
+    diff = [p for p, b in tree.items() if not os.path.isfile(A(p)) or git("hash-object", A(p)).stdout.strip() != b]
+    check("%s equals commit %s" % (name, LEAD_PR_COMMIT), tree and not diff, diff[:5])
+idf = load(A(G02 + "/sdk-batch-2a-admission/identity-freeze-r3.json"))
+ref = A(G02 + "/sdk-reference-profile/inputs/sdk/")
+pyok = {f: sha(ref + "python/src/openai_codex/" + f) == idf["trees"]["sdk-python"]["openai_codex/" + f]["sha256"] for f in ["client.py", "_initialize_metadata.py"]}
+tsok = {f: sha(ref + "typescript/src/" + f) == idf["ts_sources"][f] for f in ["exec.ts", "index.ts"]}
+check("pin sources used as anchors equal identity-freeze-r3", all(pyok.values()) and all(tsok.values()), {**pyok, **tsok})
+inv = open(A("docs/04_audit/evidence/CODEX100-EXEC-20261017/g01/component-surfaces/non-rust/inventory.json"), encoding="utf-8").read()
+check("_runtime_setup.py and pyproject.toml of the reference profile are the pin files (sha in the G01 inventory)",
+      sha(ref + "python/_runtime_setup.py") in inv and sha(ref + "python/pyproject.toml") in inv)
+check("release_version.py and scripts/update_sdk_artifacts.py are only in the G01 inventory (sha), not among the profile inputs",
+      "sdk/python/release_version.py" in inv and not os.path.exists(ref + "python/release_version.py") and not os.path.exists(ref + "python/scripts/update_sdk_artifacts.py"))
+m7 = [r for r in led["requests"] if r["id"] == "M7"][0]
+check("cache metadata M7 (release rust-v0.153.4 listing) equals the ledger sha and lists the six codex-package tar.gz assets",
+      m7.get("result") == "OK" and sha(m7["dest"]) == m7["sha256"] and m7["dest"].startswith(CACHE + "/metadata/")
+      and sum(1 for a in json.load(open(m7["dest"], encoding="utf-8"))["assets"] if a["name"].startswith("codex-package-") and a["name"].endswith(".tar.gz")) == 6, m7["id"])
+ok = all(c["ok"] for c in checks)
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS", "result": "PASS" if ok else "FAIL", "network": False,
+       "anchor_commit": PR, "checks": checks, "verified_at": datetime.now(timezone.utc).isoformat()}
+open(OUT, "w", encoding="utf-8").write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], sum(c["ok"] for c in checks), "/", len(checks))
+for c in checks:
+    if not c["ok"]:
+        print("FAIL", c["check"], json.dumps(c["detail"], ensure_ascii=False)[:400])

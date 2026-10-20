@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+# DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS - escreve next-task.json e state.json com os sha atuais dos documentos da especificação.
+# Uso: python3 -I -B close-unit-dp.py.txt <spec_dir> <phase>
+#   phase: draft (antes da revisão) | final (depois da última rodada; lê review-r1/review.json e, se existirem, repair-r1.json,
+#   review-r2/review.json e review-r2/executor-disposition.json)
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+SPEC, PHASE = sys.argv[1], sys.argv[2]
+TASK = "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS"
+UNIT = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-spec"
+
+
+def sha(name):
+    with open(os.path.join(SPEC, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(name):
+    with open(os.path.join(SPEC, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def exists(name):
+    return os.path.exists(os.path.join(SPEC, name))
+
+
+def ref(name):
+    return {"path": UNIT + "/" + name, "sha256": sha(name)}
+
+
+c1, c2 = load("cases-dp-1.json"), load("cases-dp-2.json")
+b1, b2 = load("execution-budget-dp-1.json"), load("execution-budget-dp-2.json")
+cov, fr, ev, t3 = load("coverage-plan-dp.json"), load("freeze-r4-dp-delta.json"), load("evaluator-r4-dp-delta.json"), load("t3-assessment.json")
+caps, val, iv = load("capability-contracts-dp.json"), load("validation.json"), load("input-verification.json")
+adm = load("../sdk-batch-2b2-admission/state.json")
+acq_next = load("../sdk-distributed-acquisition/next-task.json")
+review, carry, status, rounds, repairs = None, [], "IN_REVIEW", 0, 0
+if PHASE == "final":
+    r1 = load("review-r1/review.json")
+    rounds = 1
+    review = {"R1": "%s (%s) review-r1/review.json; texto sem edição em review-r1/verdict.raw.txt" % (r1["verdict"], r1.get("summary_counts", "")),
+              "critic": "subagente novo por rodada, somente leitura; o executor grava brief e veredito sem edição"}
+    last = r1
+    if exists("repair-r1.json"):
+        repairs = 1
+        review["repair"] = "repair-r1.json (1/1), preimagens em archives/r1-preimages/"
+    if exists("review-r2/review.json"):
+        r2 = load("review-r2/review.json")
+        rounds, last = 2, r2
+        review["R2"] = "%s (%s) review-r2/review.json; texto sem edição em review-r2/verdict.raw.txt" % (r2["verdict"], r2.get("summary_counts", ""))
+    disp_name = "review-r2/executor-disposition.json" if rounds == 2 else "review-r1/executor-disposition.json"
+    disp = load(disp_name) if exists(disp_name) else None
+    if disp:
+        review["disposition"] = disp_name
+        carry = [{"finding": "DP-SPEC/" + i["id"], "text": i["note"]} for i in disp["items"] if i["disposition"].startswith("CARRIED")]
+        p1_open = [i["id"] for i in disp["items"] if i.get("severity") == "P1" and not i["disposition"].startswith("FIXED")]
+        p2_open = [i["id"] for i in disp["items"] if i.get("severity") == "P2" and not (i["disposition"].startswith("FIXED") or i["disposition"].startswith("CARRIED"))]
+    else:
+        p1_open = [f["id"] for f in last.get("findings", []) if f["severity"] == "P1"]
+        p2_open = [f["id"] for f in last.get("findings", []) if f["severity"] == "P2"]
+    carried_p2 = any("P2" == i.get("severity") and i["disposition"].startswith("CARRIED") for i in (disp or {}).get("items", []))
+    if p1_open or p2_open:
+        status = "BLOCKED_REVIEW"
+    elif last["verdict"] == "APPROVE" and not carry:
+        status = "COMPLETED_LOCAL"
+    else:
+        status = "COMPLETED_LOCAL_WITH_CARRIED_P2" if carried_p2 else "COMPLETED_LOCAL_WITH_CARRIED_P3"
+
+
+def slots(doc):
+    return [{"slot": c["slot"], "case": c["id"], "kind": c["kind"], "contracts": c["contracts"], "role": c["role"], "gate": bool(c.get("gate")),
+             "arms": [b.split(" ")[0] for b in c["branches_targeted"]]} for c in doc["cases"]]
+
+
+spec = {k: ref(v) for k, v in {
+    "cases_dp_1": "cases-dp-1.json", "cases_dp_2": "cases-dp-2.json", "coverage_plan": "coverage-plan-dp.json",
+    "capability_contracts": "capability-contracts-dp.json", "freeze_r4_dp_delta": "freeze-r4-dp-delta.json",
+    "evaluator_r4_dp_delta": "evaluator-r4-dp-delta.json", "control": "control-slot-contract-dp.json",
+    "budget_dp_1": "execution-budget-dp-1.json", "budget_dp_2": "execution-budget-dp-2.json",
+    "t3": "t3-assessment.json", "validation": "validation.json", "input_verification": "input-verification.json"}.items()}
+for k, b in list(fr["base"].items()) + list(ev["base"].items()):
+    spec["base_" + k] = {"path": os.path.normpath(os.path.join(UNIT, b["path"])), "sha256": b["sha256"]}
+for k in ("acquisition_ledger", "artifact_metadata", "digest_verification"):
+    if k in acq_next["spec"]:
+        spec[k] = acq_next["spec"][k]
+carry_adm = [{"finding": "2B2-ADM/" + c["finding"], "text": c["text"], "where": "DDP-10 (freeze-r4-dp-delta.json): antes do source freeze do DP-2"}
+             for c in adm["carry_over_next"] if c["finding"] in ("R1-F02", "R1-F03", "R1-F04")]
+carry_acq = [dict(c, where="só numa aquisição futura (exige decisão nova); não se aplica ao IMPLEMENT") for c in acq_next.get("carry_over", [])]
+by_class = cov["counts"]["by_class"]
+out_summary = {k: [{"id": r["id"], "contract": r["contract"], "destination": r["destination"]} for r in cov["residuals"] if r["class"] == k]
+               for k in by_class if k != "IN_SPEC"}
+
+next_task = {
+    "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1 (proposta; nome e claim definidos pelo Lead)",
+    "previous_task": TASK, "previous_status": status,
+    "status": "READY_PENDING_LEAD_CLAIM" if PHASE == "final" and status.startswith("COMPLETED_LOCAL") else "DRAFT_PENDING_REVIEW",
+    "track": "T1 com execução local contida (bwrap --unshare-all, sem rede, sem provider, sem credencial, sem dado real); staging do cache fora de docs/",
+    "t3_required": False, "t4_required": False, "t3_assessment": UNIT + "/t3-assessment.json", "resume_checkpoint": UNIT + "/state.json",
+    "spec": spec,
+    "pins": {"distributed": c1["pins"]["distributed"], "source": c1["pins"]["source"], "build_link": c1["pins"]["build_link"]},
+    "precondition": "O cache segue igual a acquisition-ledger.json e os membros a artifact-metadata.json (input-verification.json); o freeze r4, o delta 2B e as admissões 2AC e 2B-2 não mudaram. Se algo mudou, reconferir cada DDP antes de qualquer escrita, ou parar e voltar à especificação.",
+    "what": "Implementar DDP-01..05, DDP-07 e DDP-08 (parte DP-1) e DDP-09 (dp-control-wrapper.mjs) e as cláusulas EDP numa pasta nova da unidade; staging só-leitura em /mnt/dados/cvg-work; autotestes offline de cada capacidade (capability-contracts-dp.json) e R3-12 sobre a tabela de cases-dp-1.json; source-freeze e identity-freeze do DP-1; qualificar %s; CONTROL DP1-CTRL01 primeiro (MISMATCH só por wrap.exit_mirror_exact); depois os %d casos em ordem de slot, uma vez cada, em série, sem retry; DP-REAL01 só se o DIAG-DP-REAL-CLI passar; revisão independente e adjudicação." % (
+        ", ".join(b1["planned"]["qualification_services"]), b1["planned"]["cases"]),
+    "first_step": "Lead registra claim novo. Conferir state.json desta pasta, os sha da especificação acima e o cache contra o registro antes de qualquer escrita.",
+    "budget": {"case_slots": b1["planned"]["case_slots"], "cases": b1["planned"]["cases"], "control_slots": 1,
+               "conditional_slots": b1["planned"]["conditional_slots"], "qualification_services_planned": b1["planned"]["qualification_services_planned"],
+               "qualification_services": b1["planned"]["qualification_services"], "services_reserve": b1["planned"]["services_reserve"],
+               "reviews": 2, "grouped_repairs": 1, "automatic_retries": 0, "max": b1["max"]},
+    "stops": b1["stops"], "conditional_diags": b1["conditional_diags"],
+    "carry_over": carry_adm + carry_acq + carry,
+    "not_authorized_now": b1["not_authorized"] + ["alterar código de produto ou contrato público do CVG (exigiria T3)"],
+    "after_this": [
+        "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-2 (%d vagas, %d serviços), com DDP-06, DDP-10 e a pilha Python do 2B-2" % (
+            b2["planned"]["case_slots"], b2["planned"]["qualification_services_planned"]),
+        "BIND do perfil distribuído (mapa ao lado do v5; linhas só OBSERVED_CLIENT_PARTIAL, GAP-PROVENANCE e GAP-PLATFORM-PACKAGING seguem OPEN)",
+        "perguntas contingentes de t3-assessment.json (T4: fontes do bootstrap do PY20; T3: identidade TLS de teste) só se o Lead quiser o ramo de bootstrap",
+        "itens OUT de coverage-plan-dp.json só pelo destino declarado em cada um",
+    ],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).date().isoformat(),
+}
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente",
+    "status": status,
+    "write_scope": UNIT + "/**",
+    "decisions": {"user": "../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json (Q1 pin 0.153.4, Q2 aquisição única, Q3 keyless, Q4 capability negada)",
+                  "lead_loopback": "../sdk-distributed-acquisition/lead-decision-loopback-a5.json (permitido; não usado nesta especificação, motivo em coverage-plan-dp.json)"},
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])),
+                                 "anchor_commit": iv["anchor_commit"], "record": "input-verification.json"},
+    "result": {
+        "sub_lots": {
+            "DP-1": {"language": "Node (pacotes npm publicados; CONTROL com wrapper próprio)", "slots": slots(c1), "counts": c1["counts"],
+                     "services": b1["planned"]["qualification_services"], "conditional": b1["planned"]["conditional_slots"]},
+            "DP-2": {"language": "python (wheel publicado; CONTROL cópia do 2B2-CTRL01)", "slots": slots(c2), "counts": c2["counts"],
+                     "services": b2["planned"]["qualification_services"], "conditional": b2["planned"]["conditional_slots"]}},
+        "totals": {"slots": len(c1["cases"]) + len(c2["cases"]), "cases": c1["counts"]["cases"] + c2["counts"]["cases"], "controls": 2,
+                   "conditional": c1["counts"]["conditional"] + c2["counts"]["conditional"],
+                   "services": b1["planned"]["qualification_services_planned"] + b2["planned"]["qualification_services_planned"]},
+        "pins": c1["pins"],
+        "freeze": "freeze r4 + D2B-01..D2B-15 + DDP-01..DDP-10 (freeze-r4-dp-delta.json)",
+        "evaluator": "avaliador r4 + E2B-01..E2B-14 + EDP-01..EDP-06 (evaluator-r4-dp-delta.json)",
+        "capabilities": {"interpretation": caps["interpretation"], "ids": [c["id"] for c in caps["capabilities"]]},
+        "predicates": {"DP-1": len(c1["predicate_table"]), "DP-2": len(c2["predicate_table"]),
+                       "new": sorted({k for d in (c1, c2) for k, v in d["predicate_table"].items() if v["source"].startswith("NEW")})},
+        "residuals": {"total": cov["counts"]["residuals"], "by_class": by_class, "out": out_summary},
+        "new_arm_ids": cov["new_arm_ids"]["arms"],
+        "projection_if_all_pass": cov["projection_if_all_pass"],
+        "t3": {"decision": t3["decision"], "decision_t4": t3["decision_t4"],
+               "contingent_questions_not_asked": [{"tier": q["tier"], "topic": q["topic"]} for q in t3["contingent_questions_not_asked"]]},
+        "validation": "%s (%d/%d verificações; %d/%d controles negativos rejeitados)" % (
+            val["result"], sum(c["ok"] for c in val["checks"]), len(val["checks"]),
+            sum(n["rejected"] for c in val["checks"] if c["check"].startswith("negative") for n in c["detail"]), val["negative_controls"]),
+        "next_task": "next-task.json (IMPLEMENT-AND-ADMIT do DP-1, sem T3 nem T4)",
+    },
+    "scripts": ["verify-inputs-dp.py.txt", "build-spec-dp.py.txt", "validate-spec-dp.mjs.txt", "close-unit-dp.py.txt"],
+    "budget": {"services": 0, "reviews": "%d/2" % rounds, "grouped_repairs": "%d/1" % repairs},
+    "review": review,
+    "formatting": "prettier 3.8.3 --write nos JSON depois do json.dumps(indent=2) e antes de qualquer sha que os cite",
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": "Sem serviço, SDK, compilador, Codex CLI, rede, PG, commit, branch ou worktree; nenhum arquivo do cache executado, extraído ou copiado (leitura em memória). Docker só para o gitleaks pedido, sobre cópia da pasta (registro em secret-scan.json, gravado depois do fechamento). Ledgers, coordenação, 0384-0386, catálogo central e código não editados.",
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+for name, obj in (("next-task.json", next_task), ("state.json", state)):
+    with open(os.path.join(SPEC, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+print(state["status"], state["result"]["validation"])

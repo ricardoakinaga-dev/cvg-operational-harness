@@ -1,0 +1,343 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-SOURCE-CONTINUATION-3-1",
+  "lead": "CONT-20261018-D9EF",
+  "track": "T1 com execução local contida (serviços transientes próprios, sem rede, sem provider, sem dado real)",
+  "status": "COMPLETED_LOCAL",
+  "git": {
+    "candidate_worktree": "/mnt/dados/cvg-work/cvg-codex100-c31-20261019",
+    "base": "bd97df323 (recibo do 2B-2)",
+    "branch": "nenhuma (HEAD destacado)",
+    "push": "não",
+    "pr": "não"
+  },
+  "runtime": "/mnt/dados/cvg-work/cvg-codex100-c31-runtime-20261019",
+  "spec_inputs": {
+    "folder": "inputs/spec-c3 (cópia byte a byte de ../sdk-source-continuation-3-spec, conferida contra next-task.json e contra os blobs de origin/main e origin/candidate/hiso005-0243-0242-20261019)",
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "0daac5bd45d93b05918ee988c32c47b3a8280b194c57d76551c7fa3a792facc8",
+      "result": "PASS"
+    },
+    "cases_c3_1_sha256": "fc9b54c02760eda44617cf60d414c26f9213a8b84b149c8cf9edc6bc7eb7de96",
+    "user_decision_q4": "inputs/user-decision-distributed-profile-20261019.json (Q4: DENY_NEW_CAPABILITY)",
+    "lead_decision_f01": "inputs/lead-decision-f01.json"
+  },
+  "implementation": {
+    "layout": "Duas pilhas no host: tslane/ (supervisor e avaliador TypeScript, base 2AC) para os 14 slots TS e os 4 DIAG-TS; python/ (pilha Python do 2B-2) para C31-CTRL01 e os 4 DIAG-PY. Um único source freeze, um identity freeze, um diag-admission, budget.json e case-ledger.json compartilhados; serviços sempre em série.",
+    "D3-01": "node/channel.cjs CASE_ID (C3-TS01..15 com 09A/09B) e python/channel.py SDK_CASE_RE/CONTROL_CASES (C3-PY*, C31/C32-CTRL01); supervisores ligam cases-c3-1.json por sha; contagens 15/14 (autoteste).",
+    "D3-02": "node/ts-driver.mjs: interpretador único (interpret) com vocabulário fechado (checkStep/STEP_KEYS/CONSUME; passo, chave, modo ou marcador fora da lista lança e o driver termina INVALID); new Codex sem options; options_as; mutate; events.consume; modos first_then_witness_then_throw e next_abort_at_barrier; barreiras SUSPENDED e CHILD_HELD; marcadores $SELF_REF, $NONENUM, $GETTER, $FUNCTION, $SYMBOL; observação thread_id_is_undefined; RESOLVER_ABSENCE no passo 1 do C3-TS01.",
+    "D3-03": "GetterWitnesses: conta invocações; a primeira lista /work/tmp com a função do TMP_LISTING dentro do getter; erro de listagem é capturado e registrado (R2-F02), o valor volta ao SDK; GETTER_WITNESS depois do assentamento de qualquer passo com invocação e antes do TMP_LISTING; resumo {id, invocations_total} de todo witness declarado no CALLS_DONE.",
+    "D3-06": {
+      "source_freeze": {
+        "path": "source-freeze-r4-c31.json",
+        "sha256": "3763282e750a2bcc63334545e0a0c62760f36ad07d46954caaf630d983927d24",
+        "files": 51
+      },
+      "identity_freeze": {
+        "path": "identity-freeze-r4-c31.json",
+        "sha256": "ebecbbe6631521aa7da60afad6f2f7bfeb5f45275e9abd06845fc34c68eaa407"
+      },
+      "order": "selftests e validador -> source freeze -> identity freeze -> 8 DIAG -> diag-admission -> CONTROL -> 14 slots TS"
+    },
+    "D3-07": "C31-CTRL01 = 2B1-CTRL01 com só o último elemento do argv trocado (autoteste); control-client.py aceita C31-CTRL01/C32-CTRL01.",
+    "D3-08": {
+      "R1-F02": "python/acceptance.py evaluate: expand_parts, Seq, capture_extra e capture_form dentro do try; falha -> regra 3 (autoteste com os três alvos)",
+      "R1-F03": "plan_binding na reavaliação (python e tslane): plano da pasta contra case-plan-*.json ligado pelo source freeze e passos de barreira do case_input; controles negativos no autoteste; 15/15 na reavaliação",
+      "R1-F04": "autoteste positivo/negativo de zombie_t_ns em no_termination_before (termination_exact)"
+    },
+    "erratum_C3_SPEC_R2_F01": "Aplicada em tslane/acceptance.py node_abort_termination: o oráculo client julga só (1) forma KNOWN_SIGNAL_TERMINATION, (2) SIGTERM no SIGNAL do adapter e na testemunha do SO (rastreador: zombie com status 15 ou PID ausente), (3) nenhum sinal do supervisor, (4) nenhum kill do código próprio do driver (sem marco ABORT_CALLED) e (5) ABORT_REQUESTED/ABORT_RETURNED no passo; a ordem entre processos só é registrada (order_recorded_not_judged); nenhum predicado order_unilateral foi acrescentado. Autoteste obrigatório: SIGNAL do adapter antes do marco do driver não dá MISMATCH (PASS_CLIENT_OBSERVATION pela regra 7).",
+    "carry_over_R2_F02": "aplicado (D3-03 acima; autotestes de listagem que lança no driver e no avaliador)",
+    "evaluator_clauses": [
+      "E3-01 R3-12 e classe/oráculo herdados conferidos contra as bases",
+      "E3-02 api.ts_steps_exact",
+      "E3-03 tmp.getter_witness_exact/_recorded",
+      "E3-04 witness.suspended_resources",
+      "E3-05 gen.throw_propagated",
+      "E3-06 api.abort_error_exact, abort.child_terminated_by_node_abort (errata)"
+    ],
+    "deviations": [
+      {
+        "id": "DV1",
+        "text": "Duas pilhas de host (tslane/ e python/) em vez de um supervisor único; mesmas regras de freeze, orçamento e ordem; SOURCE_SET e tabelas de spec idênticos conferidos por autoteste."
+      },
+      {
+        "id": "DV2",
+        "text": "No DIAG-TS-C3VOCAB, first_then_witness_then_throw roda sobre um gerador próprio sem filho do adapter e next_abort_at_barrier sobre o filho próprio do adapter (um serviço tem um só canal de adapter); a testemunha de adapter vivo é exercida na barreira CHILD_HELD."
+      },
+      {
+        "id": "DV3",
+        "text": "Diagnósticos do 2AC fora do orçamento do C3-1 (LARGE, TMPWATCH, ENOENT, PREABORT, EPIPE) e a testemunha inotify foram retirados do driver e do supervisor TS; nenhum caso do C3-1 os usa."
+      },
+      {
+        "id": "DV4",
+        "text": "Testemunha do SO de término do adapter no lado TS = rastreador portado do 2B-2 (estado, status de zombie e ausência com instantes), mesma regra do E2B-03."
+      },
+      {
+        "id": "DV5",
+        "text": "spawn.count_exact: a parte de zero processos lê só testemunhas ZERO_SPAWN/LAZY_POINT (SUSPENDED/CHILD_HELD veem o adapter vivo por desenho) e exige uma ZERO_SPAWN por passo com expect.spawns 0 (mais estrito que o 2AC)."
+      },
+      {
+        "id": "DV6",
+        "text": "Identity freeze sem âncoras de stdlib (cases-c3-1.json não tem); reconfere packaging/version.py, árvores, typescript.js, fontes .ts, emit selado e as âncoras de entrada do caso (fontes .ts, bootstrap, fixture-rpc.py)."
+      }
+    ]
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 94,
+    "failed": 0,
+    "node_driver_selftest": "selftests/selftest_c31_driver.mjs"
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": 15,
+    "negative_controls": 15
+  },
+  "diagnostics": {
+    "admission": {
+      "path": "diag-admission-c31.json",
+      "sha256": "16825f7824953687fba7a84e5a1952ec030d8e5ec2ca73f26b490cb2ab556234"
+    },
+    "passes": {
+      "DIAG-TS-ECHO": {
+        "dir": "diagnostics/c3e3dd258112-DIAG-TS-ECHO",
+        "verdict": "PASS"
+      },
+      "DIAG-TS-ABORT": {
+        "dir": "diagnostics/1ac2df58a7a5-DIAG-TS-ABORT",
+        "verdict": "KNOWN_SIGNAL_TERMINATION"
+      },
+      "DIAG-TS-ARGVENV": {
+        "dir": "diagnostics/79d2d35f90cb-DIAG-TS-ARGVENV",
+        "verdict": "PASS"
+      },
+      "DIAG-TS-C3VOCAB": {
+        "dir": "diagnostics/14d54cd4407a-DIAG-TS-C3VOCAB",
+        "verdict": "KNOWN_SIGNAL_TERMINATION"
+      },
+      "DIAG-PY-RPC": {
+        "dir": "diagnostics/91df982cc5f4-DIAG-PY-RPC",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-STAGE": {
+        "dir": "diagnostics/5ca65938c37b-DIAG-PY-STAGE",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-UNSCRIPTED": {
+        "dir": "diagnostics/047ae421622d-DIAG-PY-UNSCRIPTED",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-BEFOREREPLY": {
+        "dir": "diagnostics/9876b22aa309-DIAG-PY-BEFOREREPLY",
+        "verdict": "PASS"
+      }
+    },
+    "failures": 0
+  },
+  "control": {
+    "case": "C31-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [["wire.no_turn_interrupt", "client"]],
+    "gate": "MISMATCH pela regra 6 só com wire.no_turn_interrupt, sanidades aprovadas, antes dos casos SDK",
+    "gate_passed": true,
+    "counts_as_sdk_observation": false
+  },
+  "cases": {
+    "sdk_counts": {
+      "PASS_CLIENT_OBSERVATION": 14,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "rows": [
+      {
+        "slot": 15,
+        "case": "C31-CTRL01",
+        "outcome": "MISMATCH",
+        "capture_form": "PASS",
+        "dir": "cases/C31-CTRL01-96879da21100"
+      },
+      {
+        "slot": 1,
+        "case": "C3-TS01",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS01-51235e63c028"
+      },
+      {
+        "slot": 2,
+        "case": "C3-TS02",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS02-550d4f5f22fe"
+      },
+      {
+        "slot": 3,
+        "case": "C3-TS03",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS03-e9b583ae02fa"
+      },
+      {
+        "slot": 4,
+        "case": "C3-TS04",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "KNOWN_SIGNAL_TERMINATION",
+        "dir": "cases/C3-TS04-ca98cf33e9b6"
+      },
+      {
+        "slot": 5,
+        "case": "C3-TS05",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS05-f5c4c83368d1"
+      },
+      {
+        "slot": 6,
+        "case": "C3-TS06",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS06-397f6ee9c15a"
+      },
+      {
+        "slot": 7,
+        "case": "C3-TS07",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS07-a253bebb7541"
+      },
+      {
+        "slot": 8,
+        "case": "C3-TS08",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS08-63569d9baeba"
+      },
+      {
+        "slot": 9,
+        "case": "C3-TS09A",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS09A-b906ba3df524"
+      },
+      {
+        "slot": 10,
+        "case": "C3-TS09B",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS09B-b8ae5ddd5793"
+      },
+      {
+        "slot": 11,
+        "case": "C3-TS12",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "KNOWN_SIGNAL_TERMINATION",
+        "dir": "cases/C3-TS12-7fad7cad1403"
+      },
+      {
+        "slot": 12,
+        "case": "C3-TS13",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "KNOWN_SIGNAL_TERMINATION",
+        "dir": "cases/C3-TS13-4c7ed44326bd"
+      },
+      {
+        "slot": 13,
+        "case": "C3-TS14",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS14-36f30a64eec7"
+      },
+      {
+        "slot": 14,
+        "case": "C3-TS15",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "capture_form": "PASS",
+        "dir": "cases/C3-TS15-184ff09780c4"
+      }
+    ],
+    "note": "C3-TS04, C3-TS12 e C3-TS13 na forma KNOWN_SIGNAL_TERMINATION (aceita pelos três; C3-TS13 aceita PASS ou KNOWN_SIGNAL_TERMINATION)."
+  },
+  "reevaluation": {
+    "path": "reevaluation-c31.json",
+    "predicate_level_equal": true,
+    "outcome_equal": true,
+    "plan_binding_ok": true,
+    "cases": 15
+  },
+  "budget": {
+    "case_slots": "15/15",
+    "services": "8/12",
+    "reviews": "1/2",
+    "grouped_repairs": "0/1",
+    "automatic_retries": 0,
+    "conditional_slots": "nenhuma"
+  },
+  "resources": {
+    "units": 23,
+    "all_released": true,
+    "prefix": "cvg-dx100-c31-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "network": "nenhuma",
+    "mnt_ia": "não tocado",
+    "max_loadavg_at_service_start": 8.23,
+    "load_waits": 0,
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-c31-20261019",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-c31-runtime-20261019"
+    ]
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 28,
+    "by_status": {
+      "expected_empty": 28
+    },
+    "central_catalog": "não editado (merge pelo Lead)"
+  },
+  "capability": "nenhuma capacidade nova (Q4 negada pelo usuário): sem testemunha privilegiada, rede, artefato distribuído ou injeção de falha nova",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade. Atribuição de MISMATCH só por adjudicação (E3-09).",
+  "updated_at": "2026-10-20T01:02:04.278147+00:00",
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "subject": "review-freeze-r1.json",
+      "subject_sha256": "fa574e2f7608b52dec3b8e04ceba045f4a856abcedbd74fadbb6b0e15e5daef9",
+      "verdict": "APPROVE",
+      "erratum_r2_f01": "CONFORME",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 4
+      },
+      "disposition": "review-r1/executor-disposition.json"
+    }
+  },
+  "adjudication": "adjudication-r1.json",
+  "next_task": "next-task.json",
+  "closing_documents": [
+    "review-r1/executor-disposition.json",
+    "adjudication-r1.json",
+    "next-task.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r1-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ],
+  "validation": {
+    "prettier": "documentos de autoria (md e JSON de fechamento) conferidos com o prettier do repositório (--ignore-path /dev/null); fontes congeladas e evidência executada intocadas",
+    "doc_links": "node scripts/check-doc-links.mjs <pasta>: DOC_LINKS_OK",
+    "evidence_hygiene": "node scripts/check-evidence-hygiene.mjs numa cópia com empty-artifact-delta.json como catálogo: EVIDENCE_HYGIENE_OK (28 vazios catalogados, 244 JSON)",
+    "secret_scan": "lead-secret-scan-triage.json (gitleaks v8.28.0, config da raiz, código de saída 0, controle positivo 1)",
+    "pycache": "nenhum"
+  }
+}

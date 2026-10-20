@@ -1,0 +1,81 @@
+{
+  "kind": "EXECUTOR_DISPOSITION_R2",
+  "task": "DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS",
+  "review": {
+    "path": "review-r2/review.json",
+    "sha256": "7d1610ebfd736a9964c6fc2eb68f0326a0bebd6a06b1ce9655b4a135339f7cbd",
+    "raw": {
+      "path": "review-r2/verdict.raw.txt",
+      "sha256": "c4e0fee421a3939843a2e1f3cb4a7aecc3bac6773e1b9252418c484630cb53dc"
+    },
+    "verdict": "REVISE",
+    "summary_counts": "0 P1, 1 P2, 5 P3",
+    "mandatory_findings": ["R2-F01"],
+    "r1_findings_status": {
+      "R1-F01": "RESOLVED",
+      "R1-F02": "RESOLVED quanto aos predicados",
+      "R1-F03": "RESOLVED, com ressalva em R2-F02",
+      "R1-F04": "RESOLVED",
+      "R1-F05": "RESOLVED",
+      "R1-F06": "RESOLVED",
+      "R1-F07": "RESOLVED",
+      "R1-F08": "RESOLVED, com ressalva em R2-F05",
+      "R1-F09": "RESOLVED",
+      "R1-F10": "RESOLVED",
+      "R1-F11": "PARTIAL",
+      "R1-F12": "RESOLVED",
+      "R1-F13": "RESOLVED",
+      "R1-F14": "RESOLVED",
+      "R1-F15": "PARTIAL"
+    }
+  },
+  "r1_partial_followup": {
+    "R1-F11": "o resto vai pelo R2-F04",
+    "R1-F15": "o resto vai pelo R2-F03"
+  },
+  "rule": "R2 é a última revisão e o reparo agrupado (1/1) já foi usado: nenhum documento revisado é reescrito. O P2 restante e os P3 vão para a IMPLEMENT como carry-over explícito em next-task.json; o P2 é obrigatório para as IMPLEMENT do DP-1 e do DP-2. Só state.json, next-task.json, ledger-delta-cont-d9ef.md, secret-scan.json, review-r2/ e esta disposição mudam depois da R2.",
+  "unit_outcome": "COMPLETED_LOCAL_WITH_CARRIED_P2: as duas especificações ficam prontas; as IMPLEMENT aplicam a errata do R2-F01 antes do source freeze; nenhum valor congelado muda.",
+  "items": [
+    {
+      "id": "R2-F01",
+      "severity": "P2",
+      "disposition": "CARRIED_TO_IMPLEMENT_MANDATORY",
+      "scope": "DP-1 inteiro (11 casos e o CONTROL) e, no DP-2, DP-PY19A e DP-PY02P",
+      "confirmed_by_executor": "Conferido na leitura: observer.py do 2AC (linhas 399-412 e 545) só reconhece ausência de adapter e peer como NO_CHILD em typescript, e o avaliador do 2AC leva NO_CHILD não declarado a INVALID_CAPTURE; observer.py do 2B-2 (linhas 481-500) não admite papel MISSING em python. A especificação congelou PASS 'como no 2A e no 2B' para casos sem adapter e sem peer e não declarou a regra nova de forma. Não gera resultado falso, mas impede implementar sem uma decisão que não está congelada.",
+      "erratum_text": "Errata vinculante de forma de captura para a topologia só com o driver, aplicada pela IMPLEMENT do DP-1 (e pela do DP-2 no que é dela) antes do source freeze, sem mudar nenhum valor congelado. (1) Topologia declarada: driver_only em todos os casos do DP-1 (inclusive DP1-CTRL01 e DP-REAL01) e, no DP-2, em DP-PY19A e DP-PY02P; adapter_peer (como no 2B) em DP-PY19B, DP-PY19C e DP2-CTRL01; os ARTIFACT_CHECK não sobem serviço. (2) Delta do observador (observer.py do 2AC e do 2B-2), declarado como DDP novo no freeze da IMPLEMENT: em driver_only, adapter e peer MISSING são esperados e não viram motivo de INVALID_CAPTURE nem NO_CHILD; qualquer quadro de adapter ou peer em driver_only é INVALID_CAPTURE. (3) PASS em driver_only: END completo do driver; adapter e peer ausentes por declaração; FIFO do driver com EOF e sem violação; checagens do SO aprovadas; cada wrapper.run com WRAPPER_RESULT assentado no 'close' e LEFTOVER registrado; no DP-PY02P, REALCLI_WITNESS lido; no DP-PY19A, varredura da cgroup sem processo de adapter. O término dos wrappers, dos filhos sintéticos e do binário real não entra na forma: é julgado pelos predicados (wrap.exit_mirror_exact, child.*, realcli.*). (4) PASS_DECLARED_TERMINATION e REAL_CLI_KEYLESS passam a ser essa mesma base driver_only, com os acréscimos já congelados em capture_forms (self-signal declarado do filho; binário publicado com término registrado e não julgado). (5) Herança corrigida no freeze da IMPLEMENT: além de DDP-03, DDP-05 e DDP-11, mudam o observador (este item), o runtime Python por caso (DDP-06), o canal realcli.witness (DDP-05) e as entradas de barreira do DP-PY19B e do DP-PY19C no BARRIER_PLAN do 2B-2. No avaliador, a frase de evaluator-r4-dp-delta.json#/inheritance vale para os predicados que leem testemunhas do adapter (proc.argv_exact, proc.env_path_exact, proc.witness_recorded); capture.case_input_frozen_bytes (papel sem BEGIN fica NOT_APPLICABLE, oráculo herdado), api.steps_exact e proc.spawn_count_exact com spawns 0 valem em driver_only, como no DP-PY19A. (6) Autotestes obrigatórios antes de qualquer serviço: captura sintética driver_only completa dá PASS; a mesma captura com um quadro de adapter dá INVALID_CAPTURE; uma captura sintética do DP1-CTRL01 (wrapper de controle sai 0, filho sai 3) dá MISMATCH só por wrap.exit_mirror_exact; captura driver_only do DP-PY19A com processo de adapter na cgroup dá MISMATCH por proc.spawn_count_exact. O validador da IMPLEMENT confere que todo caso declara a topologia e que ela casa com os passos. A revisão independente da IMPLEMENT confere esses pontos.",
+      "note": "Errata obrigatória para as IMPLEMENT do DP-1 e do DP-2 (R2 é a última rodada e o reparo 1/1 já foi usado). Errata vinculante de forma de captura para a topologia só com o driver, aplicada pela IMPLEMENT do DP-1 (e pela do DP-2 no que é dela) antes do source freeze, sem mudar nenhum valor congelado. (1) Topologia declarada: driver_only em todos os casos do DP-1 (inclusive DP1-CTRL01 e DP-REAL01) e, no DP-2, em DP-PY19A e DP-PY02P; adapter_peer (como no 2B) em DP-PY19B, DP-PY19C e DP2-CTRL01; os ARTIFACT_CHECK não sobem serviço. (2) Delta do observador (observer.py do 2AC e do 2B-2), declarado como DDP novo no freeze da IMPLEMENT: em driver_only, adapter e peer MISSING são esperados e não viram motivo de INVALID_CAPTURE nem NO_CHILD; qualquer quadro de adapter ou peer em driver_only é INVALID_CAPTURE. (3) PASS em driver_only: END completo do driver; adapter e peer ausentes por declaração; FIFO do driver com EOF e sem violação; checagens do SO aprovadas; cada wrapper.run com WRAPPER_RESULT assentado no 'close' e LEFTOVER registrado; no DP-PY02P, REALCLI_WITNESS lido; no DP-PY19A, varredura da cgroup sem processo de adapter. O término dos wrappers, dos filhos sintéticos e do binário real não entra na forma: é julgado pelos predicados (wrap.exit_mirror_exact, child.*, realcli.*). (4) PASS_DECLARED_TERMINATION e REAL_CLI_KEYLESS passam a ser essa mesma base driver_only, com os acréscimos já congelados em capture_forms (self-signal declarado do filho; binário publicado com término registrado e não julgado). (5) Herança corrigida no freeze da IMPLEMENT: além de DDP-03, DDP-05 e DDP-11, mudam o observador (este item), o runtime Python por caso (DDP-06), o canal realcli.witness (DDP-05) e as entradas de barreira do DP-PY19B e do DP-PY19C no BARRIER_PLAN do 2B-2. No avaliador, a frase de evaluator-r4-dp-delta.json#/inheritance vale para os predicados que leem testemunhas do adapter (proc.argv_exact, proc.env_path_exact, proc.witness_recorded); capture.case_input_frozen_bytes (papel sem BEGIN fica NOT_APPLICABLE, oráculo herdado), api.steps_exact e proc.spawn_count_exact com spawns 0 valem em driver_only, como no DP-PY19A. (6) Autotestes obrigatórios antes de qualquer serviço: captura sintética driver_only completa dá PASS; a mesma captura com um quadro de adapter dá INVALID_CAPTURE; uma captura sintética do DP1-CTRL01 (wrapper de controle sai 0, filho sai 3) dá MISMATCH só por wrap.exit_mirror_exact; captura driver_only do DP-PY19A com processo de adapter na cgroup dá MISMATCH por proc.spawn_count_exact. O validador da IMPLEMENT confere que todo caso declara a topologia e que ela casa com os passos. A revisão independente da IMPLEMENT confere esses pontos."
+    },
+    {
+      "id": "R2-F02",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "send_signal lido assim pela IMPLEMENT do DP-1: o bit em SigCgt testemunha o listener do wrapper só para SIGHUP; para SIGINT e SIGTERM o Node já tem handler nativo e o bit aparece sem listener. Para esses dois, a garantia é a ordem do wrapper publicado (spawn e process.on no mesmo tick síncrono: A2 bin/codex.js linhas 241-272, A4 bin/codex-responses-api-proxy.js linhas 60-81) mais o CHILD_READY do filho Node. sigcgt_bit_seen é informativo. O autoteste 'com e sem listener' e o pass do DIAG-DP-NODE usam SIGHUP para o bit."
+    },
+    {
+      "id": "R2-F03",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "Defeito conhecido do validador desta unidade, mantido sem edição depois da R2: o controle negativo '2B process predicate on the real binary' é aceito pela mensagem da checagem de um spawn, porque '2B process predicates' é prefixo das duas. A checagem 'on the real binary' existe, mas esse controle não a isola. O validador da IMPLEMENT usa a mensagem exata 'on the real binary' e uma cópia com spawns 1 e process.argv completo."
+    },
+    {
+      "id": "R2-F04",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "A identity-freeze das IMPLEMENT (DDP-08) acrescenta aos inputs: o membro A3 package/vendor/x86_64-unknown-linux-musl/bin/codex (resolved_sha do DP-PK02R); o sha do executável do pin (not_equal do DP-PK02R), com ponteiros para ../../g02-reference-acceptance.json (fonte usada pelo gerador) e ../reference-compilation/build-provenance.json; o A5 pelo registro e os membros comparados (asset_binding e payload_identity do DP-PY20A); e o codex-cli/package.json do pin, ou a frase 'ausentes na fonte' do PK09.B02 passa a citar só o G01. Os valores congelados foram conferidos pela R2 e não mudam."
+    },
+    {
+      "id": "R2-F05",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "O DIAG-DP-REAL-CLI-APPSERVER da IMPLEMENT do DP-2 usa o argv e o env do caso (inclusive --config model=\"cvg-dp\" e o PATH com codex-path) e exercita o canal realcli.witness (WITNESS_REQUEST/WITNESS_DONE e leitura de /proc), com controle negativo de leitura antes do PROC_RETAIN (INVALID_CAPTURE). EDP-08 lido assim: no DP-1, todos os serviços, inclusive o DIAG-TS-ECHO herdado, rodam com MemoryMax 1073741824 e TasksMax 256."
+    },
+    {
+      "id": "R2-F06",
+      "severity": "P3",
+      "disposition": "CARRIED_TO_IMPLEMENT",
+      "note": "A nota do epílogo 'sem barreira EOF (não há adapter sintético...)' vale só para DP-PY19A e DP-PY02P; no DP-PY19B e no DP-PY19C há lançador e adapter, e o epílogo calls_done_release_exit_then_sdk_close_if_open segue o precedente do 2B-PY01A, com o SIGTERM do close coberto por CLIENT_TERMINATED_SIGTERM. A IMPLEMENT do DP-2 registra uma nota por topologia."
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0
+}

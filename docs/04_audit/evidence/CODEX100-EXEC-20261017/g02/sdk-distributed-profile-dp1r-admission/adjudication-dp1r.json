@@ -1,0 +1,97 @@
+{
+  "kind": "ADJUDICATION_DP1R",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1R",
+  "round": 1,
+  "rule": "R4-05/E3-09: a leitura de cada desfecho fica registrada aqui; nada muda acceptance.json, que segue como o serviço o gravou.",
+  "items": [
+    {
+      "case": "DP1R-CTRL01",
+      "outcome": "MISMATCH",
+      "composition_rule": 6,
+      "failed_predicates": [
+        "wrap.exit_mirror_exact"
+      ],
+      "acceptance": {
+        "path": "cases/DP1R-CTRL01-4b64a4f3b71a/acceptance.json",
+        "sha256": "902ec23621b8e858db8018f58d3a38f66422ec27fff2cd2228fa7d5a7bd17dc7"
+      },
+      "reading": "Gate do sub-lote cumprido: MISMATCH pela regra 6 vindo só de wrap.exit_mirror_exact (o wrapper de controle próprio sai com 0 quando o filho sai com 3), com as sanidades aprovadas. Liberou o DP-PK07B.",
+      "credit": "NONE_CONTROL_ONLY"
+    },
+    {
+      "case": "DP-PK07B",
+      "outcome": "PASS_CLIENT_OBSERVATION",
+      "composition_rule": 7,
+      "capture_form": "PASS",
+      "failed_predicates": [],
+      "acceptance": {
+        "path": "cases/DP-PK07B-dc57c93719d2/acceptance.json",
+        "sha256": "86c59f2e01b884d145188ff15fa3712332b74065cc1ee7fe9a1d18cf61a3249c"
+      },
+      "replaces": "a observação perdida do DP-PK07A (INVALID_CAPTURE adjudicado em inputs/dp1/adjudication-dp1.json); caso novo com a errata EDP1R-01, não retry",
+      "erratum_effective": "Os passos 7 e 8 (win32 x64 e arm64 sob o shim) executaram os stand-ins .exe sob o package.json {\"type\":\"commonjs\"} declarado; cada um gravou o registro com o caminho .exe congelado e saiu com 0, espelhado pelo wrapper. No DP-1 os mesmos passos pararam em ERR_UNKNOWN_FILE_EXTENSION.",
+      "observed_arms": {
+        "PK07.B01": {
+          "steps": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "executed_paths": {
+            "1": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-unknown-linux-musl/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "2": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-unknown-linux-musl/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "3": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-unknown-linux-musl/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "4": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-unknown-linux-musl/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "5": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-apple-darwin/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "6": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-apple-darwin/codex-responses-api-proxy/codex-responses-api-proxy"
+            ],
+            "7": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-pc-windows-msvc/codex-responses-api-proxy/codex-responses-api-proxy.exe"
+            ],
+            "8": [
+              "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-pc-windows-msvc/codex-responses-api-proxy/codex-responses-api-proxy.exe"
+            ]
+          },
+          "reading": "oito pares para os seis triples: linux e android dividem os triples musl; darwin com os dois apple-darwin; win32 com os dois pc-windows-msvc e o nome .exe; julgado por child.executed_path_exact e wrap.exit_mirror_exact"
+        },
+        "PK07.B02": {
+          "steps": [
+            9
+          ],
+          "stderr_head": "Error: Unsupported platform: freebsd (x64)",
+          "reading": "freebsd x64 lança Unsupported platform antes do spawn: exit 1, nenhum filho (wrap.exit_mirror_exact, wrap.stderr_contains, child.executed_path_exact)"
+        },
+        "PK07.B03": {
+          "steps": [
+            10
+          ],
+          "stderr_head": "Error: spawn /fixture/pk07/partial/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-unknown-linux-musl/codex-responses-api-proxy/codex-responses-api-proxy ENOENT",
+          "reading": "layout vendor/<triple>/codex-responses-api-proxy/<nome> sem checagem de existência: o spawn do caminho aarch64 ausente dá ENOENT pelo evento error e exit 1, nenhum filho"
+        }
+      },
+      "contrary_reading": "Como registrado em erratum-dp1r.json#/contrary_still_visible: os contrários da arm_discrimination congelada dariam MISMATCH; um cliente que deixasse de executar um filho esperado (win32 sem .exe) ou executasse um não esperado (fallback no B03) daria INVALID_CAPTURE pela regra 4, via child.program_followed. Nenhum dos dois aconteceu: os 10 passos bateram.",
+      "platform_limit": "Nenhum braço marcado como limite de plataforma: o que o PK07 julga nos ramos win32 são decisões em JavaScript do wrapper (triple, nome .exe, spawn sem checagem) sob o shim, observáveis no Linux. Fica fora e não é reivindicado: a criação de processo do Windows real (CreateProcess, resolução de .exe, aspas de argv, sinais do Windows).",
+      "credit": "CLIENT_BEHAVIOR_ONLY_IF_OBSERVED: observação parcial de cliente para o BIND; 0 recibos funcionais e 0 crédito de paridade aqui",
+      "build_link": "NO_BUILD_LINK_DECLARED"
+    }
+  ],
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "adjudicated_at": "2026-10-20T04:52:37.114102+00:00"
+}

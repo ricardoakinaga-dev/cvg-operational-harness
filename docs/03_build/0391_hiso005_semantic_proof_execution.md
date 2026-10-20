@@ -2,6 +2,10 @@
 
 Estado corrente: BUILD0237 concluído localmente na fonte `84d8d4b4`, sete deltas próprios integrados. Revisão final APPROVE/zero obrigatórios,398 focais,16 gates/38 hashes atuais e5.211 unit/302 PG/12 E2E/zero skips.14 aceites PASS e consumidor fresco207 imports/76 exports/oito pacotes/zero rede. [Resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md), [estado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/state.json). Root77 protegidos/índice/HEAD preservados,PG próprio removido/portas livres. B6 permaneceINCOMPLETE1609=537+1072/zero provas; todas 1721 ocorrências históricas também ficam registradas, sem crédito de resolução. Não repetir aprovações 0236/0237 nem reiniciar jobs encerrados.
 
+## Ação atual do pai — 20/10/2026 (CONT-20261018-D9EF)
+
+A [SPEC0244](../02_spec/0244_b6_esm_module_shape.md) foi aprovada e construída. A B6 caiu de 13.521 para 12.283 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. Pela [recon de 20/10](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/REPORT.txt), a próxima causa é o TSX parseado como TS (705 tuplas). A primeira prova exige decisões T3 sobre prova por escopo (hoje qualquer UNKNOWN suprime todas as provas), modelo de entrada externa (K0) e `new` de built-in. Risco registrado: o uso de contextos está em 229 de 256, com o pico em `z.object`.
+
 ## Ação atual do pai — 19/10/2026 (CONT-20261018-D9EF)
 
 Estado vigente, que substitui as seções abaixo, mantidas como histórico:

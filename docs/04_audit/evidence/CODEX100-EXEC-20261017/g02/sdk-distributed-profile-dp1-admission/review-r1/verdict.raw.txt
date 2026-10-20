@@ -1,0 +1,166 @@
+```json
+{
+  "kind": "INDEPENDENT_REVIEW",
+  "round": 1,
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1",
+  "reviewer": "subagente novo, sem contexto herdado; somente leitura",
+  "reviewed_at": "2026-10-19T23:50:12-03:00",
+  "subject": "review-freeze-r1.json",
+  "subject_sha256": "ad4714a1047780d337512e22950e033cd13d124a95ff378c924325432d7b1a8b",
+  "subject_hash_check": {
+    "before": "ok (sha confere; os 395 arquivos listados conferem por sha; fora da lista só review-freeze-r1.json e review-r1/brief.md)",
+    "after": "ok (mesmo sha, os 395 arquivos ainda conferem, nenhum __pycache__ criado, git status só mostra a pasta da unidade como untracked)"
+  },
+  "verdict": "REVISE",
+  "summary_counts": "0 P1, 3 P2, 6 P3",
+  "mandatory_findings": ["R1-F01", "R1-F02", "R1-F03"],
+  "findings": [
+    {
+      "id": "R1-F01",
+      "severity": "P2",
+      "area": "Errata R2-F01: freeze da IMPLEMENT e tools/validate_unit.py",
+      "title": "A errata está no código, mas faltam dois registros que ela exige: o DDP novo e a herança corrigida no freeze, e o validador não confere a topologia caso a caso contra os passos",
+      "evidence": [
+        "inputs/spec-dp/review-r2/executor-disposition.json#/items/0/erratum_text, itens (2) e (5) e a frase final do item (6)",
+        "source-freeze-dp1.json: só lista sha, sem declaração do DDP do observador (reconcile_driver_only, mapeamento capture_form) nem da herança corrigida",
+        "identity-freeze-dp1.json: não tem seção de deltas; o delta só aparece no docstring de dplane/observer.py:1-7 e em state.json:35",
+        "tools/validate_unit.py:83-89: c_topology só procura duas substrings no fonte do canal e do driver",
+        "dplane/supervisor.py:283: case_plan grava 'driver_only' fixo, e c_rows (validate_unit.py:42-51) compara o plano com a própria função, o que é tautológico",
+        "next-task.json#/carry_over[0]: para o DP-2 diz só 'autotestes', sem nomear o autoteste do DP-PY19A (proc.spawn_count_exact) nem a checagem de topologia por caso"
+      ],
+      "detail": "A substância da errata foi aplicada antes do source freeze e funciona. O canal exige topology driver_only (dp-channel.cjs:246). reconcile_driver_only recusa qualquer evento ou byte de adapter ou peer (observer.py:593-596). Os três autotestes do DP-1 existem e testam o que dizem: captura completa dá PASS; quadro de adapter dá INVALID_CAPTURE pela regra 1; CTRL sintético dá MISMATCH pela regra 6 só por wrap.exit_mirror_exact. Faltam três pontos vinculantes. Primeiro, o item (2) manda declarar o delta do observador como DDP novo no freeze da IMPLEMENT, e isso não foi feito. Segundo, o item (5) manda registrar a herança corrigida no freeze, e também não foi feito. Terceiro, o validador deveria conferir que todo caso declara a topologia e que ela casa com os passos, mas não há checagem por caso nem controle negativo que a isole (por exemplo, um caso com papel adapter ou um ARTIFACT_CHECK com serviço). Nenhum resultado fica falso por isso, porque todo o DP-1 é driver_only. Mas a revisão não consegue conferir esses pontos contra um registro congelado.",
+      "required_action": "Sem alterar bytes congelados, registrar um adendo ligado ao sha do source freeze que declare o DDP novo (observador driver_only e mapeamento capture_form) e a herança corrigida. Acrescentar, como ferramenta nova ou dentro do reparo agrupado, uma checagem por caso: cada slot e o CONTROL declaram driver_only no plano e no adapter-config.json da pasta do caso; os passos usam só o vocabulário do driver, sem papel adapter ou peer; o DP-PK09A não sobe serviço. A checagem precisa de controle negativo isolado por mensagem exata. No next-task, deixar explícitos para o DP-2 o autoteste do DP-PY19A e a checagem de topologia por caso."
+    },
+    {
+      "id": "R1-F02",
+      "severity": "P2",
+      "area": "selftests/ e inputs/spec-dp/capability-contracts-dp.json (selftests_offline)",
+      "title": "Grande parte dos autotestes offline obrigatórios das capacidades não existe, e state.json chama R2-F02 de aplicado sem o autoteste 'com e sem listener'",
+      "evidence": [
+        "inputs/spec-dp/next-task.json#/what: 'autotestes offline de cada capacidade (capability-contracts-dp.json)'",
+        "inputs/spec-dp/capability-contracts-dp.json:48, :99, :150, :192, :259 (selftests_offline de cada CAP-DP-*)",
+        "selftests/selftest-results.json: os 69 nomes não cobrem os itens listados no detalhe",
+        "selftests/selftest_dp1_driver.mjs:50-51: só faz parsing de SigCgt, sem filho próprio com e sem listener",
+        "selftests/selftest_dp1.py:342-343: o teste 'published binary is staged 0755' lê expected_dist() do metadado, o que é tautológico",
+        "dplane/supervisor.py:173-185: DIAG-DP-STAGE sem o tar.gz próprio que o own_code do contrato pede",
+        "state.json:37: R2-F02 'aplicado'"
+      ],
+      "detail": "Faltam estes autotestes. CAP-DP-STAGE: membro com sha divergente recusado; arquivo compactado divergente recusado; cópia divergente na árvore recusada; modos preservados num tar.gz próprio; nada escrito sob docs/. CAP-DP-NODE-DRIVER: shim restaurado com os valores reais (nem o DIAG-DP-NODE exercita shim.platform e shim.restore); prazo do 'close' estourado vira INVALID_CAPTURE; bit de SigCgt de um filho próprio com e sem listener (exigido também por R2-F02); LEFTOVER detecta um órfão próprio; NOT_REACHED não acrescenta falha do lado do avaliador. CAP-DP-SYNTH-CHILD: on_signal offline; CHILD_READY só depois dos listeners. CAP-DP-REAL-CLI-KEYLESS: CODEX_HOME não vazio recusado. CAP-DP-ARTIFACT-CHECK: campo divergente dá MISMATCH; arquivo do cache divergente dá INVALID_CAPTURE. Os caminhos de recusa existem no código (check_archive, member_bytes, a asserção de prazo, o keyless), mas nenhum foi provado antes do freeze. Os resultados não ficam falsos, porque os casos executados não passaram por esses caminhos. A obrigação da unidade, porém, não foi cumprida.",
+      "required_action": "Escrever e rodar offline (sem serviço e sem executar arquivo do cache) os autotestes que faltam, cada um com caso positivo e negativo. Gravar os resultados num arquivo novo ligado por sha, sem tocar no selftest-results.json congelado. A alternativa é registrar a dispensa do Lead item a item. Corrigir state.json para 'parcial' no R2-F02 até o autoteste com e sem listener existir."
+    },
+    {
+      "id": "R1-F03",
+      "severity": "P2",
+      "area": "dplane/supervisor.py PROPS (DDP-05)",
+      "title": "RuntimeMaxSec subiu de 45 (herdado) para 90 sem desvio declarado e sem checagem do validador",
+      "evidence": [
+        "dplane/supervisor.py:77 'RuntimeMaxSec': '90'",
+        "../sdk-batch-2ac-admission/python/supervisor.py:77 e ../sdk-continuation-3-1-admission/tslane/supervisor.py:103: 'RuntimeMaxSec': '45'",
+        "inputs/spec-dp/freeze-r4-dp-delta.json#/items[DDP-05]: 'cota de CPU e RuntimeMaxSec herdados'; capability-contracts-dp.json, CAP-DP-REAL-CLI-KEYLESS, contrato item 3",
+        "identity-freeze-dp1.json:227; diagnostics/*/result.json RuntimeMaxUSec '1min 30s'",
+        "state.json:32 (o DDP-05 não menciona a mudança); state.json:47-55 (só DV1 e DV2)",
+        "tools/validate_unit.py:74-80: c_props confere só MemoryMax, TasksMax e NoNewPrivileges"
+      ],
+      "detail": "O delta congelado manda herdar a cota de CPU e o RuntimeMaxSec. A cota de CPU (100%) foi herdada, mas o RuntimeMaxSec dobrou e isso não foi declarado em lugar nenhum. Não classifico como quebra de contenção efetiva. Os 16 serviços terminaram em menos de 2 s (maior tempo, 1,4 s), os demais limites e o isolamento são iguais, e os prazos internos do driver são de 30 a 45 s. Mesmo assim, é um parâmetro de contenção congelado que mudou sem desvio registrado, e o validador não o pega.",
+      "required_action": "Declarar o desvio DV3 (RuntimeMaxSec 90, motivo, efeito nulo pela duração máxima observada) com aceite do Lead. Acrescentar ao validador a conferência de CPUQuota e RuntimeMaxSec contra a herança ou o desvio declarado, com controle negativo. No DP-2, usar 45 ou declarar antes do freeze."
+    },
+    {
+      "id": "R1-F04",
+      "severity": "P3",
+      "area": "dplane/supervisor.py diag_checks e linhas DIAG",
+      "title": "Critérios de DIAG parcialmente vácuos ou mais fracos que o contrato",
+      "evidence": [
+        "dplane/supervisor.py:1145: c['nothing_written_outside_work'] = True fixo; work_before, work_after e home_after são gravados mas não julgados",
+        "dplane/supervisor.py:208: DIAG-DP-SYNTH-CHILD usa no_signal_timeout_ms 400, mas o pass do contrato diz 'NO_SIGNAL em 5 s'",
+        "dplane/supervisor.py:186-191: DIAG-DP-NODE não exercita shim.platform nem shim.restore, embora o pass peça 'wrapper.run com shim e restauração'"
+      ],
+      "detail": "A propriedade 'nada escrito fora de /work' vale pela construção: raiz remontada só-leitura e binds só-leitura. A checagem, porém, não observa nada. A espera de 5 s e a restauração do shim só foram exercitadas nos casos (DP-PK01A e programas com 5000 ms), depois do freeze. Nenhum resultado muda.",
+      "required_action": "Julgar a lista de /work e /dev antes e depois no DIAG-DP-REAL-CLI. Alinhar os pass dos DIAG ao contrato ou registrar a leitura adotada. Aplicar isso nos DIAG do DP-2."
+    },
+    {
+      "id": "R1-F05",
+      "severity": "P3",
+      "area": "carry-overs R2-F03 e R2-F04; next-task.json",
+      "title": "R2-F03 e R2-F04 foram aplicados só em parte e alguns carry-overs não passaram para o DP-2",
+      "evidence": [
+        "tools/validate_unit.py:139: o controle negativo ainda aceita prefixo (p.startswith(must)); state.json:38 diz 'mensagem exata'",
+        "next-task.json#/carry_over: não leva R2-F03 ('on the real binary' com spawns 1 e process.argv completo, ligado ao DP-PY02P) nem ACQ/R1-F03",
+        "identity-freeze-dp1.json#/pin_bindings: falta o codex-cli/package.json do pin, e nada registra a alternativa de citar só o G01 na frase 'ausentes na fonte' do PK09.B02 (state.json:39)"
+      ],
+      "detail": "No DP-1 nenhum prefixo é ambíguo, então não há controle negativo falso hoje. Mas a lição do R2-F03 (mensagem exata) não está no código, e o carry-over some do next-task justamente para o DP-2, onde ele vale. Do R2-F04 ficou só a parte do pin TS.",
+      "required_action": "Trocar startswith por igualdade exata. Repor R2-F03 e ACQ/R1-F03 no next-task. Ligar o codex-cli/package.json do pin ou registrar a alternativa do G01."
+    },
+    {
+      "id": "R1-F06",
+      "severity": "P3",
+      "area": "node/dp-synth-child.mjs; dplane/supervisor.py selftest-sandbox; state.json desvios",
+      "title": "Desvios de implementação não declarados em relação aos contratos, e guarda do DV2 mais larga que o texto",
+      "evidence": [
+        "node/dp-synth-child.mjs:23-25 e :48: registro em run-<run>/record-<pid>.json aberto com 'w' e marcador run-<run>/ready-<pid>; o contrato diz /work/child/records/<n>.json, n sequencial, criação O_EXCL, e /work/child/ready-<n>",
+        "dplane/supervisor.py:559: selftest-sandbox aceita qualquer linha DIAG, inclusive DIAG-DP-REAL-CLI, que executa o binário do cache fora do systemd; state.json:51 (DV2) diz 'nunca com binário do cache'",
+        "state.json:47-55: DV1 e DV2 sem aceite do Lead"
+      ],
+      "detail": "O layout por pid funciona e o avaliador o lê de forma coerente, mas diverge do contrato congelado e não foi declarado. O DV2 foi usado só com as 4 linhas de código próprio, uma vez cada, antes do freeze (runtime/dry: f6ec, 8baa, 649c, 367d), sem systemd-run. Isso cabe no que diz state.json, mas o código permitiria mais.",
+      "required_action": "Declarar o layout do registro e do marcador como leitura do contrato. Restringir o selftest-sandbox às 4 linhas de código próprio. Obter o aceite do Lead para DV1 e DV2."
+    },
+    {
+      "id": "R1-F07",
+      "severity": "P3",
+      "area": "dplane/stage.py check_fixture (fixture.tree_exact)",
+      "title": "A checagem de entradas extras é código morto",
+      "evidence": [
+        "dplane/stage.py:259-270: extra = set(manifest) - set(want)",
+        "dplane/stage.py:238-256 e node/dp-driver.mjs:121-136: os manifestos do host e do sandbox só listam caminhos declarados"
+      ],
+      "detail": "O oráculo diz 'exatamente como declaradas', mas um arquivo não declarado na árvore não seria detectado. O risco é baixo, porque a fixture é nova a cada tentativa e montada só-leitura.",
+      "required_action": "Varrer a raiz de cada árvore (host e sandbox) e aceitar só diretórios pais implícitos, ou registrar a leitura."
+    },
+    {
+      "id": "R1-F08",
+      "severity": "P3",
+      "area": "adjudication-dp1.json (DP-PK07A)",
+      "title": "Adjudicação correta, com a citação da evidência truncada",
+      "evidence": [
+        "adjudication-dp1.json#/items/0/evidence/0 termina em '.../codex-responses-api-proxy/codex', mas cases/DP-PK07A-5f2fe0c80c5c/blob-stderr-7.txt termina em '.../codex-responses-api-proxy.exe'",
+        "/mnt/dados/cvg-work/cvg-codex100-dp1-runtime-20261019/dist/npm/node_modules/@openai/codex-responses-api-proxy/package.json: \"type\": \"module\""
+      ],
+      "detail": "Conferido de forma independente. Os passos 7 e 8 têm child-records vazios e stderr com ERR_UNKNOWN_FILE_EXTENSION no caminho .exe esperado; o wrapper montou o caminho certo e o spawn aconteceu. O A4 é \"type\": \"module\" e o filho .exe da fixture congelada cai no loader ESM. O defeito é de fixture da especificação, com a lacuna de autoteste da IMPLEMENT como fator contribuinte (o runtime tmp/extless mostra que só o caso sem extensão foi testado). child.program_followed é peer_or_capture_sanity, então a regra 4 decide antes da 6: INVALID_CAPTURE certo, nenhum MISMATCH falso e nenhuma observação contada.",
+      "required_action": "Corrigir a citação para o caminho completo .exe. O resto fica como está."
+    },
+    {
+      "id": "R1-F09",
+      "severity": "P3",
+      "area": "tools/",
+      "title": "O gerador do preflight congelado e as ferramentas de fechamento não estão ligados por sha",
+      "evidence": [
+        "source-freeze-dp1.json: congela preflight.json, mas não tools/preflight_dp1.py (modificado às 23:28, antes do freeze)",
+        "tools/collect_results.py e tools/close_dp1.py (pós-execução) não têm sha registrado em state.json"
+      ],
+      "detail": "O preflight.json está congelado, mas a ferramenta que o produziu não. As ferramentas que escrevem case-results, reevaluation, resource-receipt, empty-artifact-delta e state não têm vínculo registrado.",
+      "required_action": "Registrar o sha das três ferramentas no fechamento ou num adendo."
+    }
+  ],
+  "checks_run": [
+    "sha do review-freeze-r1.json antes e depois, e os 395 arquivos listados recalculados (todos conferem)",
+    "os 39 arquivos do source-freeze-dp1.json recalculados: sem drift; arquivos de node/, dplane/, selftests/ e tools/ fora do freeze identificados",
+    "os sha dos 14 inputs/spec-dp e dos 4 inputs/acquisition comparados com next-task.json#/spec e byte a byte com o checkout principal; user-decision também igual",
+    "ordem temporal: selftest-results (02:30:10.297Z), validação (.376), preflight (.757), source freeze (.827), identity freeze (.987), 5 DIAG (02:30:18-22), diag-admission (02:30:27), CTRL (02:30:33), slots 1-11 em ordem (02:30:46-02:31:21)",
+    "budget.json, case-ledger.json e resource-receipt: 5/12 serviços de qualificação, 12/12 vagas, 16 units distintas confirmadas no journal do usuário (somente leitura), sem repetição, load máximo 9,81",
+    "leitura completa de acceptance.py, observer.py (diff contra o C3-1: só BLOB e reconcile_driver_only), stage.py, dp-driver.mjs, dp-loader.mjs, dp-synth-child.mjs, dp-control-wrapper.mjs, dp-platform-shim.mjs e das partes relevantes de supervisor.py e dp-channel.cjs",
+    "cada predicado de acceptance.py comparado com o oráculo e a classe da predicate_table; composição em 7 regras; mapeamento capture_form coerente com os itens (3) e (4) da errata",
+    "parser próprio dos events-driver.bin de todos os casos: probes, API_RESULT/API_ERROR, WRAPPER_RESULT, child-records, SIGNAL_SENT, shim, stdout e stderr confrontados com expected de cases-dp-1.json; os 10 PASS e o MISMATCH do CTRL batem",
+    "events-driver.jsonl e os 21 blob-*.txt conferidos contra os quadros binários",
+    "DP-PK09A conferido de forma independente: os 4 package.json do /dist staged e o último export do dist",
+    "python3 -I -B dplane/acceptance.py reevaluate nas 12 pastas de caso: todas com exit 0, iguais por predicado, por desfecho e no vínculo do plano",
+    "tools/validate_unit.py rodado em memória com a escrita suprimida: ok, 7/7 checagens e 9/9 controles negativos",
+    "unidade inteira: 397 arquivos, 0 ELF, gzip, zip, PE ou Mach-O, 0 acima de 5 MB, 112 vazios, iguais aos 112 'expected_empty' de empty-artifact-delta.json",
+    "profile-manifest de cada caso e DIAG: arquivos do perfil iguais ao source freeze; topology driver_only; result.json ligado aos sha dos dois freezes; cgroup 1073741824/256/'100000 100000'; net ns diferente do host; KEYLESS_WITNESS só com lo",
+    "case-results, state.json, case-ledger e adjudication consistentes entre si e com os sha dos acceptance.json",
+    "DV2: runtime/dry tem só as 4 linhas próprias, uma vez cada, às 23:23-23:24, antes do freeze, sem systemd-run",
+    "PK07A: blobs de stderr, package.json \"type\": \"module\" do A4 no /dist, child-records 7 e 8 vazios e regra 4"
+  ],
+  "limits": "Não rodei os autotestes (selftest_dp1.py grava selftest-results.json na unidade e cria temporários no runtime); revisei o código deles. Rodei o validador em memória com a escrita suprimida em vez de numa cópia, porque o modo deste revisor proíbe criar arquivos; o diretório temporário /mnt/dados/tmp/ricardo/claude-1000/dp1-review-9lDWc4 foi criado e ficou vazio. Não reproduzi em Node o comportamento ERR_UNKNOWN_FILE_EXTENSION do .exe sob \"type\": \"module\" e me apoiei no stderr preservado. Não li os arquivos compactados do cache diretamente, só o /dist staged, cujos sha batem com o identity freeze. Não observei a cgroup ao vivo e usei as testemunhas gravadas. Os quadros são autodeclarados pelo driver; a independência vem das testemunhas do supervisor (cgroup, net ns, maps, manifestos), não de uma segunda captura.",
+  "functional_receipts": 0,
+  "parity_credit": 0
+}
+```

@@ -1,0 +1,384 @@
+{
+  "kind": "UNIT_STATE",
+  "program": "CODEX100",
+  "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-2",
+  "lead": "CONT-20261018-D9EF",
+  "track": "T1 com execução local contida (serviços transientes próprios, sem rede, sem provider, sem credencial, sem dado real); binário publicado só dentro da contenção (Q3, lead-confirmation)",
+  "status": "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS",
+  "git": {
+    "candidate_worktree": "/mnt/dados/cvg-work/cvg-codex100-dp2-20261020",
+    "base": "3ca3fd3b0 (recibo do DP-1)",
+    "branch": "nenhuma (HEAD destacado)",
+    "push": "não",
+    "pr": "não"
+  },
+  "runtime_and_staging": "/mnt/dados/cvg-work/cvg-codex100-dp2-runtime-20261020 (sdk-python, python-deps, dist, attempts, dry)",
+  "cache": "/mnt/dados/cvg-work/cvg-codex100-distributed-cache-20261019 (somente leitura; arquivos e M7 conferidos contra acquisition-ledger.json antes de cada uso; nenhum binário em docs/)",
+  "spec_inputs": {
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "8697058965cb4d4eb5229335423ecd84fca2263666d83b93eb0e849319e247b4",
+      "result": "PASS",
+      "checks": "51/51"
+    },
+    "cases_dp_2_sha256": "82e32644a9d472160fbc24b3ce4a62b02a7d37e0c31c57862ba7400a37278a60",
+    "errata": "inputs/spec-dp/review-r2/executor-disposition.json#/items[id=R2-F01] (topologia driver_only, obrigatória)",
+    "dp1_next_task": "inputs/dp1/next-task.json (carry-overs e P3 levados ao DP-2)",
+    "lead_decision_dp1": "inputs/dp1/lead-decision-dv1-dv4.json (DV1-DV4 aceitos; PK07 só num DP-1R depois do DP-2)",
+    "lead_confirmation": "inputs/spec-dp/lead-confirmation-20261019.json (capability nova = do kernel ou privilégio; DP-PY02P dentro da Q3)",
+    "user_decision": "inputs/user-decision-distributed-profile-20261019.json (Q1 pin 0.153.4, Q2 aquisição, Q3 keyless, Q4 negada)"
+  },
+  "implementation": {
+    "layout": "Uma pilha Python no host (python/), derivada da pilha da C3-2 (2B-2 + D3 + carry-overs) com os deltas DDP do DP-2 e python/stage_dp.py (CAP-DP-STAGE derivado do dplane/stage.py do DP-1, com o wheel A1 em zip); um source freeze, um identity freeze, um diag-admission, budget.json e case-ledger.json; serviços sempre em série.",
+    "DDP-01": "channel.py aceita DP-PY19A/B/C, DP-PY02P, DP2-CTRL01 e as linhas DIAG-DP; supervisor e avaliador ligam cases-dp-2.json por sha (82e32644…); 6 vagas, DP-PY02P condicional ao DIAG-DP-REAL-CLI-APPSERVER, DP-PY20A sem serviço.",
+    "DDP-02/DDP-11": "stage_dp.py: /dist do sub-lote (A7, A2, A3, A4 e A1 em py/site) com os modos dos membros, conferido contra artifact-metadata.json e reconferido no host antes de cada serviço que o monta; árvores de fixture por tentativa (copy_of_member, file, json, dir, symlink, copy_of_profile) montadas só-leitura em /fixture; fixture.tree_exact com varredura da raiz (DP1-ADM/R1-F07) e leitura de volta dentro do sandbox (FIXTURE_READBACK com sonda EROFS).",
+    "DDP-03/DDP-04": "não aplicável ao DP-2: driver Node, loader e filho sintético são do DP-1 (DDP-08 lista para o DP-2 só DDP-01, 02, 05, 06, 07 e 11).",
+    "DDP-05": "MemoryMax 1073741824 e TasksMax 256 só no DP-PY02P e no DIAG-DP-REAL-CLI-APPSERVER (pids.peak 37 nos dois), 536870912 e 32 nos outros; demais propriedades iguais à tabela herdada (DP1-ADM/R2-F05; RuntimeMaxSec 45, sem desvio); realcli.witness: WITNESS_REQUEST depois do PROC_RETAIN, pid mapeado por NSpid, cmdline, environ, /proc/<pid>/exe e filhos do driver, REALCLI_WITNESS e WITNESS_DONE (5 s); keyless: interfaces lo, 0 rotas, nenhuma variável da lista fechada, CODEX_HOME ausente e vazio.",
+    "DDP-06": "python-driver.py: driver_runtime.sys_path_runtime e runtime.path (purga e invalidate_caches), SYS_PATH a cada troca.",
+    "DDP-07": "acceptance.py evaluate_artifact: DP-PY20A sem serviço, cache lido por sha (A1, A5, M7), campos por jeq.",
+    "DDP-08": "aplicado: source-freeze-dp2.json (pilha Python, autotestes e resultado, validador e resultado, plano, fixture-cases.json e cópias da especificação) e identity-freeze-dp2.json (cache reconferido contra acquisition-ledger.json: arquivos A1-A5 e A7 e o metadado M7; membros das entradas dos casos contra artifact-metadata.json; A5 pelo registro e membros comuns A1/A5; manifesto do /dist do sub-lote, 36 arquivos; árvores sdk-python e python-deps; âncoras de entrada; host; propriedades de serviço; topologia; argv) antes de qualquer serviço. As árvores de fixture são materializadas por tentativa a partir de fixture-cases.json e registradas em profile-manifest.json#/fixture_manifest_host de cada pasta (texto corrigido pelo R1-F07; ver DV-DP2-02 sobre o refreeze).",
+    "DDP-09": "DP2-CTRL01 = 2B2-CTRL01 com só o último elemento do argv trocado (autoteste).",
+    "DDP-10": "2B2-ADM R1-F02, R1-F03 e R1-F04 mantidos do avaliador da C3-2 antes do source freeze.",
+    "DDP-12_erratum_R2_F01": "Declarado neste IMPLEMENT: topologia por caso (driver_only: DP-PY19A, DP-PY02P e as três DIAG-DP; adapter_peer: DP-PY19B, DP-PY19C, DP2-CTRL01 e as DIAG-PY), na config (o canal recusa outra) e no plano; observer.reconcile_driver_only (adapter e peer MISSING esperados; quadro de adapter ou peer dá INVALID_CAPTURE; PASS com END completo, CALLS_DONE, EOF e checagens do SO); a base driver_only vira PASS ou REAL_CLI_KEYLESS conforme o caso; autotestes obrigatórios (DP-PY19A sintético PASS, com quadro de adapter INVALID_CAPTURE, com processo de adapter na cgroup MISMATCH por proc.spawn_count_exact); checagem caso a caso das pastas executadas em topology-checks-dp2.json (5/5 controles negativos por mensagem exata).",
+    "EDP": "EDP-01 (tabela de cases-dp-2.json com autoteste R3-12 e predicados copiados do 2B com classe e oráculo), EDP-02 (oráculos novos, jeq, stderr/stdout por inclusão e não inclusão), EDP-03 (REAL_CLI_KEYLESS e ARTIFACT_CHECK só onde o caso declara; fora disso regra 2), EDP-04 (version_dependent exato), EDP-05 (build_link NO_BUILD_LINK_DECLARED em todo acceptance.json não CONTROL; ausência dá regra 3, autoteste), EDP-06 (0 recibos e 0 crédito), EDP-07 (NOT_REACHED sem falha adicional; sem loader no DP-2) e EDP-08 (service.limits_declared lido da cgroup do serviço contra os limites de DDP-05).",
+    "carry_over_dp1": {
+      "DP-SPEC/R2-F01": "aplicado (DDP-12 acima).",
+      "DP-SPEC/R2-F03": "aplicado: tools/validate_unit.py recusa com a mensagem exata \"adapter predicate or process.spawns/argv on the real binary: DP-PY02P\" uma cópia do DP-PY02P com spawns 1 e process.argv completo.",
+      "ACQ/R1-F03": "não aplicável: só numa aquisição futura.",
+      "DP1-ADM/DV2-DV3": "aplicado: modo dry restrito no código às linhas DRY_ROWS de código próprio (DIAG-DP-STAGE, DIAG-DP-PYRUNTIME, DIAG-PY-BARRIER; nunca o binário publicado nem o SDK); RuntimeMaxSec 45 herdado, sem desvio.",
+      "DP1-ADM/R1-F04-F07": "aplicado no que é do DP-2: critérios das DIAG-DP iguais ao pass do contrato (EROFS, alvo do symlink, sha e modos; import do site declarado; initialize em 15 s, término em 2 s ou morto e colhido, nada fora de /work); fixture.tree_exact com varredura da raiz; a espera de 5 s e o shim são do DP-1.",
+      "DP-SPEC/R2-F04": "aplicado: A5 pelo registro e membros comuns A1/A5 comparados na identity freeze (cache.a1_a5_common_members).",
+      "DP-SPEC/R2-F05": "aplicado: DIAG-DP-REAL-CLI-APPSERVER com o argv e o env do caso, realcli.witness depois do PROC_RETAIN e controle negativo de leitura antes dele (recusado).",
+      "DP-SPEC/R2-F06": "aplicado: nota de epílogo por topologia no plano (case-plan.json epilogue_note_r2_f06).",
+      "2B2-ADM/R1-F02-F04": "aplicado (DDP-10).",
+      "DP1-ADM/PK07A": "não aplicável: o DP-2 não tem filho sintético.",
+      "DP1-ADM/R2-F02": "não aplicável: o driver Node não é reusado.",
+      "DP1-ADM/R2-F03": "aplicado: o DIAG do binário real grava e julga /dev (recursivo) e a árvore fora de /work antes e depois (iguais).",
+      "DP1-ADM/R2-F04": "aplicado no fechamento: tools/close_dp2.py final_status (P1/P2 só fecham como FIXED; desvio não aceito ou P1/P2 aberto dá REVIEW_REVISE; item levado adiante dá COMPLETED_LOCAL_WITH_CARRIED_FINDINGS), com autotestes positivos e negativos.",
+      "DP1-ADM/R2-F05": "aplicado: propriedades de cada argv de serviço comparadas com a tabela herdada (topology-checks-dp2.json) e controle negativo no validador e nos autotestes.",
+      "DP1-ADM/R2-F06": "aplicado: selftests_offline das capacidades usadas (CAP-DP-STAGE com zip próprio e EROFS, CAP-DP-REAL-CLI-KEYLESS com REALCLI_WITNESS depois do PROC_RETAIN e limites só nos casos declarados, os três do CAP-DP-PY-RUNTIME, CAP-DP-ARTIFACT-CHECK com nome ausente da listagem) com caso positivo e negativo, antes do source freeze e ligados por sha (selftest-results.json no source freeze)."
+    },
+    "carry_over_c32": {
+      "C32-ADM/R1-F01": "aplicado: registro de threads por threading.local; autoteste de dois threads em sequência com ident reusado; controle negativo do avaliador (thread na união do registro ou em quadro recusa a regra de zero chamadas, regra 4); THREAD_REGISTRY publica registro, vivos e união; no serviço, o DIAG-PY-BARRIER registrou o cvg-own-raiser que a C3-2 perdia (thread_registry_covers_frames).",
+      "C32-ADM/R1-F03": "aplicado: WAIT_APIS fechado na lista do D3-05 (driver, avaliador e supervisor); controle negativo no validador e no autoteste.",
+      "C32-ADM/DV-C32-02": "aplicado: case_plan_file gravado em todo profile-manifest.json (e no result.json do DP-PY20A); autoteste sobre o manifesto real escrito pelo supervisor (dry); reavaliação 6/6 com plan_binding_ok; docstring do reevaluate alinhado ao código de saída."
+    },
+    "deviations": [
+      {
+        "id": "DV-DP2-01",
+        "text": "Base Python = pilha da C3-2 (2B-2 + D3-04/D3-05 + carry-overs) em vez da pilha do 2B-2 nomeada em freeze-r4-dp-delta.json#/base, porque o coordenador pediu os carry-overs da C3-2 na pilha Python; o vocabulário D3 fica presente e não é usado pelos casos do DP-2; as linhas DIAG-PY-ASYNC, -FAULTCUT e -C3VOCAB saíram (fora do orçamento do DP-2)."
+      },
+      {
+        "id": "DV-DP2-02",
+        "text": "Freeze refeito antes de qualquer serviço: o primeiro source freeze (885e15f3…) e a identity freeze (1991899d…) foram gravados com selftest-results.json mostrando 1 falha (servidor próprio de teste instável no autoteste do cliente do binário real); os dois foram arquivados em archives/pre-service-refreeze/ com o resultado dos autotestes da época e refeitos depois da correção do autoteste (dois servidores determinísticos; 59/59 três vezes); nenhum serviço, vaga ou orçamento entre os dois freezes."
+      },
+      {
+        "id": "DV-DP2-03",
+        "text": "Execuções dry antes do freeze (6, em 3 linhas de código próprio) registradas em dry-runs-before-freeze.json; não são serviços nem vagas; a evidência fica no runtime privado."
+      },
+      {
+        "id": "DV-DP2-04",
+        "text": "Lista fechada de variáveis de credencial escolhida pelo executor (\"e afins\" da tabela): OPENAI_API_KEY, CODEX_API_KEY, GH_TOKEN, GITHUB_TOKEN, ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY, OPENAI_ORG_ID, OPENAI_PROJECT_ID, CODEX_ACCESS_TOKEN e OPENAI_BASE_URL; CODEX_HOME julgado à parte (não definido e sem entradas no início)."
+      },
+      {
+        "id": "DV-DP2-05",
+        "text": "fixture.tree_exact julga também a vista dentro do sandbox por um marco FIXTURE_READBACK que o driver emite no início dos casos com árvores (telemetria, não passo), com sonda de escrita EROFS por raiz; stage.bound_to_cache é conferido no host antes do lançamento (o DP-1 fazia o hash do /dist dentro do sandbox)."
+      },
+      {
+        "id": "DV-DP2-06",
+        "text": "DIAG-DP-STAGE prepara o tar.gz e o wheel próprios sob /fixture/ownstage (dentro do bind de /fixture) e lê de volta o /dist real do sub-lote; o stderr do binário publicado no DIAG-DP-REAL-CLI-APPSERVER fica só como bytes e sha (332 bytes), nunca o conteúdo."
+      },
+      {
+        "id": "DV-DP2-07",
+        "text": "realcli.witness_read julga \"antes do initialize\" pelo gidx do STEP_BEGIN do passo do initialize; o witness de rede keyless lê /proc/<driver>/net/dev (só lo) e /proc/<driver>/net/route (0 rotas IPv4) no host."
+      }
+    ],
+    "ddp12_binding": {
+      "rule": "DDP-12 (errata DP-SPEC/R2-F01) não tem adendo próprio: a declaração normativa é o texto de DDP-12_erratum_R2_F01 acima, e o comportamento está ligado pelo source freeze nos arquivos abaixo (R1-F07).",
+      "files": {
+        "python/channel.py": "f61b7c44f330276cd518202ae145b5989afe3039778eddb52f12a4f79c57c6d7",
+        "python/observer.py": "45a4f4a29f13e60d0b4c7ca8bf96a50392c78236129278926a2cd1efcb6d681e",
+        "python/python-driver.py": "802f05917a792c0789b562bda458ab5b772858496c0c887d3447fbf24b5ae08e",
+        "python/supervisor.py": "0729b0510b69ad77764f8649bb88fb83d68c0b12c49dc8db56463bbdbe3aa26e",
+        "python/acceptance.py": "ae3689c32880ed072bffdcb84e6ab5592461ff155fb3ed45e7c442c58cd4d075",
+        "case-plan.json": "22172a9d541ccc9c63316fc93861785927d688a2c3d35fd40794ceecb5b941c0",
+        "selftests/selftest_dp2.py": "8940f3dd5074581952ce5be88a75d1cccdd7140624617f7f728520c7ef0efbde",
+        "selftests/selftest-results.json": "8db1b3ad377b3f528eb5401428c1dd061a90eaaaa415d9f9dc561886d86db518",
+        "tools/validate_unit.py": "b4241d4ea725f9b489246475e1f6b5d97b4a9f37ed812f717dfae77685bc41f8"
+      },
+      "source_freeze_sha256": "0209d62d2b297dc329ac11396ba6ef2722343cb47264612466fa70d527276784"
+    }
+  },
+  "selftests": {
+    "path": "selftests/selftest-results.json",
+    "passed": 59,
+    "failed": 0
+  },
+  "validator": {
+    "path": "validation-unit.json",
+    "ok": true,
+    "negative_controls_refused": "11/11"
+  },
+  "topology_checks": {
+    "path": "topology-checks-dp2.json",
+    "ok": true,
+    "negative_controls_refused": "5/5"
+  },
+  "freezes": {
+    "source_freeze": {
+      "path": "source-freeze-dp2.json",
+      "sha256": "0209d62d2b297dc329ac11396ba6ef2722343cb47264612466fa70d527276784",
+      "files": 45
+    },
+    "identity_freeze": {
+      "path": "identity-freeze-dp2.json",
+      "sha256": "aafb31a04bedd73a8315d8f73c0beaab3bc869025b1bfaade75c99f2da5dc84c"
+    },
+    "order": "preflight -> implementação -> autotestes e validador -> fixtures e plano -> ledgers -> source freeze -> identity freeze (cache, /dist, árvores, âncoras) -> 10 DIAG -> diag-admission -> CONTROL -> 5 vagas em ordem"
+  },
+  "diagnostics": {
+    "admission": {
+      "path": "diag-admission-dp2.json",
+      "sha256": "f854a774a013b3ab5dbc1b111e711702ccd45bca6539380a57533fc83a174cb8"
+    },
+    "passes": {
+      "DIAG-PY-RPC": {
+        "dir": "diagnostics/5cd8f5e8a039-DIAG-PY-RPC",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-STAGE": {
+        "dir": "diagnostics/c1260961f1c7-DIAG-PY-STAGE",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-UNSCRIPTED": {
+        "dir": "diagnostics/2226c1049125-DIAG-PY-UNSCRIPTED",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-BEFOREREPLY": {
+        "dir": "diagnostics/19be576aa7b4-DIAG-PY-BEFOREREPLY",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-BARRIER": {
+        "dir": "diagnostics/0c511e11eb8e-DIAG-PY-BARRIER",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-LOGIN": {
+        "dir": "diagnostics/cf7bad895421-DIAG-PY-LOGIN",
+        "verdict": "PASS"
+      },
+      "DIAG-PY-PROCWITNESS": {
+        "dir": "diagnostics/d5b7ade130fb-DIAG-PY-PROCWITNESS",
+        "verdict": "PASS"
+      },
+      "DIAG-DP-STAGE": {
+        "dir": "diagnostics/244df873a712-DIAG-DP-STAGE",
+        "verdict": "PASS"
+      },
+      "DIAG-DP-PYRUNTIME": {
+        "dir": "diagnostics/182ecc8192cb-DIAG-DP-PYRUNTIME",
+        "verdict": "PASS"
+      },
+      "DIAG-DP-REAL-CLI-APPSERVER": {
+        "dir": "diagnostics/5942e502ef69-DIAG-DP-REAL-CLI-APPSERVER",
+        "verdict": "PASS"
+      }
+    },
+    "failures": 0,
+    "conditional_slots": {
+      "DP-PY02P": "RUN"
+    }
+  },
+  "control": {
+    "case": "DP2-CTRL01",
+    "outcome": "MISMATCH",
+    "composition_rule": 6,
+    "failed_predicates": [["wire.no_turn_interrupt", "client"]],
+    "gate": "MISMATCH pela regra 6 só com wire.no_turn_interrupt, sanidades aprovadas, antes das outras vagas",
+    "gate_passed": true,
+    "counts_as_sdk_observation": false
+  },
+  "cases": {
+    "counts": {
+      "PASS_CLIENT_OBSERVATION": 5,
+      "MISMATCH": 0,
+      "INVALID_CAPTURE": 0,
+      "INCONCLUSIVE": 0,
+      "NOT_RUN": 0
+    },
+    "rows": [
+      {
+        "slot": 6,
+        "case": "DP2-CTRL01",
+        "outcome": "MISMATCH",
+        "composition_rule": 6,
+        "capture_form": "PASS",
+        "topology": "adapter_peer",
+        "conditional": false,
+        "dir": "cases/DP2-CTRL01-334b758f04a9",
+        "service": "cvg-dx100-dp2-334b758f04a9-dp2-ctrl01.service"
+      },
+      {
+        "slot": 1,
+        "case": "DP-PY19A",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "PASS",
+        "topology": "driver_only",
+        "conditional": false,
+        "dir": "cases/DP-PY19A-6e0cb76b4200",
+        "service": "cvg-dx100-dp2-6e0cb76b4200-dp-py19a.service"
+      },
+      {
+        "slot": 2,
+        "case": "DP-PY19B",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "CLIENT_TERMINATED_SIGTERM",
+        "topology": "adapter_peer",
+        "conditional": false,
+        "dir": "cases/DP-PY19B-a0a4a9a727f2",
+        "service": "cvg-dx100-dp2-a0a4a9a727f2-dp-py19b.service"
+      },
+      {
+        "slot": 3,
+        "case": "DP-PY19C",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "CLIENT_TERMINATED_SIGTERM",
+        "topology": "adapter_peer",
+        "conditional": false,
+        "dir": "cases/DP-PY19C-78804678315c",
+        "service": "cvg-dx100-dp2-78804678315c-dp-py19c.service"
+      },
+      {
+        "slot": 4,
+        "case": "DP-PY02P",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "REAL_CLI_KEYLESS",
+        "topology": "driver_only",
+        "conditional": true,
+        "dir": "cases/DP-PY02P-2b7623441136",
+        "service": "cvg-dx100-dp2-2b7623441136-dp-py02p.service"
+      },
+      {
+        "slot": 5,
+        "case": "DP-PY20A",
+        "outcome": "PASS_CLIENT_OBSERVATION",
+        "composition_rule": 7,
+        "capture_form": "ARTIFACT_CHECK",
+        "topology": "none (evaluator only, no service)",
+        "conditional": false,
+        "dir": "cases/DP-PY20A-b2ccb3dc0e33",
+        "service": "no-service-b2ccb3dc0e33-dp-py20a"
+      }
+    ]
+  },
+  "observed_facts_not_parity": {
+    "DP-PY02P": "o binário publicado 0.153.4 respondeu o initialize keyless sem serverInfo; o SDK derivou a versão 0.153.4 do userAgent (igual ao codex-package.json); build_link NO_BUILD_LINK_DECLARED",
+    "DP-PY19B/DP-PY19C": "forma CLIENT_TERMINATED_SIGTERM (aceita pelo caso): o close do SDK terminou o adapter por SIGTERM"
+  },
+  "reevaluation": {
+    "path": "reevaluation-dp2.json",
+    "predicate_level_equal": true,
+    "outcome_equal": true,
+    "plan_binding_ok": true,
+    "cases": 6
+  },
+  "budget": {
+    "case_slots": "6/6",
+    "services": "10/12",
+    "reviews": "1/2",
+    "grouped_repairs": "0/1",
+    "automatic_retries": 0,
+    "conditional_slots": "DP-PY02P rodou (DIAG-DP-REAL-CLI-APPSERVER DIAG_PASS)"
+  },
+  "resources": {
+    "units": 15,
+    "all_released": true,
+    "prefix": "cvg-dx100-dp2-",
+    "pg": "nenhum",
+    "tcp_ports": "nenhuma",
+    "network": "nenhuma (namespace só com lo)",
+    "mnt_ia": "não tocado",
+    "max_loadavg_at_service_start": 1.81,
+    "load_waits": 0,
+    "pids_peak_max": 37,
+    "memory_peak_max_bytes": 90132480,
+    "cache_written": false,
+    "binaries_in_docs": 0,
+    "kept": [
+      "worktree /mnt/dados/cvg-work/cvg-codex100-dp2-20261020",
+      "runtime /mnt/dados/cvg-work/cvg-codex100-dp2-runtime-20261020 sem o /dist (attempts, dry, sdk-python, python-deps; evidência privada das execuções; apagar depois do BIND fica para o Lead)"
+    ],
+    "staging_dist": {
+      "path": "/mnt/dados/cvg-work/cvg-codex100-dp2-runtime-20261020/dist",
+      "files": 36,
+      "manifest_sha256": "764d89eb23a167ae6d834a3c3d64adc3f604e0d5214f7b9942b6cef785450594",
+      "rule": "capability-contracts-dp.json CAP-DP-STAGE: um diretório de staging por sub-lote, apagado no fim do sub-lote",
+      "rebuild": "python3 -I -B python/supervisor.py stage-dist (só a partir do cache conferido por sha)",
+      "status": "apagado no fechamento"
+    }
+  },
+  "empty_artifacts": {
+    "path": "empty-artifact-delta.json",
+    "count": 60,
+    "by_status": {
+      "expected_empty": 60
+    },
+    "central_catalog": "não editado (merge pelo Lead)"
+  },
+  "capability": "nenhuma capability do kernel nem privilégio (Q4; lead-confirmation); CAP-DP-* são capacidades de harness sem privilégio, com contrato, autotestes e DIAG",
+  "functional_receipts": 0,
+  "parity_credit": 0,
+  "note": "Observação de cliente não é paridade: 0 recibos funcionais, 0 crédito de paridade. Atribuição de MISMATCH só por adjudicação.",
+  "updated_at": "2026-10-20T04:22:21.477813+00:00",
+  "post_execution_tools": {
+    "rule": "Ferramentas que só leem as pastas executadas e escrevem registros derivados; ficam fora do source freeze e são ligadas aqui por sha (R1-F07). O revisor reproduziu topology_checks e a reavaliação.",
+    "files": {
+      "tools/collect_results.py": "c5e8a3a6533ed99934845ea25b2470ded08b352996e54e2bb69af6e2babc6edc",
+      "tools/dry_summary.py": "c5815508c83f1d3f9b28c75777cc730b4b9ca7c67a205993c134964d43afe643",
+      "tools/empty_artifacts.py": "fb7adc654a05713852f5b9f9b51ab6502478fddc45b4941c40200183b0ba7b17",
+      "tools/preflight_dp2.py": "abb76a6dddecb847af40f8b0f6053de46f9caba022765f7bf3bbe357200f3d66",
+      "tools/topology_checks.py": "c94a2df7d0b5785b9b26683677414c69bc5c74198a6315a6f3b8300f5514414f",
+      "tools/close_dp2.py": "2824a9ec26d358802f9630b9baf00e956ea9d78c58f939bb753541b597ffead3"
+    }
+  },
+  "review": {
+    "r1": {
+      "path": "review-r1/review.json",
+      "sha256": "5c116e33a0d8ed6a023ccf13063f5f0bc4710c5f856b23922a0ecfee0a2c572d",
+      "subject": "review-freeze-r1.json",
+      "subject_sha256": "beacbae2e99a653a493b5f330906cbd8fb5edb9513016ad1807fc7c98259f5cc",
+      "verdict": "APPROVE",
+      "erratum_r2_f01": "CONFORME",
+      "findings": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 10
+      },
+      "declared_deviations": {
+        "DV-DP2-01": "P3",
+        "DV-DP2-02": "P3",
+        "DV-DP2-03": "P3",
+        "DV-DP2-04": "P3",
+        "DV-DP2-05": "P3",
+        "DV-DP2-06": "P3",
+        "DV-DP2-07": "P3"
+      },
+      "disposition": "review-r1/executor-disposition.json"
+    }
+  },
+  "adjudication": "adjudication-dp2.json",
+  "next_task": "next-task.json",
+  "closing_documents": [
+    "review-r1/executor-disposition.json",
+    "adjudication-dp2.json",
+    "next-task.json",
+    "ledger-delta-cont-d9ef.md",
+    "lead-secret-scan-triage.json",
+    "post-review-r1-changes.json",
+    "unit-manifest.json",
+    "commit-receipt.json"
+  ]
+}

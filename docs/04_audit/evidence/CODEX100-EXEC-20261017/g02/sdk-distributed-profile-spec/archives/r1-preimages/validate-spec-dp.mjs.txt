@@ -1,0 +1,223 @@
+// DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS - validador em Node, segunda implementação do mesmo executor (não é revisão independente).
+// Uso: node --input-type=module < validate-spec-dp.mjs.txt  (cwd = raiz do repositório) -> escreve validation.json na pasta da unidade.
+// Lê os arquivos compactados do cache só em memória (gunzip + tar e zip com a stdlib do Node), sem extrair e sem executar nada.
+// Recalcula: case_input_sha256, âncoras (fonte do pin e membros do cache), tabela de predicados, braços e discriminação, NO_BUILD_LINK,
+// árvores de fixture, CONTROL, orçamentos, classificação dos resíduos, contratos de capacidade, limites keyless; controles negativos.
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs'
+import { join, normalize } from 'node:path'
+import { gunzipSync, inflateRawSync } from 'node:zlib'
+
+const UNIT = 'docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-spec'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const load = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const clone = (x) => JSON.parse(JSON.stringify(x))
+const U = (f) => join(UNIT, f)
+const R = (p) => normalize(join(UNIT, p))
+const CLASSES = ['client', 'peer_or_capture_sanity', 'capture_order_or_cleanup', 'informational', 'order_unilateral']
+const checks = []
+const check = (name, ok, detail = null) => checks.push({ check: name, ok: !!ok, detail })
+const D1 = load(U('cases-dp-1.json')); const D2 = load(U('cases-dp-2.json'))
+const COV = load(U('coverage-plan-dp.json')); const CAPS = load(U('capability-contracts-dp.json'))
+const FR = load(U('freeze-r4-dp-delta.json')); const EV = load(U('evaluator-r4-dp-delta.json'))
+const B1 = load(U('execution-budget-dp-1.json')); const B2 = load(U('execution-budget-dp-2.json'))
+const T3 = load(U('t3-assessment.json')); const IV = load(U('input-verification.json')); const CC = load(U('control-slot-contract-dp.json'))
+const META = load(R('../sdk-distributed-acquisition/artifact-metadata.json'))
+const MEMBERS = Object.fromEntries(META.artifacts.filter((a) => a.inspected).map((a) => [a.id, Object.fromEntries(a.members.filter((m) => m.type === 'file').map((m) => [m.name, m.sha256]))]))
+const TSC = load(R('../../g01/sdk-open-contracts/typescript/contracts.json'))
+const PK_ARMS = new Set(TSC.contracts.filter((c) => c.id.startsWith('PK')).flatMap((c) => c.branches.map((b) => b.id)))
+const T2B = { ...load(R('../sdk-source-batch-2b-spec/cases-2b-1.json')).predicate_table, ...load(R('../sdk-source-batch-2b-spec/cases-2b-2.json')).predicate_table }
+const B2B2 = load(R('../sdk-source-batch-2b-spec/cases-2b-2.json')).cases.find((c) => c.id === '2B2-CTRL01')
+const NBL = 'NO_BUILD_LINK_DECLARED'
+
+// ---------------------------------------------------------------- archive readers (in memory)
+const archiveCache = new Map()
+function tarMembers(buf) {
+  const out = new Map(); let off = 0; let longName = null; let pax = null
+  while (off + 512 <= buf.length) {
+    const h = buf.subarray(off, off + 512)
+    if (h.every((b) => b === 0)) break
+    const str = (a, b) => h.subarray(a, b).toString('utf8').replace(/\0.*$/s, '')
+    let name = str(0, 100); const prefix = str(345, 500); const size = parseInt(str(124, 136).trim() || '0', 8); const type = String.fromCharCode(h[156] || 48)
+    if (prefix) name = prefix + '/' + name
+    const data = buf.subarray(off + 512, off + 512 + size)
+    off += 512 + Math.ceil(size / 512) * 512
+    if (type === 'L') { longName = data.toString('utf8').replace(/\0.*$/s, ''); continue }
+    if (type === 'x') { const m = /\d+ path=([^\n]+)\n/.exec(data.toString('utf8')); pax = m ? m[1] : null; continue }
+    if (longName) { name = longName; longName = null }
+    if (pax) { name = pax; pax = null }
+    if (type === '0' || type === '\0') out.set(name, Buffer.from(data))
+  }
+  return out
+}
+function zipMember(buf, want) {
+  let eocd = buf.length - 22
+  while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--
+  const count = buf.readUInt16LE(eocd + 10); let p = buf.readUInt32LE(eocd + 16)
+  for (let i = 0; i < count; i++) {
+    const method = buf.readUInt16LE(p + 10); const csize = buf.readUInt32LE(p + 20); const nlen = buf.readUInt16LE(p + 28)
+    const elen = buf.readUInt16LE(p + 30); const clen = buf.readUInt16LE(p + 32); const lho = buf.readUInt32LE(p + 42)
+    const name = buf.subarray(p + 46, p + 46 + nlen).toString('utf8')
+    p += 46 + nlen + elen + clen
+    if (name !== want) continue
+    const lnlen = buf.readUInt16LE(lho + 26); const lelen = buf.readUInt16LE(lho + 28)
+    const raw = buf.subarray(lho + 30 + lnlen + lelen, lho + 30 + lnlen + lelen + csize)
+    return method === 8 ? inflateRawSync(raw) : Buffer.from(raw)
+  }
+  return null
+}
+function member(spec) {
+  if (!archiveCache.has(spec.cache_archive)) {
+    const buf = readFileSync(spec.cache_archive)
+    archiveCache.set(spec.cache_archive, { sha: sha(buf), buf, tar: spec.cache_archive.endsWith('.whl') ? null : tarMembers(gunzipSync(buf)) })
+  }
+  const a = archiveCache.get(spec.cache_archive)
+  const data = a.tar ? a.tar.get(spec.member) : zipMember(a.buf, spec.member)
+  return { archiveSha: a.sha, data }
+}
+function linesOf(key, spec) {
+  if (spec.path) return { sha: sha(readFileSync(R(spec.path))), lines: readFileSync(R(spec.path), 'utf8').split('\n') }
+  const m = member(spec)
+  if (!m.data || m.archiveSha !== spec.archive_sha256) return { sha: null, lines: [] }
+  return { sha: sha(m.data), lines: m.data.toString('utf8').split('\n') }
+}
+
+// ---------------------------------------------------------------- checks (pure; reused by negative controls)
+function* objects(x) { if (Array.isArray(x)) for (const v of x) yield* objects(v); else if (x && typeof x === 'object') { yield x; for (const v of Object.values(x)) yield* objects(v) } }
+const CRED = /^(OPENAI_API_KEY|CODEX_API_KEY|GH_TOKEN|GITHUB_TOKEN|ANTHROPIC_API_KEY|AZURE_OPENAI_API_KEY)$/
+function checkCases(doc, sub, cov) {
+  const p = []; const n = doc.cases.length
+  if (doc.task !== 'DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS' || doc.sub_lot !== sub || doc.status !== 'FROZEN_SPEC_NOT_RUN') p.push('header')
+  if (doc.functional_receipts !== 0 || doc.parity_credit !== 0 || doc.pins.build_link !== NBL) p.push('credit or build_link')
+  if (n > 24 || doc.counts.slots !== n) p.push('slots')
+  const ctrl = doc.cases.filter((c) => c.kind === 'CONTROL')
+  if (ctrl.length !== 1 || ctrl[0].slot !== n || ctrl[0].execution_order !== 1) p.push('control slot')
+  for (const [k, spec] of Object.entries(doc.inputs)) {
+    const l = linesOf(k, spec)
+    if (l.sha !== (spec.sha256 ?? spec.member_sha256)) p.push('input sha ' + k)
+    if (spec.member && MEMBERS[k.split(':')[0]]?.[spec.member] !== spec.member_sha256) p.push('member not in artifact-metadata ' + k)
+  }
+  for (const c of doc.cases) {
+    const id = c.id; const ci = c.case_input
+    if (sha(JSON.stringify(ci)) !== c.case_input_sha256) p.push(id + ': case_input sha')
+    if (c.runtime_status !== 'NOT_RUN' || c.receipt !== null) p.push(id + ': runtime')
+    for (const a of c.anchors) {
+      const spec = doc.inputs[a.input]
+      if (!spec || !c.inputs.includes(a.input)) { p.push(id + ': anchor input ' + a.input); continue }
+      const l = linesOf(a.input, spec)
+      if (a.sha256 !== l.sha) p.push(id + ': anchor sha ' + a.input)
+      if ((l.lines[a.lines[0] - 1] ?? '').trim() !== a.text) p.push(id + ': anchor text ' + a.input + ':' + a.lines[0])
+    }
+    for (const pr of c.predicates) if (!doc.predicate_table[pr]) p.push(id + ': undefined predicate ' + pr)
+    for (const o of objects(ci)) {
+      for (const k of Object.keys(o)) if (CRED.test(k)) p.push(id + ': credential variable ' + k)
+      if (o.kind === 'copy_of_member' && !MEMBERS[o.member.split(':')[0]]?.[o.member.split(':').slice(1).join(':')]) p.push(id + ': unknown member ' + o.member)
+      if (o.path && typeof o.path === 'string' && o.kind && !o.path.startsWith('/fixture/')) p.push(id + ': fixture path outside /fixture ' + o.path)
+    }
+    // só hosts reservados .invalid (RFC 2606) são aceitos; o 2B2-CTRL01 copiado traz https://login.invalid/... como dado sintético do peer
+    for (const m of JSON.stringify(ci).matchAll(/https?:\/\/([^/"\s:]+)/g)) if (!m[1].endsWith('.invalid')) p.push(id + ': URL in case_input ' + m[1])
+    if (c.kind === 'CONTROL') {
+      if (id === 'DP2-CTRL01') {
+        const want = clone(B2B2.case_input); want.control_client.argv[want.control_client.argv.length - 1] = id
+        if (JSON.stringify(want) !== JSON.stringify(ci)) p.push(id + ': control copy')
+      } else if (JSON.stringify(ci).includes('A2:') || JSON.stringify(ci).includes('/dist/')) p.push(id + ': control uses cache')
+      continue
+    }
+    if (c.build_link !== NBL) p.push(id + ': build_link')
+    const arms = c.branches_targeted.map((b) => b.split(' ')[0])
+    for (const a of arms) if (!(PK_ARMS.has(a) || a in cov.new_arm_ids.arms)) p.push(id + ': arm unknown ' + a)
+    if (JSON.stringify([...new Set(arms.map((a) => a.slice(0, 4)))].sort()) !== JSON.stringify([...c.contracts].sort())) p.push(id + ': contracts differ from arms')
+    if (JSON.stringify([...new Set(arms)].sort()) !== JSON.stringify([...new Set(c.arm_discrimination.map((d) => d.arm))].sort())) p.push(id + ': discrimination arms')
+    for (const d of c.arm_discrimination) {
+      if (!d.contrary || !d.observable_if_contrary || !d.judged_by.length) p.push(id + ': discrimination fields ' + d.arm)
+      if (!d.judged_by.every((j) => c.predicates.includes(j))) p.push(id + ': judged_by outside predicates ' + d.arm)
+      if (!d.judged_by.some((j) => doc.predicate_table[j]?.class === 'client')) p.push(id + ': no client predicate ' + d.arm)
+      if (!d.steps.length || !d.steps.every((s) => s >= 1 && s <= ci.sdk_calls.length)) p.push(id + ': discrimination steps ' + d.arm)
+    }
+    if (!c.known_bad.judged_by.every((j) => c.predicates.includes(j) && doc.predicate_table[j]?.class === 'client')) p.push(id + ': known_bad judged_by')
+    for (const inf of c.infra) { const m = /^(CAP-DP-[A-Z-]+)/.exec(inf); if (m && !CAPS.capabilities.some((x) => x.id === m[1])) p.push(id + ': infra not contracted ' + m[1]) }
+  }
+  return p
+}
+function checkTable(doc) {
+  const p = []
+  for (const [k, v] of Object.entries(doc.predicate_table)) {
+    if (!CLASSES.includes(v.class)) p.push('class ' + k)
+    if (v.source.startsWith('NEW')) { if (!EV.clauses.some((c) => c.id === 'EDP-02')) p.push('new predicate without EDP-02 ' + k) }
+    else if (!T2B[k] || T2B[k].class !== v.class || T2B[k].oracle !== v.oracle) p.push('base mismatch ' + k)
+  }
+  const used = new Set(doc.cases.flatMap((c) => c.predicates))
+  for (const k of Object.keys(doc.predicate_table)) if (!used.has(k)) p.push('unused ' + k)
+  return p
+}
+function checkCoverage(cov, cases) {
+  const p = []; const by = Object.fromEntries(cases.map((c) => [c.id, c]))
+  const scope = ['PY19', 'PY20', 'PY02', 'PK01', 'PK02', 'PK03', 'PK04', 'PK05', 'PK06', 'PK07', 'PK08', 'PK09']
+  for (const k of scope) if (!cov.residuals.some((r) => r.contract === k)) p.push('scope without residual ' + k)
+  const ids = cov.residuals.map((r) => r.id); if (new Set(ids).size !== ids.length) p.push('residual ids')
+  for (const r of cov.residuals) {
+    if (!(r.class in cov.classes)) { p.push(r.id + ': class'); continue }
+    if (r.class === 'IN_SPEC') {
+      if (!r.cases?.length || !r.arms?.length) p.push(r.id + ': IN without cases or arms')
+      for (const a of r.arms ?? []) if (!(r.cases ?? []).some((cid) => by[cid]?.branches_targeted.some((b) => b.startsWith(a + ' ')))) p.push(r.id + ': arm not targeted ' + a)
+    } else if (!r.reason || !r.destination) p.push(r.id + ': OUT without reason or destination')
+  }
+  for (const c of cases) if (c.kind !== 'CONTROL') for (const b of c.branches_targeted) { const a = b.split(' ')[0]; if (!cov.residuals.some((r) => r.class === 'IN_SPEC' && r.cases.includes(c.id) && r.arms.includes(a))) p.push(c.id + ': arm without residual ' + a) }
+  if (cov.functional_receipts !== 0 || cov.parity_credit !== 0) p.push('credit')
+  return p
+}
+function checkBudget(b, doc, sub) {
+  const p = []; const gated = doc.cases.filter((c) => c.kind !== 'CONTROL' && c.gate).map((c) => c.id)
+  if (b.sub_lot !== sub || b.max.case_slots !== 24 || b.max.services !== 12) p.push('max')
+  if (b.planned.case_slots !== doc.cases.length || b.planned.case_slots > 24) p.push('slots')
+  if (b.planned.qualification_services.length !== b.planned.qualification_services_planned || b.planned.qualification_services_planned > 12) p.push('services')
+  if (JSON.stringify(b.planned.conditional_slots) !== JSON.stringify(gated)) p.push('conditional')
+  return p
+}
+
+// ---------------------------------------------------------------- run
+const ALL = [...D1.cases, ...D2.cases]
+const p1 = checkCases(D1, 'DP-1', COV); check('DP-1 cases: inputs and cache members, case_input sha, anchors, predicates, arms, discrimination, build_link, fixtures, keyless limits, CONTROL', !p1.length, p1.slice(0, 20))
+const p2 = checkCases(D2, 'DP-2', COV); check('DP-2 cases: inputs and cache members, case_input sha, anchors, predicates, arms, discrimination, build_link, fixtures, keyless limits, CONTROL copy', !p2.length, p2.slice(0, 20))
+const t1 = checkTable(D1); const t2 = checkTable(D2); check('predicate tables: classes, 2B copies equal, new predicates under EDP-02, no unused', !t1.length && !t2.length, { t1, t2 })
+const pc = checkCoverage(COV, ALL); check('coverage plan: every scope residual classified with destination, IN bound to cases and arms, every arm covered', !pc.length, pc)
+const b1 = checkBudget(B1, D1, 'DP-1'); const b2 = checkBudget(B2, D2, 'DP-2'); check('budgets: <= 24 slots and <= 12 services, conditional slots equal gated cases', !b1.length && !b2.length, { b1, b2 })
+check('capability contracts: no privilege, no network, each with self-tests and DIAG', CAPS.capabilities.every((c) => c.privilege === 'nenhum' && /^nenhuma/.test(c.network) && c.selftests_offline.length && c.diag))
+check('freeze delta DDP-01..10 and evaluator delta EDP-01..06 with base shas', JSON.stringify(FR.items.map((i) => i.id)) === JSON.stringify(Array.from({ length: 10 }, (_, i) => 'DDP-' + String(i + 1).padStart(2, '0')))
+  && JSON.stringify(EV.clauses.map((c) => c.id)) === JSON.stringify(Array.from({ length: 6 }, (_, i) => 'EDP-0' + (i + 1)))
+  && Object.values(FR.base).every((b) => sha(readFileSync(R(b.path))) === b.sha256) && Object.values(EV.base).every((b) => sha(readFileSync(R(b.path))) === b.sha256))
+check('control slot contract equals the two CONTROL slots', CC.slots.every((s) => ALL.some((c) => c.id === s.case && c.case_input_sha256 === s.case_input_sha256 && c.slot === s.slot)))
+check('T3 assessment NAO_EXIGE_T3 / NAO_EXIGE_T4 with contingent questions not asked', T3.decision === 'NAO_EXIGE_T3' && T3.decision_t4 === 'NAO_EXIGE_T4' && sha(readFileSync(R(T3.rule.path))) === T3.rule.sha256)
+check('input verification PASS', IV.result === 'PASS' && IV.checks.every((c) => c.ok))
+const files = readdirSync(UNIT, { recursive: true }).filter((f) => statSync(join(UNIT, f)).isFile())
+const binaries = files.filter((f) => { const fd = openSync(join(UNIT, f), 'r'); const b = Buffer.alloc(4); readSync(fd, b, 0, 4, 0); closeSync(fd); return b.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) || b.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b])) || b.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) })
+check('unit folder has no binary, zip or gzip and no empty file', !binaries.length && files.every((f) => statSync(join(UNIT, f)).size > 0), binaries)
+
+// ---------------------------------------------------------------- negative controls
+const neg = []
+const expectFail = (name, fn) => { let r; try { r = fn() } catch (e) { r = ['threw ' + e.message] } neg.push({ control: name, rejected: r.length > 0, first: r[0] ?? null }) }
+expectFail('case_input changed', () => { const d = clone(D1); d.cases[0].case_input.sdk_calls[0].module += 'x'; return checkCases(d, 'DP-1', COV) })
+expectFail('cache member anchor text changed', () => { const d = clone(D1); d.cases.find((c) => c.id === 'DP-PK04A').anchors[0].text += ' '; return checkCases(d, 'DP-1', COV) })
+expectFail('pin anchor text changed', () => { const d = clone(D2); d.cases[0].anchors[0].text = 'x'; return checkCases(d, 'DP-2', COV) })
+expectFail('member sha not in artifact-metadata', () => { const d = clone(D1); const k = Object.keys(d.inputs).find((x) => x.startsWith('A2:')); d.inputs[k].member_sha256 = '0'.repeat(64); return checkCases(d, 'DP-1', COV) })
+expectFail('build_link missing', () => { const d = clone(D2); d.cases[0].build_link = null; return checkCases(d, 'DP-2', COV) })
+expectFail('credential variable in env', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'DP-PK06A'); c.case_input.sdk_calls[1].env.OPENAI_API_KEY = 'x'; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'DP-1', COV).filter((x) => x.includes('credential')) })
+expectFail('URL in case_input', () => { const d = clone(D1); const c = d.cases.find((x) => x.id === 'DP-REAL01'); c.case_input.sdk_calls[0].argv = ['https://github.com/openai/codex']; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'DP-1', COV).filter((x) => x.includes('URL')) })
+expectFail('unknown arm id', () => { const d = clone(D1); d.cases[0].branches_targeted[0] = 'PK01.B09 x'; return checkCases(d, 'DP-1', COV) })
+expectFail('discrimination without client predicate', () => { const d = clone(D1); d.cases[1].arm_discrimination[0].judged_by = ['stage.bound_to_cache']; return checkCases(d, 'DP-1', COV) })
+expectFail('fixture path outside /fixture', () => { const d = clone(D1); const c = d.cases[0]; c.case_input.trees[0].entries[0].path = '/dist/x'; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'DP-1', COV).filter((x) => x.includes('outside /fixture')) })
+expectFail('DP2 CONTROL lines changed', () => { const d = clone(D2); const c = d.cases.at(-1); c.case_input.control_client.lines[3].method = 'turn/steer'; c.case_input_sha256 = sha(JSON.stringify(c.case_input)); return checkCases(d, 'DP-2', COV) })
+expectFail('predicate class differs from 2B', () => { const d = clone(D2); d.predicate_table['api.steps_exact'].class = 'informational'; return checkTable(d) })
+expectFail('OUT residual without destination', () => { const cv = clone(COV); delete cv.residuals.find((r) => r.class !== 'IN_SPEC').destination; return checkCoverage(cv, ALL) })
+expectFail('scope contract without residual', () => { const cv = clone(COV); cv.residuals = cv.residuals.filter((r) => r.contract !== 'PK07'); return checkCoverage(cv, ALL) })
+expectFail('services budget over 12', () => { const b = clone(B2); b.planned.qualification_services = [...b.planned.qualification_services, 'A', 'B', 'C', 'D', 'E']; b.planned.qualification_services_planned = 13; return checkBudget(b, D2, 'DP-2') })
+check('negative controls: every corrupted copy is rejected', neg.every((n) => n.rejected), neg)
+const ok = checks.every((c) => c.ok)
+const out = { kind: 'VALIDATION', task: 'DX100-G02:SPECIFY-SDK-DISTRIBUTED-PROFILE-KEYLESS', validator: 'validate-spec-dp.mjs.txt', node: process.version, network: false,
+  result: ok ? 'PASS' : 'FAIL', checks, negative_controls: neg.length,
+  validated_files: Object.fromEntries(['cases-dp-1.json', 'cases-dp-2.json', 'coverage-plan-dp.json', 'capability-contracts-dp.json', 'freeze-r4-dp-delta.json', 'evaluator-r4-dp-delta.json',
+    'control-slot-contract-dp.json', 'execution-budget-dp-1.json', 'execution-budget-dp-2.json', 't3-assessment.json', 'input-verification.json'].map((f) => [f, sha(readFileSync(U(f)))])),
+  functional_receipts: 0, parity_credit: 0 }
+writeFileSync(U('validation.json'), JSON.stringify(out, null, 2) + '\n')
+console.log(out.result, checks.filter((c) => c.ok).length + '/' + checks.length, 'negatives', neg.filter((n) => n.rejected).length + '/' + neg.length)
+for (const c of checks) if (!c.ok) console.log('FAIL', c.check, JSON.stringify(c.detail).slice(0, 1500))

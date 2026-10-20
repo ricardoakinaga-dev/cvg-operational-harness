@@ -1,0 +1,80 @@
+--- spec0244-r2.md
++++ spec0244-r3.md
+@@ -1,6 +1,6 @@
+ # SPEC0244 — Forma de módulo ESM no kernel B6: reexport estrela e export de classe recusada
+ 
+-**PROPOSTA T3, revisão r2. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020`; texto materializado com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0244`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237, 0240, 0241, 0242 e 0243. Autoridade de segurança: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) §6 (K0 e K5), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0242](0242_b6_body_caps_deadlines.md), [SPEC0243](0243_b6_reference_source_scope.md). Execução e continuidade: [plano 0391](../03_build/0391_hiso005_semantic_proof_execution.md). A r2 corrige os obrigatórios R1-01 a R1-09 da [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/review-r1/review.json).
++**PROPOSTA T3, revisão r3. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020`; texto materializado com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0244`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237, 0240, 0241, 0242 e 0243. Autoridade de segurança: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) §6 (K0 e K5), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0242](0242_b6_body_caps_deadlines.md), [SPEC0243](0243_b6_reference_source_scope.md). Execução e continuidade: [plano 0391](../03_build/0391_hiso005_semantic_proof_execution.md). A r2 corrigiu os obrigatórios R1-01 a R1-09 da [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/review-r1/review.json). A [revisão r2](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/review-r2/review.json) aprovou o texto sem obrigatórios. A r3 aplica os seis opcionais P3 dela, sem terceira rodada ([correções](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/r2-corrections.json)).
+ 
+ Neste texto, v4 é o kernel atual (`semantic-kernel-v4-integral-body`, cabeça do PR #8 `1073a9dd`) e v5 é o kernel com E1 e E2.
+ 
+@@ -28,7 +28,7 @@
+ - **Forma de módulo:** 746 tuplas de `UNKNOWN_INHERITED_PROPERTY` em namespace com `export *` (uma delas em .tsx), 656 por classe recusada e 10 `UNKNOWN_BINDING` com nome de classe recusada. Medido: E1 sozinho remove 646. E2 é necessário para 756 (as 656 e mais 100 cuja estrela traz nome de classe recusada no módulo-fonte).
+ - **Resolução, formato e proveniência:** dist sem recibo 395, entrada instalada não alcançada 288, formato não JS 217, alvo ausente 102, formato de módulo, interop e parse.
+ - **TSX:** 705 tuplas em 29 arquivos .tsx, todos com `UNKNOWN_PARSE`. O engine parseia .tsx como TS e segue avaliando a AST recuperada. Das 430 `UNKNOWN_BINDING` em .tsx, 412 são palavras de JSX ou nomes locais, 8 têm detalhe vazio e 10 são globais.
+-- **Intrínsecos e built-ins:** global ECMAScript 337 (`Array`, `Number`, `Date`, `JSON`, `Math`, `Symbol`…), global de host 89 (`process`, `Buffer`…), módulo nativo 254 e global de ambiente sem declaração 3.
++- **Intrínsecos e built-ins:** global da ECMA-262 312 (`Array`, `Number`, `Date`, `JSON`, `Math`, `Symbol`…), global de host 114 (`process`, `Buffer`, `console`, `structuredClone`…), módulo nativo 254 e global de ambiente sem declaração 3 ([critério ECMA-262](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020/r3-measures.json)).
+ - **Fato do código:** estado mutável exportado 294, `let`/`var` 125, atribuição e reflexão.
+ 
+ ### 1.2 Propagação por origem do U
+@@ -48,7 +48,7 @@
+ | mistas sem K0 (local e argumento) | 40 |
+ | função de declaração recusada | 62 |
+ 
+-O K0 é causa própria e estrutural: toda leitura de parâmetro de superfície pública é UNKNOWN por regra e responde por 660 a 883 tuplas (5,2% a 7,0%). Nenhuma premissa nova sobre entrada externa a reduz. O resto é consequência de raízes diagnósticas.
++O K0 é causa própria e estrutural: toda leitura de parâmetro de superfície pública é UNKNOWN por regra. Nenhuma premissa nova sobre entrada externa a reduz. As 660 a 883 tuplas (5,2% a 7,0%) são o mínimo direto dele, porque as etiquetas nomeiam o gatilho imediato e não a raiz. Parte das linhas local, callee, receptor e operando também descende de parâmetro K0 (por exemplo, `const x = param.campo`). O restante descende de raízes diagnósticas.
+ 
+ ### 1.3 Origens de base (890)
+ 
+@@ -88,7 +88,11 @@
+ 
+ **Desvios conhecidos da v5a em relação à §3:**
+ 
+-- **Exports locais de binding importado.** A v5a não segue `import { X } from` seguido de `export { X }` ao comparar ligações. Por isso marca `AMBIGUOUS_STAR:PROCEED` no kernel do harness (src e dist, 2 tuplas), embora as duas estrelas tragam a mesma ligação `types.ts#PROCEED`. O desvio é conservador. O BUILD segue a §3.1 e não dá ambiguidade aí.
++- **Ligação de export indireto.** A v5a não segue `import { X } from` seguido de `export { X }`, nem o reexport indireto nomeado `export { X } from`, ao comparar ligações: usa `módulo#X`. Por isso marca `AMBIGUOUS_STAR:PROCEED` no kernel do harness (src e dist, 2 tuplas), embora as duas estrelas tragam a mesma ligação `types.ts#PROCEED`. O BUILD segue a §3.1 e não dá ambiguidade aí.
++- **Diamante ambíguo.** A v5a guarda a origem da primeira estrela de um nome ambíguo na fonte. Se outra estrela do reexportador trouxer a mesma origem, ele exporta o valor conhecido. A raiz `AMBIGUOUS_STAR` da fonte continua no fecho, e o caso não ocorre nesta raiz.
++- **Precedência por nome de tipo.** A v5a conta como export explícito também `export type` e `export interface`, que mascaram o nome da estrela. O nome fica ausente.
++- **`export * as ns` de fonte não qualificada.** A v5a deixa `ns` ausente em vez de U.
++- Todos esses desvios são conservadores: deixam mais U ou nome ausente, nunca valor indevido.
+ - **Casos raros nesta raiz:**
+   - classe default anônima: 0 ocorrências;
+   - módulo misto com estrela qualificada e não qualificada: 0. Os 8 módulos incompletos são 3 `index.ts` com formato de módulo não determinado e 5 `.d.ts`;
+@@ -132,8 +136,8 @@
+ 
+ 1. `export * as ns from 'm'` exporta `ns` com o namespace de `m`. Com fonte não qualificada, `ns` é U e a recusa `UNKNOWN_REEXPORT` é mantida.
+ 2. `export * from 'm'` reexporta cada nome `N` de `m`, exceto `default`, com o valor que `m` exporta, inclusive U.
+-3. Qualquer export explícito do módulo prevalece sobre os nomes de estrela, qualquer que seja a ordem no arquivo. Isso vale para export local, indireto nomeado e `export * as N`.
+-4. Se duas ou mais estrelas fornecem `N` com ligações resolvidas diferentes, `N` é ambíguo. O kernel o exporta como U, com `UNKNOWN_REEXPORT` e detalhe `AMBIGUOUS_STAR:N`. A ambiguidade é sticky: uma estrela posterior com a mesma ligação de uma anterior não a desfaz. Mesma ligação por dois caminhos não é ambígua.
++3. Qualquer export explícito de runtime do módulo prevalece sobre os nomes de estrela, qualquer que seja a ordem no arquivo. Isso vale para export local, indireto nomeado e `export * as N`. `export type`, `export interface` e os demais exports só de tipo não existem em runtime e não mascaram nome de estrela.
++4. Se duas ou mais estrelas fornecem `N` com ligações resolvidas diferentes, `N` é ambíguo. O kernel o exporta como U, com `UNKNOWN_REEXPORT` e detalhe `AMBIGUOUS_STAR:N`. A ambiguidade é sticky: uma estrela posterior com a mesma ligação de uma anterior não a desfaz. Mesma ligação por dois caminhos não é ambígua. Um nome ambíguo numa fonte é ambíguo em todo reexportador por estrela, como no ResolveExport: no diamante, o reexportador também o exporta como U com `AMBIGUOUS_STAR`.
+ 5. Se o módulo tiver qualquer estrela com fonte não qualificada, essa estrela mantém `UNKNOWN_REEXPORT`. Todos os nomes vindos de estrela no módulo passam a U e o namespace do módulo fica incompleto. Os exports explícitos mantêm o próprio valor.
+ 6. Ligação viva: a cópia é feita na instrução, como no reexport nomeado da v4. Um binding mutável na fonte (`let`/`var`) já emite `UNKNOWN_MUTABLE_BINDING` na fonte. Essa raiz fica no fecho de todo importador, e a cópia nunca sustenta prova.
+ 
+@@ -170,11 +174,11 @@
+    - em módulo tocado;
+    - a jusante de módulo tocado (corpo alcançado por nome que E1 ou E2 tornou conhecido); ou
+    - em arquivo cujo fecho contém módulo tocado.
+-   Tupla nova sem uma dessas causas é defeito. As novas são reportadas por motivo e família.
++   Tupla nova sem uma dessas causas é defeito. As novas são reportadas por motivo e família. A regra também é permissiva: na v5a, a união de tocado, jusante e cone cobre 1.174 dos 1.341 arquivos e 10.785 das 12.631 tuplas da v4. Tupla nova é mais UNKNOWN, a direção conservadora.
+ 4. O multiset de violações da v4 está contido no da v5. Não há prova na raiz real. O census não muda. Normal e strict são iguais. As tuplas de envelope da SPEC0241 §3.5 ficam fora da regra.
+-5. O BUILD publica os denominadores do conjunto admitido: arquivos analisados, módulos tocados, arquivos no cone e a jusante, raízes e propagações da v4, propagações admissíveis e as que sumiram.
++5. O BUILD publica os denominadores do conjunto admitido: arquivos analisados, módulos tocados, arquivos no cone, a jusante e na união das três, tuplas da v4 na união, raízes e propagações da v4, propagações admissíveis e as que sumiram.
+ 
+-A explicação é mecânica, tupla a tupla. A v5a passa nesta regra: das 7.288 raízes, somem só as 1.460 das três classes; somem 81 das 3.840 propagações admissíveis (cone de 977 de 1.341 arquivos); e as 305 novas se dividem em 291 em módulo tocado e 14 a jusante. O poder discriminante está nas raízes. A cláusula de propagação é permissiva, e por isso o BUILD publica as tuplas que somem.
++A explicação é mecânica, tupla a tupla. A v5a passa nesta regra: das 7.288 raízes, somem só as 1.460 das três classes; somem 81 das 3.840 propagações admissíveis (cone de 977 de 1.341 arquivos); e as 305 novas se dividem em 291 em módulo tocado e 14 a jusante. O poder discriminante está nas raízes. As cláusulas de propagação e de tupla nova são permissivas. Por isso o BUILD publica, tupla a tupla, as que somem e as que aparecem.
+ 
+ ### 3.4 Versão
+ 
+@@ -226,10 +230,10 @@
+ | ID   | Critério obrigatório de BUILD |
+ | ---- | --- |
+ | MS01 | Primeiras falhas na v4: fixtures de estrela e de classe exportada dão `UNKNOWN_INHERITED_PROPERTY` no importador. |
+-| MS02 | E1, um fixture por caso: estrela simples; `as ns` com fonte qualificada e não qualificada; export explícito antes e depois da estrela (local, indireto e `as N`); `default` excluído; mesma ligação por dois caminhos sem ambiguidade (inclusive `import` + `export { X }`); ligações diferentes com `AMBIGUOUS_STAR` e sticky; fonte incompleta transitiva; módulo misto com todos os nomes de estrela U; valor U preservado; binding mutável na fonte; fonte CJS, contida ou em ciclo com recusa atual. |
++| MS02 | E1, um fixture por caso: estrela simples; `as ns` com fonte qualificada e não qualificada; export explícito de runtime antes e depois da estrela (local, indireto e `as N`); `export type N` que não mascara a estrela; `default` excluído; mesma ligação por dois caminhos sem ambiguidade (inclusive `import` + `export { X }`); ligações diferentes com `AMBIGUOUS_STAR` e sticky; diamante com nome ambíguo na fonte, ambíguo também no reexportador; fonte incompleta transitiva; módulo misto com todos os nomes de estrela U; valor U preservado; binding mutável na fonte; fonte CJS, contida ou em ciclo com recusa atual. |
+ | MS03 | E2: classe nomeada, exportada, default nomeada e default anônima; referência antes da declaração lê U (TDZ); `declare class` e `export declare class` com `UNKNOWN_RUNTIME_DECLARATION`; raiz `ClassDeclaration` mantida; `UNKNOWN_EXPORT` no exportador; `new` e chamada ainda recusados. |
+ | MS04 | Fixture limpo com estrela qualificada dá PROVEN, com dependência K5 da fonte e derivação revalidada. Estrela não qualificada, ambígua ou com fonte incompleta dá UNKNOWN. Módulo com classe nunca dá PROVEN. Nenhuma violação perdida. |
+-| MS05 | Conservação da §3.3 na raiz `228e7918`, tupla a tupla, com etiquetas da cópia provada e denominadores publicados; normal igual a strict; validation true; zero provas na raiz real; redução registrada. |
++| MS05 | Conservação da §3.3 na raiz `228e7918`, tupla a tupla, com etiquetas da cópia provada e denominadores publicados (inclusive a união da regra 3); normal igual a strict; validation true; zero provas na raiz real; redução registrada. |
+ | MS06 | Census e limites iguais; versão do kernel nova; perfil e receitas iguais. |
+ | MS07 | Regressões 0228/0234/0236/0237/0240/0241/0242/0243 preservadas; crítica fresca com zero obrigatórios; 16 gates Node22; consumidor fresco. |
+ | MS08 | Promoção só dos deltas próprios; sem push, deploy ou produção. |

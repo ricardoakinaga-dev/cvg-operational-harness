@@ -1,0 +1,113 @@
+{
+ "kind": "DECLARED_FIXTURE_ERRATUM",
+ "id": "EDP1R-01",
+ "task": "DX100-G02:IMPLEMENT-AND-ADMIT-SDK-DISTRIBUTED-PROFILE-DP-1R",
+ "track": "T1 (errata de fixture antes do source freeze)",
+ "authority": [
+  "inputs/dp1/lead-decision-dv1-dv4.json#/pk07 (NEW_CASE_IN_DP1R_AFTER_DP2)",
+  "mensagem do coordenador de 20/10/2026 (errata T1 da fixture antes do freeze, registrada como delta declarado)"
+ ],
+ "source": {
+  "path": "inputs/spec-dp/cases-dp-1.json",
+  "sha256": "daafcb4e53e06b284e92f94f221bfd1653fff44a697234051ae8d2da3e60829b",
+  "case": "DP-PK07A",
+  "case_input_sha256": "ea4e966d4c3e7f02b7cefdbc5bc3b96f210c7d3739ee27feb3861ae19072b569"
+ },
+ "defect": {
+  "observed_in": "inputs/dp1/pk07a (DP-PK07A, passos 7 e 8)",
+  "stderr_step_7_sha256": "b03e4accec98f0b574d9d877ad55063688f5aa0560ae31931a7d202f80ae00a6",
+  "stderr_step_8_sha256": "7d0096d766f846371b4c8fb5e39b7fdb1c54277d5351c00a7873d6a716eff32f",
+  "text": "Node v24.20.0 executa o stand-in pelo shebang; o package.json mais próximo era o do A4 (\"type\": \"module\"), e no escopo de módulo uma extensão desconhecida (.exe) é recusada antes de qualquer código (ERR_UNKNOWN_FILE_EXTENSION). Sem registro do filho, child.program_followed (sanidade) falhou: INVALID_CAPTURE pela regra 4, defeito de fixture da especificação, não fato do cliente."
+ },
+ "change": {
+  "added_entries": [
+   {
+    "path": "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/aarch64-pc-windows-msvc/codex-responses-api-proxy/package.json",
+    "kind": "json",
+    "value": {
+     "type": "commonjs"
+    }
+   },
+   {
+    "path": "/fixture/pk07/all/node_modules/@openai/codex-responses-api-proxy/vendor/x86_64-pc-windows-msvc/codex-responses-api-proxy/package.json",
+    "kind": "json",
+    "value": {
+     "type": "commonjs"
+    }
+   }
+  ],
+  "changed_entries": [],
+  "removed_entries": [],
+  "placement": "cada package.json entra na mesma árvore /fixture/pk07/all, logo antes do stand-in .exe da sua folha"
+ },
+ "why_not_location_or_extension": "O caminho que o wrapper monta é o que o PK07 observa: vendor/<triple>/codex-responses-api-proxy/<nome>, com .exe em win32 (âncoras das linhas 51-58 do A4). Mudar o local ou a extensão do arquivo executado mudaria o child_executed_path congelado e tiraria o poder de distinguir o braço PK07.B01 (par errado) e o PK07.B03 (layout). A errata muda só a fronteira do escopo de módulo, que o wrapper nunca lê.",
+ "node_rule": "Node v24.20.0, entrada principal: .mjs é ESM, .cjs é CommonJS, .js e sem extensão seguem o \"type\" do package.json mais próximo (sem extensão em escopo module roda como ESM); outra extensão em escopo \"type\": \"module\" lança ERR_UNKNOWN_FILE_EXTENSION, e em escopo commonjs (ou sem \"type\") carrega como CommonJS. O filho sintético não tem import nem require (builtins por process.getBuiltinModule), então roda igual nos dois formatos.",
+ "preserved": {
+  "pk07b_fields_changed": [
+   "id",
+   "sub_lot",
+   "slot",
+   "case_input",
+   "case_input_sha256",
+   "erratum",
+   "replaces_observation_of"
+  ],
+  "everything_else_equal_to": "DP-PK07A",
+  "expected": "igual (child_executed_path com .exe nas duas folhas win32)",
+  "predicates": [
+   "capture.case_input_frozen_bytes",
+   "stage.bound_to_cache",
+   "fixture.tree_exact",
+   "keyless.no_network_no_credential",
+   "service.limits_declared",
+   "wrap.no_leftover_process",
+   "child.program_followed",
+   "wrap.exit_mirror_exact",
+   "wrap.stderr_contains",
+   "child.executed_path_exact",
+   "shim.platform_scoped"
+  ],
+  "arms": [
+   "PK07.B01",
+   "PK07.B02",
+   "PK07.B03"
+  ],
+  "anchors_sha256": [
+   "3d04284bd6102e856b73e6ce83cf62ae215f420e656442043b6e70c8bc835b82"
+  ]
+ },
+ "contrary_still_visible": {
+  "reading": "Os contrários da arm_discrimination congelada continuam visíveis como MISMATCH; os contrários em que o cliente deixa de executar um filho esperado, ou executa um filho não esperado, caem antes em child.program_followed (classe peer_or_capture_sanity da tabela congelada, nunca reclassificada: EDP-01) e dão INVALID_CAPTURE pela regra 4, nunca PASS. Um INVALID_CAPTURE do DP-PK07B se adjudica pelo stderr do passo (ENOENT do spawn do cliente contra ERR_UNKNOWN_FILE_EXTENSION do stand-in) antes de qualquer atribuição.",
+  "mismatch": [
+   "PK07.B01 triple errado em win32: o filho de outra folha roda e registra outro caminho -> child.executed_path_exact (regra 6)",
+   "PK07.B02 plataforma inválida aceita (exit 0, sem o texto Unsupported platform) -> wrap.exit_mirror_exact e wrap.stderr_contains (regra 6)",
+   "PK07.B03 checagem de existência com erro diferente de ENOENT, sem spawn -> wrap.stderr_contains (regra 6)"
+  ],
+  "invalid_capture_rule_4": [
+   "win32 sem .exe: spawn de um caminho inexistente, ENOENT, nenhum filho -> child.program_followed com wrap.exit_mirror_exact e child.executed_path_exact",
+   "PK07.B03 com fallback que executa o filho de outra folha -> child.program_followed com os predicados de cliente"
+  ]
+ },
+ "real_distribution_note": "No pacote publicado a folha win32 contém um PE (codex-responses-api-proxy.exe) que o Node nunca carrega como módulo; o escopo só importa porque o stand-in do harness é um script Node. O package.json declarado é artefato do harness, não do pacote.",
+ "platform_limit": "Os braços win32 do PK07.B01 julgam decisões em JavaScript do wrapper (triple, nome com .exe e spawn sem checagem de existência) sob o shim de plataforma no Linux; para isso não é preciso Windows real, e nenhum braço é marcado como limite de plataforma. Fica fora da observação, e não é reivindicado: a criação de processo do Windows (CreateProcess, resolução de .exe, aspas de argv e sinais do Windows).",
+ "lesson_applied": "DP1-ADM/PK07A: o supervisor e o validador conferem o escopo de módulo de todo filho sintético com extensão fora de \"\", .js, .mjs e .cjs antes de qualquer serviço (stage.module_scope_problems); um caso com problema é bloqueado antes do lançamento, sem consumir vaga.",
+ "outputs": {
+  "cases-dp-1r.json": {
+   "sha256": "84d478fdc91252e4ec9e69830d16dc1f5b29038145d5e5c0de5b5a4b5652434f",
+   "cases": [
+    "DP-PK07B",
+    "DP1R-CTRL01"
+   ]
+  },
+  "DP-PK07B": {
+   "case_input_sha256": "b20365fd86ad0d8a5b50d4db06c032d9ae8350bcc0af369261f644ff3a2e8f3a",
+   "fixture_entries": 13
+  },
+  "DP1R-CTRL01": {
+   "case_input_sha256": "b0234bc95f8ea6d062308d766073488e22af5d487a681379fad9f656a9c1c0bd",
+   "same_bytes_as": "DP1-CTRL01"
+  }
+ },
+ "functional_receipts": 0,
+ "parity_credit": 0
+}
