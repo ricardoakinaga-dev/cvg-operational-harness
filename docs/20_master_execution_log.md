@@ -1,3 +1,10 @@
+# AUD0621-REMEDIATION-20261020 — remediação dos 26 achados da auditoria 0621 — 20–21/10/2026 (Claude Code)
+
+- Frentes e commits de candidata: produto `8cb00604` (F07–F11, F18, F21 produto, F24, F25), F01 `a9861469` (SPEC0176, migração 0029), runtime `92004871` (SPEC0248: F02–F04, F13, F14, F21 núcleo), persistência `0e91b96b` (SPEC0249, sem migração: F05, F06, F17, F19, F20, F26) e API/web `3a4f4b9d` + `b912b348` (SPEC0250: F12, F15, F16, F22, F23). Cada uma com first red na base, mutantes e crítico independente; detalhes na evidência de cada frente.
+- Integração (`/mnt/dados/cvg-work/cvg-aud0621-integration-20261021`): typecheck, lint e prettier verdes; `test:postgres` 325/325 com role mínimo; `rem21-010` (depois de rolar a 0029), `rem21-011`, `verify:phase2`, `verify:phase3`, `test:phase4a`, `phase4a-identity`, `readiness`, `skip:governance` e `docs:check-links` PASS; `rem21-014` 18/18 nos três navegadores.
+- Certify integrado r1: 14/16. Unit e coverage falharam só no teste de arquitetura, por um comentário do lead com o nome do banco dentro do harness neutro; corrigido. Os logs detalhados da r1 se perderam ao restaurar `certification/`; o resumo fica em [certify-r1-summary.log](04_audit/evidence/AUD0621-INTEGRATION-20261021/logs/certify-r1-summary.log). O gate de coverage foi refeito na árvore final ([gates](04_audit/evidence/AUD0621-INTEGRATION-20261021/gates.json)).
+- Requalificação independente: nenhuma sonda do auditor reproduz o defeito; F15/F16 tinham teste vermelho na integração (corrigido); F01 e F21 ficam fechados só localmente; F25 depende da frente PISO-008. [Requalificação](04_audit/evidence/AUD0621-INTEGRATION-20261021/requalification/requalification.md).
+
 # CONT-20261018-D9EF — estado em 20/10/2026, segunda atualização (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

@@ -1,0 +1,123 @@
+{
+  "task": "AUD0621-INTEGRATION-20261021",
+  "parentTask": "AUD0621-REMEDIATION-20261020",
+  "node": "v22.23.2",
+  "postgres": "postgres:16 próprio, cvg-aud0621-integration-pg, 127.0.0.1:56269, removido ao fim",
+  "runs": [
+    {
+      "gate": "typecheck + lint + prettier",
+      "head": "8f92e836 (5 frentes)",
+      "result": "PASS"
+    },
+    {
+      "gate": "test:postgres",
+      "head": "97d436a6",
+      "result": "PASS",
+      "files": 39,
+      "tests": "325/325",
+      "log": "logs/test-postgres.log"
+    },
+    {
+      "gate": "readiness",
+      "result": "PASS",
+      "log": "logs/readiness.log"
+    },
+    {
+      "gate": "skip:governance",
+      "result": "FAIL → PASS",
+      "cause": "11 entradas com sha defasado e 2 arquivos PG novos sem entrada; corrigido em a81a0d03",
+      "log": "logs/skip_governance.log"
+    },
+    {
+      "gate": "docs:check-links",
+      "result": "FAIL → PASS",
+      "cause": "link citado no ledger-delta da 0250; corrigido com o manifesto",
+      "logs": [
+        "logs/docs_check-links.log",
+        "logs/docs-r2.log"
+      ]
+    },
+    {
+      "gate": "test:postgres:proof (rem21-010)",
+      "result": "FAIL → PASS",
+      "cause": "a prova rolava a 0027 sobre a 0026; o restore --clean quebrava nas FKs case_* da 0029; corrigido em a81a0d03",
+      "logs": [
+        "logs/test_postgres_proof.log",
+        "logs/test_postgres_proof-r2.log"
+      ]
+    },
+    {
+      "gate": "test:observability:proof (rem21-011)",
+      "result": "PASS",
+      "log": "logs/test_observability_proof.log"
+    },
+    {
+      "gate": "verify:phase2",
+      "result": "PASS",
+      "log": "logs/verify_phase2.log"
+    },
+    {
+      "gate": "verify:phase3",
+      "result": "PASS",
+      "log": "logs/verify_phase3.log"
+    },
+    {
+      "gate": "test:phase4a",
+      "result": "PASS",
+      "tests": "102/102",
+      "log": "logs/test_phase4a.log"
+    },
+    {
+      "gate": "verify:phase4a:identity",
+      "result": "PASS",
+      "log": "logs/verify_phase4a_identity.log"
+    },
+    {
+      "gate": "build + test:e2e:rem21-014 (browser-proof)",
+      "head": "525d3e6f",
+      "result": "PASS",
+      "tests": "18/18 (chromium, firefox, webkit)",
+      "logs": [
+        "logs/build.log",
+        "logs/rem21-014.log"
+      ]
+    },
+    {
+      "gate": "npm run certify r1",
+      "head": "f42b4ad7",
+      "result": "NO_GO 14/16",
+      "pass": [
+        "format",
+        "typecheck",
+        "lint",
+        "build",
+        "security",
+        "worker_startup",
+        "postgres",
+        "e2e",
+        "evals",
+        "chaos",
+        "load",
+        "restore",
+        "sbom",
+        "licenses"
+      ],
+      "fail": {
+        "unit": "1 de 495 arquivos: tests/architecture/dependency-direction.test.ts, comentário do lead com o nome do banco em packages/harness/src/execution-spine.ts; corrigido em f9fdc600",
+        "coverage": "o mesmo teste; coverage:critical e mutation:guard não chegaram a rodar"
+      },
+      "candidateDrift": "1 arquivo: a correção do comentário foi feita com o certify em andamento",
+      "logsNote": "os logs detalhados da r1 foram sobrescritos quando o lead restaurou certification/ (arquivos rastreados) antes de copiá-los; ficou o resumo do certify",
+      "log": "logs/certify-r1-summary.log"
+    },
+    {
+      "gate": "coverage gate completo (CVG_COVERAGE_PER_FILE=1 test:coverage && coverage:critical && mutation:guard)",
+      "head": "492594da (integração + main 6ff1a648)",
+      "result": "PASS",
+      "files": "496/496",
+      "tests": "6377/6377",
+      "log": "logs/coverage-r2.log.gz"
+    }
+  ],
+  "verdictLocal": "16/16 gates do certify com PASS somando a r1 (12 gates) e o coverage r2 (suíte, cobertura por arquivo, crítico e mutação); a barra do CI no PR é a certificação que conta"
+}

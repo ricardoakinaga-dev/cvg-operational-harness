@@ -28,6 +28,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: corrigir `assistant`/`store`/comandos para manter organização como rascunho até confirmação exata do responsável. Lembretes não podem disparar de tarefa não confirmada; correções invalidam confirmação anterior.
 - Aceite: P01 fechado; rascunho não ativa tarefa, confirmação válida ativa uma vez, duplicata não duplica efeito e correção exige nova confirmação. Preservar condições aprovadas dos comandos/D1–D4 e AP-009–AP-011.
 - Evidência: regressões de confirmação/correção/replay e estados persistidos sintéticos. Encaminha F01.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): rascunho nunca abre tarefa nem lembrete; `ok` confirma só rascunho do próprio autor, numa linha do journal que ativa as pendências; com mais de um rascunho exige `ok nota <código>`; correção exige nova confirmação; journal legado projeta tarefa de nota não confirmada como rascunho (F08). Aberto: preview aceito pelo canal (outbox/recibo), token de revisão com hash, `legacy_review_required` de notas legadas confirmadas.
 
 ### PISO-002 — Preservar fidelidade e identidade do paciente
 
@@ -35,6 +36,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: validar associação dos valores à fonte e paciente, exigir seleção inequívoca em homônimos e impedir IDs não verificados de entrarem na memória confirmada. Substituir seleção ambígua do primeiro `.find` por vínculo explícito suportado no contrato.
 - Aceite: P07/P08/P09 fechados; troca de valores entre pacientes é sinalizada mesmo com os mesmos números; dois nomes iguais não escolhem automaticamente um ID; rascunho não contamina memória confirmada. Mudança de schema de tarefa/ID tem migração e revisão próprias.
 - Evidência: casos negativos/positivos com homônimos, números e memória sintéticos. Encaminha F06/F07.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): homônimos não recebem ID pela ordem da lista; ambiguidade bloqueia a confirmação; memória de pacientes só de notas confirmadas; leito divergente não completa ID só pelo nome (F09). Aberto: evidência por campo (SourceEvidence), que depende de D2.
 
 ### PISO-003 — Recuperar processamento e envio com estado durável
 
@@ -42,6 +44,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: separar recebido/processando/processado/falha recuperável/resposta entregue em `assistant`/`store`; retries limitados por mensagem e disponibilidade da fila. Falha de append não pode rejeitar permanentemente a cadeia global de processamento.
 - Aceite: P02/P03/P11 fechados; falha transitória de transcrição/envio permite recuperação sem perder entrada e sem duplicar ativação. Resultado externo incerto usa idempotency key quando suportada ou estado explícito de revisão; não prometer exactly-once do provedor.
 - Evidência: falhas injetadas, reinício, replay, fila recuperada e efeitos por ID. Encaminha F02/F08.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): falha transitória de download, Whisper ou organização deixa a mensagem pendente com tentativa e próximo horário persistidos (30 s, 2 min, 10 min, 30 min), sobrevive a restart e termina em nota bruta ou revisão humana; membro revogado vira revisão (F07, F10). Desvio deliberado da SPEC0179 §6, mais restrito: cinco tentativas por mensagem, somando os estágios, porque o contador por estágio permitia laço quando a falha alternava de estágio. Aberto: outbox durável de respostas e recibos, transcrição persistida antes da organização, envelope inline do Evolution.
 
 ### PISO-004 — Recuperar journal truncado sem perder histórico válido
 
@@ -49,6 +52,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: especificar durabilidade e recuperação JSONL/media em `store`, incluindo escrita, sync, prefixo válido, registro incompleto final e relação entre evento/arquivo. Preservar D4 e cópia original antes de qualquer migração.
 - Aceite: P04 fechado; cauda incompleta pode ser isolada com evidência e prefixo recuperado; corrupção no meio exige diagnóstico sem descarte silencioso. Reconstrução mantém tarefas/notas/confirmação/pausa. Teste de queda de processo não é prova de queda elétrica física.
 - Evidência: fixtures de truncamento/corrupção, recuperação/restart e hashes de originais. Encaminha F03 e pré-requisito de restore.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): última linha sem LF isolada com cópia verificada, segmento selado sem truncar e sucessor em `journal.json`; linha inválida no meio, evento desconhecido ou prefixo divergente falham fechado; commits com fsync e transação numa linha (F18). Aberto: formato V2 com seq/hash, lock de escritor único, protocolo de mídia com sidecar, migração.
 
 ### PISO-005 — Serializar disparos de lembretes
 
@@ -56,6 +60,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: tornar tick/reserva por tarefa-janelamento seguro contra chamadas simultâneas, persistindo tentativa/resultado com política para envio incerto. Evitar race read→send→append.
 - Aceite: P05 fechado; dois ticks concorrentes não iniciam duas entregas da mesma janela. Preservar quatro repetições/intervalo aprovado, ACK e snooze; restart não zera contagem. Falha externa não gera loop ilimitado ou declaração enganosa de exactly-once.
 - Evidência: relógio sintético, concorrência, queda/replay e efeitos por tarefa/janela. Encaminha F04.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): um tick por vez, reserva durável antes do envio, revalidação de pausa, desligamento, journal, tarefa, nota e destinatário antes de cada envio; envio incerto bloqueia a janela até `adiar` ou `feito` (F10, F11). Aberto: recibo de entrega e AP-011, ferramenta humana de resolução de incerteza, tick de 1 a 5 s.
 
 ### PISO-006 — Fazer pausa e saúde responderem a falhas de transporte
 
@@ -63,6 +68,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: limitar request/recepção de mídia/envio em `whatsapp`/`transcriber`; abortar recursos; tornar pausa administrável fora da fila bloqueada e revalidar pausa antes de cada efeito. Definir readiness, progresso de fila e shutdown limitado.
 - Aceite: P06/P10 fechados; servidor pendurado não bloqueia pausa indefinidamente; pausa reconhecida impede o próximo efeito ainda não iniciado de tick em andamento. Health/readiness detectam ausência de progresso, sem reportar 200 saudável apenas por processo vivo. Entrada pendente não é apagada ao pausar.
 - Evidência: servidor sintético lento/travado, mídia excessiva, pausa concorrente, restart e shutdown. Encaminha F05/F09; adapter de modelo segue HISO-011.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): leituras com teto por chunk e prazo até o fim do corpo em WhatsApp e Whisper, base64 validado antes de decodificar, prazo de job, fila limitada com 503 `queue_full`, pausa do gestor fora da fila, `/health/live` e `/health/ready` com 503 por motivo, stop limitado (F21 produto). Aberto: limites do transporte de modelo e dos adapters compartilhados (HISO-011) e oracle de cancelamento de modelo, sem aplicação enquanto NO_MODEL valer.
 
 ### PISO-007 — Comprovar hardening do artefato do consumidor
 
@@ -70,6 +76,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - WHAT/WHERE/HOW: implementar candidato sem shell, usuário não root, filesystem read-only com volumes explícitos e filtro efetivo de egress na infraestrutura. Ajustar deploy/env e rotas autorizadas de WhatsApp/Whisper/modelo.
 - Aceite: controles comprovados na imagem e rede reais; tentativa de destino não autorizado bloqueada pela infraestrutura, não apenas pela allowlist da aplicação. Segredos e dados fora do artefato; sem operação HIS/prontuário/consulta automática. Não usar teste de bundle como prova de isolamento de container.
 - Evidência: build/image inspection e negativos de runtime/rede em ambiente sintético próprio. Encaminha F10 e barra 0368.
+- Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): runtime `gcr.io/distroless/cc-debian12` fixado com Node 22.23.2, sem shell, gerenciador ou `node_modules`, usuário 10001, rootfs só leitura, `/data` 0700; compose com limites e rede interna sem porta publicada; exemplo nft default-deny; `image-contract.mjs` e `infra-egress-proof.mjs` com prova local PASS e controles FAIL (F25). Aberto: filtro aplicado no host de produção com contadores, build pela receita completa no CI, SBOM do artefato.
 
 ### PISO-008 — Comprovar backup, restore e recebimento de alerta
 
