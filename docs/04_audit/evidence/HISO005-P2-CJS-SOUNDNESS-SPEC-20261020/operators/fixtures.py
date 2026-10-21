@@ -1,0 +1,177 @@
+"""Fixture catalog for SPEC0247 (CJS export value). Every fixture is a CJS root (package.json '{}'), start entry.js.
+origins: lexical origins (file, exact text, reason) that the run must prove (K7) or leave UNKNOWN.
+expect: v6 status required by the proposed contract; group: A false PROVEN in v5, B already UNKNOWN in v5,
+C sound PROVEN kept, D sound PROVEN lost (declared cost), V violation conservation.
+usage: fixtures.py  (writes fixtures.json)"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import *
+
+G = 'function g(x) { return import(x) }'
+ENTRY = "const m = require('./m.js')\nmodule.exports = 1\n"
+O = [{'file': 'm.js', 'text': 'import(x)', 'reason': 'NON_LITERAL_MODULE_REFERENCE'}]
+OE = [{'file': 'entry.js', 'text': 'import(x)', 'reason': 'NON_LITERAL_MODULE_REFERENCE'}]
+
+
+def fx(id, group, m, expect, why, entry=ENTRY, origins=O, extra=None):
+    files = {'package.json': '{}', 'entry.js': entry}
+    if m is not None:
+        files['m.js'] = m
+    files.update(extra or {})
+    return {'id': id, 'group': group, 'files': files, 'origins': origins, 'expectV6': expect, 'why': why}
+
+
+F = [
+    # A: false PROVEN in v5 (g never evaluated); v6 must not prove
+    fx('F3', 'A', 'module.exports = function f() { module.exports = ' + G + ' }\n', 'UNKNOWN',
+       'achado da recon: escrita reconhecida em corpo de função (chamado por checkExport)'),
+    fx('S10', 'A', 'if ({}) module.exports = ' + G + '\nelse module.exports = 1', 'UNKNOWN',
+       'achado da recon: ramos de if com condição não primitiva no topo; o último ramo vence'),
+    fx('S10-no-else', 'A', 'module.exports = ' + G + '\nif ({}) module.exports = 1\n', 'UNKNOWN',
+       'if sem else: o valor anterior ao if some do valor final'),
+    fx('S10-nested', 'A', 'if ({}) {\n  if ({}) module.exports = ' + G + '\n  else module.exports = 2\n} else module.exports = 1\n', 'UNKNOWN',
+       'if aninhado no topo'),
+    fx('F3-arrow', 'A', 'module.exports = () => {\n  module.exports = ' + G + '\n}\n', 'UNKNOWN',
+       'escrita em arrow com corpo de bloco'),
+    fx('F3-declaration', 'A', 'function f() {\n  module.exports = ' + G + '\n}\nmodule.exports = f\n', 'UNKNOWN',
+       'escrita em declaração de função exportada'),
+    fx('F3-returned', 'A', 'module.exports = function f() {\n  return function h() {\n    module.exports = ' + G + '\n  }\n}\n', 'UNKNOWN',
+       'escrita em função devolvida por função exportada'),
+    fx('INIT-conditional', 'A', "'use strict'\n", 'UNKNOWN',
+       'módulo CJS sem escrita: o valor inicial é VOID (falsy decidível), em runtime é o objeto exports (truthy)',
+       entry="const m = require('./m.js')\nmodule.exports = m ? " + G + ' : 1\n', origins=OE),
+    fx('INIT-not', 'A', "'use strict'\n", 'UNKNOWN', 'idem, com negação',
+       entry="const m = require('./m.js')\nmodule.exports = !m ? 1 : " + G + '\n', origins=OE),
+    fx('INIT-if', 'A', "'use strict'\n", 'UNKNOWN', 'idem, com if',
+       entry="const m = require('./m.js')\nif (m) module.exports = " + G + '\nelse module.exports = 1\n', origins=OE),
+    fx('INIT-equality', 'A', "'use strict'\n", 'UNKNOWN', 'idem, com igualdade estrita a undefined',
+       entry="const m = require('./m.js')\nmodule.exports = m === undefined ? 1 : " + G + '\n', origins=OE),
+    # B: already UNKNOWN in v5 (existing roots); must stay UNKNOWN
+    fx('E-function', 'B', 'module.exports = function f() {\n  exports.y = ' + G + '\n}\n', 'UNKNOWN',
+       'exports.y = … em corpo de função: UNKNOWN_MUTATION quando chamado'),
+    fx('E-top', 'B', 'exports.y = ' + G + '\n', 'UNKNOWN', 'exports.y = … no topo: UNKNOWN_MUTATION'),
+    fx('E-rebind', 'B', 'exports = ' + G + '\n', 'UNKNOWN', 'exports = …: UNKNOWN_MUTATION'),
+    fx('MX-property', 'B', 'module.exports.y = ' + G + '\n', 'UNKNOWN', 'module.exports.y = …: UNKNOWN_MUTATION'),
+    fx('MX-element', 'B', "module['exports'] = " + G + '\n', 'UNKNOWN', "module['exports'] = …: UNKNOWN_MUTATION"),
+    fx('MX-nested-expression', 'B', 'const a = (module.exports = ' + G + ')\n', 'UNKNOWN',
+       'atribuição como subexpressão: UNKNOWN_MUTATION'),
+    fx('THIS-top', 'B', 'this.y = ' + G + '\n', 'UNKNOWN', 'this no topo é module.exports: UNKNOWN_MUTATION'),
+    fx('DP-top', 'B', "Object.defineProperty(module, 'exports', { value: " + G + ' })\n', 'UNKNOWN',
+       'Object.defineProperty(module, ...): UNKNOWN_PROPERTY e UNKNOWN_BINDING module'),
+    fx('DP-function', 'B', "module.exports = function f() {\n  Object.defineProperty(module, 'exports', { value: " + G + ' })\n}\n', 'UNKNOWN',
+       'idem em corpo de função chamado por checkExport'),
+    fx('RD-before', 'B', 'const before = module.exports\nmodule.exports = 1\n', 'UNKNOWN',
+       'leitura de module.exports antes da reescrita: UNKNOWN_BINDING module', origins=[]),
+    fx('RD-function', 'B', 'module.exports = function f() { return module.exports }\n', 'UNKNOWN',
+       'leitura em corpo de função', origins=[]),
+    fx('TERNARY', 'B', 'module.exports = {} ? ' + G + ' : 1\n', 'UNKNOWN', 'condicional: união já existente'),
+    fx('INIT-CALL', 'B', 'function init() {\n  module.exports = ' + G + '\n}\ninit()\n', 'UNKNOWN',
+       'escrita em função chamada no topo: v5 faz strong update e checa g'),
+    # C: sound PROVEN in v5, kept in v6
+    fx('P-sequence', 'C', 'module.exports = ' + G + '\nmodule.exports = 1\n', 'PROVEN',
+       'duas escritas sequenciais no topo: g nunca é observável'),
+    fx('P-block', 'C', '{\n  module.exports = 1\n}\n', 'PROVEN', 'bloco no topo', origins=[]),
+    fx('P-decided', 'C', 'if (true) module.exports = 1\nelse module.exports = ' + G + '\n', 'PROVEN',
+       'condição K1 decide o ramo; o else é morto'),
+    fx('P-join-benign', 'C', 'if ({}) module.exports = 1\nelse module.exports = 2\n', 'PROVEN',
+       'junção de dois primitivos', origins=[]),
+    fx('P-dead-function', 'D', 'function never() {\n  module.exports = ' + G + '\n}\nmodule.exports = 1\n', 'UNKNOWN',
+       'função local nunca chamada: código morto; a classificação sintática conta a escrita (custo)'),
+    fx('P-function-export', 'C', 'module.exports = function f() { return 1 }\n', 'PROVEN', 'exporta função sem escrita', origins=[]),
+    fx('P-twice', 'C', 'module.exports = 1\n', 'PROVEN', 'dois require do mesmo módulo', origins=[],
+       entry="const a = require('./m.js')\nconst b = require('./m.js')\nmodule.exports = 1\n"),
+    # D: sound PROVEN in v5, UNKNOWN in v6 (declared cost)
+    fx('C-function-benign', 'D', 'module.exports = function f() { module.exports = 2 }\n', 'UNKNOWN',
+       'escrita benigna em corpo de função: o kernel não delimita quando ocorre', origins=[]),
+    fx('C-init-call-benign', 'D', 'function init() { module.exports = 1 }\ninit()\n', 'UNKNOWN',
+       'escrita benigna em função chamada no topo', origins=[]),
+    fx('C-side-effect-module', 'C', "'use strict'\n", 'PROVEN',
+       'módulo CJS sem escrita, require sem uso: custo só na variante U do valor inicial', origins=[],
+       entry="require('./m.js')\nmodule.exports = 1\n"),
+    fx('D-shadowed-parameter', 'D', 'function f(module) { module.exports = 1 }\nmodule.exports = 2\n', 'UNKNOWN',
+       'parâmetro chamado module: a classificação ignora sombra (custo conservador)', origins=[]),
+    # B2: other handles of the wrapper scope (already UNKNOWN in v5 when evaluated)
+    fx('H-try', 'B', 'try {\n  module.exports = ' + G + '\n} catch (e) {}\n', 'UNKNOWN',
+       'escrita dentro de instrução recusada (try): REFUSED_CONTEXT_WRITE'),
+    fx('H-arguments', 'B', 'arguments[2].exports = ' + G + '\n', 'UNKNOWN', 'arguments no topo alcança module'),
+    fx('H-require-cache', 'B', 'require.cache[__filename].exports = ' + G + '\n', 'UNKNOWN', 'require.cache alcança o próprio módulo'),
+    fx('H-eval', 'B', "eval('module.exports = 1')\nmodule.exports = 2\n", 'UNKNOWN', 'eval direto alcança o escopo do wrapper', origins=[]),
+    fx('H-escaped-callback', 'B', 'setTimeout(function () {\n  module.exports = ' + G + '\n}, 0)\nmodule.exports = 1\n', 'UNKNOWN',
+       'callback entregue a chamada opaca: nunca avaliado'),
+    fx('H-top-return', 'B', 'if ({}) return\nmodule.exports = 0\n', 'UNKNOWN',
+       'return no topo: o valor pode ficar o objeto inicial; TOP_LEVEL_RETURN',
+       entry="const m = require('./m.js')\nmodule.exports = m ? " + G + ' : 1\n', origins=OE),
+    fx('J-two-functions', 'A', 'if ({}) module.exports = ' + G + '\nelse module.exports = function h() { return 1 }\n', 'UNKNOWN',
+       'junção de duas funções: as duas passam por checkExport'),
+    fx('ESM-unaffected', 'B', 'module.exports = 1\n', 'UNKNOWN', 'arquivo ESM (type module): a forma reconhecida só vale em modo require; a atribuição é UNKNOWN_MUTATION; a SPEC não se aplica', origins=[],
+       entry="import './m.js'\nexport const v = 1\n", extra={'package.json': '{"type":"module"}'}),
+    # Critic R1 (review-r1/review.json): X01–X20 and Y01–Y05, reproduced as fixtures of the catalog.
+    fx('X04-computed-arguments', 'B', 'module.exports = () => ({ [arguments[2].exports = 1]() { return 1 } })\n', 'UNKNOWN',
+       'arguments em nome computado de método, dentro de arrow do topo: é o do wrapper (TOP_LEVEL_ARGUMENTS)', origins=[]),
+    fx('X05-computed-this', 'B', 'module.exports = () => ({ [this.k = 1]() { return 1 } })\n', 'UNKNOWN',
+       'this em nome computado de método, dentro de arrow do topo: é o do wrapper (TOP_LEVEL_THIS)', origins=[]),
+    fx('X06-two-opaque-equal', 'A', None, 'UNKNOWN', 'dois módulos sem escrita: v5 compara VOID === VOID; em runtime são objetos diferentes',
+       entry='const a = require("./a.js")\nconst b = require("./b.js")\nmodule.exports = a === b ? 1 : ' + G + '\n', origins=OE,
+       extra={'a.js': '"use strict"\n', 'b.js': '"use strict"\n'}),
+    fx('X07-join-then-sequence', 'C', 'if ({}) module.exports = ' + G + '\nmodule.exports = 1\n', 'PROVEN', 'junção seguida de escrita total'),
+    fx('X08-join-compare', 'D', 'if ({}) module.exports = 1\n', 'UNKNOWN', 'C1/C2: união com o objeto inicial não decide m === 1 (custo)',
+       entry='const m = require("./m.js")\nmodule.exports = m === 1 ? 1 : ' + G + '\n', origins=OE),
+    fx('X09-opaque-not', 'D', '"use strict"\n', 'UNKNOWN', 'C1: !m sobre o objeto inicial não decide (custo)',
+       entry='const m = require("./m.js")\nmodule.exports = !m ? 1 : 2\n', origins=[]),
+    fx('X10-escaped-identifier', 'A', 'module.exports = function f() { \\u006dodule.exports = ' + G + ' }\n', 'UNKNOWN',
+       'module escrito com escape unicode, em corpo de função'),
+    fx('X11-ts-cjs-function-write', 'A', None, 'UNKNOWN', '.ts em modo require com escrita em corpo de função',
+       entry='const m = require("./m.ts")\nmodule.exports = 1\n',
+       origins=[{'file': 'm.ts', 'text': 'import(x)', 'reason': 'NON_LITERAL_MODULE_REFERENCE'}],
+       extra={'m.ts': 'module.exports = function f(): void { module.exports = function g(x: string) { return import(x) } }\n'}),
+    fx('X12-self-require', 'B', 'module.exports = function f() { return require("./m.js") }\n', 'UNKNOWN', 'auto-require em função exportada: UNKNOWN_CYCLE', origins=[]),
+    fx('X13-reexport-opaque', 'C', '"use strict"\n', 'PROVEN', 'reexporta o objeto inicial de outro módulo', origins=[],
+       entry='module.exports = require("./m.js")\n'),
+    fx('X14-importer-mutates', 'B', '"use strict"\n', 'UNKNOWN', 'importador muta o valor: raiz só no importador (P-REINO)',
+       entry='const m = require("./m.js")\nm.y = ' + G + '\nmodule.exports = 1\n', origins=OE),
+    fx('X15-require-cache-other', 'B', 'module.exports = 1\n', 'UNKNOWN', 'outro módulo reescreve pelo require.cache: raiz no outro (P-REINO)',
+       entry='const m = require("./m.js")\nrequire.cache[require.resolve("./m.js")].exports = ' + G + '\nmodule.exports = 1\n', origins=OE),
+    fx('X16-cycle', 'B', None, 'UNKNOWN', 'ciclo entre dois módulos CJS',
+       entry='require("./a.js")\nmodule.exports = 1\n', origins=[{'file': 'a.js', 'text': 'import(x)', 'reason': 'NON_LITERAL_MODULE_REFERENCE'}],
+       extra={'a.js': 'const b = require("./b.js")\nmodule.exports = ' + G + '\n', 'b.js': 'const a = require("./a.js")\nmodule.exports = a ? 1 : 2\n'}),
+    fx('X17-property-positions', 'C', 'const o = { exports: 1, module: 2, require: 3 }\nconst v = o.exports\nmodule.exports = v\n', 'PROVEN',
+       'nomes em posição de propriedade não contam', origins=[]),
+    fx('X18-nested-decided-inner', 'A', 'if ({}) { if (true) module.exports = ' + G + ' } else module.exports = 1\n', 'UNKNOWN',
+       'if interno decidido dentro de ramo não decidido'),
+    fx('X19-union-closure', 'B', 'const v = {} ? ' + G + ' : 1\nmodule.exports = function f() { return v }\n', 'UNKNOWN', 'união capturada por função exportada'),
+    fx('X20-module-parameter', 'D', 'function h(module) { return 1 }\nmodule.exports = 2\n', 'UNKNOWN', 'parâmetro chamado module em função morta (custo da sombra ignorada)', origins=[]),
+    fx('Y01-else-if', 'A', 'if ({}) module.exports = 1\nelse if ({}) module.exports = ' + G + '\nelse module.exports = 2\n', 'UNKNOWN', 'else if: ramo do meio'),
+    fx('Y02-join-then-full-replace', 'C', 'if ({}) module.exports = ' + G + '\nif ({}) module.exports = 1\nelse module.exports = 2\n', 'PROVEN',
+       'junção seguida de if que escreve nos dois ramos'),
+    fx('Y03-join-call', 'D', 'if ({}) module.exports = function f() { return 1 }\n', 'UNKNOWN', 'C2: chamada de união com o objeto inicial (custo)',
+       entry='const m = require("./m.js")\nmodule.exports = m()\n', origins=[]),
+    fx('Y04-same-module-equal', 'D', '"use strict"\n', 'UNKNOWN', 'C1: a === b do mesmo módulo não decide (custo)',
+       entry='const a = require("./m.js")\nconst b = require("./m.js")\nmodule.exports = a === b ? 1 : ' + G + '\n', origins=OE),
+    fx('Y05-cts', 'A', None, 'UNKNOWN', '.cts com ramos de if no topo',
+       entry='const m = require("./m.cts")\nmodule.exports = 1\n',
+       origins=[{'file': 'm.cts', 'text': 'import(x)', 'reason': 'NON_LITERAL_MODULE_REFERENCE'}],
+       extra={'m.cts': 'if ({}) module.exports = function g(x: string) { return import(x) }\nelse module.exports = 1\n'}),
+    fx('X01-true-violation-call', 'V', 'module.exports = function g(s) { return require(s) }\nfunction never() { module.exports = 1 }\n', 'UNKNOWN',
+       'violação verdadeira por chamada do valor; C0 dá U ao importador (custo declarado)', origins=[],
+       entry='const m = require("./m.js")\nm("./products/x.js")\nmodule.exports = 1\n', extra={'products/x.js': 'module.exports = 1\n'}),
+    fx('X02-true-violation-specifier', 'V', 'module.exports = "./products/x.js"\nfunction never() { module.exports = 1 }\n', 'UNKNOWN',
+       'violação verdadeira por especificador vindo do valor; C0 dá U ao importador (custo declarado)', origins=[],
+       entry='const m = require("./m.js")\nrequire(m)\nmodule.exports = 1\n', extra={'products/x.js': 'module.exports = 1\n'}),
+    fx('X03-false-violation-void', 'V', '"use strict"\n', 'UNKNOWN',
+       'v5 monta "./products/undefined.js" sobre VOID; em runtime é "[object Object]": violação falsa que some (C1)', origins=[],
+       entry='const m = require("./m.js")\nconst k = "./products/" + m + ".js"\nrequire(k)\nmodule.exports = 1\n', extra={'products/undefined.js': 'module.exports = 1\n'}),
+    # V: violation conservation
+    fx('V-S10-last-branch', 'V', 'if ({}) module.exports = 1\nelse module.exports = function g(s) { return require(s) }\n', 'VIOLATION_OR_UNKNOWN',
+       'v5 acha a violação chamando o último ramo; a junção é união e a chamada de união é UNKNOWN_CALL', origins=[],
+       entry="const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n", extra={'products/x.js': 'module.exports = 1\n'}),
+    fx('V-F3-late-require', 'V', 'module.exports = function f() { module.exports = function g(s) { return require(s) } }\n', 'VIOLATION_OR_UNKNOWN',
+       'v5 acha a violação chamando o valor tardio obtido por require repetido; na v6 o valor tardio é U', origins=[],
+       entry="const a = require('./m.js')\nconst b = require('./m.js')\nb('./products/x.js')\nmodule.exports = 1\n",
+       extra={'products/x.js': 'module.exports = 1\n'}),
+    fx('V-literal', 'V', "if ({}) module.exports = function g() { return require('./products/x.js') }\nelse module.exports = 1\n", 'VIOLATION',
+       'especificador literal: violação achada na aquisição em v5 e v6', origins=[],
+       extra={'products/x.js': 'module.exports = 1\n'}),
+]
+save('fixtures.json', {'task': TASK, 'generatedAt': now(), 'count': len(F), 'fixtures': F})
+print(len(F))

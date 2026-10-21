@@ -1,0 +1,72 @@
+HISO005-P2-CJS-SOUNDNESS-SPEC-20261020 — proposta T1 da SPEC0247 (Claude Code, lead CONT-20261018-D9EF)
+
+Base: main remota 6c9fc651, engine v5 c724567f. Raiz avaliada 228e7918, reconstituída por outra unidade e conferida
+aqui nos 1.410 sha256 (antes, durante e depois). Variantes só em cópias privadas. Nada aqui é promovível.
+
+1. ONDE O KERNEL ERRA (v5, scripts/boundary-semantic-engine.mjs)
+   - 1527–1541: `module.exports = e` é sempre substituição, no topo, em ramo de if e em corpo de função
+     (o mesmo block avalia o corpo em call, 896–898).
+   - 1562–1569: if não decidido roda os dois ramos em sequência; vence o else (sem else, o then apaga o anterior).
+   - 1723–1728 com 1340–1351 e 1641–1646: checkExport roda uma vez; escrita feita depois, em função chamada pelo
+     próprio checkExport ou por importador, troca o valor sem nova verificação, e o cache o devolve.
+   - 1716 com 355: valor inicial VOID (undefined). Em runtime é o objeto exports, truthy. if, ?:, !, === e +
+     decidem errado sobre ele. Achado novo (família INIT), além de F3 e S10.
+   - Formas que a v5 já recusa com raiz quando avaliadas: exports.x, module.exports.x, this.x (1080–1082,
+     UNKNOWN_MUTATION); leitura de module/exports, inclusive module.exports antes de reescrito (961,
+     UNKNOWN_BINDING); Object.defineProperty(module, 'exports', …) (790/871/961); laço, try, switch (1634–1635).
+     Nesses casos o valor fica errado, mas há raiz no próprio módulo.
+
+2. CORREÇÃO PROPOSTA (SPEC0247 r3), só para módulo CJS
+   - C0: classificação sintática das alças do wrapper (module, exports, require fora de chamada, eval, this e
+     arguments do wrapper por escopo, return no topo, escrita em função ou em contexto recusado). Com alça não
+     delimitada: raiz UNKNOWN_CJS_EXPORTS (categoria fechada) no módulo e valor U para todo importador.
+   - C1: valor inicial = objeto exports opaco por módulo (não decide nada; checkExport não emite tupla).
+   - C2: escrita delimitada substitui; depois de if não decidido, união dos ramos.
+   - C3: checkExport continua sobre o valor rastreado (cobertura igual à da v5).
+   - Sem premissa nova e sem prova nova. Conservação por causa (§3.6), no molde da SPEC0244 §3.3.
+
+3. EFEITO
+   Fixtures (71, inclusive os 25 do crítico R1):
+   | grupo | v5 | proposta |
+   | A PROVEN falso (18) | PROVEN | UNKNOWN (18/18 fechados, inclusive F3 e S10) |
+   | B UNKNOWN com raiz (27) | UNKNOWN | UNKNOWN, tuplas da v5 mantidas |
+   | C PROVEN correto (11) | PROVEN | PROVEN |
+   | D PROVEN correto, custo (9) | PROVEN | UNKNOWN |
+   | V violação (6) | VIOLATION | 1 mantida, 3 falsas removidas, 2 verdadeiras viram UNKNOWN |
+   Raiz real: zero diferença. 1.341 módulos (1.277 ESM, 64 CJS = .ts/.tsx de primeira parte com sintaxe ESM);
+   nenhum CJS tem escrita, alça ou junção; nenhum instalado é carregado em modo require. v5 12.283 diagnósticos;
+   proposta igual em tuplas e payload (fora telemetria e literal de versão), normal = strict, sobre a v5 e sobre
+   a base v6 (v5 + 0245 A, 11.723). Contextos 229/256.
+   Alternativas medidas nos mesmos 71: E-U (+64 UNKNOWN_EXPORT na raiz), E-opaco, S, R (só raiz) e T (proposta).
+
+4. CRÍTICO (novo, não-fork, tipo Plan, só leitura; fixtures em memória)
+   - R1: REVISE (R1-01 P1 conservação estreita; R1-02 custo mal descrito e alternativa R; R1-03 tabela; R1-04
+     this/arguments em nome computado). Nenhum PROVEN falso. Reparo único → r2 (variante t3, 71 fixtures,
+     remedição na mesma época).
+   - R2: REVISE com 2 P2 só de texto (lista da regra 2 sem o U da C0; igualdade de payload sem o literal de
+     versão) e 6 P3. R1-02/03/04 resolvidos. Nenhum PROVEN falso nem prova nova.
+   - r3: os 2 P2 e os 6 P3 aplicados DEPOIS do orçamento, só no texto, sem terceira rodada
+     (spec0247-r2-to-r3.diff.txt, r2-corrections.json).
+
+5. SPEC FINAL
+   materialized/0247_b6_cjs_export_soundness.md.txt, sha256 082ad2f4985bb2e663b3f8882fe3902f6b00bcb352a45ab2f5122f94169f037f
+   (npx prettier --stdin-filepath, idempotente; 23 links resolvem de docs/02_spec; alvo livre na main remota e
+   na árvore).
+
+6. PERGUNTA T3 (decision-packet.json)
+   Aprova o BUILD local da SPEC0247 (SHA 082ad2f4…), que impede o kernel B6 de dar prova falsa quando
+   module.exports é reescrito em função, em ramo de if ou nunca é escrito, sem mudar nenhuma tupla na raiz real
+   e, nos fixtures, fechando 18 provas falsas e 3 violações falsas ao custo de 9 provas corretas e 2 violações
+   verdadeiras virarem UNKNOWN?
+
+7. INCIDENTES E RECURSOS
+   - Um teste manual de npx sem npm_config_update_notifier=false fez o npm consultar registry.npmjs.org/npm
+     (incidents.json). Depois disso, toda execução de npx foi registrada sem 'http fetch' (npx-runs.json).
+   - A unidade BUILD0245 reconstruiu dist/ na raiz avaliada durante uma medição strict: descartada
+     (real-m6t2-summary-rejected-attempt1.json); medições seguintes guardadas (guarded-runs.json), comparação
+     só na mesma época. Três tentativas de m5c falharam na hora por erro meu (symlink no caminho do checker) e
+     foram repetidas com o diretório real.
+   - X17 deu UNKNOWN_TOOLCHAIN_RUNTIME só na v5 numa execução (ambiente); repetido nas seis engines (reruns).
+   - O crítico R1 começou um lote com load 14,74 (registrado por ele).
+   - Sem PG, porta própria, commit, push, branch, ledger, coordenação, catálogo ou docs/02_spec. Worktree PR9 e
+     raiz avaliada sem mudança (git status vazio; 1.410/1.410). Runtime liberado com recibo.

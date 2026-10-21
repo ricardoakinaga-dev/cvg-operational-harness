@@ -1,0 +1,310 @@
+diff --git a/scripts/boundary-semantic-engine.mjs b/scripts/boundary-semantic-engine.mjs
+index f6c859330..c4c75b1d6 100644
+--- a/scripts/boundary-semantic-engine.mjs
++++ b/scripts/boundary-semantic-engine.mjs
+@@ -24,7 +24,7 @@ import {
+ // reimplemented. Its module hash is part of the profile (worker and parent).
+ import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
+ 
+-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v5-esm-module-shape'
++export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v6-tsx-parse'
+ export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
+ 
+ const SELF = fileURLToPath(import.meta.url)
+@@ -659,7 +659,16 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
+       source,
+       ts.ScriptTarget.Latest,
+       true,
+-      /\.[cm]?tsx?$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS
++      // SPEC0245 T1: the ScriptKind follows the extension, as TypeScript's own
++      // default. JSX forms then reach the expression fallback and are refused
++      // (T2); .tsx/.jsx keep UNKNOWN_FORMAT as a non-runtime format.
++      /\.tsx$/.test(file)
++        ? ts.ScriptKind.TSX
++        : /\.jsx$/.test(file)
++          ? ts.ScriptKind.JSX
++          : /\.[cm]?ts$/.test(file)
++            ? ts.ScriptKind.TS
++            : ts.ScriptKind.JS
+     )
+     astFiles.set(file, sf)
+     if (sf.parseDiagnostics.length) unknown(file, 'UNKNOWN_PARSE')
+diff --git a/tests/b6-0236-boundary-integration.test.js b/tests/b6-0236-boundary-integration.test.js
+index d21069a7f..6de5c7cfb 100644
+--- a/tests/b6-0236-boundary-integration.test.js
++++ b/tests/b6-0236-boundary-integration.test.js
+@@ -352,7 +352,7 @@ describe('SPEC0236 real checker/CLI integration', () => {
+     expect(after.graph.installed).toHaveLength(1)
+     expect(after.graph.installed[0]).toMatchObject({
+       verified: true,
+-      source: 'semantic-kernel-v5-esm-module-shape',
++      source: 'semantic-kernel-v6-tsx-parse',
+       contentIdentity: { status: 'MATCH' }
+     })
+     expect(after.report.resolvedDiagnostics).toHaveLength(1)
+diff --git a/tests/b6-0237-runtime-resolution.test.js b/tests/b6-0237-runtime-resolution.test.js
+index a116ed666..e25e867de 100644
+--- a/tests/b6-0237-runtime-resolution.test.js
++++ b/tests/b6-0237-runtime-resolution.test.js
+@@ -171,7 +171,7 @@ function proven(input) {
+   expect(out.status, JSON.stringify(out.unknowns)).toBe('PROVEN')
+   expect(out.validation.valid).toBe(true)
+   expect(out.proofs.length).toBeGreaterThan(0)
+-  expect(out.kernelVersion).toBe('semantic-kernel-v5-esm-module-shape')
++  expect(out.kernelVersion).toBe('semantic-kernel-v6-tsx-parse')
+   return out
+ }
+ function refused(input) {
+@@ -742,7 +742,7 @@ describe('BUILD0237 actual CLI: compatibility, origins and strict determinism',
+     const normal = f.run([...f.flags, '--semantic'])
+     const strict = f.run([...f.flags, '--semantic', '--strict'])
+     expect(normal.body.semanticBoundary.kernelVersion).toBe(
+-      'semantic-kernel-v5-esm-module-shape'
++      'semantic-kernel-v6-tsx-parse'
+     )
+     delete normal.body.semanticTelemetry
+     delete strict.body.semanticTelemetry
+diff --git a/tests/b6-0240-exact-metadata.test.js b/tests/b6-0240-exact-metadata.test.js
+index 5beea08a1..40dace9b8 100644
+--- a/tests/b6-0240-exact-metadata.test.js
++++ b/tests/b6-0240-exact-metadata.test.js
+@@ -25,7 +25,7 @@ const ENGINE = path.resolve(
+ )
+ const PARENT = ownedRunParent('b6-0240-metadata')
+ const PROFILE = 'node22-linux-exact-metadata-v1'
+-const KERNEL = 'semantic-kernel-v5-esm-module-shape'
++const KERNEL = 'semantic-kernel-v6-tsx-parse'
+ const roots = [],
+   sessions = []
+ const env = {
+diff --git a/tests/b6-0241-integral-body.test.js b/tests/b6-0241-integral-body.test.js
+index 1b30d5d1c..8b1011630 100644
+--- a/tests/b6-0241-integral-body.test.js
++++ b/tests/b6-0241-integral-body.test.js
+@@ -31,7 +31,7 @@ const PARSER = path.resolve(
+   '../node_modules/typescript/lib/typescript.js'
+ )
+ const PARENT = ownedRunParent('b6-0241-body')
+-const KERNEL = 'semantic-kernel-v5-esm-module-shape'
++const KERNEL = 'semantic-kernel-v6-tsx-parse'
+ const PREMISE = 'installed-file-identity-v1'
+ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
+ const env = () => ({
+diff --git a/tests/b6-0244-esm-module-shape.test.js b/tests/b6-0244-esm-module-shape.test.js
+index 1575366a2..04428e05c 100644
+--- a/tests/b6-0244-esm-module-shape.test.js
++++ b/tests/b6-0244-esm-module-shape.test.js
+@@ -13,7 +13,7 @@ import { ownedRunParent } from './support/owned-run-parent.mjs'
+ const parent = ownedRunParent('b6-0244-esm')
+ const pinnedNode = pinnedToolchainLocation().node
+ const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
+-const KERNEL = 'semantic-kernel-v5-esm-module-shape'
++const KERNEL = 'semantic-kernel-v6-tsx-parse'
+ 
+ function cleanCall(method, args) {
+   const code =
+diff --git a/tests/b6-0245-tsx-parse.test.js b/tests/b6-0245-tsx-parse.test.js
+new file mode 100644
+index 000000000..e21fac226
+--- /dev/null
++++ b/tests/b6-0245-tsx-parse.test.js
+@@ -0,0 +1,199 @@
++// SPEC0245 — TSX in the B6 kernel: the parser ScriptKind follows the file
++// extension (.tsx -> TSX, .jsx -> JSX, .[cm]ts -> TS, otherwise JS) and every
++// evaluated JSX form is refused by the existing expression fallback, without
++// evaluating tag, attributes or children. `.tsx` stays a non-runtime format
++// (UNKNOWN_FORMAT). Physical fixtures, analysed by a clean pinned Node22 caller
++// (the real API declines the Vitest profile), as in the 0236/0244 suites.
++import { describe, it, expect } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import { spawnSync } from 'node:child_process'
++import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
++import { ownedRunParent } from './support/owned-run-parent.mjs'
++
++const parent = ownedRunParent('b6-0245-tsx')
++const pinnedNode = pinnedToolchainLocation().node
++const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
++const KERNEL = 'semantic-kernel-v6-tsx-parse'
++
++function cleanCall(method, args) {
++  const code =
++    'const fs=require("node:fs"); const engine=require(process.argv[1]); const request=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(JSON.stringify(request.method==="SEMANTIC_KERNEL_VERSION"?engine.SEMANTIC_KERNEL_VERSION:engine[request.method](...request.args)));'
++  const out = spawnSync(pinnedNode, ['-e', code, enginePath], {
++    input: JSON.stringify({ method, args }),
++    encoding: 'utf8',
++    timeout: 60000,
++    env: {
++      PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin',
++      LANG: 'C',
++      TZ: 'UTC'
++    }
++  })
++  if (out.status !== 0)
++    throw Error('clean caller failed: ' + (out.stderr || out.error?.message))
++  return JSON.parse(out.stdout)
++}
++function fixture(files, starts = ['entry.tsx']) {
++  const root = fs.mkdtempSync(path.join(parent, 'physical-'))
++  for (const [file, body] of Object.entries({
++    'package.json': '{"type":"module"}',
++    ...files
++  })) {
++    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
++    fs.writeFileSync(path.join(root, file), body)
++  }
++  return {
++    root,
++    starts,
++    origins: [],
++    installed: [],
++    compiled: { status: 'UNAVAILABLE', files: [] }
++  }
++}
++const run = (files, starts) =>
++  cleanCall('runSemanticBoundary', [fixture(files, starts)])
++const tuples = (out) => out.unknowns.map((u) => [u.file, u.reason, u.detail])
++const has = (out, file, reason, detail = '') =>
++  out.unknowns.some(
++    (u) => u.file === file && u.reason === reason && u.detail === detail
++  )
++const VALID =
++  'import { x } from \'./a.js\';\nexport const el = <div title="t">{x}</div>;\nexport const n: number = 2;\n'
++
++describe('SPEC0245 MT01/MT02 — .tsx is parsed as TSX', () => {
++  it('a valid .tsx has no UNKNOWN_PARSE and no tuple from a recovered AST', () => {
++    const out = run({ 'entry.tsx': VALID, 'a.js': 'export const x = 1;' })
++    expect(
++      has(out, 'entry.tsx', 'UNKNOWN_PARSE'),
++      JSON.stringify(tuples(out))
++    ).toBe(false)
++    expect(has(out, 'entry.tsx', 'UNKNOWN_BINDING', 'title')).toBe(false)
++    expect(
++      has(
++        out,
++        'entry.tsx',
++        'UNKNOWN_UNSUPPORTED_SYNTAX',
++        'RegularExpressionLiteral'
++      )
++    ).toBe(false)
++  })
++  it('an evaluated JSX form is refused with its SyntaxKind and .tsx keeps UNKNOWN_FORMAT', () => {
++    const out = run({
++      'entry.tsx':
++        'export const a = <div>{1}</div>;\nexport const b = <br />;\nexport const c = <>x</>;\n'
++    })
++    expect(out.status).toBe('UNKNOWN')
++    expect(out.proofs).toEqual([])
++    for (const kind of ['JsxElement', 'JsxSelfClosingElement', 'JsxFragment'])
++      expect(
++        has(out, 'entry.tsx', 'UNKNOWN_UNSUPPORTED_SYNTAX', kind),
++        kind
++      ).toBe(true)
++    expect(has(out, 'entry.tsx', 'UNKNOWN_FORMAT')).toBe(true)
++    expect(has(out, 'entry.tsx', 'UNKNOWN_PARSE')).toBe(false)
++  })
++  it('JSX content is never evaluated: a known call into products/ stays UNKNOWN (cost of A, F1/F10b)', () => {
++    for (const entry of [
++      "import { load } from './m.js';\nexport const el = <div>{load('./products/p.js')}</div>;\n",
++      "import { o } from './o.js';\nexport const el = <div>{import(o.p)}</div>;\n"
++    ]) {
++      const out = run({
++        'entry.tsx': entry,
++        'm.js': 'export function load(s) { return import(s) }\n',
++        'o.js': "export const o = { p: './products/p.js' };\n",
++        'products/p.js': 'export const p = 1;\n'
++      })
++      expect(out.status, JSON.stringify(tuples(out))).toBe('UNKNOWN')
++      expect(out.violations).toEqual([])
++    }
++  })
++  it('a real syntax error and a TS-only `<T>x` assertion still give UNKNOWN_PARSE (F7)', () => {
++    for (const source of [
++      'export const el = <div>;\n',
++      'export const v = <number>(1 as any);\n'
++    ]) {
++      const out = run({ 'entry.tsx': source })
++      expect(has(out, 'entry.tsx', 'UNKNOWN_PARSE'), source).toBe(true)
++      expect(out.status).toBe('UNKNOWN')
++    }
++  })
++  it('JSX text that looks like an import is not code: no violation (F13)', () => {
++    const out = run({
++      'entry.tsx':
++        "export const el = <p>call import('./products/p.js') here</p>;\n",
++      'products/p.js': 'export const p = 1;\n'
++    })
++    expect(out.status).toBe('UNKNOWN')
++    expect(out.violations).toEqual([])
++  })
++  it('a .jsx file keeps the JSX parse (no-op of the table)', () => {
++    const out = run({ 'entry.jsx': 'export const el = <div>{1}</div>;\n' }, [
++      'entry.jsx'
++    ])
++    expect(has(out, 'entry.jsx', 'UNKNOWN_PARSE')).toBe(false)
++    expect(
++      has(out, 'entry.jsx', 'UNKNOWN_UNSUPPORTED_SYNTAX', 'JsxElement')
++    ).toBe(true)
++  })
++})
++
++describe('SPEC0245 MT03 — acquisition visits the real JSX subtree', () => {
++  it('a finite import() into products/ inside a JSX attribute or child is still a VIOLATION', () => {
++    for (const entry of [
++      "export const el = <div onClick={() => import('./products/p.js')} />;\n",
++      "export const el = <div>{import('./products/p.js')}</div>;\n"
++    ]) {
++      const out = run({
++        'entry.tsx': entry,
++        'products/p.js': 'export const p = 1;\n'
++      })
++      expect(out.status, entry).toBe('VIOLATION')
++    }
++  })
++  it('a target acquired only through the TSX AST is analysed: its body violation is found (F9)', () => {
++    const out = run({
++      'entry.tsx': "export const el = <div>{import('./dep.js')}</div>;\n",
++      'dep.js':
++        "const o = { p: './products/p.js' };\nexport const q = import(o.p);\n",
++      'products/p.js': 'export const p = 1;\n'
++    })
++    expect(out.status, JSON.stringify(tuples(out))).toBe('VIOLATION')
++  })
++})
++
++describe('SPEC0245 MT04 — modules outside .tsx are unchanged', () => {
++  it('a .ts module has the same tuples whether a .tsx or a .ts imports it', () => {
++    const a =
++      'export const k = 1;\nexport function f(x: number) { return x > k ? x : k }\n'
++    const fromTsx = run({
++      'entry.tsx':
++        "import { f } from './a.ts';\nexport const el = <div>{f(2)}</div>;\n",
++      'a.ts': a
++    })
++    const fromTs = run(
++      {
++        'entry.ts': "import { f } from './a.ts';\nexport const v = f(2);\n",
++        'a.ts': a
++      },
++      ['entry.ts']
++    )
++    const only = (out) =>
++      tuples(out)
++        .filter((t) => t[0] === 'a.ts')
++        .sort()
++    expect(only(fromTsx)).toEqual(only(fromTs))
++  })
++})
++
++describe('SPEC0245 MT06 — version and refusal census', () => {
++  it('publishes the new kernel version', () => {
++    expect(cleanCall('SEMANTIC_KERNEL_VERSION', [])).toBe(KERNEL)
++  })
++  it('the refusal census uses the same TSX parse', () => {
++    const out = cleanCall('analyzeSemanticBoundary', [
++      fixture({ 'entry.tsx': VALID, 'a.js': 'export const x = 1;' }),
++      { refusalCensus: true }
++    ])
++    expect(has(out, 'entry.tsx', 'UNKNOWN_PARSE')).toBe(false)
++  })
++})

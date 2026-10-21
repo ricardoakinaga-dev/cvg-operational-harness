@@ -1,0 +1,187 @@
+# SPEC0245 — TSX no kernel B6: parse pela extensão e JSX recusado no domínio
+
+**PROPOSTA T3, revisão r3. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020B`, com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0245`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237, 0240–0244. Autoridade: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) (K1–K7), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0244](0244_b6_esm_module_shape.md). Plano: [0391](../03_build/0391_hiso005_semantic_proof_execution.md). A r2 corrigiu a [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0245-r1/review.json). A [revisão r2](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0245-r2/review.json) aprovou o texto sem obrigatórios, e a r3 aplica as oito precisões P3 dela, sem terceira rodada ([correções](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/r2-corrections-0245.json)).
+
+Neste texto, v5 é o kernel atual (`semantic-kernel-v5-esm-module-shape`, cabeça do PR #9 `16dd0ce6`) e v6 é o kernel com o delta desta SPEC.
+
+## 1. CURRENT — problema e evidência
+
+Na raiz avaliada `228e7918`, a v5 tem 12.283 diagnósticos e 11.393 tuplas ([variantes](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/tsx-variants.json)). A base diagnóstica é igual à medição final do BUILD0244 em diagnósticos e tuplas. O payload difere só em `compiledProvenance.referenceDigest`, porque as referências foram refeitas pela mesma receita. Os 29 arquivos `.tsx` concentram 704 tuplas. A recon anterior contava 705, e uma tupla saiu com a v5.
+
+A causa está no parser. O engine cria a AST com `ts.ScriptKind.TS` para qualquer `.[cm]?tsx?`. Um `.tsx` com JSX não é TypeScript válido nesse modo:
+
+- todos os 29 arquivos dão `UNKNOWN_PARSE`;
+- o engine continua avaliando a AST recuperada, que não é o programa;
+- palavras de JSX viram `UNKNOWN_BINDING` (430 nos `.tsx`: 427 somem com o delta e ficam 3 globais lidos de verdade: `document` e as constantes `define` do Vite/Vitest `__CVG_WEB_MODE__` e `__CVG_WEB_CONTROLLED_TEST__`);
+- `</div>` vira regex e atributos viram operadores.
+
+Duas recusas desses arquivos estão corretas e ficam:
+
+- `.tsx` não é formato de runtime do Node 22, que só remove tipos de `.ts`, `.mts` e `.cts` e não executa JSX;
+- todo `.tsx` adquirido recebe `UNKNOWN_FORMAT`. São 37 tuplas: 29 do próprio arquivo e 8 recusas de import `.tsx`→`.tsx` como aresta contida. Também ficam as 29 `UNKNOWN_MODULE_FORMAT`.
+
+**Precedente.** Com o TypeScript 6.0.3 fixado, `.js` e `.jsx` já são parseados com a variante JSX. A v5 já recusa JSX em `.js` pelo mesmo fallback, e a camada léxica do checker já lê `.tsx` como TSX. A tabela proposta é o default do TypeScript para as extensões de runtime. Para `.jsx` não muda nada, e não há `.jsx` na raiz.
+
+**Variantes diagnósticas** (cópias privadas, nunca oficiais, mesmas referências):
+
+| Variante     | O que muda                                                        |  Diagnósticos | Tuplas em `.tsx` |
+| ------------ | ----------------------------------------------------------------- | ------------: | ---------------: |
+| v5           | —                                                                 |        12.283 |              704 |
+| A (proposta) | ScriptKind pela extensão; JSX recusado pelo fallback existente    | 11.723 (−560) |              144 |
+| C            | A + avaliar tag, atributos e filhos do JSX antes de recusar       | 11.729 (−554) |              150 |
+| B            | sem parse TSX; arquivo com erro de parse não tem o corpo avaliado | 11.676 (−607) |               97 |
+
+Na raiz medida, as três variantes têm:
+
+- grafo igual ao da v5 (1.341 arquivos, 2.729 arestas, nenhum arquivo adquirido de um lado só, nenhuma aresta para `.tsx`);
+- nenhuma tupla mudada fora dos `.tsx`, nem nos 78 arquivos a jusante deles (de `@tanstack/react-query` e `vitest`, as 2 dependências diretas);
+- zero violações na passagem normal e no census, zero provas e validation true.
+
+Na A, normal e strict dão o mesmo payload (11.723 nas duas, [resumo](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/real-v5tsxAboth-summary.json)). O uso fica assim:
+
+- contextos: 229/256;
+- estados: 134.899/250.000 (a v5 tinha 138.560);
+- tempo do worker: cerca de 114 s de 300 s.
+
+Na A, as 144 tuplas que ficam nos `.tsx` são:
+
+- 37 `UNKNOWN_FORMAT` e 29 `UNKNOWN_MODULE_FORMAT`;
+- 1 `UNKNOWN_UNSUPPORTED_SYNTAX` `JsxElement`, só em `apps/web/src/main.tsx`. Nos outros 28, o JSX está em componentes recusados (parâmetro desestruturado ou async) ou em corpos não chamados;
+- 75 tuplas de domínio e propagação sobre o código real;
+- 1 `UNKNOWN_AMBIGUOUS_RESOLUTION` e 1 `UNKNOWN_UNRESOLVED_EXPORT`.
+
+`UNKNOWN_PARSE` cai de 29 para 0. **O que recusa cada `.tsx` é `UNKNOWN_FORMAT`, não o JSX.**
+
+**Por que A.** As três alternativas têm problemas diferentes:
+
+- **C** embute uma premissa nova: atributos e filhos seriam avaliados de forma eager, na ordem do fonte. Isso vale para os runtimes clássico e automático do React, mas não é garantido para qualquer transformação. Por isso C não cabe em "sem premissa nova".
+- **B** muda todo arquivo com erro de parse, não só os `.tsx`, e mantém para a aquisição uma AST errada. Num fixture, a v5 e a B não adquirem um `import('./dep.js')` finito que está num filho JSX e perdem a violação do corpo dele; a A adquire e acha a violação (F9, na [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0245-r1/review.json)).
+- **Custo da A:** uma violação que só a avaliação do JSX exporia fica UNKNOWN. Nunca vira PROVEN sob a regra global (F1, F2, F5, F10b da revisão).
+
+## 2. PROPOSED — delta
+
+**T1 — ScriptKind pela extensão.** A tabela fechada é: `TSX` para `.tsx`, `JSX` para `.jsx`, `TS` para `.ts`, `.mts` e `.cts`, e `JS` para os demais. Nada mais muda na aquisição, na resolução, no formato ou na gramática.
+
+**T2 — JSX fora do domínio, recusado.** `JsxElement`, `JsxSelfClosingElement` e `JsxFragment` caem no fallback de expressão que já existe:
+
+- a recusa é `UNKNOWN_UNSUPPORTED_SYNTAX`, com o SyntaxKind como detalhe;
+- o valor é U;
+- tag, atributos e filhos não são avaliados.
+
+Não há premissa nova nem aceite de UNKNOWN. O delta troca tuplas sobre uma AST falsa por recusas sobre a AST real.
+
+**Soundness, sob a regra global.** São quatro pontos:
+
+1. Todo `.tsx`/`.jsx` adquirido recebe `UNKNOWN_FORMAT` incondicional. Pela regra global, nenhuma raiz que contenha um deles prova nada.
+2. Raízes sem `.tsx` são parseadas exatamente como na v5. Todo arquivo cujo ScriptKind muda (`.tsx` e as extensões inexistentes `.mtsx` e `.ctsx`, que a v5 mandava para TS e a tabela manda para JS) recebe `UNKNOWN_FORMAT`; `.jsx` não muda o parse.
+3. Todo arquivo adquirido é carregado no corpo. Não avaliar o JSX não pula a avaliação de nenhum módulo.
+4. A aquisição visita a subárvore JSX real. Especificadores finitos de `import()` e `require` continuam resolvidos e conferidos contra `products/` (probe; F9).
+
+Sob uma regra de prova por escopo (SPEC0246), a soundness da v6 depende, no mínimo, de fechar antes a lacuna do K0 descrita abaixo; a SPEC0246 precisa de argumento próprio. Esta SPEC não aprova nenhuma premissa de cobertura do K0.
+
+**Achado à parte, fora do delta: lacuna do K0** ([achado](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json)).
+
+- O problema: o valor CJS é a última escrita de `module.exports`, não a união das escritas alcançáveis. Isso acontece com a reatribuição dentro de corpo de função (F3) e com ramos de `if` de condição não primitiva no topo (S10, revisão da SPEC0246). A função escrita nunca é avaliada.
+- O efeito: as engines v4 (`1073a9dd`) e v5 (`16dd0ce6`) dão PROVEN, com K5 e com K7 para a origem `import(x)` dessa função.
+- Na raiz real, a regra global e as tuplas existentes impedem qualquer prova hoje.
+- O achado precisa de tarefa própria.
+
+Fora do delta:
+
+- rodar `.tsx` como runtime;
+- modelar JSX;
+- a factory implícita (`react/jsx-runtime`) e os pragmas `@jsxImportSource`/`@jsx`, que continuam invisíveis à aquisição (F14);
+- formatos, resolução, limites e regra de prova.
+
+## 3. Contrato
+
+### 3.1 Parse
+
+A tabela T1 vale na passagem normal e no refusal census, porque os dois usam a mesma aquisição. Sobre `UNKNOWN_PARSE`:
+
+- um `.tsx` que parseia sem diagnóstico não emite mais;
+- um `.tsx` com diagnóstico real emite como hoje;
+- um `.tsx` com sintaxe válida em TS e inválida em TSX, como a asserção `<T>x`, passa a emitir (F7).
+
+### 3.2 JSX
+
+As três formas JSX não ganham ramo próprio no avaliador. O detalhe da recusa é o nome do SyntaxKind. `JsxExpression`, `JsxText`, atributos e spreads só existem dentro dessas formas e nunca são avaliados. **Todo elemento JSX avaliado é recusado.** JSX num corpo não avaliado não gera tupla, e o arquivo segue recusado por `UNKNOWN_FORMAT`.
+
+### 3.3 Conservação
+
+A comparação é entre v5 e v6 nos mesmos inputs, limites e referências, sem estouro de prazo, ENOBUFS ou corte.
+
+1. **Grafo:** é a união das arestas da v5 e da v6. O BUILD lista os arquivos adquiridos de um lado só; na raiz real são zero.
+2. **Fora dos `.tsx`/`.jsx`**, inclusive a jusante, o multiset de tuplas é idêntico. Qualquer mudança fora deles para a promoção, que volta para revisão.
+3. **Nos `.tsx`/`.jsx`:**
+   - `UNKNOWN_FORMAT` e `UNKNOWN_MODULE_FORMAT` persistem;
+   - `UNKNOWN_PARSE` segue a §3.1;
+   - as demais tuplas vinham de uma AST que não era o programa: podem sumir e são listadas tupla a tupla;
+   - as novas são listadas. As recusas JSX têm detalhe no conjunto {JsxElement, JsxSelfClosingElement, JsxFragment}.
+4. **Violações.** Na raiz real há zero na passagem normal e no census, na v5 e na v6. Na raiz real a observação à parte do census é redundante, porque as violações do census (inclusive as do stream) são sempre unidas ao resultado final, que tem zero. Nos fixtures, o census é observado por `analyzeSemanticBoundary(input, {refusalCensus: true})` com chamador limpo, com a entrada capturada por uma cópia diagnóstica que só despeja o input. Nos fixtures, pode sumir uma violação da v5 cujo especificador, na AST TSX, fica numa região que não é código, do conjunto fechado {`JsxText`, literal de string de atributo JSX, comentário}; o sumiço é esperado e listado (F13). Qualquer outra violação perdida para a promoção.
+5. **Normal e strict** iguais, validation true e zero provas na raiz real.
+6. **Denominadores:**
+   - 29 `.tsx`, 0 `.jsx`;
+   - 78 arquivos a jusante, de 2 dependências diretas;
+   - 1.341 arquivos e 2.729 arestas;
+   - 1 de 29 `.tsx` com recusa JSX;
+   - uso de contextos, estados e tempo contra os tetos.
+
+### 3.4 Versão
+
+A versão passa a `semantic-kernel-v6-tsx-parse`. Limites (SPEC0242), receitas (SPEC0243), perfil de resolução e regra global de prova não mudam.
+
+## 4. O que permanece UNKNOWN
+
+- `.tsx` como formato de runtime: `UNKNOWN_FORMAT`, `UNKNOWN_MODULE_FORMAT` e aresta contida para `.tsx`.
+- Todo elemento JSX avaliado.
+- As arestas implícitas do JSX: factory do runtime e pragmas.
+- Tudo o mais que a v5 já recusa.
+
+A regra global continua e B6 segue INCOMPLETE. Nenhum `.tsx` fica mais perto de PROVEN.
+
+## 5. Integração e recuperação
+
+- **Base:** a main com BUILD0244 (PR #9).
+- **Fonte:** `scripts/boundary-semantic-engine.mjs`, só T1 e a versão.
+- **Teste novo:** `tests/b6-0245-tsx-parse.test.js`.
+- **Migração literal:** só o literal de versão, registrada antes da edição e com a primeira falha preservada. Nenhum teste da base afirma `UNKNOWN_PARSE` em `.tsx`; o único fixture TSX (b6-0240 MS04) afirma UNKNOWN, que segue valendo por `UNKNOWN_FORMAT`. Achar uma asserção assim para a promoção.
+- **Medição real:** raiz `228e7918` com as referências da receita com escopo. A cópia física usada nesta recon foi removida depois da medição. O BUILD precisa de uma receita de reconstituição com conferência do sha256 de cada um dos 1.410 inputs do relatório selado: qualquer divergência para a promoção, e os denominadores são republicados a partir da medição reconstituída.
+- **Rollback:** a v5.
+- **A promoção para diante de:**
+  - violação perdida fora da §3.3.4;
+  - tupla fora da §3.3;
+  - validation false;
+  - estouro, ENOBUFS, corte ou erro de worker;
+  - obrigatório de revisão.
+
+## 6. Riscos
+
+- **Folga de contextos:** 229/256 antes e depois.
+- **Cobertura:** a A deixa de ver violações que só a avaliação do JSX exporia (F1, F2, F5, F10b). Elas ficam UNKNOWN.
+- **Dependência de `UNKNOWN_FORMAT`:** se uma SPEC futura relaxar FORMAT para `.tsx` (perfil de bundler), um JSX num corpo não avaliado não terá tupla nenhuma. Essa SPEC terá de tratar isso.
+
+## 7. Aceites futuros — todos NOT_RUN
+
+| ID   | Critério                                                                                                                                                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MT01 | Primeira falha na v5: `.tsx` válido dá `UNKNOWN_PARSE` e tuplas de AST recuperada (ex.: `UNKNOWN_BINDING` de atributo).                                                                                                                                             |
+| MT02 | v6: `.tsx` válido sem `UNKNOWN_PARSE`; JSX avaliado vira `UNKNOWN_UNSUPPORTED_SYNTAX` com o SyntaxKind; `UNKNOWN_FORMAT` mantido; atributos e filhos não avaliados (F1/F10b: UNKNOWN, sem violação); erro real e `<T>x` (F7) dão `UNKNOWN_PARSE`; F13 sem violação. |
+| MT03 | Aquisição: `import('./products/…')` finito em atributo ou filho JSX continua VIOLATION; F9 (alvo adquirido só pela AST TSX) dá VIOLATION.                                                                                                                           |
+| MT04 | Módulo `.ts` importado por `.tsx`: tuplas iguais às da v5.                                                                                                                                                                                                          |
+| MT05 | Conservação da §3.3 na raiz real, tupla a tupla, com denominadores e census à parte; normal = strict; validation true; zero provas.                                                                                                                                 |
+| MT06 | Limites, perfil e receitas iguais; versão nova.                                                                                                                                                                                                                     |
+| MT07 | Regressões B6 (0228–0244) preservadas; crítica fresca sem obrigatórios; 16 gates Node22; consumidor fresco.                                                                                                                                                         |
+| MT08 | Promoção só do delta próprio; sem push, deploy ou produção.                                                                                                                                                                                                         |
+
+## 8. Autoridade e avisos para a decisão
+
+T1 muda como o K1 lê o arquivo; T2 mantém a recusa do domínio. Não há premissa nova, mas o kernel de prova muda, e D-12/T3 exige revisão explícita da SPEC pelo usuário antes do BUILD. A decisão precisa levar em conta:
+
+1. **Ganho só diagnóstico:** −560 tuplas e nenhuma prova nova.
+2. **Custo:** violações alcançáveis só pela avaliação do JSX ficam UNKNOWN.
+3. **Dependência:** a recusa dos `.tsx` se apoia em `UNKNOWN_FORMAT`.
+4. **Arestas implícitas do JSX:** continuam invisíveis (F14).
+5. **K0:** a lacuna existe na v4 e na v5. Aprovar esta SPEC não aprova nenhuma premissa de cobertura do K0 para a SPEC0246.
+
+Esta preparação não autoriza código, produção, release, dados reais, push ou deploy.

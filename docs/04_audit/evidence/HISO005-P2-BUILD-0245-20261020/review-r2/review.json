@@ -1,0 +1,650 @@
+{
+  "round": "R2",
+  "task": "HISO005-P2-BUILD-0245",
+  "reviewer": "Claude Code (mesmo crítico não-fork da R1; sessão d9ef2deb, subagente de revisão)",
+  "observedAt": "2026-10-20T12:06:06.713123+00:00",
+  "spec": {
+    "path": "docs/02_spec/0245_b6_tsx_parse.md",
+    "sha256": "04ec44eab0a2110e7804890e8688e4556aa58cd944ef7b279e15d031ec911af4"
+  },
+  "sourceFreezeSha256": "560e65c9ce003623c62cc6aa1d5971e169d20d1c0309c033a19d418aca93ac62",
+  "sourceFreezeCheck": "A candidata (HEAD 6c9fc6517f27, só os 7 caminhos sujos) reproduz o patchSha256 da r2. Engine bcbb49ab…, teste dea41c7c…. Os 5 testes com migração de literal têm o mesmo hash da r1.",
+  "verdict": "APPROVE",
+  "summary": "Os três obrigatórios da R1 foram resolvidos de fato e os seis P3 foram tratados. De r1 para r2 o engine muda só no comentário da tabela T1, e o comportamento não muda (v6r1 e v6r2 dão os mesmos diagnósticos). A raiz reconstituída com o passo harness reproduz o selado do BUILD0244 em diagnósticos (com originId), unknowns e inputs. O compiledProvenance tem 121 arquivos com sha256 idêntico; o que difere é só o referenceDigest, porque as referências foram refeitas, mais a identidade física (root e stat). Refiz de forma independente a conservação r2 (v5b→v6r2): 561 tuplas somem e 1 entra, nenhuma mudança fora dos .tsx, grafo com o mesmo conjunto de arestas, 78 arquivos a jusante de 2 dependências diretas, normal = strict, validation true, 0 provas e 0 violações. Não há obrigatórios; ficam quatro P3 de higiene e registro.",
+  "r1Resolution": [
+    {
+      "id": "R1-01",
+      "status": "RESOLVED",
+      "check": "O passo harness rodou (tsc -b … --force, exit 0) e os 48 arquivos existem no disco (42 em packages/shared/dist/__tests__ e 6 em packages/contracts/dist/__tests__). Os 1.410 inputs conferem de novo, e git status dos arquivos rastreados está limpo. Na minha comparação, real-v5b (normal e strict) contra o selado: diagnósticos idênticos, inclusive originId (12.283); compiledProvenance com 121 = 121 arquivos, 0 sha256 diferentes e só o referenceDigest diferente; resolutions iguais a menos do root; premises iguais a menos da identidade de stat. O r1Gap e o payload-comparison declaram a lacuna da r1 e a causa. references-scoped2 tem reader.files 121."
+    },
+    {
+      "id": "R1-02",
+      "status": "RESOLVED",
+      "check": "O MT04 agora fixa as tuplas de .ts/.mts/.cts com <T>x e arrow genérica. Rodei o mesmo fixture: v5 e v6r2 dão exatamente a lista do teste, e o meu mutante mTsAll diverge. red-0245-r2-on-mtsall mostra 17/18 passando e só o MT04 falhando; red-0245-r2-on-v5 mostra o MT04 passando na v5. O tools-mtsall difere da v6r2 só na regex do primeiro ramo."
+    },
+    {
+      "id": "R1-03",
+      "status": "RESOLVED",
+      "check": "O census à parte (analyzeSemanticBoundary com refusalCensus e chamador limpo) está afirmado em MT03 atributo e filho e em F9 (violação) e nas quatro variantes F13/F7×F13 (nenhuma). Recalculei a fixture-table#violationTable a partir de results: perdas só em F13-jsx-text e F7xF13 (normal e census); ganhos em MT03-child, F9 e cjs-require-in-jsx. Minhas execuções independentes dão o mesmo."
+    },
+    {
+      "id": "R1-O01",
+      "status": "RESOLVED",
+      "check": "F1/F10b e F13 afirmam phases.body COMPLETED, a recusa JsxElement e a presença das tuplas de m.js/o.js."
+    },
+    {
+      "id": "R1-O02",
+      "status": "RESOLVED",
+      "check": "conservation-r2 traz timeAndCensus, edgeSetEqual (que conferi: conjuntos iguais), directPackagesOfTsx e censusOnRealRoot."
+    },
+    {
+      "id": "R1-O03",
+      "status": "RESOLVED",
+      "check": "originIdNote declara 10.449 originIds trocados por posição, com os diagnósticos iguais quando se ignora o originId (conferido)."
+    },
+    {
+      "id": "R1-O04",
+      "status": "RESOLVED",
+      "check": "O comentário do engine agora é preciso: default do TS para as extensões de runtime; os demais nomes são JS com UNKNOWN_FORMAT."
+    },
+    {
+      "id": "R1-O05",
+      "status": "RESOLVED",
+      "check": "Os cenários .mtsx, require em JSX num .tsx CJS e F13 em string de atributo e em comentário estão nos testes e na fixture-table."
+    },
+    {
+      "id": "R1-O06",
+      "status": "PARTIAL",
+      "check": "O verifyHistory existe, mas só com a verificação depois do harness. As três verificações da r1 não foram preservadas (ver R2-O02). A comparação do runtimeResolution está registrada."
+    }
+  ],
+  "required": [],
+  "optional": [
+    {
+      "id": "R2-O01",
+      "severity": "P3",
+      "section": "R1-03 / verificabilidade",
+      "finding": "fixture-table.json#violationTable (lostV5toV6, gainedV5toV6, mt04TuplesEqualV5) não é gerado por operators/fixture_table.py, que grava só engines, fixtures e results. O operador que deriva a tabela não está arquivado. Ela bate com results, conforme recalculei.",
+      "suggestion": "Arquivar a derivação (no próprio fixture_table.py ou num operador pequeno) para que a tabela seja reproduzível a partir do script."
+    },
+    {
+      "id": "R2-O02",
+      "severity": "P3",
+      "section": "R1-O06 / honestidade do registro",
+      "finding": "r1-corrections diz que o verifyHistory guarda \"cada verificação\", mas ele tem uma entrada só (depois do harness). As verificações da r1 (depois de deps, runtime e sdk) foram sobrescritas antes de o histórico existir; só a lista steps as registra.",
+      "suggestion": "Escrever que o histórico começa na r2 e que as verificações anteriores aparecem só em steps."
+    },
+    {
+      "id": "R2-O03",
+      "severity": "P3",
+      "section": "Higiene da evidência",
+      "finding": "operators/__pycache__/common.cpython-312.pyc está na pasta de evidência.",
+      "suggestion": "Remover antes do commit e rodar os operadores com python3 -B, como já faz tools_copy para os patches."
+    },
+    {
+      "id": "R2-O04",
+      "severity": "P3",
+      "section": "§6 riscos / tempo × teto",
+      "finding": "Com load em torno de 11, o elapsedMs da v6 subiu para 154 s na normal e 164 s na strict, e para 188 s na cópia diag (wall 276 s), contra os ~114 s da SPEC e o teto global de 300 s. O timeAndCensus mostra só as execuções sem patch.",
+      "suggestion": "Pôr a execução diag no timeAndCensus e citar a folga sob carga como risco operacional. Um corte por prazo cai na regra de parada e não esconde nada."
+    }
+  ],
+  "checks": {
+    "freezeR2": "O patchSha256 reproduz. O engine muda de r1 para r2 só nas 4 linhas de comentário. tools-v6r2 difere de tools-v5 só no engine. As cópias diag v5bdiag e v6r2diag dão relatórios iguais aos sem patch, a menos de semanticTelemetry.",
+    "tests": "green-a2 18/18 (engine bcbb49ab, teste dea41c7c); focal r2 890/890, com a mesma lista de arquivos da r1 e +7 testes da 0245; native r2 79/79; red na v5 13/18 falham; red no mtsall só o MT04 falha.",
+    "conservationR2": "Recalculada a partir dos .gz v5b/v6r2: gone 561, new 1 (JsxElement em main.tsx); 0 mudanças fora dos .tsx nos registros completos e nos diagnósticos sem originId; composição dos .tsx 144 igual à r1; inputs v5b = selado = v6r2; grafo de v5bdiag/v6r2diag com 1.341 arquivos, conjunto de 2.729 arestas igual, 78 a jusante, 2 alvos diretos (@tanstack/react-query e vitest). v6r1 e v6r2 têm diagnósticos idênticos.",
+    "reconstitution": "A receita tem 7 passos com o harness e os incidentes declarados (tentativas recusadas ou limpas). keptAsEvalRoot está declarado. A raiz está em 228e79180d6d, com arquivos rastreados limpos."
+  },
+  "engines": {
+    "v5": "c724567f… (cópia de tools-v5, da r1)",
+    "v6r2": "bcbb49ab158958e48188c9a2ea9d18b083b70bbd895d7da5bb8fe1d1a6dca3cf (cópia de tools-v6r2)",
+    "mTsAll": "63d8f902… (mutante próprio da R1; tools-mtsall a24a4176… é equivalente)"
+  },
+  "scenarios": [
+    {
+      "id": "R2_MT04_tsonly",
+      "purpose": "MT04 r2: .ts/.mts/.cts com <T>x e arrow genérica. v5 = v6r2 = lista fixada no teste; o mutante mTsAll acrescenta UNKNOWN_PARSE/JsxElement e tuplas em entry.ts.",
+      "fixture": {
+        "files": {
+          "entry.ts": "import { f } from './a.ts';\nimport { m } from './b.mts';\nexport const v = f(2) + m;\n",
+          "a.ts": "export const k = 1;\nexport const id = <T,>(x: T): T => x;\nexport const gen = <T>(x: T) => x;\nexport const n = <number>(k as unknown);\nexport function f(x: number) { return x > k ? x : k }\n",
+          "b.mts": "export const m = 1;\nexport const g2 = <T,>(x: T): T => x;\nexport const c2 = <number>(m as unknown);\n",
+          "c.cts": "const one = 1;\nconst g3 = <T,>(x: T): T => x;\nconst c3 = <number>(one as unknown);\nmodule.exports = { one, g3, c3 };\n"
+        },
+        "starts": [
+          "entry.ts",
+          "c.cts"
+        ]
+      },
+      "normal": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "a.ts:UNKNOWN_BINDING_VALUE:x",
+            "a.ts:UNKNOWN_EXPORT",
+            "a.ts:UNKNOWN_OPERATOR",
+            "b.mts:UNKNOWN_BINDING_VALUE:x",
+            "b.mts:UNKNOWN_EXPORT",
+            "c.cts:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "a.ts:UNKNOWN_BINDING_VALUE:x",
+            "a.ts:UNKNOWN_EXPORT",
+            "a.ts:UNKNOWN_OPERATOR",
+            "b.mts:UNKNOWN_BINDING_VALUE:x",
+            "b.mts:UNKNOWN_EXPORT",
+            "c.cts:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "a.ts:UNKNOWN_BINDING_VALUE:x",
+            "a.ts:UNKNOWN_EXPORT",
+            "a.ts:UNKNOWN_PARSE",
+            "a.ts:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "b.mts:UNKNOWN_BINDING_VALUE:x",
+            "b.mts:UNKNOWN_EXPORT",
+            "b.mts:UNKNOWN_PARSE",
+            "b.mts:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "c.cts:UNKNOWN_PARSE",
+            "c.cts:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "entry.ts:UNKNOWN_BINDING_VALUE:f",
+            "entry.ts:UNKNOWN_CALL",
+            "entry.ts:UNKNOWN_EXPORT",
+            "entry.ts:UNKNOWN_INHERITED_PROPERTY:f",
+            "entry.ts:UNKNOWN_OPERATOR"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "a.ts:UNKNOWN_BINDING_VALUE:x",
+            "a.ts:UNKNOWN_EXPORT",
+            "a.ts:UNKNOWN_OPERATOR",
+            "b.mts:UNKNOWN_BINDING_VALUE:x",
+            "b.mts:UNKNOWN_EXPORT",
+            "c.cts:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "a.ts:UNKNOWN_BINDING_VALUE:x",
+            "a.ts:UNKNOWN_EXPORT",
+            "a.ts:UNKNOWN_OPERATOR",
+            "b.mts:UNKNOWN_BINDING_VALUE:x",
+            "b.mts:UNKNOWN_EXPORT",
+            "c.cts:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_cjs_require",
+      "purpose": "require() finito em JSX de .tsx CJS: v6r2 VIOLATION (normal e census); v5 UNKNOWN.",
+      "fixture": {
+        "files": {
+          "package.json": "{}",
+          "entry.tsx": "const el = <div>{require('./products/p.cjs')}</div>;\nmodule.exports = el;\n",
+          "products/p.cjs": "module.exports = 1;\n"
+        }
+      },
+      "normal": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:el",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:NO_BODY",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:el",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "products/p.cjs:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.cjs"
+          ]
+        },
+        "mTsAll": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:el",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "products/p.cjs:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.cjs"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_BINDING_VALUE:el",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_BINDING_VALUE:el",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "products/p.cjs:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.cjs"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_F13_text",
+      "purpose": "F13 JsxText: v5 VIOLATION, v6r2 nenhuma (normal e census).",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <p>call import('./products/p.js') here</p>;\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "normal": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "entry.tsx:UNKNOWN_BINDING:call",
+            "entry.tsx:UNKNOWN_BINDING:here",
+            "entry.tsx:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_BINDING:call",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_F13_attr",
+      "purpose": "F13 string de atributo: nenhuma violação em v5 e v6r2.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <p title=\"import('./products/p.js')\" />;\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "normal": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_BINDING",
+            "entry.tsx:UNKNOWN_BINDING:title",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_BINDING",
+            "entry.tsx:UNKNOWN_BINDING:title",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_F13_comment",
+      "purpose": "F13 comentário: nenhuma violação em v5 e v6r2.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <p>{/* import('./products/p.js') */}</p>;\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "normal": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_F7xF13",
+      "purpose": "F7×F13: v5 VIOLATION; v6r2 UNKNOWN_PARSE sem violação (classe JsxText).",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const g = <T>(x: T) => import('./products/p.js');\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "normal": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "entry.tsx:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": 1,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      }
+    },
+    {
+      "id": "R2_mtsx",
+      "purpose": ".mtsx: v5 parse TS → UNKNOWN_PARSE; v6r2 JS + UNKNOWN_FORMAT + JsxElement.",
+      "fixture": {
+        "files": {
+          "entry.mtsx": "export const el = <div>{1}</div>;\n"
+        },
+        "starts": [
+          "entry.mtsx"
+        ]
+      },
+      "normal": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.mtsx:UNKNOWN_BINDING",
+            "entry.mtsx:UNKNOWN_EXPORT",
+            "entry.mtsx:UNKNOWN_FORMAT",
+            "entry.mtsx:UNKNOWN_OPERATOR",
+            "entry.mtsx:UNKNOWN_PARSE",
+            "entry.mtsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.mtsx:UNKNOWN_EXPORT",
+            "entry.mtsx:UNKNOWN_FORMAT",
+            "entry.mtsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "mTsAll": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "entry.mtsx:UNKNOWN_EXPORT",
+            "entry.mtsx:UNKNOWN_FORMAT",
+            "entry.mtsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      },
+      "census": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.mtsx:UNKNOWN_BINDING",
+            "entry.mtsx:UNKNOWN_EXPORT",
+            "entry.mtsx:UNKNOWN_FORMAT",
+            "entry.mtsx:UNKNOWN_OPERATOR",
+            "entry.mtsx:UNKNOWN_PARSE",
+            "entry.mtsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "v6r2": {
+          "status": "UNKNOWN",
+          "violations": 0,
+          "tuples": [
+            "UNKNOWN_NEGATIVE_CENSUS_ONLY",
+            "entry.mtsx:UNKNOWN_EXPORT",
+            "entry.mtsx:UNKNOWN_FORMAT",
+            "entry.mtsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        }
+      }
+    }
+  ],
+  "commands": [
+    {
+      "what": "conferência do freeze r2",
+      "cmd": "cd <candidata> && git rev-parse HEAD && git status --short && (git diff; git diff --no-index /dev/null tests/b6-0245-tsx-parse.test.js) | sha256sum",
+      "result": "560e65c9… reproduz"
+    },
+    {
+      "what": "cópia v6r2",
+      "cmd": "cp -a <runtime>/tools-v6r2/{scripts,node_modules/typescript} → <scratchpad>/r1/eng/v6r2",
+      "result": "engine bcbb49ab…"
+    },
+    {
+      "what": "fixtures r2 (normal e census)",
+      "cmd": "python3 -I drv/fx.py drv/cases-r2.json v5,v6r2,mTsAll ; python3 -I drv/fx.py drv/cases-r2.json v5,v6r2 analyzeSemanticBoundary",
+      "result": "cenários"
+    },
+    {
+      "what": "conservação r2 independente",
+      "cmd": "python3 -I check_cons_r2.py <EV> <EV-0244> ; python3 -I check_graph_r2.py <EV> ; python3 -I check_diag_r2.py <EV>",
+      "result": "confere"
+    },
+    {
+      "what": "payload v5b × selado",
+      "cmd": "comparação de compiledProvenance.files por sha256, resolutions a menos do root, premises a menos de stat, diagnósticos completos",
+      "result": "R1-01 resolvido"
+    },
+    {
+      "what": "violationTable",
+      "cmd": "recalculada de fixture-table.json#results",
+      "result": "igual"
+    },
+    {
+      "what": "raiz avaliada (só leitura)",
+      "cmd": "ls packages/{shared,contracts}/dist/__tests__ | wc -l ; git status --porcelain --untracked-files=no",
+      "result": "42 + 6; limpa"
+    }
+  ],
+  "notRun": [
+    "checker na raiz real",
+    "vitest",
+    "certify",
+    "npm install",
+    "PG"
+  ],
+  "scratch": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r1"
+}

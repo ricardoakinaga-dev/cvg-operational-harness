@@ -1,0 +1,41 @@
+HISO005-P2-BUILD-0245, revisão R1 (crítico novo, não-fork)
+
+Veredito: REVISE. São 3 obrigatórios P2 e nenhum P1.
+Freeze revisado: patchSha256 a8349310a51880e01b4f660c337cd03bde0a4a70be32c9fd82673cd08797f37c. A candidata reproduz o patch.
+
+O que confere
+- O diff do engine faz exatamente T1 (tabela fechada de ScriptKind) e a troca de versão para semantic-kernel-v6-tsx-parse. T2 não tem código: as três formas JSX caem no fallback e saem como UNKNOWN_UNSUPPORTED_SYNTAX com o SyntaxKind, sem avaliar o conteúdo. O census usa o mesmo acquire(). A camada léxica do checker já lia .tsx como TSX, e os 45 origins em .tsx casam nas duas versões.
+- Testes: first-red 8/11, green 11/11, focal 883/883, native 79/79. A migração de literal ficou só nos 5 arquivos registrados.
+- Testando mutantes, os testes de F1/F10b matam a variante C (avaliar o JSX), e MT03/F9 matam a aquisição que pula o JSX.
+- Refiz a conservação §3.3 de forma independente a partir dos .gz:
+  - somem 561 tuplas e entra 1 (JsxElement em main.tsx), todas nos 29 .tsx;
+  - fora dos .tsx, zero mudança nos registros completos e nos diagnósticos (desconsiderando o originId);
+  - FORMAT 37 e MODULE_FORMAT 29 preservados; UNKNOWN_PARSE em 0;
+  - grafo v5 = v6 (mesmo conjunto: 1.341 arquivos e 2.729 arestas);
+  - 78 arquivos a jusante, de 2 dependências diretas;
+  - normal = strict, validation true, 0 provas, 0 violações, contextos 229/256.
+- Reconstituição: 1.410/1.410 inputs conferem e a v5 reproduz o selado em diagnósticos e unknowns, em normal e strict. O runtimeResolution é igual ao selado, exceto o root e a identidade de stat.
+
+Obrigatórios
+- R1-01 (P2): a raiz reconstituída difere da original fora dos inputs.
+  - Faltam 48 saídas compiladas de teste: 42 em packages/shared/dist/__tests__ e 6 em packages/contracts/dist/__tests__.
+  - Por isso a referência compilada lê 73 arquivos em vez de 121, e o compiledProvenance muda.
+  - O passo harness do operador não rodou.
+  - Isso não está declarado. A §3.3 não é afetada, porque os dois lados usam a mesma raiz.
+  - Correção: declarar a diferença e a causa (ou restaurar os arquivos e refazer).
+- R1-02 (P2): o MT04 não compara com a v5, e nenhum teste da 0245 fixa o ramo TS da tabela T1.
+  - O mutante que manda .ts/.mts/.cts para TSX passa nos 11 testes.
+  - Correção: pôr <T>x e uma arrow genérica no módulo .ts e afirmar as tuplas fixadas a partir da v5.
+- R1-03 (P2): a §3.3.4 exige observar o census à parte nos fixtures e listar as violações perdidas da v5.
+  - Correção: afirmar o census em MT03, F9 e F13, e registrar a tabela v5→v6 por fixture (normal e census).
+  - Pelo meu teste, a única perda é a da classe JsxText (F13 e F7×F13).
+
+Opcionais P3: 6 itens no review.json.
+- Testes de F1/F10b/F13 que hoje passariam no vazio.
+- Tempo/teto e dependências diretas na conservação.
+- Troca posicional de originId fora dos .tsx.
+- Comentário do engine.
+- Cenários extras.
+- Histórico das verificações da reconstituição.
+
+Não rodei checker na raiz real, vitest, certify, install nem PG. Fixtures e mutantes rodaram em cópias privadas no scratchpad.

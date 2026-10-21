@@ -1,0 +1,65 @@
+Agente: tipo Plan (sem Write/Edit), novo, não-fork (não é o crítico da R1). Texto enviado, byte a byte abaixo.
+
+Você é um crítico independente e novo, sem contexto anterior, de uma proposta de SPEC T3 no repositório
+/home/ricardo/Área de trabalho/cvg-operational-harness (branch main, checkout compartilhado com outros agentes).
+Sua tarefa é REVISAR (não planejar implementação): ler, testar com fixtures e devolver um veredito em JSON.
+Esta é a SEGUNDA e ÚLTIMA rodada (R2). Não haverá outro reparo com revisão; aponte como obrigatório só o que você
+confirmou e que impede o BUILD ou induz erro na decisão.
+
+REGRAS (obrigatórias)
+- Somente leitura. Não edite, crie, mova nem apague nada no repositório (inclusive docs/04_audit/evidence), nem em
+  /mnt/dados/cvg-work/cvg-d9ef-pr9-20261020 ou /mnt/dados/cvg-work/cvg-hiso005-eval-228e.
+- Seu tipo de agente não cria arquivos: rode fixtures em memória (veja abaixo). Se precisar de disco, só dentro de
+  /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/critic-R2/.
+- Sem commit, push, branch, PG, porta ou rede. Não use cvg-codex100-*, cvg-dx100-*, cvg-hiso005-build0245-* nem nada do Codex.
+- Node 22: /home/ricardo/.nvm/versions/node/v22.23.2/bin/node (a engine recusa outro Node). Python sempre com -I.
+- Antes de rodar engines, confira `uptime` NUM COMANDO SEPARADO; com load acima de 12, espere e confira de novo.
+- Não mexa nas cópias de engine; leia-as. Não mate processos de ninguém.
+
+OBJETO
+- Texto: docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/spec0247-r2.md.txt
+  (sha256 c727ed407fcc76d7f98ad303b6e34584639cee22e1f4cd9b75c862fb30bf48ee). Links relativos a docs/02_spec.
+- Revisão anterior: review-r1/review.json (REVISE: R1-01 P1, R1-02 a R1-04 P2, nove P3).
+- Correções declaradas: r1-corrections.json. Diff do texto: spec0247-r1-to-r2.diff.txt. Congelamento: contract-freeze-r2.json.
+
+CONTEXTO MÍNIMO
+- O kernel B6 (scripts/boundary-semantic-engine.mjs) é uma interpretação abstrata que diz se o núcleo importa o
+  produto (products/). Regra global: qualquer tupla UNKNOWN na execução impede todas as provas; sem UNKNOWN nem
+  violação, a execução sai PROVEN, com K5 por arquivo e K7 por origem léxica (ex.: import(x)).
+- Achado de origem: docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json (F3, S10).
+- Formato e precedentes: docs/02_spec/0236_b6_semantic_boundary_proof.md (§5, K0–K7), 0244_b6_esm_module_shape.md
+  (§3.3, regra de conservação por causa), 0245_b6_tsx_parse.md. Constituição: docs/07_agents/AGENTS.md (D-12).
+- Evidência: docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/ (fixtures.json com 71 fixtures,
+  fixture-summary.json, probe-final3.json, variant-table-final3.json, real-conservation.json, guarded-runs.json,
+  tools-variants.json, variant-*.diff.txt, operators/*.py).
+
+ENGINES PRIVADAS (só leitura; typescript pinado ao lado)
+- base v5: /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/tools-v5/scripts/boundary-semantic-engine.mjs (sha256 c724567f…)
+- proposta r2: /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/tools-v6t3/scripts/boundary-semantic-engine.mjs
+  (diff contra a v5 em variant-v6t3.diff.txt)
+- alternativa R (C0 só com raiz): tools-v6r (variant-v6r.diff.txt).
+- Para rodar fixtures sem criar arquivos, o crítico da R1 usou um node -e com env mínimo (env -i, PATH com o Node 22,
+  LANG=C, LC_ALL=C, TZ=UTC) que troca as funções de fs por um sistema de arquivos virtual e chama
+  analyzeSemanticBoundary nas duas passagens (normal e census), unindo as violações do census como em
+  runSemanticBoundary; ele conferiu esse harness contra os resultados gravados antes de usar. Faça o mesmo:
+  confira seu harness contra probe-final3.json antes de tirar conclusões. O operador oficial é operators/probe.py.
+
+O QUE AVALIAR
+1. Os obrigatórios R1-01 a R1-04 foram resolvidos de fato, no texto e, quando cabe, na variante e nos fixtures?
+2. Soundness da variante r2 (tools-v6t3): procure PROVEN falso ou valor CJS errado sem raiz no próprio módulo,
+   inclusive com a nova regra de this/arguments por escopo e com o objeto inicial por módulo.
+3. A nova §3.6 é verificável tupla a tupla e cobre o que os fixtures mostram (inclusive a tupla de aresta)?
+4. Números da §1, da tabela de variantes e da §6/§8 batem com a evidência?
+5. Há premissa nova escondida ou caminho para PROVEN novo?
+6. Clareza do português e a pergunta de uma frase da §8.
+
+SAÍDA
+Sua resposta final deve ser APENAS um objeto JSON (sem texto fora dele), no formato:
+{"round":"R2","specSha256":"…","verdict":"APPROVE_SPEC" ou "REVISE",
+ "r1Resolution":[{"id":"R1-01","resolved":true|false,"note":"…"}, …],
+ "mandatory":[{"id":"R2-01","severity":"P1" ou "P2","where":"§…","problem":"…","evidence":"…","fix":"…"}],
+ "optional":[{"id":"R2-P3-01","severity":"P3","where":"…","problem":"…","fix":"…"}],
+ "testsRun":[{"name":"…","files":{"…":"…"},"engine":"v5|v6t3|v6r","status":"…","unknownReasons":["…"]}],
+ "notes":"…"}
+P1 = obrigatório (soundness, contrato errado ou incompleto, número errado). P2 = obrigatório menor (texto que induz
+erro no BUILD ou na decisão). P3 = opcional. Seja concreto e só aponte o que você confirmou.

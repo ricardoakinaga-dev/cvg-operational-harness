@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE - passo 0 (somente leitura).
+# Uso: python3 -I -B verify-inputs-dpbind.py.txt <repo_root> <out_json>
+# As pastas g02 estão não rastreadas no checkout da main. A conferência é por sha (manifestos, recibos, freezes) e por blob git
+# (git hash-object local x git ls-tree do commit). Âncoras: o BIND do 2B-2 (v5) está em origin/main; a especificação do perfil
+# distribuído e o v6 não estão em commit nenhum e são conferidos pelas cópias byte a byte que as admissões carregam nos commits
+# destacados das candidatas (inputs/spec-dp) e pelo review-freeze-r2.json do v6. As admissões DP-1, DP-1R e DP-2 só existem nos
+# commits destacados (HEAD dos worktrees). Nada é escrito fora do <out_json>.
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT, OUT = sys.argv[1], sys.argv[2]
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02"
+SPEC = G02 + "/sdk-distributed-profile-spec"
+V6 = G02 + "/sdk-continuation-3-binding"
+B2 = G02 + "/sdk-batch-2b2-binding"
+ADM = {"DP-1": G02 + "/sdk-distributed-profile-dp1-admission", "DP-1R": G02 + "/sdk-distributed-profile-dp1r-admission",
+       "DP-2": G02 + "/sdk-distributed-profile-dp2-admission"}
+COMMITS = {"DP-1": ("9bb9184cc9a47571c604396bce69e44895f28e9f", "3ca3fd3b0444d8ec73266d71257a1391f6f89fec"),
+           "DP-1R": ("0ab937df50e4e36ac60eec32d2df52a1105ba8ff", "44bb8b4d816ed8fb3072330b8f9d0b5136718bc4"),
+           "DP-2": ("c0e877e16f73fff3cc9b42162533b4542aef410f", "c9b9650bf434052b916d01dec1b6dec488f7afc1")}
+LEAD = {"DP-1": "lead-decision-dv1-dv4.json", "DP-1R": "lead-decision-dv-dp1r-01.json", "DP-2": "lead-decision-dv-dp2.json"}
+REVIEW_FINAL = {"DP-1": "review-r2/review.json", "DP-1R": "review-r1/review.json", "DP-2": "review-r1/review.json"}
+REEVAL = {"DP-1": "reevaluation-dp1.json", "DP-1R": "reevaluation-dp1r.json", "DP-2": "reevaluation-dp2.json"}
+checks = []
+
+
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def load(p):
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def A(rel):
+    return os.path.join(ROOT, rel)
+
+
+def check(name, ok, detail=None):
+    checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+def blob(rel):
+    return git("hash-object", A(rel)).stdout.strip()
+
+
+def tree_blobs(commit, prefix):
+    res = {}
+    for line in git("ls-tree", "-r", commit, "--", prefix).stdout.splitlines():
+        meta, path = line.split("\t", 1)
+        res[path[len(prefix) + 1:]] = meta.split()[2]
+    return res
+
+
+def local_files(rel):
+    base = A(rel)
+    res = []
+    for d, dirs, files in os.walk(base):
+        for f in files:
+            res.append(os.path.relpath(os.path.join(d, f), base).replace(os.sep, "/"))
+    return sorted(res)
+
+
+# 1. v5 anchored in origin/main; v6 as frozen by its R2
+ref = git("rev-parse", "refs/remotes/origin/main").stdout.strip()
+v5 = {}
+for rel in (B2 + "/coverage-observed-v5.json", B2 + "/gaps-review-v5.json", B2 + "/user-decision-distributed-profile-20261019.json"):
+    b = git("rev-parse", "refs/remotes/origin/main:" + rel).stdout.strip()
+    v5[rel.split("/g02/")[1]] = {"local_blob": blob(rel), "ref_blob": b, "equal": blob(rel) == b}
+check("v5, lacunas v5 e decisão do usuário iguais aos blobs de origin/main (%s)" % ref[:9], ref and all(x["equal"] for x in v5.values()),
+      {"commit": ref, "files": v5})
+fz = load(A(V6 + "/review-freeze-r2.json"))["files"]
+v6_names = ("coverage-observed-v6.json", "gaps-review-v6.json", "HOW-next-profile-v3.md")
+st6 = load(A(V6 + "/state.json"))
+check("v6, lacunas v6 e HOW v3 iguais ao review-freeze-r2.json do BIND da continuação 3 (aprovado na R2; não reescritos depois); "
+      "estado COMPLETED_LOCAL com 33/11 e v5 inalterado",
+      all(sha(A(V6 + "/" + n)) == fz[n]["sha256"] for n in v6_names) and st6["status"] == "COMPLETED_LOCAL"
+      and st6["result"]["counts_v6"] == {"OBSERVED_CLIENT_PARTIAL": 33, "OPEN_REQUIRED_FUTURE_PROFILE": 11}
+      and st6["result"]["v5_unchanged_sha256"] == sha(A(B2 + "/coverage-observed-v5.json")),
+      {n: sha(A(V6 + "/" + n)) for n in v6_names})
+
+# 2. specification of the distributed profile = the copies carried by the admission commits
+plan = load(A(SPEC + "/coverage-plan-dp.json"))
+check("coverage-plan-dp.json liga o v5 pelo sha; 12 linhas (PY19, PY20, PY02 e PK01-PK09), 48 resíduos e contagem por classe igual à declarada",
+      plan["base"]["sha256"] == sha(A(B2 + "/coverage-observed-v5.json")) and len(plan["rows"]) == 12 and len(plan["residuals"]) == 48
+      and {c: sum(1 for r in plan["residuals"] if r["class"] == c) for c in plan["counts"]["by_class"]} == plan["counts"]["by_class"],
+      plan["counts"])
+spec_files = ("coverage-plan-dp.json", "cases-dp-1.json", "cases-dp-2.json", "capability-contracts-dp.json", "evaluator-r4-dp-delta.json",
+              "freeze-r4-dp-delta.json", "lead-confirmation-20261019.json", "t3-assessment.json")
+cmp_ = {}
+for sub in ("DP-1", "DP-2"):
+    tb = tree_blobs(COMMITS[sub][0], ADM[sub] + "/inputs/spec-dp")
+    for n in spec_files:
+        if n in tb:
+            cmp_["%s:%s" % (sub, n)] = tb[n] == blob(SPEC + "/" + n)
+covered = {n: [k.split(":")[0] for k in cmp_ if k.endswith(":" + n)] for n in spec_files}
+check("especificação do perfil distribuído (pasta não rastreada) igual, por blob, às cópias inputs/spec-dp dos commits do DP-1 e do DP-2; "
+      "cada arquivo usado está em pelo menos um dos commits (cases-dp-1.json só no DP-1, cases-dp-2.json só no DP-2)",
+      all(cmp_.values()) and all(covered.values()), {"equal": cmp_, "covered_by": covered})
+s1 = load(A(ADM["DP-1"] + "/state.json"))
+s2 = load(A(ADM["DP-2"] + "/state.json"))
+check("DP-1 e DP-2 ligam cases-dp-1.json e cases-dp-2.json pelo sha da especificação",
+      s1["spec_inputs"]["cases_dp_1_sha256"] == sha(A(SPEC + "/cases-dp-1.json"))
+      and s2["spec_inputs"]["cases_dp_2_sha256"] == sha(A(SPEC + "/cases-dp-2.json")),
+      [s1["spec_inputs"]["cases_dp_1_sha256"], s2["spec_inputs"]["cases_dp_2_sha256"]])
+c1r = load(A(ADM["DP-1R"] + "/cases-dp-1r.json"))
+s1r = load(A(ADM["DP-1R"] + "/state.json"))
+check("DP-1R deriva de cases-dp-1.json (sha da especificação) com a errata EDP1R-01 ligada por sha; o DP-PK07B substitui a observação do "
+      "DP-PK07A como caso novo, não retry",
+      c1r["derived_from"]["sha256"] == sha(A(SPEC + "/cases-dp-1.json")) and s1r["erratum"]["sha256"] == sha(A(ADM["DP-1R"] + "/erratum-dp1r.json"))
+      and s1r["erratum"]["cases"]["sha256"] == sha(A(ADM["DP-1R"] + "/cases-dp-1r.json"))
+      and [c for c in c1r["cases"] if c["id"] == "DP-PK07B"][0]["replaces_observation_of"].startswith("DP-PK07A"),
+      {"derived_from": c1r["derived_from"]["sha256"], "erratum": s1r["erratum"]["id"]})
+ud = sha(A(B2 + "/user-decision-distributed-profile-20261019.json"))
+check("decisão do usuário (Q1-Q4) igual no BIND 2B-2 e nas entradas das três admissões",
+      all(sha(A(ADM[s] + "/inputs/user-decision-distributed-profile-20261019.json")) == ud for s in ADM), ud)
+
+# 3. the three admissions: state, final review, Lead decision, manifest and commits
+for sub, rel in ADM.items():
+    st = load(A(rel + "/state.json"))
+    rv = load(A(rel + "/" + REVIEW_FINAL[sub]))
+    lead = load(A(rel + "/" + LEAD[sub]))
+    lead_ok = (lead.get("decision") in ("ACCEPTED", "ACCEPT_DV-DP2-01_TO_07_AS_DECLARED")
+               or all(v.get("decision") == "ACCEPTED" for v in (lead.get("deviations") or {}).values()) and lead.get("deviations"))
+    check("%s: estado COMPLETED_LOCAL_WITH_CARRIED_FINDINGS, revisão final APPROVE sem P1/P2 e desvios aceitos pelo Lead (%s)" % (sub, LEAD[sub]),
+          st["status"] == "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS" and rv["verdict"] == "APPROVE"
+          and not [f for f in rv.get("findings", []) if f["severity"] in ("P1", "P2")] and lead_ok,
+          {"status": st["status"], "final_review": [REVIEW_FINAL[sub], rv["verdict"]], "lead": lead.get("decision") or "deviations ACCEPTED"})
+    rc = load(A(rel + "/commit-receipt.json"))
+    man = load(A(rel + "/unit-manifest.json"))
+    bad = [p for p, m in man["files"].items() if not os.path.exists(A(rel + "/" + p)) or sha(A(rel + "/" + p)) != m["sha256"]]
+    extra = [p for p in local_files(rel) if p not in man["files"] and p not in ("unit-manifest.json", "commit-receipt.json", LEAD[sub])]
+    check("%s: sha do unit-manifest igual ao do commit-receipt e todos os %d arquivos conferem; único arquivo fora do manifesto é a decisão do Lead"
+          % (sub, len(man["files"])), sha(A(rel + "/unit-manifest.json")) == rc["unit_manifest_sha256"] and not bad and not extra,
+          {"bad": bad, "extra": extra})
+    content, receipt = COMMITS[sub]
+    tb = tree_blobs(content, rel)
+    probs = [p for p, b in tb.items() if b != blob(rel + "/" + p)]
+    miss = [p for p in local_files(rel) if p not in tb and p not in ("commit-receipt.json", LEAD[sub])]
+    tr = tree_blobs(receipt, rel)
+    rec_ok = tr.get("commit-receipt.json") == blob(rel + "/commit-receipt.json") and set(tr) == set(tb) | {"commit-receipt.json"}
+    refs = [x for x in git("for-each-ref", "--contains", content, "--format=%(refname)").stdout.split() if x]
+    check("%s: pasta igual ao commit de conteúdo %s e ao recibo %s (blobs); a decisão do Lead fica fora dos commits" % (sub, content[:9], receipt[:9]),
+          rc["content_commit"] == content and not probs and not miss and rec_ok,
+          {"files_in_content_commit": len(tb), "problems": probs, "missing": miss, "receipt_ok": rec_ok, "refs_containing": refs,
+           "anchor": "HEAD do worktree destacado da candidata"})
+
+# 4. outcomes, acceptance and reevaluation
+plan_cases = sorted({c for r in plan["rows"] for c in r["cases"]})
+consumed, invalid = [], []
+for sub, rel in ADM.items():
+    cr = load(A(rel + "/case-results.json"))
+    man = load(A(rel + "/unit-manifest.json"))["files"]
+    accs = {}
+    for r in cr["rows"]:
+        d = r.get("dir") or r.get("attempt_dir")
+        p = d + "/acceptance.json"
+        acc = load(A(rel + "/" + p))
+        if r["kind"] == "CONTROL":
+            accs[r["case"]] = acc["outcome"] == "MISMATCH" and acc.get("build_link") is None
+            continue
+        if acc["outcome"] == "PASS_CLIENT_OBSERVATION":
+            consumed.append(r["case"])
+            accs[r["case"]] = (acc["capture_form"] == r["capture_form"] and all(x["ok"] for x in acc["predicates"])
+                               and acc.get("build_link") == "NO_BUILD_LINK_DECLARED" and man[p]["sha256"] == sha(A(rel + "/" + p)))
+        else:
+            invalid.append(r["case"])
+            accs[r["case"]] = acc["outcome"] == "INVALID_CAPTURE" and r["case"] == "DP-PK07A"
+    check("%s: acceptance.json conferem com case-results e com o manifesto (PASS com todos os predicados ok e NO_BUILD_LINK_DECLARED; "
+          "CONTROL MISMATCH; só o DP-PK07A INVALID_CAPTURE)" % sub, all(accs.values()), accs)
+    rv = load(A(rel + "/" + REEVAL[sub]))
+    ok = rv.get("all_equal") is True or (rv.get("all_predicate_level_equal") and rv.get("all_outcome_equal") and rv.get("all_plan_binding_ok"))
+    check("%s: reavaliação offline igual (%s)" % (sub, REEVAL[sub]), ok, {k: v for k, v in rv.items() if k.startswith("all")})
+adj1 = load(A(ADM["DP-1"] + "/adjudication-dp1.json"))
+check("DP-PK07A INVALID_CAPTURE adjudicado como defeito de fixture da especificação (não fato de cliente); não consumido",
+      invalid == ["DP-PK07A"] and adj1["items"][0]["case"] == "DP-PK07A" and adj1["items"][0]["attribution"].startswith("HARNESS_FIXTURE_DEFECT"),
+      adj1["items"][0]["attribution"])
+want = sorted(set(plan_cases) - {"DP-PK07A"} | {"DP-PK07B"})
+check("casos consumidos = casos do plano sem o DP-PK07A e com o DP-PK07B (16): DP-1 10, DP-1R 1, DP-2 5", sorted(consumed) == want and len(consumed) == 16,
+      {"plan": plan_cases, "consumed": sorted(consumed)})
+
+# 5. records for the BIND
+n1r = load(A(ADM["DP-1R"] + "/next-task.json"))
+n2 = load(A(ADM["DP-2"] + "/next-task.json"))
+fa1 = load(A(ADM["DP-1"] + "/freeze-addendum-dp1.json"))
+d1 = load(A(ADM["DP-1"] + "/review-r2/executor-disposition.json"))
+check("registros para o BIND presentes: DP-1R (DP1R/PK07, PLATFORM, CONTRARY, BUILD), DP-2 (R1-F04, R1-F05, R1-F09, R1-F10), DP-1 (leituras "
+      "R1-F04, R1-F05/R2-F04 e R1-F07 do adendo; R2-F01 RECORDED)",
+      {"DP1R/PK07", "DP1R/PLATFORM", "DP1R/CONTRARY", "DP1R/BUILD"} <= {x["id"] for x in n1r["record_for_bind"]}
+      and {"DP2-ADM/R1-F04", "DP2-ADM/R1-F05", "DP2-ADM/R1-F09", "DP2-ADM/R1-F10"} <= {x["id"] for x in n2["record_for_bind"]}
+      and {"R1-F04", "R1-F05/R2-F04", "R1-F07"} <= {x["finding"] for x in fa1["readings"]}
+      and [x for x in d1["items"] if x["id"] == "R2-F01"][0]["disposition"] == "RECORDED",
+      {"dp1r": [x["id"] for x in n1r["record_for_bind"]], "dp2": [x["id"] for x in n2["record_for_bind"]],
+       "dp1_readings": [x["finding"] for x in fa1["readings"]]})
+
+doc = {"kind": "INPUT_VERIFICATION", "task": "DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE",
+       "result": "PASS" if all(c["ok"] for c in checks) else "FAIL", "checks": checks,
+       "verified_at": datetime.now(timezone.utc).isoformat()}
+with open(OUT, "w", encoding="utf-8") as f:
+    f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(doc["result"], "%d/%d" % (sum(c["ok"] for c in checks), len(checks)), [c["check"][:80] for c in checks if not c["ok"]])

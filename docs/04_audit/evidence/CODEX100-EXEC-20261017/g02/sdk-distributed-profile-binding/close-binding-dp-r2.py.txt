@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE - fechamento depois da R2 (somente leitura das entradas; não muda arquivo revisado).
+# Uso: python3 -I -B close-binding-dp-r2.py.txt <repo_root>
+# Lê o state.json da fase repaired, review-r2/review.json e review-r2/executor-disposition.json e regrava state.json e next-task.json
+# (documentos de fechamento). Status pela regra do close-binding-dp.py.txt (P1/P2 só fecham como FIXED). Trata rodada sem disposição
+# própria (R1 usa repair-r1.json) e lê a chave dispositions desta unidade (R2-F06).
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+UNIT = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-binding")
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/"
+CAND_REF = "refs/remotes/origin/candidate/hiso005-0244-docs-20261020"
+
+
+def load(rel):
+    with open(os.path.join(UNIT, rel), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(rel):
+    with open(os.path.join(UNIT, rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def save(rel, doc):
+    with open(os.path.join(UNIT, rel), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True).stdout.strip()
+
+
+st = load("state.json")
+assert st["status"] == "REPAIRED_PENDING_R2", st["status"]
+v7 = load("coverage-observed-v7.json")
+r2 = load("review-r2/review.json")
+d2 = load("review-r2/executor-disposition.json")
+dmap = {x["id"]: x for x in d2.get("dispositions") or d2.get("items") or []}
+problems = []
+for f in r2["findings"]:
+    s = (dmap.get(f["id"]) or {}).get("status")
+    if s is None:
+        problems.append("%s sem disposição" % f["id"])
+    if f["severity"] in ("P1", "P2") and s != "FIXED":
+        problems.append("%s %s com status %s" % (f["id"], f["severity"], s))
+carried = [f["id"] for f in r2["findings"] if (dmap.get(f["id"]) or {}).get("status") == "CARRIED_OVER"]
+status = "REVIEW_REVISE" if (r2["verdict"] != "APPROVE" or problems) else ("COMPLETED_LOCAL_WITH_CARRIED_FINDINGS" if carried else "COMPLETED_LOCAL")
+
+# durability checked at writing time (R2-F03)
+folders = ["sdk-continuation-3-1-admission", "sdk-continuation-3-2-admission", "sdk-continuation-3-binding", "sdk-distributed-acquisition",
+           "sdk-distributed-profile-spec", "sdk-distributed-profile-dp1-admission", "sdk-distributed-profile-dp1r-admission",
+           "sdk-distributed-profile-dp2-admission", "sdk-distributed-profile-binding"]
+in_cand = {f: len(git("ls-tree", "-r", "--name-only", CAND_REF, "--", G02 + f).splitlines()) for f in folders}
+in_main = {f: len(git("ls-tree", "-r", "--name-only", "refs/remotes/origin/main", "--", G02 + f).splitlines()) for f in folders}
+dp_commits = ["9bb9184cc", "3ca3fd3b0", "0ab937df5", "44bb8b4d8", "c0e877e16", "c9b9650bf"]
+dp_refs = {c: len(git("for-each-ref", "--contains", c, "--format=%(refname)").splitlines()) for c in dp_commits}
+worktrees = [l.split()[0] for l in git("worktree", "list").splitlines() if "/mnt/dados/cvg-work/cvg-codex100-" in l]
+st["status"] = status
+st["anchors"]["durability"] = {
+    "checked_at": datetime.now(timezone.utc).isoformat(),
+    "candidate_ref": "%s (%s)" % (CAND_REF, git("rev-parse", "--short", CAND_REF)),
+    "folders_in_candidate_ref_not_in_main": [f for f in folders if in_cand[f] and not in_main[f]],
+    "folders_outside_any_ref": [f for f in folders if not in_cand[f] and not in_main[f]],
+    "dp_commits_without_ref": [c for c, n in dp_refs.items() if n == 0],
+    "worktree_only_anchors": worktrees,
+    "note": "as demais pastas g02, inclusive o v5, estão em origin/main 24b1bbc8; os commits das admissões G02 só têm as worktrees destacadas como âncora (R2-F03, R2-F04)"}
+recs = st["result"].pop("records_for_bind_applied")
+st["result"]["records_for_bind_applied"] = [x["id"] for x in v7["records_for_bind_applied"] if x.get("applied_in")]
+st["result"]["records_superseded"] = [{"id": x["id"], "superseded_by": x.get("superseded_by")} for x in v7["records_for_bind_applied"] if not x.get("applied_in")]
+assert sorted(recs) == sorted(st["result"]["records_for_bind_applied"] + [x["id"] for x in st["result"]["records_superseded"]])
+r2f01 = dmap["R2-F01"]
+st["result"]["g02_can_close"] = (
+    "Ainda não. O recorte SDK do G02 (perfis de fonte e distribuído) terminou o que estava planejado. O que resta dele cabe sem decisão nova "
+    "do usuário, depende das decisões listadas ou fica sem caminho determinístico e sem plano. O cartão tem aceite mais amplo e depende do "
+    "DX100-G01. As cinco condições do HOW são necessárias, não suficientes (R2-F01, leitura registrada em "
+    "review-r2/executor-disposition.json#/readings_for_frozen_files): o plano de runners e acesso tem de cobrir as 22 famílias do catálogo "
+    "(o do HOW é só o recorte SDK), e falta oráculo e dono do acesso por requisito do catálogo, ou justificativa de por que o G02 fecha sem "
+    "isso. Levar as pastas à main pede autorização de push/PR do usuário (R2-F02).")
+st["result"]["user_decisions"] = [u["id"] for u in v7["decisions_that_would_unlock"] if u.get("decision_owner") == "USER"]
+st["result"]["lead_decisions"] = [u["id"] for u in v7["decisions_that_would_unlock"] if u.get("decision_owner") == "LEAD"]
+st["review"]["R2"] = {"path": "review-r2/review.json", "sha256": sha("review-r2/review.json"), "verdict": r2["verdict"], "subject": r2["subject"],
+                      "subject_sha256": r2["subject_sha256"],
+                      "counts": {s: sum(1 for f in r2["findings"] if f["severity"] == s) for s in ("P1", "P2", "P3")},
+                      "r1_findings_after_r2": r2["r1_findings_after_r2"],
+                      "findings": [{"id": f["id"], "severity": f["severity"], "title": f["title"], "status": dmap[f["id"]]["status"]} for f in r2["findings"]],
+                      "disposition": {"path": "review-r2/executor-disposition.json", "sha256": sha("review-r2/executor-disposition.json")}}
+st["review"]["status_rule"] = {"problems": problems, "carried_over": carried}
+st["budget"]["reviews"] = "2/2"
+st["readings_for_frozen_files"] = "review-r2/executor-disposition.json#/readings_for_frozen_files"
+st["closing_pending"] = [x for x, f in (("ledger-delta-cont-d9ef.md", "ledger-delta-cont-d9ef.md"), ("secret-scan.json (gitleaks, código de saída)", "secret-scan.json"))
+                         if not os.path.exists(os.path.join(UNIT, f))]
+st["post_review_r2"] = {
+    "changed": ["state.json", "next-task.json"],
+    "added": ["review-r2/review.json", "review-r2/executor-disposition.json", "close-binding-dp-r2.py.txt", "ledger-delta-cont-d9ef.md", "secret-scan.json"],
+    "not_rewritten": ("coverage-observed-v7.json, gaps-review-v7.json, HOW-final-g02.md, validation.json, input-verification.json, repair-r1.json, "
+                      "archives/ e os scripts revisados ficam como no review-freeze-r2.json"),
+    "budget_note": "orçamento esgotado (2/2 revisões, 1/1 reparo): o P2 da R2 fica aberto com a leitura corrigida registrada"}
+st["status_note"] = (
+    "REVIEW_REVISE por regra: o R2-F01 (P2, só de texto, na leitura do fechamento do cartão G02) não foi corrigido nos arquivos revisados "
+    "porque o orçamento acabou. O mapa v7 e as lacunas v7 não regrediram e a R2 os reproduziu: 44/0, 50/50 partes, 45 braços, 11 mudanças, "
+    "seis lacunas OPEN, validação 38/38. A leitura corrigida do R2-F01 e as leituras dos P3 estão na disposição da R2.")
+st["closing_documents"] = ["review-r2/executor-disposition.json", "next-task.json", "ledger-delta-cont-d9ef.md", "secret-scan.json"]
+st["updated_at"] = datetime.now(timezone.utc).isoformat()
+save("state.json", st)
+
+nt = load("next-task.json")
+nt.update({
+    "task": "Decisão do Lead sobre o BIND do perfil distribuído e o cartão DX100-G02 (proposta)",
+    "previous_status": status, "status": "READY_PENDING_LEAD_DECISION",
+    "options": [
+        {"id": "A", "what": ("Autorizar um reparo de texto e uma R3 fora do orçamento: aplicar no HOW-final-g02.md as leituras de "
+                             "review-r2/executor-disposition.json#/readings_for_frozen_files (R2-F01 com as 22 famílias e a condição 6; R2-F02, "
+                             "R2-F03, R2-F04, R2-F07 e R2-F08). Nenhum crédito, parte, status ou contagem muda."), "needs_user_decision": False},
+        {"id": "B", "what": ("Aceitar a unidade como está, com a leitura corrigida do R2-F01 registrada como errata pelo Lead; o mapa v7 e as "
+                             "lacunas v7 podem ser consumidos (a R2 não achou regressão neles)."), "needs_user_decision": False},
+        {"id": "C", "what": ("Preparar o fechamento do cartão DX100-G02 numa unidade própria: plano de runners, plataformas e acessos T4 com dono "
+                             "para as 22 famílias do catálogo (ou ponteiro ou transferência justificada); oráculo e dono do acesso por requisito "
+                             "do catálogo; o G01 antes (ou justificativa); destino dos oráculos i64 INCOMPLETE e dos 11 edges de ID; dono dos itens "
+                             "sem decisão nova; âncora dos commits de admissões G02; levar as pastas à main."),
+         "needs_user_decision": True, "why_user": "levar as pastas à main pede autorização de push/PR do usuário (AGENTS.md); nenhuma autorização para as pastas g02 foi achada"},
+        {"id": "D", "what": "Levar ao usuário as dez decisões do usuário do HOW-final-g02.md (a capacidade nova de harness é do Lead), se o Lead quiser.",
+         "needs_user_decision": True},
+    ],
+    "reference_work_note": ("Os itens sem decisão nova e os oráculos i64 transferidos a D01, A01 ou Z02 continuam trabalho de referência e "
+                            "observação (L5, com os drivers, a contenção e o cache do G02), a fazer antes da qualificação dos donos (R2-F07)."),
+    "housekeeping": {"order": [
+        "ancorar antes, por ref, tag ou bundle registrado e por decisão do Lead, todos os commits de admissões G02 presos só a worktree destacada: "
+        "C3-1, C3-2, lotes 2A, 2AC, 2B1 e 2B2 e as três DP (git worktree list; ver state.json#/anchors/durability)",
+        "só depois apagar as worktrees e os runtimes privados dessas unidades",
+        "manter o cache distribuído enquanto os itens sem decisão nova do perfil distribuído não tiverem dono e unidade; o descarte é decisão do "
+        "Lead registrada, sabendo que apagá-lo converte esses itens em D-ACQUISITION"],
+        "irreversible": "apagar uma worktree antes de ancorar deixa os commits dela sujeitos a prune"},
+    "carry_over": [{"id": "DPBIND/R2-F05", "text": dmap["R2-F05"]["action"], "applies_to": "próxima unidade que reusar validate-binding-dp.py.txt"}],
+    "created_at": datetime.now(timezone.utc).isoformat()})
+nt.pop("inputs", None)
+nt["inputs"] = {"how_final": G02 + "sdk-distributed-profile-binding/HOW-final-g02.md",
+                "readings_r2": G02 + "sdk-distributed-profile-binding/review-r2/executor-disposition.json",
+                "map_v7": G02 + "sdk-distributed-profile-binding/coverage-observed-v7.json",
+                "gaps_v7": G02 + "sdk-distributed-profile-binding/gaps-review-v7.json"}
+save("next-task.json", nt)
+print(status, problems, carried, st["anchors"]["durability"]["folders_outside_any_ref"])

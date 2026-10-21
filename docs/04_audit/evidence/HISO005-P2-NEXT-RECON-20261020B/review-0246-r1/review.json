@@ -1,0 +1,204 @@
+{
+  "round": "R1",
+  "task": "HISO005-P2-NEXT-RECON-20261020B",
+  "spec": "SPEC0246",
+  "specFile": "spec0246-r1.md.txt",
+  "specSha256": "803304ce424533888d469eae0dfbac801cbeed10205adffb54bd28061758c321",
+  "reviewer": "crítico novo não-fork (Claude Code), R1 de no máximo 2",
+  "observedAt": "2026-10-20T06:38:44.510856+00:00",
+  "verdict": "REVISE",
+  "summary": "A medição está correta e foi reproduzida (0 provas no escopo; 13 folhas triviais com R; K0/NEW sem prova nova). O texto é honesto ao dizer que a regra sozinha não gera prova. Bloqueiam: R1-01, a premissa de integridade do reino, que é nova e conflita com a SPEC0236 §5/§6; R1-02, installed[] sob escopo, que com a implementação ingênua daria verified true para zod e react-query com 1 entrada provada. Também obrigatórios: emissão com ciclos, base de conservação v5×v6, caracterização da gramática e unidades e conjunto de K0/NEW.",
+  "required": [
+    {
+      "id": "R1-01",
+      "severity": "P1",
+      "section": "§2, §3.3, §8 (e SPEC0236 §5/§6)",
+      "finding": "A afirmação \"sound e sem premissa nova\" é falsa. A regra por escopo ignora efeitos de módulos FORA do fecho sobre o estado do reino que o modelo do kernel usa: carregador CJS (Module.prototype.require, Module._load, Module._resolveFilename, Module._extensions, require.cache), hooks ESM (module.register) e o binding global Object com os intrínsecos K4. A SPEC0236 §5 exige \"registro de todos módulos/efeitos da closure anterior\" e diz que \"chamada não modelada ou import com efeito não demonstrado que possa afetá-los torna as premissas dependentes UNKNOWN\"; a §6 diz que \"módulo com side effect opaco não pode sustentar a premissa de intrínsecos intactos\". Na regra global isso é descarregado porque PROVEN implica nenhum efeito opaco no perfil analisado. Na regra por escopo, não: um módulo sujo co-carregado pode alterar o carregador, e até substituir o código-fonte de uma folha via hook de load. Isso inclui as 13 folhas triviais.",
+      "evidence": "Cenário S1 (fixture própria e engine v5 c724567f… em cópia privada): as 6 tuplas ficam todas em evil.cjs (UNKNOWN_NATIVE_BUILTIN, BINDING_VALUE Module, PROPERTY, INHERITED_PROPERTY join, MUTATION, CALL). O fecho {m.cjs, dep.cjs} não tem tupla, não há global nem violação, e as fases estão COMPLETED; pela §3.3, m.cjs recebe K5 (e K7 para qualquer origem nele). No Node 22.23.2 real, com evil.cjs carregado antes no mesmo processo, require(\"./m.cjs\") devolve \"PRODUCT-LOADED\", porque products/p.cjs foi carregado; sozinho, devolve \"dep-ok\". Não há biblioteca de patch de carregador instalada na raiz de hoje (require-in-the-middle e import-in-the-middle ausentes), mas a regra é geral.",
+      "requiredChange": "Tornar explícita a premissa de integridade do reino: carregadores CJS/ESM e Object/K4 não alterados por módulos fora do fecho. Declará-la nova em relação à SPEC0236 §5/§6 e levá-la ao §8 como decisão T3 própria. A alternativa é uma condição global que a torne desnecessária, e então mostrar que ela é sound. Remover \"sem premissa nova\" do §2 e do §8. Registrar a premissa em derivation.scope. Dizer o que o checker pode fazer com uma prova sob essa premissa: por exemplo, resolvido condicional, e nunca verified:true de instalado antes do PROVEN global. Incluir no MP02 a fixture \"módulo limpo + módulo co-carregado que altera o carregador\", com o resultado esperado segundo a premissa escolhida."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P1",
+      "section": "§3.3 (K7 de origem instalada), §5, MP03/MP04",
+      "finding": "Origens UNVERIFIED_INSTALLED_PACKAGE não chegam ao engine como K7: o checker passa só astOrigins (filtro com start/end/fileSha256). Elas são resolvidas por output.installed[] e closedInstalled, o que leva a verdict.verified = true. O engine monta installed com [...reached.entries].map(moduleIds.get).filter(Boolean) e status PROVEN se proofIds.length > 0, hoje guardado por out.status === \"PROVEN\". A SPEC não especifica installed sob escopo. Ao trocar a guarda pela regra por escopo, o .filter(Boolean) marca PROVEN um pacote com UMA entrada provada, e closedInstalled aceita porque toda proofId listada é PROVEN. Isso viola a SPEC0236: \"Somente MATCH + closure integral PROVEN permite verified: true … não diminuem por prova parcial\". Além disso, \"toda entrada alcançada tem K5\" é vacuamente verdadeiro com zero entradas. O scope.py modela K7 instalado por lógica própria, que não é o mecanismo real.",
+      "evidence": "Na raiz real, com R: zod tem 76 entradas alcançadas e só 1 provada (v4/core/json-schema.js, \"export {};\"); @tanstack/react-query tem 23 e só 1 provada (build/modern/types.js, só um comentário sourceMappingURL). As duas têm origem UNVERIFIED_INSTALLED_PACKAGE (8ef4e1c80f91…, e03bd3e1be7b…). Código: boundary-semantic-engine.mjs L2092–2110 (L2100 .filter(Boolean)); check-product-boundary.mjs L2063 (astOrigins), L2252 (closedInstalled), L2279 (verified = true).",
+      "requiredChange": "Especificar installed[] sob escopo. PROVEN só se o pacote foi alcançado (≥1 entrada), não tem tupla atribuída ao pacote e TODA entrada alcançada tem K5, com proofIds igual ao conjunto completo e sem filtro. Fora disso, UNKNOWN. A alternativa é manter installed só sob PROVEN global, e dizer isso. Trocar \"K7 de origem instalada\" pelo mecanismo real. Alinhar o preditor offline. Acrescentar ao MP03 a fixture de pacote com 2 entradas alcançadas e 1 provada: installed UNKNOWN, diagnóstico não resolvido e verified false."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "section": "§3.3, §3.4, MP02 (e SPEC0236 K7)",
+      "finding": "A emissão sobre fecho cíclico não está definida. O ID de K5 é hash do conteúdo, que inclui os IDs das dependências. emit() só memoiza depois da recursão, e resolutionEdges inclui arestas só de aquisição (import() em função nunca chamada). Um ciclo assim, sem tupla nenhuma, faz emit recursar até estourar a pilha. O catch (L2086–2090) zera TODAS as provas e acrescenta UNKNOWN_CYCLE com file \"\" (global). Na regra por escopo, um SCC limpo em qualquer lugar apagaria todas as provas por escopo e mudaria o multiset de tuplas, quebrando a §3.4. Enquanto isso, o preditor offline, cujo fecho trata ciclos, preveria provas.",
+      "evidence": "Cenário S2: com a fixture a.mjs (import \"./b.mjs\") e b.mjs (const later = () => import(\"./a.mjs\")), a v5 dá status UNKNOWN com a única tupla {file:\"\", UNKNOWN_CYCLE, \"Maximum call stack size exceeded\"}, e body/grammar ficam COMPLETED. O controle sem o import() dá PROVEN com 2 K5. Na raiz real há 7 SCCs (5 de tamanho 2 e 2 de tamanho 5), todos com UNKNOWN_CYCLE em algum membro, então hoje não há efeito.",
+      "requiredChange": "Dizer na §3.3 que um módulo cujo fecho contém SCC não trivial ou self-loop nas arestas de resolução, inclusive as de aquisição, não recebe prova, com atribuição por escopo e sem tupla global nova, em coerência com o K7 da SPEC0236. Aplicar a mesma regra no preditor e acrescentar a fixture ao MP02."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "section": "§3.4, §3.5, MP05",
+      "finding": "A base de conservação é incoerente. A §3.5 manda a 0245 primeiro (v6, semantic-kernel-v6-tsx-parse, que troca tuplas dos 29 .tsx). A §3.4 e o MP05 comparam com a v5 e com \"a regra aplicada ao despejo da cópia diagnóstica\", que é um despejo da v5. Com a 0245 primeiro, \"tuplas = v5 + gramática\" é falso por construção, e o despejo de referência não corresponde ao kernel de base. O oráculo, isto é, o preditor offline, também não está congelado nem descrito como a regra da SPEC (precedência × união, ciclos, installed). Na raiz real o MP05 terá 0 provas e não exercita emissão nenhuma.",
+      "evidence": "spec0245-r1.md.txt: v6 = semantic-kernel-v6-tsx-parse, com conservação própria contra a v5. spec0246 §3.4 \"Em relação à v5\"; MP05 \"tuplas = v5 + gramática\"; scope-v5tags.json calculado sobre diag-v5tags (v5).",
+      "requiredChange": "Definir a base como o kernel imediatamente anterior (v6 se a 0245 entrar antes) e exigir despejo diagnóstico e medição nessa base, ou declarar que a ordem é irrelevante e provar isso. Congelar o preditor por hash, implementando exatamente a §3 revista. Dizer que, na raiz real, a emissão só é exercitada por fixtures (MP01–MP04)."
+    },
+    {
+      "id": "R1-05",
+      "severity": "P2",
+      "section": "§1 (Arquivos), §3.2, §6",
+      "finding": "A caracterização das 111 falhas de gramática está errada e falta dizer que elas não mudam prova. O texto diz \"82 .ts com sintaxe que a remoção de tipos não aceita e 29 .tsx\". Na reprodução, 60 falhas (31 .ts + 29 .tsx) são sintaxe ESM em arquivo cujo modo é CJS, e não sintaxe de tipos. Todos os 111 arquivos já têm tupla na v5: a §3.2 acrescenta 111 tuplas e não muda nenhuma prova nesta raiz. A §3.2 também não diz como ficam o census, os arquivos sem modo (corpo cortado), phases.grammar sob a nova regra e o prazo.",
+      "evidence": "Cenário S5: a mesma checagem nativa (strip-only + vm, Node 22.23.2) sobre 110 dos 111 arquivos, ficando de fora 1 .ts de dist sem fonte com hash igual. Resultado: 50 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX \"parameter property\" (49 em modo import, 1 em require) e 60 SyntaxError em modo require, \"Cannot use import statement outside a module\" (45) ou \"Unexpected token 'export'\" (15). Todos os 60 têm UNKNOWN_MODULE_FORMAT, e os 50 têm ClassDeclaration recusada.",
+      "requiredChange": "Corrigir o texto com essa decomposição e declarar \"+111 tuplas, 0 efeito em prova nesta raiz\". Especificar que a gramática não roda no census, que arquivo sem modo vira UNKNOWN_RUNTIME_SYNTAX só com o corpo COMPLETED (ou não roda), qual é o valor de phases.grammar e o que acontece no prazo. Dizer o efeito no checker (12.283 → 12.394 diagnósticos) para o MP05."
+    },
+    {
+      "id": "R1-06",
+      "severity": "P2",
+      "section": "§1 (K0/NEW), §8",
+      "finding": "As unidades e o conjunto das perguntas K0 e NEW estão imprecisos. \"K0 remove 657 leituras\" são 657 tuplas (arquivo, nome) cujas emissões são todas leituras de parâmetro K0. Uma tupla cobre todas as leituras do nome no arquivo, e ficam sem remover 182 tuplas mistas K0+argumento e 25 local+K0. \"NEW remove 163 new (Date 76, Set 72, Map 30, …)\" são 163 tuplas, uma por arquivo cujos new são todos de globais da lista. A decomposição 76/72/30 conta etiquetas nas 212 tuplas NewExpression, inclusive nas 49 não removidas. O conjunto medido (NEW_BUILTINS do scope.py) inclui Promise, cujo executor roda código fornecido; Proxy, cujas armadilhas a SPEC0236 nunca modela; e URL, que é objeto do host e não intrínseco ECMAScript. Isso é incompatível com \"built-in global intrínseco cria objeto modelado\".",
+      "evidence": "Decomposição das 163 tuplas removidas (202 etiquetas, 32 tuplas com mais de um callee): Date 72, Set 60, Map 29, WeakMap 9, RegExp 9, Promise 8, URL 4, WeakSet 4, Error 3, Uint8Array 3, Proxy 1. Exemplo de K0: operator-session-route-boundary.ts lê \"method\" 3 vezes e isso dá 1 tupla.",
+      "requiredChange": "Expressar os ganhos em tuplas, com a unidade explícita. Listar no §8 o conjunto de construtores da pergunta NEW, excluindo ou separando Promise, Proxy e objetos do host. Recalcular os números. Dizer que −N é remoção bruta das tuplas da própria premissa, com efeito líquido desconhecido."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-07",
+      "severity": "P3",
+      "section": "§3.1",
+      "finding": "Os casos 2 e 3 não dizem se são cumulativos. O scope.py usa precedência: um alvo contido que seja node_modules/<p>/package.json vira dono-módulo e não sujaria o pacote. Pela letra da SPEC, o caso 3 também se aplicaria. Não há ocorrência nesta raiz (0 alvos contidos são manifestos de pacote).",
+      "requiredChange": "Dizer que a atribuição é união (todos os donos) e alinhar o preditor."
+    },
+    {
+      "id": "R1-08",
+      "severity": "P3",
+      "section": "§3.1(2), §1",
+      "finding": "\"Hoje a tupla vai só para o alvo\" vale só quando o erro traz file. Sem file, a tupla vai para o importador: 262 importadores têm registros contidos sem alvo, como os 487 UNKNOWN_NATIVE_BUILTIN. Além disso, \"1.535 arestas contidas\" são ocorrências (o contador de cobertura); os registros distintos são 1.506. \"1.061 têm arestas\" conta resolução mais contidas com alvo; 1.094 arquivos têm alguma aresta ou registro contido.",
+      "requiredChange": "Ajustar a redação e as unidades."
+    },
+    {
+      "id": "R1-09",
+      "severity": "P3",
+      "section": "§1 (13 provas)",
+      "finding": "\"11 … só exportam constantes primitivas\" não é exato. São 7 com constantes primitivas (6 routes + policy-version), 1 que exporta função que retorna null (noop-rag-source) e 3 só de tipos, sem export de runtime (runtime-execution-context, authority, schema). As 2 instaladas são vazias. Confirmado: as 13 são folhas sem aresta, sem origem e com gramática OK.",
+      "requiredChange": "Corrigir a descrição."
+    },
+    {
+      "id": "R1-10",
+      "severity": "P3",
+      "section": "§3.3 (condições de K5)",
+      "finding": "A fase grammar não está na lista de fases exigidas. Hoje qualquer aborto da gramática marca a revalidação como SKIPPED, então está coberto, mas por efeito colateral.",
+      "requiredChange": "Listar grammar explicitamente."
+    },
+    {
+      "id": "R1-11",
+      "severity": "P3",
+      "section": "§3.3 (formato) e §6",
+      "finding": "Cada K5 carrega derivation.premises (1.410 inputs, cerca de 191 KB) mais todos os probes. Com derivation.scope, isso dá cerca de 0,3–0,5 MB por prova. O teto é o maxBuffer de 64 MiB do worker, e o payload atual tem cerca de 14,6 MB. Na ordem de 100+ provas, o resultado vira ENOBUFS (outputBytes global) e perde tudo, justamente quando a regra passaria a ter valor.",
+      "requiredChange": "Declarar o orçamento ou uma derivação compacta (premissas por digest)."
+    },
+    {
+      "id": "R1-12",
+      "severity": "P3",
+      "section": "§1 (caminho até a primeira aresta)",
+      "finding": "O piso de 2 classes não é estável sob a correção de workspaces. Na v5wstags o fecho cresce e, dos 3 \"mais próximos\", só legacy-composition fica em 2 classes. O caso concreto operator-session-route-boundary foi conferido e está correto.",
+      "requiredChange": "Dizer que o piso é instável."
+    },
+    {
+      "id": "R1-13",
+      "severity": "P3",
+      "section": "§1/§8 (R)",
+      "finding": "A justificativa de R (\"o Node 22 não lê tsconfig\") não cobre compilerOptions.plugins, que são transformações no build do dist e uma das chaves que disparam a tupla.",
+      "requiredChange": "Tratar na pergunta R própria."
+    },
+    {
+      "id": "R1-14",
+      "severity": "P3",
+      "section": "Reprodutibilidade (MP05)",
+      "finding": "A raiz avaliada registrada (/mnt/dados/cvg-work/cvg-hiso005-build0241-20261018) não existe mais (verificado em 20/10 às 03:26 -03). eval-228e tem só os arquivos versionados: 775 dos 1.410 inputs com hash igual e 635 ausentes (node_modules e dist).",
+      "requiredChange": "Registrar uma receita de reconstituição com checagem de hash dos inputs antes do BUILD."
+    },
+    {
+      "id": "R1-15",
+      "severity": "P3",
+      "section": "§1 (achado de workspaces)",
+      "finding": "A medição está correta e o achado está bem posto fora da SPEC. Só que a variante é \"como o npm\" apenas para entradas que não são diretório: o npm também ignora diretório sem package.json.",
+      "requiredChange": "Ajustar a frase e abrir um item de backlog para a correção (mover o README ou alinhar o resolvedor)."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S1",
+      "kind": "contraexemplo de soundness (R1-01)",
+      "fixture": {
+        "dep.cjs": "module.exports = 'dep-ok'",
+        "m.cjs": "const dep = require('./dep.cjs')\nmodule.exports = dep",
+        "evil.cjs": "const Module = require('node:module')\nconst original = Module.prototype.require\nconst target = ['.', 'products', 'p.cjs'].join('/')\nModule.prototype.require = function (id) {\n  return original.call(this, id === './dep.cjs' ? target : id)\n}",
+        "products/p.cjs": "module.exports = 'PRODUCT-LOADED'"
+      },
+      "starts": [
+        "dep.cjs",
+        "evil.cjs",
+        "m.cjs"
+      ],
+      "result": "v5: UNKNOWN, 6 tuplas todas em evil.cjs, 0 violações, fases COMPLETED, validation true. Pela §3.3, m.cjs e dep.cjs ficam com fecho limpo e recebem K5. No Node real, require(evil) seguido de require(m) dá \"PRODUCT-LOADED\"; só require(m) dá \"dep-ok\"."
+    },
+    {
+      "id": "S2",
+      "kind": "emissão com ciclo só de aquisição (R1-03)",
+      "fixture": {
+        "a.mjs": "import './b.mjs'\nexport const x = 1",
+        "b.mjs": "const later = () => import('./a.mjs')\nexport const y = 2"
+      },
+      "starts": [
+        "a.mjs"
+      ],
+      "result": "v5: status UNKNOWN; unknowns = [{file:\"\", reason:\"UNKNOWN_CYCLE\", detail:\"Maximum call stack size exceeded\"}]; proofs []; acquisition/body/postBody/grammar/revalidation COMPLETED. Controle sem import(): PROVEN com K5 a.mjs (1 dependência) e b.mjs."
+    },
+    {
+      "id": "S3",
+      "kind": "installed parcial na raiz real (R1-02)",
+      "result": "Sob escopo + R: zod tem 1 de 76 entradas provada; @tanstack/react-query tem 1 de 23. Com o mapeamento atual sem a guarda global, as duas viram PROVEN e as origens UNVERIFIED_INSTALLED_PACKAGE são resolvidas com verified true."
+    },
+    {
+      "id": "S4",
+      "kind": "recálculo independente da §3",
+      "result": "v5tags: 11.393 tuplas, sendo 10.986 em arquivo analisado, 288 em manifesto de pacote (todas UNREACHED_INSTALLED_ENTRY), 117 em alvo contido e 2 globais (tsconfig.json e tsconfig.base.json, UNKNOWN_RESOLUTION_CONFIG). Não encontrei \"18 globais\" em nenhum artefato. Escopo dá 0 provas; escopo + R dá 13 K5, todas folhas sem aresta, sem origem e com gramática OK, com 0 de aresta e 0 K7. A atribuição pela letra da SPEC (união) e a do scope.py (precedência) dão o mesmo resultado. v5wstags: os mesmos 2 globais e as mesmas 13 provas; contidas 790; 7 SCCs, todos com UNKNOWN_CYCLE."
+    },
+    {
+      "id": "S5",
+      "kind": "reprodução da gramática (R1-05)",
+      "result": "50 parameter property (strip), 60 ESM em modo CJS (31 .ts + 29 .tsx) e 1 indisponível. Todos os 111 já tinham tupla na v5."
+    },
+    {
+      "id": "S6",
+      "kind": "fidelidade da cópia diagnóstica",
+      "result": "real-v5tags-normal comparado com BUILD0244 real-v5r3-normal: diagnostics (12.283), unknowns e usage iguais. Só diferem compiledProvenance.referenceDigest (referência recapturada, \"scoped\") e a telemetria."
+    },
+    {
+      "id": "S7",
+      "kind": "achado de workspaces",
+      "result": "746 registros contidos UNKNOWN_WORKSPACE_CONFIG, todos com alvo legacy/packages/README.md, em 458 importadores. Na variante: contidas 1.535 → 790, diagnósticos 12.283 → 12.195, contextos 229 → 241 (teto 256), provas 0 e 13. Confirmado."
+    },
+    {
+      "id": "S8",
+      "kind": "consumo pelo checker",
+      "result": "proofByOrigin (L2215–2233) não olha output.status, só valid (validação, identidade e revalidação). K7 de origem AST com status global UNKNOWN resolve a origem, e o status do checker fica INCOMPLETE pelas fronteiras. Origens instaladas não passam por K7 (ver R1-02)."
+    },
+    {
+      "id": "S9",
+      "kind": "soundness, outros fluxos examinados",
+      "result": "Sem furo encontrado em: contexto de chamada (K0 chama exports com U e receiver U; tuplas de corpos chamados por outro módulo vão para o arquivo da função, o que é conservador); estado global e globalThis (identificador livre dá UNKNOWN_BINDING no leitor); mutação (atribuição, let/var, ++, delete e métodos de array são recusados); objeto exportado ou retornado (UNKNOWN_EXPORTED_MUTABLE_STATE); loader passado a função de outro módulo (o parâmetro chamado dá UNKNOWN_CALL nesse módulo, que está no fecho); ciclos de load (UNKNOWN_CYCLE no alvo, que está no fecho); abortos globais com error.file (sempre com fase SKIPPED); census (tupla global própria); violações e revalidação (globais). O único fluxo fora das arestas é o do reino (R1-01)."
+    }
+  ],
+  "commands": [
+    "python3 -I /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/recompute.py <evidence-dir> v5tags  (e v5wstags): recálculo independente da §3 com união e com precedência, SCCs e classificação",
+    "env -i PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC /home/ricardo/.nvm/versions/node/v22.23.2/bin/node --experimental-vm-modules /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/gram/check.mjs /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/grammar-bad.json  (mesma checagem nativa do engine; fontes de eval-228e e da candidata 0244, com hash igual ao input do relatório)",
+    "cópia privada do engine v5 (sha256 c724567f…, resolution d4eeca02…, typescript.js 56917765…) em /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/eng; caller limpo: env -i PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC /home/ricardo/.nvm/versions/node/v22.23.2/bin/node /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/eng/caller.mjs <fixture> <starts…>",
+    "S1 em Node real: cd /mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0246/fx-realm && env -i PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin /home/ricardo/.nvm/versions/node/v22.23.2/bin/node -e \"require('./evil.cjs'); console.log(require('./m.cjs'))\"",
+    "python3 -I (inline): comparação de real-v5tags-normal com BUILD0244 real-v5r3-normal; números de workspace; decomposição de K0/NEW pelas etiquetas; entradas alcançadas de zod e react-query; caso operator-session-route-boundary",
+    "leitura de código: tools-v5/scripts/boundary-semantic-engine.mjs (L398–414, 828–921, 1320–1370, 1639–1729, 1924–1952, 2021–2113, 2380–2414) e check-product-boundary.mjs (L2063, 2104–2300); SPEC0236 §5/§6/K7/graph.installed; SPEC0241 §3.1"
+  ],
+  "writes": [
+    "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r1/review.json",
+    "docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r1/REPORT.txt"
+  ],
+  "forbiddenRespected": "sem checker na raiz, receitas, certify, npm install, PG, recursos do Codex, commit, push ou PR; repositório e runtime só lidos; fixtures e cópia do engine só no scratchpad"
+}
