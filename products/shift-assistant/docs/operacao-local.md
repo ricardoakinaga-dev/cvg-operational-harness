@@ -73,7 +73,12 @@ Whisper ou organização fica em espera durável (30 s, 2 min, 10 min, 30 min; c
 tentativas por mensagem, somando os estágios, e um único aviso ao autor); esgotada,
 vira nota bruta sem pendências ou revisão humana. Lembrete
 é reservado no journal antes do envio; envio de resultado desconhecido (timeout,
-5xx, queda do processo) não é repetido: `adiar N X` abre nova janela.
+5xx, queda do processo) não é repetido: `adiar N X` abre nova janela. Envio
+recusado antes de sair do processo (`not_sent`) tem cinco tentativas nos mesmos
+atrasos e é final na hora para egress negado ou texto acima do teto
+(`reminder_send_failed`, atenção na saúde); `adiar` abre janela com orçamento
+novo. Na atualização, um volume antigo com lembrete preso nesse laço passa a
+`reminder_send_failed` (contagem dos eventos antigos) e só volta com `adiar`.
 
 Conservar journal/mídia originais e inventário hash-bound antes de diagnóstico.
 Última linha sem quebra de linha não é commit: na abertura, a cópia verificada do

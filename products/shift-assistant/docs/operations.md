@@ -22,10 +22,16 @@ lockfile: `node --import tsx products/shift-assistant/scripts/<script>.mjs`.
 
 `--writer-stopped` é a declaração do operador: o journal V1 ainda não tem lock de
 escritor único nem UUID/seq (dependência PISO-004, formato V2). Por isso o
-script também exige que a URL recuse conexão, procura descritores abertos dentro
-do volume em `/proc` e refaz o hash da origem depois da cópia: qualquer mudança é
-`source_changed_during_copy`. Symlink ou arquivo especial na origem, journal que
-não abre e mídia referenciada ausente também falham.
+script exige `--stopped-url` (a URL do assistente tem de recusar conexão; se
+responder, `writer_answering`) ou, sem caminho de rede até o assistente,
+`--no-stopped-url-check`, que fica registrado no inventário como
+`waived_by_operator`; sem nenhum dos dois o backup falha
+(`stopped_url_required`). Ele refaz o hash da origem depois da cópia: qualquer
+mudança é `source_changed_during_copy`. A varredura de descritores abertos em
+`/proc` é só indício fraco: o journal é aberto e fechado a cada commit, então um
+escritor vivo raramente é visto segurando o arquivo. Symlink ou arquivo especial
+na origem, journal que não abre e mídia referenciada ausente também falham.
+`--out` dentro do volume é recusado antes de qualquer escrita.
 
 Saída: uma pasta nova `<out>/<backupId>/` (0700, arquivos 0600) com `data/`
 (cópia), `inventory.json` (caminho relativo, bytes e SHA-256 de cada documento,
@@ -53,17 +59,21 @@ Antes de escrever qualquer byte: recibo `VERIFIED`, hash do inventário e da
 projeção iguais aos do recibo, caminhos relativos sem `/` inicial, `..` ou `.`,
 nenhum symlink/arquivo especial, conjunto de arquivos idêntico ao inventário e
 cada SHA-256 conferido. O destino tem de ser novo ou vazio e nunca o volume de
-origem. A cópia é verificada de novo, o volume é reaberto somente leitura (hold:
+origem nem um caminho dentro dele (inclusive por symlink de um ancestral). A cópia é verificada de novo, o volume é reaberto somente leitura (hold:
 nada grava, cauda sem quebra de linha fica onde está) e a projeção restaurada tem
 de ser igual à do backup — texto (hash), revisão/confirmação/substituição,
 vínculos, tarefas (número, prazo, estado, contadores), entrada (estágio e
 orçamento), envio incerto, pausa e mídia.
 
 Depois, numa cópia em `--sandbox`, o assistente real roda sem hold com canal,
-Whisper e modelo substituídos por stubs em processo (o organizador responde
-`policy_denied`, NO_MODEL): um comando por membro, a confirmação de um rascunho e
-os lembretes elegíveis, uma vez cada, sem reenviar lembrete aceito ou incerto e
-sem envio fora da equipe. O volume restaurado não é tocado pela sandbox.
+Whisper e modelo substituídos por stubs em processo (notas restauradas recebem
+`policy_denied`, NO_MODEL). Volume salvo em pausa é retomado na cópia pelo
+gestor sintético (`retomar assistente`; sem gestor, FAIL). Prova um comando por
+membro, a confirmação de um rascunho — restaurado ou, sem nenhum, um rascunho
+sintético criado na própria cópia (`draftSource`) — e os lembretes elegíveis dois
+minutos depois, uma vez cada, sem reenviar lembrete aceito ou incerto e sem envio
+fora da equipe. Verificação não exercida não conta como PASS. O volume restaurado
+não é tocado pela sandbox.
 
 `restore-proof.mjs make-fixture --out <pasta nova>` grava o volume sintético dos
 testes (rascunho, confirmado, corrigido, concluído, adiado, retry, pausa,
@@ -92,8 +102,13 @@ node --import tsx products/shift-assistant/scripts/shift-monitor.mjs
 
 - Sonda `/health/live` e `/health/ready` a cada 10 s com timeout de 2 s.
 - Alerta depois de duas falhas seguidas do mesmo motivo (meta ≤ 30 s até o
-  receptor), resolve depois de duas sondas boas, um `alertId` por episódio e no
-  máximo uma atualização por minuto por motivo.
+  receptor), resolve depois de duas sondas boas da mesma origem (live com 200;
+  live falhando com outro código não resolve), um `alertId` por episódio e no
+  máximo uma atualização por minuto por episódio. Interpretação registrada: o
+  limite vale por episódio; um motivo que oscila abre episódios novos, cada um
+  depois de duas falhas, e um aviso contínuo (`paused`, `reminder_uncertain`)
+  gera uma atualização por minuto enquanto durar.
+- Leitura de prontidão com 200 e corpo ilegível é `ready_invalid`.
 - Motivos: `live_timeout`, `live_unreachable`, `live_status`, `ready_timeout`,
   `ready_unreachable`, os códigos de prontidão de `src/health.ts`
   (`storage_unavailable`, `scheduler_stale`, `inbox_stalled`,

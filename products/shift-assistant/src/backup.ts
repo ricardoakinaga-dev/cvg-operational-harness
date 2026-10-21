@@ -10,9 +10,10 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  statSync,
   writeSync
 } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { ShiftStore, type StoreProjection } from './store.ts'
 
@@ -25,9 +26,11 @@ import { ShiftStore, type StoreProjection } from './store.ts'
  *
  * Built on the current journal format (V1): there is no journal UUID or
  * sequence number and no single-writer lock file yet (PISO-004, journal V2).
- * The writer is proven stopped by the operator's statement, an optional URL
- * that must refuse connections, a scan of open file handles and a second
- * hash pass that must find the source unchanged after the copy.
+ * The writer is shown stopped by the operator's statement, a URL of the
+ * assistant that must refuse connections (or the operator's recorded waiver)
+ * and a second hash pass that must find the source unchanged after the copy.
+ * A scan of open file handles is only a weak hint: the journal is opened and
+ * closed on every commit, so a running writer is rarely caught holding it.
  */
 
 export const BACKUP_TOOL = 'cvg-shift-backup/1'
@@ -63,7 +66,7 @@ export interface SegmentSummary {
 
 export interface WriterChecks {
   operatorConfirmedStopped: boolean
-  stoppedUrl: 'refused' | 'answered' | 'not_checked'
+  stoppedUrl: 'refused' | 'answered' | 'waived_by_operator'
   openHandles: 'none_visible' | 'found' | 'unavailable'
   unreadableProcesses: number
   stableDuringCopy: boolean
@@ -113,9 +116,56 @@ export interface BackupOptions {
   outDir: string
   /** Operator statement that the assistant process is stopped. */
   writerStopped: boolean
-  /** Health or webhook URL of the assistant: it must refuse connections. */
+  /**
+   * Health or webhook URL of the assistant: it must refuse connections.
+   * Required unless `stoppedUrlWaived` records the operator's explicit
+   * decision to skip it (for example, no network path to the assistant).
+   */
   stoppedUrl?: string
+  stoppedUrlWaived?: boolean
   clock?: () => Date
+}
+
+/** Misuse that must not write anything (for example `outDir` in the volume). */
+export class BackupUsageError extends Error {
+  readonly code: string
+
+  constructor(code: string) {
+    super(code)
+    this.name = 'BackupUsageError'
+    this.code = code
+  }
+}
+
+/** Absolute path with the nearest existing ancestor's symlinks resolved. */
+function resolvedPath(path: string): string {
+  let existing = resolve(path)
+  const rest: string[] = []
+  while (!existsSync(existing)) {
+    const parent = dirname(existing)
+    if (parent === existing) break
+    rest.unshift(basename(existing))
+    existing = parent
+  }
+  return join(realpathSync(existing), ...rest)
+}
+
+/** `path` and each of its ancestors, up to the root. */
+function selfAndAncestors(path: string): string[] {
+  const out = [path]
+  let current = path
+  while (dirname(current) !== current) {
+    current = dirname(current)
+    out.push(current)
+  }
+  return out
+}
+
+function insideOrEqual(child: string, parent: string): boolean {
+  return (
+    child === parent ||
+    child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`)
+  )
 }
 
 export interface BackupResult {
@@ -427,11 +477,20 @@ function mediaReport(
  * Backs up a stopped volume into a new directory under `outDir`. Always
  * writes `receipt.json` there: `backup_verified` only after every copied
  * file matched its inventory hash and the source stayed unchanged; any
- * failure is `backup_failed` and authorizes nothing.
+ * failure is `backup_failed` and authorizes nothing. An `outDir` inside the
+ * volume is refused before anything is written (BackupUsageError).
  */
 export async function createBackup(
   options: BackupOptions
 ): Promise<BackupResult> {
+  const source = options.dataDir
+  const sourceExists = existsSync(source) && statSync(source).isDirectory()
+  if (
+    sourceExists &&
+    insideOrEqual(resolvedPath(options.outDir), realpathSync(source))
+  ) {
+    throw new BackupUsageError('out_inside_source')
+  }
   const clock = options.clock ?? (() => new Date())
   const createdAt = clock().toISOString()
   const backupId = `shift-backup-${createdAt.replace(/[-:.]/g, '').slice(0, 15)}-${randomBytes(3).toString('hex')}`
@@ -468,17 +527,17 @@ export async function createBackup(
   }
 
   if (!options.writerStopped) reasons.push('writer_not_confirmed_stopped')
-  const source = options.dataDir
-  if (!existsSync(source) || !lstatSync(source).isDirectory()) {
-    reasons.push('source_missing')
+  if (!options.stoppedUrl && options.stoppedUrlWaived !== true) {
+    reasons.push('stopped_url_required')
   }
+  if (!sourceExists) reasons.push('source_missing')
   if (reasons.length > 0) return finish()
 
-  const stoppedUrl = options.stoppedUrl
+  const stoppedUrl: WriterChecks['stoppedUrl'] = options.stoppedUrl
     ? (await answers(options.stoppedUrl))
       ? 'answered'
       : 'refused'
-    : 'not_checked'
+    : 'waived_by_operator'
   if (stoppedUrl === 'answered') reasons.push('writer_answering')
   const handles = openHandles(source)
   if (handles.state === 'found') reasons.push('writer_holds_files')
@@ -725,15 +784,21 @@ export async function restoreBackup(options: {
   const target = options.targetDir
   let targetOk = true
   let targetDetail: string | undefined
-  if (existsSync(target)) {
+  // The target (symlinks of its existing ancestors resolved) must not be the
+  // source volume or lie inside it: compare each ancestor's realpath hash.
+  const sourceHash = inventoryValue!.sourceRealpathSha256
+  if (
+    selfAndAncestors(resolvedPath(target)).some(
+      (path) => sha256(path) === sourceHash
+    )
+  ) {
+    targetOk = false
+    targetDetail = 'source volume or inside it'
+  } else if (existsSync(target)) {
     const stat = lstatSync(target)
-    const sourceHash = inventoryValue!.sourceRealpathSha256
     if (!stat.isDirectory()) {
       targetOk = false
       targetDetail = 'not a directory'
-    } else if (sha256(realpathSync(target)) === sourceHash) {
-      targetOk = false
-      targetDetail = 'source volume'
     } else if (readdirSync(target).length > 0) {
       targetOk = false
       targetDetail = 'not empty'

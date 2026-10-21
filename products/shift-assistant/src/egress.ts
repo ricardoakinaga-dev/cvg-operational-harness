@@ -57,13 +57,19 @@ function privateIPv6(host: string): boolean {
   return value === '::1' || /^f[cd][0-9a-f]{2}:/.test(value)
 }
 
+/** Well-known cloud metadata names; refused even when they look internal. */
+const METADATA_NAME = /(?:^|\.)(?:metadata|instance-data)(?:\.|$)/
+
 /**
  * True for an HTTP(S) URL without credentials whose host is loopback, a
  * private IPv4/IPv6 unique-local address, a single-label service name (a
  * Docker network alias) or a reserved internal suffix. Public names and
- * addresses, link-local/metadata (169.254.0.0/16, fe80::/10) and 0.0.0.0
- * are refused. The name is not resolved here: the backend network and the
- * host policy keep it internal (SPEC 0179 sections 8.2 and 9).
+ * addresses, link-local (169.254.0.0/16, fe80::/10), 0.0.0.0 and the
+ * well-known metadata names are refused. This is a check of the configured
+ * text only: names are not resolved here, and a single-label name could
+ * still resolve elsewhere through a DNS search domain. The backend network
+ * without external route and the host policy keep it internal (SPEC 0179
+ * sections 8.2 and 9).
  */
 export function isInternalServiceUrl(value: string): boolean {
   let url: URL
@@ -78,6 +84,7 @@ export function isInternalServiceUrl(value: string): boolean {
   if (host.startsWith('[')) return privateIPv6(host.slice(1, -1))
   if (isIP(host) === 4) return privateIPv4(host)
   if (host === 'localhost') return true
+  if (METADATA_NAME.test(host)) return false
   if (/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)) return true
   return /\.(?:local|internal|lan|home\.arpa)$/.test(host)
 }

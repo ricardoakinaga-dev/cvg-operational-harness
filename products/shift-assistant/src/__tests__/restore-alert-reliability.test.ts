@@ -49,6 +49,9 @@ import { ANA, GESTOR, setup, tempDir, wahaPayload } from './support/harness.ts'
 // local receiver that returns receipts. The stop proof runs the real process.
 // Synthetic data only; nothing reaches a provider, channel or model.
 
+/** A port nothing listens on: the stopped writer refuses connections. */
+const CLOSED = 'http://127.0.0.1:9/health/live'
+
 const sha256 = (bytes: Buffer | string) =>
   createHash('sha256').update(bytes).digest('hex')
 
@@ -94,7 +97,8 @@ describe('PISO-008: backup inventories, copies and verifies before backup_verifi
     const { receipt, backupDir } = await createBackup({
       dataDir: fixture.dataDir,
       outDir: out,
-      writerStopped: true
+      writerStopped: true,
+      stoppedUrl: CLOSED
     })
     expect(receipt).toMatchObject({
       event: 'backup_verified',
@@ -190,7 +194,7 @@ describe('PISO-008: backup inventories, copies and verifies before backup_verifi
       dataDir: fixture.dataDir,
       outDir: tempDir('backup-guard-out3'),
       writerStopped: true,
-      stoppedUrl: 'http://127.0.0.1:9/health/live'
+      stoppedUrl: CLOSED
     })
     expect(refused.receipt.status).toBe('VERIFIED')
   })
@@ -212,7 +216,8 @@ describe('PISO-008: backup inventories, copies and verifies before backup_verifi
       moving = await createBackup({
         dataDir: fixture.dataDir,
         outDir: tempDir('backup-moving-out'),
-        writerStopped: true
+        writerStopped: true,
+        stoppedUrl: CLOSED
       })
     } finally {
       clearInterval(timer)
@@ -226,7 +231,8 @@ describe('PISO-008: backup inventories, copies and verifies before backup_verifi
     const withLink = await createBackup({
       dataDir: linked.dataDir,
       outDir: tempDir('backup-link-out'),
-      writerStopped: true
+      writerStopped: true,
+      stoppedUrl: CLOSED
     })
     expect(withLink.receipt.status).toBe('FAILED')
     expect(withLink.receipt.reasons).toContain('unsupported_entry_in_source')
@@ -239,7 +245,8 @@ describe('PISO-008: backup inventories, copies and verifies before backup_verifi
     const missing = await createBackup({
       dataDir: lost.dataDir,
       outDir: tempDir('backup-lost-out'),
-      writerStopped: true
+      writerStopped: true,
+      stoppedUrl: CLOSED
     })
     expect(missing.receipt.status).toBe('FAILED')
     expect(missing.receipt.reasons).toContain('media_missing')
@@ -252,7 +259,8 @@ describe('PISO-008: restore rejects unsafe sets, compares under hold and proves 
     const { receipt, backupDir } = await createBackup({
       dataDir: fixture.dataDir,
       outDir: tempDir(`${label}-out`),
-      writerStopped: true
+      writerStopped: true,
+      stoppedUrl: CLOSED
     })
     expect(receipt.status).toBe('VERIFIED')
     return { fixture, backupDir }
@@ -455,6 +463,175 @@ describe('PISO-008: restore rejects unsafe sets, compares under hold and proves 
   })
 })
 
+describe('PISO-008: backup and restore never write into the source volume', () => {
+  it('requires the stopped URL check or a recorded operator waiver', async () => {
+    const fixture = await buildRestoreFixture(tempDir('backup-url'))
+    const missing = await createBackup({
+      dataDir: fixture.dataDir,
+      outDir: tempDir('backup-url-out'),
+      writerStopped: true
+    })
+    expect(missing.receipt.status).toBe('FAILED')
+    expect(missing.receipt.reasons).toContain('stopped_url_required')
+    expect(existsSync(join(missing.backupDir, 'data'))).toBe(false)
+    const waived = await createBackup({
+      dataDir: fixture.dataDir,
+      outDir: tempDir('backup-url-out2'),
+      writerStopped: true,
+      stoppedUrlWaived: true
+    })
+    expect(waived.receipt.status).toBe('VERIFIED')
+    const inventory = JSON.parse(
+      readFileSync(join(waived.backupDir, 'inventory.json'), 'utf8')
+    )
+    expect(inventory.writer.stoppedUrl).toBe('waived_by_operator')
+  })
+
+  it('refuses an output directory inside the volume before writing anything', async () => {
+    const fixture = await buildRestoreFixture(tempDir('backup-inside'))
+    const before = filesUnder(fixture.dataDir)
+    await expect(
+      createBackup({
+        dataDir: fixture.dataDir,
+        outDir: join(fixture.dataDir, 'backups'),
+        writerStopped: true,
+        stoppedUrl: CLOSED
+      })
+    ).rejects.toThrow(/out_inside_source/)
+    const outside = tempDir('backup-inside-link')
+    symlinkSync(fixture.dataDir, join(outside, 'volume'))
+    await expect(
+      createBackup({
+        dataDir: fixture.dataDir,
+        outDir: join(outside, 'volume', 'media', 'backups'),
+        writerStopped: true,
+        stoppedUrl: CLOSED
+      })
+    ).rejects.toThrow(/out_inside_source/)
+    expect(filesUnder(fixture.dataDir)).toEqual(before)
+  })
+
+  it('refuses a restore target inside the source, directly or through a symlinked parent', async () => {
+    const fixture = await buildRestoreFixture(tempDir('restore-inside'))
+    const { receipt, backupDir } = await createBackup({
+      dataDir: fixture.dataDir,
+      outDir: tempDir('restore-inside-out'),
+      writerStopped: true,
+      stoppedUrl: CLOSED
+    })
+    expect(receipt.status).toBe('VERIFIED')
+    const before = filesUnder(fixture.dataDir)
+    const linked = tempDir('restore-inside-link')
+    symlinkSync(fixture.dataDir, join(linked, 'volume'))
+    for (const target of [
+      join(fixture.dataDir, 'restored'),
+      join(fixture.dataDir, 'media', 'novo', 'restored'),
+      join(linked, 'volume', 'restored')
+    ]) {
+      const report = await restoreBackup({ backupDir, targetDir: target })
+      expect(report.verdict, target).toBe('FAIL')
+      expect(
+        report.checks.find((check) => check.name === 'target is new and empty')
+      ).toMatchObject({ pass: false, detail: 'source volume or inside it' })
+    }
+    expect(filesUnder(fixture.dataDir)).toEqual(before)
+  })
+})
+
+describe('PISO-008: the sandbox exercises every check', () => {
+  async function restored(
+    label: string,
+    build: (dir: string) => Promise<void>
+  ) {
+    const source = tempDir(`${label}-src`)
+    await build(source)
+    const { receipt, backupDir } = await createBackup({
+      dataDir: source,
+      outDir: tempDir(`${label}-out`),
+      writerStopped: true,
+      stoppedUrl: CLOSED
+    })
+    expect(receipt.status).toBe('VERIFIED')
+    const target = join(tempDir(`${label}-target`), 'volume')
+    expect(
+      (await restoreBackup({ backupDir, targetDir: target })).verdict
+    ).toBe('PASS')
+    return target
+  }
+
+  it('resumes a volume backed up while paused on the sandbox copy, as the runbook leaves it', async () => {
+    const target = await restored('sandbox-paused', async (dir) => {
+      await buildRestoreFixture(dir)
+      // Runbook step 1: the manager pauses before the backup.
+      const env = setup({ store: new ShiftStore(dir) })
+      await env.deliver(
+        wahaPayload('pause-before-backup', GESTOR, 'pausar assistente')
+      )
+    })
+    expect(new ShiftStore(target, { readOnly: true }).paused).toBe(true)
+    const sandbox = await sandboxCheck({
+      restoredDir: target,
+      sandboxDir: join(tempDir('sandbox-paused-copy'), 'volume'),
+      members: parseMembers(FIXTURE_MEMBERS),
+      at: new Date('2026-09-30T23:00:00.000Z')
+    })
+    expect(sandbox.verdict).toBe('PASS')
+    expect(sandbox.resumedInSandbox).toBe(true)
+    expect(sandbox.helpReplies).toBe(3)
+    expect(sandbox.confirmedTasks).toHaveLength(1)
+    expect(sandbox.remindedTasks.length).toBeGreaterThan(0)
+    // The restored volume stays paused; only the copy was resumed.
+    expect(new ShiftStore(target, { readOnly: true }).paused).toBe(true)
+
+    const noManager = await sandboxCheck({
+      restoredDir: target,
+      sandboxDir: join(tempDir('sandbox-paused-nomgr'), 'volume'),
+      members: parseMembers(`${ANA}=Dra Ana`),
+      at: new Date('2026-09-30T23:00:00.000Z')
+    })
+    expect(noManager.verdict).toBe('FAIL')
+    expect(
+      noManager.checks.find(
+        (check) => check.name === 'operation resumed on the sandbox copy'
+      )?.pass
+    ).toBe(false)
+  })
+
+  it('creates and confirms a synthetic draft when the volume has none, and reminds it', async () => {
+    const target = await restored('sandbox-nodraft', async (dir) => {
+      const env = setup({ dataDir: dir })
+      await env.deliver(wahaPayload('m1', ANA, 'Thor leito 3 ligar tutor'))
+      await env.deliver(wahaPayload('ok1', ANA, 'ok'))
+    })
+    const sandbox = await sandboxCheck({
+      restoredDir: target,
+      sandboxDir: join(tempDir('sandbox-nodraft-copy'), 'volume'),
+      members: parseMembers(`${ANA}=Dra Ana;${GESTOR}=Gestor*`),
+      at: new Date('2026-09-30T23:00:00.000Z')
+    })
+    expect(sandbox.verdict).toBe('PASS')
+    expect(sandbox.draftSource).toBe('generated_in_sandbox')
+    expect(sandbox.confirmedTasks).toHaveLength(1)
+    expect(sandbox.remindedTasks).toEqual(
+      expect.arrayContaining(sandbox.confirmedTasks)
+    )
+    expect(sandbox.resentAfterSecondTick).toBe(0)
+  })
+
+  it('fails instead of passing empty when there is no one to talk to', async () => {
+    const target = await restored('sandbox-empty', async (dir) => {
+      await buildRestoreFixture(dir)
+    })
+    const sandbox = await sandboxCheck({
+      restoredDir: target,
+      sandboxDir: join(tempDir('sandbox-empty-copy'), 'volume'),
+      members: [],
+      at: new Date('2026-09-30T23:00:00.000Z')
+    })
+    expect(sandbox.verdict).toBe('FAIL')
+  })
+})
+
 const EVENT_KEYS = [
   'alertId',
   'candidateDigest',
@@ -560,6 +737,62 @@ describe('PISO-008: external monitor alerts with one episode id and a durable qu
     expect(delivered.at(-1)!.state).toBe('firing')
   })
 
+  it('resolves a live episode only after live answers 200, not when it fails another way', async () => {
+    const delivered: AlertEvent[] = []
+    const deliver = async (body: string): Promise<DeliveryResult> => {
+      delivered.push(JSON.parse(body))
+      return {
+        ok: true,
+        receiptId: `r${delivered.length}`,
+        payloadSha256: sha256(body)
+      }
+    }
+    const clock = { now: at(0) }
+    const monitor = monitorAt(
+      join(tempDir('monitor-switch'), 'state.json'),
+      deliver,
+      clock
+    )
+    const UNREACHABLE: ProbeResult = { live: { kind: 'unreachable' } }
+    const steps: Array<[number, ProbeResult]> = [
+      [0, DOWN],
+      [10, DOWN],
+      [20, UNREACHABLE],
+      [30, UNREACHABLE],
+      [40, UNREACHABLE]
+    ]
+    for (const [second, probe] of steps) {
+      clock.now = at(second)
+      monitor.observe({ at: clock.now, ...classifyProbe(probe) })
+      await monitor.flush()
+    }
+    expect(
+      delivered.map((event) => `${event.reasonCode}:${event.state}`)
+    ).toEqual(['live_timeout:firing', 'live_unreachable:firing'])
+    for (const second of [50, 60]) {
+      clock.now = at(second)
+      monitor.observe({ at: clock.now, ...classifyProbe(OK) })
+      await monitor.flush()
+    }
+    expect(
+      delivered
+        .slice(2)
+        .map((event) => `${event.reasonCode}:${event.state}`)
+        .sort()
+    ).toEqual(['live_timeout:resolved', 'live_unreachable:resolved'])
+  })
+
+  it('does not take a 200 readiness without a readable body as healthy', () => {
+    expect(
+      classifyProbe({
+        live: OK.live,
+        ready: { kind: 'response', status: 200, body: undefined }
+      }).findings
+    ).toEqual([
+      { reasonCode: 'ready_invalid', severity: 'critical', source: 'ready' }
+    ])
+  })
+
   it('maps pause to a notice, storage and scheduler to incidents and attention to warnings', () => {
     const paused = classifyProbe({
       live: OK.live,
@@ -615,6 +848,7 @@ describe('PISO-008: external monitor alerts with one episode id and a durable qu
       findings: [
         { reasonCode: 'live_unreachable', severity: 'critical', source: 'live' }
       ],
+      liveOk: false,
       readyObserved: false
     })
   })

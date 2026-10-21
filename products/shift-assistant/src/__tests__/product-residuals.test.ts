@@ -73,6 +73,9 @@ describe('Whisper is reachable only on a local or internal destination', () => {
       'http://0.0.0.0:9000',
       'http://[2606:4700:4700::1111]/',
       'http://[fe80::1]/',
+      'http://metadata/computeMetadata/v1',
+      'http://metadata.google.internal/',
+      'http://instance-data.ec2.internal/',
       'http://user:senha@whisper:8080',
       'ftp://whisper/'
     ]) {

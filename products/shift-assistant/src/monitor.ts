@@ -56,6 +56,8 @@ export interface ProbeResult {
 
 export interface Classified {
   findings: Finding[]
+  /** True only when /health/live answered 200: the only good live probe. */
+  liveOk: boolean
   /** False when readiness was not observed (live failed or ready timed out). */
   readyObserved: boolean
 }
@@ -117,6 +119,7 @@ export function classifyProbe(result: ProbeResult): Classified {
           source: 'live'
         }
       ],
+      liveOk: false,
       readyObserved: false
     }
   }
@@ -125,11 +128,12 @@ export function classifyProbe(result: ProbeResult): Classified {
       findings: [
         { reasonCode: 'live_status', severity: 'critical', source: 'live' }
       ],
+      liveOk: false,
       readyObserved: false
     }
   }
   const ready = result.ready
-  if (!ready) return { findings: [], readyObserved: false }
+  if (!ready) return { findings: [], liveOk: true, readyObserved: false }
   if (ready.kind !== 'response') {
     return {
       findings: [
@@ -140,10 +144,19 @@ export function classifyProbe(result: ProbeResult): Classified {
           source: 'ready'
         }
       ],
+      liveOk: true,
       readyObserved: false
     }
   }
   const findings: Finding[] = []
+  if (ready.status === 200 && !isRecord(ready.body)) {
+    // A 200 without a readable status body is not proof of readiness.
+    findings.push({
+      reasonCode: 'ready_invalid',
+      severity: 'critical',
+      source: 'ready'
+    })
+  }
   const body = isRecord(ready.body) ? ready.body : {}
   const codes = Array.isArray(body.reasonCodes) ? body.reasonCodes : []
   let unknown = false
@@ -181,7 +194,7 @@ export function classifyProbe(result: ProbeResult): Classified {
       findings.push({ reasonCode: code, severity: 'warning', source: 'ready' })
     }
   }
-  return { findings, readyObserved: true }
+  return { findings, liveOk: true, readyObserved: true }
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
@@ -375,7 +388,10 @@ export class AlertMonitor {
     }
     for (const [code, state] of Object.entries(reasons)) {
       if (present.has(code)) continue
-      // A readiness reason is cleared only by an observed readiness.
+      // A reason is cleared only by a good probe of its own source: live
+      // answering 200 (not live failing with another code), or an observed
+      // readiness.
+      if (state.source === 'live' && !observation.liveOk) continue
       if (state.source === 'ready' && !observation.readyObserved) continue
       state.bad = 0
       delete state.streakSince

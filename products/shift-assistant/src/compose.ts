@@ -38,7 +38,9 @@ export interface ComposeOptions {
   /**
    * Synthetic, in-process organizer for tests only: accepted solely when it
    * carries the SYNTHETIC_ORGANIZER mark (sandbox/services.ts) and the
-   * process runs under the test runner (NODE_ENV=test). It never contacts a
+   * process runs under the test runner (NODE_ENV=test). The mark is a
+   * global symbol, so it can be forged: the guard that matters is NODE_ENV,
+   * and production entry points never pass an organizer. It never contacts a
    * model; every other composition uses the model gateway, which denies
    * clinical notes (NO_MODEL).
    */
