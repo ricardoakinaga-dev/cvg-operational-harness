@@ -1088,7 +1088,7 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
       ) {
         continue
       }
-      // SPEC0249 (AUD-0621 F17): same rule as the PostgreSQL store. An expired
+      // SPEC0249 (AUD-0621 F17): same rule as the durable store. An expired
       // lease counts as a failed attempt; on the last allowed attempt the
       // record terminates instead of being requeued forever.
       if (record.attempt >= this.maxAttempts) {
@@ -1110,7 +1110,7 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
   }
 
   // System recovery, not a worker transition: CLAIMED/RUNNING ->
-  // FAILED_TERMINAL stays outside the public graph, as in the PostgreSQL store.
+  // FAILED_TERMINAL stays outside the public graph, as in the durable store.
   private terminateExhaustedRecovery(record: ExecutionRecord, now: Date): void {
     const next = this.makeRecord({
       ...record,
