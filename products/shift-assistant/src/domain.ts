@@ -66,6 +66,11 @@ export interface Note {
   organized?: Organized
   /** Numbers in the organized output that do not appear in the raw text. */
   unverifiedNumbers: string[]
+  /**
+   * Identity or association problems the author must resolve with
+   * "corrigir" before the note can be confirmed (SPEC 0179 section 4).
+   */
+  blockingIssues?: string[]
   confirmed: boolean
   supersededBy?: string
 }
@@ -79,26 +84,111 @@ export interface Task {
   patientId?: string
   dueAt: string
   createdAt: string
-  status: 'open' | 'done' | 'cancelled'
+  /**
+   * `draft` until the author confirms the note: a draft is never listed,
+   * reminded, completed or snoozed (SPEC 0179 section 3).
+   */
+  status: TaskStatus
   remindedCount: number
   lastRemindedAt?: string
   doneAt?: string
+  /** Reminder slot whose send started and has no recorded outcome yet. */
+  reminderInFlight?: number
+  /**
+   * A reminder send may or may not have reached the channel. No further
+   * reminder of this window is sent; "adiar" opens a new window.
+   */
+  reminderUncertain?: boolean
 }
+
+export type TaskStatus = 'draft' | 'open' | 'done' | 'cancelled'
+
+/** Processing stages that call a dependency and can be retried. */
+export type ProcessingStage = 'download' | 'transcribe' | 'organize' | 'reply'
 
 /** Append-only events: the event log is the document of record (D4). */
 export type ShiftEvent =
   | { type: 'message_received'; at: string; message: InboundMessage }
   | { type: 'message_processed'; at: string; messageId: string }
   | { type: 'note_created'; at: string; note: Note }
-  | { type: 'note_confirmed'; at: string; noteId: string }
+  | {
+      type: 'note_confirmed'
+      at: string
+      noteId: string
+      /** Member who confirmed; absent in journals written before AUD-0621. */
+      by?: string
+      /** Draft tasks activated by this confirmation, in the same line. */
+      activated?: number[]
+    }
   | { type: 'note_superseded'; at: string; noteId: string; by: string }
   | { type: 'task_created'; at: string; task: Task }
   | { type: 'task_done'; at: string; number: number }
   | { type: 'task_cancelled'; at: string; number: number }
   | { type: 'task_snoozed'; at: string; number: number; dueAt: string }
-  | { type: 'task_reminded'; at: string; number: number }
+  | { type: 'task_reminded'; at: string; number: number; slot?: number }
   | { type: 'paused'; at: string; by: string }
   | { type: 'resumed'; at: string; by: string }
+  | {
+      type: 'message_retry_scheduled'
+      at: string
+      messageId: string
+      stage: ProcessingStage
+      attempt: number
+      nextAttemptAt: string
+      code: string
+    }
+  | {
+      type: 'message_review_required'
+      at: string
+      messageId: string
+      reason: string
+    }
+  | {
+      type: 'reminder_dispatch_started'
+      at: string
+      number: number
+      slot: number
+    }
+  | {
+      type: 'reminder_dispatch_failed'
+      at: string
+      number: number
+      slot: number
+      outcome: 'not_sent' | 'uncertain'
+      code: string
+    }
+  | {
+      type: 'recovery_recorded'
+      at: string
+      segment: string
+      originalSha256: string
+      prefixBytes: number
+      tailBytes: number
+      tailSha256: string
+      recoveryDir: string
+    }
+
+export const SHIFT_EVENT_TYPES: ReadonlySet<ShiftEvent['type']> = new Set<
+  ShiftEvent['type']
+>([
+  'message_received',
+  'message_processed',
+  'note_created',
+  'note_confirmed',
+  'note_superseded',
+  'task_created',
+  'task_done',
+  'task_cancelled',
+  'task_snoozed',
+  'task_reminded',
+  'paused',
+  'resumed',
+  'message_retry_scheduled',
+  'message_review_required',
+  'reminder_dispatch_started',
+  'reminder_dispatch_failed',
+  'recovery_recorded'
+])
 
 /** Digits only; WhatsApp JIDs such as 5511999990000@c.us become 5511999990000. */
 export function normalizePhone(value: string): string {

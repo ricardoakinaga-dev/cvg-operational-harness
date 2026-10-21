@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { parseMembers, type Member } from './domain.ts'
 
+/** A deadline in milliseconds, accepted only within [1 s, `max`]. */
+function ms(max: number) {
+  return z.coerce.number().int().min(1000).max(max).default(max)
+}
+
 const EnvSchema = z
   .object({
     SHIFT_PROVIDER: z.enum(['waha', 'evolution']),
@@ -10,6 +15,26 @@ const EnvSchema = z
     SHIFT_PORT: z.coerce.number().int().min(0).max(65535).default(3400),
     SHIFT_HOST: z.string().default('0.0.0.0'),
     SHIFT_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
+    // Transport deadlines and queue bounds (SPEC 0179 section 8.2). Byte
+    // ceilings are constants in transport-limits.ts and cannot be raised.
+    SHIFT_SEND_TIMEOUT_MS: ms(10_000),
+    SHIFT_MEDIA_TIMEOUT_MS: ms(15_000),
+    SHIFT_WHISPER_TIMEOUT_MS: ms(120_000),
+    SHIFT_MODEL_TIMEOUT_MS: ms(60_000),
+    SHIFT_JOB_TIMEOUT_MS: ms(210_000),
+    SHIFT_SHUTDOWN_TIMEOUT_MS: ms(10_000),
+    SHIFT_MAX_MEDIA_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(10_485_760)
+      .default(10_485_760),
+    SHIFT_MAX_PENDING_MESSAGES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .default(1000),
     WAHA_URL: z.url().optional(),
     WAHA_API_KEY: z.string().optional(),
     WAHA_SESSION: z.string().default('default'),

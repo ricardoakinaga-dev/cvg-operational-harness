@@ -1,8 +1,18 @@
 import type { FetchLike } from './egress.ts'
+import {
+  assertNotRedirect,
+  deadlineSignal,
+  DEFAULT_TIMEOUTS,
+  LIMITS,
+  readLimitedJson,
+  TransportError,
+  transportFailure,
+  untilAborted
+} from './transport-limits.ts'
 import type { MediaFile } from './whatsapp.ts'
 
 export interface Transcriber {
-  transcribe(audio: MediaFile): Promise<string>
+  transcribe(audio: MediaFile, signal?: AbortSignal): Promise<string>
 }
 
 export interface WhisperOptions {
@@ -11,6 +21,7 @@ export interface WhisperOptions {
   model: string
   language: string
   fetch: FetchLike
+  /** Total deadline, including the response body (default 120 s). */
   timeoutMs?: number
 }
 
@@ -30,7 +41,10 @@ export class WhisperTranscriber implements Transcriber {
     this.#options = { ...options, baseUrl: options.baseUrl.replace(/\/+$/, '') }
   }
 
-  async transcribe(audio: MediaFile): Promise<string> {
+  async transcribe(audio: MediaFile, caller?: AbortSignal): Promise<string> {
+    if (audio.bytes.byteLength > LIMITS.mediaBytes) {
+      throw new TransportError('MEDIA_TOO_LARGE', false)
+    }
     const mimetype = audio.mimetype.split(';')[0]!.trim()
     const form = new FormData()
     form.append(
@@ -41,22 +55,44 @@ export class WhisperTranscriber implements Transcriber {
     form.append('model', this.#options.model)
     form.append('language', this.#options.language)
     form.append('response_format', 'json')
-    const response = await this.#options.fetch(
-      `${this.#options.baseUrl}/v1/audio/transcriptions`,
-      {
-        method: 'POST',
-        body: form,
-        signal: AbortSignal.timeout(this.#options.timeoutMs ?? 120_000)
-      }
+    const signal = deadlineSignal(
+      this.#options.timeoutMs ?? DEFAULT_TIMEOUTS.whisperMs,
+      caller
     )
+    let response: Response
+    try {
+      response = await untilAborted(
+        this.#options.fetch(
+          `${this.#options.baseUrl}/v1/audio/transcriptions`,
+          { method: 'POST', body: form, signal }
+        ),
+        signal
+      )
+    } catch (error) {
+      throw transportFailure(error, signal)
+    }
+    assertNotRedirect(response)
     if (!response.ok) {
-      throw new Error(
-        `Whisper transcription failed with HTTP ${response.status}`
+      await response.body?.cancel().catch(() => undefined)
+      throw new TransportError(
+        'TRANSPORT_HTTP_STATUS',
+        response.status >= 500,
+        {
+          status: response.status
+        }
       )
     }
-    const body = (await response.json()) as { text?: unknown }
-    if (typeof body.text !== 'string') {
-      throw new Error('Whisper transcription returned no text')
+    const body = (await readLimitedJson(
+      response,
+      LIMITS.whisperResponseBytes,
+      signal
+    )) as { text?: unknown } | null
+    if (
+      !body ||
+      typeof body.text !== 'string' ||
+      body.text.length > LIMITS.transcriptChars
+    ) {
+      throw new TransportError('BODY_INVALID', false)
     }
     return body.text.trim()
   }

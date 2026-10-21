@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelProvider } from '@cvg/model-gateway'
+import type { ModelGateway } from '@cvg/model-gateway'
 import { describe, expect, it } from 'vitest'
 import { ShiftAssistant } from '../assistant.ts'
 import { parseCommand } from '../commands.ts'
@@ -266,6 +266,9 @@ describe('ShiftAssistant', () => {
       'Exames solicitados: hemograma; bioquímico (lançar na comanda)'
     )
     expect(reply).toContain('#1 — Ligar para o tutor (Thor)')
+    // AUD-0621 F08: the task stays a draft until the author confirms.
+    expect(env.store.task(1)?.status).toBe('draft')
+    await env.receive(wahaPayload('ok1', ANA, 'ok'))
     const [task] = env.store.openTasks(ANA)
     expect(task).toMatchObject({ number: 1, dueAt: '2026-09-30T19:00:00.000Z' })
   })
@@ -323,13 +326,22 @@ describe('ShiftAssistant', () => {
   it('keeps the raw text when the organizer fails', async () => {
     const env = setup({ organized: new Error('provider down') })
     await env.receive(wahaPayload('m1', ANA, 'Bob leito 2 estável'))
-    expect(env.waha.textsTo(ANA).at(0)).toContain('não consegui organizá-la')
-    expect(env.waha.textsTo(ANA).at(0)).toContain('Bob leito 2 estável')
+    // AUD-0621 F07: a transient failure is retried before the raw text is
+    // kept as the final result.
+    expect(env.waha.textsTo(ANA).at(0)).toContain('vou tentar de novo')
+    for (const minutes of [1, 3, 11, 31]) {
+      env.advance(minutes)
+      await env.assistant.tick()
+      await env.assistant.idle()
+    }
+    expect(env.waha.textsTo(ANA).at(-1)).toContain('não consegui organizá-la')
+    expect(env.waha.textsTo(ANA).at(-1)).toContain('Bob leito 2 estável')
   })
 
   it('lists, snoozes and completes only the member own tasks', async () => {
     const env = setup()
     await env.receive(wahaPayload('m1', ANA, 'nota com pendência'))
+    await env.receive(wahaPayload('ok1', ANA, 'ok')) // AUD-0621 F08
     await env.receive(wahaPayload('c1', BRUNO, 'feito 1'))
     expect(env.waha.textsTo(BRUNO).at(-1)).toContain(
       'Não encontrei a pendência 1'
@@ -346,6 +358,7 @@ describe('ShiftAssistant', () => {
   it('reminds at the due time, repeats on an interval and stops after the limit', async () => {
     const env = setup()
     await env.receive(wahaPayload('m1', ANA, 'nota'))
+    await env.receive(wahaPayload('ok1', ANA, 'ok')) // AUD-0621 F08
     expect(await env.assistant.tick()).toBe(0) // due at 16:00 local, now 15:00
     env.advance(60)
     expect(await env.assistant.tick()).toBe(1)
@@ -376,6 +389,7 @@ describe('ShiftAssistant', () => {
     expect(env.assistant.resumePending()).toBe(1)
     await env.assistant.idle()
     expect(env.waha.textsTo(ANA)).toHaveLength(1)
+    await env.receive(wahaPayload('ok1', ANA, 'ok')) // AUD-0621 F08
 
     const reopened = new ShiftStore(dataDir)
     expect(reopened.unprocessedMessages()).toHaveLength(0)
@@ -401,7 +415,8 @@ describe('ShiftAssistant', () => {
     await env.receive(wahaPayload('m1', ANA, 'Thor leito 3'))
     await env.receive(wahaPayload('m2', ANA, 'corrigir Thor leito 4'))
     expect(env.store.task(1)?.status).toBe('cancelled')
-    expect(env.store.task(2)?.status).toBe('open')
+    // AUD-0621 F08: the corrected revision needs its own confirmation.
+    expect(env.store.task(2)?.status).toBe('draft')
     expect(env.waha.textsTo(ANA).at(-1)).toContain('Nota anterior substituída')
   })
 })
@@ -523,28 +538,21 @@ describe('adapters to Whisper and the model', () => {
   })
 
   it('validates the model JSON and rejects anything else', async () => {
-    const reply = (text: string): ModelProvider =>
+    // AUD-0621 F24: the organizer talks to the public model gateway; this
+    // stand-in returns synthetic output to exercise the JSON validation only.
+    const reply = (text: string) =>
       ({
-        id: 'fake',
-        location: 'external',
-        models: ['m'],
-        execute: async () => ({
-          text,
-          usage: { inputTokens: 1, outputTokens: 1 },
-          providerId: 'fake',
-          model: 'm',
-          externalCall: false
-        })
-      }) as unknown as ModelProvider
+        generate: async () => ({ output: { text } })
+      }) as unknown as ModelGateway
     const now = new Date('2026-09-30T18:00:00.000Z')
     const fenced = '```json\n' + JSON.stringify(THOR) + '\n```'
     await expect(
-      new ModelOrganizer(reply(fenced), 'm').organize('x', now)
+      new ModelOrganizer(reply(fenced)).organize('x', now)
     ).resolves.toMatchObject({
       pacientes: [{ nome: 'Thor' }]
     })
     await expect(
-      new ModelOrganizer(reply('{"pacientes": "nao"}'), 'm').organize('x', now)
+      new ModelOrganizer(reply('{"pacientes": "nao"}')).organize('x', now)
     ).rejects.toThrow()
   })
 })

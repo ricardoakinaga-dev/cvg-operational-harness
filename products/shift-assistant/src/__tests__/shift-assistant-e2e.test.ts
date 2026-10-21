@@ -6,12 +6,18 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { composeShiftApp, type ShiftApp } from '../compose.ts'
 import { loadShiftConfig } from '../config.ts'
 import {
+  sandboxOrganizer,
   startSandboxServices,
   type SandboxServices
 } from '../sandbox/services.ts'
 
 // End to end over real HTTP: production composition and adapters against
-// loopback stand-ins for WhatsApp, Whisper and the model. Synthetic data only.
+// loopback stand-ins for WhatsApp and Whisper. Synthetic data only.
+// AUD-0621 F24: shift notes are CLINICAL and NO_MODEL is in force, so these
+// flows use the in-process sandbox organizer instead of any model request;
+// the denial of the production path is covered by
+// classification-no-model.test.ts. AUD-0621 F08: tasks are drafts until the
+// author answers "ok".
 const ANA = '5511900000001'
 const GESTOR = '5511900000009'
 const SECRET = 'segredo-sintetico-de-teste-123456'
@@ -46,7 +52,7 @@ async function boot(provider: 'waha' | 'evolution', clock: () => Date) {
     LLM_MODEL: 'sandbox',
     LLM_LOCATION: 'local'
   })
-  app = composeShiftApp(config, { clock })
+  app = composeShiftApp(config, { clock, organizer: sandboxOrganizer })
   const port = await app.start()
   const webhook = async (payload: unknown) => {
     const response = await fetch(
@@ -99,6 +105,11 @@ describe('Assistente de Plantão end to end', () => {
     expect(reply.text).toContain('Thor · ID não informado · leito 3')
     expect(reply.text).toContain('Exames solicitados: hemograma; bioquímico')
     expect(reply.text).toContain('#1 — Ligar pro tutor (Thor)')
+    expect(app.store.openTasks(ANA)).toHaveLength(0)
+    await webhook({
+      event: 'message',
+      payload: { id: 'ok1', from: `${ANA}@c.us`, fromMe: false, body: 'ok' }
+    })
     expect(app.store.openTasks(ANA)).toHaveLength(1)
 
     now = new Date('2026-10-01T19:00:00.000Z') // 16:00 local
@@ -139,6 +150,14 @@ describe('Assistente de Plantão end to end', () => {
     expect(services.sent.at(-1)?.text).toContain(
       'Bob · ID não informado · leito 2'
     )
+    await webhook({
+      event: 'messages.upsert',
+      instance: 'cvg',
+      data: {
+        key: { id: 'ok1', remoteJid: `${ANA}@s.whatsapp.net`, fromMe: false },
+        message: { conversation: 'ok' }
+      }
+    })
     expect(app.store.openTasks(ANA).at(0)?.description).toBe(
       'Trocar o curativo'
     )
@@ -177,6 +196,10 @@ describe('Assistente de Plantão end to end', () => {
     expect(reply).toContain('Evolução: consciente, com dor')
     expect(reply).toContain('Exames solicitados: raio-x; hemograma')
     expect(reply).toContain('#1 — Reavaliar a dor (Rex · ID 48213)')
+    await webhook({
+      event: 'message',
+      payload: { id: 'ok1', from: `${ANA}@c.us`, fromMe: false, body: 'ok' }
+    })
     expect(app.store.openTasks(ANA).at(0)).toMatchObject({
       patientId: '48213',
       description: 'Reavaliar a dor',
@@ -196,14 +219,17 @@ describe('Assistente de Plantão end to end', () => {
       })
       return services.sent.at(-1)!.text
     }
+    // Only confirmed notes are memory (AUD-0621 F09).
     await say(
       'r1',
       'Novo paciente: Rex, ID 111, canino, leito 4. Motivo: atropelamento.'
     )
+    await say('ok1', 'ok')
     await say(
       'r2',
       'Novo paciente: Rex, ID 222, canino, leito 7. Motivo: vômito.'
     )
+    await say('ok2', 'ok')
 
     const byBed = await say(
       'r3',
@@ -213,6 +239,7 @@ describe('Assistente de Plantão end to end', () => {
     expect(byBed).toContain(
       '🔎 ID 111 do Rex veio de uma nota anterior (leito 4); confira.'
     )
+    await say('ok3', 'ok')
     expect(app.store.openTasks(ANA).at(-1)).toMatchObject({ patientId: '111' })
 
     const ambiguous = await say('r4', 'paciente Rex comeu bem')
