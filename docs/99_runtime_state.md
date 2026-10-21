@@ -10,6 +10,18 @@
   1. Usuário: decidir o escopo por caso em tasks e approvals (resíduo P1 do F01, SPEC nova) e o produtor verificado de `case_principals` (UP91-025) antes de qualquer uso trusted.
   2. Ambiente real (fora do local): firewall nft no host, imagem pela receita no CI, monitor em outra máquina, providers e canais reais. Produção continua `NO_GO`.
 
+# CONT-20261018-D9EF — estado em 21/10/2026 (Claude Code)
+
+- `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`:
+  - PR #10 na `main` (`6ff1a648`): BUILD0245, SPEC0247 e a ligação v7 do Codex100. PR #11 (`05d4a30a`): vite 8.2.4 para os advisories de 20/10.
+  - **HISO-005:** BUILD local da [SPEC0247](02_spec/0247_b6_cjs_export_soundness.md), promovido neste PR. Raiz real 11.723 → 11.723 diagnósticos, zero provas e zero violações; nos fixtures fecham 18 provas falsas. Teste novo 98/98, crítico APPROVE sem obrigatórios. O certify local na base antiga deu NO_GO por causas fora do delta (vite antes do PR #11 e timeouts sob carga); vale o CI deste PR. [Relatório](04_audit/evidence/HISO005-P2-BUILD-0247-20261020/REPORT.txt).
+  - Achado novo, pré-existente: prova falsa por função declarada em bloco em CJS sloppy (Annex B.3.3), registrado como `HISO005-P2-ANNEXB-RECON` ([0370](03_build/0370_harness_product_isolation_backlog.md)).
+- `next_action`:
+  1. AUD0621: integração das cinco frentes em certificação local; publicação por PR próprio.
+  2. HISO-005: recon Annex B.3.3 antes da SPEC0246.
+  3. Codex100: o fechamento do G02 depende das decisões do usuário listadas no HOW final.
+
 # CONT-20261018-D9EF — estado em 20/10/2026, segunda atualização (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

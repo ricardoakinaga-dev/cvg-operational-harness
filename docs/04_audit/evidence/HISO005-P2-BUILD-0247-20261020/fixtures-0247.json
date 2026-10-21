@@ -1,0 +1,1246 @@
+{
+  "task": "HISO005-P2-BUILD-0247",
+  "generatedAt": "2026-10-20T21:49:30.809861+00:00",
+  "source": {
+    "catalog": "docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/fixtures.json",
+    "catalogSha256": "71665f542bb1e099f32c58bc59ad5650fb7c3a62beb63becfd1ee10a17cba554",
+    "review": "docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/review-r2/review.json",
+    "reviewSha256": "4913c355e3e3fff71794830879a41cb1489f1e4bd83f72be4f9b9385f0918288"
+  },
+  "count": 76,
+  "groups": {
+    "A": 18,
+    "B": 27,
+    "C": 11,
+    "D": 9,
+    "R2": 5,
+    "V": 6
+  },
+  "fixtures": [
+    {
+      "id": "F3",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { module.exports = function g(x) { return import(x) } }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "achado da recon: escrita reconhecida em corpo de função (chamado por checkExport)"
+    },
+    {
+      "id": "S10",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nelse module.exports = 1"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "achado da recon: ramos de if com condição não primitiva no topo; o último ramo vence"
+    },
+    {
+      "id": "S10-no-else",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function g(x) { return import(x) }\nif ({}) module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "if sem else: o valor anterior ao if some do valor final"
+    },
+    {
+      "id": "S10-nested",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) {\n  if ({}) module.exports = function g(x) { return import(x) }\n  else module.exports = 2\n} else module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "if aninhado no topo"
+    },
+    {
+      "id": "F3-arrow",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = () => {\n  module.exports = function g(x) { return import(x) }\n}\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "escrita em arrow com corpo de bloco"
+    },
+    {
+      "id": "F3-declaration",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function f() {\n  module.exports = function g(x) { return import(x) }\n}\nmodule.exports = f\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "escrita em declaração de função exportada"
+    },
+    {
+      "id": "F3-returned",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() {\n  return function h() {\n    module.exports = function g(x) { return import(x) }\n  }\n}\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "escrita em função devolvida por função exportada"
+    },
+    {
+      "id": "INIT-conditional",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = m ? function g(x) { return import(x) } : 1\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "módulo CJS sem escrita: o valor inicial é VOID (falsy decidível), em runtime é o objeto exports (truthy)"
+    },
+    {
+      "id": "INIT-not",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = !m ? 1 : function g(x) { return import(x) }\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "idem, com negação"
+    },
+    {
+      "id": "INIT-if",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nif (m) module.exports = function g(x) { return import(x) }\nelse module.exports = 1\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "idem, com if"
+    },
+    {
+      "id": "INIT-equality",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = m === undefined ? 1 : function g(x) { return import(x) }\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "idem, com igualdade estrita a undefined"
+    },
+    {
+      "id": "E-function",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() {\n  exports.y = function g(x) { return import(x) }\n}\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "exports.y = … em corpo de função: UNKNOWN_MUTATION quando chamado"
+    },
+    {
+      "id": "E-top",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "exports.y = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "exports.y = … no topo: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "E-rebind",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "exports = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "exports = …: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "MX-property",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports.y = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "module.exports.y = …: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "MX-element",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module['exports'] = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "module['exports'] = …: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "MX-nested-expression",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "const a = (module.exports = function g(x) { return import(x) })\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "atribuição como subexpressão: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "THIS-top",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "this.y = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "this no topo é module.exports: UNKNOWN_MUTATION"
+    },
+    {
+      "id": "DP-top",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "Object.defineProperty(module, 'exports', { value: function g(x) { return import(x) } })\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "Object.defineProperty(module, ...): UNKNOWN_PROPERTY e UNKNOWN_BINDING module"
+    },
+    {
+      "id": "DP-function",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() {\n  Object.defineProperty(module, 'exports', { value: function g(x) { return import(x) } })\n}\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "idem em corpo de função chamado por checkExport"
+    },
+    {
+      "id": "RD-before",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "const before = module.exports\nmodule.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "leitura de module.exports antes da reescrita: UNKNOWN_BINDING module"
+    },
+    {
+      "id": "RD-function",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { return module.exports }\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "leitura em corpo de função"
+    },
+    {
+      "id": "TERNARY",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = {} ? function g(x) { return import(x) } : 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "condicional: união já existente"
+    },
+    {
+      "id": "INIT-CALL",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function init() {\n  module.exports = function g(x) { return import(x) }\n}\ninit()\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "escrita em função chamada no topo: v5 faz strong update e checa g"
+    },
+    {
+      "id": "P-sequence",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function g(x) { return import(x) }\nmodule.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "PROVEN",
+      "why": "duas escritas sequenciais no topo: g nunca é observável"
+    },
+    {
+      "id": "P-block",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "{\n  module.exports = 1\n}\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "bloco no topo"
+    },
+    {
+      "id": "P-decided",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if (true) module.exports = 1\nelse module.exports = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "PROVEN",
+      "why": "condição K1 decide o ramo; o else é morto"
+    },
+    {
+      "id": "P-join-benign",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = 1\nelse module.exports = 2\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "junção de dois primitivos"
+    },
+    {
+      "id": "P-dead-function",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function never() {\n  module.exports = function g(x) { return import(x) }\n}\nmodule.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "função local nunca chamada: código morto; a classificação sintática conta a escrita (custo)"
+    },
+    {
+      "id": "P-function-export",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { return 1 }\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "exporta função sem escrita"
+    },
+    {
+      "id": "P-twice",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const a = require('./m.js')\nconst b = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "dois require do mesmo módulo"
+    },
+    {
+      "id": "C-function-benign",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { module.exports = 2 }\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "escrita benigna em corpo de função: o kernel não delimita quando ocorre"
+    },
+    {
+      "id": "C-init-call-benign",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function init() { module.exports = 1 }\ninit()\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "escrita benigna em função chamada no topo"
+    },
+    {
+      "id": "C-side-effect-module",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "módulo CJS sem escrita, require sem uso: custo só na variante U do valor inicial"
+    },
+    {
+      "id": "D-shadowed-parameter",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function f(module) { module.exports = 1 }\nmodule.exports = 2\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "parâmetro chamado module: a classificação ignora sombra (custo conservador)"
+    },
+    {
+      "id": "H-try",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "try {\n  module.exports = function g(x) { return import(x) }\n} catch (e) {}\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "escrita dentro de instrução recusada (try): REFUSED_CONTEXT_WRITE"
+    },
+    {
+      "id": "H-arguments",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "arguments[2].exports = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "arguments no topo alcança module"
+    },
+    {
+      "id": "H-require-cache",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "require.cache[__filename].exports = function g(x) { return import(x) }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "require.cache alcança o próprio módulo"
+    },
+    {
+      "id": "H-eval",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "eval('module.exports = 1')\nmodule.exports = 2\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "eval direto alcança o escopo do wrapper"
+    },
+    {
+      "id": "H-escaped-callback",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "setTimeout(function () {\n  module.exports = function g(x) { return import(x) }\n}, 0)\nmodule.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "callback entregue a chamada opaca: nunca avaliado"
+    },
+    {
+      "id": "H-top-return",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = m ? function g(x) { return import(x) } : 1\n",
+        "m.js": "if ({}) return\nmodule.exports = 0\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "return no topo: o valor pode ficar o objeto inicial; TOP_LEVEL_RETURN"
+    },
+    {
+      "id": "J-two-functions",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nelse module.exports = function h() { return 1 }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "junção de duas funções: as duas passam por checkExport"
+    },
+    {
+      "id": "ESM-unaffected",
+      "group": "B",
+      "files": {
+        "package.json": "{\"type\":\"module\"}",
+        "entry.js": "import './m.js'\nexport const v = 1\n",
+        "m.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "arquivo ESM (type module): a forma reconhecida só vale em modo require; a atribuição é UNKNOWN_MUTATION; a SPEC não se aplica"
+    },
+    {
+      "id": "X04-computed-arguments",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = () => ({ [arguments[2].exports = 1]() { return 1 } })\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "arguments em nome computado de método, dentro de arrow do topo: é o do wrapper (TOP_LEVEL_ARGUMENTS)"
+    },
+    {
+      "id": "X05-computed-this",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = () => ({ [this.k = 1]() { return 1 } })\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "this em nome computado de método, dentro de arrow do topo: é o do wrapper (TOP_LEVEL_THIS)"
+    },
+    {
+      "id": "X06-two-opaque-equal",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const a = require(\"./a.js\")\nconst b = require(\"./b.js\")\nmodule.exports = a === b ? 1 : function g(x) { return import(x) }\n",
+        "a.js": "\"use strict\"\n",
+        "b.js": "\"use strict\"\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "dois módulos sem escrita: v5 compara VOID === VOID; em runtime são objetos diferentes"
+    },
+    {
+      "id": "X07-join-then-sequence",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nmodule.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "PROVEN",
+      "why": "junção seguida de escrita total"
+    },
+    {
+      "id": "X08-join-compare",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nmodule.exports = m === 1 ? 1 : function g(x) { return import(x) }\n",
+        "m.js": "if ({}) module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "C1/C2: união com o objeto inicial não decide m === 1 (custo)"
+    },
+    {
+      "id": "X09-opaque-not",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nmodule.exports = !m ? 1 : 2\n",
+        "m.js": "\"use strict\"\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "C1: !m sobre o objeto inicial não decide (custo)"
+    },
+    {
+      "id": "X10-escaped-identifier",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { \\u006dodule.exports = function g(x) { return import(x) } }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "module escrito com escape unicode, em corpo de função"
+    },
+    {
+      "id": "X11-ts-cjs-function-write",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.ts\")\nmodule.exports = 1\n",
+        "m.ts": "module.exports = function f(): void { module.exports = function g(x: string) { return import(x) } }\n"
+      },
+      "origins": [
+        {
+          "file": "m.ts",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": ".ts em modo require com escrita em corpo de função"
+    },
+    {
+      "id": "X12-self-require",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { return require(\"./m.js\") }\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "auto-require em função exportada: UNKNOWN_CYCLE"
+    },
+    {
+      "id": "X13-reexport-opaque",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "module.exports = require(\"./m.js\")\n",
+        "m.js": "\"use strict\"\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "reexporta o objeto inicial de outro módulo"
+    },
+    {
+      "id": "X14-importer-mutates",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nm.y = function g(x) { return import(x) }\nmodule.exports = 1\n",
+        "m.js": "\"use strict\"\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "importador muta o valor: raiz só no importador (P-REINO)"
+    },
+    {
+      "id": "X15-require-cache-other",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nrequire.cache[require.resolve(\"./m.js\")].exports = function g(x) { return import(x) }\nmodule.exports = 1\n",
+        "m.js": "module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "outro módulo reescreve pelo require.cache: raiz no outro (P-REINO)"
+    },
+    {
+      "id": "X16-cycle",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "require(\"./a.js\")\nmodule.exports = 1\n",
+        "a.js": "const b = require(\"./b.js\")\nmodule.exports = function g(x) { return import(x) }\n",
+        "b.js": "const a = require(\"./a.js\")\nmodule.exports = a ? 1 : 2\n"
+      },
+      "origins": [
+        {
+          "file": "a.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "ciclo entre dois módulos CJS"
+    },
+    {
+      "id": "X17-property-positions",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "const o = { exports: 1, module: 2, require: 3 }\nconst v = o.exports\nmodule.exports = v\n"
+      },
+      "origins": [],
+      "expectV6": "PROVEN",
+      "why": "nomes em posição de propriedade não contam"
+    },
+    {
+      "id": "X18-nested-decided-inner",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) { if (true) module.exports = function g(x) { return import(x) } } else module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "if interno decidido dentro de ramo não decidido"
+    },
+    {
+      "id": "X19-union-closure",
+      "group": "B",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "const v = {} ? function g(x) { return import(x) } : 1\nmodule.exports = function f() { return v }\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "união capturada por função exportada"
+    },
+    {
+      "id": "X20-module-parameter",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function h(module) { return 1 }\nmodule.exports = 2\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "parâmetro chamado module em função morta (custo da sombra ignorada)"
+    },
+    {
+      "id": "Y01-else-if",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = 1\nelse if ({}) module.exports = function g(x) { return import(x) }\nelse module.exports = 2\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "else if: ramo do meio"
+    },
+    {
+      "id": "Y02-join-then-full-replace",
+      "group": "C",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g(x) { return import(x) }\nif ({}) module.exports = 1\nelse module.exports = 2\n"
+      },
+      "origins": [
+        {
+          "file": "m.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "PROVEN",
+      "why": "junção seguida de if que escreve nos dois ramos"
+    },
+    {
+      "id": "Y03-join-call",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nmodule.exports = m()\n",
+        "m.js": "if ({}) module.exports = function f() { return 1 }\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "C2: chamada de união com o objeto inicial (custo)"
+    },
+    {
+      "id": "Y04-same-module-equal",
+      "group": "D",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const a = require(\"./m.js\")\nconst b = require(\"./m.js\")\nmodule.exports = a === b ? 1 : function g(x) { return import(x) }\n",
+        "m.js": "\"use strict\"\n"
+      },
+      "origins": [
+        {
+          "file": "entry.js",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": "C1: a === b do mesmo módulo não decide (custo)"
+    },
+    {
+      "id": "Y05-cts",
+      "group": "A",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.cts\")\nmodule.exports = 1\n",
+        "m.cts": "if ({}) module.exports = function g(x: string) { return import(x) }\nelse module.exports = 1\n"
+      },
+      "origins": [
+        {
+          "file": "m.cts",
+          "text": "import(x)",
+          "reason": "NON_LITERAL_MODULE_REFERENCE"
+        }
+      ],
+      "expectV6": "UNKNOWN",
+      "why": ".cts com ramos de if no topo"
+    },
+    {
+      "id": "X01-true-violation-call",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nm(\"./products/x.js\")\nmodule.exports = 1\n",
+        "m.js": "module.exports = function g(s) { return require(s) }\nfunction never() { module.exports = 1 }\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "violação verdadeira por chamada do valor; C0 dá U ao importador (custo declarado)"
+    },
+    {
+      "id": "X02-true-violation-specifier",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nrequire(m)\nmodule.exports = 1\n",
+        "m.js": "module.exports = \"./products/x.js\"\nfunction never() { module.exports = 1 }\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "violação verdadeira por especificador vindo do valor; C0 dá U ao importador (custo declarado)"
+    },
+    {
+      "id": "X03-false-violation-void",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require(\"./m.js\")\nconst k = \"./products/\" + m + \".js\"\nrequire(k)\nmodule.exports = 1\n",
+        "m.js": "\"use strict\"\n",
+        "products/undefined.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "v5 monta \"./products/undefined.js\" sobre VOID; em runtime é \"[object Object]\": violação falsa que some (C1)"
+    },
+    {
+      "id": "V-S10-last-branch",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = 1\nelse module.exports = function g(s) { return require(s) }\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "VIOLATION_OR_UNKNOWN",
+      "why": "v5 acha a violação chamando o último ramo; a junção é união e a chamada de união é UNKNOWN_CALL"
+    },
+    {
+      "id": "V-F3-late-require",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const a = require('./m.js')\nconst b = require('./m.js')\nb('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "module.exports = function f() { module.exports = function g(s) { return require(s) } }\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "VIOLATION_OR_UNKNOWN",
+      "why": "v5 acha a violação chamando o valor tardio obtido por require repetido; na v6 o valor tardio é U"
+    },
+    {
+      "id": "V-literal",
+      "group": "V",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g() { return require('./products/x.js') }\nelse module.exports = 1\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "VIOLATION",
+      "why": "especificador literal: violação achada na aquisição em v5 e v6"
+    },
+    {
+      "id": "T1-function-file-tuple",
+      "group": "R2",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "const h = require('./n.js')\nif ({}) module.exports = function g() { return h({}) }\nelse module.exports = 1\n",
+        "n.js": "module.exports = function h(o) { return o.k }\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "R2 T1: a junção leva g ao checkExport; a tupla nova fica em n.js, arquivo da função chamada (fecho do módulo tocado, §3.6)",
+      "reviewFiles": {
+        "entry.js": "const m = require('./m.js'); module.exports = 1",
+        "m.js": "const h = require('./n.js'); if ({}) module.exports = function g() { return h({}) } else module.exports = 1",
+        "n.js": "module.exports = function h(o) { return o.k }"
+      },
+      "normalization": "um comando por linha e else em linha própria (ver norm)"
+    },
+    {
+      "id": "T2-true-violation-opaque",
+      "group": "R2",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nconst f = m ? function g1(s) { return require(s) } : function g2(s) { return require(s) }\nf('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "'use strict'\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "R2 T2: violação verdadeira da base carregada pelo objeto inicial (C1); vira UNKNOWN_CALL",
+      "reviewFiles": {
+        "entry.js": "const m = require('./m.js'); const f = m ? function g1(s) { return require(s) } : function g2(s) { return require(s) }; f('./products/x.js'); module.exports = 1",
+        "m.js": "'use strict'",
+        "products/x.js": "module.exports = 1"
+      },
+      "normalization": "um comando por linha e else em linha própria (ver norm)"
+    },
+    {
+      "id": "T2b-true-violation-union",
+      "group": "R2",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = function g1(s) { return require(s) }\nelse module.exports = function g2(s) { return require(s) }\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "R2 T2b: violação verdadeira da base carregada por união (C2); chamada de união recusada",
+      "reviewFiles": {
+        "entry.js": "const m = require('./m.js'); m('./products/x.js'); module.exports = 1",
+        "m.js": "if ({}) module.exports = function g1(s) { return require(s) } else module.exports = function g2(s) { return require(s) }",
+        "products/x.js": "module.exports = 1"
+      },
+      "normalization": "um comando por linha e else em linha própria (ver norm)"
+    },
+    {
+      "id": "T3-new-true-violation-join",
+      "group": "R2",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nrequire(m)\nmodule.exports = 1\n",
+        "m.js": "if ({}) module.exports = './products/x.js'\nelse module.exports = './ok.js'\n",
+        "ok.js": "module.exports = 1\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "expectV6": "VIOLATION",
+      "why": "R2 T3: a junção alcança o especificador ./products/x.js; violação nova e verdadeira, listada por causa (C2)",
+      "reviewFiles": {
+        "entry.js": "const m = require('./m.js'); require(m); module.exports = 1",
+        "m.js": "if ({}) module.exports = './products/x.js' else module.exports = './ok.js'",
+        "ok.js": "module.exports = 1",
+        "products/x.js": "module.exports = 1"
+      },
+      "normalization": "um comando por linha e else em linha própria (ver norm)"
+    },
+    {
+      "id": "Q3-computed-key-opaque",
+      "group": "R2",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nconst o = { [m]: 1 }\nmodule.exports = 1\n",
+        "m.js": "'use strict'\n"
+      },
+      "origins": [],
+      "expectV6": "UNKNOWN",
+      "why": "R2 Q3: chave computada com o objeto inicial dá UNKNOWN_OBJECT (custo C1 fora do catálogo)",
+      "reviewFiles": {
+        "entry.js": "const m = require('./m.js'); const o = { [m]: 1 }; module.exports = 1",
+        "m.js": "'use strict'"
+      },
+      "normalization": "um comando por linha e else em linha própria (ver norm)"
+    }
+  ]
+}

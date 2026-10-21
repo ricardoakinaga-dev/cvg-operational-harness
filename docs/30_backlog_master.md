@@ -10,6 +10,12 @@
   - itens de produto nos cartões PISO-001 a PISO-008 (recibo de preview, SourceEvidence/D2, journal V2, lock, outbox com recibos, AP-011);
   - smoke de produção real com o oracle novo do F26 na próxima qualificação da imagem.
 
+# CONT-20261018-D9EF — backlog em 21/10/2026 (Claude Code)
+
+- `HISO005-P2-BUILD-0247`: DONE; promovido pelo PR de 21/10. B6 continua `INCOMPLETE`, sem crédito. [Relatório](04_audit/evidence/HISO005-P2-BUILD-0247-20261020/REPORT.txt).
+- `HISO005-P2-ANNEXB-RECON`: TODO, P1 (prova falsa pré-existente em CJS sloppy), antes da SPEC0246. [0370](03_build/0370_harness_product_isolation_backlog.md).
+- Riscos: timeouts de 15 a 60 s sob carga em testes claude100, channel-gateway, apps/api e `b6-0236` (coverage); folga de 27 contextos no `maxContexts`.
+
 # CONT-20261018-D9EF — estado em 20/10/2026, segunda atualização (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

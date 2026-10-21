@@ -70,6 +70,18 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - Evidência: grafo resolvido e execução positiva/negativa do gate. Fixtures da sonda não entram no artefato de produção.
 - Progresso 07/10/2026 (`PLAN0374-B-FABLE-20261007`, B1): gate `boundary:products` passa a terminar em 26 s com `PASS` (antes ~22 min `INCOMPLETE`); dependências instaladas verificadas contra o lockfile commitado; 50 testes negativos novos cobrem os contraexemplos T2 (`P1-R2-01`, `P1-R2-02`) e as 73 sondas do crítico posterior dão 0 falsos PASS. O PASS depende de uma tabela de 169 exceções de primeira parte vinculadas por arquivo/linha/digest que ainda exige revisão independente (`--strict` mostra `INCOMPLETE`). Estado permanece `IN_PROGRESS` até a reauditoria Codex (B6). [Evidência](../04_audit/evidence/PLAN0374-B-FABLE-20261007/summary.md).
 
+#### Subtask HISO005-P2-BUILD-0247 — DONE, 21/10/2026
+
+- [SPEC0247](../02_spec/0247_b6_cjs_export_soundness.md) aprovada pelo usuário (sha `082ad2f4…`). Kernel `semantic-kernel-v7-cjs-export-value`: alças do wrapper CJS (C0), `exports` inicial opaco (C1), junção de ramos de `if` indecidido em CJS (C2) e `checkExport` sobre o valor rastreado (C3).
+- Raiz real: 11.723 → 11.723 diagnósticos, tuplas iguais, zero provas e zero violações; B6 continua `INCOMPLETE`. Fixtures: 18 PROVEN falsos fechados, 9 PROVEN corretos perdidos (custo previsto), nenhum PROVEN novo.
+- Teste novo 98/98 (75/98 falham na v6), 6 mutantes mortos, crítico R1 APPROVE sem obrigatórios. O certify local na base antiga deu NO_GO por causas fora do delta (vite antes do PR #11 e timeouts sob carga); a certificação é a do CI no PR de promoção. [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/REPORT.txt), [análise do certify](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/certify-r2-analysis.json).
+
+#### Subtask HISO005-P2-ANNEXB-RECON — TODO, aberta em 21/10/2026
+
+- Estado `TODO`. Prioridade P1, porque é prova falsa. Dono: engenharia do harness (kernel B6). Risco/gate: T1 para o recon; a correção é T3. Deve vir antes da SPEC0246.
+- Achado do BUILD0247, pré-existente e fora do delta: em CJS sloppy, uma função declarada em bloco (Annex B.3.3) reatribui a ligação do wrapper, e o kernel resolve a função externa e dá PROVEN falso; v6 e v7 iguais, confirmado no runtime do Node 22. [Achado](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/finding-annexb-block-function.json).
+- Aceite do recon: contar as ocorrências na raiz real, controles positivos e negativos, e proposta de SPEC.
+
 #### Subtask HISO005-P2-WORKSPACE-MAP — TODO, aberta em 20/10/2026
 
 - Estado `TODO`. Prioridade P2. Dono: engenharia do harness (resolvedor B6). Risco/gate: T3, porque muda a resolução que a B6 usa. Depende de nada; deve vir antes da primeira prova de aresta `@cvg/*`.
