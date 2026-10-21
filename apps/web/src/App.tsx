@@ -18,6 +18,7 @@ import {
   type AuditEvidenceReviewView,
   type AuditEventView,
   type ConversationView,
+  type ListPage,
   type ListPageInfo,
   type OperatorIdentity,
   type OperatorRole,
@@ -55,6 +56,15 @@ const failed = <T,>(data: T): PanelState<T> => ({
   error: 'Erro ao carregar dados operacionais.',
   isLoading: false
 })
+
+/** Loads one page; an emptied page past the first falls back to the first. */
+async function fetchQueuePage<T>(
+  load: (offset: number) => Promise<ListPage<T>>,
+  offset: number
+): Promise<ListPage<T>> {
+  const page = await load(offset)
+  return page.items.length === 0 && offset > 0 ? load(0) : page
+}
 
 /** Store, rate limit, server or network trouble: retry, never re-authenticate. */
 function isSessionUnavailable(error: unknown): boolean {
@@ -606,35 +616,47 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     setAuditEvidenceCheckpointMessage(null)
   }
 
+  const loadApprovalQueuePage = (identity: OperatorIdentity, offset: number) =>
+    fetchQueuePage(
+      (pageOffset) =>
+        apiClient.listApprovalPage(identity, {
+          statuses: approvalQueueStatuses,
+          limit: queuePageSize,
+          offset: pageOffset
+        }),
+      offset
+    )
+
   const refreshApprovals = async (
     scope = viewScopeToken,
     offset = approvalPageInfo?.offset ?? 0
   ) => {
     const identity = currentOperatorIdentity()
     if (!identity || !isCurrentViewScope(scope)) return
-    let page = await apiClient.listApprovalPage(identity, {
-      statuses: approvalQueueStatuses,
-      limit: queuePageSize,
-      offset
-    })
-    if (page.items.length === 0 && offset > 0) {
-      page = await apiClient.listApprovalPage(identity, {
-        statuses: approvalQueueStatuses,
-        limit: queuePageSize,
-        offset: 0
-      })
-    }
+    const page = await loadApprovalQueuePage(identity, offset)
     if (!isCurrentViewScope(scope)) return
     setApprovals(loaded(page.items))
     setApprovalPageInfo(page.pageInfo)
   }
 
+  // The queue depends on the identity, not on the selected conversation, so
+  // page navigation is guarded by the identity scope: selecting a case while
+  // a page loads cannot strand the panel in its loading state.
   const goToApprovalPage = (offset: number) => {
-    const scope = viewScopeToken
-    setApprovals(loading(approvals.data))
-    refreshApprovals(scope, Math.max(0, offset)).catch(() => {
-      if (isCurrentViewScope(scope)) setApprovals(failed(approvals.data))
-    })
+    const identity = currentOperatorIdentity()
+    if (!identity) return
+    const scope = identityKey
+    const previous = approvals.data
+    setApprovals(loading(previous))
+    loadApprovalQueuePage(identity, Math.max(0, offset))
+      .then((page) => {
+        if (!isCurrentIdentity(scope)) return
+        setApprovals(loaded(page.items))
+        setApprovalPageInfo(page.pageInfo)
+      })
+      .catch(() => {
+        if (isCurrentIdentity(scope)) setApprovals(failed(previous))
+      })
   }
 
   const openApprovalCase = (sessionId: string) => {
@@ -796,35 +818,45 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     }
   }
 
+  const loadActiveTaskPage = (identity: OperatorIdentity, offset: number) =>
+    fetchQueuePage(
+      (pageOffset) =>
+        apiClient.listTaskPage(identity, {
+          statuses: activeTaskStatuses,
+          limit: queuePageSize,
+          offset: pageOffset
+        }),
+      offset
+    )
+
   const refreshTasks = async (
     scope = viewScopeToken,
     offset = taskPageInfo?.offset ?? 0
   ) => {
     const identity = currentOperatorIdentity()
     if (!identity || !isCurrentViewScope(scope)) return
-    let page = await apiClient.listTaskPage(identity, {
-      statuses: activeTaskStatuses,
-      limit: queuePageSize,
-      offset
-    })
-    if (page.items.length === 0 && offset > 0) {
-      page = await apiClient.listTaskPage(identity, {
-        statuses: activeTaskStatuses,
-        limit: queuePageSize,
-        offset: 0
-      })
-    }
+    const page = await loadActiveTaskPage(identity, offset)
     if (!isCurrentViewScope(scope)) return
     setTasks(loaded(page.items))
     setTaskPageInfo(page.pageInfo)
   }
 
+  // Same identity-scoped guard as the approval queue navigation.
   const goToTaskPage = (offset: number) => {
-    const scope = viewScopeToken
-    setTasks(loading(tasks.data))
-    refreshTasks(scope, Math.max(0, offset)).catch(() => {
-      if (isCurrentViewScope(scope)) setTasks(failed(tasks.data))
-    })
+    const identity = currentOperatorIdentity()
+    if (!identity) return
+    const scope = identityKey
+    const previous = tasks.data
+    setTasks(loading(previous))
+    loadActiveTaskPage(identity, Math.max(0, offset))
+      .then((page) => {
+        if (!isCurrentIdentity(scope)) return
+        setTasks(loaded(page.items))
+        setTaskPageInfo(page.pageInfo)
+      })
+      .catch(() => {
+        if (isCurrentIdentity(scope)) setTasks(failed(previous))
+      })
   }
 
   const decideApproval = async (
@@ -887,9 +919,22 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       if (!isCurrentViewScope(scope)) return
       await refreshTasks(scope)
       await refreshAudit(scope)
-    } catch {
+    } catch (error) {
       if (!isCurrentViewScope(scope)) return
-      setTasks(failed(tasks.data))
+      // SPEC0250 §3.6: a transition rejected because the task already moved
+      // (conflict or invalid transition) reloads the current page.
+      if (
+        isApiConflict(error) ||
+        (error instanceof ApiRequestError && error.code === 'invalid_action')
+      ) {
+        try {
+          await refreshTasks(scope)
+          return
+        } catch {
+          // fall through to the failed state below
+        }
+      }
+      if (isCurrentViewScope(scope)) setTasks(failed(tasks.data))
     } finally {
       if (isCurrentViewScope(scope)) setTaskActionId(null)
     }

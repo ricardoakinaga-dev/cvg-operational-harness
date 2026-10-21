@@ -185,7 +185,9 @@ describe('trusted console cookie-only restoration (AUD0621 F12)', () => {
     expect(screen.queryByText('Autenticação necessária')).toBeNull()
     const retry = screen.getByRole('button', { name: 'Tentar novamente' })
     await waitFor(() => expect(document.activeElement).toBe(retry))
+    // The cookie-only read keeps the bounded GET retry (1 + 2 attempts).
     const attemptsBeforeRetry = sessionCalls.length
+    expect(attemptsBeforeRetry).toBe(3)
 
     available = true
     fireEvent.click(retry)

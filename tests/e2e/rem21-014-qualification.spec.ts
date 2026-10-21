@@ -258,6 +258,13 @@ test.describe('REM21-014 trusted browser qualification', () => {
     try {
       const first = await context.newPage()
       await openTrustedConsole(first, operator)
+      // The runtime provider consumed the one-use token on the first page.
+      expect(
+        await first.evaluate(
+          () =>
+            (window as BootstrapWindow).__CVG_OPERATOR_BOOTSTRAP_TOKEN__ ?? null
+        )
+      ).toBeNull()
       await first.close()
 
       const page = await context.newPage()

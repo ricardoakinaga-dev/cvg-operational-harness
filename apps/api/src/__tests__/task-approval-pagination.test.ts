@@ -97,7 +97,24 @@ describe('bounded task and approval listings (AUD0621 F23, SPEC0250)', () => {
     const app = buildServer({ rateLimiter: unlimited })
     try {
       const { taskIds, approvalIds } = await seed(app, tenant, 101, 101)
-      await seed(app, otherTenant, 1, 1)
+      const other = await seed(app, otherTenant, 1, 1)
+      const crossTenant = await app.inject({
+        method: 'PATCH',
+        url: `/v1/tasks/${other.taskIds[0]}/status`,
+        headers: headers('Operator'),
+        payload: { status: 'done' }
+      })
+      expect(crossTenant.statusCode).toBe(400)
+      expect(crossTenant.json().error.code).toBe('invalid_action')
+      const otherTasks = await app.inject({
+        method: 'GET',
+        url: '/v1/tasks',
+        headers: headers('Supervisor', otherTenant)
+      })
+      expect(otherTasks.json().data).toMatchObject([
+        { id: other.taskIds[0], status: 'open' }
+      ])
+      expect(otherTasks.json().meta.pageInfo.total).toBe(1)
       for (const [index, id] of approvalIds.slice(0, 51).entries()) {
         const decided = await app.inject({
           method: 'POST',

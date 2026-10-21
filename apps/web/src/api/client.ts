@@ -790,7 +790,10 @@ async function requestPage<T>(
   query: { limit: number; offset: number }
 ): Promise<ListPage<T>> {
   const { data, meta } = await requestEnvelope<T[]>(path, init)
-  const items = Array.isArray(data) ? data : []
+  if (!Array.isArray(data)) {
+    throw new ApiRequestError('Unexpected list response', 200, 'request_failed')
+  }
+  const items = data
   const pageInfo = isListPageInfo(meta.pageInfo)
     ? meta.pageInfo
     : {
