@@ -64,13 +64,15 @@ async function statusEvents(
   sessionId: string,
   taskId: string
 ): Promise<StatusEvent[]> {
+  // SPEC0176: the session audit reader only returns producer-linked events and
+  // the task transition is not linked, so read the full evidence reader.
   const audit = await app.inject({
     method: 'GET',
-    url: `/v1/audit/sessions/${sessionId}`,
+    url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
     headers: supervisorHeaders
   })
   expect(audit.statusCode).toBe(200)
-  return (audit.json().data.events as StatusEvent[]).filter(
+  return (audit.json().data.page.items as StatusEvent[]).filter(
     (event) =>
       event.payload.taskId === taskId &&
       event.payload.effect === 'internal_task_state_only'
