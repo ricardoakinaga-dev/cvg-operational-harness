@@ -138,7 +138,7 @@ export class BackupUsageError extends Error {
 }
 
 /** Absolute path with the nearest existing ancestor's symlinks resolved. */
-function resolvedPath(path: string): string {
+export function resolvedPath(path: string): string {
   let existing = resolve(path)
   const rest: string[] = []
   while (!existsSync(existing)) {
@@ -151,7 +151,7 @@ function resolvedPath(path: string): string {
 }
 
 /** `path` and each of its ancestors, up to the root. */
-function selfAndAncestors(path: string): string[] {
+export function selfAndAncestors(path: string): string[] {
   const out = [path]
   let current = path
   while (dirname(current) !== current) {
@@ -161,7 +161,7 @@ function selfAndAncestors(path: string): string[] {
   return out
 }
 
-function insideOrEqual(child: string, parent: string): boolean {
+export function insideOrEqual(child: string, parent: string): boolean {
   return (
     child === parent ||
     child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`)
@@ -527,6 +527,11 @@ export async function createBackup(
   }
 
   if (!options.writerStopped) reasons.push('writer_not_confirmed_stopped')
+  // The volume root itself must be a real directory: through a symlink the
+  // inventory would describe one path while another one is copied.
+  if (existsSync(source) && lstatSync(source).isSymbolicLink()) {
+    reasons.push('source_symlink')
+  }
   if (!options.stoppedUrl && options.stoppedUrlWaived !== true) {
     reasons.push('stopped_url_required')
   }

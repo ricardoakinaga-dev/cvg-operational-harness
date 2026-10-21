@@ -1,6 +1,20 @@
+import { randomUUID } from 'node:crypto'
+import { existsSync, realpathSync } from 'node:fs'
 import { ShiftAssistant, noteCode } from './assistant.ts'
-import { copyVolume, type RestoreCheck } from './backup.ts'
-import { samePhone, type InboundMessage, type Member } from './domain.ts'
+import {
+  copyVolume,
+  insideOrEqual,
+  resolvedPath,
+  selfAndAncestors,
+  sha256,
+  type RestoreCheck
+} from './backup.ts'
+import {
+  samePhone,
+  type InboundMessage,
+  type Member,
+  type Note
+} from './domain.ts'
 import { ShiftStore } from './store.ts'
 import { HELP_TEXT } from './commands.ts'
 import { TransportError } from './transport-limits.ts'
@@ -16,8 +30,11 @@ import type { WhatsAppClient } from './whatsapp.ts'
  * reminders, and that no reminder already accepted or uncertain is sent
  * again; every check must be exercised to pass. No channel, Whisper or model
  * is contacted: restored notes get `policy_denied` (NO_MODEL) and only the
- * sandbox's own synthetic note is organized, in process. The restored volume
- * itself is never written.
+ * sandbox's own synthetic note is organized, in process. The sandbox never
+ * runs in the restored volume, the source volume or any path inside or above
+ * them (real paths, symlinks resolved), so neither is ever written. Drafts
+ * are chosen by identity: the restored draft with the smallest note id, and
+ * the synthetic note by the message id the sandbox sent.
  */
 
 export interface SandboxOptions {
@@ -28,6 +45,8 @@ export interface SandboxOptions {
   members: Member[]
   /** Sandbox time (default: now). */
   at?: Date
+  /** The backup's `sourceRealpathSha256`: the sandbox refuses to run inside it. */
+  sourceRealpathSha256?: string
 }
 
 type SendKind = 'help' | 'confirm' | 'reminder' | 'other'
@@ -48,11 +67,76 @@ export interface SandboxReport {
   remindedTasks: number[]
   uncertainTasks: number[]
   resentAfterSecondTick: number
+  /** Note confirmed for the confirmation check (a UUID, content-free). */
+  confirmedNoteId?: string
+  /** Note the sandbox created itself, when it had to. */
+  syntheticNoteId?: string
   /** Content-free: destination class and kind only. */
   sends: Array<{ to: 'member' | 'outside'; kind: SendKind }>
 }
 
 const REMINDER = /^⏰ Lembrete #(\d+):/
+const PLACE = 'sandbox outside the source and restored volumes'
+
+/**
+ * Oracle of one reminder round: exactly the independently computed eligible
+ * set, once each, none held (uncertain or failed), nothing resent by a second
+ * tick. A round with nothing eligible and nothing sent proves nothing and
+ * fails.
+ */
+export function evaluateReminderRound(round: {
+  expected: readonly number[]
+  reminded: readonly number[]
+  resent: number
+  held: readonly number[]
+}): RestoreCheck[] {
+  const expected = new Set(round.expected)
+  const { reminded } = round
+  return [
+    {
+      name: 'reminders only for the eligible tasks, once each',
+      pass:
+        reminded.length > 0 &&
+        reminded.length === expected.size &&
+        new Set(reminded).size === reminded.length &&
+        reminded.every((number) => expected.has(number)),
+      detail: `${reminded.length} sent, ${expected.size} eligible`
+    },
+    {
+      name: 'no reminder for uncertain or failed sends',
+      pass: reminded.every((number) => !round.held.includes(number)),
+      detail: `${round.held.length} held`
+    },
+    {
+      name: 'no resend on a second tick',
+      pass: reminded.length > 0 && round.resent === 0,
+      detail: `${round.resent} resent`
+    }
+  ]
+}
+
+/** Why `sandboxDir` may not be used, or undefined when it is separate. */
+function placementProblem(options: SandboxOptions): string | undefined {
+  const sandbox = resolvedPath(options.sandboxDir)
+  if (existsSync(options.restoredDir)) {
+    const restored = realpathSync(options.restoredDir)
+    if (insideOrEqual(sandbox, restored) || insideOrEqual(restored, sandbox)) {
+      return 'restored volume, inside it or above it'
+    }
+  }
+  // The source path is known only by its hash: the sandbox and each of its
+  // ancestors are compared with it. A sandbox above the source cannot be
+  // empty, and copyVolume only accepts a new or empty directory.
+  if (
+    options.sourceRealpathSha256 !== undefined &&
+    selfAndAncestors(sandbox).some(
+      (path) => sha256(path) === options.sourceRealpathSha256
+    )
+  ) {
+    return 'source volume or inside it'
+  }
+  return undefined
+}
 const SANDBOX_NOTE = 'nota sintética da sandbox de restore'
 const SANDBOX_PATIENT = 'Paciente sintético da sandbox'
 
@@ -84,6 +168,8 @@ export async function sandboxCheck(
     checks
   })
 
+  const problem = placementProblem(options)
+  if (!check(PLACE, problem === undefined, problem)) return report()
   const copy = await copyVolume(options.restoredDir, options.sandboxDir)
   if (!check('sandbox copy verified', copy.ok, copy.detail)) return report()
   if (
@@ -148,19 +234,22 @@ export async function sandboxCheck(
   const isMember = (phone: string) =>
     options.members.some((member) => samePhone(member.phone, phone))
   let sequence = 0
+  const run = randomUUID()
+  /** Delivers `text` from `member`; returns the message id it used. */
   const say = async (member: Member, text: string) => {
     sequence += 1
+    const messageId = `restore-sandbox-${run}-${sequence}`
     const message: InboundMessage = {
       provider: 'waha',
-      messageId: `restore-sandbox-${sequence}`,
+      messageId,
       fromPhone: member.phone,
       kind: 'text',
       text,
       receivedAt: now.toISOString()
     }
-    const accepted = assistant.receive(message)
+    assistant.receive(message)
     await assistant.idle()
-    return accepted
+    return messageId
   }
 
   // A volume backed up after "pausar assistente" restores paused: release
@@ -202,21 +291,25 @@ export async function sandboxCheck(
   // Confirmation of a draft by its author activates exactly its tasks. A
   // restored draft is preferred; without one, the sandbox creates its own
   // synthetic draft on the copy so the confirmation is always exercised.
+  const confirmable = (note: Note) =>
+    !note.confirmed &&
+    !note.supersededBy &&
+    (note.blockingIssues?.length ?? 0) === 0 &&
+    isMember(note.authorPhone) &&
+    store.tasksOfNote(note.id).some((task) => task.status === 'draft')
+  /** The restored draft with the smallest note id: identity, not order. */
   const findDraft = () =>
     store
       .projection()
-      .notes.filter((note) => !note.confirmed && !note.supersededBy)
-      .map((entry) => store.note(entry.id)!)
-      .find(
-        (note) =>
-          (note.blockingIssues?.length ?? 0) === 0 &&
-          isMember(note.authorPhone) &&
-          store.tasksOfNote(note.id).some((task) => task.status === 'draft')
-      )
+      .notes.map((entry) => store.note(entry.id)!)
+      .filter(confirmable)
+      .sort((left, right) =>
+        left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+      )[0]
   const syntheticAuthor =
     options.members.find((member) => !member.manager) ?? options.members[0]!
   /** Confirms `note` by its author; returns the tasks it activated. */
-  const confirm = async (note: NonNullable<ReturnType<typeof findDraft>>) => {
+  const confirm = async (note: Note) => {
     const author = options.members.find((member) =>
       samePhone(member.phone, note.authorPhone)
     )!
@@ -236,10 +329,25 @@ export async function sandboxCheck(
       sent.slice(before).length === 1
     return { ok, activated, drafts: drafts.length }
   }
-  /** A synthetic draft due one minute from the sandbox clock. */
-  const syntheticDraft = async () => {
-    await say(syntheticAuthor, SANDBOX_NOTE)
-    return findDraft()
+  /**
+   * A synthetic draft due one minute from the sandbox clock: the note made
+   * from the message the sandbox just sent, found by that message id.
+   */
+  let syntheticNoteId: string | undefined
+  const syntheticDraft = async (): Promise<Note | undefined> => {
+    const messageId = await say(syntheticAuthor, SANDBOX_NOTE)
+    const made = store
+      .projection()
+      .notes.map((entry) => store.note(entry.id)!)
+      .find((note) => note.messageId === messageId)
+    const ok = made !== undefined && confirmable(made)
+    check(
+      'synthetic draft created',
+      ok,
+      ok ? undefined : 'the sandbox note did not become a draft'
+    )
+    if (ok) syntheticNoteId = made.id
+    return ok ? made : undefined
   }
 
   let draft = findDraft()
@@ -249,6 +357,7 @@ export async function sandboxCheck(
     draft = await syntheticDraft()
   }
   const confirmedTasks: number[] = []
+  const confirmedNoteId = draft?.id
   if (draft) {
     const result = await confirm(draft)
     confirmedTasks.push(...result.activated)
@@ -310,6 +419,11 @@ export async function sandboxCheck(
     if (extra) {
       const result = await confirm(extra)
       confirmedTasks.push(...result.activated)
+      check(
+        'synthetic draft confirmed for the reminder round',
+        result.ok,
+        `${result.activated.length}/${result.drafts}`
+      )
     }
     now = new Date(now.getTime() + 2 * 60_000)
     expected = expectedAt(now.getTime())
@@ -323,29 +437,19 @@ export async function sandboxCheck(
     .map((entry) => REMINDER.exec(entry.text)?.[1])
     .filter((number): number is string => number !== undefined)
     .map(Number)
-  check(
-    'reminders only for the eligible tasks, once each',
-    reminded.length > 0 &&
-      reminded.length === expected.size &&
-      new Set(reminded).size === reminded.length &&
-      reminded.every((number) => expected.has(number)),
-    `${reminded.length} sent, ${expected.size} eligible`
-  )
-  check(
-    'no reminder for uncertain or failed sends',
-    reminded.every((number) => !uncertainTasks.includes(number)),
-    `${uncertainTasks.length} held`
-  )
   const secondTick = sent.length
   await assistant.tick()
   await assistant.idle()
   const resent = sent
     .slice(secondTick)
     .filter((entry) => REMINDER.test(entry.text)).length
-  check(
-    'no resend on a second tick',
-    reminded.length > 0 && resent === 0,
-    `${resent} resent`
+  checks.push(
+    ...evaluateReminderRound({
+      expected: [...expected],
+      reminded,
+      resent,
+      held: uncertainTasks
+    })
   )
   check(
     'no send outside the team',
@@ -362,6 +466,8 @@ export async function sandboxCheck(
     remindedTasks: reminded,
     uncertainTasks,
     resentAfterSecondTick: resent,
+    ...(confirmedNoteId ? { confirmedNoteId } : {}),
+    ...(syntheticNoteId ? { syntheticNoteId } : {}),
     sends: sent.map((entry) => ({
       to: isMember(entry.phone) ? 'member' : 'outside',
       kind: REMINDER.test(entry.text)

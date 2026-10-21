@@ -103,6 +103,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The `/health/ready` contract (server.ts): `ready: true`, a running or
+ * paused mode and the reason and attention arrays. Anything else answered
+ * with 200 does not count as healthy.
+ */
+function readyContract(body: unknown): boolean {
+  return (
+    isRecord(body) &&
+    body.ready === true &&
+    (body.mode === 'running' || body.mode === 'paused') &&
+    Array.isArray(body.reasonCodes) &&
+    Array.isArray(body.attention)
+  )
+}
+
+/**
  * Maps a probe to stable findings. Unknown readiness codes become
  * `not_ready` and unknown attention codes are dropped: nothing received from
  * the assistant is echoed into an alert.
@@ -149,8 +164,8 @@ export function classifyProbe(result: ProbeResult): Classified {
     }
   }
   const findings: Finding[] = []
-  if (ready.status === 200 && !isRecord(ready.body)) {
-    // A 200 without a readable status body is not proof of readiness.
+  if (ready.status === 200 && !readyContract(ready.body)) {
+    // A 200 outside the /health/ready contract is not proof of readiness.
     findings.push({
       reasonCode: 'ready_invalid',
       severity: 'critical',

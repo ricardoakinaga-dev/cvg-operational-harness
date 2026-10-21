@@ -838,7 +838,7 @@ describe('PISO-008: external monitor alerts with one episode id and a durable qu
       ready: {
         kind: 'response',
         status: 200,
-        body: { mode: 'paused', reasonCodes: [], attention: [] }
+        body: { ready: true, mode: 'paused', reasonCodes: [], attention: [] }
       }
     })
     expect(paused.findings).toEqual([

@@ -11,7 +11,8 @@
 // projection with the backed-up one; then a copy runs the real assistant in a
 // transport sandbox (in-process stubs, no channel, Whisper or model) to prove
 // a command, a confirmation and the next eligible reminders without resending
-// accepted or uncertain ones. `make-fixture` writes the synthetic volume of
+// accepted or uncertain ones; the sandbox directory may not be the restored
+// or the source volume, nor inside or above them. `make-fixture` writes the synthetic volume of
 // the tests (draft, confirmed, corrected, done, snoozed, retry, pause,
 // interrupted dispatch, isolated tail, orphan media). Prints a JSON report.
 // Exit 0 PASS, 1 FAIL, 2 usage or tool unavailable.
@@ -83,13 +84,28 @@ const { sandboxCheck } = await load('../src/restore-sandbox.ts')
 const { parseMembers } = await load('../src/domain.ts')
 
 const restore = await restoreBackup({ backupDir, targetDir })
+// The sandbox also refuses to run inside the backed-up source volume.
+const { readFileSync } = await import('node:fs')
+const { join } = await import('node:path')
+let sourceRealpathSha256
+try {
+  const inventory = JSON.parse(
+    readFileSync(join(backupDir, 'inventory.json'), 'utf8')
+  )
+  if (typeof inventory.sourceRealpathSha256 === 'string') {
+    sourceRealpathSha256 = inventory.sourceRealpathSha256
+  }
+} catch {
+  sourceRealpathSha256 = undefined
+}
 const sandbox =
   restore.verdict === 'PASS'
     ? await sandboxCheck({
         restoredDir: targetDir,
         sandboxDir,
         members: parseMembers(membersSpec),
-        ...(at ? { at: new Date(at) } : {})
+        ...(at ? { at: new Date(at) } : {}),
+        ...(sourceRealpathSha256 ? { sourceRealpathSha256 } : {})
       })
     : undefined
 const verdict =
