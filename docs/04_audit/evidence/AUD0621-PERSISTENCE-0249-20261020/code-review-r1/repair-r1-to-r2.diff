@@ -1,0 +1,137 @@
+478c478
+< @@ -0,0 +1,185 @@
+---
+> @@ -0,0 +1,184 @@
+639d638
+< +    const trail = trailFor(memory.store, { rotateAt: 1 })
+661c660
+< +    expect(trail.pendingLedgers()).toBe(1)
+---
+> +    expect(ordered.pendingLedgers()).toBe(1)
+852c851
+< @@ -3,7 +3,13 @@ import { Client, Pool } from 'pg'
+---
+> @@ -3,7 +3,14 @@ import { Client, Pool } from 'pg'
+859a859
+> +  TENANT_ONLY_TABLES,
+867c867
+< @@ -136,6 +142,111 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
+---
+> @@ -136,6 +143,111 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
+979,982c979,986
+< @@ -458,7 +569,10 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
+<                  'outbox_effects',
+<                  'outbox_attempts',
+<                  'worker_heartbeats',
+---
+> @@ -454,12 +566,9 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
+>              rows: WORKER_CRITICAL_TABLES.map((table) => {
+>                const tenantExpression =
+>                  "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+> -              const expression = [
+> -                'outbox_effects',
+> -                'outbox_attempts',
+> -                'worker_heartbeats',
+984,988c988,991
+< +                'kernel_pause_switches',
+< +                // SPEC0249: tenant-only tables added to the inventory.
+< +                'effect_journal',
+< +                'runtime_approvals'
+<                ].includes(table)
+---
+> -              ].includes(table)
+> +              // SPEC0249: the worker inventory is the canonical tenant
+> +              // inventory, so the policy kind comes from it too.
+> +              const expression = TENANT_ONLY_TABLES.has(table)
+990a994
+>                return {
+1622c1626
+< @@ -3,7 +3,9 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
+---
+> @@ -3,30 +3,31 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
+1627a1632
+> +  TENANT_SCHEMA_TABLES,
+1633,1636c1638,1667
+< @@ -26,7 +28,18 @@ export const WORKER_CRITICAL_TABLES = [
+<    // PROD-0373: liveness heartbeat and the kernel pause switch (0027). An
+<    // unreadable switch keeps the worker paused, so the grant is required.
+<    'worker_heartbeats',
+---
+> - * Tables the PostgreSQL worker reads or writes during a controlled drain. Each
+> - * one must exist in the runtime schema with RLS + FORCE RLS enabled, and the
+> - * runtime role must not own them.
+> + * Tables the PostgreSQL worker preflight verifies: every tenant-scoped table
+> + * of the canonical inventory (`TENANT_SCHEMA_TABLES`, AUD19-005), the same
+> + * set the API startup preflight checks and the migration job grants. Each one
+> + * must exist in the runtime schema with RLS + FORCE RLS enabled and exactly
+> + * its inventory policy, and the runtime role must not own it. Deriving the
+> + * list keeps a table the worker writes from being skipped by a hand-kept
+> + * list: the kernel's effect journal and approvals (SPEC0249, AUD-0621 F05;
+> + * a journal without RLS let one tenant's expiry sweep rewrite another
+> + * tenant's reservation) and any table a later migration adds to the
+> + * inventory. PROD-0373's liveness heartbeat and pause switch stay covered: an
+> + * unreadable switch keeps the worker paused.
+>   */
+> -export const WORKER_CRITICAL_TABLES = [
+> -  'conversations',
+> -  'messages',
+> -  'sessions',
+> -  'agent_runs',
+> -  'tool_calls',
+> -  'approval_requests',
+> -  'tasks',
+> -  'audit_events',
+> -  'outbox_events',
+> -  'outbox_attempts',
+> -  'outbox_effects',
+> -  // PROD-0373: liveness heartbeat and the kernel pause switch (0027). An
+> -  // unreadable switch keeps the worker paused, so the grant is required.
+> -  'worker_heartbeats',
+1638,1644c1669
+< +  'kernel_pause_switches',
+< +  // SPEC0249 (AUD-0621 F05): the production kernel writes its effect
+< +  // journal (0013) and durable approvals (0015). A journal without RLS let
+< +  // the expiry sweep of one tenant rewrite another tenant's reservation.
+< +  'effect_journal',
+< +  'runtime_approvals'
+< +] as const
+---
+> +export const WORKER_CRITICAL_TABLES: readonly string[] = TENANT_SCHEMA_TABLES
+1653c1678
+< @@ -69,11 +82,114 @@ const ROLE_QUERY = `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb,
+---
+> @@ -69,11 +70,114 @@ const ROLE_QUERY = `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb,
+1773c1798
+< @@ -142,81 +258,9 @@ export async function assertPostgresWorkerPreflight(
+---
+> @@ -142,81 +246,9 @@ export async function assertPostgresWorkerPreflight(
+2170c2195
+< @@ -527,3 +533,421 @@ describe('durable PostgreSQL outbox', () => {
+---
+> @@ -527,3 +533,431 @@ describe('durable PostgreSQL outbox', () => {
+2488a2514
+> +        const leaseAfterRenewal = (await x.row(event.id))?.lease_until
+2497a2524,2527
+> +        // A foreign renewal is refused without a write.
+> +        expect((await x.row(event.id))?.lease_until?.toISOString()).toBe(
+> +          leaseAfterRenewal?.toISOString()
+> +        )
+2521a2552
+> +        const leaseOfTakeover = (await x.row(event.id))?.lease_until
+2530a2562,2565
+> +        // A stale token is refused without a write on the newer claim.
+> +        expect((await x.row(event.id))?.lease_until?.toISOString()).toBe(
+> +          leaseOfTakeover?.toISOString()
+> +        )
+3731a3767,3777
+> @@ -735,6 +1016,10 @@ function redactOutboxError(error: unknown): string {
+>    if (error === OUTBOX_TAKEOVER_SUPPRESSED_ERROR) {
+>      return OUTBOX_TAKEOVER_SUPPRESSED_ERROR
+>    }
+> +  // SPEC0249: the exhaustion reason is a fixed code, safe to show as is.
+> +  if (error === OUTBOX_LEASE_EXHAUSTED_ERROR) {
+> +    return OUTBOX_LEASE_EXHAUSTED_ERROR
+> +  }
+>    if (typeof error === 'string' && SAFE_LEGACY_OUTBOX_ERRORS.has(error)) {
+>      return error
+>    }

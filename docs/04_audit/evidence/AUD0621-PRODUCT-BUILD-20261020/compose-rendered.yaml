@@ -1,0 +1,45 @@
+name: cvg-aud0621-shift-config
+networks:
+  shift-backend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-cvgshift
+    enable_ipv6: false
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.254.177.0/28
+    name: cvg-shift-backend
+services:
+  shift-assistant:
+    build:
+      context: <copy-of-repo-root>
+      dockerfile: products/shift-assistant/deploy/Dockerfile
+      target: runtime
+    cap_drop:
+      - ALL
+    cpus: 1
+    env_file:
+      - path: <copy-of-repo-root>/products/shift-assistant/deploy/.env
+        required: true
+    image: cvg-shift-assistant:local
+    mem_limit: 512m
+    networks:
+      shift-backend: null
+    pids_limit: 64
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    user: 10001:10001
+    volumes:
+      - source: shift-data
+        target: /data
+        type: volume
+        volume: {}
+volumes:
+  shift-data:
+    name: cvg-aud0621-shift-config_shift-data

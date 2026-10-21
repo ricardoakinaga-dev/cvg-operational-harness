@@ -1,0 +1,3702 @@
+From 920048717308893182d1e564ef2bd26a89e172f0 Mon Sep 17 00:00:00 2001
+From: Ricardo Akinaga <245769618+ricardoakinaga-dev@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 23:30:21 -0300
+Subject: [PATCH] AUD0621 SPEC0248: bound decision budget, cancellation and
+ response receipt
+
+Implements SPEC0248 r3 (sha256 d4392f0b) for AUD-0621 findings F02, F03,
+F04, F13, F14 and the core part of F21.
+
+- harness: the iterative decision reserves every decision model call and
+  repair through a runtime-owned budget port that uses the kernel's
+  beginModelRequest/recordModelResult; reported usage is copied and
+  validated before it is counted and is kept on orchestrator failure; the
+  context build and the decision race the absolute deadline and the
+  caller's cancellation; a cancellation is re-checked right before dispatch.
+- orchestrator: HybridOrchestrator asks the optional DecisionModelGate
+  before each call and repair; OrchestratorDecisionError carries usage and
+  the new budget_exhausted code. The shared contracts are unchanged.
+- model-gateway: an aborted signal reserves nothing and reaches no
+  provider; the backoff races the signal; request and profile maxCostUsd
+  deny a non-finite or over-ceiling estimate before any reservation; the
+  bound transport cuts a body at the ceiling with HTTP status priority
+  (SPEC0180 D011 subset); providers read bodies under the ceiling.
+- channel-gateway: Evolution and Chatwoot send with a deadline (DNS to end
+  of body, 20 s default) and pass the byte ceiling to the transport.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../aud0621-0248-channel-bounds.test.ts       | 316 +++++++
+ .../src/adapters/bounded-body.ts              | 123 +++
+ .../channel-gateway/src/adapters/chatwoot.ts  |  82 +-
+ .../channel-gateway/src/adapters/evolution.ts |  82 +-
+ .../channel-gateway/src/adapters/ssrf-node.ts |   3 +-
+ .../aud0621-0248-decision-budget.test.ts      | 863 ++++++++++++++++++
+ packages/harness/src/iterative-runtime.ts     | 247 ++++-
+ .../aud0621-0248-bounded-response.test.ts     | 424 +++++++++
+ .../aud0621-0248-gateway-cancel-cost.test.ts  | 333 +++++++
+ packages/model-gateway/src/gateway.ts         |  84 +-
+ .../src/providers/http-errors.ts              |  81 +-
+ .../model-gateway/src/providers/ollama.ts     |  23 +-
+ .../src/providers/openai-compatible.ts        |  23 +-
+ .../model-gateway/src/providers/ssrf-node.ts  |  65 +-
+ .../aud0621-0248-decision-gate.test.ts        | 292 ++++++
+ .../orchestrator/src/hybrid-orchestrator.ts   |  93 +-
+ 16 files changed, 3001 insertions(+), 133 deletions(-)
+ create mode 100644 packages/channel-gateway/src/__tests__/aud0621-0248-channel-bounds.test.ts
+ create mode 100644 packages/channel-gateway/src/adapters/bounded-body.ts
+ create mode 100644 packages/harness/src/__tests__/aud0621-0248-decision-budget.test.ts
+ create mode 100644 packages/model-gateway/src/__tests__/aud0621-0248-bounded-response.test.ts
+ create mode 100644 packages/model-gateway/src/__tests__/aud0621-0248-gateway-cancel-cost.test.ts
+ create mode 100644 packages/orchestrator/src/__tests__/aud0621-0248-decision-gate.test.ts
+
+diff --git a/packages/channel-gateway/src/__tests__/aud0621-0248-channel-bounds.test.ts b/packages/channel-gateway/src/__tests__/aud0621-0248-channel-bounds.test.ts
+new file mode 100644
+index 000000000..d48ac9dcc
+--- /dev/null
++++ b/packages/channel-gateway/src/__tests__/aud0621-0248-channel-bounds.test.ts
+@@ -0,0 +1,316 @@
++// @vitest-environment node
++import {
++  createServer,
++  type IncomingMessage,
++  type Server,
++  type ServerResponse
++} from 'node:http'
++import type { AddressInfo } from 'node:net'
++import { afterEach, describe, expect, it } from 'vitest'
++import { ChatwootChannelAdapter } from '../adapters/chatwoot.ts'
++import { EvolutionChannelAdapter } from '../adapters/evolution.ts'
++import { fetchWithResolvedAddress } from '../adapters/ssrf-node.ts'
++
++/**
++ * SPEC0248 §3.5 (AUD-0621 F21, core): Evolution and Chatwoot pass their
++ * byte ceiling and a deadline to the transport, read the body under both,
++ * and keep the effect-unknown mapping when the deadline wins.
++ */
++
++const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
++const OUTBOUND = {
++  messageId: 'msg_bounds_0248',
++  tenantId: TENANT,
++  conversationId: 'conv_0248',
++  channel: 'whatsapp' as const,
++  recipient: { id: '5511900000001', type: 'user' as const },
++  body: { text: 'synthetic', attachments: [] },
++  correlationId: 'corr_00000000-0000-4000-8000-000000000248',
++  idempotencyKey: 'channel-bounds-0248',
++  metadata: {}
++}
++
++type Fetch = (input: string, init: RequestInit) => Promise<Response>
++
++const kinds = {
++  evolution: (options: Record<string, unknown>) =>
++    new EvolutionChannelAdapter({
++      enabled: true,
++      baseUrl: 'https://evolution.example.com',
++      dnsLookup: async () => ['93.184.216.34'],
++      apiKey: 'k',
++      instance: 'i',
++      ...options
++    }),
++  chatwoot: (options: Record<string, unknown>) =>
++    new ChatwootChannelAdapter({
++      enabled: true,
++      baseUrl: 'https://chatwoot.example.com',
++      dnsLookup: async () => ['93.184.216.34'],
++      apiKey: 'k',
++      accountId: '1',
++      ...options
++    })
++} as const
++
++const servers: Server[] = []
++afterEach(async () => {
++  await Promise.all(
++    servers.splice(0).map(
++      (server) =>
++        new Promise<void>((resolve) => {
++          server.closeAllConnections()
++          server.close(() => resolve())
++        })
++    )
++  )
++})
++
++async function startServer(
++  handler: (request: IncomingMessage, response: ServerResponse) => void
++): Promise<string> {
++  const server = createServer(handler)
++  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
++  servers.push(server)
++  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
++}
++
++function hangingBody(): Response {
++  return new Response(
++    new ReadableStream<Uint8Array>({
++      start(controller) {
++        controller.enqueue(new TextEncoder().encode('{"ok":'))
++      }
++    }),
++    { status: 200 }
++  )
++}
++
++/** A finite 1 MiB body: a reader without a ceiling still ends, and fails. */
++function largeBody(state: { pulled: number; cancelled: boolean }): Response {
++  return new Response(
++    new ReadableStream<Uint8Array>({
++      pull(controller) {
++        if (state.pulled >= 1024) {
++          controller.close()
++          return
++        }
++        state.pulled += 1
++        controller.enqueue(new Uint8Array(1024).fill(120))
++      },
++      cancel() {
++        state.cancelled = true
++      }
++    }),
++    { status: 200 }
++  )
++}
++
++for (const [name, make] of Object.entries(kinds)) {
++  describe(`SPEC0248 F21 — ${name} send bounds`, () => {
++    it('AC24: passes the ceiling and a deadline signal to the transport', async () => {
++      const seen: RequestInit[] = []
++      const fetchImpl: Fetch = async (_input, init) => {
++        seen.push(init)
++        return new Response('{}', { status: 200 })
++      }
++      await make({ fetchImpl }).send(OUTBOUND)
++      const init = seen[0] as RequestInit & { maxResponseBytes?: number }
++      expect(init.signal).toBeInstanceOf(AbortSignal)
++      expect(init.signal?.aborted).toBe(false)
++      expect(init.maxResponseBytes).toBe(64 * 1024)
++    })
++
++    it('AC24: a provider that never answers ends as an uncertain send', async () => {
++      const fetchImpl: Fetch = (_input, init) =>
++        new Promise((_resolve, reject) => {
++          init.signal?.addEventListener('abort', () =>
++            reject(init.signal?.reason)
++          )
++        })
++      const started = Date.now()
++      await expect(
++        make({ fetchImpl, timeoutMs: 100 }).send(OUTBOUND)
++      ).rejects.toMatchObject({
++        code: 'send_failed',
++        retryable: true,
++        effectUnknown: true
++      })
++      expect(Date.now() - started).toBeLessThan(2_000)
++    })
++
++    it('AC24: a guard DNS lookup that never answers ends within the deadline', async () => {
++      const started = Date.now()
++      await expect(
++        make({
++          dnsLookup: () => new Promise(() => undefined),
++          fetchImpl: async () => new Response('{}'),
++          timeoutMs: 100
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'send_failed', effectUnknown: true })
++      expect(Date.now() - started).toBeLessThan(2_000)
++    })
++
++    it('AC24: a body that hangs after the headers ends as an uncertain send', async () => {
++      const started = Date.now()
++      await expect(
++        make({ fetchImpl: async () => hangingBody(), timeoutMs: 100 }).send(
++          OUTBOUND
++        )
++      ).rejects.toMatchObject({ code: 'send_failed', effectUnknown: true })
++      expect(Date.now() - started).toBeLessThan(2_000)
++    })
++
++    it('AC24: a large body is cut without reading it whole', async () => {
++      const state = { pulled: 0, cancelled: false }
++      await expect(
++        make({
++          fetchImpl: async () => largeBody(state),
++          maxResponseBytes: 4 * 1024
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({
++        code: 'provider_rejected',
++        message: expect.stringContaining('exceeded the size limit')
++      })
++      expect(state.cancelled).toBe(true)
++      expect(state.pulled).toBeLessThan(10)
++    })
++
++    it('AC24: a declared length above the ceiling is refused before reading', async () => {
++      await expect(
++        make({
++          fetchImpl: async () =>
++            new Response('x', {
++              status: 200,
++              headers: { 'content-length': '999999' }
++            }),
++          maxResponseBytes: 8
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'provider_rejected' })
++    })
++
++    it('AC24: the bound transport cuts at the ceiling and honors the deadline', async () => {
++      let written = 0
++      const big = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(200)
++        const tick = () => {
++          if (response.destroyed || written >= 512) return
++          response.write('x'.repeat(1024))
++          written += 1
++          setTimeout(tick, 1)
++        }
++        tick()
++      })
++      await expect(
++        make({
++          baseUrl: big,
++          allowPrivateNetworks: true,
++          dnsLookup: undefined,
++          maxResponseBytes: 4 * 1024
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'provider_rejected' })
++      expect(written).toBeLessThan(512)
++
++      const failing = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(503)
++        response.end('x'.repeat(64 * 1024))
++      })
++      await expect(
++        make({
++          baseUrl: failing,
++          allowPrivateNetworks: true,
++          dnsLookup: undefined,
++          maxResponseBytes: 1024
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({
++        code: 'provider_rejected',
++        retryable: true,
++        message: expect.stringContaining('status 503')
++      })
++
++      const limited = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(429)
++        response.end('x'.repeat(64 * 1024))
++      })
++      await expect(
++        make({
++          baseUrl: limited,
++          allowPrivateNetworks: true,
++          dnsLookup: undefined,
++          maxResponseBytes: 1024
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'provider_rejected', retryable: true })
++
++      const rejected = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(400)
++        response.end('x'.repeat(64 * 1024))
++      })
++      await expect(
++        make({
++          baseUrl: rejected,
++          allowPrivateNetworks: true,
++          dnsLookup: undefined,
++          maxResponseBytes: 1024
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'provider_rejected', retryable: false })
++
++      const stalled = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(200)
++        response.write('{')
++      })
++      const started = Date.now()
++      await expect(
++        make({
++          baseUrl: stalled,
++          allowPrivateNetworks: true,
++          dnsLookup: undefined,
++          timeoutMs: 100
++        }).send(OUTBOUND)
++      ).rejects.toMatchObject({ code: 'send_failed', effectUnknown: true })
++      expect(Date.now() - started).toBeLessThan(2_000)
++    })
++
++    it('AC24: an empty 2xx body is accepted', async () => {
++      const result = await make({
++        fetchImpl: async () => new Response(null, { status: 200 })
++      }).send(OUTBOUND)
++      expect(result.accepted).toBe(true)
++    })
++
++    it('AC25: rejects a deadline outside 1..120000 ms', () => {
++      for (const timeoutMs of [0, -1, 1.5, 120_001, Number.NaN]) {
++        expect(() => make({ timeoutMs })).toThrowError(
++          expect.objectContaining({ code: 'invalid_config' })
++        )
++      }
++      expect(() => make({ timeoutMs: 1 })).not.toThrow()
++      expect(() => make({ timeoutMs: 120_000 })).not.toThrow()
++    })
++  })
++}
++
++describe('SPEC0248 F21 — channel transport ceiling error', () => {
++  it('names the ceiling error so adapters can map it', async () => {
++    const url = await startServer((request, response) => {
++      request.resume()
++      response.writeHead(200)
++      response.end('x'.repeat(4096))
++    })
++    await expect(
++      fetchWithResolvedAddress(
++        `${url}/`,
++        { method: 'GET', maxResponseBytes: 16 },
++        ['127.0.0.1']
++      )
++    ).rejects.toMatchObject({
++      name: 'ResponseTooLargeError',
++      message: 'Response exceeds maxResponseBytes',
++      status: 200
++    })
++  })
++})
+diff --git a/packages/channel-gateway/src/adapters/bounded-body.ts b/packages/channel-gateway/src/adapters/bounded-body.ts
+new file mode 100644
+index 000000000..48c531b60
+--- /dev/null
++++ b/packages/channel-gateway/src/adapters/bounded-body.ts
+@@ -0,0 +1,123 @@
++import { ChannelError } from '../errors.ts'
++
++/**
++ * SPEC 0248 §3.5 (AUD-0621 F21): channel sends carry a byte ceiling and a
++ * deadline down to the transport, and read the provider body under both.
++ */
++
++/** Name shared by the transport and the body reader for a body over its ceiling. */
++export const RESPONSE_TOO_LARGE_ERROR = 'ResponseTooLargeError'
++
++export const DEFAULT_CHANNEL_SEND_TIMEOUT_MS = 20_000
++export const MAX_CHANNEL_SEND_TIMEOUT_MS = 120_000
++
++/** The ceiling error; the transport attaches the response status. */
++export function responseTooLarge(status?: number): Error {
++  const error = new Error('Response exceeds maxResponseBytes')
++  error.name = RESPONSE_TOO_LARGE_ERROR
++  return status === undefined ? error : Object.assign(error, { status })
++}
++
++export function isResponseTooLarge(error: unknown): error is Error {
++  return error instanceof Error && error.name === RESPONSE_TOO_LARGE_ERROR
++}
++
++/**
++ * Maps a body over its ceiling. A known non-2xx status wins and maps as that
++ * status does (provider_rejected, retryable for 5xx and 429); otherwise the
++ * adapter's size rejection stays as it was.
++ */
++export function oversizedResponseError(
++  error: Error,
++  label: string
++): ChannelError {
++  const status = (error as { status?: unknown }).status
++  if (typeof status === 'number' && (status < 200 || status >= 300)) {
++    return new ChannelError(
++      'provider_rejected',
++      `${label} responded with status ${status}`,
++      status >= 500 || status === 429
++    )
++  }
++  return new ChannelError(
++    'provider_rejected',
++    `${label} response exceeded the size limit`
++  )
++}
++
++/** Races a whole send (DNS guard included) against the send deadline. */
++export function raceSignal<T>(
++  operation: Promise<T>,
++  signal: AbortSignal
++): Promise<T> {
++  // An abandoned send that settles after the deadline is never unhandled.
++  void operation.catch(() => undefined)
++  let onAbort!: () => void
++  const aborted = new Promise<never>((_resolve, reject) => {
++    onAbort = () => reject(signal.reason)
++    signal.addEventListener('abort', onAbort, { once: true })
++  })
++  return Promise.race([operation, aborted]).finally(() =>
++    signal.removeEventListener('abort', onAbort)
++  )
++}
++
++/** The send deadline: an integer in 1..120000 ms, 20000 by default. */
++export function channelSendTimeoutMs(
++  value: number | undefined,
++  label: string
++): number {
++  const timeoutMs = value ?? DEFAULT_CHANNEL_SEND_TIMEOUT_MS
++  if (
++    !Number.isSafeInteger(timeoutMs) ||
++    timeoutMs < 1 ||
++    timeoutMs > MAX_CHANNEL_SEND_TIMEOUT_MS
++  ) {
++    throw new ChannelError(
++      'invalid_config',
++      `${label} timeoutMs must be an integer in 1..${MAX_CHANNEL_SEND_TIMEOUT_MS}`
++    )
++  }
++  return timeoutMs
++}
++
++/**
++ * Drains a provider body without keeping it: a declared length above the
++ * ceiling is refused before reading, the stream is cancelled as soon as it
++ * passes the ceiling, and the deadline ends a body that never finishes.
++ */
++export async function drainBoundedBody(
++  response: Response,
++  maxBytes: number,
++  signal: AbortSignal
++): Promise<void> {
++  const body = response.body
++  if (!body) return
++  const declared = response.headers.get('content-length')
++  if (declared !== null && Number(declared) > maxBytes) {
++    await body.cancel().catch(() => undefined)
++    throw responseTooLarge()
++  }
++  const reader = body.getReader()
++  const abort = () => {
++    void reader.cancel().catch(() => undefined)
++  }
++  signal.addEventListener('abort', abort, { once: true })
++  let total = 0
++  try {
++    for (;;) {
++      signal.throwIfAborted()
++      const { value, done } = await reader.read()
++      signal.throwIfAborted()
++      if (done) return
++      total += value.byteLength
++      if (total > maxBytes) throw responseTooLarge()
++    }
++  } catch (error) {
++    await reader.cancel().catch(() => undefined)
++    throw error
++  } finally {
++    signal.removeEventListener('abort', abort)
++    reader.releaseLock()
++  }
++}
+diff --git a/packages/channel-gateway/src/adapters/chatwoot.ts b/packages/channel-gateway/src/adapters/chatwoot.ts
+index 4be8069ec..e8f6fb72c 100644
+--- a/packages/channel-gateway/src/adapters/chatwoot.ts
++++ b/packages/channel-gateway/src/adapters/chatwoot.ts
+@@ -17,6 +17,13 @@ import {
+ } from '../contracts.ts'
+ import { ChannelError } from '../errors.ts'
+ import type { FetchLike } from './evolution.ts'
++import {
++  channelSendTimeoutMs,
++  drainBoundedBody,
++  isResponseTooLarge,
++  oversizedResponseError,
++  raceSignal
++} from './bounded-body.ts'
+ import { fetchWithResolvedAddress } from './ssrf-node.ts'
+ 
+ export interface ChatwootAdapterOptions {
+@@ -27,6 +34,11 @@ export interface ChatwootAdapterOptions {
+   fetchImpl?: FetchLike
+   clock?: () => Date
+   maxResponseBytes?: number
++  /**
++   * SPEC 0248 — deadline of one send, headers and body included, in
++   * milliseconds: an integer in 1..120000, 20000 by default.
++   */
++  timeoutMs?: number
+   /**
+    * AUD19-007 — explicit opt-in for loopback/private networks (local
+    * homologation). Default false: private/reserved addresses are denied.
+@@ -70,6 +82,7 @@ export class ChatwootChannelAdapter
+   readonly #fetch?: FetchLike
+   readonly #clock: () => Date
+   readonly #maxResponseBytes: number
++  readonly #timeoutMs: number
+   readonly #allowedHosts: string[]
+   readonly #allowPrivateNetworks: boolean
+   readonly #allowHttp: boolean
+@@ -81,6 +94,7 @@ export class ChatwootChannelAdapter
+     this.#clock = options.clock ?? (() => new Date())
+     this.#maxResponseBytes =
+       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
++    this.#timeoutMs = channelSendTimeoutMs(options.timeoutMs, 'Chatwoot')
+     if (this.enabled) {
+       const baseUrl = withoutTrailingSlashes(options.baseUrl?.trim() ?? '')
+       if (!baseUrl || !options.apiKey || !options.accountId) {
+@@ -194,6 +208,9 @@ export class ChatwootChannelAdapter
+     const endpoint = `${this.#baseUrl}/api/v1/accounts/${this.#accountId}/conversations/${message.conversationId}/messages`
+     // AUD21-REM21-004 — validate every hop and bind the default Node socket
+     // to the addresses returned by that same validation.
++    // SPEC 0248: the deadline and the byte ceiling travel with the request
++    // and cover the body until its end.
++    const signal = AbortSignal.timeout(this.#timeoutMs)
+     try {
+       const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+         this.#fetch!(url, requestInit as RequestInit)
+@@ -203,32 +220,42 @@ export class ChatwootChannelAdapter
+             boundFetchImpl: this.#boundFetch
+           }
+         : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+-      const response = await fetchWithSsrfGuard(
+-        fetchImpl,
+-        endpoint,
+-        {
+-          method: 'POST',
+-          headers: {
+-            'content-type': 'application/json',
+-            api_access_token: this.#apiKey ?? ''
++      const response = await raceSignal(
++        fetchWithSsrfGuard(
++          fetchImpl,
++          endpoint,
++          {
++            method: 'POST',
++            headers: {
++              'content-type': 'application/json',
++              api_access_token: this.#apiKey ?? ''
++            },
++            body: JSON.stringify({
++              content: message.body.text,
++              message_type: 'outgoing'
++            }),
++            signal,
++            maxResponseBytes: this.#maxResponseBytes,
++            redirect: 'manual'
+           },
+-          body: JSON.stringify({
+-            content: message.body.text,
+-            message_type: 'outgoing'
+-          }),
+-          redirect: 'manual'
+-        },
+-        {
+-          allowedHosts: this.#allowedHosts,
+-          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+-          allowPrivateNetworks: this.#allowPrivateNetworks,
+-          allowLoopbackOnly: this.#allowHttp
+-        },
+-        deps
++          {
++            allowedHosts: this.#allowedHosts,
++            allowedProtocols: this.#allowHttp
++              ? ['https:', 'http:']
++              : ['https:'],
++            allowPrivateNetworks: this.#allowPrivateNetworks,
++            allowLoopbackOnly: this.#allowHttp
++          },
++          deps
++        ),
++        signal
+       )
+-      return this.#mapResponse(response, message)
++      return await this.#mapResponse(response, message, signal)
+     } catch (error) {
+       if (error instanceof ChannelError) throw error
++      if (isResponseTooLarge(error)) {
++        throw oversizedResponseError(error, 'Chatwoot')
++      }
+       if (error instanceof Error && error.name === 'UnsafeUrlError') {
+         throw new ChannelError(
+           'url_rejected',
+@@ -243,7 +270,8 @@ export class ChatwootChannelAdapter
+ 
+   async #mapResponse(
+     response: Response,
+-    message: CanonicalOutboundMessage
++    message: CanonicalOutboundMessage,
++    signal: AbortSignal
+   ): Promise<OutboundResult> {
+     if (!response.ok) {
+       throw new ChannelError(
+@@ -252,13 +280,7 @@ export class ChatwootChannelAdapter
+         response.status >= 500 || response.status === 429
+       )
+     }
+-    const body = await response.text()
+-    if (new TextEncoder().encode(body).length > this.#maxResponseBytes) {
+-      throw new ChannelError(
+-        'provider_rejected',
+-        'Chatwoot response exceeded the size limit'
+-      )
+-    }
++    await drainBoundedBody(response, this.#maxResponseBytes, signal)
+     return {
+       externalId: message.messageId,
+       channel: this.channel,
+diff --git a/packages/channel-gateway/src/adapters/evolution.ts b/packages/channel-gateway/src/adapters/evolution.ts
+index 06c343d2a..7efeffae4 100644
+--- a/packages/channel-gateway/src/adapters/evolution.ts
++++ b/packages/channel-gateway/src/adapters/evolution.ts
+@@ -16,6 +16,13 @@ import {
+   type OutboundResult
+ } from '../contracts.ts'
+ import { ChannelError } from '../errors.ts'
++import {
++  channelSendTimeoutMs,
++  drainBoundedBody,
++  isResponseTooLarge,
++  oversizedResponseError,
++  raceSignal
++} from './bounded-body.ts'
+ import { fetchWithResolvedAddress } from './ssrf-node.ts'
+ 
+ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
+@@ -29,6 +36,11 @@ export interface EvolutionAdapterOptions {
+   fetchImpl?: FetchLike
+   clock?: () => Date
+   maxResponseBytes?: number
++  /**
++   * SPEC 0248 — deadline of one send, headers and body included, in
++   * milliseconds: an integer in 1..120000, 20000 by default.
++   */
++  timeoutMs?: number
+   /**
+    * AUD19-007 — explicit opt-in for loopback/private networks (local
+    * homologation). Default false: private/reserved addresses are denied.
+@@ -65,6 +77,7 @@ export class EvolutionChannelAdapter
+   readonly #fetch?: FetchLike
+   readonly #clock: () => Date
+   readonly #maxResponseBytes: number
++  readonly #timeoutMs: number
+   readonly #allowedHosts: string[]
+   readonly #allowPrivateNetworks: boolean
+   readonly #allowHttp: boolean
+@@ -76,6 +89,7 @@ export class EvolutionChannelAdapter
+     this.#clock = options.clock ?? (() => new Date())
+     this.#maxResponseBytes =
+       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
++    this.#timeoutMs = channelSendTimeoutMs(options.timeoutMs, 'EvolutionAPI')
+     if (this.enabled) {
+       const baseUrl = withoutTrailingSlashes(options.baseUrl?.trim() ?? '')
+       if (!baseUrl || !options.apiKey || !options.instance) {
+@@ -183,6 +197,9 @@ export class EvolutionChannelAdapter
+     const endpoint = `${this.#baseUrl}/message/sendText/${this.#instance}`
+     // AUD21-REM21-004 — validate every hop and bind the default Node socket
+     // to the addresses returned by that same validation.
++    // SPEC 0248: the deadline and the byte ceiling travel with the request
++    // and cover the body until its end.
++    const signal = AbortSignal.timeout(this.#timeoutMs)
+     try {
+       const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
+         this.#fetch!(url, requestInit as RequestInit)
+@@ -192,32 +209,42 @@ export class EvolutionChannelAdapter
+             boundFetchImpl: this.#boundFetch
+           }
+         : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
+-      const response = await fetchWithSsrfGuard(
+-        fetchImpl,
+-        endpoint,
+-        {
+-          method: 'POST',
+-          headers: {
+-            'content-type': 'application/json',
+-            apikey: this.#apiKey ?? ''
++      const response = await raceSignal(
++        fetchWithSsrfGuard(
++          fetchImpl,
++          endpoint,
++          {
++            method: 'POST',
++            headers: {
++              'content-type': 'application/json',
++              apikey: this.#apiKey ?? ''
++            },
++            body: JSON.stringify({
++              number: message.recipient.id,
++              text: message.body.text
++            }),
++            signal,
++            maxResponseBytes: this.#maxResponseBytes,
++            redirect: 'manual'
+           },
+-          body: JSON.stringify({
+-            number: message.recipient.id,
+-            text: message.body.text
+-          }),
+-          redirect: 'manual'
+-        },
+-        {
+-          allowedHosts: this.#allowedHosts,
+-          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
+-          allowPrivateNetworks: this.#allowPrivateNetworks,
+-          allowLoopbackOnly: this.#allowHttp
+-        },
+-        deps
++          {
++            allowedHosts: this.#allowedHosts,
++            allowedProtocols: this.#allowHttp
++              ? ['https:', 'http:']
++              : ['https:'],
++            allowPrivateNetworks: this.#allowPrivateNetworks,
++            allowLoopbackOnly: this.#allowHttp
++          },
++          deps
++        ),
++        signal
+       )
+-      return this.#mapResponse(response, message)
++      return await this.#mapResponse(response, message, signal)
+     } catch (error) {
+       if (error instanceof ChannelError) throw error
++      if (isResponseTooLarge(error)) {
++        throw oversizedResponseError(error, 'EvolutionAPI')
++      }
+       if (error instanceof Error && error.name === 'UnsafeUrlError') {
+         throw new ChannelError(
+           'url_rejected',
+@@ -235,7 +262,8 @@ export class EvolutionChannelAdapter
+ 
+   async #mapResponse(
+     response: Response,
+-    message: CanonicalOutboundMessage
++    message: CanonicalOutboundMessage,
++    signal: AbortSignal
+   ): Promise<OutboundResult> {
+     if (!response.ok) {
+       throw new ChannelError(
+@@ -244,13 +272,7 @@ export class EvolutionChannelAdapter
+         response.status >= 500 || response.status === 429
+       )
+     }
+-    const body = await response.text()
+-    if (new TextEncoder().encode(body).length > this.#maxResponseBytes) {
+-      throw new ChannelError(
+-        'provider_rejected',
+-        'EvolutionAPI response exceeded the size limit'
+-      )
+-    }
++    await drainBoundedBody(response, this.#maxResponseBytes, signal)
+     return {
+       externalId: message.messageId,
+       channel: this.channel,
+diff --git a/packages/channel-gateway/src/adapters/ssrf-node.ts b/packages/channel-gateway/src/adapters/ssrf-node.ts
+index b19790f9c..b24af9380 100644
+--- a/packages/channel-gateway/src/adapters/ssrf-node.ts
++++ b/packages/channel-gateway/src/adapters/ssrf-node.ts
+@@ -1,6 +1,7 @@
+ import { request as httpRequest } from 'node:http'
+ import { request as httpsRequest } from 'node:https'
+ import { isIP, type LookupFunction } from 'node:net'
++import { responseTooLarge } from './bounded-body.ts'
+ 
+ /**
+  * Node-only transport for the composed SSRF guard. The URL hostname remains
+@@ -176,7 +177,7 @@ async function readResponse(
+     total += bytes.byteLength
+     if (typeof maxResponseBytes === 'number' && total > maxResponseBytes) {
+       response.destroy()
+-      throw new Error('Response exceeds maxResponseBytes')
++      throw responseTooLarge(response.statusCode)
+     }
+     chunks.push(bytes)
+   }
+diff --git a/packages/harness/src/__tests__/aud0621-0248-decision-budget.test.ts b/packages/harness/src/__tests__/aud0621-0248-decision-budget.test.ts
+new file mode 100644
+index 000000000..d1f15f04c
+--- /dev/null
++++ b/packages/harness/src/__tests__/aud0621-0248-decision-budget.test.ts
+@@ -0,0 +1,863 @@
++import { describe, expect, it } from 'vitest'
++import type {
++  ContextBuildInput,
++  IterativeOrchestrator,
++  IterativeOrchestratorInput,
++  IterativeOrchestratorTurn,
++  ModelGateway,
++  ModelRequest,
++  ModelResult,
++  RuntimeInput,
++  StepContext
++} from '@cvg/harness-contracts'
++import {
++  HybridOrchestrator,
++  OrchestratorDecisionError,
++  ScriptedModelGateway,
++  type GovernedDecisionInput
++} from '@cvg/harness-orchestrator'
++import { createOperationalHarness } from '../createOperationalHarness.ts'
++import { DefaultContextEngine } from '../context-engine.ts'
++import { InMemoryExecutionStepStore } from '../step-store.ts'
++import {
++  createPhase3ToolRegistry,
++  InMemoryApprovalEngine,
++  phase3RuntimeInput,
++  RecordingAuditSink,
++  RecordingTelemetrySink,
++  ScriptedPolicyEngine
++} from './fixtures/phase3-fixtures.ts'
++
++/**
++ * SPEC0248 (AUD-0621 F02/F03/F04): the decision step reserves every decision
++ * model call in the runtime budget, keeps usage on failure, and races the
++ * context build and the decision against the absolute deadline and the
++ * caller's cancellation. Every case goes through the public factory, like
++ * the auditor's probes.
++ */
++
++const STOP = JSON.stringify({
++  decisionType: 'STOP',
++  reasonCode: 'USER_REQUESTED_STOP'
++})
++
++interface Reply {
++  readonly text: string
++  readonly inputTokens?: number
++  readonly outputTokens?: number
++  readonly costUsd?: number
++}
++
++class CountingModel implements ModelGateway {
++  public readonly requests: ModelRequest[] = []
++
++  public constructor(private readonly reply: (call: number) => Reply) {}
++
++  public get calls(): number {
++    return this.requests.length
++  }
++
++  public async complete(request: ModelRequest): Promise<ModelResult> {
++    this.requests.push(request)
++    const reply = this.reply(this.requests.length)
++    return {
++      text: reply.text,
++      provider: 'synthetic',
++      model: 'synthetic-decision',
++      inputTokens: reply.inputTokens ?? 1,
++      outputTokens: reply.outputTokens ?? 1,
++      costUsd: reply.costUsd ?? 0.01
++    }
++  }
++}
++
++function harnessWith(
++  extra: Partial<Parameters<typeof createOperationalHarness>[0]>
++) {
++  const stepStore = new InMemoryExecutionStepStore()
++  const harness = createOperationalHarness({
++    modelGateway: new ScriptedModelGateway({ responses: ['unused'] }),
++    tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
++    policy: new ScriptedPolicyEngine(),
++    approvals: new InMemoryApprovalEngine(),
++    audit: new RecordingAuditSink(),
++    telemetry: new RecordingTelemetrySink(),
++    stepStore,
++    ...extra
++  })
++  return { harness, stepStore }
++}
++
++function input(
++  budget: Partial<RuntimeInput['budget']> = {},
++  signal?: AbortSignal
++) {
++  const base = phase3RuntimeInput()
++  return {
++    ...base,
++    budget: { ...base.budget, ...budget },
++    ...(signal ? { signal } : {})
++  }
++}
++
++const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
++
++describe('SPEC0248 F02 — decision calls are reserved in the runtime budget', () => {
++  it('AC01: a zero model-call budget never reaches the decision model', async () => {
++    const model = new CountingModel(() => ({ text: STOP }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({ decisionModel: model })
++    })
++    const result = await harness.execute(input({ maxModelCalls: 0 }))
++    expect(model.calls).toBe(0)
++    expect(result.stopReason).toBe('MAX_MODEL_CALLS')
++    expect(result.response).toBe(
++      'Model-call budget exhausted before the call was started.'
++    )
++    expect(result.modelCalls).toBe(0)
++  })
++
++  it('AC02: internal repairs cannot spend past the model and repair budgets', async () => {
++    const model = new CountingModel(() => ({ text: 'malformed' }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 5
++      })
++    })
++    const result = await harness.execute(
++      input({ maxModelCalls: 1, maxDecisionRepairs: 0 })
++    )
++    expect(model.calls).toBe(1)
++    expect(result.modelCalls).toBe(1)
++    expect(result.usage).toEqual({
++      inputTokens: 1,
++      outputTokens: 1,
++      costUsd: 0.01
++    })
++  })
++
++  it('AC03: internal repairs consume the per-execution repair budget', async () => {
++    const model = new CountingModel(() => ({ text: 'malformed' }))
++    const { harness, stepStore } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 5
++      })
++    })
++    const run = input({ maxModelCalls: 10, maxDecisionRepairs: 1 })
++    const result = await harness.execute(run)
++    expect(model.calls).toBe(2)
++    expect(result.modelCalls).toBe(2)
++    expect(result.stopReason).toBe('INTERNAL_FAILURE')
++    const checkpoint = await stepStore.loadCheckpoint(
++      run.tenantId,
++      run.executionId as string
++    )
++    expect(checkpoint?.budgetUsage.decisionRepairs).toBe(1)
++    expect(checkpoint?.budgetUsage.modelCalls).toBe(2)
++  })
++
++  it('AC03: without a repair budget the runtime default of one repair applies', async () => {
++    const model = new CountingModel(() => ({ text: 'malformed' }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 5
++      })
++    })
++    const base = input({ maxModelCalls: 10 })
++    const { maxDecisionRepairs: _omitted, ...budget } = base.budget
++    void _omitted
++    const result = await harness.execute({ ...base, budget })
++    expect(model.calls).toBe(2)
++    expect(result.modelCalls).toBe(2)
++  })
++
++  it('AC04: usage spent before a failed decision stays in the result', async () => {
++    const model = new CountingModel(() => ({
++      text: 'malformed',
++      inputTokens: 11,
++      outputTokens: 12,
++      costUsd: 0.05
++    }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 2
++      })
++    })
++    const result = await harness.execute(input({ maxDecisionRepairs: 2 }))
++    expect(model.calls).toBe(3)
++    expect(result.stopReason).toBe('INTERNAL_FAILURE')
++    expect(result.response).toBe(
++      'Execution failed internally: Orchestrator output did not contain a JSON object.'
++    )
++    expect(result.modelCalls).toBe(3)
++    expect(result.usage.inputTokens).toBe(33)
++    expect(result.usage.outputTokens).toBe(36)
++    expect(result.usage.costUsd).toBeCloseTo(0.15, 10)
++  })
++
++  it('AC05: an exhausted token budget stops before the repair call', async () => {
++    const model = new CountingModel(() => ({
++      text: 'malformed',
++      inputTokens: 30,
++      outputTokens: 30
++    }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 1
++      })
++    })
++    const result = await harness.execute(input({ maxTokens: 50 }))
++    expect(model.calls).toBe(1)
++    expect(result.stopReason).toBe('MAX_TOKENS')
++    expect(result.modelCalls).toBe(1)
++    expect(result.usage.inputTokens + result.usage.outputTokens).toBe(60)
++  })
++
++  it('AC05: an exhausted cost budget stops before the repair call', async () => {
++    const model = new CountingModel(() => ({
++      text: 'malformed',
++      costUsd: 0.5
++    }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 1
++      })
++    })
++    const result = await harness.execute(input({ maxCostUsd: 0.25 }))
++    expect(model.calls).toBe(1)
++    expect(result.stopReason).toBe('MAX_COST')
++    expect(result.usage.costUsd).toBe(0.5)
++  })
++
++  it('AC06: gated usage is counted once on success', async () => {
++    const model = new CountingModel((call) => ({
++      text: call === 1 ? 'malformed' : STOP,
++      inputTokens: 5,
++      outputTokens: 7,
++      costUsd: 0.02
++    }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 1
++      })
++    })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('COMPLETED')
++    expect(model.calls).toBe(2)
++    expect(result.modelCalls).toBe(2)
++    expect(result.usage).toEqual({
++      inputTokens: 10,
++      outputTokens: 14,
++      costUsd: 0.04
++    })
++  })
++
++  it('AC06: an orchestrator that ignores the gate is still counted from its report', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => ({
++        decision: JSON.parse(STOP),
++        usage: { modelCalls: 2, inputTokens: 3, outputTokens: 4, costUsd: 0.03 }
++      })
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('COMPLETED')
++    expect(result.modelCalls).toBe(2)
++    expect(result.usage).toEqual({
++      inputTokens: 3,
++      outputTokens: 4,
++      costUsd: 0.03
++    })
++  })
++
++  it('AC06: a success report above the budget stops with the budget reason', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => ({
++        decision: JSON.parse(STOP),
++        usage: { modelCalls: 9, inputTokens: 0, outputTokens: 0, costUsd: 0 }
++      })
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('MAX_MODEL_CALLS')
++    expect(result.response).toBe('Model-call budget exhausted.')
++  })
++
++  it('AC06: usage reported on an orchestrator failure is kept', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => {
++        throw Object.assign(new Error('third-party failure'), {
++          usage: {
++            modelCalls: 1,
++            inputTokens: 2,
++            outputTokens: 3,
++            costUsd: 0.04
++          }
++        })
++      }
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('INTERNAL_FAILURE')
++    expect(result.modelCalls).toBe(1)
++    expect(result.usage).toEqual({
++      inputTokens: 2,
++      outputTokens: 3,
++      costUsd: 0.04
++    })
++  })
++
++  it('AC06: a failure report above the budget stops with the budget reason', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => {
++        throw new OrchestratorDecisionError('decision_invalid', 'invalid', {
++          modelCalls: 9,
++          inputTokens: 0,
++          outputTokens: 0,
++          costUsd: 0
++        })
++      }
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('MAX_MODEL_CALLS')
++    expect(result.modelCalls).toBe(9)
++  })
++
++  it('AC07: invalid usage reported by an orchestrator is a model failure', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => ({
++        decision: JSON.parse(STOP),
++        usage: {
++          modelCalls: 1,
++          inputTokens: Number.NaN,
++          outputTokens: 0,
++          costUsd: 0
++        }
++      })
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('MODEL_FAILURE')
++    expect(result.response).toBe('Orchestrator reported invalid model usage.')
++  })
++
++  it('AC07: fractional or missing usage fields are rejected before counting', async () => {
++    for (const usage of [
++      { modelCalls: 0.5, inputTokens: 0, outputTokens: 0, costUsd: 0 },
++      { modelCalls: 1, inputTokens: 0, outputTokens: 0 },
++      {
++        modelCalls: 1,
++        inputTokens: Number.POSITIVE_INFINITY,
++        outputTokens: 0,
++        costUsd: 0
++      }
++    ]) {
++      const orchestrator: IterativeOrchestrator = {
++        decide: async () => ({
++          decision: JSON.parse(STOP),
++          usage: usage as never
++        })
++      }
++      const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++      const result = await harness.execute(input())
++      expect(result.stopReason).toBe('MODEL_FAILURE')
++      expect(result.modelCalls).toBe(0)
++      expect(result.usage).toEqual({
++        inputTokens: 0,
++        outputTokens: 0,
++        costUsd: 0
++      })
++    }
++  })
++
++  it('AC07: invalid usage from a gated decision call stops further calls', async () => {
++    const model = new CountingModel(() => ({
++      text: 'malformed',
++      inputTokens: -1
++    }))
++    const { harness } = harnessWith({
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 3
++      })
++    })
++    const result = await harness.execute(input({ maxDecisionRepairs: 3 }))
++    expect(model.calls).toBe(1)
++    expect(result.stopReason).toBe('MODEL_FAILURE')
++    expect(result.modelCalls).toBe(1)
++  })
++
++  it('usage is read once: a getter that changes on a second read cannot leak NaN', async () => {
++    function shifting() {
++      let reads = 0
++      return {
++        modelCalls: 1,
++        get inputTokens() {
++          reads += 1
++          return reads === 1 ? 5 : Number.NaN
++        },
++        outputTokens: 1,
++        costUsd: 0.01
++      }
++    }
++    const failing: IterativeOrchestrator = {
++      decide: async () => {
++        throw Object.assign(new Error('third-party failure'), {
++          usage: shifting()
++        })
++      }
++    }
++    const failed = await harnessWith({
++      iterativeOrchestrator: failing
++    }).harness.execute(input())
++    expect(failed.stopReason).toBe('INTERNAL_FAILURE')
++    expect(failed.usage).toEqual({
++      inputTokens: 5,
++      outputTokens: 1,
++      costUsd: 0.01
++    })
++
++    const answering: IterativeOrchestrator = {
++      decide: async () => ({
++        decision: JSON.parse(STOP),
++        usage: shifting()
++      })
++    }
++    const answered = await harnessWith({
++      iterativeOrchestrator: answering
++    }).harness.execute(input())
++    expect(answered.stopReason).toBe('COMPLETED')
++    expect(answered.usage).toEqual({
++      inputTokens: 5,
++      outputTokens: 1,
++      costUsd: 0.01
++    })
++  })
++
++  it('error usage that is malformed is ignored, not trusted', async () => {
++    const orchestrator: IterativeOrchestrator = {
++      decide: async () => {
++        throw Object.assign(new Error('third-party failure'), {
++          usage: { modelCalls: 'many' }
++        })
++      }
++    }
++    const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('INTERNAL_FAILURE')
++    expect(result.modelCalls).toBe(0)
++  })
++
++  it('non-object and null failures, or a null usage, are rethrown as internal failures', async () => {
++    const unreadable = new Error('unreadable usage')
++    Object.defineProperty(unreadable, 'usage', {
++      get() {
++        throw new Error('getter failure')
++      }
++    })
++    for (const thrown of [
++      'plain failure',
++      null,
++      Object.assign(new Error('null usage'), { usage: null }),
++      unreadable
++    ]) {
++      const orchestrator: IterativeOrchestrator = {
++        decide: async () => {
++          throw thrown
++        }
++      }
++      const { harness } = harnessWith({ iterativeOrchestrator: orchestrator })
++      const result = await harness.execute(input())
++      expect(result.stopReason).toBe('INTERNAL_FAILURE')
++      expect(result.modelCalls).toBe(0)
++    }
++  })
++})
++
++describe('SPEC0248 F03 — context build is bounded by the deadline and cancel', () => {
++  function blockedContext() {
++    let release!: () => void
++    const gate = new Promise<void>((resolve) => {
++      release = resolve
++    })
++    const fallback = new DefaultContextEngine()
++    return {
++      release,
++      engine: {
++        build: async (value: ContextBuildInput): Promise<StepContext> => {
++          await gate
++          return fallback.build(value)
++        }
++      }
++    }
++  }
++
++  it('AC08: cancellation during the context build stops without waiting', async () => {
++    const context = blockedContext()
++    let decisions = 0
++    const { harness } = harnessWith({
++      contextEngine: context.engine,
++      iterativeOrchestrator: {
++        decide: async () => {
++          decisions += 1
++          return { decision: JSON.parse(STOP) }
++        }
++      }
++    })
++    const controller = new AbortController()
++    let settled = false
++    const pending = harness
++      .execute(input({ maxDurationMs: 5_000 }, controller.signal))
++      .then((result) => {
++        settled = true
++        return result
++      })
++    await sleep(25)
++    controller.abort()
++    await sleep(50)
++    const settledBeforeRelease = settled
++    context.release()
++    const result = await pending
++    expect(settledBeforeRelease).toBe(true)
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(decisions).toBe(0)
++  })
++
++  it('AC09: the deadline during the context build stops without waiting', async () => {
++    const context = blockedContext()
++    let decisions = 0
++    const { harness } = harnessWith({
++      contextEngine: context.engine,
++      iterativeOrchestrator: {
++        decide: async () => {
++          decisions += 1
++          return { decision: JSON.parse(STOP) }
++        }
++      }
++    })
++    let settled = false
++    const pending = harness
++      .execute(input({ maxDurationMs: 40 }))
++      .then((result) => {
++        settled = true
++        return result
++      })
++    await sleep(200)
++    const settledBeforeRelease = settled
++    context.release()
++    const result = await pending
++    expect(settledBeforeRelease).toBe(true)
++    expect(result.stopReason).toBe('MAX_DURATION')
++    expect(result.response).toBe(
++      'Duration budget exhausted while building the decision context.'
++    )
++    expect(decisions).toBe(0)
++  })
++
++  it('AC10: the decision gets only what the context build left of the deadline', async () => {
++    const fallback = new DefaultContextEngine()
++    const { harness } = harnessWith({
++      contextEngine: {
++        build: async (value: ContextBuildInput) => {
++          await sleep(200)
++          return fallback.build(value)
++        }
++      },
++      iterativeOrchestrator: { decide: () => new Promise(() => undefined) }
++    })
++    const started = Date.now()
++    const result = await harness.execute(input({ maxDurationMs: 300 }))
++    const elapsed = Date.now() - started
++    expect(result.stopReason).toBe('MAX_DURATION')
++    expect(result.response).toBe(
++      'Duration budget exhausted while deciding the next step.'
++    )
++    // Base: 200 ms of build plus a fresh 300 ms window (about 500 ms).
++    expect(elapsed).toBeLessThan(450)
++  })
++})
++
++describe('SPEC0248 F04 — cancellation reaches the decision', () => {
++  it('AC11: aborting the caller ends a pending decision at once', async () => {
++    let received: AbortSignal | undefined
++    let release!: (turn: IterativeOrchestratorTurn) => void
++    const deciding = new Promise<IterativeOrchestratorTurn>((resolve) => {
++      release = resolve
++    })
++    const { harness } = harnessWith({
++      iterativeOrchestrator: {
++        decide: async (value: IterativeOrchestratorInput) => {
++          received = value.signal
++          return deciding
++        }
++      }
++    })
++    const controller = new AbortController()
++    let settled = false
++    const pending = harness
++      .execute(input({ maxDurationMs: 5_000 }, controller.signal))
++      .then((result) => {
++        settled = true
++        return result
++      })
++    await sleep(25)
++    controller.abort()
++    await sleep(50)
++    const observed = { settled, aborted: received?.aborted }
++    release({ decision: JSON.parse(STOP) })
++    const result = await pending
++    expect(observed).toEqual({ settled: true, aborted: true })
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(result.response).toBe('Execution was cancelled by the caller.')
++  })
++
++  it('a caller signal aborted before the first decision never builds context', async () => {
++    let builds = 0
++    const fallback = new DefaultContextEngine()
++    const { harness } = harnessWith({
++      contextEngine: {
++        build: async (value: ContextBuildInput) => {
++          builds += 1
++          return fallback.build(value)
++        }
++      },
++      iterativeOrchestrator: {
++        decide: async () => ({ decision: JSON.parse(STOP) })
++      }
++    })
++    const result = await harness.execute(input({}, AbortSignal.abort()))
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(builds).toBe(0)
++  })
++
++  it('AC12: the decision deadline aborts the signal the orchestrator holds', async () => {
++    let received: AbortSignal | undefined
++    const { harness } = harnessWith({
++      iterativeOrchestrator: {
++        decide: (value: IterativeOrchestratorInput) => {
++          received = value.signal
++          return new Promise(() => undefined)
++        }
++      }
++    })
++    const result = await harness.execute(input({ maxDurationMs: 200 }))
++    expect(result.stopReason).toBe('MAX_DURATION')
++    expect(result.response).toBe(
++      'Duration budget exhausted while deciding the next step.'
++    )
++    expect(received?.aborted).toBe(true)
++  })
++
++  it('AC13: an abandoned orchestrator cannot start or record calls through a closed gate', async () => {
++    let gateSeen: GovernedDecisionInput['modelGate']
++    let release!: () => void
++    const parked = new Promise<void>((resolve) => {
++      release = resolve
++    })
++    const afterClose: boolean[] = []
++    const { harness } = harnessWith({
++      iterativeOrchestrator: {
++        decide: async (value: GovernedDecisionInput) => {
++          gateSeen = value.modelGate
++          await parked
++          afterClose.push(
++            value.modelGate?.beginCall() ?? true,
++            value.modelGate?.recordCall({
++              inputTokens: 1,
++              outputTokens: 1,
++              costUsd: 0
++            }) ?? true,
++            value.modelGate?.beginRepair() ?? true
++          )
++          return { decision: JSON.parse(STOP) }
++        }
++      }
++    })
++    const controller = new AbortController()
++    const pending = harness.execute(
++      input({ maxDurationMs: 5_000 }, controller.signal)
++    )
++    await sleep(25)
++    controller.abort()
++    const result = await pending
++    release()
++    await sleep(10)
++    expect(gateSeen).toBeDefined()
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(result.modelCalls).toBe(0)
++    expect(afterClose).toEqual([false, false, false])
++  })
++
++  it('AC13: a cancelled turn refuses new calls and repairs but counts a returned call', async () => {
++    const seen: boolean[] = []
++    const { harness } = harnessWith({
++      iterativeOrchestrator: {
++        decide: (value: GovernedDecisionInput) => {
++          value.signal?.addEventListener('abort', () => {
++            const gate = value.modelGate
++            seen.push(
++              gate?.beginCall() ?? true,
++              gate?.beginRepair() ?? true,
++              gate?.recordCall({
++                inputTokens: 3,
++                outputTokens: 4,
++                costUsd: 0.01
++              }) ?? true
++            )
++          })
++          return new Promise(() => undefined)
++        }
++      }
++    })
++    const controller = new AbortController()
++    const pending = harness.execute(
++      input({ maxDurationMs: 5_000 }, controller.signal)
++    )
++    await sleep(25)
++    controller.abort()
++    const result = await pending
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(seen).toEqual([false, false, false])
++    expect(result.modelCalls).toBe(0)
++    expect(result.usage).toEqual({
++      inputTokens: 3,
++      outputTokens: 4,
++      costUsd: 0.01
++    })
++  })
++
++  it('AC14: a cancellation while the decision is audited stops before dispatch', async () => {
++    const controller = new AbortController()
++    const actions: string[] = []
++    const audit = {
++      append: async (event: { action: string }) => {
++        actions.push(event.action)
++        if (event.action === 'orchestrator.decided') controller.abort()
++      }
++    }
++    const stepStore = new InMemoryExecutionStepStore()
++    const { harness } = harnessWith({
++      audit: audit as never,
++      stepStore,
++      iterativeOrchestrator: {
++        decide: async () => ({ decision: JSON.parse(STOP) })
++      }
++    })
++    const run = input({ maxDurationMs: 5_000 }, controller.signal)
++    const result = await harness.execute(run)
++    expect(result.stopReason).toBe('CANCELLED')
++    expect(actions).toContain('orchestrator.decided')
++    const steps = await stepStore.listSteps(
++      run.tenantId,
++      run.executionId as string
++    )
++    expect(steps.some((step) => step.stepType === 'STOP')).toBe(false)
++  })
++
++  it('a gate stop also refuses later begin and repair requests', async () => {
++    const seen: boolean[] = []
++    const { harness } = harnessWith({
++      iterativeOrchestrator: {
++        decide: async (value: GovernedDecisionInput) => {
++          const gate = value.modelGate
++          seen.push(gate?.beginCall() ?? false)
++          seen.push(
++            gate?.recordCall({
++              inputTokens: 10_000,
++              outputTokens: 0,
++              costUsd: 0
++            }) ?? true
++          )
++          seen.push(gate?.beginCall() ?? true, gate?.beginRepair() ?? true)
++          // Usage of a call that still returns after the stop is counted.
++          seen.push(
++            gate?.recordCall({ inputTokens: 1, outputTokens: 0, costUsd: 0 }) ??
++              true,
++            gate?.recordCall({
++              inputTokens: Number.NaN,
++              outputTokens: 0,
++              costUsd: 0
++            }) ?? true
++          )
++          // A misbehaving orchestrator that still answers is stopped anyway.
++          return { decision: JSON.parse(STOP) }
++        }
++      }
++    })
++    const result = await harness.execute(input())
++    expect(seen).toEqual([true, false, false, false, false, false])
++    expect(result.stopReason).toBe('MAX_TOKENS')
++    expect(result.modelCalls).toBe(1)
++    expect(result.usage.inputTokens).toBe(10_001)
++  })
++})
++
++describe('SPEC0248 — repair notice follows runtime rejections only', () => {
++  it('a counted internal repair does not leak a repair notice into later steps', async () => {
++    const captured: ContextBuildInput[] = []
++    const fallback = new DefaultContextEngine()
++    const replan = JSON.stringify({
++      decisionType: 'REPLAN',
++      reasonCode: 'STRATEGY_CHANGED'
++    })
++    const model = new CountingModel((call) => ({
++      text: call === 1 ? 'malformed' : call === 2 ? replan : STOP
++    }))
++    const { harness } = harnessWith({
++      contextEngine: {
++        build: async (value: ContextBuildInput) => {
++          captured.push(value)
++          return fallback.build(value)
++        }
++      },
++      iterativeOrchestrator: new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 1
++      })
++    })
++    const result = await harness.execute(input({ maxModelCalls: 5 }))
++    expect(result.stopReason).toBe('COMPLETED')
++    expect(captured.length).toBeGreaterThanOrEqual(2)
++    expect(captured.every((value) => value.decisionRepair === undefined)).toBe(
++      true
++    )
++  })
++
++  it('a runtime rejection still sends its errors to the next decision', async () => {
++    const captured: ContextBuildInput[] = []
++    const fallback = new DefaultContextEngine()
++    const script = [
++      {
++        decisionType: 'CALL_TOOL',
++        reasonCode: 'TOOL_REQUIRED',
++        toolId: 'unknown.tool'
++      },
++      JSON.parse(STOP)
++    ]
++    let index = 0
++    const { harness } = harnessWith({
++      contextEngine: {
++        build: async (value: ContextBuildInput) => {
++          captured.push(value)
++          return fallback.build(value)
++        }
++      },
++      iterativeOrchestrator: {
++        decide: async () => ({ decision: script[index++] })
++      }
++    })
++    const result = await harness.execute(input())
++    expect(result.stopReason).toBe('COMPLETED')
++    expect(captured[0]?.decisionRepair).toBeUndefined()
++    expect(captured[1]?.decisionRepair?.attempt).toBe(1)
++    expect(captured[1]?.decisionRepair?.errors.length).toBeGreaterThan(0)
++  })
++})
+diff --git a/packages/harness/src/iterative-runtime.ts b/packages/harness/src/iterative-runtime.ts
+index a510dd361..1d2eec231 100644
+--- a/packages/harness/src/iterative-runtime.ts
++++ b/packages/harness/src/iterative-runtime.ts
+@@ -6,12 +6,14 @@ import type {
+   ClaimValidation,
+   CompletionEvaluation,
+   CompletionEvaluator,
++  ContextBuildInput,
+   ContextEngine,
+   DecisionValidationResult,
+   ExecutionCheckpoint,
+   ExecutionStep,
+   ExecutionStepStore,
+   IterativeOrchestrator,
++  IterativeOrchestratorTurn,
+   LoopDecision,
+   ModelUsage,
+   Observation,
+@@ -40,6 +42,10 @@ import type {
+   ToolDescriptor,
+   ToolRegistry
+ } from '@cvg/harness-contracts'
++import type {
++  DecisionModelGate,
++  GovernedDecisionInput
++} from '@cvg/harness-orchestrator'
+ import { DefaultContextEngine } from './context-engine.ts'
+ import { DeterministicCompletionEvaluator } from './completion.ts'
+ import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
+@@ -47,8 +53,10 @@ import { sealCheckpoint } from './step-store.ts'
+ import { agentExposesTool } from './runtime.ts'
+ import { KernelHost } from './kernel/host.ts'
+ import {
++  CANCELLED,
+   CANCELLED_RESPONSE,
+   createTurnState,
++  race,
+   runGate
+ } from './kernel/pipeline.ts'
+ import {
+@@ -67,8 +75,10 @@ import {
+ import {
+   CONTROL_SERVICES,
+   DEADLINE,
++  stop as kernelStop,
+   type EffectLedger,
+   type KernelLog,
++  type KernelStop,
+   type PauseSwitch,
+   type ServiceKey,
+   type TurnState
+@@ -128,6 +138,69 @@ export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
+ 
+ const AUDIT_GRACE_MS = 200
+ 
++const INVALID_USAGE_RESPONSE = 'Orchestrator reported invalid model usage.'
++
++const USAGE_FIELDS = [
++  'modelCalls',
++  'inputTokens',
++  'outputTokens',
++  'costUsd'
++] as const
++
++/**
++ * Reads the four usage fields once into a plain copy and validates the copy
++ * (SPEC 0248 R4): every field present, finite and not negative, with a whole
++ * call count. Only the validated copy is ever added to the counters, so a
++ * getter is never read twice.
++ */
++function snapshotUsage(value: unknown): ModelUsage | undefined {
++  if (typeof value !== 'object' || value === null) return undefined
++  const record = value as Record<string, unknown>
++  const copy: Record<(typeof USAGE_FIELDS)[number], unknown> = {
++    modelCalls: record.modelCalls,
++    inputTokens: record.inputTokens,
++    outputTokens: record.outputTokens,
++    costUsd: record.costUsd
++  }
++  const valid =
++    Number.isInteger(copy.modelCalls) &&
++    USAGE_FIELDS.every((field) => {
++      const entry = copy[field]
++      return typeof entry === 'number' && Number.isFinite(entry) && entry >= 0
++    })
++  return valid ? (copy as unknown as ModelUsage) : undefined
++}
++
++/**
++ * Usage an orchestrator attached to its failure, when it is readable and
++ * well formed; anything else is ignored, never trusted (SPEC 0248).
++ */
++function failureUsage(error: unknown): ModelUsage | undefined {
++  if (typeof error !== 'object' || error === null) return undefined
++  try {
++    return snapshotUsage((error as { usage?: unknown }).usage)
++  } catch {
++    return undefined
++  }
++}
++
++/**
++ * Runtime side of the decision budget port (SPEC 0248 §3.3): one handle per
++ * decision, closed when the decision settles.
++ */
++interface DecisionGate {
++  readonly port: DecisionModelGate
++  /** Usage already accounted through the port during this decision. */
++  readonly counted: {
++    modelCalls: number
++    inputTokens: number
++    outputTokens: number
++    costUsd: number
++  }
++  stopped(): KernelStop | undefined
++  close(): void
++}
++
+ const TERMINAL_STOPS = new Set<StopReason>([
+   'COMPLETED',
+   'HUMAN_TAKEOVER',
+@@ -875,6 +948,11 @@ export class IterativeGovernedRuntime {
+         tool: decision.toolId ?? null
+       })
+ 
++      // R6 (SPEC 0248): a cancellation that arrived while the decision was
++      // being recorded stops here, before any dispatch or effect.
++      if (this.#turns.get(run)?.signal.aborted) {
++        return this.stop('CANCELLED', CANCELLED_RESPONSE)
++      }
+       const dispatch = await this.dispatch(run, decision, stepNumber)
+       if (dispatch.kind === 'pause') {
+         return await this.pause(run, stepNumber, dispatch)
+@@ -941,8 +1019,8 @@ export class IterativeGovernedRuntime {
+     outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
+     decision?: LoopDecision
+   }> {
+-    const remaining = this.remainingDuration(run)
+-    if (remaining <= 0) {
++    const turn = this.turnFor(run)
++    if (this.remainingDuration(run) <= 0) {
+       return {
+         outcome: this.stop(
+           'MAX_DURATION',
+@@ -955,7 +1033,7 @@ export class IterativeGovernedRuntime {
+       ...run.state,
+       observations: run.observations
+     }
+-    const context = await this.contextEngine.build({
++    const buildInput: ContextBuildInput = {
+       runtime: {
+         executionId: run.executionId,
+         tenantId: run.input.tenantId,
+@@ -979,7 +1057,9 @@ export class IterativeGovernedRuntime {
+       allowedDecisionTypes: this.allowedDecisionTypes(run),
+       budget: run.input.budget,
+       budgetUsage: run.usage,
+-      ...(run.usage.decisionRepairs > 0
++      // Only a decision the runtime rejected asks for a repair; repairs the
++      // orchestrator reserved through the port need no notice (SPEC 0248).
++      ...(run.lastDecisionErrors.length > 0
+         ? {
+             decisionRepair: {
+               attempt: run.usage.decisionRepairs,
+@@ -987,32 +1067,159 @@ export class IterativeGovernedRuntime {
+             }
+           }
+         : {})
+-    })
+-    const decisionAbortController = new AbortController()
+-    const decisionOrDeadline = await this.withDeadline(
+-      this.options.orchestrator.decide({
+-        context,
+-        signal: decisionAbortController.signal
+-      }),
+-      remaining
+-    )
+-    if (decisionOrDeadline === DEADLINE_EXCEEDED) {
+-      decisionAbortController.abort()
++    }
++    // F03: the context build races the absolute deadline and the caller's
++    // cancellation (a cancelled turn never starts it); an abandoned build is
++    // never awaited.
++    const context = await race(turn, () => this.contextEngine.build(buildInput))
++    if (context === CANCELLED) {
++      return { outcome: this.stop('CANCELLED', CANCELLED_RESPONSE) }
++    }
++    if (context === DEADLINE) {
+       return {
+         outcome: this.stop(
+           'MAX_DURATION',
+-          'Duration budget exhausted while deciding the next step.'
++          'Duration budget exhausted while building the decision context.'
+         )
+       }
+     }
+-    const turn = decisionOrDeadline
+-    const usage = turn.usage ?? EMPTY_MODEL_USAGE
+-    this.accountUsage(run, usage)
++
++    // F02/F04: every decision model call is reserved through the port, the
++    // orchestrator's signal follows the caller and the deadline, and the
++    // wait races both with the remaining time recomputed after the build.
++    const gate = this.decisionGate(run)
++    const decisionAbort = new AbortController()
++    const decisionInput: GovernedDecisionInput = {
++      context,
++      signal: AbortSignal.any([decisionAbort.signal, turn.signal]),
++      modelGate: gate.port
++    }
++    let decided: IterativeOrchestratorTurn | typeof DEADLINE | typeof CANCELLED
++    try {
++      decided = await race(turn, () =>
++        this.options.orchestrator.decide(decisionInput)
++      )
++    } catch (error) {
++      const reported = failureUsage(error)
++      if (reported) this.accountBeyondGate(run, reported, gate.counted)
++      const failureStop = gate.stopped()
++      if (failureStop) {
++        return {
++          outcome: this.stop(failureStop.stopReason, failureStop.response)
++        }
++      }
++      const overrun = this.checkAfterUsage(run)
++      if (overrun) {
++        return { outcome: this.stop(overrun.reason, overrun.response) }
++      }
++      throw error
++    } finally {
++      gate.close()
++    }
++    if (decided === DEADLINE || decided === CANCELLED) {
++      decisionAbort.abort()
++      return {
++        outcome:
++          decided === DEADLINE
++            ? this.stop(
++                'MAX_DURATION',
++                'Duration budget exhausted while deciding the next step.'
++              )
++            : this.stop('CANCELLED', CANCELLED_RESPONSE)
++      }
++    }
++    const reportedUsage = decided.usage
++    const usage =
++      reportedUsage === undefined
++        ? EMPTY_MODEL_USAGE
++        : snapshotUsage(reportedUsage)
++    if (!usage) {
++      return { outcome: this.stop('MODEL_FAILURE', INVALID_USAGE_RESPONSE) }
++    }
++    this.accountBeyondGate(run, usage, gate.counted)
++    const gateStop = gate.stopped()
++    if (gateStop) {
++      return { outcome: this.stop(gateStop.stopReason, gateStop.response) }
++    }
+     const usageStop = this.checkAfterUsage(run)
+     if (usageStop) {
+       return { outcome: this.stop(usageStop.reason, usageStop.response) }
+     }
+-    return { decision: turn.decision }
++    return { decision: decided.decision }
++  }
++
++  /**
++   * Decision budget port (SPEC 0248 §3.3). Reservation and accounting use the
++   * kernel's own single sites (`beginModelRequest`/`recordModelResult`, I11);
++   * repairs share the execution's `decisionRepairs` counter. Closed, the port
++   * refuses everything, so an abandoned orchestrator cannot spend.
++   */
++  private decisionGate(run: LoopRun): DecisionGate {
++    const { budget, signal } = this.turnFor(run)
++    const counted = {
++      modelCalls: 0,
++      inputTokens: 0,
++      outputTokens: 0,
++      costUsd: 0
++    }
++    let stopped: KernelStop | undefined
++    let open = true
++    return {
++      counted,
++      stopped: () => stopped,
++      close: () => {
++        open = false
++      },
++      port: {
++        beginCall: () => {
++          if (!open || stopped || signal.aborted) return false
++          stopped = budget.beginModelRequest()
++          if (stopped) return false
++          counted.modelCalls += 1
++          return true
++        },
++        recordCall: (reported) => {
++          if (!open) return false
++          const usage = snapshotUsage({ ...reported, modelCalls: 0 })
++          if (!usage) {
++            stopped ??= kernelStop('MODEL_FAILURE', INVALID_USAGE_RESPONSE)
++            return false
++          }
++          counted.inputTokens += usage.inputTokens
++          counted.outputTokens += usage.outputTokens
++          counted.costUsd += usage.costUsd
++          const exceeded = budget.recordModelResult(usage)
++          stopped ??= exceeded
++          // A call that already returned is counted even after a cancel (R4).
++          return stopped === undefined && !signal.aborted
++        },
++        beginRepair: () => {
++          if (!open || stopped || signal.aborted) return false
++          const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
++          if (run.usage.decisionRepairs + 1 > repairBudget) return false
++          run.usage.decisionRepairs += 1
++          return true
++        }
++      }
++    }
++  }
++
++  /**
++   * Usage an orchestrator reports on top of what its port already accounted:
++   * an orchestrator that ignores the port is counted from its report, one that
++   * uses it is never counted twice (SPEC 0248 §3.2).
++   */
++  private accountBeyondGate(
++    run: LoopRun,
++    reported: ModelUsage,
++    counted: DecisionGate['counted']
++  ): void {
++    this.accountUsage(run, {
++      modelCalls: Math.max(0, reported.modelCalls - counted.modelCalls),
++      inputTokens: Math.max(0, reported.inputTokens - counted.inputTokens),
++      outputTokens: Math.max(0, reported.outputTokens - counted.outputTokens),
++      costUsd: Math.max(0, reported.costUsd - counted.costUsd)
++    })
+   }
+ 
+   /**
+diff --git a/packages/model-gateway/src/__tests__/aud0621-0248-bounded-response.test.ts b/packages/model-gateway/src/__tests__/aud0621-0248-bounded-response.test.ts
+new file mode 100644
+index 000000000..a6acdb337
+--- /dev/null
++++ b/packages/model-gateway/src/__tests__/aud0621-0248-bounded-response.test.ts
+@@ -0,0 +1,424 @@
++// @vitest-environment node
++import {
++  createServer,
++  type IncomingMessage,
++  type Server,
++  type ServerResponse
++} from 'node:http'
++import type { AddressInfo } from 'node:net'
++import { afterEach, describe, expect, it } from 'vitest'
++import { ModelProviderError } from '../errors.ts'
++import { ModelGateway } from '../gateway.ts'
++import { PromptRegistry } from '../prompt-registry.ts'
++import { networkError, readBoundedText } from '../providers/http-errors.ts'
++import { OllamaProvider } from '../providers/ollama.ts'
++import { OpenAICompatibleProvider } from '../providers/openai-compatible.ts'
++import { fetchWithResolvedAddress } from '../providers/ssrf-node.ts'
++import type { ProviderRequest } from '../contracts.ts'
++
++/**
++ * SPEC0248 §3.5 (AUD-0621 F21, core): model responses are cut chunk by
++ * chunk at the byte ceiling, before the excess is buffered, and the provider
++ * deadline holds until the end of the body.
++ */
++
++const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
++const servers: Server[] = []
++
++afterEach(async () => {
++  await Promise.all(
++    servers.splice(0).map(
++      (server) =>
++        new Promise<void>((resolve) => {
++          server.closeAllConnections()
++          server.close(() => resolve())
++        })
++    )
++  )
++})
++
++async function startServer(
++  handler: (request: IncomingMessage, response: ServerResponse) => void
++): Promise<{ url: string; port: number }> {
++  const server = createServer(handler)
++  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
++  servers.push(server)
++  const { port } = server.address() as AddressInfo
++  return { url: `http://127.0.0.1:${port}`, port }
++}
++
++/** Streams `chunks` × 1 KiB, one per tick, and records how far it got. */
++function streamingServer(chunks: number, status = 200) {
++  const state = { written: 0, closedEarly: false }
++  const handler = (request: IncomingMessage, response: ServerResponse) => {
++    request.resume()
++    response.writeHead(status, { 'content-type': 'application/json' })
++    response.on('close', () => {
++      if (state.written < chunks) state.closedEarly = true
++    })
++    const tick = () => {
++      if (response.destroyed) return
++      if (state.written >= chunks) {
++        response.end()
++        return
++      }
++      response.write('x'.repeat(1024))
++      state.written += 1
++      setTimeout(tick, 2)
++    }
++    tick()
++  }
++  return { state, handler }
++}
++
++function providerRequest(
++  overrides: Partial<ProviderRequest> = {}
++): ProviderRequest {
++  return {
++    requestId: 'req_bounded_0248',
++    tenantId: TENANT,
++    correlationId: 'corr_00000000-0000-4000-8000-000000000248',
++    model: 'local-model',
++    input: { messages: [{ role: 'user', content: 'ola' }] },
++    temperature: 0,
++    maxTokens: 32,
++    promptSha256: 'a'.repeat(64),
++    signal: new AbortController().signal,
++    timeoutMs: 5_000,
++    ...overrides
++  }
++}
++
++function streamResponse(chunks: number, chunkBytes = 1024) {
++  const state = { pulled: 0, cancelled: false }
++  const body = new ReadableStream<Uint8Array>({
++    pull(controller) {
++      if (state.pulled >= chunks) {
++        controller.close()
++        return
++      }
++      state.pulled += 1
++      controller.enqueue(new Uint8Array(chunkBytes).fill(120))
++    },
++    cancel() {
++      state.cancelled = true
++    }
++  })
++  return { state, response: new Response(body, { status: 200 }) }
++}
++
++describe('SPEC0248 F21 — bound model transport', () => {
++  it('AC20: cuts a chunked 2xx body at the ceiling and fails only the body', async () => {
++    const server = streamingServer(256)
++    const { url } = await startServer(server.handler)
++    const response = await fetchWithResolvedAddress(
++      `${url}/v1/chat/completions`,
++      { method: 'POST', body: '{}', maxResponseBytes: 4 * 1024 },
++      ['127.0.0.1']
++    )
++    expect(response.status).toBe(200)
++    await expect(response.text()).rejects.toMatchObject({
++      name: 'ResponseTooLargeError'
++    })
++    await new Promise((resolve) => setTimeout(resolve, 50))
++    expect(server.state.closedEarly).toBe(true)
++    expect(server.state.written).toBeLessThan(256)
++  })
++
++  it('AC20: does not read a 2xx body whose declared length is above the ceiling', async () => {
++    const { url } = await startServer((request, response) => {
++      request.resume()
++      response.writeHead(200, { 'content-length': String(1024 * 1024) })
++      response.flushHeaders()
++    })
++    const started = Date.now()
++    const response = await fetchWithResolvedAddress(
++      `${url}/`,
++      { method: 'GET', maxResponseBytes: 1024 },
++      ['127.0.0.1']
++    )
++    expect(Date.now() - started).toBeLessThan(1_000)
++    await expect(response.arrayBuffer()).rejects.toMatchObject({
++      name: 'ResponseTooLargeError'
++    })
++  })
++
++  it('AC21: keeps the status of a non-2xx response over the ceiling', async () => {
++    const server = streamingServer(256, 503)
++    const { url } = await startServer(server.handler)
++    const response = await fetchWithResolvedAddress(
++      `${url}/`,
++      { method: 'GET', maxResponseBytes: 1024 },
++      ['127.0.0.1']
++    )
++    expect(response.status).toBe(503)
++    expect(response.body).toBeNull()
++  })
++
++  it('keeps a body within the ceiling intact', async () => {
++    const server = streamingServer(2)
++    const { url } = await startServer(server.handler)
++    const response = await fetchWithResolvedAddress(
++      `${url}/`,
++      { method: 'GET', maxResponseBytes: 4 * 1024 },
++      ['127.0.0.1']
++    )
++    expect((await response.text()).length).toBe(2048)
++  })
++
++  it('AC21: the OpenAI-compatible provider maps the cut to response_too_large', async () => {
++    const server = streamingServer(256)
++    const { url } = await startServer(server.handler)
++    const provider = new OpenAICompatibleProvider({
++      id: 'local-openai',
++      baseUrl: url,
++      model: 'local-model',
++      location: 'local',
++      allowHttp: true,
++      allowPrivateNetworks: true,
++      maxResponseBytes: 4 * 1024
++    })
++    await expect(provider.execute(providerRequest())).rejects.toMatchObject({
++      kind: 'response_too_large',
++      message: 'Provider response exceeded 4096 bytes'
++    })
++    await new Promise((resolve) => setTimeout(resolve, 50))
++    expect(server.state.closedEarly).toBe(true)
++  })
++
++  it('AC21: the Ollama provider maps the cut to response_too_large', async () => {
++    const server = streamingServer(256)
++    const { url } = await startServer(server.handler)
++    const provider = new OllamaProvider({
++      id: 'local-ollama',
++      baseUrl: url,
++      model: 'local-model',
++      allowPrivateNetworks: true,
++      maxResponseBytes: 4 * 1024
++    })
++    await expect(provider.execute(providerRequest())).rejects.toMatchObject({
++      kind: 'response_too_large'
++    })
++    await new Promise((resolve) => setTimeout(resolve, 50))
++    expect(server.state.closedEarly).toBe(true)
++  })
++
++  it('AC21: HTTP and redirect outcomes keep priority over the ceiling', async () => {
++    const cases = [
++      [500, 'unavailable'],
++      [429, 'rate_limited'],
++      [302, 'invalid_request']
++    ] as const
++    for (const [status, kind] of cases) {
++      const { url } = await startServer((request, response) => {
++        request.resume()
++        response.writeHead(status, {
++          location: 'http://127.0.0.1:9/elsewhere'
++        })
++        response.end('x'.repeat(64 * 1024))
++      })
++      const provider = new OpenAICompatibleProvider({
++        id: 'local-openai',
++        baseUrl: url,
++        model: 'local-model',
++        location: 'local',
++        allowHttp: true,
++        allowPrivateNetworks: true,
++        maxResponseBytes: 1024
++      })
++      await expect(provider.execute(providerRequest())).rejects.toMatchObject({
++        kind
++      })
++    }
++  })
++
++  it('AC21: the gateway reports provider_response_too_large', async () => {
++    const server = streamingServer(256)
++    const { url } = await startServer(server.handler)
++    const prompts = new PromptRegistry()
++    prompts.register({
++      promptId: 'bounded',
++      version: '1.0.0',
++      content: 'Synthetic administrative text only',
++      owner: 'audit',
++      approvedBy: 'audit-reviewer',
++      status: 'approved',
++      effectiveFrom: '2026-09-01T00:00:00.000Z',
++      classification: 'INTERNAL'
++    })
++    const gateway = new ModelGateway({
++      providers: [
++        new OpenAICompatibleProvider({
++          id: 'local-openai',
++          baseUrl: url,
++          model: 'local-model',
++          location: 'local',
++          allowHttp: true,
++          allowPrivateNetworks: true,
++          maxResponseBytes: 4 * 1024
++        })
++      ],
++      profiles: {
++        local: {
++          name: 'local',
++          providerId: 'local-openai',
++          model: 'local-model',
++          location: 'local',
++          temperature: 0,
++          maxTokens: 32,
++          timeoutMs: 5_000,
++          maxCostUsd: 1,
++          estimatedCostUsd: 0,
++          maxRetries: 0,
++          pricing: { inputPer1kUsd: 0, outputPer1kUsd: 0 }
++        }
++      },
++      prompts
++    })
++    await expect(
++      gateway.generate({
++        requestId: 'req_bounded_gateway',
++        tenantId: TENANT,
++        correlationId: 'corr_bounded_gateway',
++        promptId: 'bounded',
++        promptVersion: '1.0.0',
++        modelProfile: 'local',
++        dataClassification: 'INTERNAL',
++        input: { messages: [{ role: 'user', content: 'ola' }] }
++      })
++    ).rejects.toMatchObject({
++      code: 'provider_response_too_large',
++      retryable: false
++    })
++  })
++
++  it('AC23: the provider deadline holds while the body hangs', async () => {
++    const { url } = await startServer((request, response) => {
++      request.resume()
++      response.writeHead(200, { 'content-type': 'application/json' })
++      response.write('{"choices":')
++    })
++    const provider = new OpenAICompatibleProvider({
++      id: 'local-openai',
++      baseUrl: url,
++      model: 'local-model',
++      location: 'local',
++      allowHttp: true,
++      allowPrivateNetworks: true
++    })
++    const started = Date.now()
++    await expect(
++      provider.execute(providerRequest({ timeoutMs: 150 }))
++    ).rejects.toMatchObject({ kind: 'timeout' })
++    expect(Date.now() - started).toBeLessThan(2_000)
++  })
++})
++
++describe('SPEC0248 F21 — bounded body read with an injected fetch', () => {
++  it('AC22: OpenAI-compatible cancels the stream past the ceiling', async () => {
++    const stream = streamResponse(1_000)
++    const provider = new OpenAICompatibleProvider({
++      id: 'local-openai',
++      baseUrl: 'http://127.0.0.1:9',
++      model: 'local-model',
++      location: 'local',
++      allowHttp: true,
++      allowPrivateNetworks: true,
++      maxResponseBytes: 4 * 1024,
++      fetchImpl: async () => stream.response
++    })
++    await expect(provider.execute(providerRequest())).rejects.toMatchObject({
++      kind: 'response_too_large'
++    })
++    expect(stream.state.cancelled).toBe(true)
++    expect(stream.state.pulled).toBeLessThan(10)
++  })
++
++  it('AC22: Ollama cancels the stream past the ceiling', async () => {
++    const stream = streamResponse(1_000)
++    const provider = new OllamaProvider({
++      id: 'local-ollama',
++      baseUrl: 'http://127.0.0.1:9',
++      model: 'local-model',
++      allowPrivateNetworks: true,
++      maxResponseBytes: 4 * 1024,
++      fetchImpl: async () => stream.response
++    })
++    await expect(provider.execute(providerRequest())).rejects.toMatchObject({
++      kind: 'response_too_large'
++    })
++    expect(stream.state.cancelled).toBe(true)
++    expect(stream.state.pulled).toBeLessThan(10)
++  })
++
++  it('reads bounded text, declared lengths, empty bodies and read failures', async () => {
++    await expect(
++      readBoundedText('p', new Response('{"ok":true}'), 64)
++    ).resolves.toBe('{"ok":true}')
++    await expect(readBoundedText('p', new Response(null), 64)).resolves.toBe('')
++    await expect(
++      readBoundedText(
++        'p',
++        new Response('x', { headers: { 'content-length': '999' } }),
++        64
++      )
++    ).rejects.toMatchObject({ kind: 'response_too_large' })
++    const failing = new Response(
++      new ReadableStream({
++        pull() {
++          throw new Error('socket closed')
++        }
++      })
++    )
++    await expect(readBoundedText('p', failing, 64)).rejects.toMatchObject({
++      kind: 'connection'
++    })
++    const minimal = {
++      text: async () => 'y'.repeat(100)
++    } as unknown as Response
++    await expect(readBoundedText('p', minimal, 64)).rejects.toMatchObject({
++      kind: 'response_too_large'
++    })
++  })
++
++  it('AC22: decodes UTF-8 split across chunks like Response.text()', async () => {
++    const split = new Response(
++      new ReadableStream<Uint8Array>({
++        start(controller) {
++          controller.enqueue(new Uint8Array([0x7b, 0x22, 0xc3]))
++          controller.enqueue(new Uint8Array([0xa1, 0x22, 0x7d]))
++          controller.close()
++        }
++      })
++    )
++    await expect(readBoundedText('p', split, 64)).resolves.toBe('{"á"}')
++  })
++
++  it('ends a read on abort and on timeout with the matching kind', async () => {
++    const hanging = () =>
++      new Response(
++        new ReadableStream<Uint8Array>({
++          start(controller) {
++            controller.enqueue(new Uint8Array([0x7b]))
++          }
++        })
++      )
++    const controller = new AbortController()
++    const pending = readBoundedText('p', hanging(), 64, controller.signal)
++    controller.abort()
++    await expect(pending).rejects.toMatchObject({ kind: 'cancelled' })
++    await expect(
++      readBoundedText('p', hanging(), 64, AbortSignal.timeout(20))
++    ).rejects.toMatchObject({ kind: 'timeout' })
++  })
++
++  it('maps the transport ceiling error to a non-retryable provider error', () => {
++    const cut = Object.assign(new Error('Response exceeds maxResponseBytes'), {
++      name: 'ResponseTooLargeError'
++    })
++    const mapped = networkError('p', cut)
++    expect(mapped).toBeInstanceOf(ModelProviderError)
++    expect(mapped.kind).toBe('response_too_large')
++    expect(mapped.retryable).toBe(false)
++  })
++})
+diff --git a/packages/model-gateway/src/__tests__/aud0621-0248-gateway-cancel-cost.test.ts b/packages/model-gateway/src/__tests__/aud0621-0248-gateway-cancel-cost.test.ts
+new file mode 100644
+index 000000000..1f0f8ebf7
+--- /dev/null
++++ b/packages/model-gateway/src/__tests__/aud0621-0248-gateway-cancel-cost.test.ts
+@@ -0,0 +1,333 @@
++import { describe, expect, it } from 'vitest'
++import { DeterministicModelProvider } from '../providers/deterministic.ts'
++import { InMemoryCostBudgetStore } from '../budget.ts'
++import { ModelProviderError } from '../errors.ts'
++import { ModelGateway } from '../gateway.ts'
++import { PromptRegistry } from '../prompt-registry.ts'
++import type {
++  ModelGatewayEvent,
++  ModelGatewayRequest,
++  ModelProfile,
++  ProviderRequest
++} from '../contracts.ts'
++
++/**
++ * SPEC0248 §3.4 (AUD-0621 F13/F14): an aborted signal never reaches a
++ * provider or the budget store, the backoff races the signal, and the
++ * request and profile cost ceilings deny a call whose estimate exceeds them.
++ */
++
++const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
++
++function prompts(): PromptRegistry {
++  const registry = new PromptRegistry()
++  registry.register({
++    promptId: 'audit-safe',
++    version: '1.0.0',
++    content: 'Synthetic administrative text only',
++    owner: 'audit',
++    approvedBy: 'audit-reviewer',
++    status: 'approved',
++    effectiveFrom: '2026-09-01T00:00:00.000Z',
++    classification: 'INTERNAL'
++  })
++  return registry
++}
++
++function profile(overrides: Partial<ModelProfile> = {}): ModelProfile {
++  return {
++    name: 'fast',
++    providerId: 'deterministic',
++    model: 'deterministic-v1',
++    location: 'local',
++    temperature: 0,
++    maxTokens: 512,
++    timeoutMs: 1_000,
++    maxCostUsd: 1,
++    estimatedCostUsd: 0.1,
++    maxRetries: 0,
++    pricing: { inputPer1kUsd: 1, outputPer1kUsd: 1 },
++    ...overrides
++  }
++}
++
++function request(
++  overrides: Partial<ModelGatewayRequest> = {}
++): ModelGatewayRequest {
++  return {
++    requestId: 'audit-req-0248',
++    tenantId: TENANT,
++    correlationId: 'audit-corr-0248',
++    promptId: 'audit-safe',
++    promptVersion: '1.0.0',
++    modelProfile: 'fast',
++    dataClassification: 'INTERNAL',
++    input: { messages: [{ role: 'user', content: 'Synthetic text' }] },
++    ...overrides
++  }
++}
++
++function setup(
++  options: {
++    profile?: Partial<ModelProfile>
++    fallback?: Partial<ModelProfile>
++    respond?: (call: number, request: ProviderRequest) => void
++    tokens?: number
++    sleep?: (ms: number) => Promise<void>
++  } = {}
++) {
++  const signals: AbortSignal[] = []
++  const events: ModelGatewayEvent[] = []
++  const store = new InMemoryCostBudgetStore()
++  let calls = 0
++  const provider = new DeterministicModelProvider({
++    respond: (providerRequest) => {
++      calls += 1
++      signals.push(providerRequest.signal)
++      options.respond?.(calls, providerRequest)
++      return {
++        text: 'safe',
++        usage: {
++          inputTokens: options.tokens ?? 1,
++          outputTokens: options.tokens ?? 1
++        },
++        providerId: 'deterministic',
++        model: 'deterministic-v1',
++        externalCall: false
++      }
++    }
++  })
++  const gateway = new ModelGateway({
++    providers: [provider],
++    profiles: {
++      fast: profile({
++        ...(options.fallback ? { fallbackProfile: 'local' } : {}),
++        ...options.profile
++      }),
++      ...(options.fallback
++        ? { local: profile({ name: 'local', ...options.fallback }) }
++        : {})
++    },
++    ...(options.fallback ? { routing: { allowFallback: true } } : {}),
++    prompts: prompts(),
++    budget: { store, limits: { tenant: 100 } },
++    onEvent: (event) => events.push(event),
++    ...(options.sleep ? { sleep: options.sleep } : {})
++  })
++  return {
++    gateway,
++    events,
++    store,
++    signals,
++    calls: () => calls
++  }
++}
++
++describe('SPEC0248 F13 — an aborted signal stops the gateway', () => {
++  it('AC16: a pre-aborted request reaches no provider and reserves nothing', async () => {
++    const x = setup()
++    await expect(
++      x.gateway.generate({ ...request(), signal: AbortSignal.abort() })
++    ).rejects.toMatchObject({ code: 'cancelled', retryable: false })
++    expect(x.calls()).toBe(0)
++    expect(x.store.consumed(`tenant:${TENANT}`)).toBe(0)
++    expect(x.events.map((event) => event.type)).not.toContain(
++      'model.call.started'
++    )
++  })
++
++  it('AC17: an abort during the backoff ends the call without a new attempt', async () => {
++    const controller = new AbortController()
++    const x = setup({
++      profile: { maxRetries: 3 },
++      respond: () => {
++        throw new ModelProviderError('deterministic', 'unavailable', 'down')
++      },
++      sleep: () => {
++        controller.abort()
++        return new Promise(() => undefined)
++      }
++    })
++    await expect(
++      x.gateway.generate({ ...request(), signal: controller.signal })
++    ).rejects.toMatchObject({ code: 'cancelled' })
++    expect(x.calls()).toBe(1)
++    const failed = x.events.filter(
++      (event) => event.type === 'model.call.failed'
++    )
++    expect(failed).toEqual([
++      expect.objectContaining({ code: 'cancelled', attempt: 1 })
++    ])
++  })
++
++  it('an abort that lands after the backoff still prevents the next attempt', async () => {
++    const controller = new AbortController()
++    const x = setup({
++      profile: { maxRetries: 3 },
++      respond: () => {
++        throw new ModelProviderError('deterministic', 'unavailable', 'down')
++      },
++      sleep: async () => {
++        controller.abort()
++      }
++    })
++    await expect(
++      x.gateway.generate({ ...request(), signal: controller.signal })
++    ).rejects.toMatchObject({ code: 'cancelled' })
++    expect(x.calls()).toBe(1)
++    expect(
++      x.events.filter((event) => event.type === 'model.call.started')
++    ).toHaveLength(1)
++    expect(x.events.at(-1)).toMatchObject({
++      type: 'model.call.failed',
++      code: 'cancelled',
++      attempt: 1
++    })
++  })
++
++  it('the provider signal follows the caller signal and its reason', async () => {
++    const controller = new AbortController()
++    const x = setup()
++    const result = await x.gateway.generate({
++      ...request(),
++      signal: controller.signal
++    })
++    expect(result.output.text).toBe('safe')
++    expect(x.signals[0]?.aborted).toBe(false)
++    const reason = new Error('caller stopped')
++    controller.abort(reason)
++    expect(x.signals[0]?.aborted).toBe(true)
++    expect(x.signals[0]?.reason).toBe(reason)
++  })
++
++  it('a completed backoff resumes the next attempt', async () => {
++    const x = setup({
++      profile: { maxRetries: 1 },
++      respond: (call) => {
++        if (call === 1) {
++          throw new ModelProviderError('deterministic', 'unavailable', 'down')
++        }
++      },
++      sleep: async () => undefined
++    })
++    const result = await x.gateway.generate({
++      ...request(),
++      signal: new AbortController().signal
++    })
++    expect(result.attempts).toBe(2)
++    expect(x.calls()).toBe(2)
++  })
++})
++
++describe('SPEC0248 F14 — request and profile cost ceilings', () => {
++  it('AC18: zero ceilings with a positive estimate deny before the provider', async () => {
++    const x = setup({ profile: { maxCostUsd: 0 } })
++    await expect(
++      x.gateway.generate(request({ maxCostUsd: 0 }))
++    ).rejects.toMatchObject({ code: 'budget_exceeded', retryable: false })
++    expect(x.calls()).toBe(0)
++    expect(x.store.consumed(`tenant:${TENANT}`)).toBe(0)
++    expect(x.events).toContainEqual(
++      expect.objectContaining({
++        type: 'model.budget.denied',
++        code: 'cost_ceiling'
++      })
++    )
++  })
++
++  it('AC18: the request ceiling alone denies', async () => {
++    const x = setup({ profile: { maxCostUsd: 1 } })
++    await expect(
++      x.gateway.generate(request({ maxCostUsd: 0.05 }))
++    ).rejects.toMatchObject({ code: 'budget_exceeded' })
++    expect(x.calls()).toBe(0)
++  })
++
++  it('AC18: the profile ceiling alone denies', async () => {
++    const x = setup({ profile: { maxCostUsd: 0.05 } })
++    await expect(x.gateway.generate(request())).rejects.toMatchObject({
++      code: 'budget_exceeded'
++    })
++    expect(x.calls()).toBe(0)
++  })
++
++  it('AC18: a request estimate counts against the ceiling', async () => {
++    const x = setup({ profile: { maxCostUsd: 1, estimatedCostUsd: 0 } })
++    await expect(
++      x.gateway.generate(request({ maxCostUsd: 0.2, estimatedCostUsd: 0.3 }))
++    ).rejects.toMatchObject({ code: 'budget_exceeded' })
++    expect(x.calls()).toBe(0)
++  })
++
++  it('a non-finite ceiling or estimate fails closed', async () => {
++    const unbounded = setup({
++      profile: { maxCostUsd: Number.POSITIVE_INFINITY }
++    })
++    await expect(unbounded.gateway.generate(request())).rejects.toMatchObject({
++      code: 'budget_exceeded'
++    })
++    const infinite = setup({
++      profile: {
++        maxCostUsd: Number.POSITIVE_INFINITY,
++        estimatedCostUsd: Number.POSITIVE_INFINITY
++      }
++    })
++    await expect(infinite.gateway.generate(request())).rejects.toMatchObject({
++      code: 'budget_exceeded'
++    })
++    expect(unbounded.calls() + infinite.calls()).toBe(0)
++    const nanCeiling = setup({ profile: { maxCostUsd: Number.NaN } })
++    await expect(nanCeiling.gateway.generate(request())).rejects.toMatchObject({
++      code: 'budget_exceeded'
++    })
++    const nanEstimate = setup({ profile: { estimatedCostUsd: Number.NaN } })
++    await expect(nanEstimate.gateway.generate(request())).rejects.toMatchObject(
++      { code: 'budget_exceeded' }
++    )
++    expect(nanCeiling.calls() + nanEstimate.calls()).toBe(0)
++  })
++
++  it('AC19: an estimate within the ceiling proceeds and the real cost is reported', async () => {
++    const x = setup({ profile: { maxCostUsd: 0.1, estimatedCostUsd: 0.1 } })
++    const result = await x.gateway.generate(request({ maxCostUsd: 0.5 }))
++    expect(x.calls()).toBe(1)
++    expect(result.costUsd).toBe(0.002)
++    const completed = x.events.find(
++      (event) => event.type === 'model.call.completed'
++    )
++    expect(completed?.detail).toBeUndefined()
++  })
++
++  it('AC19: a real cost above the ceiling stays visible', async () => {
++    const x = setup({
++      profile: { maxCostUsd: 0.1, estimatedCostUsd: 0.01 },
++      tokens: 100
++    })
++    const result = await x.gateway.generate(request())
++    expect(result.costUsd).toBe(0.2)
++    expect(x.events).toContainEqual(
++      expect.objectContaining({
++        type: 'model.call.completed',
++        costUsd: 0.2,
++        detail: 'cost_ceiling_exceeded'
++      })
++    )
++    expect(x.store.consumed(`tenant:${TENANT}`)).toBeCloseTo(0.2, 10)
++  })
++
++  it('AC19: a fallback candidate is held to its own ceiling', async () => {
++    const x = setup({
++      profile: { maxCostUsd: 1 },
++      fallback: { maxCostUsd: 0.01 },
++      respond: (call) => {
++        if (call === 1) {
++          throw new ModelProviderError('deterministic', 'unavailable', 'down')
++        }
++      }
++    })
++    await expect(x.gateway.generate(request())).rejects.toMatchObject({
++      code: 'budget_exceeded'
++    })
++    expect(x.calls()).toBe(1)
++  })
++})
+diff --git a/packages/model-gateway/src/gateway.ts b/packages/model-gateway/src/gateway.ts
+index 0046bfb25..982c611f1 100644
+--- a/packages/model-gateway/src/gateway.ts
++++ b/packages/model-gateway/src/gateway.ts
+@@ -258,8 +258,37 @@ export class ModelGateway {
+         `Provider ${profile.providerId} is not registered`
+       )
+     }
++    // F13: an aborted caller never reserves budget nor reaches a provider.
++    throwIfCancelled(externalSignal)
+ 
+     const estimatedCost = request.estimatedCostUsd ?? profile.estimatedCostUsd
++    // F14: the restrictive combination of the request and profile ceilings
++    // is applied to the estimate before any reservation; a non-finite
++    // ceiling or estimate (NaN or infinite) fails closed (SPEC 0248 R8).
++    const ceiling = Math.min(
++      profile.maxCostUsd,
++      request.maxCostUsd ?? Number.POSITIVE_INFINITY
++    )
++    if (
++      !(
++        Number.isFinite(ceiling) &&
++        Number.isFinite(estimatedCost) &&
++        estimatedCost <= ceiling
++      )
++    ) {
++      this.#emit({
++        type: 'model.budget.denied',
++        requestId: request.requestId,
++        tenantId: request.tenantId,
++        correlationId: request.correlationId,
++        profile: profile.name,
++        code: 'cost_ceiling'
++      })
++      throw new ModelGatewayError(
++        'budget_exceeded',
++        'Model call estimate exceeds the cost ceiling'
++      )
++    }
+     let reservedKeys: string[] = []
+     if (this.#budget) {
+       const authorization = this.#budget.authorize({
+@@ -300,8 +329,11 @@ export class ModelGateway {
+       }
+       const controller = new AbortController()
+       const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs)
+-      const onExternalAbort = () => controller.abort()
+-      externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
++      // The provider signal inherits the caller's state, including an abort
++      // that already happened (F13).
++      const signal = externalSignal
++        ? AbortSignal.any([controller.signal, externalSignal])
++        : controller.signal
+ 
+       this.#emit({
+         type: 'model.call.started',
+@@ -327,7 +359,7 @@ export class ModelGateway {
+           ...(structuredOutput
+             ? { structuredSchemaName: structuredOutput.schemaName }
+             : {}),
+-          signal: controller.signal,
++          signal,
+           timeoutMs,
+           ...(request.metadata ? { metadata: request.metadata } : {})
+         })
+@@ -364,7 +396,10 @@ export class ModelGateway {
+           attempt,
+           costUsd,
+           inputTokens: usage.inputTokens,
+-          outputTokens: usage.outputTokens
++          outputTokens: usage.outputTokens,
++          // The real cost is never hidden; an overrun of the ceiling is
++          // reported with the result (SPEC 0248 §3.4).
++          ...(costUsd > ceiling ? { detail: 'cost_ceiling_exceeded' } : {})
+         })
+         return {
+           requestId: request.requestId,
+@@ -413,7 +448,21 @@ export class ModelGateway {
+             delayMs,
+             code: gatewayError.code
+           })
+-          await this.#sleep(delayMs)
++          await this.#backoff(delayMs, externalSignal)
++          if (externalSignal?.aborted) {
++            this.#emit({
++              type: 'model.call.failed',
++              requestId: request.requestId,
++              tenantId: request.tenantId,
++              correlationId: request.correlationId,
++              providerId: provider.id,
++              model: profile.model,
++              profile: profile.name,
++              attempt,
++              code: 'cancelled'
++            })
++            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
++          }
+           continue
+         }
+         this.#emit({
+@@ -430,7 +479,6 @@ export class ModelGateway {
+         throw gatewayError
+       } finally {
+         clearTimeout(timeoutHandle)
+-        externalSignal?.removeEventListener('abort', onExternalAbort)
+       }
+     }
+ 
+@@ -440,6 +488,24 @@ export class ModelGateway {
+     )
+   }
+ 
++  /** Retry backoff that ends early when the caller aborts (F13). */
++  async #backoff(ms: number, signal: AbortSignal | undefined): Promise<void> {
++    if (!signal) {
++      await this.#sleep(ms)
++      return
++    }
++    let onAbort!: () => void
++    const aborted = new Promise<void>((resolve) => {
++      onAbort = resolve
++      signal.addEventListener('abort', onAbort, { once: true })
++    })
++    try {
++      await Promise.race([this.#sleep(ms), aborted])
++    } finally {
++      signal.removeEventListener('abort', onAbort)
++    }
++  }
++
+   #parseOutput(
+     providerResult: ProviderResult,
+     contract: StructuredOutputContract | undefined
+@@ -533,6 +599,12 @@ export class ModelGateway {
+   }
+ }
+ 
++function throwIfCancelled(signal: AbortSignal | undefined): void {
++  if (signal?.aborted) {
++    throw new ModelGatewayError('cancelled', 'Model call was cancelled')
++  }
++}
++
+ function classificationRank(classification: DataClassification): number {
+   const order: DataClassification[] = [
+     'PUBLIC',
+diff --git a/packages/model-gateway/src/providers/http-errors.ts b/packages/model-gateway/src/providers/http-errors.ts
+index 073121e44..500ef64a1 100644
+--- a/packages/model-gateway/src/providers/http-errors.ts
++++ b/packages/model-gateway/src/providers/http-errors.ts
+@@ -24,11 +24,18 @@ export function providerHttpError(
+   )
+ }
+ 
++/** Name of the transport error raised when a body passes its byte ceiling. */
++export const RESPONSE_TOO_LARGE_ERROR = 'ResponseTooLargeError'
++
+ export function networkError(
+   providerId: string,
+-  error: unknown
++  error: unknown,
++  maxBytes?: number
+ ): ModelProviderError {
+   if (error instanceof ModelProviderError) return error
++  if (error instanceof Error && error.name === RESPONSE_TOO_LARGE_ERROR) {
++    return tooLarge(providerId, maxBytes)
++  }
+   if (error instanceof Error && error.name === 'AbortError') {
+     return new ModelProviderError(providerId, 'cancelled', 'Provider aborted')
+   }
+@@ -49,10 +56,72 @@ export function assertResponseSize(
+ ): void {
+   const bytes = new TextEncoder().encode(body).length
+   if (bytes > maxBytes) {
+-    throw new ModelProviderError(
+-      providerId,
+-      'response_too_large',
+-      `Provider response exceeded ${maxBytes} bytes`
+-    )
++    throw tooLarge(providerId, maxBytes)
++  }
++}
++
++function tooLarge(providerId: string, maxBytes?: number): ModelProviderError {
++  return new ModelProviderError(
++    providerId,
++    'response_too_large',
++    maxBytes === undefined
++      ? 'Provider response exceeded the size limit'
++      : `Provider response exceeded ${maxBytes} bytes`
++  )
++}
++
++/**
++ * Reads a provider body under its byte ceiling and the call's signal (SPEC
++ * 0248 §3.5): a declared length above the ceiling is refused before reading,
++ * the stream is cancelled as soon as it passes the ceiling, and an abort ends
++ * the read. A response without a stream (empty body or a minimal adapter)
++ * falls back to `text()` with the same size check.
++ */
++export async function readBoundedText(
++  providerId: string,
++  response: Response,
++  maxBytes: number,
++  signal?: AbortSignal
++): Promise<string> {
++  const body = response.body
++  if (!body) {
++    let text: string
++    try {
++      text = await response.text()
++    } catch (error) {
++      throw networkError(providerId, error)
++    }
++    assertResponseSize(providerId, text, maxBytes)
++    return text
++  }
++  const declared = response.headers.get('content-length')
++  if (declared !== null && Number(declared) > maxBytes) {
++    await body.cancel().catch(() => undefined)
++    throw tooLarge(providerId, maxBytes)
++  }
++  const reader = body.getReader()
++  const abort = () => {
++    void reader.cancel().catch(() => undefined)
++  }
++  signal?.addEventListener('abort', abort, { once: true })
++  const chunks: Uint8Array[] = []
++  let total = 0
++  try {
++    for (;;) {
++      signal?.throwIfAborted()
++      const { value, done } = await reader.read()
++      signal?.throwIfAborted()
++      if (done) break
++      total += value.byteLength
++      if (total > maxBytes) throw tooLarge(providerId, maxBytes)
++      chunks.push(value)
++    }
++  } catch (error) {
++    await reader.cancel().catch(() => undefined)
++    throw networkError(providerId, error, maxBytes)
++  } finally {
++    signal?.removeEventListener('abort', abort)
++    reader.releaseLock()
+   }
++  return new TextDecoder().decode(Buffer.concat(chunks, total))
+ }
+diff --git a/packages/model-gateway/src/providers/ollama.ts b/packages/model-gateway/src/providers/ollama.ts
+index ee4e1dcc6..a0ac9ba1e 100644
+--- a/packages/model-gateway/src/providers/ollama.ts
++++ b/packages/model-gateway/src/providers/ollama.ts
+@@ -13,9 +13,9 @@ import type {
+ } from '../contracts.ts'
+ import { ModelProviderError } from '../errors.ts'
+ import {
+-  assertResponseSize,
+   networkError,
+-  providerHttpError
++  providerHttpError,
++  readBoundedText
+ } from './http-errors.ts'
+ import { fetchWithResolvedAddress } from './ssrf-node.ts'
+ import {
+@@ -148,6 +148,8 @@ export class OllamaProvider implements ModelProvider {
+           },
+           body: JSON.stringify(body),
+           signal,
++          // The bound transport cuts the body at the ceiling (SPEC 0248).
++          maxResponseBytes: this.#maxResponseBytes,
+           redirect: 'manual'
+         },
+         {
+@@ -167,20 +169,21 @@ export class OllamaProvider implements ModelProvider {
+           `Ollama endpoint rejected: ${error.message}`
+         )
+       }
+-      throw networkError(this.id, error)
++      throw networkError(this.id, error, this.#maxResponseBytes)
+     }
+ 
+     if (!response.ok) {
++      // The known HTTP status wins; the unread body is released (D011).
++      await response.body?.cancel().catch(() => undefined)
+       throw providerHttpError(this.id, response.status)
+     }
+ 
+-    let rawBody: string
+-    try {
+-      rawBody = await response.text()
+-    } catch (error) {
+-      throw networkError(this.id, error)
+-    }
+-    assertResponseSize(this.id, rawBody, this.#maxResponseBytes)
++    const rawBody = await readBoundedText(
++      this.id,
++      response,
++      this.#maxResponseBytes,
++      signal
++    )
+ 
+     let parsedJson: unknown
+     try {
+diff --git a/packages/model-gateway/src/providers/openai-compatible.ts b/packages/model-gateway/src/providers/openai-compatible.ts
+index 361c323d2..3da8009ef 100644
+--- a/packages/model-gateway/src/providers/openai-compatible.ts
++++ b/packages/model-gateway/src/providers/openai-compatible.ts
+@@ -14,9 +14,9 @@ import type {
+ } from '../contracts.ts'
+ import { ModelProviderError } from '../errors.ts'
+ import {
+-  assertResponseSize,
+   networkError,
+-  providerHttpError
++  providerHttpError,
++  readBoundedText
+ } from './http-errors.ts'
+ import { fetchWithResolvedAddress } from './ssrf-node.ts'
+ 
+@@ -169,6 +169,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
+           },
+           body: JSON.stringify(body),
+           signal,
++          // The bound transport cuts the body at the ceiling (SPEC 0248).
++          maxResponseBytes: this.#maxResponseBytes,
+           redirect: 'manual'
+         },
+         {
+@@ -188,20 +190,21 @@ export class OpenAICompatibleProvider implements ModelProvider {
+           `Provider endpoint rejected: ${error.message}`
+         )
+       }
+-      throw networkError(this.id, error)
++      throw networkError(this.id, error, this.#maxResponseBytes)
+     }
+ 
+     if (!response.ok) {
++      // The known HTTP status wins; the unread body is released (D011).
++      await response.body?.cancel().catch(() => undefined)
+       throw providerHttpError(this.id, response.status)
+     }
+ 
+-    let rawBody: string
+-    try {
+-      rawBody = await response.text()
+-    } catch (error) {
+-      throw networkError(this.id, error)
+-    }
+-    assertResponseSize(this.id, rawBody, this.#maxResponseBytes)
++    const rawBody = await readBoundedText(
++      this.id,
++      response,
++      this.#maxResponseBytes,
++      signal
++    )
+ 
+     let parsedJson: unknown
+     try {
+diff --git a/packages/model-gateway/src/providers/ssrf-node.ts b/packages/model-gateway/src/providers/ssrf-node.ts
+index d1b703b7f..822078fc4 100644
+--- a/packages/model-gateway/src/providers/ssrf-node.ts
++++ b/packages/model-gateway/src/providers/ssrf-node.ts
+@@ -54,13 +54,13 @@ export async function fetchWithResolvedAddress(
+     const request =
+       url.protocol === 'https:'
+         ? httpsRequest(requestOptions, (response) => {
+-            void readResponse(response, method).then(
++            void readResponse(response, method, init.maxResponseBytes).then(
+               (result) => finish(() => resolve(result)),
+               (error: unknown) => finish(() => reject(error))
+             )
+           })
+         : httpRequest(requestOptions, (response) => {
+-            void readResponse(response, method).then(
++            void readResponse(response, method, init.maxResponseBytes).then(
+               (result) => finish(() => resolve(result)),
+               (error: unknown) => finish(() => reject(error))
+             )
+@@ -164,11 +164,24 @@ function asAbortSignal(value: unknown): AbortSignal | undefined {
+   return undefined
+ }
+ 
+-async function readResponse(response: IncomingMessage, method: string) {
+-  const chunks: Buffer[] = []
+-  for await (const chunk of response) {
+-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+-  }
++function responseTooLarge(): Error {
++  const error = new Error('Response exceeds maxResponseBytes')
++  error.name = 'ResponseTooLargeError'
++  return error
++}
++
++/**
++ * Reads the body under the caller's byte ceiling (SPEC 0248 §3.5, a subset of
++ * SPEC 0180 D011). A declared length above the ceiling is not read, and the
++ * socket is destroyed at the first chunk that crosses it, before the excess
++ * is kept. The known status still wins: only a 2xx body fails with the size
++ * error; any other status keeps its status and headers with a null body.
++ */
++async function readResponse(
++  response: IncomingMessage,
++  method: string,
++  maxResponseBytes: unknown
++) {
+   const headers = new Headers()
+   for (const [name, value] of Object.entries(response.headers)) {
+     if (Array.isArray(value)) {
+@@ -186,9 +199,37 @@ async function readResponse(response: IncomingMessage, method: string) {
+     status === 204 ||
+     status === 205 ||
+     status === 304
+-  return new Response(bodyless ? null : Buffer.concat(chunks), {
+-    status,
+-    statusText: response.statusMessage ?? '',
+-    headers
+-  })
++  const limit =
++    typeof maxResponseBytes === 'number' && !bodyless
++      ? maxResponseBytes
++      : undefined
++  let oversized =
++    limit !== undefined && Number(response.headers['content-length']) > limit
++  const chunks: Buffer[] = []
++  let total = 0
++  if (!oversized) {
++    for await (const chunk of response) {
++      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
++      total += bytes.byteLength
++      if (limit !== undefined && total > limit) {
++        oversized = true
++        break
++      }
++      chunks.push(bytes)
++    }
++  }
++  const init = { status, statusText: response.statusMessage ?? '', headers }
++  if (oversized) {
++    response.destroy()
++    const failing =
++      status >= 200 && status < 300
++        ? new ReadableStream<Uint8Array>({
++            start(controller) {
++              controller.error(responseTooLarge())
++            }
++          })
++        : null
++    return new Response(failing, init)
++  }
++  return new Response(bodyless ? null : Buffer.concat(chunks), init)
+ }
+diff --git a/packages/orchestrator/src/__tests__/aud0621-0248-decision-gate.test.ts b/packages/orchestrator/src/__tests__/aud0621-0248-decision-gate.test.ts
+new file mode 100644
+index 000000000..adc1351e4
+--- /dev/null
++++ b/packages/orchestrator/src/__tests__/aud0621-0248-decision-gate.test.ts
+@@ -0,0 +1,292 @@
++import { describe, expect, it } from 'vitest'
++import type {
++  ModelRequest,
++  ModelResult,
++  StepContext
++} from '@cvg/harness-contracts'
++import {
++  HybridOrchestrator,
++  OrchestratorDecisionError,
++  type DecisionModelGate
++} from '../index.ts'
++
++/**
++ * SPEC0248 §3.1 (AUD-0621 F02): the hybrid orchestrator asks the runtime's
++ * budget port before every decision model call and every repair, and every
++ * error it raises carries the usage spent so far.
++ */
++
++function stepContext(): StepContext {
++  return {
++    executionId: 'exec_gate',
++    tenantId: 'tenant_gate' as never,
++    conversationId: 'conversation_gate',
++    stepNumber: 1,
++    runtimeProfile: 'iterative',
++    agentId: 'agent.gate' as never,
++    agentVersion: 'v1',
++    objective: 'Synthetic objective',
++    instructions: [],
++    goal: 'Synthetic goal',
++    userMessage: 'decide',
++    stateSummary: 'step=0',
++    observations: [],
++    capabilities: [],
++    knowledgeAvailable: false,
++    completionStrategy: 'DETERMINISTIC',
++    allowedDecisionTypes: ['RESPOND', 'ASK_USER', 'STOP'],
++    budget: {
++      maxSteps: 5,
++      maxModelCalls: 3,
++      maxToolCalls: 3,
++      maxDurationMs: 5_000,
++      maxCostUsd: 1,
++      maxTokens: 1_000
++    },
++    budgetUsage: {
++      steps: 0,
++      modelCalls: 0,
++      toolCalls: 0,
++      knowledgeCalls: 0,
++      verificationCalls: 0,
++      replans: 0,
++      decisionRepairs: 0,
++      inputTokens: 0,
++      outputTokens: 0,
++      costUsd: 0,
++      activeDurationMs: 0
++    },
++    tokenBudget: 1_000,
++    contextItems: [],
++    correlationId: 'correlation_gate' as never,
++    traceId: 'trace_gate' as never
++  }
++}
++
++const respond = JSON.stringify({
++  decisionType: 'RESPOND',
++  reasonCode: 'GOAL_SATISFIED',
++  responseIntent: 'answer'
++})
++
++class Model {
++  public readonly requests: ModelRequest[] = []
++  public constructor(private readonly texts: string[]) {}
++  public async complete(request: ModelRequest): Promise<ModelResult> {
++    this.requests.push(request)
++    return {
++      text: this.texts.shift() ?? 'not-json',
++      provider: 'synthetic',
++      model: 'synthetic-1',
++      inputTokens: 4,
++      outputTokens: 6,
++      costUsd: 0.01
++    }
++  }
++}
++
++function gate(
++  answers: Partial<{
++    begin: boolean[]
++    record: boolean[]
++    repair: boolean[]
++  }> = {}
++) {
++  const log: string[] = []
++  const take = (list: boolean[] | undefined) => list?.shift() ?? true
++  const port: DecisionModelGate = {
++    beginCall: () => {
++      log.push('begin')
++      return take(answers.begin)
++    },
++    recordCall: (usage) => {
++      log.push(`record:${usage.inputTokens}/${usage.outputTokens}`)
++      return take(answers.record)
++    },
++    beginRepair: () => {
++      log.push('repair')
++      return take(answers.repair)
++    }
++  }
++  return { port, log }
++}
++
++const ONE_CALL = {
++  modelCalls: 1,
++  inputTokens: 4,
++  outputTokens: 6,
++  costUsd: 0.01
++}
++
++describe('SPEC0248 hybrid orchestrator budget port', () => {
++  it('does not call the model when the port refuses the first call', async () => {
++    const model = new Model([respond])
++    const { port, log } = gate({ begin: [false] })
++    const error = await new HybridOrchestrator({ decisionModel: model })
++      .decide({ context: stepContext(), modelGate: port })
++      .catch((caught: unknown) => caught)
++    expect(model.requests).toHaveLength(0)
++    expect(log).toEqual(['begin'])
++    expect(error).toBeInstanceOf(OrchestratorDecisionError)
++    expect(error).toMatchObject({
++      code: 'budget_exhausted',
++      usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }
++    })
++  })
++
++  it('stops after a call whose usage exhausts the budget', async () => {
++    const model = new Model(['not-json', respond])
++    const { port, log } = gate({ record: [false] })
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 3
++      }).decide({ context: stepContext(), modelGate: port })
++    ).rejects.toMatchObject({ code: 'budget_exhausted', usage: ONE_CALL })
++    expect(model.requests).toHaveLength(1)
++    expect(log).toEqual(['begin', 'record:4/6'])
++  })
++
++  it('does not repair an unparseable answer without a repair slot', async () => {
++    const model = new Model(['not-json', respond])
++    const { port, log } = gate({ repair: [false] })
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 3
++      }).decide({ context: stepContext(), modelGate: port })
++    ).rejects.toMatchObject({ code: 'decision_unparseable', usage: ONE_CALL })
++    expect(model.requests).toHaveLength(1)
++    expect(log).toEqual(['begin', 'record:4/6', 'repair'])
++  })
++
++  it('does not repair an invalid decision without a repair slot', async () => {
++    const model = new Model([
++      JSON.stringify({
++        decisionType: 'CALL_TOOL',
++        reasonCode: 'TOOL_REQUIRED'
++      }),
++      respond
++    ])
++    const { port } = gate({ repair: [false] })
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 3
++      }).decide({ context: stepContext(), modelGate: port })
++    ).rejects.toMatchObject({ code: 'decision_invalid', usage: ONE_CALL })
++    expect(model.requests).toHaveLength(1)
++  })
++
++  it('reserves each repair and each call through the port', async () => {
++    const model = new Model(['not-json', respond])
++    const { port, log } = gate()
++    const turn = await new HybridOrchestrator({
++      decisionModel: model,
++      maxDecisionRepairs: 1
++    }).decide({ context: stepContext(), modelGate: port })
++    expect(turn.decision.decisionType).toBe('RESPOND')
++    expect(turn.usage).toEqual({
++      modelCalls: 2,
++      inputTokens: 8,
++      outputTokens: 12,
++      costUsd: 0.02
++    })
++    expect(log).toEqual([
++      'begin',
++      'record:4/6',
++      'repair',
++      'begin',
++      'record:4/6'
++    ])
++  })
++
++  it('keeps its own repair ceiling before asking the port', async () => {
++    const model = new Model(['not-json'])
++    const { port, log } = gate()
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 0
++      }).decide({ context: stepContext(), modelGate: port })
++    ).rejects.toMatchObject({ code: 'decision_unparseable', usage: ONE_CALL })
++    expect(log).toEqual(['begin', 'record:4/6'])
++  })
++
++  it('reports usage on cancellation and on exhausted repairs without a port', async () => {
++    const controller = new AbortController()
++    const model = new Model(['not-json', respond])
++    const original = model.complete.bind(model)
++    model.complete = async (request) => {
++      const result = await original(request)
++      controller.abort()
++      return result
++    }
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: model,
++        maxDecisionRepairs: 3
++      }).decide({ context: stepContext(), signal: controller.signal })
++    ).rejects.toMatchObject({
++      code: 'orchestrator_unavailable',
++      usage: ONE_CALL
++    })
++
++    const invalid = new Model(['not-json', 'not-json', 'not-json'])
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: invalid,
++        maxDecisionRepairs: 2
++      }).decide({ context: stepContext() })
++    ).rejects.toMatchObject({
++      code: 'decision_unparseable',
++      usage: { modelCalls: 3, inputTokens: 12, outputTokens: 18 }
++    })
++  })
++
++  it('lets a failure of the model result itself propagate unchanged', async () => {
++    const raw = new Error('raw model failure')
++    const rogue = {
++      complete: async () => ({
++        get text(): string {
++          throw raw
++        },
++        provider: 'synthetic',
++        model: 'synthetic-1',
++        inputTokens: 4,
++        outputTokens: 6,
++        costUsd: 0.01
++      })
++    }
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: rogue as never,
++        maxDecisionRepairs: 0
++      }).decide({ context: stepContext() })
++    ).rejects.toBe(raw)
++
++    const { port, log } = gate({ repair: [false] })
++    await expect(
++      new HybridOrchestrator({
++        decisionModel: rogue as never,
++        maxDecisionRepairs: 3
++      }).decide({ context: stepContext(), modelGate: port })
++    ).rejects.toBe(raw)
++    expect(log).toEqual(['begin', 'record:4/6', 'repair'])
++  })
++
++  it('leaves deterministic rules and their empty usage outside the port', async () => {
++    const { port, log } = gate()
++    const turn = await new HybridOrchestrator({
++      rules: [() => JSON.parse(respond)]
++    }).decide({ context: stepContext(), modelGate: port })
++    expect(turn.usage?.modelCalls).toBe(0)
++    expect(log).toEqual([])
++  })
++
++  it('defaults the error usage to empty', () => {
++    expect(
++      new OrchestratorDecisionError('decision_invalid', 'x').usage
++    ).toEqual({ modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 })
++  })
++})
+diff --git a/packages/orchestrator/src/hybrid-orchestrator.ts b/packages/orchestrator/src/hybrid-orchestrator.ts
+index f8998e769..5516646e1 100644
+--- a/packages/orchestrator/src/hybrid-orchestrator.ts
++++ b/packages/orchestrator/src/hybrid-orchestrator.ts
+@@ -19,14 +19,51 @@ export class OrchestratorDecisionError extends Error {
+     public readonly code:
+       | 'decision_unparseable'
+       | 'decision_invalid'
+-      | 'orchestrator_unavailable',
+-    message: string
++      | 'orchestrator_unavailable'
++      | 'budget_exhausted',
++    message: string,
++    /**
++     * Model usage the decision spent before it failed (SPEC 0248 R4), so a
++     * failed decision never hides consumption that already happened.
++     */
++    public readonly usage: ModelUsage = EMPTY_MODEL_USAGE
+   ) {
+     super(message)
+     this.name = 'OrchestratorDecisionError'
+   }
+ }
+ 
++/**
++ * Runtime-owned budget port for decision model calls (SPEC 0248 §3.1). The
++ * runtime reserves and accounts each call with the same functions the kernel
++ * uses for its own model calls, so the orchestrator never spends outside the
++ * execution budget. `false` always means: do not start anything else.
++ */
++export interface DecisionModelGate {
++  /** Reserves one model call before the provider starts. */
++  beginCall(): boolean
++  /** Accounts the usage of a call that returned. */
++  recordCall(usage: {
++    readonly inputTokens: number
++    readonly outputTokens: number
++    readonly costUsd: number
++  }): boolean
++  /** Reserves one decision repair before the repair call. */
++  beginRepair(): boolean
++}
++
++/**
++ * Decision input with the optional budget port. The shared
++ * `IterativeOrchestratorInput` contract is unchanged; a runtime that owns a
++ * budget passes the port, and an orchestrator without one keeps today's
++ * behaviour (it selects actions, budgets stay outside).
++ */
++export interface GovernedDecisionInput extends IterativeOrchestratorInput {
++  readonly modelGate?: DecisionModelGate
++}
++
++const BUDGET_EXHAUSTED_MESSAGE = 'Decision model budget is exhausted'
++
+ export type OrchestrationRule = (
+   context: StepContext
+ ) => LoopDecision | undefined
+@@ -149,7 +186,7 @@ export class HybridOrchestrator implements IterativeOrchestrator {
+   }
+ 
+   public async decide(
+-    input: IterativeOrchestratorInput
++    input: GovernedDecisionInput
+   ): Promise<IterativeOrchestratorTurn> {
+     const context = input.context
+     for (const rule of this.rules) {
+@@ -172,6 +209,7 @@ export class HybridOrchestrator implements IterativeOrchestrator {
+       )
+     }
+ 
++    const gate = input.modelGate
+     let usage: ModelUsage = EMPTY_MODEL_USAGE
+     let lastErrors: readonly string[] = []
+     let repairAttempt = 0
+@@ -179,7 +217,15 @@ export class HybridOrchestrator implements IterativeOrchestrator {
+       if (input.signal?.aborted) {
+         throw new OrchestratorDecisionError(
+           'orchestrator_unavailable',
+-          'Decision was cancelled by the runtime deadline'
++          'Decision was cancelled by the runtime deadline',
++          usage
++        )
++      }
++      if (gate && !gate.beginCall()) {
++        throw new OrchestratorDecisionError(
++          'budget_exhausted',
++          BUDGET_EXHAUSTED_MESSAGE,
++          usage
+         )
+       }
+       const prompt = buildDecisionPrompt({
+@@ -209,12 +255,30 @@ export class HybridOrchestrator implements IterativeOrchestrator {
+         ...(input.signal ? { signal: input.signal } : {})
+       })
+       usage = addUsage(usage, modelResult)
++      if (
++        gate &&
++        !gate.recordCall({
++          inputTokens: modelResult.inputTokens,
++          outputTokens: modelResult.outputTokens,
++          costUsd: modelResult.costUsd
++        })
++      ) {
++        throw new OrchestratorDecisionError(
++          'budget_exhausted',
++          BUDGET_EXHAUSTED_MESSAGE,
++          usage
++        )
++      }
+       let parsed: unknown
+       try {
+         parsed = parseDecisionText(modelResult.text)
+       } catch (error) {
+-        if (repairAttempt >= this.maxDecisionRepairs) {
+-          throw error
++        if (!this.mayRepair(repairAttempt, gate)) {
++          // The orchestrator's own failures carry the usage spent so far; a
++          // failure raised by the model result itself propagates unchanged.
++          throw error instanceof OrchestratorDecisionError
++            ? new OrchestratorDecisionError(error.code, error.message, usage)
++            : error
+         }
+         repairAttempt += 1
+         lastErrors = [
+@@ -232,14 +296,27 @@ export class HybridOrchestrator implements IterativeOrchestrator {
+           usage: resultToUsage(usage)
+         }
+       }
+-      if (repairAttempt >= this.maxDecisionRepairs) {
++      if (!this.mayRepair(repairAttempt, gate)) {
+         throw new OrchestratorDecisionError(
+           'decision_invalid',
+-          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${errors.join('; ')}`
++          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${errors.join('; ')}`,
++          usage
+         )
+       }
+       repairAttempt += 1
+       lastErrors = errors
+     }
+   }
++
++  /**
++   * A repair needs both the orchestrator's own ceiling and, when the runtime
++   * owns a budget, a reserved repair (SPEC 0248 R3).
++   */
++  private mayRepair(
++    repairAttempt: number,
++    gate: DecisionModelGate | undefined
++  ): boolean {
++    if (repairAttempt >= this.maxDecisionRepairs) return false
++    return gate ? gate.beginRepair() : true
++  }
+ }
+-- 
+2.43.0
+

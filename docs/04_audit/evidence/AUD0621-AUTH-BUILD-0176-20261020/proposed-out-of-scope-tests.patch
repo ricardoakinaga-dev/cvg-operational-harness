@@ -1,0 +1,169 @@
+diff --git a/apps/worker/src/__tests__/operational-harness-iterative-postgres.integration.test.ts b/apps/worker/src/__tests__/operational-harness-iterative-postgres.integration.test.ts
+index 8c54fa600..b81d7e384 100644
+--- a/apps/worker/src/__tests__/operational-harness-iterative-postgres.integration.test.ts
++++ b/apps/worker/src/__tests__/operational-harness-iterative-postgres.integration.test.ts
+@@ -214,10 +214,12 @@ describeWithPostgres('Phase 3 PostgreSQL iterative runtime durability', () => {
+       const trajectory = await app.inject({
+         method: 'GET',
+         url: `/v1/executions/${executionId}/trajectory`,
++        // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
++        // tenant-wide reader exercises the durable trajectory export.
+         headers: {
+           'x-tenant-id': tenantId,
+-          'x-operator-id': 'operator.phase3',
+-          'x-operator-role': 'Operator'
++          'x-operator-id': 'supervisor.phase3',
++          'x-operator-role': 'Supervisor'
+         }
+       })
+       expect(trajectory.statusCode).toBe(200)
+diff --git a/apps/worker/src/__tests__/operational-harness-iterative.test.ts b/apps/worker/src/__tests__/operational-harness-iterative.test.ts
+index a64ec6a3d..8b309bed4 100644
+--- a/apps/worker/src/__tests__/operational-harness-iterative.test.ts
++++ b/apps/worker/src/__tests__/operational-harness-iterative.test.ts
+@@ -121,7 +121,9 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
+         headers: {
+           'x-tenant-id': tenantId,
+           'x-operator-id': 'operator.phase3',
+-          'x-operator-role': 'Operator'
++          // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
++          // tenant-wide reader exercises the trajectory export.
++          'x-operator-role': 'Supervisor'
+         }
+       })
+       expect(trajectory.statusCode).toBe(200)
+@@ -167,7 +169,9 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
+         headers: {
+           'x-tenant-id': tenantId,
+           'x-operator-id': 'operator.phase3',
+-          'x-operator-role': 'Operator'
++          // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
++          // tenant-wide reader exercises the trajectory export.
++          'x-operator-role': 'Supervisor'
+         }
+       })
+       const steps = trajectory.json().data.trajectory.steps as Array<{
+diff --git a/apps/worker/src/__tests__/operational-harness-synthetic-effect-postgres.integration.test.ts b/apps/worker/src/__tests__/operational-harness-synthetic-effect-postgres.integration.test.ts
+index 167691241..372c4995c 100644
+--- a/apps/worker/src/__tests__/operational-harness-synthetic-effect-postgres.integration.test.ts
++++ b/apps/worker/src/__tests__/operational-harness-synthetic-effect-postgres.integration.test.ts
+@@ -151,6 +151,17 @@ describeWithPostgres(
+           payload
+         })
+         const status = await app.inject({
++          method: 'GET',
++          url: `/v1/executions/${executionId}`,
++          // SPEC0176 (AUD-0621 F01): tenant-wide reader; the unassigned
++          // Operator is asserted to receive 404 below.
++          headers: {
++            'x-tenant-id': tenantId,
++            'x-operator-id': 'supervisor.phase2.r4',
++            'x-operator-role': 'Supervisor'
++          }
++        })
++        const unassigned = await app.inject({
+           method: 'GET',
+           url: `/v1/executions/${executionId}`,
+           headers: {
+@@ -199,10 +210,14 @@ describeWithPostgres(
+         expect(replay.json().data.execution.id).toBe(executionId)
+         expect(status.statusCode).toBe(200)
+         expect(status.json().data.state).toBe('SUCCEEDED')
+-        expect(status.json().data.result.toolResult.output).toEqual({
+-          fixture: 'phase2',
+-          applied: true
++        // SPEC0176 DTO v2: the raw tool output never reaches HTTP.
++        expect(status.json().data).toMatchObject({
++          viewVersion: 2,
++          response: null,
++          errorSummary: null
+         })
++        expect(status.body).not.toContain('phase2')
++        expect(unassigned.statusCode).toBe(404)
+         expect(idle).toEqual({ kind: 'idle' })
+         expect(journal).toMatchObject({
+           state: 'CONFIRMED',
+diff --git a/apps/worker/src/__tests__/operational-harness-synthetic-effect.test.ts b/apps/worker/src/__tests__/operational-harness-synthetic-effect.test.ts
+index 838a73ed8..61de751b8 100644
+--- a/apps/worker/src/__tests__/operational-harness-synthetic-effect.test.ts
++++ b/apps/worker/src/__tests__/operational-harness-synthetic-effect.test.ts
+@@ -56,11 +56,15 @@ function runtime(): RuntimeInput {
+   }
+ }
+ 
+-function statusHeaders(): Record<string, string> {
++function statusHeaders(
++  role: 'Operator' | 'Supervisor' = 'Supervisor'
++): Record<string, string> {
++  // SPEC0176 (AUD-0621 F01): only a tenant-wide role or an explicit
++  // read_case grant reads the execution; the unassigned Operator gets 404.
+   return {
+     'x-tenant-id': tenantId,
+-    'x-operator-id': 'operator.phase2.synthetic',
+-    'x-operator-role': 'Operator'
++    'x-operator-id': `${role.toLowerCase()}.phase2.synthetic`,
++    'x-operator-role': role
+   }
+ }
+ 
+@@ -118,6 +122,11 @@ describe('AAA-21 R4 operational synthetic effect vertical path', () => {
+         url: `/v1/executions/${executionId}`,
+         headers: statusHeaders()
+       })
++      const unassigned = await app.inject({
++        method: 'GET',
++        url: `/v1/executions/${executionId}`,
++        headers: statusHeaders('Operator')
++      })
+       const idle = await workerRuntime.worker.processNext()
+       const journal = await workerRuntime.effectJournal?.get(
+         tenantId,
+@@ -130,10 +139,15 @@ describe('AAA-21 R4 operational synthetic effect vertical path', () => {
+       expect(replay.json().data.execution.id).toBe(executionId)
+       expect(status.statusCode).toBe(200)
+       expect(status.json().data.state).toBe('SUCCEEDED')
+-      expect(status.json().data.result.toolResult.output).toEqual({
+-        fixture: 'phase2',
+-        applied: true
++      // SPEC0176 DTO v2: the raw tool output stays in the worker record
++      // (asserted above) and never reaches the HTTP presentation.
++      expect(status.json().data).toMatchObject({
++        viewVersion: 2,
++        response: null,
++        errorSummary: null
+       })
++      expect(status.body).not.toContain('phase2')
++      expect(unassigned.statusCode).toBe(404)
+       expect(idle).toEqual({ kind: 'idle' })
+       expect(journal).toMatchObject({
+         state: 'CONFIRMED',
+diff --git a/tests/e2e/critical-flows.test.ts b/tests/e2e/critical-flows.test.ts
+index 4373e900a..2b174816c 100644
+--- a/tests/e2e/critical-flows.test.ts
++++ b/tests/e2e/critical-flows.test.ts
+@@ -64,9 +64,11 @@ describe('critical runtime flows', () => {
+         idempotencyKey: 'e2e-task-1'
+       }
+     })
++    // SPEC0176 §5: approval/task events are not session-linked by their
++    // producer; the full tenant audit reader still exposes them.
+     const audit = await app.inject({
+       method: 'GET',
+-      url: `/v1/audit/sessions/${sessionId}`,
++      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
+       headers: {
+         'x-operator-id': 'supervisor.shift-a',
+         'x-operator-role': 'Supervisor'
+@@ -84,8 +86,10 @@ describe('critical runtime flows', () => {
+     )
+     expect(
+       (
+-        audit.json() as Envelope<{ events: Array<{ type: string }> }>
+-      ).data.events.map((event) => event.type)
++        audit.json() as Envelope<{
++          page: { items: Array<{ type: string }> }
++        }>
++      ).data.page.items.map((event) => event.type)
+     ).toContain('approval_decision')
+   })
+ })

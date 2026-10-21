@@ -59,6 +59,7 @@
 - Caso de uso: listar fila humana.
 - Filtros: status, riskLevel, createdBefore.
 - Resposta: approval requests paginados.
+- Paginação (SPEC0250, 20/10/2026): `limit` 1–100 (padrão 25), `offset` 0–10000, `status` opcional como lista separada por vírgula de valores distintos do enum do recurso. `data` é array; `meta.pageInfo = { limit, offset, total, hasNextPage }`. Parâmetro inválido: 400 `invalid_pagination` (limite/deslocamento) ou `validation_failed` (status). `/v1/conversations` mantém `data: { items, pageInfo }`; unificar exige versão nova.
 
 ### `POST /v1/approvals/:approvalRequestId/decision`
 
@@ -73,6 +74,7 @@
 
 - Caso de uso: listar tarefas internas.
 - Filtros: status, priority, source.
+- Paginação (SPEC0250, 20/10/2026): `limit` 1–100 (padrão 25), `offset` 0–10000, `status` opcional como lista separada por vírgula de valores distintos do enum do recurso. `data` é array; `meta.pageInfo = { limit, offset, total, hasNextPage }`. Parâmetro inválido: 400 `invalid_pagination` (limite/deslocamento) ou `validation_failed` (status). `/v1/conversations` mantém `data: { items, pageInfo }`; unificar exige versão nova.
 
 ### `POST /v1/tasks`
 

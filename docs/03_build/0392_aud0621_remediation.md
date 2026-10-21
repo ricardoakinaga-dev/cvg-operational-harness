@@ -1,0 +1,64 @@
+# 0392 — Remediação dos achados da auditoria crítica 0621
+
+Task-mãe `AUD0621-REMEDIATION-20261020` (Claude Code, CONT-20261018-D9EF). Pedido do usuário em 20/10/2026: corrigir todos os achados do [relatório 0621](../04_audit/0621_critical_production_audit_2026-10-20.md), feito pelo Codex sobre a `main` `3704e3f8` (26 achados: 16 P1 e 10 P2). [Decisões do usuário](../04_audit/evidence/AUD0621-REMEDIATION-20261020/user-decisions-20261020.json).
+
+O parecer de produção continua NO_GO. Nada aqui concede release, transmissão clínica, dado real ou deploy.
+
+## Gates
+
+- SPEC0176 (F01): BUILD local aprovado pelo usuário em 20/10.
+- SPEC0179 e SPEC0180 (produto e transporte): BUILD local aprovado em 03/10. `NO_MODEL` para conteúdo CLINICAL continua vigente; D2 é decisão separada.
+- [SPEC0248](../02_spec/0248_runtime_budget_cancel_limits.md), [SPEC0249](../02_spec/0249_persistence_worker_integrity.md) e [SPEC0250](../02_spec/0250_api_tasks_session_approvals.md) (novas): o usuário autorizou seguir para o BUILD quando o crítico independente aprovasse sem obrigatórios. As três foram aprovadas assim e estão promovidas com os bytes aprovados (sha256 `d4392f0b…`, `f88732dd…` e `f83d4978…`). Nenhuma criou migração; a `0030` não foi usada.
+
+## Frentes
+
+| Frente                     | Achados                                                                   | Contrato  | Commit da candidata     | Evidência                                                                        |
+| -------------------------- | ------------------------------------------------------------------------- | --------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `AUD0621-PRODUCT-BUILD`    | F07, F08, F09, F10, F11, F18, F21 (produto), F24, F25                     | 0179/0180 | `8cb00604`              | [produto](../04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)    |
+| `AUD0621-AUTH-BUILD-0176`  | F01                                                                       | 0176      | `a9861469`              | [0176](../04_audit/evidence/AUD0621-AUTH-BUILD-0176-20261020/promotion.json)     |
+| `AUD0621-RUNTIME-0248`     | F02, F03, F04, F13, F14, F21 (núcleo)                                     | 0248      | `92004871`              | [0248](../04_audit/evidence/AUD0621-RUNTIME-0248-20261020/promotion.json)        |
+| `AUD0621-PERSISTENCE-0249` | F05, F06, F17, F19, F20, F26                                              | 0249      | `0e91b96b`              | [0249](../04_audit/evidence/AUD0621-PERSISTENCE-0249-20261020/promotion.json)    |
+| `AUD0621-API-WEB-0250`     | F12, F15, F16, F22, F23                                                   | 0250      | `3a4f4b9d` + `b912b348` | [0250](../04_audit/evidence/AUD0621-API-WEB-0250-20261020/promotion.json)        |
+| `AUD0621-PRODUCT-PISO008`  | F25 (backup, restore, alerta e stop do produto; imagem da base integrada) | 0179 §10  | ver evidência           | [PISO-008](../04_audit/evidence/AUD0621-PRODUCT-PISO008-20261021/promotion.json) |
+
+Cada frente reproduziu os seus achados como teste que falha na base, corrigiu, matou mutantes e passou por crítico independente sem obrigatórios.
+
+## Integração
+
+Candidata `/mnt/dados/cvg-work/cvg-aud0621-integration-20261021`, a partir da `main` `05d4a30a`. Além dos commits das frentes, o lead fez:
+
+- alinhamento da 0176 com o resto: as demos `phase2` e `phase3` leem a execução como Supervisor; quatro testes do worker e o `critical-flows` deixaram de codificar leitura sem vínculo ao caso; `test:postgres` inclui os testes PG novos;
+- F17 no store em memória da execution spine: lease vencido na última tentativa vira `FAILED_TERMINAL retry_exhausted`, igual ao PostgreSQL (o resíduo que a SPEC0249 deixou para o lead), com teste que falhava antes;
+- prova `rem21-010`: passou a fazer o roll-forward da 0029 sobre um dump da 0027 (a 0028 é opcional) e remove os objetos da 0029 antes de restaurar o backup anterior; sem isso o segundo `pg_restore --clean` quebrava nas FKs `case_*`;
+- catálogo de skips: sha e contagem sem PG dos 11 arquivos PG alterados pelas frentes e duas entradas novas (SKIP-PG-038 e 039);
+- `task-status-atomicity.test.ts` (0250) lê a auditoria pelo leitor completo, porque depois da 0176 o leitor de sessão só devolve eventos vinculados pelo produtor;
+- adendo de paginação de `GET /v1/tasks` e `GET /v1/approvals` na [SPEC0107](../02_spec/0107_contratos_de_api.md), proposto pela SPEC0250;
+- adendo da 0249, revisado pelo crítico de código da frente: o preflight do worker deriva a lista de tabelas de `TENANT_SCHEMA_TABLES` e passa a exigir as `case_*` da 0029 ([adendo](../04_audit/evidence/AUD0621-PERSISTENCE-0249-20261020/spec-addendum-lead-inventory.md)).
+
+Gates na integração (Node 22.23.2, PostgreSQL 16 próprio): [gates.json](../04_audit/evidence/AUD0621-INTEGRATION-20261021/gates.json).
+
+## Requalificação
+
+Um crítico independente reexecutou as sondas do auditor (`AUD-CRITICAL-20261020`) contra a candidata e leu o código de cada achado. Nenhum dos 26 defeitos reproduz. [Relatório](../04_audit/evidence/AUD0621-INTEGRATION-20261021/requalification/requalification.md).
+
+| Achado                  | Estado              | O que fica aberto e onde                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F01                     | Fechado localmente  | Em modo trusted, toda leitura de caso responde 503 até existir o produtor verificado de `case_principals` (SPEC0152, [UP91-025](0367_program_backlog_reaudit_2026-09-30.md#up91-025)). Resíduo da mesma classe, P1: `GET /v1/tasks`, `GET /v1/approvals` e o PATCH de task ainda não têm escopo por caso; precisa de SPEC própria ([UP91-018](0367_program_backlog_reaudit_2026-09-30.md#up91-018)). AUTH12–AUTH14 seguem abertos no mesmo cartão. |
+| F02, F03, F04           | Fechados            | Orquestrador de terceiros sem a porta de decisão fica limitado só pela parada pós-uso (SPEC0248 §6).                                                                                                                                                                                                                                                                                                                                               |
+| F05, F06                | Fechados            | O adaptador de outbox em memória ainda aceita ack/fail sem token (diferença deliberada da SPEC0249).                                                                                                                                                                                                                                                                                                                                               |
+| F07, F08, F09, F10, F11 | Fechados            | Recibo de preview, SourceEvidence (D2), estacionar tarefas de membro revogado e lock de escritor único seguem nos cartões PISO-001 a PISO-005.                                                                                                                                                                                                                                                                                                     |
+| F12                     | Fechado             | `rem21-014` 18/18 na integração. IdP corporativo e topologia SPEC0150 seguem em PR-302.                                                                                                                                                                                                                                                                                                                                                            |
+| F13, F14                | Fechados            | Causa do prazo do gateway e o restante da D009 na [HISO-011](0370_harness_product_isolation_backlog.md).                                                                                                                                                                                                                                                                                                                                           |
+| F15, F16                | Fechados            | `POST /v1/tasks` e `POST /v1/approvals` ainda criam e auditam em dois passos (UP91-018).                                                                                                                                                                                                                                                                                                                                                           |
+| F17, F18, F19, F20      | Fechados            | —                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| F21                     | Fechado localmente  | Providers, WhatsApp e Whisper reais não rodaram. Restante da D011 (backpressure, cabeçalhos, compressão, teto padrão do transporte, DNS do guard) na HISO-011.                                                                                                                                                                                                                                                                                     |
+| F22, F23                | Fechados            | O painel de approvals mostra resumo e caso de todo o tenant enquanto o escopo por caso de approvals não existir (resíduo do F01).                                                                                                                                                                                                                                                                                                                  |
+| F24                     | Fechado             | —                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| F25                     | Ver frente PISO-008 | Ambiente real: firewall nft no host com contadores, build pela receita no CI, monitor em outra máquina e receptor real.                                                                                                                                                                                                                                                                                                                            |
+| F26                     | Fechado             | O smoke de produção real com o oracle novo fica para a próxima qualificação da imagem.                                                                                                                                                                                                                                                                                                                                                             |
+
+## Decisões que ficam com o usuário
+
+1. Escopo por caso em tasks e approvals (resíduo P1 do F01): SPEC nova, porque muda o modelo de autorização aprovado na SPEC0176.
+2. Produtor verificado de `case_principals` ligado ao login OIDC/MFA (UP91-025) antes de qualquer composição trusted servir leitura de caso.
+3. D2 (organização clínica por modelo) continua não concedida.
