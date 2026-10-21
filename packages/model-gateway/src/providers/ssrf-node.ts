@@ -54,13 +54,13 @@ export async function fetchWithResolvedAddress(
     const request =
       url.protocol === 'https:'
         ? httpsRequest(requestOptions, (response) => {
-            void readResponse(response, method).then(
+            void readResponse(response, method, init.maxResponseBytes).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
           })
         : httpRequest(requestOptions, (response) => {
-            void readResponse(response, method).then(
+            void readResponse(response, method, init.maxResponseBytes).then(
               (result) => finish(() => resolve(result)),
               (error: unknown) => finish(() => reject(error))
             )
@@ -164,11 +164,24 @@ function asAbortSignal(value: unknown): AbortSignal | undefined {
   return undefined
 }
 
-async function readResponse(response: IncomingMessage, method: string) {
-  const chunks: Buffer[] = []
-  for await (const chunk of response) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-  }
+function responseTooLarge(): Error {
+  const error = new Error('Response exceeds maxResponseBytes')
+  error.name = 'ResponseTooLargeError'
+  return error
+}
+
+/**
+ * Reads the body under the caller's byte ceiling (SPEC 0248 §3.5, a subset of
+ * SPEC 0180 D011). A declared length above the ceiling is not read, and the
+ * socket is destroyed at the first chunk that crosses it, before the excess
+ * is kept. The known status still wins: only a 2xx body fails with the size
+ * error; any other status keeps its status and headers with a null body.
+ */
+async function readResponse(
+  response: IncomingMessage,
+  method: string,
+  maxResponseBytes: unknown
+) {
   const headers = new Headers()
   for (const [name, value] of Object.entries(response.headers)) {
     if (Array.isArray(value)) {
@@ -186,9 +199,37 @@ async function readResponse(response: IncomingMessage, method: string) {
     status === 204 ||
     status === 205 ||
     status === 304
-  return new Response(bodyless ? null : Buffer.concat(chunks), {
-    status,
-    statusText: response.statusMessage ?? '',
-    headers
-  })
+  const limit =
+    typeof maxResponseBytes === 'number' && !bodyless
+      ? maxResponseBytes
+      : undefined
+  let oversized =
+    limit !== undefined && Number(response.headers['content-length']) > limit
+  const chunks: Buffer[] = []
+  let total = 0
+  if (!oversized) {
+    for await (const chunk of response) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      total += bytes.byteLength
+      if (limit !== undefined && total > limit) {
+        oversized = true
+        break
+      }
+      chunks.push(bytes)
+    }
+  }
+  const init = { status, statusText: response.statusMessage ?? '', headers }
+  if (oversized) {
+    response.destroy()
+    const failing =
+      status >= 200 && status < 300
+        ? new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(responseTooLarge())
+            }
+          })
+        : null
+    return new Response(failing, init)
+  }
+  return new Response(bodyless ? null : Buffer.concat(chunks), init)
 }

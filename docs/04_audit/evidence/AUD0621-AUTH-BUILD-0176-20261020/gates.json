@@ -1,0 +1,86 @@
+{
+  "task": "AUD0621-AUTH-BUILD-0176-20261020",
+  "commit": "a9861469d6e214f342597c24a9754483e50acbef",
+  "base": "6c9fc6517f272e884a4adc5d7b8c71d1e1a552e9",
+  "node": "v22.23.2",
+  "postgres": "postgres:16-alpine disposable container cvg-aud0621-auth0176-pg (127.0.0.1:56265), removed at the end",
+  "firstRed": {
+    "test": "apps/api/src/__tests__/case-read-authorization-f01.test.ts",
+    "onBase": "2/2 failed (200 with AUDIT_PRIVATE_CASE marker on list, timeline and session audit; simulation and trusted session)",
+    "evidence": [
+      "first-red-base-6c9fc651.log",
+      "red-final-test-on-base-sources.log"
+    ],
+    "afterFix": "2/2 passed"
+  },
+  "prettierCheck": {
+    "scope": "all 31 changed .ts files",
+    "result": "pass"
+  },
+  "lint": {
+    "command": "npm run -s lint",
+    "exit": 0
+  },
+  "typecheck": {
+    "command": "npm run -s typecheck",
+    "exit": 0
+  },
+  "focal": {
+    "case-read-authorization-f01.test.ts": "2/2",
+    "case-assignment-authorization.test.ts (memory AUTH01-AUTH10 + trusted Operator)": "14/14",
+    "case-projections.test.ts (AUTH08 classification/allowlists)": "35/35",
+    "case-authority-memory.test.ts": "4/4",
+    "case-assignment-authorization-postgres.test.ts (AUTH01/04/05/06/07/11/12/13)": "8/8"
+  },
+  "unitSuiteNoPg": {
+    "command": "vitest run apps packages legacy tests/e2e --no-file-parallelism --maxWorkers=2",
+    "files": "339 passed, 3 failed, 24 skipped",
+    "tests": "3073 passed, 4 failed, 220 skipped",
+    "failures": [
+      "tests/e2e/critical-flows.test.ts — reads approval_decision from the session reader (approval producer is not session-linked; SPEC0176 §5)",
+      "apps/worker/src/__tests__/operational-harness-iterative.test.ts x2 — trajectory read by an unassigned Operator (F01 behavior)",
+      "apps/worker/src/__tests__/operational-harness-synthetic-effect.test.ts — execution read by an unassigned Operator and raw toolResult over HTTP"
+    ],
+    "note": "All four are outside this front's write scope; proposed-out-of-scope-tests.patch fixes them (validated: 10/10 including the two PG worker tests) and was reverted from the candidate."
+  },
+  "postgresSuite": {
+    "command": "test:postgres file list + case-assignment-authorization-postgres.test.ts (TEST_DATABASE_URL, CASE0176_PG_REQUIRED=1)",
+    "files": "34 passed, 4 failed (of 38)",
+    "tests": "295 passed, 4 failed, 11 skipped",
+    "failures": [
+      "apps/worker/src/__tests__/operational-harness-iterative.test.ts x2 and operational-harness-iterative-postgres.integration.test.ts, operational-harness-synthetic-effect-postgres.integration.test.ts — unassigned Operator reads (covered by the proposed patch)",
+      "packages/persistence/src/__tests__/runtime-approval-store-postgres.test.ts — beforeAll hook timeout (10s default) while running all migrations under load; rerun alone 2x: 11/11 passed. 0029 adds ~0.5s to a full migration (5.8s -> 6.3s at load ~9.5)"
+    ]
+  },
+  "mutants": {
+    "file": "mutants.json",
+    "applied": 9,
+    "killed": 9
+  },
+  "gitleaks": {
+    "binary": "/mnt/dados/cvg-work/cvg-hiso005-port-main-runtime-20261019/bin/release/gitleaks 8.28.0",
+    "commitRange": {
+      "exit": 0,
+      "leaks": 0
+    },
+    "evidenceDir": {
+      "exit": 0,
+      "leaks": 0,
+      "note": "first scan flagged 2 generic-api-key false positives (sha256 values keyed by file names in refreeze.json); the map was restructured as a list of {path, sha256}; no allowlist change"
+    }
+  },
+  "critic": {
+    "r1": "CHANGES_REQUESTED (no blocker; S1-S3) -> one grouped repair",
+    "r2": "APPROVE (nits recorded as residuals)",
+    "files": [
+      "critic-r1.md",
+      "critic-r2.md"
+    ]
+  },
+  "notRun": [
+    "npm run certify",
+    "test:e2e (Playwright)",
+    "sbom",
+    "licenses:check (reserved to the lead)"
+  ]
+}

@@ -18,12 +18,14 @@
  *     executed once, a repeated execution refused, and the original webhook
  *     replay refused after an API restart;
  *   - the kernel pause switch holding new work and draining it after resume;
- *   - a stop alert delivered to a receiver when the worker is stopped.
+ *   - a stop alert delivered to a receiver when the worker is stopped: a new,
+ *     signed worker_down firing received after the stop instant (SPEC0249,
+ *     AUD-0621 F26); alerts recorded before the stop never count.
  * Synthetic data only; no provider, channel or external network.
  *
  * Usage: npx tsx scripts/production-stack-smoke.ts --image <ref> --output <file.json>
  */
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -54,6 +56,153 @@ interface Check {
   readonly name: string
   readonly pass: boolean
   readonly detail?: unknown
+}
+
+/** One line printed by the smoke's alert receiver. */
+export interface ReceivedAlert {
+  readonly signature: string
+  readonly timestamp: string
+  readonly body: string
+  readonly receivedAt: string | null
+}
+
+/** The notification body sent by the API stop monitor. */
+export interface StopAlertBody {
+  readonly code: string
+  readonly state: string
+  readonly tenantId: string
+  readonly observedAt: string
+  readonly detail?: unknown
+}
+
+export type WorkerDownOracleResult =
+  | { readonly ok: true; readonly alert: StopAlertBody }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Parses the receiver log. Lines that are not JSON objects (startup output)
+ * are skipped; a JSON line with missing fields keeps empty values and then
+ * fails the signature check.
+ */
+export function parseAlertReceiverLog(text: string): ReceivedAlert[] {
+  const alerts: ReceivedAlert[] = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('{')) continue
+    let record: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      record =
+        parsed !== null && typeof parsed === 'object'
+          ? (parsed as Record<string, unknown>)
+          : {}
+    } catch {
+      record = {}
+    }
+    alerts.push({
+      signature: typeof record.signature === 'string' ? record.signature : '',
+      timestamp: typeof record.timestamp === 'string' ? record.timestamp : '',
+      body: typeof record.body === 'string' ? record.body : '',
+      receivedAt:
+        typeof record.receivedAt === 'string' ? record.receivedAt : null
+    })
+  }
+  return alerts
+}
+
+function isSignedAlert(alert: ReceivedAlert, secret: string): boolean {
+  if (!alert.signature || !alert.timestamp) return false
+  const expected = createHmac('sha256', secret)
+    .update(`${alert.timestamp}.${alert.body}`)
+    .digest('hex')
+  const received = Buffer.from(alert.signature, 'utf8')
+  const wanted = Buffer.from(expected, 'utf8')
+  return received.length === wanted.length && timingSafeEqual(received, wanted)
+}
+
+function stopAlertBody(alert: ReceivedAlert): StopAlertBody | null {
+  try {
+    const parsed = JSON.parse(alert.body) as Record<string, unknown> | null
+    if (
+      !parsed ||
+      typeof parsed.code !== 'string' ||
+      typeof parsed.state !== 'string' ||
+      typeof parsed.tenantId !== 'string' ||
+      typeof parsed.observedAt !== 'string'
+    ) {
+      return null
+    }
+    return parsed as unknown as StopAlertBody
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The offset to read new deliveries from, and the last worker_down state of
+ * the tenant among the deliveries from `since` on (the current API monitor;
+ * a restarted monitor starts with no open incident).
+ */
+export function alertBaseline(
+  alerts: readonly ReceivedAlert[],
+  tenantId: string,
+  since = 0
+): { offset: number; lastWorkerDownState: string | null } {
+  let lastWorkerDownState: string | null = null
+  for (const alert of alerts.slice(since)) {
+    const body = stopAlertBody(alert)
+    if (body?.code === 'worker_down' && body.tenantId === tenantId) {
+      lastWorkerDownState = body.state
+    }
+  }
+  return { offset: alerts.length, lastWorkerDownState }
+}
+
+/**
+ * SPEC0249 (AUD-0621 F26). The stop is detected only by a delivery after
+ * `offset` that is a signed worker_down firing of the tenant, observed,
+ * sent and received at or after the stop instant. Every delivery after the
+ * offset must be signed. History before the offset never counts.
+ */
+export function findWorkerDownAfterStop(
+  alerts: readonly ReceivedAlert[],
+  options: {
+    readonly offset: number
+    readonly stoppedAt: number
+    readonly tenantId: string
+    readonly secret: string
+  }
+): WorkerDownOracleResult {
+  if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
+    return { ok: false, reason: 'invalid_offset' }
+  }
+  const fresh = alerts.slice(options.offset)
+  if (fresh.length === 0) {
+    return { ok: false, reason: 'no_delivery_after_stop' }
+  }
+  if (!fresh.every((alert) => isSignedAlert(alert, options.secret))) {
+    return { ok: false, reason: 'unsigned_delivery_after_stop' }
+  }
+  const atOrAfterStop = (value: string | null): boolean => {
+    if (value === null) return false
+    const at = Date.parse(value)
+    return Number.isFinite(at) && at >= options.stoppedAt
+  }
+  for (const alert of fresh) {
+    const body = stopAlertBody(alert)
+    if (
+      body &&
+      body.code === 'worker_down' &&
+      body.state === 'firing' &&
+      body.tenantId === options.tenantId &&
+      atOrAfterStop(body.observedAt) &&
+      atOrAfterStop(alert.timestamp) &&
+      atOrAfterStop(alert.receivedAt)
+    ) {
+      return { ok: true, alert: body }
+    }
+  }
+  return { ok: false, reason: 'no_worker_down_firing_after_stop' }
 }
 
 function args(): { image: string; output: string } {
@@ -262,7 +411,7 @@ async function main(): Promise<void> {
       image,
       'node',
       '-e',
-      "require('http').createServer((q,r)=>{let b='';q.on('data',c=>b+=c);q.on('end',()=>{console.log(JSON.stringify({signature:q.headers['x-cvg-alert-signature'],timestamp:q.headers['x-cvg-alert-timestamp'],body:b}));r.writeHead(204).end()})}).listen(8080)"
+      "require('http').createServer((q,r)=>{let b='';q.on('data',c=>b+=c);q.on('end',()=>{console.log(JSON.stringify({signature:q.headers['x-cvg-alert-signature'],timestamp:q.headers['x-cvg-alert-timestamp'],body:b,receivedAt:new Date().toISOString()}));r.writeHead(204).end()})}).listen(8080)"
     ])
 
     const apiEnv: Record<string, string> = {
@@ -297,7 +446,9 @@ async function main(): Promise<void> {
       CVG_STOP_ALERT_WEBHOOK_URL: `http://${receiverName}:8080/alerts`,
       CVG_STOP_ALERT_WEBHOOK_SECRET: ALERT_SECRET,
       CVG_STOP_ALERT_TENANT_ID: TENANT,
-      CVG_STOP_ALERT_WORKER_STALE_MS: '3000',
+      // The worker beats every 10 s; 15 s keeps a live worker from flapping
+      // into worker_down, so the firing after the stop is a new incident.
+      CVG_STOP_ALERT_WORKER_STALE_MS: '15000',
       CVG_STOP_ALERT_QUEUE_STALLED_MS: '3000',
       CVG_STOP_ALERT_INTERVAL_MS: '1000'
     }
@@ -326,7 +477,12 @@ async function main(): Promise<void> {
         !`${refused.stdout}${refused.stderr}`.includes(PASSWORD),
       { status: refused.status }
     )
+    const receiverAlerts = () =>
+      parseAlertReceiverLog(docker(['logs', receiverName]))
+    // Deliveries from this offset on come from the current API monitor.
+    let apiStartOffset = 0
     const startApi = () => {
+      apiStartOffset = receiverAlerts().length
       docker([
         'run',
         '-d',
@@ -375,7 +531,8 @@ async function main(): Promise<void> {
         )
       }
     })
-    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]
+    // `?? ''`: the script is now typechecked through the oracle test.
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
     const protectedStatus = (
       await api('/v1/admin/agents', { headers: { cookie } })
     ).status
@@ -449,9 +606,8 @@ async function main(): Promise<void> {
       await api('/v1/admin/agents', { headers: { cookie } })
     ).status
     const freshLogin = await switchTo()
-    const freshCookie = (freshLogin.headers.get('set-cookie') ?? '').split(
-      ';'
-    )[0]
+    const freshCookie =
+      (freshLogin.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
     check(
       'auth.connection_loss_503_api_alive',
       terminated &&
@@ -718,41 +874,54 @@ async function main(): Promise<void> {
     check('pause.resume_drains', true)
 
     // Condition 9: stop the worker; the API monitor alerts the receiver.
-    docker(['rm', '--force', workerName])
-    const alerts = await waitFor(
+    // Only a new firing after the stop counts (SPEC0249, AUD-0621 F26): the
+    // current monitor must not already hold an open worker_down incident.
+    const baseline = await waitFor(
       async () => {
-        const lines = docker(['logs', receiverName])
-          .split('\n')
-          .filter((line) => line.startsWith('{'))
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                body: string
-                signature: string
-                timestamp: string
-              }
-          )
-        const firing = lines.filter(
-          (line) => JSON.parse(line.body).code === 'worker_down'
-        )
-        return firing.length > 0 ? lines : undefined
+        const current = alertBaseline(receiverAlerts(), TENANT, apiStartOffset)
+        return current.lastWorkerDownState === 'firing' ? undefined : current
       },
       30_000,
       500
     )
-    const { createHmac } = await import('node:crypto')
-    const signed = alerts.every(
-      (alert) =>
-        alert.signature ===
-        createHmac('sha256', ALERT_SECRET)
-          .update(`${alert.timestamp}.${alert.body}`)
-          .digest('hex')
-    )
-    check(
-      'alert.worker_down_delivered_signed',
-      signed,
-      alerts.map((alert) => JSON.parse(alert.body))
-    )
+    const stoppedAt = Date.now()
+    docker(['rm', '--force', workerName])
+    let stopAlert: WorkerDownOracleResult = {
+      ok: false,
+      reason: 'no_delivery_after_stop'
+    }
+    try {
+      stopAlert = await waitFor(
+        async () => {
+          const result = findWorkerDownAfterStop(receiverAlerts(), {
+            offset: baseline.offset,
+            stoppedAt,
+            tenantId: TENANT,
+            secret: ALERT_SECRET
+          })
+          return result.ok ? result : undefined
+        },
+        60_000,
+        500
+      )
+    } catch {
+      stopAlert = findWorkerDownAfterStop(receiverAlerts(), {
+        offset: baseline.offset,
+        stoppedAt,
+        tenantId: TENANT,
+        secret: ALERT_SECRET
+      })
+    }
+    check('alert.worker_down_after_stop_signed', stopAlert.ok, {
+      offset: baseline.offset,
+      stoppedAt: new Date(stoppedAt).toISOString(),
+      ...(stopAlert.ok
+        ? { alert: stopAlert.alert }
+        : { reason: stopAlert.reason }),
+      deliveriesAfterStop: receiverAlerts()
+        .slice(baseline.offset)
+        .map((alert) => stopAlertBody(alert))
+    })
     await pool.end()
 
     const pass = checks.every((entry) => entry.pass)
@@ -799,9 +968,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`
-  )
-  process.exitCode = 1
-})
+// Run only as the entry point (tsx), never when imported by the test.
+// scripts/ compiles as CommonJS for the typecheck, so no import.meta here.
+if (/production-stack-smoke\.[cm]?[jt]s$/.test(process.argv[1] ?? '')) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`
+    )
+    process.exitCode = 1
+  })
+}

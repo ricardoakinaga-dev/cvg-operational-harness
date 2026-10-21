@@ -68,16 +68,26 @@ const preRollForwardMigrations = [
   '0023_rate_limit_buckets',
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
-  '0026_rate_limit_key_hardening'
+  '0026_rate_limit_key_hardening',
+  '0027_worker_operations'
 ]
-// The proof always rolls forward the newest migration over a dump of the one
+// The proof always rolls forward the newest migration of the default run
+// (POSTGRES_MIGRATIONS; 0028_session_events is opt-in) over a dump of the one
 // before it; keep both in step with packages/persistence/migrations.
-const rollForwardMigration = '0027_worker_operations'
+const rollForwardMigration = '0029_case_assignment_authorization'
 const preRollForwardVersion = preRollForwardMigrations.at(-1)
-// Documented rollback of the roll-forward migration (its file header): run
-// before restoring the pre-migration backup over the rolled-forward schema.
-const rollForwardRollbackSql =
-  'DROP TABLE IF EXISTS worker_heartbeats, kernel_pause_switches'
+// Objects the roll-forward migration adds, removed before the pre-migration
+// backup is restored over the rolled-forward schema. SPEC0176 recovers
+// production by rolling forward; this drill only restores the 0027 backup.
+const rollForwardRollbackSql = [
+  'DROP TABLE IF EXISTS case_audit_links, case_execution_links,',
+  'case_assignments, case_roots, case_principals;',
+  'DROP FUNCTION IF EXISTS case_execution_link_lineage(),',
+  'case_audit_link_lineage(), case_assignment_revision_guard(),',
+  'case_principal_revision_guard(), case_authority_reject_mutation();',
+  'ALTER TABLE audit_events DROP CONSTRAINT IF EXISTS',
+  'audit_events_tenant_id_id_key'
+].join(' ')
 
 type ManagedPostgres = {
   name: string
@@ -387,6 +397,10 @@ async function runSyntheticWorkload(
         tenantId,
         eventId: event.id,
         workerId,
+        // SPEC0249 (AUD-0621 F06): the PostgreSQL ack is fenced by the claim.
+        ...(event.claimToken !== undefined
+          ? { claimToken: event.claimToken }
+          : {}),
         result: { accepted: true, synthetic: true, eventId: event.id }
       })
       processed.add(event.id)

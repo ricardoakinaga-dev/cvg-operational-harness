@@ -578,6 +578,11 @@ describe('tenant-scoped PostgreSQL boundary', () => {
         await admin.query(
           `GRANT SELECT, INSERT, UPDATE, DELETE ON ${schemaName}.conversations, ${schemaName}.messages, ${schemaName}.sessions, ${schemaName}.agent_runs, ${schemaName}.tool_calls, ${schemaName}.approval_requests, ${schemaName}.tasks, ${schemaName}.audit_events, ${schemaName}.idempotency, ${schemaName}.outbox_events, ${schemaName}.outbox_effects, ${schemaName}.outbox_attempts, ${schemaName}.platform_agents, ${schemaName}.platform_agent_versions, ${schemaName}.platform_test_runs, ${schemaName}.platform_execution_traces, ${schemaName}.platform_capability_approvals, ${schemaName}.platform_test_suites, ${schemaName}.platform_test_suite_runs, ${schemaName}.platform_plugin_catalog, ${schemaName}.platform_knowledge_sources, ${schemaName}.platform_release_candidates, ${schemaName}.audit_evidence_checkpoints TO ${roleName}`
         )
+        // SPEC0176: the core case root is born with the conversation, so the
+        // runtime role needs the (tenant-only, RLS-forced) case tables too.
+        await admin.query(
+          `GRANT SELECT, INSERT, UPDATE ON ${schemaName}.case_roots, ${schemaName}.case_principals, ${schemaName}.case_assignments, ${schemaName}.case_execution_links, ${schemaName}.case_audit_links TO ${roleName}`
+        )
         await admin.query(
           `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schemaName} TO ${roleName}`
         )

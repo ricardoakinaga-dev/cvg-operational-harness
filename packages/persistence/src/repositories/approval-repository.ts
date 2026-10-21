@@ -1,7 +1,16 @@
-import { DomainError } from '@cvg/shared'
+import {
+  ApprovalStatusSchema,
+  DomainError,
+  type ApprovalStatus
+} from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import { InMemoryDatabase } from '../db.ts'
-import type { ApprovalRequestRecord } from '../schema.ts'
+import type { ApprovalRequestRecord, PageInfo } from '../schema.ts'
+import {
+  assertStatusPageQuery,
+  pageInfoFor,
+  type StatusPageQuery
+} from './task-repository.ts'
 
 import { AuditRepository } from './audit-repository.ts'
 import {
@@ -11,6 +20,13 @@ import {
   attendanceDecisionAudit,
   type AttendanceApprovalDecision
 } from '../attendance-approval.ts'
+
+export type ApprovalListQuery = StatusPageQuery<ApprovalStatus>
+
+export interface ApprovalPage {
+  items: ApprovalRequestRecord[]
+  pageInfo: PageInfo
+}
 
 export class ApprovalRepository {
   constructor(private readonly db: InMemoryDatabase) {}
@@ -85,6 +101,34 @@ export class ApprovalRepository {
           !tenantId || this.sessionBelongsToTenant(approval.sessionId, tenantId)
       )
       .map(cloneAttendanceApproval)
+  }
+
+  /**
+   * SPEC0250 §3.2 — bounded page in creation order, optionally filtered by
+   * status; `total` counts every matching approval of the tenant.
+   */
+  listPage(
+    rawTenantId: TenantId | undefined,
+    query: ApprovalListQuery
+  ): ApprovalPage {
+    const { limit, offset, statuses } = assertStatusPageQuery(
+      query,
+      ApprovalStatusSchema.options
+    )
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    const matching = this.db.state.approvals.filter(
+      (approval) =>
+        (!tenantId ||
+          this.sessionBelongsToTenant(approval.sessionId, tenantId)) &&
+        (!statuses || statuses.includes(approval.status))
+    )
+    const items = matching
+      .slice(offset, offset + limit)
+      .map(cloneAttendanceApproval)
+    return {
+      items,
+      pageInfo: pageInfoFor({ limit, offset }, items.length, matching.length)
+    }
   }
 
   private sessionBelongsToTenant(

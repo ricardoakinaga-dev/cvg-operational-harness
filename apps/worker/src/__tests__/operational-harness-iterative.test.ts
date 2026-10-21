@@ -121,7 +121,9 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
         headers: {
           'x-tenant-id': tenantId,
           'x-operator-id': 'operator.phase3',
-          'x-operator-role': 'Operator'
+          // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
+          // tenant-wide reader exercises the trajectory export.
+          'x-operator-role': 'Supervisor'
         }
       })
       expect(trajectory.statusCode).toBe(200)
@@ -167,7 +169,9 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
         headers: {
           'x-tenant-id': tenantId,
           'x-operator-id': 'operator.phase3',
-          'x-operator-role': 'Operator'
+          // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
+          // tenant-wide reader exercises the trajectory export.
+          'x-operator-role': 'Supervisor'
         }
       })
       const steps = trajectory.json().data.trajectory.steps as Array<{

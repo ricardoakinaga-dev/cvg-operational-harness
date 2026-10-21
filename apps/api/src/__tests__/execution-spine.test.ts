@@ -18,6 +18,7 @@ import type {
   ToolRegistry
 } from '@cvg/harness-contracts'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000601'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000602'
@@ -159,6 +160,20 @@ describe('canonical execution HTTP boundary', () => {
       (await store.get(tenantA, accepted.json().data.execution.id))?.state
     ).toBe('QUEUED')
     expect(accepted.json().data.execution).not.toHaveProperty('request')
+    // SPEC0176 AUTH09: an anonymous controlled submission only receives the
+    // mutation acknowledgment, never the execution content.
+    expect(accepted.json().data.execution).toEqual({
+      id: accepted.json().data.execution.id,
+      state: 'QUEUED'
+    })
+    // AUD-0621 F01 / SPEC0176: the independent execution root is readable by
+    // an Operator only after an explicit read_case grant.
+    await grantCase(app, {
+      kind: 'independent_execution',
+      resourceId: accepted.json().data.execution.id,
+      operatorId: 'operator.execution',
+      tenantId: tenantA
+    })
 
     const get = await app.inject({
       method: 'GET',
@@ -206,6 +221,13 @@ describe('canonical execution HTTP boundary', () => {
       harnessOptions: fixtures.options
     })
     const processed = await worker.processNext()
+    // AUD-0621 F01 / SPEC0176: explicit grant on the independent root.
+    await grantCase(app, {
+      kind: 'independent_execution',
+      resourceId: executionId,
+      operatorId: 'operator.execution',
+      tenantId: tenantA
+    })
     const result = await app.inject({
       method: 'GET',
       url: `/v1/executions/${executionId}`,
@@ -220,7 +242,13 @@ describe('canonical execution HTTP boundary', () => {
     expect(processed.kind).toBe('processed')
     expect(result.statusCode).toBe(200)
     expect(result.json().data.state).toBe('SUCCEEDED')
-    expect(result.json().data.result.response).toBe('synthetic worker response')
+    // SPEC0176 DTO v2: presentation response, no raw result/failure/resume.
+    expect(result.json().data).toMatchObject({
+      viewVersion: 2,
+      response: 'synthetic worker response',
+      errorSummary: null
+    })
+    expect(result.json().data).not.toHaveProperty('result')
     expect(fixtures.audit).toHaveLength(1)
     expect(fixtures.telemetry).toHaveLength(1)
   })

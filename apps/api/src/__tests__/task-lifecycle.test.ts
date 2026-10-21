@@ -51,7 +51,10 @@ describe('task lifecycle API', () => {
       },
       payload: { status: 'in_progress' }
     })
-    const audit = await app.inject({
+    // AUD-0621 F01 / SPEC0176: the unassigned Operator gets the static 404
+    // on the session reader; the task event (not session-linked by its
+    // producer) is asserted on the full tenant audit reader.
+    const limitedAudit = await app.inject({
       method: 'GET',
       url: `/v1/audit/sessions/${sessionId}`,
       headers: {
@@ -59,23 +62,34 @@ describe('task lifecycle API', () => {
         'x-operator-role': 'Operator'
       }
     })
+    const audit = await app.inject({
+      method: 'GET',
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
+      headers: {
+        'x-operator-id': 'supervisor.shift-a',
+        'x-operator-role': 'Supervisor'
+      }
+    })
     await app.close()
 
     const updateBody = update.json() as Envelope<{ id: string; status: string }>
     const auditBody = audit.json() as Envelope<{
-      events: Array<{
-        type: string
-        correlationId: string
-        payload: Record<string, unknown>
-      }>
+      page: {
+        items: Array<{
+          type: string
+          correlationId: string
+          payload: Record<string, unknown>
+        }>
+      }
     }>
 
+    expect(limitedAudit.statusCode).toBe(404)
     expect(update.statusCode).toBe(200)
     expect(updateBody.data).toMatchObject({
       id: taskBody.data.id,
       status: 'in_progress'
     })
-    expect(auditBody.data.events).toContainEqual(
+    expect(auditBody.data.page.items).toContainEqual(
       expect.objectContaining({
         type: 'integration_event',
         correlationId: expect.stringMatching(/^corr_/),

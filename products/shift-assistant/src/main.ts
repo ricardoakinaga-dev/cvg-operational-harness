@@ -15,9 +15,12 @@ async function start(): Promise<void> {
   const pending = app.store.unprocessedMessages().length
   const port = await app.start()
 
+  // Bounded by SHIFT_SHUTDOWN_TIMEOUT_MS; an expired budget is not a clean
+  // exit, so the supervisor sees a non-zero code.
   const stop = async () => {
-    await app.stop()
-    process.exit(0)
+    const result = await app.stop().catch(() => ({ clean: false }))
+    logger.info('shift.stopped', { clean: result.clean })
+    process.exit(result.clean ? 0 : 1)
   }
   process.once('SIGTERM', () => void stop())
   process.once('SIGINT', () => void stop())

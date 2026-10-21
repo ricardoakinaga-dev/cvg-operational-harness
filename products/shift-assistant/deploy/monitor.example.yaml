@@ -1,0 +1,56 @@
+# Assistente de Plantão — external monitor (SPEC 0179 section 10, PISO-008).
+# Runs on ANOTHER machine than the assistant: a monitor on the same host
+# cannot report the host going down. Example for that machine:
+#   npm run build:monitor --workspace @cvg/shift-assistant   # in the repo
+#   copy products/shift-assistant/dist/shift-monitor.mjs to ./monitor/
+#   put the receiver token in ./secrets/receiver.token (0400)
+#   mkdir -m 0700 ./state && chown 10002:10002 ./state   # durable queue
+#   docker compose -f monitor.example.yaml up -d
+#
+# Contract (scripts/shift-monitor.mjs, src/monitor.ts): polls /health/live and
+# /health/ready every 10 s with a 2 s timeout; alerts after two consecutive
+# failures of a reason (target <= 30 s to the receiver); resolves after two
+# good probes; one alertId per episode; at most one update per minute per
+# reason; durable queue with five attempts (30 s, 2, 10, 30 min), then a
+# visible delivery failure, never a fake receipt. Events carry only
+# {alertId, product, candidateDigest, instanceOpaqueId, reasonCode,
+# firstObservedAt, observedAt, severity, state}.
+#
+# The assistant publishes nothing on the host by default (compose.yaml):
+# exposing /health to this machine needs an explicitly authorized internal
+# interface or a health-only relay, decided by the host operator. The
+# receiver is the hospital's alert endpoint with its own token; it must
+# answer {receiptId, payloadSha256} for the exact payload. The monitor gets
+# no access to the assistant's volume, model, channel or secrets.
+services:
+  shift-monitor:
+    image: node:22.23.2-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
+    command: ['node', '/monitor/shift-monitor.mjs']
+    user: '10002:10002'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 32
+    cpus: 0.25
+    environment:
+      SHIFT_MONITOR_LIVE_URL: http://shift-assistant.internal:3400/health/live
+      SHIFT_MONITOR_READY_URL: http://shift-assistant.internal:3400/health/ready
+      SHIFT_MONITOR_RECEIVER_URL: https://alertas.hospital.internal
+      SHIFT_MONITOR_RECEIVER_TOKEN_FILE: /run/secrets/receiver_token
+      SHIFT_MONITOR_STATE_FILE: /state/monitor-state.json
+      # Digest of the image under watch and an opaque instance label.
+      SHIFT_MONITOR_CANDIDATE_DIGEST: sha256:<digest-da-imagem-candidata>
+      SHIFT_MONITOR_INSTANCE_ID: plantao-instancia-1
+    volumes:
+      - ./monitor:/monitor:ro
+      - ./state:/state
+    secrets:
+      - receiver_token
+    restart: unless-stopped
+
+secrets:
+  receiver_token:
+    file: ./secrets/receiver.token

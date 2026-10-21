@@ -260,6 +260,11 @@ export interface OutboxEventRecord {
   processedAt?: Date | null
   deadLetteredAt?: Date | null
   parentEventId?: string | null
+  /**
+   * SPEC0249 (AUD-0621 F06): fencing token of the current claim. Only a claim
+   * or a lease renewal returns it; ack, fail and heartbeat must present it.
+   */
+  claimToken?: string
 }
 
 export type OutboxAttemptOutcome =

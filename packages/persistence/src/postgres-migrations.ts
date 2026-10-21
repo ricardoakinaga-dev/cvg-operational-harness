@@ -45,7 +45,9 @@ const defaultPostgresMigrations = [
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
-  '0027_worker_operations'
+  '0027_worker_operations',
+  // 0028_session_events is opt-in (dedicated schema); not in the default run.
+  '0029_case_assignment_authorization'
 ]
 
 function assertSafeSchemaName(schemaName: string): void {

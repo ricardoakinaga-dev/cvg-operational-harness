@@ -100,8 +100,10 @@ async function main(): Promise<void> {
       url: `/v1/executions/${executionId}`,
       headers: {
         'x-tenant-id': tenantId,
-        'x-operator-id': 'operator.phase2.demo',
-        'x-operator-role': 'Operator'
+        // SPEC0176: an Operator only reads assigned cases; the demo reads the
+        // execution as the tenant Supervisor, who reads every case.
+        'x-operator-id': 'supervisor.phase2.demo',
+        'x-operator-role': 'Supervisor'
       }
     })
     const journal = await workerRuntime.effectJournal?.get(

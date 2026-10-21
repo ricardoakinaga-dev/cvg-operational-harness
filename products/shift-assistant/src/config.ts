@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import { parseMembers, type Member } from './domain.ts'
+import { isInternalServiceUrl } from './egress.ts'
+
+/** A deadline in milliseconds, accepted only within [1 s, `max`]. */
+function ms(max: number) {
+  return z.coerce.number().int().min(1000).max(max).default(max)
+}
 
 const EnvSchema = z
   .object({
@@ -10,12 +16,33 @@ const EnvSchema = z
     SHIFT_PORT: z.coerce.number().int().min(0).max(65535).default(3400),
     SHIFT_HOST: z.string().default('0.0.0.0'),
     SHIFT_TICK_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
+    // Transport deadlines and queue bounds (SPEC 0179 section 8.2). Byte
+    // ceilings are constants in transport-limits.ts and cannot be raised.
+    SHIFT_SEND_TIMEOUT_MS: ms(10_000),
+    SHIFT_MEDIA_TIMEOUT_MS: ms(15_000),
+    SHIFT_WHISPER_TIMEOUT_MS: ms(120_000),
+    SHIFT_MODEL_TIMEOUT_MS: ms(60_000),
+    SHIFT_JOB_TIMEOUT_MS: ms(210_000),
+    SHIFT_SHUTDOWN_TIMEOUT_MS: ms(10_000),
+    SHIFT_MAX_MEDIA_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(10_485_760)
+      .default(10_485_760),
+    SHIFT_MAX_PENDING_MESSAGES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .default(1000),
     WAHA_URL: z.url().optional(),
     WAHA_API_KEY: z.string().optional(),
     WAHA_SESSION: z.string().default('default'),
     EVOLUTION_URL: z.url().optional(),
     EVOLUTION_API_KEY: z.string().optional(),
     EVOLUTION_INSTANCE: z.string().optional(),
+    /** Local Whisper only: loopback, private address or internal service name. */
     WHISPER_URL: z.url(),
     WHISPER_MODEL: z.string().default('whisper-1'),
     LLM_BASE_URL: z.url(),
@@ -25,6 +52,14 @@ const EnvSchema = z
     LLM_MODEL: z.string().min(1)
   })
   .superRefine((env, ctx) => {
+    if (!isInternalServiceUrl(env.WHISPER_URL)) {
+      // Value never echoed: only the field name reaches the error.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WHISPER_URL'],
+        message: 'must be a local or internal destination'
+      })
+    }
     if (env.LLM_LOCATION === 'external' && !env.LLM_API_KEY) {
       ctx.addIssue({ code: 'custom', message: 'LLM_API_KEY is required' })
     }

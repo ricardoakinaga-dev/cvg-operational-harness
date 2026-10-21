@@ -1088,6 +1088,13 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
       ) {
         continue
       }
+      // SPEC0249 (AUD-0621 F17): same rule as the durable store. An expired
+      // lease counts as a failed attempt; on the last allowed attempt the
+      // record terminates instead of being requeued forever.
+      if (record.attempt >= this.maxAttempts) {
+        this.terminateExhaustedRecovery(record, now)
+        continue
+      }
       const next = this.applyTransition(
         record,
         'QUEUED',
@@ -1100,6 +1107,29 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
       recovered.push(copy(next))
     }
     return recovered
+  }
+
+  // System recovery, not a worker transition: CLAIMED/RUNNING ->
+  // FAILED_TERMINAL stays outside the public graph, as in the durable store.
+  private terminateExhaustedRecovery(record: ExecutionRecord, now: Date): void {
+    const next = this.makeRecord({
+      ...record,
+      state: 'FAILED_TERMINAL',
+      failure: retryExhaustedFailure(this.maxAttempts),
+      leaseOwner: null,
+      leaseUntil: null,
+      completedAt: toIso(now),
+      updatedAt: toIso(now)
+    })
+    this.records.set(record.id, next)
+    this.appendEvent(
+      next,
+      eventType('FAILED_TERMINAL'),
+      null,
+      'retry_exhausted',
+      undefined,
+      now
+    )
   }
 
   public async listEvents(

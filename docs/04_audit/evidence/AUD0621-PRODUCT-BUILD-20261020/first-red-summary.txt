@@ -1,0 +1,58 @@
+FIRST RED against base 6c9fc6517f272e884a4adc5d7b8c71d1e1a552e9 (product source unmodified; only new test files present). Node v22.23.2.
+total=42 passed=3 failed=39
+
+# src/__tests__/classification-no-model.test.ts
+ - FAILED | classifies every organisation request as CLINICAL | AssertionError: expected undefined to be 'CLINICAL' // Object.is equality
+ - FAILED | is denied by the gateway before the external provider, with zero calls | TypeError: (0 , __vite_ssr_import_7__.buildOrganizerGateway) is not a function
+ - FAILED | is denied by the gateway before the local provider, with zero calls | TypeError: (0 , __vite_ssr_import_7__.buildOrganizerGateway) is not a function
+ - FAILED | cannot be routed around with substitution or fallback | TypeError: (0 , __vite_ssr_import_7__.buildOrganizerGateway) is not a function
+ - FAILED | stores the note as a raw document and makes zero model requests | AssertionError: expected 1 to be +0 // Object.is equality
+
+# src/__tests__/confirmation-reliability.test.ts
+ - FAILED | keeps the proposed task out of the scheduler until "ok" | AssertionError: expected [ { number: 1, …(8) } ] to have a length of +0 but got 1
+ - PASSED | confirms once: a replayed or repeated "ok" adds no task or reminder | 
+ - FAILED | never lets one member confirm another member draft | AssertionError: expected [ { number: 1, …(8) } ] to have a length of +0 but got 1
+ - FAILED | asks which draft to confirm when there is more than one | AssertionError: expected [ { number: 1, …(8) }, …(1) ] to have a length of +0 but got 2
+ - FAILED | requires a new confirmation after a correction | AssertionError: expected 'open' to be 'draft' // Object.is equality
+ - FAILED | keeps drafts inactive after a restart, including legacy journals | AssertionError: expected 'open' to be 'draft' // Object.is equality
+ - FAILED | leaves the task unbound, asks and blocks confirmation | AssertionError: expected 'open' to be 'draft' // Object.is equality
+ - PASSED | binds the ID when exactly one patient carries the name | 
+ - FAILED | never completes an ID from an unconfirmed draft | AssertionError: expected '🐾 Bob · ID 111\n— Texto para colar n…' to contain 'Qual é o ID do Bob?'
+
+# src/__tests__/image-infra-contract.test.ts
+ - PASSED | pins every base image by digest | 
+ - FAILED | runs on the distroless C runtime with the pinned Node binary only | AssertionError: expected 'node:22.23.2-bookworm-slim@sha256:48e…' to match /^gcr\.io\/distroless\/cc-d…/distroless\
+ - FAILED | uses a non-root account and exec-form commands | AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+ - FAILED | keeps the hardening flags | AssertionError: expected '# Assistente de Plantão — run from th…' to contain 'user: \'10001:10001\''
+ - FAILED | attaches only to an internal backend network and publishes nothing | AssertionError: expected '# Assistente de Plantão — run from th…' not to match /^\s+ports:/m
+ - FAILED | ships a default-deny forward policy for the host firewall | AssertionError: expected false to be true // Object.is equality
+
+# src/__tests__/inbox-outbox-reliability.test.ts
+ - FAILED | retries a transient organizer failure instead of closing the message | AssertionError: expected [] to deeply equal [ 'm1' ]
+ - FAILED | survives a restart with the retry budget intact | AssertionError: expected [] to have a length of 1 but got +0
+ - FAILED | keeps the raw text after the retry budget is exhausted, without tasks | AssertionError: expected 1 to be 5 // Object.is equality
+ - FAILED | does not poison the queue when the journal write fails | Error: promise rejected "Error: EACCES: permission denied, open '/… { …(4) }" instead of resolving
+
+# src/__tests__/journal-reliability.test.ts
+ - FAILED | loads the valid prefix and keeps the original bytes intact | SyntaxError: Unterminated string in JSON at position 13 (line 1 column 14)
+ - FAILED | treats complete JSON without the final newline as uncommitted | AssertionError: expected true to be false // Object.is equality
+ - FAILED | fails closed on a corrupted line in the middle, without touching it | AssertionError: expected SyntaxError: Unterminated string in JSON … to match object { code: 'JOURNAL_CORRUPT' }
+ - FAILED | fails closed on an unknown event instead of skipping it | AssertionError: expected function to throw an error, but it didn't
+
+# src/__tests__/reminder-concurrency.test.ts
+ - FAILED | does not remind a member removed from the team | AssertionError: expected 1 to be +0 // Object.is equality
+ - FAILED | does not process or answer a stored message of a revoked member | AssertionError: expected [ 'Thor leito 3' ] to have a length of +0 but got 1
+ - FAILED | sends once when two ticks overlap on a slow channel | AssertionError: expected [ { to: '5511900000001', …(1) }, …(1) ] to have a length of 1 but got 2
+ - FAILED | stops the second reminder once a pause is recorded during the first | AssertionError: expected [ { to: '5511900000001', …(1) }, …(1) ] to have a length of 1 but got 2
+ - FAILED | records the reservation before sending, so a crash never resends blindly | AssertionError: expected 1 to be +0 // Object.is equality
+
+# src/__tests__/transport-control-health.test.ts
+ - FAILED | cancels a WAHA download that exceeds the media ceiling | Error: promise resolved "{ …(2) }" instead of rejecting
+ - FAILED | gives up on a WAHA send that never answers, as uncertain | Error: expected Error: did not settle in 3000 ms to match object { code: 'TRANSPORT_TIMEOUT', …(1) }
+ - FAILED | refuses an oversized Whisper response and an endless body | Error: promise resolved "'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…'" instead of rejecting
+ - FAILED | validates Evolution base64 and its size before decoding | Error: promise resolved "{ …(2) }" instead of rejecting
+ - FAILED | records a manager pause while a content job hangs on Whisper | AssertionError: expected false to be true // Object.is equality
+ - FAILED | ends a job that outlives its deadline and keeps the queue moving | Error: did not settle in 3000 ms
+ - FAILED | reports readiness from progress, storage and backlog, not just liveness | AssertionError: expected 404 to be 200 // Object.is equality
+ - FAILED | reports a stalled scheduler as not ready | AssertionError: expected 404 to be 200 // Object.is equality
+ - FAILED | stops within the shutdown budget while a send hangs | Error: did not settle in 4000 ms

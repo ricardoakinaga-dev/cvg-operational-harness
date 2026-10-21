@@ -86,7 +86,8 @@ const tenantIsolationMigrationVersions = [
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
-  '0027_worker_operations'
+  '0027_worker_operations',
+  '0029_case_assignment_authorization'
 ] as const
 
 const tenantIsolationRequiredConstraints = [
@@ -382,6 +383,328 @@ export async function assertTenantIsolationMigrationState(
       )
     }
     previousAppliedAt = appliedAt
+  }
+}
+
+/**
+ * SPEC0176 / AUTH11 — semantic preflight of the case authority schema. The
+ * constraint definitions and lineage/immutability triggers are compared with
+ * the live catalog, not only by name: a weakened CHECK, a dropped FK or a
+ * disabled trigger refuses startup.
+ */
+const caseAuthorizationConstraints: ReadonlyMap<string, string> = new Map([
+  [
+    'case_assignments_changed_by_check',
+    "CHECK ((changed_by ~ '^[A-Za-z0-9._:-]{3,80}$'::text))"
+  ],
+  ['case_assignments_pkey', 'PRIMARY KEY (tenant_id, case_id, operator_id)'],
+  [
+    'case_assignments_principal_fk',
+    'FOREIGN KEY (tenant_id, operator_id) REFERENCES case_principals(tenant_id, operator_id)'
+  ],
+  ['case_assignments_revision_check', 'CHECK ((revision >= 1))'],
+  [
+    'case_assignments_root_fk',
+    'FOREIGN KEY (tenant_id, case_id) REFERENCES case_roots(tenant_id, case_id)'
+  ],
+  ['case_assignments_scope_check', "CHECK ((scope = 'read_case'::text))"],
+  [
+    'case_assignments_status_check',
+    "CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'REVOKED'::text])))"
+  ],
+  [
+    'case_audit_links_core_session_fk',
+    'FOREIGN KEY (tenant_id, core_session_id) REFERENCES sessions(tenant_id, id)'
+  ],
+  [
+    'case_audit_links_event_fk',
+    'FOREIGN KEY (tenant_id, audit_event_id) REFERENCES audit_events(tenant_id, id)'
+  ],
+  [
+    'case_audit_links_harness_session_fk',
+    'FOREIGN KEY (tenant_id, harness_conversation_id, harness_session_id) REFERENCES cvg_conversation_sessions(tenant_id, conversation_id, session_id)'
+  ],
+  ['case_audit_links_pkey', 'PRIMARY KEY (tenant_id, audit_event_id)'],
+  [
+    'case_audit_links_root_fk',
+    'FOREIGN KEY (tenant_id, case_id) REFERENCES case_roots(tenant_id, case_id)'
+  ],
+  [
+    'case_audit_links_session_reference_check',
+    'CHECK ((((core_session_id IS NOT NULL) AND (harness_conversation_id IS NULL) AND (harness_session_id IS NULL)) OR ((core_session_id IS NULL) AND (harness_conversation_id IS NOT NULL) AND (harness_session_id IS NOT NULL))))'
+  ],
+  [
+    'case_execution_links_execution_fk',
+    'FOREIGN KEY (tenant_id, execution_id) REFERENCES operational_executions(tenant_id, id)'
+  ],
+  ['case_execution_links_pkey', 'PRIMARY KEY (tenant_id, execution_id)'],
+  [
+    'case_execution_links_root_fk',
+    'FOREIGN KEY (tenant_id, case_id) REFERENCES case_roots(tenant_id, case_id)'
+  ],
+  [
+    'case_execution_links_session_fk',
+    'FOREIGN KEY (tenant_id, core_session_id) REFERENCES sessions(tenant_id, id)'
+  ],
+  [
+    'case_execution_links_validated_by_check',
+    "CHECK ((((validated_by = 'core_parent_pair'::text) AND (core_session_id IS NOT NULL)) OR ((validated_by = 'independent_root'::text) AND (core_session_id IS NULL))))"
+  ],
+  [
+    'case_principals_authority_version_check',
+    'CHECK (((char_length(authority_version) >= 1) AND (char_length(authority_version) <= 120)))'
+  ],
+  [
+    'case_principals_operator_check',
+    "CHECK ((operator_id ~ '^[A-Za-z0-9._:-]{3,80}$'::text))"
+  ],
+  ['case_principals_pkey', 'PRIMARY KEY (tenant_id, operator_id)'],
+  [
+    'case_principals_proof_digest_check',
+    "CHECK ((proof_digest ~ '^[0-9a-f]{64}$'::text))"
+  ],
+  ['case_principals_revision_check', 'CHECK ((revision >= 1))'],
+  [
+    'case_principals_role_check',
+    "CHECK ((role = ANY (ARRAY['Operator'::text, 'Approver'::text, 'Supervisor'::text, 'Admin'::text])))"
+  ],
+  [
+    'case_principals_source_check',
+    "CHECK ((identity_source = ANY (ARRAY['verified_adapter'::text, 'synthetic_fixture'::text])))"
+  ],
+  [
+    'case_principals_tenant_check',
+    "CHECK ((tenant_id ~ '^tenant_[0-9a-f-]{36}$'::text))"
+  ],
+  [
+    'case_roots_case_id_check',
+    "CHECK ((case_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text))"
+  ],
+  [
+    'case_roots_core_conversation_fk',
+    'FOREIGN KEY (tenant_id, core_conversation_id) REFERENCES conversations(tenant_id, id)'
+  ],
+  [
+    'case_roots_core_conversation_key',
+    'UNIQUE (tenant_id, core_conversation_id)'
+  ],
+  [
+    'case_roots_execution_fk',
+    'FOREIGN KEY (tenant_id, execution_id) REFERENCES operational_executions(tenant_id, id)'
+  ],
+  ['case_roots_execution_key', 'UNIQUE (tenant_id, execution_id)'],
+  [
+    'case_roots_harness_conversation_fk',
+    'FOREIGN KEY (tenant_id, harness_conversation_id) REFERENCES cvg_conversation_sessions(tenant_id, conversation_id)'
+  ],
+  [
+    'case_roots_harness_conversation_key',
+    'UNIQUE (tenant_id, harness_conversation_id)'
+  ],
+  [
+    'case_roots_kind_reference_check',
+    "CHECK ((((kind = 'core_conversation'::text) AND (core_conversation_id IS NOT NULL) AND (harness_conversation_id IS NULL) AND (execution_id IS NULL)) OR ((kind = 'harness_conversation'::text) AND (harness_conversation_id IS NOT NULL) AND (core_conversation_id IS NULL) AND (execution_id IS NULL)) OR ((kind = 'independent_execution'::text) AND (execution_id IS NOT NULL) AND (core_conversation_id IS NULL) AND (harness_conversation_id IS NULL))))"
+  ],
+  ['case_roots_pkey', 'PRIMARY KEY (tenant_id, case_id)'],
+  ['audit_events_tenant_id_id_key', 'UNIQUE (tenant_id, id)']
+])
+
+/** [trigger, table, function, pg_trigger.tgtype (timing/level/events)] */
+const caseAuthorizationTriggers: ReadonlyArray<
+  readonly [string, string, string, number]
+> = [
+  [
+    'case_assignments_no_delete',
+    'case_assignments',
+    'case_authority_reject_mutation',
+    11
+  ],
+  [
+    'case_assignments_no_truncate',
+    'case_assignments',
+    'case_authority_reject_mutation',
+    34
+  ],
+  [
+    'case_assignments_revision',
+    'case_assignments',
+    'case_assignment_revision_guard',
+    19
+  ],
+  [
+    'case_audit_links_immutable',
+    'case_audit_links',
+    'case_authority_reject_mutation',
+    27
+  ],
+  [
+    'case_audit_links_lineage',
+    'case_audit_links',
+    'case_audit_link_lineage',
+    7
+  ],
+  [
+    'case_audit_links_no_truncate',
+    'case_audit_links',
+    'case_authority_reject_mutation',
+    34
+  ],
+  [
+    'case_execution_links_immutable',
+    'case_execution_links',
+    'case_authority_reject_mutation',
+    27
+  ],
+  [
+    'case_execution_links_lineage',
+    'case_execution_links',
+    'case_execution_link_lineage',
+    7
+  ],
+  [
+    'case_execution_links_no_truncate',
+    'case_execution_links',
+    'case_authority_reject_mutation',
+    34
+  ],
+  [
+    'case_principals_no_delete',
+    'case_principals',
+    'case_authority_reject_mutation',
+    11
+  ],
+  [
+    'case_principals_no_truncate',
+    'case_principals',
+    'case_authority_reject_mutation',
+    34
+  ],
+  [
+    'case_principals_revision',
+    'case_principals',
+    'case_principal_revision_guard',
+    19
+  ],
+  ['case_roots_immutable', 'case_roots', 'case_authority_reject_mutation', 27],
+  ['case_roots_no_truncate', 'case_roots', 'case_authority_reject_mutation', 34]
+]
+
+/** sha256 of each trigger function body (pg_proc.prosrc). */
+const caseAuthorizationFunctions: ReadonlyMap<string, string> = new Map([
+  [
+    'case_assignment_revision_guard',
+    'f37f79fcb42fc1937de25b772723506cd46b727d1436d3cafdc49bc4ff52618e'
+  ],
+  [
+    'case_audit_link_lineage',
+    'e9e44ffe15ab4190775d658b369658fb554ea7fc4e29c20854d999e935b1fe60'
+  ],
+  [
+    'case_authority_reject_mutation',
+    '3bf5c39b60b68e494aac3a28b4a854285102fc3d0f5ba6af18a2d52c5c21cd20'
+  ],
+  [
+    'case_execution_link_lineage',
+    'e37c8d6ac7b3eda120055cc933f2df2648cc1b40a0d124cd3cb8e212bea44641'
+  ],
+  [
+    'case_principal_revision_guard',
+    '4929106570d311969495806d62661d8b9f9cfac3dd6194c4452a553301002201'
+  ]
+])
+
+function normalizeConstraintDefinition(definition: string): string {
+  return definition.replace(/\s+/g, ' ').trim()
+}
+
+export async function assertCaseAuthorizationSchema(
+  client: PostgresQueryable
+): Promise<void> {
+  const constraints = await client.query<{
+    conname: string
+    definition: string
+    convalidated: boolean
+  }>(
+    `SELECT c.conname, pg_get_constraintdef(c.oid) AS definition, c.convalidated
+     FROM pg_constraint AS c
+     WHERE c.connamespace = current_schema()::regnamespace
+       AND c.conname = ANY($1::text[])`,
+    [[...caseAuthorizationConstraints.keys()]]
+  )
+  const byName = new Map(
+    constraints.rows.map((row) => [row.conname, row] as const)
+  )
+  for (const [name, expected] of caseAuthorizationConstraints) {
+    const actual = byName.get(name)
+    if (
+      !actual ||
+      !actual.convalidated ||
+      normalizeConstraintDefinition(actual.definition) !== expected
+    ) {
+      throw new Error(
+        `PostgreSQL case authorization constraint is not verified: ${name}`
+      )
+    }
+  }
+  const triggers = await client.query<{
+    tgname: string
+    relname: string
+    proname: string
+    tgenabled: string
+    tgtype: number
+  }>(
+    `SELECT t.tgname, c.relname, p.proname, t.tgenabled, t.tgtype
+     FROM pg_trigger AS t
+     INNER JOIN pg_class AS c ON c.oid = t.tgrelid
+     INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
+     INNER JOIN pg_proc AS p ON p.oid = t.tgfoid
+     WHERE n.nspname = current_schema()
+       AND NOT t.tgisinternal
+       AND c.relname = ANY($1::text[])`,
+    [[...new Set(caseAuthorizationTriggers.map(([, table]) => table))]]
+  )
+  for (const [name, table, fn, type] of caseAuthorizationTriggers) {
+    const trigger = triggers.rows.find(
+      (row) => row.tgname === name && row.relname === table
+    )
+    if (
+      !trigger ||
+      trigger.proname !== fn ||
+      trigger.tgenabled !== 'O' ||
+      Number(trigger.tgtype) !== type
+    ) {
+      throw new Error(
+        `PostgreSQL case authorization trigger is not verified: ${name}`
+      )
+    }
+  }
+  const functions = await client.query<{
+    proname: string
+    prosrc: string
+    prosecdef: boolean
+    pinned: boolean
+  }>(
+    `SELECT p.proname, p.prosrc, p.prosecdef,
+            COALESCE(p.proconfig @> ARRAY[
+              'search_path=' || quote_ident(current_schema()) || ', pg_temp'
+            ], false) AS pinned
+     FROM pg_proc AS p
+     WHERE p.pronamespace = current_schema()::regnamespace
+       AND p.proname = ANY($1::text[])`,
+    [[...caseAuthorizationFunctions.keys()]]
+  )
+  for (const [name, digest] of caseAuthorizationFunctions) {
+    const fn = functions.rows.filter((row) => row.proname === name)
+    if (
+      fn.length !== 1 ||
+      fn[0]!.prosecdef ||
+      !fn[0]!.pinned ||
+      createHash('sha256').update(fn[0]!.prosrc).digest('hex') !== digest
+    ) {
+      throw new Error(
+        `PostgreSQL case authorization function is not verified: ${name}`
+      )
+    }
   }
 }
 

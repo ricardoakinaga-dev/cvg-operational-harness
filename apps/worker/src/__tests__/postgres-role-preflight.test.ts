@@ -3,7 +3,14 @@ import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { RuntimeInput } from '@cvg/harness-contracts'
 import type { TenantId } from '@cvg/platform'
-import { runPostgresMigrations } from '@cvg/persistence'
+import {
+  PostgresEffectJournal,
+  runPostgresMigrations,
+  TENANT_ONLY_TABLES,
+  TENANT_SCHEMA_TABLES,
+  withTenantContext
+} from '@cvg/persistence'
+import { assertPostgresKernelPrerequisites } from '../kernel-composition.ts'
 import { createControlledNoopHandlers } from '../postgres-controlled.ts'
 import { createPostgresControlledWorker } from '../postgres-controlled.ts'
 import {
@@ -135,6 +142,111 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
       max,
       options: `-c search_path=${schemaName}`
     })
+
+  // SPEC0249 AC01/AC02 (AUD-0621 F05): the kernel's effect journal and
+  // approvals belong to the worker's critical inventory, and the expiry sweep
+  // never leaves the tenant even when RLS is missing on the journal.
+  const grantInventory = async (role: string): Promise<void> => {
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+    for (const table of TENANT_SCHEMA_TABLES) {
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+      )
+    }
+    await admin.query(`ALTER ROLE ${role} SET search_path TO ${schema}`)
+  }
+
+  const withJournalRlsDisabled = async (
+    run: () => Promise<void>
+  ): Promise<void> => {
+    await admin.query(
+      `ALTER TABLE ${schema}.effect_journal DISABLE ROW LEVEL SECURITY`
+    )
+    try {
+      await run()
+    } finally {
+      await admin.query(
+        `ALTER TABLE ${schema}.effect_journal ENABLE ROW LEVEL SECURITY`
+      )
+    }
+  }
+
+  it('SPEC0249 AC01: the worker preflight refuses an effect journal without RLS', async () => {
+    const role = await createRole(
+      'p0249a',
+      'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await grantInventory(role)
+    const pool = poolFor(role)
+    try {
+      await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+      await withJournalRlsDisabled(async () => {
+        await expect(
+          assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+        ).rejects.toThrow(/tenant-isolated/)
+      })
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('SPEC0249 AC01: the kernel prerequisites refuse an effect journal without RLS', async () => {
+    const role = await createRole(
+      'p0249b',
+      'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await grantInventory(role)
+    const pool = poolFor(role)
+    try {
+      await assertPostgresKernelPrerequisites(pool, tenant)
+      await withJournalRlsDisabled(async () => {
+        await expect(
+          assertPostgresKernelPrerequisites(pool, tenant)
+        ).rejects.toMatchObject({
+          code: 'kernel_runtime_prerequisites_missing'
+        })
+      })
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('SPEC0249 AC01: the journal expiry sweep stays inside the tenant without RLS', async () => {
+    const role = await createRole(
+      'p0249c',
+      'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await grantInventory(role)
+    const pool = poolFor(role)
+    const foreignTenant = 'tenant_00000000-0000-4000-8000-000000000822'
+    const operationKey = `p0249-foreign-reservation-${suffix}`
+    try {
+      await withJournalRlsDisabled(async () => {
+        await admin.query(
+          `INSERT INTO ${schema}.effect_journal
+             (tenant_id, operation_key, proposal_hash, state, attempt_id, expires_at)
+           VALUES ($1, $2, $3, 'RESERVED', 'synthetic-attempt', '2026-10-01T00:00:00Z')`,
+          [foreignTenant, operationKey, 'a'.repeat(64)]
+        )
+        await withTenantContext(pool, tenant, (client) =>
+          new PostgresEffectJournal(client).releaseExpired(
+            new Date('2026-10-22T12:00:00.000Z'),
+            30_000
+          )
+        )
+        const row = await admin.query<{ tenant_id: string; state: string }>(
+          `SELECT tenant_id, state FROM ${schema}.effect_journal
+            WHERE operation_key = $1`,
+          [operationKey]
+        )
+        expect(row.rows).toEqual([
+          { tenant_id: foreignTenant, state: 'RESERVED' }
+        ])
+      })
+    } finally {
+      await pool.end()
+    }
+  })
 
   it('rejects an additional permissive policy before any claim', async () => {
     const role = await createRole('policy', 'NOSUPERUSER NOBYPASSRLS')
@@ -454,12 +566,9 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
             rows: WORKER_CRITICAL_TABLES.map((table) => {
               const tenantExpression =
                 "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
-              const expression = [
-                'outbox_effects',
-                'outbox_attempts',
-                'worker_heartbeats',
-                'kernel_pause_switches'
-              ].includes(table)
+              // SPEC0249: the worker inventory is the canonical tenant
+              // inventory, so the policy kind comes from it too.
+              const expression = TENANT_ONLY_TABLES.has(table)
                 ? tenantExpression
                 : `tenant_isolation_quarantined = false AND ${tenantExpression}`
               return {

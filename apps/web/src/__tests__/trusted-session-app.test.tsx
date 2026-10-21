@@ -45,7 +45,11 @@ function emptyOperationalApi() {
         pageInfo: { limit: 25, offset: 0, total: 0, hasNextPage: false }
       })
     }
-    if (url === '/v1/approvals' || url === '/v1/tasks') return envelope([])
+    if (
+      url === '/v1/approvals?status=pending&limit=25&offset=0' ||
+      url === '/v1/tasks?status=open,in_progress&limit=25&offset=0'
+    )
+      return envelope([])
     return Promise.reject(new Error(`Unexpected URL ${url}`))
   })
 }

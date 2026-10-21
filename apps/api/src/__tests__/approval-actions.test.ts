@@ -45,9 +45,12 @@ describe('approval controlled actions API', () => {
       },
       payload: { decision: 'assumed', note: 'handoff controlado' }
     })
+    // SPEC0176 §5: the approval producer does not link its event to a case
+    // session (payload.sessionId is not a lineage source), so the handoff is
+    // asserted on the full tenant audit reader that still exposes it.
     const audit = await app.inject({
       method: 'GET',
-      url: `/v1/audit/sessions/${inboundBody.data.sessionId}`,
+      url: `/v1/observability/audit-evidence?sessionId=${inboundBody.data.sessionId}`,
       headers: {
         'x-operator-id': 'supervisor.shift-a',
         'x-operator-role': 'Supervisor'
@@ -60,13 +63,15 @@ describe('approval controlled actions API', () => {
       decidedBy: string
     }>
     const auditBody = audit.json() as Envelope<{
-      events: Array<{
-        type: string
-        correlationId: string
-        payload: Record<string, unknown>
-      }>
+      page: {
+        items: Array<{
+          type: string
+          correlationId: string
+          payload: Record<string, unknown>
+        }>
+      }
     }>
-    const handoffEvent = auditBody.data.events.find(
+    const handoffEvent = auditBody.data.page.items.find(
       (event) => event.type === 'handoff'
     )
 

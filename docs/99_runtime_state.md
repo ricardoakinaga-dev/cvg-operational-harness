@@ -1,3 +1,15 @@
+# AUD0621-REMEDIATION-20261020 — remediação da auditoria crítica 0621 — 21/10/2026 (Claude Code)
+
+- `status: READY_FOR_REVIEW` (PR da integração). Pedido do usuário em 20/10: "resolva todos os itens apresentados nesse relatório do agente crítico" ([relatório 0621](04_audit/0621_critical_production_audit_2026-10-20.md), 26 achados, NO_GO). [Plano e resultado](03_build/0392_aud0621_remediation.md). [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`:
+  - Cinco frentes em candidatas próprias, cada uma com first red, mutantes e crítico independente sem obrigatórios: produto (SPEC0179/0180), F01 (SPEC0176), runtime ([SPEC0248](02_spec/0248_runtime_budget_cancel_limits.md)), persistência e worker ([SPEC0249](02_spec/0249_persistence_worker_integrity.md)) e API/web ([SPEC0250](02_spec/0250_api_tasks_session_approvals.md)). As três SPECs novas seguiram para o BUILD pela regra do usuário (APPROVE do crítico, sem premissa nova nem migração nova).
+  - Integração com correções do lead: F17 no store em memória da execution spine, prova `rem21-010` rolando a 0029, catálogo de skips, teste de task lendo a auditoria completa e paginação na SPEC0107.
+  - F25 local pela frente PISO-008 (SPEC0179 §10): backup, restore, monitor externo com recibos, stop e imagem; crítico R3 APPROVE. [Evidência](04_audit/evidence/AUD0621-PRODUCT-PISO008-20261021/promotion.json).
+  - Requalificação por crítico independente: nenhum dos 26 defeitos reproduz nas sondas do auditor. [Requalificação](04_audit/evidence/AUD0621-INTEGRATION-20261021/requalification/requalification.md), [gates](04_audit/evidence/AUD0621-INTEGRATION-20261021/gates.json).
+- `next_action`:
+  1. Usuário: decidir o escopo por caso em tasks e approvals (resíduo P1 do F01, SPEC nova) e o produtor verificado de `case_principals` (UP91-025) antes de qualquer uso trusted.
+  2. Ambiente real (fora do local): firewall nft no host, imagem pela receita no CI, monitor em outra máquina, providers e canais reais. Produção continua `NO_GO`.
+
 # CONT-20261018-D9EF — estado em 21/10/2026 (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

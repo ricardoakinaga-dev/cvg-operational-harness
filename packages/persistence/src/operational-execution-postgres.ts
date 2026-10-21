@@ -283,6 +283,14 @@ function isPool(
   return typeof (connection as PostgresPoolLike).connect === 'function'
 }
 
+/** Caller-owned step executed inside the submission transaction. */
+export type OperationalExecutionSubmitHook = (
+  client: PostgresQueryable,
+  record: ExecutionRecord,
+  created: boolean,
+  now: Date
+) => Promise<void>
+
 /** PostgreSQL authority for the neutral AAA-21 execution spine. */
 export class PostgresOperationalExecutionStore implements OperationalExecutionStore {
   private readonly leaseMs: number
@@ -312,6 +320,28 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     input: ExecutionSubmission,
     rawNow?: Date
   ): Promise<SubmitResult> {
+    return this.submitInternal(input, rawNow)
+  }
+
+  /**
+   * SPEC0176: the same submission unit plus a caller-owned step (the case
+   * lineage) that commits or rolls back with the execution, its events and
+   * its queue row. The hook also runs for an idempotent duplicate so it can
+   * verify that the persisted lineage did not change.
+   */
+  public submitWith(
+    input: ExecutionSubmission,
+    hook: OperationalExecutionSubmitHook,
+    rawNow?: Date
+  ): Promise<SubmitResult> {
+    return this.submitInternal(input, rawNow, hook)
+  }
+
+  private submitInternal(
+    input: ExecutionSubmission,
+    rawNow?: Date,
+    hook?: OperationalExecutionSubmitHook
+  ): Promise<SubmitResult> {
     const tenant = TenantIdSchema.parse(input.tenantId)
     const normalized = parseExecutionSubmission(input, tenant)
     const now = rawNow ?? this.clock()
@@ -334,6 +364,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
               'Idempotency key is already bound to a different request'
             )
           }
+          await hook?.(client, record, false, now)
           return { record, created: false }
         }
 
@@ -376,6 +407,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
               'Idempotency key is already bound to a different request'
             )
           }
+          await hook?.(client, record, false, now)
           return { record, created: false }
         }
 
@@ -425,6 +457,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
           undefined,
           now
         )
+        await hook?.(client, record, true, now)
         return { record, created: true }
       })
     )
@@ -1140,6 +1173,13 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
         )
         const recovered: ExecutionRecord[] = []
         for (const row of selected.rows) {
+          // SPEC0249 (AUD-0621 F17): an expired lease counts as a failed
+          // attempt. On the last allowed attempt it terminates like a
+          // retryable failure would, instead of being requeued forever.
+          if (row.attempt >= this.maxAttempts) {
+            await this.terminateExhaustedRecovery(client, tenant, row, now)
+            continue
+          }
           const updated = await client.query<ExecutionRow>(
             `UPDATE operational_executions
                 SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL,
@@ -1177,6 +1217,63 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
         }
         return recovered
       })
+    )
+  }
+
+  private async terminateExhaustedRecovery(
+    client: PostgresQueryable,
+    tenant: TenantId,
+    row: ExecutionRow,
+    now: Date
+  ): Promise<void> {
+    const exhausted = retryExhaustedFailure(this.maxAttempts)
+    const terminated = await client.query<ExecutionRow>(
+      `UPDATE operational_executions
+          SET state = 'FAILED_TERMINAL', lease_owner = NULL,
+              lease_until = NULL, failure = $3::jsonb,
+              updated_at = $2, completed_at = $2
+        WHERE tenant_id = $1 AND id = $4
+          AND state IN ('CLAIMED', 'RUNNING')
+          AND lease_until <= $2
+          AND attempt >= $5
+        RETURNING ${executionColumns}`,
+      [
+        tenant,
+        now,
+        jsonText(exhausted, 'Execution failure'),
+        row.id,
+        this.maxAttempts
+      ]
+    )
+    if (!terminated.rows[0]) {
+      throw new OperationalExecutionError(
+        'conflict',
+        'Recovery exhaustion transition lost'
+      )
+    }
+    const record = mapRecord(terminated.rows[0])
+    const deadLettered = await client.query(
+      `UPDATE operational_execution_outbox
+          SET status = 'dead_letter', available_at = $3,
+              lease_owner = NULL, lease_until = NULL,
+              last_error = $4, processed_at = $3
+        WHERE tenant_id = $1 AND execution_id = $2`,
+      [tenant, record.id, now, exhausted.message]
+    )
+    if (deadLettered.rowCount !== 1) {
+      throw new OperationalExecutionError(
+        'conflict',
+        'Recovery exhaustion queue pairing was lost'
+      )
+    }
+    await this.appendEvent(
+      client,
+      record,
+      'FAILED_TERMINAL',
+      null,
+      'retry_exhausted',
+      undefined,
+      now
     )
   }
 

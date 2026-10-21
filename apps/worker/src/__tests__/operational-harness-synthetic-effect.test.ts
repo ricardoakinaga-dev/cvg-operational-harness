@@ -56,11 +56,15 @@ function runtime(): RuntimeInput {
   }
 }
 
-function statusHeaders(): Record<string, string> {
+function statusHeaders(
+  role: 'Operator' | 'Supervisor' = 'Supervisor'
+): Record<string, string> {
+  // SPEC0176 (AUD-0621 F01): only a tenant-wide role or an explicit
+  // read_case grant reads the execution; the unassigned Operator gets 404.
   return {
     'x-tenant-id': tenantId,
-    'x-operator-id': 'operator.phase2.synthetic',
-    'x-operator-role': 'Operator'
+    'x-operator-id': `${role.toLowerCase()}.phase2.synthetic`,
+    'x-operator-role': role
   }
 }
 
@@ -118,6 +122,11 @@ describe('AAA-21 R4 operational synthetic effect vertical path', () => {
         url: `/v1/executions/${executionId}`,
         headers: statusHeaders()
       })
+      const unassigned = await app.inject({
+        method: 'GET',
+        url: `/v1/executions/${executionId}`,
+        headers: statusHeaders('Operator')
+      })
       const idle = await workerRuntime.worker.processNext()
       const journal = await workerRuntime.effectJournal?.get(
         tenantId,
@@ -130,10 +139,15 @@ describe('AAA-21 R4 operational synthetic effect vertical path', () => {
       expect(replay.json().data.execution.id).toBe(executionId)
       expect(status.statusCode).toBe(200)
       expect(status.json().data.state).toBe('SUCCEEDED')
-      expect(status.json().data.result.toolResult.output).toEqual({
-        fixture: 'phase2',
-        applied: true
+      // SPEC0176 DTO v2: the raw tool output stays in the worker record
+      // (asserted above) and never reaches the HTTP presentation.
+      expect(status.json().data).toMatchObject({
+        viewVersion: 2,
+        response: null,
+        errorSummary: null
       })
+      expect(status.body).not.toContain('phase2')
+      expect(unassigned.statusCode).toBe(404)
       expect(idle).toEqual({ kind: 'idle' })
       expect(journal).toMatchObject({
         state: 'CONFIRMED',

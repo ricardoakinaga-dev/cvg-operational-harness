@@ -1,0 +1,27 @@
+{
+  "round": "BUILD0249 reparo agrupado entre crítica r1 e r2",
+  "review": "code-review-r1/review.md",
+  "verdictR1": "APPROVE sem obrigatórios",
+  "applied": [
+    { "id": "P3-1", "file": "apps/worker/src/__tests__/kernel-audit-trail.test.ts", "change": "a asserção do último teste passa a consultar o trail usado (ordered.pendingLedgers()); o trail não usado saiu" },
+    { "id": "P3-3", "file": "packages/persistence/src/__tests__/outbox-durability.test.ts", "change": "AC07 confere lease_until inalterado também nas recusas por outro dono e por token velho" },
+    { "id": "P3-6", "file": "packages/persistence/src/postgres-outbox.ts", "change": "redactOutboxError mostra o código fixo outbox_error:lease_expired_exhausted, como já faz com o erro de takeover" },
+    { "id": "P3-8", "file": "build/prettier-check.log, build/lint.log, build/typecheck.log", "change": "logs dos gates AC15 gravados" },
+    { "id": "LEAD-F05-INVENTORY", "file": "apps/worker/src/postgres-role-preflight.ts, apps/worker/src/__tests__/postgres-role-preflight.test.ts", "change": "pedido do lead durante o BUILD: WORKER_CRITICAL_TABLES passa a ser TENANT_SCHEMA_TABLES (inventário canônico inteiro, sem nomes fixos), para que tabelas tenant-only de migrações futuras, como as case_* da 0029 da frente SPEC0176, entrem no preflight do worker sem editar a lista; o mock do teste de limpeza de contexto deriva o tipo de política de TENANT_ONLY_TABLES. Ver spec-addendum-lead-inventory.md" }
+  ],
+  "notApplied": [
+    { "id": "P3-2", "reason": "interpretação registrada: heartbeatClaim devolve null (não lança) com token divergente, conforme §3.3 itens 3 e 5; a frase 'recusam com conflict' da §3.2 item 7 vale para ack e fail" },
+    { "id": "P3-4", "reason": "a checagem 'newer' é defesa em profundidade; pelos invariantes (todo escritor de outbox_attempts sob o lock do evento, requeue só a partir de dead_letter) não há estado alcançável em que só ela recuse; M2 remove outcome e newer juntos e morre na AC05" },
+    { "id": "P3-5", "reason": "o dublê em memória aceita qualquer leaseMs positivo também no claim; a faixa 1.000–3.600.000 é do adapter PG; sem efeito de segurança" },
+    { "id": "P3-7", "reason": "previsto na SPEC (§3.2 item 7); o dublê não é adapter de produção" },
+    { "id": "P3-9", "reason": "custo aceito: records() copia até 10 mil registros por lote de 200, só quando há sufixo pendente" }
+  ],
+  "gatesAfterRepair": {
+    "typecheck": "exit 0",
+    "lint": "npm run -s lint exit 0",
+    "prettier": "22 arquivos tocados, todos formatados",
+    "affectedSuites": "87 arquivos, 503 testes PASS, 0 skip (persistence, worker, chaos, agent-core, spine do harness, 4 da API, oracle), PG próprio com TEST_DATABASE_URL",
+    "testPostgres": "npm run -s test:postgres em banco novo: 37 arquivos, 314 testes PASS",
+    "mutantM8Rerun": "M8 reescrito para a lista derivada (filtra effect_journal) e morto pela AC01"
+  }
+}

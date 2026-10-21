@@ -1,5 +1,11 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { OrganizedSchema } from '../domain.ts'
+import {
+  formatLocalIso,
+  SYNTHETIC_ORGANIZER,
+  type Organizer
+} from '../organizer.ts'
 
 /**
  * Loopback stand-ins for WAHA, Evolution, Whisper and an OpenAI-compatible
@@ -314,5 +320,21 @@ export function sandboxOrganize(message: string) {
       : [
           'Qual é o nome do paciente? (dica: mande "novo paciente" para ver o modelo)'
         ]
+  }
+}
+
+/**
+ * In-process organizer with the same rules as the sandbox model. It never
+ * contacts a model, so local tests can exercise drafts, confirmation and
+ * reminders while the production composition keeps NO_MODEL (AUD-0621 F24).
+ */
+export const sandboxOrganizer: Organizer & { [SYNTHETIC_ORGANIZER]: true } = {
+  [SYNTHETIC_ORGANIZER]: true,
+  async organize(text, now) {
+    return OrganizedSchema.parse(
+      sandboxOrganize(
+        `Momento atual: ${formatLocalIso(now)}\n\nAnotação:\n${text}`
+      )
+    )
   }
 }

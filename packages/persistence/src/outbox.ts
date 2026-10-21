@@ -31,6 +31,15 @@ export const DEFAULT_OUTBOX_RETRY_MAX_MS = 60_000
 export const DEFAULT_OUTBOX_MAX_PAYLOAD_BYTES = 64 * 1024
 export const OUTBOX_TAKEOVER_SUPPRESSED_ERROR =
   'human takeover active; automatic outbound suppressed'
+/**
+ * SPEC0249 (AUD-0621 F17): recorded on an event whose lease expired after its
+ * last allowed attempt, so crash recovery cannot recycle it forever.
+ */
+export const OUTBOX_LEASE_EXHAUSTED_ERROR = sanitizeOutboxError({
+  code: 'lease_expired_exhausted'
+})
+/** Upper bound of exhausted events one claim call dead-letters. */
+export const OUTBOX_EXHAUSTED_PER_CLAIM = 25
 
 export type OutboxClock = (() => Date) | { now(): Date }
 
@@ -89,6 +98,11 @@ export interface OutboxAckInput {
   tenantId: TenantId
   eventId: string
   workerId: string
+  /**
+   * SPEC0249 (AUD-0621 F06): token of the claim being acknowledged. Required
+   * by the PostgreSQL adapter; the in-memory double checks it when present.
+   */
+  claimToken?: string
   effect?: OutboxEffect
   /** Used only when the injected effect intentionally returns no value. */
   result?: unknown
@@ -102,6 +116,8 @@ export interface OutboxFailInput {
   tenantId: TenantId
   eventId: string
   workerId: string
+  /** Token of the failing claim; see {@link OutboxAckInput.claimToken}. */
+  claimToken?: string
   error: unknown
   /** An unknown handler or equivalent failure is terminal by explicit policy. */
   terminal?: boolean
@@ -109,6 +125,19 @@ export interface OutboxFailInput {
   handoff?: boolean
   /** Deprecated compatibility field; repository-owned time is authoritative. */
   now?: Date
+}
+
+/**
+ * SPEC0249 (AUD-0621 F20): renews the lease of the current claim. Returns
+ * null, without writing, when the claim is no longer the live one.
+ */
+export interface OutboxHeartbeatInput {
+  tenantId: TenantId
+  eventId: string
+  workerId: string
+  /** Token of the claim being renewed; see {@link OutboxAckInput.claimToken}. */
+  claimToken?: string
+  leaseMs?: number
 }
 
 export interface OutboxRequeueInput {
@@ -131,6 +160,15 @@ export interface DurableOutboxAdapter {
   requeueDeadLetter(
     input: OutboxRequeueInput
   ): OutboxEventRecord | Promise<OutboxEventRecord>
+  /**
+   * SPEC0249 (AUD-0621 F20): extends the lease of the current live claim and
+   * returns the renewed event, or null when the lease expired, belongs to
+   * another claim or the event left processing. Workers without it can only
+   * verify ownership, never renew.
+   */
+  heartbeatClaim?(
+    input: OutboxHeartbeatInput
+  ): OutboxEventRecord | null | Promise<OutboxEventRecord | null>
   /**
    * AUD19-004 — convergence read for redeliveries. Optional so existing
    * adapters keep compiling; callers that re-enqueue on a possibly-seen key
@@ -321,10 +359,39 @@ export class OutboxRepository implements DurableOutboxAdapter {
     const workerId = requireActor(input.workerId, 'workerId')
     const now = this.currentTime()
     const leaseMs = positiveInteger(input.leaseMs ?? this.leaseMs, 'leaseMs')
-    const candidate = this.db.state.outbox
+    for (
+      let exhausted = 0;
+      exhausted < OUTBOX_EXHAUSTED_PER_CLAIM;
+      exhausted += 1
+    ) {
+      const candidate = this.nextClaimCandidate(tenantId, input.eventId, now)
+      if (!candidate) return null
+      if (candidate.status === 'processing') {
+        this.markExpiredClaim(candidate)
+      }
+      // SPEC0249 (AUD-0621 F17): a crash on the last allowed attempt must
+      // not be recycled by the lease expiry; it dead-letters like a fail.
+      if (
+        (candidate.status === 'processing' || candidate.status === 'failed') &&
+        Math.max(0, candidate.attempts ?? 0) >= this.maxAttempts
+      ) {
+        this.deadLetterExhausted(candidate, workerId, now)
+        continue
+      }
+      return this.claimCandidate(candidate, tenantId, workerId, now, leaseMs)
+    }
+    return null
+  }
+
+  private nextClaimCandidate(
+    tenantId: TenantId,
+    eventId: string | undefined,
+    now: Date
+  ): OutboxEventRecord | undefined {
+    return this.db.state.outbox
       .filter((event) => {
         if (event.tenantId !== tenantId) return false
-        if (input.eventId && event.id !== input.eventId) return false
+        if (eventId && event.id !== eventId) return false
         if (event.status === 'pending') {
           return (
             !event.availableAt || event.availableAt.getTime() <= now.getTime()
@@ -343,12 +410,15 @@ export class OutboxRepository implements DurableOutboxAdapter {
         )
       })
       .sort((left, right) => eligibleAt(left) - eligibleAt(right))[0]
+  }
 
-    if (!candidate) return null
-
-    if (candidate.status === 'processing') {
-      this.markExpiredClaim(candidate)
-    }
+  private claimCandidate(
+    candidate: OutboxEventRecord,
+    tenantId: TenantId,
+    workerId: string,
+    now: Date,
+    leaseMs: number
+  ): OutboxEventRecord {
     const attempts = Math.max(0, candidate.attempts ?? 0) + 1
     const claimed: OutboxEventRecord = {
       ...cloneEvent(candidate),
@@ -356,7 +426,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
       attempts,
       leaseOwner: workerId,
       leaseUntil: new Date(now.getTime() + leaseMs),
-      lastError: null
+      lastError: null,
+      claimToken: createDomainId('claim')
     }
     this.replaceEvent(claimed)
     this.db.state.outboxAttempts = [
@@ -378,11 +449,13 @@ export class OutboxRepository implements DurableOutboxAdapter {
     const tenantId = requireTenant(input.tenantId)
     const workerId = requireActor(input.workerId, 'workerId')
     const now = this.currentTime()
+    const claimToken = input.claimToken
     const current = this.requireOwnedEvent(
       tenantId,
       input.eventId,
       workerId,
-      now
+      now,
+      claimToken
     )
     const key = requireEventIdempotencyKey(current)
     const journal = this.db.state.outboxEffects.find(
@@ -395,7 +468,13 @@ export class OutboxRepository implements DurableOutboxAdapter {
           'Outbox effect journal points to another event'
         )
       }
-      return this.commitAck(current, workerId, cloneValue(journal.result), now)
+      return this.commitAck(
+        current,
+        workerId,
+        cloneValue(journal.result),
+        now,
+        claimToken
+      )
     }
 
     if (!input.effect && input.result === undefined) {
@@ -414,7 +493,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
           workerId,
           terminal: true,
           handoff: true,
-          error: OUTBOX_TAKEOVER_SUPPRESSED_ERROR
+          error: OUTBOX_TAKEOVER_SUPPRESSED_ERROR,
+          ...(claimToken !== undefined ? { claimToken } : {})
         })
       }
       const effectResult = input.effect
@@ -428,7 +508,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
             value === undefined && input.result !== undefined
               ? cloneValue(input.result)
               : cloneValue(value),
-            this.currentTime()
+            this.currentTime(),
+            claimToken
           )
         )
       }
@@ -438,7 +519,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
         effectResult === undefined && input.result !== undefined
           ? cloneValue(input.result)
           : cloneValue(effectResult),
-        now
+        now,
+        claimToken
       )
     }
     const takeover = resolveTakeoverCheck(input.takeoverActive)
@@ -456,7 +538,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
       tenantId,
       input.eventId,
       workerId,
-      now
+      now,
+      input.claimToken
     )
     const attempts = Math.max(0, current.attempts ?? 0)
     const error = redactError(input.error)
@@ -483,6 +566,7 @@ export class OutboxRepository implements DurableOutboxAdapter {
             })
       }
       if (deadLetter) delete updated.availableAt
+      delete updated.claimToken
       this.replaceEvent(updated)
       this.markAttemptOutcome(
         updated,
@@ -557,6 +641,7 @@ export class OutboxRepository implements DurableOutboxAdapter {
         lastError: null,
         deadLetteredAt: null
       }
+      delete updated.claimToken
       this.replaceEvent(updated)
       this.db.state.outboxAttempts = [
         ...this.db.state.outboxAttempts,
@@ -608,10 +693,17 @@ export class OutboxRepository implements DurableOutboxAdapter {
     current: OutboxEventRecord,
     workerId: string,
     result: unknown,
-    now: Date
+    now: Date,
+    claimToken: string | undefined
   ): OutboxEventRecord {
     const tenantId = requireTenant(current.tenantId)
-    const owned = this.requireOwnedEvent(tenantId, current.id, workerId, now)
+    const owned = this.requireOwnedEvent(
+      tenantId,
+      current.id,
+      workerId,
+      now,
+      claimToken
+    )
     const key = requireEventIdempotencyKey(owned)
     const snapshot = this.snapshot()
     try {
@@ -648,6 +740,7 @@ export class OutboxRepository implements DurableOutboxAdapter {
         lastError: null,
         processedAt: new Date(now)
       }
+      delete updated.claimToken
       this.replaceEvent(updated)
       this.markAttemptOutcome(updated, workerId, 'processed', null)
       this.appendTransitionAudit(
@@ -669,7 +762,8 @@ export class OutboxRepository implements DurableOutboxAdapter {
     tenantId: TenantId,
     eventId: string,
     workerId: string,
-    now: Date
+    now: Date,
+    claimToken?: string
   ): OutboxEventRecord {
     const event = this.db.state.outbox.find(
       (candidate) => candidate.id === eventId
@@ -692,7 +786,80 @@ export class OutboxRepository implements DurableOutboxAdapter {
     if (!event.leaseUntil || event.leaseUntil.getTime() <= now.getTime()) {
       throw new DomainError('conflict', 'Outbox lease has expired')
     }
+    // SPEC0249 (AUD-0621 F06): a token from an older claim never acts on the
+    // current one, even when the worker id is the same.
+    if (claimToken !== undefined && event.claimToken !== claimToken) {
+      throw new DomainError(
+        'conflict',
+        'Outbox claim is not the current attempt'
+      )
+    }
     return event
+  }
+
+  /**
+   * SPEC0249 (AUD-0621 F20): extends the lease of the current live claim.
+   * Returns null without writing when the claim expired, belongs to another
+   * claim or the event left processing. The lease is never shortened.
+   */
+  heartbeatClaim(input: OutboxHeartbeatInput): OutboxEventRecord | null {
+    const tenantId = requireTenant(input.tenantId)
+    const workerId = requireActor(input.workerId, 'workerId')
+    const now = this.currentTime()
+    const leaseMs = positiveInteger(input.leaseMs ?? this.leaseMs, 'leaseMs')
+    const event = this.db.state.outbox.find(
+      (candidate) => candidate.id === input.eventId
+    )
+    if (
+      !event ||
+      event.tenantId !== tenantId ||
+      event.status !== 'processing' ||
+      event.leaseOwner !== workerId ||
+      !event.leaseUntil ||
+      event.leaseUntil.getTime() <= now.getTime() ||
+      (input.claimToken !== undefined && event.claimToken !== input.claimToken)
+    ) {
+      return null
+    }
+    const renewed: OutboxEventRecord = {
+      ...cloneEvent(event),
+      leaseUntil: new Date(
+        Math.max(event.leaseUntil.getTime(), now.getTime() + leaseMs)
+      )
+    }
+    this.replaceEvent(renewed)
+    return cloneEvent(renewed)
+  }
+
+  private deadLetterExhausted(
+    candidate: OutboxEventRecord,
+    workerId: string,
+    now: Date
+  ): void {
+    const snapshot = this.snapshot()
+    try {
+      const updated: OutboxEventRecord = {
+        ...cloneEvent(candidate),
+        status: 'dead_letter',
+        leaseOwner: null,
+        leaseUntil: null,
+        lastError: OUTBOX_LEASE_EXHAUSTED_ERROR,
+        deadLetteredAt: new Date(now)
+      }
+      delete updated.availableAt
+      delete updated.claimToken
+      this.replaceEvent(updated)
+      this.appendTransitionAudit(
+        updated,
+        workerId,
+        'dead_letter',
+        OUTBOX_LEASE_EXHAUSTED_ERROR,
+        now
+      )
+    } catch (error) {
+      this.restore(snapshot)
+      throw error
+    }
   }
 
   private appendTransitionAudit(

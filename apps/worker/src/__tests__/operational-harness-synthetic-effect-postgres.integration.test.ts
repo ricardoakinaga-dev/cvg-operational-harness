@@ -153,6 +153,17 @@ describeWithPostgres(
         const status = await app.inject({
           method: 'GET',
           url: `/v1/executions/${executionId}`,
+          // SPEC0176 (AUD-0621 F01): tenant-wide reader; the unassigned
+          // Operator is asserted to receive 404 below.
+          headers: {
+            'x-tenant-id': tenantId,
+            'x-operator-id': 'supervisor.phase2.r4',
+            'x-operator-role': 'Supervisor'
+          }
+        })
+        const unassigned = await app.inject({
+          method: 'GET',
+          url: `/v1/executions/${executionId}`,
           headers: {
             'x-tenant-id': tenantId,
             'x-operator-id': 'operator.phase2.r4',
@@ -199,10 +210,14 @@ describeWithPostgres(
         expect(replay.json().data.execution.id).toBe(executionId)
         expect(status.statusCode).toBe(200)
         expect(status.json().data.state).toBe('SUCCEEDED')
-        expect(status.json().data.result.toolResult.output).toEqual({
-          fixture: 'phase2',
-          applied: true
+        // SPEC0176 DTO v2: the raw tool output never reaches HTTP.
+        expect(status.json().data).toMatchObject({
+          viewVersion: 2,
+          response: null,
+          errorSummary: null
         })
+        expect(status.body).not.toContain('phase2')
+        expect(unassigned.statusCode).toBe(404)
         expect(idle).toEqual({ kind: 'idle' })
         expect(journal).toMatchObject({
           state: 'CONFIRMED',

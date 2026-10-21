@@ -1,9 +1,33 @@
-import { createHash, randomUUID } from 'node:crypto'
-import type { ModelProvider } from '@cvg/model-gateway'
+import { randomUUID } from 'node:crypto'
+import {
+  computePromptSha256,
+  ModelGateway,
+  PromptRegistry,
+  type ModelProfile,
+  type ModelProfileName,
+  type ModelProvider
+} from '@cvg/model-gateway'
 import { OrganizedSchema, type Organized } from './domain.ts'
 
 export interface Organizer {
-  organize(text: string, now: Date): Promise<Organized>
+  organize(text: string, now: Date, signal?: AbortSignal): Promise<Organized>
+}
+
+/**
+ * Marks the in-process synthetic organizer of the sandbox. The composition
+ * accepts an injected organizer only with this mark and only under the test
+ * runner; production always organizes through the model gateway (NO_MODEL).
+ */
+export const SYNTHETIC_ORGANIZER: unique symbol = Symbol.for(
+  'cvg.shift-assistant.synthetic-organizer'
+)
+
+export function isSyntheticOrganizer(organizer: Organizer): boolean {
+  return (
+    (organizer as Organizer & { [SYNTHETIC_ORGANIZER]?: unknown })[
+      SYNTHETIC_ORGANIZER
+    ] === true
+  )
 }
 
 export const ORGANIZER_PROMPT = `Você organiza anotações de plantão de um hospital veterinário.
@@ -27,26 +51,107 @@ Regras:
 - Não dê conselho clínico.`
 
 /**
- * Organizes text with an external model that has no tools: it can only
- * return JSON, which is validated here. The service decides what happens.
+ * Shift notes, transcripts and patient memory are CLINICAL (B3, SPEC 0179
+ * section 1 and SPEC 0180 D009). The class is fixed here, never derived from
+ * configuration or content, and fictitious notes are not reclassified.
+ */
+export const ORGANIZER_DATA_CLASSIFICATION = 'CLINICAL' as const
+export const ORGANIZER_PROMPT_ID = 'shift-assistant.organizer'
+export const ORGANIZER_PROMPT_VERSION = '1'
+/** Opaque tenant of the product inside the model gateway. */
+export const SHIFT_TENANT_ID = 'tenant_5b1f0177-0000-4000-8000-000000000177'
+
+/** Registry holding the organizer prompt, approved for its CLINICAL class. */
+export function organizerPromptRegistry(): PromptRegistry {
+  const prompts = new PromptRegistry()
+  prompts.register({
+    promptId: ORGANIZER_PROMPT_ID,
+    version: ORGANIZER_PROMPT_VERSION,
+    content: ORGANIZER_PROMPT,
+    owner: 'shift-assistant',
+    approvedBy: 'spec-0177',
+    status: 'approved',
+    effectiveFrom: '2026-09-30T00:00:00.000Z',
+    classification: ORGANIZER_DATA_CLASSIFICATION,
+    tenantId: SHIFT_TENANT_ID
+  })
+  return prompts
+}
+
+export interface OrganizerGatewayOptions {
+  provider: ModelProvider
+  model: string
+  location: 'external' | 'local'
+  timeoutMs: number
+}
+
+/**
+ * The public model gateway in front of the organizer provider: one profile,
+ * no retries, no fallback and no local substitution. Its data-placement
+ * policy answers `policy_denied` for CLINICAL input before any budget,
+ * provider, DNS or HTTP (NO_MODEL; D2 is a separate decision).
+ */
+export function buildOrganizerGateway(
+  options: OrganizerGatewayOptions
+): ModelGateway {
+  const name: ModelProfileName =
+    options.location === 'local' ? 'local' : 'balanced'
+  const profile: ModelProfile = {
+    name,
+    providerId: options.provider.id,
+    model: options.model,
+    location: options.location,
+    temperature: 0,
+    maxTokens: 1500,
+    timeoutMs: options.timeoutMs,
+    maxCostUsd: 0,
+    estimatedCostUsd: 0,
+    maxRetries: 0,
+    pricing: { inputPer1kUsd: 0, outputPer1kUsd: 0 }
+  }
+  return new ModelGateway({
+    providers: [options.provider],
+    profiles: { [name]: profile },
+    prompts: organizerPromptRegistry(),
+    routing: { allowFallback: false, allowLocalSubstitution: false },
+    retry: { maxRetries: 0 },
+    defaultTimeoutMs: options.timeoutMs
+  })
+}
+
+/**
+ * Organizes text through the public model gateway; the model has no tools
+ * and can only return JSON, which is validated here. Under NO_MODEL every
+ * call ends in `policy_denied` and the assistant keeps the raw note.
  */
 export class ModelOrganizer implements Organizer {
-  readonly #provider: ModelProvider
-  readonly #model: string
+  readonly #gateway: Pick<ModelGateway, 'generate'>
+  readonly #profile: ModelProfileName
   readonly #timeoutMs: number
 
-  constructor(provider: ModelProvider, model: string, timeoutMs = 60_000) {
-    this.#provider = provider
-    this.#model = model
-    this.#timeoutMs = timeoutMs
+  constructor(
+    gateway: Pick<ModelGateway, 'generate'>,
+    options: { profile?: ModelProfileName; timeoutMs?: number } = {}
+  ) {
+    this.#gateway = gateway
+    this.#profile = options.profile ?? 'balanced'
+    this.#timeoutMs = options.timeoutMs ?? 60_000
   }
 
-  async organize(text: string, now: Date): Promise<Organized> {
-    const result = await this.#provider.execute({
+  async organize(
+    text: string,
+    now: Date,
+    signal?: AbortSignal
+  ): Promise<Organized> {
+    const result = await this.#gateway.generate({
       requestId: randomUUID(),
-      tenantId: 'cvg',
+      tenantId: SHIFT_TENANT_ID,
       correlationId: randomUUID(),
-      model: this.#model,
+      promptId: ORGANIZER_PROMPT_ID,
+      promptVersion: ORGANIZER_PROMPT_VERSION,
+      promptSha256: computePromptSha256(ORGANIZER_PROMPT),
+      modelProfile: this.#profile,
+      dataClassification: ORGANIZER_DATA_CLASSIFICATION,
       input: {
         system: ORGANIZER_PROMPT,
         messages: [
@@ -56,14 +161,11 @@ export class ModelOrganizer implements Organizer {
           }
         ]
       },
-      temperature: 0,
+      timeoutMs: this.#timeoutMs,
       maxTokens: 1500,
-      promptSha256: createHash('sha256').update(ORGANIZER_PROMPT).digest('hex'),
-      structuredSchemaName: 'shift_note',
-      signal: AbortSignal.timeout(this.#timeoutMs),
-      timeoutMs: this.#timeoutMs
+      ...(signal ? { signal } : {})
     })
-    return OrganizedSchema.parse(JSON.parse(stripFences(result.text)))
+    return OrganizedSchema.parse(JSON.parse(stripFences(result.output.text)))
   }
 }
 

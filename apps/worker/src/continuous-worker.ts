@@ -11,6 +11,7 @@ import {
   type ControlledWorkerHandlers
 } from './controlled-worker.ts'
 import {
+  claimTokenOf,
   completeClaimedOutboxEvent,
   type ClaimedOutboxEventResult,
   type OutboxHandoffResult
@@ -131,8 +132,9 @@ export interface ContinuousWorker {
  *
  * The pump claims at most `concurrency` events, runs each handler inside the
  * adapter's durable `ack` boundary, heartbeats the lease while the handler is
- * in flight (renewing when the adapter exposes `heartbeatClaim`, otherwise
- * re-verifying ownership and failing closed on a lost lease), backs off on
+ * in flight (renewing with the claim token when the adapter exposes
+ * `heartbeatClaim`, otherwise only re-verifying ownership, reported as
+ * `verified`, and failing closed on a lost lease), backs off on
  * empty polls and claim errors, and on SIGTERM finishes in-flight work or
  * releases the lease so another worker can retry the same idempotency key.
  * Unknown event types and handler failures flow through the repository retry
@@ -267,27 +269,29 @@ export function createContinuousWorker(
     }
   }
 
-  async function renewLease(event: OutboxEventRecord): Promise<boolean> {
-    const heartbeatCapable = options.adapter as DurableOutboxAdapter & {
-      heartbeatClaim?: (input: {
-        tenantId: TenantId
-        eventId: string
-        workerId: string
-        leaseMs: number
-      }) => OutboxEventRecord | null | Promise<OutboxEventRecord | null>
-    }
-    if (typeof heartbeatCapable.heartbeatClaim === 'function') {
-      const renewed = await heartbeatCapable.heartbeatClaim({
+  /**
+   * `renewed`: the adapter extended the lease of this claim (SPEC0249,
+   * AUD-0621 F20). `verified`: the adapter can only show the owner, so the
+   * lease is not extended. `lost`: the claim is no longer this one.
+   */
+  async function renewLease(
+    event: OutboxEventRecord
+  ): Promise<'renewed' | 'verified' | 'lost'> {
+    if (typeof options.adapter.heartbeatClaim === 'function') {
+      const renewed = await options.adapter.heartbeatClaim({
         tenantId: options.tenantId,
         eventId: event.id,
         workerId,
-        leaseMs: tuning.leaseMs
+        leaseMs: tuning.leaseMs,
+        ...claimTokenOf(event)
       })
-      return Boolean(
-        renewed &&
+      return renewed &&
         renewed.status === 'processing' &&
-        renewed.leaseOwner === workerId
-      )
+        renewed.leaseOwner === workerId &&
+        (event.claimToken === undefined ||
+          renewed.claimToken === event.claimToken)
+        ? 'renewed'
+        : 'lost'
     }
     const lookup = options.adapter as DurableOutboxAdapter & {
       findById?: (
@@ -301,23 +305,23 @@ export function createContinuousWorker(
     }
     if (typeof lookup.findOutboxById === 'function') {
       const current = await lookup.findOutboxById(options.tenantId, event.id)
-      return Boolean(
-        current &&
+      return current &&
         current.status === 'processing' &&
         current.leaseOwner === workerId
-      )
+        ? 'verified'
+        : 'lost'
     }
     if (typeof lookup.findById === 'function') {
       const current = lookup.findById(event.id, options.tenantId)
-      return Boolean(
-        current &&
+      return current &&
         current.status === 'processing' &&
         current.leaseOwner === workerId
-      )
+        ? 'verified'
+        : 'lost'
     }
     // Adapters without an ownership lookup cannot be verified; lease sizing
     // remains the only guarantee and is reported as such.
-    return true
+    return 'verified'
   }
 
   function startHeartbeat(event: OutboxEventRecord): {
@@ -353,11 +357,10 @@ export function createContinuousWorker(
     const beat = async (): Promise<void> => {
       if (stopped || leaseLost) return
       try {
-        if (await renewLease(event)) {
+        const outcome = await renewLease(event)
+        if (outcome !== 'lost') {
           counters.heartbeats += 1
-          telemetry.metric('worker_outbox_heartbeats_total', 1, {
-            outcome: 'renewed'
-          })
+          telemetry.metric('worker_outbox_heartbeats_total', 1, { outcome })
           return
         }
         markLost()
@@ -616,6 +619,7 @@ export function createContinuousWorker(
             tenantId: options.tenantId,
             eventId: event.id,
             workerId,
+            ...claimTokenOf(event),
             error: SHUTDOWN_RELEASE_ERROR
           })
           counters.released += 1
@@ -737,6 +741,7 @@ export function createContinuousWorker(
               tenantId: options.tenantId,
               eventId: event.id,
               workerId,
+              ...claimTokenOf(event),
               error: SHUTDOWN_RELEASE_ERROR
             })
             released += 1

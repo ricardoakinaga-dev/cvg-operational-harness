@@ -11,9 +11,12 @@ import {
 } from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
+  OUTBOX_EXHAUSTED_PER_CLAIM,
+  OUTBOX_LEASE_EXHAUSTED_ERROR,
   OUTBOX_TAKEOVER_SUPPRESSED_ERROR,
   type OutboxClaimInput,
   type OutboxFailInput,
+  type OutboxHeartbeatInput,
   type OutboxTakeoverCheck
 } from './outbox.ts'
 import { assertSameOutboxContent } from './outbox-content-hash.ts'
@@ -193,60 +196,189 @@ export async function claimNext(
   const leaseUntil = new Date(now.getTime() + leaseMs)
 
   return withOutboxTransaction(ctx.client, async () => {
-    const candidate = await ctx.client.query<DurableOutboxRow>(
-      `SELECT ${outboxSelectColumns}
-       FROM outbox_events
-       WHERE tenant_id = $1
-         AND (
-           (status = 'pending' AND available_at <= $2)
-           OR (status = 'failed' AND available_at <= $2)
-           OR (status = 'processing' AND lease_until <= $2)
-         )
-         AND ($3::text IS NULL OR id = $3)
-       ORDER BY available_at ASC, created_at ASC, id ASC
-       FOR UPDATE SKIP LOCKED
-       LIMIT 1`,
-      [tenantId, now, rawInput.eventId ?? null]
-    )
-    const row = candidate.rows[0]
-    if (!row) return null
-
-    if (row.status === 'processing') {
-      await ctx.client.query(
-        `UPDATE outbox_attempts
-         SET outcome = COALESCE(outcome, 'lease_expired'),
-             error = COALESCE(error, 'outbox_error:lease_expired')
-         WHERE tenant_id = $1 AND event_id = $2 AND outcome IS NULL`,
-        [tenantId, row.id]
+    for (
+      let exhausted = 0;
+      exhausted < OUTBOX_EXHAUSTED_PER_CLAIM;
+      exhausted += 1
+    ) {
+      const candidate = await ctx.client.query<DurableOutboxRow>(
+        `SELECT ${outboxSelectColumns}
+         FROM outbox_events
+         WHERE tenant_id = $1
+           AND (
+             (status = 'pending' AND available_at <= $2)
+             OR (status = 'failed' AND available_at <= $2)
+             OR (status = 'processing' AND lease_until <= $2)
+           )
+           AND ($3::text IS NULL OR id = $3)
+         ORDER BY available_at ASC, created_at ASC, id ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1`,
+        [tenantId, now, rawInput.eventId ?? null]
       )
-    }
+      const row = candidate.rows[0]
+      if (!row) return null
 
-    const claimed = await ctx.client.query<DurableOutboxRow>(
+      if (row.status === 'processing') {
+        await ctx.client.query(
+          `UPDATE outbox_attempts
+           SET outcome = COALESCE(outcome, 'lease_expired'),
+               error = COALESCE(error, 'outbox_error:lease_expired')
+           WHERE tenant_id = $1 AND event_id = $2 AND outcome IS NULL`,
+          [tenantId, row.id]
+        )
+      }
+
+      // SPEC0249 (AUD-0621 F17): a crash on the last allowed attempt must not
+      // be recycled by the lease expiry; it dead-letters like a fail would.
+      if (
+        (row.status === 'processing' || row.status === 'failed') &&
+        row.attempts >= OUTBOX_MAX_ATTEMPTS
+      ) {
+        await deadLetterExhaustedOutbox(ctx, tenantId, row, workerId, now)
+        continue
+      }
+
+      const claimed = await ctx.client.query<DurableOutboxRow>(
+        `UPDATE outbox_events
+         SET status = 'processing',
+             attempts = attempts + 1,
+             lease_owner = $3,
+             lease_until = $4,
+             available_at = $2,
+             last_error = NULL
+         WHERE tenant_id = $1 AND id = $5
+           AND (
+             status = 'pending'
+             OR (status = 'failed' AND available_at <= $2)
+             OR (status = 'processing' AND lease_until <= $2)
+           )
+         RETURNING ${outboxSelectColumns}`,
+        [tenantId, now, workerId, leaseUntil, row.id]
+      )
+      const claimedRow = claimed.rows[0]
+      if (!claimedRow) return null
+      // SPEC0249 (AUD-0621 F06): the attempt row identity is the fencing
+      // token of this claim. It is unique in the table and never reused,
+      // not even after a requeue resets the attempts counter.
+      const attempt = await ctx.client.query<{ id: string }>(
+        `INSERT INTO outbox_attempts
+           (tenant_id, event_id, attempt, worker_id, claimed_at, outcome, error)
+         VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+         RETURNING id::text AS id`,
+        [tenantId, claimedRow.id, claimedRow.attempts, workerId, now]
+      )
+      const claimToken = attempt.rows[0]?.id
+      if (!claimToken || !CLAIM_TOKEN_PATTERN.test(claimToken)) {
+        throw new DomainError(
+          'invalid_action',
+          'Outbox claim token could not be issued'
+        )
+      }
+      return { ...mapDurableOutboxRow(claimedRow), claimToken }
+    }
+    return null
+  })
+}
+
+async function deadLetterExhaustedOutbox(
+  ctx: PostgresOutboxContext,
+  tenantId: TenantId,
+  row: DurableOutboxRow,
+  workerId: string,
+  now: Date
+): Promise<void> {
+  const updated = await ctx.client.query<DurableOutboxRow>(
+    `UPDATE outbox_events
+     SET status = 'dead_letter',
+         available_at = $3,
+         last_error = $4,
+         lease_owner = NULL,
+         lease_until = NULL,
+         dead_lettered_at = $3
+     WHERE tenant_id = $1 AND id = $2 AND status = $5 AND attempts = $6
+     RETURNING ${outboxSelectColumns}`,
+    [
+      tenantId,
+      row.id,
+      now,
+      OUTBOX_LEASE_EXHAUSTED_ERROR,
+      row.status,
+      row.attempts
+    ]
+  )
+  const updatedRow = updated.rows[0]
+  if (!updatedRow) {
+    throw new DomainError(
+      'conflict',
+      'Outbox retry exhaustion lost its compare-and-swap'
+    )
+  }
+  await appendDurableOutboxAudit(ctx.client, {
+    tenantId,
+    eventId: updatedRow.id,
+    correlationId: updatedRow.correlation_id,
+    actorId: workerId,
+    action: 'dead_letter',
+    attempts: updatedRow.attempts,
+    status: updatedRow.status,
+    error: OUTBOX_LEASE_EXHAUSTED_ERROR
+  })
+}
+
+/**
+ * SPEC0249 (AUD-0621 F20): renews the lease of the current live claim with a
+ * compare-and-swap on owner, attempt and token. Returns null, without any
+ * write, when the lease already expired, the token is not the current
+ * attempt or the event left processing. The lease is never shortened.
+ */
+export async function renewClaim(
+  ctx: Pick<PostgresOutboxContext, 'client' | 'repositoryNow'>,
+  rawInput: OutboxHeartbeatInput
+): Promise<DurableOutboxEventRecord | null> {
+  const tenantId = TenantIdSchema.parse(rawInput.tenantId)
+  const eventId = assertOutboxText(rawInput.eventId, 'eventId', 160)
+  const workerId = validateOutboxWorker(rawInput.workerId)
+  const claimToken = requireOutboxClaimToken(rawInput.claimToken)
+  const leaseMs = validateOutboxLeaseMs(
+    rawInput.leaseMs ?? OUTBOX_DEFAULT_LEASE_MS
+  )
+  return withOutboxTransaction(ctx.client, async () => {
+    const now = ctx.repositoryNow()
+    const event = await lockOutboxEvent(ctx.client, tenantId, eventId)
+    if (
+      !event ||
+      !isLiveLease(event, workerId, now) ||
+      !(await isCurrentClaimAttempt(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken,
+        'open'
+      ))
+    ) {
+      return null
+    }
+    const renewed = await ctx.client.query<DurableOutboxRow>(
       `UPDATE outbox_events
-       SET status = 'processing',
-           attempts = attempts + 1,
-           lease_owner = $3,
-           lease_until = $4,
-           available_at = $2,
-           last_error = NULL
-       WHERE tenant_id = $1 AND id = $5
-         AND (
-           status = 'pending'
-           OR (status = 'failed' AND available_at <= $2)
-           OR (status = 'processing' AND lease_until <= $2)
-         )
+       SET lease_until = GREATEST(lease_until, $3::timestamptz)
+       WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
+         AND lease_owner = $4 AND attempts = $5 AND lease_until > $6
        RETURNING ${outboxSelectColumns}`,
-      [tenantId, now, workerId, leaseUntil, row.id]
+      [
+        tenantId,
+        event.id,
+        new Date(now.getTime() + leaseMs),
+        workerId,
+        event.attempts,
+        now
+      ]
     )
-    const claimedRow = claimed.rows[0]
-    if (!claimedRow) return null
-    await ctx.client.query(
-      `INSERT INTO outbox_attempts
-         (tenant_id, event_id, attempt, worker_id, claimed_at, outcome, error)
-       VALUES ($1, $2, $3, $4, $5, NULL, NULL)`,
-      [tenantId, claimedRow.id, claimedRow.attempts, workerId, now]
-    )
-    return mapDurableOutboxRow(claimedRow)
+    const renewedRow = renewed.rows[0]
+    return renewedRow
+      ? { ...mapDurableOutboxRow(renewedRow), claimToken }
+      : null
   })
 }
 
@@ -257,6 +389,7 @@ export async function ack(
   const tenantId = TenantIdSchema.parse(rawInput.tenantId)
   const eventId = assertOutboxText(rawInput.eventId, 'eventId', 160)
   const workerId = validateOutboxWorker(rawInput.workerId)
+  const claimToken = requireOutboxClaimToken(rawInput.claimToken)
   const now = ctx.repositoryNow()
 
   /**
@@ -266,28 +399,26 @@ export async function ack(
    * connection. The final transaction performs the compare-and-swap and
    * journals the sanitized result. Controlled handlers are idempotent, so a
    * crash between the handler and this final transaction is safe to retry.
+   * SPEC0249 (AUD-0621 F06): both transactions require the claim token of
+   * the current attempt, so an older attempt of the same worker id can
+   * neither observe nor finish the newer claim.
    */
   const prepared = await withOutboxTransaction(ctx.client, async () => {
-    const selected = await ctx.client.query<DurableOutboxRow>(
-      `SELECT ${outboxSelectColumns}
-       FROM outbox_events
-       WHERE tenant_id = $1 AND id = $2
-       FOR UPDATE`,
-      [tenantId, eventId]
-    )
-    const event = selected.rows[0]
+    const event = await lockOutboxEvent(ctx.client, tenantId, eventId)
     if (!event)
       throw new DomainError('invalid_action', 'Outbox event not found')
     if (event.status !== 'processing' && event.status !== 'processed') {
       throw new DomainError('conflict', 'Outbox lease is not owned by worker')
     }
-    if (
-      event.status === 'processing' &&
-      (event.lease_owner !== workerId ||
-        !event.lease_until ||
-        new Date(event.lease_until).getTime() <= now.getTime())
-    ) {
-      throw new DomainError('conflict', 'Outbox lease is not owned by worker')
+    if (event.status === 'processing') {
+      await assertCurrentOutboxClaim(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken,
+        now
+      )
     }
 
     const journal = await ctx.client.query<{
@@ -313,6 +444,13 @@ export async function ack(
           'Processed outbox event has no matching effect journal'
         )
       }
+      await assertProcessedByClaim(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken
+      )
       return {
         kind: 'processed' as const,
         event: mapDurableOutboxRow(event)
@@ -321,7 +459,7 @@ export async function ack(
     if (
       await ctx.isOutboxTakeoverActive(tenantId, event, rawInput.takeoverActive)
     ) {
-      return { kind: 'takeover' as const, event }
+      return { kind: 'takeover' as const }
     }
     return {
       kind: 'execute' as const,
@@ -335,14 +473,28 @@ export async function ack(
 
   if (prepared.kind === 'processed') return prepared.event
   if (prepared.kind === 'takeover') {
-    return withOutboxTransaction(ctx.client, () =>
-      ctx.suppressOutboxForTakeover(
-        prepared.event,
+    // Re-read under a new lock: the claim may have expired or been taken
+    // over since the validation transaction committed.
+    return withOutboxTransaction(ctx.client, async () => {
+      const suppressNow = ctx.repositoryNow()
+      const event = await lockOutboxEvent(ctx.client, tenantId, eventId)
+      if (!event)
+        throw new DomainError('invalid_action', 'Outbox event not found')
+      await assertCurrentOutboxClaim(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken,
+        suppressNow
+      )
+      return ctx.suppressOutboxForTakeover(
+        event,
         tenantId,
         workerId,
-        ctx.repositoryNow()
+        suppressNow
       )
-    )
+    })
   }
 
   let result = prepared.journalResult
@@ -365,26 +517,21 @@ export async function ack(
 
   return withOutboxTransaction(ctx.client, async () => {
     const ackNow = ctx.repositoryNow()
-    const selected = await ctx.client.query<DurableOutboxRow>(
-      `SELECT ${outboxSelectColumns}
-       FROM outbox_events
-       WHERE tenant_id = $1 AND id = $2
-       FOR UPDATE`,
-      [tenantId, eventId]
-    )
-    const event = selected.rows[0]
+    const event = await lockOutboxEvent(ctx.client, tenantId, eventId)
     if (!event)
       throw new DomainError('invalid_action', 'Outbox event not found')
     if (event.status !== 'processing' && event.status !== 'processed') {
       throw new DomainError('conflict', 'Outbox lease is not owned by worker')
     }
-    if (
-      event.status === 'processing' &&
-      (event.lease_owner !== workerId ||
-        !event.lease_until ||
-        new Date(event.lease_until).getTime() <= ackNow.getTime())
-    ) {
-      throw new DomainError('conflict', 'Outbox lease is not owned by worker')
+    if (event.status === 'processing') {
+      await assertCurrentOutboxClaim(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken,
+        ackNow
+      )
     }
 
     const journal = await ctx.client.query<{
@@ -410,6 +557,13 @@ export async function ack(
           'Processed outbox event has no matching effect journal'
         )
       }
+      await assertProcessedByClaim(
+        ctx.client,
+        tenantId,
+        event,
+        workerId,
+        claimToken
+      )
       return mapDurableOutboxRow(event)
     }
     if (
@@ -471,9 +625,9 @@ export async function ack(
            last_error = NULL,
            available_at = $3
        WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
-         AND lease_owner = $4
+         AND lease_owner = $4 AND attempts = $5
        RETURNING ${outboxSelectColumns}`,
-      [tenantId, event.id, ackNow, workerId]
+      [tenantId, event.id, ackNow, workerId, event.attempts]
     )
     const updatedRow = updated.rows[0]
     if (!updatedRow)
@@ -481,9 +635,9 @@ export async function ack(
     await ctx.client.query(
       `UPDATE outbox_attempts
        SET outcome = 'processed', error = NULL
-       WHERE tenant_id = $1 AND event_id = $2 AND worker_id = $3
+       WHERE tenant_id = $1 AND event_id = $2 AND id = $3::bigint
          AND outcome IS NULL`,
-      [tenantId, event.id, workerId]
+      [tenantId, event.id, claimToken]
     )
     await appendDurableOutboxAudit(ctx.client, {
       tenantId,
@@ -507,28 +661,22 @@ export async function fail(
   const tenantId = TenantIdSchema.parse(rawInput.tenantId)
   const eventId = assertOutboxText(rawInput.eventId, 'eventId', 160)
   const workerId = validateOutboxWorker(rawInput.workerId)
+  const claimToken = requireOutboxClaimToken(rawInput.claimToken)
   const now = ctx.repositoryNow()
   const error = redactOutboxError(rawInput.error)
 
   return withOutboxTransaction(ctx.client, async () => {
-    const selected = await ctx.client.query<DurableOutboxRow>(
-      `SELECT ${outboxSelectColumns}
-       FROM outbox_events
-       WHERE tenant_id = $1 AND id = $2
-       FOR UPDATE`,
-      [tenantId, eventId]
-    )
-    const event = selected.rows[0]
+    const event = await lockOutboxEvent(ctx.client, tenantId, eventId)
     if (!event)
       throw new DomainError('invalid_action', 'Outbox event not found')
-    if (
-      event.status !== 'processing' ||
-      event.lease_owner !== workerId ||
-      !event.lease_until ||
-      new Date(event.lease_until).getTime() <= now.getTime()
-    ) {
-      throw new DomainError('conflict', 'Outbox lease is not owned by worker')
-    }
+    await assertCurrentOutboxClaim(
+      ctx.client,
+      tenantId,
+      event,
+      workerId,
+      claimToken,
+      now
+    )
     const terminal =
       rawInput.handoff === true ||
       rawInput.terminal === true ||
@@ -546,9 +694,18 @@ export async function fail(
            lease_until = NULL,
            dead_lettered_at = CASE WHEN $3 = 'dead_letter' THEN $6::timestamptz ELSE NULL END
        WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
-         AND lease_owner = $7
+         AND lease_owner = $7 AND attempts = $8
        RETURNING ${outboxSelectColumns}`,
-      [tenantId, event.id, status, availableAt, error, now, workerId]
+      [
+        tenantId,
+        event.id,
+        status,
+        availableAt,
+        error,
+        now,
+        workerId,
+        event.attempts
+      ]
     )
     const updatedRow = updated.rows[0]
     if (!updatedRow)
@@ -559,12 +716,12 @@ export async function fail(
     await ctx.client.query(
       `UPDATE outbox_attempts
        SET outcome = $4, error = $5
-       WHERE tenant_id = $1 AND event_id = $2 AND worker_id = $3
+       WHERE tenant_id = $1 AND event_id = $2 AND id = $3::bigint
          AND outcome IS NULL`,
       [
         tenantId,
         event.id,
-        workerId,
+        claimToken,
         rawInput.handoff ? 'handoff' : status,
         error
       ]
@@ -587,6 +744,130 @@ export async function fail(
     })
     return mapDurableOutboxRow(updatedRow)
   })
+}
+
+/** SPEC0249: decimal text of `outbox_attempts.id`, below 2^63 − 1. */
+const CLAIM_TOKEN_PATTERN = /^[1-9][0-9]{0,17}$/
+
+function requireOutboxClaimToken(value: unknown): string {
+  if (typeof value !== 'string' || !CLAIM_TOKEN_PATTERN.test(value)) {
+    throw new DomainError('validation_failed', 'Outbox claim token is required')
+  }
+  return value
+}
+
+async function lockOutboxEvent(
+  client: PostgresQueryable,
+  tenantId: TenantId,
+  eventId: string
+): Promise<DurableOutboxRow | undefined> {
+  const selected = await client.query<DurableOutboxRow>(
+    `SELECT ${outboxSelectColumns}
+     FROM outbox_events
+     WHERE tenant_id = $1 AND id = $2
+     FOR UPDATE`,
+    [tenantId, eventId]
+  )
+  return selected.rows[0]
+}
+
+function isLiveLease(
+  event: DurableOutboxRow,
+  workerId: string,
+  now: Date
+): boolean {
+  return (
+    event.status === 'processing' &&
+    event.lease_owner === workerId &&
+    Boolean(event.lease_until) &&
+    new Date(event.lease_until as Date).getTime() > now.getTime()
+  )
+}
+
+/**
+ * True when `claimToken` names the newest attempt row of the event, owned by
+ * the worker, with the event's attempt number, and in the expected outcome.
+ * The caller holds the event row lock, so no attempt row of the same event
+ * is inserted or closed concurrently.
+ */
+async function isCurrentClaimAttempt(
+  client: PostgresQueryable,
+  tenantId: TenantId,
+  event: DurableOutboxRow,
+  workerId: string,
+  claimToken: string,
+  outcome: 'open' | 'processed'
+): Promise<boolean> {
+  const result = await client.query<{
+    attempt: number
+    worker_id: string
+    outcome: string | null
+    newer: boolean
+  }>(
+    `SELECT a.attempt, a.worker_id, a.outcome,
+            EXISTS (
+              SELECT 1
+              FROM outbox_attempts AS n
+              WHERE n.tenant_id = $1 AND n.event_id = $2 AND n.id > a.id
+            ) AS newer
+     FROM outbox_attempts AS a
+     WHERE a.tenant_id = $1 AND a.event_id = $2 AND a.id = $3::bigint`,
+    [tenantId, event.id, claimToken]
+  )
+  const row = result.rows[0]
+  return Boolean(
+    row &&
+    row.worker_id === workerId &&
+    Number(row.attempt) === event.attempts &&
+    !row.newer &&
+    (outcome === 'open' ? row.outcome === null : row.outcome === 'processed')
+  )
+}
+
+async function assertCurrentOutboxClaim(
+  client: PostgresQueryable,
+  tenantId: TenantId,
+  event: DurableOutboxRow,
+  workerId: string,
+  claimToken: string,
+  now: Date
+): Promise<void> {
+  if (!isLiveLease(event, workerId, now)) {
+    throw new DomainError('conflict', 'Outbox lease is not owned by worker')
+  }
+  if (
+    !(await isCurrentClaimAttempt(
+      client,
+      tenantId,
+      event,
+      workerId,
+      claimToken,
+      'open'
+    ))
+  ) {
+    throw new DomainError('conflict', 'Outbox claim is not the current attempt')
+  }
+}
+
+async function assertProcessedByClaim(
+  client: PostgresQueryable,
+  tenantId: TenantId,
+  event: DurableOutboxRow,
+  workerId: string,
+  claimToken: string
+): Promise<void> {
+  if (
+    !(await isCurrentClaimAttempt(
+      client,
+      tenantId,
+      event,
+      workerId,
+      claimToken,
+      'processed'
+    ))
+  ) {
+    throw new DomainError('conflict', 'Outbox claim is not the current attempt')
+  }
 }
 
 export async function requeueDeadLetter(
@@ -734,6 +1015,10 @@ function serializeOutboxJson(value: unknown, label: string): string {
 function redactOutboxError(error: unknown): string {
   if (error === OUTBOX_TAKEOVER_SUPPRESSED_ERROR) {
     return OUTBOX_TAKEOVER_SUPPRESSED_ERROR
+  }
+  // SPEC0249: the exhaustion reason is a fixed code, safe to show as is.
+  if (error === OUTBOX_LEASE_EXHAUSTED_ERROR) {
+    return OUTBOX_LEASE_EXHAUSTED_ERROR
   }
   if (typeof error === 'string' && SAFE_LEGACY_OUTBOX_ERRORS.has(error)) {
     return error

@@ -2,7 +2,7 @@ export type Command =
   | { type: 'list' }
   | { type: 'done'; number: number }
   | { type: 'snooze'; number: number; minutes: number }
-  | { type: 'confirm' }
+  | { type: 'confirm'; code?: string }
   | { type: 'correct'; text: string }
   | { type: 'help' }
   | { type: 'template' }
@@ -29,6 +29,8 @@ export function parseCommand(text: string): Command | undefined {
     return { type: 'template' }
   }
   if (/^(ok|confirmo|confirmado)[.!]?$/.test(folded)) return { type: 'confirm' }
+  const exact = /^(?:ok|confirmo) nota ([0-9a-f]{8})$/.exec(folded)
+  if (exact) return { type: 'confirm', code: exact[1]! }
   if (folded === 'pausar assistente') return { type: 'pause' }
   if (folded === 'retomar assistente') return { type: 'resume' }
 
@@ -63,7 +65,7 @@ export const HELP_TEXT = [
   '• "pendências" — lista o que é seu e está aberto.',
   '• "feito 3" — conclui a pendência 3.',
   '• "adiar 3 30" ou "adiar 3 1h" — adia a pendência 3.',
-  '• "ok" — confirma a última nota.',
+  '• "ok" — confirma o seu rascunho e ativa as pendências dele (com mais de um rascunho, "ok nota <código>").',
   '• "corrigir <texto>" — refaz a última nota com o texto certo.',
   'O assistente não grava no HIS: ele devolve o texto pronto para você colar lá.'
 ].join('\n')

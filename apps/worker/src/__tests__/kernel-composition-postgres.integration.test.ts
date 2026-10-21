@@ -10,6 +10,7 @@ import {
   resolveWorkflowCoordinator,
   toGovernedTurnInput,
   type GovernedRuntimeCompositionInput,
+  type GovernedTurnInput,
   type WorkflowPlan,
   type WorkflowStep
 } from '@cvg/agent-runtime'
@@ -24,12 +25,17 @@ import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
 import {
   PostgresEffectJournal,
   runPostgresMigrations,
+  TENANT_SCHEMA_TABLES,
   withTenantContext
 } from '@cvg/persistence'
 import { canonicalizeJson } from '@cvg/shared'
 import { buildServer } from '../../../api/src/server.ts'
+import { verifyPersistedKernelAudit } from '../kernel-audit-chain.ts'
 import {
+  CONTROLLED_KERNEL_PAYLOAD_SCHEMA,
   CONTROLLED_KERNEL_POLICY_DOCUMENT,
+  CONTROLLED_KERNEL_PROMPT_ID,
+  CONTROLLED_KERNEL_PROMPT_VERSION,
   KERNEL_WORKER_RUNTIME,
   KernelRuntimeConfigurationError,
   assertPostgresKernelPrerequisites,
@@ -818,5 +824,157 @@ describe('AAA-21 composed kernel path over API → outbox → worker (PostgreSQL
         )
       }
     }
+  )
+})
+
+// SPEC0249 AC12 (AUD-0621 F19): a failed audit batch is rolled back whole and
+// the next turn resends exactly the missing suffix, so the persisted chain
+// stays contiguous. Runs as a minimal runtime role (no SUPERUSER/BYPASSRLS).
+describe('SPEC0249 kernel audit chain persistence', () => {
+  const itWithPostgres = testDatabaseUrl ? it : it.skip
+
+  function readTurn(correlationId: string, key: string): GovernedTurnInput {
+    return {
+      tenantId: TENANT,
+      operatorId: 'op_synthetic_kernel',
+      operatorRole: 'Operator',
+      agentId: AGENT,
+      agentVersion: 'synthetic-v1',
+      agentProfile: 'assistant',
+      conversationId: 'conv_p0249_kernel_audit',
+      correlationId,
+      capability: 'resource.read',
+      action: 'resource.read',
+      resource: { type: 'record_draft', id: 'draft_p0249' },
+      dataClassification: 'INTERNAL',
+      prompt: {
+        promptId: CONTROLLED_KERNEL_PROMPT_ID,
+        version: CONTROLLED_KERNEL_PROMPT_VERSION
+      },
+      modelProfile: 'fast',
+      modelMessages: {
+        messages: [{ role: 'user', content: 'synthetic read for p0249' }]
+      },
+      structuredOutput: {
+        schemaName: 'ControlledKernelPayload',
+        schema: CONTROLLED_KERNEL_PAYLOAD_SCHEMA
+      },
+      idempotencyKey: key
+    }
+  }
+
+  itWithPostgres(
+    'AC12: resends the exact missing suffix after a failed batch and keeps the chain contiguous',
+    async () => {
+      const databaseUrl = testDatabaseUrl as string
+      const suffix = `${Date.now()}_${randomBytes(3).toString('hex')}`
+      const schema = `cvg_p0249_kaudit_${suffix}`
+      const role = `cvg_p0249_kaudit_${suffix}`
+      const password = 'synthetic-0249-role-password'
+      const admin = new Client({ connectionString: databaseUrl })
+      await admin.connect()
+      let pool: Pool | undefined
+      try {
+        await runPostgresMigrations(admin, { schemaName: schema })
+        await admin.query(
+          `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+        )
+        await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+        for (const table of TENANT_SCHEMA_TABLES) {
+          await admin.query(
+            `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+          )
+        }
+        const url = new URL(databaseUrl)
+        url.username = role
+        url.password = password
+        pool = new Pool({
+          connectionString: url.toString(),
+          options: `-c search_path=${schema}`
+        })
+        const runtime = createPostgresKernelRuntime({
+          pool,
+          tenantId: TENANT,
+          env: {
+            CVG_WORKER_RUNTIME: KERNEL_WORKER_RUNTIME,
+            CVG_WORKER_TENANT_ID: TENANT,
+            CVG_WORKER_AGENT_ID: AGENT
+          },
+          agentId: AGENT
+        })
+        await runtime.preflight()
+        const kernelRows = async () => {
+          const result = await admin.query<{
+            total: number
+            sequences: number
+          }>(
+            `SELECT count(*)::int AS total,
+                    count(DISTINCT payload->'kernelAudit'->>'sequence')::int AS sequences
+               FROM ${schema}.audit_events
+              WHERE tenant_id = $1 AND payload ? 'kernelAudit'`,
+            [TENANT]
+          )
+          return result.rows[0]
+        }
+
+        await admin.query(
+          `CREATE FUNCTION ${schema}.p0249_reject_kernel_audit_seq2()
+             RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.payload ? 'kernelAudit'
+                AND NEW.payload->'kernelAudit'->>'sequence' = '2' THEN
+               RAISE EXCEPTION 'synthetic kernel audit insert fault';
+             END IF;
+             RETURN NEW;
+           END $$`
+        )
+        await admin.query(
+          `CREATE TRIGGER p0249_reject_kernel_audit_seq2
+             BEFORE INSERT ON ${schema}.audit_events
+             FOR EACH ROW EXECUTE FUNCTION ${schema}.p0249_reject_kernel_audit_seq2()`
+        )
+        await expect(
+          runtime.runTurn(
+            readTurn(
+              'corr_00000000-0000-4000-8000-000000024901',
+              'p0249-turn-1'
+            )
+          )
+        ).rejects.toThrow(/synthetic kernel audit insert fault/)
+        const afterFailure = runtime.audit.size()
+        expect(afterFailure).toBeGreaterThanOrEqual(2)
+        // The failed batch was rolled back whole: no prefix was committed.
+        await expect(kernelRows()).resolves.toEqual({ total: 0, sequences: 0 })
+
+        await admin.query(
+          `DROP TRIGGER p0249_reject_kernel_audit_seq2 ON ${schema}.audit_events`
+        )
+        const second = await runtime.runTurn(
+          readTurn('corr_00000000-0000-4000-8000-000000024902', 'p0249-turn-2')
+        )
+        expect(second.outcome).toBe('executed')
+        expect(runtime.audit.size()).toBeGreaterThan(afterFailure)
+
+        const report = await verifyPersistedKernelAudit(pool, TENANT)
+        expect(report.valid).toBe(true)
+        expect(report.ledgers).toHaveLength(1)
+        expect(report.events).toBe(runtime.audit.size())
+        await expect(kernelRows()).resolves.toEqual({
+          total: runtime.audit.size(),
+          sequences: runtime.audit.size()
+        })
+      } finally {
+        await pool?.end().catch(() => undefined)
+        await admin
+          .query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+          .catch(() => undefined)
+        await admin
+          .query(`DROP OWNED BY ${role} CASCADE`)
+          .catch(() => undefined)
+        await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)
+        await admin.end().catch(() => undefined)
+      }
+    },
+    60_000
   )
 })

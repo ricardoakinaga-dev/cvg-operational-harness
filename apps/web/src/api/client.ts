@@ -461,6 +461,54 @@ export interface ApprovalView {
   summary: string
   riskLevel: string
   status: string
+  createdAt?: string
+}
+
+/** SPEC0250 §3.4 — page metadata of the task and approval listings. */
+export interface ListPageInfo {
+  limit: number
+  offset: number
+  total: number
+  hasNextPage: boolean
+}
+
+export interface ListPage<T> {
+  items: T[]
+  pageInfo: ListPageInfo
+}
+
+export type ApprovalStatusFilter =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'assumed'
+
+export interface StatusPageQuery<S extends string> {
+  statuses?: readonly S[]
+  limit: number
+  offset: number
+}
+
+function statusPagePath<S extends string>(
+  path: string,
+  query: StatusPageQuery<S>
+): string {
+  const status = query.statuses?.length
+    ? `status=${query.statuses.map((value) => encodeURIComponent(value)).join(',')}&`
+    : ''
+  return `${path}?${status}limit=${query.limit}&offset=${query.offset}`
+}
+
+function isListPageInfo(value: unknown): value is ListPageInfo {
+  if (typeof value !== 'object' || value === null) return false
+  const info = value as Record<string, unknown>
+  return (
+    Number.isInteger(info.limit) &&
+    Number.isInteger(info.offset) &&
+    Number.isInteger(info.total) &&
+    typeof info.hasNextPage === 'boolean'
+  )
 }
 
 export interface TaskView {
@@ -603,15 +651,37 @@ export interface AuditEvidenceCheckpointView {
   updatedAt: string
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+interface RequestBehavior {
+  /** Retry idempotent reads (default true). One-use credentials must not. */
+  retry?: boolean
+  /** Call the ambient 401 hook (default true). */
+  notifyUnauthorized?: boolean
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  behavior: RequestBehavior = {}
+): Promise<T> {
+  return (await requestEnvelope<T>(path, init, behavior)).data
+}
+
+async function requestEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+  behavior: RequestBehavior = {}
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   const method = (init?.method ?? 'GET').toUpperCase()
   const idempotent = method === 'GET' || method === 'HEAD'
-  const maxAttempts = idempotent ? 1 + defaultApiClientOptions.maxGetRetries : 1
+  const maxAttempts =
+    idempotent && behavior.retry !== false
+      ? 1 + defaultApiClientOptions.maxGetRetries
+      : 1
   let attempt = 0
   for (;;) {
     attempt += 1
     try {
-      return await requestOnce<T>(path, init)
+      return await requestOnce<T>(path, init, behavior)
     } catch (error) {
       if (
         attempt >= maxAttempts ||
@@ -637,7 +707,11 @@ function isRetryable(error: unknown): boolean {
   return false
 }
 
-async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestOnce<T>(
+  path: string,
+  init: RequestInit | undefined,
+  behavior: RequestBehavior
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   const controller = new AbortController()
   let timedOut = false
   const timeout = setTimeout(() => {
@@ -668,7 +742,7 @@ async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
         'network_unavailable'
       )
     }
-    if (response.status === 401) {
+    if (response.status === 401 && behavior.notifyUnauthorized !== false) {
       defaultApiClientOptions.onUnauthorized()
     }
     let envelope: ApiEnvelope<T>
@@ -700,10 +774,35 @@ async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
           : 'request_failed'
       )
     }
-    return envelope.data
+    const meta =
+      typeof envelope.meta === 'object' && envelope.meta !== null
+        ? (envelope.meta as unknown as Record<string, unknown>)
+        : {}
+    return { data: envelope.data, meta }
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function requestPage<T>(
+  path: string,
+  init: RequestInit,
+  query: { limit: number; offset: number }
+): Promise<ListPage<T>> {
+  const { data, meta } = await requestEnvelope<T[]>(path, init)
+  if (!Array.isArray(data)) {
+    throw new ApiRequestError('Unexpected list response', 200, 'request_failed')
+  }
+  const items = data
+  const pageInfo = isListPageInfo(meta.pageInfo)
+    ? meta.pageInfo
+    : {
+        limit: query.limit,
+        offset: query.offset,
+        total: query.offset + items.length,
+        hasNextPage: false
+      }
+  return { items, pageInfo }
 }
 
 /**
@@ -751,10 +850,18 @@ export const apiClient = {
   async getSession(
     bootstrapToken: string | null = null
   ): Promise<OperatorSessionView> {
-    return request('/v1/session', {
-      headers: bootstrapToken ? { 'x-cvg-operator-token': bootstrapToken } : {},
-      credentials: 'include'
-    })
+    // SPEC0250 §3.5: the caller owns this 401 (first visit is not an expired
+    // session), and a one-use bootstrap token is never resent by a retry.
+    return request(
+      '/v1/session',
+      {
+        headers: bootstrapToken
+          ? { 'x-cvg-operator-token': bootstrapToken }
+          : {},
+        credentials: 'include'
+      },
+      { notifyUnauthorized: false, retry: bootstrapToken === null }
+    )
   },
 
   async logoutSession(): Promise<void> {
@@ -788,6 +895,17 @@ export const apiClient = {
     return request('/v1/approvals', operatorInit(identity))
   },
 
+  async listApprovalPage(
+    identity: OperatorIdentity,
+    query: StatusPageQuery<ApprovalStatusFilter>
+  ): Promise<ListPage<ApprovalView>> {
+    return requestPage(
+      statusPagePath('/v1/approvals', query),
+      operatorInit(identity),
+      query
+    )
+  },
+
   async decideApproval(input: {
     approvalRequestId: string
     decision: ApprovalDecision
@@ -806,6 +924,17 @@ export const apiClient = {
 
   async listTasks(identity: OperatorIdentity): Promise<TaskView[]> {
     return request('/v1/tasks', operatorInit(identity))
+  },
+
+  async listTaskPage(
+    identity: OperatorIdentity,
+    query: StatusPageQuery<TaskStatus>
+  ): Promise<ListPage<TaskView>> {
+    return requestPage(
+      statusPagePath('/v1/tasks', query),
+      operatorInit(identity),
+      query
+    )
   },
 
   async updateTaskStatus(input: {

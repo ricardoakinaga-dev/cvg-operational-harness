@@ -1,3 +1,7 @@
+import {
+  insertCoreConversationRootInTransaction,
+  linkAuditEventToCoreSessionWhenAvailable
+} from './case-root-sql.ts'
 import { createInboundIdempotencyKey } from './postgres-outbox.ts'
 import { assertInboundToolAuditParents } from './postgres-audit.ts'
 import {
@@ -260,6 +264,13 @@ export async function createWithSession(
             session.createdAt,
             session.updatedAt
           ]
+        )
+        // SPEC0176: the core case root commits with the conversation.
+        await insertCoreConversationRootInTransaction(
+          ctx.client,
+          tenantId,
+          conversation.id,
+          now
         )
       } else {
         await ctx.client.query(
@@ -648,6 +659,19 @@ export async function completeInboundRuntime(
   const trace = sanitizeTraceForPersistence(input.trace)
   assertInboundRuntimeCorrelation(input.correlationId)
   assertInboundToolAuditParents(trace, input.toolAuditEvents)
+  const completionSessionId = input.sessionId
+  // SPEC0176: completion events are linked, in this transaction, to the
+  // persisted session the runtime operated on (tenant-isolated schema only).
+  const linkCompletionAudit = async (event: { id: string }) => {
+    if (!ctx.tenantIsolation || !completionSessionId) return
+    await linkAuditEventToCoreSessionWhenAvailable(
+      ctx.client,
+      tenantId,
+      event.id,
+      completionSessionId,
+      new Date()
+    )
+  }
   await ctx.client.query('BEGIN')
   try {
     const inbound = ctx.tenantIsolation
@@ -704,23 +728,25 @@ export async function completeInboundRuntime(
         await ctx.client.query('COMMIT')
         return { status: 'paused' }
       }
-      await ctx.appendAudit({
-        type: 'handoff',
-        actorType: 'System',
-        actorId: 'agent-runtime',
-        correlationId: input.correlationId,
-        policyVersion: 'human-takeover-v1',
-        tenantId,
-        payload: {
+      await linkCompletionAudit(
+        await ctx.appendAudit({
+          type: 'handoff',
+          actorType: 'System',
+          actorId: 'agent-runtime',
+          correlationId: input.correlationId,
+          policyVersion: 'human-takeover-v1',
           tenantId,
-          conversationId: input.conversationId,
-          sessionId: input.sessionId,
-          traceId: trace.traceId,
-          state: handoff.takeoverState,
-          reason: trace.handoff.reason,
-          effect: 'human_handoff_requested'
-        }
-      })
+          payload: {
+            tenantId,
+            conversationId: input.conversationId,
+            sessionId: input.sessionId,
+            traceId: trace.traceId,
+            state: handoff.takeoverState,
+            reason: trace.handoff.reason,
+            effect: 'human_handoff_requested'
+          }
+        })
+      )
     }
 
     if (trace.response.text.trim().length > 0) {
@@ -732,26 +758,28 @@ export async function completeInboundRuntime(
       })
     }
     for (const event of input.toolAuditEvents) {
-      await ctx.appendAudit({
-        type: event.type,
-        actorType: 'System',
-        actorId: 'agent-runtime',
-        correlationId: event.correlationId,
-        policyVersion: 'plugin-gateway-v1',
-        tenantId,
-        payload: {
+      await linkCompletionAudit(
+        await ctx.appendAudit({
+          type: event.type,
+          actorType: 'System',
+          actorId: 'agent-runtime',
+          correlationId: event.correlationId,
+          policyVersion: 'plugin-gateway-v1',
           tenantId,
-          agentId: event.agentId,
-          versionId: event.versionId,
-          traceId: event.traceId,
-          conversationId: input.conversationId,
-          sessionId: input.sessionId,
-          plugin: event.plugin,
-          toolName: event.toolName,
-          status: event.status,
-          payload: event.payload
-        }
-      })
+          payload: {
+            tenantId,
+            agentId: event.agentId,
+            versionId: event.versionId,
+            traceId: event.traceId,
+            conversationId: input.conversationId,
+            sessionId: input.sessionId,
+            plugin: event.plugin,
+            toolName: event.toolName,
+            status: event.status,
+            payload: event.payload
+          }
+        })
+      )
     }
     await controlPlane.recordExecutionTrace({ tenantId }, trace)
     const markedCompleted = await ctx.markInboundRuntimeCompleted(
@@ -764,23 +792,25 @@ export async function completeInboundRuntime(
         'Inbound runtime completion marker was not updated'
       )
     }
-    await ctx.appendAudit({
-      type: 'integration_event',
-      actorType: 'System',
-      actorId: 'api',
-      correlationId: input.correlationId,
-      policyVersion: 'api-runtime-v1',
-      tenantId,
-      payload: {
-        sessionId: input.sessionId,
-        conversationId: input.conversationId,
-        accepted: true,
+    await linkCompletionAudit(
+      await ctx.appendAudit({
+        type: 'integration_event',
+        actorType: 'System',
+        actorId: 'api',
+        correlationId: input.correlationId,
+        policyVersion: 'api-runtime-v1',
         tenantId,
-        runtimeStatus: 'completed',
-        traceId: trace.traceId,
-        externalCall: trace.provider.externalCall
-      }
-    })
+        payload: {
+          sessionId: input.sessionId,
+          conversationId: input.conversationId,
+          accepted: true,
+          tenantId,
+          runtimeStatus: 'completed',
+          traceId: trace.traceId,
+          externalCall: trace.provider.externalCall
+        }
+      })
+    )
     await ctx.client.query('COMMIT')
     return { status: 'completed' }
   } catch (error) {

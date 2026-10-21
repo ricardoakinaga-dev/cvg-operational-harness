@@ -1,5 +1,4 @@
 import {
-  ApiRequestError,
   apiClient,
   type OperatorIdentity,
   type OperatorSessionView
@@ -13,6 +12,7 @@ export type WebSessionStatus =
   | 'authentication_required'
   | 'expired'
   | 'reauthenticating'
+  | 'unavailable'
 
 export interface TrustedWebSession extends OperatorSessionView {
   identity: OperatorIdentity
@@ -57,15 +57,12 @@ export function createTrustedSessionBootstrap(
 ): SessionBootstrap {
   return {
     async load(): Promise<TrustedWebSession> {
+      // SPEC0250 §3.5 / SPEC0144 invariant 3 (AUD0621 F12): a fresh host
+      // token is exchanged once; without one, the existing session is
+      // restored from the HttpOnly cookie before authentication is required.
       const token = tokenProvider ? await tokenProvider() : null
-      if (!token?.trim()) {
-        throw new ApiRequestError(
-          'Uma sessão confiável é necessária para continuar.',
-          401,
-          'unauthorized'
-        )
-      }
-      return apiClient.getSession(token.trim())
+      const bootstrapToken = token?.trim() ? token.trim() : null
+      return apiClient.getSession(bootstrapToken)
     },
     async logout(): Promise<void> {
       await apiClient.logoutSession()

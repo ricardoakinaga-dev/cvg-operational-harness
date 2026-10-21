@@ -258,8 +258,37 @@ export class ModelGateway {
         `Provider ${profile.providerId} is not registered`
       )
     }
+    // F13: an aborted caller never reserves budget nor reaches a provider.
+    throwIfCancelled(externalSignal)
 
     const estimatedCost = request.estimatedCostUsd ?? profile.estimatedCostUsd
+    // F14: the restrictive combination of the request and profile ceilings
+    // is applied to the estimate before any reservation; a non-finite
+    // ceiling or estimate (NaN or infinite) fails closed (SPEC 0248 R8).
+    const ceiling = Math.min(
+      profile.maxCostUsd,
+      request.maxCostUsd ?? Number.POSITIVE_INFINITY
+    )
+    if (
+      !(
+        Number.isFinite(ceiling) &&
+        Number.isFinite(estimatedCost) &&
+        estimatedCost <= ceiling
+      )
+    ) {
+      this.#emit({
+        type: 'model.budget.denied',
+        requestId: request.requestId,
+        tenantId: request.tenantId,
+        correlationId: request.correlationId,
+        profile: profile.name,
+        code: 'cost_ceiling'
+      })
+      throw new ModelGatewayError(
+        'budget_exceeded',
+        'Model call estimate exceeds the cost ceiling'
+      )
+    }
     let reservedKeys: string[] = []
     if (this.#budget) {
       const authorization = this.#budget.authorize({
@@ -300,8 +329,11 @@ export class ModelGateway {
       }
       const controller = new AbortController()
       const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs)
-      const onExternalAbort = () => controller.abort()
-      externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+      // The provider signal inherits the caller's state, including an abort
+      // that already happened (F13).
+      const signal = externalSignal
+        ? AbortSignal.any([controller.signal, externalSignal])
+        : controller.signal
 
       this.#emit({
         type: 'model.call.started',
@@ -327,7 +359,7 @@ export class ModelGateway {
           ...(structuredOutput
             ? { structuredSchemaName: structuredOutput.schemaName }
             : {}),
-          signal: controller.signal,
+          signal,
           timeoutMs,
           ...(request.metadata ? { metadata: request.metadata } : {})
         })
@@ -364,7 +396,10 @@ export class ModelGateway {
           attempt,
           costUsd,
           inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens
+          outputTokens: usage.outputTokens,
+          // The real cost is never hidden; an overrun of the ceiling is
+          // reported with the result (SPEC 0248 §3.4).
+          ...(costUsd > ceiling ? { detail: 'cost_ceiling_exceeded' } : {})
         })
         return {
           requestId: request.requestId,
@@ -413,7 +448,21 @@ export class ModelGateway {
             delayMs,
             code: gatewayError.code
           })
-          await this.#sleep(delayMs)
+          await this.#backoff(delayMs, externalSignal)
+          if (externalSignal?.aborted) {
+            this.#emit({
+              type: 'model.call.failed',
+              requestId: request.requestId,
+              tenantId: request.tenantId,
+              correlationId: request.correlationId,
+              providerId: provider.id,
+              model: profile.model,
+              profile: profile.name,
+              attempt,
+              code: 'cancelled'
+            })
+            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
+          }
           continue
         }
         this.#emit({
@@ -430,7 +479,6 @@ export class ModelGateway {
         throw gatewayError
       } finally {
         clearTimeout(timeoutHandle)
-        externalSignal?.removeEventListener('abort', onExternalAbort)
       }
     }
 
@@ -438,6 +486,24 @@ export class ModelGateway {
       lastError ??
       new ModelGatewayError('internal_error', 'Model call exhausted attempts')
     )
+  }
+
+  /** Retry backoff that ends early when the caller aborts (F13). */
+  async #backoff(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (!signal) {
+      await this.#sleep(ms)
+      return
+    }
+    let onAbort!: () => void
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try {
+      await Promise.race([this.#sleep(ms), aborted])
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 
   #parseOutput(
@@ -530,6 +596,12 @@ export class ModelGateway {
 
   #emit(event: ModelGatewayEvent): void {
     this.#onEvent?.(event)
+  }
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new ModelGatewayError('cancelled', 'Model call was cancelled')
   }
 }
 

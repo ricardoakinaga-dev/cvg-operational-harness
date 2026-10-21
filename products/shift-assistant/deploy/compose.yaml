@@ -3,29 +3,55 @@
 #   docker compose -f products/shift-assistant/deploy/compose.yaml up -d --build
 #
 # WAHA or Evolution and the Whisper server are the hospital's existing
-# services; point the variables in .env at them. Runbook:
-# docs/runbooks/assistente-plantao-fase1.md
+# services. The assistant joins only `cvg-shift-backend`, an internal Docker
+# network with no route outside it: attach WAHA/Evolution and Whisper to that
+# network (they keep their own networks for their own traffic) and point the
+# variables in .env at their names there. Nothing is published on the host;
+# the channel delivers webhooks over the backend network and the health
+# check runs inside the container. NO_MODEL is in force for shift notes, so
+# no model destination is reachable or needed. Host firewall for other
+# layouts: deploy/egress-policy.example.nft. Runbook: docs/operacao-local.md
 services:
   shift-assistant:
     build:
       context: ../../..
       dockerfile: products/shift-assistant/deploy/Dockerfile
+      target: runtime
     image: cvg-shift-assistant:local
     env_file: .env
-    ports:
-      - '127.0.0.1:3400:3400'
+    user: '10001:10001'
     volumes:
-      # Event log and media are documents (decision D4): keep this volume in
+      # Journal and media are documents (decision D4): keep this volume in
       # the server backup; nothing in it is deleted by the assistant.
       - shift-data:/data
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    cpus: 1
+    stop_grace_period: 15s
+    networks:
+      shift-backend:
+        # Fixed so the host policy can name the assistant as the source.
+        ipv4_address: 10.254.177.4
     restart: unless-stopped
+
+networks:
+  shift-backend:
+    name: cvg-shift-backend
+    driver: bridge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: br-cvgshift
+    ipam:
+      config:
+        - subnet: 10.254.177.0/28
 
 volumes:
   shift-data:
