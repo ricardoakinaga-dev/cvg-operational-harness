@@ -1,0 +1,137 @@
+{
+  "task": "HISO005-P2-BUILD-0247",
+  "observedAt": "2026-10-20T23:39:47.051913+00:00",
+  "review": "review-r1/review.json",
+  "verdict": "APPROVE",
+  "required": 0,
+  "decision": "sem segunda rodada: a R1 aprovou sem obrigatórios e nenhum P3 pede código no engine; o P3-04 (único com needsCode) foi tratado só na evidência para não mudar bytes depois da aprovação. Os bytes congelados r1b são os do commit.",
+  "items": [
+    {
+      "id": "R1-P3-01",
+      "treatment": "EVIDÊNCIA",
+      "codeChanged": false,
+      "record": "finding-annexb-block-function.json",
+      "result": "confirmado no engine: AnnexB-block-export, AnnexB-if-export e AnnexB-top-call dão PROVEN na v6, na v7r1b e na referência t3 (iguais); em runtime (Node 22, em memória) a função exportada é a interna. Prova falsa pré-existente, fora do delta da SPEC0247; o controle strict dá PROVEN correto. Levado ao lead como achado de recon antes da SPEC0246."
+    },
+    {
+      "id": "R1-P3-02",
+      "treatment": "EVIDÊNCIA",
+      "codeChanged": false,
+      "record": "red-0247-r1b-on-mc1-r1b-rerun.json",
+      "result": "mc1-r1b deu 19 falhas (as 2 a mais com UNKNOWN_INVALID_WORKER_RESULT) quando rodou junto com o focal r1b, com load até ~16; repetido sozinho (load ~9): 17 falhas, mesmo conjunto do mc1-r1 (True). Mutante morto nas duas. O certify roda sozinho.",
+      "flakeTests": [
+        {
+          "title": "SPEC0247 catalog — vN against the base, fixture by fixture P-dead-function",
+          "firstMessage": "AssertionError: P-dead-function: expected [ Array(1) ] to deeply equal [ Array(1) ]\n    at /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/red-red-0247-r1b-on-mc1-r1b/tests/b6-0247-cjs-expo"
+        },
+        {
+          "title": "SPEC0247 §3.6 rule 2 — new tuples by cause every new tuple is a root of the closed list or code that the C0 U, the join or the opaque object reach",
+          "firstMessage": "AssertionError: P-dead-function [\"UNKNOWN_INVALID_WORKER_RESULT\",\"\",\"\"]: expected undefined to be true // Object.is equality\n    at /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/red-red-0"
+        }
+      ]
+    },
+    {
+      "id": "R1-P3-03",
+      "treatment": "EVIDÊNCIA",
+      "codeChanged": false,
+      "record": "fixture-table.json#touchedCriterion, conservation-r1.json#touchedCriterion",
+      "result": "critério declarado: C2 marca junção que mudou o valor em algum ponto, superconjunto da definição da §3.6; só alarga tocados e afetados (conservador). Regras 1–4 seguem ok nos 76 fixtures; na raiz real nenhum módulo tem junção."
+    },
+    {
+      "id": "R1-P3-04",
+      "treatment": "EVIDÊNCIA (sem mudar o teste depois da APPROVE)",
+      "codeChanged": false,
+      "record": "fixtures-0247-extra.json, probe-extra.json",
+      "result": {
+        "a": "REQUIRE-resolve-called: v7 sem UNKNOWN_CJS_EXPORTS (tuplas iguais à v6: UNKNOWN_PROPERTY e UNKNOWN_CALL, porque a leitura de require.resolve já é recusada); REQUIRE-resolve-not-called: v7 acrescenta LOADER_REFERENCE. A exceção só tira um U; o mutante que a removesse seria só mais conservador. PROVEN não é possível nesse fixture em nenhuma versão.",
+        "b": "ESM-undecided-if: PROVEN e sem tupla na v6, na v7 e na referência; a guarda join só em CJS é equivalente (em ESM o valor CJS fica VOID e a união de VOID com VOID é VOID), como o crítico notou.",
+        "c": "as classes de violação perdida do MC05 são documentais (declaredByHand em test-generation.json); a verdade em runtime de cada classe está no catálogo da SPEC (§1.2) e na R2 dela (T2, T2b)."
+      },
+      "probe": {
+        "REQUIRE-resolve-called": {
+          "v6": [
+            [
+              "UNKNOWN_CALL",
+              "m.js",
+              ""
+            ],
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ],
+          "v7r1b": [
+            [
+              "UNKNOWN_CALL",
+              "m.js",
+              ""
+            ],
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ],
+          "v6t3ref": [
+            [
+              "UNKNOWN_CALL",
+              "m.js",
+              ""
+            ],
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ]
+        },
+        "REQUIRE-resolve-not-called": {
+          "v6": [
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ],
+          "v7r1b": [
+            [
+              "UNKNOWN_CJS_EXPORTS",
+              "m.js",
+              "LOADER_REFERENCE"
+            ],
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ],
+          "v6t3ref": [
+            [
+              "UNKNOWN_CJS_EXPORTS",
+              "m.js",
+              "LOADER_REFERENCE"
+            ],
+            [
+              "UNKNOWN_PROPERTY",
+              "m.js",
+              ""
+            ]
+          ]
+        },
+        "ESM-undecided-if": {
+          "v6": [],
+          "v7r1b": [],
+          "v6t3ref": []
+        }
+      }
+    },
+    {
+      "id": "R1-P3-05",
+      "treatment": "REGRA DE PROMOÇÃO",
+      "codeChanged": false,
+      "record": "promotion-<sha12>.json#applyRule",
+      "result": "hoje nem main (False) nem origin/main (False) contêm 1d40fe51 (main local 3704e3f853e4; origin/main 6c9fc6517f27). O patch de promoção é sobre 1d40fe51 e só se aplica depois que o BUILD0245 entrar, conferindo as pré-imagens; se a 0245 não entrar antes, vale a alternativa da §3.7 (semantic-kernel-v6-cjs-export-value, com a 0245 migrada para semantic-kernel-v7-tsx-parse), e a promoção volta ao lead."
+    }
+  ]
+}

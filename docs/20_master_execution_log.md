@@ -1,3 +1,14 @@
+# HISO005-P2-BUILD-0247 — valor CJS no kernel B6 — 20–21/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- Delta: alças do wrapper CJS com raiz `UNKNOWN_CJS_EXPORTS` (C0), `exports` inicial opaco por módulo (C1), junção de ramos de `if` indecidido só em CJS (C2) e `checkExport` sobre o valor rastreado (C3). Versão `semantic-kernel-v7-cjs-export-value`; literal migrado em 6 testes B6.
+- Testes: novo `tests/b6-0247-cjs-export-value.test.js` 98/98 (75/98 falham na v6); mutantes C0, C0 só raiz, C1, C1 sem silêncio, C2 e C3 mortos; focal B6 988/988, nativo 79/79; consumidor fresco PASS. Depois do porte para a `main` `6ff1a648`: focais 0244/0245/0247 166/166.
+- Fixtures (76): 18 PROVEN falsos fechados, 11 PROVEN mantidos, 9 PROVEN corretos perdidos (custo), 5 violações somem (3 falsas, 2 verdadeiras), nenhum PROVEN novo; igual à variante t3 da SPEC.
+- Raiz real `228e7918`: 11.723 → 11.723, 10.833 tuplas iguais, payload igual fora a telemetria e a versão; contextos 229/256; worker ~115 s de 300 s.
+- Crítica R1 (crítico novo, não-fork): APPROVE, sem obrigatórios.
+- certify local na base `1d40fe51`: r1 14/16 e r2 13/16, NO_GO. Security: vite 8.2.2 do lock da base (corrigido pelo PR #11). Unit e coverage: timeouts sob carga, em testes que levam 3–4,5 s nos outros runs; nenhum FAIL do delta. [Análise](04_audit/evidence/HISO005-P2-BUILD-0247-20261020/certify-r2-analysis.json).
+- Achado novo fora do delta: Annex B.3.3 em CJS sloppy dá PROVEN falso (v6 = v7). [Achado](04_audit/evidence/HISO005-P2-BUILD-0247-20261020/finding-annexb-block-function.json).
+- Recursos: PG próprio removido, portas 56263/3449/4449 livres, runtime liberado; a candidata fica como âncora.
+
 # CONT-20261018-D9EF — estado em 20/10/2026, segunda atualização (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

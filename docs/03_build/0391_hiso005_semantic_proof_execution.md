@@ -2,6 +2,14 @@
 
 Estado corrente: BUILD0237 concluído localmente na fonte `84d8d4b4`, sete deltas próprios integrados. Revisão final APPROVE/zero obrigatórios,398 focais,16 gates/38 hashes atuais e5.211 unit/302 PG/12 E2E/zero skips.14 aceites PASS e consumidor fresco207 imports/76 exports/oito pacotes/zero rede. [Resultado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/REPORT.md), [estado](../04_audit/evidence/HISO005-P2-BUILD-0237-20261018/state.json). Root77 protegidos/índice/HEAD preservados,PG próprio removido/portas livres. B6 permaneceINCOMPLETE1609=537+1072/zero provas; todas 1721 ocorrências históricas também ficam registradas, sem crédito de resolução. Não repetir aprovações 0236/0237 nem reiniciar jobs encerrados.
 
+## Ação atual do pai — 21/10/2026 (CONT-20261018-D9EF)
+
+O BUILD0245 entrou na `main` pelo PR #10. O [BUILD0247](../02_spec/0247_b6_cjs_export_soundness.md) fechou a falha de soundness do valor CJS: na raiz real a B6 fica igual (11.723 diagnósticos, zero provas, zero violações, `INCOMPLETE`), e nos fixtures fecham 18 provas falsas. [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/REPORT.txt).
+
+O BUILD achou outra prova falsa, pré-existente: função declarada em bloco em CJS sloppy (Annex B.3.3). O recon dela (`HISO005-P2-ANNEXB-RECON`, [backlog 0370](0370_harness_product_isolation_backlog.md)) vem antes da SPEC0246, que segue adiada pelo usuário.
+
+`active_action_id: HISO005-P2-ANNEXB-RECON`.
+
 ## Ação atual do pai — 20/10/2026, segunda atualização (CONT-20261018-D9EF)
 
 O [BUILD0245](../02_spec/0245_b6_tsx_parse.md) passou a parsear `.tsx` como TSX e a recusar o JSX no domínio. A B6 caiu de 12.283 para 11.723 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0245-20261020/REPORT.txt).
