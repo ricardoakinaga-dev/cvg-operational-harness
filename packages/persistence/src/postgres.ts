@@ -39,10 +39,12 @@ import {
   type PostgresAuditContext
 } from './postgres-audit.ts'
 import {
+  ApprovalStatusSchema,
   createDomainId,
   DomainError,
   IdempotencyKeySchema,
   sanitizeAuditEvidencePayload,
+  TaskStatusSchema,
   type Channel,
   type TaskPriority,
   type TaskStatus
@@ -62,6 +64,19 @@ import {
 } from '@cvg/platform'
 import type { QueryResult, QueryResultRow } from 'pg'
 import { summarizeAuditEvents } from './repositories/audit-repository.ts'
+import {
+  assertStatusPageQuery,
+  assertTaskStatusTransition,
+  pageInfoFor,
+  taskStatusTransitionAudit,
+  type TaskListQuery,
+  type TaskPage,
+  type TaskStatusTransitionCommand
+} from './repositories/task-repository.ts'
+import type {
+  ApprovalListQuery,
+  ApprovalPage
+} from './repositories/approval-repository.ts'
 import {
   AuditEvidenceCheckpointIdSchema,
   type AuditEvidenceCheckpointCreateInput,
@@ -1044,6 +1059,155 @@ export class PostgresRuntimeRepository {
     return row ? this.mapTask(row) : null
   }
 
+  /**
+   * SPEC0250 §3.2 — one statement, so `total` and the page come from the same
+   * snapshot and `total` exists even for an empty page.
+   */
+  async listTaskPage(
+    query: TaskListQuery,
+    rawTenantId?: TenantId
+  ): Promise<TaskPage> {
+    const { limit, offset, statuses } = assertStatusPageQuery(
+      query,
+      TaskStatusSchema.options
+    )
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    if (this.tenantIsolation && !tenantId) {
+      throw new DomainError('invalid_action', 'Tenant scope is required')
+    }
+    const values: unknown[] = [limit, offset]
+    const conditions: string[] = []
+    if (tenantId) {
+      values.push(tenantId)
+      conditions.push(`conversations.tenant_id = $${values.length}`)
+    }
+    if (statuses) {
+      values.push([...statuses])
+      conditions.push(`tasks.status = ANY($${values.length}::text[])`)
+    }
+    const scopeJoin = tenantId
+      ? `INNER JOIN sessions ON sessions.id = tasks.session_id
+         INNER JOIN conversations ON conversations.id = sessions.conversation_id`
+      : ''
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const result = await this.client.query<{
+      total: number
+      id: string | null
+      session_id: string
+      title: string
+      description: string
+      priority: TaskPriority
+      source: string
+      status: TaskRecord['status']
+      idempotency_key: string
+      created_at: Date
+    }>(
+      `SELECT counted.total, page.id, page.session_id, page.title, page.description,
+              page.priority, page.source, page.status, page.idempotency_key, page.created_at
+       FROM (
+         SELECT COUNT(*)::integer AS total
+         FROM tasks
+         ${scopeJoin}
+         ${where}
+       ) counted
+       LEFT JOIN LATERAL (
+         SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority,
+                tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
+         FROM tasks
+         ${scopeJoin}
+         ${where}
+         ORDER BY tasks.created_at ASC, tasks.id ASC
+         LIMIT $1 OFFSET $2
+       ) page ON true
+       ORDER BY page.created_at ASC, page.id ASC`,
+      values
+    )
+    const items = result.rows
+      .filter((row) => row.id !== null)
+      .map((row) => this.mapTask({ ...row, id: row.id as string }))
+    const total = result.rows[0]?.total ?? 0
+    return {
+      items,
+      pageInfo: pageInfoFor({ limit, offset }, items.length, total)
+    }
+  }
+
+  /**
+   * SPEC0250 §3.1 — validation, CAS update and audit in one transaction on
+   * this client. The row lock serializes concurrent transitions, so the rule
+   * is checked against the committed status; the expected-status predicate
+   * stays as defense in depth. Any failure rolls both writes back.
+   */
+  async transitionTaskStatusWithAudit(
+    command: TaskStatusTransitionCommand,
+    rawTenantId?: TenantId
+  ): Promise<TaskRecord> {
+    const status = TaskStatusSchema.parse(command.status)
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    if (this.tenantIsolation && !tenantId) {
+      throw new DomainError('invalid_action', 'Tenant scope is required')
+    }
+    const scopeJoin = tenantId
+      ? `INNER JOIN sessions ON sessions.id = tasks.session_id
+         INNER JOIN conversations ON conversations.id = sessions.conversation_id`
+      : ''
+    const scopeFilter = tenantId ? ' AND conversations.tenant_id = $2' : ''
+    await this.client.query('BEGIN')
+    try {
+      const locked = await this.client.query<{
+        id: string
+        session_id: string
+        title: string
+        description: string
+        priority: TaskPriority
+        source: string
+        status: TaskRecord['status']
+        idempotency_key: string
+        created_at: Date
+      }>(
+        `SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
+         FROM tasks
+         ${scopeJoin}
+         WHERE tasks.id = $1
+         ${scopeFilter}
+         LIMIT 1
+         FOR UPDATE OF tasks`,
+        [command.taskId, ...(tenantId ? [tenantId] : [])]
+      )
+      const lockedRow = locked.rows[0]
+      if (!lockedRow) throw new DomainError('invalid_action', 'Task not found')
+      const current = this.mapTask(lockedRow)
+      assertTaskStatusTransition(current.status, status)
+      const updatedResult = await this.client.query<
+        (typeof locked.rows)[number]
+      >(
+        `UPDATE tasks
+         SET status = $2
+         WHERE id = $1 AND status = $3
+         RETURNING id, session_id, title, description, priority, source, status, idempotency_key, created_at`,
+        [current.id, status, current.status]
+      )
+      const updatedRow = updatedResult.rows[0]
+      if (!updatedRow) {
+        throw new DomainError('conflict', 'Task status changed concurrently')
+      }
+      const updated = this.mapTask(updatedRow)
+      await this.appendAudit(
+        taskStatusTransitionAudit(current, updated, command, tenantId)
+      )
+      await this.client.query('COMMIT')
+      return updated
+    } catch (error) {
+      try {
+        await this.client.query('ROLLBACK')
+      } catch {
+        // The connection is unusable; surface the original failure. The pool
+        // owner discards a client whose cleanup fails.
+      }
+      throw error
+    }
+  }
+
   private async assertSessionTenant(
     sessionId: string,
     tenantId: TenantId
@@ -1226,6 +1390,79 @@ export class PostgresRuntimeRepository {
       tenantId ? [tenantId] : undefined
     )
     return result.rows.map((row) => this.mapApproval(row))
+  }
+
+  /** SPEC0250 §3.2 — same single-snapshot page as `listTaskPage`. */
+  async listApprovalPage(
+    query: ApprovalListQuery,
+    rawTenantId?: TenantId
+  ): Promise<ApprovalPage> {
+    const { limit, offset, statuses } = assertStatusPageQuery(
+      query,
+      ApprovalStatusSchema.options
+    )
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    if (this.tenantIsolation && !tenantId) {
+      throw new DomainError('invalid_action', 'Tenant scope is required')
+    }
+    const values: unknown[] = [limit, offset]
+    const conditions: string[] = []
+    if (tenantId) {
+      values.push(tenantId)
+      conditions.push(`conversations.tenant_id = $${values.length}`)
+    }
+    if (statuses) {
+      values.push([...statuses])
+      conditions.push(
+        `approval_requests.status = ANY($${values.length}::text[])`
+      )
+    }
+    const scopeJoin = tenantId
+      ? `INNER JOIN sessions ON sessions.id = approval_requests.session_id
+         INNER JOIN conversations ON conversations.id = sessions.conversation_id`
+      : ''
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const result = await this.client.query<{
+      total: number
+      id: string | null
+      session_id: string
+      proposed_action: string
+      summary: string
+      risk_level: ApprovalRequestRecord['riskLevel']
+      status: ApprovalRequestRecord['status']
+      decided_by: string | null
+      decided_at: Date | null
+      created_at: Date
+    }>(
+      `SELECT counted.total, page.id, page.session_id, page.proposed_action, page.summary,
+              page.risk_level, page.status, page.decided_by, page.decided_at, page.created_at
+       FROM (
+         SELECT COUNT(*)::integer AS total
+         FROM approval_requests
+         ${scopeJoin}
+         ${where}
+       ) counted
+       LEFT JOIN LATERAL (
+         SELECT approval_requests.id, approval_requests.session_id, approval_requests.proposed_action,
+                approval_requests.summary, approval_requests.risk_level, approval_requests.status,
+                approval_requests.decided_by, approval_requests.decided_at, approval_requests.created_at
+         FROM approval_requests
+         ${scopeJoin}
+         ${where}
+         ORDER BY approval_requests.created_at ASC, approval_requests.id ASC
+         LIMIT $1 OFFSET $2
+       ) page ON true
+       ORDER BY page.created_at ASC, page.id ASC`,
+      values
+    )
+    const items = result.rows
+      .filter((row) => row.id !== null)
+      .map((row) => this.mapApproval({ ...row, id: row.id as string }))
+    const total = result.rows[0]?.total ?? 0
+    return {
+      items,
+      pageInfo: pageInfoFor({ limit, offset }, items.length, total)
+    }
   }
 
   private async markOutboxSessionHandoff(

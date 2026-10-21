@@ -131,7 +131,7 @@ describe('web console', () => {
     expect(await screen.findByText('Tarefa via API')).toBeTruthy()
     expect(await screen.findByText('integration_event')).toBeTruthy()
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      '/v1/approvals',
+      '/v1/approvals?status=pending&limit=25&offset=0',
       expect.objectContaining({
         headers: expect.objectContaining({
           'x-operator-id': 'operator.shift-a',
@@ -228,7 +228,7 @@ describe('web console', () => {
           ]
         })
       }
-      if (url === '/v1/approvals') {
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0') {
         return envelope(
           tenant === tenantA
             ? [
@@ -255,7 +255,7 @@ describe('web console', () => {
               : []
         )
       }
-      if (url === '/v1/tasks') {
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0') {
         return envelope(
           tenant === tenantA
             ? [
@@ -388,7 +388,7 @@ describe('web console', () => {
           resolveDecision = resolve
         })
       }
-      if (url === '/v1/approvals') {
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0') {
         return envelope(
           tenant === tenantB
             ? [
@@ -413,7 +413,8 @@ describe('web console', () => {
               ]
         )
       }
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       if (url === '/v1/audit/sessions/sess_tenant_a')
         return envelope({ events: [] })
       if (url === '/v1/audit/sessions/sess_tenant_b')
@@ -498,7 +499,7 @@ describe('web console', () => {
         })
       }
       if (url.includes('/timeline')) return envelope({ messages: [] })
-      if (url === '/v1/approvals') {
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0') {
         approvalReads += 1
         return envelope([
           {
@@ -516,7 +517,8 @@ describe('web console', () => {
           deferredDecision.resolve = resolve
         })
       }
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       if (url.includes('/v1/audit/sessions/')) return envelope({ events: [] })
       return Promise.reject(new Error(`Unexpected URL ${url}`))
     })
@@ -710,7 +712,8 @@ describe('web console', () => {
       }
       if (url === '/v1/conversations/conv_api_1/timeline')
         return envelope({ messages: [] })
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       if (url === '/v1/audit/sessions/sess_api_1') {
         return envelope({
           events: [
@@ -723,7 +726,10 @@ describe('web console', () => {
           ]
         })
       }
-      if (url === '/v1/approvals' && !init?.method) {
+      if (
+        url === '/v1/approvals?status=pending&limit=25&offset=0' &&
+        !init?.method
+      ) {
         return envelope([
           {
             id: 'approval_api_1',
@@ -850,7 +856,8 @@ describe('web console', () => {
       }
       if (url === '/v1/conversations/conv_api_1/timeline')
         return envelope({ messages: [] })
-      if (url === '/v1/approvals') return envelope([])
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0')
+        return envelope([])
       if (url === '/v1/audit/sessions/sess_api_1') {
         return envelope({
           events: [
@@ -863,7 +870,10 @@ describe('web console', () => {
           ]
         })
       }
-      if (url === '/v1/tasks' && !init?.method) {
+      if (
+        url === '/v1/tasks?status=open,in_progress&limit=25&offset=0' &&
+        !init?.method
+      ) {
         return envelope([
           {
             id: 'task_api_1',
@@ -945,10 +955,14 @@ describe('web console', () => {
       }
       if (url === '/v1/conversations/conv_api_1/timeline')
         return envelope({ messages: [] })
-      if (url === '/v1/approvals') return envelope([])
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0')
+        return envelope([])
       if (url === '/v1/audit/sessions/sess_api_1')
         return envelope({ events: [] })
-      if (url === '/v1/tasks' && !init?.method) {
+      if (
+        url === '/v1/tasks?status=open,in_progress&limit=25&offset=0' &&
+        !init?.method
+      ) {
         return envelope([
           {
             id: 'task_api_2',
@@ -1024,8 +1038,10 @@ describe('web console', () => {
         }
         if (url === '/v1/conversations/conv_api_1/timeline')
           return envelope({ messages: [] })
-        if (url === '/v1/approvals') return envelope([])
-        if (url === '/v1/tasks') return envelope([])
+        if (url === '/v1/approvals?status=pending&limit=25&offset=0')
+          return envelope([])
+        if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+          return envelope([])
         if (url === '/v1/audit/sessions/sess_api_1') {
           return envelope({
             events: [
@@ -1152,7 +1168,8 @@ describe('web console', () => {
       }
       if (url === '/v1/conversations/conv_api_1/timeline')
         return envelope({ messages: [] })
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       if (url === '/v1/audit/sessions/sess_api_1') {
         return envelope({
           events: [
@@ -1165,7 +1182,11 @@ describe('web console', () => {
           ]
         })
       }
-      if (url === '/v1/approvals' && !init?.method) return envelope([])
+      if (
+        url === '/v1/approvals?status=pending&limit=25&offset=0' &&
+        !init?.method
+      )
+        return envelope([])
       if (url === '/v1/approvals' && init?.method === 'POST') {
         expect(init).toMatchObject({
           method: 'POST',
@@ -1339,8 +1360,10 @@ describe('web console', () => {
         }
         if (url === '/v1/conversations/conv_api_1/timeline')
           return envelope({ messages: [] })
-        if (url === '/v1/approvals') return envelope([])
-        if (url === '/v1/tasks') return envelope([])
+        if (url === '/v1/approvals?status=pending&limit=25&offset=0')
+          return envelope([])
+        if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+          return envelope([])
         if (url === '/v1/audit/sessions/sess_api_1')
           return envelope({ events: [] })
         return Promise.reject(new Error(`Unexpected URL ${url}`))

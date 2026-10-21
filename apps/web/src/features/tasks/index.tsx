@@ -1,3 +1,5 @@
+import { PageControls, type PageControlsInfo } from '../page-controls.tsx'
+
 export interface TasksPanelProps {
   tasks: Array<{ id: string; title: string; priority: string; status: string }>
   error?: string | null
@@ -7,6 +9,9 @@ export interface TasksPanelProps {
   onStart?: (taskId: string) => void
   onComplete?: (taskId: string) => void
   onCancel?: (taskId: string) => void
+  pageInfo?: PageControlsInfo | null
+  onPreviousPage?: () => void
+  onNextPage?: () => void
 }
 
 export function TasksPanel({
@@ -17,13 +22,16 @@ export function TasksPanel({
   canUpdateTasks = false,
   onStart,
   onComplete,
-  onCancel
+  onCancel,
+  pageInfo = null,
+  onPreviousPage,
+  onNextPage
 }: TasksPanelProps) {
   return (
     <section className="panel" aria-labelledby="tasks-title">
       <header className="panelHeader">
         <h2 id="tasks-title">Tarefas</h2>
-        <span className="counter">{tasks.length}</span>
+        <span className="counter">{pageInfo?.total ?? tasks.length}</span>
       </header>
       <div className="list">
         {isLoading ? (
@@ -91,6 +99,16 @@ export function TasksPanel({
               )
             })
           : null}
+        {!error ? (
+          <PageControls
+            label="tarefas"
+            pageInfo={pageInfo}
+            itemCount={tasks.length}
+            disabled={isLoading}
+            {...(onPreviousPage ? { onPrevious: onPreviousPage } : {})}
+            {...(onNextPage ? { onNext: onNextPage } : {})}
+          />
+        ) : null}
       </div>
     </section>
   )

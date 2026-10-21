@@ -18,6 +18,7 @@ import {
   type AuditEvidenceReviewView,
   type AuditEventView,
   type ConversationView,
+  type ListPageInfo,
   type OperatorIdentity,
   type OperatorRole,
   type TaskStatus,
@@ -55,11 +56,23 @@ const failed = <T,>(data: T): PanelState<T> => ({
   isLoading: false
 })
 
+/** Store, rate limit, server or network trouble: retry, never re-authenticate. */
+function isSessionUnavailable(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    (error.status === 0 || error.status === 429 || error.status >= 500)
+  )
+}
+
 function canReviewAuditEvidence(role: OperatorRole): boolean {
   return role === 'Supervisor' || role === 'Admin'
 }
 
 const auditEvidenceLimit = 10
+/** SPEC0250 §3.6 — bounded queues: pending approvals and active tasks. */
+const queuePageSize = 25
+const approvalQueueStatuses = ['pending'] as const
+const activeTaskStatuses = ['open', 'in_progress'] as const
 const maxBrowserTimeoutMs = 2_147_483_647
 const defaultTrustedSessionBootstrap = createTrustedSessionBootstrap()
 const controlledTestProfile =
@@ -99,6 +112,10 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     loading([])
   )
   const [tasks, setTasks] = useState<PanelState<TaskView[]>>(loading([]))
+  const [approvalPageInfo, setApprovalPageInfo] = useState<ListPageInfo | null>(
+    null
+  )
+  const [taskPageInfo, setTaskPageInfo] = useState<ListPageInfo | null>(null)
   const [auditEvents, setAuditEvents] = useState<PanelState<AuditEventView[]>>(
     loading([])
   )
@@ -175,6 +192,14 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       } catch (error) {
         if (trustedBootstrapAttemptRef.current !== attempt) return
         setTrustedSession(null)
+        // SPEC0250 §3.5 (AUD0621 F12): a 401 here is "no session yet", not
+        // an expiry; an unavailable store or network keeps the cookie and
+        // offers a retry instead of asking for authentication.
+        if (isSessionUnavailable(error)) {
+          setSessionStatus('unavailable')
+          setSessionError('Sessão operacional indisponível. Tente novamente.')
+          return
+        }
         setSessionStatus('authentication_required')
         setSessionError(
           error instanceof ApiRequestError && error.status === 401
@@ -252,7 +277,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     if (!trustedMode) return
     if (
       sessionStatus === 'authentication_required' ||
-      sessionStatus === 'expired'
+      sessionStatus === 'expired' ||
+      sessionStatus === 'unavailable'
     ) {
       sessionActionRef.current?.focus()
     }
@@ -327,6 +353,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       setMessages(loaded([]))
       setApprovals(loaded([]))
       setTasks(loaded([]))
+      setApprovalPageInfo(null)
+      setTaskPageInfo(null)
       setAuditEvents(loaded([]))
       setAuditEvidence(loaded(null))
       setAuditEvidenceOffset(0)
@@ -348,6 +376,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     setMessages(loading([]))
     setApprovals(loading([]))
     setTasks(loading([]))
+    setApprovalPageInfo(null)
+    setTaskPageInfo(null)
     setAuditEvents(loading([]))
     setAuditEvidence(loaded(null))
     setAuditEvidenceOffset(0)
@@ -385,18 +415,30 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       })
 
     apiClient
-      .listApprovals(identity)
-      .then((data) => {
-        if (active && isCurrentIdentity(scope)) setApprovals(loaded(data))
+      .listApprovalPage(identity, {
+        statuses: approvalQueueStatuses,
+        limit: queuePageSize,
+        offset: 0
+      })
+      .then((page) => {
+        if (!active || !isCurrentIdentity(scope)) return
+        setApprovals(loaded(page.items))
+        setApprovalPageInfo(page.pageInfo)
       })
       .catch(() => {
         if (active && isCurrentIdentity(scope)) setApprovals(failed([]))
       })
 
     apiClient
-      .listTasks(identity)
-      .then((data) => {
-        if (active && isCurrentIdentity(scope)) setTasks(loaded(data))
+      .listTaskPage(identity, {
+        statuses: activeTaskStatuses,
+        limit: queuePageSize,
+        offset: 0
+      })
+      .then((page) => {
+        if (!active || !isCurrentIdentity(scope)) return
+        setTasks(loaded(page.items))
+        setTaskPageInfo(page.pageInfo)
       })
       .catch(() => {
         if (active && isCurrentIdentity(scope)) setTasks(failed([]))
@@ -564,12 +606,42 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     setAuditEvidenceCheckpointMessage(null)
   }
 
-  const refreshApprovals = async (scope = viewScopeToken) => {
+  const refreshApprovals = async (
+    scope = viewScopeToken,
+    offset = approvalPageInfo?.offset ?? 0
+  ) => {
     const identity = currentOperatorIdentity()
     if (!identity || !isCurrentViewScope(scope)) return
-    const data = await apiClient.listApprovals(identity)
+    let page = await apiClient.listApprovalPage(identity, {
+      statuses: approvalQueueStatuses,
+      limit: queuePageSize,
+      offset
+    })
+    if (page.items.length === 0 && offset > 0) {
+      page = await apiClient.listApprovalPage(identity, {
+        statuses: approvalQueueStatuses,
+        limit: queuePageSize,
+        offset: 0
+      })
+    }
     if (!isCurrentViewScope(scope)) return
-    setApprovals(loaded(data))
+    setApprovals(loaded(page.items))
+    setApprovalPageInfo(page.pageInfo)
+  }
+
+  const goToApprovalPage = (offset: number) => {
+    const scope = viewScopeToken
+    setApprovals(loading(approvals.data))
+    refreshApprovals(scope, Math.max(0, offset)).catch(() => {
+      if (isCurrentViewScope(scope)) setApprovals(failed(approvals.data))
+    })
+  }
+
+  const openApprovalCase = (sessionId: string) => {
+    const conversation = conversations.data.find(
+      (item) => item.openSessionId === sessionId
+    )
+    if (conversation) selectConversation(conversation)
   }
 
   const refreshAudit = async (scope = viewScopeToken) => {
@@ -724,12 +796,35 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     }
   }
 
-  const refreshTasks = async (scope = viewScopeToken) => {
+  const refreshTasks = async (
+    scope = viewScopeToken,
+    offset = taskPageInfo?.offset ?? 0
+  ) => {
     const identity = currentOperatorIdentity()
     if (!identity || !isCurrentViewScope(scope)) return
-    const data = await apiClient.listTasks(identity)
+    let page = await apiClient.listTaskPage(identity, {
+      statuses: activeTaskStatuses,
+      limit: queuePageSize,
+      offset
+    })
+    if (page.items.length === 0 && offset > 0) {
+      page = await apiClient.listTaskPage(identity, {
+        statuses: activeTaskStatuses,
+        limit: queuePageSize,
+        offset: 0
+      })
+    }
     if (!isCurrentViewScope(scope)) return
-    setTasks(loaded(data))
+    setTasks(loaded(page.items))
+    setTaskPageInfo(page.pageInfo)
+  }
+
+  const goToTaskPage = (offset: number) => {
+    const scope = viewScopeToken
+    setTasks(loading(tasks.data))
+    refreshTasks(scope, Math.max(0, offset)).catch(() => {
+      if (isCurrentViewScope(scope)) setTasks(failed(tasks.data))
+    })
   }
 
   const decideApproval = async (
@@ -823,7 +918,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     authenticated: simulationMode ? 'Simulação controlada' : 'Sessão confiável',
     authentication_required: 'Autenticação necessária',
     expired: 'Sessão expirada',
-    reauthenticating: 'Reautenticando…'
+    reauthenticating: 'Reautenticando…',
+    unavailable: 'Sessão indisponível'
   }
 
   return (
@@ -883,7 +979,9 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
                   ref={sessionActionRef}
                   onClick={() => void loadTrustedSession('reauthenticating')}
                 >
-                  Reautenticar
+                  {sessionStatus === 'unavailable'
+                    ? 'Tentar novamente'
+                    : 'Reautenticar'}
                 </button>
               )}
             </>
@@ -980,6 +1078,23 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         <ApprovalsPanel
           message={approvalMessage}
           approvals={approvals.data}
+          pageInfo={approvalPageInfo}
+          onPreviousPage={() =>
+            goToApprovalPage(
+              (approvalPageInfo?.offset ?? 0) -
+                (approvalPageInfo?.limit ?? queuePageSize)
+            )
+          }
+          onNextPage={() =>
+            goToApprovalPage(
+              (approvalPageInfo?.offset ?? 0) +
+                (approvalPageInfo?.limit ?? queuePageSize)
+            )
+          }
+          openableSessionIds={conversations.data.flatMap((conversation) =>
+            conversation.openSessionId ? [conversation.openSessionId] : []
+          )}
+          onOpenCase={openApprovalCase}
           actionId={approvalActionId}
           error={approvals.error}
           isLoading={approvals.isLoading}
@@ -1009,6 +1124,19 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         />
         <TasksPanel
           tasks={tasks.data}
+          pageInfo={taskPageInfo}
+          onPreviousPage={() =>
+            goToTaskPage(
+              (taskPageInfo?.offset ?? 0) -
+                (taskPageInfo?.limit ?? queuePageSize)
+            )
+          }
+          onNextPage={() =>
+            goToTaskPage(
+              (taskPageInfo?.offset ?? 0) +
+                (taskPageInfo?.limit ?? queuePageSize)
+            )
+          }
           actionId={taskActionId}
           error={tasks.error}
           isLoading={tasks.isLoading}

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks'
 import Fastify from 'fastify'
 import {
+  ApprovalStatusSchema,
   auditEvidenceGovernance,
   createCorrelationId,
   DomainError,
@@ -18,8 +19,7 @@ import {
   type Channel,
   type IdentityMode,
   type OperatorIdentity,
-  type OperatorIdentityResolver,
-  type TaskStatus
+  type OperatorIdentityResolver
 } from '@cvg/shared'
 import {
   AgentConfigSchema,
@@ -114,7 +114,15 @@ import {
   runPostgresMigrations,
   guardPostgresPoolErrors,
   TaskRepository,
-  type PostgresQueryable
+  type ApprovalListQuery,
+  type ApprovalPage,
+  type PageInfo,
+  type PostgresQueryable,
+  type TaskListQuery,
+  type TaskPage,
+  type TaskRecord,
+  type TaskStatusTransitionCommand,
+  withTenantContext
 } from '@cvg/persistence'
 import {
   createInternalTask,
@@ -1758,7 +1766,13 @@ export function buildServer(options: BuildServerOptions = {}) {
     try {
       const identity = requireIdentity(request.headers, 'task:view')
       const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      return ok(await tasks.list(tenantId), correlationId)
+      // SPEC0250 §3.4 (AUD0621 F23): bounded, validated page; `data` stays
+      // an array and the page metadata travels in `meta.pageInfo`.
+      const query = parseStatusPageQuery(
+        request.query,
+        TaskStatusSchema.options
+      )
+      return okPage(await tasks.listPage(tenantId, query), correlationId)
     } catch (error) {
       const safeError = toSafeError(error)
       reply.code(statusCodeForError(safeError.code))
@@ -1777,34 +1791,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!status.success) {
         throw new DomainError('validation_failed', 'Task status is required')
       }
-      const existing = await tasks.findById(params.taskId, tenantId)
-      if (!existing) {
-        throw new DomainError('invalid_action', 'Task not found')
-      }
-      assertTaskTransition(existing.status, status.data)
-      const updated = await tasks.updateStatus(
-        params.taskId,
-        status.data,
-        tenantId
-      )
-      if (!updated) {
-        throw new DomainError('invalid_action', 'Task not found')
-      }
-      await audit.append(
+      // SPEC0250 §3.1 (AUD0621 F15/F16): one atomic port call validates the
+      // transition against the committed status, writes it with a CAS and
+      // records the audit event in the same unit; a failure changes nothing.
+      const updated = await tasks.transitionStatusWithAudit(
         {
-          type: 'integration_event',
+          taskId: params.taskId,
+          status: status.data,
           actorType: identity.role,
           actorId: identity.operatorId,
-          correlationId,
-          policyVersion: 'api-runtime-v1',
-          payload: {
-            sessionId: updated.sessionId,
-            taskId: updated.id,
-            fromStatus: existing.status,
-            toStatus: updated.status,
-            effect: 'internal_task_state_only',
-            tenantId
-          }
+          correlationId
         },
         tenantId
       )
@@ -1942,7 +1938,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     try {
       const identity = requireIdentity(request.headers, 'approval:view')
       const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      return ok(await approvals.list(tenantId), correlationId)
+      // SPEC0250 §3.4 (AUD0621 F23): bounded, validated, filterable queue.
+      const query = parseStatusPageQuery(
+        request.query,
+        ApprovalStatusSchema.options
+      )
+      return okPage(await approvals.listPage(tenantId, query), correlationId)
     } catch (error) {
       const safeError = toSafeError(error)
       reply.code(statusCodeForError(safeError.code))
@@ -4684,9 +4685,14 @@ interface RuntimePersistence {
     findById:
       | TaskRepository['findById']
       | PostgresRuntimeRepository['findTaskById']
-    updateStatus:
-      | TaskRepository['updateStatus']
-      | PostgresRuntimeRepository['updateTaskStatus']
+    listPage: (
+      tenantId: TenantId | undefined,
+      query: TaskListQuery
+    ) => TaskPage | Promise<TaskPage>
+    transitionStatusWithAudit: (
+      command: TaskStatusTransitionCommand,
+      tenantId?: TenantId
+    ) => TaskRecord | Promise<TaskRecord>
   }
   approvals: {
     save: ApprovalRepository['save'] | PostgresRuntimeRepository['saveApproval']
@@ -4699,6 +4705,10 @@ interface RuntimePersistence {
     list:
       | ApprovalRepository['list']
       | PostgresRuntimeRepository['listApprovals']
+    listPage: (
+      tenantId: TenantId | undefined,
+      query: ApprovalListQuery
+    ) => ApprovalPage | Promise<ApprovalPage>
   }
   audit: {
     append: (
@@ -4767,23 +4777,73 @@ function sanitizeAuditEvidencePage(page: {
   }
 }
 
-function assertTaskTransition(
-  fromStatus: TaskStatus,
-  toStatus: TaskStatus
-): void {
-  if (fromStatus === toStatus) return
-  const allowed: Record<TaskStatus, TaskStatus[]> = {
-    open: ['in_progress', 'done', 'canceled'],
-    in_progress: ['done', 'canceled'],
-    done: [],
-    canceled: []
-  }
-  if (!allowed[fromStatus].includes(toStatus)) {
+/**
+ * SPEC0250 §3.4 — `limit`/`offset` reuse the conversation bounds; `status`
+ * is one comma-separated list of distinct values of the resource enum.
+ * Repeated parameters arrive as arrays and are rejected.
+ */
+function parseStatusPageQuery<S extends string>(
+  query: unknown,
+  allowed: readonly S[]
+): { limit: number; offset: number; statuses?: S[] } {
+  const pagination = parsePagination(query)
+  if (!pagination) {
     throw new DomainError(
-      'invalid_action',
-      'Task status transition is not allowed'
+      'invalid_pagination',
+      `limit must be between 1 and 100 and ${PAGINATION_OFFSET_ERROR_MESSAGE}`
     )
   }
+  const raw = (query as { status?: unknown } | undefined)?.status
+  if (raw === undefined) return pagination
+  const values = typeof raw === 'string' ? raw.split(',') : null
+  if (
+    !values ||
+    new Set(values).size !== values.length ||
+    values.some((value) => !(allowed as readonly string[]).includes(value))
+  ) {
+    throw new DomainError(
+      'validation_failed',
+      `status must be a comma-separated list of distinct values among ${allowed.join(', ')}`
+    )
+  }
+  return { ...pagination, statuses: values as S[] }
+}
+
+function okPage<T>(
+  page: { items: T[]; pageInfo: PageInfo },
+  correlationId: ReturnType<typeof createCorrelationId>
+) {
+  const envelope = ok(page.items, correlationId)
+  return { ...envelope, meta: { ...envelope.meta, pageInfo: page.pageInfo } }
+}
+
+/**
+ * SPEC0250 §3.3 — the paged reads and the atomic task transition are not on
+ * `TenantScopedPostgresRuntimeRepository`; in pool mode this applies the same
+ * tenant context per operation that its `run` does. The single-client mode is
+ * not production and shares one connection across requests (SPEC0250 §8).
+ */
+function runTaskApprovalOperation<T>(
+  config: PostgresPersistenceConfig,
+  direct: PostgresRuntimeRepository | null,
+  rawTenantId: TenantId | undefined,
+  operation: (repository: PostgresRuntimeRepository) => Promise<T>
+): Promise<T> {
+  if (config.kind === 'postgres' && direct) return operation(direct)
+  if (config.kind !== 'postgres-pool') {
+    return Promise.reject(
+      new DomainError('invalid_action', 'PostgreSQL persistence is required')
+    )
+  }
+  const tenantId = TenantIdSchema.safeParse(rawTenantId)
+  if (!tenantId.success) {
+    return Promise.reject(
+      new DomainError('invalid_action', 'Tenant scope is required')
+    )
+  }
+  return withTenantContext(config.pool, tenantId.data, (client) =>
+    operation(new PostgresRuntimeRepository(client, { tenantIsolation: true }))
+  )
 }
 
 function parsePagination(
@@ -4897,6 +4957,8 @@ function createPersistence(
       journeyRepository !== undefined
         ? journeyRepository
         : createPostgresJourneyRepository(config)
+    const direct =
+      postgres instanceof PostgresRuntimeRepository ? postgres : null
     return {
       sessionVersionPinning: config.kind === 'postgres-pool',
       outbox: postgres as unknown as DurableOutboxAdapter,
@@ -4909,15 +4971,25 @@ function createPersistence(
         ) => postgres.createTask(input, tenantId),
         list: (tenantId) => postgres.listTasks(tenantId),
         findById: (id, tenantId) => postgres.findTaskById(id, tenantId),
-        updateStatus: (id, status, tenantId) =>
-          postgres.updateTaskStatus(id, status, tenantId)
+        listPage: (tenantId, query) =>
+          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
+            repository.listTaskPage(query, tenantId)
+          ),
+        transitionStatusWithAudit: (command, tenantId) =>
+          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
+            repository.transitionTaskStatusWithAudit(command, tenantId)
+          )
       },
       approvals: {
         decideWithAudit: (input, tenantId) =>
           postgres.decideApprovalWithAudit(input, tenantId),
         save: (request, tenantId) => postgres.saveApproval(request, tenantId),
         findById: (id, tenantId) => postgres.findApprovalById(id, tenantId),
-        list: (tenantId) => postgres.listApprovals(tenantId)
+        list: (tenantId) => postgres.listApprovals(tenantId),
+        listPage: (tenantId, query) =>
+          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
+            repository.listApprovalPage(query, tenantId)
+          )
       },
       audit: {
         append: (input, tenantId) =>

@@ -247,6 +247,80 @@ test.describe('REM21-014 trusted browser qualification', () => {
     expect(await page.getByLabel('ID do operador').count()).toBe(0)
   })
 
+  test('cookie-only reload restores the trusted session without bootstrap re-injection', async ({
+    browser
+  }) => {
+    // SPEC0250 P9 / SPEC0144 invariant 3 (AUD0621 F12): the token is used
+    // once, by the first page only. Later pages of the same browser context
+    // carry no init script, so only the session cookie can restore identity.
+    const context = await browser.newContext()
+    const operator = identity('operator.rem21.014.reload', 'Operator', tenantA)
+    try {
+      const first = await context.newPage()
+      await openTrustedConsole(first, operator)
+      await first.close()
+
+      const page = await context.newPage()
+      const requests = trackRequests(page)
+      await page.goto('/', { waitUntil: 'networkidle' })
+      expect(
+        await page.evaluate(
+          () =>
+            (window as BootstrapWindow).__CVG_OPERATOR_BOOTSTRAP_TOKEN__ ?? null
+        )
+      ).toBeNull()
+      // The console keeps nothing in web storage; the bootstrap token never
+      // lands there (SPEC0144 invariant 4).
+      expect(
+        await page.evaluate(() => [localStorage.length, sessionStorage.length])
+      ).toEqual([0, 0])
+      await expect(
+        page.getByText('Sessão confiável', { exact: true })
+      ).toBeVisible()
+      await expect(
+        page.getByText(operator.operatorId, { exact: true })
+      ).toBeVisible()
+
+      await page.reload({ waitUntil: 'networkidle' })
+      await expect(
+        page.getByText('Sessão confiável', { exact: true })
+      ).toBeVisible()
+      await expect(
+        page.getByText(operator.operatorId, { exact: true })
+      ).toBeVisible()
+      expect(
+        requests.filter((request) => request.path === '/v1/session').length
+      ).toBeGreaterThanOrEqual(2)
+      expect(
+        requests.filter((request) => request.headers['x-cvg-operator-token'])
+      ).toEqual([])
+    } finally {
+      await context.close()
+    }
+
+    const anonymous = await browser.newContext()
+    try {
+      const page = await anonymous.newPage()
+      await page.goto('/', { waitUntil: 'networkidle' })
+      await expect(
+        page
+          .getByLabel('Identidade operacional')
+          .getByText('Autenticação necessária', { exact: true })
+      ).toBeVisible()
+      await expect(
+        page.getByText('Uma sessão confiável é necessária para continuar.')
+      ).toBeVisible()
+      expect(
+        await page
+          .getByText('A sessão operacional expirou. Reautentique-se.')
+          .count()
+      ).toBe(0)
+      expect(await page.getByLabel('ID do operador').count()).toBe(0)
+    } finally {
+      await anonymous.close()
+    }
+  })
+
   test('trusted role authorization keeps forbidden controls disabled', async ({
     browser
   }) => {
@@ -265,35 +339,41 @@ test.describe('REM21-014 trusted browser qualification', () => {
     for (const expected of cases) {
       const context = await browser.newContext()
       const page = await context.newPage()
-      await page.route('**/v1/approvals', (route) =>
-        route.fulfill({
-          contentType: 'application/json',
-          body: JSON.stringify(
-            envelope([
-              {
-                id: 'approval_rem21_014_synthetic',
-                proposedAction: 'acao-sintetica',
-                riskLevel: 'medium',
-                status: 'pending'
-              }
-            ])
-          )
-        })
+      // SPEC0250 (AUD0621 F23): the console asks for a bounded, filtered
+      // page, so the mock matches the path with any query string.
+      await page.route(
+        (url) => url.pathname === '/v1/approvals',
+        (route) =>
+          route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify(
+              envelope([
+                {
+                  id: 'approval_rem21_014_synthetic',
+                  proposedAction: 'acao-sintetica',
+                  riskLevel: 'medium',
+                  status: 'pending'
+                }
+              ])
+            )
+          })
       )
-      await page.route('**/v1/tasks', (route) =>
-        route.fulfill({
-          contentType: 'application/json',
-          body: JSON.stringify(
-            envelope([
-              {
-                id: 'task_rem21_014_synthetic',
-                title: 'tarefa-sintetica',
-                priority: 'normal',
-                status: 'open'
-              }
-            ])
-          )
-        })
+      await page.route(
+        (url) => url.pathname === '/v1/tasks',
+        (route) =>
+          route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify(
+              envelope([
+                {
+                  id: 'task_rem21_014_synthetic',
+                  title: 'tarefa-sintetica',
+                  priority: 'normal',
+                  status: 'open'
+                }
+              ])
+            )
+          })
       )
       const operator = identity(
         `operator.rem21.014.${expected.role.toLowerCase()}`,

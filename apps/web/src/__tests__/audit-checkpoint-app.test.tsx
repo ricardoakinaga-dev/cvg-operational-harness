@@ -36,8 +36,10 @@ describe('App audit evidence checkpoint flow', () => {
       if (url === '/v1/conversations/conv_checkpoint_1/timeline') {
         return envelope({ messages: [] })
       }
-      if (url === '/v1/approvals') return envelope([])
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0')
+        return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       if (
         url === '/v1/audit/sessions/sess_00000000-0000-4000-8000-000000000201'
       ) {

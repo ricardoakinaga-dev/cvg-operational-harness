@@ -33,7 +33,7 @@ describe('attendance approval conflict recovery', () => {
           items: [],
           pageInfo: { limit: 25, offset: 0, total: 0, hasNextPage: false }
         })
-      if (url === '/v1/approvals') {
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0') {
         reads++
         return envelope([
           {
@@ -61,7 +61,8 @@ describe('attendance approval conflict recovery', () => {
           })
         } as Response)
       }
-      if (url === '/v1/tasks') return envelope([])
+      if (url === '/v1/tasks?status=open,in_progress&limit=25&offset=0')
+        return envelope([])
       return envelope([])
     })
     render(<App />)
@@ -96,7 +97,7 @@ describe('attendance approval conflict recovery', () => {
           items: [],
           pageInfo: { limit: 25, offset: 0, total: 0, hasNextPage: false }
         })
-      if (url === '/v1/approvals')
+      if (url === '/v1/approvals?status=pending&limit=25&offset=0')
         return envelope([
           {
             id: 'approval_fixture',
