@@ -273,6 +273,46 @@ describe('neutral durable execution spine contract', () => {
     expect(recovered[0]?.leaseOwner).toBeNull()
   })
 
+  it('terminates instead of requeueing when the lease expires on the last allowed attempt', async () => {
+    let now = new Date('2026-09-13T12:00:00.000Z')
+    const store = new InMemoryOperationalExecutionStore({
+      clock: () => now,
+      leaseMs: 100,
+      maxAttempts: 2
+    })
+    const submitted = await store.submit(submission(), now)
+
+    const first = await store.claimNext(tenantA, 'worker-a', now, 100)
+    expect(first?.record.attempt).toBe(1)
+    now = new Date('2026-09-13T12:00:01.000Z')
+    const requeued = await store.recoverExpired(tenantA, now)
+    expect(requeued.map((record) => record.state)).toEqual(['QUEUED'])
+
+    const second = await store.claimNext(tenantA, 'worker-a', now, 100)
+    expect(second?.record.attempt).toBe(2)
+    now = new Date('2026-09-13T12:00:02.000Z')
+    await expect(store.recoverExpired(tenantA, now)).resolves.toEqual([])
+
+    const record = await store.get(tenantA, submitted.record.id)
+    expect(record).toMatchObject({
+      state: 'FAILED_TERMINAL',
+      leaseOwner: null,
+      leaseUntil: null,
+      completedAt: now.toISOString(),
+      failure: { code: 'retry_exhausted' }
+    })
+    const events = await store.listEvents(tenantA, submitted.record.id)
+    expect(events.at(-1)).toMatchObject({
+      type: 'FAILED_TERMINAL',
+      reason: 'retry_exhausted',
+      workerId: null,
+      attempt: 2
+    })
+    await expect(
+      store.claimNext(tenantA, 'worker-b', now, 100)
+    ).resolves.toBeNull()
+  })
+
   it('calls the public harness factory from the worker and persists success', async () => {
     const store = new InMemoryOperationalExecutionStore()
     const submitted = await store.submit(submission())
