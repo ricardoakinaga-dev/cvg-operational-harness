@@ -283,6 +283,14 @@ function isPool(
   return typeof (connection as PostgresPoolLike).connect === 'function'
 }
 
+/** Caller-owned step executed inside the submission transaction. */
+export type OperationalExecutionSubmitHook = (
+  client: PostgresQueryable,
+  record: ExecutionRecord,
+  created: boolean,
+  now: Date
+) => Promise<void>
+
 /** PostgreSQL authority for the neutral AAA-21 execution spine. */
 export class PostgresOperationalExecutionStore implements OperationalExecutionStore {
   private readonly leaseMs: number
@@ -312,6 +320,28 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     input: ExecutionSubmission,
     rawNow?: Date
   ): Promise<SubmitResult> {
+    return this.submitInternal(input, rawNow)
+  }
+
+  /**
+   * SPEC0176: the same submission unit plus a caller-owned step (the case
+   * lineage) that commits or rolls back with the execution, its events and
+   * its queue row. The hook also runs for an idempotent duplicate so it can
+   * verify that the persisted lineage did not change.
+   */
+  public submitWith(
+    input: ExecutionSubmission,
+    hook: OperationalExecutionSubmitHook,
+    rawNow?: Date
+  ): Promise<SubmitResult> {
+    return this.submitInternal(input, rawNow, hook)
+  }
+
+  private submitInternal(
+    input: ExecutionSubmission,
+    rawNow?: Date,
+    hook?: OperationalExecutionSubmitHook
+  ): Promise<SubmitResult> {
     const tenant = TenantIdSchema.parse(input.tenantId)
     const normalized = parseExecutionSubmission(input, tenant)
     const now = rawNow ?? this.clock()
@@ -334,6 +364,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
               'Idempotency key is already bound to a different request'
             )
           }
+          await hook?.(client, record, false, now)
           return { record, created: false }
         }
 
@@ -376,6 +407,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
               'Idempotency key is already bound to a different request'
             )
           }
+          await hook?.(client, record, false, now)
           return { record, created: false }
         }
 
@@ -425,6 +457,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
           undefined,
           now
         )
+        await hook?.(client, record, true, now)
         return { record, created: true }
       })
     )

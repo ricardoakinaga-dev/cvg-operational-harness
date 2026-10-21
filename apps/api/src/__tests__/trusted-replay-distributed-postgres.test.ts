@@ -72,7 +72,24 @@ function trustedApp(
     }),
     operatorSessionStore: createInMemoryOperatorSessionStore(),
     persistence: { kind: 'postgres', client: pool as never },
-    tokenReplayStore: store
+    tokenReplayStore: store,
+    // SPEC0176: trusted case reads require the principal authority.
+    casePrincipalAuthority: { authorityVersion: 'synthetic-authority-v1' }
+  })
+}
+
+async function provisionReplayPrincipal(
+  app: ReturnType<typeof trustedApp>
+): Promise<void> {
+  await app.caseAuthority.applyVerifiedPrincipalState({
+    tenantId: tenantA,
+    operatorId: identity.operatorId,
+    role: identity.role,
+    active: true,
+    expectedRevision: 0,
+    authorityVersion: 'synthetic-authority-v1',
+    proofRef: 'synthetic-proof:operator.replay',
+    identitySource: 'synthetic_fixture'
   })
 }
 
@@ -89,6 +106,7 @@ describe('distributed operator token replay (AUD19-006)', () => {
           setup.pool,
           new PostgresWebhookReplayStore(setup.pool as never)
         )
+        await provisionReplayPrincipal(appA)
         const first = await appA.inject({
           method: 'GET',
           url: '/v1/conversations?limit=1',

@@ -19,6 +19,10 @@ import type { InMemoryDatabase } from '../db.ts'
 import { OutboxRepository } from '../outbox.ts'
 import type { OutboxEnqueueInput } from '../outbox.ts'
 import { createSenderRefFingerprint } from '../sender-fingerprint.ts'
+import {
+  registerMemoryCoreConversationRoot,
+  snapshotMemoryCaseRoots
+} from '../case-authority-memory-state.ts'
 import type {
   ConversationListItem,
   ConversationPage,
@@ -47,6 +51,7 @@ export class ConversationRepository {
       outboxEffects: this.db.state.outboxEffects,
       auditEvents: this.db.state.auditEvents
     }
+    const restoreCaseRoots = snapshotMemoryCaseRoots(this.db)
     try {
       const created = this.createWithSession(input)
       const outbox = new OutboxRepository(this.db).enqueue({
@@ -75,6 +80,7 @@ export class ConversationRepository {
       this.db.state.outboxAttempts = snapshot.outboxAttempts
       this.db.state.outboxEffects = snapshot.outboxEffects
       this.db.state.auditEvents = snapshot.auditEvents
+      restoreCaseRoots()
       throw error
     }
   }
@@ -194,6 +200,8 @@ export class ConversationRepository {
     this.db.state.conversations = [...this.db.state.conversations, conversation]
     this.db.state.sessions = [...this.db.state.sessions, session]
     this.db.state.messages = [...this.db.state.messages, message]
+    // SPEC0176: the core case root is born in the same unit as the resource.
+    registerMemoryCoreConversationRoot(this.db, tenantId, conversation.id, now)
     return { conversation, session, message }
   }
 
@@ -412,9 +420,24 @@ export class ConversationRepository {
   }
 
   listPage(tenantId: TenantId, input: PaginationInput): ConversationPage {
+    return this.listPageWhere(tenantId, input, () => true)
+  }
+
+  /**
+   * SPEC0176: the visibility predicate is applied before ordering, total and
+   * pagination, so a hidden conversation never influences the page.
+   */
+  listPageWhere(
+    tenantId: TenantId,
+    input: PaginationInput,
+    visible: (conversation: ConversationRecord) => boolean
+  ): ConversationPage {
     const scope = TenantIdSchema.parse(tenantId)
     const indexedItems = this.db.state.conversations
-      .filter((conversation) => conversation.tenantId === scope)
+      .filter(
+        (conversation) =>
+          conversation.tenantId === scope && visible(conversation)
+      )
       .map((conversation, index) => ({
         item: this.toListItem(conversation),
         index

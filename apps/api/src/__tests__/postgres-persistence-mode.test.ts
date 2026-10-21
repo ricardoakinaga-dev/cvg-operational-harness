@@ -301,6 +301,14 @@ async function createPostgresHandoffAgent(
   return agent
 }
 
+const SPEC0176_CASE_TABLES: readonly string[] = [
+  'case_principals',
+  'case_roots',
+  'case_assignments',
+  'case_execution_links',
+  'case_audit_links'
+]
+
 describe('api PostgreSQL persistence mode', () => {
   it('fails closed when the tenant-isolation migration marker is absent', async () => {
     const client: PostgresQueryable = {
@@ -345,7 +353,9 @@ describe('api PostgreSQL persistence mode', () => {
       '0024_approval_decision_causality',
       '0025_webhook_replay_fencing',
       '0026_rate_limit_key_hardening',
-      '0027_worker_operations'
+      '0027_worker_operations',
+      // SPEC0176: the case assignment schema is part of the verified set.
+      '0029_case_assignment_authorization'
     ] as const
     const rows: Array<{
       version: string
@@ -1010,7 +1020,9 @@ describe('api PostgreSQL persistence mode', () => {
               table_name === 'journey_patient_drafts' ||
               table_name === 'journey_appointment_drafts' ||
               table_name === 'worker_heartbeats' ||
-              table_name === 'kernel_pause_switches'
+              table_name === 'kernel_pause_switches' ||
+              // SPEC0176 case tables are tenant-only (inventory).
+              SPEC0176_CASE_TABLES.includes(table_name)
                 ? []
                 : [
                     { table_name, column_name: 'tenant_isolation_quarantined' }
@@ -1078,7 +1090,8 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'journey_patient_drafts' ||
               tablename === 'journey_appointment_drafts' ||
               tablename === 'worker_heartbeats' ||
-              tablename === 'kernel_pause_switches'
+              tablename === 'kernel_pause_switches' ||
+              SPEC0176_CASE_TABLES.includes(tablename)
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')",
             with_check:
@@ -1092,7 +1105,8 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'journey_patient_drafts' ||
               tablename === 'journey_appointment_drafts' ||
               tablename === 'worker_heartbeats' ||
-              tablename === 'kernel_pause_switches'
+              tablename === 'kernel_pause_switches' ||
+              SPEC0176_CASE_TABLES.includes(tablename)
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
           }))
@@ -1807,7 +1821,9 @@ describe('api PostgreSQL persistence mode', () => {
         app = await buildServerFromEnv(serverEnv, {
           webhookVerifier: () => true,
           operatorIdentityResolver: trustedProductionIdentity,
-          operatorSessionStore: createInMemoryOperatorSessionStore()
+          operatorSessionStore: createInMemoryOperatorSessionStore(),
+          // SPEC0176: trusted case reads need the verified principal producer.
+          casePrincipalAuthority: { authorityVersion: 'synthetic-authority-v1' }
         })
         const health = await app.inject({
           method: 'GET',
@@ -1815,6 +1831,25 @@ describe('api PostgreSQL persistence mode', () => {
           headers: { 'x-forwarded-proto': 'https' }
         })
         expect(health.statusCode).toBe(200)
+        // AUD-0621 F01 / SPEC0176: the session alone is not a principal.
+        const unprovisioned = await app.inject({
+          method: 'GET',
+          url: '/v1/conversations?limit=1',
+          headers: { 'x-forwarded-proto': 'https' }
+        })
+        expect(unprovisioned.statusCode).toBe(401)
+        await (
+          app as unknown as ReturnType<typeof buildServer>
+        ).caseAuthority.applyVerifiedPrincipalState({
+          tenantId: postgresTenantA,
+          operatorId: 'fixture.production',
+          role: 'Supervisor',
+          active: true,
+          expectedRevision: 0,
+          authorityVersion: 'synthetic-authority-v1',
+          proofRef: 'synthetic-proof:fixture.production',
+          identitySource: 'synthetic_fixture'
+        })
         const ordinary = await app.inject({
           method: 'GET',
           url: '/v1/conversations?limit=1',
@@ -1923,7 +1958,10 @@ describe('api PostgreSQL persistence mode', () => {
             receivedAt: '2026-04-29T13:01:00-03:00'
           }
         })
-        const conversationList = await app.inject({
+        // AUD-0621 F01 / SPEC0176: the legacy single-connection schema has
+        // no case authority, so scoped (Operator) reads fail closed with 503;
+        // the tenant-wide Supervisor read still works on this schema.
+        const scopedList = await app.inject({
           method: 'GET',
           url: '/v1/conversations?limit=10&offset=0',
           headers: {
@@ -1931,12 +1969,20 @@ describe('api PostgreSQL persistence mode', () => {
             'x-operator-role': 'Operator'
           }
         })
+        const conversationList = await app.inject({
+          method: 'GET',
+          url: '/v1/conversations?limit=10&offset=0',
+          headers: {
+            'x-operator-id': 'supervisor.postgres',
+            'x-operator-role': 'Supervisor'
+          }
+        })
         const timeline = await app.inject({
           method: 'GET',
           url: `/v1/conversations/${inboundBody.data.conversationId}/timeline`,
           headers: {
-            'x-operator-id': 'operator.postgres',
-            'x-operator-role': 'Operator'
+            'x-operator-id': 'supervisor.postgres',
+            'x-operator-role': 'Supervisor'
           }
         })
         const approval = await app.inject({
@@ -2056,10 +2102,16 @@ describe('api PostgreSQL persistence mode', () => {
         expect(
           (taskStatus.json() as Envelope<{ status: string }>).data.status
         ).toBe('in_progress')
+        expect(scopedList.statusCode).toBe(503)
+        // SPEC0176 §5: the session reader needs the 0029 lineage tables
+        // (absent here → 503); the approval decision stays on the full reader.
+        expect(audit.statusCode).toBe(503)
         expect(
           (
-            audit.json() as Envelope<{ events: Array<{ type: string }> }>
-          ).data.events.map((event) => event.type)
+            evidence.json() as Envelope<{
+              page: { items: Array<{ type: string }> }
+            }>
+          ).data.page.items.map((event) => event.type)
         ).toContain('approval_decision')
         expect(
           (
@@ -2225,7 +2277,8 @@ describe('api PostgreSQL persistence mode', () => {
         expect(tasksB.json().data).toHaveLength(1)
         expect(approvalsA.json().data).toHaveLength(1)
         expect(approvalsB.json().data).toHaveLength(1)
-        expect(crossTenantAudit.statusCode).toBe(400)
+        // SPEC0176 §7: another tenant's session is the static 404.
+        expect(crossTenantAudit.statusCode).toBe(404)
       } finally {
         await client.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
         await client.end()
@@ -2343,9 +2396,17 @@ describe('api PostgreSQL persistence mode', () => {
           status: 'completed',
           trace: { response: { text: 'Endereço fictício PostgreSQL.' } }
         })
+        // SPEC0176 §7 timeline allowlist: externalMessageId is no longer part
+        // of the message DTO; the resumed message is matched by its body.
+        expect(timeline.json().data.messages[0]).not.toHaveProperty(
+          'externalMessageId'
+        )
         expect(timeline.json().data).toMatchObject({
           messages: expect.arrayContaining([
-            expect.objectContaining({ externalMessageId: 'pg-handoff-3' })
+            expect.objectContaining({
+              direction: 'inbound',
+              body: 'Qual endereço?'
+            })
           ]),
           sessions: [expect.objectContaining({ takeoverState: 'BOT_ACTIVE' })]
         })

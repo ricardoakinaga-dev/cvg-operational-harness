@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 import { approvalsRoute } from '../routes/approvals.ts'
 import { auditSessionRoute } from '../routes/audit.ts'
 import { conversationTimelineRoute } from '../routes/conversations.ts'
@@ -84,6 +85,13 @@ describe('api runtime', () => {
     })
     const duplicateBody = duplicate.json() as Envelope<InboundResult>
 
+    // AUD-0621 F01 / SPEC0176: the Operator reads the timeline only after a
+    // read_case grant on the conversation root through the public registry.
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: inboundBody.data.conversationId,
+      operatorId: 'operator.health'
+    })
     const timeline = await app.inject({
       method: 'GET',
       url: `/v1/conversations/${inboundBody.data.conversationId}/timeline`,
@@ -131,6 +139,11 @@ describe('api runtime', () => {
       url: `/v1/audit/sessions/${sessionId}`,
       headers: supervisorHeaders
     })
+    const fullAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
+      headers: supervisorHeaders
+    })
     await app.close()
 
     expect(inboundBody.data.accepted).toBe(true)
@@ -147,8 +160,16 @@ describe('api runtime', () => {
     expect(
       (allowedDecision.json() as Envelope<ApprovalResult>).data.status
     ).toBe('approved')
+    // SPEC0176 §5: the session reader returns only events whose producer
+    // linked them to this session (inbound acceptance and its duplicate);
+    // task/approval events stay visible in the full tenant audit reader.
+    expect(audit.statusCode).toBe(200)
     expect(
       (audit.json() as Envelope<{ events: unknown[] }>).data.events.length
+    ).toBeGreaterThanOrEqual(1)
+    expect(
+      (fullAudit.json() as Envelope<{ summary: { totalEvents: number } }>).data
+        .summary.totalEvents
     ).toBeGreaterThanOrEqual(3)
   })
 })

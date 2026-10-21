@@ -138,8 +138,6 @@ import {
   OperationalExecutionError,
   deriveExecutionResume,
   parseExecutionSubmission,
-  readExecutionTrajectory,
-  toExecutionView,
   type ExecutionStepStore,
   type OperationalExecutionStore
 } from '@cvg/harness'
@@ -170,6 +168,19 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import {
+  CaseAuthorityError,
+  InMemoryCaseAuthority,
+  PostgresCaseAuthority,
+  type CaseAuthorityPort
+} from '@cvg/persistence'
+import {
+  presentExecutionForCaller,
+  registerCaseAuthorizationRoutes,
+  submitExecutionWithCase,
+  toSafeCaseError,
+  type CaseRouteDependencies
+} from './case-authorization/case-routes.ts'
 import { ControlledRequestMetrics } from './request-metrics.ts'
 import { installResponseCorrelationHook } from './response-correlation.ts'
 import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
@@ -330,6 +341,16 @@ export interface BuildServerOptions {
    * export becomes available; it never exposes payloads or reasoning.
    */
   executionSteps?: ExecutionStepStore
+  /**
+   * SPEC0176 case authority. Omitted: memory persistence uses the synthetic
+   * in-memory authority and PostgreSQL the 0029 tables on the same database.
+   */
+  caseAuthority?: CaseAuthorityPort
+  /**
+   * SPEC0176 trusted principal producer (SPEC0152 adapter). Trusted case
+   * reads require it; without it they fail closed with 503.
+   */
+  casePrincipalAuthority?: { authorityVersion: string }
 }
 
 export type BuildServerFromEnvOptions = Omit<
@@ -383,6 +404,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     options.persistence,
     options.journeyRepository
   )
+  const caseAuthority: CaseAuthorityPort =
+    options.caseAuthority ??
+    (options.persistence?.kind === 'postgres'
+      ? new PostgresCaseAuthority(options.persistence.client)
+      : options.persistence?.kind === 'postgres-pool'
+        ? new PostgresCaseAuthority(options.persistence.pool, {
+            mode: 'pool'
+          })
+        : new InMemoryCaseAuthority(persistence.memoryDb!))
   const operationalExecution =
     options.operationalExecution ??
     (options.persistence?.kind === 'postgres'
@@ -464,7 +494,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       operationalExecution,
       operationalApprovalAuthority,
       operationalApprovals,
-      telemetry
+      telemetry,
+      caseAuthority
     }
   )
   app.setErrorHandler((error, _request, reply) => {
@@ -719,6 +750,35 @@ export function buildServer(options: BuildServerOptions = {}) {
     process.env.NODE_ENV === 'test' && identityMode === 'simulation'
       ? (options.requireAuthenticatedMutations ?? false)
       : true
+  const sessionLinkedAudit = (
+    scope: TenantId,
+    sessionId: string
+  ): Pick<RuntimePersistence['audit'], 'append'> => ({
+    append: (input: Parameters<typeof audit.append>[0]) =>
+      caseAuthority.appendLinkedAudit(scope, input, {
+        kind: 'core',
+        sessionId
+      })
+  })
+  // SPEC0176: one dependency bag for the case readers, the registry and the
+  // execution projection used by mutation responses.
+  const caseRouteDeps: CaseRouteDependencies = {
+    caseAuthority,
+    principalPolicy: {
+      identityMode,
+      authorityVersion: options.casePrincipalAuthority?.authorityVersion ?? null
+    },
+    operationalExecution,
+    ...(options.executionSteps
+      ? { executionSteps: options.executionSteps }
+      : {}),
+    requireIdentity,
+    requireAnyIdentity,
+    resolveDataPlaneTenant,
+    parsePagination,
+    paginationErrorMessage: PAGINATION_OFFSET_ERROR_MESSAGE,
+    log: emitRuntimeLog
+  }
 
   app.get(healthRoute, async () =>
     ok({ status: 'ok', runtime: 'api' }, createCorrelationId())
@@ -910,7 +970,12 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? resolveDataPlaneTenant(request.headers, identity)
         : resolveOptionalRequestTenant(request.headers)
       const submission = parseExecutionSubmission(request.body, tenantId)
-      const result = await operationalExecution.submit(submission)
+      const result = await submitExecutionWithCase(
+        caseRouteDeps,
+        identity,
+        tenantId,
+        submission
+      )
       reply.code(202)
       emitRuntimeLog({
         event: result.created ? 'execution.accepted' : 'execution.duplicate',
@@ -922,7 +987,12 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.send(
         ok(
           {
-            execution: toExecutionView(result.record),
+            execution: await presentExecutionForCaller(
+              caseRouteDeps,
+              identity,
+              tenantId,
+              result.record
+            ),
             processing: 'queued' as const,
             created: result.created
           },
@@ -931,7 +1001,11 @@ export function buildServer(options: BuildServerOptions = {}) {
       )
     } catch (error) {
       const safeError =
-        error instanceof OperationalExecutionError ? error : toSafeError(error)
+        error instanceof OperationalExecutionError
+          ? error
+          : error instanceof CaseAuthorityError
+            ? toSafeCaseError(error)
+            : toSafeError(error)
       reply.code(statusCodeForError(safeError.code))
       emitRuntimeLog({
         event: 'execution.submit_failed',
@@ -940,32 +1014,6 @@ export function buildServer(options: BuildServerOptions = {}) {
         status: 'error',
         errorCode: safeError.code
       })
-      return reply.send(fail(safeError.code, safeError.message, correlationId))
-    }
-  })
-
-  app.get('/v1/executions/:executionId', async (request, reply) => {
-    const correlationId = createCorrelationId()
-    try {
-      const identity = requireIdentity(
-        request.headers,
-        'conversation:view_assigned'
-      )
-      const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      const params = request.params as { executionId?: unknown }
-      if (typeof params.executionId !== 'string') {
-        throw new DomainError('validation_failed', 'Execution id is required')
-      }
-      const record = await operationalExecution.get(
-        tenantId,
-        params.executionId
-      )
-      if (!record) throw new DomainError('not_found', 'Execution not found')
-      return reply.send(ok(toExecutionView(record), correlationId))
-    } catch (error) {
-      const safeError =
-        error instanceof OperationalExecutionError ? error : toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
       return reply.send(fail(safeError.code, safeError.message, correlationId))
     }
   })
@@ -1013,7 +1061,12 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.send(
         ok(
           {
-            execution: toExecutionView(resumed),
+            execution: await presentExecutionForCaller(
+              caseRouteDeps,
+              identity,
+              tenantId,
+              resumed
+            ),
             processing: 'queued' as const,
             resume: deriveExecutionResume(resumed)?.kind ?? null
           },
@@ -1028,51 +1081,6 @@ export function buildServer(options: BuildServerOptions = {}) {
         event: 'execution.user_input_failed',
         correlationId,
         route: '/v1/executions/:executionId/input',
-        status: 'error',
-        errorCode: safeError.code
-      })
-      return reply.send(fail(safeError.code, safeError.message, correlationId))
-    }
-  })
-
-  app.get('/v1/executions/:executionId/trajectory', async (request, reply) => {
-    const correlationId = createCorrelationId()
-    try {
-      const identity = requireIdentity(
-        request.headers,
-        'conversation:view_assigned'
-      )
-      const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      const params = request.params as { executionId?: unknown }
-      if (typeof params.executionId !== 'string') {
-        throw new DomainError('validation_failed', 'Execution id is required')
-      }
-      if (!options.executionSteps) {
-        throw new DomainError(
-          'invalid_action',
-          'Trajectory export is not configured'
-        )
-      }
-      const record = await operationalExecution.get(
-        tenantId,
-        params.executionId
-      )
-      if (!record) throw new DomainError('not_found', 'Execution not found')
-      const trajectory = await readExecutionTrajectory(
-        options.executionSteps,
-        tenantId,
-        record.id
-      )
-      reply.code(200)
-      return reply.send(ok({ trajectory }, correlationId))
-    } catch (error) {
-      const safeError =
-        error instanceof OperationalExecutionError ? error : toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
-      emitRuntimeLog({
-        event: 'execution.trajectory_failed',
-        correlationId,
-        route: '/v1/executions/:executionId/trajectory',
         status: 'error',
         errorCode: safeError.code
       })
@@ -1125,7 +1133,12 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.send(
         ok(
           {
-            execution: toExecutionView(cancelled),
+            execution: await presentExecutionForCaller(
+              caseRouteDeps,
+              identity,
+              tenantId,
+              cancelled
+            ),
             processing: 'terminal' as const,
             cancelled: before.state !== 'CANCELLED'
           },
@@ -1366,7 +1379,12 @@ export function buildServer(options: BuildServerOptions = {}) {
         return reply.send(
           ok(
             {
-              execution: toExecutionView(resolved),
+              execution: await presentExecutionForCaller(
+                caseRouteDeps,
+                identity,
+                tenantId,
+                resolved
+              ),
               approvalId: approval.approvalId,
               decision,
               processing: decision === 'APPROVED' ? 'queued' : 'terminal'
@@ -1396,43 +1414,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   )
 
-  app.get('/v1/conversations', async (request, reply) => {
-    const correlationId = createCorrelationId()
-    try {
-      const identity = requireIdentity(
-        request.headers,
-        'conversation:view_assigned'
-      )
-      const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      const pagination = parsePagination(request.query)
-      if (!pagination) {
-        throw new DomainError(
-          'invalid_pagination',
-          `limit must be between 1 and 100 and ${PAGINATION_OFFSET_ERROR_MESSAGE}`
-        )
-      }
-
-      const page = await conversations.listPage(tenantId, pagination)
-      emitRuntimeLog({
-        event: 'conversation.list_read',
-        correlationId,
-        route: '/v1/conversations',
-        status: 'ok'
-      })
-      return ok(page, correlationId)
-    } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
-      emitRuntimeLog({
-        event: 'conversation.list_failed',
-        correlationId,
-        route: '/v1/conversations',
-        status: 'error',
-        errorCode: safeError.code
-      })
-      return fail(safeError.code, safeError.message, correlationId)
-    }
-  })
+  registerCaseAuthorizationRoutes(app, caseRouteDeps)
 
   app.post(
     '/v1/webhooks/channels/:channel/messages',
@@ -1552,7 +1534,11 @@ export function buildServer(options: BuildServerOptions = {}) {
                 conversationId: result.conversationId,
                 sessionId: runtimeSessionId,
                 messageId: result.messageId,
-                audit,
+                // SPEC0176: runtime events are linked to the persisted session
+                // this producer validated, never to the payload claim.
+                audit: runtimeSessionId
+                  ? sessionLinkedAudit(tenantId, runtimeSessionId)
+                  : audit,
                 conversations,
                 sessionVersionPinning: persistence.sessionVersionPinning
               })
@@ -1564,37 +1550,43 @@ export function buildServer(options: BuildServerOptions = {}) {
             agentRuntime?.completeInboundRuntime
           )
         ) {
-          await audit.append(
-            {
-              type: 'integration_event',
-              actorType: 'System',
-              actorId: 'api',
-              correlationId: result.correlationId ?? correlationId,
-              policyVersion: 'api-runtime-v1',
-              payload: {
-                sessionId: result.sessionId,
-                conversationId: result.conversationId,
-                accepted: result.accepted,
-                tenantId,
-                ...(queuedOutbox
-                  ? {
-                      processing: 'queued',
-                      outboxEventId: queuedOutbox.id,
-                      outboxStatus: queuedOutbox.status
-                    }
-                  : {}),
-                ...(runtime
-                  ? {
-                      runtimeStatus: runtime.status,
-                      traceId: runtime.trace?.traceId ?? null,
-                      externalCall:
-                        runtime.trace?.provider.externalCall ?? false
-                    }
-                  : {})
-              }
-            },
-            tenantId
-          )
+          const inboundAudit = {
+            type: 'integration_event' as const,
+            actorType: 'System' as const,
+            actorId: 'api',
+            correlationId: result.correlationId ?? correlationId,
+            policyVersion: 'api-runtime-v1',
+            payload: {
+              sessionId: result.sessionId,
+              conversationId: result.conversationId,
+              accepted: result.accepted,
+              tenantId,
+              ...(queuedOutbox
+                ? {
+                    processing: 'queued',
+                    outboxEventId: queuedOutbox.id,
+                    outboxStatus: queuedOutbox.status
+                  }
+                : {}),
+              ...(runtime
+                ? {
+                    runtimeStatus: runtime.status,
+                    traceId: runtime.trace?.traceId ?? null,
+                    externalCall: runtime.trace?.provider.externalCall ?? false
+                  }
+                : {})
+            }
+          }
+          // SPEC0176: the producer links the event to the session it persisted
+          // (never to the payload claim) in the same unit as the event.
+          if (typeof result.sessionId === 'string') {
+            await caseAuthority.appendLinkedAudit(tenantId, inboundAudit, {
+              kind: 'core',
+              sessionId: result.sessionId
+            })
+          } else {
+            await audit.append(inboundAudit, tenantId)
+          }
         }
         if (webhookLease) {
           await webhookLease.commit()
@@ -1621,7 +1613,10 @@ export function buildServer(options: BuildServerOptions = {}) {
         if (webhookLease) {
           await Promise.resolve(webhookLease.release()).catch(() => undefined)
         }
-        const safeError = toSafeError(error)
+        const safeError =
+          error instanceof CaseAuthorityError
+            ? toSafeCaseError(error)
+            : toSafeError(error)
         reply.code(statusCodeForError(safeError.code))
         emitRuntimeLog({
           event: 'inbound.failed',
@@ -1650,7 +1645,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!session) {
         throw new DomainError('invalid_action', 'Session not found')
       }
-      await audit.append(
+      // SPEC0176: linked to the persisted session the transition operated on.
+      await caseAuthority.appendLinkedAudit(
+        tenantId,
         {
           type: 'handoff',
           actorType: identity.role,
@@ -1665,43 +1662,18 @@ export function buildServer(options: BuildServerOptions = {}) {
             effect: 'human_takeover_state_only'
           }
         },
-        tenantId
+        { kind: 'core', sessionId: session.id }
       )
       return ok(session, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
+      const safeError =
+        error instanceof CaseAuthorityError
+          ? toSafeCaseError(error)
+          : toSafeError(error)
       reply.code(statusCodeForError(safeError.code))
       return fail(safeError.code, safeError.message, correlationId)
     }
   })
-
-  app.get(
-    '/v1/conversations/:conversationId/timeline',
-    async (request, reply) => {
-      const correlationId = createCorrelationId()
-      try {
-        const identity = requireIdentity(
-          request.headers,
-          'conversation:view_assigned'
-        )
-        const tenantId = resolveDataPlaneTenant(request.headers, identity)
-        const params = request.params as { conversationId: string }
-        const timeline = await getConversationTimeline(
-          conversations,
-          tenantId,
-          params.conversationId
-        )
-        if (timeline.messages.length === 0 && timeline.sessions.length === 0) {
-          throw new DomainError('invalid_action', 'Conversation not found')
-        }
-        return ok(timeline, correlationId)
-      } catch (error) {
-        const safeError = toSafeError(error)
-        reply.code(statusCodeForError(safeError.code))
-        return fail(safeError.code, safeError.message, correlationId)
-      }
-    }
-  )
 
   registerSecretaryJourneyRoutes(app, {
     journeys,
@@ -2241,34 +2213,6 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
     }
   )
-
-  app.get('/v1/audit/sessions/:sessionId', async (request, reply) => {
-    const correlationId = createCorrelationId()
-    try {
-      const identity = requireAnyIdentity(request.headers, [
-        'audit:view_full',
-        'audit:view_limited'
-      ])
-      const tenantId = resolveDataPlaneTenant(request.headers, identity)
-      const params = request.params as { sessionId: string }
-      const events = await audit.listBySession(params.sessionId, tenantId)
-      if (events.length === 0) {
-        throw new DomainError('invalid_action', 'Audit session not found')
-      }
-      emitRuntimeLog({
-        event: 'audit.session_read',
-        correlationId,
-        route: '/v1/audit/sessions/:sessionId',
-        status: 'ok',
-        sessionId: params.sessionId
-      })
-      return ok({ events }, correlationId)
-    } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
-      return fail(safeError.code, safeError.message, correlationId)
-    }
-  })
 
   app.get('/v1/observability/audit-evidence', async (request, reply) => {
     const correlationId = createCorrelationId()
@@ -3873,7 +3817,7 @@ async function executeInboundRuntime(input: {
   conversationId: string
   sessionId: string | null
   messageId: string
-  audit: RuntimePersistence['audit']
+  audit: Pick<RuntimePersistence['audit'], 'append'>
   conversations: RuntimePersistence['conversations']
   sessionVersionPinning: boolean
 }) {
@@ -4554,6 +4498,7 @@ function statusCodeForError(code: string): number {
 
 export {
   assertApprovalDecisionAuditDedupe,
+  assertCaseAuthorizationSchema,
   assertMigrationOwnerFromCatalog,
   assertMigrationRoleIsLeastPrivilege,
   assertMigrationRoleSecurityBoundary,
@@ -4656,6 +4601,7 @@ function createPostgresPool(
 }
 import {
   assertApprovalDecisionAuditDedupe,
+  assertCaseAuthorizationSchema,
   assertMigrationOwnerFromCatalog,
   assertMigrationRoleIsLeastPrivilege,
   assertMigrationRoleSecurityBoundary,
@@ -4669,6 +4615,8 @@ import {
 } from './tenant-preflight.ts'
 
 interface RuntimePersistence {
+  /** SPEC0176: synthetic memory database backing the in-memory case authority. */
+  memoryDb?: InMemoryDatabase
   /** Legacy direct-client fixtures do not have the tenant-scoped pin columns. */
   sessionVersionPinning: boolean
   outbox: DurableOutboxAdapter
@@ -5036,6 +4984,7 @@ function createPersistence(
   const db = new InMemoryDatabase()
   const outbox = new OutboxRepository(db)
   return {
+    memoryDb: db,
     sessionVersionPinning: true,
     outbox,
     journeys:
@@ -5482,6 +5431,7 @@ export async function buildServerFromEnv(
         }
         await assertTenantIsolationMigrationState(runtimeSchemaClient)
         await assertTenantIsolationSchema(runtimeSchemaClient)
+        await assertCaseAuthorizationSchema(runtimeSchemaClient)
         await assertWebhookReplaySchema(runtimeSchemaClient)
       } finally {
         runtimeSchemaClient.release()

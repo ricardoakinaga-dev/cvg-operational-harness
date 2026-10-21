@@ -147,12 +147,23 @@ describe('operator identity RBAC hardening', () => {
       },
       payload: { decision: 'approved', note: 'identidade controlada' }
     })
-    const audit = await app.inject({
+    // AUD-0621 F01 / SPEC0176: an Approver without a read_case grant gets
+    // the static 404 on the session reader; the decision actor is asserted
+    // on the full tenant audit reader (approval events are not session-linked).
+    const limitedAudit = await app.inject({
       method: 'GET',
       url: `/v1/audit/sessions/${sessionId}`,
       headers: {
         'x-operator-id': 'approver.shift-a',
         'x-operator-role': 'Approver'
+      }
+    })
+    const audit = await app.inject({
+      method: 'GET',
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
+      headers: {
+        'x-operator-id': 'supervisor.shift-a',
+        'x-operator-role': 'Supervisor'
       }
     })
     await app.close()
@@ -162,19 +173,22 @@ describe('operator identity RBAC hardening', () => {
       decidedBy: string
     }>
     const auditBody = audit.json() as Envelope<{
-      events: Array<{
-        type: string
-        actorId: string
-        actorType: string
-        payload: Record<string, unknown>
-      }>
+      page: {
+        items: Array<{
+          type: string
+          actorId: string
+          actorType: string
+          payload: Record<string, unknown>
+        }>
+      }
     }>
+    expect(limitedAudit.statusCode).toBe(404)
     expect(decision.statusCode).toBe(200)
     expect(decisionBody.data).toMatchObject({
       status: 'approved',
       decidedBy: 'approver.shift-a'
     })
-    expect(auditBody.data.events).toContainEqual(
+    expect(auditBody.data.page.items).toContainEqual(
       expect.objectContaining({
         type: 'approval_decision',
         actorId: 'approver.shift-a',
@@ -218,9 +232,11 @@ describe('operator identity RBAC hardening', () => {
       },
       payload
     })
+    // SPEC0176 §5: approval events are not session-linked by their producer;
+    // the actor is asserted on the full tenant audit reader.
     const audit = await app.inject({
       method: 'GET',
-      url: `/v1/audit/sessions/${sessionId}`,
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
       headers: {
         'x-operator-id': 'supervisor.audit',
         'x-operator-role': 'Supervisor'
@@ -244,9 +260,9 @@ describe('operator identity RBAC hardening', () => {
     expect(
       (
         audit.json() as Envelope<{
-          events: Array<{ actorId: string; actorType: string }>
+          page: { items: Array<{ actorId: string; actorType: string }> }
         }>
-      ).data.events
+      ).data.page.items
     ).toContainEqual(
       expect.objectContaining({
         actorId: 'supervisor.audit',
@@ -293,7 +309,10 @@ describe('operator identity RBAC hardening', () => {
       },
       payload: { status: 'in_progress' }
     })
-    const audit = await app.inject({
+    // AUD-0621 F01 / SPEC0176: an unassigned Operator gets the static 404 on
+    // the session reader; the task actor is asserted on the full tenant
+    // audit reader (task events are not session-linked by their producer).
+    const limitedAudit = await app.inject({
       method: 'GET',
       url: `/v1/audit/sessions/${sessionId}`,
       headers: {
@@ -301,22 +320,33 @@ describe('operator identity RBAC hardening', () => {
         'x-operator-role': 'Operator'
       }
     })
+    const audit = await app.inject({
+      method: 'GET',
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
+      headers: {
+        'x-operator-id': 'supervisor.shift-a',
+        'x-operator-role': 'Supervisor'
+      }
+    })
     await app.close()
 
     const forbiddenBody = forbidden.json() as Envelope<never>
     const acceptedBody = accepted.json() as Envelope<{ status: string }>
     const auditBody = audit.json() as Envelope<{
-      events: Array<{
-        actorId: string
-        actorType: string
-        payload: Record<string, unknown>
-      }>
+      page: {
+        items: Array<{
+          actorId: string
+          actorType: string
+          payload: Record<string, unknown>
+        }>
+      }
     }>
+    expect(limitedAudit.statusCode).toBe(404)
     expect(forbidden.statusCode).toBe(403)
     expect(forbiddenBody.error?.code).toBe('forbidden')
     expect(accepted.statusCode).toBe(200)
     expect(acceptedBody.data.status).toBe('in_progress')
-    expect(auditBody.data.events).toContainEqual(
+    expect(auditBody.data.page.items).toContainEqual(
       expect.objectContaining({
         actorId: 'operator.shift-a',
         actorType: 'Operator',

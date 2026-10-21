@@ -127,14 +127,20 @@ describe('execution input and trajectory HTTP routes', () => {
       data: {
         processing: 'queued',
         resume: 'user_input',
+        // SPEC0176 AUTH09: the mutation response uses the presentation DTO
+        // v2; resume input, tenantId and internal fields are never echoed.
         execution: {
+          viewVersion: 2,
           id: execution.id,
-          tenantId: tenantA,
           state: 'QUEUED',
-          resume: { kind: 'user_input', input: 'synthetic answer' }
+          response: null,
+          errorSummary: null
         }
       }
     })
+    expect(resumed.json().data.execution).not.toHaveProperty('resume')
+    expect(resumed.json().data.execution).not.toHaveProperty('tenantId')
+    expect(resumed.body).not.toContain('synthetic answer')
     expect(await store.get(tenantA, execution.id)).toMatchObject({
       state: 'QUEUED',
       resume: { kind: 'user_input', input: 'synthetic answer' }

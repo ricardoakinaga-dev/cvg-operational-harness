@@ -73,7 +73,13 @@ export const TENANT_SCHEMA_INVENTORY: readonly TenantScopedTable[] = [
   entry('cvg_conversation_deliveries'),
   // PROD-0373: worker liveness and the kernel pause switch.
   entry('worker_heartbeats', 'tenant-only'),
-  entry('kernel_pause_switches', 'tenant-only')
+  entry('kernel_pause_switches', 'tenant-only'),
+  // SPEC0176: case assignment registry and lineage (migration 0029).
+  entry('case_principals', 'tenant-only'),
+  entry('case_roots', 'tenant-only'),
+  entry('case_assignments', 'tenant-only'),
+  entry('case_execution_links', 'tenant-only'),
+  entry('case_audit_links', 'tenant-only')
 ]
 
 export const TENANT_SCHEMA_TABLES: readonly string[] =

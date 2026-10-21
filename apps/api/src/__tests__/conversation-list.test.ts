@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -12,7 +13,6 @@ interface ConversationListItem {
   channel: string
   senderRef: string
   status: string
-  correlationId: string
   openSessionId: string | null
   lastMessageBody: string | null
   lastMessageAt: string | null
@@ -54,18 +54,28 @@ async function postInbound(
 describe('conversation list API', () => {
   it('returns paginated conversations from runtime persistence without requiring controlled bootstrap ids', async () => {
     const app = buildServer()
-    await postInbound(
+    const first = await postInbound(
       app,
       'list-msg-1',
       '+551100000001',
       'Primeira conversa ficticia'
     )
-    await postInbound(
+    const second = await postInbound(
       app,
       'list-msg-2',
       '+551100000002',
       'Segunda conversa ficticia'
     )
+    // AUD-0621 F01 / SPEC0176: an Operator lists only assigned case roots;
+    // both conversations are granted through the public registry first.
+    for (const [index, inbound] of [first, second].entries()) {
+      await grantCase(app, {
+        kind: 'core_conversation',
+        resourceId: inbound.json().data.conversationId,
+        operatorId: 'operator.conversation-list',
+        provision: index === 0
+      })
+    }
 
     const response = await app.inject({
       method: 'GET',
@@ -92,7 +102,8 @@ describe('conversation list API', () => {
     })
     expect(body.data?.items[0]?.id).toMatch(/^conv_/)
     expect(body.data?.items[0]?.openSessionId).toMatch(/^sess_/)
-    expect(body.data?.items[0]?.correlationId).toMatch(/^corr_/)
+    // SPEC0176 §7 allowlist: correlationId is no longer part of the item DTO.
+    expect(body.data?.items[0]).not.toHaveProperty('correlationId')
     expect(body.data?.items[0]?.lastMessageAt).toEqual(expect.any(String))
   })
 

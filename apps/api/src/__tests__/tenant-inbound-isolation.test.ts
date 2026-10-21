@@ -67,9 +67,14 @@ describe('tenant-scoped inbound data plane', () => {
     })
     await app.close()
 
-    expect(response.statusCode).toBe(400)
+    // SPEC0176 §7: another tenant's object is the same static 404 as a
+    // missing object (previously 400 invalid_action); still no data.
+    expect(response.statusCode).toBe(404)
     expect(response.json().data).toBeNull()
-    expect(response.json().error.code).toBe('invalid_action')
+    expect(response.json().error).toEqual({
+      code: 'not_found',
+      message: 'Resource not found'
+    })
   })
 
   it('scopes tasks and approvals through the conversation tenant', async () => {
@@ -195,8 +200,10 @@ describe('tenant-scoped inbound data plane', () => {
     })
     await app.close()
 
-    expect(response.statusCode).toBe(400)
+    // SPEC0176 §7: cross-tenant session → static 404 (previously 400).
+    expect(response.statusCode).toBe(404)
     expect(response.json().data).toBeNull()
+    expect(response.json().error.code).toBe('not_found')
     expect(evidence.statusCode).toBe(200)
     expect(evidence.json().data.summary.totalEvents).toBe(0)
     expect(evidence.json().data.page.items).toEqual([])
